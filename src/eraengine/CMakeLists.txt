@@ -13,6 +13,7 @@ qt_add_qml_module(eraengine
     URI io.yigekuoyou.eraengine
     VERSION 1.0
     SOURCES eraengine.cpp eraengine.h
+    SOURCES variable_storage.h variable_storage.cpp
 )
 
 target_compile_definitions(eraengine

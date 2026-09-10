@@ -4,7 +4,7 @@ project(emuera VERSION 0.1 LANGUAGES CXX)
 
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 
-find_package(Qt6 REQUIRED COMPONENTS Quick Core DBus)
+find_package(Qt6 REQUIRED COMPONENTS Quick Core DBus Widgets)
 find_package(BISON REQUIRED)
 find_package(FLEX REQUIRED)
 qt_standard_project_setup(REQUIRES 6.10)
@@ -17,6 +17,7 @@ qt_add_qml_module(appemuera
     URI io.yigekuoyou.appemuera
     QML_FILES
         src/Main.qml
+        QML_FILES src/EraRender.qml
 )
 set_target_properties(appemuera PROPERTIES
 #    MACOSX_BUNDLE_GUI_IDENTIFIER com.example.appemuera
@@ -27,7 +28,7 @@ set_target_properties(appemuera PROPERTIES
 )
 
 target_link_libraries(appemuera
-    PRIVATE Qt6::Quick Qt6::DBus
+    PRIVATE Qt6::Quick Qt6::DBus Qt6::Widgets
 )
 
 include(GNUInstallDirs)

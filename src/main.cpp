@@ -1,13 +1,13 @@
-#include <QGuiApplication>
 #include <QQmlApplicationEngine>
 #include <QDBusConnection>
 #include <QDBusInterface>
 #include <QDBusReply>
 #include <QDir>
-
+#include <QApplication>
+#include <QQmlContext>
 int main(int argc, char *argv[])
 {
-	QGuiApplication app(argc, argv);
+	QApplication app(argc, argv);
 	#ifdef Q_OS_LINUX
 	app.setApplicationName("emuera");
 	const QString serviceName = "io.yigekuyou.emuera";
@@ -21,6 +21,7 @@ int main(int argc, char *argv[])
 	QObject::connect(&engine, &QQmlApplicationEngine::objectCreationFailed,
 									 &app, []() { QCoreApplication::exit(-1); },
 	Qt::QueuedConnection);
+	engine.rootContext()->setContextProperty("currentDir", QDir::currentPath());
 	engine.loadFromModule("io.yigekuoyou.appemuera", "Main");
 
 	return app.exec();

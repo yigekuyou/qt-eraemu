@@ -1,6 +1,7 @@
 #ifndef ERAENGINE_H
 #define ERAENGINE_H
 #include <qqmlintegration.h>
+#include "variable_storage.h"
 #include <QQuickItem>
 #include <QObject>
 #include <QDBusInterface>
@@ -10,13 +11,57 @@
 //引入这个头文件以使用 QML_ELEMENT
 #include <qqmlregistration.h>
 #include <QDBusPendingCallWatcher>
-
 class EraEngine : public QObject
 {
 	Q_OBJECT
 	QML_ELEMENT
+	Q_PROPERTY(bool isInitialized READ isInitialized NOTIFY isInitializedChanged)
+	Q_PROPERTY(QString exeDir READ exeDir NOTIFY exeDirChanged)
+	Q_PROPERTY(QString csvDir READ csvDir NOTIFY csvDirChanged)
+	Q_PROPERTY(QString erbDir READ erbDir NOTIFY erbDirChanged)
+	Q_PROPERTY(QString contentDir READ contentDir NOTIFY contentDirChanged)
+	Q_PROPERTY(QString configPath READ configPath NOTIFY configPathChanged)
+	Q_PROPERTY(QVariantMap configMap READ configMap NOTIFY configMapChanged)
+	Q_PROPERTY(QVariantMap gameBaseData READ gameBaseData NOTIFY gameBaseDataChanged)
+	Q_PROPERTY(QString gameDirectory READ gameDirectory WRITE setGameDirectory NOTIFY gameDirectoryChanged)
+	Q_PROPERTY(VariableStorage* variableStorage READ variableStorage CONSTANT)
 public:
 	EraEngine();
+	bool isInitialized() const { return m_isInitialized; }
+	QString exeDir() const { return m_exeDir; }
+	QString csvDir() const { return m_csvDir; }
+	QString erbDir() const { return m_erbDir; }
+	QString contentDir() const { return m_contentDir; }
+	QString configPath() const { return m_configPath; }
+	QString gameDirectory() const { return m_gameDirectory; }
+	int currentLayout() const { return m_currentLayout; }
+	QVariantMap configMap() const { return m_configMap; }
+	QVariantMap gameBaseData() const { return m_gameBaseData; }
+	void setGameDirectory(const QString &path);
+	// 可写属性的 Setter 函数声明
+	void setCurrentLayout(int currentLayout);
+
+	VariableStorage* variableStorage() { return &m_variableStorage; }
+			const VariableStorage* variableStorage() const { return &m_variableStorage; }
+
+	Q_INVOKABLE void setGlobalInt(const QString &name, int index, qint64 value) {
+			m_variableStorage.setGlobalInt(name, index, value);
+		}
+		Q_INVOKABLE qint64 getGlobalInt(const QString &name, int index) const {
+			return m_variableStorage.getGlobalInt(name, index);
+		}
+		Q_INVOKABLE void setGlobalStr(const QString &name, int index, const QString &value) {
+			m_variableStorage.setGlobalStr(name, index, value);
+		}
+		Q_INVOKABLE QString getGlobalStr(const QString &name, int index) const {
+			return m_variableStorage.getGlobalStr(name, index);
+		}
+		Q_INVOKABLE void setCharaInt(const QString &name, int charaId, int index, qint64 value) {
+			m_variableStorage.setCharaInt(name, charaId, index, value);
+		}
+		Q_INVOKABLE qint64 getCharaInt(const QString &name, int charaId, int index) const {
+			return m_variableStorage.getCharaInt(name, charaId, index);
+		}
 private:
 		bool m_isInitialized;
 		QString m_exeDir;
@@ -24,8 +69,9 @@ private:
 		QString m_erbDir;
 		QString m_configPath;
 		int m_currentLayout;
-		void setGameDirectory(const QString &path);
-
+		QString m_contentDir;
+		QString m_gameDirectory;
+		VariableStorage m_variableStorage;
 		QVariantMap m_configMap;
 		QVariantMap m_gameBaseData;
 
@@ -33,6 +79,16 @@ private:
 		void loadConfiguration();
 		void loadGameBaseCsv();
 signals:
+		void isInitializedChanged();
+		void exeDirChanged();
+		void csvDirChanged();
+		void erbDirChanged();
+		void contentDirChanged();
+		void configPathChanged();
+		void currentLayoutChanged();
+		void configMapChanged();
+		void gameBaseDataChanged();
+		void gameDirectoryChanged();
 		// 基础文本类
 		void renderText(const QString &text, bool addNewline, bool needWait);
 

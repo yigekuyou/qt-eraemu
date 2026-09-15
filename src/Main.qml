@@ -10,7 +10,7 @@ Window {
     visible: true
     property string gameDirectory: ""
     signal init(string path)
-    title: eraEngine.gameBaseData["ウィンドウタイトル"] || "Emuera Engine"
+    title: eraEngine.gameBaseData.windowTitle || "Emuera Engine"
     color: Kirigami.Theme.backgroundColor
     Platform.FolderDialog {
         id: folderDialog
@@ -39,27 +39,27 @@ Window {
         flags: Qt.Window | Qt.WindowTitleHint | Qt.WindowSystemMenuHint | Qt.WindowCloseButtonHint
         color: Kirigami.Theme.backgroundColor
         Column {
-            anchors.centerIn: parent
+            width: 300
             spacing: 10
 
             Label {
-                text: qsTr("Game Title: ") + (eraEngine.gameBaseData["タイトル"] || qsTr("Unknown"))
+                text: qsTr("Game Title: ") + (eraEngine.gameBaseData.title || qsTr("Unknown"))
                 color: Kirigami.Theme.textColor
             }
             Label {
-                text: qsTr("Author: ") + (eraEngine.gameBaseData["作者"] || qsTr("Unknown"))
+                text: qsTr("Author: ") + (eraEngine.gameBaseData.author || qsTr("Unknown"))
                 color: Kirigami.Theme.textColor
             }
             Label {
-                text: qsTr("Version: ") + (eraEngine.gameBaseData["バージョン"] || qsTr("Unknown"))
+                text: qsTr("Version: ") + (eraEngine.gameBaseData.version || qsTr("Unknown"))
                 color: Kirigami.Theme.textColor
             }
             Label {
-                text: qsTr("Release Year: ") + (eraEngine.gameBaseData["製作年"] || qsTr("Unknown"))
+                text: qsTr("Release Year: ") + (eraEngine.gameBaseData.releaseYear || qsTr("Unknown"))
                 color: Kirigami.Theme.textColor
             }
             Label {
-                text: qsTr("Additional Info: ") + (eraEngine.gameBaseData["追加情報"] || qsTr("None"))
+                text: qsTr("Additional Info: ") + (eraEngine.gameBaseData.additionalInfo || qsTr("None"))
                 color: Kirigami.Theme.textColor
             }
         }
@@ -73,8 +73,31 @@ Window {
                 shortcut: StandardKey.Open
                 onTriggered: folderDialog.open()
             }
+            Platform.MenuItem {
+                text: qsTr("reboot")
+                shortcut: StandardKey.Open
+            }
+            Platform.MenuItem {
+                text: qsTr("reboot")
+                shortcut: StandardKey.Open
+            }
+            Platform.MenuItem {
+                text: qsTr("save log")
+            }
+            Platform.MenuItem {
+                text: qsTr("retunrn title")
+                onTriggered: if (eraRender.engine)
+                    eraRender.engine.gotoTitle()
+            }
+            Platform.MenuItem {
+                text: qsTr("settings")
+                onTriggered: configWindow.visible = true // 弹出配置窗口
+            }
+            Platform.MenuItem {
+                text: qsTr("exit")
+                onTriggered: Qt.quit()
+            }
         }
-
         Platform.Menu {
             id: editMenu
             title: qsTr("&Edit")

@@ -1,184 +1,247 @@
 #include "eraengine.h"
-#include <QDir>
-#include <QFile>
-#include <QTextStream>
-#include <QDebug>
-#include <QCoreApplication>
-#include <QVariantMap>
-#include <QRegularExpression>
-EraEngine::EraEngine()
-		: m_isInitialized(false), m_currentLayout(0)
-{
-	m_variableStorage.initialize(150, 100);
-}
-// 辅助函数：在指定目录下不分大小写查找真实文件夹名
-QString findActualDir(const QString &basePath, const QString &targetName) {
-		QDir dir(basePath);
-		if (!dir.exists()) {
-				qDebug() << "Game directory not exists :" << basePath;
-				return targetName; // 基础路径不存在，返回原目标名
-		}
 
-		QStringList subDirs = dir.entryList(QDir::Dirs | QDir::NoDotAndDotDot);
-		for (const QString &subDir : subDirs) {
-				qDebug() << "Game directory entryList :" << subDirs;
-				if (subDir.compare(targetName, Qt::CaseInsensitive) == 0) {
-						return subDir; // 返回磁盘上真实的目录名（大小写一致）
-				}
-		}
-		return targetName; // 没找到则返回原目标名
-}
-void EraEngine::setGameDirectory(const QString &path)
+
+// Include the input system header for EraTetrisInputState
+#include "input_system.h"
+
+EraEngine::EraEngine(QObject *parent)
+		: QObject(parent),
+			m_variableStorage(),
+			m_expressionEvaluator(),
+			m_functionSystem(),
+			m_instructionSystem(),
+			m_gameFlowControl(),
+			m_renderingSystem(),
+			m_fileSystem(),
+			m_binaryIo(),
+			m_inputSystem(),
+			m_executionEngine(&m_variableStorage),
+			m_processState(),
+			m_systemProcessor(&m_processState),
+			m_configLoader(),
+			m_scriptProcessor(),
+			m_inputHandler(),
+			m_eventManager()
 {
-		if (path.isEmpty()) return;
-		QUrl url(path);
-		QString localPath = url.isLocalFile() ? url.toLocalFile() : path;		// 统一将输入的路径转换为本地规范路径，并确保以 '/' 结尾
-		QString normalizedPath = QDir::cleanPath(localPath);
-		m_exeDir = normalizedPath.endsWith("/") ? normalizedPath : normalizedPath + "/";
-		QString csvFolder = findActualDir(m_exeDir, "csv");
-		QString erbFolder = findActualDir(m_exeDir, "erb");
-		QString contentDir = findActualDir(m_exeDir, "resources");
-		m_csvDir = m_exeDir + csvFolder + "/";
-		m_erbDir = m_exeDir + erbFolder + "/";
-		m_contentDir = m_exeDir + contentDir + "/";
-		m_configPath = m_exeDir + "emuera.config";
-		initializeEngine();
+		// All components are initialized by their constructors
 }
 
-bool EraEngine::initializeEngine()
+void EraEngine::registerTypes()
 {
-		//检查基础目录是否存在
-		if (!QDir(m_csvDir).exists() || !QDir(m_erbDir).exists()) {
-				qWarning() << "CSV or ERB directory missing in:" << m_exeDir;
-				emit renderText("错误: 未找到 csv 或 erb 文件夹，请检查游戏路径。", true, false);
-				return false;
-		}
+		qmlRegisterType<GameBaseData>("io.yigekuoyou.eraengine", 1, 0, "GameBaseData");
+		qmlRegisterType<EraEngine>("io.yigekuoyou.eraengine", 1, 0, "EraEngine");
 
-		if (!QDir(m_csvDir).exists() || !QDir(m_erbDir).exists()) {
-						qWarning() << "CSV or ERB directory missing in:" << m_exeDir;
-						emit renderText("错误: 未找到 csv 或 erb 文件夹，请检查游戏路径。", true, false);
-						return false;
-				}
+		// Register input system types
+		qmlRegisterUncreatableType<EraTetrisInputSystem>("io.yigekuoyou.eraengine", 1, 0, "EraTetrisInputSystem",
+				"EraTetrisInputSystem is created by EraEngine");
 
-				loadConfiguration();
-				loadGameBaseCsv();
+		// Register script types
+		qmlRegisterUncreatableType<ScriptLine>("io.yigekuoyou.eraengine", 1, 0, "ScriptLine",
+				"ScriptLine is used internally");
+		qmlRegisterUncreatableType<LogicalLine>("io.yigekuoyou.eraengine", 1, 0, "LogicalLine",
+				"LogicalLine is used internally");
 
-				// 参照 C# 补充后续初始化步骤
-				// loadReplaceFile();
-				// loadConstantsData();
-				// loadHeaderFiles(); // ERH
-				// loadErbFiles();    // ERB
-
-				m_isInitialized = true;
-				emit clearScreen();
-				emit renderText("EraEngine C++ 核心初始化成功。", true, false);
-				return true;
+		// Register enum types
+		qRegisterMetaType<StateCode>("StateCode");
+		qRegisterMetaType<BeginType>("BeginType");
+		qRegisterMetaType<ScriptLineType>("ScriptLineType");
+		qRegisterMetaType<VariableTypes::Type>("VariableTypes::Type");
+		qRegisterMetaType<VariableTypes::Scope>("VariableTypes::Scope");
+		qRegisterMetaType<VariableTypes::Dimension>("VariableTypes::Dimension");
+		qRegisterMetaType<VariableTypes::Flag>("VariableTypes::Flag");
+		qRegisterMetaType<ScriptPosition>("ScriptPosition");
+		qRegisterMetaType<InstructionArgument>("InstructionArgument");
+		qRegisterMetaType<InstructionData>("InstructionData");
+		qRegisterMetaType<CalledFunction>("CalledFunction");
 }
 
-void EraEngine::loadConfiguration()
+bool EraEngine::loadScript(const QString& scriptPath)
 {
-		QFile file(m_configPath);
-		if (!file.open(QIODevice::ReadOnly | QIODevice::Text)) {
-				qDebug() << "Config file not found, using default settings.";
-				return;
-		}
-
-		QTextStream in(&file);
-		while (!in.atEnd()) {
-				QString line = in.readLine().trimmed();
-				if (line.isEmpty() || line.startsWith(";")) continue;
-				// 解析配置键值对
-				int idx = line.indexOf('=');
-				if (idx != -1) {
-						QString key = line.left(idx).trimmed();
-						QString val = line.mid(idx + 1).trimmed();
-						m_configMap[key] = val;
-				}
-		}
-		file.close();
+		return m_executionEngine.loadScripts(scriptPath);
 }
 
-void EraEngine::loadGameBaseCsv()
+void EraEngine::executeScript(const QString& scriptName)
 {
-		QString gameBaseFile = m_csvDir + "GameBase.csv";
-		QFile file(gameBaseFile);
-		if (!file.open(QIODevice::ReadOnly | QIODevice::Text)) {
-				qDebug() << "GameBase.csv not found.";
-				return;
-		}
-
-		QTextStream in(&file);
-		// 设置编码，防止中文路径或注释乱码（根据实际情况调整，通常为 Utf8）
-		#if QT_VERSION < QT_VERSION_CHECK(6, 0, 0)
-				in.setCodec("UTF-8");
-		#else
-				in.setEncoding(QStringConverter::Utf8);
-		#endif
-
-		while (!in.atEnd()) {
-				QString line = in.readLine().trimmed();
-				if (line.isEmpty() || line.startsWith(";")) continue;
-
-				// 解析 GameBase 定义
-				QStringList parts = line.split(',');
-				if (parts.size() < 2) continue;
-
-				QString key = parts[0].trimmed();
-				QString val = parts[1].trimmed();
-				m_gameBaseData[key] = val;
-
-				// 针对特定键值进行逻辑处理（对标 C# 的 switch 逻辑）
-				if (key == "コード") {
-						bool ok = false;
-						long long code = val.toLongLong(&ok);
-						if (ok && code == 0) {
-								qWarning() << "代码:0的セーブデータはいかなるコードのスクリプトからも読めるデータとして扱われます";
-						}
-				}
-				else if (key == "動作に必要なEmueraのバージョン") {
-						// 正则校验版本格式 (例如: 1.824.0 等)
-						QRegularExpression rx("^\\d+\\.\\d+\\.\\d+\\.\\d+$");
-						if (!rx.match(val).hasMatch()) {
-								qWarning() << "版本指定指标无法识别，跳过处理：" << val;
-								continue;
-						}
-						// 可在此处对比当前引擎版本
-						// Version currentVersion(InternalEmueraVer);
-						// Version targetVersion(val);
-						// if (currentVersion < targetVersion) { ... }
-				}
-		}
-		file.close();
-
-		// 处理窗口标题默认回退逻辑
-		if (!m_gameBaseData.contains("ウィンドウタイトル") || m_gameBaseData["ウィンドウタイトル"].toString().isEmpty()) {
-				QString title = m_gameBaseData.value("タイトル", "").toString();
-				QString versionText = m_gameBaseData.value("バージョン", "").toString();
-				if (title.isEmpty()) {
-						m_gameBaseData["ウィンドウタイトル"] = "Emuera";
-				} else {
-						m_gameBaseData["ウィンドウタイトル"] = title + " " + versionText;
-				}
-		}
-
-		// 通知 QML 更新游戏标题等元数据
-		if (m_gameBaseData.contains("タイトル")) {
-				emit globalDataUpdated("gameTitle", m_gameBaseData["タイトル"]);
-		}
-		if (m_gameBaseData.contains("ウィンドウタイトル")) {
-				emit globalDataUpdated("windowTitle", m_gameBaseData["ウィンドウタイトル"]);
-		}
-
-		emit gameBaseDataChanged();
+		m_executionEngine.executeScript(scriptName);
 }
 
-void EraEngine::sendUserInputValue(const QVariant &value)
+QString EraEngine::getGameDirectory() const
 {
-		qDebug() << "User input received from QML:" << value;
+		return m_gameDirectory;
+}
 
-		// 根据当前输入请求状态分发输入值
-		// 后续在此处对接 Era 解释器的 INPUT / INPUTS / WAIT 状态机
+void EraEngine::setGameDirectory(const QString& directory)
+{
+		if (m_gameDirectory != directory) {
+				m_gameDirectory = directory;
+				m_fileSystem.setRootDir(directory);
+				reload();
+				emit gameDirectoryChanged();
+		}
+}
 
-		// 示例：回显输入并解除等待
-		emit renderText(">> " + value.toString(), true, false);
+void EraEngine::reload()
+{
+		// Reload scripts from current directory
+		if (!m_gameDirectory.isEmpty()) {
+				// First load gamebase data
+				loadGameBaseData();
+
+				// Then load scripts
+				m_executionEngine.loadScripts(m_gameDirectory);
+		}
+}
+
+void EraEngine::loadGameBaseData()
+{
+		// GameBase.csv should be in the game directory
+		QString gameBasePath = m_gameDirectory;
+		QString localPath = QUrl(gameBasePath).toLocalFile();
+
+		qDebug() << "[DEBUG] Looking for GameBase.csv in:" << localPath;
+
+		// Find the actual CSV directory (case-insensitive)
+		QString csvDir = m_fileSystem.findActualDir(localPath, "CSV");
+		qDebug() << "[DEBUG] Found CSV directory:" << csvDir;
+		gameBasePath=m_fileSystem.getPathWithActualCase(localPath,csvDir);
+		QString GameBaseCsv = m_fileSystem.findActualDir(gameBasePath, "GameBase.csv");
+		qDebug() << "[DEBUG] Found GameBase name:" << GameBaseCsv;
+		gameBasePath = gameBasePath+"/"+GameBaseCsv;
+		qDebug() << "[DEBUG] GameBase path:" << gameBasePath;
+
+		// Load GameBase.csv
+		CsvLoader csvLoader;
+		if (csvLoader.loadFile(gameBasePath)) {
+			qDebug() << "[DEBUG] CSV file loaded successfully";
+			// Parse the data and populate gameBaseData
+			// GameBase.csv format: "列名,值"
+			// Example: "タイトル,era俄罗斯方块"
+
+			QStringList tableNames = csvLoader.getTableNames();
+			if (!tableNames.isEmpty()) {
+				QString tableName = tableNames.first();
+				int rowCount = csvLoader.getRowCount(tableName);
+
+				qDebug() << "[DEBUG] Table:" << tableName << "has" << rowCount << "rows";
+
+				// Parse each row
+				for (int row = 0; row < rowCount; ++row) {
+					// Get the key-value pair
+					QString key = csvLoader.getString(tableName, row, 0);
+					QString value = csvLoader.getString(tableName, row, 1);
+
+					qDebug() << "[DEBUG] Row" << row << "- Key:" << key << "Value:" << value;
+
+					// Map Japanese keys to GameBaseData properties
+					if (key == "ウィンドウタイトル") {
+						m_gameBaseData.set("ウィンドウタイトル", value);
+						qDebug() << "[DEBUG] Set windowTitle to:" << value;
+					} else if (key == "タイトル") {
+						m_gameBaseData.set("タイトル", value);
+						qDebug() << "[DEBUG] Set title to:" << value;
+					} else if (key == "作者") {
+						m_gameBaseData.set("作者", value);
+						qDebug() << "[DEBUG] Set author to:" << value;
+					} else if (key == "バージョン") {
+						m_gameBaseData.set("バージョン", value);
+						qDebug() << "[DEBUG] Set version to:" << value;
+					} else if (key == "製作年") {
+						m_gameBaseData.set("製作年", value);
+						qDebug() << "[DEBUG] Set releaseYear to:" << value;
+					} else if (key == "追加情報") {
+						m_gameBaseData.set("追加情報", value);
+						qDebug() << "[DEBUG] Set additionalInfo to:" << value;
+					}
+				}
+
+				// ==========================================
+				// 在这里调用 toMap() 获取 QVariantMap 格式的数据
+				// ==========================================
+				QVariantMap gameDataBaseMap = m_gameBaseData.toMap();
+				qDebug() << "[DEBUG] GameBaseData as map:" << gameDataBaseMap;
+				qDebug() << "[INFO] GameBase.csv loaded successfully";
+			}
+		} else {
+			qDebug() << "[INFO] GameBase.csv not found or could not be loaded";
+		}
+}
+// Config loading helper methods (callable from QML)
+void EraEngine::loadConfig(const QString& filePath, int precedence)
+{
+		m_configLoader.loadConfigFile(filePath, precedence);
+		qDebug() << "[DEBUG] Config loaded:" << filePath << "precedence:" << precedence;
+}
+
+void EraEngine::mergeConfig(const QString& filePath, int precedence)
+{
+		m_configLoader.mergeConfig(filePath, precedence);
+		qDebug() << "[DEBUG] Config merged:" << filePath << "precedence:" << precedence;
+}
+
+QString EraEngine::getConfig(const QString& key) const
+{
+		return m_configLoader.getConfig(key);
+}
+
+bool EraEngine::hasConfig(const QString& key) const
+{
+		return m_configLoader.hasConfig(key);
+}
+
+// Script processing helper methods (callable from QML)
+void EraEngine::processScripts(const QString& scriptDir)
+{
+		m_scriptProcessor.processScripts(scriptDir);
+		qDebug() << "[DEBUG] Scripts processed from:" << scriptDir;
+}
+
+QString EraEngine::getSystemEntryPoint() const
+{
+		return m_scriptProcessor.findSystemEntryPoint();
+}
+
+QString EraEngine::getSystemTitleEntry() const
+{
+		return m_scriptProcessor.findSystemTitleEntry();
+}
+
+QStringList EraEngine::getEventEntries() const
+{
+		return m_scriptProcessor.findEventEntries();
+}
+
+QStringList EraEngine::getAllEntryPoints() const
+{
+		return m_scriptProcessor.findAllEntryPoints();
+}
+
+// Event execution helper methods (callable from QML)
+void EraEngine::executeEvent(const QString& eventName)
+{
+		m_eventManager.executeEvent(eventName);
+}
+
+void EraEngine::queueEvent(const QString& eventName)
+{
+		m_eventManager.queueEvent(eventName);
+}
+
+void EraEngine::processEvents()
+{
+		m_eventManager.processEvents();
+}
+
+void EraEngine::clearEventQueue()
+{
+		m_eventManager.clearEventQueue();
+}
+
+QStringList EraEngine::getRegisteredEvents() const
+{
+		return m_eventManager.getRegisteredEvents();
+}
+
+bool EraEngine::isEventExecuted(const QString& eventName) const
+{
+		return m_eventManager.isEventExecuted(eventName);
 }

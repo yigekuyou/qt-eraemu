@@ -1,124 +1,128 @@
 #ifndef ERAENGINE_H
 #define ERAENGINE_H
-#include <qqmlintegration.h>
-#include "variable_storage.h"
-#include <QQuickItem>
+
 #include <QObject>
-#include <QDBusInterface>
-#include <QString>
-#include <QDBusPendingReply>
-#include <QDBusServiceWatcher>
-//引入这个头文件以使用 QML_ELEMENT
-#include <qqmlregistration.h>
-#include <QDBusPendingCallWatcher>
+#include <QQmlEngine>
+#include <QQmlContext>
+#include "csv_loader.h"
+#include "variable_storage.h"
+#include "expression_evaluator.h"
+#include "function_system.h"
+#include "instruction_system.h"
+#include "game_flow_control.h"
+#include "rendering_system.h"
+#include "file_system_io.h"
+#include "input_system.h"
+#include "execution_engine.h"
+#include "process_state.h"
+#include "system_processor.h"
+#include "script_line.h"
+#include "config_loader.h"
+#include "script_processor.h"
+#include "input_handler.h"
+#include "event_manager.h"
+#include "logical_line_parser.h"
+#include "variable_types.h"
+#include "game_base_data.h"
+
 class EraEngine : public QObject
 {
-	Q_OBJECT
-	QML_ELEMENT
-	Q_PROPERTY(bool isInitialized READ isInitialized NOTIFY isInitializedChanged)
-	Q_PROPERTY(QString exeDir READ exeDir NOTIFY exeDirChanged)
-	Q_PROPERTY(QString csvDir READ csvDir NOTIFY csvDirChanged)
-	Q_PROPERTY(QString erbDir READ erbDir NOTIFY erbDirChanged)
-	Q_PROPERTY(QString contentDir READ contentDir NOTIFY contentDirChanged)
-	Q_PROPERTY(QString configPath READ configPath NOTIFY configPathChanged)
-	Q_PROPERTY(QVariantMap configMap READ configMap NOTIFY configMapChanged)
-	Q_PROPERTY(QVariantMap gameBaseData READ gameBaseData NOTIFY gameBaseDataChanged)
-	Q_PROPERTY(QString gameDirectory READ gameDirectory WRITE setGameDirectory NOTIFY gameDirectoryChanged)
-	Q_PROPERTY(VariableStorage* variableStorage READ variableStorage CONSTANT)
+    Q_OBJECT
+    QML_ELEMENT
+
 public:
-	EraEngine();
-	bool isInitialized() const { return m_isInitialized; }
-	QString exeDir() const { return m_exeDir; }
-	QString csvDir() const { return m_csvDir; }
-	QString erbDir() const { return m_erbDir; }
-	QString contentDir() const { return m_contentDir; }
-	QString configPath() const { return m_configPath; }
-	QString gameDirectory() const { return m_gameDirectory; }
-	int currentLayout() const { return m_currentLayout; }
-	QVariantMap configMap() const { return m_configMap; }
-	QVariantMap gameBaseData() const { return m_gameBaseData; }
-	void setGameDirectory(const QString &path);
-	// 可写属性的 Setter 函数声明
-	void setCurrentLayout(int currentLayout);
-
-	VariableStorage* variableStorage() { return &m_variableStorage; }
-			const VariableStorage* variableStorage() const { return &m_variableStorage; }
-
-	Q_INVOKABLE void setGlobalInt(const QString &name, int index, qint64 value) {
-			m_variableStorage.setGlobalInt(name, index, value);
-		}
-		Q_INVOKABLE qint64 getGlobalInt(const QString &name, int index) const {
-			return m_variableStorage.getGlobalInt(name, index);
-		}
-		Q_INVOKABLE void setGlobalStr(const QString &name, int index, const QString &value) {
-			m_variableStorage.setGlobalStr(name, index, value);
-		}
-		Q_INVOKABLE QString getGlobalStr(const QString &name, int index) const {
-			return m_variableStorage.getGlobalStr(name, index);
-		}
-		Q_INVOKABLE void setCharaInt(const QString &name, int charaId, int index, qint64 value) {
-			m_variableStorage.setCharaInt(name, charaId, index, value);
-		}
-		Q_INVOKABLE qint64 getCharaInt(const QString &name, int charaId, int index) const {
-			return m_variableStorage.getCharaInt(name, charaId, index);
-		}
-private:
-		bool m_isInitialized;
-		QString m_exeDir;
-		QString m_csvDir;
-		QString m_erbDir;
-		QString m_configPath;
-		int m_currentLayout;
-		QString m_contentDir;
-		QString m_gameDirectory;
-		VariableStorage m_variableStorage;
-		QVariantMap m_configMap;
-		QVariantMap m_gameBaseData;
-
-		bool initializeEngine();
-		void loadConfiguration();
-		void loadGameBaseCsv();
+    explicit EraEngine(QObject *parent = nullptr);
+    
+    // QML-exposable properties
+		Q_PROPERTY(QString gameDirectory READ getGameDirectory WRITE setGameDirectory NOTIFY gameDirectoryChanged)
+		Q_PROPERTY(GameBaseData* gameBaseData READ gameBaseData CONSTANT)
+		Q_PROPERTY(RenderingSystem* renderingSystem READ getRenderingSystem CONSTANT)
+		Q_PROPERTY(EraTetrisInputSystem* inputSystem READ getInputSystem CONSTANT)
+		Q_PROPERTY(InputHandler* inputHandler READ getInputHandler CONSTANT)
+		Q_PROPERTY(ExecutionEngine* executionEngine READ getExecutionEngine CONSTANT)
+    // Game base data
+    GameBaseData* gameBaseData() { return &m_gameBaseData; }
+    
+    // Directory management
+    QString getGameDirectory() const;
+    void setGameDirectory(const QString& directory);
+    
+    // Main components
+		VariableStorage* getVariableStorage() { return &m_variableStorage; }
+		ExpressionEvaluator* getExpressionEvaluator() { return &m_expressionEvaluator; }
+		FunctionSystem* getFunctionSystem() { return &m_functionSystem; }
+		InstructionSystem* getInstructionSystem() { return &m_instructionSystem; }
+		GameFlowControl* getGameFlowControl() { return &m_gameFlowControl; }
+		RenderingSystem* getRenderingSystem() { return &m_renderingSystem; }
+		FileSystem* getFileSystem() { return &m_fileSystem; }
+		BinaryIo* getBinaryIo() { return &m_binaryIo; }
+		EraTetrisInputSystem* getInputSystem() { return &m_inputSystem; }
+		ExecutionEngine* getExecutionEngine() { return &m_executionEngine; }
+		ProcessState* getProcessState() { return &m_processState; }
+		SystemProcessor* getSystemProcessor() { return &m_systemProcessor; }
+		InputHandler* getInputHandler() { return &m_inputHandler; }
+    // QML registration
+    static void registerTypes();
+    
+    // Script loading helper (callable from QML)
+    Q_INVOKABLE bool loadScript(const QString& scriptPath);
+    Q_INVOKABLE void executeScript(const QString& scriptName);
+    Q_INVOKABLE void reload();
+    
+    // Game base data loading
+    void loadGameBaseData();
+    
+    // Config loading helper (callable from QML)
+    Q_INVOKABLE void loadConfig(const QString& filePath, int precedence = 0);
+    Q_INVOKABLE void mergeConfig(const QString& filePath, int precedence = 0);
+    Q_INVOKABLE QString getConfig(const QString& key) const;
+    Q_INVOKABLE bool hasConfig(const QString& key) const;
+    
+    // Script processing helper (callable from QML)
+    Q_INVOKABLE void processScripts(const QString& scriptDir);
+    Q_INVOKABLE QString getSystemEntryPoint() const;
+    Q_INVOKABLE QString getSystemTitleEntry() const;
+    Q_INVOKABLE QStringList getEventEntries() const;
+    Q_INVOKABLE QStringList getAllEntryPoints() const;
+    
+    // Event execution helper (callable from QML)
+    Q_INVOKABLE void executeEvent(const QString& eventName);
+    Q_INVOKABLE void queueEvent(const QString& eventName);
+    Q_INVOKABLE void processEvents();
+    Q_INVOKABLE void clearEventQueue();
+    Q_INVOKABLE QStringList getRegisteredEvents() const;
+    Q_INVOKABLE bool isEventExecuted(const QString& eventName) const;
+    
 signals:
-		void isInitializedChanged();
-		void exeDirChanged();
-		void csvDirChanged();
-		void erbDirChanged();
-		void contentDirChanged();
-		void configPathChanged();
-		void currentLayoutChanged();
-		void configMapChanged();
-		void gameBaseDataChanged();
-		void gameDirectoryChanged();
-		// 基础文本类
-		void renderText(const QString &text, bool addNewline, bool needWait);
-
-		// 图片类信号 (传递图片路径或 ID、宽高、以及后续控制符)
-		void renderImage(const QString &imagePath, int width, int height, bool addNewline, bool needWait);
-
-		// 按钮类信号 (传递按钮显示的文本、绑定的返回值)
-		void renderButton(const QString &buttonText, const QVariant &returnValue, bool addNewline);
-
-		// 条形图信号 (当前值，最大值，长度)
-		void drawBar(int current, int max, int width, const QString &color);
-		// 控制流式布局、绝对布局或网格布局
-		void setlayout(int layoutMode);
-		//音频信号
-		void playMedia(int type, const QString &path, int volume);
-		//等待信号
-		void waitTimer(int milliseconds);
-		//清除屏幕
-		void clearScreen();
-		//字体样式
-		void setStyle(const QVariantMap &styleMap);
-		//drawLine
-		void drawLine(const QString &styleChar);
-		//type 区分：0=任意键(WAIT), 1=数字输入(INPUT), 2=字符串输入(INPUTS), 3=鼠标点击(INPUTMOUSEKEY)。通知 QML 开放输入控件并显示提示。
-		void requestInput(int type, int timeout, const QString &prompt);
-		//渲染命令 cmdId 代表画布操作（如画线、贴图、移动 Sprite），args 包含坐标、大小、纹理 ID 等
-		void renderCommand(int cmdId, const QVariantList &args);\
-		//更新
-		void globalDataUpdated(const QString &key, const QVariant &value);
-public slots:
-		void sendUserInputValue(const QVariant &value);
+    void gameDirectoryChanged();
+    
+private:
+    QString m_gameDirectory;
+    GameBaseData m_gameBaseData;
+    VariableStorage m_variableStorage;
+    ExpressionEvaluator m_expressionEvaluator;
+    FunctionSystem m_functionSystem;
+    InstructionSystem m_instructionSystem;
+    GameFlowControl m_gameFlowControl;
+    RenderingSystem m_renderingSystem;
+    FileSystem m_fileSystem;
+    BinaryIo m_binaryIo;
+    EraTetrisInputSystem m_inputSystem;
+    ExecutionEngine m_executionEngine;
+    ProcessState m_processState;
+    SystemProcessor m_systemProcessor;
+    
+    // Config loader
+    ConfigLoader m_configLoader;
+    
+    // Script processor
+    ScriptProcessor m_scriptProcessor;
+    
+    // Input handler
+    InputHandler m_inputHandler;
+    
+    // Event manager
+    EventManager m_eventManager;
 };
+
 #endif // ERAENGINE_H

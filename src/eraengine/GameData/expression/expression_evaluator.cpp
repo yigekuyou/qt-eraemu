@@ -36,7 +36,6 @@ QVariant ExpressionEvaluator::evaluate(const QString &expression, VariableStorag
 
 		QVariant result = evaluateNode(*ast, storage, gameBaseData);
 
-		qDebug() << "  Expression result:" << result.toString();
 		emit evaluationFinished(expression, result);
 		return result;
 }
@@ -71,8 +70,6 @@ QVariant ExpressionEvaluator::evaluateLiteral(const LiteralNode &node)
 
 QVariant ExpressionEvaluator::evaluateVariable(const VariableNode &node, VariableStorage *storage, GameBaseData *gameBaseData)
 {
-    qDebug() << "evaluateVariable: varName=" << node.name();
-    
     if (!storage) {
         return QVariant();
     }
@@ -83,7 +80,6 @@ QVariant ExpressionEvaluator::evaluateVariable(const VariableNode &node, Variabl
     if (varName.startsWith("GAMEBASE_") && gameBaseData) {
         QString key = varName.mid(9);  // Remove "GAMEBASE_" prefix
         QString value = gameBaseData->get(key);
-        qDebug() << "  GameBase value for" << key << ":" << value;
         if (!value.isEmpty()) {
             return QVariant(value);
         }

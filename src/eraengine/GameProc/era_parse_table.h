@@ -84,7 +84,7 @@ public:
     QString getEntryPoint() const;
 
     // Get execution queue for current script
-    QQueue<LogicalLine> getExecutionQueue() const;
+    QList<LogicalLine> getExecutionQueue() const;
 
     // Get label position in script
     int getLabelPosition(const QString& scriptName, const QString& labelName) const;
@@ -173,7 +173,8 @@ public slots:
     bool jumpToLabel(const QString& label);
 
     // 压入调用帧并跳转到 label（CALL 语义），返回地址 = 当前行 + 1
-    bool callLabel(const QString& label);
+    // If advanceWasCalled is true, currentLine already points to next instruction
+    bool callLabel(const QString& label, bool advanceWasCalled = false);
 
     // 弹出调用帧并恢复到返回地址（RETURN 语义）；空栈返回 false
     bool returnFromCall();
@@ -208,6 +209,9 @@ public slots:
     // Start the execution pump (called after entry point is set)
     void startExecutionPump();
 
+    // Switch to different memory space (public for testing)
+    void switchToMemorySpace(const QString& scriptName);
+
 private:
     // Build execution queue for a script
     void buildExecutionQueue(const QString& scriptName);
@@ -217,9 +221,6 @@ private:
 
     // Get or create memory space for script
     ScriptMemorySpace* getOrCreateMemorySpace(const QString& scriptName);
-
-    // Switch to different memory space
-    void switchToMemorySpace(const QString& scriptName);
 
     // Reconstruct operand from instruction arguments
     QString reconstructOperand(const ScriptLine& scriptLine) const;
@@ -239,12 +240,20 @@ private:
     void pushFrame(const Frame& frame);
     Frame popFrame();
 
+    // 获取当前执行索引（用于记录 CALL 时的返回地址）
+    int getCurrentExecutionIndex() const;
+
+    // 记录 CALL 指令的位置（在 advance 之前），用于正确计算返回地址
+    void recordCallPosition();
+
     // 某脚本的逻辑行数（0 表示未知）
     int lineCountFor(const QString& script) const;
 
     // Parse table data (只读区)
     QHash<QString, QList<LogicalLine>> m_parsedScripts;
-    QHash<QString, QQueue<LogicalLine>> m_executionQueues;
+    // Execution queues - one per script, stores remaining instructions to execute
+    QHash<QString, QList<LogicalLine>> m_executionQueues;
+    QHash<QString, int> m_executionQueueIndices;  // Current index in each script's queue
     QHash<QString, QHash<QString, int>> m_labelPositions;
 
     // Entry point

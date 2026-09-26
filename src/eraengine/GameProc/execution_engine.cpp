@@ -27,6 +27,10 @@ ExecutionEngine::~ExecutionEngine() {
     }
 }
 
+void ExecutionEngine::setParseTable(EraParseTable* parseTable) {
+    m_parseTable = parseTable;
+}
+
 bool ExecutionEngine::executeScript(const QString& scriptName) {
     // This function is kept for backward compatibility
     // The new signal/slot architecture handles execution

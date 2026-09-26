@@ -131,3 +131,26 @@ target_include_directories(test_era_parse_table PRIVATE
     ${CMAKE_CURRENT_SOURCE_DIR}/GameProc
     ${CMAKE_CURRENT_SOURCE_DIR}/GameView
 )
+
+# Regression tests for Phase D (CALL/RETURN接线)
+add_executable(test_regression
+test/test_regression.cpp
+)
+target_link_libraries(test_regression PRIVATE eraengine Qt6::Core Qt6::Qml Qt6::Widgets)
+target_include_directories(test_regression PRIVATE
+    ${CMAKE_CURRENT_SOURCE_DIR}/Config
+    ${CMAKE_CURRENT_SOURCE_DIR}/Content
+    ${CMAKE_CURRENT_SOURCE_DIR}/GameData
+    ${CMAKE_CURRENT_SOURCE_DIR}/GameData/expression
+    ${CMAKE_CURRENT_SOURCE_DIR}/GameData/Function
+    ${CMAKE_CURRENT_SOURCE_DIR}/GameData/Variable
+    ${CMAKE_CURRENT_SOURCE_DIR}/GameProc
+    ${CMAKE_CURRENT_SOURCE_DIR}/GameView
+)
+
+# Enable testing
+enable_testing()
+
+# Register all tests with CTest
+add_test(NAME test_era_parse_table COMMAND test_era_parse_table)
+add_test(NAME test_regression COMMAND test_regression)

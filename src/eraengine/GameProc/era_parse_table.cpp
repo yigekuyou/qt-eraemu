@@ -6,6 +6,10 @@
 #include <QFileInfo>
 #include <QCoreApplication>
 #include <QEventLoop>
+#include <iostream>
+
+// Re-entrancy guard for pumpInstructions to prevent stack overflow
+static thread_local bool s_inPumpInstructions = false;
 
 EraParseTable::EraParseTable(ProcessState* state, ExecutionEngine* execEngine, QObject* parent)
     : QObject(parent)
@@ -137,14 +141,12 @@ void EraParseTable::setEntryPoint(const QString& label) {
         const QHash<QString, int>& labelMap = m_labelPositions[scriptName];
         if (labelMap.contains(label)) {
             m_currentScript = scriptName;
-            qDebug() << "Set entry point:" << label << "in script:" << m_currentScript;
             break;
         }
     }
     
     // If entry point not found, try to find a reasonable default
     if (m_currentScript.isEmpty()) {
-        qDebug() << "Entry point not found:" << label << ", trying defaults";
         // Try to find a script with common entry point labels
         QStringList commonLabels = {"MAIN_LOOP", "SYSTEM_TITLE", "MAIN", "TITLE"};
         for (const QString& labelToTry : commonLabels) {
@@ -153,7 +155,6 @@ void EraParseTable::setEntryPoint(const QString& label) {
                 if (labelMap.contains(labelToTry)) {
                     m_currentScript = scriptName;
                     m_entryPoint = labelToTry;
-                    qDebug() << "Found default entry point:" << labelToTry << "in" << scriptName;
                     break;
                 }
             }
@@ -167,6 +168,11 @@ void EraParseTable::setEntryPoint(const QString& label) {
         m_currentMemorySpace = getOrCreateMemorySpace(m_currentScript);
         resetPosition();
         setCurrentLineInternal(entryLine >= 0 ? entryLine : 0, true);
+        
+        // Sync queue index to PC to prevent desync
+        if (m_executionQueueIndices.contains(m_currentScript)) {
+            m_executionQueueIndices[m_currentScript] = entryLine;
+        }
     }
 
     emit entryPointReached(label);
@@ -180,9 +186,9 @@ QString EraParseTable::getEntryPoint() const {
     return m_entryPoint;
 }
 
-QQueue<LogicalLine> EraParseTable::getExecutionQueue() const {
+QList<LogicalLine> EraParseTable::getExecutionQueue() const {
     if (m_currentScript.isEmpty()) {
-        return QQueue<LogicalLine>();
+        return QList<LogicalLine>();
     }
     return m_executionQueues.value(m_currentScript);
 }
@@ -276,7 +282,10 @@ void EraParseTable::setCurrentLineInternal(int line, bool forceEmit) {
     if (line == m_currentLine && !forceEmit) {
         return;
     }
+    int oldLine = m_currentLine;
     m_currentLine = line;
+    
+    // Note: Position tracking is now handled by ParseTable as the authority
     emit positionChanged(m_currentScript, m_currentLine);
 }
 
@@ -302,6 +311,11 @@ void EraParseTable::resetPosition() {
     m_currentLine = 0;
     emit callStackChanged(0);
     emit positionChanged(m_currentScript, 0);
+    
+    // Reset the queue index to 0 when position is reset
+    if (m_executionQueueIndices.contains(m_currentScript)) {
+        m_executionQueueIndices[m_currentScript] = 0;
+    }
 }
 
 void EraParseTable::setPosition(const QString& script, int line) {
@@ -321,6 +335,12 @@ bool EraParseTable::jumpToLine(int line) {
         return false;
     }
     setCurrentLineInternal(line, true);
+    
+    // Reset the queue index to the new position
+    if (m_executionQueueIndices.contains(m_currentScript)) {
+        m_executionQueueIndices[m_currentScript] = line;
+    }
+    
     return true;
 }
 
@@ -339,11 +359,17 @@ bool EraParseTable::jumpToLabel(const QString& label) {
     }
 
     setCurrentLineInternal(target, true);
+    
+    // Reset the queue index to the new position
+    if (m_executionQueueIndices.contains(m_currentScript)) {
+        m_executionQueueIndices[m_currentScript] = target;
+    }
+    
     emit jumpRequested(m_currentScript, label, target);
     return true;
 }
 
-bool EraParseTable::callLabel(const QString& label) {
+bool EraParseTable::callLabel(const QString& label, bool advanceWasCalled) {
     // 目标优先在当前脚本解析，否则跨脚本查找（保持调用者脚本不变）
     QString targetScript = m_currentScript;
     int target = getLabelPosition(m_currentScript, label);
@@ -362,12 +388,26 @@ bool EraParseTable::callLabel(const QString& label) {
     }
 
     // 返回地址 = CALL 所在行的下一行，此时仍处于调用者脚本中
-    pushFrame(Frame(m_currentScript, m_currentLine + 1, label));
+    // The return address is the line AFTER the CALL instruction.
+    // If advanceWasCalled is true, m_currentLine already points to the line after CALL
+    // (because advance() was called before callLabel()).
+    // Otherwise, m_currentLine points to CALL itself, so returnLine = m_currentLine + 1.
+    int returnLine = advanceWasCalled ? m_currentLine : m_currentLine + 1;
+    pushFrame(Frame(m_currentScript, returnLine, label));
 
     if (targetScript != m_currentScript) {
         switchToMemorySpace(targetScript);
     }
     setCurrentLineInternal(target, true);
+    
+    // Reset the queue index to the target position
+    if (m_executionQueueIndices.contains(targetScript)) {
+        m_executionQueueIndices[targetScript] = target;
+    }
+    
+    // Emit checkState to continue execution
+    emit checkState();
+    
     return true;
 }
 
@@ -381,6 +421,12 @@ bool EraParseTable::returnFromCall() {
         switchToMemorySpace(frame.script);
     }
     setCurrentLineInternal(frame.returnLine, true);
+    
+    // Reset the queue index when returning to the caller's position
+    if (m_executionQueueIndices.contains(m_currentScript)) {
+        m_executionQueueIndices[m_currentScript] = frame.returnLine;
+    }
+    
     return true;
 }
 
@@ -397,14 +443,11 @@ void EraParseTable::buildExecutionQueue(const QString& scriptName) {
         return;
     }
     
-    QQueue<LogicalLine> queue;
     const QList<LogicalLine>& lines = m_parsedScripts[scriptName];
     
-    for (const LogicalLine& line : lines) {
-        queue.enqueue(line);
-    }
-    
-    m_executionQueues[scriptName] = queue;
+    // Initialize queue and index
+    m_executionQueues[scriptName] = lines;
+    m_executionQueueIndices[scriptName] = 0;
 
     if (m_currentScript == scriptName) {
         // 位置区：脚本重新装载后 PC 归零（加载期，保持安静，不发信号）
@@ -580,48 +623,34 @@ void EraParseTable::switchToMemorySpace(const QString& scriptName) {
     m_currentScript = scriptName;
     m_currentMemorySpace = getOrCreateMemorySpace(scriptName);
     
-    qDebug() << "Switched to memory space:" << scriptName;
-    
     emit memorySpaceChanged(scriptName);
 }
 
 void EraParseTable::onExecutionResult(const QString& scriptName, int lineNumber, bool success) {
+    // Note: Execution result handling is now managed by ParseTable
     if (!success) {
-        qDebug() << "Execution failed:" << scriptName << "line:" << lineNumber;
         return;
     }
-    
-    qDebug() << "Execution result received for:" << scriptName << "line:" << lineNumber;
     
     emit checkState();
 }
 
 void EraParseTable::onJumpRequest(const QString& label) {
-    qDebug() << "Jump request received for label:" << label;
-
     // 位置区统一入口：解析 label（可跨脚本）并更新 PC，再通知执行侧。
-    if (!jumpToLabel(label)) {
-        qDebug() << "Failed to resolve jump target:" << label;
-    }
+    jumpToLabel(label);
 }
 
 void EraParseTable::onJumpToScript(const QString& scriptName, const QString& label) {
-    qDebug() << "Jump to script request:" << scriptName << "label:" << label;
-    
     int targetPosition = -1;
     if (resolveJumpToScript(scriptName, label, targetPosition)) {
-        qDebug() << "Jump to script resolved:" << scriptName << ":" << label << "->" << targetPosition;
         // 位置区：切换脚本并定位到目标 label
         setPosition(scriptName, targetPosition);
         emit jumpRequested(scriptName, label, targetPosition);
-    } else {
-        qDebug() << "Failed to resolve jump to script:" << scriptName << ":" << label;
     }
 }
 
 void EraParseTable::onStateChange() {
     // State change detected - stop execution
-    qDebug() << "State change detected, stopping execution";
 }
 
 void EraParseTable::onStateUnchanged() {
@@ -631,11 +660,17 @@ void EraParseTable::onStateUnchanged() {
         return;
     }
     
+    // Check if there are more instructions to execute
+    int& index = m_executionQueueIndices[m_currentScript];
+    const QList<LogicalLine>& queue = m_executionQueues[m_currentScript];
+    if (index >= queue.size()) {
+        return;
+    }
+    
     pumpInstructions();
 }
 
 void EraParseTable::onStateChanged() {
-    qDebug() << "State changed, continuing execution";
     // Continue execution after state change
     pumpInstructions();
 }
@@ -646,23 +681,52 @@ bool EraParseTable::pumpInstructions() {
     // 1. Using Qt::QueuedConnection for stateUnchanged signal (set in eraengine.cpp)
     // 2. Directly processing instructions without emitting signals
     
+    // Re-entrancy guard: prevent pumpInstructions from being called recursively
+    if (s_inPumpInstructions) {
+        return false;
+    }
+    s_inPumpInstructions = true;
+    
+    // Re-entrancy cleanup on exit (RAII-style)
+    auto cleanup = [&]() { s_inPumpInstructions = false; };
+    
     if (m_currentScript.isEmpty() || m_executionQueues[m_currentScript].isEmpty()) {
+        cleanup();
         return false;
     }
     
-    // Get reference to the queue
-    QQueue<LogicalLine>& queue = m_executionQueues[m_currentScript];
+    // Get reference to the queue and index
+    QList<LogicalLine>& queue = m_executionQueues[m_currentScript];
+    int& index = m_executionQueueIndices[m_currentScript];
     
     // Process instructions until queue is empty or state changes
     // Execute one instruction at a time to avoid stack overflow
     // This is called repeatedly by onStateUnchanged via Qt::QueuedConnection
-    if (queue.isEmpty()) {
-        return false;
+    if (index >= queue.size()) {
+        // End of queue: if there's a call stack, return from call; otherwise stop
+        if (m_callStack.isEmpty()) {
+            // No more execution to do
+            cleanup();
+            return false;
+        } else {
+            // We've reached the end of a function, return to caller
+            // This handles the case where a script ends before its entry function completes
+            if (returnFromCall()) {
+                // Continue execution in caller
+                cleanup();
+                return true;
+            } else {
+                // Should not happen if callStack is not empty
+                cleanup();
+                return false;
+            }
+        }
     }
     
     // Get and execute the next instruction directly
-    LogicalLine line = queue.dequeue();
-    advance();  // 位置区：PC++，队列出队即前进
+    LogicalLine line = queue.at(index);
+    index++;
+    advance();  // 位置区：PC++，索引递增即前进
 
     // Use ExecutionEngine to execute the instruction
     if (m_executionEngine) {
@@ -686,22 +750,24 @@ bool EraParseTable::pumpInstructions() {
             if (scriptLine.type() == ScriptLineType::Label) {
                 continue;  // Labels don't execute
             }
-            if (scriptLine.type() == ScriptLineType::Instruction) {
-                QString instructionName = scriptLine.instructionData().name;
-                qDebug() << "Executing instruction:" << instructionName;
-            }
         }
     }
     
     // After instruction, give event loop a chance to process
+    // Process events to ensure onStateUnchanged is processed
+    // Note: timeout of 1ms is sufficient to allow event processing without blocking
     QCoreApplication::processEvents(QEventLoop::AllEvents, 1);
     
+    // Emit checkState to trigger the next instruction via onStateUnchanged
+    emit checkState();
+    
     // Return true if there are more instructions to process
-    return !queue.isEmpty();
+    bool result = index < queue.size();
+    cleanup();
+    return result;
 }
 
 void EraParseTable::startExecutionPump() {
-    qDebug() << "Starting execution pump";
     // Start the execution pump by requesting the first instruction
     if (!m_entryPoint.isEmpty() && m_currentScript.isEmpty()) {
         // Set entry point if not already set
@@ -712,19 +778,10 @@ void EraParseTable::startExecutionPump() {
 }
 
 void EraParseTable::onRequestNextInstruction() {
-    qDebug() << "Request for next instruction received";
     pumpInstructions();
 }
 
 void EraParseTable::onExecutionComplete(const QString& scriptName) {
-    qDebug() << "Execution complete for script:" << scriptName;
-
     // 位置区：一次执行结束，清空调用栈并复位 PC
     resetPosition();
-
-    
-    if (m_currentScript == scriptName) {
-        // Execution complete for current script
-        qDebug() << "Execution complete for current script:" << scriptName;
-    }
 }

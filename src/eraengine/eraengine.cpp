@@ -34,6 +34,9 @@ EraEngine::EraEngine(QObject *parent)
 		// Set variable storage in parse table for condition evaluation
 		m_parseTable.setVariableStorage(&m_variableStorage);
 		
+		// Set ParseTable reference in ExecutionEngine for CALL/RETURN integration
+		m_executionEngine.setParseTable(&m_parseTable);
+		
 		// Initialize signal manager with default handlers
 		// Connect execution engine signals to signal manager
 		connect(&m_executionEngine, &ExecutionEngine::executionStarted,
@@ -132,8 +135,9 @@ EraEngine::EraEngine(QObject *parent)
 				&m_parseTable, &EraParseTable::onStateUnchanged, Qt::QueuedConnection);
 		
 		// ProcessState emits stateChangedSignal when state changed
+		// Use Qt::QueuedConnection to break the signal chain and avoid stack overflow
 		connect(&m_processState, &ProcessState::stateChangedSignal,
-				&m_parseTable, &EraParseTable::onStateChanged);
+				&m_parseTable, &EraParseTable::onStateChanged, Qt::QueuedConnection);
 		
 		// ProcessState emits stateChanged (no args) when state changes
 		// Connect to SystemStatusManager to keep state synchronized

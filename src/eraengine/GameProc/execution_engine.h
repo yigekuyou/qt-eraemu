@@ -15,6 +15,9 @@
 #include "process_state.h"
 #include "game_base_data.h"
 
+// Forward declaration
+class EraParseTable;
+
 // Execution engine - main game loop and instruction execution
 class ExecutionEngine : public QObject {
     Q_OBJECT
@@ -22,6 +25,9 @@ class ExecutionEngine : public QObject {
 public:
     explicit ExecutionEngine(VariableStorage* storage, GameBaseData* gameBaseData = nullptr, QObject* parent = nullptr);
     ~ExecutionEngine();
+    
+    // Set ParseTable reference for CALL/RETURN integration
+    void setParseTable(EraParseTable* parseTable);
     
     // Start execution
     bool executeScript(const QString& scriptName);
@@ -116,6 +122,10 @@ private:
     ErbLoader m_erbLoader;
     LogicalLineParser m_parser;
     ProcessState m_state;
+    
+    // ParseTable reference for CALL/RETURN integration
+    EraParseTable* m_parseTable;
+    
     bool m_running;
     int m_currentLine;
     QString m_currentScript;

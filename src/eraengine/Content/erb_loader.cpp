@@ -3,6 +3,7 @@
 #include <QRegularExpression>
 #include <QTextStream>
 #include <algorithm>
+#include <iostream>
 #include "file_system_io.h"
 
 ErbLoader::ErbLoader(QObject* parent) : QObject(parent), m_parseTable(nullptr) {}
@@ -293,6 +294,11 @@ InstructionData ErbLoader::extractInstruction(const QString& line) {
         data.name = "CALL";
         QString funcName = callMatch.captured(1);
         QString args = callMatch.captured(2);
+        
+        // Remove @ prefix from function name for label lookup
+        if (funcName.startsWith('@')) {
+            funcName = funcName.mid(1);
+        }
         
         // Store function name as first argument (label to call)
         data.arguments.append(InstructionArgument(funcName));

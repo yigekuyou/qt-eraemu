@@ -66,6 +66,9 @@ public:
     QString getDirectoryPath(const QString& filePath) const;
     QString combinePath(const QString& basePath, const QString& relativePath) const;
     
+    // Config file path helpers
+    QString getConfigPath(const QString& basePath, const QString& configName) const;
+    
     // Stream operations
     IoResult readTextFile(const QString& filePath, QString& content);
     IoResult writeTextFile(const QString& filePath, const QString& content);

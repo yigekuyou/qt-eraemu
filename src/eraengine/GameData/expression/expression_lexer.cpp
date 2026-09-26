@@ -1,7 +1,9 @@
 #include "expression_lexer.h"
-#include "expression_token.h"
 #include <QRegularExpression>
 #include <QSet>
+
+ExpressionToken::ExpressionToken(TokenType type, const QString& value, int line, int column)
+    : m_type(type), m_value(value), m_line(line), m_column(column) {}
 
 ExpressionLexer::ExpressionLexer() : m_position(0), m_line(1), m_column(0) {}
 

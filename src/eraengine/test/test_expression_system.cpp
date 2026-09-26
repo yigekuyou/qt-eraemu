@@ -1,7 +1,6 @@
 #include <QCoreApplication>
 #include <QDebug>
 #include <QDir>
-#include "expression_token.h"
 #include "expression_lexer.h"
 #include "expression_parser.h"
 #include "expression_ast.h"

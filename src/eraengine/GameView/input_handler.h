@@ -37,4 +37,29 @@ private:
     QWaitCondition m_waitCondition;
 };
 
+// ---------------------------------------------------------------------------
+// EraTetrisInputSystem: maps QML text input to game actions.
+// Formerly GameView/input_system.h/.cpp; kept together with InputHandler since
+// both are the "user input" surface of the engine.
+// ---------------------------------------------------------------------------
+class EraTetrisInputSystem : public QObject
+{
+		Q_OBJECT
+
+public:
+		explicit EraTetrisInputSystem(QObject *parent = nullptr);
+
+		// QML 中直接调用的输入动作
+		Q_INVOKABLE bool handleTetrisInput(const QString& input);
+
+signals:
+		void tetrisMoveLeft();
+		void tetrisMoveRight();
+		void tetrisMoveDown();
+		void tetrisRotate();
+		void tetrisHardDrop();
+		void tetrisPause();
+		void tetrisStart();
+};
+
 #endif // INPUT_HANDLER_H

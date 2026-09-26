@@ -3,7 +3,6 @@
 #include "expression_ast.h"
 #include "expression_lexer.h"
 #include "variable_storage.h"
-#include "variable_token.h"
 #include "game_base_data.h"
 #include <QRegularExpression>
 #include <QDebug>
@@ -37,6 +36,7 @@ QVariant ExpressionEvaluator::evaluate(const QString &expression, VariableStorag
 
 		QVariant result = evaluateNode(*ast, storage, gameBaseData);
 
+		qDebug() << "  Expression result:" << result.toString();
 		emit evaluationFinished(expression, result);
 		return result;
 }
@@ -101,12 +101,30 @@ QVariant ExpressionEvaluator::evaluateVariable(const VariableNode &node, Variabl
         auto *indexNode = indices.first();
         if (auto *literal = dynamic_cast<LiteralNode*>(indexNode)) {
             int index = evaluateLiteral(*literal).toInt();
-            return evaluateIndexedVariable(varName, index, storage);
+            
+            // Try to get system variable first
+            if (storage->isVariableGlobal(varName) || 
+                varName == "DAY" || varName == "MONEY" || varName == "FLAG" ||
+                varName == "ITEM" || varName == "COUNT" || varName == "A" ||
+                varName == "B" || varName == "C") {
+                return QVariant(storage->getSystemVariable(varName, index));
+            }
+            
+            // Fall back to global variable
+            return QVariant(storage->getGlobalInt1D(varName, index));
         }
     }
     
-    // Simple variable access - return 0 if not found
-    return QVariant(0);
+    // Simple variable access (no array index) - look up in storage
+    // For system variables, return index 0 value by default
+    if (varName == "DAY" || varName == "MONEY" || varName == "FLAG" ||
+        varName == "ITEM" || varName == "COUNT" || varName == "A" ||
+        varName == "B" || varName == "C") {
+        return QVariant(storage->getSystemVariable(varName, 0));
+    }
+    
+    // Regular global variable
+    return QVariant(storage->getGlobalInt1D(varName, 0));
 }
 
 QVariant ExpressionEvaluator::evaluateIndexedVariable(const QString &varName, int index, VariableStorage *storage)
@@ -116,9 +134,15 @@ QVariant ExpressionEvaluator::evaluateIndexedVariable(const QString &varName, in
     }
     
     // Try to get the variable value
-    // This would need to check the variable type and call the appropriate method
-    // For now, returning 0 for unknown variables
-    return QVariant(0);
+    // Check if it's a system variable first
+    if (varName == "DAY" || varName == "MONEY" || varName == "FLAG" ||
+        varName == "ITEM" || varName == "COUNT" || varName == "A" ||
+        varName == "B" || varName == "C") {
+        return QVariant(storage->getSystemVariable(varName, index));
+    }
+    
+    // Fall back to global variable
+    return QVariant(storage->getGlobalInt1D(varName, index));
 }
 
 QVariant ExpressionEvaluator::evaluateBinaryOp(const BinaryOpNode &node, VariableStorage *storage, GameBaseData *gameBaseData)

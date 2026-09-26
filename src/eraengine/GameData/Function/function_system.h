@@ -6,6 +6,9 @@
 #include <QString>
 #include <QVariant>
 #include <QList>
+#include <QStack>
+#include <QPair>
+#include "script_line.h"
 
 class VariableStorage; // Forward declaration
 
@@ -43,9 +46,11 @@ struct FunctionResult {
     bool success;
     QVariant value;
     QString error;
+    ScriptPosition position;  // Add position for error context
     
-    FunctionResult(bool succ, const QVariant& val, const QString& err = "")
-        : success(succ), value(val), error(err) {}
+    FunctionResult(bool succ, const QVariant& val, const QString& err = "", 
+                   const ScriptPosition& pos = ScriptPosition())
+        : success(succ), value(val), error(err), position(pos) {}
 };
 
 // Function system interface
@@ -64,15 +69,25 @@ public:
     bool hasFunction(const QString& name) const;
     FunctionSignature getFunctionSignature(const QString& name) const;
     
-    // Function execution
-    FunctionResult executeFunction(const QString& name, const QList<QVariant>& args, VariableStorage* storage = nullptr);
+    // Enhanced function execution with error context
+    FunctionResult executeFunction(const QString& name, const QList<QVariant>& args, 
+                                   VariableStorage* storage, 
+                                   const ScriptPosition& pos = ScriptPosition());
     
-    // Built-in functions
+    // Built-in functions for variable operations
     void registerBuiltInFunctions();
+    
+    // Function call stack management
+    void pushCallFrame(const QString& label, const ScriptPosition& pos);
+    void popCallFrame();
+    QString getCurrentCallFunction() const;
 
 private:
     QHash<QString, FunctionSignature> m_functions;
     QHash<QString, std::function<QVariant(const QList<QVariant>&, VariableStorage*)>> m_builtInFunctions;
+    
+    // Function call stack
+    QStack<QPair<QString, ScriptPosition>> m_callStack;
     
     // Helper methods
     QVariant evaluateExpression(const QString& expression, VariableStorage* storage);

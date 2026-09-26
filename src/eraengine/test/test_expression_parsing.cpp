@@ -2,7 +2,6 @@
 #include <QDebug>
 #include <QFile>
 #include <QStringList>
-#include "expression_token.h"
 #include "expression_lexer.h"
 #include "expression_parser.h"
 #include "expression_ast.h"

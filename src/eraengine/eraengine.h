@@ -8,22 +8,24 @@
 #include "variable_storage.h"
 #include "expression_evaluator.h"
 #include "function_system.h"
-#include "instruction_system.h"
-#include "game_flow_control.h"
 #include "rendering_system.h"
 #include "file_system_io.h"
-#include "input_system.h"
 #include "execution_engine.h"
 #include "process_state.h"
 #include "system_processor.h"
+#include "system_status_manager.h"
 #include "script_line.h"
 #include "config_loader.h"
 #include "script_processor.h"
 #include "input_handler.h"
-#include "event_manager.h"
 #include "logical_line_parser.h"
 #include "variable_types.h"
 #include "game_base_data.h"
+#include "identifier_dictionary.h"
+#include "signal_hub.h"
+#include "era_parse_table.h"
+#include "execution/memory_block.h"
+#include "execution/script_memory_space.h"
 
 class EraEngine : public QObject
 {
@@ -39,9 +41,16 @@ public:
 		Q_PROPERTY(RenderingSystem* renderingSystem READ getRenderingSystem CONSTANT)
 		Q_PROPERTY(EraTetrisInputSystem* inputSystem READ getInputSystem CONSTANT)
 		Q_PROPERTY(InputHandler* inputHandler READ getInputHandler CONSTANT)
+		Q_PROPERTY(SystemStatusManager* statusManager READ getStatusManager CONSTANT)
 		Q_PROPERTY(ExecutionEngine* executionEngine READ getExecutionEngine CONSTANT)
+		Q_PROPERTY(EraParseTable* parseTable READ getParseTable CONSTANT)
     // Game base data
     GameBaseData* gameBaseData() { return &m_gameBaseData; }
+    
+    // Constant data (CSV data loading)
+    
+    // Identifier dictionary (name collision detection)
+    IdentifierDictionary* getIdentifierDictionary() { return &m_identifierDictionary; }
     
     // Directory management
     QString getGameDirectory() const;
@@ -51,8 +60,6 @@ public:
 		VariableStorage* getVariableStorage() { return &m_variableStorage; }
 		ExpressionEvaluator* getExpressionEvaluator() { return &m_expressionEvaluator; }
 		FunctionSystem* getFunctionSystem() { return &m_functionSystem; }
-		InstructionSystem* getInstructionSystem() { return &m_instructionSystem; }
-		GameFlowControl* getGameFlowControl() { return &m_gameFlowControl; }
 		RenderingSystem* getRenderingSystem() { return &m_renderingSystem; }
 		FileSystem* getFileSystem() { return &m_fileSystem; }
 		BinaryIo* getBinaryIo() { return &m_binaryIo; }
@@ -61,6 +68,13 @@ public:
 		ProcessState* getProcessState() { return &m_processState; }
 		SystemProcessor* getSystemProcessor() { return &m_systemProcessor; }
 		InputHandler* getInputHandler() { return &m_inputHandler; }
+    SystemStatusManager* getStatusManager() { return &m_statusManager; }
+    SignalManager* getSignalManager() { return &m_signalManager; }
+    EraParseTable* getParseTable() { return &m_parseTable; }
+    
+    // Execution module accessors
+    MemorySpaceManager* getMemorySpaceManager() { return m_parseTable.getMemorySpaceManager(); }
+    
     // QML registration
     static void registerTypes();
     
@@ -84,6 +98,16 @@ public:
     Q_INVOKABLE QString getSystemTitleEntry() const;
     Q_INVOKABLE QStringList getEventEntries() const;
     Q_INVOKABLE QStringList getAllEntryPoints() const;
+    Q_INVOKABLE void registerEventsWithManager();
+    
+    // Entry point execution helper (callable from QML)
+    Q_INVOKABLE void executeSystemEntryPoint();
+    Q_INVOKABLE void executeSystemTitleEntry();
+    
+    // Full Emuera flow helper (callable from QML)
+    Q_INVOKABLE void runSystem();
+    
+    Q_INVOKABLE void gotoTitle();
     
     // Event execution helper (callable from QML)
     Q_INVOKABLE void executeEvent(const QString& eventName);
@@ -95,6 +119,8 @@ public:
     
 signals:
     void gameDirectoryChanged();
+    void systemStarted();
+    void systemFinished();
     
 private:
     QString m_gameDirectory;
@@ -102,8 +128,6 @@ private:
     VariableStorage m_variableStorage;
     ExpressionEvaluator m_expressionEvaluator;
     FunctionSystem m_functionSystem;
-    InstructionSystem m_instructionSystem;
-    GameFlowControl m_gameFlowControl;
     RenderingSystem m_renderingSystem;
     FileSystem m_fileSystem;
     BinaryIo m_binaryIo;
@@ -111,6 +135,12 @@ private:
     ExecutionEngine m_executionEngine;
     ProcessState m_processState;
     SystemProcessor m_systemProcessor;
+    SystemStatusManager m_statusManager;
+    SignalManager m_signalManager;
+    EraParseTable m_parseTable;
+    
+    // Phase 6: Missing features
+    IdentifierDictionary m_identifierDictionary;
     
     // Config loader
     ConfigLoader m_configLoader;
@@ -123,6 +153,9 @@ private:
     
     // Event manager
     EventManager m_eventManager;
+    
+    // Connection manager - manages signal-slot connections between components
+    ConnectionManager m_connectionManager;
 };
 
 #endif // ERAENGINE_H

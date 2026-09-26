@@ -3,7 +3,7 @@
 
 #include <QString>
 #include <QList>
-#include "expression_token.h"
+#include "expression_lexer.h"
 
 class ExpressionNode {
 public:

@@ -19,7 +19,7 @@ int main(int argc, char *argv[]) {
     // Test 1: Create components
     qDebug() << "\n2. Creating ExecutionEngine components:";
     VariableStorage storage;
-    ExecutionEngine engine(&storage);
+    ExecutionEngine engine(&storage, nullptr);
     qDebug() << "   VariableStorage created";
     qDebug() << "   ExecutionEngine created with storage";
     

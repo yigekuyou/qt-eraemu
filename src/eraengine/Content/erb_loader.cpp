@@ -2,9 +2,10 @@
 #include <QDir>
 #include <QRegularExpression>
 #include <QTextStream>
+#include <algorithm>
 #include "file_system_io.h"
 
-ErbLoader::ErbLoader(QObject* parent) : QObject(parent) {}
+ErbLoader::ErbLoader(QObject* parent) : QObject(parent), m_parseTable(nullptr) {}
 
 bool ErbLoader::loadFile(const QString& filePath) {
     QString content = readFileContent(filePath);
@@ -16,28 +17,53 @@ bool ErbLoader::loadFile(const QString& filePath) {
     QFileInfo fileInfo(filePath);
     QString scriptName = fileInfo.baseName();
     
+    // Emit parse started signal
+    emit parseStarted(scriptName);
+    
     QList<ScriptLine> lines = parseScript(content, filePath);
+    
+    // Store raw script lines
     m_scripts.insert(scriptName, lines);
     m_scriptPaths.insert(scriptName, filePath);
     
-    // Build label lookup
-    for (ScriptLine& line : lines) {
+    // Build label lookup and position mapping
+    for (int i = 0; i < lines.size(); ++i) {
+        ScriptLine& line = lines[i];
         if (line.type() == ScriptLineType::Label) {
             QString labelName = extractLabelName(line.content());
             m_labels.insert(labelName, &line);
+            m_labelPositions.insert(scriptName + ":" + labelName, i);
         }
     }
+    m_scriptLineCounts.insert(scriptName, lines.size());
+    
+    // Parse logical lines and cache them
+    LogicalLineParser parser;
+    QList<LogicalLine> logicalLines = parser.parseLogicalLines(lines);
+    m_logicalLines.insert(scriptName, logicalLines);
+    
+    // Notify parse table about parsed data
+    if (m_parseTable) {
+        m_parseTable->loadScript(scriptName, logicalLines);
+    }
+    
+    // Emit parse finished signal
+    emit parseFinished(scriptName);
     
     return true;
 }
 
-bool ErbLoader::loadDirectory(const QString& dirPath) {
+bool ErbLoader::loadDirectory(const QString& dirPath, int depth) {
+    if (depth > 5) {
+        return true;
+    }
+    
     QDir dir(dirPath);
     if (!dir.exists()) {
         return false;
     }
     
-    // Find all .ERB files (case-insensitive) recursively
+    // Find all .ERB files
     QDir::Filters fileFilter = QDir::Files | QDir::Hidden | QDir::NoDotAndDotDot;
     QStringList nameFilters;
     nameFilters << "*.ERB" << "*.erb" << "*.ERH" << "*.erh";
@@ -47,7 +73,6 @@ bool ErbLoader::loadDirectory(const QString& dirPath) {
     bool success = true;
     for (const QFileInfo& fileInfo : allFiles) {
         QString fileName = fileInfo.fileName();
-        // Case-insensitive check for .erb and .erh extensions
         if (fileName.endsWith(".erb", Qt::CaseInsensitive) || fileName.endsWith(".erh", Qt::CaseInsensitive)) {
             QString filePath = fileInfo.absoluteFilePath();
             if (!loadFile(filePath)) {
@@ -56,12 +81,12 @@ bool ErbLoader::loadDirectory(const QString& dirPath) {
         }
     }
     
-    // Also try subdirectories (like ERB/, CSV/)
+    // Also try subdirectories
     QDir::Filters dirFilter = QDir::Dirs | QDir::NoDotAndDotDot;
     QStringList dirNames = dir.entryList(dirFilter);
     for (const QString& subDirName : dirNames) {
         QString subDirPath = dirPath + "/" + subDirName;
-        loadDirectory(subDirPath);
+        loadDirectory(subDirPath, depth + 1);
     }
     
     return success;
@@ -75,6 +100,64 @@ ScriptLine* ErbLoader::findLabel(const QString& labelName) {
     return m_labels.value(labelName, nullptr);
 }
 
+bool ErbLoader::scriptExists(const QString& scriptName) const {
+    return m_scripts.contains(scriptName);
+}
+
+QString ErbLoader::resolveScriptName(const QString& scriptName) const {
+    // Try exact match first
+    if (m_scripts.contains(scriptName)) {
+        return scriptName;
+    }
+    
+    // Try case-insensitive match
+    QString lowerName = scriptName.toLower();
+    for (auto it = m_scripts.constBegin(); it != m_scripts.constEnd(); ++it) {
+        if (it.key().toLower() == lowerName) {
+            return it.key();
+        }
+    }
+    
+    return "";  // Not found
+}
+
+QHash<QString, QList<ScriptLine>> ErbLoader::getLoadedScriptsCI() const {
+    QHash<QString, QList<ScriptLine>> result;
+    for (auto it = m_scripts.constBegin(); it != m_scripts.constEnd(); ++it) {
+        result.insert(it.key().toLower(), it.value());
+    }
+    return result;
+}
+
+QList<LogicalLine> ErbLoader::getLogicalLines(const QString& scriptName) {
+    return m_logicalLines.value(scriptName, QList<LogicalLine>());
+}
+
+QList<LogicalLine> ErbLoader::getLogicalLinesCI(const QString& scriptName) {
+    // Try exact match first
+    if (m_logicalLines.contains(scriptName)) {
+        return m_logicalLines.value(scriptName, QList<LogicalLine>());
+    }
+    
+    // Try case-insensitive match
+    QString lowerName = scriptName.toLower();
+    for (auto it = m_logicalLines.constBegin(); it != m_logicalLines.constEnd(); ++it) {
+        if (it.key().toLower() == lowerName) {
+            return it.value();
+        }
+    }
+    
+    return QList<LogicalLine>();
+}
+
+int ErbLoader::getLabelPosition(const QString& scriptName, const QString& labelName) {
+    return m_labelPositions.value(scriptName + ":" + labelName, -1);
+}
+
+int ErbLoader::getScriptLineCount(const QString& scriptName) {
+    return m_scriptLineCounts.value(scriptName, 0);
+}
+
 QString ErbLoader::getScriptPath(const QString& scriptName) const {
     return m_scriptPaths.value(scriptName, "");
 }
@@ -85,7 +168,6 @@ QString ErbLoader::readFileContent(const QString& filePath) {
         return "";
     }
     
-    // Qt 6 uses UTF-8 by default for QTextStream
     QTextStream in(&file);
     QString content = in.readAll();
     
@@ -103,6 +185,9 @@ QList<ScriptLine> ErbLoader::parseScript(const QString& content, const QString& 
         
         ScriptLine scriptLine = parseLine(line, i + 1, filePath);
         lines.append(scriptLine);
+        
+        // Emit parse line ready signal for each parsed line
+        emit parseLineReady(QFileInfo(filePath).baseName(), i + 1, line);
     }
     
     return lines;
@@ -124,11 +209,11 @@ ScriptLine ErbLoader::parseLine(const QString& line, int lineNumber, const QStri
     
     // Preprocessor directive (starts with #)
     if (trimmed.startsWith('#')) {
-        ScriptLine line;
-        line.setType(ScriptLineType::Preprocessor);
-        line.setContent(trimmed);
-        line.setPosition(pos);
-        return line;
+        ScriptLine scriptLine;
+        scriptLine.setType(ScriptLineType::Preprocessor);
+        scriptLine.setContent(trimmed);
+        scriptLine.setPosition(pos);
+        return scriptLine;
     }
     
     // Label definition (starts with @ or $)
@@ -170,9 +255,6 @@ InstructionData ErbLoader::extractInstruction(const QString& line) {
     InstructionData data;
     
     // Check for assignment operations first
-    // Simple assignment: VARIABLE = value
-    // Compound assignment: VARIABLE += value, VARIABLE -= value, etc.
-    // Use Unicode-aware pattern for variable names (letters, digits, underscores)
     QRegularExpression simpleAssignmentRegex(R"(^([^\s]+)\s*=\s*(.+)$)");
     QRegularExpression compoundAssignmentRegex(R"(^([^\s]+)\s*(\+\=|\-\=|\*\=|\/\=)\s*(.+)$)");
     
@@ -183,12 +265,8 @@ InstructionData ErbLoader::extractInstruction(const QString& line) {
         QString variableName = simpleMatch.captured(1);
         QString value = simpleMatch.captured(2);
         
-        // For assignment, the "instruction" is the operator
         data.name = "=";
-        
-        // First argument is the variable name
         data.arguments.append(InstructionArgument(variableName));
-        // Second argument is the value
         data.arguments.append(InstructionArgument(value));
         
         return data;
@@ -199,34 +277,32 @@ InstructionData ErbLoader::extractInstruction(const QString& line) {
         QString op = compoundMatch.captured(2);
         QString value = compoundMatch.captured(3);
         
-        // For compound assignment, the "instruction" is the operator
-        data.name = op;  // +=, -=, *=, /=
-        
-        // First argument is the variable name
+        data.name = op;
         data.arguments.append(InstructionArgument(variableName));
-        // Second argument is the value
         data.arguments.append(InstructionArgument(value));
         
         return data;
     }
     
     // Special handling for CALL instruction with parentheses
-    // CALL INIT_STAGE() or CALL CHECK_PLAYER_COLLISION(arg1, arg2)
-    QRegularExpression callRegex(R"(^CALL\s+(\w+)(?:\s*\(([^)]*)\))?\s*$)");
+    // Match CALL <function_name>[(<args>)]
+    // Function name can contain any characters except spaces and parentheses
+    QRegularExpression callRegex(R"(^CALL\s+([^\s\(]+)(?:\s*\(([^)]*)\))?\s*$)");
     QRegularExpressionMatch callMatch = callRegex.match(line.trimmed());
     if (callMatch.hasMatch()) {
         data.name = "CALL";
-        QString funcName = callMatch.captured(1);  // Function name without parentheses
-        QString args = callMatch.captured(2);  // Arguments (may be empty)
+        QString funcName = callMatch.captured(1);
+        QString args = callMatch.captured(2);
+        
+        // Store function name as first argument (label to call)
+        data.arguments.append(InstructionArgument(funcName));
         
         if (!args.isEmpty()) {
-            // Parse arguments by splitting on comma
             QStringList argList = args.split(',', Qt::SkipEmptyParts);
             for (const QString& arg : argList) {
                 data.arguments.append(InstructionArgument(arg.trimmed()));
             }
         }
-        data.arguments.append(InstructionArgument(funcName));
         return data;
     }
     
@@ -237,23 +313,18 @@ InstructionData ErbLoader::extractInstruction(const QString& line) {
         return data;
     }
     
-    // First token is the instruction name
     data.name = tokens[0];
     
-    // Remaining tokens are arguments
     for (int i = 1; i < tokens.size(); ++i) {
         QString token = tokens[i];
         InstructionArgument arg(token);
         
-        // Check if it's a string literal (starts with ")
         if (token.startsWith('"') && token.endsWith('"')) {
             arg.isString = true;
             arg.value = token.mid(1, token.length() - 2);
-        }
-        // Check if it's a variable reference (starts with $ or %)
-        else if (token.startsWith('$') || token.startsWith('%')) {
+        } else if (token.startsWith('$') || token.startsWith('%')) {
             arg.isVariable = true;
-            arg.value = token.mid(1);  // Remove prefix
+            arg.value = token.mid(1);
         }
         
         data.arguments.append(arg);

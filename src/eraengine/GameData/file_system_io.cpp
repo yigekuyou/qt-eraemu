@@ -528,3 +528,19 @@ bool BinaryIo::isEraBinaryFormat(const QByteArray& data) const
     // Placeholder for Era binary format detection
     return false;
 }
+
+QString FileSystem::getConfigPath(const QString& basePath, const QString& configName) const
+{
+    // Get the CSV directory path
+    QString csvDir = findActualDir(basePath, "CSV");
+    if (csvDir.isEmpty()) {
+        csvDir = findActualDir(basePath, "csv");
+    }
+    
+    if (csvDir.isEmpty()) {
+        return QString();
+    }
+    
+    // Combine CSV directory with config file name
+    return combinePath(csvDir, configName);
+}

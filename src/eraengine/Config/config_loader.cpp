@@ -13,6 +13,7 @@ bool ConfigLoader::loadConfigFile(const QString& filePath, int precedence)
     ConfigFile config;
     config.filePath = filePath;
     config.precedence = precedence;
+    config.isFixed = filePath.contains("_fixed.config", Qt::CaseInsensitive);
     
     parseConfigFile(filePath, config.config);
     m_configFiles.append(config);
@@ -24,6 +25,7 @@ void ConfigLoader::mergeConfig(const QString& filePath, int precedence)
     ConfigFile config;
     config.filePath = filePath;
     config.precedence = precedence;
+    config.isFixed = filePath.contains("_fixed.config", Qt::CaseInsensitive);
     
     parseConfigFile(filePath, config.config);
     m_configFiles.append(config);
@@ -67,12 +69,25 @@ void ConfigLoader::parseConfigFile(const QString& filePath, QHash<QString, QStri
 QString ConfigLoader::getConfig(const QString& key) const
 {
     // Search from highest precedence to lowest
+    // Fixed config has highest priority, then regular configs by precedence
+    // Within same precedence, later loaded files have higher priority
+    
+    // First, check fixed configs (highest priority)
     for (int i = m_configFiles.size() - 1; i >= 0; i--) {
         const ConfigFile& config = m_configFiles[i];
-        if (config.config.contains(key)) {
+        if (config.isFixed && config.config.contains(key)) {
             return config.config[key];
         }
     }
+    
+    // Then check non-fixed configs
+    for (int i = m_configFiles.size() - 1; i >= 0; i--) {
+        const ConfigFile& config = m_configFiles[i];
+        if (!config.isFixed && config.config.contains(key)) {
+            return config.config[key];
+        }
+    }
+    
     return QString();  // Return empty string if not found
 }
 

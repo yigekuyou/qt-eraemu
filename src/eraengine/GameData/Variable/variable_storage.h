@@ -9,8 +9,6 @@
 #include <QtQml/qqmlregistration.h>
 
 #include "variable_types.h"
-#include "variable_identifier.h"
-#include "system_variables.h"
 #include "variable_config.h"
 
 class VariableStorage : public QObject
@@ -112,6 +110,11 @@ public:
 		Q_INVOKABLE bool isVariable1D(const QString &name) const;
 		Q_INVOKABLE bool isVariable2D(const QString &name) const;
 		Q_INVOKABLE bool isVariable3D(const QString &name) const;
+
+		// ================= System Variable Access by Name =================
+		// Helper methods to access system variables by name for expression evaluation
+		Q_INVOKABLE qint64 getSystemVariable(const QString &name, int index) const;
+		Q_INVOKABLE void setSystemVariable(const QString &name, int index, qint64 value);
 
 		// ================= Character variable type checking methods =================
 		Q_INVOKABLE bool isCharaVariableInteger(const QString &name) const;

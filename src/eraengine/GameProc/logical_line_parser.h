@@ -38,6 +38,7 @@ public:
 signals:
 		void parserWarning(const QString& message, int lineNo, int level);
 		void analysisMessagePrinted(const QString& message);
+		void logicalLineParsed(const LogicalLine& line, int lineNumber);
 
 private:
 		// Helper to skip empty lines and comments

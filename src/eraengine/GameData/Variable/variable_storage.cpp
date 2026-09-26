@@ -388,6 +388,76 @@ bool VariableStorage::loadVariables(const QString &filePath)
 		return true;
 }
 
+// ================= System Variable Access by Name =================
+qint64 VariableStorage::getSystemVariable(const QString &name, int index) const
+{
+		// Check for system variables and call appropriate getter
+		if (name == "DAY") return getDay(index);
+		if (name == "MONEY") return getMoney(index);
+		if (name == "ITEM") return getItem(index);
+		if (name == "ITEMSALES") return getItemsales(index);
+		if (name == "NOITEM") return getNoitem(index);
+		if (name == "BOUGHT") return getBought(index);
+		if (name == "PBAND") return getPband(index);
+		if (name == "FLAG") return getFlag(index);
+		if (name == "TFLAG") return getTflag(index);
+		if (name == "TARGET") return getTarget(index);
+		if (name == "MASTER") return getMaster(index);
+		if (name == "PLAYER") return getPlayer(index);
+		if (name == "ASSI") return getAssi(index);
+		if (name == "ASSIPLAY") return getAssiplay(index);
+		if (name == "UP") return getUp(index);
+		if (name == "DOWN") return getDown(index);
+		if (name == "LOSEBASE") return getLosebase(index);
+		if (name == "PALAMLV") return getPalamlv(index);
+		if (name == "EXPLV") return getExplv(index);
+		if (name == "EJAC") return getEjac(index);
+		if (name == "PREVCOM") return getPrevcom(index);
+		if (name == "SELECTCOM") return getSelectcom(index);
+		if (name == "NEXTCOM") return getNextcom(index);
+		if (name == "RESULT") return getResult(index);
+		if (name == "COUNT") return getCount(index);
+		if (name == "A") return getA(index);
+		if (name == "B") return getB(index);
+		if (name == "C") return getC(index);
+		
+		// Not a system variable, return 0
+		return 0;
+}
+
+void VariableStorage::setSystemVariable(const QString &name, int index, qint64 value)
+{
+		// Check for system variables and call appropriate setter
+		if (name == "DAY") { setDay(index, value); return; }
+		if (name == "MONEY") { setMoney(index, value); return; }
+		if (name == "ITEM") { setItem(index, value); return; }
+		if (name == "ITEMSALES") { setItemsales(index, value); return; }
+		if (name == "NOITEM") { setNoitem(index, value); return; }
+		if (name == "BOUGHT") { setBought(index, value); return; }
+		if (name == "PBAND") { setPband(index, value); return; }
+		if (name == "FLAG") { setFlag(index, value); return; }
+		if (name == "TFLAG") { setTflag(index, value); return; }
+		if (name == "TARGET") { setTarget(index, value); return; }
+		if (name == "MASTER") { setMaster(index, value); return; }
+		if (name == "PLAYER") { setPlayer(index, value); return; }
+		if (name == "ASSI") { setAssi(index, value); return; }
+		if (name == "ASSIPLAY") { setAssiplay(index, value); return; }
+		if (name == "UP") { setUp(index, value); return; }
+		if (name == "DOWN") { setDown(index, value); return; }
+		if (name == "LOSEBASE") { setLosebase(index, value); return; }
+		if (name == "PALAMLV") { setPalamlv(index, value); return; }
+		if (name == "EXPLV") { setExplv(index, value); return; }
+		if (name == "EJAC") { setEjac(index, value); return; }
+		if (name == "PREVCOM") { setPrevcom(index, value); return; }
+		if (name == "SELECTCOM") { setSelectcom(index, value); return; }
+		if (name == "NEXTCOM") { setNextcom(index, value); return; }
+		if (name == "RESULT") { setResult(index, value); return; }
+		if (name == "COUNT") { setCount(index, value); return; }
+		if (name == "A") { setA(index, value); return; }
+		if (name == "B") { setB(index, value); return; }
+		if (name == "C") { setC(index, value); return; }
+}
+
 // ================= Expression Evaluation =================
 QVariant VariableStorage::evaluateExpression(const QString &expression)
 {

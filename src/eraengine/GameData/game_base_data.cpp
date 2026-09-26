@@ -29,12 +29,27 @@ void GameBaseData::set(const QString& key, const QString& value)
 
 QString GameBaseData::get(const QString& key) const
 {
-    if (key == "ウィンドウタイトル") return m_windowTitle;
-    if (key == "タイトル") return m_title;
-    if (key == "作者") return m_author;
-    if (key == "バージョン") return m_version;
-    if (key == "製作年") return m_releaseYear;
-    if (key == "追加情報") return m_additionalInfo;
+    // Map English keys to Japanese keys
+    QString mappedKey = key;
+    if (key == "TITLE") mappedKey = "タイトル";
+    else if (key == "VERSION") mappedKey = "バージョン";
+    else if (key == "AUTHOR") mappedKey = "作者";
+    else if (key == "YEAR") mappedKey = "製作年";
+    else if (key == "INFO") mappedKey = "追加情報";
+    else if (key == "WINDOW_TITLE") mappedKey = "ウィンドウタイトル";
+    else if (key == "GAMEBASE_TITLE") mappedKey = "タイトル";
+    else if (key == "GAMEBASE_VERSION") mappedKey = "バージョン";
+    else if (key == "GAMEBASE_AUTHOR") mappedKey = "作者";
+    else if (key == "GAMEBASE_YEAR") mappedKey = "製作年";
+    else if (key == "GAMEBASE_INFO") mappedKey = "追加情報";
+    else if (key == "GAMEBASE_WINDOW_TITLE") mappedKey = "ウィンドウタイトル";
+    
+    if (mappedKey == "ウィンドウタイトル") return m_windowTitle;
+    if (mappedKey == "タイトル") return m_title;
+    if (mappedKey == "作者") return m_author;
+    if (mappedKey == "バージョン") return m_version;
+    if (mappedKey == "製作年") return m_releaseYear;
+    if (mappedKey == "追加情報") return m_additionalInfo;
     return QString();
 }
 

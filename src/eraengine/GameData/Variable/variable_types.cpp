@@ -1,5 +1,37 @@
-#include "variable_token.h"
+#include "variable_types.h"
 #include "variable_storage.h"
+
+// ---------------------------------------------------------------------------
+// VariableIdentifier
+// ---------------------------------------------------------------------------
+
+VariableIdentifier::VariableIdentifier(const QString &name, const VariableTypeInfo &typeInfo)
+    : m_name(name), m_typeInfo(typeInfo)
+{
+}
+
+VariableIdentifier VariableIdentifier::fromName(const QString &name)
+{
+    static const QHash<QString, VariableTypeInfo> variableTypeMap = []() {
+        QHash<QString, VariableTypeInfo> map;
+        for (const auto &entry : SYSTEM_VARIABLES) {
+            map[entry.name] = entry.info;
+        }
+        return map;
+    }();
+
+    auto it = variableTypeMap.constFind(name);
+    if (it != variableTypeMap.constEnd()) {
+        return VariableIdentifier(name, it.value());
+    }
+
+    // Return null identifier for unknown variables
+    return VariableIdentifier();
+}
+
+// ---------------------------------------------------------------------------
+// VariableToken
+// ---------------------------------------------------------------------------
 
 VariableToken::VariableToken()
     : name(""), typeInfo(), isValid(false)
@@ -14,7 +46,7 @@ VariableToken::VariableToken(const QString &name, const VariableTypeInfo &typeIn
 qint64 VariableToken::getIntValue(int index) const
 {
     if (!isValid || !typeInfo.isInteger || storage == nullptr) return 0;
-    
+
     // This is a simplified implementation that would need to be expanded to handle
     // different variable types dynamically based on typeInfo
     // For now, returning a placeholder - real implementation would use reflection
@@ -24,7 +56,7 @@ qint64 VariableToken::getIntValue(int index) const
 void VariableToken::setIntValue(int index, qint64 value) const
 {
     if (!isValid || !typeInfo.isInteger || storage == nullptr) return;
-    
+
     // This is a simplified implementation that would need to be expanded to handle
     // different variable types dynamically based on typeInfo
     // For now, doing nothing - real implementation would use reflection
@@ -34,7 +66,7 @@ void VariableToken::setIntValue(int index, qint64 value) const
 QString VariableToken::getStrValue(int index) const
 {
     if (!isValid || !typeInfo.isString || storage == nullptr) return "";
-    
+
     // This is a simplified implementation that would need to be expanded to handle
     // different variable types dynamically based on typeInfo
     // For now, returning a placeholder - real implementation would use reflection
@@ -44,7 +76,7 @@ QString VariableToken::getStrValue(int index) const
 void VariableToken::setStrValue(int index, const QString& value) const
 {
     if (!isValid || !typeInfo.isString || storage == nullptr) return;
-    
+
     // This is a simplified implementation that would need to be expanded to handle
     // different variable types dynamically based on typeInfo
     // For now, doing nothing - real implementation would use reflection

@@ -10,6 +10,7 @@
 struct ConfigFile {
     QString filePath;
     int precedence;  // Lower number = lower priority
+    bool isFixed;    // True if this is a fixed config (e.g., _fixed.config)
     QHash<QString, QString> config;
 };
 

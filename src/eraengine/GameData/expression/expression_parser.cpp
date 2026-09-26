@@ -159,10 +159,9 @@ ExpressionNode* ExpressionParser::parsePrimary() {
 		}
 
 		if (check(TokenType::IDENTIFIER)) {
-				// 检查是否为函数调用（标识符后跟左括号或冒号）
+				// 检查是否为函数调用（标识符后跟左括号）
 				if (m_current + 1 < m_tokens.size() &&
-						(m_tokens[m_current + 1].type() == TokenType::LEFT_PAREN ||
-						 m_tokens[m_current + 1].type() == TokenType::COLON)) {
+						m_tokens[m_current + 1].type() == TokenType::LEFT_PAREN) {
 						return parseFunctionCall();
 				}
 				return parseVariable();

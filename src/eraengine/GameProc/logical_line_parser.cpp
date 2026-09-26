@@ -6,6 +6,7 @@ LogicalLineParser::LogicalLineParser(QObject* parent) : QObject(parent) {}
 QList<LogicalLine> LogicalLineParser::parseLogicalLines(const QList<ScriptLine>& scriptLines) {
 		QList<LogicalLine> logicalLines;
 		int i = 0;
+		int lineNumber = 0;
 
 		while (i < scriptLines.size()) {
 				i = skipNonCodeLines(scriptLines, i);
@@ -15,6 +16,10 @@ QList<LogicalLine> LogicalLineParser::parseLogicalLines(const QList<ScriptLine>&
 
 				LogicalLine line = parseLogicalLine(scriptLines, i);
 				logicalLines.append(line);
+				
+				// Emit signal when a logical line is parsed
+				emit logicalLineParsed(line, lineNumber);
+				lineNumber++;
 
 				// Move past this logical line
 				i += line.scriptLines().size();
@@ -257,9 +262,13 @@ LogicalLine LogicalLineParser::parseLabelLine(const QString& content, const Scri
 				return gotoLine;
 		}
 
-		FunctionLabelLine funcLabel(position.lineNumber, labelName);
-		emit analysisMessagePrinted("@" + labelName);
-		return LogicalLine(position);
+		// For function labels (@LABEL), we need to create a logical line
+		// with a label script line so the parser can properly track position
+		ScriptLine labelLine = ScriptLine::createLabel(labelName, position);
+		LogicalLine line(position);
+		line.addScriptLine(labelLine);
+		line.setComplete(true);
+		return line;
 }
 
 LogicalLine LogicalLineParser::parseLine(const QString& content, const ScriptPosition& position) {

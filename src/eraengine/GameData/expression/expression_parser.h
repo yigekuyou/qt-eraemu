@@ -3,7 +3,7 @@
 
 #include <QList>
 #include <QMap>
-#include "expression_token.h"
+#include "expression_lexer.h"
 #include "expression_ast.h"
 
 class ExpressionParser {

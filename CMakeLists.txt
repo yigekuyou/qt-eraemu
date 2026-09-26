@@ -28,7 +28,7 @@ set_target_properties(appemuera PROPERTIES
 )
 
 target_link_libraries(appemuera
-    PRIVATE Qt6::Quick Qt6::DBus Qt6::Widgets
+    PRIVATE Qt6::Quick Qt6::DBus Qt6::Widgets eraengine
 )
 
 include(GNUInstallDirs)

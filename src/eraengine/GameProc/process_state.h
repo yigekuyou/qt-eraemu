@@ -7,13 +7,83 @@
 #include <QMap>
 #include <QMetaType>
 #include "script_line.h"
-#include "logical_line_parser.h"
 
-// State codes matching C# ProcessState
-enum class StateCode {
+// Forward declarations
+class LogicalLine;
+
+// System state codes matching C# SystemStateCode
+// These states track the current phase of the Emuera game execution
+enum class SystemStateCode {
+    // Can save flag
+    __CAN_SAVE__ = 0x10000,
+    
+    // Can begin flag  
+    __CAN_BEGIN__ = 0x20000,
+    
+    // Initial state
     Title_Begin = 0,
+    
+    // Opening phase
     Openning = 1,
-    Normal = 0xFFFF,
+    
+    // Normal game flow
+    Normal = 0xFFFF | __CAN_BEGIN__ | __CAN_SAVE__,
+    
+    // TRAIN system states
+    Train_Begin = 0x10,
+    Train_CallEventTrain = 0x11,
+    Train_CallShowStatus = 0x12,
+    Train_CallComAbleXX = 0x13,
+    Train_CallShowUserCom = 0x14,
+    Train_WaitInput = 0x15,
+    Train_CallEventCom = 0x16 | __CAN_BEGIN__,
+    Train_CallComXX = 0x17 | __CAN_BEGIN__,
+    Train_CallSourceCheck = 0x18 | __CAN_BEGIN__,
+    Train_CallEventComEnd = 0x19 | __CAN_BEGIN__,
+    Train_DoTrain = 0x1A,
+    
+    // AFTERTRAIN system states
+    AfterTrain_Begin = 0x20 | __CAN_BEGIN__,
+    
+    // ABLUP system states
+    Ablup_Begin = 0x30,
+    Ablup_CallShowJuel = 0x31,
+    Ablup_CallShowAblupSelect = 0x32,
+    Ablup_WaitInput = 0x33,
+    Ablup_CallAblupXX = 0x34 | __CAN_BEGIN__,
+    
+    // TURNEND system states
+    Turnend_Begin = 0x40 | __CAN_BEGIN__,
+    
+    // SHOP system states
+    Shop_Begin = 0x50 | __CAN_SAVE__,
+    Shop_CallEventShop = 0x51 | __CAN_BEGIN__ | __CAN_SAVE__,
+    Shop_CallShowShop = 0x52 | __CAN_SAVE__,
+    Shop_WaitInput = 0x53 | __CAN_SAVE__,
+    Shop_CallEventBuy = 0x54 | __CAN_BEGIN__ | __CAN_SAVE__,
+    
+    // SAVE/LOAD system states
+    SaveGame_Begin = 0x100,
+    SaveGame_WaitInput = 0x101,
+    SaveGame_WaitInputOverwrite = 0x102,
+    SaveGame_CallSaveInfo = 0x103,
+    LoadGame_Begin = 0x110,
+    LoadGame_WaitInput = 0x111,
+    LoadGameOpenning_Begin = 0x120,
+    LoadGameOpenning_WaitInput = 0x121,
+    
+    // AUTO system states
+    AutoSave_CallSaveInfo = 0x201,
+    AutoSave_CallUniqueAutosave = 0x202,
+    AutoSave_Skipped = 0x203,
+    
+    // LOAD data states
+    LoadData_DataLoaded = 0x210,
+    LoadData_CallSystemLoad = 0x211 | __CAN_BEGIN__,
+    LoadData_CallEventLoad = 0x212 | __CAN_BEGIN__,
+    
+    // System states
+    Openning_TitleLoadgame = 0x220,
     System_Reloaderb = 0x230,
     First_Begin = 0x240,
 };
@@ -30,6 +100,10 @@ enum class BeginType {
     TITLE = 8,
 };
 
+// State codes for backward compatibility
+// (using SystemStateCode as the primary state code)
+using StateCode = SystemStateCode;
+
 // Called function information
 struct CalledFunction {
     QString labelName;
@@ -37,6 +111,12 @@ struct CalledFunction {
     
     CalledFunction(const QString& label = "", const ScriptPosition& pos = ScriptPosition())
         : labelName(label), position(pos) {}
+    
+    // Get position for this function
+    ScriptPosition getPosition() const { return position; }
+    
+    // Get label name
+    QString getLabelName() const { return labelName; }
 };
 
 Q_DECLARE_METATYPE(CalledFunction)
@@ -57,6 +137,19 @@ public:
     void setBegin(BeginType type);
     void setBegin(const QString& keyword);
     
+    // System state management
+    SystemStateCode getSystemState() const;
+    void setSystemState(SystemStateCode state);
+    
+    // Check if system state allows saving
+    bool canSave() const;
+    
+    // Check if system state allows BEGIN command
+    bool canBegin() const;
+    
+    // Process state management (BEGIN command handling)
+    void processBegin(BeginType type);
+    
     // Line management
     LogicalLine* getCurrentLine() const;
     void setCurrentLine(LogicalLine* line);
@@ -69,21 +162,59 @@ public:
     void popFunction();
     int getFunctionCount() const;
     
+    // Into function and return (for CALL/GOTO/RETURN flow control)
+    // IntoFunction: Push function to stack and set current line
+    void intoFunction(const QString& label, const ScriptPosition& pos);
+    // ReturnF: Pop function from stack and return to caller
+    void returnF();
+    
     // Line counting
     int getLineCount() const;
     void setLineCount(int count);
+    
+    // Function stack getters
+    ScriptPosition getCurrentFunctionPosition() const;
+    QString getCurrentFunctionLabel() const;
     
     // State queries
     bool isScriptEnd() const;
     bool isBegun() const;
     
+    // State check request (for signal-based state checking)
+    void requestStateCheck();
+    
+    // Emit request next instruction signal
+    void emitRequestNextInstruction();
+    
+    // Set the entry point script name for state tracking
+    void setEntryPointScript(const QString& scriptName);
+    
+signals:
+    // State changed signal - emitted when state changes
+    void stateChanged();
+    
+    // State unchanged - emitted when state didn't change after check
+    void stateUnchanged();
+    
+    // State changed - emitted when state changed after check
+    void stateChangedSignal();
+    
+    // Request for next instruction - emitted when state is ready for next instruction
+    void requestNextInstruction();
+    
 private:
-    StateCode m_state;
+    SystemStateCode m_systemState;
     BeginType m_beginType;
     LogicalLine* m_currentLine;
     LogicalLine* m_errorLine;
     int m_lineCount;
     QList<CalledFunction> m_functionList;
+    
+    // State tracking
+    SystemStateCode m_lastState;
+    
+    // Entry point script name
+    QString m_entryPointScript;
 };
 
 #endif // PROCESS_STATE_H

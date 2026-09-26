@@ -4,7 +4,8 @@ project(emuera VERSION 0.1 LANGUAGES CXX)
 
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 
-find_package(Qt6 REQUIRED COMPONENTS Quick Core DBus Widgets)
+find_package(Qt6 REQUIRED COMPONENTS Quick Core DBus Widgets Concurrent)
+find_package(OpenMP REQUIRED)
 find_package(BISON REQUIRED)
 find_package(FLEX REQUIRED)
 qt_standard_project_setup(REQUIRES 6.10)

@@ -17,28 +17,52 @@
  */
 import QtQuick
 import QtQuick.Controls
-import QtQml
 
-// 控制台视图（混合形态：C++ 提供服务，QML 自建对象）
+// 控制台视图 —— root 层 + 分层渲染
 //
-//   * C++ 的 ConsoleBackend 提供「可见行模型」`visibleLines`（QVariantList）；
-//   * QML 用 **Instantiator** 按模型创建 `ConsoleLine` 对象，模型变化时自动增删
-//     （对齐 quickshell 的 `Instantiator { model: …; delegate: … }` 用法）；
-//   * 每行内部再由 `ConsoleLine` 用 `Repeater` 创建 span 对象（含内联图/图形）；
-//   * 只承载「可见窗口」，不建整段历史对象。
+//   root 层（本组件）     ：可见窗口容器（滚动/裁剪/输入条）
+//   text 层（textLayer）  ：所有文本区块
+//   image 层（imageLayer）：所有图片区块
+//   shape 层（shapeLayer）：所有图形区块
+//
+// 三个层都是 root 的子 Item，坐标同源，所以：
+//   * 区块的**绝对位置**就是它在层内的 x/y（同 root 坐标系）；
+//   * 区块的**相对位置**是 relX/relY（相对它所属的显示行）；
+//   * 尺寸（w/h）由 C++ 按当前字体/字号/资源**动态测量**后给出。
+//
+// **位置与尺寸都是 C++ 说了算**（对齐 C# 的 SetAlignment / CalcPointX / SetWidth）：
+// QML 只负责「按数据把区块对象创建到对应的层里」。层内对象用 Instantiator 创建，
+// 模型变化（滚动/输出/换字号）时自动增删。
 Item {
-    id: consoleView
+    id: root
+
     property var backend: null              // ConsoleBackend
-    property int lineHeight: 22
+    property int lineHeight: 19
     property string fontName: ""            // 来自 GuiManager
-    property int fontSize: 16
+    property int fontSize: 18
     property color foreColor: "#e0e0e0"
     property color focusColor: "#ffff00"
     property color logColor: "#9a9a9a"
 
-    // 可见行数 / 取第 i 个可见行对象（供测试与外部使用）
-    readonly property int visibleCount: linesInst.count
-    function lineAt(i) { return linesInst.objectAt(i) }
+    // ---- 单元格大小：**由 QML 决定**（这就是「区块大小决定权在 QML」）----
+    //   cellWidth  = 一个「区块长」= 一个半角字符宽
+    //   cellHeight = 一个「区块高」= 一行高
+    // C++ 只给 col/row（单位坐标）与 cols/rows（格子数），像素由这里换算。
+    readonly property real cellWidth: Math.max(1, fontSize / 2)
+    readonly property real cellHeight: lineHeight
+
+    // 三个层各自的区块模型（C++ 提供，坐标已算好）
+    readonly property var textModel: backend ? backend.textBlocks : []
+    readonly property var imageModel: backend ? backend.imageBlocks : []
+    readonly property var shapeModel: backend ? backend.shapeBlocks : []
+    readonly property int contentHeight: backend ? backend.contentHeight : 0
+
+    // 可见区块数（供测试）
+    readonly property int textBlockCount: textInst.count
+    readonly property int imageBlockCount: imageInst.count
+    readonly property int shapeBlockCount: shapeInst.count
+    function textBlockAt(i) { return textInst.objectAt(i) }
+    function blockAt(i) { return textBlockAt(i) }
 
     function submit() {
         if (!backend) return;
@@ -46,40 +70,98 @@ Item {
         inputField.text = "";
     }
 
+    // 把字号/行高/字体推给 C++（C++ 据此动态重算所有区块的位置与尺寸）
+    function syncLayout() {
+        if (!backend) return;
+        backend.setFontSize(fontSize);
+        backend.setLineHeight(lineHeight);
+        backend.setWindowWidth(width);
+    }
+    onFontSizeChanged: syncLayout()
+    onLineHeightChanged: syncLayout()
+    onWidthChanged: syncLayout()
+
     Item {
-        id: listArea
+        id: viewport
         anchors.left: parent.left
         anchors.right: parent.right
         anchors.top: parent.top
         anchors.bottom: inputBar.top
         clip: true
-        focus: true
 
-        // ---- 可见行窗口：模型 → 对象（QML 自建）----
-        Instantiator {
-            id: linesInst
+        // ---- text 层 ----
+        Item {
+            id: textLayer
+            anchors.fill: parent
 
-            model: consoleView.backend ? consoleView.backend.visibleLines : []
-            delegate: ConsoleLine {
-                width: consoleView.width
-                height: consoleView.lineHeight
-                lineIndex: index
-                lineData: modelData
-                backend: consoleView.backend
-                isBacklog: consoleView.backend ? !consoleView.backend.followTail : false
-                fontName: consoleView.fontName
-                fontSize: consoleView.fontSize
-                foreColor: consoleView.foreColor
-                focusColor: consoleView.focusColor
-                logColor: consoleView.logColor
+            Instantiator {
+                id: textInst
+                model: root.textModel
+                delegate: ConsoleBlock {
+                    blockData: modelData
+                    backend: root.backend
+                    cellWidth: root.cellWidth
+                    cellHeight: root.cellHeight
+                    fontName: root.fontName
+                    fontSize: root.fontSize
+                    foreColor: root.foreColor
+                    focusColor: root.focusColor
+                    logColor: root.logColor
+                    isBacklog: root.backend ? !root.backend.followTail : false
+                }
+                // Instantiator 不把对象挂进可视树：显式设 parent；销毁由它负责
+                onObjectAdded: (index, object) => { object.parent = textLayer; }
+                onObjectRemoved: (index, object) => { object.parent = null; }
             }
+        }
 
-            // 位置由 Instantiator 管理的对象自行计算（行高 × 序号）
-            // 注意：Instantiator 不会把对象挂进可视树，必须显式设置 parent；
-            //       对象由 Instantiator 负责销毁，勿手动 destroy()
-            onObjectAdded: (index, object) => {
-                object.parent = listArea;
-                object.y = index * consoleView.lineHeight;
+        // ---- image 层 ----
+        Item {
+            id: imageLayer
+            anchors.fill: parent
+
+            Instantiator {
+                id: imageInst
+                model: root.imageModel
+                delegate: ConsoleBlock {
+                    blockData: modelData
+                    backend: root.backend
+                    cellWidth: root.cellWidth
+                    cellHeight: root.cellHeight
+                    fontName: root.fontName
+                    fontSize: root.fontSize
+                    foreColor: root.foreColor
+                    focusColor: root.focusColor
+                    logColor: root.logColor
+                    isBacklog: root.backend ? !root.backend.followTail : false
+                }
+                onObjectAdded: (index, object) => { object.parent = imageLayer; }
+                onObjectRemoved: (index, object) => { object.parent = null; }
+            }
+        }
+
+        // ---- shape 层 ----
+        Item {
+            id: shapeLayer
+            anchors.fill: parent
+
+            Instantiator {
+                id: shapeInst
+                model: root.shapeModel
+                delegate: ConsoleBlock {
+                    blockData: modelData
+                    backend: root.backend
+                    cellWidth: root.cellWidth
+                    cellHeight: root.cellHeight
+                    fontName: root.fontName
+                    fontSize: root.fontSize
+                    foreColor: root.foreColor
+                    focusColor: root.focusColor
+                    logColor: root.logColor
+                    isBacklog: root.backend ? !root.backend.followTail : false
+                }
+                onObjectAdded: (index, object) => { object.parent = shapeLayer; }
+                onObjectRemoved: (index, object) => { object.parent = null; }
             }
         }
 
@@ -118,19 +200,20 @@ Item {
                 width: parent.width - 90
                 height: parent.height - 8
                 placeholderText: backend ? ("输入（" + backend.inputKind + "）") : ""
-                onAccepted: consoleView.submit()
+                onAccepted: root.submit()
             }
             Button {
                 text: qsTr("确定")
-                onClicked: consoleView.submit()
+                onClicked: root.submit()
             }
         }
     }
 
     onHeightChanged: {
-        if (backend) backend.visibleCount = Math.max(1, Math.floor(listArea.height / lineHeight));
+        if (backend) backend.visibleCount = Math.max(1, Math.floor(viewport.height / lineHeight));
     }
     Component.onCompleted: {
-        if (backend) backend.visibleCount = Math.max(1, Math.floor(listArea.height / lineHeight));
+        syncLayout();
+        if (backend) backend.visibleCount = Math.max(1, Math.floor(viewport.height / lineHeight));
     }
 }

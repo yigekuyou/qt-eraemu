@@ -37,8 +37,7 @@ qt_add_qml_module(appemuera
         src/qml/Main.qml
         src/qml/EraRender.qml
         src/qml/Console.qml
-        src/qml/ConsoleLine.qml
-        src/qml/ConsoleSpan.qml
+        src/qml/ConsoleBlock.qml
         src/qml/SettingsDialog.qml
         src/qml/AboutDialog.qml
 )

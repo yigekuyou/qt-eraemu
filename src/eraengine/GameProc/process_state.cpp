@@ -26,8 +26,7 @@ ProcessState::ProcessState(QObject* parent)
       m_beginType(BeginType::NONE),
       m_currentLine(nullptr),
       m_errorLine(nullptr),
-      m_lineCount(0),
-      m_lastState(SystemStateCode::Title_Begin)
+      m_lineCount(0)
 {
 }
 
@@ -37,7 +36,6 @@ SystemStateCode ProcessState::getSystemState() const {
 
 void ProcessState::setSystemState(SystemStateCode state) {
     if (m_systemState != state) {
-        m_lastState = m_systemState;
         m_systemState = state;
         emit stateChanged();
     }
@@ -49,7 +47,6 @@ SystemStateCode ProcessState::getState() const {
 
 void ProcessState::setState(SystemStateCode state) {
     if (m_systemState != state) {
-        m_lastState = m_systemState;
         m_systemState = state;
         emit stateChanged();
     }
@@ -111,19 +108,55 @@ bool ProcessState::canBegin() const {
     return (static_cast<int>(m_systemState) & static_cast<int>(SystemStateCode::__CAN_BEGIN__)) != 0;
 }
 
-void ProcessState::processBegin(BeginType type) {
-    // Clear function stack on BEGIN
-    m_functionList.clear();
-    
-    // Set the begin type
+// ---------------------------------------------------------------------------
+// BEGIN 状态迁移（对齐 C# Process.SetBegin / ProcessState.Begin）
+// ---------------------------------------------------------------------------
+
+bool ProcessState::setBeginKeyword(const QString& keyword, QString* error, const QString& funcName) {
+    const QString upperKeyword = keyword.trimmed().toUpper();
+    BeginType type = BeginType::NONE;
+    if (upperKeyword == QLatin1String("SHOP")) type = BeginType::SHOP;
+    else if (upperKeyword == QLatin1String("TRAIN")) type = BeginType::TRAIN;
+    else if (upperKeyword == QLatin1String("AFTERTRAIN")) type = BeginType::AFTERTRAIN;
+    else if (upperKeyword == QLatin1String("ABLUP")) type = BeginType::ABLUP;
+    else if (upperKeyword == QLatin1String("TURNEND")) type = BeginType::TURNEND;
+    else if (upperKeyword == QLatin1String("FIRST")) type = BeginType::FIRST;
+    else if (upperKeyword == QLatin1String("TITLE")) type = BeginType::TITLE;
+    else {
+        if (error) *error = QStringLiteral("BEGIN 的关键字\"%1\"未定义").arg(keyword);
+        return false;
+    }
+    return processBegin(type, error, funcName);
+}
+
+bool ProcessState::processBegin(BeginType type, QString* error, const QString& funcName) {
+    // SetBegin(BeginType)：除 TITLE 外都要求当前状态允许 BEGIN
+    // （C#：SHOP/TRAIN/AFTERTRAIN/ABLUP/TURNEND/FIRST 需 __CAN_BEGIN__；
+    //  1.729 起 BEGIN TITLE 在任何状态都可用）
+    if (type != BeginType::TITLE && type != BeginType::NONE && !canBegin()) {
+        if (error) {
+            QString name = funcName;
+            if (name.isEmpty() && !m_functionList.isEmpty()) {
+                name = m_functionList.first().getLabelName();
+            }
+            *error = QStringLiteral("@%1 中不能执行 BEGIN 命令").arg(name);
+        }
+        return false;
+    }
     m_beginType = type;
-    
-    // Store old state for signal
-    SystemStateCode oldState = m_systemState;
-    
-    // Set state based on begin type
-    switch (type) {
+    beginFromType();
+    return true;
+}
+
+void ProcessState::beginFromType() {
+    // C# 备注：从 @EVENTSHOP 发起的 BEGIN 一律丢弃
+    if (m_systemState == SystemStateCode::Shop_CallEventShop) {
+        return;
+    }
+
+    switch (m_beginType) {
         case BeginType::SHOP:
+            m_calledWhenNormal = (m_systemState == SystemStateCode::Normal);
             m_systemState = SystemStateCode::Shop_Begin;
             break;
         case BeginType::TRAIN:
@@ -146,37 +179,32 @@ void ProcessState::processBegin(BeginType type) {
             break;
         case BeginType::NONE:
         default:
-            break;
+            return;
     }
-    
-    // Emit state changed signal if state changed
-    if (m_systemState != oldState) {
-        emit stateChanged();
-    }
+
+    clearFunctionList();
+    m_beginType = BeginType::NONE;
+    emit stateChanged();
+}
+
+void ProcessState::clearFunctionList() {
+    m_functionList.clear();
+    m_beginType = BeginType::NONE;
 }
 
 void ProcessState::setBegin(const QString& keyword) {
-    QString upperKeyword = keyword.toUpper();
-    
-    if (upperKeyword == "SHOP") {
-        m_beginType = BeginType::SHOP;
-    } else if (upperKeyword == "TRAIN") {
-        m_beginType = BeginType::TRAIN;
-    } else if (upperKeyword == "AFTERTRAIN") {
-        m_beginType = BeginType::AFTERTRAIN;
-    } else if (upperKeyword == "ABLUP") {
-        m_beginType = BeginType::ABLUP;
-    } else if (upperKeyword == "TURNEND") {
-        m_beginType = BeginType::TURNEND;
-    } else if (upperKeyword == "FIRST") {
-        m_beginType = BeginType::FIRST;
-    } else if (upperKeyword == "TITLE") {
-        m_beginType = BeginType::TITLE;
-    } else {
-        // In a real implementation, this would throw an exception
-        qDebug() << "BEGIN keyword not recognized:" << keyword;
+    QString error;
+    if (!setBeginKeyword(keyword, &error)) {
+        qWarning().noquote() << "[BEGIN]" << error;
     }
 }
+
+bool ProcessState::calledWhenNormal() const { return m_calledWhenNormal; }
+void ProcessState::setCalledWhenNormal(bool value) { m_calledWhenNormal = value; }
+
+int ProcessState::currentMin() const { return m_currentMin; }
+void ProcessState::setCurrentMin(int value) { m_currentMin = value; }
+int ProcessState::functionCount() const { return m_functionList.size(); }
 
 LogicalLine* ProcessState::getCurrentLine() const {
     return m_currentLine;
@@ -247,29 +275,12 @@ void ProcessState::setLineCount(int count) {
 }
 
 bool ProcessState::isScriptEnd() const {
-    return m_functionList.isEmpty();
+    // 对齐 C#：ScriptEnd = (functionList.Count == currentMin)
+    return m_functionList.size() == m_currentMin;
 }
 
 bool ProcessState::isBegun() const {
     return m_beginType != BeginType::NONE;
-}
-
-void ProcessState::requestStateCheck() {
-    qDebug() << "[requestStateCheck] m_systemState:" << (int)m_systemState << "m_lastState:" << (int)m_lastState;
-    // Emit state unchanged if state didn't change since last check
-    if (m_systemState == m_lastState) {
-        qDebug() << "[requestStateCheck] State unchanged, emitting stateUnchanged";
-        emit stateUnchanged();
-    } else {
-        qDebug() << "[requestStateCheck] State changed, emitting stateChangedSignal";
-        emit stateChangedSignal();
-        // Update last state to current state
-        m_lastState = m_systemState;
-    }
-}
-
-void ProcessState::emitRequestNextInstruction() {
-    emit requestNextInstruction();
 }
 
 void ProcessState::setEntryPointScript(const QString& scriptName) {

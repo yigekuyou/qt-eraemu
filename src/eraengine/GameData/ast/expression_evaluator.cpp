@@ -16,6 +16,7 @@
  * along with this program.  If not, see <https://www.gnu.org/licenses/>.
  */
 #include "expression_evaluator.h"
+#include "system_variables.h"
 #include "constant_table.h"
 #include "expression_parser.h"
 #include "expression_ast.h"
@@ -259,6 +260,35 @@ qint64 ExpressionEvaluator::resolveIndex(const VariableNode& node, int index,
     return value.toLongLong();
 }
 
+// 变量写入（整型）：与 evaluateVariable 的读取路径对称，供 ++/-- 的副作用使用
+bool ExpressionEvaluator::assignVariable(const VariableNode& node, VariableStorage* storage,
+                                         GameBaseData* gameBaseData, qint64 value)
+{
+    if (!storage) {
+        return false;
+    }
+    const QString name = node.name();
+    const QString upper = name.toUpper();
+    int idx = 0;
+    if (node.isArray() && !node.indices().isEmpty()) {
+        idx = static_cast<int>(resolveIndex(node, 0, storage, gameBaseData));
+    }
+    if (upper == QLatin1String("LOCAL") || upper == QLatin1String("ARG")) {
+        storage->setLocalInt(idx, value);
+        return true;
+    }
+    if (upper == QLatin1String("ARGS") || upper == QLatin1String("LOCALS")
+        || upper == QLatin1String("RESULTS")) {
+        return false;   // 字符串变量不能自增
+    }
+    if (storage->hasSystemVariable(name)) {
+        storage->setSystemVariable(name, idx, value);
+        return true;
+    }
+    storage->setGlobalInt1D(name, idx, value);
+    return true;
+}
+
 QVariant ExpressionEvaluator::evaluateVariable(const VariableNode &node, VariableStorage *storage, GameBaseData *gameBaseData)
 {
     if (!storage) {
@@ -305,6 +335,36 @@ QVariant ExpressionEvaluator::evaluateVariable(const VariableNode &node, Variabl
         }
     }
 
+    // ---- LINECOUNT：控制台当前行数（C# console.LineCount）----
+    if (m_lineCountProvider && varName.compare(QLatin1String("LINECOUNT"), Qt::CaseInsensitive) == 0) {
+        return QVariant::fromValue<qint64>(m_lineCountProvider());
+    }
+
+    // ---- #DIM CONST 常量（求值期折叠；对齐 C# 常数）----
+    if (m_constProvider) {
+        QVariant cv;
+        if (m_constProvider(varName, cv) && cv.isValid()) {
+            return cv;
+        }
+    }
+
+    // ---- 字符串变量（用户全局字符串 / 系统字符串）----
+    // 对齐 Emuera：#DIMS/#GLOBALS 声明的字符串变量；此前只会按整数读取。
+    if (node.valueType() == OperandType::Str) {
+        const QString upper = varName.toUpper();
+        if (upper == QLatin1String("RESULTS")) {
+            return QVariant(storage->getLocalStr(0));
+        }
+        if (upper == QLatin1String("SAVEDATA_TEXT")) {
+            return QVariant(storage->getSystemStr(upper, 0));
+        }
+        int idx = 0;
+        if (node.isArray() && !node.indices().isEmpty()) {
+            idx = static_cast<int>(resolveIndex(node, 0, storage, gameBaseData));
+        }
+        return QVariant(storage->getGlobalStr1D(varName, idx));
+    }
+
     // Check if this is an array access
     if (node.isArray()) {
         // Evaluate the index expression
@@ -329,14 +389,13 @@ QVariant ExpressionEvaluator::evaluateVariable(const VariableNode &node, Variabl
         return QVariant(storage->getGlobalInt1D(varName, index));
     }
     
-    // Simple variable access (no array index) - look up in storage
-    // For system variables, return index 0 value by default
-    if (varName == "DAY" || varName == "MONEY" || varName == "FLAG" ||
-        varName == "ITEM" || varName == "COUNT" || varName == "A" ||
-        varName == "B" || varName == "C") {
+    // Simple variable access (no array index)
+    // 系统变量（RESULT / DAY / MONEY / FLAG / A / B / C / …）-> 取下标 0 的值
+    // 只有**真正有存储槽**的系统变量才走系统变量通道（A–Z/DA–DE 等无槽 → 用户全局）
+    if (storage->hasSystemVariable(varName)) {
         return QVariant(storage->getSystemVariable(varName, 0));
     }
-    
+
     // Regular global variable
     return QVariant(storage->getGlobalInt1D(varName, 0));
 }
@@ -405,8 +464,18 @@ QVariant ExpressionEvaluator::evaluateUnaryOp(const UnaryOpNode &node, VariableS
     case TokenType::PLUS:      return QVariant::fromValue<qint64>(v);
     case TokenType::BIT_NOT:   return QVariant::fromValue<qint64>(~v);
     case TokenType::INCREMENT:
-    case TokenType::DECREMENT:
-        return QVariant::fromValue<qint64>(v + (node.op().type() == TokenType::INCREMENT ? 1 : -1));
+    case TokenType::DECREMENT: {
+        const qint64 delta = (node.op().type() == TokenType::INCREMENT) ? 1 : -1;
+        const QSharedPointer<ExpressionNode> target = node.operand();
+        // C# OperatorMethod：++x -> PlusValue(1)（返回新值）；x++ -> PlusValue(1)-1（返回旧值）
+        // 两者**都会写回变量**（CanRestructure = false）。
+        if (target && target->kind() == NodeKind::Variable) {
+            const VariableNode& var = static_cast<const VariableNode&>(*target);
+            assignVariable(var, storage, gameBaseData, v + delta);
+            return QVariant::fromValue<qint64>(node.isPostfix() ? v : v + delta);
+        }
+        return QVariant::fromValue<qint64>(v + delta);
+    }
     default: break;
     }
     return QVariant();

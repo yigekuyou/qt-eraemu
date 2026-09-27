@@ -36,19 +36,66 @@ int ConsoleBackend::lineCount() const {
 // ---------------------------------------------------------------------------
 
 void ConsoleBackend::print(const QString& text) {
+    appendTextWithButtons(text);
+    markDirty();
+}
+
+// 对齐 C# ButtonStringCreator：把 `[±?digits]` 变成可点击按钮（Emuera 里选择项就是这么做的）。
+// 其余文本照旧；按钮只覆盖 `[n]` 这一小段 span。
+void ConsoleBackend::appendTextWithButtons(const QString& text) {
     if (!m_pendingOpen) {
         ConsoleDisplayLine line;
         line.align = m_align;
         m_buffer.appendLine(line);
         m_pendingOpen = true;
     }
-    ConsoleSpan span;
-    span.kind = ConsoleSpanKind::Text;
-    span.text = text;
-    span.raw = text;
-    span.style = m_style;
-    m_buffer.appendSpanToLast(span);
-    markDirty();
+    const auto appendSpan = [this](const QString& t) {
+        if (t.isEmpty()) return;
+        ConsoleSpan span;
+        span.kind = ConsoleSpanKind::Text;
+        span.text = t;
+        span.raw = t;
+        span.style = m_style;
+        m_buffer.appendSpanToLast(span);
+    };
+
+    int pos = 0;
+    while (pos < text.size()) {
+        const int open = text.indexOf(QLatin1Char('['), pos);
+        if (open < 0) break;
+        const int close = text.indexOf(QLatin1Char(']'), open + 1);
+        if (close < 0) break;
+        const QString inner = text.mid(open + 1, close - open - 1).trimmed();
+        // 只认整数（含 +123 / -123）：与 C# 的整数按钮一致
+        bool ok = false;
+        QString digits = inner;
+        if (digits.startsWith(QLatin1Char('+'))) digits = digits.mid(1);
+        const qint64 value = digits.toLongLong(&ok);
+        const bool isInt = ok && !digits.isEmpty()
+                           && digits.size() <= 9
+                           && (digits.at(0).isDigit() || digits.at(0) == QLatin1Char('-'));
+        if (!isInt) {
+            // 不是按钮：整段按文本推进，继续找下一个 '['
+            appendSpan(text.mid(pos, close - pos + 1));
+            pos = close + 1;
+            continue;
+        }
+        appendSpan(text.mid(pos, open - pos));              // `[` 之前的文本
+        const QString token = text.mid(open, close - open + 1);
+        const int startSpan = m_buffer.lastMutable().spans.size();
+        appendSpan(token);                                  // `[n]` 本身
+        ConsoleButton button;
+        button.startSpan = startSpan;
+        button.spanCount = 1;
+        button.isInteger = true;
+        button.intValue = value;
+        button.generation = m_generation;
+        m_buffer.lastMutable().buttons.append(button);
+        pos = close + 1;
+    }
+    if (pos < text.size()) {
+        appendSpan(text.mid(pos));
+    }
 }
 
 void ConsoleBackend::newline() {
@@ -159,6 +206,14 @@ void ConsoleBackend::flush() {
     emit windowChanged();
 }
 
+void ConsoleBackend::setMaxLog(int lines) {
+    const int cap = lines > 0 ? lines : 1;
+    if (m_buffer.capacity() == cap) return;
+    m_buffer.setCapacity(cap);
+    clampScroll();
+    markDirty();
+}
+
 void ConsoleBackend::tick() {
     if (m_dirty) {
         flush();
@@ -207,6 +262,23 @@ QVariantMap ConsoleBackend::visibleLine(int index) const {
     QVariantMap m = m_buffer.at(abs).toVariantMap();
     m.insert("absIndex", abs);
     return m;
+}
+
+int ConsoleBackend::windowFirstLine() const {
+    const int n = m_buffer.count();
+    return std::max(0, n - m_visibleCount - m_scrollOffset);
+}
+
+QVariantList ConsoleBackend::visibleLines() const {
+    QVariantList out;
+    const int n = m_buffer.count();
+    const int first = windowFirstLine();
+    for (int abs = first; abs < n; ++abs) {
+        QVariantMap m = m_buffer.at(abs).toVariantMap();
+        m.insert("absIndex", abs);
+        out.append(m);
+    }
+    return out;
 }
 
 void ConsoleBackend::clickAt(int visibleIndex, int buttonIndex) {

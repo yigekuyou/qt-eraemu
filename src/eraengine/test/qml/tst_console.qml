@@ -63,7 +63,7 @@ TestCase {
         backend.flush();                       // flush 点 -> windowChanged -> rebuild
 
         verify(backend.visibleLineCount() === 3, "visibleLineCount == 3");
-        compare(view.live.length, backend.visibleLineCount());
+        compare(view.visibleCount, backend.visibleLineCount());
     }
 
     // 有界窗口：行数超过可见数时，只建 visibleCount 个 item
@@ -73,8 +73,8 @@ TestCase {
             backend.newline();
         }
         backend.flush();
-        compare(view.live.length, backend.visibleCount);
-        verify(view.live.length <= 10);        // 200px / 20px
+        compare(view.visibleCount, backend.visibleCount);
+        verify(view.visibleCount <= 10);        // 200px / 20px
     }
 
     // 按钮命中 -> ConsoleBackend::clickAt -> inputSubmitted
@@ -88,7 +88,7 @@ TestCase {
         backend.newline();
         backend.flush();
 
-        const line = view.live[view.live.length - 1];
+        const line = view.lineAt(view.visibleCount - 1);
         verify(line !== null && line !== undefined, "no line item");
 
         const mouse = findChild(line, "spanButtonMouse");

@@ -33,6 +33,7 @@ class ConstantTable;
 class ProcessState;
 class ExecutionEngine;
 class VariableStorage;
+class GameBaseData;
 class ExpressionEvaluator;
 
 // ---------------------------------------------------------------------------
@@ -82,6 +83,30 @@ struct ScriptData {
 using UserFunctionInfo = UserFunctionDecl;
 
 // ---------------------------------------------------------------------------
+// LabelRef —— 一个函数标签的声明位置（同名标签可以有多条）
+//
+// 对齐 C# LabelDictionary.labelAtDic（名称 -> List<FunctionLabelLine>）：
+// 事件函数（@EVENTTRAIN 等）在真实游戏里会被大量「口上」重复声明，
+// 系统状态机需要按 #SINGLE/#PRI/#LATER/#ONLY 分成 4 组依次调用。
+// 因此除 labelPositions（名称 -> 最后一条，用于普通 GOTO/CALL）之外，
+// 还要保留全部声明。
+// ---------------------------------------------------------------------------
+struct LabelRef {
+    QString script;
+    int     line = -1;
+    bool    isEvent = false;
+    bool    isSingle = false;
+    bool    isPri = false;
+    bool    isLater = false;
+    bool    isOnly = false;
+
+    bool operator==(const LabelRef& o) const {
+        return script == o.script && line == o.line;
+    }
+};
+Q_DECLARE_METATYPE(LabelRef)
+
+// ---------------------------------------------------------------------------
 // EraParseTable —— 内存运行时容器（只读区 / 标记区 / 位置区）
 //
 //   只读区 : m_scripts（ScriptData）+ m_astCache（表达式串 -> 不可变 AST）
@@ -107,8 +132,6 @@ public:
     void setEntryPoint(const QString& label);
     QString getEntryPoint() const;
 
-    QList<LogicalLine> getExecutionQueue() const;
-
     int getLabelPosition(const QString& scriptName, const QString& labelName) const;
 
     bool resolveJumpTarget(const QString& label, int& position);
@@ -116,6 +139,7 @@ public:
 
     QString getCurrentScript() const;
 
+    void setGameBaseData(GameBaseData* data) { m_gameBaseData = data; }
     void setVariableStorage(VariableStorage* storage);
     void setExpressionEvaluator(ExpressionEvaluator* evaluator);
 
@@ -135,6 +159,21 @@ public:
     // 用户自定义函数注册表（对齐 C# FunctionLabelLine）
     [[nodiscard]] const UserFunctionInfo* userFunction(const QString& name) const;
     [[nodiscard]] const QHash<QString, UserFunctionInfo>& userFunctions() const { return m_functions; }
+
+    // 同名标签的全部声明（按 脚本名 + 行号 排序；供事件四分组导航）
+    // 对齐 C# LabelDictionary.GetEventLabels / SortLabels
+    [[nodiscard]] QList<LabelRef> labels(const QString& name) const;
+
+    // 某脚本的行数（用于计算「脚本结束」的返回地址）
+    [[nodiscard]] int scriptLineCount(const QString& scriptName) const;
+    // 某行上的标签名（函数标签；用于取函数私有变量初值）
+    [[nodiscard]] QString labelNameAt(const QString& scriptName, int line) const;
+
+    // 以显式返回地址跳到「某脚本的某一行」（事件分组导航用）
+    bool callLabelAt(const QString& script, int line, int returnLine);
+    // 同上，但显式指定「返回脚本」（系统层调用脚本函数时用：返回脚本 = 被调脚本自身，
+    // 返回地址 = 该脚本末尾 → 函数体结束即回到系统层）
+    bool callLabelAt(const QString& script, int line, const QString& returnScript, int returnLine);
 
     // 解析期告警（参数个数/类型错误等，对齐 C# ParserMediator 的结构化告警）
     [[nodiscard]] const QList<QString>& parseWarnings() const { return m_parseWarnings; }
@@ -165,10 +204,14 @@ public:
     [[nodiscard]] Frame currentFrame() const;
     [[nodiscard]] bool hasPosition() const;
 
+    // 上一次位置变化是不是「跳转」（相对顺序推进）。用于区分
+    // 「顺序落入函数标签」（= 函数结束）与「跳转/调用到函数标签」（= 跳过标签）。
+    // 对齐 C# runScriptProc 每轮先 ShiftNextLine 再判断的语义。
+    [[nodiscard]] bool jumpedToCurrent() const { return m_jumped; }
+
 signals:
     void entryPointReached(const QString& label);
     void jumpRequested(const QString& targetScript, const QString& label, int targetPosition);
-    void checkState();
     void parseCompleted(const QString& scriptName);
     void memorySpaceChanged(const QString& scriptName);
     void positionChanged(const QString& script, int line);
@@ -183,18 +226,9 @@ public slots:
     bool callLabel(const QString& label, bool advanceWasCalled = false);
     // 以显式返回地址压帧并跳转（执行链同步调用用户函数时使用）
     bool callLabelWithReturn(const QString& label, int returnLine);
+    // 函数私有变量初值（#DIM X = 7）——进入函数时由执行侧调用
+    void applyPrivateVariableDefaults(const QString& function);
     bool returnFromCall();
-
-    void onExecutionResult(const QString& scriptName, int lineNumber, bool success);
-    void onJumpRequest(const QString& label);
-    void onJumpToScript(const QString& scriptName, const QString& label);
-    void onStateChange();
-    void onStateUnchanged();
-    void onStateChanged();
-    void onRequestNextInstruction();
-    void onExecutionComplete(const QString& scriptName);
-    bool pumpInstructions();
-    void startExecutionPump();
     void switchToMemorySpace(const QString& scriptName);
 
 private:
@@ -206,6 +240,9 @@ private:
     void applyVariableTypes();
     // 字符串赋值的右值改按 StrForm 解析（对齐 C# AnalyseFormattedString）
     void applyStringAssignments();
+    // #DIM/#DIMS 初值：全局装载时写入
+    void applyVariableDefaults(const QList<VariableDecl>& decls);
+    void applyGlobalVariableDefaults();
     // 用户自定义函数的强类型化：形参类型由变量表回填（#DIM/#DIMS + ARG/ARGS），
     // 返回类型由 #FUNCTION(S) 决定。必须在 finalizeParse 内、变量声明解析之后。
     void resolveUserFunctionTypes();
@@ -228,8 +265,9 @@ private:
 
     QHash<QString, ScriptData> m_scripts;
     QHash<QString, QSharedPointer<ExpressionNode>> m_astCache;
-    QHash<QString, int> m_executionQueueIndices;
     QHash<QString, UserFunctionInfo> m_functions;
+    // 名称 -> 全部声明（同名函数可重复声明；事件函数靠它做 4 组导航）
+    QHash<QString, QList<LabelRef>> m_labelLists;
     QList<QString> m_parseWarnings;
     const ConstantTable* m_constantTable = nullptr;
     VariableTable m_variables;
@@ -238,12 +276,14 @@ private:
     ProcessState* m_state;
     ExecutionEngine* m_executionEngine;
     VariableStorage* m_variableStorage = nullptr;
+    GameBaseData* m_gameBaseData = nullptr;   // GAMEBASE_* 求值（条件表达式）
     ExpressionEvaluator* m_evaluator = nullptr;
 
     QString       m_currentScript;
     int           m_currentLine = 0;
     QList<Frame>  m_callStack;
     int           m_depth = 0;
+    bool          m_jumped = false;
 };
 
 #endif // ERA_PARSE_TABLE_H

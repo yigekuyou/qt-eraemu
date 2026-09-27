@@ -51,29 +51,22 @@ public:
     // Start execution
     bool executeScript(const QString& scriptName);
     void executeLogicalLine(const LogicalLine& line);
-    
-    // Control flow
-    bool handleGoto(const QString& label);
-    bool handleCall(const QString& label);
-    bool handleReturn();
-    bool handleIf(const QString& condition, const QString& thenLabel);
-    
+
     // Get execution state
     bool isRunning() const;
     int getCurrentLine() const;
     QString getCurrentScript() const;
-    int getExecutionQueueSize() const;
     int getTotalInstructionsExecuted() const;
-    
-    // Stop execution (for timeout control)
-    void stopExecution();
-    
+
     // Load scripts
     bool loadScripts(const QString& scriptDir);
     
     // Get loaded scripts
     QHash<QString, QList<LogicalLine>> getLoadedScripts() const;
     
+    // GameBase.csv 数据（GAMEBASE_TITLE 等）；求值器需要它
+    [[nodiscard]] GameBaseData* gameBaseData() const { return m_gameBaseData; }
+
     // Get ErbLoader for signal connections
     ErbLoader& getErbLoader() { return m_erbLoader; }
     const ErbLoader& getErbLoader() const { return m_erbLoader; }
@@ -83,36 +76,17 @@ signals:
     void lineExecuted(int line);
     void executionFinished();
     void errorOccurred(const QString& message);
-    void functionResult(const QString& name, const QVariant& result, const QString& error);
-    
-    // Instruction executed signal - emitted after each instruction is executed
-    // Used to request the next instruction from ParseTable
-    void instructionExecuted(const QString& scriptName, int lineNumber, bool success);
-    
-    // BEGIN instruction signal - emitted when BEGIN is encountered
-    void beginRequested(const QString& keyword);
 
     // ---- 显示输出（由 EraEngine 接到 ConsoleBackend）----
     void consolePrint(const QString& text, bool newline);
+    // PRINTBUTTON：打印一段文本并把它变成按钮（值可为整数或字符串）
+    void consolePrintButton(const QString& text, qint64 intValue, const QString& strValue, bool isString);
     void consoleClearLines(int count);
     void consoleAlign(const QString& align);
     void consoleColor(const QString& colorName);
     void consoleResetColor();
     void consoleRedraw(const QString& mode);
-    
-public slots:
-    // Receive instruction from ParseTable
-    void receiveInstruction(const LogicalLine& line);
-    
-    // Handle jump request from ParseTable
-    void handleJumpRequest(const QString& targetScript, const QString& label, int targetPosition);
-    
-    // Handle memory space change from ParseTable
-    void handleMemorySpaceChange(const QString& scriptName);
-    
-    // Function execution (public for EraEngine to call)
-    bool handleFunctionCall(const QString& name, const QList<QString>& args);
-    
+
 public:
     // Execute a single instruction (public for testing)
     bool executeInstruction(const LogicalLine& line);
@@ -128,17 +102,12 @@ private:
     
     // Assignment handling
     bool handleAssignment(const QString& lhs, const QString& rhs);
+    // 字符串赋值（目的变量是字符串变量时）：右侧按字符串求值后写入字符串容器
+    bool handleStringAssignment(const QString& lhs, const QString& rhs);
     bool handleCompoundAssignment(const QString& lhs, const QString& op, const QString& rhs);
     
     // Parse LHS (left-hand side) of assignment
     QPair<QString, int> parseLHS(const QString& lhs);
-    
-    // Loop control (private, called by executeInstruction)
-    bool handleFor(const QString& varName, qint64 start, qint64 end);
-    bool handleNext(const QString& varName);
-    bool handleLoop(bool condition);
-    bool handleWhile(const QString& condition);
-    bool handleWend();
     
     // Helper methods
     void setError(const QString& message);
@@ -159,109 +128,13 @@ private:
     int m_currentLine;
     QString m_currentScript;
     
-    // Execution queue
-    QQueue<LogicalLine> m_executionQueue;
-    
-    // Label lookup helper
-
-    // Label position lookup
-    int getLabelPosition(const QString& label);
-    
-    // Restart execution from a specific line
-    void restartFromLine(int linePosition);
-    
-    // Label position map for current script
-    QHash<QString, int> m_labelPositions;
-    
     // Current execution position (0-indexed line number)
     int m_executionPosition;
     
     // Total instructions executed counter
     int m_totalInstructionsExecuted;
     
-    // REPEAT loop state management
-    // REPEAT count - stores the original count and remaining iterations
-    struct RepeatLoopState {
-        int originalCount;
-        int remainingCount;
-        int loopLine;  // Line number where REPEAT is defined
-        int bodyStartLine;  // Line number where loop body starts (REPEAT + 1)
-        
-        // Required for QList::indexOf
-        bool operator==(const RepeatLoopState& other) const {
-            return originalCount == other.originalCount &&
-                   remainingCount == other.remainingCount &&
-                   loopLine == other.loopLine &&
-                   bodyStartLine == other.bodyStartLine;
-        }
-    };
-    
-    // FOR loop state management
-    // FOR LOCAL, start, end - stores the loop variable, start, end, and current value
-    struct ForLoopState {
-        QString variableName;
-        qint64 startValue;
-        qint64 endValue;
-        qint64 currentValue;
-        int loopLine;  // Line number where FOR is defined
-        
-        // Required for QList::indexOf
-        bool operator==(const ForLoopState& other) const {
-            return variableName == other.variableName &&
-                   startValue == other.startValue &&
-                   endValue == other.endValue &&
-                   currentValue == other.currentValue &&
-                   loopLine == other.loopLine;
-        }
-    };
-    
-    // WHILE loop state management
-    // WHILE condition - stores the condition and loop line for re-evaluation
-    struct WhileLoopState {
-        int loopLine;  // Line number where WHILE is defined
-        QString condition;  // Condition string (for re-evaluation)
-        bool entered;  // Has this loop been entered at least once?
-        
-        // Required for QList::indexOf
-        bool operator==(const WhileLoopState& other) const {
-            return loopLine == other.loopLine &&
-                   condition == other.condition &&
-                   entered == other.entered;
-        }
-    };
-    
-    // Stack of active REPEAT loops
-    QList<RepeatLoopState> m_repeatLoopStack;
-    
-    // Stack of active FOR loops
-    QList<ForLoopState> m_forLoopStack;
-    
-    // Stack of active WHILE loops
-    QList<WhileLoopState> m_whileLoopStack;
-    
 public:
-    // Flag to indicate a jump occurred (for test compatibility)
-    bool m_jumpOccurred;
-    
-    // Track the last WHILE position for re-entry detection
-    int m_lastWhileLine;
-    
-    // Get/set for testing
-    bool getJumpOccurred() const { return m_jumpOccurred; }
-    void setJumpOccurred(bool value) { m_jumpOccurred = value; }
-    
-    // Get execution queue status
-    bool isQueueEmpty() const { return m_executionQueue.isEmpty(); }
-    
-    // Dequeue from execution queue
-    LogicalLine dequeueExecutionLine() { return m_executionQueue.dequeue(); }
-    
-    // Get execution lines (for loop handling)
-    QList<LogicalLine> getExecutionLines() { return m_erbLoader.getLogicalLinesCI(m_currentScript); }
-    
-    // Get repeat loop stack reference
-    QList<RepeatLoopState>& getRepeatLoopStack() { return m_repeatLoopStack; }
-    
     // Setters
     void setCurrentScript(const QString& script) { m_currentScript = script; }
     void setExecutionPosition(int pos) { m_executionPosition = pos; }

@@ -22,6 +22,7 @@
 #include <QDir>
 #include <QApplication>
 #include <QQmlContext>
+#include "GameView/resource_image_provider.h"
 int main(int argc, char *argv[])
 {
 	QApplication app(argc, argv);
@@ -35,6 +36,8 @@ int main(int argc, char *argv[])
 	}
 	#endif
 	QQmlApplicationEngine engine;
+	// 资源图（C# ConstImage 的「资源名 -> 图片」）：QML 侧用 Image { source: "image://emuera/<name>" }
+	engine.addImageProvider(QStringLiteral("emuera"), new ResourceImageProvider);
 	QObject::connect(&engine, &QQmlApplicationEngine::objectCreationFailed,
 									 &app, []() { QCoreApplication::exit(-1); },
 	Qt::QueuedConnection);

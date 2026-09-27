@@ -28,7 +28,9 @@
 class EraParseTable;
 class ExecutionEngine;
 class VariableStorage;
+class GameBaseData;
 class ExpressionEvaluator;
+class SystemStateMachine;
 struct UserFunctionDecl;
 
 // ---------------------------------------------------------------------------
@@ -66,6 +68,13 @@ public:
 
     // 设置表达式求值器（用于挂用户函数回调 + 条件求值）
     void setExpressionEvaluator(ExpressionEvaluator* evaluator);
+
+    // 单次连续执行的步数上限（0 = 不限）；超限报错，用于把「脚本死循环」变成可定位的错误
+    void setStepLimit(qint64 limit) { m_stepLimit = limit; }
+    [[nodiscard]] qint64 stepLimit() const { return m_stepLimit; }
+
+    // 系统状态机（BEGIN / CALLTRAIN / DOTRAIN / SAVEGAME 等指令需要它）
+    void setSystemStateMachine(SystemStateMachine* machine) { m_machine = machine; }
 
 signals:
     void suspended(ExecState state);          // 挂起（等待输入等）
@@ -115,14 +124,26 @@ private:
 
     // 标签/函数
     int  labelLine(const QString& label) const;
+    // GAMEBASE_* 等需要 GameBase 数据（经 ExecutionEngine 取得）
+    [[nodiscard]] GameBaseData* baseData() const;
     // 绑定实参到 LOCAL，并把形参名注册为局部别名（供表达式解析）
     void bindArguments(const UserFunctionDecl* info, const QList<Operand>& callArgs);
+    // FOR/NEXT 的循环变量写入：LOCAL/ARG 写局部槽（脚本读法一致），其余写系统/全局
+    void writeLoopCounter(const QString& name, qint64 value);
+
+    // 整型变量统一读写（LOCAL/ARG -> 局部槽；系统变量 -> 系统槽；其余 -> 全局）
+    [[nodiscard]] qint64 readIntVar(const QString& name, int index) const;
+    void writeIntVar(const QString& name, int index, qint64 value);
+    // 从实参取「变量名 + 下标」（SWAP 用；下标可为表达式）
+    bool extractVarRef(const Operand& op, QString& name, int& index);
 
     EraParseTable*   m_table;
     ExecutionEngine* m_engine;
     ProcessState*    m_state;
     VariableStorage* m_storage;
     ExpressionEvaluator* m_evaluator = nullptr;
+    qint64 m_stepLimit = 0;   // 0 = 不限
+    SystemStateMachine*  m_machine = nullptr;
 
     QList<LoopFrame> m_loops;
     QList<QHash<QString, int>> m_aliasStack;   // CALL 时的局部别名快照

@@ -22,6 +22,7 @@
 #include <QTimer>
 #include <QColor>
 #include <QVariantMap>
+#include <QVariantList>
 #include <QtQml/qqmlregistration.h>
 #include "console_types.h"
 #include "console_buffer.h"
@@ -53,6 +54,13 @@ class ConsoleBackend : public QObject {
 public:
     explicit ConsoleBackend(QObject* parent = nullptr);
 
+    // ---- 可见窗口模型（供 QML Instantiator/Repeater 直接建模）----
+    // 元素为 ConsoleDisplayLine::toVariantMap()（含 spans/buttons/align）+ "absIndex"。
+    Q_PROPERTY(QVariantList visibleLines READ visibleLines NOTIFY windowChanged)
+    [[nodiscard]] QVariantList visibleLines() const;
+    // 可见窗口首行的绝对行号（0 = 缓冲第一行）
+    [[nodiscard]] int windowFirstLine() const;
+
     // ---- 只读属性 ----
     int  lineCount() const;
     int  visibleCount() const { return m_visibleCount; }
@@ -66,6 +74,9 @@ public:
     Q_INVOKABLE void print(const QString& text);          // 追加到当前行
     Q_INVOKABLE void newline();                            // 结束当前行
     Q_INVOKABLE void printButton(const QString& text, qint64 value, const QString& tooltip = QString());
+    // 把普通文本切成「文本 + [n] 按钮」（对齐 C# ButtonStringCreator）：
+    //   `[0] 开始游戏` -> span("...") + span("[0]")（带按钮） + span(" 开始游戏")
+    void appendTextWithButtons(const QString& text);
     Q_INVOKABLE void printButtonStr(const QString& text, const QString& value, const QString& tooltip = QString());
     Q_INVOKABLE void clearLines(int n);                    // CLEARLINE
     Q_INVOKABLE void clearAll();                           // 清屏
@@ -78,6 +89,10 @@ public:
     void markDirty();
     // 强制立即刷新（flush 点：进入等待输入前等）
     Q_INVOKABLE void flush();
+
+    // 历史保留行数（GuiManager 的 MaxLog）；缩小容量会丢弃最旧的行
+    Q_INVOKABLE void setMaxLog(int lines);
+    [[nodiscard]] int maxLog() const { return m_buffer.capacity(); }
 
     // ---- 输入桥接 ----
     void notifyInputRequested(const QString& kind);   // 由执行链调用

@@ -15,160 +15,187 @@
  * You should have received a copy of the GNU General Public License
  * along with this program.  If not, see <https://www.gnu.org/licenses/>.
  */
-import Qt.labs.platform as Platform
 import QtQuick
 import QtQuick.Controls
 import QtQuick.Dialogs
 import io.yigekuoyou.eraengine
-import org.kde.kirigami as Kirigami
 
-Window {
+// ---------------------------------------------------------------------------
+// 主窗口（界面 GUI 的装配点）
+//
+//   * EraEngine 单例 + GuiManager（设置）+ ConsoleBackend（控制台数据）；
+//   * 菜单：文件 / 编辑 / 视图 / 帮助（对齐 C# MainWindow 的 ToolStrip）；
+//   * 对话框：目录选择 / 保存日志 / 设置 / 关于；
+//   * 窗口标题、尺寸、字体、颜色全部来自 GuiManager（可在设置里改、可持久化）。
+// ---------------------------------------------------------------------------
+ApplicationWindow {
     id: window
 
-    property string gameDirectory: ""
-
-    signal init(string path)
-
     visible: true
-    title: eraEngine.gameBaseData.windowTitle || "Emuera Engine"
-    color: Kirigami.Theme.backgroundColor
+    title: eraEngine.gui.windowTitle || "Emuera Engine"
+    width: eraEngine.gui.windowWidth
+    height: eraEngine.gui.windowHeight
+    visibility: eraEngine.gui.maximized ? Window.Maximized : Window.Windowed
+    color: eraEngine.gui.backColor
 
-    Platform.FolderDialog {
-        id: folderDialog
+    property bool fullscreen: false
 
-        title: qsTr("Select Directory")
-        folder: currentDir // 赋予一个安全的初始默认路径
-        onAccepted: {
-            window.gameDirectory = folderDialog.folder;
-            window.init(window.gameDirectory);
-            eraEngine.gameDirectory = folderDialog.folder;
-        }
-    }
-
+    // 引擎单例（QML 中实例化；也可作为 qmlRegisterSingletonInstance 注入）
     EraEngine {
-        //将 QML 的 window.init 信号绑定到 C++ 的初始化槽函数（或通过 Connections/直接调用）
-
         id: eraEngine
     }
 
+    // ---- 对话框 ----
+    // 原生文件对话框（平台对话框，常驻即可）
+    FolderDialog {
+        id: folderDialog
+        title: qsTr("选择游戏目录")
+        currentFolder: "file://" + eraEngine.gui.startDirectory
+        onAccepted: eraEngine.gameDirectory = selectedFolder
+    }
+
+    FileDialog {
+        id: logDialog
+        title: qsTr("保存日志")
+        fileMode: FileDialog.SaveFile
+        defaultSuffix: "log"
+        currentFolder: "file://" + eraEngine.gui.startDirectory
+        nameFilters: [qsTr("日志文件 (*.log *.txt)"), qsTr("所有文件 (*)")]
+        onAccepted: eraEngine.gui.saveLog(selectedFile)
+    }
+
+    // ---- 自建窗口/对话框（Qt6 QML 惯用法：Qt.createComponent + createObject）----
+    // QML 自己按需创建对象并持有引用；重开时先销毁旧的，关闭即释放。
+    property var activeDialog: null
+
+    function openLazyDialog(url, props) {
+        if (activeDialog) {
+            activeDialog.destroy();
+            activeDialog = null;
+        }
+        const comp = Qt.createComponent(Qt.resolvedUrl(url));
+        if (comp.status === Component.Error) {
+            console.error("加载组件失败:", url, comp.errorString());
+            return null;
+        }
+        const obj = comp.createObject(window, props || {});
+        if (obj === null) {
+            console.error("实例化对象失败:", url);
+            return null;
+        }
+        activeDialog = obj;
+        if (obj.closed) obj.closed.connect(function () { if (window.activeDialog === obj) window.activeDialog = null; });
+        if (obj.open) obj.open();
+        return obj;
+    }
+    function openSettings() { openLazyDialog("SettingsDialog.qml", { "gui": eraEngine.gui, "engine": eraEngine }); }
+    function openAbout()    { openLazyDialog("AboutDialog.qml", { "gameBase": eraEngine.gameBaseData }); }
+
+    // ---- 菜单动作（QtQuick.Controls 的 MenuItem 用 action 承载快捷键）----
+    Action { id: actOpen;   text: qsTr("打开目录…"); shortcut: StandardKey.Open;    onTriggered: folderDialog.open() }
+    Action { id: actReload; text: qsTr("重新加载");  shortcut: StandardKey.Refresh; onTriggered: eraEngine.reload() }
+    Action { id: actSaveLog; text: qsTr("保存日志…"); shortcut: StandardKey.Save;   onTriggered: logDialog.open() }
+    Action { id: actTitle;  text: qsTr("返回标题");  onTriggered: eraEngine.gotoTitle() }
+    Action { id: actSettings; text: qsTr("设置…");   onTriggered: window.openSettings() }
+    Action { id: actQuit;   text: qsTr("退出");      shortcut: StandardKey.Quit;    onTriggered: Qt.quit() }
+
+    Action { id: actClear;  text: qsTr("清屏");      onTriggered: eraEngine.console.clearAll() }
+    Action { id: actBottom; text: qsTr("滚动到底部"); shortcut: "End";               onTriggered: eraEngine.console.scrollToBottom() }
+
+    Action { id: actZoomIn;  text: qsTr("放大字号"); shortcut: "Ctrl+="; onTriggered: eraEngine.gui.adjustFontSize(1) }
+    Action { id: actZoomOut; text: qsTr("缩小字号"); shortcut: "Ctrl+-"; onTriggered: eraEngine.gui.adjustFontSize(-1) }
+    Action { id: actAbout;   text: qsTr("关于…");   onTriggered: window.openAbout() }
+
+    // ---- 菜单栏 ----
+    menuBar: MenuBar {
+        Menu {
+            title: qsTr("文件(&F)")
+            MenuItem { action: actOpen }
+            MenuItem { action: actReload }
+            MenuItem { action: actSaveLog }
+            MenuItem { action: actTitle }
+            MenuSeparator {}
+            MenuItem { action: actSettings }
+            MenuSeparator {}
+            MenuItem { action: actQuit }
+        }
+
+        Menu {
+            title: qsTr("编辑(&E)")
+            MenuItem { action: actClear }
+            MenuItem { action: actBottom }
+        }
+
+        Menu {
+            title: qsTr("视图(&V)")
+            MenuItem { action: actZoomIn }
+            MenuItem { action: actZoomOut }
+            MenuItem {
+                text: qsTr("全屏")
+                checkable: true
+                checked: window.fullscreen
+                onTriggered: window.fullscreen = !window.fullscreen
+            }
+            MenuSeparator {}
+            MenuItem { text: qsTr("刷新帧率 +"); onTriggered: eraEngine.gui.fps = eraEngine.gui.fps + 1 }
+            MenuItem { text: qsTr("刷新帧率 −"); onTriggered: eraEngine.gui.fps = eraEngine.gui.fps - 1 }
+        }
+
+        Menu {
+            title: qsTr("帮助(&H)")
+            MenuItem { action: actAbout }
+        }
+    }
+
+    // ---- 控制台（渲染层）----
     EraRender {
         id: eraRender
-
         anchors.fill: parent
         engine: eraEngine
     }
 
-    Window {
-        id: aboutWindow
+    // ---- 状态栏 ----
+    footer: ToolBar {
+        visible: eraEngine.console.waitingInput
 
-        title: eraEngine.gameBaseData.windowTitle
-        visible: false
-        modality: Qt.ApplicationModal // 设置为应用模态（可选，限制父子窗口焦点）
-        flags: Qt.Window | Qt.WindowTitleHint | Qt.WindowSystemMenuHint | Qt.WindowCloseButtonHint
-        color: Kirigami.Theme.backgroundColor
-
-        Column {
-            width: 300
-            spacing: 10
-
+        Row {
+            anchors.verticalCenter: parent.verticalCenter
+            anchors.left: parent.left
+            anchors.leftMargin: 8
+            spacing: 12
             Label {
-                text: qsTr("Game Title: ") + (eraEngine.gameBaseData.title || qsTr("Unknown"))
-                color: Kirigami.Theme.textColor
-            }
-
-            Label {
-                text: qsTr("Author: ") + (eraEngine.gameBaseData.author || qsTr("Unknown"))
-                color: Kirigami.Theme.textColor
-            }
-
-            Label {
-                text: qsTr("Version: ") + (eraEngine.gameBaseData.version || qsTr("Unknown"))
-                color: Kirigami.Theme.textColor
-            }
-
-            Label {
-                text: qsTr("Release Year: ") + (eraEngine.gameBaseData.releaseYear || qsTr("Unknown"))
-                color: Kirigami.Theme.textColor
-            }
-
-            Label {
-                text: qsTr("Additional Info: ") + (eraEngine.gameBaseData.additionalInfo || qsTr("None"))
-                color: Kirigami.Theme.textColor
+                text: eraEngine.console.waitingInput
+                      ? qsTr("等待输入：") + eraEngine.console.inputKind
+                      : ""
+                color: eraEngine.gui.foreColor
             }
         }
     }
 
-    Platform.MenuBar {
-        Platform.Menu {
-            id: fileMenu
+    // ---- 快捷键：全屏 ----
+    Shortcut {
+        sequence: "F11"
+        onActivated: window.fullscreen = !window.fullscreen
+    }
 
-            title: qsTr("File")
+    // 全屏切换
+    onFullscreenChanged: visibility = fullscreen ? Window.FullScreen
+                                                 : (eraEngine.gui.maximized ? Window.Maximized
+                                                                            : Window.Windowed)
 
-            Platform.MenuItem {
-                text: qsTr("open")
-                shortcut: StandardKey.Open
-                onTriggered: folderDialog.open()
-            }
-
-            Platform.MenuItem {
-                text: qsTr("reload")
-                shortcut: StandardKey.Refresh
-                onTriggered: eraEngine.reload()()
-            }
-
-            Platform.MenuItem {
-                text: qsTr("save log")
-            }
-
-            Platform.MenuItem {
-                text: qsTr("retunrn title")
-                onTriggered: {
-                    if (eraRender.engine) {
-                        eraRender.engine.gotoTitle();
-                    }
-                }
-            }
-
-            Platform.MenuItem {
-                text: qsTr("settings")
-                onTriggered: configWindow.visible = true // 弹出配置窗口
-            }
-
-            Platform.MenuItem {
-                text: qsTr("exit")
-                onTriggered: Qt.quit()
-            }
+    // 支持命令行直接带游戏目录启动：appemuera <dir>
+    Component.onCompleted: {
+        const args = Qt.application.arguments;
+        for (let i = 1; i < args.length; ++i) {
+            if (args[i].startsWith("-")) continue;
+            eraEngine.gameDirectory = args[i];
+            break;
         }
+    }
 
-        Platform.Menu {
-            // ...
-
-            id: editMenu
-
-            title: qsTr("&Edit")
-        }
-
-        Platform.Menu {
-            // ...
-
-            id: viewMenu
-
-            title: qsTr("&View")
-        }
-
-        Platform.Menu {
-            id: helpMenu
-
-            title: qsTr("&Help")
-
-            Platform.MenuItem {
-                text: qsTr("&about")
-                onTriggered: {
-                    aboutWindow.visible = true;
-                    aboutWindow.raise();
-                    aboutWindow.requestActivate();
-                }
-            }
-        }
+    // 装载完成后自动进入系统状态机（标题画面 → 等待输入）
+    Connections {
+        target: eraEngine
+        function onScriptsLoaded(ok) { if (ok) eraEngine.runSystem() }
     }
 }

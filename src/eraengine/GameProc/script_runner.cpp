@@ -19,6 +19,7 @@
 #include "era_parse_table.h"
 #include "execution_engine.h"
 #include "variable_storage.h"
+#include "system_state_machine.h"
 #include "ast/expression_evaluator.h"
 #include <QDebug>
 
@@ -67,7 +68,17 @@ void ScriptRunner::onContinueExecution() {
         return;   // 重入保护
     }
     m_running = true;
+    qint64 steps = 0;
     while (m_state->isRunning()) {
+        if (m_stepLimit > 0 && ++steps > m_stepLimit) {
+            emit errorOccurred(QStringLiteral("脚本可能陷入死循环：本次连续执行超过 %1 步（@%2 第 %3 行）")
+                                   .arg(m_stepLimit)
+                                   .arg(m_table->currentFrame().callLabel.isEmpty()
+                                            ? QStringLiteral("?") : m_table->currentFrame().callLabel)
+                                   .arg(m_table->currentLine()));
+            m_state->setErrorState();
+            break;
+        }
         if (!stepOnce()) {
             break;   // 挂起 / 结束 / 错误
         }
@@ -165,18 +176,22 @@ int ScriptRunner::labelLine(const QString& label) const {
     return m_table->getLabelPosition(m_table->currentScript(), label);
 }
 
+GameBaseData* ScriptRunner::baseData() const {
+    return m_engine ? m_engine->gameBaseData() : nullptr;
+}
+
 bool ScriptRunner::evalInt(const QSharedPointer<ExpressionNode>& ast, const QString& raw, qint64& out) {
     ExpressionEvaluator local;
     ExpressionEvaluator* ev = m_evaluator ? m_evaluator : &local;
     if (ast) {
-        out = ev->evaluate(*ast, m_storage, nullptr).toLongLong();
+        out = ev->evaluate(*ast, m_storage, baseData()).toLongLong();
         return true;
     }
     if (raw.trimmed().isEmpty()) {
         out = 0;
         return true;
     }
-    out = ev->evaluate(raw, m_storage, nullptr).toLongLong();
+    out = ev->evaluate(raw, m_storage, baseData()).toLongLong();
     return true;
 }
 
@@ -198,7 +213,19 @@ ExecState ScriptRunner::executeLine(const LogicalLine& line) {
     const auto advance = [&]() { m_table->advance(); };
 
     if (line.kind != LineKind::Instruction) {
-        advance();   // 标签 / 空行 / 注释 / 预处理指令
+        // 函数标签 = 当前函数体结束（对齐 C# runScriptProc：顺序落入 FunctionLabelLine → Return(0)）。
+        // 但若当前位置是「跳转/调用/入口」落点，则标签只是跳转目标，跳过即可。
+        if (line.kind == LineKind::FunctionLabel) {
+            if (m_table->jumpedToCurrent()) {
+                advance();
+                return ExecState::Continue;
+            }
+            if (m_table->returnFromCall()) {
+                return ExecState::Continue;
+            }
+            return ExecState::Halt;
+        }
+        advance();   // 空行 / 注释 / 预处理指令
         return ExecState::Continue;
     }
 
@@ -347,8 +374,7 @@ ExecState ScriptRunner::executeLine(const LogicalLine& line) {
             f.step = 1;
             if (ops.size() >= 4) evalInt(ops[3]->ast, ops[3]->raw, f.step);
 
-            m_storage->setSystemVariable(f.varName, 0, f.value);
-            m_storage->setGlobalInt1D(f.varName, 0, f.value);
+            writeLoopCounter(f.varName, f.value);
 
             const bool enters = (f.step >= 0) ? (f.value <= f.end) : (f.value >= f.end);
             if (!enters) {
@@ -366,8 +392,7 @@ ExecState ScriptRunner::executeLine(const LogicalLine& line) {
         LoopFrame* f = topLoop(LoopFrame::Kind::For);
         if (f) {
             f->value += f->step;
-            m_storage->setSystemVariable(f->varName, 0, f->value);
-            m_storage->setGlobalInt1D(f->varName, 0, f->value);
+            writeLoopCounter(f->varName, f->value);
             const bool more = (f->step >= 0) ? (f->value <= f->end) : (f->value >= f->end);
             if (more) {
                 gotoLine(f->startLine + 1);
@@ -391,7 +416,10 @@ ExecState ScriptRunner::executeLine(const LogicalLine& line) {
     }
     if (name == QLatin1String("CONTINUE")) {
         if (!m_loops.isEmpty()) {
-            gotoLine(m_loops.last().startLine + 1);
+            // 跳到**循环末尾行**（NEXT / LOOP / WEND），让「自增 + 条件」正常执行。
+            // 对齐 C#：CONTINUE 的目标是循环的 continue 点，而不是循环体开头。
+            const LoopFrame& f = m_loops.last();
+            gotoLine(f.endLine >= 0 ? f.endLine : f.startLine + 1);
         } else {
             advance();
         }
@@ -419,6 +447,8 @@ ExecState ScriptRunner::executeLine(const LogicalLine& line) {
             emit errorOccurred(QStringLiteral("CALL label not found: %1").arg(label));
             return ExecState::Error;
         }
+        // 函数私有变量初值（#DIM X = 7）：每次进入函数时写入
+        m_table->applyPrivateVariableDefaults(label);
         return ExecState::Continue;
     }
     if (name == QLatin1String("RETURN") || name == QLatin1String("RETURNF")) {
@@ -454,19 +484,134 @@ ExecState ScriptRunner::executeLine(const LogicalLine& line) {
         return ExecState::Continue;
     }
 
+    // ---- SWAP / SWAPVAR：交换两个变量的值（对齐 C# SP_SWAP_Instruction）----
+    if (name == QLatin1String("SWAP") || name == QLatin1String("SWAPVAR")) {
+        QList<const Operand*> ops;
+        if (line.argument.kind == ArgKind::Swap && line.argument.params.size() >= 2) {
+            for (const Operand& a : line.argument.params) ops.append(&a);
+        } else {
+            for (const Operand& a : line.arguments) {
+                if (a.raw != QLatin1String(",")) ops.append(&a);
+            }
+        }
+        if (ops.size() >= 2) {
+            QString na, nb;
+            int ia = 0, ib = 0;
+            if (extractVarRef(*ops[0], na, ia) && extractVarRef(*ops[1], nb, ib)) {
+                const qint64 va = readIntVar(na, ia);
+                const qint64 vb = readIntVar(nb, ib);
+                writeIntVar(na, ia, vb);
+                writeIntVar(nb, ib, va);
+            }
+        }
+        advance();
+        return ExecState::Continue;
+    }
+
     // ---- 输入等待（由中心执行状态挂起）----
     if (name == QLatin1String("INPUT") || name == QLatin1String("ONEINPUT")
-        || name == QLatin1String("TONEINPUT") || name == QLatin1String("INPUTS")
-        || name == QLatin1String("INPUTMOUSEKEY")) {
+        || name == QLatin1String("INPUTS")) {
         advance();                       // 指令已消费
         return ExecState::WaitInput;     // 挂起等待用户操作
     }
 
-    // ---- BEGIN：请求系统状态控制器切换状态 ----
+    // ---- 实时 / 限时输入（对齐 C# INPUTMOUSEKEY / TONEINPUT）----
+    if (name == QLatin1String("INPUTMOUSEKEY")) {
+        qint64 timeout = 0;
+        if (!line.arguments.isEmpty()) evalInt(line.arguments.first().ast, line.arguments.first().raw, timeout);
+        advance();
+        if (m_machine) {
+            m_machine->waitMouseKey(static_cast<int>(timeout));
+            return m_state->getExecState();
+        }
+        return ExecState::WaitInput;
+    }
+    if (name == QLatin1String("TONEINPUT") || name == QLatin1String("TONEINPUTS")) {
+        qint64 timeout = 0;
+        if (!line.arguments.isEmpty()) evalInt(line.arguments.first().ast, line.arguments.first().raw, timeout);
+        advance();
+        if (m_machine) {
+            m_machine->waitTimedInput(static_cast<int>(timeout));
+            return m_state->getExecState();
+        }
+        return ExecState::WaitInput;
+    }
+    // AWAIT n：挂起 n 毫秒后自动继续（不阻塞、不请求输入）
+    if (name == QLatin1String("AWAIT")) {
+        qint64 ms = 0;
+        if (!line.arguments.isEmpty()) evalInt(line.arguments.first().ast, line.arguments.first().raw, ms);
+        if (ms < 0) ms = 0;
+        advance();
+        if (m_machine && ms > 0) {
+            m_machine->awaitDelay(static_cast<int>(ms));
+            return m_state->getExecState();
+        }
+        return ExecState::Continue;
+    }
+
+    // ---- BEGIN：设置 BEGIN 类型并返回当前函数（对齐 C# BEGIN_Instruction）----
     if (name == QLatin1String("BEGIN")) {
         const QString keyword = line.arguments.isEmpty() ? QString() : line.arguments.first().raw;
+        QString error;
+        const bool ok = m_machine ? m_machine->beginWithKeyword(keyword, &error)
+                                  : m_state->setBeginKeyword(keyword, &error);
+        if (!ok) {
+            m_state->setErrorState();
+            emit errorOccurred(error);
+            return ExecState::Error;
+        }
+        // C# state.Return(0)：BEGIN 之后直接返回，由系统状态机在帧底接管
+        if (!m_table->returnFromCall()) {
+            return ExecState::Halt;
+        }
+        return ExecState::Continue;
+    }
+
+    // ---- SAVEGAME / LOADGAME：记录返回状态并切换（对齐 C# SAVELOADGAME_Instruction）----
+    if (name == QLatin1String("SAVEGAME") || name == QLatin1String("LOADGAME")) {
+        if (!m_state->canSave()) {
+            m_state->setErrorState();
+            emit errorOccurred(QStringLiteral("@%1 中不能执行 SAVEGAME/LOADGAME 命令")
+                                   .arg(m_table->currentFrame().callLabel));
+            return ExecState::Error;
+        }
+        if (m_machine) {
+            m_machine->requestSaveLoad(name == QLatin1String("SAVEGAME"));
+        }
         advance();
-        m_state->setBegin(keyword);
+        return ExecState::Continue;
+    }
+
+    // ---- CALLTRAIN / STOPCALLTRAIN / DOTRAIN ----
+    if (m_machine && name == QLatin1String("CALLTRAIN")) {
+        qint64 count = 0;
+        evalInt(line.arguments.isEmpty() ? QSharedPointer<ExpressionNode>()
+                                         : line.arguments.first().ast,
+                line.arguments.isEmpty() ? QString() : line.arguments.first().raw, count);
+        m_machine->setCommands(count);
+        advance();
+        return ExecState::Continue;
+    }
+    if (m_machine && name == QLatin1String("STOPCALLTRAIN")) {
+        if (m_machine->isContinuousTrain()) {
+            m_machine->clearCommands();
+        }
+        advance();
+        return ExecState::Continue;
+    }
+    if (m_machine && name == QLatin1String("DOTRAIN")) {
+        qint64 train = 0;
+        evalInt(line.arguments.isEmpty() ? QSharedPointer<ExpressionNode>()
+                                         : line.arguments.first().ast,
+                line.arguments.isEmpty() ? QString() : line.arguments.first().raw, train);
+        if (train < 0 || train >= m_machine->trainCount()) {
+            m_state->setErrorState();
+            emit errorOccurred(QStringLiteral("DOTRAIN 的值超出 TRAINNAME 范围"));
+            return ExecState::Error;
+        }
+        m_machine->setDoTrainSelectCom(train);
+        m_state->setSystemState(SystemStateCode::Train_DoTrain);
+        advance();
         return ExecState::Continue;
     }
 
@@ -493,6 +638,99 @@ ExecState ScriptRunner::executeLine(const LogicalLine& line) {
 //     其它名字   -> 函数私有变量：本移植把它登记为「名字 -> LOCAL[i]」别名
 //   （Emuera 里 ARG 就是 LOCAL 的整数数组、ARGS 是字符串数组，因此语义等价）
 // ---------------------------------------------------------------------------
+qint64 ScriptRunner::readIntVar(const QString& name, int index) const {
+    const QString upper = name.toUpper();
+    if (upper == QLatin1String("LOCAL") || upper == QLatin1String("ARG")) {
+        return m_storage->getLocalInt(index);
+    }
+    if (m_storage->hasSystemVariable(name)) {
+        return m_storage->getSystemVariable(name, index);
+    }
+    return m_storage->getGlobalInt1D(name, index);
+}
+
+void ScriptRunner::writeIntVar(const QString& name, int index, qint64 value) {
+    const QString upper = name.toUpper();
+    if (upper == QLatin1String("LOCAL") || upper == QLatin1String("ARG")) {
+        m_storage->setLocalInt(index, value);
+        return;
+    }
+    if (m_storage->hasSystemVariable(name)) {
+        m_storage->setSystemVariable(name, index, value);
+        return;
+    }
+    m_storage->setGlobalInt1D(name, index, value);
+}
+
+bool ScriptRunner::extractVarRef(const Operand& op, QString& name, int& index) {
+    index = 0;
+    if (op.ast && op.ast->kind() == NodeKind::Variable) {
+        const VariableNode& var = static_cast<const VariableNode&>(*op.ast);
+        name = var.name();
+        if (var.isArray() && !var.indices().isEmpty()) {
+            const QSharedPointer<ExpressionNode> idxNode = var.indices().at(0);
+            if (idxNode) {
+                if (m_evaluator) {
+                    index = static_cast<int>(
+                        m_evaluator->evaluate(*idxNode, m_storage, baseData()).toLongLong());
+                } else {
+                    qint64 v = 0;
+                    evalInt(idxNode, QString(), v);
+                    index = static_cast<int>(v);
+                }
+            }
+        }
+        return true;
+    }
+    // 退化：从 raw 文本解析 "NAME[:下标]"（下标可以是变量/表达式）
+    QString raw = op.raw.trimmed();
+    const int colon = raw.indexOf(QLatin1Char(':'));
+    if (colon > 0) {
+        const QString idxText = raw.mid(colon + 1).trimmed();
+        bool ok = false;
+        const int direct = idxText.toInt(&ok);
+        if (ok) {
+            index = direct;
+        } else if (m_table) {
+            const QSharedPointer<ExpressionNode> ast = m_table->expressionAst(idxText);
+            if (ast) {
+                if (m_evaluator) {
+                    index = static_cast<int>(m_evaluator->evaluate(*ast, m_storage, baseData()).toLongLong());
+                } else {
+                    qint64 v = 0;
+                    evalInt(ast, QString(), v);
+                    index = static_cast<int>(v);
+                }
+            }
+        }
+        raw = raw.left(colon);
+    }
+    name = bareVarName(raw);
+    return !name.isEmpty();
+}
+
+void ScriptRunner::writeLoopCounter(const QString& rawName, qint64 value) {
+    // 支持 `LOCAL:0` / `LOCAL:1` / `A:3` 这类带下标（数字字面量）的循环变量。
+    // —— eraTetris 用 LOCAL:0/LOCAL:1/LOCAL:2 做嵌套循环计数器，若一律写到槽 0
+    //    会导致内层循环覆盖外层计数器。
+    QString name = rawName;
+    int index = 0;
+    const int colon = name.indexOf(QLatin1Char(':'));
+    if (colon > 0) {
+        bool ok = false;
+        const int idx = name.mid(colon + 1).trimmed().toInt(&ok);
+        if (ok) { index = idx; name = name.left(colon); }
+    }
+    name = bareVarName(name);
+    const QString upper = name.toUpper();
+    if (upper == QLatin1String("LOCAL") || upper == QLatin1String("ARG")) {
+        m_storage->setLocalInt(index, value);
+        return;
+    }
+    m_storage->setSystemVariable(name, index, value);
+    m_storage->setGlobalInt1D(name, index, value);
+}
+
 void ScriptRunner::bindArguments(const UserFunctionDecl* info, const QList<Operand>& callArgs) {
     const auto bindOne = [this](const UserParamDecl* p, int position,
                                 bool argIsString, const QString& strValue, qint64 intValue) {

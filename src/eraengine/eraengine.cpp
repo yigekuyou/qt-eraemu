@@ -36,7 +36,7 @@ EraEngine::EraEngine(QObject *parent)
 			m_inputSystem(),
 			m_executionEngine(&m_variableStorage, &m_gameBaseData),
 			m_processState(),
-			m_systemProcessor(&m_processState),
+			m_systemStateMachine(&m_processState),
 			m_parseTable(&m_processState, &m_executionEngine),
 		m_scriptRunner(&m_parseTable, &m_executionEngine, &m_processState, &m_variableStorage),
 			m_configLoader(),
@@ -54,6 +54,17 @@ EraEngine::EraEngine(QObject *parent)
 		// Set ParseTable reference in ExecutionEngine for CALL/RETURN integration
 		m_executionEngine.setParseTable(&m_parseTable);
 
+		// ---- 系统状态机：依赖注入 ----
+		m_systemStateMachine.setParseTable(&m_parseTable);
+		m_systemStateMachine.setVariableStorage(&m_variableStorage);
+		m_systemStateMachine.setScriptRunner(&m_scriptRunner);
+		m_scriptRunner.setSystemStateMachine(&m_systemStateMachine);
+		// 实时/限时输入：AWAIT / INPUTMOUSEKEY 超时 / TONEINPUT 超时 用 QTimer 驱动
+		m_systemStateMachine.setTimer([this](int ms, std::function<void()> cb) {
+			QTimer::singleShot(ms, this, [cb]() { cb(); });
+		});
+		buildSystemHost();
+
 		// ---- 执行链：信号与槽，由程序状态控制器驱动 ----
 		// 表达式求值器挂上“用户自定义函数”回调（执行链 / 执行引擎 / 解析表共享同一求值器）
 		m_parseTable.setExpressionEvaluator(&m_expressionEvaluator);
@@ -61,17 +72,23 @@ EraEngine::EraEngine(QObject *parent)
 		m_scriptRunner.setExpressionEvaluator(&m_expressionEvaluator);
 		// 变量字符串下标（CSV 常量名）解析依赖常量名表
 		m_expressionEvaluator.setConstantTable(&m_constantTable);
+		// LINECOUNT = 控制台当前行数（eraTetris 等用它做「清掉本帧」）
+		m_expressionEvaluator.setLineCountProvider([this]() -> qint64 {
+			return m_console.lineCount();
+		});
 		// 解析期也需要常量名表（CFLAG:ARG:現在位置 之类的常量名下标）
 		m_parseTable.setConstantTable(&m_constantTable);
+		m_parseTable.setGameBaseData(&m_gameBaseData);
 		m_executionEngine.getErbLoader().setConstantTable(&m_constantTable);
 
-		// 控制器发出 continueExecution() -> 执行链槽 onContinueExecution()
-		connect(&m_processState, &ProcessState::continueExecution,
-				&m_scriptRunner, &ScriptRunner::onContinueExecution);
-
-		connect(&m_scriptRunner, &ScriptRunner::finished, this, [this]() {
-			emit systemFinished();
+		// ---- 界面管理：控制台 + 窗口标题 ----
+		m_guiManager.setConsole(&m_console);
+		m_guiManager.setStartDirectory(m_gameDirectory);
+		m_guiManager.setWindowTitle(m_gameBaseData.windowTitle());
+		connect(&m_gameBaseData, &GameBaseData::dataChanged, this, [this]() {
+			m_guiManager.setWindowTitle(m_gameBaseData.windowTitle());
 		});
+
 		connect(&m_scriptRunner, &ScriptRunner::errorOccurred, this, [](const QString& msg) {
 			qWarning() << "[ScriptRunner]" << msg;
 		});
@@ -89,6 +106,11 @@ EraEngine::EraEngine(QObject *parent)
 				});
 		connect(&m_executionEngine, &ExecutionEngine::consoleClearLines,
 				&m_console, &ConsoleBackend::clearLines);
+		connect(&m_executionEngine, &ExecutionEngine::consolePrintButton, this,
+				[this](const QString& text, qint64 intValue, const QString& strValue, bool isString) {
+					if (isString) m_console.printButtonStr(text, strValue);
+					else m_console.printButton(text, intValue);
+				});
 		connect(&m_executionEngine, &ExecutionEngine::consoleResetColor,
 				&m_console, &ConsoleBackend::resetColor);
 		connect(&m_executionEngine, &ExecutionEngine::consoleRedraw, this,
@@ -186,64 +208,29 @@ EraEngine::EraEngine(QObject *parent)
 		
 		// Connect ErbLoader to ParseTable for parsing notifications
 		m_executionEngine.getErbLoader().setParseTable(&m_parseTable);
-		
-		// Connect EraParseTable to ProcessState for state-based execution control
-		// ParseTable emits checkState when it needs to verify if execution should continue
-		// ProcessState emits stateUnchanged if state didn't change, allowing execution to continue
-		connect(&m_parseTable, &EraParseTable::checkState,
-				&m_processState, &ProcessState::requestStateCheck);
-		
-		// ProcessState emits stateUnchanged when state didn't change
-		// Use Qt::QueuedConnection to break the signal chain and avoid stack overflow
-		connect(&m_processState, &ProcessState::stateUnchanged,
-				&m_parseTable, &EraParseTable::onStateUnchanged, Qt::QueuedConnection);
-		
-		// ProcessState emits stateChangedSignal when state changed
-		// Use Qt::QueuedConnection to break the signal chain and avoid stack overflow
-		connect(&m_processState, &ProcessState::stateChangedSignal,
-				&m_parseTable, &EraParseTable::onStateChanged, Qt::QueuedConnection);
-		
+
 		// ProcessState emits stateChanged (no args) when state changes
 		// Connect to SystemStatusManager to keep state synchronized
 		connect(&m_processState, &ProcessState::stateChanged,
 				[this]() {
 			m_statusManager.onStateChanged(m_processState.getState());
 		});
-		
-		// Removed: requestNextInstruction signal is no longer used
-		// Execution is now driven by pumpInstructions() directly
-		
-		// Instruction execution is now handled directly by EraParseTable::pumpInstructions()
-		// to avoid stack overflow from recursive signal chains
-		
-		connect(&m_parseTable, &EraParseTable::jumpRequested,
-				&m_executionEngine, &ExecutionEngine::handleJumpRequest);
-		
-		connect(&m_parseTable, &EraParseTable::memorySpaceChanged,
-				&m_executionEngine, &ExecutionEngine::handleMemorySpaceChange);
-		
-		// Connect system processor signals to signal manager
-		connect(&m_systemProcessor, &SystemProcessor::stateChanged,
-				&m_signalManager, [this](StateCode oldState, StateCode newState) {
+
+		// Connect system state machine signals to signal manager / status manager
+		connect(&m_systemStateMachine, &SystemStateMachine::stateChanged,
+				&m_signalManager, [this](StateCode, StateCode newState) {
 			m_signalManager.emitStateChanged(newState);
+			m_statusManager.onStateChanged(newState);
 		});
-		
-		connect(&m_systemProcessor, &SystemProcessor::inputRequested,
+		connect(&m_systemStateMachine, &SystemStateMachine::inputRequested,
 				&m_signalManager, &SignalManager::emitInputRequested);
-		
-		// Connect execution engine BEGIN signal to system processor
-		connect(&m_executionEngine, &ExecutionEngine::beginRequested,
-				&m_systemProcessor, &SystemProcessor::onBeginRequested);
-		
-		// Connect system processor signals to signal manager parsing signals
-		connect(&m_systemProcessor, &SystemProcessor::parsingPaused,
-				&m_signalManager, [this](StateCode state) {
-			m_signalManager.emitParsingPaused(state);
+		connect(&m_systemStateMachine, &SystemStateMachine::inputRequested, this,
+				[this](SystemStateCode state) {
+			m_console.notifyInputRequested(SystemStateMachine::stateName(state));
 		});
-		
-		connect(&m_systemProcessor, &SystemProcessor::parsingResumed,
-				&m_signalManager, [this](StateCode state) {
-			m_signalManager.emitParsingResumed(state);
+		connect(&m_systemStateMachine, &SystemStateMachine::errorOccurred, this,
+				[](const QString& message) {
+			qWarning().noquote() << "[SystemStateMachine]" << message;
 		});
 		
 		// Connect signal manager to system status manager for parsing signals
@@ -350,6 +337,9 @@ void EraEngine::setGameDirectory(const QString& directory)
 				}
 				m_gameDirectory = dir;
 				m_fileSystem.setRootDir(dir);
+				m_guiManager.setGameDirectory(dir);
+				m_guiManager.setStartDirectory(dir);
+				ResourceImageProvider::setRoot(dir);
 				qDebug() << "[DEBUG] About to call reload()";
 				reload();
 				qDebug() << "[DEBUG] reload() complete";
@@ -382,6 +372,8 @@ void EraEngine::reload()
 
 				collectEntryPoints();
 				loadFinishedHook();
+				// 同步装载完成（GUI 可据此启动系统状态机：runSystem()）
+				emit scriptsLoaded(true);
 		}
 }
 
@@ -424,6 +416,8 @@ void EraEngine::loadConfigFiles()
 						m_executionEngine.getErbLoader().loadRenameFile(renameCsv);
 				}
 		}
+		// 界面设置（字体/字号/行高/颜色/帧率/窗口…）从配置读入（对齐 C# ConfigData）
+		m_guiManager.loadFromConfig(m_configLoader);
 }
 
 void EraEngine::loadConstantData()
@@ -562,6 +556,8 @@ bool EraEngine::saveEncodingToConfig()
 
 int EraEngine::saveConfigFiles()
 {
+		// 界面设置回写（字体/字号/行高/颜色/帧率/窗口…），再保存全部已加载配置文件
+		m_guiManager.saveToConfig(m_configLoader);
 		return m_configLoader.saveAll();
 }
 
@@ -646,17 +642,26 @@ void EraEngine::loadGameBaseData()
 
 		// Load GameBase.csv using CsvLoader
 		CsvLoader csvLoader;
-		if (csvLoader.loadFile(gameBasePath)) {
-				qDebug() << "[DEBUG] GameBase.csv loaded successfully";
-				QStringList tableNames = csvLoader.getTableNames();
-				for (const QString& tableName : tableNames) {
-						int rowCount = csvLoader.getRowCount(tableName);
-						int colCount = csvLoader.getColumnCount(tableName);
-						qDebug() << "[DEBUG] Table:" << tableName << "rows:" << rowCount << "cols:" << colCount;
-				}
-		} else {
+		if (!csvLoader.loadFile(gameBasePath)) {
 				qDebug() << "[DEBUG] Failed to load GameBase.csv";
+				return;
 		}
+		// **真正的载入**：把每一行 (键, 值) 写进 GameBaseData
+		// （对齐 C# GameBase.LoadGameBase；此前只打印了行列数，导致 %GAMEBASE_TITLE% 等全为空）
+		const QString table = csvLoader.getTableNames().isEmpty()
+		                          ? QString() : csvLoader.getTableNames().first();
+		const int rows = csvLoader.getRowCount(table);
+		int applied = 0;
+		for (int r = 0; r < rows; ++r) {
+				const QString key = csvLoader.getString(table, r, 0).trimmed();
+				if (key.isEmpty()) continue;
+				const QString value = csvLoader.getString(table, r, 1);
+				m_gameBaseData.set(key, value);
+				++applied;
+		}
+		// GameBaseData::set 只认日文键：英文键（如 "TITLE"）走 get() 的映射，故这里不强求
+		qDebug() << "[EraEngine] GameBase.csv:" << applied << "项 标题:" << m_gameBaseData.title()
+		         << " 版本:" << m_gameBaseData.version();
 }
 
 void EraEngine::loadConfig(const QString& filePath, int precedence)
@@ -679,11 +684,6 @@ QString EraEngine::getConfig(const QString& key) const
 bool EraEngine::hasConfig(const QString& key) const
 {
 		return m_configLoader.hasConfig(key);
-}
-
-void EraEngine::processScripts(const QString& scriptDir)
-{
-		m_scriptProcessor.processScripts(scriptDir);
 }
 
 QString EraEngine::getSystemEntryPoint() const
@@ -737,32 +737,26 @@ void EraEngine::runSystem()
 {
 		qDebug() << "[EraEngine] Running system...";
 
-		// 入口点：直接按标签启动（标签来自已装载 AST，不再二次扫盘/重载脚本）
-		QString label = m_scriptProcessor.findSystemLabel();
-		if (label.isEmpty()) {
-				label = m_scriptProcessor.findSystemTitleLabel();
-		}
-		if (label.isEmpty()) {
-				const QStringList commonLabels = {"SYSTEM", "SYSTEM_TITLE", "MAIN", "MAIN_LOOP"};
-				for (const QString& candidate : commonLabels) {
-						if (m_parseTable.hasLabel(candidate)) { label = candidate; break; }
-				}
-		}
-		if (label.isEmpty()) {
-				qWarning() << "[EraEngine] 未找到入口点（@SYSTEM / @SYSTEM_TITLE）";
+		if (m_parseTable.scriptNames().isEmpty()) {
+				qWarning() << "[EraEngine] 未装载脚本，无法启动系统";
 				emit systemFinished();
 				return;
 		}
 
-		qDebug() << "[EraEngine] 入口点:" << label
+		// C# 语义：系统状态机**从 Title_Begin 起步**；beginTitle 会调用 @SYSTEM_TITLE
+		// （不存在则绘制标准标题画面）。@SYSTEM_TITLE 里的 BEGIN FIRST/SHOP 由脚本发出。
+		// —— 不能把 @SYSTEM_TITLE 当普通入口脚本直接执行（那样状态还是 Title_Begin，
+		//    脚本里的 BEGIN FIRST 会被判为「不允许 BEGIN」）。
+		qDebug() << "[EraEngine] 系统状态机启动（Title_Begin）"
+		         << " SYSTEM_TITLE:" << (m_parseTable.hasLabel(QStringLiteral("SYSTEM_TITLE")) ? "有" : "无")
 		         << " 脚本数:" << m_parseTable.scriptNames().size()
 		         << " 告警:" << m_parseTable.parseWarningCount()
 		         << " 变量:" << m_parseTable.variableTable().count();
-		m_parseTable.setEntryPoint(label);
 
-		// 启动执行链（信号与槽：控制器置 Continue 并驱动 onContinueExecution）
+		m_processState.setSystemState(SystemStateCode::Title_Begin);
+
 		emit systemStarted();
-		const ExecState st = m_scriptRunner.runToCompletion();
+		const ExecState st = m_systemStateMachine.run();
 		if (st == ExecState::WaitInput || st == ExecState::WaitSystemInput) {
 				qDebug() << "[EraEngine] execution suspended, waiting for input";
 		} else {
@@ -773,17 +767,112 @@ void EraEngine::runSystem()
 
 void EraEngine::provideInput(qint64 value)
 {
-		// 用户操作交付：写入 RESULT 并请求控制器恢复执行
+		// 用户操作交付：写入 RESULT/systemResult 并让状态机继续
 		m_console.notifyInputDone();
-		m_scriptRunner.onInputProvided(value);
+		m_systemStateMachine.resume(value);
 }
 
 void EraEngine::provideInputString(const QString& value)
 {
-		// 字符串输入：写入 RESULTS（局部字符串槽）后恢复执行
-		m_variableStorage.setLocalStr(0, value);
+		// 字符串输入：写入 RESULTS（局部字符串槽）后继续
 		m_console.notifyInputDone();
-		m_scriptRunner.onInputProvided(0);
+		m_systemStateMachine.resumeString(value);
+}
+
+void EraEngine::provideInputValues(const QVariantList& values)
+{
+		// 多值输入（INPUTMOUSEKEY：RESULT:0..4 = 类型 / 坐标 / 按键）
+		m_console.notifyInputDone();
+		QList<qint64> ints;
+		ints.reserve(values.size());
+		for (const QVariant& v : values) ints.append(v.toLongLong());
+		m_systemStateMachine.deliverInputValues(ints);
+}
+
+void EraEngine::provideMouseKey(int type, int r1, int r2, int r3, int r4)
+{
+		// 对齐 C# InputResult5：RESULT:0..4
+		provideInputValues({type, r1, r2, r3, r4});
+}
+
+// ---------------------------------------------------------------------------
+// 系统状态机 -> 引擎子系统 的适配层（SystemHost）
+// ---------------------------------------------------------------------------
+void EraEngine::buildSystemHost()
+{
+		SystemHost host;
+
+		// ---- 输出 -> ConsoleBackend ----
+		host.printSingleLine = [this](const QString& text) {
+				m_console.print(text);
+				m_console.newline();
+		};
+		host.print = [this](const QString& text) { m_console.print(text); };
+		host.printC = [this](const QString& text, bool) { m_console.print(text); };
+		host.printTemporaryLine = [this](const QString& text) {
+				m_console.print(text);
+				m_console.newline();
+		};
+		host.printError = [this](const QString& text) {
+				m_console.print(text);
+				m_console.newline();
+		};
+		host.deleteLine = [this](int count) { m_console.clearLines(count); };
+		host.printBar = [this]() {
+				m_console.print(QString(44, QChar(0x2015)));   // ――…
+		};
+		host.newLine = [this]() { m_console.newline(); };
+		host.setAlignment = [this](int mode) {
+				if (mode == 1) m_console.setAlignment(ConsoleAlign::Center);
+				else if (mode == 2) m_console.setAlignment(ConsoleAlign::Right);
+				else m_console.setAlignment(ConsoleAlign::Left);
+		};
+		host.refreshStrings = [this]() { m_console.flush(); };
+		host.printFlush = [this]() { m_console.flush(); };
+
+		// ---- 输入等待（UI 通知由 inputRequested 信号统一处理）----
+		host.readAnyKey = [this]() { m_console.notifyInputRequested(QStringLiteral("ANYKEY")); };
+
+		// ---- GameBase（标准标题画面）----
+		host.scriptTitle = [this]() { return m_gameBaseData.title(); };
+		host.scriptVersionText = [this]() { return m_gameBaseData.version(); };
+		host.scriptAutherName = [this]() { return m_gameBaseData.author(); };
+		host.scriptYear = [this]() { return m_gameBaseData.releaseYear(); };
+		host.scriptDetail = [this]() { return m_gameBaseData.additionalInfo(); };
+		host.scriptVersion = [this]() -> qint64 {
+				bool ok = false;
+				const qint64 v = m_gameBaseData.version().toLongLong(&ok);
+				return ok ? v : 0;
+		};
+
+		// ---- 配置 ----
+		const auto boolCfg = [this](const QStringList& keys, bool fallback) {
+				for (const QString& key : keys) {
+						if (m_configLoader.hasConfig(key)) return m_configLoader.getBool(key, fallback);
+				}
+				return fallback;
+		};
+		const auto intCfg = [this](const QStringList& keys, int fallback) {
+				for (const QString& key : keys) {
+						if (m_configLoader.hasConfig(key)) return m_configLoader.getInt(key, fallback);
+				}
+				return fallback;
+		};
+		host.autoSave = [boolCfg]() { return boolCfg({QStringLiteral("オートセーブ"),
+		                                               QStringLiteral("AutoSave")}, false); };
+		host.maxShopItem = [intCfg]() { return intCfg({QStringLiteral("アイテムの最大数"),
+		                                                QStringLiteral("MaxShopItem")}, 100); };
+		host.comAbleDefault = [intCfg]() { return intCfg({QStringLiteral("COM_ABLE初期値"),
+		                                                   QStringLiteral("ComAbleDefault")}, 1); };
+		host.printCPerLine = [intCfg]() { return intCfg({QStringLiteral("PRINTC の表示数"),
+		                                                  QStringLiteral("PrintCPerLine")}, 0); };
+		host.compatiCallEvent = [boolCfg]() { return boolCfg({QStringLiteral("イベント関数のCALLを許可"),
+		                                                       QStringLiteral("CompatiCallEvent")}, false); };
+		host.titleMenuString = [](int index) {
+				return index == 0 ? QStringLiteral("开始游戏") : QStringLiteral("读取存档");
+		};
+
+		m_systemStateMachine.setHost(std::move(host));
 }
 
 void EraEngine::gotoTitle()

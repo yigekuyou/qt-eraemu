@@ -17,52 +17,28 @@
  */
 import QtQuick
 import QtQuick.Controls
+import QtQml
 
-// 控制台视图（方案 H）：
-//   * 模板在 QML（ConsoleLine），内容由 C++（ConsoleBackend）决定；
-//   * 只显示“可见窗口”，不显示全部历史；超出即回收复用；
-//   * 刷新由 C++ 的 1Hz 定时器 / flush 点触发 windowChanged，这里仅重建可见窗口。
+// 控制台视图（混合形态：C++ 提供服务，QML 自建对象）
+//
+//   * C++ 的 ConsoleBackend 提供「可见行模型」`visibleLines`（QVariantList）；
+//   * QML 用 **Instantiator** 按模型创建 `ConsoleLine` 对象，模型变化时自动增删
+//     （对齐 quickshell 的 `Instantiator { model: …; delegate: … }` 用法）；
+//   * 每行内部再由 `ConsoleLine` 用 `Repeater` 创建 span 对象（含内联图/图形）；
+//   * 只承载「可见窗口」，不建整段历史对象。
 Item {
     id: consoleView
     property var backend: null              // ConsoleBackend
     property int lineHeight: 22
-    property var pool: []                   // 空闲 item 复用池
-    property var live: []                   // 当前可见 item
+    property string fontName: ""            // 来自 GuiManager
+    property int fontSize: 16
+    property color foreColor: "#e0e0e0"
+    property color focusColor: "#ffff00"
+    property color logColor: "#9a9a9a"
 
-    Component { id: lineComp; ConsoleLine {} }
-
-    function computeVisibleCount() {
-        return Math.max(1, Math.floor(listArea.height / lineHeight));
-    }
-
-    function recycleAll() {
-        for (let i = 0; i < live.length; ++i) {
-            live[i].visible = false;
-        }
-        pool = pool.concat(live);
-        live = [];
-    }
-
-    // 重建可见窗口（1Hz 下重建几十行成本可忽略）
-    function rebuild() {
-        if (!backend) return;
-        recycleAll();
-        const n = backend.visibleLineCount();
-        for (let k = 0; k < n; ++k) {
-            const data = backend.visibleLine(k);
-            if (!data || data.spans === undefined) continue;
-            let it = pool.pop();
-            if (!it) it = lineComp.createObject(content, {});
-            it.backend = backend;
-            it.lineHeight = consoleView.lineHeight;
-            it.lineData = data;
-            it.lineIndex = k;
-            it.isBacklog = !backend.followTail;
-            it.y = k * consoleView.lineHeight;
-            it.visible = true;
-            live.push(it);
-        }
-    }
+    // 可见行数 / 取第 i 个可见行对象（供测试与外部使用）
+    readonly property int visibleCount: linesInst.count
+    function lineAt(i) { return linesInst.objectAt(i) }
 
     function submit() {
         if (!backend) return;
@@ -79,10 +55,32 @@ Item {
         clip: true
         focus: true
 
-        Item {
-            id: content
-            width: listArea.width
-            height: listArea.height
+        // ---- 可见行窗口：模型 → 对象（QML 自建）----
+        Instantiator {
+            id: linesInst
+
+            model: consoleView.backend ? consoleView.backend.visibleLines : []
+            delegate: ConsoleLine {
+                width: consoleView.width
+                height: consoleView.lineHeight
+                lineIndex: index
+                lineData: modelData
+                backend: consoleView.backend
+                isBacklog: consoleView.backend ? !consoleView.backend.followTail : false
+                fontName: consoleView.fontName
+                fontSize: consoleView.fontSize
+                foreColor: consoleView.foreColor
+                focusColor: consoleView.focusColor
+                logColor: consoleView.logColor
+            }
+
+            // 位置由 Instantiator 管理的对象自行计算（行高 × 序号）
+            // 注意：Instantiator 不会把对象挂进可视树，必须显式设置 parent；
+            //       对象由 Instantiator 负责销毁，勿手动 destroy()
+            onObjectAdded: (index, object) => {
+                object.parent = listArea;
+                object.y = index * consoleView.lineHeight;
+            }
         }
 
         WheelHandler {
@@ -129,16 +127,10 @@ Item {
         }
     }
 
-    Connections {
-        target: backend
-        function onWindowChanged() { consoleView.rebuild(); }
-    }
-
     onHeightChanged: {
-        if (backend) backend.visibleCount = computeVisibleCount();
+        if (backend) backend.visibleCount = Math.max(1, Math.floor(listArea.height / lineHeight));
     }
     Component.onCompleted: {
-        if (backend) backend.visibleCount = computeVisibleCount();
-        rebuild();
+        if (backend) backend.visibleCount = Math.max(1, Math.floor(listArea.height / lineHeight));
     }
 }

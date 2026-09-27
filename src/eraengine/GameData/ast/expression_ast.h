@@ -145,7 +145,8 @@ private:
 // 一元运算符
 class UnaryOpNode : public ExpressionNode {
 public:
-    UnaryOpNode(const ExpressionToken& op, QSharedPointer<ExpressionNode> operand);
+    UnaryOpNode(const ExpressionToken& op, QSharedPointer<ExpressionNode> operand,
+                bool postfix = false);
 
     [[nodiscard]] NodeKind kind() const noexcept override { return NodeKind::UnaryOp; }
     [[nodiscard]] QString toString() const override;
@@ -160,10 +161,13 @@ public:
 
     [[nodiscard]] ExpressionToken op() const { return m_op; }
     [[nodiscard]] QSharedPointer<ExpressionNode> operand() const { return m_operand; }
+    // 前置还是后置（++/--）；C# 对应 unaryDic / unaryAfterDic
+    [[nodiscard]] bool isPostfix() const { return m_postfix; }
 
 private:
     ExpressionToken m_op;
     QSharedPointer<ExpressionNode> m_operand;
+    bool m_postfix = false;
 };
 
 // FunctionMethodTerm：函数调用

@@ -189,7 +189,9 @@ public:
     bool canBegin() const;
     
     // Process state management (BEGIN command handling)
-    void processBegin(BeginType type);
+    // SetBegin(BeginType) + Begin()：校验 __CAN_BEGIN__ 后立即切换状态。
+    bool processBegin(BeginType type, QString* error = nullptr,
+                      const QString& funcName = QString());
     
     // Line management
     LogicalLine* getCurrentLine() const;
@@ -218,8 +220,34 @@ public:
     QString getCurrentFunctionLabel() const;
     
     // State queries
+    //
+    // 对齐 C# ProcessState.ScriptEnd = (functionList.Count == currentMin)。
+    // currentMin 是「帧底」：0 表示系统层可以调用脚本函数，函数返回后
+    // functionList 缩回 currentMin 即视为「脚本执行结束」，由系统状态机接管。
     bool isScriptEnd() const;
     bool isBegun() const;
+
+    // 帧底（C# currentMin）与函数栈规模（C# functionCount）
+    int currentMin() const;
+    void setCurrentMin(int value);
+    int functionCount() const;
+
+    // 清空函数栈并复位 begintype（C# ClearFunctionList）
+    void clearFunctionList();
+
+    // C# Process.SetBegin(string)：把关键字解析为 BeginType，未定义则失败
+    // funcName：发起 BEGIN 的函数名（用于错误消息，对齐 C# functionList[0].FunctionName）
+    bool setBeginKeyword(const QString& keyword, QString* error = nullptr,
+                         const QString& funcName = QString());
+
+    // C# ProcessState.Begin()：按已设置的 begintype 切换系统状态、清空函数栈、
+    // 复位 begintype。由系统状态机在脚本执行到帧底时调用。
+    void beginFromType();
+
+    // C# Process.calledWhenNormal：本次 BEGIN 是否从 Normal 状态发起
+    // （自动存档只在 Normal 发起 SHOP 时才做）
+    bool calledWhenNormal() const;
+    void setCalledWhenNormal(bool value);
     
     // =======================================================================
     // 中心执行状态 (Execution state) —— 由状态控制器设置，执行链查询
@@ -237,24 +265,12 @@ public:
     void requestResume();      // 置回 Continue
     void setErrorState();
 
-    // State check request (for signal-based state checking)
-    void requestStateCheck();
-    
-    // Emit request next instruction signal
-    void emitRequestNextInstruction();
-    
     // Set the entry point script name for state tracking
     void setEntryPointScript(const QString& scriptName);
     
 signals:
     // State changed signal - emitted when state changes
     void stateChanged();
-    
-    // State unchanged - emitted when state didn't change after check
-    void stateUnchanged();
-    
-    // State changed - emitted when state changed after check
-    void stateChangedSignal();
 
     // 中心执行状态变化（执行/等待输入/停止…）
     void execStateChanged(ExecState state);
@@ -262,20 +278,16 @@ signals:
     // 请求执行链继续（由状态控制器发出，执行链的 onContinueExecution() 槽响应）
     void continueExecution();
     
-    // Request for next instruction - emitted when state is ready for next instruction
-    void requestNextInstruction();
-    
 private:
     SystemStateCode m_systemState;
     ExecState m_execState;
     BeginType m_beginType;
+    bool m_calledWhenNormal = true;
     LogicalLine* m_currentLine;
     LogicalLine* m_errorLine;
     int m_lineCount;
+    int m_currentMin = 0;
     QList<CalledFunction> m_functionList;
-    
-    // State tracking
-    SystemStateCode m_lastState;
     
     // Entry point script name
     QString m_entryPointScript;

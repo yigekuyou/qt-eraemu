@@ -139,9 +139,23 @@ public:
 		Q_INVOKABLE bool isVariable2D(const QString &name) const;
 		Q_INVOKABLE bool isVariable3D(const QString &name) const;
 
+		// ================= 全局字符串变量 (1D/2D) =================
+		// Emuera 的用户字符串变量（#DIMS/#GLOBALS 声明）；此前完全缺失。
+		Q_INVOKABLE void setGlobalStr1D(const QString &name, int x, const QString &value);
+		Q_INVOKABLE QString getGlobalStr1D(const QString &name, int x) const;
+		Q_INVOKABLE void setGlobalStr2D(const QString &name, int x, int y, const QString &value);
+		Q_INVOKABLE QString getGlobalStr2D(const QString &name, int x, int y) const;
+
+		// ================= 系统字符串变量 =================
+		// 如 RESULTS / SAVEDATA_TEXT；按 (名称, 下标) 存取
+		Q_INVOKABLE void setSystemStr(const QString &name, int index, const QString &value);
+		Q_INVOKABLE QString getSystemStr(const QString &name, int index) const;
+
 		// ================= System Variable Access by Name =================
 		// Helper methods to access system variables by name for expression evaluation
 		Q_INVOKABLE qint64 getSystemVariable(const QString &name, int index) const;
+		// 该名字是否有真正的系统变量存储槽（A–Z/DA–DE 等无槽）
+		[[nodiscard]] bool hasSystemVariable(const QString &name) const;
 		Q_INVOKABLE void setSystemVariable(const QString &name, int index, qint64 value);
 
 		// ================= Character variable type checking methods =================

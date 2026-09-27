@@ -137,6 +137,25 @@ QList<VariableDecl> VariableTable::declarations() const {
     return out;
 }
 
+QList<VariableDecl> VariableTable::localsOf(const QString& function) const {
+    QList<VariableDecl> out;
+    const auto it = m_locals.constFind(function);
+    if (it != m_locals.constEnd()) {
+        for (const VariableDecl& d : it.value()) out.append(d);
+    }
+    return out;
+}
+
+bool VariableTable::constStr(const QString& name, QString& out) const {
+    auto it = m_constStr.constFind(name);
+    if (it != m_constStr.constEnd()) { out = it.value(); return true; }
+    // 大小写不敏感回退
+    for (auto i = m_constStr.constBegin(); i != m_constStr.constEnd(); ++i) {
+        if (i.key().compare(name, Qt::CaseInsensitive) == 0) { out = i.value(); return true; }
+    }
+    return false;
+}
+
 void VariableTable::clear() {
     m_globals.clear();
     m_locals.clear();
@@ -162,9 +181,12 @@ void VariableTable::setConstStr(const QString& name, const QString& value) {
 
 bool VariableTable::constInt(const QString& name, qint64& out) const {
     const auto it = m_constInt.constFind(name);
-    if (it == m_constInt.constEnd()) return false;
-    out = it.value();
-    return true;
+    if (it != m_constInt.constEnd()) { out = it.value(); return true; }
+    // 大小写不敏感回退（Emuera 标识符不区分大小写）
+    for (auto i = m_constInt.constBegin(); i != m_constInt.constEnd(); ++i) {
+        if (i.key().compare(name, Qt::CaseInsensitive) == 0) { out = i.value(); return true; }
+    }
+    return false;
 }
 
 bool VariableTable::evalDim(const QString& expr, int& out) const {

@@ -16,6 +16,7 @@
  * along with this program.  If not, see <https://www.gnu.org/licenses/>.
  */
 #include "variable_storage.h"
+#include <QSet>
 #include "expression_evaluator.h"
 
 VariableStorage::VariableStorage(QObject *parent)
@@ -393,6 +394,54 @@ void VariableStorage::setGlobalInt1D(const QString &name, int x, qint64 val)
 		vec[x] = val;
 }
 
+void VariableStorage::setGlobalStr1D(const QString &name, int x, const QString &value)
+{
+		if (x < 0) return;
+		auto &vec = m_globalStr1D[name];
+		if (vec.size() <= x) vec.resize(x + 1, QString());
+		vec[x] = value;
+}
+
+QString VariableStorage::getGlobalStr1D(const QString &name, int x) const
+{
+		if (x < 0) return QString();
+		auto it = m_globalStr1D.constFind(name);
+		if (it != m_globalStr1D.constEnd() && x < it.value().size()) {
+				return it.value().at(x);
+		}
+		return QString();
+}
+
+void VariableStorage::setGlobalStr2D(const QString &name, int x, int y, const QString &value)
+{
+		if (x < 0 || y < 0) return;
+		auto &table = m_globalStr2D[name];
+		if (table.size() <= x) table.resize(x + 1);
+		if (table[x].size() <= y) table[x].resize(y + 1, QString());
+		table[x][y] = value;
+}
+
+QString VariableStorage::getGlobalStr2D(const QString &name, int x, int y) const
+{
+		if (x < 0 || y < 0) return QString();
+		auto it = m_globalStr2D.constFind(name);
+		if (it == m_globalStr2D.constEnd()) return QString();
+		if (x >= it.value().size() || y >= it.value().at(x).size()) return QString();
+		return it.value().at(x).at(y);
+}
+
+void VariableStorage::setSystemStr(const QString &name, int index, const QString &value)
+{
+		if (index != 0) return;   // 系统字符串变量目前只有单值（RESULTS / SAVEDATA_TEXT）
+		m_systemStrVars[name.toUpper()] = value;
+}
+
+QString VariableStorage::getSystemStr(const QString &name, int index) const
+{
+		if (index != 0) return QString();
+		return m_systemStrVars.value(name.toUpper());
+}
+
 qint64 VariableStorage::getGlobalInt1D(const QString &name, int x) const
 {
 		if (x < 0) return 0;
@@ -471,6 +520,14 @@ bool VariableStorage::loadVariables(const QString &filePath)
 }
 
 // ================= System Variable Access by Name =================
+bool VariableStorage::hasSystemVariable(const QString &name) const
+{
+		static const QSet<QString> kNames = {
+QStringLiteral("DAY"),QStringLiteral("MONEY"),QStringLiteral("ITEM"),QStringLiteral("ITEMSALES"),QStringLiteral("NOITEM"),QStringLiteral("BOUGHT"),QStringLiteral("PBAND"),QStringLiteral("FLAG"),QStringLiteral("TFLAG"),QStringLiteral("TARGET"),QStringLiteral("MASTER"),QStringLiteral("PLAYER"),QStringLiteral("ASSI"),QStringLiteral("ASSIPLAY"),QStringLiteral("UP"),QStringLiteral("DOWN"),QStringLiteral("LOSEBASE"),QStringLiteral("PALAMLV"),QStringLiteral("EXPLV"),QStringLiteral("EJAC"),QStringLiteral("PREVCOM"),QStringLiteral("SELECTCOM"),QStringLiteral("NEXTCOM"),QStringLiteral("RESULT"),QStringLiteral("COUNT"),QStringLiteral("A"),QStringLiteral("B"),QStringLiteral("C")
+		};
+		return kNames.contains(name.toUpper());
+}
+
 qint64 VariableStorage::getSystemVariable(const QString &name, int index) const
 {
 		// Check for system variables and call appropriate getter

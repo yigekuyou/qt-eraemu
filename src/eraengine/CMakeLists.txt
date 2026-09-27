@@ -48,8 +48,6 @@ GameData/file_system_io.h
 GameData/game_base_data.cpp
 GameData/game_base_data.h
 
-GameData/efficient_csv_loader.cpp
-GameData/efficient_csv_loader.h
 GameData/identifier_dictionary.cpp
 GameData/identifier_dictionary.h
 
@@ -99,8 +97,8 @@ GameProc/script_processor.cpp
 GameProc/script_processor.h
 GameProc/signal_hub.cpp
 GameProc/signal_hub.h
-GameProc/system_processor.cpp
-GameProc/system_processor.h
+GameProc/system_state_machine.cpp
+GameProc/system_state_machine.h
 GameProc/system_status_manager.cpp
 GameProc/system_status_manager.h
 GameProc/user_defined_variable_data.cpp
@@ -114,6 +112,10 @@ GameView/console_types.h
 GameView/console_buffer.h
 GameView/console_backend.cpp
 GameView/console_backend.h
+GameView/gui_manager.cpp
+GameView/gui_manager.h
+GameView/resource_image_provider.cpp
+GameView/resource_image_provider.h
 )
 
 # Add QtConcurrent and OpenMP after the library is defined
@@ -154,18 +156,25 @@ set(ERAENGINE_TEST_INCLUDE_DIRS
 # 声明一个测试可执行文件（默认不注册进 CTest）
 function(eraengine_add_test target)
     add_executable(${target} test/${target}.cpp)
-    target_link_libraries(${target} PRIVATE eraengine Qt6::Core Qt6::Qml Qt6::Widgets)
+    target_link_libraries(${target} PRIVATE eraengine Qt6::Core Qt6::Qml Qt6::Quick Qt6::Widgets)
     target_include_directories(${target} PRIVATE ${ERAENGINE_TEST_INCLUDE_DIRS})
 endfunction()
 
 # 应用入口 / 完整流程测试
+# test_cli 额外需要 DBus（外部输入通道：qdbus io.yigekuyou.emuera.testcli /testcli input 0）
 eraengine_add_test(test_cli)
+target_link_libraries(test_cli PRIVATE Qt6::DBus)
 
 # 纯单元测试（自包含、无需外部目录）
 eraengine_add_test(test_era_parse_table)
 eraengine_add_test(test_parse_table_ast)
 eraengine_add_test(test_execution_chain)
 eraengine_add_test(test_console_backend)
+eraengine_add_test(test_gui_manager)
+eraengine_add_test(test_resource_image)
+eraengine_add_test(test_system_flow)
+eraengine_add_test(test_input)
+eraengine_add_test(test_statements)
 eraengine_add_test(test_expression_system)
 eraengine_add_test(test_expression_types)
 eraengine_add_test(test_builtin_functions)
@@ -203,6 +212,11 @@ add_test(NAME test_era_parse_table COMMAND test_era_parse_table)
 add_test(NAME test_parse_table_ast COMMAND test_parse_table_ast)
 add_test(NAME test_execution_chain COMMAND test_execution_chain)
 add_test(NAME test_console_backend COMMAND test_console_backend)
+add_test(NAME test_gui_manager COMMAND test_gui_manager)
+add_test(NAME test_resource_image COMMAND test_resource_image)
+add_test(NAME test_system_flow COMMAND test_system_flow)
+add_test(NAME test_input COMMAND test_input)
+add_test(NAME test_statements COMMAND test_statements)
 add_test(NAME test_expression_system COMMAND test_expression_system)
 add_test(NAME test_expression_types COMMAND test_expression_types)
 add_test(NAME test_builtin_functions COMMAND test_builtin_functions)

@@ -18,6 +18,7 @@
 #ifndef EXPRESSION_PARSER_H
 #define EXPRESSION_PARSER_H
 
+#include <QVariant>
 #include <QList>
 #include <QSharedPointer>
 #include <functional>
@@ -52,6 +53,12 @@ public:
 
     // 常量名判定：变量下标里出现「已知 CSV 常量名」的标识符时，按字符串处理
     // （对齐 C# ExpressionParser.reduceIdentifier：ConstantData.isDefined → SingleTerm(string)）
+    // #DIM CONST 常量折叠：名字 -> 常量值（Qt6 QVariant，Int 或 Str）
+    using ConstantValueProvider = std::function<QVariant(const QString& name)>;
+    void setConstantValueProvider(ConstantValueProvider provider) {
+        m_constantValueProvider = std::move(provider);
+    }
+
     using ConstantNameProvider = std::function<bool(const QString& variable, const QString& name)>;
     void setConstantNameProvider(ConstantNameProvider provider) {
         m_constantNameProvider = std::move(provider);
@@ -89,6 +96,7 @@ private:
     FunctionTypeProvider m_functionTypeProvider;
     FormProvider m_formProvider;
     ConstantNameProvider m_constantNameProvider;
+    ConstantValueProvider m_constantValueProvider;
 };
 
 #endif // EXPRESSION_PARSER_H

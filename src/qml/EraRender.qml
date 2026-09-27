@@ -28,13 +28,18 @@ Item {
 
     Rectangle {
         anchors.fill: parent
-        color: "#101010"
+        color: eraRender.engine ? eraRender.engine.gui.backColor : "#101010"
     }
 
     Console {
         anchors.fill: parent
         anchors.margins: 6
-        lineHeight: 22
+        lineHeight: eraRender.engine ? eraRender.engine.gui.lineHeight : 22
+        fontName: eraRender.engine ? eraRender.engine.gui.fontName : ""
+        fontSize: eraRender.engine ? eraRender.engine.gui.fontSize : 16
+        foreColor: eraRender.engine ? eraRender.engine.gui.foreColor : "#e0e0e0"
+        focusColor: eraRender.engine ? eraRender.engine.gui.focusColor : "#ffff00"
+        logColor: eraRender.engine ? eraRender.engine.gui.logColor : "#9a9a9a"
         backend: eraRender.engine ? eraRender.engine.console : null
     }
 

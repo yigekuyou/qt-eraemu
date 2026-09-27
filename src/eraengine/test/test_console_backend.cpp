@@ -124,6 +124,65 @@ int main(int argc, char* argv[]) {
     console.flush();                                              // 一次刷新
     check(windowChanged == 1, "3 prints + 1 flush -> 1 windowChanged");
 
+
+    // ---- 菜单项 `[n]` 自动变按钮（对齐 C# ButtonStringCreator）----
+    qDebug() << "\n菜单按钮";
+    {
+        ConsoleBackend c;
+        c.print(QString::fromUtf8("[0] 开始游戏"));
+        c.newline();
+        c.flush();
+        const ConsoleDisplayLine& l = c.buffer().at(0);
+        check(l.buttons.size() == 1, "[0] -> 1 个按钮");
+        check(!l.buttons.isEmpty() && l.buttons.first().isInteger
+                  && l.buttons.first().intValue == 0, "按钮值 == 0");
+        check(l.plainText() == QString::fromUtf8("[0] 开始游戏"), "文本保留原样");
+        // 文本被切成 `[0]` + ` 开始游戏`（按钮覆盖第 1 段）
+        check(l.spans.size() == 2, "文本按按钮切成 2 段");
+        if (l.spans.size() == 2) {
+            check(l.spans.at(0).text == QStringLiteral("[0]"), "第 1 段是 [0]");
+            check(l.spans.at(1).text == QString::fromUtf8(" 开始游戏"), "第 2 段是剩余文本");
+            check(l.buttons.first().startSpan == 0, "按钮覆盖第 1 段");
+        }
+
+        ConsoleBackend c2;
+        c2.print(QString::fromUtf8("[9999] 設定完毕"));
+        c2.newline();
+        c2.flush();
+        check(c2.buffer().at(0).buttons.size() == 1
+                  && c2.buffer().at(0).buttons.first().intValue == 9999, "[9999] -> 9999");
+
+        ConsoleBackend c3;
+        c3.print(QString::fromUtf8("[abc] 不是数字"));
+        c3.newline();
+        c3.flush();
+        check(c3.buffer().at(0).buttons.isEmpty(), "[abc] 不建按钮");
+    }
+
+    qDebug() << "\nPRINTBUTTON";
+    {
+        ConsoleBackend c;
+        c.printButton(QString::fromUtf8("[←]"), 4);
+        c.printButton(QString::fromUtf8("[↓]"), 2);
+        c.newline();
+        c.flush();
+        const ConsoleDisplayLine& l = c.buffer().at(0);
+        check(l.buttons.size() == 2, "两个 PRINTBUTTON");
+        check(l.buttons.at(0).intValue == 4 && l.buttons.at(1).intValue == 2, "值 4/2");
+    }
+
+    qDebug() << "\nCLEARLINE";
+    {
+        ConsoleBackend c;
+        c.print("A"); c.newline();
+        c.print("B"); c.newline();
+        c.print("C"); c.newline();
+        c.flush();
+        check(c.lineCount() == 3, "3 行");
+        c.clearLines(2);
+        check(c.lineCount() == 1 && linePlain(c, 0) == "A", "CLEARLINE 2 -> 只剩 A");
+    }
+
     qDebug() << "\n===================";
     if (g_failures == 0) {
         qDebug() << "[SUCCESS] console backend tests passed";

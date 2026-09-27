@@ -150,8 +150,9 @@ QString BinaryOpNode::toString() const {
 // ---------------------------------------------------------------------------
 // UnaryOpNode
 // ---------------------------------------------------------------------------
-UnaryOpNode::UnaryOpNode(const ExpressionToken& op, QSharedPointer<ExpressionNode> operand)
-    : m_op(op), m_operand(std::move(operand))
+UnaryOpNode::UnaryOpNode(const ExpressionToken& op, QSharedPointer<ExpressionNode> operand,
+                             bool postfix)
+    : m_op(op), m_operand(std::move(operand)), m_postfix(postfix)
 {
 }
 

@@ -19,6 +19,8 @@
 #define ERAENGINE_H
 
 #include <QObject>
+#include <QTimer>
+#include <QVariantList>
 #include <QQmlEngine>
 #include <QQmlContext>
 #include "csv_loader.h"
@@ -31,7 +33,7 @@
 #include "file_system_io.h"
 #include "execution_engine.h"
 #include "process_state.h"
-#include "system_processor.h"
+#include "system_state_machine.h"
 #include "system_status_manager.h"
 #include "ast/logical_line.h"
 #include "config_loader.h"
@@ -45,6 +47,8 @@
 #include "era_parse_table.h"
 #include "script_runner.h"
 #include "console_backend.h"
+#include "gui_manager.h"
+#include "resource_image_provider.h"
 
 class EraEngine : public QObject
 {
@@ -64,6 +68,7 @@ public:
 		Q_PROPERTY(ExecutionEngine* executionEngine READ getExecutionEngine CONSTANT)
 		Q_PROPERTY(EraParseTable* parseTable READ getParseTable CONSTANT)
 		Q_PROPERTY(ConsoleBackend* console READ getConsole CONSTANT)
+		Q_PROPERTY(GuiManager* gui READ getGuiManager CONSTANT)
     // Game base data
     GameBaseData* gameBaseData() { return &m_gameBaseData; }
     
@@ -86,13 +91,14 @@ public:
 		EraTetrisInputSystem* getInputSystem() { return &m_inputSystem; }
 		ExecutionEngine* getExecutionEngine() { return &m_executionEngine; }
 		ProcessState* getProcessState() { return &m_processState; }
-		SystemProcessor* getSystemProcessor() { return &m_systemProcessor; }
+		SystemStateMachine* getSystemStateMachine() { return &m_systemStateMachine; }
 		InputHandler* getInputHandler() { return &m_inputHandler; }
     SystemStatusManager* getStatusManager() { return &m_statusManager; }
     SignalManager* getSignalManager() { return &m_signalManager; }
     EraParseTable* getParseTable() { return &m_parseTable; }
     ScriptRunner* getScriptRunner() { return &m_scriptRunner; }
     ConsoleBackend* getConsole() { return &m_console; }
+    GuiManager* getGuiManager() { return &m_guiManager; }
 
     // ---- 目录解析（对齐 C# Program.ErbDir / Program.CsvDir）----
     // 只在这两个目录内检索脚本与数据，不再遍历整个游戏根目录
@@ -148,6 +154,9 @@ public:
     Q_INVOKABLE void provideInput(qint64 value);
     // 字符串输入交付（INPUTS）：写入 RESULTS 并恢复执行
     Q_INVOKABLE void provideInputString(const QString& value);
+    // 多值输入（INPUTMOUSEKEY）：RESULT:0..4 = 类型 / 坐标 / 按键
+    Q_INVOKABLE void provideInputValues(const QVariantList& values);
+    Q_INVOKABLE void provideMouseKey(int type, int r1, int r2, int r3, int r4);
     
     // QML registration
     static void registerTypes();
@@ -167,7 +176,6 @@ public:
     Q_INVOKABLE bool hasConfig(const QString& key) const;
     
     // Script processing helper (callable from QML)
-    Q_INVOKABLE void processScripts(const QString& scriptDir);
     Q_INVOKABLE QString getSystemEntryPoint() const;
     Q_INVOKABLE QString getSystemTitleEntry() const;
     Q_INVOKABLE QStringList getEventEntries() const;
@@ -218,12 +226,13 @@ private:
     EraTetrisInputSystem m_inputSystem;
     ExecutionEngine m_executionEngine;
     ProcessState m_processState;
-    SystemProcessor m_systemProcessor;
+    SystemStateMachine m_systemStateMachine;
     SystemStatusManager m_statusManager;
     SignalManager m_signalManager;
     EraParseTable m_parseTable;
     ScriptRunner m_scriptRunner;
     ConsoleBackend m_console;
+    GuiManager m_guiManager;
     
     // Phase 6: Missing features
     IdentifierDictionary m_identifierDictionary;
@@ -254,6 +263,7 @@ private:
     void collectEntryPoints();       // 从已装载 AST 收集入口点（不再二次扫文件）
     void resolveTextConfig();        // 从配置读编码/子目录检索设置（Config.SearchSubdirectory 等）
     void loadFinishedHook();         // 装载完成后的统一收尾（日志/告警）
+    void buildSystemHost();          // 系统状态机 -> 引擎子系统 适配层
 };
 
 #endif // ERAENGINE_H

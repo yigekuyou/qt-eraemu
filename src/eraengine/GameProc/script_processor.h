@@ -89,11 +89,8 @@ class ScriptProcessor : public QObject
 
 public:
     explicit ScriptProcessor(QObject *parent = nullptr);
-    
-    // Process scripts and detect entry points
-    void processScripts(const QString& scriptDir);
 
-    // 从已装载的 AST 直接收集入口点（推荐；避免二次扫盘）
+    // 从已装载的 AST 直接收集入口点（唯一入口点来源；不再二次扫盘/重解析）
     void collectFromParseTable(const EraParseTable* table);
     void clear();
     
@@ -106,9 +103,6 @@ public:
     QStringList findEventEntries() const;
     QStringList findAllEntryPoints() const;
     
-    // Validation
-    bool validateScript(const QString& scriptPath);
-    
     // Get all detected entry points
     QList<ScriptEntryPoint> getEntryPoints() const;
     
@@ -120,10 +114,6 @@ public:
     const QList<ScriptEntryPoint>& entryPoints() const { return m_entryPoints; }
 
 private:
-    // Helper methods
-    void parseScriptFile(const QString& scriptPath);
-    QString extractEntryPointName(const QString& line) const;
-    
     // Entry point storage
     QList<ScriptEntryPoint> m_entryPoints;
     QHash<QString, QString> m_systemEntryPoint;  // "SYSTEM" -> script path

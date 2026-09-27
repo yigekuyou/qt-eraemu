@@ -48,6 +48,8 @@ struct VariableDecl {
     bool        isPrivate = false;
     bool        isConst = false;
     bool        isArg = false;               // 来自 @F(A,B) 形参表
+    QList<qint64> defaultInt;   // #DIM X = 1,2 的初值（进入函数时写入）
+    QStringList   defaultStr;   // #DIMS S = "a" 的初值
 };
 
 class VariableTable {
@@ -66,6 +68,8 @@ public:
 
     [[nodiscard]] int count() const;
     [[nodiscard]] QList<VariableDecl> declarations() const;
+    // 某函数的局部（私有）变量声明
+    [[nodiscard]] QList<VariableDecl> localsOf(const QString& function) const;
 
     void clear();
 
@@ -73,6 +77,7 @@ public:
     void setConstInt(const QString& name, qint64 value);
     void setConstStr(const QString& name, const QString& value);
     [[nodiscard]] bool constInt(const QString& name, qint64& out) const;
+    [[nodiscard]] bool constStr(const QString& name, QString& out) const;
     [[nodiscard]] int constCount() const { return m_constInt.size() + m_constStr.size(); }
 
     // 用常数表重新求值所有声明的维数（后声明的常数也能修正先前的声明）

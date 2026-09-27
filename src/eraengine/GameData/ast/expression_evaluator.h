@@ -63,6 +63,10 @@ public:
     // 语言编码（对齐 C# LangManager.setEncode(Config.Encode)）：
     // STRLENS/SUBSTRING/STRFIND 的「位置/长度」按该编码的字节数计
     // （日文 Shift-JIS 下 ASCII=1 字节、假名/汉字=2 字节）。
+    // `#DIM CONST NAME = value` 常量（求值期查表，装载顺序无关）
+    using ConstProvider = std::function<bool(const QString& name, QVariant& out)>;
+    void setConstProvider(ConstProvider provider) { m_constProvider = std::move(provider); }
+
     void setLanguageEncoding(TextEncoding enc) { m_langEncoding = enc; }
     [[nodiscard]] TextEncoding languageEncoding() const { return m_langEncoding; }
 
@@ -76,8 +80,11 @@ public:
 
     // 角色数（SUMCARRAY/CMATCH/… 的范围上限，对齐 C# VEvaluator.CHARANUM）。
     // 默认回退到 CHARANUM 系统变量；执行链可注入实际值。
+    // LINECOUNT：控制台当前行数（C# console.LineCount）
+    using LineCountProvider = std::function<qint64()>;
     using CharaCountProvider = std::function<int()>;
     void setCharaCountProvider(CharaCountProvider provider) { m_charaNumProvider = std::move(provider); }
+    void setLineCountProvider(LineCountProvider provider) { m_lineCountProvider = std::move(provider); }
 
 signals:
     void evaluationFinished(const QString &expression, const QVariant &result);
@@ -102,6 +109,10 @@ private:
     QVariant evaluateVariable(const VariableNode &node, VariableStorage *storage, GameBaseData *gameBaseData = nullptr);
     QVariant evaluateIndexedVariable(const QString &varName, int index, VariableStorage *storage);
     QVariant evaluateBinaryOp(const BinaryOpNode &node, VariableStorage *storage, GameBaseData *gameBaseData = nullptr);
+    // 变量写入（整型）：++/-- 的副作用
+    bool assignVariable(const VariableNode& node, VariableStorage* storage,
+                        GameBaseData* gameBaseData, qint64 value);
+
     QVariant evaluateUnaryOp(const UnaryOpNode &node, VariableStorage *storage, GameBaseData *gameBaseData = nullptr);
     QVariant evaluateFunction(const FunctionNode &node, VariableStorage *storage, GameBaseData *gameBaseData = nullptr);
 
@@ -137,8 +148,10 @@ private:
     UserFunctionInvoker m_userInvoker;
     ConfigProvider m_configProvider;
     CharaCountProvider m_charaNumProvider;
+    LineCountProvider m_lineCountProvider;
     const ConstantTable* m_constantTable = nullptr;
     TextEncoding m_langEncoding = TextEncoding::ShiftJis;
+    ConstProvider m_constProvider;   // #DIM CONST
     QString m_moneyLabel = QStringLiteral("$");
     bool    m_moneyFirst = true;
     QChar   m_barFilled = QLatin1Char('*');

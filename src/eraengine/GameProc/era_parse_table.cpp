@@ -30,13 +30,9 @@
 #include "ast/argument_parser.h"
 #include "ast/expression_evaluator.h"
 #include <QDebug>
-#include <QCoreApplication>
-#include <QEventLoop>
 #include <QSet>
+#include <algorithm>
 #include <utility>
-
-// Re-entrancy guard for pumpInstructions to prevent stack overflow
-static thread_local bool s_inPumpInstructions = false;
 
 EraParseTable::EraParseTable(ProcessState* state, ExecutionEngine* execEngine, QObject* parent)
     : QObject(parent)
@@ -107,6 +103,17 @@ QSharedPointer<ExpressionNode> EraParseTable::expressionAst(const QString& expr)
             return ct->indexForVariable(var, name) >= 0;
         });
     }
+    // `#DIM CONST NAME = value`：解析期折叠为字面量（与 CSV 常数名区分：这里返回**值**）
+    {
+        const VariableTable* vt = &m_variables;
+        parser.setConstantValueProvider([vt](const QString& name) -> QVariant {
+            qint64 iv = 0;
+            if (vt->constInt(name, iv)) return QVariant::fromValue<qint64>(iv);
+            QString sv;
+            if (vt->constStr(name, sv)) return QVariant(sv);
+            return QVariant();
+        });
+    }
     QSharedPointer<ExpressionNode> ast = parser.parse(tokens);
     if (ast) {
         // 立即按变量表定型（新解析的 AST 也保持强类型）
@@ -164,6 +171,46 @@ const UserFunctionInfo* EraParseTable::userFunction(const QString& name) const {
     return it == m_functions.constEnd() ? nullptr : &it.value();
 }
 
+QList<LabelRef> EraParseTable::labels(const QString& name) const {
+    QList<LabelRef> out = m_labelLists.value(name.toUpper());
+    // 并行装载时插入顺序不确定；固定按 (脚本名, 行号) 排序，保证事件导航可复现
+    std::sort(out.begin(), out.end(), [](const LabelRef& a, const LabelRef& b) {
+        if (a.script != b.script) return a.script < b.script;
+        return a.line < b.line;
+    });
+    return out;
+}
+
+int EraParseTable::scriptLineCount(const QString& scriptName) const {
+    const ScriptData* data = script(scriptName);
+    return data ? data->lines.size() : 0;
+}
+
+QString EraParseTable::labelNameAt(const QString& scriptName, int line) const {
+    const ScriptData* data = script(scriptName);
+    if (!data || line < 0 || line >= data->lines.size()) return QString();
+    return data->lines.at(line).labelName;
+}
+
+bool EraParseTable::callLabelAt(const QString& scriptName, int line, int returnLine) {
+    return callLabelAt(scriptName, line, m_currentScript, returnLine);
+}
+
+bool EraParseTable::callLabelAt(const QString& scriptName, int line,
+                                const QString& returnScript, int returnLine) {
+    const ScriptData* data = script(scriptName);
+    if (!data || line < 0 || line >= data->lines.size()) {
+        return false;
+    }
+    pushFrame(Frame(returnScript, returnLine, data->lines.at(line).labelName));
+    if (scriptName != m_currentScript) {
+        switchToMemorySpace(scriptName);
+    }
+    m_jumped = true;
+    setCurrentLineInternal(line, true);
+    return true;
+}
+
 // ---------------------------------------------------------------------------
 // 只读区：条件求值（优先使用缓存 AST）
 // ---------------------------------------------------------------------------
@@ -174,7 +221,7 @@ bool EraParseTable::evaluateAst(const QSharedPointer<ExpressionNode>& ast, bool&
     }
     ExpressionEvaluator local;
     ExpressionEvaluator* ev = m_evaluator ? m_evaluator : &local;
-    const QVariant v = ev->evaluate(*ast, m_variableStorage, nullptr);
+    const QVariant v = ev->evaluate(*ast, m_variableStorage, m_gameBaseData);
     out = v.isValid() && v.toInt() != 0;
     return true;
 }
@@ -186,7 +233,7 @@ bool EraParseTable::evaluateExpression(const QString& expr, bool& out) {
     }
     ExpressionEvaluator local;
     ExpressionEvaluator* ev = m_evaluator ? m_evaluator : &local;
-    const QVariant v = ev->evaluate(expr, m_variableStorage, nullptr);
+    const QVariant v = ev->evaluate(expr, m_variableStorage, m_gameBaseData);
     out = v.isValid() && v.toInt() != 0;
     return true;
 }
@@ -322,6 +369,17 @@ bool EraParseTable::loadScript(const QString& scriptName, const QList<LogicalLin
                 if (!m_functions.contains(decl.name)) {
                     m_functions.insert(decl.name, decl);
                 }
+
+                // 保留全部声明（事件函数的 4 组导航需要；同名多份）
+                LabelRef ref;
+                ref.script = scriptName;
+                ref.line = i;
+                ref.isEvent = decl.isEvent;
+                ref.isSingle = decl.isSingle;
+                ref.isPri = decl.isPri;
+                ref.isLater = decl.isLater;
+                ref.isOnly = decl.isOnly;
+                m_labelLists[decl.name].append(ref);
             }
         }
     }
@@ -337,7 +395,6 @@ bool EraParseTable::loadScript(const QString& scriptName, const QList<LogicalLin
     if (m_currentScript.isEmpty()) {
         m_currentScript = scriptName;
     }
-    m_executionQueueIndices.insert(scriptName, 0);
 
     emit parseCompleted(scriptName);
     return true;
@@ -370,27 +427,15 @@ void EraParseTable::setEntryPoint(const QString& label) {
     if (!m_currentScript.isEmpty()) {
         const int entryLine = getLabelPosition(m_currentScript, m_entryPoint);
         resetPosition();
+        m_jumped = true;   // 入口是「跳转」落点：标签行应被跳过
         setCurrentLineInternal(entryLine >= 0 ? entryLine : 0, true);
-        m_executionQueueIndices[m_currentScript] = entryLine >= 0 ? entryLine : 0;
     }
 
     emit entryPointReached(label);
-
-    if (m_state) {
-        m_state->requestStateCheck();
-    }
 }
 
 QString EraParseTable::getEntryPoint() const {
     return m_entryPoint;
-}
-
-QList<LogicalLine> EraParseTable::getExecutionQueue() const {
-    if (m_currentScript.isEmpty()) {
-        return QList<LogicalLine>();
-    }
-    const ScriptData* data = script(m_currentScript);
-    return data ? data->lines : QList<LogicalLine>();
 }
 
 int EraParseTable::getLabelPosition(const QString& scriptName, const QString& labelName) const {
@@ -500,20 +545,18 @@ void EraParseTable::resetPosition() {
     m_currentLine = 0;
     emit callStackChanged(0);
     emit positionChanged(m_currentScript, 0);
-
-    if (m_executionQueueIndices.contains(m_currentScript)) {
-        m_executionQueueIndices[m_currentScript] = 0;
-    }
 }
 
 void EraParseTable::setPosition(const QString& script, int line) {
     if (!script.isEmpty() && script != m_currentScript) {
         switchToMemorySpace(script);
     }
+    m_jumped = true;
     setCurrentLineInternal(line, true);
 }
 
 void EraParseTable::advance() {
+    m_jumped = false;
     setCurrentLineInternal(m_currentLine + 1);
 }
 
@@ -522,11 +565,8 @@ bool EraParseTable::jumpToLine(int line) {
     if (line < 0 || (count > 0 && line >= count)) {
         return false;
     }
+    m_jumped = true;
     setCurrentLineInternal(line, true);
-
-    if (m_executionQueueIndices.contains(m_currentScript)) {
-        m_executionQueueIndices[m_currentScript] = line;
-    }
     return true;
 }
 
@@ -536,10 +576,8 @@ bool EraParseTable::jumpToLabel(const QString& label) {
         return false;
     }
 
+    m_jumped = true;
     setCurrentLineInternal(target, true);
-    if (m_executionQueueIndices.contains(m_currentScript)) {
-        m_executionQueueIndices[m_currentScript] = target;
-    }
 
     emit jumpRequested(m_currentScript, label, target);
     return true;
@@ -568,13 +606,8 @@ bool EraParseTable::callLabel(const QString& label, bool advanceWasCalled) {
     if (targetScript != m_currentScript) {
         switchToMemorySpace(targetScript);
     }
+    m_jumped = true;
     setCurrentLineInternal(target, true);
-
-    if (m_executionQueueIndices.contains(targetScript)) {
-        m_executionQueueIndices[targetScript] = target;
-    }
-
-    emit checkState();
     return true;
 }
 
@@ -599,10 +632,8 @@ bool EraParseTable::callLabelWithReturn(const QString& label, int returnLine) {
     if (targetScript != m_currentScript) {
         switchToMemorySpace(targetScript);
     }
+    m_jumped = true;
     setCurrentLineInternal(target, true);
-    if (m_executionQueueIndices.contains(targetScript)) {
-        m_executionQueueIndices[targetScript] = target;
-    }
     return true;
 }
 
@@ -615,11 +646,8 @@ bool EraParseTable::returnFromCall() {
     if (!frame.script.isEmpty() && frame.script != m_currentScript) {
         switchToMemorySpace(frame.script);
     }
+    m_jumped = true;
     setCurrentLineInternal(frame.returnLine, true);
-
-    if (m_executionQueueIndices.contains(m_currentScript)) {
-        m_executionQueueIndices[m_currentScript] = frame.returnLine;
-    }
     return true;
 }
 
@@ -629,121 +657,6 @@ void EraParseTable::switchToMemorySpace(const QString& scriptName) {
     }
     m_currentScript = scriptName;
     emit memorySpaceChanged(scriptName);
-}
-
-void EraParseTable::onExecutionResult(const QString& scriptName, int lineNumber, bool success) {
-    if (!success) {
-        return;
-    }
-    emit checkState();
-}
-
-void EraParseTable::onJumpRequest(const QString& label) {
-    jumpToLabel(label);
-}
-
-void EraParseTable::onJumpToScript(const QString& scriptName, const QString& label) {
-    int targetPosition = -1;
-    if (resolveJumpToScript(scriptName, label, targetPosition)) {
-        setPosition(scriptName, targetPosition);
-        emit jumpRequested(scriptName, label, targetPosition);
-    }
-}
-
-void EraParseTable::onStateChange() {
-}
-
-void EraParseTable::onStateUnchanged() {
-    if (m_currentScript.isEmpty()) {
-        return;
-    }
-    const ScriptData* data = script(m_currentScript);
-    if (!data) {
-        return;
-    }
-    int& index = m_executionQueueIndices[m_currentScript];
-    if (index >= data->lines.size()) {
-        return;
-    }
-    pumpInstructions();
-}
-
-void EraParseTable::onStateChanged() {
-    pumpInstructions();
-}
-
-bool EraParseTable::pumpInstructions() {
-    if (s_inPumpInstructions) {
-        return false;
-    }
-    s_inPumpInstructions = true;
-    auto cleanup = [&]() { s_inPumpInstructions = false; };
-
-    if (m_currentScript.isEmpty()) {
-        cleanup();
-        return false;
-    }
-
-    const ScriptData* data = script(m_currentScript);
-    if (!data) {
-        cleanup();
-        return false;
-    }
-
-    int& index = m_executionQueueIndices[m_currentScript];
-
-    if (index >= data->lines.size()) {
-        if (m_callStack.isEmpty()) {
-            cleanup();
-            return false;
-        }
-        if (returnFromCall()) {
-            cleanup();
-            return true;
-        }
-        cleanup();
-        return false;
-    }
-
-    LogicalLine line = data->lines.at(index);
-    index++;
-    advance();
-
-    if (m_executionEngine) {
-        m_executionEngine->setCurrentScript(m_currentScript);
-        m_executionEngine->setExecutionPosition(m_currentLine);
-        m_executionEngine->executeLogicalLine(line);
-
-        while (!m_executionEngine->isQueueEmpty()) {
-            LogicalLine execLine = m_executionEngine->dequeueExecutionLine();
-            advance();
-            m_executionEngine->setExecutionPosition(m_currentLine);
-            m_executionEngine->executeLogicalLine(execLine);
-        }
-    }
-
-    QCoreApplication::processEvents(QEventLoop::AllEvents, 1);
-
-    emit checkState();
-
-    const bool result = index < data->lines.size();
-    cleanup();
-    return result;
-}
-
-void EraParseTable::startExecutionPump() {
-    if (!m_entryPoint.isEmpty() && m_currentScript.isEmpty()) {
-        setEntryPoint(m_entryPoint);
-    }
-    pumpInstructions();
-}
-
-void EraParseTable::onRequestNextInstruction() {
-    pumpInstructions();
-}
-
-void EraParseTable::onExecutionComplete(const QString& scriptName) {
-    resetPosition();
 }
 
 // ---------------------------------------------------------------------------
@@ -836,7 +749,6 @@ void EraParseTable::buildJumpMarkings(const QString& scriptName) {
                 const LoopInfo info = loopStack.takeLast();
                 data.loopEndLines[info.startLine] = i;
                 data.jumpToEnd[info.startLine] = i;
-                data.lines[info.startLine].jumpToEndCatch = i;
                 data.jumpTo[i] = info.startLine;
                 data.lines[i].jumpTo = info.startLine;
             }
@@ -925,6 +837,10 @@ void EraParseTable::parseVariableDeclaration(const LogicalLine& line, const QStr
         decl.lengthExprs = d.lengthExprs;
         decl.isPrivate = isPrivate || !isGlobal;
         decl.isConst = d.isConst;
+        if (!d.isConst) {                 // 初值（非 CONST）：进入函数/装载时写入
+            decl.defaultInt = d.defaultInt;
+            decl.defaultStr = d.defaultStr;
+        }
 
         if (!m_variables.add(decl)) {
             // 局部重名：同名 @label 重复定义时常见（C# 亦报错）；此处静默 first-wins
@@ -976,6 +892,18 @@ void EraParseTable::mergeAstCache(const QHash<QString, QSharedPointer<Expression
 
 void EraParseTable::finalizeParse() {
     m_variables.resolveDimensions();
+    // #DIM CONST 常量：交给求值器在求值时查表（装载顺序无关）
+    if (m_evaluator) {
+        const VariableTable* vt = &m_variables;
+        m_evaluator->setConstProvider([vt](const QString& name, QVariant& out) -> bool {
+            qint64 iv = 0;
+            if (vt->constInt(name, iv)) { out = QVariant::fromValue<qint64>(iv); return true; }
+            QString sv;
+            if (vt->constStr(name, sv)) { out = QVariant(sv); return true; }
+            return false;
+        });
+    }
+    applyGlobalVariableDefaults();   // #DIM X = 1 等初值（全局）
     // 用户自定义函数的强类型化（形参类型回填 + 返回类型确定）
     resolveUserFunctionTypes();
     // 字符串赋值的右值改按 StrForm 解析（对齐 C# AnalyseFormattedString）
@@ -1020,6 +948,37 @@ QString leadingIdentifier(const QString& raw) {
 }
 
 } // namespace
+
+// 把 #DIM/#DIMS 的初值写入存储（对齐 C#：全局变量装载时取初值；
+// 函数私有变量每次进入函数时取初值）。本移植的私有变量按名字存取（无逐函数存储），
+// 因此这里同样按名字写。
+void EraParseTable::applyVariableDefaults(const QList<VariableDecl>& decls) {
+    if (!m_variableStorage) return;
+    for (const VariableDecl& d : decls) {
+        if (d.isConst || !d.isPrivate) continue;
+        if (d.type == OperandType::Str) {
+            for (int i = 0; i < d.defaultStr.size(); ++i) {
+                m_variableStorage->setGlobalStr1D(d.name, i, d.defaultStr.at(i));
+            }
+        } else {
+            for (int i = 0; i < d.defaultInt.size(); ++i) {
+                m_variableStorage->setGlobalInt1D(d.name, i, d.defaultInt.at(i));
+            }
+        }
+    }
+}
+
+void EraParseTable::applyGlobalVariableDefaults() {
+    for (const VariableDecl& d : m_variables.declarations()) {
+        if (d.scope != VarScope::Global || d.isConst) continue;
+        applyVariableDefaults({d});
+    }
+}
+
+void EraParseTable::applyPrivateVariableDefaults(const QString& function) {
+    if (function.isEmpty()) return;
+    applyVariableDefaults(m_variables.localsOf(function));
+}
 
 void EraParseTable::applyStringAssignments() {
     const AstResolver resolve = [this](const QString& e) { return expressionAst(e); };

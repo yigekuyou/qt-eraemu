@@ -15,6 +15,7 @@
  * You should have received a copy of the GNU General Public License
  * along with this program.  If not, see <https://www.gnu.org/licenses/>.
  */
+#include <QVariant>
 #include "expression_parser.h"
 #include "operator_table.h"
 #include "function_types.h"
@@ -117,10 +118,10 @@ QSharedPointer<ExpressionNode> ExpressionParser::parseUnary() {
         return nullptr;
     }
 
-    // 后置一元运算符（++ / --）
+    // 后置一元运算符（++ / --）：返回值是**自增前**的值，但变量本身要自增
     if (check(TokenType::INCREMENT) || check(TokenType::DECREMENT)) {
         const ExpressionToken op = advance();
-        node = QSharedPointer<UnaryOpNode>::create(op, node);
+        node = QSharedPointer<UnaryOpNode>::create(op, node, /*postfix=*/true);
     }
     return node;
 }
@@ -139,6 +140,19 @@ QSharedPointer<ExpressionNode> ExpressionParser::parsePrimary() {
         if (m_current + 1 < m_tokens.size() &&
             m_tokens[m_current + 1].type() == TokenType::LEFT_PAREN) {
             return parseFunctionCall();
+        }
+        // `#DIM CONST NAME = value`：在解析期折叠为字面量（对齐 C# 的常数）
+        if (m_constantValueProvider) {
+            const bool hasIndex = (m_current + 1 < m_tokens.size()
+                                   && m_tokens[m_current + 1].type() == TokenType::COLON);
+            const QVariant cv = m_constantValueProvider(m_tokens[m_current].value());
+            if (cv.isValid() && !hasIndex) {
+                advance();
+                if (cv.typeId() == QMetaType::QString) {
+                    return QSharedPointer<LiteralNode>::create(cv.toString());
+                }
+                return QSharedPointer<LiteralNode>::create(cv.toLongLong());
+            }
         }
         return parseVariable();
     }

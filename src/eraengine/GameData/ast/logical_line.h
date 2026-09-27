@@ -166,15 +166,12 @@ struct LogicalLine {
     QSharedPointer<ExpressionNode> condition;   // IF/SIF/ELSEIF/WHILE/REPEAT 条件
 
     // 原始 token 与文本（C# argprimitive / WordCollection）
-    WordCollection words;
     QString        raw;
 
     // 扁平控制流（行号索引，替代 C# 的 NextLine / JumpTo 指针）
     int  lineIndex      = -1;
     int  nextLine       = -1;
     int  jumpTo         = -1;
-    int  jumpToEndCatch = -1;
-    int  parentLabelLine = -1;
     QString ownerFunction;      // 所属函数标签（变量作用域判定，装载期填充）
 
     // 诊断

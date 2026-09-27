@@ -556,6 +556,13 @@ void SystemStateMachine::waitMouseKey(int timeoutMs) {
     }
 }
 
+void SystemStateMachine::waitAnyKey() {
+    // C# Console.ReadAnyKey()：挂起等待「任意键」（Enter/点击），无超时
+    m_state->setExecState(ExecState::WaitInput);
+    emit inputRequested(m_state->getSystemState());
+    if (m_host.readAnyKey) m_host.readAnyKey();   // 通知 UI 弹「任意键」等待
+}
+
 void SystemStateMachine::waitTimedInput(int timeoutMs) {
     m_state->setExecState(ExecState::WaitInput);
     emit inputRequested(m_state->getSystemState());

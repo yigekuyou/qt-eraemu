@@ -107,17 +107,17 @@ int main(int argc, char* argv[]) {
 
         runner.onInputProvided(3);
         check(state.getExecState() == ExecState::WaitInput, "第 2 次 ONEINPUT 挂起");
-        check(storage.getGlobalInt1D("A", 0) == 3, "A = RESULT == 3");
+        check(storage.getSystemVariable("A", 0) == 3, "A = RESULT == 3");
         check(storage.getGlobalInt1D("CNT", 0) == 1, "CNT == 1");
 
         runner.onInputProvided(5);
         check(state.getExecState() == ExecState::WaitInput, "INPUT 挂起");
-        check(storage.getGlobalInt1D("B", 0) == 5, "B = RESULT == 5");
+        check(storage.getSystemVariable("B", 0) == 5, "B = RESULT == 5");
         check(storage.getGlobalInt1D("CNT", 0) == 2, "CNT == 2");
 
         runner.onInputProvided(7);
         check(state.getExecState() == ExecState::Halt, "第 3 次输入后结束（Halt）");
-        check(storage.getGlobalInt1D("C", 0) == 7, "C = RESULT == 7");
+        check(storage.getSystemVariable("C", 0) == 7, "C = RESULT == 7");
         check(storage.getGlobalInt1D("CNT", 0) == 3, "CNT == 3（三次输入都生效）");
     }
 
@@ -303,13 +303,13 @@ int main(int argc, char* argv[]) {
 
         // 超时 -> C# 语义 [4,0,0,0,0]
         fire();
-        check(storage.getGlobalInt1D("A", 0) == 4, "INPUTMOUSEKEY 超时 RESULT = 4（对齐 C# InputMouseKey(4,...)）");
+        check(storage.getSystemVariable("A", 0) == 4, "INPUTMOUSEKEY 超时 RESULT = 4（对齐 C# InputMouseKey(4,...)）");
         check(state.getExecState() == ExecState::WaitInput, "第二个 INPUTMOUSEKEY（无超时）挂起");
         check(pending.isEmpty(), "无超时的 INPUTMOUSEKEY 不登记计时器");
 
         // 真实鼠标点击：类型=1（按下），坐标(50,60)，按钮=1
         machine.deliverInputValues({1, 50, 60, 1, 0});
-        check(storage.getGlobalInt1D("B", 0) == 1, "INPUTMOUSEKEY 收到真实输入类型 1");
+        check(storage.getSystemVariable("B", 0) == 1, "INPUTMOUSEKEY 收到真实输入类型 1");
         check(storage.getSystemVariable(QStringLiteral("RESULT"), 1) == 50, "RESULT:1 = x 坐标 50");
         check(storage.getSystemVariable(QStringLiteral("RESULT"), 2) == 60, "RESULT:2 = y 坐标 60");
     }

@@ -128,35 +128,61 @@ int main(int argc, char* argv[]) {
     // ---- 菜单项 `[n]` 自动变按钮（对齐 C# ButtonStringCreator）----
     qDebug() << "\n菜单按钮";
     {
+        // 一个核 → 整行一段，且可点击（C#：buttonCount <= 1 时整行是一段）
         ConsoleBackend c;
         c.print(QString::fromUtf8("[0] 开始游戏"));
         c.newline();
         c.flush();
         const ConsoleDisplayLine& l = c.buffer().at(0);
-        check(l.buttons.size() == 1, "[0] -> 1 个按钮");
-        check(!l.buttons.isEmpty() && l.buttons.first().isInteger
-                  && l.buttons.first().intValue == 0, "按钮值 == 0");
-        check(l.plainText() == QString::fromUtf8("[0] 开始游戏"), "文本保留原样");
-        // 文本被切成 `[0]` + ` 开始游戏`（按钮覆盖第 1 段）
-        check(l.spans.size() == 2, "文本按按钮切成 2 段");
-        if (l.spans.size() == 2) {
-            check(l.spans.at(0).text == QStringLiteral("[0]"), "第 1 段是 [0]");
-            check(l.spans.at(1).text == QString::fromUtf8(" 开始游戏"), "第 2 段是剩余文本");
-            check(l.buttons.first().startSpan == 0, "按钮覆盖第 1 段");
+        check(l.segments.size() == 1, "[0] -> 1 段（整行）");
+        if (l.segments.size() == 1) {
+            check(l.segments.first().isButton, "这一段可点击");
+            check(l.segments.first().isInteger && l.segments.first().intValue == 0,
+                  "按钮值 == 0");
+            check(l.segments.first().spans.size() == 1
+                      && l.segments.first().spans.first().text == QString::fromUtf8("[0] 开始游戏"),
+                  "整行一个最小单位区块（文本未切碎）");
         }
+        check(l.plainText() == QString::fromUtf8("[0] 开始游戏"), "文本保留原样");
 
         ConsoleBackend c2;
         c2.print(QString::fromUtf8("[9999] 設定完毕"));
         c2.newline();
         c2.flush();
-        check(c2.buffer().at(0).buttons.size() == 1
-                  && c2.buffer().at(0).buttons.first().intValue == 9999, "[9999] -> 9999");
+        check(c2.buffer().at(0).segments.size() == 1
+                  && c2.buffer().at(0).segments.first().isButton
+                  && c2.buffer().at(0).segments.first().intValue == 9999, "[9999] -> 9999");
 
+        // 非数字 `[abc]`：不是核 → 整行不可点击
         ConsoleBackend c3;
         c3.print(QString::fromUtf8("[abc] 不是数字"));
         c3.newline();
         c3.flush();
-        check(c3.buffer().at(0).buttons.isEmpty(), "[abc] 不建按钮");
+        check(!c3.buffer().at(0).segments.isEmpty()
+                  && !c3.buffer().at(0).segments.first().isButton, "[abc] 不建按钮");
+
+        // 十六进制 / 指数 / 带符号（C# 正则允许）
+        ConsoleBackend c4;
+        c4.print(QString::fromUtf8("[0x10] 十六进制"));
+        c4.newline();
+        c4.flush();
+        check(c4.buffer().at(0).segments.first().isButton
+                  && c4.buffer().at(0).segments.first().intValue == 16,
+              "[0x10] -> 16（C# 正则支持 0x 前缀）");
+    }
+
+    // 多个核 → 切成多段（C# 的多段状态机）
+    qDebug() << "\n多个按钮切段";
+    {
+        ConsoleBackend c;
+        c.print(QString::fromUtf8("[1] 选择一 [2] 选择二"));
+        c.newline();
+        c.flush();
+        const ConsoleDisplayLine& l = c.buffer().at(0);
+        int buttons = 0;
+        for (const ConsoleSegment& s : l.segments) if (s.isButton) ++buttons;
+        check(buttons == 2, "两个核 -> 两段可点击");
+        check(l.plainText() == QString::fromUtf8("[1] 选择一 [2] 选择二"), "切段不改变文本");
     }
 
     qDebug() << "\nPRINTBUTTON";
@@ -167,10 +193,34 @@ int main(int argc, char* argv[]) {
         c.newline();
         c.flush();
         const ConsoleDisplayLine& l = c.buffer().at(0);
-        check(l.buttons.size() == 2, "两个 PRINTBUTTON");
-        check(l.buttons.at(0).intValue == 4 && l.buttons.at(1).intValue == 2, "值 4/2");
+        check(l.segments.size() == 2, "两个 PRINTBUTTON -> 2 段");
+        check(l.segments.at(0).intValue == 4 && l.segments.at(1).intValue == 2, "值 4/2");
     }
 
+    qDebug() << "\n最小单位区块 / 图 / 形";
+    {
+        ConsoleBackend c;
+        c.print("A");
+        c.printImage("face_01", 100, 100);   // width/height 是 FontSize 的百分比
+        c.printShape("rect", {100});
+        c.newline();
+        c.flush();
+        const ConsoleDisplayLine& l = c.buffer().at(0);
+        check(l.spanCount() == 3, "3 个最小单位区块（文本/图/形）");
+        if (l.spanCount() == 3) {
+            const QList<ConsoleSpan> parts = l.flatSpans();
+            check(parts.at(0).kind == ConsoleSpanKind::Text, "第 1 个是 text");
+            check(parts.at(1).kind == ConsoleSpanKind::Image
+                      && parts.at(1).text == "face_01", "第 2 个是 image(face_01)");
+            check(parts.at(2).kind == ConsoleSpanKind::Shape
+                      && parts.at(2).shapeType == "rect", "第 3 个是 shape(rect)");
+            check(parts.at(0).relCol == 0, "区块自带相对列 relCol");
+            check(parts.at(0).cols == 1, "文本 'A' 占 1 个单位长");
+            check(parts.at(1).cols == 2, "图片 100% FontSize = 18px = 2 个单位长");
+        }
+    }
+
+    // CLEARLINE 只数逻辑行（C# deleteLine）
     qDebug() << "\nCLEARLINE";
     {
         ConsoleBackend c;
@@ -179,8 +229,10 @@ int main(int argc, char* argv[]) {
         c.print("C"); c.newline();
         c.flush();
         check(c.lineCount() == 3, "3 行");
+        check(c.logicalLineCount() == 3, "LINECOUNT == 3");
         c.clearLines(2);
         check(c.lineCount() == 1 && linePlain(c, 0) == "A", "CLEARLINE 2 -> 只剩 A");
+        check(c.logicalLineCount() == 1, "CLEARLINE 后 LINECOUNT == 1");
     }
 
     qDebug() << "\n===================";

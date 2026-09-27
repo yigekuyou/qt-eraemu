@@ -33,6 +33,8 @@
 //     整数 / 文本     -> provideInput / provideInputString
 //     :q 或 EOF       -> 退出
 //     :state          -> 打印系统状态 / 执行状态 / 调用栈
+//     :v NAME[:i[:j]] -> dump 任意变量（整数/字符串/二维）
+//     :e EXPR         -> 求值任意表达式（调试表达式/常量）
 //     :vars           -> 打印若干系统变量（RESULT / 常用变量）
 //     :model          -> 显示模型：逐 span（文本/颜色/粗斜体/内联图/图形）逐按钮
 //     :check          -> 渲染自检：未展开的 %..%/{..}、本应是按钮的 [n]、空行、对齐
@@ -58,6 +60,7 @@
 #include <QDBusConnection>
 #include <QDBusMessage>
 #include <QSocketNotifier>
+#include <QElapsedTimer>
 #include <unistd.h>   // STDIN_FILENO
 #include <QFile>
 #include <QLocalServer>
@@ -71,6 +74,7 @@
 #include "process_state.h"
 #include "system_state_machine.h"
 #include "console_backend.h"
+#include "console_plane.h"
 #include "variable_storage.h"
 
 namespace {
@@ -108,27 +112,73 @@ QString lineAnnotation(const ConsoleDisplayLine& line) {
     if (line.align != ConsoleAlign::Left) {
         a += QStringLiteral("[%1]").arg(QString::fromLatin1(alignName(int(line.align))));
     }
-    if (!line.buttons.isEmpty()) {
-        QStringList vals;
-        for (const ConsoleButton& b : line.buttons) {
-            vals << (b.isInteger ? QString::number(b.intValue) : b.strValue);
-        }
-        a += QStringLiteral("[btn:%1]").arg(vals.join(QLatin1Char(',')));
+    QStringList vals;
+    for (const ConsoleSegment& seg : line.segments) {
+        if (!seg.isButton) continue;
+        vals << (seg.isInteger ? QString::number(seg.intValue) : seg.strValue);
     }
+    if (!vals.isEmpty()) a += QStringLiteral("[btn:%1]").arg(vals.join(QLatin1Char(',')));
     const QString text = line.plainText();
     if (hasUnresolvedForm(text)) a += QStringLiteral("[!未展开格式]");
-    if (line.buttons.isEmpty() && looksLikeMenuButton(text)) a += QStringLiteral("[!字面按钮未生效]");
-    if (text.trimmed().isEmpty() && line.spans.isEmpty()) a += QStringLiteral("[空行]");
+    if (vals.isEmpty() && looksLikeMenuButton(text)) a += QStringLiteral("[!字面按钮未生效]");
+    if (text.trimmed().isEmpty()) a += QStringLiteral("[空行]");
     return a;
 }
 
-// 显示模型：逐 span / 逐 button
+// 显示模型：逐段（ConsoleSegment）/ 逐最小单位区块（ConsoleSpan）
 void dumpModel(const ConsoleDisplayLine& line, int absIndex) {
     std::cout << "  #" << absIndex << " align=" << alignName(int(line.align))
-              << " spans=" << line.spans.size() << " buttons=" << line.buttons.size()
+              << " lineNo=" << line.lineNo
+              << " logical=" << (line.isLogicalLine ? 1 : 0)
+              << " segments=" << line.segments.size()
+              << " parts=" << line.spanCount()
+              << " width=" << line.width()
               << "  text=\"" << line.plainText().toStdString() << "\"\n";
-    for (int i = 0; i < line.spans.size(); ++i) {
-        const ConsoleSpan& sp = line.spans.at(i);
+    for (int i = 0; i < line.segments.size(); ++i) {
+        const ConsoleSegment& seg = line.segments.at(i);
+        std::cout << "    segment" << i
+                  << (seg.isButton ? " [button]" : " [text]")
+                  << " col=" << seg.relCol << " cols=" << seg.cols
+                  << " parts=" << seg.spans.size();
+        if (seg.isButton) {
+            std::cout << " value="
+                      << (seg.isInteger ? QString::number(seg.intValue).toStdString()
+                                        : seg.strValue.toStdString())
+                      << " gen=" << seg.generation;
+            if (!seg.tooltip.isEmpty())
+                std::cout << " tooltip=\"" << seg.tooltip.toStdString() << "\"";
+            if (!seg.enabled) std::cout << " DISABLED";
+        }
+        std::cout << "\n";
+        for (int k = 0; k < seg.spans.size(); ++k) {
+            const ConsoleSpan& sp = seg.spans.at(k);
+            std::cout << "        part" << k << " col=" << sp.col << " cols=" << sp.cols
+                      << " row=" << sp.row;
+            switch (sp.kind) {
+            case ConsoleSpanKind::Image: std::cout << " kind=image src=" << sp.text.toStdString(); break;
+            case ConsoleSpanKind::Shape: std::cout << " kind=shape type=" << sp.shapeType.toStdString(); break;
+            default:        std::cout << " kind=text  \"" << sp.text.toStdString() << "\""; break;
+            }
+            if (sp.style.color.isValid())
+                std::cout << " color=" << sp.style.color.name(QColor::HexRgb).toStdString();
+            if (sp.style.bold)      std::cout << " bold";
+            if (sp.style.italic)    std::cout << " italic";
+            if (sp.style.underline) std::cout << " underline";
+            if (!sp.style.fontName.isEmpty())
+                std::cout << " font=" << sp.style.fontName.toStdString();
+            std::cout << "\n";
+        }
+    }
+}
+
+// 显示模型（扁平）：兼容旧的逐 span / 逐 button 输出
+void dumpModelFlat(const ConsoleDisplayLine& line, int absIndex) {
+    std::cout << "  #" << absIndex << " align=" << alignName(int(line.align))
+              << " spans=" << line.spanCount() << " buttons=" << line.buttonIndices().size()
+              << "  text=\"" << line.plainText().toStdString() << "\"\n";
+    const QList<ConsoleSpan> parts = line.flatSpans();
+    for (int i = 0; i < parts.size(); ++i) {
+        const ConsoleSpan& sp = parts.at(i);
         std::cout << "      span" << i;
         switch (sp.kind) {
         case ConsoleSpanKind::Image: std::cout << " kind=image src=" << sp.text.toStdString(); break;
@@ -138,23 +188,19 @@ void dumpModel(const ConsoleDisplayLine& line, int absIndex) {
         if (sp.style.color.isValid())
             std::cout << " color=" << sp.style.color.name(QColor::HexRgb).toStdString();
         if (sp.style.bold)      std::cout << " bold";
-        if (sp.style.italic)    std::cout << " italic";
-        if (sp.style.underline) std::cout << " underline";
-        if (!sp.style.fontName.isEmpty())
-            std::cout << " font=" << sp.style.fontName.toStdString();
         std::cout << "\n";
     }
-    for (int i = 0; i < line.buttons.size(); ++i) {
-        const ConsoleButton& b = line.buttons.at(i);
-        std::cout << "      button" << i << " spans[" << b.startSpan << ".."
-                  << (b.startSpan + b.spanCount - 1) << "] value="
-                  << (b.isInteger ? QString::number(b.intValue).toStdString() : b.strValue.toStdString())
-                  << (b.tooltip.isEmpty() ? "" : (" tooltip=\"" + b.tooltip.toStdString() + "\""))
-                  << (b.enabled ? "" : " DISABLED") << "\n";
+    for (int i = 0; i < line.segments.size(); ++i) {
+        const ConsoleSegment& seg = line.segments.at(i);
+        if (!seg.isButton) continue;
+        std::cout << "      button(segment" << i << ") value="
+                  << (seg.isInteger ? QString::number(seg.intValue).toStdString()
+                                    : seg.strValue.toStdString())
+                  << (seg.tooltip.isEmpty() ? "" : (" tooltip=\"" + seg.tooltip.toStdString() + "\""))
+                  << (seg.enabled ? "" : " DISABLED") << "\n";
     }
 }
 
-// 把 ConsoleBackend 的新行打印到 stdout（最后一行可能仍在追加，可选是否打印）
 // 当前屏幕快照（以 ConsoleBackend 的缓冲为准；CLEARLINE 之后的行不会残留）
 QList<QString> screenLines(ConsoleBackend* console, bool withAnnotation, bool withModel,
                            QList<ConsoleDisplayLine>* rawOut = nullptr) {
@@ -170,25 +216,19 @@ QList<QString> screenLines(ConsoleBackend* console, bool withAnnotation, bool wi
         }
         out.append(text);
         if (withModel) {
-            // 模型细节也拼进来（前缀缩进，便于区分）
             QStringList detail;
-            for (const ConsoleSpan& sp : l.spans) {
-                QString d = QStringLiteral("    span ");
-                switch (sp.kind) {
-                case ConsoleSpanKind::Image: d += QStringLiteral("image src=") + sp.text; break;
-                case ConsoleSpanKind::Shape: d += QStringLiteral("shape ") + sp.shapeType; break;
-                default: d += QStringLiteral("text \"") + sp.text + QStringLiteral("\""); break;
+            for (const ConsoleSegment& seg : l.segments) {
+                for (const ConsoleSpan& sp : seg.spans) {
+                    QString d = QStringLiteral("    part ");
+                    switch (sp.kind) {
+                    case ConsoleSpanKind::Image: d += QStringLiteral("image src=") + sp.text; break;
+                    case ConsoleSpanKind::Shape: d += QStringLiteral("shape ") + sp.shapeType; break;
+                    default: d += QStringLiteral("text \"") + sp.text + QStringLiteral("\""); break;
+                    }
+                    d += QStringLiteral(" col=%1 cols=%2 row=%3").arg(sp.col).arg(sp.cols).arg(sp.row);
+                    if (seg.isButton) d += QStringLiteral(" [btn]");
+                    detail.append(d);
                 }
-                if (sp.style.color.isValid()) d += QStringLiteral(" color=") + sp.style.color.name(QColor::HexRgb);
-                if (sp.style.bold) d += QStringLiteral(" bold");
-                if (sp.style.italic) d += QStringLiteral(" italic");
-                detail.append(d);
-            }
-            for (const ConsoleButton& b : l.buttons) {
-                detail.append(QStringLiteral("    button value=")
-                              + (b.isInteger ? QString::number(b.intValue) : b.strValue)
-                              + QStringLiteral(" spans[%1..%2]").arg(b.startSpan)
-                                    .arg(b.startSpan + b.spanCount - 1));
             }
             out += detail;
         }
@@ -196,13 +236,22 @@ QList<QString> screenLines(ConsoleBackend* console, bool withAnnotation, bool wi
     return out;
 }
 
+// 平面重建工具（定义在后面）
+QStringList planeLines(ConsoleBackend* console, bool withRuler);
+QStringList planeIssues(ConsoleBackend* console);
+
 // 把「当前屏幕」打印出来（仅在变化时）；用于发现渲染错误：
 //   * 帧没有被 CLEARLINE 清掉（越堆越多）
 //   * 未展开的 %..% / {..}、本应是按钮的 [n]
 //   * 对齐/颜色/内联图/图形
+//   * withPlane：用「二维字符平面」呈现（root/text/image 分层模型重建）
 bool renderScreen(ConsoleBackend* console, QList<QString>& last, bool withAnnotation,
-                  bool withModel, const QString& tag) {
-    const QList<QString> now = screenLines(console, withAnnotation, withModel);
+                  bool withModel, const QString& tag, bool withPlane = false) {
+    const QList<QString> now = withPlane ? [&]() {
+            QStringList pl = planeLines(console, /*withRuler*/ true);
+            return QList<QString>(pl.begin(), pl.end());
+        }()
+                                       : screenLines(console, withAnnotation, withModel);
     if (now == last) return false;
     last = now;
     std::cout << "\n";
@@ -210,6 +259,39 @@ bool renderScreen(ConsoleBackend* console, QList<QString>& last, bool withAnnota
     if (!tag.isEmpty()) std::cout << "──── " << tag.toStdString() << " ────\n";
     for (const QString& l : now) std::cout << l.toStdString() << "\n";
     return true;
+}
+
+// ---------------------------------------------------------------------------
+// 平面重建（分层模型 → 二维字符平面）
+//
+// QML 的 root / text / image / shape 各层**铺满同一个平面**，区块的 x/y 就是
+// 相对 root 的绝对坐标。所以可以按 (x / 列宽) 定列、(y / 行高) 定行，把整屏
+// 还原成字符矩阵 —— 文本照抄、图片用 ▨ 占位、图形用 ─ 占位。
+// 这样无需 GUI 就能看出「2 维排版」是否正确（列有没有对齐、图有没有落到右侧面板）。
+// ---------------------------------------------------------------------------
+ConsolePlaneOptions planeOptions(ConsoleBackend* console) {
+    ConsolePlaneOptions opt;
+    opt.windowWidth = console ? console->windowWidth() : 760;
+    // 终端安全：把 □ ■ ▨ ─ 这些「宽度有歧义」的符号换成 2 个 ASCII 字符，
+    // 于是任何终端/字体下都严格「1 字符 = 1 个区块长」，列才对得齐；
+    // 行尾附带本行占用的单位数，便于核对（不依赖终端字体）。
+    opt.terminalSafe = true;
+    opt.withWidths = true;
+    return opt;
+}
+
+QStringList planeLines(ConsoleBackend* console, bool withRuler) {
+    if (!console) return {};
+    const ConsolePlaneOptions opt = planeOptions(console);
+    return withRuler ? ConsolePlane::renderWithRuler(console->buffer(), console->layout(), opt)
+                     : ConsolePlane::render(console->buffer(), console->layout(), opt);
+}
+
+// 平面几何自检（越界/重叠/未对齐/尺寸缺失…）
+QStringList planeIssues(ConsoleBackend* console) {
+    if (!console) return {};
+    return ConsolePlane::issueTexts(
+        ConsolePlane::inspect(console->buffer(), console->layout(), planeOptions(console)));
 }
 
 // 渲染自检：返回可疑项（供 --check 与 :check 使用）
@@ -224,12 +306,14 @@ QStringList renderSuspects(ConsoleBackend* console) {
         if (t.trimmed().isEmpty()) { ++blanks; continue; }
         if (hasUnresolvedForm(t))
             out << QStringLiteral("第 %1 行有未展开的格式化标记: %2").arg(i).arg(t.left(60));
-        if (l.buttons.isEmpty() && looksLikeMenuButton(t))
+        if (l.buttonIndices().isEmpty() && looksLikeMenuButton(t))
             out << QStringLiteral("第 %1 行像选中项但没有按钮: %2").arg(i).arg(t.left(60));
     }
     if (blanks > lines.size() / 2 && lines.size() > 4)
         out << QStringLiteral("屏幕空行过多（%1/%2）—— 可能是本帧没被清掉或绘制缺失")
                    .arg(blanks).arg(lines.size());
+    // 平面几何诊断（分层模型的坐标/尺寸）
+    out += planeIssues(console);
     return out;
 }
 
@@ -281,18 +365,22 @@ public:
 
 int main(int argc, char* argv[]) {
     QCoreApplication app(argc, argv);
+    std::cout << std::unitbuf;      // 调试输出不缓冲（管道/重定向时也能实时看到）
 
     QString directory;
     QStringList scripted;      // --script 0,1,0
     bool interactive = true;
     bool appendLog = false;    // --log：追加式（不反映 CLEARLINE）
     bool withModel = false;    // --model：打印 span/button 结构
+    bool withPlane = false;    // --plane：用二维字符平面呈现（分层模型）
+    quint32 seedValue = 0;     // --seed 的值
     bool checkMode = false;    // --check：渲染自检
     int  frameLimit = 30;      // 屏幕快照最多打印多少帧
     bool useDBus = false;      // --dbus：注册 DBus 服务
     QString socketPath;        // --socket [路径]：Unix socket
     int  tcpPort = 0;          // --tcp <端口>：TCP socket
     int  runMs = 0;            // --run-ms N：输入用尽后继续跑 N 毫秒（供外部注入）
+    bool hasSeed = false;      // --seed N：固定 MT19937 随机种子（复现整局）
     for (int i = 1; i < argc; ++i) {
         const QString a = QString::fromLocal8Bit(argv[i]);
         if (a == QLatin1String("--help") || a == QLatin1String("-h")) {
@@ -300,12 +388,14 @@ int main(int argc, char* argv[]) {
                 << "usage: test_cli <游戏目录> [--script 0,1,0] [--log] [--model] [--check] [--frames N]\n"
                 << "  --log     追加式日志（旧行为；不反映 CLEARLINE）\n"
                 << "  --model   屏幕快照同时打印 span/button 结构\n"
+                << "  --plane   用「二维字符平面」呈现屏幕（root/text/image 分层模型重建）\n"
                 << "  --frames N  最多打印 N 帧屏幕快照（默认 30，0=不限）\n"
                 << "  --check   渲染自检（未展开格式/%/无按钮的 [n]/空行过多）→ 可疑时退出码 2\n"
                 << "  --dbus           注册 DBus 服务 io.yigekuyou.emuera.testcli (/testcli)\n"
                 << "  --socket [路径]  Unix socket（默认 /tmp/emuera-test-cli.sock）\n"
                 << "  --tcp <端口>      TCP socket\n"
                 << "  --run-ms N       输入用尽后继续跑 N 毫秒（给外部注入留时间）\n"
+                << "  --seed N         固定 MT19937 随机种子（整局可复现）\n"
                 << "  输入源：stdin / --script / DBus / socket，行协议见文件头注释";
             return 0;
         }
@@ -326,12 +416,23 @@ int main(int argc, char* argv[]) {
             if (i + 1 < argc) runMs = QString::fromLocal8Bit(argv[++i]).toInt();
             continue;
         }
+        if (a == QLatin1String("--seed")) {   // 固定随机种子（复现/回归）
+            if (i + 1 < argc) {
+                seedValue = static_cast<quint32>(QString::fromLocal8Bit(argv[++i]).toUInt());
+                hasSeed = true;
+            }
+            continue;
+        }
         if (a == QLatin1String("--log")) {   // 追加式日志（旧行为）
             appendLog = true;
             continue;
         }
         if (a == QLatin1String("--model")) { // 屏幕快照同时打印显示模型
             withModel = true;
+            continue;
+        }
+        if (a == QLatin1String("--plane")) { // 用「二维字符平面」呈现屏幕（分层模型 → 平面）
+            withPlane = true;
             continue;
         }
         if (a == QLatin1String("--check")) { // 渲染自检；发现可疑退出码 2
@@ -371,6 +472,7 @@ int main(int argc, char* argv[]) {
     });
 
     engine.getScriptRunner()->setStepLimit(2000000);   // 死循环诊断：超限即报错并给出位置
+    if (hasSeed) engine.setRandomSeed(seedValue);      // 固定随机种子 -> 整局可复现
 
     // ---- 外部输入通道：stdin / --script / DBus / socket 统一走「命令队列」----
     QList<QString> pending;
@@ -507,6 +609,9 @@ int main(int argc, char* argv[]) {
         return true;
     };
 
+    QElapsedTimer runClock;                 // --run-ms 的总预算
+    runClock.start();
+
     int printed = 0;                       // --log 模式的行游标
     QList<QString> lastScreen;
     int framesShown = 0;
@@ -520,7 +625,7 @@ int main(int argc, char* argv[]) {
         if (checkMode) collectSuspects();
         if (appendLog) return;
         if (frameLimit > 0 && framesShown >= frameLimit) return;
-        if (renderScreen(console, lastScreen, /*annotation*/ true, withModel, tag)) ++framesShown;
+        if (renderScreen(console, lastScreen, /*annotation*/ true, withModel, tag, withPlane)) ++framesShown;
     };
     auto drainLog = [&]() {
         if (!appendLog) return;
@@ -536,9 +641,123 @@ int main(int argc, char* argv[]) {
     showScreen(QStringLiteral("首屏"));
     drainLog();
 
+    // ---- 调试命令（任何状态下都能执行：:state / :v / :plane / :geometry …）----
+    // 返回 true = 已处理；false = 请求退出
+    auto runDebugCommand = [&](const QString& cmd) -> bool {
+        if (cmd == ":state") {
+            const ExecState cur = state ? state->getExecState() : ExecState::Halt;
+            std::cout << "  systemState="
+                      << (state ? SystemStateMachine::stateName(state->getSystemState())
+                                        : QStringLiteral("-")).toStdString()
+                      << " execState=" << int(cur)
+                      << " 调用栈深度=" << (engine.getParseTable() ? engine.getParseTable()->depth() : -1)
+                      << " 当前脚本=" << (engine.getParseTable() ? engine.getParseTable()->currentScript().toStdString() : std::string())
+                      << " 行=" << (engine.getParseTable() ? engine.getParseTable()->currentLine() : -1) << "\n";
+            return true;
+        }
+        if (cmd == ":screen") {
+            QList<QString> dummy;
+            renderScreen(console, dummy, true, withModel, QStringLiteral("当前屏幕"), withPlane);
+            return true;
+        }
+        if (cmd == ":model") {
+            withModel = !withModel;
+            QList<QString> dummy;
+            renderScreen(console, dummy, true, withModel, QStringLiteral("当前屏幕（模型）"), withPlane);
+            return true;
+        }
+        if (cmd == ":plane") {          // 二维字符平面（分层模型重建 + 列标尺）
+            withPlane = !withPlane;
+            QList<QString> dummy;
+            renderScreen(console, dummy, true, withModel,
+                         QStringLiteral("当前平面（%1）").arg(withPlane ? "开" : "关"), withPlane);
+            return true;
+        }
+        if (cmd == ":geometry") {       // 逐区块的 绝对/相对 位置与尺寸
+            const QVariantList blocks = console ? console->visibleBlocks() : QVariantList();
+            std::cout << "  区块数 " << blocks.size()
+                      << "  行高 " << (console ? console->lineHeight() : 0)
+                      << "  字号 " << (console ? console->fontSize() : 0)
+                      << "  root 宽 " << (console ? console->windowWidth() : 0)
+                      << "  列宽 " << (console ? console->columnWidth() : 0) << "\n";
+            for (const QVariant& v : blocks) {
+                const QVariantMap m = v.toMap();
+                std::cout << "    [" << m.value("layer").toString().toStdString() << "]"
+                          << " grid=(" << m.value("col").toInt() << "," << m.value("row").toInt() << ")"
+                          << " rel=(" << m.value("relCol").toInt() << "," << m.value("relRow").toInt() << ")"
+                          << " size=" << m.value("cols").toInt() << "x" << m.value("rows").toInt()
+                          << " (px " << m.value("width").toInt() << "x" << m.value("height").toInt() << ")"
+                          << (m.value("isButton").toBool() ? " [button]" : "")
+                          << " \"" << m.value("plain").toString().toStdString()
+                          << m.value("text").toString().toStdString() << "\"\n";
+            }
+            return true;
+        }
+        if (cmd == ":check") {
+            const QStringList sus = renderSuspects(console);
+            std::cout << "  渲染自检：" << (sus.isEmpty() ? "未发现可疑项" : "") << "\n";
+            for (const QString& s : sus) std::cout << "  [!] " << s.toStdString() << "\n";
+            return true;
+        }
+        if (cmd.startsWith(QLatin1String(":e "))) {   // :e EXPR —— 求值任意表达式
+            const QString expr = cmd.mid(3);
+            ExpressionEvaluator* ev = engine.getExpressionEvaluator();
+            const QVariant r = ev ? ev->evaluate(expr, engine.getVariableStorage(),
+                                                 engine.gameBaseData())
+                                  : QVariant();
+            std::cout << "  " << expr.toStdString() << " = " << r.toString().toStdString()
+                      << "  (int " << r.toLongLong() << ")\n";
+            return true;
+        }
+        if (cmd.startsWith(QLatin1String(":v "))) {   // :v NAME[:i[:j]] —— dump 任意变量
+            const QString spec = cmd.mid(3);
+            const QStringList parts = spec.split(QLatin1Char(':'));
+            VariableStorage* vs = engine.getVariableStorage();
+            if (!vs || parts.isEmpty() || parts.first().isEmpty()) {
+                std::cout << "  用法: :v NAME[:i[:j]]\n";
+                return true;
+            }
+            const QString nm = parts.at(0);
+            std::cout << "  " << spec.toStdString() << " = ";
+            if (parts.size() == 1) {
+                const qint64 iv = vs->getGlobalInt1D(nm, 0);
+                const QString sv = vs->getGlobalStr1D(nm, 0);
+                std::cout << iv << (sv.isEmpty() ? "" : (" / \"" + sv.toStdString() + "\""));
+            } else if (parts.size() == 2) {
+                const int i = parts.at(1).toInt();
+                const qint64 iv = vs->getGlobalInt1D(nm, i);
+                const QString sv = vs->getGlobalStr1D(nm, i);
+                std::cout << iv << (sv.isEmpty() ? "" : (" / \"" + sv.toStdString() + "\""));
+            } else {
+                std::cout << vs->getGlobalInt2D(nm, parts.at(1).toInt(), parts.at(2).toInt());
+            }
+            std::cout << "\n";
+            return true;
+        }
+        if (cmd == ":vars") {
+            VariableStorage* vs = engine.getVariableStorage();
+            std::cout << "  RESULT=" << (vs ? vs->getSystemVariable(QStringLiteral("RESULT"), 0) : 0)
+                      << " DAY=" << (vs ? vs->getSystemVariable(QStringLiteral("DAY"), 0) : 0)
+                      << " MONEY=" << (vs ? vs->getSystemVariable(QStringLiteral("MONEY"), 0) : 0)
+                      << " RESULTS=\"" << (vs ? vs->getLocalStr(0).toStdString() : std::string()) << "\"\n";
+            return true;
+        }
+        return true;      // 未知 `:` 命令：吞掉
+    };
+
     int step = 0;
 
     for (;;) {
+        // 挂起的调试命令（:…）在任何状态下都先执行 —— 否则实时等待
+        // （TONEINPUT/INPUTMOUSEKEY/AWAIT）会把控制权一直占住，没法调试
+        while (!pending.isEmpty()) {
+            const QString c = pending.first();
+            if (c == QLatin1String(":q") || c == QLatin1String("q")) goto endMainLoop;
+            if (!c.startsWith(QLatin1Char(':'))) break;   // 输入命令留给正常流程
+            pending.takeFirst();
+            std::cout << "> " << c.toStdString() << "   (调试)\n";
+            runDebugCommand(c);
+        }
         showScreen(QStringLiteral("第 %1 帧").arg(framesShown + 1));
         drainLog();
         const ExecState st = state->getExecState();
@@ -564,41 +783,45 @@ int main(int argc, char* argv[]) {
         const bool timerWait = (st == ExecState::WaitSystemInput && kind.isEmpty())
                                || kind.contains(QLatin1String("INPUTMOUSEKEY"))
                                || kind.contains(QLatin1String("TONEINPUT"));
+        const bool hasExternal = !localClients.isEmpty() || !tcpClients.isEmpty() || useDBus;
         if (timerWait) {
+            // 实时等待：AWAIT / TONEINPUT / INPUTMOUSEKEY 本身不需要用户操作，
+            // 必须**真的跑事件循环**让 QTimer 到点（EraEngine 用 QTimer::singleShot）。
+            // 期间随时接受外部注入（DBus / socket / stdin 的 'k …'）。
+            if (!interactive && scripted.isEmpty() && !hasExternal && runMs <= 0) {
+                std::cout << "\n（输入源用尽，停止实时循环）\n";
+                break;
+            }
             static bool bannerShown = false;
             if (!bannerShown) {
                 std::cout << "\n--- 实时等待（AWAIT / 限时输入，跑定时器）"
                              "---（外部通道：DBus/socket/stdin 的 'k t r1 r2 r3 r4' 注入鼠标键）\n";
                 bannerShown = true;
             }
-            // 只跑一小段就让出，回到主循环检查外部命令（DBus / socket / --script）
-            for (int i = 0; i < 20; ++i) {
-                QCoreApplication::processEvents(QEventLoop::AllEvents, 10);
+            int pump = 0;
+            while (state->getExecState() == st && pending.isEmpty()) {
+                QCoreApplication::processEvents(QEventLoop::AllEvents, 20);
                 QThread::msleep(5);
-                if (state->getExecState() != st) break;
-                if (console && !console->inputKind().isEmpty()) break;
-                if (!pending.isEmpty()) break;
+                if (++pump % 40 == 0) pushScreen();       // 让 socket 客户端看到进展
+                if (!interactive && runMs > 0 && runClock.elapsed() > runMs) break;
             }
             showScreen(QStringLiteral("第 %1 帧").arg(framesShown + 1));
             drainLog();
             pushScreen();
-            if (!pending.isEmpty()) continue;              // 有外部命令 -> 回主循环处理
-            if (state->getExecState() != st) {
-                bannerShown = false;
-                continue;                                   // 状态变了 -> 重新判断
-            }
-            const bool external = !localClients.isEmpty() || !tcpClients.isEmpty()
-                                  || useDBus || runMs > 0;
-            if (!interactive && scripted.isEmpty() && !external) {
-                std::cout << "\n（输入源用尽，停止实时循环）\n";
+            if (pending.isEmpty()) {
+                if (state->getExecState() != st) {
+                    bannerShown = false;
+                    continue;                               // 定时器到点 -> 重新判断
+                }
+                if (!interactive && runMs > 0 && runClock.elapsed() > runMs) {
+                    std::cout << "\n（--run-ms 到期，退出）\n";
+                    break;
+                }
+                std::cout << "\n（实时等待超时，退出）\n";
                 break;
             }
-            static int idleMs = 0;
-            if (runMs > 0 && (idleMs += 100) > runMs) {
-                std::cout << "\n（--run-ms 到期，退出）\n";
-                break;
-            }
-            continue;
+            // 有外部命令（i/k/x/s…）：**不要** continue —— 否则会一直在实时等待里
+            // 打转、命令永远不被消费。落到下面的「等待输入/命令处理」即可。
         }
 
         std::cout << "\n--- 等待输入 [" << kind.toStdString() << "] 状态=" << stName.toStdString()
@@ -615,11 +838,15 @@ int main(int argc, char* argv[]) {
             cmd = scripted.takeFirst();
             haveCmd = true;
             std::cout << "> " << cmd.toStdString() << "\n";
-        } else if (stdinOpen) {
-            // stdin 由 QSocketNotifier 非阻塞喂进 pending；这里只做一次事件循环让数据到达
-            for (int i = 0; i < 20 && pending.isEmpty(); ++i) {
-                QCoreApplication::processEvents(QEventLoop::AllEvents, 10);
+        } else if (stdinOpen || hasExternal || runMs > 0) {
+            // stdin 由 QSocketNotifier 非阻塞喂进 pending；外部通道由 socket/dbus 回调喂。
+            // 交互/外部模式下一直等（临时挂起让数据到达），非交互且无外部输入则收尾。
+            const bool waitForever = interactive || stdinOpen || hasExternal;
+            while (pending.isEmpty()) {
+                QCoreApplication::processEvents(QEventLoop::AllEvents, 20);
                 QThread::msleep(5);
+                if (!waitForever && runMs > 0 && runClock.elapsed() > runMs) break;
+                if (!waitForever && runMs <= 0) break;
             }
             if (!pending.isEmpty()) {
                 cmd = pending.takeFirst();
@@ -629,13 +856,11 @@ int main(int argc, char* argv[]) {
         }
         if (!haveCmd) {
             // 没有输入源了：若开了外部通道/--run-ms，继续跑让外部注入；否则收尾
-            const bool external = !localClients.isEmpty() || !tcpClients.isEmpty() || useDBus || runMs > 0;
-            if (!external) {
+            if (!hasExternal && runMs <= 0) {
                 std::cout << "（输入源用尽，退出）\n";
                 break;
             }
-            static int idleRounds = 0;
-            if (runMs > 0 && ++idleRounds * 50 > runMs) {
+            if (runMs > 0 && runClock.elapsed() > runMs) {
                 std::cout << "（--run-ms 到期，退出）\n";
                 break;
             }
@@ -652,44 +877,17 @@ int main(int argc, char* argv[]) {
             pushScreen();
             continue;
         }
-        if (line == ":state") {
-            std::cout << "  systemState=" << stName.toStdString()
-                      << " execState=" << int(st)
-                      << " 调用栈深度=" << (engine.getParseTable() ? engine.getParseTable()->depth() : -1)
-                      << " 当前脚本=" << (engine.getParseTable() ? engine.getParseTable()->currentScript().toStdString() : std::string())
-                      << " 行=" << (engine.getParseTable() ? engine.getParseTable()->currentLine() : -1) << "\n";
+        if (cmd.startsWith(QLatin1Char(':'))) {
+            if (cmd == QLatin1String(":q") || cmd == QLatin1String("q")) break;
+            std::cout << "> " << cmd.toStdString() << "   (调试)\n";
+            runDebugCommand(cmd);
             continue;
         }
-        if (line == ":screen") {
-            QList<QString> dummy;
-            renderScreen(console, dummy, true, withModel, QStringLiteral("当前屏幕"));
-            continue;
-        }
-        if (line == ":model") {
-            withModel = !withModel;
-            QList<QString> dummy;
-            renderScreen(console, dummy, true, withModel, QStringLiteral("当前屏幕（模型）"));
-            continue;
-        }
-        if (line == ":check") {
-            const QStringList sus = renderSuspects(console);
-            std::cout << "  渲染自检：" << (sus.isEmpty() ? "未发现可疑项" : "") << "\n";
-            for (const QString& s : sus) std::cout << "  [!] " << s.toStdString() << "\n";
-            continue;
-        }
-        if (line == ":vars") {
-            VariableStorage* vs = engine.getVariableStorage();
-            std::cout << "  RESULT=" << (vs ? vs->getSystemVariable(QStringLiteral("RESULT"), 0) : 0)
-                      << " DAY=" << (vs ? vs->getSystemVariable(QStringLiteral("DAY"), 0) : 0)
-                      << " MONEY=" << (vs ? vs->getSystemVariable(QStringLiteral("MONEY"), 0) : 0)
-                      << " RESULTS=\"" << (vs ? vs->getLocalStr(0).toStdString() : std::string()) << "\"\n";
-            continue;
-        }
-
         applyCommand(cmd);
         ++step;
         pushScreen();
     }
+endMainLoop:
 
     showScreen(QStringLiteral("末屏"));
     drainLog();

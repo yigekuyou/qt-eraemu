@@ -202,6 +202,9 @@ QList<ErbSourceLine> ErbPreprocessor::process(const QString& content, QStringLis
         outLine.physicalLine = lineNo;
 
         QString line = applyRename(raw.at(idx));
+        // CRLF 文件：split('\n') 会留下行尾 CR，而 C# 的 EraStreamReader 是连行终止符
+        // 一起剥掉的。必须在这里去掉 —— 否则它会混进 PRINT 族的字面文本里。
+        if (line.endsWith(QLatin1Char('\r'))) line.chop(1);
 
         // 空行 / 纯空白行：C# 直接跳过（不产生逻辑行）
         if (line.isEmpty() || line.trimmed().isEmpty()) {

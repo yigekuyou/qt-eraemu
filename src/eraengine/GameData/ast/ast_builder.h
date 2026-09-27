@@ -47,6 +47,35 @@ public:
                              const ScriptPosition& position,
                              const AstResolver& resolve);
 
+    // ---- PRINT 族参数形态（对齐 C# PRINT_Instruction 的后缀扫描）----
+    //   PRINT…(V)     -> PrintV        逗号分隔的整数值，直接拼接
+    //   PRINT…(S)     -> StrExpression 字符串表达式
+    //   PRINT…(FORMS) -> StrExpression 字符串表达式（结果再按格式串展开）
+    //   PRINT…(FORM)  -> FormStr       格式化串（文本 + {…}/%…%）
+    //   PRINT…(其它)  -> Literal       整行**字面文本**（不是表达式！）
+    enum class PrintArgMode { NotPrint, Literal, StrExpression, FormStr, PrintV };
+    struct PrintArgInfo {
+        PrintArgMode mode = PrintArgMode::NotPrint;
+        bool newline   = false;   // L（或 W）
+        bool waitInput = false;   // W：换行后等待输入
+        bool clearPad  = false;   // C / LC：按 PRINTC 的定宽列布局打印
+        bool padLeft   = false;   // C（右对齐补左）；LC 时 false（左对齐补右）
+        bool forms     = false;   // FORMS：求值结果再当格式串展开
+        bool debug     = false;   // D 后缀
+    };
+    static PrintArgInfo printInfo(const QString& upperName);
+
+    // 指令名是否属于 PRINT 族（含 PRINTPLAIN*）
+    static bool isPrintFamily(const QString& upperName) {
+        return printInfo(upperName).mode != PrintArgMode::NotPrint;
+    }
+
+    // 「这是不是一条指令名」——用于区分
+    //   `ステージ:(ステージ幅 - 1):(LOCAL:0) = 1`（赋值，允许 LHS 含空白）
+    //   `PRINTFORML a = b`            （指令，LHS 里那个 = 只是文本）
+    // 对齐 C# LogicalLineParser：先查函数名表，命中即为命令文，否则按赋值解。
+    static bool isKnownInstructionName(const QString& upperName);
+
 private:
     // 顶层赋值切分（"="/"+="/...，含 "'="）。命中返回 true 并输出 lhs/op/rhs。
     static bool splitAssignment(const QString& line, QString& lhs, QString& op, QString& rhs);
@@ -58,8 +87,6 @@ private:
     // 指令是否使用整行操作数作为条件表达式。
     static bool isConditionInstruction(const QString& upperName);
 
-    // PRINT 族参数形态（对齐 C# PRINT_Instruction 后缀扫描）
-    enum class PrintArgMode { NotPrint, Literal, StrExpression, FormStr, PrintV };
     static PrintArgMode classifyPrintArg(const QString& upperName);
 
     // 指令的操作数是否为格式化串（StrForm）：整行按文本 + {expr}/%expr% 解析。

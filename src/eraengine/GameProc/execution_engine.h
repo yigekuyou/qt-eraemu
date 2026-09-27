@@ -67,6 +67,19 @@ public:
     // GameBase.csv 数据（GAMEBASE_TITLE 等）；求值器需要它
     [[nodiscard]] GameBaseData* gameBaseData() const { return m_gameBaseData; }
 
+    // PRINTC / PRINTLC 的定宽（C# Config.PrintCLength，默认 25）
+    void setPrintCLength(int n) { if (n > 0) m_printCLength = n; }
+    [[nodiscard]] int printCLength() const { return m_printCLength; }
+
+    // DRAWLINE 用字符（C# Config.DrawLineString，键「DRAWLINE文字」，默认 "-"）
+    void setDrawLineString(const QString& s) { if (!s.isEmpty()) m_drawLineString = s; }
+    [[nodiscard]] QString drawLineString() const { return m_drawLineString; }
+    // 一行最多几个「半角单位」（C# Config.DrawableWidth / 列宽）
+    void setMaxLineUnits(int n) { if (n > 0) m_maxLineUnits = n; }
+    [[nodiscard]] int maxLineUnits() const { return m_maxLineUnits; }
+    // 文本占几个半角单位（全角 2 / 半角 1）
+    [[nodiscard]] static int unitWidth(const QString& text);
+
     // Get ErbLoader for signal connections
     ErbLoader& getErbLoader() { return m_erbLoader; }
     const ErbLoader& getErbLoader() const { return m_erbLoader; }
@@ -79,6 +92,8 @@ signals:
 
     // ---- 显示输出（由 EraEngine 接到 ConsoleBackend）----
     void consolePrint(const QString& text, bool newline);
+    // PRINTW 的「换行后等任意键」（对齐 C# PRINT_WAITINPUT -> Console.ReadAnyKey）
+    void requestAnyKey();
     // PRINTBUTTON：打印一段文本并把它变成按钮（值可为整数或字符串）
     void consolePrintButton(const QString& text, qint64 intValue, const QString& strValue, bool isString);
     void consoleClearLines(int count);
@@ -93,10 +108,11 @@ public:
     
 private:
     
-    // Handle basic instructions
-    bool handlePrint(const QList<Operand>& args, bool newline);
-    // 格式化串输出（PRINTFORM* → StrForm 求值）
-    bool handlePrintForm(const QList<Operand>& args, bool newline);
+    // PRINT 族统一出口（对齐 C# PRINT_Instruction）：形态由指令名后缀决定
+    bool handlePrintInstruction(const QString& name, const QList<Operand>& args);
+    // PRINTC / PRINTLC 的定宽列补齐（对齐 C# CreateTypeCString）
+    [[nodiscard]] QString padPrintC(const QString& text, bool padLeft) const;
+    [[nodiscard]] static int printCWidth(const QString& text);
     bool handleResetData();
     bool handleLoadGlobal();
     
@@ -107,7 +123,25 @@ private:
     bool handleCompoundAssignment(const QString& lhs, const QString& op, const QString& rhs);
     
     // Parse LHS (left-hand side) of assignment
+    // 兼容旧接口：返回 (名字, 第一个下标)（无下标时下标为 -1）
     QPair<QString, int> parseLHS(const QString& lhs);
+
+public:
+    // LHS 引用（支持 2D/3D 下标：`A:i:j` / `A:i:j:k` / `BAG:COUNT` / `BAG:(COUNT+1)`）
+    struct LhsRef {
+        QString    name;
+        QList<int> indices;
+        bool       valid = false;
+        [[nodiscard]] bool hasIndex() const { return !indices.isEmpty(); }
+        [[nodiscard]] int  first() const { return indices.isEmpty() ? 0 : indices.first(); }
+    };
+
+private:
+    [[nodiscard]] LhsRef parseLhsRef(const QString& lhs);
+    // 依据声明维度写入（1D/2D/3D）
+    void writeLhs(const LhsRef& ref, qint64 value);
+    [[nodiscard]] qint64 readLhs(const LhsRef& ref);
+    [[nodiscard]] int lhsDimension(const QString& name) const;
     
     // Helper methods
     void setError(const QString& message);
@@ -125,6 +159,9 @@ private:
     ExpressionEvaluator* m_expressionEvaluator = nullptr;
     
     bool m_running;
+    int m_printCLength = 25;      // PRINTC 一列的文字宽度（C# Config.PrintCLength）
+    QString m_drawLineString = QStringLiteral("-");   // C# Config.DrawLineString
+    int m_maxLineUnits = 84;      // 一行最多单位数（760px / 9px）
     int m_currentLine;
     QString m_currentScript;
     

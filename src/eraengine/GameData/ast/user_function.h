@@ -55,7 +55,10 @@ struct UserParamDecl {
     QString         name;           // 标签里的原始写法（用于显示/诊断）
     UserParamTarget target = UserParamTarget::Unknown;
     int             index = 0;      // ARG:/ARGS: 的下标；LocalVar 时=位置
-    QString         varName;        // LocalVar 时的变量名
+    QString         varName;        // LocalVar 时的变量名（`NAME:0` -> NAME）
+    // Emuera 允许形参写成数组元素：`@F(A:0, A:1)` —— 实参直接写进该元素
+    int             fixedIndex = -1;      // >=0 = 固定下标（元素形参）
+    QList<int>      fixedIndices;         // 多维形式（`A:0:1`）
     OperandType     type = OperandType::Unknown;   // Int/Str（LocalVar 由变量表回填）
     // 类型是否来自真实声明（ARG/ARGS 恒为 true；私有变量要有 #DIM/#DIMS 才算）。
     // 只有 typeKnown 的形参才参与「式中调用」的强类型校验 —— 未声明的名字

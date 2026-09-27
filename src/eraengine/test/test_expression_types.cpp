@@ -152,9 +152,11 @@ int main(int argc, char* argv[]) {
     check(sfPct && sfPct->parts().size() == 2
           && sfPct->parts()[0].type == StrFormPartType::Expression
           && sfPct->parts()[1].text == "円", "%VA%円 -> [Expr, Text(円)]");
+    // 格式串里的引号**只是普通字符**（对齐 C# AnalyseFormattedString）：
+    // 只有 @"…" 这种上下文才把 " 当终止符，所以这里引号照原样输出
     auto sfQuote = StrFormParser::parse("\"hello\" {VA}", nullptr);
     check(sfQuote && sfQuote->parts()[0].type == StrFormPartType::Text
-          && sfQuote->parts()[0].text == "hello ", "引号剥除为文本");
+          && sfQuote->parts()[0].text == "\"hello\" ", "引号原样保留为文本");
 
     qDebug() << "\n7) StrForm 求值";
     VariableStorage storage;

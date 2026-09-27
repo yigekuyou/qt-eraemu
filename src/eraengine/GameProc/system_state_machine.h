@@ -148,6 +148,8 @@ public:
     void waitMouseKey(int timeoutMs);
     // TONEINPUT time：限时输入；超时按默认值（RESULT=0）返回
     void waitTimedInput(int timeoutMs);
+    // PRINTW / WAITANYKEY：等待任意键（无超时，结果不使用）——对齐 C# Console.ReadAnyKey
+    void waitAnyKey();
 
     // C# Process.runSystemProc：对当前状态执行一次处理函数。
     void runSystemProc();

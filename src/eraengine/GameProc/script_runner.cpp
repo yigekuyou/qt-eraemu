@@ -271,6 +271,54 @@ ExecState ScriptRunner::executeLine(const LogicalLine& line) {
         advance();
         return ExecState::Continue;
     }
+    // ---- SELECTCASE（对齐 C# SELECTCASE_Instruction / CASE_Instruction）----
+    if (name == QLatin1String("SELECTCASE")) {
+        // 求值 -> 顺序比较各 CASE 行；命中就跳到该 CASE 的下一行
+        // 支持：`CASE v1, v2` / `CASE IS >= n` / `CASE a TO b` / `CASEELSE`
+        QVariant valueVar;
+        ExpressionEvaluator localEvaluator;
+        ExpressionEvaluator& ev = m_evaluator ? *m_evaluator : localEvaluator;
+        if (line.condition) {
+            valueVar = ev.evaluate(*line.condition, m_storage, baseData());
+        } else if (!line.arguments.isEmpty()) {
+            const Operand& op = line.arguments.first();
+            if (op.ast) {
+                valueVar = ev.evaluate(*op.ast, m_storage, baseData());
+            } else if (m_table) {
+                const QSharedPointer<ExpressionNode> ast = m_table->expressionAst(op.raw);
+                valueVar = ast ? ev.evaluate(*ast, m_storage, baseData())
+                               : QVariant::fromValue<qint64>(op.raw.toLongLong());
+            }
+        }
+        const qint64 value = valueVar.toLongLong();
+        const bool valueIsStr = (valueVar.typeId() == QMetaType::QString);
+
+        const QList<int> caseLines = m_table->ifBranches(script, pc);
+        for (int caseLine : caseLines) {
+            const LogicalLine* cl = m_table->lineAt(script, caseLine);
+            if (!cl) continue;
+            if (cl->is("CASEELSE")) {
+                gotoLine(caseLine + 1);          // 默认分支
+                return ExecState::Continue;
+            }
+            if (caseMatches(*cl, value, valueVar, valueIsStr)) {
+                gotoLine(caseLine + 1);
+                return ExecState::Continue;
+            }
+        }
+        gotoLine(m_table->jumpTarget(script, pc));   // 无命中 -> ENDSELECT 之后
+        return ExecState::Continue;
+    }
+    if (name == QLatin1String("CASE") || name == QLatin1String("CASEELSE")) {
+        // 顺序落入（上一个 CASE 体执行完）-> 跳到 ENDSELECT 之后
+        gotoLine(m_table->jumpTarget(script, pc));
+        return ExecState::Continue;
+    }
+    if (name == QLatin1String("ENDSELECT")) {
+        advance();
+        return ExecState::Continue;
+    }
+
     if (name == QLatin1String("SIF")) {
         bool cond = false;
         evalCondition(line, cond);
@@ -440,6 +488,8 @@ ExecState ScriptRunner::executeLine(const LogicalLine& line) {
         const QString label = line.arguments.isEmpty() ? QString() : line.arguments.first().raw;
         const UserFunctionDecl* info = m_table->userFunction(label);
         m_aliasStack.append(m_storage->localAliases());
+        // 顺序对齐 C#：先初始化函数私有变量的初值（#DIM X = 7），再写实参
+        m_table->applyPrivateVariableDefaults(label);
         bindArguments(info, line.arguments);
         if (label.isEmpty() || !m_table->callLabel(label)) {
             if (!m_aliasStack.isEmpty()) m_storage->setLocalAliases(m_aliasStack.takeLast());
@@ -447,8 +497,6 @@ ExecState ScriptRunner::executeLine(const LogicalLine& line) {
             emit errorOccurred(QStringLiteral("CALL label not found: %1").arg(label));
             return ExecState::Error;
         }
-        // 函数私有变量初值（#DIM X = 7）：每次进入函数时写入
-        m_table->applyPrivateVariableDefaults(label);
         return ExecState::Continue;
     }
     if (name == QLatin1String("RETURN") || name == QLatin1String("RETURNF")) {
@@ -638,6 +686,106 @@ ExecState ScriptRunner::executeLine(const LogicalLine& line) {
 //     其它名字   -> 函数私有变量：本移植把它登记为「名字 -> LOCAL[i]」别名
 //   （Emuera 里 ARG 就是 LOCAL 的整数数组、ARGS 是字符串数组，因此语义等价）
 // ---------------------------------------------------------------------------
+// ---------------------------------------------------------------------------
+// SELECTCASE 的 CASE 匹配（对齐 C# CASE_ArgumentBuilder / SelectCaseExpression）
+//   CASE v1, v2        -> 任一相等即命中
+//   CASE IS <op> expr  -> 用 value <op> expr 判定（op ∈ == != < > <= >=）
+//   CASE a TO b        -> a <= value <= b
+//   CASEELSE           -> 由调用方处理（默认分支）
+// 字符串 SELECTCASE 走字符串比较；数值走整数比较。
+// ---------------------------------------------------------------------------
+namespace {
+// 顶层逗号切分（跳过引号与括号嵌套）—— 供 CASE 的参数列表使用
+QStringList splitCaseArgs(const QString& text)
+{
+    QStringList out;
+    QString current;
+    int depth = 0;
+    QChar quote;
+    for (const QChar c : text) {
+        if (!quote.isNull()) {
+            current += c;
+            if (c == quote) quote = QChar();
+            continue;
+        }
+        if (c == QLatin1Char('"') || c == QLatin1Char('\'')) { quote = c; current += c; continue; }
+        if (c == QLatin1Char('(') || c == QLatin1Char('[')) { ++depth; current += c; continue; }
+        if (c == QLatin1Char(')') || c == QLatin1Char(']')) { --depth; current += c; continue; }
+        if (c == QLatin1Char(',') && depth == 0) { out.append(current); current.clear(); continue; }
+        current += c;
+    }
+    if (!current.trimmed().isEmpty()) out.append(current);
+    return out;
+}
+} // namespace
+
+bool ScriptRunner::caseMatches(const LogicalLine& caseLine, qint64 value,
+                               const QVariant& valueVar, bool valueIsStr)
+{
+    QString spec = caseLine.raw.trimmed();
+    // 去掉前导 'CASE'
+    if (spec.left(4).compare(QLatin1String("CASE"), Qt::CaseInsensitive) == 0) {
+        spec = spec.mid(4);
+    }
+    spec = spec.trimmed();
+    if (spec.isEmpty()) return false;
+
+    ExpressionEvaluator localEvaluator;
+    ExpressionEvaluator& ev = m_evaluator ? *m_evaluator : localEvaluator;
+    const auto evalText = [&](const QString& text) -> QVariant {
+        if (m_table) {
+            const QSharedPointer<ExpressionNode> ast = m_table->expressionAst(text);
+            if (ast) return ev.evaluate(*ast, m_storage, baseData());
+        }
+        return ev.evaluate(text, m_storage, baseData());
+    };
+
+    // `IS <op> expr`
+    if (spec.startsWith(QLatin1String("IS "))) {
+        const QString rest = spec.mid(3).trimmed();
+        static const QStringList ops = {"<=", ">=", "==", "!=", "<", ">"};
+        for (const QString& op : ops) {
+            if (!rest.startsWith(op)) continue;
+            const QString rhsText = rest.mid(op.size()).trimmed();
+            const QVariant rhs = evalText(rhsText);
+            const qint64 r = rhs.toLongLong();
+            if (op == "<=") return value <= r;
+            if (op == ">=") return value >= r;
+            if (op == "==") return value == r;
+            if (op == "!=") return value != r;
+            if (op == "<")  return value < r;
+            return value > r;
+        }
+        return false;
+    }
+
+    // `a TO b`（顶层）
+    {
+        const int toIdx = spec.indexOf(QLatin1String(" TO "));
+        if (toIdx > 0) {
+            const qint64 a = evalText(spec.left(toIdx).trimmed()).toLongLong();
+            const qint64 b = evalText(spec.mid(toIdx + 4).trimmed()).toLongLong();
+            const qint64 lo = qMin(a, b);
+            const qint64 hi = qMax(a, b);
+            return value >= lo && value <= hi;
+        }
+    }
+
+    // `v1, v2, …`
+    const QStringList parts = splitCaseArgs(spec);
+    for (const QString& part : parts) {
+        const QString t = part.trimmed();
+        if (t.isEmpty()) continue;
+        const QVariant cv = evalText(t);
+        if (valueIsStr || cv.typeId() == QMetaType::QString) {
+            if (cv.toString() == valueVar.toString()) return true;
+        } else if (cv.toLongLong() == value) {
+            return true;
+        }
+    }
+    return false;
+}
+
 qint64 ScriptRunner::readIntVar(const QString& name, int index) const {
     const QString upper = name.toUpper();
     if (upper == QLatin1String("LOCAL") || upper == QLatin1String("ARG")) {
@@ -745,6 +893,22 @@ void ScriptRunner::bindArguments(const UserFunctionDecl* info, const QList<Opera
             m_storage->setLocalAlias(p->name, p->index);
             break;
         case UserParamTarget::LocalVar:
+            if (p && p->fixedIndex >= 0) {
+                // 元素形参（`@F(A:0, A:1)`）：实参写进 A 的这个元素
+                const QString vn = p->varName;
+                const int dim = (m_table && m_table->variableTable().find(vn))
+                                    ? m_table->variableTable().find(vn)->dimension : 1;
+                if (p->type == OperandType::Str) {
+                    m_storage->setGlobalStr1D(vn, p->fixedIndex,
+                                              argIsString ? strValue : QString::number(intValue));
+                } else if (dim >= 2 && p->fixedIndices.size() >= 2) {
+                    m_storage->setGlobalInt2D(vn, p->fixedIndices.at(0), p->fixedIndices.at(1),
+                                              intValue);
+                } else {
+                    m_storage->setGlobalInt1D(vn, p->fixedIndex, intValue);
+                }
+                break;
+            }
             // 私有变量：整型写 LOCAL[position]，字符串写 LOCALS[position]，名字做别名
             if (p->type == OperandType::Str) {
                 m_storage->setLocalStr(position, argIsString ? strValue : QString::number(intValue));
@@ -809,6 +973,10 @@ bool ScriptRunner::invokeUserFunction(const QString& name, const QList<QVariant>
             m_storage->setLocalAlias(param->name, param->index);
             break;
         case UserParamTarget::LocalVar:
+            if (param->fixedIndex >= 0) {
+                m_storage->setGlobalInt1D(param->varName, param->fixedIndex, v.toLongLong());
+                break;
+            }
             m_storage->setLocalInt(i, v.toLongLong());
             if (isStr) m_storage->setLocalStr(i, v.toString());
             m_storage->setLocalAlias(param->varName.isEmpty() ? param->name : param->varName, i);

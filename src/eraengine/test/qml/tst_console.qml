@@ -55,26 +55,66 @@ TestCase {
         backend.clearAll();
     }
 
-    // 可见窗口重建：live item 数 == backend.visibleLineCount()
-    function test_windowRebuild() {
+    // 分层：text 层的区块数 == C++ 给的 textBlocks 数（C++ 说了算）
+    function test_layers() {
+        backend.clearAll();
         backend.print("A"); backend.newline();
         backend.print("B"); backend.newline();
         backend.print("C"); backend.newline();
-        backend.flush();                       // flush 点 -> windowChanged -> rebuild
+        backend.flush();
 
-        verify(backend.visibleLineCount() === 3, "visibleLineCount == 3");
-        compare(view.visibleCount, backend.visibleLineCount());
+        compare(view.textBlockCount, backend.textBlocks.length);
+        compare(view.imageBlockCount, backend.imageBlocks.length);
+        // 每行一个文本区块
+        verify(backend.textBlocks.length === 3, "3 行 -> 3 个文本区块");
     }
 
-    // 有界窗口：行数超过可见数时，只建 visibleCount 个 item
+    // 位置/尺寸来自 C++（绝对位置 x/y、相对位置 relX/relY、动态尺寸 w/h）
+    function test_blockGeometryFromCpp() {
+        backend.clearAll();
+        backend.print("hello");
+        backend.newline();
+        backend.flush();
+
+        const blocks = backend.textBlocks;
+        verify(blocks.length === 1, "1 个区块");
+        const b = blocks[0];
+        verify(b.col !== undefined && b.row !== undefined, "区块带绝对网格坐标 col/row");
+        verify(b.relCol !== undefined && b.relRow !== undefined, "区块带相对网格坐标 relCol/relRow");
+        verify(b.cols > 0 && b.rows > 0, "区块带格子数（单位：区块长/区块高）");
+
+        // 像素大小由 QML 决定：QML 用自己的 cell 宽高 × 格子数
+        const item = view.blockAt(0);
+        verify(item !== null, "no block item");
+        compare(item.x, b.col * view.cellWidth);
+        compare(item.y, b.row * view.cellHeight);
+        compare(item.width, b.cols * view.cellWidth);
+        compare(item.height, b.rows * view.cellHeight);
+    }
+
+    // 图片层：image 区块进 imageLayer
+    function test_imageLayer() {
+        backend.clearAll();
+        backend.print("A");
+        backend.printImage("face_01", 40, 40);
+        backend.newline();
+        backend.flush();
+
+        verify(backend.imageBlocks.length === 1, "1 个图片区块");
+        compare(view.imageBlockCount, 1);
+        compare(backend.imageBlocks[0].text, "face_01");
+    }
+
+    // 有界窗口：区块数随可见行数受控
     function test_boundedWindow() {
+        backend.clearAll();
         for (let i = 0; i < 50; ++i) {
             backend.print("line " + i);
             backend.newline();
         }
         backend.flush();
-        compare(view.visibleCount, backend.visibleCount);
-        verify(view.visibleCount <= 10);        // 200px / 20px
+        verify(backend.visibleLineCount() <= 10);       // 200px / 20px
+        compare(view.textBlockCount, backend.textBlocks.length);
     }
 
     // 按钮命中 -> ConsoleBackend::clickAt -> inputSubmitted
@@ -88,11 +128,12 @@ TestCase {
         backend.newline();
         backend.flush();
 
-        const line = view.lineAt(view.visibleCount - 1);
-        verify(line !== null && line !== undefined, "no line item");
+        const item = view.blockAt(0);
+        verify(item !== null && item !== undefined, "no block item");
+        compare(item.clickable, true, "区块应可点击");
 
-        const mouse = findChild(line, "spanButtonMouse");
-        verify(mouse !== null, "找不到按钮 MouseArea");
+        const mouse = findChild(item, "blockButtonMouse");
+        verify(mouse !== null, "找不到区块 MouseArea");
 
         mouseClick(mouse);
         compare(spy.count, 1, "点击应触发 1 次 inputSubmitted");

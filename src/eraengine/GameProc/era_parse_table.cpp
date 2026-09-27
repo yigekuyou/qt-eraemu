@@ -686,9 +686,16 @@ void EraParseTable::buildJumpMarkings(const QString& scriptName) {
         int startLine = -1;
         QString type;
     };
+    // SELECTCASE 组（对齐 C# SELECTCASE_Instruction.IfCaseList + CASE.JumpTo）
+    struct SelectInfo {
+        int selectLine = -1;
+        QList<int> caseLines;      // CASE / CASEELSE 行（按出现顺序）
+        int lastCase = -1;
+    };
 
     QList<IfInfo> ifStack;
     QList<LoopInfo> loopStack;
+    QList<SelectInfo> selectStack;
 
     for (int i = 0; i < data.lines.size(); ++i) {
         LogicalLine& ll = data.lines[i];
@@ -734,6 +741,37 @@ void EraParseTable::buildJumpMarkings(const QString& scriptName) {
                     data.jumpTo[b] = after;             // 顺序落入分支 -> 跳过到 ENDIF 之后
                     data.lines[b].jumpTo = after;
                 }
+            }
+        }
+        else if (name == QLatin1String("SELECTCASE")) {
+            selectStack.append({i, {}, -1});
+        }
+        else if (name == QLatin1String("CASE") || name == QLatin1String("CASEELSE")) {
+            if (!selectStack.isEmpty()) {
+                SelectInfo& cur = selectStack.last();
+                // 上一个 CASE 体结束 -> 直接跳到 ENDSELECT 之后（C# 是逐级跳到下一个 CASE）
+                if (cur.lastCase >= 0) {
+                    data.jumpTo[cur.lastCase] = -1;      // 占位，ENDSELECT 时统一填
+                    data.lines[cur.lastCase].jumpTo = -2; // 标记「待填」
+                }
+                cur.caseLines.append(i);
+                cur.lastCase = i;
+            }
+        }
+        else if (name == QLatin1String("ENDSELECT")) {
+            if (!selectStack.isEmpty()) {
+                const SelectInfo cur = selectStack.takeLast();
+                const int after = i + 1;
+                // 每个 CASE / CASEELSE 顺序落入 -> 跳到 ENDSELECT 之后
+                for (int c : cur.caseLines) {
+                    data.jumpTo[c] = after;
+                    data.lines[c].jumpTo = after;
+                }
+                // SELECTCASE 的默认目标（无 CASE 命中）
+                data.jumpTo[cur.selectLine] = after;
+                data.jumpToEnd[cur.selectLine] = i;      // ENDSELECT 行
+                data.lines[cur.selectLine].jumpTo = after;
+                data.ifBranches[cur.selectLine] = cur.caseLines;
             }
         }
         else if (name == QLatin1String("REPEAT") || name == QLatin1String("WHILE")
@@ -821,7 +859,9 @@ void EraParseTable::parseVariableDeclaration(const LogicalLine& line, const QStr
             if (d.typeIsStr) {
                 if (!d.defaultStr.isEmpty()) m_variables.setConstStr(d.name, d.defaultStr.first());
             } else if (!d.defaultInt.isEmpty()) {
-                m_variables.setConstInt(d.name, d.defaultInt.first());
+                // 常数**数组**（`#DIM CONST NAME, N = v0, v1, …`）也要存下来，
+                // 供 `NAME:i` 的下标访问使用；标量常数取第一个值
+                m_variables.setConstArray(d.name, d.defaultInt);
             }
         }
 
@@ -901,6 +941,16 @@ void EraParseTable::finalizeParse() {
             QString sv;
             if (vt->constStr(name, sv)) { out = QVariant(sv); return true; }
             return false;
+        });
+        // 常数数组（`#DIM CONST X, N = …`）：先判名（避免下标副作用被求两遍）
+        m_evaluator->setConstArrayChecker([vt](const QString& name) -> bool {
+            return vt->constArraySize(name) > 0;
+        });
+        m_evaluator->setConstArrayProvider([vt](const QString& name, int index, QVariant& out) -> bool {
+            qint64 iv = 0;
+            if (!vt->constArrayAt(name, index, iv)) return false;
+            out = QVariant::fromValue<qint64>(iv);
+            return true;
         });
     }
     applyGlobalVariableDefaults();   // #DIM X = 1 等初值（全局）

@@ -117,23 +117,108 @@ bool AstBuilder::isCallFamilyInstruction(const QString& upperName) {
 //   PRINT…(FORM)  -> FORM_STR_NULLABLE 格式化串（文本 + {…}/%…%）
 //   PRINT…(其它)  -> STR_NULLABLE     整行**字面文本**（不是表达式！）
 // 最后一条很关键：eramaker 风格的 `PRINTL [0] 结缘(\1000)` 整行是文本。
-AstBuilder::PrintArgMode AstBuilder::classifyPrintArg(const QString& upperName) {
-    QString rest;
-    if (upperName.startsWith(QLatin1String("PRINTPLAINFORM"))) return PrintArgMode::Literal;
-    if (upperName.startsWith(QLatin1String("PRINTPLAIN"))) return PrintArgMode::Literal;
-    if (upperName.startsWith(QLatin1String("PRINTSINGLE"))) rest = upperName.mid(11);
-    else if (upperName.startsWith(QLatin1String("PRINT"))) rest = upperName.mid(5);
-    else return PrintArgMode::NotPrint;
+AstBuilder::PrintArgInfo AstBuilder::printInfo(const QString& upperName) {
+    PrintArgInfo info;
 
-    // 排除 PRINTBUTTON / PRINTDATA（各自有专用参数族）
-    for (const QChar c : rest) {
-        if (!QLatin1String("VSLWCKDFORM").contains(c)) return PrintArgMode::NotPrint;
+    // PRINTPLAIN / PRINTPLAINFORM：C# 里是独立注册的函数（STR_NULLABLE /
+    // FORM_STR_NULLABLE），参数形态与 PRINT / PRINTFORM 相同
+    if (upperName.startsWith(QLatin1String("PRINTPLAINFORM"))) {
+        info.mode = PrintArgMode::FormStr;
+        return info;
     }
-    if (rest.startsWith(QLatin1String("FORMS"))) return PrintArgMode::StrExpression;
-    if (rest.startsWith(QLatin1String("FORM"))) return PrintArgMode::FormStr;
-    if (rest.startsWith(QLatin1Char('V'))) return PrintArgMode::PrintV;
-    if (rest.startsWith(QLatin1Char('S'))) return PrintArgMode::StrExpression;
-    return PrintArgMode::Literal;
+    if (upperName.startsWith(QLatin1String("PRINTPLAIN"))) {
+        info.mode = PrintArgMode::Literal;
+        return info;
+    }
+
+    // C#: StringStream st(name); st.Jump(5/*PRINT*/);
+    QString rest;
+    if (upperName.startsWith(QLatin1String("PRINTSINGLE"))) {
+        info.mode = PrintArgMode::Literal;      // PRINT_SINGLE + EXTENDED
+        rest = upperName.mid(11);
+    } else if (upperName.startsWith(QLatin1String("PRINT"))) {
+        rest = upperName.mid(5);
+    } else {
+        return info;                            // NotPrint
+    }
+
+    // 排除 PRINTBUTTON / PRINTDATA / PRINTCPERLINE 等同前缀指令
+    // （C# 是「补后缀后必须恰好到 EOS」，非 PRINT 族后缀会抛 PRINT異常）
+    for (const QChar c : rest) {
+        if (!QLatin1String("VSLWCKDFORM").contains(c)) return PrintArgInfo{};
+    }
+
+    // ---- 参数形态（顺序同 C#：V / S / FORMS / FORM / 其余）----
+    if (rest.startsWith(QLatin1String("FORMS"))) {
+        info.mode = PrintArgMode::StrExpression;
+        info.forms = true;
+        rest = rest.mid(5);
+    } else if (rest.startsWith(QLatin1String("FORM"))) {
+        info.mode = PrintArgMode::FormStr;
+        rest = rest.mid(4);
+    } else if (rest.startsWith(QLatin1Char('V'))) {
+        info.mode = PrintArgMode::PrintV;
+        rest = rest.mid(1);
+    } else if (rest.startsWith(QLatin1Char('S'))) {
+        info.mode = PrintArgMode::StrExpression;
+        rest = rest.mid(1);
+    } else {
+        info.mode = PrintArgMode::Literal;
+    }
+
+    // ---- 尾部开关（C# 顺序：LC / C，然后 K，D，L / W）----
+    if (rest.startsWith(QLatin1String("LC"))) {
+        info.clearPad = true;
+        info.padLeft = false;
+        rest = rest.mid(2);
+    } else if (rest.startsWith(QLatin1Char('C'))) {
+        info.clearPad = true;
+        info.padLeft = true;
+        rest = rest.mid(1);
+    }
+    if (rest.startsWith(QLatin1Char('K'))) rest = rest.mid(1);
+    if (rest.startsWith(QLatin1Char('D'))) {
+        info.debug = true;
+        rest = rest.mid(1);
+    }
+    if (rest.startsWith(QLatin1Char('L'))) {
+        info.newline = true;
+        rest = rest.mid(1);
+    } else if (rest.startsWith(QLatin1Char('W'))) {
+        info.newline = true;
+        info.waitInput = true;
+        rest = rest.mid(1);
+    }
+    if (!rest.isEmpty()) return PrintArgInfo{};   // 后缀没吃干净 -> 不是 PRINT 族
+    return info;
+}
+
+AstBuilder::PrintArgMode AstBuilder::classifyPrintArg(const QString& upperName) {
+    return printInfo(upperName).mode;
+}
+
+// 是否是「已知指令名」（规范表 + PRINT 族 + CALL 族 + 少数控制流）
+bool AstBuilder::isKnownInstructionName(const QString& upperName) {
+    if (upperName.isEmpty()) return false;
+    if (findInstructionSpec(upperName.toStdString())) return true;      // 指令规范表
+    if (printInfo(upperName).mode != PrintArgMode::NotPrint) return true; // PRINT 族
+    if (isCallFamilyInstruction(upperName)) return true;                // CALL/JUMP/BEGIN
+    static const char* kExtra[] = {
+        "FORM", "CHKFONT", "SETCOLOR", "RESETCOLOR", "ALIGNMENT", "REDRAW",
+        "NEWLINE", "PRINTDATA", "PRINTDATAL", "PRINTDATAW", "PRINTBUTTONLC",
+        "DOUBLEPRINT", "DEBUGPRINT", "HTML_PRINT", "HTML_TAGSPLIT",
+    };
+    for (const char* n : kExtra) {
+        if (upperName == QLatin1String(n)) return true;
+    }
+    // 以 PRINT / DEBUGPRINT / HTML_PRINT / CALL / JUMP / TRY / GOTO 开头的一律按指令
+    static const char* kPrefixes[] = {"PRINT", "DEBUGPRINT", "HTML_PRINT",
+                                      "CALL", "JUMP", "TRYCALL", "TRYJUMP",
+                                      "GOTO", "TRYGOTO", "CALLEVENT", "TRYCALLEVENT"};
+    for (const char* p : kPrefixes) {
+        if (upperName.startsWith(QLatin1String(p))) return true;
+    }
+    return false;
 }
 
 bool AstBuilder::isStrFormInstruction(const QString& upperName) {
@@ -326,10 +411,13 @@ bool AstBuilder::splitAssignment(const QString& line, QString& lhs, QString& op,
             continue;
         }
 
-        // LHS 必须是不含空白的单个符号（含空白说明是 IF/PRINT 等指令）
+        // LHS 必须非空；**允许含空白**（Emuera 的赋值 LHS 可以是
+        // `ステージ:(ステージ幅 - 1):(LOCAL:0)` 这种带空格的表达式下标）。
+        // 「= 出现在指令行里」的情况由 build() 的「首 token 是否指令名」拦掉。
         if (lhs.isEmpty()) return false;
-        for (const QChar c : lhs) {
-            if (c.isSpace()) return false;
+        const QChar head = lhs.at(0);
+        if (!(head.isLetter() || head == QLatin1Char('_') || head.unicode() > 127)) {
+            return false;                        // 必须以标识符开头
         }
         return true;
     }
@@ -386,8 +474,16 @@ LogicalLine AstBuilder::build(const QString& rawLine,
     line.raw = rawLine;
     line.position = position;
 
+    // 防御：调用方可能传入带行终止符的行（CRLF）。C# 的行永远不会带 CR。
+    QString raw = rawLine;
+    if (raw.endsWith(QLatin1Char('\r'))) raw.chop(1);
+
     // ';' 之后是注释（字符串内除外）
-    const QString trimmed = stripLineComment(rawLine).trimmed();
+    // 注意：行尾空白**不能**在这里就丢掉 —— PRINT 族的字面文本参数是
+    // 「命令名之后原样到行尾」（C# STR_ArgumentBuilder -> StringStream.Substring），
+    // eraTetris/eraTW 用 `PRINT 　　　　SCORE 　　　　　　　　` 这类尾随全角空格做列对齐。
+    const QString source = stripLineComment(raw);
+    const QString trimmed = source.trimmed();
 
     // 空行 / 注释（C# NullLine）
     if (trimmed.isEmpty() || trimmed.startsWith(';')) {
@@ -447,8 +543,16 @@ LogicalLine AstBuilder::build(const QString& rawLine,
     }
 
     // 赋值语句（函数名 = 特例：AssignOperator）
+    // 先看首个 token 是不是「已知指令名」：是则走命令文（对齐 C# LogicalLineParser
+    // 先查函数名表）；否则按赋值解 —— 这样 `ステージ:(ステージ幅 - 1):i = v`
+    // 这类 **LHS 含空白** 的赋值才能被识别，而 `PRINTFORML a = b` 仍是指令。
+    const WordCollection wcHead = tokenize(trimmed);
+    bool firstIsInstruction = false;
+    if (!wcHead.isEmpty() && wcHead.words().first().kind == WordKind::Identifier) {
+        firstIsInstruction = isKnownInstructionName(wcHead.words().first().text.toUpper());
+    }
     QString lhs, op, rhs;
-    if (splitAssignment(trimmed, lhs, op, rhs)) {
+    if (!firstIsInstruction && splitAssignment(trimmed, lhs, op, rhs)) {
         line.kind = LineKind::Instruction;
         line.functionName = op;
         line.assignOperator = op;
@@ -457,6 +561,23 @@ LogicalLine AstBuilder::build(const QString& rawLine,
         if (resolve) value.ast = resolve(rhs);
         line.arguments = { dest, value };
         return finalized(std::move(line));
+    }
+
+    // 后缀自增/自减**语句**：`I++` / `BAG:COUNT--`
+    // （对齐 C# LogicalLineParser 的 SETFunction + OperatorCode.Increment/Decrement）
+    if (!firstIsInstruction) {
+        for (const char* opText : {"++", "--"}) {
+            if (!trimmed.endsWith(QLatin1String(opText))) continue;
+            const QString body = trimmed.left(trimmed.size() - 2).trimmed();
+            if (body.isEmpty() || body.contains(QLatin1Char('='))) continue;
+            const QChar head = body.at(0);
+            if (!(head.isLetter() || head == QLatin1Char('_') || head.unicode() > 127)) continue;
+            line.kind = LineKind::Instruction;
+            line.functionName = QString::fromLatin1(opText);
+            line.assignOperator = line.functionName;
+            line.arguments = { Operand(body) };
+            return finalized(std::move(line));
+        }
     }
 
     // 命令文
@@ -507,15 +628,58 @@ LogicalLine AstBuilder::build(const QString& rawLine,
         return finalized(std::move(line));
     }
 
-    // 纯文本打印指令（PRINT/PRINTL/PRINTC/PRINTSINGLE/PRINTPLAIN…）：
-    // 整行剩余部分就是**字面文本**，不做表达式归约（对齐 C# STR_ArgumentBuilder）
-    if (classifyPrintArg(line.functionName) == PrintArgMode::Literal) {
-        // C# 只吞掉命令名后的**一个**字符（通常是空格），其余原样作为文本
-        QString rest = trimmed.mid(first.text.length());
+    // ---- PRINT 族（对齐 C# PRINT_Instruction：参数形态由**指令名后缀**决定）----
+    //
+    //   PRINT / PRINTL / PRINTW / PRINTC / PRINTSINGLE / PRINTPLAIN …
+    //        整行剩余部分就是**字面文本**（C# STR_ArgumentBuilder），不做表达式归约；
+    //   PRINTS / PRINTSL / PRINTFORMS …
+    //        整行剩余部分是**一个**字符串表达式（C# STR_EXPRESSION，只按顶层逗号分项）；
+    //   PRINTFORM* / PRINTPLAINFORM
+    //        整行剩余部分是**一个**格式化串（C# FORM_STR，文本 + {…}/%…%）；
+    //   PRINTV*
+    //        落到下面的通用路径（C# SP_PRINTV：按顶层逗号/空白分项）。
+    const PrintArgInfo printInfo = AstBuilder::printInfo(line.functionName);
+    if (printInfo.mode != PrintArgMode::NotPrint
+        && printInfo.mode != PrintArgMode::PrintV) {
+        // 「命令名之后到行尾」的原文。行尾空白必须保留：eraTetris 用
+        // `PRINT 　　　　SCORE 　　　　　　　　` 的尾随全角空格做列对齐。
+        int ls = 0;
+        while (ls < source.size() && source.at(ls).isSpace()) ++ls;
+        QString rest = source.mid(ls).mid(first.text.length());
         if (!rest.isEmpty() && rest.at(0).isSpace()) rest = rest.mid(1);
-        Operand operand(rest);
-        operand.isString = true;      // 字面文本（引号也照样输出，C# 不剥引号）
-        line.arguments.append(operand);
+
+        if (printInfo.mode == PrintArgMode::Literal) {
+            Operand operand(rest);
+            operand.isString = true;      // 字面文本（含引号，C# 不剥引号）
+            line.arguments.append(operand);
+            return finalized(std::move(line));
+        }
+        // 表达式 / 格式化串：只去掉行尾多余的逗号，保留空白（用于列对齐）
+        // C# STR_EXPRESSION / FORM_STR 也是从命令名之后到行尾，不修剪空白。
+        QString expr = rest;
+        while (expr.endsWith(QLatin1Char(','))) {
+            expr.chop(1);
+        }
+        if (printInfo.mode == PrintArgMode::FormStr) {
+            if (!expr.isEmpty()) {
+                Operand operand(expr);
+                if (resolve) operand.ast = StrFormParser::parse(expr, resolve);
+                line.arguments.append(operand);
+            }
+            return finalized(std::move(line));
+        }
+        // StrExpression（含 FORMS：结果在运行期再当格式串展开）
+        if (!expr.isEmpty()) {
+            Operand operand(expr);
+            if (expr.length() >= 2 && expr.startsWith(QLatin1Char('"'))
+                && expr.endsWith(QLatin1Char('"'))) {
+                operand.isString = true;
+                operand.raw = expr.mid(1, expr.length() - 2);
+            } else if (resolve) {
+                operand.ast = resolve(expr);
+            }
+            line.arguments.append(operand);
+        }
         return finalized(std::move(line));
     }
 

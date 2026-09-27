@@ -25,6 +25,7 @@
 #include <functional>
 
 #include "expression_ast.h"
+#include "../mt19937.h"
 #include "text_encoding.h"
 
 class VariableStorage; // Forward declaration
@@ -85,6 +86,30 @@ public:
     using CharaCountProvider = std::function<int()>;
     void setCharaCountProvider(CharaCountProvider provider) { m_charaNumProvider = std::move(provider); }
     void setLineCountProvider(LineCountProvider provider) { m_lineCountProvider = std::move(provider); }
+
+    // `#DIM CONST NAME, N = …` 常数数组的下标查询（注入自 VariableTable）
+    //   * checker：只判断名字是不是常数数组（**必须能不求值下标**，
+    //     否则 `BAG:(I++)` 的下标会被求值两次、副作用算两遍）；
+    //   * provider：命中后再按下标取值。
+    using ConstArrayProvider = std::function<bool(const QString&, int, QVariant&)>;
+    using ConstArrayChecker  = std::function<bool(const QString&)>;
+    void setConstArrayProvider(ConstArrayProvider p) { m_constArrayProvider = std::move(p); }
+    void setConstArrayChecker(ConstArrayChecker c) { m_constArrayChecker = std::move(c); }
+
+    // 变量声明维度（1/2/3）：由 EraParseTable 的 VariableTable 注入
+    using VariableDimProvider = std::function<int(const QString&)>;
+    void setVariableDimProvider(VariableDimProvider p) { m_variableDimProvider = std::move(p); }
+    [[nodiscard]] int variableDimension(const QString& name) const;
+    [[nodiscard]] QList<int> resolveIndices(const VariableNode& node, VariableStorage* storage,
+                                            GameBaseData* gameBaseData);
+
+    // ---- 随机数（对齐 C# VariableEvaluator + MTRandom/MT19937）----
+    //   启动时用系统随机源产生种子；RANDOMIZE / setRandomSeed 可复现。
+    [[nodiscard]] Mt19937& random() { return m_rand; }
+    [[nodiscard]] const Mt19937& random() const { return m_rand; }
+    void setRandomSeed(quint32 seed) { m_rand.reseed(seed); }
+    [[nodiscard]] quint32 randomSeed() const { return m_rand.seedUsed(); }
+    void randomize() { m_rand.reseed(Mt19937::randomSeed()); }
 
 signals:
     void evaluationFinished(const QString &expression, const QVariant &result);
@@ -149,6 +174,10 @@ private:
     ConfigProvider m_configProvider;
     CharaCountProvider m_charaNumProvider;
     LineCountProvider m_lineCountProvider;
+    Mt19937 m_rand;                       // MT19937（启动时随机种子）
+    VariableDimProvider m_variableDimProvider;
+    ConstArrayProvider  m_constArrayProvider;
+    ConstArrayChecker   m_constArrayChecker;
     const ConstantTable* m_constantTable = nullptr;
     TextEncoding m_langEncoding = TextEncoding::ShiftJis;
     ConstProvider m_constProvider;   // #DIM CONST

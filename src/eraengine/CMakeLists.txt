@@ -47,6 +47,8 @@ GameData/file_system_io.cpp
 GameData/file_system_io.h
 GameData/game_base_data.cpp
 GameData/game_base_data.h
+GameData/mt19937.cpp
+GameData/mt19937.h
 
 GameData/identifier_dictionary.cpp
 GameData/identifier_dictionary.h
@@ -110,6 +112,12 @@ GameView/rendering_system.cpp
 GameView/rendering_system.h
 GameView/console_types.h
 GameView/console_buffer.h
+GameView/console_layout.cpp
+GameView/console_layout.h
+GameView/button_string_creator.cpp
+GameView/button_string_creator.h
+GameView/console_plane.cpp
+GameView/console_plane.h
 GameView/console_backend.cpp
 GameView/console_backend.h
 GameView/gui_manager.cpp
@@ -170,6 +178,7 @@ eraengine_add_test(test_era_parse_table)
 eraengine_add_test(test_parse_table_ast)
 eraengine_add_test(test_execution_chain)
 eraengine_add_test(test_console_backend)
+eraengine_add_test(test_console_plane)
 eraengine_add_test(test_gui_manager)
 eraengine_add_test(test_resource_image)
 eraengine_add_test(test_system_flow)
@@ -188,6 +197,8 @@ eraengine_add_test(test_sjis_game)
 eraengine_add_test(test_encoding_probe)
 eraengine_add_test(test_game_base_data)
 eraengine_add_test(test_variable_storage)
+eraengine_add_test(test_print_whitespace)
+target_link_libraries(test_print_whitespace PRIVATE Qt6::Test)
 
 # 需要外部目录参数的诊断/回归工具（编译校验，不进 CTest）
 eraengine_add_test(test_erb_loader)
@@ -212,6 +223,7 @@ add_test(NAME test_era_parse_table COMMAND test_era_parse_table)
 add_test(NAME test_parse_table_ast COMMAND test_parse_table_ast)
 add_test(NAME test_execution_chain COMMAND test_execution_chain)
 add_test(NAME test_console_backend COMMAND test_console_backend)
+add_test(NAME test_console_plane COMMAND test_console_plane)
 add_test(NAME test_gui_manager COMMAND test_gui_manager)
 add_test(NAME test_resource_image COMMAND test_resource_image)
 add_test(NAME test_system_flow COMMAND test_system_flow)
@@ -227,6 +239,7 @@ add_test(NAME test_erb_preprocessor COMMAND test_erb_preprocessor)
 add_test(NAME test_text_encoding COMMAND test_text_encoding)
 add_test(NAME test_sjis_game COMMAND test_sjis_game)
 add_test(NAME test_encoding_probe COMMAND test_encoding_probe)
+add_test(NAME test_print_whitespace COMMAND test_print_whitespace)
 
 # 诊断工具：导出全部装载告警
 eraengine_add_test(dump_warnings)

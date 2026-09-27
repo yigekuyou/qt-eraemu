@@ -109,8 +109,8 @@ int main(int argc, char* argv[]) {
     check(st == ExecState::Halt, "脚本正常结束（无死循环）");
 
     qDebug() << "\n1) 自增副作用与后置语义";
-    check(storage.getGlobalInt1D("A", 0) == 10, "A = BAG:(I++) -> 10（旧值）");
-    check(storage.getGlobalInt1D("B", 0) == 20, "B = BAG:(I++) -> 20（旧值）");
+    check(storage.getSystemVariable("A", 0) == 10, "A = BAG:(I++) -> 10（旧值）");
+    check(storage.getSystemVariable("B", 0) == 20, "B = BAG:(I++) -> 20（旧值）");
     check(storage.getGlobalInt1D("I", 0) == 2, "I 自增两次 -> 2（副作用生效）");
 
     qDebug() << "\n2) SWAP / 变量下标赋值";

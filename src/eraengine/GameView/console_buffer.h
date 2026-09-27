@@ -22,68 +22,80 @@
 #include "console_types.h"
 
 // ---------------------------------------------------------------------------
-// ConsoleBuffer —— 有界的显示行缓冲（环形语义）
+// ConsoleBuffer —— 有界的显示行缓冲
 //
-// 历史不可能全显示，也不需要全保留：超过容量就丢弃最旧的行。
-// 滚动只是在这个有界窗口内移动视图（见 ConsoleBackend）。
+// 对齐 C# EmueraConsole.displayLineList：
+//   * appendLine：追加一行（超过容量丢最旧，C# 是 displayLineList.RemoveAt(0)）；
+//   * removeLastLogicalLines(n)：CLEARLINE 的实体（C# deleteLine）——
+//     从尾部弹，**只数 IsLogicalLine 的行**，折行产生的续行被删掉但不计数；
+//   * lineCount()：逻辑行总数（C# logicalLineCount，也就是 LINECOUNT）。
+//
+// 注意：C# 的 MaxLog 裁剪**不会**回退 logicalLineCount，这里同样保持
+// 「逻辑行计数只增不减（除 deleteLine）」的语义。
 // ---------------------------------------------------------------------------
 class ConsoleBuffer {
 public:
-    explicit ConsoleBuffer(int capacity = 2000) : m_capacity(capacity > 0 ? capacity : 1) {}
+    explicit ConsoleBuffer(int capacity = 5000) : m_capacity(capacity > 0 ? capacity : 1) {}
 
     void setCapacity(int capacity) {
         m_capacity = capacity > 0 ? capacity : 1;
         trim();
     }
-    int capacity() const { return m_capacity; }
-    int count() const { return m_lines.size(); }
+    int  capacity() const { return m_capacity; }
+    int  count() const { return m_lines.size(); }
     bool isEmpty() const { return m_lines.isEmpty(); }
 
     const ConsoleDisplayLine& at(int index) const { return m_lines.at(index); }
     const QList<ConsoleDisplayLine>& lines() const { return m_lines; }
 
-    // 追加 span 到当前（最后一行）
-    void appendSpanToLast(const ConsoleSpan& span) {
-        if (m_lines.isEmpty()) {
-            m_lines.append(ConsoleDisplayLine());
-        }
-        m_lines.last().spans.append(span);
-    }
-
     ConsoleDisplayLine& lastMutable() { return m_lines.last(); }
 
     void appendLine(const ConsoleDisplayLine& line) {
         m_lines.append(line);
+        if (line.isLogicalLine) ++m_logicalCount;
         trim();
     }
 
     void replaceLast(const ConsoleDisplayLine& line) {
         if (m_lines.isEmpty()) {
-            m_lines.append(line);
-        } else {
-            m_lines.last() = line;
+            appendLine(line);
+            return;
+        }
+        if (m_lines.last().isLogicalLine) --m_logicalCount;
+        m_lines.last() = line;
+        if (line.isLogicalLine) ++m_logicalCount;
+    }
+
+    // CLEARLINE：从尾部删掉 n 个**逻辑行**（连同其折行续行）
+    void removeLastLogicalLines(int n) {
+        int deleted = 0;
+        while (deleted < n && !m_lines.isEmpty()) {
+            const bool logical = m_lines.last().isLogicalLine;
+            m_lines.removeLast();
+            if (logical) {
+                ++deleted;
+                if (m_logicalCount > 0) --m_logicalCount;
+            }
         }
     }
 
-    // CLEARLINE：删除末尾 n 行
-    void removeLast(int n) {
-        if (n <= 0) return;
-        if (n >= m_lines.size()) m_lines.clear();
-        else m_lines.erase(m_lines.end() - n, m_lines.end());
+    void clear() {
+        m_lines.clear();
+        m_logicalCount = 0;
     }
 
-    void clear() { m_lines.clear(); }
+    // 逻辑行计数 = C# logicalLineCount = LINECOUNT
+    int logicalLineCount() const { return m_logicalCount; }
 
 private:
     void trim() {
         const int overflow = m_lines.size() - m_capacity;
-        if (overflow > 0) {
-            m_lines.erase(m_lines.begin(), m_lines.begin() + overflow);
-        }
+        if (overflow > 0) m_lines.erase(m_lines.begin(), m_lines.begin() + overflow);
     }
 
     QList<ConsoleDisplayLine> m_lines;
     int m_capacity;
+    int m_logicalCount = 0;
 };
 
 #endif // CONSOLE_BUFFER_H

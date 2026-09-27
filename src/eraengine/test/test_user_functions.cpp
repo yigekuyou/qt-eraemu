@@ -193,7 +193,7 @@ int main(int argc, char* argv[]) {
     check(storage.getGlobalInt1D("OUT1", 0) == 3, "ARG 收到第 1 个实参 3（ARG 目标）");
     check(storage.getGlobalInt1D("OUT2", 0) == 2,
           "ARGS 收到第 2 个实参 \"hi\"（STRLENS == 2）");
-    check(storage.getGlobalInt1D("LOCAL", 0) == 40, "式中调用 INT_FN(4) -> 40");
+    check(storage.getLocalInt(0) == 40, "式中调用 INT_FN(4) -> 40（LOCAL 是用户函数局部槽）");
 
     // =====================================================================
     qDebug() << "\n5) 实参个数校验（解析期）";

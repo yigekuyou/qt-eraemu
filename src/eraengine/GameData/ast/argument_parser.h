@@ -96,6 +96,7 @@ inline constexpr auto kInstructionSpecs = std::to_array<InstructionSpec>({
     {"WAIT",         ArgKind::Void,          0,  0},
     {"WAITANYKEY",   ArgKind::Void,          0,  0},
     {"AWAIT",        ArgKind::IntExpression, 0,  1},
+    {"RANDOMIZE",    ArgKind::IntExpression, 1,  1},
     {"BEGIN",        ArgKind::Raw,           1,  1},
     {"QUIT",         ArgKind::Void,          0,  0},
     {"SETS",         ArgKind::VarSet,        1,  2},

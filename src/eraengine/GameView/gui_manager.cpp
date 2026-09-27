@@ -239,6 +239,10 @@ void GuiManager::applyToConsole() {
     if (!m_console) return;
     m_console->setFrameMs(frameMs());
     m_console->setMaxLog(m_maxLog);
+    // 排版参数：C++ 依据这些**动态重算**每个最小单位区块的位置与尺寸
+    m_console->setFontSize(m_fontSize);
+    m_console->setLineHeight(m_lineHeight);
+    m_console->setWindowWidth(m_windowWidth);
 }
 
 bool GuiManager::saveLog(const QString& path) {

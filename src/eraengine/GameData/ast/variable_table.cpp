@@ -225,3 +225,25 @@ void VariableTable::resolveDimensions() {
         for (auto& d : f) fix(d);
     }
 }
+
+void VariableTable::setConstArray(const QString& name, const QList<qint64>& values)
+{
+    m_constArray.insert(name, values);
+    if (!values.isEmpty()) m_constInt.insert(name, values.first());
+}
+
+bool VariableTable::constArrayAt(const QString& name, int index, qint64& out) const
+{
+    auto it = m_constArray.constFind(name);
+    if (it == m_constArray.constEnd()) return false;
+    if (!m_constArray.constFind(name.toUpper()).key().isEmpty()) { /* 大小写不敏感回退 */ }
+    if (index < 0 || index >= it.value().size()) return false;
+    out = it.value().at(index);
+    return true;
+}
+
+int VariableTable::constArraySize(const QString& name) const
+{
+    auto it = m_constArray.constFind(name);
+    return (it == m_constArray.constEnd()) ? 0 : it.value().size();
+}

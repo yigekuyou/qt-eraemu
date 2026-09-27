@@ -170,7 +170,9 @@ int main(int argc, char* argv[]) {
     runner.runToCompletion();
     check(printed.size() == 3, "PRINTFORML + PRINT + PRINTFORM -> 3 consolePrint");
     if (printed.size() == 3) {
-        check(printed[0].first == "hello" && printed[0].second, "PRINTFORML(\"hello\") newline=true");
+        // 格式串里的引号只是普通字符（对齐 C# AnalyseFormattedString），会一起输出
+        check(printed[0].first == "\"hello\"" && printed[0].second,
+              "PRINTFORML \"hello\" -> 原样输出 \"hello\"（引号非格式符）");
         check(printed[1].first == "world" && !printed[1].second, "PRINT world newline=false（纯文本打印）");
         check(printed[2].first == "HP=3" && printed[2].second, "PRINTFORML HP={VA} -> StrForm 求值 HP=3");
     }

@@ -34,6 +34,7 @@
 #include <QTime>
 #include <QVector>
 #include <cmath>
+#include <cstdio>
 #include <utility>
 
 namespace {
@@ -41,6 +42,208 @@ namespace {
 inline bool isRuntimeString(const QVariant& v) noexcept {
     const int id = v.typeId();
     return id == QMetaType::QString || id == QMetaType::QChar;
+}
+
+// ---------------------------------------------------------------------------
+// TOSTR 的第 2 参数：.NET 数字格式串（C# `i.ToString(format)`）
+//
+// Erb 里的 TOSTR 直接转发给 .NET，所以语义必须对齐。这里实现 ERB 实际会用到的
+// 子集：
+//   标准说明符  D/d 十进制补零、X/x 十六进制、N/n 千分位、F/f 定点、G/g、
+//               P/p 百分比、E/e 科学计数
+//   自定义      #（可选位）0（必需位）. ,（分组 / 末尾逗号 = 除 1000）
+//               % / ‰（放大的字面量）\ 转义 "…"/'…' 字面量 ; 分正/负/零段
+// 例：`TOSTR(1234, "0000000000")` -> "0000001234"
+//     `TOSTR(1234567, "#,###")`   -> "1,234,567"
+// ---------------------------------------------------------------------------
+
+// 千分位分组
+QString groupThousands(const QString& digits) {
+    QString g;
+    for (int i = digits.size(); i > 0; i -= 3) {
+        const int from = qMax(0, i - 3);
+        g.prepend(digits.mid(from, i - from));
+        if (from > 0) g.prepend(QLatin1Char(','));
+    }
+    return g;
+}
+
+QString fixedNumber(qint64 value, int decimals, bool grouping) {
+    const bool neg = value < 0;
+    const quint64 absV = neg ? (quint64(0) - quint64(value)) : quint64(value);
+    QString digits = QString::number(absV);
+    if (grouping) digits = groupThousands(digits);
+    if (decimals > 0) digits += QLatin1Char('.') + QString(decimals, QLatin1Char('0'));
+    if (neg) digits.prepend(QLatin1Char('-'));
+    return digits;
+}
+
+// 单字母标准格式说明符？
+bool stdSpecifier(const QString& format, QChar& spec, int& precision) {
+    if (format.isEmpty()) return false;
+    const QChar c = format.at(0).toUpper();
+    if (!QStringLiteral("DXNFGPE").contains(c)) return false;
+    if (format.size() == 1) { spec = c; precision = -1; return true; }
+    bool ok = false;
+    const int p = format.mid(1).toInt(&ok);
+    if (!ok || p < 0 || p > 99) return false;
+    spec = c; precision = p;
+    return true;
+}
+
+QString formatStandard(qint64 value, QChar spec, int precision) {
+    const bool neg = value < 0;
+    switch (spec.unicode()) {
+    case 'D': {
+        QString d = QString::number(neg ? (quint64(0) - quint64(value)) : quint64(value));
+        const int n = precision < 0 ? 1 : precision;
+        while (d.size() < n) d.prepend(QLatin1Char('0'));
+        return neg ? (QLatin1Char('-') + d) : d;
+    }
+    case 'X': {
+        // .NET 的 X 按二进制补码输出（与 quint64 转换一致）
+        QString h = QString::number(static_cast<quint64>(value), 16).toUpper();
+        if (precision > 0) while (h.size() < precision) h.prepend(QLatin1Char('0'));
+        return h;
+    }
+    case 'N': return fixedNumber(value, precision < 0 ? 2 : precision, true);
+    case 'F': return fixedNumber(value, precision < 0 ? 2 : precision, false);
+    case 'P': {
+        const int n = precision < 0 ? 2 : precision;
+        return fixedNumber(value * 100, n, true) + QLatin1String(" %");
+    }
+    case 'E': {
+        const int n = precision < 0 ? 6 : precision;
+        char buf[64];
+        std::snprintf(buf, sizeof(buf), "%.*E", n, static_cast<double>(value));
+        return QString::fromLatin1(buf);
+    }
+    default:  // G
+        return QString::number(value);
+    }
+}
+
+// 按未转义的 ';' 切成 1~3 段（对齐 .NET 自定义格式的正/负/零段）
+QStringList splitFormatSections(const QString& format) {
+    QStringList out;
+    QString cur;
+    QChar quote;
+    for (int i = 0; i < format.size(); ++i) {
+        const QChar c = format.at(i);
+        if (!quote.isNull()) {
+            cur += c;
+            if (c == quote) quote = QChar();
+            continue;
+        }
+        if (c == QLatin1Char('\\')) {
+            cur += c;
+            if (i + 1 < format.size()) cur += format.at(++i);
+            continue;
+        }
+        if (c == QLatin1Char('"') || c == QLatin1Char('\'')) { quote = c; cur += c; continue; }
+        if (c == QLatin1Char(';')) { out.append(cur); cur.clear(); continue; }
+        cur += c;
+    }
+    out.append(cur);
+    return out;
+}
+
+inline bool isDigitPlaceholder(QChar c) {
+    return c == QLatin1Char('#') || c == QLatin1Char('0');
+}
+
+// 展开段里的字面量：\x 转义；"…"/'…' 去掉引号保留内容
+QString expandLiterals(const QString& text) {
+    QString out;
+    for (int i = 0; i < text.size(); ++i) {
+        const QChar c = text.at(i);
+        if (c == QLatin1Char('\\')) {
+            if (i + 1 < text.size()) out += text.at(++i);
+            continue;
+        }
+        if (c == QLatin1Char('"') || c == QLatin1Char('\'')) {
+            const QChar q = c;
+            for (++i; i < text.size() && text.at(i) != q; ++i) out += text.at(i);
+            continue;
+        }
+        out += c;
+    }
+    return out;
+}
+
+QString formatCustom(qint64 value, const QString& format) {
+    const QStringList sections = splitFormatSections(format);
+    QString section;
+    bool negative = value < 0;
+    if (sections.size() <= 1) {
+        section = sections.value(0);
+    } else if (sections.size() == 2) {
+        // 两段 = 非负;负（负段用绝对值格式化，符号由该段自己写）
+        section = negative ? sections.at(1) : sections.at(0);
+        negative = false;
+    } else {
+        if (value == 0) { section = sections.at(2); negative = false; }
+        else { section = negative ? sections.at(1) : sections.at(0); negative = false; }
+    }
+
+    // 占位符区间之外是前后缀字面量
+    int firstPh = -1, lastPh = -1;
+    for (int i = 0; i < section.size(); ++i) {
+        if (isDigitPlaceholder(section.at(i))) {
+            if (firstPh < 0) firstPh = i;
+            lastPh = i;
+        }
+    }
+    if (firstPh < 0) return expandLiterals(section);       // 纯字面量
+
+    const QString prefix = expandLiterals(section.left(firstPh));
+    const QString suffix = expandLiterals(section.mid(lastPh + 1));
+    const QString core = section.mid(firstPh, lastPh - firstPh + 1);
+
+    const int dot = core.indexOf(QLatin1Char('.'));
+    QString intPart = dot < 0 ? core : core.left(dot);
+    QString decPart = dot < 0 ? QString() : core.mid(dot + 1);
+
+    // 末尾逗号 = 每 1000 缩放一次；其余逗号 = 千分位分组
+    int scaling = 0;
+    while (intPart.endsWith(QLatin1Char(','))) { intPart.chop(1); ++scaling; }
+    const bool grouping = intPart.contains(QLatin1Char(','));
+
+    quint64 absV = negative ? (quint64(0) - quint64(value)) : quint64(value);
+    for (int i = 0; i < scaling; ++i) absV /= 1000;
+    for (const QChar c : intPart) {                        // % / ‰ 放大
+        if (c == QLatin1Char('%')) absV *= 100;
+        else if (c == QChar(0x2030)) absV *= 1000;
+    }
+    for (const QChar c : decPart) {                        // 小数段的 % / ‰ 同样放大
+        if (c == QLatin1Char('%')) absV *= 100;
+        else if (c == QChar(0x2030)) absV *= 1000;
+    }
+
+    int minInt = 0;
+    for (const QChar c : intPart) if (c == QLatin1Char('0')) ++minInt;
+    int decimals = 0;
+    for (const QChar c : decPart) if (isDigitPlaceholder(c)) ++decimals;
+
+    QString digits = QString::number(absV);
+    const bool allOptional = (minInt == 0);
+    if (absV == 0 && allOptional) digits.clear();          // 全可选位 + 0 -> 整部留空
+    if (!digits.isEmpty() && grouping) digits = groupThousands(digits);
+    if (digits.size() < minInt) digits.prepend(QString(minInt - digits.size(), QLatin1Char('0')));
+    if (decimals > 0) {
+        if (digits.isEmpty() && !allOptional) digits = QStringLiteral("0");
+        digits += QLatin1Char('.') + QString(decimals, QLatin1Char('0'));
+    }
+    if (negative) digits.prepend(QLatin1Char('-'));
+    return prefix + digits + suffix;
+}
+
+QString formatDotNetNumber(qint64 value, const QString& format) {
+    if (format.isEmpty()) return QString::number(value);
+    QChar spec;
+    int precision = -1;
+    if (stdSpecifier(format, spec, precision)) return formatStandard(value, spec, precision);
+    return formatCustom(value, format);
 }
 } // namespace
 
@@ -260,6 +463,30 @@ qint64 ExpressionEvaluator::resolveIndex(const VariableNode& node, int index,
     return value.toLongLong();
 }
 
+// 变量声明维度（1/2/3）：由 EraParseTable 的 VariableTable 注入；
+// 未注入或未知 -> 1（此时多余下标按 C# Int1DVariableToken 只取第一个）
+int ExpressionEvaluator::variableDimension(const QString& name) const
+{
+    if (m_variableDimProvider) {
+        const int d = m_variableDimProvider(name);
+        if (d >= 1 && d <= 3) return d;
+    }
+    return 1;
+}
+
+// 解析全部下标（数组变量的 2D/3D 访问）
+QList<int> ExpressionEvaluator::resolveIndices(const VariableNode& node, VariableStorage* storage,
+                                              GameBaseData* gameBaseData)
+{
+    QList<int> out;
+    const auto& indices = node.indices();
+    out.reserve(indices.size());
+    for (int i = 0; i < indices.size(); ++i) {
+        out.append(static_cast<int>(resolveIndex(node, i, storage, gameBaseData)));
+    }
+    return out;
+}
+
 // 变量写入（整型）：与 evaluateVariable 的读取路径对称，供 ++/-- 的副作用使用
 bool ExpressionEvaluator::assignVariable(const VariableNode& node, VariableStorage* storage,
                                          GameBaseData* gameBaseData, qint64 value)
@@ -269,9 +496,17 @@ bool ExpressionEvaluator::assignVariable(const VariableNode& node, VariableStora
     }
     const QString name = node.name();
     const QString upper = name.toUpper();
-    int idx = 0;
-    if (node.isArray() && !node.indices().isEmpty()) {
-        idx = static_cast<int>(resolveIndex(node, 0, storage, gameBaseData));
+    const QList<int> ids = resolveIndices(node, storage, gameBaseData);
+    const int idx = ids.isEmpty() ? 0 : ids.first();
+    const int dim = variableDimension(name);
+    // `NAME:i:j` / `NAME:i:j:k`（用户 2D/3D 数组）
+    if (dim >= 2 && ids.size() >= 2 && !storage->hasSystemVariable(name)) {
+        if (dim >= 3 && ids.size() >= 3) {
+            storage->setGlobalInt3D(name, ids.at(0), ids.at(1), ids.at(2), value);
+        } else {
+            storage->setGlobalInt2D(name, ids.at(0), ids.at(1), value);
+        }
+        return true;
     }
     if (upper == QLatin1String("LOCAL") || upper == QLatin1String("ARG")) {
         storage->setLocalInt(idx, value);
@@ -340,8 +575,42 @@ QVariant ExpressionEvaluator::evaluateVariable(const VariableNode &node, Variabl
         return QVariant::fromValue<qint64>(m_lineCountProvider());
     }
 
-    // ---- #DIM CONST 常量（求值期折叠；对齐 C# 常数）----
-    if (m_constProvider) {
+    // ---- RAND：伪随机变量（C# RandToken）----
+    //   `RAND:n` -> [0, n) 的随机数；n<=0 视为 0（C# 会报错，这里容错）
+    if (varName.compare(QLatin1String("RAND"), Qt::CaseInsensitive) == 0) {
+        qint64 n = 0;
+        if (node.isArray() && !node.indices().isEmpty()) {
+            n = resolveIndex(node, 0, storage, gameBaseData);
+        }
+        if (n <= 0) return QVariant::fromValue<qint64>(0);
+        return QVariant::fromValue<qint64>(m_rand.nextInt(n));
+    }
+
+    // ---- RANDDATA：随机数状态（C# RANDDATA 系统变量，长度 625）----
+    if (varName.compare(QLatin1String("RANDDATA"), Qt::CaseInsensitive) == 0) {
+        const QList<qint64> st = m_rand.state();
+        int idx = 0;
+        if (node.isArray() && !node.indices().isEmpty()) {
+            idx = static_cast<int>(resolveIndex(node, 0, storage, gameBaseData));
+        }
+        if (idx < 0 || idx >= st.size()) return QVariant::fromValue<qint64>(0);
+        return QVariant::fromValue<qint64>(st.at(idx));
+    }
+
+    // ---- #DIM CONST 常量（求值期查表；对齐 C# 常数）----
+    //   标量常数：`#DIM CONST X = 5` -> X
+    //   常数数组：`#DIM CONST X, 3 = 1, 2, 3` -> X:i（必须按下标取，不能一律返回首元素）
+    if (node.isArray() && !node.indices().isEmpty() && m_constArrayProvider
+        && (!m_constArrayChecker || m_constArrayChecker(varName))) {
+        // 注意：只有确认是常数数组才求值下标 —— 否则下标表达式里的
+        // 副作用（如 `BAG:(I++)`）会被算两遍
+        const int idx = static_cast<int>(resolveIndex(node, 0, storage, gameBaseData));
+        QVariant cv;
+        if (m_constArrayProvider(varName, idx, cv) && cv.isValid()) {
+            return cv;
+        }
+    }
+    if (!node.isArray() && m_constProvider) {
         QVariant cv;
         if (m_constProvider(varName, cv) && cv.isValid()) {
             return cv;
@@ -360,6 +629,12 @@ QVariant ExpressionEvaluator::evaluateVariable(const VariableNode &node, Variabl
         }
         int idx = 0;
         if (node.isArray() && !node.indices().isEmpty()) {
+            if (variableDimension(varName) >= 2 && node.indices().size() >= 2) {
+                const QList<int> ids = resolveIndices(node, storage, gameBaseData);
+                if (ids.size() >= 2) {
+                    return QVariant(storage->getGlobalStr2D(varName, ids.at(0), ids.at(1)));
+                }
+            }
             idx = static_cast<int>(resolveIndex(node, 0, storage, gameBaseData));
         }
         return QVariant(storage->getGlobalStr1D(varName, idx));
@@ -371,6 +646,22 @@ QVariant ExpressionEvaluator::evaluateVariable(const VariableNode &node, Variabl
         const auto& indices = node.indices();
         if (indices.isEmpty()) {
             return QVariant();
+        }
+
+        // ---- 多维访问（用户 #DIM 的 2D/3D 数组）----
+        // 对齐 C# Int2DVariableToken/Int3DVariableToken：直接用两个（三个）下标。
+        // 维度由变量声明决定；系统变量与 1D 变量只取第一个下标。
+        const int dim = variableDimension(varName);
+        if (dim >= 2 && indices.size() >= 2 && !storage->hasSystemVariable(varName)) {
+            const QList<int> ids = resolveIndices(node, storage, gameBaseData);
+            if (dim >= 3 && ids.size() >= 3) {
+                return QVariant::fromValue<qint64>(
+                    storage->getGlobalInt3D(varName, ids.at(0), ids.at(1), ids.at(2)));
+            }
+            if (ids.size() >= 2) {
+                return QVariant::fromValue<qint64>(
+                    storage->getGlobalInt2D(varName, ids.at(0), ids.at(1)));
+            }
         }
 
         // 1D 访问：下标可以是整数或字符串（CSV 常量名 / 格式化串）
@@ -778,11 +1069,13 @@ bool ExpressionEvaluator::evaluateBuiltin(const FunctionNode &node, VariableStor
         return true;
     }
     case BuiltinOp::Rand: {
+        // 对齐 C# RandMethod：RAND(max) -> [0,max)，RAND(min,max) -> [min,max)
+        // 内部走 VEvaluator.GetNextRand(max - min) == NextUInt64() % (max - min)
         qint64 minV = 0, maxV = 0;
         if (node.arguments().size() == 1) { maxV = I(0); }
         else { minV = I(0); maxV = I(1); }
         if (maxV <= minV) { out = QVariant::fromValue<qint64>(minV); return true; }
-        out = QVariant::fromValue<qint64>(minV + static_cast<qint64>(QRandomGenerator::global()->bounded(quint32(maxV - minV))));
+        out = QVariant::fromValue<qint64>(minV + m_rand.nextInt(maxV - minV));
         return true;
     }
     case BuiltinOp::Min:
@@ -871,8 +1164,10 @@ bool ExpressionEvaluator::evaluateBuiltin(const FunctionNode &node, VariableStor
         return true;
     }
     case BuiltinOp::ToStr:
-        // 第 2 参数为 .NET 数字格式串（如 "000"），Qt 无等价语法 → 忽略格式
-        out = QVariant(QString::number(I(0)));
+        // 第 2 参数是 .NET 数字格式串（`i.ToString(format)`）
+        out = QVariant(node.arguments().size() >= 2
+                           ? formatDotNetNumber(I(0), S(1))
+                           : QString::number(I(0)));
         return true;
     case BuiltinOp::ToInt:   out = QVariant::fromValue<qint64>(parseIntLikeEmuera(S(0))); return true;
     case BuiltinOp::IsNumeric:{ out = QVariant::fromValue<qint64>(isNumericLikeEmuera(S(0)) ? 1 : 0); return true; }

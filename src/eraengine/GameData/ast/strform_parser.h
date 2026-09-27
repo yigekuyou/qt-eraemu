@@ -49,6 +49,8 @@ public:
 
     // 在 text[from, end) 中查找顶层（跳过引号/({[]嵌套）的字符 c；找不到返回 -1
     [[nodiscard]] static int findTopLevel(const QString& text, QChar c, int from, int end);
+    // `%expr%` 的右端 `%`（只跳括号，不跳引号）
+    [[nodiscard]] static int findPercentEnd(const QString& text, int from);
 };
 
 #endif // AST_STRFORM_PARSER_H

@@ -61,6 +61,28 @@ UserParamDecl classifyUserParam(const QString& rawName) {
         p.typeKnown = true;   // ARGS 恒为字符串局部槽
         return p;
     }
+    // 数组元素形参：`A:0` / `A:1:2`（对齐 Emuera：形参本身可以是「变量+固定下标」，
+    // 实参会被写进那个元素，函数体里就以 A:0 的形式读它）
+    {
+        const QStringList parts = p.name.split(QLatin1Char(':'));
+        if (parts.size() >= 2) {
+            QList<int> idx;
+            bool allNumeric = true;
+            for (int i = 1; i < parts.size(); ++i) {
+                bool ok = false;
+                const int v = parts.at(i).trimmed().toInt(&ok);
+                if (!ok) { allNumeric = false; break; }
+                idx.append(v);
+            }
+            if (allNumeric && !idx.isEmpty()) {
+                p.target = UserParamTarget::LocalVar;
+                p.varName = parts.first().trimmed();
+                p.fixedIndices = idx;
+                p.fixedIndex = idx.first();
+                return p;
+            }
+        }
+    }
     p.target = UserParamTarget::LocalVar;
     p.varName = p.name;
     return p;

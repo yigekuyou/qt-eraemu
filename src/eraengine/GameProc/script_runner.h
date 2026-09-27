@@ -133,6 +133,9 @@ private:
 
     // 整型变量统一读写（LOCAL/ARG -> 局部槽；系统变量 -> 系统槽；其余 -> 全局）
     [[nodiscard]] qint64 readIntVar(const QString& name, int index) const;
+    // SELECTCASE 的 CASE 匹配：支持 `v1, v2` / `IS >= n` / `a TO b`
+    [[nodiscard]] bool caseMatches(const LogicalLine& caseLine, qint64 value,
+                                   const QVariant& valueVar, bool valueIsStr);
     void writeIntVar(const QString& name, int index, qint64 value);
     // 从实参取「变量名 + 下标」（SWAP 用；下标可为表达式）
     bool extractVarRef(const Operand& op, QString& name, int& index);

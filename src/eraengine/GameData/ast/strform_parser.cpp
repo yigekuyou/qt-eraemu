@@ -20,9 +20,23 @@
 bool StrFormParser::hasForm(const QString& text) {
     if (text.contains(QLatin1String("\\@"))) return true;
     if (text.contains(QLatin1Char('{')) && text.contains(QLatin1Char('}'))) return true;
-    // %...% 形式：结束的 % 必须位于顶层（括号外），避免把 "100%" 或取模当成格式串
+    // %...% 形式：结束的 % 位于顶层（括号外）即可 —— 对齐 C# AnalyseFormattedString，
+    // 引号在格式串里**不是**特殊字符（`"a%X%b"` 里的 %X% 照样展开）
     const int first = text.indexOf(QLatin1Char('%'));
-    return first >= 0 && findTopLevel(text, QLatin1Char('%'), first + 1, -1) > 0;
+    return first >= 0 && findPercentEnd(text, first + 1) > 0;
+}
+
+// `%expr%` 的右端 `%`：只跳括号嵌套，**不**把引号当特殊字符
+// （C# 用 LexEndWith.Percent 单独做词法，引号只在表达式内部有含义）
+int StrFormParser::findPercentEnd(const QString& text, int from) {
+    int depth = 0;
+    for (int i = from; i < text.size(); ++i) {
+        const QChar ch = text.at(i);
+        if (ch == QLatin1Char('(') || ch == QLatin1Char('[') || ch == QLatin1Char('{')) { ++depth; continue; }
+        if (ch == QLatin1Char(')') || ch == QLatin1Char(']') || ch == QLatin1Char('}')) { if (depth > 0) --depth; continue; }
+        if (depth == 0 && ch == QLatin1Char('%')) return i;
+    }
+    return -1;
 }
 
 int StrFormParser::findTopLevel(const QString& text, QChar c, int from, int end) {
@@ -156,37 +170,29 @@ QSharedPointer<StrFormNode> StrFormParser::parse(const QString& text, const Expr
         }
 
         if (ch == QLatin1Char('%')) {
-            const int j = findTopLevel(text, QLatin1Char('%'), i + 1, -1);
+            const int j = findPercentEnd(text, i + 1);
             if (j < 0) { b.pending += ch; continue; }    // 无成对 % -> 普通文本
             addExpr(text.mid(i + 1, j - i - 1));
             i = j;
             continue;
         }
 
-        // 带引号字符串字面量：按普通文本处理（剥掉引号，处理转义），
-        // 对齐 C# LexicalAnalyzer 把 LiteralStringWord 归入 StrForm 文本的做法。
-        if (ch == QLatin1Char('"') || ch == QLatin1Char('\'')) {
-            const QChar quote = ch;
-            int j = i + 1;
-            for (; j < n && text.at(j) != quote; ++j) {
-                if (text.at(j) == QLatin1Char('\\') && j + 1 < n) {
-                    const QChar esc = text.at(j + 1);
-                    switch (esc.toLatin1()) {
-                    case 'n': b.pending += QLatin1Char('\n'); break;
-                    case 't': b.pending += QLatin1Char('\t'); break;
-                    case 's': b.pending += QLatin1Char(' ');  break;
-                    default:  b.pending += esc;               break;
-                    }
-                    ++j;
-                } else {
-                    b.pending += text.at(j);
-                }
-            }
-            if (j >= n) { b.pending += quote; continue; }  // 未闭合
-            i = j;                                         // 跳过闭合引号
+        // 转义（对齐 C# AnalyseFormattedString 的 `\` 分支）：
+        //   \s -> 半角空格   \S -> 全角空格   \t -> TAB   \n -> 换行
+        //   \@ -> 条件式（上面已处理）        其它 -> 直接取该字符
+        if (ch == QLatin1Char('\\') && i + 1 < n) {
+            const QChar esc = text.at(i + 1);
+            if (esc == QLatin1Char('s'))      b.pending += QLatin1Char(' ');
+            else if (esc == QLatin1Char('S')) b.pending += QChar(0x3000);
+            else if (esc == QLatin1Char('t')) b.pending += QLatin1Char('\t');
+            else if (esc == QLatin1Char('n')) b.pending += QLatin1Char('\n');
+            else                              b.pending += esc;
+            ++i;
             continue;
         }
 
+        // 引号在格式串里**只是普通字符**（C# 仅在 @"…" 上下文才把 " 当终止符）；
+        // 所以 `PRINTFORML "分数={S}"` 的 {} 照样展开，引号也照样输出。
         b.pending += ch;
     }
 

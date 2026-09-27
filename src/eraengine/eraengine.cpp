@@ -72,9 +72,19 @@ EraEngine::EraEngine(QObject *parent)
 		m_scriptRunner.setExpressionEvaluator(&m_expressionEvaluator);
 		// 变量字符串下标（CSV 常量名）解析依赖常量名表
 		m_expressionEvaluator.setConstantTable(&m_constantTable);
-		// LINECOUNT = 控制台当前行数（eraTetris 等用它做「清掉本帧」）
+		// 变量声明维度（#DIM A, 3 / #DIM A, 3, 4 / #DIM A, 2, 3, 4）：
+		// 多维访问（A:i:j）靠它区分「2D 数组」与「1D 数组的多余下标」
+		m_expressionEvaluator.setVariableDimProvider([this](const QString& name) -> int {
+			if (const VariableDecl* d = m_parseTable.variableTable().find(name)) {
+				return d->dimension;
+			}
+			return 1;
+		});
+		// LINECOUNT = **逻辑行数**（C# logicalLineCount）：折行产生的续行不计入，
+		// eraTetris 用它做「CLEARLINE LINECOUNT - FIRSTLINE」清本帧，必须与
+		// deleteLine 的计数口径一致（都只数 IsLogicalLine 的行）
 		m_expressionEvaluator.setLineCountProvider([this]() -> qint64 {
-			return m_console.lineCount();
+			return m_console.logicalLineCount();
 		});
 		// 解析期也需要常量名表（CFLAG:ARG:現在位置 之类的常量名下标）
 		m_parseTable.setConstantTable(&m_constantTable);
@@ -83,6 +93,19 @@ EraEngine::EraEngine(QObject *parent)
 
 		// ---- 界面管理：控制台 + 窗口标题 ----
 		m_guiManager.setConsole(&m_console);
+		// 显示层的排版口径：DRAWLINE 用字符（C# 「DRAWLINE文字」，默认 "-"）与
+		// 一行最大单位数（DrawableWidth / 列宽）—— 与 GuiManager 的窗口宽保持同步
+		m_executionEngine.setDrawLineString(
+			m_configLoader.hasConfig(QStringLiteral("DRAWLINE文字"))
+				? m_configLoader.getConfig(QStringLiteral("DRAWLINE文字"))
+				: QStringLiteral("-"));
+		m_executionEngine.setMaxLineUnits(
+			qMax(1, m_guiManager.windowWidth() / qMax(1, m_guiManager.fontSize() / 2)));
+		// 窗口宽/字号变化后同步（DRAWLINE 的铺满宽度由它决定）
+		connect(&m_guiManager, &GuiManager::settingsChanged, this, [this]() {
+			m_executionEngine.setMaxLineUnits(
+				qMax(1, m_guiManager.windowWidth() / qMax(1, m_guiManager.fontSize() / 2)));
+		});
 		m_guiManager.setStartDirectory(m_gameDirectory);
 		m_guiManager.setWindowTitle(m_gameBaseData.windowTitle());
 		connect(&m_gameBaseData, &GameBaseData::dataChanged, this, [this]() {
@@ -577,6 +600,9 @@ void EraEngine::loadFinishedHook()
 		qDebug() << "[EraEngine] 装载完成：脚本" << m_parseTable.scriptNames().size()
 		         << "个，告警" << m_parseTable.parseWarningCount()
 		         << "条，变量" << m_parseTable.variableTable().count() << "个";
+		// 随机种子：启动时自动产生；`--seed` / setRandomSeed 固定后可整局复现
+		qDebug() << "[EraEngine] 随机种子:" << m_expressionEvaluator.randomSeed()
+		         << "（MT19937，可用 --seed 复现）";
 		for (int i = 0; i < qMin(12, m_parseTable.parseWarningCount()); ++i) {
 				qWarning() << "  [parse warn]" << m_parseTable.parseWarnings().at(i);
 		}
@@ -873,6 +899,19 @@ void EraEngine::buildSystemHost()
 		};
 
 		m_systemStateMachine.setHost(std::move(host));
+}
+
+void EraEngine::setRandomSeed(quint32 seed)
+{
+		m_expressionEvaluator.setRandomSeed(seed);
+		qInfo().noquote() << "[EraEngine] 随机种子已固定:" << seed;
+		emit randomSeedChanged();
+}
+
+void EraEngine::randomizeRandom()
+{
+		m_expressionEvaluator.randomize();
+		emit randomSeedChanged();
 }
 
 void EraEngine::gotoTitle()

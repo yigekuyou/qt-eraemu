@@ -84,6 +84,13 @@ public:
     // Main components
 		VariableStorage* getVariableStorage() { return &m_variableStorage; }
 		ExpressionEvaluator* getExpressionEvaluator() { return &m_expressionEvaluator; }
+
+		// ---- 随机数（启动时随机种子；可显式固定以便复现）----
+		Q_PROPERTY(quint32 randomSeed READ randomSeed NOTIFY randomSeedChanged)
+		[[nodiscard]] quint32 randomSeed() const { return m_expressionEvaluator.randomSeed(); }
+		// 固定随机种子（调试/回归用）：之后整局的随机序列可复现
+		Q_INVOKABLE void setRandomSeed(quint32 seed);
+		Q_INVOKABLE void randomizeRandom();
 		FunctionSystem* getFunctionSystem() { return &m_functionSystem; }
 		RenderingSystem* getRenderingSystem() { return &m_renderingSystem; }
 		FileSystem* getFileSystem() { return &m_fileSystem; }
@@ -203,6 +210,7 @@ signals:
     void gameDirectoryChanged();
     void systemStarted();
     void systemFinished();
+    void randomSeedChanged();
     // 异步装载：开始 / 进度（已处理, 总数）/ 完成
     void scriptsLoadStarted();
     void scriptsLoadProgress(int processed, int total);

@@ -75,6 +75,10 @@ public:
 
     // ---- 常数（#DIM CONST name = value）与维数求值 ----
     void setConstInt(const QString& name, qint64 value);
+    // `#DIM CONST NAME, N = v0, v1, …`：常数**数组**（下标访问用）
+    void setConstArray(const QString& name, const QList<qint64>& values);
+    [[nodiscard]] bool constArrayAt(const QString& name, int index, qint64& out) const;
+    [[nodiscard]] int constArraySize(const QString& name) const;
     void setConstStr(const QString& name, const QString& value);
     [[nodiscard]] bool constInt(const QString& name, qint64& out) const;
     [[nodiscard]] bool constStr(const QString& name, QString& out) const;
@@ -93,6 +97,7 @@ private:
 
     QHash<QString, VariableDecl> m_globals;
     QHash<QString, qint64>  m_constInt;
+    QHash<QString, QList<qint64>> m_constArray;
     QHash<QString, QString> m_constStr;
     // 反向索引：局部变量名 -> 声明它的函数个数 / 唯一时的类型（空上下文 O(1) 查询）
     QHash<QString, int> m_localNameCount;

@@ -1,3 +1,20 @@
+/*
+ * emuera —— Emuera（ERB 脚本引擎）的 Qt6 + QML/C++ 移植
+ * Copyright (C) 2026  yigekuyou
+ *
+ * This program is free software: you can redistribute it and/or modify
+ * it under the terms of the GNU General Public License as published by
+ * the Free Software Foundation, either version 3 of the License, or
+ * (at your option) any later version.
+ *
+ * This program is distributed in the hope that it will be useful,
+ * but WITHOUT ANY WARRANTY; without even the implied warranty of
+ * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+ * GNU General Public License for more details.
+ *
+ * You should have received a copy of the GNU General Public License
+ * along with this program.  If not, see <https://www.gnu.org/licenses/>.
+ */
 #include "system_processor.h"
 #include <QDebug>
 #include "process_state.h"
@@ -120,93 +137,66 @@ bool SystemProcessor::transitionToTurnEnd() {
 }
 
 bool SystemProcessor::processLine(const LogicalLine& line) {
-    // Process a logical line from the script
-    const QList<ScriptLine>& scriptLines = line.scriptLines();
-    
-    for (const ScriptLine& scriptLine : scriptLines) {
-        if (scriptLine.type() == ScriptLineType::Label) {
-            // Labels are just targets, not executed
-            continue;
+    // 处理一条完整的 AST 逻辑行。
+    if (line.kind != LineKind::Instruction) {
+        m_state->setLineCount(m_state->getLineCount() + 1);
+        return true;
+    }
+
+    const QString& name = line.functionName;
+    const QList<Operand>& args = line.arguments;
+    const auto arg0 = [&]() -> QString { return args.isEmpty() ? QString() : args.first().raw; };
+
+    if (name == "BEGIN") {
+        if (!args.isEmpty()) {
+            m_state->setBegin(arg0());
+            checkStateForInputWait();
         }
-        
-        if (scriptLine.type() == ScriptLineType::Instruction) {
-            InstructionData data = scriptLine.instructionData();
-            
-            // Process based on instruction type
-            if (data.name == "BEGIN") {
-                if (!data.arguments.isEmpty()) {
-                    QString keyword = data.arguments[0].value;
-                    m_state->setBegin(keyword);
-                    // Check if this triggers a wait state
-                    checkStateForInputWait();
-                }
-                qDebug() << "[SystemProcessor] BEGIN instruction processed";
-            }
-            else if (data.name == "GOTO") {
-                QString label;
-                if (!data.arguments.isEmpty()) {
-                    label = data.arguments[0].value;
-                    processLabelJump(label);
-                }
-                qDebug() << "[SystemProcessor] GOTO label:" << label;
-            }
-            else if (data.name == "IF") {
-                // Handle IF statement - for now just log
-                qDebug() << "[SystemProcessor] IF statement processed";
-            }
-            else if (data.name == "ELSEIF" || data.name == "ELSE" || data.name == "ENDIF") {
-                // Control flow statements
-                qDebug() << "[SystemProcessor] Control flow:" << data.name;
-            }
-            else if (data.name == "FOR" || data.name == "LOOP" || data.name == "NEXT") {
-                // Loop statements
-                qDebug() << "[SystemProcessor] Loop statement:" << data.name;
-            }
-            else if (data.name == "CALL") {
-                if (!data.arguments.isEmpty()) {
-                    QString label = data.arguments[0].value;
-                    qDebug() << "[SystemProcessor] CALL label:" << label;
-                    // In a full implementation, this would push to call stack
-                }
-            }
-            else if (data.name == "RETURN") {
-                qDebug() << "[SystemProcessor] RETURN instruction";
-                // In a full implementation, this would pop from call stack
-            }
-            else if (data.name == "WAIT" || data.name == "INPUT" || data.name == "SELECT" 
-                    || data.name == "TONEINPUT" || data.name == "ONEINPUT") {
-                // These instructions typically require input or waiting
-                qDebug() << "[SystemProcessor] Input-related instruction:" << data.name;
-                processInputRequest();
-            }
-            else if (data.name == "PRINT" || data.name == "PRINTFORML" || data.name == "PRINTBUTTON") {
-                // Output instructions
-                qDebug() << "[SystemProcessor] Output instruction:" << data.name;
-                if (m_executionEngine) {
-                    // Pass to execution engine for actual output
-                }
-            }
-            else if (data.name == "RESETDATA" || data.name == "LOADGLOBAL" || data.name == "RESETCOLOR") {
-                // System instructions
-                qDebug() << "[SystemProcessor] System instruction:" << data.name;
-            }
-            else if (data.name == "SIF" || data.name == "ALIGNMENT" || data.name == "DRAWLINE") {
-                // Special instructions
-                qDebug() << "[SystemProcessor] Special instruction:" << data.name;
-            }
-            else if (data.name == "=" || data.name == "+=" || data.name == "-=" || 
-                    data.name == "*=" || data.name == "/=") {
-                // Assignment statements
-                qDebug() << "[SystemProcessor] Assignment:" << data.name;
-            }
-            else {
-                // Unknown instruction - log for debugging
-                qDebug() << "[SystemProcessor] Unknown instruction:" << data.name;
-            }
+        qDebug() << "[SystemProcessor] BEGIN instruction processed";
+    }
+    else if (name == "GOTO") {
+        const QString label = arg0();
+        processLabelJump(label);
+        qDebug() << "[SystemProcessor] GOTO label:" << label;
+    }
+    else if (name == "IF") {
+        qDebug() << "[SystemProcessor] IF statement processed";
+    }
+    else if (name == "ELSEIF" || name == "ELSE" || name == "ENDIF") {
+        qDebug() << "[SystemProcessor] Control flow:" << name;
+    }
+    else if (name == "FOR" || name == "LOOP" || name == "NEXT") {
+        qDebug() << "[SystemProcessor] Loop statement:" << name;
+    }
+    else if (name == "CALL") {
+        if (!args.isEmpty()) {
+            qDebug() << "[SystemProcessor] CALL label:" << arg0();
         }
     }
-    
-    // Advance to next line
+    else if (name == "RETURN") {
+        qDebug() << "[SystemProcessor] RETURN instruction";
+    }
+    else if (name == "WAIT" || name == "INPUT" || name == "SELECT"
+             || name == "TONEINPUT" || name == "ONEINPUT") {
+        qDebug() << "[SystemProcessor] Input-related instruction:" << name;
+        processInputRequest();
+    }
+    else if (name == "PRINT" || name == "PRINTFORML" || name == "PRINTBUTTON") {
+        qDebug() << "[SystemProcessor] Output instruction:" << name;
+    }
+    else if (name == "RESETDATA" || name == "LOADGLOBAL" || name == "RESETCOLOR") {
+        qDebug() << "[SystemProcessor] System instruction:" << name;
+    }
+    else if (name == "SIF" || name == "ALIGNMENT" || name == "DRAWLINE") {
+        qDebug() << "[SystemProcessor] Special instruction:" << name;
+    }
+    else if (name == "=" || name == "+=" || name == "-=" || name == "*=" || name == "/=") {
+        qDebug() << "[SystemProcessor] Assignment:" << name;
+    }
+    else {
+        qDebug() << "[SystemProcessor] Unknown instruction:" << name;
+    }
+
     m_state->setLineCount(m_state->getLineCount() + 1);
     return true;
 }

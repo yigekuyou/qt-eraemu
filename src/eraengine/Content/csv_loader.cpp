@@ -1,4 +1,22 @@
+/*
+ * emuera —— Emuera（ERB 脚本引擎）的 Qt6 + QML/C++ 移植
+ * Copyright (C) 2026  yigekuyou
+ *
+ * This program is free software: you can redistribute it and/or modify
+ * it under the terms of the GNU General Public License as published by
+ * the Free Software Foundation, either version 3 of the License, or
+ * (at your option) any later version.
+ *
+ * This program is distributed in the hope that it will be useful,
+ * but WITHOUT ANY WARRANTY; without even the implied warranty of
+ * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+ * GNU General Public License for more details.
+ *
+ * You should have received a copy of the GNU General Public License
+ * along with this program.  If not, see <https://www.gnu.org/licenses/>.
+ */
 #include "csv_loader.h"
+#include "text_encoding.h"
 #include <QRegularExpression>
 #include <QFileInfo>
 
@@ -8,19 +26,16 @@ CsvLoader::CsvLoader(QObject* parent)
 }
 
 bool CsvLoader::loadFile(const QString& filePath) {
-    QFile file(filePath);
-    if (!file.open(QIODevice::ReadOnly | QIODevice::Text)) {
+    // 编码按文件嗅探（CSV 在日文游戏里常为 Shift-JIS，汉化版为 UTF-8）
+    bool ok = false;
+    const QString content = TextCodecUtil::readFile(filePath, TextEncoding::Auto, nullptr, &ok);
+    if (!ok) {
         return false;
     }
-    
-    // Read entire file content
-    QTextStream in(&file);
-    QString content = in.readAll();
-    file.close();
-    
+
     // Parse the CSV content
     loadCsvData(filePath);
-    
+
     return true;
 }
 
@@ -49,19 +64,16 @@ void CsvLoader::loadCsvData(const QString& filePath) {
 }
 
 QStringList CsvLoader::readFileLines(const QString& filePath) {
-    QFile file(filePath);
     QStringList lines;
-    
-    if (!file.open(QIODevice::ReadOnly | QIODevice::Text)) {
+    bool ok = false;
+    const QString text = TextCodecUtil::readFile(filePath, TextEncoding::Auto, nullptr, &ok);
+    if (!ok) {
         return lines;
     }
-    
-    QTextStream in(&file);
-    while (!in.atEnd()) {
-        lines.append(in.readLine());
+    lines = text.split(QLatin1Char('\n'));
+    for (QString& l : lines) {
+        if (l.endsWith(QLatin1Char('\r'))) l.chop(1);
     }
-    
-    file.close();
     return lines;
 }
 

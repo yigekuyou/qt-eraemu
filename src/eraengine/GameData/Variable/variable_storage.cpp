@@ -1,3 +1,20 @@
+/*
+ * emuera —— Emuera（ERB 脚本引擎）的 Qt6 + QML/C++ 移植
+ * Copyright (C) 2026  yigekuyou
+ *
+ * This program is free software: you can redistribute it and/or modify
+ * it under the terms of the GNU General Public License as published by
+ * the Free Software Foundation, either version 3 of the License, or
+ * (at your option) any later version.
+ *
+ * This program is distributed in the hope that it will be useful,
+ * but WITHOUT ANY WARRANTY; without even the implied warranty of
+ * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+ * GNU General Public License for more details.
+ *
+ * You should have received a copy of the GNU General Public License
+ * along with this program.  If not, see <https://www.gnu.org/licenses/>.
+ */
 #include "variable_storage.h"
 #include "expression_evaluator.h"
 
@@ -34,15 +51,58 @@ VariableStorage::VariableStorage(QObject *parent)
 		m_b.fill(0, 1000);
 		m_c.fill(0, 1000);
 
-		// Load variable configuration from CSV
-		m_variableConfig.loadFromCSV(":/eraTW/CSV/VariableSize.csv");
-		
+		// 变量尺寸表在 EraEngine::loadConstantData() 中从 CSV 目录读入
+		// （对齐 C#：读取 <CsvDir>/VariableSize.CSV）
+
 		// Register system variable types
 		for (int i = 0; i < SYSTEM_VARIABLES.size(); ++i) {
 				const auto &entry = SYSTEM_VARIABLES.at(i);
 				m_variableTypes[entry.name] = entry.info;
 				m_variableIdentifiers[entry.name] = VariableIdentifier(entry.name, entry.info);
 		}
+}
+
+// 从 VariableSize.csv 读取系统数组尺寸并应用
+// （对齐 C# GameData/Variable/VariableData.cs 的 processSystemVariableSize）
+bool VariableStorage::loadVariableSizes(const QString& csvPath)
+{
+		if (!m_variableConfig.loadFromCSV(csvPath)) {
+				return false;
+		}
+		// 名字 -> 容器；只处理有独立容器的系统变量
+		const auto resize1D = [this](const QString& name, QList<qint64>& vec) {
+				const int n = m_variableConfig.getSize1D(name);
+				if (n > 0) vec.resize(n);
+		};
+		resize1D(QStringLiteral("DAY"), m_day);
+		resize1D(QStringLiteral("MONEY"), m_money);
+		resize1D(QStringLiteral("ITEM"), m_item);
+		resize1D(QStringLiteral("ITEMSALES"), m_itemsales);
+		resize1D(QStringLiteral("NOITEM"), m_noitem);
+		resize1D(QStringLiteral("BOUGHT"), m_bought);
+		resize1D(QStringLiteral("PBAND"), m_pband);
+		resize1D(QStringLiteral("FLAG"), m_flag);
+		resize1D(QStringLiteral("TFLAG"), m_tflag);
+		resize1D(QStringLiteral("TARGET"), m_target);
+		resize1D(QStringLiteral("MASTER"), m_master);
+		resize1D(QStringLiteral("PLAYER"), m_player);
+		resize1D(QStringLiteral("ASSI"), m_assi);
+		resize1D(QStringLiteral("ASSIPLAY"), m_assiplay);
+		resize1D(QStringLiteral("UP"), m_up);
+		resize1D(QStringLiteral("DOWN"), m_down);
+		resize1D(QStringLiteral("LOSEBASE"), m_losebase);
+		resize1D(QStringLiteral("PALAMLV"), m_palamlv);
+		resize1D(QStringLiteral("EXPLV"), m_explv);
+		resize1D(QStringLiteral("EJAC"), m_ejac);
+		resize1D(QStringLiteral("PREVCOM"), m_prevcom);
+		resize1D(QStringLiteral("SELECTCOM"), m_selectcom);
+		resize1D(QStringLiteral("NEXTCOM"), m_nextcom);
+		resize1D(QStringLiteral("RESULT"), m_result);
+		resize1D(QStringLiteral("COUNT"), m_count);
+		resize1D(QStringLiteral("A"), m_a);
+		resize1D(QStringLiteral("B"), m_b);
+		resize1D(QStringLiteral("C"), m_c);
+		return true;
 }
 
 void VariableStorage::initialize(int maxCharacters, int localSize)
@@ -121,9 +181,14 @@ qint64 VariableStorage::getCharaInt(const QString &name, int charaId, int index)
 // ================= 本地变量实现 =================
 void VariableStorage::setLocalInt(int index, qint64 value)
 {
-		if (index >= 0 && index < m_localIntVars.size()) {
-				m_localIntVars[index] = value;
+		if (index < 0) {
+				return;
 		}
+		if (index >= m_localIntVars.size()) {
+				m_localIntVars.resize(index + 1);
+				m_localStrVars.resize(index + 1);
+		}
+		m_localIntVars[index] = value;
 }
 
 qint64 VariableStorage::getLocalInt(int index) const
@@ -136,9 +201,14 @@ qint64 VariableStorage::getLocalInt(int index) const
 
 void VariableStorage::setLocalStr(int index, const QString &value)
 {
-		if (index >= 0 && index < m_localStrVars.size()) {
-				m_localStrVars[index] = value;
+		if (index < 0) {
+				return;
 		}
+		if (index >= m_localStrVars.size()) {
+				m_localIntVars.resize(index + 1);
+				m_localStrVars.resize(index + 1);
+		}
+		m_localStrVars[index] = value;
 }
 
 QString VariableStorage::getLocalStr(int index) const
@@ -147,6 +217,18 @@ QString VariableStorage::getLocalStr(int index) const
 				return m_localStrVars.at(index);
 		}
 		return QString();
+}
+
+void VariableStorage::setLocalAlias(const QString &name, int index)
+{
+		if (!name.isEmpty() && index >= 0) {
+				m_localAliases.insert(name.toUpper(), index);
+		}
+}
+
+int VariableStorage::localAliasIndex(const QString &name) const
+{
+		return m_localAliases.value(name.toUpper(), -1);
 }
 
 // ================= System variable implementations =================

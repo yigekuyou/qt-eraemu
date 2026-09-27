@@ -1,3 +1,20 @@
+/*
+ * emuera —— Emuera（ERB 脚本引擎）的 Qt6 + QML/C++ 移植
+ * Copyright (C) 2026  yigekuyou
+ *
+ * This program is free software: you can redistribute it and/or modify
+ * it under the terms of the GNU General Public License as published by
+ * the Free Software Foundation, either version 3 of the License, or
+ * (at your option) any later version.
+ *
+ * This program is distributed in the hope that it will be useful,
+ * but WITHOUT ANY WARRANTY; without even the implied warranty of
+ * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+ * GNU General Public License for more details.
+ *
+ * You should have received a copy of the GNU General Public License
+ * along with this program.  If not, see <https://www.gnu.org/licenses/>.
+ */
 // ---------------------------------------------------------------------------
 // test_era_parse_table.cpp
 //
@@ -14,7 +31,7 @@
 #include <QDebug>
 #include <QStringList>
 
-#include "script_line.h"
+#include "ast/logical_line.h"
 #include "process_state.h"
 #include "era_parse_table.h"
 
@@ -30,21 +47,22 @@ static void check(bool cond, const QString& what) {
 }
 
 static LogicalLine makeLabel(const QString& label, int lineNo) {
-    const ScriptPosition pos("test.ERB", lineNo, 0);
-    LogicalLine ll(pos);
-    ll.addScriptLine(ScriptLine::createLabel(label, pos));
+    LogicalLine ll;
+    ll.kind = LineKind::FunctionLabel;
+    ll.labelName = label;
+    ll.position = ScriptPosition("test.ERB", lineNo, 0);
+    ll.raw = "@" + label;
     return ll;
 }
 
 static LogicalLine makeInstr(const QString& name, const QStringList& args, int lineNo) {
-    InstructionData d;
-    d.name = name;
-    d.position = ScriptPosition("test.ERB", lineNo, 0);
+    LogicalLine ll;
+    ll.kind = LineKind::Instruction;
+    ll.functionName = name.toUpper();
+    ll.position = ScriptPosition("test.ERB", lineNo, 0);
     for (const QString& a : args) {
-        d.arguments.append(InstructionArgument(a));
+        ll.arguments.append(Operand(a));
     }
-    LogicalLine ll(d.position);
-    ll.addScriptLine(ScriptLine::createInstruction(d));
     return ll;
 }
 

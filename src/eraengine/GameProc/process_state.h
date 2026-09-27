@@ -1,3 +1,20 @@
+/*
+ * emuera —— Emuera（ERB 脚本引擎）的 Qt6 + QML/C++ 移植
+ * Copyright (C) 2026  yigekuyou
+ *
+ * This program is free software: you can redistribute it and/or modify
+ * it under the terms of the GNU General Public License as published by
+ * the Free Software Foundation, either version 3 of the License, or
+ * (at your option) any later version.
+ *
+ * This program is distributed in the hope that it will be useful,
+ * but WITHOUT ANY WARRANTY; without even the implied warranty of
+ * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+ * GNU General Public License for more details.
+ *
+ * You should have received a copy of the GNU General Public License
+ * along with this program.  If not, see <https://www.gnu.org/licenses/>.
+ */
 #ifndef PROCESS_STATE_H
 #define PROCESS_STATE_H
 
@@ -6,7 +23,7 @@
 #include <QList>
 #include <QMap>
 #include <QMetaType>
-#include "script_line.h"
+#include "ast/logical_line.h"
 
 // Forward declarations
 class LogicalLine;
@@ -104,6 +121,30 @@ enum class BeginType {
 // (using SystemStateCode as the primary state code)
 using StateCode = SystemStateCode;
 
+// ---------------------------------------------------------------------------
+// 中心执行状态 (Execution state)
+//
+// 执行链每执行一步都会查询它；由“程序状态控制器”（ProcessState，配合
+// SystemProcessor）统一设置。对应 C# Emuera 的 console.IsRunning / ConsoleState
+// 与 Process 的 DoScript 门控：一旦不再是 Continue，执行链立即挂起并返回。
+//
+//   Continue        —— 继续执行（C# Running）
+//   WaitInput       —— 等待用户操作（普通 INPUT/ONEINPUT/…，C# WaitInput）
+//   WaitSystemInput —— 等待系统输入（状态机驱动，如 TRAIN/SHOP 的输入）
+//   WaitEvent       —— 等待事件（C# 事件导航）
+//   Halt            —— 脚本结束，停止
+//   Error           —— 出错停止
+// ---------------------------------------------------------------------------
+enum class ExecState {
+    Continue = 0,
+    WaitInput,
+    WaitSystemInput,
+    WaitEvent,
+    Halt,
+    Error
+};
+Q_DECLARE_METATYPE(ExecState)
+
 // Called function information
 struct CalledFunction {
     QString labelName;
@@ -180,6 +221,22 @@ public:
     bool isScriptEnd() const;
     bool isBegun() const;
     
+    // =======================================================================
+    // 中心执行状态 (Execution state) —— 由状态控制器设置，执行链查询
+    // =======================================================================
+    ExecState getExecState() const;
+    void setExecState(ExecState state);
+
+    // 是否允许执行链继续推进（等价 C# console.IsRunning）
+    bool isRunning() const;
+
+    // 请求挂起等待用户输入 / 恢复 / 停止
+    void requestWaitInput();
+    void requestWaitSystemInput();
+    void requestHalt();
+    void requestResume();      // 置回 Continue
+    void setErrorState();
+
     // State check request (for signal-based state checking)
     void requestStateCheck();
     
@@ -198,12 +255,19 @@ signals:
     
     // State changed - emitted when state changed after check
     void stateChangedSignal();
+
+    // 中心执行状态变化（执行/等待输入/停止…）
+    void execStateChanged(ExecState state);
+
+    // 请求执行链继续（由状态控制器发出，执行链的 onContinueExecution() 槽响应）
+    void continueExecution();
     
     // Request for next instruction - emitted when state is ready for next instruction
     void requestNextInstruction();
     
 private:
     SystemStateCode m_systemState;
+    ExecState m_execState;
     BeginType m_beginType;
     LogicalLine* m_currentLine;
     LogicalLine* m_errorLine;

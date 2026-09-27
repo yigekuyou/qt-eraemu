@@ -1,3 +1,20 @@
+/*
+ * emuera —— Emuera（ERB 脚本引擎）的 Qt6 + QML/C++ 移植
+ * Copyright (C) 2026  yigekuyou
+ *
+ * This program is free software: you can redistribute it and/or modify
+ * it under the terms of the GNU General Public License as published by
+ * the Free Software Foundation, either version 3 of the License, or
+ * (at your option) any later version.
+ *
+ * This program is distributed in the hope that it will be useful,
+ * but WITHOUT ANY WARRANTY; without even the implied warranty of
+ * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+ * GNU General Public License for more details.
+ *
+ * You should have received a copy of the GNU General Public License
+ * along with this program.  If not, see <https://www.gnu.org/licenses/>.
+ */
 #ifndef VARIABLE_STORAGE_H
 #include <QVariant>
 #define VARIABLE_STORAGE_H
@@ -21,6 +38,10 @@ public:
 
 		Q_INVOKABLE void initialize(int maxCharacters, int localSize);
 
+		// 从 CSV 目录的 VariableSize.csv 读取系统数组尺寸（对齐 C# VariableData）
+		bool loadVariableSizes(const QString& csvPath);
+		[[nodiscard]] const VariableConfig& variableConfig() const { return m_variableConfig; }
+
 		// ================= 全局整型 (支持 1D/2D/3D) =================
 		Q_INVOKABLE void setGlobalInt1D(const QString &name, int x, qint64 val);
 		Q_INVOKABLE qint64 getGlobalInt1D(const QString &name, int x) const;
@@ -40,6 +61,13 @@ public:
 		Q_INVOKABLE qint64 getLocalInt(int index) const;
 		Q_INVOKABLE void setLocalStr(int index, const QString &value);
 		Q_INVOKABLE QString getLocalStr(int index) const;
+
+		// 局部变量名别名：用户函数形参(@F(A,B)) -> LOCAL 槽位，供表达式解析 A/B
+		void setLocalAlias(const QString &name, int index);
+		int  localAliasIndex(const QString &name) const;
+		QHash<QString, int> localAliases() const { return m_localAliases; }
+		void setLocalAliases(const QHash<QString, int> &aliases) { m_localAliases = aliases; }
+		void clearLocalAliases() { m_localAliases.clear(); }
 
 		// ================= System variables (1D) =================
 		Q_INVOKABLE void setDay(int index, qint64 value);
@@ -156,6 +184,7 @@ private:
 		// 本地变量
 		QList<qint64> m_localIntVars;
 		QList<QString> m_localStrVars;
+		QHash<QString, int> m_localAliases;   // 形参名 -> LOCAL 槽位
 
 		// System variable containers (1D arrays)
 		QList<qint64> m_day;

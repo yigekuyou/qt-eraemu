@@ -1,4 +1,22 @@
+/*
+ * emuera —— Emuera（ERB 脚本引擎）的 Qt6 + QML/C++ 移植
+ * Copyright (C) 2026  yigekuyou
+ *
+ * This program is free software: you can redistribute it and/or modify
+ * it under the terms of the GNU General Public License as published by
+ * the Free Software Foundation, either version 3 of the License, or
+ * (at your option) any later version.
+ *
+ * This program is distributed in the hope that it will be useful,
+ * but WITHOUT ANY WARRANTY; without even the implied warranty of
+ * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+ * GNU General Public License for more details.
+ *
+ * You should have received a copy of the GNU General Public License
+ * along with this program.  If not, see <https://www.gnu.org/licenses/>.
+ */
 #include "script_processor.h"
+#include "era_parse_table.h"
 #include <QDir>
 #include <QFile>
 #include <QTextStream>
@@ -39,6 +57,51 @@ void ScriptProcessor::processScripts(const QString& scriptDir)
         QString filePath = dir.absoluteFilePath(file);
         std::cerr << "[DEBUG] Processing script file: " << filePath.toStdString() << std::endl;
         parseScriptFile(filePath);
+    }
+}
+
+void ScriptProcessor::clear()
+{
+    m_entryPoints.clear();
+    m_systemEntryPoint.clear();
+    m_systemTitleEntry.clear();
+    m_systemLabel.clear();
+    m_systemTitleLabel.clear();
+    m_eventEntries.clear();
+}
+
+void ScriptProcessor::collectFromParseTable(const EraParseTable* table)
+{
+    if (!table) return;
+    clear();
+    // 遍历已装载的 AST：函数标签（LineKind::FunctionLabel）即入口点候选
+    for (const QString& scriptName : table->scriptNames()) {
+        const ScriptData* data = table->script(scriptName);
+        if (!data) continue;
+        const QString scriptPath = table->scriptPath(scriptName);
+        for (int i = 0; i < data->lines.size(); ++i) {
+            const LogicalLine& line = data->lines.at(i);
+            if (line.kind != LineKind::FunctionLabel) continue;
+            const QString name = line.labelName;
+            if (name.isEmpty()) continue;
+
+            ScriptEntryPoint entry;
+            entry.name = name;
+            entry.scriptPath = scriptPath;
+            entry.lineNum = line.position.lineNumber;
+            m_entryPoints.append(entry);
+
+            if (name.compare(QLatin1String("SYSTEM"), Qt::CaseInsensitive) == 0
+                || name.compare(QLatin1String("SYSTEM_INIT"), Qt::CaseInsensitive) == 0) {
+                m_systemEntryPoint[QStringLiteral("SYSTEM")] = scriptPath;
+                if (m_systemLabel.isEmpty()) m_systemLabel = name;
+            } else if (name.compare(QLatin1String("SYSTEM_TITLE"), Qt::CaseInsensitive) == 0) {
+                m_systemTitleEntry[QStringLiteral("SYSTEM_TITLE")] = scriptPath;
+                if (m_systemTitleLabel.isEmpty()) m_systemTitleLabel = name;
+            } else if (name.startsWith(QLatin1String("EVENT"), Qt::CaseInsensitive)) {
+                if (!m_eventEntries.contains(scriptPath)) m_eventEntries.append(scriptPath);
+            }
+        }
     }
 }
 

@@ -1,3 +1,20 @@
+/*
+ * emuera —— Emuera（ERB 脚本引擎）的 Qt6 + QML/C++ 移植
+ * Copyright (C) 2026  yigekuyou
+ *
+ * This program is free software: you can redistribute it and/or modify
+ * it under the terms of the GNU General Public License as published by
+ * the Free Software Foundation, either version 3 of the License, or
+ * (at your option) any later version.
+ *
+ * This program is distributed in the hope that it will be useful,
+ * but WITHOUT ANY WARRANTY; without even the implied warranty of
+ * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+ * GNU General Public License for more details.
+ *
+ * You should have received a copy of the GNU General Public License
+ * along with this program.  If not, see <https://www.gnu.org/licenses/>.
+ */
 #ifndef SCRIPT_PROCESSOR_H
 #define SCRIPT_PROCESSOR_H
 
@@ -5,6 +22,8 @@
 #include <QString>
 #include <QList>
 #include <QHash>
+
+class EraParseTable;
 
 // ---------------------------------------------------------------------------
 // Event registry.
@@ -73,10 +92,17 @@ public:
     
     // Process scripts and detect entry points
     void processScripts(const QString& scriptDir);
+
+    // 从已装载的 AST 直接收集入口点（推荐；避免二次扫盘）
+    void collectFromParseTable(const EraParseTable* table);
+    void clear();
     
     // Entry point detection
     QString findSystemEntryPoint() const;
     QString findSystemTitleEntry() const;
+    // 入口点标签名（如 "SYSTEM" / "SYSTEM_TITLE"）；由 collectFromParseTable 填充
+    [[nodiscard]] QString findSystemLabel() const { return m_systemLabel; }
+    [[nodiscard]] QString findSystemTitleLabel() const { return m_systemTitleLabel; }
     QStringList findEventEntries() const;
     QStringList findAllEntryPoints() const;
     
@@ -102,6 +128,8 @@ private:
     QList<ScriptEntryPoint> m_entryPoints;
     QHash<QString, QString> m_systemEntryPoint;  // "SYSTEM" -> script path
     QHash<QString, QString> m_systemTitleEntry;  // "SYSTEM_TITLE" -> script path
+    QString m_systemLabel;        // 实际找到的入口标签（如 "SYSTEM" / "SYSTEM_INIT"）
+    QString m_systemTitleLabel;   // 实际找到的标题标签
     QStringList m_eventEntries;  // List of @EVENT* script paths
 };
 

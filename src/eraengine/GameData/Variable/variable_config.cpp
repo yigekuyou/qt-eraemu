@@ -1,4 +1,22 @@
+/*
+ * emuera —— Emuera（ERB 脚本引擎）的 Qt6 + QML/C++ 移植
+ * Copyright (C) 2026  yigekuyou
+ *
+ * This program is free software: you can redistribute it and/or modify
+ * it under the terms of the GNU General Public License as published by
+ * the Free Software Foundation, either version 3 of the License, or
+ * (at your option) any later version.
+ *
+ * This program is distributed in the hope that it will be useful,
+ * but WITHOUT ANY WARRANTY; without even the implied warranty of
+ * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+ * GNU General Public License for more details.
+ *
+ * You should have received a copy of the GNU General Public License
+ * along with this program.  If not, see <https://www.gnu.org/licenses/>.
+ */
 #include "variable_config.h"
+#include "text_encoding.h"
 #include <QFile>
 #include <QTextStream>
 #include <QRegularExpression>
@@ -10,16 +28,17 @@ VariableConfig::VariableConfig()
 
 bool VariableConfig::loadFromCSV(const QString& filePath)
 {
-    QFile file(filePath);
-    if (!file.open(QIODevice::ReadOnly | QIODevice::Text)) {
+    // 编码按文件嗅探（VariableSize.csv 常见 Shift-JIS 或 UTF-8）
+    bool readOk = false;
+    const QString text = TextCodecUtil::readFile(filePath, TextEncoding::Auto, nullptr, &readOk);
+    if (!readOk) {
         return false;
     }
 
-    QTextStream in(&file);
-    QString line;
-    
-    while (!in.atEnd()) {
-        line = in.readLine().trimmed();
+    const QStringList rawLines = text.split(QLatin1Char('\n'));
+    for (QString line : rawLines) {
+        if (line.endsWith(QLatin1Char('\r'))) line.chop(1);
+        line = line.trimmed();
         
         // Skip comments and empty lines
         if (line.isEmpty() || line.startsWith(";") || line.startsWith("#")) {
@@ -48,7 +67,7 @@ bool VariableConfig::loadFromCSV(const QString& filePath)
             variableSizes[name] = info;
         }
     }
-    
+
     return true;
 }
 

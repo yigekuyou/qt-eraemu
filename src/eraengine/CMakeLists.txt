@@ -1,3 +1,18 @@
+# emuera —— Emuera（ERB 脚本引擎）的 Qt6 + QML/C++ 移植
+# Copyright (C) 2026  yigekuyou
+#
+# This program is free software: you can redistribute it and/or modify
+# it under the terms of the GNU General Public License as published by
+# the Free Software Foundation, either version 3 of the License, or
+# (at your option) any later version.
+#
+# This program is distributed in the hope that it will be useful,
+# but WITHOUT ANY WARRANTY; without even the implied warranty of
+# MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+# GNU General Public License for more details.
+#
+# You should have received a copy of the GNU General Public License
+# along with this program.  If not, see <https://www.gnu.org/licenses/>.
 cmake_minimum_required(VERSION 3.16)
 
 project(eraengine VERSION 0.1 LANGUAGES CXX)
@@ -19,6 +34,14 @@ Content/csv_loader.cpp
 Content/csv_loader.h
 Content/erb_loader.cpp
 Content/erb_loader.h
+Content/encoding/text_encoding.cpp
+Content/encoding/encoding_probe.cpp
+Content/encoding/encoding_probe.h
+Content/encoding/text_encoding.h
+Content/constant_table.cpp
+Content/constant_table.h
+Content/erb_preprocessor.cpp
+Content/erb_preprocessor.h
 
 GameData/file_system_io.cpp
 GameData/file_system_io.h
@@ -30,19 +53,29 @@ GameData/efficient_csv_loader.h
 GameData/identifier_dictionary.cpp
 GameData/identifier_dictionary.h
 
-GameData/execution/memory_block.cpp
-GameData/execution/memory_block.h
-GameData/execution/script_memory_space.cpp
-GameData/execution/script_memory_space.h
-
-GameData/expression/expression_ast.cpp
-GameData/expression/expression_ast.h
-GameData/expression/expression_evaluator.cpp
-GameData/expression/expression_evaluator.h
-GameData/expression/expression_lexer.cpp
-GameData/expression/expression_lexer.h
-GameData/expression/expression_parser.cpp
-GameData/expression/expression_parser.h
+GameData/ast/expression_ast.cpp
+GameData/ast/expression_ast.h
+GameData/ast/expression_evaluator.cpp
+GameData/ast/expression_evaluator.h
+GameData/ast/expression_lexer.cpp
+GameData/ast/expression_lexer.h
+GameData/ast/expression_parser.cpp
+GameData/ast/expression_parser.h
+GameData/ast/operand_type.h
+GameData/ast/operator_table.h
+GameData/ast/function_types.h
+GameData/ast/strform_parser.cpp
+GameData/ast/strform_parser.h
+GameData/ast/argument_parser.cpp
+GameData/ast/argument_parser.h
+GameData/ast/variable_table.cpp
+GameData/ast/variable_table.h
+GameData/ast/user_function.cpp
+GameData/ast/user_function.h
+GameData/ast/word.h
+GameData/ast/logical_line.h
+GameData/ast/ast_builder.cpp
+GameData/ast/ast_builder.h
 
 GameData/Function/function_system.cpp
 GameData/Function/function_system.h
@@ -58,13 +91,10 @@ GameProc/era_parse_table.cpp
 GameProc/era_parse_table.h
 GameProc/execution_engine.cpp
 GameProc/execution_engine.h
-GameProc/function_label_line.h
-GameProc/logical_line_parser.cpp
-GameProc/logical_line_parser.h
+GameProc/script_runner.cpp
+GameProc/script_runner.h
 GameProc/process_state.cpp
 GameProc/process_state.h
-GameProc/script_line.cpp
-GameProc/script_line.h
 GameProc/script_processor.cpp
 GameProc/script_processor.h
 GameProc/signal_hub.cpp
@@ -80,6 +110,10 @@ GameView/input_handler.cpp
 GameView/input_handler.h
 GameView/rendering_system.cpp
 GameView/rendering_system.h
+GameView/console_types.h
+GameView/console_buffer.h
+GameView/console_backend.cpp
+GameView/console_backend.h
 )
 
 # Add QtConcurrent and OpenMP after the library is defined
@@ -89,9 +123,9 @@ target_link_libraries(eraengine
 target_include_directories(eraengine PRIVATE
     ${CMAKE_CURRENT_SOURCE_DIR}/Config
     ${CMAKE_CURRENT_SOURCE_DIR}/Content
+    ${CMAKE_CURRENT_SOURCE_DIR}/Content/encoding
     ${CMAKE_CURRENT_SOURCE_DIR}/GameData
-    ${CMAKE_CURRENT_SOURCE_DIR}/GameData/execution
-    ${CMAKE_CURRENT_SOURCE_DIR}/GameData/expression
+    ${CMAKE_CURRENT_SOURCE_DIR}/GameData/ast
     ${CMAKE_CURRENT_SOURCE_DIR}/GameData/Function
     ${CMAKE_CURRENT_SOURCE_DIR}/GameData/Variable
     ${CMAKE_CURRENT_SOURCE_DIR}/GameProc
@@ -99,58 +133,89 @@ target_include_directories(eraengine PRIVATE
 )
 target_include_directories(eraengine PUBLIC ${CMAKE_CURRENT_SOURCE_DIR})
 
+# ---------------------------------------------------------------------------
 # Test executables
-add_executable(test_cli
-test/test_cli.cpp
-)
-target_link_libraries(test_cli PRIVATE eraengine Qt6::Core Qt6::Qml Qt6::Widgets)
-target_include_directories(test_cli PRIVATE
+# ---------------------------------------------------------------------------
+
+# 所有测试共享的 include 目录
+set(ERAENGINE_TEST_INCLUDE_DIRS
+    ${CMAKE_CURRENT_SOURCE_DIR}
     ${CMAKE_CURRENT_SOURCE_DIR}/Config
     ${CMAKE_CURRENT_SOURCE_DIR}/Content
+    ${CMAKE_CURRENT_SOURCE_DIR}/Content/encoding
     ${CMAKE_CURRENT_SOURCE_DIR}/GameData
-    ${CMAKE_CURRENT_SOURCE_DIR}/GameData/expression
+    ${CMAKE_CURRENT_SOURCE_DIR}/GameData/ast
     ${CMAKE_CURRENT_SOURCE_DIR}/GameData/Function
     ${CMAKE_CURRENT_SOURCE_DIR}/GameData/Variable
     ${CMAKE_CURRENT_SOURCE_DIR}/GameProc
     ${CMAKE_CURRENT_SOURCE_DIR}/GameView
 )
 
-# Position-region unit test (任务 3)
-add_executable(test_era_parse_table
-test/test_era_parse_table.cpp
-)
-target_link_libraries(test_era_parse_table PRIVATE eraengine Qt6::Core)
-target_include_directories(test_era_parse_table PRIVATE
-    ${CMAKE_CURRENT_SOURCE_DIR}/Config
-    ${CMAKE_CURRENT_SOURCE_DIR}/Content
-    ${CMAKE_CURRENT_SOURCE_DIR}/GameData
-    ${CMAKE_CURRENT_SOURCE_DIR}/GameData/execution
-    ${CMAKE_CURRENT_SOURCE_DIR}/GameData/expression
-    ${CMAKE_CURRENT_SOURCE_DIR}/GameData/Function
-    ${CMAKE_CURRENT_SOURCE_DIR}/GameData/Variable
-    ${CMAKE_CURRENT_SOURCE_DIR}/GameProc
-    ${CMAKE_CURRENT_SOURCE_DIR}/GameView
-)
+# 声明一个测试可执行文件（默认不注册进 CTest）
+function(eraengine_add_test target)
+    add_executable(${target} test/${target}.cpp)
+    target_link_libraries(${target} PRIVATE eraengine Qt6::Core Qt6::Qml Qt6::Widgets)
+    target_include_directories(${target} PRIVATE ${ERAENGINE_TEST_INCLUDE_DIRS})
+endfunction()
 
-# Regression tests for Phase D (CALL/RETURN接线)
-add_executable(test_regression
-test/test_regression.cpp
-)
-target_link_libraries(test_regression PRIVATE eraengine Qt6::Core Qt6::Qml Qt6::Widgets)
-target_include_directories(test_regression PRIVATE
-    ${CMAKE_CURRENT_SOURCE_DIR}/Config
-    ${CMAKE_CURRENT_SOURCE_DIR}/Content
-    ${CMAKE_CURRENT_SOURCE_DIR}/GameData
-    ${CMAKE_CURRENT_SOURCE_DIR}/GameData/expression
-    ${CMAKE_CURRENT_SOURCE_DIR}/GameData/Function
-    ${CMAKE_CURRENT_SOURCE_DIR}/GameData/Variable
-    ${CMAKE_CURRENT_SOURCE_DIR}/GameProc
-    ${CMAKE_CURRENT_SOURCE_DIR}/GameView
-)
+# 应用入口 / 完整流程测试
+eraengine_add_test(test_cli)
 
-# Enable testing
-enable_testing()
+# 纯单元测试（自包含、无需外部目录）
+eraengine_add_test(test_era_parse_table)
+eraengine_add_test(test_parse_table_ast)
+eraengine_add_test(test_execution_chain)
+eraengine_add_test(test_console_backend)
+eraengine_add_test(test_expression_system)
+eraengine_add_test(test_expression_types)
+eraengine_add_test(test_builtin_functions)
+eraengine_add_test(test_user_functions)
+eraengine_add_test(test_argument_types)
+eraengine_add_test(test_variable_table)
+eraengine_add_test(test_erb_preprocessor)
+eraengine_add_test(test_async_load)
+eraengine_add_test(test_text_encoding)
+eraengine_add_test(test_sjis_game)
+eraengine_add_test(test_encoding_probe)
+eraengine_add_test(test_game_base_data)
+eraengine_add_test(test_variable_storage)
+
+# 需要外部目录参数的诊断/回归工具（编译校验，不进 CTest）
+eraengine_add_test(test_erb_loader)
+eraengine_add_test(test_expression_parsing)
+eraengine_add_test(test_execution_engine)
+
+# QML 侧测试（Qt Quick Test）：测 Console/ConsoleLine 的接线与呈现
+if(TARGET Qt6::QuickTest)
+    add_executable(test_qml_console test/test_qml_console.cpp)
+    target_link_libraries(test_qml_console PRIVATE eraengine Qt6::QuickTest Qt6::Quick Qt6::Qml)
+    target_include_directories(test_qml_console PRIVATE ${ERAENGINE_TEST_INCLUDE_DIRS})
+    target_compile_definitions(test_qml_console PRIVATE
+        QUICK_TEST_SOURCE_DIR="${CMAKE_CURRENT_SOURCE_DIR}/test/qml"
+        CONSOLE_QML_PATH="${CMAKE_CURRENT_SOURCE_DIR}/../qml/Console.qml")
+    add_test(NAME test_qml_console
+             COMMAND test_qml_console -input ${CMAKE_CURRENT_SOURCE_DIR}/test/qml)
+    set_tests_properties(test_qml_console PROPERTIES ENVIRONMENT "QT_QPA_PLATFORM=offscreen")
+endif()
 
 # Register all tests with CTest
 add_test(NAME test_era_parse_table COMMAND test_era_parse_table)
-add_test(NAME test_regression COMMAND test_regression)
+add_test(NAME test_parse_table_ast COMMAND test_parse_table_ast)
+add_test(NAME test_execution_chain COMMAND test_execution_chain)
+add_test(NAME test_console_backend COMMAND test_console_backend)
+add_test(NAME test_expression_system COMMAND test_expression_system)
+add_test(NAME test_expression_types COMMAND test_expression_types)
+add_test(NAME test_builtin_functions COMMAND test_builtin_functions)
+add_test(NAME test_user_functions COMMAND test_user_functions)
+add_test(NAME test_argument_types COMMAND test_argument_types)
+add_test(NAME test_variable_table COMMAND test_variable_table)
+add_test(NAME test_erb_preprocessor COMMAND test_erb_preprocessor)
+add_test(NAME test_text_encoding COMMAND test_text_encoding)
+add_test(NAME test_sjis_game COMMAND test_sjis_game)
+add_test(NAME test_encoding_probe COMMAND test_encoding_probe)
+
+# 诊断工具：导出全部装载告警
+eraengine_add_test(dump_warnings)
+# 工具：把游戏目录的文本文件规范化为 UTF-8（dry-run 缺省）
+eraengine_add_test(text_convert)
+eraengine_add_test(expr_probe)

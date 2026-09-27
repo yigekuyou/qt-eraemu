@@ -1,23 +1,66 @@
+/*
+ * emuera —— Emuera（ERB 脚本引擎）的 Qt6 + QML/C++ 移植
+ * Copyright (C) 2026  yigekuyou
+ *
+ * This program is free software: you can redistribute it and/or modify
+ * it under the terms of the GNU General Public License as published by
+ * the Free Software Foundation, either version 3 of the License, or
+ * (at your option) any later version.
+ *
+ * This program is distributed in the hope that it will be useful,
+ * but WITHOUT ANY WARRANTY; without even the implied warranty of
+ * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+ * GNU General Public License for more details.
+ *
+ * You should have received a copy of the GNU General Public License
+ * along with this program.  If not, see <https://www.gnu.org/licenses/>.
+ */
 #include "execution_engine.h"
 #include <QDebug>
-#include <QRegularExpression>
 #include "expression_evaluator.h"
+#include "ast/expression_ast.h"
+#include "era_parse_table.h"
 #include "eraengine.h"
 #include "function_system.h"
+
+namespace {
+
+// 优先使用 EraParseTable 缓存的 AST 求值（AST 单一解析流水线）；
+// 未命中再回退到字符串入口。这样执行侧不再“二次解析”表达式。
+QVariant evalExpressionCached(EraParseTable* table,
+                              ExpressionEvaluator& evaluator,
+                              const QString& expr,
+                              VariableStorage* storage,
+                              GameBaseData* gameBaseData) {
+    if (table) {
+        const QSharedPointer<ExpressionNode> ast = table->expressionAst(expr);
+        if (ast) {
+            return evaluator.evaluate(*ast, storage, gameBaseData);
+        }
+    }
+    return evaluator.evaluate(expr, storage, gameBaseData);
+}
+
+} // namespace
 
 ExecutionEngine::ExecutionEngine(VariableStorage* storage, GameBaseData* gameBaseData, QObject* parent)
     : QObject(parent), m_storage(storage), m_gameBaseData(gameBaseData), m_functionSystem(nullptr), m_running(false), m_currentLine(0), m_executionPosition(0), m_totalInstructionsExecuted(0) {
     connect(&m_erbLoader, &ErbLoader::objectNameChanged, this, &ExecutionEngine::objectNameChanged);
-    
-    // Initialize assignment regex patterns
-    m_simpleAssignmentRegex = QRegularExpression(R"(^(\w[\w:]*?)\s*=\s*(.+)$)");
-    m_compoundAssignmentRegex = QRegularExpression(R"(^(\w[\w:]*?)\s*(\+\=|\-\=|\*\=|\/\=)\s*(.+)$)");
-    
+
+    // ParseTable reference (installed later via setParseTable)
+    m_parseTable = nullptr;
+
     // Initialize function system
     m_functionSystem = new FunctionSystem(this);
     
     // Initialize repeat loop stack
     // m_repeatLoopStack is automatically initialized by QList
+    
+    // Initialize jump flag
+    m_jumpOccurred = false;
+    
+    // Initialize last WHILE line
+    m_lastWhileLine = -1;
 }
 
 ExecutionEngine::~ExecutionEngine() {
@@ -71,23 +114,18 @@ bool ExecutionEngine::executeScript(const QString& scriptName) {
 }
 
 void ExecutionEngine::executeLogicalLine(const LogicalLine& line) {
-    const QList<ScriptLine>& scriptLines = line.scriptLines();
-    
-    for (const ScriptLine& scriptLine : scriptLines) {
-        if (scriptLine.type() == ScriptLineType::Label) {
-            // Labels don't execute, they're just jump targets
-            continue;
-        }
-        
-        if (scriptLine.type() == ScriptLineType::Instruction) {
-            InstructionData data = scriptLine.instructionData();
-            if (!executeInstruction(data)) {
-                // Error occurred
-                return;
-            }
-        }
-        
-        // Other line types (comments, empty) are ignored
+    // 完整 AST：一行即一个 LogicalLine。
+    if (line.kind == LineKind::FunctionLabel || line.kind == LineKind::GotoLabel) {
+        // 标签只是跳转目标，不执行
+        return;
+    }
+    if (line.kind != LineKind::Instruction) {
+        return;   // 空行 / 注释 / 预处理指令
+    }
+
+    qDebug() << "[executeLogicalLine]   Executing Instruction:" << line.functionName;
+    if (!executeInstruction(line)) {
+        qDebug() << "[executeLogicalLine]   executeInstruction returned false";
     }
 }
 
@@ -325,6 +363,118 @@ bool ExecutionEngine::handleLoop(bool condition) {
     return true;
 }
 
+bool ExecutionEngine::handleWhile(const QString& condition) {
+    qDebug() << "handleWhile ENTER: condition=" << condition << "stack size:" << m_whileLoopStack.size()
+             << "lastWhileLine=" << m_lastWhileLine << "m_executionPosition=" << m_executionPosition;
+    
+    // Check if we're re-entering a WHILE loop (same line, already in stack)
+    // Note: m_executionPosition was already incremented in executeInstruction,
+    // so we check against m_executionPosition - 1 (the actual line position)
+    int currentWhilePos = m_executionPosition - 1;
+    bool reEntry = false;
+    
+    qDebug() << "  Checking re-entry: currentWhilePos=" << currentWhilePos << "stack size=" << m_whileLoopStack.size();
+    int i = 0;
+    for (const WhileLoopState& state : m_whileLoopStack) {
+        qDebug() << "    State[" << i << "]: loopLine=" << state.loopLine << ", condition=" << state.condition << ", entered=" << state.entered;
+        if (state.loopLine == currentWhilePos) {
+            reEntry = true;
+            qDebug() << "    -> MATCH! Re-entry detected.";
+            break;
+        }
+        i++;
+    }
+    
+    if (!reEntry) {
+        // First time entering this WHILE - push to stack
+        WhileLoopState state;
+        // Note: m_executionPosition was already incremented in executeInstruction,
+        // so we need to use m_executionPosition - 1 as the loop line
+        state.loopLine = currentWhilePos;  // WHILE line (0-indexed)
+        state.condition = condition;  // Save condition for re-evaluation
+        state.entered = true;  // Mark as entered
+        
+        m_whileLoopStack.append(state);
+        qDebug() << "WHILE loop pushed, stack size:" << m_whileLoopStack.size()
+                 << "loopLine:" << state.loopLine
+                 << "condition:" << condition;
+    } else {
+        // Re-entry from WEND - don't push again
+        qDebug() << "WHILE re-entry (same line as existing WHILE), not pushing to stack";
+    }
+    
+    // Update last WHILE line for next check (use the position BEFORE increment)
+    m_lastWhileLine = m_executionPosition - 1;
+    
+    qDebug() << "handleWhile EXIT: loopLine=" << m_lastWhileLine;
+    
+    // The WHILE instruction itself is at m_executionPosition
+    // The loop body starts at the NEXT line (m_executionPosition + 1)
+    return true;
+}
+
+bool ExecutionEngine::handleWend() {
+    qDebug() << "handleWend: stack size:" << m_whileLoopStack.size();
+    
+    if (m_whileLoopStack.isEmpty()) {
+        qDebug() << "WEND without WHILE - ignoring";
+        return true;
+    }
+    
+    // Re-evaluate the condition using ExpressionEvaluator
+    // Note: We DON'T pop from stack in this function - that happens after we know the condition is false
+    
+    // Find the matching state in the stack (it should be the last one)
+    WhileLoopState state;
+    if (!m_whileLoopStack.isEmpty()) {
+        state = m_whileLoopStack.last();
+    } else {
+        qDebug() << "WEND without WHILE - ignoring";
+        return true;
+    }
+    
+    // Re-evaluate the condition using ExpressionEvaluator
+    ExpressionEvaluator evaluator;
+    QVariant result = evaluator.evaluate(state.condition, m_storage, m_gameBaseData);
+    bool conditionMet = result.isValid() && result.toInt() != 0;
+    
+    qDebug() << "WEND: condition=" << state.condition << "result=" << result.toString() 
+             << "conditionMet=" << conditionMet << "loopLine:" << state.loopLine
+             << "stackSize:" << m_whileLoopStack.size()
+             << "A=" << m_storage->getGlobalInt1D("A", -1) << "B=" << m_storage->getGlobalInt1D("B", -1);
+    
+    if (conditionMet) {
+        // Loop continues - jump back to WHILE line
+        // Note: The WHILE instruction is at state.loopLine, so we need to re-execute it
+        // We use the ParseTable's jumpToLine to properly update position
+        qDebug() << "WEND: loop continues, jumping back to line:" << state.loopLine;
+        
+        if (m_parseTable) {
+            // Use ParseTable's jumpToLine to properly update position
+            m_parseTable->jumpToLine(state.loopLine);
+            // Update our execution position to match
+            m_executionPosition = state.loopLine;
+            // Mark that a jump occurred (for test compatibility)
+            m_jumpOccurred = true;
+            // Clear lastWhileLine so the WHILE at this line is treated as new entry
+            m_lastWhileLine = -1;
+        } else {
+            // Fallback: just set the position
+            m_executionPosition = state.loopLine;
+            m_lastWhileLine = -1;
+        }
+    } else {
+        // Loop ended - pop from stack and clear last WHILE line
+        if (!m_whileLoopStack.isEmpty()) {
+            m_whileLoopStack.takeLast();
+        }
+        m_lastWhileLine = -1;
+        qDebug() << "WEND: loop ended, popped from stack";
+    }
+    
+    return true;
+}
+
 int ExecutionEngine::getLabelPosition(const QString& label) {
     // Remove $ prefix if present
     QString labelName = label;
@@ -358,19 +508,18 @@ int ExecutionEngine::getLabelPosition(const QString& label) {
 }
 
 QPair<QString, int> ExecutionEngine::parseLHS(const QString& lhs) {
-    // Parse variable name and index from LHS
-    // Format: VARIABLE or VARIABLE:index
-    QRegularExpression re(R"(^(\w+):(\d+)$)");
-    QRegularExpressionMatch match = re.match(lhs);
-    
-    if (match.hasMatch()) {
-        QString varName = match.captured(1);
-        int index = match.captured(2).toInt();
-        return qMakePair(varName, index);
+    // 手工解析 LHS：VARIABLE 或 VARIABLE:index（不再使用正则）。
+    const QString trimmed = lhs.trimmed();
+    const int colon = trimmed.lastIndexOf(':');
+    if (colon > 0) {
+        const QString name = trimmed.left(colon).trimmed();
+        bool ok = false;
+        const int index = trimmed.mid(colon + 1).trimmed().toInt(&ok);
+        if (ok && !name.isEmpty()) {
+            return qMakePair(name, index);
+        }
     }
-    
-    // No index, return variable name with -1 as index
-    return qMakePair(lhs, -1);
+    return qMakePair(trimmed, -1);
 }
 
 
@@ -387,8 +536,11 @@ bool ExecutionEngine::handleCompoundAssignment(const QString& lhs, const QString
         currentValue = m_storage->getGlobalInt1D(varName, 0);
     }
     
-    // Evaluate the RHS expression
-    int rhsValue = rhs.toInt();
+    // Evaluate the RHS expression (prefer cached AST)
+    ExpressionEvaluator localEvaluator;
+    ExpressionEvaluator& evaluator = m_expressionEvaluator ? *m_expressionEvaluator : localEvaluator;
+    const QVariant rhsVar = evalExpressionCached(m_parseTable, evaluator, rhs, m_storage, m_gameBaseData);
+    int rhsValue = rhsVar.isValid() ? rhsVar.toInt() : rhs.toInt();
     
     // Apply the operation
     if (op == "+=") {
@@ -437,84 +589,62 @@ bool ExecutionEngine::loadScripts(const QString& scriptDir) {
     return m_erbLoader.loadDirectory(scriptDir, 0);
 }
 
-QHash<QString, QList<ScriptLine>> ExecutionEngine::getLoadedScripts() const {
+QHash<QString, QList<LogicalLine>> ExecutionEngine::getLoadedScripts() const {
     return m_erbLoader.getLoadedScripts();
 }
 
-bool ExecutionEngine::resolveLabel(const QString& label, ScriptLine*& line) {
-    // Remove $ prefix if present (era format uses $ for labels)
-    QString labelName = label;
-    if (labelName.startsWith('$')) {
-        labelName = labelName.mid(1);
-    }
-    
-    line = m_erbLoader.findLabel(labelName);
-    return line != nullptr;
-}
 
-bool ExecutionEngine::resolveLabelWithPosition(const QString& label, ScriptLine*& line, int& position) {
-    // Remove $ prefix if present (era format uses $ for labels)
-    QString labelName = label;
-    if (labelName.startsWith('$')) {
-        labelName = labelName.mid(1);
-    }
-    
-    line = m_erbLoader.findLabel(labelName);
-    if (line) {
-        position = getLabelPosition(labelName);
-        return true;
-    }
-    return false;
-}
 
-bool ExecutionEngine::executeInstruction(const InstructionData& data) {
-    qDebug() << "Executing instruction:" << data.name << "m_executionPosition:" << m_executionPosition;
+bool ExecutionEngine::executeInstruction(const LogicalLine& line) {
+    const QString& name = line.functionName;
+    const QList<Operand>& args = line.arguments;
+    qDebug() << "Executing instruction:" << name << "m_executionPosition:" << m_executionPosition;
     m_totalInstructionsExecuted++;
     m_executionPosition++;  // Increment position after each instruction
     
     bool result = true;
-    if (data.name == "GOTO") {
-        if (data.arguments.size() >= 1) {
-            QString label = data.arguments[0].value;
+    if (name == "GOTO") {
+        if (args.size() >= 1) {
+            QString label = args[0].raw;
             return handleGoto(label);
         }
     }
-    else if (data.name == "IF") {
+    else if (name == "IF") {
         // IF instruction - for now, just evaluate condition and continue
         // Full IF/ELSEIF/ELSE/ENDIF block parsing is not yet implemented
-        if (data.arguments.size() >= 1) {
-            QString condition = data.arguments[0].value;
+        if (args.size() >= 1) {
+            QString condition = args[0].raw;
             // Just evaluate the condition for now
             ExpressionEvaluator evaluator;
             evaluator.evaluate(condition, m_storage, nullptr);
         }
         return true;
     }
-    else if (data.name == "ELSEIF") {
+    else if (name == "ELSEIF") {
         // ELSEIF - skip for now, just continue execution
         return true;
     }
-    else if (data.name == "ELSE") {
+    else if (name == "ELSE") {
         // ELSE - skip for now, just continue execution
         return true;
     }
-    else if (data.name == "ENDIF") {
+    else if (name == "ENDIF") {
         // ENDIF - just continue, no action needed
         return true;
     }
-    else if (data.name == "FOR") {
+    else if (name == "FOR") {
         // FOR instruction - for FOR...NEXT loops
         // Format: FOR LOCAL, start, end
-        if (data.arguments.size() >= 3) {
-            QString varName = data.arguments[0].value;
+        if (args.size() >= 3) {
+            QString varName = args[0].raw;
             // Extract variable name (remove % if present)
             if (varName.startsWith('%')) varName = varName.mid(1);
             if (varName.endsWith('%')) varName.chop(1);
             
             // Get start and end values
             bool startOk = false, endOk = false;
-            qint64 start = data.arguments[1].value.toLongLong(&startOk);
-            qint64 end = data.arguments[2].value.toLongLong(&endOk);
+            qint64 start = args[1].raw.toLongLong(&startOk);
+            qint64 end = args[2].raw.toLongLong(&endOk);
             
             if (startOk && endOk) {
                 return handleFor(varName, start, end);
@@ -522,51 +652,65 @@ bool ExecutionEngine::executeInstruction(const InstructionData& data) {
         }
         return true;
     }
-    else if (data.name == "CALL") {
+    else if (name == "CALL") {
         // CALL instruction - calls a label/subroutine
-        if (data.arguments.size() >= 1) {
-            QString label = data.arguments[0].value;
-            // Remove parentheses if present (e.g., INIT_STAGE() -> INIT_STAGE)
-            label.remove(QRegularExpression(R"(\(\s*\)$)"));
+        if (args.size() >= 1) {
+            QString label = args[0].raw;
+            // Remove trailing parentheses if present (e.g., INIT_STAGE() -> INIT_STAGE)
+            const int paren = label.indexOf('(');
+            if (paren >= 0) {
+                label = label.left(paren);
+            }
+            label = label.trimmed();
             return handleCall(label);
         }
         return true;
     }
-    else if (data.name == "RESETDATA") {
+    else if (name == "RESETDATA") {
         return handleResetData();
     }
-    else if (data.name == "LOADGLOBAL") {
+    else if (name == "LOADGLOBAL") {
         return handleLoadGlobal();
     }
-    else if (data.name == "PRINTFORML") {
-        return handlePrint(data.arguments);
+    else if (name == "PRINTFORM" || name == "PRINTFORMS") {
+        return handlePrintForm(args, false);
     }
-    else if (data.name == "PRINT") {
-        return handlePrint(data.arguments);
+    else if (name == "PRINTFORML" || name == "PRINTFORMW" || name == "PRINTFORMSL"
+             || name == "PRINTFORMSW" || name == "PRINTFORMC" || name == "PRINTFORMLC") {
+        return handlePrintForm(args, true);
     }
-    else if (data.name == "=") {
-        qDebug() << "Handling assignment:" << data.arguments[0].value << "=" << data.arguments[1].value;
+    else if (name == "PRINTFORMC" || name == "PRINTC") {
+        return handlePrint(args, false);
+    }
+    else if (name == "PRINT") {
+        return handlePrint(args, false);
+    }
+    else if (name == "PRINTL") {
+        return handlePrint(args, true);
+    }
+    else if (name == "=") {
+        qDebug() << "Handling assignment:" << args[0].raw << "=" << args[1].raw;
         // Simple assignment: VARIABLE = value
-        if (data.arguments.size() >= 2) {
-            QString lhs = data.arguments[0].value;
-            QString rhs = data.arguments[1].value;
+        if (args.size() >= 2) {
+            QString lhs = args[0].raw;
+            QString rhs = args[1].raw;
             return handleAssignment(lhs, rhs);
         }
     }
-    else if (data.name == "+=" || data.name == "-=" || data.name == "*=" || data.name == "/=") {
+    else if (name == "+=" || name == "-=" || name == "*=" || name == "/=") {
         // Compound assignment
-        if (data.arguments.size() >= 2) {
-            QString lhs = data.arguments[0].value;
-            QString rhs = data.arguments[1].value;
-            return handleCompoundAssignment(lhs, data.name, rhs);
+        if (args.size() >= 2) {
+            QString lhs = args[0].raw;
+            QString rhs = args[1].raw;
+            return handleCompoundAssignment(lhs, name, rhs);
         }
     }
-    else if (data.name == "REPEAT") {
+    else if (name == "REPEAT") {
         // REPEAT - for REPEAT...ENDREPEAT loops
         // REPEAT count - execute the following instructions count times
-        if (data.arguments.size() >= 1) {
+        if (args.size() >= 1) {
             bool countOk = false;
-            int count = data.arguments[0].value.toInt(&countOk);
+            int count = args[0].raw.toInt(&countOk);
             if (countOk && count > 0) {
                 // Push loop state onto stack
                 // loopLine points to the REPEAT instruction
@@ -585,7 +729,7 @@ bool ExecutionEngine::executeInstruction(const InstructionData& data) {
         }
         return true;
     }
-    else if (data.name == "ENDREPEAT") {
+    else if (name == "ENDREPEAT") {
         // ENDREPEAT - end of REPEAT loop
         if (m_repeatLoopStack.isEmpty()) {
             qDebug() << "ENDREPEAT without REPEAT - ignoring";
@@ -610,21 +754,10 @@ bool ExecutionEngine::executeInstruction(const InstructionData& data) {
             
             // Add body lines from bodyStartLine until we reach the ENDREPEAT
             for (int i = state.bodyStartLine; i < logicalLines.size(); i++) {
-                const LogicalLine& line = logicalLines[i];
-                const QList<ScriptLine>& scriptLines = line.scriptLines();
-                
-                // Check if this is ENDREPEAT
-                bool isEndRepeat = false;
-                for (const ScriptLine& scriptLine : scriptLines) {
-                    if (scriptLine.type() == ScriptLineType::Instruction) {
-                        if (scriptLine.instructionData().name == "ENDREPEAT") {
-                            isEndRepeat = true;
-                            break;
-                        }
-                    }
-                }
-                
-                m_executionQueue.enqueue(line);
+                const LogicalLine& body = logicalLines[i];
+                const bool isEndRepeat = body.is("ENDREPEAT");
+
+                m_executionQueue.enqueue(body);
                 
                 // Stop after adding ENDREPEAT
                 if (isEndRepeat) {
@@ -637,22 +770,14 @@ bool ExecutionEngine::executeInstruction(const InstructionData& data) {
             // Debug: print logicalLines size
             qDebug() << "logicalLines.size():" << logicalLines.size();
             for (int i = state.bodyStartLine; i < qMin(state.bodyStartLine + 5, logicalLines.size()); i++) {
-                const LogicalLine& line = logicalLines[i];
-                const QList<ScriptLine>& scriptLines = line.scriptLines();
-                qDebug() << "  logicalLines[" << i << "]:" << scriptLines[0].instructionData().name;
+                qDebug() << "  logicalLines[" << i << "]:" << logicalLines[i].functionName;
             }
             
             // Debug: print queue contents
             qDebug() << "Queue contents:";
             QQueue<LogicalLine> tempQueue = m_executionQueue;
             while (!tempQueue.isEmpty()) {
-                const LogicalLine& line = tempQueue.dequeue();
-                const QList<ScriptLine>& scriptLines = line.scriptLines();
-                for (const ScriptLine& scriptLine : scriptLines) {
-                    if (scriptLine.type() == ScriptLineType::Instruction) {
-                        qDebug() << "  -" << scriptLine.instructionData().name;
-                    }
-                }
+                qDebug() << "  -" << tempQueue.dequeue().functionName;
             }
             
             // Execute the body
@@ -667,23 +792,23 @@ bool ExecutionEngine::executeInstruction(const InstructionData& data) {
         }
         return true;
     }
-    else if (data.name == "LOOP") {
+    else if (name == "LOOP") {
         // LOOP - for DO...LOOP construct
         // Evaluate the condition if present
         bool condition = true;
-        if (data.arguments.size() >= 1) {
+        if (args.size() >= 1) {
             // LOOP has a condition - evaluate it
             ExpressionEvaluator evaluator;
-            QVariant result = evaluator.evaluate(data.arguments[0].value, m_storage, m_gameBaseData);
+            QVariant result = evaluator.evaluate(args[0].raw, m_storage, m_gameBaseData);
             condition = result.isValid() && result.toInt() != 0;
         }
         return handleLoop(condition);
     }
-    else if (data.name == "NEXT") {
+    else if (name == "NEXT") {
         // NEXT - for FOR...NEXT loops
-        if (data.arguments.size() >= 1) {
+        if (args.size() >= 1) {
             // NEXT variable - extract variable name
-            QString varName = data.arguments[0].value;
+            QString varName = args[0].raw;
             // Remove % prefix/suffix if present
             if (varName.startsWith('%')) varName = varName.mid(1);
             if (varName.endsWith('%')) varName.chop(1);
@@ -691,52 +816,52 @@ bool ExecutionEngine::executeInstruction(const InstructionData& data) {
         }
         return handleNext("");  // Empty name will be handled by handleNext
     }
-    else if (data.name == "RETURN") {
+    else if (name == "RETURN") {
         // RETURN - return from a function call
         return handleReturn();
     }
-    else if (data.name == "SELECTCASE") {
+    else if (name == "SELECTCASE") {
         // SELECTCASE - for now, just continue (CASE handling not implemented)
         return true;
     }
-    else if (data.name == "CASE") {
+    else if (name == "CASE") {
         // CASE - for now, just continue
         return true;
     }
-    else if (data.name == "ENDSELECT") {
+    else if (name == "ENDSELECT") {
         // ENDSELECT - just continue
         return true;
     }
-    else if (data.name == "INPUT") {
+    else if (name == "INPUT") {
         // INPUT - wait for user input (for CLI testing, stop execution and set RESULT)
         // In Emuera, INPUT typically shows a menu and waits for user selection
         // For CLI testing, we'll stop execution and set RESULT to 0
-        if (data.arguments.size() >= 1) {
-            qDebug() << "INPUT with arguments (skipping debug output for InstructionArgument list)";
+        if (args.size() >= 1) {
+            qDebug() << "INPUT with arguments (skipping debug output for Operand list)";
         }
         m_storage->setGlobalInt1D("RESULT", 0, 0);
         m_running = false;  // Stop execution to simulate waiting for input
         return true;
     }
-    else if (data.name == "TONEINPUT") {
+    else if (name == "TONEINPUT") {
         // TONEINPUT - wait for input with timeout (for CLI testing, stop execution)
-        if (data.arguments.size() >= 1) {
+        if (args.size() >= 1) {
             m_storage->setGlobalInt1D("RESULT", 0, 0);
         }
         m_running = false;  // Stop execution to simulate waiting for input
         return true;
     }
-    else if (data.name == "ONEINPUT") {
+    else if (name == "ONEINPUT") {
         // ONEINPUT - wait for single input (for CLI testing, stop execution)
         m_storage->setGlobalInt1D("RESULT", 0, 0);
         m_running = false;  // Stop execution to simulate waiting for input
         return true;
     }
-    else if (data.name == "PRINTBUTTON") {
-        if (data.arguments.size() >= 1) {
-            QString text = data.arguments[0].value;
-            if (data.arguments.size() >= 2) {
-                QString key = data.arguments[1].value;
+    else if (name == "PRINTBUTTON") {
+        if (args.size() >= 1) {
+            QString text = args[0].raw;
+            if (args.size() >= 2) {
+                QString key = args[1].raw;
                 qDebug() << "PRINTBUTTON:" << text << "(key:" << key << ")";
             } else {
                 qDebug() << "PRINTBUTTON:" << text;
@@ -744,26 +869,33 @@ bool ExecutionEngine::executeInstruction(const InstructionData& data) {
         }
         return true;
     }
-    else if (data.name == "CLEARLINE") {
-        if (data.arguments.size() >= 1) {
-            qDebug() << "CLEARLINE:" << data.arguments[0].value;
-        } else {
-            qDebug() << "CLEARLINE: 1 line";
+    else if (name == "CLEARLINE") {
+        int n = 1;
+        if (args.size() >= 1) {
+            n = args[0].raw.toInt();
+            if (n <= 0) n = 1;
+        }
+        emit consoleClearLines(n);
+        return true;
+    }
+    else if (name == "REDRAW") {
+        const QString redrawValue = args.size() >= 1 ? args[0].raw : "1";
+        emit consoleRedraw(redrawValue);
+        return true;
+    }
+    else if (name == "RESETCOLOR") {
+        emit consoleResetColor();
+        return true;
+    }
+    else if (name == "SETCOLOR") {
+        if (args.size() >= 1) {
+            emit consoleColor(args[0].raw);
         }
         return true;
     }
-    else if (data.name == "REDRAW") {
-        QString redrawValue = data.arguments.size() >= 1 ? data.arguments[0].value : "1";
-        qDebug() << "REDRAW:" << redrawValue;
-        return true;
-    }
-    else if (data.name == "RESETCOLOR") {
-        qDebug() << "RESETCOLOR";
-        return true;
-    }
-    else if (data.name == "BEGIN") {
-        if (data.arguments.size() >= 1) {
-            QString keyword = data.arguments[0].value;
+    else if (name == "BEGIN") {
+        if (args.size() >= 1) {
+            QString keyword = args[0].raw;
             m_state.setBegin(keyword);
             qDebug() << "BEGIN:" << keyword;
             // Emit signal for system processor to handle state transition
@@ -771,9 +903,9 @@ bool ExecutionEngine::executeInstruction(const InstructionData& data) {
         }
         return true;
     }
-    else if (data.name == "SIF") {
-        if (data.arguments.size() >= 1) {
-            QString condition = data.arguments[0].value;
+    else if (name == "SIF") {
+        if (args.size() >= 1) {
+            QString condition = args[0].raw;
             ExpressionEvaluator evaluator;
             QVariant result = evaluator.evaluate(condition, m_storage, m_gameBaseData);
             bool isTrue = result.isValid() && result.toInt() != 0;
@@ -783,23 +915,46 @@ bool ExecutionEngine::executeInstruction(const InstructionData& data) {
         }
         return true;
     }
-    else if (data.name == "ALIGNMENT") {
-        QString alignValue = data.arguments.size() >= 1 ? data.arguments[0].value : "LEFT";
-        qDebug() << "ALIGNMENT:" << alignValue;
+    else if (name == "ALIGNMENT") {
+        const QString alignValue = args.size() >= 1 ? args[0].raw : QStringLiteral("LEFT");
+        emit consoleAlign(alignValue);
         return true;
     }
-    else if (data.name == "DRAWLINE") {
+    else if (name == "DRAWLINE") {
         qDebug() << "DRAWLINE";
         return true;
     }
-    else if (data.name == "SETCOLOR") {
-        QString colorValue = data.arguments.size() >= 1 ? data.arguments[0].value : "default";
+    else if (name == "SETCOLOR") {
+        QString colorValue = args.size() >= 1 ? args[0].raw : "default";
         qDebug() << "SETCOLOR:" << colorValue;
+        return true;
+    }
+    else if (name == "WHILE") {
+        // WHILE condition - start a while loop
+        if (args.size() >= 1) {
+            QString condition = args[0].raw;
+            return handleWhile(condition);
+        }
+        return true;  // No condition, skip the loop
+    }
+    else if (name == "WEND") {
+        // WEND - end of while loop
+        return handleWend();
+    }
+    else if (name == "+" || name == "-" || name == "*" || name == "/" || name == "%") {
+        // Compound assignment operators: A + 1 means A = A + 1
+        if (args.size() >= 2) {
+            QString lhs = args[0].raw;
+            QString rhs = args[1].raw;
+            // Build expression: lhs + rhs (e.g., "A + 1")
+            QString expr = lhs + " " + name + " " + rhs;
+            return handleAssignment(lhs, expr);
+        }
         return true;
     }
     
     // Default: log instruction
-    qDebug() << "Executing instruction:" << data.name << "(name=" << data.name << ")";
+    qDebug() << "Executing instruction:" << name << "(name=" << name << ")";
     return true;
 }
 
@@ -811,10 +966,11 @@ bool ExecutionEngine::handleAssignment(const QString& lhs, const QString& rhs) {
     
     qDebug() << "  varName=" << varName << "index=" << index;
     
-    // Evaluate the RHS expression using ExpressionEvaluator
-    // Pass m_gameBaseData if available so GameBase variables can be resolved
-    ExpressionEvaluator evaluator;
-    QVariant rhsValue = evaluator.evaluate(rhs, m_storage, m_gameBaseData);
+    // Evaluate the RHS expression using the parse table's cached AST.
+    // Pass m_gameBaseData if available so GameBase variables can be resolved.
+    ExpressionEvaluator localEvaluator;
+    ExpressionEvaluator& evaluator = m_expressionEvaluator ? *m_expressionEvaluator : localEvaluator;
+    QVariant rhsValue = evalExpressionCached(m_parseTable, evaluator, rhs, m_storage, m_gameBaseData);
     
     qDebug() << "  rhsValue=" << rhsValue.toString();
     
@@ -843,10 +999,10 @@ bool ExecutionEngine::handleAssignment(const QString& lhs, const QString& rhs) {
     return true;
 }
 
-bool ExecutionEngine::handlePrint(const QList<InstructionArgument>& args) {
+bool ExecutionEngine::handlePrint(const QList<Operand>& args, bool newline) {
     QString text;
-    for (const InstructionArgument& arg : args) {
-        QString value = arg.value;
+    for (const Operand& arg : args) {
+        QString value = arg.raw;
         
         // If this is a variable reference, substitute its value
         if (arg.isVariable) {
@@ -881,6 +1037,25 @@ bool ExecutionEngine::handlePrint(const QList<InstructionArgument>& args) {
         text += value + " ";
     }
     qDebug() << "PRINT:" << text.trimmed();
+    // 输出到显示层（ConsoleBackend）；换行由 *L 系决定
+    emit consolePrint(text, newline);
+    return true;
+}
+
+bool ExecutionEngine::handlePrintForm(const QList<Operand>& args, bool newline) {
+    ExpressionEvaluator localEvaluator;
+    ExpressionEvaluator& evaluator = m_expressionEvaluator ? *m_expressionEvaluator : localEvaluator;
+
+    QString text;
+    for (const Operand& arg : args) {
+        if (arg.ast) {
+            // StrForm AST：文本 + 内嵌表达式
+            text += evaluator.evaluate(*arg.ast, m_storage, m_gameBaseData).toString();
+        } else {
+            text += arg.raw;
+        }
+    }
+    emit consolePrint(text, newline);
     return true;
 }
 

@@ -1,57 +1,60 @@
+/*
+ * emuera —— Emuera（ERB 脚本引擎）的 Qt6 + QML/C++ 移植
+ * Copyright (C) 2026  yigekuyou
+ *
+ * This program is free software: you can redistribute it and/or modify
+ * it under the terms of the GNU General Public License as published by
+ * the Free Software Foundation, either version 3 of the License, or
+ * (at your option) any later version.
+ *
+ * This program is distributed in the hope that it will be useful,
+ * but WITHOUT ANY WARRANTY; without even the implied warranty of
+ * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+ * GNU General Public License for more details.
+ *
+ * You should have received a copy of the GNU General Public License
+ * along with this program.  If not, see <https://www.gnu.org/licenses/>.
+ */
 #include <QCoreApplication>
 #include <QDebug>
 #include <QFile>
 #include <QStringList>
-#include "expression_lexer.h"
-#include "expression_parser.h"
-#include "expression_ast.h"
-#include "expression_evaluator.h"
+#include "ast/expression_lexer.h"
+#include "ast/expression_parser.h"
+#include "ast/expression_ast.h"
+#include "ast/expression_evaluator.h"
+#include "ast/logical_line.h"
+#include "ast/ast_builder.h"
 #include "variable_storage.h"
-#include "script_line.h"
-#include "logical_line_parser.h"
 #include "execution_engine.h"
 #include "erb_loader.h"
 
-void printScriptLine(const ScriptLine& line) {
-    qDebug() << "  Type:" << static_cast<int>(line.type());
-    
-    QString content = line.content();
-    if (content.isEmpty()) {
-        return;
-    }
-    
-    if (line.type() == ScriptLineType::Label) {
-        // Label lines start with @
-        if (content.startsWith('@')) {
-            QString labelName = content.mid(1);
-            qDebug() << "  Label:" << labelName;
-        } else {
-            qDebug() << "  Label:" << content;
+void printLogicalLine(const LogicalLine& line) {
+    switch (line.kind) {
+    case LineKind::FunctionLabel:
+        qDebug() << "  FunctionLabel:" << line.labelName;
+        break;
+    case LineKind::GotoLabel:
+        qDebug() << "  GotoLabel:" << line.labelName;
+        break;
+    case LineKind::Instruction: {
+        qDebug() << "  Instruction:" << line.functionName;
+        qDebug() << "  Arguments:" << line.arguments.size();
+        for (int j = 0; j < line.arguments.size(); j++) {
+            const Operand& arg = line.arguments.at(j);
+            qDebug() << QString("    Arg%1: '%2' (str=%3,var=%4,ast=%5)")
+                            .arg(j).arg(arg.raw)
+                            .arg(arg.isString ? "yes" : "no")
+                            .arg(arg.isVariable ? "yes" : "no")
+                            .arg(arg.ast ? "yes" : "no");
         }
+        break;
     }
-    else if (line.type() == ScriptLineType::Comment) {
-        qDebug() << "  Comment:" << content;
-    }
-    else if (line.type() == ScriptLineType::Instruction) {
-        InstructionData data = line.instructionData();
-        qDebug() << "  Instruction:" << data.name;
-        qDebug() << "  Arguments:" << data.arguments.size();
-        
-        for (int j = 0; j < data.arguments.size(); j++) {
-            const InstructionArgument& arg = data.arguments[j];
-            QString argStr = QString("    Arg%1: '%2' (str=%3,var=%4)")
-                .arg(j)
-                .arg(arg.value)
-                .arg(arg.isString ? "yes" : "no")
-                .arg(arg.isVariable ? "yes" : "no");
-            qDebug() << argStr;
-        }
-    }
-    else if (line.type() == ScriptLineType::Expression) {
-        qDebug() << "  Expression:" << content;
-    }
-    else {
-        qDebug() << "  Content:" << content;
+    case LineKind::Preprocessor:
+        qDebug() << "  Preprocessor:" << line.raw.trimmed();
+        break;
+    default:
+        break;
     }
 }
 
@@ -63,7 +66,6 @@ int main(int argc, char *argv[]) {
     
     // Initialize components
     ErbLoader erbLoader;
-    LogicalLineParser logicalParser;
     VariableStorage storage;
     ExecutionEngine engine(&storage);
     
@@ -90,7 +92,7 @@ int main(int argc, char *argv[]) {
     qDebug() << "Load result:" << loaded;
     
     // Get the loaded scripts directly from ErbLoader
-    auto loadedScripts = erbLoader.getLoadedScripts();
+    auto loadedScripts = engine.getErbLoader().getLoadedScripts();
     qDebug() << "Loaded scripts count:" << loadedScripts.size();
     qDebug() << "Loaded scripts:" << loadedScripts.keys().join(", ");
     
@@ -101,26 +103,14 @@ int main(int argc, char *argv[]) {
         return 1;
     }
     
-    QList<ScriptLine> scriptLines = loadedScripts.value(scriptName);
-    
-    qDebug() << "\nFound" << scriptLines.size() << "script lines in" << scriptName;
-    
-    // Parse into logical lines
-    QList<LogicalLine> logicalLines = logicalParser.parseLogicalLines(scriptLines);
-    
-    qDebug() << "Parsed into" << logicalLines.size() << "logical lines\n";
-    
+    QList<LogicalLine> logicalLines = loadedScripts.value(scriptName);
+
+    qDebug() << "\nFound" << logicalLines.size() << "logical lines in" << scriptName;
+
     // Print each logical line
     for (int i = 0; i < logicalLines.size() && i < 20; i++) {  // Limit to first 20
-        const LogicalLine& line = logicalLines[i];
-        const QList<ScriptLine>& lines = line.scriptLines();
-        
         qDebug() << "--- Logical Line" << i + 1 << "---";
-        
-        for (const ScriptLine& scriptLine : lines) {
-            printScriptLine(scriptLine);
-        }
-        
+        printLogicalLine(logicalLines.at(i));
         qDebug() << "";
     }
     

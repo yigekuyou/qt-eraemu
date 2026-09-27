@@ -1,3 +1,20 @@
+/*
+ * emuera —— Emuera（ERB 脚本引擎）的 Qt6 + QML/C++ 移植
+ * Copyright (C) 2026  yigekuyou
+ *
+ * This program is free software: you can redistribute it and/or modify
+ * it under the terms of the GNU General Public License as published by
+ * the Free Software Foundation, either version 3 of the License, or
+ * (at your option) any later version.
+ *
+ * This program is distributed in the hope that it will be useful,
+ * but WITHOUT ANY WARRANTY; without even the implied warranty of
+ * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+ * GNU General Public License for more details.
+ *
+ * You should have received a copy of the GNU General Public License
+ * along with this program.  If not, see <https://www.gnu.org/licenses/>.
+ */
 #include "eraengine.h"
 
 // Include ConsoleDisplay for QML singleton registration
@@ -5,7 +22,6 @@
 #include "system_status_manager.h"
 #include "signal_hub.h"
 #include "erb_loader.h"
-#include "logical_line_parser.h"
 #include <iostream>
 #include <QObject>
 
@@ -22,6 +38,7 @@ EraEngine::EraEngine(QObject *parent)
 			m_processState(),
 			m_systemProcessor(&m_processState),
 			m_parseTable(&m_processState, &m_executionEngine),
+		m_scriptRunner(&m_parseTable, &m_executionEngine, &m_processState, &m_variableStorage),
 			m_configLoader(),
 			m_scriptProcessor(),
 			m_inputHandler(),
@@ -36,6 +53,69 @@ EraEngine::EraEngine(QObject *parent)
 		
 		// Set ParseTable reference in ExecutionEngine for CALL/RETURN integration
 		m_executionEngine.setParseTable(&m_parseTable);
+
+		// ---- 执行链：信号与槽，由程序状态控制器驱动 ----
+		// 表达式求值器挂上“用户自定义函数”回调（执行链 / 执行引擎 / 解析表共享同一求值器）
+		m_parseTable.setExpressionEvaluator(&m_expressionEvaluator);
+		m_executionEngine.setExpressionEvaluator(&m_expressionEvaluator);
+		m_scriptRunner.setExpressionEvaluator(&m_expressionEvaluator);
+		// 变量字符串下标（CSV 常量名）解析依赖常量名表
+		m_expressionEvaluator.setConstantTable(&m_constantTable);
+		// 解析期也需要常量名表（CFLAG:ARG:現在位置 之类的常量名下标）
+		m_parseTable.setConstantTable(&m_constantTable);
+		m_executionEngine.getErbLoader().setConstantTable(&m_constantTable);
+
+		// 控制器发出 continueExecution() -> 执行链槽 onContinueExecution()
+		connect(&m_processState, &ProcessState::continueExecution,
+				&m_scriptRunner, &ScriptRunner::onContinueExecution);
+
+		connect(&m_scriptRunner, &ScriptRunner::finished, this, [this]() {
+			emit systemFinished();
+		});
+		connect(&m_scriptRunner, &ScriptRunner::errorOccurred, this, [](const QString& msg) {
+			qWarning() << "[ScriptRunner]" << msg;
+		});
+		connect(&m_scriptRunner, &ScriptRunner::inputRequested, this, [this](const QString& kind) {
+			qDebug() << "[ScriptRunner] waiting for user input:" << kind
+					 << "state=" << static_cast<int>(m_processState.getExecState());
+			m_console.notifyInputRequested(kind);
+		});
+
+		// ---- 显示层：执行引擎输出 -> ConsoleBackend ----
+		connect(&m_executionEngine, &ExecutionEngine::consolePrint, this,
+				[this](const QString& text, bool newline) {
+					m_console.print(text);
+					if (newline) m_console.newline();
+				});
+		connect(&m_executionEngine, &ExecutionEngine::consoleClearLines,
+				&m_console, &ConsoleBackend::clearLines);
+		connect(&m_executionEngine, &ExecutionEngine::consoleResetColor,
+				&m_console, &ConsoleBackend::resetColor);
+		connect(&m_executionEngine, &ExecutionEngine::consoleRedraw, this,
+				[this](const QString&) { m_console.flush(); });
+		connect(&m_executionEngine, &ExecutionEngine::consoleAlign, this,
+				[this](const QString& align) {
+					const QString a = align.toUpper();
+					if (a == QLatin1String("CENTER")) m_console.setAlignment(ConsoleAlign::Center);
+					else if (a == QLatin1String("RIGHT")) m_console.setAlignment(ConsoleAlign::Right);
+					else m_console.setAlignment(ConsoleAlign::Left);
+				});
+		connect(&m_executionEngine, &ExecutionEngine::consoleColor, this,
+				[this](const QString& colorName) {
+					QColor c(colorName);
+					if (!c.isValid()) {
+						bool ok = false;
+						uint v = colorName.toUInt(&ok, 0);   // 0xRRGGBB
+						if (ok) c = QColor::fromRgb(v);
+					}
+					if (c.isValid()) m_console.setColor(c);
+				});
+
+		// ---- 输入：控制台 -> 执行链 ----
+		connect(&m_console, &ConsoleBackend::inputSubmitted, this,
+				[this](qint64 value) { provideInput(value); });
+		connect(&m_console, &ConsoleBackend::inputSubmittedString, this,
+				[this](const QString& value) { provideInputString(value); });
 		
 		// Initialize signal manager with default handlers
 		// Connect execution engine signals to signal manager
@@ -55,22 +135,6 @@ EraEngine::EraEngine(QObject *parent)
 				&m_signalManager, &SignalManager::emitParseFinished);
 		connect(&m_executionEngine.getErbLoader(), &ErbLoader::parseError,
 				&m_signalManager, &SignalManager::emitParseError);
-		
-		// Connect LogicalLineParser signals to signal manager
-		connect(&m_executionEngine.getLogicalLineParser(), &LogicalLineParser::logicalLineParsed,
-				&m_signalManager, [this](const LogicalLine& line, int lineNumber) {
-			// Convert LogicalLine to ExecutionLineData for signal manager
-			const QList<ScriptLine>& scriptLines = line.scriptLines();
-			for (const ScriptLine& scriptLine : scriptLines) {
-				if (scriptLine.type() == ScriptLineType::Instruction) {
-					ExecutionLineData data;
-					data.scriptName = "current";
-					data.lineNumber = lineNumber;
-					data.instruction = scriptLine.content();
-					m_signalManager.emitParseLineReady({data.scriptName, data.lineNumber, data.instruction});
-				}
-			}
-		});
 		
 		// Connect signal manager to system status manager slots for all signal types
 		connect(&m_signalManager, &SignalManager::signalEmitted,
@@ -231,23 +295,15 @@ void EraEngine::registerTypes()
 		qmlRegisterUncreatableType<EraTetrisInputSystem>("io.yigekuoyou.eraengine", 1, 0, "EraTetrisInputSystem",
 				"EraTetrisInputSystem is created by EraEngine");
 
-		// Register script types
-		qmlRegisterUncreatableType<ScriptLine>("io.yigekuoyou.eraengine", 1, 0, "ScriptLine",
-				"ScriptLine is used internally");
-		qmlRegisterUncreatableType<LogicalLine>("io.yigekuoyou.eraengine", 1, 0, "LogicalLine",
-				"LogicalLine is used internally");
-
 		// Register enum types
 		qRegisterMetaType<StateCode>("StateCode");
 		qRegisterMetaType<BeginType>("BeginType");
-		qRegisterMetaType<ScriptLineType>("ScriptLineType");
+		qRegisterMetaType<LineKind>("LineKind");
 		qRegisterMetaType<VariableTypes::Type>("VariableTypes::Type");
 		qRegisterMetaType<VariableTypes::Scope>("VariableTypes::Scope");
 		qRegisterMetaType<VariableTypes::Dimension>("VariableTypes::Dimension");
 		qRegisterMetaType<VariableTypes::Flag>("VariableTypes::Flag");
 		qRegisterMetaType<ScriptPosition>("ScriptPosition");
-		qRegisterMetaType<InstructionArgument>("InstructionArgument");
-		qRegisterMetaType<InstructionData>("InstructionData");
 		qRegisterMetaType<CalledFunction>("CalledFunction");
 		qRegisterMetaType<SignalType>("SignalType");
 		qRegisterMetaType<ExecutionLineData>("ExecutionLineData");
@@ -262,6 +318,20 @@ bool EraEngine::loadScript(const QString& scriptPath)
 void EraEngine::executeScript(const QString& scriptName)
 {
 		m_executionEngine.executeScript(scriptName);
+}
+
+void EraEngine::loadAsync(const QString& directory)
+{
+		QString dir = directory;
+		if (dir.startsWith(QLatin1String("file://"))) {
+				dir = QUrl(dir).toLocalFile();
+		}
+		if (m_gameDirectory != dir) {
+				m_gameDirectory = dir;
+				m_fileSystem.setRootDir(dir);
+				emit gameDirectoryChanged();
+		}
+		reloadAsync();
 }
 
 QString EraEngine::getGameDirectory() const
@@ -292,91 +362,300 @@ void EraEngine::reload()
 {
 		// Reload scripts from current directory
 		if (!m_gameDirectory.isEmpty()) {
-				// First load config files in correct precedence order
-				// 1. _default.config (lowest precedence)
-				// 2. emuera.config (medium precedence)
-				// 3. _fixed.config (highest precedence)
-				QString csvDir = m_fileSystem.findActualDir(m_gameDirectory, "CSV");
-				if (csvDir.isEmpty()) {
-						csvDir = m_fileSystem.findActualDir(m_gameDirectory, "csv");
-				}
-				
-				if (!csvDir.isEmpty()) {
-						// Load default config first (lowest precedence)
-						QString defaultConfig = m_fileSystem.getConfigPath(m_gameDirectory, "_default.config");
-						if (m_fileSystem.fileExists(defaultConfig)) {
-								m_configLoader.loadConfigFile(defaultConfig, 0);
-						}
-						// Load main config file (medium precedence)
-						QString mainConfig = m_fileSystem.getConfigPath(m_gameDirectory, "emuera.config");
-						if (m_fileSystem.fileExists(mainConfig)) {
-								m_configLoader.loadConfigFile(mainConfig, 1);
-						}
-						// Load fixed config last (highest precedence)
-						QString fixedConfig = m_fileSystem.getConfigPath(m_gameDirectory, "_fixed.config");
-						if (m_fileSystem.fileExists(fixedConfig)) {
-								m_configLoader.loadConfigFile(fixedConfig, 2);
-						}
-				}
+				// 对齐 C#：先解析 ErbDir / CsvDir（只在这两个目录内检索）
+				resolveGameDirs();
 
-				// Then load gamebase data
+				// 配置文件：_default.config / _fixed.config 在 CSV 目录，
+				// emuera.config 在游戏根目录（C# ConfigData.configPath = ExeDir + "emuera.config"）
+				loadConfigFiles();
+				resolveTextConfig();   // 编码 / 子目录检索（配置项在编码嗅探下才读得到）
+
+				// GameBase.csv / 常量 CSV：只从 CSV 目录读取
 				loadGameBaseData();
+				loadConstantData();
 
-				// Then load constant data from CSV files
-				if (!csvDir.isEmpty()) {
-						qDebug() << "[DEBUG] Loading constant data from CSV...";
-						qDebug() << "[DEBUG] Constant data loaded";
-				}
-
-				// Then load scripts
-				qDebug() << "[DEBUG] Loading scripts...";
-				m_executionEngine.loadScripts(m_gameDirectory);
+				// 脚本：只从 ERB 目录装载
+				qDebug() << "[DEBUG] Loading scripts from:" << m_erbDir;
+				m_executionEngine.loadScripts(m_erbDir);
+				m_parseTable.finalizeParse();   // 全量回填变量类型（一次性）
 				qDebug() << "[DEBUG] Scripts loaded";
-				
-				// Extract entry points from loaded scripts
-				qDebug() << "[DEBUG] Processing entry points...";
-				m_scriptProcessor.processScripts(m_gameDirectory);
-				qDebug() << "[DEBUG] Entry points processed";
+
+				collectEntryPoints();
+				loadFinishedHook();
 		}
+}
+
+void EraEngine::resolveGameDirs()
+{
+		if (m_gameDirectory.isEmpty()) {
+				m_csvDir.clear();
+				m_erbDir.clear();
+				return;
+		}
+		// 与 C# 的 Program.CsvDir / Program.ErbDir 对齐：大小写不敏感地定位子目录
+		m_csvDir = m_fileSystem.resolveSubDir(m_gameDirectory, QStringList{"CSV", "csv"});
+		m_erbDir = m_fileSystem.resolveSubDir(m_gameDirectory, QStringList{"ERB", "erb"});
+		if (m_csvDir.isEmpty()) {
+				qWarning() << "[EraEngine] CSV 目录未找到：" << m_gameDirectory;
+		}
+		if (m_erbDir.isEmpty()) {
+				qWarning() << "[EraEngine] ERB 目录未找到：" << m_gameDirectory;
+		}
+}
+
+void EraEngine::loadConfigFiles()
+{
+		m_configLoader.clearFiles();   // 幂等：允许在探测出回退编码后重读一次
+		// 1. _default.config（最低优先级，位于 CSV 目录）
+		// 2. emuera.config（中等优先级，位于游戏根目录）
+		// 3. _fixed.config（最高优先级，位于 CSV 目录）
+		if (!m_csvDir.isEmpty()) {
+				const QString defaultConfig = QDir(m_csvDir).absoluteFilePath("_default.config");
+				if (m_fileSystem.fileExists(defaultConfig)) m_configLoader.loadConfigFile(defaultConfig, 0);
+		}
+		const QString mainConfig = QDir(m_gameDirectory).absoluteFilePath("emuera.config");
+		if (m_fileSystem.fileExists(mainConfig)) m_configLoader.loadConfigFile(mainConfig, 1);
+		if (!m_csvDir.isEmpty()) {
+				const QString fixedConfig = QDir(m_csvDir).absoluteFilePath("_fixed.config");
+				if (m_fileSystem.fileExists(fixedConfig)) m_configLoader.loadConfigFile(fixedConfig, 2);
+				// _Rename.csv：行内 [[..]] 替换（对齐 C# ParserMediator.LoadEraExRenameFile）
+				const QString renameCsv = QDir(m_csvDir).absoluteFilePath("_Rename.csv");
+				if (m_fileSystem.fileExists(renameCsv)) {
+						m_executionEngine.getErbLoader().loadRenameFile(renameCsv);
+				}
+		}
+}
+
+void EraEngine::loadConstantData()
+{
+		if (m_csvDir.isEmpty()) return;
+
+		// 常量名表（CSV 名 → 下标）：只从 CSV 目录读取，对齐 C# ConstantData
+		const int tables = m_constantTable.loadCsvDirectory(m_csvDir, m_searchSubdirectory);
+
+		// 变量尺寸表（对齐 C# VariableData 读取 VariableSize.CSV）
+		int sizesLoaded = 0;
+		const QStringList sizeCandidates = m_fileSystem.listFiles(m_csvDir,
+		                                                          QStringList{"VariableSize.csv"}, false);
+		for (const QString& path : sizeCandidates) {
+				if (m_variableStorage.loadVariableSizes(path)) ++sizesLoaded;
+		}
+		qDebug() << "[EraEngine] CSV 目录:" << m_csvDir
+		         << " 常量表:" << tables << "(" << m_constantTable.nameCount() << "项)"
+		         << " VariableSize:" << sizesLoaded;
+}
+
+// 从已加载配置里取「编码 / 子目录检索」等引擎级设置
+//  · サブディレクトリを検索する  —— Config.SearchSubdirectory（C# 默认 false，era 游戏多配 YES）
+//  · TextEncoding / テキストエンコーディング / 文字コード —— 强制读编码（缺省 AUTO = 逐文件嗅探）
+void EraEngine::resolveTextConfig()
+{
+		m_searchSubdirectory = m_configLoader.getBool(QString::fromUtf8("サブディレクトリを検索する"), true);
+
+		TextEncoding enc = TextEncoding::Auto;
+		const QStringList keys = {
+				QStringLiteral("TextEncoding"),
+				QStringLiteral("TextCodec"),
+				QString::fromUtf8("テキストエンコーディング"),
+				QString::fromUtf8("文字コード"),
+		};
+		for (const QString& key : keys) {
+				if (!m_configLoader.hasConfig(key)) continue;
+				const TextEncoding parsed = TextCodecUtil::fromName(m_configLoader.getConfig(key));
+				if (parsed != TextEncoding::Auto) { enc = parsed; break; }
+		}
+		m_textEncoding = enc;
+		m_configLoader.setReadEncoding(enc);
+		m_executionEngine.getErbLoader().setReadEncoding(enc);
+
+		// 回退编码的来源（按优先级）：
+		//   1. 就地配置的 `内部で使用する東アジア言語`（对齐 C# useLanguage → Config.Encode 932/949/936/950）
+		//   2. 没有配置时 -> **ROM 探测**（扫描 ERB/CSV/*.config 投票）；只取非 UTF-8 的结论
+		//   3. 都没有 -> Latin-1
+		TextEncoding fallback = TextEncoding::Latin1;
+		bool fallbackFromConfig = false;
+		const QString langKey = QString::fromUtf8("内部で使用する東アジア言語");
+		if (m_configLoader.hasConfig(langKey)) {
+				const TextEncoding langEnc =
+						TextCodecUtil::fromLanguageName(m_configLoader.getConfig(langKey));
+				if (langEnc != TextEncoding::Auto) {
+						fallback = langEnc;
+						fallbackFromConfig = true;
+				}
+		}
+		if (!fallbackFromConfig && m_textEncoding == TextEncoding::Auto) {
+				const QString probeReport = probeGameEncoding();
+				// 没有置信度门槛：探测就是「严格解码命中最多者」
+				if (m_probeResult.dominant == TextEncoding::ShiftJis
+				    || m_probeResult.dominant == TextEncoding::Gbk
+				    || m_probeResult.dominant == TextEncoding::Big5
+				    || m_probeResult.dominant == TextEncoding::EucKr) {
+						fallback = m_probeResult.dominant;
+						qDebug().noquote() << "[EraEngine] ROM 探测结论用于回退编码:" << probeReport;
+				}
+		}
+		TextCodecUtil::setFallbackEncoding(fallback);
+
+		// 配置文件的编码也受回退编码影响（中文/韩文游戏的 emuera.config 本身就是 GBK/Big5）：
+		// 若回退编码变了且不是 Latin-1，用新回退重读一次配置（3 个小文件，代价可忽略）。
+		// 注意顺序：loadConfigFiles() -> resolveTextConfig() -> 其余装载都在这之后。
+		if (!fallbackFromConfig
+		    && TextCodecUtil::canDecode(fallback)
+		    && fallback != TextEncoding::Latin1) {
+				loadConfigFiles();   // 内部会先清空，避免重复累积
+		}
+
+		qDebug() << "[EraEngine] 文本编码:" << TextCodecUtil::name(enc)
+		         << " 回退编码:" << TextCodecUtil::name(fallback)
+		         << "(" << TextCodecUtil::backendFor(fallback) << ")"
+		         << " 子目录检索:" << m_searchSubdirectory;
+}
+
+void EraEngine::setTextEncoding(const QString& name)
+{
+		m_textEncoding = TextCodecUtil::fromName(name);
+		m_configLoader.setReadEncoding(m_textEncoding);
+		m_executionEngine.getErbLoader().setReadEncoding(m_textEncoding);
+}
+
+void EraEngine::setTextWriteEncoding(const QString& name)
+{
+		const TextEncoding enc = TextCodecUtil::fromName(name);
+		if (enc != TextEncoding::Auto) {
+				m_configLoader.setWriteEncoding(enc);
+		}
+}
+
+// ROM（游戏）编码探测：只读扫描，给出「这个游戏整体是什么编码」
+QString EraEngine::probeGameEncoding()
+{
+		QStringList dirs;
+		if (!m_erbDir.isEmpty()) dirs << m_erbDir;
+		if (!m_csvDir.isEmpty()) dirs << m_csvDir;
+		if (dirs.isEmpty() && !m_gameDirectory.isEmpty()) dirs << m_gameDirectory;
+
+		m_probeResult = EncodingProbe::probe(dirs, EncodingProbe::defaultSuffixes(),
+		                                     m_searchSubdirectory);
+		const QString report = m_probeResult.summary();
+		qDebug().noquote() << "[EraEngine] ROM 编码探测:\n" + report;
+		return report;
+}
+
+bool EraEngine::saveEncodingToConfig()
+{
+		if (m_csvDir.isEmpty()) return false;
+		const QString path = QDir(m_csvDir).absoluteFilePath(QStringLiteral("_fixed.config"));
+		// 显式设置优先；否则用探测结论（前端可以「探测 -> 落盘」一步完成）
+		TextEncoding toSave = m_textEncoding;
+		if (toSave == TextEncoding::Auto) {
+				toSave = m_probeResult.dominant;
+		}
+		const QString value = QString::fromLatin1(TextCodecUtil::name(toSave));
+		const bool ok = m_configLoader.setConfigValueInFile(path, QStringLiteral("TextEncoding"),
+		                                                   value, TextEncoding::Utf8Bom);
+		if (ok) {
+				// 立刻在内存里生效，避免等下次 reload
+				m_configLoader.setConfig(QStringLiteral("TextEncoding"), value);
+		}
+		return ok;
+}
+
+int EraEngine::saveConfigFiles()
+{
+		return m_configLoader.saveAll();
+}
+
+QString EraEngine::configEncodingOf(const QString& filePath) const
+{
+		return QString::fromLatin1(TextCodecUtil::name(m_configLoader.encodingOf(filePath)));
+}
+
+void EraEngine::collectEntryPoints()
+{
+		// 入口点直接来自已装载的 AST（避免像以前那样把 ERB 目录再全量扫一遍）
+		m_scriptProcessor.collectFromParseTable(&m_parseTable);
+}
+
+void EraEngine::loadFinishedHook()
+{
+		qDebug() << "[EraEngine] 装载完成：脚本" << m_parseTable.scriptNames().size()
+		         << "个，告警" << m_parseTable.parseWarningCount()
+		         << "条，变量" << m_parseTable.variableTable().count() << "个";
+		for (int i = 0; i < qMin(12, m_parseTable.parseWarningCount()); ++i) {
+				qWarning() << "  [parse warn]" << m_parseTable.parseWarnings().at(i);
+		}
+}
+
+void EraEngine::reloadAsync()
+{
+		if (m_gameDirectory.isEmpty()) {
+				emit scriptsLoaded(false);
+				return;
+		}
+		resolveGameDirs();
+		loadConfigFiles();
+		resolveTextConfig();
+		loadGameBaseData();
+		loadConstantData();
+		m_scriptProcessor.clear();
+
+		ErbLoader& loader = m_executionEngine.getErbLoader();
+		if (m_loadProgressConn) disconnect(m_loadProgressConn);
+		if (m_loadCompletedConn) disconnect(m_loadCompletedConn);
+		m_loadProgressConn = connect(&loader, &ErbLoader::loadProgress,
+		                             this, &EraEngine::scriptsLoadProgress);
+		m_loadCompletedConn = connect(&loader, &ErbLoader::loadCompleted, this, [this](bool ok) {
+				// 语义阶段（类型回填 + 参数校验 + 入口点收集）必须在全量装载之后
+				m_parseTable.finalizeParse();
+				collectEntryPoints();
+				loadFinishedHook();
+				emit scriptsLoaded(ok);
+		});
+
+		emit scriptsLoadStarted();
+		loader.loadDirectoryAsync(m_erbDir);
+}
+
+bool EraEngine::isLoadingScripts() const
+{
+		return m_executionEngine.getErbLoader().isLoading();
+}
+
+QStringList EraEngine::parseWarnings() const
+{
+		return m_parseTable.parseWarnings();
 }
 
 void EraEngine::loadGameBaseData()
 {
-		// Debug: Print the raw game directory
-		qDebug() << "[DEBUG] Raw m_gameDirectory:" << m_gameDirectory;
-		
-		// GameBase.csv should be in the CSV directory
-		QString localPath = QUrl(m_gameDirectory).toLocalFile();
-		qDebug() << "[DEBUG] localPath from QUrl:" << localPath;
-
-		if (localPath.isEmpty()) {
-			localPath = m_gameDirectory;
-			qDebug() << "[DEBUG] Using direct conversion:" << localPath;
+		// 对齐 C#：GameBase.csv 位于 CSV 目录（Program.CsvDir + "GAMEBASE.CSV"）
+		if (m_csvDir.isEmpty()) {
+				qDebug() << "[EraEngine] CSV 目录未解析，跳过 GameBase.csv";
+				return;
 		}
-
-		qDebug() << "[DEBUG] Looking for GameBase.csv in:" << localPath;
-
-		QString gameBasePath = localPath + "/GameBase.csv";
-		qDebug() << "[DEBUG] GameBase.csv path:" << gameBasePath;
-
-		if (!m_fileSystem.fileExists(gameBasePath)) {
-			qDebug() << "[DEBUG] GameBase.csv not found";
-			return;
+		QString gameBasePath;
+		const QStringList candidates = m_fileSystem.listFiles(m_csvDir,
+		                                                      QStringList{"GameBase.csv"}, false);
+		if (!candidates.isEmpty()) {
+				gameBasePath = candidates.first();
+		}
+		if (gameBasePath.isEmpty()) {
+				qDebug() << "[DEBUG] GameBase.csv not found in" << m_csvDir;
+				return;
 		}
 
 		// Load GameBase.csv using CsvLoader
 		CsvLoader csvLoader;
 		if (csvLoader.loadFile(gameBasePath)) {
-			qDebug() << "[DEBUG] GameBase.csv loaded successfully";
-			// Get table names
-			QStringList tableNames = csvLoader.getTableNames();
-			for (const QString& tableName : tableNames) {
-				int rowCount = csvLoader.getRowCount(tableName);
-				int colCount = csvLoader.getColumnCount(tableName);
-				qDebug() << "[DEBUG] Table:" << tableName << "rows:" << rowCount << "cols:" << colCount;
-			}
+				qDebug() << "[DEBUG] GameBase.csv loaded successfully";
+				QStringList tableNames = csvLoader.getTableNames();
+				for (const QString& tableName : tableNames) {
+						int rowCount = csvLoader.getRowCount(tableName);
+						int colCount = csvLoader.getColumnCount(tableName);
+						qDebug() << "[DEBUG] Table:" << tableName << "rows:" << rowCount << "cols:" << colCount;
+				}
 		} else {
-			qDebug() << "[DEBUG] Failed to load GameBase.csv";
+				qDebug() << "[DEBUG] Failed to load GameBase.csv";
 		}
 }
 
@@ -457,71 +736,54 @@ void EraEngine::executeSystemTitleEntry()
 void EraEngine::runSystem()
 {
 		qDebug() << "[EraEngine] Running system...";
-		
-		// Resolve entry point and execute
-		const QString entryPoint = getSystemEntryPoint();
-		QString scriptName;
-		
-		if (!entryPoint.isEmpty()) {
-			// Use @SYSTEM or @SYSTEM_INIT entry point
-			QFileInfo fileInfo(entryPoint);
-			scriptName = fileInfo.baseName();
-		} else {
-			// Fallback to @SYSTEM_TITLE entry point if available
-			const QString titleEntry = getSystemTitleEntry();
-			if (!titleEntry.isEmpty()) {
-				QFileInfo fileInfo(titleEntry);
-				scriptName = fileInfo.baseName();
-			} else {
-				scriptName = "system";  // ultimate fallback
-			}
+
+		// 入口点：直接按标签启动（标签来自已装载 AST，不再二次扫盘/重载脚本）
+		QString label = m_scriptProcessor.findSystemLabel();
+		if (label.isEmpty()) {
+				label = m_scriptProcessor.findSystemTitleLabel();
 		}
-		
-		qDebug() << "[EraEngine] Executing script:" << scriptName;
-		
-		// Build execution queue for the entry point script
-		if (!m_parseTable.loadScript(scriptName, m_executionEngine.getErbLoader().getLogicalLinesCI(scriptName))) {
-			qWarning() << "[EraEngine] Failed to load script into parse table:" << scriptName;
-		}
-		
-		// Set entry point to start execution
-		// The entry point is the label name (e.g., "SYSTEM", "SYSTEM_TITLE")
-		// We need to find the label in the loaded scripts
-		QString scriptPath = getSystemEntryPoint();
-		if (scriptPath.isEmpty()) {
-			scriptPath = getSystemTitleEntry();
-		}
-		if (!scriptPath.isEmpty()) {
-			// Extract the base name (script name without extension)
-			QFileInfo fileInfo(scriptPath);
-			QString scriptBaseName = fileInfo.baseName();
-			
-			// Look for the @SYSTEM or @SYSTEM_TITLE label in the loaded scripts
-			// The label name should match the script base name (case-insensitive)
-			QString labelName = scriptBaseName.toUpper();
-			if (labelName == "SYSTEM" || labelName == "SYSTEM_TITLE") {
-				// Use the base name as the label name
-				m_parseTable.setEntryPoint(scriptBaseName);
-			} else {
-				// Try common entry point labels
-				QStringList commonLabels = {"SYSTEM", "SYSTEM_TITLE", "MAIN", "MAIN_LOOP"};
-				for (const QString& label : commonLabels) {
-					if (m_parseTable.getLabelPosition(scriptBaseName, label) >= 0) {
-						m_parseTable.setEntryPoint(label);
-						break;
-					}
+		if (label.isEmpty()) {
+				const QStringList commonLabels = {"SYSTEM", "SYSTEM_TITLE", "MAIN", "MAIN_LOOP"};
+				for (const QString& candidate : commonLabels) {
+						if (m_parseTable.hasLabel(candidate)) { label = candidate; break; }
 				}
-			}
 		}
-		
-		// Start the execution pump to begin instruction execution
-		// The pump uses iterative execution to avoid stack overflow
-		m_parseTable.startExecutionPump();
-		
-		qDebug() << "[EraEngine] System execution pump started";
+		if (label.isEmpty()) {
+				qWarning() << "[EraEngine] 未找到入口点（@SYSTEM / @SYSTEM_TITLE）";
+				emit systemFinished();
+				return;
+		}
+
+		qDebug() << "[EraEngine] 入口点:" << label
+		         << " 脚本数:" << m_parseTable.scriptNames().size()
+		         << " 告警:" << m_parseTable.parseWarningCount()
+		         << " 变量:" << m_parseTable.variableTable().count();
+		m_parseTable.setEntryPoint(label);
+
+		// 启动执行链（信号与槽：控制器置 Continue 并驱动 onContinueExecution）
 		emit systemStarted();
-		// Note: systemFinished() is NOT emitted here because execution is synchronous
-		// The execution happens in pumpInstructions() which blocks until complete
+		const ExecState st = m_scriptRunner.runToCompletion();
+		if (st == ExecState::WaitInput || st == ExecState::WaitSystemInput) {
+				qDebug() << "[EraEngine] execution suspended, waiting for input";
+		} else {
+				qDebug() << "[EraEngine] execution finished, state=" << static_cast<int>(st);
+		}
+		emit systemFinished();
+}
+
+void EraEngine::provideInput(qint64 value)
+{
+		// 用户操作交付：写入 RESULT 并请求控制器恢复执行
+		m_console.notifyInputDone();
+		m_scriptRunner.onInputProvided(value);
+}
+
+void EraEngine::provideInputString(const QString& value)
+{
+		// 字符串输入：写入 RESULTS（局部字符串槽）后恢复执行
+		m_variableStorage.setLocalStr(0, value);
+		m_console.notifyInputDone();
+		m_scriptRunner.onInputProvided(0);
 }
 
 void EraEngine::gotoTitle()

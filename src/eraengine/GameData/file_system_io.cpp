@@ -1,3 +1,20 @@
+/*
+ * emuera —— Emuera（ERB 脚本引擎）的 Qt6 + QML/C++ 移植
+ * Copyright (C) 2026  yigekuyou
+ *
+ * This program is free software: you can redistribute it and/or modify
+ * it under the terms of the GNU General Public License as published by
+ * the Free Software Foundation, either version 3 of the License, or
+ * (at your option) any later version.
+ *
+ * This program is distributed in the hope that it will be useful,
+ * but WITHOUT ANY WARRANTY; without even the implied warranty of
+ * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+ * GNU General Public License for more details.
+ *
+ * You should have received a copy of the GNU General Public License
+ * along with this program.  If not, see <https://www.gnu.org/licenses/>.
+ */
 #include "file_system_io.h"
 #include <QFileInfo>
 #include <QDir>
@@ -34,6 +51,61 @@ QString FileSystem::findActualDir(const QString& basePath, const QString& target
         }
     }
     return targetName;
+}
+
+QString FileSystem::resolveSubDir(const QString& basePath, const QString& name) const
+{
+    QDir base(basePath);
+    if (!base.exists()) {
+        return QString();
+    }
+    const QStringList entries = base.entryList(QDir::Dirs | QDir::NoDotAndDotDot, QDir::Name);
+    for (const QString& e : entries) {
+        if (e.compare(name, Qt::CaseInsensitive) == 0) {
+            return base.absoluteFilePath(e);
+        }
+    }
+    return QString();
+}
+
+QString FileSystem::resolveSubDir(const QString& basePath, const QStringList& names) const
+{
+    for (const QString& n : names) {
+        const QString p = resolveSubDir(basePath, n);
+        if (!p.isEmpty()) return p;
+    }
+    return QString();
+}
+
+QStringList FileSystem::listFiles(const QString& dirPath, const QStringList& suffixes,
+                                  bool recursive) const
+{
+    QStringList out;
+    QDir dir(dirPath);
+    if (!dir.exists()) return out;
+
+    const QDir::Filters fileFilter = QDir::Files | QDir::Hidden | QDir::NoDotAndDotDot;
+    const auto matches = [&suffixes](const QString& fileName) {
+        for (const QString& raw : suffixes) {
+            // 允许 "*.csv" 或 ".csv" 两种写法
+            const QString s = raw.startsWith(QLatin1Char('*')) ? raw.mid(1) : raw;
+            if (s.isEmpty()) continue;
+            if (fileName.endsWith(s, Qt::CaseInsensitive)) return true;
+        }
+        return false;
+    };
+
+    const QFileInfoList files = dir.entryInfoList(fileFilter, QDir::Name);
+    for (const QFileInfo& fi : files) {
+        if (matches(fi.fileName())) out.append(fi.absoluteFilePath());
+    }
+    if (recursive) {
+        const QStringList dirs = dir.entryList(QDir::Dirs | QDir::NoDotAndDotDot, QDir::Name);
+        for (const QString& d : dirs) {
+            out += listFiles(dir.absoluteFilePath(d), suffixes, true);
+        }
+    }
+    return out;
 }
 
 QString FileSystem::getPathWithActualCase(const QString& basePath, const QString& targetPath) const
@@ -531,16 +603,12 @@ bool BinaryIo::isEraBinaryFormat(const QByteArray& data) const
 
 QString FileSystem::getConfigPath(const QString& basePath, const QString& configName) const
 {
-    // Get the CSV directory path
-    QString csvDir = findActualDir(basePath, "CSV");
-    if (csvDir.isEmpty()) {
-        csvDir = findActualDir(basePath, "csv");
-    }
-    
+    // 对齐 C#：配置文件（_default.config / _fixed.config / _Rename.csv / _Replace.csv）
+    // 位于 CSV 目录内
+    const QString csvDir = resolveSubDir(basePath, QStringList{"CSV", "csv"});
     if (csvDir.isEmpty()) {
         return QString();
     }
-    
-    // Combine CSV directory with config file name
-    return combinePath(csvDir, configName);
+    const QString path = QDir(csvDir).absoluteFilePath(configName);
+    return QFile::exists(path) ? path : QString();
 }

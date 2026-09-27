@@ -1,3 +1,20 @@
+/*
+ * emuera —— Emuera（ERB 脚本引擎）的 Qt6 + QML/C++ 移植
+ * Copyright (C) 2026  yigekuyou
+ *
+ * This program is free software: you can redistribute it and/or modify
+ * it under the terms of the GNU General Public License as published by
+ * the Free Software Foundation, either version 3 of the License, or
+ * (at your option) any later version.
+ *
+ * This program is distributed in the hope that it will be useful,
+ * but WITHOUT ANY WARRANTY; without even the implied warranty of
+ * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+ * GNU General Public License for more details.
+ *
+ * You should have received a copy of the GNU General Public License
+ * along with this program.  If not, see <https://www.gnu.org/licenses/>.
+ */
 #include "process_state.h"
 #include <QString>
 #include <QDebug>
@@ -5,6 +22,7 @@
 ProcessState::ProcessState(QObject* parent)
     : QObject(parent),
       m_systemState(SystemStateCode::Title_Begin),
+      m_execState(ExecState::Continue),
       m_beginType(BeginType::NONE),
       m_currentLine(nullptr),
       m_errorLine(nullptr),
@@ -35,6 +53,46 @@ void ProcessState::setState(SystemStateCode state) {
         m_systemState = state;
         emit stateChanged();
     }
+}
+
+// ---------------------------------------------------------------------------
+// 中心执行状态
+// ---------------------------------------------------------------------------
+ExecState ProcessState::getExecState() const {
+    return m_execState;
+}
+
+void ProcessState::setExecState(ExecState state) {
+    if (m_execState != state) {
+        m_execState = state;
+        emit execStateChanged(m_execState);
+    }
+}
+
+bool ProcessState::isRunning() const {
+    return m_execState == ExecState::Continue;
+}
+
+void ProcessState::requestWaitInput() {
+    setExecState(ExecState::WaitInput);
+}
+
+void ProcessState::requestWaitSystemInput() {
+    setExecState(ExecState::WaitSystemInput);
+}
+
+void ProcessState::requestHalt() {
+    setExecState(ExecState::Halt);
+}
+
+void ProcessState::requestResume() {
+    setExecState(ExecState::Continue);
+    // 信号与槽驱动：通知执行链继续
+    emit continueExecution();
+}
+
+void ProcessState::setErrorState() {
+    setExecState(ExecState::Error);
 }
 
 BeginType ProcessState::getBeginType() const {
@@ -197,10 +255,13 @@ bool ProcessState::isBegun() const {
 }
 
 void ProcessState::requestStateCheck() {
+    qDebug() << "[requestStateCheck] m_systemState:" << (int)m_systemState << "m_lastState:" << (int)m_lastState;
     // Emit state unchanged if state didn't change since last check
     if (m_systemState == m_lastState) {
+        qDebug() << "[requestStateCheck] State unchanged, emitting stateUnchanged";
         emit stateUnchanged();
     } else {
+        qDebug() << "[requestStateCheck] State changed, emitting stateChangedSignal";
         emit stateChangedSignal();
         // Update last state to current state
         m_lastState = m_systemState;

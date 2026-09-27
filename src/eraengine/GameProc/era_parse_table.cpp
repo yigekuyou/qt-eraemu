@@ -1,12 +1,39 @@
+/*
+ * emuera —— Emuera（ERB 脚本引擎）的 Qt6 + QML/C++ 移植
+ * Copyright (C) 2026  yigekuyou
+ *
+ * This program is free software: you can redistribute it and/or modify
+ * it under the terms of the GNU General Public License as published by
+ * the Free Software Foundation, either version 3 of the License, or
+ * (at your option) any later version.
+ *
+ * This program is distributed in the hope that it will be useful,
+ * but WITHOUT ANY WARRANTY; without even the implied warranty of
+ * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+ * GNU General Public License for more details.
+ *
+ * You should have received a copy of the GNU General Public License
+ * along with this program.  If not, see <https://www.gnu.org/licenses/>.
+ */
 #include "era_parse_table.h"
 #include "process_state.h"
 #include "variable_storage.h"
 #include "execution_engine.h"
+#include "ast/expression_lexer.h"
+#include "ast/expression_parser.h"
+#include "ast/function_types.h"
+#include "ast/strform_parser.h"
+#include "constant_table.h"
+#include "user_defined_variable_data.h"
+#include <exception>
+#include "ast/expression_ast.h"
+#include "ast/argument_parser.h"
+#include "ast/expression_evaluator.h"
 #include <QDebug>
-#include <QFileInfo>
 #include <QCoreApplication>
 #include <QEventLoop>
-#include <iostream>
+#include <QSet>
+#include <utility>
 
 // Re-entrancy guard for pumpInstructions to prevent stack overflow
 static thread_local bool s_inPumpInstructions = false;
@@ -14,14 +41,7 @@ static thread_local bool s_inPumpInstructions = false;
 EraParseTable::EraParseTable(ProcessState* state, ExecutionEngine* execEngine, QObject* parent)
     : QObject(parent)
     , m_state(state)
-    , m_memorySpaceManager(new MemorySpaceManager(this))
-    , m_currentMemorySpace(nullptr)
     , m_executionEngine(execEngine)
-    // 位置区
-    , m_currentScript()
-    , m_currentLine(0)
-    , m_callStack()
-    , m_depth(0)
 {
 }
 
@@ -30,130 +50,315 @@ EraParseTable::EraParseTable(ProcessState* state, QObject* parent)
 {
 }
 
-EraParseTable::~EraParseTable() {
-    // MemorySpaceManager will be deleted automatically
-}
+EraParseTable::~EraParseTable() = default;
 
 void EraParseTable::setVariableStorage(VariableStorage* storage) {
-    if (storage) {
-        // Set variable storage for all memory spaces
-        for (const QString& scriptName : m_executionQueues.keys()) {
-            m_memorySpaceManager->setVariableStorage(scriptName, storage);
-        }
-        // Also set for any memory spaces that might exist
-        if (m_currentMemorySpace) {
-            m_currentMemorySpace->setVariableStorage(storage);
-        }
-    }
+    m_variableStorage = storage;
 }
 
-// Helper function to reconstruct operand from instruction arguments
-QString EraParseTable::reconstructOperand(const ScriptLine& scriptLine) const
-{
-    QString operand;
-    const QList<InstructionArgument> args = scriptLine.instructionData().arguments;
-    
-    if (args.isEmpty()) {
-        return "";
+void EraParseTable::setExpressionEvaluator(ExpressionEvaluator* evaluator) {
+    m_evaluator = evaluator;
+}
+
+// ---------------------------------------------------------------------------
+// 只读区：表达式 AST 缓存（唯一解析流水线）
+// ---------------------------------------------------------------------------
+
+QSharedPointer<ExpressionNode> EraParseTable::expressionAst(const QString& expr) {
+    const QString key = expr.trimmed();
+    if (key.isEmpty()) {
+        return nullptr;
     }
-    
-    // Join all arguments with spaces to reconstruct the operand
-    for (int i = 0; i < args.size(); ++i) {
-        if (i > 0) {
-            operand += " ";
+
+    auto it = m_astCache.constFind(key);
+    if (it != m_astCache.constEnd()) {
+        return it.value();
+    }
+
+    ExpressionLexer lexer;
+    const QList<ExpressionToken> tokens = lexer.tokenize(key, 1);
+    if (tokens.isEmpty()) {
+        return nullptr;
+    }
+
+    ExpressionParser parser;
+    // 强类型：仅用户自定义函数由 Provider 决定；内置函数（内部命令）由
+    // ExpressionParser 内部的 kBuiltinFunctions 目录解析（对齐 C# methodDic）。
+    // 装载期间用户函数可能尚未 merge，finalizeParse 会再统一重绑一次。
+    parser.setFunctionTypeProvider([this](const QString& name) -> OperandType {
+        if (const UserFunctionDecl* fn = userFunction(name)) {
+            // #FUNCTIONS -> Str；#FUNCTION -> Int；无 # 行的 @label 也按 Int 处理
+            // （实测 eraTW 大量「无 #FUNCTION 的 @label」在式中调用且正常工作，
+            //  故此处取宽容语义，与 C# 源码里的严厉分支不同）
+            if (fn->isMethod) return fn->returnType;
+            return OperandType::Int;
         }
-        operand += args[i].value;
+        return OperandType::Unknown;
+    });
+    // 格式化串：@"..." / \@...#...\@
+    parser.setFormProvider([this](const QString& text, bool yenAt) -> QSharedPointer<ExpressionNode> {
+        const AstResolver resolve = [this](const QString& e) { return expressionAst(e); };
+        if (yenAt) return StrFormParser::parseYenAt(text, resolve);
+        return QSharedPointer<ExpressionNode>(StrFormParser::parse(text, resolve));
+    });
+    if (m_constantTable) {
+        const ConstantTable* ct = m_constantTable;
+        parser.setConstantNameProvider([ct](const QString& var, const QString& name) {
+            return ct->indexForVariable(var, name) >= 0;
+        });
     }
-    
-    return operand.trimmed();
+    QSharedPointer<ExpressionNode> ast = parser.parse(tokens);
+    if (ast) {
+        // 立即按变量表定型（新解析的 AST 也保持强类型）
+        VariableTable::applyTypes(*ast, m_variables);
+        m_astCache.insert(key, ast);
+    }
+    return ast;
 }
 
-// Helper function to reconstruct full command text from instruction data
-QString EraParseTable::reconstructCommand(const ScriptLine& scriptLine) const
-{
-    QString command;
-    const InstructionData& data = scriptLine.instructionData();
-    
-    if (data.name.isEmpty()) {
-        return scriptLine.content();
-    }
-    
-    // Start with the instruction name
-    command = data.name;
-    
-    // Add all arguments with spaces
-    for (const InstructionArgument& arg : data.arguments) {
-        command += " " + arg.value;
-    }
-    
-    return command.trimmed();
+const ScriptData* EraParseTable::script(const QString& scriptName) const {
+    auto it = m_scripts.constFind(scriptName);
+    return it == m_scripts.constEnd() ? nullptr : &it.value();
 }
 
-bool EraParseTable::loadScript(const QString& scriptName, const QList<LogicalLine>& lines) {
-    if (scriptName.isEmpty() || lines.isEmpty()) {
+QString EraParseTable::scriptPath(const QString& scriptName) const {
+    if (const ScriptData* data = script(scriptName)) {
+        return data->path;
+    }
+    return QString();
+}
+
+bool EraParseTable::hasLabel(const QString& label) const {
+    for (auto it = m_scripts.constBegin(); it != m_scripts.constEnd(); ++it) {
+        if (it.value().labelPositions.contains(label)) return true;
+    }
+    return false;
+}
+
+const LogicalLine* EraParseTable::lineAt(const QString& scriptName, int line) const {
+    const ScriptData* data = script(scriptName);
+    if (!data || line < 0 || line >= data->lines.size()) {
+        return nullptr;
+    }
+    return &data->lines.at(line);
+}
+
+int EraParseTable::jumpTarget(const QString& scriptName, int line) const {
+    const ScriptData* data = script(scriptName);
+    if (!data) {
+        return -1;
+    }
+    return data->jumpTo.value(line, -1);
+}
+
+QList<int> EraParseTable::ifBranches(const QString& scriptName, int ifLine) const {
+    const ScriptData* data = script(scriptName);
+    if (!data) {
+        return QList<int>();
+    }
+    return data->ifBranches.value(ifLine, QList<int>());
+}
+
+const UserFunctionInfo* EraParseTable::userFunction(const QString& name) const {
+    auto it = m_functions.constFind(name.toUpper());
+    return it == m_functions.constEnd() ? nullptr : &it.value();
+}
+
+// ---------------------------------------------------------------------------
+// 只读区：条件求值（优先使用缓存 AST）
+// ---------------------------------------------------------------------------
+
+bool EraParseTable::evaluateAst(const QSharedPointer<ExpressionNode>& ast, bool& out) {
+    if (!ast) {
         return false;
     }
-    
-    // Store parsed script
-    m_parsedScripts[scriptName] = lines;
-    
-    // Build execution queue
-    buildExecutionQueue(scriptName);
-    
-    // Build memory space tree with proper nested blocks
-    buildMemorySpaceTree(scriptName);
-    
-    // Build label positions
-    QHash<QString, int> labelMap;
-    for (int i = 0; i < lines.size(); ++i) {
-        const LogicalLine& line = lines[i];
-        const QList<ScriptLine>& scriptLines = line.scriptLines();
-        
-        for (const ScriptLine& scriptLine : scriptLines) {
-            if (scriptLine.type() == ScriptLineType::Label) {
-                // Extract label name from the line content
-                QString labelName = scriptLine.content();
-                // Remove @ prefix if present
-                if (labelName.startsWith('@')) {
-                    labelName = labelName.mid(1);
-                }
-                labelMap[labelName] = i;
-            }
-        }
-    }
-    m_labelPositions[scriptName] = labelMap;
-    
-    emit parseCompleted(scriptName);
+    ExpressionEvaluator local;
+    ExpressionEvaluator* ev = m_evaluator ? m_evaluator : &local;
+    const QVariant v = ev->evaluate(*ast, m_variableStorage, nullptr);
+    out = v.isValid() && v.toInt() != 0;
     return true;
 }
 
-bool EraParseTable::loadDirectory(const QString& dirPath, int depth) {
-    // Directory loading should be handled by ErbLoader
-    // This method is now obsolete but kept for API compatibility
+bool EraParseTable::evaluateExpression(const QString& expr, bool& out) {
+    const QSharedPointer<ExpressionNode> ast = expressionAst(expr);
+    if (ast) {
+        return evaluateAst(ast, out);
+    }
+    ExpressionEvaluator local;
+    ExpressionEvaluator* ev = m_evaluator ? m_evaluator : &local;
+    const QVariant v = ev->evaluate(expr, m_variableStorage, nullptr);
+    out = v.isValid() && v.toInt() != 0;
+    return true;
+}
+
+bool EraParseTable::evaluateCondition(const QString& scriptName, int line, bool& out, int argIndex) {
+    const LogicalLine* ll = lineAt(scriptName, line);
+    if (!ll) {
+        return false;
+    }
+    if (ll->condition && evaluateAst(ll->condition, out)) {
+        return true;
+    }
+    if (argIndex >= 0 && argIndex < ll->arguments.size() && ll->arguments.at(argIndex).ast) {
+        return evaluateAst(ll->arguments.at(argIndex).ast, out);
+    }
+    return evaluateExpression(ll->raw, out);
+}
+
+// ---------------------------------------------------------------------------
+// 只读区：装载（AST 由 ErbLoader/AstBuilder 预先构建）
+// ---------------------------------------------------------------------------
+
+bool EraParseTable::loadScript(const QString& scriptName, const QList<LogicalLine>& lines,
+                              bool isHeaderFile, const QString& path) {
+    if (scriptName.isEmpty() || lines.isEmpty()) {
+        return false;
+    }
+
+    ScriptData data;
+    data.lines = lines;
+    data.path = path;
+
+    QString currentFunction;   // 用于 #DIM 的作用域判定
+    bool afterLabel = false;   // .ERB 中 # 行必须紧跟函数标签（对齐 C# ErbLoader）
+
+    for (int i = 0; i < data.lines.size(); ++i) {
+        LogicalLine& line = data.lines[i];
+        if (line.kind != LineKind::Null && line.kind != LineKind::Preprocessor
+            && line.kind != LineKind::FunctionLabel) {
+            afterLabel = false;
+        }
+        line.ownerFunction = currentFunction;   // 记录所属函数（供变量类型解析）
+
+        // 变量声明（#DIM/#DIMS/#GLOBAL/#GLOBALS/#PRIVATE）
+        // 注：Emuera 的函数形参是「引用私有变量」（@F(VAR:0)），类型来自 #DIM，
+        //     因此这里只跟踪当前函数名用于作用域判定，不把形参登记为新变量。
+        if (line.kind == LineKind::FunctionLabel) {
+            currentFunction = line.labelName;
+        } else if (line.kind == LineKind::Preprocessor) {
+            // .ERH（头文件）：文件级 #DIM = 全局（对齐 C# HeaderFileLoader）
+            // .ERB（脚本）  ：# 行必须紧跟函数标签，否则告警并忽略（对齐 C# ErbLoader）
+            if (isHeaderFile || afterLabel) {
+                parseVariableDeclaration(line, currentFunction, isHeaderFile);
+            } else {
+                m_parseWarnings.append(QStringLiteral("%1: 函数声明之外使用了 # 行 (%2)")
+                                           .arg(line.position.toString(), line.raw.trimmed()));
+            }
+        }
+        if (line.kind == LineKind::FunctionLabel) {
+            line.ownerFunction = currentFunction;   // 函数标签行自身
+            afterLabel = true;
+        }
+
+        if (line.isLabel()) {
+            data.labelPositions[line.labelName] = i;
+
+            // 注册用户自定义函数（@label 即函数入口）—— 构建完整的声明节点
+            if (line.kind == LineKind::FunctionLabel) {
+                UserFunctionDecl decl;
+                decl.name = line.labelName.toUpper();
+                decl.script = scriptName;
+                decl.labelLine = i;
+
+                // 形参表：把标签里写的名字归类为 ARG / ARGS / 私有变量
+                for (const QString& argName : line.labelArgs) {
+                    UserParamDecl p = classifyUserParam(argName);
+                    if (p.target == UserParamTarget::Arg
+                        && p.index > decl.maxArgIndex) decl.maxArgIndex = p.index;
+                    if (p.target == UserParamTarget::Args
+                        && p.index > decl.maxArgsIndex) decl.maxArgsIndex = p.index;
+                    decl.params.append(p);
+                }
+
+                // 紧随其后的 # 行：是否可作表达式函数 + 事件分组/私有局部尺寸
+                for (int j = i + 1; j < lines.size() && lines.at(j).kind == LineKind::Preprocessor; ++j) {
+                    const QString dir = lines.at(j).raw.trimmed().toUpper();
+                    if (dir.startsWith("#FUNCTIONS")) {
+                        decl.isMethod = true;
+                        decl.returnType = OperandType::Str;
+                    } else if (dir.startsWith("#FUNCTION")) {
+                        if (!decl.isMethod) decl.returnType = OperandType::Int;
+                        decl.isMethod = true;
+                    } else if (dir.startsWith("#SINGLE")) {
+                        decl.isSingle = true;
+                    } else if (dir.startsWith("#PRI")) {
+                        decl.isPri = true;
+                    } else if (dir.startsWith("#LATER")) {
+                        decl.isLater = true;
+                    } else if (dir.startsWith("#ONLY")) {
+                        decl.isOnly = true;
+                    } else if (dir.startsWith("#LOCALSSIZE")) {
+                        decl.localsSize = dir.mid(11).trimmed().toInt();
+                    } else if (dir.startsWith("#LOCALSIZE")) {
+                        decl.localSize = dir.mid(10).trimmed().toInt();
+                    }
+                }
+
+                // 事件 / 系统标签（对齐 C# IdentifierDictionary.IsEventLabelName/IsSystemLabelName）
+                static const QSet<QString> kEventLabels = {
+                    QStringLiteral("EVENTFIRST"), QStringLiteral("EVENTTRAIN"),
+                    QStringLiteral("EVENTSHOP"), QStringLiteral("EVENTBUY"),
+                    QStringLiteral("EVENTCOM"), QStringLiteral("EVENTTURNEND"),
+                    QStringLiteral("EVENTCOMEND"), QStringLiteral("EVENTEND"),
+                    QStringLiteral("EVENTLOAD"),
+                };
+                if (kEventLabels.contains(decl.name)) decl.isEvent = true;
+                if (decl.isEvent || decl.name.startsWith(QLatin1String("SYSTEM"))
+                    || decl.name.startsWith(QLatin1String("SHOW_"))
+                    || decl.name.startsWith(QLatin1String("USER"))
+                    || decl.name.startsWith(QLatin1String("COM"))
+                    || decl.name.startsWith(QLatin1String("ABLUP"))) {
+                    decl.isSystem = true;
+                }
+
+                // 函数体结束 = 下一个函数标签前一行（扁平行号区间，供诊断/遍历）
+                decl.endLine = lines.size() - 1;
+                for (int j = i + 1; j < lines.size(); ++j) {
+                    if (lines.at(j).kind == LineKind::FunctionLabel) { decl.endLine = j - 1; break; }
+                }
+
+                // 同名函数重复定义：真实游戏（eraTW 的各个「口上」）普遍存在，
+                // C# 也是 first-wins，故静默忽略后者（不产生告警）。
+                if (!m_functions.contains(decl.name)) {
+                    m_functions.insert(decl.name, decl);
+                }
+            }
+        }
+    }
+
+    m_scripts.insert(scriptName, data);
+
+    // 维数求值与类型回填都推迟到 finalizeParse()：
+    // 二者都需要「全部声明/常数就绪」，且是全量操作（避免 O(脚本数 × 声明数)）。
+
+    // 标记区：跳转标记 + 控制转移预绑定
+    buildJumpMarkings(scriptName);
+
+    if (m_currentScript.isEmpty()) {
+        m_currentScript = scriptName;
+    }
+    m_executionQueueIndices.insert(scriptName, 0);
+
+    emit parseCompleted(scriptName);
     return true;
 }
 
 void EraParseTable::setEntryPoint(const QString& label) {
     m_entryPoint = label;
-    
-    // Find which script contains this entry point label
-    for (const QString& scriptName : m_labelPositions.keys()) {
-        const QHash<QString, int>& labelMap = m_labelPositions[scriptName];
-        if (labelMap.contains(label)) {
-            m_currentScript = scriptName;
+
+    for (auto it = m_scripts.constBegin(); it != m_scripts.constEnd(); ++it) {
+        if (it.value().labelPositions.contains(label)) {
+            m_currentScript = it.key();
             break;
         }
     }
-    
-    // If entry point not found, try to find a reasonable default
+
     if (m_currentScript.isEmpty()) {
-        // Try to find a script with common entry point labels
-        QStringList commonLabels = {"MAIN_LOOP", "SYSTEM_TITLE", "MAIN", "TITLE"};
+        const QStringList commonLabels = {"MAIN_LOOP", "SYSTEM_TITLE", "MAIN", "TITLE"};
         for (const QString& labelToTry : commonLabels) {
-            for (const QString& scriptName : m_labelPositions.keys()) {
-                const QHash<QString, int>& labelMap = m_labelPositions[scriptName];
-                if (labelMap.contains(labelToTry)) {
-                    m_currentScript = scriptName;
+            for (auto it = m_scripts.constBegin(); it != m_scripts.constEnd(); ++it) {
+                if (it.value().labelPositions.contains(labelToTry)) {
+                    m_currentScript = it.key();
                     m_entryPoint = labelToTry;
                     break;
                 }
@@ -161,18 +366,12 @@ void EraParseTable::setEntryPoint(const QString& label) {
             if (!m_currentScript.isEmpty()) break;
         }
     }
-    
-    // 位置区：入口点 = 全新执行，清空调用栈并把 PC 定位到入口 label
+
     if (!m_currentScript.isEmpty()) {
         const int entryLine = getLabelPosition(m_currentScript, m_entryPoint);
-        m_currentMemorySpace = getOrCreateMemorySpace(m_currentScript);
         resetPosition();
         setCurrentLineInternal(entryLine >= 0 ? entryLine : 0, true);
-        
-        // Sync queue index to PC to prevent desync
-        if (m_executionQueueIndices.contains(m_currentScript)) {
-            m_executionQueueIndices[m_currentScript] = entryLine;
-        }
+        m_executionQueueIndices[m_currentScript] = entryLine >= 0 ? entryLine : 0;
     }
 
     emit entryPointReached(label);
@@ -190,34 +389,32 @@ QList<LogicalLine> EraParseTable::getExecutionQueue() const {
     if (m_currentScript.isEmpty()) {
         return QList<LogicalLine>();
     }
-    return m_executionQueues.value(m_currentScript);
+    const ScriptData* data = script(m_currentScript);
+    return data ? data->lines : QList<LogicalLine>();
 }
 
 int EraParseTable::getLabelPosition(const QString& scriptName, const QString& labelName) const {
-    if (!m_labelPositions.contains(scriptName)) {
+    const ScriptData* data = script(scriptName);
+    if (!data) {
         return -1;
     }
-    
-    const QHash<QString, int>& labelMap = m_labelPositions[scriptName];
-    return labelMap.value(labelName, -1);
+    return data->labelPositions.value(labelName, -1);
 }
 
 bool EraParseTable::resolveJumpTarget(const QString& label, int& position) {
     position = getLabelPosition(m_currentScript, label);
-    
     if (position >= 0) {
         return true;
     }
-    
-    for (const QString& scriptName : m_labelPositions.keys()) {
-        position = getLabelPosition(scriptName, label);
-        if (position >= 0) {
-            m_currentScript = scriptName;
-            m_currentMemorySpace = getOrCreateMemorySpace(scriptName);
+
+    for (auto it = m_scripts.constBegin(); it != m_scripts.constEnd(); ++it) {
+        const int pos = it.value().labelPositions.value(label, -1);
+        if (pos >= 0) {
+            position = pos;
+            switchToMemorySpace(it.key());
             return true;
         }
     }
-    
     return false;
 }
 
@@ -236,12 +433,6 @@ QString EraParseTable::getCurrentScript() const {
 
 // ===========================================================================
 // 位置区 (Position region)
-// ---------------------------------------------------------------------------
-// 位置区只由持有本对象的执行线程读写，所有写入都必须经过下面这些
-// setCurrentLineInternal / pushFrame / popFrame 的收敛点，以保证
-// m_currentLine、m_callStack、m_depth 始终自洽。
-// 对应官方 C#：Process.currentLine + Process.functionList
-// (Emuera/GameProc/Process.cs, Process.CalledFunction.cs)。
 // ===========================================================================
 
 QString EraParseTable::currentScript() const {
@@ -272,7 +463,8 @@ bool EraParseTable::hasPosition() const {
 }
 
 int EraParseTable::lineCountFor(const QString& script) const {
-    return m_parsedScripts.value(script).size();
+    const ScriptData* data = this->script(script);
+    return data ? data->lines.size() : 0;
 }
 
 void EraParseTable::setCurrentLineInternal(int line, bool forceEmit) {
@@ -282,10 +474,7 @@ void EraParseTable::setCurrentLineInternal(int line, bool forceEmit) {
     if (line == m_currentLine && !forceEmit) {
         return;
     }
-    int oldLine = m_currentLine;
     m_currentLine = line;
-    
-    // Note: Position tracking is now handled by ParseTable as the authority
     emit positionChanged(m_currentScript, m_currentLine);
 }
 
@@ -311,8 +500,7 @@ void EraParseTable::resetPosition() {
     m_currentLine = 0;
     emit callStackChanged(0);
     emit positionChanged(m_currentScript, 0);
-    
-    // Reset the queue index to 0 when position is reset
+
     if (m_executionQueueIndices.contains(m_currentScript)) {
         m_executionQueueIndices[m_currentScript] = 0;
     }
@@ -335,47 +523,34 @@ bool EraParseTable::jumpToLine(int line) {
         return false;
     }
     setCurrentLineInternal(line, true);
-    
-    // Reset the queue index to the new position
+
     if (m_executionQueueIndices.contains(m_currentScript)) {
         m_executionQueueIndices[m_currentScript] = line;
     }
-    
     return true;
 }
 
 bool EraParseTable::jumpToLabel(const QString& label) {
-    const QString oldScript = m_currentScript;
-
     int target = -1;
     if (!resolveJumpTarget(label, target)) {
         return false;
     }
 
-    // resolveJumpTarget 可能已经改变了 m_currentScript，这里补齐内存空间与信号
-    if (m_currentScript != oldScript) {
-        m_currentMemorySpace = getOrCreateMemorySpace(m_currentScript);
-        emit memorySpaceChanged(m_currentScript);
-    }
-
     setCurrentLineInternal(target, true);
-    
-    // Reset the queue index to the new position
     if (m_executionQueueIndices.contains(m_currentScript)) {
         m_executionQueueIndices[m_currentScript] = target;
     }
-    
+
     emit jumpRequested(m_currentScript, label, target);
     return true;
 }
 
 bool EraParseTable::callLabel(const QString& label, bool advanceWasCalled) {
-    // 目标优先在当前脚本解析，否则跨脚本查找（保持调用者脚本不变）
     QString targetScript = m_currentScript;
     int target = getLabelPosition(m_currentScript, label);
     if (target < 0) {
-        for (auto it = m_labelPositions.constBegin(); it != m_labelPositions.constEnd(); ++it) {
-            const int pos = it.value().value(label, -1);
+        for (auto it = m_scripts.constBegin(); it != m_scripts.constEnd(); ++it) {
+            const int pos = it.value().labelPositions.value(label, -1);
             if (pos >= 0) {
                 targetScript = it.key();
                 target = pos;
@@ -387,27 +562,47 @@ bool EraParseTable::callLabel(const QString& label, bool advanceWasCalled) {
         return false;
     }
 
-    // 返回地址 = CALL 所在行的下一行，此时仍处于调用者脚本中
-    // The return address is the line AFTER the CALL instruction.
-    // If advanceWasCalled is true, m_currentLine already points to the line after CALL
-    // (because advance() was called before callLabel()).
-    // Otherwise, m_currentLine points to CALL itself, so returnLine = m_currentLine + 1.
-    int returnLine = advanceWasCalled ? m_currentLine : m_currentLine + 1;
+    const int returnLine = advanceWasCalled ? m_currentLine : m_currentLine + 1;
     pushFrame(Frame(m_currentScript, returnLine, label));
 
     if (targetScript != m_currentScript) {
         switchToMemorySpace(targetScript);
     }
     setCurrentLineInternal(target, true);
-    
-    // Reset the queue index to the target position
+
     if (m_executionQueueIndices.contains(targetScript)) {
         m_executionQueueIndices[targetScript] = target;
     }
-    
-    // Emit checkState to continue execution
+
     emit checkState();
-    
+    return true;
+}
+
+bool EraParseTable::callLabelWithReturn(const QString& label, int returnLine) {
+    QString targetScript = m_currentScript;
+    int target = getLabelPosition(m_currentScript, label);
+    if (target < 0) {
+        for (auto it = m_scripts.constBegin(); it != m_scripts.constEnd(); ++it) {
+            const int pos = it.value().labelPositions.value(label, -1);
+            if (pos >= 0) {
+                targetScript = it.key();
+                target = pos;
+                break;
+            }
+        }
+    }
+    if (target < 0) {
+        return false;
+    }
+
+    pushFrame(Frame(m_currentScript, returnLine, label));
+    if (targetScript != m_currentScript) {
+        switchToMemorySpace(targetScript);
+    }
+    setCurrentLineInternal(target, true);
+    if (m_executionQueueIndices.contains(targetScript)) {
+        m_executionQueueIndices[targetScript] = target;
+    }
     return true;
 }
 
@@ -421,359 +616,125 @@ bool EraParseTable::returnFromCall() {
         switchToMemorySpace(frame.script);
     }
     setCurrentLineInternal(frame.returnLine, true);
-    
-    // Reset the queue index when returning to the caller's position
+
     if (m_executionQueueIndices.contains(m_currentScript)) {
         m_executionQueueIndices[m_currentScript] = frame.returnLine;
     }
-    
     return true;
 }
 
-ScriptMemorySpace* EraParseTable::getCurrentMemorySpace() const {
-    return m_currentMemorySpace;
-}
-
-MemorySpaceManager* EraParseTable::getMemorySpaceManager() const {
-    return m_memorySpaceManager;
-}
-
-void EraParseTable::buildExecutionQueue(const QString& scriptName) {
-    if (!m_parsedScripts.contains(scriptName)) {
-        return;
-    }
-    
-    const QList<LogicalLine>& lines = m_parsedScripts[scriptName];
-    
-    // Initialize queue and index
-    m_executionQueues[scriptName] = lines;
-    m_executionQueueIndices[scriptName] = 0;
-
-    if (m_currentScript == scriptName) {
-        // 位置区：脚本重新装载后 PC 归零（加载期，保持安静，不发信号）
-        m_currentLine = 0;
-    }
-}
-
-void EraParseTable::buildMemorySpaceTree(const QString& scriptName) {
-    if (!m_parsedScripts.contains(scriptName)) {
-        return;
-    }
-    
-    ScriptMemorySpace* space = getOrCreateMemorySpace(scriptName);
-    
-    // Ensure root block exists
-    if (!space->rootBlock()) {
-        space->setRootBlock(new MemoryBlock(MemoryBlockType::NestedBlock, space));
-    }
-    
-    const QList<LogicalLine>& lines = m_parsedScripts[scriptName];
-    
-    MemoryBlock* currentParent = space->rootBlock();
-    QList<MemoryBlock*> blockStack;
-    
-    for (int i = 0; i < lines.size(); ++i) {
-        const LogicalLine& line = lines[i];
-        const QList<ScriptLine>& scriptLines = line.scriptLines();
-        
-        for (const ScriptLine& scriptLine : scriptLines) {
-            MemoryBlock* block = nullptr;
-            
-            switch (scriptLine.type()) {
-                case ScriptLineType::Label: {
-                    QString labelName = scriptLine.content();
-                    if (labelName.startsWith('@')) {
-                        labelName = labelName.mid(1);
-                    }
-                    block = new LabelBlock(labelName, space);
-                    space->addLabelBlock(labelName, block);
-                    space->setLabelPosition(labelName, i);
-                    break;
-                }
-                
-                case ScriptLineType::Instruction: {
-                    QString instructionName = scriptLine.instructionData().name;
-                    QString trimmed = instructionName.trimmed();
-                    
-                    // Use case-insensitive comparison for instruction names
-                    QString upperName = trimmed.toUpper();
-                    
-                    if (upperName == "IF") {
-                        // Reconstruct condition from instruction arguments
-                        QString condition = reconstructOperand(scriptLine);
-                        IfBlock* ifBlock = new IfBlock(condition, space);
-                        block = ifBlock;
-                        blockStack.append(currentParent);
-                        currentParent = ifBlock;
-                    }
-                    else if (upperName == "ELSEIF") {
-                        QString condition = reconstructOperand(scriptLine);
-                        ElseIfBlock* elseIfBlock = new ElseIfBlock(condition, space);
-                        block = elseIfBlock;
-                        
-                        if (!blockStack.isEmpty()) {
-                            MemoryBlock* parent = blockStack.last();
-                            if (parent && parent->type() == MemoryBlockType::IfBlock) {
-                                IfBlock* ifBlock = static_cast<IfBlock*>(parent);
-                                ifBlock->setFalseBranch(elseIfBlock);
-                                currentParent = elseIfBlock;
-                            }
-                        }
-                    }
-                    else if (upperName == "ELSE") {
-                        if (!blockStack.isEmpty()) {
-                            MemoryBlock* parent = blockStack.last();
-                            if (parent && parent->type() == MemoryBlockType::IfBlock) {
-                                IfBlock* ifBlock = static_cast<IfBlock*>(parent);
-                                if (ifBlock->trueBranch()) {
-                                    ifBlock->setFalseBranch(new ElseBlock(space));
-                                    block = ifBlock->falseBranch();
-                                    currentParent = block;
-                                }
-                            }
-                        }
-                    }
-                    else if (upperName == "ENDIF") {
-                        if (!blockStack.isEmpty()) {
-                            currentParent = blockStack.takeLast();
-                        }
-                        continue;
-                    }
-                    else if (upperName == "SIF") {
-                        // SIF is a conditional IF that skips next line if false
-                        QString condition = reconstructOperand(scriptLine);
-                        IfBlock* ifBlock = new IfBlock(condition, space);
-                        block = ifBlock;
-                        blockStack.append(currentParent);
-                        currentParent = ifBlock;
-                    }
-                    else if (upperName == "REPEAT" || upperName == "LOOP") {
-                        QString operand = reconstructOperand(scriptLine);
-                        LoopBlock* loopBlock = new LoopBlock(operand.toInt(), space);
-                        block = loopBlock;
-                        
-                        blockStack.append(currentParent);
-                        currentParent = loopBlock;
-                    }
-                    else if (upperName == "NEXT") {
-                        if (!blockStack.isEmpty()) {
-                            currentParent = blockStack.takeLast();
-                        }
-                        continue;
-                    }
-                    else if (upperName == "GOTO") {
-                        QString target = reconstructOperand(scriptLine);
-                        GotoBlock* gotoBlock = new GotoBlock(target, space);
-                        block = gotoBlock;
-                    }
-                    else if (upperName == "CALL") {
-                        QString target = reconstructOperand(scriptLine);
-                        CallBlock* callBlock = new CallBlock(target, space);
-                        block = callBlock;
-                    }
-                    else if (upperName == "RETURN") {
-                        ReturnBlock* returnBlock = new ReturnBlock(space);
-                        block = returnBlock;
-                    }
-                    else {
-                        CommandBlock* cmdBlock = new CommandBlock(reconstructCommand(scriptLine), space);
-                        block = cmdBlock;
-                    }
-                    break;
-                }
-                
-                case ScriptLineType::Expression: {
-                    CommandBlock* cmdBlock = new CommandBlock(reconstructCommand(scriptLine), space);
-                    block = cmdBlock;
-                    break;
-                }
-                
-                case ScriptLineType::Comment:
-                case ScriptLineType::Empty:
-                    continue;
-                
-                default:
-                    continue;
-            }
-            
-            if (block) {
-                // Only add to allBlocks if not already owned by a parent
-                // Blocks added to parent are owned by parent and will be deleted when parent is deleted
-                space->addToExecutionQueue(block);
-                currentParent->addChild(block);
-            }
-        }
-    }
-    
-}
-
-ScriptMemorySpace* EraParseTable::getOrCreateMemorySpace(const QString& scriptName) {
-    ScriptMemorySpace* space = m_memorySpaceManager->getMemorySpace(scriptName);
-    if (!space) {
-        space = m_memorySpaceManager->createMemorySpace(scriptName);
-    }
-    return space;
-}
-
 void EraParseTable::switchToMemorySpace(const QString& scriptName) {
-    if (m_currentScript == scriptName) {
+    if (m_currentScript == scriptName || scriptName.isEmpty()) {
         return;
     }
-    
     m_currentScript = scriptName;
-    m_currentMemorySpace = getOrCreateMemorySpace(scriptName);
-    
     emit memorySpaceChanged(scriptName);
 }
 
 void EraParseTable::onExecutionResult(const QString& scriptName, int lineNumber, bool success) {
-    // Note: Execution result handling is now managed by ParseTable
     if (!success) {
         return;
     }
-    
     emit checkState();
 }
 
 void EraParseTable::onJumpRequest(const QString& label) {
-    // 位置区统一入口：解析 label（可跨脚本）并更新 PC，再通知执行侧。
     jumpToLabel(label);
 }
 
 void EraParseTable::onJumpToScript(const QString& scriptName, const QString& label) {
     int targetPosition = -1;
     if (resolveJumpToScript(scriptName, label, targetPosition)) {
-        // 位置区：切换脚本并定位到目标 label
         setPosition(scriptName, targetPosition);
         emit jumpRequested(scriptName, label, targetPosition);
     }
 }
 
 void EraParseTable::onStateChange() {
-    // State change detected - stop execution
 }
 
 void EraParseTable::onStateUnchanged() {
-    // State unchanged - pump the next instruction
-    // This is called when the state check finds no change
-    if (m_currentScript.isEmpty() || m_executionQueues[m_currentScript].isEmpty()) {
+    if (m_currentScript.isEmpty()) {
         return;
     }
-    
-    // Check if there are more instructions to execute
+    const ScriptData* data = script(m_currentScript);
+    if (!data) {
+        return;
+    }
     int& index = m_executionQueueIndices[m_currentScript];
-    const QList<LogicalLine>& queue = m_executionQueues[m_currentScript];
-    if (index >= queue.size()) {
+    if (index >= data->lines.size()) {
         return;
     }
-    
     pumpInstructions();
 }
 
 void EraParseTable::onStateChanged() {
-    // Continue execution after state change
     pumpInstructions();
 }
 
 bool EraParseTable::pumpInstructions() {
-    // Execute instructions in a loop until state changes or queue is empty
-    // This avoids stack overflow from recursive signal chains by:
-    // 1. Using Qt::QueuedConnection for stateUnchanged signal (set in eraengine.cpp)
-    // 2. Directly processing instructions without emitting signals
-    
-    // Re-entrancy guard: prevent pumpInstructions from being called recursively
     if (s_inPumpInstructions) {
         return false;
     }
     s_inPumpInstructions = true;
-    
-    // Re-entrancy cleanup on exit (RAII-style)
     auto cleanup = [&]() { s_inPumpInstructions = false; };
-    
-    if (m_currentScript.isEmpty() || m_executionQueues[m_currentScript].isEmpty()) {
+
+    if (m_currentScript.isEmpty()) {
         cleanup();
         return false;
     }
-    
-    // Get reference to the queue and index
-    QList<LogicalLine>& queue = m_executionQueues[m_currentScript];
+
+    const ScriptData* data = script(m_currentScript);
+    if (!data) {
+        cleanup();
+        return false;
+    }
+
     int& index = m_executionQueueIndices[m_currentScript];
-    
-    // Process instructions until queue is empty or state changes
-    // Execute one instruction at a time to avoid stack overflow
-    // This is called repeatedly by onStateUnchanged via Qt::QueuedConnection
-    if (index >= queue.size()) {
-        // End of queue: if there's a call stack, return from call; otherwise stop
+
+    if (index >= data->lines.size()) {
         if (m_callStack.isEmpty()) {
-            // No more execution to do
             cleanup();
             return false;
-        } else {
-            // We've reached the end of a function, return to caller
-            // This handles the case where a script ends before its entry function completes
-            if (returnFromCall()) {
-                // Continue execution in caller
-                cleanup();
-                return true;
-            } else {
-                // Should not happen if callStack is not empty
-                cleanup();
-                return false;
-            }
         }
+        if (returnFromCall()) {
+            cleanup();
+            return true;
+        }
+        cleanup();
+        return false;
     }
-    
-    // Get and execute the next instruction directly
-    LogicalLine line = queue.at(index);
-    index++;
-    advance();  // 位置区：PC++，索引递增即前进
 
-    // Use ExecutionEngine to execute the instruction
+    LogicalLine line = data->lines.at(index);
+    index++;
+    advance();
+
     if (m_executionEngine) {
-        // Set current script and position
         m_executionEngine->setCurrentScript(m_currentScript);
         m_executionEngine->setExecutionPosition(m_currentLine);
         m_executionEngine->executeLogicalLine(line);
 
-        // Execute any additional instructions from ExecutionEngine's queue
-        // (e.g., loop body re-execution)
         while (!m_executionEngine->isQueueEmpty()) {
             LogicalLine execLine = m_executionEngine->dequeueExecutionLine();
             advance();
             m_executionEngine->setExecutionPosition(m_currentLine);
             m_executionEngine->executeLogicalLine(execLine);
         }
-    } else {
-        // Fallback: execute inline
-        const QList<ScriptLine>& scriptLines = line.scriptLines();
-        for (const ScriptLine& scriptLine : scriptLines) {
-            if (scriptLine.type() == ScriptLineType::Label) {
-                continue;  // Labels don't execute
-            }
-        }
     }
-    
-    // After instruction, give event loop a chance to process
-    // Process events to ensure onStateUnchanged is processed
-    // Note: timeout of 1ms is sufficient to allow event processing without blocking
+
     QCoreApplication::processEvents(QEventLoop::AllEvents, 1);
-    
-    // Emit checkState to trigger the next instruction via onStateUnchanged
+
     emit checkState();
-    
-    // Return true if there are more instructions to process
-    bool result = index < queue.size();
+
+    const bool result = index < data->lines.size();
     cleanup();
     return result;
 }
 
 void EraParseTable::startExecutionPump() {
-    // Start the execution pump by requesting the first instruction
     if (!m_entryPoint.isEmpty() && m_currentScript.isEmpty()) {
-        // Set entry point if not already set
         setEntryPoint(m_entryPoint);
     }
-    // Pump first instruction
     pumpInstructions();
 }
 
@@ -782,6 +743,495 @@ void EraParseTable::onRequestNextInstruction() {
 }
 
 void EraParseTable::onExecutionComplete(const QString& scriptName) {
-    // 位置区：一次执行结束，清空调用栈并复位 PC
     resetPosition();
+}
+
+// ---------------------------------------------------------------------------
+// 标记区：跳转标记 + 控制转移预绑定（行号索引，等价 C# JumpTo / NextLine）
+// ---------------------------------------------------------------------------
+
+void EraParseTable::buildJumpMarkings(const QString& scriptName) {
+    auto scriptIt = m_scripts.find(scriptName);
+    if (scriptIt == m_scripts.end()) {
+        return;
+    }
+
+    ScriptData& data = scriptIt.value();
+    data.endifLines.clear();
+    data.elseLines.clear();
+    data.loopEndLines.clear();
+    data.jumpTo.clear();
+    data.jumpToEnd.clear();
+    data.ifBranches.clear();
+
+    struct IfInfo {
+        int ifLine = -1;
+        int lastBranch = -1;
+        QList<int> branches;   // ELSEIF/ELSE 行（C# IfCaseList）
+    };
+    struct LoopInfo {
+        int startLine = -1;
+        QString type;
+    };
+
+    QList<IfInfo> ifStack;
+    QList<LoopInfo> loopStack;
+
+    for (int i = 0; i < data.lines.size(); ++i) {
+        LogicalLine& ll = data.lines[i];
+        ll.lineIndex = i;
+        if (i + 1 < data.lines.size()) {
+            ll.nextLine = i + 1;
+        }
+        if (!ll.isInstruction()) {
+            continue;
+        }
+
+        const QString& name = ll.functionName;
+
+        if (name == QLatin1String("IF")) {
+            ifStack.append({i, -1, {}});
+        }
+        else if (name == QLatin1String("SIF")) {
+            // SIF：条件为假则跳过下一行
+            data.jumpTo[i] = i + 2;
+            data.elseLines[i] = i + 2;
+            ll.jumpTo = i + 2;
+        }
+        else if (name == QLatin1String("ELSEIF") || name == QLatin1String("ELSE")) {
+            if (!ifStack.isEmpty()) {
+                IfInfo& cur = ifStack.last();
+                const int prev = (cur.lastBranch >= 0) ? cur.lastBranch : cur.ifLine;
+                data.elseLines[prev] = i;
+                cur.branches.append(i);
+                cur.lastBranch = i;
+                // ELSEIF/ELSE 由“顺序落入”执行时，直接跳到 ENDIF 之后（C# state.JumpTo(ENDIF)）
+            }
+        }
+        else if (name == QLatin1String("ENDIF")) {
+            if (!ifStack.isEmpty()) {
+                const IfInfo cur = ifStack.takeLast();
+                const int after = i + 1;
+                data.endifLines[cur.ifLine] = after;
+                data.jumpTo[cur.ifLine] = after;
+                data.lines[cur.ifLine].jumpTo = after;
+                data.ifBranches[cur.ifLine] = cur.branches;
+                for (int b : cur.branches) {
+                    data.endifLines[b] = after;
+                    data.jumpTo[b] = after;             // 顺序落入分支 -> 跳过到 ENDIF 之后
+                    data.lines[b].jumpTo = after;
+                }
+            }
+        }
+        else if (name == QLatin1String("REPEAT") || name == QLatin1String("WHILE")
+                 || name == QLatin1String("FOR")) {
+            loopStack.append({i, name});
+        }
+        else if (name == QLatin1String("LOOP") || name == QLatin1String("WEND")
+                 || name == QLatin1String("NEXT")) {
+            const QString expected = (name == QLatin1String("LOOP")) ? QStringLiteral("REPEAT")
+                                   : (name == QLatin1String("WEND")) ? QStringLiteral("WHILE")
+                                                                     : QStringLiteral("FOR");
+            if (!loopStack.isEmpty() && loopStack.last().type == expected) {
+                const LoopInfo info = loopStack.takeLast();
+                data.loopEndLines[info.startLine] = i;
+                data.jumpToEnd[info.startLine] = i;
+                data.lines[info.startLine].jumpToEndCatch = i;
+                data.jumpTo[i] = info.startLine;
+                data.lines[i].jumpTo = info.startLine;
+            }
+        }
+    }
+}
+
+// ---------------------------------------------------------------------------
+// 变量表：解析 #DIM/#DIMS/#GLOBAL/#GLOBALS/#PRIVATE，并把类型回填到 AST
+// ---------------------------------------------------------------------------
+namespace {
+// 去掉指令行的 ';' 注释（尊重引号）；#DIM CONST X = 0 ;说明 需要它
+QString stripDirectiveComment(const QString& text) {
+    QChar quote;
+    for (int i = 0; i < text.size(); ++i) {
+        const QChar c = text.at(i);
+        if (!quote.isNull()) {
+            if (c == quote) quote = QChar();
+            continue;
+        }
+        if (c == QLatin1Char('"') || c == QLatin1Char('\'')) { quote = c; continue; }
+        if (c == QLatin1Char(';')) return text.left(i);
+    }
+    return text;
+}
+} // namespace
+
+void EraParseTable::parseVariableDeclaration(const LogicalLine& line, const QString& currentFunction,
+                                            bool isHeaderFile) {
+    QString s = line.raw.trimmed();
+    if (!s.startsWith(QLatin1Char('#'))) return;
+    s = s.mid(1);
+
+    int i = 0;
+    while (i < s.size() && !s.at(i).isSpace()) ++i;
+    const QString directive = s.left(i).toUpper();
+    const QString rest = stripDirectiveComment(s.mid(i)).trimmed();
+
+    bool isStr = false;
+    bool isGlobal = false;
+    bool isPrivate = false;
+    if (directive == QLatin1String("DIM")) {
+        // 默认：函数内私有 / 文件级全局
+    } else if (directive == QLatin1String("DIMS")) {
+        isStr = true;
+    } else if (directive == QLatin1String("GLOBAL")) {
+        isGlobal = true;
+    } else if (directive == QLatin1String("GLOBALS")) {
+        isGlobal = true;
+        isStr = true;
+    } else if (directive == QLatin1String("PRIVATE")) {
+        isGlobal = true;
+        isPrivate = true;
+    } else {
+        return;   // 其它 # 行（#FUNCTION/#SINGLE/…）不在此处理
+    }
+
+    if (rest.isEmpty()) {
+        m_parseWarnings.append(QStringLiteral("%1: #%2 缺少变量名")
+                                   .arg(line.position.toString(), directive));
+        return;
+    }
+
+    try {
+        const UserDefinedVariableData d =
+            UserDefinedVariableData::create(rest, isStr, /*isPrivate=*/true, line.position);
+
+        // CONST 声明的初值即常数（供 #DIM 维数引用）
+        if (d.isConst) {
+            if (d.typeIsStr) {
+                if (!d.defaultStr.isEmpty()) m_variables.setConstStr(d.name, d.defaultStr.first());
+            } else if (!d.defaultInt.isEmpty()) {
+                m_variables.setConstInt(d.name, d.defaultInt.first());
+            }
+        }
+
+        VariableDecl decl;
+        decl.name = d.name;
+        decl.type = d.typeIsStr ? OperandType::Str : OperandType::Int;
+        // 全局判定：GLOBAL 关键字 / 头文件文件级 / 不在任何函数内
+        decl.scope = (isGlobal || d.global || isHeaderFile || currentFunction.isEmpty())
+                         ? VarScope::Global : VarScope::Local;
+        decl.function = (decl.scope == VarScope::Local) ? currentFunction : QString();
+        decl.dimension = d.dimension;
+        decl.lengths = d.lengths;
+        decl.lengthExprs = d.lengthExprs;
+        decl.isPrivate = isPrivate || !isGlobal;
+        decl.isConst = d.isConst;
+
+        if (!m_variables.add(decl)) {
+            // 局部重名：同名 @label 重复定义时常见（C# 亦报错）；此处静默 first-wins
+            if (decl.scope == VarScope::Global) {
+                m_parseWarnings.append(QStringLiteral("%1: 全局变量 %2 重复定义")
+                                           .arg(line.position.toString(), decl.name));
+            }
+        }
+    } catch (const std::exception& e) {
+        m_parseWarnings.append(QStringLiteral("%1: #%2 声明错误：%3 (%4)")
+                                   .arg(line.position.toString(), directive,
+                                        QString::fromUtf8(e.what()), rest));
+    }
+}
+
+void EraParseTable::applyVariableTypes() {
+    // 1) 缓存里的 AST
+    for (auto& ast : m_astCache) {
+        if (ast) VariableTable::applyTypes(*ast, m_variables);
+    }
+    // 2) 各行实际引用的 AST（并行装载时 worker 的 AST 不在主缓存中）
+    const auto applyToLine = [this](const LogicalLine& line) {
+        const QString& fn = line.ownerFunction;
+        for (const Operand& op : line.arguments) {
+            if (op.ast) VariableTable::applyTypes(*op.ast, m_variables, fn);
+        }
+        for (const auto& e : line.argument.exprs) {
+            if (e) VariableTable::applyTypes(*e, m_variables, fn);
+        }
+        for (const Operand& c : line.argument.cases) {
+            if (c.ast) VariableTable::applyTypes(*c.ast, m_variables, fn);
+        }
+        if (line.condition) VariableTable::applyTypes(*line.condition, m_variables, fn);
+    };
+    for (auto sit = m_scripts.begin(); sit != m_scripts.end(); ++sit) {
+        for (const LogicalLine& line : sit.value().lines) {
+            applyToLine(line);
+        }
+    }
+}
+
+void EraParseTable::mergeAstCache(const QHash<QString, QSharedPointer<ExpressionNode>>& localCache) {
+    for (auto it = localCache.constBegin(); it != localCache.constEnd(); ++it) {
+        if (!m_astCache.contains(it.key())) {
+            m_astCache.insert(it.key(), it.value());
+        }
+    }
+}
+
+void EraParseTable::finalizeParse() {
+    m_variables.resolveDimensions();
+    // 用户自定义函数的强类型化（形参类型回填 + 返回类型确定）
+    resolveUserFunctionTypes();
+    // 字符串赋值的右值改按 StrForm 解析（对齐 C# AnalyseFormattedString）
+    applyStringAssignments();
+    applyVariableTypes();
+    // 函数调用重绑：装载顺序无关（并行分块时，某块的表达式可能先于
+    // 它调用的 #FUNCTION 被解析，此时只能当「未定义」；到此处全部脚本已 merge）
+    resolveFunctionNodes();
+    // 参数/类型校验必须在「变量类型已回填」之后进行：
+    // 否则 LFONTS 之类用户 #DIMS 变量在解析期还是默认的 Int，
+    // 会误报「需要字符串表达式，实得 Int」。
+    validateArguments();
+}
+
+// ---------------------------------------------------------------------------
+// 函数调用重绑 + 校验（对齐 C# IdentifierDictionary.GetFunctionMethod）
+// ---------------------------------------------------------------------------
+// ---------------------------------------------------------------------------
+// 字符串赋值：右值按 StrForm 解析（对齐 C# SP_SET_ArgumentBuilder）
+//
+//   C# 里 `STRVAR = <剩余全部文本>` 走 LexicalAnalyzer.AnalyseFormattedString，
+//   即「文本 + {expr}/%expr%」——所以 eraTW 的
+//       PNAME = 妖怪之山 (山麓)
+//       PNAME = %GET_MAPNAME(MAPID)%への道中
+//   都是合法的（前者整体是字面文本）。若当表达式解析，前者会变成
+//   「未定义的函数 妖怪之山」，后者直接解析失败。
+//
+//   变量类型要到所有 #DIM/#DIMS 都解析完之后才确定，故放在 finalize。
+// ---------------------------------------------------------------------------
+namespace {
+
+// 取赋值左值的首标识符（跳过 A:1 / GLOBAL:5 这类下标）
+QString leadingIdentifier(const QString& raw) {
+    int i = 0;
+    while (i < raw.size()) {
+        const QChar c = raw.at(i);
+        if (c.isSpace() || c == QLatin1Char(':') || c == QLatin1Char('[')
+            || c == QLatin1Char('(') || c == QLatin1Char('=')) break;
+        ++i;
+    }
+    return raw.left(i).trimmed();
+}
+
+} // namespace
+
+void EraParseTable::applyStringAssignments() {
+    const AstResolver resolve = [this](const QString& e) { return expressionAst(e); };
+    for (auto sit = m_scripts.begin(); sit != m_scripts.end(); ++sit) {
+        for (LogicalLine& line : sit.value().lines) {
+            if (line.kind != LineKind::Instruction) continue;
+            if (line.assignOperator != QLatin1String("=")) continue;
+            if (line.arguments.size() != 2) continue;
+
+            Operand& dest = line.arguments[0];
+            Operand& value = line.arguments[1];
+            if (dest.isString || value.isString) continue;   // 引号字面量原样保留
+
+            const QString varName = leadingIdentifier(dest.raw);
+            if (varName.isEmpty()) continue;
+            if (m_variables.typeOf(varName, line.ownerFunction) != OperandType::Str) continue;
+
+            // 右值整体按格式化串解析（文本 = 字面量，{…}/%…% = 表达式）
+            value.ast = StrFormParser::parse(value.raw, resolve);
+        }
+    }
+}
+
+// ---------------------------------------------------------------------------
+// 用户自定义函数的强类型化
+//
+//   * 形参类型：ARG -> Int、ARGS -> Str、私有变量 -> 变量表里的 #DIM/#DIMS 类型
+//   * 返回类型：#FUNCTION -> Int、#FUNCTIONS -> Str；
+//     没有 # 行的 @label 也按 Int（式中调用在实测游戏里普遍存在）
+// ---------------------------------------------------------------------------
+void EraParseTable::resolveUserFunctionTypes() {
+    for (auto it = m_functions.begin(); it != m_functions.end(); ++it) {
+        UserFunctionDecl& decl = it.value();
+        if (!decl.isMethod || !isKnown(decl.returnType)) {
+            decl.returnType = OperandType::Int;
+        }
+        for (UserParamDecl& p : decl.params) {
+            switch (p.target) {
+            case UserParamTarget::Arg:
+                p.type = OperandType::Int;
+                break;
+            case UserParamTarget::Args:
+                p.type = OperandType::Str;
+                break;
+            case UserParamTarget::LocalVar: {
+                const OperandType t = m_variables.typeOf(p.varName, decl.name);
+                if (isKnown(t)) {
+                    p.type = t;
+                    p.typeKnown = true;   // 私有变量由 #DIM/#DIMS 定类型
+                } else {
+                    p.type = OperandType::Int;   // 绑定按整数槽处理，但不参与类型校验
+                    p.typeKnown = false;
+                }
+                break;
+            }
+            case UserParamTarget::Unknown:
+            default:
+                if (!isKnown(p.type)) p.type = OperandType::Int;
+                break;
+            }
+        }
+    }
+}
+
+// 式中调用的强类型校验（复刻 C# Process.CalledFunction.ConvertArg）：
+//
+//   * 实参个数超过形参个数      -> 错误（C#「引数の数が…超えています」）
+//   * 字符串实参 -> 整型形参    -> 错误（C#「文字列型から整数型に変換できません」，
+//                                  任何配置下都不允许）
+//   * 整型实参 -> 字符串形参    -> 允许（C# CompatiFuncArgAutoConvert /
+//                                  「ユーザー関数の引数に自動的にTOSTRを補完する」；
+//                                  eraTW 等实际游戏普遍设为 YES）
+//
+//   仅当形参类型来自真实声明（typeKnown：ARG/ARGS，或私有变量有 #DIM/#DIMS）才判定。
+QString EraParseTable::checkUserCallArgs(const UserFunctionDecl& decl,
+                                         const QList<OperandType>& argTypes) const {
+    const int want = decl.paramCount();
+    if (argTypes.size() > want) {
+        return QStringLiteral("函数 %1 的实参过多（形参 %2 个，实得 %3 个）")
+            .arg(decl.name).arg(want).arg(argTypes.size());
+    }
+    for (int i = 0; i < argTypes.size(); ++i) {
+        const UserParamDecl& p = decl.params.at(i);
+        const OperandType actual = argTypes.at(i);
+        if (!p.typeKnown || !isKnown(actual) || !isKnown(p.type)) continue;
+        if (actual == OperandType::Str && p.type == OperandType::Int) {
+            return QStringLiteral("函数 %1 第 %2 个实参需要%3，实得字符串（不能从字符串转换为整数）")
+                .arg(decl.name).arg(i + 1)
+                .arg(QString::fromUtf8(operandTypeName(p.type)));
+        }
+    }
+    return QString();
+}
+
+void EraParseTable::resolveFunctionNodes() {
+    const auto userType = [this](const QString& name) -> OperandType {
+        if (const UserFunctionDecl* fn = userFunction(name)) {
+            return fn->isMethod ? fn->returnType : OperandType::Int;
+        }
+        return OperandType::Unknown;
+    };
+
+    const auto resolveNode = [this, &userType](ExpressionNode& node) {
+        if (node.kind() != NodeKind::Function) return;
+        auto& fn = static_cast<FunctionNode&>(node);
+        fn.setUserFunction(false);
+        fn.setBuiltinIndex(-1);
+
+        const FunctionResolution res = resolveFunctionCall(fn.name(), userType);
+        if (res.isUserFunction) {
+            fn.setUserFunction(true);
+            fn.setValueType(res.returnType);
+            // 强类型：按声明的形参类型逐个校验实参（复刻 C# UserDefinedMethodTerm.Create）
+            const UserFunctionDecl* decl = userFunction(fn.name().toUpper());
+            if (decl) {
+                QList<OperandType> argTypes;
+                argTypes.reserve(fn.arguments().size());
+                for (const auto& a : fn.arguments()) {
+                    argTypes.append(a ? a->valueType() : OperandType::Unknown);
+                }
+                fn.setArityError(checkUserCallArgs(*decl, argTypes));
+            } else {
+                fn.setArityError(QString());
+            }
+        } else if (res.isBuiltin) {
+            fn.setBuiltinIndex(res.builtinIndex);
+            fn.setValueType(res.returnType);
+            fn.setArityError(validateBuiltinCall(kBuiltinFunctions[res.builtinIndex], fn.arguments()));
+        } else if (const UserFunctionDecl* decl = userFunction(fn.name().toUpper())) {
+            // 有同名 @label 但既非内置也无 #FUNCTION：按宽容语义当作返回 Int 的用户函数
+            // （eraTW 大量如此使用，实际可运行），但仍按声明的形参类型做校验。
+            fn.setUserFunction(true);
+            fn.setValueType(isKnown(decl->returnType) ? decl->returnType : OperandType::Int);
+            QList<OperandType> argTypes;
+            argTypes.reserve(fn.arguments().size());
+            for (const auto& a : fn.arguments()) {
+                argTypes.append(a ? a->valueType() : OperandType::Unknown);
+            }
+            fn.setArityError(checkUserCallArgs(*decl, argTypes));
+        } else {
+            fn.setValueType(OperandType::Unknown);
+            fn.setArityError(QStringLiteral("未定义的函数 %1").arg(fn.name()));
+        }
+    };
+
+    for (auto& ast : m_astCache) {
+        if (ast) walkExpression(*ast, resolveNode);
+    }
+    // 并行装载时 worker 的 AST 不在主缓存里，需按行再走一遍
+    for (auto sit = m_scripts.begin(); sit != m_scripts.end(); ++sit) {
+        for (LogicalLine& line : sit.value().lines) {
+            for (const Operand& op : line.arguments) {
+                if (op.ast) walkExpression(*op.ast, resolveNode);
+            }
+            for (const auto& e : line.argument.exprs) {
+                if (e) walkExpression(*e, resolveNode);
+            }
+            for (const Operand& c : line.argument.cases) {
+                if (c.ast) walkExpression(*c.ast, resolveNode);
+            }
+            if (line.condition) walkExpression(*line.condition, resolveNode);
+        }
+    }
+}
+
+// 收集一个 AST 里的函数调用告警（内置函数参数不符 / 未定义的函数）。
+// position 为空时只报函数级消息；seen 用于去重（同一表达式被多行共享）。
+void EraParseTable::collectFunctionWarnings(const QSharedPointer<ExpressionNode>& ast,
+                                            const QString& position, QSet<QString>& seen) {
+    if (!ast) return;
+    walkExpression(*ast, [this, &seen, &position](ExpressionNode& node) {
+        if (node.kind() != NodeKind::Function) return;
+        const auto& fn = static_cast<const FunctionNode&>(node);
+        const QString& err = fn.arityError();
+        if (err.isEmpty()) return;
+        const QString key = fn.name().toUpper() + QLatin1Char('\x1f') + err;
+        if (seen.contains(key)) return;
+        seen.insert(key);
+        m_parseWarnings.append(QStringLiteral("%1: %2 [%3]")
+                                   .arg(position, err, fn.toString()));
+    });
+}
+
+void EraParseTable::validateArguments() {
+    QSet<QString> seenFunctions;   // 同一函数表达式被多行共享时只报一次
+    for (auto sit = m_scripts.begin(); sit != m_scripts.end(); ++sit) {
+        for (LogicalLine& line : sit.value().lines) {
+            if (line.kind != LineKind::Instruction) continue;
+            ArgumentParser::build(line);   // 幂等：重算 kind/params/exprs + 重新校验
+            if (line.argument.hasError()) {
+                m_parseWarnings.append(QStringLiteral("%1: %2 (%3)")
+                                           .arg(line.position.toString(),
+                                                line.argument.typeError,
+                                                line.raw.trimmed()));
+            }
+            const QString pos = line.position.toString();
+
+            // 注：CALL 语句**不做**实参类型校验 —— 对齐 C#（SP_CALL_ArgumentBuilder 不调用
+            // ConvertArg，实参按「实际类型」装进 Transporter 后由被调函数自行解释）。
+            // 强类型校验只发生在「式中调用」NAME(args) 处（见 resolveFunctionNodes）。
+
+            // 函数调用（内部命令/内置函数）参数校验告警
+            collectFunctionWarnings(line.condition, pos, seenFunctions);
+            for (const Operand& op : line.arguments) {
+                collectFunctionWarnings(op.ast, pos, seenFunctions);
+            }
+            for (const auto& e : line.argument.exprs) {
+                collectFunctionWarnings(e, pos, seenFunctions);
+            }
+            for (const Operand& c : line.argument.cases) {
+                collectFunctionWarnings(c.ast, pos, seenFunctions);
+            }
+        }
+    }
 }

@@ -1,3 +1,20 @@
+/*
+ * emuera —— Emuera（ERB 脚本引擎）的 Qt6 + QML/C++ 移植
+ * Copyright (C) 2026  yigekuyou
+ *
+ * This program is free software: you can redistribute it and/or modify
+ * it under the terms of the GNU General Public License as published by
+ * the Free Software Foundation, either version 3 of the License, or
+ * (at your option) any later version.
+ *
+ * This program is distributed in the hope that it will be useful,
+ * but WITHOUT ANY WARRANTY; without even the implied warranty of
+ * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+ * GNU General Public License for more details.
+ *
+ * You should have received a copy of the GNU General Public License
+ * along with this program.  If not, see <https://www.gnu.org/licenses/>.
+ */
 #ifndef FILE_SYSTEM_IO_H
 #define FILE_SYSTEM_IO_H
 
@@ -43,6 +60,14 @@ public:
     // Case-insensitive directory lookup
     QString findActualDir(const QString& basePath, const QString& targetName) const;
     QString getPathWithActualCase(const QString& basePath, const QString& targetPath) const;
+
+    // 解析子目录的**绝对路径**（大小写不敏感）；不存在返回空字符串。
+    // 对齐 C# 的 Program.ErbDir / Program.CsvDir（只在该目录内检索）。
+    QString resolveSubDir(const QString& basePath, const QString& name) const;
+    QString resolveSubDir(const QString& basePath, const QStringList& names) const;
+
+    // 枚举目录下的文件（大小写不敏感的后缀过滤），recursive = 搜索子目录（Config.SearchSubdirectory）
+    QStringList listFiles(const QString& dirPath, const QStringList& suffixes, bool recursive) const;
     
     // File operations
     IoResult readFile(const QString& filePath, QString& content);

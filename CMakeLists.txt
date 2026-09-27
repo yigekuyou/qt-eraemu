@@ -38,6 +38,9 @@ qt_add_qml_module(appemuera
         src/qml/EraRender.qml
         src/qml/Console.qml
         src/qml/ConsoleLine.qml
+        src/qml/ConsoleSpan.qml
+        src/qml/SettingsDialog.qml
+        src/qml/AboutDialog.qml
 )
 set_target_properties(appemuera PROPERTIES
 #    MACOSX_BUNDLE_GUI_IDENTIFIER com.example.appemuera

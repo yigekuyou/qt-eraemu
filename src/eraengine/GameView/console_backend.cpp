@@ -17,8 +17,10 @@
  */
 #include "console_backend.h"
 #include "button_string_creator.h"
+#include "GameData/ast/print_template.h"
 
 #include <algorithm>
+#include <QRegularExpression>
 
 ConsoleBackend::ConsoleBackend(QObject* parent)
     : QObject(parent)
@@ -159,6 +161,104 @@ void ConsoleBackend::print(const QString& text) {
     markDirty();
 }
 
+void ConsoleBackend::printHtml(const QString& html) {
+    printTemplate(PrintTemplateCompiler::evaluate(*PrintTemplateCompiler::compile(html),
+        [](const ExpressionNode&) { return QString(); }));
+}
+
+void ConsoleBackend::printTemplate(const PrintTemplate& output) {
+    if (m_pendingOpen) newline();
+    const ConsoleAlign savedAlign = m_align;
+    const bool savedWrap = m_wrapLines;
+    QList<ConsoleAlign> alignments;
+    QList<bool> wrapping;
+    ConsoleStyle style = m_style;
+    QList<ConsoleStyle> styles;
+    ConsoleSegment button;
+    bool inButton = false;
+    const auto sealButton = [&] {
+        if (!inButton) return;
+        button.generation = m_generation;
+        m_sealed.append(button);
+        button = {};
+        inButton = false;
+    };
+    for (const auto& part : output.parts) {
+        if (part.kind == PrintTemplatePart::Kind::Style) {
+            styles.append(style);
+            if (part.style.color.isValid()) { style.color = part.style.color; style.colorChanged = true; }
+            if (part.style.buttonColor.isValid()) style.buttonColor = part.style.buttonColor;
+            if (!part.style.fontName.isEmpty()) style.fontName = part.style.fontName;
+            style.bold |= part.style.bold; style.italic |= part.style.italic;
+            style.underline |= part.style.underline; style.strike |= part.style.strike;
+            continue;
+        }
+        if (part.kind == PrintTemplatePart::Kind::EndStyle) {
+            for (int i = 0; i < part.x && !styles.isEmpty(); ++i) style = styles.takeLast();
+            continue;
+        }
+        if (part.kind == PrintTemplatePart::Kind::NoWrap) {
+            wrapping.append(m_wrapLines); m_wrapLines = false; continue;
+        }
+        if (part.kind == PrintTemplatePart::Kind::EndNoWrap) {
+            if (m_pendingOpen) { sealButton(); newline(); }
+            if (!wrapping.isEmpty()) m_wrapLines = wrapping.takeLast();
+            continue;
+        }
+        if (part.kind == PrintTemplatePart::Kind::EndAlignment) {
+            if (m_pendingOpen) { sealButton(); newline(); }
+            if (!alignments.isEmpty()) m_align = alignments.takeLast();
+            continue;
+        }
+        if (part.kind == PrintTemplatePart::Kind::Alignment) {
+            if (m_pendingOpen) { sealButton(); newline(); }
+            alignments.append(m_align);
+            const QString align = part.text.toLower();
+            if (align == "center") m_align = ConsoleAlign::Center;
+            else if (align == "right") m_align = ConsoleAlign::Right;
+            else if (align == "left") m_align = ConsoleAlign::Left;
+            continue;
+        }
+        if (part.kind == PrintTemplatePart::Kind::Button) {
+            sealButton();
+            flushPendingToSegments(m_sealed); m_pendingParts.clear();
+            button.isButton = true;
+            button.intValue = part.buttonValue.toLongLong(&button.isInteger);
+            button.strValue = part.buttonValue; button.tooltip = part.tooltip;
+            inButton = true;
+            continue;
+        }
+        if (part.kind == PrintTemplatePart::Kind::EndButton) { sealButton(); continue; }
+        if (part.kind == PrintTemplatePart::Kind::Break) {
+            const auto continued = button; const bool wasButton = inButton;
+            sealButton(); newline();
+            if (wasButton) { button = continued; button.spans.clear(); inButton = true; }
+            continue;
+        }
+        ConsoleSpan span; span.text = part.text; span.raw = part.text;
+        span.style = style;
+        if (part.style.color.isValid()) { span.style.color = part.style.color; span.style.colorChanged = true; }
+        if (part.style.buttonColor.isValid()) span.style.buttonColor = part.style.buttonColor;
+        if (!part.style.fontName.isEmpty()) span.style.fontName = part.style.fontName;
+        span.style.bold |= part.style.bold; span.style.italic |= part.style.italic;
+        span.style.underline |= part.style.underline; span.style.strike |= part.style.strike;
+        if (part.kind == PrintTemplatePart::Kind::Image) {
+            span.kind = ConsoleSpanKind::Image; span.imageSize = QSizeF(part.width, part.height);
+            span.top = part.y; span.altText = QStringLiteral("<img src='%1'>").arg(part.text);
+        } else if (part.kind == PrintTemplatePart::Kind::Shape) {
+            span.kind = ConsoleSpanKind::Shape; span.shapeType = part.shapeType;
+            span.shapeParams = part.shapeParams; span.altText = QStringLiteral("<shape type='%1'>").arg(part.shapeType);
+        }
+        ensureLineOpen();
+        if (inButton) button.spans.append(span); else appendPart(span);
+        markDirty();
+    }
+    sealButton();
+    if (m_pendingOpen) newline();
+    m_align = savedAlign;
+    m_wrapLines = savedWrap;
+}
+
 void ConsoleBackend::printPlain(const QString& text) {
     if (text.isEmpty()) return;
     ensureLineOpen();
@@ -187,17 +287,16 @@ void ConsoleBackend::newline() {
     if (m_wrapLines) {
         const QList<ConsoleDisplayLine> lines = m_layout.wrapSegments(std::move(line.segments),
                                                                      line.align);
-        for (const ConsoleDisplayLine& l : lines) m_buffer.appendLine(l);
-    } else {
-        m_layout.layoutSegments(line.segments);
-        // 对齐产生的整行平移（C# SetAlignment）：容器也可以自己算
-        if (line.align != ConsoleAlign::Left) {
-            const int w = line.width();
-            const int target = (line.align == ConsoleAlign::Center)
-                                   ? (m_layout.windowWidth() / 2 - w / 2)
-                                   : (m_layout.windowWidth() - w);
-            line.pointOffset = target;
+        int row = m_buffer.count();
+        for (ConsoleDisplayLine l : lines) {
+            // wrapSegments 只负责切分逻辑行；绝对列/对齐仍由同一入口计算。
+            m_layout.placeLine(l, row++);
+            m_buffer.appendLine(l);
         }
+    } else {
+        // pointOffset/part.col 的单位是字符列，不是像素。统一走 placeLine，
+        // 由 maxCols() 和 widthUnits() 计算对齐，避免 760px 被误当成 760 列。
+        m_layout.placeLine(line, m_buffer.count());
         m_buffer.appendLine(line);
     }
     emit lineCountChanged();
@@ -440,13 +539,8 @@ QVariantList ConsoleBackend::visibleBlocks() const {
     for (int abs = first; abs < n; ++abs) {
         const ConsoleDisplayLine& line = m_buffer.at(abs);
         const int lineIndex = abs - first;
-        // 对齐平移：优先用 C++ 早就算好的 pointOffset
-        int offset = line.pointOffset;
-        if (line.align != ConsoleAlign::Left && offset == 0) {
-            const int w = line.width();
-            offset = (line.align == ConsoleAlign::Center) ? (m_layout.windowWidth() / 2 - w / 2)
-                                                          : (m_layout.windowWidth() - w);
-        }
+        // pointOffset 与 relCol 都是字符列单位；newline() 已经完成布局。
+        const int offset = line.pointOffset;
         for (int si = 0; si < line.segments.size(); ++si) {
             const ConsoleSegment& seg = line.segments.at(si);
             for (const ConsoleSpan& part : seg.spans) {

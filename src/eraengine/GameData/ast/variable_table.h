@@ -48,6 +48,7 @@ struct VariableDecl {
     bool        isPrivate = false;
     bool        isConst = false;
     bool        isArg = false;               // 来自 @F(A,B) 形参表
+    bool        isReference = false;         // #DIM(S) REF：调用方数组的别名
     QList<qint64> defaultInt;   // #DIM X = 1,2 的初值（进入函数时写入）
     QStringList   defaultStr;   // #DIMS S = "a" 的初值
 };

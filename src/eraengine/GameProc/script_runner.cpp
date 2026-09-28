@@ -22,6 +22,7 @@
 #include "system_state_machine.h"
 #include "ast/expression_evaluator.h"
 #include <QDebug>
+#include <bit>
 
 namespace {
 
@@ -46,6 +47,12 @@ ScriptRunner::ScriptRunner(EraParseTable* table,
     , m_state(state)
     , m_storage(storage)
 {
+    connect(m_table, &EraParseTable::entryPointReached, this, [this](const QString&) {
+        while (!m_callContexts.isEmpty())
+            m_storage->setLocalContext(m_callContexts.takeLast().locals);
+        m_loops.clear();
+        m_lastReturnValue = QVariant::fromValue<qint64>(0);
+    });
 }
 
 void ScriptRunner::setExpressionEvaluator(ExpressionEvaluator* evaluator) {
@@ -68,17 +75,8 @@ void ScriptRunner::onContinueExecution() {
         return;   // 重入保护
     }
     m_running = true;
-    qint64 steps = 0;
+    m_steps = 0;
     while (m_state->isRunning()) {
-        if (m_stepLimit > 0 && ++steps > m_stepLimit) {
-            emit errorOccurred(QStringLiteral("脚本可能陷入死循环：本次连续执行超过 %1 步（@%2 第 %3 行）")
-                                   .arg(m_stepLimit)
-                                   .arg(m_table->currentFrame().callLabel.isEmpty()
-                                            ? QStringLiteral("?") : m_table->currentFrame().callLabel)
-                                   .arg(m_table->currentLine()));
-            m_state->setErrorState();
-            break;
-        }
         if (!stepOnce()) {
             break;   // 挂起 / 结束 / 错误
         }
@@ -115,6 +113,29 @@ void ScriptRunner::onHaltRequested() {
 // 主步进
 // ---------------------------------------------------------------------------
 
+void ScriptRunner::enterCall(const QString& function) {
+    m_callContexts.append({m_table->depth(), int(m_loops.size()), function, m_storage->localContext()});
+    auto locals = m_functionLocals.value(function);
+    locals.parameters.clear();
+    locals.aliases.clear();
+    m_storage->setLocalContext(locals);
+    QStringList privateNames;
+    for (const auto& decl : m_table->variableTable().localsOf(function))
+        if (!decl.isConst) privateNames.append(decl.name);
+    m_storage->setPrivateScope(function, privateNames);
+}
+
+bool ScriptRunner::returnFromCall() {
+    if (!m_table->returnFromCall()) return false;
+    if (!m_callContexts.isEmpty() && m_callContexts.last().depth == m_table->depth()) {
+        const auto context = m_callContexts.takeLast();
+        m_functionLocals.insert(context.function, m_storage->localContext());
+        m_storage->setLocalContext(context.locals);
+        m_loops.resize(context.loops);
+    }
+    return true;
+}
+
 bool ScriptRunner::stepOnce() {
     if (!m_table || !m_table->hasPosition()) {
         m_state->requestHalt();
@@ -122,6 +143,12 @@ bool ScriptRunner::stepOnce() {
         return false;
     }
 
+    if (m_stepLimit > 0 && ++m_steps > m_stepLimit) {
+        emit errorOccurred(QStringLiteral("脚本可能陷入死循环：连续执行超过 %1 步（第 %2 行）")
+                               .arg(m_stepLimit).arg(m_table->currentLine()));
+        m_state->setErrorState();
+        return false;
+    }
     const QString script = m_table->currentScript();
     const ScriptData* sd = m_table->script(script);
     if (!sd) {
@@ -132,8 +159,11 @@ bool ScriptRunner::stepOnce() {
 
     const int pc = m_table->currentLine();
     if (pc < 0 || pc >= sd->lines.size()) {
+        m_lastReturnValue = QVariant::fromValue<qint64>(0);
+        m_storage->setSystemVariable("RESULT", 0, 0);
+        m_storage->setGlobalInt1D("RESULT", 0, 0);
         // 脚本结束：能返回就返回调用者，否则停止
-        if (m_table->returnFromCall()) {
+        if (returnFromCall()) {
             return true;
         }
         m_state->requestHalt();
@@ -142,7 +172,14 @@ bool ScriptRunner::stepOnce() {
     }
 
     const LogicalLine& line = sd->lines.at(pc);
-    const ExecState r = executeLine(line);
+    // System entry points are not entered through CALL. Resolve private storage
+    // from the executing owner as well, including resumed SHOW_SHOP frames.
+    QStringList privateNames;
+    for (const auto& decl : m_table->variableTable().localsOf(line.ownerFunction))
+        if (!decl.isConst) privateNames.append(decl.name);
+    m_storage->setPrivateScope(line.ownerFunction, privateNames);
+    ExecState r = executeLine(line);
+    if (m_state->getExecState() == ExecState::Error) r = ExecState::Error;
 
     if (r == ExecState::Continue) {
         emit instructionExecuted(script, pc);
@@ -168,6 +205,8 @@ bool ScriptRunner::stepOnce() {
 
 ScriptRunner::LoopFrame* ScriptRunner::topLoop(LoopFrame::Kind kind) {
     if (m_loops.isEmpty()) return nullptr;
+    if (m_loops.last().depth != m_table->depth()
+        || m_loops.last().script != m_table->currentScript()) return nullptr;
     if (m_loops.last().kind == kind) return &m_loops.last();
     return nullptr;
 }
@@ -208,7 +247,7 @@ ExecState ScriptRunner::executeLine(const LogicalLine& line) {
     const int pc = m_table->currentLine();
 
     const auto gotoLine = [&](int npc) {
-        m_table->setPosition(script, npc);   // 允许 npc == lines.size()（越过末尾 -> 结束）
+        m_table->setPosition(script, npc, false);   // 允许 npc == lines.size()（越过末尾 -> 结束）
     };
     const auto advance = [&]() { m_table->advance(); };
 
@@ -220,7 +259,10 @@ ExecState ScriptRunner::executeLine(const LogicalLine& line) {
                 advance();
                 return ExecState::Continue;
             }
-            if (m_table->returnFromCall()) {
+            m_lastReturnValue = QVariant::fromValue<qint64>(0);
+            m_storage->setSystemVariable("RESULT", 0, 0);
+            m_storage->setGlobalInt1D("RESULT", 0, 0);
+            if (returnFromCall()) {
                 return ExecState::Continue;
             }
             return ExecState::Halt;
@@ -282,7 +324,9 @@ ExecState ScriptRunner::executeLine(const LogicalLine& line) {
             valueVar = ev.evaluate(*line.condition, m_storage, baseData());
         } else if (!line.arguments.isEmpty()) {
             const Operand& op = line.arguments.first();
-            if (op.ast) {
+            if (op.isString) {
+                valueVar = op.raw;
+            } else if (op.ast) {
                 valueVar = ev.evaluate(*op.ast, m_storage, baseData());
             } else if (m_table) {
                 const QSharedPointer<ExpressionNode> ast = m_table->expressionAst(op.raw);
@@ -290,8 +334,7 @@ ExecState ScriptRunner::executeLine(const LogicalLine& line) {
                                : QVariant::fromValue<qint64>(op.raw.toLongLong());
             }
         }
-        const qint64 value = valueVar.toLongLong();
-        const bool valueIsStr = (valueVar.typeId() == QMetaType::QString);
+            const bool valueIsStr = (valueVar.typeId() == QMetaType::QString);
 
         const QList<int> caseLines = m_table->ifBranches(script, pc);
         for (int caseLine : caseLines) {
@@ -301,7 +344,7 @@ ExecState ScriptRunner::executeLine(const LogicalLine& line) {
                 gotoLine(caseLine + 1);          // 默认分支
                 return ExecState::Continue;
             }
-            if (caseMatches(*cl, value, valueVar, valueIsStr)) {
+            if (caseMatches(*cl, valueVar, valueIsStr)) {
                 gotoLine(caseLine + 1);
                 return ExecState::Continue;
             }
@@ -323,13 +366,14 @@ ExecState ScriptRunner::executeLine(const LogicalLine& line) {
         bool cond = false;
         evalCondition(line, cond);
         if (cond) advance();
-        else gotoLine(pc + 2);       // 伪 -> 跳过下一行
+        else gotoLine(m_table->jumpTarget(script, pc));       // 伪 -> 跳过下一行
         return ExecState::Continue;
     }
 
     // ---- 循环 ----
     if (name == QLatin1String("REPEAT")) {
         qint64 count = 0;
+        writeLoopCounter(QStringLiteral("COUNT"), 0);
         evalInt(line.condition, line.raw, count);
         const int endLine = sd->loopEndLines.value(pc, -1);
         if (count <= 0) {
@@ -338,18 +382,41 @@ ExecState ScriptRunner::executeLine(const LogicalLine& line) {
         }
         LoopFrame f;
         f.kind = LoopFrame::Kind::Repeat;
+        f.depth = m_table->depth();
+        f.script = script;
+        f.varName = QStringLiteral("COUNT");
+        f.end = count;
         f.startLine = pc;
         f.endLine = endLine;
-        f.remaining = count;
         m_loops.append(f);
         advance();
         return ExecState::Continue;
     }
-    if (name == QLatin1String("LOOP")) {
+    if (name == QLatin1String("DO")) {
+        LoopFrame f;
+        f.kind = LoopFrame::Kind::Do;
+        f.depth = m_table->depth();
+        f.script = script;
+        f.startLine = pc;
+        f.endLine = sd->loopEndLines.value(pc, -1);
+        m_loops.append(f);
+        advance();
+        return ExecState::Continue;
+    }
+    if (name == QLatin1String("LOOP") && topLoop(LoopFrame::Kind::Do)) {
+        const LoopFrame f = *topLoop(LoopFrame::Kind::Do);
+        bool cond = false;
+        evalCondition(line, cond);
+        if (cond) gotoLine(f.startLine + 1);
+        else { m_loops.removeLast(); advance(); }
+        return ExecState::Continue;
+    }
+    if (name == QLatin1String("LOOP") || name == QLatin1String("REND")) {
         LoopFrame* f = topLoop(LoopFrame::Kind::Repeat);
         if (f) {
-            f->remaining--;
-            if (f->remaining > 0) {
+            f->value = std::bit_cast<qint64>(quint64(readIntVar("COUNT", 0)) + 1);
+            writeLoopCounter("COUNT", f->value);
+            if (f->value < f->end) {
                 gotoLine(f->startLine + 1);   // 回到循环体开头
             } else {
                 m_loops.removeLast();
@@ -364,12 +431,12 @@ ExecState ScriptRunner::executeLine(const LogicalLine& line) {
         LoopFrame* existing = topLoop(LoopFrame::Kind::While);
         if (existing && existing->startLine == pc) {
             // 由 WEND 回跳而来：重新判断，不重复压栈
+            const int endLine = existing->endLine;
             bool cond = false;
             evalCondition(line, cond);
             if (cond) {
                 advance();
             } else {
-                const int endLine = existing->endLine;
                 m_loops.removeLast();
                 gotoLine(endLine >= 0 ? endLine + 1 : pc + 1);
             }
@@ -380,6 +447,8 @@ ExecState ScriptRunner::executeLine(const LogicalLine& line) {
         if (cond) {
             LoopFrame f;
             f.kind = LoopFrame::Kind::While;
+            f.depth = m_table->depth();
+            f.script = script;
             f.startLine = pc;
             f.endLine = sd->loopEndLines.value(pc, -1);
             m_loops.append(f);
@@ -414,17 +483,18 @@ ExecState ScriptRunner::executeLine(const LogicalLine& line) {
         if (ops.size() >= 3) {
             LoopFrame f;
             f.kind = LoopFrame::Kind::For;
+            f.depth = m_table->depth();
+            f.script = script;
             f.startLine = pc;
             f.endLine = endLine;
             f.varName = bareVarName(ops[0]->raw);
             evalInt(ops[1]->ast, ops[1]->raw, f.value);
+            writeLoopCounter(f.varName, f.value);
             evalInt(ops[2]->ast, ops[2]->raw, f.end);
             f.step = 1;
             if (ops.size() >= 4) evalInt(ops[3]->ast, ops[3]->raw, f.step);
 
-            writeLoopCounter(f.varName, f.value);
-
-            const bool enters = (f.step >= 0) ? (f.value <= f.end) : (f.value >= f.end);
+            const bool enters = (f.step > 0 && f.value < f.end) || (f.step < 0 && f.value > f.end);
             if (!enters) {
                 gotoLine(endLine >= 0 ? endLine + 1 : pc + 1);
             } else {
@@ -439,9 +509,15 @@ ExecState ScriptRunner::executeLine(const LogicalLine& line) {
     if (name == QLatin1String("NEXT")) {
         LoopFrame* f = topLoop(LoopFrame::Kind::For);
         if (f) {
-            f->value += f->step;
+            // The body may change the counter (e.g. recheck a shifted Tetris row).
+            Operand counter;
+            counter.raw = f->varName;
+            QString counterName;
+            int counterIndex = 0;
+            extractVarRef(counter, counterName, counterIndex);
+            f->value = std::bit_cast<qint64>(quint64(readIntVar(counterName, counterIndex)) + quint64(f->step));
             writeLoopCounter(f->varName, f->value);
-            const bool more = (f->step >= 0) ? (f->value <= f->end) : (f->value >= f->end);
+            const bool more = (f->step > 0 && f->value < f->end) || (f->step < 0 && f->value > f->end);
             if (more) {
                 gotoLine(f->startLine + 1);
             } else {
@@ -454,8 +530,17 @@ ExecState ScriptRunner::executeLine(const LogicalLine& line) {
         return ExecState::Continue;
     }
     if (name == QLatin1String("BREAK")) {
-        if (!m_loops.isEmpty()) {
+        if (!m_loops.isEmpty() && m_loops.last().depth == m_table->depth()
+            && m_loops.last().script == script) {
             const LoopFrame f = m_loops.takeLast();
+            if (f.kind == LoopFrame::Kind::Repeat || f.kind == LoopFrame::Kind::For) {
+                Operand counter(f.varName);
+                QString counterName;
+                int index = 0;
+                extractVarRef(counter, counterName, index);
+                writeIntVar(counterName, index, std::bit_cast<qint64>(
+                    quint64(readIntVar(counterName, index)) + quint64(f.step)));
+            }
             gotoLine(f.endLine >= 0 ? f.endLine + 1 : pc + 1);
         } else {
             advance();
@@ -463,7 +548,8 @@ ExecState ScriptRunner::executeLine(const LogicalLine& line) {
         return ExecState::Continue;
     }
     if (name == QLatin1String("CONTINUE")) {
-        if (!m_loops.isEmpty()) {
+        if (!m_loops.isEmpty() && m_loops.last().depth == m_table->depth()
+            && m_loops.last().script == script) {
             // 跳到**循环末尾行**（NEXT / LOOP / WEND），让「自增 + 条件」正常执行。
             // 对齐 C#：CONTINUE 的目标是循环的 continue 点，而不是循环体开头。
             const LoopFrame& f = m_loops.last();
@@ -487,12 +573,59 @@ ExecState ScriptRunner::executeLine(const LogicalLine& line) {
     if (name == QLatin1String("CALL")) {
         const QString label = line.arguments.isEmpty() ? QString() : line.arguments.first().raw;
         const UserFunctionDecl* info = m_table->userFunction(label);
-        m_aliasStack.append(m_storage->localAliases());
+        QList<Operand> evaluated;
+        QHash<QString, QString> references;
+        evaluated.reserve(line.arguments.size());
+        evaluated.append(line.arguments.value(0));
+        for (int i = 1; i < line.arguments.size(); ++i) {
+            const Operand source = line.arguments.at(i);
+            const UserParamDecl* param = info && i - 1 < info->params.size()
+                                             ? &info->params.at(i - 1) : nullptr;
+            if (param && param->isReference) {
+                const QString actualName = bareVarName(source.raw);
+                if (!actualName.isEmpty()) {
+                    references.insert(param->name.toUpper(), m_storage->resolvedStorageName(actualName));
+                }
+                evaluated.append(source);
+                continue;
+            }
+            ExpressionEvaluator fallback;
+            const QVariant value = source.isString ? QVariant(source.raw)
+                : source.ast
+                    ? (m_evaluator ? m_evaluator : &fallback)->evaluate(*source.ast, m_storage, baseData())
+                    : (m_evaluator ? m_evaluator : &fallback)->evaluate(source.raw, m_storage, baseData());
+            Operand arg(value.toString());
+            arg.isString = value.typeId() == QMetaType::QString;
+            evaluated.append(arg);
+        }
+        // Emuera 允许 CALL F(array) 对应 F(array:0, array:1, ...)。
+        // 在绑定前按固定下标形参展开，避免数组被错误求值为单个标量。
+        if (evaluated.size() == 2 && info && !info->params.isEmpty()) {
+            QString actualName = bareVarName(line.arguments.value(1).raw);
+            bool expandable = !actualName.isEmpty();
+            for (const UserParamDecl& p : info->params)
+                expandable = expandable && p.fixedIndex >= 0 && p.varName.compare(actualName, Qt::CaseInsensitive) == 0;
+            if (expandable) {
+                QList<Operand> expanded;
+                const QString storageName = m_storage->resolvedStorageName(actualName);
+                expanded.append(evaluated.first());
+                for (const UserParamDecl& p : info->params) {
+                    Operand item;
+                    item.isString = p.type == OperandType::Str;
+                    item.raw = item.isString
+                        ? m_storage->getGlobalStr1D(storageName, p.fixedIndex)
+                        : QString::number(m_storage->getGlobalInt1D(storageName, p.fixedIndex));
+                    expanded.append(item);
+                }
+                evaluated = expanded;
+            }
+        }
+        enterCall(label);
         // 顺序对齐 C#：先初始化函数私有变量的初值（#DIM X = 7），再写实参
         m_table->applyPrivateVariableDefaults(label);
-        bindArguments(info, line.arguments);
+        bindArguments(info, evaluated, references);
         if (label.isEmpty() || !m_table->callLabel(label)) {
-            if (!m_aliasStack.isEmpty()) m_storage->setLocalAliases(m_aliasStack.takeLast());
+            if (!m_callContexts.isEmpty()) m_storage->setLocalContext(m_callContexts.takeLast().locals);
             m_state->setErrorState();
             emit errorOccurred(QStringLiteral("CALL label not found: %1").arg(label));
             return ExecState::Error;
@@ -500,34 +633,36 @@ ExecState ScriptRunner::executeLine(const LogicalLine& line) {
         return ExecState::Continue;
     }
     if (name == QLatin1String("RETURN") || name == QLatin1String("RETURNF")) {
-        qint64 result = 0;
-        if (!line.arguments.isEmpty()) {
-            const Operand& a = line.arguments.first();
-            if (a.isString && line.arguments.size() == 1) {
-                m_storage->setLocalStr(0, a.raw);
-            } else {
-                // 返回值是整行操作数表达式（可能被切成多个 token）
-                QString expr;
-                for (const Operand& op : line.arguments) {
-                    if (!expr.isEmpty()) expr += ' ';
-                    expr += op.raw;
-                }
-                const QSharedPointer<ExpressionNode> ast =
-                    (line.arguments.size() == 1) ? a.ast : m_table->expressionAst(expr);
-                qint64 v = 0;
-                evalInt(ast, expr, v);
-                result = v;
-                m_storage->setSystemVariable(QStringLiteral("RESULT"), 0, result);
-                m_storage->setGlobalInt1D(QStringLiteral("RESULT"), 0, result);
+        m_lastReturnValue = QVariant::fromValue<qint64>(0);
+        ExpressionEvaluator fallback;
+        ExpressionEvaluator* ev = m_evaluator ? m_evaluator : &fallback;
+        if (name == QLatin1String("RETURNF")) {
+            if (!line.arguments.isEmpty()) {
+                const Operand& op = line.arguments.first();
+                m_lastReturnValue = op.isString ? QVariant(op.raw)
+                    : op.ast ? ev->evaluate(*op.ast, m_storage, baseData())
+                             : ev->evaluate(op.raw, m_storage, baseData());
             }
+        } else {
+            // Evaluate all return expressions before changing RESULT; later
+            // expressions may read the previous RESULT values.
+            QList<qint64> values;
+            for (const Operand& op : line.arguments) {
+                if (op.raw == QLatin1String(",")) continue;
+                qint64 value = 0;
+                evalInt(op.ast, op.raw, value);
+                values.append(value);
+            }
+            if (values.isEmpty()) values.append(0);
+            for (int i = 0; i < values.size(); ++i) {
+                m_storage->setSystemVariable("RESULT", i, values[i]);
+                m_storage->setGlobalInt1D("RESULT", i, values[i]);
+            }
+            m_lastReturnValue = QVariant::fromValue<qint64>(values.first());
         }
-        if (!m_table->returnFromCall()) {
+        if (!returnFromCall()) {
             // 顶层 RETURN：脚本结束
             return ExecState::Halt;
-        }
-        // 恢复局部别名快照
-        if (!m_aliasStack.isEmpty()) {
-            m_storage->setLocalAliases(m_aliasStack.takeLast());
         }
         return ExecState::Continue;
     }
@@ -609,7 +744,7 @@ ExecState ScriptRunner::executeLine(const LogicalLine& line) {
             return ExecState::Error;
         }
         // C# state.Return(0)：BEGIN 之后直接返回，由系统状态机在帧底接管
-        if (!m_table->returnFromCall()) {
+        if (!returnFromCall()) {
             return ExecState::Halt;
         }
         return ExecState::Continue;
@@ -719,7 +854,7 @@ QStringList splitCaseArgs(const QString& text)
 }
 } // namespace
 
-bool ScriptRunner::caseMatches(const LogicalLine& caseLine, qint64 value,
+bool ScriptRunner::caseMatches(const LogicalLine& caseLine,
                                const QVariant& valueVar, bool valueIsStr)
 {
     QString spec = caseLine.raw.trimmed();
@@ -740,53 +875,57 @@ bool ScriptRunner::caseMatches(const LogicalLine& caseLine, qint64 value,
         return ev.evaluate(text, m_storage, baseData());
     };
 
-    // `IS <op> expr`
-    if (spec.startsWith(QLatin1String("IS "))) {
-        const QString rest = spec.mid(3).trimmed();
-        static const QStringList ops = {"<=", ">=", "==", "!=", "<", ">"};
-        for (const QString& op : ops) {
-            if (!rest.startsWith(op)) continue;
-            const QString rhsText = rest.mid(op.size()).trimmed();
-            const QVariant rhs = evalText(rhsText);
-            const qint64 r = rhs.toLongLong();
-            if (op == "<=") return value <= r;
-            if (op == ">=") return value >= r;
-            if (op == "==") return value == r;
-            if (op == "!=") return value != r;
-            if (op == "<")  return value < r;
-            return value > r;
-        }
-        return false;
-    }
-
-    // `a TO b`（顶层）
-    {
-        const int toIdx = spec.indexOf(QLatin1String(" TO "));
-        if (toIdx > 0) {
-            const qint64 a = evalText(spec.left(toIdx).trimmed()).toLongLong();
-            const qint64 b = evalText(spec.mid(toIdx + 4).trimmed()).toLongLong();
-            const qint64 lo = qMin(a, b);
-            const qint64 hi = qMax(a, b);
-            return value >= lo && value <= hi;
-        }
-    }
-
-    // `v1, v2, …`
-    const QStringList parts = splitCaseArgs(spec);
-    for (const QString& part : parts) {
+    const auto compare = [&](const QVariant& lhs, const QVariant& rhs) {
+        if (valueIsStr) return QString::compare(lhs.toString(), rhs.toString(), Qt::CaseSensitive);
+        const qint64 l = lhs.toLongLong(), r = rhs.toLongLong();
+        return l < r ? -1 : l > r ? 1 : 0;
+    };
+    // Each comma-separated item has its own IS / TO grammar. Only recognize
+    // keywords outside strings and nested expressions.
+    for (const QString& part : splitCaseArgs(spec)) {
         const QString t = part.trimmed();
         if (t.isEmpty()) continue;
-        const QVariant cv = evalText(t);
-        if (valueIsStr || cv.typeId() == QMetaType::QString) {
-            if (cv.toString() == valueVar.toString()) return true;
-        } else if (cv.toLongLong() == value) {
-            return true;
+        if (t.startsWith("IS ", Qt::CaseInsensitive)) {
+            const QString rest = t.mid(3).trimmed();
+            static const QStringList ops = {"<=", ">=", "==", "!=", "<", ">"};
+            for (const QString& op : ops) {
+                if (!rest.startsWith(op)) continue;
+                const int cmp = compare(valueVar, evalText(rest.mid(op.size()).trimmed()));
+                if ((op == "<=" && cmp <= 0) || (op == ">=" && cmp >= 0)
+                    || (op == "==" && cmp == 0) || (op == "!=" && cmp != 0)
+                    || (op == "<" && cmp < 0) || (op == ">" && cmp > 0)) return true;
+                break;
+            }
+            continue;
         }
+        int to = -1, depth = 0;
+        QChar quote;
+        for (int i = 0; i < t.size(); ++i) {
+            const QChar c = t[i];
+            if (!quote.isNull()) {
+                if (c == '\\') { ++i; continue; }
+                if (c == quote) quote = QChar();
+                continue;
+            }
+            if (c == '\"' || c == '\'') { quote = c; continue; }
+            if (c == '(' || c == '[') ++depth;
+            if (c == ')' || c == ']') --depth;
+            if (depth == 0 && i > 0 && i + 2 < t.size() && t[i-1].isSpace()
+                && t.mid(i, 2).compare("TO", Qt::CaseInsensitive) == 0 && t[i+2].isSpace()) {
+                to = i;
+                break;
+            }
+        }
+        if (to >= 0) {
+            if (compare(evalText(t.left(to).trimmed()), valueVar) <= 0
+                && compare(valueVar, evalText(t.mid(to + 2).trimmed())) <= 0) return true;
+        } else if (compare(valueVar, evalText(t)) == 0) return true;
     }
     return false;
 }
 
 qint64 ScriptRunner::readIntVar(const QString& name, int index) const {
+    if (m_storage->hasParameter(name)) return m_storage->parameter(name).toLongLong();
     const QString upper = name.toUpper();
     if (upper == QLatin1String("LOCAL") || upper == QLatin1String("ARG")) {
         return m_storage->getLocalInt(index);
@@ -798,6 +937,7 @@ qint64 ScriptRunner::readIntVar(const QString& name, int index) const {
 }
 
 void ScriptRunner::writeIntVar(const QString& name, int index, qint64 value) {
+    if (m_storage->hasParameter(name)) { m_storage->setParameter(name, value); return; }
     const QString upper = name.toUpper();
     if (upper == QLatin1String("LOCAL") || upper == QLatin1String("ARG")) {
         m_storage->setLocalInt(index, value);
@@ -858,29 +998,15 @@ bool ScriptRunner::extractVarRef(const Operand& op, QString& name, int& index) {
 }
 
 void ScriptRunner::writeLoopCounter(const QString& rawName, qint64 value) {
-    // 支持 `LOCAL:0` / `LOCAL:1` / `A:3` 这类带下标（数字字面量）的循环变量。
-    // —— eraTetris 用 LOCAL:0/LOCAL:1/LOCAL:2 做嵌套循环计数器，若一律写到槽 0
-    //    会导致内层循环覆盖外层计数器。
-    QString name = rawName;
+    Operand counter(rawName);
+    QString name;
     int index = 0;
-    const int colon = name.indexOf(QLatin1Char(':'));
-    if (colon > 0) {
-        bool ok = false;
-        const int idx = name.mid(colon + 1).trimmed().toInt(&ok);
-        if (ok) { index = idx; name = name.left(colon); }
-    }
-    name = bareVarName(name);
-    const QString upper = name.toUpper();
-    if (upper == QLatin1String("LOCAL") || upper == QLatin1String("ARG")) {
-        m_storage->setLocalInt(index, value);
-        return;
-    }
-    m_storage->setSystemVariable(name, index, value);
-    m_storage->setGlobalInt1D(name, index, value);
+    if (extractVarRef(counter, name, index)) writeIntVar(name, index, value);
 }
 
-void ScriptRunner::bindArguments(const UserFunctionDecl* info, const QList<Operand>& callArgs) {
-    const auto bindOne = [this](const UserParamDecl* p, int position,
+void ScriptRunner::bindArguments(const UserFunctionDecl* info, const QList<Operand>& callArgs,
+                                 const QHash<QString, QString>& references) {
+    const auto bindOne = [this, &references](const UserParamDecl* p, int position,
                                 bool argIsString, const QString& strValue, qint64 intValue) {
         switch (p ? p->target : UserParamTarget::Unknown) {
         case UserParamTarget::Arg:
@@ -893,6 +1019,10 @@ void ScriptRunner::bindArguments(const UserFunctionDecl* info, const QList<Opera
             m_storage->setLocalAlias(p->name, p->index);
             break;
         case UserParamTarget::LocalVar:
+            if (p && p->isReference && references.contains(p->name.toUpper())) {
+                m_storage->setReference(p->varName, references.value(p->name.toUpper()));
+                break;
+            }
             if (p && p->fixedIndex >= 0) {
                 // 元素形参（`@F(A:0, A:1)`）：实参写进 A 的这个元素
                 const QString vn = p->varName;
@@ -909,14 +1039,9 @@ void ScriptRunner::bindArguments(const UserFunctionDecl* info, const QList<Opera
                 }
                 break;
             }
-            // 私有变量：整型写 LOCAL[position]，字符串写 LOCALS[position]，名字做别名
-            if (p->type == OperandType::Str) {
-                m_storage->setLocalStr(position, argIsString ? strValue : QString::number(intValue));
-            } else {
-                m_storage->setLocalInt(position, intValue);
-                if (argIsString) m_storage->setLocalStr(position, strValue);
-            }
-            m_storage->setLocalAlias(p->varName.isEmpty() ? p->name : p->varName, position);
+            m_storage->setParameter(p->varName.isEmpty() ? p->name : p->varName,
+                p->type == OperandType::Str ? QVariant(argIsString ? strValue : QString::number(intValue))
+                                            : QVariant(intValue));
             break;
         case UserParamTarget::Unknown:
         default:
@@ -928,15 +1053,25 @@ void ScriptRunner::bindArguments(const UserFunctionDecl* info, const QList<Opera
     };
 
     m_storage->clearLocalAliases();
-    for (int i = 1; i < callArgs.size(); ++i) {
-        const Operand& a = callArgs.at(i);
-        const int position = i - 1;
+    const int supplied = qMax(0, callArgs.size() - 1);
+    for (int position = 0; position < supplied; ++position) {
+        const Operand& a = callArgs.at(position + 1);
         qint64 intValue = 0;
         if (!a.isString) evalInt(a.ast, a.raw, intValue);
 
         const UserParamDecl* param = nullptr;
         if (info && position < info->params.size()) param = &info->params.at(position);
         bindOne(param, position, a.isString, a.raw, intValue);
+    }
+    if (!info) return;
+    for (int position = supplied; position < info->params.size(); ++position) {
+        const UserParamDecl& param = info->params.at(position);
+        if (!param.hasDefault) continue;
+        const bool stringDefault = param.type == OperandType::Str && !param.defaultStr.isEmpty();
+        QString text = param.defaultStr;
+        if (stringDefault && text.size() >= 2 && text.startsWith(QLatin1Char('"'))
+            && text.endsWith(QLatin1Char('"'))) text = text.mid(1, text.size() - 2);
+        bindOne(&param, position, stringDefault, text, param.defaultInt);
     }
 }
 
@@ -954,10 +1089,11 @@ bool ScriptRunner::invokeUserFunction(const QString& name, const QList<QVariant>
     const int savedPc = m_table->currentLine();
     const int savedDepth = m_table->depth();
     const int savedLoops = m_loops.size();
-    const int savedAliasDepth = m_aliasStack.size();
+    const int savedContextDepth = m_callContexts.size();
 
     // 绑定实参（按声明的形参表：ARG/ARGS/私有变量）
-    m_aliasStack.append(m_storage->localAliases());
+    enterCall(name);
+    m_table->applyPrivateVariableDefaults(name);
     m_storage->clearLocalAliases();
     for (int i = 0; i < args.size(); ++i) {
         const QVariant& v = args.at(i);
@@ -977,9 +1113,7 @@ bool ScriptRunner::invokeUserFunction(const QString& name, const QList<QVariant>
                 m_storage->setGlobalInt1D(param->varName, param->fixedIndex, v.toLongLong());
                 break;
             }
-            m_storage->setLocalInt(i, v.toLongLong());
-            if (isStr) m_storage->setLocalStr(i, v.toString());
-            m_storage->setLocalAlias(param->varName.isEmpty() ? param->name : param->varName, i);
+            m_storage->setParameter(param->varName.isEmpty() ? param->name : param->varName, v);
             break;
         case UserParamTarget::Unknown:
         default:
@@ -991,13 +1125,14 @@ bool ScriptRunner::invokeUserFunction(const QString& name, const QList<QVariant>
 
     // 以 savedPc 为返回地址压帧并进入函数体
     if (!m_table->callLabelWithReturn(info->name, savedPc)) {
-        m_aliasStack.resize(savedAliasDepth);
+        m_storage->setLocalContext(m_callContexts.takeLast().locals);
         return false;
     }
 
     // 同步跑完该函数（直到返回帧被弹出）
     const bool wasRunning = m_running;
     m_running = true;
+    if (!wasRunning) m_steps = 0;
     while (m_state->isRunning() && m_table->depth() > savedDepth) {
         if (!stepOnce()) {
             break;   // 函数内挂起（如 INPUT）：无法同步返回
@@ -1007,16 +1142,17 @@ bool ScriptRunner::invokeUserFunction(const QString& name, const QList<QVariant>
 
     m_loops.resize(savedLoops);
     // 恢复别名快照（正常 RETURN 已弹出一层；这里兜底）
-    while (m_aliasStack.size() > savedAliasDepth) {
-        m_storage->setLocalAliases(m_aliasStack.takeLast());
+    while (m_callContexts.size() > savedContextDepth) {
+        m_storage->setLocalContext(m_callContexts.takeLast().locals);
     }
 
     const bool completed = (m_table->depth() == savedDepth);
     if (!completed) {
-        m_table->setPosition(savedScript, savedPc);
+        while (m_table->depth() > savedDepth) m_table->returnFromCall();
+        m_table->setPosition(savedScript, savedPc, false);
         return false;
     }
 
-    out = QVariant(m_storage->getSystemVariable(QStringLiteral("RESULT"), 0));
+    out = m_lastReturnValue;
     return true;
 }

@@ -92,6 +92,7 @@ signals:
 
     // ---- 显示输出（由 EraEngine 接到 ConsoleBackend）----
     void consolePrint(const QString& text, bool newline);
+    void consolePrintTemplate(const PrintTemplate& output);
     // PRINTW 的「换行后等任意键」（对齐 C# PRINT_WAITINPUT -> Console.ReadAnyKey）
     void requestAnyKey();
     // PRINTBUTTON：打印一段文本并把它变成按钮（值可为整数或字符串）
@@ -109,7 +110,7 @@ public:
 private:
     
     // PRINT 族统一出口（对齐 C# PRINT_Instruction）：形态由指令名后缀决定
-    bool handlePrintInstruction(const QString& name, const QList<Operand>& args);
+    bool handlePrintInstruction(const LogicalLine& line);
     // PRINTC / PRINTLC 的定宽列补齐（对齐 C# CreateTypeCString）
     [[nodiscard]] QString padPrintC(const QString& text, bool padLeft) const;
     [[nodiscard]] static int printCWidth(const QString& text);
@@ -117,10 +118,10 @@ private:
     bool handleLoadGlobal();
     
     // Assignment handling
-    bool handleAssignment(const QString& lhs, const QString& rhs);
+    bool handleAssignment(const QString& lhs, const QString& rhs, const QSharedPointer<ExpressionNode>& ast = {});
     // 字符串赋值（目的变量是字符串变量时）：右侧按字符串求值后写入字符串容器
-    bool handleStringAssignment(const QString& lhs, const QString& rhs);
-    bool handleCompoundAssignment(const QString& lhs, const QString& op, const QString& rhs);
+    bool handleStringAssignment(const QString& lhs, const QString& rhs, const QSharedPointer<ExpressionNode>& ast = {});
+    bool handleCompoundAssignment(const QString& lhs, const QString& op, const QString& rhs, const QSharedPointer<ExpressionNode>& ast = {});
     
     // Parse LHS (left-hand side) of assignment
     // 兼容旧接口：返回 (名字, 第一个下标)（无下标时下标为 -1）

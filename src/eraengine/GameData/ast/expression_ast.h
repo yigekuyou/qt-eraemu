@@ -22,6 +22,8 @@
 #include <QList>
 #include <QSharedPointer>
 #include <functional>
+#include <QJsonObject>
+#include <QJsonDocument>
 #include "expression_lexer.h"
 #include "operand_type.h"
 #include "operator_table.h"
@@ -244,6 +246,10 @@ struct FunctionResolution {
 void walkExpression(ExpressionNode& node,
                     const std::function<void(ExpressionNode&)>& visit);
 
+// 面向诊断/测试的结构化导出：保留节点类别、强类型、变量下标和函数解析状态。
+[[nodiscard]] QJsonObject expressionAstJson(const ExpressionNode& node);
+[[nodiscard]] QString expressionAstDump(const ExpressionNode& node, int indent = 0);
+
 // 三目：cond ? then # else
 class IfNode : public ExpressionNode {
 public:
@@ -283,6 +289,9 @@ struct StrFormPart {
     QString text;                                   // Text
     QSharedPointer<ExpressionNode> expression;      // Expression
 
+    QSharedPointer<ExpressionNode> width;
+    bool leftAlign = false;
+
     static StrFormPart makeText(const QString& t) { return StrFormPart{StrFormPartType::Text, t, nullptr}; }
     static StrFormPart makeExpr(QSharedPointer<ExpressionNode> e) {
         return StrFormPart{StrFormPartType::Expression, QString(), std::move(e)};
@@ -303,6 +312,8 @@ public:
 private:
     QList<StrFormPart> m_parts;
 };
+
+QSharedPointer<ExpressionNode> cloneExpression(const QSharedPointer<ExpressionNode>& node);
 
 // C# 命名别名（便于对照阅读）
 using OperandTerm = ExpressionNode;   // IOperandTerm

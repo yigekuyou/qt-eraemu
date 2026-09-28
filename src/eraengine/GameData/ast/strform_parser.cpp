@@ -133,9 +133,17 @@ QSharedPointer<StrFormNode> StrFormParser::parse(const QString& text, const Expr
     const int n = text.length();
 
     const auto addExpr = [&](const QString& inner) {
-        QSharedPointer<ExpressionNode> expr = resolve ? resolve(inner.trimmed()) : nullptr;
+        const int comma = findTopLevel(inner, QLatin1Char(','), 0, -1);
+        const QString value = comma < 0 ? inner : inner.left(comma);
+        QSharedPointer<ExpressionNode> expr = resolve ? resolve(value.trimmed()) : nullptr;
         if (!expr) expr = QSharedPointer<LiteralNode>::create(0);
         b.addExpr(expr);
+        if (comma >= 0) {
+            const int second = findTopLevel(inner, QLatin1Char(','), comma + 1, -1);
+            const QString width = second < 0 ? inner.mid(comma + 1) : inner.mid(comma + 1, second-comma-1);
+            b.parts.last().width = resolve ? resolve(width.trimmed()) : nullptr;
+            b.parts.last().leftAlign = second >= 0 && inner.mid(second+1).trimmed().compare("LEFT", Qt::CaseInsensitive) == 0;
+        }
     };
 
     for (int i = 0; i < n; ++i) {

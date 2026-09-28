@@ -17,6 +17,7 @@
  */
 #include "ast_builder.h"
 #include "strform_parser.h"
+#include "print_template.h"
 #include "argument_parser.h"
 
 namespace {
@@ -92,7 +93,8 @@ bool AstBuilder::isConditionInstruction(const QString& upperName) {
         || upperName == QLatin1String("SIF")
         || upperName == QLatin1String("ELSEIF")
         || upperName == QLatin1String("WHILE")
-        || upperName == QLatin1String("REPEAT");
+        || upperName == QLatin1String("REPEAT")
+        || upperName == QLatin1String("LOOP");
 }
 
 // 首操作数是标签名的指令族（CALL/CALLFORM/CALLF/TRYCALL*/JUMP*/BEGIN）
@@ -533,8 +535,12 @@ LogicalLine AstBuilder::build(const QString& rawLine,
                 for (const QString& part : splitTopLevelComma(rest)) {
                     QString item = part.trimmed();
                     const int eq = topLevelEquals(item);
+                    const QString defaultValue = eq >= 0 ? item.mid(eq + 1).trimmed() : QString();
                     if (eq >= 0) item = item.left(eq).trimmed();
-                    if (!item.isEmpty()) line.labelArgs.append(item);
+                    if (!item.isEmpty()) {
+                        line.labelArgs.append(item);
+                        line.labelDefaults.append(defaultValue);
+                    }
                 }
             }
         }
@@ -628,6 +634,27 @@ LogicalLine AstBuilder::build(const QString& rawLine,
         return finalized(std::move(line));
     }
 
+    // HTML_PRINT 的参数是一个完整字符串表达式，不按空白或逗号拆分。
+    if (line.functionName == QLatin1String("RETURNF")) {
+        const QString expr = trimmed.mid(first.text.length()).trimmed();
+        if (!expr.isEmpty()) {
+            Operand operand(expr);
+            if (resolve) operand.ast = resolve(expr);
+            line.arguments.append(operand);
+        }
+        return finalized(std::move(line));
+    }
+    if (line.functionName == QLatin1String("HTML_PRINT")) {
+        const QString expr = trimmed.mid(first.text.length()).trimmed();
+        if (!expr.isEmpty()) {
+            Operand operand(expr);
+            if (resolve) operand.ast = resolve(expr);
+            line.arguments.append(operand);
+            line.printTemplate = PrintTemplateCompiler::compile(operand.ast);
+        }
+        return finalized(std::move(line));
+    }
+
     // ---- PRINT 族（对齐 C# PRINT_Instruction：参数形态由**指令名后缀**决定）----
     //
     //   PRINT / PRINTL / PRINTW / PRINTC / PRINTSINGLE / PRINTPLAIN …
@@ -652,6 +679,11 @@ LogicalLine AstBuilder::build(const QString& rawLine,
             Operand operand(rest);
             operand.isString = true;      // 字面文本（含引号，C# 不剥引号）
             line.arguments.append(operand);
+            line.printTemplate = QSharedPointer<PrintTemplate>::create();
+            PrintTemplatePart part;
+            part.kind = PrintTemplatePart::Kind::Text;
+            part.text = rest;
+            line.printTemplate->parts.append(part);
             return finalized(std::move(line));
         }
         // 表达式 / 格式化串：只去掉行尾多余的逗号，保留空白（用于列对齐）
@@ -665,6 +697,12 @@ LogicalLine AstBuilder::build(const QString& rawLine,
                 Operand operand(expr);
                 if (resolve) operand.ast = StrFormParser::parse(expr, resolve);
                 line.arguments.append(operand);
+                line.printTemplate = QSharedPointer<PrintTemplate>::create();
+                PrintTemplatePart part;
+                part.kind = operand.ast ? PrintTemplatePart::Kind::Expression : PrintTemplatePart::Kind::Text;
+                part.text = operand.raw;
+                part.expression = operand.ast;
+                line.printTemplate->parts.append(part);
             }
             return finalized(std::move(line));
         }
@@ -679,6 +717,12 @@ LogicalLine AstBuilder::build(const QString& rawLine,
                 operand.ast = resolve(expr);
             }
             line.arguments.append(operand);
+            line.printTemplate = QSharedPointer<PrintTemplate>::create();
+            PrintTemplatePart part;
+            part.kind = operand.ast ? PrintTemplatePart::Kind::Expression : PrintTemplatePart::Kind::Text;
+            part.text = operand.raw;
+            part.expression = operand.ast;
+            line.printTemplate->parts.append(part);
         }
         return finalized(std::move(line));
     }

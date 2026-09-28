@@ -74,6 +74,8 @@ GameData/ast/user_function.cpp
 GameData/ast/user_function.h
 GameData/ast/word.h
 GameData/ast/logical_line.h
+GameData/ast/print_template.cpp
+GameData/ast/print_template.h
 GameData/ast/ast_builder.cpp
 GameData/ast/ast_builder.h
 
@@ -177,6 +179,8 @@ target_link_libraries(test_cli PRIVATE Qt6::DBus)
 eraengine_add_test(test_era_parse_table)
 eraengine_add_test(test_parse_table_ast)
 eraengine_add_test(test_execution_chain)
+eraengine_add_test(test_control_flow)
+add_test(NAME test_control_flow COMMAND test_control_flow)
 eraengine_add_test(test_console_backend)
 eraengine_add_test(test_console_plane)
 eraengine_add_test(test_gui_manager)
@@ -197,6 +201,8 @@ eraengine_add_test(test_sjis_game)
 eraengine_add_test(test_encoding_probe)
 eraengine_add_test(test_game_base_data)
 eraengine_add_test(test_variable_storage)
+eraengine_add_test(test_print_template)
+add_test(NAME test_print_template COMMAND test_print_template)
 eraengine_add_test(test_print_whitespace)
 target_link_libraries(test_print_whitespace PRIVATE Qt6::Test)
 

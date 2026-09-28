@@ -127,6 +127,8 @@ EraEngine::EraEngine(QObject *parent)
 					m_console.print(text);
 					if (newline) m_console.newline();
 				});
+        connect(&m_executionEngine, &ExecutionEngine::consolePrintTemplate,
+                &m_console, &ConsoleBackend::printTemplate);
 		connect(&m_executionEngine, &ExecutionEngine::consoleClearLines,
 				&m_console, &ConsoleBackend::clearLines);
 		connect(&m_executionEngine, &ExecutionEngine::consolePrintButton, this,

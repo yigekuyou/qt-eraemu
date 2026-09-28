@@ -60,6 +60,10 @@ void TestPrintWhitespace::testPrintsPreservesTrailingSpacesInQuotedString() {
     // 参数应是 "\"hello   \""（引号保留），raw 应是 "hello   "（引号内保留空格）
     const Operand& arg = line.arguments.first();
     QCOMPARE(arg.raw, QStringLiteral("hello   "));  // 引号被剥离后的内容
+    QVERIFY(line.printTemplate);
+    QCOMPARE(line.printTemplate->parts.size(), 1);
+    QCOMPARE(line.printTemplate->parts.first().kind, PrintTemplatePart::Kind::Text);
+    QCOMPARE(line.printTemplate->parts.first().text, QStringLiteral("hello   "));
 }
 
 void TestPrintWhitespace::testPrintcPreservesTrailingSpaces() {

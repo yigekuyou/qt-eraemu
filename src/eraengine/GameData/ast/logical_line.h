@@ -23,6 +23,8 @@
 #include <QStringList>
 #include <QMetaType>
 #include <QSharedPointer>
+#include <QColor>
+#include <QHash>
 
 #include "expression_ast.h"
 #include "word.h"
@@ -136,6 +138,44 @@ enum class ArgKind : quint8 {
     Raw             // 宽松：原样 token（未列入规范的指令）
 };
 
+// 通用打印属性：HTML_PRINT/PRINTFORM 的标签解析结果附着在 ERB 打印模板上，
+// 不创建 Html AST 类型。无效颜色/空字体名表示系统默认样式。
+struct PrintStyle {
+    QColor color;
+    QColor buttonColor;
+    QString fontName;
+    bool bold = false;
+    bool italic = false;
+    bool underline = false;
+    bool strike = false;
+};
+
+struct PrintTemplatePart {
+    enum class Kind : quint8 { Text, Expression, Break, Image, Shape, Button, EndButton, Alignment, EndAlignment, NoWrap, EndNoWrap, Style, EndStyle };
+    Kind kind = Kind::Text;
+    QString text;
+    QSharedPointer<ExpressionNode> expression;
+    PrintStyle style;
+    QString buttonValue;
+    QSharedPointer<ExpressionNode> buttonValueExpression;
+    QHash<QString, QSharedPointer<ExpressionNode>> attributes;
+    QStringList attributeOrder;
+    QString tooltip;
+    int width = 0;
+    int height = 0;
+    QString shapeType;
+    QList<int> shapeParams;
+    bool lockedPosition = false;
+    int x = -1;
+    int y = -1;
+};
+
+struct PrintTemplate {
+    QList<PrintTemplatePart> parts;
+    int alignment = 0; // 0=left, 1=center, 2=right
+    bool noWrap = false;
+};
+
 struct TypedArgument {
     ArgKind kind = ArgKind::Raw;
     QList<Operand> operands;                          // 原始操作数（raw + ast）
@@ -157,6 +197,7 @@ struct LogicalLine {
     // 标签（FunctionLabel / GotoLabel）
     QString        labelName;
     QStringList    labelArgs;        // 形参名 @NAME(a, b)（用户自定义函数）
+    QStringList    labelDefaults;    // 同位置的默认值；无默认值为空串
 
     // 指令（Instruction）
     QString        functionName;     // 大写指令名
@@ -167,6 +208,7 @@ struct LogicalLine {
 
     // 原始 token 与文本（C# argprimitive / WordCollection）
     QString        raw;
+    QSharedPointer<PrintTemplate> printTemplate;
 
     // 扁平控制流（行号索引，替代 C# 的 NextLine / JumpTo 指针）
     int  lineIndex      = -1;

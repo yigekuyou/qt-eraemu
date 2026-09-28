@@ -208,7 +208,11 @@ QList<QString> screenLines(ConsoleBackend* console, bool withAnnotation, bool wi
     if (!console) return out;
     const QList<ConsoleDisplayLine>& lines = console->buffer().lines();
     if (rawOut) *rawOut = lines;
-    for (const ConsoleDisplayLine& l : lines) {
+    for (int lineIndex = 0; lineIndex < lines.size(); ++lineIndex) {
+        ConsoleDisplayLine l = lines.at(lineIndex);
+        // buffer 中的行已经由 ConsoleBackend 布局；这里再次用同一布局
+        // 生成诊断坐标，保证 --model 与 QML visibleBlocks 使用同一单位。
+        console->layout().placeLine(l, lineIndex);
         QString text = l.plainText();
         if (withAnnotation) {
             const QString ann = lineAnnotation(l);
@@ -226,6 +230,8 @@ QList<QString> screenLines(ConsoleBackend* console, bool withAnnotation, bool wi
                     default: d += QStringLiteral("text \"") + sp.text + QStringLiteral("\""); break;
                     }
                     d += QStringLiteral(" col=%1 cols=%2 row=%3").arg(sp.col).arg(sp.cols).arg(sp.row);
+                    if (sp.style.color.isValid())
+                        d += QStringLiteral(" color=%1").arg(sp.style.color.name(QColor::HexRgb));
                     if (seg.isButton) d += QStringLiteral(" [btn]");
                     detail.append(d);
                 }
@@ -237,8 +243,9 @@ QList<QString> screenLines(ConsoleBackend* console, bool withAnnotation, bool wi
 }
 
 // 平面重建工具（定义在后面）
-QStringList planeLines(ConsoleBackend* console, bool withRuler);
-QStringList planeIssues(ConsoleBackend* console);
+QStringList planeLines(ConsoleBackend* console, bool withRuler, bool withDebug, bool withColor,
+                       bool withAnsi);
+QStringList planeIssues(ConsoleBackend* console, bool withDebug);
 
 // 把「当前屏幕」打印出来（仅在变化时）；用于发现渲染错误：
 //   * 帧没有被 CLEARLINE 清掉（越堆越多）
@@ -246,9 +253,10 @@ QStringList planeIssues(ConsoleBackend* console);
 //   * 对齐/颜色/内联图/图形
 //   * withPlane：用「二维字符平面」呈现（root/text/image 分层模型重建）
 bool renderScreen(ConsoleBackend* console, QList<QString>& last, bool withAnnotation,
-                  bool withModel, const QString& tag, bool withPlane = false) {
+                  bool withModel, const QString& tag, bool withPlane = false,
+                  bool withDebug = false, bool withColor = false, bool withAnsi = false) {
     const QList<QString> now = withPlane ? [&]() {
-            QStringList pl = planeLines(console, /*withRuler*/ true);
+            QStringList pl = planeLines(console, /*withRuler*/ true, withDebug, withColor, withAnsi);
             return QList<QString>(pl.begin(), pl.end());
         }()
                                        : screenLines(console, withAnnotation, withModel);
@@ -269,29 +277,33 @@ bool renderScreen(ConsoleBackend* console, QList<QString>& last, bool withAnnota
 // 还原成字符矩阵 —— 文本照抄、图片用 ▨ 占位、图形用 ─ 占位。
 // 这样无需 GUI 就能看出「2 维排版」是否正确（列有没有对齐、图有没有落到右侧面板）。
 // ---------------------------------------------------------------------------
-ConsolePlaneOptions planeOptions(ConsoleBackend* console) {
+ConsolePlaneOptions planeOptions(ConsoleBackend* console, bool withDebug = false, bool withColor = false) {
     ConsolePlaneOptions opt;
     opt.windowWidth = console ? console->windowWidth() : 760;
     // 终端安全：把 □ ■ ▨ ─ 这些「宽度有歧义」的符号换成 2 个 ASCII 字符，
     // 于是任何终端/字体下都严格「1 字符 = 1 个区块长」，列才对得齐；
     // 行尾附带本行占用的单位数，便于核对（不依赖终端字体）。
-    opt.terminalSafe = true;
+    opt.terminalSafe = !withDebug;   // 调试模式不使用 ASCII 替换
     opt.withWidths = true;
+    opt.debugCompare = withDebug;    // 调试对比模式
+    opt.debugColor = withColor;      // 调试颜色模式
     return opt;
 }
 
-QStringList planeLines(ConsoleBackend* console, bool withRuler) {
+QStringList planeLines(ConsoleBackend* console, bool withRuler, bool withDebug, bool withColor,
+                       bool withAnsi) {
     if (!console) return {};
-    const ConsolePlaneOptions opt = planeOptions(console);
+    ConsolePlaneOptions opt = planeOptions(console, withDebug, withColor);
+    opt.ansiColors = withAnsi;
     return withRuler ? ConsolePlane::renderWithRuler(console->buffer(), console->layout(), opt)
                      : ConsolePlane::render(console->buffer(), console->layout(), opt);
 }
 
 // 平面几何自检（越界/重叠/未对齐/尺寸缺失…）
-QStringList planeIssues(ConsoleBackend* console) {
+QStringList planeIssues(ConsoleBackend* console, bool withDebug) {
     if (!console) return {};
     return ConsolePlane::issueTexts(
-        ConsolePlane::inspect(console->buffer(), console->layout(), planeOptions(console)));
+        ConsolePlane::inspect(console->buffer(), console->layout(), planeOptions(console, withDebug)));
 }
 
 // 渲染自检：返回可疑项（供 --check 与 :check 使用）
@@ -313,7 +325,7 @@ QStringList renderSuspects(ConsoleBackend* console) {
         out << QStringLiteral("屏幕空行过多（%1/%2）—— 可能是本帧没被清掉或绘制缺失")
                    .arg(blanks).arg(lines.size());
     // 平面几何诊断（分层模型的坐标/尺寸）
-    out += planeIssues(console);
+    out += planeIssues(console, false);  // 自检不需要调试模式
     return out;
 }
 
@@ -330,7 +342,7 @@ bool isStringInput(const QString& kind) {
 //     s <文本>         -> 字符串输入（INPUTS -> RESULTS）
 //     k <t> <r1> <r2> <r3> <r4>  -> INPUTMOUSEKEY 事件（类型/坐标/按键）
 //     x                -> 注入一次鼠标左键点击
-//     :state :vars :screen :model :check  -> 调试命令
+//     :state :vars :screen :model :check :ast EXPR -> 调试命令
 //     q                -> 退出
 // ---------------------------------------------------------------------------
 class ControlObject : public QObject {
@@ -339,7 +351,9 @@ public:
     explicit ControlObject(QObject* parent = nullptr) : QObject(parent) {}
     std::function<void(const QString&)> onCommand;
     std::function<QStringList()> screenProvider;
+    std::function<QStringList()> debugProvider;
     std::function<QStringList()> suspectsProvider;
+    bool stderrDebug = true;
 
 public slots:
     Q_SCRIPTABLE void input(int value) { if (onCommand) onCommand(QString::number(value)); }
@@ -350,22 +364,30 @@ public slots:
         if (onCommand)
             onCommand(QStringLiteral("k %1 %2 %3 %4 %5").arg(type).arg(r1).arg(r2).arg(r3).arg(r4));
     }
+    Q_SCRIPTABLE void sendCommand(const QString& command) { if (onCommand) onCommand(command); }
     Q_SCRIPTABLE QStringList screen() const { return screenProvider ? screenProvider() : QStringList(); }
+    Q_SCRIPTABLE QStringList debugInfo() const { return debugProvider ? debugProvider() : QStringList(); }
     Q_SCRIPTABLE QStringList suspects() const { return suspectsProvider ? suspectsProvider() : QStringList(); }
     Q_SCRIPTABLE void quit() { if (onCommand) onCommand(QStringLiteral("q")); }
 
 signals:
     Q_SCRIPTABLE void screenChanged(const QStringList& lines);
+    Q_SCRIPTABLE void debugMessage(const QString& message);
 
 public:
     void notifyScreen(const QStringList& lines) { emit screenChanged(lines); }
+    void debug(const QString& message) {
+        if (stderrDebug) std::cerr << "[test_cli] " << message.toStdString() << '\n';
+        emit debugMessage(message);
+    }
 };
 
 } // namespace
 
 int main(int argc, char* argv[]) {
     QCoreApplication app(argc, argv);
-    std::cout << std::unitbuf;      // 调试输出不缓冲（管道/重定向时也能实时看到）
+    std::cout << std::unitbuf;      // 终端输出不缓冲
+    std::cerr << std::unitbuf;      // stderr 调试流不缓冲，便于外部 harness 实时读取
 
     QString directory;
     QStringList scripted;      // --script 0,1,0
@@ -373,6 +395,10 @@ int main(int argc, char* argv[]) {
     bool appendLog = false;    // --log：追加式（不反映 CLEARLINE）
     bool withModel = false;    // --model：打印 span/button 结构
     bool withPlane = false;    // --plane：用二维字符平面呈现（分层模型）
+    bool withDebug = false;    // --debug：调试对比模式（方块替换为 [ ]）
+    bool withColor = false;    // --color：调试颜色模式（用 ANSI 颜色表示位置矩阵）
+    bool withAnsi = false;     // --ansi：按 span 样式输出 ANSI 真彩色
+    bool stderrDebug = true;   // stderr 默认开启，便于外部调试器实时读取
     quint32 seedValue = 0;     // --seed 的值
     bool checkMode = false;    // --check：渲染自检
     int  frameLimit = 30;      // 屏幕快照最多打印多少帧
@@ -389,9 +415,16 @@ int main(int argc, char* argv[]) {
                 << "  --log     追加式日志（旧行为；不反映 CLEARLINE）\n"
                 << "  --model   屏幕快照同时打印 span/button 结构\n"
                 << "  --plane   用「二维字符平面」呈现屏幕（root/text/image 分层模型重建）\n"
+                << "  --debug   调试对比模式：用 [ ] 替换方块字符，便于对比两个输出\n"
+                << "  --color   调试颜色模式：用 ANSI 颜色表示位置矩阵（需配合 --debug）\n"
+                << "  --ansi    按 span 样式输出 ANSI 真彩色（自动启用 --plane；显示彩色方块）\n"
                 << "  --frames N  最多打印 N 帧屏幕快照（默认 30，0=不限）\n"
                 << "  --check   渲染自检（未展开格式/%/无按钮的 [n]/空行过多）→ 可疑时退出码 2\n"
                 << "  --dbus           注册 DBus 服务 io.yigekuyou.emuera.testcli (/testcli)\n"
+                << "                   方法：input/inputString/mouseKey/sendCommand/screen/debugInfo/suspects/quit\n"
+                << "                   信号：screenChanged/debugMessage\n"
+                << "  --stderr-debug   将运行状态、外部命令和屏幕帧摘要写入 stderr（默认开启）\n"
+                << "  --no-stderr-debug  关闭 test_cli 自身的 stderr 调试摘要\n"
                 << "  --socket [路径]  Unix socket（默认 /tmp/emuera-test-cli.sock）\n"
                 << "  --tcp <端口>      TCP socket\n"
                 << "  --run-ms N       输入用尽后继续跑 N 毫秒（给外部注入留时间）\n"
@@ -401,6 +434,14 @@ int main(int argc, char* argv[]) {
         }
         if (a == QLatin1String("--dbus")) {
             useDBus = true;
+            continue;
+        }
+        if (a == QLatin1String("--stderr-debug")) {
+            stderrDebug = true;
+            continue;
+        }
+        if (a == QLatin1String("--no-stderr-debug")) {
+            stderrDebug = false;
             continue;
         }
         if (a == QLatin1String("--socket")) {
@@ -432,6 +473,19 @@ int main(int argc, char* argv[]) {
             continue;
         }
         if (a == QLatin1String("--plane")) { // 用「二维字符平面」呈现屏幕（分层模型 → 平面）
+            withPlane = true;
+            continue;
+        }
+        if (a == QLatin1String("--debug")) { // 调试对比模式：方块替换为 [ ]
+            withDebug = true;
+            continue;
+        }
+        if (a == QLatin1String("--color")) { // 调试颜色模式：用 ANSI 颜色表示位置矩阵
+            withColor = true;
+            continue;
+        }
+        if (a == QLatin1String("--ansi")) { // 按实际 span 颜色呈现终端平面
+            withAnsi = true;
             withPlane = true;
             continue;
         }
@@ -467,10 +521,6 @@ int main(int argc, char* argv[]) {
     ProcessState* state = engine.getProcessState();
     SystemStateMachine* machine = engine.getSystemStateMachine();
 
-    QObject::connect(machine, &SystemStateMachine::errorOccurred, [](const QString& m) {
-        std::cout << "[状态机错误] " << m.toStdString() << "\n";
-    });
-
     engine.getScriptRunner()->setStepLimit(2000000);   // 死循环诊断：超限即报错并给出位置
     if (hasSeed) engine.setRandomSeed(seedValue);      // 固定随机种子 -> 整局可复现
 
@@ -478,12 +528,33 @@ int main(int argc, char* argv[]) {
     QList<QString> pending;
     bool stdinOpen = interactive;
     ControlObject control;
-    control.onCommand = [&pending](const QString& cmd) { pending.append(cmd); };
+    control.stderrDebug = stderrDebug;
+    control.onCommand = [&pending, &control](const QString& cmd) {
+        pending.append(cmd);
+        control.debug(QStringLiteral("command queued: %1").arg(cmd));
+    };
     control.screenProvider = [&]() {
         QList<QString> snap = screenLines(console, true, withModel);
         return QStringList(snap.begin(), snap.end());
     };
+    control.debugProvider = [&]() {
+        return QStringList{
+            QStringLiteral("systemState=%1").arg(state ? SystemStateMachine::stateName(state->getSystemState()) : QStringLiteral("-")),
+            QStringLiteral("execState=%1").arg(state ? int(state->getExecState()) : -1),
+            QStringLiteral("inputKind=%1").arg(console ? console->inputKind() : QString()),
+            QStringLiteral("script=%1").arg(engine.getParseTable() ? engine.getParseTable()->currentScript() : QString()),
+            QStringLiteral("line=%1").arg(engine.getParseTable() ? engine.getParseTable()->currentLine() : -1),
+            QStringLiteral("depth=%1").arg(engine.getParseTable() ? engine.getParseTable()->depth() : -1),
+            QStringLiteral("screenLines=%1").arg(console ? console->buffer().count() : 0),
+            QStringLiteral("pendingCommands=%1").arg(pending.size())
+        };
+    };
     control.suspectsProvider = [&]() { return renderSuspects(console); };
+    control.debug(QStringLiteral("loaded %1; external input and terminal input ready").arg(directory));
+    QObject::connect(machine, &SystemStateMachine::errorOccurred, [&control](const QString& m) {
+        std::cout << "[状态机错误] " << m.toStdString() << "\n";
+        control.debug(QStringLiteral("state machine error: %1").arg(m));
+    });
 
     // stdin（管道/终端）：非阻塞读，统一进 pending —— 这样管道 `printf 'i 0\nq\n' | test_cli` 也能驱动
     auto* stdinNotifier = new QSocketNotifier(STDIN_FILENO, QSocketNotifier::Read, &control);
@@ -513,6 +584,7 @@ int main(int argc, char* argv[]) {
         auto* srv = new QLocalServer(&control);
         if (srv->listen(socketPath)) {
             std::cout << "== Unix socket: " << socketPath.toStdString() << " ==\n";
+            control.debug(QStringLiteral("Unix socket ready: %1").arg(socketPath));
             QObject::connect(srv, &QLocalServer::newConnection, [&]() {
                 while (QLocalSocket* c = srv->nextPendingConnection()) {
                     localClients.append(c);
@@ -562,6 +634,7 @@ int main(int argc, char* argv[]) {
             && bus.registerService(QStringLiteral("io.yigekuyou.emuera.testcli"))) {
             std::cout << "== DBus: io.yigekuyou.emuera.testcli /testcli"
                          "（qdbus io.yigekuyou.emuera.testcli /testcli input 0）==\n";
+            control.debug(QStringLiteral("DBus ready: io.yigekuyou.emuera.testcli /testcli"));
         } else {
             std::cout << "== DBus 注册失败（是否已有实例？）==\n";
         }
@@ -625,7 +698,14 @@ int main(int argc, char* argv[]) {
         if (checkMode) collectSuspects();
         if (appendLog) return;
         if (frameLimit > 0 && framesShown >= frameLimit) return;
-        if (renderScreen(console, lastScreen, /*annotation*/ true, withModel, tag, withPlane)) ++framesShown;
+        const bool changed = renderScreen(console, lastScreen, /*annotation*/ true, withModel,
+                                          tag, withPlane, withDebug, withColor, withAnsi);
+        if (!changed) return;
+        ++framesShown;
+        const QStringList dbusScreen = control.screenProvider ? control.screenProvider() : QStringList();
+        control.notifyScreen(dbusScreen);
+        control.debug(QStringLiteral("screen changed: %1, lines=%2, frame=%3")
+                          .arg(tag).arg(dbusScreen.size()).arg(framesShown));
     };
     auto drainLog = [&]() {
         if (!appendLog) return;
@@ -657,20 +737,20 @@ int main(int argc, char* argv[]) {
         }
         if (cmd == ":screen") {
             QList<QString> dummy;
-            renderScreen(console, dummy, true, withModel, QStringLiteral("当前屏幕"), withPlane);
+            renderScreen(console, dummy, true, withModel, QStringLiteral("当前屏幕"), withPlane, withDebug, withColor, withAnsi);
             return true;
         }
         if (cmd == ":model") {
             withModel = !withModel;
             QList<QString> dummy;
-            renderScreen(console, dummy, true, withModel, QStringLiteral("当前屏幕（模型）"), withPlane);
+            renderScreen(console, dummy, true, withModel, QStringLiteral("当前屏幕（模型）"), withPlane, withDebug, withColor, withAnsi);
             return true;
         }
         if (cmd == ":plane") {          // 二维字符平面（分层模型重建 + 列标尺）
             withPlane = !withPlane;
             QList<QString> dummy;
             renderScreen(console, dummy, true, withModel,
-                         QStringLiteral("当前平面（%1）").arg(withPlane ? "开" : "关"), withPlane);
+                         QStringLiteral("当前平面（%1）").arg(withPlane ? "开" : "关"), withPlane, withDebug, withColor, withAnsi);
             return true;
         }
         if (cmd == ":geometry") {       // 逐区块的 绝对/相对 位置与尺寸
@@ -688,6 +768,7 @@ int main(int argc, char* argv[]) {
                           << " size=" << m.value("cols").toInt() << "x" << m.value("rows").toInt()
                           << " (px " << m.value("width").toInt() << "x" << m.value("height").toInt() << ")"
                           << (m.value("isButton").toBool() ? " [button]" : "")
+                          << (m.contains("color") ? " color=" + m.value("color").toString().toStdString() : "")
                           << " \"" << m.value("plain").toString().toStdString()
                           << m.value("text").toString().toStdString() << "\"\n";
             }
@@ -697,6 +778,17 @@ int main(int argc, char* argv[]) {
             const QStringList sus = renderSuspects(console);
             std::cout << "  渲染自检：" << (sus.isEmpty() ? "未发现可疑项" : "") << "\n";
             for (const QString& s : sus) std::cout << "  [!] " << s.toStdString() << "\n";
+            return true;
+        }
+        if (cmd.startsWith(QLatin1String(":ast "))) {   // :ast EXPR —— 导出强类型表达式 AST
+            const QString expr = cmd.mid(5).trimmed();
+            EraParseTable* table = engine.getParseTable();
+            const QSharedPointer<ExpressionNode> ast = table ? table->expressionAst(expr) : nullptr;
+            if (!ast) {
+                std::cout << "  AST <null> expr=" << expr.toStdString() << "\n";
+            } else {
+                std::cout << expressionAstDump(*ast).toStdString() << "\n";
+            }
             return true;
         }
         if (cmd.startsWith(QLatin1String(":e "))) {   // :e EXPR —— 求值任意表达式
@@ -799,7 +891,7 @@ int main(int argc, char* argv[]) {
                 bannerShown = true;
             }
             int pump = 0;
-            while (state->getExecState() == st && pending.isEmpty()) {
+            while (state->getExecState() == st && pending.isEmpty() && scripted.isEmpty()) {
                 QCoreApplication::processEvents(QEventLoop::AllEvents, 20);
                 QThread::msleep(5);
                 if (++pump % 40 == 0) pushScreen();       // 让 socket 客户端看到进展
@@ -808,7 +900,7 @@ int main(int argc, char* argv[]) {
             showScreen(QStringLiteral("第 %1 帧").arg(framesShown + 1));
             drainLog();
             pushScreen();
-            if (pending.isEmpty()) {
+            if (pending.isEmpty() && scripted.isEmpty()) {
                 if (state->getExecState() != st) {
                     bannerShown = false;
                     continue;                               // 定时器到点 -> 重新判断

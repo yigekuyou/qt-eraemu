@@ -16,11 +16,13 @@
  * along with this program.  If not, see <https://www.gnu.org/licenses/>.
  */
 #include "execution_engine.h"
+#include <QRegularExpression>
 #include <QDebug>
 #include "expression_evaluator.h"
 #include "ast/expression_ast.h"
 #include "ast/ast_builder.h"
 #include "ast/strform_parser.h"
+#include "ast/print_template.h"
 #include "era_parse_table.h"
 #include "eraengine.h"
 #include "function_system.h"
@@ -215,6 +217,7 @@ QPair<QString, int> ExecutionEngine::parseLHS(const QString& lhs) {
 // 否则按声明维度走 1D / 2D / 3D）
 qint64 ExecutionEngine::readLhs(const LhsRef& ref) {
     if (!m_storage) return 0;
+    if (m_storage->hasParameter(ref.name)) return m_storage->parameter(ref.name).toLongLong();
     const QString upper = ref.name.toUpper();
     if (upper == QLatin1String("LOCAL") || upper == QLatin1String("ARG")) {
         return m_storage->getLocalInt(ref.first());
@@ -239,6 +242,7 @@ qint64 ExecutionEngine::readLhs(const LhsRef& ref) {
 
 void ExecutionEngine::writeLhs(const LhsRef& ref, qint64 value) {
     if (!m_storage) return;
+    if (m_storage->hasParameter(ref.name)) { m_storage->setParameter(ref.name, value); return; }
     const QString upper = ref.name.toUpper();
     if (upper == QLatin1String("LOCAL") || upper == QLatin1String("ARG")) {
         m_storage->setLocalInt(ref.first(), value);   // 用户函数局部槽（C# LOCAL）
@@ -265,7 +269,7 @@ void ExecutionEngine::writeLhs(const LhsRef& ref, qint64 value) {
     m_storage->setGlobalInt1D(ref.name, ref.first(), value);
 }
 
-bool ExecutionEngine::handleCompoundAssignment(const QString& lhs, const QString& op, const QString& rhs) {
+bool ExecutionEngine::handleCompoundAssignment(const QString& lhs, const QString& op, const QString& rhs, const QSharedPointer<ExpressionNode>& ast) {
     // Parse the LHS to get variable name and index（支持 2D/3D 下标）
     const LhsRef ref = parseLhsRef(lhs);
     qint64 currentValue = readLhs(ref);
@@ -273,8 +277,9 @@ bool ExecutionEngine::handleCompoundAssignment(const QString& lhs, const QString
     // Evaluate the RHS expression (prefer cached AST)
     ExpressionEvaluator localEvaluator;
     ExpressionEvaluator& evaluator = m_expressionEvaluator ? *m_expressionEvaluator : localEvaluator;
-    const QVariant rhsVar = evalExpressionCached(m_parseTable, evaluator, rhs, m_storage, m_gameBaseData);
-    int rhsValue = rhsVar.isValid() ? rhsVar.toInt() : rhs.toInt();
+    const QVariant rhsVar = ast ? evaluator.evaluate(*ast, m_storage, m_gameBaseData)
+        : evalExpressionCached(m_parseTable, evaluator, rhs, m_storage, m_gameBaseData);
+    qint64 rhsValue = rhsVar.isValid() ? rhsVar.toLongLong() : rhs.toLongLong();
     
     // Apply the operation
     if (op == "+=") {
@@ -335,11 +340,95 @@ bool ExecutionEngine::executeInstruction(const LogicalLine& line) {
         return handleLoadGlobal();
     }
 
+    // ---- 命令式字符串内置函数 ----
+    // ERB 既支持 STRLENS(VERSION) 表达式，也支持
+    //   STRLENS VERSION
+    //   SUBSTRING VERSION, RESULT - 3, 3
+    // 后一种形式由 AST 保留为普通指令，必须在执行阶段把结果写回
+    // RESULT / RESULTS；否则 TITLE.ERB 的版本号会退化成 0.0。
+    if (name == "STRLENS" || name == "STRLENSU" || name == "SUBSTRING"
+        || name == "SUBSTRINGU") {
+        ExpressionEvaluator localEvaluator;
+        ExpressionEvaluator& ev = m_expressionEvaluator ? *m_expressionEvaluator : localEvaluator;
+        QString callText = line.raw;
+        const int commandEnd = callText.indexOf(QRegularExpression(QStringLiteral("\\s")));
+        if (commandEnd >= 0) callText = callText.mid(commandEnd).trimmed();
+        if (callText.isEmpty()) {
+            QStringList callArgs;
+            for (const Operand& arg : args) {
+                if (arg.raw != QLatin1String(",")) callArgs << arg.raw;
+            }
+            callText = callArgs.join(QLatin1Char(','));
+        }
+        // line.raw 保留命令后的空白、逗号和运算符：
+        // SUBSTRING VERSION, RESULT - 3, 3 -> SUBSTRING(VERSION, RESULT - 3, 3)
+        const QString expr = name + QLatin1Char('(') + callText + QLatin1Char(')');
+        QVariant value;
+        if (name == QLatin1String("SUBSTRING") || name == QLatin1String("SUBSTRINGU")) {
+            const QStringList pieces = callText.split(QLatin1Char(','), Qt::KeepEmptyParts);
+            if (pieces.size() >= 3) {
+                const QString sourceName = pieces.at(0).trimmed();
+                QString source;
+                if (sourceName.compare(QLatin1String("RESULTS"), Qt::CaseInsensitive) == 0) {
+                    source = m_storage ? m_storage->getLocalStr(0) : QString();
+                } else {
+                    const QPair<QString, int> sourceRef = parseLHS(sourceName);
+                    if (m_storage && sourceRef.first == sourceName && sourceRef.first.size() > 0) {
+                        source = m_storage->getGlobalStr1D(sourceRef.first,
+                                                           sourceRef.second >= 0 ? sourceRef.second : 0);
+                    } else {
+                        source = ev.evaluate(sourceName, m_storage, m_gameBaseData).toString();
+                    }
+                }
+                const qint64 start = ev.evaluate(pieces.at(1).trimmed(), m_storage,
+                                                 m_gameBaseData).toLongLong();
+                const qint64 length = ev.evaluate(pieces.at(2).trimmed(), m_storage,
+                                                  m_gameBaseData).toLongLong();
+                QString escaped = source;
+                escaped.replace(QLatin1Char('\\'), QStringLiteral("\\\\"));
+                escaped.replace(QLatin1Char('"'), QStringLiteral("\\\""));
+                if (start < 0) {
+                    // Emuera 的版本字符串按四位小数部分处理：2 -> 0002。
+                    // 负位置从该四位字符串末尾计算。
+                    source = QStringLiteral("0000").right(4 - qMin(4, source.size())) + source;
+                }
+                const int safeStart = start < 0
+                                           ? qMax(0, source.size() + static_cast<int>(start))
+                                           : static_cast<int>(start);
+                value = source.mid(safeStart, length < 0 ? -1 : static_cast<int>(length));
+            }
+        } else {
+            value = ev.evaluate(expr, m_storage, m_gameBaseData);
+        }
+        if (name == QLatin1String("STRLENS") || name == QLatin1String("STRLENSU")) {
+            if (m_storage) m_storage->setSystemVariable(QStringLiteral("RESULT"), 0,
+                                                          value.toLongLong());
+        } else if (m_storage) {
+            m_storage->setLocalStr(0, value.toString());
+        }
+        return true;
+    }
+
+    if (name == QLatin1String("HTML_PRINT")) {
+        ExpressionEvaluator fallback;
+        ExpressionEvaluator& evaluator = m_expressionEvaluator ? *m_expressionEvaluator : fallback;
+        const auto eval = [&](const ExpressionNode& node) {
+            return evaluator.evaluate(node, m_storage, m_gameBaseData).toString();
+        };
+        auto compiled = line.printTemplate;
+        if (!compiled && !args.isEmpty()) {
+            const auto& arg = args.first();
+            compiled = PrintTemplateCompiler::compile(arg.ast ? eval(*arg.ast) : arg.raw);
+        }
+        if (compiled) emit consolePrintTemplate(PrintTemplateCompiler::evaluate(*compiled, eval));
+        return true;
+    }
+
     // ---- 输出（PRINT 族，对齐 C# PRINT_Instruction.DoInstruction）----
     // 形态由后缀决定：PRINT / PRINTL / PRINTS / PRINTFORM / PRINTFORML /
     // PRINTFORMS / PRINTV / PRINTC / PRINTLC / PRINTPLAIN* …
     if (AstBuilder::isPrintFamily(name)) {
-        return handlePrintInstruction(name, args);
+        return handlePrintInstruction(line);
     }
     if (name == "PRINTBUTTON") {
         // PRINTBUTTON <文本>, <整数|字符串>：打印文本并把它变成按钮（对齐 C# PRINTBUTTON）
@@ -461,12 +550,12 @@ bool ExecutionEngine::executeInstruction(const LogicalLine& line) {
             // 目的类型从**变量表**取（LHS 操作数在 AST 里不带类型节点）。
             const auto lhsInfo = parseLHS(args[0].raw);
             const OperandType destType =
-                m_parseTable ? m_parseTable->variableTable().typeOf(lhsInfo.first, QString())
+                m_parseTable ? m_parseTable->variableTable().typeOf(lhsInfo.first, line.ownerFunction)
                              : OperandType::Unknown;
             if (destType == OperandType::Str) {
-                return handleStringAssignment(args[0].raw, args[1].raw);
+                return handleStringAssignment(args[0].raw, args[1].raw, args[1].ast);
             }
-            return handleAssignment(args[0].raw, args[1].raw);
+            return handleAssignment(args[0].raw, args[1].raw, args[1].ast);
         }
         return true;
     }
@@ -475,7 +564,7 @@ bool ExecutionEngine::executeInstruction(const LogicalLine& line) {
         if (args.size() >= 2) {
             const auto lhsInfo = parseLHS(args[0].raw);
             const OperandType destType =
-                m_parseTable ? m_parseTable->variableTable().typeOf(lhsInfo.first, QString())
+                m_parseTable ? m_parseTable->variableTable().typeOf(lhsInfo.first, line.ownerFunction)
                              : OperandType::Unknown;
             if (destType == OperandType::Str) {
                 return handleStringAssignment(args[0].raw,
@@ -485,7 +574,7 @@ bool ExecutionEngine::executeInstruction(const LogicalLine& line) {
     }
     if (name == "+=" || name == "-=" || name == "*=" || name == "/=") {
         if (args.size() >= 2) {
-            return handleCompoundAssignment(args[0].raw, name, args[1].raw);
+            return handleCompoundAssignment(args[0].raw, name, args[1].raw, args[1].ast);
         }
         return true;
     }
@@ -502,7 +591,7 @@ bool ExecutionEngine::executeInstruction(const LogicalLine& line) {
     return true;
 }
 
-bool ExecutionEngine::handleStringAssignment(const QString& lhs, const QString& rhs) {
+bool ExecutionEngine::handleStringAssignment(const QString& lhs, const QString& rhs, const QSharedPointer<ExpressionNode>& ast) {
     auto [varName, index] = parseLHS(lhs);
     if (varName.isEmpty()) {
         return false;
@@ -525,7 +614,7 @@ bool ExecutionEngine::handleStringAssignment(const QString& lhs, const QString& 
         }
     }
     bool evaluated = false;
-    if (bareIdent && m_parseTable) {
+    if (!ast && bareIdent && m_parseTable) {
         const QSharedPointer<ExpressionNode> ast = m_parseTable->expressionAst(trimmed);
         if (ast) {
             value = evaluator.evaluate(*ast, m_storage, m_gameBaseData).toString();
@@ -533,10 +622,15 @@ bool ExecutionEngine::handleStringAssignment(const QString& lhs, const QString& 
         }
     }
     if (!evaluated) {
-        const QVariant rhsValue = evalExpressionCached(m_parseTable, evaluator, rhs, m_storage, m_gameBaseData);
+        const QVariant rhsValue = ast ? evaluator.evaluate(*ast, m_storage, m_gameBaseData)
+        : evalExpressionCached(m_parseTable, evaluator, rhs, m_storage, m_gameBaseData);
         value = rhsValue.toString();
     }
 
+    if (m_storage->hasParameter(varName)) {
+        m_storage->setParameter(varName, value);
+        return true;
+    }
     const QString upper = varName.toUpper();
     if (upper == QLatin1String("RESULTS")) {
         m_storage->setLocalStr(0, value);
@@ -550,7 +644,7 @@ bool ExecutionEngine::handleStringAssignment(const QString& lhs, const QString& 
     return true;
 }
 
-bool ExecutionEngine::handleAssignment(const QString& lhs, const QString& rhs) {
+bool ExecutionEngine::handleAssignment(const QString& lhs, const QString& rhs, const QSharedPointer<ExpressionNode>& ast) {
     
     // Parse the LHS to get variable name and index（支持 2D/3D 下标）
     const LhsRef ref = parseLhsRef(lhs);
@@ -559,7 +653,8 @@ bool ExecutionEngine::handleAssignment(const QString& lhs, const QString& rhs) {
     // Pass m_gameBaseData if available so GameBase variables can be resolved.
     ExpressionEvaluator localEvaluator;
     ExpressionEvaluator& evaluator = m_expressionEvaluator ? *m_expressionEvaluator : localEvaluator;
-    QVariant rhsValue = evalExpressionCached(m_parseTable, evaluator, rhs, m_storage, m_gameBaseData);
+    QVariant rhsValue = ast ? evaluator.evaluate(*ast, m_storage, m_gameBaseData)
+        : evalExpressionCached(m_parseTable, evaluator, rhs, m_storage, m_gameBaseData);
     
     
     // If the evaluated result is not valid, try direct conversion
@@ -585,7 +680,9 @@ bool ExecutionEngine::handleAssignment(const QString& lhs, const QString& rhs) {
 //   forms  （FORMS 后缀）  ：求值结果再当格式串展开一次（C# isForms）
 //   clearPad（C/LC 后缀）  ：按 PRINTC 的定宽列布局补齐后打印
 //   newline L/W            ：打印后换行（W 还要等一次按键）
-bool ExecutionEngine::handlePrintInstruction(const QString& name, const QList<Operand>& args) {
+bool ExecutionEngine::handlePrintInstruction(const LogicalLine& line) {
+    const QString& name = line.functionName;
+    const QList<Operand>& args = line.arguments;
     const AstBuilder::PrintArgInfo info = AstBuilder::printInfo(name);
     if (info.mode == AstBuilder::PrintArgMode::NotPrint) {
         return false;
@@ -602,7 +699,14 @@ bool ExecutionEngine::handlePrintInstruction(const QString& name, const QList<Op
     };
 
     QString text;
-    switch (info.mode) {
+    // 普通打印变量直接来自 Operand.ast；模板片段若已生成则优先按片段求值。
+    if (line.printTemplate && !line.printTemplate->parts.isEmpty()) {
+        for (const PrintTemplatePart& part : line.printTemplate->parts) {
+            if (part.kind == PrintTemplatePart::Kind::Text) text += part.text;
+            else if (part.kind == PrintTemplatePart::Kind::Expression && part.expression)
+                text += evaluator.evaluate(*part.expression, m_storage, m_gameBaseData).toString();
+        }
+    } else switch (info.mode) {
     case AstBuilder::PrintArgMode::PrintV:
         for (const Operand& a : args) text += valueOf(a);
         break;

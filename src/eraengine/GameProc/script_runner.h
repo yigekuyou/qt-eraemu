@@ -23,6 +23,7 @@
 #include <QList>
 #include <QSharedPointer>
 #include "process_state.h"
+#include "variable_storage.h"
 #include "ast/logical_line.h"
 
 class EraParseTable;
@@ -99,10 +100,11 @@ public slots:
 private:
     // 运行时循环状态（循环计数是运行期数据，不放进只读 AST）
     struct LoopFrame {
-        enum class Kind { Repeat, For, While } kind = Kind::Repeat;
+        enum class Kind { Repeat, For, While, Do } kind = Kind::Repeat;
         int    startLine = -1;   // REPEAT / FOR / WHILE 行
         int    endLine   = -1;   // LOOP / NEXT / WEND 行
-        qint64 remaining = 0;    // REPEAT 剩余次数
+        int depth = 0;
+        QString script;
         QString varName;         // FOR 变量
         qint64 value = 0;        // FOR 当前值
         qint64 end = 0;          // FOR 终值
@@ -111,6 +113,8 @@ private:
 
     // 执行一步（取 PC 处的一行）；返回 false 表示已挂起/结束/出错
     bool stepOnce();
+    bool returnFromCall();
+    void enterCall(const QString& function);
 
     // 执行一行；返回中心执行状态（Continue 表示可继续）
     ExecState executeLine(const LogicalLine& line);
@@ -127,14 +131,15 @@ private:
     // GAMEBASE_* 等需要 GameBase 数据（经 ExecutionEngine 取得）
     [[nodiscard]] GameBaseData* baseData() const;
     // 绑定实参到 LOCAL，并把形参名注册为局部别名（供表达式解析）
-    void bindArguments(const UserFunctionDecl* info, const QList<Operand>& callArgs);
+    void bindArguments(const UserFunctionDecl* info, const QList<Operand>& callArgs,
+                       const QHash<QString, QString>& references = {});
     // FOR/NEXT 的循环变量写入：LOCAL/ARG 写局部槽（脚本读法一致），其余写系统/全局
     void writeLoopCounter(const QString& name, qint64 value);
 
     // 整型变量统一读写（LOCAL/ARG -> 局部槽；系统变量 -> 系统槽；其余 -> 全局）
     [[nodiscard]] qint64 readIntVar(const QString& name, int index) const;
     // SELECTCASE 的 CASE 匹配：支持 `v1, v2` / `IS >= n` / `a TO b`
-    [[nodiscard]] bool caseMatches(const LogicalLine& caseLine, qint64 value,
+    [[nodiscard]] bool caseMatches(const LogicalLine& caseLine,
                                    const QVariant& valueVar, bool valueIsStr);
     void writeIntVar(const QString& name, int index, qint64 value);
     // 从实参取「变量名 + 下标」（SWAP 用；下标可为表达式）
@@ -145,12 +150,16 @@ private:
     ProcessState*    m_state;
     VariableStorage* m_storage;
     ExpressionEvaluator* m_evaluator = nullptr;
+    qint64 m_steps = 0;
     qint64 m_stepLimit = 0;   // 0 = 不限
     SystemStateMachine*  m_machine = nullptr;
 
     QList<LoopFrame> m_loops;
-    QList<QHash<QString, int>> m_aliasStack;   // CALL 时的局部别名快照
+    struct CallContext { int depth; int loops; QString function; VariableStorage::LocalContext locals; };
+    QHash<QString, VariableStorage::LocalContext> m_functionLocals;
+    QList<CallContext> m_callContexts;   // Caller locals and loop depth, restored on every return
     bool m_running = false;
+    QVariant m_lastReturnValue;
 };
 
 #endif // SCRIPT_RUNNER_H

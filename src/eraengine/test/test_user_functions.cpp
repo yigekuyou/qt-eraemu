@@ -141,12 +141,13 @@ int main(int argc, char* argv[]) {
     const QStringList src = {
         QStringLiteral("@MAIN"),                       // 0
         QStringLiteral("CALL STR_FN(3, \"hi\")"),       // 1  ARG<-3, ARGS<-"hi"
-        QStringLiteral("OUT1 = ARG"),                  // 2  ARG 应指向 LOCAL[0]
-        QStringLiteral("OUT2 = STRLENS(ARGS)"),        // 3  ARGS 应指向 LOCALS[0]
+        QStringLiteral("AFTER_ARG = ARG"),                  // 2  ARG 应指向 LOCAL[0]
+        QStringLiteral("AFTER_ARGS = STRLENS(ARGS)"),        // 3  ARGS 应指向 LOCALS[0]
         QStringLiteral("LOCAL = INT_FN(4)"),           // 4  式中调用
         QStringLiteral("RETURN"),                      // 5
         QStringLiteral("@STR_FN, ARG, ARGS"),          // 6  逗号式：arg0->ARG, arg1->ARGS
-        QStringLiteral("#DIM A"),                      // 7
+        QStringLiteral("OUT1 = ARG"),
+        QStringLiteral("OUT2 = STRLENS(ARGS)"),                      // 7
         QStringLiteral("RETURN"),                      // 8
         QStringLiteral("@INT_FN(X)"),                  // 9  #FUNCTION
         QStringLiteral("#DIM X"),                      // 私有整型变量 -> Int
@@ -171,8 +172,8 @@ int main(int argc, char* argv[]) {
                   && strFn->params.at(1).index == 0, "形参1 -> ARGS:0");
         check(strFn->maxArgIndex == 0 && strFn->maxArgsIndex == 0, "maxArg/maxArgs 下标 == 0");
         check(!strFn->isMethod, "STR_FN 不是 #FUNCTION（语句函数）");
-        check(strFn->labelLine == 6 && strFn->endLine == 8,
-              QString("STR_FN 体区间 [%1, %2] == [6, 8]").arg(strFn->labelLine).arg(strFn->endLine));
+        check(strFn->labelLine == 6 && strFn->endLine == 9,
+              QString("STR_FN 体区间 [%1, %2] == [6, 9]").arg(strFn->labelLine).arg(strFn->endLine));
     }
 
     const UserFunctionDecl* intFn = table.userFunction("INT_FN");
@@ -194,6 +195,9 @@ int main(int argc, char* argv[]) {
     check(storage.getGlobalInt1D("OUT2", 0) == 2,
           "ARGS 收到第 2 个实参 \"hi\"（STRLENS == 2）");
     check(storage.getLocalInt(0) == 40, "式中调用 INT_FN(4) -> 40（LOCAL 是用户函数局部槽）");
+
+    check(storage.getGlobalInt1D("AFTER_ARG", 0) == 0, "CALL restores caller integer locals");
+    check(storage.getGlobalInt1D("AFTER_ARGS", 0) == 0, "CALL restores caller string locals");
 
     // =====================================================================
     qDebug() << "\n5) 实参个数校验（解析期）";
@@ -245,7 +249,8 @@ int main(int argc, char* argv[]) {
             QStringLiteral("#FUNCTIONS"),            // 17
             QStringLiteral("RETURNF S2"),            // 18
             QStringLiteral("@TOOMANY(A)"),           // 19
-            QStringLiteral("#DIM A"),                // 20
+            QStringLiteral("OUT1 = ARG"),
+        QStringLiteral("OUT2 = STRLENS(ARGS)"),                // 20
             QStringLiteral("#FUNCTION"),             // 21
             QStringLiteral("RETURN A")               // 22
         };
@@ -286,6 +291,207 @@ int main(int argc, char* argv[]) {
         const QSharedPointer<ExpressionNode> concat =
             t3.expressionAst(QStringLiteral("AUTOCONV(1) + \"x\""));
         check(concat && concat->valueType() == OperandType::Str, "AUTOCONV(1) + \"x\" -> Str");
+    }
+
+    // Rendering-style nested calls: parameters must survive LOCAL loops and
+    // both implicit return forms (next function label and physical EOF).
+    {
+        VariableStorage vars;
+        ProcessState ps;
+        EraParseTable pt(&ps);
+        ExecutionEngine ex(&vars, nullptr);
+        ExpressionEvaluator ev;
+        ex.setParseTable(&pt);
+        ex.setExpressionEvaluator(&ev);
+        pt.setVariableStorage(&vars);
+        pt.setExpressionEvaluator(&ev);
+        ScriptRunner run(&pt, &ex, &ps, &vars);
+        run.setExpressionEvaluator(&ev);
+        run.setStepLimit(10000);
+        const QStringList program = {
+            "@MAIN", "LOCAL = 99", "CALL ROW(7, 9)",
+            "PRESERVED = LOCAL", "CALL COUNTER", "CALL COUNTER", "RETURN",
+            "@COUNTER", "LOCAL = LOCAL + 1", "PERSISTED_LOCAL = LOCAL", "RETURN",
+            "@ROW(ROWNUM, OTHER)", "#DIM ROWNUM", "#DIM OTHER",
+            "FOR LOCAL:0, 0, 12", "FOR LOCAL:1, 0, 3",
+            "CALL COLOR(ROWNUM, OTHER)", "CELLS = CELLS + 1", "NEXT", "NEXT",
+            "AFTER_ROW = ROWNUM", "RETURN",
+            "@COLOR(COLORNUM, SECOND)", "#DIM COLORNUM", "#DIM SECOND",
+            "LOCAL = 123", "COLORNUM = COLORNUM + 1", "CALL LAST(COLORNUM, SECOND)",
+            "AFTER_COLOR = COLORNUM",
+            "@LAST(VALUE, SECOND)", "#DIM VALUE", "#DIM SECOND",
+            "SEEN = VALUE * 100 + SECOND", "LOCAL = 456"
+        };
+        check(pt.loadScript("regression", buildLines(pt, program)), "load nested rendering regression");
+        pt.finalizeParse();
+        pt.setEntryPoint("MAIN");
+        check(run.runToCompletion() == ExecState::Halt, "nested rendering terminates");
+        check(vars.getGlobalInt1D("CELLS", 0) == 36, "12 columns x 3 cells despite callee LOCAL writes");
+        check(vars.getGlobalInt1D("SEEN", 0) == 809, "all call arguments evaluated in caller context");
+        check(vars.getGlobalInt1D("AFTER_COLOR", 0) == 8, "EOF return restores named parameter");
+        check(vars.getGlobalInt1D("AFTER_ROW", 0) == 7, "function-label return restores named parameter");
+        check(vars.getGlobalInt1D("PRESERVED", 0) == 99, "explicit return restores caller LOCAL");
+        check(vars.getGlobalInt1D("PERSISTED_LOCAL", 0) == 2, "function LOCAL persists between calls");
+        check(!vars.hasParameter("ROWNUM") && !vars.hasParameter("VALUE"), "parameters do not leak after return");
+    }
+    {
+        VariableStorage vars;
+        ProcessState ps;
+        EraParseTable pt(&ps);
+        ExecutionEngine ex(&vars, nullptr);
+        ExpressionEvaluator ev;
+        ex.setParseTable(&pt); ex.setExpressionEvaluator(&ev);
+        pt.setVariableStorage(&vars); pt.setExpressionEvaluator(&ev);
+        ScriptRunner run(&pt, &ex, &ps, &vars);
+        run.setExpressionEvaluator(&ev); run.setStepLimit(1000);
+        const QStringList program = {
+            "@MAIN", "FOR LOCAL, 0, 12", "ASCENDING_COUNT = ASCENDING_COUNT + 1", "NEXT",
+            "FOR LOCAL, 3, -1, -1", "DESCENDING_COUNT = DESCENDING_COUNT + 1", "NEXT",
+            "FOR LOCAL, 4, 4", "BAD = BAD + 1", "NEXT",
+            "FOR LOCAL, 4, 4, -1", "BAD = BAD + 1", "NEXT",
+            "FOR LOCAL, 0, 10, 0", "BAD = BAD + 1", "NEXT", "RETURN"
+        };
+        pt.loadScript("bounds", buildLines(pt, program)); pt.finalizeParse(); pt.setEntryPoint("MAIN");
+        check(run.runToCompletion() == ExecState::Halt, "FOR edge cases terminate");
+        check(vars.getGlobalInt1D("ASCENDING_COUNT", 0) == 12, "FOR positive bound is exclusive");
+        check(vars.getGlobalInt1D("DESCENDING_COUNT", 0) == 4, "FOR negative bound is exclusive");
+        check(vars.getGlobalInt1D("BAD", 0) == 0, "equal bounds and zero step skip loop body");
+    }
+
+    {
+        VariableStorage vars;
+        ProcessState ps;
+        EraParseTable pt(&ps);
+        ExecutionEngine ex(&vars, nullptr);
+        ExpressionEvaluator ev;
+        ex.setParseTable(&pt); ex.setExpressionEvaluator(&ev);
+        pt.setVariableStorage(&vars); pt.setExpressionEvaluator(&ev);
+        ScriptRunner run(&pt, &ex, &ps, &vars);
+        run.setExpressionEvaluator(&ev); run.setStepLimit(1000);
+        const QStringList program = {
+            "@MAIN", "CALL OUTER(6, 3)", "CALL OUTER(8, 4)", "RETURN",
+            "@OUTER(POS:0, POS:1)", "#DIM POS, 2", "#DIM TEMP, 2",
+            "TEMP:0 = POS:0 + 1", "TEMP:1 = POS:1 + 2",
+            "CALL INNER(TEMP:0, TEMP:1)",
+            "SEEN_X = POS:0", "SEEN_Y = POS:1", "SEEN_TEMP = TEMP:0", "RETURN",
+            "@INNER(POS:0, POS:1)", "#DIM POS, 2", "#DIM TEMP, 2",
+            "INNER_X = POS:0", "INNER_Y = POS:1", "TEMP:0 = 99", "RETURN"
+        };
+        pt.loadScript("private_arrays", buildLines(pt, program)); pt.finalizeParse(); pt.setEntryPoint("MAIN");
+        check(run.runToCompletion() == ExecState::Halt, "private array calls terminate");
+        check(vars.getGlobalInt1D("SEEN_X", 0) == 8 && vars.getGlobalInt1D("SEEN_Y", 0) == 4,
+              "nested collision helper preserves caller coordinate array");
+        check(vars.getGlobalInt1D("SEEN_TEMP", 0) == 9, "same-name private scratch arrays isolated");
+        check(vars.getGlobalInt1D("INNER_X", 0) == 9 && vars.getGlobalInt1D("INNER_Y", 0) == 6,
+              "repeated CALL evaluates original argument AST on each invocation");
+    }
+
+    // NEXT must advance the actual variable after assignments in the body,
+    // including nonzero LOCAL/ARG and global array slots.
+    for (const QString& counter : QStringList{"LOCAL:0", "LOCAL:2", "ARG:1", "LOOP_COUNTER:2"}) {
+        VariableStorage vars;
+        ProcessState ps;
+        EraParseTable pt(&ps);
+        ExecutionEngine ex(&vars, nullptr);
+        ExpressionEvaluator ev;
+        ex.setParseTable(&pt); ex.setExpressionEvaluator(&ev);
+        pt.setVariableStorage(&vars); pt.setExpressionEvaluator(&ev);
+        ScriptRunner run(&pt, &ex, &ps, &vars);
+        run.setExpressionEvaluator(&ev); run.setStepLimit(1000);
+        const QStringList program = {
+            "@MAIN", QString("FOR %1, 3, 0, -1").arg(counter),
+            "DESCENDING_COUNT += 1", "SIF DESCENDING_COUNT == 1",
+            QString("%1 += 1").arg(counter), "NEXT",
+            QString("DESCENDING_FINAL = %1").arg(counter),
+            QString("FOR %1, 0, 3, 1").arg(counter),
+            "ASCENDING_COUNT += 1", "SIF ASCENDING_COUNT == 1",
+            QString("%1 -= 1").arg(counter), "NEXT",
+            QString("ASCENDING_FINAL = %1").arg(counter), "RETURN"
+        };
+        check(pt.loadScript("modified_counter", buildLines(pt, program)), "load counter assignment regression");
+        pt.finalizeParse(); pt.setEntryPoint("MAIN");
+        check(run.runToCompletion() == ExecState::Halt, counter + " modified loops terminate");
+        check(vars.getGlobalInt1D("DESCENDING_COUNT", 0) == 4,
+              counter + " descending FOR rechecks counter incremented by first body");
+        check(vars.getGlobalInt1D("ASCENDING_COUNT", 0) == 4,
+              counter + " ascending FOR rechecks counter decremented by first body");
+        check(vars.getGlobalInt1D("DESCENDING_FINAL", 0) == 0
+                  && vars.getGlobalInt1D("ASCENDING_FINAL", 0) == 3,
+              counter + " modified loops retain exclusive bounds");
+    }
+
+    // eraTetris CHECK_STAGE_LINE / DELETE_STAGE_LINE pattern, with each
+    // STAGE entry holding the occupied-cell count of one row. Adjacent full
+    // rows must both be cleared by revisiting the row shifted down by CALL.
+    {
+        VariableStorage vars;
+        ProcessState ps;
+        EraParseTable pt(&ps);
+        ExecutionEngine ex(&vars, nullptr);
+        ExpressionEvaluator ev;
+        ex.setParseTable(&pt); ex.setExpressionEvaluator(&ev);
+        pt.setVariableStorage(&vars); pt.setExpressionEvaluator(&ev);
+        ScriptRunner run(&pt, &ex, &ps, &vars);
+        run.setExpressionEvaluator(&ev); run.setStepLimit(1000);
+        const QStringList program = {
+            "@MAIN", "STAGE:0 = 4", "STAGE:1 = 10", "STAGE:2 = 10",
+            "CALL CHECK_STAGE_LINE", "RETURN",
+            "@CHECK_STAGE_LINE", "FOR LOCAL:0, 2, -1, -1",
+            "VISITS += 1", "CALL CHECK_STAGE_LINE_MINO_COUNT(LOCAL:0)",
+            "IF RESULT:0 == 10", "CALL DELETE_STAGE_LINE(LOCAL:0)",
+            "CLEARED += 1", "LOCAL:0 += 1", "ENDIF", "NEXT", "RETURN",
+            "@CHECK_STAGE_LINE_MINO_COUNT(ROW)", "#DIM ROW", "RETURN STAGE:ROW",
+            "@DELETE_STAGE_LINE(ROW)", "#DIM ROW", "FOR LOCAL:0, ROW, 0, -1",
+            "STAGE:(LOCAL:0) = STAGE:(LOCAL:0 - 1)", "NEXT", "STAGE:0 = 0", "RETURN"
+        };
+        check(pt.loadScript("clear_lines", buildLines(pt, program)), "load shifted-row regression");
+        pt.finalizeParse(); pt.setEntryPoint("MAIN");
+        check(run.runToCompletion() == ExecState::Halt, "shifted-row clearing terminates");
+        check(vars.getGlobalInt1D("CLEARED", 0) == 2, "both adjacent full rows are cleared");
+        check(vars.getGlobalInt1D("VISITS", 0) == 5, "each cleared row is rechecked after shifting");
+        check(vars.getGlobalInt1D("STAGE", 0) == 0 && vars.getGlobalInt1D("STAGE", 1) == 0
+                  && vars.getGlobalInt1D("STAGE", 2) == 4,
+              "partial row shifts to bottom and vacated rows are empty");
+    }
+
+    // eraTW new-game menu: indexed string parameters are collected into a
+    // private array and passed by REF to a loop bounded by VARSIZE.
+    {
+        VariableStorage vars;
+        ProcessState ps;
+        EraParseTable pt(&ps);
+        ExecutionEngine ex(&vars, nullptr);
+        ExpressionEvaluator ev;
+        ex.setParseTable(&pt); ex.setExpressionEvaluator(&ev);
+        pt.setVariableStorage(&vars); pt.setExpressionEvaluator(&ev);
+        ScriptRunner run(&pt, &ex, &ps, &vars);
+        run.setExpressionEvaluator(&ev); run.setStepLimit(1000);
+        const QStringList program = {
+            "@MAIN", "CALL COLLECT(\"START\", \"ROLE\")", "RETURN",
+            "@COLLECT(choices:0=\"\", choices:1=\"\")", "#DIMS choices, 10",
+            "OUTER_SIZE = VARSIZE(\"choices\")", "CALL INSPECT(choices)", "RETURN",
+            "@INSPECT(refChoices, cancel=-1)", "#DIMS REF refChoices, 0", "#DIMS html", "#DIM DYNAMIC cancel",
+            "REF_SIZE = VARSIZE(\"refChoices\")", "FOR LOCAL, 0, VARSIZE(\"refChoices\")",
+            "IF refChoices:LOCAL != \"\"", "html += refChoices:LOCAL", "NONEMPTY += 1", "ENDIF",
+            "NEXT", "HTML_LEN = STRLENS(html)", "RETURN"
+        };
+        check(pt.loadScript("ref_menu", buildLines(pt, program)), "load REF menu regression");
+        pt.finalizeParse(); pt.setEntryPoint("MAIN");
+        check(run.runToCompletion() == ExecState::Halt, "REF menu loop terminates");
+        qDebug() << "  measured OUTER_SIZE=" << vars.getGlobalInt1D("OUTER_SIZE", 0)
+                 << "REF_SIZE=" << vars.getGlobalInt1D("REF_SIZE", 0)
+                 << "NONEMPTY=" << vars.getGlobalInt1D("NONEMPTY", 0);
+        check(vars.getGlobalInt1D("REF_SIZE", 0) == 10, "VARSIZE follows REF private array");
+        qDebug() << "  measured HTML_LEN=" << vars.getGlobalInt1D("HTML_LEN", 0);
+        check(vars.getGlobalInt1D("NONEMPTY", 0) == 2, "REF reads indexed string parameters");
+        const UserFunctionDecl* inspect = pt.userFunction("INSPECT");
+        check(inspect && inspect->params.value(0).isReference, "#DIMS REF annotates matching parameter");
+        check(inspect && inspect->params.value(1).hasDefault
+                  && inspect->params.value(1).defaultInt == -1,
+              "function default parameter is retained in AST");
+        const auto ast = pt.expressionAst(QStringLiteral("\"ROLE\" + \"!\""));
+        check(ast && ast->valueType() == OperandType::Str && ast->isStaticallyTyped(),
+              "string concatenation remains statically string-typed");
     }
 
     qDebug() << "\n================================";

@@ -219,7 +219,7 @@ signals:
 
 public slots:
     void resetPosition();
-    void setPosition(const QString& script, int line);
+    void setPosition(const QString& script, int line, bool jumped = true);
     void advance();
     bool jumpToLine(int line);
     bool jumpToLabel(const QString& label);
@@ -263,6 +263,8 @@ private:
     Frame popFrame();
     int lineCountFor(const QString& script) const;
 
+    bool m_finalized = false;
+    QHash<QString, QSharedPointer<ExpressionNode>> m_scopedAstCache;
     QHash<QString, ScriptData> m_scripts;
     QHash<QString, QSharedPointer<ExpressionNode>> m_astCache;
     QHash<QString, UserFunctionInfo> m_functions;

@@ -92,6 +92,56 @@ TestCase {
         compare(item.height, b.rows * view.cellHeight);
     }
 
+    function test_gridGlyphBounds() {
+        view.fontSize = 19;
+        view.fontName = "DejaVu Sans";
+        backend.clearAll();
+        backend.print("WWiii■■□　");
+        backend.printButton("[HOLD]", 8);
+        backend.newline(); backend.flush();
+        compare(view.cellWidth, 9);
+        const block = view.blockAt(0);
+        const row = findChild(block, "textCells");
+        let total = 0;
+        let glyphs = 0;
+        for (let i = 0; i < row.children.length; ++i) {
+            const cell = row.children[i];
+            const glyph = findChild(cell, "gridGlyph");
+            if (!glyph) continue;
+            console.log("grid advance", glyph.text, glyph.implicitWidth, "cell", cell.width);
+            verify(Math.abs(glyph.implicitWidth * glyph.transform[0].xScale - cell.width) < 0.01);
+            verify(cell.clip);
+            total += cell.width;
+            ++glyphs;
+        }
+        compare(glyphs, 9);
+        compare(total, block.width);
+        compare(view.blockAt(1).x, block.x + block.width);
+    }
+
+    function test_spanStyleOverridesAndDefaults() {
+        backend.clearAll();
+        backend.print("A"); backend.newline(); backend.flush();
+        const block = view.blockAt(0);
+        const original = block.blockData;
+        block.blockData = {
+            kind: "text", text: "A", cols: 1, rows: 1,
+            fontName: "DejaVu Serif", color: "#123456", buttonColor: "#abcdef",
+            bold: true, italic: true, underline: true, strike: true
+        };
+        const glyph = findChild(block, "gridGlyph");
+        verify(glyph !== null);
+        compare(glyph.font.family, "DejaVu Serif");
+        compare(glyph.color, "#123456");
+        compare(block.effectiveFocusColor, "#abcdef");
+        verify(glyph.font.bold && glyph.font.italic && glyph.font.underline && glyph.font.strikeout);
+        compare(block.height, view.cellHeight);
+        block.fontName = "DejaVu Sans";
+        block.blockData = original;
+        compare(glyph.font.family, "DejaVu Sans");
+        verify(!glyph.font.bold && !glyph.font.italic);
+    }
+
     // 图片层：image 区块进 imageLayer
     function test_imageLayer() {
         backend.clearAll();

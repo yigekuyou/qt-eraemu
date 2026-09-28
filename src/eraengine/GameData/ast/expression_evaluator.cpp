@@ -432,11 +432,15 @@ QVariant ExpressionEvaluator::evaluateStrForm(const StrFormNode &node, VariableS
         }
         if (!part.expression) continue;
         const QVariant v = evaluateNode(*part.expression, storage, gameBaseData);
-        if (part.expression->valueType() == OperandType::Str || v.typeId() == QMetaType::QString) {
-            out += v.toString();
-        } else {
-            out += QString::number(v.toLongLong());
+        QString value = v.toString();
+        if (part.width) {
+            const qint64 width = qBound<qint64>(0LL, evaluateNode(*part.width, storage, gameBaseData).toLongLong(), 1000000LL);
+            int units = 0;
+            for (const QChar c : value) units += c.unicode() < 0x80 || (c.unicode() >= 0xff61 && c.unicode() <= 0xff9f) ? 1 : 2;
+            const QString padding(qMax<qint64>(0, width - units), QLatin1Char(' '));
+            value = part.leftAlign ? value + padding : padding + value;
         }
+        out += value;
     }
     return QVariant(out);
 }
@@ -496,6 +500,10 @@ bool ExpressionEvaluator::assignVariable(const VariableNode& node, VariableStora
     }
     const QString name = node.name();
     const QString upper = name.toUpper();
+    if (storage->hasParameter(name)) {
+        storage->setParameter(name, value);
+        return true;
+    }
     const QList<int> ids = resolveIndices(node, storage, gameBaseData);
     const int idx = ids.isEmpty() ? 0 : ids.first();
     const int dim = variableDimension(name);
@@ -531,6 +539,7 @@ QVariant ExpressionEvaluator::evaluateVariable(const VariableNode &node, Variabl
     }
     
     QString varName = node.name();
+    if (storage->hasParameter(varName)) return storage->parameter(varName);
     
     // Check if this is a GameBase variable
     if (varName.startsWith("GAMEBASE_") && gameBaseData) {
@@ -552,7 +561,7 @@ QVariant ExpressionEvaluator::evaluateVariable(const VariableNode &node, Variabl
             }
             return QVariant(storage->getLocalInt(idx));
         }
-        if (upper == QLatin1String("ARGS")) {
+        if (upper == QLatin1String("ARGS") || upper == QLatin1String("LOCALS")) {
             // ARGS = 字符串局部槽（对应 LOCALS）
             int idx = 0;
             if (node.isArray() && !node.indices().isEmpty()) {
@@ -712,6 +721,19 @@ QVariant ExpressionEvaluator::evaluateIndexedVariable(const QString &varName, in
 QVariant ExpressionEvaluator::evaluateBinaryOp(const BinaryOpNode &node, VariableStorage *storage, GameBaseData *gameBaseData)
 {
     QVariant left = evaluateNode(*node.left(), storage, gameBaseData);
+    if (!left.isValid()) return QVariant();
+    // Match OperatorMethod.cs: logical operators short-circuit before evaluating
+    // the RHS, including its function calls and increment/decrement side effects.
+    const TokenType logicalOp = node.op().type();
+    if (node.left()->valueType() == OperandType::Int) {
+        const bool truth = left.toLongLong() != 0;
+        if ((!truth && logicalOp == TokenType::AND)
+            || (truth && logicalOp == TokenType::LOGICAL_NOR))
+            return QVariant::fromValue<qint64>(0);
+        if ((truth && logicalOp == TokenType::OR)
+            || (!truth && logicalOp == TokenType::LOGICAL_NAND))
+            return QVariant::fromValue<qint64>(1);
+    }
     QVariant right = evaluateNode(*node.right(), storage, gameBaseData);
     if (!left.isValid() || !right.isValid()) [[unlikely]] {
         return QVariant();
@@ -1426,14 +1448,15 @@ bool ExpressionEvaluator::evaluateBuiltin(const FunctionNode &node, VariableStor
         const int dim = node.arguments().size() >= 2 ? static_cast<int>(I(1)) : 0;
         qint64 size = 0;
         if (storage) {
+            size = storage->arraySize(name);
             const VariableConfig& cfg = storage->variableConfig();
-            if (dim == 0) {
+            if (size <= 0 && dim == 0) {
                 size = cfg.getSize1D(name);
                 if (size <= 0) size = cfg.getSize1D(upper);
                 if (size <= 0) size = cfg.getSize2D(name).second;
-            } else if (dim == 1) {
+            } else if (size <= 0 && dim == 1) {
                 size = cfg.getSize2D(name).first;
-            } else if (dim == 2) {
+            } else if (size <= 0 && dim == 2) {
                 const QVector<int> s3 = cfg.getSize3D(name);
                 size = s3.isEmpty() ? 0 : s3.at(0);
             }

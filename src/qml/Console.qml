@@ -40,15 +40,16 @@ Item {
     property int lineHeight: 19
     property string fontName: ""            // 来自 GuiManager
     property int fontSize: 18
-    property color foreColor: "#e0e0e0"
-    property color focusColor: "#ffff00"
-    property color logColor: "#9a9a9a"
+    // 空颜色交给 ConsoleBlock/Qt Controls palette 使用系统主题。
+    property string foreColor: ""
+    property string focusColor: ""
+    property string logColor: ""
 
     // ---- 单元格大小：**由 QML 决定**（这就是「区块大小决定权在 QML」）----
     //   cellWidth  = 一个「区块长」= 一个半角字符宽
     //   cellHeight = 一个「区块高」= 一行高
     // C++ 只给 col/row（单位坐标）与 cols/rows（格子数），像素由这里换算。
-    readonly property real cellWidth: Math.max(1, fontSize / 2)
+    readonly property real cellWidth: Math.max(1, Math.floor(fontSize / 2))
     readonly property real cellHeight: lineHeight
 
     // 三个层各自的区块模型（C++ 提供，坐标已算好）

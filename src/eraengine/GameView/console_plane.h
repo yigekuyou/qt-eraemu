@@ -51,6 +51,12 @@ struct ConsolePlaneOptions {
     bool terminalSafe = true;
     // 每行末尾附上「本行的单位宽度」（便于核对，不依赖终端字体）
     bool withWidths = false;
+    // 调试对比模式：用 [ ] 替换方块字符，便于对比两个输出
+    bool debugCompare = false;
+    // 调试颜色模式：用 ANSI 颜色表示矩阵位置
+    bool debugColor = false;
+    // 按 ConsoleSpan.style.color 输出 ANSI 真色；不参与网格宽度计算
+    bool ansiColors = false;
     QString imageMark;          // 图片占位符（默认 ▨）
     QString shapeMark;          // 图形占位符（默认 ─）
 

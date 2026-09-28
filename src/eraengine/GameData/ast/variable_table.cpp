@@ -63,6 +63,7 @@ void walkApply(ExpressionNode& node, const VariableTable& table, const QString& 
         for (auto& p : n.parts()) {
             if (p.type == StrFormPartType::Expression && p.expression) {
                 walkApply(*p.expression, table, function);
+                if (p.width) walkApply(*p.width, table, function);
             }
         }
         break;

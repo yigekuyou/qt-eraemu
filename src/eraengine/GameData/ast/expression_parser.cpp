@@ -23,7 +23,7 @@
 #include <QDebug>
 
 namespace {
-constexpr int kMaxDepth = 256;   // 防止畸形输入导致栈溢出
+constexpr int kMaxDepth = 2048;   // 防止畸形输入导致栈溢出
 }
 
 ExpressionParser::ExpressionParser() = default;

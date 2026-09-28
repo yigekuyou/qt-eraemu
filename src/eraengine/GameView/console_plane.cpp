@@ -22,6 +22,11 @@
 
 namespace {
 
+struct PlaneCell {
+    QString text;
+    int units = 0;      // > 0: glyph origin; 0: empty; -1: wide-glyph continuation
+};
+
 // 半角 1 格 / 全角 2 格（与 ConsoleLayout 的度量同一套单位）
 inline bool isHalfWidthChar(QChar c) {
     const ushort u = c.unicode();
@@ -62,16 +67,93 @@ QString ambiguousSubstitute(QChar c) {
     return QStringLiteral("??");
 }
 
-// 图片/图形在平面里的占位符（按单位数重复）
+// 图片/图形在平面里的单个占位符；栅格化时按 part.cols 填满。
 QString blockGlyphs(const ConsoleSpan& part, const ConsolePlaneOptions& opt) {
-    const int cols = qMax(1, part.cols);
     switch (part.kind) {
     case ConsoleSpanKind::Image:
-        return QString(opt.imageMark.repeated(cols));
+        return opt.imageMark;
     case ConsoleSpanKind::Shape:
-        return QString(opt.shapeMark.repeated(cols));
+        return opt.shapeMark;
     default:
         return part.text;
+    }
+}
+
+QString debugSubstitute(QChar c, int col, bool withColor) {
+    QString text;
+    switch (c.unicode()) {
+    case 0x25A0: text = QStringLiteral("##"); break;
+    case 0x25A1: text = QStringLiteral(".."); break;
+    default:     text = ambiguousSubstitute(c); break;
+    }
+    if (!withColor) return text;
+
+    static constexpr int colors[] = {31, 32, 34, 33};
+    return QStringLiteral("\033[%1m%2\033[0m").arg(colors[qAbs(col) % 4]).arg(text);
+}
+
+void clearCell(QVector<PlaneCell>& row, int col) {
+    if (col < 0 || col >= row.size() || row.at(col).units == 0) return;
+
+    int origin = col;
+    while (origin > 0 && row.at(origin).units < 0) --origin;
+    const int units = qMax(1, row.at(origin).units);
+    for (int i = origin; i < origin + units && i < row.size(); ++i) row[i] = {};
+}
+
+void putGlyph(QVector<PlaneCell>& row, int col, int units, const QString& text) {
+    if (col < 0 || units <= 0) return;
+    if (row.size() < col + units) row.resize(col + units);
+    for (int i = col; i < col + units; ++i) clearCell(row, i);
+    row[col].text = text;
+    row[col].units = units;
+    for (int i = 1; i < units; ++i) row[col + i].units = -1;
+}
+
+// 按绝对网格列写入一个 span。part.cols 是唯一宽度来源，终端替换文本
+// 和 ANSI 转义序列不能改变后续 span 的起始列。
+void putPart(QVector<PlaneCell>& row, const ConsoleSpan& part,
+             const ConsolePlaneOptions& opt) {
+    const int start = qMax(0, part.col);
+    const int width = qMax(0, part.cols);
+    const int end = start + width;
+    int col = start;
+
+    const QString glyphs = blockGlyphs(part, opt);
+    const auto displayText = [&](QChar c, int glyphCol) {
+        QString text = QString(c);
+        if (opt.debugCompare && ConsolePlane::isAmbiguousWidth(c)) {
+            text = debugSubstitute(c, glyphCol, opt.debugColor);
+        }
+        if (opt.terminalSafe && ConsolePlane::isAmbiguousWidth(c)) {
+            text = ambiguousSubstitute(c);
+        }
+        if (opt.ansiColors && part.style.color.isValid()) {
+            const QColor color = part.style.color;
+            text = QStringLiteral("\033[38;2;%1;%2;%3m%4\033[39m")
+                       .arg(color.red()).arg(color.green()).arg(color.blue()).arg(text);
+        }
+        return text;
+    };
+
+    for (const QChar c : glyphs) {
+        const int units = unitWidth(c);
+        if (col + units > end) break;
+        putGlyph(row, col, units, displayText(c, col));
+        col += units;
+    }
+
+    // 图片和图形表示矩形区块，需要用单个标记铺满模型声明的宽度。
+    if (part.kind != ConsoleSpanKind::Text && !glyphs.isEmpty()) {
+        const QChar marker = glyphs.at(0);
+        while (col < end) {
+            const int units = qMin(unitWidth(marker), end - col);
+            const QString text = units == unitWidth(marker)
+                                     ? displayText(marker, col)
+                                     : QStringLiteral("?");
+            putGlyph(row, col, units, text);
+            col += units;
+        }
     }
 }
 
@@ -108,9 +190,7 @@ QString ConsolePlane::toTerminalSafe(const QString& text) {
 // ---------------------------------------------------------------------------
 QStringList ConsolePlane::render(const ConsoleBuffer& buffer, const ConsoleLayout& layout,
                                  const Options& opt) {
-    QVector<QString> rows;
-    const int maxCols = qMax(1, opt.windowWidth / qMax(1, layout.columnWidthPx()));
-    int lastRow = -1;
+    QVector<QVector<PlaneCell>> rows;
 
     const int n = buffer.count();
     for (int i = 0; i < n; ++i) {
@@ -120,24 +200,8 @@ QStringList ConsolePlane::render(const ConsoleBuffer& buffer, const ConsoleLayou
             for (const ConsoleSpan& part : seg.spans) {
                 const int r = part.row;
                 if (r < 0) continue;
-                while (rows.size() <= r) rows.append(QString());
-                if (r > lastRow) lastRow = r;
-                QString& row = rows[r];
-                // 补齐到起始列
-                const int cur = row.size() >= 0 ? row.size() : 0;
-                Q_UNUSED(cur);
-                const int curUnits = [&row]() {
-                    int u = 0;
-                    for (const QChar c : row) u += unitWidth(c);
-                    return u;
-                }();
-                if (part.col > curUnits) {
-                    row += QString(part.col - curUnits, QLatin1Char(' '));
-                } else if (part.col < curUnits) {
-                    row += QChar(0x001B);          // 重叠标记（inspect 会报）
-                }
-                const QString glyphs = blockGlyphs(part, opt);
-                row += opt.terminalSafe ? toTerminalSafe(glyphs) : glyphs;
+                while (rows.size() <= r) rows.append(QVector<PlaneCell>());
+                putPart(rows[r], part, opt);
             }
         }
     }
@@ -146,18 +210,19 @@ QStringList ConsolePlane::render(const ConsoleBuffer& buffer, const ConsoleLayou
     const int limit = (opt.maxLines > 0) ? qMin(opt.maxLines, static_cast<int>(rows.size()))
                                          : static_cast<int>(rows.size());
     for (int i = 0; i < limit; ++i) {
-        QString row = rows.at(i);
+        const QVector<PlaneCell>& cells = rows.at(i);
+        int used = cells.size();
+        while (used > 0 && cells.at(used - 1).units == 0) --used;
+
+        QString row;
+        for (int col = 0; col < used; ++col) {
+            const PlaneCell& cell = cells.at(col);
+            if (cell.units > 0) row += cell.text;
+            else if (cell.units == 0) row += QLatin1Char(' ');
+        }
         if (opt.withWidths) {
-            // 行尾附上「本行实际占的单位数」，与终端字体无关 —— 用来核对列对齐
-            const int units = [&row]() {
-                int u = 0;
-                for (const QChar c : row) {
-                    if (c == QChar(0x001B)) continue;      // 重叠标记
-                    u += unitWidth(c);
-                }
-                return u;
-            }();
-            row += QStringLiteral("  |%1").arg(units);
+            // 宽度直接来自网格右界，不受 ANSI 转义或替换文本长度影响。
+            row += QStringLiteral("  |%1").arg(used);
         }
         out.append(row);
     }

@@ -163,7 +163,73 @@ int main(int argc, char** argv) {
     }
 
     // -----------------------------------------------------------------------
-    qDebug() << "\n4) 平面自检能抓到越界 / 重叠";
+    qDebug() << "\n4) 绝对列与占位符宽度";
+    {
+        ConsoleBuffer buffer;
+        ConsoleLayout layout;
+        layout.setFontSize(18);
+        layout.setWindowWidth(760);
+
+        ConsoleDisplayLine line;
+        ConsoleSegment left;
+        ConsoleSpan wide;
+        wide.kind = ConsoleSpanKind::Text;
+        wide.text = QString(QChar(0x25A0));
+        wide.cols = 2;
+        left.spans.append(wide);
+
+        ConsoleSegment right;
+        right.relCol = 6;
+        ConsoleSpan label;
+        label.kind = ConsoleSpanKind::Text;
+        label.text = QStringLiteral("X");
+        label.cols = 1;
+        label.relCol = 6;
+        label.pointXLocked = true;
+        right.spans.append(label);
+        line.segments = {left, right};
+        buffer.appendLine(line);
+
+        ConsolePlaneOptions opt;
+        opt.windowWidth = 760;
+        opt.terminalSafe = true;
+        opt.withWidths = true;
+        const QStringList plane = ConsolePlane::render(buffer, layout, opt);
+        check(plane.size() == 1 && plane.first() == QStringLiteral("##    X  |7"),
+              "绝对列 6 的区块保持在第 7 列，替换字符不推动位置");
+
+        ConsolePlaneOptions debug = opt;
+        debug.terminalSafe = false;
+        debug.debugCompare = true;
+        const QStringList debugPlane = ConsolePlane::render(buffer, layout, debug);
+        check(debugPlane.size() == 1 && debugPlane.first() == QStringLiteral("##    X  |7"),
+              "调试占位符保持 2 列宽");
+
+        buffer.lastMutable().segments[0].spans[0].style.color = QColor("#ff1abd");
+        ConsolePlaneOptions ansi = opt;
+        ansi.ansiColors = true;
+        check(ConsolePlane::render(buffer, layout, ansi).first()
+                  == QStringLiteral("\033[38;2;255;26;189m##\033[39m    X  |7"),
+              "真实颜色输出不改变后续区块列号或行宽");
+        check(ConsolePlane::render(buffer, layout, opt).first() == plane.first(),
+              "关闭 ANSI 时仍输出纯文本");
+
+        ConsoleBuffer imageBuffer;
+        ConsoleDisplayLine imageLine;
+        ConsoleSegment imageSegment;
+        ConsoleSpan image;
+        image.kind = ConsoleSpanKind::Image;
+        image.cols = 4;
+        imageSegment.spans.append(image);
+        imageLine.segments.append(imageSegment);
+        imageBuffer.appendLine(imageLine);
+        const QStringList imagePlane = ConsolePlane::render(imageBuffer, layout, opt);
+        check(imagePlane.size() == 1 && imagePlane.first() == QStringLiteral("@@@@  |4"),
+              "4 列图片只占 4 列，不重复放大占位符");
+    }
+
+    // -----------------------------------------------------------------------
+    qDebug() << "\n5) 平面自检能抓到越界 / 重叠";
     {
         ConsoleBackend c;
         c.setFontSize(18);

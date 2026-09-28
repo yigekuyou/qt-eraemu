@@ -25,6 +25,7 @@
 #include <QVariantList>
 #include <QtQml/qqmlregistration.h>
 #include "console_types.h"
+#include "GameData/ast/logical_line.h"
 #include "console_buffer.h"
 #include "console_layout.h"
 
@@ -106,6 +107,7 @@ public:
     // ---- 显示写入接口（对齐 C# EmueraConsole.Print）----
     Q_INVOKABLE void print(const QString& text);                  // 追加文本（不换行）
     Q_INVOKABLE void printPlain(const QString& text);             // 整段不可点击（PRINTPLAIN）
+    Q_INVOKABLE void printHtml(const QString& html);              // HTML_PRINT 常用标签子集
     Q_INVOKABLE void newline();                                   // 结束当前行（flush）
     Q_INVOKABLE void printButton(const QString& text, qint64 value, const QString& tooltip = QString());
     Q_INVOKABLE void printButtonStr(const QString& text, const QString& value, const QString& tooltip = QString());
@@ -120,6 +122,7 @@ public:
     Q_INVOKABLE void resetColor();
     Q_INVOKABLE void setFontStyle(bool bold, bool italic, bool underline, bool strike);
 
+    void printTemplate(const PrintTemplate& output);
     void markDirty();
     Q_INVOKABLE void flush();                 // 强制 emit windowChanged
 

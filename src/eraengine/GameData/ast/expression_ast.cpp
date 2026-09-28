@@ -18,6 +18,8 @@
 #include "expression_ast.h"
 #include "operator_table.h"
 #include <cmath>
+#include <QJsonArray>
+#include <QJsonValue>
 
 // 整数/进制字面量求值（对齐 C# LexicalAnalyzer.ReadInt64）：
 //   0x.. 十六进制、0b.. 二进制；p/P 为 2 的幂指数、e/E 为 10 的幂指数（如 "1p0"）。
@@ -84,6 +86,88 @@ bool parseIntegerLiteral(const QString& text, qint64& out) {
                                                                  static_cast<double>(exponent));
     out = static_cast<qint64>(d);
     return true;
+}
+
+namespace {
+QString nodeKindName(NodeKind kind) {
+    switch (kind) {
+    case NodeKind::Literal: return QStringLiteral("Literal");
+    case NodeKind::Variable: return QStringLiteral("Variable");
+    case NodeKind::BinaryOp: return QStringLiteral("BinaryOp");
+    case NodeKind::UnaryOp: return QStringLiteral("UnaryOp");
+    case NodeKind::Function: return QStringLiteral("Function");
+    case NodeKind::If: return QStringLiteral("If");
+    case NodeKind::StrForm: return QStringLiteral("StrForm");
+    }
+    return QStringLiteral("Unknown");
+}
+QString typeName(OperandType type) {
+    switch (type) {
+    case OperandType::Int: return QStringLiteral("Int");
+    case OperandType::Str: return QStringLiteral("Str");
+    case OperandType::Void: return QStringLiteral("Void");
+    default: return QStringLiteral("Unknown");
+    }
+}
+QJsonObject astJson(const ExpressionNode& node) {
+    QJsonObject out;
+    out.insert(QStringLiteral("kind"), nodeKindName(node.kind()));
+    out.insert(QStringLiteral("type"), typeName(node.valueType()));
+    out.insert(QStringLiteral("staticType"), node.isStaticallyTyped());
+    out.insert(QStringLiteral("text"), node.toString());
+    QJsonArray children;
+    if (node.kind() == NodeKind::Literal) {
+        const auto& n = static_cast<const LiteralNode&>(node);
+        if (n.isString()) out.insert(QStringLiteral("value"), n.strValue());
+        else out.insert(QStringLiteral("value"), n.intValue());
+    } else if (node.kind() == NodeKind::Variable) {
+        const auto& n = static_cast<const VariableNode&>(node);
+        out.insert(QStringLiteral("name"), n.name());
+        out.insert(QStringLiteral("array"), n.isArray());
+        for (const auto& child : n.indices()) if (child) children.append(astJson(*child));
+    } else if (node.kind() == NodeKind::BinaryOp) {
+        const auto& n = static_cast<const BinaryOpNode&>(node);
+        out.insert(QStringLiteral("operator"), n.op().value());
+        if (n.left()) children.append(astJson(*n.left()));
+        if (n.right()) children.append(astJson(*n.right()));
+    } else if (node.kind() == NodeKind::UnaryOp) {
+        const auto& n = static_cast<const UnaryOpNode&>(node);
+        out.insert(QStringLiteral("operator"), n.op().value());
+        out.insert(QStringLiteral("postfix"), n.isPostfix());
+        if (n.operand()) children.append(astJson(*n.operand()));
+    } else if (node.kind() == NodeKind::Function) {
+        const auto& n = static_cast<const FunctionNode&>(node);
+        out.insert(QStringLiteral("name"), n.name());
+        out.insert(QStringLiteral("builtin"), n.isBuiltin());
+        out.insert(QStringLiteral("userFunction"), n.isUserFunction());
+        out.insert(QStringLiteral("arityError"), n.arityError());
+        for (const auto& child : n.arguments()) if (child) children.append(astJson(*child));
+    } else if (node.kind() == NodeKind::If) {
+        const auto& n = static_cast<const IfNode&>(node);
+        if (n.condition()) children.append(astJson(*n.condition()));
+        if (n.thenExpr()) children.append(astJson(*n.thenExpr()));
+        if (n.elseExpr()) children.append(astJson(*n.elseExpr()));
+    } else if (node.kind() == NodeKind::StrForm) {
+        const auto& n = static_cast<const StrFormNode&>(node);
+        for (const auto& part : n.parts()) {
+            QJsonObject p;
+            p.insert(QStringLiteral("part"), part.type == StrFormPartType::Text ? QStringLiteral("text") : QStringLiteral("expression"));
+            if (part.type == StrFormPartType::Text) p.insert(QStringLiteral("text"), part.text);
+            else if (part.expression) p.insert(QStringLiteral("ast"), astJson(*part.expression));
+            children.append(p);
+        }
+    }
+    if (!children.isEmpty()) out.insert(QStringLiteral("children"), children);
+    return out;
+}
+}
+
+QJsonObject expressionAstJson(const ExpressionNode& node) { return astJson(node); }
+
+QString expressionAstDump(const ExpressionNode& node, int indent) {
+    const QByteArray json = QJsonDocument(astJson(node)).toJson(QJsonDocument::Indented);
+    Q_UNUSED(indent);
+    return QString::fromUtf8(json);
 }
 
 // ---------------------------------------------------------------------------
@@ -330,6 +414,7 @@ void walkExpression(ExpressionNode& node, const std::function<void(ExpressionNod
         for (const StrFormPart& p : s.parts()) {
             if (p.type == StrFormPartType::Expression && p.expression) {
                 walkExpression(*p.expression, visit);
+                if (p.width) walkExpression(*p.width, visit);
             }
         }
         return;
@@ -384,4 +469,43 @@ bool StrFormNode::isConst() const {
         }
     }
     return true;
+}
+
+QSharedPointer<ExpressionNode> cloneExpression(const QSharedPointer<ExpressionNode>& node) {
+    if (!node) return {};
+    switch (node->kind()) {
+    case NodeKind::Literal: return QSharedPointer<LiteralNode>::create(static_cast<const LiteralNode&>(*node));
+    case NodeKind::Variable: {
+        const auto& n = static_cast<const VariableNode&>(*node);
+        auto copy = QSharedPointer<VariableNode>::create(n.name(), n.valueType());
+        for (const auto& i : n.indices()) copy->addIndex(cloneExpression(i));
+        return copy;
+    }
+    case NodeKind::BinaryOp: {
+        const auto& n = static_cast<const BinaryOpNode&>(*node);
+        return QSharedPointer<BinaryOpNode>::create(cloneExpression(n.left()), n.op(), cloneExpression(n.right()));
+    }
+    case NodeKind::UnaryOp: {
+        const auto& n = static_cast<const UnaryOpNode&>(*node);
+        return QSharedPointer<UnaryOpNode>::create(n.op(), cloneExpression(n.operand()), n.isPostfix());
+    }
+    case NodeKind::Function: {
+        const auto& n = static_cast<const FunctionNode&>(*node);
+        QList<QSharedPointer<ExpressionNode>> args;
+        for (const auto& a : n.arguments()) args.append(cloneExpression(a));
+        auto copy = QSharedPointer<FunctionNode>::create(n.name(), args);
+        copy->setValueType(n.valueType()); copy->setBuiltinIndex(n.builtinIndex());
+        copy->setUserFunction(n.isUserFunction()); copy->setArityError(n.arityError()); return copy;
+    }
+    case NodeKind::If: {
+        const auto& n = static_cast<const IfNode&>(*node);
+        return QSharedPointer<IfNode>::create(cloneExpression(n.condition()), cloneExpression(n.thenExpr()), cloneExpression(n.elseExpr()));
+    }
+    case NodeKind::StrForm: {
+        QList<StrFormPart> parts = static_cast<const StrFormNode&>(*node).parts();
+        for (auto& p : parts) { p.expression = cloneExpression(p.expression); p.width = cloneExpression(p.width); }
+        return QSharedPointer<StrFormNode>::create(parts);
+    }
+    }
+    return {};
 }

@@ -114,6 +114,8 @@ int main(int argc, char* argv[]) {
     check(storage.getGlobalInt1D("I", 0) == 2, "I 自增两次 -> 2（副作用生效）");
 
     qDebug() << "\n2) SWAP / 变量下标赋值";
+    // BAG is private to MAIN; inspect it in its owning scope after execution.
+    storage.setPrivateScope("MAIN", {"BAG"});
     check(storage.getGlobalInt1D("BAG", 1) == 99 || storage.getGlobalInt1D("BAG", 1) == 10,
           "BAG:J = 99（变量下标 J=1）");
     check(storage.getGlobalInt1D("BAG", 1) == 99, "BAG:1 == 99");
@@ -126,8 +128,8 @@ int main(int argc, char* argv[]) {
     check(storage.getGlobalInt1D("NVAL", 0) == 7, "NVAL == 7（N 初值生效）");
 
     qDebug() << "\n5) FOR + CONTINUE 能终止";
-    check(storage.getGlobalInt1D("TOTAL", 0) == 3,
-          "K=0,1,2 CONTINUE；K=3,4,5 计数 -> TOTAL == 3");
+    check(storage.getGlobalInt1D("TOTAL", 0) == 2,
+          "K=0,1,2 CONTINUE；K=3,4 计数 -> TOTAL == 2");
 
     qDebug() << "\n======================================";
     if (g_failures == 0) {

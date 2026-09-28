@@ -69,6 +69,47 @@ public:
 		void setLocalAliases(const QHash<QString, int> &aliases) { m_localAliases = aliases; }
 		void clearLocalAliases() { m_localAliases.clear(); }
 
+        struct LocalContext {
+            QList<qint64> integers;
+            QList<QString> strings;
+            QHash<QString, int> aliases;
+            QHash<QString, QVariant> parameters;
+            QHash<QString, QString> privateNames;
+            QHash<QString, QString> references;
+        };
+        LocalContext localContext() const {
+            return {m_localIntVars, m_localStrVars, m_localAliases, m_parameters,
+                    m_privateNames, m_references};
+        }
+        void setLocalContext(const LocalContext& context) {
+            m_localIntVars = context.integers;
+            m_localStrVars = context.strings;
+            m_localAliases = context.aliases;
+            m_parameters = context.parameters;
+            m_privateNames = context.privateNames;
+            m_references = context.references;
+        }
+        void setPrivateScope(const QString& function, const QStringList& names) {
+            QHash<QString, QString> next;
+            for (const auto& name : names)
+                next.insert(name.toUpper(), function.toUpper() + QChar(0x1f) + name.toUpper());
+            if (next == m_privateNames) return;
+            m_privateNames = std::move(next);
+        }
+        QString storageName(const QString& name) const {
+            const QString upper = name.toUpper();
+            return m_references.value(upper, m_privateNames.value(upper, name));
+        }
+        void setReference(const QString& name, const QString& targetStorage) {
+            m_references.insert(name.toUpper(), targetStorage);
+        }
+        [[nodiscard]] QString resolvedStorageName(const QString& name) const { return storageName(name); }
+        [[nodiscard]] int arraySize(const QString& name) const;
+        void ensureArraySize(const QString& name, int size, bool stringArray);
+        bool hasParameter(const QString& name) const { return m_parameters.contains(name.toUpper()); }
+        QVariant parameter(const QString& name) const { return m_parameters.value(name.toUpper()); }
+        void setParameter(const QString& name, const QVariant& value) { m_parameters.insert(name.toUpper(), value); }
+
 		// ================= System variables (1D) =================
 		Q_INVOKABLE void setDay(int index, qint64 value);
 		Q_INVOKABLE qint64 getDay(int index) const;
@@ -196,6 +237,9 @@ private:
 		QHash<QString, QList<QList<QString>>> m_charaStrVars;
 
 		// 本地变量
+		QHash<QString, QVariant> m_parameters;
+        QHash<QString, QString> m_privateNames;
+        QHash<QString, QString> m_references;
 		QList<qint64> m_localIntVars;
 		QList<QString> m_localStrVars;
 		QHash<QString, int> m_localAliases;   // 形参名 -> LOCAL 槽位

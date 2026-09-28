@@ -106,6 +106,28 @@ bool VariableStorage::loadVariableSizes(const QString& csvPath)
 		return true;
 }
 
+int VariableStorage::arraySize(const QString& name) const
+{
+		const QString key = storageName(name);
+		if (auto it = m_globalStr1D.constFind(key); it != m_globalStr1D.constEnd()) return it->size();
+		if (auto it = m_globalInt1D.constFind(key); it != m_globalInt1D.constEnd()) return it->size();
+		if (auto it = m_globalStr2D.constFind(key); it != m_globalStr2D.constEnd()) return it->size();
+		if (auto it = m_globalInt2D.constFind(key); it != m_globalInt2D.constEnd()) return it->size();
+		return 0;
+}
+
+void VariableStorage::ensureArraySize(const QString& name, int size, bool stringArray)
+{
+		if (size <= 0) return;
+		if (stringArray) {
+			auto& values = m_globalStr1D[storageName(name)];
+			if (values.size() < size) values.resize(size);
+		} else {
+			auto& values = m_globalInt1D[storageName(name)];
+			if (values.size() < size) values.resize(size);
+		}
+}
+
 void VariableStorage::initialize(int maxCharacters, int localSize)
 {
 		Q_UNUSED(maxCharacters)
@@ -120,7 +142,7 @@ void VariableStorage::setGlobalInt3D(const QString &name, int x, int y, int z, q
 {
 		if (x < 0 || y < 0 || z < 0) return;
 
-		auto &grid3D = m_globalInt3D[name];
+		auto &grid3D = m_globalInt3D[storageName(name)];
 		if (grid3D.size() <= x) grid3D.resize(x + 1);
 
 		auto &grid2D = grid3D[x];
@@ -136,7 +158,7 @@ qint64 VariableStorage::getGlobalInt3D(const QString &name, int x, int y, int z)
 {
 		if (x < 0 || y < 0 || z < 0) return 0;
 
-		auto it = m_globalInt3D.constFind(name);
+		auto it = m_globalInt3D.constFind(storageName(name));
 		if (it != m_globalInt3D.constEnd() && x < it.value().size()) {
 				const auto &grid2D = it.value().at(x);
 				if (y < grid2D.size()) {
@@ -389,7 +411,7 @@ bool VariableStorage::isCharaVariable1D(const QString &name) const
 void VariableStorage::setGlobalInt1D(const QString &name, int x, qint64 val)
 {
 		if (x < 0) return;
-		auto &vec = m_globalInt1D[name];
+		auto &vec = m_globalInt1D[storageName(name)];
 		if (vec.size() <= x) vec.resize(x + 1, 0);
 		vec[x] = val;
 }
@@ -397,7 +419,7 @@ void VariableStorage::setGlobalInt1D(const QString &name, int x, qint64 val)
 void VariableStorage::setGlobalStr1D(const QString &name, int x, const QString &value)
 {
 		if (x < 0) return;
-		auto &vec = m_globalStr1D[name];
+		auto &vec = m_globalStr1D[storageName(name)];
 		if (vec.size() <= x) vec.resize(x + 1, QString());
 		vec[x] = value;
 }
@@ -405,7 +427,7 @@ void VariableStorage::setGlobalStr1D(const QString &name, int x, const QString &
 QString VariableStorage::getGlobalStr1D(const QString &name, int x) const
 {
 		if (x < 0) return QString();
-		auto it = m_globalStr1D.constFind(name);
+		auto it = m_globalStr1D.constFind(storageName(name));
 		if (it != m_globalStr1D.constEnd() && x < it.value().size()) {
 				return it.value().at(x);
 		}
@@ -415,7 +437,7 @@ QString VariableStorage::getGlobalStr1D(const QString &name, int x) const
 void VariableStorage::setGlobalStr2D(const QString &name, int x, int y, const QString &value)
 {
 		if (x < 0 || y < 0) return;
-		auto &table = m_globalStr2D[name];
+		auto &table = m_globalStr2D[storageName(name)];
 		if (table.size() <= x) table.resize(x + 1);
 		if (table[x].size() <= y) table[x].resize(y + 1, QString());
 		table[x][y] = value;
@@ -424,7 +446,7 @@ void VariableStorage::setGlobalStr2D(const QString &name, int x, int y, const QS
 QString VariableStorage::getGlobalStr2D(const QString &name, int x, int y) const
 {
 		if (x < 0 || y < 0) return QString();
-		auto it = m_globalStr2D.constFind(name);
+		auto it = m_globalStr2D.constFind(storageName(name));
 		if (it == m_globalStr2D.constEnd()) return QString();
 		if (x >= it.value().size() || y >= it.value().at(x).size()) return QString();
 		return it.value().at(x).at(y);
@@ -445,7 +467,7 @@ QString VariableStorage::getSystemStr(const QString &name, int index) const
 qint64 VariableStorage::getGlobalInt1D(const QString &name, int x) const
 {
 		if (x < 0) return 0;
-		auto it = m_globalInt1D.constFind(name);
+		auto it = m_globalInt1D.constFind(storageName(name));
 		if (it != m_globalInt1D.constEnd() && x < it.value().size()) {
 				return it.value().at(x);
 		}
@@ -455,7 +477,7 @@ qint64 VariableStorage::getGlobalInt1D(const QString &name, int x) const
 void VariableStorage::setGlobalInt2D(const QString &name, int x, int y, qint64 val)
 {
 		if (x < 0 || y < 0) return;
-		auto &grid2D = m_globalInt2D[name];
+		auto &grid2D = m_globalInt2D[storageName(name)];
 		if (grid2D.size() <= x) grid2D.resize(x + 1);
 		auto &vec = grid2D[x];
 		if (vec.size() <= y) vec.resize(y + 1, 0);
@@ -465,7 +487,7 @@ void VariableStorage::setGlobalInt2D(const QString &name, int x, int y, qint64 v
 qint64 VariableStorage::getGlobalInt2D(const QString &name, int x, int y) const
 {
 		if (x < 0 || y < 0) return 0;
-		auto it = m_globalInt2D.constFind(name);
+		auto it = m_globalInt2D.constFind(storageName(name));
 		if (it != m_globalInt2D.constEnd() && x < it.value().size()) {
 				const auto &vec = it.value().at(x);
 				if (y < vec.size()) {

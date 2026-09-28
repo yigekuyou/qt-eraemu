@@ -129,7 +129,7 @@ int main(int argc, char* argv[]) {
     check(storage.getGlobalInt1D("AA", 0) == 7, "AA == 1 + 2 * 3 == 7");
     check(storage.getGlobalInt1D("BB", 0) == 10, "IF branch taken -> BB == 10");
     check(storage.getGlobalInt1D("CC", 0) == 3, "REPEAT 3 -> CC == 3");
-    check(storage.getGlobalInt1D("DD", 0) == 3, "FOR II,0,2 -> DD == 3");
+    check(storage.getGlobalInt1D("DD", 0) == 2, "FOR II,0,2 -> DD == 2");
     check(storage.getGlobalInt1D("EE", 0) == 2, "WHILE EE<2 -> EE == 2");
     check(storage.getGlobalInt1D("HH", 0) == 1, "GOTO DONE -> HH == 1");
     check(storage.getGlobalInt1D("BB", 0) != 999, "line after GOTO skipped");

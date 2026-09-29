@@ -43,6 +43,8 @@ Item {
     function syncCadence() { if (backend) backend.frameMs = refreshIntervalMs; }
     onRefreshIntervalMsChanged: syncCadence()
     onBackendChanged: { syncCadence(); syncLayout(); }
+    readonly property bool primitiveInput: backend && backend.waitingInput && backend.inputKind === "INPUTMOUSEKEY"
+    onPrimitiveInputChanged: { if (primitiveInput) viewport.forceActiveFocus(); }
     property var backend: null              // ConsoleBackend
     property int lineHeight: 19
     property string fontName: ""            // 来自 GuiManager
@@ -74,7 +76,9 @@ Item {
 
     function submit() {
         if (!backend) return;
-        backend.submitInput(parseInt(inputField.text) || 0);
+        if (backend.inputKind === "INPUTS" || backend.inputKind === "TONEINPUTS")
+            backend.submitInputString(inputField.text);
+        else backend.submitInput(parseInt(inputField.text) || 0);
         inputField.text = "";
     }
 
@@ -96,6 +100,7 @@ Item {
         anchors.top: parent.top
         anchors.bottom: inputBar.top
         clip: true
+        focus: root.primitiveInput
 
         // ---- text 层 ----
         Item {
@@ -173,7 +178,26 @@ Item {
             }
         }
 
+        MouseArea {
+            objectName: "primitiveMouse"
+            anchors.fill: parent
+            z: 10
+            enabled: root.primitiveInput
+            acceptedButtons: Qt.AllButtons
+            onPressed: (e) => {
+                // WinForms MouseButtons values; coordinates relative to the lower left.
+                const button = e.button === Qt.LeftButton ? 1048576
+                    : e.button === Qt.RightButton ? 2097152
+                    : e.button === Qt.MiddleButton ? 4194304
+                    : e.button === Qt.BackButton ? 8388608 : 16777216;
+                backend.submitMouseKey(1, button, Math.round(e.x), Math.round(e.y - viewport.height), -1);
+            }
+            onWheel: (e) => backend.submitMouseKey(2, e.angleDelta.y,
+                Math.round(e.x), Math.round(e.y - viewport.height), 0)
+        }
+
         WheelHandler {
+            enabled: !root.primitiveInput
             onWheel: (e) => {
                 if (!backend) return;
                 backend.scrollBy(e.angleDelta.y > 0 ? 3 : -3);
@@ -182,6 +206,24 @@ Item {
 
         Keys.onPressed: (e) => {
             if (!backend) return;
+            if (root.primitiveInput) {
+                const special = {};
+                special[Qt.Key_Return] = 13; special[Qt.Key_Enter] = 13;
+                special[Qt.Key_Escape] = 27; special[Qt.Key_Backspace] = 8;
+                special[Qt.Key_Tab] = 9; special[Qt.Key_Left] = 37;
+                special[Qt.Key_Up] = 38; special[Qt.Key_Right] = 39; special[Qt.Key_Down] = 40;
+                special[Qt.Key_PageUp] = 33; special[Qt.Key_PageDown] = 34;
+                special[Qt.Key_End] = 35; special[Qt.Key_Home] = 36;
+                special[Qt.Key_Insert] = 45; special[Qt.Key_Delete] = 46;
+                let key = special[e.key] !== undefined ? special[e.key] : e.key;
+                if (e.key >= Qt.Key_F1 && e.key <= Qt.Key_F24) key = 112 + e.key - Qt.Key_F1;
+                const mods = ((e.modifiers & Qt.ShiftModifier) ? 65536 : 0)
+                    | ((e.modifiers & Qt.ControlModifier) ? 131072 : 0)
+                    | ((e.modifiers & Qt.AltModifier) ? 262144 : 0);
+                backend.submitMouseKey(3, key, key | mods, 0, 0);
+                e.accepted = true;
+                return;
+            }
             if (e.key === Qt.Key_PageUp)   backend.scrollBy(10);
             if (e.key === Qt.Key_PageDown) backend.scrollBy(-10);
             if (e.key === Qt.Key_End)      backend.scrollToBottom();
@@ -194,7 +236,7 @@ Item {
         anchors.left: parent.left
         anchors.right: parent.right
         anchors.bottom: parent.bottom
-        height: backend && backend.waitingInput ? 38 : 0
+        height: backend && backend.waitingInput && !root.primitiveInput ? 38 : 0
         visible: height > 0
         color: "#202020"
 

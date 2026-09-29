@@ -95,8 +95,10 @@ ExecState ScriptRunner::runSlice(int instructionBudget, int timeBudgetMs) {
     if (!m_continuingSlice) m_steps = 0;
     QElapsedTimer elapsed;
     elapsed.start();
+    // 打印只标记本周期有输出；不能把每条 PRINT 当作一次执行暂停，
+    // 否则大量菜单文本会把泵浦速度降到一条指令/帧。
     for (int i = 0; i < qMax(1, instructionBudget); ++i) {
-        if (!stepOnce() || m_printed || elapsed.elapsed() >= qMax(1, timeBudgetMs)) break;
+        if (!stepOnce() || elapsed.elapsed() >= qMax(1, timeBudgetMs)) break;
     }
     m_continuingSlice = m_state->isRunning();
     m_running = false;
@@ -209,7 +211,8 @@ bool ScriptRunner::stepOnce() {
 
     // 挂起 / 结束
     m_state->setExecState(r);
-    if (r == ExecState::WaitInput || r == ExecState::WaitSystemInput) {
+    if ((r == ExecState::WaitInput || r == ExecState::WaitSystemInput)
+        && line.functionName != QLatin1String("AWAIT")) {
         emit inputRequested(line.functionName);
     } else if (r == ExecState::Halt) {
         emit finished();

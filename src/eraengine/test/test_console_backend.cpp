@@ -122,7 +122,7 @@ int main(int argc, char* argv[]) {
                      [&windowChanged]() { ++windowChanged; });
     console.print("x"); console.print("y"); console.print("z");   // 多次输出
     console.flush();                                              // 一次刷新
-    check(windowChanged == 3, "each print publishes one QML refresh; explicit flush adds none");
+    check(windowChanged == 1, "prints batch into one frame notification");
     check(console.currentLineText() == QStringLiteral("xyz"), "pending line survives refresh without forced newline");
     check(console.lineCount() == 2, "pending line is not counted as a physical newline");
 
@@ -235,6 +235,33 @@ int main(int argc, char* argv[]) {
         c.clearLines(2);
         check(c.lineCount() == 1 && linePlain(c, 0) == "A", "CLEARLINE 2 -> 只剩 A");
         check(c.logicalLineCount() == 1, "CLEARLINE 后 LINECOUNT == 1");
+    }
+
+    {
+        ConsoleBackend c;
+        int windows = 0, lines = 0;
+        QObject::connect(&c, &ConsoleBackend::windowChanged, [&]() { ++windows; });
+        QObject::connect(&c, &ConsoleBackend::lineCountChanged, [&]() { ++lines; });
+        for (int i = 0; i < 100; ++i) { c.print("batch"); c.newline(); }
+        check(windows == 0 && lines == 0, "output does not refresh once per print or newline");
+        c.notifyInputRequested("INPUT");
+        check(windows == 1 && lines == 1, "input boundary publishes complete output once");
+        c.flush();
+        check(windows == 1 && lines == 1, "clean flush does not republish");
+        c.clearAll();
+        c.printButton("old", 9);
+        c.newline();
+        c.notifyInputRequested("INPUTMOUSEKEY");
+        c.notifyInputDone(); // a timer or direct engine input resumed execution
+        c.printButton("new", 10);
+        c.newline();
+        c.notifyInputRequested("INPUT");
+        int value = -1;
+        QObject::connect(&c, &ConsoleBackend::inputSubmitted, [&](qint64 v) { value = v; });
+        c.clickAt(0, 0);
+        check(value == -1, "automatic input completion invalidates old buttons");
+        c.clickAt(1, 0);
+        check(value == 10, "new prompt remains clickable after automatic completion");
     }
 
     qDebug() << "\n===================";

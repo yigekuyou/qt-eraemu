@@ -494,6 +494,35 @@ int main(int argc, char* argv[]) {
               "string concatenation remains statically string-typed");
     }
 
+    {
+        ProcessState ps;
+        EraParseTable pt(&ps);
+        VariableStorage vs;
+        ExpressionEvaluator ev;
+        pt.setVariableStorage(&vs);
+        pt.setExpressionEvaluator(&ev);
+        ExecutionEngine ex(&vs, nullptr);
+        ex.setParseTable(&pt);
+        ex.setExpressionEvaluator(&ev);
+        ScriptRunner run(&pt, &ex, &ps, &vs);
+        run.setExpressionEvaluator(&ev);
+        const QStringList source = {
+            "@MAIN", "CALL TWO", "CALL THREE", "RETURN",
+            "@TWO", "#DIM GRID, 2, 3", "GRID:1:0 = 17", "GRID:1:2 = 29",
+            "OUT2D = GRID:1:2", "OUT2DINC = ++GRID:1:2", "OUT2DZERO = GRID:1:0", "RETURN",
+            "@THREE", "#DIM GRID, 2, 3, 4", "GRID:1:2:0 = 41", "GRID:1:2:3 = 53",
+            "OUT3D = GRID:1:2:3", "OUT3DINC = ++GRID:1:2:3", "OUT3DZERO = GRID:1:2:0", "RETURN"
+        };
+        pt.loadScript("scoped", buildLines(pt, source));
+        pt.finalizeParse();
+        pt.setEntryPoint("MAIN");
+        check(run.runToCompletion() == ExecState::Halt, "scoped arrays complete");
+        check(vs.getGlobalInt1D("OUT2D", 0) == 29 && vs.getGlobalInt1D("OUT2DINC", 0) == 30
+                  && vs.getGlobalInt1D("OUT2DZERO", 0) == 17, "private 2D read and increment preserve second index");
+        check(vs.getGlobalInt1D("OUT3D", 0) == 53 && vs.getGlobalInt1D("OUT3DINC", 0) == 54
+                  && vs.getGlobalInt1D("OUT3DZERO", 0) == 41, "same name in another scope uses 3D indices");
+    }
+
     qDebug() << "\n================================";
     if (g_failures == 0) {
         qDebug() << "[SUCCESS] user function tests passed";

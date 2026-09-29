@@ -55,6 +55,11 @@ void EraParseTable::setVariableStorage(VariableStorage* storage) {
 
 void EraParseTable::setExpressionEvaluator(ExpressionEvaluator* evaluator) {
     m_evaluator = evaluator;
+    if (evaluator) evaluator->setVariableDimProvider([this](const QString& name) {
+        const auto* line = lineAt(m_currentScript, m_currentLine);
+        const auto* decl = m_variables.find(name, line ? line->ownerFunction : QString());
+        return decl ? decl->dimension : 1;
+    });
 }
 
 // ---------------------------------------------------------------------------

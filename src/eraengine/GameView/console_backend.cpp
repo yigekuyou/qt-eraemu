@@ -124,6 +124,11 @@ void ConsoleBackend::flushPendingToSegments(QList<ConsoleSegment>& out) const {
     }
 }
 
+void ConsoleBackend::sealSpan() {
+    flushPendingToSegments(m_sealed);
+    m_pendingParts.clear();
+}
+
 ConsoleDisplayLine ConsoleBackend::buildLine() const {
     ConsoleDisplayLine line;
     line.segments = m_sealed;
@@ -291,7 +296,6 @@ void ConsoleBackend::newline() {
         m_layout.placeLine(line, m_buffer.count());
         m_buffer.appendLine(line);
     }
-    emit lineCountChanged();
     markDirty();
 }
 
@@ -375,7 +379,6 @@ void ConsoleBackend::clearLines(int n) {
     }
     m_buffer.removeLastLogicalLines(n);
     clampScroll();
-    emit lineCountChanged();
     markDirty();
 }
 
@@ -415,7 +418,6 @@ void ConsoleBackend::setFontStyle(bool bold, bool italic, bool underline, bool s
 
 void ConsoleBackend::markDirty() {
     m_dirty = true;
-    flush();
 }
 
 void ConsoleBackend::flush() {
@@ -461,18 +463,18 @@ void ConsoleBackend::tick() {
 // ---------------------------------------------------------------------------
 
 void ConsoleBackend::notifyInputRequested(const QString& kind) {
-    // 新的输入请求 = 新世代：本行新造的段用新世代，旧的段失效（C# newGeneration）
-    if (m_inputKind != kind) {
-        ++m_generation;
-        emit generationChanged();
-    }
     m_inputKind = kind;
     m_waitingInput = true;
+    flush();
     emit inputRequested(kind);
     emit waitingInputChanged();
 }
 
 void ConsoleBackend::notifyInputDone() {
+    if (!m_waitingInput) return;
+    sealSpan();
+    ++m_generation;
+    emit generationChanged();
     m_inputKind.clear();
     m_waitingInput = false;
     emit waitingInputChanged();
@@ -603,13 +605,8 @@ void ConsoleBackend::clickAt(int visibleIndex, int segmentIndex) {
     if (seg.generation != m_generation) {
         return;
     }
-    if (seg.isInteger) {
-        emit inputSubmitted(seg.intValue);
-    } else {
-        emit inputSubmittedString(seg.strValue);
-    }
-    ++m_generation;
-    emit generationChanged();
+    if (seg.isInteger) submitInput(seg.intValue);
+    else submitInputString(seg.strValue);
 }
 
 void ConsoleBackend::scrollBy(int lines) {
@@ -620,16 +617,26 @@ void ConsoleBackend::scrollToBottom() {
     setScrollOffset(0);
 }
 
+void ConsoleBackend::submitMouseKey(int type, int r1, int r2, int r3, int r4) {
+    if (!m_waitingInput || m_inputKind != QLatin1String("INPUTMOUSEKEY")) return;
+    sealSpan();
+    ++m_generation;
+    emit generationChanged();
+    emit mouseKeySubmitted(type, r1, r2, r3, r4);
+}
+
 void ConsoleBackend::submitInput(qint64 value) {
-    emit inputSubmitted(value);
+    sealSpan();
     ++m_generation;   // 提交后旧按钮失效（C# forceUpdateGeneration）
     emit generationChanged();
+    emit inputSubmitted(value);
 }
 
 void ConsoleBackend::submitInputString(const QString& value) {
-    emit inputSubmittedString(value);
+    sealSpan();
     ++m_generation;
     emit generationChanged();
+    emit inputSubmittedString(value);
 }
 
 // ---------------------------------------------------------------------------

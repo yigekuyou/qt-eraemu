@@ -483,6 +483,7 @@ void SystemStateMachine::deletePrevState() {
 // ---------------------------------------------------------------------------
 
 ExecState SystemStateMachine::run() {
+    ++m_waitGeneration;
     ++m_runGeneration;
     m_pumpScheduled = false;
     initialize();
@@ -500,6 +501,7 @@ ExecState SystemStateMachine::resume(qint64 value) {
     if (m_state->getExecState() == ExecState::Error) {
         return ExecState::Error;
     }
+    ++m_waitGeneration;
     m_systemResult = value;
     if (m_storage) {
         m_storage->setResult(0, value);
@@ -517,6 +519,7 @@ ExecState SystemStateMachine::resumeString(const QString& value) {
 }
 
 ExecState SystemStateMachine::deliverInputValues(const QList<qint64>& values) {
+    ++m_waitGeneration;
     if (m_state->getExecState() == ExecState::Error) {
         return ExecState::Error;
     }
@@ -546,14 +549,17 @@ void SystemStateMachine::awaitDelay(int ms) {
     if (!m_timer) {
         return;   // 未注入计时器：由外部负责恢复（引擎侧始终注入 QTimer）
     }
-    m_timer(ms, [this]() { resume(0); });
+    const auto wait = ++m_waitGeneration;
+    m_timer(ms, [this, wait]() { if (wait == m_waitGeneration) resume(0); });
 }
 
 void SystemStateMachine::waitMouseKey(int timeoutMs) {
+    const auto wait = ++m_waitGeneration;
     m_state->setExecState(ExecState::WaitInput);
     emit inputRequested(m_state->getSystemState());
     if (timeoutMs > 0 && m_timer) {
-        m_timer(timeoutMs, [this]() {
+        m_timer(timeoutMs, [this, wait]() {
+            if (wait != m_waitGeneration) return;
             // C#：INPUTMOUSEKEY 超时 -> InputMouseKey(4,0,0,0,0)
             deliverInputValues({4, 0, 0, 0, 0});
         });
@@ -568,10 +574,11 @@ void SystemStateMachine::waitAnyKey() {
 }
 
 void SystemStateMachine::waitTimedInput(int timeoutMs) {
+    const auto wait = ++m_waitGeneration;
     m_state->setExecState(ExecState::WaitInput);
     emit inputRequested(m_state->getSystemState());
     if (timeoutMs > 0 && m_timer) {
-        m_timer(timeoutMs, [this]() { deliverInputValues({0}); });
+        m_timer(timeoutMs, [this, wait]() { if (wait == m_waitGeneration) deliverInputValues({0}); });
     }
 }
 
@@ -579,7 +586,7 @@ void SystemStateMachine::schedulePump() {
     if (m_pumpScheduled) return;
     m_pumpScheduled = true;
     const auto generation = m_runGeneration;
-    QTimer::singleShot(m_frameInterval, Qt::PreciseTimer, this, [this, generation] {
+    QTimer::singleShot(0, Qt::PreciseTimer, this, [this, generation] {
         if (generation != m_runGeneration) return;
         m_pumpScheduled = false;
         if (m_state->isRunning()) pump();
@@ -611,7 +618,7 @@ ExecState SystemStateMachine::pump() {
             if (!m_runner) {
                 m_atFloor = true;
             } else {
-                if (m_pacingEnabled) m_runner->runSlice();
+                if (m_pacingEnabled) m_runner->runSlice(4096, 3);
                 else m_runner->runToCompletion();
                 if (m_pacingEnabled && m_state->isRunning()) {
                     schedulePump();

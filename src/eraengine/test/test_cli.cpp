@@ -414,7 +414,7 @@ int main(int argc, char* argv[]) {
         if (a == QLatin1String("--help") || a == QLatin1String("-h")) {
             qInfo().noquote()
                 << "usage: test_cli <游戏目录> [--script 0,1,0] [--log] [--model] [--check] [--frames N]\n"
-                << "  --paced   按事件循环分片执行；--frame-ms N 设置节奏（默认16ms）\n"
+                << "  --paced   按事件循环分片执行；--frame-ms N 设置显示刷新间隔（默认16ms，不限制执行速度）\n"
                 << "  --log     追加式日志（旧行为；不反映 CLEARLINE）\n"
                 << "  --model   屏幕快照同时打印 span/button 结构\n"
                 << "  --plane   用「二维字符平面」呈现屏幕（root/text/image 分层模型重建）\n"
@@ -528,9 +528,6 @@ int main(int argc, char* argv[]) {
     ProcessState* state = engine.getProcessState();
     SystemStateMachine* machine = engine.getSystemStateMachine();
     machine->setPacingEnabled(paced); // deterministic synchronous headless fallback
-    engine.getConsole()->setFrameMs(frameMs);
-
-    machine->setPacingEnabled(paced);
     console->setFrameMs(frameMs);
     engine.getScriptRunner()->setStepLimit(2000000);   // 死循环诊断：超限即报错并给出位置
     if (hasSeed) engine.setRandomSeed(seedValue);      // 固定随机种子 -> 整局可复现

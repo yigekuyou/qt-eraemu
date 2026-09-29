@@ -59,10 +59,6 @@ EraEngine::EraEngine(QObject *parent)
 		m_systemStateMachine.setVariableStorage(&m_variableStorage);
 		m_systemStateMachine.setScriptRunner(&m_scriptRunner);
         m_systemStateMachine.setPacingEnabled(true);
-        m_systemStateMachine.setFrameInterval(m_console.frameMs());
-        connect(&m_console, &ConsoleBackend::frameMsChanged, this, [this] {
-            m_systemStateMachine.setFrameInterval(m_console.frameMs());
-        });
 		m_scriptRunner.setSystemStateMachine(&m_systemStateMachine);
 		// 实时/限时输入：AWAIT / INPUTMOUSEKEY 超时 / TONEINPUT 超时 用 QTimer 驱动
 		m_systemStateMachine.setTimer([this](int ms, std::function<void()> cb) {
@@ -77,14 +73,6 @@ EraEngine::EraEngine(QObject *parent)
 		m_scriptRunner.setExpressionEvaluator(&m_expressionEvaluator);
 		// 变量字符串下标（CSV 常量名）解析依赖常量名表
 		m_expressionEvaluator.setConstantTable(&m_constantTable);
-		// 变量声明维度（#DIM A, 3 / #DIM A, 3, 4 / #DIM A, 2, 3, 4）：
-		// 多维访问（A:i:j）靠它区分「2D 数组」与「1D 数组的多余下标」
-		m_expressionEvaluator.setVariableDimProvider([this](const QString& name) -> int {
-			if (const VariableDecl* d = m_parseTable.variableTable().find(name)) {
-				return d->dimension;
-			}
-			return 1;
-		});
 		// LINECOUNT = **逻辑行数**（C# logicalLineCount）：折行产生的续行不计入，
 		// eraTetris 用它做「CLEARLINE LINECOUNT - FIRSTLINE」清本帧，必须与
 		// deleteLine 的计数口径一致（都只数 IsLogicalLine 的行）
@@ -163,7 +151,13 @@ EraEngine::EraEngine(QObject *parent)
 					if (c.isValid()) m_console.setColor(c);
 				});
 
+        connect(&m_processState, &ProcessState::execStateChanged, this, [this](ExecState state) {
+            if (state == ExecState::Continue || state == ExecState::Halt || state == ExecState::Error)
+                m_console.notifyInputDone();
+        });
+
 		// ---- 输入：控制台 -> 执行链 ----
+        connect(&m_console, &ConsoleBackend::mouseKeySubmitted, this, &EraEngine::provideMouseKey);
 		connect(&m_console, &ConsoleBackend::inputSubmitted, this,
 				[this](qint64 value) { provideInput(value); });
 		connect(&m_console, &ConsoleBackend::inputSubmittedString, this,
@@ -256,7 +250,8 @@ EraEngine::EraEngine(QObject *parent)
 				&m_signalManager, &SignalManager::emitInputRequested);
 		connect(&m_systemStateMachine, &SystemStateMachine::inputRequested, this,
 				[this](SystemStateCode state) {
-			m_console.notifyInputRequested(SystemStateMachine::stateName(state));
+			if (state != SystemStateCode::Normal)
+                m_console.notifyInputRequested(SystemStateMachine::stateName(state));
 		});
 		connect(&m_systemStateMachine, &SystemStateMachine::errorOccurred, this,
 				[](const QString& message) {

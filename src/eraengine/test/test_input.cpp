@@ -290,7 +290,10 @@ int main(int argc, char* argv[]) {
         table.finalizeParse();
         machine.initialize();
 
+        QStringList prompts;
+        QObject::connect(&runner, &ScriptRunner::inputRequested, [&](const QString& kind) { prompts.append(kind); });
         ExecState st = machine.run();
+        check(prompts.isEmpty(), "AWAIT does not request input UI");
         check(st == ExecState::WaitSystemInput, "AWAIT 16 挂起（WaitSystemInput，不阻塞）");
         check(pending.size() == 1 && pending.first().ms == 16, "已登记 16ms 计时器");
 
@@ -312,6 +315,45 @@ int main(int argc, char* argv[]) {
         check(storage.getSystemVariable("B", 0) == 1, "INPUTMOUSEKEY 收到真实输入类型 1");
         check(storage.getSystemVariable(QStringLiteral("RESULT"), 1) == 50, "RESULT:1 = x 坐标 50");
         check(storage.getSystemVariable(QStringLiteral("RESULT"), 2) == 60, "RESULT:2 = y 坐标 60");
+
+        // Restart, answer before timeout, then fire the old callback at the next prompt.
+        pending.clear();
+        state.setSystemState(SystemStateCode::Title_Begin);
+        state.setExecState(ExecState::Continue);
+        machine.run();
+        fire();
+        auto stale = pending.takeFirst().cb;
+        machine.deliverInputValues({1, 20, 30, 40, -1});
+        check(state.getExecState() == ExecState::WaitInput, "early mouse input reaches next prompt");
+        stale();
+        check(state.getExecState() == ExecState::WaitInput
+                  && storage.getSystemVariable("RESULT", 0) == 1
+                  && storage.getSystemVariable("RESULT", 1) == 20,
+              "answered mouse timeout cannot overwrite or resume next prompt");
+    }
+
+    {
+        ProcessState state;
+        EraParseTable table(&state);
+        VariableStorage storage;
+        SystemStateMachine machine(&state, &table);
+        machine.setVariableStorage(&storage);
+        QList<std::function<void()>> callbacks;
+        machine.setTimer([&](int, std::function<void()> cb) { callbacks.append(cb); });
+        machine.waitMouseKey(100);
+        machine.waitTimedInput(200);
+        storage.setSystemVariable("RESULT", 0, 77);
+        callbacks.at(0)();
+        check(state.getExecState() == ExecState::WaitInput && storage.getSystemVariable("RESULT", 0) == 77,
+              "stale mouse timeout cannot consume newer timed input");
+        machine.awaitDelay(50);
+        callbacks.at(1)();
+        check(state.getExecState() == ExecState::WaitSystemInput && storage.getSystemVariable("RESULT", 0) == 77,
+              "stale timed input cannot consume AWAIT");
+        machine.waitMouseKey(0);
+        callbacks.at(2)();
+        check(state.getExecState() == ExecState::WaitInput && storage.getSystemVariable("RESULT", 0) == 77,
+              "stale AWAIT callback cannot consume mouse input");
     }
 
     qDebug() << "\n============================";

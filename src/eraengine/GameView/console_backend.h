@@ -155,6 +155,7 @@ public:
     Q_INVOKABLE void scrollBy(int lines);
     Q_INVOKABLE void scrollToBottom();
     Q_INVOKABLE void tick();
+    Q_INVOKABLE void submitMouseKey(int type, int r1, int r2, int r3, int r4);
     Q_INVOKABLE void submitInput(qint64 value);
     Q_INVOKABLE void submitInputString(const QString& value);
 
@@ -172,6 +173,7 @@ signals:
     void generationChanged();
     void inputRequested(const QString& kind);
     void waitingInputChanged();
+    void mouseKeySubmitted(int type, int r1, int r2, int r3, int r4);
     void inputSubmitted(qint64 value);
     void inputSubmittedString(const QString& value);
 

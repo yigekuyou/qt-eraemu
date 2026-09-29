@@ -177,6 +177,12 @@ int main(int argc, char* argv[]) {
         check(printed[2].first == "HP=3" && printed[2].second, "PRINTFORML HP={VA} -> StrForm 求值 HP=3");
     }
 
+    printed.clear();
+    table.setEntryPoint("OUT");
+    state.setExecState(ExecState::Continue);
+    runner.runSlice(4096, 1000);
+    check(printed.size() == 3, "one execution slice crosses consecutive print instructions");
+
     qDebug() << "\n================================";
     if (g_failures == 0) {
         qDebug() << "[SUCCESS] execution-chain tests passed";

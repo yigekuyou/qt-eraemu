@@ -31,6 +31,9 @@
 #include <QQmlEngine>
 #include <QQmlContext>
 #include <QObject>
+#include <QQuickItem>
+#include <QQuickWindow>
+#include <QtTest/QTest>
 #include "console_backend.h"
 
 // 测试夹具：把不可创建的 ConsoleBackend 交给 QML 使用
@@ -38,6 +41,13 @@ class ConsoleFixture : public QObject {
     Q_OBJECT
 public:
     explicit ConsoleFixture(QObject* parent = nullptr) : QObject(parent) {}
+    Q_INVOKABLE void pressLeft(QObject* object) {
+        auto* item = qobject_cast<QQuickItem*>(object);
+        QTest::keyClick(item->window(), Qt::Key_Left);
+    }
+    Q_INVOKABLE void request(QObject* object, const QString& kind) {
+        static_cast<ConsoleBackend*>(object)->notifyInputRequested(kind);
+    }
     Q_INVOKABLE QObject* create(QObject* parent = nullptr) {
         return new ConsoleBackend(parent);
     }

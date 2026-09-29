@@ -70,7 +70,8 @@ Item {
     readonly property int gridRow: blockData && blockData.row !== undefined ? blockData.row : 0
     readonly property int gridCols: blockData && blockData.cols > 0 ? blockData.cols : 1
     readonly property int gridRows: blockData && blockData.rows > 0 ? blockData.rows : 1
-    readonly property bool clickable: blockData ? blockData.clickable === true : false
+    readonly property bool clickable: blockData && backend
+        ? blockData.clickable === true && blockData.generation === backend.generation : false
     readonly property bool hovered: mouse.containsMouse && clickable
 
     // 位置与尺寸：网格坐标 × 单元格大小（QML 说了算）

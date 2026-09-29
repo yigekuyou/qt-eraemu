@@ -189,4 +189,54 @@ TestCase {
         compare(spy.count, 1, "点击应触发 1 次 inputSubmitted");
         compare(spy.signalArguments[0][0], 1, "按钮值应为 1");
     }
+    function test_consecutiveInputKinds() {
+        let ints = 0;
+        let strings = 0;
+        function next(value) {
+            ++ints;
+            backend.clearAll();
+            backend.printButtonStr("next", "accepted");
+            backend.newline();
+            consoleFixture.request(backend, "INPUTS");
+        }
+        function done(value) { compare(value, "accepted"); ++strings; }
+        backend.inputSubmitted.connect(next);
+        backend.inputSubmittedString.connect(done);
+        backend.printButton("start", 0);
+        backend.newline();
+        consoleFixture.request(backend, "INPUT");
+        mouseClick(findChild(view.blockAt(0), "blockButtonMouse"));
+        compare(ints, 1);
+        compare(view.blockAt(0).clickable, true);
+        mouseClick(findChild(view.blockAt(0), "blockButtonMouse"));
+        compare(strings, 1);
+        compare(view.blockAt(0).clickable, false, "submitted buttons are visibly inactive");
+        backend.inputSubmitted.disconnect(next);
+        backend.inputSubmittedString.disconnect(done);
+    }
+
+    function test_primitiveMouseAndKey() {
+        const spy = Qt.createQmlObject('import QtTest 1.0; SignalSpy {}', tc);
+        spy.target = backend;
+        spy.signalName = "mouseKeySubmitted";
+        consoleFixture.request(backend, "INPUTMOUSEKEY");
+        const mouse = findChild(view, "primitiveMouse");
+        mouseClick(mouse, 12, 15, Qt.LeftButton);
+        compare(spy.count, 1);
+        compare(spy.signalArguments[0][0], 1);
+        compare(spy.signalArguments[0][1], 1048576);
+        compare(spy.signalArguments[0][2], 12);
+        compare(spy.signalArguments[0][3], 15 - mouse.height);
+        consoleFixture.request(backend, "INPUTMOUSEKEY");
+        win.requestActivate();
+        tryCompare(win, "active", true);
+        mouse.parent.forceActiveFocus();
+        tryCompare(mouse.parent, "activeFocus", true);
+        consoleFixture.pressLeft(mouse);
+        compare(spy.count, 2);
+        compare(spy.signalArguments[1][0], 3);
+        compare(spy.signalArguments[1][1], 37);
+        spy.destroy();
+    }
+
 }

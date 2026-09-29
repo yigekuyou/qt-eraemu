@@ -133,7 +133,6 @@ public:
     ExecState run();
     void setPacingEnabled(bool enabled) { m_pacingEnabled = enabled; }
     bool pacingEnabled() const { return m_pacingEnabled; }
-    void setFrameInterval(int ms) { m_frameInterval = qMax(1, ms); }
     // 用户交付整数输入后继续（写入 RESULT/systemResult）
     ExecState resume(qint64 value);
     // 用户交付字符串输入后继续
@@ -301,8 +300,8 @@ private:
     bool m_pumpActive = false;
     bool m_pacingEnabled = false;
     bool m_pumpScheduled = false;
-    int m_frameInterval = 16;
     quint64 m_runGeneration = 0;
+    quint64 m_waitGeneration = 0;
     void schedulePump();
     bool m_atFloor = false;      // true = 函数栈回到帧底（系统层）
 

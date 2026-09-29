@@ -26,15 +26,23 @@
 #include <QTextStream>
 
 // CSV data loader - loads CSV files for game data
+class ConstantTable;
+class VariableStorage;
 class CsvLoader : public QObject {
     Q_OBJECT
 
 public:
     explicit CsvLoader(QObject* parent = nullptr);
-    
+
     // Load CSV file
     bool loadFile(const QString& filePath);
-    
+
+    // 角色 CSV（<Csv>/Chara/*.csv -> NAME/CALLNAME/BASE/ABL/…）：
+    // 返回成功装载的角色数（对齐 C# ConstantData 的 CharacterTemplate 读取）
+    static int loadCharaDirectory(const QString& charaDir,
+                                  const ConstantTable* constants,
+                                  VariableStorage* storage);
+
     // Access data
     QVariant getValue(const QString& tableName, int row, int col);
     QString getString(const QString& tableName, int row, int col);

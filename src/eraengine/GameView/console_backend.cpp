@@ -22,6 +22,15 @@
 #include <algorithm>
 #include <QRegularExpression>
 
+namespace {
+// 当前等待的输入是否为**字符串型**（INPUTS/SINPUTS/TONEINPUTS/ARGS 系）。
+// 其余（INPUT/TINPUT/ONEINPUT/INPUTMOUSEKEY/系统菜单…）一律按整数型裁决。
+bool inputExpectsString(const QString& kind) {
+    const QString k = kind.toUpper();
+    return k.contains(QLatin1String("INPUTS")) || k.contains(QLatin1String("ARGS"));
+}
+} // namespace
+
 ConsoleBackend::ConsoleBackend(QObject* parent)
     : QObject(parent)
 {
@@ -605,6 +614,12 @@ void ConsoleBackend::clickAt(int visibleIndex, int segmentIndex) {
     if (seg.generation != m_generation) {
         return;
     }
+    // 输入裁决：只有「正在等待输入」且「按钮类型与等待的输入类型一致」才响应。
+    // 否则静默忽略——不推进世代（点击无效但按钮保持可重试），
+    // 杜绝「点击杀死了按钮却没有产生任何效果」的不确定响应。
+    if (!m_waitingInput || inputExpectsString(m_inputKind) == seg.isInteger) {
+        return;
+    }
     if (seg.isInteger) submitInput(seg.intValue);
     else submitInputString(seg.strValue);
 }
@@ -626,6 +641,8 @@ void ConsoleBackend::submitMouseKey(int type, int r1, int r2, int r3, int r4) {
 }
 
 void ConsoleBackend::submitInput(qint64 value) {
+    // 类型分支限制：整数提交只在等待整数型输入（INPUT/TINPUT/ONEINPUT…）时有效
+    if (!m_waitingInput || inputExpectsString(m_inputKind)) return;
     sealSpan();
     ++m_generation;   // 提交后旧按钮失效（C# forceUpdateGeneration）
     emit generationChanged();
@@ -633,6 +650,8 @@ void ConsoleBackend::submitInput(qint64 value) {
 }
 
 void ConsoleBackend::submitInputString(const QString& value) {
+    // 字符串提交只在等待字符串型输入（INPUTS/SINPUTS/TONEINPUTS…）时有效
+    if (!m_waitingInput || !inputExpectsString(m_inputKind)) return;
     sealSpan();
     ++m_generation;
     emit generationChanged();

@@ -35,7 +35,9 @@ ApplicationWindow {
     title: eraEngine.gui.windowTitle || "Emuera Engine"
     width: eraEngine.gui.windowWidth
     height: eraEngine.gui.windowHeight
-    visibility: eraEngine.gui.maximized ? Window.Maximized : Window.Windowed
+    // 全屏(F11)优先；否则遵循设置里的「最大化」
+    visibility: fullscreen ? Window.FullScreen
+                           : (eraEngine.gui.maximized ? Window.Maximized : Window.Windowed)
     color: eraEngine.gui.backColor
 
     property bool fullscreen: false
@@ -177,11 +179,6 @@ ApplicationWindow {
         sequence: "F11"
         onActivated: window.fullscreen = !window.fullscreen
     }
-
-    // 全屏切换
-    onFullscreenChanged: visibility = fullscreen ? Window.FullScreen
-                                                 : (eraEngine.gui.maximized ? Window.Maximized
-                                                                            : Window.Windowed)
 
     // 支持命令行直接带游戏目录启动：appemuera <dir>
     Component.onCompleted: {

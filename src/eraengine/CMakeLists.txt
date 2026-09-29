@@ -31,6 +31,7 @@ qt_add_qml_module(eraengine
 Config/config_loader.cpp
 Config/config_loader.h
 Content/csv_loader.cpp
+Content/csv_loader_chara.cpp
 Content/csv_loader.h
 Content/erb_loader.cpp
 Content/erb_loader.h

@@ -188,6 +188,13 @@ TestCase {
         const mouse = findChild(item, "blockButtonMouse");
         verify(mouse !== null, "找不到区块 MouseArea");
 
+        // 输入裁决：未等待输入时点击不产生提交，也不失效按钮
+        mouseClick(mouse);
+        compare(spy.count, 0, "未等待输入时点击被忽略");
+        compare(item.clickable, true, "被忽略的点击不应使按钮失效");
+
+        // 等待整数输入后，同一按钮的点击生效
+        consoleFixture.request(backend, "INPUT");
         mouseClick(mouse);
         compare(spy.count, 1, "点击应触发 1 次 inputSubmitted");
         compare(spy.signalArguments[0][0], 1, "按钮值应为 1");

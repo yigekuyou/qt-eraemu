@@ -21,15 +21,15 @@ import QtQuick.Window
 
 // 控制台视图 —— root 层 + 分层渲染
 //
-//   root 层（本组件）     ：可见窗口容器（滚动/裁剪/输入条）
+//   root 层（本组件）     ：可见窗口容器（滚动/裁剪/输入条/原生滚动条）
 //   text 层（textLayer）  ：所有文本区块
 //   image 层（imageLayer）：所有图片区块
 //   shape 层（shapeLayer）：所有图形区块
 //
-// 三个层都是 root 的子 Item，坐标同源，所以：
+// 三个层用 inline component `BlockLayer` 建模（结构相同、模型不同），
+// 都是 root 的子 Item，坐标同源：
 //   * 区块的**绝对位置**就是它在层内的 x/y（同 root 坐标系）；
-//   * 区块的**相对位置**是 relX/relY（相对它所属的显示行）；
-//   * 尺寸（w/h）由 C++ 按当前字体/字号/资源**动态测量**后给出。
+//   * 尺寸（cols/rows）由 C++ 按当前字体/字号/资源**动态测量**后给出。
 //
 // **位置与尺寸都是 C++ 说了算**（对齐 C# 的 SetAlignment / CalcPointX / SetWidth）：
 // QML 只负责「按数据把区块对象创建到对应的层里」。层内对象用 Instantiator 创建，
@@ -44,6 +44,12 @@ Item {
     onRefreshIntervalMsChanged: syncCadence()
     onBackendChanged: { syncCadence(); syncLayout(); }
     readonly property bool primitiveInput: backend && backend.waitingInput && backend.inputKind === "INPUTMOUSEKEY"
+    // 当前等待的是否为字符串型输入（INPUTS 系）；整数型 INPUT 一律走数字校验
+    readonly property bool stringInputKind: {
+        if (!backend || !backend.waitingInput) return false;
+        const k = backend.inputKind.toUpperCase();
+        return k.indexOf("INPUTS") >= 0 || k.indexOf("ARGS") >= 0;
+    }
     onPrimitiveInputChanged: { if (primitiveInput) viewport.forceActiveFocus(); }
     property var backend: null              // ConsoleBackend
     property int lineHeight: 19
@@ -96,6 +102,22 @@ Item {
         syncLayout()
     }
 
+    // ---- 分层（text/image/shape 结构相同，仅模型不同）----
+    // delegate 抽成 inline component，消除三份重复；层本身保留显式 id
+    // （Instantiator 的测试/调试入口：view.textBlockCount / blockAt(i)）。
+    component BlockDelegate: ConsoleBlock {
+        blockData: modelData
+        backend: root.backend
+        cellWidth: root.cellWidth
+        cellHeight: root.cellHeight
+        fontName: root.fontName
+        fontSize: root.fontSize
+        foreColor: root.foreColor
+        focusColor: root.focusColor
+        logColor: root.logColor
+        isBacklog: root.backend ? !root.backend.followTail : false
+    }
+
     Item {
         id: viewport
         anchors.left: parent.left
@@ -113,18 +135,7 @@ Item {
             Instantiator {
                 id: textInst
                 model: root.textModel
-                delegate: ConsoleBlock {
-                    blockData: modelData
-                    backend: root.backend
-                    cellWidth: root.cellWidth
-                    cellHeight: root.cellHeight
-                    fontName: root.fontName
-                    fontSize: root.fontSize
-                    foreColor: root.foreColor
-                    focusColor: root.focusColor
-                    logColor: root.logColor
-                    isBacklog: root.backend ? !root.backend.followTail : false
-                }
+                delegate: BlockDelegate {}
                 // Instantiator 不把对象挂进可视树：显式设 parent；销毁由它负责
                 onObjectAdded: (index, object) => { object.parent = textLayer; }
                 onObjectRemoved: (index, object) => { object.parent = null; }
@@ -139,18 +150,7 @@ Item {
             Instantiator {
                 id: imageInst
                 model: root.imageModel
-                delegate: ConsoleBlock {
-                    blockData: modelData
-                    backend: root.backend
-                    cellWidth: root.cellWidth
-                    cellHeight: root.cellHeight
-                    fontName: root.fontName
-                    fontSize: root.fontSize
-                    foreColor: root.foreColor
-                    focusColor: root.focusColor
-                    logColor: root.logColor
-                    isBacklog: root.backend ? !root.backend.followTail : false
-                }
+                delegate: BlockDelegate {}
                 onObjectAdded: (index, object) => { object.parent = imageLayer; }
                 onObjectRemoved: (index, object) => { object.parent = null; }
             }
@@ -164,21 +164,45 @@ Item {
             Instantiator {
                 id: shapeInst
                 model: root.shapeModel
-                delegate: ConsoleBlock {
-                    blockData: modelData
-                    backend: root.backend
-                    cellWidth: root.cellWidth
-                    cellHeight: root.cellHeight
-                    fontName: root.fontName
-                    fontSize: root.fontSize
-                    foreColor: root.foreColor
-                    focusColor: root.focusColor
-                    logColor: root.logColor
-                    isBacklog: root.backend ? !root.backend.followTail : false
-                }
+                delegate: BlockDelegate {}
                 onObjectAdded: (index, object) => { object.parent = shapeLayer; }
                 onObjectRemoved: (index, object) => { object.parent = null; }
             }
+        }
+
+        // ---- 原生纵向滚动条（绑定 C++ 的滚动状态，可拖拽）----
+        ScrollBar {
+            id: vbar
+            orientation: Qt.Vertical
+            anchors.right: parent.right
+            anchors.top: parent.top
+            anchors.bottom: parent.bottom
+            visible: backend && backend.lineCount > backend.visibleCount
+            property bool syncing: false      // 程序性回设不当作用户拖动
+            function syncFromBackend() {
+                syncing = true;
+                const total = backend ? backend.lineCount : 0;
+                if (total <= 0) { size = 1; position = 0; syncing = false; return; }
+                const maxOffset = Math.max(0, total - backend.visibleCount);
+                const first = Math.max(0, total - backend.visibleCount - backend.scrollOffset);
+                size = Math.max(0.02, Math.min(1, backend.visibleCount / total));
+                position = Math.min(1 - size, Math.max(0, first / total));
+                syncing = false;
+            }
+            onPositionChanged: {
+                if (syncing || !backend) return;
+                const total = backend.lineCount;
+                const maxOffset = Math.max(0, total - backend.visibleCount);
+                // 窗口顶行 = position × 总行数；换算回「距底部」的 scrollOffset
+                const first = position * total;
+                backend.scrollOffset = Math.max(0, Math.min(maxOffset, Math.round(maxOffset - first)));
+                syncFromBackend();
+            }
+            Connections {
+                target: backend
+                function onWindowChanged() { vbar.syncFromBackend() }
+            }
+            Component.onCompleted: syncFromBackend()
         }
 
         MouseArea {
@@ -201,6 +225,7 @@ Item {
 
         WheelHandler {
             enabled: !root.primitiveInput
+            acceptedDevices: PointerDevice.Mouse | PointerDevice.TouchPad
             onWheel: (e) => {
                 if (!backend) return;
                 backend.scrollBy(e.angleDelta.y > 0 ? 3 : -3);
@@ -233,7 +258,7 @@ Item {
         }
     }
 
-    // 输入条：仅当执行链等待用户输入时出现
+    // 输入条：仅当执行链等待用户输入时出现（跟随系统主题配色）
     Rectangle {
         id: inputBar
         anchors.left: parent.left
@@ -241,7 +266,7 @@ Item {
         anchors.bottom: parent.bottom
         height: backend && backend.waitingInput && !root.primitiveInput ? 38 : 0
         visible: height > 0
-        color: "#202020"
+        color: palette.window
 
         Row {
             anchors.fill: parent
@@ -253,7 +278,13 @@ Item {
                 width: parent.width - 90
                 height: parent.height - 8
                 placeholderText: backend ? ("输入（" + backend.inputKind + "）") : ""
+                // 输入类型分支限制：整数型输入只接受数字（INPUT 可负）
+                validator: backend && backend.waitingInput && !root.stringInputKind ? intOnly : null
                 onAccepted: root.submit()
+            }
+            RegularExpressionValidator {
+                id: intOnly
+                regularExpression: /-?[0-9]+/
             }
             Button {
                 text: qsTr("确定")

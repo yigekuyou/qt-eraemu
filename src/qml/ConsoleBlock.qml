@@ -28,17 +28,18 @@ import QtQuick.Controls
 // **像素大小由本组件决定**：px = col × cellWidth，py = row × cellHeight，
 // 也就是说换字体/缩放只改 cellWidth/cellHeight，不用动 C++。
 //
-//   kind === "text"  → Text
+//   kind === "text"  → Text（按钮 span 则是原生 Button）
 //   kind === "image" → Image（source: image://emuera/<资源名>；取不到退化成 altText）
 //   kind === "shape" → Rectangle（space / rect / line）
 //
 // 点击由区块自己上报：同一个「段」的多个区块共享同一份点击值，
 // 所以点哪个区块都等价（对齐 C# 的「先命中 part，再映射到 ConsoleButtonString」）。
+// 按钮 span 用原生 Button 提供外观与禁用态；点击仍统一走 blockButtonMouse，
+// 让「命中 → clickAt → submitInput」只有一个入口（与 C++ 世代校验同源）。
 Item {
     id: block
 
     property var blockData: ({})
-    property var line: null                  // 兼容旧属性
     property var backend: null
     // ---- 单元格大小（由容器决定）----
     property real cellWidth: 9
@@ -66,6 +67,7 @@ Item {
     }
 
     readonly property string kind: blockData ? (blockData.kind || "text") : "text"
+    readonly property bool isButtonSpan: blockData ? blockData.isButton === true : false
     readonly property int gridCol: blockData && blockData.col !== undefined ? blockData.col : 0
     readonly property int gridRow: blockData && blockData.row !== undefined ? blockData.row : 0
     readonly property int gridCols: blockData && blockData.cols > 0 ? blockData.cols : 1
@@ -78,13 +80,48 @@ Item {
     x: gridCol * cellWidth
     y: gridRow * cellHeight
     // 外层至少覆盖 C++ 的网格测量；文本内容本身由 glyph 容器自动撑开。
-    width: Math.max(gridCols * cellWidth, contentRow.implicitWidth)
+    width: Math.max(gridCols * cellWidth, isButtonSpan ? 0 : contentRow.implicitWidth)
     height: Math.max(gridRows * cellHeight, contentRow.implicitHeight)
 
-    // 悬停高亮（可点击区块）
+    // ---- 按钮 span：原生 Button 提供外观/悬停/禁用态 ----
+    Button {
+        id: buttonChrome
+        visible: block.isButtonSpan
+        anchors.fill: parent
+        enabled: false                       // 交互统一由 blockButtonMouse 上报
+        hoverEnabled: false
+        leftPadding: 6
+        rightPadding: 6
+        topPadding: 0
+        bottomPadding: 0
+        text: block.blockData ? (block.blockData.text || "") : ""
+        font.family: block.effectiveFontName
+        font.pixelSize: block.fontSize > 0 ? block.fontSize : undefined
+        font.bold: block.blockData ? block.blockData.bold === true : false
+        opacity: block.clickable ? 1.0 : 0.65
+        palette.button: block.effectiveTextColor
+        palette.buttonText: block.hovered ? block.effectiveFocusColor : block.effectiveTextColor
+        palette.highlight: block.effectiveFocusColor
+        down: block.hovered                  // 由 blockButtonMouse 驱动原生按压/高亮
+        highlighted: block.hovered
+        // 按钮文本按 C++ 量好的格子宽度截断，不撑破平面布局
+        contentItem: Label {
+            text: buttonChrome.text
+            font: buttonChrome.font
+            color: buttonChrome.palette.buttonText
+            verticalAlignment: Text.AlignVCenter
+            elide: Label.ElideRight
+            maximumLineCount: 1
+        }
+        ToolTip.visible: block.hovered && block.blockData && (block.blockData.tooltip || "") !== ""
+        ToolTip.delay: 350
+        ToolTip.text: block.blockData ? (block.blockData.tooltip || "") : ""
+    }
+
+    // ---- 悬停高亮（可点击区块）----
     Rectangle {
         anchors.fill: parent
-        visible: block.hovered
+        visible: block.hovered && !block.isButtonSpan
         color: block.effectiveFocusColor
         opacity: 0.22
         radius: 2
@@ -98,9 +135,10 @@ Item {
         objectName: "textCells"
         anchors.left: parent.left
         anchors.verticalCenter: parent.verticalCenter
-        visible: block.kind === "text"
+        visible: block.kind === "text" && !block.isButtonSpan
         Repeater {
-            model: block.blockData ? (block.blockData.text || "").split("") : []
+            model: block.visible && block.kind === "text" && !block.isButtonSpan
+                   ? (block.blockData ? (block.blockData.text || "").split("") : []) : []
             delegate: Item {
                 required property string modelData
                 readonly property int units: {
@@ -174,6 +212,7 @@ Item {
     MouseArea {
         id: mouse
         objectName: "blockButtonMouse"      // 供 QML 测试 findChild 命中
+        z: 1
         anchors.fill: parent
         hoverEnabled: true
         enabled: block.clickable

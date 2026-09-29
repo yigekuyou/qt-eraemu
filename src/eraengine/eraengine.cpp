@@ -469,9 +469,13 @@ void EraEngine::loadConstantData()
 		for (const QString& path : sizeCandidates) {
 				if (m_variableStorage.loadVariableSizes(path)) ++sizesLoaded;
 		}
+		// 角色 CSV（对齐 C# ConstantData 读 <Csv>/Chara）：NAME/CALLNAME/BASE/ABL/…
+		const int charaLoaded = CsvLoader::loadCharaDirectory(
+		    m_csvDir + QStringLiteral("/Chara"), &m_constantTable, &m_variableStorage);
 		qDebug() << "[EraEngine] CSV 目录:" << m_csvDir
 		         << " 常量表:" << tables << "(" << m_constantTable.nameCount() << "项)"
-		         << " VariableSize:" << sizesLoaded;
+		         << " VariableSize:" << sizesLoaded
+		         << " 角色:" << charaLoaded;
 }
 
 // 从已加载配置里取「编码 / 子目录检索」等引擎级设置

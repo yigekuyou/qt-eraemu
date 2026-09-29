@@ -42,13 +42,4 @@ Item {
         logColor: eraRender.engine ? eraRender.engine.gui.logColor : "#9a9a9a"
         backend: eraRender.engine ? eraRender.engine.console : null
     }
-
-    Text {
-        anchors.right: parent.right
-        anchors.bottom: parent.bottom
-        anchors.margins: 6
-        font.pixelSize: 10
-        color: "#666666"
-        text: eraRender.engine ? "frames: " + eraRender.engine.console.frameMs + "ms" : ""
-    }
 }

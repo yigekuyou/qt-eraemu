@@ -95,6 +95,7 @@ int main(int argc, char* argv[]) {
                      [&submitted](qint64 v) { submitted = static_cast<int>(v); });
 
     console.clearAll();
+    console.notifyInputRequested("INPUT");   // 输入裁决：等待整数型输入后按钮才可提交
     console.printButton("[1] 选择一", 1);
     console.printButton("[2] 选择二", 2);
     console.newline();

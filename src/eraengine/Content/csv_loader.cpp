@@ -34,12 +34,12 @@ bool CsvLoader::loadFile(const QString& filePath) {
     }
 
     // Parse the CSV content
-    loadCsvData(filePath);
+		loadCsvData(filePath,content);
 
     return true;
 }
 
-void CsvLoader::loadCsvData(const QString& filePath) {
+void CsvLoader::loadCsvData(const QString& filePath,const QString& content) {
     // For now, just load basic CSV format
     // In a full implementation, this would parse all CSV files
     // and store them in m_data
@@ -48,43 +48,39 @@ void CsvLoader::loadCsvData(const QString& filePath) {
     QString tableName = fileInfo.baseName();
     
     // Parse each line of the file
-    QStringList lines = readFileLines(filePath);
+		QStringList lines = content.split(QLatin1Char('\n'));
     QList<QList<QString>> tableData;
-    
-    for (const QString& line : lines) {
-        QStringList values = parseLine(line);
-        if (!values.isEmpty()) {
-            tableData.append(values);
-        }
-    }
+		for (QString line : lines) {
+				if (line.endsWith(QLatin1Char('\r'))) line.chop(1);
+				if (line.startsWith(QChar(0xFEFF))) line.remove(0, 1); // BOM
+				line = line.trimmed();
+				if (line.isEmpty() || line.startsWith(QLatin1Char(';'))) continue; // 注释
+				tableData.append(parseLine(line));
+		}
     
     // Store the data
     m_data.insert(tableName, tableData);
     m_rowCounts.insert(tableName, tableData.size());
 }
 
-QStringList CsvLoader::readFileLines(const QString& filePath) {
-    QStringList lines;
-    bool ok = false;
-    const QString text = TextCodecUtil::readFile(filePath, TextEncoding::Auto, nullptr, &ok);
-    if (!ok) {
-        return lines;
-    }
-    lines = text.split(QLatin1Char('\n'));
-    for (QString& l : lines) {
-        if (l.endsWith(QLatin1Char('\r'))) l.chop(1);
-    }
-    return lines;
+QStringList CsvLoader::getRowByFirstColumn(const QString& tableName,
+																					 const QString& key) const {
+		auto it = m_data.constFind(tableName);
+		if (it == m_data.constEnd()) return {};
+		for (const auto& row : *it) {
+				if (!row.isEmpty() && row.first() == key) return row;
+		}
+		return {};
 }
 
 QStringList CsvLoader::parseLine(const QString& line) {
-    QStringList values;
-    
-    // Simple CSV parsing - split by comma
-    // In a full implementation, would handle quoted strings and escaped commas
-    values = line.split(',');
-    
-    return values;
+		QStringList values;
+
+		// Simple CSV parsing - split by comma
+		// In a full implementation, would handle quoted strings and escaped commas
+		values = line.split(',');
+
+		return values;
 }
 
 QVariant CsvLoader::getValue(const QString& tableName, int row, int col) {

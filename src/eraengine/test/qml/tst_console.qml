@@ -99,7 +99,7 @@ TestCase {
         backend.print("WWiii■■□　");
         backend.printButton("[HOLD]", 8);
         backend.newline(); backend.flush();
-        compare(view.cellWidth, 9);
+        compare(view.cellWidth, 4);
         const block = view.blockAt(0);
         const row = findChild(block, "textCells");
         let total = 0;
@@ -163,7 +163,10 @@ TestCase {
             backend.newline();
         }
         backend.flush();
-        verify(backend.visibleLineCount() <= 10);       // 200px / 20px
+        compare(backend.gridColumns, 80);
+        compare(backend.gridRows, 25);
+        compare(view.cellWidth, 4);
+        compare(view.cellHeight, 8);
         compare(view.textBlockCount, backend.textBlocks.length);
     }
 

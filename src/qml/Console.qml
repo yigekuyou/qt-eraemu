@@ -54,12 +54,12 @@ Item {
     property string focusColor: ""
     property string logColor: ""
 
-    // ---- 单元格大小：**由 QML 决定**（这就是「区块大小决定权在 QML」）----
-    //   cellWidth  = 一个「区块长」= 一个半角字符宽
-    //   cellHeight = 一个「区块高」= 一行高
-    // C++ 只给 col/row（单位坐标）与 cols/rows（格子数），像素由这里换算。
-    readonly property real cellWidth: Math.max(1, Math.floor(fontSize / 2))
-    readonly property real cellHeight: lineHeight
+    // ---- 固定逻辑网格，动态像素格子 ----
+    // C++/EraEngine 固定脚本看到的列数；窗口改变时只改变每格像素大小。
+    readonly property int gridColumns: backend && backend.gridColumns > 0 ? backend.gridColumns : 80
+    readonly property int gridRows: backend && backend.gridRows > 0 ? backend.gridRows : 25
+    readonly property real cellWidth: Math.max(1, width / gridColumns)
+    readonly property real cellHeight: Math.max(1, viewport.height / gridRows)
 
     // 三个层各自的区块模型（C++ 提供，坐标已算好）
     readonly property var textModel: backend ? backend.textBlocks : []
@@ -87,11 +87,14 @@ Item {
         if (!backend) return;
         backend.setFontSize(fontSize);
         backend.setLineHeight(lineHeight);
-        backend.setWindowWidth(width);
     }
     onFontSizeChanged: syncLayout()
     onLineHeightChanged: syncLayout()
-    onWidthChanged: syncLayout()
+    onWidthChanged: {
+        // Width changes resize cells only. Do not feed the viewport width back
+        // into the logical layout, otherwise ERB line wrapping changes.
+        syncLayout()
+    }
 
     Item {
         id: viewport
@@ -260,11 +263,11 @@ Item {
     }
 
     onHeightChanged: {
-        if (backend) backend.visibleCount = Math.max(1, Math.floor(viewport.height / lineHeight));
+        if (backend) backend.visibleCount = Math.max(1, Math.floor(viewport.height / cellHeight));
     }
     Component.onCompleted: {
         syncCadence();
         syncLayout();
-        if (backend) backend.visibleCount = Math.max(1, Math.floor(viewport.height / lineHeight));
+        if (backend) backend.visibleCount = Math.max(1, Math.floor(viewport.height / cellHeight));
     }
 }

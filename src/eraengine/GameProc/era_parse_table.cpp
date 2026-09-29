@@ -913,17 +913,26 @@ void EraParseTable::parseVariableDeclaration(const LogicalLine& line, const QStr
         decl.isPrivate = isPrivate || !isGlobal;
         decl.isConst = d.isConst;
         decl.isReference = d.reference;
+        decl.isCharaData = d.charaData;
+
+        // 用户 `#DIM(S) CHARADATA`：登记为角色数据变量，供读写路径按
+        // (角色号, 元素下标) 存取（否则元素互相覆盖，表现为「变量似乎不可变」）。
+        if (decl.isCharaData && !decl.isReference && m_variableStorage) {
+            m_variableStorage->registerCharaDataVariable(
+                decl.name, decl.type == OperandType::Str, decl.dimension);
+        }
         if (!d.isConst) {                 // 初值（非 CONST）：进入函数/装载时写入
             decl.defaultInt = d.defaultInt;
             decl.defaultStr = d.defaultStr;
         }
 
-        if (!m_variables.add(decl)) {
-            // 局部重名：同名 @label 重复定义时常见（C# 亦报错）；此处静默 first-wins
-            if (decl.scope == VarScope::Global) {
-                m_parseWarnings.append(QStringLiteral("%1: 全局变量 %2 重复定义")
-                                           .arg(line.position.toString(), decl.name));
-            }
+        // 重复声明（first-wins）：与 C# 一样，全局变量重名一律告警（类型/维度是否
+        // 一致都不影响后续使用，但重名通常意味着脚本有误）；函数局部重名在真实
+        // 游戏里很常见（同名 @label 被口上补丁覆盖），保持静默。
+        const VariableTable::DeclStatus status = m_variables.addChecked(decl);
+        if (status != VariableTable::DeclStatus::Added && decl.scope == VarScope::Global) {
+            m_parseWarnings.append(QStringLiteral("%1: 全局变量 %2 重复定义")
+                                       .arg(line.position.toString(), decl.name));
         }
     } catch (const std::exception& e) {
         m_parseWarnings.append(QStringLiteral("%1: #%2 声明错误：%3 (%4)")
@@ -1052,7 +1061,7 @@ QString leadingIdentifier(const QString& raw) {
 void EraParseTable::applyVariableDefaults(const QList<VariableDecl>& decls) {
     if (!m_variableStorage) return;
     for (const VariableDecl& d : decls) {
-        if (d.isConst || !d.isPrivate || d.isReference) continue;
+        if (d.isConst || !d.isPrivate || d.isReference || d.isCharaData) continue;
         if (!d.lengths.isEmpty())
             m_variableStorage->ensureArraySize(d.name, d.lengths.first(), d.type == OperandType::Str);
         if (d.type == OperandType::Str) {

@@ -218,6 +218,16 @@ QPair<QString, int> ExecutionEngine::parseLHS(const QString& lhs) {
 qint64 ExecutionEngine::readLhs(const LhsRef& ref) {
     if (!m_storage) return 0;
     if (m_storage->hasParameter(ref.name)) return m_storage->parameter(ref.name).toLongLong();
+    // 角色数据变量：按 (角色号, 元素下标) 读取（与求值器一致）
+    if (m_storage->isCharaDataVariable(ref.name)) {
+        if (m_storage->isCharaDataString(ref.name)) return 0;   // 字符串：走 handleStringAssignment
+        int charaId = 0;
+        QList<int> elems;
+        m_storage->reduceCharaArgs(ref.name, ref.indices, charaId, elems);
+        if (m_storage->charaDataDimension(ref.name) >= 2)
+            return m_storage->getCharaInt3D(ref.name, charaId, elems.value(0), elems.value(1));
+        return m_storage->getCharaInt(ref.name, charaId, elems.value(0));
+    }
     const QString upper = ref.name.toUpper();
     if (upper == QLatin1String("LOCAL") || upper == QLatin1String("ARG")) {
         return m_storage->getLocalInt(ref.first());
@@ -243,6 +253,18 @@ qint64 ExecutionEngine::readLhs(const LhsRef& ref) {
 void ExecutionEngine::writeLhs(const LhsRef& ref, qint64 value) {
     if (!m_storage) return;
     if (m_storage->hasParameter(ref.name)) { m_storage->setParameter(ref.name, value); return; }
+    // 角色数据变量：按 (角色号, 元素下标) 写入（否则同一角色的元素互相覆盖）
+    if (m_storage->isCharaDataVariable(ref.name)) {
+        if (m_storage->isCharaDataString(ref.name)) return;   // 字符串：走 handleStringAssignment
+        int charaId = 0;
+        QList<int> elems;
+        m_storage->reduceCharaArgs(ref.name, ref.indices, charaId, elems);
+        if (m_storage->charaDataDimension(ref.name) >= 2)
+            m_storage->setCharaInt3D(ref.name, charaId, elems.value(0), elems.value(1), value);
+        else
+            m_storage->setCharaInt(ref.name, charaId, elems.value(0), value);
+        return;
+    }
     const QString upper = ref.name.toUpper();
     if (upper == QLatin1String("LOCAL") || upper == QLatin1String("ARG")) {
         m_storage->setLocalInt(ref.first(), value);   // 用户函数局部槽（C# LOCAL）
@@ -608,7 +630,9 @@ bool ExecutionEngine::executeInstruction(const LogicalLine& line) {
 }
 
 bool ExecutionEngine::handleStringAssignment(const QString& lhs, const QString& rhs, const QSharedPointer<ExpressionNode>& ast) {
-    auto [varName, index] = parseLHS(lhs);
+    const LhsRef ref = parseLhsRef(lhs);
+    const QString varName = ref.name;
+    const int index = ref.hasIndex() ? ref.first() : -1;
     if (varName.isEmpty()) {
         return false;
     }
@@ -654,6 +678,14 @@ bool ExecutionEngine::handleStringAssignment(const QString& lhs, const QString& 
     }
     if (upper == QLatin1String("SAVEDATA_TEXT")) {
         m_storage->setSystemStr(upper, 0, value);
+        return true;
+    }
+    // 角色字符串变量（NAME/CSTR/用户 #DIMS CHARADATA）：按 (角色号, 下标) 写入
+    if (m_storage->isCharaDataString(varName)) {
+        int charaId = 0;
+        QList<int> elems;
+        m_storage->reduceCharaArgs(varName, ref.indices, charaId, elems);
+        m_storage->setCharaStr(varName, charaId, elems.value(0), value);
         return true;
     }
     m_storage->setGlobalStr1D(varName, index >= 0 ? index : 0, value);

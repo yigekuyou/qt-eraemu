@@ -42,7 +42,9 @@ int ConsoleLayout::measureUnits(const QString& text) const {
 }
 
 int ConsoleLayout::maxCols() const {
-    return qMax(1, m_windowWidth / qMax(1, columnWidthPx()));
+    // The ERB logical grid is fixed. Window pixels are a QML presentation
+    // concern and must not change script wrapping or span coordinates.
+    return qMax(1, m_gridColumns);
 }
 
 void ConsoleLayout::measurePart(ConsoleSpan& part) const {

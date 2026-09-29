@@ -504,6 +504,19 @@ bool ExpressionEvaluator::assignVariable(const VariableNode& node, VariableStora
         storage->setParameter(name, value);
         return true;
     }
+    // 角色数据变量（++/-- 的写回）与读取路径对称
+    if (storage->isCharaDataVariable(name)) {
+        if (storage->isCharaDataString(name)) return false;   // 字符串不能自增
+        const QList<int> cids = resolveIndices(node, storage, gameBaseData);
+        int charaId = 0;
+        QList<int> elems;
+        storage->reduceCharaArgs(name, cids, charaId, elems);
+        if (storage->charaDataDimension(name) >= 2)
+            storage->setCharaInt3D(name, charaId, elems.value(0), elems.value(1), value);
+        else
+            storage->setCharaInt(name, charaId, elems.value(0), value);
+        return true;
+    }
     const QList<int> ids = resolveIndices(node, storage, gameBaseData);
     const int idx = ids.isEmpty() ? 0 : ids.first();
     const int dim = variableDimension(name);
@@ -540,6 +553,24 @@ QVariant ExpressionEvaluator::evaluateVariable(const VariableNode &node, Variabl
     
     QString varName = node.name();
     if (storage->hasParameter(varName)) return storage->parameter(varName);
+
+    // ---- 角色数据变量（CFLAG/TALENT/… 内建 + 用户 #DIM(S) CHARADATA）----
+    // 必须按 (角色号, 元素下标) 存取。此前走通用 1D 全局路径，把角色号之后的
+    // 元素下标整个丢掉，导致同一角色的所有元素挤在一个槽位互相覆盖。
+    if (storage->isCharaDataVariable(varName)) {
+        const QList<int> ids = resolveIndices(node, storage, gameBaseData);
+        int charaId = 0;
+        QList<int> elems;
+        storage->reduceCharaArgs(varName, ids, charaId, elems);
+        if (storage->isCharaDataString(varName)) {
+            return QVariant(storage->getCharaStr(varName, charaId, elems.value(0)));
+        }
+        if (storage->charaDataDimension(varName) >= 2) {
+            return QVariant::fromValue<qint64>(
+                storage->getCharaInt3D(varName, charaId, elems.value(0), elems.value(1)));
+        }
+        return QVariant::fromValue<qint64>(storage->getCharaInt(varName, charaId, elems.value(0)));
+    }
     
     // Check if this is a GameBase variable
     if (varName.startsWith("GAMEBASE_") && gameBaseData) {
@@ -677,11 +708,10 @@ QVariant ExpressionEvaluator::evaluateVariable(const VariableNode &node, Variabl
         const int index = static_cast<int>(resolveIndex(node, 0, storage, gameBaseData));
 
         // Try to get system variable first
-        if (storage->isVariableGlobal(varName) ||
-            varName == "DAY" || varName == "MONEY" || varName == "FLAG" ||
-            varName == "ITEM" || varName == "COUNT" || varName == "A" ||
-            varName == "B" || varName == "C" ||
-            varName == "TFLAG" || varName == "RESULT" || varName == "TIME") {
+        // 判定必须与写入路径（ExecutionEngine::writeLhs）一致，且大小写不敏感：
+        // 之前用「硬编码名单 + isVariableGlobal」且漏了 TIME，导致 TIME:0/2/5 写入
+        // 落到用户全局槽、读取却走系统通道恒为 0 —— 表现为「变量似乎不可变」。
+        if (storage->hasSystemVariable(varName)) {
             return QVariant(storage->getSystemVariable(varName, index));
         }
 
@@ -801,23 +831,6 @@ QVariant ExpressionEvaluator::evaluateUnaryOp(const UnaryOpNode &node, VariableS
 //   实现（语义逐条对齐；错误条件放宽为返回 0/默认值，不抛异常）。
 // ===========================================================================
 namespace {
-
-// 一维整型系统变量（与 evaluateVariable 的判定保持一致）
-bool isSystem1DName(const QString& upper) {
-    static const QSet<QString> kNames = {
-        QStringLiteral("DAY"), QStringLiteral("MONEY"), QStringLiteral("ITEM"),
-        QStringLiteral("ITEMSALES"), QStringLiteral("NOITEM"), QStringLiteral("BOUGHT"),
-        QStringLiteral("PBAND"), QStringLiteral("FLAG"), QStringLiteral("TFLAG"),
-        QStringLiteral("TARGET"), QStringLiteral("MASTER"), QStringLiteral("PLAYER"),
-        QStringLiteral("ASSI"), QStringLiteral("ASSIPLAY"), QStringLiteral("UP"),
-        QStringLiteral("DOWN"), QStringLiteral("LOSEBASE"), QStringLiteral("PALAMLV"),
-        QStringLiteral("EXPLV"), QStringLiteral("EJAC"), QStringLiteral("PREVCOM"),
-        QStringLiteral("SELECTCOM"), QStringLiteral("NEXTCOM"), QStringLiteral("RESULT"),
-        QStringLiteral("COUNT"), QStringLiteral("A"), QStringLiteral("B"),
-        QStringLiteral("C"),
-    };
-    return kNames.contains(upper);
-}
 
 // 半角 <-> 全角（对齐 C# Strings.StrConv(VbStrConv.Narrow/Wide) 的 ASCII 部分；
 // 假名半角/全角映射需要大表，此处保持原样）
@@ -944,8 +957,8 @@ QList<qint64> ExpressionEvaluator::readIntArray(const VariableNode &var, Variabl
     }
     out.reserve(size);
     for (int i = 0; i < size; ++i) {
-        out.append(isSystem1DName(upper) ? storage->getSystemVariable(upper, i)
-                                         : storage->getGlobalInt1D(name, i));
+        out.append(storage->hasSystemVariable(upper) ? storage->getSystemVariable(upper, i)
+                                                     : storage->getGlobalInt1D(name, i));
     }
     return out;
 }

@@ -537,9 +537,9 @@ ExecState ScriptRunner::executeLine(const LogicalLine& line) {
             Operand counter;
             counter.raw = f->varName;
             QString counterName;
-            int counterIndex = 0;
-            extractVarRef(counter, counterName, counterIndex);
-            f->value = std::bit_cast<qint64>(quint64(readIntVar(counterName, counterIndex)) + quint64(f->step));
+            QList<int> counterIndices;
+            extractVarRef(counter, counterName, counterIndices);
+            f->value = std::bit_cast<qint64>(quint64(readIntVar(counterName, counterIndices)) + quint64(f->step));
             writeLoopCounter(f->varName, f->value);
             const bool more = (f->step > 0 && f->value < f->end) || (f->step < 0 && f->value > f->end);
             if (more) {
@@ -560,10 +560,10 @@ ExecState ScriptRunner::executeLine(const LogicalLine& line) {
             if (f.kind == LoopFrame::Kind::Repeat || f.kind == LoopFrame::Kind::For) {
                 Operand counter(f.varName);
                 QString counterName;
-                int index = 0;
-                extractVarRef(counter, counterName, index);
-                writeIntVar(counterName, index, std::bit_cast<qint64>(
-                    quint64(readIntVar(counterName, index)) + quint64(f.step)));
+                QList<int> indices;
+                extractVarRef(counter, counterName, indices);
+                writeIntVar(counterName, indices, std::bit_cast<qint64>(
+                    quint64(readIntVar(counterName, indices)) + quint64(f.step)));
             }
             gotoLine(f.endLine >= 0 ? f.endLine + 1 : pc + 1);
         } else {
@@ -703,7 +703,7 @@ ExecState ScriptRunner::executeLine(const LogicalLine& line) {
         }
         if (ops.size() >= 2) {
             QString na, nb;
-            int ia = 0, ib = 0;
+            QList<int> ia, ib;
             if (extractVarRef(*ops[0], na, ia) && extractVarRef(*ops[1], nb, ib)) {
                 const qint64 va = readIntVar(na, ia);
                 const qint64 vb = readIntVar(nb, ib);
@@ -949,83 +949,140 @@ bool ScriptRunner::caseMatches(const LogicalLine& caseLine,
 }
 
 qint64 ScriptRunner::readIntVar(const QString& name, int index) const {
+    return readIntVar(name, QList<int>{index});
+}
+
+qint64 ScriptRunner::readIntVar(const QString& name, const QList<int>& indices) const {
     if (m_storage->hasParameter(name)) return m_storage->parameter(name).toLongLong();
+    // 角色数据变量：按 (角色号, 元素下标) 读取（与求值器一致）
+    if (m_storage->isCharaDataVariable(name)) {
+        if (m_storage->isCharaDataString(name)) return 0;
+        int charaId = 0;
+        QList<int> elems;
+        m_storage->reduceCharaArgs(name, indices, charaId, elems);
+        if (m_storage->charaDataDimension(name) >= 2)
+            return m_storage->getCharaInt3D(name, charaId, elems.value(0), elems.value(1));
+        return m_storage->getCharaInt(name, charaId, elems.value(0));
+    }
     const QString upper = name.toUpper();
     if (upper == QLatin1String("LOCAL") || upper == QLatin1String("ARG")) {
-        return m_storage->getLocalInt(index);
+        return m_storage->getLocalInt(indices.value(0));
     }
     if (m_storage->hasSystemVariable(name)) {
-        return m_storage->getSystemVariable(name, index);
+        return m_storage->getSystemVariable(name, indices.value(0));
     }
-    return m_storage->getGlobalInt1D(name, index);
+    return m_storage->getGlobalInt1D(name, indices.value(0));
 }
 
 void ScriptRunner::writeIntVar(const QString& name, int index, qint64 value) {
+    writeIntVar(name, QList<int>{index}, value);
+}
+
+void ScriptRunner::writeIntVar(const QString& name, const QList<int>& indices, qint64 value) {
     if (m_storage->hasParameter(name)) { m_storage->setParameter(name, value); return; }
+    // 角色数据变量：按 (角色号, 元素下标) 写入（否则同一角色的元素互相覆盖）
+    if (m_storage->isCharaDataVariable(name)) {
+        if (m_storage->isCharaDataString(name)) return;
+        int charaId = 0;
+        QList<int> elems;
+        m_storage->reduceCharaArgs(name, indices, charaId, elems);
+        if (m_storage->charaDataDimension(name) >= 2)
+            m_storage->setCharaInt3D(name, charaId, elems.value(0), elems.value(1), value);
+        else
+            m_storage->setCharaInt(name, charaId, elems.value(0), value);
+        return;
+    }
     const QString upper = name.toUpper();
     if (upper == QLatin1String("LOCAL") || upper == QLatin1String("ARG")) {
-        m_storage->setLocalInt(index, value);
+        m_storage->setLocalInt(indices.value(0), value);
         return;
     }
     if (m_storage->hasSystemVariable(name)) {
-        m_storage->setSystemVariable(name, index, value);
+        m_storage->setSystemVariable(name, indices.value(0), value);
         return;
     }
-    m_storage->setGlobalInt1D(name, index, value);
+    m_storage->setGlobalInt1D(name, indices.value(0), value);
 }
 
-bool ScriptRunner::extractVarRef(const Operand& op, QString& name, int& index) {
-    index = 0;
+// 顶层 ':' 切分（尊重括号/引号），把 `VAR:a:b` 拆成 [VAR, a, b]
+static QStringList splitColonTopLevel(const QString& text) {
+    QStringList out;
+    QString cur;
+    int depth = 0;
+    QChar quote;
+    for (const QChar c : text) {
+        if (!quote.isNull()) { cur += c; if (c == quote) quote = QChar(); continue; }
+        if (c == QLatin1Char('"') || c == QLatin1Char('\'')) { quote = c; cur += c; continue; }
+        if (c == QLatin1Char('(') || c == QLatin1Char('[')) { ++depth; cur += c; continue; }
+        if (c == QLatin1Char(')') || c == QLatin1Char(']')) { --depth; cur += c; continue; }
+        if (c == QLatin1Char(':') && depth == 0) { out.append(cur); cur.clear(); continue; }
+        cur += c;
+    }
+    out.append(cur);
+    return out;
+}
+
+bool ScriptRunner::extractVarRef(const Operand& op, QString& name, QList<int>& indices) {
+    indices.clear();
     if (op.ast && op.ast->kind() == NodeKind::Variable) {
         const VariableNode& var = static_cast<const VariableNode&>(*op.ast);
         name = var.name();
-        if (var.isArray() && !var.indices().isEmpty()) {
-            const QSharedPointer<ExpressionNode> idxNode = var.indices().at(0);
-            if (idxNode) {
-                if (m_evaluator) {
-                    index = static_cast<int>(
-                        m_evaluator->evaluate(*idxNode, m_storage, baseData()).toLongLong());
-                } else {
-                    qint64 v = 0;
-                    evalInt(idxNode, QString(), v);
-                    index = static_cast<int>(v);
-                }
+        for (const QSharedPointer<ExpressionNode>& idxNode : var.indices()) {
+            if (!idxNode) { indices.append(0); continue; }
+            if (m_evaluator) {
+                indices.append(static_cast<int>(
+                    m_evaluator->evaluate(*idxNode, m_storage, baseData()).toLongLong()));
+            } else {
+                qint64 v = 0;
+                evalInt(idxNode, QString(), v);
+                indices.append(static_cast<int>(v));
             }
         }
         return true;
     }
-    // 退化：从 raw 文本解析 "NAME[:下标]"（下标可以是变量/表达式）
+    // 退化：从 raw 文本解析 "NAME[:下标[:下标…]]"（下标可以是变量/表达式）
     QString raw = op.raw.trimmed();
-    const int colon = raw.indexOf(QLatin1Char(':'));
-    if (colon > 0) {
-        const QString idxText = raw.mid(colon + 1).trimmed();
-        bool ok = false;
-        const int direct = idxText.toInt(&ok);
-        if (ok) {
-            index = direct;
-        } else if (m_table) {
-            const QSharedPointer<ExpressionNode> ast = m_table->expressionAst(idxText);
-            if (ast) {
-                if (m_evaluator) {
-                    index = static_cast<int>(m_evaluator->evaluate(*ast, m_storage, baseData()).toLongLong());
-                } else {
-                    qint64 v = 0;
-                    evalInt(ast, QString(), v);
-                    index = static_cast<int>(v);
+    const QStringList parts = splitColonTopLevel(raw);
+    if (parts.size() > 1) {
+        for (int i = 1; i < parts.size(); ++i) {
+            const QString idxText = parts.at(i).trimmed();
+            bool ok = false;
+            const int direct = idxText.toInt(&ok);
+            if (ok) { indices.append(direct); continue; }
+            int value = 0;
+            if (m_table) {
+                const QSharedPointer<ExpressionNode> ast = m_table->expressionAst(idxText);
+                if (ast) {
+                    if (m_evaluator) {
+                        value = static_cast<int>(
+                            m_evaluator->evaluate(*ast, m_storage, baseData()).toLongLong());
+                    } else {
+                        qint64 v = 0;
+                        evalInt(ast, QString(), v);
+                        value = static_cast<int>(v);
+                    }
                 }
             }
+            indices.append(value);
         }
-        raw = raw.left(colon);
+        raw = parts.first();
     }
     name = bareVarName(raw);
     return !name.isEmpty();
 }
 
+bool ScriptRunner::extractVarRef(const Operand& op, QString& name, int& index) {
+    QList<int> indices;
+    const bool ok = extractVarRef(op, name, indices);
+    index = indices.value(0);
+    return ok;
+}
+
 void ScriptRunner::writeLoopCounter(const QString& rawName, qint64 value) {
     Operand counter(rawName);
     QString name;
-    int index = 0;
-    if (extractVarRef(counter, name, index)) writeIntVar(name, index, value);
+    QList<int> indices;
+    if (extractVarRef(counter, name, indices)) writeIntVar(name, indices, value);
 }
 
 void ScriptRunner::bindArguments(const UserFunctionDecl* info, const QList<Operand>& callArgs,

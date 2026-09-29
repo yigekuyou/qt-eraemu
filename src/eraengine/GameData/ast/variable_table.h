@@ -49,14 +49,20 @@ struct VariableDecl {
     bool        isConst = false;
     bool        isArg = false;               // 来自 @F(A,B) 形参表
     bool        isReference = false;         // #DIM(S) REF：调用方数组的别名
+    bool        isCharaData = false;         // #DIM(S) CHARADATA：每角色一份
     QList<qint64> defaultInt;   // #DIM X = 1,2 的初值（进入函数时写入）
     QStringList   defaultStr;   // #DIMS S = "a" 的初值
 };
 
 class VariableTable {
 public:
+    // 声明结果：新增 / 同名同义（无害重复，如 .ERH 被重复装载）/ 同名冲突
+    enum class DeclStatus { Added, DuplicateSame, Conflict };
+
     // 返回 false 表示重名（已存在）
     bool add(const VariableDecl& decl);
+    // 区分「完全相同的重复声明」与「真正冲突的重复声明」
+    DeclStatus addChecked(const VariableDecl& decl);
 
     // 查声明：先按函数局部，再按全局
     [[nodiscard]] const VariableDecl* find(const QString& name,

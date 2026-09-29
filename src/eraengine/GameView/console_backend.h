@@ -62,6 +62,8 @@ class ConsoleBackend : public QObject {
     Q_PROPERTY(QString inputKind     READ inputKind                                  NOTIFY inputRequested)
     Q_PROPERTY(bool waitingInput     READ waitingInput                                NOTIFY waitingInputChanged)
     Q_PROPERTY(quint64 generation    READ generation                                 NOTIFY generationChanged)
+    Q_PROPERTY(int gridColumns READ gridColumns CONSTANT)
+    Q_PROPERTY(int gridRows READ gridRows CONSTANT)
 
 public:
     explicit ConsoleBackend(QObject* parent = nullptr);
@@ -103,6 +105,8 @@ public:
     [[nodiscard]] QString inputKind() const { return m_inputKind; }
     [[nodiscard]] bool waitingInput() const { return m_waitingInput; }
     [[nodiscard]] quint64 generation() const { return m_generation; }
+    [[nodiscard]] int gridColumns() const { return m_layout.gridColumns(); }
+    [[nodiscard]] int gridRows() const { return m_layout.gridRows(); }
 
     // ---- 显示写入接口（对齐 C# EmueraConsole.Print）----
     Q_INVOKABLE void print(const QString& text);                  // 追加文本（不换行）

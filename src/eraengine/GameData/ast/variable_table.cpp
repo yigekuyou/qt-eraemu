@@ -21,6 +21,10 @@
 
 namespace {
 
+// Emuera 的 `大文字小文字の違いを無視する:YES`（ICVariable）语义：
+// 标识符（变量名 / 函数名）大小写不敏感，内部统一用大写做键。
+QString nk(const QString& name) { return name.toUpper(); }
+
 // 递归把类型回填到 AST 的变量节点（其余节点仅递归）
 void walkApply(ExpressionNode& node, const VariableTable& table, const QString& function) {
     switch (node.kind()) {
@@ -75,38 +79,64 @@ void walkApply(ExpressionNode& node, const VariableTable& table, const QString& 
 
 } // namespace
 
-bool VariableTable::add(const VariableDecl& decl) {
-    if (decl.name.isEmpty()) return false;
+namespace {
+
+// 两份声明是否等价（同名重复声明是否无害）
+bool sameDeclaration(const VariableDecl& a, const VariableDecl& b) {
+    return a.type == b.type && a.scope == b.scope && a.dimension == b.dimension
+           && a.lengths == b.lengths && a.isConst == b.isConst
+           && a.isReference == b.isReference && a.isCharaData == b.isCharaData;
+}
+
+} // namespace
+
+VariableTable::DeclStatus VariableTable::addChecked(const VariableDecl& decl) {
+    if (decl.name.isEmpty()) return DeclStatus::Conflict;
+    const QString nameKey = nk(decl.name);
     if (decl.scope == VarScope::Local && !decl.function.isEmpty()) {
-        auto& fmap = m_locals[decl.function];
-        if (fmap.contains(decl.name)) return false;
-        fmap.insert(decl.name, decl);
+        auto& fmap = m_locals[nk(decl.function)];
+        const auto existing = fmap.constFind(nameKey);
+        if (existing != fmap.constEnd()) {
+            // first-wins：保留首次声明（含其维数/初值），后续重复声明不再覆盖，
+            // 否则 `#DIM A, 3` 之后再出现一个 `#DIM A` 会把数组尺寸抹掉。
+            return sameDeclaration(existing.value(), decl) ? DeclStatus::DuplicateSame
+                                                           : DeclStatus::Conflict;
+        }
+        fmap.insert(nameKey, decl);
         // 维护反向索引（唯一性用于无函数上下文时的类型解析）
-        const int c = m_localNameCount.value(decl.name, 0) + 1;
-        m_localNameCount.insert(decl.name, c);
-        if (c == 1) m_uniqueLocalType.insert(decl.name, decl.type);
-        else m_uniqueLocalType.remove(decl.name);
-        return true;
+        const int c = m_localNameCount.value(nameKey, 0) + 1;
+        m_localNameCount.insert(nameKey, c);
+        if (c == 1) m_uniqueLocalType.insert(nameKey, decl.type);
+        else m_uniqueLocalType.remove(nameKey);
+        return DeclStatus::Added;
     }
-    if (m_globals.contains(decl.name)) return false;
-    m_globals.insert(decl.name, decl);
-    return true;
+    const auto existing = m_globals.constFind(nameKey);
+    if (existing != m_globals.constEnd()) {
+        return sameDeclaration(existing.value(), decl) ? DeclStatus::DuplicateSame
+                                                       : DeclStatus::Conflict;
+    }
+    m_globals.insert(nameKey, decl);
+    return DeclStatus::Added;
+}
+
+bool VariableTable::add(const VariableDecl& decl) {
+    return addChecked(decl) == DeclStatus::Added;
 }
 
 const VariableDecl* VariableTable::find(const QString& name, const QString& function) const {
     if (!function.isEmpty()) {
-        const auto fit = m_locals.constFind(function);
+        const auto fit = m_locals.constFind(nk(function));
         if (fit != m_locals.constEnd()) {
-            const auto it = fit.value().constFind(name);
+            const auto it = fit.value().constFind(nk(name));
             if (it != fit.value().constEnd()) return &it.value();
         }
     }
-    const auto it = m_globals.constFind(name);
+    const auto it = m_globals.constFind(nk(name));
     return it == m_globals.constEnd() ? nullptr : &it.value();
 }
 
 bool VariableTable::contains(const QString& name) const {
-    return m_globals.contains(name) || m_localNameCount.contains(name);
+    return m_globals.contains(nk(name)) || m_localNameCount.contains(nk(name));
 }
 
 OperandType VariableTable::typeOf(const QString& name, const QString& function) const {
@@ -115,7 +145,7 @@ OperandType VariableTable::typeOf(const QString& name, const QString& function) 
     }
     if (function.isEmpty()) {
         // 无上下文：仅当该名字在全表局部中唯一出现时才采用（O(1) 反向索引）
-        const OperandType local = m_uniqueLocalType.value(name, OperandType::Unknown);
+        const OperandType local = m_uniqueLocalType.value(nk(name), OperandType::Unknown);
         if (isKnown(local)) return local;
     }
     // 用户未声明 -> 回退到系统变量表（FLAG/CFLAG/RESULTS/GLOBALS/…）
@@ -140,7 +170,7 @@ QList<VariableDecl> VariableTable::declarations() const {
 
 QList<VariableDecl> VariableTable::localsOf(const QString& function) const {
     QList<VariableDecl> out;
-    const auto it = m_locals.constFind(function);
+    const auto it = m_locals.constFind(nk(function));
     if (it != m_locals.constEnd()) {
         for (const VariableDecl& d : it.value()) out.append(d);
     }
@@ -148,12 +178,8 @@ QList<VariableDecl> VariableTable::localsOf(const QString& function) const {
 }
 
 bool VariableTable::constStr(const QString& name, QString& out) const {
-    auto it = m_constStr.constFind(name);
+    const auto it = m_constStr.constFind(nk(name));
     if (it != m_constStr.constEnd()) { out = it.value(); return true; }
-    // 大小写不敏感回退
-    for (auto i = m_constStr.constBegin(); i != m_constStr.constEnd(); ++i) {
-        if (i.key().compare(name, Qt::CaseInsensitive) == 0) { out = i.value(); return true; }
-    }
     return false;
 }
 
@@ -173,20 +199,16 @@ void VariableTable::applyTypes(ExpressionNode& node, const VariableTable& table,
 // 常数（#DIM CONST）与维数求值
 // ---------------------------------------------------------------------------
 void VariableTable::setConstInt(const QString& name, qint64 value) {
-    if (!name.isEmpty()) m_constInt.insert(name, value);
+    if (!name.isEmpty()) m_constInt.insert(nk(name), value);
 }
 
 void VariableTable::setConstStr(const QString& name, const QString& value) {
-    if (!name.isEmpty()) m_constStr.insert(name, value);
+    if (!name.isEmpty()) m_constStr.insert(nk(name), value);
 }
 
 bool VariableTable::constInt(const QString& name, qint64& out) const {
-    const auto it = m_constInt.constFind(name);
+    const auto it = m_constInt.constFind(nk(name));
     if (it != m_constInt.constEnd()) { out = it.value(); return true; }
-    // 大小写不敏感回退（Emuera 标识符不区分大小写）
-    for (auto i = m_constInt.constBegin(); i != m_constInt.constEnd(); ++i) {
-        if (i.key().compare(name, Qt::CaseInsensitive) == 0) { out = i.value(); return true; }
-    }
     return false;
 }
 
@@ -229,15 +251,14 @@ void VariableTable::resolveDimensions() {
 
 void VariableTable::setConstArray(const QString& name, const QList<qint64>& values)
 {
-    m_constArray.insert(name, values);
-    if (!values.isEmpty()) m_constInt.insert(name, values.first());
+    m_constArray.insert(nk(name), values);
+    if (!values.isEmpty()) m_constInt.insert(nk(name), values.first());
 }
 
 bool VariableTable::constArrayAt(const QString& name, int index, qint64& out) const
 {
-    auto it = m_constArray.constFind(name);
+    const auto it = m_constArray.constFind(nk(name));
     if (it == m_constArray.constEnd()) return false;
-    if (!m_constArray.constFind(name.toUpper()).key().isEmpty()) { /* 大小写不敏感回退 */ }
     if (index < 0 || index >= it.value().size()) return false;
     out = it.value().at(index);
     return true;
@@ -245,6 +266,6 @@ bool VariableTable::constArrayAt(const QString& name, int index, qint64& out) co
 
 int VariableTable::constArraySize(const QString& name) const
 {
-    auto it = m_constArray.constFind(name);
+    const auto it = m_constArray.constFind(nk(name));
     return (it == m_constArray.constEnd()) ? 0 : it.value().size();
 }

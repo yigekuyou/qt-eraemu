@@ -48,7 +48,12 @@ public:
 
     // 一个「区块长」（列）等于多少像素 —— QML 侧也应取同一个值
     [[nodiscard]] int columnWidthPx() const { return qMax(1, m_fontSize / 2); }
-    // root 全平面有多少列 / 多少行（行数由容器按高度决定）
+    // 逻辑网格固定后，窗口变化只改变 QML 的像素格子大小。
+    void setGridColumns(int columns) { if (columns > 0) m_gridColumns = columns; }
+    [[nodiscard]] int gridColumns() const { return m_gridColumns; }
+    void setGridRows(int rows) { if (rows > 0) m_gridRows = rows; }
+    [[nodiscard]] int gridRows() const { return m_gridRows; }
+    // root 全平面的固定列数
     [[nodiscard]] int maxCols() const;
 
     // ---- 单位（网格）换算 ----
@@ -74,6 +79,8 @@ private:
     int  m_fontSize = 18;
     int  m_lineHeight = 19;
     int  m_windowWidth = 760;
+    int  m_gridColumns = 80;
+    int  m_gridRows = 25;
     bool m_buttonWrap = true;
     bool m_compatiLinefeed = false;
 };

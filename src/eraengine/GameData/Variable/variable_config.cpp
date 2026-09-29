@@ -79,6 +79,7 @@ void VariableConfig::loadDefaults()
     // 1D system variables
     variableSizes["DAY"] = VariableSizeInfo{1000, QPair<int, int>(), QVector<int>(), false, false};
     variableSizes["MONEY"] = VariableSizeInfo{1000, QPair<int, int>(), QVector<int>(), false, false};
+    variableSizes["TIME"] = VariableSizeInfo{1000, QPair<int, int>(), QVector<int>(), false, false};
     variableSizes["ITEM"] = VariableSizeInfo{1000, QPair<int, int>(), QVector<int>(), false, false};
     variableSizes["ITEMSALES"] = VariableSizeInfo{1000, QPair<int, int>(), QVector<int>(), false, false};
     variableSizes["NOITEM"] = VariableSizeInfo{1000, QPair<int, int>(), QVector<int>(), false, false};

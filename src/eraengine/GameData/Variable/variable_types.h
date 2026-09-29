@@ -144,6 +144,7 @@ struct SystemVariableEntry {
 inline const QList<SystemVariableEntry> SYSTEM_VARIABLES = {
 		{"DAY",       {VariableTypes::Type::Integer, VariableTypes::Scope::Global, VariableTypes::Dimension::OneD, VariableTypes::Flag::CanForbid, 1000, 0, 0, false, false, true}},
 		{"MONEY",     {VariableTypes::Type::Integer, VariableTypes::Scope::Global, VariableTypes::Dimension::OneD, VariableTypes::Flag::CanForbid, 1000, 0, 0, false, false, true}},
+		{"TIME",      {VariableTypes::Type::Integer, VariableTypes::Scope::Global, VariableTypes::Dimension::OneD, VariableTypes::Flag::CanForbid, 1000, 0, 0, false, false, true}},
 		{"ITEM",      {VariableTypes::Type::Integer, VariableTypes::Scope::Global, VariableTypes::Dimension::OneD, VariableTypes::Flag::CanForbid, 1000, 0, 0, false, false, true}},
 		{"ITEMSALES", {VariableTypes::Type::Integer, VariableTypes::Scope::Global, VariableTypes::Dimension::OneD, VariableTypes::Flag::CanForbid, 1000, 0, 0, false, false, true}},
 		{"NOITEM",    {VariableTypes::Type::Integer, VariableTypes::Scope::Global, VariableTypes::Dimension::OneD, VariableTypes::Flag::CanForbid, 1000, 0, 0, false, false, true}},

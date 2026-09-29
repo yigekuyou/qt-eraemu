@@ -55,6 +55,22 @@ public:
 		Q_INVOKABLE qint64 getCharaInt(const QString &name, int charaId, int index) const;
 		Q_INVOKABLE void setCharaInt3D(const QString &name, int charaId, int x, int y, qint64 value);
 		Q_INVOKABLE qint64 getCharaInt3D(const QString &name, int charaId, int x, int y) const;
+		// 角色字符串变量（CSTR / NAME / 用户 #DIMS CHARADATA）
+		Q_INVOKABLE void setCharaStr(const QString &name, int charaId, int index, const QString &value);
+		Q_INVOKABLE QString getCharaStr(const QString &name, int charaId, int index) const;
+
+		// ================= 角色数据变量（CHARADATA）识别与实参规约 =================
+		// Emuera 的角色变量写作 `VAR:角色:下标…`；角色维省略时取 TARGET。
+		// 内建角色变量（CHARACTER_VARIABLES）在构造时登记；用户 `#DIM(S) CHARADATA X`
+		// 由 EraParseTable 登记。elementDimension 是「每个角色的元素维数」
+		// （NAME 之类标量为 0，CFLAG 为 1，二维角色数组为 2）。
+		void registerCharaDataVariable(const QString &name, bool isString, int elementDimension);
+		[[nodiscard]] bool isCharaDataVariable(const QString &name) const;
+		[[nodiscard]] bool isCharaDataString(const QString &name) const;
+		[[nodiscard]] int charaDataDimension(const QString &name) const;
+		// 按 C# VariableParser.ReduceVariable 的实参规约得到 (角色号, 元素下标)
+		void reduceCharaArgs(const QString &name, const QList<int> &indices,
+		                     int &charaId, QList<int> &elements) const;
 
 		// ================= 本地变量 =================
 		Q_INVOKABLE void setLocalInt(int index, qint64 value);
@@ -96,9 +112,12 @@ public:
             if (next == m_privateNames) return;
             m_privateNames = std::move(next);
         }
+        // Emuera 的 `大文字小文字の違いを無視する:YES`（ICVariable）语义：
+        // 标识符大小写不敏感，所有存储键统一用大写，写 A 与读 a 落到同一槽位。
+        // 否则 `Mark`/`MARK` 会被当成两个变量，表现为「变量似乎不可变」。
         QString storageName(const QString& name) const {
             const QString upper = name.toUpper();
-            return m_references.value(upper, m_privateNames.value(upper, name));
+            return m_references.value(upper, m_privateNames.value(upper, upper));
         }
         void setReference(const QString& name, const QString& targetStorage) {
             m_references.insert(name.toUpper(), targetStorage);
@@ -115,6 +134,8 @@ public:
 		Q_INVOKABLE qint64 getDay(int index) const;
 		Q_INVOKABLE void setMoney(int index, qint64 value);
 		Q_INVOKABLE qint64 getMoney(int index) const;
+		Q_INVOKABLE void setTime(int index, qint64 value);
+		Q_INVOKABLE qint64 getTime(int index) const;
 		Q_INVOKABLE void setItem(int index, qint64 value);
 		Q_INVOKABLE qint64 getItem(int index) const;
 		Q_INVOKABLE void setItemsales(int index, qint64 value);
@@ -247,6 +268,7 @@ private:
 		// System variable containers (1D arrays)
 		QList<qint64> m_day;
 		QList<qint64> m_money;
+		QList<qint64> m_time;
 		QList<qint64> m_item;
 		QList<qint64> m_itemsales;
 		QList<qint64> m_noitem;
@@ -273,6 +295,10 @@ private:
 		QList<qint64> m_a;
 		QList<qint64> m_b;
 		QList<qint64> m_c;
+
+		// 角色数据变量元信息：名字(大写) -> {是否字符串, 元素维数}
+		struct CharaDataInfo { bool isString = false; int dimension = 1; };
+		QHash<QString, CharaDataInfo> m_charaDataVars;
 
 		// Variable type information and identifiers
 		QHash<QString, VariableTypeInfo> m_variableTypes;

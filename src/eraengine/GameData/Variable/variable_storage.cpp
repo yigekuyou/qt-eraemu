@@ -25,6 +25,7 @@ VariableStorage::VariableStorage(QObject *parent)
 		// Initialize system variable containers
 		m_day.fill(0, 1000);
 		m_money.fill(0, 1000);
+		m_time.fill(0, 1000);
 		m_item.fill(0, 1000);
 		m_itemsales.fill(0, 1000);
 		m_noitem.fill(0, 1000);
@@ -61,6 +62,26 @@ VariableStorage::VariableStorage(QObject *parent)
 				m_variableTypes[entry.name] = entry.info;
 				m_variableIdentifiers[entry.name] = VariableIdentifier(entry.name, entry.info);
 		}
+
+		// 内建角色数据变量：`CFLAG:角色:下标` 必须落到角色存储，否则所有元素
+		// 会挤在同一槽位而互相覆盖（表现为「变量似乎不可变」）。
+		// 数值角色变量 —— 标量（元素维 0）与一维数组（元素维 1）。
+		// 对照 C# VariableCode：__CHARACTER_DATA__ 且非 __ARRAY_2D__。
+		for (const char *name : {"ISASSI", "NO"}) {
+				registerCharaDataVariable(QString::fromLatin1(name), false, 0);
+		}
+		for (const char *name : {"BASE", "MAXBASE", "ABL", "TALENT", "EXP", "MARK", "PALAM",
+		                         "SOURCE", "EX", "CFLAG", "JUEL", "RELATION", "EQUIP", "TEQUIP",
+		                         "STAIN", "GOTJUEL", "NOWEX", "DOWNBASE", "CUP", "CDOWN", "TCVAR"}) {
+				registerCharaDataVariable(QString::fromLatin1(name), false, 1);
+		}
+		// 二维角色数组 CDFLAG:角色:x:y
+		registerCharaDataVariable(QStringLiteral("CDFLAG"), false, 2);
+		// 内建角色字符串变量：标量（NAME/CALLNAME/…）+ 数组（CSTR）
+		for (const char *name : {"NAME", "CALLNAME", "NICKNAME", "MASTERNAME"}) {
+				registerCharaDataVariable(QString::fromLatin1(name), true, 0);
+		}
+		registerCharaDataVariable(QStringLiteral("CSTR"), true, 1);
 }
 
 // 从 VariableSize.csv 读取系统数组尺寸并应用
@@ -77,6 +98,7 @@ bool VariableStorage::loadVariableSizes(const QString& csvPath)
 		};
 		resize1D(QStringLiteral("DAY"), m_day);
 		resize1D(QStringLiteral("MONEY"), m_money);
+		resize1D(QStringLiteral("TIME"), m_time);
 		resize1D(QStringLiteral("ITEM"), m_item);
 		resize1D(QStringLiteral("ITEMSALES"), m_itemsales);
 		resize1D(QStringLiteral("NOITEM"), m_noitem);
@@ -176,7 +198,7 @@ void VariableStorage::setCharaInt(const QString &name, int charaId, int index, q
 {
 		if (charaId < 0 || index < 0) return;
 
-		auto &charaList = m_charaIntVars[name];
+		auto &charaList = m_charaIntVars[storageName(name)];
 		if (charaList.size() <= charaId) {
 				charaList.resize(charaId + 1);
 		}
@@ -191,7 +213,7 @@ qint64 VariableStorage::getCharaInt(const QString &name, int charaId, int index)
 {
 		if (charaId < 0 || index < 0) return 0;
 
-		auto it = m_charaIntVars.constFind(name);
+		auto it = m_charaIntVars.constFind(storageName(name));
 		if (it != m_charaIntVars.constEnd() && charaId < it.value().size()) {
 				const auto &vec = it.value().at(charaId);
 				if (index < vec.size()) {
@@ -199,6 +221,80 @@ qint64 VariableStorage::getCharaInt(const QString &name, int charaId, int index)
 				}
 		}
 		return 0;
+}
+
+// ================= 角色字符串变量 =================
+void VariableStorage::setCharaStr(const QString &name, int charaId, int index, const QString &value)
+{
+		if (charaId < 0 || index < 0) return;
+		auto &charaList = m_charaStrVars[storageName(name)];
+		if (charaList.size() <= charaId) charaList.resize(charaId + 1);
+		auto &vec = charaList[charaId];
+		if (vec.size() <= index) vec.resize(index + 1);
+		vec[index] = value;
+}
+
+QString VariableStorage::getCharaStr(const QString &name, int charaId, int index) const
+{
+		if (charaId < 0 || index < 0) return QString();
+		auto it = m_charaStrVars.constFind(storageName(name));
+		if (it != m_charaStrVars.constEnd() && charaId < it.value().size()) {
+				const auto &vec = it.value().at(charaId);
+				if (index < vec.size()) return vec.at(index);
+		}
+		return QString();
+}
+
+// ================= 角色数据变量（CHARADATA） =================
+void VariableStorage::registerCharaDataVariable(const QString &name, bool isString,
+                                                int elementDimension)
+{
+		if (name.isEmpty()) return;
+		CharaDataInfo info;
+		info.isString = isString;
+		info.dimension = qBound(0, elementDimension, 2);
+		m_charaDataVars.insert(name.toUpper(), info);
+}
+
+bool VariableStorage::isCharaDataVariable(const QString &name) const
+{
+		return m_charaDataVars.contains(name.toUpper());
+}
+
+bool VariableStorage::isCharaDataString(const QString &name) const
+{
+		const auto it = m_charaDataVars.constFind(name.toUpper());
+		return it != m_charaDataVars.constEnd() && it.value().isString;
+}
+
+int VariableStorage::charaDataDimension(const QString &name) const
+{
+		const auto it = m_charaDataVars.constFind(name.toUpper());
+		return it == m_charaDataVars.constEnd() ? 0 : it.value().dimension;
+}
+
+// 实参规约（对齐 C# VariableParser.ReduceVariable）：
+//   · 参数足够（>= 1 + 元素维数）→ 第 1 个是角色号，其余是元素下标
+//   · 参数不足（省略了角色维）→ 角色号取 TARGET，其余是元素下标
+//   · 完全没有参数 → 角色号取 TARGET，元素下标补 0
+void VariableStorage::reduceCharaArgs(const QString &name, const QList<int> &indices,
+                                      int &charaId, QList<int> &elements) const
+{
+		const int dim = charaDataDimension(name);
+		const int total = dim + 1;
+		elements.clear();
+		int offset = 0;
+		if (indices.size() >= total) {
+				charaId = indices.at(0);
+				offset = 1;
+		} else {
+				charaId = static_cast<int>(getSystemVariable(QStringLiteral("TARGET"), 0));
+		}
+		if (charaId < 0) charaId = 0;
+		for (int i = 0; i < dim; ++i) {
+				const int src = offset + i;
+				elements.append(src < indices.size() ? indices.at(src) : 0);
+		}
 }
 
 // ================= 本地变量实现 =================
@@ -260,6 +356,9 @@ qint64 VariableStorage::getDay(int index) const { return (index >= 0 && index < 
 
 void VariableStorage::setMoney(int index, qint64 value) { if (index >= 0 && index < m_money.size()) m_money[index] = value; }
 qint64 VariableStorage::getMoney(int index) const { return (index >= 0 && index < m_money.size()) ? m_money.at(index) : 0; }
+
+void VariableStorage::setTime(int index, qint64 value) { if (index >= 0 && index < m_time.size()) m_time[index] = value; }
+qint64 VariableStorage::getTime(int index) const { return (index >= 0 && index < m_time.size()) ? m_time.at(index) : 0; }
 
 void VariableStorage::setItem(int index, qint64 value) { if (index >= 0 && index < m_item.size()) m_item[index] = value; }
 qint64 VariableStorage::getItem(int index) const { return (index >= 0 && index < m_item.size()) ? m_item.at(index) : 0; }
@@ -342,68 +441,68 @@ qint64 VariableStorage::getC(int index) const { return (index >= 0 && index < m_
 // ================= Type checking implementations =================
 bool VariableStorage::isVariableInteger(const QString &name) const
 {
-		auto it = m_variableIdentifiers.constFind(name);
+		auto it = m_variableIdentifiers.constFind(name.toUpper());
 		return (it != m_variableIdentifiers.constEnd()) ? it.value().isInteger() : false;
 }
 
 bool VariableStorage::isVariableString(const QString &name) const
 {
-		auto it = m_variableIdentifiers.constFind(name);
+		auto it = m_variableIdentifiers.constFind(name.toUpper());
 		return (it != m_variableIdentifiers.constEnd()) ? it.value().isString() : false;
 }
 
 bool VariableStorage::isVariableLocal(const QString &name) const
 {
-		auto it = m_variableIdentifiers.constFind(name);
+		auto it = m_variableIdentifiers.constFind(name.toUpper());
 		return (it != m_variableIdentifiers.constEnd()) ? it.value().isLocal() : false;
 }
 
 bool VariableStorage::isVariableGlobal(const QString &name) const
 {
-		auto it = m_variableIdentifiers.constFind(name);
+		auto it = m_variableIdentifiers.constFind(name.toUpper());
 		return (it != m_variableIdentifiers.constEnd()) ? it.value().isGlobal() : false;
 }
 
 bool VariableStorage::isVariableCharacterData(const QString &name) const
 {
-		auto it = m_variableIdentifiers.constFind(name);
+		auto it = m_variableIdentifiers.constFind(name.toUpper());
 		return (it != m_variableIdentifiers.constEnd()) ? it.value().isCharacterData() : false;
 }
 
 bool VariableStorage::isVariable1D(const QString &name) const
 {
-		auto it = m_variableIdentifiers.constFind(name);
+		auto it = m_variableIdentifiers.constFind(name.toUpper());
 		return (it != m_variableIdentifiers.constEnd()) ? it.value().is1D() : false;
 }
 
 bool VariableStorage::isVariable2D(const QString &name) const
 {
-		auto it = m_variableIdentifiers.constFind(name);
+		auto it = m_variableIdentifiers.constFind(name.toUpper());
 		return (it != m_variableIdentifiers.constEnd()) ? it.value().is2D() : false;
 }
 
 bool VariableStorage::isVariable3D(const QString &name) const
 {
-		auto it = m_variableIdentifiers.constFind(name);
+		auto it = m_variableIdentifiers.constFind(name.toUpper());
 		return (it != m_variableIdentifiers.constEnd()) ? it.value().is3D() : false;
 }
 
 // ================= Character variable type checking implementations =================
 bool VariableStorage::isCharaVariableInteger(const QString &name) const
 {
-		auto it = m_variableIdentifiers.constFind(name);
+		auto it = m_variableIdentifiers.constFind(name.toUpper());
 		return (it != m_variableIdentifiers.constEnd()) ? (it.value().isInteger() && it.value().isCharacterData()) : false;
 }
 
 bool VariableStorage::isCharaVariableString(const QString &name) const
 {
-		auto it = m_variableIdentifiers.constFind(name);
+		auto it = m_variableIdentifiers.constFind(name.toUpper());
 		return (it != m_variableIdentifiers.constEnd()) ? (it.value().isString() && it.value().isCharacterData()) : false;
 }
 
 bool VariableStorage::isCharaVariable1D(const QString &name) const
 {
-		auto it = m_variableIdentifiers.constFind(name);
+		auto it = m_variableIdentifiers.constFind(name.toUpper());
 		return (it != m_variableIdentifiers.constEnd()) ? (it.value().is1D() && it.value().isCharacterData()) : false;
 }
 
@@ -501,7 +600,7 @@ qint64 VariableStorage::getGlobalInt2D(const QString &name, int x, int y) const
 void VariableStorage::setCharaInt3D(const QString &name, int charaId, int x, int y, qint64 value)
 {
 		if (charaId < 0 || x < 0 || y < 0) return;
-		auto &charaList = m_charaIntVars3D[name];
+		auto &charaList = m_charaIntVars3D[storageName(name)];
 		if (charaList.size() <= charaId) charaList.resize(charaId + 1);
 		auto &grid2D = charaList[charaId];
 		if (grid2D.size() <= x) grid2D.resize(x + 1);
@@ -513,7 +612,7 @@ void VariableStorage::setCharaInt3D(const QString &name, int charaId, int x, int
 qint64 VariableStorage::getCharaInt3D(const QString &name, int charaId, int x, int y) const
 {
 		if (charaId < 0 || x < 0 || y < 0) return 0;
-		auto it = m_charaIntVars3D.constFind(name);
+		auto it = m_charaIntVars3D.constFind(storageName(name));
 		if (it != m_charaIntVars3D.constEnd() && charaId < it.value().size()) {
 				const auto &grid2D = it.value().at(charaId);
 				if (x < grid2D.size()) {
@@ -545,42 +644,45 @@ bool VariableStorage::loadVariables(const QString &)
 bool VariableStorage::hasSystemVariable(const QString &name) const
 {
 		static const QSet<QString> kNames = {
-QStringLiteral("DAY"),QStringLiteral("MONEY"),QStringLiteral("ITEM"),QStringLiteral("ITEMSALES"),QStringLiteral("NOITEM"),QStringLiteral("BOUGHT"),QStringLiteral("PBAND"),QStringLiteral("FLAG"),QStringLiteral("TFLAG"),QStringLiteral("TARGET"),QStringLiteral("MASTER"),QStringLiteral("PLAYER"),QStringLiteral("ASSI"),QStringLiteral("ASSIPLAY"),QStringLiteral("UP"),QStringLiteral("DOWN"),QStringLiteral("LOSEBASE"),QStringLiteral("PALAMLV"),QStringLiteral("EXPLV"),QStringLiteral("EJAC"),QStringLiteral("PREVCOM"),QStringLiteral("SELECTCOM"),QStringLiteral("NEXTCOM"),QStringLiteral("RESULT"),QStringLiteral("COUNT"),QStringLiteral("A"),QStringLiteral("B"),QStringLiteral("C")
+QStringLiteral("DAY"),QStringLiteral("MONEY"),QStringLiteral("TIME"),QStringLiteral("ITEM"),QStringLiteral("ITEMSALES"),QStringLiteral("NOITEM"),QStringLiteral("BOUGHT"),QStringLiteral("PBAND"),QStringLiteral("FLAG"),QStringLiteral("TFLAG"),QStringLiteral("TARGET"),QStringLiteral("MASTER"),QStringLiteral("PLAYER"),QStringLiteral("ASSI"),QStringLiteral("ASSIPLAY"),QStringLiteral("UP"),QStringLiteral("DOWN"),QStringLiteral("LOSEBASE"),QStringLiteral("PALAMLV"),QStringLiteral("EXPLV"),QStringLiteral("EJAC"),QStringLiteral("PREVCOM"),QStringLiteral("SELECTCOM"),QStringLiteral("NEXTCOM"),QStringLiteral("RESULT"),QStringLiteral("COUNT"),QStringLiteral("A"),QStringLiteral("B"),QStringLiteral("C")
 		};
 		return kNames.contains(name.toUpper());
 }
 
 qint64 VariableStorage::getSystemVariable(const QString &name, int index) const
 {
+		// 系统变量名同样大小写不敏感（ICVariable）
+		const QString key = name.toUpper();
 		// Check for system variables and call appropriate getter
-		if (name == "DAY") return getDay(index);
-		if (name == "MONEY") return getMoney(index);
-		if (name == "ITEM") return getItem(index);
-		if (name == "ITEMSALES") return getItemsales(index);
-		if (name == "NOITEM") return getNoitem(index);
-		if (name == "BOUGHT") return getBought(index);
-		if (name == "PBAND") return getPband(index);
-		if (name == "FLAG") return getFlag(index);
-		if (name == "TFLAG") return getTflag(index);
-		if (name == "TARGET") return getTarget(index);
-		if (name == "MASTER") return getMaster(index);
-		if (name == "PLAYER") return getPlayer(index);
-		if (name == "ASSI") return getAssi(index);
-		if (name == "ASSIPLAY") return getAssiplay(index);
-		if (name == "UP") return getUp(index);
-		if (name == "DOWN") return getDown(index);
-		if (name == "LOSEBASE") return getLosebase(index);
-		if (name == "PALAMLV") return getPalamlv(index);
-		if (name == "EXPLV") return getExplv(index);
-		if (name == "EJAC") return getEjac(index);
-		if (name == "PREVCOM") return getPrevcom(index);
-		if (name == "SELECTCOM") return getSelectcom(index);
-		if (name == "NEXTCOM") return getNextcom(index);
-		if (name == "RESULT") return getResult(index);
-		if (name == "COUNT") return getCount(index);
-		if (name == "A") return getA(index);
-		if (name == "B") return getB(index);
-		if (name == "C") return getC(index);
+		if (key == "DAY") return getDay(index);
+		if (key == "MONEY") return getMoney(index);
+		if (key == "TIME") return getTime(index);
+		if (key == "ITEM") return getItem(index);
+		if (key == "ITEMSALES") return getItemsales(index);
+		if (key == "NOITEM") return getNoitem(index);
+		if (key == "BOUGHT") return getBought(index);
+		if (key == "PBAND") return getPband(index);
+		if (key == "FLAG") return getFlag(index);
+		if (key == "TFLAG") return getTflag(index);
+		if (key == "TARGET") return getTarget(index);
+		if (key == "MASTER") return getMaster(index);
+		if (key == "PLAYER") return getPlayer(index);
+		if (key == "ASSI") return getAssi(index);
+		if (key == "ASSIPLAY") return getAssiplay(index);
+		if (key == "UP") return getUp(index);
+		if (key == "DOWN") return getDown(index);
+		if (key == "LOSEBASE") return getLosebase(index);
+		if (key == "PALAMLV") return getPalamlv(index);
+		if (key == "EXPLV") return getExplv(index);
+		if (key == "EJAC") return getEjac(index);
+		if (key == "PREVCOM") return getPrevcom(index);
+		if (key == "SELECTCOM") return getSelectcom(index);
+		if (key == "NEXTCOM") return getNextcom(index);
+		if (key == "RESULT") return getResult(index);
+		if (key == "COUNT") return getCount(index);
+		if (key == "A") return getA(index);
+		if (key == "B") return getB(index);
+		if (key == "C") return getC(index);
 		
 		// Not a system variable, return 0
 		return 0;
@@ -588,35 +690,38 @@ qint64 VariableStorage::getSystemVariable(const QString &name, int index) const
 
 void VariableStorage::setSystemVariable(const QString &name, int index, qint64 value)
 {
+		// 系统变量名同样大小写不敏感（ICVariable）
+		const QString key = name.toUpper();
 		// Check for system variables and call appropriate setter
-		if (name == "DAY") { setDay(index, value); return; }
-		if (name == "MONEY") { setMoney(index, value); return; }
-		if (name == "ITEM") { setItem(index, value); return; }
-		if (name == "ITEMSALES") { setItemsales(index, value); return; }
-		if (name == "NOITEM") { setNoitem(index, value); return; }
-		if (name == "BOUGHT") { setBought(index, value); return; }
-		if (name == "PBAND") { setPband(index, value); return; }
-		if (name == "FLAG") { setFlag(index, value); return; }
-		if (name == "TFLAG") { setTflag(index, value); return; }
-		if (name == "TARGET") { setTarget(index, value); return; }
-		if (name == "MASTER") { setMaster(index, value); return; }
-		if (name == "PLAYER") { setPlayer(index, value); return; }
-		if (name == "ASSI") { setAssi(index, value); return; }
-		if (name == "ASSIPLAY") { setAssiplay(index, value); return; }
-		if (name == "UP") { setUp(index, value); return; }
-		if (name == "DOWN") { setDown(index, value); return; }
-		if (name == "LOSEBASE") { setLosebase(index, value); return; }
-		if (name == "PALAMLV") { setPalamlv(index, value); return; }
-		if (name == "EXPLV") { setExplv(index, value); return; }
-		if (name == "EJAC") { setEjac(index, value); return; }
-		if (name == "PREVCOM") { setPrevcom(index, value); return; }
-		if (name == "SELECTCOM") { setSelectcom(index, value); return; }
-		if (name == "NEXTCOM") { setNextcom(index, value); return; }
-		if (name == "RESULT") { setResult(index, value); return; }
-		if (name == "COUNT") { setCount(index, value); return; }
-		if (name == "A") { setA(index, value); return; }
-		if (name == "B") { setB(index, value); return; }
-		if (name == "C") { setC(index, value); return; }
+		if (key == "DAY") { setDay(index, value); return; }
+		if (key == "MONEY") { setMoney(index, value); return; }
+		if (key == "TIME") { setTime(index, value); return; }
+		if (key == "ITEM") { setItem(index, value); return; }
+		if (key == "ITEMSALES") { setItemsales(index, value); return; }
+		if (key == "NOITEM") { setNoitem(index, value); return; }
+		if (key == "BOUGHT") { setBought(index, value); return; }
+		if (key == "PBAND") { setPband(index, value); return; }
+		if (key == "FLAG") { setFlag(index, value); return; }
+		if (key == "TFLAG") { setTflag(index, value); return; }
+		if (key == "TARGET") { setTarget(index, value); return; }
+		if (key == "MASTER") { setMaster(index, value); return; }
+		if (key == "PLAYER") { setPlayer(index, value); return; }
+		if (key == "ASSI") { setAssi(index, value); return; }
+		if (key == "ASSIPLAY") { setAssiplay(index, value); return; }
+		if (key == "UP") { setUp(index, value); return; }
+		if (key == "DOWN") { setDown(index, value); return; }
+		if (key == "LOSEBASE") { setLosebase(index, value); return; }
+		if (key == "PALAMLV") { setPalamlv(index, value); return; }
+		if (key == "EXPLV") { setExplv(index, value); return; }
+		if (key == "EJAC") { setEjac(index, value); return; }
+		if (key == "PREVCOM") { setPrevcom(index, value); return; }
+		if (key == "SELECTCOM") { setSelectcom(index, value); return; }
+		if (key == "NEXTCOM") { setNextcom(index, value); return; }
+		if (key == "RESULT") { setResult(index, value); return; }
+		if (key == "COUNT") { setCount(index, value); return; }
+		if (key == "A") { setA(index, value); return; }
+		if (key == "B") { setB(index, value); return; }
+		if (key == "C") { setC(index, value); return; }
 }
 
 // ================= Expression Evaluation =================

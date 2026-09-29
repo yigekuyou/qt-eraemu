@@ -20,6 +20,7 @@
 
 #include <QQuickImageProvider>
 #include <QString>
+#include <QHash>
 #include "Content/csv_loader.h"
 // ---------------------------------------------------------------------------
 // ResourceImageProvider —— 供 QML 用 `Image { source: "image://emuera/<name>" }`
@@ -60,6 +61,10 @@ public:
 
 private:
     static QString s_root;
+    static QHash<QString, Sprite> s_atlas;
+    static QString s_atlasRoot;
+
+    static void ensureAtlasLoaded(const QString& root);
 };
 
 #endif // RESOURCE_IMAGE_PROVIDER_H

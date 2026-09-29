@@ -60,6 +60,13 @@ int main(int argc, char* argv[]) {
     writeImage(QDir(root).filePath(QStringLiteral("resources/face_01.png")));
     writeImage(QDir(root).filePath(QStringLiteral("bg.jpg")));
     writeImage(QDir(root).filePath(QStringLiteral("resources/icon.bmp")));
+    writeImage(QDir(root).filePath(QStringLiteral("resources/服_笑顔.webp")));
+    writeImage(QDir(root).filePath(QStringLiteral("resources/title.webp")));
+    {
+        QFile atlas(QDir(root).filePath(QStringLiteral("resources/list.csv")));
+        if (atlas.open(QIODevice::WriteOnly | QIODevice::Text))
+            atlas.write(QByteArrayLiteral("TW_title004,title.webp,0,1,2,2\n"));
+    }
 
     qDebug() << "\n1) 资源名解析";
     check(ResourceImageProvider::resolvePath(QStringLiteral("face_01"), root)
@@ -77,12 +84,23 @@ int main(int argc, char* argv[]) {
     check(ResourceImageProvider::resolvePath(QStringLiteral("face_01.png?x=1"), root)
               == QDir(root).filePath(QStringLiteral("resources/face_01.png")),
           "去查询串");
+    check(ResourceImageProvider::resolvePath(QStringLiteral("%E6%9C%8D_%E7%AC%91%E9%A1%94"), root)
+              == QDir(root).filePath(QStringLiteral("resources/服_笑顔.webp")),
+          "URL 编码的日文资源名");
     check(ResourceImageProvider::resolvePath(QStringLiteral("nope"), root).isEmpty(),
           "不存在的资源 -> 空");
     check(ResourceImageProvider::resolvePath(QStringLiteral("face_01"), QString()).isEmpty(),
           "根目录为空 -> 空");
 
     qDebug() << "\n2) requestImage";
+    {
+        ResourceImageProvider::setRoot(root);
+        ResourceImageProvider prov;
+        QSize atlasSize;
+        const QImage atlasImage = prov.requestImage(QStringLiteral("TW_title004"), &atlasSize, QSize());
+        check(!atlasImage.isNull(), "list.csv 图集资源返回有效图片");
+        check(atlasSize == QSize(2, 2), "图集资源按 CSV 裁剪尺寸");
+    }
     {
         ResourceImageProvider::setRoot(root);
         ResourceImageProvider prov;

@@ -138,9 +138,12 @@ Item {
         anchors.left: parent.left
         anchors.verticalCenter: parent.verticalCenter
         source: (visible && block.blockData && block.blockData.text)
-                    ? ("image://emuera/" + block.blockData.text) : ""
-        width: block.width
-        height: block.height
+                    ? ("image://emuera/" + encodeURIComponent(block.blockData.text)) : ""
+        // ConsoleLayout supplies grid dimensions.  Keep the Image item at the
+        // same size as its span so a loaded resource cannot paint into the
+        // following line or leave a zero-sized QML item.
+        width: Math.max(1, block.width)
+        height: Math.max(1, block.height)
         fillMode: Image.PreserveAspectFit
         smooth: true
         asynchronous: true

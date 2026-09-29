@@ -345,8 +345,14 @@ void EraEngine::loadAsync(const QString& directory)
 		if (m_gameDirectory != dir) {
 				m_gameDirectory = dir;
 				m_fileSystem.setRootDir(dir);
+				m_guiManager.setGameDirectory(dir);
+				m_guiManager.setStartDirectory(dir);
 				emit gameDirectoryChanged();
 		}
+		// loadAsync() is the normal QML loading path. Keep the image provider in
+		// sync here as well as in setGameDirectory(), otherwise image://emuera
+		// requests still point at the previous game (or at an empty root).
+		ResourceImageProvider::setRoot(dir);
 		reloadAsync();
 }
 

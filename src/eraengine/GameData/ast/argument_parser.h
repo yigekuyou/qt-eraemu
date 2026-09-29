@@ -79,7 +79,8 @@ inline constexpr auto kInstructionSpecs = std::to_array<InstructionSpec>({
     {"PRINTL",       ArgKind::Raw,           0,  -1},
     {"PRINTV",       ArgKind::PrintV,        1,  -1},
     {"PRINTS",       ArgKind::PrintV,        1,  -1},
-    {"PRINTBUTTON",  ArgKind::Expressions,   2,  3},   // <文字列式>,<数式>(,<tooltip>)
+    {"PRINT_IMG",    ArgKind::StrExpression, 1,  1},   // C# PRINT_IMG: resource string expression
+    {"PRINTBUTTON",  ArgKind::Button,        2,  3},   // <文字列式>,<数式>(,<tooltip>)
     {"PRINTDATA",    ArgKind::PrintData,     0,  -1},
     {"DRAWLINE",     ArgKind::Void,          0,  0},
     {"CLEARLINE",    ArgKind::IntExpression, 0,  1},

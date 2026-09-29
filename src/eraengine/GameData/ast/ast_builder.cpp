@@ -209,6 +209,7 @@ bool AstBuilder::isKnownInstructionName(const QString& upperName) {
         "FORM", "CHKFONT", "SETCOLOR", "RESETCOLOR", "ALIGNMENT", "REDRAW",
         "NEWLINE", "PRINTDATA", "PRINTDATAL", "PRINTDATAW", "PRINTBUTTONLC",
         "DOUBLEPRINT", "DEBUGPRINT", "HTML_PRINT", "HTML_TAGSPLIT",
+        "PRINT_IMG",
     };
     for (const char* n : kExtra) {
         if (upperName == QLatin1String(n)) return true;
@@ -630,6 +631,38 @@ LogicalLine AstBuilder::build(const QString& rawLine,
                 }
                 line.arguments.append(operand);
             }
+        }
+        return finalized(std::move(line));
+    }
+
+    // PRINTBUTTON 的每个参数是一个完整表达式；只按顶层逗号切分。
+    // 空格属于字符串表达式的一部分，不能走 Raw 的空白切分。
+    if (line.functionName == QLatin1String("PRINTBUTTON")) {
+        const QString remainder = trimmed.mid(first.text.length()).trimmed();
+        for (const QString& item : splitTopLevelComma(remainder)) {
+            const QString text = item.trimmed();
+            if (text.isEmpty()) continue;
+            Operand operand(text);
+            bool wholeString = false;
+            if (text.size() >= 2 && text.startsWith(QLatin1Char('"'))) {
+                bool escaped = false;
+                for (int j = 1; j < text.size(); ++j) {
+                    const QChar c = text.at(j);
+                    if (escaped) { escaped = false; continue; }
+                    if (c == QLatin1Char('\\')) { escaped = true; continue; }
+                    if (c == QLatin1Char('"')) {
+                        wholeString = (j == text.size() - 1);
+                        break;
+                    }
+                }
+            }
+            if (wholeString) {
+                operand.isString = true;
+                operand.raw = text.mid(1, text.size() - 2);
+            } else if (resolve) {
+                operand.ast = resolve(text);
+            }
+            line.arguments.append(operand);
         }
         return finalized(std::move(line));
     }

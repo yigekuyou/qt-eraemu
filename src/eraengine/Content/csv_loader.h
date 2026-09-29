@@ -48,6 +48,7 @@ public:
 private:
     // Parse a single CSV line
 		QStringList parseLine(const QString& line);
+
     // Load CSV content into data structure
 		void loadCsvData(const QString& filePath, const QString& content);
 		QStringList getRowByFirstColumn(const QString& tableName, const QString& key) const;

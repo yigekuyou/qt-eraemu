@@ -20,11 +20,15 @@
 
 #include <QQuickImageProvider>
 #include <QString>
-
+#include "Content/csv_loader.h"
 // ---------------------------------------------------------------------------
 // ResourceImageProvider —— 供 QML 用 `Image { source: "image://emuera/<name>" }`
 // 读取游戏资源图（对齐 C# GameView 的 ConstImage「资源名 → 图片」加载）。
 //
+//    图集（sprite sheet）定义
+//      通过 loadAtlas(".../list.csv") 加载形如：
+//          <名>,<图集文件>[,<x>,<y>,<w>,<h>]
+//      的行；命中后从源图集上裁出子图返回。后四列可省略 —— 表示整张图即该资源。
 // 混合形态里 C++ 只提供「资源名 → 文件」的服务；实际显示由 QML 的 Image 对象负责。
 // 名称解析顺序（第一个存在者胜出）：
 //     <root>/resources/<name>[.ext]
@@ -35,6 +39,14 @@
 // ---------------------------------------------------------------------------
 class ResourceImageProvider : public QQuickImageProvider {
 public:
+	struct Sprite {
+			QString sourceFile;        // 图集图片文件名（相对于图集所在目录 / root）
+			bool    hasRect = false;   // false = 整张图集就是该资源
+			int     x = 0;
+			int     y = 0;
+			int     w = 0;
+			int     h = 0;
+	};
     ResourceImageProvider();
 
     QImage requestImage(const QString& id, QSize* size, const QSize& requestedSize) override;

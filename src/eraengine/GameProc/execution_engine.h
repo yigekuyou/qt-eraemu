@@ -93,6 +93,8 @@ signals:
     // ---- 显示输出（由 EraEngine 接到 ConsoleBackend）----
     void consolePrint(const QString& text, bool newline);
     void consolePrintTemplate(const PrintTemplate& output);
+    // PRINT_IMG：把资源名作为行内图片输出（C# Console.PrintImg）
+    void consolePrintImage(const QString& resourceName, int width, int height, int ypos);
     // PRINTW 的「换行后等任意键」（对齐 C# PRINT_WAITINPUT -> Console.ReadAnyKey）
     void requestAnyKey();
     // PRINTBUTTON：打印一段文本并把它变成按钮（值可为整数或字符串）

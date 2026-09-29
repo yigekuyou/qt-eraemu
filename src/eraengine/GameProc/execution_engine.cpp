@@ -430,6 +430,19 @@ bool ExecutionEngine::executeInstruction(const LogicalLine& line) {
     if (AstBuilder::isPrintFamily(name)) {
         return handlePrintInstruction(line);
     }
+    if (name == QLatin1String("PRINT_IMG")) {
+        if (args.isEmpty()) return true;
+        ExpressionEvaluator localEvaluator;
+        ExpressionEvaluator& ev = m_expressionEvaluator ? *m_expressionEvaluator : localEvaluator;
+        const Operand& operand = args.first();
+        const QVariant value = operand.isString
+            ? QVariant(operand.raw)
+            : (operand.ast ? ev.evaluate(*operand.ast, m_storage, m_gameBaseData)
+                           : evalExpressionCached(m_parseTable, ev, operand.raw,
+                                                   m_storage, m_gameBaseData));
+        emit consolePrintImage(value.toString(), 0, 0, 0);
+        return true;
+    }
     if (name == "PRINTBUTTON") {
         // PRINTBUTTON <文本>, <整数|字符串>：打印文本并把它变成按钮（对齐 C# PRINTBUTTON）
         // 注意：line.arguments 里逗号也是一个操作数，需要过滤掉
@@ -444,19 +457,20 @@ bool ExecutionEngine::executeInstruction(const LogicalLine& line) {
         if (ops.size() >= 2) {
             ExpressionEvaluator localEvaluator;
             ExpressionEvaluator& ev = m_expressionEvaluator ? *m_expressionEvaluator : localEvaluator;
-            QString text = evalExpressionCached(m_parseTable, ev, ops[0]->raw,
-                                                m_storage, m_gameBaseData).toString();
-            if (text.isEmpty()) {
-                QString t = ops[0]->raw.trimmed();
-                if (t.startsWith(QLatin1Char('"'))) t = t.mid(1);
-                if (t.endsWith(QLatin1Char('"'))) t.chop(1);
-                text = t;
-            }
-            const QString rawValue = ops[1]->raw.trimmed();
-            const bool valueIsString = rawValue.startsWith(QLatin1Char('"'))
+            // AstBuilder 已把带引号的字面量标记为 isString 并去掉外层引号；
+            // 再按 raw 解析会把 "123" 错当整数、把 "A" 错当变量。
+            const auto evaluateOperand = [&](const Operand& operand) -> QVariant {
+                if (operand.isString) return QVariant(operand.raw);
+                if (operand.ast) return ev.evaluate(*operand.ast, m_storage, m_gameBaseData);
+                return evalExpressionCached(m_parseTable, ev, operand.raw,
+                                            m_storage, m_gameBaseData);
+            };
+            const QVariant textValue = evaluateOperand(*ops[0]);
+            QString text = textValue.toString();
+            if (text.isEmpty() && !ops[0]->isString) text = ops[0]->raw.trimmed();
+            const QVariant value = evaluateOperand(*ops[1]);
+            const bool valueIsString = ops[1]->isString
                                        || (ops[1]->ast && ops[1]->ast->valueType() == OperandType::Str);
-            const QVariant value = evalExpressionCached(m_parseTable, ev, rawValue,
-                                                        m_storage, m_gameBaseData);
             emit consolePrintButton(text, value.toLongLong(), value.toString(), valueIsString);
         }
         return true;

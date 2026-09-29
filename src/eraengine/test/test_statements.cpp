@@ -131,6 +131,50 @@ int main(int argc, char* argv[]) {
     check(storage.getGlobalInt1D("TOTAL", 0) == 2,
           "K=0,1,2 CONTINUE；K=3,4 计数 -> TOTAL == 2");
 
+
+    // ecd/docs/translation/Command.html: PRINTBUTTON accepts integer or string values.
+    {
+        QString text, stringValue;
+        qint64 integerValue = -1;
+        bool isString = false;
+        int emitted = 0;
+        const auto connection = QObject::connect(&engine, &ExecutionEngine::consolePrintButton,
+            [&](const QString& t, qint64 i, const QString& s, bool str) {
+                text = t; integerValue = i; stringValue = s; isString = str; ++emitted;
+            });
+        auto execute = [&](const QString& source) {
+            engine.executeInstruction(buildLines(table, {source}).first());
+        };
+        execute("PRINTBUTTON \"A\", \"123\"");
+        check(text == "A" && isString && stringValue == "123",
+              "button literals retain text and string input type");
+        execute("PRINTBUTTON \"[穗月]\", \"穗月\"");
+        check(text == "[穗月]" && isString && stringValue == "穗月",
+              "documented name button preserves string value");
+        execute("PRINTBUTTON \"\", 40 + 2");
+        check(text.isEmpty() && !isString && integerValue == 42,
+              "empty button text and numeric expression");
+        execute("PRINTBUTTON \"a\" + \"b\", 7");
+        check(text == "ab" && !isString && integerValue == 7,
+              "button string concatenation is an expression");
+        check(emitted == 4, "each button instruction emits exactly once");
+        QObject::disconnect(connection);
+    }
+
+    // ecd/docs/reference/ERB_Statements.html / C# PRINT_IMG: one string
+    // expression is forwarded as an inline resource image.
+    {
+        QString imageName;
+        int imageWidth = -1, imageHeight = -1, imageY = -1;
+        const auto connection = QObject::connect(&engine, &ExecutionEngine::consolePrintImage,
+            [&](const QString& name, int width, int height, int ypos) {
+                imageName = name; imageWidth = width; imageHeight = height; imageY = ypos;
+            });
+        engine.executeInstruction(buildLines(table, {"PRINT_IMG \"face_01\""}).first());
+        check(imageName == "face_01" && imageWidth == 0 && imageHeight == 0 && imageY == 0,
+              "PRINT_IMG forwards the resource expression with inline defaults");
+        QObject::disconnect(connection);
+    }
     qDebug() << "\n======================================";
     if (g_failures == 0) {
         qDebug() << "[SUCCESS] statement tests passed";

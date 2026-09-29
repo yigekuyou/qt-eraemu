@@ -46,7 +46,7 @@ void CsvLoader::loadCsvData(const QString& filePath,const QString& content) {
     
     QFileInfo fileInfo(filePath);
     QString tableName = fileInfo.baseName();
-    
+
     // Parse each line of the file
 		QStringList lines = content.split(QLatin1Char('\n'));
     QList<QList<QString>> tableData;
@@ -62,7 +62,6 @@ void CsvLoader::loadCsvData(const QString& filePath,const QString& content) {
     m_data.insert(tableName, tableData);
     m_rowCounts.insert(tableName, tableData.size());
 }
-
 QStringList CsvLoader::getRowByFirstColumn(const QString& tableName,
 																					 const QString& key) const {
 		auto it = m_data.constFind(tableName);
@@ -72,7 +71,6 @@ QStringList CsvLoader::getRowByFirstColumn(const QString& tableName,
 		}
 		return {};
 }
-
 QStringList CsvLoader::parseLine(const QString& line) {
 		QStringList values;
 

@@ -151,7 +151,44 @@ int main(int argc, char* argv[]) {
     check(data->lines[2].jumpTo == 7, "line[IF].jumpTo == 7 (ENDIF+1)");
     check(data->lines[1].nextLine == 2, "line1.nextLine == 2");
 
-    qDebug() << "\n5) AST 缓存去重共享";
+    qDebug() << "\n5) 文档语法的按钮、输入与 CASE AST";
+    {
+        const QStringList documented = {
+            "PRINTBUTTON \"开始\", 42",
+            "INPUT",
+            "INPUTS",
+            "CASE IS >= 10",
+            "CASE 1 TO 3",
+            "CASE 4, 5"
+        };
+        QList<LogicalLine> documentedLines;
+        for (int i = 0; i < documented.size(); ++i) {
+            documentedLines.append(AstBuilder::build(documented.at(i),
+                                                      ScriptPosition("docs.ERB", i), resolve));
+        }
+        check(documentedLines[0].argument.kind == ArgKind::Button,
+              "PRINTBUTTON is typed as Button");
+        check(documentedLines[0].argument.typeOk
+                  && documentedLines[0].argument.params.size() == 2,
+              "PRINTBUTTON keeps text/value operands");
+        check(documentedLines[1].functionName == "INPUT"
+                  && documentedLines[1].argument.kind == ArgKind::Expressions,
+              "INPUT is preserved as an input instruction");
+        check(documentedLines[2].functionName == "INPUTS"
+                  && documentedLines[2].argument.kind == ArgKind::Expressions,
+              "INPUTS is preserved as an input instruction");
+        check(documentedLines[3].argument.kind == ArgKind::Case
+                  && documentedLines[3].argument.cases.size() == 1,
+              "CASE IS keeps one structured case operand");
+        check(documentedLines[4].argument.kind == ArgKind::Case
+                  && documentedLines[4].argument.cases.size() == 1,
+              "CASE TO keeps one structured case operand");
+        check(documentedLines[5].argument.kind == ArgKind::Case
+                  && documentedLines[5].argument.cases.size() == 2,
+              "CASE comma list keeps both case operands");
+    }
+
+    qDebug() << "\n6) AST 缓存去重共享";
     const QSharedPointer<ExpressionNode> a1 = table.expressionAst("1 + 2 * 3");
     const QSharedPointer<ExpressionNode> a2 = table.expressionAst(" 1 + 2 * 3 ");
     check(!a1.isNull() && a1 == a2, "expressionAst cache returns shared AST");

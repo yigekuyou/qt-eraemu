@@ -79,7 +79,7 @@ static QSharedPointer<ExpressionNode> parse(ExpressionParser& parser, const QStr
     return parser.parse(lexer.tokenize(text, 1));
 }
 
-static QString typeName(OperandType t) { return QString::fromLatin1(operandTypeName(t)); }
+[[maybe_unused]] static QString typeName(OperandType t) { return QString::fromLatin1(operandTypeName(t)); }
 
 int main(int argc, char* argv[]) {
     QCoreApplication app(argc, argv);

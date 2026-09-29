@@ -41,18 +41,27 @@ Dialog {
     }
 
     function colorOf(which) {
-        if (!gui) return "#000000";
-        if (which === "fore")  return gui.foreColor;
-        if (which === "back")  return gui.backColor;
-        if (which === "focus") return gui.focusColor;
+        if (!gui)
+            return "#000000";
+        if (which === "fore")
+            return gui.foreColor;
+        if (which === "back")
+            return gui.backColor;
+        if (which === "focus")
+            return gui.focusColor;
         return gui.logColor;
     }
     function applyColor(which, c) {
-        if (!gui) return;
-        if (which === "fore")  gui.foreColor = c;
-        else if (which === "back")  gui.backColor = c;
-        else if (which === "focus") gui.focusColor = c;
-        else gui.logColor = c;
+        if (!gui)
+            return;
+        if (which === "fore")
+            gui.foreColor = c;
+        else if (which === "back")
+            gui.backColor = c;
+        else if (which === "focus")
+            gui.focusColor = c;
+        else
+            gui.logColor = c;
     }
 
     contentItem: Column {
@@ -64,61 +73,98 @@ Dialog {
             columnSpacing: 12
             rowSpacing: 8
 
-            Label { text: qsTr("字号") }
+            Label {
+                text: qsTr("字号")
+            }
             SpinBox {
-                from: 8; to: 72
+                from: 8
+                to: 72
                 value: dlg.gui ? dlg.gui.fontSize : 18
-                onValueModified: if (dlg.gui) dlg.gui.fontSize = value
+                onValueModified: if (dlg.gui)
+                    dlg.gui.fontSize = value
             }
 
-            Label { text: qsTr("行高") }
+            Label {
+                text: qsTr("行高")
+            }
             SpinBox {
-                from: 8; to: 96
+                from: 8
+                to: 96
                 value: dlg.gui ? dlg.gui.lineHeight : 19
-                onValueModified: if (dlg.gui) dlg.gui.lineHeight = value
+                onValueModified: if (dlg.gui)
+                    dlg.gui.lineHeight = value
             }
 
-            Label { text: qsTr("刷新帧率") }
+            Label {
+                text: qsTr("刷新帧率")
+            }
             SpinBox {
-                from: 1; to: 60
-                value: dlg.gui ? dlg.gui.fps : 5
-                onValueModified: if (dlg.gui) dlg.gui.fps = value
+                from: 1
+                to: 2000
+                value: dlg.gui ? dlg.gui.fps : 60
+                onValueModified: if (dlg.gui)
+                    dlg.gui.fps = value
             }
 
-            Label { text: qsTr("历史行数") }
+            Label {
+                text: qsTr("历史行数")
+            }
             SpinBox {
-                from: 100; to: 100000
+                from: 100
+                to: 100000
                 stepSize: 100
                 value: dlg.gui ? dlg.gui.maxLog : 5000
-                onValueModified: if (dlg.gui) dlg.gui.maxLog = value
+                onValueModified: if (dlg.gui)
+                    dlg.gui.maxLog = value
             }
 
-            Label { text: qsTr("字体") }
+            Label {
+                text: qsTr("字体")
+            }
             ComboBox {
                 id: fontBox
                 width: 240
                 editable: true
                 model: dlg.gui ? dlg.gui.availableFontFamilies() : []
-                Component.onCompleted: if (dlg.gui) editText = dlg.gui.fontName
-                onActivated: if (dlg.gui) dlg.gui.fontName = currentText
-                onAccepted: if (dlg.gui) dlg.gui.fontName = editText
+                Component.onCompleted: if (dlg.gui)
+                    editText = dlg.gui.fontName
+                onActivated: if (dlg.gui)
+                    dlg.gui.fontName = currentText
+                onAccepted: if (dlg.gui)
+                    dlg.gui.fontName = editText
             }
         }
 
         // ---- 颜色 ----
         Repeater {
             model: [
-                { key: "fore",  label: qsTr("文字色") },
-                { key: "back",  label: qsTr("背景色") },
-                { key: "focus", label: qsTr("选中文字色") },
-                { key: "log",   label: qsTr("历史文字色") }
+                {
+                    key: "fore",
+                    label: qsTr("文字色")
+                },
+                {
+                    key: "back",
+                    label: qsTr("背景色")
+                },
+                {
+                    key: "focus",
+                    label: qsTr("选中文字色")
+                },
+                {
+                    key: "log",
+                    label: qsTr("历史文字色")
+                }
             ]
             delegate: Row {
                 required property var modelData
                 spacing: 8
-                Label { text: modelData.label; width: 90 }
+                Label {
+                    text: modelData.label
+                    width: 90
+                }
                 Rectangle {
-                    width: 48; height: 22
+                    width: 48
+                    height: 22
                     border.color: "#888888"
                     color: dlg.colorOf(modelData.key)
                 }
@@ -141,12 +187,14 @@ Dialog {
             spacing: 8
             Button {
                 text: qsTr("恢复默认")
-                onClicked: if (dlg.gui) dlg.gui.resetToDefaults()
+                onClicked: if (dlg.gui)
+                    dlg.gui.resetToDefaults()
             }
             Button {
                 text: qsTr("保存到配置文件")
                 enabled: dlg.gui !== null
-                onClicked: if (engine) engine.saveConfigFiles()
+                onClicked: if (engine)
+                    engine.saveConfigFiles()
             }
         }
 

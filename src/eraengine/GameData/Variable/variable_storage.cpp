@@ -527,14 +527,14 @@ qint64 VariableStorage::getCharaInt3D(const QString &name, int charaId, int x, i
 }
 
 // ================= Save/Load Methods =================
-bool VariableStorage::saveVariables(const QString &filePath) const
+bool VariableStorage::saveVariables(const QString &) const
 {
 		// Implementation will be added in Phase 6
 		// For now, just return true to indicate it's a placeholder
 		return true;
 }
 
-bool VariableStorage::loadVariables(const QString &filePath)
+bool VariableStorage::loadVariables(const QString &)
 {
 		// Implementation will be added in Phase 6
 		// For now, just return true to indicate it's a placeholder

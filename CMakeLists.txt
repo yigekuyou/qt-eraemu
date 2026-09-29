@@ -17,6 +17,8 @@ cmake_minimum_required(VERSION 3.16)
 
 project(emuera VERSION 0.1 LANGUAGES CXX)
 
+option(EMUERA_WARNINGS_AS_ERRORS "Treat warnings as errors for project targets" ON)
+
 set(CMAKE_CXX_STANDARD 23)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 set(CMAKE_CXX_EXTENSIONS OFF)
@@ -52,6 +54,13 @@ set_target_properties(appemuera PROPERTIES
 target_link_libraries(appemuera
     PRIVATE Qt6::Quick Qt6::DBus Qt6::Widgets eraengine
 )
+if(EMUERA_WARNINGS_AS_ERRORS)
+    if(MSVC)
+        target_compile_options(appemuera PRIVATE /W4 /WX)
+    elseif(CMAKE_CXX_COMPILER_ID MATCHES "GNU|Clang|AppleClang")
+        target_compile_options(appemuera PRIVATE -Wall -Wextra -Wpedantic -Werror)
+    endif()
+endif()
 
 include(GNUInstallDirs)
 install(TARGETS appemuera

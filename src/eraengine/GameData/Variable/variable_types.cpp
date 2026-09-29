@@ -60,7 +60,7 @@ VariableToken::VariableToken(const QString &name, const VariableTypeInfo &typeIn
 {
 }
 
-qint64 VariableToken::getIntValue(int index) const
+qint64 VariableToken::getIntValue(int) const
 {
     if (!isValid || !typeInfo.isInteger || storage == nullptr) return 0;
 
@@ -70,7 +70,7 @@ qint64 VariableToken::getIntValue(int index) const
     return 0;
 }
 
-void VariableToken::setIntValue(int index, qint64 value) const
+void VariableToken::setIntValue(int, qint64) const
 {
     if (!isValid || !typeInfo.isInteger || storage == nullptr) return;
 
@@ -80,7 +80,7 @@ void VariableToken::setIntValue(int index, qint64 value) const
     return;
 }
 
-QString VariableToken::getStrValue(int index) const
+QString VariableToken::getStrValue(int) const
 {
     if (!isValid || !typeInfo.isString || storage == nullptr) return "";
 
@@ -90,7 +90,7 @@ QString VariableToken::getStrValue(int index) const
     return "";
 }
 
-void VariableToken::setStrValue(int index, const QString& value) const
+void VariableToken::setStrValue(int, const QString&) const
 {
     if (!isValid || !typeInfo.isString || storage == nullptr) return;
 

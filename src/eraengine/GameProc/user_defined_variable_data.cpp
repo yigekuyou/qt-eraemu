@@ -66,7 +66,7 @@ int findTopLevelEquals(const QString& text) {
 
 } // namespace
 
-UserDefinedVariableData UserDefinedVariableData::create(QString streamContent, bool isDims, bool isPrivate, const ScriptPosition& pos) {
+UserDefinedVariableData UserDefinedVariableData::create(QString streamContent, bool isDims, bool isPrivate, const ScriptPosition&) {
 		UserDefinedVariableData data;
 		data.typeIsStr = isDims;
 		data.isPrivate = isPrivate;
@@ -75,8 +75,6 @@ UserDefinedVariableData UserDefinedVariableData::create(QString streamContent, b
 
 		// 1. 提取修饰关键字 (DYNAMIC, CONST, REF 等)
 		QRegularExpression tokenRe("^([^\\s,=()]+)");   // 允许非 ASCII 变量名（CJK/全角）
-		bool staticDefined = false;
-
 		while (true) {
 				QRegularExpressionMatch match = tokenRe.match(stream);
 				if (!match.hasMatch()) break;

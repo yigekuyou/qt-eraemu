@@ -164,7 +164,58 @@ int main(int argc, char* argv[]) {
     check(table.evaluateCondition("test", 16, condFalse), "evaluateCondition(SIF 1==0) ok");
     check(!condFalse, "SIF 1 == 0 -> false");
 
-    qDebug() << "\n7) 表达式优先级/运算符对齐 C#";
+    qDebug() << "\n7) 字符串赋值：原文、插值、作用域与真正未定义函数";
+    {
+        ProcessState stringState;
+        EraParseTable stringTable(&stringState);
+        const AstResolver stringResolve = [&stringTable](const QString& e) {
+            return stringTable.expressionAst(e);
+        };
+        const QStringList stringSource = {
+            "@TEXT_CASE(ARG)",
+            "#DIMS LOCAL_TEXT",
+            "LOCAL_TEXT = 白狼天狗服(色固定)",
+            "LOCAL_TEXT = 妖怪之山 {ARG}",
+            "LOCAL_TEXT '= 既定の文字列",
+            "LOCAL_TEXT = %KNOWN(ARG)%",
+            "LOCAL_TEXT '= missing_function(ARG)"
+        };
+        QList<LogicalLine> stringLines;
+        for (int i = 0; i < stringSource.size(); ++i) {
+            stringLines.append(AstBuilder::build(stringSource.at(i),
+                                                  ScriptPosition("strings.ERB", i),
+                                                  stringResolve));
+        }
+        check(stringTable.loadScript("strings", stringLines), "load string assignment script");
+        stringTable.finalizeParse();
+        const ScriptData* strings = stringTable.script("strings");
+        check(strings != nullptr, "string assignment script available");
+        if (strings) {
+            check(strings->lines[2].arguments[1].ast
+                      && strings->lines[2].arguments[1].ast->kind() == NodeKind::StrForm,
+                  "plain parenthesized text is a StrForm, not a function call");
+            check(strings->lines[3].arguments[1].ast
+                      && strings->lines[3].arguments[1].ast->kind() == NodeKind::StrForm,
+                  "brace interpolation keeps the surrounding text as StrForm");
+            check(strings->lines[4].assignOperator == "'=",
+                  "C# string expression assignment preserves '= operator");
+            check(strings->lines[4].arguments[1].ast
+                      && strings->lines[4].arguments[1].ast->kind() != NodeKind::StrForm,
+                  "'= keeps typed expression semantics");
+            check(strings->lines[5].arguments[1].ast
+                      && strings->lines[5].arguments[1].ast->kind() == NodeKind::StrForm,
+                  "percent interpolation is parsed as StrForm");
+            bool hasMissing = false;
+            for (const QString& warning : stringTable.parseWarnings()) {
+                if (warning.contains("MISSING_FUNCTION", Qt::CaseInsensitive)) hasMissing = true;
+                check(!warning.contains("白狼天狗服") && !warning.contains("妖怪之山"),
+                      "plain string text has no undefined-function warning");
+            }
+            check(hasMissing, "true undefined function remains diagnosed");
+        }
+    }
+
+    qDebug() << "\n8) 表达式优先级/运算符对齐 C#";
     check(parseToString("1 + 2 * 3") == "BinaryOp(Literal(1), +, BinaryOp(Literal(2), *, Literal(3)))",
           "'*' 高于 '+'");
     check(parseToString("(1 + 2) * 3") == "BinaryOp(BinaryOp(Literal(1), +, Literal(2)), *, Literal(3))",

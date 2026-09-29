@@ -96,7 +96,7 @@ QString FunctionSystem::getCurrentCallFunction() const
 void FunctionSystem::registerBuiltInFunctions()
 {
     // Mathematical functions
-    m_builtInFunctions["ABS"] = [](const QList<QVariant>& args, VariableStorage* storage) -> QVariant {
+    m_builtInFunctions["ABS"] = [](const QList<QVariant>& args, VariableStorage*) -> QVariant {
         if (args.isEmpty()) return QVariant(0);
         if (args.first().canConvert<int>()) {
             int value = args.first().toInt();
@@ -105,7 +105,7 @@ void FunctionSystem::registerBuiltInFunctions()
         return QVariant(0);
     };
     
-    m_builtInFunctions["SGN"] = [](const QList<QVariant>& args, VariableStorage* storage) -> QVariant {
+    m_builtInFunctions["SGN"] = [](const QList<QVariant>& args, VariableStorage*) -> QVariant {
         if (args.isEmpty()) return QVariant(0);
         int val = args.first().toInt();
         if (val > 0) return QVariant(1);
@@ -113,12 +113,12 @@ void FunctionSystem::registerBuiltInFunctions()
         return QVariant(0);
     };
     
-    m_builtInFunctions["INT"] = [](const QList<QVariant>& args, VariableStorage* storage) -> QVariant {
+    m_builtInFunctions["INT"] = [](const QList<QVariant>& args, VariableStorage*) -> QVariant {
         if (args.isEmpty()) return QVariant(0);
         return QVariant(args.first().toInt());
     };
     
-    m_builtInFunctions["RND"] = [](const QList<QVariant>& args, VariableStorage* storage) -> QVariant {
+    m_builtInFunctions["RND"] = [](const QList<QVariant>& args, VariableStorage*) -> QVariant {
         if (args.isEmpty()) return QVariant(QRandomGenerator::global()->generate() % 1000);
         int range = args.first().toInt();
         if (range <= 0) return QVariant(0);
@@ -126,7 +126,7 @@ void FunctionSystem::registerBuiltInFunctions()
     };
     
     // Input functions
-    m_builtInFunctions["ONEINPUT"] = [](const QList<QVariant>& args, VariableStorage* storage) -> QVariant {
+    m_builtInFunctions["ONEINPUT"] = [](const QList<QVariant>&, VariableStorage* storage) -> QVariant {
         // For CLI testing, return immediately without waiting for input
         // Set RESULT variable to 0 (no input)
         if (storage) {
@@ -136,12 +136,12 @@ void FunctionSystem::registerBuiltInFunctions()
     };
     
     // String functions
-    m_builtInFunctions["LEN"] = [](const QList<QVariant>& args, VariableStorage* storage) -> QVariant {
+    m_builtInFunctions["LEN"] = [](const QList<QVariant>& args, VariableStorage*) -> QVariant {
         if (args.isEmpty()) return QVariant(0);
         return QVariant(args.first().toString().length());
     };
     
-    m_builtInFunctions["MID"] = [](const QList<QVariant>& args, VariableStorage* storage) -> QVariant {
+    m_builtInFunctions["MID"] = [](const QList<QVariant>& args, VariableStorage*) -> QVariant {
         if (args.size() < 2) return QVariant("");
         QString str = args.first().toString();
         int start = args.at(1).toInt();
@@ -153,7 +153,7 @@ void FunctionSystem::registerBuiltInFunctions()
         return QVariant(str.mid(start - 1));
     };
     
-    m_builtInFunctions["LEFT"] = [](const QList<QVariant>& args, VariableStorage* storage) -> QVariant {
+    m_builtInFunctions["LEFT"] = [](const QList<QVariant>& args, VariableStorage*) -> QVariant {
         if (args.size() < 2) return QVariant("");
         QString str = args.first().toString();
         int length = args.at(1).toInt();
@@ -161,7 +161,7 @@ void FunctionSystem::registerBuiltInFunctions()
         return QVariant(str.left(length));
     };
     
-    m_builtInFunctions["RIGHT"] = [](const QList<QVariant>& args, VariableStorage* storage) -> QVariant {
+    m_builtInFunctions["RIGHT"] = [](const QList<QVariant>& args, VariableStorage*) -> QVariant {
         if (args.size() < 2) return QVariant("");
         QString str = args.first().toString();
         int length = args.at(1).toInt();
@@ -170,7 +170,7 @@ void FunctionSystem::registerBuiltInFunctions()
     };
 }
 
-QVariant FunctionSystem::evaluateExpression(const QString& expression, VariableStorage* storage)
+QVariant FunctionSystem::evaluateExpression(const QString&, VariableStorage*)
 {
     // This would use the expression evaluator to process expressions
     // For now return a placeholder

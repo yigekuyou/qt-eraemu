@@ -1084,25 +1084,38 @@ void EraParseTable::applyStringAssignments() {
     for (auto sit = m_scripts.begin(); sit != m_scripts.end(); ++sit) {
         for (LogicalLine& line : sit.value().lines) {
             if (line.kind != LineKind::Instruction) continue;
+            // C# uses two assignment operators with different RHS semantics:
+            //   =  : string variables consume the remaining source as a StrForm
+            //        (plain text plus {expr}/%expr% interpolation).
+            //   '= : expression string assignment; keep the normal expression AST.
+            // The initial AST is intentionally built before variable declarations
+            // are finalized, so it may look like a call for text such as
+            // `白狼天狗服(色固定)`.  Do not use that provisional node to decide
+            // whether the RHS is raw text.
             if (line.assignOperator != QLatin1String("=")) continue;
             if (line.arguments.size() != 2) continue;
 
             Operand& dest = line.arguments[0];
             Operand& value = line.arguments[1];
-            if (dest.isString || value.isString) continue;   // 引号字面量原样保留
 
             const QString varName = leadingIdentifier(dest.raw);
             if (varName.isEmpty()) continue;
             if (m_variables.typeOf(varName, line.ownerFunction) != OperandType::Str) continue;
 
-            // 右值整体按格式化串解析（文本 = 字面量，{…}/%…% = 表达式）
-            if (value.ast && (value.ast->kind() == NodeKind::Literal
-                || value.ast->kind() == NodeKind::StrForm
-                || value.ast->kind() == NodeKind::Function
-                || value.ast->kind() == NodeKind::BinaryOp
-                || (value.ast->kind() == NodeKind::Variable
-                    && m_variables.typeOf(static_cast<const VariableNode&>(*value.ast).name(), line.ownerFunction) == OperandType::Str))) continue;
-            value.ast = StrFormParser::parse(value.raw, resolve);
+            // A bare, declared string variable is a value reference (`NAME = RESULTS`).
+            // Other RHS text uses formatted-string semantics, even when it looks
+            // like a call (`CLOTH = 白狼天狗服(色固定)`).
+            const QString rhsName = value.raw.trimmed();
+            bool bareName = !rhsName.isEmpty()
+                            && (rhsName.at(0).isLetter() || rhsName.at(0) == QLatin1Char('_'));
+            for (int i = 1; bareName && i < rhsName.size(); ++i) {
+                const QChar c = rhsName.at(i);
+                bareName = c.isLetterOrNumber() || c == QLatin1Char('_');
+            }
+            if (bareName && m_variables.typeOf(rhsName, line.ownerFunction) == OperandType::Str)
+                value.ast = resolve(rhsName);
+            else
+                value.ast = StrFormParser::parse(value.raw, resolve);
         }
     }
 }

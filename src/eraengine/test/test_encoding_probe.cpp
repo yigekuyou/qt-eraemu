@@ -145,11 +145,11 @@ int main(int argc, char* argv[]) {
         const QByteArray gbk = TextCodecUtil::encode(zh, TextEncoding::Gbk);
         TextCodecUtil::setFallbackEncoding(TextEncoding::Gbk);
         TextEncoding det = TextEncoding::Auto;
-        TextCodecUtil::decode(gbk, TextEncoding::Auto, &det);
+        (void)TextCodecUtil::decode(gbk, TextEncoding::Auto, &det);
         check(det == TextEncoding::Gbk, QString("回退=GB18030 时 GBK 样本判为 GB18030（得到 %1）")
                                             .arg(encName(det)));
         TextCodecUtil::setFallbackEncoding(TextEncoding::Latin1);
-        TextCodecUtil::decode(gbk, TextEncoding::Auto, &det);
+        (void)TextCodecUtil::decode(gbk, TextEncoding::Auto, &det);
         // ICU 的 Shift-JIS 校验比「字节范围」严格：这段 GBK 字节通不过，
         // 因此没有声明语言时会落到 LATIN1（而不是被静默当成 CP932 乱码）
         check(det == TextEncoding::Latin1,

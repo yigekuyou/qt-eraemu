@@ -145,6 +145,16 @@ target_include_directories(eraengine PRIVATE
 )
 target_include_directories(eraengine PUBLIC ${CMAKE_CURRENT_SOURCE_DIR})
 
+# Keep warning policy explicit and compiler-specific.  Qt headers are included
+# under the same policy as project code so new compatibility issues are visible.
+if(EMUERA_WARNINGS_AS_ERRORS)
+    if(MSVC)
+        target_compile_options(eraengine PRIVATE /W4 /WX)
+    elseif(CMAKE_CXX_COMPILER_ID MATCHES "GNU|Clang|AppleClang")
+        target_compile_options(eraengine PRIVATE -Wall -Wextra -Wpedantic -Werror)
+    endif()
+endif()
+
 # ---------------------------------------------------------------------------
 # Test executables
 # ---------------------------------------------------------------------------
@@ -168,6 +178,13 @@ function(eraengine_add_test target)
     add_executable(${target} test/${target}.cpp)
     target_link_libraries(${target} PRIVATE eraengine Qt6::Core Qt6::Qml Qt6::Quick Qt6::Widgets)
     target_include_directories(${target} PRIVATE ${ERAENGINE_TEST_INCLUDE_DIRS})
+    if(EMUERA_WARNINGS_AS_ERRORS)
+        if(MSVC)
+            target_compile_options(${target} PRIVATE /W4 /WX)
+        elseif(CMAKE_CXX_COMPILER_ID MATCHES "GNU|Clang|AppleClang")
+            target_compile_options(${target} PRIVATE -Wall -Wextra -Wpedantic -Werror)
+        endif()
+    endif()
 endfunction()
 
 # 应用入口 / 完整流程测试

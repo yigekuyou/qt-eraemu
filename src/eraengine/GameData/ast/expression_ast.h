@@ -292,9 +292,17 @@ struct StrFormPart {
     QSharedPointer<ExpressionNode> width;
     bool leftAlign = false;
 
-    static StrFormPart makeText(const QString& t) { return StrFormPart{StrFormPartType::Text, t, nullptr}; }
+    static StrFormPart makeText(const QString& t) {
+        StrFormPart part;
+        part.type = StrFormPartType::Text;
+        part.text = t;
+        return part;
+    }
     static StrFormPart makeExpr(QSharedPointer<ExpressionNode> e) {
-        return StrFormPart{StrFormPartType::Expression, QString(), std::move(e)};
+        StrFormPart part;
+        part.type = StrFormPartType::Expression;
+        part.expression = std::move(e);
+        return part;
     }
 };
 

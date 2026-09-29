@@ -182,16 +182,16 @@ int main(int argc, char* argv[]) {
     {
         ErbPreprocessor pp;
         QStringList warns;
-        pp.process(QStringLiteral("{\nA = 1\n"), &warns, "t.ERB");
+        (void)pp.process(QStringLiteral("{\nA = 1\n"), &warns, "t.ERB");
         check(!warns.isEmpty() && warns.first().contains(QStringLiteral("缺少对应的 '}'")),
               "未闭合的 '{' 告警");
 
         warns.clear();
-        pp.process(QStringLiteral("[ENDIF]\n"), &warns, "t.ERB");
+        (void)pp.process(QStringLiteral("[ENDIF]\n"), &warns, "t.ERB");
         check(!warns.isEmpty(), "[ENDIF] 不对应时告警");
 
         warns.clear();
-        pp.process(QStringLiteral("[SKIPSTART extra]\n"), &warns, "t.ERB");
+        (void)pp.process(QStringLiteral("[SKIPSTART extra]\n"), &warns, "t.ERB");
         check(!warns.isEmpty(), "[SKIPSTART] 多余参数时告警");
     }
 

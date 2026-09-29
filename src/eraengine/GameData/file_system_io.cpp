@@ -585,18 +585,23 @@ QByteArray BinaryIo::writeUInt32(quint32 value)
 
 IoResult BinaryIo::readEraData(const QString& filePath, QVariantMap& data)
 {
+    Q_UNUSED(filePath);
+    Q_UNUSED(data);
     // Placeholder for Era data reading
     return IoResult(true, "Era data reading not implemented");
 }
 
 IoResult BinaryIo::writeEraData(const QString& filePath, const QVariantMap& data)
 {
+    Q_UNUSED(filePath);
+    Q_UNUSED(data);
     // Placeholder for Era data writing
     return IoResult(true, "Era data writing not implemented");
 }
 
 bool BinaryIo::isEraBinaryFormat(const QByteArray& data) const
 {
+    Q_UNUSED(data);
     // Placeholder for Era binary format detection
     return false;
 }

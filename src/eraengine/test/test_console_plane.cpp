@@ -75,7 +75,7 @@ int main(int argc, char** argv) {
         check(!ButtonStringCreator::isButtonCore(QStringLiteral("[1e2]")),
               "[1e2] 整数解析失败 -> 不是按钮核");
         qint64 v = 0;
-        ButtonStringCreator::isButtonCore(QStringLiteral("[0x10]"), &v);
+        check(ButtonStringCreator::isButtonCore(QStringLiteral("[0x10]"), &v), "hex button token recognized");
         check(v == 16, "[0x10] -> 16");
         check(!ButtonStringCreator::isButtonCore(QStringLiteral("[abc]")), "[abc] 不是按钮核");
         check(!ButtonStringCreator::isButtonCore(QStringLiteral("[]")), "[] 不是按钮核");

@@ -48,7 +48,7 @@ QVariant evalExpressionCached(EraParseTable* table,
 } // namespace
 
 ExecutionEngine::ExecutionEngine(VariableStorage* storage, GameBaseData* gameBaseData, QObject* parent)
-    : QObject(parent), m_storage(storage), m_gameBaseData(gameBaseData), m_functionSystem(nullptr), m_running(false), m_currentLine(0), m_executionPosition(0), m_totalInstructionsExecuted(0) {
+    : QObject(parent), m_functionSystem(nullptr), m_storage(storage), m_gameBaseData(gameBaseData), m_running(false), m_currentLine(0), m_executionPosition(0), m_totalInstructionsExecuted(0) {
     connect(&m_erbLoader, &ErbLoader::objectNameChanged, this, &ExecutionEngine::objectNameChanged);
 
     // ParseTable reference (installed later via setParseTable)

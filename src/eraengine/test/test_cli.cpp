@@ -126,7 +126,7 @@ QString lineAnnotation(const ConsoleDisplayLine& line) {
 }
 
 // 显示模型：逐段（ConsoleSegment）/ 逐最小单位区块（ConsoleSpan）
-void dumpModel(const ConsoleDisplayLine& line, int absIndex) {
+[[maybe_unused]] void dumpModel(const ConsoleDisplayLine& line, int absIndex) {
     std::cout << "  #" << absIndex << " align=" << alignName(int(line.align))
               << " lineNo=" << line.lineNo
               << " logical=" << (line.isLogicalLine ? 1 : 0)
@@ -172,7 +172,7 @@ void dumpModel(const ConsoleDisplayLine& line, int absIndex) {
 }
 
 // 显示模型（扁平）：兼容旧的逐 span / 逐 button 输出
-void dumpModelFlat(const ConsoleDisplayLine& line, int absIndex) {
+[[maybe_unused]] void dumpModelFlat(const ConsoleDisplayLine& line, int absIndex) {
     std::cout << "  #" << absIndex << " align=" << alignName(int(line.align))
               << " spans=" << line.spanCount() << " buttons=" << line.buttonIndices().size()
               << "  text=\"" << line.plainText().toStdString() << "\"\n";

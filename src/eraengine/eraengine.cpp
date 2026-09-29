@@ -37,15 +37,17 @@ EraEngine::EraEngine(QObject *parent)
 			m_executionEngine(&m_variableStorage, &m_gameBaseData),
 			m_processState(),
 			m_systemStateMachine(&m_processState),
+			m_statusManager(),
+			m_signalManager(this),
 			m_parseTable(&m_processState, &m_executionEngine),
-		m_scriptRunner(&m_parseTable, &m_executionEngine, &m_processState, &m_variableStorage),
+			m_scriptRunner(&m_parseTable, &m_executionEngine, &m_processState, &m_variableStorage),
+			m_console(),
+			m_guiManager(),
+			m_identifierDictionary(),
 			m_configLoader(),
 			m_scriptProcessor(),
 			m_inputHandler(),
 			m_eventManager(),
-			m_identifierDictionary(),
-			m_statusManager(),
-			m_signalManager(this),
 			m_connectionManager(this)
 {
 		// Set variable storage in parse table for condition evaluation

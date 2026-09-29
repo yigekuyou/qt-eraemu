@@ -25,11 +25,11 @@
 #include <functional>
 
 #include "expression_ast.h"
+#include "../game_base_data.h"
 #include "../mt19937.h"
 #include "text_encoding.h"
 
 class VariableStorage; // Forward declaration
-class GameBaseData; // Forward declaration
 class ConstantTable;  // Forward declaration（CSV 常量名表）
 
 class ExpressionEvaluator : public QObject

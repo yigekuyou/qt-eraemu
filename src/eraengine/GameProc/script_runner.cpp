@@ -22,6 +22,7 @@
 #include "system_state_machine.h"
 #include "ast/expression_evaluator.h"
 #include <QDebug>
+#include <QElapsedTimer>
 #include <bit>
 
 namespace {
@@ -47,6 +48,9 @@ ScriptRunner::ScriptRunner(EraParseTable* table,
     , m_state(state)
     , m_storage(storage)
 {
+    connect(m_engine, &ExecutionEngine::consolePrint, this, [this] { m_printed = true; });
+    connect(m_engine, &ExecutionEngine::consolePrintButton, this, [this] { m_printed = true; });
+    connect(m_engine, &ExecutionEngine::consolePrintTemplate, this, [this] { m_printed = true; });
     connect(m_table, &EraParseTable::entryPointReached, this, [this](const QString&) {
         while (!m_callContexts.isEmpty())
             m_storage->setLocalContext(m_callContexts.takeLast().locals);
@@ -84,7 +88,24 @@ void ScriptRunner::onContinueExecution() {
     m_running = false;
 }
 
+ExecState ScriptRunner::runSlice(int instructionBudget, int timeBudgetMs) {
+    if (m_running || !m_state->isRunning()) return m_state->getExecState();
+    m_running = true;
+    m_printed = false;
+    if (!m_continuingSlice) m_steps = 0;
+    QElapsedTimer elapsed;
+    elapsed.start();
+    for (int i = 0; i < qMax(1, instructionBudget); ++i) {
+        if (!stepOnce() || m_printed || elapsed.elapsed() >= qMax(1, timeBudgetMs)) break;
+    }
+    m_continuingSlice = m_state->isRunning();
+    m_running = false;
+    return m_state->getExecState();
+}
+
 ExecState ScriptRunner::runToCompletion() {
+    if (m_running) return m_state->getExecState();
+    m_continuingSlice = false;
     // 直接置为 Continue 并手动驱动一次（不依赖信号接线，便于测试/CLI）
     m_state->setExecState(ExecState::Continue);
     onContinueExecution();

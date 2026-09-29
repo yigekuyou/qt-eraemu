@@ -131,6 +131,9 @@ public:
     // ---- 驱动 ----
     // 从当前状态开始，交替执行脚本与状态处理器，直到挂起/停止/出错。
     ExecState run();
+    void setPacingEnabled(bool enabled) { m_pacingEnabled = enabled; }
+    bool pacingEnabled() const { return m_pacingEnabled; }
+    void setFrameInterval(int ms) { m_frameInterval = qMax(1, ms); }
     // 用户交付整数输入后继续（写入 RESULT/systemResult）
     ExecState resume(qint64 value);
     // 用户交付字符串输入后继续
@@ -296,6 +299,11 @@ private:
     QHash<SystemStateCode, Handler> m_handlers;
     bool m_initialized = false;
     bool m_pumpActive = false;
+    bool m_pacingEnabled = false;
+    bool m_pumpScheduled = false;
+    int m_frameInterval = 16;
+    quint64 m_runGeneration = 0;
+    void schedulePump();
     bool m_atFloor = false;      // true = 函数栈回到帧底（系统层）
 
     // ---- 运行期状态（对齐 C# Process 的成员）----

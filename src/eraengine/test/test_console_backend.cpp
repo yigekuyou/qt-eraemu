@@ -122,7 +122,9 @@ int main(int argc, char* argv[]) {
                      [&windowChanged]() { ++windowChanged; });
     console.print("x"); console.print("y"); console.print("z");   // 多次输出
     console.flush();                                              // 一次刷新
-    check(windowChanged == 1, "3 prints + 1 flush -> 1 windowChanged");
+    check(windowChanged == 3, "each print publishes one QML refresh; explicit flush adds none");
+    check(console.currentLineText() == QStringLiteral("xyz"), "pending line survives refresh without forced newline");
+    check(console.lineCount() == 2, "pending line is not counted as a physical newline");
 
 
     // ---- 菜单项 `[n]` 自动变按钮（对齐 C# ButtonStringCreator）----

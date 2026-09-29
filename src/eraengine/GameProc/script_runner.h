@@ -60,6 +60,9 @@ public:
 
     // 供测试/无事件循环场景：直接同步跑到挂起或结束。
     ExecState runToCompletion();
+    // One event-loop slice. Continue means the caller must schedule another slice.
+    ExecState runSlice(int instructionBudget = 256, int timeBudgetMs = 4);
+    bool printedInSlice() const { return m_printed; }
 
     // 是否正在执行
     bool isRunning() const { return m_running; }
@@ -159,6 +162,8 @@ private:
     QHash<QString, VariableStorage::LocalContext> m_functionLocals;
     QList<CallContext> m_callContexts;   // Caller locals and loop depth, restored on every return
     bool m_running = false;
+    bool m_printed = false;
+    bool m_continuingSlice = false;
     QVariant m_lastReturnValue;
 };
 

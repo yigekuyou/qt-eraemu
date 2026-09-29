@@ -47,16 +47,8 @@ void ConsoleBackend::ensureLineOpen() {
     m_pendingOpen = true;
 }
 
-// 追加一个「未定型」的 part；同样式文本合并（C# builder + lastStringStyle）
+// Keep each print operation as a separate span, even when styles match.
 void ConsoleBackend::appendPart(const ConsoleSpan& part) {
-    if (part.kind == ConsoleSpanKind::Text && !m_pendingParts.isEmpty()) {
-        ConsoleSpan& last = m_pendingParts.last();
-        if (last.kind == ConsoleSpanKind::Text && last.style == part.style) {
-            last.text += part.text;      // 同样式直接接上（对齐 C# 的 StringBuilder）
-            last.raw = last.text;
-            return;
-        }
-    }
     m_pendingParts.append(part);
 }
 
@@ -422,12 +414,12 @@ void ConsoleBackend::setFontStyle(bool bold, bool italic, bool underline, bool s
 }
 
 void ConsoleBackend::markDirty() {
-    if (!m_dirty) {
-        m_dirty = true;
-    }
+    m_dirty = true;
+    flush();
 }
 
 void ConsoleBackend::flush() {
+    if (!m_dirty) return;
     m_dirty = false;
     emit lineCountChanged();
     emit windowChanged();
@@ -490,35 +482,42 @@ void ConsoleBackend::notifyInputDone() {
 // 窗口 / 滚动
 // ---------------------------------------------------------------------------
 
+ConsoleDisplayLine ConsoleBackend::displayLine(int index) const {
+    if (index < m_buffer.count()) return m_buffer.at(index);
+    ConsoleDisplayLine pending = buildLine();
+    m_layout.placeLine(pending, index);
+    return pending;
+}
+
 int ConsoleBackend::visibleLineCount() const {
-    const int n = m_buffer.count();
+    const int n = displayLineCount();
     const int first = std::max(0, n - m_visibleCount - m_scrollOffset);
     return n - first;
 }
 
 QVariantMap ConsoleBackend::visibleLine(int index) const {
-    const int n = m_buffer.count();
+    const int n = displayLineCount();
     const int first = std::max(0, n - m_visibleCount - m_scrollOffset);
     const int abs = first + index;
     if (index < 0 || abs >= n) {
         return QVariantMap();
     }
-    QVariantMap m = m_buffer.at(abs).toVariantMap();
+    QVariantMap m = displayLine(abs).toVariantMap();
     m.insert("absIndex", abs);
     return m;
 }
 
 int ConsoleBackend::windowFirstLine() const {
-    const int n = m_buffer.count();
+    const int n = displayLineCount();
     return std::max(0, n - m_visibleCount - m_scrollOffset);
 }
 
 QVariantList ConsoleBackend::visibleLines() const {
     QVariantList out;
-    const int n = m_buffer.count();
+    const int n = displayLineCount();
     const int first = windowFirstLine();
     for (int abs = first; abs < n; ++abs) {
-        QVariantMap m = m_buffer.at(abs).toVariantMap();
+        QVariantMap m = displayLine(abs).toVariantMap();
         m.insert("absIndex", abs);
         out.append(m);
     }
@@ -534,10 +533,10 @@ QVariantList ConsoleBackend::visibleLines() const {
 // text / image 两层各自挑出自己关心的 kind，然后按 x/y 摆放即可。
 QVariantList ConsoleBackend::visibleBlocks() const {
     QVariantList out;
-    const int n = m_buffer.count();
+    const int n = displayLineCount();
     const int first = windowFirstLine();
     for (int abs = first; abs < n; ++abs) {
-        const ConsoleDisplayLine& line = m_buffer.at(abs);
+        const ConsoleDisplayLine line = displayLine(abs);
         const int lineIndex = abs - first;
         // pointOffset 与 relCol 都是字符列单位；newline() 已经完成布局。
         const int offset = line.pointOffset;
@@ -582,17 +581,17 @@ QVariantList ConsoleBackend::layerBlocks(const QString& layer) const {
 
 // root 层的「内容高度」= 已排版可见行数 × 行高
 int ConsoleBackend::contentHeight() const {
-    return (m_buffer.count() - windowFirstLine()) * m_lineHeight;
+    return (displayLineCount() - windowFirstLine()) * m_lineHeight;
 }
 
 void ConsoleBackend::clickAt(int visibleIndex, int segmentIndex) {
-    const int n = m_buffer.count();
+    const int n = displayLineCount();
     const int first = std::max(0, n - m_visibleCount - m_scrollOffset);
     const int abs = first + visibleIndex;
     if (abs < 0 || abs >= n) {
         return;
     }
-    const ConsoleDisplayLine& line = m_buffer.at(abs);
+    const ConsoleDisplayLine line = displayLine(abs);
     if (segmentIndex < 0 || segmentIndex >= line.segments.size()) {
         return;
     }
@@ -649,7 +648,7 @@ void ConsoleBackend::setVisibleCount(int count) {
 
 void ConsoleBackend::setScrollOffset(int offset) {
     offset = std::max(0, offset);
-    const int maxOffset = std::max(0, m_buffer.count() - m_visibleCount);
+    const int maxOffset = std::max(0, displayLineCount() - m_visibleCount);
     offset = std::min(offset, maxOffset);
     if (offset == m_scrollOffset) {
         return;
@@ -659,7 +658,7 @@ void ConsoleBackend::setScrollOffset(int offset) {
 }
 
 void ConsoleBackend::setFrameMs(int ms) {
-    ms = std::max(50, ms);
+    ms = std::max(1, ms);
     if (ms == m_frameMs) {
         return;
     }
@@ -669,6 +668,6 @@ void ConsoleBackend::setFrameMs(int ms) {
 }
 
 void ConsoleBackend::clampScroll() {
-    const int maxOffset = std::max(0, m_buffer.count() - m_visibleCount);
+    const int maxOffset = std::max(0, displayLineCount() - m_visibleCount);
     m_scrollOffset = std::min(m_scrollOffset, maxOffset);
 }

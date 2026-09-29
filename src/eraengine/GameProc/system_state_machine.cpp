@@ -22,6 +22,8 @@
 
 #include <QDateTime>
 #include <QDebug>
+#include <QTimer>
+#include <QElapsedTimer>
 
 namespace {
 
@@ -481,6 +483,8 @@ void SystemStateMachine::deletePrevState() {
 // ---------------------------------------------------------------------------
 
 ExecState SystemStateMachine::run() {
+    ++m_runGeneration;
+    m_pumpScheduled = false;
     initialize();
     // C# DoScript：从**系统层**起步（Title_Begin -> beginTitle -> @SYSTEM_TITLE）。
     // 清掉装载期可能残留的位置，避免把首个函数标签当入口执行。
@@ -571,6 +575,17 @@ void SystemStateMachine::waitTimedInput(int timeoutMs) {
     }
 }
 
+void SystemStateMachine::schedulePump() {
+    if (m_pumpScheduled) return;
+    m_pumpScheduled = true;
+    const auto generation = m_runGeneration;
+    QTimer::singleShot(m_frameInterval, Qt::PreciseTimer, this, [this, generation] {
+        if (generation != m_runGeneration) return;
+        m_pumpScheduled = false;
+        if (m_state->isRunning()) pump();
+    });
+}
+
 ExecState SystemStateMachine::pump() {
     initialize();
     if (m_pumpActive) {
@@ -579,6 +594,8 @@ ExecState SystemStateMachine::pump() {
     m_pumpActive = true;
 
     int guard = 0;
+    QElapsedTimer sliceTime;
+    sliceTime.start();
     for (;;) {
         if (!m_state->isRunning()) {
             break;
@@ -594,7 +611,12 @@ ExecState SystemStateMachine::pump() {
             if (!m_runner) {
                 m_atFloor = true;
             } else {
-                m_runner->runToCompletion();
+                if (m_pacingEnabled) m_runner->runSlice();
+                else m_runner->runToCompletion();
+                if (m_pacingEnabled && m_state->isRunning()) {
+                    schedulePump();
+                    break;
+                }
                 const ExecState st = m_state->getExecState();
                 if (st == ExecState::WaitInput || st == ExecState::WaitSystemInput
                     || st == ExecState::Error) {
@@ -607,6 +629,11 @@ ExecState SystemStateMachine::pump() {
         }
 
         if (!m_state->isRunning()) {
+            break;
+        }
+
+        if (m_pacingEnabled && (guard > 64 || sliceTime.elapsed() >= 4)) {
+            schedulePump();
             break;
         }
 

@@ -181,6 +181,8 @@ public slots:
     void setFrameMs(int ms);
 
 private:
+    int displayLineCount() const { return m_buffer.count() + (m_pendingOpen ? 1 : 0); }
+    ConsoleDisplayLine displayLine(int index) const;
     void ensureLineOpen();
     void appendPart(const ConsoleSpan& part);          // 追加到「未定型」串
     void sealSpan();                                   // 未定型 part → 段
@@ -204,7 +206,7 @@ private:
     int  m_lineHeight = 19;
     int  m_visibleCount = 40;
     int  m_scrollOffset = 0;
-    int  m_frameMs = 1000;
+    int  m_frameMs = 16;
     quint64 m_generation = 1;
 
     QString m_inputKind;

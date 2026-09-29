@@ -130,7 +130,7 @@ int main(int argc, char** argv) {
 
         const ConsoleDisplayLine& l0 = c.buffer().at(0);
         const QList<ConsoleSpan> parts = l0.flatSpans();
-        check(parts.size() == 1, "同样式文本合并成 1 个区块（对齐 C# StringBuilder）");
+        check(parts.size() == 3, "each print operation remains a distinct span");
 
         ConsolePlaneOptions opt;
         opt.windowWidth = c.windowWidth();

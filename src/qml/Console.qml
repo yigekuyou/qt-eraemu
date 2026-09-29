@@ -17,6 +17,7 @@
  */
 import QtQuick
 import QtQuick.Controls
+import QtQuick.Window
 
 // 控制台视图 —— root 层 + 分层渲染
 //
@@ -36,6 +37,12 @@ import QtQuick.Controls
 Item {
     id: root
 
+    // Timer pacing follows the display cadence. QML may combine notifications in
+    // one rendered frame; a model update is not a promise of a physical frame.
+    property int refreshIntervalMs: Math.max(1, Math.ceil(1000 / (Screen.refreshRate > 0 ? Screen.refreshRate : 60)))
+    function syncCadence() { if (backend) backend.frameMs = refreshIntervalMs; }
+    onRefreshIntervalMsChanged: syncCadence()
+    onBackendChanged: { syncCadence(); syncLayout(); }
     property var backend: null              // ConsoleBackend
     property int lineHeight: 19
     property string fontName: ""            // 来自 GuiManager
@@ -214,6 +221,7 @@ Item {
         if (backend) backend.visibleCount = Math.max(1, Math.floor(viewport.height / lineHeight));
     }
     Component.onCompleted: {
+        syncCadence();
         syncLayout();
         if (backend) backend.visibleCount = Math.max(1, Math.floor(viewport.height / lineHeight));
     }

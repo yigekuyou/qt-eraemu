@@ -58,6 +58,11 @@ EraEngine::EraEngine(QObject *parent)
 		m_systemStateMachine.setParseTable(&m_parseTable);
 		m_systemStateMachine.setVariableStorage(&m_variableStorage);
 		m_systemStateMachine.setScriptRunner(&m_scriptRunner);
+        m_systemStateMachine.setPacingEnabled(true);
+        m_systemStateMachine.setFrameInterval(m_console.frameMs());
+        connect(&m_console, &ConsoleBackend::frameMsChanged, this, [this] {
+            m_systemStateMachine.setFrameInterval(m_console.frameMs());
+        });
 		m_scriptRunner.setSystemStateMachine(&m_systemStateMachine);
 		// 实时/限时输入：AWAIT / INPUTMOUSEKEY 超时 / TONEINPUT 超时 用 QTimer 驱动
 		m_systemStateMachine.setTimer([this](int ms, std::function<void()> cb) {

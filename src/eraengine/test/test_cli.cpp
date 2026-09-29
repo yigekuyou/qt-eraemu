@@ -405,6 +405,8 @@ int main(int argc, char* argv[]) {
     bool useDBus = false;      // --dbus：注册 DBus 服务
     QString socketPath;        // --socket [路径]：Unix socket
     int  tcpPort = 0;          // --tcp <端口>：TCP socket
+    bool paced = false;
+    int frameMs = 16;
     int  runMs = 0;            // --run-ms N：输入用尽后继续跑 N 毫秒（供外部注入）
     bool hasSeed = false;      // --seed N：固定 MT19937 随机种子（复现整局）
     for (int i = 1; i < argc; ++i) {
@@ -412,6 +414,7 @@ int main(int argc, char* argv[]) {
         if (a == QLatin1String("--help") || a == QLatin1String("-h")) {
             qInfo().noquote()
                 << "usage: test_cli <游戏目录> [--script 0,1,0] [--log] [--model] [--check] [--frames N]\n"
+                << "  --paced   按事件循环分片执行；--frame-ms N 设置节奏（默认16ms）\n"
                 << "  --log     追加式日志（旧行为；不反映 CLEARLINE）\n"
                 << "  --model   屏幕快照同时打印 span/button 结构\n"
                 << "  --plane   用「二维字符平面」呈现屏幕（root/text/image 分层模型重建）\n"
@@ -431,6 +434,10 @@ int main(int argc, char* argv[]) {
                 << "  --seed N         固定 MT19937 随机种子（整局可复现）\n"
                 << "  输入源：stdin / --script / DBus / socket，行协议见文件头注释";
             return 0;
+        }
+        if (a == QLatin1String("--paced")) { paced = true; continue; }
+        if (a == QLatin1String("--frame-ms") && i + 1 < argc) {
+            frameMs = qMax(1, QString::fromLocal8Bit(argv[++i]).toInt()); continue;
         }
         if (a == QLatin1String("--dbus")) {
             useDBus = true;
@@ -520,7 +527,11 @@ int main(int argc, char* argv[]) {
     ConsoleBackend* console = engine.getConsole();
     ProcessState* state = engine.getProcessState();
     SystemStateMachine* machine = engine.getSystemStateMachine();
+    machine->setPacingEnabled(paced); // deterministic synchronous headless fallback
+    engine.getConsole()->setFrameMs(frameMs);
 
+    machine->setPacingEnabled(paced);
+    console->setFrameMs(frameMs);
     engine.getScriptRunner()->setStepLimit(2000000);   // 死循环诊断：超限即报错并给出位置
     if (hasSeed) engine.setRandomSeed(seedValue);      // 固定随机种子 -> 整局可复现
 
@@ -850,6 +861,10 @@ int main(int argc, char* argv[]) {
             std::cout << "> " << c.toStdString() << "   (调试)\n";
             runDebugCommand(c);
         }
+        if (state->getExecState() == ExecState::Continue) {
+            QCoreApplication::processEvents(QEventLoop::AllEvents, 5);
+            continue;
+        }
         showScreen(QStringLiteral("第 %1 帧").arg(framesShown + 1));
         drainLog();
         const ExecState st = state->getExecState();
@@ -897,7 +912,11 @@ int main(int argc, char* argv[]) {
                 if (++pump % 40 == 0) pushScreen();       // 让 socket 客户端看到进展
                 if (!interactive && runMs > 0 && runClock.elapsed() > runMs) break;
             }
-            showScreen(QStringLiteral("第 %1 帧").arg(framesShown + 1));
+            if (state->getExecState() == ExecState::Continue) {
+            QCoreApplication::processEvents(QEventLoop::AllEvents, 5);
+            continue;
+        }
+        showScreen(QStringLiteral("第 %1 帧").arg(framesShown + 1));
             drainLog();
             pushScreen();
             if (pending.isEmpty() && scripted.isEmpty()) {

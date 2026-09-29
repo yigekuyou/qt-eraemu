@@ -548,9 +548,10 @@ bool ExecutionEngine::executeInstruction(const LogicalLine& line) {
         if (args.size() >= 2) {
             // 目的变量是字符串 -> 字符串赋值（此前只有整数路径）。
             // 目的类型从**变量表**取（LHS 操作数在 AST 里不带类型节点）。
-            const auto lhsInfo = parseLHS(args[0].raw);
+            // Type lookup must not evaluate indexed LHS expressions (e.g. A:I++).
+            const QString lhsName = splitTopLevelColon(args[0].raw).first().trimmed();
             const OperandType destType =
-                m_parseTable ? m_parseTable->variableTable().typeOf(lhsInfo.first, line.ownerFunction)
+                m_parseTable ? m_parseTable->variableTable().typeOf(lhsName, line.ownerFunction)
                              : OperandType::Unknown;
             if (destType == OperandType::Str) {
                 return handleStringAssignment(args[0].raw, args[1].raw, args[1].ast);
@@ -562,9 +563,10 @@ bool ExecutionEngine::executeInstruction(const LogicalLine& line) {
     if (name == "+=") {
         // 字符串累加（`A += B` -> A = A + B）
         if (args.size() >= 2) {
-            const auto lhsInfo = parseLHS(args[0].raw);
+            // Type lookup must not evaluate indexed LHS expressions (e.g. A:I++).
+            const QString lhsName = splitTopLevelColon(args[0].raw).first().trimmed();
             const OperandType destType =
-                m_parseTable ? m_parseTable->variableTable().typeOf(lhsInfo.first, line.ownerFunction)
+                m_parseTable ? m_parseTable->variableTable().typeOf(lhsName, line.ownerFunction)
                              : OperandType::Unknown;
             if (destType == OperandType::Str) {
                 return handleStringAssignment(args[0].raw,

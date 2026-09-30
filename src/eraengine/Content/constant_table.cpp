@@ -99,6 +99,7 @@ bool ConstantTable::loadCsvFile(const QString& filePath, const QString& tableKey
 int ConstantTable::loadCsvDirectory(const QString& csvDir, bool recursive) {
     QDir dir(csvDir);
     if (!dir.exists()) {
+        qWarning() << "[load] 常量名表目录不存在:" << csvDir;
         return 0;
     }
     int loaded = 0;
@@ -113,6 +114,7 @@ int ConstantTable::loadCsvDirectory(const QString& csvDir, bool recursive) {
         if (m_tables.contains(key)) continue;   // 同名（不同目录）只取先出现的
         if (loadCsvFile(fi.absoluteFilePath(), key)) ++loaded;
     }
+    qDebug() << "[load] 常量名表" << csvDir << ":" << loaded << "张（累计" << m_tables.size() << "张/" << m_nameCount << "名）";
     if (recursive) {
         const QStringList dirs = dir.entryList(QDir::Dirs | QDir::NoDotAndDotDot, QDir::Name);
         for (const QString& d : dirs) {

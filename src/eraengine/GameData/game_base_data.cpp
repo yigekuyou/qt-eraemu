@@ -16,6 +16,7 @@
  * along with this program.  If not, see <https://www.gnu.org/licenses/>.
  */
 #include "game_base_data.h"
+#include <QDebug>
 
 GameBaseData::GameBaseData(QObject *parent)
     : QObject(parent)
@@ -40,6 +41,7 @@ void GameBaseData::set(const QString& key, const QString& value)
 		else if (key == "追加情報") { m_additionalInfo = value; updated = true; }
 
 		if (updated) {
+				qDebug() << "[load] GameBase" << key << "=" << value;
 				emit dataChanged(); // 关键：通知 QML 属性已变更
 		}
 }

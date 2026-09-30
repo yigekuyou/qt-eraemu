@@ -810,6 +810,7 @@ void EraEngine::runSystem()
 void EraEngine::provideInput(qint64 value)
 {
 		// 用户操作交付：写入 RESULT/systemResult 并让状态机继续
+		qDebug() << "[input] provideInput" << value;
 		m_console.notifyInputDone();
 		m_systemStateMachine.resume(value);
 }
@@ -817,6 +818,7 @@ void EraEngine::provideInput(qint64 value)
 void EraEngine::provideInputString(const QString& value)
 {
 		// 字符串输入：写入 RESULTS（局部字符串槽）后继续
+		qDebug() << "[input] provideInputString" << value;
 		m_console.notifyInputDone();
 		m_systemStateMachine.resumeString(value);
 }
@@ -824,6 +826,7 @@ void EraEngine::provideInputString(const QString& value)
 void EraEngine::provideInputValues(const QVariantList& values)
 {
 		// 多值输入（INPUTMOUSEKEY：RESULT:0..4 = 类型 / 坐标 / 按键）
+		qDebug() << "[input] provideInputValues" << values;
 		m_console.notifyInputDone();
 		QList<qint64> ints;
 		ints.reserve(values.size());

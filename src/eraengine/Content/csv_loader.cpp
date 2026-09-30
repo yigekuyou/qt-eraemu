@@ -18,6 +18,7 @@
 #include "csv_loader.h"
 #include "text_encoding.h"
 #include <QRegularExpression>
+#include <QDebug>
 #include <QFileInfo>
 
 CsvLoader::CsvLoader(QObject* parent)
@@ -30,6 +31,7 @@ bool CsvLoader::loadFile(const QString& filePath) {
     bool ok = false;
     const QString content = TextCodecUtil::readFile(filePath, TextEncoding::Auto, nullptr, &ok);
     if (!ok) {
+        qWarning() << "[load] CSV 读取失败:" << filePath;
         return false;
     }
 

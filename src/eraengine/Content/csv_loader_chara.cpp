@@ -43,6 +43,7 @@
 
 #include <QDir>
 #include <QFileInfo>
+#include <QDebug>
 #include <climits>
 
 namespace {
@@ -165,5 +166,6 @@ int CsvLoader::loadCharaDirectory(const QString& charaDir,
         }
         if (defined) ++loadedChars;
     }
+    qDebug() << "[load] 角色 CSV" << charaDir << ":" << loadedChars << "个模板";
     return loadedChars;
 }

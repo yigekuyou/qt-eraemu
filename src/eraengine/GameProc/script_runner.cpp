@@ -596,6 +596,7 @@ ExecState ScriptRunner::executeLine(const LogicalLine& line) {
     }
     if (name == QLatin1String("CALL")) {
         const QString label = line.arguments.isEmpty() ? QString() : line.arguments.first().raw;
+        qDebug() << "[exec] CALL" << label << "line" << m_table->currentLine();
         const UserFunctionDecl* info = m_table->userFunction(label);
         QList<Operand> evaluated;
         QHash<QString, QString> references;

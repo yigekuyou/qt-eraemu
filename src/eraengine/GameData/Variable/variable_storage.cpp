@@ -17,6 +17,7 @@
  */
 #include "variable_storage.h"
 #include <QSet>
+#include <QDebug>
 #include "expression_evaluator.h"
 
 VariableStorage::VariableStorage(QObject *parent)
@@ -89,8 +90,10 @@ VariableStorage::VariableStorage(QObject *parent)
 bool VariableStorage::loadVariableSizes(const QString& csvPath)
 {
 		if (!m_variableConfig.loadFromCSV(csvPath)) {
+				qWarning() << "[var] VariableSize 加载失败:" << csvPath;
 				return false;
 		}
+		qDebug() << "[var] VariableSize 加载:" << csvPath;
 		// 名字 -> 容器；只处理有独立容器的系统变量
 		const auto resize1D = [this](const QString& name, QList<qint64>& vec) {
 				const int n = m_variableConfig.getSize1D(name);
@@ -153,6 +156,7 @@ void VariableStorage::ensureArraySize(const QString& name, int size, bool string
 void VariableStorage::initialize(int maxCharacters, int localSize)
 {
 		Q_UNUSED(maxCharacters)
+		qDebug() << "[var] initialize localSize =" << localSize;
 		if (localSize > 0) {
 				m_localIntVars.fill(0, localSize);
 				m_localStrVars.fill(QString(), localSize);
@@ -250,6 +254,8 @@ void VariableStorage::registerCharaDataVariable(const QString &name, bool isStri
                                                 int elementDimension)
 {
 		if (name.isEmpty()) return;
+		qDebug() << "[var] registerCharaData" << name << "str =" << isString
+				 << "dim =" << elementDimension;
 		CharaDataInfo info;
 		info.isString = isString;
 		info.dimension = qBound(0, elementDimension, 2);
@@ -626,15 +632,17 @@ qint64 VariableStorage::getCharaInt3D(const QString &name, int charaId, int x, i
 }
 
 // ================= Save/Load Methods =================
-bool VariableStorage::saveVariables(const QString &) const
+bool VariableStorage::saveVariables(const QString &path) const
 {
+		qWarning() << "[var] saveVariables 是未实现的占位（Phase 6）:" << path;
 		// Implementation will be added in Phase 6
 		// For now, just return true to indicate it's a placeholder
 		return true;
 }
 
-bool VariableStorage::loadVariables(const QString &)
+bool VariableStorage::loadVariables(const QString &path)
 {
+		qWarning() << "[var] loadVariables 是未实现的占位（Phase 6）:" << path;
 		// Implementation will be added in Phase 6
 		// For now, just return true to indicate it's a placeholder
 		return true;

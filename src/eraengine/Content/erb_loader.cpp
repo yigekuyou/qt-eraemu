@@ -263,7 +263,10 @@ bool ErbLoader::mergeParsedFile(ParsedErbFile&& pf) {
 // ---------------------------------------------------------------------------
 bool ErbLoader::loadFile(const QString& filePath) {
     const QString content = readFileContent(filePath);
-    if (content.isEmpty()) return false;
+    if (content.isEmpty()) {
+        qWarning() << "[load] ERB 读取失败或为空:" << filePath;
+        return false;
+    }
 
     ParsedErbFile pf;
     pf.scriptName = QFileInfo(filePath).baseName();
@@ -306,6 +309,8 @@ bool ErbLoader::loadDirectory(const QString& dirPath, int depth) {
         for (const QString& f : files) {
             if (!loadFile(f)) ok = false;
         }
+        qDebug() << "[load] ERB（串行）" << dirPath << ":" << files.size() << "个文件,"
+                 << "脚本" << m_scriptPaths.size() << "个,标签" << m_labels.size() << "个";
         return ok;
     }
 

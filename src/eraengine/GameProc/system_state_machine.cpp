@@ -260,6 +260,7 @@ QString SystemStateMachine::comString(int trainCode, int comNo) const {
 void SystemStateMachine::setState(SystemStateCode state) {
     const SystemStateCode old = m_state->getSystemState();
     if (old == state) return;
+    qDebug() << "[state]" << stateName(old) << "->" << stateName(state);
     m_state->setSystemState(state);
     emit stateChanged(old, state);
 }
@@ -352,6 +353,7 @@ bool SystemStateMachine::callFunction(const QString& name, bool force, bool isEv
         return false;
     }
     const QList<LabelRef> refs = m_table->labels(name);
+    qDebug() << "[exec] callFunction @" << name << "force =" << force << "isEvent =" << isEvent;
 
     if (isEvent) {
         QList<LabelRef> events;
@@ -455,6 +457,7 @@ bool SystemStateMachine::clearCommands() {
 }
 
 void SystemStateMachine::requestSaveLoad(bool save) {
+    qDebug() << "[state] requestSaveLoad" << (save ? "SAVE" : "LOAD");
     m_prevStates.append(m_state->getSystemState());
     setState(save ? SystemStateCode::SaveGame_Begin : SystemStateCode::LoadGame_Begin);
 }

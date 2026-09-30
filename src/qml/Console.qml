@@ -82,8 +82,9 @@ Item {
 
     function submit() {
         if (!backend) return;
-        if (backend.inputKind === "INPUTS" || backend.inputKind === "TONEINPUTS")
-            backend.submitInputString(inputField.text);
+        // 与 C++ 的 inputExpectsString 同源：INPUTS / SINPUTS / TONEINPUTS / ARGS 系
+        // 都是字符串型输入，其余（INPUT/TINPUT/ONEINPUT…）走整数校验。
+        if (stringInputKind) backend.submitInputString(inputField.text);
         else backend.submitInput(parseInt(inputField.text) || 0);
         inputField.text = "";
     }

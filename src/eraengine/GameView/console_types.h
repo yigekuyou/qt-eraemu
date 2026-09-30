@@ -109,6 +109,10 @@ struct ConsoleSpan {
     // ---- Image / Shape 附加参数 ----
     int      imageId = -1;      // 资源 id（-1 = 未解析）
     QSizeF   imageSize;         // 目标尺寸（<=0 表示按行高自适应）
+    // imageSize 是**像素**（取自资源固有尺寸）还是**字号百分比**（<img width=N>）。
+    // Emuera 的 <img width=N> 里 N 是相对字号的百分比；而 `<img src='X'>` 不带尺寸时
+    // 必须用资源自身像素尺寸，否则整张图会被压成一个字号见方。
+    bool     imageSizeIsPixels = false;
     QString  shapeType;         // "space" | "rect" | "line" | "polygon"
     QList<int> shapeParams;     // 百分比参数（× FontSize / 100）
     bool     error = false;     // 字体/资源异常（C# part.Error）

@@ -17,6 +17,7 @@
  */
 #include "console_backend.h"
 #include "button_string_creator.h"
+#include "resource_image_provider.h"
 #include "GameData/ast/print_template.h"
 
 #include <algorithm>
@@ -251,6 +252,16 @@ void ConsoleBackend::printTemplate(const PrintTemplate& output) {
         if (part.kind == PrintTemplatePart::Kind::Image) {
             span.kind = ConsoleSpanKind::Image; span.imageSize = QSizeF(part.width, part.height);
             span.top = part.y; span.altText = QStringLiteral("<img src='%1'>").arg(part.text);
+            // `<img src='X'>` 未指定宽高时，用资源图片的**固有像素尺寸**排版。
+            // 否则会被当成「一个字号见方」，整张图缩成小方块
+            // （eraTW 标题画面 = 35 张 1041×16 的条图，全被压成 16×16）。
+            if (part.width <= 0 || part.height <= 0) {
+                int iw = 0, ih = 0;
+                if (ResourceImageProvider::intrinsicSize(part.text, iw, ih)) {
+                    span.imageSize = QSizeF(iw, ih);
+                    span.imageSizeIsPixels = true;
+                }
+            }
         } else if (part.kind == PrintTemplatePart::Kind::Shape) {
             span.kind = ConsoleSpanKind::Shape; span.shapeType = part.shapeType;
             span.shapeParams = part.shapeParams; span.altText = QStringLiteral("<shape type='%1'>").arg(part.shapeType);
@@ -444,6 +455,20 @@ void ConsoleBackend::setFontSize(int px) {
 
 void ConsoleBackend::setWindowWidth(int px) {
     m_layout.setWindowWidth(px);
+    emit windowChanged();
+}
+
+// 逻辑网格列/行数：脚本看到的列数（居中、换行都以它为准）。
+// 与「窗口像素 / 单元格像素」同源，装载后固定。
+void ConsoleBackend::setGridColumns(int columns) {
+    if (columns <= 0 || columns == m_layout.gridColumns()) return;
+    m_layout.setGridColumns(columns);
+    emit windowChanged();   // 行位置在读取时按当前网格惰性重算
+}
+
+void ConsoleBackend::setGridRows(int rows) {
+    if (rows <= 0 || rows == m_layout.gridRows()) return;
+    m_layout.setGridRows(rows);
     emit windowChanged();
 }
 

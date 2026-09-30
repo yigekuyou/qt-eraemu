@@ -99,7 +99,7 @@ TestCase {
         backend.print("WWiii■■□　");
         backend.printButton("[HOLD]", 8);
         backend.newline(); backend.flush();
-        compare(view.cellWidth, 4);
+        compare(view.cellWidth, view.width / backend.gridColumns);
         const block = view.blockAt(0);
         const row = findChild(block, "textCells");
         let total = 0;
@@ -117,6 +117,26 @@ TestCase {
         compare(glyphs, 9);
         compare(total, block.width);
         compare(view.blockAt(1).x, block.x + block.width);
+    }
+
+    // 按钮 span 按「网格文字」渲染：00097c1 曾把它换成原生 Button
+    // （内边距/最小尺寸让按钮比文字宽，和相邻区块对不齐），现已移除。
+    // 这里锁住：逐字格子数 == 文字长度、宽高 == 网格尺寸。
+    function test_buttonSpanIsGridText() {
+        backend.clearAll();
+        backend.printButton("[HOLD]", 8);
+        backend.newline(); backend.flush();
+
+        const block = view.blockAt(0);
+        verify(block !== null && block.blockData.isButton === true, "按钮区块");
+        const row = findChild(block, "textCells");
+        verify(row !== null && row.visible, "按钮 span 用网格文字容器渲染");
+        let glyphs = 0;
+        for (let i = 0; i < row.children.length; ++i)
+            if (findChild(row.children[i], "gridGlyph")) ++glyphs;
+        compare(glyphs, block.blockData.text.length);
+        compare(block.width, block.blockData.cols * view.cellWidth);
+        compare(block.height, view.cellHeight);
     }
 
     function test_spanStyleOverridesAndDefaults() {
@@ -163,9 +183,13 @@ TestCase {
             backend.newline();
         }
         backend.flush();
-        compare(backend.gridColumns, 80);
+        // 逻辑列数由 C++ 按「窗口宽 ÷ 单元格宽（FontSize/2）」推导（与 QML 同源），
+        // 所以这里按公式核对，而不是写死旧的默认 80 列。
+        // 窗口宽取 ConsoleLayout 的默认值（760px；QML 侧不暴露该属性）。
+        const colPx = Math.max(1, Math.floor(view.fontSize / 2));
+        compare(backend.gridColumns, Math.max(1, Math.floor(760 / colPx)));
         compare(backend.gridRows, 25);
-        compare(view.cellWidth, 4);
+        compare(view.cellWidth, view.width / backend.gridColumns);
         compare(view.cellHeight, 8);
         compare(view.textBlockCount, backend.textBlocks.length);
     }

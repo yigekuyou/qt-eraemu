@@ -62,8 +62,12 @@ class ConsoleBackend : public QObject {
     Q_PROPERTY(QString inputKind     READ inputKind                                  NOTIFY inputRequested)
     Q_PROPERTY(bool waitingInput     READ waitingInput                                NOTIFY waitingInputChanged)
     Q_PROPERTY(quint64 generation    READ generation                                 NOTIFY generationChanged)
-    Q_PROPERTY(int gridColumns READ gridColumns CONSTANT)
-    Q_PROPERTY(int gridRows READ gridRows CONSTANT)
+    // 逻辑网格列/行数：**不是**常量。装载配置后会按「窗口宽 ÷ 单元格宽」重算
+    // （eraTW 是 175 列，代码默认只有 80）。若声明为 CONSTANT，QML 会一直用旧值
+    // 换算像素格子，而 C++ 给出的区块坐标已按新网格计算，两者比例不一致
+    // ——表现就是「内容比窗口宽/高出一倍，只能看见一半」。
+    Q_PROPERTY(int gridColumns READ gridColumns NOTIFY windowChanged)
+    Q_PROPERTY(int gridRows READ gridRows NOTIFY windowChanged)
 
 public:
     explicit ConsoleBackend(QObject* parent = nullptr);
@@ -137,6 +141,9 @@ public:
     // ---- 排版参数（GuiManager / 配置接线）----
     Q_INVOKABLE void setFontSize(int px);
     Q_INVOKABLE void setWindowWidth(int px);
+    // 逻辑网格（脚本看到的列/行数）——由引擎按配置窗口与字号设定，装载后不变
+    Q_INVOKABLE void setGridColumns(int columns);
+    Q_INVOKABLE void setGridRows(int rows);
     // 行高（GuiManager 的 LineHeight）：分层模型里 y = 行序号 × 行高
     Q_INVOKABLE void setLineHeight(int px);
     [[nodiscard]] int lineHeight() const { return m_lineHeight; }

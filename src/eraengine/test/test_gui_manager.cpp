@@ -80,9 +80,10 @@ int main(int argc, char* argv[]) {
         cfg.setConfig(QStringLiteral("選択中文字色"), QStringLiteral("#00FF00"));
         cfg.setConfig(QStringLiteral("フレーム毎秒"), QStringLiteral("10"));
         cfg.setConfig(QStringLiteral("履歴ログの行数"), QStringLiteral("1234"));
-        // 英文别名
+        // 英文别名（尺寸会被抬到「最小窗口」之上：字号 24/行高 30 时
+        // 最小高 = 25 行 × 30 + 96 = 846，所以给 900 以免被钳制掩盖别名是否生效）
         cfg.setConfig(QStringLiteral("WindowX"), QStringLiteral("1024"));
-        cfg.setConfig(QStringLiteral("WindowY"), QStringLiteral("768"));
+        cfg.setConfig(QStringLiteral("WindowY"), QStringLiteral("900"));
 
         GuiManager gui;
         gui.loadFromConfig(cfg);
@@ -95,7 +96,7 @@ int main(int argc, char* argv[]) {
         check(gui.focusColor() == QColor(0, 255, 0), "选中色 #00FF00");
         check(gui.fps() == 10, "fps 10");
         check(gui.maxLog() == 1234, "maxLog 1234");
-        check(gui.windowWidth() == 1024 && gui.windowHeight() == 768, "窗口 1024x768（英文别名）");
+        check(gui.windowWidth() == 1024 && gui.windowHeight() == 900, "窗口 1024x900（英文别名）");
     }
 
     // =====================================================================

@@ -200,8 +200,13 @@ AstBuilder::PrintArgMode AstBuilder::classifyPrintArg(const QString& upperName) 
     return printInfo(upperName).mode;
 }
 
-// 是否是「已知指令名」（规范表 + PRINT 族 + CALL 族 + 少数控制流）
-bool AstBuilder::isKnownInstructionName(const QString& upperName) {
+// 是否是「**精确**登记的指令名」（规范表 + PRINT 族 + CALL 族 + 少数控制流）
+//
+// 与 isKnownInstructionName 的区别：这里**不含前缀启发式**。
+// 前缀匹配（CALL…/JUMP…/GOTO…/PRINT…）会误命中同前缀的**变量名**
+// （eraTW 就有 `CALLNAME:MASTER = …`、`GOTJUEL:ARG:0 = …`），
+// 所以那些位置必须先确认「这一行不是赋值」再用。
+bool AstBuilder::isExactInstructionName(const QString& upperName) {
     if (upperName.isEmpty()) return false;
     if (findInstructionSpec(upperName.toStdString())) return true;      // 指令规范表
     if (printInfo(upperName).mode != PrintArgMode::NotPrint) return true; // PRINT 族
@@ -228,7 +233,12 @@ bool AstBuilder::isKnownInstructionName(const QString& upperName) {
     for (const char* n : kExtra) {
         if (upperName == QLatin1String(n)) return true;
     }
-    // 以 PRINT / DEBUGPRINT / HTML_PRINT / CALL / JUMP / TRY / GOTO 开头的一律按指令
+    return false;
+}
+
+// 前缀启发式：以 PRINT / DEBUGPRINT / HTML_PRINT / CALL / JUMP / TRY / GOTO 开头。
+// 目的只是兜住规范表没登记的变体（PRINTFORMD 之类）；命中不等于「这行就是指令」。
+bool AstBuilder::hasInstructionPrefix(const QString& upperName) {
     static const char* kPrefixes[] = {"PRINT", "DEBUGPRINT", "HTML_PRINT",
                                       "CALL", "JUMP", "TRYCALL", "TRYJUMP",
                                       "GOTO", "TRYGOTO", "CALLEVENT", "TRYCALLEVENT"};
@@ -236,6 +246,29 @@ bool AstBuilder::isKnownInstructionName(const QString& upperName) {
         if (upperName.startsWith(QLatin1String(p))) return true;
     }
     return false;
+}
+
+bool AstBuilder::isKnownInstructionName(const QString& upperName) {
+    return isExactInstructionName(upperName) || hasInstructionPrefix(upperName);
+}
+
+// 赋值左值必须是「一个变量引用」：以标识符起头，且顶层没有空白
+// （下标里的空白在括号内，如 `ステージ:(ステージ幅 - 1):i`）。
+bool AstBuilder::isBareVariableLhs(const QString& lhs) {
+    if (lhs.isEmpty()) return false;
+    const QChar head = lhs.at(0);
+    if (!(head.isLetter() || head == QLatin1Char('_') || head.unicode() > 127)) return false;
+    int depth = 0;
+    QChar quote;
+    for (const QChar c : lhs) {
+        if (!quote.isNull()) { if (c == quote) quote = QChar(); continue; }
+        if (c == QLatin1Char('"') || c == QLatin1Char('\'')) { quote = c; continue; }
+        if (c == QLatin1Char('(') || c == QLatin1Char('[') || c == QLatin1Char('{')) { ++depth; continue; }
+        if (c == QLatin1Char(')') || c == QLatin1Char(']') || c == QLatin1Char('}')) { if (depth > 0) --depth; continue; }
+        // 顶层空白/逗号 -> 不是单个变量引用（`CALL FOO, 1` 这类不能被当成赋值）
+        if (depth == 0 && (c.isSpace() || c == QLatin1Char(','))) return false;
+    }
+    return true;
 }
 
 bool AstBuilder::isStrFormInstruction(const QString& upperName) {
@@ -569,7 +602,15 @@ LogicalLine AstBuilder::build(const QString& rawLine,
     const WordCollection wcHead = tokenize(trimmed);
     bool firstIsInstruction = false;
     if (!wcHead.isEmpty() && wcHead.words().first().kind == WordKind::Identifier) {
-        firstIsInstruction = isKnownInstructionName(wcHead.words().first().text.toUpper());
+        const QString head = wcHead.words().first().text.toUpper();
+        firstIsInstruction = isExactInstructionName(head);
+        if (!firstIsInstruction && hasInstructionPrefix(head)) {
+            // 前缀启发式的**假阳性**：`CALLNAME:MASTER = …`（CALL 前缀）、
+            // `GOTJUEL:ARG:0 = 1`（GOTO 前缀）这类**变量**赋值。
+            // 只有当这一行不是合法赋值形状时才当成指令。
+            QString l, o, r;
+            firstIsInstruction = !(splitAssignment(trimmed, l, o, r) && isBareVariableLhs(l));
+        }
     }
     QString lhs, op, rhs;
     if (!firstIsInstruction && splitAssignment(trimmed, lhs, op, rhs)) {

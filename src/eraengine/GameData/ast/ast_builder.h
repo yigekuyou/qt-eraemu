@@ -77,6 +77,12 @@ public:
     static bool isKnownInstructionName(const QString& upperName);
 
 private:
+    // 精确登记（不含前缀启发式）/ 仅前缀命中 —— 用于甄别「同前缀的变量名赋值」。
+    static bool isExactInstructionName(const QString& upperName);
+    static bool hasInstructionPrefix(const QString& upperName);
+    // 赋值左值的形状检查：单个变量引用（无顶层空白）。
+    static bool isBareVariableLhs(const QString& lhs);
+
     // 顶层赋值切分（"="/"+="/...，含 "'="）。命中返回 true 并输出 lhs/op/rhs。
     static bool splitAssignment(const QString& line, QString& lhs, QString& op, QString& rhs);
 

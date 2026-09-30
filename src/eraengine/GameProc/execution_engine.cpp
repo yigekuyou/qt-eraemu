@@ -705,6 +705,27 @@ bool ExecutionEngine::executeInstruction(const LogicalLine& line) {
         }
         return true;
     }
+    // `'=` —— **字符串专用**赋值运算符（C# OperatorCode.AssignmentStr「単一代入」）。
+    // 左值必须是字符串变量；右值按**普通表达式**求值（不做 %..%/{..} 的格式化展开，
+    // 与 `=` 的字符串分支不同，见 EraParseTable::applyStringAssignments）。
+    // 以前这里没有分支：`X '= Y` 会落到「未知指令静默跳过」，于是
+    //   * eraTW 的改名（NAME:ARG '= RESULTS / CALLNAME:ARG '= RESULTS）点了不生效；
+    //   * 函数内静态字符串（#DIMS html）不再被重置，重绘时越接越长。
+    if (name == QLatin1String("'=")) {
+        if (args.size() >= 2) {
+            const QString lhsName = splitTopLevelColon(args[0].raw).first().trimmed();
+            const OperandType destType =
+                m_parseTable ? m_parseTable->variableTable().typeOf(lhsName, line.ownerFunction)
+                             : OperandType::Unknown;
+            if (destType == OperandType::Int) {
+                // C# 同样拒绝：整数型变量没有 '= 语义
+                qWarning() << "[exec] 整数型变量不能使用 '= 赋值，已忽略：" << lhsName;
+                return true;
+            }
+            return handleStringAssignment(args[0].raw, args[1].raw, args[1].ast);
+        }
+        return true;
+    }
     if (name == "+=") {
         // 字符串累加（`A += B` -> A = A + B）
         if (args.size() >= 2) {

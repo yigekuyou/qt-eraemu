@@ -102,6 +102,22 @@ int main(int argc, char* argv[]) {
         check(atlasSize == QSize(2, 2), "图集资源按 CSV 裁剪尺寸");
     }
     {
+        // 固有尺寸：`<img src='X'>` 不带 width/height 时排版要用它，否则图片会被
+        // 当成「一个字号见方」压成小方块（eraTW 标题画面 35 张 1041×16 条图曾如此）。
+        ResourceImageProvider::setRoot(root);
+        int w = 0, h = 0;
+        check(ResourceImageProvider::intrinsicSize(QStringLiteral("TW_title004"), w, h)
+                  && w == 2 && h == 2,
+              "图集资源固有尺寸取自 list.csv 的矩形");
+        w = h = 0;
+        check(ResourceImageProvider::intrinsicSize(QStringLiteral("face_01"), w, h)
+                  && w == 4 && h == 4,
+              "独立图片固有尺寸取自文件实际大小");
+        w = h = 0;
+        check(!ResourceImageProvider::intrinsicSize(QStringLiteral("ghost"), w, h),
+              "不存在的资源 -> false");
+    }
+    {
         ResourceImageProvider::setRoot(root);
         ResourceImageProvider prov;
         QSize size;

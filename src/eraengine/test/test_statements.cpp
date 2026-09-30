@@ -131,6 +131,50 @@ int main(int argc, char* argv[]) {
     check(storage.getGlobalInt1D("TOTAL", 0) == 2,
           "K=0,1,2 CONTINUE；K=3,4 计数 -> TOTAL == 2");
 
+    qDebug() << "\n6) '=（単一代入）与「同指令前缀的变量名」";
+    // eraTW：改名用 `NAME:ARG '= RESULTS`，称呼用 `CALLNAME:ARG '= RESULTS`。
+    // 两处都曾经失效：
+    //   * `'=` 没有被执行链处理 -> 落到「未实现指令静默跳过」；
+    //   * `CALLNAME…` 命中 isKnownInstructionName 的 "CALL" 前缀启发式
+    //     -> 整行被当成 CALL 族指令，连赋值都不是。
+    // 后果：点了改名/称呼没反应；函数内静态串（#DIMS html）不再重置，重绘时越接越长。
+    {
+        const AstResolver resolveOne = [&table](const QString& e) { return table.expressionAst(e); };
+        const auto execOne = [&](const QString& src) {
+            LogicalLine l = AstBuilder::build(src, ScriptPosition("t.ERB", 0, 0), resolveOne);
+            engine.executeInstruction(l);
+            return l;
+        };
+        const LogicalLine assign = execOne(QStringLiteral("CALLNAME:3 '= \"新称呼\""));
+        check(assign.functionName == QLatin1String("'="),
+              "CALLNAME:3 '= … 解析为赋值（不再被 CALL 前缀误判为指令）");
+        check(storage.getCharaStr(QStringLiteral("CALLNAME"), 3, 0) == QStringLiteral("新称呼"),
+              "称呼写入生效");
+
+        storage.setLocalStr(0, QStringLiteral("新名字"));
+        execOne(QStringLiteral("NAME:3 '= RESULTS"));
+        check(storage.getCharaStr(QStringLiteral("NAME"), 3, 0) == QStringLiteral("新名字"),
+              "NAME:3 '= RESULTS 写入生效");
+
+        // `=` 也有同样的前缀假阳性（eraTW：CALLNAME:MASTER = %CALLNAME:nNo%）
+        const LogicalLine eqAssign = execOne(QStringLiteral("CALLNAME:4 = \"克勞恩皮絲\""));
+        check(eqAssign.functionName == QLatin1String("="),
+              "CALLNAME:4 = … 解析为赋值");
+        check(storage.getCharaStr(QStringLiteral("CALLNAME"), 4, 0) == QStringLiteral("克勞恩皮絲"),
+              "= 写入生效");
+
+        // 负向：真指令不能被误判成赋值
+        check(AstBuilder::build(QStringLiteral("PRINTFORML a = b"), {}, resolveOne)
+                  .functionName != QLatin1String("="),
+              "PRINTFORML a = b 仍是指令（左值含空白）");
+        check(AstBuilder::build(QStringLiteral("CALL FOO, 1"), {}, resolveOne)
+                  .functionName == QLatin1String("CALL"),
+              "CALL FOO, 1 仍是 CALL 指令");
+        check(AstBuilder::build(QStringLiteral("PRINTFORM  ({BASE:MASTER:体力,5})"), {}, resolveOne)
+                  .functionName == QLatin1String("PRINTFORM"),
+              "PRINTFORM  ({…}) 仍是指令");
+    }
+
 
     // ecd/docs/translation/Command.html: PRINTBUTTON accepts integer or string values.
     {

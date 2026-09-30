@@ -103,10 +103,16 @@ EraEngine::EraEngine(QObject *parent)
 				: QStringLiteral("-"));
 		m_executionEngine.setMaxLineUnits(
 			qMax(1, m_guiManager.windowWidth() / qMax(1, m_guiManager.fontSize() / 2)));
+		// 逻辑网格：脚本看到的列/行数固定为「配置窗口 ÷ 单元格像素」。
+		// 它与 maxLineUnits 必须同源 —— 否则居中（offset = 网格列/2 - 行宽/2）
+		// 会按错误的列数计算，宽度超过默认 80 列的图片/长行会被挤到左边
+		// （eraTW 标题图宽 130 列，正是被 80 列的网格压到 col 0 的）。
+		syncConsoleGrid();
 		// 窗口宽/字号变化后同步（DRAWLINE 的铺满宽度由它决定）
 		connect(&m_guiManager, &GuiManager::settingsChanged, this, [this]() {
 			m_executionEngine.setMaxLineUnits(
 				qMax(1, m_guiManager.windowWidth() / qMax(1, m_guiManager.fontSize() / 2)));
+			syncConsoleGrid();
 		});
 		m_guiManager.setStartDirectory(m_gameDirectory);
 		m_guiManager.setWindowTitle(m_gameBaseData.windowTitle());
@@ -694,8 +700,21 @@ QStringList EraEngine::parseWarnings() const
 		return m_parseTable.parseWarnings();
 }
 
-void EraEngine::loadGameBaseData()
+// 逻辑网格 = 脚本看到的列/行数（窗口像素只是呈现层的事，不能反过来影响换行）。
+// 列：窗口宽 / 半角字宽；行：窗口高 / 行高。与 executionEngine 的 maxLineUnits 同源。
+void EraEngine::syncConsoleGrid()
 {
+		const int columnPx = qMax(1, m_guiManager.fontSize() / 2);
+		const int columns = qMax(1, m_guiManager.windowWidth() / columnPx);
+		const int lineHeight = qMax(1, m_guiManager.lineHeight());
+		const int rows = qMax(1, m_guiManager.windowHeight() / lineHeight);
+		m_console.setGridColumns(columns);
+		m_console.setGridRows(rows);
+		qDebug() << "[render] 逻辑网格" << columns << "列 x" << rows << "行"
+				 << "(单元格" << columnPx << "x" << lineHeight << "px)";
+}
+
+void EraEngine::loadGameBaseData(){
 		// 对齐 C#：GameBase.csv 位于 CSV 目录（Program.CsvDir + "GAMEBASE.CSV"）
 		if (m_csvDir.isEmpty()) {
 				qDebug() << "[EraEngine] CSV 目录未解析，跳过 GameBase.csv";

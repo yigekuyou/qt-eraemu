@@ -59,6 +59,12 @@ public:
     // 解析资源名到绝对文件路径（不存在返回空串）。root 为空时用已设置的根。
     [[nodiscard]] static QString resolvePath(const QString& id, const QString& root = QString());
 
+    // 资源图片的**固有像素尺寸**（对齐 C# Emuera 的 ImageResource）。
+    // `<img src='X'>` 不带 width/height 时，排版必须用图片自身尺寸；否则会被当成
+    // 「一个字号见方」而缩成小方块（eraTW 标题画面正是这样被压成 16×16 的）。
+    // 命中 resources/list.csv 的矩形取 w/h，否则按文件实际尺寸。找不到返回 false。
+    static bool intrinsicSize(const QString& id, int& width, int& height);
+
 private:
     static QString s_root;
     static QHash<QString, Sprite> s_atlas;

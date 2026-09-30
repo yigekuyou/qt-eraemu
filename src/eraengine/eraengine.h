@@ -175,6 +175,11 @@ public:
     
     // Game base data loading
     void loadGameBaseData();
+
+    // 把「配置窗口 ÷ 单元格像素」同步成控制台逻辑网格列/行数。
+    // 居中（offset = 网格列/2 - 行宽/2）、DRAWLINE 铺满宽度都以它为准，
+    // 必须与 maxLineUnits 同源。
+    void syncConsoleGrid();
     
     // Config loading helper (callable from QML)
     Q_INVOKABLE void loadConfig(const QString& filePath, int precedence = 0);

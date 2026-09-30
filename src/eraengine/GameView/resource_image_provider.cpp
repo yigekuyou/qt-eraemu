@@ -134,6 +134,41 @@ QString ResourceImageProvider::resolvePath(const QString& id, const QString& roo
     return QString();
 }
 
+// 资源图片固有尺寸：优先用清单里的矩形（图集裁剪后的真实尺寸，无需解码图片），
+// 否则退回加载文件取原始尺寸。只用于排版测量；失败不影响实际渲染。
+bool ResourceImageProvider::intrinsicSize(const QString& id, int& width, int& height) {
+    const QString normalized = normalizeId(id);
+    ensureAtlasLoaded(s_root);
+
+    const auto atlasIt = s_atlas.constFind(normalized);
+    if (atlasIt != s_atlas.constEnd()) {
+        const Sprite& sprite = atlasIt.value();
+        if (sprite.hasRect && sprite.w > 0 && sprite.h > 0) {
+            width = sprite.w;
+            height = sprite.h;
+            return true;
+        }
+        const QString source = QDir(s_root).filePath(
+            QStringLiteral("resources/%1").arg(sprite.sourceFile));
+        QImage image;
+        if (image.load(source) && !image.isNull()) {
+            width = image.width();
+            height = image.height();
+            return true;
+        }
+        return false;
+    }
+
+    const QString path = resolvePath(normalized);
+    if (path.isEmpty()) return false;
+    QImage image;
+    if (!image.load(path) || image.isNull()) return false;
+    width = image.width();
+    height = image.height();
+    return true;
+}
+
+
 QImage ResourceImageProvider::requestImage(const QString& id, QSize* size, const QSize& requestedSize) {
     const QString normalizedId = normalizeId(id);
     ensureAtlasLoaded(s_root);

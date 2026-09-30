@@ -50,17 +50,31 @@ int ConsoleLayout::maxCols() const {
 void ConsoleLayout::measurePart(ConsoleSpan& part) const {
     switch (part.kind) {
     case ConsoleSpanKind::Image: {
-        // 图片宽度：<img width> 是 FontSize 的百分比；缺省按行高占一格见方
-        int wPx = part.imageSize.width() > 0
+        // 尺寸有两种来源：
+        //   * imageSizeIsPixels：资源**固有像素**尺寸（`<img src='X'>` 不带宽高时的正解）
+        //   * 否则：`<img width=N>` 的 N 是**字号百分比**（C# 语义）
+        int wPx = 0;
+        int hPx = 0;
+        if (part.imageSizeIsPixels && part.imageSize.width() > 0) {
+            wPx = static_cast<int>(part.imageSize.width());
+            hPx = static_cast<int>(part.imageSize.height());
+        } else {
+            wPx = part.imageSize.width() > 0
                       ? static_cast<int>(part.imageSize.width() * m_fontSize / 100.0)
                       : 0;
+            hPx = part.imageSize.height() > 0
+                      ? static_cast<int>(part.imageSize.height() * m_fontSize / 100.0)
+                      : 0;
+        }
         if (wPx <= 0) wPx = m_fontSize;                  // 缺省 = 1 个全角宽
+        if (hPx <= 0) hPx = m_lineHeight;
         part.cols = qMax(1, qRound(wPx / static_cast<double>(columnWidthPx())));
-        part.rows = 1;
+        // 高图（立ち絵/顔絵）必须跨多行，否则后面的行会与图重叠
+        part.rows = qMax(1, qRound(hPx / static_cast<double>(qMax(1, m_lineHeight))));
         part.width = part.cols * columnWidthPx();
-        part.height = m_lineHeight;
+        part.height = part.rows * m_lineHeight;
         part.top = 0;
-        part.bottom = m_lineHeight;
+        part.bottom = part.height;
         break;
     }
     case ConsoleSpanKind::Shape: {

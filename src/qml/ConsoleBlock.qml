@@ -28,14 +28,18 @@ import QtQuick.Controls
 // **像素大小由本组件决定**：px = col × cellWidth，py = row × cellHeight，
 // 也就是说换字体/缩放只改 cellWidth/cellHeight，不用动 C++。
 //
-//   kind === "text"  → Text（按钮 span 则是原生 Button）
+//   kind === "text"  → Text（**可点击 span 也是 Text**，只是多一层悬停高亮）
 //   kind === "image" → Image（source: image://emuera/<资源名>；取不到退化成 altText）
 //   kind === "shape" → Rectangle（space / rect / line）
 //
 // 点击由区块自己上报：同一个「段」的多个区块共享同一份点击值，
 // 所以点哪个区块都等价（对齐 C# 的「先命中 part，再映射到 ConsoleButtonString」）。
-// 按钮 span 用原生 Button 提供外观与禁用态；点击仍统一走 blockButtonMouse，
-// 让「命中 → clickAt → submitInput」只有一个入口（与 C++ 世代校验同源）。
+//
+// 按钮 span **不再套原生 Button**（00097c1 引入，已移除）：Qt Quick Controls 的
+// Button 有自己的内边距/最小尺寸/居中文本，画出来比文字宽，且与按网格排布的
+// 相邻区块对不齐。Emuera 的按钮就是「文字 + 换色 + tooltip」，所以这里统一按
+// 网格逐字排布，只保留悬停高亮；命中仍只有一个入口 blockButtonMouse
+// （「命中 → clickAt → submitInput」，与 C++ 世代校验同源）。
 Item {
     id: block
 
@@ -67,7 +71,6 @@ Item {
     }
 
     readonly property string kind: blockData ? (blockData.kind || "text") : "text"
-    readonly property bool isButtonSpan: blockData ? blockData.isButton === true : false
     readonly property int gridCol: blockData && blockData.col !== undefined ? blockData.col : 0
     readonly property int gridRow: blockData && blockData.row !== undefined ? blockData.row : 0
     readonly property int gridCols: blockData && blockData.cols > 0 ? blockData.cols : 1
@@ -80,48 +83,13 @@ Item {
     x: gridCol * cellWidth
     y: gridRow * cellHeight
     // 外层至少覆盖 C++ 的网格测量；文本内容本身由 glyph 容器自动撑开。
-    width: Math.max(gridCols * cellWidth, isButtonSpan ? 0 : contentRow.implicitWidth)
+    width: Math.max(gridCols * cellWidth, contentRow.implicitWidth)
     height: Math.max(gridRows * cellHeight, contentRow.implicitHeight)
 
-    // ---- 按钮 span：原生 Button 提供外观/悬停/禁用态 ----
-    Button {
-        id: buttonChrome
-        visible: block.isButtonSpan
-        anchors.fill: parent
-        enabled: false                       // 交互统一由 blockButtonMouse 上报
-        hoverEnabled: false
-        leftPadding: 6
-        rightPadding: 6
-        topPadding: 0
-        bottomPadding: 0
-        text: block.blockData ? (block.blockData.text || "") : ""
-        font.family: block.effectiveFontName
-        font.pixelSize: block.fontSize > 0 ? block.fontSize : undefined
-        font.bold: block.blockData ? block.blockData.bold === true : false
-        opacity: block.clickable ? 1.0 : 0.65
-        palette.button: block.effectiveTextColor
-        palette.buttonText: block.hovered ? block.effectiveFocusColor : block.effectiveTextColor
-        palette.highlight: block.effectiveFocusColor
-        down: block.hovered                  // 由 blockButtonMouse 驱动原生按压/高亮
-        highlighted: block.hovered
-        // 按钮文本按 C++ 量好的格子宽度截断，不撑破平面布局
-        contentItem: Label {
-            text: buttonChrome.text
-            font: buttonChrome.font
-            color: buttonChrome.palette.buttonText
-            verticalAlignment: Text.AlignVCenter
-            elide: Label.ElideRight
-            maximumLineCount: 1
-        }
-        ToolTip.visible: block.hovered && block.blockData && (block.blockData.tooltip || "") !== ""
-        ToolTip.delay: 350
-        ToolTip.text: block.blockData ? (block.blockData.tooltip || "") : ""
-    }
-
-    // ---- 悬停高亮（可点击区块）----
+    // ---- 悬停高亮（可点击区块，含按钮 span）----
     Rectangle {
         anchors.fill: parent
-        visible: block.hovered && !block.isButtonSpan
+        visible: block.hovered
         color: block.effectiveFocusColor
         opacity: 0.22
         radius: 2
@@ -135,9 +103,9 @@ Item {
         objectName: "textCells"
         anchors.left: parent.left
         anchors.verticalCenter: parent.verticalCenter
-        visible: block.kind === "text" && !block.isButtonSpan
+        visible: block.kind === "text"
         Repeater {
-            model: block.visible && block.kind === "text" && !block.isButtonSpan
+            model: block.visible && block.kind === "text"
                    ? (block.blockData ? (block.blockData.text || "").split("") : []) : []
             delegate: Item {
                 required property string modelData
@@ -221,5 +189,11 @@ Item {
             if (block.backend && block.clickable && block.blockData)
                 block.backend.clickAt(block.blockData.lineIndex, block.blockData.segmentIndex);
         }
+        // 按钮的 Title（C# ButtonString.Title）——以前挂在原生 Button 上，
+        // 去掉按钮样式后改挂在命中区上，行为不变。
+        ToolTip.visible: block.hovered && block.blockData
+                         && (block.blockData.tooltip || "") !== ""
+        ToolTip.delay: 350
+        ToolTip.text: block.blockData ? (block.blockData.tooltip || "") : ""
     }
 }

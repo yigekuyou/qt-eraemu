@@ -107,6 +107,10 @@ enum class BuiltinOp : quint16 {
     Match, CharaMatch, GroupMatch, Nosames, Allsames, FindElement,
     FindLastElement, GetNum, VarSize, GetConfig, GetConfigs,
     ExistCsv, CsvChara, GetColor, GetStyle,
+    // ---- 显示状态查询（语句形式与式中形式都用；对齐 C# 的 Console 系函数）----
+    GetDefColor, GetBgColor, GetDefBgColor, CurrentRedraw,
+    // ---- 格式化串长度（STRLENFORM / STRLENFORMU）----
+    StrLenForm, StrLenFormU,
 };
 
 struct BuiltinFunctionSpec {
@@ -148,15 +152,15 @@ inline constexpr BuiltinFunctionSpec kBuiltinFunctions[] = {
     {"MOUSESKIP"           , OperandType::Int, 0, 0, """", false, BuiltinOp::None},
     {"MESSKIP"             , OperandType::Int, 0, 0, """", false, BuiltinOp::None},
     {"GETCOLOR"            , OperandType::Int, 0, 0, """", true , BuiltinOp::GetColor},
-    {"GETDEFCOLOR"         , OperandType::Int, 0, 0, """", true , BuiltinOp::None},
+    {"GETDEFCOLOR"         , OperandType::Int, 0, 0, """", true , BuiltinOp::GetDefColor},
     {"GETFOCUSCOLOR"       , OperandType::Int, 0, 0, """", true , BuiltinOp::None},
-    {"GETBGCOLOR"          , OperandType::Int, 0, 0, """", true , BuiltinOp::None},
-    {"GETDEFBGCOLOR"       , OperandType::Int, 0, 0, """", true , BuiltinOp::None},
+    {"GETBGCOLOR"          , OperandType::Int, 0, 0, """", true , BuiltinOp::GetBgColor},
+    {"GETDEFBGCOLOR"       , OperandType::Int, 0, 0, """", true , BuiltinOp::GetDefBgColor},
     {"GETSTYLE"            , OperandType::Int, 0, 0, """", false, BuiltinOp::GetStyle},
     {"GETFONT"             , OperandType::Str, 0, 0, """", false, BuiltinOp::None},
     {"BARSTR"              , OperandType::Str, 3, 3, "iii", true , BuiltinOp::BarStr},
     {"CURRENTALIGN"        , OperandType::Str, 0, 0, """", false, BuiltinOp::None},
-    {"CURRENTREDRAW"       , OperandType::Int, 0, 0, """", false, BuiltinOp::None},
+    {"CURRENTREDRAW"       , OperandType::Int, 0, 0, """", false, BuiltinOp::CurrentRedraw},
     {"COLOR_FROMNAME"      , OperandType::Int, 1, 1, "s", true , BuiltinOp::None},
     {"COLOR_FROMRGB"       , OperandType::Int, 3, 3, "iii", true , BuiltinOp::None},
     {"CHKCHARADATA"        , OperandType::Int, 1, 1, "s", false, BuiltinOp::None},
@@ -282,6 +286,28 @@ inline constexpr BuiltinFunctionSpec kBuiltinFunctions[] = {
     {"SPRITEANIMECREATE"   , OperandType::Int, 3, 3, "sii", false, BuiltinOp::None},
     {"SPRITEANIMEADDFRAME" , OperandType::Int, 9, 9, "siiiiiiii", false, BuiltinOp::None},
     {"SETANIMETIMER"       , OperandType::Int, 1, 1, "i", false, BuiltinOp::None},
+
+    // ------------------------------------------------------------------
+    // 语句形式的内部函数（对齐 C# FunctionIdentifier.funcDic 里
+    // 「只有 ArgumentBuilder、没有 Instruction」的一类：它们既能作式中函数，
+    // 也能单独成行当**函数语句**用，返回值写 RESULT / RESULTS:0）。
+    // eraTW 里实际出现但此前完全没登记的名字都补在这里。
+    // ------------------------------------------------------------------
+    {"TWAIT"               , OperandType::Int, 1, 2, "ii", false, BuiltinOp::None},   // TWAIT <ms>[, <skip>]
+    {"RESETBGCOLOR"        , OperandType::Int, 0, 0, """", false, BuiltinOp::None},   // 背景色复位
+    {"RESET_STAIN"         , OperandType::Int, 1, 1, "i", false, BuiltinOp::None},    // 污渍清零
+    {"SAVECHARA"           , OperandType::Int, 2, -1, "ssi", false, BuiltinOp::None}, // <文件>,<摘要>,<角色番号>…
+    {"LOADCHARA"           , OperandType::Int, 1, 1, "s", false, BuiltinOp::None},
+    {"SWAPCHARA"           , OperandType::Int, 2, 2, "ii", false, BuiltinOp::None},
+    {"COPYCHARA"           , OperandType::Int, 2, 2, "ii", false, BuiltinOp::None},
+    {"ADDCOPYCHARA"        , OperandType::Int, 1, -1, "i", false, BuiltinOp::None},
+    {"PICKUPCHARA"         , OperandType::Int, 1, -1, "i", false, BuiltinOp::None},
+    {"STRLENFORM"          , OperandType::Int, 0, 1, "s", false, BuiltinOp::StrLenForm},
+    {"STRLENFORMU"         , OperandType::Int, 0, 1, "s", false, BuiltinOp::StrLenFormU},
+    {"PUTFORM"             , OperandType::Int, 0, 1, "s", false, BuiltinOp::None},    // 存档摘要（SAVEDATA_TEXT）
+    {"INITRAND"            , OperandType::Int, 0, 0, """", false, BuiltinOp::None},
+    {"DUMPRAND"            , OperandType::Int, 0, 0, """", false, BuiltinOp::None},
+    {"DEBUGCLEAR"          , OperandType::Int, 0, 0, """", false, BuiltinOp::None},
 };
 
 inline constexpr std::size_t kBuiltinFunctionCount = std::size(kBuiltinFunctions);

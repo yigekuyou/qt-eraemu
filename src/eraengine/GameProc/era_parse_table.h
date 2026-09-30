@@ -76,6 +76,11 @@ struct ScriptData {
     QHash<int, int>     jumpTo;         // 控制转移：行 -> 目标行（C# JumpTo）
     QHash<int, int>     jumpToEnd;      // 循环开始行 -> 结束行
     QHash<int, QList<int>> ifBranches;  // IF 行 -> 其 ELSEIF/ELSE 行列表（C# IfCaseList）
+    // TRYC 系异常块的配对（对齐 C# ErbLoader 的 nestStack + JumpToEndCatch）
+    //   catchLines    : TRYC 行     -> 配对的 CATCH 行（失败时跳到它**之后**）
+    //   endCatchLines : CATCH 行    -> 配对的 ENDCATCH 行（顺序落入时跳到它之后）
+    QHash<int, int>     catchLines;
+    QHash<int, int>     endCatchLines;
     QString             path;           // 源文件路径（供入口点/诊断显示）
 };
 
@@ -157,6 +162,11 @@ public:
 
     // IF 行 -> 其 ELSEIF/ELSE 分支行列表（C# IfCaseList）；空表示无分支
     [[nodiscard]] QList<int> ifBranches(const QString& scriptName, int ifLine) const;
+
+    // TRYC 系异常块：TRYC 行 -> 配对 CATCH 行 / CATCH 行 -> 配对 ENDCATCH 行
+    // （-1 = 没有配对；对齐 C# InstructionLine.JumpToEndCatch）
+    [[nodiscard]] int catchTarget(const QString& scriptName, int trycLine) const;
+    [[nodiscard]] int endCatchTarget(const QString& scriptName, int catchLine) const;
 
     // 用户自定义函数注册表（对齐 C# FunctionLabelLine）
     [[nodiscard]] const UserFunctionInfo* userFunction(const QString& name) const;

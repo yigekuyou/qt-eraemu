@@ -78,6 +78,71 @@ int main(int argc, char** argv) {
         "CHECK = 1",
         "TRYCALLFORM NOPE_%A%",
         "CHECK += 1"}, 2);
+    // TRYC 系 + CATCH + THROW（eraTW 的 EXISTOBJ：TRYCCALLFORM EXIST_xxx + CALLF SET_EXIST）
+    //   * 目标存在   -> 执行 TRY 体，落到 CATCH 时跳到 ENDCATCH 之后
+    //   * 目标不存在 -> 从 CATCH 的**下一行**开始执行异常体
+    run("TRYCCALLFORM 命中 = 正常调用", {
+        "A = 1",
+        "TRYCCALLFORM SUB_%A%",
+        "CHECK = 10",
+        "CATCH",
+        "CHECK = 999",
+        "ENDCATCH",
+        "RETURN",
+        "@SUB_1",
+        "CHECK += 1",
+        "RETURN"}, 10);
+    run("TRYCCALLFORM 未命中 = 进入 CATCH", {
+        "A = 2",
+        "TRYCCALLFORM SUB_%A%",
+        "CHECK = 10",
+        "CATCH",
+        "CHECK = 7",
+        "ENDCATCH",
+        "RETURN",
+        "@SUB_1",
+        "CHECK = 999",
+        "RETURN"}, 7);
+    run("TRY 无 CATCH 未命中 = 静默跳过", {
+        "A = 3",
+        "TRYCCALLFORM SUB_%A%",
+        "CHECK = 1",
+        "RETURN",
+        "@SUB_1",
+        "CHECK = 999",
+        "RETURN"}, 1);
+    // THROW **不会**被 CATCH 接住：Emuera 文档《异常分支：TRYC / CATCH / ENDCATCH》
+    // 明确「用于捕获『函数不存在』的情况」，THROW 走 CodeEE（报错并停止脚本）。
+    // 对齐 C# THROW_Instruction：`throw new CodeEE(...)`。
+    // 本移植里 THROW 只报错、不中断（见 ScriptRunner::executeLine 的注释），
+    // 所以异常体不执行，TRY 体正常收尾。
+    run("THROW 不被 CATCH 捕获（异常体不执行）", {
+        "TRYCCALLFORM THROWER",
+        "CHECK = 10",
+        "CATCH",
+        "CHECK = 3",
+        "ENDCATCH",
+        "RETURN",
+        "@THROWER",
+        "CHECK = 999",
+        "THROW \"boom\"",
+        "RETURN"}, 10);
+    // CALLF：调用式中関数并把返回值写进 RESULT（以前整行被静默丢弃）
+    run("CALLF 调用式中関数 -> RESULT", {
+        "CALLF DOUBLE(21)",
+        "CHECK = RESULT",
+        "RETURN",
+        "@DOUBLE(N)",
+        "#FUNCTION",
+        "RETURNF N * 2"}, 42);
+    run("CALLFORMF 格式化函数名", {
+        "A = 7",
+        "CALLFORMF TRIPLE_%A%(A)",
+        "CHECK = RESULT",
+        "RETURN",
+        "@TRIPLE_7(N)",
+        "#FUNCTION",
+        "RETURNF N * 3"}, 21);
     run("CASE mixed forms", {"SELECTCASE 5", "CASE 1, 4 TO 6, IS > 10", "CHECK = 1", "CASEELSE", "CHECK = 999", "ENDSELECT"}, 1);
     run("CASE reversed range", {"SELECTCASE 5", "CASE 6 TO 4", "CHECK = 999", "CASEELSE", "CHECK = 1", "ENDSELECT"}, 1);
     run("CASE string relation", {"SELECTCASE \"abc\"", "CASE IS > \"zzz\"", "CHECK = 999", "CASE IS < \"def\"", "CHECK = 1", "ENDSELECT"}, 1);

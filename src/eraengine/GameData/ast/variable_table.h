@@ -19,6 +19,7 @@
 #define AST_VARIABLE_TABLE_H
 
 #include <QHash>
+#include <functional>
 #include <QString>
 #include <QList>
 #include "operand_type.h"
@@ -87,12 +88,21 @@ public:
     [[nodiscard]] bool constArrayAt(const QString& name, int index, qint64& out) const;
     [[nodiscard]] int constArraySize(const QString& name) const;
     void setConstStr(const QString& name, const QString& value);
+    // `#DIM CONST NAME = <非常量字面量的表达式>`（如 `= 人物数量上限`）。
+    // 声明顺序 / 跨文件顺序不可靠，所以**不在装载期**求值，而是把表达式留到
+    // 求值期惰性计算（`#DIM CONST OBJ_ID_LAST = 人物数量上限` 曾因此恒为 0，
+    // 进而 INRANGE(…, OBJ_ID_LAST) 为假 -> eraTW 的 EXISTOBJ 抛 THROW）。
+    void setConstExprs(const QString& name, const QStringList& exprs);
+    [[nodiscard]] QStringList constExprs(const QString& name) const;
     [[nodiscard]] bool constInt(const QString& name, qint64& out) const;
     [[nodiscard]] bool constStr(const QString& name, QString& out) const;
     [[nodiscard]] int constCount() const { return m_constInt.size() + m_constStr.size(); }
 
     // 用常数表重新求值所有声明的维数（后声明的常数也能修正先前的声明）
     void resolveDimensions();
+    // 维数表达式的兜底求值器（`#DIM X, CLASS_NUM + 1` 这类算式/复合表达式）。
+    // 由 EraParseTable 在常量表就绪后注入 —— 求值器内部会回查本表的常数。
+    void setDimEvaluator(std::function<qint64(const QString&)> fn) { m_dimEvaluator = std::move(fn); }
 
     // 把一个已构建的 AST 中的变量节点按表回填类型（强类型回填）
     static void applyTypes(ExpressionNode& node, const VariableTable& table,
@@ -106,6 +116,8 @@ private:
     QHash<QString, qint64>  m_constInt;
     QHash<QString, QList<qint64>> m_constArray;
     QHash<QString, QString> m_constStr;
+    QHash<QString, QStringList> m_constExpr;   // 未折叠的 CONST 初值表达式
+    std::function<qint64(const QString&)> m_dimEvaluator;   // 维数表达式兜底求值
     // 反向索引：局部变量名 -> 声明它的函数个数 / 唯一时的类型（空上下文 O(1) 查询）
     QHash<QString, int> m_localNameCount;
     QHash<QString, OperandType> m_uniqueLocalType;

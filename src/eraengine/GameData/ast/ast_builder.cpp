@@ -20,6 +20,7 @@
 #include "strform_parser.h"
 #include "print_template.h"
 #include "argument_parser.h"
+#include "function_types.h"   // isBuiltinFunction（函数语句的定性）
 
 namespace {
 
@@ -103,8 +104,12 @@ bool AstBuilder::isCallFamilyInstruction(const QString& upperName) {
     static const char* kNames[] = {
         "CALL", "CALLFORM", "CALLF", "CALLFORMF",
         "TRYCALL", "TRYCALLFORM", "TRYCALLF", "TRYCALLFORMF",
+        // TRYC* 系（C# CALL_Instruction(isTry=true, isTryCatch=true)）：
+        // eraTW 的 口上 大量使用 TRYCCALLFORM UNIQUE_FA_{CHARA}(…)。
+        "TRYCCALL", "TRYCCALLFORM", "TRYCJUMP", "TRYCJUMPFORM",
         "JUMP", "JUMPFORM", "TRYJUMP", "TRYJUMPFORM",
-        "GOTOFORM", "TRYGOTOFORM", "CALLEVENT", "TRYCALLEVENT",
+        "GOTOFORM", "TRYGOTOFORM", "TRYCGOTO", "TRYCGOTOFORM",
+        "CALLEVENT", "TRYCALLEVENT",
         "BEGIN",
     };
     for (const char* n : kNames) {
@@ -221,8 +226,15 @@ bool AstBuilder::isExactInstructionName(const QString& upperName) {
         "DATAFORM", "DATA", "ENDDATA", "FORCEWAIT", "SKIPDISP", "REUSELASTLINE",
         "FONTREGULAR", "FONTSTYLE", "FONTBOLD", "FONTITALIC", "FONTSTRIKE",
         "CATCH", "ENDCATCH", "TRYCALLLIST", "TRYJUMPLIST", "GOTOLIST",
-        "SWAP", "SWAPVAR", "TIMES", "BAR", "POWER", "SORTCHARA", "VARSET",
+        "SWAP", "SWAPVAR", "TIMES", "BAR", "BARL", "POWER", "SORTCHARA", "VARSET",
         "CVARSET", "ADDCHARA", "DELCHARA", "ADDCHARAALL", "SPLIT",
+        // 由执行链（ScriptRunner）处理的控制流型指令：不在指令规范表里，
+        // 但必须算「已知」，否则装载期会刷「未识别的指令」。
+        "DOTRAIN", "CALLTRAIN", "STOPCALLTRAIN", "FORCEWAIT", "SKIPDISP",
+        "REUSELASTLINE", "NOSKIP", "ENDNOSKIP", "CLEARTEXTBOX", "OUTPUTLOG",
+        "RESETGLOBAL", "DELALLCHARA", "ADDSPCHARA", "ADDDEFCHARA",
+        "ADDVOIDCHARA", "UPCHECK", "CUPCHECK", "FORCEKANA", "TRYCGOTO",
+        "TRYCGOTOFORM", "TRYCCALL", "TRYCCALLFORM", "TRYCJUMP", "TRYCJUMPFORM",
         "SAVEGAME", "LOADGAME", "SAVEDATA", "LOADDATA", "DELDATA",
         // 控制流关键字（执行链单独处理，不进指令规范表）
         "DO", "REND", "LOOP", "WHILE", "WEND", "REPEAT", "FOR", "NEXT",
@@ -241,6 +253,7 @@ bool AstBuilder::isExactInstructionName(const QString& upperName) {
 bool AstBuilder::hasInstructionPrefix(const QString& upperName) {
     static const char* kPrefixes[] = {"PRINT", "DEBUGPRINT", "HTML_PRINT",
                                       "CALL", "JUMP", "TRYCALL", "TRYJUMP",
+                                      "TRYC",   // TRYCCALL / TRYCCALLFORM / TRYCJUMP…
                                       "GOTO", "TRYGOTO", "CALLEVENT", "TRYCALLEVENT"};
     for (const char* p : kPrefixes) {
         if (upperName.startsWith(QLatin1String(p))) return true;
@@ -652,6 +665,32 @@ LogicalLine AstBuilder::build(const QString& rawLine,
     line.kind = LineKind::Instruction;
     const Word& first = wc.words().first();
     line.functionName = first.text.toUpper();
+
+    // ---- 函数语句（对齐 C# LogicalLineType.Function）----
+    // 一行以**内置函数名**开头（且不是已知指令/赋值）时，整行是一次函数调用：
+    //   GETMILLISECOND                 -> RESULT = GETMILLISECOND()
+    //   GETTIME
+    //   CURRENTREDRAW
+    //   REPLACE LOCALS, "(^\s+|\s+$)", ""   -> RESULTS:0 = REPLACE(…)
+    //   TWAIT 2500, 0
+    //   SUBSTRING RESULTS:0, 0, RESULT
+    //   SPRITECREATE @"%素体:TEMP%%TEMP_NAME%", G_ID
+    // 返回值由执行链写入 RESULT（整型）/ RESULTS:0（字符串）。
+    // 这里把「函数名 + 剩余原文」重新组装成一个调用表达式交给表达式解析器归约，
+    // 好处是实参里的空格/逗号/运算符（`TWAIT 550 + COUNT * 75, 0`）原样保留。
+    //
+    // 定性放在**赋值判定之后**：`RAND:3 = 5` 的 `RAND` 也是函数名，
+    // 但整行是合法赋值，必须仍按赋值走（eraTW 大量使用 `RAND:n`）。
+    if (isBuiltinFunction(line.functionName.toStdString())) {
+        const QString callText = trimmed.mid(first.text.length()).trimmed();
+        const QString exprText =
+            line.functionName + QLatin1Char('(') + callText + QLatin1Char(')');
+        Operand call(exprText);
+        if (resolve) call.ast = resolve(exprText);
+        line.arguments.append(call);
+        line.isFunctionCall = true;
+        return finalized(std::move(line));
+    }
 
     // CALL 族特例：CALL / CALLFORM / CALLF / TRYCALL* / JUMP* / BEGIN
     // 第一个操作数是**标签名**（可含 %...% 格式串），不是表达式 ——

@@ -21,6 +21,7 @@
 #include <QObject>
 #include <QVariant>
 #include <QString>
+#include <QSet>
 #include <QList>
 #include <functional>
 
@@ -93,6 +94,12 @@ public:
     using ColorProvider = std::function<qint64()>;
     void setColorProvider(ColorProvider provider) { m_colorProvider = std::move(provider); }
     void setStyleProvider(ColorProvider provider) { m_styleProvider = std::move(provider); }
+    // GETDEFCOLOR / GETBGCOLOR / GETDEFBGCOLOR / CURRENTREDRAW
+    // （缺省：默认文字色 0xFFFFFF、背景 0、允许重绘 1）
+    void setDefaultColorProvider(ColorProvider provider) { m_defaultColorProvider = std::move(provider); }
+    void setBgColorProvider(ColorProvider provider) { m_bgColorProvider = std::move(provider); }
+    void setDefaultBgColorProvider(ColorProvider provider) { m_defaultBgColorProvider = std::move(provider); }
+    void setRedrawProvider(ColorProvider provider) { m_redrawProvider = std::move(provider); }
 
     // `#DIM CONST NAME, N = …` 常数数组的下标查询（注入自 VariableTable）
     //   * checker：只判断名字是不是常数数组（**必须能不求值下标**，
@@ -185,6 +192,10 @@ private:
     LineCountProvider m_lineCountProvider;
     ColorProvider m_colorProvider;        // GETCOLOR
     ColorProvider m_styleProvider;        // GETSTYLE
+    ColorProvider m_defaultColorProvider; // GETDEFCOLOR
+    ColorProvider m_bgColorProvider;      // GETBGCOLOR
+    ColorProvider m_defaultBgColorProvider; // GETDEFBGCOLOR
+    ColorProvider m_redrawProvider;       // CURRENTREDRAW
     Mt19937 m_rand;                       // MT19937（启动时随机种子）
     VariableDimProvider m_variableDimProvider;
     ConstArrayProvider  m_constArrayProvider;
@@ -192,6 +203,7 @@ private:
     const ConstantTable* m_constantTable = nullptr;
     TextEncoding m_langEncoding = TextEncoding::ShiftJis;
     ConstProvider m_constProvider;   // #DIM CONST
+    QSet<QString> m_reportedUnfinished;   // 「未完成」告警去重（同一函数只报一次）
     QString m_moneyLabel = QStringLiteral("$");
     bool    m_moneyFirst = true;
     QChar   m_barFilled = QLatin1Char('*');

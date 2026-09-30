@@ -21,6 +21,7 @@
 #include "expression_evaluator.h"
 #include "ast/expression_ast.h"
 #include "ast/ast_builder.h"
+#include "ast/function_types.h"   // 函数语句（isBuiltinFunction / builtinFunctionReturnType）
 #include "ast/strform_parser.h"
 #include "ast/print_template.h"
 #include "era_parse_table.h"
@@ -689,6 +690,47 @@ bool ExecutionEngine::executeInstruction(const LogicalLine& line) {
         return true;
     }
 
+    // ---- SETBIT / CLEARBIT / INVERTBIT（对齐 C# SETBIT_Instruction）----
+    //   SETBIT  <变量>[, <位0-63>]…   置位
+    //   CLEARBIT<变量>[, <位0-63>]…   清位
+    //   INVERTBIT<变量>[, <位0-63>]…  取反
+    // eraTW 用 `SETBIT CFLAG:C_ID:口上実装状況, 口上カウント` 记录口上实现状况，
+    // 以前没有实现 -> 那些标志位永远是 0。
+    if (name == QLatin1String("SETBIT") || name == QLatin1String("CLEARBIT")
+        || name == QLatin1String("INVERTBIT")) {
+        if (!m_storage) return true;
+        QList<const Operand*> ops;
+        if (line.argument.kind == ArgKind::Bit && !line.argument.params.isEmpty()) {
+            for (const Operand& a : line.argument.params) ops.append(&a);
+        } else {
+            for (const Operand& a : line.arguments) {
+                if (a.raw != QLatin1String(",")) ops.append(&a);
+            }
+        }
+        if (ops.isEmpty()) return true;
+        const LhsRef ref = parseLhsRef(ops.first()->raw);
+        if (!ref.valid) return true;
+        ExpressionEvaluator localEvaluator;
+        ExpressionEvaluator& ev = m_expressionEvaluator ? *m_expressionEvaluator : localEvaluator;
+        qint64 bits = readLhs(ref);
+        for (int i = 1; i < ops.size(); ++i) {
+            const qint64 x = ops.at(i)->ast
+                ? ev.evaluate(*ops.at(i)->ast, m_storage, m_gameBaseData).toLongLong()
+                : ops.at(i)->raw.toLongLong();
+            if (x < 0 || x > 63) {
+                emit errorOccurred(QStringLiteral("SETBIT 的第 %1 引数超出位范围(0..63)：%2")
+                                       .arg(i + 1).arg(x));
+                continue;
+            }
+            const qint64 shift = static_cast<qint64>(1) << static_cast<int>(x);
+            if (name == QLatin1String("SETBIT")) bits |= shift;
+            else if (name == QLatin1String("CLEARBIT")) bits &= ~shift;
+            else bits ^= shift;
+        }
+        writeLhs(ref, bits);
+        return true;
+    }
+
     // ---- 命令式字符串内置函数 ----
     // ERB 既支持 STRLENS(VERSION) 表达式，也支持
     //   STRLENS VERSION
@@ -1048,8 +1090,69 @@ bool ExecutionEngine::executeInstruction(const LogicalLine& line) {
         return true;
     }
 
-    // 其它指令：由显示/子系统各自处理（未实现者静默跳过）
+    // ---- 语句形式的内部函数（对齐 C# METHOD_Instruction）----
+    //   GETMILLISECOND / GETTIME / GETCOLOR / CURRENTREDRAW / GETBIT …
+    //   REPLACE LOCALS, "a", "b" / TWAIT 2500, 0 / SUBSTRING RESULTS:0, 0, 3 …
+    // 整行是一次函数调用，返回值为整型时写 RESULT、为字符串时写 RESULTS:0。
+    if (line.isFunctionCall) {
+        return executeFunctionCall(line);
+    }
+
+    // 其它指令：由显示/子系统各自处理。
+    // 「未完成」——尚未实现的指令在这里明确留痕（同一名字只报一次），
+    // 这样跑 eraTW 时从 stderr 就能看出还有哪些接口没接线。
+    reportUnfinished(QStringLiteral("指令"), name, line);
     return true;
+}
+
+// ---------------------------------------------------------------------------
+// 语句形式的内部函数（对齐 C# METHOD_Instruction.DoInstruction）
+//   if (term.GetOperandType() == typeof(Int64)) RESULT = term.GetIntValue();
+//   else                                         RESULTS = term.GetStrValue();
+// ---------------------------------------------------------------------------
+bool ExecutionEngine::executeFunctionCall(const LogicalLine& line)
+{
+    if (!m_storage) return true;
+    const QString& name = line.functionName;
+    const QString upper = name.toUpper();
+
+    // 先在实例里去重登记：即便求值器自己也报过，这里给出**行号 + 原文**，
+    // 便于直接从运行日志定位是哪个脚本的哪一行没实现。
+    const bool unfinished = !line.arguments.isEmpty() && !line.arguments.first().ast;
+
+    QVariant value;
+    if (unfinished) {
+        // 表达式没归约出来（语法不认识 / 参数形态特殊）：明确留痕并跳过。
+        reportUnfinished(QStringLiteral("函数语句（实参无法归约）"), name, line);
+        return true;
+    }
+    ExpressionEvaluator fallback;
+    ExpressionEvaluator& ev = m_expressionEvaluator ? *m_expressionEvaluator : fallback;
+    value = ev.evaluate(*line.arguments.first().ast, m_storage, m_gameBaseData);
+
+    // 返回类型决定写哪个寄存器（对齐 C#：Int64 -> RESULT，string -> RESULTS）
+    const OperandType ret = builtinFunctionReturnType(upper.toStdString());
+    const bool returnsStr = (ret == OperandType::Str)
+                            || (ret == OperandType::Unknown && value.typeId() == QMetaType::QString);
+    if (returnsStr) {
+        m_storage->setLocalStr(0, value.toString());          // RESULTS:0
+    } else {
+        m_storage->setSystemVariable(QStringLiteral("RESULT"), 0, value.toLongLong());
+    }
+    qDebug() << "[funcstmt]" << upper << "->" << (returnsStr ? "RESULTS" : "RESULT")
+             << value << "行" << line.position.toString();
+    return true;
+}
+
+// 未实现接口的运行期留痕（同名只报一次，避免刷屏）
+void ExecutionEngine::reportUnfinished(const QString& what, const QString& name,
+                                       const LogicalLine& line)
+{
+    if (m_reportedUnfinished.contains(name)) return;
+    m_reportedUnfinished.insert(name);
+    qWarning() << "[未完成]" << what << name
+               << "在运行期被忽略。行:" << line.position.toString()
+               << "原文:" << line.raw.left(100);
 }
 
 bool ExecutionEngine::handleStringAssignment(const QString& lhs, const QString& rhs, const QSharedPointer<ExpressionNode>& ast) {

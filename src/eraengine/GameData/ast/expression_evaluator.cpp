@@ -1268,25 +1268,38 @@ bool ExpressionEvaluator::evaluateBuiltin(const FunctionNode &node, VariableStor
     case BuiltinOp::ToHalf:  out = QVariant(toHalfWidth(S(0))); return true;
     case BuiltinOp::ToFull:  out = QVariant(toFullWidth(S(0))); return true;
     case BuiltinOp::Replace: {
+        // REPLACE(<文字列>, <正規表現>, <置換文字列>) —— 对齐 C# ReplaceMethod：
+        // 第 2 引数是**正则表达式**（`new Regex(pattern)` + `reg.Replace(base, repl)`）。
+        // 以前按「字面串替换」实现，eraTW 的
+        //   REPLACE LOCALS, "(^ +| +$)", ""      ; 去首尾空格
+        //   ARGS '= REPLACE(ARGS, "/+", "/")     ; 斜杠压缩
+        // 全部无效（看起来像没执行）。
+        // 注意：ERB 字符串先做转义（`\s`=空格、`\+`=`+`…），到这里已经是
+        // 干净的 .NET 风格正则；QRegularExpression 与其语法基本一致。
         QString s = S(0);
-        const QString from = S(1);
+        const QString pattern = S(1);
         const QString to = S(2);
-        if (from.isEmpty()) {
-            // C# string.Replace("", x) 会抛异常；Emuera 未特判，这里按不变处理
+        if (pattern.isEmpty()) {
+            out = QVariant(s);   // 空模式：保持原样（C# 会抛，这里容错）
+            return true;
+        }
+        const QRegularExpression re(pattern);
+        if (!re.isValid()) {
+            // 对齐 C# 的 CodeEE（"第２引数が正規表現として不正です"）：留痕并保持原样
+            qWarning() << "[exec] REPLACE 的第 2 引数不是合法正则：" << pattern
+                       << re.errorString();
             out = QVariant(s);
             return true;
         }
-        // 对齐 .NET Replace：从左到右、不递归替换
-        QString result;
-        int pos = 0;
-        while (true) {
-            const int idx = s.indexOf(from, pos);
-            if (idx < 0) { result += s.mid(pos); break; }
-            result += s.mid(pos, idx - pos);
-            result += to;
-            pos = idx + from.size();
+        // 替换串的占位符：.NET 用 $1、Qt 用 \1 —— eraTW 只用空串，这里顺带
+        // 把 `$N` 转成 `\N` 以兼容 .NET 写法。
+        QString replacement = to;
+        {
+            static const QRegularExpression groupRef(QStringLiteral("\\$(\\d+)"));
+            replacement.replace(groupRef, QStringLiteral("\\\\\\1"));
         }
-        out = QVariant(result);
+        s.replace(re, replacement);
+        out = QVariant(s);
         return true;
     }
     case BuiltinOp::Unicode: {
@@ -1492,25 +1505,45 @@ bool ExpressionEvaluator::evaluateBuiltin(const FunctionNode &node, VariableStor
                               || (storage && storage->isCharaDataString(var->name()));
         if (strArray) {
             const QList<QString> values = readStrArray(*var, storage);
-            const int start = node.arguments().size() > 2 ? static_cast<int>(I(2)) : 0;
-            const int end = node.arguments().size() > 3 ? static_cast<int>(I(3)) : values.size();
+            // 第 3/4 实参可为空（`FINDELEMENT(A, X, 1, , 1)`）：省略时分别取
+            // 「0」与「数组末尾」（对齐 C# arguments[i] == null 的默认值）
+            const int start = (node.arguments().size() > 2 && !node.isArgOmitted(2))
+                                  ? static_cast<int>(I(2)) : 0;
+            const int end = (node.arguments().size() > 3 && !node.isArgOmitted(3))
+                                ? static_cast<int>(I(3)) : values.size();
             const QString target = argStr(node, 1, storage, gameBaseData);
+            // 第 5 实参 isExact：正则必须**整串匹配**（对齐 C# FindElementMethod）
+            const bool isExact = (node.arguments().size() > 4 && !node.isArgOmitted(4))
+                                     ? (I(4) != 0) : false;
+            // 第 2 实参是**正则**（eraTW 惯用 `FINDELEMENT(CLASS_NAME, ESCAPE(name), 1, , 1)`）。
+            // 正则非法时退化为字面比较（C# 会抛 CodeEE；这里容错并留痕）。
+            const QRegularExpression re(target);
+            const bool useRegex = re.isValid();
+            if (!useRegex) qWarning() << "[exec] FINDELEMENT 的模式不是合法正则，按字面比较：" << target;
+            const auto matches = [&](const QString& s) -> bool {
+                if (!useRegex) return s == target;
+                const QRegularExpressionMatch m = re.match(s);
+                if (!m.hasMatch()) return false;
+                return !isExact || m.capturedLength() == s.size();
+            };
             qint64 found = -1;
             if (op == BuiltinOp::FindElement) {
                 for (int i = qMax(0, start); i < qMin(end, values.size()); ++i) {
-                    if (values.at(i) == target) { found = i; break; }
+                    if (matches(values.at(i))) { found = i; break; }
                 }
             } else {
                 for (int i = qMin(end, values.size()) - 1; i >= qMax(0, start); --i) {
-                    if (values.at(i) == target) { found = i; break; }
+                    if (matches(values.at(i))) { found = i; break; }
                 }
             }
             out = QVariant::fromValue<qint64>(found);
             return true;
         }
         const QList<qint64> values = readIntArray(*var, storage, gameBaseData, false);
-        const int start = node.arguments().size() > 2 ? static_cast<int>(I(2)) : 0;
-        const int end = node.arguments().size() > 3 ? static_cast<int>(I(3)) : values.size();
+        const int start = (node.arguments().size() > 2 && !node.isArgOmitted(2))
+                              ? static_cast<int>(I(2)) : 0;
+        const int end = (node.arguments().size() > 3 && !node.isArgOmitted(3))
+                            ? static_cast<int>(I(3)) : values.size();
         const qint64 target = I(1);
         qint64 found = -1;
         if (op == BuiltinOp::FindElement) {
@@ -1589,6 +1622,38 @@ bool ExpressionEvaluator::evaluateBuiltin(const FunctionNode &node, VariableStor
         out = QVariant::fromValue<qint64>(m_styleProvider ? m_styleProvider() : 0);
         return true;
     }
+    case BuiltinOp::GetDefColor: {
+        // GETDEFCOLOR() -> 默认文字颜色（C# Config.ForeColor；RESETCOLOR 还原到此值）。
+        out = QVariant::fromValue<qint64>(m_defaultColorProvider ? m_defaultColorProvider() : 0xFFFFFF);
+        return true;
+    }
+    case BuiltinOp::GetBgColor: {
+        // GETBGCOLOR() -> 当前背景色（C# Console.BackColor）。
+        out = QVariant::fromValue<qint64>(m_bgColorProvider ? m_bgColorProvider() : 0);
+        return true;
+    }
+    case BuiltinOp::GetDefBgColor: {
+        // GETDEFBGCOLOR() -> 默认背景色
+        out = QVariant::fromValue<qint64>(m_defaultBgColorProvider ? m_defaultBgColorProvider() : 0);
+        return true;
+    }
+    case BuiltinOp::CurrentRedraw: {
+        // CURRENTREDRAW() -> 当前是否处于「允许重绘」状态（1/0）。
+        // eraTW：`PREV_REDRAW = CURRENTREDRAW()` … `REDRAW 0` … `REDRAW PREV_REDRAW`。
+        out = QVariant::fromValue<qint64>(m_redrawProvider ? m_redrawProvider() : 1);
+        return true;
+    }
+    case BuiltinOp::StrLenForm:
+    case BuiltinOp::StrLenFormU: {
+        // STRLENFORM / STRLENFORMU <格式化串>：先把 {…}/%…% 展开，再取长度。
+        // 对齐 C# STRLEN_Instruction(argisform=true)：FORM_STR 求值后
+        //   STRLENFORM  -> LangManager.GetStrlenLang(str)（按语言编码的字节数）
+        //   STRLENFORMU -> str.Length（UTF-16 码元数）
+        const QString text = hasArg(node, 0) ? argStr(node, 0, storage, gameBaseData) : QString();
+        if (op == BuiltinOp::StrLenFormU) out = QVariant::fromValue<qint64>(text.size());
+        else out = QVariant::fromValue<qint64>(langByteCount(text));
+        return true;
+    }
     case BuiltinOp::VarSize: {
         // VARSIZE("变量名"[, 维])
         const QString name = S(0);
@@ -1630,7 +1695,11 @@ bool ExpressionEvaluator::evaluateBuiltin(const FunctionNode &node, VariableStor
     case BuiltinOp::None:
         // 未实现的内置函数此前会静默产出 0/空串，表现为「函数恒为 0」而不报错
         // （CSVCSTR / EXISTCSV 就曾如此）。这里明确留痕，便于定位缺口。
-        qWarning() << "[exec] 内置函数尚未实现求值（返回 0）:" << node.name();
+        // 同一个名字只报一次（eraTW 里有在内层循环里调用的用例，避免刷屏）。
+        if (!m_reportedUnfinished.contains(node.name())) {
+            m_reportedUnfinished.insert(node.name());
+            qWarning() << "[未完成] 内置函数尚未实现求值（返回 0）:" << node.name();
+        }
         break;
     }
     Q_UNUSED(storage);

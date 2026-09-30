@@ -280,15 +280,18 @@ QSharedPointer<ExpressionNode> ExpressionParser::parseFunctionCall() {
     }
 
     QList<QSharedPointer<ExpressionNode>> args;
+    QList<int> omittedArgs;   // 空实参位置（语义上「省略」，不是显式 0）
     if (!check(TokenType::RIGHT_PAREN)) {
         while (true) {
             // 允许空实参（Emuera 常见：GET_INT(, "x", ...)、FUNC(a,)）
             if (check(TokenType::COMMA)) {
+                omittedArgs.append(args.size());
                 args.append(QSharedPointer<LiteralNode>::create(0));
                 advance();
                 continue;
             }
             if (check(TokenType::RIGHT_PAREN)) {
+                omittedArgs.append(args.size());
                 args.append(QSharedPointer<LiteralNode>::create(0));
                 break;
             }
@@ -309,6 +312,7 @@ QSharedPointer<ExpressionNode> ExpressionParser::parseFunctionCall() {
     }
 
     auto fn = QSharedPointer<FunctionNode>::create(token.value(), args);
+    for (int oi : omittedArgs) fn->markArgOmitted(oi);
 
     // 解析函数调用（对齐 C# IdentifierDictionary.GetFunctionMethod）：
     //   用户自定义函数（#FUNCTION(S)）优先 → 内置函数（内部命令）→ 未定义。

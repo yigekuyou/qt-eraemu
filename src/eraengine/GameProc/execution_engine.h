@@ -19,6 +19,7 @@
 #define EXECUTION_ENGINE_H
 
 #include <QObject>
+#include <QSet>
 #include <QString>
 #include <QList>
 #include <QQueue>
@@ -122,6 +123,13 @@ private:
     [[nodiscard]] static int printCWidth(const QString& text);
     bool handleResetData();
     bool handleLoadGlobal();
+
+    // 语句形式的内部函数（对齐 C# LogicalLineType.Function / METHOD_Instruction）：
+    // 整行是一次内建函数调用，返回值写 RESULT（整型）/ RESULTS:0（字符串）。
+    bool executeFunctionCall(const LogicalLine& line);
+    // 未实现接口的运行期留痕（输出含「未完成」，同一名字只报一次）
+    void reportUnfinished(const QString& what, const QString& name, const LogicalLine& line);
+    QSet<QString> m_reportedUnfinished;
     
     // Assignment handling
     bool handleAssignment(const QString& lhs, const QString& rhs, const QSharedPointer<ExpressionNode>& ast = {});

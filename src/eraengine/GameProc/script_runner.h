@@ -20,6 +20,7 @@
 
 #include <QObject>
 #include <QString>
+#include <QSet>
 #include <QList>
 #include <QSharedPointer>
 #include "process_state.h"
@@ -182,6 +183,7 @@ private:
     bool m_printed = false;
     bool m_continuingSlice = false;
     QVariant m_lastReturnValue;
+    QSet<QString> m_reportedThrow;   // THROW 告警去重（同一行只报一次）
 };
 
 #endif // SCRIPT_RUNNER_H

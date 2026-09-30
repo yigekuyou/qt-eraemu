@@ -495,7 +495,12 @@ QSharedPointer<ExpressionNode> cloneExpression(const QSharedPointer<ExpressionNo
         for (const auto& a : n.arguments()) args.append(cloneExpression(a));
         auto copy = QSharedPointer<FunctionNode>::create(n.name(), args);
         copy->setValueType(n.valueType()); copy->setBuiltinIndex(n.builtinIndex());
-        copy->setUserFunction(n.isUserFunction()); copy->setArityError(n.arityError()); return copy;
+        copy->setUserFunction(n.isUserFunction()); copy->setArityError(n.arityError());
+        // 空实参占位（`F(a, , b)`）必须一起克隆：丢了它 FINDELEMENT 的第 4 实参
+        // 会被当成显式 0（结束位置 0 -> 恒返回 -1）
+        for (int i = 0; i < args.size(); ++i)
+            if (n.isArgOmitted(i)) copy->markArgOmitted(i);
+        return copy;
     }
     case NodeKind::If: {
         const auto& n = static_cast<const IfNode&>(*node);

@@ -122,6 +122,7 @@ inline constexpr auto kInstructionSpecs = std::to_array<InstructionSpec>({
     {"SPLIT",        ArgKind::Split,         1,  -1},
     {"STRDATA",      ArgKind::VarStr,        0,  1},   // VAR_STR：0 实参时目标为 RESULTS:0
     {"DATAFORM",     ArgKind::FormStr,       0,  1},   // FORM_STR_NULLABLE
+    {"THROW",        ArgKind::FormStr,       0,  1},   // FORM_STR_NULLABLE（THROW <格式化串>）
     {"SETBGCOLOR",   ArgKind::Color,         1,  3},
     {"SETCOLORBYNAME", ArgKind::Color,       1,  1},
     {"GETINT",       ArgKind::GetInt,        1,  1},

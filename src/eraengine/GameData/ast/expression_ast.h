@@ -210,9 +210,22 @@ public:
     [[nodiscard]] const QString& name() const { return m_name; }
     [[nodiscard]] const QList<QSharedPointer<ExpressionNode>>& arguments() const { return m_args; }
 
+    // 空实参占位（`FINDELEMENT(A, X, 1, , 1)`）：解析器用 LiteralNode(0) 占位，
+    // 但「省略」与「显式 0」语义不同 —— 对齐 C# 的 `arguments[i] == null`
+    // （FINDELEMENT 第 4 实参省略时取「数组末尾」）。这里单独记一笔。
+    void markArgOmitted(int index) {
+        if (index < 0) return;
+        if (m_argOmitted.size() <= index) m_argOmitted.resize(index + 1, false);
+        m_argOmitted[index] = true;
+    }
+    [[nodiscard]] bool isArgOmitted(int index) const {
+        return index >= 0 && index < m_argOmitted.size() && m_argOmitted.at(index);
+    }
+
 private:
     QString m_name;
     QList<QSharedPointer<ExpressionNode>> m_args;
+    QList<bool> m_argOmitted;   // 该位实参是否写成空（见 markArgOmitted）
     OperandType m_type = OperandType::Int;   // 默认整数（C# 未标注时的宽松处理）
     bool m_isUserFunction = false;
     int  m_builtinIndex = -1;                // kBuiltinFunctions 下标；-1 = 非内置

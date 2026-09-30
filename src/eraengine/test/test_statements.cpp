@@ -300,6 +300,21 @@ int main(int argc, char* argv[]) {
                 table.expressionAst(QStringLiteral("FINDELEMENT(VSSARR, \"気力\")"));
             const qint64 idx = ast ? evaluator.evaluate(*ast, &storage, nullptr).toLongLong() : -999;
             check(idx == 1, "FINDELEMENT 字符串数组按字符串比较（気力 -> 1）");
+
+            // 空实参 = 「省略」，不是显式 0：eraTW 的
+            //   FINDELEMENT(CLASS_NAME, ESCAPE(ARGS:0), 1, , 1)
+            // 第 4 实参省略时取**数组末尾**；若被当 0 则区间 [1,0) 恒空 -> -1
+            // -> eraTW 的 EXISTOBJ 抛「未設定の変数です」并卡住新开局。
+            storage.setGlobalStr1D("VSSARR", 2, QStringLiteral("Ｃ感"));
+            const QSharedPointer<ExpressionNode> ast2 =
+                table.expressionAst(QStringLiteral("FINDELEMENT(VSSARR, ESCAPE(\"気力\"), 1, , 1)"));
+            const qint64 idx2 = ast2 ? evaluator.evaluate(*ast2, &storage, nullptr).toLongLong() : -999;
+            check(idx2 == 1, "FINDELEMENT 第4实参省略 = 数组末尾，且 ESCAPE 模式按正则整串匹配");
+
+            const QSharedPointer<ExpressionNode> ast3 =
+                table.expressionAst(QStringLiteral("FINDELEMENT(VSSARR, \"^Ｃ感$\", 1, , 1)"));
+            const qint64 idx3 = ast3 ? evaluator.evaluate(*ast3, &storage, nullptr).toLongLong() : -999;
+            check(idx3 == 2, "FINDELEMENT 字符串分支按正则匹配（^Ｃ感$ -> 2）");
         }
 
         // --- CVARSET：逐角色设置同一元素 ---
@@ -309,6 +324,84 @@ int main(int argc, char* argv[]) {
         check(storage.getCharaInt("CFLAG", 0, 5) == 9 && storage.getCharaInt("CFLAG", 1, 5) == 9
                   && storage.getCharaInt("CFLAG", 2, 5) == 9,
               "CVARSET CFLAG, 5, 9, 0, 3 逐角色写入元素 5");
+    }
+
+    qDebug() << "\n8) 函数语句（一行以内置函数名开头）+ SETBIT 族";
+    // 对齐 C# LogicalLineType.Function / METHOD_Instruction：
+    //   返回值是整型 -> RESULT，字符串 -> RESULTS:0。
+    // eraTW 里 GETMILLISECOND / CURRENTREDRAW / GETTIME / REPLACE / SUBSTRING …
+    // 全都是这种写法，以前整行落到「未知指令」被静默丢弃。
+    {
+        const AstResolver resolveOne = [&table](const QString& e) { return table.expressionAst(e); };
+        const auto execOne = [&](const QString& src) {
+            LogicalLine l = AstBuilder::build(src, ScriptPosition("f.ERB", 0, 0), resolveOne);
+            engine.executeInstruction(l);
+            return l;
+        };
+
+        // --- 解析定性 ---
+        const LogicalLine ts = AstBuilder::build(QStringLiteral("GETMILLISECOND"), {},
+                                                 resolveOne);
+        check(ts.isFunctionCall && ts.functionName == QLatin1String("GETMILLISECOND"),
+              "GETMILLISECOND 解析为「函数语句」");
+        check(AstBuilder::build(QStringLiteral("RAND:3 = 5"), {}, resolveOne).functionName
+                  == QLatin1String("="),
+              "`RAND:3 = 5` 仍是赋值（函数名不得抢走变量赋值）");
+        check(!AstBuilder::build(QStringLiteral("PRINTL GETMILLISECOND"), {}, resolveOne)
+                   .isFunctionCall,
+              "PRINTL … 不被误判为函数语句");
+
+        // --- 整型返回值写 RESULT ---
+        execOne(QStringLiteral("GETMILLISECOND"));
+        check(storage.getSystemVariable("RESULT", 0) > 0,
+              "GETMILLISECOND -> RESULT（毫秒时间戳 > 0）");
+
+        // --- 系统变量查询 ---
+        execOne(QStringLiteral("CURRENTREDRAW"));
+        check(storage.getSystemVariable("RESULT", 0) == 1, "CURRENTREDRAW -> RESULT == 1");
+        execOne(QStringLiteral("GETTIME"));
+        check(storage.getSystemVariable("RESULT", 0) > 0, "GETTIME -> RESULT > 0");
+
+        // --- 带实参 + 字符串返回值写 RESULTS:0 ---
+        // REPLACE 的第 2 引数是**正则**（C# ReplaceMethod 用 new Regex()）；
+        // eraTW 用它去首尾空格：REPLACE LOCALS, "(^ +| +$)", ""
+        storage.setLocalStr(0, QStringLiteral("  x  "));
+        execOne(QStringLiteral("REPLACE RESULTS, \"(^ +| +$)\", \"\""));
+        check(storage.getLocalStr(0) == QStringLiteral("x"),
+              "REPLACE RESULTS, 正则去首尾空格 -> RESULTS:0");
+        storage.setLocalStr(0, QStringLiteral("a//b"));
+        execOne(QStringLiteral("REPLACE RESULTS, \"/+\", \"/\""));
+        check(storage.getLocalStr(0) == QStringLiteral("a/b"),
+              "REPLACE 正则 /+ -> /（斜杠压缩）");
+
+        storage.setLocalStr(0, QStringLiteral("  x  "));
+        execOne(QStringLiteral("SUBSTRING RESULTS, 2, 2"));
+        check(storage.getLocalStr(0) == QStringLiteral("x "),
+              "SUBSTRING RESULTS, 2, 2 -> RESULTS:0");
+
+        // --- STRLENFORM：实参按格式化串展开再取长度 ---
+        storage.setLocalStr(0, QStringLiteral("abcd"));
+        execOne(QStringLiteral("STRLENFORMU RESULTS"));
+        check(storage.getSystemVariable("RESULT", 0) == 4,
+              "STRLENFORMU RESULTS -> RESULT == 4");
+
+        // --- SETBIT / CLEARBIT / INVERTBIT ---
+        storage.setGlobalInt1D("BITS", 0, 0);
+        execOne(QStringLiteral("SETBIT BITS, 3"));
+        check(storage.getGlobalInt1D("BITS", 0) == 8, "SETBIT BITS, 3 -> 8");
+        execOne(QStringLiteral("SETBIT BITS, 0, 1"));
+        check(storage.getGlobalInt1D("BITS", 0) == 11, "SETBIT BITS, 0, 1 -> 11");
+        execOne(QStringLiteral("CLEARBIT BITS, 0"));
+        check(storage.getGlobalInt1D("BITS", 0) == 10, "CLEARBIT BITS, 0 -> 10");
+        execOne(QStringLiteral("INVERTBIT BITS, 1"));
+        check(storage.getGlobalInt1D("BITS", 0) == 8, "INVERTBIT BITS, 1 -> 8");
+
+        // --- 角色变量 + 下标表达式（eraTW：SETBIT CFLAG:C_ID:口上実装状況, N）---
+        // 上面的 CVARSET 用例已把 CFLAG:0:5 写成 9（位 0 与位 3 已置位），
+        // 再置位 4 -> 9 | 16 == 25。
+        execOne(QStringLiteral("SETBIT CFLAG:0:5, 4"));
+        check(storage.getCharaInt("CFLAG", 0, 5) == 25,
+              "SETBIT CFLAG:0:5, 4 -> 25（角色变量 + 下标，位运算叠加）");
     }
 
     qDebug() << "\n======================================";

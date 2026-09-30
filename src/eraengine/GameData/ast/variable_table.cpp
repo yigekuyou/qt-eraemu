@@ -16,6 +16,7 @@
  * along with this program.  If not, see <https://www.gnu.org/licenses/>.
  */
 #include "variable_table.h"
+#include <limits>
 #include "system_variables.h"
 #include <QDebug>
 #include <QStringList>
@@ -226,7 +227,15 @@ bool VariableTable::evalDim(const QString& expr, int& out) const {
         out = static_cast<int>(cv);
         return true;
     }
-    // 形如 数字 +/- 数字 的简单算式（常数表不足以做完整常量折叠）
+    // 兜底：交给求值器做完整的常量折叠（`CLASS_NUM + 1` / `MAXBASE - 1` …）。
+    // 由 EraParseTable 在常量表就绪后注入；未注入时保持旧行为（记 0）。
+    if (m_dimEvaluator) {
+        const qint64 v64 = m_dimEvaluator(expr);
+        if (v64 > 0 && v64 <= std::numeric_limits<int>::max()) {
+            out = static_cast<int>(v64);
+            return true;
+        }
+    }
     return false;
 }
 
@@ -256,6 +265,16 @@ void VariableTable::setConstArray(const QString& name, const QList<qint64>& valu
 {
     m_constArray.insert(nk(name), values);
     if (!values.isEmpty()) m_constInt.insert(nk(name), values.first());
+}
+
+void VariableTable::setConstExprs(const QString& name, const QStringList& exprs)
+{
+    m_constExpr.insert(nk(name), exprs);
+}
+
+QStringList VariableTable::constExprs(const QString& name) const
+{
+    return m_constExpr.value(nk(name));
 }
 
 bool VariableTable::constArrayAt(const QString& name, int index, qint64& out) const

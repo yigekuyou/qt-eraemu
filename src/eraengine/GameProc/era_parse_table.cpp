@@ -183,6 +183,18 @@ QList<int> EraParseTable::ifBranches(const QString& scriptName, int ifLine) cons
     return data->ifBranches.value(ifLine, QList<int>());
 }
 
+int EraParseTable::catchTarget(const QString& scriptName, int trycLine) const {
+    const ScriptData* data = script(scriptName);
+    if (!data) return -1;
+    return data->catchLines.value(trycLine, -1);
+}
+
+int EraParseTable::endCatchTarget(const QString& scriptName, int catchLine) const {
+    const ScriptData* data = script(scriptName);
+    if (!data) return -1;
+    return data->endCatchLines.value(catchLine, -1);
+}
+
 const UserFunctionInfo* EraParseTable::userFunction(const QString& name) const {
     auto it = m_functions.constFind(name.toUpper());
     return it == m_functions.constEnd() ? nullptr : &it.value();
@@ -702,6 +714,8 @@ void EraParseTable::buildJumpMarkings(const QString& scriptName) {
     data.jumpTo.clear();
     data.jumpToEnd.clear();
     data.ifBranches.clear();
+    data.catchLines.clear();
+    data.endCatchLines.clear();
 
     struct IfInfo {
         int ifLine = -1;
@@ -719,9 +733,21 @@ void EraParseTable::buildJumpMarkings(const QString& scriptName) {
         int lastCase = -1;
     };
 
+    // TRYC / CATCH / ENDCATCH 的配对栈（对齐 C# ErbLoader.ParseFunction 的 nestStack）
+    //   进入 TRYC*  -> 压入 (TRY，行号)
+    //   遇到 CATCH  -> 若栈顶是 TRY：记录 tryc->catch，弹栈后压入 (CATCH，行号)
+    //   遇到 ENDCATCH -> 若栈顶是 CATCH：记录 catch->endcatch，弹栈
+    // 注意：eraTW 里绝大多数 TRYC* 是**没有** CATCH 的（972 : 73），
+    // 所以这里只认「栈顶就是 TRY」的 CATCH；否则该 CATCH 属于别的结构，忽略。
+    struct CatchInfo {
+        bool isCatch = false;
+        int  line = -1;
+    };
+
     QList<IfInfo> ifStack;
     QList<LoopInfo> loopStack;
     QList<SelectInfo> selectStack;
+    QList<CatchInfo> catchStack;
 
     for (int i = 0; i < data.lines.size(); ++i) {
         LogicalLine& ll = data.lines[i];
@@ -733,6 +759,7 @@ void EraParseTable::buildJumpMarkings(const QString& scriptName) {
             ifStack.clear();
             loopStack.clear();
             selectStack.clear();
+            catchStack.clear();
         }
         if (!ll.isInstruction()) {
             continue;
@@ -828,6 +855,25 @@ void EraParseTable::buildJumpMarkings(const QString& scriptName) {
                 data.lines[i].jumpTo = info.startLine;
             }
         }
+        // ---- TRYC 异常块：TRYCCALL(FORM) / TRYCJUMP(FORM) / TRYCGOTO(FORM) ----
+        else if (name == QLatin1String("TRYCCALL") || name == QLatin1String("TRYCCALLFORM")
+                 || name == QLatin1String("TRYCJUMP") || name == QLatin1String("TRYCJUMPFORM")
+                 || name == QLatin1String("TRYCGOTO") || name == QLatin1String("TRYCGOTOFORM")) {
+            catchStack.append({false, i});
+        }
+        else if (name == QLatin1String("CATCH")) {
+            if (!catchStack.isEmpty() && !catchStack.last().isCatch) {
+                const CatchInfo tryInfo = catchStack.takeLast();
+                data.catchLines[tryInfo.line] = i;          // TRYC -> CATCH
+                catchStack.append({true, i});
+            }
+        }
+        else if (name == QLatin1String("ENDCATCH")) {
+            if (!catchStack.isEmpty() && catchStack.last().isCatch) {
+                const CatchInfo catchInfo = catchStack.takeLast();
+                data.endCatchLines[catchInfo.line] = i;     // CATCH -> ENDCATCH
+            }
+        }
     }
 }
 
@@ -848,6 +894,39 @@ QString stripDirectiveComment(const QString& text) {
         if (c == QLatin1Char(';')) return text.left(i);
     }
     return text;
+}
+
+// `#DIM CONST NAME = <初值>` 的「初值」部分（按顶层逗号切分）。
+// 空初值返回空表 —— eraTW 用它表示「初值写在其后的 { … } 块里」。
+QStringList constValueExpressions(const QString& declRest) {
+    QChar quote;
+    int depth = 0;
+    for (int i = 0; i < declRest.size(); ++i) {
+        const QChar c = declRest.at(i);
+        if (!quote.isNull()) { if (c == quote) quote = QChar(); continue; }
+        if (c == QLatin1Char('"') || c == QLatin1Char('\'')) { quote = c; continue; }
+        if (c == QLatin1Char('(') || c == QLatin1Char('[')) { ++depth; continue; }
+        if (c == QLatin1Char(')') || c == QLatin1Char(']')) { if (depth > 0) --depth; continue; }
+        if (c == QLatin1Char('=') && depth == 0) {
+            const QString tail = declRest.mid(i + 1).trimmed();
+            if (tail.isEmpty()) return QStringList();
+            QStringList out;
+            QString current;
+            int d2 = 0;
+            QChar q2;
+            for (const QChar ch : tail) {
+                if (!q2.isNull()) { current += ch; if (ch == q2) q2 = QChar(); continue; }
+                if (ch == QLatin1Char('"') || ch == QLatin1Char('\'')) { q2 = ch; current += ch; continue; }
+                if (ch == QLatin1Char('(') || ch == QLatin1Char('[')) { ++d2; current += ch; continue; }
+                if (ch == QLatin1Char(')') || ch == QLatin1Char(']')) { if (d2 > 0) --d2; current += ch; continue; }
+                if (d2 == 0 && ch == QLatin1Char(',')) { out << current.trimmed(); current.clear(); continue; }
+                current += ch;
+            }
+            if (!current.trimmed().isEmpty()) out << current.trimmed();
+            return out;
+        }
+    }
+    return QStringList();
 }
 } // namespace
 
@@ -893,8 +972,26 @@ void EraParseTable::parseVariableDeclaration(const LogicalLine& line, const QStr
 
         // CONST 声明的初值即常数（供 #DIM 维数引用）
         if (d.isConst) {
+            // 非常量字面量的初值（`#DIM CONST OBJ_ID_LAST = 人物数量上限`）：
+            // 按字面量解析只会得到 0（曾因此 INRANGE(…, OBJ_ID_LAST) 恒假，
+            // eraTW 的 EXISTOBJ 抛 THROW），而声明顺序又不可靠（跨文件！），
+            // 所以保留表达式原文，交给求值期**惰性**计算。
+            const QStringList valueExprs = constValueExpressions(rest);
+            const bool allLiteral = !valueExprs.isEmpty()
+                && std::all_of(valueExprs.begin(), valueExprs.end(), [](const QString& v) {
+                       qint64 n = 0;
+                       return parseIntegerLiteral(v.trimmed(), n);
+                   });
             if (d.typeIsStr) {
                 if (!d.defaultStr.isEmpty()) m_variables.setConstStr(d.name, d.defaultStr.first());
+            } else if (!allLiteral && !valueExprs.isEmpty()) {
+                m_variables.setConstExprs(d.name, valueExprs);
+            } else if (valueExprs.isEmpty()) {
+                // `#DIM CONST X, N =` + 紧随其后的 `{ … }` 多行初值块：
+                // 本移植尚未支持该写法（常量数组的初值会丢），明确留痕。
+                if (d.dimension > 1)
+                    qWarning() << "[未完成] #DIM CONST 的多行初值块（{ }）尚未实现:"
+                               << d.name << line.position.toString();
             } else if (!d.defaultInt.isEmpty()) {
                 // 常数**数组**（`#DIM CONST NAME, N = v0, v1, …`）也要存下来，
                 // 供 `NAME:i` 的下标访问使用；标量常数取第一个值
@@ -987,28 +1084,76 @@ void EraParseTable::mergeAstCache(const QHash<QString, QSharedPointer<Expression
 }
 
 void EraParseTable::finalizeParse() {
-    m_variables.resolveDimensions();
+    // 维数求值放在**常量表就绪之后**：`#DIM X, CLASS_NUM + 1` 这种维数表达式
+    // 需要先能查到常量（以前只能识别「数字」和「单个常量名」，
+    // 于是 eraTW 的 `#DIMS CLASS_NAME, CLASS_NUM + 1` 退化成 0 元素数组，
+    // FINDELEMENT 恒返回 -1 -> EXISTOBJ 抛 THROW）。
     // #DIM CONST 常量：交给求值器在求值时查表（装载顺序无关）
     if (m_evaluator) {
         const VariableTable* vt = &m_variables;
-        m_evaluator->setConstProvider([vt](const QString& name, QVariant& out) -> bool {
+        // 惰性常量表达式缓存（`#DIM CONST OBJ_ID_LAST = 人物数量上限`）
+        //   LazyConst = 逐元素的求值结果（标量常量就是单元素）
+        using LazyConst = QList<QVariant>;
+        auto lazyConst = QSharedPointer<QHash<QString, LazyConst>>::create();
+        auto lazyDepth = QSharedPointer<int>::create(0);
+        // 求值并缓存某个常量声明的全部元素；返回 nullptr 表示「不是表达式型常量」
+        const auto lazyConstValues = [this, vt, lazyConst, lazyDepth](const QString& name)
+            -> QSharedPointer<LazyConst> {
+            const QString key = name.toUpper();
+            const auto cached = lazyConst->constFind(key);
+            if (cached != lazyConst->constEnd())
+                return QSharedPointer<LazyConst>::create(cached.value());
+            const QStringList exprs = vt->constExprs(name);
+            if (exprs.isEmpty() || !m_evaluator) return QSharedPointer<LazyConst>();
+            if (*lazyDepth >= 16) return QSharedPointer<LazyConst>();   // 循环定义保护
+            ++*lazyDepth;
+            LazyConst values;
+            values.reserve(exprs.size());
+            for (const QString& e : exprs)
+                values.append(m_evaluator->evaluate(e.trimmed(), m_variableStorage, m_gameBaseData));
+            --*lazyDepth;
+            lazyConst->insert(key, values);
+            return QSharedPointer<LazyConst>::create(values);
+        };
+        const auto evalLazyConst = [lazyConstValues](const QString& name, int index,
+                                                     QVariant& out) -> bool {
+            const QSharedPointer<LazyConst> values = lazyConstValues(name);
+            if (!values || values->isEmpty()) return false;
+            const int i = (index < 0) ? 0 : index;
+            out = values->value(i < values->size() ? i : 0);
+            return true;
+        };
+        m_evaluator->setConstProvider([vt, evalLazyConst](const QString& name, QVariant& out) -> bool {
             qint64 iv = 0;
             if (vt->constInt(name, iv)) { out = QVariant::fromValue<qint64>(iv); return true; }
             QString sv;
             if (vt->constStr(name, sv)) { out = QVariant(sv); return true; }
-            return false;
+            return evalLazyConst(name, 0, out);
         });
         // 常数数组（`#DIM CONST X, N = …`）：先判名（避免下标副作用被求两遍）
         m_evaluator->setConstArrayChecker([vt](const QString& name) -> bool {
             return vt->constArraySize(name) > 0;
         });
-        m_evaluator->setConstArrayProvider([vt](const QString& name, int index, QVariant& out) -> bool {
+        m_evaluator->setConstArrayProvider([vt, evalLazyConst](const QString& name, int index,
+                                                               QVariant& out) -> bool {
             qint64 iv = 0;
-            if (!vt->constArrayAt(name, index, iv)) return false;
-            out = QVariant::fromValue<qint64>(iv);
-            return true;
+            if (vt->constArrayAt(name, index, iv)) {
+                out = QVariant::fromValue<qint64>(iv);
+                return true;
+            }
+            // 没有字面量值：可能是表达式型常量数组（`= (1<<N)-1, …`）
+            return evalLazyConst(name, index, out);
         });
     }
+    // 维数表达式求值（`#DIM X, A + 1` / `#DIM X, MAXBASE - 1`）：常数表已就绪，
+    // 用求值器把维数表达式折叠成整数
+    m_variables.setDimEvaluator([this](const QString& expr) -> qint64 {
+        if (!m_evaluator) return 0;
+        const QVariant v = m_evaluator->evaluate(expr, m_variableStorage, m_gameBaseData);
+        return v.isValid() ? v.toLongLong() : 0;
+    });
+    m_variables.resolveDimensions();
+
     applyGlobalVariableDefaults();   // #DIM X = 1 等初值（全局）
     // 用户自定义函数的强类型化（形参类型回填 + 返回类型确定）
     resolveUserFunctionTypes();

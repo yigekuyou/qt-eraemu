@@ -428,6 +428,49 @@ ExecState ScriptRunner::executeLine(const LogicalLine& line) {
         return ExecState::Continue;
     }
 
+    // ---- CATCH / ENDCATCH（TRYC 系异常块的标记，对齐 C# CATCH_Instruction）----
+    // 顺序落入 CATCH 说明 TRYC 体的目标函数**找到了**（没跳走），此时异常体不能执行
+    // -> 跳到配对的 ENDCATCH 之后。
+    // 「TRYC 失败」的落地在 doCallLine 里直接落到 CATCH 的下一行，不会命中这里。
+    if (name == QLatin1String("CATCH")) {
+        const int endCatch = m_table->endCatchTarget(script, pc);
+        if (endCatch >= 0) gotoLine(endCatch + 1);
+        else advance();
+        return ExecState::Continue;
+    }
+    if (name == QLatin1String("ENDCATCH")) {
+        advance();
+        return ExecState::Continue;
+    }
+
+    // ---- THROW（C# THROW_Instruction -> throw new CodeEE）----
+    // 语义要点一：Emuera 的 CATCH **不是**通用异常捕获 ——
+    //   文档《异常分支：TRYC / CATCH / ENDCATCH》：「用于捕获『函数不存在』的情况」。
+    //   所以 THROW 不会被 CATCH 接住（C# 里 JumpToEndCatch 只在「找不到函数」时用）。
+    // 语义要点二：C# 会中断本次执行。这里**先只报错、不中断**，原因是：
+    //   eraTW 在 Emuera 下这些 THROW 本来就不该发生，能触发说明上游求值有缺陷
+    //   （参数绑定 / 常量折叠一类）。直接停机会让整局跑不下去、也挡住其它缺口的
+    //   观察；因此这里用 qWarning 把「哪个文件的哪一行、抛了什么」完整打出来，
+    //   继续执行。等上游缺陷修完，这里应改回真正的中断。
+    if (name == QLatin1String("THROW")) {
+        QString message;
+        if (!line.arguments.isEmpty()) {
+            ExpressionEvaluator fallback;
+            ExpressionEvaluator& ev = m_evaluator ? *m_evaluator : fallback;
+            const Operand& op = line.arguments.first();
+            message = op.ast ? ev.evaluate(*op.ast, m_storage, baseData()).toString() : op.raw;
+        }
+        // 同一行只报一次（eraTW 的 EXISTOBJ 在 151 次循环里会反复抛同一个 THROW）
+        if (!m_reportedThrow.contains(line.position.toString())) {
+            m_reportedThrow.insert(line.position.toString());
+            qWarning() << "[THROW]" << message
+                       << "行:" << line.position.toString()
+                       << "（C# 会中断执行；此处继续，需排查上游求值缺陷）";
+        }
+        advance();
+        return ExecState::Continue;
+    }
+
     // ---- RESTART：回到当前函数的第一行（Emuera 的 RESTART 指令）----
     // eraTW 的各类菜单（角色自定义、服装选择、商店…）靠它重绘并重新等待输入；
     // 此前未实现，导致「改完一项后菜单不再刷新」。
@@ -661,10 +704,43 @@ ExecState ScriptRunner::executeLine(const LogicalLine& line) {
     // 语义对齐 C# CALL_Instruction(form, isJump, isTry, isTryCatch)。
     if (name == QLatin1String("CALL") || name == QLatin1String("TRYCALL")
         || name == QLatin1String("CALLFORM") || name == QLatin1String("TRYCALLFORM")
-        || name == QLatin1String("TRYCCALLFORM")) {
+        || name == QLatin1String("TRYCCALL") || name == QLatin1String("TRYCCALLFORM")) {
         const bool isForm = name.contains(QLatin1String("FORM"));
         const bool isTry  = name.startsWith(QLatin1String("TRY"));
         return doCallLine(line, isForm, isTry);
+    }
+
+    // ---- CALLF / CALLFORMF：调用「式中関数」并把返回值写进 RESULT / RESULTS:0 ----
+    //   CALLF MAKE_EXIST(CLASS_NAME)        （eraTW 的 EXISTOBJ 系全靠它）
+    //   CALLFORMF FUNC_%X%(A, B)
+    // 对齐 C# CALLF_Instruction：目标是 function-method（不是 CALL 的标签），
+    // 实参照旧求值；返回值由 RETURNF 机制落到 RESULT，指令本身不改流程。
+    // 以前这条完全没有实现 -> EXIST 系列函数形同虚设。
+    if (name == QLatin1String("CALLF") || name == QLatin1String("CALLFORMF")) {
+        QString funcName = line.arguments.isEmpty() ? QString() : line.arguments.first().raw;
+        if (name == QLatin1String("CALLFORMF")) funcName = expandCallFormLabel(funcName);
+        QStringList argTexts;
+        for (int i = 1; i < line.arguments.size(); ++i) {
+            const Operand& op = line.arguments.at(i);
+            if (op.raw == QLatin1String(",")) continue;
+            argTexts << op.raw;
+        }
+        const QString callText = funcName + QLatin1Char('(')
+                                 + argTexts.join(QLatin1Char(',')) + QLatin1Char(')');
+        ExpressionEvaluator localEv;
+        ExpressionEvaluator& ev = m_evaluator ? *m_evaluator : localEv;
+        const QSharedPointer<ExpressionNode> ast =
+            m_table ? m_table->expressionAst(callText) : QSharedPointer<ExpressionNode>();
+        const QVariant value = ast ? ev.evaluate(*ast, m_storage, baseData())
+                                   : ev.evaluate(callText, m_storage, baseData());
+        if (m_storage) {
+            if (value.typeId() == QMetaType::QString) m_storage->setLocalStr(0, value.toString());
+            else m_storage->setSystemVariable(QStringLiteral("RESULT"), 0, value.toLongLong());
+        }
+        qCDebug(eraTrace) << "[callf]" << callText << "->" << value
+                          << "行" << line.position.toString();
+        advance();
+        return ExecState::Continue;
     }
 
     if (name == QLatin1String("RETURN") || name == QLatin1String("RETURNF")) {
@@ -759,6 +835,33 @@ ExecState ScriptRunner::executeLine(const LogicalLine& line) {
         qint64 ms = 0;
         if (!line.arguments.isEmpty()) evalInt(line.arguments.first().ast, line.arguments.first().raw, ms);
         if (ms < 0) ms = 0;
+        advance();
+        if (m_machine && ms > 0) {
+            m_machine->awaitDelay(static_cast<int>(ms));
+            return m_state->getExecState();
+        }
+        return ExecState::Continue;
+    }
+
+    // ---- TWAIT <时间ms>[, <跳过标记>]（对齐 C# TWAIT_Instruction）----
+    //   暂停 <时间>ms 后自动继续；<跳过标记>!=0 时任意键/点击可提前结束等待。
+    //   计时路径完整（挂起 -> 计时器到点恢复）；「按键提前跳过」属于输入层能力，
+    //   尚未接线（仅影响能否点掉动画，不影响流程正确性）。
+    if (name == QLatin1String("TWAIT")) {
+        QSharedPointer<ExpressionNode> timeNode;
+        QSharedPointer<ExpressionNode> skipNode;
+        if (!line.arguments.isEmpty() && line.arguments.first().ast
+            && line.arguments.first().ast->kind() == NodeKind::Function) {
+            const auto& fn = static_cast<const FunctionNode&>(*line.arguments.first().ast);
+            if (!fn.arguments().isEmpty()) timeNode = fn.arguments().at(0);
+            if (fn.arguments().size() >= 2) skipNode = fn.arguments().at(1);
+        }
+        qint64 ms = 0, skip = 0;
+        evalInt(timeNode, QString(), ms);
+        evalInt(skipNode, QString(), skip);
+        if (ms < 0) ms = 0;
+        qCDebug(eraTrace) << "[twait] 等待" << ms << "ms 跳过标记" << skip
+                          << "行" << line.position.toString();
         advance();
         if (m_machine && ms > 0) {
             m_machine->awaitDelay(static_cast<int>(ms));
@@ -882,10 +985,24 @@ ExecState ScriptRunner::doCallLine(const LogicalLine& line, bool isForm, bool is
     // TRY 系：目标不存在就静默跳过（对齐 C# isTry）。
     // 注意用 hasLabel（能命中任意 @/$ 标签）而不是 userFunction，
     // 因为 eraTW 里存在「无 #FUNCTION 的 @label」也照常 CALL。
-    if (isTry && !m_table->hasLabel(label)) {
-        qDebug() << "[call] TRY* 目标不存在，跳过：" << label;
-        m_table->advance();
+    // TRYC 系失败的落地：有配对的 CATCH 就从「CATCH 的下一行」开始跑异常体，
+    // 没有 CATCH 的话就是普通的 TRY（静默跳过）。
+    // 对齐 C# ProcessState 的语义：主循环先 ShiftNextLine 再执行，所以
+    // JumpTo(CATCH) 真正的落点是 CATCH 的下一行。
+    const auto tryFail = [&]() -> ExecState {
+        const QString sc = m_table->currentScript();
+        const int catchLine = m_table->catchTarget(sc, m_table->currentLine());
+        if (catchLine >= 0) {
+            qCDebug(eraTrace) << "[call] TRYC 目标不存在 -> 进入 CATCH" << catchLine + 1 << label;
+            m_table->setPosition(sc, catchLine + 1, false);
+        } else {
+            qDebug() << "[call] TRY* 目标不存在，跳过：" << label;
+            m_table->advance();
+        }
         return ExecState::Continue;
+    };
+    if (isTry && !m_table->hasLabel(label)) {
+        return tryFail();
     }
 
     const UserFunctionDecl* info = m_table->userFunction(label);
@@ -943,8 +1060,7 @@ ExecState ScriptRunner::doCallLine(const LogicalLine& line, bool isForm, bool is
     if (!m_table->callLabel(label)) {
         if (!m_callContexts.isEmpty()) m_storage->setLocalContext(m_callContexts.takeLast().locals);
         if (isTry) {
-            m_table->advance();
-            return ExecState::Continue;
+            return tryFail();
         }
         m_state->setErrorState();
         emit errorOccurred(QStringLiteral("CALL label not found: %1").arg(label));

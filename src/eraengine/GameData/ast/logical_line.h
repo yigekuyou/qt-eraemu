@@ -202,6 +202,11 @@ struct LogicalLine {
     // 指令（Instruction）
     QString        functionName;     // 大写指令名
     QString        assignOperator;   // "=" / "+=" …（C# InstructionLine.AssignOperator）
+    // 「函数语句」标记（对齐 C# LogicalLineType.Function）：
+    // 一行以**内置函数名**开头、又不是已知指令/赋值时，整行是一次函数调用，
+    // 返回值写 RESULT（整型）/ RESULTS:0（字符串）。eraTW 里大量存在：
+    //   GETMILLISECOND / CURRENTREDRAW / GETTIME / REPLACE LOCALS, "a", "b" …
+    bool           isFunctionCall = false;
     QList<Operand> arguments;
     TypedArgument  argument;                    // 类型化参数（C# InstructionLine.Argument）
     QSharedPointer<ExpressionNode> condition;   // IF/SIF/ELSEIF/WHILE/REPEAT 条件

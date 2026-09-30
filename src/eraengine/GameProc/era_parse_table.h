@@ -145,6 +145,7 @@ public:
 
     // CSV 常量名表（解析期识别「常量名下标」）
     void setConstantTable(const ConstantTable* table) { m_constantTable = table; }
+    [[nodiscard]] const ConstantTable* constantTable() const { return m_constantTable; }
 
     // ---- 只读区查询 ----
     [[nodiscard]] const ScriptData* script(const QString& scriptName) const;

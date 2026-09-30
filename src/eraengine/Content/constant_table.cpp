@@ -60,10 +60,11 @@ QStringList ConstantTable::parseCsvLine(const QString& line) {
 bool ConstantTable::loadCsvFile(const QString& filePath, const QString& tableKey) {
     // CSV 名表：同样按文件嗅探编码（CSV 可能是 Shift-JIS 或 UTF-8）
     bool ok = false;
-    const QString text = TextCodecUtil::readFile(filePath, TextEncoding::Auto, nullptr, &ok);
+    QString text = TextCodecUtil::readFile(filePath, TextEncoding::Auto, nullptr, &ok);
     if (!ok) {
         return false;
     }
+    if (text.startsWith(QChar(0xFEFF))) text.remove(0, 1);
 
     QStringList names;
     const QStringList lines = text.split(QLatin1Char('\n'));
@@ -73,6 +74,17 @@ bool ConstantTable::loadCsvFile(const QString& filePath, const QString& tableKey
         if (trimmed.isEmpty() || trimmed.startsWith(QLatin1Char(';'))) continue;
         const QStringList cols = parseCsvLine(trimmed);
         if (cols.isEmpty()) continue;
+        // 标准 Emuera 名表格式：第 0 列 = 数值下标，第 1 列 = 常量名（其后是注释列）。
+        // 名字必须放进「第 0 列声明」的槽位——Base.csv 等存在空缺下标
+        // （0,1,2,…,8,10,…），顺序 append 会让整个表错位。
+        bool indexOk = false;
+        const int declared = cols.first().toInt(&indexOk);
+        if (indexOk && declared >= 0 && cols.size() >= 2) {
+            if (names.size() <= declared) names.resize(declared + 1);
+            names[declared] = cols.at(1);
+            continue;
+        }
+        // 回退：无下标列的名表（每行第 0 列即名字）
         names.append(cols.first());
     }
     if (names.isEmpty()) {

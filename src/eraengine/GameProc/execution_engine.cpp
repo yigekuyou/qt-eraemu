@@ -24,6 +24,7 @@
 #include "ast/strform_parser.h"
 #include "ast/print_template.h"
 #include "era_parse_table.h"
+#include "constant_table.h"
 #include "eraengine.h"
 #include "function_system.h"
 
@@ -182,6 +183,21 @@ ExecutionEngine::LhsRef ExecutionEngine::parseLhsRef(const QString& lhs)
             ref.indices.append(direct);
             continue;
         }
+        // CSV 常量名下标（MAXBASE:ARG:体力 / TALENT:MASTER:性別 之类）：
+        // 必须先按「常量名」查 ConstantTable（与 ExpressionParser::parseIndexTerm
+        // 的判定顺序一致），否则会被当普通表达式求值成 0，写错槽位。
+        if (m_parseTable) {
+            if (const ConstantTable* ct = m_parseTable->constantTable()) {
+                const int mapped = ct->indexForVariable(ref.name, idxText);
+                if (mapped >= 0) {
+                    qDebug() << "[parseLhsRef] const-name" << ref.name << idxText << "->" << mapped;
+                    ref.indices.append(mapped);
+                    continue;
+                }
+            } else {
+                qDebug() << "[parseLhsRef] constantTable is NULL";
+            }
+        }
         // 变量下标 / 表达式（BAG:COUNT、BAG:(COUNT + 1)）
         qint64 value = 0;
         bool resolved = false;
@@ -191,6 +207,7 @@ ExecutionEngine::LhsRef ExecutionEngine::parseLhsRef(const QString& lhs)
                 ExpressionEvaluator localEvaluator;
                 ExpressionEvaluator& ev = m_expressionEvaluator ? *m_expressionEvaluator : localEvaluator;
                 value = ev.evaluate(*ast, m_storage, m_gameBaseData).toLongLong();
+                qDebug() << "[parseLhsRef] expr" << ref.name << idxText << "->" << value;
                 resolved = true;
             }
         }
@@ -252,6 +269,9 @@ qint64 ExecutionEngine::readLhs(const LhsRef& ref) {
 
 void ExecutionEngine::writeLhs(const LhsRef& ref, qint64 value) {
     if (!m_storage) return;
+    qDebug() << "[writeLhs]" << ref.name << "indices" << ref.indices << "=" << value
+             << "chara?" << m_storage->isCharaDataVariable(ref.name)
+             << "sys?" << m_storage->hasSystemVariable(ref.name);
     if (m_storage->hasParameter(ref.name)) { m_storage->setParameter(ref.name, value); return; }
     // 角色数据变量：按 (角色号, 元素下标) 写入（否则同一角色的元素互相覆盖）
     if (m_storage->isCharaDataVariable(ref.name)) {
@@ -693,7 +713,7 @@ bool ExecutionEngine::handleStringAssignment(const QString& lhs, const QString& 
 }
 
 bool ExecutionEngine::handleAssignment(const QString& lhs, const QString& rhs, const QSharedPointer<ExpressionNode>& ast) {
-    
+
     // Parse the LHS to get variable name and index（支持 2D/3D 下标）
     const LhsRef ref = parseLhsRef(lhs);
 

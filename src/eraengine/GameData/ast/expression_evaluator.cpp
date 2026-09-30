@@ -464,6 +464,16 @@ qint64 ExpressionEvaluator::resolveIndex(const VariableNode& node, int index,
         }
         return name.toLongLong();   // 退化为数值字面量（如 "3"）
     }
+    // 裸标识符下标的运行期兜底：内部解析路径（evaluate(QString) / evalExpressionCached
+    // 的回退分支）没有挂常量名提供器，`TALENT:ARG:性別` 的 `性別` 会解析成未知变量
+    // 求值成 0。若该标识符恰好是本变量的 CSV 常量名（C# isDefined 优先于变量引用），
+    // 必须按常量名映射。
+    if (const auto* varIdx = dynamic_cast<const VariableNode*>(&idx)) {
+        if (varIdx->indices().isEmpty() && m_constantTable) {
+            const int mapped = m_constantTable->indexForVariable(node.name(), varIdx->name());
+            if (mapped >= 0) return mapped;
+        }
+    }
     return value.toLongLong();
 }
 
@@ -566,10 +576,15 @@ QVariant ExpressionEvaluator::evaluateVariable(const VariableNode &node, Variabl
             return QVariant(storage->getCharaStr(varName, charaId, elems.value(0)));
         }
         if (storage->charaDataDimension(varName) >= 2) {
-            return QVariant::fromValue<qint64>(
-                storage->getCharaInt3D(varName, charaId, elems.value(0), elems.value(1)));
+            const qint64 v3 = storage->getCharaInt3D(varName, charaId, elems.value(0), elems.value(1));
+            qDebug() << "[evalRead3D]" << varName << "ids" << ids << "chara" << charaId
+                     << "elems" << elems << "=" << v3;
+            return QVariant::fromValue<qint64>(v3);
         }
-        return QVariant::fromValue<qint64>(storage->getCharaInt(varName, charaId, elems.value(0)));
+        const qint64 v1 = storage->getCharaInt(varName, charaId, elems.value(0));
+        qDebug() << "[evalRead]" << varName << "ids" << ids << "chara" << charaId
+                 << "elems" << elems << "=" << v1;
+        return QVariant::fromValue<qint64>(v1);
     }
     
     // Check if this is a GameBase variable

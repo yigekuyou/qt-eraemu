@@ -16,6 +16,8 @@
  * along with this program.  If not, see <https://www.gnu.org/licenses/>.
  */
 #include "script_runner.h"
+#include "eraengine_log.h"
+#include <algorithm>
 #include "era_parse_table.h"
 #include "execution_engine.h"
 #include "variable_storage.h"
@@ -182,7 +184,16 @@ bool ScriptRunner::stepOnce() {
 
     const int pc = m_table->currentLine();
     if (pc < 0 || pc >= sd->lines.size()) {
-        m_lastReturnValue = QVariant::fromValue<qint64>(0);
+        // 函数体自然结束（无 RETURN/RETURNF）：#FUNCTIONS 缺省返回**空字符串**
+        // （eraTW 大量依赖 `STRLENS(GET_TALENTNAME(...))` 过滤无值素질 ——
+        //   若缺省成整数 0，字符串化后是 "0"，会把所有无值素質显示成 [0]）。
+        // 其余情况缺省 0 并清 RESULT。
+        const UserFunctionDecl* finfo =
+            m_table->userFunction(m_table->currentFrame().callLabel);
+        if (finfo && finfo->isMethod && finfo->returnsString())
+            m_lastReturnValue = QVariant(QString());
+        else
+            m_lastReturnValue = QVariant::fromValue<qint64>(0);
         m_storage->setSystemVariable("RESULT", 0, 0);
         m_storage->setGlobalInt1D("RESULT", 0, 0);
         // 脚本结束：能返回就返回调用者，否则停止
@@ -195,6 +206,26 @@ bool ScriptRunner::stepOnce() {
     }
 
     const LogicalLine& line = sd->lines.at(pc);
+    // 函数体边界（C# FunctionLabelLine 终止上一个函数体）：
+    // 落入的不是本帧入口的 @label = 上一函数已自然结束、无 RETURN/RETURNF。
+    // #FUNCTIONS 缺省返回**空字符串**（eraTW 依赖 STRLENS(GET_TALENTNAME(...))
+    // 过滤无值素質），其余缺省 0。
+    if (line.kind == LineKind::FunctionLabel && m_table->depth() > 0
+        && m_table->currentFrame().entryLine != pc) {
+        const UserFunctionDecl* finfo = m_table->userFunction(m_table->currentFrame().callLabel);
+        if (finfo && finfo->isMethod && finfo->returnsString())
+            m_lastReturnValue = QVariant(QString());
+        else
+            m_lastReturnValue = QVariant::fromValue<qint64>(0);
+        m_storage->setSystemVariable("RESULT", 0, 0);
+        m_storage->setGlobalInt1D("RESULT", 0, 0);
+        if (returnFromCall()) {
+            return true;
+        }
+        m_state->requestHalt();
+        emit finished();
+        return false;
+    }
     // System entry points are not entered through CALL. Resolve private storage
     // from the executing owner as well, including resumed SHOW_SHOP frames.
     QStringList privateNames;
@@ -231,7 +262,17 @@ ScriptRunner::LoopFrame* ScriptRunner::topLoop(LoopFrame::Kind kind) {
     if (m_loops.isEmpty()) return nullptr;
     if (m_loops.last().depth != m_table->depth()
         || m_loops.last().script != m_table->currentScript()) return nullptr;
-    if (m_loops.last().kind == kind) return &m_loops.last();
+    if (m_loops.last().kind == kind) {
+        LoopFrame& f = m_loops.last();
+        // 每次「回到循环头」时计数：超过阈值只告警一次，报出循环位置与状态。
+        if (++f.iterations == kLoopIterationWarn && !f.warned) {
+            f.warned = true;
+            qWarning() << "[exec] 循环迭代异常偏多:" << f.script << "行" << f.startLine
+                       << "种类" << static_cast<int>(f.kind) << "变量" << f.varName
+                       << "当前值" << f.value << "终值" << f.end << "已迭代" << f.iterations;
+        }
+        return &f;
+    }
     return nullptr;
 }
 
@@ -383,6 +424,22 @@ ExecState ScriptRunner::executeLine(const LogicalLine& line) {
     }
     if (name == QLatin1String("ENDSELECT")) {
         advance();
+        return ExecState::Continue;
+    }
+
+    // ---- RESTART：回到当前函数的第一行（Emuera 的 RESTART 指令）----
+    // eraTW 的各类菜单（角色自定义、服装选择、商店…）靠它重绘并重新等待输入；
+    // 此前未实现，导致「改完一项后菜单不再刷新」。
+    if (name == QLatin1String("RESTART")) {
+        const QString fn = line.ownerFunction;
+        const int labelLine = fn.isEmpty() ? -1 : m_table->getLabelPosition(script, fn);
+        if (labelLine < 0) {
+            m_state->setErrorState();
+            emit errorOccurred(QStringLiteral("RESTART 找不到当前函数的入口标签（%1）").arg(fn));
+            return ExecState::Error;
+        }
+        qCDebug(eraTrace) << "[exec] RESTART" << fn << "->" << labelLine + 1;
+        gotoLine(labelLine + 1);       // 跳过标签行，从函数体第一行重新开始
         return ExecState::Continue;
     }
 
@@ -966,9 +1023,8 @@ qint64 ScriptRunner::readIntVar(const QString& name, const QList<int>& indices) 
         return m_storage->getCharaInt(name, charaId, elems.value(0));
     }
     const QString upper = name.toUpper();
-    if (upper == QLatin1String("LOCAL") || upper == QLatin1String("ARG")) {
-        return m_storage->getLocalInt(indices.value(0));
-    }
+    if (upper == QLatin1String("ARG")) return m_storage->getArgInt(indices.value(0));
+    if (upper == QLatin1String("LOCAL")) return m_storage->getLocalInt(indices.value(0));
     if (m_storage->hasSystemVariable(name)) {
         return m_storage->getSystemVariable(name, indices.value(0));
     }
@@ -994,7 +1050,11 @@ void ScriptRunner::writeIntVar(const QString& name, const QList<int>& indices, q
         return;
     }
     const QString upper = name.toUpper();
-    if (upper == QLatin1String("LOCAL") || upper == QLatin1String("ARG")) {
+    if (upper == QLatin1String("ARG")) {
+        m_storage->setArgInt(indices.value(0), value);
+        return;
+    }
+    if (upper == QLatin1String("LOCAL")) {
         m_storage->setLocalInt(indices.value(0), value);
         return;
     }
@@ -1092,12 +1152,12 @@ void ScriptRunner::bindArguments(const UserFunctionDecl* info, const QList<Opera
                                 bool argIsString, const QString& strValue, qint64 intValue) {
         switch (p ? p->target : UserParamTarget::Unknown) {
         case UserParamTarget::Arg:
-            m_storage->setLocalInt(p->index, intValue);
+            m_storage->setArgInt(p->index, intValue);
             // ARG:0 也可以写成裸 ARG（求值器已知），同时登记别名便于形参名解析
             m_storage->setLocalAlias(p->name, p->index);
             break;
         case UserParamTarget::Args:
-            m_storage->setLocalStr(p->index, argIsString ? strValue : QString::number(intValue));
+            m_storage->setArgStr(p->index, argIsString ? strValue : QString::number(intValue));
             m_storage->setLocalAlias(p->name, p->index);
             break;
         case UserParamTarget::LocalVar:
@@ -1128,8 +1188,8 @@ void ScriptRunner::bindArguments(const UserFunctionDecl* info, const QList<Opera
         case UserParamTarget::Unknown:
         default:
             // 未归类（或无声明）：退化为按位置绑定到 ARG/ARGS
-            if (argIsString) m_storage->setLocalStr(position, strValue);
-            else             m_storage->setLocalInt(position, intValue);
+            if (argIsString) m_storage->setArgStr(position, strValue);
+            else             m_storage->setArgInt(position, intValue);
             break;
         }
     };
@@ -1162,9 +1222,13 @@ bool ScriptRunner::invokeUserFunction(const QString& name, const QList<QVariant>
     if (!info || !info->isMethod) {
         return false;   // 非用户函数（交给内置函数）
     }
-    if (m_running && !m_state->isRunning()) {
-        return false;   // 已挂起，无法同步求值
-    }
+
+    // 暂停期间的同步求值：调用方（如调试命令 `:e`）在状态机停下时要求一个表达式的值。
+    // 此时 ExecState 不是 Continue，下面的驱动循环会一行都不执行而直接返回 0
+    // —— 表现为「用户函数恒为 0」。临时置回 Continue，跑完函数体后恢复现场。
+    const bool wasSuspended = !m_state->isRunning();
+    const ExecState savedExecState = m_state->getExecState();
+    if (wasSuspended) m_state->setExecState(ExecState::Continue);
 
     // 保存当前位置 / 别名快照
     const QString savedScript = m_table->currentScript();
@@ -1183,11 +1247,11 @@ bool ScriptRunner::invokeUserFunction(const QString& name, const QList<QVariant>
         const UserParamDecl* param = (i < info->params.size()) ? &info->params.at(i) : nullptr;
         switch (param ? param->target : UserParamTarget::Unknown) {
         case UserParamTarget::Arg:
-            m_storage->setLocalInt(param->index, v.toLongLong());
+            m_storage->setArgInt(param->index, v.toLongLong());
             m_storage->setLocalAlias(param->name, param->index);
             break;
         case UserParamTarget::Args:
-            m_storage->setLocalStr(param->index, v.toString());
+            m_storage->setArgStr(param->index, v.toString());
             m_storage->setLocalAlias(param->name, param->index);
             break;
         case UserParamTarget::LocalVar:
@@ -1199,8 +1263,8 @@ bool ScriptRunner::invokeUserFunction(const QString& name, const QList<QVariant>
             break;
         case UserParamTarget::Unknown:
         default:
-            m_storage->setLocalInt(i, v.toLongLong());
-            if (isStr) m_storage->setLocalStr(i, v.toString());
+            m_storage->setArgInt(i, v.toLongLong());
+            if (isStr) m_storage->setArgStr(i, v.toString());
             break;
         }
     }
@@ -1221,6 +1285,8 @@ bool ScriptRunner::invokeUserFunction(const QString& name, const QList<QVariant>
         }
     }
     m_running = wasRunning;
+    // 恢复挂起前的执行状态（函数体已跑完，调用方仍需保持暂停）
+    if (wasSuspended) m_state->setExecState(savedExecState);
 
     m_loops.resize(savedLoops);
     // 恢复别名快照（正常 RETURN 已弹出一层；这里兜底）

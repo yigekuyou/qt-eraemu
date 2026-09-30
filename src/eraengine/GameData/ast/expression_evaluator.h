@@ -87,6 +87,13 @@ public:
     void setCharaCountProvider(CharaCountProvider provider) { m_charaNumProvider = std::move(provider); }
     void setLineCountProvider(LineCountProvider provider) { m_lineCountProvider = std::move(provider); }
 
+    // 当前文字颜色 / 字体样式（GETCOLOR / GETSTYLE）——由执行引擎维护并注入。
+    // eraTW 的 COLORMESSAGE 会 `SAVE = GETCOLOR()` … `SETCOLOR SAVE` 地保存还原，
+    // 因此两端的编码必须自洽（颜色 = 0xRRGGBB，样式 = 位掩码）。
+    using ColorProvider = std::function<qint64()>;
+    void setColorProvider(ColorProvider provider) { m_colorProvider = std::move(provider); }
+    void setStyleProvider(ColorProvider provider) { m_styleProvider = std::move(provider); }
+
     // `#DIM CONST NAME, N = …` 常数数组的下标查询（注入自 VariableTable）
     //   * checker：只判断名字是不是常数数组（**必须能不求值下标**，
     //     否则 `BAG:(I++)` 的下标会被求值两次、副作用算两遍）；
@@ -174,6 +181,8 @@ private:
     ConfigProvider m_configProvider;
     CharaCountProvider m_charaNumProvider;
     LineCountProvider m_lineCountProvider;
+    ColorProvider m_colorProvider;        // GETCOLOR
+    ColorProvider m_styleProvider;        // GETSTYLE
     Mt19937 m_rand;                       // MT19937（启动时随机种子）
     VariableDimProvider m_variableDimProvider;
     ConstArrayProvider  m_constArrayProvider;

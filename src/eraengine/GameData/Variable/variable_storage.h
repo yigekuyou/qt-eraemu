@@ -53,6 +53,8 @@ public:
 		// ================= 角色整型 (支持 2D/3D) =================
 		Q_INVOKABLE void setCharaInt(const QString &name, int charaId, int index, qint64 value);
 		Q_INVOKABLE qint64 getCharaInt(const QString &name, int charaId, int index) const;
+		// 按运行时下标直接存取（不做 运行时->模板 翻译）：供角色列表自身（NO）使用
+		void setCharaIntRaw(const QString &name, int charaId, int index, qint64 value);
 		Q_INVOKABLE void setCharaInt3D(const QString &name, int charaId, int x, int y, qint64 value);
 		Q_INVOKABLE qint64 getCharaInt3D(const QString &name, int charaId, int x, int y) const;
 		// 角色字符串变量（CSTR / NAME / 用户 #DIMS CHARADATA）
@@ -72,11 +74,42 @@ public:
 		void reduceCharaArgs(const QString &name, const QList<int> &indices,
 		                     int &charaId, QList<int> &elements) const;
 
+		// ================= 角色列表（ADDCHARA / DELCHARA / CHARANUM）=================
+		// C# 里「已登记角色」是运行时列表，第 i 个角色的数据来自 CSV 模板 NO:i。
+		// 本移植把模板数据按**模板号**存放，故这里维护 运行时下标 -> 模板号 的映射，
+		// 角色数据访问统一经 resolveCharaIndex 翻译（列表为空时恒等，模板装载期安全）。
+		void addChara(int csvNo);
+		bool delChara(int index);
+		[[nodiscard]] int charaNum() const { return m_charaList.size(); }
+		[[nodiscard]] int charaCsvNo(int index) const { return m_charaList.value(index, -1); }
+		[[nodiscard]] int resolveCharaIndex(int index) const { return m_charaList.value(index, index); }
+		void markCsvExists(int csvNo) { if (csvNo >= 0) m_existCsv.insert(csvNo); }
+		[[nodiscard]] bool existCsv(int csvNo) const { return m_existCsv.contains(csvNo); }
+		void clearCharaList() { m_charaList.clear(); }
+
+		// ================= CSV 模板快照（CSVNAME/CSVBASE/CSVABL/… 用）=================
+		// C# 里「CSV 模板」与「角色运行时数据」是两个存储：CSV* 函数读模板，
+		// VAR:角色:下标 读运行时可变量。本移植把模板值直接写进了角色存储，
+		// 故在装载结束时深拷贝一份作为模板快照（见 eraengine 的 loadConstantData）。
+		void snapshotCharaTemplates();
+		[[nodiscard]] qint64 csvCharaInt(const QString& name, int charaId, int index) const;
+		[[nodiscard]] QString csvCharaStr(const QString& name, int charaId, int index) const;
+
 		// ================= 本地变量 =================
 		Q_INVOKABLE void setLocalInt(int index, qint64 value);
 		Q_INVOKABLE qint64 getLocalInt(int index) const;
 		Q_INVOKABLE void setLocalStr(int index, const QString &value);
 		Q_INVOKABLE QString getLocalStr(int index) const;
+
+		// ---- 函数实参 ARG / ARGS ----
+		// Emuera 里 ARG / ARGS 与 LOCAL / LOCALS 是**两套独立的数组**：
+		// ARG 保存实参，LOCAL 是函数的局部变量。二者混用会让 `LOCAL:2 = …`
+		// 覆盖掉 `ARG:2`（eraTW 的 PRINT_COLORBAR 正是「先读 ARG:2 当循环上界，
+		// 再写 LOCAL:2 保存颜色」，别名实现下上界被改写成颜色值 → 死循环）。
+		void setArgInt(int index, qint64 value);
+		[[nodiscard]] qint64 getArgInt(int index) const;
+		void setArgStr(int index, const QString& value);
+		[[nodiscard]] QString getArgStr(int index) const;
 
 		// 局部变量名别名：用户函数形参(@F(A,B)) -> LOCAL 槽位，供表达式解析 A/B
 		void setLocalAlias(const QString &name, int index);
@@ -88,18 +121,22 @@ public:
         struct LocalContext {
             QList<qint64> integers;
             QList<QString> strings;
+            QList<qint64> argIntegers;
+            QList<QString> argStrings;
             QHash<QString, int> aliases;
             QHash<QString, QVariant> parameters;
             QHash<QString, QString> privateNames;
             QHash<QString, QString> references;
         };
         LocalContext localContext() const {
-            return {m_localIntVars, m_localStrVars, m_localAliases, m_parameters,
-                    m_privateNames, m_references};
+            return {m_localIntVars, m_localStrVars, m_argIntVars, m_argStrVars,
+                    m_localAliases, m_parameters, m_privateNames, m_references};
         }
         void setLocalContext(const LocalContext& context) {
             m_localIntVars = context.integers;
             m_localStrVars = context.strings;
+            m_argIntVars = context.argIntegers;
+            m_argStrVars = context.argStrings;
             m_localAliases = context.aliases;
             m_parameters = context.parameters;
             m_privateNames = context.privateNames;
@@ -262,7 +299,9 @@ private:
         QHash<QString, QString> m_privateNames;
         QHash<QString, QString> m_references;
 		QList<qint64> m_localIntVars;
+		QList<qint64> m_argIntVars;   // ARG（与 LOCAL 分离）
 		QList<QString> m_localStrVars;
+		QList<QString> m_argStrVars;  // ARGS
 		QHash<QString, int> m_localAliases;   // 形参名 -> LOCAL 槽位
 
 		// System variable containers (1D arrays)
@@ -299,6 +338,14 @@ private:
 		// 角色数据变量元信息：名字(大写) -> {是否字符串, 元素维数}
 		struct CharaDataInfo { bool isString = false; int dimension = 1; };
 		QHash<QString, CharaDataInfo> m_charaDataVars;
+
+		// 已登记角色：运行时下标 -> CSV 模板号；以及存在模板的番号集合（EXISTCSV）
+		QList<int> m_charaList;
+		QSet<int>  m_existCsv;
+		// CSV 模板快照（按模板号存放）
+		QHash<QString, QList<QList<qint64>>> m_csvIntVars;
+		QHash<QString, QList<QList<QList<qint64>>>> m_csvIntVars3D;
+		QHash<QString, QList<QList<QString>>> m_csvStrVars;
 
 		// Variable type information and identifiers
 		QHash<QString, VariableTypeInfo> m_variableTypes;

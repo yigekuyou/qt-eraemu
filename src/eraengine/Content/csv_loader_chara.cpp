@@ -164,7 +164,11 @@ int CsvLoader::loadCharaDirectory(const QString& charaDir,
                     storage->setCharaInt(QStringLiteral("MAXBASE"), charaId, index, value);
             }
         }
-        if (defined) ++loadedChars;
+        if (defined) {
+            ++loadedChars;
+            // 登记「该番号的角色模板存在」（EXISTCSV 用）
+            if (charaNo >= 0) storage->markCsvExists(static_cast<int>(charaNo));
+        }
     }
     qDebug() << "[load] 角色 CSV" << charaDir << ":" << loadedChars << "个模板";
     return loadedChars;

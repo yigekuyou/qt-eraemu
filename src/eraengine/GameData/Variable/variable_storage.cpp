@@ -198,10 +198,10 @@ qint64 VariableStorage::getGlobalInt3D(const QString &name, int x, int y, int z)
 }
 
 // ================= 角色整型变量 =================
-void VariableStorage::setCharaInt(const QString &name, int charaId, int index, qint64 value)
+// Raw：按**运行时下标**直接存取（不做 运行时->模板 翻译），供角色列表自身使用。
+void VariableStorage::setCharaIntRaw(const QString &name, int charaId, int index, qint64 value)
 {
 		if (charaId < 0 || index < 0) return;
-
 		auto &charaList = m_charaIntVars[storageName(name)];
 		if (charaList.size() <= charaId) {
 				charaList.resize(charaId + 1);
@@ -213,9 +213,16 @@ void VariableStorage::setCharaInt(const QString &name, int charaId, int index, q
 		vec[index] = value;
 }
 
+void VariableStorage::setCharaInt(const QString &name, int charaId, int index, qint64 value)
+{
+		if (charaId < 0 || index < 0) return;
+		setCharaIntRaw(name, resolveCharaIndex(charaId), index, value);
+}
+
 qint64 VariableStorage::getCharaInt(const QString &name, int charaId, int index) const
 {
 		if (charaId < 0 || index < 0) return 0;
+		charaId = resolveCharaIndex(charaId);
 
 		auto it = m_charaIntVars.constFind(storageName(name));
 		if (it != m_charaIntVars.constEnd() && charaId < it.value().size()) {
@@ -231,6 +238,7 @@ qint64 VariableStorage::getCharaInt(const QString &name, int charaId, int index)
 void VariableStorage::setCharaStr(const QString &name, int charaId, int index, const QString &value)
 {
 		if (charaId < 0 || index < 0) return;
+		charaId = resolveCharaIndex(charaId);
 		auto &charaList = m_charaStrVars[storageName(name)];
 		if (charaList.size() <= charaId) charaList.resize(charaId + 1);
 		auto &vec = charaList[charaId];
@@ -241,12 +249,69 @@ void VariableStorage::setCharaStr(const QString &name, int charaId, int index, c
 QString VariableStorage::getCharaStr(const QString &name, int charaId, int index) const
 {
 		if (charaId < 0 || index < 0) return QString();
+		charaId = resolveCharaIndex(charaId);
 		auto it = m_charaStrVars.constFind(storageName(name));
 		if (it != m_charaStrVars.constEnd() && charaId < it.value().size()) {
 				const auto &vec = it.value().at(charaId);
 				if (index < vec.size()) return vec.at(index);
 		}
 		return QString();
+}
+
+// ================= 角色列表（ADDCHARA / DELCHARA / CHARANUM）=================
+// 对齐 C# VariableEvaluator.AddChara / DelChara：ADDCHARA 把 CSV 模板登记为
+// 一个运行时角色（数据本身按模板号存放，见 resolveCharaIndex）。
+void VariableStorage::addChara(int csvNo)
+{
+		if (csvNo < 0) return;
+		m_charaList.append(csvNo);
+		const int index = m_charaList.size() - 1;
+		// NO:i = 该运行时角色所用的模板号（C# NO 系统变量）。
+		// 必须写**原始运行时下标**（绕过 resolveCharaIndex，否则会落到模板槽）。
+		setCharaIntRaw(QStringLiteral("NO"), index, 0, csvNo);
+		qDebug() << "[chara] ADDCHARA" << csvNo << "-> index" << index
+				 << "CHARANUM" << m_charaList.size();
+}
+
+bool VariableStorage::delChara(int index)
+{
+		if (index < 0 || index >= m_charaList.size()) return false;
+		m_charaList.removeAt(index);
+		qDebug() << "[chara] DELCHARA index" << index << "CHARANUM" << m_charaList.size();
+		return true;
+}
+
+// ================= CSV 模板快照 =================
+// 装载角色 CSV 之后调用一次：把当前角色存储整体复制为「模板」。
+// 此后 CSV* 函数读快照，脚本对 VAR:角色:下标 的修改不再影响模板值。
+void VariableStorage::snapshotCharaTemplates()
+{
+		m_csvIntVars = m_charaIntVars;
+		m_csvIntVars3D = m_charaIntVars3D;
+		m_csvStrVars = m_charaStrVars;
+		qDebug() << "[chara] CSV 模板快照：整型变量" << m_csvIntVars.size()
+				 << "三维" << m_csvIntVars3D.size()
+				 << "字符串" << m_csvStrVars.size();
+}
+
+qint64 VariableStorage::csvCharaInt(const QString& name, int charaId, int index) const
+{
+		if (charaId < 0 || index < 0) return 0;
+		const auto it = m_csvIntVars.constFind(storageName(name));
+		if (it == m_csvIntVars.constEnd()) return 0;
+		if (charaId >= it.value().size()) return 0;
+		const auto& vec = it.value().at(charaId);
+		return index < vec.size() ? vec.at(index) : 0;
+}
+
+QString VariableStorage::csvCharaStr(const QString& name, int charaId, int index) const
+{
+		if (charaId < 0 || index < 0) return QString();
+		const auto it = m_csvStrVars.constFind(storageName(name));
+		if (it == m_csvStrVars.constEnd()) return QString();
+		if (charaId >= it.value().size()) return QString();
+		const auto& vec = it.value().at(charaId);
+		return index < vec.size() ? vec.at(index) : QString();
 }
 
 // ================= 角色数据变量（CHARADATA） =================
@@ -344,8 +409,32 @@ QString VariableStorage::getLocalStr(int index) const
 		return QString();
 }
 
-void VariableStorage::setLocalAlias(const QString &name, int index)
+// ---- 函数实参 ARG / ARGS（与 LOCAL / LOCALS 分离，见头文件说明）----
+void VariableStorage::setArgInt(int index, qint64 value)
 {
+		if (index < 0) return;
+		if (index >= m_argIntVars.size()) m_argIntVars.resize(index + 1);
+		m_argIntVars[index] = value;
+}
+
+qint64 VariableStorage::getArgInt(int index) const
+{
+		return (index >= 0 && index < m_argIntVars.size()) ? m_argIntVars.at(index) : 0;
+}
+
+void VariableStorage::setArgStr(int index, const QString& value)
+{
+		if (index < 0) return;
+		if (index >= m_argStrVars.size()) m_argStrVars.resize(index + 1);
+		m_argStrVars[index] = value;
+}
+
+QString VariableStorage::getArgStr(int index) const
+{
+		return (index >= 0 && index < m_argStrVars.size()) ? m_argStrVars.at(index) : QString();
+}
+
+void VariableStorage::setLocalAlias(const QString &name, int index){
 		if (!name.isEmpty() && index >= 0) {
 				m_localAliases.insert(name.toUpper(), index);
 		}
@@ -606,6 +695,7 @@ qint64 VariableStorage::getGlobalInt2D(const QString &name, int x, int y) const
 void VariableStorage::setCharaInt3D(const QString &name, int charaId, int x, int y, qint64 value)
 {
 		if (charaId < 0 || x < 0 || y < 0) return;
+		charaId = resolveCharaIndex(charaId);
 		auto &charaList = m_charaIntVars3D[storageName(name)];
 		if (charaList.size() <= charaId) charaList.resize(charaId + 1);
 		auto &grid2D = charaList[charaId];
@@ -618,6 +708,7 @@ void VariableStorage::setCharaInt3D(const QString &name, int charaId, int x, int
 qint64 VariableStorage::getCharaInt3D(const QString &name, int charaId, int x, int y) const
 {
 		if (charaId < 0 || x < 0 || y < 0) return 0;
+		charaId = resolveCharaIndex(charaId);
 		auto it = m_charaIntVars3D.constFind(storageName(name));
 		if (it != m_charaIntVars3D.constEnd() && charaId < it.value().size()) {
 				const auto &grid2D = it.value().at(charaId);
@@ -652,7 +743,7 @@ bool VariableStorage::loadVariables(const QString &path)
 bool VariableStorage::hasSystemVariable(const QString &name) const
 {
 		static const QSet<QString> kNames = {
-QStringLiteral("DAY"),QStringLiteral("MONEY"),QStringLiteral("TIME"),QStringLiteral("ITEM"),QStringLiteral("ITEMSALES"),QStringLiteral("NOITEM"),QStringLiteral("BOUGHT"),QStringLiteral("PBAND"),QStringLiteral("FLAG"),QStringLiteral("TFLAG"),QStringLiteral("TARGET"),QStringLiteral("MASTER"),QStringLiteral("PLAYER"),QStringLiteral("ASSI"),QStringLiteral("ASSIPLAY"),QStringLiteral("UP"),QStringLiteral("DOWN"),QStringLiteral("LOSEBASE"),QStringLiteral("PALAMLV"),QStringLiteral("EXPLV"),QStringLiteral("EJAC"),QStringLiteral("PREVCOM"),QStringLiteral("SELECTCOM"),QStringLiteral("NEXTCOM"),QStringLiteral("RESULT"),QStringLiteral("COUNT"),QStringLiteral("A"),QStringLiteral("B"),QStringLiteral("C")
+QStringLiteral("DAY"),QStringLiteral("MONEY"),QStringLiteral("TIME"),QStringLiteral("ITEM"),QStringLiteral("ITEMSALES"),QStringLiteral("NOITEM"),QStringLiteral("BOUGHT"),QStringLiteral("PBAND"),QStringLiteral("FLAG"),QStringLiteral("TFLAG"),QStringLiteral("TARGET"),QStringLiteral("MASTER"),QStringLiteral("PLAYER"),QStringLiteral("ASSI"),QStringLiteral("ASSIPLAY"),QStringLiteral("UP"),QStringLiteral("DOWN"),QStringLiteral("LOSEBASE"),QStringLiteral("PALAMLV"),QStringLiteral("EXPLV"),QStringLiteral("EJAC"),QStringLiteral("PREVCOM"),QStringLiteral("SELECTCOM"),QStringLiteral("NEXTCOM"),QStringLiteral("RESULT"),QStringLiteral("COUNT"),QStringLiteral("A"),QStringLiteral("B"),QStringLiteral("C"),QStringLiteral("CHARANUM")
 		};
 		return kNames.contains(name.toUpper());
 }
@@ -691,6 +782,8 @@ qint64 VariableStorage::getSystemVariable(const QString &name, int index) const
 		if (key == "A") return getA(index);
 		if (key == "B") return getB(index);
 		if (key == "C") return getC(index);
+		// CHARANUM：已登记角色数（对齐 C# VEvaluator.CHARANUM，由 ADDCHARA/DELCHARA 维护）
+		if (key == "CHARANUM") return m_charaList.size();
 		
 		// Not a system variable, return 0
 		return 0;

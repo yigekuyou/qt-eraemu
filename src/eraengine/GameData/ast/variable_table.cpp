@@ -17,6 +17,7 @@
  */
 #include "variable_table.h"
 #include "system_variables.h"
+#include <QDebug>
 #include <QStringList>
 
 namespace {
@@ -247,6 +248,8 @@ void VariableTable::resolveDimensions() {
     for (auto& f : m_locals) {
         for (auto& d : f) fix(d);
     }
+    qDebug() << "[parse] 变量维数求值：全局" << m_globals.size() << "局部作用域" << m_locals.size()
+             << "常量" << m_constInt.size() << "常量数组" << m_constArray.size();
 }
 
 void VariableTable::setConstArray(const QString& name, const QList<qint64>& values)

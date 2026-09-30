@@ -392,6 +392,7 @@ void ConsoleBackend::clearLines(int n) {
 }
 
 void ConsoleBackend::clearAll() {
+    qDebug() << "[render] clearAll（清屏，行数" << m_buffer.count() << "）";
     m_buffer.clear();
     m_pendingParts.clear();
     m_sealed.clear();
@@ -612,14 +613,20 @@ void ConsoleBackend::clickAt(int visibleIndex, int segmentIndex) {
     }
     // 只有当前世代的段可点击（对齐 C# selectingButton.Generation != lastButtonGeneration）
     if (seg.generation != m_generation) {
+        qDebug() << "[input] 点击忽略（世代过期）行" << visibleIndex << "段" << segmentIndex;
         return;
     }
     // 输入裁决：只有「正在等待输入」且「按钮类型与等待的输入类型一致」才响应。
     // 否则静默忽略——不推进世代（点击无效但按钮保持可重试），
     // 杜绝「点击杀死了按钮却没有产生任何效果」的不确定响应。
     if (!m_waitingInput || inputExpectsString(m_inputKind) == seg.isInteger) {
+        qDebug() << "[input] 点击忽略（未等待输入或类型不符）kind" << m_inputKind
+                 << "等待中" << m_waitingInput << "段为整数" << seg.isInteger;
         return;
     }
+    qDebug() << "[input] 点击按钮 行" << visibleIndex << "段" << segmentIndex
+             << (seg.isInteger ? QStringLiteral("整数=") + QString::number(seg.intValue)
+                               : QStringLiteral("字符串=") + seg.strValue);
     if (seg.isInteger) submitInput(seg.intValue);
     else submitInputString(seg.strValue);
 }
@@ -633,7 +640,11 @@ void ConsoleBackend::scrollToBottom() {
 }
 
 void ConsoleBackend::submitMouseKey(int type, int r1, int r2, int r3, int r4) {
-    if (!m_waitingInput || m_inputKind != QLatin1String("INPUTMOUSEKEY")) return;
+    if (!m_waitingInput || m_inputKind != QLatin1String("INPUTMOUSEKEY")) {
+        qWarning() << "[input] 鼠标键提交被拒：kind" << m_inputKind << "等待中" << m_waitingInput;
+        return;
+    }
+    qDebug() << "[input] 提交鼠标键 type" << type << r1 << r2 << r3 << r4;
     sealSpan();
     ++m_generation;
     emit generationChanged();
@@ -642,7 +653,11 @@ void ConsoleBackend::submitMouseKey(int type, int r1, int r2, int r3, int r4) {
 
 void ConsoleBackend::submitInput(qint64 value) {
     // 类型分支限制：整数提交只在等待整数型输入（INPUT/TINPUT/ONEINPUT…）时有效
-    if (!m_waitingInput || inputExpectsString(m_inputKind)) return;
+    if (!m_waitingInput || inputExpectsString(m_inputKind)) {
+        qWarning() << "[input] 整数提交被拒：kind" << m_inputKind << "等待中" << m_waitingInput;
+        return;
+    }
+    qDebug() << "[input] 提交整数" << value << "kind" << m_inputKind;
     sealSpan();
     ++m_generation;   // 提交后旧按钮失效（C# forceUpdateGeneration）
     emit generationChanged();
@@ -651,7 +666,11 @@ void ConsoleBackend::submitInput(qint64 value) {
 
 void ConsoleBackend::submitInputString(const QString& value) {
     // 字符串提交只在等待字符串型输入（INPUTS/SINPUTS/TONEINPUTS…）时有效
-    if (!m_waitingInput || !inputExpectsString(m_inputKind)) return;
+    if (!m_waitingInput || !inputExpectsString(m_inputKind)) {
+        qWarning() << "[input] 字符串提交被拒：kind" << m_inputKind << "等待中" << m_waitingInput;
+        return;
+    }
+    qDebug() << "[input] 提交字符串" << value << "kind" << m_inputKind;
     sealSpan();
     ++m_generation;
     emit generationChanged();

@@ -230,7 +230,21 @@ QSharedPointer<ExpressionNode> ExpressionParser::parseIndexTerm(const QString& v
                 return QSharedPointer<LiteralNode>::create(ident);
             }
         }
-        return parseVariable();
+        // 变量下标项：只取标识符本身。后续 `:下标` 链属于**外层**变量
+        // （C# ReduceVariable 从左到右归约：TALENT:選択中角色ID:LOCAL =
+        //   TALENT[選択中角色ID][LOCAL]）。若这里走 parseVariable()，
+        // 内层变量会把 `:LOCAL` 吞成自己的下标，外层只剩一个下标，
+        // 角色变量读取全部塌到 [0][0]。
+        const ExpressionToken tok = consume(TokenType::IDENTIFIER, "Expected variable name");
+        const QString identName = tok.value();
+        OperandType varType = OperandType::Int;
+        if (identName.startsWith(QLatin1Char('$'))) {
+            varType = OperandType::Str;
+        } else {
+            const OperandType sys = sysvar::systemVariableType(identName.toStdString());
+            if (isKnown(sys)) varType = sys;
+        }
+        return QSharedPointer<VariableNode>::create(identName, varType);
     }
     if (check(TokenType::LEFT_PAREN)) {
         advance();
@@ -335,7 +349,9 @@ ExpressionToken ExpressionParser::consume(TokenType type, const QString& message
     if (check(type)) {
         return advance();
     }
-    if (m_verbose) qDebug() << "Parse error: " << message;
+    // 解析失败点：调用方通常只拿到 nullptr，这里给出「期望什么/实际读到什么」
+    qWarning() << "[parse] 表达式语法错误:" << message
+               << "实际 token:" << peek().value();
     return ExpressionToken(TokenType::END_OF_FILE, "", -1, -1);
 }
 

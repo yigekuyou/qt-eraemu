@@ -81,6 +81,13 @@ EraEngine::EraEngine(QObject *parent)
 		m_expressionEvaluator.setLineCountProvider([this]() -> qint64 {
 			return m_console.logicalLineCount();
 		});
+		// GETCOLOR / GETSTYLE：由执行引擎维护的当前颜色与样式位
+		m_expressionEvaluator.setColorProvider([this]() -> qint64 {
+			return m_executionEngine.currentColorValue();
+		});
+		m_expressionEvaluator.setStyleProvider([this]() -> qint64 {
+			return m_executionEngine.currentStyleBits();
+		});
 		// 解析期也需要常量名表（CFLAG:ARG:現在位置 之类的常量名下标）
 		m_parseTable.setConstantTable(&m_constantTable);
 		m_parseTable.setGameBaseData(&m_gameBaseData);
@@ -143,6 +150,10 @@ EraEngine::EraEngine(QObject *parent)
 					if (a == QLatin1String("CENTER")) m_console.setAlignment(ConsoleAlign::Center);
 					else if (a == QLatin1String("RIGHT")) m_console.setAlignment(ConsoleAlign::Right);
 					else m_console.setAlignment(ConsoleAlign::Left);
+				});
+		connect(&m_executionEngine, &ExecutionEngine::consoleFontStyle, this,
+				[this](bool bold, bool italic, bool underline, bool strike) {
+					m_console.setFontStyle(bold, italic, underline, strike);
 				});
 		connect(&m_executionEngine, &ExecutionEngine::consoleColor, this,
 				[this](const QString& colorName) {
@@ -462,6 +473,22 @@ void EraEngine::loadConstantData()
 		// 常量名表（CSV 名 → 下标）：只从 CSV 目录读取，对齐 C# ConstantData
 		const int tables = m_constantTable.loadCsvDirectory(m_csvDir, m_searchSubdirectory);
 
+		// CSV 名表 -> <VAR>NAME 字符串数组（对齐 C#：装载 CSV 时同步填充
+		// TALENTNAME/ABLNAME/EXPNAME/…——脚本会直接引用这些数组，
+		// 如 GET_TALENTNAME 的 CASEELSE 兜底显示 %TALENTNAME:ARG%）
+		int nameArrays = 0;
+		for (const QString& key : m_constantTable.tableNames()) {
+			const int cap = m_variableStorage.variableConfig().getSize1D(key + QStringLiteral("NAME"));
+			if (cap <= 0) continue;   // 未登记的变量（角色 CSV 等）跳过
+			const int n = qMin(cap, m_constantTable.count(key + QStringLiteral(".CSV")));
+			for (int i = 0; i < n; ++i) {
+				const QString nm = m_constantTable.nameAt(key + QStringLiteral(".CSV"), i);
+				if (!nm.isEmpty()) m_variableStorage.setGlobalStr1D(key + QStringLiteral("NAME"), i, nm);
+			}
+			++nameArrays;
+		}
+		qDebug() << "[load] NAME 数组填充:" << nameArrays << "个";
+
 		// 变量尺寸表（对齐 C# VariableData 读取 VariableSize.CSV）
 		int sizesLoaded = 0;
 		const QStringList sizeCandidates = m_fileSystem.listFiles(m_csvDir,
@@ -472,6 +499,9 @@ void EraEngine::loadConstantData()
 		// 角色 CSV（对齐 C# ConstantData 读 <Csv>/Chara）：NAME/CALLNAME/BASE/ABL/…
 		const int charaLoaded = CsvLoader::loadCharaDirectory(
 		    m_csvDir + QStringLiteral("/Chara"), &m_constantTable, &m_variableStorage);
+		// CSV* 系函数读「模板值」：装载完角色 CSV 后立刻快照一份
+		// （此后脚本对 VAR:角色:下标 的修改不再污染模板）
+		m_variableStorage.snapshotCharaTemplates();
 		qDebug() << "[EraEngine] CSV 目录:" << m_csvDir
 		         << " 常量表:" << tables << "(" << m_constantTable.nameCount() << "项)"
 		         << " VariableSize:" << sizesLoaded
@@ -930,6 +960,7 @@ void EraEngine::setRandomSeed(quint32 seed)
 void EraEngine::randomizeRandom()
 {
 		m_expressionEvaluator.randomize();
+		qDebug() << "[var] 随机重置（新种子）" << m_expressionEvaluator.randomSeed();
 		emit randomSeedChanged();
 }
 

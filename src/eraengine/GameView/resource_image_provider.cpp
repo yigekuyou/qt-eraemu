@@ -17,6 +17,7 @@
  */
 #include "resource_image_provider.h"
 
+#include "eraengine_log.h"
 #include <QDir>
 #include <QFileInfo>
 #include <QImage>
@@ -77,6 +78,7 @@ void ResourceImageProvider::ensureAtlasLoaded(const QString& root) {
         }
         s_atlas.insert(name, sprite);
     }
+    qDebug() << "[load] 图集清单" << csvPath << "->" << s_atlas.size() << "项";
 }
 
 QString ResourceImageProvider::root() {
@@ -155,9 +157,13 @@ QImage ResourceImageProvider::requestImage(const QString& id, QSize* size, const
     }
 
     if (image.isNull()) {
+        qCDebug(eraTrace) << "[render] 图片未命中" << normalizedId
+                 << "（图集" << (atlasIt != s_atlas.constEnd() ? "有此项但取图失败" : "无此项") << "）";
         if (size) *size = QSize();
         return QImage();
     }
+    qCDebug(eraTrace) << "[render] 图片" << normalizedId << image.size()
+             << (atlasIt != s_atlas.constEnd() ? "(图集)" : "(独立文件)");
     if (size) *size = image.size();
     if (requestedSize.isValid() && !requestedSize.isEmpty())
         image = image.scaled(requestedSize, Qt::KeepAspectRatio, Qt::SmoothTransformation);

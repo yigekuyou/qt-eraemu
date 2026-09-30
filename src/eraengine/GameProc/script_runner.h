@@ -112,7 +112,13 @@ private:
         qint64 value = 0;        // FOR 当前值
         qint64 end = 0;          // FOR 终值
         qint64 step = 1;         // FOR 步长
+        // 迭代计数与超限告警（诊断）：脚本里的循环若跑到异常次数，直接报出
+        // 「哪个脚本的哪一行 + 循环变量当前值/终值」，而不是等全局步数上限
+        // 在无关的位置报错（eraTW 曾出现单个循环吞掉数千万步的情况）。
+        qint64 iterations = 0;
+        bool   warned = false;
     };
+    static constexpr qint64 kLoopIterationWarn = 100000;   // 单循环迭代告警阈值
 
     // 执行一步（取 PC 处的一行）；返回 false 表示已挂起/结束/出错
     bool stepOnce();

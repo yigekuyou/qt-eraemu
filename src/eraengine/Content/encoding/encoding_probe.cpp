@@ -17,6 +17,7 @@
  */
 #include "encoding_probe.h"
 
+#include <QDebug>
 #include <QDir>
 #include <QDirIterator>
 #include <QFile>
@@ -125,6 +126,10 @@ EncodingProbeResult probe(const QStringList& dirs, const QStringList& suffixes,
     } else {
         result.dominant = TextEncoding::Utf8;   // 全是 ASCII
     }
+    // 回退编码探测结论：编码选错会让整个游戏文本变乱码，值得留痕
+    qDebug() << "[load] 编码探测：扫描" << result.filesScanned
+             << "文件，主导编码" << TextCodecUtil::name(result.dominant)
+             << "，候选" << result.counts.size() << "种";
     return result;
 }
 

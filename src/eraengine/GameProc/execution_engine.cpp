@@ -26,6 +26,7 @@
 #include "era_parse_table.h"
 #include "constant_table.h"
 #include "eraengine.h"
+#include "eraengine_log.h"
 #include "function_system.h"
 
 namespace {
@@ -190,12 +191,11 @@ ExecutionEngine::LhsRef ExecutionEngine::parseLhsRef(const QString& lhs)
             if (const ConstantTable* ct = m_parseTable->constantTable()) {
                 const int mapped = ct->indexForVariable(ref.name, idxText);
                 if (mapped >= 0) {
-                    qDebug() << "[parseLhsRef] const-name" << ref.name << idxText << "->" << mapped;
                     ref.indices.append(mapped);
                     continue;
                 }
             } else {
-                qDebug() << "[parseLhsRef] constantTable is NULL";
+                qWarning() << "[var] 常量名表为空：CSV 尚未装载，下标按表达式求值";
             }
         }
         // 变量下标 / 表达式（BAG:COUNT、BAG:(COUNT + 1)）
@@ -207,7 +207,7 @@ ExecutionEngine::LhsRef ExecutionEngine::parseLhsRef(const QString& lhs)
                 ExpressionEvaluator localEvaluator;
                 ExpressionEvaluator& ev = m_expressionEvaluator ? *m_expressionEvaluator : localEvaluator;
                 value = ev.evaluate(*ast, m_storage, m_gameBaseData).toLongLong();
-                qDebug() << "[parseLhsRef] expr" << ref.name << idxText << "->" << value;
+                qCDebug(eraTrace) << "[var] 下标(表达式)" << ref.name << idxText << "->" << value;
                 resolved = true;
             }
         }
@@ -246,7 +246,9 @@ qint64 ExecutionEngine::readLhs(const LhsRef& ref) {
         return m_storage->getCharaInt(ref.name, charaId, elems.value(0));
     }
     const QString upper = ref.name.toUpper();
-    if (upper == QLatin1String("LOCAL") || upper == QLatin1String("ARG")) {
+    // ARG / LOCAL 是两套数组（见 variable_storage.h）
+    if (upper == QLatin1String("ARG")) return m_storage->getArgInt(ref.first());
+    if (upper == QLatin1String("LOCAL")) {
         return m_storage->getLocalInt(ref.first());
     }
     if (upper == QLatin1String("ARGS") || upper == QLatin1String("LOCALS")
@@ -269,9 +271,7 @@ qint64 ExecutionEngine::readLhs(const LhsRef& ref) {
 
 void ExecutionEngine::writeLhs(const LhsRef& ref, qint64 value) {
     if (!m_storage) return;
-    qDebug() << "[writeLhs]" << ref.name << "indices" << ref.indices << "=" << value
-             << "chara?" << m_storage->isCharaDataVariable(ref.name)
-             << "sys?" << m_storage->hasSystemVariable(ref.name);
+    qCDebug(eraTrace) << "[var] write" << ref.name << ref.indices << "=" << value;
     if (m_storage->hasParameter(ref.name)) { m_storage->setParameter(ref.name, value); return; }
     // 角色数据变量：按 (角色号, 元素下标) 写入（否则同一角色的元素互相覆盖）
     if (m_storage->isCharaDataVariable(ref.name)) {
@@ -286,8 +286,12 @@ void ExecutionEngine::writeLhs(const LhsRef& ref, qint64 value) {
         return;
     }
     const QString upper = ref.name.toUpper();
-    if (upper == QLatin1String("LOCAL") || upper == QLatin1String("ARG")) {
-        m_storage->setLocalInt(ref.first(), value);   // 用户函数局部槽（C# LOCAL）
+    if (upper == QLatin1String("ARG")) {
+        m_storage->setArgInt(ref.first(), value);
+        return;
+    }
+    if (upper == QLatin1String("LOCAL")) {
+        m_storage->setLocalInt(ref.first(), value);   // 函数局部槽（C# LOCAL）
         return;
     }
     if (upper == QLatin1String("ARGS") || upper == QLatin1String("LOCALS")
@@ -380,6 +384,30 @@ bool ExecutionEngine::executeInstruction(const LogicalLine& line) {
     }
     if (name == "LOADGLOBAL") {
         return handleLoadGlobal();
+    }
+
+    // ---- 角色列表：ADDCHARA / DELCHARA（对齐 C# ADDCHARA_Instruction）----
+    // 形如 `ADDCHARA 0` / `ADDCHARA LOCAL` / `DELCHARA CHARANUM - 1`：
+    // 参数是**表达式**，必须求值而不是取字面量。
+    if (name == "ADDCHARA" || name == "DELCHARA") {
+        if (!m_storage) return true;
+        qint64 value = 0;
+        if (!args.isEmpty() && !args.first().raw.trimmed().isEmpty()) {
+            ExpressionEvaluator localEvaluator;
+            ExpressionEvaluator& ev = m_expressionEvaluator ? *m_expressionEvaluator : localEvaluator;
+            value = evalExpressionCached(m_parseTable, ev, args.first().raw,
+                                         m_storage, m_gameBaseData).toLongLong();
+        }
+        if (name == "ADDCHARA") {
+            if (value < 0) {
+                emit errorOccurred(QStringLiteral("ADDCHARA 的角色番号无效: %1").arg(value));
+                return true;
+            }
+            m_storage->addChara(static_cast<int>(value));
+        } else if (!m_storage->delChara(static_cast<int>(value))) {
+            emit errorOccurred(QStringLiteral("DELCHARA 的番号超出角色范围: %1").arg(value));
+        }
+        return true;
     }
 
     // ---- 命令式字符串内置函数 ----
@@ -553,17 +581,70 @@ bool ExecutionEngine::executeInstruction(const LogicalLine& line) {
                                         m_storage, m_gameBaseData).toLongLong();
         }
         if (m_expressionEvaluator) m_expressionEvaluator->setRandomSeed(static_cast<quint32>(seed));
+        qDebug() << "[var] RANDOMIZE 固定种子" << seed;
         return true;
     }
 
     if (name == "RESETCOLOR") {
+        m_colorValue = kDefaultColor;
         emit consoleResetColor();
         return true;
     }
     if (name == "SETCOLOR") {
-        if (args.size() >= 1) {
-            emit consoleColor(args[0].raw);
+        // 参数是**表达式**：`SETCOLOR 0x70C070` / `SETCOLOR C_YELLOW` /
+        // `SETCOLOR 現在指定の色`（eraTW 的 COLORMESSAGE 就靠后者还原颜色）。
+        // 之前直接透传 raw 文本，变量与函数形式都会失效。
+        if (!args.isEmpty() && !args.first().raw.trimmed().isEmpty()) {
+            const QString raw = args.first().raw.trimmed();
+            ExpressionEvaluator localEvaluator;
+            ExpressionEvaluator& ev = m_expressionEvaluator ? *m_expressionEvaluator : localEvaluator;
+            const QVariant value = evalExpressionCached(m_parseTable, ev, raw,
+                                                        m_storage, m_gameBaseData);
+            if (value.typeId() == QMetaType::QString) {
+                // 颜色名（含 C_* 等常量与 @"..." 形式）
+                const QString name = value.toString().trimmed();
+                m_colorValue = colorValueOf(name);
+                emit consoleColor(name);
+            } else {
+                // 整数：0xRRGGBB（GETCOLOR 的返回值走这条路）
+                const qint64 v = value.toLongLong();
+                m_colorValue = v;
+                emit consoleColor(QStringLiteral("0x%1").arg(v & 0xFFFFFF, 6, 16, QLatin1Char('0')));
+            }
         }
+        return true;
+    }
+
+    // ---- 字体样式（FONTBOLD/FONTITALIC/FONTUNDERLINE/FONTSTRIKE/FONTREGULAR/FONTSTYLE）----
+    // GETSTYLE/FONTSTYLE 成对使用（eraTW 的 COLORMESSAGE 保存并还原样式）。
+    if (name.startsWith(QLatin1String("FONT"))) {
+        if (name == QLatin1String("FONTREGULAR")) {
+            m_styleBits = 0;
+        } else if (name == QLatin1String("FONTSTYLE")) {
+            // FONTSTYLE <位掩码>：整体替换
+            if (!args.isEmpty() && !args.first().raw.trimmed().isEmpty()) {
+                ExpressionEvaluator localEvaluator;
+                ExpressionEvaluator& ev = m_expressionEvaluator ? *m_expressionEvaluator : localEvaluator;
+                m_styleBits = evalExpressionCached(m_parseTable, ev, args.first().raw,
+                                                   m_storage, m_gameBaseData).toLongLong();
+            }
+        } else {
+            const qint64 bit = (name == QLatin1String("FONTBOLD")) ? 1
+                             : (name == QLatin1String("FONTITALIC")) ? 2
+                             : (name == QLatin1String("FONTSTRIKE")) ? 4
+                             : (name == QLatin1String("FONTUNDERLINE")) ? 8 : 0;
+            if (bit == 0) return true;          // FONTNAME/FONTSIZE 等：暂不处理字体族/字号
+            // 无参数 = 置位；有参数且求值为 0 = 清除
+            bool on = true;
+            if (!args.isEmpty() && !args.first().raw.trimmed().isEmpty()) {
+                ExpressionEvaluator localEvaluator;
+                ExpressionEvaluator& ev = m_expressionEvaluator ? *m_expressionEvaluator : localEvaluator;
+                on = evalExpressionCached(m_parseTable, ev, args.first().raw,
+                                          m_storage, m_gameBaseData).toLongLong() != 0;
+            }
+            m_styleBits = on ? (m_styleBits | bit) : (m_styleBits & ~bit);
+        }
+        emit consoleFontStyle(m_styleBits & 1, m_styleBits & 2, m_styleBits & 8, m_styleBits & 4);
         return true;
     }
     if (name == "ALIGNMENT") {
@@ -573,13 +654,21 @@ bool ExecutionEngine::executeInstruction(const LogicalLine& line) {
     if (name == "DRAWLINE" || name == "CUSTOMDRAWLINE" || name == "DRAWLINEFORM") {
         // 对齐 C# Process.ScriptProc：DRAWLINE = PrintBar()（用 Config.DrawLineString
         // 循环拼到 DrawableWidth 再裁回）+ NewLine()；
-        // CUSTOMDRAWLINE / DRAWLINEFORM = printCustomBar(str) + NewLine()。
+        //   CUSTOMDRAWLINE = printCustomBar(<字面文字>) —— 参数是**字面**文字而非表达式
+        //     （eraTW 写 `CUSTOMDRAWLINE ━`；按表达式求值会得到 0，
+        //      表现为整条分隔线变成 "0000…"，正是标题画面的那串 0）
+        //   DRAWLINEFORM   = 格式串（文本 + %…%/{…}）
         QString barStr = m_drawLineString;               // 默认 "-"（半角）
         if (name != QLatin1String("DRAWLINE")) {
             if (args.isEmpty()) return true;
-            barStr = evalExpressionCached(m_parseTable, *m_expressionEvaluator,
-                                          args.first().raw, m_storage, m_gameBaseData)
-                         .toString();
+            if (name == QLatin1String("CUSTOMDRAWLINE")) {
+                barStr = args.first().raw;
+            } else {
+                ExpressionEvaluator localEvaluator;
+                ExpressionEvaluator& ev = m_expressionEvaluator ? *m_expressionEvaluator : localEvaluator;
+                barStr = evalExpressionCached(m_parseTable, ev, args.first().raw,
+                                              m_storage, m_gameBaseData).toString();
+            }
             if (barStr.isEmpty()) {
                 emit errorOccurred(QStringLiteral("空文字列によるDRAWLINEが行われました"));
                 return true;
@@ -694,6 +783,15 @@ bool ExecutionEngine::handleStringAssignment(const QString& lhs, const QString& 
     const QString upper = varName.toUpper();
     if (upper == QLatin1String("RESULTS")) {
         m_storage->setLocalStr(0, value);
+        return true;
+    }
+    // ARGS（实参字符串数组）与 LOCALS（局部字符串数组）分离，同 ARG/LOCAL
+    if (upper == QLatin1String("ARGS")) {
+        m_storage->setArgStr(index >= 0 ? index : 0, value);
+        return true;
+    }
+    if (upper == QLatin1String("LOCALS")) {
+        m_storage->setLocalStr(index >= 0 ? index : 0, value);
         return true;
     }
     if (upper == QLatin1String("SAVEDATA_TEXT")) {
@@ -844,6 +942,42 @@ bool ExecutionEngine::handleResetData() {
     return true;
 }
 
+// 颜色名 -> 0xRRGGBB。覆盖 Emuera 的 C_* 内置常量与常见日/英颜色名，
+// 以及 "0xRRGGBB" / 十进制字面量；未知名字回落到白色。
+qint64 ExecutionEngine::colorValueOf(const QString& rawName) {
+    QString name = rawName.trimmed();
+    if (name.isEmpty()) return kDefaultColor;
+    // 字面量：0xRRGGBB / #RRGGBB / 十进制
+    {
+        QString hex = name;
+        if (hex.startsWith(QLatin1Char('#'))) hex.remove(0, 1);
+        bool ok = false;
+        const uint v = hex.toUInt(&ok, 0);
+        if (ok) return static_cast<qint64>(v & 0xFFFFFF);
+    }
+    name = name.toUpper();
+    if (name.startsWith(QLatin1String("C_"))) name.remove(0, 2);
+    static const QHash<QString, qint64> kColors = {
+        {QStringLiteral("BLACK"),      0x000000}, {QStringLiteral("WHITE"),      0xFFFFFF},
+        {QStringLiteral("RED"),        0xFF0000}, {QStringLiteral("GREEN"),      0x00FF00},
+        {QStringLiteral("BLUE"),       0x0000FF}, {QStringLiteral("YELLOW"),     0xFFFF00},
+        {QStringLiteral("CYAN"),       0x00FFFF}, {QStringLiteral("AQUA"),       0x00FFFF},
+        {QStringLiteral("MAGENTA"),    0xFF00FF}, {QStringLiteral("PURPLE"),     0xFF00FF},
+        {QStringLiteral("GRAY"),       0x808080}, {QStringLiteral("GREY"),       0x808080},
+        {QStringLiteral("SILVER"),     0xC0C0C0}, {QStringLiteral("LIME"),       0x00FF00},
+        {QStringLiteral("MAROON"),     0x800000}, {QStringLiteral("NAVY"),       0x000080},
+        {QStringLiteral("OLIVE"),      0x808000}, {QStringLiteral("TEAL"),       0x008080},
+        {QStringLiteral("PINK"),       0xFFC0CB}, {QStringLiteral("ORANGE"),     0xFFA500},
+        {QStringLiteral("GOLD"),       0xFFD700}, {QStringLiteral("BROWN"),      0xA52A2A},
+        {QStringLiteral("LIGHTGRAY"),  0xD3D3D3}, {QStringLiteral("DARKGRAY"),   0xA9A9A9},
+        // 日文颜色名（Emuera 的内置名）
+        {QStringLiteral("白"),          0xFFFFFF}, {QStringLiteral("黒"),          0x000000},
+        {QStringLiteral("赤"),          0xFF0000}, {QStringLiteral("緑"),          0x00FF00},
+        {QStringLiteral("青"),          0x0000FF}, {QStringLiteral("黄"),          0xFFFF00},
+        {QStringLiteral("紫"),          0xFF00FF}, {QStringLiteral("茶"),          0xA52A2A},
+    };
+    return kColors.value(name, kDefaultColor);
+}
 bool ExecutionEngine::handleLoadGlobal() {
     qDebug() << "LOADGLOBAL";
     return true;

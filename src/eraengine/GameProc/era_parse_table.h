@@ -47,10 +47,11 @@ struct Frame {
     QString script;
     int     returnLine = 0;
     QString callLabel;
+    int     entryLine = -1;   // 被调函数 @label 的行号（用于识别函数体边界）
 
     Frame() = default;
-    Frame(const QString& s, int line, const QString& label)
-        : script(s), returnLine(line), callLabel(label) {}
+    Frame(const QString& s, int line, const QString& label, int entry = -1)
+        : script(s), returnLine(line), callLabel(label), entryLine(entry) {}
 
     bool operator==(const Frame& other) const {
         return script == other.script

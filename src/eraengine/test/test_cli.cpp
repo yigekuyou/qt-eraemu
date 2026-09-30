@@ -529,7 +529,10 @@ int main(int argc, char* argv[]) {
     SystemStateMachine* machine = engine.getSystemStateMachine();
     machine->setPacingEnabled(paced); // deterministic synchronous headless fallback
     console->setFrameMs(frameMs);
-    engine.getScriptRunner()->setStepLimit(2000000);   // 死循环诊断：超限即报错并给出位置
+    // 死循环诊断：超限即报错并给出位置。
+    // 上限要足够大——eraTW 的新开局（145 个角色的房间/服装/初始化）单批就超过
+    // 200 万条指令；真死循环会无限跑下去，所以高上限仍能捕获，只是晚一点。
+    engine.getScriptRunner()->setStepLimit(200000000);
     if (hasSeed) engine.setRandomSeed(seedValue);      // 固定随机种子 -> 整局可复现
 
     // ---- 外部输入通道：stdin / --script / DBus / socket 统一走「命令队列」----
@@ -786,6 +789,25 @@ int main(int argc, char* argv[]) {
             const QStringList sus = renderSuspects(console);
             std::cout << "  渲染自检：" << (sus.isEmpty() ? "未发现可疑项" : "") << "\n";
             for (const QString& s : sus) std::cout << "  [!] " << s.toStdString() << "\n";
+            return true;
+        }
+        if (cmd.startsWith(QLatin1String(":lines "))) {   // :lines SCRIPT —— dump 引擎侧逻辑行
+            const QString scriptName = cmd.mid(7).trimmed();
+            EraParseTable* table = engine.getParseTable();
+            if (!table || !table->script(scriptName)) {
+                std::cout << "  脚本不存在: " << scriptName.toStdString() << "\n";
+                return true;
+            }
+            const ScriptData* sd = table->script(scriptName);
+            for (int i = 0; i < sd->lines.size(); ++i) {
+                const LogicalLine& ll = sd->lines[i];
+                if (!ll.isInstruction()) continue;
+                const QString fn = ll.functionName;
+                if (fn == "CASE" || fn == "CASEELSE" || fn == "SELECTCASE" || fn == "ENDSELECT") {
+                    std::cout << "  " << i << " " << fn.toStdString() << "  "
+                              << ll.raw.left(70).toStdString() << "\n";
+                }
+            }
             return true;
         }
         if (cmd.startsWith(QLatin1String(":ast "))) {   // :ast EXPR —— 导出强类型表达式 AST

@@ -59,6 +59,10 @@ class GuiManager : public QObject {
     Q_PROPERTY(bool maximized READ maximized WRITE setMaximized NOTIFY settingsChanged)
     Q_PROPERTY(int windowWidth READ windowWidth WRITE setWindowWidth NOTIFY settingsChanged)
     Q_PROPERTY(int windowHeight READ windowHeight WRITE setWindowHeight NOTIFY settingsChanged)
+    // 只读：窗口最小尺寸。引擎的逻辑网格（脚本看到的列/行数）不随窗口变化，
+    // 窗口小于「网格 × 单元格像素」就会裁掉内容，故以下限约束窗口与设置值。
+    Q_PROPERTY(int minimumWindowWidth READ minimumWindowWidth NOTIFY settingsChanged)
+    Q_PROPERTY(int minimumWindowHeight READ minimumWindowHeight NOTIFY settingsChanged)
     Q_PROPERTY(QString windowTitle READ windowTitle WRITE setWindowTitle NOTIFY windowTitleChanged)
     Q_PROPERTY(QString gameDirectory READ gameDirectory WRITE setGameDirectory NOTIFY gameDirectoryChanged)
     // 只读：启动目录（QML 文件对话框的初始路径）
@@ -90,6 +94,12 @@ public:
     [[nodiscard]] bool maximized() const { return m_maximized; }
     [[nodiscard]] int windowWidth() const { return m_windowWidth; }
     [[nodiscard]] int windowHeight() const { return m_windowHeight; }
+    // 最小尺寸 = 网格能完整显示所需像素（单元格宽按「字号/2」的半角口径，
+    // 与引擎 maxLineUnits 一致），再加菜单栏/输入条/滚动条的余量。
+    [[nodiscard]] int minimumWindowWidth() const;
+    [[nodiscard]] int minimumWindowHeight() const;
+    // 字号/行高变化后把窗口尺寸抬回下限之上（内部使用）
+    void reclampWindowSize();
     [[nodiscard]] QString windowTitle() const { return m_windowTitle; }
     [[nodiscard]] QString gameDirectory() const { return m_gameDirectory; }
     [[nodiscard]] QString startDirectory() const { return m_startDirectory; }

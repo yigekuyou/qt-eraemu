@@ -16,6 +16,7 @@
  * along with this program.  If not, see <https://www.gnu.org/licenses/>.
  */
 #include "ast_builder.h"
+#include <QDebug>
 #include "strform_parser.h"
 #include "print_template.h"
 #include "argument_parser.h"
@@ -210,6 +211,19 @@ bool AstBuilder::isKnownInstructionName(const QString& upperName) {
         "NEWLINE", "PRINTDATA", "PRINTDATAL", "PRINTDATAW", "PRINTBUTTONLC",
         "DOUBLEPRINT", "DEBUGPRINT", "HTML_PRINT", "HTML_TAGSPLIT",
         "PRINT_IMG",
+        // 控制流 / 结构化指令（由执行链与状态机处理，不在指令规范表里）
+        "RESTART", "RESETDATA", "LOADGLOBAL", "SAVEGLOBAL", "DATALIST", "ENDLIST",
+        "DATAFORM", "DATA", "ENDDATA", "FORCEWAIT", "SKIPDISP", "REUSELASTLINE",
+        "FONTREGULAR", "FONTSTYLE", "FONTBOLD", "FONTITALIC", "FONTSTRIKE",
+        "CATCH", "ENDCATCH", "TRYCALLLIST", "TRYJUMPLIST", "GOTOLIST",
+        "SWAP", "SWAPVAR", "TIMES", "BAR", "POWER", "SORTCHARA", "VARSET",
+        "CVARSET", "ADDCHARA", "DELCHARA", "ADDCHARAALL", "SPLIT",
+        "SAVEGAME", "LOADGAME", "SAVEDATA", "LOADDATA", "DELDATA",
+        // 控制流关键字（执行链单独处理，不进指令规范表）
+        "DO", "REND", "LOOP", "WHILE", "WEND", "REPEAT", "FOR", "NEXT",
+        "BREAK", "CONTINUE", "RETURN", "RETURNF", "GOTO", "CALL", "BEGIN",
+        "IF", "ELSEIF", "ELSE", "ENDIF", "SIF", "SELECTCASE", "CASE",
+        "CASEELSE", "ENDSELECT", "THROW", "END", "QUIT",
     };
     for (const char* n : kExtra) {
         if (upperName == QLatin1String(n)) return true;
@@ -504,7 +518,6 @@ LogicalLine AstBuilder::build(const QString& rawLine,
     if (trimmed.startsWith('@') || trimmed.startsWith('$')) {
         line.kind = trimmed.startsWith('@') ? LineKind::FunctionLabel : LineKind::GotoLabel;
         const QString label = trimmed.mid(1);
-
         // 标签名 = 首个标识符 token（对齐 C# LexicalAnalyzer：名字不能含
         // 空格 / 全角空格 / 制表符 / ( , [ : = 等符号）
         int cut = label.size();
@@ -612,6 +625,17 @@ LogicalLine AstBuilder::build(const QString& rawLine,
             funcName = rest.left(paren).trimmed();
             const int close = rest.lastIndexOf(')');
             args = (close > paren) ? rest.mid(paren + 1, close - paren - 1) : rest.mid(paren + 1);
+        } else {
+            // 逗号形式 `CALL 标签, 实参1, 实参2`（Emuera 与括号形式等价，eraTW 大量使用）。
+            // 之前只识别括号形式，逗号形式会把整串当作标签名 -> "CALL label not found"。
+            const QStringList parts = splitTopLevelComma(rest);
+            if (parts.size() > 1) {
+                funcName = parts.first().trimmed();
+                QStringList tail;
+                tail.reserve(parts.size() - 1);
+                for (int i = 1; i < parts.size(); ++i) tail.append(parts.at(i));
+                args = tail.join(QLatin1Char(','));
+            }
         }
         if (funcName.startsWith('@')) funcName = funcName.mid(1);
 
@@ -834,6 +858,12 @@ LogicalLine AstBuilder::build(const QString& rawLine,
     if (isConditionInstruction(line.functionName)) {
         const QString cond = remainder.trimmed();
         if (resolve && !cond.isEmpty()) line.condition = resolve(cond);
+    }
+
+    // 未知指令名：Emuera 对未登记的命令字会报错；这里留痕（含原行文本）
+    if (!isKnownInstructionName(line.functionName)) {
+        qWarning() << "[parse] 未识别的指令:" << line.functionName
+                   << "原文:" << trimmed.left(80);
     }
 
     return finalized(std::move(line));

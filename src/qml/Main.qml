@@ -40,6 +40,13 @@ ApplicationWindow {
                            : (eraEngine.gui.maximized ? Window.Maximized : Window.Windowed)
     color: eraEngine.gui.backColor
 
+    // ---- 最小窗口尺寸 ----
+    // 引擎的逻辑网格是固定的（脚本看到的列/行数不随窗口变化），窗口小于
+    // 「网格 × 单元格像素」时内容会被裁剪。下限由 GuiManager 依据当前字号
+    // 与网格统一给出（那里也对保存的设置值做同样的钳制）。
+    minimumWidth: eraEngine.gui.minimumWindowWidth
+    minimumHeight: eraEngine.gui.minimumWindowHeight
+
     property bool fullscreen: false
 
     // 引擎单例（QML 中实例化；也可作为 qmlRegisterSingletonInstance 注入）

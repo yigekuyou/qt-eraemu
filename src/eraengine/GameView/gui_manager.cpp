@@ -21,6 +21,7 @@
 #include "console_backend.h"
 #include "console_buffer.h"
 
+#include <QDebug>
 #include <QDir>
 #include <QFile>
 #include <QFontDatabase>
@@ -150,12 +151,14 @@ void GuiManager::setFontSize(int v) {
     if (m_fontSize == v) return;
     m_fontSize = v;
     // 字号变化时若未单独设置行高，则行高跟随
+    reclampWindowSize();
     emit settingsChanged();
 }
 void GuiManager::setLineHeight(int v) {
     v = qBound(6, v, 200);
     if (m_lineHeight == v) return;
     m_lineHeight = v;
+    reclampWindowSize();
     emit settingsChanged();
 }
 void GuiManager::setForeColor(const QColor& v) { if (m_foreColor == v) return; m_foreColor = v; emit settingsChanged(); }
@@ -184,14 +187,36 @@ void GuiManager::setScrollLines(int v) {
 }
 void GuiManager::setSizableWindow(bool v) { if (m_sizableWindow == v) return; m_sizableWindow = v; emit settingsChanged(); }
 void GuiManager::setMaximized(bool v) { if (m_maximized == v) return; m_maximized = v; emit settingsChanged(); }
+// 最小窗口尺寸：保证引擎的固定逻辑网格在当前字号下不被裁掉。
+// 单元格宽 = 字号 / 2（半角字符宽）；余量给菜单栏 / 页脚 / 输入条 / 滚动条。
+int GuiManager::minimumWindowWidth() const {
+    const int columns = m_console ? m_console->gridColumns() : 80;
+    const int cellWidth = qMax(1, m_fontSize / 2);
+    return qMax(320, columns * cellWidth + 24);
+}
+
+int GuiManager::minimumWindowHeight() const {
+    const int rows = m_console ? m_console->gridRows() : 25;
+    const int cellHeight = qMax(1, m_lineHeight);
+    return qMax(240, rows * cellHeight + 96);
+}
+
+// 字号/行高/网格变化后，把已保存的窗口尺寸重新抬到下限之上
+void GuiManager::reclampWindowSize() {
+    const int w = qBound(minimumWindowWidth(), m_windowWidth, 20000);
+    const int h = qBound(minimumWindowHeight(), m_windowHeight, 20000);
+    if (w != m_windowWidth) m_windowWidth = w;
+    if (h != m_windowHeight) m_windowHeight = h;
+}
+
 void GuiManager::setWindowWidth(int v) {
-    v = qBound(200, v, 20000);
+    v = qBound(minimumWindowWidth(), v, 20000);
     if (m_windowWidth == v) return;
     m_windowWidth = v;
     emit settingsChanged();
 }
 void GuiManager::setWindowHeight(int v) {
-    v = qBound(200, v, 20000);
+    v = qBound(minimumWindowHeight(), v, 20000);
     if (m_windowHeight == v) return;
     m_windowHeight = v;
     emit settingsChanged();
@@ -237,6 +262,10 @@ void GuiManager::resetToDefaults() {
 
 void GuiManager::applyToConsole() {
     if (!m_console) return;
+    qDebug() << "[render] 应用界面设置：窗口" << m_windowWidth << "x" << m_windowHeight
+             << "最小" << minimumWindowWidth() << "x" << minimumWindowHeight()
+             << "字号" << m_fontSize << "行高" << m_lineHeight
+             << "帧率" << frameMs() << "ms 历史" << m_maxLog;
     m_console->setFrameMs(frameMs());
     m_console->setMaxLog(m_maxLog);
     // 排版参数：C++ 依据这些**动态重算**每个最小单位区块的位置与尺寸

@@ -219,7 +219,7 @@ bool EraParseTable::callLabelAt(const QString& scriptName, int line,
     if (!data || line < 0 || line >= data->lines.size()) {
         return false;
     }
-    pushFrame(Frame(returnScript, returnLine, data->lines.at(line).labelName));
+    pushFrame(Frame(returnScript, returnLine, data->lines.at(line).labelName, line));
     if (scriptName != m_currentScript) {
         switchToMemorySpace(scriptName);
     }
@@ -420,6 +420,8 @@ bool EraParseTable::loadScript(const QString& scriptName, const QList<LogicalLin
         m_currentScript = scriptName;
     }
 
+    qDebug() << "[parse] 脚本" << scriptName << (isHeaderFile ? "(头文件)" : "")
+             << "逻辑行" << data.lines.size() << "标签" << data.labelPositions.size();
     emit parseCompleted(scriptName);
     return true;
 }
@@ -625,7 +627,7 @@ bool EraParseTable::callLabel(const QString& label, bool advanceWasCalled) {
     }
 
     const int returnLine = advanceWasCalled ? m_currentLine : m_currentLine + 1;
-    pushFrame(Frame(m_currentScript, returnLine, label));
+    pushFrame(Frame(m_currentScript, returnLine, label, target));
 
     if (targetScript != m_currentScript) {
         switchToMemorySpace(targetScript);
@@ -652,7 +654,7 @@ bool EraParseTable::callLabelWithReturn(const QString& label, int returnLine) {
         return false;
     }
 
-    pushFrame(Frame(m_currentScript, returnLine, label));
+    pushFrame(Frame(m_currentScript, returnLine, label, target));
     if (targetScript != m_currentScript) {
         switchToMemorySpace(targetScript);
     }
@@ -1022,6 +1024,9 @@ void EraParseTable::finalizeParse() {
     validateArguments();
     m_scopedAstCache.clear();
     m_finalized = true;
+    qDebug() << "[parse] finalizeParse 完成：脚本" << m_scripts.size()
+             << "变量" << m_variables.count() << "用户函数" << m_functions.size()
+             << "告警" << m_parseWarnings.size();
 }
 
 // ---------------------------------------------------------------------------

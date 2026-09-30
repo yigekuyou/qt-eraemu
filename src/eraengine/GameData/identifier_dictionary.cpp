@@ -16,6 +16,7 @@
  * along with this program.  If not, see <https://www.gnu.org/licenses/>.
  */
 #include "identifier_dictionary.h"
+#include <QDebug>
 #include <QSet>
 
 // Static initialization
@@ -70,6 +71,10 @@ void IdentifierDictionary::initializeSystemNames()
     for (const QString &name : SYSTEM_VARIABLES) {
         m_nameDic[name] = DefinedNameType::SystemVariable;
     }
+    qDebug() << "[parse] 标识符表：指令" << SYSTEM_INSTRUMENTS.size()
+             << "方法" << SYSTEM_METHODS.size()
+             << "系统变量" << SYSTEM_VARIABLES.size()
+             << "保留字" << RESERVED_WORDS.size() << "合计" << m_nameDic.size();
 }
 
 bool IdentifierDictionary::isReserved(const QString &name) const

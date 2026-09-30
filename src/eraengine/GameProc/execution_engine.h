@@ -77,6 +77,9 @@ public:
     // 一行最多几个「半角单位」（C# Config.DrawableWidth / 列宽）
     void setMaxLineUnits(int n) { if (n > 0) m_maxLineUnits = n; }
     [[nodiscard]] int maxLineUnits() const { return m_maxLineUnits; }
+    // 当前文字颜色 / 字体样式（GETCOLOR / GETSTYLE）
+    [[nodiscard]] qint64 currentColorValue() const { return m_colorValue; }
+    [[nodiscard]] qint64 currentStyleBits() const { return m_styleBits; }
     // 文本占几个半角单位（全角 2 / 半角 1）
     [[nodiscard]] static int unitWidth(const QString& text);
 
@@ -102,6 +105,7 @@ signals:
     void consoleClearLines(int count);
     void consoleAlign(const QString& align);
     void consoleColor(const QString& colorName);
+    void consoleFontStyle(bool bold, bool italic, bool underline, bool strike);
     void consoleResetColor();
     void consoleRedraw(const QString& mode);
 
@@ -165,6 +169,11 @@ private:
     int m_printCLength = 25;      // PRINTC 一列的文字宽度（C# Config.PrintCLength）
     QString m_drawLineString = QStringLiteral("-");   // C# Config.DrawLineString
     int m_maxLineUnits = 84;      // 一行最多单位数（760px / 9px）
+    // 当前文字颜色 / 字体样式（GETCOLOR / GETSTYLE 的返回值来源）
+    static constexpr qint64 kDefaultColor = 0xFFFFFF;
+    qint64 m_colorValue = kDefaultColor;
+    qint64 m_styleBits = 0;       // 1=粗体 2=斜体 4=删除线 8=下划线
+    static qint64 colorValueOf(const QString& name);   // 颜色名/常量 -> 0xRRGGBB
     int m_currentLine;
     QString m_currentScript;
     

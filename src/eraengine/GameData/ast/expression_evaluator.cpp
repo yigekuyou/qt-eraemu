@@ -539,7 +539,8 @@ bool ExpressionEvaluator::assignVariable(const VariableNode& node, VariableStora
         }
         return true;
     }
-    if (upper == QLatin1String("LOCAL") || upper == QLatin1String("ARG")) {
+    if (upper == QLatin1String("ARG")) { storage->setArgInt(idx, value); return true; }
+    if (upper == QLatin1String("LOCAL")) {
         storage->setLocalInt(idx, value);
         return true;
     }
@@ -576,15 +577,10 @@ QVariant ExpressionEvaluator::evaluateVariable(const VariableNode &node, Variabl
             return QVariant(storage->getCharaStr(varName, charaId, elems.value(0)));
         }
         if (storage->charaDataDimension(varName) >= 2) {
-            const qint64 v3 = storage->getCharaInt3D(varName, charaId, elems.value(0), elems.value(1));
-            qDebug() << "[evalRead3D]" << varName << "ids" << ids << "chara" << charaId
-                     << "elems" << elems << "=" << v3;
-            return QVariant::fromValue<qint64>(v3);
+            return QVariant::fromValue<qint64>(
+                storage->getCharaInt3D(varName, charaId, elems.value(0), elems.value(1)));
         }
-        const qint64 v1 = storage->getCharaInt(varName, charaId, elems.value(0));
-        qDebug() << "[evalRead]" << varName << "ids" << ids << "chara" << charaId
-                 << "elems" << elems << "=" << v1;
-        return QVariant::fromValue<qint64>(v1);
+        return QVariant::fromValue<qint64>(storage->getCharaInt(varName, charaId, elems.value(0)));
     }
     
     // Check if this is a GameBase variable
@@ -596,19 +592,32 @@ QVariant ExpressionEvaluator::evaluateVariable(const VariableNode &node, Variabl
         }
     }
     
-    // 用户函数参数 / 局部变量：LOCAL / ARG / ARGS（本移植中 ARG 视为 LOCAL 别名）
+    // 用户函数参数 / 局部变量：ARG / LOCAL（两套独立数组）
     {
         const QString upper = varName.toUpper();
-        if (upper == QLatin1String("LOCAL") || upper == QLatin1String("ARG")) {
-            // LOCAL / ARG = 整数局部槽（Emuera 里 ARG 就是 LOCAL 的别名）
+        if (upper == QLatin1String("ARG")) {
+            int idx = 0;
+            if (node.isArray() && !node.indices().isEmpty()) {
+                idx = static_cast<int>(resolveIndex(node, 0, storage, gameBaseData));
+            }
+            return QVariant(storage->getArgInt(idx));
+        }
+        if (upper == QLatin1String("LOCAL")) {
             int idx = 0;
             if (node.isArray() && !node.indices().isEmpty()) {
                 idx = static_cast<int>(resolveIndex(node, 0, storage, gameBaseData));
             }
             return QVariant(storage->getLocalInt(idx));
         }
-        if (upper == QLatin1String("ARGS") || upper == QLatin1String("LOCALS")) {
-            // ARGS = 字符串局部槽（对应 LOCALS）
+        if (upper == QLatin1String("ARGS")) {
+            int idx = 0;
+            if (node.isArray() && !node.indices().isEmpty()) {
+                idx = static_cast<int>(resolveIndex(node, 0, storage, gameBaseData));
+            }
+            return QVariant(storage->getArgStr(idx));
+        }
+        if (upper == QLatin1String("LOCALS")) {
+            // LOCALS = 字符串局部槽
             int idx = 0;
             if (node.isArray() && !node.indices().isEmpty()) {
                 idx = static_cast<int>(resolveIndex(node, 0, storage, gameBaseData));
@@ -1469,6 +1478,62 @@ bool ExpressionEvaluator::evaluateBuiltin(const FunctionNode &node, VariableStor
         out = QVariant::fromValue<qint64>(idx);
         return true;
     }
+    case BuiltinOp::ExistCsv: {
+        // EXISTCSV(n) -> 番号 n 的角色 CSV 模板是否存在（对齐 C# CharacterTemplate 检查）
+        out = QVariant::fromValue<qint64>(storage && storage->existCsv(static_cast<int>(I(0))) ? 1 : 0);
+        return true;
+    }
+    case BuiltinOp::CsvChara: {
+        // CSV 系函数：读取角色 **CSV 模板**的原始值（与运行时变量区分）
+        //   CSVNAME/CSVCALLNAME/CSVNICKNAME/CSVMASTERNAME(chara[, idx]) -> 字符串
+        //   CSVCSTR(chara, 下标)                                        -> 字符串
+        //   CSVBASE/CSVABL/CSVEXP/CSVMARK/CSVTALENT/CSVCFLAG/…(chara, 下标) -> 整数
+        // eraTW 用它们取角色的初始/模板数据（NEWGAME、状态显示、地图管理）。
+        if (!storage) { out = QVariant(QString()); return true; }
+        static const QHash<QString, QString> kStrVarOf = {
+            {QStringLiteral("CSVNAME"),       QStringLiteral("NAME")},
+            {QStringLiteral("CSVCALLNAME"),   QStringLiteral("CALLNAME")},
+            {QStringLiteral("CSVNICKNAME"),   QStringLiteral("NICKNAME")},
+            {QStringLiteral("CSVMASTERNAME"), QStringLiteral("MASTERNAME")},
+            {QStringLiteral("CSVCSTR"),       QStringLiteral("CSTR")},
+        };
+        const QString fn = node.name().toUpper();
+        const int chara = static_cast<int>(I(0));
+
+        if (kStrVarOf.contains(fn)) {
+            const QString var = kStrVarOf.value(fn);
+            // 字符串型：单参数形式（CSVNAME(chara)）取元素 0
+            int index = node.arguments().size() >= 2 ? static_cast<int>(I(1)) : 0;
+            const QString nameArg = node.arguments().size() >= 2 ? S(1) : QString();
+            if (!nameArg.isEmpty() && m_constantTable) {
+                const int mapped = m_constantTable->indexForVariable(var, nameArg);
+                if (mapped >= 0) index = mapped;
+            }
+            out = QVariant(storage->csvCharaStr(var, chara, index));
+            return true;
+        }
+
+        // 数值型：CSVBASE -> BASE、CSVMAXBASE -> MAXBASE、CSVABL -> ABL …
+        const QString var = fn.mid(3);   // 去掉 "CSV" 前缀
+        int index = static_cast<int>(I(1));
+        const QString nameArg = S(1);
+        if (!nameArg.isEmpty() && m_constantTable) {
+            const int mapped = m_constantTable->indexForVariable(var, nameArg);
+            if (mapped >= 0) index = mapped;
+        }
+        out = QVariant::fromValue<qint64>(storage->csvCharaInt(var, chara, index));
+        return true;
+    }
+    case BuiltinOp::GetColor: {
+        // GETCOLOR() -> 当前文字颜色（0xRRGGBB）。由执行引擎维护并注入。
+        out = QVariant::fromValue<qint64>(m_colorProvider ? m_colorProvider() : 0);
+        return true;
+    }
+    case BuiltinOp::GetStyle: {
+        // GETSTYLE() -> 当前字体样式位掩码（1=粗体 2=斜体 4=删除线 8=下划线）。
+        out = QVariant::fromValue<qint64>(m_styleProvider ? m_styleProvider() : 0);
+        return true;
+    }
     case BuiltinOp::VarSize: {
         // VARSIZE("变量名"[, 维])
         const QString name = S(0);
@@ -1508,6 +1573,9 @@ bool ExpressionEvaluator::evaluateBuiltin(const FunctionNode &node, VariableStor
 
     // ---------------- 尚未实现求值 ----------------
     case BuiltinOp::None:
+        // 未实现的内置函数此前会静默产出 0/空串，表现为「函数恒为 0」而不报错
+        // （CSVCSTR / EXISTCSV 就曾如此）。这里明确留痕，便于定位缺口。
+        qWarning() << "[exec] 内置函数尚未实现求值（返回 0）:" << node.name();
         break;
     }
     Q_UNUSED(storage);

@@ -16,7 +16,9 @@
  * along with this program.  If not, see <https://www.gnu.org/licenses/>.
  */
 #include "mt19937.h"
+#include "eraengine_log.h"
 
+#include <QDebug>
 #include <QRandomGenerator>
 
 namespace {
@@ -43,6 +45,9 @@ quint32 Mt19937::randomSeed() {
 }
 
 void Mt19937::reseed(quint32 seed) {
+    // 注意：**默认构造**也会走到这里（引擎里每个临时 ExpressionEvaluator 都会
+    // 构造一个 Mt19937），所以只留跟踪级日志，避免刷屏。
+    qCDebug(eraTrace) << "[var] MT19937 重置种子:" << seed;
     m_seed = seed;
     m_state[0] = seed;
     for (int i = 1; i < N; ++i) {

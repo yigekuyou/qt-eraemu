@@ -27,7 +27,7 @@ qt_add_library(eraengine STATIC)
 qt_add_qml_module(eraengine
     URI io.yigekuoyou.eraengine
     VERSION 1.0
-    SOURCES eraengine.cpp eraengine.h
+    SOURCES eraengine.cpp eraengine.h eraengine_log.cpp eraengine_log.h
 Config/config_loader.cpp
 Config/config_loader.h
 Content/csv_loader.cpp

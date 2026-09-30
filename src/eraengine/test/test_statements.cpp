@@ -219,6 +219,85 @@ int main(int argc, char* argv[]) {
               "PRINT_IMG forwards the resource expression with inline defaults");
         QObject::disconnect(connection);
     }
+    qDebug() << "\n7) VARSET / SETS / CVARSET 族";
+    // 以前 ArgKind::VarSet 只在 argument_parser 里登记，执行期没有任何分支：
+    // `PRINT_STATE.ERB:336 VARSET TLNT_CNT` 被静默跳过 -> 计数器不清零 ->
+    // 素質/性的特徴/身体的特徴 列表越叠越长。这里覆盖各目标类型与范围语义。
+    {
+        const AstResolver resolveOne = [&table](const QString& e) { return table.expressionAst(e); };
+        // 全局声明（头文件级 -> 全局作用域）：1D 整型 / 2D 整型 / 1D 字符串
+        table.loadScript("v.ERH",
+                         buildLines(table, {"#DIM VSCNT, 6",
+                                            "#DIM VSNO, 6, 100",
+                                            "#DIMS VSSARR, 4"}),
+                         true);
+        table.finalizeParse();
+        const auto execV = [&](const QString& src) {
+            LogicalLine l = AstBuilder::build(src, ScriptPosition("v.ERB", 0, 0), resolveOne);
+            engine.executeInstruction(l);
+            return l;
+        };
+
+        // --- 无范围：end 取 #DIM 长度 ---
+        storage.setGlobalInt1D("VSCNT", 0, 9);
+        storage.setGlobalInt1D("VSCNT", 5, 9);
+        execV(QStringLiteral("VARSET VSCNT"));
+        check(storage.getGlobalInt1D("VSCNT", 0) == 0 && storage.getGlobalInt1D("VSCNT", 5) == 0,
+              "VARSET VSCNT（无范围）按 #DIM 长度 6 清空整条 1D 数组");
+
+        // --- 2D：忽略范围，整体清空（对齐 C# Int2DVariableToken.SetValueAll）---
+        storage.setGlobalInt2D("VSNO", 3, 7, 9);
+        execV(QStringLiteral("VARSET VSNO"));
+        check(storage.getGlobalInt2D("VSNO", 3, 7) == 0,
+              "VARSET VSNO（2D 无范围）整体清空");
+
+        // --- 字符串变量 ---
+        storage.setGlobalStr1D("VSSARR", 2, QStringLiteral("q"));
+        execV(QStringLiteral("VARSET VSSARR, \"x\""));
+        check(storage.getGlobalStr1D("VSSARR", 2) == QStringLiteral("x"),
+              "VARSET 字符串数组赋 \"x\"");
+
+        // --- 显式范围 + start>end 自动交换 ---
+        for (int i = 1; i <= 4; ++i) storage.setGlobalInt1D("VSCNT", i, 7);
+        execV(QStringLiteral("VARSET VSCNT, 5, 3, 1"));   // start=3,end=1 -> 交换 -> [1,3)
+        check(storage.getGlobalInt1D("VSCNT", 1) == 5 && storage.getGlobalInt1D("VSCNT", 2) == 5,
+              "VARSET 显式范围 [1,3) 赋值，且 start>end 自动交换");
+        check(storage.getGlobalInt1D("VSCNT", 3) == 7 && storage.getGlobalInt1D("VSCNT", 4) == 7,
+              "范围外元素不受影响");
+
+        // --- 角色变量：VARSET TEQUIP:1:0, 7, 10, 13 ---
+        storage.addChara(0);
+        storage.addChara(1);
+        storage.addChara(2);
+        storage.setCharaInt("TEQUIP", 1, 10, 1);
+        storage.setCharaInt("TEQUIP", 1, 12, 1);
+        execV(QStringLiteral("VARSET TEQUIP:1:0, 7, 10, 13"));
+        check(storage.getCharaInt("TEQUIP", 1, 10) == 7 && storage.getCharaInt("TEQUIP", 1, 12) == 7,
+              "VARSET 角色变量 TEQUIP:1 [10,13) = 7");
+
+        // --- 系统变量：VARSET ITEM, 0, 101, 110 ---
+        storage.setSystemVariable("ITEM", 101, 1);
+        storage.setSystemVariable("ITEM", 109, 1);
+        execV(QStringLiteral("VARSET ITEM, 0, 101, 110"));
+        check(storage.getSystemVariable("ITEM", 101) == 0 && storage.getSystemVariable("ITEM", 109) == 0,
+              "VARSET 系统变量 ITEM [101,110) 清空");
+
+        // --- LOCAL 数组 ---
+        storage.setLocalInt(0, 3);
+        storage.setLocalInt(7, 3);
+        execV(QStringLiteral("VARSET LOCAL, 5, 0, 8"));
+        check(storage.getLocalInt(0) == 5 && storage.getLocalInt(7) == 5,
+              "VARSET LOCAL [0,8) = 5");
+
+        // --- CVARSET：逐角色设置同一元素 ---
+        storage.setCharaInt("CFLAG", 0, 5, 1);
+        storage.setCharaInt("CFLAG", 2, 5, 1);
+        execV(QStringLiteral("CVARSET CFLAG, 5, 9, 0, 3"));
+        check(storage.getCharaInt("CFLAG", 0, 5) == 9 && storage.getCharaInt("CFLAG", 1, 5) == 9
+                  && storage.getCharaInt("CFLAG", 2, 5) == 9,
+              "CVARSET CFLAG, 5, 9, 0, 3 逐角色写入元素 5");
+    }
+
     qDebug() << "\n======================================";
     if (g_failures == 0) {
         qDebug() << "[SUCCESS] statement tests passed";

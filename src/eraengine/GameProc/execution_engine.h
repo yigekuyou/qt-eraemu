@@ -128,6 +128,17 @@ private:
     // 字符串赋值（目的变量是字符串变量时）：右侧按字符串求值后写入字符串容器
     bool handleStringAssignment(const QString& lhs, const QString& rhs, const QSharedPointer<ExpressionNode>& ast = {});
     bool handleCompoundAssignment(const QString& lhs, const QString& op, const QString& rhs, const QSharedPointer<ExpressionNode>& ast = {});
+
+    // VARSET 族（对齐 C# VARSET_Instruction / CVARSET_Instruction）
+    //   eachChara == false: SET / VARSET / SETS / VAR_SET  —— 一个变量的元素区间赋值
+    //   eachChara == true : CVARSET                        —— 逐个角色设置同一元素
+    bool handleVarSet(const LogicalLine& line, bool eachChara);
+    // 目的变量是否字符串型（决定右值按 Str 还是 Int 求值）
+    [[nodiscard]] bool isStringVariable(const QString& name, const QString& function) const;
+    // #DIM/#DIMS 声明的维数长度（未声明返回空）
+    [[nodiscard]] QList<int> declaredLengths(const QString& name, const QString& function) const;
+    // VARSET 里 1 次元变量的元素个数（对齐 C# VariableTerm.GetLength）
+    [[nodiscard]] int variableLength1D(const QString& name, const QString& function) const;
     
     // Parse LHS (left-hand side) of assignment
     // 兼容旧接口：返回 (名字, 第一个下标)（无下标时下标为 -1）

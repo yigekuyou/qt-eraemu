@@ -345,6 +345,285 @@ bool ExecutionEngine::handleCompoundAssignment(const QString& lhs, const QString
     return true;
 }
 
+// ===========================================================================
+// VARSET 族
+//
+//   SET / VARSET / SETS / VAR_SET ：<可変変数>, <式>[, <範囲初値>, <範囲終値>]
+//   CVARSET                       ：<角色変数>, <要素>[, <式>[, <範囲初値>, <範囲終値>]]
+//
+// 语义对齐 C# GameProc/Function/Instraction.Child.cs 的 VARSET_Instruction /
+// CVARSET_Instruction 与 GameData/Variable/VariableEvaluator.cs 的
+// SetValueAll / SetValueAllEachChara，以及各 VariableToken.SetValueAll：
+//
+//   * end 省略且目标是 **1 次元**数组 -> end = 该变量的长度（var.GetLength()）
+//   * start > end 时**交换**（需求约定；C# 原码 `int t=start; start=end; end=start;`
+//     实际会把区间收成空，这里按「交换」的可预期语义实现）
+//   * 2 次元 / 3 次元数组的 SetValueAll **忽略范围**，整体赋值
+//     （Int2D/3DVariableToken.SetValueAll 就是无脑双重/三重循环）
+//   * 角色变量按 (角色号, 元素下标) 路由；**标量**角色变量只写一个槽
+//   * 字符串 / 整数由**目标变量类型**决定右值的求值方式
+// ===========================================================================
+bool ExecutionEngine::isStringVariable(const QString& name, const QString& function) const {
+    if (m_storage) {
+        // 角色变量：NAME/CALLNAME/… 与用户 #DIMS CHARADATA
+        if (m_storage->isCharaDataVariable(name)) return m_storage->isCharaDataString(name);
+        const QString upper = name.toUpper();
+        // 内建字符串变量/数组（与 handleStringAssignment 保持一致）
+        if (upper == QLatin1String("RESULTS") || upper == QLatin1String("ARGS")
+            || upper == QLatin1String("LOCALS") || upper == QLatin1String("SAVEDATA_TEXT")) {
+            return true;
+        }
+    }
+    if (m_parseTable) {
+        const OperandType t = m_parseTable->variableTable().typeOf(name, function);
+        if (t == OperandType::Str) return true;
+        if (t == OperandType::Int) return false;
+    }
+    return false;
+}
+
+QList<int> ExecutionEngine::declaredLengths(const QString& name, const QString& function) const {
+    if (m_parseTable) {
+        if (const VariableDecl* d = m_parseTable->variableTable().find(name, function)) {
+            return d->lengths;
+        }
+    }
+    return {};
+}
+
+int ExecutionEngine::variableLength1D(const QString& name, const QString& function) const {
+    const QString upper = name.toUpper();
+    // 角色变量：每个角色的元素数（内建走 VariableSize.csv，用户走 #DIM CHARADATA 的维数）
+    if (m_storage && m_storage->isCharaDataVariable(name)) {
+        const int cfg = m_storage->variableConfig().getSize1D(upper);
+        if (cfg > 0) return cfg;
+        const QList<int> lens = declaredLengths(name, function);
+        return lens.isEmpty() ? 1 : lens.first();
+    }
+    // LOCAL / ARG / LOCALS / ARGS：VariableSize.csv 指定（LOCAL=500 / ARG=200 / …）
+    if (upper == QLatin1String("LOCAL") || upper == QLatin1String("ARG")
+        || upper == QLatin1String("LOCALS") || upper == QLatin1String("ARGS")) {
+        const int cfg = m_storage ? m_storage->variableConfig().getSize1D(upper) : 0;
+        return cfg > 0 ? cfg : 0;
+    }
+    // 系统变量（RESULT / COUNT / …）：VariableSize.csv，其次当前容器尺寸
+    if (m_storage && m_storage->hasSystemVariable(name)) {
+        const int cfg = m_storage->variableConfig().getSize1D(upper);
+        if (cfg > 0) return cfg;
+        return m_storage->arraySize(name);
+    }
+    // 用户变量：#DIM 声明的长度与当前存储长度取较大者
+    const QList<int> lens = declaredLengths(name, function);
+    const int declared = lens.isEmpty() ? 1 : lens.first();
+    const int stored = m_storage ? m_storage->arraySize(name) : 0;
+    return qMax(declared, stored);
+}
+
+bool ExecutionEngine::handleVarSet(const LogicalLine& line, bool eachChara) {
+    if (!m_storage) return true;
+
+    // 参数（剔除分隔符）。VarSet 走 argument_parser 的 params；兜底用 line.arguments。
+    QList<const Operand*> a;
+    if (!line.argument.params.isEmpty()) {
+        for (const Operand& o : line.argument.params) a.append(&o);
+    } else {
+        for (const Operand& o : line.arguments) {
+            if (o.raw != QLatin1String(",") && o.raw != QLatin1String(":")) a.append(&o);
+        }
+    }
+    if (a.isEmpty()) {
+        qWarning() << "[varset] 参数为空，忽略:" << line.functionName;
+        return true;
+    }
+
+    ExpressionEvaluator localEvaluator;
+    ExpressionEvaluator& ev = m_expressionEvaluator ? *m_expressionEvaluator : localEvaluator;
+    const auto evalInt = [&](const Operand& o) -> qint64 {
+        if (o.isString) return o.raw.toLongLong();
+        if (o.ast) return ev.evaluate(*o.ast, m_storage, m_gameBaseData).toLongLong();
+        return evalExpressionCached(m_parseTable, ev, o.raw, m_storage, m_gameBaseData).toLongLong();
+    };
+    const auto evalStr = [&](const Operand& o) -> QString {
+        if (o.isString) return o.raw;
+        if (o.ast) return ev.evaluate(*o.ast, m_storage, m_gameBaseData).toString();
+        return evalExpressionCached(m_parseTable, ev, o.raw, m_storage, m_gameBaseData).toString();
+    };
+
+    const LhsRef ref = parseLhsRef(a[0]->raw.trimmed());
+    if (ref.name.isEmpty()) {
+        qWarning() << "[varset] 左值无法解析，忽略:" << a[0]->raw;
+        return true;
+    }
+    const QString name = ref.name;
+    const QString upper = name.toUpper();
+    const QString fn = line.ownerFunction;
+    const bool isString = isStringVariable(name, fn);
+    const bool isChara = m_storage->isCharaDataVariable(name);
+
+    // ---------------- CVARSET：对 [start,end) 内每个角色设置同一元素 ----------------
+    if (eachChara) {
+        // C# 要求一维角色变量（二维被 ArgumentBuilder 明确拒绝）
+        if (!isChara || m_storage->charaDataDimension(name) != 1) {
+            qWarning() << "[varset] CVARSET 需要一维角色变量，忽略:" << name;
+            return true;
+        }
+        const int index = a.size() >= 2 ? static_cast<int>(evalInt(*a[1])) : 0;
+        const qint64 value = a.size() >= 3 ? evalInt(*a[2]) : 0;
+        const QString svalue = a.size() >= 3 ? evalStr(*a[2]) : QString();
+        const int charaNum = m_storage->charaNum();
+        int start = a.size() >= 4 ? static_cast<int>(evalInt(*a[3])) : 0;
+        int end = a.size() >= 5 ? static_cast<int>(evalInt(*a[4])) : charaNum;
+        if (start < 0 || start > charaNum) {
+            qWarning() << "[varset] 命令CVARSET的第４引数(" << start << ")がキャラクタの範囲外です";
+            return true;
+        }
+        if (end < 0 || end > charaNum) {
+            qWarning() << "[varset] 命令CVARSET的第５引数(" << end << ")がキャラクタの範囲外です";
+            return true;
+        }
+        if (start > end) std::swap(start, end);
+        qDebug() << "[varset] CVARSET" << name << "元素" << index << "值"
+                 << (isString ? svalue : QString::number(value))
+                 << "角色区间[" << start << "," << end << ")";
+        for (int cid = start; cid < end; ++cid) {
+            if (isString) m_storage->setCharaStr(name, cid, index, svalue);
+            else m_storage->setCharaInt(name, cid, index, value);
+        }
+        return true;
+    }
+
+    // ---------------- VARSET：一个变量的区间赋值 ----------------
+    const qint64 value = a.size() >= 2 ? evalInt(*a[1]) : 0;
+    const QString svalue = a.size() >= 2 ? evalStr(*a[1]) : QString();
+    const bool hasStart = a.size() >= 3;
+    const bool hasEnd = a.size() >= 4;
+    int start = hasStart ? static_cast<int>(evalInt(*a[2])) : 0;
+    int end = hasEnd ? static_cast<int>(evalInt(*a[3])) : -1;   // -1 = 未指定
+
+    // ---- 角色变量 ----
+    if (isChara) {
+        const int cdim = m_storage->charaDataDimension(name);
+        int charaId = 0;
+        QList<int> elems;
+        m_storage->reduceCharaArgs(name, ref.indices, charaId, elems);
+        if (cdim == 0) {
+            // 标量角色变量：忽略范围，只写一个槽
+            qDebug() << "[varset] VARSET 标量角色变量" << name << "角色" << charaId;
+            if (isString) m_storage->setCharaStr(name, charaId, 0, svalue);
+            else m_storage->setCharaInt(name, charaId, 0, value);
+            return true;
+        }
+        if (cdim >= 2) {
+            // 二维角色数组：整体赋值（忽略范围）
+            const QList<int> lens = declaredLengths(name, fn);
+            const int n0 = lens.size() >= 1 && lens.at(0) > 0 ? lens.at(0) : 1;
+            const int n1 = lens.size() >= 2 && lens.at(1) > 0 ? lens.at(1) : 1;
+            qDebug() << "[varset] VARSET 二维角色数组" << name << "角色" << charaId
+                     << "尺寸" << n0 << "x" << n1;
+            for (int x = 0; x < n0; ++x)
+                for (int y = 0; y < n1; ++y)
+                    m_storage->setCharaInt3D(name, charaId, x, y, value);
+            return true;
+        }
+        if (end < 0) end = variableLength1D(name, fn);
+        if (start > end) std::swap(start, end);
+        qDebug() << "[varset] VARSET 角色数组" << name << "角色" << charaId
+                 << "区间[" << start << "," << end << ") 值"
+                 << (isString ? svalue : QString::number(value));
+        for (int i = start; i < end; ++i) {
+            if (isString) m_storage->setCharaStr(name, charaId, i, svalue);
+            else m_storage->setCharaInt(name, charaId, i, value);
+        }
+        return true;
+    }
+
+    // ---- 引用变量（参数别名）----
+    if (m_storage->hasParameter(name)) {
+        m_storage->setParameter(name, isString ? QVariant(svalue) : QVariant(value));
+        return true;
+    }
+
+    // ---- LOCAL / LOCALS / ARG / ARGS ----
+    if (upper == QLatin1String("LOCAL") || upper == QLatin1String("LOCALS")
+        || upper == QLatin1String("ARG") || upper == QLatin1String("ARGS")) {
+        const bool strSlot = (upper == QLatin1String("LOCALS") || upper == QLatin1String("ARGS"));
+        if (end < 0) end = variableLength1D(name, fn);
+        if (start > end) std::swap(start, end);
+        if (end <= 0) return true;
+        qDebug() << "[varset] VARSET" << upper << "区间[" << start << "," << end << ")";
+        for (int i = start; i < end; ++i) {
+            if (strSlot) {
+                if (upper == QLatin1String("ARGS")) m_storage->setArgStr(i, svalue);
+                else m_storage->setLocalStr(i, svalue);
+            } else {
+                if (upper == QLatin1String("ARG")) m_storage->setArgInt(i, value);
+                else m_storage->setLocalInt(i, value);
+            }
+        }
+        return true;
+    }
+
+    // ---- RESULTS：本移植放在 LOCAL 字符串槽 0（与字符串赋值路径一致）----
+    if (upper == QLatin1String("RESULTS")) {
+        m_storage->setLocalStr(0, svalue);
+        return true;
+    }
+
+    // ---- 系统变量 ----
+    if (m_storage->hasSystemVariable(name)) {
+        if (end < 0) end = variableLength1D(name, fn);
+        if (start > end) std::swap(start, end);
+        qDebug() << "[varset] VARSET 系统变量" << name << "区间[" << start << "," << end << ")";
+        for (int i = start; i < end; ++i) {
+            if (isString) m_storage->setSystemStr(name, i, svalue);
+            else m_storage->setSystemVariable(name, i, value);
+        }
+        return true;
+    }
+
+    // ---- 用户变量：按声明维数分派 ----
+    const VariableDecl* decl = m_parseTable ? m_parseTable->variableTable().find(name, fn) : nullptr;
+    const int dim = decl ? decl->dimension : 1;
+    if (dim >= 2) {
+        // 2/3 次元数组：整体赋值（忽略范围）
+        const QList<int> lens = declaredLengths(name, fn);
+        if (lens.size() < 2) {
+            qWarning() << "[varset] 多维变量缺少维数声明，忽略:" << name;
+            return true;
+        }
+        const int n0 = qMax(1, lens.value(0, 1));
+        const int n1 = qMax(1, lens.value(1, 1));
+        qDebug() << "[varset] VARSET 全局多维" << (isString ? "字符串" : "整数") << name
+                 << "维数" << lens;
+        if (dim >= 3) {
+            const int n2 = qMax(1, lens.value(2, 1));
+            for (int x = 0; x < n0; ++x)
+                for (int y = 0; y < n1; ++y)
+                    for (int z = 0; z < n2; ++z)
+                        m_storage->setGlobalInt3D(name, x, y, z, value);
+        } else {
+            for (int x = 0; x < n0; ++x)
+                for (int y = 0; y < n1; ++y) {
+                    if (isString) m_storage->setGlobalStr2D(name, x, y, svalue);
+                    else m_storage->setGlobalInt2D(name, x, y, value);
+                }
+        }
+        return true;
+    }
+
+    // ---- 用户一维变量 ----
+    if (end < 0) end = variableLength1D(name, fn);
+    if (start > end) std::swap(start, end);
+    qDebug() << "[varset] VARSET 全局" << (isString ? "字符串" : "整数") << name
+             << "区间[" << start << "," << end << ") 值"
+             << (isString ? svalue : QString::number(value));
+    for (int i = start; i < end; ++i) {
+        if (isString) m_storage->setGlobalStr1D(name, i, svalue);
+        else m_storage->setGlobalInt1D(name, i, value);
+    }
+    return true;
+}
+
 bool ExecutionEngine::isRunning() const {
     return m_running;
 }
@@ -705,6 +984,20 @@ bool ExecutionEngine::executeInstruction(const LogicalLine& line) {
         }
         return true;
     }
+    // ---- VARSET 族（对齐 C# FunctionCode.VARSET / CVARSET）----
+    //   VARSET 名[, 值[, 初値[, 終値]]]：把变量的元素区间整体赋值
+    //   CVARSET 角色变量, 下标[, 值[, 初値[, 終値]]]：逐角色设置同一元素
+    // 以前 ArgKind::VarSet 只在 argument_parser 里登记、执行期没有任何分支，
+    // 于是 `PRINT_STATE.ERB:336 VARSET TLNT_CNT` 之类的清空被**静默跳过**，
+    // 计数器不清零 -> 素質/性的特徴 列表越叠越长。
+    if (name == QLatin1String("VARSET") || name == QLatin1String("SETS")
+        || name == QLatin1String("VAR_SET") || name == QLatin1String("SET")) {
+        return handleVarSet(line, false);
+    }
+    if (name == QLatin1String("CVARSET")) {
+        return handleVarSet(line, true);
+    }
+
     // `'=` —— **字符串专用**赋值运算符（C# OperatorCode.AssignmentStr「単一代入」）。
     // 左值必须是字符串变量；右值按**普通表达式**求值（不做 %..%/{..} 的格式化展开，
     // 与 `=` 的字符串分支不同，见 EraParseTable::applyStringAssignments）。

@@ -101,7 +101,7 @@ inline constexpr auto kInstructionSpecs = std::to_array<InstructionSpec>({
     {"BEGIN",        ArgKind::Raw,           1,  1},
     {"QUIT",         ArgKind::Void,          0,  0},
     {"SETS",         ArgKind::VarSet,        1,  2},
-    {"CVARSET",      ArgKind::VarSet,        1,  4},
+    {"CVARSET",      ArgKind::VarSet,        1,  5},   // <角色变量>,<元素>[,<式>[,<初値>,<終値>]]
     {"VAR_SET",      ArgKind::VarSet,        1,  4},
     {"SWAPVAR",      ArgKind::Swap,          2,  2},
     {"TIMES",        ArgKind::Times,         2,  2},

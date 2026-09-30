@@ -23,6 +23,7 @@
 #include "variable_storage.h"
 #include "system_state_machine.h"
 #include "ast/expression_evaluator.h"
+#include "ast/strform_parser.h"
 #include <QDebug>
 #include <QElapsedTimer>
 #include <bit>
@@ -651,69 +652,21 @@ ExecState ScriptRunner::executeLine(const LogicalLine& line) {
         }
         return ExecState::Continue;
     }
-    if (name == QLatin1String("CALL")) {
-        const QString label = line.arguments.isEmpty() ? QString() : line.arguments.first().raw;
-        qDebug() << "[exec] CALL" << label << "line" << m_table->currentLine();
-        const UserFunctionDecl* info = m_table->userFunction(label);
-        QList<Operand> evaluated;
-        QHash<QString, QString> references;
-        evaluated.reserve(line.arguments.size());
-        evaluated.append(line.arguments.value(0));
-        for (int i = 1; i < line.arguments.size(); ++i) {
-            const Operand source = line.arguments.at(i);
-            const UserParamDecl* param = info && i - 1 < info->params.size()
-                                             ? &info->params.at(i - 1) : nullptr;
-            if (param && param->isReference) {
-                const QString actualName = bareVarName(source.raw);
-                if (!actualName.isEmpty()) {
-                    references.insert(param->name.toUpper(), m_storage->resolvedStorageName(actualName));
-                }
-                evaluated.append(source);
-                continue;
-            }
-            ExpressionEvaluator fallback;
-            const QVariant value = source.isString ? QVariant(source.raw)
-                : source.ast
-                    ? (m_evaluator ? m_evaluator : &fallback)->evaluate(*source.ast, m_storage, baseData())
-                    : (m_evaluator ? m_evaluator : &fallback)->evaluate(source.raw, m_storage, baseData());
-            Operand arg(value.toString());
-            arg.isString = value.typeId() == QMetaType::QString;
-            evaluated.append(arg);
-        }
-        // Emuera 允许 CALL F(array) 对应 F(array:0, array:1, ...)。
-        // 在绑定前按固定下标形参展开，避免数组被错误求值为单个标量。
-        if (evaluated.size() == 2 && info && !info->params.isEmpty()) {
-            QString actualName = bareVarName(line.arguments.value(1).raw);
-            bool expandable = !actualName.isEmpty();
-            for (const UserParamDecl& p : info->params)
-                expandable = expandable && p.fixedIndex >= 0 && p.varName.compare(actualName, Qt::CaseInsensitive) == 0;
-            if (expandable) {
-                QList<Operand> expanded;
-                const QString storageName = m_storage->resolvedStorageName(actualName);
-                expanded.append(evaluated.first());
-                for (const UserParamDecl& p : info->params) {
-                    Operand item;
-                    item.isString = p.type == OperandType::Str;
-                    item.raw = item.isString
-                        ? m_storage->getGlobalStr1D(storageName, p.fixedIndex)
-                        : QString::number(m_storage->getGlobalInt1D(storageName, p.fixedIndex));
-                    expanded.append(item);
-                }
-                evaluated = expanded;
-            }
-        }
-        enterCall(label);
-        // 顺序对齐 C#：先初始化函数私有变量的初值（#DIM X = 7），再写实参
-        m_table->applyPrivateVariableDefaults(label);
-        bindArguments(info, evaluated, references);
-        if (label.isEmpty() || !m_table->callLabel(label)) {
-            if (!m_callContexts.isEmpty()) m_storage->setLocalContext(m_callContexts.takeLast().locals);
-            m_state->setErrorState();
-            emit errorOccurred(QStringLiteral("CALL label not found: %1").arg(label));
-            return ExecState::Error;
-        }
-        return ExecState::Continue;
+    // ---- 调用族：CALL / TRYCALL / CALLFORM / TRYCALLFORM / TRYCCALLFORM ----
+    // 以前这里**只认 CALL**：CALLFORM / TRYCALL / TRYCALLFORM 都落到
+    // 「其它指令」被静默跳过。后果（eraTW 实测）：
+    //   * `CALLFORM CUSTOM_%ARGS%_MENU(ARG)` 不执行 -> 「能力/素質/経験の編集」
+    //     菜单一片空白（点按钮像没反应）；
+    //   * 大量 `TRYCALLFORM 口上_%…%`（956 处）口上全都不显示。
+    // 语义对齐 C# CALL_Instruction(form, isJump, isTry, isTryCatch)。
+    if (name == QLatin1String("CALL") || name == QLatin1String("TRYCALL")
+        || name == QLatin1String("CALLFORM") || name == QLatin1String("TRYCALLFORM")
+        || name == QLatin1String("TRYCCALLFORM")) {
+        const bool isForm = name.contains(QLatin1String("FORM"));
+        const bool isTry  = name.startsWith(QLatin1String("TRY"));
+        return doCallLine(line, isForm, isTry);
     }
+
     if (name == QLatin1String("RETURN") || name == QLatin1String("RETURNF")) {
         m_lastReturnValue = QVariant::fromValue<qint64>(0);
         ExpressionEvaluator fallback;
@@ -887,6 +840,116 @@ ExecState ScriptRunner::executeLine(const LogicalLine& line) {
         m_engine->executeInstruction(line);
     }
     advance();
+    return ExecState::Continue;
+}
+
+// ---------------------------------------------------------------------------
+// 调用族的统一实现（CALL / TRYCALL / CALLFORM / TRYCALLFORM）
+//
+// 对齐 C# CALL_Instruction.DoInstruction：
+//   * isForm：标签名由格式化串求值（`CUSTOM_%ARGS%_MENU` -> `CUSTOM_ABL_MENU`）
+//   * isTry ：找不到函数时静默跳过（不回退、不报错）
+// 其余（实参求值、引用形参、固定下标数组展开、私有变量初值）与旧 CALL 一致。
+// ---------------------------------------------------------------------------
+QString ScriptRunner::expandCallFormLabel(const QString& raw)
+{
+    QString text = raw.trimmed();
+    if (text.isEmpty()) return text;
+    if (!StrFormParser::hasForm(text)) return text;   // 纯文本标签：不展开
+    const auto resolve = [this](const QString& e) -> QSharedPointer<ExpressionNode> {
+        return m_table ? m_table->expressionAst(e) : QSharedPointer<ExpressionNode>();
+    };
+    const QSharedPointer<StrFormNode> form = StrFormParser::parse(text, resolve);
+    if (!form) return text;
+    ExpressionEvaluator fallback;
+    ExpressionEvaluator& ev = m_evaluator ? *m_evaluator : fallback;
+    const QString out = ev.evaluate(*form.staticCast<ExpressionNode>(), m_storage, baseData()).toString();
+    return out.isEmpty() ? text : out;
+}
+
+ExecState ScriptRunner::doCallLine(const LogicalLine& line, bool isForm, bool isTry)
+{
+    QString label = line.arguments.isEmpty() ? QString() : line.arguments.first().raw;
+    if (isForm) label = expandCallFormLabel(label);
+    qDebug() << "[exec] CALL" << (isForm ? "(form)" : "") << label
+             << (isTry ? "(try)" : "") << "line" << m_table->currentLine();
+
+    if (label.isEmpty()) {
+        m_state->setErrorState();
+        emit errorOccurred(QStringLiteral("CALL label not found: (空)"));
+        return ExecState::Error;
+    }
+    // TRY 系：目标不存在就静默跳过（对齐 C# isTry）。
+    // 注意用 hasLabel（能命中任意 @/$ 标签）而不是 userFunction，
+    // 因为 eraTW 里存在「无 #FUNCTION 的 @label」也照常 CALL。
+    if (isTry && !m_table->hasLabel(label)) {
+        qDebug() << "[call] TRY* 目标不存在，跳过：" << label;
+        m_table->advance();
+        return ExecState::Continue;
+    }
+
+    const UserFunctionDecl* info = m_table->userFunction(label);
+    QList<Operand> evaluated;
+    QHash<QString, QString> references;
+    evaluated.reserve(line.arguments.size());
+    evaluated.append(line.arguments.value(0));
+    for (int i = 1; i < line.arguments.size(); ++i) {
+        const Operand source = line.arguments.at(i);
+        const UserParamDecl* param = info && i - 1 < info->params.size()
+                                         ? &info->params.at(i - 1) : nullptr;
+        if (param && param->isReference) {
+            const QString actualName = bareVarName(source.raw);
+            if (!actualName.isEmpty()) {
+                references.insert(param->name.toUpper(), m_storage->resolvedStorageName(actualName));
+            }
+            evaluated.append(source);
+            continue;
+        }
+        ExpressionEvaluator fallback;
+        const QVariant value = source.isString ? QVariant(source.raw)
+            : source.ast
+                ? (m_evaluator ? m_evaluator : &fallback)->evaluate(*source.ast, m_storage, baseData())
+                : (m_evaluator ? m_evaluator : &fallback)->evaluate(source.raw, m_storage, baseData());
+        Operand arg(value.toString());
+        arg.isString = value.typeId() == QMetaType::QString;
+        evaluated.append(arg);
+    }
+    // Emuera 允许 CALL F(array) 对应 F(array:0, array:1, ...)。
+    // 在绑定前按固定下标形参展开，避免数组被错误求值为单个标量。
+    if (evaluated.size() == 2 && info && !info->params.isEmpty()) {
+        QString actualName = bareVarName(line.arguments.value(1).raw);
+        bool expandable = !actualName.isEmpty();
+        for (const UserParamDecl& p : info->params)
+            expandable = expandable && p.fixedIndex >= 0 && p.varName.compare(actualName, Qt::CaseInsensitive) == 0;
+        if (expandable) {
+            QList<Operand> expanded;
+            const QString storageName = m_storage->resolvedStorageName(actualName);
+            expanded.append(evaluated.first());
+            for (const UserParamDecl& p : info->params) {
+                Operand item;
+                item.isString = p.type == OperandType::Str;
+                item.raw = item.isString
+                    ? m_storage->getGlobalStr1D(storageName, p.fixedIndex)
+                    : QString::number(m_storage->getGlobalInt1D(storageName, p.fixedIndex));
+                expanded.append(item);
+            }
+            evaluated = expanded;
+        }
+    }
+    enterCall(label);
+    // 顺序对齐 C#：先初始化函数私有变量的初值（#DIM X = 7），再写实参
+    m_table->applyPrivateVariableDefaults(label);
+    bindArguments(info, evaluated, references);
+    if (!m_table->callLabel(label)) {
+        if (!m_callContexts.isEmpty()) m_storage->setLocalContext(m_callContexts.takeLast().locals);
+        if (isTry) {
+            m_table->advance();
+            return ExecState::Continue;
+        }
+        m_state->setErrorState();
+        emit errorOccurred(QStringLiteral("CALL label not found: %1").arg(label));
+        return ExecState::Error;
+    }
     return ExecState::Continue;
 }
 

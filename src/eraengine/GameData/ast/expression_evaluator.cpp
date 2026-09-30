@@ -987,6 +987,39 @@ QList<qint64> ExpressionEvaluator::readIntArray(const VariableNode &var, Variabl
     return out;
 }
 
+// 字符串一维数组内容。对齐 readIntArray，但走字符串容器：
+//   * CSV 常数名数组（ABLNAME/BASENAME/TALENTNAME/…）存在全局字符串槽
+//   * 用户 #DIMS 全局串、SAVESTR/STR 等系统串
+// (BASENAME, ABLNAME …) 以前被 readIntArray 当整数读 -> 全 0，
+// 于是 `FINDELEMENT(BASENAME,"気力")` 恒为 0：eraTW 的 BASE_BAR 里
+// 体力/気力 都用 BASE_ID=0 的同一个槽，两根条才会「一起变」。
+QList<QString> ExpressionEvaluator::readStrArray(const VariableNode &var, VariableStorage *storage) const {
+    QList<QString> out;
+    if (!storage) return out;
+    const QString name = var.name();
+    const QString upper = name.toUpper();
+
+    // 角色字符串数组（CSTR 之类）：沿角色维取同一列
+    if (storage->isCharaDataVariable(name)) {
+        if (!storage->isCharaDataString(name)) return out;
+        const int charaNum = charaCount(storage);
+        const int column = var.indices().isEmpty()
+            ? 0
+            : static_cast<int>(const_cast<ExpressionEvaluator*>(this)->resolveIndex(var, 0, storage, nullptr));
+        out.reserve(charaNum);
+        for (int i = 0; i < charaNum; ++i) out.append(storage->getCharaStr(name, i, column));
+        return out;
+    }
+
+    int size = storage->variableConfig().getSize1D(name);
+    if (size <= 0) size = storage->variableConfig().getSize1D(upper);
+    if (size <= 0) size = storage->arraySize(name);
+    if (size <= 0) size = storage->variableConfig().getSize2D(name).second;
+    out.reserve(size);
+    for (int i = 0; i < size; ++i) out.append(storage->getGlobalStr1D(name, i));
+    return out;
+}
+
 int ExpressionEvaluator::charaCount(VariableStorage *storage) const {
     if (m_charaNumProvider) return m_charaNumProvider();
     if (!storage) return 0;
@@ -1453,6 +1486,28 @@ bool ExpressionEvaluator::evaluateBuiltin(const FunctionNode &node, VariableStor
     case BuiltinOp::FindLastElement: {
         const VariableNode* var = argVar(node, 0);
         if (!var) { out = QVariant::fromValue<qint64>(-1); return true; }
+        // 字符串数组（BASENAME/ABLNAME/…）：按字符串比较（对齐 C# FINDELEMENT 的字符串分支）。
+        // 否则会被 readIntArray 当整数读成全 0，恒返回 0。
+        const bool strArray = (var->valueType() == OperandType::Str)
+                              || (storage && storage->isCharaDataString(var->name()));
+        if (strArray) {
+            const QList<QString> values = readStrArray(*var, storage);
+            const int start = node.arguments().size() > 2 ? static_cast<int>(I(2)) : 0;
+            const int end = node.arguments().size() > 3 ? static_cast<int>(I(3)) : values.size();
+            const QString target = argStr(node, 1, storage, gameBaseData);
+            qint64 found = -1;
+            if (op == BuiltinOp::FindElement) {
+                for (int i = qMax(0, start); i < qMin(end, values.size()); ++i) {
+                    if (values.at(i) == target) { found = i; break; }
+                }
+            } else {
+                for (int i = qMin(end, values.size()) - 1; i >= qMax(0, start); --i) {
+                    if (values.at(i) == target) { found = i; break; }
+                }
+            }
+            out = QVariant::fromValue<qint64>(found);
+            return true;
+        }
         const QList<qint64> values = readIntArray(*var, storage, gameBaseData, false);
         const int start = node.arguments().size() > 2 ? static_cast<int>(I(2)) : 0;
         const int end = node.arguments().size() > 3 ? static_cast<int>(I(3)) : values.size();

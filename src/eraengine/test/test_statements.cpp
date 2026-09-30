@@ -289,6 +289,19 @@ int main(int argc, char* argv[]) {
         check(storage.getLocalInt(0) == 5 && storage.getLocalInt(7) == 5,
               "VARSET LOCAL [0,8) = 5");
 
+        // --- FINDELEMENT 字符串数组：必须按字符串比较 ---
+        // eraTW 的 BASE_BAR 用 `FINDELEMENT(BASENAME, "体力")` 取元素下标；
+        // 以前被 readIntArray 当整数读 -> 恒 0，于是体力/気力 都指向同一槽，
+        // 两根条「一起变」。这里用 #DIMS 字符串数组复现。
+        storage.setGlobalStr1D("VSSARR", 0, QStringLiteral("体力"));
+        storage.setGlobalStr1D("VSSARR", 1, QStringLiteral("気力"));
+        {
+            const QSharedPointer<ExpressionNode> ast =
+                table.expressionAst(QStringLiteral("FINDELEMENT(VSSARR, \"気力\")"));
+            const qint64 idx = ast ? evaluator.evaluate(*ast, &storage, nullptr).toLongLong() : -999;
+            check(idx == 1, "FINDELEMENT 字符串数组按字符串比较（気力 -> 1）");
+        }
+
         // --- CVARSET：逐角色设置同一元素 ---
         storage.setCharaInt("CFLAG", 0, 5, 1);
         storage.setCharaInt("CFLAG", 2, 5, 1);

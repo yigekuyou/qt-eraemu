@@ -162,6 +162,8 @@ private:
     // 数组：读一维整型数组内容 / 取长度（对齐 C# VariableTerm 的数组访问）
     QList<qint64> readIntArray(const VariableNode &var, VariableStorage *storage,
                                GameBaseData *gameBaseData, bool charaRange) const;
+    // 字符串一维数组内容（FINDELEMENT 等需要按字符串比较，如 BASENAME/ABLNAME）
+    QList<QString> readStrArray(const VariableNode &var, VariableStorage *storage) const;
     [[nodiscard]] int charaCount(VariableStorage *storage) const;
 
     // TOINT / ISNUMERIC 的 Emuera 语义（对齐 C# ToIntMethod / IsNumericMethod）

@@ -57,6 +57,27 @@ int main(int argc, char** argv) {
     run("FOR expression index", {"B = 2", "FOR A:B, 0, 3", "CHECK += A:2 + 1", "NEXT"}, 6);
     run("FOR descending/empty/zero step", {"FOR A, 3, 0, -1", "CHECK += A", "NEXT", "FOR A, 1, 1", "CHECK = 999", "NEXT",
         "FOR A, 0, 9, 0", "CHECK = 999", "NEXT", "WHILE 0", "CHECK = 999", "WEND"}, 6);
+    // 调用族：以前只实现了 CALL，CALLFORM/TRYCALL/TRYCALLFORM 全被静默跳过
+    // （eraTW `CALLFORM CUSTOM_%ARGS%_MENU(ARG)` 不执行 -> 菜单空白）。
+    run("CALLFORM 格式化标签", {
+        "A = 7",
+        "CALLFORM SUB_%A%(A)",
+        "RETURN",
+        "@SUB_7(NUM)",
+        "CHECK = NUM * 10",
+        "RETURN"}, 70);
+    run("TRYCALL 存在则调用", {
+        "TRYCALL SUB_9",
+        "CHECK += 1",
+        "RETURN",
+        "@SUB_9",
+        "CHECK = 5",
+        "RETURN"}, 6);
+    run("TRYCALLFORM 不存在则静默跳过", {
+        "A = 3",
+        "CHECK = 1",
+        "TRYCALLFORM NOPE_%A%",
+        "CHECK += 1"}, 2);
     run("CASE mixed forms", {"SELECTCASE 5", "CASE 1, 4 TO 6, IS > 10", "CHECK = 1", "CASEELSE", "CHECK = 999", "ENDSELECT"}, 1);
     run("CASE reversed range", {"SELECTCASE 5", "CASE 6 TO 4", "CHECK = 999", "CASEELSE", "CHECK = 1", "ENDSELECT"}, 1);
     run("CASE string relation", {"SELECTCASE \"abc\"", "CASE IS > \"zzz\"", "CHECK = 999", "CASE IS < \"def\"", "CHECK = 1", "ENDSELECT"}, 1);

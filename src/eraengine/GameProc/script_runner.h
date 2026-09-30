@@ -135,6 +135,13 @@ private:
     bool evalInt(const QSharedPointer<ExpressionNode>& ast, const QString& raw, qint64& out);
     bool evalCondition(const LogicalLine& line, bool& out);
 
+    // 调用族（CALL / TRYCALL / CALLFORM / TRYCALLFORM / TRYCCALLFORM）统一实现。
+    //   isForm: 标签名是格式化串（`CUSTOM_%ARGS%_MENU`），运行期展开
+    //   isTry : 找不到函数不报错（TRY…）
+    ExecState doCallLine(const LogicalLine& line, bool isForm, bool isTry);
+    // 把 CALLFORM 的标签名（含 %..%/{..}）展开为实际标签
+    [[nodiscard]] QString expandCallFormLabel(const QString& raw);
+
     // 标签/函数
     int  labelLine(const QString& label) const;
     // GAMEBASE_* 等需要 GameBase 数据（经 ExecutionEngine 取得）

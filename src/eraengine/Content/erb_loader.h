@@ -199,14 +199,14 @@ private:
     QHash<QString, int> m_labelPositions;           // "script:label" -> lineIndex
     QHash<QString, int> m_scriptLineCounts;
 
-    // [qdbug] 修复（eraTW 实测差距）：AST 拍平（装载/拍平）应该是**顺序**的 ——
-    // 并行分块装载存在三类问题（见 era_parse_table.cpp 注释）：
-    //   * 某块的表达式可能先于它调用的 #FUNCTION 被解析，此时只能当「未定义」；
-    //   * worker 的 AST 不在主缓存中，需按行再走一遍；
-    //   * 插入顺序不确定，需按 (脚本名, 行号) 排序兜底。
-    // 拍平结构的意义就是「源码顺序的平铺行表」，装载顺序不确定与其矛盾，
-    // 故默认改为**串行装载**（显式 setParallelLoad(true) 可开并行）。
-    bool m_parallel = false;
+    // [qdbug] 验证（eraTW 实测）：并行拍平与顺序拍平结果**完全一致** ——
+    // dump_lines 串行/并行各导出 2,075,985 行拍平行，diff 完全相同。
+    // 并行合并本身即保序（blockingMapped 结果按输入序返回、主线程按序合并）；
+    // 并行解析期的三类不确定性（「未定义」解析 / worker AST 缓存缺失 /
+    // 插入顺序）已由 finalizeParse 的重绑 + labels() 的 (脚本名,行号) 排序 +
+    // 懒加载解析兜底。保持并行默认（性能收益），显式 setParallelLoad(false)
+    // 可退回串行（dump_lines --parallel 可复核一致性）。
+    bool m_parallel = true;
     int  m_maxThreads = 0;
     int  m_chunkSize = 64;
 

@@ -28,8 +28,11 @@
 //
 // 每行格式：脚本名<TAB>行号<TAB>kind<TAB>labelName<TAB>原文(截断)
 //
-// 用法： dump_lines <gameDir> [outFile] [--script NAME]
+// 用法： dump_lines <gameDir> [outFile] [--script NAME] [--parallel]
 //   --script NAME 只导出指定脚本（大库全量导出会很慢，先定位再导）
+//   --parallel 用并行分块装载（默认串行）：与顺序装载对比，验证
+//   「并行拍平 == 顺序拍平」—— 两次导出走同一确定性顺序（脚本名字典序
+//   + 行号升序），diff 两份导出即可核对一致性。
 // ---------------------------------------------------------------------------
 #include <QCoreApplication>
 #include <QDebug>
@@ -41,7 +44,7 @@
 int main(int argc, char* argv[]) {
     QCoreApplication app(argc, argv);
     if (argc < 2) {
-        qWarning() << "usage: dump_lines <gameDir> [outFile] [--script NAME]";
+        qWarning() << "usage: dump_lines <gameDir> [outFile] [--script NAME] [--parallel]";
         return 2;
     }
     const QString dir = QString::fromLocal8Bit(argv[1]);
@@ -49,10 +52,13 @@ int main(int argc, char* argv[]) {
                                 ? QString::fromLocal8Bit(argv[2]) : QString();
 
     QString onlyScript;
+    bool useParallel = false;
     for (int i = 2; i < argc; ++i) {
         if (QString::fromLocal8Bit(argv[i]) == QLatin1String("--script")
             && i + 1 < argc) {
             onlyScript = QString::fromLocal8Bit(argv[i + 1]);
+        } else if (QString::fromLocal8Bit(argv[i]) == QLatin1String("--parallel")) {
+            useParallel = true;
         }
     }
 
@@ -60,6 +66,8 @@ int main(int argc, char* argv[]) {
     timer.start();
 
     EraEngine engine;
+    // 并行模式：装载前显式开启（验证并行拍平与顺序拍平结果一致）
+    if (useParallel) engine.getExecutionEngine()->getErbLoader().setParallelLoad(true);
     engine.setGameDirectory(dir);
 
     const EraParseTable* table = engine.getParseTable();

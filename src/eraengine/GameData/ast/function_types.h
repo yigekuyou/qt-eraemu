@@ -212,6 +212,11 @@ inline constexpr BuiltinFunctionSpec kBuiltinFunctions[] = {
     {"INRANGECARRAY"       , OperandType::Int, 3, 6, "viii", false, BuiltinOp::InRangeCharaArray},
     {"GETNUMB"             , OperandType::Int, 2, 2, "vs", false, BuiltinOp::GetNum},
     {"ARRAYMSORT"          , OperandType::Int, 2, -1, "v", false, BuiltinOp::None},
+    // [qdbug] C# 原版全量：STRLEN/STRLENU 是基础版正式名（BuiltInFunctionCode.cs:111/114，
+    //   STRLENS/STRLENSU 在 C# 基础版被注释、属 EE 扩展名 —— 两套名字都收，
+    //   语义一致：STRLEN/STRLENS=字节数，STRLENU/STRLENSU=字符数）
+    {"STRLEN"              , OperandType::Int, 1, 1, "s", true , BuiltinOp::StrLen},
+    {"STRLENU"             , OperandType::Int, 1, 1, "s", true , BuiltinOp::StrLenU},
     {"STRLENS"             , OperandType::Int, 1, 1, "s", true , BuiltinOp::StrLen},
     {"STRLENSU"            , OperandType::Int, 1, 1, "s", true , BuiltinOp::StrLenU},
     {"SUBSTRING"           , OperandType::Str, 1, 3, "sii", true , BuiltinOp::Substring},

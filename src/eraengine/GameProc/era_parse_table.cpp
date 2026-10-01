@@ -622,12 +622,24 @@ bool EraParseTable::jumpToLabel(const QString& label) {
 }
 
 bool EraParseTable::callLabel(const QString& label, bool advanceWasCalled) {
+    // [qdbug] 修复（eraMegaten 实测差距）：CALL 只能调用 **@函数标签**
+    //   （对齐 C# FunctionIdentifierDictionary：函数字典只收 @label，
+    //   $GOTO 标签不可调用）。eraMegaten 的 SYSTEM_TITLE.erb:127
+    //   `$PRINT_TITLE`（GOTO 标签）与 TITLE_STOCK.ERB:17 `@PRINT_TITLE`
+    //   同名共存，此前 CALL 优先命中当前脚本的 $ 标签 -> 自跳死循环。
+    //   此处命中行必须是 FunctionLabel，否则继续向后找（跨脚本）。
+    const auto callable = [this](const QString& sn, int pos) -> bool {
+        const ScriptData* d = script(sn);
+        return d && pos >= 0 && pos < d->lines.size()
+               && d->lines.at(pos).kind == LineKind::FunctionLabel;
+    };
     QString targetScript = m_currentScript;
     int target = getLabelPosition(m_currentScript, label);
-    if (target < 0) {
+    if (target < 0 || !callable(targetScript, target)) {
+        target = -1;
         for (auto it = m_scripts.constBegin(); it != m_scripts.constEnd(); ++it) {
             const int pos = it.value().labelPositions.value(label, -1);
-            if (pos >= 0) {
+            if (pos >= 0 && callable(it.key(), pos)) {
                 targetScript = it.key();
                 target = pos;
                 break;

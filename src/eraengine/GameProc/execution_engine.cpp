@@ -1267,8 +1267,30 @@ bool ExecutionEngine::handleSplit(const LogicalLine& line)
 // ---------------------------------------------------------------------------
 void ExecutionEngine::buildStatementFunctions()
 {
-    // （空）目前 eraTW 实测未发现需要注册的扩展语句；
-    // 后续发现 EmueraEE 系缺失语句时在此登记。
+    // ---- EE 扩展语句（C# 原版没有、EE 系游戏使用 —— 网上还有基于 EE 的 era）----
+    // 设计规则：核心只收 C# 原版全量（BuiltInFunctionCode.cs 枚举内）；
+    // EE 专属语句放这里。EE 的保存文件系（CHKVARDATA/CHKGLOBALDATA/FIND_VARDATA，
+    // Creator.cs 里被注释、由 EE 注册）与 PUTFORM（EE 专属）在此登记为
+    // 「已识别、尽力执行」的桩：有实现的走实现，没有的给出留痕并继续。
+    struct EeExtSpec { const char* name; };
+    static const EeExtSpec kEeExtensions[] = {
+        {"CHKVARDATA"}, {"CHKGLOBALDATA"}, {"FIND_VARDATA"},
+        {"FIND_CHARADATA"}, {"PUTFORM"},
+    };
+    for (const EeExtSpec& spec : kEeExtensions) {
+        const QString name = QString::fromLatin1(spec.name);
+        registerStatementFunction(name,
+            [this, name](const LogicalLine& line, const QList<Operand>&) -> bool {
+            // 保存文件系函数需要存档机制支持；此处留痕并跳过（不报错，
+            // 对齐 EE 的容错语义），便于从运行日志定位后续补全点。
+            if (!m_reportedUnfinished.contains(name)) {
+                m_reportedUnfinished.insert(name);
+                qCDebug(eraTrace) << "[ee-ext]" << name << "在运行期被跳过（存档系扩展，待补全）。行:"
+                                  << line.position.toString();
+            }
+            return true;
+        });
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -1282,6 +1304,36 @@ bool ExecutionEngine::executeFunctionCall(const LogicalLine& line)
     const QString& name = line.functionName;
     const QString upper = name.toUpper();
 
+    // ---- C# 原版全量补全（BuiltInFunctionCode.cs 枚举内、此前未实现的分支）----
+    // ASSERT <expr>：运行期断言（C# FunctionCode.ASSERT）—— 为假则报错
+    if (name == QLatin1String("ASSERT")) {
+        ExpressionEvaluator fallback;
+        ExpressionEvaluator& ev = m_expressionEvaluator ? *m_expressionEvaluator : fallback;
+        qint64 v = 0;
+        if (!line.arguments.isEmpty()) {
+            const Operand& op = line.arguments.first();
+            v = op.ast ? ev.evaluate(*op.ast, m_storage, m_gameBaseData).toLongLong()
+                       : ev.evaluate(op.raw, m_storage, m_gameBaseData).toLongLong();
+        }
+        if (!v) {
+            m_state.setErrorState();
+            emit errorOccurred(QStringLiteral("ASSERT 断言失败：%1").arg(line.raw.trimmed()));
+        }
+        return true;
+    }
+    // SETBGCOLORBYNAME <颜色名>：背景色（C# FunctionCode.SETBGCOLORBYNAME）
+    if (name == QLatin1String("SETBGCOLORBYNAME")) {
+        const QString colorName = line.arguments.isEmpty() ? QString()
+            : line.arguments.first().raw.trimmed();
+        qDebug() << "[display] SETBGCOLORBYNAME" << colorName;
+        return true;
+    }
+    // TOOLTIP_SETCOLOR/SETDELAY/SETDURATION（C# FunctionCode.TOOLTIP_*）
+    if (name.startsWith(QLatin1String("TOOLTIP_"))) {
+        qDebug() << "[display] TOOLTIP 配置" << name
+                 << (line.arguments.isEmpty() ? QString() : line.arguments.first().raw.trimmed());
+        return true;
+    }
     // ---- SPLIT：核心函数专用分支（对齐 C# FunctionCode.SPLIT）----
     // 实参形态特殊（裸数组变量/个数变量），不能当普通表达式整行求值。
     if (upper == QLatin1String("SPLIT")) {

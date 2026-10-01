@@ -756,6 +756,35 @@ ExecState ScriptRunner::executeLine(const LogicalLine& line) {
         return ExecState::Continue;
     }
 
+    // ---- RETURNFORM（对齐 C# FunctionCode.RETURNFORM：字符串 FORM 返回）----
+    //   RETURNFORM <格式串> -> RESULTS:0 = 展开结果（RESULTS 全局，跨函数共享）
+    //   然后与 RETURN 相同地弹栈返回。此前未实现 -> 落「其它指令」静默跳过，
+    //   函数返回值丢失。eraTW 基础版枚举（BuiltInFunctionCode.cs）含 RETURNFORM。
+    if (name == QLatin1String("RETURNFORM")) {
+        ExpressionEvaluator fallback;
+        ExpressionEvaluator* ev = m_evaluator ? m_evaluator : &fallback;
+        m_lastReturnValue = QVariant::fromValue<qint64>(0);
+        if (!line.arguments.isEmpty()) {
+            const Operand& op = line.arguments.first();
+            QString text;
+            if (op.isString) text = op.raw;
+            else if (op.ast) {
+                const auto resolve = [this](const QString& e) {
+                    return m_table ? m_table->expressionAst(e)
+                                   : QSharedPointer<ExpressionNode>(); };
+                const QSharedPointer<ExpressionNode> form = StrFormParser::parse(op.raw, resolve);
+                text = form ? ev->evaluate(*form.staticCast<ExpressionNode>(), m_storage, baseData()).toString()
+                            : ev->evaluate(op.raw, m_storage, baseData()).toString();
+            } else {
+                text = ev->evaluate(op.raw, m_storage, baseData()).toString();
+            }
+            // RESULTS 全局（C# VariableData.cs:202，跨函数共享）
+            m_storage->setGlobalStr1D(QStringLiteral("RESULTS"), 0, text);
+            m_storage->setLocalStr(0, text);
+        }
+        if (!returnFromCall()) return ExecState::Halt;
+        return ExecState::Continue;
+    }
     if (name == QLatin1String("RETURN") || name == QLatin1String("RETURNF")) {
         m_lastReturnValue = QVariant::fromValue<qint64>(0);
         ExpressionEvaluator fallback;

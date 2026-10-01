@@ -64,6 +64,9 @@ ExecutionEngine::ExecutionEngine(VariableStorage* storage, GameBaseData* gameBas
 
     // Initialize function system
     m_functionSystem = new FunctionSystem(this);
+
+    // 扩展函数注册表（只收 C# 原型没有的扩展语句；核心函数走专用分支）
+    buildStatementFunctions();
 }
 
 ExecutionEngine::~ExecutionEngine() {
@@ -1040,6 +1043,17 @@ bool ExecutionEngine::executeInstruction(const LogicalLine& line) {
     // 以前 ArgKind::VarSet 只在 argument_parser 里登记、执行期没有任何分支，
     // 于是 `PRINT_STATE.ERB:336 VARSET TLNT_CNT` 之类的清空被**静默跳过**，
     // 计数器不清零 -> 素質/性的特徴 列表越叠越长。
+    // ---- SPLIT（核心函数，对齐 C# FunctionCode.SPLIT / SpSplitArgument）----
+    //   装载期第3引数（裸数组变量，如 STR_ARRAY）不做表达式归约，
+    //   整行**不是**函数调用形态（SPLIT 不在 kBuiltinFunctions 表），
+    //   因此走不到 executeFunctionCall 的专用分支 —— 必须在指令分发处处理。
+    //   此前落到「其它指令」被静默忽略 -> STR_ARRAY 永不填充 ->
+    //   eraTW 的 @TEXTR（COMMON.ERB:229）返回空串，随机抽选全链失效。
+    if (name == QLatin1String("SPLIT")) {
+        if (handleSplit(line)) return true;
+        reportUnfinished(QStringLiteral("SPLIT（参数不足）"), name, line);
+        return true;
+    }
     if (name == QLatin1String("VARSET") || name == QLatin1String("SETS")
         || name == QLatin1String("VAR_SET") || name == QLatin1String("SET")) {
         return handleVarSet(line, false);
@@ -1114,8 +1128,115 @@ bool ExecutionEngine::executeInstruction(const LogicalLine& line) {
     if (name.startsWith(QLatin1String("DEBUGPRINT"))) {
         return true;
     }
+    // [qdbug]（保留的调试桩）：落到「其它指令」的**每一次**执行都留痕 ——
+    // reportUnfinished 同名只报一次，会漏掉后续出现的同型行；
+    // EMUERA_QDBUG_TRACE=1 时逐次输出，便于定位「指令被静默跳过」的完整现场
+    //（如 SPLIT 此前被静默跳过、COLOREDMAP 的 TRY 失败等）。
+    if (qEnvironmentVariableIsSet("EMUERA_QDBUG_TRACE")) {
+        qCDebug(eraTrace) << "[qdbug] other-instruction" << name
+                          << "行" << line.position.toString()
+                          << "|" << line.raw.trimmed().left(60);
+    }
     reportUnfinished(QStringLiteral("指令"), name, line);
     return true;
+}
+
+// ---------------------------------------------------------------------------
+// 语句型函数注册表（高扩展接口）
+//
+// 对齐 C# Process.ScriptProc.cs 的 FunctionCode.SPLIT 等专用分支 +
+// SpXxxArgument：这类语句的实参形态特殊（裸数组变量 / 个数变量），
+// 不能当普通表达式整行求值。注册表把「名字 -> 执行器」集中管理，
+// 新增语句型函数只需 registerStatementFunction() 一行 + 一个 lambda，
+// 不必再往 executeFunctionCall 的通用路径里塞 if 分支。
+// ---------------------------------------------------------------------------
+void ExecutionEngine::registerStatementFunction(const QString& name, StatementFn fn)
+{
+    m_statementFunctions.insert(name.toUpper(), std::move(fn));
+}
+
+// ---------------------------------------------------------------------------
+// SPLIT（**核心函数**，对齐 C# FunctionCode.SPLIT / SpSplitArgument）
+//
+// 设计规则：C# 原型（Process.ScriptProc.cs）已有的函数一律走核心引擎分支，
+// 不进语句函数注册表；注册表只收「C# 原型没有的扩展函数」（EmueraEE 系）。
+//
+//   SPLIT <字符串>, <分隔串>, <数组变量>[, <个数变量>]
+//   * 第3引数必须是**数组变量**；第4引数可省略，省略时个数写 RESULT:0
+//   * 分割后全部元素从数组下标 0 依次写入（超出数组长度时截断，C# 同款）
+//   * 元素个数写入第4变量（或 RESULT:0）
+// 此前没有执行分支：`SPLIT ARGS, "/", STR_ARRAY` 被静默跳过，
+// STR_ARRAY 永不填充 -> eraTW 的 @TEXTR（COMMON.ERB:229）返回空串，
+// 特典/能力文本/処女喪失履歴 等随机抽选全链失效。
+// ---------------------------------------------------------------------------
+bool ExecutionEngine::handleSplit(const LogicalLine& line)
+{
+    ExpressionEvaluator fallback;
+    ExpressionEvaluator& ev = m_expressionEvaluator ? *m_expressionEvaluator : fallback;
+    const auto evalStr = [&](const Operand& op) -> QString {
+        if (op.isString) return op.raw;
+        return op.ast ? ev.evaluate(*op.ast, m_storage, m_gameBaseData).toString()
+                      : ev.evaluate(op.raw, m_storage, m_gameBaseData).toString();
+    };
+    // 顶层逗号切分（逗号可能是独立 Operand，也可能是表达式的一部分）
+    QList<Operand> parts;
+    for (const Operand& op : line.arguments) {
+        if (op.raw == QLatin1String(",")) continue;
+        parts.append(op);
+    }
+    if (parts.size() < 3) return false;   // 参数不足：交给通用路径留痕
+
+    const QString target = evalStr(parts[0]);
+    const QString delimiter = evalStr(parts[1]);
+    const QString arrRaw = parts[2].raw.trimmed();
+    if (arrRaw.isEmpty()) return false;
+    // 裸数组变量名（剥掉 STR_ARRAY:i 下标形态，取首标识符）
+    QString arrName;
+    for (int i = 0; i < arrRaw.size(); ++i) {
+        const QChar c = arrRaw.at(i);
+        if (!(c.isLetterOrNumber() || c == QLatin1Char('_') || c.unicode() > 127)) break;
+        arrName += c;
+    }
+    if (arrName.isEmpty()) return false;
+
+    const QStringList elements = delimiter.isEmpty()
+        ? QStringList{ target }
+        : target.split(delimiter, Qt::KeepEmptyParts);
+
+    // 全部元素从下标 0 依次写入（复用字符串赋值路径：
+    // 参数/ARGS/LOCALS/角色变量/全局变量 的解析逻辑保持一致）
+    for (int i = 0; i < elements.size(); ++i) {
+        handleStringAssignment(arrRaw.left(arrRaw.size() - arrName.size())
+                                   + arrName + QLatin1Char(':') + QString::number(i),
+                               elements.at(i));
+    }
+
+    // 个数：第4变量（可省略）-> 否则 RESULT:0
+    if (parts.size() >= 4) {
+        const QString cntRaw = parts[3].raw.trimmed();
+        if (!cntRaw.isEmpty()) {
+            handleAssignment(cntRaw, QString::number(elements.size()));
+        }
+    } else {
+        m_storage->setSystemVariable(QStringLiteral("RESULT"), 0, elements.size());
+    }
+    qDebug() << "[funcstmt] SPLIT ->" << elements.size() << "个元素 行"
+             << line.position.toString();
+    return true;
+}
+
+// ---------------------------------------------------------------------------
+// 语句型函数注册表（**扩展函数专用**，高扩展接口）
+//
+// 设计规则：只有 **C# 原型没有的函数**（eraTW 依赖的 EmueraEE/EM 扩展系
+// 内建语句）才进注册表；C# 原型已有的函数（SPLIT/REPLACE/VARSET 等）
+// 一律走核心引擎分支（executeFunctionCall / executeInstruction 的专用分支）。
+// 新增扩展函数只需 registerStatementFunction() 一行 + 一个 lambda。
+// ---------------------------------------------------------------------------
+void ExecutionEngine::buildStatementFunctions()
+{
+    // （空）目前 eraTW 实测未发现需要注册的扩展语句；
+    // 后续发现 EmueraEE 系缺失语句时在此登记。
 }
 
 // ---------------------------------------------------------------------------
@@ -1129,8 +1250,21 @@ bool ExecutionEngine::executeFunctionCall(const LogicalLine& line)
     const QString& name = line.functionName;
     const QString upper = name.toUpper();
 
-    // 先在实例里去重登记：即便求值器自己也报过，这里给出**行号 + 原文**，
-    // 便于直接从运行日志定位是哪个脚本的哪一行没实现。
+    // ---- SPLIT：核心函数专用分支（对齐 C# FunctionCode.SPLIT）----
+    // 实参形态特殊（裸数组变量/个数变量），不能当普通表达式整行求值。
+    if (upper == QLatin1String("SPLIT")) {
+        return handleSplit(line);
+    }
+
+    // ---- 语句型函数注册表（扩展函数专用：C# 原型没有的函数）----
+    // 注册表命中即执行，未命中落到下面的通用路径。
+    if (!m_statementFunctions.isEmpty()) {
+        const auto reg = m_statementFunctions.constFind(upper);
+        if (reg != m_statementFunctions.constEnd()) {
+            if (reg.value()(line, line.arguments)) return true;
+        }
+    }
+
     const bool unfinished = !line.arguments.isEmpty() && !line.arguments.first().ast;
 
     QVariant value;
@@ -1205,6 +1339,16 @@ bool ExecutionEngine::handleStringAssignment(const QString& lhs, const QString& 
         : evalExpressionCached(m_parseTable, evaluator, rhs, m_storage, m_gameBaseData);
         value = rhsValue.toString();
     }
+
+    // [qdbug] 字符串赋值跟踪（保留的调试桩）：追查 eraTW 的右值展开问题 ——
+    //   * MOBGIRL_GENERATOR.ERB:146 `CSTR:ARG:路人子種族 = %ARGS%` 落到字面 "ARGS"；
+    //   * 同文件 1059/1061 `処女喪失履歴 = 献给了%TEXTR(...)%...` 的 %..% 段丢失。
+    // rhs 是解析期原文、value 是运行期求值结果；若两者语义不符
+    // （%ARGS% 原样写入 / %..% 段被截断），即为展开链路缺陷。
+    // 用 QT_LOGGING_RULES="era.trace.debug=true" 打开。
+    qCDebug(eraTrace) << "[qdbug] str-assign" << lhs << "<-" << trimmed
+                      << "=> value =" << value
+                      << "(ast?" << (ast != nullptr) << ")";
 
     if (m_storage->hasParameter(varName)) {
         m_storage->setParameter(varName, value);

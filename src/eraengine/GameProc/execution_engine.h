@@ -24,6 +24,7 @@
 #include <QList>
 #include <QQueue>
 #include <QHash>
+#include <functional>
 #include "variable_storage.h"
 #include "ast/logical_line.h"
 #include "erb_loader.h"
@@ -117,7 +118,22 @@ signals:
 public:
     // Execute a single instruction (public for testing)
     bool executeInstruction(const LogicalLine& line);
-    
+
+    // ---- 语句型函数注册表（扩展函数专用，高扩展接口）----
+    // 设计规则：只有 **C# 原型没有的函数**（eraTW 依赖的 EmueraEE/EM 扩展系
+    // 内建语句）才进注册表；C# 原型已有的函数（SPLIT/REPLACE/VARSET 等）
+    // 一律走核心引擎分支。注册表把「名字 -> 执行器」集中管理，
+    // 新增扩展函数只需 registerStatementFunction() 一行 + 一个 lambda。
+    using StatementFn = std::function<bool(const LogicalLine& line, const QList<Operand>& args)>;
+    void registerStatementFunction(const QString& name, StatementFn fn);
+
+private:
+    // 一次性建表（构造函数里调用；扩展语句在此登记）
+    void buildStatementFunctions();
+    QHash<QString, StatementFn> m_statementFunctions;
+    // SPLIT：核心函数专用分支（对齐 C# FunctionCode.SPLIT / SpSplitArgument）
+    bool handleSplit(const LogicalLine& line);
+
 private:
     
     // PRINT 族统一出口（对齐 C# PRINT_Instruction）：形态由指令名后缀决定

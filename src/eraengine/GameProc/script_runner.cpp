@@ -208,6 +208,16 @@ bool ScriptRunner::stepOnce() {
     }
 
     const LogicalLine& line = sd->lines.at(pc);
+    // [qdbug] 逐行执行跟踪（保留的调试桩）：高频率输出，仅在
+    // EMUERA_QDBUG_TRACE=1 时启用；可用 EMUERA_QDBUG_TRACE_FILE 过滤脚本名
+    // （如 COMMON.ERB）把开销降到可控 —— 追查「CHOICE 体内 INPUT 未等待、
+    // 执行穿透到下一条指令」这类控制流缺陷时打开。
+    if (qEnvironmentVariableIsSet("EMUERA_QDBUG_TRACE")
+        && (m_qdbugTraceFile.isEmpty() || line.position.filename.contains(m_qdbugTraceFile))) {
+        qCDebug(eraTrace) << "[qdbug] line" << line.position.toString()
+                          << "|" << line.raw.trimmed().left(60)
+                          << "| depth" << m_table->depth();
+    }
     // 函数体边界（C# FunctionLabelLine 终止上一个函数体）：
     // 落入的不是本帧入口的 @label = 上一函数已自然结束、无 RETURN/RETURNF。
     // #FUNCTIONS 缺省返回**空字符串**（eraTW 依赖 STRLENS(GET_TALENTNAME(...))
@@ -687,6 +697,10 @@ ExecState ScriptRunner::executeLine(const LogicalLine& line) {
             emit errorOccurred(QStringLiteral("GOTO label not found: %1").arg(label));
             return ExecState::Error;
         }
+        // [qdbug] GOTO 跳转跟踪（保留的调试桩）：追查 eraTW 口上选择之后
+        // 「ADD_ALL_CHARACTERS 的 FOR 循环未继续、执行直接落到 CHARA_STATE@69」
+        // 之类的跳转异常；QT_LOGGING_RULES="era.trace.debug=true" 打开。
+        qCDebug(eraTrace) << "[qdbug] GOTO" << label << "from" << line.position.toString();
         return ExecState::Continue;
     }
     // ---- 调用族：CALL / TRYCALL / CALLFORM / TRYCALLFORM / TRYCCALLFORM ----
@@ -770,6 +784,11 @@ ExecState ScriptRunner::executeLine(const LogicalLine& line) {
             }
             m_lastReturnValue = QVariant::fromValue<qint64>(values.first());
         }
+        // [qdbug] RETURN 跟踪（保留的调试桩）：追查 eraTW「KOJO_MULTIPLE 返回 2 后
+        // ADD_ALL_CHARACTERS 的 FOR 循环未继续」类返回/弹栈异常；
+        // QT_LOGGING_RULES="era.trace.debug=true" 打开。
+        qCDebug(eraTrace) << "[qdbug] RETURN from" << line.position.toString()
+                          << "ret =" << m_lastReturnValue;
         if (!returnFromCall()) {
             // 顶层 RETURN：脚本结束
             return ExecState::Halt;
@@ -1131,8 +1150,13 @@ ExecState ScriptRunner::doCallLine(const LogicalLine& line, bool isForm, bool is
 {
     QString label = line.arguments.isEmpty() ? QString() : line.arguments.first().raw;
     if (isForm) label = expandCallFormLabel(label);
+    // [qdbug]（保留的调试桩）：CALL 增加脚本名与源码位置。currentLine() 是
+    // 0 基内部行号（比 ERB 源码行号小 1），line.position 才是源码位置；
+    // 两者并列便于对照 eraTW 原始代码。
     qDebug() << "[exec] CALL" << (isForm ? "(form)" : "") << label
-             << (isTry ? "(try)" : "") << "line" << m_table->currentLine();
+             << (isTry ? "(try)" : "") << "line" << m_table->currentLine()
+             << "src" << line.position.toString()
+             << "script" << m_table->currentScript();
 
     if (label.isEmpty()) {
         m_state->setErrorState();

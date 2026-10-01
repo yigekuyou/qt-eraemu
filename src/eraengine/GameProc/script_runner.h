@@ -182,6 +182,8 @@ private:
     QHash<QString, VariableStorage::LocalContext> m_functionLocals;
     QList<CallContext> m_callContexts;   // Caller locals and loop depth, restored on every return
     bool m_running = false;
+    // [qdbug] 逐行跟踪的脚本名过滤器（EMUERA_QDBUG_TRACE_FILE，空=不过滤）
+    QString m_qdbugTraceFile = qEnvironmentVariable("EMUERA_QDBUG_TRACE_FILE");
     bool m_printed = false;
     bool m_continuingSlice = false;
     QVariant m_lastReturnValue;

@@ -274,3 +274,7 @@ eraengine_add_test(dump_warnings)
 # 工具：把游戏目录的文本文件规范化为 UTF-8（dry-run 缺省）
 eraengine_add_test(text_convert)
 eraengine_add_test(expr_probe)
+# qdbug 桩：字符串赋值右值求值诊断（eraTW「種族：[ARGS]」根因复现）
+eraengine_add_test(qdbug_probe)
+# qdbug 桩：拍平行表导出（确定性顺序，供离线核对拍平是否保序）
+eraengine_add_test(dump_lines)

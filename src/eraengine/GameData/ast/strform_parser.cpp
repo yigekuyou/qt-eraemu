@@ -26,12 +26,31 @@ bool StrFormParser::hasForm(const QString& text) {
     return first >= 0 && findPercentEnd(text, first + 1) > 0;
 }
 
-// `%expr%` 的右端 `%`：只跳括号嵌套，**不**把引号当特殊字符
+// `%expr%` 的右端 `%`：只跳括号嵌套与 \@...\@ 跨度，**不**把引号当特殊字符
 // （C# 用 LexEndWith.Percent 单独做词法，引号只在表达式内部有含义）
+//
+// [qdbug] 修复（eraTW 实测差距）：此前不知道 \@...\@（条件三元）跨度，
+// `%\@ cond ? A # %ARGS% \@%` 的内层 %ARGS% 的 % 被当成顶层结束符，
+// 三元的右分支被截断、变量名落成字面文本 —— MOBGIRL_GENERATOR.ERB:145
+// `ARGS = %\@ ARGS == "販売員" ? 因幡 # %ARGS% \@%` 被求值成 "ARGS"
+// 并写进 ARGS:0，下一行 `CSTR:ARG:路人子種族 = %ARGS%` 再读出毒化值，
+// 路人子素質栏显示「種族：[…][ARGS]」。对齐 C# LexicalAnalyzer：
+// AnalyseFormattedString 的 \@ 跨度先于 % 词法，右分支完整保留。
 int StrFormParser::findPercentEnd(const QString& text, int from) {
     int depth = 0;
     for (int i = from; i < text.size(); ++i) {
         const QChar ch = text.at(i);
+        // \@ ... \@ —— 条件三元跨度：整体跳过（其中的 %..% 属于三元分支）
+        if (ch == QLatin1Char('\\') && i + 1 < text.size()
+            && text.at(i + 1) == QLatin1Char('@')) {
+            int j = i + 2;
+            while (j + 1 < text.size()) {
+                if (text.at(j) == QLatin1Char('\\') && text.at(j + 1) == QLatin1Char('@')) break;
+                ++j;
+            }
+            i = (j + 1 < text.size()) ? j + 1 : text.size();
+            continue;
+        }
         if (ch == QLatin1Char('(') || ch == QLatin1Char('[') || ch == QLatin1Char('{')) { ++depth; continue; }
         if (ch == QLatin1Char(')') || ch == QLatin1Char(']') || ch == QLatin1Char('}')) { if (depth > 0) --depth; continue; }
         if (depth == 0 && ch == QLatin1Char('%')) return i;

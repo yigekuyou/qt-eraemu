@@ -908,7 +908,31 @@ QString VariableStorage::dumpSaveData() const
             }
         }
     }
-    // 系统变量（int/str：DAY/TIME/MONEY 等）
+    // 专用系统变量成员（DAY/MONEY/TIME/ITEM/FLAG/TFLAG/…：m_day 等专用 QList，
+    //   不在 m_systemIntVars 哈希里 —— 此前漏档导致读档后 DAY/MONEY 不还原）
+    //   成员名 -> 系统变量名（restore 侧经 setSystemVariable 的既有分发落位）
+    // 成员名 -> 系统变量名（restore 侧经 setSystemVariable 的既有分发落位）
+    struct DedicatedVar { const QList<qint64>* list; const char* name; };
+    static const DedicatedVar kDedicated[] = {
+        {&m_day, "DAY"},   {&m_money, "MONEY"},   {&m_time, "TIME"},
+        {&m_item, "ITEM"}, {&m_itemsales, "ITEMSALES"}, {&m_noitem, "NOITEM"},
+        {&m_bought, "BOUGHT"}, {&m_pband, "PBAND"}, {&m_flag, "FLAG"},
+        {&m_tflag, "TFLAG"}, {&m_target, "TARGET"}, {&m_master, "MASTER"},
+        {&m_player, "PLAYER"}, {&m_assi, "ASSI"}, {&m_assiplay, "ASSIPLAY"},
+        {&m_up, "UP"}, {&m_down, "DOWN"}, {&m_losebase, "LOSEBASE"},
+        {&m_palamlv, "PALAMLV"}, {&m_explv, "EXPLV"}, {&m_ejac, "EJAC"},
+        {&m_prevcom, "PREVCOM"}, {&m_selectcom, "SELECTCOM"}, {&m_nextcom, "NEXTCOM"},
+        {&m_result, "RESULT"}, {&m_count, "COUNT"},
+        {&m_a, "A"}, {&m_b, "B"}, {&m_c, "C"},
+    };
+    for (const DedicatedVar& dv : kDedicated) {
+        const QList<qint64>& cells = *dv.list;
+        for (int i = 0; i < cells.size(); ++i) {
+            if (cells.at(i) != 0)
+                out << QStringLiteral("SI\t%1\t%2\t%3").arg(QString::fromLatin1(dv.name), QString::number(i)).arg(cells.at(i));
+        }
+    }
+    // 其他系统变量（int/str 哈希）
     for (auto it = m_systemIntVars.constBegin(); it != m_systemIntVars.constEnd(); ++it) {
         if (it.value() != 0)
             out << QStringLiteral("SI\t%1\t%2").arg(it.key()).arg(it.value());
@@ -950,10 +974,18 @@ void VariableStorage::restoreSaveData(const QString& text)
             setCharaInt(f.at(1), f.at(2).toInt(), f.at(3).toInt(), f.at(4).toLongLong());
         } else if (tag == QLatin1String("CS") && f.size() >= 5) {
             setCharaStr(f.at(1), f.at(2).toInt(), f.at(3).toInt(), f.at(4));
-        } else if (tag == QLatin1String("SI") && f.size() >= 3) {
-            setSystemVariable(f.at(1), 0, f.at(2).toLongLong());
-        } else if (tag == QLatin1String("SS") && f.size() >= 3) {
-            setSystemStr(f.at(1).toUpper(), 0, f.at(2));
+        } else if (tag == QLatin1String("SI")) {
+            // 格式 SI\t<名>\t<下标>\t<值>；无下标形态（3 字段）按标量
+            if (f.size() >= 4)
+                setSystemVariable(f.at(1), f.at(2).toInt(), f.at(3).toLongLong());
+            else if (f.size() >= 3)
+                setSystemVariable(f.at(1), 0, f.at(2).toLongLong());
+        } else if (tag == QLatin1String("SS")) {
+            // 格式 SS\t<名>\t<下标>\t<值>；无下标形态（3 字段）按标量
+            if (f.size() >= 4)
+                setSystemStr(f.at(1).toUpper(), f.at(2).toInt(), f.at(3));
+            else if (f.size() >= 3)
+                setSystemStr(f.at(1).toUpper(), 0, f.at(2));
         }
     }
     qCDebug(eraTrace) << "[save] 存档载入：行" << lines.size();

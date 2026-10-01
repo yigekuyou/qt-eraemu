@@ -72,6 +72,10 @@ public:
     void setPrintCLength(int n) { if (n > 0) m_printCLength = n; }
     [[nodiscard]] int printCLength() const { return m_printCLength; }
 
+    // SAVEGLOBAL / LOADGLOBAL 的落盘目录（游戏根目录；由 EraEngine 接线）
+    void setGameDataDir(const QString& dir) { m_gameDataDir = dir; }
+    [[nodiscard]] QString gameDataDir() const { return m_gameDataDir; }
+
     // DRAWLINE 用字符（C# Config.DrawLineString，键「DRAWLINE文字」，默认 "-"）
     void setDrawLineString(const QString& s) { if (!s.isEmpty()) m_drawLineString = s; }
     [[nodiscard]] QString drawLineString() const { return m_drawLineString; }
@@ -122,7 +126,13 @@ private:
     [[nodiscard]] QString padPrintC(const QString& text, bool padLeft) const;
     [[nodiscard]] static int printCWidth(const QString& text);
     bool handleResetData();
+    // LOADGLOBAL / SAVEGLOBAL（对齐 C# VEvaluator.LoadGlobal / SaveGlobal）：
+    // GLOBAL / GLOBALS 系统数组 + `#DIM SAVEDATA GLOBAL` 用户变量 -> save_global.dat。
+    // LOADGLOBAL 成功置 RESULT=1，文件缺失 / 校验失败置 RESULT=0。
     bool handleLoadGlobal();
+    bool handleSaveGlobal();
+    // 游戏唯一码（对齐 C# gamebase.ScriptUniqueCode，由标题/版本派生）
+    [[nodiscard]] qint64 globalUniqueCode() const;
 
     // 语句形式的内部函数（对齐 C# LogicalLineType.Function / METHOD_Instruction）：
     // 整行是一次内建函数调用，返回值写 RESULT（整型）/ RESULTS:0（字符串）。
@@ -179,6 +189,7 @@ private:
     GameBaseData* m_gameBaseData;
     ErbLoader m_erbLoader;
     ProcessState m_state;
+    QString m_gameDataDir;   // SAVEGLOBAL / LOADGLOBAL 的落盘目录
     
     // ParseTable reference for CALL/RETURN integration
     EraParseTable* m_parseTable;

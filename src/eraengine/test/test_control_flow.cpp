@@ -112,11 +112,11 @@ int main(int argc, char** argv) {
         "CHECK = 999",
         "RETURN"}, 1);
     // THROW **不会**被 CATCH 接住：Emuera 文档《异常分支：TRYC / CATCH / ENDCATCH》
-    // 明确「用于捕获『函数不存在』的情况」，THROW 走 CodeEE（报错并停止脚本）。
-    // 对齐 C# THROW_Instruction：`throw new CodeEE(...)`。
-    // 本移植里 THROW 只报错、不中断（见 ScriptRunner::executeLine 的注释），
-    // 所以异常体不执行，TRY 体正常收尾。
-    run("THROW 不被 CATCH 捕获（异常体不执行）", {
+    // THROW 中断执行（C# THROW_Instruction -> throw new CodeEE）：
+    // TRYC 系的 CATCH 只捕获「函数不存在」，不捕获被调函数里抛出的 THROW。
+    // 曾有一段时期这里「只告警不中断」以便观察上游求值缺陷；上游缺陷修完
+    // 后已恢复 C# 语义 —— THROW 所在脚本以 Error 状态终止（CHECK = 999）。
+    run("THROW 中断执行（CATCH 不捕获，异常体不执行）", {
         "TRYCCALLFORM THROWER",
         "CHECK = 10",
         "CATCH",
@@ -126,22 +126,27 @@ int main(int argc, char** argv) {
         "@THROWER",
         "CHECK = 999",
         "THROW \"boom\"",
-        "RETURN"}, 10);
-    // CALLF：调用式中関数并把返回值写进 RESULT（以前整行被静默丢弃）
-    run("CALLF 调用式中関数 -> RESULT", {
+        "RETURN"}, 999, ExecState::Error);
+    // CALLF：调用式中関数；对齐 C# CALLF_Instruction（mToken.GetValue(exm)），
+    // **返回值被丢弃**，不写 RESULT —— 此前把返回值写进 RESULT / LOCALS:0，
+    // LOCALS:0 会覆盖调用者的局部槽（eraTW 的 TEMP_RE_STR 因此恒返回空串）。
+    // 这里用副作用验证函数确实被调用。
+    run("CALLF 调用式中関数（返回值丢弃，副作用生效）", {
         "CALLF DOUBLE(21)",
-        "CHECK = RESULT",
+        "CHECK = CHECK:1",
         "RETURN",
         "@DOUBLE(N)",
         "#FUNCTION",
+        "CHECK:1 = N * 2",
         "RETURNF N * 2"}, 42);
-    run("CALLFORMF 格式化函数名", {
+    run("CALLFORMF 格式化函数名（返回值丢弃，副作用生效）", {
         "A = 7",
         "CALLFORMF TRIPLE_%A%(A)",
-        "CHECK = RESULT",
+        "CHECK = CHECK:1",
         "RETURN",
         "@TRIPLE_7(N)",
         "#FUNCTION",
+        "CHECK:1 = N * 3",
         "RETURNF N * 3"}, 21);
     run("CASE mixed forms", {"SELECTCASE 5", "CASE 1, 4 TO 6, IS > 10", "CHECK = 1", "CASEELSE", "CHECK = 999", "ENDSELECT"}, 1);
     run("CASE reversed range", {"SELECTCASE 5", "CASE 6 TO 4", "CHECK = 999", "CASEELSE", "CHECK = 1", "ENDSELECT"}, 1);

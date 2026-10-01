@@ -18,6 +18,11 @@
 #include "execution_engine.h"
 #include <QRegularExpression>
 #include <QDebug>
+#include <QDir>
+#include <QFile>
+#include <QJsonArray>
+#include <QJsonDocument>
+#include <QJsonObject>
 #include "expression_evaluator.h"
 #include "ast/expression_ast.h"
 #include "ast/ast_builder.h"
@@ -665,6 +670,9 @@ bool ExecutionEngine::executeInstruction(const LogicalLine& line) {
     if (name == "LOADGLOBAL") {
         return handleLoadGlobal();
     }
+    if (name == "SAVEGLOBAL") {
+        return handleSaveGlobal();
+    }
 
     // ---- 角色列表：ADDCHARA / DELCHARA（对齐 C# ADDCHARA_Instruction）----
     // 形如 `ADDCHARA 0` / `ADDCHARA LOCAL` / `DELCHARA CHARANUM - 1`：
@@ -1101,6 +1109,11 @@ bool ExecutionEngine::executeInstruction(const LogicalLine& line) {
     // 其它指令：由显示/子系统各自处理。
     // 「未完成」——尚未实现的指令在这里明确留痕（同一名字只报一次），
     // 这样跑 eraTW 时从 stderr 就能看出还有哪些接口没接线。
+    // DEBUGPRINT 族：仅在调试模式输出（C# DEBUGPRINT_Instruction 检查
+    // debugMode），非调试运行期静默忽略，不算未实现。
+    if (name.startsWith(QLatin1String("DEBUGPRINT"))) {
+        return true;
+    }
     reportUnfinished(QStringLiteral("指令"), name, line);
     return true;
 }
@@ -1205,10 +1218,12 @@ bool ExecutionEngine::handleStringAssignment(const QString& lhs, const QString& 
     // ARGS（实参字符串数组）与 LOCALS（局部字符串数组）分离，同 ARG/LOCAL
     if (upper == QLatin1String("ARGS")) {
         m_storage->setArgStr(index >= 0 ? index : 0, value);
+        qCDebug(eraTrace) << "[var] str-write ARGS" << (index >= 0 ? index : 0) << "=" << value;
         return true;
     }
     if (upper == QLatin1String("LOCALS")) {
         m_storage->setLocalStr(index >= 0 ? index : 0, value);
+        qCDebug(eraTrace) << "[var] str-write LOCALS" << (index >= 0 ? index : 0) << "=" << value;
         return true;
     }
     if (upper == QLatin1String("SAVEDATA_TEXT")) {
@@ -1396,8 +1411,120 @@ qint64 ExecutionEngine::colorValueOf(const QString& rawName) {
     return kColors.value(name, kDefaultColor);
 }
 bool ExecutionEngine::handleLoadGlobal() {
-    qDebug() << "LOADGLOBAL";
+    // 对齐 C# LOADGLOBAL_Instruction：文件缺失 / 校验失败 -> RESULT=0 并返回
+    //（C# 里 LOADGLOBAL 失败不是错误，脚本以 `RESULT = 0` 分支处理）。
+    bool ok = false;
+    const QString path = m_gameDataDir + QLatin1String("/save_global.dat");
+    QFile file(path);
+    if (file.open(QIODevice::ReadOnly)) {
+        const QJsonDocument doc = QJsonDocument::fromJson(file.readAll());
+        file.close();
+        const QJsonObject root = doc.object();
+        ok = root.value(QStringLiteral("format")).toString() == QStringLiteral("emuera-qt-global");
+        if (ok) {
+            // 唯一码校验（对齐 C# UniqueCodeEqualTo：别的游戏的存档不读）
+            const qint64 code = globalUniqueCode();
+            ok = (code == 0) || (root.value(QStringLiteral("uniqueCode")).toVariant().toLongLong() == code);
+        }
+        if (ok) {
+            const QJsonArray globals = root.value(QStringLiteral("globals")).toArray();
+            for (int i = 0; i < globals.size(); ++i)
+                m_storage->setGlobalInt1D(QStringLiteral("GLOBAL"), i, globals.at(i).toVariant().toLongLong());
+            const QJsonArray globalss = root.value(QStringLiteral("globalss")).toArray();
+            for (int i = 0; i < globalss.size(); ++i)
+                m_storage->setGlobalStr1D(QStringLiteral("GLOBALS"), i, globalss.at(i).toString());
+            const QJsonObject vars = root.value(QStringLiteral("vars")).toObject();
+            for (auto it = vars.begin(); it != vars.end(); ++it) {
+                const QJsonObject entry = it.value().toObject();
+                const QJsonArray data = entry.value(QStringLiteral("data")).toArray();
+                const bool isStr = entry.value(QStringLiteral("type")).toString() == QLatin1String("str");
+                for (int i = 0; i < data.size(); ++i) {
+                    if (isStr) m_storage->setGlobalStr1D(it.key(), i, data.at(i).toString());
+                    else m_storage->setGlobalInt1D(it.key(), i, data.at(i).toVariant().toLongLong());
+                }
+            }
+            qDebug() << "LOADGLOBAL 成功" << path;
+        }
+    }
+    if (m_storage) m_storage->setSystemVariable(QStringLiteral("RESULT"), 0, ok ? 1 : 0);
     return true;
+}
+
+bool ExecutionEngine::handleSaveGlobal() {
+    // 对齐 C# SAVEGLOBAL_Instruction -> VEvaluator.SaveGlobal()：
+    // 把 GLOBAL / GLOBALS 与用户 `#DIM SAVEDATA GLOBAL` 变量写入 save_global.dat。
+    QJsonObject root;
+    root.insert(QStringLiteral("format"), QStringLiteral("emuera-qt-global"));
+    root.insert(QStringLiteral("uniqueCode"), static_cast<qint64>(globalUniqueCode()));
+
+    auto sizeOf = [this](const QString& name) -> int {
+        int size = m_storage->arraySize(name);
+        const VariableConfig& cfg = m_storage->variableConfig();
+        if (size <= 0) size = cfg.getSize1D(name);
+        if (size <= 0) size = cfg.getSize1D(name.toUpper());
+        return qMax(size, 0);
+    };
+
+    QJsonArray globals;
+    {
+        const int size = sizeOf(QStringLiteral("GLOBAL"));
+        for (int i = 0; i < size; ++i)
+            globals.append(static_cast<double>(m_storage->getGlobalInt1D(QStringLiteral("GLOBAL"), i)));
+    }
+    root.insert(QStringLiteral("globals"), globals);
+    QJsonArray globalss;
+    {
+        const int size = sizeOf(QStringLiteral("GLOBALS"));
+        for (int i = 0; i < size; ++i)
+            globalss.append(m_storage->getGlobalStr1D(QStringLiteral("GLOBALS"), i));
+    }
+    root.insert(QStringLiteral("globalss"), globalss);
+
+    // 用户 `#DIM SAVEDATA GLOBAL` 变量（对齐 C# userDefinedGlobalSaveVarList）
+    QJsonObject vars;
+    if (m_parseTable) {
+        const QList<VariableDecl> decls = m_parseTable->variableTable().declarations();
+        for (const VariableDecl& decl : decls) {
+            if (!decl.isGlobalSave || decl.isReference || decl.isConst) continue;
+            const int size = qMax(sizeOf(decl.name), decl.lengths.value(0, 1));
+            if (size <= 0) continue;
+            QJsonArray data;
+            const bool isStr = decl.type == OperandType::Str;
+            for (int i = 0; i < size; ++i) {
+                if (isStr) data.append(m_storage->getGlobalStr1D(decl.name, i));
+                else data.append(static_cast<double>(m_storage->getGlobalInt1D(decl.name, i)));
+            }
+            QJsonObject entry;
+            entry.insert(QStringLiteral("type"), isStr ? QStringLiteral("str") : QStringLiteral("int"));
+            entry.insert(QStringLiteral("data"), data);
+            vars.insert(decl.name, entry);
+        }
+    }
+    root.insert(QStringLiteral("vars"), vars);
+
+    if (m_gameDataDir.isEmpty()) {
+        qWarning() << "SAVEGLOBAL：游戏目录未知，跳过保存";
+        return true;
+    }
+    const QString path = m_gameDataDir + QLatin1String("/save_global.dat");
+    QFile file(path);
+    if (!file.open(QIODevice::WriteOnly | QIODevice::Truncate)) {
+        emit errorOccurred(QStringLiteral("SAVEGLOBAL 无法写入 %1").arg(path));
+        return true;
+    }
+    file.write(QJsonDocument(root).toJson(QJsonDocument::Compact));
+    file.close();
+    qDebug() << "SAVEGLOBAL 成功" << path;
+    return true;
+}
+
+qint64 ExecutionEngine::globalUniqueCode() const {
+    // 对齐 C# gamebase.ScriptUniqueCode：由游戏标题/版本派生的唯一码，
+    // 防止读入其它游戏的全局存档。GameBase 未装载时返回 0（跳过校验）。
+    if (!m_gameBaseData) return 0;
+    const QString title = m_gameBaseData->windowTitle();
+    if (title.isEmpty()) return 0;
+    return static_cast<qint64>(qHash(title + QLatin1Char('|') + m_gameBaseData->version()));
 }
 
 void ExecutionEngine::setError(const QString& message) {

@@ -69,7 +69,9 @@ public:
     bool isRunning() const { return m_running; }
 
     // 用户函数回调（表达式 `NAME(args)`），由 ExpressionEvaluator 使用。
-    bool invokeUserFunction(const QString& name, const QList<QVariant>& args, QVariant& out);
+    // argNodes 与 args 一一对应（省略实参为 nullptr），供 REF 形参识别实参变量。
+    bool invokeUserFunction(const QString& name, const QList<QVariant>& args,
+                            const QList<const ExpressionNode*>& argNodes, QVariant& out);
 
     // 设置表达式求值器（用于挂用户函数回调 + 条件求值）
     void setExpressionEvaluator(ExpressionEvaluator* evaluator);
@@ -183,7 +185,6 @@ private:
     bool m_printed = false;
     bool m_continuingSlice = false;
     QVariant m_lastReturnValue;
-    QSet<QString> m_reportedThrow;   // THROW 告警去重（同一行只报一次）
 };
 
 #endif // SCRIPT_RUNNER_H

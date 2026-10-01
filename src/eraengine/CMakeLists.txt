@@ -127,6 +127,8 @@ GameView/gui_manager.cpp
 GameView/gui_manager.h
 GameView/resource_image_provider.cpp
 GameView/resource_image_provider.h
+GameView/graphics_store.cpp
+GameView/graphics_store.h
 )
 
 # Add QtConcurrent and OpenMP after the library is defined

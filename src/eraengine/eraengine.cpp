@@ -392,6 +392,8 @@ void EraEngine::setGameDirectory(const QString& directory)
 				m_guiManager.setGameDirectory(dir);
 				m_guiManager.setStartDirectory(dir);
 				ResourceImageProvider::setRoot(dir);
+				// SAVEGLOBAL / LOADGLOBAL 的落盘目录（对齐 C# getSaveDataPathG）
+				m_executionEngine.setGameDataDir(dir);
 				qDebug() << "[DEBUG] About to call reload()";
 				reload();
 				qDebug() << "[DEBUG] reload() complete";

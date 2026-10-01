@@ -17,8 +17,10 @@
  */
 #include "resource_image_provider.h"
 
+#include "graphics_store.h"
 #include "eraengine_log.h"
 #include <QDir>
+#include <QDirIterator>
 #include <QFileInfo>
 #include <QImage>
 #include <QSize>
@@ -51,34 +53,46 @@ void ResourceImageProvider::ensureAtlasLoaded(const QString& root) {
 
     s_atlas.clear();
     s_atlasRoot = base;
-    const QString csvPath = QDir(base).filePath(QStringLiteral("resources/list.csv"));
-    QFile file(csvPath);
-    if (!file.open(QIODevice::ReadOnly | QIODevice::Text)) return;
+    // 对齐 C# AppContents.LoadContents：递归扫描 resources/ 下**所有** csv
+    // （eraTW 的 差し替え.csv / 39_コマンド.csv 等也注册精灵；
+    //   只读 list.csv 会让 SPRITECREATED("55_A1") 恒假 -> 立绘合成被跳过）。
+    // 源图片路径相对于**该 csv 所在目录**（C# 用 csv 的目录拼接）。
+    const QString resDir = QDir(base).filePath(QStringLiteral("resources"));
+    QDirIterator csvIt(resDir, QStringList{QStringLiteral("*.csv")},
+                       QDir::Files, QDirIterator::Subdirectories);
+    while (csvIt.hasNext()) {
+        QFile file(csvIt.next());
+        // 源文件相对路径：resources/ 之下的 csv 子目录前缀
+        QString relDir = QDir(resDir).relativeFilePath(QFileInfo(csvIt.fileInfo()).absolutePath());
+        if (relDir == QLatin1String(".")) relDir.clear();
+        else relDir += QLatin1Char('/');
+        if (!file.open(QIODevice::ReadOnly | QIODevice::Text)) continue;
 
-    while (!file.atEnd()) {
-        QString line = QString::fromUtf8(file.readLine()).trimmed();
-        if (line.startsWith(QChar(0xFEFF))) line.remove(0, 1);
-        if (line.isEmpty() || line.startsWith(QLatin1Char(';'))
-            || line.startsWith(QLatin1Char('#'))) continue;
-        const QStringList fields = line.split(QLatin1Char(','));
-        if (fields.size() < 2) continue;
-        const QString name = fields.at(0).trimmed();
-        const QString source = fields.at(1).trimmed();
-        if (name.isEmpty() || source.isEmpty()) continue;
+        while (!file.atEnd()) {
+            QString line = QString::fromUtf8(file.readLine()).trimmed();
+            if (line.startsWith(QChar(0xFEFF))) line.remove(0, 1);
+            if (line.isEmpty() || line.startsWith(QLatin1Char(';'))
+                || line.startsWith(QLatin1Char('#'))) continue;
+            const QStringList fields = line.split(QLatin1Char(','));
+            if (fields.size() < 2) continue;
+            const QString name = fields.at(0).trimmed();
+            const QString source = fields.at(1).trimmed();
+            if (name.isEmpty() || source.isEmpty()) continue;
 
-        Sprite sprite;
-        sprite.sourceFile = source;
-        if (fields.size() >= 6) {
-            bool okX = false, okY = false, okW = false, okH = false;
-            sprite.x = fields.at(2).trimmed().toInt(&okX);
-            sprite.y = fields.at(3).trimmed().toInt(&okY);
-            sprite.w = fields.at(4).trimmed().toInt(&okW);
-            sprite.h = fields.at(5).trimmed().toInt(&okH);
-            sprite.hasRect = okX && okY && okW && okH && sprite.w > 0 && sprite.h > 0;
+            Sprite sprite;
+            sprite.sourceFile = relDir + source;
+            if (fields.size() >= 6) {
+                bool okX = false, okY = false, okW = false, okH = false;
+                sprite.x = fields.at(2).trimmed().toInt(&okX);
+                sprite.y = fields.at(3).trimmed().toInt(&okY);
+                sprite.w = fields.at(4).trimmed().toInt(&okW);
+                sprite.h = fields.at(5).trimmed().toInt(&okH);
+                sprite.hasRect = okX && okY && okW && okH && sprite.w > 0 && sprite.h > 0;
+            }
+            s_atlas.insert(name, sprite);
         }
-        s_atlas.insert(name, sprite);
     }
-    qDebug() << "[load] 图集清单" << csvPath << "->" << s_atlas.size() << "项";
+    qDebug() << "[load] 图集清单" << resDir << "->" << s_atlas.size() << "项";
 }
 
 QString ResourceImageProvider::root() {
@@ -134,11 +148,30 @@ QString ResourceImageProvider::resolvePath(const QString& id, const QString& roo
     return QString();
 }
 
+bool ResourceImageProvider::hasResource(const QString& id) {
+    const QString normalized = normalizeId(id);
+    if (normalized.isEmpty()) return false;
+    ensureAtlasLoaded(s_root);
+    if (s_atlas.contains(normalized)) return true;
+    return !resolvePath(normalized).isEmpty();
+}
+
 // 资源图片固有尺寸：优先用清单里的矩形（图集裁剪后的真实尺寸，无需解码图片），
 // 否则退回加载文件取原始尺寸。只用于排版测量；失败不影响实际渲染。
 bool ResourceImageProvider::intrinsicSize(const QString& id, int& width, int& height) {
     const QString normalized = normalizeId(id);
     ensureAtlasLoaded(s_root);
+
+    // 运行期精灵（SPRITECREATE 的产物）优先 —— 对齐 C# AppContents.GetSprite：
+    // 精灵名覆盖同名静态资源。
+    {
+        const QImage runtimeSprite = GraphicsStore::spriteImage(normalized);
+        if (!runtimeSprite.isNull()) {
+            width = runtimeSprite.width();
+            height = runtimeSprite.height();
+            return true;
+        }
+    }
 
     const auto atlasIt = s_atlas.constFind(normalized);
     if (atlasIt != s_atlas.constEnd()) {
@@ -169,7 +202,10 @@ bool ResourceImageProvider::intrinsicSize(const QString& id, int& width, int& he
 }
 
 
-QImage ResourceImageProvider::requestImage(const QString& id, QSize* size, const QSize& requestedSize) {
+// 仅按静态资源（图集 / 文件）取图，不含运行期精灵回退。
+// GraphicsStore::spriteImage 依赖它做「静态资源即精灵」的兜底，
+// 两者不得互相递归。
+QImage ResourceImageProvider::loadResourceImage(const QString& id) {
     const QString normalizedId = normalizeId(id);
     ensureAtlasLoaded(s_root);
 
@@ -190,15 +226,31 @@ QImage ResourceImageProvider::requestImage(const QString& id, QSize* size, const
         const QString path = resolvePath(normalizedId);
         if (!path.isEmpty()) image.load(path);
     }
+    return image;
+}
+
+QImage ResourceImageProvider::requestImage(const QString& id, QSize* size, const QSize& requestedSize) {
+    const QString normalizedId = normalizeId(id);
+    ensureAtlasLoaded(s_root);
+
+    QImage image;
+    // 运行期精灵优先（SPRITECREATE 产物，同名覆盖静态资源）
+    image = GraphicsStore::spriteImage(normalizedId);
+    if (!image.isNull()) {
+        if (size) *size = image.size();
+        if (requestedSize.isValid() && !requestedSize.isEmpty())
+            image = image.scaled(requestedSize, Qt::KeepAspectRatio, Qt::SmoothTransformation);
+        return image;
+    }
+
+    image = loadResourceImage(normalizedId);
 
     if (image.isNull()) {
-        qCDebug(eraTrace) << "[render] 图片未命中" << normalizedId
-                 << "（图集" << (atlasIt != s_atlas.constEnd() ? "有此项但取图失败" : "无此项") << "）";
+        qCDebug(eraTrace) << "[render] 图片未命中" << normalizedId;
         if (size) *size = QSize();
         return QImage();
     }
-    qCDebug(eraTrace) << "[render] 图片" << normalizedId << image.size()
-             << (atlasIt != s_atlas.constEnd() ? "(图集)" : "(独立文件)");
+    qCDebug(eraTrace) << "[render] 图片" << normalizedId << image.size();
     if (size) *size = image.size();
     if (requestedSize.isValid() && !requestedSize.isEmpty())
         image = image.scaled(requestedSize, Qt::KeepAspectRatio, Qt::SmoothTransformation);

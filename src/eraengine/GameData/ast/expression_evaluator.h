@@ -52,8 +52,11 @@ public:
 
     // 用户自定义函数回调：表达式 `NAME(args)` 命中用户函数时调用（由执行链提供）。
     // 返回 true 表示已处理，out 为返回值。
+    // argNodes 与 args 一一对应（省略实参为 nullptr），供执行链识别
+    // `#DIM REF` 引用形参的实参变量名（值本身丢失不了变量身份，但引用需要）。
     using UserFunctionInvoker = std::function<bool(const QString &name,
                                                    const QList<QVariant> &args,
+                                                   const QList<const ExpressionNode*> &argNodes,
                                                    QVariant &out)>;
     void setUserFunctionInvoker(UserFunctionInvoker invoker) { m_userInvoker = std::move(invoker); }
 
@@ -159,6 +162,11 @@ private:
     // 返回 false 表示该 opcode 尚未实现求值（交给用户函数回调 / 默认 0）。
     bool evaluateBuiltin(const FunctionNode &node, VariableStorage *storage,
                          GameBaseData *gameBaseData, QVariant &out);
+
+    // GDRAWG / GDRAWSPRITE 的颜色矩阵实参：从 2D/3D 数组变量的给定下标起
+    // 读 5x5 个整数（/256，对齐 C# ReadColormatrix），失败返回 false。
+    bool readColorMatrix(const FunctionNode &node, int argNo, VariableStorage *storage,
+                         GameBaseData *gameBaseData, float out[5][5]);
 
     // 实参取值辅助
     qint64  argInt(const FunctionNode &node, int i, VariableStorage *storage, GameBaseData *g);

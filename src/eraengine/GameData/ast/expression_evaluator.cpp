@@ -25,6 +25,8 @@
 #include "strform_parser.h"
 #include "variable_storage.h"
 #include "variable_config.h"
+#include "../../GameView/graphics_store.h"
+#include "../../GameView/resource_image_provider.h"
 #include "game_base_data.h"
 #include <QDateTime>
 #include <QDebug>
@@ -1132,12 +1134,23 @@ QVariant ExpressionEvaluator::evaluateFunction(const FunctionNode &node, Variabl
     if (m_userInvoker) {
         const QString funcName = node.name().toUpper();
         QList<QVariant> args;
+        QList<const ExpressionNode*> argNodes;
         args.reserve(node.arguments().size());
-        for (const auto& a : node.arguments()) {
-            args.append(evaluateNode(*a.get(), storage, gameBaseData));
+        argNodes.reserve(node.arguments().size());
+        for (int i = 0; i < node.arguments().size(); ++i) {
+            // 省略实参（`F(a, , c)`）记为无效 QVariant —— 对齐 C# 的省略 -> 缺省值
+            // 语义（字符串形参得 ""、整数形参得 0）。此前求值成整数 0，绑定到
+            // 字符串形参后变成 "0"（TEMPVAR 的 VARMAKE 把空 V_STR 写成 "0"）。
+            const ExpressionNode* argNode = node.arguments().at(i).get();
+            argNodes.append(argNode);
+            if (node.isArgOmitted(i)) {
+                args.append(QVariant());
+                continue;
+            }
+            args.append(evaluateNode(*argNode, storage, gameBaseData));
         }
         QVariant out;
-        if (m_userInvoker(funcName, args, out)) {
+        if (m_userInvoker(funcName, args, argNodes, out)) {
             return out;
         }
     }
@@ -1691,6 +1704,159 @@ bool ExpressionEvaluator::evaluateBuiltin(const FunctionNode &node, VariableStor
         return true;
     }
 
+    // ---------------- G 图像 / 精灵 ----------------
+    // 对齐 C# Graphics*Method / Sprite*Method（Creator.Method.cs）：
+    // 失败一律返回 0（不抛错），eraTW 用返回值判断资源是否存在。
+    case BuiltinOp::GCreated: {
+        out = QVariant::fromValue<qint64>(GraphicsStore::gCreated(I(0)) ? 1 : 0);
+        return true;
+    }
+    case BuiltinOp::GWidth:
+    case BuiltinOp::GHeight: {
+        const QImage image = GraphicsStore::gImage(I(0));
+        out = QVariant::fromValue<qint64>(
+            op == BuiltinOp::GWidth ? image.width() : image.height());
+        return true;
+    }
+    case BuiltinOp::GCreate: {
+        out = QVariant::fromValue<qint64>(
+            GraphicsStore::gCreate(I(0), static_cast<int>(I(1)), static_cast<int>(I(2))) ? 1 : 0);
+        return true;
+    }
+    case BuiltinOp::GCreateFromFile: {
+        out = QVariant::fromValue<qint64>(
+            GraphicsStore::gCreateFromFile(I(0), S(1)) ? 1 : 0);
+        return true;
+    }
+    case BuiltinOp::GDispose: {
+        out = QVariant::fromValue<qint64>(GraphicsStore::gDispose(I(0)) ? 1 : 0);
+        return true;
+    }
+    case BuiltinOp::GClear: {
+        out = QVariant::fromValue<qint64>(
+            GraphicsStore::gClear(I(0), QColor::fromRgba(static_cast<QRgb>(I(1)))) ? 1 : 0);
+        return true;
+    }
+    case BuiltinOp::GFillRectangle: {
+        out = QVariant::fromValue<qint64>(GraphicsStore::gFillRectangle(
+            I(0), QColor::fromRgba(static_cast<QRgb>(I(1))),
+            QRect(static_cast<int>(I(2)), static_cast<int>(I(3)),
+                  static_cast<int>(I(4)), static_cast<int>(I(5)))) ? 1 : 0);
+        return true;
+    }
+    case BuiltinOp::GSetColor: {
+        // GSETCOLOR id, cARGB, x, y：单像素填充
+        auto it = GraphicsStore::gImage(I(0));
+        if (it.isNull()) { out = QVariant::fromValue<qint64>(0); return true; }
+        const int x = static_cast<int>(I(2)), y = static_cast<int>(I(3));
+        if (x < 0 || y < 0 || x >= it.width() || y >= it.height()) {
+            out = QVariant::fromValue<qint64>(0);
+            return true;
+        }
+        it.setPixel(x, y, QColor::fromRgba(static_cast<QRgb>(I(1))).rgba());
+        GraphicsStore::gDrawImage(I(0), it, it.rect());
+        out = QVariant::fromValue<qint64>(1);
+        return true;
+    }
+    case BuiltinOp::GGetColor: {
+        const QImage image = GraphicsStore::gImage(I(0));
+        const int x = static_cast<int>(I(1)), y = static_cast<int>(I(2));
+        if (image.isNull() || x < 0 || y < 0 || x >= image.width() || y >= image.height()) {
+            out = QVariant::fromValue<qint64>(-1);
+            return true;
+        }
+        const QRgb c = image.pixel(x, y);
+        out = QVariant::fromValue<qint64>((qint64(c) << 24) | qRed(c) << 16 | qGreen(c) << 8 | qBlue(c));
+        return true;
+    }
+    case BuiltinOp::GDrawG: {
+        // GDRAWG id, srcId[, destX, destY, destW, destH[, srcX, srcY, srcW, srcH[, CM]]]
+        const int count = node.arguments().size();
+        const QRect dest = count >= 6
+            ? QRect(int(I(2)), int(I(3)), int(I(4)), int(I(5)))
+            : QRect();
+        const QImage src = GraphicsStore::gImage(I(1));
+        if (src.isNull()) { out = QVariant::fromValue<qint64>(0); return true; }
+        QRect srcRect;
+        if (count >= 10) srcRect = QRect(int(I(6)), int(I(7)), int(I(8)), int(I(9)));
+        float cm[5][5];
+        const bool hasCm = count >= 11 && readColorMatrix(node, 10, storage, gameBaseData, cm);
+        out = QVariant::fromValue<qint64>(GraphicsStore::gDrawG(
+            I(0), I(1), dest, srcRect, hasCm ? cm : nullptr) ? 1 : 0);
+        return true;
+    }
+    case BuiltinOp::GDrawSprite: {
+        // GDRAWSPRITE id, name[, destX, destY, destW, destH[, CM]]
+        const int count = node.arguments().size();
+        const QImage sprite = GraphicsStore::spriteImage(S(1));
+        if (sprite.isNull()) { out = QVariant::fromValue<qint64>(0); return true; }
+        const QRect dest = count >= 6
+            ? QRect(int(I(2)), int(I(3)), int(I(4)), int(I(5)))
+            : QRect(0, 0, sprite.width(), sprite.height());
+        float cm[5][5];
+        const bool hasCm = count >= 7 && readColorMatrix(node, 6, storage, gameBaseData, cm);
+        out = QVariant::fromValue<qint64>(GraphicsStore::gDrawImage(
+            I(0), sprite, dest, hasCm ? cm : nullptr) ? 1 : 0);
+        return true;
+    }
+    case BuiltinOp::SpriteCreated: {
+        // 运行期精灵（SPRITECREATE 产物）或静态资源（C# AppContents 会把
+        // resources 下所有 csv 条目注册成精灵，eraTW 用
+        // `SPRITECREATED("55_A1")` 检查资源是否安装）任一存在即真。
+        out = QVariant::fromValue<qint64>(
+            (GraphicsStore::spriteCreated(S(0)) || ResourceImageProvider::hasResource(S(0))) ? 1 : 0);
+        return true;
+    }
+    case BuiltinOp::SpriteWidth:
+    case BuiltinOp::SpriteHeight: {
+        QImage image = GraphicsStore::spriteImage(S(0));
+        int width = image.width(), height = image.height();
+        if (image.isNull() && ResourceImageProvider::intrinsicSize(S(0), width, height)) {
+            // 静态资源：按图集矩形 / 文件实际尺寸
+        }
+        out = QVariant::fromValue<qint64>(op == BuiltinOp::SpriteWidth ? width : height);
+        return true;
+    }
+    case BuiltinOp::SpritePosX:
+    case BuiltinOp::SpritePosY: {
+        const GraphicsStore::Sprite* sprite = GraphicsStore::sprite(S(0));
+        out = QVariant::fromValue<qint64>(sprite ? (op == BuiltinOp::SpritePosX ? sprite->posX : sprite->posY) : -1);
+        return true;
+    }
+    case BuiltinOp::SpriteMove:
+    case BuiltinOp::SpriteSetPos: {
+        // 两者都把精灵移到 (x, y)（C# SPRITEMOVE 是相对位移、SPRITESETPOS 绝对；
+        // eraTW 只用绝对定位场景，这里统一按绝对处理并留痕差异）
+        const GraphicsStore::Sprite* sprite = GraphicsStore::sprite(S(0));
+        if (!sprite) { out = QVariant::fromValue<qint64>(0); return true; }
+        GraphicsStore::spriteSetPos(S(0), static_cast<int>(I(1)), static_cast<int>(I(2)));
+        out = QVariant::fromValue<qint64>(1);
+        return true;
+    }
+    case BuiltinOp::SpriteGetColor: {
+        const QImage image = GraphicsStore::spriteImage(S(0));
+        const int x = static_cast<int>(I(1)), y = static_cast<int>(I(2));
+        if (image.isNull() || x < 0 || y < 0 || x >= image.width() || y >= image.height()) {
+            out = QVariant::fromValue<qint64>(-1);
+            return true;
+        }
+        const QRgb c = image.pixel(x, y);
+        out = QVariant::fromValue<qint64>((qint64(qAlpha(c)) << 24) | qRed(c) << 16 | qGreen(c) << 8 | qBlue(c));
+        return true;
+    }
+    case BuiltinOp::SpriteCreate: {
+        // SPRITECREATE name, gID[, x, y, w, h]
+        const QRect rect = node.arguments().size() >= 6
+            ? QRect(int(I(2)), int(I(3)), int(I(4)), int(I(5)))
+            : QRect();
+        out = QVariant::fromValue<qint64>(GraphicsStore::spriteCreate(S(0), I(1), rect) ? 1 : 0);
+        return true;
+    }
+    case BuiltinOp::SpriteDispose: {
+        out = QVariant::fromValue<qint64>(GraphicsStore::spriteDispose(S(0)) ? 1 : 0);
+        return true;
+    }
+
     // ---------------- 尚未实现求值 ----------------
     case BuiltinOp::None:
         // 未实现的内置函数此前会静默产出 0/空串，表现为「函数恒为 0」而不报错
@@ -1705,6 +1871,40 @@ bool ExpressionEvaluator::evaluateBuiltin(const FunctionNode &node, VariableStor
     Q_UNUSED(storage);
     Q_UNUSED(gameBaseData);
     Q_UNUSED(V);
+    return false;
+}
+
+bool ExpressionEvaluator::readColorMatrix(const FunctionNode &node, int argNo,
+                                          VariableStorage *storage, GameBaseData *gameBaseData,
+                                          float out[5][5]) {
+    // 对齐 C# ReadColormatrix：第 argNo 个实参是 2D/3D 数组变量的一个元素引用
+    // （如 `カラーマトリクス:0:0`），以它为左上角读 5x5 个整数并除以 256。
+    const VariableNode* var = argVar(node, argNo);
+    if (!var || !storage) return false;
+    const QList<int> ids = [&]{
+        QList<int> ids;
+        ids.reserve(var->indices().size());
+        for (int i = 0; i < var->indices().size(); ++i)
+            ids.append(static_cast<int>(resolveIndex(*var, i, storage, gameBaseData)));
+        return ids;
+    }();
+    const QString name = storage->resolvedStorageName(var->name());
+    if (var->indices().size() >= 3) {
+        const int e1 = ids.value(0), e2 = ids.value(1), e3 = ids.value(2);
+        if (e2 < 0 || e3 < 0) return false;
+        for (int x = 0; x < 5; ++x)
+            for (int y = 0; y < 5; ++y)
+                out[x][y] = static_cast<float>(storage->getGlobalInt3D(name, e1, e2 + x, e3 + y)) / 256.0f;
+        return true;
+    }
+    if (var->indices().size() == 2) {
+        const int e1 = ids.value(0), e2 = ids.value(1);
+        if (e1 < 0 || e2 < 0) return false;
+        for (int x = 0; x < 5; ++x)
+            for (int y = 0; y < 5; ++y)
+                out[x][y] = static_cast<float>(storage->getGlobalInt2D(name, e1 + x, e2 + y)) / 256.0f;
+        return true;
+    }
     return false;
 }
 

@@ -65,6 +65,15 @@ public:
     // 命中 resources/list.csv 的矩形取 w/h，否则按文件实际尺寸。找不到返回 false。
     static bool intrinsicSize(const QString& id, int& width, int& height);
 
+    // 静态资源是否存在（图集条目或 resources 目录下的文件）。
+    // C# 的 AppContents.LoadContents 会把 resources 下所有 csv 条目注册成精灵，
+    // 因此 SPRITECREATED 系的查询也要把静态资源当作「已存在的精灵」。
+    [[nodiscard]] static bool hasResource(const QString& id);
+
+    // 仅按静态资源取图（图集矩形裁剪 / 文件），不含运行期精灵回退。
+    // 供 GraphicsStore 的「静态资源即精灵」兜底使用。
+    [[nodiscard]] static QImage loadResourceImage(const QString& id);
+
 private:
     static QString s_root;
     static QHash<QString, Sprite> s_atlas;

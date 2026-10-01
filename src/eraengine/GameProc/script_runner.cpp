@@ -67,8 +67,9 @@ void ScriptRunner::setExpressionEvaluator(ExpressionEvaluator* evaluator) {
     if (m_evaluator) {
         // 表达式中的用户自定义函数经本执行链回调
         m_evaluator->setUserFunctionInvoker(
-            [this](const QString& name, const QList<QVariant>& args, QVariant& out) {
-                return invokeUserFunction(name, args, out);
+            [this](const QString& name, const QList<QVariant>& args,
+                   const QList<const ExpressionNode*>& argNodes, QVariant& out) {
+                return invokeUserFunction(name, args, argNodes, out);
             });
     }
 }
@@ -447,11 +448,10 @@ ExecState ScriptRunner::executeLine(const LogicalLine& line) {
     // 语义要点一：Emuera 的 CATCH **不是**通用异常捕获 ——
     //   文档《异常分支：TRYC / CATCH / ENDCATCH》：「用于捕获『函数不存在』的情况」。
     //   所以 THROW 不会被 CATCH 接住（C# 里 JumpToEndCatch 只在「找不到函数」时用）。
-    // 语义要点二：C# 会中断本次执行。这里**先只报错、不中断**，原因是：
-    //   eraTW 在 Emuera 下这些 THROW 本来就不该发生，能触发说明上游求值有缺陷
-    //   （参数绑定 / 常量折叠一类）。直接停机会让整局跑不下去、也挡住其它缺口的
-    //   观察；因此这里用 qWarning 把「哪个文件的哪一行、抛了什么」完整打出来，
-    //   继续执行。等上游缺陷修完，这里应改回真正的中断。
+    // 语义要点二：THROW 中断本次执行（C# 抛 CodeEE -> 进 Error 状态）。
+    //   曾经这里「只告警不中断」以便观察上游求值缺陷；CALLF 字符串实参丢引号、
+    //   省略实参整数化 "0"、缺省形参未绑定、ARRAYREMOVE 未实现、CALLF 返回值
+    //   覆盖 LOCALS[0] 这一串上游缺陷修复后，eraTW 冒烟已无 THROW，恢复中断语义。
     if (name == QLatin1String("THROW")) {
         QString message;
         if (!line.arguments.isEmpty()) {
@@ -460,15 +460,9 @@ ExecState ScriptRunner::executeLine(const LogicalLine& line) {
             const Operand& op = line.arguments.first();
             message = op.ast ? ev.evaluate(*op.ast, m_storage, baseData()).toString() : op.raw;
         }
-        // 同一行只报一次（eraTW 的 EXISTOBJ 在 151 次循环里会反复抛同一个 THROW）
-        if (!m_reportedThrow.contains(line.position.toString())) {
-            m_reportedThrow.insert(line.position.toString());
-            qWarning() << "[THROW]" << message
-                       << "行:" << line.position.toString()
-                       << "（C# 会中断执行；此处继续，需排查上游求值缺陷）";
-        }
-        advance();
-        return ExecState::Continue;
+        m_state->setErrorState();
+        emit errorOccurred(QStringLiteral("THROW: %1（%2）").arg(message, line.position.toString()));
+        return ExecState::Error;
     }
 
     // ---- RESTART：回到当前函数的第一行（Emuera 的 RESTART 指令）----
@@ -714,7 +708,10 @@ ExecState ScriptRunner::executeLine(const LogicalLine& line) {
     //   CALLF MAKE_EXIST(CLASS_NAME)        （eraTW 的 EXISTOBJ 系全靠它）
     //   CALLFORMF FUNC_%X%(A, B)
     // 对齐 C# CALLF_Instruction：目标是 function-method（不是 CALL 的标签），
-    // 实参照旧求值；返回值由 RETURNF 机制落到 RESULT，指令本身不改流程。
+    // 实参照旧求值；**返回值直接丢弃**（C# DoInstruction 只有 mToken.GetValue(exm)）。
+    // 此前把字符串返回值写进 LOCALS[0]、整数写进 RESULT —— LOCALS[0] 是局部槽，
+    // 会把调用者刚写入的 LOCALS 覆盖掉（eraTW 的 TEMP_RE_STR 因此恒返回空串，
+    // GET_STR/OBJ 系全链失效）。
     // 以前这条完全没有实现 -> EXIST 系列函数形同虚设。
     if (name == QLatin1String("CALLF") || name == QLatin1String("CALLFORMF")) {
         QString funcName = line.arguments.isEmpty() ? QString() : line.arguments.first().raw;
@@ -723,7 +720,12 @@ ExecState ScriptRunner::executeLine(const LogicalLine& line) {
         for (int i = 1; i < line.arguments.size(); ++i) {
             const Operand& op = line.arguments.at(i);
             if (op.raw == QLatin1String(",")) continue;
-            argTexts << op.raw;
+            // 装载期把字符串实参剥掉引号存进 raw（isString 标记）。
+            // 这里必须把引号**加回去**再拼成调用表达式，否则 `"VARX"` 会变成
+            // 裸标识符按变量求值（未知变量 -> 0），TEMPVAR/OBJ 系全链断掉。
+            argTexts << (op.isString
+                             ? QLatin1Char('"') + op.raw + QLatin1Char('"')
+                             : op.raw);
         }
         const QString callText = funcName + QLatin1Char('(')
                                  + argTexts.join(QLatin1Char(',')) + QLatin1Char(')');
@@ -733,10 +735,7 @@ ExecState ScriptRunner::executeLine(const LogicalLine& line) {
             m_table ? m_table->expressionAst(callText) : QSharedPointer<ExpressionNode>();
         const QVariant value = ast ? ev.evaluate(*ast, m_storage, baseData())
                                    : ev.evaluate(callText, m_storage, baseData());
-        if (m_storage) {
-            if (value.typeId() == QMetaType::QString) m_storage->setLocalStr(0, value.toString());
-            else m_storage->setSystemVariable(QStringLiteral("RESULT"), 0, value.toLongLong());
-        }
+        Q_UNUSED(value);   // 对齐 C#：CALLF 的返回值不落任何寄存器
         qCDebug(eraTrace) << "[callf]" << callText << "->" << value
                           << "行" << line.position.toString();
         advance();
@@ -800,6 +799,164 @@ ExecState ScriptRunner::executeLine(const LogicalLine& line) {
         }
         advance();
         return ExecState::Continue;
+    }
+
+    // ---- ARRAYCOPY / ARRAYSHIFT / ARRAYREMOVE / ARRAYSORT（对齐 C# ArrayControl 系）----
+    // 此前完全没实现：解析通过但执行期静默跳过。eraTW 的 TEMPVAR.OBJ 系靠
+    // ARRAYREMOVE 从临时变量数组里删除元素 —— 空操作导致元素残留、VAR_CNT
+    // 涨到上限后 THROW「保持変数が上限に達しています」。
+    // 这里实现 1 次元（整数/字符串）数组；角色变量暂不支持（C# 也仅限 1D）。
+    if (name == QLatin1String("ARRAYCOPY") || name == QLatin1String("ARRAYSHIFT")
+        || name == QLatin1String("ARRAYREMOVE") || name == QLatin1String("ARRAYSORT")) {
+        advance();
+        QList<Operand> ops;
+        for (const Operand& a : line.arguments) {
+            if (a.raw != QLatin1String(",")) ops.append(a);
+        }
+        auto evalOp = [&](int i, qint64 def) -> qint64 {
+            if (i >= ops.size()) return def;
+            qint64 v = def;
+            evalInt(ops.at(i).ast, ops.at(i).raw, v);
+            return v;
+        };
+        // 数组逻辑长度：优先声明长度，其次实际存储长度
+        auto length1D = [&](const QString& var) -> int {
+            if (m_table) {
+                const VariableDecl* decl =
+                    m_table->variableTable().find(var, line.ownerFunction);
+                if (decl && decl->dimension == 1 && !decl->lengths.isEmpty()
+                    && decl->lengths.first() > 0)
+                    return decl->lengths.first();
+            }
+            return qMax(0, m_storage->arraySize(var));
+        };
+        // 是否字符串数组（按声明类型）
+        auto isStrArray = [&](const QString& var) -> bool {
+            if (m_table) {
+                const VariableDecl* decl =
+                    m_table->variableTable().find(var, line.ownerFunction);
+                if (decl) return decl->type == OperandType::Str;
+            }
+            return false;
+        };
+
+        if (name == QLatin1String("ARRAYREMOVE")) {
+            // ARRAYREMOVE var, start, num：左移 num 个元素，尾部补 0/""（长度不变）
+            if (ops.isEmpty()) return ExecState::Continue;
+            const QString var = ops.first().raw.trimmed();
+            const int len = length1D(var);
+            const int start = static_cast<int>(evalOp(1, 0));
+            qint64 numN = evalOp(2, -1);
+            if (len <= 0 || start < 0 || start >= len || numN == 0) return ExecState::Continue;
+            const int num = (numN < 0) ? (len - start) : static_cast<int>(qMin<qint64>(numN, len - start));
+            if (isStrArray(var)) {
+                QStringList vals;
+                for (int i = 0; i < len; ++i) vals << m_storage->getGlobalStr1D(var, i);
+                for (int i = start; i < len; ++i)
+                    m_storage->setGlobalStr1D(var, i, (i + num < len) ? vals.at(i + num) : QString());
+            } else {
+                QList<qint64> vals;
+                for (int i = 0; i < len; ++i) vals << m_storage->getGlobalInt1D(var, i);
+                for (int i = start; i < len; ++i)
+                    m_storage->setGlobalInt1D(var, i, (i + num < len) ? vals.at(i + num) : 0);
+            }
+            return ExecState::Continue;
+        }
+        if (name == QLatin1String("ARRAYSHIFT")) {
+            // ARRAYSHIFT var, shift, def[, start, num]：区间内元素平移，空出的格子填 def
+            if (ops.isEmpty()) return ExecState::Continue;
+            const QString var = ops.first().raw.trimmed();
+            const int len = length1D(var);
+            const int shift = static_cast<int>(evalOp(1, 0));
+            if (len <= 0 || shift == 0) return ExecState::Continue;
+            const int start = static_cast<int>(evalOp(3, 0));
+            if (start < 0 || start >= len) return ExecState::Continue;
+            qint64 numN = evalOp(4, -1);
+            int num = (numN < 0) ? (len - start) : static_cast<int>(qMin<qint64>(numN, len - start));
+            if (num <= 0) return ExecState::Continue;
+            const bool strArr = isStrArray(var);
+            const QString defS = ops.size() > 2 ? (ops.at(2).isString ? ops.at(2).raw : QString())
+                                                : QString();
+            const qint64 defI = evalOp(2, 0);
+            if (strArr) {
+                QStringList vals;
+                for (int i = 0; i < len; ++i) vals << m_storage->getGlobalStr1D(var, i);
+                for (int i = start; i < start + num; ++i) {
+                    const int src = i - shift;
+                    m_storage->setGlobalStr1D(var, i,
+                        (src >= start && src < start + num) ? vals.at(src) : defS);
+                }
+            } else {
+                QList<qint64> vals;
+                for (int i = 0; i < len; ++i) vals << m_storage->getGlobalInt1D(var, i);
+                for (int i = start; i < start + num; ++i) {
+                    const int src = i - shift;
+                    m_storage->setGlobalInt1D(var, i,
+                        (src >= start && src < start + num) ? vals.at(src) : defI);
+                }
+            }
+            return ExecState::Continue;
+        }
+        if (name == QLatin1String("ARRAYSORT")) {
+            // ARRAYSORT var[, FORWARD|BACK[, start[, num]]]
+            if (ops.isEmpty()) return ExecState::Continue;
+            const QString var = ops.first().raw.trimmed();
+            const int len = length1D(var);
+            if (len <= 0) return ExecState::Continue;
+            const bool back = (ops.size() > 1
+                               && ops.at(1).raw.trimmed().toUpper() == QLatin1String("BACK"));
+            const int start = static_cast<int>(evalOp(2, 0));
+            qint64 numN = evalOp(3, -1);
+            if (start < 0 || start >= len) return ExecState::Continue;
+            const int num = (numN < 0) ? (len - start) : static_cast<int>(qMin<qint64>(numN, len - start));
+            if (num <= 1) return ExecState::Continue;
+            if (isStrArray(var)) {
+                QStringList vals;
+                for (int i = 0; i < len; ++i) vals << m_storage->getGlobalStr1D(var, i);
+                std::sort(vals.begin() + start, vals.begin() + start + num,
+                          [&](const QString& a, const QString& b) {
+                              return back ? (a > b) : (a < b);
+                          });
+                for (int i = 0; i < len; ++i) m_storage->setGlobalStr1D(var, i, vals.at(i));
+            } else {
+                QList<qint64> vals;
+                for (int i = 0; i < len; ++i) vals << m_storage->getGlobalInt1D(var, i);
+                std::sort(vals.begin() + start, vals.begin() + start + num,
+                          [&](qint64 a, qint64 b) { return back ? (a > b) : (a < b); });
+                for (int i = 0; i < len; ++i) m_storage->setGlobalInt1D(var, i, vals.at(i));
+            }
+            return ExecState::Continue;
+        }
+        // ARRAYCOPY dest, src：整体拷贝（C# CopyArray：src[0..len) -> dest[0..len)）
+        if (ops.size() >= 2) {
+            const QString dest = ops.at(0).raw.trimmed();
+            const QString src = ops.at(1).raw.trimmed();
+            const int len = length1D(src);
+            const bool strArr = isStrArray(src);
+            for (int i = 0; i < len; ++i) {
+                if (strArr) {
+                    m_storage->setGlobalStr1D(dest, i, m_storage->getGlobalStr1D(src, i));
+                } else {
+                    m_storage->setGlobalInt1D(dest, i, m_storage->getGlobalInt1D(src, i));
+                }
+            }
+        }
+        return ExecState::Continue;
+    }
+
+    // ---- WAIT / WAITANYKEY / FORCEWAIT（对齐 C# WAIT_Instruction）----
+    //   WAIT       -> Console.ReadAnyKey()        等任意键（可被跳过功能略过）
+    //   WAITANYKEY -> Console.ReadAnyKey(true,false)
+    //   FORCEWAIT  -> Console.ReadAnyKey(false,true) 跳过功能不能略过的 WAIT
+    // 三者都挂起等输入；「跳过模式下的差异」属于输入层能力，此处统一等任意键。
+    if (name == QLatin1String("WAIT") || name == QLatin1String("WAITANYKEY")
+        || name == QLatin1String("FORCEWAIT")) {
+        advance();
+        if (m_machine) {
+            m_machine->waitAnyKey();
+            return m_state->getExecState();
+        }
+        return ExecState::WaitInput;
     }
 
     // ---- 输入等待（由中心执行状态挂起）----
@@ -1396,7 +1553,8 @@ void ScriptRunner::bindArguments(const UserFunctionDecl* info, const QList<Opera
     }
 }
 
-bool ScriptRunner::invokeUserFunction(const QString& name, const QList<QVariant>& args, QVariant& out) {
+bool ScriptRunner::invokeUserFunction(const QString& name, const QList<QVariant>& args,
+                                      const QList<const ExpressionNode*>& argNodes, QVariant& out) {
     const UserFunctionDecl* info = m_table->userFunction(name);
     if (!info || !info->isMethod) {
         return false;   // 非用户函数（交给内置函数）
@@ -1423,27 +1581,83 @@ bool ScriptRunner::invokeUserFunction(const QString& name, const QList<QVariant>
     for (int i = 0; i < args.size(); ++i) {
         const QVariant& v = args.at(i);
         const bool isStr = (v.typeId() == QMetaType::QString);
+        const bool omitted = !v.isValid();   // 省略实参（evaluateFunction 记为无效 QVariant）
         const UserParamDecl* param = (i < info->params.size()) ? &info->params.at(i) : nullptr;
+        // `#DIM REF` 引用形参：实参必须是裸变量名（对齐语句 CALL 路径的
+        // references 机制）—— 把形参名别名到调用方变量的存储键，函数体内
+        // 对形参的读写直接落到调用方变量。eraTW 的 画像合成(グラフィックID
+        // 为 REF) 全靠这个把分配到的 G 编号写回调用者。
+        if (param && param->isReference && param->target == UserParamTarget::LocalVar
+            && argNodes.value(i)) {
+            const auto* argVarNode = dynamic_cast<const VariableNode*>(argNodes.at(i));
+            if (argVarNode && argVarNode->indices().isEmpty()) {
+                const QString actualName = argVarNode->name();
+                if (!actualName.isEmpty()) {
+                    m_storage->setReference(param->varName,
+                                            m_storage->resolvedStorageName(actualName));
+                    continue;
+                }
+            }
+        }
         switch (param ? param->target : UserParamTarget::Unknown) {
         case UserParamTarget::Arg:
-            m_storage->setArgInt(param->index, v.toLongLong());
+            m_storage->setArgInt(param->index, omitted ? 0 : v.toLongLong());
             m_storage->setLocalAlias(param->name, param->index);
             break;
         case UserParamTarget::Args:
-            m_storage->setArgStr(param->index, v.toString());
+            // 省略 -> 空串（对齐 C# 缺省值）；此前整数化成 "0" 污染字符串形参
+            m_storage->setArgStr(param->index, omitted ? QString() : v.toString());
             m_storage->setLocalAlias(param->name, param->index);
             break;
         case UserParamTarget::LocalVar:
             if (param->fixedIndex >= 0) {
-                m_storage->setGlobalInt1D(param->varName, param->fixedIndex, v.toLongLong());
+                m_storage->setGlobalInt1D(param->varName, param->fixedIndex,
+                                          omitted ? 0 : v.toLongLong());
                 break;
             }
-            m_storage->setParameter(param->varName.isEmpty() ? param->name : param->varName, v);
+            m_storage->setParameter(param->varName.isEmpty() ? param->name : param->varName,
+                omitted ? QVariant(param->type == OperandType::Str ? QString() : QVariant::fromValue<qint64>(0))
+                        : v);
             break;
         case UserParamTarget::Unknown:
         default:
-            m_storage->setArgInt(i, v.toLongLong());
-            if (isStr) m_storage->setArgStr(i, v.toString());
+            m_storage->setArgInt(i, omitted ? 0 : v.toLongLong());
+            if (omitted || isStr) m_storage->setArgStr(i, omitted ? QString() : v.toString());
+            break;
+        }
+    }
+    // 缺省形参（`@F(A, OP = "NORMAL")`）：实参没给到的位置按声明缺省值绑定。
+    // 此前只在语句 CALL 路径（bindArguments）处理，表达式调用（CALLF/式中调用）
+    // 漏掉了 —— eraTW 的 TEMP_VARCLEAR(ARGS:0, OP = "NORMAL") 的 OP 恒为空串，
+    // SELECTCASE 一个 CASE 都不命中，TEMPVAR 清除链整体失效。
+    for (int position = args.size(); position < info->params.size(); ++position) {
+        const UserParamDecl& param = info->params.at(position);
+        if (!param.hasDefault) continue;
+        const bool stringDefault = param.type == OperandType::Str && !param.defaultStr.isEmpty();
+        QString text = param.defaultStr;
+        if (stringDefault && text.size() >= 2 && text.startsWith(QLatin1Char('"'))
+            && text.endsWith(QLatin1Char('"'))) text = text.mid(1, text.size() - 2);
+        switch (param.target) {
+        case UserParamTarget::Arg:
+            m_storage->setArgInt(param.index, param.defaultInt);
+            m_storage->setLocalAlias(param.name, param.index);
+            break;
+        case UserParamTarget::Args:
+            m_storage->setArgStr(param.index, stringDefault ? text : QString());
+            m_storage->setLocalAlias(param.name, param.index);
+            break;
+        case UserParamTarget::LocalVar:
+            if (param.fixedIndex >= 0) {
+                m_storage->setGlobalInt1D(param.varName, param.fixedIndex, param.defaultInt);
+                break;
+            }
+            m_storage->setParameter(param.varName.isEmpty() ? param.name : param.varName,
+                stringDefault ? QVariant(text) : QVariant::fromValue<qint64>(param.defaultInt));
+            break;
+        case UserParamTarget::Unknown:
+        default:
+            m_storage->setArgInt(position, param.defaultInt);
+            if (stringDefault) m_storage->setArgStr(position, text);
             break;
         }
     }

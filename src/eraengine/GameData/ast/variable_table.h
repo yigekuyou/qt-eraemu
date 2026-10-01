@@ -51,6 +51,7 @@ struct VariableDecl {
     bool        isArg = false;               // 来自 @F(A,B) 形参表
     bool        isReference = false;         // #DIM(S) REF：调用方数组的别名
     bool        isCharaData = false;         // #DIM(S) CHARADATA：每角色一份
+    bool        isGlobalSave = false;        // #DIM SAVEDATA GLOBAL：随 SAVEGLOBAL 持久化
     QList<qint64> defaultInt;   // #DIM X = 1,2 的初值（进入函数时写入）
     QStringList   defaultStr;   // #DIMS S = "a" 的初值
 };
@@ -88,6 +89,10 @@ public:
     [[nodiscard]] bool constArrayAt(const QString& name, int index, qint64& out) const;
     [[nodiscard]] int constArraySize(const QString& name) const;
     void setConstStr(const QString& name, const QString& value);
+    // `#DIMS CONST NAME, N = s0, s1, …`：字符串常数数组（eraTW 的 DISP_MEMO 等）
+    void setConstStrArray(const QString& name, const QStringList& values);
+    [[nodiscard]] bool constStrArrayAt(const QString& name, int index, QString& out) const;
+    [[nodiscard]] int constStrArraySize(const QString& name) const;
     // `#DIM CONST NAME = <非常量字面量的表达式>`（如 `= 人物数量上限`）。
     // 声明顺序 / 跨文件顺序不可靠，所以**不在装载期**求值，而是把表达式留到
     // 求值期惰性计算（`#DIM CONST OBJ_ID_LAST = 人物数量上限` 曾因此恒为 0，
@@ -115,6 +120,7 @@ private:
     QHash<QString, VariableDecl> m_globals;
     QHash<QString, qint64>  m_constInt;
     QHash<QString, QList<qint64>> m_constArray;
+    QHash<QString, QStringList> m_constStrArray;   // 字符串常数数组
     QHash<QString, QString> m_constStr;
     QHash<QString, QStringList> m_constExpr;   // 未折叠的 CONST 初值表达式
     std::function<qint64(const QString&)> m_dimEvaluator;   // 维数表达式兜底求值

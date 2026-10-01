@@ -291,3 +291,23 @@ int VariableTable::constArraySize(const QString& name) const
     const auto it = m_constArray.constFind(nk(name));
     return (it == m_constArray.constEnd()) ? 0 : it.value().size();
 }
+
+void VariableTable::setConstStrArray(const QString& name, const QStringList& values)
+{
+    if (!name.isEmpty() && !values.isEmpty()) m_constStrArray.insert(nk(name), values);
+}
+
+bool VariableTable::constStrArrayAt(const QString& name, int index, QString& out) const
+{
+    const auto it = m_constStrArray.constFind(nk(name));
+    if (it == m_constStrArray.constEnd()) return false;
+    if (index < 0 || index >= it.value().size()) return false;
+    out = it.value().at(index);
+    return true;
+}
+
+int VariableTable::constStrArraySize(const QString& name) const
+{
+    const auto it = m_constStrArray.constFind(nk(name));
+    return (it == m_constStrArray.constEnd()) ? 0 : it.value().size();
+}

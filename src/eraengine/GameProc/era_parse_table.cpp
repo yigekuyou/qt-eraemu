@@ -983,7 +983,13 @@ void EraParseTable::parseVariableDeclaration(const LogicalLine& line, const QStr
                        return parseIntegerLiteral(v.trimmed(), n);
                    });
             if (d.typeIsStr) {
-                if (!d.defaultStr.isEmpty()) m_variables.setConstStr(d.name, d.defaultStr.first());
+                if (d.defaultStr.size() > 1) {
+                    // 字符串常数**数组**（`#DIMS CONST X, N = s0, s1, …`，
+                    // eraTW 的 DISP_MEMO）：逐下标提供，此前只存第一个值。
+                    m_variables.setConstStrArray(d.name, d.defaultStr);
+                } else if (!d.defaultStr.isEmpty()) {
+                    m_variables.setConstStr(d.name, d.defaultStr.first());
+                }
             } else if (!allLiteral && !valueExprs.isEmpty()) {
                 m_variables.setConstExprs(d.name, valueExprs);
             } else if (valueExprs.isEmpty()) {
@@ -1013,6 +1019,11 @@ void EraParseTable::parseVariableDeclaration(const LogicalLine& line, const QStr
         decl.isConst = d.isConst;
         decl.isReference = d.reference;
         decl.isCharaData = d.charaData;
+        // `#DIM SAVEDATA GLOBAL X`（对齐 C# IsGlobal && IsSavedata）：
+        // 随 SAVEGLOBAL/LOADGLOBAL 持久化到 save_global.dat 的用户变量。
+        // 注意 `#DIM GLOBAL X` 的 GLOBAL 写在变量名前（d.global），与
+        // `#GLOBAL X` 指令（isGlobal）两种写法都要认。
+        decl.isGlobalSave = d.save && (d.global || isGlobal);
 
         // 用户 `#DIM(S) CHARADATA`：登记为角色数据变量，供读写路径按
         // (角色号, 元素下标) 存取（否则元素互相覆盖，表现为「变量似乎不可变」）。
@@ -1132,10 +1143,15 @@ void EraParseTable::finalizeParse() {
         });
         // 常数数组（`#DIM CONST X, N = …`）：先判名（避免下标副作用被求两遍）
         m_evaluator->setConstArrayChecker([vt](const QString& name) -> bool {
-            return vt->constArraySize(name) > 0;
+            return vt->constArraySize(name) > 0 || vt->constStrArraySize(name) > 0;
         });
         m_evaluator->setConstArrayProvider([vt, evalLazyConst](const QString& name, int index,
                                                                QVariant& out) -> bool {
+            QString sv;
+            if (vt->constStrArrayAt(name, index, sv)) {
+                out = QVariant(sv);
+                return true;
+            }
             qint64 iv = 0;
             if (vt->constArrayAt(name, index, iv)) {
                 out = QVariant::fromValue<qint64>(iv);

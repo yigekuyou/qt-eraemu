@@ -1126,7 +1126,38 @@ bool ExecutionEngine::executeInstruction(const LogicalLine& line) {
     // 这样跑 eraTW 时从 stderr 就能看出还有哪些接口没接线。
     // DEBUGPRINT 族：仅在调试模式输出（C# DEBUGPRINT_Instruction 检查
     // debugMode），非调试运行期静默忽略，不算未实现。
+    // ---- DEBUGPRINT 族（对齐 C# FunctionCode.DEBUGPRINT*：写到调试输出）----
+    // eraTW 实测 65+ 处使用（DEBUGPRINTFORML 65 / 宽松 116）；此前全部静默
+    // 跳过，调试信息完全丢失。对齐 C#：输出到调试端（不进游戏控制台），
+    // 这里映射到 eraTrace 调试日志（EMUERA_QDBUG_TRACE=1 可见）。
+    // 后缀语义与 PRINT 族一致：V/S=变量求值、FORM=格式串、L/W=换行。
     if (name.startsWith(QLatin1String("DEBUGPRINT"))) {
+        ExpressionEvaluator fallback;
+        ExpressionEvaluator& ev = m_expressionEvaluator ? *m_expressionEvaluator : fallback;
+        const QString rest = line.raw.trimmed().mid(name.size()).trimmed();
+        QString text;
+        if (name.contains(QLatin1String("FORM"))) {
+            // FORM 变体：整段按**格式串**展开（%..%/{..}/\@…\@）——
+            // 对齐 C# AnalyseFormattedString；不能当普通表达式解析
+            //（% 是 UNKNOWN token，会解析失败 -> 原样输出）。
+            const auto resolve = m_parseTable
+                ? [this](const QString& e) { return m_parseTable->expressionAst(e); }
+                : std::function<QSharedPointer<ExpressionNode>(const QString&)>();
+            const QSharedPointer<ExpressionNode> ast =
+                StrFormParser::parse(rest, resolve);
+            text = ast ? ev.evaluate(*ast.staticCast<ExpressionNode>(), m_storage, m_gameBaseData).toString()
+                       : rest;
+        } else if (!rest.isEmpty()) {
+            const QVariant v = ev.evaluate(rest, m_storage, m_gameBaseData);
+            text = v.toString();
+        }
+        if (name.contains(QLatin1String("FORMS"))) {
+            // FORMS 变体：实参是字符串表达式
+            text = ev.evaluate(rest, m_storage, m_gameBaseData).toString();
+        }
+        if (!name.endsWith(QLatin1Char('L')) && !name.endsWith(QLatin1Char('W')))
+            text += QLatin1Char('\n');
+        qCDebug(eraTrace).noquote() << "[debugprint]" << text;
         return true;
     }
     // [qdbug]（保留的调试桩）：落到「其它指令」的**每一次**执行都留痕 ——

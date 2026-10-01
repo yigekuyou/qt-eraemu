@@ -95,6 +95,15 @@ public:
 		[[nodiscard]] qint64 csvCharaInt(const QString& name, int charaId, int index) const;
 		[[nodiscard]] QString csvCharaStr(const QString& name, int charaId, int index) const;
 
+		// ================= 存档序列化（SAVEDATA/LOADDATA/DELDATA/CHKDATA 支持）=================
+		// 对齐 C# VariableEvaluator.SaveTo/LoadFrom 的语义：
+		//   * 文件名 save{index:00}.sav（C# VariableEvaluator.cs:1746）
+		//   * 内容：唯一码/版本/SAVETEXT(PUTFORM)/角色清单/全局变量/系统变量
+		//   * 格式为移植版行式文本 —— C# 的 EraDataWriter 格式不兼容，
+		//     C# 存档不可载入（已知限制）；移植版自身存档可完整往返。
+		Q_INVOKABLE QString dumpSaveData() const;
+		Q_INVOKABLE void restoreSaveData(const QString& text);
+
 		// ================= 本地变量 =================
 		Q_INVOKABLE void setLocalInt(int index, qint64 value);
 		Q_INVOKABLE qint64 getLocalInt(int index) const;

@@ -578,12 +578,30 @@ void SystemStateMachine::waitAnyKey() {
     if (m_host.readAnyKey) m_host.readAnyKey();   // 通知 UI 弹「任意键」等待
 }
 
-void SystemStateMachine::waitTimedInput(int timeoutMs) {
+void SystemStateMachine::waitTimedInput(int timeoutMs, qint64 defaultValue) {
     const auto wait = ++m_waitGeneration;
     m_state->setExecState(ExecState::WaitInput);
     emit inputRequested(m_state->getSystemState());
     if (timeoutMs > 0 && m_timer) {
-        m_timer(timeoutMs, [this, wait]() { if (wait == m_waitGeneration) deliverInputValues({0}); });
+        // [qdbug] C# 原版全量：TINPUT 超时交付**缺省值**（此前恒为 0）
+        m_timer(timeoutMs, [this, wait, defaultValue]() {
+            if (wait == m_waitGeneration) deliverInputValues({defaultValue});
+        });
+    }
+}
+
+// TINPUTS：限时字符串输入；超时没输入则 RESULTS = 缺省字符串并继续
+//（RESULTS 全局，C# VariableData.cs:202）
+void SystemStateMachine::waitTimedStringInput(int timeoutMs, const QString& defaultValue) {
+    const auto wait = ++m_waitGeneration;
+    m_state->setExecState(ExecState::WaitInput);
+    emit inputRequested(m_state->getSystemState());
+    if (timeoutMs > 0 && m_timer) {
+        m_timer(timeoutMs, [this, wait, defaultValue]() {
+            if (wait != m_waitGeneration) return;
+            m_storage->setGlobalStr1D(QStringLiteral("RESULTS"), 0, defaultValue);
+            resume(0);
+        });
     }
 }
 

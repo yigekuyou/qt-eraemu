@@ -1224,6 +1224,14 @@ bool ExpressionEvaluator::evaluateBuiltin(const FunctionNode &node, VariableStor
         out = QVariant::fromValue<qint64>((m < 0 || m > 63) ? 0 : ((n >> static_cast<int>(m)) & 1));
         return true;
     }
+    case BuiltinOp::ChkData: {
+        // CHKDATA <存档名/号>：存档存在判定（C# CheckdataMethod）
+        // 走 EraEngine 注入的 provider（存档目录 + save{##}.sav 探测）
+        const QString saveName = S(0);
+        if (m_saveExistsProvider) { out = QVariant::fromValue<qint64>(m_saveExistsProvider(saveName)); return true; }
+        out = QVariant::fromValue<qint64>(0);
+        return true;
+    }
     case BuiltinOp::InRange: {
         const qint64 v = I(0), lo = I(1), hi = I(2);
         out = QVariant::fromValue<qint64>((v >= lo && v <= hi) ? 1 : 0);

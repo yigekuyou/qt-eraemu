@@ -1009,7 +1009,7 @@ ExecState ScriptRunner::executeLine(const LogicalLine& line) {
 
     // ---- 输入等待（由中心执行状态挂起）----
     if (name == QLatin1String("INPUT") || name == QLatin1String("ONEINPUT")
-        || name == QLatin1String("INPUTS")) {
+        || name == QLatin1String("INPUTS") || name == QLatin1String("ONEINPUTS")) {
         advance();                       // 指令已消费
         return ExecState::WaitInput;     // 挂起等待用户操作
     }
@@ -1021,6 +1021,40 @@ ExecState ScriptRunner::executeLine(const LogicalLine& line) {
         advance();
         if (m_machine) {
             m_machine->waitMouseKey(static_cast<int>(timeout));
+            return m_state->getExecState();
+        }
+        return ExecState::WaitInput;
+    }
+    // ---- TINPUT <超时ms>, <缺省值>[, <跳过标记>] / TINPUTS（对齐 C# TINPUT_Instruction）----
+    //   暂停 <超时>ms 等输入；到点没输入则按缺省值交付（RESULT/RESULTS）；
+    //   有输入则取输入。eraMegaten 的 SYSTEM_TITLE.erb:62 TINPUTS 100, "-1", 0
+    //   此前被静默忽略。TINPUTS 的缺省值为字符串（写 RESULTS）。
+    if (name == QLatin1String("TINPUT") || name == QLatin1String("TINPUTS")) {
+        QSharedPointer<ExpressionNode> timeNode, defNode;
+        if (!line.arguments.isEmpty() && line.arguments.first().ast
+            && line.arguments.first().ast->kind() == NodeKind::Function) {
+            const auto& fn = static_cast<const FunctionNode&>(*line.arguments.first().ast);
+            if (!fn.arguments().isEmpty()) timeNode = fn.arguments().at(0);
+            if (fn.arguments().size() >= 2) defNode = fn.arguments().at(1);
+        }
+        qint64 ms = 0, def = 0;
+        evalInt(timeNode, QString(), ms);
+        QString defStr;
+        if (name == QLatin1String("TINPUTS") && defNode) {
+            ExpressionEvaluator fallback;
+            ExpressionEvaluator* ev = m_evaluator ? m_evaluator : &fallback;
+            defStr = ev->evaluate(*defNode, m_storage, baseData()).toString();
+        } else {
+            evalInt(defNode, QString(), def);
+        }
+        if (ms < 0) ms = 0;
+        advance();
+        if (name == QLatin1String("TINPUTS")) {
+            m_machine->waitTimedStringInput(static_cast<int>(ms), defStr);
+            return m_state->getExecState();
+        }
+        if (m_machine) {
+            m_machine->waitTimedInput(static_cast<int>(ms), def);
             return m_state->getExecState();
         }
         return ExecState::WaitInput;

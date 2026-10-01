@@ -1160,6 +1160,12 @@ bool ExecutionEngine::executeInstruction(const LogicalLine& line) {
         qCDebug(eraTrace).noquote() << "[debugprint]" << text;
         return true;
     }
+    // ---- 存档系（普通语句形态：LOADDATA 等不经过 executeFunctionCall）----
+    if (name == QLatin1String("SAVEDATA")) { handleSaveData(line); return true; }
+    if (name == QLatin1String("LOADDATA"))  { handleLoadData(line); return true; }
+    if (name == QLatin1String("DELDATA"))   { handleDelData(line); return true; }
+    if (name == QLatin1String("CHKDATA"))   { handleChkData(line); return true; }
+
     // [qdbug]（保留的调试桩）：落到「其它指令」的**每一次**执行都留痕 ——
     // reportUnfinished 同名只报一次，会漏掉后续出现的同型行；
     // EMUERA_QDBUG_TRACE=1 时逐次输出，便于定位「指令被静默跳过」的完整现场
@@ -1339,6 +1345,36 @@ bool ExecutionEngine::executeFunctionCall(const LogicalLine& line)
     if (upper == QLatin1String("SPLIT")) {
         return handleSplit(line);
     }
+
+    // ---- None-op 内建：显示/配置类（对齐 C# FunctionCode.RESETBGCOLOR 等）----
+    //   此前注册于 kBuiltinFunctions 但 BuiltinOp::None 无求值分支，
+    //   运行期报「内置函数尚未实现求值（返回 0）」。
+    if (upper == QLatin1String("RESETBGCOLOR")) {
+        qDebug() << "[display] RESETBGCOLOR" << "行" << line.position.toString();
+        return true;
+    }
+    if (upper == QLatin1String("INITRAND")) {
+        if (m_expressionEvaluator) m_expressionEvaluator->randomize();
+        qDebug() << "[var] INITRAND 随机重置" << "行" << line.position.toString();
+        return true;
+    }
+    if (upper == QLatin1String("DUMPRAND")) {
+        if (m_expressionEvaluator)
+            qDebug() << "[var] DUMPRAND 状态" << m_expressionEvaluator->randomSeed()
+                     << "行" << line.position.toString();
+        return true;
+    }
+    if (upper == QLatin1String("DEBUGCLEAR")) {
+        qDebug() << "[debugprint] DEBUGCLEAR" << "行" << line.position.toString();
+        return true;
+    }
+    // ---- 存档系（核心：C# 原版全量，BuiltInFunctionCode.cs 枚举内）----
+    //   SAVEDATA/LOADDATA/DELDATA/CHKDATA：函数调用形态与普通语句形态都
+    //   可能出现，统一委托私有方法（实现见 handleSaveData 等）。
+    if (upper == QLatin1String("SAVEDATA")) { handleSaveData(line); return true; }
+    if (upper == QLatin1String("LOADDATA"))  { handleLoadData(line); return true; }
+    if (upper == QLatin1String("DELDATA"))   { handleDelData(line); return true; }
+    if (upper == QLatin1String("CHKDATA"))   { handleChkData(line); return true; }
 
     // ---- 语句型函数注册表（扩展函数专用：C# 原型没有的函数）----
     // 注册表命中即执行，未命中落到下面的通用路径。
@@ -1766,3 +1802,102 @@ void ExecutionEngine::setError(const QString& message) {
 // Receive instruction from ParseTable
 // Handle jump request from ParseTable
 // Handle memory space change from ParseTable
+
+// ---------------------------------------------------------------------------
+// 存档系私有方法（SAVEDATA/LOADDATA/DELDATA/CHKDATA 的实现）
+// 对齐 C# FunctionCode.SAVEDATA/LOADDATA/DELDATA + SpSaveDataArgument +
+// VariableEvaluator.SaveTo/LoadFrom：文件名 save{##}.sav（C# 1746）；
+// 存档格式为移植版行式文本（C# EraDataWriter 不兼容 —— 已知限制）。
+// ---------------------------------------------------------------------------
+void ExecutionEngine::handleSaveData(const LogicalLine& line)
+{
+    QList<Operand> parts;
+    for (const Operand& op : line.arguments) {
+        if (op.raw == QLatin1String(",")) continue;
+        parts.append(op);
+    }
+    if (parts.size() < 2) return;
+    ExpressionEvaluator fallback;
+    ExpressionEvaluator& ev = m_expressionEvaluator ? *m_expressionEvaluator : fallback;
+    const auto evalOp = [&](const Operand& op) -> QVariant {
+        return op.ast ? ev.evaluate(*op.ast, m_storage, m_gameBaseData)
+                      : ev.evaluate(op.raw, m_storage, m_gameBaseData);
+    };
+    const qint64 idx = evalOp(parts[0]).toLongLong();
+    const QString saveText = evalOp(parts[1]).toString();
+    if (idx < 0) {
+        m_state.setErrorState();
+        emit errorOccurred(QStringLiteral("SAVEDATAの引数に負の値(%1)が指定されました").arg(idx));
+        return;
+    }
+    if (saveText.contains(QLatin1Char('\n'))) {
+        m_state.setErrorState();
+        emit errorOccurred(QStringLiteral("SAVEDATAのセーブテキストに改行文字が与えられました"));
+        return;
+    }
+    QDir().mkpath(m_gameDirectory + QStringLiteral("/sav"));
+    const QString path = m_gameDirectory + QStringLiteral("/sav/save%1.sav")
+                             .arg(idx, 2, 10, QLatin1Char('0'));
+    QString body = m_storage ? m_storage->dumpSaveData() : QString();
+    // SAVETEXT（PUTFORM 累积文本）写进存档头（对齐 C# SaveToStream 第3项）
+    body.replace(QStringLiteral("eraemu-save-v1"),
+                 QStringLiteral("eraemu-save-v1\nSAVETEXT\t%1").arg(saveText));
+    QFile f(path);
+    if (f.open(QIODevice::WriteOnly | QIODevice::Text)) {
+        f.write(body.toUtf8());
+        f.close();
+        qDebug() << "[save] SAVEDATA" << idx << "->" << path;
+    } else {
+        qWarning() << "[save] SAVEDATA 写入失败:" << path;
+    }
+}
+
+void ExecutionEngine::handleLoadData(const LogicalLine& line)
+{
+    if (line.arguments.isEmpty()) return;
+    ExpressionEvaluator fallback;
+    ExpressionEvaluator& ev = m_expressionEvaluator ? *m_expressionEvaluator : fallback;
+    const Operand& op = line.arguments.first();
+    const qint64 idx = op.ast ? ev.evaluate(*op.ast, m_storage, m_gameBaseData).toLongLong()
+                              : ev.evaluate(op.raw, m_storage, m_gameBaseData).toLongLong();
+    const QString path = m_gameDirectory + QStringLiteral("/sav/save%1.sav")
+                             .arg(idx, 2, 10, QLatin1Char('0'));
+    QFile f(path);
+    if (f.open(QIODevice::ReadOnly | QIODevice::Text)) {
+        const QString body = QString::fromUtf8(f.readAll());
+        f.close();
+        if (m_storage) m_storage->restoreSaveData(body);
+        qDebug() << "[save] LOADDATA" << idx << "<-" << path;
+    } else {
+        qWarning() << "[save] LOADDATA 读档失败（无此存档）:" << path;
+    }
+}
+
+void ExecutionEngine::handleDelData(const LogicalLine& line)
+{
+    if (line.arguments.isEmpty()) return;
+    ExpressionEvaluator fallback;
+    ExpressionEvaluator& ev = m_expressionEvaluator ? *m_expressionEvaluator : fallback;
+    const Operand& op = line.arguments.first();
+    const qint64 idx = op.ast ? ev.evaluate(*op.ast, m_storage, m_gameBaseData).toLongLong()
+                              : ev.evaluate(op.raw, m_storage, m_gameBaseData).toLongLong();
+    const QString path = m_gameDirectory + QStringLiteral("/sav/save%1.sav")
+                             .arg(idx, 2, 10, QLatin1Char('0'));
+    if (QFile::exists(path) && QFile::remove(path))
+        qDebug() << "[save] DELDATA" << idx << "删除" << path;
+}
+
+void ExecutionEngine::handleChkData(const LogicalLine& line)
+{
+    ExpressionEvaluator fallback;
+    ExpressionEvaluator& ev = m_expressionEvaluator ? *m_expressionEvaluator : fallback;
+    const Operand& op = line.arguments.isEmpty() ? Operand() : line.arguments.first();
+    const qint64 idx = op.ast ? ev.evaluate(*op.ast, m_storage, m_gameBaseData).toLongLong()
+                              : ev.evaluate(op.raw, m_storage, m_gameBaseData).toLongLong();
+    const QString path = m_gameDirectory + QStringLiteral("/sav/save%1.sav")
+                             .arg(idx, 2, 10, QLatin1Char('0'));
+    const bool exists = QFile::exists(path);
+    if (m_storage) m_storage->setSystemVariable(QStringLiteral("RESULT"), 0, exists ? 1 : 0);
+    qDebug() << "[save] CHKDATA" << idx << (exists ? "存在" : "不存在")
+             << "行" << line.position.toString();
+}

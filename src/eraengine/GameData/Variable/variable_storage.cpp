@@ -18,6 +18,7 @@
 #include "variable_storage.h"
 #include <QSet>
 #include <QDebug>
+#include "eraengine_log.h"
 #include "expression_evaluator.h"
 
 VariableStorage::VariableStorage(QObject *parent)
@@ -830,4 +831,130 @@ QVariant VariableStorage::evaluateExpression(const QString &expression)
 {
     ExpressionEvaluator evaluator;
     return evaluator.evaluate(expression, this);
+}
+
+// ---------------------------------------------------------------------------
+// 存档序列化（SAVEDATA/LOADDATA 支持；对齐 C# VariableEvaluator.SaveTo/LoadFrom）
+//   文件名 save{index:00}.sav（C# VariableEvaluator.cs:1746）；
+//   格式为移植版行式文本（eraemu-save-v1）—— C# 的 EraDataWriter 格式不
+//   兼容，C# 存档不可载入（已知限制）；移植版自身存档可完整往返。
+//   只序列化**运行期游戏状态**：角色清单、全局变量、角色变量、系统变量。
+//   局部变量（LOCAL/LOCALS/ARGS/私有变量）不入档（对齐 C#：存档只存全局）。
+// ---------------------------------------------------------------------------
+QString VariableStorage::dumpSaveData() const
+{
+    QStringList out;
+    out << QStringLiteral("eraemu-save-v1");
+
+    // 角色清单（运行时下标 -> 模板号；对齐 C# CharacterList）
+    QStringList csvNos;
+    for (int v : m_charaList) csvNos << QString::number(v);
+    out << QStringLiteral("CHARALIST\t") + csvNos.join(QLatin1Char(','));
+
+    // 全局整数 1D/2D
+    for (auto it = m_globalInt1D.constBegin(); it != m_globalInt1D.constEnd(); ++it) {
+        const auto &cells = it.value();
+        for (int i = 0; i < cells.size(); ++i) {
+            if (cells.at(i) != 0)
+                out << QStringLiteral("GI\t%1\t%2\t%3").arg(it.key(), QString::number(i)).arg(cells.at(i));
+        }
+    }
+    for (auto it = m_globalInt2D.constBegin(); it != m_globalInt2D.constEnd(); ++it) {
+        const auto &rows = it.value();
+        for (int x = 0; x < rows.size(); ++x) {
+            const auto &cols = rows.at(x);
+            for (int y = 0; y < cols.size(); ++y) {
+                if (cols.at(y) != 0)
+                    out << QStringLiteral("GI2\t%1\t%2\t%3\t%4").arg(it.key(), QString::number(x), QString::number(y)).arg(cols.at(y));
+            }
+        }
+    }
+    // 全局字符串 1D/2D
+    for (auto it = m_globalStr1D.constBegin(); it != m_globalStr1D.constEnd(); ++it) {
+        const auto &cells = it.value();
+        for (int i = 0; i < cells.size(); ++i) {
+            if (!cells.at(i).isEmpty())
+                out << QStringLiteral("GS\t%1\t%2\t%3").arg(it.key(), QString::number(i), cells.at(i));
+        }
+    }
+    for (auto it = m_globalStr2D.constBegin(); it != m_globalStr2D.constEnd(); ++it) {
+        const auto &rows = it.value();
+        for (int x = 0; x < rows.size(); ++x) {
+            const auto &cols = rows.at(x);
+            for (int y = 0; y < cols.size(); ++y) {
+                if (!cols.at(y).isEmpty())
+                    out << QStringLiteral("GS2\t%1\t%2\t%3\t%4").arg(it.key(), QString::number(x), QString::number(y), cols.at(y));
+            }
+        }
+    }
+    // 角色变量（int/str：m_charaIntVars / m_charaStrVars 的 charaId -> 槽位）
+    for (auto it = m_charaIntVars.constBegin(); it != m_charaIntVars.constEnd(); ++it) {
+        const auto &rows = it.value();
+        for (int c = 0; c < rows.size(); ++c) {
+            const auto &cells = rows.at(c);
+            for (int i = 0; i < cells.size(); ++i) {
+                if (cells.at(i) != 0)
+                    out << QStringLiteral("CI\t%1\t%2\t%3\t%4").arg(it.key(), QString::number(c), QString::number(i)).arg(cells.at(i));
+            }
+        }
+    }
+    for (auto it = m_charaStrVars.constBegin(); it != m_charaStrVars.constEnd(); ++it) {
+        const auto &rows = it.value();
+        for (int c = 0; c < rows.size(); ++c) {
+            const auto &cells = rows.at(c);
+            for (int i = 0; i < cells.size(); ++i) {
+                if (!cells.at(i).isEmpty())
+                    out << QStringLiteral("CS\t%1\t%2\t%3\t%4").arg(it.key(), QString::number(c), QString::number(i), cells.at(i));
+            }
+        }
+    }
+    // 系统变量（int/str：DAY/TIME/MONEY 等）
+    for (auto it = m_systemIntVars.constBegin(); it != m_systemIntVars.constEnd(); ++it) {
+        if (it.value() != 0)
+            out << QStringLiteral("SI\t%1\t%2").arg(it.key()).arg(it.value());
+    }
+    for (auto it = m_systemStrVars.constBegin(); it != m_systemStrVars.constEnd(); ++it) {
+        if (!it.value().isEmpty())
+            out << QStringLiteral("SS\t%1\t%2").arg(it.key(), it.value());
+    }
+    return out.join(QLatin1Char('\n'));
+}
+
+void VariableStorage::restoreSaveData(const QString& text)
+{
+    if (text.isEmpty() || !text.startsWith(QStringLiteral("eraemu-save-v1"))) {
+        qWarning() << "[save] 存档格式不识别（eraemu-save-v1）";
+        return;
+    }
+    const QStringList lines = text.split(QLatin1Char('\n'));
+    // 先清运行期状态（对齐 C# LoadFromStream：SetDefaultValue 后再载入）
+    for (const QString& line : lines) {
+        const QList<QString> f = line.split(QLatin1Char('\t'));
+        if (f.isEmpty()) continue;
+        const QString& tag = f.first();
+        if (tag == QLatin1String("CHARALIST")) {
+            m_charaList.clear();
+            if (f.size() >= 2 && !f.at(1).isEmpty()) {
+                const QStringList nos = f.at(1).split(QLatin1Char(','));
+                for (const QString& n : nos) m_charaList.append(n.toInt());
+            }
+        } else if (tag == QLatin1String("GI") && f.size() >= 4) {
+            setGlobalInt1D(f.at(1), f.at(2).toInt(), f.at(3).toLongLong());
+        } else if (tag == QLatin1String("GI2") && f.size() >= 5) {
+            setGlobalInt2D(f.at(1), f.at(2).toInt(), f.at(3).toInt(), f.at(4).toLongLong());
+        } else if (tag == QLatin1String("GS") && f.size() >= 4) {
+            setGlobalStr1D(f.at(1), f.at(2).toInt(), f.at(3));
+        } else if (tag == QLatin1String("GS2") && f.size() >= 5) {
+            setGlobalStr2D(f.at(1), f.at(2).toInt(), f.at(3).toInt(), f.at(4));
+        } else if (tag == QLatin1String("CI") && f.size() >= 5) {
+            setCharaInt(f.at(1), f.at(2).toInt(), f.at(3).toInt(), f.at(4).toLongLong());
+        } else if (tag == QLatin1String("CS") && f.size() >= 5) {
+            setCharaStr(f.at(1), f.at(2).toInt(), f.at(3).toInt(), f.at(4));
+        } else if (tag == QLatin1String("SI") && f.size() >= 3) {
+            setSystemVariable(f.at(1), 0, f.at(2).toLongLong());
+        } else if (tag == QLatin1String("SS") && f.size() >= 3) {
+            setSystemStr(f.at(1).toUpper(), 0, f.at(2));
+        }
+    }
+    qCDebug(eraTrace) << "[save] 存档载入：行" << lines.size();
 }

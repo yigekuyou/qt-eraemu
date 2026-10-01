@@ -90,6 +90,11 @@ public:
     using CharaCountProvider = std::function<int()>;
     void setCharaCountProvider(CharaCountProvider provider) { m_charaNumProvider = std::move(provider); }
     void setLineCountProvider(LineCountProvider provider) { m_lineCountProvider = std::move(provider); }
+    // CHKDATA 存在判定回调（EraEngine 注入：存档目录 + save{##}.sav 探测）
+    // 对齐 C# CheckdataMethod（EraSaveFileType.Normal）：RESULT = 1 存在 / 0 不存在
+    void setSaveExistsProvider(std::function<qint64(const QString&)> provider) {
+        m_saveExistsProvider = std::move(provider);
+    }
 
     // 当前文字颜色 / 字体样式（GETCOLOR / GETSTYLE）——由执行引擎维护并注入。
     // eraTW 的 COLORMESSAGE 会 `SAVE = GETCOLOR()` … `SETCOLOR SAVE` 地保存还原，
@@ -198,6 +203,7 @@ private:
     ConfigProvider m_configProvider;
     CharaCountProvider m_charaNumProvider;
     LineCountProvider m_lineCountProvider;
+    std::function<qint64(const QString&)> m_saveExistsProvider;
     ColorProvider m_colorProvider;        // GETCOLOR
     ColorProvider m_styleProvider;        // GETSTYLE
     ColorProvider m_defaultColorProvider; // GETDEFCOLOR

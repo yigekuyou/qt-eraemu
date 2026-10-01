@@ -149,7 +149,9 @@ public:
     // INPUTMOUSEKEY [time]：等待鼠标/键盘；time>0 超时按 [4,0,0,0,0] 返回
     void waitMouseKey(int timeoutMs);
     // TONEINPUT time：限时输入；超时按默认值（RESULT=0）返回
-    void waitTimedInput(int timeoutMs);
+    void waitTimedInput(int timeoutMs, qint64 defaultValue = 0);
+    // TINPUTS：限时字符串输入，超时交付缺省字符串（写 RESULTS 全局槽）
+    void waitTimedStringInput(int timeoutMs, const QString& defaultValue);
     // PRINTW / WAITANYKEY：等待任意键（无超时，结果不使用）——对齐 C# Console.ReadAnyKey
     void waitAnyKey();
 

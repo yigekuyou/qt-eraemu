@@ -81,6 +81,14 @@ EraEngine::EraEngine(QObject *parent)
 		m_expressionEvaluator.setLineCountProvider([this]() -> qint64 {
 			return m_console.logicalLineCount();
 		});
+		// CHKDATA 存在判定：存档目录 <gameDir>/sav 的 save{##}.sav 探测
+		//（对齐 C# VariableEvaluator.getSaveDataPath：save{index:00}.sav）
+		m_expressionEvaluator.setSaveExistsProvider([this](const QString& saveName) -> qint64 {
+			const qint64 idx = saveName.toLongLong();
+			const QString path = m_gameDirectory + QStringLiteral("/sav/save%1.sav")
+			                         .arg(idx, 2, 10, QLatin1Char('0'));
+			return QFile::exists(path) ? 1 : 0;
+		});
 		// GETCOLOR / GETSTYLE：由执行引擎维护的当前颜色与样式位
 		m_expressionEvaluator.setColorProvider([this]() -> qint64 {
 			return m_executionEngine.currentColorValue();
@@ -447,6 +455,8 @@ void EraEngine::resolveGameDirs()
 		if (m_erbDir.isEmpty()) {
 				qWarning() << "[EraEngine] ERB 目录未找到：" << m_gameDirectory;
 		}
+		// 存档目录注入（SAVEDATA/LOADDATA/DELDATA/CHKDATA 用）
+		m_executionEngine.setGameDirectory(m_gameDirectory);
 }
 
 void EraEngine::loadConfigFiles()

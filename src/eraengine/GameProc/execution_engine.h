@@ -133,6 +133,11 @@ private:
     QHash<QString, StatementFn> m_statementFunctions;
     // SPLIT：核心函数专用分支（对齐 C# FunctionCode.SPLIT / SpSplitArgument）
     bool handleSplit(const LogicalLine& line);
+    // 存档系（C# 原版全量）：SAVEDATA/LOADDATA/DELDATA/CHKDATA 的实现
+    void handleSaveData(const LogicalLine& line);
+    void handleLoadData(const LogicalLine& line);
+    void handleDelData(const LogicalLine& line);
+    void handleChkData(const LogicalLine& line);
 
 private:
     
@@ -205,6 +210,10 @@ private:
     GameBaseData* m_gameBaseData;
     ErbLoader m_erbLoader;
     ProcessState m_state;
+    // 游戏目录（SAVEDATA/LOADDATA/DELDATA 的存档目录由它决定；EraEngine::setGameDirectory 注入）
+    QString m_gameDirectory;
+public:
+    void setGameDirectory(const QString& dir) { m_gameDirectory = dir; }
     QString m_gameDataDir;   // SAVEGLOBAL / LOADGLOBAL 的落盘目录
     
     // ParseTable reference for CALL/RETURN integration

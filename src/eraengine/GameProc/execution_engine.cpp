@@ -572,9 +572,10 @@ bool ExecutionEngine::handleVarSet(const LogicalLine& line, bool eachChara) {
         return true;
     }
 
-    // ---- RESULTS：本移植放在 LOCAL 字符串槽 0（与字符串赋值路径一致）----
+    // ---- RESULTS：**全局**字符串数组（C# VariableData.cs:202 Str1DVariableToken，
+    //      跨函数共享；LOCALS 才是函数局部）----
     if (upper == QLatin1String("RESULTS")) {
-        m_storage->setLocalStr(0, svalue);
+        m_storage->setGlobalStr1D(QStringLiteral("RESULTS"), 0, svalue);
         return true;
     }
 
@@ -1282,7 +1283,8 @@ bool ExecutionEngine::executeFunctionCall(const LogicalLine& line)
     const bool returnsStr = (ret == OperandType::Str)
                             || (ret == OperandType::Unknown && value.typeId() == QMetaType::QString);
     if (returnsStr) {
-        m_storage->setLocalStr(0, value.toString());          // RESULTS:0
+        // [qdbug] 修复：RESULTS 全局（C# VariableData.cs:202，跨函数共享）
+        m_storage->setGlobalStr1D(QStringLiteral("RESULTS"), 0, value.toString());
     } else {
         m_storage->setSystemVariable(QStringLiteral("RESULT"), 0, value.toLongLong());
     }
@@ -1356,7 +1358,8 @@ bool ExecutionEngine::handleStringAssignment(const QString& lhs, const QString& 
     }
     const QString upper = varName.toUpper();
     if (upper == QLatin1String("RESULTS")) {
-        m_storage->setLocalStr(0, value);
+        // [qdbug] 修复：RESULTS 全局（C# VariableData.cs:202，跨函数共享）
+        m_storage->setGlobalStr1D(QStringLiteral("RESULTS"), 0, value);
         return true;
     }
     // ARGS（实参字符串数组）与 LOCALS（局部字符串数组）分离，同 ARG/LOCAL

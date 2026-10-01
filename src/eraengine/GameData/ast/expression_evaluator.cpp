@@ -627,7 +627,11 @@ QVariant ExpressionEvaluator::evaluateVariable(const VariableNode &node, Variabl
             return QVariant(storage->getLocalStr(idx));
         }
         if (upper == QLatin1String("RESULTS")) {
-            return QVariant(storage->getLocalStr(0));
+            // [qdbug] 修复：RESULTS 是**全局**字符串数组（C# VariableData.cs:202
+            //   varTokenDic.Add("RESULTS", new Str1DVariableToken(...))），跨函数
+            //   共享；此前放函数局部槽，被调方写的返回值在调用方读不到
+            //   （eraTW 的 CALLFORM COLOREDMAP_%RESULTS%_… 展开为空）。
+            return QVariant(storage->getGlobalStr1D(QStringLiteral("RESULTS"), 0));
         }
         // 用户函数形参别名（@F(A,B) 内的 A/B -> LOCAL 槽位）
         const int aliasIdx = storage->localAliasIndex(varName);
@@ -688,7 +692,8 @@ QVariant ExpressionEvaluator::evaluateVariable(const VariableNode &node, Variabl
     if (node.valueType() == OperandType::Str) {
         const QString upper = varName.toUpper();
         if (upper == QLatin1String("RESULTS")) {
-            return QVariant(storage->getLocalStr(0));
+            // [qdbug] 修复：RESULTS 全局（同上，C# VariableData.cs:202）
+            return QVariant(storage->getGlobalStr1D(QStringLiteral("RESULTS"), 0));
         }
         if (upper == QLatin1String("SAVEDATA_TEXT")) {
             return QVariant(storage->getSystemStr(upper, 0));

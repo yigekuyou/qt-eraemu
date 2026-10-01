@@ -516,7 +516,9 @@ ExecState SystemStateMachine::resume(qint64 value) {
 
 ExecState SystemStateMachine::resumeString(const QString& value) {
     if (m_storage) {
-        m_storage->setLocalStr(0, value);
+        // [qdbug] 修复：RESULTS 全局（C# VariableData.cs:202，跨函数共享；
+        //   INPUTS 写入的 RESULTS 在任何函数里都应读到）
+        m_storage->setGlobalStr1D(QStringLiteral("RESULTS"), 0, value);
     }
     return resume(0);
 }

@@ -65,6 +65,16 @@ ExecutionEngine::ExecutionEngine(VariableStorage* storage, GameBaseData* gameBas
 
     // Initialize function system
     m_functionSystem = new FunctionSystem(this);
+
+    // 扩展实现所需的服务（复杂度由注册类承担：引擎填入，扩展经 services() 取用）。
+    // 存档目录用惰性 provider —— setGameDirectory 之后才可知。
+    m_extensions.setServices(ExtensionRegistry::Services{
+        m_storage,
+        [this] {
+            return m_gameDirectory.isEmpty()
+                ? QString() : m_gameDirectory + QStringLiteral("/sav");
+        }
+    });
 }
 
 ExecutionEngine::~ExecutionEngine() {

@@ -27,8 +27,9 @@
 #include "ast/function_types.h"  // isBuiltinFunction（核心名 fail-fast）
 #include "ast/logical_line.h"    // LogicalLine / Operand
 #include "eraengine_log.h"       // eraTrace（桩留痕）
+#include "variable_storage.h"    // Services::storage（扩展实现写 RESULT/RESULTS）
 
-// ---------------------------------------------------------------------------
+#include "ee_extension.h"        // EE 扩展（只在这里装入；ee_extension.h 前置声明本类）// ---------------------------------------------------------------------------
 // ExtensionRegistry —— 扩展注册类（扩展函数唯一入口）
 //
 // 对提交 f25cb92 的修正：复杂度全部由注册类承担，扩展侧只剩简单函数调用。
@@ -72,9 +73,20 @@ public:
         // PUTFORM 的实参是 StrForm（文本 + {…}/%…%）—— 注册类插入 AST，
         // ast_builder 零函数名。
         regForm(QStringLiteral("PUTFORM"));
-        // EE 扩展默认全启用（EE 头只在注册类里被实现 —— 见底部 #include）
+        // EE 扩展默认全启用（EE 头只在注册类里被实现 —— 见顶部 #include）
         registerEeExtensions(*this);
     }
+
+    // ---- 扩展实现所需的服务（复杂度由注册类承担）--------------------------
+    // 引擎在构造时填入；扩展实现只经 services() 取用，不直接依赖引擎。
+    // 惰性 provider：游戏目录在 setGameDirectory 之后才可知（对齐配置的
+    // 惰性 provider 模式）。
+    struct Services {
+        VariableStorage* storage = nullptr;      // 变量表（RESULT / RESULTS 数组写入）
+        std::function<QString()> savDirectory;   // 存档目录（CHKVARDATA/FIND_VARDATA 探测用）
+    };
+    void setServices(Services s) { m_services = std::move(s); }
+    [[nodiscard]] const Services& services() const { return m_services; }
 
     // ---- 简单注册函数（复杂度由注册类承担；扩展只写这几行）----------------
 
@@ -145,6 +157,7 @@ private:
     QHash<QString, StatementFn> m_functions;   // 扩展实现（名字 -> 执行器）
     QSet<QString> m_stubs;                     // 只登记名字的桩
     QSet<QString> m_traced;                    // 留痕去重（每个名字只一次）
+    Services m_services;                       // 扩展实现所需的服务（引擎填入）
 };
 
 // ---------------------------------------------------------------------------

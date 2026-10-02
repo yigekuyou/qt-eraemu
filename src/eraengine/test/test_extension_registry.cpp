@@ -33,6 +33,8 @@
 
 #include <QCoreApplication>
 #include <QDebug>
+#include <QDir>
+#include <QFile>
 #include <QString>
 #include <QStringList>
 
@@ -143,12 +145,34 @@ int main(int argc, char* argv[]) {
               "注册类构造即装入 EE 扩展（EE 头只在注册类里被实现）");
 
         VariableStorage storage;
-        ExecutionEngine engine(&storage, nullptr);   // 构造 -> 注册类装入 EE 扩展
+        ExecutionEngine engine(&storage, nullptr);   // 构造 -> 注册类装入 EE 扩展 + 填服务
         LogicalLine line;
         line.functionName = "CHKVARDATA";
-        check(engine.executeInstruction(line), "引擎：CHKVARDATA 扩展语句分发（桩命中）");
+        check(engine.executeInstruction(line), "引擎：CHKVARDATA 扩展语句分发（真实现；无实参 -> 留痕）");
         line.functionName = "FIND_VARDATA";
-        check(engine.executeInstruction(line), "引擎：FIND_VARDATA 扩展语句分发（桩命中）");
+        check(engine.executeInstruction(line), "引擎：FIND_VARDATA 扩展语句分发（真实现）");
+
+        // EE 存档系真实现：CHKVARDATA "<文件名>" -> RESULT = EraDataState
+        const QString savFile = QDir::temp().filePath("emuera_ee_chk.sav");
+        QFile(savFile).remove();
+        { bool opened = QFile(savFile).open(QIODevice::WriteOnly); Q_UNUSED(opened); }
+        LogicalLine chk;
+        chk.functionName = "CHKVARDATA";
+        chk.arguments.append(Operand(savFile));
+        check(engine.executeInstruction(chk), "CHKVARDATA 存在的文件 -> 分发命中");
+        check(storage.getSystemVariable(QStringLiteral("RESULT"), 0) == 0,
+              "CHKVARDATA 存在 -> RESULT == 0（EraDataState::OK）");
+        check(storage.getGlobalStr1D(QStringLiteral("RESULTS"), 0) == QStringLiteral("ＯＫ"),
+              "RESULTS = ＯＫ（状态说明）");
+        QFile(savFile).remove();
+        chk.arguments.clear();
+        chk.arguments.append(Operand(QStringLiteral("不存在的文件.sav")));
+        check(engine.executeInstruction(chk), "CHKVARDATA 不存在的文件 -> 分发命中");
+        check(storage.getSystemVariable(QStringLiteral("RESULT"), 0) == 1,
+              "CHKVARDATA 不存在 -> RESULT == 1（FILENOTFOUND）");
+        check(storage.getGlobalStr1D(QStringLiteral("RESULTS"), 0)
+                  == QStringLiteral("ファイルが存在しません"),
+              "RESULTS = ファイルが存在しません");
 
         // SPLIT（核心实现，引擎专用分支分发）：第3引数是裸数组变量，
         // 指令分发处命中核心分支 -> handleSplit

@@ -96,6 +96,7 @@ GameProc/execution_engine.cpp
 GameProc/execution_engine.h
 GameProc/ee_extension.h
 GameProc/extension_registry.h
+GameProc/ee_extension.cpp
 GameProc/script_runner.cpp
 GameProc/script_runner.h
 GameProc/process_state.cpp

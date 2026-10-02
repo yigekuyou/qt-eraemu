@@ -40,17 +40,27 @@ Item {
     // Timer pacing follows the display cadence. QML may combine notifications in
     // one rendered frame; a model update is not a promise of a physical frame.
     property int refreshIntervalMs: Math.max(1, Math.ceil(1000 / (Screen.refreshRate > 0 ? Screen.refreshRate : 60)))
-    function syncCadence() { if (backend) backend.frameMs = refreshIntervalMs; }
+    function syncCadence() {
+        if (backend)
+            backend.frameMs = refreshIntervalMs;
+    }
     onRefreshIntervalMsChanged: syncCadence()
-    onBackendChanged: { syncCadence(); syncLayout(); }
+    onBackendChanged: {
+        syncCadence();
+        syncLayout();
+    }
     readonly property bool primitiveInput: backend && backend.waitingInput && backend.inputKind === "INPUTMOUSEKEY"
     // 当前等待的是否为字符串型输入（INPUTS 系）；整数型 INPUT 一律走数字校验
     readonly property bool stringInputKind: {
-        if (!backend || !backend.waitingInput) return false;
+        if (!backend || !backend.waitingInput)
+            return false;
         const k = backend.inputKind.toUpperCase();
         return k.indexOf("INPUTS") >= 0 || k.indexOf("ARGS") >= 0;
     }
-    onPrimitiveInputChanged: { if (primitiveInput) viewport.forceActiveFocus(); }
+    onPrimitiveInputChanged: {
+        if (primitiveInput)
+            viewport.forceActiveFocus();
+    }
     property var backend: null              // ConsoleBackend
     property int lineHeight: 19
     property string fontName: ""            // 来自 GuiManager
@@ -77,21 +87,29 @@ Item {
     readonly property int textBlockCount: textInst.count
     readonly property int imageBlockCount: imageInst.count
     readonly property int shapeBlockCount: shapeInst.count
-    function textBlockAt(i) { return textInst.objectAt(i) }
-    function blockAt(i) { return textBlockAt(i) }
+    function textBlockAt(i) {
+        return textInst.objectAt(i);
+    }
+    function blockAt(i) {
+        return textBlockAt(i);
+    }
 
     function submit() {
-        if (!backend) return;
+        if (!backend)
+            return;
         // 与 C++ 的 inputExpectsString 同源：INPUTS / SINPUTS / TONEINPUTS / ARGS 系
         // 都是字符串型输入，其余（INPUT/TINPUT/ONEINPUT…）走整数校验。
-        if (stringInputKind) backend.submitInputString(inputField.text);
-        else backend.submitInput(parseInt(inputField.text) || 0);
+        if (stringInputKind)
+            backend.submitInputString(inputField.text);
+        else
+            backend.submitInput(parseInt(inputField.text) || 0);
         inputField.text = "";
     }
 
     // 把字号/行高/字体推给 C++（C++ 据此动态重算所有区块的位置与尺寸）
     function syncLayout() {
-        if (!backend) return;
+        if (!backend)
+            return;
         backend.setFontSize(fontSize);
         backend.setLineHeight(lineHeight);
     }
@@ -100,7 +118,7 @@ Item {
     onWidthChanged: {
         // Width changes resize cells only. Do not feed the viewport width back
         // into the logical layout, otherwise ERB line wrapping changes.
-        syncLayout()
+        syncLayout();
     }
 
     // ---- 分层（text/image/shape 结构相同，仅模型不同）----
@@ -138,8 +156,12 @@ Item {
                 model: root.textModel
                 delegate: BlockDelegate {}
                 // Instantiator 不把对象挂进可视树：显式设 parent；销毁由它负责
-                onObjectAdded: (index, object) => { object.parent = textLayer; }
-                onObjectRemoved: (index, object) => { object.parent = null; }
+                onObjectAdded: (index, object) => {
+                    object.parent = textLayer;
+                }
+                onObjectRemoved: (index, object) => {
+                    object.parent = null;
+                }
             }
         }
 
@@ -152,8 +174,12 @@ Item {
                 id: imageInst
                 model: root.imageModel
                 delegate: BlockDelegate {}
-                onObjectAdded: (index, object) => { object.parent = imageLayer; }
-                onObjectRemoved: (index, object) => { object.parent = null; }
+                onObjectAdded: (index, object) => {
+                    object.parent = imageLayer;
+                }
+                onObjectRemoved: (index, object) => {
+                    object.parent = null;
+                }
             }
         }
 
@@ -166,8 +192,12 @@ Item {
                 id: shapeInst
                 model: root.shapeModel
                 delegate: BlockDelegate {}
-                onObjectAdded: (index, object) => { object.parent = shapeLayer; }
-                onObjectRemoved: (index, object) => { object.parent = null; }
+                onObjectAdded: (index, object) => {
+                    object.parent = shapeLayer;
+                }
+                onObjectRemoved: (index, object) => {
+                    object.parent = null;
+                }
             }
         }
 
@@ -183,7 +213,12 @@ Item {
             function syncFromBackend() {
                 syncing = true;
                 const total = backend ? backend.lineCount : 0;
-                if (total <= 0) { size = 1; position = 0; syncing = false; return; }
+                if (total <= 0) {
+                    size = 1;
+                    position = 0;
+                    syncing = false;
+                    return;
+                }
                 const maxOffset = Math.max(0, total - backend.visibleCount);
                 const first = Math.max(0, total - backend.visibleCount - backend.scrollOffset);
                 size = Math.max(0.02, Math.min(1, backend.visibleCount / total));
@@ -191,7 +226,8 @@ Item {
                 syncing = false;
             }
             onPositionChanged: {
-                if (syncing || !backend) return;
+                if (syncing || !backend)
+                    return;
                 const total = backend.lineCount;
                 const maxOffset = Math.max(0, total - backend.visibleCount);
                 // 窗口顶行 = position × 总行数；换算回「距底部」的 scrollOffset
@@ -201,7 +237,9 @@ Item {
             }
             Connections {
                 target: backend
-                function onWindowChanged() { vbar.syncFromBackend() }
+                function onWindowChanged() {
+                    vbar.syncFromBackend();
+                }
             }
             Component.onCompleted: syncFromBackend()
         }
@@ -212,50 +250,58 @@ Item {
             z: 10
             enabled: root.primitiveInput
             acceptedButtons: Qt.AllButtons
-            onPressed: (e) => {
+            onPressed: e => {
                 // WinForms MouseButtons values; coordinates relative to the lower left.
-                const button = e.button === Qt.LeftButton ? 1048576
-                    : e.button === Qt.RightButton ? 2097152
-                    : e.button === Qt.MiddleButton ? 4194304
-                    : e.button === Qt.BackButton ? 8388608 : 16777216;
+                const button = e.button === Qt.LeftButton ? 1048576 : e.button === Qt.RightButton ? 2097152 : e.button === Qt.MiddleButton ? 4194304 : e.button === Qt.BackButton ? 8388608 : 16777216;
                 backend.submitMouseKey(1, button, Math.round(e.x), Math.round(e.y - viewport.height), -1);
             }
-            onWheel: (e) => backend.submitMouseKey(2, e.angleDelta.y,
-                Math.round(e.x), Math.round(e.y - viewport.height), 0)
+            onWheel: e => backend.submitMouseKey(2, e.angleDelta.y, Math.round(e.x), Math.round(e.y - viewport.height), 0)
         }
 
         WheelHandler {
             enabled: !root.primitiveInput
             acceptedDevices: PointerDevice.Mouse | PointerDevice.TouchPad
-            onWheel: (e) => {
-                if (!backend) return;
+            onWheel: e => {
+                if (!backend)
+                    return;
                 backend.scrollBy(e.angleDelta.y > 0 ? 3 : -3);
             }
         }
 
-        Keys.onPressed: (e) => {
-            if (!backend) return;
+        Keys.onPressed: e => {
+            if (!backend)
+                return;
             if (root.primitiveInput) {
                 const special = {};
-                special[Qt.Key_Return] = 13; special[Qt.Key_Enter] = 13;
-                special[Qt.Key_Escape] = 27; special[Qt.Key_Backspace] = 8;
-                special[Qt.Key_Tab] = 9; special[Qt.Key_Left] = 37;
-                special[Qt.Key_Up] = 38; special[Qt.Key_Right] = 39; special[Qt.Key_Down] = 40;
-                special[Qt.Key_PageUp] = 33; special[Qt.Key_PageDown] = 34;
-                special[Qt.Key_End] = 35; special[Qt.Key_Home] = 36;
-                special[Qt.Key_Insert] = 45; special[Qt.Key_Delete] = 46;
+                special[Qt.Key_Return] = 13;
+                special[Qt.Key_Enter] = 13;
+                special[Qt.Key_Escape] = 27;
+                special[Qt.Key_Backspace] = 8;
+                special[Qt.Key_Tab] = 9;
+                special[Qt.Key_Left] = 37;
+                special[Qt.Key_Up] = 38;
+                special[Qt.Key_Right] = 39;
+                special[Qt.Key_Down] = 40;
+                special[Qt.Key_PageUp] = 33;
+                special[Qt.Key_PageDown] = 34;
+                special[Qt.Key_End] = 35;
+                special[Qt.Key_Home] = 36;
+                special[Qt.Key_Insert] = 45;
+                special[Qt.Key_Delete] = 46;
                 let key = special[e.key] !== undefined ? special[e.key] : e.key;
-                if (e.key >= Qt.Key_F1 && e.key <= Qt.Key_F24) key = 112 + e.key - Qt.Key_F1;
-                const mods = ((e.modifiers & Qt.ShiftModifier) ? 65536 : 0)
-                    | ((e.modifiers & Qt.ControlModifier) ? 131072 : 0)
-                    | ((e.modifiers & Qt.AltModifier) ? 262144 : 0);
+                if (e.key >= Qt.Key_F1 && e.key <= Qt.Key_F24)
+                    key = 112 + e.key - Qt.Key_F1;
+                const mods = ((e.modifiers & Qt.ShiftModifier) ? 65536 : 0) | ((e.modifiers & Qt.ControlModifier) ? 131072 : 0) | ((e.modifiers & Qt.AltModifier) ? 262144 : 0);
                 backend.submitMouseKey(3, key, key | mods, 0, 0);
                 e.accepted = true;
                 return;
             }
-            if (e.key === Qt.Key_PageUp)   backend.scrollBy(10);
-            if (e.key === Qt.Key_PageDown) backend.scrollBy(-10);
-            if (e.key === Qt.Key_End)      backend.scrollToBottom();
+            if (e.key === Qt.Key_PageUp)
+                backend.scrollBy(10);
+            if (e.key === Qt.Key_PageDown)
+                backend.scrollBy(-10);
+            if (e.key === Qt.Key_End)
+                backend.scrollToBottom();
         }
     }
 
@@ -280,7 +326,8 @@ Item {
         placeholderText: backend && backend.waitingInput ? ("输入（" + backend.inputKind + "）") : ""
         // 输入类型分支限制：整数型输入只接受数字（INPUT 可负）
         validator: backend && backend.waitingInput && !root.stringInputKind ? intOnly : null
-        onVisibleChanged: if (visible) inputField.forceActiveFocus();
+        onVisibleChanged: if (visible)
+            inputField.forceActiveFocus()
         onAccepted: root.submit()
     }
     RegularExpressionValidator {
@@ -289,11 +336,13 @@ Item {
     }
 
     onHeightChanged: {
-        if (backend) backend.visibleCount = Math.max(1, Math.floor(viewport.height / cellHeight));
+        if (backend)
+            backend.visibleCount = Math.max(1, Math.floor(viewport.height / cellHeight));
     }
     Component.onCompleted: {
         syncCadence();
         syncLayout();
-        if (backend) backend.visibleCount = Math.max(1, Math.floor(viewport.height / cellHeight));
+        if (backend)
+            backend.visibleCount = Math.max(1, Math.floor(viewport.height / cellHeight));
     }
 }

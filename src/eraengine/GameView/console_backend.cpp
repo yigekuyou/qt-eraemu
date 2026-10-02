@@ -542,9 +542,8 @@ void ConsoleBackend::tick() {
 // 输入桥接
 // ---------------------------------------------------------------------------
 
-void ConsoleBackend::notifyInputRequested(const QString& kind, const QVariantList& branches) {
+void ConsoleBackend::notifyInputRequested(const QString& kind) {
     m_inputKind = kind;
-    m_inputBranches = branches;
     m_waitingInput = true;
     flush();
     emit inputRequested(kind);

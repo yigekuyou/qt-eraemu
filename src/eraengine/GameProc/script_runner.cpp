@@ -713,12 +713,21 @@ ExecState ScriptRunner::executeLine(const LogicalLine& line) {
 
     // ---- 跳转 / 调用 ----
     if (name == QLatin1String("GOTO")) {
-        const QString label = line.arguments.isEmpty() ? QString() : line.arguments.first().raw;
-        if (label.isEmpty() || !m_table->jumpToLabel(label)) {
+        QString label = line.arguments.isEmpty() ? QString() : line.arguments.first().raw;
+        label = label.trimmed();
+        if (label.startsWith(QLatin1Char('$'))) label.remove(0, 1);
+        // $ 标签只在**当前函数**内解析（对齐 C# LabelDictionary.GetLabelDollar）。
+        // 此前走 jumpToLabel（脚本级 labelPositions 表）：同一脚本里多个函数
+        // 都有同名 $ 标签时（eraTW COMMON.ERB 有 4 个 $INPUT_LOOP），后注册的
+        // 覆盖先注册的 —— GOTO 跳进**别的函数**继续执行（「进入了错误的内存」，
+        // 强くてニューゲーム.ERB 的 @CHOICE 非法输入路径实测触发）。
+        const int pos = label.isEmpty() ? -1 : findGotoLabelInFunction(label, line.ownerFunction);
+        if (pos < 0) {
             m_state->setErrorState();
             emit errorOccurred(QStringLiteral("GOTO label not found: %1").arg(label));
             return ExecState::Error;
         }
+        m_table->setPosition(script, pos, true);
         // [qdbug] GOTO 跳转跟踪（保留的调试桩）：追查 eraTW 口上选择之后
         // 「ADD_ALL_CHARACTERS 的 FOR 循环未继续、执行直接落到 CHARA_STATE@69」
         // 之类的跳转异常；QT_LOGGING_RULES="era.trace.debug=true" 打开。
@@ -1115,17 +1124,11 @@ ExecState ScriptRunner::executeLine(const LogicalLine& line) {
     }
 
     // ---- 输入等待（由中心执行状态挂起）----
+    // 非分支数不在这里拦：C# 语义是任何输入都写 RESULT 继续执行，
+    // 落空分支由脚本自己的流程兜底（SELECTCASE 落空 -> RESTART/GOTO
+    // 重画菜单再等输入），引擎只负责把 RESTART/GOTO 跑对。
     if (name == QLatin1String("INPUT") || name == QLatin1String("ONEINPUT")
         || name == QLatin1String("INPUTS") || name == QLatin1String("ONEINPUTS")) {
-        // 数值 INPUT/ONEINPUT：AST 静态分析前方 SELECTCASE 的 CASE 常量，
-        // 得到「合法分支」（非分支数会落空 -> 无 CASEELSE 时 GOTO 回菜单
-        // 重画再等 —— 自动跑就是卡死）；字符串 INPUTS/ONEINPUTS 不带分支上下文。
-        if (name == QLatin1String("INPUT") || name == QLatin1String("ONEINPUT")) {
-            analyzeInputBranches(pc + 1);
-        } else {
-            m_inputBranches.clear();
-            m_inputBranchRestricted = false;
-        }
         advance();                       // 指令已消费
         return ExecState::WaitInput;     // 挂起等待用户操作
     }
@@ -1177,9 +1180,26 @@ ExecState ScriptRunner::executeLine(const LogicalLine& line) {
     if (name == QLatin1String("TONEINPUT") || name == QLatin1String("TONEINPUTS")) {
         qint64 timeout = 0;
         if (!line.arguments.isEmpty()) evalInt(line.arguments.first().ast, line.arguments.first().raw, timeout);
+        // TONEINPUTS 是**字符串型**限时输入（ONEINPUTS + 超时，写 RESULTS）：
+        // 超时交付第 2 参缺省值（eraTW BATTLE.ERB ASK_BATTLE 的
+        // `TONEINPUTS 制限時間, "p", 1` -> SELECTCASE RESULTS CASEELSE）。
+        // 此前误走整数 waitTimedInput：超时写 RESULT、RESULTS 保持陈旧值，
+        // 跟在后面的 SELECTCASE RESULTS 全部判错（上一局 QTE 的 w/a/d/s）。
+        QString defStr;
+        if (name == QLatin1String("TONEINPUTS") && line.arguments.size() >= 2) {
+            const Operand& def = line.arguments.at(1);
+            ExpressionEvaluator fallback;
+            ExpressionEvaluator* ev = m_evaluator ? m_evaluator : &fallback;
+            defStr = def.ast ? ev->evaluate(*def.ast, m_storage, baseData()).toString()
+                             : ev->evaluate(def.raw, m_storage, baseData()).toString();
+        }
+        if (timeout < 0) timeout = 0;
         advance();
         if (m_machine) {
-            m_machine->waitTimedInput(static_cast<int>(timeout));
+            if (name == QLatin1String("TONEINPUTS"))
+                m_machine->waitTimedStringInput(static_cast<int>(timeout), defStr);
+            else
+                m_machine->waitTimedInput(static_cast<int>(timeout));
             return m_state->getExecState();
         }
         return ExecState::WaitInput;
@@ -1491,12 +1511,16 @@ ExecState ScriptRunner::doTryListLine(const LogicalLine& line) {
 }
 
 // $ 标签只在本函数体内有效（对齐 C# state.CurrentCalled.CallLabel 的查找范围）。
-int ScriptRunner::findGotoLabelInFunction(const QString& label) const {
+// ownerFunction：没有调用帧（depth==0 的系统入口）时用它定位函数入口行。
+int ScriptRunner::findGotoLabelInFunction(const QString& label, const QString& ownerFunction) const {
     const QString script = m_table->currentScript();
     const ScriptData* sd = m_table->script(script);
     if (!sd) return -1;
-    const int entry = (m_table->depth() > 0) ? m_table->currentFrame().entryLine : -1;
-    const int start = (entry >= 0 && entry < sd->lines.size()) ? entry : 0;
+    int start = -1;
+    if (m_table->depth() > 0) start = m_table->currentFrame().entryLine;
+    if (start < 0 && !ownerFunction.isEmpty())
+        start = m_table->getLabelPosition(script, ownerFunction);
+    if (start < 0 || start >= sd->lines.size()) start = 0;
     for (int i = start; i < sd->lines.size(); ++i) {
         const LogicalLine& l = sd->lines.at(i);
         if (i > start && l.kind == LineKind::FunctionLabel) break;   // 离开本函数体
@@ -1627,83 +1651,14 @@ bool ScriptRunner::caseMatches(const LogicalLine& caseLine,
 // ---------------------------------------------------------------------------
 // INPUT 分支候选的静态分析（AST）
 //
-// 数值 INPUT/ONEINPUT 等待点前方小窗口里找 SELECTCASE，收集 CASE 的
-// **字面常量**（十进制 / 0x 十六进制；变量 / IS / TO 形式跳过 —— 保守起见
-// 不经存储求值、不猜，避免静态分析触发副作用或误限合法输入）。
-// CASEELSE 存在说明游戏自己兜底（example 菜单的「无效输入」路径）
-// -> 不限制，保持 C# 语义。
-// 非分支数的危害：eraTW TITLE.ERB 的 INPUT -> SELECTCASE CASE 0/CASE 1
-// **没有兜底**，非分支数落空后 GOTO START 无限重画 35 张标题图再等输入
-// —— 自动跑（test_cli 分支选择 / 随机行走）就是卡死。
+// 【已移除】此前在数值 INPUT/ONEINPUT 等待点前方小窗口里做 AST 静态分析，
+// 收集前方 SELECTCASE 的 CASE 字面常量并在交付时拒绝「非分支值」。
+// 该方案错误判断了分支结构（eraTW NEWGAME_CUSTOM.ERB 的 `CASE 0 TO 999`
+// 是 TO 区间，字面常量收集不到 -> 合法输入 0 被引擎误杀）。
+// C# 语义本就不拦输入：任何输入都写 RESULT 继续执行，落空分支由脚本
+// 自己的流程兜底（SELECTCASE 落空 -> RESTART/GOTO 重画菜单再等输入）。
+// 引擎只需把 RESTART / GOTO 跑对，不需要静态分析。
 // ---------------------------------------------------------------------------
-void ScriptRunner::analyzeInputBranches(int inputPc)
-{
-    m_inputBranches.clear();
-    m_inputBranchRestricted = false;
-    if (!m_table) return;
-    const QString script = m_table->currentScript();
-    const ScriptData* sd = m_table->script(script);
-    if (!sd) return;
-
-    // 前方小窗口：够跨越 PRINT / CUSTOMDRAWLINE（CALL）等非分支指令；
-    // 窗口内又出现输入指令或流程跳转 -> SELECTCASE 不属于本次输入，放弃。
-    static const QSet<QString> kInputFamily = {
-        QStringLiteral("INPUT"), QStringLiteral("INPUTS"),
-        QStringLiteral("ONEINPUT"), QStringLiteral("ONEINPUTS"),
-        QStringLiteral("TINPUT"), QStringLiteral("TINPUTS"),
-        QStringLiteral("TONEINPUT"), QStringLiteral("TONEINPUTS"),
-        QStringLiteral("WAIT"), QStringLiteral("WAITANYKEY"),
-        QStringLiteral("FORCEWAIT"), QStringLiteral("INPUTMOUSEKEY"),
-        // 流程改变：SELECTCASE 属于跳转后的区域，不属于本次输入
-        QStringLiteral("RETURN"), QStringLiteral("GOTO"), QStringLiteral("GOTOFORM"),
-        QStringLiteral("JUMP"), QStringLiteral("JUMPFORM"), QStringLiteral("BEGIN"),
-        QStringLiteral("CALLTRAIN"), QStringLiteral("DOTRAIN"),
-        QStringLiteral("STOPCALLTRAIN"), QStringLiteral("RESTART"), QStringLiteral("THROW"),
-    };
-    static constexpr int kBranchWindow = 8;
-    const int last = qMin(inputPc + kBranchWindow, sd->lines.size());
-    for (int i = inputPc; i < last; ++i) {
-        const LogicalLine& ll = sd->lines[i];
-        if (!ll.isInstruction()) continue;
-        const QString fn = ll.functionName;
-        if (kInputFamily.contains(fn)) return;
-        if (fn != QLatin1String("SELECTCASE")) continue;
-        // 只认 RESULT 选择器（SELECTCASE RESULT）：选择其它变量的 SELECTCASE
-        // 与本次输入无关，不能拿它的 CASE 常量来限制输入
-        QString sel = ll.raw.trimmed();
-        if (sel.left(10).compare(QLatin1String("SELECTCASE"), Qt::CaseInsensitive) == 0)
-            sel = sel.mid(10).trimmed();
-        if (!sel.startsWith(QLatin1String("RESULT"), Qt::CaseInsensitive)) continue;
-
-        const QList<int> caseLines = m_table->ifBranches(script, i);
-        bool hasCaseElse = false;
-        QVariantList values;
-        for (int caseLine : caseLines) {
-            const LogicalLine* cl = m_table->lineAt(script, caseLine);
-            if (!cl) continue;
-            if (cl->is("CASEELSE")) { hasCaseElse = true; break; }
-            QString spec = cl->raw.trimmed();
-            if (spec.left(4).compare(QLatin1String("CASE"), Qt::CaseInsensitive) == 0)
-                spec = spec.mid(4);
-            for (const QString& arg : splitCaseArgs(spec)) {
-                const QString a = arg.trimmed();
-                if (a.isEmpty()) continue;
-                if (a.startsWith(QLatin1String("IS"), Qt::CaseInsensitive)) continue;  // IS >= n
-                if (a.contains(QLatin1String(" TO "), Qt::CaseInsensitive)) continue;  // a TO b
-                bool ok = false;
-                const qint64 v = a.toLongLong(&ok, 0);   // 字面常量（十进制 / 0x）
-                if (ok) values.append(v);
-            }
-        }
-        if (!hasCaseElse && !values.isEmpty()) {
-            m_inputBranches = values;
-            m_inputBranchRestricted = true;
-            qCDebug(eraTrace) << "[exec] INPUT 分支静态分析" << script << "行" << inputPc
-                              << "合法分支" << m_inputBranches;
-        }
-        return;
-    }
-}
 
 qint64 ScriptRunner::readIntVar(const QString& name, int index) const {
     return readIntVar(name, QList<int>{index});

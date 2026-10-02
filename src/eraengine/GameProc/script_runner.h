@@ -83,16 +83,6 @@ public:
     // 系统状态机（BEGIN / CALLTRAIN / DOTRAIN / SAVEGAME 等指令需要它）
     void setSystemStateMachine(SystemStateMachine* machine) { m_machine = machine; }
 
-    // ---- INPUT 分支点的「合法分支数字」（AST 静态分析）----
-    // 数值 INPUT/ONEINPUT 等待点前方小窗口内的 SELECTCASE 的 CASE 常量
-    // （eraTW TITLE.ERB：INPUT -> CUSTOMDRAWLINE -> SELECTCASE CASE 0/CASE 1，
-    //   **没有 CASEELSE** -> 非分支数落空后 GOTO START 无限重画标题再等输入）。
-    // 空 = 无分支上下文（不受限制）；CASEELSE 存在时游戏自己兜底 -> 不限制。
-    [[nodiscard]] QVariantList inputBranchCandidates() const { return m_inputBranches; }
-    [[nodiscard]] bool inputBranchRestricted() const { return m_inputBranchRestricted; }
-    // 交付一次输入后清掉分支上下文（检查窗口收紧到「INPUT 等待后的第一次交付」）
-    void clearInputBranchContext() { m_inputBranches.clear(); m_inputBranchRestricted = false; }
-
 signals:
     void suspended(ExecState state);          // 挂起（等待输入等）
     void finished();                          // 脚本结束
@@ -161,7 +151,12 @@ private:
     ExecState doTryListLine(const LogicalLine& line);
     // 在当前函数体内找 $ 标签（对齐 C# state.CurrentCalled.CallLabel：$ 标签
     // 只在本函数作用域内有效），返回行号；找不到返回 -1。
-    [[nodiscard]] int findGotoLabelInFunction(const QString& label) const;
+    // $ 标签只在**当前函数**内解析（C# LabelDictionary.GetLabelDollar）：
+    // 同一脚本里不同函数的同名 $ 标签（eraTW COMMON.ERB 有 4 个 $INPUT_LOOP）
+    // 互不干扰。ownerFunction：GOTO 处没有调用帧（depth==0 的系统入口）时
+    // 用它定位函数入口；有帧时用帧的 entryLine。
+    [[nodiscard]] int findGotoLabelInFunction(const QString& label,
+                                              const QString& ownerFunction = QString()) const;
     // 把 CALLFORM 的标签名（含 %..%/{..}）展开为实际标签
     [[nodiscard]] QString expandCallFormLabel(const QString& raw);
     // 标签/函数
@@ -187,9 +182,6 @@ private:
     bool extractVarRef(const Operand& op, QString& name, int& index);
     bool extractVarRef(const Operand& op, QString& name, QList<int>& indices);
 
-    // INPUT 分支候选的静态分析（等待点前方窗口找 SELECTCASE 的 CASE 常量）
-    void analyzeInputBranches(int inputPc);
-
     EraParseTable*   m_table;
     ExecutionEngine* m_engine;
     ProcessState*    m_state;
@@ -200,8 +192,6 @@ private:
     SystemStateMachine*  m_machine = nullptr;
 
     QList<LoopFrame> m_loops;
-    QVariantList m_inputBranches;          // INPUT 分支点的合法分支数字（静态分析）
-    bool m_inputBranchRestricted = false;  // 非分支数是否被引擎拒绝
     struct CallContext { int depth; int loops; QString function; VariableStorage::LocalContext locals; };
     QHash<QString, VariableStorage::LocalContext> m_functionLocals;
     QList<CallContext> m_callContexts;   // Caller locals and loop depth, restored on every return

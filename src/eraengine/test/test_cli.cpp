@@ -437,10 +437,8 @@ int main(int argc, char* argv[]) {
                 << "  --tcp <端口>      TCP socket\n"
                 << "  --run-ms N       输入用尽后继续跑 N 毫秒（给外部注入留时间）\n"
                 << "  --seed N         固定 MT19937 随机种子（整局可复现）\n"
-                << "  --auto-branch    输入用尽后，在「合法分支」（AST 静态分析出的\n"
-                << "                   SELECTCASE CASE 常量）里按种子随机挑一个继续：\n"
-                << "                   非分支数会落空并卡死引擎，挑合法分支则不会\n"
-                << "                   （:branches 命令可查看当前输入的合法分支）\n"
+                << "  --auto-branch    输入用尽后，从屏幕上已打印且仍可点击的按钮值里\n"
+                << "                   按种子随机挑一个继续（ASK_YN / 菜单按钮）\n"
                 << "  --branch-seed N  分支选择的种子（与 --seed 分开设置；未给时用 --seed）\n"
                 << "  输入源：stdin / --script / DBus / socket，行协议见文件头注释";
             return 0;
@@ -813,17 +811,6 @@ int main(int argc, char* argv[]) {
             for (const QString& s : sus) std::cout << "  [!] " << s.toStdString() << "\n";
             return true;
         }
-        if (cmd == ":branches") {   // 当前输入的「合法分支」（引擎 AST 静态分析）
-            const QVariantList branches = console ? console->inputBranches() : QVariantList();
-            std::cout << "  合法分支: ";
-            if (branches.isEmpty()) {
-                std::cout << "（无 —— 非分支输入 / 有 CASEELSE 兜底，不受限制）\n";
-            } else {
-                for (const QVariant& b : branches) std::cout << b.toLongLong() << ' ';
-                std::cout << "\n";
-            }
-            return true;
-        }
         if (cmd.startsWith(QLatin1String(":lines "))) {   // :lines SCRIPT —— dump 引擎侧逻辑行
             const QString scriptName = cmd.mid(7).trimmed();
             EraParseTable* table = engine.getParseTable();
@@ -1019,15 +1006,14 @@ int main(int argc, char* argv[]) {
             haveCmd = true;
             std::cout << "> " << cmd.toStdString() << "\n";
         } else if (autoBranch && !interactive) {
-            // 分支选择（--auto-branch）：只在「合法分支」里挑 —— 非分支数会落空
-            // （无 CASEELSE 时 GOTO 回菜单重画再等），自动行走就是卡死；挑合法
-            // 分支则永不卡死。种子：--branch-seed 单独设置（未给时用 --seed）。
-            // 仅非交互模式（交互模式留给手输，:branches 可查看合法分支）。
-            // 候选优先级：AST 静态分析（SELECTCASE CASE 常量）
-            //          -> 屏幕上已打印且仍可点击的按钮值（运行期合法输入：
-            //             ASK_YN / 菜单按钮 —— 非按钮值会被守卫循环吃掉）。
-            QVariantList picks = console ? console->inputBranches() : QVariantList();
-            if (picks.isEmpty() && console) {
+            // 分支选择（--auto-branch）：从屏幕上已打印且仍可点击的按钮值里
+            // 按种子随机挑一个（ASK_YN / 菜单按钮）。种子：--branch-seed
+            // 单独设置（未给时用 --seed）。仅非交互模式（交互模式留给手输）。
+            // 注：引擎不再做 INPUT 分支静态分析（AST 猜测会误杀 TO 区间等
+            // 合法输入，见 ScriptRunner）—— 落空分支由脚本自身的
+            // RESTART / GOTO 重画菜单兜底，这里只挑可点击的按钮值。
+            QVariantList picks;
+            if (console) {
                 QSet<qint64> btns;
                 const QVariantList blocks = console->visibleBlocks();
                 for (const QVariant& v : blocks) {

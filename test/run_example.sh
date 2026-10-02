@@ -10,6 +10,8 @@
 #   ./test/run_example.sh 15       # 鼠标组（INPUTMOUSEKEY：k 注入 + 超时两条路径）
 #   ./test/run_example.sh 18       # 破坏性组（RESTART + EE 破坏系桩）
 #   ./test/run_example.sh 19       # 破坏性组（DOTRAIN，预期「执行出错」）
+#   ./test/run_example.sh 20       # RESTART 菜单复刻（eraTW NEWGAME_CUSTOM 回归）
+#   ./test/run_example.sh 21       # GOTO $标签 函数作用域（eraTW COMMON @CHOICE 回归）
 #
 # 依赖：build/src/eraengine/test_cli
 #       （cmake --build build --target test_cli）
@@ -39,6 +41,15 @@ elif [ "$SELECTION" = "15" ]; then
     # 鼠标组：菜单选 15 + `k 1 10 10 1 0` 注入（type=1 左键）——
     # 组15 的 INPUTMOUSEKEY(0) 吃注入，INPUTMOUSEKEY(50) 靠超时自动继续
     SCRIPT="15,k 1 10 10 1 0"
+elif [ "$SELECTION" = "20" ]; then
+    # RESTART 菜单复刻组：菜单选 20，随后按 @CUSTOM_TERMINAL_REPLICA 的
+    # INPUT/INPUTS 序列喂入（0 命中 CASE 0 TO 999 是本次回归的关键）：
+    # 改名(0 + s 名字) -> RESTART -> 子菜单(2000 + 9999 返回) -> RESTART -> 完了(9999)
+    SCRIPT="20,0,s TW名字,2000,9999,9999"
+elif [ "$SELECTION" = "21" ]; then
+    # GOTO 标签作用域组：菜单选 21，@CHOICE_REPLICA 先喂 3（越界 ->
+    # CASEELSE 惩罚 -> GOTO 回本函数 $INPUT_LOOP），再喂 1（合法 -> 返回 1）
+    SCRIPT="21,3,1"
 else
     SCRIPT="$SELECTION"
 fi

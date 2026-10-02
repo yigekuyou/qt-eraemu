@@ -60,9 +60,6 @@ class ConsoleBackend : public QObject {
     Q_PROPERTY(bool followTail       READ followTail                                  NOTIFY windowChanged)
     Q_PROPERTY(int  frameMs          READ frameMs          WRITE setFrameMs          NOTIFY frameMsChanged)
     Q_PROPERTY(QString inputKind     READ inputKind                                  NOTIFY inputRequested)
-    // INPUT 分支点的「合法分支数字」（引擎 AST 静态分析，随 inputRequested 一起通知；
-    // QML/test_cli 据此只在合法分支里选择 —— 非分支数会落空并卡死引擎）
-    Q_PROPERTY(QVariantList inputBranches READ inputBranches                     NOTIFY inputRequested)
     Q_PROPERTY(bool waitingInput     READ waitingInput                                NOTIFY waitingInputChanged)    Q_PROPERTY(quint64 generation    READ generation                                 NOTIFY generationChanged)
     // 逻辑网格列/行数：**不是**常量。装载配置后会按「窗口宽 ÷ 单元格宽」重算
     // （eraTW 是 175 列，代码默认只有 80）。若声明为 CONSTANT，QML 会一直用旧值
@@ -109,8 +106,6 @@ public:
     [[nodiscard]] bool followTail() const { return m_scrollOffset == 0; }
     [[nodiscard]] int  frameMs() const { return m_frameMs; }
     [[nodiscard]] QString inputKind() const { return m_inputKind; }
-    // INPUT 分支点的合法分支数字（引擎 AST 静态分析；随 inputRequested 通知）
-    [[nodiscard]] QVariantList inputBranches() const { return m_inputBranches; }
     [[nodiscard]] bool waitingInput() const { return m_waitingInput; }
     [[nodiscard]] quint64 generation() const { return m_generation; }
     [[nodiscard]] int gridColumns() const { return m_layout.gridColumns(); }
@@ -169,9 +164,7 @@ public:
     [[nodiscard]] bool wrappingEnabled() const { return m_wrapLines; }
 
     // ---- 输入桥接 ----
-    // branches：INPUT 分支点的合法分支数字（引擎 AST 静态分析；
-    // 不传（默认空）= 清掉 —— 系统层请求（TRAIN/SHOP）不带分支上下文）
-    void notifyInputRequested(const QString& kind, const QVariantList& branches = {});
+    void notifyInputRequested(const QString& kind);
     void notifyInputDone();
 
     // ---- QML 调用 ----
@@ -239,7 +232,6 @@ private:
 
     QStringList m_htmlLines;      // printHtml 原文（HTML_POPPRINTINGSTR 消费）
     QString m_inputKind;
-    QVariantList m_inputBranches;   // INPUT 分支点的合法分支数字（AST 静态分析）
     bool    m_waitingInput = false;
 
     QTimer m_timer;

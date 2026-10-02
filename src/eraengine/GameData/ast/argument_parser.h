@@ -103,6 +103,11 @@ inline constexpr auto kInstructionSpecs = std::to_array<InstructionSpec>({
     {"ONEINPUT",     ArgKind::Expressions,   0,  2},   // SP_ONEINPUT
     {"TONEINPUT",    ArgKind::Expressions,   1,  4},   // SP_TINPUT
     {"TINPUT",       ArgKind::Input,         1,  4},
+    {"INPUTMOUSEKEY", ArgKind::IntExpression, 0,  1},  // 可选超时 ms（C# GetNormalArgumentBuilder("I",0)）
+    {"ONEINPUTS",    ArgKind::Expressions,   0,  1},   // SP_INPUTS
+    {"TINPUTS",      ArgKind::Expressions,   0,  4},   // 超时[,缺省][,跳过]
+    {"TONEINPUTS",   ArgKind::Expressions,   0,  4},
+    {"TWAIT",        ArgKind::Expressions,   0,  2},   // 超时[,跳过]
     {"WAIT",         ArgKind::Void,          0,  0},
     {"WAITANYKEY",   ArgKind::Void,          0,  0},
     {"AWAIT",        ArgKind::IntExpression, 0,  1},

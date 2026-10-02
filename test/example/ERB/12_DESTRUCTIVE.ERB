@@ -21,3 +21,50 @@ PRINTL 即将执行 THROW —— 随后应看到「执行出错」，这是预�
 THROW THROW 的测试消息：本行之后将进入错误状态
 PRINTL 不应执行到这里（THROW 已终止执行）
 RETURN 0
+
+;-------------------------------------------------------------
+; 追加的破坏性指令
+;   * RESTART    回到当前函数第一行（真实实现，对齐 C# JumpTo(ParentLabelLine)）
+;                —— 用「自重启一次」的子函数测：LOCAL 标记防止无限重启
+;                （RESTART 是同帧跳转，LOCAL/ARG 跨重启保留）。
+;   * FORCE_BEGIN / FORCE_QUIT / FORCE_QUIT_AND_RESTART /
+;     QUIT_AND_RESTART / CLEARMEMORY      EE 命令（当前「留痕跳过」桩，执行
+;                不报错；C# 语义上破坏流程/内存，故单独成组不进自动路径）。
+;   * DOTRAIN    仅训练流程状态合法（example 无 TRAINNAME，同样报错）——
+;                预期「执行出错」，用 ./test/run_example.sh 19 单独跑。
+;-------------------------------------------------------------
+@TEST_RESTART
+#DIM NONG
+PRINTL == 组12b：RESTART（重启当前函数） ==
+CALL DO_RESTART_ONCE
+; 真重启：两次经过函数头 -> LOCAL:0 计到 2；没重启（掉下去）-> 只计到 1
+CALL ASSERT_EQ, RESULT, 2, @"RESTART 重启了子函数一次（LOCAL 计数 = 2）"
+NONG = RESULT
+RETURN NONG
+
+; 自重启一次：LOCAL:0 计数经过函数头的次数（RESTART 同帧跳转，LOCAL 保留）
+@DO_RESTART_ONCE
+LOCAL:0 = LOCAL:0 + 1
+IF LOCAL:0 == 1
+	RESTART
+ENDIF
+RETURN LOCAL:0
+
+@TEST_DESTRUCTIVE_EE
+#DIM NONG
+PRINTL == 组12c：EE 破坏性命令（当前留痕跳过桩） ==
+FORCE_BEGIN 0
+FORCE_QUIT
+FORCE_QUIT_AND_RESTART
+QUIT_AND_RESTART
+CLEARMEMORY
+CALL ASSERT_TRUE, 1, @"EE 破坏性命令（桩）执行不报错"
+NONG = RESULT
+RETURN NONG
+
+@TEST_DOTRAIN
+PRINTL == 组13b：DOTRAIN（训练流程外非法，预期「执行出错」） ==
+PRINTL 即将执行 DOTRAIN —— 无 TRAINNAME 时应「执行出错」，这是预期行为
+DOTRAIN 0
+PRINTL 不应执行到这里（DOTRAIN 已报错）
+RETURN 0

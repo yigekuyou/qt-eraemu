@@ -542,8 +542,9 @@ void ConsoleBackend::tick() {
 // 输入桥接
 // ---------------------------------------------------------------------------
 
-void ConsoleBackend::notifyInputRequested(const QString& kind) {
+void ConsoleBackend::notifyInputRequested(const QString& kind, const QVariantList& branches) {
     m_inputKind = kind;
+    m_inputBranches = branches;
     m_waitingInput = true;
     flush();
     emit inputRequested(kind);
@@ -641,6 +642,10 @@ QVariantList ConsoleBackend::visibleBlocks() const {
                 m.insert("isButton", seg.isButton);
                 m.insert("isInteger", seg.isInteger);
                 m.insert("clickable", seg.isButton && seg.enabled);
+                if (seg.isButton)
+                    // 按钮值（运行期合法输入）：test_cli 分支选择的兜底候选
+                    m.insert("btnValue", seg.isInteger ? QVariant(seg.intValue)
+                                                       : QVariant(seg.strValue));
                 m.insert("tooltip", seg.tooltip);
                 m.insert("generation", QVariant::fromValue<qulonglong>(seg.generation));
                 out.append(m);

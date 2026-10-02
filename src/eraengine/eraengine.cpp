@@ -213,9 +213,10 @@ EraEngine::EraEngine(QObject *parent)
 		connect(&m_scriptRunner, &ScriptRunner::inputRequested, this, [this](const QString& kind) {
 			qDebug() << "[ScriptRunner] waiting for user input:" << kind
 					 << "state=" << static_cast<int>(m_processState.getExecState());
-			m_console.notifyInputRequested(kind);
+			// INPUT 分支点的合法分支数字（AST 静态分析）随请求一起推给显示层：
+			// QML / test_cli 据此只在合法分支里选择（非分支数会落空并卡死引擎）
+			m_console.notifyInputRequested(kind, m_scriptRunner.inputBranchCandidates());
 		});
-
 		// ---- 显示层：执行引擎输出 -> ConsoleBackend ----
 		connect(&m_executionEngine, &ExecutionEngine::consolePrint, this,
 				[this](const QString& text, bool newline) {
@@ -955,12 +956,23 @@ void EraEngine::runSystem()
 
 void EraEngine::provideInput(qint64 value)
 {
+		// INPUT 分支点（AST 静态分析）：等待点前方 SELECTCASE 的 CASE 常量。
+		// 非分支数会落空（无 CASEELSE 时 GOTO 回菜单重画再等）—— 自动跑就是卡死。
+		// 这里只放行合法分支：拒绝时不消费输入、保持等待，日志说明原因。
+		if (m_scriptRunner.inputBranchRestricted()) {
+				const QVariantList branches = m_scriptRunner.inputBranchCandidates();
+				if (!branches.contains(QVariant::fromValue<qint64>(value))) {
+						qWarning() << "[input] 非分支值" << value << "被拒绝（合法分支：" << branches << "）";
+						return;
+				}
+		}
 		// 用户操作交付：写入 RESULT/systemResult 并让状态机继续
 		qDebug() << "[input] provideInput" << value;
 		m_console.notifyInputDone();
 		m_systemStateMachine.resume(value);
+		// 检查窗口收紧到「INPUT 等待后的第一次交付」：后续排队输入不再受分支限制
+		m_scriptRunner.clearInputBranchContext();
 }
-
 void EraEngine::provideInputString(const QString& value)
 {
 		// 字符串输入：写入 RESULTS（局部字符串槽）后继续

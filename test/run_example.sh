@@ -7,6 +7,9 @@
 #   ./test/run_example.sh 5        # 只运行第 5 组
 #   ./test/run_example.sh 12       # 破坏性组（BEGIN TITLE，会回到标题画面）
 #   ./test/run_example.sh 13       # 破坏性组（THROW，预期「执行出错」）
+#   ./test/run_example.sh 15       # 鼠标组（INPUTMOUSEKEY：k 注入 + 超时两条路径）
+#   ./test/run_example.sh 18       # 破坏性组（RESTART + EE 破坏系桩）
+#   ./test/run_example.sh 19       # 破坏性组（DOTRAIN，预期「执行出错」）
 #
 # 依赖：build/src/eraengine/test_cli
 #       （cmake --build build --target test_cli）
@@ -32,6 +35,10 @@ SELECTION="${1:-0}"
 if [ "$SELECTION" = "0" ]; then
     # 全部自动：菜单选 0，随后 14 个填充值供「输入族」消费
     SCRIPT="0,0,0,0,0,0,0,0,0,0,0,0,0,0,0"
+elif [ "$SELECTION" = "15" ]; then
+    # 鼠标组：菜单选 15 + `k 1 10 10 1 0` 注入（type=1 左键）——
+    # 组15 的 INPUTMOUSEKEY(0) 吃注入，INPUTMOUSEKEY(50) 靠超时自动继续
+    SCRIPT="15,k 1 10 10 1 0"
 else
     SCRIPT="$SELECTION"
 fi

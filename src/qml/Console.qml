@@ -124,7 +124,7 @@ Item {
         anchors.left: parent.left
         anchors.right: parent.right
         anchors.top: parent.top
-        anchors.bottom: inputBar.top
+        anchors.bottom: inputField.top
         clip: true
         focus: root.primitiveInput
 
@@ -259,39 +259,33 @@ Item {
         }
     }
 
-    // 输入条：仅当执行链等待用户输入时出现（跟随系统主题配色）
-    Rectangle {
-        id: inputBar
+    // 底部输入行：等待输入时贴着最下面出现——无边框、无背景、无按钮，
+    // 高度只有一行文字（去掉旧 inputBar 的 38px 背景条，不再撑大控制台）；
+    // 直接键入、回车即提交。非等待状态高度为 0，不影响布局。
+    TextField {
+        id: inputField
         anchors.left: parent.left
         anchors.right: parent.right
         anchors.bottom: parent.bottom
-        height: backend && backend.waitingInput && !root.primitiveInput ? 38 : 0
-        visible: height > 0
-        color: palette.window
-
-        Row {
-            anchors.fill: parent
-            anchors.margins: 4
-            spacing: 6
-
-            TextField {
-                id: inputField
-                width: parent.width - 90
-                height: parent.height - 8
-                placeholderText: backend ? ("输入（" + backend.inputKind + "）") : ""
-                // 输入类型分支限制：整数型输入只接受数字（INPUT 可负）
-                validator: backend && backend.waitingInput && !root.stringInputKind ? intOnly : null
-                onAccepted: root.submit()
-            }
-            RegularExpressionValidator {
-                id: intOnly
-                regularExpression: /-?[0-9]+/
-            }
-            Button {
-                text: qsTr("确定")
-                onClicked: root.submit()
-            }
-        }
+        height: visible ? implicitHeight : 0
+        visible: backend && backend.waitingInput && !root.primitiveInput
+        background: null                 // 无边框：去掉 TextField 默认描边
+        topPadding: 0
+        bottomPadding: 0
+        leftPadding: 4
+        rightPadding: 4
+        font.family: root.fontName
+        font.pixelSize: root.fontSize
+        color: root.foreColor !== "" ? root.foreColor : palette.windowText
+        placeholderText: backend && backend.waitingInput ? ("输入（" + backend.inputKind + "）") : ""
+        // 输入类型分支限制：整数型输入只接受数字（INPUT 可负）
+        validator: backend && backend.waitingInput && !root.stringInputKind ? intOnly : null
+        onVisibleChanged: if (visible) inputField.forceActiveFocus();
+        onAccepted: root.submit()
+    }
+    RegularExpressionValidator {
+        id: intOnly
+        regularExpression: /-?[0-9]+/
     }
 
     onHeightChanged: {

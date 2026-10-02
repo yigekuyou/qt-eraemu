@@ -15,7 +15,7 @@
 | `example/ERB/10_COVERAGE.ERB` | **自动生成**的全函数冒烟覆盖（勿手改） |
 | `data/emuera_standard_cmds.txt` | Emuera 原版命令清单（导出自 C#） |
 | `data/emuera_standard_funcs.txt` | Emuera 原版式中函数清单（导出自 C#） |
-| `data/emuera_ee_cmds.txt` | EmueraEE 扩展命令清单 |
+| `data/emuera_ee_cmds.txt` | EmueraEE 扩展命令清单（已转移到扩展：`src/eraengine/GameProc/ee_extension.h` 逐一注册；本文件仍为覆盖组名单来源） |
 | `data/coverage_report.txt` | 覆盖率报告（生成） |
 | `run_example.sh` | 运行示例（唯一需要的入口） |
 | `export_command_tables.py` | 从 C# 源码导出上述命令清单 |

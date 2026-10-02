@@ -39,6 +39,7 @@
 //     :model          -> 显示模型：逐 span（文本/颜色/粗斜体/内联图/图形）逐按钮
 //     :check          -> 渲染自检：未展开的 %..%/{..}、本应是按钮的 [n]、空行、对齐
 //     x               -> 注入一次鼠标点击（INPUTMOUSEKEY）
+//     :branches       -> 打印当前输入的「合法分支」（引擎 AST 静态分析）
 //
 // 渲染诊断（「错误渲染」怎么测）：
 //   * 每行输出都会附带注解：[CENTER]/[btn:0,1]/[!未展开格式]/[!字面按钮] …
@@ -56,7 +57,7 @@
 #include <QSet>
 #include <algorithm>
 #include <optional>
-
+#include <random>
 #include <QDBusConnection>
 #include <QDBusMessage>
 #include <QSocketNotifier>
@@ -409,6 +410,10 @@ int main(int argc, char* argv[]) {
     int frameMs = 16;
     int  runMs = 0;            // --run-ms N：输入用尽后继续跑 N 毫秒（供外部注入）
     bool hasSeed = false;      // --seed N：固定 MT19937 随机种子（复现整局）
+    bool autoBranch = false;   // --auto-branch：分支输入处按 seed 随机挑「合法分支」
+    std::mt19937 branchRng;    // 分支选择的随机源（--seed 播种，可复现）
+    int  branchSeedValue = 0;  // --branch-seed N：分支选择的种子（与 --seed 分开设置）
+    bool hasBranchSeed = false;
     for (int i = 1; i < argc; ++i) {
         const QString a = QString::fromLocal8Bit(argv[i]);
         if (a == QLatin1String("--help") || a == QLatin1String("-h")) {
@@ -432,10 +437,20 @@ int main(int argc, char* argv[]) {
                 << "  --tcp <端口>      TCP socket\n"
                 << "  --run-ms N       输入用尽后继续跑 N 毫秒（给外部注入留时间）\n"
                 << "  --seed N         固定 MT19937 随机种子（整局可复现）\n"
+                << "  --auto-branch    输入用尽后，在「合法分支」（AST 静态分析出的\n"
+                << "                   SELECTCASE CASE 常量）里按种子随机挑一个继续：\n"
+                << "                   非分支数会落空并卡死引擎，挑合法分支则不会\n"
+                << "                   （:branches 命令可查看当前输入的合法分支）\n"
+                << "  --branch-seed N  分支选择的种子（与 --seed 分开设置；未给时用 --seed）\n"
                 << "  输入源：stdin / --script / DBus / socket，行协议见文件头注释";
             return 0;
         }
         if (a == QLatin1String("--paced")) { paced = true; continue; }
+        if (a == QLatin1String("--auto-branch")) {
+            autoBranch = true;
+            interactive = false;   // 自动行走模式（交互模式留给手输）
+            continue;
+        }
         if (a == QLatin1String("--frame-ms") && i + 1 < argc) {
             frameMs = qMax(1, QString::fromLocal8Bit(argv[++i]).toInt()); continue;
         }
@@ -469,6 +484,11 @@ int main(int argc, char* argv[]) {
                 seedValue = static_cast<quint32>(QString::fromLocal8Bit(argv[++i]).toUInt());
                 hasSeed = true;
             }
+            continue;
+        }
+        if (a == QLatin1String("--branch-seed") && i + 1 < argc) {
+            branchSeedValue = QString::fromLocal8Bit(argv[++i]).toInt();
+            hasBranchSeed = true;
             continue;
         }
         if (a == QLatin1String("--log")) {   // 追加式日志（旧行为）
@@ -514,6 +534,8 @@ int main(int argc, char* argv[]) {
         if (directory.isEmpty()) directory = a;
     }
     if (directory.isEmpty()) directory = QStringLiteral(".");
+    // 分支选择的随机源：--branch-seed 单独设置；未给时回落 --seed（默认 0）
+    branchRng.seed(hasBranchSeed ? branchSeedValue : seedValue);
 
     if (!QDir(directory).exists()) {
         qWarning().noquote() << "目录不存在:" << directory;
@@ -791,6 +813,17 @@ int main(int argc, char* argv[]) {
             for (const QString& s : sus) std::cout << "  [!] " << s.toStdString() << "\n";
             return true;
         }
+        if (cmd == ":branches") {   // 当前输入的「合法分支」（引擎 AST 静态分析）
+            const QVariantList branches = console ? console->inputBranches() : QVariantList();
+            std::cout << "  合法分支: ";
+            if (branches.isEmpty()) {
+                std::cout << "（无 —— 非分支输入 / 有 CASEELSE 兜底，不受限制）\n";
+            } else {
+                for (const QVariant& b : branches) std::cout << b.toLongLong() << ' ';
+                std::cout << "\n";
+            }
+            return true;
+        }
         if (cmd.startsWith(QLatin1String(":lines "))) {   // :lines SCRIPT —— dump 引擎侧逻辑行
             const QString scriptName = cmd.mid(7).trimmed();
             EraParseTable* table = engine.getParseTable();
@@ -915,8 +948,25 @@ int main(int argc, char* argv[]) {
             // 必须**真的跑事件循环**让 QTimer 到点（EraEngine 用 QTimer::singleShot）。
             // 期间随时接受外部注入（DBus / socket / stdin 的 'k …'）。
             if (!interactive && scripted.isEmpty() && !hasExternal && runMs <= 0) {
-                std::cout << "\n（输入源用尽，停止实时循环）\n";
-                break;
+                // 输入源用尽 —— 但**限时等待还有 QTimer 这个输入源**：
+                // 给它一段有界时间到点（TINPUT 50 / INPUTMOUSEKEY 50 的超时
+                // 交付）；无计时器的等待（INPUTMOUSEKEY 0）到时退出。
+                // 用 generation 判定「定时器真的交付了输入」（同 enum 值的
+                // 新等待不算：deliverInputValues -> execStateChanged ->
+                // notifyInputDone 会推 generation）。
+                const quint64 gen0 = console ? console->generation() : 0;
+                QElapsedTimer bounded; bounded.start();
+                while (state->getExecState() == st && pending.isEmpty() && scripted.isEmpty()) {
+                    QCoreApplication::processEvents(QEventLoop::AllEvents, 20);
+                    QThread::msleep(5);
+                    if (bounded.elapsed() > 3000) break;
+                }
+                if (state->getExecState() == st
+                    && (!console || console->generation() == gen0)) {
+                    std::cout << "\n（输入源用尽，停止实时循环）\n";
+                    break;
+                }
+                continue;   // 定时器到点交付 -> 回主循环继续推进
             }
             static bool bannerShown = false;
             if (!bannerShown) {
@@ -968,6 +1018,36 @@ int main(int argc, char* argv[]) {
             cmd = scripted.takeFirst();
             haveCmd = true;
             std::cout << "> " << cmd.toStdString() << "\n";
+        } else if (autoBranch && !interactive) {
+            // 分支选择（--auto-branch）：只在「合法分支」里挑 —— 非分支数会落空
+            // （无 CASEELSE 时 GOTO 回菜单重画再等），自动行走就是卡死；挑合法
+            // 分支则永不卡死。种子：--branch-seed 单独设置（未给时用 --seed）。
+            // 仅非交互模式（交互模式留给手输，:branches 可查看合法分支）。
+            // 候选优先级：AST 静态分析（SELECTCASE CASE 常量）
+            //          -> 屏幕上已打印且仍可点击的按钮值（运行期合法输入：
+            //             ASK_YN / 菜单按钮 —— 非按钮值会被守卫循环吃掉）。
+            QVariantList picks = console ? console->inputBranches() : QVariantList();
+            if (picks.isEmpty() && console) {
+                QSet<qint64> btns;
+                const QVariantList blocks = console->visibleBlocks();
+                for (const QVariant& v : blocks) {
+                    const QVariantMap m = v.toMap();
+                    if (!m.value(QStringLiteral("isButton")).toBool()) continue;
+                    if (!m.value(QStringLiteral("clickable")).toBool()) continue;
+                    const QVariant bv = m.value(QStringLiteral("btnValue"));
+                    if (bv.typeId() == QMetaType::QString) continue;   // 字符串按钮不给数值输入
+                    btns.insert(bv.toLongLong());
+                }
+                for (const qint64 b : btns) picks.append(QVariant::fromValue<qint64>(b));
+            }
+            if (!picks.isEmpty()) {
+                std::uniform_int_distribution<int> pick(0, static_cast<int>(picks.size()) - 1);
+                cmd = QString::number(picks.at(pick(branchRng)).toLongLong());
+                haveCmd = true;
+                std::cout << "> " << cmd.toStdString()
+                          << "   (分支选择 seed="
+                          << (hasBranchSeed ? branchSeedValue : seedValue) << ")\n";
+            }
         } else if (stdinOpen || hasExternal || runMs > 0) {
             // stdin 由 QSocketNotifier 非阻塞喂进 pending；外部通道由 socket/dbus 回调喂。
             // 交互/外部模式下一直等（临时挂起让数据到达），非交互且无外部输入则收尾。

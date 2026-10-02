@@ -1117,10 +1117,18 @@ ExecState ScriptRunner::executeLine(const LogicalLine& line) {
     // ---- 输入等待（由中心执行状态挂起）----
     if (name == QLatin1String("INPUT") || name == QLatin1String("ONEINPUT")
         || name == QLatin1String("INPUTS") || name == QLatin1String("ONEINPUTS")) {
+        // 数值 INPUT/ONEINPUT：AST 静态分析前方 SELECTCASE 的 CASE 常量，
+        // 得到「合法分支」（非分支数会落空 -> 无 CASEELSE 时 GOTO 回菜单
+        // 重画再等 —— 自动跑就是卡死）；字符串 INPUTS/ONEINPUTS 不带分支上下文。
+        if (name == QLatin1String("INPUT") || name == QLatin1String("ONEINPUT")) {
+            analyzeInputBranches(pc + 1);
+        } else {
+            m_inputBranches.clear();
+            m_inputBranchRestricted = false;
+        }
         advance();                       // 指令已消费
         return ExecState::WaitInput;     // 挂起等待用户操作
     }
-
     // ---- 实时 / 限时输入（对齐 C# INPUTMOUSEKEY / TONEINPUT）----
     if (name == QLatin1String("INPUTMOUSEKEY")) {
         qint64 timeout = 0;
@@ -1614,6 +1622,87 @@ bool ScriptRunner::caseMatches(const LogicalLine& caseLine,
         } else if (compare(valueVar, evalText(t)) == 0) return true;
     }
     return false;
+}
+
+// ---------------------------------------------------------------------------
+// INPUT 分支候选的静态分析（AST）
+//
+// 数值 INPUT/ONEINPUT 等待点前方小窗口里找 SELECTCASE，收集 CASE 的
+// **字面常量**（十进制 / 0x 十六进制；变量 / IS / TO 形式跳过 —— 保守起见
+// 不经存储求值、不猜，避免静态分析触发副作用或误限合法输入）。
+// CASEELSE 存在说明游戏自己兜底（example 菜单的「无效输入」路径）
+// -> 不限制，保持 C# 语义。
+// 非分支数的危害：eraTW TITLE.ERB 的 INPUT -> SELECTCASE CASE 0/CASE 1
+// **没有兜底**，非分支数落空后 GOTO START 无限重画 35 张标题图再等输入
+// —— 自动跑（test_cli 分支选择 / 随机行走）就是卡死。
+// ---------------------------------------------------------------------------
+void ScriptRunner::analyzeInputBranches(int inputPc)
+{
+    m_inputBranches.clear();
+    m_inputBranchRestricted = false;
+    if (!m_table) return;
+    const QString script = m_table->currentScript();
+    const ScriptData* sd = m_table->script(script);
+    if (!sd) return;
+
+    // 前方小窗口：够跨越 PRINT / CUSTOMDRAWLINE（CALL）等非分支指令；
+    // 窗口内又出现输入指令或流程跳转 -> SELECTCASE 不属于本次输入，放弃。
+    static const QSet<QString> kInputFamily = {
+        QStringLiteral("INPUT"), QStringLiteral("INPUTS"),
+        QStringLiteral("ONEINPUT"), QStringLiteral("ONEINPUTS"),
+        QStringLiteral("TINPUT"), QStringLiteral("TINPUTS"),
+        QStringLiteral("TONEINPUT"), QStringLiteral("TONEINPUTS"),
+        QStringLiteral("WAIT"), QStringLiteral("WAITANYKEY"),
+        QStringLiteral("FORCEWAIT"), QStringLiteral("INPUTMOUSEKEY"),
+        // 流程改变：SELECTCASE 属于跳转后的区域，不属于本次输入
+        QStringLiteral("RETURN"), QStringLiteral("GOTO"), QStringLiteral("GOTOFORM"),
+        QStringLiteral("JUMP"), QStringLiteral("JUMPFORM"), QStringLiteral("BEGIN"),
+        QStringLiteral("CALLTRAIN"), QStringLiteral("DOTRAIN"),
+        QStringLiteral("STOPCALLTRAIN"), QStringLiteral("RESTART"), QStringLiteral("THROW"),
+    };
+    static constexpr int kBranchWindow = 8;
+    const int last = qMin(inputPc + kBranchWindow, sd->lines.size());
+    for (int i = inputPc; i < last; ++i) {
+        const LogicalLine& ll = sd->lines[i];
+        if (!ll.isInstruction()) continue;
+        const QString fn = ll.functionName;
+        if (kInputFamily.contains(fn)) return;
+        if (fn != QLatin1String("SELECTCASE")) continue;
+        // 只认 RESULT 选择器（SELECTCASE RESULT）：选择其它变量的 SELECTCASE
+        // 与本次输入无关，不能拿它的 CASE 常量来限制输入
+        QString sel = ll.raw.trimmed();
+        if (sel.left(10).compare(QLatin1String("SELECTCASE"), Qt::CaseInsensitive) == 0)
+            sel = sel.mid(10).trimmed();
+        if (!sel.startsWith(QLatin1String("RESULT"), Qt::CaseInsensitive)) continue;
+
+        const QList<int> caseLines = m_table->ifBranches(script, i);
+        bool hasCaseElse = false;
+        QVariantList values;
+        for (int caseLine : caseLines) {
+            const LogicalLine* cl = m_table->lineAt(script, caseLine);
+            if (!cl) continue;
+            if (cl->is("CASEELSE")) { hasCaseElse = true; break; }
+            QString spec = cl->raw.trimmed();
+            if (spec.left(4).compare(QLatin1String("CASE"), Qt::CaseInsensitive) == 0)
+                spec = spec.mid(4);
+            for (const QString& arg : splitCaseArgs(spec)) {
+                const QString a = arg.trimmed();
+                if (a.isEmpty()) continue;
+                if (a.startsWith(QLatin1String("IS"), Qt::CaseInsensitive)) continue;  // IS >= n
+                if (a.contains(QLatin1String(" TO "), Qt::CaseInsensitive)) continue;  // a TO b
+                bool ok = false;
+                const qint64 v = a.toLongLong(&ok, 0);   // 字面常量（十进制 / 0x）
+                if (ok) values.append(v);
+            }
+        }
+        if (!hasCaseElse && !values.isEmpty()) {
+            m_inputBranches = values;
+            m_inputBranchRestricted = true;
+            qCDebug(eraTrace) << "[exec] INPUT 分支静态分析" << script << "行" << inputPc
+                              << "合法分支" << m_inputBranches;
+        }
+        return;
+    }
 }
 
 qint64 ScriptRunner::readIntVar(const QString& name, int index) const {

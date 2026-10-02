@@ -241,6 +241,8 @@ bool AstBuilder::isExactInstructionName(const QString& upperName) {
         "ADDVOIDCHARA", "UPCHECK", "CUPCHECK", "FORCEKANA", "TRYCGOTO",
         "TRYCGOTOFORM", "TRYCCALL", "TRYCCALLFORM", "TRYCJUMP", "TRYCJUMPFORM",
         "SAVEGAME", "LOADGAME", "SAVEDATA", "LOADDATA", "DELDATA",
+        // 运行期断言（ExecutionEngine 处理；为假报错终止）—— 不算未识别
+        "ASSERT",
         // 控制流关键字（执行链单独处理，不进指令规范表）
         "DO", "REND", "LOOP", "WHILE", "WEND", "REPEAT", "FOR", "NEXT",
         "BREAK", "CONTINUE", "RETURN", "RETURNF", "GOTO", "CALL", "BEGIN",

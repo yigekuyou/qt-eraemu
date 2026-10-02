@@ -54,14 +54,15 @@ set_target_properties(appemuera PROPERTIES
 target_link_libraries(appemuera
     PRIVATE Qt6::Quick Qt6::DBus Qt6::Widgets eraengine
 )
-if(EMUERA_WARNINGS_AS_ERRORS)
     if(MSVC)
         target_compile_options(appemuera PRIVATE /W4 /WX)
     elseif(CMAKE_CXX_COMPILER_ID MATCHES "GNU|Clang|AppleClang")
         target_compile_options(appemuera PRIVATE -Wall -Wextra -Wpedantic -Werror)
     endif()
-endif()
-
+target_compile_definitions(appemuera
+    PRIVATE
+        $<$<NOT:$<CONFIG:Debug>>:QT_NO_DEBUG_OUTPUT>
+)
 include(GNUInstallDirs)
 install(TARGETS appemuera
     BUNDLE DESTINATION .

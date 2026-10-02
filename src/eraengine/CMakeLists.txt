@@ -153,13 +153,11 @@ target_include_directories(eraengine PUBLIC ${CMAKE_CURRENT_SOURCE_DIR})
 
 # Keep warning policy explicit and compiler-specific.  Qt headers are included
 # under the same policy as project code so new compatibility issues are visible.
-if(EMUERA_WARNINGS_AS_ERRORS)
     if(MSVC)
         target_compile_options(eraengine PRIVATE /W4 /WX)
     elseif(CMAKE_CXX_COMPILER_ID MATCHES "GNU|Clang|AppleClang")
         target_compile_options(eraengine PRIVATE -Wall -Wextra -Wpedantic -Werror)
     endif()
-endif()
 
 # ---------------------------------------------------------------------------
 # Test executables
@@ -282,3 +280,7 @@ eraengine_add_test(expr_probe)
 eraengine_add_test(qdbug_probe)
 # qdbug 桩：拍平行表导出（确定性顺序，供离线核对拍平是否保序）
 eraengine_add_test(dump_lines)
+target_compile_definitions(eraengine
+    PRIVATE
+        $<$<NOT:$<OR:$<CONFIG:Debug>:QT_NO_DEBUG_OUTPUT>
+)

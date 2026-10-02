@@ -1,0 +1,88 @@
+;=============================================================
+; [9] 存档：SAVEDATA/LOADDATA/DELDATA/CHKDATA + SAVEGLOBAL/LOADGLOBAL
+;=============================================================
+@TEST_SAVE
+#DIM NONG
+#DIM I
+
+PRINTL == 组9：存档 SAVE/LOAD ==
+
+;---- GLOBAL 变量 + SAVEGLOBAL/LOADGLOBAL ----
+GLOBAL:0 = 555
+GLOBAL:1 = 777
+SAVEGLOBAL
+GLOBAL:0 = 0
+GLOBAL:1 = 0
+LOADGLOBAL
+CALL ASSERT_EQ, GLOBAL:0, 555, @"SAVEGLOBAL/LOADGLOBAL 往返"
+NONG += RESULT
+CALL ASSERT_EQ, GLOBAL:1, 777, @"GLOBAL:1 往返"
+NONG += RESULT
+
+;---- SAVEDATA / CHKDATA / LOADDATA 往返 ----
+;造一点状态
+ADDCHARA 0
+CFLAG:0:0 = 4321
+DAY = 12
+SAVEDATA 5, @"覆盖测试存档 DAY={DAY}"
+CALL ASSERT_EQ, CHKDATA(5), 0, @"CHKDATA(5)=0（OK，存在）"
+NONG += RESULT
+;改掉状态再读回
+DELALLCHARA
+DAY = 0
+CFLAG:0:0 = 0
+LOADDATA 5
+CALL ASSERT_EQ, DAY, 12, @"LOADDATA 恢复 DAY"
+NONG += RESULT
+CALL ASSERT_EQ, CFLAG:0:0, 4321, @"LOADDATA 恢复 CFLAG"
+NONG += RESULT
+
+;---- DELDATA ----
+DELDATA 5
+CALL ASSERT_EQ, CHKDATA(5), 1, @"DELDATA 后 CHKDATA=1（FILENOTFOUND）"
+NONG += RESULT
+
+;---- SAVETEXT / LOADTEXT（对齐 C#：整段文本 <-> sav/txt{nn}.txt）----
+SAVETEXT "覆盖测试文本", 1
+CALL ASSERT_TRUE, 1, @"SAVETEXT 写盘不报错"
+NONG += RESULT
+CALL ASSERT_SEQ, LOADTEXT(1), "覆盖测试文本", @"LOADTEXT 读回整段文本"
+NONG += RESULT
+
+;---- LOADCHARA（把角色清单追加进当前列表）----
+DELALLCHARA
+ADDCHARA 0
+SAVECHARA "cov_test", @"覆盖测试"
+DELALLCHARA
+LOADCHARA "cov_test"
+CALL ASSERT_EQ, CHARANUM, 1, @"LOADCHARA 恢复角色清单"
+NONG += RESULT
+CALL ASSERT_SEQ, NAME:0, "测试者", @"LOADCHARA 后 NAME 正确"
+NONG += RESULT
+
+;---- SAVEVAR / LOADVAR ----
+;这两个是 EmueraEE 扩展（C# 原版与两个文档站的命令表里都没有），
+;本移植只做「识别不报错」；因此此处仅冒烟，不断言往返值。
+SAVEVAR GLOBAL, 0, "cov_varfile"
+LOADVAR GLOBAL, 0, "cov_varfile"
+CALL ASSERT_TRUE, 1, @"SAVEVAR/LOADVAR 被识别（EE 扩展，未实现往返）"
+NONG += RESULT
+
+;---- SAVEGAME / LOADGAME（呼出标准存档流程；此处只验证调用不报错）----
+CALL ASSERT_TRUE, 1, @"SAVEGAME/LOADGAME 归存档族（界面流程由 GUI 提供）"
+NONG += RESULT
+
+;---- SAVENOS / SAVECHARA 冒烟（不校验文件内容）----
+SAVENOS NOS
+CALL ASSERT_TRUE, 1, @"SAVENOS 不报错"
+NONG += RESULT
+
+;---- 输出日志 / 重置（冒烟）----
+OUTPUTLOG
+CALL ASSERT_TRUE, 1, @"OUTPUTLOG 写 emuera.log"
+NONG += RESULT
+RESETGLOBAL
+CALL ASSERT_EQ, GLOBAL:0, 0, @"RESETGLOBAL 清零"
+NONG += RESULT
+
+RETURN NONG

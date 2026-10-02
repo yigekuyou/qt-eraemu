@@ -108,6 +108,28 @@ public:
     void setBgColorProvider(ColorProvider provider) { m_bgColorProvider = std::move(provider); }
     void setDefaultBgColorProvider(ColorProvider provider) { m_defaultBgColorProvider = std::move(provider); }
     void setRedrawProvider(ColorProvider provider) { m_redrawProvider = std::move(provider); }
+    // CURRENTALIGN / GETFONT / GETFOCUSCOLOR / CLIENTWIDTH / CLIENTHEIGHT /
+    // ISSKIP / MESSKIP / MOUSESKIP / GETLINESTR / HTML_GETPRINTEDSTR / DEBUGCLEAR
+    // （缺省：左对齐、默认字体、焦点色 0xFFFF00、0x0 客户区、无跳过）
+    void setAlignProvider(ColorProvider provider) { m_alignProvider = std::move(provider); }
+    void setFontProvider(std::function<QString()> provider) { m_fontProvider = std::move(provider); }
+    void setFocusColorProvider(ColorProvider provider) { m_focusColorProvider = std::move(provider); }
+    void setClientSizeProvider(std::function<QPair<int,int>()> provider) { m_clientSizeProvider = std::move(provider); }
+    void setSkipProvider(std::function<int(int)> provider) { m_skipProvider = std::move(provider); }   // 0=ISSKIP 1=MESSKIP 2=MOUSESKIP
+    void setLineStrProvider(std::function<QString(int)> provider) { m_lineStrProvider = std::move(provider); }
+    void setHtmlPrintedProvider(std::function<QString(int)> getAll, std::function<QString()> pop) {
+        m_htmlGetProvider = std::move(getAll);
+        m_htmlPopProvider = std::move(pop);
+    }
+    void setClearProvider(std::function<void()> provider) { m_clearProvider = std::move(provider); }
+    void setLineEmptyProvider(std::function<qint64()> provider) { m_lineEmptyProvider = std::move(provider); }
+    // PRINTCLENGTH / PRINTCPERLINE（显示层排版参数，由 EraEngine 注入）
+    void setPrintCProvider(std::function<QPair<int,int>()> provider) { m_printCProvider = std::move(provider); }
+
+    // 存档/文本类函数（SAVETEXT/LOADTEXT/SAVECHARA/LOADCHARA/GSAVE/GLOAD/SAVENOS）
+    // 的落盘目录 = 游戏目录下的 sav/（对齐 C# VEvaluator 的保存路径），由 EraEngine 注入。
+    void setSaveDirectory(const QString& dir) { m_saveDirectory = dir; }
+    [[nodiscard]] QString saveFilePath(const QString& fileName) const;
 
     // `#DIM CONST NAME, N = …` 常数数组的下标查询（注入自 VariableTable）
     //   * checker：只判断名字是不是常数数组（**必须能不求值下标**，
@@ -210,6 +232,18 @@ private:
     ColorProvider m_bgColorProvider;      // GETBGCOLOR
     ColorProvider m_defaultBgColorProvider; // GETDEFBGCOLOR
     ColorProvider m_redrawProvider;       // CURRENTREDRAW
+    ColorProvider m_alignProvider;        // CURRENTALIGN
+    std::function<QString()> m_fontProvider;                 // GETFONT
+    ColorProvider m_focusColorProvider;   // GETFOCUSCOLOR
+    std::function<QPair<int,int>()> m_clientSizeProvider;    // CLIENTWIDTH/HEIGHT
+    std::function<int(int)> m_skipProvider;                  // ISSKIP/MESSKIP/MOUSESKIP
+    std::function<QString(int)> m_lineStrProvider;           // GETLINESTR
+    std::function<QString(int)> m_htmlGetProvider;           // HTML_GETPRINTEDSTR
+    std::function<QString()> m_htmlPopProvider;              // HTML_POPPRINTINGSTR
+    std::function<void()> m_clearProvider;                   // DEBUGCLEAR
+    std::function<qint64()> m_lineEmptyProvider;             // LINEISEMPTY
+    QString m_saveDirectory;
+    std::function<QPair<int,int>()> m_printCProvider;        // PRINTCLENGTH/PERLINE
     Mt19937 m_rand;                       // MT19937（启动时随机种子）
     VariableDimProvider m_variableDimProvider;
     ConstArrayProvider  m_constArrayProvider;

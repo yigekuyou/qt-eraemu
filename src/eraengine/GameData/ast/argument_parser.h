@@ -56,6 +56,12 @@ inline constexpr auto kInstructionSpecs = std::to_array<InstructionSpec>({
     {"CALL",         ArgKind::Call,          1,  -1},
     {"CALLFORM",     ArgKind::CallF,         1,  -1},
     {"JUMP",         ArgKind::Call,          1,  -1},   // 对齐 C#：JUMP 使用 CALL_Instruction（CALL 同族）
+    {"FUNC",         ArgKind::CallF,         1,  -1},   // TRY*LIST 体内的条目（C# SP_CALLFORM）
+    {"TRYCALLLIST",  ArgKind::Void,          0,  0},
+    {"TRYJUMPLIST",  ArgKind::Void,          0,  0},
+    {"TRYGOTOLIST",  ArgKind::Void,          0,  0},
+    {"GOTOLIST",     ArgKind::Void,          0,  0},   // TRYGOTOLIST 的宽松别名
+    {"ENDFUNC",      ArgKind::Void,          0,  0},
     {"RETURN",       ArgKind::Expressions,   0,  -1},   // INT_ANY：逗号分隔的整型表达式序列 -> RESULT:0..n
     {"RETURNF",      ArgKind::Expression,    0,  1},
     {"SELECTCASE",   ArgKind::Expression,    1,  1},
@@ -68,6 +74,7 @@ inline constexpr auto kInstructionSpecs = std::to_array<InstructionSpec>({
     {"*=",           ArgKind::Raw,           2,  2},
     {"/=",           ArgKind::Raw,           2,  2},
     {"'=",           ArgKind::Raw,           2,  2},
+    {"%=",           ArgKind::Raw,           2,  2},
     {"SET",          ArgKind::VarSet,        1,  4},
     {"VARSET",       ArgKind::VarSet,        1,  -1},   // 值可省略
     {"VARSIZE",      ArgKind::Expressions,   1,  -1},
@@ -81,6 +88,8 @@ inline constexpr auto kInstructionSpecs = std::to_array<InstructionSpec>({
     {"PRINTS",       ArgKind::PrintV,        1,  -1},
     {"PRINT_IMG",    ArgKind::StrExpression, 1,  1},   // C# PRINT_IMG: resource string expression
     {"PRINTBUTTON",  ArgKind::Button,        2,  3},   // <文字列式>,<数式>(,<tooltip>)
+    {"PRINTBUTTONC", ArgKind::Button,        2,  3},   // 同上 + PRINTC 定宽（右对齐）
+    {"PRINTBUTTONLC", ArgKind::Button,       2,  3},   // 同上 + PRINTC 定宽（左对齐）
     {"PRINTDATA",    ArgKind::PrintData,     0,  -1},
     {"DRAWLINE",     ArgKind::Void,          0,  0},
     {"CLEARLINE",    ArgKind::IntExpression, 0,  1},

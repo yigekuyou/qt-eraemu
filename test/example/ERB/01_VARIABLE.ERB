@@ -1,0 +1,148 @@
+;=============================================================
+; [1] 变量 · 赋值 · 数组 · 私有/全局声明
+;=============================================================
+@TEST_VARIABLE
+#DIM NONG
+#DIM A
+#DIMS S
+#DIM ARR, 5
+#DIM ARR2, 2, 3
+#DIM CONST TEST_CONST_VALUE = 123
+
+PRINTL == 组1：变量 · 赋值 · 数组 ==
+
+;---- 基本赋值与运算符 ----
+A = 5
+CALL ASSERT_EQ, A, 5, @"A = 5"
+NONG += RESULT
+A += 3
+CALL ASSERT_EQ, A, 8, @"A += 3"
+NONG += RESULT
+A -= 1
+CALL ASSERT_EQ, A, 7, @"A -= 1"
+NONG += RESULT
+A *= 2
+CALL ASSERT_EQ, A, 14, @"A *= 2"
+NONG += RESULT
+A /= 4
+CALL ASSERT_EQ, A, 3, @"A /= 4（整除）"
+NONG += RESULT
+A %= 2
+CALL ASSERT_EQ, A, 1, @"A %= 2"
+NONG += RESULT
+A ++
+CALL ASSERT_EQ, A, 2, @"A ++（后缀自增语句）"
+NONG += RESULT
+A --
+CALL ASSERT_EQ, A, 1, @"A --（后缀自减语句）"
+NONG += RESULT
+
+;---- 括号与运算优先级 ----
+A = (1 + 2) * 3
+CALL ASSERT_EQ, A, 9, @"(1 + 2) * 3"
+NONG += RESULT
+A = 2 + 3 * 4
+CALL ASSERT_EQ, A, 14, @"乘法优先于加法"
+NONG += RESULT
+A = 100 / 7 / 2
+CALL ASSERT_EQ, A, 7, @"左结合除法"
+NONG += RESULT
+
+;---- 比较 / 逻辑 ----
+CALL ASSERT_TRUE, 1 < 2 && 2 <= 2, @"&& 与 <="
+NONG += RESULT
+CALL ASSERT_TRUE, 3 > 2 || 1 > 2, @"||"
+NONG += RESULT
+CALL ASSERT_TRUE, !(1 > 2), @"逻辑非"
+NONG += RESULT
+CALL ASSERT_TRUE, 5 != 4, @"!="
+NONG += RESULT
+
+;---- 位运算 ----
+A = 6
+CALL ASSERT_EQ, A & 3, 2, @"6 & 3"
+NONG += RESULT
+CALL ASSERT_EQ, A | 1, 7, @"6 | 1"
+NONG += RESULT
+CALL ASSERT_EQ, A ^ 3, 5, @"6 ^ 3（异或）"
+NONG += RESULT
+CALL ASSERT_EQ, A << 2, 24, @"6 << 2"
+NONG += RESULT
+CALL ASSERT_EQ, A >> 1, 3, @"6 >> 1"
+NONG += RESULT
+SETBIT A, 0
+CALL ASSERT_EQ, A, 7, @"SETBIT A, 0"
+NONG += RESULT
+CLEARBIT A, 0
+CALL ASSERT_EQ, A, 6, @"CLEARBIT A, 0"
+NONG += RESULT
+INVERTBIT A, 1
+CALL ASSERT_EQ, A, 4, @"INVERTBIT A, 1"
+NONG += RESULT
+CALL ASSERT_EQ, GETBIT(6, 1), 1, @"GETBIT(6, 1)"
+NONG += RESULT
+
+;---- 三元 ----
+A = 1
+CALL ASSERT_EQ, A == 1 ? 10 # 20, 10, @"三元运算符 ? #（Emuera 用 # 分隔假分支）"
+NONG += RESULT
+
+;---- 数组（一维/二维）与下标 ----
+ARR:0 = 10
+ARR:1 = 20
+ARR:2 = ARR:0 + ARR:1
+CALL ASSERT_EQ, ARR:2, 30, @"一维数组读写"
+NONG += RESULT
+ARR2:1:2 = 99
+CALL ASSERT_EQ, ARR2:1:2, 99, @"二维数组读写"
+NONG += RESULT
+
+;---- VARSET / 数组控制 ----
+VARSET ARR, 7
+CALL ASSERT_EQ, ARR:4, 7, @"VARSET 全量填充"
+NONG += RESULT
+VARSET ARR, 1, 0, 2
+CALL ASSERT_EQ, ARR:1, 1, @"VARSET 指定范围"
+NONG += RESULT
+VARSET ARR, 0
+VARSET ARR2, 0
+ARRAYCOPY ARR, ARR2
+CALL ASSERT_EQ, ARR2:0, 0, @"ARRAYCOPY"
+NONG += RESULT
+
+;---- SWAP / SWAPVAR ----
+ARR:0 = 1
+ARR:1 = 2
+SWAP ARR:0, ARR:1
+CALL ASSERT_EQ, ARR:0, 2, @"SWAP 交换后 ARR:0"
+NONG += RESULT
+CALL ASSERT_EQ, ARR:1, 1, @"SWAP 交换后 ARR:1"
+NONG += RESULT
+
+;---- TIMES（小数乘法，结果取整）----
+A = 100
+TIMES A, 1.5
+CALL ASSERT_EQ, A, 150, @"TIMES A, 1.5"
+NONG += RESULT
+
+;---- 字符串变量与字符串插值 ----
+S = ABC
+CALL ASSERT_SEQ, S, "ABC", @"S = ABC"
+NONG += RESULT
+S = "X" + S + "Y"
+CALL ASSERT_SEQ, S, "XABCY", @"字符串连接 +"
+NONG += RESULT
+
+;---- ARG/RESULTS 系统槽 ----
+ARG:0 = 42
+CALL ASSERT_EQ, ARG:0, 42, @"ARG:0 读写"
+NONG += RESULT
+RESULTS:0 = 你好
+CALL ASSERT_SEQ, RESULTS:0, "你好", @"RESULTS:0 读写"
+NONG += RESULT
+
+;---- #DIM CONST 常量 ----
+CALL ASSERT_EQ, TEST_CONST_VALUE, 123, @"#DIM CONST 常量"
+NONG += RESULT
+
+RETURN NONG

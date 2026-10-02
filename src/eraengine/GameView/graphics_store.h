@@ -69,6 +69,54 @@ public:
     // ---- 颜色矩阵（GDRAWG / GDRAWSPRITE 的第 7/11 实参，5x5 整数 / 256）----
     static bool applyColorMatrix(QImage& image, const float colorMatrix[5][5]);
 
+    // ---- 画笔 / 刷子 / 字体（GSETBRUSH / GSETPEN / GSETFONT，每 G 独立）----
+    struct PenState   { QColor color; int width = 1; };
+    struct BrushState { QColor color; };
+    struct FontState  { QString name; int size = 18; };
+    static bool gSetBrush(int id, const QColor& color);
+    static bool gSetPen(int id, const QColor& color, int width);
+    static bool gSetFont(int id, const QString& name, int size);
+
+    // ---- GSAVE / GLOAD（文件编号 <-> sav/g{no}.png）----
+    static bool gSave(int id, const QString& path);
+    static bool gLoad(int id, const QString& path);
+
+    // ---- GDRAWGWITHMASK：掩码非透明像素处才画 src ----
+    static bool gDrawGWithMask(int dstId, int srcId, int maskId, int dx, int dy);
+
+    // ---- CBG 角色背景层（CBGSETG / CBGSETSPRITE / CBGCLEAR / …）----
+    struct CbgLayer {
+        int  z = 0;
+        int  gId = -1;
+        bool isSprite = false;
+        QString sprite;             // 精灵名 / 被按下按钮精灵名
+        QString selectedSprite;     // CBGSETBUTTONSPRITE 的选中态精灵
+        int  x = 0;
+        int  y = 0;
+        bool isButton = false;      // CBGSETBUTTONSPRITE
+        qint64 buttonValue = 0;
+        QString tooltip;
+        bool isBmap = false;        // CBGSETBMAPG 的底图
+    };
+    static bool cbgSetG(int gId, int x, int y, int z);
+    static bool cbgSetSprite(const QString& sprite, int x, int y, int z);
+    static bool cbgSetButtonSprite(qint64 value, const QString& sprite,
+                                   const QString& selectedSprite, int x, int y, int z,
+                                   const QString& tooltip);
+    static bool cbgSetBmapG(int gId);
+    static void cbgClear();
+    static void cbgClearButton();
+    static bool cbgRemoveRange(int zMin, int zMax);
+    static void cbgRemoveBmap();
+    [[nodiscard]] static const QList<CbgLayer>& cbgLayers();
+
+    // ---- 精灵动画（SPRITEANIMECREATE / SPRITEANIMEADDFRAME）----
+    struct AnimeFrame { int gId = -1; QRect rect; int dx = 0; int dy = 0; int delay = 0; };
+    struct Anime { QSize size; QList<AnimeFrame> frames; };
+    static bool spriteAnimeCreate(const QString& name, int width, int height);
+    static bool spriteAnimeAddFrame(const QString& name, int gId, int x, int y,
+                                    int width, int height, int dx, int dy, int delay);
+
     // RESETDATA / 重新装载时清空（G 图像与精灵都是运行期状态）
     static void clearAll();
 };

@@ -262,12 +262,18 @@ public:
     void requestWaitInput();
     void requestWaitSystemInput();
     void requestHalt();
+    // QUIT：结束整个程序（区别于 Halt —— Halt 只是「脚本回到底层」，
+    // 系统状态机随后会重新驱动标题/主循环；QUIT 要求彻底停止）。
+    void requestQuit() { m_quitRequested = true; setExecState(ExecState::Halt); }
+    [[nodiscard]] bool quitRequested() const { return m_quitRequested; }
     void requestResume();      // 置回 Continue
     void setErrorState();
 
     // Set the entry point script name for state tracking
     void setEntryPointScript(const QString& scriptName);
     
+    bool m_quitRequested = false;
+
 signals:
     // State changed signal - emitted when state changes
     void stateChanged();

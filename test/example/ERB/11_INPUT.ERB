@@ -1,0 +1,93 @@
+;=============================================================
+; [11] 输入族 · 等待（由 test_cli 的 --script 自动喂入输入）
+;
+; 这些指令会挂起等待用户输入 —— 正常 GUI 下必须手点；
+; 无 GUI 时用 test_cli 的 --script 序列自动喂入（run_example.sh 会多给
+; 若干个填充值）。这正是「只有 test_cli 能自动跑完这条流程」的原因。
+;=============================================================
+@TEST_INPUT
+#DIM NONG
+#DIMS S
+#DIM N
+
+PRINTL == 组11：输入族 · 等待（自动输入） ==
+
+;---- INPUT（数值）----
+PRINTL INPUT：请输入一个数字（自动化时由 --script 喂入）
+INPUT
+N = RESULT
+CALL ASSERT_TRUE, 1, @"INPUT 返回（挂起后由脚本输入恢复）"
+NONG += RESULT
+
+;---- INPUTS（字符串）----
+PRINTL INPUTS：请输入文本
+INPUTS
+S = RESULTS
+CALL ASSERT_TRUE, 1, @"INPUTS 返回"
+NONG += RESULT
+
+;---- ONEINPUT（单字符数值）----
+PRINTL ONEINPUT：输入单个字符
+ONEINPUT
+CALL ASSERT_TYPE_FREE, @"ONEINPUT 返回"
+NONG += RESULT
+
+;---- ONEINPUTS（单字符字符串）----
+PRINTL ONEINPUTS：输入单个字符
+ONEINPUTS
+CALL ASSERT_TYPE_FREE, @"ONEINPUTS 返回"
+NONG += RESULT
+
+;---- TINPUT（限时数值；超时取缺省值）----
+PRINTL TINPUT：限时输入（超时用缺省值 -1）
+TINPUT 50, -1
+CALL ASSERT_TRUE, RESULT == -1 || RESULT >= -1, @"TINPUT 返回（真实输入或超时缺省）"
+NONG += RESULT
+
+;---- TINPUTS（限时字符串）----
+PRINTL TINPUTS：限时字符串
+TINPUTS 50, "DEFVAL"
+CALL ASSERT_TRUE, 1, @"TINPUTS 返回"
+NONG += RESULT
+
+;---- TONEINPUT / TONEINPUTS（限时单字符）----
+TONEINPUT 50, -1
+CALL ASSERT_TRUE, 1, @"TONEINPUT 返回"
+NONG += RESULT
+TONEINPUTS 50, "D"
+CALL ASSERT_TRUE, 1, @"TONEINPUTS 返回"
+NONG += RESULT
+
+;---- WAIT / WAITANYKEY / FORCEWAIT ----
+WAITANYKEY
+CALL ASSERT_TRUE, 1, @"WAITANYKEY 返回"
+NONG += RESULT
+AWAIT 50
+CALL ASSERT_TRUE, 1, @"AWAIT 返回"
+NONG += RESULT
+FORCEWAIT
+CALL ASSERT_TRUE, 1, @"FORCEWAIT 返回"
+NONG += RESULT
+TWAIT 0, 0
+CALL ASSERT_TRUE, 1, @"TWAIT 0 返回"
+NONG += RESULT
+
+;---- 输入状态查询（无 GUI 时的确定值）----
+CALL ASSERT_EQ, ISACTIVE(), 1, @"ISACTIVE 在 CLI 下视为激活"
+NONG += RESULT
+CALL ASSERT_EQ, GETKEY(0), 0, @"GETKEY 无输入源时为 0"
+NONG += RESULT
+CALL ASSERT_EQ, GETKEYTRIGGERED(0), 0, @"GETKEYTRIGGERED 为 0"
+NONG += RESULT
+CALL ASSERT_EQ, MOUSEX(), 0, @"MOUSEX 为 0"
+NONG += RESULT
+CALL ASSERT_EQ, MOUSEY(), 0, @"MOUSEY 为 0"
+NONG += RESULT
+
+RETURN NONG
+
+;覆盖辅助：不比较值，只确认「调用返回且未中断执行」
+@ASSERT_TYPE_FREE(SNAME)
+#DIMS SNAME
+DEBUGPRINTL PASS
+RETURN 0

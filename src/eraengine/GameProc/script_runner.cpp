@@ -153,6 +153,19 @@ void ScriptRunner::enterCall(const QString& function) {
 }
 
 bool ScriptRunner::returnFromCall() {
+    // C# ProcessState.Return：JUMP 帧弹出后**立刻递归 Return** —— JUMP 不产生
+    // 新的返回层，被跳转函数 RETURN 时连同「被替换」的当前帧一起弹出。
+    // 此前只弹一层，被 JUMP 替换的帧残留在栈上，后续 $ 标签/返回地址全部错位。
+    while (m_table->depth() > 0 && m_table->currentFrame().isJump) {
+        if (!m_callContexts.isEmpty()
+            && m_callContexts.last().depth == m_table->depth() - 1) {
+            const auto context = m_callContexts.takeLast();
+            m_functionLocals.insert(context.function, m_storage->localContext());
+            m_storage->setLocalContext(context.locals);
+            m_loops.resize(context.loops);
+        }
+        m_table->returnFromCall();
+    }
     if (!m_table->returnFromCall()) return false;
     if (!m_callContexts.isEmpty() && m_callContexts.last().depth == m_table->depth()) {
         const auto context = m_callContexts.takeLast();
@@ -689,6 +702,15 @@ ExecState ScriptRunner::executeLine(const LogicalLine& line) {
         return ExecState::Continue;
     }
 
+    // ---- QUIT（对齐 C# FunctionCode.QUIT：结束本次执行）
+    // 此前 QUIT 只被识别为指令名、没有任何执行分支 —— 脚本里的 QUIT
+    // 被静默忽略，程序不会退出（自动化跑测试时表现为「菜单被反复重跑」）。
+    if (name == QLatin1String("QUIT")) {
+        m_state->requestQuit();   // 结束程序（Halt 会被系统层当成「回到底层」）
+        emit finished();
+        return ExecState::Halt;
+    }
+
     // ---- 跳转 / 调用 ----
     if (name == QLatin1String("GOTO")) {
         const QString label = line.arguments.isEmpty() ? QString() : line.arguments.first().raw;
@@ -716,6 +738,91 @@ ExecState ScriptRunner::executeLine(const LogicalLine& line) {
         const bool isForm = name.contains(QLatin1String("FORM"));
         const bool isTry  = name.startsWith(QLatin1String("TRY"));
         return doCallLine(line, isForm, isTry);
+    }
+
+    // ---- JUMP 系：JUMP / JUMPFORM / TRYJUMP / TRYJUMPFORM ----
+    // 对齐 C# CALL_Instruction(isJump=true)：跳转但**不产生新的返回地址**，
+    // 目标函数 RETURN 时直接回到当前函数的调用者。此前这四条完全未实现，
+    // 落到「其它指令」被静默跳过。
+    if (name == QLatin1String("JUMP") || name == QLatin1String("TRYJUMP")
+        || name == QLatin1String("JUMPFORM") || name == QLatin1String("TRYJUMPFORM")) {
+        const bool isForm = name.contains(QLatin1String("FORM"));
+        const bool isTry  = name.startsWith(QLatin1String("TRY"));
+        return doCallLine(line, isForm, isTry, true);
+    }
+
+    // ---- GOTOFORM / TRYGOTO / TRYGOTOFORM（C# GOTO_Instruction：$ 标签跳转）----
+    // GOTO 家族的变体：FORM 系的标签名可以是格式化串；目标只在**当前函数内**
+    // 的 $ 标签里找（C# LabelDictionary.GetLabelDollar(func.ParentLabelLine)）。
+    // TRY 系找不到目标时静默跳过（有配对 CATCH 则落到 CATCH 下一行）。
+    // 跳转不压栈 —— 没有返回地址。
+    if (name == QLatin1String("GOTOFORM") || name == QLatin1String("TRYGOTO")
+        || name == QLatin1String("TRYGOTOFORM")) {
+        QString label = line.arguments.isEmpty() ? QString() : line.arguments.first().raw;
+        if (name != QLatin1String("TRYGOTO")) label = expandCallFormLabel(label);
+        label = label.trimmed();
+        if (label.startsWith(QLatin1Char('$'))) label.remove(0, 1);
+        const int pos = label.isEmpty() ? -1 : findGotoLabelInFunction(label);
+        if (pos >= 0) {
+            m_table->setPosition(script, pos, true);
+            return ExecState::Continue;
+        }
+        const int catchLine = m_table->catchTarget(script, pc);
+        if (catchLine >= 0) {
+            m_table->setPosition(script, catchLine + 1, false);
+        } else if (name == QLatin1String("GOTOFORM")) {
+            m_state->setErrorState();
+            emit errorOccurred(QStringLiteral("GOTO label not found: %1").arg(label));
+            return ExecState::Error;
+        } else {
+            advance();
+        }
+        return ExecState::Continue;
+    }
+
+    // ---- TRYCJUMP / TRYCJUMPFORM / TRYCGOTO / TRYCGOTOFORM 的 C 变体 ----
+    // 对齐 C# CALL_Instruction(isJump/isTry=true, isTryCatch=true)：JUMP/GOTO 的
+    // TRYC 版本，目标不存在时落到配对 CATCH。此前未分发、被静默跳过。
+    if (name == QLatin1String("TRYCJUMP") || name == QLatin1String("TRYCJUMPFORM")) {
+        const bool isForm = name.contains(QLatin1String("FORM"));
+        return doCallLine(line, isForm, true, true);
+    }
+    if (name == QLatin1String("TRYCGOTO") || name == QLatin1String("TRYCGOTOFORM")) {
+        // 语法/跳转语义与 TRYGOTO(FORM) 相同（TRYCGOTO 的 CATCH 配对在
+        // findGotoLabelInFunction 失败分支里处理）。
+        QString label = line.arguments.isEmpty() ? QString() : line.arguments.first().raw;
+        if (name == QLatin1String("TRYCGOTOFORM")) label = expandCallFormLabel(label);
+        label = label.trimmed();
+        if (label.startsWith(QLatin1Char('$'))) label.remove(0, 1);
+        const int pos = label.isEmpty() ? -1 : findGotoLabelInFunction(label);
+        if (pos >= 0) {
+            m_table->setPosition(script, pos, true);
+            return ExecState::Continue;
+        }
+        const int catchLine = m_table->catchTarget(script, pc);
+        if (catchLine >= 0) {
+            m_table->setPosition(script, catchLine + 1, false);
+        } else {
+            advance();
+        }
+        return ExecState::Continue;
+    }
+
+    // ---- TRYCALLLIST / TRYJUMPLIST / TRYGOTOLIST（GOTOLIST 为宽松别名）----
+    // 依次尝试体内 FUNC 条目，命中即去；全部失败 -> ENDFUNC 之后
+    // （对齐 C# doFlowControlFunction 的 callList 遍历 + state.JumpTo(func.JumpTo)）。
+    if (name == QLatin1String("TRYCALLLIST") || name == QLatin1String("TRYJUMPLIST")
+        || name == QLatin1String("TRYGOTOLIST") || name == QLatin1String("GOTOLIST")) {
+        return doTryListLine(line);
+    }
+
+    // ---- FUNC / ENDFUNC ----
+    // 只允许出现在 TRY*LIST 体内（C# ErbLoader 装载期校验）；正常执行流经
+    // TRY*LIST 分派不会顺序落入这两行。顺序落入 = 装载期结构异常或 ENDFUNC
+    // 落点，一律空过（不报错，保持与三游戏数据兼容）。
+    if (name == QLatin1String("FUNC") || name == QLatin1String("ENDFUNC")) {
+        advance();
+        return ExecState::Continue;
     }
 
     // ---- CALLF / CALLFORMF：调用「式中関数」并把返回值写进 RESULT / RESULTS:0 ----
@@ -1209,7 +1316,8 @@ QString ScriptRunner::expandCallFormLabel(const QString& raw)
     return out.isEmpty() ? text : out;
 }
 
-ExecState ScriptRunner::doCallLine(const LogicalLine& line, bool isForm, bool isTry)
+ExecState ScriptRunner::doCallLine(const LogicalLine& line, bool isForm, bool isTry,
+                                   bool isJump, int returnLine)
 {
     QString label = line.arguments.isEmpty() ? QString() : line.arguments.first().raw;
     if (isForm) label = expandCallFormLabel(label);
@@ -1301,8 +1409,22 @@ ExecState ScriptRunner::doCallLine(const LogicalLine& line, bool isForm, bool is
     // 顺序对齐 C#：先初始化函数私有变量的初值（#DIM X = 7），再写实参
     m_table->applyPrivateVariableDefaults(label);
     bindArguments(info, evaluated, references);
-    if (!m_table->callLabel(label)) {
+    bool entered = false;
+    if (isJump) {
+        entered = m_table->jumpLabel(label);            // JUMP 系：继承当前帧返回地址
+    } else if (returnLine >= 0) {
+        entered = m_table->callLabelWithReturn(label, returnLine);   // TRY*LIST：ENDFUNC 之后
+    } else {
+        entered = m_table->callLabel(label);
+    }
+    if (!entered) {
         if (!m_callContexts.isEmpty()) m_storage->setLocalContext(m_callContexts.takeLast().locals);
+        if (returnLine >= 0) {
+            // TRY*LIST 候选（前面已确认 hasLabel，正常不会走到）：
+            // 不能走 tryFail 的 advance() —— 那会顺序落入 FUNC 条目；回到 ENDFUNC 之后
+            m_table->setPosition(m_table->currentScript(), returnLine, false);
+            return ExecState::Continue;
+        }
         if (isTry) {
             return tryFail();
         }
@@ -1311,6 +1433,71 @@ ExecState ScriptRunner::doCallLine(const LogicalLine& line, bool isForm, bool is
         return ExecState::Error;
     }
     return ExecState::Continue;
+}
+
+// ---------------------------------------------------------------------------
+// TRYCALLLIST / TRYJUMPLIST / TRYGOTOLIST（GOTOLIST 为宽松别名）
+//
+// 对齐 C# doFlowControlFunction（Process.ScriptProc.cs:782）：
+//   * 体内只有 `FUNC <名称式>(<实参>)` 单行条目（装载期已配好 funcEntries）；
+//   * 逐个求值名称，第一个存在的目标即被采用：
+//       - TRYCALLLIST -> CALL（带实参，返回地址 = ENDFUNC 之后）
+//       - TRYJUMPLIST -> JUMP（带实参，不产生新的返回地址）
+//       - TRYGOTOLIST -> GOTO $标签（无实参，只在本函数体内找）
+//   * 全部失败 -> 跳到配对 ENDFUNC 之后（C# state.JumpTo(func.JumpTo)）。
+// ---------------------------------------------------------------------------
+ExecState ScriptRunner::doTryListLine(const LogicalLine& line) {
+    const QString& name = line.functionName;
+    const bool isGotoList = (name == QLatin1String("TRYGOTOLIST")
+                             || name == QLatin1String("GOTOLIST"));
+    const bool isJumpList = (name == QLatin1String("TRYJUMPLIST"));
+
+    const QString script = m_table->currentScript();
+    const int listLine = m_table->currentLine();
+    const QList<int> entries = m_table->funcEntryLines(script, listLine);
+    const int endLine = m_table->endFuncTarget(script, listLine);
+    const int afterEnd = (endLine >= 0) ? endLine + 1 : listLine + 1;
+
+    for (int entryLine : entries) {
+        const LogicalLine* entry = m_table->lineAt(script, entryLine);
+        if (!entry || entry->arguments.isEmpty()) continue;
+        QString target = entry->arguments.first().raw;
+        if (target.startsWith(QLatin1Char('@')) || target.startsWith(QLatin1Char('$')))
+            target.remove(0, 1);
+        target = expandCallFormLabel(target).trimmed();
+        if (target.isEmpty()) continue;
+
+        if (isGotoList) {
+            const int labelPos = findGotoLabelInFunction(target);
+            if (labelPos < 0) continue;             // 候选不存在 -> 下一个
+            m_table->setPosition(script, labelPos, true);
+            return ExecState::Continue;
+        }
+        // CALL/JUMP 候选：目标不存在就静默试下一个（对齐 C# callto == null -> continue）
+        if (!m_table->hasLabel(target)) continue;
+        return doCallLine(*entry, false, /*isTry=*/true, isJumpList, afterEnd);
+    }
+    // 没有候选命中（或体内无 FUNC 条目）-> ENDFUNC 之后
+    m_table->setPosition(script, afterEnd, false);
+    return ExecState::Continue;
+}
+
+// $ 标签只在本函数体内有效（对齐 C# state.CurrentCalled.CallLabel 的查找范围）。
+int ScriptRunner::findGotoLabelInFunction(const QString& label) const {
+    const QString script = m_table->currentScript();
+    const ScriptData* sd = m_table->script(script);
+    if (!sd) return -1;
+    const int entry = (m_table->depth() > 0) ? m_table->currentFrame().entryLine : -1;
+    const int start = (entry >= 0 && entry < sd->lines.size()) ? entry : 0;
+    for (int i = start; i < sd->lines.size(); ++i) {
+        const LogicalLine& l = sd->lines.at(i);
+        if (i > start && l.kind == LineKind::FunctionLabel) break;   // 离开本函数体
+        if (l.kind == LineKind::GotoLabel
+            && l.labelName.compare(label, Qt::CaseInsensitive) == 0) {
+            return i;
+        }
+    }
+    return -1;
 }
 
 // ---------------------------------------------------------------------------

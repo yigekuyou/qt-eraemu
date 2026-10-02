@@ -86,6 +86,17 @@ public:
     // 当前文字颜色 / 字体样式（GETCOLOR / GETSTYLE）
     [[nodiscard]] qint64 currentColorValue() const { return m_colorValue; }
     [[nodiscard]] qint64 currentStyleBits() const { return m_styleBits; }
+    // CURRENTALIGN / GETFONT 的状态源（ALIGNMENT / SETFONT 语句维护）
+    [[nodiscard]] bool skipDisp() const { return m_skipDisp; }
+    // 默认文字色的惰性读取（配置在 setGameDirectory 之后才可用）
+    void setDefaultColorProvider(std::function<qint64()> provider) {
+        m_defaultColorProvider = std::move(provider);
+    }
+    [[nodiscard]] qint64 defaultColorValue() const {
+        return m_defaultColorProvider ? m_defaultColorProvider() : 0xFFFFFF;
+    }
+    [[nodiscard]] qint64 currentAlign() const { return m_currentAlign; }
+    [[nodiscard]] QString currentFontName() const { return m_fontName; }
     // 文本占几个半角单位（全角 2 / 半角 1）
     [[nodiscard]] static int unitWidth(const QString& text);
 
@@ -114,6 +125,10 @@ signals:
     void consoleFontStyle(bool bold, bool italic, bool underline, bool strike);
     void consoleResetColor();
     void consoleRedraw(const QString& mode);
+    // PRINT_RECT / PRINT_SPACE：行内图形（C# Console.PrintShape）
+    void consolePrintShape(const QString& type, const QList<int>& params);
+    // OUTPUTLOG：把显示行日志写进 emuera.log（C# Console.OutputLog(null)）
+    void consoleOutputLog();
 
 public:
     // Execute a single instruction (public for testing)
@@ -166,6 +181,8 @@ private:
     bool handleAssignment(const QString& lhs, const QString& rhs, const QSharedPointer<ExpressionNode>& ast = {});
     // 字符串赋值（目的变量是字符串变量时）：右侧按字符串求值后写入字符串容器
     bool handleStringAssignment(const QString& lhs, const QString& rhs, const QSharedPointer<ExpressionNode>& ast = {});
+    // 已求值字符串写入左值（SPLIT 等复用；不做表达式求值）
+    bool writeStringValue(const QString& lhs, const QString& value);
     bool handleCompoundAssignment(const QString& lhs, const QString& op, const QString& rhs, const QSharedPointer<ExpressionNode>& ast = {});
 
     // VARSET 族（对齐 C# VARSET_Instruction / CVARSET_Instruction）
@@ -222,6 +239,12 @@ public:
     
     bool m_running;
     int m_printCLength = 25;      // PRINTC 一列的文字宽度（C# Config.PrintCLength）
+    // SKIPDISP <n>：置位后所有 PRINT 输出被跳过（C# Process.SkipPrint）
+    bool m_skipDisp = false;
+    // 默认文字色（C# Config.ForeColor，RESETCOLOR 还原到此；由 EraEngine 依配置注入）
+    std::function<qint64()> m_defaultColorProvider;
+    qint64 m_currentAlign = 0;    // 0=LEFT 1=CENTER 2=RIGHT（CURRENTALIGN）
+    QString m_fontName;           // 当前字体（SETFONT；空 = 默认）
     QString m_drawLineString = QStringLiteral("-");   // C# Config.DrawLineString
     int m_maxLineUnits = 84;      // 一行最多单位数（760px / 9px）
     // 当前文字颜色 / 字体样式（GETCOLOR / GETSTYLE 的返回值来源）

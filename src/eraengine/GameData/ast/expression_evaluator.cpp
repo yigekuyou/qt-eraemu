@@ -28,6 +28,11 @@
 #include "../../GameView/graphics_store.h"
 #include "../../GameView/resource_image_provider.h"
 #include "game_base_data.h"
+#include <QDir>
+#include <QThread>
+#include <QFile>
+#include <QFontDatabase>
+#include <QGuiApplication>
 #include <QDateTime>
 #include <QDebug>
 #include <QRegularExpression>
@@ -36,6 +41,7 @@
 #include <QTime>
 #include <QVector>
 #include <cmath>
+#include <algorithm>
 #include <cstdio>
 #include <utility>
 
@@ -142,7 +148,7 @@ QStringList splitFormatSections(const QString& format) {
             if (i + 1 < format.size()) cur += format.at(++i);
             continue;
         }
-        if (c == QLatin1Char('"') || c == QLatin1Char('\'')) { quote = c; cur += c; continue; }
+        if (c == QLatin1Char('"') || c == QStringLiteral("'")) { quote = c; cur += c; continue; }
         if (c == QLatin1Char(';')) { out.append(cur); cur.clear(); continue; }
         cur += c;
     }
@@ -163,7 +169,7 @@ QString expandLiterals(const QString& text) {
             if (i + 1 < text.size()) out += text.at(++i);
             continue;
         }
-        if (c == QLatin1Char('"') || c == QLatin1Char('\'')) {
+        if (c == QLatin1Char('"') || c == QStringLiteral("'")) {
             const QChar q = c;
             for (++i; i < text.size() && text.at(i) != q; ++i) out += text.at(i);
             continue;
@@ -439,7 +445,7 @@ QVariant ExpressionEvaluator::evaluateStrForm(const StrFormNode &node, VariableS
             const qint64 width = qBound<qint64>(0LL, evaluateNode(*part.width, storage, gameBaseData).toLongLong(), 1000000LL);
             int units = 0;
             for (const QChar c : value) units += c.unicode() < 0x80 || (c.unicode() >= 0xff61 && c.unicode() <= 0xff9f) ? 1 : 2;
-            const QString padding(qMax<qint64>(0, width - units), QLatin1Char(' '));
+            const QString padding(int(qMax<qint64>(0, width - units)), QLatin1Char(' '));
             value = part.leftAlign ? value + padding : padding + value;
         }
         out += value;
@@ -871,7 +877,7 @@ QString toHalfWidth(const QString& s) {
     for (QChar c : s) {
         const ushort u = c.unicode();
         if (u >= 0xFF01 && u <= 0xFF5E) out.append(QChar(u - 0xFEE0));
-        else if (u == 0x3000) out.append(QLatin1Char(' '));
+        else if (u == 0x3000) out.append(QStringLiteral(" "));
         else out.append(c);
     }
     return out;
@@ -986,6 +992,10 @@ QList<qint64> ExpressionEvaluator::readIntArray(const VariableNode &var, Variabl
         const QPair<int, int> p2 = storage->variableConfig().getSize2D(upper);
         size = p2.second;
     }
+    // 用户 #DIM 声明的数组（ARR 等）不在 variableConfig 里：按实际存储长度取
+    // （此前 size 恒 0 -> MAXARRAY/SUMARRAY/FINDELEMENT 对用户数组全返回 0/-1）
+    if (size <= 0) size = storage->arraySize(name);
+    if (size <= 0) size = storage->arraySize(upper);
     out.reserve(size);
     for (int i = 0; i < size; ++i) {
         out.append(storage->hasSystemVariable(upper) ? storage->getSystemVariable(upper, i)
@@ -1378,19 +1388,33 @@ bool ExpressionEvaluator::evaluateBuiltin(const FunctionNode &node, VariableStor
         return true;
     }
     case BuiltinOp::LineIsEmpty:
-        // 需要控制台状态（C# GlobalStatic.Console.EmptyLine），显示层未接线 → 视为非空
-        out = QVariant::fromValue<qint64>(0);
+        // LINEISEMPTY()：当前打印缓冲是否为空（C# GlobalStatic.Console.EmptyLine）
+        out = QVariant::fromValue<qint64>(m_lineEmptyProvider ? m_lineEmptyProvider() : 0);
         return true;
     case BuiltinOp::StrJoin: {
+        // STRJOIN <一元数组>{, <连接符>{, <開始>{, <終了>}}}（对齐 C# JoinMethod：
+        // 连接符缺省 ","；字符串数组按字符串读、整型数组按整型读）
         const VariableNode* var = argVar(node, 0);
         if (!var) { out = QVariant(QString()); return true; }
-        const QString delim = node.arguments().size() >= 2 ? S(1) : QStringLiteral(",");
-        const QList<qint64> values = readIntArray(*var, storage, gameBaseData, false);
-        const int start = node.arguments().size() >= 3 ? static_cast<int>(I(2)) : 0;
-        const int end = node.arguments().size() >= 4 ? static_cast<int>(I(3)) : values.size();
+        const QString delim = (node.arguments().size() >= 2 && !node.isArgOmitted(1))
+                                  ? S(1) : QStringLiteral(",");
+        const bool strArray = (var->valueType() == OperandType::Str)
+                              || (storage && storage->isCharaDataString(var->name()));
+        const int start = (node.arguments().size() >= 3 && !node.isArgOmitted(2))
+                              ? static_cast<int>(I(2)) : 0;
         QStringList parts;
-        for (int i = qMax(0, start); i < qMin(end, values.size()); ++i) {
-            parts << QString::number(values.at(i));
+        if (strArray) {
+            const QList<QString> values = readStrArray(*var, storage);
+            const int end = (node.arguments().size() >= 4 && !node.isArgOmitted(3))
+                                ? static_cast<int>(I(3)) : values.size();
+            for (int i = qMax(0, start); i < qMin(end, values.size()); ++i)
+                parts << values.at(i);
+        } else {
+            const QList<qint64> values = readIntArray(*var, storage, gameBaseData, false);
+            const int end = (node.arguments().size() >= 4 && !node.isArgOmitted(3))
+                                ? static_cast<int>(I(3)) : values.size();
+            for (int i = qMax(0, start); i < qMin(end, values.size()); ++i)
+                parts << QString::number(values.at(i));
         }
         out = QVariant(parts.join(delim));
         return true;
@@ -1421,9 +1445,12 @@ bool ExpressionEvaluator::evaluateBuiltin(const FunctionNode &node, VariableStor
         return true;
     }
     case BuiltinOp::PrintCPerLine:
-    case BuiltinOp::PrintCLength:
-        out = QVariant::fromValue<qint64>(0);   // 显示层参数未接线
+    case BuiltinOp::PrintCLength: {
+        // PRINTCLENGTH / PRINTCPERLINE（C# Config.PrintCLength / PrintCPerLine）
+        const QPair<int,int> pc = m_printCProvider ? m_printCProvider() : qMakePair(25, 3);
+        out = QVariant::fromValue<qint64>(op == BuiltinOp::PrintCLength ? pc.first : pc.second);
         return true;
+    }
 
     // ---------------- 数组 ----------------
     case BuiltinOp::SumArray:
@@ -1675,7 +1702,19 @@ bool ExpressionEvaluator::evaluateBuiltin(const FunctionNode &node, VariableStor
         // 对齐 C# STRLEN_Instruction(argisform=true)：FORM_STR 求值后
         //   STRLENFORM  -> LangManager.GetStrlenLang(str)（按语言编码的字节数）
         //   STRLENFORMU -> str.Length（UTF-16 码元数）
-        const QString text = hasArg(node, 0) ? argStr(node, 0, storage, gameBaseData) : QString();
+        QString text = hasArg(node, 0) ? argStr(node, 0, storage, gameBaseData) : QString();
+        // C# 的 STRLENFORM 实参是 FORM_STR（装载期已把 {…}/%…% 建成展开节点）；
+        // 这里拿到的是字面量原文，含展开标记时再按格式串求值一次。
+        if (text.contains(QLatin1Char('{')) || text.contains(QLatin1Char('%'))) {
+            const auto resolve = [](const QString& e) -> QSharedPointer<ExpressionNode> {
+                ExpressionLexer lexer;
+                ExpressionParser parser;
+                return parser.parse(lexer.tokenize(e, 1));
+            };
+            if (auto form = StrFormParser::parse(text, resolve)) {
+                text = evaluate(*form.staticCast<ExpressionNode>(), storage, gameBaseData).toString();
+            }
+        }
         if (op == BuiltinOp::StrLenFormU) out = QVariant::fromValue<qint64>(text.size());
         else out = QVariant::fromValue<qint64>(langByteCount(text));
         return true;
@@ -1870,6 +1909,450 @@ bool ExpressionEvaluator::evaluateBuiltin(const FunctionNode &node, VariableStor
         return true;
     }
 
+
+    // ---------------- 显示状态 / 输入（对齐 C# Console 系 Method）----------------
+    case BuiltinOp::CurrentAlign: {
+        // CURRENTALIGN() -> 0=LEFT 1=CENTER 2=RIGHT（C# Console.CurrentAlignment）
+        out = QVariant::fromValue<qint64>(m_alignProvider ? m_alignProvider() : 0);
+        return true;
+    }
+    case BuiltinOp::GetFocusColor: {
+        // GETFOCUSCOLOR() -> 选中文字色（C# Config.FocusColor，默认黄色）
+        out = QVariant::fromValue<qint64>(m_focusColorProvider ? m_focusColorProvider() : 0xFFFF00);
+        return true;
+    }
+    case BuiltinOp::GetFont: {
+        // GETFONT() -> 当前字体名（C# Console.Font.Name）
+        out = m_fontProvider ? m_fontProvider() : QString();
+        return true;
+    }
+    case BuiltinOp::ChkFont: {
+        // CHKFONT <字体名> -> 系统是否安装该字体（C# Config.IsFontExists）。
+        // 注意：QFontDatabase 需要 QGuiApplication；无 GUI 的宿主（test_cli 等
+        // 用 QCoreApplication）调用它会**段错误**，因此先探测应用类型。
+        const bool hasGui = (qobject_cast<QGuiApplication*>(QCoreApplication::instance()) != nullptr);
+        out = QVariant::fromValue<qint64>(hasGui && QFontDatabase::hasFamily(S(0)) ? 1 : 0);
+        return true;
+    }
+    case BuiltinOp::ClientWidth:
+    case BuiltinOp::ClientHeight: {
+        // CLIENTWIDTH / CLIENTHEIGHT -> 逻辑客户区列数/行数
+        const QPair<int,int> size = m_clientSizeProvider ? m_clientSizeProvider() : qMakePair(0, 0);
+        out = QVariant::fromValue<qint64>(op == BuiltinOp::ClientWidth ? size.first : size.second);
+        return true;
+    }
+    case BuiltinOp::Isskip:
+    case BuiltinOp::Messkip:
+    case BuiltinOp::MouseSkip: {
+        // ISSKIP / MESSKIP / MOUSESKIP -> 是否处于对应跳过状态
+        const int kind = (op == BuiltinOp::Isskip) ? 0 : (op == BuiltinOp::Messkip) ? 1 : 2;
+        out = QVariant::fromValue<qint64>(m_skipProvider ? m_skipProvider(kind) : 0);
+        return true;
+    }
+    case BuiltinOp::GetLineStr: {
+        // GETLINESTR <行号> -> 该显示行的文本
+        out = m_lineStrProvider ? m_lineStrProvider(int(I(0))) : QString();
+        return true;
+    }
+    case BuiltinOp::GetKey:
+    case BuiltinOp::GetKeyTriggered: {
+        // GETKEY / GETKEYTRIGGERED <键码>：无 GUI 输入源时恒 0
+        out = QVariant::fromValue<qint64>(0);
+        return true;
+    }
+    case BuiltinOp::MouseX:
+    case BuiltinOp::MouseY: {
+        out = QVariant::fromValue<qint64>(0);
+        return true;
+    }
+    case BuiltinOp::IsActive: {
+        // ISACTIVE() -> 主窗口是否激活；CLI 下视为激活
+        out = QVariant::fromValue<qint64>(1);
+        return true;
+    }
+
+    // ---------------- 随机数状态（C# DumpRanddata / InitRanddata）----------------
+    case BuiltinOp::DumpRand: {
+        // DUMPRAND：MT 状态写入 RANDDATA 数组（C# rand.GetRand(RANDDATA)）
+        const QList<qint64> state = m_rand.state();
+        for (int i = 0; i < state.size(); ++i)
+            storage->setGlobalInt1D(QStringLiteral("RANDDATA"), i, state.at(i));
+        out = QVariant::fromValue<qint64>(0);
+        return true;
+    }
+    case BuiltinOp::InitRand: {
+        // INITRAND：从 RANDDATA 数组恢复 MT 状态（C# rand.SetRand(RANDDATA)）
+        QList<qint64> state;
+        state.reserve(Mt19937::StateLength);
+        for (int i = 0; i < Mt19937::StateLength; ++i)
+            state.append(storage->getGlobalInt1D(QStringLiteral("RANDDATA"), i));
+        m_rand.setState(state);
+        out = QVariant::fromValue<qint64>(0);
+        return true;
+    }
+
+    // ---------------- 角色操作 / 检索 ----------------
+    case BuiltinOp::GetChara:
+    case BuiltinOp::GetSpChara: {
+        // GETCHARA <番号>{, <SP判定>} / GETSPCHARA <番号>
+        // 在角色列表中找 NO == 番号 的角色，返回运行时下标；找不到 -1。
+        // 第 2 实参非 0 时只检索 SP 角色（GETSPCHARA 等价于 GETCHARA(no, 1)）。
+        const qint64 no = I(0);
+        const bool wantSp = (op == BuiltinOp::GetSpChara) || (node.arguments().size() >= 2 && I(1) != 0);
+        const int count = charaCount(storage);
+        for (int i = 0; i < count; ++i) {
+            const bool isSp = storage->isSpChara(i);
+            if (wantSp != isSp) continue;
+            if (storage->charaCsvNo(i) == static_cast<int>(no)) {
+                out = QVariant::fromValue<qint64>(i);
+                return true;
+            }
+        }
+        out = QVariant::fromValue<qint64>(-1);
+        return true;
+    }
+    case BuiltinOp::FindChara:
+    case BuiltinOp::FindCharaLast:
+    case BuiltinOp::FindCharaData:
+    case BuiltinOp::FindCharaDataLast: {
+        // FINDCHARA <角色变量>, <式>{, <開始>, <終了>}（FINDLASTCHARA 从末尾找；
+        // FIND_CHARADATA 系检索用户 CHARADATA 变量，检索方式相同）
+        const VariableNode* var = argVar(node, 0);
+        if (!var || !storage) { out = QVariant::fromValue<qint64>(-1); return true; }
+        const QString varName = var->name();
+        const bool isStr = storage->isCharaDataString(varName);
+        qint64 element = 0;
+        if (!var->indices().isEmpty())
+            element = evaluateNode(*var->indices().first(), storage, gameBaseData).toLongLong();
+        const bool last = (op == BuiltinOp::FindCharaLast || op == BuiltinOp::FindCharaDataLast);
+        const int count = charaCount(storage);
+        // C#：開始缺省 0、終了缺省 CHARANUM（FINDCHARA(V, X) 是合法的省略形式）
+        const int start = qBound(0,
+            (node.arguments().size() > 2 && !node.isArgOmitted(2)) ? int(I(2)) : 0, count);
+        const int end = qMin(count,
+            (node.arguments().size() > 3 && !node.isArgOmitted(3)) ? int(I(3)) : count);
+        for (int step = 0; step <= (end - start); ++step) {
+            const int i = last ? (end - 1 - step) : (start + step);
+            if (i < start || i >= end) break;
+            if (isStr) {
+                if (storage->getCharaStr(varName, i, int(element)) == S(1)) {
+                    out = QVariant::fromValue<qint64>(i);
+                    return true;
+                }
+            } else {
+                if (storage->getCharaInt(varName, i, int(element)) == I(1)) {
+                    out = QVariant::fromValue<qint64>(i);
+                    return true;
+                }
+            }
+        }
+        out = QVariant::fromValue<qint64>(-1);
+        return true;
+    }
+    case BuiltinOp::ChkCharaData: {
+        // CHKCHARADATA <变量名> -> 是否为已登记的角色数据变量
+        out = QVariant::fromValue<qint64>(storage && storage->isCharaDataVariable(S(0)) ? 1 : 0);
+        return true;
+    }
+    case BuiltinOp::SwapChara: {
+        storage->swapChara(int(I(0)), int(I(1)));
+        out = QVariant::fromValue<qint64>(0);
+        return true;
+    }
+    case BuiltinOp::CopyChara: {
+        storage->copyChara(int(I(0)), int(I(1)));
+        out = QVariant::fromValue<qint64>(0);
+        return true;
+    }
+    case BuiltinOp::AddCopyChara: {
+        storage->addCopyChara(int(I(0)));
+        out = QVariant::fromValue<qint64>(0);
+        return true;
+    }
+    case BuiltinOp::PickupChara: {
+        // PICKUPCHARA <角色>(, <角色>…)：角色列表重排为给定序列
+        QList<int> indexes;
+        for (int i = 0; i < node.arguments().size(); ++i)
+            indexes.append(int(I(i)));
+        storage->pickupChara(indexes);
+        out = QVariant::fromValue<qint64>(0);
+        return true;
+    }
+    case BuiltinOp::SaveChara: {
+        // SAVECHARA <文件名>, <摘要>{, <角色番号>…}：角色清单写入 sav/
+        const QString path = saveFilePath(S(0));
+        if (node.arguments().size() >= 3) {
+            QList<int> indexes;
+            for (int i = 2; i < node.arguments().size(); ++i)
+                indexes.append(int(I(i)));
+            storage->pickupChara(indexes);
+        }
+        QFile file(path);
+        out = QVariant::fromValue<qint64>(
+            (file.open(QIODevice::WriteOnly | QIODevice::Text | QIODevice::Truncate)
+                 && file.write(storage->dumpCharaList().toUtf8()) >= 0) ? 1 : 0);
+        return true;
+    }
+    case BuiltinOp::LoadChara: {
+        // LOADCHARA <文件名>：把角色清单追加进当前列表
+        QFile file(saveFilePath(S(0)));
+        if (!file.open(QIODevice::ReadOnly | QIODevice::Text)) {
+            out = QVariant::fromValue<qint64>(0);
+            return true;
+        }
+        storage->appendCharaList(QString::fromUtf8(file.readAll()));
+        out = QVariant::fromValue<qint64>(1);
+        return true;
+    }
+    case BuiltinOp::ResetStain: {
+        // RESET_STAIN <角色>：STAIN 数组清零（_REPLACE.CSV 初值未装载时按 0 处理）
+        const int target = int(I(0));
+        const int n = storage->arraySize(QStringLiteral("STAIN"));
+        for (int i = 0; i < n; ++i)
+            storage->setCharaInt(QStringLiteral("STAIN"), target, i, 0);
+        out = QVariant::fromValue<qint64>(0);
+        return true;
+    }
+
+    // ---------------- 存档 / 文本 ----------------
+    case BuiltinOp::SaveText: {
+        // SAVETEXT <文字列式>, <ファイル番号>{, <force_savdir>, <force_UTF8>}
+        // 对齐 C# SaveTextMethod（Creator.Method.cs:4118）：
+        //   整段文本覆写 sav/txt{番号:02}.txt（getSaveDataPathText）
+        const QString path = saveFilePath(QStringLiteral("txt%1.txt")
+                                              .arg(int(I(1)), 2, 10, QLatin1Char('0')));
+        QFile file(path);
+        out = QVariant::fromValue<qint64>(
+            (file.open(QIODevice::WriteOnly | QIODevice::Text | QIODevice::Truncate)
+                 && file.write(S(0).toUtf8()) >= 0) ? 1 : 0);
+        return true;
+    }
+    case BuiltinOp::LoadText: {
+        // LOADTEXT <ファイル番号>{, <force_savdir>, <force_UTF8>} -> 整段文本
+        // 对齐 C# LoadTextMethod：**不是**行区间，而是读回整个文件内容。
+        QFile file(saveFilePath(QStringLiteral("txt%1.txt")
+                                    .arg(int(I(0)), 2, 10, QLatin1Char('0'))));
+        if (!file.open(QIODevice::ReadOnly | QIODevice::Text)) { out = QString(); return true; }
+        out = QString::fromUtf8(file.readAll());
+        return true;
+    }
+    case BuiltinOp::PutForm: {
+        // PUTFORM <FORM文本>：设置存档摘要（@SAVEINFO 内使用 -> SAVEDATA_TEXT）
+        storage->setGlobalStr1D(QStringLiteral("SAVEDATA_TEXT"), 0, S(0));
+        out = QVariant::fromValue<qint64>(0);
+        return true;
+    }
+    case BuiltinOp::SaveNos: {
+        // SAVENOS <数值变量>：NOS 数组写入 sav/nos.dat
+        QFile file(saveFilePath(QStringLiteral("nos.dat")));
+        if (!file.open(QIODevice::WriteOnly | QIODevice::Text | QIODevice::Truncate)) {
+            out = QVariant::fromValue<qint64>(0);
+            return true;
+        }
+        const int n = storage->arraySize(QStringLiteral("NOS"));
+        for (int i = 0; i < n; ++i)
+            file.write(QString("%1\n").arg(storage->getGlobalInt1D(QStringLiteral("NOS"), i)).toUtf8());
+        out = QVariant::fromValue<qint64>(1);
+        return true;
+    }
+    case BuiltinOp::DebugClear: {
+        if (m_clearProvider) m_clearProvider();
+        out = QVariant::fromValue<qint64>(0);
+        return true;
+    }
+
+    // ---------------- 数组 / 阈值 ----------------
+    case BuiltinOp::ArrayMSort: {
+        // ARRAYMSORT <角色变量>, <顺序>{, <開始>, <数>}：按变量值对角色多重排序
+        const VariableNode* var = argVar(node, 0);
+        if (!var) { out = QVariant::fromValue<qint64>(0); return true; }
+        const bool forward = (node.arguments().size() < 2 || I(1) == 0);
+        const int count = charaCount(storage);
+        QList<int> order;
+        order.reserve(count);
+        for (int i = 0; i < count; ++i) order.append(i);
+        const QString varName = var->name();
+        qint64 element = 0;
+        if (!var->indices().isEmpty())
+            element = evaluateNode(*var->indices().first(), storage, gameBaseData).toLongLong();
+        const bool isStr = storage->isCharaDataString(varName);
+        std::stable_sort(order.begin(), order.end(), [&](int a, int b) {
+            if (isStr) {
+                const QString va = storage->getCharaStr(varName, a, int(element));
+                const QString vb = storage->getCharaStr(varName, b, int(element));
+                return forward ? va < vb : va > vb;
+            }
+            const qint64 va = storage->getCharaInt(varName, a, int(element));
+            const qint64 vb = storage->getCharaInt(varName, b, int(element));
+            return forward ? va < vb : va > vb;
+        });
+        storage->pickupChara(order);
+        out = QVariant::fromValue<qint64>(0);
+        return true;
+    }
+    case BuiltinOp::GetPalamLv:
+    case BuiltinOp::GetExpLv: {
+        // GETPALAMLV / GETEXPLV <值>, <上限LV>：与 PALAMLV/EXPLV 阈值表逐级比较
+        // （对齐 C# getPalamLv：pl < 阈值[i+1] -> 返回 i，全不满足返回 maxlv）
+        const QString table = (op == BuiltinOp::GetPalamLv) ? QStringLiteral("PALAMLV")
+                                                            : QStringLiteral("EXPLV");
+        const qint64 pl = I(0);
+        const qint64 maxlv = I(1);
+        // PALAMLV/EXPLV 是**系统**数组（C# varData.DataIntegerArray[PALAMLV]）：
+        // 写入走 setSystemVariable，读取必须同样优先系统槽，否则恒读 0
+        // -> 所有值都 >= 0 的阈值比较失败 -> 恒返回 maxlv。
+        const bool isSys = storage->hasSystemVariable(table);
+        for (qint64 i = 0; i < maxlv; ++i) {
+            const qint64 threshold = isSys
+                ? storage->getSystemVariable(table, int(i + 1))
+                : storage->getGlobalInt1D(table, int(i + 1));
+            if (pl < threshold) {
+                out = QVariant::fromValue<qint64>(i);
+                return true;
+            }
+        }
+        out = QVariant::fromValue<qint64>(maxlv);
+        return true;
+    }
+
+    // ---------------- 颜色 / 其它 ----------------
+    case BuiltinOp::ColorFromName: {
+        // COLOR_FROMNAME <颜色名>：C_* 常量 / SVG 颜色名 / 0xRRGGBB -> 0xRRGGBB
+        QString name = S(0).trimmed();
+        if (name.startsWith(QLatin1Char('#'))) name.remove(0, 1);
+        bool ok = false;
+        const uint v = name.toUInt(&ok, 0);
+        if (ok) { out = QVariant::fromValue<qint64>(qint64(v & 0xFFFFFF)); return true; }
+        if (name.startsWith(QStringLiteral("C_"), Qt::CaseInsensitive)) name.remove(0, 2);
+        const QColor c(name.toLower());
+        out = QVariant::fromValue<qint64>(c.isValid() ? qint64(c.rgb() & 0xFFFFFF) : qint64(0xFFFFFF));
+        return true;
+    }
+    case BuiltinOp::ColorFromRgb: {
+        // COLOR_FROMRGB <红>, <绿>, <蓝>
+        out = QVariant::fromValue<qint64>((I(0) << 16) | ((I(1) & 0xFF) << 8) | (I(2) & 0xFF));
+        return true;
+    }
+    case BuiltinOp::SetAnimeTimer: {
+        // SETANIMETIMER <时间>：动画时间基准（渲染层暂未消费，接受并忽略）
+        out = QVariant::fromValue<qint64>(0);
+        return true;
+    }
+    case BuiltinOp::TwAit: {
+        // TWAIT <毫秒>{, <可否跳过>}：无条件等待指定毫秒
+        const qint64 ms = I(0);
+        if (ms > 0 && ms < 60'000) QThread::msleep(uint(ms));
+        out = QVariant::fromValue<qint64>(0);
+        return true;
+    }
+    case BuiltinOp::ResetBgColor: {
+        // RESETBGCOLOR：背景色复位（渲染层当前未消费背景色状态）
+        out = QVariant::fromValue<qint64>(0);
+        return true;
+    }
+
+    // ---------------- HTML ----------------
+    case BuiltinOp::HtmlEscape: {
+        // HTML_ESCAPE <字符串>：转义 HTML 实体
+        QString text = S(0);
+        text.replace(QLatin1Char('&'), QStringLiteral("&amp;"));
+        text.replace(QLatin1Char('<'), QStringLiteral("&lt;"));
+        text.replace(QLatin1Char('>'), QStringLiteral("&gt;"));
+        text.replace(QLatin1Char('"'), QStringLiteral("&quot;"));
+        text.replace(QLatin1Char('\''), QStringLiteral("&apos;"));
+        out = text;
+        return true;
+    }
+    case BuiltinOp::HtmlToPlainText: {
+        // HTML_TOPLAINTEXT <字符串>：剥掉标签 + 实体还原
+        QString text = S(0);
+        text.replace(QRegularExpression(QStringLiteral("<[^>]*>")), QString());
+        text.replace(QStringLiteral("&lt;"), QStringLiteral("<"));
+        text.replace(QStringLiteral("&gt;"), QStringLiteral(">"));
+        text.replace(QStringLiteral("&quot;"), QStringLiteral("\""));
+        text.replace(QStringLiteral("&apos;"), QStringLiteral("'"));
+        text.replace(QStringLiteral("&nbsp;"), QStringLiteral(" "));
+        text.replace(QStringLiteral("&amp;"), QStringLiteral("&"));
+        out = text;
+        return true;
+    }
+    case BuiltinOp::HtmlGetPrintedStr: {
+        // HTML_GETPRINTEDSTR <行号>：该行打印缓冲的 HTML 原文
+        out = m_htmlGetProvider ? m_htmlGetProvider(int(I(0))) : QString();
+        return true;
+    }
+    case BuiltinOp::HtmlPopPrintingStr: {
+        // HTML_POPPRINTINGSTR()：弹出当前打印缓冲的 HTML 原文
+        out = m_htmlPopProvider ? m_htmlPopProvider() : QString();
+        return true;
+    }
+
+    // ---------------- G 图像补全 / CBG / 精灵动画 ----------------
+    case BuiltinOp::GSetBrush: {
+        out = QVariant::fromValue<qint64>(GraphicsStore::gSetBrush(int(I(0)), QColor(int(I(1)))) ? 1 : 0);
+        return true;
+    }
+    case BuiltinOp::GSetPen: {
+        out = QVariant::fromValue<qint64>(GraphicsStore::gSetPen(int(I(0)), QColor(int(I(1))), int(I(2))) ? 1 : 0);
+        return true;
+    }
+    case BuiltinOp::GSetFont: {
+        out = QVariant::fromValue<qint64>(GraphicsStore::gSetFont(int(I(0)), S(1), int(I(2))) ? 1 : 0);
+        return true;
+    }
+    case BuiltinOp::GSave: {
+        // GSAVE <ID>, <文件编号>：G 图像存为 sav/g{no}.png
+        out = QVariant::fromValue<qint64>(GraphicsStore::gSave(int(I(0)),
+            saveFilePath(QStringLiteral("img%1.png").arg(int(I(1)), 4, 10, QLatin1Char('0')))) ? 1 : 0);
+        return true;
+    }
+    case BuiltinOp::GLoad: {
+        out = QVariant::fromValue<qint64>(GraphicsStore::gLoad(int(I(0)),
+            saveFilePath(QStringLiteral("img%1.png").arg(int(I(1)), 4, 10, QLatin1Char('0')))) ? 1 : 0);
+        return true;
+    }
+    case BuiltinOp::GDrawGWithMask: {
+        out = QVariant::fromValue<qint64>(GraphicsStore::gDrawGWithMask(
+            int(I(0)), int(I(1)), int(I(2)), int(I(3)), int(I(4))) ? 1 : 0);
+        return true;
+    }
+    case BuiltinOp::CbgSetG: {
+        out = QVariant::fromValue<qint64>(GraphicsStore::cbgSetG(int(I(0)), int(I(1)), int(I(2)), int(I(3))) ? 1 : 0);
+        return true;
+    }
+    case BuiltinOp::CbgSetSprite: {
+        out = QVariant::fromValue<qint64>(GraphicsStore::cbgSetSprite(S(0), int(I(1)), int(I(2)), int(I(3))) ? 1 : 0);
+        return true;
+    }
+    case BuiltinOp::CbgSetButtonSprite: {
+        // CBGSETBUTTONSPRITE <按钮值>, <精灵名>, <选中精灵名>, <x>, <y>, <z>{, <tooltip>}
+        out = QVariant::fromValue<qint64>(GraphicsStore::cbgSetButtonSprite(
+            I(0), S(1), S(2), int(I(3)), int(I(4)), int(I(5)),
+            node.arguments().size() >= 7 ? S(6) : QString()) ? 1 : 0);
+        return true;
+    }
+    case BuiltinOp::CbgSetBmapG: {
+        out = QVariant::fromValue<qint64>(GraphicsStore::cbgSetBmapG(int(I(0))) ? 1 : 0);
+        return true;
+    }
+    case BuiltinOp::CbgClear:      GraphicsStore::cbgClear();           break;
+    case BuiltinOp::CbgClearButton: GraphicsStore::cbgClearButton();     break;
+    case BuiltinOp::CbgRemoveRange: {
+        out = QVariant::fromValue<qint64>(GraphicsStore::cbgRemoveRange(int(I(0)), int(I(1))) ? 1 : 0);
+        return true;
+    }
+    case BuiltinOp::CbgRemoveBmap: GraphicsStore::cbgRemoveBmap();       break;
+    case BuiltinOp::SpriteAnimeCreate: {
+        out = QVariant::fromValue<qint64>(GraphicsStore::spriteAnimeCreate(S(0), int(I(1)), int(I(2))) ? 1 : 0);
+        return true;
+    }
+    case BuiltinOp::SpriteAnimeAddFrame: {
+        out = QVariant::fromValue<qint64>(GraphicsStore::spriteAnimeAddFrame(
+            S(0), int(I(1)), int(I(2)), int(I(3)), int(I(4)), int(I(5)),
+            int(I(6)), int(I(7)), int(I(8))) ? 1 : 0);
+        return true;
+    }
+
     // ---------------- 尚未实现求值 ----------------
     case BuiltinOp::None:
         // 未实现的内置函数此前会静默产出 0/空串，表现为「函数恒为 0」而不报错
@@ -1885,6 +2368,13 @@ bool ExpressionEvaluator::evaluateBuiltin(const FunctionNode &node, VariableStor
     Q_UNUSED(gameBaseData);
     Q_UNUSED(V);
     return false;
+}
+
+
+QString ExpressionEvaluator::saveFilePath(const QString& fileName) const {
+    if (m_saveDirectory.isEmpty()) return fileName;
+    QDir().mkpath(m_saveDirectory);   // 首次写盘时按需创建 sav/
+    return m_saveDirectory + QLatin1Char('/') + fileName;
 }
 
 bool ExpressionEvaluator::readColorMatrix(const FunctionNode &node, int argNo,

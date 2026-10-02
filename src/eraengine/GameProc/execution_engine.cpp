@@ -34,6 +34,7 @@
 #include "eraengine.h"
 #include "eraengine_log.h"
 #include "function_system.h"
+#include "GameView/graphics_store.h"
 
 namespace {
 
@@ -346,6 +347,10 @@ bool ExecutionEngine::handleCompoundAssignment(const QString& lhs, const QString
     } else if (op == "/=") {
         if (rhsValue != 0) {
             currentValue /= rhsValue;
+        }
+    } else if (op == "%=") {
+        if (rhsValue != 0) {
+            currentValue %= rhsValue;
         }
     }
     
@@ -702,6 +707,196 @@ bool ExecutionEngine::executeInstruction(const LogicalLine& line) {
         return true;
     }
 
+    // ---- 角色列表扩展（对齐 C# ADDVOIDCHARA / ADDSPCHARA / ADDDEFCHARA / DELALLCHARA）----
+    if (name == "ADDVOIDCHARA" || name == "ADDSPCHARA" || name == "ADDDEFCHARA"
+        || name == "DELALLCHARA") {
+        if (!m_storage) return true;
+        if (name == "ADDVOIDCHARA") {
+            m_storage->addVoidChara();          // 无任何设置的空角色（csvNo = -1）
+        } else if (name == "DELALLCHARA") {
+            m_storage->delAllChara();
+        } else if (name == "ADDDEFCHARA") {
+            // C#：只允许在 @SYSTEM_TITLE 里用；添加 0 号角色，
+            // 且 GameBase.csv「最初からいるキャラ」> 0 时再添加它
+            m_storage->addChara(0);
+            const qint64 def = m_gameBaseData
+                ? m_gameBaseData->get(QStringLiteral("最初からいるキャラ")).toLongLong() : -1;
+            if (def > 0) m_storage->addChara(static_cast<int>(def));
+        } else {   // ADDSPCHARA <番号>
+            ExpressionEvaluator localEvaluator;
+            ExpressionEvaluator& ev = m_expressionEvaluator ? *m_expressionEvaluator : localEvaluator;
+            const qint64 value = args.isEmpty() ? 0
+                : evalExpressionCached(m_parseTable, ev, args.first().raw,
+                                       m_storage, m_gameBaseData).toLongLong();
+            if (value < 0) {
+                emit errorOccurred(QStringLiteral("ADDSPCHARA 的角色番号无效: %1").arg(value));
+            } else {
+                m_storage->addSpChara(static_cast<int>(value));
+            }
+        }
+        return true;
+    }
+
+    // ---- TIMES <变量>, <实数>（对齐 C# SP_TIMES_Instruction：double 乘后截断）----
+    if (name == "TIMES") {
+        if (!m_storage) return true;
+        QList<const Operand*> ops;
+        for (const Operand& a : args) {
+            if (a.isString || a.raw != QLatin1String(",")) ops.append(&a);
+        }
+        if (ops.size() >= 2) {
+            const LhsRef ref = parseLhsRef(ops.first()->raw);
+            if (ref.valid) {
+                ExpressionEvaluator localEvaluator;
+                ExpressionEvaluator& ev = m_expressionEvaluator ? *m_expressionEvaluator : localEvaluator;
+                // C# SP_TIMES 的实参由 LexicalAnalyzer.ReadDouble 直接读原始文本
+                // （表达式解析器不支持小数字面量），这里同样按 raw.toDouble()
+                double factor = 0;
+                if (ops.at(1)->ast) {
+                    factor = ev.evaluate(*ops.at(1)->ast, m_storage, m_gameBaseData).toDouble();
+                } else {
+                    factor = ops.at(1)->raw.trimmed().toDouble();
+                }
+                const double product = static_cast<double>(readLhs(ref)) * factor;
+                writeLhs(ref, static_cast<qint64>(product));   // C# unchecked 强转截断
+            }
+        }
+        return true;
+    }
+
+    // ---- RESETGLOBAL（对齐 C# RESETGLOBAL_Instruction：全全局变量归零/清空）----
+    if (name == "RESETGLOBAL") {
+        if (m_storage) m_storage->resetGlobals();
+        return true;
+    }
+
+    // ---- CUPCHECK <角色编号>（对齐 C# CUpdateInUpcheck）----
+    //   把 CUP/CDOWN 累计值应用到 PALAM 并打印「名 值+上-下=新值」，然后清零。
+    if (name == "CUPCHECK") {
+        if (!m_storage) return true;
+        ExpressionEvaluator localEvaluator;
+        ExpressionEvaluator& ev = m_expressionEvaluator ? *m_expressionEvaluator : localEvaluator;
+        const qint64 target = args.isEmpty() ? -1
+            : evalExpressionCached(m_parseTable, ev, args.first().raw,
+                                   m_storage, m_gameBaseData).toLongLong();
+        if (target < 0 || target >= m_storage->charaNum()) return true;
+        const int length = m_storage->arraySize("PALAM");
+        for (int i = 0; i < length; ++i) {
+            const qint64 up = m_storage->getCharaInt("CUP", static_cast<int>(target), i);
+            const qint64 down = m_storage->getCharaInt("CDOWN", static_cast<int>(target), i);
+            if (up <= 0 && down <= 0) continue;
+            qint64 param = m_storage->getCharaInt("PALAM", static_cast<int>(target), i);
+            const QString pname = m_storage->getGlobalStr1D("PALAMNAME", i);
+            param += up - down;   // C#：负值同样参与（unchecked 加减）
+            if (!m_skipDisp) {
+                QString text = pname + ' ' + QString::number(m_storage->getCharaInt("PALAM", static_cast<int>(target), i));
+                if (up > 0) text += '+' + QString::number(up);
+                if (down > 0) text += '-' + QString::number(down);
+                text += '=' + QString::number(param);
+                emit consolePrint(text, true);
+            }
+            m_storage->setCharaInt("PALAM", static_cast<int>(target), i, param);
+        }
+        for (int i = 0; i < m_storage->arraySize("CUP"); ++i) {
+            m_storage->setCharaInt("CUP", static_cast<int>(target), i, 0);
+            m_storage->setCharaInt("CDOWN", static_cast<int>(target), i, 0);
+        }
+        return true;
+    }
+
+    // ---- SKIPDISP <n>（对齐 C#：skipPrint = (iValue != 0)，并写 RESULT）----
+    if (name == "SKIPDISP") {
+        ExpressionEvaluator localEvaluator;
+        ExpressionEvaluator& ev = m_expressionEvaluator ? *m_expressionEvaluator : localEvaluator;
+        const qint64 value = args.isEmpty() ? 0
+            : evalExpressionCached(m_parseTable, ev, args.first().raw,
+                                   m_storage, m_gameBaseData).toLongLong();
+        m_skipDisp = (value != 0);
+        const qint64 result = m_skipDisp ? 1 : 0;
+        if (m_storage) {
+            m_storage->setSystemVariable("RESULT", 0, result);
+            m_storage->setGlobalInt1D("RESULT", 0, result);
+        }
+        return true;
+    }
+
+    // ---- FORCEKANA <n> / NOSKIP / ENDNOSKIP（显示状态，移植版暂无对应渲染开关）----
+    if (name == "FORCEKANA" || name == "NOSKIP" || name == "ENDNOSKIP") {
+        if (name == "FORCEKANA" && !args.isEmpty()) {
+            ExpressionEvaluator localEvaluator;
+            ExpressionEvaluator& ev = m_expressionEvaluator ? *m_expressionEvaluator : localEvaluator;
+            evalExpressionCached(m_parseTable, ev, args.first().raw,
+                                 m_storage, m_gameBaseData).toLongLong();
+        }
+        qDebug() << "[display]" << name << "(状态命令，当前渲染层忽略)";
+        return true;
+    }
+
+    // ---- OUTPUTLOG（对齐 C#：显示行日志写进 emuera.log）----
+    if (name == "OUTPUTLOG") {
+        emit consoleOutputLog();
+        return true;
+    }
+
+    // ---- PRINT_RECT / PRINT_SPACE（对齐 C# Console.PrintShape）----
+    //   PRINT_RECT <宽>,<高> 或 <x>,<y>,<宽>,<高>；PRINT_SPACE <宽>
+    if (name == "PRINT_RECT" || name == "PRINT_SPACE") {
+        if (m_skipDisp) return true;
+        QList<int> param;
+        for (const Operand& a : args) {
+            if (!a.isString && a.raw == QLatin1String(",")) continue;
+            ExpressionEvaluator localEvaluator;
+            ExpressionEvaluator& ev = m_expressionEvaluator ? *m_expressionEvaluator : localEvaluator;
+            param.append(static_cast<int>(a.ast
+                ? ev.evaluate(*a.ast, m_storage, m_gameBaseData).toLongLong()
+                : evalExpressionCached(m_parseTable, ev, a.raw, m_storage, m_gameBaseData).toLongLong()));
+            if (param.size() == 4) break;
+        }
+        if (name == "PRINT_SPACE") {
+            if (!param.isEmpty()) emit consolePrintShape("space", param.mid(0, 1));
+        } else if (!param.isEmpty()) {
+            emit consolePrintShape("rect", param);
+        }
+        return true;
+    }
+
+    // ---- TOOLTIP_SETCOLOR / TOOLTIP_SETDELAY / TOOLTIP_SETDURATION ----
+    // C# 设定 GUI 提示框样式；渲染层当前没有提示框实现，先求值并留痕。
+    if (name == "TOOLTIP_SETCOLOR" || name == "TOOLTIP_SETDELAY" || name == "TOOLTIP_SETDURATION") {
+        qDebug() << "[display]" << name << "(tooltip 样式，渲染层暂未实现)";
+        return true;
+    }
+
+    // ---- REUSELASTLINE <FORM文本>（对齐 C# PrintTemporaryLine：单行输出不折行）----
+    if (name == "REUSELASTLINE") {
+        if (m_skipDisp) return true;
+        QString text;
+        ExpressionEvaluator localEvaluator;
+        ExpressionEvaluator& ev = m_expressionEvaluator ? *m_expressionEvaluator : localEvaluator;
+        if (!args.isEmpty()) {
+            const Operand& a = args.first();
+            if (a.isString) {
+                text = a.raw;
+                // FORM 格式串：展开 {…}/%…%
+                const auto resolve = [this](const QString& e) {
+                    return m_parseTable ? m_parseTable->expressionAst(e)
+                                        : QSharedPointer<ExpressionNode>(); };
+                if (StrFormParser::hasForm(text)) {
+                    if (auto form = StrFormParser::parse(text, resolve))
+                        text = ev.evaluate(*form.staticCast<ExpressionNode>(),
+                                           m_storage, m_gameBaseData).toString();
+                }
+            } else if (a.ast) {
+                text = ev.evaluate(*a.ast, m_storage, m_gameBaseData).toString();
+            } else {
+                text = evalExpressionCached(m_parseTable, ev, a.raw,
+                                            m_storage, m_gameBaseData).toString();
+            }
+        }
+        emit consolePrint(text, true);
+        return true;
+    }
+
     // ---- SETBIT / CLEARBIT / INVERTBIT（对齐 C# SETBIT_Instruction）----
     //   SETBIT  <变量>[, <位0-63>]…   置位
     //   CLEARBIT<变量>[, <位0-63>]…   清位
@@ -716,7 +911,7 @@ bool ExecutionEngine::executeInstruction(const LogicalLine& line) {
             for (const Operand& a : line.argument.params) ops.append(&a);
         } else {
             for (const Operand& a : line.arguments) {
-                if (a.raw != QLatin1String(",")) ops.append(&a);
+                if (a.isString || a.raw != QLatin1String(",")) ops.append(&a);
             }
         }
         if (ops.isEmpty()) return true;
@@ -834,6 +1029,7 @@ bool ExecutionEngine::executeInstruction(const LogicalLine& line) {
         return handlePrintInstruction(line);
     }
     if (name == QLatin1String("PRINT_IMG")) {
+        if (m_skipDisp) return true;
         if (args.isEmpty()) return true;
         ExpressionEvaluator localEvaluator;
         ExpressionEvaluator& ev = m_expressionEvaluator ? *m_expressionEvaluator : localEvaluator;
@@ -846,15 +1042,18 @@ bool ExecutionEngine::executeInstruction(const LogicalLine& line) {
         emit consolePrintImage(value.toString(), 0, 0, 0);
         return true;
     }
-    if (name == "PRINTBUTTON") {
+    if (name == "PRINTBUTTON" || name == "PRINTBUTTONC" || name == "PRINTBUTTONLC") {
         // PRINTBUTTON <文本>, <整数|字符串>：打印文本并把它变成按钮（对齐 C# PRINTBUTTON）
+        // PRINTBUTTONC / PRINTBUTTONLC：先把文本按 PRINTC 定宽补齐再做成按钮
+        // （对齐 C# PrintButtonC -> CreateTypeCString：C=右对齐补左侧、LC=左对齐补右侧）
         // 注意：line.arguments 里逗号也是一个操作数，需要过滤掉
+        if (m_skipDisp) return true;
         QList<const Operand*> ops;
         if (line.argument.kind == ArgKind::Button && line.argument.params.size() >= 2) {
             for (const Operand& a : line.argument.params) ops.append(&a);
         } else {
             for (const Operand& a : args) {
-                if (a.raw != QLatin1String(",")) ops.append(&a);
+                if (a.isString || a.raw != QLatin1String(",")) ops.append(&a);
             }
         }
         if (ops.size() >= 2) {
@@ -871,6 +1070,11 @@ bool ExecutionEngine::executeInstruction(const LogicalLine& line) {
             const QVariant textValue = evaluateOperand(*ops[0]);
             QString text = textValue.toString();
             if (text.isEmpty() && !ops[0]->isString) text = ops[0]->raw.trimmed();
+            // ボタン処理に絡んで表示がおかしくなるため、PRINTBUTTONでの改行コードはオミット
+            text.remove(QLatin1Char('\n'));
+            if (name != "PRINTBUTTON" && !text.isEmpty()) {
+                text = padPrintC(text, name == "PRINTBUTTONC");   // C=右对齐 / LC=左对齐
+            }
             const QVariant value = evaluateOperand(*ops[1]);
             const bool valueIsString = ops[1]->isString
                                        || (ops[1]->ast && ops[1]->ast->valueType() == OperandType::Str);
@@ -919,7 +1123,7 @@ bool ExecutionEngine::executeInstruction(const LogicalLine& line) {
     }
 
     if (name == "RESETCOLOR") {
-        m_colorValue = kDefaultColor;
+        m_colorValue = defaultColorValue();   // C#：还原到 Config.ForeColor
         emit consoleResetColor();
         return true;
     }
@@ -981,7 +1185,22 @@ bool ExecutionEngine::executeInstruction(const LogicalLine& line) {
         return true;
     }
     if (name == "ALIGNMENT") {
-        emit consoleAlign(args.size() >= 1 ? args[0].raw : QStringLiteral("LEFT"));
+        const QString a = args.size() >= 1 ? args[0].raw.toUpper() : QStringLiteral("LEFT");
+        m_currentAlign = (a == QLatin1String("CENTER")) ? 1 : (a == QLatin1String("RIGHT")) ? 2 : 0;
+        emit consoleAlign(a);
+        return true;
+    }
+    // ---- SETFONT <字体名>（对齐 C# SETFONT_Instruction：记录当前字体）----
+    if (name == "SETFONT") {
+        if (!args.isEmpty() && !args.first().raw.trimmed().isEmpty()) {
+            m_fontName = args.first().raw.trimmed();
+            if (m_fontName.compare(QStringLiteral("DEFAULT"), Qt::CaseInsensitive) == 0
+                || m_fontName == QStringLiteral("標準")) {
+                m_fontName.clear();
+            }
+        } else {
+            m_fontName.clear();   // SETFONT 省略参数 = 恢复默认
+        }
         return true;
     }
     if (name == "DRAWLINE" || name == "CUSTOMDRAWLINE" || name == "DRAWLINEFORM") {
@@ -1098,7 +1317,7 @@ bool ExecutionEngine::executeInstruction(const LogicalLine& line) {
             }
         }
     }
-    if (name == "+=" || name == "-=" || name == "*=" || name == "/=") {
+    if (name == "+=" || name == "-=" || name == "*=" || name == "/=" || name == "%=") {
         if (args.size() >= 2) {
             return handleCompoundAssignment(args[0].raw, name, args[1].raw, args[1].ast);
         }
@@ -1219,7 +1438,9 @@ bool ExecutionEngine::handleSplit(const LogicalLine& line)
     // 顶层逗号切分（逗号可能是独立 Operand，也可能是表达式的一部分）
     QList<Operand> parts;
     for (const Operand& op : line.arguments) {
-        if (op.raw == QLatin1String(",")) continue;
+        // 只跳过「标点逗号」——引号字面量 ","（分隔符实参）的 raw 也是 ","，
+        // 但 isString 为真，必须保留（否则 SPLIT "a,b", ",", ARR 的分隔符丢失）。
+        if (!op.isString && op.raw == QLatin1String(",")) continue;
         parts.append(op);
     }
     if (parts.size() < 3) return false;   // 参数不足：交给通用路径留痕
@@ -1244,9 +1465,7 @@ bool ExecutionEngine::handleSplit(const LogicalLine& line)
     // 全部元素从下标 0 依次写入（复用字符串赋值路径：
     // 参数/ARGS/LOCALS/角色变量/全局变量 的解析逻辑保持一致）
     for (int i = 0; i < elements.size(); ++i) {
-        handleStringAssignment(arrRaw.left(arrRaw.size() - arrName.size())
-                                   + arrName + QLatin1Char(':') + QString::number(i),
-                               elements.at(i));
+        writeStringValue(arrName + QLatin1Char(':') + QString::number(i), elements.at(i));
     }
 
     // 个数：第4变量（可省略）-> 否则 RESULT:0
@@ -1425,9 +1644,7 @@ void ExecutionEngine::reportUnfinished(const QString& what, const QString& name,
 
 bool ExecutionEngine::handleStringAssignment(const QString& lhs, const QString& rhs, const QSharedPointer<ExpressionNode>& ast) {
     const LhsRef ref = parseLhsRef(lhs);
-    const QString varName = ref.name;
-    const int index = ref.hasIndex() ? ref.first() : -1;
-    if (varName.isEmpty()) {
+    if (ref.name.isEmpty()) {
         return false;
     }
     ExpressionEvaluator localEvaluator;
@@ -1448,7 +1665,17 @@ bool ExecutionEngine::handleStringAssignment(const QString& lhs, const QString& 
         }
     }
     bool evaluated = false;
-    if (!ast && bareIdent && m_parseTable) {
+    // 右值以引号开头（"X" + S + "Y" 这类**字符串拼接表达式**）时按普通表达式
+    // 归约（C# 语义：赋值右值是完整表达式，+ 对字符串是拼接）。此前整条右值
+    // 被当成格式化串字面量，引号原样落进变量。
+    if (trimmed.startsWith(QLatin1Char('"')) && m_parseTable) {
+        const QSharedPointer<ExpressionNode> exprAst = m_parseTable->expressionAst(trimmed);
+        if (exprAst) {
+            value = evaluator.evaluate(*exprAst, m_storage, m_gameBaseData).toString();
+            evaluated = true;
+        }
+    }
+    if (!evaluated && !ast && bareIdent && m_parseTable) {
         const QSharedPointer<ExpressionNode> ast = m_parseTable->expressionAst(trimmed);
         if (ast) {
             value = evaluator.evaluate(*ast, m_storage, m_gameBaseData).toString();
@@ -1471,6 +1698,17 @@ bool ExecutionEngine::handleStringAssignment(const QString& lhs, const QString& 
                       << "=> value =" << value
                       << "(ast?" << (ast != nullptr) << ")";
 
+    return writeStringValue(lhs, value);
+}
+
+// 把**已求值**的字符串写入左值（从 handleStringAssignment 抽出，供 SPLIT 等
+// 「值不是表达式文本」的调用方复用 —— SPLIT 的分割结果若再当表达式求值，
+// 裸文本 "x" 会被解析成变量 x -> 0）。
+bool ExecutionEngine::writeStringValue(const QString& lhs, const QString& value) {
+    const LhsRef ref = parseLhsRef(lhs);
+    const QString varName = ref.name;
+    const int index = ref.hasIndex() ? ref.first() : -1;
+    if (varName.isEmpty()) return false;
     if (m_storage->hasParameter(varName)) {
         m_storage->setParameter(varName, value);
         return true;
@@ -1550,6 +1788,11 @@ bool ExecutionEngine::handlePrintInstruction(const LogicalLine& line) {
     const AstBuilder::PrintArgInfo info = AstBuilder::printInfo(name);
     if (info.mode == AstBuilder::PrintArgMode::NotPrint) {
         return false;
+    }
+    // SKIPDISP 1：跳过显示（C# PRINT_Instruction.DoInstruction 的 skipPrint 早退，
+    // 连 W 后缀的按键等待一并跳过）
+    if (m_skipDisp) {
+        return true;
     }
 
     ExpressionEvaluator localEvaluator;
@@ -1636,7 +1879,15 @@ int ExecutionEngine::printCWidth(const QString& text) {
 }
 
 bool ExecutionEngine::handleResetData() {
-    qDebug() << "RESETDATA";
+    // 对齐 C# VariableEvaluator.ResetData：
+    //   SetDefaultLocalValue / SetDefaultValue(常量初值) / CharacterList.Clear()
+    // 角色列表必须清空 —— 否则 RESETDATA 之后残留旧角色（eraTW 新开游戏时
+    // 会出现「继承上一周目角色」的现象）。
+    if (m_storage) {
+        m_storage->clearCharaList();
+        GraphicsStore::clearAll();
+    }
+    qDebug() << "[RESETDATA] 变量与角色列表已重置";
     return true;
 }
 
@@ -1813,7 +2064,9 @@ void ExecutionEngine::handleSaveData(const LogicalLine& line)
 {
     QList<Operand> parts;
     for (const Operand& op : line.arguments) {
-        if (op.raw == QLatin1String(",")) continue;
+        // 只跳过「标点逗号」——引号字面量 ","（分隔符实参）的 raw 也是 ","，
+        // 但 isString 为真，必须保留（否则 SPLIT "a,b", ",", ARR 的分隔符丢失）。
+        if (!op.isString && op.raw == QLatin1String(",")) continue;
         parts.append(op);
     }
     if (parts.size() < 2) return;
@@ -1897,7 +2150,13 @@ void ExecutionEngine::handleChkData(const LogicalLine& line)
     const QString path = m_gameDirectory + QStringLiteral("/sav/save%1.sav")
                              .arg(idx, 2, 10, QLatin1Char('0'));
     const bool exists = QFile::exists(path);
-    if (m_storage) m_storage->setSystemVariable(QStringLiteral("RESULT"), 0, exists ? 1 : 0);
+    // 对齐 C# CheckdataMethod：RESULT = EraDataState（0=OK / 1=FILENOTFOUND），
+    // RESULTS = 状态说明文本。
+    if (m_storage) {
+        m_storage->setSystemVariable(QStringLiteral("RESULT"), 0, exists ? 0 : 1);
+        m_storage->setGlobalStr1D(QStringLiteral("RESULTS"), 0,
+            exists ? QStringLiteral("ＯＫ") : QStringLiteral("ファイルが存在しません"));
+    }
     qDebug() << "[save] CHKDATA" << idx << (exists ? "存在" : "不存在")
              << "行" << line.position.toString();
 }

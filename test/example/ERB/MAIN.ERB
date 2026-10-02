@@ -1,0 +1,154 @@
+;=============================================================
+; era 全函数覆盖示例 —— 根目录 test/ 的引擎忠实性回归用例
+;
+; 运行：build/src/eraengine/test_cli test/example --script 0
+;   输入 0 = 自动依次运行全部测试组并打印汇总
+;   输入 1..9 = 只运行单组（见菜单）
+;=============================================================
+@SYSTEM_TITLE
+#DIM NONG
+
+$MENU_TOP
+DRAWLINE
+ALIGNMENT CENTER
+PRINTFORML era 全函数覆盖示例（GAMEBASE_TITLE=%GAMEBASE_TITLE%）
+PRINTFORML 版本 {GAMEBASE_VERSION} / 作者 %GAMEBASE_AUTHOR%
+ALIGNMENT LEFT
+DRAWLINE
+PRINTL  [0] 全部自动运行
+PRINTL  [1] 变量·赋值·数组
+PRINTL  [2] PRINT 族·按钮·颜色
+PRINTL  [3] 控制流 IF/SELECTCASE/循环/GOTO
+PRINTL  [4] 调用 CALL/JUMP/式中函数
+PRINTL  [5] TRY*LIST + FUNC/ENDFUNC（新实现）
+PRINTL  [6] 字符串函数
+PRINTL  [7] 数值函数
+PRINTL  [8] CSV/角色函数
+PRINTL  [9] 存档 SAVE/LOAD
+PRINTL  [10] 全函数覆盖（自动生成）
+PRINTL  [11] 输入族·等待（需 test_cli 自动输入）
+PRINTL  [12] BEGIN（破坏性·单独跑）
+PRINTL  [13] THROW（破坏性·单独跑）
+PRINTL  [14] 剩余命令（TRYGOTO/PRINT_RECT/CALLEVENT 等）
+PRINTL  [-1] 退出
+DRAWLINE
+PRINTL 请输入编号（自动化时输入 0）
+ONEINPUT
+
+SELECTCASE RESULT
+	CASE 0
+		NONG = 0
+		CALL TEST_VARIABLE
+		NONG += RESULT
+		CALL TEST_PRINT
+		NONG += RESULT
+		CALL TEST_CONTROL
+		NONG += RESULT
+		CALL TEST_CALL_JUMP
+		NONG += RESULT
+		CALL TEST_TRYLIST
+		NONG += RESULT
+		CALL TEST_STRFUNC
+		NONG += RESULT
+		CALL TEST_NUMFUNC
+		NONG += RESULT
+		CALL TEST_CSV_CHARA
+		NONG += RESULT
+		CALL TEST_SAVE
+		NONG += RESULT
+		CALL TEST_COVERAGE
+		NONG += RESULT
+		CALL TEST_MISC
+		NONG += RESULT
+		CALL TEST_SUMMARY, NONG
+		QUIT
+	CASE 1
+		CALL TEST_VARIABLE
+	CASE 2
+		CALL TEST_PRINT
+	CASE 3
+		CALL TEST_CONTROL
+	CASE 4
+		CALL TEST_CALL_JUMP
+	CASE 5
+		CALL TEST_TRYLIST
+	CASE 6
+		CALL TEST_STRFUNC
+	CASE 7
+		CALL TEST_NUMFUNC
+	CASE 8
+		CALL TEST_CSV_CHARA
+	CASE 9
+		CALL TEST_SAVE
+	CASE 10
+		CALL TEST_COVERAGE
+	CASE 11
+		CALL TEST_INPUT
+	CASE 12
+		CALL TEST_BEGIN
+	CASE 13
+		CALL TEST_THROW
+	CASE 14
+		CALL TEST_MISC
+	CASE -1
+		QUIT
+	CASEELSE
+		PRINTL 无效输入
+ENDSELECT
+;单组运行后回到菜单
+GOTO MENU_TOP
+
+;-------------------------------------------------------------
+; 汇总
+;-------------------------------------------------------------
+@TEST_SUMMARY(FAILS)
+#DIM FAILS
+DRAWLINE
+IF FAILS == 0
+	SETCOLOR 0,255,0
+	PRINTL ★ 全部断言通过（ALL PASS）★
+	RESETCOLOR
+ELSE
+	SETCOLOR 255,0,0
+	PRINTFORML ★ 有 {FAILS} 条断言失败（ALL PASS 未达成）★
+	RESETCOLOR
+ENDIF
+DRAWLINE
+
+;-------------------------------------------------------------
+; 断言辅助：整数相等 / 字符串相等 / 布尔
+; 返回值 = 失败记数（0/1），调用方用 NONG += RESULT 累加
+;-------------------------------------------------------------
+@ASSERT_EQ(GOT, WANT, SNAME)
+#DIMS SNAME
+IF GOT == WANT
+	DEBUGPRINTL PASS
+	RETURN 0
+ENDIF
+PRINTFORML  [FAIL] %SNAME% : got={GOT} want={WANT}
+RETURN 1
+
+@ASSERT_SEQ(GOT, WANT, SNAME)
+#DIMS GOT
+#DIMS WANT
+#DIMS SNAME
+IF GOT == WANT
+	DEBUGPRINTL PASS
+	RETURN 0
+ENDIF
+PRINTFORML  [FAIL] %SNAME% : got=%GOT% want=%WANT%
+RETURN 1
+
+@ASSERT_TRUE(COND, SNAME)
+#DIMS SNAME
+IF COND
+	DEBUGPRINTL PASS
+	RETURN 0
+ENDIF
+PRINTFORML  [FAIL] %SNAME% : 条件不成立
+RETURN 1
+
+;单行注释覆盖：; 开头、[SKIPSTART]/[SKIPEND] 块
+[SKIPSTART]
+这一行永远不该被执行 PRINTL
+[SKIPEND]

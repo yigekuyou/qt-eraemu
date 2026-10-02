@@ -111,6 +111,10 @@ bool AstBuilder::isCallFamilyInstruction(const QString& upperName) {
         "GOTOFORM", "TRYGOTOFORM", "TRYCGOTO", "TRYCGOTOFORM",
         "CALLEVENT", "TRYCALLEVENT",
         "BEGIN",
+        // FUNC：TRYCALLLIST/TRYJUMPLIST/TRYGOTOLIST 体内的单行条目
+        // `FUNC 関数名式(実引数…)` —— 参数形态对齐 C# SP_CALLFORM
+        // （ErbLoader 只允许 FUNC 出现在 TRY*LIST 体内）。
+        "FUNC",
     };
     for (const char* n : kNames) {
         if (upperName == QLatin1String(n)) return true;
@@ -220,12 +224,13 @@ bool AstBuilder::isExactInstructionName(const QString& upperName) {
         "FORM", "CHKFONT", "SETCOLOR", "RESETCOLOR", "ALIGNMENT", "REDRAW",
         "NEWLINE", "PRINTDATA", "PRINTDATAL", "PRINTDATAW", "PRINTBUTTONLC",
         "DOUBLEPRINT", "DEBUGPRINT", "HTML_PRINT", "HTML_TAGSPLIT",
-        "PRINT_IMG",
+        "PRINT_IMG", "PRINTBUTTONC",
         // 控制流 / 结构化指令（由执行链与状态机处理，不在指令规范表里）
         "RESTART", "RESETDATA", "LOADGLOBAL", "SAVEGLOBAL", "DATALIST", "ENDLIST",
         "DATAFORM", "DATA", "ENDDATA", "FORCEWAIT", "SKIPDISP", "REUSELASTLINE",
         "FONTREGULAR", "FONTSTYLE", "FONTBOLD", "FONTITALIC", "FONTSTRIKE",
         "CATCH", "ENDCATCH", "TRYCALLLIST", "TRYJUMPLIST", "GOTOLIST",
+        "TRYGOTOLIST", "ENDFUNC",
         "SWAP", "SWAPVAR", "TIMES", "BAR", "BARL", "POWER", "SORTCHARA", "VARSET",
         "CVARSET", "ADDCHARA", "DELCHARA", "ADDCHARAALL", "SPLIT",
         // 由执行链（ScriptRunner）处理的控制流型指令：不在指令规范表里，
@@ -461,7 +466,7 @@ bool AstBuilder::splitAssignment(const QString& line, QString& lhs, QString& op,
             const QChar prev = line.at(i - 1);
             if (prev == '!' || prev == '<' || prev == '>') continue;
 
-            if (prev == '+' || prev == '-' || prev == '*' || prev == '/') {
+            if (prev == '+' || prev == '-' || prev == '*' || prev == '/' || prev == '%') {
                 lhs = line.left(i - 1).trimmed();
                 op = QString(prev) + '=';
                 rhs = line.mid(i + 1).trimmed();
@@ -698,24 +703,37 @@ LogicalLine AstBuilder::build(const QString& rawLine,
     // 若按表达式解析，TRYCALLFORM NAME_%X%_K30(...) 会被误当成函数调用。
     if (isCallFamilyInstruction(line.functionName)) {
         QString rest = trimmed.mid(first.text.length()).trimmed();
-        QString funcName = rest;
+        QString funcName;
         QString args;
-        const int paren = rest.indexOf('(');
-        if (paren >= 0) {
-            funcName = rest.left(paren).trimmed();
+        // 标签名 = 第一个 token（到 空白 / 逗号 / '(' 为止）。只有当 '(' **紧跟**
+        // 标签名时才按括号形式取实参 —— 否则逗号形式的实参里若含 '('
+        // （如 `CALL F, !(1)`），rest.indexOf('(') 会命中实参里的括号，
+        // 把标签名错切成 "F, !" -> "CALL label not found"。
+        int nameEnd = 0;
+        bool inPercentForm = false;   // %…% 是格式串区，内部的 ( , 空格不属于名字边界
+        while (nameEnd < rest.size()) {
+            const QChar c = rest.at(nameEnd);
+            if (c == QLatin1Char('%')) {
+                inPercentForm = !inPercentForm;
+            } else if (!inPercentForm
+                       && (c.isSpace() || c == QLatin1Char(',')
+                           || c == QLatin1Char('('))) {
+                break;
+            }
+            ++nameEnd;
+        }
+        funcName = rest.left(nameEnd).trimmed();
+        const QChar afterName = (nameEnd < rest.size()) ? rest.at(nameEnd) : QChar();
+        if (afterName == QLatin1Char('(')) {
             const int close = rest.lastIndexOf(')');
-            args = (close > paren) ? rest.mid(paren + 1, close - paren - 1) : rest.mid(paren + 1);
+            args = (close > nameEnd) ? rest.mid(nameEnd + 1, close - nameEnd - 1)
+                                     : rest.mid(nameEnd + 1);
         } else {
             // 逗号形式 `CALL 标签, 实参1, 实参2`（Emuera 与括号形式等价，eraTW 大量使用）。
-            // 之前只识别括号形式，逗号形式会把整串当作标签名 -> "CALL label not found"。
-            const QStringList parts = splitTopLevelComma(rest);
-            if (parts.size() > 1) {
-                funcName = parts.first().trimmed();
-                QStringList tail;
-                tail.reserve(parts.size() - 1);
-                for (int i = 1; i < parts.size(); ++i) tail.append(parts.at(i));
-                args = tail.join(QLatin1Char(','));
-            }
+            int argStart = nameEnd;
+            while (argStart < rest.size() && (rest.at(argStart).isSpace()
+                   || rest.at(argStart) == QLatin1Char(','))) ++argStart;
+            if (argStart < rest.size()) args = rest.mid(argStart);
         }
         if (funcName.startsWith('@')) funcName = funcName.mid(1);
 
@@ -739,9 +757,12 @@ LogicalLine AstBuilder::build(const QString& rawLine,
         return finalized(std::move(line));
     }
 
-    // PRINTBUTTON 的每个参数是一个完整表达式；只按顶层逗号切分。
-    // 空格属于字符串表达式的一部分，不能走 Raw 的空白切分。
-    if (line.functionName == QLatin1String("PRINTBUTTON")) {
+    // PRINTBUTTON 族（PRINTBUTTON / PRINTBUTTONC / PRINTBUTTONLC）的每个参数
+    // 是一个完整表达式；只按顶层逗号切分。空格属于字符串表达式的一部分，
+    // 不能走 Raw 的空白切分。
+    if (line.functionName == QLatin1String("PRINTBUTTON")
+        || line.functionName == QLatin1String("PRINTBUTTONC")
+        || line.functionName == QLatin1String("PRINTBUTTONLC")) {
         const QString remainder = trimmed.mid(first.text.length()).trimmed();
         for (const QString& item : splitTopLevelComma(remainder)) {
             const QString text = item.trimmed();

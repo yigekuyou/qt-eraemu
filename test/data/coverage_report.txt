@@ -1,0 +1,49 @@
+# 覆盖率报告（依据 C# 权威命令表）
+
+## Emuera 原版命令（199 条）
+  手写用例已覆盖    ：144
+  自动生成冒烟覆盖  ：39
+  不由自动段执行    ：8
+      · ASSERT —— 断言失败即终止
+      · CALLTRAIN —— 仅训练流程状态合法
+      · CLEARLINE —— 会删除已显示行（干扰本组输出）
+      · CLEARTEXTBOX —— 清空文本框
+      · DOTRAIN —— 仅训练流程状态合法（C# 同样报错）
+      · INPUTMOUSEKEY —— 需要鼠标输入（GUI）
+      · RESTART —— 重启脚本（破坏性）
+      · STOPCALLTRAIN —— 仅训练流程状态合法
+  PRINT 族后缀变体  ：8（由基名规则覆盖，不逐个列）
+  未覆盖            ：0（全部登记项均有对应用例）
+## Emuera 原版式中函数（163 条）
+  手写用例已覆盖    ：76
+  自动生成冒烟覆盖  ：87
+  不由自动段执行    ：0
+  PRINT 族后缀变体  ：0（由基名规则覆盖，不逐个列）
+  未覆盖            ：0（全部登记项均有对应用例）
+## EmueraEE 扩展命令（56 条）
+  手写用例已覆盖    ：0
+  自动生成冒烟覆盖  ：35
+  不由自动段执行    ：21
+      · BINPUT —— 需要鼠标按钮输入（EE）
+      · BINPUTS —— 需要鼠标按钮输入（EE）
+      · CLEARMEMORY —— 释放内存（EE，破坏性）
+      · FLOWINPUT —— 交互输入（EE）
+      · FORCE_BEGIN —— 改变游戏流程（EE）
+      · FORCE_QUIT —— 结束程序（EE）
+      · FORCE_QUIT_AND_RESTART —— 结束并重启（EE）
+      · GETTEXTBOX —— 需要文本框控件（EE）
+      · INPUTANY —— 交互输入（EE）
+      · OCLEARLINE —— 删除已显示行（EE）
+      · PLAYBGM —— 需要音频后端（EE）
+      · PLAYSOUND —— 需要音频后端（EE）
+      · QUIT_AND_RESTART —— 结束并重启（EE）
+      · SETBGMVOLUME —— 需要音频后端（EE）
+      · SETSOUNDVOLUME —— 需要音频后端（EE）
+      · SETTEXTBOX —— 需要文本框控件（EE）
+      · SKIPLOG —— 控制日志输出（EE）
+      · STOPBGM —— 需要音频后端（EE）
+      · STOPSOUND —— 需要音频后端（EE）
+      · TINPUTAWAIT —— 交互输入（EE）
+      · UPDATECHECK —— 需要网络（EE）
+  PRINT 族后缀变体  ：0（由基名规则覆盖，不逐个列）
+  未覆盖            ：0（全部登记项均有对应用例）

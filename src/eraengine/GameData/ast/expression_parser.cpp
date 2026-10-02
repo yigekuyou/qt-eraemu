@@ -141,6 +141,28 @@ QSharedPointer<ExpressionNode> ExpressionParser::parsePrimary() {
             m_tokens[m_current + 1].type() == TokenType::LEFT_PAREN) {
             return parseFunctionCall();
         }
+        // 无括号的**0 参内建函数**（PRINTCLENGTH / GETCOLOR / GETTIME / …）：
+        // C# 把方法名与变量名放同一标识符字典，没有同名变量时按方法调用
+        // （GETCOLOR 就是这种写法）。这里对 minArgs==0 的内建名按 0 参函数
+        // 归约 —— 否则裸标识符落进未知变量恒为 0。
+        if (const auto* spec = findBuiltinFunction(m_tokens[m_current].value().toStdString());
+            spec != nullptr && spec->minArgs == 0) {
+            const ExpressionToken token = advance();
+            const QList<QSharedPointer<ExpressionNode>> noArgs;
+            auto fn = QSharedPointer<FunctionNode>::create(token.value(), noArgs);
+            const FunctionResolution res = resolveFunctionCall(token.value(), m_functionTypeProvider);
+            if (res.isUserFunction) {
+                fn->setUserFunction(true);
+                fn->setValueType(res.returnType);
+            } else if (res.isBuiltin) {
+                fn->setBuiltinIndex(res.builtinIndex);
+                fn->setValueType(res.returnType);
+            } else {
+                fn->setValueType(OperandType::Unknown);
+                fn->setArityError(QStringLiteral("未定义的函数 %1").arg(token.value()));
+            }
+            return fn;
+        }
         // `#DIM CONST NAME = value`：在解析期折叠为字面量（对齐 C# 的常数）
         if (m_constantValueProvider) {
             const bool hasIndex = (m_current + 1 < m_tokens.size()

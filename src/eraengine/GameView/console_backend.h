@@ -123,6 +123,15 @@ public:
     Q_INVOKABLE void printImage(const QString& resourceName, int width = 0, int height = 0, int ypos = 0);
     // 图形（C# PrintShape / <shape>）：type ∈ space/rect/polygon，param 为百分比
     Q_INVOKABLE void printShape(const QString& type, const QList<int>& params);
+    // OUTPUTLOG（C# Console.OutputLog）：把全部显示行文本写进 path
+    Q_INVOKABLE bool outputLog(const QString& path) const;
+    // GETLINESTR：第 lineNo 逻辑行的文本
+    Q_INVOKABLE QString lineText(int lineNo) const;
+    // HTML_GETPRINTEDSTR / HTML_POPPRINTINGSTR：printHtml 收到的原文缓冲
+    Q_INVOKABLE QString htmlPrintedStr(int lineNo) const;
+    Q_INVOKABLE QString htmlPopPrintingStr();
+    // LINEISEMPTY（C# Console.EmptyLine）：当前打印缓冲是否为空
+    Q_INVOKABLE bool currentLineEmpty() const;
     Q_INVOKABLE void clearLines(int n);                           // CLEARLINE（按逻辑行数删）
     Q_INVOKABLE void clearAll();
     Q_INVOKABLE void setAlignment(ConsoleAlign align);
@@ -222,6 +231,7 @@ private:
     int  m_frameMs = 16;
     quint64 m_generation = 1;
 
+    QStringList m_htmlLines;      // printHtml 原文（HTML_POPPRINTINGSTR 消费）
     QString m_inputKind;
     bool    m_waitingInput = false;
 

@@ -1,0 +1,4 @@
+# 运行时产物（示例游戏执行时产生）
+example/sav/
+example/emuera.log
+example/save_global.dat

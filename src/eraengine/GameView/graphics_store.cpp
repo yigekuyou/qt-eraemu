@@ -163,7 +163,175 @@ bool GraphicsStore::applyColorMatrix(QImage& image, const float colorMatrix[5][5
     return true;
 }
 
+// ---------------- 画笔 / 刷子 / 字体 ----------------
+namespace {
+struct GExtra {
+    QHash<int, GraphicsStore::PenState> pen;
+    QHash<int, GraphicsStore::BrushState> brush;
+    QHash<int, GraphicsStore::FontState> font;
+    QList<GraphicsStore::CbgLayer> cbg;
+    QHash<QString, GraphicsStore::Anime> anime;   // 键统一大写
+};
+GExtra& gExtra() {
+    static GExtra store;
+    return store;
+}
+} // namespace
+
+bool GraphicsStore::gSetBrush(int id, const QColor& color) {
+    if (!gImages().contains(id)) return false;
+    gExtra().brush[id] = BrushState{ color };
+    return true;
+}
+
+bool GraphicsStore::gSetPen(int id, const QColor& color, int width) {
+    if (!gImages().contains(id)) return false;
+    gExtra().pen[id] = PenState{ color, qMax(1, width) };
+    return true;
+}
+
+bool GraphicsStore::gSetFont(int id, const QString& name, int size) {
+    if (!gImages().contains(id)) return false;
+    gExtra().font[id] = FontState{ name, size };
+    return true;
+}
+
+// ---------------- GSAVE / GLOAD ----------------
+bool GraphicsStore::gSave(int id, const QString& path) {
+    const QImage image = gImage(id);
+    if (image.isNull() || path.isEmpty()) return false;
+    return image.save(path, "png");
+}
+
+bool GraphicsStore::gLoad(int id, const QString& path) {
+    if (path.isEmpty()) return false;
+    QImage image(path);
+    if (image.isNull()) return false;
+    gImages().insert(id, image);
+    return true;
+}
+
+// ---------------- GDRAWGWITHMASK ----------------
+bool GraphicsStore::gDrawGWithMask(int dstId, int srcId, int maskId, int dx, int dy) {
+    const QImage src = gImage(srcId);
+    const QImage mask = gImage(maskId);
+    QImage dst = gImage(dstId);
+    if (src.isNull() || mask.isNull() || dst.isNull()) return false;
+    // 掩码尺寸以 dst 可用区域为准（对齐 C#：以掩码图像的 alpha 通道为选中区）
+    const int w = qMin(qMin(src.width(), mask.width()), dst.width() - dx);
+    const int h = qMin(qMin(src.height(), mask.height()), dst.height() - dy);
+    if (w <= 0 || h <= 0) return false;
+    QImage overlay = dst.copy(dx, dy, w, h).convertToFormat(QImage::Format_ARGB32);
+    const QImage s = src.convertToFormat(QImage::Format_ARGB32);
+    const QImage m = mask.convertToFormat(QImage::Format_ARGB32);
+    for (int y = 0; y < h; ++y) {
+        const QRgb* mline = reinterpret_cast<const QRgb*>(m.constScanLine(y));
+        const QRgb* sline = reinterpret_cast<const QRgb*>(s.constScanLine(y));
+        QRgb* oline = reinterpret_cast<QRgb*>(overlay.scanLine(y));
+        for (int x = 0; x < w; ++x) {
+            if (qAlpha(mline[x]) == 0) continue;   // 掩码透明处保留 dst
+            oline[x] = sline[x];
+        }
+    }
+    gDrawImage(dstId, overlay, QRect(dx, dy, w, h));
+    return true;
+}
+
+// ---------------- CBG 角色背景层 ----------------
+bool GraphicsStore::cbgSetG(int gId, int x, int y, int z) {
+    if (!gImages().contains(gId)) return false;
+    CbgLayer layer;
+    layer.gId = gId; layer.x = x; layer.y = y; layer.z = z;
+    gExtra().cbg.append(layer);
+    return true;
+}
+
+bool GraphicsStore::cbgSetSprite(const QString& sprite, int x, int y, int z) {
+    if (!spriteCreated(sprite)) return false;
+    CbgLayer layer;
+    layer.isSprite = true; layer.sprite = sprite.toUpper();
+    layer.x = x; layer.y = y; layer.z = z;
+    gExtra().cbg.append(layer);
+    return true;
+}
+
+bool GraphicsStore::cbgSetButtonSprite(qint64 value, const QString& sprite,
+                                       const QString& selectedSprite, int x, int y, int z,
+                                       const QString& tooltip) {
+    if (!spriteCreated(sprite)) return false;
+    CbgLayer layer;
+    layer.isSprite = true; layer.isButton = true;
+    layer.sprite = sprite.toUpper();
+    layer.selectedSprite = selectedSprite.toUpper();
+    layer.buttonValue = value;
+    layer.x = x; layer.y = y; layer.z = z; layer.tooltip = tooltip;
+    gExtra().cbg.append(layer);
+    return true;
+}
+
+bool GraphicsStore::cbgSetBmapG(int gId) {
+    if (!gImages().contains(gId)) return false;
+    CbgLayer layer;
+    layer.gId = gId; layer.isBmap = true;
+    gExtra().cbg.append(layer);
+    return true;
+}
+
+void GraphicsStore::cbgClear() { gExtra().cbg.clear(); }
+
+void GraphicsStore::cbgClearButton() {
+    auto& cbg = gExtra().cbg;
+    for (int i = cbg.size() - 1; i >= 0; --i)
+        if (cbg.at(i).isButton) cbg.removeAt(i);
+}
+
+bool GraphicsStore::cbgRemoveRange(int zMin, int zMax) {
+    auto& cbg = gExtra().cbg;
+    const int before = cbg.size();
+    for (int i = cbg.size() - 1; i >= 0; --i) {
+        const int z = cbg.at(i).z;
+        if (z >= zMin && z <= zMax) cbg.removeAt(i);
+    }
+    return cbg.size() != before;
+}
+
+void GraphicsStore::cbgRemoveBmap() {
+    auto& cbg = gExtra().cbg;
+    for (int i = cbg.size() - 1; i >= 0; --i)
+        if (cbg.at(i).isBmap) cbg.removeAt(i);
+}
+
+const QList<GraphicsStore::CbgLayer>& GraphicsStore::cbgLayers() {
+    return gExtra().cbg;
+}
+
+// ---------------- 精灵动画 ----------------
+bool GraphicsStore::spriteAnimeCreate(const QString& name, int width, int height) {
+    if (name.isEmpty() || width <= 0 || height <= 0) return false;
+    Anime anime;
+    anime.size = QSize(width, height);
+    gExtra().anime.insert(name.toUpper(), anime);
+    return true;
+}
+
+bool GraphicsStore::spriteAnimeAddFrame(const QString& name, int gId, int x, int y,
+                                        int width, int height, int dx, int dy, int delay) {
+    auto it = gExtra().anime.find(name.toUpper());
+    if (it == gExtra().anime.end()) return false;
+    AnimeFrame frame;
+    frame.gId = gId;
+    frame.rect = (width > 0 && height > 0) ? QRect(x, y, width, height) : QRect();
+    frame.dx = dx; frame.dy = dy; frame.delay = delay;
+    it->frames.append(frame);
+    return true;
+}
+
 void GraphicsStore::clearAll() {
     gImages().clear();
     sprites().clear();
+    gExtra().pen.clear();
+    gExtra().brush.clear();
+    gExtra().font.clear();
+    gExtra().cbg.clear();
+    gExtra().anime.clear();
 }

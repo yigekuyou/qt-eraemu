@@ -83,11 +83,14 @@ EraEngine::EraEngine(QObject *parent)
 		});
 		// CHKDATA 存在判定：存档目录 <gameDir>/sav 的 save{##}.sav 探测
 		//（对齐 C# VariableEvaluator.getSaveDataPath：save{index:00}.sav）
+		// 对齐 C# EraDataState：0=OK（可载入） / 1=FILENOTFOUND（不存在）。
+		// eraMegaten 用 `CHKDATA n` + `SIF !RESULT` 判断「有存档」，因此
+		// 「存在 -> 0」是必须的（此前返回 1 语义相反）。
 		m_expressionEvaluator.setSaveExistsProvider([this](const QString& saveName) -> qint64 {
 			const qint64 idx = saveName.toLongLong();
 			const QString path = m_gameDirectory + QStringLiteral("/sav/save%1.sav")
 			                         .arg(idx, 2, 10, QLatin1Char('0'));
-			return QFile::exists(path) ? 1 : 0;
+			return QFile::exists(path) ? 0 : 1;
 		});
 		// GETCOLOR / GETSTYLE：由执行引擎维护的当前颜色与样式位
 		m_expressionEvaluator.setColorProvider([this]() -> qint64 {
@@ -96,6 +99,82 @@ EraEngine::EraEngine(QObject *parent)
 		m_expressionEvaluator.setStyleProvider([this]() -> qint64 {
 			return m_executionEngine.currentStyleBits();
 		});
+		// CURRENTALIGN / GETFONT / CLIENTWIDTH / CLIENTHEIGHT / GETLINESTR /
+		// HTML_GETPRINTEDSTR / HTML_POPPRINTINGSTR / DEBUGCLEAR / ISSKIP 等
+		m_expressionEvaluator.setAlignProvider([this]() -> qint64 {
+			return m_executionEngine.currentAlign();
+		});
+		m_expressionEvaluator.setFontProvider([this]() -> QString {
+			return m_executionEngine.currentFontName();
+		});
+		m_expressionEvaluator.setFocusColorProvider([this]() -> qint64 {
+			// C# Config.FocusColor（選択中文字色，默认 255,255,0）
+			for (const QString& k : {QStringLiteral("選択中文字色"),
+			                          QStringLiteral("FocusColor")}) {
+				if (m_configLoader.hasConfig(k)) {
+					const QStringList rgb = m_configLoader.getConfig(k).split(QLatin1Char(','));
+					if (rgb.size() >= 3) {
+						return qint64((rgb.at(0).toInt() << 16)
+						              | (rgb.at(1).toInt() << 8)
+						              | rgb.at(2).toInt()) & 0xFFFFFF;
+					}
+				}
+			}
+			return 0xFFFF00;
+		});
+		m_expressionEvaluator.setLineEmptyProvider([this]() -> qint64 {
+			return m_console.currentLineEmpty() ? 1 : 0;
+		});
+		// RESETCOLOR / GETDEFCOLOR 的还原目标 = 配置文字色（C# Config.ForeColor）。
+		// 配置在 setGameDirectory 之后才装载，因此这里用惰性 provider。
+		const auto defaultForeColor = [this]() -> qint64 {
+			for (const QString& k : {QStringLiteral("文字色"), QStringLiteral("ForeColor")}) {
+				if (m_configLoader.hasConfig(k)) {
+					const QStringList rgb = m_configLoader.getConfig(k).split(QLatin1Char(','));
+					if (rgb.size() >= 3) {
+						return qint64((rgb.at(0).toInt() << 16)
+						              | (rgb.at(1).toInt() << 8)
+						              | rgb.at(2).toInt()) & 0xFFFFFF;
+					}
+				}
+			}
+			return qint64(0xFFFFFF);
+		};
+		m_executionEngine.setDefaultColorProvider(defaultForeColor);
+		m_expressionEvaluator.setDefaultColorProvider(defaultForeColor);
+		m_expressionEvaluator.setClientSizeProvider([this]() -> QPair<int,int> {
+			const int columnPx = qMax(1, m_guiManager.fontSize() / 2);
+			const int lineHeight = qMax(1, m_guiManager.lineHeight());
+			return { qMax(1, m_guiManager.windowWidth() / columnPx),
+			         qMax(1, m_guiManager.windowHeight() / lineHeight) };
+		});
+		m_expressionEvaluator.setSkipProvider([this](int kind) -> int {
+			// kind：0=ISSKIP（SKIPDISP） 1=MESSKIP 2=MOUSESKIP（GUI 专属，恒 0）
+			return kind == 0 && m_executionEngine.skipDisp() ? 1 : 0;
+		});
+		m_expressionEvaluator.setLineStrProvider([this](int lineNo) -> QString {
+			return m_console.lineText(lineNo);
+		});
+		m_expressionEvaluator.setHtmlPrintedProvider(
+			[this](int lineNo) -> QString { return m_console.htmlPrintedStr(lineNo); },
+			[this]() -> QString { return m_console.htmlPopPrintingStr(); });
+		m_expressionEvaluator.setClearProvider([this]() { m_console.clearAll(); });
+		m_expressionEvaluator.setPrintCProvider([this]() -> QPair<int,int> {
+			// C# Config.PrintCLength（PRINTCの文字数）/ PrintCPerLine（PRINTCを並べる数）
+			int len = 25, per = 3;
+			for (const QString& k : {QStringLiteral("PRINTCの文字数"),
+			                          QStringLiteral("PRINTC 文字数")}) {
+				if (m_configLoader.hasConfig(k)) { len = m_configLoader.getInt(k, 25); break; }
+			}
+			for (const QString& k : {QStringLiteral("PRINTCを並べる数"),
+			                          QStringLiteral("PRINTC の表示数"),
+			                          QStringLiteral("PrintCPerLine")}) {
+				if (m_configLoader.hasConfig(k)) { per = m_configLoader.getInt(k, 3); break; }
+			}
+			return { len, per };
+		});
+		// SAVETEXT / LOADTEXT / SAVECHARA / LOADCHARA / GSAVE / GLOAD 的落盘目录
+		m_expressionEvaluator.setSaveDirectory(m_gameDirectory + QStringLiteral("/sav"));
 		// 解析期也需要常量名表（CFLAG:ARG:現在位置 之类的常量名下标）
 		m_parseTable.setConstantTable(&m_constantTable);
 		m_parseTable.setGameBaseData(&m_gameBaseData);
@@ -145,8 +224,12 @@ EraEngine::EraEngine(QObject *parent)
 				});
         connect(&m_executionEngine, &ExecutionEngine::consolePrintTemplate,
                 &m_console, &ConsoleBackend::printTemplate);
-        connect(&m_executionEngine, &ExecutionEngine::consolePrintImage,
-                &m_console, &ConsoleBackend::printImage);
+		connect(&m_executionEngine, &ExecutionEngine::consolePrintImage,
+				&m_console, &ConsoleBackend::printImage);
+		connect(&m_executionEngine, &ExecutionEngine::consolePrintShape,
+				&m_console, &ConsoleBackend::printShape);
+		connect(&m_executionEngine, &ExecutionEngine::consoleOutputLog, this,
+				[this] { m_console.outputLog(m_gameDirectory + QStringLiteral("/emuera.log")); });
 		connect(&m_executionEngine, &ExecutionEngine::consoleClearLines,
 				&m_console, &ConsoleBackend::clearLines);
 		connect(&m_executionEngine, &ExecutionEngine::consolePrintButton, this,
@@ -402,6 +485,8 @@ void EraEngine::setGameDirectory(const QString& directory)
 				ResourceImageProvider::setRoot(dir);
 				// SAVEGLOBAL / LOADGLOBAL 的落盘目录（对齐 C# getSaveDataPathG）
 				m_executionEngine.setGameDataDir(dir);
+				// SAVETEXT / LOADTEXT / SAVECHARA / LOADCHARA / GSAVE / GLOAD 的落盘目录
+				m_expressionEvaluator.setSaveDirectory(dir + QStringLiteral("/sav"));
 				qDebug() << "[DEBUG] About to call reload()";
 				reload();
 				qDebug() << "[DEBUG] reload() complete";

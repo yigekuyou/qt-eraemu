@@ -195,6 +195,18 @@ int EraParseTable::endCatchTarget(const QString& scriptName, int catchLine) cons
     return data->endCatchLines.value(catchLine, -1);
 }
 
+QList<int> EraParseTable::funcEntryLines(const QString& scriptName, int listLine) const {
+    const ScriptData* data = script(scriptName);
+    if (!data) return {};
+    return data->funcEntries.value(listLine);
+}
+
+int EraParseTable::endFuncTarget(const QString& scriptName, int listLine) const {
+    const ScriptData* data = script(scriptName);
+    if (!data) return -1;
+    return data->endFuncLines.value(listLine, -1);
+}
+
 const UserFunctionInfo* EraParseTable::userFunction(const QString& name) const {
     auto it = m_functions.constFind(name.toUpper());
     return it == m_functions.constEnd() ? nullptr : &it.value();
@@ -687,6 +699,38 @@ bool EraParseTable::callLabelWithReturn(const QString& label, int returnLine) {
     return true;
 }
 
+bool EraParseTable::jumpLabel(const QString& label) {
+    if (m_callStack.isEmpty()) {
+        // 顶层（系统入口）JUMP：没有可继承的返回帧，退化为普通跳转
+        return jumpToLabel(label);
+    }
+    QString targetScript = m_currentScript;
+    int target = getLabelPosition(m_currentScript, label);
+    if (target < 0) {
+        for (auto it = m_scripts.constBegin(); it != m_scripts.constEnd(); ++it) {
+            const int pos = it.value().labelPositions.value(label, -1);
+            if (pos >= 0) {
+                targetScript = it.key();
+                target = pos;
+                break;
+            }
+        }
+    }
+    if (target < 0) {
+        return false;
+    }
+
+    // 新帧继承当前帧的返回地址（对齐 C# IsJump + Return 的递归语义）
+    const Frame current = m_callStack.last();
+    pushFrame(Frame(current.script, current.returnLine, label, target, /*jump=*/true));
+    if (targetScript != m_currentScript) {
+        switchToMemorySpace(targetScript);
+    }
+    m_jumped = true;
+    setCurrentLineInternal(target, true);
+    return true;
+}
+
 bool EraParseTable::returnFromCall() {
     if (m_callStack.isEmpty()) {
         return false;
@@ -728,6 +772,8 @@ void EraParseTable::buildJumpMarkings(const QString& scriptName) {
     data.ifBranches.clear();
     data.catchLines.clear();
     data.endCatchLines.clear();
+    data.endFuncLines.clear();
+    data.funcEntries.clear();
 
     struct IfInfo {
         int ifLine = -1;
@@ -755,11 +801,19 @@ void EraParseTable::buildJumpMarkings(const QString& scriptName) {
         bool isCatch = false;
         int  line = -1;
     };
+    // TRYCALLLIST/TRYJUMPLIST/TRYGOTOLIST 的配对栈（对齐 C# ErbLoader nestStack）
+    //   进入 TRY*LIST -> 压栈；体内 FUNC 条目 -> 归入栈顶列表；
+    //   ENDFUNC -> 弹栈并记录列表行 -> ENDFUNC（C# pf.JumpTo = func）。
+    struct ListInfo {
+        int line = -1;
+        QList<int> funcLines;
+    };
 
     QList<IfInfo> ifStack;
     QList<LoopInfo> loopStack;
     QList<SelectInfo> selectStack;
     QList<CatchInfo> catchStack;
+    QList<ListInfo> listStack;
 
     for (int i = 0; i < data.lines.size(); ++i) {
         LogicalLine& ll = data.lines[i];
@@ -772,6 +826,7 @@ void EraParseTable::buildJumpMarkings(const QString& scriptName) {
             loopStack.clear();
             selectStack.clear();
             catchStack.clear();
+            listStack.clear();
         }
         if (!ll.isInstruction()) {
             continue;
@@ -884,6 +939,26 @@ void EraParseTable::buildJumpMarkings(const QString& scriptName) {
             if (!catchStack.isEmpty() && catchStack.last().isCatch) {
                 const CatchInfo catchInfo = catchStack.takeLast();
                 data.endCatchLines[catchInfo.line] = i;     // CATCH -> ENDCATCH
+            }
+        }
+        // ---- TRYCALLLIST/TRYJUMPLIST/TRYGOTOLIST（+GOTOLIST 宽松别名）----
+        // 体内只有 FUNC 单行条目，ENDFUNC 收尾（对齐 C# ErbLoader nestStack）。
+        else if (name == QLatin1String("TRYCALLLIST") || name == QLatin1String("TRYJUMPLIST")
+                 || name == QLatin1String("TRYGOTOLIST") || name == QLatin1String("GOTOLIST")) {
+            ListInfo info;
+            info.line = i;
+            listStack.append(info);
+        }
+        else if (name == QLatin1String("FUNC")) {
+            if (!listStack.isEmpty()) {
+                listStack.last().funcLines.append(i);
+            }
+        }
+        else if (name == QLatin1String("ENDFUNC")) {
+            if (!listStack.isEmpty()) {
+                const ListInfo listInfo = listStack.takeLast();
+                data.endFuncLines[listInfo.line] = i;       // TRY*LIST -> ENDFUNC
+                data.funcEntries[listInfo.line] = listInfo.funcLines;
             }
         }
     }

@@ -224,6 +224,7 @@ qint64 VariableStorage::getCharaInt(const QString &name, int charaId, int index)
 {
 		if (charaId < 0 || index < 0) return 0;
 		charaId = resolveCharaIndex(charaId);
+		if (charaId < 0) return 0;   // VOID 角色（ADDVOIDCHARA）：无模板数据
 
 		auto it = m_charaIntVars.constFind(storageName(name));
 		if (it != m_charaIntVars.constEnd() && charaId < it.value().size()) {
@@ -240,6 +241,7 @@ void VariableStorage::setCharaStr(const QString &name, int charaId, int index, c
 {
 		if (charaId < 0 || index < 0) return;
 		charaId = resolveCharaIndex(charaId);
+		if (charaId < 0) return;   // VOID 角色：无模板数据
 		auto &charaList = m_charaStrVars[storageName(name)];
 		if (charaList.size() <= charaId) charaList.resize(charaId + 1);
 		auto &vec = charaList[charaId];
@@ -251,6 +253,7 @@ QString VariableStorage::getCharaStr(const QString &name, int charaId, int index
 {
 		if (charaId < 0 || index < 0) return QString();
 		charaId = resolveCharaIndex(charaId);
+		if (charaId < 0) return QString();   // VOID 角色：无模板数据
 		auto it = m_charaStrVars.constFind(storageName(name));
 		if (it != m_charaStrVars.constEnd() && charaId < it.value().size()) {
 				const auto &vec = it.value().at(charaId);
@@ -278,8 +281,103 @@ bool VariableStorage::delChara(int index)
 {
 		if (index < 0 || index >= m_charaList.size()) return false;
 		m_charaList.removeAt(index);
+		m_charaSp.remove(index);
 		qDebug() << "[chara] DELCHARA index" << index << "CHARANUM" << m_charaList.size();
 		return true;
+}
+
+void VariableStorage::addSpChara(int csvNo)
+{
+		if (csvNo < 0) return;
+		m_charaList.append(csvNo);
+		m_charaSp.insert(m_charaList.size() - 1);
+		qDebug() << "[chara] ADDSPCHARA" << csvNo << "-> index" << m_charaList.size() - 1;
+}
+
+void VariableStorage::swapChara(int a, int b)
+{
+		if (a < 0 || b < 0 || a >= m_charaList.size() || b >= m_charaList.size() || a == b) return;
+		m_charaList.swapItemsAt(a, b);
+		const bool sa = m_charaSp.contains(a);
+		const bool sb = m_charaSp.contains(b);
+		if (sa != sb) {
+			if (sa) { m_charaSp.remove(a); m_charaSp.insert(b); }
+			else    { m_charaSp.remove(b); m_charaSp.insert(a); }
+		}
+}
+
+void VariableStorage::copyChara(int dst, int src)
+{
+		if (dst < 0 || src < 0 || dst >= m_charaList.size() || src >= m_charaList.size()) return;
+		m_charaList[dst] = m_charaList[src];
+		if (m_charaSp.contains(src)) m_charaSp.insert(dst);
+		else m_charaSp.remove(dst);
+}
+
+void VariableStorage::addCopyChara(int src)
+{
+		if (src < 0 || src >= m_charaList.size()) return;
+		m_charaList.append(m_charaList.at(src));
+		if (m_charaSp.contains(src)) m_charaSp.insert(m_charaList.size() - 1);
+}
+
+void VariableStorage::pickupChara(const QList<int>& indexes)
+{
+		QList<int> newList;
+		QSet<int> newSp;
+		newList.reserve(indexes.size());
+		for (int i : indexes) {
+			if (i < 0 || i >= m_charaList.size()) continue;
+			newList.append(m_charaList.at(i));
+			if (m_charaSp.contains(i)) newSp.insert(newList.size() - 1);
+		}
+		m_charaList = newList;
+		m_charaSp = newSp;
+}
+
+QString VariableStorage::dumpCharaList() const
+{
+		QStringList out;
+		for (int i = 0; i < m_charaList.size(); ++i)
+			out << QString::number(m_charaList.at(i)) << (m_charaSp.contains(i) ? QStringLiteral("1") : QStringLiteral("0"));
+		return out.join(QLatin1Char(' '));
+}
+
+void VariableStorage::appendCharaList(const QString& text)
+{
+		const QStringList f = text.split(QLatin1Char(' '), Qt::SkipEmptyParts);
+		for (int i = 0; i + 1 < f.size(); i += 2) {
+			bool okNo = false, okSp = false;
+			const int no = f.at(i).toInt(&okNo);
+			const int sp = f.at(i + 1).toInt(&okSp);
+			if (!okNo || no < 0) continue;
+			m_charaList.append(no);
+			if (okSp && sp != 0) m_charaSp.insert(m_charaList.size() - 1);
+		}
+}
+
+void VariableStorage::resetGlobals()
+{
+		// C# ResetGlobalData：只重置 **GLOBAL/GLOBALS 声明的广域变量**。
+		// 函数私有变量在这里与广域变量同容器存放，键形如 `函数名\x1f变量名`
+		// （见 setPrivateScope）—— 必须保留，否则 RESETGLOBAL 会把各函数的
+		// 私有计数器一并清零（表现为「跨函数累积的统计量丢失」）。
+		const auto isPrivateKey = [](const QString& k) {
+			return k.contains(QChar(0x1f));
+		};
+		const auto purge = [&](auto& map) {
+			for (auto it = map.begin(); it != map.end(); ) {
+				if (isPrivateKey(it.key())) ++it;
+				else it = map.erase(it);
+			}
+		};
+		purge(m_globalInt1D);
+		purge(m_globalInt2D);
+		purge(m_globalInt3D);
+		purge(m_globalStr1D);
+		purge(m_globalStr2D);
+		purge(m_globalStr3D);
+		qDebug() << "[global] RESETGLOBAL（保留函数私有变量）";
 }
 
 // ================= CSV 模板快照 =================
@@ -710,6 +808,7 @@ qint64 VariableStorage::getCharaInt3D(const QString &name, int charaId, int x, i
 {
 		if (charaId < 0 || x < 0 || y < 0) return 0;
 		charaId = resolveCharaIndex(charaId);
+		if (charaId < 0) return 0;   // VOID 角色：无模板数据
 		auto it = m_charaIntVars3D.constFind(storageName(name));
 		if (it != m_charaIntVars3D.constEnd() && charaId < it.value().size()) {
 				const auto &grid2D = it.value().at(charaId);

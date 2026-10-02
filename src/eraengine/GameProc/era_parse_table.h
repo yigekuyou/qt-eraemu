@@ -48,10 +48,11 @@ struct Frame {
     int     returnLine = 0;
     QString callLabel;
     int     entryLine = -1;   // 被调函数 @label 的行号（用于识别函数体边界）
+    bool    isJump = false;   // JUMP 系帧：RETURN 时连同本帧一起递归弹出（C# IsJump）
 
     Frame() = default;
-    Frame(const QString& s, int line, const QString& label, int entry = -1)
-        : script(s), returnLine(line), callLabel(label), entryLine(entry) {}
+    Frame(const QString& s, int line, const QString& label, int entry = -1, bool jump = false)
+        : script(s), returnLine(line), callLabel(label), entryLine(entry), isJump(jump) {}
 
     bool operator==(const Frame& other) const {
         return script == other.script
@@ -81,6 +82,11 @@ struct ScriptData {
     //   endCatchLines : CATCH 行    -> 配对的 ENDCATCH 行（顺序落入时跳到它之后）
     QHash<int, int>     catchLines;
     QHash<int, int>     endCatchLines;
+    // TRYCALLLIST/TRYJUMPLIST/TRYGOTOLIST 的配对（对齐 C# callList + JumpTo=ENDFUNC）
+    //   funcEntries  : TRY*LIST 行 -> 体内各 FUNC 条目行号（按出现顺序）
+    //   endFuncLines : TRY*LIST 行 -> 配对的 ENDFUNC 行（全部候选失败时跳到它**之后**）
+    QHash<int, int>        endFuncLines;
+    QHash<int, QList<int>> funcEntries;
     QString             path;           // 源文件路径（供入口点/诊断显示）
 };
 
@@ -168,6 +174,11 @@ public:
     [[nodiscard]] int catchTarget(const QString& scriptName, int trycLine) const;
     [[nodiscard]] int endCatchTarget(const QString& scriptName, int catchLine) const;
 
+    // TRYCALLLIST/TRYJUMPLIST/TRYGOTOLIST：行 -> 体内 FUNC 条目行 / 配对 ENDFUNC 行
+    // （-1 = 没有配对；对齐 C# InstructionLine.callList / JumpTo）
+    [[nodiscard]] QList<int> funcEntryLines(const QString& scriptName, int listLine) const;
+    [[nodiscard]] int endFuncTarget(const QString& scriptName, int listLine) const;
+
     // 用户自定义函数注册表（对齐 C# FunctionLabelLine）
     [[nodiscard]] const UserFunctionInfo* userFunction(const QString& name) const;
     [[nodiscard]] const QHash<QString, UserFunctionInfo>& userFunctions() const { return m_functions; }
@@ -238,6 +249,11 @@ public slots:
     bool callLabel(const QString& label, bool advanceWasCalled = false);
     // 以显式返回地址压帧并跳转（执行链同步调用用户函数时使用）
     bool callLabelWithReturn(const QString& label, int returnLine);
+    // JUMP / TRYJUMP / TRYJUMPLIST：跳转但**不产生新的返回地址** —— 新帧继承
+    // 当前帧的返回地址（对齐 C# CalledFunction.IsJump + ProcessState.Return 的
+    // 「JUMP 帧弹出后立刻递归 Return」效果：JUMP 目标函数 RETURN 时直接回到
+    // 当前函数的调用者）。
+    bool jumpLabel(const QString& label);
     // 函数私有变量初值（#DIM X = 7）——进入函数时由执行侧调用
     void applyPrivateVariableDefaults(const QString& function);
     bool returnFromCall();

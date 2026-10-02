@@ -22,6 +22,8 @@
 
 #include <algorithm>
 #include <QRegularExpression>
+#include <QFile>
+#include <QTextStream>
 
 namespace {
 // 当前等待的输入是否为**字符串型**（INPUTS/SINPUTS/TONEINPUTS/ARGS 系）。
@@ -169,8 +171,31 @@ void ConsoleBackend::print(const QString& text) {
 }
 
 void ConsoleBackend::printHtml(const QString& html) {
+    m_htmlLines.append(html);
     printTemplate(PrintTemplateCompiler::evaluate(*PrintTemplateCompiler::compile(html),
         [](const ExpressionNode&) { return QString(); }));
+}
+
+QString ConsoleBackend::lineText(int lineNo) const {
+    if (lineNo < 0 || lineNo >= m_buffer.count()) return QString();
+    QString text;
+    for (const ConsoleSegment& seg : m_buffer.at(lineNo).segments)
+        for (const ConsoleSpan& span : seg.spans)
+            text += span.text.isEmpty() ? span.altText : span.text;
+    return text;
+}
+
+QString ConsoleBackend::htmlPrintedStr(int lineNo) const {
+    if (lineNo < 0 || lineNo >= m_htmlLines.size()) return QString();
+    return m_htmlLines.at(m_htmlLines.size() - 1 - lineNo);   // 行号从最近一行起算
+}
+
+QString ConsoleBackend::htmlPopPrintingStr() {
+    return m_htmlLines.isEmpty() ? QString() : m_htmlLines.takeLast();
+}
+
+bool ConsoleBackend::currentLineEmpty() const {
+    return m_pendingParts.isEmpty() && m_sealed.isEmpty();
 }
 
 void ConsoleBackend::printTemplate(const PrintTemplate& output) {
@@ -388,6 +413,26 @@ void ConsoleBackend::printShape(const QString& type, const QList<int>& params) {
     part.style = m_style;
     appendPart(part);
     markDirty();
+}
+
+// OUTPUTLOG（C# Console.OutputLog）：显示行全文写文件
+bool ConsoleBackend::outputLog(const QString& path) const {
+    QFile file(path);
+    if (!file.open(QIODevice::WriteOnly | QIODevice::Text | QIODevice::Truncate)) {
+        qWarning() << "[console] OUTPUTLOG 无法写入：" << path;
+        return false;
+    }
+    QTextStream out(&file);
+    out.setEncoding(QStringConverter::Utf8);
+    for (const ConsoleDisplayLine& line : m_buffer.lines()) {
+        for (const ConsoleSegment& seg : line.segments) {
+            for (const ConsoleSpan& span : seg.spans) {
+                out << (span.text.isEmpty() ? span.altText : span.text);
+            }
+        }
+        out << '\n';
+    }
+    return true;
 }
 
 void ConsoleBackend::clearLines(int n) {

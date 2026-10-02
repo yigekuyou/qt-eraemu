@@ -138,10 +138,20 @@ private:
     bool evalInt(const QSharedPointer<ExpressionNode>& ast, const QString& raw, qint64& out);
     bool evalCondition(const LogicalLine& line, bool& out);
 
-    // 调用族（CALL / TRYCALL / CALLFORM / TRYCALLFORM / TRYCCALLFORM）统一实现。
+    // 调用族（CALL / TRYCALL / CALLFORM / TRYCALLFORM / TRYCCALLFORM / JUMP 系）
+    // 统一实现。
     //   isForm: 标签名是格式化串（`CUSTOM_%ARGS%_MENU`），运行期展开
     //   isTry : 找不到函数不报错（TRY…）
-    ExecState doCallLine(const LogicalLine& line, bool isForm, bool isTry);
+    //   isJump: JUMP/TRYJUMP/TRYJUMPLIST —— 不产生新的返回地址（继承当前帧）
+    //   returnLine >= 0：以该行为返回地址压帧（TRYCALLLIST 用 ENDFUNC 之后）
+    ExecState doCallLine(const LogicalLine& line, bool isForm, bool isTry,
+                         bool isJump = false, int returnLine = -1);
+    // TRYCALLLIST/TRYJUMPLIST/TRYGOTOLIST：依次尝试体内 FUNC 条目（对齐 C#
+    // doFlowControlFunction）；全部失败 -> 跳到配对 ENDFUNC 之后。
+    ExecState doTryListLine(const LogicalLine& line);
+    // 在当前函数体内找 $ 标签（对齐 C# state.CurrentCalled.CallLabel：$ 标签
+    // 只在本函数作用域内有效），返回行号；找不到返回 -1。
+    [[nodiscard]] int findGotoLabelInFunction(const QString& label) const;
     // 把 CALLFORM 的标签名（含 %..%/{..}）展开为实际标签
     [[nodiscard]] QString expandCallFormLabel(const QString& raw);
 

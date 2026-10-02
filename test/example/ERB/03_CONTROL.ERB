@@ -1,0 +1,127 @@
+;=============================================================
+; [3] 控制流：IF/SIF/SELECTCASE/循环/GOTO/$ 标签
+;=============================================================
+@TEST_CONTROL
+#DIM NONG
+#DIM I
+#DIM TOTAL
+
+PRINTL == 组3：控制流 ==
+
+;---- IF / ELSEIF / ELSE / ENDIF ----
+I = 2
+IF I == 1
+	TOTAL = 0
+ELSEIF I == 2
+	TOTAL = 20
+ELSE
+	TOTAL = 30
+ENDIF
+CALL ASSERT_EQ, TOTAL, 20, @"ELSEIF 分支"
+NONG += RESULT
+
+;---- SIF ----
+TOTAL = 0
+SIF I == 2
+	TOTAL = 1
+CALL ASSERT_EQ, TOTAL, 1, @"SIF 条件成立执行下一行"
+NONG += RESULT
+TOTAL = 0
+SIF I == 9
+	TOTAL = 1
+CALL ASSERT_EQ, TOTAL, 0, @"SIF 条件不成立跳过"
+NONG += RESULT
+
+;---- SELECTCASE：值列表 / TO / IS / CASEELSE ----
+TOTAL = 0
+SELECTCASE 5
+	CASE 1, 2
+		TOTAL = 1
+	CASE 4 TO 6
+		TOTAL = 2
+	CASE IS >= 10
+		TOTAL = 3
+	CASEELSE
+		TOTAL = 4
+ENDSELECT
+CALL ASSERT_EQ, TOTAL, 2, @"SELECTCASE 范围 TO"
+NONG += RESULT
+
+SELECTCASE 99
+	CASE 1, 2
+		TOTAL = 1
+	CASEELSE
+		TOTAL = 44
+ENDSELECT
+CALL ASSERT_EQ, TOTAL, 44, @"SELECTCASE CASEELSE"
+NONG += RESULT
+
+;---- REPEAT / REND + COUNT ----
+TOTAL = 0
+REPEAT 5
+	TOTAL += COUNT
+REND
+CALL ASSERT_EQ, TOTAL, 10, @"REPEAT 5: COUNT 0..4 求和"
+NONG += RESULT
+
+;---- FOR / NEXT（自定义变量与步长）----
+TOTAL = 0
+FOR I, 2, 10, 2
+	TOTAL += I
+NEXT
+CALL ASSERT_EQ, TOTAL, 20, @"FOR 2..9 步长 2 求和"
+NONG += RESULT
+
+;---- WHILE / WEND ----
+I = 0
+TOTAL = 0
+WHILE I < 4
+	I += 1
+	TOTAL += I
+WEND
+CALL ASSERT_EQ, TOTAL, 10, @"WHILE 累加"
+NONG += RESULT
+
+;---- DO / LOOP（先执行后判断）----
+I = 100
+TOTAL = 0
+DO
+	TOTAL = I
+	I += 1
+LOOP I < 1
+CALL ASSERT_EQ, TOTAL, 100, @"DO/LOOP 至少执行一次"
+NONG += RESULT
+
+;---- BREAK / CONTINUE ----
+TOTAL = 0
+FOR I, 0, 10
+	SIF I == 3
+		CONTINUE
+	SIF I == 6
+		BREAK
+	TOTAL += I
+NEXT
+CALL ASSERT_EQ, TOTAL, 12, @"CONTINUE 跳过 3，BREAK 到 6 前停"
+NONG += RESULT
+
+;---- 嵌套循环 + BREAK ----
+TOTAL = 0
+REPEAT 3
+	FOR I, 0, 10
+		SIF I == 2
+			BREAK
+		TOTAL += 1
+	NEXT
+REND
+CALL ASSERT_EQ, TOTAL, 6, @"嵌套循环（外层 3 × 内层 2）"
+NONG += RESULT
+
+;---- GOTO / $ 标签 ----
+TOTAL = 0
+GOTO SKIPTARGET
+TOTAL = 99
+$SKIPTARGET
+CALL ASSERT_EQ, TOTAL, 0, @"GOTO 跳过赋值"
+NONG += RESULT
+
+RETURN NONG

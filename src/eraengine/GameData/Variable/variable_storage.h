@@ -80,12 +80,31 @@ public:
 		// 角色数据访问统一经 resolveCharaIndex 翻译（列表为空时恒等，模板装载期安全）。
 		void addChara(int csvNo);
 		bool delChara(int index);
+		// ADDVOIDCHARA（C#：何の設定のないキャラを作成）—— csvNo = -1 的空角色
+		void addVoidChara() { m_charaList.append(-1); }
+		// ADDSPCHARA（C#：SP キャラとして追加）—— SP 角色不参与 GETCHARA 常规检索
+		void addSpChara(int csvNo);
+		[[nodiscard]] bool isSpChara(int index) const { return m_charaSp.contains(index); }
+		// DELALLCHARA（C#：DelAllCharacter）
+		void delAllChara() { m_charaList.clear(); m_charaSp.clear(); }
+		// SWAPCHARA / COPYCHARA / ADDCOPYCHARA / PICKUPCHARA（C# 同名命令）
+		void swapChara(int a, int b);
+		void copyChara(int dst, int src);
+		void addCopyChara(int src);
+		// PICKUPCHARA：角色列表重排为给定的运行时下标序列（可少于原数量）
+		void pickupChara(const QList<int>& indexes);
+		// SAVECHARA / LOADCHARA：角色清单（模板号 + SP 标记）的文本序列化
+		[[nodiscard]] QString dumpCharaList() const;
+		void appendCharaList(const QString& text);
 		[[nodiscard]] int charaNum() const { return m_charaList.size(); }
 		[[nodiscard]] int charaCsvNo(int index) const { return m_charaList.value(index, -1); }
 		[[nodiscard]] int resolveCharaIndex(int index) const { return m_charaList.value(index, index); }
 		void markCsvExists(int csvNo) { if (csvNo >= 0) m_existCsv.insert(csvNo); }
 		[[nodiscard]] bool existCsv(int csvNo) const { return m_existCsv.contains(csvNo); }
-		void clearCharaList() { m_charaList.clear(); }
+		void clearCharaList() { m_charaList.clear(); m_charaSp.clear(); }
+
+		// RESETGLOBAL（C#：全てのグローバル変数を初期化）
+		void resetGlobals();
 
 		// ================= CSV 模板快照（CSVNAME/CSVBASE/CSVABL/… 用）=================
 		// C# 里「CSV 模板」与「角色运行时数据」是两个存储：CSV* 函数读模板，
@@ -350,6 +369,7 @@ private:
 
 		// 已登记角色：运行时下标 -> CSV 模板号；以及存在模板的番号集合（EXISTCSV）
 		QList<int> m_charaList;
+		QSet<int>  m_charaSp;   // SP 角色的运行时下标（ADDSPCHARA）
 		QSet<int>  m_existCsv;
 		// CSV 模板快照（按模板号存放）
 		QHash<QString, QList<QList<qint64>>> m_csvIntVars;

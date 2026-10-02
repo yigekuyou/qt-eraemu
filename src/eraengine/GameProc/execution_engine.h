@@ -135,16 +135,20 @@ public:
     bool executeInstruction(const LogicalLine& line);
 
     // ---- 语句型函数注册表（扩展函数专用，高扩展接口）----
-    // 设计规则：只有 **C# 原型没有的函数**（eraTW 依赖的 EmueraEE/EM 扩展系
-    // 内建语句）才进注册表；C# 原型已有的函数（SPLIT/REPLACE/VARSET 等）
-    // 一律走核心引擎分支。注册表把「名字 -> 执行器」集中管理，
-    // 新增扩展函数只需 registerStatementFunction() 一行 + 一个 lambda。
+    // 设计规则（Xorg 式分段 + fail-fast）：
+    //   · 核心专用分支（executeInstruction/executeFunctionCall 内联）=「0-127 核心段」，
+    //     扩展不得覆盖 —— registerStatementFunction 里 fail-fast 拒绝；
+    //   · 注册表 =「128-255 扩展段」，只收 **C# 原型没有的函数**（EE/EM 扩展系）；
+    //   · 同名重复注册 first-wins 拒绝（Xorg: opcode 已被占用 → AddExtension 失败）。
+    // 扩展名单声明外置在 extension_registry（Wayland 式：核心文件零扩展名，
+    // 后续扩展 = 改声明数据 / 放清单文件 emuera_extensions.txt，不动核心代码）。
     using StatementFn = std::function<bool(const LogicalLine& line, const QList<Operand>& args)>;
     void registerStatementFunction(const QString& name, StatementFn fn);
 
 private:
-    // 一次性建表（构造函数里调用；扩展语句在此登记）
-    void buildStatementFunctions();
+    // 扩展惰性绑定（首次执行指令时调用一次；默认名单 + 游戏目录清单发现）
+    void ensureExtensionsBound();
+    bool m_extensionsBound = false;
     QHash<QString, StatementFn> m_statementFunctions;
     // SPLIT：核心函数专用分支（对齐 C# FunctionCode.SPLIT / SpSplitArgument）
     bool handleSplit(const LogicalLine& line);

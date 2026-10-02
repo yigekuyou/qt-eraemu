@@ -94,6 +94,8 @@ GameProc/era_parse_table.cpp
 GameProc/era_parse_table.h
 GameProc/execution_engine.cpp
 GameProc/execution_engine.h
+GameProc/extension_registry.cpp
+GameProc/extension_registry.h
 GameProc/script_runner.cpp
 GameProc/script_runner.h
 GameProc/process_state.cpp

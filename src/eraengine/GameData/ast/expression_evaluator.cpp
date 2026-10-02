@@ -2137,8 +2137,13 @@ bool ExpressionEvaluator::evaluateBuiltin(const FunctionNode &node, VariableStor
         return true;
     }
     case BuiltinOp::PutForm: {
-        // PUTFORM <FORM文本>：设置存档摘要（@SAVEINFO 内使用 -> SAVEDATA_TEXT）
-        storage->setGlobalStr1D(QStringLiteral("SAVEDATA_TEXT"), 0, S(0));
+        // PUTFORM <FORM文本>：存档概要**追加**（对齐 C# Process.ScriptProc.cs:291-293：
+        // SAVEDATA_TEXT 非空则 +=、否则 =；@SAVEINFO 内可多次调用逐段拼接）
+        // 写入走 setSystemStr（与读取点 SAVEDATA_TEXT 分支同一存储 m_systemStrVars；
+        // 此前写 setGlobalStr1D -> m_globalStr1D，读取 getSystemStr -> m_systemStrVars，
+        // 两张表不一致导致概要永不生效）
+        const QString prev = storage->getSystemStr(QStringLiteral("SAVEDATA_TEXT"), 0);
+        storage->setSystemStr(QStringLiteral("SAVEDATA_TEXT"), 0, prev + S(0));
         out = QVariant::fromValue<qint64>(0);
         return true;
     }

@@ -30,6 +30,7 @@
 #include "ast/strform_parser.h"
 #include "ast/print_template.h"
 #include "era_parse_table.h"
+#include "extension_registry.h"
 #include "constant_table.h"
 #include "eraengine.h"
 #include "eraengine_log.h"
@@ -66,8 +67,8 @@ ExecutionEngine::ExecutionEngine(VariableStorage* storage, GameBaseData* gameBas
     // Initialize function system
     m_functionSystem = new FunctionSystem(this);
 
-    // 扩展函数注册表（只收 C# 原型没有的扩展语句；核心函数走专用分支）
-    buildStatementFunctions();
+    // 扩展注册表改为惰性绑定（ensureExtensionsBound，首次执行指令时调用）：
+    // 游戏目录那时才可知，运行期清单发现（emuera_extensions.txt）依赖它。
 }
 
 ExecutionEngine::~ExecutionEngine() {
@@ -670,6 +671,9 @@ bool ExecutionEngine::executeInstruction(const LogicalLine& line) {
     const QList<Operand>& args = line.arguments;
     m_totalInstructionsExecuted++;
     m_executionPosition++;
+
+    // 扩展注册表惰性绑定（首次执行时一次；Wayland wl_registry.bind 式）
+    ensureExtensionsBound();
 
     // 只处理「非控制流」指令：控制流（IF/SIF/REPEAT/LOOP/WHILE/WEND/FOR/NEXT/
     // GOTO/CALL/RETURN/BEGIN/INPUT/…）已由 ScriptRunner 依据拍平 AST + 标记区执行。
@@ -1409,7 +1413,19 @@ bool ExecutionEngine::executeInstruction(const LogicalLine& line) {
 // ---------------------------------------------------------------------------
 void ExecutionEngine::registerStatementFunction(const QString& name, StatementFn fn)
 {
-    m_statementFunctions.insert(name.toUpper(), std::move(fn));
+    const QString upper = name.toUpper();
+    // 核心段保留（Xorg: 0-127 操作码不可被扩展占用）—— 扩展不得覆盖核心函数，
+    // 否则扩展桩会遮蔽 kBuiltinFunctions 表里的真实现（PUTFORM/FIND_CHARADATA 案例）。
+    if (isBuiltinFunction(upper.toStdString())) {
+        qWarning() << "[ext] 拒绝注册：" << name << "属核心函数（kBuiltinFunctions），扩展不得覆盖";
+        return;
+    }
+    // 扩展段冲突（Xorg: opcode 已被占用 → AddExtension 失败）—— first-wins
+    if (m_statementFunctions.contains(upper)) {
+        qWarning() << "[ext] 拒绝注册：" << name << "已被其他扩展注册（first-wins）";
+        return;
+    }
+    m_statementFunctions.insert(upper, std::move(fn));
 }
 
 // ---------------------------------------------------------------------------
@@ -1483,39 +1499,24 @@ bool ExecutionEngine::handleSplit(const LogicalLine& line)
 }
 
 // ---------------------------------------------------------------------------
-// 语句型函数注册表（**扩展函数专用**，高扩展接口）
+// 扩展注册表绑定（Wayland 式声明外置 + Xorg 式 fail-fast）
 //
-// 设计规则：只有 **C# 原型没有的函数**（eraTW 依赖的 EmueraEE/EM 扩展系
-// 内建语句）才进注册表；C# 原型已有的函数（SPLIT/REPLACE/VARSET 等）
-// 一律走核心引擎分支（executeFunctionCall / executeInstruction 的专用分支）。
-// 新增扩展函数只需 registerStatementFunction() 一行 + 一个 lambda。
+// 分发优先级（固定，由结构决定，不由注册顺序决定）：
+//   ① 核心专用分支（executeInstruction / executeFunctionCall 内联）——「0-127 核心段」
+//   ② 扩展注册表 m_statementFunctions 查表 ——「128-255 扩展段」
+//   ③ 通用路径（表达式求值 → kBuiltinFunctions 表）
+//
+// 扩展名单声明外置在 extension_registry（核心文件零扩展名）：
+//   · 默认名单：extension_registry.cpp kEeDefaultExtensions（EE 存档系）；
+//   · 运行期发现：游戏目录 emuera_extensions.txt（声明数据，wl_registry.bind 式）。
+// 惰性绑定：游戏目录在装载完游戏数据后才可知，故绑定时机后移到
+// executeInstruction 入口（首次执行时一次）。
 // ---------------------------------------------------------------------------
-void ExecutionEngine::buildStatementFunctions()
+void ExecutionEngine::ensureExtensionsBound()
 {
-    // ---- EE 扩展语句（C# 原版没有、EE 系游戏使用 —— 网上还有基于 EE 的 era）----
-    // 设计规则：核心只收 C# 原版全量（BuiltInFunctionCode.cs 枚举内）；
-    // EE 专属语句放这里。EE 的保存文件系（CHKVARDATA/CHKGLOBALDATA/FIND_VARDATA，
-    // Creator.cs 里被注释、由 EE 注册）与 PUTFORM（EE 专属）在此登记为
-    // 「已识别、尽力执行」的桩：有实现的走实现，没有的给出留痕并继续。
-    struct EeExtSpec { const char* name; };
-    static const EeExtSpec kEeExtensions[] = {
-        {"CHKVARDATA"}, {"CHKGLOBALDATA"}, {"FIND_VARDATA"},
-        {"FIND_CHARADATA"}, {"PUTFORM"},
-    };
-    for (const EeExtSpec& spec : kEeExtensions) {
-        const QString name = QString::fromLatin1(spec.name);
-        registerStatementFunction(name,
-            [this, name](const LogicalLine& line, const QList<Operand>&) -> bool {
-            // 保存文件系函数需要存档机制支持；此处留痕并跳过（不报错，
-            // 对齐 EE 的容错语义），便于从运行日志定位后续补全点。
-            if (!m_reportedUnfinished.contains(name)) {
-                m_reportedUnfinished.insert(name);
-                qCDebug(eraTrace) << "[ee-ext]" << name << "在运行期被跳过（存档系扩展，待补全）。行:"
-                                  << line.position.toString();
-            }
-            return true;
-        });
-    }
+    if (m_extensionsBound) return;
+    m_extensionsBound = true;
+    registerEngineExtensions(*this, m_gameDirectory);
 }
 
 // ---------------------------------------------------------------------------
@@ -1557,6 +1558,26 @@ bool ExecutionEngine::executeFunctionCall(const LogicalLine& line)
     if (name.startsWith(QLatin1String("TOOLTIP_"))) {
         qDebug() << "[display] TOOLTIP 配置" << name
                  << (line.arguments.isEmpty() ? QString() : line.arguments.first().raw.trimmed());
+        return true;
+    }
+    // ---- PUTFORM（C# FunctionCode.PUTFORM：StrForm 实参 -> SAVEDATA_TEXT 累加）----
+    //   对齐 C# Process.ScriptProc.cs:291-293：SAVEDATA_TEXT 非空则 +=、否则 =；
+    //   @SAVEINFO 内可多次调用逐段拼接。实参是 StrForm（文本 + {…}/%…%），
+    //   装载期已按 StrForm 解析（见 AstBuilder 内建分支）；未能归约时按原文兜底
+    //   （概要信息不应丢）。
+    if (upper == QLatin1String("PUTFORM")) {
+        QString text;
+        if (!line.arguments.isEmpty() && line.arguments.first().ast) {
+            ExpressionEvaluator fallback;
+            ExpressionEvaluator& ev = m_expressionEvaluator ? *m_expressionEvaluator : fallback;
+            text = ev.evaluate(*line.arguments.first().ast, m_storage, m_gameBaseData).toString();
+        } else if (!line.arguments.isEmpty()) {
+            text = line.arguments.first().raw;
+        }
+        if (m_storage) {
+            const QString prev = m_storage->getSystemStr(QStringLiteral("SAVEDATA_TEXT"), 0);
+            m_storage->setSystemStr(QStringLiteral("SAVEDATA_TEXT"), 0, prev + text);
+        }
         return true;
     }
     // ---- SPLIT：核心函数专用分支（对齐 C# FunctionCode.SPLIT）----

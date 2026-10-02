@@ -688,6 +688,17 @@ LogicalLine AstBuilder::build(const QString& rawLine,
     // 但整行是合法赋值，必须仍按赋值走（eraTW 大量使用 `RAND:n`）。
     if (isBuiltinFunction(line.functionName.toStdString())) {
         const QString callText = trimmed.mid(first.text.length()).trimmed();
+        // PUTFORM（C# FunctionCode.PUTFORM）：实参是**格式化串**（文本 + {…}/%…%），
+        // 不是表达式 —— 按表达式归约会失败（eraTW @SAVEINFO 的
+        // `PUTFORM {DAY,3,RIGHT}日目 %GET_MAPNAME(…)%` 被静默跳过、概要丢失）。
+        // 对齐 C# FormArgument：整行按 StrForm 解析，语义在执行期由专用分支处理。
+        if (line.functionName == QLatin1String("PUTFORM") && !callText.isEmpty()) {
+            Operand form(callText);
+            if (resolve) form.ast = StrFormParser::parse(callText, resolve);
+            line.arguments.append(form);
+            line.isFunctionCall = true;
+            return finalized(std::move(line));
+        }
         const QString exprText =
             line.functionName + QLatin1Char('(') + callText + QLatin1Char(')');
         Operand call(exprText);

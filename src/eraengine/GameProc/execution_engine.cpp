@@ -32,7 +32,6 @@
 #include "era_parse_table.h"
 #include "extension_registry.h"
 #include "constant_table.h"
-#include "eraengine.h"
 #include "eraengine_log.h"
 #include "function_system.h"
 #include "GameView/graphics_store.h"
@@ -66,9 +65,6 @@ ExecutionEngine::ExecutionEngine(VariableStorage* storage, GameBaseData* gameBas
 
     // Initialize function system
     m_functionSystem = new FunctionSystem(this);
-
-    // 扩展注册表改为惰性绑定（ensureExtensionsBound，首次执行指令时调用）：
-    // 游戏目录那时才可知，运行期清单发现（emuera_extensions.txt）依赖它。
 }
 
 ExecutionEngine::~ExecutionEngine() {
@@ -671,9 +667,6 @@ bool ExecutionEngine::executeInstruction(const LogicalLine& line) {
     const QList<Operand>& args = line.arguments;
     m_totalInstructionsExecuted++;
     m_executionPosition++;
-
-    // 扩展注册表惰性绑定（首次执行时一次；Wayland wl_registry.bind 式）
-    ensureExtensionsBound();
 
     // 只处理「非控制流」指令：控制流（IF/SIF/REPEAT/LOOP/WHILE/WEND/FOR/NEXT/
     // GOTO/CALL/RETURN/BEGIN/INPUT/…）已由 ScriptRunner 依据拍平 AST + 标记区执行。
@@ -1389,6 +1382,14 @@ bool ExecutionEngine::executeInstruction(const LogicalLine& line) {
     if (name == QLatin1String("DELDATA"))   { handleDelData(line); return true; }
     if (name == QLatin1String("CHKDATA"))   { handleChkData(line); return true; }
 
+    // ---- 扩展注册类（普通语句形态：扩展语句在这里分发）----
+    // 语句形态的扩展函数（如 CHKVARDATA）不经过 executeFunctionCall ——
+    // 在「其它指令」之前查注册类，命中即执行（桩 = 留痕一次 + 跳过，
+    // 由注册类承担，对齐 EE 的容错语义）；未命中继续走「其它指令」。
+    if (m_extensions.runStatement(name, line)) {
+        return true;
+    }
+
     // [qdbug]（保留的调试桩）：落到「其它指令」的**每一次**执行都留痕 ——
     // reportUnfinished 同名只报一次，会漏掉后续出现的同型行；
     // EMUERA_QDBUG_TRACE=1 时逐次输出，便于定位「指令被静默跳过」的完整现场
@@ -1400,32 +1401,6 @@ bool ExecutionEngine::executeInstruction(const LogicalLine& line) {
     }
     reportUnfinished(QStringLiteral("指令"), name, line);
     return true;
-}
-
-// ---------------------------------------------------------------------------
-// 语句型函数注册表（高扩展接口）
-//
-// 对齐 C# Process.ScriptProc.cs 的 FunctionCode.SPLIT 等专用分支 +
-// SpXxxArgument：这类语句的实参形态特殊（裸数组变量 / 个数变量），
-// 不能当普通表达式整行求值。注册表把「名字 -> 执行器」集中管理，
-// 新增语句型函数只需 registerStatementFunction() 一行 + 一个 lambda，
-// 不必再往 executeFunctionCall 的通用路径里塞 if 分支。
-// ---------------------------------------------------------------------------
-void ExecutionEngine::registerStatementFunction(const QString& name, StatementFn fn)
-{
-    const QString upper = name.toUpper();
-    // 核心段保留（Xorg: 0-127 操作码不可被扩展占用）—— 扩展不得覆盖核心函数，
-    // 否则扩展桩会遮蔽 kBuiltinFunctions 表里的真实现（PUTFORM/FIND_CHARADATA 案例）。
-    if (isBuiltinFunction(upper.toStdString())) {
-        qWarning() << "[ext] 拒绝注册：" << name << "属核心函数（kBuiltinFunctions），扩展不得覆盖";
-        return;
-    }
-    // 扩展段冲突（Xorg: opcode 已被占用 → AddExtension 失败）—— first-wins
-    if (m_statementFunctions.contains(upper)) {
-        qWarning() << "[ext] 拒绝注册：" << name << "已被其他扩展注册（first-wins）";
-        return;
-    }
-    m_statementFunctions.insert(upper, std::move(fn));
 }
 
 // ---------------------------------------------------------------------------
@@ -1499,26 +1474,14 @@ bool ExecutionEngine::handleSplit(const LogicalLine& line)
 }
 
 // ---------------------------------------------------------------------------
-// 扩展注册表绑定（Wayland 式声明外置 + Xorg 式 fail-fast）
-//
-// 分发优先级（固定，由结构决定，不由注册顺序决定）：
+// 扩展分发优先级（固定，由结构决定，不由注册顺序决定）：
 //   ① 核心专用分支（executeInstruction / executeFunctionCall 内联）——「0-127 核心段」
-//   ② 扩展注册表 m_statementFunctions 查表 ——「128-255 扩展段」
+//   ② 扩展注册类查表（ExtensionRegistry::runStatement）——「128-255 扩展段」
 //   ③ 通用路径（表达式求值 → kBuiltinFunctions 表）
 //
-// 扩展名单声明外置在 extension_registry（核心文件零扩展名）：
-//   · 默认名单：extension_registry.cpp kEeDefaultExtensions（EE 存档系）；
-//   · 运行期发现：游戏目录 emuera_extensions.txt（声明数据，wl_registry.bind 式）。
-// 惰性绑定：游戏目录在装载完游戏数据后才可知，故绑定时机后移到
-// executeInstruction 入口（首次执行时一次）。
-// ---------------------------------------------------------------------------
-void ExecutionEngine::ensureExtensionsBound()
-{
-    if (m_extensionsBound) return;
-    m_extensionsBound = true;
-    registerEngineExtensions(*this, m_gameDirectory);
-}
-
+// 注册 API 在 ExtensionRegistry（复杂度由注册类承担：fail-fast / first-wins /
+// 留痕桩 / 插入 AST）；EE 扩展 = ee_extension.h 单独一个头文件，只在注册类里
+// 被实现（其他位置不得放置 EE 头文件），注册类构造时一次登记，默认全启用。
 // ---------------------------------------------------------------------------
 // 语句形式的内部函数（对齐 C# METHOD_Instruction.DoInstruction）
 //   if (term.GetOperandType() == typeof(Int64)) RESULT = term.GetIntValue();
@@ -1616,13 +1579,11 @@ bool ExecutionEngine::executeFunctionCall(const LogicalLine& line)
     if (upper == QLatin1String("DELDATA"))   { handleDelData(line); return true; }
     if (upper == QLatin1String("CHKDATA"))   { handleChkData(line); return true; }
 
-    // ---- 语句型函数注册表（扩展函数专用：C# 原型没有的函数）----
-    // 注册表命中即执行，未命中落到下面的通用路径。
-    if (!m_statementFunctions.isEmpty()) {
-        const auto reg = m_statementFunctions.constFind(upper);
-        if (reg != m_statementFunctions.constEnd()) {
-            if (reg.value()(line, line.arguments)) return true;
-        }
+    // ---- 扩展注册类（扩展函数专用：C# 原型没有的函数）----
+    // 注册类命中即执行（桩的「留痕 + 跳过」由注册类承担），
+    // 未命中返回 false 落到下面的通用路径。
+    if (m_extensions.runStatement(upper, line)) {
+        return true;
     }
 
     const bool unfinished = !line.arguments.isEmpty() && !line.arguments.first().ast;

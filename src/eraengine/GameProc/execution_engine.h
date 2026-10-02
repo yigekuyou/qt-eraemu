@@ -28,6 +28,7 @@
 #include "variable_storage.h"
 #include "ast/logical_line.h"
 #include "erb_loader.h"
+#include "extension_registry.h"
 #include "function_system.h"
 #include "process_state.h"
 #include "game_base_data.h"
@@ -134,22 +135,21 @@ public:
     // Execute a single instruction (public for testing)
     bool executeInstruction(const LogicalLine& line);
 
-    // ---- 语句型函数注册表（扩展函数专用，高扩展接口）----
-    // 设计规则（Xorg 式分段 + fail-fast）：
-    //   · 核心专用分支（executeInstruction/executeFunctionCall 内联）=「0-127 核心段」，
-    //     扩展不得覆盖 —— registerStatementFunction 里 fail-fast 拒绝；
-    //   · 注册表 =「128-255 扩展段」，只收 **C# 原型没有的函数**（EE/EM 扩展系）；
-    //   · 同名重复注册 first-wins 拒绝（Xorg: opcode 已被占用 → AddExtension 失败）。
-    // 扩展名单声明外置在 extension_registry（Wayland 式：核心文件零扩展名，
-    // 后续扩展 = 改声明数据 / 放清单文件 emuera_extensions.txt，不动核心代码）。
-    using StatementFn = std::function<bool(const LogicalLine& line, const QList<Operand>& args)>;
-    void registerStatementFunction(const QString& name, StatementFn fn);
+    // ---- 扩展注册类（扩展函数唯一入口；复杂度由注册类承担）----
+    // 注册 API 在 ExtensionRegistry（不再挂引擎）：
+    //   · reg(name) / reg(name, 实现)（C++ 重载：参数不同 -> 不同重载）/
+    //     regForm(name)（实参形态 = StrForm，注册类插入 AST）；
+    //   · 扩展只调注册类的函数就能实现扩展函数（EE 扩展 = ee_extension.h
+    //     单独一个头文件，只在注册类里被实现 —— 其他位置不得放置 EE 头文件，
+    //     注册类构造时一次登记，默认全启用）；
+    //   · fail-fast（核心名拒绝注册）/ first-wins（同名重复拒绝）/
+    //     统一「留痕跳过」桩 —— 全部由注册类内部承担；
+    //   · 分发优先级（固定，由结构决定）：① 核心专用分支（本类内联）->
+    //     ② 扩展注册类查表 -> ③ 通用路径（表达式求值 -> kBuiltinFunctions 表）。
 
 private:
-    // 扩展惰性绑定（首次执行指令时调用一次；默认名单 + 游戏目录清单发现）
-    void ensureExtensionsBound();
-    bool m_extensionsBound = false;
-    QHash<QString, StatementFn> m_statementFunctions;
+    // 扩展注册类实例（构造时由注册类装入 EE 扩展 + SPLIT 实现；分发时查表）
+    ExtensionRegistry m_extensions;
     // SPLIT：核心函数专用分支（对齐 C# FunctionCode.SPLIT / SpSplitArgument）
     bool handleSplit(const LogicalLine& line);
     // 存档系（C# 原版全量）：SAVEDATA/LOADDATA/DELDATA/CHKDATA 的实现

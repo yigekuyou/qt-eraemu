@@ -688,11 +688,13 @@ LogicalLine AstBuilder::build(const QString& rawLine,
     // 但整行是合法赋值，必须仍按赋值走（eraTW 大量使用 `RAND:n`）。
     if (isBuiltinFunction(line.functionName.toStdString())) {
         const QString callText = trimmed.mid(first.text.length()).trimmed();
-        // PUTFORM（C# FunctionCode.PUTFORM）：实参是**格式化串**（文本 + {…}/%…%），
+        // 实参形态声明外置（注册类可以插入 AST）：ExtensionRegistry::regForm()
+        // 声明的函数（如 PUTFORM），实参是**格式化串**（文本 + {…}/%…%），
         // 不是表达式 —— 按表达式归约会失败（eraTW @SAVEINFO 的
         // `PUTFORM {DAY,3,RIGHT}日目 %GET_MAPNAME(…)%` 被静默跳过、概要丢失）。
         // 对齐 C# FormArgument：整行按 StrForm 解析，语义在执行期由专用分支处理。
-        if (line.functionName == QLatin1String("PUTFORM") && !callText.isEmpty()) {
+        // 本文件零函数名 —— 声明由注册类注入（registerFormArgFunction）。
+        if (!callText.isEmpty() && isFormArgFunction(line.functionName)) {
             Operand form(callText);
             if (resolve) form.ast = StrFormParser::parse(callText, resolve);
             line.arguments.append(form);
@@ -972,8 +974,11 @@ LogicalLine AstBuilder::build(const QString& rawLine,
         if (resolve && !cond.isEmpty()) line.condition = resolve(cond);
     }
 
-    // 未知指令名：Emuera 对未登记的命令字会报错；这里留痕（含原行文本）
-    if (!isKnownInstructionName(line.functionName)) {
+    // 未知指令名：Emuera 对未登记的命令字会报错；这里留痕（含原行文本）。
+    // 扩展语句（注册类 reg() 注入，registerExtensionStatement）不算未识别 ——
+    // 扩展默认全启用，登记过的名字是已认识的扩展。
+    if (!isKnownInstructionName(line.functionName)
+        && !s_extensionStatements.contains(line.functionName)) {
         qWarning() << "[parse] 未识别的指令:" << line.functionName
                    << "原文:" << trimmed.left(80);
     }

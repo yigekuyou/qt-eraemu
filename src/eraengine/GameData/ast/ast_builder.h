@@ -19,6 +19,7 @@
 #define AST_AST_BUILDER_H
 
 #include <functional>
+#include <QSet>
 #include <QString>
 #include <QStringList>
 #include "logical_line.h"
@@ -46,6 +47,13 @@ public:
     static LogicalLine build(const QString& rawLine,
                              const ScriptPosition& position,
                              const AstResolver& resolve);
+
+    // ExtensionRegistry::reg() 登记的扩展语句名：解析期不再报「未识别的指令」
+    // （扩展默认全启用，登记过的名字是已认识的扩展；只消警告，
+    // 不影响命令文/赋值分类）。
+    static void registerExtensionStatement(const QString& upperName) {
+        s_extensionStatements.insert(upperName);
+    }
 
     // ---- PRINT 族参数形态（对齐 C# PRINT_Instruction 的后缀扫描）----
     //   PRINT…(V)     -> PrintV        逗号分隔的整数值，直接拼接
@@ -76,7 +84,23 @@ public:
     // 对齐 C# LogicalLineParser：先查函数名表，命中即为命令文，否则按赋值解。
     static bool isKnownInstructionName(const QString& upperName);
 
+    // ---- 注册类插入点（注册类可以插入 AST）----
+    // ExtensionRegistry::regForm() 声明「该函数的实参是 StrForm（文本 +
+    // {…}/%…%）」。AstBuilder 自身零函数名 —— 实参形态声明全部由注册类
+    // 经本插入点注入，装载期查表按格式串解析（不做表达式归约）。
+    static void registerFormArgFunction(const QString& upperName) {
+        s_formArgFunctions.insert(upperName);
+    }
+    // 该函数的实参是否为 StrForm（注册类注入的声明；未注入按表达式归约）
+    [[nodiscard]] static bool isFormArgFunction(const QString& upperName) {
+        return s_formArgFunctions.contains(upperName);
+    }
+
 private:
+    // 实参形态 = StrForm 的函数名（ExtensionRegistry::regForm 注入；本文件零函数名）
+    inline static QSet<QString> s_formArgFunctions;
+    // 扩展语句名（ExtensionRegistry::reg 注入；解析期警告豁免用）
+    inline static QSet<QString> s_extensionStatements;
     // 精确登记（不含前缀启发式）/ 仅前缀命中 —— 用于甄别「同前缀的变量名赋值」。
     static bool isExactInstructionName(const QString& upperName);
     static bool hasInstructionPrefix(const QString& upperName);

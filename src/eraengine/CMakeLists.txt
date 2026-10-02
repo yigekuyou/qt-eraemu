@@ -94,7 +94,7 @@ GameProc/era_parse_table.cpp
 GameProc/era_parse_table.h
 GameProc/execution_engine.cpp
 GameProc/execution_engine.h
-GameProc/extension_registry.cpp
+GameProc/ee_extension.h
 GameProc/extension_registry.h
 GameProc/script_runner.cpp
 GameProc/script_runner.h
@@ -225,6 +225,7 @@ eraengine_add_test(test_game_base_data)
 eraengine_add_test(test_variable_storage)
 eraengine_add_test(test_variable_mutability)
 eraengine_add_test(test_print_template)
+eraengine_add_test(test_extension_registry)
 add_test(NAME test_print_template COMMAND test_print_template)
 eraengine_add_test(test_print_whitespace)
 target_link_libraries(test_print_whitespace PRIVATE Qt6::Test)

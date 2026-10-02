@@ -61,8 +61,7 @@ target_link_libraries(appemuera
     endif()
 target_compile_definitions(appemuera
     PRIVATE
-        $<$<NOT:$<CONFIG:Debug>>:QT_NO_DEBUG_OUTPUT>
-)
+$<$<NOT:$<CONFIG:Debug>>:QT_NO_DEBUG_OUTPUT>)
 include(GNUInstallDirs)
 install(TARGETS appemuera
     BUNDLE DESTINATION .

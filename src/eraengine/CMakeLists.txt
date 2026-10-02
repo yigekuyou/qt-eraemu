@@ -282,5 +282,4 @@ eraengine_add_test(qdbug_probe)
 eraengine_add_test(dump_lines)
 target_compile_definitions(eraengine
     PRIVATE
-        $<$<NOT:$<OR:$<CONFIG:Debug>:QT_NO_DEBUG_OUTPUT>
-)
+$<$<NOT:$<CONFIG:Debug>>:QT_NO_DEBUG_OUTPUT>)

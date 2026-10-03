@@ -28,6 +28,28 @@
 #include "variable_types.h"
 #include "variable_config.h"
 
+// perf：变量名（eraTW/MUGEN 惯例）几乎都是大写，QString::toUpper() 即使无变化
+// 也会 detach + 逐字符大小写转换。这里先扫一遍：无 a-z 且无非 ASCII 字符时
+// toUpper() 等价于原串，直接复用零分配；否则才真正转换到 scratch。
+[[nodiscard]] inline const QString& eraUpperKey(const QString& s, QString& scratch) {
+    for (const QChar c : s) {
+        const ushort u = c.unicode();
+        if ((u >= 'a' && u <= 'z') || u >= 0x80) {
+            scratch = s.toUpper();
+            return scratch;
+        }
+    }
+    return s;
+}
+// 便利重载：返回 QString（已是「大写等价」时只做共享引用，不分配）。
+[[nodiscard]] inline QString eraUpperKey(const QString& s) {
+    for (const QChar c : s) {
+        const ushort u = c.unicode();
+        if ((u >= 'a' && u <= 'z') || u >= 0x80) return s.toUpper();
+    }
+    return s;
+}
+
 class VariableStorage : public QObject
 {
 		Q_OBJECT
@@ -171,17 +193,27 @@ public:
             m_references = context.references;
         }
         void setPrivateScope(const QString& function, const QStringList& names) {
-            QHash<QString, QString> next;
-            for (const auto& name : names)
-                next.insert(name.toUpper(), function.toUpper() + QChar(0x1f) + name.toUpper());
-            if (next == m_privateNames) return;
-            m_privateNames = std::move(next);
+            // perf：作用域只随函数名变化（声明表装载后不变）——按函数缓存构建结果，
+            // 免去每次 CALL/RETURN 都对每个名字做 toUpper + 拼接 + 哈希插入。
+            // 仍与 m_privateNames 比较（setLocalContext 恢复上下文后需重新落地）。
+            const QString fkey = function.toUpper();
+            const auto it = m_privateScopeCache.constFind(fkey);
+            if (it == m_privateScopeCache.constEnd()) {
+                QHash<QString, QString> next;
+                for (const auto& name : names)
+                    next.insert(name.toUpper(), fkey + QChar(0x1f) + name.toUpper());
+                const auto ins = m_privateScopeCache.insert(fkey, next);
+                if (ins.value() != m_privateNames) m_privateNames = ins.value();
+                return;
+            }
+            if (it.value() != m_privateNames) m_privateNames = it.value();
         }
         // Emuera 的 `大文字小文字の違いを無視する:YES`（ICVariable）语义：
         // 标识符大小写不敏感，所有存储键统一用大写，写 A 与读 a 落到同一槽位。
         // 否则 `Mark`/`MARK` 会被当成两个变量，表现为「变量似乎不可变」。
         QString storageName(const QString& name) const {
-            const QString upper = name.toUpper();
+            QString scratch;
+            const QString& upper = eraUpperKey(name, scratch);
             return m_references.value(upper, m_privateNames.value(upper, upper));
         }
         void setReference(const QString& name, const QString& targetStorage) {
@@ -326,6 +358,8 @@ private:
 		QHash<QString, QVariant> m_parameters;
         QHash<QString, QString> m_privateNames;
         QHash<QString, QString> m_references;
+        // setPrivateScope 的按函数缓存（function(upper) -> name(upper) -> storage key）
+        QHash<QString, QHash<QString, QString>> m_privateScopeCache;
 		QList<qint64> m_localIntVars;
 		QList<qint64> m_argIntVars;   // ARG（与 LOCAL 分离）
 		QList<QString> m_localStrVars;

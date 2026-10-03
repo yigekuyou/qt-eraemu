@@ -82,6 +82,10 @@ public:
     // perf：执行热路径（每条指令都要解析私有作用域）用 —— 装载完成后 m_locals
     // 不再变化，按函数缓存声明列表，返回引用免去每次调用逐个拷贝 VariableDecl。
     [[nodiscard]] const QList<VariableDecl>& localsOfRef(const QString& function) const;
+    // perf：私有作用域的**非 const 名字表**（setPrivateScope 的入参）也按函数缓存。
+    // 此前每次 CALL/RETURN 都重建 QStringList（eraTW 地图逐字符 TRYCALLFORM 时
+    // 一次绘制上万次），这里装载后不变，返回引用即可。
+    [[nodiscard]] const QStringList& localNamesOfRef(const QString& function) const;
 
     void clear();
 
@@ -133,6 +137,8 @@ private:
     QHash<QString, QHash<QString, VariableDecl>> m_locals;  // function -> name -> decl
     // localsOfRef 的按函数缓存（装载后 m_locals 不变；执行单线程）
     mutable QHash<QString, QList<VariableDecl>> m_localsRefCache;
+    // localNamesOfRef 的按函数缓存（同上）
+    mutable QHash<QString, QStringList> m_localNamesRefCache;
 };
 
 #endif // AST_VARIABLE_TABLE_H

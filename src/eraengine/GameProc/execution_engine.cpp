@@ -985,76 +985,109 @@ bool ExecutionEngine::executeInstruction(const LogicalLine& line) {
     // RESULT / RESULTS；否则 TITLE.ERB 的版本号会退化成 0.0。
     if (name == "STRLENS" || name == "STRLENSU" || name == "SUBSTRING"
         || name == "SUBSTRINGU") {
-        ExpressionEvaluator& ev = getEvaluator();
-        QString callText = line.raw;
-        // perf：不用 QRegularExpression（每次执行都构造正则 + JIT 编译，
-        // eraTW 地图逐字符 STRLENSU/SUBSTRINGU 时是热路径）；手写扫空白。
-        // 注意：必须先跳过**前导缩进**（eraTW/示例中 IF/WHILE/FOR 体内的行以
-        // 制表符或空格缩进）。否则缩进处就是首个空白，commandEnd = 0、
-        // mid(0) 返回整行 —— 命令名会混进实参串（sourceName 变成
-        // "SUBSTRINGU S:0"），SUBSTRINGU/STRLENS 全部退化成空串。
-        // 这是 eraTW 逐字符地图「画不出图」（RESULTS 恒空、WHILE 空转）的根因。
-        int scan = 0;
-        while (scan < callText.size() && callText.at(scan).isSpace()) ++scan;
-        int commandEnd = -1;
-        for (int i = scan; i < callText.size(); ++i) {
-            const QChar c = callText.at(i);
-            if (c == QLatin1Char(' ') || c == QLatin1Char('\t') || c == QChar(0x3000)) {
-                commandEnd = i;
-                break;
+        // perf：实参解析（扫空白 / split / trimmed / expressionAst 查表）只在
+        // 首次执行做一次，缓存进 LogicalLine::strArgs —— eraTW 地图逐字符时
+        // 这几条指令一次绘制执行上万次，重复解析是最大热点。行内容装载后不可变。
+        if (!line.strArgsReady) {
+            StrBuiltinArgs a;
+            // 取命令后的实参文本：先跳过**前导缩进**（eraTW/示例里 IF/WHILE/FOR
+            // 体内的行以制表符/空格缩进，否则缩进处就是首个空白，命令名会混进
+            // 实参串 —— eraTW 逐字符地图「画不出图」的根因），再跳到命令名后的空白。
+            const QString& raw = line.raw;
+            int scan = 0;
+            while (scan < raw.size() && raw.at(scan).isSpace()) ++scan;
+            int commandEnd = -1;
+            for (int i = scan; i < raw.size(); ++i) {
+                const QChar c = raw.at(i);
+                if (c == QLatin1Char(' ') || c == QLatin1Char('\t') || c == QChar(0x3000)) {
+                    commandEnd = i;
+                    break;
+                }
             }
-        }
-        if (commandEnd >= 0) callText = callText.mid(commandEnd).trimmed();
-        if (callText.isEmpty()) {
-            QStringList callArgs;
-            for (const Operand& arg : args) {
-                if (arg.raw != QLatin1String(",")) callArgs << arg.raw;
+            QString callText = commandEnd >= 0 ? raw.mid(commandEnd).trimmed() : raw;
+            if (callText.isEmpty()) {
+                QStringList callArgs;
+                for (const Operand& arg : args) {
+                    if (arg.raw != QLatin1String(",")) callArgs << arg.raw;
+                }
+                callText = callArgs.join(QLatin1Char(','));
             }
-            callText = callArgs.join(QLatin1Char(','));
-        }
-        QVariant value;
-        if (name == QLatin1String("SUBSTRING") || name == QLatin1String("SUBSTRINGU")) {
-            const QStringList pieces = callText.split(QLatin1Char(','), Qt::KeepEmptyParts);
-            if (pieces.size() >= 3) {
-                const QString sourceName = pieces.at(0).trimmed();
-                QString source;
-                if (sourceName.compare(QLatin1String("RESULTS"), Qt::CaseInsensitive) == 0) {
+            if (name == QLatin1String("SUBSTRING") || name == QLatin1String("SUBSTRINGU")) {
+                const QStringList pieces = callText.split(QLatin1Char(','), Qt::KeepEmptyParts);
+                if (pieces.size() >= 3) {
+                    a.mode = StrBuiltinArgs::Mode::Substring;
+                    const QString sourceName = pieces.at(0).trimmed();
                     // RESULTS 与全引擎一致走全局字符串槽（expression_evaluator /
                     // 赋值 / 函数返回都用 get/setGlobalStr1D）——此前这里读的是
-                    // 另一个 LocalStr 槽，SUBSTRINGU 写回后脚本仍读到旧值，
-                    // 导致 eraTW `WHILE RESULTS != "" && STRLENSU(RESULTS) < 3`
-                    // 的地图逐字符循环永不终止（表现为「地图画不出来」）。
-                    source = m_storage ? m_storage->getGlobalStr1D(QStringLiteral("RESULTS"), 0)
-                                       : QString();
-                } else {
-                    const QPair<QString, int> sourceRef = parseLHS(sourceName);
-                    if (m_storage && sourceRef.first == sourceName && sourceRef.first.size() > 0) {
-                        source = m_storage->getGlobalStr1D(sourceRef.first,
-                                                           sourceRef.second >= 0 ? sourceRef.second : 0);
+                    // 另一个 LocalStr 槽，SUBSTRINGU 写回后脚本仍读到旧值，导致
+                    // eraTW `WHILE RESULTS != "" && STRLENSU(RESULTS) < 3` 空转。
+                    if (sourceName.compare(QLatin1String("RESULTS"), Qt::CaseInsensitive) == 0) {
+                        a.src = StrBuiltinArgs::Src::Results;
                     } else {
-                        source = evalExpressionCached(m_parseTable, ev, sourceName,
-                                                      m_storage, m_gameBaseData).toString();
+                        const QPair<QString, int> sourceRef = parseLHS(sourceName);
+                        if (m_storage && sourceRef.first == sourceName
+                            && sourceRef.first.size() > 0) {
+                            a.src = StrBuiltinArgs::Src::PlainName;
+                            a.plainName = sourceRef.first;
+                            a.plainIndex = sourceRef.second;
+                        } else {
+                            a.src = StrBuiltinArgs::Src::Expr;
+                            a.sourceText = sourceName;
+                            if (m_parseTable) a.sourceAst = m_parseTable->expressionAst(sourceName);
+                        }
+                    }
+                    a.startText = pieces.at(1).trimmed();
+                    a.lengthText = pieces.at(2).trimmed();
+                    if (m_parseTable) {
+                        a.startAst = m_parseTable->expressionAst(a.startText);
+                        a.lengthAst = m_parseTable->expressionAst(a.lengthText);
                     }
                 }
-                const qint64 start = evalExpressionCached(m_parseTable, ev, pieces.at(1).trimmed(),
-                                                          m_storage, m_gameBaseData).toLongLong();
-                const qint64 length = evalExpressionCached(m_parseTable, ev, pieces.at(2).trimmed(),
-                                                           m_storage, m_gameBaseData).toLongLong();
-                if (start < 0) {
-                    // Emuera 的版本字符串按四位小数部分处理：2 -> 0002。
-                    // 负位置从该四位字符串末尾计算。
-                    source = QStringLiteral("0000").right(4 - qMin(4, source.size())) + source;
-                }
-                const int safeStart = start < 0
-                                           ? qMax(0, source.size() + static_cast<int>(start))
-                                           : static_cast<int>(start);
-                value = source.mid(safeStart, length < 0 ? -1 : static_cast<int>(length));
+            } else {
+                // STRLENS / STRLENSU：按 `STRLENSU(实参)` 函数调用求值。
+                a.mode = StrBuiltinArgs::Mode::StrLen;
+                a.exprText = name + QLatin1Char('(') + callText + QLatin1Char(')');
+                if (m_parseTable) a.lenAst = m_parseTable->expressionAst(a.exprText);
             }
-        } else {
-            // STRLENS / STRLENSU：按 `STRLENSU(实参)` 函数调用求值（走 AST 缓存）。
-            // line.raw 保留命令后的逗号/运算符：STRLENSU VERSION, 3 -> STRLENSU(VERSION, 3)
-            const QString expr = name + QLatin1Char('(') + callText + QLatin1Char(')');
-            value = evalExpressionCached(m_parseTable, ev, expr, m_storage, m_gameBaseData);
+            line.strArgs = std::move(a);
+            line.strArgsReady = true;
+        }
+
+        const StrBuiltinArgs& a = line.strArgs;
+        ExpressionEvaluator& ev = getEvaluator();
+        // AST 命中直接求值；未命中回退文本入口（与 evalExpressionCached 等价）。
+        const auto evalArg = [&](const QSharedPointer<ExpressionNode>& ast,
+                                 const QString& text) -> QVariant {
+            if (ast) return ev.evaluate(*ast, m_storage, m_gameBaseData);
+            return ev.evaluate(text, m_storage, m_gameBaseData);
+        };
+        QVariant value;
+        if (a.mode == StrBuiltinArgs::Mode::Substring) {
+            QString source;
+            if (a.src == StrBuiltinArgs::Src::Results) {
+                source = m_storage ? m_storage->getGlobalStr1D(QStringLiteral("RESULTS"), 0)
+                                   : QString();
+            } else if (a.src == StrBuiltinArgs::Src::PlainName) {
+                source = m_storage
+                             ? m_storage->getGlobalStr1D(a.plainName,
+                                                         a.plainIndex >= 0 ? a.plainIndex : 0)
+                             : QString();
+            } else {
+                source = evalArg(a.sourceAst, a.sourceText).toString();
+            }
+            const qint64 start = evalArg(a.startAst, a.startText).toLongLong();
+            const qint64 length = evalArg(a.lengthAst, a.lengthText).toLongLong();
+            if (start < 0) {
+                // Emuera 的版本字符串按四位小数部分处理：2 -> 0002。
+                // 负位置从该四位字符串末尾计算。
+                source = QStringLiteral("0000").right(4 - qMin(4, source.size())) + source;
+            }
+            const int safeStart = start < 0
+                                       ? qMax(0, source.size() + static_cast<int>(start))
+                                       : static_cast<int>(start);
+            value = source.mid(safeStart, length < 0 ? -1 : static_cast<int>(length));
+        } else if (a.mode == StrBuiltinArgs::Mode::StrLen) {
+            value = evalArg(a.lenAst, a.exprText);
         }
         if (name == QLatin1String("STRLENS") || name == QLatin1String("STRLENSU")) {
             if (m_storage) m_storage->setSystemVariable(QStringLiteral("RESULT"), 0,

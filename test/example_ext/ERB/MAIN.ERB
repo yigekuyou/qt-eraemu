@@ -1,0 +1,40 @@
+;=============================================================
+; EE 扩展验证 —— 自建 test 目录（test/ 就是怎么来的）
+;
+; 运行：build/src/eraengine/test_cli test/example_ext
+;
+; 验证点（对应扩展机制重构）：
+;   1. 扩展默认全启用：本目录没有 emuera_extensions.txt 清单文件，
+;      EE 存档系（CHKVARDATA/CHKGLOBALDATA/FIND_VARDATA）由 ee_extension.h
+;      在引擎构造时经注册类 reg() 一次注册；
+;   2. 扩展语句真正分发：普通语句形态在 executeInstruction 尾部查注册类，
+;      真实现（EE 存档系）命中即执行；其余为「留痕跳过」桩；
+;   3. 注册类可以插入 AST：PUTFORM 实参按 StrForm 解析
+;      （regForm 声明 -> AstBuilder 查表按格式串解析；ast_builder 零函数名）。
+;=============================================================
+@SYSTEM_TITLE
+#DIM I
+
+DRAWLINE
+PRINTFORML EE 拡張検証（自建 test 目录，无清单文件）
+
+;---- 1) 扩展语句：注册类真实现（EE 存档系：对齐 C# CheckdataStrMethod 等）----
+;   RESULT = EraDataState（0=OK / 1=FILENOTFOUND），RESULTS = 状态说明
+CHKVARDATA "save1.sav"
+CHKGLOBALDATA 0
+FIND_VARDATA
+PRINTL [1] 扩展语句 3 条执行完毕（RESULT/RESULTS 已写入，无报错）
+
+;---- 2) PUTFORM：实参按 StrForm 解析（注册类 regForm 声明 -> 插入 AST）----
+PUTFORM {1 + 2}日目
+PRINTL [2] PUTFORM StrForm 展开完毕（SAVEDATA_TEXT = 3日目）
+
+;---- 3) 扩展语句在循环里反复出现：真实现重复执行、留痕不刷屏 ----
+FOR I, 0, 10
+	CHKVARDATA "save1.sav"
+NEXT
+PRINTL [3] 循环 10 次 CHKVARDATA 完毕（真实现，无报错）
+
+DRAWLINE
+PRINTFORML 完成：扩展默认全启用 + 扩展语句真分发 + PUTFORM 走注册类声明
+QUIT

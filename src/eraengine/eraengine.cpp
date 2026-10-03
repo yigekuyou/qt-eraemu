@@ -593,6 +593,22 @@ void EraEngine::loadConstantData()
 		}
 		qDebug() << "[load] NAME 数组填充:" << nameArrays << "个";
 
+		// STR 变量本身：文档明确「Str.csv 的数据保存在这里」——string[0..19999]，
+		// 第一列是字符串编号、第二列是字符串（值），与 <VAR>NAME 名表是两回事
+		// （上面那套循环只填 STRNAME，且 eraTW 没有 StrName.csv）。
+		// eraTW @NAME_FROM_PLACE 用 %STR:(6000 + ARG/10)% 取場所名：此前从不填充
+		// STR，STR:n 恒为空 -> NAME_FROM_PLACE 返回 "" -> @RANDOM_ODEKAKE 的
+		// WHILE 永不收敛（10 万次迭代告警）。
+		{
+			const int cap = m_variableStorage.variableConfig().getSize1D(QStringLiteral("STR"));
+			const int n = qMin(cap, m_constantTable.count(QStringLiteral("STR.CSV")));
+			for (int i = 0; i < n; ++i) {
+				const QString v = m_constantTable.nameAt(QStringLiteral("STR.CSV"), i);
+				if (!v.isEmpty()) m_variableStorage.setGlobalStr1D(QStringLiteral("STR"), i, v);
+			}
+			qDebug() << "[load] STR 变量填充:" << n << "槽";
+		}
+
 		// 变量尺寸表（对齐 C# VariableData 读取 VariableSize.CSV）
 		int sizesLoaded = 0;
 		const QStringList sizeCandidates = m_fileSystem.listFiles(m_csvDir,

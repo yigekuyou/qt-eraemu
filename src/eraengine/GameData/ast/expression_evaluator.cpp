@@ -517,7 +517,8 @@ bool ExpressionEvaluator::assignVariable(const VariableNode& node, VariableStora
         return false;
     }
     const QString name = node.name();
-    const QString upper = name.toUpper();
+    QString upperScratch;
+    const QString& upper = eraUpperKey(name, upperScratch);
     if (storage->hasParameter(name)) {
         storage->setParameter(name, value);
         return true;
@@ -602,7 +603,8 @@ QVariant ExpressionEvaluator::evaluateVariable(const VariableNode &node, Variabl
     
     // 用户函数参数 / 局部变量：ARG / LOCAL（两套独立数组）
     {
-        const QString upper = varName.toUpper();
+        QString upperScratch;
+        const QString& upper = eraUpperKey(varName, upperScratch);
         if (upper == QLatin1String("ARG")) {
             int idx = 0;
             if (node.isArray() && !node.indices().isEmpty()) {
@@ -696,7 +698,8 @@ QVariant ExpressionEvaluator::evaluateVariable(const VariableNode &node, Variabl
     // ---- 字符串变量（用户全局字符串 / 系统字符串）----
     // 对齐 Emuera：#DIMS/#GLOBALS 声明的字符串变量；此前只会按整数读取。
     if (node.valueType() == OperandType::Str) {
-        const QString upper = varName.toUpper();
+        QString upperScratch;
+        const QString& upper = eraUpperKey(varName, upperScratch);
         if (upper == QLatin1String("RESULTS")) {
             // [qdbug] 修复：RESULTS 全局（同上，C# VariableData.cs:202）
             return QVariant(storage->getGlobalStr1D(QStringLiteral("RESULTS"), 0));
@@ -969,7 +972,8 @@ QList<qint64> ExpressionEvaluator::readIntArray(const VariableNode &var, Variabl
     QList<qint64> out;
     if (!storage) return out;
     const QString name = var.name();
-    const QString upper = name.toUpper();
+    QString upperScratch;
+    const QString& upper = eraUpperKey(name, upperScratch);
 
     if (charaRange) {
         // 角色数组：SUMCARRAY(CFLAG:列) 的列号即变量第一个下标，沿角色维求和
@@ -1014,7 +1018,8 @@ QList<QString> ExpressionEvaluator::readStrArray(const VariableNode &var, Variab
     QList<QString> out;
     if (!storage) return out;
     const QString name = var.name();
-    const QString upper = name.toUpper();
+    QString upperScratch;
+    const QString& upper = eraUpperKey(name, upperScratch);
 
     // 角色字符串数组（CSTR 之类）：沿角色维取同一列
     if (storage->isCharaDataVariable(name)) {
@@ -1722,7 +1727,8 @@ bool ExpressionEvaluator::evaluateBuiltin(const FunctionNode &node, VariableStor
     case BuiltinOp::VarSize: {
         // VARSIZE("变量名"[, 维])
         const QString name = S(0);
-        const QString upper = name.toUpper();
+        QString upperScratch;
+        const QString& upper = eraUpperKey(name, upperScratch);
         const int dim = node.arguments().size() >= 2 ? static_cast<int>(I(1)) : 0;
         qint64 size = 0;
         if (storage) {

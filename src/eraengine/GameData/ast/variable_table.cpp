@@ -189,6 +189,17 @@ const QList<VariableDecl>& VariableTable::localsOfRef(const QString& function) c
     return *m_localsRefCache.insert(key, decls);
 }
 
+const QStringList& VariableTable::localNamesOfRef(const QString& function) const {
+    static const QStringList kEmpty;
+    const QString key = nk(function);
+    const auto it = m_localNamesRefCache.constFind(key);
+    if (it != m_localNamesRefCache.constEnd()) return it.value();
+    QStringList names;
+    for (const VariableDecl& decl : localsOfRef(function))
+        if (!decl.isConst) names.append(decl.name);
+    return *m_localNamesRefCache.insert(key, names);
+}
+
 bool VariableTable::constStr(const QString& name, QString& out) const {
     const auto it = m_constStr.constFind(nk(name));
     if (it != m_constStr.constEnd()) { out = it.value(); return true; }
@@ -201,6 +212,7 @@ void VariableTable::clear() {
     m_localNameCount.clear();
     m_uniqueLocalType.clear();
     m_localsRefCache.clear();
+    m_localNamesRefCache.clear();
 }
 
 void VariableTable::applyTypes(ExpressionNode& node, const VariableTable& table,
@@ -269,6 +281,7 @@ void VariableTable::resolveDimensions() {
         for (auto& d : f) fix(d);
     }
     m_localsRefCache.clear();   // 维数已重写，丢弃 localsOfRef 缓存
+    m_localNamesRefCache.clear();
     qDebug() << "[parse] 变量维数求值：全局" << m_globals.size() << "局部作用域" << m_locals.size()
              << "常量" << m_constInt.size() << "常量数组" << m_constArray.size();
 }

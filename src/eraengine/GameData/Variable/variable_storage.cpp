@@ -158,6 +158,7 @@ void VariableStorage::initialize(int maxCharacters, int localSize)
 {
 		Q_UNUSED(maxCharacters)
 		qDebug() << "[var] initialize localSize =" << localSize;
+		m_privateScopeCache.clear();   // 脚本（重）装载后私有作用域可能变化
 		if (localSize > 0) {
 				m_localIntVars.fill(0, localSize);
 				m_localStrVars.fill(QString(), localSize);
@@ -423,23 +424,23 @@ void VariableStorage::registerCharaDataVariable(const QString &name, bool isStri
 		CharaDataInfo info;
 		info.isString = isString;
 		info.dimension = qBound(0, elementDimension, 2);
-		m_charaDataVars.insert(name.toUpper(), info);
+		m_charaDataVars.insert(eraUpperKey(name), info);
 }
 
 bool VariableStorage::isCharaDataVariable(const QString &name) const
 {
-		return m_charaDataVars.contains(name.toUpper());
+		return m_charaDataVars.contains(eraUpperKey(name));
 }
 
 bool VariableStorage::isCharaDataString(const QString &name) const
 {
-		const auto it = m_charaDataVars.constFind(name.toUpper());
+		const auto it = m_charaDataVars.constFind(eraUpperKey(name));
 		return it != m_charaDataVars.constEnd() && it.value().isString;
 }
 
 int VariableStorage::charaDataDimension(const QString &name) const
 {
-		const auto it = m_charaDataVars.constFind(name.toUpper());
+		const auto it = m_charaDataVars.constFind(eraUpperKey(name));
 		return it == m_charaDataVars.constEnd() ? 0 : it.value().dimension;
 }
 
@@ -535,13 +536,13 @@ QString VariableStorage::getArgStr(int index) const
 
 void VariableStorage::setLocalAlias(const QString &name, int index){
 		if (!name.isEmpty() && index >= 0) {
-				m_localAliases.insert(name.toUpper(), index);
+				m_localAliases.insert(eraUpperKey(name), index);
 		}
 }
 
 int VariableStorage::localAliasIndex(const QString &name) const
 {
-		return m_localAliases.value(name.toUpper(), -1);
+		return m_localAliases.value(eraUpperKey(name), -1);
 }
 
 // ================= System variable implementations =================
@@ -635,68 +636,68 @@ qint64 VariableStorage::getC(int index) const { return (index >= 0 && index < m_
 // ================= Type checking implementations =================
 bool VariableStorage::isVariableInteger(const QString &name) const
 {
-		auto it = m_variableIdentifiers.constFind(name.toUpper());
+		auto it = m_variableIdentifiers.constFind(eraUpperKey(name));
 		return (it != m_variableIdentifiers.constEnd()) ? it.value().isInteger() : false;
 }
 
 bool VariableStorage::isVariableString(const QString &name) const
 {
-		auto it = m_variableIdentifiers.constFind(name.toUpper());
+		auto it = m_variableIdentifiers.constFind(eraUpperKey(name));
 		return (it != m_variableIdentifiers.constEnd()) ? it.value().isString() : false;
 }
 
 bool VariableStorage::isVariableLocal(const QString &name) const
 {
-		auto it = m_variableIdentifiers.constFind(name.toUpper());
+		auto it = m_variableIdentifiers.constFind(eraUpperKey(name));
 		return (it != m_variableIdentifiers.constEnd()) ? it.value().isLocal() : false;
 }
 
 bool VariableStorage::isVariableGlobal(const QString &name) const
 {
-		auto it = m_variableIdentifiers.constFind(name.toUpper());
+		auto it = m_variableIdentifiers.constFind(eraUpperKey(name));
 		return (it != m_variableIdentifiers.constEnd()) ? it.value().isGlobal() : false;
 }
 
 bool VariableStorage::isVariableCharacterData(const QString &name) const
 {
-		auto it = m_variableIdentifiers.constFind(name.toUpper());
+		auto it = m_variableIdentifiers.constFind(eraUpperKey(name));
 		return (it != m_variableIdentifiers.constEnd()) ? it.value().isCharacterData() : false;
 }
 
 bool VariableStorage::isVariable1D(const QString &name) const
 {
-		auto it = m_variableIdentifiers.constFind(name.toUpper());
+		auto it = m_variableIdentifiers.constFind(eraUpperKey(name));
 		return (it != m_variableIdentifiers.constEnd()) ? it.value().is1D() : false;
 }
 
 bool VariableStorage::isVariable2D(const QString &name) const
 {
-		auto it = m_variableIdentifiers.constFind(name.toUpper());
+		auto it = m_variableIdentifiers.constFind(eraUpperKey(name));
 		return (it != m_variableIdentifiers.constEnd()) ? it.value().is2D() : false;
 }
 
 bool VariableStorage::isVariable3D(const QString &name) const
 {
-		auto it = m_variableIdentifiers.constFind(name.toUpper());
+		auto it = m_variableIdentifiers.constFind(eraUpperKey(name));
 		return (it != m_variableIdentifiers.constEnd()) ? it.value().is3D() : false;
 }
 
 // ================= Character variable type checking implementations =================
 bool VariableStorage::isCharaVariableInteger(const QString &name) const
 {
-		auto it = m_variableIdentifiers.constFind(name.toUpper());
+		auto it = m_variableIdentifiers.constFind(eraUpperKey(name));
 		return (it != m_variableIdentifiers.constEnd()) ? (it.value().isInteger() && it.value().isCharacterData()) : false;
 }
 
 bool VariableStorage::isCharaVariableString(const QString &name) const
 {
-		auto it = m_variableIdentifiers.constFind(name.toUpper());
+		auto it = m_variableIdentifiers.constFind(eraUpperKey(name));
 		return (it != m_variableIdentifiers.constEnd()) ? (it.value().isString() && it.value().isCharacterData()) : false;
 }
 
 bool VariableStorage::isCharaVariable1D(const QString &name) const
 {
-		auto it = m_variableIdentifiers.constFind(name.toUpper());
+		auto it = m_variableIdentifiers.constFind(eraUpperKey(name));
 		return (it != m_variableIdentifiers.constEnd()) ? (it.value().is1D() && it.value().isCharacterData()) : false;
 }
 
@@ -748,13 +749,13 @@ QString VariableStorage::getGlobalStr2D(const QString &name, int x, int y) const
 void VariableStorage::setSystemStr(const QString &name, int index, const QString &value)
 {
 		if (index != 0) return;   // 系统字符串变量目前只有单值（RESULTS / SAVEDATA_TEXT）
-		m_systemStrVars[name.toUpper()] = value;
+		m_systemStrVars[eraUpperKey(name)] = value;
 }
 
 QString VariableStorage::getSystemStr(const QString &name, int index) const
 {
 		if (index != 0) return QString();
-		return m_systemStrVars.value(name.toUpper());
+		return m_systemStrVars.value(eraUpperKey(name));
 }
 
 qint64 VariableStorage::getGlobalInt1D(const QString &name, int x) const
@@ -845,13 +846,13 @@ bool VariableStorage::hasSystemVariable(const QString &name) const
 		static const QSet<QString> kNames = {
 QStringLiteral("DAY"),QStringLiteral("MONEY"),QStringLiteral("TIME"),QStringLiteral("ITEM"),QStringLiteral("ITEMSALES"),QStringLiteral("NOITEM"),QStringLiteral("BOUGHT"),QStringLiteral("PBAND"),QStringLiteral("FLAG"),QStringLiteral("TFLAG"),QStringLiteral("TARGET"),QStringLiteral("MASTER"),QStringLiteral("PLAYER"),QStringLiteral("ASSI"),QStringLiteral("ASSIPLAY"),QStringLiteral("UP"),QStringLiteral("DOWN"),QStringLiteral("LOSEBASE"),QStringLiteral("PALAMLV"),QStringLiteral("EXPLV"),QStringLiteral("EJAC"),QStringLiteral("PREVCOM"),QStringLiteral("SELECTCOM"),QStringLiteral("NEXTCOM"),QStringLiteral("RESULT"),QStringLiteral("COUNT"),QStringLiteral("A"),QStringLiteral("B"),QStringLiteral("C"),QStringLiteral("CHARANUM")
 		};
-		return kNames.contains(name.toUpper());
+		return kNames.contains(eraUpperKey(name));
 }
 
 qint64 VariableStorage::getSystemVariable(const QString &name, int index) const
 {
 		// 系统变量名同样大小写不敏感（ICVariable）
-		const QString key = name.toUpper();
+		const QString key = eraUpperKey(name);
 		// Check for system variables and call appropriate getter
 		if (key == "DAY") return getDay(index);
 		if (key == "MONEY") return getMoney(index);
@@ -892,7 +893,7 @@ qint64 VariableStorage::getSystemVariable(const QString &name, int index) const
 void VariableStorage::setSystemVariable(const QString &name, int index, qint64 value)
 {
 		// 系统变量名同样大小写不敏感（ICVariable）
-		const QString key = name.toUpper();
+		const QString key = eraUpperKey(name);
 		// Check for system variables and call appropriate setter
 		if (key == "DAY") { setDay(index, value); return; }
 		if (key == "MONEY") { setMoney(index, value); return; }

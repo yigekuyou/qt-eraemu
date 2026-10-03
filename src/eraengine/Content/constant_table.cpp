@@ -190,7 +190,12 @@ QString ConstantTable::csvForVariable(const QString& variableName) {
         {QStringLiteral("ITEM"),      QStringLiteral("ITEM.CSV")},
         {QStringLiteral("ITEMSALES"), QStringLiteral("ITEM.CSV")},
         {QStringLiteral("STAIN"),     QStringLiteral("STAIN.CSV")},
-        {QStringLiteral("STR"),       QStringLiteral("STR.CSV")},
+        // STR 的**值**来自 Str.csv，但 `STR:名前` 的**名表**是 StrName.csv
+        // （C# ConstantData.ResolveName：case VariableCode.STR -> nameToIntDics[strnameIndex],
+        //  errPos = "strname.csv"；而 STR.CSV 的逆引き字典被显式跳过「Strは逆引き無用」）。
+        // 文档 Variable.html：`STRNAME ← StrName.csv`「Str.csv 指定的是 STR 的内容，
+        // 而不是元素的名称」。此前错挂 STR.CSV，导致 `STR:<值文本>` 被当成下标。
+        {QStringLiteral("STR"),       QStringLiteral("STRNAME.CSV")},
         {QStringLiteral("CSTR"),      QStringLiteral("CSTR.CSV")},
         {QStringLiteral("SAVESTR"),   QStringLiteral("SAVESTR.CSV")},
         {QStringLiteral("GLOBAL"),    QStringLiteral("GLOBAL.CSV")},

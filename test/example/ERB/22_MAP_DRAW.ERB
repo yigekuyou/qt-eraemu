@@ -1,0 +1,267 @@
+;=============================================================
+; [22] MAP 绘制（eraTW @DRAW_MAP 逐字符热路径复现·回归 + 计时）
+;
+; 背景：eraTW 打开地图时 @DRAW_MAP 对地图每一行逐字符：
+;     SUBSTRINGU → ISNUMERIC → TRYCALLFORM DRAW_MAP_BG_*
+;     → SETCOLOR / PRINTS / RESETCOLOR
+; 一张图约 1400 个字符、每字符 6+ 条指令，且有约 40 个 PRINTBUTTON。
+; 本组把这条路径**原样**复刻（数据来自 eraTW MAP_00.ERB 神社图，逐字节复制），
+; 用途：
+;   1) 回归：画 1 张 + 连画 20 张不报错（--check 可查漏按钮/漏色）
+;   2) 性能：外部计时，单张耗时突增即回归：
+;        time ./test/run_example.sh 22
+; 与 eraTW 的差异（不影响热路径指令构成）：
+;   * 颜色常量（C_WOOD1 等）→ 字面量；TFLAG:地圖切換 → TFLAG:1
+;   * GETMAP 略去居場所察知/KEHAI 分支，保留 SETCOLOR+PRINTBUTTON+RESETCOLOR
+;   * 住宿人物（破舊小屋）条件分支略去
+;=============================================================
+@TEST_MAP_DRAW
+#DIM NONG
+#DIM I
+#DIM LINES_BEFORE
+#DIM T0
+#DIM T1
+#DIM MS
+
+PRINTL == 组22：MAP 绘制（eraTW DRAW_MAP 逐字符复现） ==
+TFLAG:1 = 0
+
+;---- 正确性：画一张，行数不小于 23 行地图（eraTW DRAW_MAP 逐行 PRINTL）----
+LINES_BEFORE = LINECOUNT
+CALL DRAW_MAP_TEST
+CALL ASSERT_TRUE, 1, @"DRAW_MAP_TEST 执行不报错"
+NONG += RESULT
+CALL ASSERT_TRUE, LINECOUNT - LINES_BEFORE >= 23, @"一张图 ≥ 23 行（AA:00..AA:22 逐一 PRINTL）"
+NONG += RESULT
+
+;---- 性能复现：连画 20 张自计时（毫秒；突增即性能回归）----
+T0 = GETMILLISECOND()
+FOR I, 0, 20
+	CALL DRAW_MAP_TEST
+NEXT
+T1 = GETMILLISECOND()
+MS = T1 - T0
+CALL ASSERT_TRUE, MS >= 0, @"连画 20 张不报错"
+NONG += RESULT
+PRINTFORML 性能：连画 20 张 = {MS} ms（单张 ≈ {MS / 20} ms）
+PRINTFORML 完成：21 张博麗神社图（每张 23 行，逐字符着色）
+RETURN NONG
+
+;-----------------------------------------------------------
+; Map描画処理（复刻 eraTW DRAW_MAP.ERB 主体）
+; 2文字セットの半角数字(01とか)は自動でボタン化、全角数字は認識しない
+;-----------------------------------------------------------
+@DRAW_MAP_TEST
+#DIMS AA, 50
+#DIM LINENUM
+#DIM X_POINT
+
+VARSET AA
+SETFONT "ＭＳ ゴシック"
+TRYCALLFORM MAP_TEST_1(AA)
+
+FOR LINENUM, 0, 23
+	SIF AA:LINENUM == ""
+		CONTINUE
+	;行ごとに初期化
+	X_POINT = 0
+	RESULTS = "X"
+	;行の終端までループ
+	WHILE RESULTS != "" && STRLENSU(RESULTS) < 3
+		;1文字取り出す
+		SUBSTRINGU AA:LINENUM, X_POINT, 1
+		;数字ならボタンにする
+		IF ISNUMERIC(RESULTS)
+			;分岐めんどいから必ず2ケタ取る
+			SUBSTRINGU AA:LINENUM, X_POINT, 2
+			CALL GETMAP_TEST(TOINT(RESULTS))
+			X_POINT += 2
+		;記号に意味を持たせる例、これだと#は普通には使えなくなるけどまあいいか
+		ELSEIF RESULTS == "#"
+			;必ず二文字取る
+			SUBSTRINGU AA:LINENUM, X_POINT, 2
+			TRYCALLFORM DRAW_MAP_BG_TEST(RESULTS)
+			X_POINT += 2
+		;ふつうの文字
+		ELSE
+			TRYCALLFORM DRAW_MAP_BG_TEST(RESULTS)
+			X_POINT ++
+		ENDIF
+	WEND
+	PRINTL
+NEXT
+SETFONT
+RESETCOLOR
+
+;-----------------------------------------------------------
+; 地図データ（eraTW MAP_00.ERB 博麗神社・逐字节复制）
+;-----------------------------------------------------------
+@MAP_TEST_1(AA)
+#DIMS REF AA, 0
+AA:00 = ■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■#B#B#B#B#B
+AA:01 = ■林林林林林林林林林林林林林林林林林林林林林林林林林林林林林林林林■#B#B　#B#B
+AA:02 = ■γ⌒ヽ石■■■■■■　　　　　　　　　　■■■　　　林林林木林林■　◆三◆　
+AA:03 = ■ゝ＿ノ　#A風呂■　■□□○　　　　　　　■06■　　　　　木56木林■　◆#C◆　
+AA:04 = ■ｖ　　　■ 13 │12■■■■■■■■■　　　￣　　　　　　　木林林■　　36　　
+AA:05 = ■林ｖ　　■■■■─■└┘　　土間　│　　　　　　　　　　　　　林■　　　　　
+AA:06 = ■林　　　■14│　　│ 08 　　 07 　■　　　　　　　　　　┏━┓　■　　　　　
+AA:07 = ■林　　　■■■　　■──■─■■■■　　■■■■■■　　　05　　■　　　　　
+AA:08 = ■林　　　　　||　　│54　　　■□□■　　■　　　　■　　　　　　■回　　　　
+AA:09 = ■林#a　　　　||　　│。　　　│ 53 ■　　■　□□　■　　　狛　　●┳回　　　
+AA:10 = ■林#b　　　　||　　■　　　　■■■■ 20 ■□　　□■■　　　　　　┃┳回　　
+AA:11 = ■林#c　　　　||　　│　居間　│ 17 ■　　■　 04 　||目03　 02 　01┃┃┳　　
+AA:12 = ■林#d　11　　|| 10 │　 09 　■□□■　　■□　　□■■　　　　　　┃┃┃　　
+AA:13 = ■林　　　　　||　　■　　　　■■■■　　■　□□　■　　　狛　　●┻┃┃22#p
+AA:14 = ■林　　　　　||　　│　　　　■和室■　　■　　　　■　　　　　　■回┻┃　　
+AA:15 = ■林　　　　　||　　│　　　　│ 55 ■　　■■■■■■　　　　　　■　回┻　　
+AA:16 = ■林■─■　　■─■■■──■■　　■　　　　　　　　　　ｘ　　　■　　回　　
+AA:17 = ■林■52■　　■　□■　霊夢　■■■■　　　　　　　　　／守＼　　■　　　　　
+AA:18 = ■林■■■　　■19□■　 15 　│18■　　　〓─■　　　　| ☆ |　　■森　25　森
+AA:19 = ■林林林　　　■■■■■■■■■■■　　　〓16〓　　　　￣21￣　林■森森　森森
+AA:20 = ■林林林林　　　　　　　　　　　　　　　　＼〓／　　　　　　　林林■森森森森森
+AA:21 = ■林林林林林林林林林林林林林林林林林林林林林林林林林林林林林林林林■森森森森森
+AA:22 = ■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■森森森森森
+
+;-----------------------------------------------------------
+; 着色と置換（复刻 eraTW DRAW_MAP_BG_0；颜色常量 → 字面量）
+;-----------------------------------------------------------
+@DRAW_MAP_BG_TEST(SLICED)
+#DIMS SLICED
+#DIM CONST C_MUGEN = 0x4d5aaf
+SELECTCASE SLICED
+;▼着色
+CASE "ｖ"
+	SETCOLOR 0x2d8f46
+	PRINTS SLICED
+	RESETCOLOR
+CASE "林", "木"
+	SETCOLOR 0x0e791e
+	PRINTS SLICED
+	RESETCOLOR
+CASE "森"
+	SETCOLOR 0x04570c
+	PRINTS SLICED
+	RESETCOLOR
+CASE "■", "│", "─", "┐", "┌", "└", "┘", "￣", "／", "＼", "ｘ", "目"
+	SELECTCASE TFLAG:1
+	CASE 2
+		SETCOLOR C_MUGEN
+	CASEELSE
+		SETCOLOR 0x856022
+	ENDSELECT
+	PRINTS SLICED
+	RESETCOLOR
+CASE "□", "○", "┏", "┓", "┗", "┛", "〓"
+	SELECTCASE TFLAG:1
+	CASE 2
+		SETCOLOR 0x706caa
+	CASE 4, 0
+		SETCOLOR C_MUGEN
+	CASEELSE
+		SETCOLOR 0x9b7a2e
+	ENDSELECT
+	PRINTS SLICED
+	RESETCOLOR
+CASE "|"
+	SETCOLOR 0x9b7a2e
+	PRINTS SLICED
+	RESETCOLOR
+CASE "γ", "⌒", "ヽ", "ゝ", "＿", "ノ"
+	SELECTCASE TFLAG:1
+	CASE 4, 0
+		SETCOLOR C_MUGEN
+	CASEELSE
+		SETCOLOR 0x00a3af
+	ENDSELECT
+	PRINTS SLICED
+	RESETCOLOR
+CASE "石", "狛", "回", "┃", "┳", "┻", "┣", "┫"
+	SELECTCASE TFLAG:1
+	CASE 3
+		SETCOLOR 0x9b7a2e
+	CASEELSE
+		SETCOLOR 0x9d9da8
+	ENDSELECT
+	PRINTS SLICED
+	RESETCOLOR
+CASE "━"
+	SELECTCASE TFLAG:1
+	CASE 2
+		SETCOLOR 0x9d9da8
+	CASEELSE
+		SETCOLOR 0x9b7a2e
+	ENDSELECT
+	PRINTS SLICED
+	RESETCOLOR
+CASE "☆"
+	SETCOLOR 0x7fcf53
+	PRINTS SLICED
+	RESETCOLOR
+CASE "三"
+	SETCOLOR C_MUGEN
+	PRINTS SLICED
+	RESETCOLOR
+CASE "。"
+	SETCOLOR 0xec6d71
+	PRINTS SLICED
+	RESETCOLOR
+CASE "◆", "Π"
+	SETCOLOR C_MUGEN
+	PRINTS SLICED
+	RESETCOLOR
+CASE "●"
+	SETCOLOR 0xd43a4c
+	PRINTS SLICED
+	RESETCOLOR
+CASE "♨"
+	SETCOLOR 0x59b9c6
+	PRINTS SLICED
+	RESETCOLOR
+CASE "/", "X", "ヾ", "v", "ﾉ", "､"
+	SETCOLOR 0x0e791e
+	PRINTS SLICED
+	RESETCOLOR
+CASE "\"", "`", "ゞ", "ヽ", "y"
+	SETCOLOR 0x9b7a2e
+	PRINTS SLICED
+	RESETCOLOR
+;▼特殊な表示
+CASE "#a", "#b", "#c", "#d", "#e", "#f", "#g", "#h", "#i", "#j", "#k", "#l", "#m", "#n", "#p"
+	CALL MAP_PRINT_TEST(SLICED)
+CASE "#A"
+	SETCOLOR 0x5b8fc9
+	PRINT □
+	RESETCOLOR
+CASE "#B"
+	SETCOLOR C_MUGEN
+	PRINT ■
+	RESETCOLOR
+CASE "#C"
+	SETCOLOR C_MUGEN
+	PRINT ニ
+	RESETCOLOR
+;ふつうの
+CASEELSE
+	PRINTS SLICED
+ENDSELECT
+
+;-----------------------------------------------------------
+; #a-#p 地点标记（eraTW MAP_PRINT 的桩：着色打印原字符）
+;-----------------------------------------------------------
+@MAP_PRINT_TEST(SLICED)
+#DIMS SLICED
+SETCOLOR 0xd0a8ff
+PRINTS SLICED
+RESETCOLOR
+
+;-----------------------------------------------------------
+; 数字按钮（eraTW GETMAP 桩：保留 SETCOLOR+PRINTBUTTON+RESETCOLOR 主干）
+;-----------------------------------------------------------
+@GETMAP_TEST(ARG)
+SETCOLOR 0x228b22
+IF ARG > 9
+	PRINTBUTTON TOSTR(ARG), ARG
+ELSE
+	PRINTBUTTON TOFULL(TOSTR(ARG)), ARG
+ENDIF
+RESETCOLOR

@@ -12,6 +12,8 @@
 #   ./test/run_example.sh 19       # 破坏性组（DOTRAIN，预期「执行出错」）
 #   ./test/run_example.sh 20       # RESTART 菜单复刻（eraTW NEWGAME_CUSTOM 回归）
 #   ./test/run_example.sh 21       # GOTO $标签 函数作用域（eraTW COMMON @CHOICE 回归）
+#   ./test/run_example.sh 23       # PRINTDATA/DATAFORM/ENDDATA（eraTW TW_TIPS 复现·特征化）
+#   ./test/run_example.sh 24       # CSV 名表与 STR 变量（ecd/docs 规范：Str.csv 值 / StrName.csv 名）
 #
 # 依赖：build/src/eraengine/test_cli
 #       （cmake --build build --target test_cli）

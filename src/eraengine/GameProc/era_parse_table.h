@@ -220,7 +220,9 @@ public:
     bool evaluateExpression(const QString& expr, bool& out);
 
     // ---- 位置区查询 ----
-    [[nodiscard]] QString currentScript() const;
+    // perf：返回引用而非按值拷贝（stepOnce/executeLine 每条指令都调用，
+    // 按值返回会带来 QString 原子引用计数 + 拷贝；调用方均为立即使用或自行拷贝）。
+    [[nodiscard]] const QString& currentScript() const;
     [[nodiscard]] int currentLine() const;
     [[nodiscard]] int depth() const;
     [[nodiscard]] const QList<Frame>& callStack() const;
@@ -294,6 +296,10 @@ private:
     bool m_finalized = false;
     QHash<QString, QSharedPointer<ExpressionNode>> m_scopedAstCache;
     QHash<QString, ScriptData> m_scripts;
+    // perf：hasLabel 的结果按标签名记忆（此前每次 TRYCALL/TRYCALLFORM 都遍历
+    // 全部脚本的 labelPositions；eraTW 地图逐字符 TRYCALLFORM 时是热点）。
+    // 装载期每插入一个脚本即失效重建。
+    mutable QHash<QString, bool> m_hasLabelCache;
     QHash<QString, QSharedPointer<ExpressionNode>> m_astCache;
     QHash<QString, UserFunctionInfo> m_functions;
     // 名称 -> 全部声明（同名函数可重复声明；事件函数靠它做 4 组导航）

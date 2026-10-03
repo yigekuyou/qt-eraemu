@@ -193,6 +193,32 @@ struct CaseClause {
     QString textB;                                // Range：右端
     QSharedPointer<ExpressionNode> astA;          // 预解析结果（可空 -> 运行期按文本求值）
     QSharedPointer<ExpressionNode> astB;
+    // perf：CASE 臂是**纯字符串字面量**（如 "林"）时预存字面值 —— 逐字符
+    // SELECTCASE 时免去每臂 AST 求值 + QVariant 分配（eraTW 地图最大 CASE 热点）。
+    bool    isSimpleStr = false;
+    QString strLiteral;
+};
+
+// ---------------------------------------------------------------------------
+// 命令式字符串内置函数（STRLENS/STRLENSU/SUBSTRING/SUBSTRINGU 的**语句形式**）
+// 实参解析缓存。这些指令（尤其 SUBSTRINGU）此前每次执行都要：line.raw 扫描 +
+// mid/trimmed + split(',') + trimmed + expressionAst(QString) 查表 —— eraTW 地图
+// 逐字符时是最大的热点之一（一次绘制上万次）。行内容装载后不可变，故首次执行
+// 解析一次进 LogicalLine::strArgs，之后直接复用 AST。
+// ---------------------------------------------------------------------------
+struct StrBuiltinArgs {
+    enum class Mode : quint8 { None, Substring, StrLen } mode = Mode::None;
+    enum class Src : quint8 { Expr, Results, PlainName } src = Src::Expr;
+    QString plainName;                            // Src::PlainName 的变量名 / 下标
+    int     plainIndex = -1;
+    QString sourceText;                           // Src::Expr 的文本回退（AST 为空时）
+    QString startText;
+    QString lengthText;
+    QString exprText;                             // Mode::StrLen 的文本回退
+    QSharedPointer<ExpressionNode> sourceAst;
+    QSharedPointer<ExpressionNode> startAst;
+    QSharedPointer<ExpressionNode> lengthAst;
+    QSharedPointer<ExpressionNode> lenAst;
 };
 
 struct TypedArgument {
@@ -247,6 +273,10 @@ struct LogicalLine {
     // CASE 臂解析缓存（见 CaseClause 注释；执行单线程，行内容装载后不可变）
     mutable bool caseCacheReady = false;
     mutable QList<CaseClause> caseCache;
+
+    // 命令式字符串内置函数实参缓存（见 StrBuiltinArgs 注释）
+    mutable bool strArgsReady = false;
+    mutable StrBuiltinArgs strArgs;
 
     bool isNull() const { return kind == LineKind::Null; }
     bool isInstruction() const { return kind == LineKind::Instruction; }

@@ -154,10 +154,9 @@ void ScriptRunner::enterCall(const QString& function) {
     locals.parameters.clear();
     locals.aliases.clear();
     m_storage->setLocalContext(locals);
-    QStringList privateNames;
-    for (const auto& decl : m_table->variableTable().localsOfRef(function))
-        if (!decl.isConst) privateNames.append(decl.name);
-    m_storage->setPrivateScope(function, privateNames);
+    // perf：私有名字表按函数缓存（localNamesOfRef），免去每次调用重建 QStringList
+    m_storage->setPrivateScope(function,
+                               m_table->variableTable().localNamesOfRef(function));
     m_lastPrivateScope = function;   // 与 stepOnce 的缓存 guard 同步
 }
 
@@ -267,10 +266,9 @@ bool ScriptRunner::stepOnce() {
     // perf：本函数每条指令都会进来 —— 私有作用域只在**换函数**时才需要重算
     // （声明表装载后不可变；enterCall/returnFromCall 换上下文时 owner 必然变化）。
     if (line.ownerFunction != m_lastPrivateScope) {
-        QStringList privateNames;
-        for (const auto& decl : m_table->variableTable().localsOfRef(line.ownerFunction))
-            if (!decl.isConst) privateNames.append(decl.name);
-        m_storage->setPrivateScope(line.ownerFunction, privateNames);
+        m_storage->setPrivateScope(
+            line.ownerFunction,
+            m_table->variableTable().localNamesOfRef(line.ownerFunction));
         m_lastPrivateScope = line.ownerFunction;
     }
     ExecState r = executeLine(line);
@@ -1653,6 +1651,26 @@ void buildCaseCache(const LogicalLine& caseLine, EraParseTable* table)
             if (clause.kind == CaseClause::Kind::Range)
                 clause.astB = table->expressionAst(clause.textB);
         }
+        // 纯字符串字面量（无转义 / 无 %..% 形式）预存字面值：匹配期直接 QString 比较
+        if (clause.kind == CaseClause::Kind::Equal) {
+            const QString& s = clause.textA;
+            if (s.size() >= 2 && s.startsWith(QLatin1Char('"'))
+                && s.endsWith(QLatin1Char('"'))) {
+                bool simple = true;
+                for (int i = 1; i + 1 < s.size(); ++i) {
+                    const QChar c = s.at(i);
+                    if (c == QLatin1Char('"') || c == QLatin1Char('\\')
+                        || c == QLatin1Char('%')) {
+                        simple = false;
+                        break;
+                    }
+                }
+                if (simple) {
+                    clause.isSimpleStr = true;
+                    clause.strLiteral = s.mid(1, s.size() - 2);
+                }
+            }
+        }
         caseLine.caseCache.append(clause);
     }
     caseLine.caseCacheReady = true;
@@ -1666,6 +1684,8 @@ bool ScriptRunner::caseMatches(const LogicalLine& caseLine,
     if (!caseLine.caseCacheReady) buildCaseCache(caseLine, m_table);
 
     ExpressionEvaluator& ev = getEvaluator();
+    // perf：SELECTCASE 值只转一次字符串（此前每个 CASE 臂都 toString 一次）
+    const QString valueStr = valueIsStr ? valueVar.toString() : QString();
     const auto evalClause = [&](const CaseClause& clause, bool right) -> QVariant {
         const QString& text = right ? clause.textB : clause.textA;
         const auto& ast = right ? clause.astB : clause.astA;
@@ -1692,7 +1712,16 @@ bool ScriptRunner::caseMatches(const LogicalLine& caseLine,
                 && compare(valueVar, evalClause(clause, true)) <= 0) return true;
             break;
         case CaseClause::Kind::Equal:
-            if (compare(valueVar, evalClause(clause, false)) == 0) return true;
+            if (valueIsStr) {
+                // 纯字符串字面量臂：不经 AST/ QVariant，直接比较（eraTW 地图热点）
+                if (clause.isSimpleStr) {
+                    if (valueStr == clause.strLiteral) return true;
+                } else if (valueStr == evalClause(clause, false).toString()) {
+                    return true;
+                }
+            } else if (compare(valueVar, evalClause(clause, false)) == 0) {
+                return true;
+            }
             break;
         }
     }

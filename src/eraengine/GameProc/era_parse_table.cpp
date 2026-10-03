@@ -153,10 +153,14 @@ QString EraParseTable::scriptPath(const QString& scriptName) const {
 }
 
 bool EraParseTable::hasLabel(const QString& label) const {
+    const auto cached = m_hasLabelCache.constFind(label);
+    if (cached != m_hasLabelCache.constEnd()) return cached.value();
+    bool found = false;
     for (auto it = m_scripts.constBegin(); it != m_scripts.constEnd(); ++it) {
-        if (it.value().labelPositions.contains(label)) return true;
+        if (it.value().labelPositions.contains(label)) { found = true; break; }
     }
-    return false;
+    m_hasLabelCache.insert(label, found);
+    return found;
 }
 
 const LogicalLine* EraParseTable::lineAt(const QString& scriptName, int line) const {
@@ -433,6 +437,7 @@ bool EraParseTable::loadScript(const QString& scriptName, const QList<LogicalLin
     }
 
     m_scripts.insert(scriptName, data);
+    m_hasLabelCache.clear();   // 新脚本可能带来新标签
 
     // 维数求值与类型回填都推迟到 finalizeParse()：
     // 二者都需要「全部声明/常数就绪」，且是全量操作（避免 O(脚本数 × 声明数)）。
@@ -530,7 +535,7 @@ QString EraParseTable::getCurrentScript() const {
 // 位置区 (Position region)
 // ===========================================================================
 
-QString EraParseTable::currentScript() const {
+const QString& EraParseTable::currentScript() const {
     return m_currentScript;
 }
 

@@ -1,0 +1,47 @@
+;=============================================================
+; [24] CSV 名表与 STR 变量（依据 ecd/docs 规范）
+;
+; 文档依据（仓库内 ecd/docs）：
+;   * guide/EraBasic_Variables.html：
+;       「STR —— 文本数据。string[]0~19999，Str.csv 的数据保存在这里」
+;   * reference/CSV_File_Format.html：
+;       「Str.csv 的格式：第一栏字符串编号，第二栏字符串」
+;   * reference/Variable.html：
+;       「STRNAME ← StrName.csv」「Str.csv 指定的是 STR 的内容，而不是元素的名称」
+; 对齐实现（C# GameData/ConstantData.cs）：STR 的**值**来自 Str.csv；
+; `STR:名前` 的**名表**是 StrName.csv（ResolveName: case STR -> strname.csv；
+; STR.CSV 的逆引き字典被显式跳过「Strは逆引き無用」）。
+;
+; 本组用 test/example/CSV/Str.csv（值）与 CSV/StrName.csv（名）——两者内容刻意
+; 不同——验证：STR:n 取值；STR:名字 的名字取自 StrName.csv（不是 Str.csv）。
+;=============================================================
+@TEST_CSV_STR
+#DIM NONG
+#DIMS P
+
+PRINTL == 组24：CSV 名表与 STR 变量（ecd/docs 规范） ==
+
+;---- 1) STR[n] 的值来自 Str.csv ----
+P = %STR:6001%
+CALL ASSERT_SEQ, P, "StrValA", @"STR:6001 的值来自 Str.csv"
+NONG += RESULT
+P = %STR:6002%
+CALL ASSERT_SEQ, P, "StrValB", @"STR:6002 的值来自 Str.csv"
+NONG += RESULT
+
+;---- 2) 表达式下标 ----
+P = %STR:(6000 + 2)%
+CALL ASSERT_SEQ, P, "StrValB", @"STR:(6000+2) 表达式下标"
+NONG += RESULT
+
+;---- 3) STR:名字 的名表是 StrName.csv（名 -> 下标 -> 再取 Str.csv 的值）----
+; StrKeyA 只在 StrName.csv 里（值为 6001）；Str.csv 的 6001 值是 "StrValA"。
+; 若名表误挂 Str.csv，StrKeyA 无法解析，本断言即失败。
+P = %STR:StrKeyA%
+CALL ASSERT_SEQ, P, "StrValA", @"STR:StrKeyA 的名来自 StrName.csv -> 下标 6001 -> 值 StrValA"
+NONG += RESULT
+P = %STR:StrKeyB%
+CALL ASSERT_SEQ, P, "StrValB", @"STR:StrKeyB 的名来自 StrName.csv -> 下标 6002 -> 值 StrValB"
+NONG += RESULT
+
+RETURN NONG

@@ -192,7 +192,9 @@ private:
     // Assignment handling
     bool handleAssignment(const QString& lhs, const QString& rhs, const QSharedPointer<ExpressionNode>& ast = {});
     // 字符串赋值（目的变量是字符串变量时）：右侧按字符串求值后写入字符串容器
-    bool handleStringAssignment(const QString& lhs, const QString& rhs, const QSharedPointer<ExpressionNode>& ast = {});
+    bool handleStringAssignment(const QString& lhs, const QString& rhs,
+                                const QSharedPointer<ExpressionNode>& ast = {},
+                                const QString& ownerFunction = QString());
     // 已求值字符串写入左值（SPLIT 等复用；不做表达式求值）
     bool writeStringValue(const QString& lhs, const QString& value);
     bool handleCompoundAssignment(const QString& lhs, const QString& op, const QString& rhs, const QSharedPointer<ExpressionNode>& ast = {});

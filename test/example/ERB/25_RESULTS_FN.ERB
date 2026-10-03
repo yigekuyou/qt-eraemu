@@ -1,0 +1,114 @@
+;=============================================================
+; 组 25 —— RESULTS 下标 / #FUNCTIONS 返回值 / 裸文本赋值
+;
+; eraTW OPTION.ERB 的 OPTION_SETTING 原型回归：
+;   * OPTION_SETNAME：#FUNCTIONS + VARSET RESULTS + RESULTS:0（名）/RESULTS:1（值）
+//     + RETURNF RESULTS:0 —— 菜单 `[%N,2}] - %OPTION_SETNAME(N), 30, RIGHT%：%RESULTS:1%`
+;   * 此前两处缺陷：
+;       - RESULTS 读写硬编码槽 0（RESULTS:1 恒等于 RESULTS:0 的值）
+;         -> 菜单左右两列显示同一个值
+;       - 裸单词右值（`RESULTS:0 = 文本設定`）被当变量引用求值 -> 0
+;         -> 名字列显示 0
+;   * C# 对照（SP_SET_ArgumentBuilder / VariableData.cs:202）：
+;       - RESULTS 是全局字符串数组，下标有效
+;       - 普通 = 的字符串右值按**格式化串**解析：裸文本是字面量，%…%/{…} 展开
+;=============================================================
+@TEST_RESULTS_FN
+#DIM RET
+#DIMS P
+#DIMS SA
+
+RET = 0
+
+;---- RESULTS 下标：三个槽各自独立 ----
+RESULTS:0 = "R0"
+RESULTS:1 = "R1"
+RESULTS:2 = "R2"
+CALL ASSERT_SEQ, RESULTS:0, "R0", @"RESULTS:0 独立（此前恒读槽 0）"
+RET += RESULT
+CALL ASSERT_SEQ, RESULTS:1, "R1", @"RESULTS:1 独立（此前读写恒落槽 0）"
+RET += RESULT
+CALL ASSERT_SEQ, RESULTS:2, "R2", @"RESULTS:2 独立"
+RET += RESULT
+
+;---- #FUNCTIONS + RETURNF RESULTS:0（OPTION_SETNAME 原型）----
+CALL FN_NAME_VALUE, 0
+RET += RESULT
+P = %FN_NAME_VALUE(0)%
+CALL ASSERT_SEQ, P, "名前甲", @"%FN_NAME_VALUE(0)% 返回 RESULTS:0（名）"
+RET += RESULT
+CALL ASSERT_SEQ, RESULTS:1, "値乙", @"函数返回后 RESULTS:1 仍是函数内写入的值"
+RET += RESULT
+
+;---- VARSET RESULTS 后再写入（OPTION_SETNAME 的 VARSET 原型）----
+P = %FN_VARSET()%
+CALL ASSERT_SEQ, P, "名前乙", @"VARSET RESULTS 后写入 + RETURNF RESULTS:0"
+RET += RESULT
+
+;---- 裸文本赋值：裸单词/带空格文本都是字面量（C# FORM 语义）----
+RESULTS:0 = 文本設定
+CALL ASSERT_SEQ, RESULTS:0, "文本設定", @"裸单词右值是字面量（此前被当变量求值成 0）"
+RET += RESULT
+RESULTS:1 = 妊娠の有無 ※基本OFF
+CALL ASSERT_SEQ, RESULTS:1, "妊娠の有無 ※基本OFF", @"带空格/※的裸文本是字面量"
+RET += RESULT
+;---- %…% 展开 ----
+RESULTS:2 = %RESULTS:1%
+CALL ASSERT_SEQ, RESULTS:2, "妊娠の有無 ※基本OFF", @"%…% 右值展开变量"
+RET += RESULT
+
+;---- 裸变量引用：已知变量按表达式求值 ----
+P = RESULTS
+CALL ASSERT_SEQ, P, "文本設定", @"裸变量引用（无下标）求值 -> RESULTS:0（上一步设为 文本設定）"
+RET += RESULT
+P = RESULTS:1
+CALL ASSERT_SEQ, P, "妊娠の有無 ※基本OFF", @"裸下标引用 RESULTS:1 求值"
+RET += RESULT
+SA:0 = "局部甲"
+P = SA:0
+CALL ASSERT_SEQ, P, "局部甲", @"裸下标引用 #DIMS SA:0 求值"
+RET += RESULT
+
+;---- FORM 对齐：,%N, 30, RIGHT%（OPTION 菜单原型的宽度/对齐部分）----
+PRINTFORML [{0, 2}] - %FN_NAME_VALUE(0), 30, RIGHT%：%RESULTS:1%
+CALL ASSERT_SEQ, RESULTS:1, "値乙", @"%…%,宽度,RIGHT% 对齐后 :%RESULTS:1% 仍读对槽"
+RET += RESULT
+;---- SELECTCASE 字符串臂（OPTION_SETTING 的分发原型）----
+CALL FN_SELECT_DISPATCH, 0
+RET += RESULT
+
+PRINTFORML 组25 失败数：{RET}
+RETURN RET
+
+;---- OPTIONAL_SETNAME 原型：#FUNCTIONS + VARSET + RETURNF RESULTS:0 ----
+@FN_NAME_VALUE(ARG)
+#FUNCTIONS
+VARSET RESULTS
+RESULTS:0 = "名前甲"
+IF ARG == 0
+	RESULTS:1 = "値乙"
+ELSE
+	RESULTS:1 = "値乙別"
+ENDIF
+RETURNF RESULTS:0
+
+@FN_VARSET()
+#FUNCTIONS
+VARSET RESULTS
+RESULTS:0 = "名前乙"
+RESULTS:1 = "値乙2"
+RETURNF RESULTS:0
+
+;---- OPTION_SETTING 的分发原型：SELECTCASE 字符串臂 ----
+@FN_SELECT_DISPATCH(ARG)
+#DIM RET
+#DIMS GOT
+GOT = %FN_NAME_VALUE(ARG)%
+RET = 1
+SELECTCASE GOT
+CASE "名前甲"
+	RET = 0
+ENDSELECT
+SIF RET != 0
+	PRINTFORML  [FAIL] SELECTCASE 字符串臂未命中：%GOT%
+RETURN RET

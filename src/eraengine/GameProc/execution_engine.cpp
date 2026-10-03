@@ -1377,7 +1377,8 @@ bool ExecutionEngine::executeInstruction(const LogicalLine& line) {
                 m_parseTable ? m_parseTable->variableTable().typeOf(lhsName, line.ownerFunction)
                              : OperandType::Unknown;
             if (destType == OperandType::Str) {
-                return handleStringAssignment(args[0].raw, args[1].raw, args[1].ast);
+                return handleStringAssignment(args[0].raw, args[1].raw, args[1].ast,
+                                              line.ownerFunction);
             }
             return handleAssignment(args[0].raw, args[1].raw, args[1].ast);
         }
@@ -1425,7 +1426,8 @@ bool ExecutionEngine::executeInstruction(const LogicalLine& line) {
                 qWarning() << "[exec] 整数型变量不能使用 '= 赋值，已忽略：" << lhsName;
                 return true;
             }
-            return handleStringAssignment(args[0].raw, args[1].raw, args[1].ast);
+            return handleStringAssignment(args[0].raw, args[1].raw, args[1].ast,
+                                          line.ownerFunction);
         }
         return true;
     }
@@ -1439,7 +1441,8 @@ bool ExecutionEngine::executeInstruction(const LogicalLine& line) {
                              : OperandType::Unknown;
             if (destType == OperandType::Str) {
                 return handleStringAssignment(args[0].raw,
-                                              args[0].raw + QLatin1String(" + ") + args[1].raw);
+                                              args[0].raw + QLatin1String(" + ") + args[1].raw,
+                                              {}, line.ownerFunction);
             }
         }
     }
@@ -1813,7 +1816,9 @@ void ExecutionEngine::reportUnfinished(const QString& what, const QString& name,
                << "原文:" << line.raw.left(100);
 }
 
-bool ExecutionEngine::handleStringAssignment(const QString& lhs, const QString& rhs, const QSharedPointer<ExpressionNode>& ast) {
+bool ExecutionEngine::handleStringAssignment(const QString& lhs, const QString& rhs,
+                                             const QSharedPointer<ExpressionNode>& ast,
+                                             const QString& ownerFunction) {
     const LhsRef ref = parseLhsRef(lhs);
     if (ref.name.isEmpty()) {
         return false;
@@ -1845,11 +1850,27 @@ bool ExecutionEngine::handleStringAssignment(const QString& lhs, const QString& 
             evaluated = true;
         }
     }
-    if (!evaluated && !ast && bareIdent && m_parseTable) {
-        const QSharedPointer<ExpressionNode> ast = m_parseTable->expressionAst(trimmed);
-        if (ast) {
-            value = evaluator.evaluate(*ast, m_storage, m_gameBaseData).toString();
-            evaluated = true;
+    if (!evaluated && bareIdent && m_parseTable) {
+        // 裸变量引用（`NAME = RESULTS` / `L = RESULTS:0` / `P = SA:0`）按**普通表达式**
+        // 优先求值 —— 但仅当该名字确实是**已知变量**（含 :/. 的下标/成员引用、
+        // 已声明变量、系统/角色变量）。C# 对字符串变量的普通 = 赋值按**格式化串**
+        // 解析（bare 文本是字面量，只有 %…%/{…}/\@…\@ 展开）：
+        // `RESULTS:0 = 文本設定` 的「文本設定」不是变量 -> 字面量；
+        // 此前被当变量引用求值 -> 未定义变量 = 0 -> OPTION 菜单的名字列显示 0。
+        const bool indexedRef = trimmed.contains(QLatin1Char(':'))
+                                || trimmed.contains(QLatin1Char('.'));
+        const bool knownVariable = indexedRef
+            || (m_parseTable
+                && m_parseTable->variableTable().typeOf(trimmed, ownerFunction)
+                   != OperandType::Unknown)
+            || (m_storage && (m_storage->hasSystemVariable(trimmed)
+                              || m_storage->isCharaDataVariable(trimmed)));
+        if (knownVariable) {
+            const QSharedPointer<ExpressionNode> exprAst = m_parseTable->expressionAst(trimmed);
+            if (exprAst) {
+                value = evaluator.evaluate(*exprAst, m_storage, m_gameBaseData).toString();
+                evaluated = true;
+            }
         }
     }
     if (!evaluated) {
@@ -1894,7 +1915,10 @@ bool ExecutionEngine::writeStringValue(const QString& lhs, const QString& value)
     const QString upper = varName.toUpper();
     if (upper == QLatin1String("RESULTS")) {
         // [qdbug] 修复：RESULTS 全局（C# VariableData.cs:202，跨函数共享）
-        m_storage->setGlobalStr1D(QStringLiteral("RESULTS"), 0, value);
+        // 下标：RESULTS:1 此前恒写槽 0（index 已算出却未使用）——
+        // OPTION_SETNAME 的 RESULTS:0（名）/RESULTS:1（值）全落同一槽
+        m_storage->setGlobalStr1D(QStringLiteral("RESULTS"),
+                                  index >= 0 ? index : 0, value);
         return true;
     }
     // ARGS（实参字符串数组）与 LOCALS（局部字符串数组）分离，同 ARG/LOCAL

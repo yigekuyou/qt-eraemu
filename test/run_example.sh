@@ -14,6 +14,7 @@
 #   ./test/run_example.sh 21       # GOTO $标签 函数作用域（eraTW COMMON @CHOICE 回归）
 #   ./test/run_example.sh 23       # PRINTDATA/DATAFORM/ENDDATA（eraTW TW_TIPS 复现·特征化）
 #   ./test/run_example.sh 24       # CSV 名表与 STR 变量（ecd/docs 规范：Str.csv 值 / StrName.csv 名）
+#   ./test/run_example.sh 25       # RESULTS 下标/#FUNCTIONS 返回值/裸文本赋值（eraTW OPTION_SETTING 回归）
 #
 # 依赖：build/src/eraengine/test_cli
 #       （cmake --build build --target test_cli）

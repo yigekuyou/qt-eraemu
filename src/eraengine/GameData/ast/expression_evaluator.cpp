@@ -639,7 +639,13 @@ QVariant ExpressionEvaluator::evaluateVariable(const VariableNode &node, Variabl
             //   varTokenDic.Add("RESULTS", new Str1DVariableToken(...))），跨函数
             //   共享；此前放函数局部槽，被调方写的返回值在调用方读不到
             //   （eraTW 的 CALLFORM COLOREDMAP_%RESULTS%_… 展开为空）。
-            return QVariant(storage->getGlobalStr1D(QStringLiteral("RESULTS"), 0));
+            // 下标：RESULTS:1 此前恒读槽 0（硬编码 0）—— OPTION_SETNAME 的
+            // RESULTS:0（名）/RESULTS:1（值）全落同一槽，菜单左右两列显示同一个值
+            int idx = 0;
+            if (node.isArray() && !node.indices().isEmpty()) {
+                idx = static_cast<int>(resolveIndex(node, 0, storage, gameBaseData));
+            }
+            return QVariant(storage->getGlobalStr1D(QStringLiteral("RESULTS"), idx));
         }
         // 用户函数形参别名（@F(A,B) 内的 A/B -> LOCAL 槽位）
         const int aliasIdx = storage->localAliasIndex(varName);
@@ -702,7 +708,12 @@ QVariant ExpressionEvaluator::evaluateVariable(const VariableNode &node, Variabl
         const QString& upper = eraUpperKey(varName, upperScratch);
         if (upper == QLatin1String("RESULTS")) {
             // [qdbug] 修复：RESULTS 全局（同上，C# VariableData.cs:202）
-            return QVariant(storage->getGlobalStr1D(QStringLiteral("RESULTS"), 0));
+            // 下标：同上 —— RESULTS:1 恒读槽 0 -> OPTION 菜单左右两列同值
+            int idx = 0;
+            if (node.isArray() && !node.indices().isEmpty()) {
+                idx = static_cast<int>(resolveIndex(node, 0, storage, gameBaseData));
+            }
+            return QVariant(storage->getGlobalStr1D(QStringLiteral("RESULTS"), idx));
         }
         if (upper == QLatin1String("SAVEDATA_TEXT")) {
             return QVariant(storage->getSystemStr(upper, 0));

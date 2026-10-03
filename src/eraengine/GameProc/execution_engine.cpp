@@ -1281,10 +1281,10 @@ bool ExecutionEngine::executeInstruction(const LogicalLine& line) {
 
     // ---- 字体样式（FONTBOLD/FONTITALIC/FONTUNDERLINE/FONTSTRIKE/FONTREGULAR/FONTSTYLE）----
     // GETSTYLE/FONTSTYLE 成对使用（eraTW 的 COLORMESSAGE 保存并还原样式）。
-    if (name.startsWith(QLatin1String("FONT"))) {
+    if (name.startsWith(QLatin1String("FONT")) || name == QLatin1String("SETSTYLE")) {
         if (name == QLatin1String("FONTREGULAR")) {
             m_styleBits = 0;
-        } else if (name == QLatin1String("FONTSTYLE")) {
+        } else if (name == QLatin1String("FONTSTYLE") || name == QLatin1String("SETSTYLE")) {
             // FONTSTYLE <位掩码>：整体替换
             if (!args.isEmpty() && !args.first().raw.trimmed().isEmpty()) {
                 ExpressionEvaluator& ev = getEvaluator();

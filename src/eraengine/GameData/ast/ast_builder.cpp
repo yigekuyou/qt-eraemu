@@ -248,6 +248,14 @@ bool AstBuilder::isExactInstructionName(const QString& upperName) {
         "BREAK", "CONTINUE", "RETURN", "RETURNF", "GOTO", "CALL", "BEGIN",
         "IF", "ELSEIF", "ELSE", "ENDIF", "SIF", "SELECTCASE", "CASE",
         "CASEELSE", "ENDSELECT", "THROW", "END", "QUIT",
+        // ecd/docs 命令表里、由执行链/引擎单独处理但不在指令规范表里的名字
+        // （缺了会被当成「未识别的指令」静默跳过）：
+        "RETURNFORM",      // RETURN 的格式化串版本（StrForm 实参）
+        "SETSTYLE",        // 字体样式位掩码（与 FONTSTYLE 同类）
+        "DRAWLINEFORM",    // DRAWLINE 的格式化串版本
+        "SETBGCOLORBYNAME", "TOOLTIP_SETCOLOR", "TOOLTIP_SETDELAY",
+        "TOOLTIP_SETDURATION",
+        "TRYLIST",         // STRDATA 的 TRY 版本（数据块标记）
     };
     for (const char* n : kExtra) {
         if (upperName == QLatin1String(n)) return true;

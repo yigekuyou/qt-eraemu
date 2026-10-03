@@ -966,6 +966,8 @@ ExecState ScriptRunner::executeLine(const LogicalLine& line) {
             // RESULTS 全局（C# VariableData.cs:202，跨函数共享）
             m_storage->setGlobalStr1D(QStringLiteral("RESULTS"), 0, text);
             m_storage->setLocalStr(0, text);
+            // 返回值：字符串型函数的调用方读的是 m_lastReturnValue（与 RETURNF 同路径）
+            m_lastReturnValue = QVariant(text);
         }
         if (!returnFromCall()) return ExecState::Halt;
         return ExecState::Continue;

@@ -1,0 +1,165 @@
+;=============================================================
+; 组 26 —— 自然结束不清 RESULT / 裸 RETURNF 返回空串
+;
+; eraTW NOUMIN.ERB「請選擇一個僱傭你的地主」（主菜单 [151] 農家設定）
+; 回归。两个症状、同一组根因：
+;
+;   * 地主一覧显示 0：无農民数据的角色本应被
+;     `SIF !STRLENS(STR_NOUMIN(C_ID, "説明")) CONTINUE` 过滤掉。
+;     GET_OBJ 拦截后走**裸 RETURNF** —— #FUNCTIONS 的缺省返回必须是
+;     空串（C# Process.State.cs ReturnF(null) -> MethodReturnValue=null），
+;     此前把缺省整数 0 字符串化成 "0"，STRLENS==1 过滤失效，
+;     一覧里全是 `0　0的位置在0的附近`。
+;   * 地主无法选择：`INPUT` -> `SELECTCASE RESULT` ->
+;     `SIF !STRLENS(STR_NOUMIN(RESULT, "説明"))` -> `FLAG:地主 = RESULT`。
+;     STR_NOUMIN 链（GET_STR -> GET_OBJ -> CALLF 角色データN）调用的
+;     角色データN 是 SELECTCASE 后**自然结束**（无 RETURN）的 #FUNCTION，
+;     引擎此前在自然结束时把全局 RESULT 清 0 -> FLAG:地主 = 0 ->
+;     外层 LOOP !(FLAG:地主) 无限重打列表。
+;     C# 对照：Process.ScriptProc.cs:67 自然结束走 state.Return(0)，
+;     Return/ReturnF 本身**不写 RESULT**（只有 RETURN 语句写）。
+;=============================================================
+
+@TEST_NOUMIN_RESULT
+#DIM RET
+#DIM LAND
+#DIM D
+#DIMS S
+
+RET = 0
+
+;---- 1) 角色データ原型：自然结束的 #FUNCTION 不清 RESULT ----
+;注意：CALL ASSERT_EQ 自身的 RETURN 0 会写 RESULT:0（C# RETURN 语义），
+;断言 RESULT 前必须先捕获到局部变量。
+RESULT = 7
+D = R26_FALL_INT()
+LAND = RESULT
+CALL ASSERT_EQ, D, 0, @"自然结束 #FUNCTION 缺省返回 0"
+RET += RESULT
+CALL ASSERT_EQ, LAND, 7, @"自然结束 #FUNCTION 后 RESULT 保持 7（此前被清 0）"
+RET += RESULT
+
+;---- 2) 缺省返回：裸 RETURNF / 自然结束 #FUNCTIONS 都是空串 ----
+S = %R26_BARE_RETURNF()%
+CALL ASSERT_SEQ, S, "", @"裸 RETURNF（#FUNCTIONS）返回空串（此前是 0）"
+RET += RESULT
+CALL ASSERT_EQ, STRLENS(R26_FALL_STR()), 0, @"自然结束 #FUNCTIONS 返回空串（GET_TALENTNAME 过滤模式）"
+RET += RESULT
+
+;---- 3) 有農民数据的角色：值经 TEMP 缩微槽返回 ----
+S = %R26_STR_NOUMIN(1, "説明")%
+CALL ASSERT_SEQ, S, "米農家", @"角色 1（霊夢原型）的農民：説明"
+RET += RESULT
+S = %R26_STR_NOUMIN(5, "説明")%
+CALL ASSERT_SEQ, S, "生菜農家", @"角色 5（桑尼原型）的農民：説明"
+RET += RESULT
+
+;---- 4) 无農民数据的角色：必须过滤为空串（地主一覧此前显示 0）----
+CALL ASSERT_EQ, STRLENS(R26_STR_NOUMIN(4, "説明")), 0, @"角色 4（无農民数据）返回空串"
+RET += RESULT
+
+;---- 5) 选地主：SIF 用户函数(RESULT) 之后 RESULT 保持（地主可选的关键）----
+;eraTW 原型：INPUT 选 [1] 后 RESULT=1，
+;  SIF !STRLENS(STR_NOUMIN(RESULT, "説明")) / FLAG:地主 = RESULT
+;  （SIF 与下一行之间没有 CALL —— RESULT 必须原样穿透用户函数调用链）
+RESULT = 1
+SIF STRLENS(R26_STR_NOUMIN(RESULT, "説明"))
+	LAND = 1
+D = RESULT
+CALL ASSERT_EQ, LAND, 1, @"SIF 调用用户函数后分支命中"
+RET += RESULT
+CALL ASSERT_EQ, D, 1, @"SIF 调用链后 RESULT 仍 = 1（此前被清 0，地主无法选择）"
+RET += RESULT
+
+;---- 6) 无数据角色：!STRLENS 命中 -> 走 RETRY 重试分支 ----
+RESULT = 4
+LAND = 0
+SIF !STRLENS(R26_STR_NOUMIN(RESULT, "説明"))
+	LAND = -1
+CALL ASSERT_EQ, LAND, -1, @"无数据角色被 !STRLENS 过滤（-> RETRY）"
+RET += RESULT
+
+DEBUGPRINTL 组26完成
+RETURN RET
+
+;=============================================================
+; eraTW 缩微原型
+;=============================================================
+
+;---- 角色データN 原型：#FUNCTION、SELECTCASE 无 RETURN（自然结束）----
+;有農民数据的角色命中 CASE 后经 CALLF 把值写进暂存槽（TEMPVAR 缩微）；
+;无论命中与否函数都自然结束 —— 这正是 eraTW @角色データN 的形状。
+@R26_CHARA_DATA(ARG, O_DATA)
+#FUNCTION
+#DIMS O_DATA
+SELECTCASE O_DATA
+CASE "農民：説明"
+	SELECTCASE ARG
+	CASE 1
+		CALLF R26_TEMP("MAKE", "米農家", ARG)
+	CASE 5
+		CALLF R26_TEMP("MAKE", "生菜農家", ARG)
+	ENDSELECT
+ENDSELECT
+
+;---- GET_STR/GET_OBJ 原型：包装层 + 存在性拦截（裸 RETURNF）----
+@R26_STR_NOUMIN(ID, TYPE)
+#FUNCTIONS
+#DIM ID
+#DIMS TYPE
+RETURNF R26_GET_OBJ(ID, "農民：" + TYPE)
+
+@R26_GET_OBJ(ARG, O_DATA)
+#FUNCTIONS
+#DIM ARG
+#DIMS O_DATA
+CALLF R26_CHARA_DATA(ARG, O_DATA)
+;暂存槽没有本角色的值 = 无農民数据 -> 裸 RETURNF 返回空串
+SIF R26_TEMP("GET_ID", "", ARG) == "0"
+	RETURNF
+RETURNF R26_TEMP("RE_STR", "", ARG)
+
+;---- TEMPVAR 缩微（eraTW OBJ/TEMPVAR.ERB：静态私有变量当存储）----
+;所有读写都经本函数（私有静态跨函数不可见，与原版 @TEMP_STOCK 同构）
+@R26_TEMP(COMMAND, SVAL, ID)
+#FUNCTIONS
+#DIMS COMMAND
+#DIMS SVAL
+#DIM ID
+#DIMS ST_VALUE
+#DIM  ST_ID
+#DIM  ST_FULL
+SELECTCASE COMMAND
+CASE "MAKE"
+	ST_VALUE = %SVAL%
+	ST_ID = ID
+	ST_FULL = 1
+	RETURNF "1"
+CASE "GET_ID"
+	SIF ST_FULL == 1 && ID == ST_ID
+		RETURNF "1"
+	RETURNF "0"
+CASE "RE_STR"
+	SIF ST_FULL != 1
+		RETURNF ""
+	ST_FULL = 0
+	RETURNF ST_VALUE
+CASEELSE
+	RETURNF ""
+ENDSELECT
+
+;---- 裸 RETURNF 原型 ----
+@R26_BARE_RETURNF
+#FUNCTIONS
+RETURNF
+
+;---- 自然结束原型 ----
+@R26_FALL_INT
+#FUNCTION
+SIF 0
+	RETURNF 1
+
+@R26_FALL_STR
+#FUNCTIONS
+SIF 0
+	RETURNF "x"

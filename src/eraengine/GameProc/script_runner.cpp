@@ -212,15 +212,16 @@ bool ScriptRunner::stepOnce() {
         // 函数体自然结束（无 RETURN/RETURNF）：#FUNCTIONS 缺省返回**空字符串**
         // （eraTW 大量依赖 `STRLENS(GET_TALENTNAME(...))` 过滤无值素질 ——
         //   若缺省成整数 0，字符串化后是 "0"，会把所有无值素質显示成 [0]）。
-        // 其余情况缺省 0 并清 RESULT。
+        // 其余情况缺省 0。对齐 C# Process.ScriptProc.cs:67 state.Return(0)：
+        // 自然结束**不写 RESULT**（Return/ReturnF 本身不落 RESULT，eraTW 依赖
+        // `SIF 用户函数(RESULT)` 后继续读 RESULT —— NOUMIN 选地主的
+        // `FLAG:地主 = RESULT` 在此被清 0 导致地主无法选择）。
         const UserFunctionDecl* finfo =
             m_table->userFunction(m_table->currentFrame().callLabel);
         if (finfo && finfo->isMethod && finfo->returnsString())
             m_lastReturnValue = QVariant(QString());
         else
             m_lastReturnValue = QVariant::fromValue<qint64>(0);
-        m_storage->setSystemVariable("RESULT", 0, 0);
-        m_storage->setGlobalInt1D("RESULT", 0, 0);
         // 脚本结束：能返回就返回调用者，否则停止
         if (returnFromCall()) {
             return true;
@@ -244,7 +245,7 @@ bool ScriptRunner::stepOnce() {
     // 函数体边界（C# FunctionLabelLine 终止上一个函数体）：
     // 落入的不是本帧入口的 @label = 上一函数已自然结束、无 RETURN/RETURNF。
     // #FUNCTIONS 缺省返回**空字符串**（eraTW 依赖 STRLENS(GET_TALENTNAME(...))
-    // 过滤无值素質），其余缺省 0。
+    // 过滤无值素質），其余缺省 0。同上：自然结束不写 RESULT（对齐 C#）。
     if (line.kind == LineKind::FunctionLabel && m_table->depth() > 0
         && m_table->currentFrame().entryLine != pc) {
         const UserFunctionDecl* finfo = m_table->userFunction(m_table->currentFrame().callLabel);
@@ -252,8 +253,6 @@ bool ScriptRunner::stepOnce() {
             m_lastReturnValue = QVariant(QString());
         else
             m_lastReturnValue = QVariant::fromValue<qint64>(0);
-        m_storage->setSystemVariable("RESULT", 0, 0);
-        m_storage->setGlobalInt1D("RESULT", 0, 0);
         if (returnFromCall()) {
             return true;
         }
@@ -427,8 +426,15 @@ ExecState ScriptRunner::executeLine(const LogicalLine& line) {
                 return ExecState::Continue;
             }
             m_lastReturnValue = QVariant::fromValue<qint64>(0);
-            m_storage->setSystemVariable("RESULT", 0, 0);
-            m_storage->setGlobalInt1D("RESULT", 0, 0);
+            // 自然结束不写 RESULT（对齐 C# Process.ScriptProc.cs:67 Return(0)）；
+            // #FUNCTIONS 缺省返回空串（其余同上）。此前在此清 RESULT 会把
+            // `SIF 用户函数(RESULT)` 之后的 `FLAG:地主 = RESULT` 清成 0。
+            {
+                const UserFunctionDecl* finfo =
+                    m_table->userFunction(m_table->currentFrame().callLabel);
+                if (finfo && finfo->isMethod && finfo->returnsString())
+                    m_lastReturnValue = QVariant(QString());
+            }
             if (returnFromCall()) {
                 return ExecState::Continue;
             }
@@ -985,6 +991,15 @@ ExecState ScriptRunner::executeLine(const LogicalLine& line) {
                 m_lastReturnValue = op.isString ? QVariant(op.raw)
                     : op.ast ? ev->evaluate(*op.ast, m_storage, baseData())
                              : ev->evaluate(op.raw, m_storage, baseData());
+            } else {
+                // 裸 RETURNF：对齐 C# ReturnF(null) —— MethodReturnValue=null，
+                // 调用方按函数类型读缺省值。#FUNCTIONS 必须取**空串**而非把整数
+                // 0 字符串化成 "0"（eraTW GET_OBJ 的 `SIF TEMP_GET(...)==\"0\"`
+                // 拦截后 RETURNF 缺省值成了 "0"，无農民数据的角色全显示 0）。
+                const UserFunctionDecl* finfo =
+                    m_table->userFunction(m_table->currentFrame().callLabel);
+                if (finfo && finfo->isMethod && finfo->returnsString())
+                    m_lastReturnValue = QVariant(QString());
             }
         } else {
             // Evaluate all return expressions before changing RESULT; later

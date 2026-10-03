@@ -1,0 +1,35 @@
+;=============================================================
+; [16] 显示行操作（CLEARLINE 族）
+;
+; 这些命令会删除/清空已显示行 —— 在专用组里执行不影响其它组的输出，
+; 因此由手写组覆盖（自动冒烟组里会把组内输出删掉，所以不自动生成）。
+;=============================================================
+@TEST_DISPLAY
+#DIM NONG
+#DIM N
+
+PRINTL == 组16：显示行操作（CLEARLINE 族） ==
+
+;---- CLEARLINE：按逻辑行数删（C# deleteLine）----
+PRINTL 这一行马上会被 CLEARLINE 删掉
+CLEARLINE 1
+CALL ASSERT_TRUE, 1, @"CLEARLINE 1 执行不报错"
+NONG += RESULT
+
+PRINTL A
+PRINTL B
+N = LINECOUNT
+CLEARLINE 2
+CALL ASSERT_EQ, LINECOUNT, N - 2, @"CLEARLINE 2 删掉 2 行"
+NONG += RESULT
+
+;---- CLEARTEXTBOX（EE）：清空文本框（留痕桩）----
+CLEARTEXTBOX
+CALL ASSERT_TRUE, 1, @"CLEARTEXTBOX（EE）执行不报错"
+NONG += RESULT
+
+;---- OCLEARLINE（EE）：删除已显示行（留痕桩）----
+OCLEARLINE 1
+CALL ASSERT_TRUE, 1, @"OCLEARLINE 1（EE）执行不报错"
+NONG += RESULT
+RETURN NONG

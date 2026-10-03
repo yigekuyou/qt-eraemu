@@ -1,0 +1,68 @@
+;=============================================================
+; [21] GOTO $标签 函数作用域（eraTW COMMON.ERB @CHOICE 回归用例）
+;
+; 复刻 eraTW/ERB/COMMON.ERB @CHOICE 的非法输入路径：
+;   $INPUT_LOOP / INPUT / SELECTCASE RESULT
+;     CASE 0 TO LOCAL - 1        （合法 -> RETURN RESULT）
+;     CASEELSE -> CALL 惩罚函数 -> GOTO INPUT_LOOP（重等输入）
+;
+; 回归背景：引擎的 GOTO 曾按「脚本级标签表」（labelPositions 按名字
+; 一对一覆盖）解析 —— 同一脚本里多个函数都有同名 $ 标签时（eraTW
+; COMMON.ERB 有 4 个 $INPUT_LOOP），后注册的覆盖先注册的，GOTO 跳进
+; **别的函数**继续执行（表现即「进入了错误的内存」）。
+; eraTW 实测触发点：NEWGAME/強くてニューゲーム.ERB:344 CALL CHOICE ->
+; 非法输入 3 -> CASEELSE CALL SIMATTYAUOJISAN -> GOTO INPUT_LOOP。
+; C# 语义：$ 标签解析期绑定在**当前函数内**，跨函数不可能。
+;
+; 本文件故意放了两个 $INPUT_LOOP（本组后半个函数 GOTO_TRAP 里）：
+; 有 bug 时 GOTO INPUT_LOOP 会跳进 GOTO_TRAP（返回 99），断言失败；
+; 修复后回到 @CHOICE_REPLICA 自己的 $INPUT_LOOP，最终返回 1。
+;
+; 由 test_cli --script 自动喂入（run_example.sh 21）：
+;   21 -> 3（越界，走 CASEELSE + GOTO 循环）-> 1（合法，返回 1）
+;=============================================================
+@TEST_GOTO_LABEL_SCOPE
+PRINTL == 组21：GOTO $标签 函数作用域（eraTW COMMON.ERB @CHOICE） ==
+CALL CHOICE_REPLICA, "要使用哪个口上呢", "口上A", "口上B"
+CALL ASSERT_EQ, RESULT, 1, @"CHOICE 复刻返回 1（非法 3 -> GOTO 回本函数 INPUT_LOOP 重等）"
+CALL TEST_SUMMARY, RESULT
+QUIT
+
+;-----------------------------------------------------------
+; @CHOICE(ARGS:0, ARGS:1～4) 的复刻（COMMON.ERB:33）
+; 注意：@CHOICE_REPLICA 必须在 GOTO_TRAP **之前** —— 有 bug 时
+; 脚本级标签表「后者覆盖」恰好命中 GOTO_TRAP 的同名标签。
+;-----------------------------------------------------------
+@CHOICE_REPLICA(ARGS:0, ARGS:1, ARGS:2, ARGS:3, ARGS:4)
+PRINTSL ARGS:0
+FOR LOCAL, 0, 4
+	PRINTFORML [{LOCAL}] - %ARGS:(1 + LOCAL)%
+	SIF LOCAL && !STRLENS(ARGS:(2 + LOCAL))
+		BREAK
+NEXT
+$INPUT_LOOP
+INPUT
+SELECTCASE RESULT
+	CASE 0 TO LOCAL - 1
+	CASEELSE
+		CALL PUNISH_REPLICA
+		CLEARLINE 1
+		GOTO INPUT_LOOP
+ENDSELECT
+RETURN RESULT
+
+;-----------------------------------------------------------
+; @SIMATTYAUOJISAN 的替身（原函数在 OPTION.ERB：没收叔叔）
+;-----------------------------------------------------------
+@PUNISH_REPLICA
+PRINTL 输入了选项之外的数字（没收叔叔出現了！）
+
+;-----------------------------------------------------------
+; 诱饵函数：与 @CHOICE_REPLICA 同名的 $INPUT_LOOP。
+; GOTO 误解析时执行会落到这里（RESULT=99 -> 断言失败可见）。
+;-----------------------------------------------------------
+@GOTO_TRAP
+$INPUT_LOOP
+PRINTL 不应执行到这里（GOTO 跳进了别的函数的 $INPUT_LOOP —— 错误的内存）
+INPUT
+RETURN 99

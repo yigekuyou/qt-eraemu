@@ -1,0 +1,45 @@
+;=============================================================
+; [15] 鼠标 / 原始输入（INPUTMOUSEKEY）+ EE 输入族桩
+;
+; INPUTMOUSEKEY 等鼠标/键盘 —— GUI 下必须手点；无 GUI 时用 test_cli 的
+; `k <t> <r1> <r2> <r3> <r4>` 注入（x = 左键点击）。两种路径都测：
+;   * 真实注入（k 1 10 10 1 0）→ RESULT:0 = 1（类型 = 鼠标左键）；
+;   * 带超时（INPUTMOUSEKEY 50）→ 注入没来时超时自动继续，
+;     C# 对齐：超时按 InputMouseKey(4,0,0,0,0) → RESULT:0 = 4。
+; 注意顺序：**先注入后超时** —— 脚本序列里 k 在前，第一个 INPUTMOUSEKEY
+; 吃注入；第二个 INPUTMOUSEKEY 时序列已空，靠超时自动继续。
+; 运行：./test/run_example.sh 15（脚本 = 菜单 15 + k 注入）
+;=============================================================
+@TEST_MOUSE
+#DIM NONG
+
+PRINTL == 组15：鼠标 / 原始输入（INPUTMOUSEKEY） ==
+
+;---- 真实注入（test_cli `k 1 10 10 1 0`）----
+PRINTL INPUTMOUSEKEY：等待鼠标/键盘（自动化时由 k 注入）
+INPUTMOUSEKEY 0
+CALL ASSERT_EQ, RESULT:0, 1, @"INPUTMOUSEKEY 收到注入 type=1"
+NONG += RESULT
+
+;---- 带超时：注入没来时超时自动继续（C# InputMouseKey(4,0,0,0,0)）----
+INPUTMOUSEKEY 50
+CALL ASSERT_EQ, RESULT:0, 4, @"INPUTMOUSEKEY 超时 RESULT:0 = 4"
+NONG += RESULT
+
+;---- EE 输入族桩（留痕跳过，执行不报错）----
+BINPUT
+CALL ASSERT_TRUE, 1, @"BINPUT（EE 桩）执行不报错"
+NONG += RESULT
+BINPUTS
+CALL ASSERT_TRUE, 1, @"BINPUTS（EE 桩）执行不报错"
+NONG += RESULT
+INPUTANY
+CALL ASSERT_TRUE, 1, @"INPUTANY（EE 桩）执行不报错"
+NONG += RESULT
+FLOWINPUT
+CALL ASSERT_TRUE, 1, @"FLOWINPUT（EE 桩）执行不报错"
+NONG += RESULT
+TINPUTAWAIT
+CALL ASSERT_TRUE, 1, @"TINPUTAWAIT（EE 桩）执行不报错"
+NONG += RESULT
+RETURN NONG

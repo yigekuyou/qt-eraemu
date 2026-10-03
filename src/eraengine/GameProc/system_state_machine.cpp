@@ -1340,7 +1340,18 @@ void SystemStateMachine::loadGameWaitInput() {
         if (m_state->getSystemState() == SystemStateCode::LoadGameOpenning_WaitInput) {
             beginTitle();
         } else {
-            loadPrevState();
+            // C# loadPrevState 恢复整份备份进程（含调用栈）；引擎只有状态码快照，
+            // 残留的旧脚本帧无法按行复活。从 Normal（标题）打开的读档画面取消 =
+            // 清掉残留帧、回到标题重画（对齐可观察行为：重画标题、重新等输入）。
+            const SystemStateCode prev = m_prevStates.isEmpty()
+                ? SystemStateCode::Title_Begin : m_prevStates.last();
+            if (prev == SystemStateCode::Normal) {
+                if (!m_prevStates.isEmpty()) m_prevStates.removeLast();
+                if (m_table) m_table->resetPosition();
+                setState(SystemStateCode::Title_Begin);
+            } else {
+                loadPrevState();
+            }
         }
         return;
     }
@@ -1382,6 +1393,10 @@ void SystemStateMachine::loadGameWaitInput() {
         m_state->setErrorState();
         return;
     }
+    // 载入成功：读档前的旧调用栈一并废弃 —— C# 里备份进程被 deletePrevState
+    // 丢弃，载入后的游戏从 EVENTLOAD 起走全新流程；残留旧帧（如标题循环）
+    // 若不清掉，会在 SHOW_SHOP 返回后复活（标题重画进载入后的游戏）。
+    if (m_table) m_table->resetPosition();
     deletePrevState();
     beginDataLoaded();
 }

@@ -175,6 +175,26 @@ int main(int argc, char* argv[]) {
               "PRINTFORM  ({…}) 仍是指令");
     }
 
+    // eraTW TRACHECK_ORGASM.ERB:92 `POWER Multiplier, 2, MultipleEc`：
+    // POWER 的**语句形式**是 SP_POWER 指令（<变量>, X, Y -> 变量 = X^Y，3 参），
+    // 与式中函数 POWER(X, Y)（2 参）并存。此前语句被「内置函数名开头 -> 整行
+    // 按函数调用归约」劫持：既触发双重参数告警（指令侧 3 参只见 1 个操作数、
+    // 函数侧 2 参收到 3 个），又丢掉对变量的赋值。
+    qDebug() << "\n7) POWER 语句（变量 = X^Y）";
+    {
+        const AstResolver resolveOne = [&table](const QString& e) { return table.expressionAst(e); };
+        LogicalLine p = AstBuilder::build(QStringLiteral("POWER BAG:2, 2, 10"),
+                                          ScriptPosition("t.ERB", 0, 0), resolveOne);
+        check(p.functionName == QLatin1String("POWER") && !p.isFunctionCall,
+              "POWER 语句按指令解析（不再被归约为函数调用）");
+        check(!p.argument.hasError(),
+              "POWER 语句 3 参通过校验（" + p.argument.typeError + "）");
+        storage.setPrivateScope("MAIN", {"BAG"});
+        engine.executeInstruction(p);
+        check(storage.getGlobalInt1D("BAG", 2) == 1024,
+              "POWER BAG:2, 2, 10 -> BAG:2 == 1024（变量被赋值）");
+    }
+
 
     // ecd/docs/translation/Command.html: PRINTBUTTON accepts integer or string values.
     {

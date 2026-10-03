@@ -286,8 +286,10 @@ inline constexpr BuiltinFunctionSpec kBuiltinFunctions[] = {
     {"MOUSEX"              , OperandType::Int, 0, 0, """", false, BuiltinOp::MouseX},
     {"MOUSEY"              , OperandType::Int, 0, 0, """", false, BuiltinOp::MouseY},
     {"ISACTIVE"            , OperandType::Int, 0, 0, """", false, BuiltinOp::IsActive},
-    {"SAVETEXT"            , OperandType::Int, 4, 4, "siii", false, BuiltinOp::SaveText},
-    {"LOADTEXT"            , OperandType::Str, 3, 3, "iii", false, BuiltinOp::LoadText},
+    // SAVETEXT str text, int fileNo{, int force_savdir, int force_UTF8}（C# Creator.Method.cs:4116：2..4 参）
+    {"SAVETEXT"            , OperandType::Int, 2, 4, "siii", false, BuiltinOp::SaveText},
+    // LOADTEXT int fileNo{, int force_savdir, int force_UTF8}（C# Creator.Method.cs:4171：1..3 参）
+    {"LOADTEXT"            , OperandType::Str, 1, 3, "iii", false, BuiltinOp::LoadText},
     {"GCREATED"            , OperandType::Int, 1, 1, "i", false, BuiltinOp::GCreated},
     {"GWIDTH"              , OperandType::Int, 1, 1, "i", false, BuiltinOp::GWidth},
     {"GHEIGHT"             , OperandType::Int, 1, 1, "i", false, BuiltinOp::GHeight},

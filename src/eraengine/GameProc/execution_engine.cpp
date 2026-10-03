@@ -23,6 +23,7 @@
 #include <QJsonArray>
 #include <QJsonDocument>
 #include <QJsonObject>
+#include <cmath>
 #include "expression_evaluator.h"
 #include "ast/expression_ast.h"
 #include "ast/ast_builder.h"
@@ -766,6 +767,43 @@ bool ExecutionEngine::executeInstruction(const LogicalLine& line) {
                 }
                 const double product = static_cast<double>(readLhs(ref)) * factor;
                 writeLhs(ref, static_cast<qint64>(product));   // C# unchecked 强转截断
+            }
+        }
+        return true;
+    }
+
+    // ---- POWER <变量>, <X>, <Y>（对齐 C# SP_POWER_Instruction：变量 = X^Y）----
+    // 语句形式（3 参、首参变量），与式中函数 POWER(X, Y)（2 参）并存；
+    // ast_builder 已把语句形式按指令解析（不走 isFunctionCall）。
+    if (name == "POWER") {
+        if (!m_storage) return true;
+        QList<const Operand*> ops;
+        for (const Operand& a : args) {
+            if (a.isString || a.raw != QLatin1String(",")) ops.append(&a);
+        }
+        if (ops.size() >= 3) {
+            const LhsRef ref = parseLhsRef(ops.first()->raw);
+            if (ref.valid) {
+                ExpressionEvaluator localEvaluator;
+                ExpressionEvaluator& ev = m_expressionEvaluator ? *m_expressionEvaluator : localEvaluator;
+                const qint64 x = ops.at(1)->ast
+                    ? ev.evaluate(*ops.at(1)->ast, m_storage, m_gameBaseData).toLongLong()
+                    : ev.evaluate(ops.at(1)->raw, m_storage, m_gameBaseData).toLongLong();
+                const qint64 y = ops.at(2)->ast
+                    ? ev.evaluate(*ops.at(2)->ast, m_storage, m_gameBaseData).toLongLong()
+                    : ev.evaluate(ops.at(2)->raw, m_storage, m_gameBaseData).toLongLong();
+                // 对齐 C# PowerMethod.GetIntValue：double 幂，非数值/无穷/超 64 位范围报错
+                const double pow = std::pow(static_cast<double>(x), static_cast<double>(y));
+                if (std::isnan(pow)) {
+                    m_state.setErrorState();
+                    emit errorOccurred(QStringLiteral("累乗結果が非数値です（POWER %1, %2）").arg(x).arg(y));
+                } else if (std::isinf(pow) || pow >= 9223372036854775807.0 || pow <= -9223372036854775808.0) {
+                    m_state.setErrorState();
+                    emit errorOccurred(QStringLiteral("累乗結果(%1)が64ビット符号付き整数の範囲外です（POWER %2, %3）")
+                                           .arg(QString::number(pow, 'g', 17)).arg(x).arg(y));
+                } else {
+                    writeLhs(ref, static_cast<qint64>(pow));
+                }
             }
         }
         return true;
@@ -1677,7 +1715,15 @@ bool ExecutionEngine::handleStringAssignment(const QString& lhs, const QString& 
     if (!evaluated) {
         const QVariant rhsValue = ast ? evaluator.evaluate(*ast, m_storage, m_gameBaseData)
         : evalExpressionCached(m_parseTable, evaluator, rhs, m_storage, m_gameBaseData);
-        value = rhsValue.toString();
+        if (rhsValue.isValid()) {
+            value = rhsValue.toString();
+        } else {
+            // eramaker 兼容：字符串变量可以赋**裸字符串**（无引号、不是表达式）。
+            // eraTW 口上 `RESULTS:0 = 図書館にどんな本を増やしたらいいですかね?`
+            // —— 句末的 ? 会被表达式解析器当成三元运算符（「Expected #」），
+            // 右值解析失败；此时右值按字面文本写入（对齐 C# 裸字符串赋值兼容）。
+            value = trimmed;
+        }
     }
 
     // [qdbug] 字符串赋值跟踪（保留的调试桩）：追查 eraTW 的右值展开问题 ——

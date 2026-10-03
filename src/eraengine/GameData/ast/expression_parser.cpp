@@ -375,9 +375,18 @@ ExpressionToken ExpressionParser::consume(TokenType type, const QString& message
     if (check(type)) {
         return advance();
     }
-    // 解析失败点：调用方通常只拿到 nullptr，这里给出「期望什么/实际读到什么」
-    qWarning() << "[parse] 表达式语法错误:" << message
-               << "实际 token:" << peek().value();
+    // 解析失败点：调用方通常只拿到 nullptr，这里给出「期望什么/实际读到什么」。
+    // 附上 token 序列拼回的原文 —— 表达式本身没有位置信息，只有原文能定位到行。
+    {
+        QString text;
+        for (const ExpressionToken& t : m_tokens) {
+            if (!text.isEmpty()) text += QLatin1Char(' ');
+            text += t.value();
+        }
+        qWarning() << "[parse] 表达式语法错误:" << message
+                   << "实际 token:" << peek().value()
+                   << "表达式:" << text.left(160);
+    }
     return ExpressionToken(TokenType::END_OF_FILE, "", -1, -1);
 }
 

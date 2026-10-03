@@ -1,0 +1,95 @@
+;=============================================================
+; [20] RESTART 菜单复刻（eraTW NEWGAME_CUSTOM.ERB 回归用例）
+;
+; 复刻 eraTW/ERB/NEWGAME/NEWGAME_CUSTOM.ERB 的菜单骨架：
+;   INPUT -> SELECTCASE RESULT（含 `CASE 0 TO 999` 等 TO 区间）
+;         -> ENDSELECT -> RESTART（回到 @ 函数开头重画菜单再等输入）
+;
+; 回归背景：引擎曾在 INPUT 等待点做「AST 静态分析」，只收集 CASE 的
+; 字面常量 —— `CASE 0 TO 999` 是 TO 区间收集不到，合法输入 0（改名）
+; 被引擎误拒（「非分支值 0 被拒绝（合法分支：9999 2000 3000 4000 5000）」）。
+; 正确语义（对齐 C#）：任何输入都写 RESULT 继续，落空分支由脚本自己的
+; RESTART / GOTO 兜底 —— 引擎只需把 RESTART 跑对，不需要静态分析。
+;
+; 由 test_cli --script 自动喂入（run_example.sh 20）：
+;   20 -> 0（改名，TO 区间）-> s <名字>（INPUTS）
+;      -> 2000（子菜单）-> 9999（子菜单返回）-> 9999（设定完毕）
+;=============================================================
+
+;-----------------------------------------------------------
+; @CUSTOM_TERMINAL(ARG, HIKITSUGI) 的复刻（菜单 + INPUT + RESTART）
+;-----------------------------------------------------------
+@TEST_RESTART_MENU
+PRINTL == 组20：RESTART 菜单复刻（eraTW NEWGAME_CUSTOM.ERB） ==
+CALL CUSTOM_TERMINAL_REPLICA
+CALL TEST_SUMMARY, RESULT
+QUIT
+
+@CUSTOM_TERMINAL_REPLICA
+;静态局部变量只在「进入函数」时初始化一次；RESTART 是同帧跳转，
+;不会重置它们（对齐 ecd 文档：动态变量也不会被 RESTART 重置）。
+;——所以计数器**不能**写成函数体里的 `TM_PASS = 0`：那会跟着
+;函数体重跑，RESTART 一圈就清零（eraTW 原版同理）。
+#DIM TM_PASS        ; 经过函数头的次数（RESTART 保留）
+#DIM TM_NAME_EDIT   ; CASE 0 TO 999 命中次数（证明输入 0 没被拒）
+#DIM TM_FAILS       ; 断言失败累计
+#DIMS TM_EDITED     ; INPUTS 改好的名字
+;名前ボタン表示
+DRAWLINE
+PRINTL 　[0～999] 名字の編集
+PRINTL 　[2000] 能力の編集
+PRINTL 　[9999] 設定完毕
+DRAWLINE
+INPUT
+TM_PASS = TM_PASS + 1
+SELECTCASE RESULT
+	CASE 9999
+		TM_FAILS = 0
+		CALL ASSERT_EQ, TM_PASS, 3, @"RESTART 循环经过函数头的次数（改名/子菜单/完了）"
+		TM_FAILS += RESULT
+		CALL ASSERT_EQ, TM_NAME_EDIT, 1, @"输入 0 命中 CASE 0 TO 999（未被引擎拒绝）"
+		TM_FAILS += RESULT
+		CALL ASSERT_SEQ, TM_EDITED, "TW名字", @"INPUTS 改名生效"
+		TM_FAILS += RESULT
+		RETURN TM_FAILS
+	;NAME
+	CASE 0 TO 999
+		TM_NAME_EDIT = TM_NAME_EDIT + 1
+		CALL CUSTOM_NAME_REPLICA
+		TM_EDITED = RESULTS
+	;BASE
+	CASE 1000 TO 1999
+		PRINTL 不应走到这里（无填充输入）
+	;ABL
+	CASE 2000
+		CALL CUSTOM_MENU_REPLICA
+	;TALENT
+	CASE 3000
+	;EXP
+	CASE 4000
+	CASE 5000
+ENDSELECT
+RESTART
+
+;-----------------------------------------------------------
+; @CUSTOM_NAME(ARG, ARG:1) 的复刻（INPUTS，留空取消）
+;-----------------------------------------------------------
+@CUSTOM_NAME_REPLICA
+PRINTFORML 想要変更的话请输入新的名字。(留空为取消)
+INPUTS
+IF RESULTS != ""
+	PRINTFORML 已変更。現在的名字是%RESULTS%。
+ENDIF
+
+;-----------------------------------------------------------
+; @CUSTOM_MENU(ARGS, ARG) 的复刻（子菜单自己的 INPUT -> RESTART）
+;-----------------------------------------------------------
+@CUSTOM_MENU_REPLICA
+PRINTL
+PRINTL   [0] 能力A
+PRINTL   [9999] 返回
+INPUT
+SIF RESULT == 9999
+	RETURN
+PRINTL 能力已編集
+RESTART

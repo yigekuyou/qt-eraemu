@@ -688,7 +688,13 @@ LogicalLine AstBuilder::build(const QString& rawLine,
     //
     // 定性放在**赋值判定之后**：`RAND:3 = 5` 的 `RAND` 也是函数名，
     // 但整行是合法赋值，必须仍按赋值走（eraTW 大量使用 `RAND:n`）。
-    if (isBuiltinFunction(line.functionName.toStdString())) {
+    if (isBuiltinFunction(line.functionName.toStdString())
+        // POWER 例外：语句形式是 SP_POWER 指令「<变量>, X, Y -> 变量 = X^Y」
+        // （C# BuiltInFunctionCode.POWER，注释「引数が違うのでMETHOD化できない」），
+        // 与式中函数 POWER(X, Y)（2 参）不同形 —— 语句不能按函数调用归约，
+        // 否则 eraTW TRACHECK_ORGASM.ERB:92 `POWER Multiplier, 2, MultipleEc`
+        // 既触发参数数目双重告警、又丢掉对变量的赋值。
+        && line.functionName != QLatin1String("POWER")) {
         const QString callText = trimmed.mid(first.text.length()).trimmed();
         // 实参形态声明外置（注册类可以插入 AST）：ExtensionRegistry::regForm()
         // 声明的函数（如 PUTFORM），实参是**格式化串**（文本 + {…}/%…%），

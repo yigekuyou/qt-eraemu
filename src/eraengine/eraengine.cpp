@@ -23,6 +23,8 @@
 #include "signal_hub.h"
 #include "erb_loader.h"
 #include <iostream>
+#include <QFile>
+#include <QDir>
 #include <QObject>
 
 EraEngine::EraEngine(QObject *parent)
@@ -1062,6 +1064,45 @@ void EraEngine::buildSystemHost()
 		                                                       QStringLiteral("CompatiCallEvent")}, false); };
 		host.titleMenuString = [](int index) {
 				return index == 0 ? QStringLiteral("开始游戏") : QStringLiteral("读取存档");
+		};
+
+		// ---- 存/读档（SAVEGAME / LOADGAME 系统画面）----
+		// 文件名/目录对齐 ExecutionEngine 的 SAVEDATA/LOADDATA（sav/save##.sav），
+		// 内容 = VariableStorage::dumpSaveData（eraemu-save-v1）+ SAVETEXT 概要头。
+		// 此前这四个回调从未接线：读档画面所有槽位恒判「没有数据」、保存恒失败。
+		const auto savePath = [this](int index) {
+				return m_gameDirectory + QStringLiteral("/sav/save%1.sav")
+						.arg(index, 2, 10, QLatin1Char('0'));
+		};
+		host.saveDataNos = [intCfg]() {
+				return intCfg({QStringLiteral("セーブデータの数"),
+				               QStringLiteral("SaveDataNos")}, 20);
+		};
+		host.checkData = [this, savePath](int index, QString* message) {
+				const bool exists = QFile::exists(savePath(index));
+				if (message) {
+						*message = exists ? QStringLiteral("ＯＫ")
+					                      : QStringLiteral("ファイルが存在しません");
+				}
+				return exists;
+		};
+		host.saveTo = [this, savePath](int index, const QString& saveText) -> bool {
+				QDir().mkpath(m_gameDirectory + QStringLiteral("/sav"));
+				QString body = m_variableStorage.dumpSaveData();
+				if (!saveText.isEmpty()) {
+						body.replace(QStringLiteral("eraemu-save-v1"),
+						             QStringLiteral("eraemu-save-v1\nSAVETEXT\t%1").arg(saveText));
+				}
+				QFile f(savePath(index));
+				if (!f.open(QIODevice::WriteOnly | QIODevice::Text)) return false;
+				f.write(body.toUtf8());
+				return true;
+		};
+		host.loadFrom = [this, savePath](int index) -> bool {
+				QFile f(savePath(index));
+				if (!f.open(QIODevice::ReadOnly | QIODevice::Text)) return false;
+				m_variableStorage.restoreSaveData(QString::fromUtf8(f.readAll()));
+				return true;
 		};
 
 		m_systemStateMachine.setHost(std::move(host));

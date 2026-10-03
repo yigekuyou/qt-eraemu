@@ -1270,11 +1270,18 @@ ExecState ScriptRunner::executeLine(const LogicalLine& line) {
                                    .arg(m_table->currentFrame().callLabel));
             return ExecState::Error;
         }
+        advance();
         if (m_machine) {
             m_machine->requestSaveLoad(name == QLatin1String("SAVEGAME"));
+            // 对齐 C# SaveLoadData：进程状态切换后由**系统层**接管（存/读档画面）。
+            // 脚本不能继续跑当前函数的剩余部分 —— 否则（eraTW 标题「[1] 存檔再開」）
+            // 标题循环回到 INPUT 再挂起一次，用户再次输入时又执行 LOADGAME，
+            // 而状态已切到 LoadGame_Begin（无 __CAN_SAVE__）→ 误报
+            // 「@SYSTEM_TITLE 中不能执行 SAVEGAME/LOADGAME 命令」。
+            // WaitEvent：让 pump 交还系统层（区别于 Halt 的「脚本终结」）。
+            return ExecState::WaitEvent;
         }
-        advance();
-        return ExecState::Continue;
+        return ExecState::WaitInput;
     }
 
     // ---- CALLTRAIN / STOPCALLTRAIN / DOTRAIN ----

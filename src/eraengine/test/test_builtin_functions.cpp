@@ -182,6 +182,26 @@ int main(int argc, char* argv[]) {
         check(!validateBuiltinCall(spec("RAND"), {parse("1"), parse("2"), parse("3")}).isEmpty(),
               "RAND(1,2,3) -> 参数过多");
 
+        // eraTW CHARA_DIARY.ERB：LOADTEXT (1700+LOCAL)（1 参）/ SAVETEXT SAVESTR:1, (1700+RESULT)（2 参）
+        // —— C# LoadTextMethod/SaveTextMethod 的尾参 force_savdir / force_UTF8 可省略。
+        // 此前 min 参误写为 3/4，eraTW 的合法写法刷「参数过少」告警。
+        check(validateBuiltinCall(spec("LOADTEXT"), {parse("1700")}).isEmpty(),
+              "LOADTEXT(1700) -> 通过（1 参合法）");
+        check(validateBuiltinCall(spec("LOADTEXT"), {parse("1700"), parse("0"), parse("0")}).isEmpty(),
+              "LOADTEXT(1700,0,0) -> 通过（3 参合法）");
+        check(!validateBuiltinCall(spec("LOADTEXT"), none).isEmpty(),
+              "LOADTEXT() -> 参数过少");
+        check(!validateBuiltinCall(spec("LOADTEXT"),
+                                   {parse("1"), parse("2"), parse("3"), parse("4")}).isEmpty(),
+              "LOADTEXT(1,2,3,4) -> 参数过多");
+        check(validateBuiltinCall(spec("SAVETEXT"), {parse("\"s\""), parse("1700")}).isEmpty(),
+              "SAVETEXT(\"s\",1700) -> 通过（2 参合法）");
+        check(validateBuiltinCall(spec("SAVETEXT"),
+                                  {parse("\"s\""), parse("1700"), parse("0"), parse("0")}).isEmpty(),
+              "SAVETEXT(\"s\",1700,0,0) -> 通过（4 参合法）");
+        check(!validateBuiltinCall(spec("SAVETEXT"), {parse("\"s\"")}).isEmpty(),
+              "SAVETEXT(\"s\") -> 参数过少");
+
         // 解析内嵌调用时的校验（"1 + ABS()"）
         auto nested = parse("1 + ABS()");
         bool found = false;

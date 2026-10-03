@@ -1,0 +1,48 @@
+;=============================================================
+; [17] 环境 / 桩命令（ASSERT 通过路径 + 训练流程登记 + EE 环境族）
+;
+; * ASSERT 只测「条件为真」的通过路径 —— 失败即终止，由组 13 模式覆盖；
+; * CALLTRAIN/STOPCALLTRAIN 只登记训练流程（在训练状态外使用才非法）；
+; * EE 音频/文本框/网络族当前是「留痕跳过」桩 —— 执行不报错即通过；
+;   它们需要真实后端（音频/网络/文本框控件），冒烟无意义所以不自动生成。
+;=============================================================
+@TEST_ENV
+#DIM NONG
+
+PRINTL == 组17：环境 / 桩命令 ==
+
+;---- ASSERT（通过路径：条件为真不终止）----
+ASSERT 1 == 1
+CALL ASSERT_TRUE, 1, @"ASSERT 条件为真（不终止）"
+NONG += RESULT
+
+;---- CALLTRAIN / STOPCALLTRAIN（训练流程登记）----
+CALLTRAIN 0
+STOPCALLTRAIN
+CALL ASSERT_TRUE, 1, @"CALLTRAIN/STOPCALLTRAIN 执行不报错"
+NONG += RESULT
+
+;---- EE 音频族（留痕桩）----
+PLAYBGM 0
+PLAYSOUND 0
+STOPBGM
+STOPSOUND
+SETBGMVOLUME 50
+SETSOUNDVOLUME 50
+CALL ASSERT_TRUE, 1, @"音频族（EE 桩）执行不报错"
+NONG += RESULT
+
+;---- EE 文本框族（留痕桩）----
+SETTEXTBOX 0
+GETTEXTBOX
+CALL ASSERT_TRUE, 1, @"文本框族（EE 桩）执行不报错"
+NONG += RESULT
+
+;---- EE 网络 / 日志（留痕桩）----
+UPDATECHECK
+CALL ASSERT_TRUE, 1, @"UPDATECHECK（EE 桩）执行不报错"
+NONG += RESULT
+SKIPLOG 0
+CALL ASSERT_TRUE, 1, @"SKIPLOG（EE 桩）执行不报错"
+NONG += RESULT
+RETURN NONG

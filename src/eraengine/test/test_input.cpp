@@ -43,7 +43,7 @@
 #include "script_runner.h"
 #include "variable_storage.h"
 #include "system_state_machine.h"
-
+#include "console_backend.h"
 static int g_failures = 0;
 
 static void check(bool cond, const QString& what) {
@@ -354,6 +354,178 @@ int main(int argc, char* argv[]) {
         callbacks.at(2)();
         check(state.getExecState() == ExecState::WaitInput && storage.getSystemVariable("RESULT", 0) == 77,
               "stale AWAIT callback cannot consume mouse input");
+    }
+
+    // =====================================================================
+    qDebug() << "\nF) 任意键等待：WAIT / TWAIT skip 语义";
+    {
+        // eraTW DQPRINT（TUTORIAL.ERB）逐字动画 TWAIT ARG:1, 1 + 结尾 WAIT：
+        // 之前「一直等待」的根因 —— WAIT 只能靠底部输入框提交数字才能通过。
+        VariableStorage storage;
+        ProcessState state;
+        EraParseTable table(&state);
+        ExpressionEvaluator evaluator;
+        table.setExpressionEvaluator(&evaluator);
+        table.setVariableStorage(&storage);
+        ExecutionEngine engine(&storage, nullptr);
+        engine.setParseTable(&table);
+        engine.setExpressionEvaluator(&evaluator);
+        ScriptRunner runner(&table, &engine, &state, &storage);
+        runner.setExpressionEvaluator(&evaluator);
+        SystemStateMachine machine(&state, &table);
+        machine.setVariableStorage(&storage);
+        machine.setScriptRunner(&runner);
+        runner.setSystemStateMachine(&machine);
+
+        struct Pending { int ms; std::function<void()> cb; };
+        QList<Pending> pending;
+        machine.setTimer([&pending](int ms, std::function<void()> cb) {
+            pending.append({ms, cb});
+        });
+
+        // TWAIT 100, 1 -> C# InputType.Void（纯计时，输入不能跳过，不发 inputRequested）
+        // WAIT          -> C# InputType.EnterKey（任意键/点击继续）
+        const QStringList src = {
+            "@SYSTEM_TITLE",    // 0
+            "CNT = 0",          // 1
+            "TWAIT 100, 1",     // 2  纯计时
+            "CNT = CNT + 1",    // 3
+            "WAIT",             // 4  任意键
+            "CNT = CNT + 10"    // 5
+        };
+        check(table.loadScript("main", buildLines(table, src)), "loadScript(WAIT)");
+        table.finalizeParse();
+        machine.initialize();
+
+        QStringList prompts;
+        QObject::connect(&runner, &ScriptRunner::inputRequested,
+                         [&](const QString& kind) { prompts.append(kind); });
+        const ExecState st = machine.run();
+        check(prompts.isEmpty(), "TWAIT skip!=0 不请求输入 UI（C# InputType.Void）");
+        check(st == ExecState::WaitSystemInput, "TWAIT 100,1 挂起（纯计时）");
+        check(pending.size() == 1 && pending.first().ms == 100, "已登记 100ms 计时器");
+
+        // 到点自动继续 -> WAIT 挂起（任意键）
+        if (!pending.isEmpty()) pending.takeFirst().cb();
+        check(state.getExecState() == ExecState::WaitInput, "TWAIT 到点继续，WAIT 挂起");
+        check(prompts.size() == 1 && prompts.first() == QLatin1String("WAIT"),
+              "WAIT 请求输入 kind=WAIT");
+        check(storage.getGlobalInt1D("CNT", 0) == 1, "TWAIT 之后继续执行了下一行");
+
+        // 模拟「点击/回车」交付：submitAnyKey -> inputSubmitted(0) -> provideInput -> resume
+        machine.resume(0);
+        check(storage.getGlobalInt1D("CNT", 0) == 11, "WAIT 被任意键交付后继续（CNT = 11）");
+    }
+
+    {
+        // PRINTW（W 后缀）：打印后等任意键（C# PRINT_WAITINPUT -> Console.ReadAnyKey）
+        // 此前 requestAnyKey 信号无人接线，等待被完全忽略（教学段落不停顿）
+        VariableStorage storage;
+        ProcessState state;
+        EraParseTable table(&state);
+        ExpressionEvaluator evaluator;
+        table.setExpressionEvaluator(&evaluator);
+        table.setVariableStorage(&storage);
+        ExecutionEngine engine(&storage, nullptr);
+        engine.setParseTable(&table);
+        engine.setExpressionEvaluator(&evaluator);
+        ScriptRunner runner(&table, &engine, &state, &storage);
+        runner.setExpressionEvaluator(&evaluator);
+        SystemStateMachine machine(&state, &table);
+        machine.setVariableStorage(&storage);
+        machine.setScriptRunner(&runner);
+        runner.setSystemStateMachine(&machine);
+
+        const QStringList src = {
+            "@SYSTEM_TITLE",    // 0
+            "PRINTL BEFORE",    // 1（L 后缀只换行）
+            "PRINTW AFTER",     // 2  打印 + 等任意键
+            "CNT = 7"           // 3
+        };
+        check(table.loadScript("main", buildLines(table, src)), "loadScript(PRINTW)");
+        table.finalizeParse();
+        machine.initialize();
+
+        QStringList prompts;
+        QObject::connect(&runner, &ScriptRunner::inputRequested,
+                         [&](const QString& kind) { prompts.append(kind); });
+        const ExecState st = machine.run();
+        check(st == ExecState::WaitInput, "PRINTW 打印后挂起（等任意键）");
+        check(prompts.size() == 1 && prompts.first() == QLatin1String("ANYKEY"),
+              "PRINTW 请求输入 kind=ANYKEY");
+        machine.resume(0);
+        check(storage.getGlobalInt1D("CNT", 0) == 7, "PRINTW 被任意键交付后继续（CNT = 7）");
+    }
+
+    {
+        // TWAIT 时间, 0 -> C# InputType.EnterKey + Timelimit：计时器 + 可点击/回车提前结束
+        VariableStorage storage;
+        ProcessState state;
+        EraParseTable table(&state);
+        ExpressionEvaluator evaluator;
+        table.setExpressionEvaluator(&evaluator);
+        table.setVariableStorage(&storage);
+        ExecutionEngine engine(&storage, nullptr);
+        engine.setParseTable(&table);
+        engine.setExpressionEvaluator(&evaluator);
+        ScriptRunner runner(&table, &engine, &state, &storage);
+        runner.setExpressionEvaluator(&evaluator);
+        SystemStateMachine machine(&state, &table);
+        machine.setVariableStorage(&storage);
+        machine.setScriptRunner(&runner);
+        runner.setSystemStateMachine(&machine);
+
+        struct Pending { int ms; std::function<void()> cb; };
+        QList<Pending> pending;
+        machine.setTimer([&pending](int ms, std::function<void()> cb) {
+            pending.append({ms, cb});
+        });
+
+        const QStringList src = {
+            "@SYSTEM_TITLE",    // 0
+            "TWAIT 100, 0",     // 1  EnterKey + Timelimit
+            "CNT = 5"           // 2
+        };
+        check(table.loadScript("main", buildLines(table, src)), "loadScript(TWAIT skip=0)");
+        table.finalizeParse();
+        machine.initialize();
+
+        QStringList prompts;
+        QObject::connect(&runner, &ScriptRunner::inputRequested,
+                         [&](const QString& kind) { prompts.append(kind); });
+        const ExecState st = machine.run();
+        check(st == ExecState::WaitInput, "TWAIT 100,0 挂起（WaitInput，可点击提前结束）");
+        check(prompts.size() == 1 && prompts.first() == QLatin1String("TWAIT"),
+              "TWAIT skip=0 请求输入 kind=TWAIT");
+        check(pending.size() == 1 && pending.first().ms == 100, "TWAIT skip=0 登记了计时器");
+        if (!pending.isEmpty()) pending.takeFirst().cb();
+        check(storage.getGlobalInt1D("CNT", 0) == 5, "TWAIT skip=0 到点自动继续（CNT = 5）");
+    }
+
+    // =====================================================================
+    qDebug() << "\nG) ConsoleBackend::submitAnyKey（任意键裁决）";
+    {
+        ConsoleBackend console;
+        const auto expectAnyKey = [&console](const char* kind, bool ok) {
+            console.notifyInputRequested(QLatin1String(kind));
+            bool submitted = false;
+            const QMetaObject::Connection c = QObject::connect(
+                &console, &ConsoleBackend::inputSubmitted,
+                [&](qint64) { submitted = true; });
+            console.submitAnyKey();
+            QObject::disconnect(c);
+            check(submitted == ok,
+                  QString(QLatin1String("%1 -> submitAnyKey %2"))
+                      .arg(QLatin1String(kind), ok ? QStringLiteral("交付")
+                                                   : QStringLiteral("拒绝")));
+            console.notifyInputDone();
+        };
+        expectAnyKey("WAIT", true);
+        expectAnyKey("WAITANYKEY", true);
+        expectAnyKey("FORCEWAIT", true);
+        expectAnyKey("ANYKEY", true);
+        expectAnyKey("INPUT", false);    // 整数型输入不受任意键影响
+        expectAnyKey("INPUTS", false);   // 字符串型输入不受任意键影响
     }
 
     qDebug() << "\n============================";

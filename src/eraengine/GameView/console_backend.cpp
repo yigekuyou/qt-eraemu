@@ -32,6 +32,14 @@ bool inputExpectsString(const QString& kind) {
     const QString k = kind.toUpper();
     return k.contains(QLatin1String("INPUTS")) || k.contains(QLatin1String("ARGS"));
 }
+// 当前等待的输入是否为「任意键」型（WAIT/WAITANYKEY/FORCEWAIT/ANYKEY）。
+// 对齐 C# IsWaitingEnterKey：这类等待点击控制台任意位置（或回车）即继续，
+// 不要求按钮/文本框 —— 否则 DQPRINT 结尾的 WAIT 永远等不到输入。
+bool inputExpectsAnyKey(const QString& kind) {
+    const QString k = kind.toUpper();
+    return k == QLatin1String("WAIT") || k == QLatin1String("WAITANYKEY")
+        || k == QLatin1String("FORCEWAIT") || k == QLatin1String("ANYKEY");
+}
 } // namespace
 
 ConsoleBackend::ConsoleBackend(QObject* parent)
@@ -320,8 +328,14 @@ void ConsoleBackend::printPlain(const QString& text) {
 }
 
 void ConsoleBackend::newline() {
-    ConsoleDisplayLine line = buildLine();
-    // 先定型，避免 buildLine 里 const 的临时结果
+    // C# addDisplayLine：最后一行是「一時行」（REUSELASTLINE/PrintTemporaryLine）时，
+    // 下一个显示行输出**替换**它（deleteLine(1)）。DQPRINT 逐字动画靠这个
+    // 把整句动画在一行内完成；此前按普通输出追加，一句口上会产生几十行。
+    if (m_lastLineTemporary) {
+        m_lastLineTemporary = false;
+        clearLines(1);
+    }
+    ConsoleDisplayLine line = buildLine();    // 先定型，避免 buildLine 里 const 的临时结果
     m_sealed.clear();
     m_pendingParts.clear();
     m_pendingOpen = false;
@@ -443,6 +457,7 @@ void ConsoleBackend::clearLines(int n) {
         m_pendingOpen = false;
     }
     m_buffer.removeLastLogicalLines(n);
+    m_lastLineTemporary = false;   // 末尾的「一時行」已被删 -> 清标记
     clampScroll();
     markDirty();
 }
@@ -450,6 +465,7 @@ void ConsoleBackend::clearLines(int n) {
 void ConsoleBackend::clearAll() {
     qDebug() << "[render] clearAll（清屏，行数" << m_buffer.count() << "）";
     m_buffer.clear();
+    m_lastLineTemporary = false;
     m_pendingParts.clear();
     m_sealed.clear();
     m_pendingOpen = false;
@@ -565,6 +581,20 @@ void ConsoleBackend::notifyInputDone() {
     emit waitingInputChanged();
 }
 
+// REUSELASTLINE（C# PrintTemporaryLine -> PrintSingleLine(str, temporary=true)）：
+// 先定型未定型缓冲（PrintFlush），再把文本作为一条「一時行」加入。
+// 空文本不产生任何输出（C# IsNullOrEmpty 早退）。
+void ConsoleBackend::notifyReuseLastLine(const QString& text) {
+    if (text.isEmpty()) return;
+    // C# PrintSingleLine：先 PrintFlush（把未定型缓冲定型成普通行），
+    // 再把文本作为一条「一時行」加入；newline() 里处理一時行替换
+    if (m_pendingOpen || !m_pendingParts.isEmpty() || !m_sealed.isEmpty()) {
+        newline();
+    }
+    print(text);
+    newline();
+    m_lastLineTemporary = true;    // 本行是「一時行」
+}
 // ---------------------------------------------------------------------------
 // 窗口 / 滚动
 // ---------------------------------------------------------------------------
@@ -683,6 +713,13 @@ void ConsoleBackend::clickAt(int visibleIndex, int segmentIndex) {
         return;
     }
     const ConsoleDisplayLine line = displayLine(abs);
+    // WAIT/ANYKEY 系：点击任意位置（含按钮文本）都视为「按任意键」继续。
+    // 对齐 C# IsWaitingEnterKey —— EnterKey 等待时点击按钮也不会选中按钮，
+    // 只会 PressEnterKey 结束等待（SelectedString 对 EnterKey 请求恒为 null）。
+    if (m_waitingInput && inputExpectsAnyKey(m_inputKind)) {
+        submitAnyKey();
+        return;
+    }
     if (segmentIndex < 0 || segmentIndex >= line.segments.size()) {
         return;
     }
@@ -728,6 +765,19 @@ void ConsoleBackend::submitMouseKey(int type, int r1, int r2, int r3, int r4) {
     ++m_generation;
     emit generationChanged();
     emit mouseKeySubmitted(type, r1, r2, r3, r4);
+}
+
+// WAIT/WAITANYKEY/FORCEWAIT/ANYKEY 系等待：点击任意处/回车即继续（C# PressEnterKey）。
+// 这类请求没有按钮可点 —— 之前的实现里点击控制台毫无响应，游戏看起来「一直等待」。
+void ConsoleBackend::submitAnyKey() {
+    if (!m_waitingInput || !inputExpectsAnyKey(m_inputKind)) {
+        return;
+    }
+    qDebug() << "[input] 任意键/点击继续 kind" << m_inputKind;
+    sealSpan();
+    ++m_generation;   // 与 submitInput 同源：提交后旧按钮失效
+    emit generationChanged();
+    emit inputSubmitted(0);   // RESULT = 0（WAIT 系不使用输入值）
 }
 
 void ConsoleBackend::submitInput(qint64 value) {

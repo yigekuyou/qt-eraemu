@@ -170,6 +170,10 @@ public:
     void notifyInputRequested(const QString& kind);
     void notifyInputDone();
 
+    // REUSELASTLINE（C# PrintTemporaryLine）：单行输出并标记「一時行」——
+    // 下一个显示行输出会**替换**它（C# addDisplayLine 的 LastLineIsTemporary）。
+    // DQPRINT 逐字动画靠它把整句动画在一行内完成。
+    void notifyReuseLastLine(const QString& text);
     // ---- QML 调用 ----
     Q_INVOKABLE QVariantMap visibleLine(int index) const;
     Q_INVOKABLE int  visibleLineCount() const;
@@ -180,6 +184,9 @@ public:
     Q_INVOKABLE void submitMouseKey(int type, int r1, int r2, int r3, int r4);
     Q_INVOKABLE void submitInput(qint64 value);
     Q_INVOKABLE void submitInputString(const QString& value);
+    // WAIT/WAITANYKEY/FORCEWAIT/ANYKEY：点击控制台任意处或回车即继续
+    //（对齐 C# IsWaitingEnterKey 的鼠标/按键裁决）
+    Q_INVOKABLE void submitAnyKey();
 
     // 供 C++/测试
     ConsoleBuffer& buffer() { return m_buffer; }
@@ -236,6 +243,8 @@ private:
     QStringList m_htmlLines;      // printHtml 原文（HTML_POPPRINTINGSTR 消费）
     QString m_inputKind;
     bool    m_waitingInput = false;
+    // 最后一行是否为「一時行」（REUSELASTLINE）：下一行显示输出替换它
+    bool    m_lastLineTemporary = false;
 
     QTimer m_timer;
 };

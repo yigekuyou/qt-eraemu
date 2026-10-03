@@ -599,6 +599,19 @@ void SystemStateMachine::waitTimedInput(int timeoutMs, qint64 defaultValue) {
     }
 }
 
+// TWAIT 时间[, 0]：限时任意键等待（C# InputType.EnterKey + Timelimit）；
+//   到点自动继续；点击/回车可提前结束（skip!=0 的纯计时路径走 awaitDelay）
+void SystemStateMachine::waitTimedAnyKey(int timeoutMs) {
+    const auto wait = ++m_waitGeneration;
+    m_state->setExecState(ExecState::WaitInput);
+    emit inputRequested(m_state->getSystemState());
+    if (timeoutMs > 0 && m_timer) {
+        m_timer(timeoutMs, [this, wait]() {
+            if (wait == m_waitGeneration) resume(0);
+        });
+    }
+}
+
 // TINPUTS：限时字符串输入；超时没输入则 RESULTS = 缺省字符串并继续
 //（RESULTS 全局，C# VariableData.cs:202）
 void SystemStateMachine::waitTimedStringInput(int timeoutMs, const QString& defaultValue) {

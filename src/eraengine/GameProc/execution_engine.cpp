@@ -908,32 +908,34 @@ bool ExecutionEngine::executeInstruction(const LogicalLine& line) {
         return true;
     }
 
-    // ---- REUSELASTLINE <FORM文本>（对齐 C# PrintTemporaryLine：单行输出不折行）----
+    // ---- REUSELASTLINE <FORM文本>（C# REUSELASTLINE_Instruction：
+    //   FORM_STR_NULLABLE，与 PUTFORM 同形）----
+    //   整个实参是**格式串**（文本 + {…}/%…% 展开）：`REUSELASTLINE %RESULTS:0%`
+    //   （DQPRINT 逐字动画）此前按表达式归约失败 -> 文本完全丢失、只打印空行。
+    //   对齐 C#：实参按 FORM 语义展开后单行输出（PrintTemporaryLine）。
     if (name == "REUSELASTLINE") {
         if (m_skipDisp) return true;
         QString text;
         ExpressionEvaluator& ev = getEvaluator();
         if (!args.isEmpty()) {
             const Operand& a = args.first();
-            if (a.isString) {
-                text = a.raw;
-                // FORM 格式串：展开 {…}/%…%
+            if (a.ast) {
+                text = ev.evaluate(*a.ast, m_storage, m_gameBaseData).toString();
+            } else if (StrFormParser::hasForm(a.raw)) {
+                // FORM 格式串：展开 {…}/%…%（% 是 UNKNOWN token，不能按表达式解析）
                 const auto resolve = [this](const QString& e) {
                     return m_parseTable ? m_parseTable->expressionAst(e)
                                         : QSharedPointer<ExpressionNode>(); };
-                if (StrFormParser::hasForm(text)) {
-                    if (auto form = StrFormParser::parse(text, resolve))
-                        text = ev.evaluate(*form.staticCast<ExpressionNode>(),
-                                           m_storage, m_gameBaseData).toString();
-                }
-            } else if (a.ast) {
-                text = ev.evaluate(*a.ast, m_storage, m_gameBaseData).toString();
+                if (auto form = StrFormParser::parse(a.raw, resolve))
+                    text = ev.evaluate(*form.staticCast<ExpressionNode>(),
+                                       m_storage, m_gameBaseData).toString();
             } else {
-                text = evalExpressionCached(m_parseTable, ev, a.raw,
-                                            m_storage, m_gameBaseData).toString();
+                text = a.raw;
             }
         }
-        emit consolePrint(text, true);
+        // C# PrintSingleLine：空文本不产生任何输出（IsNullOrEmpty 早退）；
+        // 非空按「一時行」单行输出（下一次显示行输出替换它）
+        if (!text.isEmpty()) emit consoleReuseLastLine(text);
         return true;
     }
 
@@ -1789,6 +1791,7 @@ void ExecutionEngine::printDataNewline() {
 void ExecutionEngine::requestPrintDataWaitKey() {
     if (m_skipDisp) return;
     emit requestAnyKey();
+    m_printWaitKey = true;
 }
 
 void ExecutionEngine::assignPrintDataIndex(const QString& lhsText, qint64 value) {
@@ -2015,6 +2018,7 @@ bool ExecutionEngine::handlePrintInstruction(const LogicalLine& line) {
     // W 后缀（PRINTW / PRINTFORMW / …）：换行后再等一次任意键（C# PRINT_WAITINPUT）
     if (info.waitInput) {
         emit requestAnyKey();
+        m_printWaitKey = true;   // runner 在指令执行后消费并挂起（C# ReadAnyKey 阻塞）
     }
     return true;
 }

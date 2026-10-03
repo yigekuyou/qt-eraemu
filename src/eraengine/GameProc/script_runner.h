@@ -201,6 +201,12 @@ private:
 
     QList<LoopFrame> m_loops;
     struct CallContext { int depth; int loops; QString function; VariableStorage::LocalContext locals; };
+    // 本轮挂起是否为「需要用户输入」的等待（AWAIT / TWAIT skip!=0 的纯计时不算，
+    // 不发 inputRequested：C# InputType.Void 不是用户输入请求，UI 不显示）
+    bool m_waitNotifiesUser = true;
+    // 本轮挂起的输入种类覆盖（空 = functionName）。任意键系等待（打印系 W 后缀）
+    // 统一报 ANYKEY，UI 侧按「点击任意处/回车」裁决（C# IsWaitingEnterKey）
+    QString m_waitKind;
     QHash<QString, VariableStorage::LocalContext> m_functionLocals;
     QList<CallContext> m_callContexts;   // Caller locals and loop depth, restored on every return
     bool m_running = false;

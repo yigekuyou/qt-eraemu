@@ -88,6 +88,9 @@ public:
     // 当前文字颜色 / 字体样式（GETCOLOR / GETSTYLE）
     [[nodiscard]] qint64 currentColorValue() const { return m_colorValue; }
     [[nodiscard]] qint64 currentStyleBits() const { return m_styleBits; }
+    // 打印系 W 后缀（PRINTW/PRINTFORMW/PRINTDATAW…）的等待标记：
+    // requestAnyKey 信号是纯通知，挂起由 runner 在指令执行后经本方法消费
+    bool consumePrintWaitKey() { const bool v = m_printWaitKey; m_printWaitKey = false; return v; }
     // CURRENTALIGN / GETFONT 的状态源（ALIGNMENT / SETFONT 语句维护）
     [[nodiscard]] bool skipDisp() const { return m_skipDisp; }
     // 默认文字色的惰性读取（配置在 setGameDirectory 之后才可用）
@@ -114,8 +117,9 @@ signals:
 
     // ---- 显示输出（由 EraEngine 接到 ConsoleBackend）----
     void consolePrint(const QString& text, bool newline);
-    void consolePrintTemplate(const PrintTemplate& output);
-    // PRINT_IMG：把资源名作为行内图片输出（C# Console.PrintImg）
+    // REUSELASTLINE（C# PrintTemporaryLine）：单行输出并标记「一時行」
+    void consoleReuseLastLine(const QString& text);
+    void consolePrintTemplate(const PrintTemplate& output);    // PRINT_IMG：把资源名作为行内图片输出（C# Console.PrintImg）
     void consolePrintImage(const QString& resourceName, int width, int height, int ypos);
     // PRINTW 的「换行后等任意键」（对齐 C# PRINT_WAITINPUT -> Console.ReadAnyKey）
     void requestAnyKey();
@@ -281,6 +285,8 @@ public:
     qint64 m_bgColorValue = -1;
     qint64 m_styleBits = 0;       // 1=粗体 2=斜体 4=删除线 8=下划线
     static qint64 colorValueOf(const QString& name);   // 颜色名/常量 -> 0xRRGGBB
+    // 打印系 W 后缀的等待标记（打印 + 等任意键；runner 消费后挂起）
+    bool m_printWaitKey = false;
     int m_currentLine;
     QString m_currentScript;
     

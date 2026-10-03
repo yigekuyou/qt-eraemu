@@ -50,6 +50,14 @@ Item {
         syncLayout();
     }
     readonly property bool primitiveInput: backend && backend.waitingInput && backend.inputKind === "INPUTMOUSEKEY"
+    // 当前等待的是否为「任意键」型（WAIT/WAITANYKEY/FORCEWAIT/ANYKEY）：
+    // 点击控制台任意处或回车即继续（C# IsWaitingEnterKey）；不弹数字/文本输入框
+    readonly property bool anyKeyInput: {
+        if (!backend || !backend.waitingInput)
+            return false;
+        const k = backend.inputKind.toUpperCase();
+        return k === "WAIT" || k === "WAITANYKEY" || k === "FORCEWAIT" || k === "ANYKEY";
+    }
     // 当前等待的是否为字符串型输入（INPUTS 系）；整数型 INPUT 一律走数字校验
     readonly property bool stringInputKind: {
         if (!backend || !backend.waitingInput)
@@ -97,6 +105,12 @@ Item {
     function submit() {
         if (!backend)
             return;
+        // 任意键型等待（WAIT/WAITANYKEY/FORCEWAIT/ANYKEY）：回车即继续，输入内容不使用
+        if (anyKeyInput) {
+            backend.submitAnyKey();
+            inputField.text = "";
+            return;
+        }
         // 与 C++ 的 inputExpectsString 同源：INPUTS / SINPUTS / TONEINPUTS / ARGS 系
         // 都是字符串型输入，其余（INPUT/TINPUT/ONEINPUT…）走整数校验。
         if (stringInputKind)
@@ -258,6 +272,22 @@ Item {
             onWheel: e => backend.submitMouseKey(2, e.angleDelta.y, Math.round(e.x), Math.round(e.y - viewport.height), 0)
         }
 
+        // 任意键型等待（WAIT/WAITANYKEY/FORCEWAIT/ANYKEY）：点击控制台任意处即继续。
+        // 对齐 C# MainWindow：IsWaitingEnterKey 时左/右键都走 PressEnterKey —— 此前
+        // 点击控制台毫无响应（MouseArea 只在 INPUTMOUSEKEY 启用），DQPRINT 结尾的
+        // WAIT 只能靠底部输入框提交数字才能通过，看起来「一直等待」。
+        MouseArea {
+            objectName: "anyKeyMouse"
+            anchors.fill: parent
+            z: 10
+            enabled: root.anyKeyInput
+            acceptedButtons: Qt.AllButtons
+            onPressed: e => {
+                backend.submitAnyKey();
+                e.accepted = true;
+            }
+        }
+
         WheelHandler {
             enabled: !root.primitiveInput
             acceptedDevices: PointerDevice.Mouse | PointerDevice.TouchPad
@@ -296,6 +326,14 @@ Item {
                 e.accepted = true;
                 return;
             }
+            if (root.anyKeyInput) {
+                // 任意键型等待：回车即继续（点击由 anyKeyMouse 处理）
+                if (e.key === Qt.Key_Return || e.key === Qt.Key_Enter) {
+                    backend.submitAnyKey();
+                    e.accepted = true;
+                }
+                return;
+            }
             if (e.key === Qt.Key_PageUp)
                 backend.scrollBy(10);
             if (e.key === Qt.Key_PageDown)
@@ -323,7 +361,10 @@ Item {
         font.family: root.fontName
         font.pixelSize: root.fontSize
         color: root.foreColor !== "" ? root.foreColor : palette.windowText
-        placeholderText: backend && backend.waitingInput ? ("输入（" + backend.inputKind + "）") : ""
+        placeholderText: backend && backend.waitingInput
+            ? (root.anyKeyInput ? ("回车/点击继续（" + backend.inputKind + "）")
+                                : ("输入（" + backend.inputKind + "）"))
+            : ""
         // 输入类型分支限制：整数型输入只接受数字（INPUT 可负）
         validator: backend && backend.waitingInput && !root.stringInputKind ? intOnly : null
         onVisibleChanged: if (visible)

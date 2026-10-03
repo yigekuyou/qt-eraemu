@@ -282,8 +282,9 @@ bool ScriptRunner::stepOnce() {
     // 挂起 / 结束
     m_state->setExecState(r);
     if ((r == ExecState::WaitInput || r == ExecState::WaitSystemInput)
-        && line.functionName != QLatin1String("AWAIT")) {
-        emit inputRequested(line.functionName);
+        && m_waitNotifiesUser) {
+        // m_waitKind：任意键系等待（打印系 W 后缀）统一报 ANYKEY（点击任意处/回车）
+        emit inputRequested(m_waitKind.isEmpty() ? line.functionName : m_waitKind);
     } else if (r == ExecState::Halt) {
         emit finished();
     } else if (r == ExecState::Error) {
@@ -408,6 +409,9 @@ ExecState ScriptRunner::executeLine(const LogicalLine& line) {
         return ExecState::Error;
     }
     const int pc = m_table->currentLine();
+    // 每行重置：只有 AWAIT / TWAIT skip!=0（纯计时，C# InputType.Void）会覆盖为 false
+    m_waitNotifiesUser = true;
+    m_waitKind.clear();
 
     const auto gotoLine = [&](int npc) {
         m_table->setPosition(script, npc, false);   // 允许 npc == lines.size()（越过末尾 -> 结束）
@@ -1272,11 +1276,12 @@ ExecState ScriptRunner::executeLine(const LogicalLine& line) {
         }
         return ExecState::WaitInput;
     }
-    // AWAIT n：挂起 n 毫秒后自动继续（不阻塞、不请求输入）
+    // AWAIT n：挂起 n 毫秒后自动继续（不阻塞、不请求输入；C# InputType.Void）
     if (name == QLatin1String("AWAIT")) {
         qint64 ms = 0;
         if (!line.arguments.isEmpty()) evalInt(line.arguments.first().ast, line.arguments.first().raw, ms);
         if (ms < 0) ms = 0;
+        m_waitNotifiesUser = false;
         advance();
         if (m_machine && ms > 0) {
             m_machine->awaitDelay(static_cast<int>(ms));
@@ -1286,9 +1291,10 @@ ExecState ScriptRunner::executeLine(const LogicalLine& line) {
     }
 
     // ---- TWAIT <时间ms>[, <跳过标记>]（对齐 C# TWAIT_Instruction）----
-    //   暂停 <时间>ms 后自动继续；<跳过标记>!=0 时任意键/点击可提前结束等待。
-    //   计时路径完整（挂起 -> 计时器到点恢复）；「按键提前跳过」属于输入层能力，
-    //   尚未接线（仅影响能否点掉动画，不影响流程正确性）。
+    //   暂停 <时间>ms 后自动继续。C# TWAIT_Instruction：
+    //     flag != 0 -> InputType.Void   纯计时等待，输入不能跳过（DQPRINT 逐字动画）
+    //     flag == 0 -> InputType.EnterKey + Timelimit 点击/回车可提前结束
+    //   计时路径完整（挂起 -> 计时器到点恢复）。
     if (name == QLatin1String("TWAIT")) {
         QSharedPointer<ExpressionNode> timeNode;
         QSharedPointer<ExpressionNode> skipNode;
@@ -1304,9 +1310,14 @@ ExecState ScriptRunner::executeLine(const LogicalLine& line) {
         if (ms < 0) ms = 0;
         qCDebug(eraTrace) << "[twait] 等待" << ms << "ms 跳过标记" << skip
                           << "行" << line.position.toString();
+        m_waitNotifiesUser = (skip == 0);
         advance();
         if (m_machine && ms > 0) {
-            m_machine->awaitDelay(static_cast<int>(ms));
+            if (skip != 0) {
+                m_machine->awaitDelay(static_cast<int>(ms));
+            } else {
+                m_machine->waitTimedAnyKey(static_cast<int>(ms));
+            }
             return m_state->getExecState();
         }
         return ExecState::Continue;
@@ -1371,9 +1382,20 @@ ExecState ScriptRunner::executeLine(const LogicalLine& line) {
             const bool newline =
                 name.endsWith(QLatin1Char('L')) || name.endsWith(QLatin1Char('W'));
             if (newline && m_engine) m_engine->printDataNewline();
-            if (name.endsWith(QLatin1Char('W')) && m_engine) m_engine->requestPrintDataWaitKey();
+            const bool waitKey = name.endsWith(QLatin1Char('W'));
+            if (waitKey && m_engine) m_engine->requestPrintDataWaitKey();
         }
         m_table->setPosition(script, next, false);   // 跳过整段（endLine 可能是 lines.size()）
+        // PRINTDATAW：打印后等任意键（C# PRINT_DATA_Instruction 的 W 后缀 ->
+        // Console.ReadAnyKey）；此前 requestAnyKey 无人接线，等待被忽略
+        if (m_engine && m_engine->consumePrintWaitKey()) {
+            m_waitKind = QStringLiteral("ANYKEY");
+            if (m_machine) {
+                m_machine->waitAnyKey();
+                return m_state->getExecState();
+            }
+            return ExecState::WaitInput;
+        }
         return ExecState::Continue;
     }
 
@@ -1431,6 +1453,18 @@ ExecState ScriptRunner::executeLine(const LogicalLine& line) {
         m_engine->setCurrentScript(script);
         m_engine->setExecutionPosition(pc);
         m_engine->executeInstruction(line);
+        // PRINTW / PRINTFORMW / PRINTFORMLW…（W 后缀）：打印后等任意键。
+        // C# PRINT_WAITINPUT -> Console.ReadAnyKey（阻塞）—— 此前 requestAnyKey
+        // 信号无人接线，等待被完全忽略（eraTW 教学的段落不会停顿）。
+        if (m_engine->consumePrintWaitKey()) {
+            m_waitKind = QStringLiteral("ANYKEY");
+            advance();
+            if (m_machine) {
+                m_machine->waitAnyKey();
+                return m_state->getExecState();
+            }
+            return ExecState::WaitInput;
+        }
     }
     advance();
     return ExecState::Continue;

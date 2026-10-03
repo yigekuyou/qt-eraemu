@@ -150,6 +150,9 @@ public:
     void waitMouseKey(int timeoutMs);
     // TONEINPUT time：限时输入；超时按默认值（RESULT=0）返回
     void waitTimedInput(int timeoutMs, qint64 defaultValue = 0);
+    // TWAIT 时间[, 0]：限时**任意键**等待（C# InputType.EnterKey + Timelimit）；
+    //   到点自动继续，点击/回车可提前结束（区别于 skip!=0 的纯计时 Void 等待）
+    void waitTimedAnyKey(int timeoutMs);
     // TINPUTS：限时字符串输入，超时交付缺省字符串（写 RESULTS 全局槽）
     void waitTimedStringInput(int timeoutMs, const QString& defaultValue);
     // PRINTW / WAITANYKEY：等待任意键（无超时，结果不使用）——对齐 C# Console.ReadAnyKey

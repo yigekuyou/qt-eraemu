@@ -23,6 +23,7 @@
 #include <QSet>
 #include <QList>
 #include <QSharedPointer>
+#include <memory>
 #include "process_state.h"
 #include "variable_storage.h"
 #include "ast/logical_line.h"
@@ -104,6 +105,10 @@ public slots:
     void onHaltRequested();
 
 private:
+    // perf：求值器统一入口。热路径（每条指令）上不再无条件构造 fallback
+    // ExpressionEvaluator（QObject 构造不便宜）—— m_evaluator 为空才惰性创建。
+    ExpressionEvaluator& getEvaluator();
+
     // 运行时循环状态（循环计数是运行期数据，不放进只读 AST）
     struct LoopFrame {
         enum class Kind { Repeat, For, While, Do } kind = Kind::Repeat;
@@ -187,6 +192,9 @@ private:
     ProcessState*    m_state;
     VariableStorage* m_storage;
     ExpressionEvaluator* m_evaluator = nullptr;
+    std::unique_ptr<ExpressionEvaluator> m_fallbackEvaluator;
+    // perf：stepOnce 只在 owner 函数变化时重算私有作用域（见 stepOnce）
+    QString m_lastPrivateScope;
     qint64 m_steps = 0;
     qint64 m_stepLimit = 0;   // 0 = 不限
     SystemStateMachine*  m_machine = nullptr;
@@ -198,6 +206,9 @@ private:
     bool m_running = false;
     // [qdbug] 逐行跟踪的脚本名过滤器（EMUERA_QDBUG_TRACE_FILE，空=不过滤）
     QString m_qdbugTraceFile = qEnvironmentVariable("EMUERA_QDBUG_TRACE_FILE");
+    // perf：EMUERA_QDBUG_TRACE 只在构造时查一次。此前 stepOnce 每条指令都
+    // qEnvironmentVariableIsSet -> getenv，perf 显示占热路径 ~6%（见组22剖析）。
+    bool m_qdbugTrace = qEnvironmentVariableIsSet("EMUERA_QDBUG_TRACE");
     bool m_printed = false;
     bool m_continuingSlice = false;
     QVariant m_lastReturnValue;

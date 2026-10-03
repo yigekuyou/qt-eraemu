@@ -25,6 +25,7 @@
 #include <QQueue>
 #include <QHash>
 #include <functional>
+#include <memory>
 #include "variable_storage.h"
 #include "ast/logical_line.h"
 #include "erb_loader.h"
@@ -240,6 +241,16 @@ public:
     // ParseTable reference for CALL/RETURN integration
     EraParseTable* m_parseTable;
     ExpressionEvaluator* m_expressionEvaluator = nullptr;
+
+    // perf：求值器统一入口。热路径（每条指令）上不再无条件构造 fallback
+    // ExpressionEvaluator（QObject + Mt19937 构造不便宜，eraTW 地图逐字符
+    // SELECTCASE 时一帧上万次）—— m_expressionEvaluator 为空才惰性创建。
+    ExpressionEvaluator& getEvaluator();
+    std::unique_ptr<ExpressionEvaluator> m_fallbackEvaluator;
+
+    // perf：EMUERA_QDBUG_TRACE 只在构造时查一次（此前每次「其它指令」都
+    // qEnvironmentVariableIsSet -> getenv）。
+    bool m_qdbugTrace = qEnvironmentVariableIsSet("EMUERA_QDBUG_TRACE");
     
     bool m_running;
     int m_printCLength = 25;      // PRINTC 一列的文字宽度（C# Config.PrintCLength）

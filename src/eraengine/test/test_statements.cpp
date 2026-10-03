@@ -151,7 +151,9 @@ int main(int argc, char* argv[]) {
         check(storage.getCharaStr(QStringLiteral("CALLNAME"), 3, 0) == QStringLiteral("新称呼"),
               "称呼写入生效");
 
-        storage.setLocalStr(0, QStringLiteral("新名字"));
+        // RESULTS 是**全局**字符串数组（C# VariableData.cs:202），不是 LOCALS:0；
+        // 这里经全局槽设置，与引擎（求值器 / 赋值 / 函数返回）保持一致。
+        storage.setGlobalStr1D(QStringLiteral("RESULTS"), 0, QStringLiteral("新名字"));
         execOne(QStringLiteral("NAME:3 '= RESULTS"));
         check(storage.getCharaStr(QStringLiteral("NAME"), 3, 0) == QStringLiteral("新名字"),
               "NAME:3 '= RESULTS 写入生效");
@@ -385,22 +387,23 @@ int main(int argc, char* argv[]) {
         // --- 带实参 + 字符串返回值写 RESULTS:0 ---
         // REPLACE 的第 2 引数是**正则**（C# ReplaceMethod 用 new Regex()）；
         // eraTW 用它去首尾空格：REPLACE LOCALS, "(^ +| +$)", ""
-        storage.setLocalStr(0, QStringLiteral("  x  "));
+        // RESULTS 全局槽（见上）；REPLACE/SUBSTRING 语句形式读写同一槽。
+        storage.setGlobalStr1D(QStringLiteral("RESULTS"), 0, QStringLiteral("  x  "));
         execOne(QStringLiteral("REPLACE RESULTS, \"(^ +| +$)\", \"\""));
-        check(storage.getLocalStr(0) == QStringLiteral("x"),
+        check(storage.getGlobalStr1D(QStringLiteral("RESULTS"), 0) == QStringLiteral("x"),
               "REPLACE RESULTS, 正则去首尾空格 -> RESULTS:0");
-        storage.setLocalStr(0, QStringLiteral("a//b"));
+        storage.setGlobalStr1D(QStringLiteral("RESULTS"), 0, QStringLiteral("a//b"));
         execOne(QStringLiteral("REPLACE RESULTS, \"/+\", \"/\""));
-        check(storage.getLocalStr(0) == QStringLiteral("a/b"),
+        check(storage.getGlobalStr1D(QStringLiteral("RESULTS"), 0) == QStringLiteral("a/b"),
               "REPLACE 正则 /+ -> /（斜杠压缩）");
 
-        storage.setLocalStr(0, QStringLiteral("  x  "));
+        storage.setGlobalStr1D(QStringLiteral("RESULTS"), 0, QStringLiteral("  x  "));
         execOne(QStringLiteral("SUBSTRING RESULTS, 2, 2"));
-        check(storage.getLocalStr(0) == QStringLiteral("x "),
+        check(storage.getGlobalStr1D(QStringLiteral("RESULTS"), 0) == QStringLiteral("x "),
               "SUBSTRING RESULTS, 2, 2 -> RESULTS:0");
 
         // --- STRLENFORM：实参按格式化串展开再取长度 ---
-        storage.setLocalStr(0, QStringLiteral("abcd"));
+        storage.setGlobalStr1D(QStringLiteral("RESULTS"), 0, QStringLiteral("abcd"));
         execOne(QStringLiteral("STRLENFORMU RESULTS"));
         check(storage.getSystemVariable("RESULT", 0) == 4,
               "STRLENFORMU RESULTS -> RESULT == 4");

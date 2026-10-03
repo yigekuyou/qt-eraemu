@@ -153,12 +153,12 @@ int main(int argc, char* argv[]) {
         check(st == ExecState::WaitInput, "INPUTS 挂起");
         check(state.getExecState() == ExecState::WaitInput, "中心状态 = WaitInput");
 
-        // 字符串输入路径：写 RESULTS（局部字符串槽 0）后恢复
-        storage.setLocalStr(0, QStringLiteral("あいう"));
+        // 字符串输入路径：RESULTS 是**全局**字符串数组（C# VariableData.cs:202），
+        // 与引擎（求值器 / 赋值）一致地经全局槽设置。
+        storage.setGlobalStr1D(QStringLiteral("RESULTS"), 0, QStringLiteral("あいう"));
         runner.onInputProvided(0);
         check(state.getExecState() == ExecState::Halt, "字符串输入后结束");
-        check(storage.getSystemVariable(QStringLiteral("RESULTS"), 0) == 0
-                  || storage.getLocalStr(0) == QStringLiteral("あいう"),
+        check(storage.getGlobalStr1D(QStringLiteral("RESULTS"), 0) == QStringLiteral("あいう"),
               "RESULTS 承载字符串输入");
         check(storage.getGlobalInt1D("LEN", 0) == 6, "STRLENS(\"あいう\") == 6（Shift-JIS 字节）");
     }

@@ -27,13 +27,17 @@ constexpr quint32 kUpperMask = 0x80000000u;   // 最高位
 }
 
 Mt19937::Mt19937()
-    : Mt19937(randomSeed())
+    : m_seed(randomSeed())
 {
+    // 惰性初始化：构造不填 624 字状态表（perf：引擎热路径上存在大量临时
+    // ExpressionEvaluator -> Mt19937，首次取数才物化）
+    m_index = N + 1;
 }
 
 Mt19937::Mt19937(quint32 seed)
+    : m_seed(seed)
 {
-    reseed(seed);
+    m_index = N + 1;
 }
 
 quint32 Mt19937::randomSeed() {
@@ -44,18 +48,22 @@ quint32 Mt19937::randomSeed() {
     return s;
 }
 
-void Mt19937::reseed(quint32 seed) {
-    // 注意：**默认构造**也会走到这里（引擎里每个临时 ExpressionEvaluator 都会
-    // 构造一个 Mt19937），所以只留跟踪级日志，避免刷屏。
-    qCDebug(eraTrace) << "[var] MT19937 重置种子:" << seed;
-    m_seed = seed;
-    m_state[0] = seed;
+void Mt19937::fillStateFromSeed() const {
+    m_state[0] = m_seed;
     for (int i = 1; i < N; ++i) {
         // mt[i] = 1812433253 * (mt[i-1] ^ (mt[i-1] >> 30)) + i
         m_state[i] = 1812433253u * (m_state[i - 1] ^ (m_state[i - 1] >> 30))
                      + static_cast<quint32>(i);
     }
     m_index = N;                              // 下一次取数触发 generate()
+}
+
+void Mt19937::reseed(quint32 seed) {
+    // 注意：默认构造**不再**在这里走到（惰性初始化），只有显式 RANDOMIZE /
+    // 首次取数才填状态表。只留跟踪级日志，避免刷屏。
+    qCDebug(eraTrace) << "[var] MT19937 重置种子:" << seed;
+    m_seed = seed;
+    fillStateFromSeed();
 }
 
 void Mt19937::generate() {
@@ -71,6 +79,9 @@ void Mt19937::generate() {
 }
 
 quint32 Mt19937::nextU32() {
+    if (m_index > N) {
+        fillStateFromSeed();                  // 惰性初始化（构造时未填状态表）
+    }
     if (m_index >= N) {
         generate();
     }
@@ -101,6 +112,7 @@ qint64 Mt19937::range(qint64 minValue, qint64 maxValue) {
 }
 
 QList<qint64> Mt19937::state() const {
+    if (m_index > N) fillStateFromSeed();     // 惰性：导出 RANDDATA 前先物化种子状态
     QList<qint64> out;
     out.reserve(StateLength);
     for (int i = 0; i < N; ++i) out.append(static_cast<qint64>(m_state[i]));

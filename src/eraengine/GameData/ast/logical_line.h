@@ -176,6 +176,25 @@ struct PrintTemplate {
     bool noWrap = false;
 };
 
+// ---------------------------------------------------------------------------
+// SELECTCASE 的 CASE 臂（perf 缓存）
+//
+// 此前 caseMatches 每次执行都重新 splitCaseArgs + expressionAst —— eraTW
+// 地图这类「每字符一个 SELECTCASE × 25 个 CASE」的热路径上是最大热点。
+// CASE 行装载后不可变，解析结果在**首次匹配时**填充进 LogicalLine::caseCache，
+// 之后直接复用（表达式 AST 解析需要 ownerFunction 作用域，装载期无法完全
+// 预解析，所以惰性做一次）。
+// ---------------------------------------------------------------------------
+struct CaseClause {
+    enum class Kind : quint8 { Equal, IsOp, Range };
+    Kind kind = Kind::Equal;
+    QString op;                                   // IsOp：<= >= == != < >
+    QString textA;                                // Equal：比较文本；IsOp：操作数；Range：左端
+    QString textB;                                // Range：右端
+    QSharedPointer<ExpressionNode> astA;          // 预解析结果（可空 -> 运行期按文本求值）
+    QSharedPointer<ExpressionNode> astB;
+};
+
 struct TypedArgument {
     ArgKind kind = ArgKind::Raw;
     QList<Operand> operands;                          // 原始操作数（raw + ast）
@@ -224,6 +243,10 @@ struct LogicalLine {
     // 诊断
     bool    isError = false;
     QString errMes;
+
+    // CASE 臂解析缓存（见 CaseClause 注释；执行单线程，行内容装载后不可变）
+    mutable bool caseCacheReady = false;
+    mutable QList<CaseClause> caseCache;
 
     bool isNull() const { return kind == LineKind::Null; }
     bool isInstruction() const { return kind == LineKind::Instruction; }

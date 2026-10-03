@@ -58,6 +58,7 @@ ScriptRunner::ScriptRunner(EraParseTable* table,
         while (!m_callContexts.isEmpty())
             m_storage->setLocalContext(m_callContexts.takeLast().locals);
         m_loops.clear();
+        m_lastPrivateScope.clear();   // 上下文被恢复 -> 强制下一步重算私有作用域
         m_lastReturnValue = QVariant::fromValue<qint64>(0);
     });
 }
@@ -90,6 +91,13 @@ void ScriptRunner::onContinueExecution() {
         }
     }
     m_running = false;
+}
+
+// 求值器统一入口：注入的优先，否则惰性创建 fallback（只服务未接线的裸测环境）
+ExpressionEvaluator& ScriptRunner::getEvaluator() {
+    if (!m_evaluator && !m_fallbackEvaluator)
+        m_fallbackEvaluator = std::make_unique<ExpressionEvaluator>();
+    return m_evaluator ? *m_evaluator : *m_fallbackEvaluator;
 }
 
 ExecState ScriptRunner::runSlice(int instructionBudget, int timeBudgetMs) {
@@ -147,9 +155,10 @@ void ScriptRunner::enterCall(const QString& function) {
     locals.aliases.clear();
     m_storage->setLocalContext(locals);
     QStringList privateNames;
-    for (const auto& decl : m_table->variableTable().localsOf(function))
+    for (const auto& decl : m_table->variableTable().localsOfRef(function))
         if (!decl.isConst) privateNames.append(decl.name);
     m_storage->setPrivateScope(function, privateNames);
+    m_lastPrivateScope = function;   // 与 stepOnce 的缓存 guard 同步
 }
 
 bool ScriptRunner::returnFromCall() {
@@ -162,6 +171,7 @@ bool ScriptRunner::returnFromCall() {
             const auto context = m_callContexts.takeLast();
             m_functionLocals.insert(context.function, m_storage->localContext());
             m_storage->setLocalContext(context.locals);
+            m_lastPrivateScope.clear();   // 上下文被恢复 -> 强制重算私有作用域
             m_loops.resize(context.loops);
         }
         m_table->returnFromCall();
@@ -171,6 +181,7 @@ bool ScriptRunner::returnFromCall() {
         const auto context = m_callContexts.takeLast();
         m_functionLocals.insert(context.function, m_storage->localContext());
         m_storage->setLocalContext(context.locals);
+        m_lastPrivateScope.clear();   // 上下文被恢复 -> 强制重算私有作用域
         m_loops.resize(context.loops);
     }
     return true;
@@ -225,7 +236,7 @@ bool ScriptRunner::stepOnce() {
     // EMUERA_QDBUG_TRACE=1 时启用；可用 EMUERA_QDBUG_TRACE_FILE 过滤脚本名
     // （如 COMMON.ERB）把开销降到可控 —— 追查「CHOICE 体内 INPUT 未等待、
     // 执行穿透到下一条指令」这类控制流缺陷时打开。
-    if (qEnvironmentVariableIsSet("EMUERA_QDBUG_TRACE")
+    if (m_qdbugTrace
         && (m_qdbugTraceFile.isEmpty() || line.position.filename.contains(m_qdbugTraceFile))) {
         qCDebug(eraTrace) << "[qdbug] line" << line.position.toString()
                           << "|" << line.raw.trimmed().left(60)
@@ -253,10 +264,15 @@ bool ScriptRunner::stepOnce() {
     }
     // System entry points are not entered through CALL. Resolve private storage
     // from the executing owner as well, including resumed SHOW_SHOP frames.
-    QStringList privateNames;
-    for (const auto& decl : m_table->variableTable().localsOf(line.ownerFunction))
-        if (!decl.isConst) privateNames.append(decl.name);
-    m_storage->setPrivateScope(line.ownerFunction, privateNames);
+    // perf：本函数每条指令都会进来 —— 私有作用域只在**换函数**时才需要重算
+    // （声明表装载后不可变；enterCall/returnFromCall 换上下文时 owner 必然变化）。
+    if (line.ownerFunction != m_lastPrivateScope) {
+        QStringList privateNames;
+        for (const auto& decl : m_table->variableTable().localsOfRef(line.ownerFunction))
+            if (!decl.isConst) privateNames.append(decl.name);
+        m_storage->setPrivateScope(line.ownerFunction, privateNames);
+        m_lastPrivateScope = line.ownerFunction;
+    }
     ExecState r = executeLine(line);
     if (m_state->getExecState() == ExecState::Error) r = ExecState::Error;
 
@@ -310,8 +326,7 @@ GameBaseData* ScriptRunner::baseData() const {
 }
 
 bool ScriptRunner::evalInt(const QSharedPointer<ExpressionNode>& ast, const QString& raw, qint64& out) {
-    ExpressionEvaluator local;
-    ExpressionEvaluator* ev = m_evaluator ? m_evaluator : &local;
+    ExpressionEvaluator* ev = &getEvaluator();
     if (ast) {
         out = ev->evaluate(*ast, m_storage, baseData()).toLongLong();
         return true;
@@ -408,8 +423,7 @@ ExecState ScriptRunner::executeLine(const LogicalLine& line) {
         // 求值 -> 顺序比较各 CASE 行；命中就跳到该 CASE 的下一行
         // 支持：`CASE v1, v2` / `CASE IS >= n` / `CASE a TO b` / `CASEELSE`
         QVariant valueVar;
-        ExpressionEvaluator localEvaluator;
-        ExpressionEvaluator& ev = m_evaluator ? *m_evaluator : localEvaluator;
+        ExpressionEvaluator& ev = getEvaluator();
         if (line.condition) {
             valueVar = ev.evaluate(*line.condition, m_storage, baseData());
         } else if (!line.arguments.isEmpty()) {
@@ -478,8 +492,7 @@ ExecState ScriptRunner::executeLine(const LogicalLine& line) {
     if (name == QLatin1String("THROW")) {
         QString message;
         if (!line.arguments.isEmpty()) {
-            ExpressionEvaluator fallback;
-            ExpressionEvaluator& ev = m_evaluator ? *m_evaluator : fallback;
+            ExpressionEvaluator& ev = getEvaluator();
             const Operand& op = line.arguments.first();
             message = op.ast ? ev.evaluate(*op.ast, m_storage, baseData()).toString() : op.raw;
         }
@@ -859,8 +872,7 @@ ExecState ScriptRunner::executeLine(const LogicalLine& line) {
         }
         const QString callText = funcName + QLatin1Char('(')
                                  + argTexts.join(QLatin1Char(',')) + QLatin1Char(')');
-        ExpressionEvaluator localEv;
-        ExpressionEvaluator& ev = m_evaluator ? *m_evaluator : localEv;
+        ExpressionEvaluator& ev = getEvaluator();
         const QSharedPointer<ExpressionNode> ast =
             m_table ? m_table->expressionAst(callText) : QSharedPointer<ExpressionNode>();
         const QVariant value = ast ? ev.evaluate(*ast, m_storage, baseData())
@@ -877,8 +889,7 @@ ExecState ScriptRunner::executeLine(const LogicalLine& line) {
     //   然后与 RETURN 相同地弹栈返回。此前未实现 -> 落「其它指令」静默跳过，
     //   函数返回值丢失。eraTW 基础版枚举（BuiltInFunctionCode.cs）含 RETURNFORM。
     if (name == QLatin1String("RETURNFORM")) {
-        ExpressionEvaluator fallback;
-        ExpressionEvaluator* ev = m_evaluator ? m_evaluator : &fallback;
+        ExpressionEvaluator* ev = &getEvaluator();
         m_lastReturnValue = QVariant::fromValue<qint64>(0);
         if (!line.arguments.isEmpty()) {
             const Operand& op = line.arguments.first();
@@ -903,8 +914,7 @@ ExecState ScriptRunner::executeLine(const LogicalLine& line) {
     }
     if (name == QLatin1String("RETURN") || name == QLatin1String("RETURNF")) {
         m_lastReturnValue = QVariant::fromValue<qint64>(0);
-        ExpressionEvaluator fallback;
-        ExpressionEvaluator* ev = m_evaluator ? m_evaluator : &fallback;
+        ExpressionEvaluator* ev = &getEvaluator();
         if (name == QLatin1String("RETURNF")) {
             if (!line.arguments.isEmpty()) {
                 const Operand& op = line.arguments.first();
@@ -1159,8 +1169,7 @@ ExecState ScriptRunner::executeLine(const LogicalLine& line) {
         evalInt(timeNode, QString(), ms);
         QString defStr;
         if (name == QLatin1String("TINPUTS") && defNode) {
-            ExpressionEvaluator fallback;
-            ExpressionEvaluator* ev = m_evaluator ? m_evaluator : &fallback;
+            ExpressionEvaluator* ev = &getEvaluator();
             defStr = ev->evaluate(*defNode, m_storage, baseData()).toString();
         } else {
             evalInt(defNode, QString(), def);
@@ -1188,8 +1197,7 @@ ExecState ScriptRunner::executeLine(const LogicalLine& line) {
         QString defStr;
         if (name == QLatin1String("TONEINPUTS") && line.arguments.size() >= 2) {
             const Operand& def = line.arguments.at(1);
-            ExpressionEvaluator fallback;
-            ExpressionEvaluator* ev = m_evaluator ? m_evaluator : &fallback;
+            ExpressionEvaluator* ev = &getEvaluator();
             defStr = def.ast ? ev->evaluate(*def.ast, m_storage, baseData()).toString()
                              : ev->evaluate(def.raw, m_storage, baseData()).toString();
         }
@@ -1345,8 +1353,7 @@ QString ScriptRunner::expandCallFormLabel(const QString& raw)
     };
     const QSharedPointer<StrFormNode> form = StrFormParser::parse(text, resolve);
     if (!form) return text;
-    ExpressionEvaluator fallback;
-    ExpressionEvaluator& ev = m_evaluator ? *m_evaluator : fallback;
+    ExpressionEvaluator& ev = getEvaluator();
     const QString out = ev.evaluate(*form.staticCast<ExpressionNode>(), m_storage, baseData()).toString();
     return out.isEmpty() ? text : out;
 }
@@ -1409,11 +1416,10 @@ ExecState ScriptRunner::doCallLine(const LogicalLine& line, bool isForm, bool is
             evaluated.append(source);
             continue;
         }
-        ExpressionEvaluator fallback;
         const QVariant value = source.isString ? QVariant(source.raw)
             : source.ast
-                ? (m_evaluator ? m_evaluator : &fallback)->evaluate(*source.ast, m_storage, baseData())
-                : (m_evaluator ? m_evaluator : &fallback)->evaluate(source.raw, m_storage, baseData());
+                ? getEvaluator().evaluate(*source.ast, m_storage, baseData())
+                : getEvaluator().evaluate(source.raw, m_storage, baseData());
         Operand arg(value.toString());
         arg.isString = value.typeId() == QMetaType::QString;
         evaluated.append(arg);
@@ -1583,10 +1589,12 @@ QStringList splitCaseArgs(const QString& text)
     if (!current.trimmed().isEmpty()) out.append(current);
     return out;
 }
-} // namespace
-
-bool ScriptRunner::caseMatches(const LogicalLine& caseLine,
-                               const QVariant& valueVar, bool valueIsStr)
+// CASE 臂解析（对齐 C# CASE_ArgumentBuilder）：只认引号/括号外的 IS / TO。
+// perf：CASE 行装载后不可变，结果缓存在 LogicalLine::caseCache —— 首次
+// caseMatches 时解析一次（含 expressionAst 预解析），之后直接复用。
+// 此前每字符 × 每 CASE 臂都要重新 splitCaseArgs + expressionAst，是 eraTW
+// 地图逐字符 SELECTCASE 热路径上的最大热点。
+void buildCaseCache(const LogicalLine& caseLine, EraParseTable* table)
 {
     QString spec = caseLine.raw.trimmed();
     // 去掉前导 'CASE'
@@ -1594,15 +1602,74 @@ bool ScriptRunner::caseMatches(const LogicalLine& caseLine,
         spec = spec.mid(4);
     }
     spec = spec.trimmed();
-    if (spec.isEmpty()) return false;
 
-    ExpressionEvaluator localEvaluator;
-    ExpressionEvaluator& ev = m_evaluator ? *m_evaluator : localEvaluator;
-    const auto evalText = [&](const QString& text) -> QVariant {
-        if (m_table) {
-            const QSharedPointer<ExpressionNode> ast = m_table->expressionAst(text);
-            if (ast) return ev.evaluate(*ast, m_storage, baseData());
+    for (const QString& part : splitCaseArgs(spec)) {
+        const QString t = part.trimmed();
+        if (t.isEmpty()) continue;
+        CaseClause clause;
+        if (t.startsWith("IS ", Qt::CaseInsensitive)) {
+            const QString rest = t.mid(3).trimmed();
+            static const QStringList ops = {"<=", ">=", "==", "!=", "<", ">"};
+            bool opMatched = false;
+            for (const QString& op : ops) {
+                if (!rest.startsWith(op)) continue;
+                clause.kind = CaseClause::Kind::IsOp;
+                clause.op = op;
+                clause.textA = rest.mid(op.size()).trimmed();
+                opMatched = true;
+                break;
+            }
+            if (!opMatched) continue;   // 与原实现一致：无操作数的 IS 臂被忽略
+        } else {
+            int to = -1, depth = 0;
+            QChar quote;
+            for (int i = 0; i < t.size(); ++i) {
+                const QChar c = t[i];
+                if (!quote.isNull()) {
+                    if (c == '\\') { ++i; continue; }
+                    if (c == quote) quote = QChar();
+                    continue;
+                }
+                if (c == '\"' || c == '\'') { quote = c; continue; }
+                if (c == '(' || c == '[') ++depth;
+                if (c == ')' || c == ']') --depth;
+                if (depth == 0 && i > 0 && i + 2 < t.size() && t[i-1].isSpace()
+                    && t.mid(i, 2).compare("TO", Qt::CaseInsensitive) == 0 && t[i+2].isSpace()) {
+                    to = i;
+                    break;
+                }
+            }
+            if (to >= 0) {
+                clause.kind = CaseClause::Kind::Range;
+                clause.textA = t.left(to).trimmed();
+                clause.textB = t.mid(to + 2).trimmed();
+            } else {
+                clause.kind = CaseClause::Kind::Equal;
+                clause.textA = t;
+            }
         }
+        if (table) {
+            clause.astA = table->expressionAst(clause.textA);
+            if (clause.kind == CaseClause::Kind::Range)
+                clause.astB = table->expressionAst(clause.textB);
+        }
+        caseLine.caseCache.append(clause);
+    }
+    caseLine.caseCacheReady = true;
+}
+
+} // namespace
+
+bool ScriptRunner::caseMatches(const LogicalLine& caseLine,
+                               const QVariant& valueVar, bool valueIsStr)
+{
+    if (!caseLine.caseCacheReady) buildCaseCache(caseLine, m_table);
+
+    ExpressionEvaluator& ev = getEvaluator();
+    const auto evalClause = [&](const CaseClause& clause, bool right) -> QVariant {
+        const QString& text = right ? clause.textB : clause.textA;
+        const auto& ast = right ? clause.astB : clause.astA;
+        if (ast) return ev.evaluate(*ast, m_storage, baseData());
         return ev.evaluate(text, m_storage, baseData());
     };
 
@@ -1611,46 +1678,23 @@ bool ScriptRunner::caseMatches(const LogicalLine& caseLine,
         const qint64 l = lhs.toLongLong(), r = rhs.toLongLong();
         return l < r ? -1 : l > r ? 1 : 0;
     };
-    // Each comma-separated item has its own IS / TO grammar. Only recognize
-    // keywords outside strings and nested expressions.
-    for (const QString& part : splitCaseArgs(spec)) {
-        const QString t = part.trimmed();
-        if (t.isEmpty()) continue;
-        if (t.startsWith("IS ", Qt::CaseInsensitive)) {
-            const QString rest = t.mid(3).trimmed();
-            static const QStringList ops = {"<=", ">=", "==", "!=", "<", ">"};
-            for (const QString& op : ops) {
-                if (!rest.startsWith(op)) continue;
-                const int cmp = compare(valueVar, evalText(rest.mid(op.size()).trimmed()));
-                if ((op == "<=" && cmp <= 0) || (op == ">=" && cmp >= 0)
-                    || (op == "==" && cmp == 0) || (op == "!=" && cmp != 0)
-                    || (op == "<" && cmp < 0) || (op == ">" && cmp > 0)) return true;
-                break;
-            }
-            continue;
+    for (const CaseClause& clause : caseLine.caseCache) {
+        switch (clause.kind) {
+        case CaseClause::Kind::IsOp: {
+            const int cmp = compare(valueVar, evalClause(clause, false));
+            if ((clause.op == "<=" && cmp <= 0) || (clause.op == ">=" && cmp >= 0)
+                || (clause.op == "==" && cmp == 0) || (clause.op == "!=" && cmp != 0)
+                || (clause.op == "<" && cmp < 0) || (clause.op == ">" && cmp > 0)) return true;
+            break;
         }
-        int to = -1, depth = 0;
-        QChar quote;
-        for (int i = 0; i < t.size(); ++i) {
-            const QChar c = t[i];
-            if (!quote.isNull()) {
-                if (c == '\\') { ++i; continue; }
-                if (c == quote) quote = QChar();
-                continue;
-            }
-            if (c == '\"' || c == '\'') { quote = c; continue; }
-            if (c == '(' || c == '[') ++depth;
-            if (c == ')' || c == ']') --depth;
-            if (depth == 0 && i > 0 && i + 2 < t.size() && t[i-1].isSpace()
-                && t.mid(i, 2).compare("TO", Qt::CaseInsensitive) == 0 && t[i+2].isSpace()) {
-                to = i;
-                break;
-            }
+        case CaseClause::Kind::Range:
+            if (compare(evalClause(clause, false), valueVar) <= 0
+                && compare(valueVar, evalClause(clause, true)) <= 0) return true;
+            break;
+        case CaseClause::Kind::Equal:
+            if (compare(valueVar, evalClause(clause, false)) == 0) return true;
+            break;
         }
-        if (to >= 0) {
-            if (compare(evalText(t.left(to).trimmed()), valueVar) <= 0
-                && compare(valueVar, evalText(t.mid(to + 2).trimmed())) <= 0) return true;
-        } else if (compare(valueVar, evalText(t)) == 0) return true;
     }
     return false;
 }

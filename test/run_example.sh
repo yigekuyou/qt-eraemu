@@ -50,12 +50,19 @@ elif [ "$SELECTION" = "21" ]; then
     # GOTO 标签作用域组：菜单选 21，@CHOICE_REPLICA 先喂 3（越界 ->
     # CASEELSE 惩罚 -> GOTO 回本函数 $INPUT_LOOP），再喂 1（合法 -> 返回 1）
     SCRIPT="21,3,1"
+elif [ "$SELECTION" = "22" ]; then
+    # MAP 绘制复现组（eraTW DRAW_MAP 逐字符热路径）：无输入；
+    # 帧预算放宽到 0（不限）保证 21 张图画完并出汇总。
+    # 计时：time ./test/run_example.sh 22（单张耗时突增即性能回归）
+    SCRIPT="22"
+    FRAMES=0
 else
     SCRIPT="$SELECTION"
 fi
+FRAMES="${FRAMES:-400}"
 
 # --check：渲染自检（未展开的 %..%/{..}、漏按钮等）发现可疑即退出码 2
-OUT="$("$CLI" "$GAME" --script "$SCRIPT" --check --frames 400 2>&1)"
+OUT="$("$CLI" "$GAME" --script "$SCRIPT" --check --frames "$FRAMES" 2>&1)"
 STATUS=$?
 printf '%s\n' "$OUT"
 

@@ -57,6 +57,13 @@ QVariant evalExpressionCached(EraParseTable* table,
 
 } // namespace
 
+// 求值器统一入口：注入的优先，否则惰性创建 fallback（只服务未接线的裸测环境）
+ExpressionEvaluator& ExecutionEngine::getEvaluator() {
+    if (!m_expressionEvaluator && !m_fallbackEvaluator)
+        m_fallbackEvaluator = std::make_unique<ExpressionEvaluator>();
+    return m_expressionEvaluator ? *m_expressionEvaluator : *m_fallbackEvaluator;
+}
+
 ExecutionEngine::ExecutionEngine(VariableStorage* storage, GameBaseData* gameBaseData, QObject* parent)
     : QObject(parent), m_functionSystem(nullptr), m_storage(storage), m_gameBaseData(gameBaseData), m_running(false), m_currentLine(0), m_executionPosition(0), m_totalInstructionsExecuted(0) {
     connect(&m_erbLoader, &ErbLoader::objectNameChanged, this, &ExecutionEngine::objectNameChanged);
@@ -222,8 +229,7 @@ ExecutionEngine::LhsRef ExecutionEngine::parseLhsRef(const QString& lhs)
         if (m_parseTable) {
             const QSharedPointer<ExpressionNode> ast = m_parseTable->expressionAst(idxText);
             if (ast) {
-                ExpressionEvaluator localEvaluator;
-                ExpressionEvaluator& ev = m_expressionEvaluator ? *m_expressionEvaluator : localEvaluator;
+                ExpressionEvaluator& ev = getEvaluator();
                 value = ev.evaluate(*ast, m_storage, m_gameBaseData).toLongLong();
                 qCDebug(eraTrace) << "[var] 下标(表达式)" << ref.name << idxText << "->" << value;
                 resolved = true;
@@ -339,8 +345,7 @@ bool ExecutionEngine::handleCompoundAssignment(const QString& lhs, const QString
     qint64 currentValue = readLhs(ref);
     
     // Evaluate the RHS expression (prefer cached AST)
-    ExpressionEvaluator localEvaluator;
-    ExpressionEvaluator& evaluator = m_expressionEvaluator ? *m_expressionEvaluator : localEvaluator;
+    ExpressionEvaluator& evaluator = getEvaluator();
     const QVariant rhsVar = ast ? evaluator.evaluate(*ast, m_storage, m_gameBaseData)
         : evalExpressionCached(m_parseTable, evaluator, rhs, m_storage, m_gameBaseData);
     qint64 rhsValue = rhsVar.isValid() ? rhsVar.toLongLong() : rhs.toLongLong();
@@ -458,8 +463,7 @@ bool ExecutionEngine::handleVarSet(const LogicalLine& line, bool eachChara) {
         return true;
     }
 
-    ExpressionEvaluator localEvaluator;
-    ExpressionEvaluator& ev = m_expressionEvaluator ? *m_expressionEvaluator : localEvaluator;
+    ExpressionEvaluator& ev = getEvaluator();
     const auto evalInt = [&](const Operand& o) -> qint64 {
         if (o.isString) return o.raw.toLongLong();
         if (o.ast) return ev.evaluate(*o.ast, m_storage, m_gameBaseData).toLongLong();
@@ -698,8 +702,7 @@ bool ExecutionEngine::executeInstruction(const LogicalLine& line) {
         if (!m_storage) return true;
         qint64 value = 0;
         if (!args.isEmpty() && !args.first().raw.trimmed().isEmpty()) {
-            ExpressionEvaluator localEvaluator;
-            ExpressionEvaluator& ev = m_expressionEvaluator ? *m_expressionEvaluator : localEvaluator;
+            ExpressionEvaluator& ev = getEvaluator();
             value = evalExpressionCached(m_parseTable, ev, args.first().raw,
                                          m_storage, m_gameBaseData).toLongLong();
         }
@@ -731,8 +734,7 @@ bool ExecutionEngine::executeInstruction(const LogicalLine& line) {
                 ? m_gameBaseData->get(QStringLiteral("最初からいるキャラ")).toLongLong() : -1;
             if (def > 0) m_storage->addChara(static_cast<int>(def));
         } else {   // ADDSPCHARA <番号>
-            ExpressionEvaluator localEvaluator;
-            ExpressionEvaluator& ev = m_expressionEvaluator ? *m_expressionEvaluator : localEvaluator;
+            ExpressionEvaluator& ev = getEvaluator();
             const qint64 value = args.isEmpty() ? 0
                 : evalExpressionCached(m_parseTable, ev, args.first().raw,
                                        m_storage, m_gameBaseData).toLongLong();
@@ -755,8 +757,7 @@ bool ExecutionEngine::executeInstruction(const LogicalLine& line) {
         if (ops.size() >= 2) {
             const LhsRef ref = parseLhsRef(ops.first()->raw);
             if (ref.valid) {
-                ExpressionEvaluator localEvaluator;
-                ExpressionEvaluator& ev = m_expressionEvaluator ? *m_expressionEvaluator : localEvaluator;
+                ExpressionEvaluator& ev = getEvaluator();
                 // C# SP_TIMES 的实参由 LexicalAnalyzer.ReadDouble 直接读原始文本
                 // （表达式解析器不支持小数字面量），这里同样按 raw.toDouble()
                 double factor = 0;
@@ -784,8 +785,7 @@ bool ExecutionEngine::executeInstruction(const LogicalLine& line) {
         if (ops.size() >= 3) {
             const LhsRef ref = parseLhsRef(ops.first()->raw);
             if (ref.valid) {
-                ExpressionEvaluator localEvaluator;
-                ExpressionEvaluator& ev = m_expressionEvaluator ? *m_expressionEvaluator : localEvaluator;
+                ExpressionEvaluator& ev = getEvaluator();
                 const qint64 x = ops.at(1)->ast
                     ? ev.evaluate(*ops.at(1)->ast, m_storage, m_gameBaseData).toLongLong()
                     : ev.evaluate(ops.at(1)->raw, m_storage, m_gameBaseData).toLongLong();
@@ -819,8 +819,7 @@ bool ExecutionEngine::executeInstruction(const LogicalLine& line) {
     //   把 CUP/CDOWN 累计值应用到 PALAM 并打印「名 值+上-下=新值」，然后清零。
     if (name == "CUPCHECK") {
         if (!m_storage) return true;
-        ExpressionEvaluator localEvaluator;
-        ExpressionEvaluator& ev = m_expressionEvaluator ? *m_expressionEvaluator : localEvaluator;
+        ExpressionEvaluator& ev = getEvaluator();
         const qint64 target = args.isEmpty() ? -1
             : evalExpressionCached(m_parseTable, ev, args.first().raw,
                                    m_storage, m_gameBaseData).toLongLong();
@@ -851,8 +850,7 @@ bool ExecutionEngine::executeInstruction(const LogicalLine& line) {
 
     // ---- SKIPDISP <n>（对齐 C#：skipPrint = (iValue != 0)，并写 RESULT）----
     if (name == "SKIPDISP") {
-        ExpressionEvaluator localEvaluator;
-        ExpressionEvaluator& ev = m_expressionEvaluator ? *m_expressionEvaluator : localEvaluator;
+        ExpressionEvaluator& ev = getEvaluator();
         const qint64 value = args.isEmpty() ? 0
             : evalExpressionCached(m_parseTable, ev, args.first().raw,
                                    m_storage, m_gameBaseData).toLongLong();
@@ -868,8 +866,7 @@ bool ExecutionEngine::executeInstruction(const LogicalLine& line) {
     // ---- FORCEKANA <n> / NOSKIP / ENDNOSKIP（显示状态，移植版暂无对应渲染开关）----
     if (name == "FORCEKANA" || name == "NOSKIP" || name == "ENDNOSKIP") {
         if (name == "FORCEKANA" && !args.isEmpty()) {
-            ExpressionEvaluator localEvaluator;
-            ExpressionEvaluator& ev = m_expressionEvaluator ? *m_expressionEvaluator : localEvaluator;
+            ExpressionEvaluator& ev = getEvaluator();
             evalExpressionCached(m_parseTable, ev, args.first().raw,
                                  m_storage, m_gameBaseData).toLongLong();
         }
@@ -890,8 +887,7 @@ bool ExecutionEngine::executeInstruction(const LogicalLine& line) {
         QList<int> param;
         for (const Operand& a : args) {
             if (!a.isString && a.raw == QLatin1String(",")) continue;
-            ExpressionEvaluator localEvaluator;
-            ExpressionEvaluator& ev = m_expressionEvaluator ? *m_expressionEvaluator : localEvaluator;
+            ExpressionEvaluator& ev = getEvaluator();
             param.append(static_cast<int>(a.ast
                 ? ev.evaluate(*a.ast, m_storage, m_gameBaseData).toLongLong()
                 : evalExpressionCached(m_parseTable, ev, a.raw, m_storage, m_gameBaseData).toLongLong()));
@@ -916,8 +912,7 @@ bool ExecutionEngine::executeInstruction(const LogicalLine& line) {
     if (name == "REUSELASTLINE") {
         if (m_skipDisp) return true;
         QString text;
-        ExpressionEvaluator localEvaluator;
-        ExpressionEvaluator& ev = m_expressionEvaluator ? *m_expressionEvaluator : localEvaluator;
+        ExpressionEvaluator& ev = getEvaluator();
         if (!args.isEmpty()) {
             const Operand& a = args.first();
             if (a.isString) {
@@ -962,8 +957,7 @@ bool ExecutionEngine::executeInstruction(const LogicalLine& line) {
         if (ops.isEmpty()) return true;
         const LhsRef ref = parseLhsRef(ops.first()->raw);
         if (!ref.valid) return true;
-        ExpressionEvaluator localEvaluator;
-        ExpressionEvaluator& ev = m_expressionEvaluator ? *m_expressionEvaluator : localEvaluator;
+        ExpressionEvaluator& ev = getEvaluator();
         qint64 bits = readLhs(ref);
         for (int i = 1; i < ops.size(); ++i) {
             const qint64 x = ops.at(i)->ast
@@ -991,10 +985,25 @@ bool ExecutionEngine::executeInstruction(const LogicalLine& line) {
     // RESULT / RESULTS；否则 TITLE.ERB 的版本号会退化成 0.0。
     if (name == "STRLENS" || name == "STRLENSU" || name == "SUBSTRING"
         || name == "SUBSTRINGU") {
-        ExpressionEvaluator localEvaluator;
-        ExpressionEvaluator& ev = m_expressionEvaluator ? *m_expressionEvaluator : localEvaluator;
+        ExpressionEvaluator& ev = getEvaluator();
         QString callText = line.raw;
-        const int commandEnd = callText.indexOf(QRegularExpression(QStringLiteral("\\s")));
+        // perf：不用 QRegularExpression（每次执行都构造正则 + JIT 编译，
+        // eraTW 地图逐字符 STRLENSU/SUBSTRINGU 时是热路径）；手写扫空白。
+        // 注意：必须先跳过**前导缩进**（eraTW/示例中 IF/WHILE/FOR 体内的行以
+        // 制表符或空格缩进）。否则缩进处就是首个空白，commandEnd = 0、
+        // mid(0) 返回整行 —— 命令名会混进实参串（sourceName 变成
+        // "SUBSTRINGU S:0"），SUBSTRINGU/STRLENS 全部退化成空串。
+        // 这是 eraTW 逐字符地图「画不出图」（RESULTS 恒空、WHILE 空转）的根因。
+        int scan = 0;
+        while (scan < callText.size() && callText.at(scan).isSpace()) ++scan;
+        int commandEnd = -1;
+        for (int i = scan; i < callText.size(); ++i) {
+            const QChar c = callText.at(i);
+            if (c == QLatin1Char(' ') || c == QLatin1Char('\t') || c == QChar(0x3000)) {
+                commandEnd = i;
+                break;
+            }
+        }
         if (commandEnd >= 0) callText = callText.mid(commandEnd).trimmed();
         if (callText.isEmpty()) {
             QStringList callArgs;
@@ -1003,9 +1012,6 @@ bool ExecutionEngine::executeInstruction(const LogicalLine& line) {
             }
             callText = callArgs.join(QLatin1Char(','));
         }
-        // line.raw 保留命令后的空白、逗号和运算符：
-        // SUBSTRING VERSION, RESULT - 3, 3 -> SUBSTRING(VERSION, RESULT - 3, 3)
-        const QString expr = name + QLatin1Char('(') + callText + QLatin1Char(')');
         QVariant value;
         if (name == QLatin1String("SUBSTRING") || name == QLatin1String("SUBSTRINGU")) {
             const QStringList pieces = callText.split(QLatin1Char(','), Qt::KeepEmptyParts);
@@ -1013,23 +1019,27 @@ bool ExecutionEngine::executeInstruction(const LogicalLine& line) {
                 const QString sourceName = pieces.at(0).trimmed();
                 QString source;
                 if (sourceName.compare(QLatin1String("RESULTS"), Qt::CaseInsensitive) == 0) {
-                    source = m_storage ? m_storage->getLocalStr(0) : QString();
+                    // RESULTS 与全引擎一致走全局字符串槽（expression_evaluator /
+                    // 赋值 / 函数返回都用 get/setGlobalStr1D）——此前这里读的是
+                    // 另一个 LocalStr 槽，SUBSTRINGU 写回后脚本仍读到旧值，
+                    // 导致 eraTW `WHILE RESULTS != "" && STRLENSU(RESULTS) < 3`
+                    // 的地图逐字符循环永不终止（表现为「地图画不出来」）。
+                    source = m_storage ? m_storage->getGlobalStr1D(QStringLiteral("RESULTS"), 0)
+                                       : QString();
                 } else {
                     const QPair<QString, int> sourceRef = parseLHS(sourceName);
                     if (m_storage && sourceRef.first == sourceName && sourceRef.first.size() > 0) {
                         source = m_storage->getGlobalStr1D(sourceRef.first,
                                                            sourceRef.second >= 0 ? sourceRef.second : 0);
                     } else {
-                        source = ev.evaluate(sourceName, m_storage, m_gameBaseData).toString();
+                        source = evalExpressionCached(m_parseTable, ev, sourceName,
+                                                      m_storage, m_gameBaseData).toString();
                     }
                 }
-                const qint64 start = ev.evaluate(pieces.at(1).trimmed(), m_storage,
-                                                 m_gameBaseData).toLongLong();
-                const qint64 length = ev.evaluate(pieces.at(2).trimmed(), m_storage,
-                                                  m_gameBaseData).toLongLong();
-                QString escaped = source;
-                escaped.replace(QLatin1Char('\\'), QStringLiteral("\\\\"));
-                escaped.replace(QLatin1Char('"'), QStringLiteral("\\\""));
+                const qint64 start = evalExpressionCached(m_parseTable, ev, pieces.at(1).trimmed(),
+                                                          m_storage, m_gameBaseData).toLongLong();
+                const qint64 length = evalExpressionCached(m_parseTable, ev, pieces.at(2).trimmed(),
+                                                           m_storage, m_gameBaseData).toLongLong();
                 if (start < 0) {
                     // Emuera 的版本字符串按四位小数部分处理：2 -> 0002。
                     // 负位置从该四位字符串末尾计算。
@@ -1041,20 +1051,23 @@ bool ExecutionEngine::executeInstruction(const LogicalLine& line) {
                 value = source.mid(safeStart, length < 0 ? -1 : static_cast<int>(length));
             }
         } else {
-            value = ev.evaluate(expr, m_storage, m_gameBaseData);
+            // STRLENS / STRLENSU：按 `STRLENSU(实参)` 函数调用求值（走 AST 缓存）。
+            // line.raw 保留命令后的逗号/运算符：STRLENSU VERSION, 3 -> STRLENSU(VERSION, 3)
+            const QString expr = name + QLatin1Char('(') + callText + QLatin1Char(')');
+            value = evalExpressionCached(m_parseTable, ev, expr, m_storage, m_gameBaseData);
         }
         if (name == QLatin1String("STRLENS") || name == QLatin1String("STRLENSU")) {
             if (m_storage) m_storage->setSystemVariable(QStringLiteral("RESULT"), 0,
                                                           value.toLongLong());
         } else if (m_storage) {
-            m_storage->setLocalStr(0, value.toString());
+            // SUBSTRINGU 的结果写 RESULTS —— 与全引擎同一存储（见上方说明）
+            m_storage->setGlobalStr1D(QStringLiteral("RESULTS"), 0, value.toString());
         }
         return true;
     }
 
     if (name == QLatin1String("HTML_PRINT")) {
-        ExpressionEvaluator fallback;
-        ExpressionEvaluator& evaluator = m_expressionEvaluator ? *m_expressionEvaluator : fallback;
+        ExpressionEvaluator& evaluator = getEvaluator();
         const auto eval = [&](const ExpressionNode& node) {
             return evaluator.evaluate(node, m_storage, m_gameBaseData).toString();
         };
@@ -1076,8 +1089,7 @@ bool ExecutionEngine::executeInstruction(const LogicalLine& line) {
     if (name == QLatin1String("PRINT_IMG")) {
         if (m_skipDisp) return true;
         if (args.isEmpty()) return true;
-        ExpressionEvaluator localEvaluator;
-        ExpressionEvaluator& ev = m_expressionEvaluator ? *m_expressionEvaluator : localEvaluator;
+        ExpressionEvaluator& ev = getEvaluator();
         const Operand& operand = args.first();
         const QVariant value = operand.isString
             ? QVariant(operand.raw)
@@ -1102,8 +1114,7 @@ bool ExecutionEngine::executeInstruction(const LogicalLine& line) {
             }
         }
         if (ops.size() >= 2) {
-            ExpressionEvaluator localEvaluator;
-            ExpressionEvaluator& ev = m_expressionEvaluator ? *m_expressionEvaluator : localEvaluator;
+            ExpressionEvaluator& ev = getEvaluator();
             // AstBuilder 已把带引号的字面量标记为 isString 并去掉外层引号；
             // 再按 raw 解析会把 "123" 错当整数、把 "A" 错当变量。
             const auto evaluateOperand = [&](const Operand& operand) -> QVariant {
@@ -1131,8 +1142,7 @@ bool ExecutionEngine::executeInstruction(const LogicalLine& line) {
         // 参数是**表达式**（如 `CLEARLINE LINECOUNT - FIRSTLINE`），不能按字面量解析
         int n = 1;
         if (!args.isEmpty() && !args.first().raw.trimmed().isEmpty()) {
-            ExpressionEvaluator localEvaluator;
-            ExpressionEvaluator& ev = m_expressionEvaluator ? *m_expressionEvaluator : localEvaluator;
+            ExpressionEvaluator& ev = getEvaluator();
             n = static_cast<int>(evalExpressionCached(m_parseTable, ev, args.first().raw,
                                                       m_storage, m_gameBaseData).toLongLong());
         }
@@ -1178,8 +1188,7 @@ bool ExecutionEngine::executeInstruction(const LogicalLine& line) {
         // 之前直接透传 raw 文本，变量与函数形式都会失效。
         if (!args.isEmpty() && !args.first().raw.trimmed().isEmpty()) {
             const QString raw = args.first().raw.trimmed();
-            ExpressionEvaluator localEvaluator;
-            ExpressionEvaluator& ev = m_expressionEvaluator ? *m_expressionEvaluator : localEvaluator;
+            ExpressionEvaluator& ev = getEvaluator();
             const QVariant value = evalExpressionCached(m_parseTable, ev, raw,
                                                         m_storage, m_gameBaseData);
             if (value.typeId() == QMetaType::QString) {
@@ -1205,8 +1214,7 @@ bool ExecutionEngine::executeInstruction(const LogicalLine& line) {
         } else if (name == QLatin1String("FONTSTYLE")) {
             // FONTSTYLE <位掩码>：整体替换
             if (!args.isEmpty() && !args.first().raw.trimmed().isEmpty()) {
-                ExpressionEvaluator localEvaluator;
-                ExpressionEvaluator& ev = m_expressionEvaluator ? *m_expressionEvaluator : localEvaluator;
+                ExpressionEvaluator& ev = getEvaluator();
                 m_styleBits = evalExpressionCached(m_parseTable, ev, args.first().raw,
                                                    m_storage, m_gameBaseData).toLongLong();
             }
@@ -1219,8 +1227,7 @@ bool ExecutionEngine::executeInstruction(const LogicalLine& line) {
             // 无参数 = 置位；有参数且求值为 0 = 清除
             bool on = true;
             if (!args.isEmpty() && !args.first().raw.trimmed().isEmpty()) {
-                ExpressionEvaluator localEvaluator;
-                ExpressionEvaluator& ev = m_expressionEvaluator ? *m_expressionEvaluator : localEvaluator;
+                ExpressionEvaluator& ev = getEvaluator();
                 on = evalExpressionCached(m_parseTable, ev, args.first().raw,
                                           m_storage, m_gameBaseData).toLongLong() != 0;
             }
@@ -1261,8 +1268,7 @@ bool ExecutionEngine::executeInstruction(const LogicalLine& line) {
             if (name == QLatin1String("CUSTOMDRAWLINE")) {
                 barStr = args.first().raw;
             } else {
-                ExpressionEvaluator localEvaluator;
-                ExpressionEvaluator& ev = m_expressionEvaluator ? *m_expressionEvaluator : localEvaluator;
+                ExpressionEvaluator& ev = getEvaluator();
                 barStr = evalExpressionCached(m_parseTable, ev, args.first().raw,
                                               m_storage, m_gameBaseData).toString();
             }
@@ -1396,8 +1402,7 @@ bool ExecutionEngine::executeInstruction(const LogicalLine& line) {
     // 这里映射到 eraTrace 调试日志（EMUERA_QDBUG_TRACE=1 可见）。
     // 后缀语义与 PRINT 族一致：V/S=变量求值、FORM=格式串、L/W=换行。
     if (name.startsWith(QLatin1String("DEBUGPRINT"))) {
-        ExpressionEvaluator fallback;
-        ExpressionEvaluator& ev = m_expressionEvaluator ? *m_expressionEvaluator : fallback;
+        ExpressionEvaluator& ev = getEvaluator();
         const QString rest = line.raw.trimmed().mid(name.size()).trimmed();
         QString text;
         if (name.contains(QLatin1String("FORM"))) {
@@ -1442,7 +1447,7 @@ bool ExecutionEngine::executeInstruction(const LogicalLine& line) {
     // reportUnfinished 同名只报一次，会漏掉后续出现的同型行；
     // EMUERA_QDBUG_TRACE=1 时逐次输出，便于定位「指令被静默跳过」的完整现场
     //（如 SPLIT 此前被静默跳过、COLOREDMAP 的 TRY 失败等）。
-    if (qEnvironmentVariableIsSet("EMUERA_QDBUG_TRACE")) {
+    if (m_qdbugTrace) {
         qCDebug(eraTrace) << "[qdbug] other-instruction" << name
                           << "行" << line.position.toString()
                           << "|" << line.raw.trimmed().left(60);
@@ -1467,8 +1472,7 @@ bool ExecutionEngine::executeInstruction(const LogicalLine& line) {
 // ---------------------------------------------------------------------------
 bool ExecutionEngine::handleSplit(const LogicalLine& line)
 {
-    ExpressionEvaluator fallback;
-    ExpressionEvaluator& ev = m_expressionEvaluator ? *m_expressionEvaluator : fallback;
+    ExpressionEvaluator& ev = getEvaluator();
     const auto evalStr = [&](const Operand& op) -> QString {
         if (op.isString) return op.raw;
         return op.ast ? ev.evaluate(*op.ast, m_storage, m_gameBaseData).toString()
@@ -1544,8 +1548,7 @@ bool ExecutionEngine::executeFunctionCall(const LogicalLine& line)
     // ---- C# 原版全量补全（BuiltInFunctionCode.cs 枚举内、此前未实现的分支）----
     // ASSERT <expr>：运行期断言（C# FunctionCode.ASSERT）—— 为假则报错
     if (name == QLatin1String("ASSERT")) {
-        ExpressionEvaluator fallback;
-        ExpressionEvaluator& ev = m_expressionEvaluator ? *m_expressionEvaluator : fallback;
+        ExpressionEvaluator& ev = getEvaluator();
         qint64 v = 0;
         if (!line.arguments.isEmpty()) {
             const Operand& op = line.arguments.first();
@@ -1579,8 +1582,7 @@ bool ExecutionEngine::executeFunctionCall(const LogicalLine& line)
     if (upper == QLatin1String("PUTFORM")) {
         QString text;
         if (!line.arguments.isEmpty() && line.arguments.first().ast) {
-            ExpressionEvaluator fallback;
-            ExpressionEvaluator& ev = m_expressionEvaluator ? *m_expressionEvaluator : fallback;
+            ExpressionEvaluator& ev = getEvaluator();
             text = ev.evaluate(*line.arguments.first().ast, m_storage, m_gameBaseData).toString();
         } else if (!line.arguments.isEmpty()) {
             text = line.arguments.first().raw;
@@ -1642,8 +1644,7 @@ bool ExecutionEngine::executeFunctionCall(const LogicalLine& line)
         reportUnfinished(QStringLiteral("函数语句（实参无法归约）"), name, line);
         return true;
     }
-    ExpressionEvaluator fallback;
-    ExpressionEvaluator& ev = m_expressionEvaluator ? *m_expressionEvaluator : fallback;
+    ExpressionEvaluator& ev = getEvaluator();
     value = ev.evaluate(*line.arguments.first().ast, m_storage, m_gameBaseData);
 
     // 返回类型决定写哪个寄存器（对齐 C#：Int64 -> RESULT，string -> RESULTS）
@@ -1677,8 +1678,7 @@ bool ExecutionEngine::handleStringAssignment(const QString& lhs, const QString& 
     if (ref.name.isEmpty()) {
         return false;
     }
-    ExpressionEvaluator localEvaluator;
-    ExpressionEvaluator& evaluator = m_expressionEvaluator ? *m_expressionEvaluator : localEvaluator;
+    ExpressionEvaluator& evaluator = getEvaluator();
 
     // 装载期为「字符串赋值的右值」统一建了格式化串节点（对齐 C# AnalyseFormattedString），
     // 但右值是**裸变量名**（如 `NAME = RESULTS`）时它会被当成字面量文本。
@@ -1791,8 +1791,7 @@ bool ExecutionEngine::handleAssignment(const QString& lhs, const QString& rhs, c
 
     // Evaluate the RHS expression using the parse table's cached AST.
     // Pass m_gameBaseData if available so GameBase variables can be resolved.
-    ExpressionEvaluator localEvaluator;
-    ExpressionEvaluator& evaluator = m_expressionEvaluator ? *m_expressionEvaluator : localEvaluator;
+    ExpressionEvaluator& evaluator = getEvaluator();
     QVariant rhsValue = ast ? evaluator.evaluate(*ast, m_storage, m_gameBaseData)
         : evalExpressionCached(m_parseTable, evaluator, rhs, m_storage, m_gameBaseData);
     
@@ -1833,8 +1832,7 @@ bool ExecutionEngine::handlePrintInstruction(const LogicalLine& line) {
         return true;
     }
 
-    ExpressionEvaluator localEvaluator;
-    ExpressionEvaluator& evaluator = m_expressionEvaluator ? *m_expressionEvaluator : localEvaluator;
+    ExpressionEvaluator& evaluator = getEvaluator();
 
     const auto valueOf = [&](const Operand& a) -> QString {
         if (a.ast) {
@@ -2108,8 +2106,7 @@ void ExecutionEngine::handleSaveData(const LogicalLine& line)
         parts.append(op);
     }
     if (parts.size() < 2) return;
-    ExpressionEvaluator fallback;
-    ExpressionEvaluator& ev = m_expressionEvaluator ? *m_expressionEvaluator : fallback;
+    ExpressionEvaluator& ev = getEvaluator();
     const auto evalOp = [&](const Operand& op) -> QVariant {
         return op.ast ? ev.evaluate(*op.ast, m_storage, m_gameBaseData)
                       : ev.evaluate(op.raw, m_storage, m_gameBaseData);
@@ -2146,8 +2143,7 @@ void ExecutionEngine::handleSaveData(const LogicalLine& line)
 void ExecutionEngine::handleLoadData(const LogicalLine& line)
 {
     if (line.arguments.isEmpty()) return;
-    ExpressionEvaluator fallback;
-    ExpressionEvaluator& ev = m_expressionEvaluator ? *m_expressionEvaluator : fallback;
+    ExpressionEvaluator& ev = getEvaluator();
     const Operand& op = line.arguments.first();
     const qint64 idx = op.ast ? ev.evaluate(*op.ast, m_storage, m_gameBaseData).toLongLong()
                               : ev.evaluate(op.raw, m_storage, m_gameBaseData).toLongLong();
@@ -2167,8 +2163,7 @@ void ExecutionEngine::handleLoadData(const LogicalLine& line)
 void ExecutionEngine::handleDelData(const LogicalLine& line)
 {
     if (line.arguments.isEmpty()) return;
-    ExpressionEvaluator fallback;
-    ExpressionEvaluator& ev = m_expressionEvaluator ? *m_expressionEvaluator : fallback;
+    ExpressionEvaluator& ev = getEvaluator();
     const Operand& op = line.arguments.first();
     const qint64 idx = op.ast ? ev.evaluate(*op.ast, m_storage, m_gameBaseData).toLongLong()
                               : ev.evaluate(op.raw, m_storage, m_gameBaseData).toLongLong();
@@ -2180,8 +2175,7 @@ void ExecutionEngine::handleDelData(const LogicalLine& line)
 
 void ExecutionEngine::handleChkData(const LogicalLine& line)
 {
-    ExpressionEvaluator fallback;
-    ExpressionEvaluator& ev = m_expressionEvaluator ? *m_expressionEvaluator : fallback;
+    ExpressionEvaluator& ev = getEvaluator();
     const Operand& op = line.arguments.isEmpty() ? Operand() : line.arguments.first();
     const qint64 idx = op.ast ? ev.evaluate(*op.ast, m_storage, m_gameBaseData).toLongLong()
                               : ev.evaluate(op.raw, m_storage, m_gameBaseData).toLongLong();

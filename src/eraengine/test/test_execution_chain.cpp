@@ -105,7 +105,7 @@ int main(int argc, char* argv[]) {
         "KK = DOUBLE(21)",    // 19
         "GOTO DONE",          // 20
         "BB = 999",           // 21 (应被跳过)
-        "@DONE",              // 22
+        "$DONE",              // 22 (GOTO 目标是函数内 $标签；@函数标签会终结函数)
         "HH = 1",             // 23
         "",                   // 24
         "@SUB(X)",            // 25

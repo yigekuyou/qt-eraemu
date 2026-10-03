@@ -64,9 +64,14 @@ public:
 
 private:
     void generate();
+    // 惰性初始化：把 m_seed 物化进 m_state（m_index = N，下一次取数触发 generate()）。
+    // const（state() 是 const），所以状态字是 mutable —— 构造不 reseed（perf：
+    // 引擎热路径上存在大量临时 ExpressionEvaluator -> Mt19937），首次取数/
+    // 导出 RANDDATA 前才真正填 624 字。
+    void fillStateFromSeed() const;
 
-    quint32 m_state[N];
-    int     m_index = N + 1;      // N+1 = 需要重新生成
+    mutable quint32 m_state[N];
+    mutable int     m_index = N + 1;   // N+1 = 未初始化；N = 需要重生成；<N = 可取数
     quint32 m_seed = 0;
 };
 

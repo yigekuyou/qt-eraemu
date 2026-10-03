@@ -79,6 +79,9 @@ public:
     [[nodiscard]] QList<VariableDecl> declarations() const;
     // 某函数的局部（私有）变量声明
     [[nodiscard]] QList<VariableDecl> localsOf(const QString& function) const;
+    // perf：执行热路径（每条指令都要解析私有作用域）用 —— 装载完成后 m_locals
+    // 不再变化，按函数缓存声明列表，返回引用免去每次调用逐个拷贝 VariableDecl。
+    [[nodiscard]] const QList<VariableDecl>& localsOfRef(const QString& function) const;
 
     void clear();
 
@@ -128,6 +131,8 @@ private:
     QHash<QString, int> m_localNameCount;
     QHash<QString, OperandType> m_uniqueLocalType;
     QHash<QString, QHash<QString, VariableDecl>> m_locals;  // function -> name -> decl
+    // localsOfRef 的按函数缓存（装载后 m_locals 不变；执行单线程）
+    mutable QHash<QString, QList<VariableDecl>> m_localsRefCache;
 };
 
 #endif // AST_VARIABLE_TABLE_H

@@ -1308,6 +1308,20 @@ ExecState ScriptRunner::executeLine(const LogicalLine& line) {
         return ExecState::Continue;
     }
     if (m_machine && name == QLatin1String("DOTRAIN")) {
+        // 位置守卫（对齐 C# DOTRAIN_Instruction）：仅 @EVENTTRAIN / @SHOW_STATUS /
+        // @SHOW_USERCOM / @USERCOM / @EVENTCOMEND 上下文合法，其余位置报错。
+        // 文档 Command.html：「只能在 @EVENTTRAIN、@SHOW_STATUS、@SHOW_USERCOM、
+        // @USERCOM、@EVENTCOMEND 及从这些函数中调用的函数内使用」。
+        const SystemStateCode sst = m_state->getSystemState();
+        const bool inTrainFlow = sst == SystemStateCode::Train_CallEventTrain
+                                 || sst == SystemStateCode::Train_CallShowStatus
+                                 || sst == SystemStateCode::Train_CallShowUserCom
+                                 || sst == SystemStateCode::Train_CallEventComEnd;
+        if (!inTrainFlow) {
+            m_state->setErrorState();
+            emit errorOccurred(QStringLiteral("DOTRAIN 命令不能在此位置执行"));
+            return ExecState::Error;
+        }
         qint64 train = 0;
         evalInt(line.arguments.isEmpty() ? QSharedPointer<ExpressionNode>()
                                          : line.arguments.first().ast,
@@ -1317,6 +1331,8 @@ ExecState ScriptRunner::executeLine(const LogicalLine& line) {
             emit errorOccurred(QStringLiteral("DOTRAIN 的值超出 TRAINNAME 范围"));
             return ExecState::Error;
         }
+        // CALLTRAIN 处理途中执行 DOTRAIN -> CALLTRAIN 剩余部分作废（文档/C# 明确）
+        m_machine->abortCallTrain();
         m_machine->setDoTrainSelectCom(train);
         m_state->setSystemState(SystemStateCode::Train_DoTrain);
         advance();

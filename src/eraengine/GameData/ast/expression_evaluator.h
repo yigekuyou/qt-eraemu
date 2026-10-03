@@ -74,6 +74,9 @@ public:
 
     void setLanguageEncoding(TextEncoding enc) { m_langEncoding = enc; }
     [[nodiscard]] TextEncoding languageEncoding() const { return m_langEncoding; }
+    // 语言相关的字节长度（对齐 C# LangManager.GetStrlenLang）。公开给
+    // 语句形式的 STRLENFORM（FORM_STR 实参）复用 —— 见 ExecutionEngine。
+    [[nodiscard]] int langByteCount(const QString& s) const;
 
     // GETCONFIG / GETCONFIGS 的配置取值回调（返回 false = 未命中）。
     using ConfigProvider = std::function<bool(const QString& key, QString& value)>;
@@ -213,7 +216,7 @@ private:
     [[nodiscard]] bool   isNumericLikeEmuera(const QString& str) const;
 
     // 语言相关的字节长度（对齐 C# LangManager.GetStrlenLang / GetSubStringLang / GetUFTIndex）
-    [[nodiscard]] int langByteCount(const QString& s) const;
+    // （langByteCount 已在 public 区声明，供 STRLENFORM 语句形式复用）
     [[nodiscard]] int langByteCountOfChar(QChar c) const;
     [[nodiscard]] QString langSubstring(const QString& s, int startIndex, int length) const;
     [[nodiscard]] int langIndexOf(const QString& target, const QString& word, int langStart) const;

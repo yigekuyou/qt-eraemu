@@ -402,11 +402,20 @@ int main(int argc, char* argv[]) {
         check(storage.getGlobalStr1D(QStringLiteral("RESULTS"), 0) == QStringLiteral("x "),
               "SUBSTRING RESULTS, 2, 2 -> RESULTS:0");
 
-        // --- STRLENFORM：实参按格式化串展开再取长度 ---
+        // --- STRLENFORM：实参是 FORM_STR（C# STRLEN_Instruction(argisform=true) ->
+        //     FunctionArgType.FORM_STR_NULLABLE）。**无 %…%/{…} 标记时整个实参是
+        //     字面量**（IsConst/ConstStr），不是变量引用；要取值须写 %…%
+        //     （eraTW：`STRLENFORM %ForagePlaceName(SpotID)%`）。
         storage.setGlobalStr1D(QStringLiteral("RESULTS"), 0, QStringLiteral("abcd"));
         execOne(QStringLiteral("STRLENFORMU RESULTS"));
+        check(storage.getSystemVariable("RESULT", 0) == 7,
+              "STRLENFORMU RESULTS -> 字面量 \"RESULTS\" 的长度 == 7");
+        execOne(QStringLiteral("STRLENFORMU %RESULTS%"));
         check(storage.getSystemVariable("RESULT", 0) == 4,
-              "STRLENFORMU RESULTS -> RESULT == 4");
+              "STRLENFORMU %RESULTS% -> RESULTS 展开后长度 == 4");
+        execOne(QStringLiteral("STRLENFORM %RESULTS%"));
+        check(storage.getSystemVariable("RESULT", 0) == 4,
+              "STRLENFORM %RESULTS% -> 语言编码字节数 == 4");
 
         // --- SETBIT / CLEARBIT / INVERTBIT ---
         storage.setGlobalInt1D("BITS", 0, 0);

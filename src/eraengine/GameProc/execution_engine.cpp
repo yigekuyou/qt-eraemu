@@ -1669,6 +1669,39 @@ bool ExecutionEngine::executeFunctionCall(const LogicalLine& line)
         return true;
     }
 
+    // ---- STRLENFORM / STRLENFORMU（C# STRLEN_Instruction(argisform=true)）----
+    //   实参是 FORM_STR：先展开 {…}/%…% 再取长度
+    //     STRLENFORM  -> 语言编码的**字节数**
+    //     STRLENFORMU -> UTF-16 **码元数**
+    //   eraTW `STRLENFORM %ForagePlaceName(SpotID)%`（MAP_MANAGE.ERB:466）以语句
+    //   形式出现，此前整行被「函数语句（实参无法归约）」跳过。
+    if (upper == QLatin1String("STRLENFORM") || upper == QLatin1String("STRLENFORMU")) {
+        ExpressionEvaluator& ev = getEvaluator();
+        QString text;
+        if (!line.arguments.isEmpty()) {
+            const Operand& a = line.arguments.first();
+            if (a.ast) text = ev.evaluate(*a.ast, m_storage, m_gameBaseData).toString();
+            else text = a.raw;
+        }
+        // 兜底：仍含格式标记（实参未归约成 StrForm）时再按格式串展开一次
+        if (text.contains(QLatin1Char('{')) || text.contains(QLatin1Char('%'))) {
+            const StrFormParser::ExprResolver resolve =
+                [this](const QString& e) -> QSharedPointer<ExpressionNode> {
+                return m_parseTable ? m_parseTable->expressionAst(e)
+                                    : QSharedPointer<ExpressionNode>();
+            };
+            if (const QSharedPointer<StrFormNode> form = StrFormParser::parse(text, resolve)) {
+                text = ev.evaluate(*form.staticCast<ExpressionNode>(), m_storage, m_gameBaseData)
+                           .toString();
+            }
+        }
+        const qint64 len = (upper == QLatin1String("STRLENFORMU"))
+                               ? static_cast<qint64>(text.size())
+                               : static_cast<qint64>(ev.langByteCount(text));
+        if (m_storage) m_storage->setSystemVariable(QStringLiteral("RESULT"), 0, len);
+        return true;
+    }
+
     const bool unfinished = !line.arguments.isEmpty() && !line.arguments.first().ast;
 
     QVariant value;

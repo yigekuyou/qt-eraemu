@@ -73,6 +73,12 @@ public:
         // PUTFORM 的实参是 StrForm（文本 + {…}/%…%）—— 注册类插入 AST，
         // ast_builder 零函数名。
         regForm(QStringLiteral("PUTFORM"));
+        // STRLENFORM / STRLENFORMU 的实参也是 FORM_STR（C# STRLEN_Instruction
+        // argisform=true -> FORM_STR，见 Instraction.Child.cs:1959）。eraTW 里
+        // 以**语句形式**出现：`STRLENFORM %ForagePlaceName(SpotID)%` —— 不声明
+        // 实参形态时，`%…%` 无法按表达式归约，整行被跳过（函数语句实参无法归约）。
+        regForm(QStringLiteral("STRLENFORM"));
+        regForm(QStringLiteral("STRLENFORMU"));
         // EE 扩展默认全启用（EE 头只在注册类里被实现 —— 见顶部 #include）
         registerEeExtensions(*this);
     }

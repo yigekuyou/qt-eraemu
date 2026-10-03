@@ -456,6 +456,15 @@ bool SystemStateMachine::clearCommands() {
     return callFunction(QStringLiteral("CALLTRAINEND"), false, false);
 }
 
+void SystemStateMachine::abortCallTrain() {
+    // 对齐 C# DOTRAIN_Instruction：coms.Clear(); isCTrain = false; count = 0;
+    // 目的：CALLTRAIN 处理途中执行 DOTRAIN 时，CALLTRAIN 的剩余部分作废
+    // （文档 Command.html「DOTRAIN」条目）。**不**调用 @CALLTRAINEND。
+    m_coms.clear();
+    m_count = 0;
+    m_isCTrain = false;
+}
+
 void SystemStateMachine::requestSaveLoad(bool save) {
     qDebug() << "[state] requestSaveLoad" << (save ? "SAVE" : "LOAD");
     m_prevStates.append(m_state->getSystemState());

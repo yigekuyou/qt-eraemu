@@ -180,6 +180,9 @@ public:
     // ---- CALLTRAIN / STOPCALLTRAIN / DOTRAIN 指令钩子 ----
     void setCommands(qint64 count);      // CALLTRAIN
     bool clearCommands();                // STOPCALLTRAIN / 内部
+    // DOTRAIN：CALLTRAIN 剩余部分作废（对齐 C# DOTRAIN_Instruction 的
+    // coms.Clear()/isCTrain=false/count=0）。与 clearCommands 不同，**不**调 @CALLTRAINEND。
+    void abortCallTrain();
     void setDoTrainSelectCom(qint64 com) { m_doTrainSelectCom = com; }
     [[nodiscard]] bool isContinuousTrain() const { return m_isCTrain; }
     [[nodiscard]] int trainCount() const { return m_trainNames.size(); }

@@ -1239,6 +1239,46 @@ bool ExecutionEngine::executeInstruction(const LogicalLine& line) {
         return true;
     }
 
+    // ---- SETBGCOLOR / SETBGCOLORBYNAME（C# SETBGCOLOR_Instruction，SP_COLOR/STR）----
+    //   SETBGCOLOR R, G, B      （eraTW TUTORIAL.ERB:11 `SETBGCOLOR 0, 0, 102`）
+    //   SETBGCOLOR 0xRRGGBB / SETBGCOLOR <颜色名>
+    //   SETBGCOLORBYNAME <颜色名>
+    // 此前落到 reportUnfinished 被忽略。
+    if (name == QLatin1String("SETBGCOLOR") || name == QLatin1String("SETBGCOLORBYNAME")) {
+        ExpressionEvaluator& ev = getEvaluator();
+        const auto evalOperand = [&](const Operand& a) -> QVariant {
+            if (a.ast) return ev.evaluate(*a.ast, m_storage, m_gameBaseData);
+            const QString raw = a.raw.trimmed();
+            if (raw.isEmpty()) return QVariant();
+            return evalExpressionCached(m_parseTable, ev, raw, m_storage, m_gameBaseData);
+        };
+        QList<Operand> parts;
+        for (const Operand& a : args) {
+            const QString t = a.raw.trimmed();
+            if (!t.isEmpty() && t != QLatin1String(",")) parts.append(a);
+        }
+        if (parts.size() >= 3) {
+            const qint64 r = evalOperand(parts.at(0)).toLongLong() & 0xFF;
+            const qint64 g = evalOperand(parts.at(1)).toLongLong() & 0xFF;
+            const qint64 b = evalOperand(parts.at(2)).toLongLong() & 0xFF;
+            m_bgColorValue = (r << 16) | (g << 8) | b;
+            emit consoleBgColor(
+                QStringLiteral("0x%1").arg(m_bgColorValue, 6, 16, QLatin1Char('0')));
+        } else if (parts.size() == 1) {
+            const QVariant v = evalOperand(parts.first());
+            if (v.typeId() == QMetaType::QString) {
+                const QString nm = v.toString().trimmed();
+                m_bgColorValue = colorValueOf(nm);
+                emit consoleBgColor(nm);
+            } else {
+                m_bgColorValue = v.toLongLong() & 0xFFFFFF;
+                emit consoleBgColor(
+                    QStringLiteral("0x%1").arg(m_bgColorValue, 6, 16, QLatin1Char('0')));
+            }
+        }
+        return true;
+    }
+
     // ---- 字体样式（FONTBOLD/FONTITALIC/FONTUNDERLINE/FONTSTRIKE/FONTREGULAR/FONTSTYLE）----
     // GETSTYLE/FONTSTYLE 成对使用（eraTW 的 COLORMESSAGE 保存并还原样式）。
     if (name.startsWith(QLatin1String("FONT"))) {
@@ -1594,13 +1634,7 @@ bool ExecutionEngine::executeFunctionCall(const LogicalLine& line)
         }
         return true;
     }
-    // SETBGCOLORBYNAME <颜色名>：背景色（C# FunctionCode.SETBGCOLORBYNAME）
-    if (name == QLatin1String("SETBGCOLORBYNAME")) {
-        const QString colorName = line.arguments.isEmpty() ? QString()
-            : line.arguments.first().raw.trimmed();
-        qDebug() << "[display] SETBGCOLORBYNAME" << colorName;
-        return true;
-    }
+    // （SETBGCOLORBYNAME 已在上面的 SETBGCOLOR 分支统一处理）
     // TOOLTIP_SETCOLOR/SETDELAY/SETDURATION（C# FunctionCode.TOOLTIP_*）
     if (name.startsWith(QLatin1String("TOOLTIP_"))) {
         qDebug() << "[display] TOOLTIP 配置" << name
@@ -1636,6 +1670,9 @@ bool ExecutionEngine::executeFunctionCall(const LogicalLine& line)
     //   此前注册于 kBuiltinFunctions 但 BuiltinOp::None 无求值分支，
     //   运行期报「内置函数尚未实现求值（返回 0）」。
     if (upper == QLatin1String("RESETBGCOLOR")) {
+        // 还原背景色（C# RESETBGCOLOR_Instruction -> Console.ResetBgColor）
+        m_bgColorValue = -1;
+        emit consoleResetBgColor();
         qDebug() << "[display] RESETBGCOLOR" << "行" << line.position.toString();
         return true;
     }

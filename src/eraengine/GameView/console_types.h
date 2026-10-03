@@ -49,6 +49,7 @@ enum class ConsoleAlign { Left = 0, Center = 1, Right = 2 };
 // C# StringStyle（GameView/StringStyle.cs）
 struct ConsoleStyle {
     QColor  color;              // 前景色（无效表示用默认前景）
+    QColor  bgColor;            // 背景色（SETBGCOLOR；无效表示透明=默认背景）
     QColor  buttonColor;        // 选中/悬停高亮色（无效表示默认）
     bool    bold = false;
     bool    italic = false;
@@ -60,9 +61,9 @@ struct ConsoleStyle {
     bool    colorChanged = false;
 
     bool operator==(const ConsoleStyle& o) const {
-        return color == o.color && buttonColor == o.buttonColor && bold == o.bold
-               && italic == o.italic && underline == o.underline && strike == o.strike
-               && fontName == o.fontName;
+        return color == o.color && bgColor == o.bgColor && buttonColor == o.buttonColor
+               && bold == o.bold && italic == o.italic && underline == o.underline
+               && strike == o.strike && fontName == o.fontName;
     }
     bool operator!=(const ConsoleStyle& o) const { return !(*this == o); }
 };
@@ -161,6 +162,7 @@ struct ConsoleSpan {
         for (int p : shapeParams) params.append(p);
         m.insert("shapeParams", params);
         if (style.color.isValid())       m.insert("color", style.color.name(QColor::HexArgb));
+        if (style.bgColor.isValid())     m.insert("bgColor", style.bgColor.name(QColor::HexArgb));
         if (style.buttonColor.isValid()) m.insert("buttonColor", style.buttonColor.name(QColor::HexArgb));
         m.insert("bold", style.bold);
         m.insert("italic", style.italic);

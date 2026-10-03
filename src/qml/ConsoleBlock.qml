@@ -70,6 +70,10 @@ Item {
         return foreColor !== "" ? foreColor : systemPalette.text;
     }
 
+    // SETBGCOLOR 的文字背景色（span style.bgColor；无效 = 透明 = 主题背景）
+    readonly property color effectiveBgColor: (blockData && blockData.bgColor)
+                                              ? blockData.bgColor : "transparent"
+
     readonly property string kind: blockData ? (blockData.kind || "text") : "text"
     readonly property int gridCol: blockData && blockData.col !== undefined ? blockData.col : 0
     readonly property int gridRow: blockData && blockData.row !== undefined ? blockData.row : 0
@@ -98,6 +102,15 @@ Item {
     // A Text.width constrains layout, not glyph advance. Render each grid
     // character in its assigned cells so font fallback/proportional fonts cannot
     // move later characters or paint over the following span.
+    // SETBGCOLOR 背景（画在文字之后，z = -1）
+    Rectangle {
+        objectName: "spanBg"
+        visible: block.kind === "text" && block.effectiveBgColor.a > 0
+        color: block.effectiveBgColor
+        anchors.fill: parent
+        z: -1
+    }
+
     Row {
         id: contentRow
         objectName: "textCells"

@@ -136,6 +136,9 @@ public:
     Q_INVOKABLE void setAlignment(ConsoleAlign align);
     Q_INVOKABLE void setColor(const QColor& color);
     Q_INVOKABLE void resetColor();
+    // SETBGCOLOR / RESETBGCOLOR（文字背景色）
+    Q_INVOKABLE void setBgColor(const QColor& color);
+    Q_INVOKABLE void resetBgColor();
     Q_INVOKABLE void setFontStyle(bool bold, bool italic, bool underline, bool strike);
 
     void printTemplate(const PrintTemplate& output);

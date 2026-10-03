@@ -126,6 +126,9 @@ signals:
     void consoleColor(const QString& colorName);
     void consoleFontStyle(bool bold, bool italic, bool underline, bool strike);
     void consoleResetColor();
+    // SETBGCOLOR / SETBGCOLORBYNAME / RESETBGCOLOR：文字**背景色**（C# SETBGCOLOR_Instruction）
+    void consoleBgColor(const QString& colorName);
+    void consoleResetBgColor();
     void consoleRedraw(const QString& mode);
     // PRINT_RECT / PRINT_SPACE：行内图形（C# Console.PrintShape）
     void consolePrintShape(const QString& type, const QList<int>& params);
@@ -274,6 +277,8 @@ public:
     // 当前文字颜色 / 字体样式（GETCOLOR / GETSTYLE 的返回值来源）
     static constexpr qint64 kDefaultColor = 0xFFFFFF;
     qint64 m_colorValue = kDefaultColor;
+    // 文字背景色（SETBGCOLOR）。-1 = 未设置/已 RESETBGCOLOR（跟随主题默认）
+    qint64 m_bgColorValue = -1;
     qint64 m_styleBits = 0;       // 1=粗体 2=斜体 4=删除线 8=下划线
     static qint64 colorValueOf(const QString& name);   // 颜色名/常量 -> 0xRRGGBB
     int m_currentLine;

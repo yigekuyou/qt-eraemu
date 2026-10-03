@@ -475,6 +475,11 @@ void ConsoleBackend::resetColor() {
     m_style.colorChanged = false;
 }
 
+// SETBGCOLOR / RESETBGCOLOR：文字背景色（与前景色同样作用到后续 span）
+void ConsoleBackend::setBgColor(const QColor& color) { m_style.bgColor = color; }
+
+void ConsoleBackend::resetBgColor() { m_style.bgColor = QColor(); }
+
 void ConsoleBackend::setFontStyle(bool bold, bool italic, bool underline, bool strike) {
     m_style.bold = bold;
     m_style.italic = italic;

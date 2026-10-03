@@ -263,6 +263,18 @@ EraEngine::EraEngine(QObject *parent)
 					}
 					if (c.isValid()) m_console.setColor(c);
 				});
+		connect(&m_executionEngine, &ExecutionEngine::consoleResetBgColor,
+				&m_console, &ConsoleBackend::resetBgColor);
+		connect(&m_executionEngine, &ExecutionEngine::consoleBgColor, this,
+				[this](const QString& colorName) {
+					QColor c(colorName);
+					if (!c.isValid()) {
+						bool ok = false;
+						uint v = colorName.toUInt(&ok, 0);   // 0xRRGGBB
+						if (ok) c = QColor::fromRgb(v);
+					}
+					if (c.isValid()) m_console.setBgColor(c);
+				});
 
         connect(&m_processState, &ProcessState::execStateChanged, this, [this](ExecState state) {
             if (state == ExecState::Continue || state == ExecState::Halt || state == ExecState::Error)

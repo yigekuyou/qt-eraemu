@@ -82,6 +82,9 @@ void VariableConfig::loadDefaults()
     variableSizes["TIME"] = VariableSizeInfo{1000, QPair<int, int>(), QVector<int>(), false, false};
     variableSizes["ITEM"] = VariableSizeInfo{1000, QPair<int, int>(), QVector<int>(), false, false};
     variableSizes["ITEMSALES"] = VariableSizeInfo{1000, QPair<int, int>(), QVector<int>(), false, false};
+    // ITEMPRICE 在 C# 侧默认 1000（VariableSize.csv 里常被注释掉），缺注册会让
+    // getSize1D 返回 0 -> Item.csv 第 3 列的价格无法装载
+    variableSizes["ITEMPRICE"] = VariableSizeInfo{1000, QPair<int, int>(), QVector<int>(), false, false};
     variableSizes["NOITEM"] = VariableSizeInfo{1000, QPair<int, int>(), QVector<int>(), false, false};
     variableSizes["BOUGHT"] = VariableSizeInfo{1000, QPair<int, int>(), QVector<int>(), false, false};
     variableSizes["PBAND"] = VariableSizeInfo{1000, QPair<int, int>(), QVector<int>(), false, false};

@@ -631,6 +631,35 @@ void EraEngine::loadConstantData()
 			qDebug() << "[load] STR 变量填充:" << n << "槽";
 		}
 
+		// ITEMPRICE：Item.csv **第 3 列**是价格（对齐 C# ConstantData.loadDataTo
+		// 的 targetI 分支：tokens[2] 能解析成整数就写 ItemPrice[index]）。
+		// 此前从未填充 -> 隙間商店/通販等所有商品价格显示 $0。
+		{
+			const QStringList itemCandidates = m_fileSystem.listFiles(
+			    m_csvDir, QStringList{QStringLiteral("Item.csv")}, m_searchSubdirectory);
+			if (!itemCandidates.isEmpty()) {
+				CsvLoader itemLoader;
+				if (itemLoader.loadFile(itemCandidates.first())) {
+					const QString table = QFileInfo(itemCandidates.first()).baseName();
+					const int cap = m_variableStorage.variableConfig().getSize1D(
+					    QStringLiteral("ITEMPRICE"));
+					const int rows = qMin(itemLoader.getRowCount(table), cap);
+					int filled = 0;
+					for (int r = 0; r < rows; ++r) {
+						bool indexOk = false;
+						const int index = itemLoader.getValue(table, r, 0).toInt(&indexOk);
+						if (!indexOk || index < 0 || index >= cap) continue;
+						bool priceOk = false;
+						const qint64 price = itemLoader.getValue(table, r, 2).toLongLong(&priceOk);
+						if (!priceOk) continue;   // 无价格列/价格不可解析：保持 0
+						m_variableStorage.setGlobalInt1D(QStringLiteral("ITEMPRICE"), index, price);
+						++filled;
+					}
+					qDebug() << "[load] ITEMPRICE 填充:" << filled << "项";
+				}
+			}
+		}
+
 		// 变量尺寸表（对齐 C# VariableData 读取 VariableSize.CSV）
 		int sizesLoaded = 0;
 		const QStringList sizeCandidates = m_fileSystem.listFiles(m_csvDir,

@@ -230,7 +230,23 @@ ExecutionEngine::LhsRef ExecutionEngine::parseLhsRef(const QString& lhs)
             const QSharedPointer<ExpressionNode> ast = m_parseTable->expressionAst(idxText);
             if (ast) {
                 ExpressionEvaluator& ev = getEvaluator();
-                value = ev.evaluate(*ast, m_storage, m_gameBaseData).toLongLong();
+                const QVariant v = ev.evaluate(*ast, m_storage, m_gameBaseData);
+                if (v.userType() == QMetaType::QString) {
+                    // 运行期字符串下标（FLAG:ARGS ++，ARGS="兒童の性別"）：
+                    // 对齐 ExpressionEvaluator::resolveIndex —— 先按变量名表
+                    // （FLAG.csv 等）映射，退化为数值字面量。此前直接
+                    // toLongLong() 丢掉字符串恒得 0，eraTW OPTION 的
+                    // @オプション切り替え（FLAG:ARGS ++）全部失效。
+                    const QString s = v.toString();
+                    int mapped = -1;
+                    if (m_parseTable) {
+                        if (const ConstantTable* ct = m_parseTable->constantTable())
+                            mapped = ct->indexForVariable(ref.name, s);
+                    }
+                    value = mapped >= 0 ? mapped : s.toLongLong();
+                } else {
+                    value = v.toLongLong();
+                }
                 qCDebug(eraTrace) << "[var] 下标(表达式)" << ref.name << idxText << "->" << value;
                 resolved = true;
             }
@@ -1343,9 +1359,20 @@ bool ExecutionEngine::executeInstruction(const LogicalLine& line) {
             if (name == QLatin1String("CUSTOMDRAWLINE")) {
                 barStr = args.first().raw;
             } else {
+                // DRAWLINEFORM 参数是 FORM 串（文本 + %…%/{…}）：裸文本
+                // （eraTW OPTION.ERB 的 `DRAWLINEFORM =` / `DRAWLINEFORM －`）
+                // 必须按**字面量**处理 —— 此前按表达式求值，`－` 被当负号求成 0、
+                // `=` 解析失败，分隔线成了 "0000…" 或空行。
+                const QString raw = args.first().raw;
                 ExpressionEvaluator& ev = getEvaluator();
-                barStr = evalExpressionCached(m_parseTable, ev, args.first().raw,
-                                              m_storage, m_gameBaseData).toString();
+                barStr.clear();
+                if (m_parseTable) {
+                    const StrFormParser::ExprResolver resolve =
+                        [this](const QString& e) { return m_parseTable->expressionAst(e); };
+                    if (const QSharedPointer<StrFormNode> node = StrFormParser::parse(raw, resolve))
+                        barStr = ev.evaluate(*node, m_storage, m_gameBaseData).toString();
+                }
+                if (barStr.isEmpty()) barStr = raw;   // 展开失败/为空 -> 按字面量兜底
             }
             if (barStr.isEmpty()) {
                 emit errorOccurred(QStringLiteral("空文字列によるDRAWLINEが行われました"));

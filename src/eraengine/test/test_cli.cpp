@@ -741,6 +741,11 @@ int main(int argc, char* argv[]) {
     auto drainLog = [&]() {
         if (!appendLog) return;
         const QList<ConsoleDisplayLine>& lines = console->buffer().lines();
+        // CLEARLINE / CLEAR 使行数低于游标：重置游标并整屏重打 —— 否则
+        // 「删 N 行 + 重打 N 行」之后的输出会因索引低于旧游标而被静默跳过，
+        // 日志里看起来像「菜单没有重绘」（曾误导 eraTW OPTION 的排查）。
+        const bool shrank = lines.size() < printed;
+        if (shrank) printed = 0;
         for (int i = printed; i < lines.size(); ++i) {
             std::cout << lines.at(i).plainText().toStdString() << "\n";
         }

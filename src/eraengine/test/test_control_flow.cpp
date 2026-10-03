@@ -156,7 +156,9 @@ int main(int argc, char** argv) {
     run("call restores loops and locals", {"FOR LOCAL:0, 0, 3", "CALL SUB", "CHECK += LOCAL:0 + 1", "NEXT", "RETURN", "@SUB",
         "FOR LOCAL:0, 0, 10", "RETURN", "NEXT"}, 6);
     run("bare RETURN clears RESULT", {"CALL FIRST", "CALL SECOND", "CHECK = RESULT", "RETURN", "@FIRST", "RETURN 9", "@SECOND", "RETURN"}, 0);
-    run("implicit RETURN clears RESULT", {"CALL FIRST", "CALL SECOND", "CHECK = RESULT", "RETURN", "@FIRST", "RETURN 9", "@SECOND", "A = 1", "@THIRD", "RETURN 99"}, 0);
+    // 对齐 C#：自然结束走 state.Return(0)，Return/ReturnF 不写 RESULT ——
+    // 只有显式 RETURN 语句写。eraTW 选地主的 `FLAG:地主 = RESULT` 靠此语义。
+    run("implicit RETURN preserves RESULT", {"CALL FIRST", "CALL SECOND", "CHECK = RESULT", "RETURN", "@FIRST", "RETURN 9", "@SECOND", "A = 1", "@THIRD", "RETURN 99"}, 9);
     run("SIF skips next logical instruction", {"SIF 0", "", "; comment", "CHECK = 999", "CHECK += 1"}, 1);
     run("branch ending at function boundary", {"IF 0", "CHECK = 999", "ENDIF", "@SECOND", "CHECK = 777"}, 0);
     run("short circuit side effects", {"IF 0 && ++A", "CHECK = 999", "ENDIF", "IF 1 || ++A", "CHECK = A + 1", "ENDIF"}, 1);

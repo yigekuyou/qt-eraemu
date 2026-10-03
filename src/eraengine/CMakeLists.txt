@@ -126,6 +126,8 @@ GameView/console_plane.cpp
 GameView/console_plane.h
 GameView/console_backend.cpp
 GameView/console_backend.h
+GameView/dbus_debug.cpp
+GameView/dbus_debug.h
 GameView/gui_manager.cpp
 GameView/gui_manager.h
 GameView/resource_image_provider.cpp

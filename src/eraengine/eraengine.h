@@ -20,6 +20,7 @@
 
 #include <QObject>
 #include <QTimer>
+#include <memory>
 #include <QVariantList>
 #include <QQmlEngine>
 #include <QQmlContext>
@@ -50,6 +51,8 @@
 #include "gui_manager.h"
 #include "resource_image_provider.h"
 
+class EraDBusDebug;
+
 class EraEngine : public QObject
 {
     Q_OBJECT
@@ -57,6 +60,7 @@ class EraEngine : public QObject
 
 public:
     explicit EraEngine(QObject *parent = nullptr);
+    ~EraEngine() override;   // unique_ptr<EraDBusDebug> 需要完整类型，定义在 .cpp
     
     // QML-exposable properties
 		Q_PROPERTY(QString gameDirectory READ getGameDirectory WRITE setGameDirectory NOTIFY gameDirectoryChanged)
@@ -264,6 +268,9 @@ private:
     
     // Connection manager - manages signal-slot connections between components
     ConnectionManager m_connectionManager;
+
+    // D-Bus 调试/控制入口（/debug 对象；无会话总线时为空壳）
+    std::unique_ptr<EraDBusDebug> m_dbusDebug;
 
     // 异步装载：连接句柄（避免重复连接）
     QMetaObject::Connection m_loadProgressConn;

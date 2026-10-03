@@ -21,6 +21,7 @@
 #include "GameData/ast/print_template.h"
 
 #include <algorithm>
+#include <QElapsedTimer>
 #include <QRegularExpression>
 #include <QFile>
 #include <QTextStream>
@@ -474,7 +475,7 @@ void ConsoleBackend::clearAll() {
     emit generationChanged();
     emit cleared();
     emit lineCountChanged();
-    emit windowChanged();
+    notifyWindowChanged();
 }
 
 void ConsoleBackend::setAlignment(ConsoleAlign align) {
@@ -507,21 +508,55 @@ void ConsoleBackend::markDirty() {
     m_dirty = true;
 }
 
+// windowChanged 的统一出口：内容代数(epoch)自增后再广播，
+// 层缓存（m_*Cache）据此失效。
+void ConsoleBackend::notifyWindowChanged() {
+    ++m_windowChangedCount;
+    ++m_windowEpoch;
+    emit windowChanged();
+}
+
+QString ConsoleBackend::perfReport() const {
+    return QStringLiteral(
+               "windowChanged=%1\nvisibleBlocksCalls=%2\nlayerBlocksCalls=%3\n"
+               "blocksBuilt=%4\nblockBuildMs=%5\ncacheEpoch=%6 windowEpoch=%7\n"
+               "bufferLines=%8 logicalLines=%9 visibleCount=%10 scrollOffset=%11")
+        .arg(m_windowChangedCount)
+        .arg(m_visibleBlockCalls)
+        .arg(m_layerBlockCalls)
+        .arg(m_blocksBuilt)
+        .arg(m_blockBuildMs)
+        .arg(m_blockCacheEpoch)
+        .arg(m_windowEpoch)
+        .arg(m_buffer.count())
+        .arg(m_buffer.logicalLineCount())
+        .arg(m_visibleCount)
+        .arg(m_scrollOffset);
+}
+
+void ConsoleBackend::resetPerfCounters() {
+    m_layerBlockCalls = 0;
+    m_visibleBlockCalls = 0;
+    m_blocksBuilt = 0;
+    m_blockBuildMs = 0;
+    m_windowChangedCount = 0;
+}
+
 void ConsoleBackend::flush() {
     if (!m_dirty) return;
     m_dirty = false;
     emit lineCountChanged();
-    emit windowChanged();
+    notifyWindowChanged();
 }
 
 void ConsoleBackend::setFontSize(int px) {
     m_layout.setFontSize(px);
-    emit windowChanged();
+    notifyWindowChanged();
 }
 
 void ConsoleBackend::setWindowWidth(int px) {
     m_layout.setWindowWidth(px);
-    emit windowChanged();
+    notifyWindowChanged();
 }
 
 // 逻辑网格列/行数：脚本看到的列数（居中、换行都以它为准）。
@@ -529,20 +564,20 @@ void ConsoleBackend::setWindowWidth(int px) {
 void ConsoleBackend::setGridColumns(int columns) {
     if (columns <= 0 || columns == m_layout.gridColumns()) return;
     m_layout.setGridColumns(columns);
-    emit windowChanged();   // 行位置在读取时按当前网格惰性重算
+    notifyWindowChanged();   // 行位置在读取时按当前网格惰性重算
 }
 
 void ConsoleBackend::setGridRows(int rows) {
     if (rows <= 0 || rows == m_layout.gridRows()) return;
     m_layout.setGridRows(rows);
-    emit windowChanged();
+    notifyWindowChanged();
 }
 
 void ConsoleBackend::setLineHeight(int px) {
     if (px <= 0 || px == m_lineHeight) return;
     m_lineHeight = px;
     m_layout.setLineHeight(px);     // 区块「高」也按行高算
-    emit windowChanged();
+    notifyWindowChanged();
 }
 
 void ConsoleBackend::setMaxLog(int lines) {
@@ -649,6 +684,7 @@ QVariantList ConsoleBackend::visibleLines() const {
 //
 // text / image 两层各自挑出自己关心的 kind，然后按 x/y 摆放即可。
 QVariantList ConsoleBackend::visibleBlocks() const {
+    ++m_visibleBlockCalls;
     QVariantList out;
     const int n = displayLineCount();
     const int first = windowFirstLine();
@@ -691,13 +727,31 @@ QVariantList ConsoleBackend::visibleBlocks() const {
 
 // 三个层各自的区块列表：从摊平的可见区块里按 kind 挑
 QVariantList ConsoleBackend::layerBlocks(const QString& layer) const {
-    QVariantList out;
-    const QVariantList all = visibleBlocks();
-    for (const QVariant& v : all) {
-        const QVariantMap m = v.toMap();
-        if (m.value(QStringLiteral("layer")).toString() == layer) out.append(m);
+    // 三个层共享一次 visibleBlocks() 摊平（按 m_windowEpoch 缓存）：
+    // QML 每帧会分别读 text/image/shape 三个属性 —— 此前每个属性各调一遍
+    // visibleBlocks()，同一帧 3× 重复构建（每行×每段×每区块一个 QVariantMap）。
+    ++m_layerBlockCalls;
+    if (m_blockCacheEpoch != m_windowEpoch) {
+        QElapsedTimer timer;
+        timer.start();
+        const QVariantList all = visibleBlocks();
+        m_textCache.clear();
+        m_imageCache.clear();
+        m_shapeCache.clear();
+        for (const QVariant& v : all) {
+            const QVariantMap m = v.toMap();
+            const QString k = m.value(QStringLiteral("layer")).toString();
+            if (k == QLatin1String("text")) m_textCache.append(m);
+            else if (k == QLatin1String("image")) m_imageCache.append(m);
+            else if (k == QLatin1String("shape")) m_shapeCache.append(m);
+        }
+        m_blocksBuilt += all.size();
+        m_blockBuildMs += timer.elapsed();
+        m_blockCacheEpoch = m_windowEpoch;
     }
-    return out;
+    if (layer == QLatin1String("text")) return m_textCache;
+    if (layer == QLatin1String("image")) return m_imageCache;
+    return m_shapeCache;
 }
 
 // root 层的「内容高度」= 已排版可见行数 × 行高
@@ -817,7 +871,7 @@ void ConsoleBackend::setVisibleCount(int count) {
     }
     m_visibleCount = count;
     clampScroll();
-    emit windowChanged();
+    notifyWindowChanged();
 }
 
 void ConsoleBackend::setScrollOffset(int offset) {
@@ -828,7 +882,7 @@ void ConsoleBackend::setScrollOffset(int offset) {
         return;
     }
     m_scrollOffset = offset;
-    emit windowChanged();
+    notifyWindowChanged();
 }
 
 void ConsoleBackend::setFrameMs(int ms) {

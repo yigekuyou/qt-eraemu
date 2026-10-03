@@ -195,7 +195,9 @@ Item {
         objectName: "blockButtonMouse"      // 供 QML 测试 findChild 命中
         z: 1
         anchors.fill: parent
-        hoverEnabled: true
+        // 只在可点击时开启悬停：全屏数千个区块逐帧 hover 命中测试是
+        // 滚动/鼠标移动卡顿的主要来源之一（不可点击区块永远不需要高亮）。
+        hoverEnabled: block.clickable
         enabled: block.clickable
         cursorShape: block.clickable ? Qt.PointingHandCursor : Qt.ArrowCursor
         onClicked: {

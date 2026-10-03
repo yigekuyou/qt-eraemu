@@ -88,6 +88,8 @@ public:
 
     // ③ 三个「层」各自的区块列表（QML 里一一对应三个 Instantiator）
     //    root 层 = 可见窗口容器；text 层 / image 层 = 区块的宿主
+    //    三个属性共享同一份按代数(epoch)的缓存：一次 visibleBlocks() 摊平，
+    //    三个层各自取用 —— 此前每个属性各建一遍，同一帧 3× 重复构建。
     Q_PROPERTY(QVariantList textBlocks  READ textBlocks  NOTIFY windowChanged)
     Q_PROPERTY(QVariantList imageBlocks READ imageBlocks NOTIFY windowChanged)
     Q_PROPERTY(QVariantList shapeBlocks READ shapeBlocks NOTIFY windowChanged)
@@ -97,6 +99,10 @@ public:
     [[nodiscard]] QVariantList shapeBlocks() const { return layerBlocks(QStringLiteral("shape")); }
     [[nodiscard]] QVariantList layerBlocks(const QString& layer) const;
     [[nodiscard]] int contentHeight() const;
+
+    // ---- 性能诊断（QML 卡顿定位；appemuera 的 D-Bus /debug 也读取）----
+    Q_INVOKABLE QString perfReport() const;
+    Q_INVOKABLE void resetPerfCounters();
 
     // ---- 只读属性 ----
     [[nodiscard]] int  lineCount() const;                // 显示行数（缓冲里）
@@ -221,6 +227,9 @@ private:
     void flushPendingToSegments(QList<ConsoleSegment>& out) const;
     ConsoleDisplayLine buildLine() const;
     void clampScroll();
+    // windowChanged 的统一出口：内容代数(epoch)自增后再广播，
+    // 层缓存（m_*Cache）据此失效。所有窗口变化必须走这里。
+    void notifyWindowChanged();
 
     ConsoleBuffer m_buffer;
     ConsoleLayout m_layout;
@@ -247,6 +256,17 @@ private:
     bool    m_lastLineTemporary = false;
 
     QTimer m_timer;
+
+    // ---- 窗口内容代数与层缓存（见 notifyWindowChanged / layerBlocks）----
+    int  m_windowEpoch = 1;
+    mutable int          m_blockCacheEpoch = -1;   // 缓存对应的代数
+    mutable QVariantList m_textCache, m_imageCache, m_shapeCache;
+    // 性能计数器（perfReport 读取；D-Bus /debug 转发）
+    mutable qint64 m_layerBlockCalls = 0;
+    mutable qint64 m_visibleBlockCalls = 0;
+    mutable qint64 m_blocksBuilt = 0;        // 累计生成的区块数（含三次层取用）
+    mutable qint64 m_blockBuildMs = 0;       // 累计构建耗时（毫秒）
+    mutable qint64 m_windowChangedCount = 0; // windowChanged 次数（≈ 模型重置次数）
 };
 
 #endif // CONSOLE_BACKEND_H

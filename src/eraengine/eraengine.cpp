@@ -22,10 +22,14 @@
 #include "system_status_manager.h"
 #include "signal_hub.h"
 #include "erb_loader.h"
+#include "GameView/dbus_debug.h"
+#include <memory>
 #include <iostream>
 #include <QFile>
 #include <QDir>
 #include <QObject>
+
+EraEngine::~EraEngine() = default;
 
 EraEngine::EraEngine(QObject *parent)
 		: QObject(parent),
@@ -54,9 +58,13 @@ EraEngine::EraEngine(QObject *parent)
 {
 		// Set variable storage in parse table for condition evaluation
 		m_parseTable.setVariableStorage(&m_variableStorage);
-		
+
 		// Set ParseTable reference in ExecutionEngine for CALL/RETURN integration
 		m_executionEngine.setParseTable(&m_parseTable);
+
+		// ---- D-Bus 调试/控制入口（appemuera 的 /debug 对象；test_cli 无总线时静默）----
+		m_dbusDebug = std::make_unique<EraDBusDebug>(this, this);
+		m_dbusDebug->registerOnBus();
 
 		// ---- 系统状态机：依赖注入 ----
 		m_systemStateMachine.setParseTable(&m_parseTable);

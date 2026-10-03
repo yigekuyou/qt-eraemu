@@ -904,6 +904,8 @@ void SystemStateMachine::endCallShowUserCom() {
     if (m_skipPrint) {
         m_skipPrint = false;
     }
+    // C# vEvaluator.UpdateAfterShowUsercom()：UP/DOWN/LOSEBASE + 角色 DOWNBASE/CUP/CDOWN 归零
+    if (m_storage) m_storage->updateAfterShowUsercom();
     if (!m_isCTrain) {
         setWaitInput();
         setState(SystemStateCode::Train_WaitInput);
@@ -946,7 +948,8 @@ void SystemStateMachine::trainWaitInput() {
 }
 
 void SystemStateMachine::callEventCom() {
-    // C# vEvaluator.UpdateAfterInputCom()
+    // C# vEvaluator.UpdateAfterInputCom()：各角色 NOWEX 归零（选定指令即将执行前）
+    if (m_storage) m_storage->updateAfterInputCom();
     setState(SystemStateCode::Train_CallEventCom);
     if (!callFunction(QStringLiteral("EVENTCOM"), false, true)) {
         endEventCom();
@@ -954,6 +957,9 @@ void SystemStateMachine::callEventCom() {
 }
 
 void SystemStateMachine::doTrain() {
+    // C# Process.SystemProc.cs doTrain()：
+    //   UpdateAfterShowUsercom(); SELECTCOM = doTrainSelectCom; callEventCom();
+    if (m_storage) m_storage->updateAfterShowUsercom();
     if (m_storage) m_storage->setSelectcom(0, m_doTrainSelectCom);
     callEventCom();
 }

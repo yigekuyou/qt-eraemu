@@ -235,6 +235,15 @@ private:
     // 游戏目录（SAVEDATA/LOADDATA/DELDATA 的存档目录由它决定；EraEngine::setGameDirectory 注入）
     QString m_gameDirectory;
 public:
+    // ---- PRINTDATA 段（C# PRINT_DATA_Instruction / ErbLoader 的 dataList）----
+    // 打印一条 DATAFORM/DATA 行（求值 StrForm，**不换行**）；段内换行 / 段后换行 /
+    // 等键由 ScriptRunner 按指令后缀（…L / …W）驱动。
+    void printDataFormLine(const LogicalLine& line);
+    void printDataNewline();
+    void requestPrintDataWaitKey();
+    // PRINTDATA 的可选整型变量实参（如 `PRINTDATAW LOCAL:0`）：写入被选中的段下标。
+    void assignPrintDataIndex(const QString& lhsText, qint64 value);
+
     void setGameDirectory(const QString& dir) { m_gameDirectory = dir; }
     QString m_gameDataDir;   // SAVEGLOBAL / LOADGLOBAL 的落盘目录
     

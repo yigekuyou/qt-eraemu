@@ -278,6 +278,13 @@ struct LogicalLine {
     mutable bool strArgsReady = false;
     mutable StrBuiltinArgs strArgs;
 
+    // PRINTDATA 段的惰性解析缓存（见 execution_engine.cpp printDataFormLine 说明）：
+    // printDataGroups = 各「段」的行号列表（DATAFORM/DATA 各自成段；DATALIST..ENDLIST
+    // 之间的 DATA 并成一段）；printDataEndLine = 对应 ENDDATA 的行号（跳转目标 = +1）。
+    mutable bool printDataReady = false;
+    mutable QList<QList<int>> printDataGroups;
+    mutable int printDataEndLine = -1;
+
     bool isNull() const { return kind == LineKind::Null; }
     bool isInstruction() const { return kind == LineKind::Instruction; }
     bool isLabel() const {

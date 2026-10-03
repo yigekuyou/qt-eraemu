@@ -1728,6 +1728,40 @@ bool ExecutionEngine::executeFunctionCall(const LogicalLine& line)
     return true;
 }
 
+// ---------------------------------------------------------------------------
+// PRINTDATA 段辅助（C# PRINT_DATA_Instruction / ErbLoader 的 dataList）
+// ---------------------------------------------------------------------------
+// 打印一条 DATAFORM/DATA 行：按 StrForm 求值后送入 console（不换行）。
+// 段内多行的换行、段后的换行（…L/…W）、以及 …W 的等键均由 ScriptRunner 驱动。
+void ExecutionEngine::printDataFormLine(const LogicalLine& line) {
+    if (m_skipDisp) return;
+    QString text;
+    if (!line.arguments.isEmpty()) {
+        const Operand& a = line.arguments.first();
+        if (a.ast) text = getEvaluator().evaluate(*a.ast, m_storage, m_gameBaseData).toString();
+        else text = a.raw;
+    }
+    emit consolePrint(text, false);
+}
+
+void ExecutionEngine::printDataNewline() {
+    if (m_skipDisp) return;
+    emit consolePrint(QString(), true);
+}
+
+void ExecutionEngine::requestPrintDataWaitKey() {
+    if (m_skipDisp) return;
+    emit requestAnyKey();
+}
+
+void ExecutionEngine::assignPrintDataIndex(const QString& lhsText, qint64 value) {
+    const QString name = lhsText.trimmed();
+    if (name.isEmpty()) return;
+    const LhsRef ref = parseLhsRef(name);
+    if (ref.name.isEmpty()) return;
+    writeLhs(ref, value);
+}
+
 // 未实现接口的运行期留痕（同名只报一次，避免刷屏）
 void ExecutionEngine::reportUnfinished(const QString& what, const QString& name,
                                        const LogicalLine& line)

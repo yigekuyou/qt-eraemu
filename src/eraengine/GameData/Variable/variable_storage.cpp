@@ -221,6 +221,33 @@ void VariableStorage::setCharaInt(const QString &name, int charaId, int index, q
 		setCharaIntRaw(name, resolveCharaIndex(charaId), index, value);
 }
 
+// ---------------------------------------------------------------------------
+// 训练流程变量重置（对齐 C# GameData/Variable/VariableEvaluator.cs
+//   UpdateAfterShowUsercom / UpdateAfterInputCom）
+// ---------------------------------------------------------------------------
+void VariableStorage::updateAfterShowUsercom()
+{
+		// UP = 0, DOWN = 0, LOSEBASE = 0（全局 1D）
+		m_up.fill(0);
+		m_down.fill(0);
+		m_losebase.fill(0);
+		// 各角色 DOWNBASE = 0, CUP = 0, CDOWN = 0
+		static const char* const kCharaKeys[] = {"DOWNBASE", "CUP", "CDOWN"};
+		for (const char* k : kCharaKeys) {
+				auto it = m_charaIntVars.find(storageName(QString::fromLatin1(k)));
+				if (it == m_charaIntVars.end()) continue;
+				for (QList<qint64>& vec : it.value()) vec.fill(0);
+		}
+}
+
+void VariableStorage::updateAfterInputCom()
+{
+		// 各角色 NOWEX = 0（对齐 C#：选择中以外的角色也全部重置）
+		auto it = m_charaIntVars.find(storageName(QStringLiteral("NOWEX")));
+		if (it == m_charaIntVars.end()) return;
+		for (QList<qint64>& vec : it.value()) vec.fill(0);
+}
+
 qint64 VariableStorage::getCharaInt(const QString &name, int charaId, int index) const
 {
 		if (charaId < 0 || index < 0) return 0;
@@ -366,9 +393,20 @@ void VariableStorage::resetGlobals()
 		const auto isPrivateKey = [](const QString& k) {
 			return k.contains(QChar(0x1f));
 		};
+		// C# SetDefaultGlobalValue 只重置 GLOBAL/GLOBALS（内建数组）+ 用户 #GLOBAL/#GLOBALS；
+		// **内建系统/字符串变量（DAY/FLAG/UP/…/STR/RESULTS…）不在重置之列**。
+		// 此前是「非私有键一律 erase」，会把内建字符串数组 STR（Str.csv 的数据）
+		// 和 RESULTS 一并清掉 —— eraTW 的 %STR:(…)% 场所名、RETURNF 的 RESULTS 会失效。
+		static const QSet<QString> kPreservedBuiltinStrings = {
+			QStringLiteral("STR"),      QStringLiteral("RESULTS"), QStringLiteral("SAVESTR"),
+			QStringLiteral("TSTR"),     QStringLiteral("CSTR"),    QStringLiteral("SAVEDATA_TEXT"),
+		};
+		const auto isPreservedBuiltin = [&](const QString& k) {
+			return hasSystemVariable(k) || kPreservedBuiltinStrings.contains(eraUpperKey(k));
+		};
 		const auto purge = [&](auto& map) {
 			for (auto it = map.begin(); it != map.end(); ) {
-				if (isPrivateKey(it.key())) ++it;
+				if (isPrivateKey(it.key()) || isPreservedBuiltin(it.key())) ++it;
 				else it = map.erase(it);
 			}
 		};

@@ -1,5 +1,5 @@
 ;=============================================================
-; [23] PRINTDATA / DATAFORM / ENDDATA（eraTW TW_TIPS 复现·特征化）
+; [23] PRINTDATA / DATAFORM / ENDDATA（eraTW TW_TIPS 复现）
 ;
 ; 背景：eraTW 大量使用 PRINTDATA 多段数据块：
 ;   * SHOP.ERB:230 @TW_TIPS —— 60 条 DATAFORM 的随机提示；
@@ -12,11 +12,6 @@
 ;   * 每个 DATAFORM 行 = 一个「段」（dataList 的一项；DATALIST 才把多行并一段）；
 ;   * 执行 PRINTDATA 时随机选一段打印；若带整型变量实参则写入选中下标；
 ;   * ENDDATA 之后继续执行；PRINTDATAL/…W 额外换行（W 再等一次按键）。
-;
-; 本组是**特征化测试（characterization test）**：记录当前引擎在运行期
-; 「忽略」这三条命令（execution_engine.cpp 的 reportUnfinished 会打印
-; [未完成] …在运行期被忽略）。待实现后，把下面两条标注「（特征化）」
-; 的断言改成正确语义断言即可（本组其余断言实现前后都成立）。
 ;=============================================================
 @TEST_PRINTDATA
 #DIM NONG
@@ -24,7 +19,7 @@
 
 PRINTL == 组23：PRINTDATA/DATAFORM/ENDDATA（eraTW TW_TIPS 复现） ==
 
-;---- 1) 非空块 + 索引变量：不报错、ENDDATA 之后继续 ----
+;---- 1) 非空块 + 索引变量：随机选一段、写回下标、ENDDATA 之后继续 ----
 IDX = -1
 RESULTS = "SENTINEL"
 PRINTDATA IDX
@@ -34,15 +29,15 @@ PRINTDATA IDX
 ENDDATA
 CALL ASSERT_TRUE, 1, @"PRINTDATA 段执行不报错"
 NONG += RESULT
-CALL ASSERT_EQ, IDX, -1, @"（特征化）PRINTDATA 被忽略：索引变量保持 -1"
+CALL ASSERT_TRUE, IDX >= 0 && IDX < 3, @"PRINTDATA 写入被选中的段下标（0..2）"
 NONG += RESULT
-CALL ASSERT_SEQ, RESULTS, "SENTINEL", @"（特征化）PRINTDATA 被忽略：RESULTS 不被改写"
+CALL ASSERT_SEQ, RESULTS, "SENTINEL", @"PRINTDATA 不改写 RESULTS"
 NONG += RESULT
 PRINTL [after-enddata]
 CALL ASSERT_TRUE, 1, @"ENDDATA 之后继续执行（不被数据段卡住）"
 NONG += RESULT
 
-;---- 2) 空块：也不报错 ----
+;---- 2) 空块：不打印、不报错 ----
 PRINTDATA
 ENDDATA
 CALL ASSERT_TRUE, 1, @"空 PRINTDATA 段执行不报错"

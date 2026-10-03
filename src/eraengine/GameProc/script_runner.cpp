@@ -341,6 +341,66 @@ bool ScriptRunner::evalCondition(const LogicalLine& line, bool& out) {
     return m_table->evaluateCondition(m_table->currentScript(), line.lineIndex, out);
 }
 
+// ---------------------------------------------------------------------------
+// PRINTDATA 段（C# PRINT_DATA_Instruction / ErbLoader.cs 的 dataList 构建）
+//   * PRINTDATA(|K)(|D)(|L)(|W)：语句形式，从随机的「段」里选一段打印；可选整型
+//     变量实参写入选中下标；…L/…W 额外换行（W 再等一次按键）。
+//   * 每个 DATAFORM/DATA 行自成一个段；DATALIST..ENDLIST 之间的 DATA 并成一段。
+//   * ENDDATA 之后继续（跳转目标 = ENDDATA 下一行）。
+// ---------------------------------------------------------------------------
+namespace {
+
+bool isPrintDataName(const QString& n) {
+    static const char* const kNames[] = {"PRINTDATA",  "PRINTDATAL",  "PRINTDATAW",
+                                         "PRINTDATAD", "PRINTDATADL", "PRINTDATADW",
+                                         "PRINTDATAK", "PRINTDATAKL", "PRINTDATAKW"};
+    for (const char* s : kNames) {
+        if (n == QLatin1String(s)) return true;
+    }
+    return false;
+}
+
+// 首次执行 PRINTDATA 时扫描其数据段（行内容装载后不可变，缓存进 LogicalLine）
+void buildPrintDataBlock(const LogicalLine& line, int pc, const ScriptData* sd) {
+    QList<QList<int>> groups;
+    int endLine = -1;
+    bool inList = false;
+    if (sd) {
+        for (int i = pc + 1; i < sd->lines.size(); ++i) {
+            const LogicalLine& l = sd->lines.at(i);
+            const QString& fn = l.functionName;
+            if (fn == QLatin1String("ENDDATA")) {
+                endLine = i;
+                break;
+            }
+            if (fn == QLatin1String("DATALIST")) {
+                inList = true;
+                groups.append(QList<int>());
+                continue;
+            }
+            if (fn == QLatin1String("ENDLIST")) {
+                inList = false;
+                continue;
+            }
+            if (fn == QLatin1String("DATA") || fn == QLatin1String("DATAFORM")) {
+                if (inList) {
+                    if (groups.isEmpty()) groups.append(QList<int>());
+                    groups.last().append(i);
+                } else {
+                    groups.append(QList<int>{i});
+                }
+                continue;
+            }
+            break;   // 非数据段成员：结束扫描
+        }
+    }
+    line.printDataGroups = groups;
+    line.printDataEndLine = endLine;
+    line.printDataReady = true;
+}
+
+} // namespace
+
 ExecState ScriptRunner::executeLine(const LogicalLine& line) {
     const QString script = m_table->currentScript();
     const ScriptData* sd = m_table->script(script);
@@ -1288,6 +1348,31 @@ ExecState ScriptRunner::executeLine(const LogicalLine& line) {
             return ExecState::WaitEvent;
         }
         return ExecState::WaitInput;
+    }
+
+    // ---- PRINTDATA 系（C# PRINT_DATA_Instruction）----
+    if (isPrintDataName(name)) {
+        if (!line.printDataReady) buildPrintDataBlock(line, pc, sd);
+        const int next = line.printDataEndLine >= 0 ? line.printDataEndLine + 1 : pc + 1;
+        if (sd && !line.printDataGroups.isEmpty()) {
+            const int count = line.printDataGroups.size();
+            const int choice = static_cast<int>(getEvaluator().random().nextInt(count));
+            // 可选整型变量实参（如 `PRINTDATAW LOCAL:0`）：写入被选中的段下标
+            if (!line.arguments.isEmpty() && m_engine) {
+                m_engine->assignPrintDataIndex(line.arguments.first().raw, choice);
+            }
+            const QList<int>& grp = line.printDataGroups.at(choice);
+            for (int k = 0; k < grp.size(); ++k) {
+                if (m_engine) m_engine->printDataFormLine(sd->lines.at(grp.at(k)));
+                if (k + 1 < grp.size() && m_engine) m_engine->printDataNewline();
+            }
+            const bool newline =
+                name.endsWith(QLatin1Char('L')) || name.endsWith(QLatin1Char('W'));
+            if (newline && m_engine) m_engine->printDataNewline();
+            if (name.endsWith(QLatin1Char('W')) && m_engine) m_engine->requestPrintDataWaitKey();
+        }
+        m_table->setPosition(script, next, false);   // 跳过整段（endLine 可能是 lines.size()）
+        return ExecState::Continue;
     }
 
     // ---- CALLTRAIN / STOPCALLTRAIN / DOTRAIN ----

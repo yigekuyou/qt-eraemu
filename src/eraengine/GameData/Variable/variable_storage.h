@@ -108,6 +108,14 @@ public:
 		void addSpChara(int csvNo);
 		[[nodiscard]] bool isSpChara(int index) const { return m_charaSp.contains(index); }
 		// DELALLCHARA（C#：DelAllCharacter）
+		// ---- 训练流程的变量重置（对齐 C# VariableEvaluator）----
+		// UpdateAfterShowUsercom：UP/DOWN/LOSEBASE（全局）+ 各角色 DOWNBASE/CUP/CDOWN 归零。
+		//   在 @SHOW_USERCOM 结束、以及 DOTRAIN 强制训练前调用。
+		void updateAfterShowUsercom();
+		// UpdateAfterInputCom：各角色 NOWEX 归零（对齐 C#「选择中以外的角色也全部重置」）。
+		//   在 @EVENTCOM 之前（callEventCom）调用。
+		void updateAfterInputCom();
+
 		void delAllChara() { m_charaList.clear(); m_charaSp.clear(); }
 		// SWAPCHARA / COPYCHARA / ADDCOPYCHARA / PICKUPCHARA（C# 同名命令）
 		void swapChara(int a, int b);

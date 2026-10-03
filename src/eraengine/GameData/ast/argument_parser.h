@@ -136,6 +136,11 @@ inline constexpr auto kInstructionSpecs = std::to_array<InstructionSpec>({
     {"SPLIT",        ArgKind::Split,         1,  -1},
     {"STRDATA",      ArgKind::VarStr,        0,  1},   // VAR_STR：0 实参时目标为 RESULTS:0
     {"DATAFORM",     ArgKind::FormStr,       0,  1},   // FORM_STR_NULLABLE
+    // DATA：C# 是 STR_NULLABLE，但 era 脚本一律写「DATA <原文文本>」
+    // （PRINTDATA/DATALIST/STRDATA 的数据行），而裸标识符在表达式里会被当成
+    // 变量（得 0）。这里按 FORMS 语义解析实参（原文即文本，%…%/{…} 仍展开），
+    // 与 DATAFORM 一致 —— 否则 `DATA 列表项1` 输出 0。
+    {"DATA",         ArgKind::FormStr,       0,  1},   // STR_NULLABLE（按 FORM 语义）
     {"THROW",        ArgKind::FormStr,       0,  1},   // FORM_STR_NULLABLE（THROW <格式化串>）
     {"SETBGCOLOR",   ArgKind::Color,         1,  3},
     {"SETCOLORBYNAME", ArgKind::Color,       1,  1},

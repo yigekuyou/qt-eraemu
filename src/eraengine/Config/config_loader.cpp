@@ -196,6 +196,98 @@ int ConfigLoader::getInt(const QString& key, int defaultValue) const
     return ok ? v : defaultValue;
 }
 
+// ---------------------------------------------------------------------------
+// GETCONFIG / GETCONFIGS —— 对齐 C# ConfigData.GetConfigValueInERB 的白名单
+//
+// 表项 = (键名, 缺省值, 类型)。类型只影响返回值形态（bool/color 需要转换），
+// 其余原样。eraTW/eraMegaten 等大量脚本靠这几项换算像素与行数，例如
+//   `画像横幅 = 默认角色画像横幅 * 拡大比率 / GETCONFIG("フォントサイズ")`
+// ——不接线时全部除零得 0，画面上的画像尺寸（选项 4/5/6）就完全失效。
+// ---------------------------------------------------------------------------
+namespace {
+enum class ErbConfigType { Int, Int64, Bool, Color, Text };
+
+struct ErbConfigItem { const char* key; const char* def; ErbConfigType type; };
+
+const QList<ErbConfigItem>& erbConfigTable() {
+    static const QList<ErbConfigItem> kItems = {
+        // <int>
+        {"ウィンドウ幅",                "760",            ErbConfigType::Int},
+        {"PRINTCを並べる数",             "3",              ErbConfigType::Int},
+        {"PRINTCの文字数",               "25",             ErbConfigType::Int},
+        {"フォントサイズ",               "18",             ErbConfigType::Int},
+        {"一行の高さ",                   "19",             ErbConfigType::Int},
+        {"表示するセーブデータ数",       "20",             ErbConfigType::Int},
+        {"販売アイテム数",               "100",            ErbConfigType::Int},
+        {"COM_ABLE初期値",               "1",              ErbConfigType::Int},
+        // <Int64>
+        {"PBANDの初期値",                "4",              ErbConfigType::Int64},
+        {"RELATIONの初期値",             "0",              ErbConfigType::Int64},
+        // <bool>（C# 以 1/0 返回）
+        {"オートセーブを行なう",         "1",              ErbConfigType::Bool},
+        {"単位の位置",                   "1",              ErbConfigType::Bool},
+        // <Color>（C# 打包为 ((R*256)+G)*256+B）
+        {"文字色",                       "192,192,192",    ErbConfigType::Color},
+        {"背景色",                       "0,0,0",          ErbConfigType::Color},
+        {"選択中文字色",                 "255,255,0",      ErbConfigType::Color},
+        {"履歴文字色",                   "192,192,192",    ErbConfigType::Color},
+        // <string>
+        {"フォント名",                   "ＭＳ ゴシック",  ErbConfigType::Text},
+        {"お金の単位",                   "$",              ErbConfigType::Text},
+        {"起動時簡略表示",               "Now Loading...", ErbConfigType::Text},
+        {"DRAWLINE文字",                 "-",              ErbConfigType::Text},
+        {"システムメニュー0",            "最初からはじめる", ErbConfigType::Text},
+        {"システムメニュー1",            "ロードしてはじめる", ErbConfigType::Text},
+        {"時間切れ表示",                 "時間切れ",       ErbConfigType::Text},
+        // <char>
+        {"BAR文字1",                     "*",              ErbConfigType::Text},
+        {"BAR文字2",                     ".",              ErbConfigType::Text},
+        // <TextDrawingMode>
+        {"描画インターフェース",         "TEXTRENDERER",   ErbConfigType::Text},
+    };
+    return kItems;
+}
+
+const ErbConfigItem* findErbConfig(const QString& key) {
+    for (const ErbConfigItem& item : erbConfigTable()) {
+        if (key == QString::fromUtf8(item.key)) return &item;
+    }
+    return nullptr;
+}
+} // namespace
+
+bool ConfigLoader::isErbConfigKey(const QString& key)
+{
+    return findErbConfig(key) != nullptr;
+}
+
+bool ConfigLoader::configValueInErb(const QString& key, QString& out) const
+{
+    const ErbConfigItem* item = findErbConfig(key);
+    if (!item) return false;
+    const QString def = QString::fromUtf8(item->def);
+    const QString raw = hasConfig(key) ? getConfig(key) : def;
+    switch (item->type) {
+    case ErbConfigType::Bool:
+        out = QString::number(parseBool(raw, def == QLatin1String("1")) ? 1 : 0);
+        return true;
+    case ErbConfigType::Color: {
+        const QStringList rgb = raw.split(QLatin1Char(','));
+        const int r = rgb.size() > 0 ? rgb.at(0).trimmed().toInt() : 0;
+        const int g = rgb.size() > 1 ? rgb.at(1).trimmed().toInt() : 0;
+        const int b = rgb.size() > 2 ? rgb.at(2).trimmed().toInt() : 0;
+        out = QString::number(((r * 256) + g) * 256 + b);
+        return true;
+    }
+    case ErbConfigType::Int:
+    case ErbConfigType::Int64:
+    case ErbConfigType::Text:
+    default:
+        out = raw;
+        return true;
+    }
+}
+
 QString ConfigLoader::serialize(const QHash<QString, QString>& config)
 {
     QStringList keys = config.keys();

@@ -136,6 +136,20 @@ EraEngine::EraEngine(QObject *parent)
 			}
 			return 0xFFFF00;
 		});
+		// ---- GETCONFIG / GETCONFIGS：emuera.config 取值 ----
+		// 对齐 C# ConfigData.GetConfigValueInERB：**白名单**（只有列出的配置项允许
+		// 被 ERB 读出；白名单外 GETCONFIG -> 0 / GETCONFIGS -> ""），返回形态按项类型：
+		//   整数/Int64 -> 数值文本；<bool> -> "1"/"0"；<Color> -> ((R*256)+G)*256+B；
+		//   <string>/<char>/<TextDrawingMode> -> 文本（GETCONFIGS 用）。
+		// 此前完全没有接线 -> 一律 0/""，eraTW 的画像尺寸计算因此全部除以 0：
+		//   `画像横幅 = 默认角色画像横幅 * 拡大比率 / GETCONFIG("フォントサイズ")` -> 0，
+		//   于是 `<img ... height='0' width='0'>`，「画像尺寸 拡大/縮小」（选项 5/6）
+		//   与尺寸档位（选项 4）在画面上完全看不出变化。
+		m_expressionEvaluator.setConfigProvider([this](const QString& key, QString& value) -> bool {
+			// 取值的白名单与类型转换在 ConfigLoader::configValueInErb（可单测）；
+			// 这里只负责把「配置对象」接到求值器上。
+			return m_configLoader.configValueInErb(key, value);
+		});
 		m_expressionEvaluator.setLineEmptyProvider([this]() -> qint64 {
 			return m_console.currentLineEmpty() ? 1 : 0;
 		});

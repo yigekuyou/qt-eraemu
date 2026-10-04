@@ -96,6 +96,20 @@ public:
     // 清空已加载文件（供「用新的回退编码重读配置」使用）
     void clearFiles() { m_configFiles.clear(); }
 
+    // ---- ERB 侧取值：GETCONFIG / GETCONFIGS ----
+    // 对齐 C# ConfigData.GetConfigValueInERB：**只有白名单里的配置项**允许被
+    // ERB 读出（白名单外 C# 抛错，这里按「未命中」处理）。返回值的形态按项类型：
+    //   <bool>            -> "1"/"0"（按 YES/NO/TRUE/FALSE/ON/OFF/1/0 宽松解析）
+    //   <int>/<Int64>     -> 数值文本
+    //   <Color>           -> ((R*256)+G)*256+B（C# 的 Color -> Int 打包）
+    //   <string>/<char>/<TextDrawingMode> -> 原样文本（GETCONFIGS 用）
+    // 配置项缺省时回落到 C# 的内建默认值。
+    // 命中返回 true；白名单外返回 false（调用方：GETCONFIG -> 0 / GETCONFIGS -> ""）。
+    [[nodiscard]] bool configValueInErb(const QString& key, QString& out) const;
+
+    // 该键是否属于 GETCONFIG/GETCONFIGS 白名单（用于 GETCONFIGS 的类型校验提示）
+    [[nodiscard]] static bool isErbConfigKey(const QString& key);
+
     // 已加载文件（含嗅探到的编码）
     QList<ConfigFile> getConfigFiles() const;
     // 某个文件嗅探到的编码（未加载返回 Auto）

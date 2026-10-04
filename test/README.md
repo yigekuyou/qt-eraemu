@@ -15,7 +15,7 @@
 | `example/ERB/10_COVERAGE.ERB` | **自动生成**的全函数冒烟覆盖（勿手改） |
 | `data/emuera_standard_cmds.txt` | Emuera 原版命令清单（导出自 C#） |
 | `data/emuera_standard_funcs.txt` | Emuera 原版式中函数清单（导出自 C#） |
-| `data/emuera_ee_cmds.txt` | EmueraEE 扩展命令清单（已转移到扩展：`src/eraengine/GameProc/ee_extension.h` 逐一注册；本文件仍为覆盖组名单来源） |
+| `data/emuera_ee_cmds.txt` | EmueraEE 扩展命令清单（**命令/桩与式中函数都在扩展侧** `src/eraengine/GameProc/ee_extension.cpp` 经注册类 `ExtensionRegistry`（`reg`/`regForm`/`regExpr`）逐一登记；式中函数如 `EXISTFUNCTION`/`GETDOINGFUNCTION`/`GETDISPLAYLINE` 亦在此实现，声明由注册类注入运行期扩展函数表。本文件仍为覆盖组名单来源） |
 | `data/coverage_report.txt` | 覆盖率报告（生成） |
 | `run_example.sh` | 运行示例（唯一需要的入口） |
 | `export_command_tables.py` | 从 C# 源码导出上述命令清单 |
@@ -27,7 +27,7 @@
 # 1) 编译（含测试用 CLI）
 cmake --build build --target test_cli
 
-# 2) 运行全部（组1..10、14 + 汇总）
+# 2) 运行全部自动组（1..10、14、16、17、23..28 + 汇总）
 ./test/run_example.sh
 
 # 3) 只跑某一组
@@ -59,8 +59,26 @@ cmake --build build --target test_cli
 | 28 | **文档语义·SELECTCASE/循环/EE 与 eraTW 惯用法**（`28_DOC_FLOW.ERB`） |
 | 29 | **文档语义·BEGIN FIRST 事件函数流** `#PRI/#LATER/#SINGLE/#ONLY`（破坏性·单独跑，`29_DOC_EVENT.ERB`） |
 
-组 11/12/13 不在「全部自动运行」路径里：11 需要外部喂输入，12/13 会中断或改流程。
-组 27/28 已纳入「全部自动运行」；29 为破坏性单跑组（`./test/run_example.sh 29`）。
+「全部自动运行」（`./test/run_example.sh` 无参数）依次执行：
+**1–10、14、16、17、23–28 + 汇总**。
+
+不在自动路径、需单跑的组（`./test/run_example.sh <组号>`）：
+
+| 组 | 单跑原因 |
+| --- | --- |
+| 11 | 输入族，需 `test_cli` 自动喂输入 |
+| 12 | `BEGIN`：切换流程、不返回 |
+| 13 | `THROW`：**预期**「执行出错」 |
+| 15 | 鼠标/原始输入：`k` 注入 + 超时两条路径 |
+| 18 | `RESTART` + EE 破坏系 |
+| 19 | `DOTRAIN`：**预期**「执行出错」 |
+| 20/21 | `RESTART` 菜单复刻 / GOTO 标签作用域 |
+| 22 | MAP 绘制复现（计时用） |
+| 29 | `BEGIN FIRST` 事件函数流（破坏性） |
+
+注意：单跑组若未调用 `TEST_SUMMARY`（组 1–10 等子集）或本就**预期出错**
+（组 13/19），`run_example.sh` 的汇总行会显示「失败」——这是外壳判定
+（它靠输出里的 `全部断言通过` 判定），看 `[FAIL]` 与否才是真正的断言结果。
 
 ## 文档语义测试（组 27–29）
 
@@ -81,16 +99,31 @@ EmueraEE·私家改造版 readme**，不参考本移植实现：
 * 组 29：`ecd/docs「ERB 的内置流程」`——BEGIN FIRST 触发 @EVENTFIRST、
   PRI→普通→LATER 顺序、#SINGLE 返回 1 跳过本组、#ONLY 终止事件。
 
-这些断言是「规范行为」的编码：**当前仍有部分失败，即移植与规范之间的已知差距**，
-修复移植后应全部转绿。已确认的差距（2026-10）：ERH `#DEFINE` 宏未展开、
-`#DIM GLOBAL` 不随 SAVEGLOBAL 持久化、`__INT_MAX__`/`EMUERA_VERSION` 等系
-统常量缺失、`BEGIN FIRST` 未调用 @EVENTFIRST 而是回标题、EXISTFUNCTION/
-GETDOINGFUNCTION/GETDISPLAYLINE/DAYNAME 未实现、参数初始值省略实参时未生效
-（读到陈旧 ARG）、CURRENTALIGN 返回数值而非 LEFT/CENTER/RIGHT、
-GETTIME 返回值格式、GETEXPLV/GETPALAMLV 阈值边界、`;!;` 行被当注释、
-SAVEDATA 不写 SAVEDATA_TEXT、RESET_STAIN 无效、ARRAYREMOVE 第三参 0 不删到
-末尾、STRJOIN 区间参数语义、`3*"AB"` 整数在左不重复、CALL 参数中带引号串接、
-BINPUT 无按钮不取缺省值、UNICODE 控制码未按 v18 返回空串。
+这些断言是「规范行为」的编码。**截至 2026-10 已全部通过**：组 27/28 纳入
+「全部自动运行」，组 29 单跑（`./test/run_example.sh 29`），二者均
+`★ 全部断言通过（ALL PASS）★`、`./test/run_example.sh` 退出码 0。
+
+本轮（2026-10）为让 27–29 转绿而对移植做的修复：
+
+* **ERH 对象宏**：`#DEFINE NAME body` 的替换体未剥离宏名，`body` 错成
+  `"NAME body"` 并自引用膨胀（`DOC_HELLO "你好宏" "你好宏"…`、`DOC_MAC_27`→0）。
+* **SAVEDATA 字符串实参**：`SAVEDATA 40, "标题"` 的第二实参是整段引号字面量
+  （已去引号、无 AST），此前被当表达式求值成 0 → `SAVEDATA_TEXT` 落空。
+* **`DAY.csv` 名表**：登记 `DAYNAME`（`VariableSize` + 系统字符串变量）与
+  `DAY→DAY.CSV`（`ConstantTable`），并修 `RESETGLOBAL` 不再清空 `<VAR>NAME`
+  名表（组 9 的 RESETGLOBAL 曾把 `DAYNAME` 清掉）。
+* **EE 式中函数**：`EXISTFUNCTION`（1/2/3/0 + 第二参大小写选项）、
+  `GETDOINGFUNCTION`、`GETDISPLAYLINE`（按逻辑行、0 起算、越界空串）——
+  **实现全在扩展侧**（`ee_extension.cpp` 经 `ExtensionRegistry::regExpr` 登记，
+  声明注入运行期扩展函数表；原生函数表不变），引擎只提供 services 与
+  `BuiltinOp::Extension` 求值回调；同时支持伪变量 0 参写法 `LINECOUNT()` 与
+  字符串赋值右值的**单个函数调用**（`RESULTS:0 = GETDOINGFUNCTION()`）。
+* **`BINPUT`/`BINPUTS`**：无按钮时直接把缺省值写入 `RESULT(S)`（不等待）；
+  裸执行（无按钮、无缺省值）按输入族桩容错跳过、不报错（组 15）。
+* **`BEGIN`**：此前会 `returnFromCall()` 回到调用方（菜单继续跑到 `ONEINPUT`），
+  导致 `BEGIN FIRST` 不触发 `@EVENTFIRST`；改为对齐 C#：清空调用栈、`Halt`
+  交还系统层。事件分组同步改为 `#PRI → 普通 → #LATER`，`#ONLY` 为「该函数
+  返回后终止整个事件」的标记（组 29）。
 
 ## 关于「自动输入」
 
@@ -123,8 +156,7 @@ EE 扩展 56 条，**全部 0 未覆盖**。少量命令刻意不由自动段执
 
 ## 相关
 
-* 编译器/引擎回归：`cd build && ctest`（注意：`test_input` / `test_statements`
-  在本移植**基线**上即有失败，与测试示例无关）。
+* 编译器/引擎回归：`cd build && ctest`（**28/28 通过**）。
 * 本目录的改动同时记录了若干引擎修复：`CHKDATA` 返回值（EraDataState）、
   `RESETDATA` 清空角色、`RESETGLOBAL` 保留函数私有变量、`QUIT` 结束程序、
   `SAVETEXT/LOADTEXT` 的 `txt{nn}.txt` 语义、`CHKFONT` 无 GUI 时的崩溃等。

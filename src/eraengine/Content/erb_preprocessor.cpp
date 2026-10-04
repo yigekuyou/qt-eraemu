@@ -192,6 +192,11 @@ ErbPreprocessor::MacroTable ErbPreprocessor::collectMacroTable(const QString& co
                 }
                 s = s.mid(close + 1);
             }
+        } else {
+            // 对象宏：替换体从宏名之后开始（跳过宏名本身）。
+            // 此前未剥离宏名，导致 body="DOC_MAC_27 33"，展开成
+            // "DOC_MAC_27 33 33 …"（自引用膨胀），完全错误。
+            s = s.mid(i);
         }
         def.body = s.trimmed();
         table.insert(name, def);

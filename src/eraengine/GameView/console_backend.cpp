@@ -194,6 +194,45 @@ QString ConsoleBackend::lineText(int lineNo) const {
     return text;
 }
 
+QString ConsoleBackend::displayLineText(int lineNo) const {
+    if (lineNo < 0) return QString();
+    int seen = -1;
+    for (const ConsoleDisplayLine& line : m_buffer.lines()) {
+        if (!line.isLogicalLine) continue;   // 折行续行不计入（对齐 LINECOUNT 口径）
+        if (++seen != lineNo) continue;
+        QString text;
+        for (const ConsoleSegment& seg : line.segments)
+            for (const ConsoleSpan& span : seg.spans)
+                text += span.text.isEmpty() ? span.altText : span.text;
+        return text;
+    }
+    return QString();
+}
+
+bool ConsoleBackend::hasEnabledButton() const {
+    // BINPUT/BINPUTS 的「当前是否有可点击按钮」判定（EE v31fix）：
+    //   只看**尾部连续的按钮块**（当前屏幕刚打印的按钮）——历史屏幕遗留的按钮
+    //   不算「実行時点でボタン化されている」。世代（generation）仍用于过滤：
+    //   只有与当前世代一致的按钮才可点击（对齐 lastButtonGeneration）。
+    // 1) PRINTBUTTON 后尚未换行的当前行
+    for (const ConsoleSegment& seg : m_sealed) {
+        if (seg.isButton && seg.enabled && seg.generation == m_generation) return true;
+    }
+    // 2) 末尾连续的「含按钮」显示行
+    const QList<ConsoleDisplayLine>& lines = m_buffer.lines();
+    for (int i = lines.size() - 1; i >= 0; --i) {
+        bool hasButton = false, hasCurrent = false;
+        for (const ConsoleSegment& seg : lines.at(i).segments) {
+            if (!seg.isButton) continue;
+            hasButton = true;
+            if (seg.enabled && seg.generation == m_generation) hasCurrent = true;
+        }
+        if (!hasButton) break;       // 尾部按钮块到此结束
+        if (hasCurrent) return true;
+    }
+    return false;
+}
+
 QString ConsoleBackend::htmlPrintedStr(int lineNo) const {
     if (lineNo < 0 || lineNo >= m_htmlLines.size()) return QString();
     return m_htmlLines.at(m_htmlLines.size() - 1 - lineNo);   // 行号从最近一行起算

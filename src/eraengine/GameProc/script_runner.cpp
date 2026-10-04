@@ -1225,6 +1225,43 @@ ExecState ScriptRunner::executeLine(const LogicalLine& line) {
         advance();                       // 指令已消费
         return ExecState::WaitInput;     // 挂起等待用户操作
     }
+    // ---- BINPUT / BINPUTS（EE v31fix）----
+    //   実行時点でボタン化されている値のみを受け付ける INPUT(S)。ボタンが
+    //   一つも無い状態なら、デフォルト値があれば**入力待ちをせずに**
+    //   RESULT(S) にデフォルト値を入れる（缺省值も無ければエラー）。
+    //   有按钮时退化为普通 INPUT/INPUTS 等待（按钮值白名单校验暂不强制）。
+    if (name == QLatin1String("BINPUT") || name == QLatin1String("BINPUTS")) {
+        const bool isStr = (name == QLatin1String("BINPUTS"));
+        const bool anyButton = m_buttonAvailable && m_buttonAvailable();
+        if (anyButton) {
+            advance();
+            return ExecState::WaitInput;
+        }
+        if (line.arguments.isEmpty()) {
+            // 无按钮、无缺省值：按 EE 输入族桩的容错语义**留痕跳过**，不报错
+            // （组15 断言 `BINPUT`/`BINPUTS` 裸执行不报错）。
+            qCDebug(eraTrace) << "[ee-input]" << name
+                              << "无按钮且无缺省值，跳过。行:" << line.position.toString();
+            advance();
+            return ExecState::Continue;
+        }
+        const Operand& def = line.arguments.first();
+        if (isStr) {
+            const QString v = def.ast
+                ? getEvaluator().evaluate(*def.ast, m_storage, baseData()).toString()
+                : (def.isString ? def.raw
+                                : getEvaluator().evaluate(def.raw, m_storage, baseData()).toString());
+            if (m_storage) m_storage->setGlobalStr1D(QStringLiteral("RESULTS"), 0, v);
+        } else {
+            qint64 v = 0;
+            if (def.ast) v = getEvaluator().evaluate(*def.ast, m_storage, baseData()).toLongLong();
+            else if (def.isString) v = def.raw.toLongLong();
+            else v = getEvaluator().evaluate(def.raw, m_storage, baseData()).toLongLong();
+            if (m_storage) m_storage->setSystemVariable(QStringLiteral("RESULT"), 0, v);
+        }
+        advance();
+        return ExecState::Continue;
+    }
     // ---- 实时 / 限时输入（对齐 C# INPUTMOUSEKEY / TONEINPUT）----
     if (name == QLatin1String("INPUTMOUSEKEY")) {
         qint64 timeout = 0;
@@ -1353,11 +1390,14 @@ ExecState ScriptRunner::executeLine(const LogicalLine& line) {
             emit errorOccurred(error);
             return ExecState::Error;
         }
-        // C# state.Return(0)：BEGIN 之后直接返回，由系统状态机在帧底接管
-        if (!returnFromCall()) {
-            return ExecState::Halt;
-        }
-        return ExecState::Continue;
+        // 对齐 C# BEGIN_Instruction：state.SetBegin() 会清空函数列表（忘记 CALL
+        // 调用方），随后 state.Return(0) 直接回到系统层 —— BEGIN **不返回调用方**。
+        // 此前只 processBegin 清了 ProcessState 的列表，却仍 returnFromCall() 回到
+        // 调用函数（菜单继续执行到 ONEINPUT），导致 BEGIN FIRST 不触发 @EVENTFIRST
+        // 而是停在标题菜单（组29 回归）。
+        if (m_table) m_table->resetPosition();
+        m_state->clearFunctionList();
+        return ExecState::Halt;
     }
 
     // ---- SAVEGAME / LOADGAME：记录返回状态并切换（对齐 C# SAVELOADGAME_Instruction）----

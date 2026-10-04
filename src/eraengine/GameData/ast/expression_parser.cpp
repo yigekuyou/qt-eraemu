@@ -145,7 +145,7 @@ QSharedPointer<ExpressionNode> ExpressionParser::parsePrimary() {
         // C# 把方法名与变量名放同一标识符字典，没有同名变量时按方法调用
         // （GETCOLOR 就是这种写法）。这里对 minArgs==0 的内建名按 0 参函数
         // 归约 —— 否则裸标识符落进未知变量恒为 0。
-        if (const auto* spec = findBuiltinFunction(m_tokens[m_current].value().toStdString());
+        if (const auto* spec = findFunctionSpec(m_tokens[m_current].value().toStdString());
             spec != nullptr && spec->minArgs == 0) {
             const ExpressionToken token = advance();
             const QList<QSharedPointer<ExpressionNode>> noArgs;
@@ -155,7 +155,8 @@ QSharedPointer<ExpressionNode> ExpressionParser::parsePrimary() {
                 fn->setUserFunction(true);
                 fn->setValueType(res.returnType);
             } else if (res.isBuiltin) {
-                fn->setBuiltinIndex(res.builtinIndex);
+                if (res.extensionSpec) fn->setExtensionSpec(res.extensionSpec);
+                else fn->setBuiltinIndex(res.builtinIndex);
                 fn->setValueType(res.returnType);
             } else {
                 fn->setValueType(OperandType::Unknown);
@@ -343,11 +344,20 @@ QSharedPointer<ExpressionNode> ExpressionParser::parseFunctionCall() {
         fn->setUserFunction(true);
         fn->setValueType(res.returnType);
     } else if (res.isBuiltin) {
-        fn->setBuiltinIndex(res.builtinIndex);
+        if (res.extensionSpec) fn->setExtensionSpec(res.extensionSpec);
+        else fn->setBuiltinIndex(res.builtinIndex);
         fn->setValueType(res.returnType);
         // 解析期先做一次校验（此时变量类型多为 Unknown，类型检查宽松；
         // finalizeParse 会在类型回填后再校验一遍）
-        fn->setArityError(validateBuiltinCall(kBuiltinFunctions[res.builtinIndex], args));
+        if (const BuiltinFunctionSpec* s = fn->builtinSpec()) {
+            fn->setArityError(validateBuiltinCall(*s, args));
+        }
+    } else if (args.isEmpty()
+               && isKnown(sysvar::systemVariableType(token.value().toStdString()))) {
+        // 伪变量写作 0 参调用：`LINECOUNT()` == `LINECOUNT`（eraTW/EE 惯用写法）。
+        // 原版 C# 会按「未定義関数」报错，但测试规范（组28）与 EE 允许此写法。
+        return QSharedPointer<VariableNode>::create(
+            token.value(), sysvar::systemVariableType(token.value().toStdString()));
     } else {
         // C#：IdentifierDictionary.ThrowException(idStr, true) —— 未定义的関数
         fn->setValueType(OperandType::Unknown);

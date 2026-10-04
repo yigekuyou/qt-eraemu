@@ -2007,6 +2007,22 @@ bool ExpressionEvaluator::evaluateBuiltin(const FunctionNode &node, VariableStor
         out = m_lineStrProvider ? m_lineStrProvider(int(I(0))) : QString();
         return true;
     }
+    case BuiltinOp::Extension: {
+        // 扩展式中函数（EE 等）：实参求值后交给注册类注入的回调。
+        // 引擎不内联任何扩展名/实现（原生归原生、扩展归扩展）。
+        if (!m_extensionFnInvoker) return false;
+        QList<QVariant> args;
+        QList<const ExpressionNode*> argNodes;
+        args.reserve(node.arguments().size());
+        argNodes.reserve(node.arguments().size());
+        for (int i = 0; i < node.arguments().size(); ++i) {
+            const auto& arg = node.arguments().at(i);
+            argNodes.append(arg.get());
+            args.append(node.isArgOmitted(i) ? QVariant()
+                                             : evaluateNode(*arg, storage, gameBaseData));
+        }
+        return m_extensionFnInvoker(node.name(), args, argNodes, out);
+    }
     case BuiltinOp::GetKey:
     case BuiltinOp::GetKeyTriggered: {
         // GETKEY / GETKEYTRIGGERED <键码>：无 GUI 输入源时恒 0

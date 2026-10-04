@@ -201,6 +201,8 @@ QString ConstantTable::csvForVariable(const QString& variableName) {
         {QStringLiteral("GLOBAL"),    QStringLiteral("GLOBAL.CSV")},
         {QStringLiteral("GLOBALS"),   QStringLiteral("GLOBALS.CSV")},
         {QStringLiteral("TSTR"),      QStringLiteral("TSTR.CSV")},
+        // eraTW：DAY.csv 使 DAY 获得命名索引（`DAY:天気` / `DAYNAME:5`）
+        {QStringLiteral("DAY"),       QStringLiteral("DAY.CSV")},
     };
     return map.value(variableName.toUpper());
 }

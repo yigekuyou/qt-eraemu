@@ -120,6 +120,18 @@ public:
     void setClientSizeProvider(std::function<QPair<int,int>()> provider) { m_clientSizeProvider = std::move(provider); }
     void setSkipProvider(std::function<int(int)> provider) { m_skipProvider = std::move(provider); }   // 0=ISSKIP 1=MESSKIP 2=MOUSESKIP
     void setLineStrProvider(std::function<QString(int)> provider) { m_lineStrProvider = std::move(provider); }
+
+    // ---- 扩展式中函数（EE 等）的求值回调 ----
+    // 求值归扩展侧：BuiltinOp::Extension 的节点交给此回调（实参已求值）。
+    // 引擎不内联任何扩展名/实现；回调由注册类（ExtensionRegistry）提供。
+    // 返回 true 表示已处理（out 为返回值）。
+    using ExtensionFunctionInvoker = std::function<bool(const QString& name,
+                                                       const QList<QVariant>& args,
+                                                       const QList<const ExpressionNode*>& argNodes,
+                                                       QVariant& out)>;
+    void setExtensionFunctionInvoker(ExtensionFunctionInvoker invoker) {
+        m_extensionFnInvoker = std::move(invoker);
+    }
     void setHtmlPrintedProvider(std::function<QString(int)> getAll, std::function<QString()> pop) {
         m_htmlGetProvider = std::move(getAll);
         m_htmlPopProvider = std::move(pop);
@@ -241,6 +253,7 @@ private:
     std::function<QPair<int,int>()> m_clientSizeProvider;    // CLIENTWIDTH/HEIGHT
     std::function<int(int)> m_skipProvider;                  // ISSKIP/MESSKIP/MOUSESKIP
     std::function<QString(int)> m_lineStrProvider;           // GETLINESTR
+    ExtensionFunctionInvoker    m_extensionFnInvoker;        // 扩展式中函数（BuiltinOp::Extension）
     std::function<QString(int)> m_htmlGetProvider;           // HTML_GETPRINTEDSTR
     std::function<QString()> m_htmlPopProvider;              // HTML_POPPRINTINGSTR
     std::function<void()> m_clearProvider;                   // DEBUGCLEAR

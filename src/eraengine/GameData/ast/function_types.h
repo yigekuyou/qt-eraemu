@@ -19,7 +19,10 @@
 #define AST_FUNCTION_TYPES_H
 
 #include <cstddef>
+#include <deque>
+#include <string>
 #include <string_view>
+#include <unordered_map>
 #include <QtGlobal>
 #include "operand_type.h"
 
@@ -120,6 +123,8 @@ enum class BuiltinOp : quint16 {
     CurrentAlign, GetFocusColor, GetFont, ChkFont,
     ClientWidth, ClientHeight, Isskip, Messkip, MouseSkip,
     GetLineStr, GetKey, GetKeyTriggered, MouseX, MouseY, IsActive,
+    // ---- 扩展式中函数（EE 等；实现在注册类的扩展侧，求值经注入的回调）----
+    Extension,
     // ---- 随机数状态（RANDDATA）----
     DumpRand, InitRand,
     // ---- 角色操作 / 检索（文档「角色操作·引用」组）----
@@ -264,6 +269,9 @@ inline constexpr BuiltinFunctionSpec kBuiltinFunctions[] = {
     {"ENCODETOUNI"         , OperandType::Int, 1, 2, "si", true , BuiltinOp::EncodeToUni},
     {"CHARATU"             , OperandType::Str, 2, 2, "si", true , BuiltinOp::CharAtU},
     {"GETLINESTR"          , OperandType::Str, 1, 1, "s", false, BuiltinOp::GetLineStr},
+    // 注：EmueraEE 式中函数（EXISTFUNCTION / GETDOINGFUNCTION / GETDISPLAYLINE）
+    // 不在此原生表 —— 它们是**扩展**，经 ExtensionRegistry::regExpr 注入运行期
+    // 扩展函数表（见本文件底部 extensionFunctionStore）。原生归原生、扩展归扩展。
     {"STRFORM"             , OperandType::Str, 1, 1, "s", true , BuiltinOp::StrForm},
     {"STRJOIN"             , OperandType::Str, 1, 4, "vaii", true , BuiltinOp::StrJoin},
     {"GETCONFIG"           , OperandType::Int, 1, 1, "s", true , BuiltinOp::GetConfig},
@@ -388,6 +396,54 @@ inline constexpr std::size_t kBuiltinFunctionCount = std::size(kBuiltinFunctions
         return true;
     }
     return false;
+}
+
+// ---------------------------------------------------------------------------
+// 运行期「扩展式中函数」表
+//
+// **原生归原生、扩展归扩展**：原生函数表 kBuiltinFunctions 保持 constexpr 不变；
+// 扩展（EE 等）在启动时经注册类（ExtensionRegistry::regExpr ->
+// AstBuilder::registerExtensionFunction）注入本表。表中函数的求值 opcode 统一为
+// BuiltinOp::Extension —— 具体求值由注册类持有的回调完成（见 ExpressionEvaluator
+// 的扩展函数回调）。这样解析期能像内置函数一样拿到返回类型/参数个数，
+// 但实现完全住在扩展侧（GameProc/ee_extension.cpp）。
+// ---------------------------------------------------------------------------
+struct ExtensionFunctionStore {
+    std::deque<std::string> names;                             // 稳定存储（spec.name 指向它）
+    std::unordered_map<std::string, BuiltinFunctionSpec> specs; // 名字（大写）-> 声明
+};
+
+inline ExtensionFunctionStore& extensionFunctionStore() {
+    static ExtensionFunctionStore store;
+    return store;
+}
+
+// 注册（重复注册按后者覆盖；名字规范为大写）
+inline void registerExtensionFunctionSpec(const std::string& upperName, OperandType ret,
+                                          int minArgs, int maxArgs) {
+    ExtensionFunctionStore& store = extensionFunctionStore();
+    store.names.push_back(upperName);
+    BuiltinFunctionSpec spec{};
+    spec.name = store.names.back();
+    spec.ret = ret;
+    spec.minArgs = static_cast<qint8>(minArgs);
+    spec.maxArgs = static_cast<qint8>(maxArgs);
+    spec.argPattern = std::string_view{};
+    spec.canRestructure = false;
+    spec.op = BuiltinOp::Extension;
+    store.specs.insert_or_assign(upperName, spec);
+}
+
+[[nodiscard]] inline const BuiltinFunctionSpec* findExtensionFunction(std::string_view upperName) {
+    const auto& store = extensionFunctionStore();
+    const auto it = store.specs.find(std::string(upperName));
+    return it == store.specs.end() ? nullptr : &it->second;
+}
+
+// 合并查表：原生优先，其次扩展（解析期知道「是个函数 + 返回类型 + 参数个数」）。
+[[nodiscard]] inline const BuiltinFunctionSpec* findFunctionSpec(std::string_view upperName) {
+    if (const BuiltinFunctionSpec* s = findBuiltinFunction(upperName)) return s;
+    return findExtensionFunction(upperName);
 }
 
 #endif // AST_FUNCTION_TYPES_H

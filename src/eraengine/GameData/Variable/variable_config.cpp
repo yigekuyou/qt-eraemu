@@ -152,6 +152,9 @@ void VariableConfig::loadDefaults()
     variableSizes["FLAGNAME"] = VariableSizeInfo{10000, QPair<int, int>(), QVector<int>(), false, false};
     variableSizes["TFLAGNAME"] = VariableSizeInfo{1000, QPair<int, int>(), QVector<int>(), false, false};
     variableSizes["STR"] = VariableSizeInfo{20000, QPair<int, int>(), QVector<int>(), false, false};
+    // DAY.csv 名表（eraTW：`DAY:天気` / `DAYNAME:5`）。Emuera 原版无 DAYNAME，
+    // 但 eraTW 自带 CSV/DAY.csv，NAME 数组填充循环按 `<VAR>NAME` 约定登记。
+    variableSizes["DAYNAME"] = VariableSizeInfo{1000, QPair<int, int>(), QVector<int>(), false, false};
     
     // 1D character variables
     variableSizes["BASE"] = VariableSizeInfo{100, QPair<int, int>(), QVector<int>(), false, false};

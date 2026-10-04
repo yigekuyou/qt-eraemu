@@ -75,6 +75,7 @@ struct UserParamDecl {
 // 一个用户自定义函数的完整声明
 struct UserFunctionDecl {
     QString      name;                 // 大写函数名（C# Config.ICVariable 默认开启）
+    QString      originalName;         // 声明处的原始大小写（EXISTFUNCTION 区分大小写用）
     QString      script;               // 所在脚本
     int          labelLine = -1;       // @label 的行号
     int          endLine = -1;         // 函数体结束（下一函数标签前一行）

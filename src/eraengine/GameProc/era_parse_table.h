@@ -182,6 +182,9 @@ public:
     // 用户自定义函数注册表（对齐 C# FunctionLabelLine）
     [[nodiscard]] const UserFunctionInfo* userFunction(const QString& name) const;
     [[nodiscard]] const QHash<QString, UserFunctionInfo>& userFunctions() const { return m_functions; }
+    // EXISTFUNCTION 语义（EmueraEE）：通常=1 / #FUNCTION=2 / #FUNCTIONS=3 / 未知=0。
+    // caseInsensitive=false 时按声明处原始大小写精确匹配。
+    [[nodiscard]] int functionExistsKind(const QString& name, bool caseInsensitive) const;
 
     // 同名标签的全部声明（按 脚本名 + 行号 排序；供事件四分组导航）
     // 对齐 C# LabelDictionary.GetEventLabels / SortLabels

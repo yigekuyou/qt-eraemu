@@ -277,7 +277,7 @@ FunctionResolution resolveFunctionCall(const QString& name,
             return out;
         }
     }
-    // 2) 内置函数（methodDic）
+    // 2) 原生内置函数（methodDic）
     const int index = builtinFunctionIndex(upper.toStdString());
     if (index >= 0) {
         out.isBuiltin = true;
@@ -285,7 +285,14 @@ FunctionResolution resolveFunctionCall(const QString& name,
         out.returnType = kBuiltinFunctions[index].ret;
         return out;
     }
-    // 3) 未定义
+    // 3) 扩展式中函数（运行期注册表；实现住在扩展侧）
+    if (const BuiltinFunctionSpec* ext = findExtensionFunction(upper.toStdString())) {
+        out.isBuiltin = true;
+        out.extensionSpec = ext;
+        out.returnType = ext->ret;
+        return out;
+    }
+    // 4) 未定义
     return out;
 }
 
@@ -495,6 +502,9 @@ QSharedPointer<ExpressionNode> cloneExpression(const QSharedPointer<ExpressionNo
         for (const auto& a : n.arguments()) args.append(cloneExpression(a));
         auto copy = QSharedPointer<FunctionNode>::create(n.name(), args);
         copy->setValueType(n.valueType()); copy->setBuiltinIndex(n.builtinIndex());
+        if (const BuiltinFunctionSpec* ext = n.builtinSpec()) {
+            if (n.builtinIndex() < 0) copy->setExtensionSpec(ext);   // 扩展式中函数
+        }
         copy->setUserFunction(n.isUserFunction()); copy->setArityError(n.arityError());
         // 空实参占位（`F(a, , b)`）必须一起克隆：丢了它 FINDELEMENT 的第 4 实参
         // 会被当成显式 0（结束位置 0 -> 恒返回 -1）

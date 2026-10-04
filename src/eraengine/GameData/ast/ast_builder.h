@@ -23,6 +23,7 @@
 #include <QString>
 #include <QStringList>
 #include "logical_line.h"
+#include "function_types.h"   // 运行期扩展式中函数表（registerExtensionFunction）
 
 // 把表达式文本归约为 AST 的回调（由 EraParseTable 的 m_astCache 提供，
 // 保证同一表达式只解析一次并跨脚本共享）。
@@ -53,6 +54,14 @@ public:
     // 不影响命令文/赋值分类）。
     static void registerExtensionStatement(const QString& upperName) {
         s_extensionStatements.insert(upperName);
+    }
+
+    // ExtensionRegistry::regExpr() 登记的扩展式中函数：注入运行期「扩展函数表」
+    // （function_types.h），解析期即可拿到返回类型/参数个数；求值 opcode 统一
+    // BuiltinOp::Extension，实际求值住扩展侧（注册类持有的回调）。
+    static void registerExtensionFunction(const QString& upperName, OperandType ret,
+                                          int minArgs, int maxArgs) {
+        registerExtensionFunctionSpec(upperName.toStdString(), ret, minArgs, maxArgs);
     }
 
     // ---- PRINT 族参数形态（对齐 C# PRINT_Instruction 的后缀扫描）----

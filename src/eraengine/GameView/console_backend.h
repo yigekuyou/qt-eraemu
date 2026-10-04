@@ -132,6 +132,11 @@ public:
     Q_INVOKABLE bool outputLog(const QString& path) const;
     // GETLINESTR：第 lineNo 逻辑行的文本
     Q_INVOKABLE QString lineText(int lineNo) const;
+    // GETDISPLAYLINE：第 lineNo 逻辑行（跳过折行续行）的文本；越界为空串。
+    // 对齐 EE readme「0 起算、LINECOUNT 恒为空、LINECOUNT 次循环取全行」。
+    [[nodiscard]] QString displayLineText(int lineNo) const;
+    // BINPUT/BINPUTS：是否存在「当前屏幕刚打印的」可点击按钮（尾部按钮块 + 当前行）。
+    [[nodiscard]] bool hasEnabledButton() const;
     // HTML_GETPRINTEDSTR / HTML_POPPRINTINGSTR：printHtml 收到的原文缓冲
     Q_INVOKABLE QString htmlPrintedStr(int lineNo) const;
     Q_INVOKABLE QString htmlPopPrintingStr();

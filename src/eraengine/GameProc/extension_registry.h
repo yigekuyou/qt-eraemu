@@ -20,6 +20,7 @@
 #include <QHash>
 #include <QSet>
 #include <QString>
+#include <QVariant>
 #include <QtGlobal>
 #include <functional>
 
@@ -68,6 +69,14 @@ public:
     using StatementFn =
         std::function<bool(const LogicalLine& line, const QList<Operand>& args)>;
 
+    // 式中（表达式内）扩展函数：实参已由求值器求值（省略实参为无效 QVariant，
+    // argNodes 与之一一对应）；返回 true 表示已处理（out = 返回值）。
+    // 实现住扩展侧（ee_extension.cpp），求值经 ExpressionEvaluator 的
+    // 扩展函数回调（BuiltinOp::Extension）转回本注册类。
+    using ExprFn = std::function<bool(const QList<QVariant>& args,
+                                      const QList<const ExpressionNode*>& argNodes,
+                                      QVariant& out)>;
+
     ExtensionRegistry() {
         // 核心函数的实参形态声明也由注册类承担（复杂度集中注册类）：
         // PUTFORM 的实参是 StrForm（文本 + {…}/%…%）—— 注册类插入 AST，
@@ -90,8 +99,21 @@ public:
     struct Services {
         VariableStorage* storage = nullptr;      // 变量表（RESULT / RESULTS 数组写入）
         std::function<QString()> savDirectory;   // 存档目录（CHKVARDATA/FIND_VARDATA 探测用）
+        // EE 式中函数所需（EraEngine 注入；惰性 provider）：
+        std::function<int(const QString&, bool)> functionExists;   // EXISTFUNCTION(name, ci)
+        std::function<QString()>                 doingFunction;    // GETDOINGFUNCTION()
+        std::function<QString(int)>              displayLine;      // GETDISPLAYLINE(lineNo)
     };
     void setServices(Services s) { m_services = std::move(s); }
+    // 引擎在运行期补挂「式中函数」服务（构造期 storage 已知，但这些 provider
+    // 依赖解析表/控制台，由 EraEngine 在装配完成后注入）。
+    void setExpressionServices(std::function<int(const QString&, bool)> functionExists,
+                               std::function<QString()> doingFunction,
+                               std::function<QString(int)> displayLine) {
+        m_services.functionExists = std::move(functionExists);
+        m_services.doingFunction = std::move(doingFunction);
+        m_services.displayLine = std::move(displayLine);
+    }
     [[nodiscard]] const Services& services() const { return m_services; }
 
     // ---- 简单注册函数（复杂度由注册类承担；扩展只写这几行）----------------
@@ -119,11 +141,34 @@ public:
         AstBuilder::registerFormArgFunction(name.toUpper());
     }
 
+    // ④ 登记**式中函数**（表达式内可调用）：注入运行期扩展函数表（声明 = 返回
+    //    类型 + 参数个数）并保存实现。求值 opcode 统一 BuiltinOp::Extension，
+    //    由 ExpressionEvaluator 的扩展回调转回本注册类的 runExpression。
+    //    同时登记为扩展语句名：裸写（覆盖组把 EE 名单当命令逐条跑）不报警告，
+    //    运行期按桩静默跳过（式中函数本就应带参数，裸写无意义）。
+    void regExpr(const QString& name, OperandType ret, int minArgs, int maxArgs, ExprFn fn) {
+        const QString upper = failFastChecked(name);
+        if (upper.isEmpty()) return;
+        m_exprFunctions.insert(upper, std::move(fn));
+        AstBuilder::registerExtensionFunction(upper, ret, minArgs, maxArgs);
+        AstBuilder::registerExtensionStatement(upper);
+    }
+
     // ---- 查询（执行引擎使用；查询侧零扩展名）------------------------------
 
-    // 注册表是否认识该语句名（实现或桩）
+    // 注册表是否认识该语句名（实现 / 桩 / 式中函数裸写）
     [[nodiscard]] bool hasStatement(const QString& upperName) const {
-        return m_functions.contains(upperName) || m_stubs.contains(upperName);
+        return m_functions.contains(upperName) || m_stubs.contains(upperName)
+               || m_exprFunctions.contains(upperName);
+    }
+
+    // 式中函数求值入口（ExpressionEvaluator 的 BuiltinOp::Extension 回调转来）。
+    // 未命中的名字返回 false（调用方按求值失败处理）。名字大小写不敏感。
+    bool runExpression(const QString& name, const QList<QVariant>& args,
+                       const QList<const ExpressionNode*>& argNodes, QVariant& out) {
+        const auto it = m_exprFunctions.constFind(name.toUpper());
+        if (it == m_exprFunctions.constEnd()) return false;
+        return it.value()(args, argNodes, out);
     }
 
     // 命中即执行；未命中返回 false（调用方落到通用路径）。
@@ -140,6 +185,10 @@ public:
             }
             return true;
         }
+        // 式中函数裸写（无参数、非表达式用法）：静默跳过（式中函数应带参数）。
+        if (m_exprFunctions.contains(upperName)) {
+            return true;
+        }
         return false;
     }
 
@@ -153,17 +202,19 @@ private:
                        << "属核心函数（kBuiltinFunctions），扩展不得覆盖";
             return {};
         }
-        if (m_functions.contains(upper) || m_stubs.contains(upper)) {
+        if (m_functions.contains(upper) || m_stubs.contains(upper)
+            || m_exprFunctions.contains(upper)) {
             qWarning() << "[ext] 拒绝注册：" << name << "已被其他扩展注册（first-wins）";
             return {};
         }
         return upper;
     }
 
-    QHash<QString, StatementFn> m_functions;   // 扩展实现（名字 -> 执行器）
-    QSet<QString> m_stubs;                     // 只登记名字的桩
-    QSet<QString> m_traced;                    // 留痕去重（每个名字只一次）
-    Services m_services;                       // 扩展实现所需的服务（引擎填入）
+    QHash<QString, StatementFn> m_functions;    // 扩展语句实现（名字 -> 执行器）
+    QHash<QString, ExprFn>      m_exprFunctions;// 扩展式中函数（名字 -> 求值）
+    QSet<QString> m_stubs;                      // 只登记名字的桩
+    QSet<QString> m_traced;                     // 留痕去重（每个名字只一次）
+    Services m_services;                        // 扩展实现所需的服务（引擎填入）
 };
 
 // ---------------------------------------------------------------------------

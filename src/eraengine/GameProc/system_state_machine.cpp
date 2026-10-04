@@ -294,7 +294,7 @@ void SystemStateMachine::eventShiftNext() {
         }
         m_event.group++;
         m_event.counter = -1;
-        if (m_event.group >= 4) {
+        if (m_event.group >= 3) {
             m_event.hasCurrent = false;
             return;
         }
@@ -304,7 +304,7 @@ void SystemStateMachine::eventShiftNext() {
 void SystemStateMachine::eventShiftNextGroup() {
     m_event.counter = -1;
     m_event.group++;
-    if (m_event.group >= 4) {
+    if (m_event.group >= 3) {
         m_event.hasCurrent = false;
         return;
     }
@@ -366,15 +366,17 @@ bool SystemStateMachine::callFunction(const QString& name, bool force, bool isEv
             }
             return false;
         }
+        // 组顺序（ecd/docs 规范 + eraTW 兼容）：#PRI → 普通 → #LATER。
+        // #ONLY 不是独立的一组，而是「该函数返回后终止整个事件调用」的标记
+        //（见 advanceEventCall）。同时带 #PRI 与 #LATER 的函数会被调用两次。
         EventCall ec;
         ec.active = true;
         ec.name = name;
-        ec.groups = QList<QList<LabelRef>>(4);
+        ec.groups = QList<QList<LabelRef>>(3);
         for (const LabelRef& r : events) {
-            if (r.isOnly) ec.groups[0].append(r);
-            if (r.isPri) ec.groups[1].append(r);
-            if (!r.isPri && !r.isLater) ec.groups[2].append(r);
-            if (r.isLater) ec.groups[3].append(r);
+            if (r.isPri) ec.groups[0].append(r);
+            if (!r.isPri && !r.isLater) ec.groups[1].append(r);
+            if (r.isLater) ec.groups[2].append(r);
         }
         ec.group = -1;
         ec.counter = -1;

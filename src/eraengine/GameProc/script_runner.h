@@ -23,6 +23,7 @@
 #include <QSet>
 #include <QList>
 #include <QSharedPointer>
+#include <functional>
 #include <memory>
 #include "process_state.h"
 #include "variable_storage.h"
@@ -83,6 +84,11 @@ public:
 
     // 系统状态机（BEGIN / CALLTRAIN / DOTRAIN / SAVEGAME 等指令需要它）
     void setSystemStateMachine(SystemStateMachine* machine) { m_machine = machine; }
+
+    // BINPUT/BINPUTS：当前是否已有可点击按钮（EE v31fix：无按钮时直接取缺省值，不等待）
+    void setButtonAvailableProvider(std::function<bool()> provider) {
+        m_buttonAvailable = std::move(provider);
+    }
 
 signals:
     void suspended(ExecState state);          // 挂起（等待输入等）
@@ -198,6 +204,7 @@ private:
     qint64 m_steps = 0;
     qint64 m_stepLimit = 0;   // 0 = 不限
     SystemStateMachine*  m_machine = nullptr;
+    std::function<bool()> m_buttonAvailable;   // BINPUT/BINPUTS 按钮判定
 
     QList<LoopFrame> m_loops;
     struct CallContext { int depth; int loops; QString function; VariableStorage::LocalContext locals; };

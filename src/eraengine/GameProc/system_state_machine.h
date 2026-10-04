@@ -214,7 +214,7 @@ private:
     struct EventCall {
         bool     active = false;
         QString  name;
-        QList<QList<LabelRef>> groups;   // [0]=#ONLY [1]=#PRI [2]=普通 [3]=#LATER
+        QList<QList<LabelRef>> groups;   // [0]=#PRI [1]=普通 [2]=#LATER（#ONLY 见 isOnly）
         int      group = 0;
         int      counter = -1;
         LabelRef current;

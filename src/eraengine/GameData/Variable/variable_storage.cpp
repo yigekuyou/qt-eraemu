@@ -415,7 +415,12 @@ void VariableStorage::resetGlobals()
 			QStringLiteral("TSTR"),     QStringLiteral("CSTR"),    QStringLiteral("SAVEDATA_TEXT"),
 		};
 		const auto isPreservedBuiltin = [&](const QString& k) {
-			return hasSystemVariable(k) || kPreservedBuiltinStrings.contains(eraUpperKey(k));
+			const QString up = eraUpperKey(k);
+			// CSV 名表（<VAR>NAME：ABLNAME/TALENTNAME/DAYNAME/…）是装载期由 CSV
+			// 建立的常量数据，不属于 GLOBAL/GLOBALS，RESETGLOBAL 不应清空
+			// （C# SetDefaultGlobalValue 只重置 GLOBAL/GLOBALS + 用户广域变量）。
+			if (up.endsWith(QLatin1String("NAME"))) return true;
+			return hasSystemVariable(k) || kPreservedBuiltinStrings.contains(up);
 		};
 		const auto purge = [&](auto& map) {
 			for (auto it = map.begin(); it != map.end(); ) {

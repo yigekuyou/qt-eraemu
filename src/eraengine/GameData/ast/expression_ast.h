@@ -190,12 +190,18 @@ public:
     [[nodiscard]] bool isUserFunction() const { return m_isUserFunction; }
     void setUserFunction(bool v) { m_isUserFunction = v; }
 
-    // ---- 内置函数（内部命令）----
-    [[nodiscard]] bool isBuiltin() const noexcept { return m_builtinIndex >= 0; }
+    // ---- 内置函数（内部命令）+ 扩展式中函数 ----
+    //   两者都「是函数、有返回类型」，但求值来源不同：内置走 kBuiltinFunctions，
+    //   扩展走注册类的回调（BuiltinOp::Extension）。isBuiltin() 覆盖两者，
+    //   求值分派据此进入 evaluateBuiltin。
+    [[nodiscard]] bool isBuiltin() const noexcept {
+        return m_builtinIndex >= 0 || m_extensionSpec != nullptr;
+    }
     [[nodiscard]] int  builtinIndex() const noexcept { return m_builtinIndex; }
     void setBuiltinIndex(int index) noexcept { m_builtinIndex = index; }
+    void setExtensionSpec(const BuiltinFunctionSpec* spec) noexcept { m_extensionSpec = spec; }
     [[nodiscard]] const BuiltinFunctionSpec* builtinSpec() const noexcept {
-        return m_builtinIndex >= 0 ? &kBuiltinFunctions[m_builtinIndex] : nullptr;
+        return m_builtinIndex >= 0 ? &kBuiltinFunctions[m_builtinIndex] : m_extensionSpec;
     }
     [[nodiscard]] BuiltinOp builtinOp() const noexcept {
         const BuiltinFunctionSpec* s = builtinSpec();
@@ -228,7 +234,8 @@ private:
     QList<bool> m_argOmitted;   // 该位实参是否写成空（见 markArgOmitted）
     OperandType m_type = OperandType::Int;   // 默认整数（C# 未标注时的宽松处理）
     bool m_isUserFunction = false;
-    int  m_builtinIndex = -1;                // kBuiltinFunctions 下标；-1 = 非内置
+    int  m_builtinIndex = -1;                // kBuiltinFunctions 下标；-1 = 非原生内置
+    const BuiltinFunctionSpec* m_extensionSpec = nullptr; // 扩展式中函数声明（运行期表）
     QString m_arityError;                    // 空串 = 参数校验通过
 };
 
@@ -247,6 +254,8 @@ struct FunctionResolution {
     bool     isBuiltin = false;
     bool     isUserFunction = false;
     int      builtinIndex = -1;
+    // 扩展式中函数（运行期注册表命中）时指向其声明；否则 nullptr。
+    const BuiltinFunctionSpec* extensionSpec = nullptr;
     OperandType returnType = OperandType::Unknown;
 };
 [[nodiscard]] FunctionResolution resolveFunctionCall(

@@ -81,7 +81,10 @@ ExecutionEngine::ExecutionEngine(VariableStorage* storage, GameBaseData* gameBas
         [this] {
             return m_gameDirectory.isEmpty()
                 ? QString() : m_gameDirectory + QStringLiteral("/sav");
-        }
+        },
+        nullptr,   // functionExists（EraEngine 装配后经 setExpressionServices 注入）
+        nullptr,   // doingFunction
+        nullptr    // displayLine
     });
 }
 
@@ -1900,6 +1903,27 @@ bool ExecutionEngine::handleStringAssignment(const QString& lhs, const QString& 
             }
         }
     }
+    // 右值是「单个函数调用」（`RESULTS:0 = GETDOINGFUNCTION()`）时按普通表达式
+    // 求值。C# 的字符串赋值右值本按格式化串解析（裸文本为字面量），但函数调用
+    // 形态不含 %..%/{..} 展开，按表达式求值才符合直觉，且测试规范（组28）要求。
+    if (!evaluated && m_parseTable && trimmed.endsWith(QLatin1Char(')'))
+        && !trimmed.contains(QLatin1Char('%'))
+        && !trimmed.contains(QLatin1Char('{')) && !trimmed.contains(QLatin1Char('}'))) {
+        const int paren = trimmed.indexOf(QLatin1Char('('));
+        bool identOnly = paren > 0;
+        for (int i = 0; identOnly && i < paren; ++i) {
+            const QChar c = trimmed.at(i);
+            if (!(c.isLetterOrNumber() || c == QLatin1Char('_') || c == QLatin1Char(':')))
+                identOnly = false;
+        }
+        if (identOnly) {
+            const QSharedPointer<ExpressionNode> exprAst = m_parseTable->expressionAst(trimmed);
+            if (exprAst && exprAst->kind() == NodeKind::Function) {
+                value = evaluator.evaluate(*exprAst, m_storage, m_gameBaseData).toString();
+                evaluated = true;
+            }
+        }
+    }
     if (!evaluated) {
         const QVariant rhsValue = ast ? evaluator.evaluate(*ast, m_storage, m_gameBaseData)
         : evalExpressionCached(m_parseTable, evaluator, rhs, m_storage, m_gameBaseData);
@@ -2300,6 +2324,9 @@ void ExecutionEngine::handleSaveData(const LogicalLine& line)
     if (parts.size() < 2) return;
     ExpressionEvaluator& ev = getEvaluator();
     const auto evalOp = [&](const Operand& op) -> QVariant {
+        // 整段引号字面量（如 SAVEDATA 40, "标题"）：raw 已是去引号后的文本，
+        // 且无 AST；若再当表达式求值会把中文标题当未定义标识符 -> 0。
+        if (op.isString) return QVariant(op.raw);
         return op.ast ? ev.evaluate(*op.ast, m_storage, m_gameBaseData)
                       : ev.evaluate(op.raw, m_storage, m_gameBaseData);
     };

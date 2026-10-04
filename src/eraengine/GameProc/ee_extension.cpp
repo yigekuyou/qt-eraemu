@@ -111,10 +111,52 @@ bool findVarData(const LogicalLine& line, const QList<Operand>& args,
 }  // namespace
 
 // ---------------------------------------------------------------------------
+// EE 式中函数（ee readme）—— 实现住扩展侧；引擎只提供 services()
+//
+//   EXISTFUNCTION("関数名"{, 大文字小文字無視})
+//       通常関数=1 / #FUNCTION=2 / #FUNCTIONS=3 / 未定義・システム組み込み=0
+//   GETDOINGFUNCTION()  -> 現在実行中の関数名（__FUNCTION__ と同義）
+//   GETDISPLAYLINE(<行番号>) -> 表示済み行の内容（0 起算、LINECOUNT は空）
+//
+// 三者都经注册类 regExpr() 登记：声明（返回类型/参数个数）注入运行期扩展函数表，
+// 求值经 ExpressionEvaluator 的扩展回调转回 ExtensionRegistry::runExpression。
+// ---------------------------------------------------------------------------
+static void registerEeExpressionFunctions(ExtensionRegistry& ext)
+{
+    ext.regExpr(QStringLiteral("EXISTFUNCTION"), OperandType::Int, 1, 2,
+        [&ext](const QList<QVariant>& a, const QList<const ExpressionNode*>&, QVariant& out) {
+            const ExtensionRegistry::Services& sv = ext.services();
+            const QString name = a.isEmpty() ? QString() : a.at(0).toString();
+            const bool caseInsensitive = a.size() >= 2 && a.at(1).toLongLong() != 0;
+            const int kind = sv.functionExists ? sv.functionExists(name, caseInsensitive) : 0;
+            out = QVariant::fromValue<qint64>(kind);
+            return true;
+        });
+
+    ext.regExpr(QStringLiteral("GETDOINGFUNCTION"), OperandType::Str, 0, 0,
+        [&ext](const QList<QVariant>&, const QList<const ExpressionNode*>&, QVariant& out) {
+            const ExtensionRegistry::Services& sv = ext.services();
+            out = sv.doingFunction ? sv.doingFunction() : QString();
+            return true;
+        });
+
+    ext.regExpr(QStringLiteral("GETDISPLAYLINE"), OperandType::Str, 1, 1,
+        [&ext](const QList<QVariant>& a, const QList<const ExpressionNode*>&, QVariant& out) {
+            const ExtensionRegistry::Services& sv = ext.services();
+            const int lineNo = a.isEmpty() ? 0 : static_cast<int>(a.at(0).toLongLong());
+            out = sv.displayLine ? sv.displayLine(lineNo) : QString();
+            return true;
+        });
+}
+
+// ---------------------------------------------------------------------------
 // EE 扩展登记（注册类构造时一次调用；默认全启用）
 // ---------------------------------------------------------------------------
 void registerEeExtensions(ExtensionRegistry& ext)
 {
+    // 式中函数（实现住本文件；见上）
+    registerEeExpressionFunctions(ext);
+
     // ---- EE 存档系：真实现（reg 带实现的重载；经注册类 services() 取用）----
     // 实现是三参函数（line, args, ext）——经 lambda 绑定注册类实例
     // （注册类与 lambda 同生命周期：lambda 存在注册类自己的表里）。
@@ -142,7 +184,6 @@ void registerEeExtensions(ExtensionRegistry& ext)
         QStringLiteral("COLUMNPRINTW"),
         QStringLiteral("COLUMNRESIZE"),
         QStringLiteral("COLUMNWAIT"),
-        QStringLiteral("EXISTFUNCTION"),
         QStringLiteral("EXISTSOUND"),
         QStringLiteral("FLOWINPUT"),
         QStringLiteral("FORCE_BEGIN"),
@@ -154,8 +195,6 @@ void registerEeExtensions(ExtensionRegistry& ext)
         QStringLiteral("GDRAWGWITHROTATE"),
         QStringLiteral("GDRAWLINE"),
         QStringLiteral("GDRAWTEXT"),
-        QStringLiteral("GETDISPLAYLINE"),
-        QStringLiteral("GETDOINGFUNCTION"),
         QStringLiteral("GETMEMORYUSAGE"),
         QStringLiteral("GETTEXTBOX"),
         QStringLiteral("GETTEXTSIZE"),

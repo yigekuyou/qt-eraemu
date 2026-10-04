@@ -72,6 +72,10 @@ EraEngine::EraEngine(QObject *parent)
 		m_systemStateMachine.setScriptRunner(&m_scriptRunner);
         m_systemStateMachine.setPacingEnabled(true);
 		m_scriptRunner.setSystemStateMachine(&m_systemStateMachine);
+		// BINPUT/BINPUTS：无按钮时直接取缺省值（EE v31fix）
+		m_scriptRunner.setButtonAvailableProvider([this]() -> bool {
+			return m_console.hasEnabledButton();
+		});
 		// 实时/限时输入：AWAIT / INPUTMOUSEKEY 超时 / TONEINPUT 超时 用 QTimer 驱动
 		m_systemStateMachine.setTimer([this](int ms, std::function<void()> cb) {
 			QTimer::singleShot(ms, this, [cb]() { cb(); });
@@ -165,6 +169,29 @@ EraEngine::EraEngine(QObject *parent)
 		m_expressionEvaluator.setLineStrProvider([this](int lineNo) -> QString {
 			return m_console.lineText(lineNo);
 		});
+		// 扩展注册类（EE 等）的式中函数：实现住扩展侧（ee_extension.cpp）。
+		// 引擎只提供「服务」（函数存在性 / 当前函数名 / 显示行）与「求值回调」——
+		// 原生归原生、扩展归扩展，引擎不内联任何扩展名/实现。
+		m_executionEngine.extensions().setExpressionServices(
+			[this](const QString& name, bool caseInsensitive) -> int {
+				return m_parseTable.functionExistsKind(name, caseInsensitive);
+			},
+			[this]() -> QString {
+				// 当前执行中的函数名：调用帧栈顶的 callLabel（EE：__FUNCTION__ 同义）。
+				// 深度 0（入口函数直接执行）时回退到入口标签。
+				const Frame frame = m_parseTable.currentFrame();
+				if (!frame.callLabel.isEmpty()) return frame.callLabel;
+				return m_parseTable.getEntryPoint();
+			},
+			[this](int lineNo) -> QString {
+				return m_console.displayLineText(lineNo);
+			});
+		// BuiltinOp::Extension 的节点按名字转回注册类的 runExpression。
+		m_expressionEvaluator.setExtensionFunctionInvoker(
+			[this](const QString& name, const QList<QVariant>& args,
+			       const QList<const ExpressionNode*>& argNodes, QVariant& out) -> bool {
+				return m_executionEngine.extensions().runExpression(name, args, argNodes, out);
+			});
 		m_expressionEvaluator.setHtmlPrintedProvider(
 			[this](int lineNo) -> QString { return m_console.htmlPrintedStr(lineNo); },
 			[this]() -> QString { return m_console.htmlPopPrintingStr(); });

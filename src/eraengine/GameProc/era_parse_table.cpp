@@ -216,6 +216,22 @@ const UserFunctionInfo* EraParseTable::userFunction(const QString& name) const {
     return it == m_functions.constEnd() ? nullptr : &it.value();
 }
 
+int EraParseTable::functionExistsKind(const QString& name, bool caseInsensitive) const {
+    const auto kindOf = [](const UserFunctionInfo& fn) -> int {
+        if (!fn.isMethod) return 1;                       // 通常関数
+        return fn.returnType == OperandType::Str ? 3 : 2; // #FUNCTIONS / #FUNCTION
+    };
+    if (caseInsensitive) {
+        if (const UserFunctionInfo* fn = userFunction(name)) return kindOf(*fn);
+        return 0;
+    }
+    // 大小写敏感：按声明处原始名精确匹配（原版 EmueraEE 第二参为 0 时的默认行为）
+    for (auto it = m_functions.constBegin(); it != m_functions.constEnd(); ++it) {
+        if (it.value().originalName == name) return kindOf(it.value());
+    }
+    return 0;
+}
+
 QList<LabelRef> EraParseTable::labels(const QString& name) const {
     QList<LabelRef> out = m_labelLists.value(name.toUpper());
     // 并行装载时插入顺序不确定；固定按 (脚本名, 行号) 排序，保证事件导航可复现
@@ -349,6 +365,7 @@ bool EraParseTable::loadScript(const QString& scriptName, const QList<LogicalLin
             if (line.kind == LineKind::FunctionLabel) {
                 UserFunctionDecl decl;
                 decl.name = line.labelName.toUpper();
+                decl.originalName = line.labelName;
                 decl.script = scriptName;
                 decl.labelLine = i;
 
@@ -1475,6 +1492,7 @@ void EraParseTable::resolveFunctionNodes() {
         auto& fn = static_cast<FunctionNode&>(node);
         fn.setUserFunction(false);
         fn.setBuiltinIndex(-1);
+        fn.setExtensionSpec(nullptr);
 
         const FunctionResolution res = resolveFunctionCall(fn.name(), userType);
         if (res.isUserFunction) {
@@ -1493,9 +1511,12 @@ void EraParseTable::resolveFunctionNodes() {
                 fn.setArityError(QString());
             }
         } else if (res.isBuiltin) {
-            fn.setBuiltinIndex(res.builtinIndex);
+            if (res.extensionSpec) fn.setExtensionSpec(res.extensionSpec);
+            else fn.setBuiltinIndex(res.builtinIndex);
             fn.setValueType(res.returnType);
-            fn.setArityError(validateBuiltinCall(kBuiltinFunctions[res.builtinIndex], fn.arguments()));
+            if (const BuiltinFunctionSpec* spec = fn.builtinSpec()) {
+                fn.setArityError(validateBuiltinCall(*spec, fn.arguments()));
+            }
         } else if (const UserFunctionDecl* decl = userFunction(fn.name().toUpper())) {
             // 有同名 @label 但既非内置也无 #FUNCTION：按宽容语义当作返回 Int 的用户函数
             // （eraTW 大量如此使用，实际可运行），但仍按声明的形参类型做校验。

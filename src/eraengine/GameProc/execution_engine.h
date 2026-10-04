@@ -146,7 +146,8 @@ public:
     // ---- 扩展注册类（扩展函数唯一入口；复杂度由注册类承担）----
     // 注册 API 在 ExtensionRegistry（不再挂引擎）：
     //   · reg(name) / reg(name, 实现)（C++ 重载：参数不同 -> 不同重载）/
-    //     regForm(name)（实参形态 = StrForm，注册类插入 AST）；
+    //     regForm(name)（实参形态 = StrForm，注册类插入 AST）/
+    //     regExpr(name, ret, minArgs, maxArgs, 实现)（式中函数）；
     //   · 扩展只调注册类的函数就能实现扩展函数（EE 扩展 = ee_extension.h
     //     单独一个头文件，只在注册类里被实现 —— 其他位置不得放置 EE 头文件，
     //     注册类构造时一次登记，默认全启用）；
@@ -154,6 +155,10 @@ public:
     //     统一「留痕跳过」桩 —— 全部由注册类内部承担；
     //   · 分发优先级（固定，由结构决定）：① 核心专用分支（本类内联）->
     //     ② 扩展注册类查表 -> ③ 通用路径（表达式求值 -> kBuiltinFunctions 表）。
+
+    // 扩展注册类实例（EraEngine 装配期用它注入「式中函数」服务 + 挂求值回调；
+    // 分发时查表）。
+    [[nodiscard]] ExtensionRegistry& extensions() { return m_extensions; }
 
 private:
     // 扩展注册类实例（构造时由注册类装入 EE 扩展 + SPLIT 实现；分发时查表）

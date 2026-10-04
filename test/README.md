@@ -55,8 +55,42 @@ cmake --build build --target test_cli
 | 12 | `BEGIN`（破坏性：切换流程、不返回） |
 | 13 | `THROW`（破坏性：主动报错终止，**预期**「执行出错」） |
 | 14 | 剩余命令（`TRYGOTO`/`JUMPFORM`/`TRYCJUMPFORM`/`PRINT_RECT`/`ADDDEFCHARA`/`CALLEVENT`…） |
+| 27 | **文档语义·表达式/字面量/声明**（`example/ERB/TEST_HEADER.ERH` + `27_DOC_EXPR.ERB`，ecd/docs 规范 + C# 语义） |
+| 28 | **文档语义·SELECTCASE/循环/EE 与 eraTW 惯用法**（`28_DOC_FLOW.ERB`） |
+| 29 | **文档语义·BEGIN FIRST 事件函数流** `#PRI/#LATER/#SINGLE/#ONLY`（破坏性·单独跑，`29_DOC_EVENT.ERB`） |
 
 组 11/12/13 不在「全部自动运行」路径里：11 需要外部喂输入，12/13 会中断或改流程。
+组 27/28 已纳入「全部自动运行」；29 为破坏性单跑组（`./test/run_example.sh 29`）。
+
+## 文档语义测试（组 27–29）
+
+组 27–29 的用例**全部推导自 ecd/docs 规范文档与 C# 权威源码 / eraTW 自带
+EmueraEE·私家改造版 readme**，不参考本移植实现：
+
+* 组 27：`ecd/docs/reference`（表达式/语句/结构/变量/版本索引）、`spec/EraBasic`、
+  Emuera C#（`OperatorCode`/`CreateBar`/`EraStreamReader`/`ErbLoader` 等）。
+  覆盖：进制字面量、`^^`/`!&`/`!|`、字符串重复 `\@…\@` 三元、FORM 对齐、
+  `__INT_MAX__` 系常量、`;!;` 行、行连接 `{}`、ERH 宏与广域/全局变量、
+  `#LOCALSIZE`、LOCAL 静态保留、参数初始值、REF 引用传参、`'=`、
+  BARSTR/GETTIME/GETEXPLV/POWER/RESET_STAIN/SAVEDATA_TEXT、
+  STRJOIN/ARRAYREMOVE（v18 语义）、UNICODE 控制码（v18 语义）。
+* 组 28：eraTW ERB 惯用法（CASE 多值+区间、SIF…RETURNF 链、TRYCCALLFORM、
+  CSV 名下标、`#DIMS` 初始化列表、全角名变量）+ EE readme（EXISTFUNCTION、
+  TRYCALLFORMF、EXISTSOUND、GETDISPLAYLINE、GETDOINGFUNCTION、BINPUT 缺省值）。
+  新增 `example/CSV/DAY.csv` 验证 DAYNAME。
+* 组 29：`ecd/docs「ERB 的内置流程」`——BEGIN FIRST 触发 @EVENTFIRST、
+  PRI→普通→LATER 顺序、#SINGLE 返回 1 跳过本组、#ONLY 终止事件。
+
+这些断言是「规范行为」的编码：**当前仍有部分失败，即移植与规范之间的已知差距**，
+修复移植后应全部转绿。已确认的差距（2026-10）：ERH `#DEFINE` 宏未展开、
+`#DIM GLOBAL` 不随 SAVEGLOBAL 持久化、`__INT_MAX__`/`EMUERA_VERSION` 等系
+统常量缺失、`BEGIN FIRST` 未调用 @EVENTFIRST 而是回标题、EXISTFUNCTION/
+GETDOINGFUNCTION/GETDISPLAYLINE/DAYNAME 未实现、参数初始值省略实参时未生效
+（读到陈旧 ARG）、CURRENTALIGN 返回数值而非 LEFT/CENTER/RIGHT、
+GETTIME 返回值格式、GETEXPLV/GETPALAMLV 阈值边界、`;!;` 行被当注释、
+SAVEDATA 不写 SAVEDATA_TEXT、RESET_STAIN 无效、ARRAYREMOVE 第三参 0 不删到
+末尾、STRJOIN 区间参数语义、`3*"AB"` 整数在左不重复、CALL 参数中带引号串接、
+BINPUT 无按钮不取缺省值、UNICODE 控制码未按 v18 返回空串。
 
 ## 关于「自动输入」
 

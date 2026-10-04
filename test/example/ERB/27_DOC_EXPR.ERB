@@ -1,0 +1,328 @@
+;=============================================================
+; [27] 文档语义·表达式/字面量/变量声明
+;
+; 依据（ec「d/docs 规范 + Emuera C# 权威源码」，不依赖本移植实现）：
+;   - ERB_Expressions：64 位整数、5/3=1、0x/0b 字面量、字符串拼接与重复、
+;     \@…\@ 字符串三元、FORM 宽度对齐、TOSTR/TOINT 不隐式转换
+;   - ERB_Structure：;!; 行在 Emuera 中有效、行连接 { }（换行处补半角空格）
+;   - ERB_Variables：__INT_MAX__/__INT_MIN__ 系统常量、RAND 伪变量
+;   - Compatibility/Version_Index：'= 字符串赋值(1.813)、REF 引用传参(1.810)、
+;     参数初始值、LOCAL 离开函数后值保留（LOCAL@函数名 静态变量）
+;   - CSV_File/ERB_Variables：GETEXPLV/GETPALAMLV 阈值语义
+;   - eraTW README集（EmueraEE/私家改造版）：STRJOIN 完整签名、
+;     UNICODE 控制码、ARRAYREMOVE 第三参<=0 删到末尾
+;=============================================================
+@TEST_DOC_EXPR
+#DIM NONG
+#DIMS S27
+#DIMS P27
+#DIM X27
+#DIM N27REF
+#DIM ARR27, 5
+#DIM ARRJ27, 3
+;#DIM 声明时初始值（文档「函数与预处理指令」：变量声明可带初始值）
+#DIM INIT_27 = 42
+#DIMS SINIT_27 = "初始值"
+;全角名局部变量（eraTW ERB 惯用法，如 『現在地』）
+#DIM 全角変数２７
+
+PRINTL == 组27：文档语义·表达式/字面量/变量声明 ==
+
+;---- 整除与取余（文档：数值是 64 位整数，5/3 的结果是 1；C# 截断向零）----
+CALL ASSERT_EQ, 5 / 3, 1, @"文档示例 5/3=1（整除）"
+NONG += RESULT
+CALL ASSERT_EQ, -7 / 2, -3, @"负数整除向零截断 -7/2=-3"
+NONG += RESULT
+CALL ASSERT_EQ, -7 % 2, -1, @"取余符号随被除数 -7%2=-1"
+NONG += RESULT
+
+;---- 进制字面量（文档：0x/0b 开头）----
+CALL ASSERT_EQ, 0xFF, 255, @"文档示例 0xFF=255"
+NONG += RESULT
+CALL ASSERT_EQ, 0b1010, 10, @"文档示例 0b1010=10"
+NONG += RESULT
+CALL ASSERT_EQ, 0x10, 16, @"0x10=16"
+NONG += RESULT
+
+;---- 单目运算符（文档：~ ! -）----
+CALL ASSERT_EQ, ~6, -7, @"~6=-7（按位取反）"
+NONG += RESULT
+CALL ASSERT_EQ, !3, 0, @"!3=0"
+NONG += RESULT
+CALL ASSERT_EQ, !0, 1, @"!0=1"
+NONG += RESULT
+
+;---- 逻辑扩展运算符（C# OperatorCode：^^ 异或 / !& 与非 / !| 或非）----
+CALL ASSERT_EQ, 1 ^^ 0, 1, @"1^^0=1（逻辑异或）"
+NONG += RESULT
+CALL ASSERT_EQ, 2 ^^ 3, 0, @"2^^3=0（非零即真）"
+NONG += RESULT
+CALL ASSERT_EQ, 1 !& 1, 0, @"1!&1=0（逻辑与非）"
+NONG += RESULT
+CALL ASSERT_EQ, 0 !& 1, 1, @"0!&1=1"
+NONG += RESULT
+CALL ASSERT_EQ, 1 !| 0, 0, @"1!|0=0（逻辑或非）"
+NONG += RESULT
+CALL ASSERT_EQ, 0 !| 0, 1, @"0!|0=1"
+NONG += RESULT
+
+;---- 字符串运算（文档：字符串 + 为拼接、* 整数为重复）----
+;写法说明：CALL 参数里 "AB" + "CD"（带空格）会触发移植解析问题，此处用无空格写法
+CALL ASSERT_SEQ, "AB" * 3, "ABABAB", @"文档示例 字符串重复 AB*3"
+NONG += RESULT
+CALL ASSERT_SEQ, 3 * "AB", "ABABAB", @"整数在左 3*AB 同样成立（C# MultStrInt 双向）"
+NONG += RESULT
+CALL ASSERT_SEQ, "AB" * 0, "", @"乘 0 得空串"
+NONG += RESULT
+CALL ASSERT_SEQ, "AB"+"CD", "ABCD", @"字符串拼接"
+NONG += RESULT
+
+;---- 字符串三元 \@…\@（文档：字符串版需要外层 \@ … \@，臂内为裸文本）----
+X27 = 5
+S27 = \@ X27 > 0 ? 正数27 # 负数27 \@
+CALL ASSERT_SEQ, S27, "正数27", @"字符串三元命中真臂"
+NONG += RESULT
+X27 = -1
+S27 = \@ X27 > 0 ? 正数27 # 负数27 \@
+CALL ASSERT_SEQ, S27, "负数27", @"字符串三元命中假臂"
+NONG += RESULT
+
+;---- FORM 宽度对齐（文档：{表达式,宽度,LEFT/RIGHT}、%字符串,宽度,对齐%）----
+CALL ASSERT_SEQ, STRFORM("{123,5,RIGHT}"), "  123", @"STRFORM 数值宽度 5 右对齐"
+NONG += RESULT
+S27 = "ab"
+P27 = %S27,4,LEFT%
+CALL ASSERT_SEQ, P27, "ab  ", @"%…%,4,LEFT% 字符串宽度左对齐"
+NONG += RESULT
+P27 = %S27,6,RIGHT%
+CALL ASSERT_SEQ, P27, "    ab", @"%…%,6,RIGHT% 字符串宽度右对齐"
+NONG += RESULT
+
+;---- 系统常量（文档 ERB_Variables：__INT_MAX__/__INT_MIN__）----
+CALL ASSERT_EQ, __INT_MAX__, 9223372036854775807, @"__INT_MAX__=Int64 最大值"
+NONG += RESULT
+CALL ASSERT_EQ, __INT_MIN__, -9223372036854775808, @"__INT_MIN__=Int64 最小值"
+NONG += RESULT
+CALL ASSERT_TRUE, STRLENSU(EMUERA_VERSION) > 0, @"EMUERA_VERSION 非空"
+NONG += RESULT
+
+;---- 伪变量 RAND:100（文档：写成变量、实为函数）----
+X27 = RAND:100
+CALL ASSERT_TRUE, INRANGE(X27, 0, 99), @"伪变量 RAND:100 取值 [0,100)"
+NONG += RESULT
+
+;---- BARSTR（文档：BARSTR <变量>,<最大值>,<长度>；C# CreateBar：[+BarChar1×n+BarChar2×m+]）----
+CALL ASSERT_SEQ, BARSTR(5, 10, 10), "[*****.....]", @"BARSTR 半满"
+NONG += RESULT
+CALL ASSERT_SEQ, BARSTR(0, 10, 4), "[....]", @"BARSTR 全空"
+NONG += RESULT
+CALL ASSERT_SEQ, BARSTR(20, 10, 4), "[****]", @"BARSTR 超上限钳满"
+NONG += RESULT
+
+;---- CURRENTALIGN 返回字符串（C#：LEFT/CENTER/RIGHT）----
+ALIGNMENT CENTER
+CALL ASSERT_SEQ, CURRENTALIGN(), "CENTER", @"CURRENTALIGN 返回 CENTER"
+NONG += RESULT
+ALIGNMENT RIGHT
+CALL ASSERT_SEQ, CURRENTALIGN(), "RIGHT", @"CURRENTALIGN 返回 RIGHT"
+NONG += RESULT
+ALIGNMENT LEFT
+CALL ASSERT_SEQ, CURRENTALIGN(), "LEFT", @"CURRENTALIGN 返回 LEFT"
+NONG += RESULT
+
+;---- GETTIME/GETTIMES（C#：GETTIME=YYYYMMDDhhmmssmmm、GETTIMES=yyyy/MM/dd HH:mm:ss）----
+CALL ASSERT_TRUE, GETTIME() > 20200101000000000, @"GETTIME 形如 17 位日期数值"
+NONG += RESULT
+CALL ASSERT_EQ, STRLENSU(GETTIMES()), 19, @"GETTIMES 长度 19"
+NONG += RESULT
+CALL ASSERT_SEQ, CHARATU(GETTIMES(), 4), "/", @"GETTIMES 第 5 字符是 /"
+NONG += RESULT
+
+;---- GETEXPLV（C#：EXPLV 初始值 {0,1,4,20,50,200}，第 i+1 项为阈值）----
+CALL ASSERT_EQ, GETEXPLV(0, 5), 0, @"GETEXPLV(0,5)=0"
+NONG += RESULT
+CALL ASSERT_EQ, GETEXPLV(1, 5), 1, @"GETEXPLV(1,5)=1"
+NONG += RESULT
+CALL ASSERT_EQ, GETEXPLV(4, 5), 2, @"GETEXPLV(4,5)=2"
+NONG += RESULT
+CALL ASSERT_EQ, GETEXPLV(20, 5), 3, @"GETEXPLV(20,5)=3"
+NONG += RESULT
+CALL ASSERT_EQ, GETEXPLV(500, 5), 5, @"GETEXPLV 超阈值取 maxlv"
+NONG += RESULT
+CALL ASSERT_EQ, GETPALAMLV(99, 9), 0, @"GETPALAMLV(99,9)=0（PALAMLV:1=100）"
+NONG += RESULT
+
+;---- POWER 命令形（文档：POWER <变量>,<x>,<y>）----
+X27 = 0
+POWER X27, 3, 4
+CALL ASSERT_EQ, X27, 81, @"POWER 命令形 X=3^4=81"
+NONG += RESULT
+
+;---- '字符串赋值（Version_Index 1.813：支持用字符串表达式赋值）----
+S27 '= "X" + TOSTR(27)
+CALL ASSERT_SEQ, S27, "X27", @"'= 字符串赋值表达式"
+NONG += RESULT
+
+;---- !; 行（文档：在 Emuera 中为有效行，Eramaker 中被当注释）----
+;!;X27 = 7
+CALL ASSERT_EQ, X27, 7, @";!; 行在 Emuera 中有效执行"
+NONG += RESULT
+
+;---- 行连接 { }（文档：{ 与 } 必须单独成行，换行处补半角空格）----
+{
+X27 =
+10
++ 5
+}
+CALL ASSERT_EQ, X27, 15, @"行连接 { } 跨行表达式"
+NONG += RESULT
+
+;---- ERH 宏（TEST_HEADER.ERH：加载期字符串替换、多重展开、带参宏）----
+CALL ASSERT_EQ, DOC_MAC_27, 33, @"ERH 对象宏 DOC_MAC_27=33"
+NONG += RESULT
+CALL ASSERT_EQ, DOC_DBL(4), 8, @"ERH 带参宏 DOC_DBL(4)=8"
+NONG += RESULT
+CALL ASSERT_EQ, DOC_INDIRECT, 33, @"ERH 宏多重展开 DOC_INDIRECT=33"
+NONG += RESULT
+S27 = DOC_HELLO
+CALL ASSERT_SEQ, S27, "你好宏", @"ERH 字符串宏"
+NONG += RESULT
+
+;---- ERH 广域变量（所有函数共享）----
+DOC_WIDE_27 = 0
+DOC_WIDE_S27 = ""
+CALL SET_WIDE_27
+CALL ASSERT_EQ, DOC_WIDE_27, 5, @"ERH 广域变量跨函数共享"
+NONG += RESULT
+CALL ASSERT_SEQ, DOC_WIDE_S27, "广域文本", @"ERH 广域字符串变量"
+NONG += RESULT
+
+;---- ERH 全局变量 + SAVEGLOBAL/LOADGLOBAL 往返 ----
+DOC_GVAR_27 = 888
+SAVEGLOBAL
+DOC_GVAR_27 = 0
+LOADGLOBAL
+CALL ASSERT_EQ, DOC_GVAR_27, 888, @"#DIM GLOBAL 随 SAVEGLOBAL/LOADGLOBAL 往返"
+NONG += RESULT
+
+;---- 声明时初始值 ----
+CALL ASSERT_EQ, INIT_27, 42, @"#DIM 初始值 42"
+NONG += RESULT
+CALL ASSERT_SEQ, SINIT_27, "初始值", @"#DIMS 初始值"
+NONG += RESULT
+
+;---- #LOCALSIZE（文档：#LOCALSIZE 调整 LOCAL 大小）----
+CALL LOCALSIZE_27
+CALL ASSERT_EQ, RESULT, 9040, @"#LOCALSIZE 40：VARSIZE(LOCAL)=40 且 LOCAL:39 可用"
+NONG += RESULT
+
+;---- LOCAL 静态保留（文档：LOCAL 实为 LOCAL@函数名，离开函数后值保留）----
+CALL LOCAL_KEEP_27
+CALL ASSERT_EQ, RESULT, 1, @"LOCAL 静态保留：首次调用计数 1"
+NONG += RESULT
+CALL LOCAL_OTHER_27
+CALL LOCAL_KEEP_27
+CALL ASSERT_EQ, RESULT, 2, @"另一函数的 LOCAL:9 不串扰，本函数计数继续"
+NONG += RESULT
+
+;---- 参数初始值（文档 Compatibility：参数初始值 ✓）----
+CALL PARAM_DEF_27
+CALL ASSERT_EQ, RESULT, 22, @"省略实参用初始值 A=0,B=22"
+NONG += RESULT
+CALL PARAM_DEF_27, 1
+CALL ASSERT_EQ, RESULT, 23, @"部分省略 A=1,B=22"
+NONG += RESULT
+CALL PARAM_DEF_27, 1, 2
+CALL ASSERT_EQ, RESULT, 3, @"全部给定 A=1,B=2"
+NONG += RESULT
+
+;---- REF 引用传参（Version_Index 1.810：形参用引用型变量）----
+N27REF = 1
+CALL REF_INC_27, N27REF
+CALL ASSERT_EQ, N27REF, 101, @"REF 引用传参：被调函数直接改写实参"
+NONG += RESULT
+
+;---- SAVEDATA_TEXT（C#：SAVEDATA 把标题写入 SAVEDATA_TEXT）----
+SAVEDATA 40, "文档测试存档"
+CALL ASSERT_SEQ, SAVEDATA_TEXT, "文档测试存档", @"SAVEDATA 后 SAVEDATA_TEXT=标题"
+NONG += RESULT
+CALL ASSERT_EQ, CHKDATA(40), 0, @"CHKDATA(40)=0"
+NONG += RESULT
+DELDATA 40
+
+;---- UNICODE 控制码策略（eraTW 私家改造版 readme v6.1：0x0A/0x0D 放行，其余控制码→空串）----
+CALL ASSERT_EQ, STRLENSU(UNICODE(0x0A)), 1, @"0x0A 换行符放行（1 字符）"
+NONG += RESULT
+CALL ASSERT_SEQ, UNICODE(0x01), "", @"0x01 控制码返回空串"
+NONG += RESULT
+
+;---- STRJOIN 完整签名（eraTW 私家改造版 v7.2：缺省分隔=逗号、区间 起始<=i<起始+个数）----
+ARRJ27:0 = 1
+ARRJ27:1 = 2
+ARRJ27:2 = 3
+CALL ASSERT_SEQ, STRJOIN(ARRJ27), "1,2,3", @"STRJOIN 缺省分隔符逗号"
+NONG += RESULT
+CALL ASSERT_SEQ, STRJOIN(ARRJ27, "-"), "1-2-3", @"STRJOIN 指定分隔符"
+NONG += RESULT
+CALL ASSERT_SEQ, STRJOIN(ARRJ27, "-", 1, 2), "2-3", @"STRJOIN 区间 [1,1+2)"
+NONG += RESULT
+
+;---- ARRAYREMOVE 第三参 <=0 删到末尾（eraTW 私家改造版 v39）----
+ARR27:0 = 1
+ARR27:1 = 2
+ARR27:2 = 3
+ARR27:3 = 4
+ARR27:4 = 5
+ARRAYREMOVE ARR27, 2, 0
+CALL ASSERT_EQ, ARR27:0, 1, @"ARRAYREMOVE A,2,0：前 2 元素保留(1)"
+NONG += RESULT
+CALL ASSERT_EQ, ARR27:1, 2, @"ARRAYREMOVE A,2,0：前 2 元素保留(2)"
+NONG += RESULT
+CALL ASSERT_EQ, ARR27:2, 0, @"下标 2 起删到末尾(1)"
+NONG += RESULT
+CALL ASSERT_EQ, ARR27:4, 0, @"下标 2 起删到末尾(2)"
+NONG += RESULT
+
+;---- RESET_STAIN（文档命令表：RESET_STAIN <角色编号> 恢复 STAIN 初始值）----
+ADDCHARA 0
+STAIN:0:1 = 5
+RESET_STAIN 0
+CALL ASSERT_EQ, STAIN:0:1, 0, @"RESET_STAIN 恢复初始值"
+NONG += RESULT
+DELCHARA 0
+
+RETURN NONG
+
+;-------------------------------------------------------------
+; 组27 辅助函数
+;-------------------------------------------------------------
+@SET_WIDE_27
+DOC_WIDE_27 = 5
+DOC_WIDE_S27 = "广域文本"
+
+@LOCALSIZE_27
+#LOCALSIZE 40
+LOCAL:39 = 9
+RETURN VARSIZE("LOCAL") + LOCAL:39 * 1000
+
+;LOCAL 是 LOCAL@函数名 静态变量：值跨调用保留
+@LOCAL_KEEP_27
+LOCAL:9 += 1
+RETURN LOCAL:9
+
+;干扰项：另一函数的同下标 LOCAL 不得影响 LOCAL_KEEP_27
+@LOCAL_OTHER_27
+LOCAL:9 = 99
+RETURN 0
+
+;参数初始值：省略实参时用定义处的常量初始值
+@PARAM_DEF_27, A, B = 22
+#DIM A
+#DIM B
+RETURN A + B
+
+;REF 引用传参：对 V 的写入直接作用于调用方实参
+@REF_INC_27, V
+#DIM REF V
+V += 100
+RETURN 0

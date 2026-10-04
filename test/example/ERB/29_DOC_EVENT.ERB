@@ -1,0 +1,77 @@
+;=============================================================
+; [29] 文档语义·BEGIN FIRST 事件函数流（破坏性：单独跑）
+;
+; 依据（ecd/docs「ERB 的内置流程」+ Compatibility/Version_Index）：
+;   - 同名事件函数全部会被调用；#PRI 组先于普通组、普通组先于 #LATER 组；
+;   - #SINGLE：返回值仅为 1 时跳过本组剩余同名函数（1.752 修正「非 0」为「1」，
+;     1.756 修正为按 PRI/LATER 组跳过）；
+;   - #ONLY：该函数返回后终止整个事件调用；
+;   - BEGIN FIRST 时引擎自动调用 @EVENTFIRST，且 BEGIN 不返回原函数。
+;
+; 观察：FLAG:900..905 为命中标记，FLAG:911 为执行顺序编码（10 进制拼接）。
+; 断言与汇总在最后一个（#ONLY）函数内完成并 QUIT。
+;=============================================================
+@TEST_DOC_EVENT
+DRAWLINE
+PRINTL == 组29：BEGIN FIRST 事件函数流（#PRI/#LATER/#SINGLE/#ONLY）==
+PRINTL 即将 BEGIN FIRST，观察 @EVENTFIRST 家族的执行顺序与 #SINGLE/#ONLY 中断
+DRAWLINE
+BEGIN FIRST
+;BEGIN 不返回：以下不应执行
+PRINTL ★不应出现在这里★
+
+;---- PRI 组：E1 执行 -> E2(#SINGLE) 执行并返回 1 -> E3 被跳过 ----
+@EVENTFIRST
+#PRI
+FLAG:900 += 1
+FLAG:911 = FLAG:911 * 10 + 1
+
+@EVENTFIRST
+#PRI
+#SINGLE
+FLAG:901 += 1
+FLAG:911 = FLAG:911 * 10 + 2
+RETURN 1
+
+@EVENTFIRST
+#PRI
+FLAG:902 += 1
+FLAG:911 = FLAG:911 * 10 + 3
+
+;---- 普通组：E4 执行 ----
+@EVENTFIRST
+FLAG:903 += 1
+FLAG:911 = FLAG:911 * 10 + 4
+
+;---- LATER 组：E5 执行 -> E6(#ONLY) 执行后终止整个事件 ----
+@EVENTFIRST
+#LATER
+FLAG:904 += 1
+FLAG:911 = FLAG:911 * 10 + 5
+
+@EVENTFIRST
+#LATER
+#ONLY
+FLAG:905 += 1
+FLAG:911 = FLAG:911 * 10 + 6
+CALL EVENT_ASSERT_29
+QUIT
+
+@EVENT_ASSERT_29
+#DIM NONG
+PRINTL == 组29 断言 ==
+CALL ASSERT_EQ, FLAG:900, 1, @"#PRI 组第 1 个执行"
+NONG += RESULT
+CALL ASSERT_EQ, FLAG:901, 1, @"#SINGLE 函数本身执行并返回 1"
+NONG += RESULT
+CALL ASSERT_EQ, FLAG:902, 0, @"#SINGLE 返回 1 后跳过本组剩余同名函数"
+NONG += RESULT
+CALL ASSERT_EQ, FLAG:903, 1, @"普通组执行"
+NONG += RESULT
+CALL ASSERT_EQ, FLAG:904, 1, @"#LATER 组执行"
+NONG += RESULT
+CALL ASSERT_EQ, FLAG:905, 1, @"#ONLY 函数本身执行"
+NONG += RESULT
+CALL ASSERT_EQ, FLAG:911, 12456, @"执行顺序编码 1,2,4,5,6（PRI→普通→LATER）"
+NONG += RESULT
+CALL TEST_SUMMARY, NONG

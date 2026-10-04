@@ -1,0 +1,27 @@
+;=============================================================
+; ERH 头文件 —— ecd/docs「ERB 文件结构」规范示例
+;
+; 文档依据（reference/ERB_Structure.html、reference/ERB_Variables.html、
+; spec EraBasic「导入系统」）：
+;   - 头文件仅允许 #DIM / #DIMS / #DEFINE，不得包含其它内容；
+;   - #DIM/#DIMS 定义广域变量（所有函数共享）；
+;   - #DIM GLOBAL 定义全局变量（跨存档共享，随 SAVEGLOBAL/LOADGLOBAL 往返）；
+;   - #DEFINE 宏在 ERB 加载时按字符串替换，支持多重展开与带参宏。
+;=============================================================
+
+;---- #DEFINE 宏 ----
+;对象宏（数值）
+#DEFINE DOC_MAC_27 33
+;带参宏（加载期文本替换，非函数调用）
+#DEFINE DOC_DBL(x) ((x) * 2)
+;多重展开：DOC_INDIRECT -> DOC_MAC_27 -> 33
+#DEFINE DOC_INDIRECT DOC_MAC_27
+;字符串宏
+#DEFINE DOC_HELLO "你好宏"
+
+;---- 广域变量（所有函数共享，非存档对象）----
+#DIM DOC_WIDE_27
+#DIMS DOC_WIDE_S27
+
+;---- 全局变量（SAVEGLOBAL/LOADGLOBAL 持久化）----
+#DIM GLOBAL DOC_GVAR_27

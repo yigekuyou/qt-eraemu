@@ -1,0 +1,218 @@
+;=============================================================
+; [28] 文档语义·SELECTCASE/循环/EE 与 eraTW 惯用法
+;
+; 依据（ecd/docs + eraTW + Emuera C# 权威源码，不依赖本移植实现）：
+;   - ERB_Compound_Statements：CASE 值,值 / 起 TO 止 / IS 比较、
+;     从左到右命中即停、FOR 负步长（终止值不含）
+;   - eraTW ERB 惯用法：CASE 多值+区间混用（PLACE_拠点別分岐.ERB）、
+;     #FUNCTION + SIF…RETURNF 早退链（COMMON @ITEMSTOCK）、
+;     TRYCCALLFORM 动态名 + CATCH 兜底（ANOTHER_TALK.ERB）、
+;     CSV 名做下标 ABL:技巧、#DIMS 初始化列表（モブ子用.ERH）、全角名变量
+;   - eraTW README集/EmueraEE Readme：EXISTFUNCTION 返回值约定
+;     （普通=1/#FUNCTION=2/#FUNCTIONS=3/系统=0）、TRYCALLFORMF 静默、
+;     EXISTSOUND、GETDISPLAYLINE（0 起始、GETDISPLAYLINE(LINECOUNT) 为空）、
+;     GETDOINGFUNCTION、BINPUT 无按钮时用缺省值（v31fix）
+;   - eraTW CSV/DAY.csv：DAYNAME 命名索引
+;=============================================================
+@TEST_DOC_FLOW
+#DIM NONG
+#DIM K27
+#DIM CNT27
+#DIM SUM27
+#DIM I27N
+#DIM C27CHARA
+#DIMS DS27, 3 = "甲", "乙", "丙"
+#DIM 全角変数２８ = 7
+
+PRINTL == 组28：文档语义·SELECTCASE/循环/惯用法 ==
+
+;---- #DIMS 初始化列表（eraTW モブ子用.ERH 惯用法）----
+CALL ASSERT_SEQ, DS27:0, "甲", @"#DIMS 初始化列表(0)"
+NONG += RESULT
+CALL ASSERT_SEQ, DS27:1, "乙", @"#DIMS 初始化列表(1)"
+NONG += RESULT
+CALL ASSERT_SEQ, DS27:2, "丙", @"#DIMS 初始化列表(2)"
+NONG += RESULT
+CALL ASSERT_EQ, 全角変数２８, 7, @"全角名局部变量"
+NONG += RESULT
+
+;---- SELECTCASE：多值 + TO 区间混写（eraTW PLACE_拠点別分岐 CASE 108,109,113 TO 120）----
+K27 = 113
+SELECTCASE K27
+	CASE 108, 109, 113 TO 120
+		CNT27 = 1
+	CASEELSE
+		CNT27 = 2
+ENDSELECT
+CALL ASSERT_EQ, CNT27, 1, @"CASE 多值+区间混写命中 113"
+NONG += RESULT
+K27 = 112
+SELECTCASE K27
+	CASE 108, 109, 113 TO 120
+		CNT27 = 1
+	CASEELSE
+		CNT27 = 2
+ENDSELECT
+CALL ASSERT_EQ, CNT27, 2, @"区间外 112 落 CASEELSE"
+NONG += RESULT
+
+;---- SELECTCASE：IS 比较条件（文档：CASE IS <= 值）----
+K27 = 150
+SELECTCASE K27
+	CASE IS >= 200
+		CNT27 = 1
+	CASE IS == 150
+		CNT27 = 2
+	CASEELSE
+		CNT27 = 3
+ENDSELECT
+CALL ASSERT_EQ, CNT27, 2, @"CASE IS == 命中"
+NONG += RESULT
+K27 = -5
+SELECTCASE K27
+	CASE IS < 0
+		CNT27 = 1
+	CASEELSE
+		CNT27 = 2
+ENDSELECT
+CALL ASSERT_EQ, CNT27, 1, @"CASE IS < 0 命中负数"
+NONG += RESULT
+
+;---- SELECTCASE：从左到右命中即停（文档 ERB_Compound_Statements）----
+K27 = 3
+SELECTCASE K27
+	CASE 1 TO 5
+		CNT27 = 1
+	CASE 3
+		CNT27 = 2
+ENDSELECT
+CALL ASSERT_EQ, CNT27, 1, @"从前到后命中即停：3 落在先声明的 TO 区间"
+NONG += RESULT
+
+;---- FOR 负步长（文档：终止值不包含在内；C# step<0 时 counter>end 继续）----
+SUM27 = 0
+CNT27 = 0
+FOR I27N, 5, 1, -1
+	SUM27 += I27N
+	CNT27 += 1
+NEXT
+CALL ASSERT_EQ, SUM27, 14, @"FOR 5→1 步长-1：和 5+4+3+2=14（不含 1）"
+NONG += RESULT
+CALL ASSERT_EQ, CNT27, 4, @"循环 4 次"
+NONG += RESULT
+
+;---- #FUNCTION + SIF…RETURNF 早退链（eraTW COMMON @ITEMSTOCK 惯用法）----
+CALL ASSERT_EQ, STOCK_27(1), 10, @"SIF…RETURNF 链第 1 条"
+NONG += RESULT
+CALL ASSERT_EQ, STOCK_27(2), 20, @"SIF…RETURNF 链第 2 条"
+NONG += RESULT
+CALL ASSERT_EQ, STOCK_27(3), 0, @"全部未命中落默认 RETURNF 0"
+NONG += RESULT
+
+;---- TRYCCALLFORM 动态函数名 + CATCH 兜底（eraTW ANOTHER_TALK 惯用法）----
+RESULTS = 不存在
+TRYCCALLFORM K27_%RESULTS%_DESC
+	FLAG:920 = 1
+CATCH
+	FLAG:920 = 2
+ENDCATCH
+CALL ASSERT_EQ, FLAG:920, 2, @"动态名不存在进 CATCH"
+NONG += RESULT
+RESULTS = OK
+TRYCCALLFORM K27_%RESULTS%_DESC
+	FLAG:921 = 1
+CATCH
+	FLAG:921 = 2
+ENDCATCH
+CALL ASSERT_EQ, FLAG:921, 1, @"动态名存在正常调用不走 CATCH"
+NONG += RESULT
+
+;---- CSV 名做下标（文档 CSV_File：Abl.csv 注册后可用 ABL:技巧 引用）----
+ADDCHARA 0
+C27CHARA = CHARANUM - 1
+CALL ASSERT_TRUE, ABL:C27CHARA:技巧 == ABL:C27CHARA:2, @"CSV 名下标与数值下标等价"
+NONG += RESULT
+CALL ASSERT_EQ, ABL:C27CHARA:技巧, 3, @"Chara0 能力3=技巧 技巧=3"
+NONG += RESULT
+
+;---- DAYNAME（eraTW CSV/DAY.csv + EE readme：DAY.csv 使 DAY 获得命名索引）----
+CALL ASSERT_SEQ, DAYNAME:5, "天気", @"DAY.csv 注册的 DAYNAME:5"
+NONG += RESULT
+DAY:天気 = 3
+CALL ASSERT_EQ, DAY:5, 3, @"DAY 名下标与数值下标互通"
+NONG += RESULT
+
+;---- EXISTSOUND（EE readme：sound 文件夹无该文件=0；测试游戏无 sound 文件夹必为 0）----
+CALL ASSERT_EQ, EXISTSOUND("a.mp3"), 0, @"EXISTSOUND 无 sound 文件夹恒 0"
+NONG += RESULT
+
+;---- EXISTFUNCTION（EE readme：普通函数=1、#FUNCTION=2、#FUNCTIONS=3、系统=0）----
+CALL ASSERT_EQ, EXISTFUNCTION("EF_PLAIN_27"), 1, @"EXISTFUNCTION 普通函数=1"
+NONG += RESULT
+CALL ASSERT_EQ, EXISTFUNCTION("EF_NUM_27"), 2, @"EXISTFUNCTION #FUNCTION=2"
+NONG += RESULT
+CALL ASSERT_EQ, EXISTFUNCTION("EF_STR_27"), 3, @"EXISTFUNCTION #FUNCTIONS=3"
+NONG += RESULT
+CALL ASSERT_EQ, EXISTFUNCTION("ABS"), 0, @"EXISTFUNCTION 内建式中函数=0"
+NONG += RESULT
+CALL ASSERT_EQ, EXISTFUNCTION("ef_plain_27", 1), 1, @"EXISTFUNCTION 第2参非0时大小写不敏感"
+NONG += RESULT
+
+;---- TRYCALLFORMF（EE readme：CALLF 的 TRY 版，函数不存在不报错、返回值丢弃）----
+TRYCALLFORMF NOT_EXIST_FUNC_27
+FLAG:922 = 1
+CALL ASSERT_EQ, FLAG:922, 1, @"TRYCALLFORMF 不存在的函数后继续执行"
+NONG += RESULT
+
+;---- GETDOINGFUNCTION（EE readme：返回当前执行中函数名）----
+CALL DOING_27
+CALL ASSERT_TRUE, STRFIND(RESULTS:0, "DOING_27") >= 0, @"GETDOINGFUNCTION 含当前函数名"
+NONG += RESULT
+
+;---- GETDISPLAYLINE（EE readme：0 起始保存，GETDISPLAYLINE(LINECOUNT) 恒为空）----
+PRINTL 显示行甲27
+PRINTL 显示行乙27
+CNT27 = LINECOUNT()
+CALL ASSERT_SEQ, GETDISPLAYLINE(CNT27 - 1), "显示行乙27", @"GETDISPLAYLINE 最后一行"
+NONG += RESULT
+CALL ASSERT_SEQ, GETDISPLAYLINE(CNT27), "", @"GETDISPLAYLINE(LINECOUNT) 为空串"
+NONG += RESULT
+
+;---- BINPUT 缺省值（EE readme v31fix：无按钮时不等待，直接采用缺省值）----
+BINPUT 42
+CALL ASSERT_EQ, RESULT, 42, @"BINPUT 无按钮直接取缺省值"
+NONG += RESULT
+
+DELCHARA C27CHARA
+RETURN NONG
+
+;-------------------------------------------------------------
+; 组28 辅助函数
+;-------------------------------------------------------------
+;#FUNCTION + SIF…RETURNF 早退链（多返回码惯用法）
+@STOCK_27, X
+#FUNCTION
+#DIM X
+SIF X == 1
+	RETURNF 10
+SIF X == 2
+	RETURNF 20
+RETURNF 0
+
+@K27_OK_DESC
+RETURN 0
+
+@EF_PLAIN_27
+RETURN 0
+
+@EF_NUM_27
+#FUNCTION
+RETURNF 1
+
+@EF_STR_27
+#FUNCTIONS
+RETURNF "s"
+
+@DOING_27
+RESULTS:0 = GETDOINGFUNCTION()
+RETURN 0

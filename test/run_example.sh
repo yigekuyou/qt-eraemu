@@ -16,6 +16,9 @@
 #   ./test/run_example.sh 24       # CSV 名表与 STR 变量（ecd/docs 规范：Str.csv 值 / StrName.csv 名）
 #   ./test/run_example.sh 25       # RESULTS 下标/#FUNCTIONS 返回值/裸文本赋值（eraTW OPTION_SETTING 回归）
 #   ./test/run_example.sh 26       # 自然结束不清 RESULT/裸 RETURNF 空串（eraTW 農家設定选地主回归）
+#   ./test/run_example.sh 27       # 文档语义·表达式/字面量/声明（ecd/docs + ERH 宏/REF/参数初始值）
+#   ./test/run_example.sh 28       # 文档语义·SELECTCASE/循环/EE 与 eraTW 惯用法
+#   ./test/run_example.sh 29       # 破坏性组（BEGIN FIRST：@EVENTFIRST #PRI/#LATER/#SINGLE/#ONLY 流）
 #
 # 依赖：build/src/eraengine/test_cli
 #       （cmake --build build --target test_cli）

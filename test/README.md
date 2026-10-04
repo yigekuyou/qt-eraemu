@@ -129,6 +129,28 @@ EmueraEE·私家改造版 readme**，不参考本移植实现：
   交还系统层。事件分组同步改为 `#PRI → 普通 → #LATER`，`#ONLY` 为「该函数
   返回后终止整个事件」的标记（组 29）。
 
+## eraTW「採集場所一覧」回归（2026-10）
+
+用 `test_cli` 复现 eraTW `1,0,410`（`--script 1,0,410,99`）时发现「选项是数字、
+输入 99 无法返回」。定位到**两个独立缺陷**，均按 C# 权威语义修复：
+
+* **标签名大小写不敏感**（`era_parse_table.cpp`）：`labelPositions` 原以标签
+  原样大小写为键，而式中调用用户函数的求值回调会把名字 `toUpper()` 后再查
+  （`ExpressionEvaluator` → `ScriptRunner::invokeUserFunction` → `callLabelWithReturn(info->name)`），
+  于是**混大小写**的 `@ForagePlaceName` 恒查不到 → `%ForagePlaceName(x)%`
+  恒返回 0：`@SHOW_GATHERING_LIST` 里 `IF ForagePlaceName(PLACE) != ""` 对
+  99 也成立 → 不进 `RETURN -1` 分支 → 无法返回。改为存储/查找统一折叠大写
+  （对齐 C# `ErbLoader.LabelDic` 以 `ToUpper` 为键）。
+* **字符串 `=` 赋值右值 = 格式化串**（`execution_engine.cpp::handleStringAssignment`）：
+  裸文本一律字面量（对齐 C# `AnalyseFormattedString`），只有裸**字符串**变量名
+  才按变量引用求值。旧实现把「任意已知变量/系统变量/角色变量」都当引用，
+  于是 eraTW `DIM.ERH:91 #DIM CONST 斜角的竹林 = 430`（地图地点编号）与
+  `@ForagePlaceName` 的 `LOCALS = 斜角的竹林`（地点名字符串）**同名碰撞**时，
+  取到整数常量 430 → 「採集場所一覧」整列显示 430/460/470… 数字。
+
+回归：`test_user_functions`（§7 混大小写式子调用）、`test_statements`（§9
+整数名当字面量、字符串名当引用）。
+
 ## 关于「自动输入」
 
 `INPUT` / `INPUTS` / `ONEINPUT` / `TINPUT` / `WAITANYKEY` / `AWAIT` 在 GUI 下会

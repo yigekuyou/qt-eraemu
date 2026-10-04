@@ -70,7 +70,7 @@ Q_DECLARE_METATYPE(Frame)
 // ---------------------------------------------------------------------------
 struct ScriptData {
     QList<LogicalLine>  lines;          // 完整 AST 逻辑行（对齐 C# LogicalLine 数组）
-    QHash<QString, int> labelPositions; // @label -> 行号
+    QHash<QString, int> labelPositions; // @label（**大写折叠**）-> 行号（故查表须 label.toUpper()）
     QHash<int, int>     endifLines;     // 标记区：IF/SIF 行 -> ENDIF+1
     QHash<int, int>     elseLines;      // 标记区：IF/SIF 行 -> ELSEIF/ELSE/ENDIF
     QHash<int, int>     loopEndLines;   // 标记区：REPEAT/WHILE/FOR 行 -> 配对行

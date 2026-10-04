@@ -436,6 +436,54 @@ int main(int argc, char* argv[]) {
               "SETBIT CFLAG:0:5, 4 -> 25（角色变量 + 下标，位运算叠加）");
     }
 
+    // =====================================================================
+    // 字符串 `=` 赋值的右值 = 格式化串（裸文本一律字面量，即使与**整数**
+    // 变量/常量同名）；只有裸**字符串**变量名才按变量引用求值。
+    // 回归：eraTW `DIM.ERH:91 #DIM CONST 斜角的竹林 = 430`（地图地点编号）
+    // 与 `@ForagePlaceName` 的 `LOCALS = 斜角的竹林`（地点名字符串）**同名
+    // 碰撞** —— 旧实现把任何「已知变量」都当引用，于是「採集場所一覧」整列
+    // 显示成 430/460/470… 数字，且把 PLACE 名判断 `!= ""` 永远当真，
+    // 输入 99 无法返回。
+    qDebug() << "\n9) 字符串 = 赋值：整数名当字面量，字符串名当引用";
+    {
+        VariableStorage vs;
+        ProcessState ps;
+        EraParseTable pt(&ps);
+        ExecutionEngine ex(&vs, nullptr);
+        ExpressionEvaluator ev;
+        ex.setParseTable(&pt); ex.setExpressionEvaluator(&ev);
+        pt.setVariableStorage(&vs); pt.setExpressionEvaluator(&ev);
+        ScriptRunner run(&pt, &ex, &ps, &vs);
+        run.setExpressionEvaluator(&ev);
+        run.setStepLimit(10000);
+        const QStringList program = {
+            QStringLiteral("@MAIN"),
+            QStringLiteral("#DIM CONST 斜角的竹林 = 430"),   // 与地点名字符串同名的整数常量
+            QStringLiteral("#DIMS OUT_LIT"),
+            QStringLiteral("#DIMS OUT_SYS"),
+            QStringLiteral("#DIMS OUT_REF"),
+            QStringLiteral("#DIMS SRC_STR"),
+            QStringLiteral("SRC_STR = \"值\""),
+            QStringLiteral("OUT_LIT = 斜角的竹林"),          // 整数常量名 -> 字面量
+            QStringLiteral("OUT_SYS = FLAG"),                // 整数系统变量名 -> 字面量
+            QStringLiteral("OUT_REF = SRC_STR"),             // 字符串变量名 -> 取当前值
+            QStringLiteral("RETURN")
+        };
+        check(pt.loadScript("strap", buildLines(pt, program)), "load string-assignment script");
+        pt.finalizeParse();
+        pt.setEntryPoint("MAIN");
+        check(run.runToCompletion() == ExecState::Halt, "string-assignment script completes");
+        vs.setPrivateScope(QStringLiteral("MAIN"),
+                           {QStringLiteral("OUT_LIT"), QStringLiteral("OUT_SYS"),
+                            QStringLiteral("OUT_REF"), QStringLiteral("SRC_STR")});
+        check(vs.getGlobalStr1D(QStringLiteral("OUT_LIT"), 0) == QStringLiteral("斜角的竹林"),
+              "OUT_LIT = 斜角的竹林（整数常量名）-> 字面量，而非常量值 430");
+        check(vs.getGlobalStr1D(QStringLiteral("OUT_SYS"), 0) == QStringLiteral("FLAG"),
+              "OUT_SYS = FLAG（整数系统变量名）-> 字面量 \"FLAG\"");
+        check(vs.getGlobalStr1D(QStringLiteral("OUT_REF"), 0) == QStringLiteral("值"),
+              "OUT_REF = SRC_STR（字符串变量名）-> 取该变量当前值");
+    }
+
     qDebug() << "\n======================================";
     if (g_failures == 0) {
         qDebug() << "[SUCCESS] statement tests passed";

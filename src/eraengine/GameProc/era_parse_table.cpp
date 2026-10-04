@@ -157,7 +157,7 @@ bool EraParseTable::hasLabel(const QString& label) const {
     if (cached != m_hasLabelCache.constEnd()) return cached.value();
     bool found = false;
     for (auto it = m_scripts.constBegin(); it != m_scripts.constEnd(); ++it) {
-        if (it.value().labelPositions.contains(label)) { found = true; break; }
+        if (it.value().labelPositions.contains(label.toUpper())) { found = true; break; }
     }
     m_hasLabelCache.insert(label, found);
     return found;
@@ -359,7 +359,12 @@ bool EraParseTable::loadScript(const QString& scriptName, const QList<LogicalLin
         }
 
         if (line.isLabel()) {
-            data.labelPositions[line.labelName] = i;
+            // 标签名大小写不敏感（对齐 C# ErbLoader.LabelDic 以 ToUpper 为键）：
+            // 存储与查找统一折叠为大写。否则会出现「声明 @ForagePlaceName、
+            // 表达式调用把名字 toUpper 成 FORAGEPLACENAME 后查不到标签」的错配
+            // —— eraTW @SHOW_GATHERING_LIST 的 %ForagePlaceName(...)% 恒返回 0
+            // （「採集場所一覧」选项显示成数字 0、输入 99 无法返回）正是此例。
+            data.labelPositions[line.labelName.toUpper()] = i;
 
             // 注册用户自定义函数（@label 即函数入口）—— 构建完整的声明节点
             if (line.kind == LineKind::FunctionLabel) {
@@ -476,7 +481,7 @@ void EraParseTable::setEntryPoint(const QString& label) {
     m_entryPoint = label;
 
     for (auto it = m_scripts.constBegin(); it != m_scripts.constEnd(); ++it) {
-        if (it.value().labelPositions.contains(label)) {
+        if (it.value().labelPositions.contains(label.toUpper())) {
             m_currentScript = it.key();
             break;
         }
@@ -486,7 +491,7 @@ void EraParseTable::setEntryPoint(const QString& label) {
         const QStringList commonLabels = {"MAIN_LOOP", "SYSTEM_TITLE", "MAIN", "TITLE"};
         for (const QString& labelToTry : commonLabels) {
             for (auto it = m_scripts.constBegin(); it != m_scripts.constEnd(); ++it) {
-                if (it.value().labelPositions.contains(labelToTry)) {
+                if (it.value().labelPositions.contains(labelToTry.toUpper())) {
                     m_currentScript = it.key();
                     m_entryPoint = labelToTry;
                     break;
@@ -515,7 +520,7 @@ int EraParseTable::getLabelPosition(const QString& scriptName, const QString& la
     if (!data) {
         return -1;
     }
-    return data->labelPositions.value(labelName, -1);
+    return data->labelPositions.value(labelName.toUpper(), -1);
 }
 
 bool EraParseTable::resolveJumpTarget(const QString& label, int& position) {
@@ -525,7 +530,7 @@ bool EraParseTable::resolveJumpTarget(const QString& label, int& position) {
     }
 
     for (auto it = m_scripts.constBegin(); it != m_scripts.constEnd(); ++it) {
-        const int pos = it.value().labelPositions.value(label, -1);
+        const int pos = it.value().labelPositions.value(label.toUpper(), -1);
         if (pos >= 0) {
             position = pos;
             switchToMemorySpace(it.key());
@@ -672,7 +677,7 @@ bool EraParseTable::callLabel(const QString& label, bool advanceWasCalled) {
     if (target < 0 || !callable(targetScript, target)) {
         target = -1;
         for (auto it = m_scripts.constBegin(); it != m_scripts.constEnd(); ++it) {
-            const int pos = it.value().labelPositions.value(label, -1);
+            const int pos = it.value().labelPositions.value(label.toUpper(), -1);
             if (pos >= 0 && callable(it.key(), pos)) {
                 targetScript = it.key();
                 target = pos;
@@ -700,7 +705,7 @@ bool EraParseTable::callLabelWithReturn(const QString& label, int returnLine) {
     int target = getLabelPosition(m_currentScript, label);
     if (target < 0) {
         for (auto it = m_scripts.constBegin(); it != m_scripts.constEnd(); ++it) {
-            const int pos = it.value().labelPositions.value(label, -1);
+            const int pos = it.value().labelPositions.value(label.toUpper(), -1);
             if (pos >= 0) {
                 targetScript = it.key();
                 target = pos;
@@ -730,7 +735,7 @@ bool EraParseTable::jumpLabel(const QString& label) {
     int target = getLabelPosition(m_currentScript, label);
     if (target < 0) {
         for (auto it = m_scripts.constBegin(); it != m_scripts.constEnd(); ++it) {
-            const int pos = it.value().labelPositions.value(label, -1);
+            const int pos = it.value().labelPositions.value(label.toUpper(), -1);
             if (pos >= 0) {
                 targetScript = it.key();
                 target = pos;

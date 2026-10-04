@@ -1889,12 +1889,18 @@ bool ExecutionEngine::handleStringAssignment(const QString& lhs, const QString& 
         // 此前被当变量引用求值 -> 未定义变量 = 0 -> OPTION 菜单的名字列显示 0。
         const bool indexedRef = trimmed.contains(QLatin1Char(':'))
                                 || trimmed.contains(QLatin1Char('.'));
-        const bool knownVariable = indexedRef
-            || (m_parseTable
-                && m_parseTable->variableTable().typeOf(trimmed, ownerFunction)
-                   != OperandType::Unknown)
-            || (m_storage && (m_storage->hasSystemVariable(trimmed)
-                              || m_storage->isCharaDataVariable(trimmed)));
+        // 仅当裸名字确实是**字符串**变量时才按变量引用求值 —— 对齐 C#
+        // （字符串 `=` 的右值按格式化串解析，裸文本是字面量；只有字符串
+        // 变量名才可能意指「取该变量当前值」）。**整数**变量/常量绝不能当
+        // 引用：eraTW `DIM.ERH:91 #DIM CONST 斜角的竹林 = 430`（地图地点编号）
+        // 与 `@ForagePlaceName` 里的 `LOCALS = 斜角的竹林`（地点名字符串）同名
+        // 碰撞，一旦把整数常量当引用，「採集場所一覧」就整列显示成数字
+        // （430/460/470…）而非地点名。此前用「任意已知变量/系统变量/角色变量」
+        // 判定，FLAG、MONEY、#DIM CONST 等整数名全部误命中。
+        const bool stringVarRef = m_parseTable
+            && m_parseTable->variableTable().typeOf(trimmed, ownerFunction) == OperandType::Str;
+        const bool charaStrRef = m_storage && m_storage->isCharaDataString(trimmed);
+        const bool knownVariable = indexedRef || stringVarRef || charaStrRef;
         if (knownVariable) {
             const QSharedPointer<ExpressionNode> exprAst = m_parseTable->expressionAst(trimmed);
             if (exprAst) {

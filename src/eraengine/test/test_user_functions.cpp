@@ -523,6 +523,49 @@ int main(int argc, char* argv[]) {
                   && vs.getGlobalInt1D("OUT3DZERO", 0) == 41, "same name in another scope uses 3D indices");
     }
 
+    // =====================================================================
+    // 标签名大小写不敏感（对齐 C# ErbLoader.LabelDic 以 ToUpper 为键）
+    // 回归：eraTW `@ForagePlaceName`（混大小写）经式子 `%ForagePlaceName(x)%`
+    // 调用，曾因求值回调把名字 toUpper 后去查**大小写敏感**的 labelPositions
+    // 而恒返回 0 —— 「採集場所一覧」选项全显示成 0、输入 99 无法返回。
+    qDebug() << "\n7) 标签名大小写不敏感（式子调用混大小写用户函数）";
+    {
+        VariableStorage vs;
+        ProcessState ps;
+        EraParseTable pt(&ps);
+        ExecutionEngine ex(&vs, nullptr);
+        ExpressionEvaluator ev;
+        ex.setParseTable(&pt);
+        ex.setExpressionEvaluator(&ev);
+        pt.setVariableStorage(&vs);
+        pt.setExpressionEvaluator(&ev);
+        ScriptRunner run(&pt, &ex, &ps, &vs);
+        run.setExpressionEvaluator(&ev);
+        run.setStepLimit(10000);
+        const QStringList program = {
+            QStringLiteral("@MAIN"),
+            QStringLiteral("MIXED_LEN = STRLENS(MixStr())"),   // 式子调用混大小写 #FUNCTIONS
+            QStringLiteral("LOWER_LEN = STRLENS(mixstr())"),   // 全小写调用（大小写不敏感）
+            QStringLiteral("CALL PlainFn"),                    // 语句调用（对照）
+            QStringLiteral("RETURN"),
+            QStringLiteral("@MixStr()"),
+            QStringLiteral("#FUNCTIONS"),
+            QStringLiteral("RETURNF \"ok\""),
+            QStringLiteral("@PLAINFN"),
+            QStringLiteral("PLAIN_OUT = 7"),
+            QStringLiteral("RETURN")
+        };
+        check(pt.loadScript("case", buildLines(pt, program)), "load mixed-case function script");
+        pt.finalizeParse();
+        pt.setEntryPoint("MAIN");
+        check(run.runToCompletion() == ExecState::Halt, "mixed-case function script completes");
+        check(vs.getGlobalInt1D("MIXED_LEN", 0) == 2,
+              "式子 %MixStr()% -> \"ok\"（STRLENS == 2，混大小写标签能查到）");
+        check(vs.getGlobalInt1D("LOWER_LEN", 0) == 2,
+              "式子 %mixstr()% 大小写不敏感 -> 2");
+        check(vs.getGlobalInt1D("PLAIN_OUT", 0) == 7, "CALL PlainFn 语句调用正常");
+    }
+
     qDebug() << "\n================================";
     if (g_failures == 0) {
         qDebug() << "[SUCCESS] user function tests passed";

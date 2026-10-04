@@ -98,6 +98,12 @@ Item {
     function textBlockAt(i) {
         return textInst.objectAt(i);
     }
+    function imageBlockAt(i) {
+        return imageInst.objectAt(i);
+    }
+    function shapeBlockAt(i) {
+        return shapeInst.objectAt(i);
+    }
     function blockAt(i) {
         return textBlockAt(i);
     }

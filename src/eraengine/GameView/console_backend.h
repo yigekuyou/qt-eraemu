@@ -251,6 +251,10 @@ private:
     int  m_lineHeight = 19;
     int  m_visibleCount = 40;
     int  m_scrollOffset = 0;
+    // 缓冲里**最长**的区块能往上探出几行（立絵跨行 + 图片 ypos 负偏移）。
+    // visibleBlocks() 靠它决定「窗口上方多扫几行」，否则跨行图会整张消失。
+    int  m_maxSpanReach = 1;
+    void trackSpanReach(const ConsoleDisplayLine& line);
     int  m_frameMs = 16;
     quint64 m_generation = 1;
 

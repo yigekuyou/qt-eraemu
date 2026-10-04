@@ -73,8 +73,11 @@ void ConsoleLayout::measurePart(ConsoleSpan& part) const {
         part.rows = qMax(1, qRound(hPx / static_cast<double>(qMax(1, m_lineHeight))));
         part.width = part.cols * columnWidthPx();
         part.height = part.rows * m_lineHeight;
-        part.top = 0;
-        part.bottom = part.height;
+        // C# ConsoleImagePart：top = raw_ypos * FontSize / 100（**像素**，负值合法）。
+        // eraTW 的画像枠/時間停止/特效各自在被打印的那一行，靠负 ypos 被拉回来盖在
+        // 立絵上 —— 这里不折算，QML 就只能在立絵下面一行画框（「边框没有在立绘边缘」）。
+        part.top = part.yposRaw * m_fontSize / 100;
+        part.bottom = part.top + part.height;
         break;
     }
     case ConsoleSpanKind::Shape: {

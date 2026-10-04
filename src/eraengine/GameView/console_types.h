@@ -114,6 +114,10 @@ struct ConsoleSpan {
     // Emuera 的 <img width=N> 里 N 是相对字号的百分比；而 `<img src='X'>` 不带尺寸时
     // 必须用资源自身像素尺寸，否则整张图会被压成一个字号见方。
     bool     imageSizeIsPixels = false;
+    // `<img ypos=N>`：N 是**字号百分比**的纵向偏移（C# ConsoleImagePart.raw_ypos）。
+    // eraTW 的画像枠・時間停止・特效都是「另一张图叠在立絵上」：它们各自在被打印的
+    // 那一行，靠 ypos 负偏移被拉回去盖住立絵 —— 不实现 ypos，框就落在立絵下面一行。
+    int      yposRaw = 0;
     QString  shapeType;         // "space" | "rect" | "line" | "polygon"
     QList<int> shapeParams;     // 百分比参数（× FontSize / 100）
     bool     error = false;     // 字体/资源异常（C# part.Error）

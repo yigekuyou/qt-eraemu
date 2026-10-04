@@ -175,6 +175,38 @@ TestCase {
         compare(backend.imageBlocks[0].text, "face_01");
     }
 
+    // 跨行图片：QML 侧必须按 C++ 给的 rows 撑开（否则 PreserveAspectFit 把整张
+    // 立絵压进一行，eraTW 的「画像尺寸 拡大/縮小」在画面上看不出任何变化），
+    // 并应用 ypos 的纵向偏移（eraTW 的画像枠/特效靠它盖在立絵边缘）。
+    function test_imageBlockSpansRowsAndYpos() {
+        backend.clearAll();
+        backend.printImage("face_01", 400, 400);   // 400% * 16px = 64px = 4 行
+        backend.newline();
+        backend.flush();
+
+        verify(backend.imageBlocks.length === 1, "1 个图片区块");
+        const b = backend.imageBlocks[0];
+        compare(b.rows, 4, "C++ 给出 rows == 4");
+        const item = view.imageBlockAt(0);
+        verify(item !== null, "no image block item");
+        compare(item.width, b.cols * view.cellWidth);
+        compare(item.height, b.rows * view.cellHeight, "区块高度 = rows × 行高（跨行）");
+
+        // ypos：C++ 折算成行数偏移（负 = 往上盖）。
+        // 先垫 8 行文本，让 ypos=-8 的框正好落在窗口里（全在窗口上方时会被裁掉）。
+        backend.clearAll();
+        for (let i = 0; i < 8; ++i) { backend.print("x"); backend.newline(); }
+        backend.printImage("frame", 400, 400, -800);
+        backend.newline();
+        backend.flush();
+        verify(backend.imageBlocks.length === 1, "1 个 ypos 图片区块");
+        const f = backend.imageBlocks[0];
+        // 夹具用 fontSize 18 / lineHeight 20：top = -800*18/100 = -144px -> -144/20 = -7.2 行
+        verify(Math.abs(f.offsetRows - (-7.2)) < 0.001, "ypos=-800 -> offsetRows == -7.2");
+        const fitem = view.imageBlockAt(0);
+        compare(fitem.y, (f.row + f.offsetRows) * view.cellHeight, "y 应用 offsetRows");
+    }
+
     // 有界窗口：区块数随可见行数受控
     function test_boundedWindow() {
         backend.clearAll();

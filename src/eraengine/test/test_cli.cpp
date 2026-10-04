@@ -789,6 +789,19 @@ int main(int argc, char* argv[]) {
                          QStringLiteral("当前平面（%1）").arg(withPlane ? "开" : "关"), withPlane, withDebug, withColor, withAnsi);
             return true;
         }
+        if (cmd.startsWith(QLatin1String(":scroll"))) {   // 滚动历史（正=向上翻），复核历史视图区块
+            int lines = 10;
+            bool ok = false;
+            const int parsed = cmd.mid(7).trimmed().toInt(&ok);
+            if (ok) lines = parsed;
+            if (console) {
+                console->scrollBy(lines);
+                std::cout << "  滚动 " << lines << " 行 -> scrollOffset "
+                          << console->scrollOffset() << "（followTail="
+                          << (console->followTail() ? "true" : "false") << "）\n";
+            }
+            return true;
+        }
         if (cmd == ":geometry") {       // 逐区块的 绝对/相对 位置与尺寸
             const QVariantList blocks = console ? console->visibleBlocks() : QVariantList();
             std::cout << "  区块数 " << blocks.size()
@@ -803,6 +816,7 @@ int main(int argc, char* argv[]) {
                           << " rel=(" << m.value("relCol").toInt() << "," << m.value("relRow").toInt() << ")"
                           << " size=" << m.value("cols").toInt() << "x" << m.value("rows").toInt()
                           << " (px " << m.value("width").toInt() << "x" << m.value("height").toInt() << ")"
+                          << " dy=" << m.value("offsetRows").toDouble()
                           << (m.value("isButton").toBool() ? " [button]" : "")
                           << (m.contains("color") ? " color=" + m.value("color").toString().toStdString() : "")
                           << " \"" << m.value("plain").toString().toStdString()

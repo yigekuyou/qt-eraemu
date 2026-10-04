@@ -324,7 +324,8 @@ void ConsoleBackend::printTemplate(const PrintTemplate& output) {
         span.style.underline |= part.style.underline; span.style.strike |= part.style.strike;
         if (part.kind == PrintTemplatePart::Kind::Image) {
             span.kind = ConsoleSpanKind::Image; span.imageSize = QSizeF(part.width, part.height);
-            span.top = part.y; span.altText = QStringLiteral("<img src='%1'>").arg(part.text);
+            span.yposRaw = part.y;
+            span.altText = QStringLiteral("<img src='%1'>").arg(part.text);
             // `<img src='X'>` 未指定宽高时，用资源图片的**固有像素尺寸**排版。
             // 否则会被当成「一个字号见方」，整张图缩成小方块
             // （eraTW 标题画面 = 35 张 1041×16 的条图，全被压成 16×16）。
@@ -387,12 +388,14 @@ void ConsoleBackend::newline() {
         for (ConsoleDisplayLine l : lines) {
             // wrapSegments 只负责切分逻辑行；绝对列/对齐仍由同一入口计算。
             m_layout.placeLine(l, row++);
+            trackSpanReach(l);
             m_buffer.appendLine(l);
         }
     } else {
         // pointOffset/part.col 的单位是字符列，不是像素。统一走 placeLine，
         // 由 maxCols() 和 widthUnits() 计算对齐，避免 760px 被误当成 760 列。
         m_layout.placeLine(line, m_buffer.count());
+        trackSpanReach(line);
         m_buffer.appendLine(line);
     }
     markDirty();
@@ -450,7 +453,7 @@ void ConsoleBackend::printImage(const QString& resourceName, int width, int heig
     part.text = resourceName;          // QML 侧拼 image://emuera/<name>
     part.altText = QStringLiteral("<img src='%1'>").arg(resourceName);   // C# AltText 回退
     part.imageSize = QSizeF(width, height);
-    part.top = ypos;
+    part.yposRaw = ypos;               // 字号百分比的纵向偏移（measurePart 折算成像素）
     part.style = m_style;
     appendPart(part);
     markDirty();
@@ -502,9 +505,25 @@ void ConsoleBackend::clearLines(int n) {
     markDirty();
 }
 
+// 记录「区块最多往上探出窗口几行」：rows 本身，加上 ypos 的负偏移折算的行数。
+// 只在行定型（measurePart 算完 cols/rows/top）之后调用。
+void ConsoleBackend::trackSpanReach(const ConsoleDisplayLine& line) {
+    for (const ConsoleSegment& seg : line.segments) {
+        for (const ConsoleSpan& part : seg.spans) {
+            int reach = qMax(1, part.rows);
+            if (m_lineHeight > 0 && part.top < 0) {
+                const int offRows = int(-part.top) / qMax(1, m_lineHeight);
+                reach += offRows;
+            }
+            m_maxSpanReach = std::max(m_maxSpanReach, reach);
+        }
+    }
+}
+
 void ConsoleBackend::clearAll() {
     qDebug() << "[render] clearAll（清屏，行数" << m_buffer.count() << "）";
     m_buffer.clear();
+    m_maxSpanReach = 1;
     m_lastLineTemporary = false;
     m_pendingParts.clear();
     m_sealed.clear();
@@ -727,7 +746,14 @@ QVariantList ConsoleBackend::visibleBlocks() const {
     QVariantList out;
     const int n = displayLineCount();
     const int first = windowFirstLine();
-    for (int abs = first; abs < n; ++abs) {
+    const int count = n - first;              // 窗口行数
+    // 跨行区块（立絵/顔絵、以及挂了 ypos 的图层图）可能从**窗口上方**伸进来：
+    // 锚点行已经滚出窗口，图的下半部分却还在可见区里。只遍历窗口内的行会让整张图
+    // 突然消失（「不完整显示立绘，立绘就消失」）。所以往上多扫 m_maxSpanReach 行，
+    // 再按「绘制矩形与窗口相交」过滤；坐标可以超出窗口（row 为负 / 大于行数），
+    // 由 QML 视口的 clip 裁掉多余部分。
+    const int scanFirst = std::max(0, first - m_maxSpanReach);
+    for (int abs = scanFirst; abs < n; ++abs) {
         const ConsoleDisplayLine line = displayLine(abs);
         const int lineIndex = abs - first;
         // pointOffset 与 relCol 都是字符列单位；newline() 已经完成布局。
@@ -739,12 +765,28 @@ QVariantList ConsoleBackend::visibleBlocks() const {
                 m.insert("layer", part.layer());           // text / image / shape
                 m.insert("col", offset + part.relCol);     // 绝对列（单位 = 区块长）
                 m.insert("row", lineIndex);                // 绝对行（单位 = 区块高）
-                m.insert("cols", qMax(1, part.cols));
-                m.insert("rows", 1);
+                const int spanCols = qMax(1, part.cols);
+                // 区块占几行：文本/形状恒 1 行，**图片按资源尺寸跨多行**
+                // （ConsoleLayout::measurePart 已按 `<img width/height>` 算好 rows）。
+                // 此前这里对所有 kind 一律写 1 + height=行高，QML 的 Image 区块就永远
+                // 只有一行高，PreserveAspectFit 又把图压进那个扁盒子 —— 于是
+                // 「画像尺寸 档位/拡大/縮小」（eraTW OPTION 选项 4/5/6）改了状态、
+                // 改了 HTML 里的 height/width，画面上却一点变化都看不出来。
+                const int spanRows = qMax(1, part.rows);
+                // ypos：图片相对本行的纵向偏移（像素 -> 行数；负 = 往上盖）。QML 侧
+                // 按 row + offsetRows 摆放，图层（枠/特效）才会正好盖在立絵边缘。
+                const double offsetRows = m_lineHeight > 0
+                                              ? double(part.top) / double(m_lineHeight) : 0.0;
+                const double topRow = lineIndex + offsetRows;
+                if (topRow + spanRows <= 0.0) continue;   // 整块在窗口上方
+                if (topRow >= count) continue;            // 整块在窗口下方
+                m.insert("cols", spanCols);
+                m.insert("rows", spanRows);
                 m.insert("relCol", part.relCol);
                 m.insert("relRow", 0);
-                m.insert("width", qMax(1, part.cols) * m_layout.columnWidthPx());
-                m.insert("height", m_lineHeight);
+                m.insert("offsetRows", offsetRows);
+                m.insert("width", spanCols * m_layout.columnWidthPx());
+                m.insert("height", spanRows * m_lineHeight);
                 // 段的点击信息（同一个段的所有区块共享）
                 m.insert("lineIndex", lineIndex);
                 m.insert("segmentIndex", si);

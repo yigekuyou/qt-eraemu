@@ -265,6 +265,77 @@ int main(int argc, char* argv[]) {
         check(value == 10, "new prompt remains clickable after automatic completion");
     }
 
+    // ---- 跨行图片（立絵）的可见窗口 / 滚动 / ypos ----
+    // 复现两个用户可见缺陷（都不需要跑 eraTW）：
+    //   ① 跨行图从窗口上方探进来时整张消失（「不完整显示立绘，立绘就消失」）
+    //   ② <img ypos=N> 被丢掉 -> 图层（画像枠/特效）落在立絵下面一行
+    //      （「边框没有在立绘边缘」）
+    qDebug() << "\n跨行图片：窗口裁剪 / ypos 图层叠加";
+    {
+        ConsoleBackend c;
+        c.setFontSize(16);
+        c.setLineHeight(16);
+        c.setGridColumns(40);
+        c.setGridRows(10);
+        c.setVisibleCount(10);                     // 窗口 = 10 行
+
+        auto imageBlock = [&c](const QString& name) -> QVariantMap {
+            for (const QVariant& v : c.imageBlocks()) {
+                const QVariantMap m = v.toMap();
+                if (m.value("text").toString() == name) return m;
+            }
+            return QVariantMap();
+        };
+
+        for (int i = 0; i < 7; ++i) { c.print(QStringLiteral("T%1").arg(i)); c.newline(); }   // 0..6
+        c.printImage(QStringLiteral("face"), 400, 400); c.newline();                          // 7
+        for (int i = 0; i < 7; ++i) { c.print(QStringLiteral("M%1").arg(i)); c.newline(); }   // 8..14
+        c.printImage(QStringLiteral("frame"), 400, 400, -800); c.newline();                   // 15
+        for (int i = 0; i < 5; ++i) { c.print(QStringLiteral("B%1").arg(i)); c.newline(); }   // 16..20
+        c.flush();
+        // 400% * 16px = 64px = 4 行高；ypos=-800 -> -800*16/100 = -128px = -8 行
+        check(c.lineCount() == 21, "21 行（图片各占 1 个逻辑行）");
+
+        // followTail：窗口 = 第 11..20 行。立絵锚点在 7、占 7..10 行，
+        // 框锚点在 15 但 ypos 把它拉回 7..10 行 —— 两张整块都在窗口上方。
+        check(imageBlock(QStringLiteral("face")).isEmpty(),
+              "整块在窗口上方 -> 不产出（不会凭空露出一角）");
+
+        // 往上滚 3 行：窗口 = 第 8..17 行 -> 立絵还剩 8/9/10 三行可见。
+        // 修复前只遍历窗口内的行，锚点行 7 不在窗口里 -> 整张立絵消失。
+        c.scrollBy(3);
+        check(c.scrollOffset() == 3, "scrollOffset == 3");
+        const QVariantMap face = imageBlock(QStringLiteral("face"));
+        check(!face.isEmpty(),
+              "立絵从窗口上方探进来（还剩 3 行可见）-> 必须产出区块");
+        check(face.value("row").toInt() == -1, "row == -1（锚点行 7 - 窗口顶 8）");
+        check(face.value("rows").toInt() == 4, "跨行：rows == 4（64px / 行高 16）");
+        check(face.value("height").toInt() == 64, "跨行：height == rows * 行高 = 64px");
+        check(face.value("offsetRows").toDouble() == 0.0, "立絵本身没有 ypos");
+
+        const QVariantMap frame = imageBlock(QStringLiteral("frame"));
+        check(!frame.isEmpty(), "ypos 图层：框也在窗口里");
+        check(frame.value("rows").toInt() == 4, "框同样 4 行高");
+        check(frame.value("row").toInt() == 7, "框锚点行 15 - 窗口顶 8 = 7");
+        check(qFuzzyCompare(frame.value("offsetRows").toDouble(), -8.0),
+              "ypos=-800 -> offsetRows == -8（-128px / 行高 16）");
+        check(face.value("row").toInt() + face.value("offsetRows").toDouble()
+                  == frame.value("row").toInt() + frame.value("offsetRows").toDouble(),
+              "框与立絵**同一纵坐标**（图层叠加对齐 -> 边框落在立绘边缘）");
+
+        // 回到最新：两张图整块都在窗口上方 -> 都不产出
+        c.scrollToBottom();
+        check(imageBlock(QStringLiteral("face")).isEmpty()
+                  && imageBlock(QStringLiteral("frame")).isEmpty(),
+              "回到最新：整块在窗口上方的图不产出");
+
+        // 滚到顶部：窗口 = 第 0..20 行 -> 两图重新进入窗口
+        c.scrollBy(20);
+        check(!imageBlock(QStringLiteral("face")).isEmpty()
+                  && !imageBlock(QStringLiteral("frame")).isEmpty(),
+              "滚到顶部：立絵与框重新进入窗口");
+    }
+
     qDebug() << "\n===================";
     if (g_failures == 0) {
         qDebug() << "[SUCCESS] console backend tests passed";

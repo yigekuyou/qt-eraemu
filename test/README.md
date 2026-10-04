@@ -256,6 +256,47 @@ eraTW 的 `emuera.config`（フォントサイズ 16 / 一行の高さ 16 / ウ�
 > 备注：`--check` 对 eraTW 的**开头几帧**会报「屏幕空行过多（36/45）」，
 > 这是标题/载入画面的启发式误报（与本次改动无关，已用 `git stash` 对照确认）。
 
+## 跨行图片的「可见窗口」与 `<img ypos>`（2026-10 修正）
+
+选项 4/5/6 改成按资源尺寸排版之后，立絵不再是一行高的方块，于是暴露出两个
+**既有**缺陷（都发生在 `ConsoleBackend::visibleBlocks()`）：
+
+### ① 「不完整显示立绘，立绘就消失」
+
+可见窗口只遍历 `[windowFirstLine, 行数)` 这些**行**。跨行图片的锚点行一旦滚出窗口
+顶部，整张图就不再产出区块 —— 即使它还有大半张露在可见区里。
+
+修：窗口上方再多扫 `m_maxSpanReach` 行（缓冲里最长区块的「向上探出量」，含 ypos
+负偏移），再按**绘制矩形与窗口相交**过滤（`topRow + rows > 0 && topRow < 窗口行数`）。
+`row` 允许为负，交给 QML 视口的 `clip` 裁掉多余部分。
+
+### ② 「边框没有在立绘边缘」
+
+eraTW 的画像枠・時間停止・特效都是**另一张图叠在立絵上**：它们各自被打印在自己的
+行里，靠 `<img ypos=N>`（N = 字号百分比，负值向上）被拉回去盖住立絵。
+
+修：`ConsoleSpan::yposRaw` → `ConsoleLayout::measurePart` 折算成像素
+（`top = raw_ypos * FontSize / 100`，对齐 C# `ConsoleImagePart`）→
+`visibleBlocks()` 输出 `offsetRows`（= `top / 行高`）→ QML
+`y = (row + offsetRows) * cellHeight`。
+
+### 回归（都不需要跑 eraTW，毫秒级）
+
+| 位置 | 断言 |
+| --- | --- |
+| `test_console_backend`「跨行图片：窗口裁剪 / ypos 图层叠加」 | `rows == 4` / `height == rows × 行高`；锚点行滚出窗口顶但仍有可见部分 → **必须产出区块**（`row == -1`）；整块在窗口外 → 不产出；`ypos=-800 → offsetRows == -8`；**框与立絵同一纵坐标**（叠加对齐） |
+| `test_qml_console::test_imageBlockSpansRowsAndYpos` | QML 侧 `height == rows × cellHeight`（跨行）、`y == (row + offsetRows) × cellHeight` |
+
+用 `:geometry` 复核（`dy` = `offsetRows`）：
+
+```
+[image] grid=(76,7) rel=(0,0) size=23x11 (px 184x176) dy=0    "立絵_裸_笑顔_1"
+[image] grid=(76,8) rel=(0,0) size=23x11 (px 184x176) dy=-1   "フレーム_ターゲット_通常"
+```
+
+框锚点行 8 + dy(-1) = 7 = 立絵的 7 → 正好重合。`test_cli` 也补了
+`:scroll <N>`（正 = 向上翻）用来复核历史视图的区块。
+
 ## 音频播放（扩展能力 · 2026-10）
 
 C# 原版没有音频；整块能力住在扩展（`GameProc/ee_extension.cpp`），经

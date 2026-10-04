@@ -83,9 +83,14 @@ Item {
         ? blockData.clickable === true && blockData.generation === backend.generation : false
     readonly property bool hovered: mouse.containsMouse && clickable
 
+    // 图片的 `<img ypos=N>`：C++ 折算成「行数」的纵向偏移（负 = 往上盖）。
+    // eraTW 的画像枠/時間停止/特效各自在被打印的那一行，靠它拉回来盖在立絵边缘。
+    readonly property real offsetRows: blockData && blockData.offsetRows ? blockData.offsetRows : 0
+
     // 位置与尺寸：网格坐标 × 单元格大小（QML 说了算）
+    // row 允许为负 / 超过行数：跨行图与带 ypos 的图层块会探出窗口，交给视口 clip。
     x: gridCol * cellWidth
-    y: gridRow * cellHeight
+    y: (gridRow + offsetRows) * cellHeight
     // 外层至少覆盖 C++ 的网格测量；文本内容本身由 glyph 容器自动撑开。
     width: Math.max(gridCols * cellWidth, contentRow.implicitWidth)
     height: Math.max(gridRows * cellHeight, contentRow.implicitHeight)

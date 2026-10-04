@@ -416,8 +416,18 @@ QVariant ExpressionEvaluator::evaluateStrBinary(TokenType op, const QString& ls,
     switch (op) {
     case TokenType::PLUS:
         return QVariant(ls + rs);
-    case TokenType::MULTIPLY:   // 'str' * n
-        return QVariant(ls.repeated(static_cast<int>(right.toLongLong())));
+    case TokenType::MULTIPLY: {
+        // C# MultStrInt：str * n 与 n * str 均为字符串重复（双向）
+        const QVariant& strSide  = isRuntimeString(left) ? left : right;
+        const QVariant& intSide  = isRuntimeString(left) ? right : left;
+        const qint64 count = intSide.toLongLong();
+        if (count < 0 || count >= 10000) {
+            emit evaluationError(QStringLiteral("Int"),
+                                 QStringLiteral("文字列に負の値または10000以上の値(%1)を乗算しようとしました").arg(count));
+            return QVariant();
+        }
+        return QVariant(strSide.toString().repeated(static_cast<int>(count)));
+    }
     case TokenType::EQUALS:        return QVariant::fromValue<qint64>(ls == rs ? 1 : 0);
     case TokenType::NOT_EQUALS:    return QVariant::fromValue<qint64>(ls != rs ? 1 : 0);
     case TokenType::LESS_THAN:     return QVariant::fromValue<qint64>(ls <  rs ? 1 : 0);
@@ -668,6 +678,18 @@ QVariant ExpressionEvaluator::evaluateVariable(const VariableNode &node, Variabl
         }
         if (n <= 0) return QVariant::fromValue<qint64>(0);
         return QVariant::fromValue<qint64>(m_rand.nextInt(n));
+    }
+
+    // ---- 系统伪变量（C# VariableToken.PseudoVariableToken 族）----
+    if (varName.compare(QLatin1String("__INT_MAX__"), Qt::CaseInsensitive) == 0) {
+        return QVariant::fromValue<qint64>(std::numeric_limits<qint64>::max());
+    }
+    if (varName.compare(QLatin1String("__INT_MIN__"), Qt::CaseInsensitive) == 0) {
+        return QVariant::fromValue<qint64>(std::numeric_limits<qint64>::min());
+    }
+    if (varName.compare(QLatin1String("EMUERA_VERSION"), Qt::CaseInsensitive) == 0) {
+        // C# EMUERA_VERSIONToken -> MainWindow.InternalEmueraVer（非空字符串）
+        return QVariant(QStringLiteral("1.824"));
     }
 
     // ---- RANDDATA：随机数状态（C# RANDDATA 系统变量，长度 625）----
@@ -1356,6 +1378,8 @@ bool ExpressionEvaluator::evaluateBuiltin(const FunctionNode &node, VariableStor
     }
     case BuiltinOp::Unicode: {
         const qint64 i = I(0);
+        // eraTW 私家改造版 readme v6.1：0x0A/0x0D 之外的 C0 控制码 -> 空串
+        if (i < 0x20 && i != 0x0A && i != 0x0D) { out = QVariant(QString()); return true; }
         out = QVariant((i < 0 || i > 0xFFFF) ? QString() : QString(QChar(static_cast<ushort>(i))));
         return true;
     }
@@ -1408,8 +1432,8 @@ bool ExpressionEvaluator::evaluateBuiltin(const FunctionNode &node, VariableStor
         out = QVariant::fromValue<qint64>(m_lineEmptyProvider ? m_lineEmptyProvider() : 0);
         return true;
     case BuiltinOp::StrJoin: {
-        // STRJOIN <一元数组>{, <连接符>{, <開始>{, <終了>}}}（对齐 C# JoinMethod：
-        // 连接符缺省 ","；字符串数组按字符串读、整型数组按整型读）
+        // STRJOIN <一元数组>{, <连接符>{, <開始>{, <个数>}}}（对齐 C# JoinMethod：
+        // 连接符缺省 ","；第 3/4 参为 [開始, 開始+个数) 区间（EmueraEE/eraTW v7.2）
         const VariableNode* var = argVar(node, 0);
         if (!var) { out = QVariant(QString()); return true; }
         const QString delim = (node.arguments().size() >= 2 && !node.isArgOmitted(1))
@@ -1421,14 +1445,16 @@ bool ExpressionEvaluator::evaluateBuiltin(const FunctionNode &node, VariableStor
         QStringList parts;
         if (strArray) {
             const QList<QString> values = readStrArray(*var, storage);
-            const int end = (node.arguments().size() >= 4 && !node.isArgOmitted(3))
-                                ? static_cast<int>(I(3)) : values.size();
+            const int count = (node.arguments().size() >= 4 && !node.isArgOmitted(3))
+                                  ? static_cast<int>(I(3)) : values.size() - start;
+            const int end = start + count;
             for (int i = qMax(0, start); i < qMin(end, values.size()); ++i)
                 parts << values.at(i);
         } else {
             const QList<qint64> values = readIntArray(*var, storage, gameBaseData, false);
-            const int end = (node.arguments().size() >= 4 && !node.isArgOmitted(3))
-                                ? static_cast<int>(I(3)) : values.size();
+            const int count = (node.arguments().size() >= 4 && !node.isArgOmitted(3))
+                                  ? static_cast<int>(I(3)) : values.size() - start;
+            const int end = start + count;
             for (int i = qMax(0, start); i < qMin(end, values.size()); ++i)
                 parts << QString::number(values.at(i));
         }
@@ -1437,7 +1463,16 @@ bool ExpressionEvaluator::evaluateBuiltin(const FunctionNode &node, VariableStor
     }
 
     // ---------------- 时间 / 常量 ----------------
-    case BuiltinOp::GetTime:  out = QVariant::fromValue<qint64>(QDateTime::currentSecsSinceEpoch()); return true;
+    // GETTIME() -> YYYYMMDDhhmmssmmm（17 位，C# GettimeMethod）；GETTIMES 同 C# GettimesMethod
+    case BuiltinOp::GetTime: {
+        const QDateTime now = QDateTime::currentDateTime();
+        qint64 date = now.date().year();
+        date = (date * 100 + now.date().month()) * 100 + now.date().day();
+        date = (date * 100 + now.time().hour()) * 100 + now.time().minute();
+        date = (date * 100 + now.time().second()) * 1000 + now.time().msec();
+        out = QVariant::fromValue<qint64>(date);
+        return true;
+    }
     case BuiltinOp::GetTimes: out = QVariant(QDateTime::currentDateTime().toString(QStringLiteral("yyyy/MM/dd HH:mm:ss"))); return true;
     case BuiltinOp::GetMillisecond: out = QVariant::fromValue<qint64>(QDateTime::currentMSecsSinceEpoch()); return true;
     case BuiltinOp::GetSecond: out = QVariant::fromValue<qint64>(QTime::currentTime().msecsSinceStartOfDay() / 1000); return true;
@@ -1929,8 +1964,9 @@ bool ExpressionEvaluator::evaluateBuiltin(const FunctionNode &node, VariableStor
 
     // ---------------- 显示状态 / 输入（对齐 C# Console 系 Method）----------------
     case BuiltinOp::CurrentAlign: {
-        // CURRENTALIGN() -> 0=LEFT 1=CENTER 2=RIGHT（C# Console.CurrentAlignment）
-        out = QVariant::fromValue<qint64>(m_alignProvider ? m_alignProvider() : 0);
+        // CURRENTALIGN() -> "LEFT"/"CENTER"/"RIGHT"（C# CurrentAlignMethod 返回 string）
+        const int align = m_alignProvider ? m_alignProvider() : 0;
+        out = align == 1 ? QStringLiteral("CENTER") : align == 2 ? QStringLiteral("RIGHT") : QStringLiteral("LEFT");
         return true;
     }
     case BuiltinOp::GetFocusColor: {
@@ -2122,9 +2158,11 @@ bool ExpressionEvaluator::evaluateBuiltin(const FunctionNode &node, VariableStor
         return true;
     }
     case BuiltinOp::ResetStain: {
-        // RESET_STAIN <角色>：STAIN 数组清零（_REPLACE.CSV 初值未装载时按 0 处理）
+        // RESET_STAIN <角色>：STAIN 数组恢复初始值（_REPLACE.CSV 初值未装载时按 0 处理）
+        // STAIN 是**角色**变量，arraySize 查不到 —— 尺寸从 VariableSize 配置取
         const int target = int(I(0));
-        const int n = storage->arraySize(QStringLiteral("STAIN"));
+        int n = storage->variableConfig().getSize1D(QStringLiteral("STAIN"));
+        if (n <= 0) n = 100;
         for (int i = 0; i < n; ++i)
             storage->setCharaInt(QStringLiteral("STAIN"), target, i, 0);
         out = QVariant::fromValue<qint64>(0);

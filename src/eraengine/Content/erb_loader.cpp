@@ -299,10 +299,14 @@ bool ErbLoader::loadDirectory(const QString& dirPath, int depth) {
 
     // 宏表：#DEFINE（仅头文件，对齐 C# HeaderFileLoader）
     QSet<QString> macros = m_preprocessor.macros();
+    ErbPreprocessor::MacroTable macroTable = m_preprocessor.macroTable();
     for (const QString& h : headers) {
         macros.unite(ErbPreprocessor::collectDefines(readFileContent(h)));
+        const ErbPreprocessor::MacroTable t = ErbPreprocessor::collectMacroTable(readFileContent(h));
+        for (auto it = t.constBegin(); it != t.constEnd(); ++it) macroTable.insert(it.key(), it.value());
     }
     m_preprocessor.setMacros(macros);
+    m_preprocessor.setMacroTable(macroTable);
 
     if (!m_parallel || files.size() < 2) {
         bool ok = true;
@@ -378,6 +382,8 @@ ErbLoader::LoadPrep ErbLoader::prepareLoad(const QString& dirPath, int depth) co
 
     for (const QString& h : headers) {
         prep.macros.unite(ErbPreprocessor::collectDefines(readFileContent(h)));
+        const ErbPreprocessor::MacroTable t = ErbPreprocessor::collectMacroTable(readFileContent(h));
+        for (auto it = t.constBegin(); it != t.constEnd(); ++it) prep.macroTable.insert(it.key(), it.value());
     }
     // 函数返回类型预扫描（只读，线程内）
     for (const QString& f : prep.files) {
@@ -440,6 +446,7 @@ void ErbLoader::onPrepFinished() {
         tryAutoLoadRename(m_async.dirPath);
     }
     m_preprocessor.setMacros(prep.macros);
+    m_preprocessor.setMacroTable(prep.macroTable);
     m_asyncTypes = prep.functionTypes;
     m_async.files = prep.files;
     m_async.total = prep.files.size();

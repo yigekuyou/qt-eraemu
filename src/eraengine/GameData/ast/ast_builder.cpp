@@ -45,6 +45,20 @@ LogicalLine finalized(LogicalLine line) {
     return line;
 }
 
+// 整段文本是否为**单个**字符串字面量（首引号与其配对闭引号恰为行尾）。
+// 仅查首尾字符会把表达式 `"AB"+"CD"` 误判成整段字符串 —— 必须扫描配对。
+bool wholeQuoted(const QString& t) {
+    if (t.size() < 2 || !t.startsWith(QLatin1Char('"'))) return false;
+    bool escaped = false;
+    for (int j = 1; j < t.size(); ++j) {
+        const QChar c = t.at(j);
+        if (escaped) { escaped = false; continue; }
+        if (c == QLatin1Char('\\')) { escaped = true; continue; }
+        if (c == QLatin1Char('"')) return j == t.size() - 1;
+    }
+    return false;
+}
+
 bool isOperatorStart(QChar c) {
     static const QString ops = QStringLiteral("+-*/%=!<>&|^~?#");
     return ops.contains(c);
@@ -556,6 +570,16 @@ LogicalLine AstBuilder::build(const QString& rawLine,
     QString raw = rawLine;
     if (raw.endsWith(QLatin1Char('\r'))) raw.chop(1);
 
+    // Emuera 专用行 ";!;"：前缀被跳过后按**正常代码行**解析（LexicalAnalyzer.cs
+    // 的 st.CurrentEqualTo(";!;") -> st.Jump(3)）；Eramaker 中才是注释。
+    // 必须在 stripLineComment 之前剥掉，否则整行会被当成注释丢弃。
+    {
+        int lead = 0;
+        while (lead < raw.size() && (raw.at(lead) == QLatin1Char(' ') || raw.at(lead) == QLatin1Char('\t'))) ++lead;
+        if (raw.mid(lead).startsWith(QLatin1String(";!;")))
+            raw = raw.left(lead) + raw.mid(lead + 3);
+    }
+
     // ';' 之后是注释（字符串内除外）
     // 注意：行尾空白**不能**在这里就丢掉 —— PRINT 族的字面文本参数是
     // 「命令名之后原样到行尾」（C# STR_ArgumentBuilder -> StringStream.Substring），
@@ -774,7 +798,7 @@ LogicalLine AstBuilder::build(const QString& rawLine,
             for (const QString& a : argList) {
                 const QString t = a.trimmed();
                 Operand operand(t);
-                if (t.length() >= 2 && t.startsWith('"') && t.endsWith('"')) {
+                if (wholeQuoted(t)) {
                     operand.isString = true;
                     operand.raw = t.mid(1, t.length() - 2);
                 } else if (resolve) {
@@ -896,8 +920,7 @@ LogicalLine AstBuilder::build(const QString& rawLine,
         // StrExpression（含 FORMS：结果在运行期再当格式串展开）
         if (!expr.isEmpty()) {
             Operand operand(expr);
-            if (expr.length() >= 2 && expr.startsWith(QLatin1Char('"'))
-                && expr.endsWith(QLatin1Char('"'))) {
+            if (wholeQuoted(expr)) {
                 operand.isString = true;
                 operand.raw = expr.mid(1, expr.length() - 2);
             } else if (resolve) {
@@ -945,7 +968,7 @@ LogicalLine AstBuilder::build(const QString& rawLine,
         }
         if (!rest.isEmpty()) {
             Operand operand(rest);
-            if (rest.length() >= 2 && rest.startsWith('"') && rest.endsWith('"')) {
+            if (wholeQuoted(rest)) {
                 operand.isString = true;
                 operand.raw = rest.mid(1, rest.length() - 2);
             } else if (argKind == ArgKind::FormStr) {
@@ -973,7 +996,7 @@ LogicalLine AstBuilder::build(const QString& rawLine,
     const QStringList tokens = splitOperands(remainder, argKind == ArgKind::Raw);
     for (const QString& token : tokens) {
         Operand operand(token);
-        if (token.length() >= 2 && token.startsWith('"') && token.endsWith('"')) {
+        if (wholeQuoted(token)) {
             operand.isString = true;
             operand.raw = token.mid(1, token.length() - 2);
         } else if (token.startsWith('%') || token.startsWith('$')) {

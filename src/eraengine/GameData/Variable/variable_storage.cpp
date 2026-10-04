@@ -45,6 +45,14 @@ VariableStorage::VariableStorage(QObject *parent)
 		m_losebase.fill(0, 1000);
 		m_palamlv.fill(0, 1000);
 		m_explv.fill(0, 1000);
+		// 阈值默认表来自 C# ConfigData 的 _Replace.csv 默认值：
+		//   PALAMLV {0,100,500,3000,10000,30000,60000,100000,150000,250000}
+		//   EXPLV   {0,1,4,20,50,200}
+		// GETPALAMLV/GETEXPLV 用第 i+1 项做阈值（VariableData.cs 构造时写入）
+		static const qint64 kPalamLvDef[] = {0, 100, 500, 3000, 10000, 30000, 60000, 100000, 150000, 250000};
+		for (size_t i = 0; i < std::size(kPalamLvDef); ++i) m_palamlv[i] = kPalamLvDef[i];
+		static const qint64 kExpLvDef[] = {0, 1, 4, 20, 50, 200};
+		for (size_t i = 0; i < std::size(kExpLvDef); ++i) m_explv[i] = kExpLvDef[i];
 		m_ejac.fill(0, 1000);
 		m_prevcom.fill(0, 1000);
 		m_selectcom.fill(0, 1000);
@@ -135,6 +143,11 @@ bool VariableStorage::loadVariableSizes(const QString& csvPath)
 int VariableStorage::arraySize(const QString& name) const
 {
 		const QString key = storageName(name);
+		// 局部/实参槽不在 m_global* 容器里，单独报尺寸（VARSIZE("LOCAL")）
+		if (key == QLatin1String("LOCAL")) return m_localIntVars.size();
+		if (key == QLatin1String("LOCALS")) return m_localStrVars.size();
+		if (key == QLatin1String("ARG")) return m_argIntVars.size();
+		if (key == QLatin1String("ARGS")) return m_argStrVars.size();
 		if (auto it = m_globalStr1D.constFind(key); it != m_globalStr1D.constEnd()) return it->size();
 		if (auto it = m_globalInt1D.constFind(key); it != m_globalInt1D.constEnd()) return it->size();
 		if (auto it = m_globalStr2D.constFind(key); it != m_globalStr2D.constEnd()) return it->size();
@@ -525,6 +538,12 @@ qint64 VariableStorage::getLocalInt(int index) const
 				return m_localIntVars.at(index);
 		}
 		return 0;
+}
+
+void VariableStorage::ensureLocalSize(int n)
+{
+		if (n > m_localIntVars.size()) m_localIntVars.resize(n);
+		if (n > m_localStrVars.size()) m_localStrVars.resize(n);
 }
 
 void VariableStorage::setLocalStr(int index, const QString &value)

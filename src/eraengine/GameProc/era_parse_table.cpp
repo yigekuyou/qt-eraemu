@@ -1111,11 +1111,12 @@ void EraParseTable::parseVariableDeclaration(const LogicalLine& line, const QStr
         decl.isConst = d.isConst;
         decl.isReference = d.reference;
         decl.isCharaData = d.charaData;
-        // `#DIM SAVEDATA GLOBAL X`（对齐 C# IsGlobal && IsSavedata）：
-        // 随 SAVEGLOBAL/LOADGLOBAL 持久化到 save_global.dat 的用户变量。
+        // 随 SAVEGLOBAL/LOADGLOBAL 持久化到 save_global.dat 的用户变量：
+        // `#DIM SAVEDATA GLOBAL X`（C# IsGlobal && IsSavedata）与 `#DIM GLOBAL X`
+        //（ecd/docs「全局变量随 SAVEGLOBAL/LOADGLOBAL 往返」）都算。
         // 注意 `#DIM GLOBAL X` 的 GLOBAL 写在变量名前（d.global），与
         // `#GLOBAL X` 指令（isGlobal）两种写法都要认。
-        decl.isGlobalSave = d.save && (d.global || isGlobal);
+        decl.isGlobalSave = (d.save || d.global) && (d.global || isGlobal);
 
         // 用户 `#DIM(S) CHARADATA`：登记为角色数据变量，供读写路径按
         // (角色号, 元素下标) 存取（否则元素互相覆盖，表现为「变量似乎不可变」）。

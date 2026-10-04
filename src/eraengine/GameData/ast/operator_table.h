@@ -93,7 +93,8 @@ constexpr OperatorDef asUnary(OperatorDef d, OperandType operand, OperandType re
 inline constexpr auto kOperatorTable = std::to_array<OperatorDef>({
     // 算术
     opdetail::bop(TokenType::MULTIPLY, 10, { opdetail::bin(OperandType::Int, OperandType::Int, OperandType::Int),
-                                             opdetail::bin(OperandType::Str, OperandType::Int, OperandType::Str) }),
+                                             opdetail::bin(OperandType::Str, OperandType::Int, OperandType::Str),
+                                             opdetail::bin(OperandType::Int, OperandType::Str, OperandType::Str) }),
     opdetail::bop(TokenType::DIVIDE,   10, { opdetail::bin(OperandType::Int, OperandType::Int, OperandType::Int) }),
     opdetail::bop(TokenType::MODULO,   10, { opdetail::bin(OperandType::Int, OperandType::Int, OperandType::Int) }),
     // 注：PLUS / MINUS 同时是一元运算符，定义见下方（避免重复条目）

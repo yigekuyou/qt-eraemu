@@ -154,6 +154,9 @@ void ScriptRunner::enterCall(const QString& function) {
     locals.parameters.clear();
     locals.aliases.clear();
     m_storage->setLocalContext(locals);
+    // #LOCALSIZE：本函数声明的 LOCAL/LOCALS 尺寸（只扩不缩，静态值保留）
+    const UserFunctionDecl& decl = m_table->userFunctions().value(function.toUpper());
+    if (decl.localSize > 0) m_storage->ensureLocalSize(decl.localSize);
     // perf：私有名字表按函数缓存（localNamesOfRef），免去每次调用重建 QStringList
     m_storage->setPrivateScope(function,
                                m_table->variableTable().localNamesOfRef(function));
@@ -1094,14 +1097,15 @@ ExecState ScriptRunner::executeLine(const LogicalLine& line) {
         };
 
         if (name == QLatin1String("ARRAYREMOVE")) {
-            // ARRAYREMOVE var, start, num：左移 num 个元素，尾部补 0/""（长度不变）
+            // ARRAYREMOVE var, start, num：左移 num 个元素，尾部补 0/""（长度不变）。
+            // eraTW 私家改造版 v39：num <= 0 时从 start 删到末尾。
             if (ops.isEmpty()) return ExecState::Continue;
             const QString var = ops.first().raw.trimmed();
             const int len = length1D(var);
             const int start = static_cast<int>(evalOp(1, 0));
-            qint64 numN = evalOp(2, -1);
-            if (len <= 0 || start < 0 || start >= len || numN == 0) return ExecState::Continue;
-            const int num = (numN < 0) ? (len - start) : static_cast<int>(qMin<qint64>(numN, len - start));
+            qint64 numN = evalOp(2, 0);
+            if (len <= 0 || start < 0 || start >= len) return ExecState::Continue;
+            const int num = (numN <= 0) ? (len - start) : static_cast<int>(qMin<qint64>(numN, len - start));
             if (isStrArray(var)) {
                 QStringList vals;
                 for (int i = 0; i < len; ++i) vals << m_storage->getGlobalStr1D(var, i);
@@ -2094,12 +2098,43 @@ void ScriptRunner::bindArguments(const UserFunctionDecl* info, const QList<Opera
     if (!info) return;
     for (int position = supplied; position < info->params.size(); ++position) {
         const UserParamDecl& param = info->params.at(position);
-        if (!param.hasDefault) continue;
-        const bool stringDefault = param.type == OperandType::Str && !param.defaultStr.isEmpty();
-        QString text = param.defaultStr;
-        if (stringDefault && text.size() >= 2 && text.startsWith(QLatin1Char('"'))
-            && text.endsWith(QLatin1Char('"'))) text = text.mid(1, text.size() - 2);
-        bindOne(&param, position, stringDefault, text, param.defaultInt);
+        if (param.hasDefault) {
+            const bool stringDefault = param.type == OperandType::Str && !param.defaultStr.isEmpty();
+            QString text = param.defaultStr;
+            if (stringDefault && text.size() >= 2 && text.startsWith(QLatin1Char('"'))
+                && text.endsWith(QLatin1Char('"'))) text = text.mid(1, text.size() - 2);
+            bindOne(&param, position, stringDefault, text, param.defaultInt);
+            continue;
+        }
+        // 省略且无缺省值：按类型绑 0 / 空串（C# 在函数入口把私有形参初始化为
+        // 零值；不写回的话形参名会解析到同名的**全局**变量 —— eraTW 的
+        // PARAM_DEF 组测试里 A 读到了系统变量 A:0 的残值）
+        switch (param.target) {
+        case UserParamTarget::Arg:
+            m_storage->setArgInt(param.index, 0);
+            m_storage->setLocalAlias(param.name, param.index);
+            break;
+        case UserParamTarget::Args:
+            m_storage->setArgStr(param.index, QString());
+            m_storage->setLocalAlias(param.name, param.index);
+            break;
+        case UserParamTarget::LocalVar:
+            if (param.fixedIndex >= 0) {
+                if (param.type == OperandType::Str)
+                    m_storage->setGlobalStr1D(param.varName, param.fixedIndex, QString());
+                else
+                    m_storage->setGlobalInt1D(param.varName, param.fixedIndex, 0);
+                break;
+            }
+            m_storage->setParameter(param.varName.isEmpty() ? param.name : param.varName,
+                param.type == OperandType::Str ? QVariant(QString())
+                                               : QVariant::fromValue<qint64>(0));
+            break;
+        case UserParamTarget::Unknown:
+        default:
+            m_storage->setArgInt(position, 0);
+            break;
+        }
     }
 }
 
@@ -2182,32 +2217,61 @@ bool ScriptRunner::invokeUserFunction(const QString& name, const QList<QVariant>
     // SELECTCASE 一个 CASE 都不命中，TEMPVAR 清除链整体失效。
     for (int position = args.size(); position < info->params.size(); ++position) {
         const UserParamDecl& param = info->params.at(position);
-        if (!param.hasDefault) continue;
-        const bool stringDefault = param.type == OperandType::Str && !param.defaultStr.isEmpty();
-        QString text = param.defaultStr;
-        if (stringDefault && text.size() >= 2 && text.startsWith(QLatin1Char('"'))
-            && text.endsWith(QLatin1Char('"'))) text = text.mid(1, text.size() - 2);
+        if (param.hasDefault) {
+            const bool stringDefault = param.type == OperandType::Str && !param.defaultStr.isEmpty();
+            QString text = param.defaultStr;
+            if (stringDefault && text.size() >= 2 && text.startsWith(QLatin1Char('"'))
+                && text.endsWith(QLatin1Char('"'))) text = text.mid(1, text.size() - 2);
+            switch (param.target) {
+            case UserParamTarget::Arg:
+                m_storage->setArgInt(param.index, param.defaultInt);
+                m_storage->setLocalAlias(param.name, param.index);
+                break;
+            case UserParamTarget::Args:
+                m_storage->setArgStr(param.index, stringDefault ? text : QString());
+                m_storage->setLocalAlias(param.name, param.index);
+                break;
+            case UserParamTarget::LocalVar:
+                if (param.fixedIndex >= 0) {
+                    m_storage->setGlobalInt1D(param.varName, param.fixedIndex, param.defaultInt);
+                    break;
+                }
+                m_storage->setParameter(param.varName.isEmpty() ? param.name : param.varName,
+                    stringDefault ? QVariant(text) : QVariant::fromValue<qint64>(param.defaultInt));
+                break;
+            case UserParamTarget::Unknown:
+            default:
+                m_storage->setArgInt(position, param.defaultInt);
+                if (stringDefault) m_storage->setArgStr(position, text);
+                break;
+            }
+            continue;
+        }
+        // 省略且无缺省值：按类型绑 0 / 空串（同 bindArguments 的省略语义）
         switch (param.target) {
         case UserParamTarget::Arg:
-            m_storage->setArgInt(param.index, param.defaultInt);
+            m_storage->setArgInt(param.index, 0);
             m_storage->setLocalAlias(param.name, param.index);
             break;
         case UserParamTarget::Args:
-            m_storage->setArgStr(param.index, stringDefault ? text : QString());
+            m_storage->setArgStr(param.index, QString());
             m_storage->setLocalAlias(param.name, param.index);
             break;
         case UserParamTarget::LocalVar:
             if (param.fixedIndex >= 0) {
-                m_storage->setGlobalInt1D(param.varName, param.fixedIndex, param.defaultInt);
+                if (param.type == OperandType::Str)
+                    m_storage->setGlobalStr1D(param.varName, param.fixedIndex, QString());
+                else
+                    m_storage->setGlobalInt1D(param.varName, param.fixedIndex, 0);
                 break;
             }
             m_storage->setParameter(param.varName.isEmpty() ? param.name : param.varName,
-                stringDefault ? QVariant(text) : QVariant::fromValue<qint64>(param.defaultInt));
+                param.type == OperandType::Str ? QVariant(QString())
+                                               : QVariant::fromValue<qint64>(0));
             break;
         case UserParamTarget::Unknown:
         default:
-            m_storage->setArgInt(position, param.defaultInt);
-            if (stringDefault) m_storage->setArgStr(position, text);
+            m_storage->setArgInt(position, 0);
             break;
         }
     }

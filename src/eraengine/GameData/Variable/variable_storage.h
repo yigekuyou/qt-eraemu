@@ -169,6 +169,11 @@ public:
 		void setArgStr(int index, const QString& value);
 		[[nodiscard]] QString getArgStr(int index) const;
 
+		// #LOCALSIZE：把当前函数的 LOCAL/LOCALS 扩到 n（只扩不缩，保留静态值）
+		void ensureLocalSize(int n);
+		[[nodiscard]] int localIntSize() const { return m_localIntVars.size(); }
+		[[nodiscard]] int localStrSize() const { return m_localStrVars.size(); }
+
 		// 局部变量名别名：用户函数形参(@F(A,B)) -> LOCAL 槽位，供表达式解析 A/B
 		void setLocalAlias(const QString &name, int index);
 		int  localAliasIndex(const QString &name) const;

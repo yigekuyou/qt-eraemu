@@ -2326,6 +2326,8 @@ void ExecutionEngine::handleSaveData(const LogicalLine& line)
     if (f.open(QIODevice::WriteOnly | QIODevice::Text)) {
         f.write(body.toUtf8());
         f.close();
+        // SAVEDATA_TEXT 回填标题（供保存后的界面/脚本读取）
+        if (m_storage) m_storage->setSystemStr(QStringLiteral("SAVEDATA_TEXT"), 0, saveText);
         qDebug() << "[save] SAVEDATA" << idx << "->" << path;
     } else {
         qWarning() << "[save] SAVEDATA 写入失败:" << path;

@@ -160,10 +160,19 @@ ErbPreprocessor::RenameMap ErbPreprocessor::parseRenameCsv(const QString& conten
 }
 
 QSet<QString> ErbPreprocessor::collectDefines(const QString& content) {
+    const MacroTable table = collectMacroTable(content);
     QSet<QString> macros;
+    for (auto it = table.constBegin(); it != table.constEnd(); ++it)
+        macros.insert(it.key());
+    return macros;
+}
+
+ErbPreprocessor::MacroTable ErbPreprocessor::collectMacroTable(const QString& content) {
+    MacroTable table;
     const QStringList lines = content.split(QLatin1Char('\n'));
     for (const QString& raw : lines) {
         QString s = raw.trimmed();
+        if (s.endsWith(QLatin1Char('\r'))) s.chop(1);
         if (!s.startsWith(QLatin1Char('#'))) continue;
         s = s.mid(1).trimmed();
         if (!s.startsWith(QLatin1String("DEFINE"), Qt::CaseInsensitive)) continue;
@@ -171,9 +180,130 @@ QSet<QString> ErbPreprocessor::collectDefines(const QString& content) {
         int i = 0;
         while (i < s.size() && s.at(i).isSpace()) ++i;
         const QString name = readIdentifier(s, i);
-        if (!name.isEmpty()) macros.insert(name);
+        if (name.isEmpty()) continue;
+        // C# analyzeSharpDefine：带参宏的 '(' 必须紧贴宏名（中间不允许空白）
+        MacroDef def;
+        if (i < s.size() && s.at(i) == QLatin1Char('(')) {
+            const int close = s.indexOf(QLatin1Char(')'), i);
+            if (close > i) {
+                for (const QString& p : s.mid(i + 1, close - i - 1).split(QLatin1Char(','))) {
+                    const QString t = p.trimmed();
+                    if (!t.isEmpty()) def.params.append(t);
+                }
+                s = s.mid(close + 1);
+            }
+        }
+        def.body = s.trimmed();
+        table.insert(name, def);
     }
-    return macros;
+    return table;
+}
+
+namespace {
+
+// 标识符边界判定（前后均不得是标识符字符）
+bool isIdentChar(QChar c) {
+    return c.isLetterOrNumber() || c == QLatin1Char('_') || c.unicode() > 127;
+}
+
+} // namespace
+
+QString ErbPreprocessor::expandMacros(const QString& line) const {
+    if (m_macroTable.isEmpty()) return line;
+    QString text = line;
+    for (int pass = 0; pass < 32; ++pass) {
+        QString out;
+        int i = 0;
+        bool changed = false;
+        while (i < text.size()) {
+            const QChar c = text.at(i);
+            if (c == QLatin1Char('"')) {
+                // 字符串字面量整体拷贝（C# 词法级展开不会进入字符串 token）
+                out += c;
+                ++i;
+                while (i < text.size()) {
+                    out += text.at(i);
+                    const bool isEnd = text.at(i) == QLatin1Char('"');
+                    ++i;
+                    if (isEnd) break;
+                }
+                continue;
+            }
+            if (!isIdentChar(c)) { out += c; ++i; continue; }
+            int j = i;
+            while (j < text.size() && isIdentChar(text.at(j))) ++j;
+            const QString id = text.mid(i, j - i);
+            auto it = m_macroTable.constFind(id);
+            if (it == m_macroTable.constEnd()) {
+                out += id;
+                i = j;
+                continue;
+            }
+            const MacroDef& def = it.value();
+            if (def.params.isEmpty()) {
+                out += def.body;
+                i = j;
+                changed = true;
+                continue;
+            }
+            // 带参宏：宏名后必须紧跟 '('（C# hasArg 规则）
+            int k = j;
+            while (k < text.size() && text.at(k).isSpace()) ++k;
+            if (k >= text.size() || text.at(k) != QLatin1Char('(')) {
+                out += id;
+                i = j;
+                continue;
+            }
+            // 顶层逗号切分实参
+            QStringList args;
+            int depth = 0;
+            int start = ++k;
+            while (k < text.size()) {
+                const QChar ck = text.at(k);
+                if (ck == QLatin1Char('(')) ++depth;
+                else if (ck == QLatin1Char(')')) {
+                    if (depth == 0) break;
+                    --depth;
+                } else if (ck == QLatin1Char(',') && depth == 0) {
+                    args.append(text.mid(start, k - start));
+                    start = k + 1;
+                }
+                ++k;
+            }
+            if (k >= text.size()) {   // 括号未闭合：不展开
+                out += id;
+                i = j;
+                continue;
+            }
+            args.append(text.mid(start, k - start));
+            QString body = def.body;
+            for (int p = 0; p < def.params.size() && p < args.size(); ++p) {
+                const QString& param = def.params.at(p);
+                // 仅替换 body 中的完整标识符
+                QString replaced;
+                int bi = 0;
+                while (bi < body.size()) {
+                    if (isIdentChar(body.at(bi))) {
+                        int bj = bi;
+                        while (bj < body.size() && isIdentChar(body.at(bj))) ++bj;
+                        const QString bid = body.mid(bi, bj - bi);
+                        replaced += (bid == param) ? args.value(p).trimmed() : bid;
+                        bi = bj;
+                    } else {
+                        replaced += body.at(bi);
+                        ++bi;
+                    }
+                }
+                body = replaced;
+            }
+            out += body;
+            i = k + 1;
+            changed = true;
+        }
+        if (!changed) return out;
+        text = out;
+    }
+    return text;
 }
 
 QList<ErbSourceLine> ErbPreprocessor::process(const QString& content, QStringList* warnings,
@@ -209,6 +339,13 @@ QList<ErbSourceLine> ErbPreprocessor::process(const QString& content, QStringLis
         // 空行 / 纯空白行：C# 直接跳过（不产生逻辑行）
         if (line.isEmpty() || line.trimmed().isEmpty()) {
             out.append(outLine);   // text 为空 -> Null 行
+            continue;
+        }
+
+        // 宏替换（C# 在词法级展开；这里在行文本级做，先于一切解析）
+        line = expandMacros(line);
+        if (line.isEmpty() || line.trimmed().isEmpty()) {
+            out.append(outLine);
             continue;
         }
 

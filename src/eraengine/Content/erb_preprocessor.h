@@ -49,12 +49,23 @@ class ErbPreprocessor {
 public:
     using RenameMap = QHash<QString, QString>;   // "[[''X''']]" -> 替换文本
 
+    // 宏定义：对象宏 name -> 替换文本；带参宏 name -> (形参列表, 替换模板)
+    struct MacroDef {
+        QString body;              // 替换文本
+        QStringList params;        // 带参宏形参；空 = 对象宏
+    };
+    using MacroTable = QHash<QString, MacroDef>;
+
     void setRenameMap(const RenameMap& map) { m_rename = map; }
     [[nodiscard]] const RenameMap& renameMap() const { return m_rename; }
 
     // 已定义的宏名（来自 .ERH 的 #DEFINE），供 [IF name] / [ELSEIF name] 判定
     void setMacros(const QSet<QString>& macros) { m_macros = macros; }
     [[nodiscard]] const QSet<QString>& macros() const { return m_macros; }
+
+    // 宏定义表（对象宏 + 带参宏），供行文本展开
+    void setMacroTable(const MacroTable& table) { m_macroTable = table; }
+    [[nodiscard]] const MacroTable& macroTable() const { return m_macroTable; }
 
     void setDebugMode(bool on) { m_debugMode = on; }
 
@@ -69,9 +80,17 @@ public:
     // 从（头）文件内容收集 #DEFINE 宏名（对齐 C# HeaderFileLoader.analyzeSharpDefine）
     static QSet<QString> collectDefines(const QString& content);
 
+    // 收集完整宏定义（#DEFINE name body / #DEFINE name(a,b) body）
+    static MacroTable collectMacroTable(const QString& content);
+
+    // 对一行源文本应用宏替换（标识符边界匹配、跳过字符串字面量、
+    // 循环展开至不动点，上限防自引用死循环）
+    QString expandMacros(const QString& line) const;
+
 private:
     RenameMap m_rename;
     QSet<QString> m_macros;
+    MacroTable m_macroTable;
     bool m_debugMode = false;
 };
 

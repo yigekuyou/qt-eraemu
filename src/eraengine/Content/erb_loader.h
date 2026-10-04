@@ -131,6 +131,7 @@ private:
         QStringList files;      // 排序后的全部 .erb/.erh（头文件在前）
         QHash<QString, QString> renames;
         QSet<QString> macros;
+        ErbPreprocessor::MacroTable macroTable;
         FunctionTypes functionTypes;
         bool ok = false;
     };

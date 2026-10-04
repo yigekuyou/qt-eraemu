@@ -56,6 +56,9 @@
 //     TIMENAME/MONEYNAME…）登记进运行期扩展变量表（system_variables.h）；
 //     regNameTable() 为基础变量补名表映射（DAY -> DAY.CSV）。fail-fast：
 //     原生系统变量 / 核心已映射名表拒绝注册（扩展不得覆盖核心）。
+//   · 音频管线：regAudioPipelines() 登记扩展要维护的播放管线数量（4 字节无符号；
+//     C# 原版没有音频，故整块能力住在扩展）。引擎把数量 + 播放池交给 QML
+//     播放维护层 —— C++ 决定「第几条管线播什么」，QML 负责真正播放。
 //
 // 启用语义：默认全启用 —— 无清单文件（游戏不会默认带 emuera_extensions.txt），
 // 没有运行期发现，也没有惰性绑定；EE 扩展在注册类构造时一次登记。
@@ -66,6 +69,9 @@
 // 只调 reg() 即完成扩展 —— 这才是扩展函数。
 // ---------------------------------------------------------------------------
 class ExtensionRegistry;
+// 音频播放「管线池」（定义在 GameView/audio_pipeline_pool.h）：核心引擎不持有
+// 音频后端，只把它当一个「由扩展登记、由引擎装配」的服务转发给 QML 播放层。
+class AudioPipelinePool;
 
 // EE 扩展登记入口（定义在 ee_extension.h；只由注册类构造函数调用）
 void registerEeExtensions(ExtensionRegistry& ext);
@@ -109,6 +115,9 @@ public:
         std::function<int(const QString&, bool)> functionExists;   // EXISTFUNCTION(name, ci)
         std::function<QString()>                 doingFunction;    // GETDOINGFUNCTION()
         std::function<QString(int)>              displayLine;      // GETDISPLAYLINE(lineNo)
+        // 表达式求值（扩展命令实参：PLAYBGM 的字符串式 / SET*VOLUME 的整数式）。
+        // 惰性：解析表装配后才可用；未注入时扩展退回按字面量处理。
+        std::function<QVariant(const QString&)>  evaluate;
     };
     void setServices(Services s) { m_services = std::move(s); }
     // 引擎在运行期补挂「式中函数」服务（构造期 storage 已知，但这些 provider
@@ -192,6 +201,21 @@ public:
         m_nameTables.insert(upper);
         sysvar::registerExtensionNameTable(upper.toStdString(), csvFileName.toStdString());
     }
+
+    // ---- 音频播放管线（扩展能力：C# 原版没有音频）------------------------
+    // ⑦ 登记「音效(SE)管线」数量。核心引擎**不含任何音频后端，也不硬编码这个数**
+    //    —— 数量（4 字节无符号 quint32）由扩展声明。对齐 EE 源码
+    //    （emuera.em `Instraction.Child.cs`）：`Sound[] sound = new Sound[10]`
+    //    即 10 条音效管线，BGM 另占 1 条独立管线（`Sound bgm`）。
+    //    引擎据此把数量交给 QML 播放维护层（QML 按此维护这么多条 SE 播放器
+    //    + 1 条 BGM 播放器）。没有程序会同时播 2^32-1 条 BGM，故 quint32 足够。
+    void regAudioPipelines(quint32 soundPipelines) { m_audioPipelines = soundPipelines; }
+    [[nodiscard]] quint32 audioPipelines() const { return m_audioPipelines; }
+
+    // 音频播放池由**引擎**在装配后注入（扩展实现经 audioPool() 取用，
+    // 把 PLAYBGM/PLAYSOUND/… 变成对池的控制调用）。
+    void setAudioPool(AudioPipelinePool* pool) { m_audioPool = pool; }
+    [[nodiscard]] AudioPipelinePool* audioPool() const { return m_audioPool; }
 
     // ---- 查询（执行引擎使用；查询侧零扩展名）------------------------------
 
@@ -280,6 +304,8 @@ private:
     QSet<QString> m_variables;                  // 扩展系统变量（名字，大写）
     QSet<QString> m_nameTables;                 // 扩展名表映射（基础变量名，大写）
     Services m_services;                        // 扩展实现所需的服务（引擎填入）
+    quint32 m_audioPipelines = 0;               // 扩展登记的音频管线数（4 字节无符号）
+    AudioPipelinePool* m_audioPool = nullptr;   // 音频播放池（引擎装配后注入）
 };
 
 // ---------------------------------------------------------------------------

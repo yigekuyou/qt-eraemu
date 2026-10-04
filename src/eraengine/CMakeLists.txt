@@ -134,6 +134,8 @@ GameView/resource_image_provider.cpp
 GameView/resource_image_provider.h
 GameView/graphics_store.cpp
 GameView/graphics_store.h
+GameView/audio_pipeline_pool.cpp
+GameView/audio_pipeline_pool.h
 )
 
 # Add QtConcurrent and OpenMP after the library is defined
@@ -230,6 +232,8 @@ eraengine_add_test(test_train_reset)
 eraengine_add_test(test_ecd_command_coverage)
 eraengine_add_test(test_print_template)
 eraengine_add_test(test_extension_registry)
+eraengine_add_test(test_audio_pipeline)
+add_test(NAME test_audio_pipeline COMMAND test_audio_pipeline)
 add_test(NAME test_print_template COMMAND test_print_template)
 eraengine_add_test(test_print_whitespace)
 target_link_libraries(test_print_whitespace PRIVATE Qt6::Test)

@@ -50,6 +50,7 @@
 #include "console_backend.h"
 #include "gui_manager.h"
 #include "resource_image_provider.h"
+#include "audio_pipeline_pool.h"
 
 class EraDBusDebug;
 
@@ -73,6 +74,10 @@ public:
 		Q_PROPERTY(EraParseTable* parseTable READ getParseTable CONSTANT)
 		Q_PROPERTY(ConsoleBackend* console READ getConsole CONSTANT)
 		Q_PROPERTY(GuiManager* gui READ getGuiManager CONSTANT)
+		// 音频播放管线池（C++ 控制端）：QML 按 capacity() 维护播放器并监听其信号
+		Q_PROPERTY(AudioPipelinePool* audio READ getAudio CONSTANT)
+		// 最近一次执行是否出错（底部状态灯用；装载/重新运行会复位）
+		Q_PROPERTY(bool hasError READ hasError NOTIFY hasErrorChanged)
     // Game base data
     GameBaseData* gameBaseData() { return &m_gameBaseData; }
     
@@ -110,6 +115,13 @@ public:
     ScriptRunner* getScriptRunner() { return &m_scriptRunner; }
     ConsoleBackend* getConsole() { return &m_console; }
     GuiManager* getGuiManager() { return &m_guiManager; }
+    AudioPipelinePool* getAudio() { return &m_audio; }
+    [[nodiscard]] bool hasError() const { return m_hasError; }
+    void setHasError(bool on) {
+        if (m_hasError == on) return;
+        m_hasError = on;
+        emit hasErrorChanged();
+    }
 
     // ---- 目录解析（对齐 C# Program.ErbDir / Program.CsvDir）----
     // 只在这两个目录内检索脚本与数据，不再遍历整个游戏根目录
@@ -224,6 +236,7 @@ signals:
     void scriptsLoadStarted();
     void scriptsLoadProgress(int processed, int total);
     void scriptsLoaded(bool ok);
+    void hasErrorChanged();
     
 private:
     QString m_gameDirectory;
@@ -250,6 +263,7 @@ private:
     ScriptRunner m_scriptRunner;
     ConsoleBackend m_console;
     GuiManager m_guiManager;
+    AudioPipelinePool m_audio;   // 音频播放管线池（扩展登记数量，QML 维护播放）
     
     // Phase 6: Missing features
     IdentifierDictionary m_identifierDictionary;
@@ -275,6 +289,7 @@ private:
     // 异步装载：连接句柄（避免重复连接）
     QMetaObject::Connection m_loadProgressConn;
     QMetaObject::Connection m_loadCompletedConn;
+    bool m_hasError = false;   // 最近一次执行出错（状态灯）
 
     // ---- 内部：目录解析与分批装载 ----
     void resolveGameDirs();          // 解析 CSV/ERB 目录（绝对路径 + 实际大小写）

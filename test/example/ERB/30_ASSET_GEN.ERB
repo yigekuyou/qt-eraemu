@@ -1,0 +1,154 @@
+;=============================================================
+; [30] 音频 · 图片（随机生成命令 · 回归）
+;
+; 用命令**随机生成**素材来测：
+;   * 图片：随机尺寸/颜色/像素；GCREATE -> GCLEAR -> GSETCOLOR
+;           -> GSETBRUSH -> GFILLRECTANGLE -> GGETCOLOR -> SPRITECREATE
+;           -> SPRITEGETCOLOR -> HTML_PRINT <img> -> GDISPOSE。
+;     「随机」只影响数值，不影响断言含义：期望值就用同一批随机变量，
+;     所以任何随机结果下断言都必须成立（不依赖固定种子）。
+;   * 音频：随机生成参数（名字/音量/重复次数）驱动 EE 音频命令
+;           PLAYBGM / PLAYSOUND / STOPBGM / STOPSOUND / SETBGMVOLUME /
+;           SETSOUNDVOLUME / EXISTSOUND。素材 test/example/sound/*.wav
+;           为脚本随机合成（见 test/README.md）。
+;=============================================================
+@TEST_ASSET_GEN
+#DIM NONG
+CALL TEST_IMAGE_GEN
+NONG += RESULT
+CALL TEST_AUDIO_GEN
+NONG += RESULT
+RETURN NONG
+
+;=============================================================
+; 图片：随机生成 + 读取校验
+;=============================================================
+@TEST_IMAGE_GEN
+#DIM FAILS
+#DIM I
+#DIM GID
+#DIM W
+#DIM H
+#DIM COL
+#DIM COL2
+#DIM PX
+#DIM PY
+#DIMS NAME
+PRINTL == 组30：图片（随机生成：GCREATE/GSETBRUSH/GFILLRECTANGLE/GGETCOLOR/SPRITECREATE） ==
+
+FOR I, 0, 8
+	GID = 100 + I
+	;随机尺寸（宽 12..71 / 高 8..47）
+	W = RAND:60 + 12
+	H = RAND:40 + 8
+	;随机不透明色（ARGB 0xFFxxxxxx）
+	COL = 4278190080 + RAND:16777216
+	COL2 = 4278190080 + RAND:16777216
+	SIF COL2 == COL
+		COL2 = COL + 1
+	;随机像素点（避开边界与 (0,0)，保证 (0,0) 仍是底色）
+	PX = RAND:MAX(W - 2, 1) + 1
+	PY = RAND:MAX(H - 2, 1) + 1
+
+	CALL ASSERT_EQ, GCREATE(GID, W, H), 1, @"GCREATE(随机尺寸)"
+	FAILS += RESULT
+	CALL ASSERT_EQ, GCREATED(GID), 1, @"GCREATED"
+	FAILS += RESULT
+	CALL ASSERT_EQ, GWIDTH(GID), W, @"GWIDTH = 随机宽"
+	FAILS += RESULT
+	CALL ASSERT_EQ, GHEIGHT(GID), H, @"GHEIGHT = 随机高"
+	FAILS += RESULT
+
+	CALL ASSERT_EQ, GCLEAR(GID, COL), 1, @"GCLEAR(随机色)"
+	FAILS += RESULT
+	CALL ASSERT_EQ, GGETCOLOR(GID, 0, 0), COL, @"GGETCOLOR(0,0) = 随机色"
+	FAILS += RESULT
+	CALL ASSERT_EQ, GGETCOLOR(GID, W - 1, H - 1), COL, @"GGETCOLOR(W-1,H-1) = 随机色"
+	FAILS += RESULT
+
+	CALL ASSERT_EQ, GSETCOLOR(GID, COL2, PX, PY), 1, @"GSETCOLOR(随机位置)"
+	FAILS += RESULT
+	CALL ASSERT_EQ, GGETCOLOR(GID, PX, PY), COL2, @"GGETCOLOR(随机位置) = 随机色2"
+	FAILS += RESULT
+	CALL ASSERT_EQ, GGETCOLOR(GID, 0, 0), COL, @"单像素不改底色"
+	FAILS += RESULT
+
+	CALL ASSERT_EQ, GSETBRUSH(GID, COL2), 1, @"GSETBRUSH(随机色2)"
+	FAILS += RESULT
+	CALL ASSERT_EQ, GFILLRECTANGLE(GID, PX, PY, 2, 2), 1, @"GFILLRECTANGLE(随机起点)"
+	FAILS += RESULT
+	CALL ASSERT_EQ, GGETCOLOR(GID, PX + 1, PY + 1), COL2, @"GGETCOLOR(矩形内) = 随机色2"
+	FAILS += RESULT
+	CALL ASSERT_EQ, GGETCOLOR(GID, -1, 0), -1, @"GGETCOLOR 越界 = -1"
+	FAILS += RESULT
+
+	;`= @"…"` 应当剥掉 @" 与引号（只展开 %…%）——回归
+	NAME = @"rand_sprite_%I%"
+	CALL ASSERT_EQ, SPRITECREATE(NAME, GID), 1, @"SPRITECREATE(随机命名)"
+	FAILS += RESULT
+	CALL ASSERT_EQ, SPRITECREATED(NAME), 1, @"SPRITECREATED"
+	FAILS += RESULT
+	CALL ASSERT_EQ, SPRITEWIDTH(NAME), W, @"SPRITEWIDTH = 随机宽"
+	FAILS += RESULT
+	CALL ASSERT_EQ, SPRITEHEIGHT(NAME), H, @"SPRITEHEIGHT = 随机高"
+	FAILS += RESULT
+	CALL ASSERT_EQ, SPRITEGETCOLOR(NAME, 0, 0), COL, @"SPRITEGETCOLOR(0,0) = 随机色"
+	FAILS += RESULT
+
+	;把随机图作为图片区块送进渲染层（仅首个，避免刷屏）
+	SIF I == 0
+		HTML_PRINT @"<p align='left'><img src='%NAME%' width='%W%' height='%H%'></p>"
+
+	CALL ASSERT_EQ, GDISPOSE(GID), 1, @"GDISPOSE"
+	FAILS += RESULT
+	CALL ASSERT_EQ, GCREATED(GID), 0, @"GDISPOSE 后 GCREATED = 0"
+	FAILS += RESULT
+NEXT
+RETURN FAILS
+
+;=============================================================
+; 音频：随机参数驱动 EE 音频命令
+;=============================================================
+@TEST_AUDIO_GEN
+#DIM FAILS
+#DIM I
+#DIM VOL
+#DIM REP
+#DIM TMP
+#DIMS NAME
+PRINTL == 组30：音频（随机参数：PLAYBGM/PLAYSOUND/SET*VOLUME/EXISTSOUND） ==
+
+;素材存在性（test/example/sound/*.wav 为随机合成）
+CALL ASSERT_EQ, EXISTSOUND("bgm01.wav"), 1, @"EXISTSOUND(存在的 BGM) = 1"
+FAILS += RESULT
+CALL ASSERT_EQ, EXISTSOUND("se01.wav"), 1, @"EXISTSOUND(存在的 SE) = 1"
+FAILS += RESULT
+CALL ASSERT_EQ, EXISTSOUND("nosuch_se.wav"), 0, @"EXISTSOUND(不存在) = 0"
+FAILS += RESULT
+
+FOR I, 0, 12
+	VOL = RAND:101
+	REP = RAND:4 + 1
+	;随机资源名（基本不可能命中磁盘）
+	TMP = RAND:99999
+	NAME = @"rand_%I%_%TMP%.wav"
+	CALL ASSERT_EQ, EXISTSOUND(NAME), 0, @"EXISTSOUND(随机名) = 0"
+	FAILS += RESULT
+
+	;随机参数驱动命令（音量 0..100 / 重复 1..4 / 随机分支）
+	SETBGMVOLUME VOL
+	SETSOUNDVOLUME VOL
+	IF TMP % 2 == 0
+		PLAYBGM "bgm01.wav"
+	ELSE
+		PLAYSOUND "se01.wav", REP
+	ENDIF
+NEXT
+CALL ASSERT_TRUE, 1, @"PLAYBGM/PLAYSOUND/SET*VOLUME 随机驱动不报错"
+FAILS += RESULT
+
+STOPBGM
+STOPSOUND
+CALL ASSERT_TRUE, 1, @"STOPBGM/STOPSOUND 执行不报错"
+FAILS += RESULT
+RETURN FAILS

@@ -192,6 +192,17 @@ EraEngine::EraEngine(QObject *parent)
 			       const QList<const ExpressionNode*>& argNodes, QVariant& out) -> bool {
 				return m_executionEngine.extensions().runExpression(name, args, argNodes, out);
 			});
+		// ---- 音频播放（扩展能力；C# 原版没有）----
+		// 扩展登记「管线数量」（4 字节无符号，不硬编码在核心），引擎把播放池注入
+		// 扩展（C++ 控制端），QML 按 pool.capacity() 维护对应数量的播放器。
+		m_executionEngine.extensions().setAudioPool(&m_audio);
+		m_audio.setSoundPipelines(m_executionEngine.extensions().audioPipelines());
+		// 执行错误 -> 状态灯（QML 读 hasError）
+		connect(&m_executionEngine, &ExecutionEngine::errorOccurred, this,
+		        [this](const QString& message) {
+			        qWarning() << "[EraEngine] 执行错误:" << message;
+			        setHasError(true);
+		        });
 		m_expressionEvaluator.setHtmlPrintedProvider(
 			[this](int lineNo) -> QString { return m_console.htmlPrintedStr(lineNo); },
 			[this]() -> QString { return m_console.htmlPopPrintingStr(); });
@@ -511,6 +522,7 @@ void EraEngine::loadAsync(const QString& directory)
 		// sync here as well as in setGameDirectory(), otherwise image://emuera
 		// requests still point at the previous game (or at an empty root).
 		ResourceImageProvider::setRoot(dir);
+		m_audio.setSoundDirectory(dir);   // 音频资源检索目录（PLAYBGM/PLAYSOUND）
 		reloadAsync();
 }
 
@@ -533,6 +545,7 @@ void EraEngine::setGameDirectory(const QString& directory)
 				m_guiManager.setGameDirectory(dir);
 				m_guiManager.setStartDirectory(dir);
 				ResourceImageProvider::setRoot(dir);
+				m_audio.setSoundDirectory(dir);   // 音频资源检索目录（PLAYBGM/PLAYSOUND）
 				// SAVEGLOBAL / LOADGLOBAL 的落盘目录（对齐 C# getSaveDataPathG）
 				m_executionEngine.setGameDataDir(dir);
 				// SAVETEXT / LOADTEXT / SAVECHARA / LOADCHARA / GSAVE / GLOAD 的落盘目录
@@ -547,6 +560,7 @@ void EraEngine::setGameDirectory(const QString& directory)
 
 void EraEngine::reload()
 {
+		setHasError(false);   // 重新装载 -> 清掉上一次的错误灯
 		// Reload scripts from current directory
 		if (!m_gameDirectory.isEmpty()) {
 				// 对齐 C#：先解析 ErbDir / CsvDir（只在这两个目录内检索）

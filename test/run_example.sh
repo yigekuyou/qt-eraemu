@@ -19,6 +19,7 @@
 #   ./test/run_example.sh 27       # 文档语义·表达式/字面量/声明（ecd/docs + ERH 宏/REF/参数初始值）
 #   ./test/run_example.sh 28       # 文档语义·SELECTCASE/循环/EE 与 eraTW 惯用法
 #   ./test/run_example.sh 29       # 破坏性组（BEGIN FIRST：@EVENTFIRST #PRI/#LATER/#SINGLE/#ONLY 流）
+#   ./test/run_example.sh 30       # 音频·图片（用命令随机生成素材：G* 图像命令 + EE 音频命令）
 #
 # 依赖：build/src/eraengine/test_cli
 #       （cmake --build build --target test_cli）

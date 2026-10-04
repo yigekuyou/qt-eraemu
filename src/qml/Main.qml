@@ -255,20 +255,105 @@ ApplicationWindow {
         engine: eraEngine
     }
 
-    // ---- 状态栏 ----
-    footer: ToolBar {
-        visible: enabled // eraEngine.console.waitingInput
+    // ---- 音频播放维护层（QML 按 C++ 登记的管线数量维护播放器）----
+    AudioPlayers {
+        id: audioPlayers
+        audio: eraEngine.audio
+    }
+
+    // ---- 底部「红绿灯」状态条 ----
+    // 高度最小、悬浮在内容之上（不占布局、不挤动控制台）；每个灯一个含义，
+    // 悬浮（Hover）弹出 ToolTip 说明。灯亮/灭 = 该状态此刻是否成立。
+    Item {
+        id: statusStrip
+        anchors.left: parent.left
+        anchors.bottom: parent.bottom
+        anchors.margins: 4
+        width: lightRow.width + 10
+        height: 12
+        z: 1000
+
+        property bool loading: false      // 脚本装载中
+        property bool errorState: eraEngine.hasError
+        property int warningCount: 0      // 装载告警条数
+        readonly property bool waiting: eraEngine.console.waitingInput
+        readonly property int audioChannels: audioPlayers.activeChannels
+
+        Rectangle {
+            anchors.fill: parent
+            radius: height / 2
+            color: Qt.rgba(0, 0, 0, 0.5)
+            border.width: 1
+            border.color: Qt.rgba(1, 1, 1, 0.15)
+        }
 
         Row {
-            anchors.verticalCenter: parent.verticalCenter
-            anchors.left: parent.left
-            anchors.leftMargin: 8
-            spacing: 12
-            Label {
-                text: eraEngine.console.waitingInput ? qsTr("等待输入：") + eraEngine.console.inputKind : ""
-                color: eraEngine.gui.foreColor
+            id: lightRow
+            anchors.centerIn: parent
+            spacing: 5
+
+            // ① 错误：最近一次执行/装载出错
+            StatusLight {
+                litColor: "#e0483c"
+                lit: statusStrip.errorState
+                label: qsTr("错误")
+                detail: lit ? qsTr("最近一次执行出错") : qsTr("正常")
+            }
+            // ② 载入：正在装载脚本
+            StatusLight {
+                litColor: "#e0c040"
+                lit: statusStrip.loading
+                label: qsTr("载入")
+                detail: lit ? qsTr("正在装载脚本") : qsTr("空闲")
+            }
+            // ③ 等待输入：脚本停在 INPUT 等玩家操作
+            StatusLight {
+                litColor: "#48c048"
+                lit: statusStrip.waiting
+                label: qsTr("等待输入")
+                detail: lit ? qsTr("等待：%1").arg(eraEngine.console.inputKind)
+                            : qsTr("脚本运行中")
+            }
+            // ④ 音频：有音频管线正在出声
+            StatusLight {
+                litColor: "#48a0e0"
+                lit: statusStrip.audioChannels > 0
+                label: qsTr("音频")
+                detail: lit ? qsTr("播放中：%1 路").arg(statusStrip.audioChannels)
+                            : qsTr("静音")
+            }
+            // ⑤ 装载告警：解析期告警条数
+            StatusLight {
+                litColor: "#e08a30"
+                lit: statusStrip.warningCount > 0
+                label: qsTr("装载告警")
+                detail: statusStrip.warningCount > 0
+                        ? qsTr("%1 条").arg(statusStrip.warningCount) : qsTr("无")
             }
         }
+    }
+
+    // 状态灯（最小尺寸圆点；悬浮显示含义 + 当前状态）
+    component StatusLight: Rectangle {
+        id: light
+        property color litColor: "#48c048"
+        property bool lit: false
+        property string label: ""
+        property string detail: ""
+
+        width: 7
+        height: 7
+        radius: width / 2
+        color: lit ? litColor : Qt.rgba(1, 1, 1, 0.16)
+        border.width: 1
+        border.color: lit ? Qt.rgba(1, 1, 1, 0.6) : Qt.rgba(1, 1, 1, 0.22)
+
+        HoverHandler {
+            id: hover
+        }
+        ToolTip.visible: hover.hovered
+        ToolTip.delay: 200
+        ToolTip.text: light.label + "：" + light.detail
     }
 
     // ---- 快捷键：全屏 ----
@@ -291,7 +376,12 @@ ApplicationWindow {
     // 装载完成后自动进入系统状态机（标题画面 → 等待输入）
     Connections {
         target: eraEngine
+        function onScriptsLoadStarted() {
+            statusStrip.loading = true;
+        }
         function onScriptsLoaded(ok) {
+            statusStrip.loading = false;
+            statusStrip.warningCount = eraEngine.parseWarnings().length;
             if (ok)
                 eraEngine.runSystem();
         }

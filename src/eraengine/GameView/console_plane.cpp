@@ -270,7 +270,10 @@ QList<ConsolePlaneIssue> ConsolePlane::inspect(const ConsoleBuffer& buffer,
                     issues.append({i, QStringLiteral("区块宽度为 0 单位（%1）")
                                           .arg(part.text.left(20))});
                 }
-                if (part.rows != 1) {
+                // 图片区块天然跨多行（eraTW 立絵是 176px 高的 sprite），
+                // 「1 行 · 像素高=行高」这两条启发式只对文本/形状成立。
+                const bool isImage = part.kind == ConsoleSpanKind::Image;
+                if (!isImage && part.rows != 1) {
                     issues.append({i, QStringLiteral("区块高度应为 1 行（rows=%1）")
                                           .arg(part.rows)});
                 }
@@ -290,6 +293,7 @@ QList<ConsolePlaneIssue> ConsolePlane::inspect(const ConsoleBuffer& buffer,
         // 4) 行的 Y 单位必须与行高对齐（row 是单位行号，因此恒成立；这里校验像素参考值）
         for (const ConsoleSegment& seg : line.segments) {
             for (const ConsoleSpan& part : seg.spans) {
+                if (part.kind == ConsoleSpanKind::Image) continue;   // 图片像素高 ≠ 行高（见上）
                 if (part.height > 0 && part.height != lineHeight) {
                     issues.append({i, QStringLiteral("区块像素高 %1 ≠ 行高 %2")
                                           .arg(part.height).arg(lineHeight)});

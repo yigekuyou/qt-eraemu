@@ -1006,7 +1006,11 @@ QList<qint64> ExpressionEvaluator::readIntArray(const VariableNode &var, Variabl
     if (!storage) return out;
     const QString name = var.name();
     QString upperScratch;
-    const QString& upper = eraUpperKey(name, upperScratch);
+    // REF 形参别名解析：`#DIM REF ターゲット` ← 系统变量 TARGET 时，按解析后的
+    // 名字取名（系统变量的长度/元素都登记在 "TARGET" 名下）。否则 size=0 ->
+    // 整数组读成空 -> FINDELEMENT(ターゲット,…) 恒 -1（eraTW 画像表示 示例立絵）。
+    // 普通变量（含 REF 到用户全局）解析结果与原名字一致，行为不变。
+    const QString upper = storage->systemVariableName(eraUpperKey(name, upperScratch));
 
     if (charaRange) {
         // 角色数组：SUMCARRAY(CFLAG:列) 的列号即变量第一个下标，沿角色维求和
@@ -1842,10 +1846,13 @@ bool ExpressionEvaluator::evaluateBuiltin(const FunctionNode &node, VariableStor
         return true;
     }
     case BuiltinOp::GFillRectangle: {
+        // 对齐 C# GraphicsFillRectangleMethod：`GFILLRECTANGLE id, x, y, w, h`
+        // （**没有颜色实参**）—— 用 GSETBRUSH 设定的画刷填充。此前误把第 2 个
+        // 实参当颜色、并把矩形整体后移一位（对齐 emuera.em `ReadRectangle(argNo=1)`）。
         out = QVariant::fromValue<qint64>(GraphicsStore::gFillRectangle(
-            I(0), QColor::fromRgba(static_cast<QRgb>(I(1))),
-            QRect(static_cast<int>(I(2)), static_cast<int>(I(3)),
-                  static_cast<int>(I(4)), static_cast<int>(I(5)))) ? 1 : 0);
+            I(0), GraphicsStore::brushColor(I(0)),
+            QRect(static_cast<int>(I(1)), static_cast<int>(I(2)),
+                  static_cast<int>(I(3)), static_cast<int>(I(4)))) ? 1 : 0);
         return true;
     }
     case BuiltinOp::GSetColor: {
@@ -1870,7 +1877,9 @@ bool ExpressionEvaluator::evaluateBuiltin(const FunctionNode &node, VariableStor
             return true;
         }
         const QRgb c = image.pixel(x, y);
-        out = QVariant::fromValue<qint64>((qint64(c) << 24) | qRed(c) << 16 | qGreen(c) << 8 | qBlue(c));
+        // 对齐 C# GraphicsGetColorMethod：`c.ToArgb() & 0xFFFFFFFF`（ARGB 无符号 32 位）。
+        // 此前写成 `(c << 24) | r<<16 | g<<8 | b` —— 高位重复左移，返回值是垃圾。
+        out = QVariant::fromValue<qint64>(static_cast<qint64>(c) & 0xFFFFFFFFLL);
         return true;
     }
     case BuiltinOp::GDrawG: {
@@ -2365,7 +2374,10 @@ bool ExpressionEvaluator::evaluateBuiltin(const FunctionNode &node, VariableStor
 
     // ---------------- G 图像补全 / CBG / 精灵动画 ----------------
     case BuiltinOp::GSetBrush: {
-        out = QVariant::fromValue<qint64>(GraphicsStore::gSetBrush(int(I(0)), QColor(int(I(1)))) ? 1 : 0);
+        // GSETBRUSH id, cARGB：颜色是 **ARGB**（对齐 C# ReadColor -> Color.FromArgb）。
+        // 此前用 QColor(int) 当成 RGB（丢 alpha）。
+        out = QVariant::fromValue<qint64>(
+            GraphicsStore::gSetBrush(int(I(0)), QColor::fromRgba(static_cast<QRgb>(I(1)))) ? 1 : 0);
         return true;
     }
     case BuiltinOp::GSetPen: {

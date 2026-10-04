@@ -1402,7 +1402,14 @@ void EraParseTable::applyStringAssignments() {
                 const QChar c = rhsName.at(i);
                 bareName = c.isLetterOrNumber() || c == QLatin1Char('_');
             }
-            if (bareName && m_variables.typeOf(rhsName, line.ownerFunction) == OperandType::Str)
+            // 带引号的字符串字面量（"…" / @"…"）当**表达式**建节点：引号是定界符，
+            // `@"…"` 里的 %…%/{…}/\\@…\\@ 也照常展开（与运行期 handleStringAssignment
+            // 的判定保持一致）。
+            const bool quotedLiteral = rhsName.startsWith(QLatin1Char('"'))
+                                       || rhsName.startsWith(QLatin1String("@\""));
+            if (quotedLiteral && resolve)
+                value.ast = resolve(rhsName);
+            else if (bareName && m_variables.typeOf(rhsName, line.ownerFunction) == OperandType::Str)
                 value.ast = resolve(rhsName);
             else
                 value.ast = StrFormParser::parse(value.raw, resolve);

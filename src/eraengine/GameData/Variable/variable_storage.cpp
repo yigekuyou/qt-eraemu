@@ -908,13 +908,15 @@ bool VariableStorage::hasSystemVariable(const QString &name) const
 		static const QSet<QString> kNames = {
 QStringLiteral("DAY"),QStringLiteral("MONEY"),QStringLiteral("TIME"),QStringLiteral("ITEM"),QStringLiteral("ITEMSALES"),QStringLiteral("NOITEM"),QStringLiteral("BOUGHT"),QStringLiteral("PBAND"),QStringLiteral("FLAG"),QStringLiteral("TFLAG"),QStringLiteral("TARGET"),QStringLiteral("MASTER"),QStringLiteral("PLAYER"),QStringLiteral("ASSI"),QStringLiteral("ASSIPLAY"),QStringLiteral("UP"),QStringLiteral("DOWN"),QStringLiteral("LOSEBASE"),QStringLiteral("PALAMLV"),QStringLiteral("EXPLV"),QStringLiteral("EJAC"),QStringLiteral("PREVCOM"),QStringLiteral("SELECTCOM"),QStringLiteral("NEXTCOM"),QStringLiteral("RESULT"),QStringLiteral("COUNT"),QStringLiteral("A"),QStringLiteral("B"),QStringLiteral("C"),QStringLiteral("CHARANUM")
 		};
-		return kNames.contains(eraUpperKey(name));
+		// 先经 REF 形参别名解析（`#DIM REF X` ← 系统变量实参），再判名。
+		return kNames.contains(systemVariableName(name));
 }
 
 qint64 VariableStorage::getSystemVariable(const QString &name, int index) const
 {
-		// 系统变量名同样大小写不敏感（ICVariable）
-		const QString key = eraUpperKey(name);
+		// 系统变量名同样大小写不敏感（ICVariable）；并先经 REF 形参别名解析
+		// （`#DIM REF ターゲット` ← TARGET 之类，见 systemVariableName）。
+		const QString key = systemVariableName(name);
 		// Check for system variables and call appropriate getter
 		if (key == "DAY") return getDay(index);
 		if (key == "MONEY") return getMoney(index);
@@ -954,8 +956,8 @@ qint64 VariableStorage::getSystemVariable(const QString &name, int index) const
 
 void VariableStorage::setSystemVariable(const QString &name, int index, qint64 value)
 {
-		// 系统变量名同样大小写不敏感（ICVariable）
-		const QString key = eraUpperKey(name);
+		// 系统变量名同样大小写不敏感（ICVariable）；并先经 REF 形参别名解析
+		const QString key = systemVariableName(name);
 		// Check for system variables and call appropriate setter
 		if (key == "DAY") { setDay(index, value); return; }
 		if (key == "MONEY") { setMoney(index, value); return; }

@@ -46,6 +46,10 @@ class ExtensionRegistry;   // 前置声明（完整定义在 extension_registry.
 //     MONEYNAME 及 DAY/TIME/MONEY 的名表映射（regVariable / regNameTable）——
 //     对齐 EmueraEM+EE readme「DAY、TIME、MONEY に CSV を適用可能に」。
 //     （原版 Emuera 无这些变量；本移植此前写死进核心三处，现移到扩展。）
+//   · 音频（C# 原版没有）：PLAYBGM / PLAYSOUND / STOPBGM / STOPSOUND /
+//     SETBGMVOLUME / SETSOUNDVOLUME（语句）+ EXISTSOUND（式中函数）—— **真实现**
+//     （经 regAudioPipelines 登记维护数量；C++ 的 AudioPipelinePool 是控制端，
+//     QML AudioPlayers 按数量维护播放器真正出声）。
 // PUTFORM / FIND_CHARADATA 属核心（BuiltInFunctionCode.cs 枚举内），
 // 不在此登记 —— 扩展不得覆盖核心（注册类 fail-fast 拒绝）。
 //

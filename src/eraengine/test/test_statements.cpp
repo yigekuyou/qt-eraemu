@@ -484,6 +484,56 @@ int main(int argc, char* argv[]) {
               "OUT_REF = SRC_STR（字符串变量名）-> 取该变量当前值");
     }
 
+    // =====================================================================
+    // 字符串 = 赋值：带引号的字符串字面量（"…" / @"…"）引号是定界符，要剥掉。
+    // 回归：eraTW `LOCALS = @"[目瞳:…][表情:…]"`（精灵名）此前落到**格式化串**
+    // 路径，`@"` 与引号原样落进变量；同一变量在别处又用 `LOCALS = 倒錯的`
+    // （裸文本）/ `LOCALS = "Ｃ感度"`（引号）——三者必须等价才自洽。
+    qDebug() << "\n10) 字符串 = 赋值：\"…\" 与 @\"…\" 都剥引号（@\"…\" 展开 %…%）";
+    {
+        VariableStorage vs;
+        ProcessState ps;
+        EraParseTable pt(&ps);
+        ExecutionEngine ex(&vs, nullptr);
+        ExpressionEvaluator ev;
+        ex.setParseTable(&pt);
+        ex.setExpressionEvaluator(&ev);
+        pt.setVariableStorage(&vs);
+        pt.setExpressionEvaluator(&ev);
+        ScriptRunner run(&pt, &ex, &ps, &vs);
+        run.setExpressionEvaluator(&ev);
+        run.setStepLimit(10000);
+        const QStringList program = {
+            QStringLiteral("@MAIN"),
+            QStringLiteral("#DIM N"),
+            QStringLiteral("#DIMS Q"),
+            QStringLiteral("#DIMS F"),
+            QStringLiteral("#DIMS B"),
+            QStringLiteral("#DIMS E"),
+            QStringLiteral("N = 7"),
+            QStringLiteral("Q = \"quote\""),          // 字符串字面量 -> quote
+            QStringLiteral("F = @\"lit_%N%\""),        // 格式化字符串字面量 -> lit_7
+            QStringLiteral("B = bare_%N%"),            // 裸格式化串 -> bare_7
+            QStringLiteral("E = @\"[PN:%N%]\""),       // eraTW 精灵名样式 -> [PN:7]
+            QStringLiteral("RETURN")
+        };
+        check(pt.loadScript("qstr", buildLines(pt, program)), "load quoted string-assignment script");
+        pt.finalizeParse();
+        pt.setEntryPoint("MAIN");
+        check(run.runToCompletion() == ExecState::Halt, "quoted string-assignment script completes");
+        vs.setPrivateScope(QStringLiteral("MAIN"),
+                           {QStringLiteral("Q"), QStringLiteral("F"), QStringLiteral("B"),
+                            QStringLiteral("E")});
+        check(vs.getGlobalStr1D(QStringLiteral("Q"), 0) == QStringLiteral("quote"),
+              "Q = \"quote\" -> quote（引号是定界符）");
+        check(vs.getGlobalStr1D(QStringLiteral("F"), 0) == QStringLiteral("lit_7"),
+              "F = @\"lit_%N%\" -> lit_7（剥 @\"…\" 并展开 %…%）");
+        check(vs.getGlobalStr1D(QStringLiteral("B"), 0) == QStringLiteral("bare_7"),
+              "B = bare_%N% -> bare_7（裸格式化串）");
+        check(vs.getGlobalStr1D(QStringLiteral("E"), 0) == QStringLiteral("[PN:7]"),
+              "E = @\"[PN:%N%]\" -> [PN:7]（eraTW 精灵名样式）");
+    }
+
     qDebug() << "\n======================================";
     if (g_failures == 0) {
         qDebug() << "[SUCCESS] statement tests passed";

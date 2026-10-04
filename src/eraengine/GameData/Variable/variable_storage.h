@@ -232,6 +232,18 @@ public:
         void setReference(const QString& name, const QString& targetStorage) {
             m_references.insert(name.toUpper(), targetStorage);
         }
+        // REF 形参别名解析：`#DIM REF ターゲット` ← 实参 TARGET 时，m_references 把
+        // 形参名映射到实参的存储键（"TARGET"）。系统变量按**名字**分派到各自数组
+        // （m_target / m_flag …），并不走 m_globalInt1D —— 若不做这一步解析，
+        // 「REF 到系统变量」的读写会落到同名用户全局槽（恒 0）。eraTW 画像表示
+        // 的 `CALL PRINT_TARGET_IMAGE(TARGET)`（TARGET 是系统变量）正是此例：
+        // 函数内 `SIF !ターゲット` 读成 0 提前 RETURN → 「示例立絵」整块不显示。
+        // 名字未登记引用时原样返回（普通变量/私有作用域不受影响）。
+        [[nodiscard]] QString systemVariableName(const QString& name) const {
+            QString scratch;
+            const QString& upper = eraUpperKey(name, scratch);
+            return m_references.value(upper, upper);
+        }
         [[nodiscard]] QString resolvedStorageName(const QString& name) const { return storageName(name); }
         [[nodiscard]] int arraySize(const QString& name) const;
         void ensureArraySize(const QString& name, int size, bool stringArray);

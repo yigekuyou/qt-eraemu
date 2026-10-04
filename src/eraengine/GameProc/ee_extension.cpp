@@ -36,6 +36,7 @@
 #include "ee_extension.h"
 #include "extension_registry.h"
 #include "variable_storage.h"
+#include "audio_pipeline_pool.h"
 
 namespace {
 
@@ -106,6 +107,169 @@ bool findVarData(const LogicalLine& line, const QList<Operand>& args,
     }
     qDebug() << "[ee-ext] FIND_VARDATA" << pattern << "->" << files.size() << "个文件";
     return true;
+}
+
+// ---------------------------------------------------------------------------
+// EE 音频（C# 原版没有音频，整块能力住在扩展）------------------------------
+//
+// 权威来源：emuera.em（EE）`Runtime/Script/Statements/Instraction.Child.cs`
+//     public static Sound[] sound = new Sound[10];   // 10 条音效(SE)管线
+//     public static Sound bgm = new();               // 1 条独立 BGM 管线
+//   命令：PLAYSOUND(SP_HTML_PRINT: 字符串式 + 可选重复次数) / STOPSOUND /
+//         PLAYBGM(STR_EXPRESSION) / STOPBGM / SETSOUNDVOLUME / SETBGMVOLUME(INT)；
+//   音量 Math.Clamp(vol,0,100)；文件路径 `Program.SoundDir + 名`（<游戏目录>/sound/）。
+//
+// 分工（对齐 prd）：
+//   * **C++ 控制**：本扩展把命令变成对 AudioPipelinePool 的控制调用
+//     （第几条管线播什么、音量、循环次数）；
+//   * **QML 维护播放**：池把「音效管线数」（4 字节无符号，扩展登记）交给 QML，
+//     由 QML 维护对应数量的 SE 播放器 + 1 条 BGM 播放器真正出声。
+//
+// 数量**不硬编码在核心** —— 核心只搬这个 quint32 常量，改这里即可调整。
+// ---------------------------------------------------------------------------
+constexpr quint32 kEeAudioPipelines = 10;   // 对齐 EE `Sound[10]`（4 字节无符号）
+
+// 顶层逗号切分（尊重引号 / 括号 / 方括号）：PLAYSOUND 的第 2 段是可选重复次数。
+QStringList splitTopLevelComma(const QString& text) {
+    QStringList out;
+    QString cur;
+    int depth = 0;
+    QChar quote;
+    for (const QChar c : text) {
+        if (!quote.isNull()) {
+            cur += c;
+            if (c == quote) quote = {};
+            continue;
+        }
+        if (c == QLatin1Char('"') || c == QLatin1Char('\'')) { quote = c; cur += c; continue; }
+        if (c == QLatin1Char('(') || c == QLatin1Char('[')) ++depth;
+        else if (c == QLatin1Char(')') || c == QLatin1Char(']')) { if (depth > 0) --depth; }
+        if (c == QLatin1Char(',') && depth == 0) { out.append(cur); cur.clear(); continue; }
+        cur += c;
+    }
+    out.append(cur);
+    return out;
+}
+
+// 语句「去掉命令名后的剩余部分」（EE 的 STR_EXPRESSION / SP_HTML_PRINT 都取整段）。
+QString statementRemainder(const LogicalLine& line, const QString& command) {
+    QString rest = line.raw.trimmed();
+    if (rest.left(command.length()).compare(command, Qt::CaseInsensitive) == 0)
+        rest = rest.mid(command.length());
+    return rest.trimmed();
+}
+
+// 求值一个表达式文本（扩展实参）；未注入求值服务时返回无效 QVariant。
+QVariant audioEval(const QString& expr, const ExtensionRegistry& ext) {
+    const ExtensionRegistry::Services& sv = ext.services();
+    if (!sv.evaluate || expr.isEmpty()) return {};
+    return sv.evaluate(expr);
+}
+
+// 去掉一层外层引号（兜底：求值失败时把文本原样当字符串用）。
+QString stripOuterQuotes(QString s) {
+    s = s.trimmed();
+    if (s.size() >= 2) {
+        const QChar first = s.front(), last = s.back();
+        if ((first == QLatin1Char('"') && last == QLatin1Char('"'))
+            || (first == QLatin1Char('\'') && last == QLatin1Char('\''))) {
+            s = s.mid(1, s.size() - 2);
+        }
+    }
+    return s;
+}
+
+// 字符串式实参：优先求值（变量 / 拼接 / 函数），失败退回去引号的原文。
+QString audioStrExpr(const QString& expr, const ExtensionRegistry& ext) {
+    const QVariant v = audioEval(expr, ext);
+    if (v.isValid()) return v.toString();
+    return stripOuterQuotes(expr);
+}
+
+// PLAYBGM <字符串式>：循环播放 BGM（0 号管线）。对齐 EE PLAYBGM_Instruction。
+bool audioPlayBgm(const LogicalLine& line, const QList<Operand>&, const ExtensionRegistry& ext) {
+    AudioPipelinePool* pool = ext.audioPool();
+    if (!pool) return true;   // 无音频池：静默（等同未装音频扩展）
+    const QString source = audioStrExpr(statementRemainder(line, QStringLiteral("PLAYBGM")), ext);
+    const QString used = pool->playBgm(source);
+    qDebug() << "[ee-ext] PLAYBGM" << source << "->" << used;
+    return true;
+}
+
+// PLAYSOUND <字符串式>{, <重复次数>}：一次性音效。对齐 EE PLAYSOUND_Instruction。
+bool audioPlaySound(const LogicalLine& line, const QList<Operand>&, const ExtensionRegistry& ext) {
+    AudioPipelinePool* pool = ext.audioPool();
+    if (!pool) return true;
+    const QStringList parts =
+        splitTopLevelComma(statementRemainder(line, QStringLiteral("PLAYSOUND")));
+    const QString source = audioStrExpr(parts.value(0), ext);
+    int repeat = 1;
+    if (parts.size() >= 2 && !parts.at(1).trimmed().isEmpty()) {
+        const QVariant v = audioEval(parts.at(1), ext);
+        repeat = static_cast<int>(v.isValid() ? v.toLongLong() : parts.at(1).trimmed().toLongLong());
+    }
+    const QString used = pool->playSound(source, repeat);
+    qDebug() << "[ee-ext] PLAYSOUND" << source << "x" << repeat << "->" << used;
+    return true;
+}
+
+// STOPBGM：停止 BGM。
+bool audioStopBgm(const LogicalLine&, const QList<Operand>&, const ExtensionRegistry& ext) {
+    AudioPipelinePool* pool = ext.audioPool();
+    if (pool) pool->stopBgm();
+    return true;
+}
+
+// STOPSOUND：停掉全部音效（EE 语义；不带资源名）。
+bool audioStopSound(const LogicalLine&, const QList<Operand>&, const ExtensionRegistry& ext) {
+    AudioPipelinePool* pool = ext.audioPool();
+    if (pool) pool->stopSounds();
+    return true;
+}
+
+// SETBGMVOLUME / SETSOUNDVOLUME <整数式>：设置音量（EE Math.Clamp 在池内做）。
+bool audioSetVolume(const LogicalLine& line, const QString& command,
+                    const ExtensionRegistry& ext, bool bgm) {
+    AudioPipelinePool* pool = ext.audioPool();
+    if (!pool) return true;
+    const QString expr = statementRemainder(line, command);
+    const QVariant v = audioEval(expr, ext);
+    const int volume = static_cast<int>(v.isValid() ? v.toLongLong() : expr.toLongLong());
+    if (bgm) pool->setBgmVolume(volume);
+    else pool->setSoundVolume(volume);
+    return true;
+}
+
+// 音频扩展登记：声明维护数量（EE Sound[10]）+ 注册命令实现 + 式中函数 EXISTSOUND。
+void registerEeAudio(ExtensionRegistry& ext) {
+    ext.regAudioPipelines(kEeAudioPipelines);
+
+    ext.reg(QStringLiteral("PLAYBGM"),
+            [&ext](const LogicalLine& l, const QList<Operand>& a) { return audioPlayBgm(l, a, ext); });
+    ext.reg(QStringLiteral("PLAYSOUND"),
+            [&ext](const LogicalLine& l, const QList<Operand>& a) { return audioPlaySound(l, a, ext); });
+    ext.reg(QStringLiteral("STOPBGM"),
+            [&ext](const LogicalLine& l, const QList<Operand>& a) { return audioStopBgm(l, a, ext); });
+    ext.reg(QStringLiteral("STOPSOUND"),
+            [&ext](const LogicalLine& l, const QList<Operand>& a) { return audioStopSound(l, a, ext); });
+    ext.reg(QStringLiteral("SETBGMVOLUME"),
+            [&ext](const LogicalLine& l, const QList<Operand>&) {
+                return audioSetVolume(l, QStringLiteral("SETBGMVOLUME"), ext, true);
+            });
+    ext.reg(QStringLiteral("SETSOUNDVOLUME"),
+            [&ext](const LogicalLine& l, const QList<Operand>&) {
+                return audioSetVolume(l, QStringLiteral("SETSOUNDVOLUME"), ext, false);
+            });
+
+    // EXISTSOUND(<字符串式>)：sound 目录下是否存在该资源（0/1）。
+    // 对齐 EE ExistSoundMethod（ReturnType=long，实参 string）。
+    ext.regExpr(QStringLiteral("EXISTSOUND"), OperandType::Int, 1, 1,
+        [&ext](const QList<QVariant>& a, const QList<const ExpressionNode*>&, QVariant& out) {
+            AudioPipelinePool* pool = ext.audioPool();
+            const QString name = a.isEmpty() ? QString() : a.at(0).toString();
+            out = QVariant::fromValue<qint64>(pool && pool->sourceExists(name) ? 1 : 0);
+            return true;
+        });
 }
 
 }  // namespace
@@ -185,6 +349,9 @@ void registerEeExtensions(ExtensionRegistry& ext)
     // 式中函数（实现住本文件；见上）
     registerEeExpressionFunctions(ext);
 
+    // 音频（C# 原版没有；C++ 控制 + QML 维护播放，数量由扩展登记不硬编码）
+    registerEeAudio(ext);
+
     // ---- EE 存档系：真实现（reg 带实现的重载；经注册类 services() 取用）----
     // 实现是三参函数（line, args, ext）——经 lambda 绑定注册类实例
     // （注册类与 lambda 同生命周期：lambda 存在注册类自己的表里）。
@@ -212,7 +379,6 @@ void registerEeExtensions(ExtensionRegistry& ext)
         QStringLiteral("COLUMNPRINTW"),
         QStringLiteral("COLUMNRESIZE"),
         QStringLiteral("COLUMNWAIT"),
-        QStringLiteral("EXISTSOUND"),
         QStringLiteral("FLOWINPUT"),
         QStringLiteral("FORCE_BEGIN"),
         QStringLiteral("FORCE_QUIT"),
@@ -234,16 +400,10 @@ void registerEeExtensions(ExtensionRegistry& ext)
         QStringLiteral("INPUTANY"),
         QStringLiteral("LCSVISASSI"),
         QStringLiteral("OCLEARLINE"),
-        QStringLiteral("PLAYBGM"),
-        QStringLiteral("PLAYSOUND"),
         QStringLiteral("QUIT_AND_RESTART"),
-        QStringLiteral("SETBGMVOLUME"),
-        QStringLiteral("SETSOUNDVOLUME"),
         QStringLiteral("SETTEXTBOX"),
         QStringLiteral("SKIPLOG"),
         QStringLiteral("SPRITEDISPOSEALL"),
-        QStringLiteral("STOPBGM"),
-        QStringLiteral("STOPSOUND"),
         QStringLiteral("STRJOIN1"),
         QStringLiteral("TINPUTAWAIT"),
         QStringLiteral("TOOLTIP_EXTENSION"),

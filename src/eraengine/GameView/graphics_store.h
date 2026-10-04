@@ -74,6 +74,8 @@ public:
     struct BrushState { QColor color; };
     struct FontState  { QString name; int size = 18; };
     static bool gSetBrush(int id, const QColor& color);
+    // 当前画刷色（GFILLRECTANGLE 用；对齐 C# GraphicsImage.brush）。未设置时回退缺省色。
+    [[nodiscard]] static QColor brushColor(int id);
     static bool gSetPen(int id, const QColor& color, int width);
     static bool gSetFont(int id, const QString& name, int size);
 

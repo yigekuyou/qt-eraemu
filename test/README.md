@@ -58,9 +58,10 @@ cmake --build build --target test_cli
 | 27 | **文档语义·表达式/字面量/声明**（`example/ERB/TEST_HEADER.ERH` + `27_DOC_EXPR.ERB`，ecd/docs 规范 + C# 语义） |
 | 28 | **文档语义·SELECTCASE/循环/EE 与 eraTW 惯用法**（`28_DOC_FLOW.ERB`） |
 | 29 | **文档语义·BEGIN FIRST 事件函数流** `#PRI/#LATER/#SINGLE/#ONLY`（破坏性·单独跑，`29_DOC_EVENT.ERB`） |
+| 30 | **音频·图片（用命令随机生成素材）**（`30_ASSET_GEN.ERB`） |
 
 「全部自动运行」（`./test/run_example.sh` 无参数）依次执行：
-**1–10、14、16、17、23–28 + 汇总**。
+**1–10、14、16、17、23–28、30 + 汇总**。
 
 不在自动路径、需单跑的组（`./test/run_example.sh <组号>`）：
 
@@ -151,6 +152,131 @@ EmueraEE·私家改造版 readme**，不参考本移植实现：
 回归：`test_user_functions`（§7 混大小写式子调用）、`test_statements`（§9
 整数名当字面量、字符串名当引用）。
 
+## eraTW「画像表示設定」示例立絵回归（2026-10）
+
+用 `test_cli` 复现 eraTW `1,0,400,97`（`--script 1,0,400,97,0` 打开画像显示）
+时发现「示例立絵的图片没有」（`▼示例▼` 之后一行空白，无 `part image`）。
+
+根因：**`#DIM REF` 形参绑定到系统变量时读不到值**。`@PRINT_TARGET_IMAGE(ターゲット)`
+用 `#DIM REF ターゲット` 接收系统变量 `TARGET`（`CALL PRINT_TARGET_IMAGE(TARGET)`）。
+REF 别名机制（`VariableStorage::setReference`）只对**用户全局槽**生效，而系统变量
+按**名字**分派到各自数组（`m_target` / `m_flag` …）。于是函数体内 `SIF !ターゲット`
+经 `getGlobalInt1D("ターゲット")` 落到同名用户全局槽（恒 0）→ 提前 `RETURN` →
+示例立絵整块不显示。
+
+修复（`variable_storage.{h,cpp}` + `expression_evaluator.cpp::readIntArray`）：
+新增 `VariableStorage::systemVariableName(name)`，把名字先经 REF 引用表解析，
+`hasSystemVariable` / `getSystemVariable` / `setSystemVariable` 与整数组读取
+（长度 + 元素）都改用解析后的名字 —— REF 到系统变量的读写回到系统变量通道。
+`test_cli eraTW --script 1,0,400,97,0 --model` 现可见
+`part image src=立絵_裸_笑顔_1`。
+
+回归：`test_user_functions`（§8 REF 形参 ← 系统变量 TARGET）。
+
+## 音频播放（扩展能力 · 2026-10）
+
+C# 原版没有音频；整块能力住在扩展（`GameProc/ee_extension.cpp`），经
+`ExtensionRegistry` 登记，核心引擎不含任何音频后端。**语义以 EE 源码为准**
+（`emuera.em` = 已克隆的 EmueraEE，`Runtime/Script/Statements/Instraction.Child.cs`）：
+
+```csharp
+public static Sound[] sound = new Sound[10];   // 10 条音效(SE)管线
+public static Sound bgm = new();               // 1 条独立 BGM 管线
+```
+
+* **数量不硬编码**：`regAudioPipelines(quint32)` 由扩展声明 **SE 管线数**
+  （对齐 EE `Sound[10]` = 10，**4 字节无符号**；没有程序同时播 2^32-1 条 BGM）。
+  核心只搬运这个 `quint32`，不含「10」这个常量。管线布局：**0 = BGM**，
+  **1..N = SE**。
+* **C++ 控制 + QML 维护播放**：`GameView/audio_pipeline_pool.*`（`AudioPipelinePool`，
+  经 `EraEngine::audio` 暴露给 QML）只**决定**第几条管线播什么、音量、循环次数，
+  并以信号广播；`src/qml/AudioPlayers.qml` 按 `audio.soundPipelines` 维护对应数量的
+  SE 播放器（`SoundEffect`）+ 1 条 BGM 播放器（`MediaPlayer`），播完回调
+  `reportFinished` 归还管线。
+* 命令（对齐 EE）：`PLAYBGM`（`STR_EXPRESSION`，无限循环）/ `PLAYSOUND`
+  （`SP_HTML_PRINT`：字符串式 + 可选重复次数）/ `STOPBGM` / `STOPSOUND` /
+  `SETBGMVOLUME` / `SETSOUNDVOLUME`（`INT_EXPRESSION`）—— 语句；
+  `EXISTSOUND`（`long(string)`）—— 式中函数。实参经新注入的
+  `Services::evaluate`（解析表 `expressionAst` 带类型上下文）求值，
+  文件按 EE `Program.SoundDir`（`<游戏目录>/sound/`）解析；音量 `Math.Clamp(0,100)`；
+  `PLAYSOUND` 全忙时用 0 号（对齐 EE `if (i >= sound.Length) i = 0`）。
+
+回归：`test_audio_pipeline`（管线布局 / BGM 不重启 / SE 全忙用 0 号 / 重复次数 /
+音量夹取 / 扩展登记数量与命令）。
+
+## 底部「红绿灯」状态条（QML · 2026-10）
+
+`src/qml/Main.qml` 的底部状态条改为**最小高度、悬浮在内容之上**的一排小圆点
+（原 `footer: ToolBar` 占布局、挤压控制台）。每个灯一个含义，悬浮（Hover）弹出
+ToolTip 说明：
+
+| 灯 | 含义 | 亮起条件 |
+|----|------|----------|
+| 红 | 错误 | `eraEngine.hasError`（最近一次执行出错） |
+| 黄 | 载入 | 脚本装载中 |
+| 绿 | 等待输入 | `console.waitingInput` |
+| 蓝 | 音频 | `audio.activeChannels > 0` |
+| 橙 | 装载告警 | `parseWarnings()` 非空 |
+
+## 音频·图片随机生成测试（组 30 · 2026-10）
+
+`test/example/ERB/30_ASSET_GEN.ERB`：**用命令随机生成素材**来测音频与图片。
+
+* **图片**（`@TEST_IMAGE_GEN`）：循环 8 次，每次随机尺寸（宽 12..71 / 高 8..47）、
+  随机不透明色、随机像素点；依次跑
+  `GCREATE → GCLEAR → GGETCOLOR → GSETCOLOR → GGETCOLOR → GSETBRUSH →
+  GFILLRECTANGLE → GGETCOLOR → SPRITECREATE → SPRITECREATED →
+  SPRITEWIDTH/HEIGHT → SPRITEGETCOLOR → HTML_PRINT <img> → GDISPOSE`。
+  期望值就用同一批随机变量，所以**任何随机结果下断言都必须成立**
+  （不依赖固定种子）。
+* **音频**（`@TEST_AUDIO_GEN`）：随机名字/音量/重复次数驱动 EE 命令
+  `PLAYBGM / PLAYSOUND "se", N / SETBGMVOLUME / SETSOUNDVOLUME / STOPBGM /
+  STOPSOUND`，并用 `EXISTSOUND` 校验资源解析（存在 1 / 不存在 0）。
+  素材 `test/example/sound/*.wav` 由脚本随机合成（8kHz 单声道 8bit，
+  几百字节的极小文件）。
+
+写这个测试时对照 EE（`emuera.em`）发现并修好了 3 个图片命令缺陷
+（eraTW 未用到，但语义确为错）：
+
+| 命令 | 原实现 | 修正（对齐 C#） |
+| --- | --- | --- |
+| `GGETCOLOR` | `(c<<24)\|r<<16\|g<<8\|b`（高位重复左移 → 垃圾值） | `c.ToArgb() & 0xFFFFFFFF`（ARGB 无符号 32 位） |
+| `GSETBRUSH` | `QColor(int)`（当 RGB，丢 alpha） | ARGB（`Color.FromArgb` 同义） |
+| `GFILLRECTANGLE` | 把第 2 实参当颜色、矩形整体后移一位 | `GFILLRECTANGLE id, x, y, w, h`（**无颜色实参**），用 `GSETBRUSH` 的画刷填充 |
+
+运行：`./test/run_example.sh 30`（或 `--script 30`）；已含在组 0 全自动里。
+
+## 字符串 `=` 赋值的「带引号字面量」（2026-10 修正）
+
+写组 30 时踩到一个坑：`NAME = @"rand_sprite_%I%"` 得到的是 **`@"rand_sprite_0"`**
+（`@"` 与引号都留在了值里），于是精灵名/图片 `src` 都带引号。
+
+**语义**（对齐 eraTW / eraMegaten 的实际写法 + 文档）：
+
+| 写法 | 结果 | 说明 |
+| --- | --- | --- |
+| `X = abc` | `abc` | 裸文本（格式串字面量） |
+| `X = %V%` | V 的值 | 格式串展开 |
+| `X = "abc"` | `abc` | **`"…"` 是字符串字面量，引号是定界符** |
+| `X = @"abc%V%"` | `abc<V>` | **`@"…"` 是格式化字符串字面量：剥定界符 + 展开** |
+| `X = "a" + TOSTR(N)` | 拼接结果 | 字符串表达式 |
+
+即：**右值是带引号的字面量（`"…"` / `@"…"`）时，引号必须剥掉** —— 这一点上
+`"…"` 与 `@"…"` 必须一致（否则同一变量用两种写法会得到不同结果）。
+eraTW 同一个 `SELECTCASE` 里 `LOCALS = 倒錯的`（裸）、`LOCALS = "Ｃ感度"`（引号）、
+`LOCALS = @"[目瞳:…]"`（`@"`）三种写法混用，同走一条显示路径；
+eraMegaten 的 `BTL_KOJO_RESULTS:0` 同样混用 —— 只有都剥引号才自洽。
+
+原实现只认 `"` 开头，`= @"…"` 落到**格式化串**路径 → `@"` + 引号原样落进变量
+（eraTW `LOCALS = @"[目瞳:…]"` 的精灵名会带 `@"`）。
+
+修复：`execution_engine.cpp::handleStringAssignment` 与
+`era_parse_table.cpp::applyStringAssignments` 把 `@"` 开头与 `"` 开头同等对待
+（都按**表达式**建节点，`@"…"` 由表达式词法解析成格式化字符串字面量）。
+
+回归：`test_statements`（§10 `"…"` / `@"…"` / 裸格式串三者）、组 30（精灵名改用
+`NAME = @"rand_sprite_%I%"`，图片 `src` 现在无引号）。
+
 ## 关于「自动输入」
 
 `INPUT` / `INPUTS` / `ONEINPUT` / `TINPUT` / `WAITANYKEY` / `AWAIT` 在 GUI 下会
@@ -182,7 +308,7 @@ EE 扩展 56 条，**全部 0 未覆盖**。少量命令刻意不由自动段执
 
 ## 相关
 
-* 编译器/引擎回归：`cd build && ctest`（**28/28 通过**）。
+* 编译器/引擎回归：`cd build && ctest`（**29/29 通过**）。
 * 本目录的改动同时记录了若干引擎修复：`CHKDATA` 返回值（EraDataState）、
   `RESETDATA` 清空角色、`RESETGLOBAL` 保留函数私有变量、`QUIT` 结束程序、
   `SAVETEXT/LOADTEXT` 的 `txt{nn}.txt` 语义、`CHKFONT` 无 GUI 时的崩溃等。

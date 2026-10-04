@@ -566,6 +566,51 @@ int main(int argc, char* argv[]) {
         check(vs.getGlobalInt1D("PLAIN_OUT", 0) == 7, "CALL PlainFn 语句调用正常");
     }
 
+    // =====================================================================
+    // REF 形参绑定到**系统变量**（对齐 C#：实参可以是系统变量）
+    // 回归：eraTW `@PRINT_TARGET_IMAGE(ターゲット)` 用 `#DIM REF ターゲット`
+    // 接收系统变量 TARGET（`CALL PRINT_TARGET_IMAGE(TARGET)`）。此前 REF 别名
+    // 只在用户全局槽生效，系统变量按名字分派到各自数组（m_target）—— 函数内
+    // `SIF !ターゲット` 恒读 0 提前 RETURN，「画像表示设定」的示例立絵整块消失
+    // （`1,0,400,97` 界面图片没有）。修复：系统变量的读写/长度先经引用表解析。
+    qDebug() << "\n8) REF 形参 ← 系统变量 TARGET（eraTW 画像表示回归）";
+    {
+        VariableStorage vs;
+        ProcessState ps;
+        EraParseTable pt(&ps);
+        ExecutionEngine ex(&vs, nullptr);
+        ExpressionEvaluator ev;
+        ex.setParseTable(&pt);
+        ex.setExpressionEvaluator(&ev);
+        pt.setVariableStorage(&vs);
+        pt.setExpressionEvaluator(&ev);
+        ScriptRunner run(&pt, &ex, &ps, &vs);
+        run.setExpressionEvaluator(&ev);
+        run.setStepLimit(10000);
+        const QStringList program = {
+            QStringLiteral("@MAIN"),
+            QStringLiteral("TARGET = 7"),        // 系统变量 TARGET（非用户全局）
+            QStringLiteral("TARGET:5 = 55"),
+            QStringLiteral("CALL Grab(TARGET)"),  // REF 形参接收系统变量
+            QStringLiteral("RETURN"),
+            QStringLiteral("@Grab(ターゲット)"),
+            QStringLiteral("#DIM REF ターゲット"),
+            QStringLiteral("OUT_SCALAR = ターゲット"),     // 读标量（下标 0）
+            QStringLiteral("OUT_ELEM = ターゲット:5"),     // 读元素（REF 数组）
+            QStringLiteral("ターゲット:2 = 22")            // 经 REF 写回系统变量
+        };
+        check(pt.loadScript("case", buildLines(pt, program)), "load REF-to-system-variable script");
+        pt.finalizeParse();
+        pt.setEntryPoint("MAIN");
+        check(run.runToCompletion() == ExecState::Halt, "REF-to-system-variable script completes");
+        check(vs.getGlobalInt1D("OUT_SCALAR", 0) == 7,
+              "REF 形参读到系统变量 TARGET=7（此前恒 0 → 图片没有）");
+        check(vs.getGlobalInt1D("OUT_ELEM", 0) == 55,
+              "REF 形参数组元素 ターゲット:5 -> 55（经系统变量 TARGET 解析）");
+        check(vs.getSystemVariable(QStringLiteral("TARGET"), 2) == 22,
+              "经 REF 写回系统变量 TARGET:2 = 22");
+    }
+
     qDebug() << "\n================================";
     if (g_failures == 0) {
         qDebug() << "[SUCCESS] user function tests passed";

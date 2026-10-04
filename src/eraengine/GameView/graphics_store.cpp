@@ -184,6 +184,13 @@ bool GraphicsStore::gSetBrush(int id, const QColor& color) {
     return true;
 }
 
+QColor GraphicsStore::brushColor(int id) {
+    const auto it = gExtra().brush.constFind(id);
+    // C# 缺省用 Config.BackColor；GraphicsStore 是静态层、无 Config 通道，
+    // 未设画刷时回退透明（不产生可见填充）。实际游戏都会先 GSETBRUSH。
+    return it == gExtra().brush.constEnd() ? QColor(0, 0, 0, 0) : it.value().color;
+}
+
 bool GraphicsStore::gSetPen(int id, const QColor& color, int width) {
     if (!gImages().contains(id)) return false;
     gExtra().pen[id] = PenState{ color, qMax(1, width) };

@@ -84,7 +84,19 @@ ExecutionEngine::ExecutionEngine(VariableStorage* storage, GameBaseData* gameBas
         },
         nullptr,   // functionExists（EraEngine 装配后经 setExpressionServices 注入）
         nullptr,   // doingFunction
-        nullptr    // displayLine
+        nullptr,   // displayLine
+        // 表达式求值（扩展命令实参；惰性：getEvaluator 依赖装配后的解析表）。
+        // 经解析表的 expressionAst 归约（带**类型上下文**）——否则裸字符串变量名
+        // （PLAYBGM F）会被当成整数求值成 0；expressionAst 失败才退回无类型求值。
+        [this](const QString& e) -> QVariant {
+            if (m_parseTable) {
+                if (const QSharedPointer<ExpressionNode> ast = m_parseTable->expressionAst(e)) {
+                    const QVariant v = getEvaluator().evaluate(*ast, m_storage, m_gameBaseData);
+                    if (v.isValid()) return v;
+                }
+            }
+            return getEvaluator().evaluate(e, m_storage, m_gameBaseData);
+        }
     });
 }
 
@@ -1870,10 +1882,18 @@ bool ExecutionEngine::handleStringAssignment(const QString& lhs, const QString& 
         }
     }
     bool evaluated = false;
-    // 右值以引号开头（"X" + S + "Y" 这类**字符串拼接表达式**）时按普通表达式
-    // 归约（C# 语义：赋值右值是完整表达式，+ 对字符串是拼接）。此前整条右值
-    // 被当成格式化串字面量，引号原样落进变量。
-    if (trimmed.startsWith(QLatin1Char('"')) && m_parseTable) {
+    // 右值是**带引号的字符串字面量**时按普通表达式求值（引号是定界符，要剥掉）：
+    //   "X"        -> X            （字符串字面量）
+    //   @"X%V%"    -> X<展开>       （格式化字符串字面量：`%..%`/`{..}`/`\@..\@` 展开）
+    //   "X" + S    -> 拼接          （字符串表达式）
+    // 二者必须一致：eraTW / eraMegaten 对**同一个变量、同一条显示路径**混用
+    // `= 文本`、`= "文本"`、`= @"文本"`（如 eraTW `LOCALS = 倒錯的` 与
+    // `LOCALS = "Ｃ感度"` 同处一个 SELECTCASE），只有都剥引号才等价。
+    // 此前只认 `"` 开头，`= @"..."` 落到**格式化串**路径 -> `@"` 与引号原样
+    // 落进变量（eraTW `LOCALS = @"[目瞳:...]"` 的精灵名会带 `@"`）。
+    const bool quotedLiteral =
+        trimmed.startsWith(QLatin1Char('"')) || trimmed.startsWith(QLatin1String("@\""));
+    if (quotedLiteral && m_parseTable) {
         const QSharedPointer<ExpressionNode> exprAst = m_parseTable->expressionAst(trimmed);
         if (exprAst) {
             value = evaluator.evaluate(*exprAst, m_storage, m_gameBaseData).toString();

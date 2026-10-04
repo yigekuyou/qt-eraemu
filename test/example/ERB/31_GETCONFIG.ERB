@@ -1,0 +1,106 @@
+;************************************************************************
+; 组 31：GETCONFIG / GETCONFIGS（emuera.config 取值）
+;
+; 回归动机：eraTW「画像表示設定」（1,0,400,97）的选项 4/5/6 看似无效 ——
+;   GETCONFIG 没接线 -> 一律 0 -> eraTW 的像素换算全部除以 0：
+;     `画像縦幅 = 默认角色画像横幅 * 拡大比率 / GETCONFIG("フォントサイズ")`
+;   得到 0，输出 <img ... height='0' width='0'>，尺寸档位/拡大縮小改了状态
+;   却在画面上完全看不出来。
+;
+; 断言覆盖：
+;   · 读到的确实是 test/example 的 CSV/_default.config（フォントサイズ 18 …）
+;   · 类型：<int>/<Int64> 数值、<Color> 打包为 ((R*256)+G)*256+B、<bool> 1/0、
+;     字符串/字符原样（GETCONFIGS）
+;   · **白名单**：ウィンドウ高さ 存在于 _default.config(640) 但不在白名单 -> 0
+;   · 缺项回落 C# 内建默认（PBANDの初期値 4 / COM_ABLE初期値 1 …）
+;   · eraTW 的像素换算不再除零
+;************************************************************************
+
+@TEST_GETCONFIG
+#DIM FAILS
+#DIM PX
+#DIM PX2
+FAILS = 0
+DRAWLINE
+PRINTL == 组31：GETCONFIG / GETCONFIGS（emuera.config 取值） ==
+DRAWLINE
+
+;--- 1) 读到 CSV/_default.config 的整数值 ---
+CALL ASSERT_EQ, GETCONFIG("フォントサイズ"), 18, "GETCONFIG(フォントサイズ)=18（_default.config）"
+FAILS += RESULT
+CALL ASSERT_EQ, GETCONFIG("一行の高さ"), 19, "GETCONFIG(一行の高さ)=19"
+FAILS += RESULT
+CALL ASSERT_EQ, GETCONFIG("ウィンドウ幅"), 760, "GETCONFIG(ウィンドウ幅)=760"
+FAILS += RESULT
+CALL ASSERT_EQ, GETCONFIG("PRINTCを並べる数"), 3, "GETCONFIG(PRINTCを並べる数)=3"
+FAILS += RESULT
+CALL ASSERT_EQ, GETCONFIG("PRINTCの文字数"), 25, "GETCONFIG(PRINTCの文字数)=25"
+FAILS += RESULT
+
+;--- 2) <Color>：((R*256)+G)*256+B ---
+CALL ASSERT_EQ, GETCONFIG("文字色"), 12632256, "GETCONFIG(文字色) 192,192,192 -> 12632256"
+FAILS += RESULT
+CALL ASSERT_EQ, GETCONFIG("背景色"), 0, "GETCONFIG(背景色) 0,0,0 -> 0"
+FAILS += RESULT
+CALL ASSERT_EQ, GETCONFIG("選択中文字色"), 16776960, "GETCONFIG(選択中文字色) 255,255,0 -> 16776960"
+FAILS += RESULT
+
+;--- 3) <bool>：YES/NO -> 1/0（不是原样文本） ---
+CALL ASSERT_EQ, GETCONFIG("オートセーブを行なう"), 0, "GETCONFIG(オートセーブを行なう) NO -> 0"
+FAILS += RESULT
+
+;--- 4) 白名单：存在于配置文件但不允许被 ERB 读出的项 -> 0 ---
+CALL ASSERT_EQ, GETCONFIG("ウィンドウ高さ"), 0, "白名单外：ウィンドウ高さ(文件里=640) -> 0"
+FAILS += RESULT
+CALL ASSERT_EQ, GETCONFIG("履歴ログの行数"), 0, "白名单外：履歴ログの行数 -> 0"
+FAILS += RESULT
+CALL ASSERT_EQ, GETCONFIG("不存在的配置项"), 0, "不存在的键 -> 0"
+FAILS += RESULT
+
+;--- 5) 缺项回落 C# 内建默认（这些键不在 _default.config 里） ---
+CALL ASSERT_EQ, GETCONFIG("PBANDの初期値"), 4, "缺项默认：PBANDの初期値=4"
+FAILS += RESULT
+CALL ASSERT_EQ, GETCONFIG("RELATIONの初期値"), 0, "缺项默认：RELATIONの初期値=0"
+FAILS += RESULT
+CALL ASSERT_EQ, GETCONFIG("販売アイテム数"), 100, "缺项默认：販売アイテム数=100"
+FAILS += RESULT
+CALL ASSERT_EQ, GETCONFIG("COM_ABLE初期値"), 1, "缺项默认：COM_ABLE初期値=1"
+FAILS += RESULT
+CALL ASSERT_EQ, GETCONFIG("表示するセーブデータ数"), 20, "缺项默认：表示するセーブデータ数=20"
+FAILS += RESULT
+
+;--- 6) GETCONFIGS：字符串/字符/描画インターフェース 原样 ---
+CALL ASSERT_SEQ, GETCONFIGS("描画インターフェース"), "TEXTRENDERER", "GETCONFIGS(描画インターフェース)"
+FAILS += RESULT
+CALL ASSERT_SEQ, GETCONFIGS("フォント名"), "ＭＳ ゴシック", "GETCONFIGS(フォント名)"
+FAILS += RESULT
+CALL ASSERT_SEQ, GETCONFIGS("お金の単位"), "$", "GETCONFIGS(お金の単位)"
+FAILS += RESULT
+CALL ASSERT_SEQ, GETCONFIGS("BAR文字1"), "*", "GETCONFIGS(BAR文字1)"
+FAILS += RESULT
+CALL ASSERT_SEQ, GETCONFIGS("BAR文字2"), ".", "GETCONFIGS(BAR文字2)"
+FAILS += RESULT
+CALL ASSERT_SEQ, GETCONFIGS("DRAWLINE文字"), "-", "GETCONFIGS(DRAWLINE文字)"
+FAILS += RESULT
+CALL ASSERT_SEQ, GETCONFIGS("起動時簡略表示"), "Now Loading...", "GETCONFIGS(起動時簡略表示)"
+FAILS += RESULT
+CALL ASSERT_SEQ, GETCONFIGS("時間切れ表示"), "時間切れ", "GETCONFIGS(時間切れ表示)"
+FAILS += RESULT
+CALL ASSERT_SEQ, GETCONFIGS("システムメニュー0"), "最初からはじめる", "GETCONFIGS(システムメニュー0)"
+FAILS += RESULT
+CALL ASSERT_SEQ, GETCONFIGS("システムメニュー1"), "ロードしてはじめる", "GETCONFIGS(システムメニュー1)"
+FAILS += RESULT
+
+;--- 7) 回归：eraTW 的像素换算不再除零 ---
+;   画像縦幅 = 默认角色画像横幅 * 拡大比率 / GETCONFIG("フォントサイズ")
+PX = 180 * 100 / GETCONFIG("フォントサイズ")
+CALL ASSERT_EQ, PX, 1000, "eraTW 画像縦幅 = 180*100/18 = 1000（修复前恒 0）"
+FAILS += RESULT
+PX2 = 180 * 110 / GETCONFIG("フォントサイズ")
+CALL ASSERT_EQ, PX2, 1100, "拡大 110%% -> 1100（可见缩放）"
+FAILS += RESULT
+CALL ASSERT_TRUE, PX2 > PX, "拡大后的像素大于原始（选项 5/6 真的改变画面）"
+FAILS += RESULT
+
+DRAWLINE
+RETURN FAILS

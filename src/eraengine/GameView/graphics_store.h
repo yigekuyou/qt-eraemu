@@ -66,6 +66,13 @@ public:
     [[nodiscard]] static QImage spriteImage(const QString& name);
     [[nodiscard]] static const Sprite* sprite(const QString& name);
 
+    // 精灵的**输出基准位置**（C# ASprite.DestBasePosition）：
+    //   * 运行期精灵（SPRITECREATE 产物）：SPRITESETPOS/SPRITEMOVE 设定的位置；
+    //   * 静态资源（CSV 图集条目）：CSV 第 7/8 列（SpriteF 的 pos 实参），
+    //     SPRITESETPOS 对其同样有效（C# 里 GetSprite 返回的就是那个对象）。
+    // 返回 false = 这个名字既不是运行期精灵也不是静态资源。
+    static bool spriteBasePos(const QString& name, int& x, int& y);
+
     // ---- 颜色矩阵（GDRAWG / GDRAWSPRITE 的第 7/11 实参，5x5 整数 / 256）----
     static bool applyColorMatrix(QImage& image, const float colorMatrix[5][5]);
 

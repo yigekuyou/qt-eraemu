@@ -47,6 +47,14 @@ public:
 			int     y = 0;
 			int     w = 0;
 			int     h = 0;
+			// CSV 第 7/8 列：输出时的位置调整（C# SpriteF.DestBasePosition /
+			// AppContents.CreateFromCsv 的 tokens[6],tokens[7]）。
+			// eraTW 的白蓮(55)/路人立绘都是「把带偏移的部件叠进一张 G」合成的：
+			// 丢掉偏移 -> 所有部件挤在 (0,0)，立绘不完整、差分图像盖不到该盖的地方。
+			// （只用来区分「显式写了第 7/8 列」与「没写」，绘制路径上两者等价。）
+			bool    hasOffset = false;
+			int     offsetX = 0;
+			int     offsetY = 0;
 	};
     ResourceImageProvider();
 
@@ -73,6 +81,25 @@ public:
     // 仅按静态资源取图（图集矩形裁剪 / 文件），不含运行期精灵回退。
     // 供 GraphicsStore 的「静态资源即精灵」兜底使用。
     [[nodiscard]] static QImage loadResourceImage(const QString& id);
+
+    // 静态精灵（CSV 定义的图集条目）的**输出偏移** —— CSV 第 7/8 列，
+    // 对应 C# SpriteF 的 DestBasePosition（AppContents.CreateFromCsv 的
+    // tokens[6]/tokens[7]）。eraTW 的 リソース作成.ERB / モブ子表示.ERB 靠它把
+    // 部件叠到正确位置。返回 false = 不是 CSV 精灵（无偏移概念）。
+    // 注：控制台 `<img src='X'>` 的排版路径（ConsoleLayout::measurePart）**不**叠加
+    // 这个偏移（C# ConsoleImagePart.DrawTo 会）。eraTW 里带偏移的精灵（白蓮/路人部件）
+    // 都是经 GDRAWSPRITE 参与合成的，直接 `<img>` 显示的精灵偏移都是 (0,0)。
+    static bool spriteOffset(const QString& id, int& x, int& y);
+
+    // 图片解码（含**尺寸头回退**）。
+    //   Qt 的 webp 解码器对某些合法的「全透明」小体积 lossless 文件会失败：
+    //   eraTW 的 resources/ダミー.webp 只有 34 字节（VP8L,180×180,全透明），
+    //   用 QImage/QImageReader 一律「Unable to read image data」，但 libwebp
+    //   （C# 走 WebPWrapper 直连）能正常读出 180×180。eraTW 的立绘合成第一步是
+    //   `GCREATE(GID, SPRITEWIDTH("ダミー"), SPRITEHEIGHT("ダミー"))`，尺寸读成 0
+    //   会让整张合成图创建失败 —— 立绘不完整、差分图像盖不上去。
+    //   解码失败时按文件头（PNG/JPEG/BMP/GIF/WebP）解析出尺寸，返回同尺寸全透明图。
+    [[nodiscard]] static QImage loadImageFile(const QString& path);
 
 private:
     static QString s_root;

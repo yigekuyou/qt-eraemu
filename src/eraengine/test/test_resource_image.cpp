@@ -24,6 +24,7 @@
 //   3. 显式扩展名不追加
 //   4. 去查询串 / 前导斜杠
 //   5. requestImage 对存在/不存在文件的行为
+//   6. 图集输出偏移（CSV 第 7/8 列）与「尺寸头回退」（Qt 解不了的 webp）
 // ---------------------------------------------------------------------------
 
 #include <QCoreApplication>
@@ -49,6 +50,14 @@ static void writeImage(const QString& path) {
     img.save(path);
 }
 
+// 34 字节的 VP8L「全透明 180x180」webp —— 与 eraTW 的 resources/ダミー.webp
+// 逐字节相同。Qt 的 webp 解码器读不了它（libwebp 可以），所以它同时是
+// 「尺寸头回退」的夹具。
+static const unsigned char kLosslessTransparentWebp[] = {
+    0x52, 0x49, 0x46, 0x46, 0x1a, 0x00, 0x00, 0x00, 0x57, 0x45, 0x42, 0x50,
+    0x56, 0x50, 0x38, 0x4c, 0x0d, 0x00, 0x00, 0x00, 0x2f, 0xb3, 0xc0, 0x2c,
+    0x10, 0x07, 0x10, 0x11, 0x11, 0x88, 0x88, 0xfe, 0x07, 0x00};
+
 int main(int argc, char* argv[]) {
     QCoreApplication app(argc, argv);
 
@@ -66,6 +75,24 @@ int main(int argc, char* argv[]) {
         QFile atlas(QDir(root).filePath(QStringLiteral("resources/list.csv")));
         if (atlas.open(QIODevice::WriteOnly | QIODevice::Text))
             atlas.write(QByteArrayLiteral("TW_title004,title.webp,0,1,2,2\n"));
+    }
+    // 图集里的输出偏移（第 7/8 列）+ 一个 Qt 解不了的全透明 webp。
+    // 注意：图集清单是按 root 缓存的，所有夹具必须在第一次 setRoot() 之前写好。
+    const QString webpPath = QDir(root).filePath(QStringLiteral("resources/transparent.webp"));
+    {
+        QFile webp(webpPath);
+        if (webp.open(QIODevice::WriteOnly))
+            webp.write(reinterpret_cast<const char*>(kLosslessTransparentWebp),
+                       int(sizeof(kLosslessTransparentWebp)));
+    }
+    {
+        QFile atlas(QDir(root).filePath(QStringLiteral("resources/offset.csv")));
+        if (atlas.open(QIODevice::WriteOnly | QIODevice::Text)) {
+            atlas.write("part,title.webp,0,0,2,2,3,2\n");        // 带偏移
+            atlas.write("plain,title.webp,0,0,2,2\n");           // 6 列：无偏移
+            atlas.write("plainzero,title.webp,0,0,2,2,0,0\n");   // 显式 (0,0)
+            atlas.write("transparent,transparent.webp\n");       // 尺寸头回退
+        }
     }
 
     qDebug() << "\n1) 资源名解析";
@@ -132,6 +159,48 @@ int main(int argc, char* argv[]) {
         QSize size3;
         const QImage scaled = prov.requestImage(QStringLiteral("face_01"), &size3, QSize(2, 2));
         check(scaled.width() == 2 && scaled.height() == 2, "按 requestedSize 缩放为 2x2");
+    }
+
+    qDebug() << "\n3) 图集输出偏移（CSV 第 7/8 列 = C# SpriteF.DestBasePosition）";
+    {
+        ResourceImageProvider::setRoot(root);
+        int x = -1, y = -1;
+        check(ResourceImageProvider::spriteOffset(QStringLiteral("part"), x, y) && x == 3 && y == 2,
+              "带第 7/8 列的条目 -> (3,2)");
+        x = y = -1;
+        check(ResourceImageProvider::spriteOffset(QStringLiteral("plain"), x, y) && x == 0 && y == 0,
+              "只有 6 列（旧写法）-> (0,0)");
+        x = y = -1;
+        check(ResourceImageProvider::spriteOffset(QStringLiteral("plainzero"), x, y) && x == 0 && y == 0,
+              "显式 (0,0) -> (0,0)");
+        x = y = -1;
+        check(!ResourceImageProvider::spriteOffset(QStringLiteral("ghost"), x, y),
+              "不是图集条目 -> false");
+    }
+
+    qDebug() << "\n4) 尺寸头回退（Qt 解不了的 34 字节全透明 webp）";
+    {
+        ResourceImageProvider::setRoot(root);
+        // 前提：Qt 的 webp 解码器确实读不了它（C# 走 libwebp 直连能读）。
+        const QImage direct(webpPath);
+        if (!direct.isNull())
+            qDebug() << "  [note] 本机 Qt 能解码该 webp，用例退化为普通解码路径";
+        else
+            check(true, "前提成立：QImage 直接读该 webp 失败");
+
+        const QImage fallback = ResourceImageProvider::loadImageFile(webpPath);
+        check(fallback.size() == QSize(180, 180), "按文件头（VP8L）回退出 180x180");
+        check(!fallback.isNull() && qAlpha(fallback.pixel(0, 0)) == 0, "回退图是全透明");
+        check(ResourceImageProvider::loadImageFile(QStringLiteral("/no/such/file.png")).isNull(),
+              "不存在的路径 -> 空图");
+        int w = 0, h = 0;
+        check(ResourceImageProvider::intrinsicSize(QStringLiteral("transparent"), w, h)
+                  && w == 180 && h == 180,
+              "intrinsicSize 走回退 -> SPRITEWIDTH/SPRITEHEIGHT 得 180");
+        // 正常图不能被回退逻辑影响
+        const QImage ok = ResourceImageProvider::loadImageFile(
+            QDir(root).filePath(QStringLiteral("resources/face_01.png")));
+        check(ok.size() == QSize(4, 4), "能解码的图照常返回原图（4x4）");
     }
 
     qDebug() << "\n==========================";

@@ -89,6 +89,19 @@ void ResourceImageProvider::ensureAtlasLoaded(const QString& root) {
                 sprite.h = fields.at(5).trimmed().toInt(&okH);
                 sprite.hasRect = okX && okY && okW && okH && sprite.w > 0 && sprite.h > 0;
             }
+            // 第 7/8 列 = 输出偏移（C# 在同一层里读 tokens[6],tokens[7]）。
+            // 只有两列都能解析才算数（eraTW 里大量行以逗号结尾 -> 列数是 7，
+            // 偏移缺席，按 (0,0) 处理）。
+            if (fields.size() >= 8) {
+                bool okOX = false, okOY = false;
+                const int ox = fields.at(6).trimmed().toInt(&okOX);
+                const int oy = fields.at(7).trimmed().toInt(&okOY);
+                if (okOX && okOY) {
+                    sprite.hasOffset = true;
+                    sprite.offsetX = ox;
+                    sprite.offsetY = oy;
+                }
+            }
             s_atlas.insert(name, sprite);
         }
     }
@@ -118,7 +131,102 @@ bool hasExtension(const QString& name) {
     return dot > slash;
 }
 
+quint32 le32(const QByteArray& d, int off) {
+    if (off < 0 || off + 4 > d.size()) return 0;
+    return quint32(quint8(d.at(off))) | (quint32(quint8(d.at(off + 1))) << 8)
+           | (quint32(quint8(d.at(off + 2))) << 16) | (quint32(quint8(d.at(off + 3))) << 24);
+}
+quint32 be32(const QByteArray& d, int off) {
+    if (off < 0 || off + 4 > d.size()) return 0;
+    return (quint32(quint8(d.at(off))) << 24) | (quint32(quint8(d.at(off + 1))) << 16)
+           | (quint32(quint8(d.at(off + 2))) << 8) | quint32(quint8(d.at(off + 3)));
+}
+
+// 从文件头解析图片尺寸（Qt 解不了的图也要能排版）。成功返回 true。
+// 支持 WebP(VP8/VP8L/VP8X) / PNG / JPEG / BMP / GIF。
+bool parseImageSizeFromHeader(const QByteArray& d, int& width, int& height) {
+    const auto at = [&d](int i) { return i < d.size() ? quint8(d.at(i)) : 0; };
+    if (d.size() >= 16 && d.startsWith(QByteArrayLiteral("RIFF"))
+        && d.mid(8, 4) == QByteArrayLiteral("WEBP")) {
+        const QByteArray fourcc = d.mid(12, 4);
+        if (fourcc == QByteArrayLiteral("VP8 ")) {
+            // 有损：帧头在 payload[6..9]（宽 14 位 + 高 14 位，小端）
+            width = int((at(26) | (at(27) << 8)) & 0x3FFF);
+            height = int((at(28) | (at(29) << 8)) & 0x3FFF);
+            return width > 0 && height > 0;
+        }
+        if (fourcc == QByteArrayLiteral("VP8L")) {
+            // 无损：payload[0] 是签名 0x2f，随后 14 位宽-1、14 位高-1（LSB first）
+            const quint32 v = at(21) | (quint32(at(22)) << 8) | (quint32(at(23)) << 16)
+                              | (quint32(at(24)) << 24);
+            width = int(v & 0x3FFF) + 1;
+            height = int((v >> 14) & 0x3FFF) + 1;
+            return true;
+        }
+        if (fourcc == QByteArrayLiteral("VP8X")) {
+            // 扩展：payload[4..6] = 宽-1，payload[7..9] = 高-1（24 位小端）
+            width = int(quint32(at(24)) | (quint32(at(25)) << 8) | (quint32(at(26)) << 16)) + 1;
+            height = int(quint32(at(27)) | (quint32(at(28)) << 8) | (quint32(at(29)) << 16)) + 1;
+            return true;
+        }
+        return false;
+    }
+    if (d.size() >= 24 && at(0) == 0x89 && at(1) == 'P' && at(2) == 'N' && at(3) == 'G') {
+        width = int(be32(d, 16));
+        height = int(be32(d, 20));
+        return width > 0 && height > 0;
+    }
+    if (d.size() >= 10 && (d.startsWith(QByteArrayLiteral("GIF87a"))
+                           || d.startsWith(QByteArrayLiteral("GIF89a")))) {
+        width = at(6) | (at(7) << 8);
+        height = at(8) | (at(9) << 8);
+        return width > 0 && height > 0;
+    }
+    if (d.size() >= 26 && d.startsWith(QByteArrayLiteral("BM"))) {
+        width = int(qint32(le32(d, 18)));
+        height = qAbs(int(qint32(le32(d, 22))));
+        return width > 0 && height > 0;
+    }
+    if (d.size() >= 4 && at(0) == 0xFF && at(1) == 0xD8) {
+        // JPEG：扫 SOFn（C0..CF，去掉 C4/C8/CC）里的高/宽（大端 16 位）
+        int i = 2;
+        while (i + 9 < d.size()) {
+            if (at(i) != 0xFF) { ++i; continue; }
+            const int marker = at(i + 1);
+            if (marker >= 0xC0 && marker <= 0xCF && marker != 0xC4 && marker != 0xC8
+                && marker != 0xCC) {
+                height = int((at(i + 5) << 8) | at(i + 6));
+                width = int((at(i + 7) << 8) | at(i + 8));
+                return width > 0 && height > 0;
+            }
+            const int len = (at(i + 2) << 8) | at(i + 3);
+            if (len < 2) return false;
+            i += 2 + len;
+        }
+        return false;
+    }
+    return false;
+}
+
 } // namespace
+
+QImage ResourceImageProvider::loadImageFile(const QString& path) {
+    QImage image;
+    if (path.isEmpty()) return image;
+    if (image.load(path) && !image.isNull()) return image;
+
+    // 解码失败 -> 按文件头补一个同尺寸的全透明图（见头文件里的 ダミー.webp 说明）。
+    QFile file(path);
+    if (!file.open(QIODevice::ReadOnly)) return QImage();
+    const QByteArray head = file.read(64);   // 头解析最多用到 ~30 字节
+    int w = 0, h = 0;
+    if (!parseImageSizeFromHeader(head, w, h) || w <= 0 || h <= 0 || w > 8192 || h > 8192)
+        return QImage();
+    qCDebug(eraTrace) << "[load] 图片解码失败，按文件头尺寸回退" << path << QSize(w, h);
+    image = QImage(w, h, QImage::Format_ARGB32);
+    image.fill(Qt::transparent);
+    return image;
+}
 
 QString ResourceImageProvider::resolvePath(const QString& id, const QString& root) {
     const QString name = normalizeId(id);
@@ -183,8 +291,8 @@ bool ResourceImageProvider::intrinsicSize(const QString& id, int& width, int& he
         }
         const QString source = QDir(s_root).filePath(
             QStringLiteral("resources/%1").arg(sprite.sourceFile));
-        QImage image;
-        if (image.load(source) && !image.isNull()) {
+        const QImage image = loadImageFile(source);
+        if (!image.isNull()) {
             width = image.width();
             height = image.height();
             return true;
@@ -194,10 +302,20 @@ bool ResourceImageProvider::intrinsicSize(const QString& id, int& width, int& he
 
     const QString path = resolvePath(normalized);
     if (path.isEmpty()) return false;
-    QImage image;
-    if (!image.load(path) || image.isNull()) return false;
+    const QImage image = loadImageFile(path);
+    if (image.isNull()) return false;
     width = image.width();
     height = image.height();
+    return true;
+}
+
+bool ResourceImageProvider::spriteOffset(const QString& id, int& x, int& y) {
+    const QString normalized = normalizeId(id);
+    ensureAtlasLoaded(s_root);
+    const auto it = s_atlas.constFind(normalized);
+    if (it == s_atlas.constEnd()) return false;
+    x = it.value().offsetX;
+    y = it.value().offsetY;
     return true;
 }
 
@@ -214,7 +332,7 @@ QImage ResourceImageProvider::loadResourceImage(const QString& id) {
     if (atlasIt != s_atlas.constEnd()) {
         const Sprite& sprite = atlasIt.value();
         const QString source = QDir(s_root).filePath(QStringLiteral("resources/%1").arg(sprite.sourceFile));
-        image.load(source);
+        image = loadImageFile(source);
         if (!image.isNull() && sprite.hasRect) {
             const QRect rect(sprite.x, sprite.y, sprite.w, sprite.h);
             if (rect.left() < image.width() && rect.top() < image.height())

@@ -21,6 +21,7 @@
 #   ./test/run_example.sh 29       # 破坏性组（BEGIN FIRST：@EVENTFIRST #PRI/#LATER/#SINGLE/#ONLY 流）
 #   ./test/run_example.sh 30       # 音频·图片（用命令随机生成素材：G* 图像命令 + EE 音频命令）
 #   ./test/run_example.sh 31       # GETCONFIG/GETCONFIGS（emuera.config 取值白名单/类型/默认）
+#   ./test/run_example.sh 32       # CSV 精灵偏移（立绘合成：GDRAWSPRITE/差分覆盖/尺寸头回退）
 #
 # 依赖：build/src/eraengine/test_cli
 #       （cmake --build build --target test_cli）

@@ -1912,11 +1912,22 @@ bool ExpressionEvaluator::evaluateBuiltin(const FunctionNode &node, VariableStor
     case BuiltinOp::GDrawSprite: {
         // GDRAWSPRITE id, name[, destX, destY, destW, destH[, CM]]
         const int count = node.arguments().size();
-        const QImage sprite = GraphicsStore::spriteImage(S(1));
+        const QString spriteName = S(1);
+        const QImage sprite = GraphicsStore::spriteImage(spriteName);
         if (sprite.isNull()) { out = QVariant::fromValue<qint64>(0); return true; }
-        const QRect dest = count >= 6
+        QRect dest = count >= 6
             ? QRect(int(I(2)), int(I(3)), int(I(4)), int(I(5)))
             : QRect(0, 0, sprite.width(), sprite.height());
+        // C# ASpriteSingle.GraphicsDraw(g, destRect)：把 DestBasePosition 按
+        // 「目标尺寸 / 源矩形尺寸」同比缩放后加到目标原点。eraTW 的白蓮(55)/路人立绘
+        // 就是「把带 CSV 偏移的部件叠进一张 G」合成的 —— 丢掉偏移，部件全挤到 (0,0)，
+        // 立绘不完整、差分图像盖不到该盖的地方。
+        int bx = 0, by = 0;
+        if (!dest.isEmpty() && GraphicsStore::spriteBasePos(spriteName, bx, by)
+            && (bx != 0 || by != 0)) {
+            dest.moveLeft(dest.x() + bx * dest.width() / qMax(1, sprite.width()));
+            dest.moveTop(dest.y() + by * dest.height() / qMax(1, sprite.height()));
+        }
         float cm[5][5];
         const bool hasCm = count >= 7 && readColorMatrix(node, 6, storage, gameBaseData, cm);
         out = QVariant::fromValue<qint64>(GraphicsStore::gDrawImage(
@@ -1943,17 +1954,29 @@ bool ExpressionEvaluator::evaluateBuiltin(const FunctionNode &node, VariableStor
     }
     case BuiltinOp::SpritePosX:
     case BuiltinOp::SpritePosY: {
-        const GraphicsStore::Sprite* sprite = GraphicsStore::sprite(S(0));
-        out = QVariant::fromValue<qint64>(sprite ? (op == BuiltinOp::SpritePosX ? sprite->posX : sprite->posY) : -1);
+        // C# SpriteStateMethod：精灵不存在时返回 0（不是 -1）；静态资源也返回
+        // 自己的 DestBasePosition（CSV 第 7/8 列）。
+        int bx = 0, by = 0;
+        const bool found = GraphicsStore::spriteBasePos(S(0), bx, by);
+        out = QVariant::fromValue<qint64>(found ? (op == BuiltinOp::SpritePosX ? bx : by) : 0);
         return true;
     }
     case BuiltinOp::SpriteMove:
     case BuiltinOp::SpriteSetPos: {
-        // 两者都把精灵移到 (x, y)（C# SPRITEMOVE 是相对位移、SPRITESETPOS 绝对；
-        // eraTW 只用绝对定位场景，这里统一按绝对处理并留痕差异）
-        const GraphicsStore::Sprite* sprite = GraphicsStore::sprite(S(0));
-        if (!sprite) { out = QVariant::fromValue<qint64>(0); return true; }
-        GraphicsStore::spriteSetPos(S(0), static_cast<int>(I(1)), static_cast<int>(I(2)));
+        // C# SPRITESETPOS 是绝对、SPRITEMOVE 是相对（DestBasePosition.Offset）。
+        // 两者对静态资源（CSV 精灵）同样有效 —— eraTW 虽然没用，但保持语义一致。
+        const QString name = S(0);
+        int bx = 0, by = 0;
+        if (!GraphicsStore::spriteBasePos(name, bx, by)) {
+            out = QVariant::fromValue<qint64>(0);
+            return true;
+        }
+        if (op == BuiltinOp::SpriteMove) {
+            GraphicsStore::spriteSetPos(name, bx + static_cast<int>(I(1)),
+                                        by + static_cast<int>(I(2)));
+        } else {
+            GraphicsStore::spriteSetPos(name, static_cast<int>(I(1)), static_cast<int>(I(2)));
+        }
         out = QVariant::fromValue<qint64>(1);
         return true;
     }

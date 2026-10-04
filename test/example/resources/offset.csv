@@ -1,0 +1,24 @@
+;------------------------------------------------------------
+; 组32 用：CSV 精灵（图集矩形 + 输出偏移）与「尺寸头回退」
+;
+; 格式（对齐 C# AppContents.CreateFromCsv）：
+;   名, 源文件 [, x, y, w, h [, offsetX, offsetY [, delay]]]
+; 第 7/8 列 = 输出时的位置调整（C# SpriteF 的 DestBasePosition）。
+; eraTW 的白蓮(55)/路人立绘都靠它把部件叠到正确位置。
+;------------------------------------------------------------
+;整张图即该资源（无矩形、无偏移）
+off_norect,offset_atlas.png
+
+;红：4x4 象限，偏移 (0,0)
+off_base,offset_atlas.png,0,0,4,4,0,0
+;蓝：4x4 象限，偏移 (3,2)
+off_part,offset_atlas.png,4,0,4,4,3,2
+;黄：4x4 象限，偏移 (1,1)（当「差分」压住 off_base）
+off_diff,offset_atlas.png,4,4,4,4,1,1
+;只有 6 列：旧写法（没有偏移列），偏移按 (0,0)
+off_legacy,offset_atlas.png,0,4,4,4
+
+;eraTW 的 resources/ダミー.webp 同类：34 字节、VP8L、180x180、全透明。
+;Qt 的 webp 解码器解不了它（libwebp 可以）—— 尺寸必须能从文件头回退出来，
+;因为 eraTW 的立绘合成第一步就是 GCREATE(GID, SPRITEWIDTH("ダミー"), ...)。
+off_dummy,transparent.webp

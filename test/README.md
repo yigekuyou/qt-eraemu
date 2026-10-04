@@ -60,9 +60,10 @@ cmake --build build --target test_cli
 | 29 | **文档语义·BEGIN FIRST 事件函数流** `#PRI/#LATER/#SINGLE/#ONLY`（破坏性·单独跑，`29_DOC_EVENT.ERB`） |
 | 30 | **音频·图片（用命令随机生成素材）**（`30_ASSET_GEN.ERB`） |
 | 31 | **GETCONFIG/GETCONFIGS（emuera.config 取值）**（`31_GETCONFIG.ERB`） |
+| 32 | **CSV 精灵偏移（立绘合成）与尺寸头回退**（`32_SPRITE_OFFSET.ERB`，素材 `example/resources/`） |
 
 「全部自动运行」（`./test/run_example.sh` 无参数）依次执行：
-**1–10、14、16、17、23–28、30、31 + 汇总**。
+**1–10、14、16、17、23–28、30、31、32 + 汇总**。
 
 不在自动路径、需单跑的组（`./test/run_example.sh <组号>`）：
 
@@ -296,6 +297,35 @@ eraTW 的画像枠・時間停止・特效都是**另一张图叠在立絵上**�
 
 框锚点行 8 + dy(-1) = 7 = 立絵的 7 → 正好重合。`test_cli` 也补了
 `:scroll <N>`（正 = 向上翻）用来复核历史视图的区块。
+
+## CSV 精灵偏移与「尺寸头回退」（立绘合成 · 2026-10 修正）
+
+eraTW 的立绘**不是一张图**：`ERB\リソース作成.ERB`（白蓮 55）与
+`ERB\ステータス表示関連\モブ子表示.ERB`（路人）都是
+「把 `/resources/` 图集里的部件叠进一张 G」再 `SPRITECREATE`：
+
+```
+CALL 画像合成(GID, "55_A1")   ->  GDRAWSPRITE GID, "55_A1", 0, 0, SPRITEWIDTH(...), SPRITEHEIGHT(...)
+```
+
+部件的落点全部来自 **CSV 第 7/8 列**（C# `AppContents.CreateFromCsv` 的
+`tokens[6],tokens[7]` → `SpriteF.DestBasePosition`），例如
+`差し替え画像/差し替え.csv` 的 `55_A1,55_別立ち.png,0,0,122,152,24,28`。
+
+| 缺陷 | 现象 | 修正 |
+| --- | --- | --- |
+| 第 7/8 列被丢弃 | 所有部件都落在 (0,0)：**立绘不完整**、**差分图像盖不到该盖的地方** | 解析为 `Sprite.offsetX/Y` → `GraphicsStore::spriteBasePos` → `GDRAWSPRITE` 按 C# `ASpriteSingle.GraphicsDraw(g,destRect)` 缩放偏移（`+ off*目标尺寸/源尺寸`） |
+| `ダミー.webp` 解不出来 | `resources/ダミー.webp` 是 34 字节、VP8L、180×180 的**全透明**图；Qt 的 webp 解码器读不了（C# 走 libwebp 直连能读）→ `SPRITEWIDTH("ダミー")=0` → 合成第一步 `GCREATE(GID,0,0)` 失败 → **整张立绘都建不出来** | `ResourceImageProvider::loadImageFile`：解码失败时按文件头（WebP VP8/VP8L/VP8X、PNG、JPEG、BMP、GIF）补齐尺寸，返回同尺寸全透明图 |
+| `SPRITEPOSX/Y` 对静态资源返回 -1 | C# 返回 `DestBasePosition`（CSV 偏移），精灵不存在时返回 **0** | 同上；`SPRITEMOVE`/`SPRITESETPOS` 对静态资源也生效（C# 里静态精灵同样是可变对象） |
+
+验证方式（**不跑 eraTW**，全部毫秒级）：
+
+| 位置 | 断言 |
+| --- | --- |
+| `test_resource_image` §3/§4 | 第 7/8 列解析成 (3,2)／6 列旧写法 = (0,0)／非图集条目 = false；34 字节 webp `loadImageFile` 回退 180×180 且全透明、`intrinsicSize` 同值、正常图不受影响 |
+| `test/example/ERB/32_SPRITE_OFFSET.ERB`（组 32） | `SPRITEPOSX/Y` = CSV 列；`GDRAWSPRITE` 的落点 = 偏移（2 参与 6 参形态，放大时同比例）；**差分压在底图上的位置正确**（盖住处变差分色、其余仍是底图色）；`SPRITEWIDTH("off_dummy")=180` 并能当合成画布；`SPRITESETPOS/SPRITEMOVE` 对静态资源生效 |
+| 反证 | 关掉偏移应用 → 组 32 立刻 13 条 FAIL（`偏移原点没有东西`、`差分没覆盖到的 (0,0) 仍是底图红` …）；关掉尺寸头回退 → 4 条 FAIL（`解码失败也得从文件头拿到宽 180` …） |
+| 与独立实现比对 | 用 PIL 按同一份 `差し替え.csv` 重做 55_A1 / 55_A1+B19+C19+D19 的合成 → 引擎 `GSAVE` 出来的图 **逐像素相同**（180×180，差异 0 像素） |
 
 ## 音频播放（扩展能力 · 2026-10）
 

@@ -31,6 +31,13 @@ QHash<QString, GraphicsStore::Sprite>& sprites() {
     static QHash<QString, GraphicsStore::Sprite> store;   // 键统一大写（ICVariable）
     return store;
 }
+// 静态资源（CSV 精灵）被 SPRITESETPOS/SPRITEMOVE 改过的位置。
+// C# 里静态精灵也是可变对象（AppContents.GetSprite 返回同一个 ASprite），
+// 我们不改 ResourceImageProvider 的只读清单，改在这里覆盖。
+QHash<QString, QPoint>& spritePosOverrides() {
+    static QHash<QString, QPoint> store;   // 键统一大写
+    return store;
+}
 } // namespace
 
 bool GraphicsStore::gCreate(int id, int width, int height) {
@@ -45,7 +52,8 @@ bool GraphicsStore::gCreateFromFile(int id, const QString& resourceName) {
     if (gImages().contains(id)) return false;   // C#：已存在的 G 不重建
     const QString path = ResourceImageProvider::resolvePath(resourceName);
     if (path.isEmpty()) return false;
-    QImage image(path);
+    // loadImageFile：Qt 解不了的图（eraTW 的 34 字节全透明 ダミー.webp）也要拿到尺寸
+    QImage image = ResourceImageProvider::loadImageFile(path);
     if (image.isNull()) return false;
     gImages().insert(id, image.convertToFormat(QImage::Format_ARGB32_Premultiplied));
     return true;
@@ -111,14 +119,42 @@ bool GraphicsStore::spriteCreate(const QString& name, int gId, const QRect& rect
 }
 
 bool GraphicsStore::spriteDispose(const QString& name) {
-    return sprites().remove(name.toUpper()) > 0;
+    const QString key = name.toUpper();
+    spritePosOverrides().remove(key);
+    return sprites().remove(key) > 0;
 }
 
 bool GraphicsStore::spriteSetPos(const QString& name, int x, int y) {
-    auto it = sprites().find(name.toUpper());
-    if (it == sprites().end()) return false;
-    it->posX = x;
-    it->posY = y;
+    const QString key = name.toUpper();
+    auto it = sprites().find(key);
+    if (it != sprites().end()) {
+        it->posX = x;
+        it->posY = y;
+        return true;
+    }
+    // 静态资源：C# 里 SPRITESETPOS 对 CSV 精灵同样有效 -> 记到覆盖表。
+    int sx = 0, sy = 0;
+    if (!ResourceImageProvider::spriteOffset(name, sx, sy)) return false;
+    spritePosOverrides().insert(key, QPoint(x, y));
+    return true;
+}
+
+bool GraphicsStore::spriteBasePos(const QString& name, int& x, int& y) {
+    if (const Sprite* s = sprite(name); s && s->created) {
+        x = s->posX;
+        y = s->posY;
+        return true;
+    }
+    int sx = 0, sy = 0;
+    if (!ResourceImageProvider::spriteOffset(name, sx, sy)) return false;
+    const auto ov = spritePosOverrides().constFind(name.toUpper());
+    if (ov != spritePosOverrides().constEnd()) {
+        x = ov->x();
+        y = ov->y();
+    } else {
+        x = sx;
+        y = sy;
+    }
     return true;
 }
 
@@ -336,6 +372,7 @@ bool GraphicsStore::spriteAnimeAddFrame(const QString& name, int gId, int x, int
 void GraphicsStore::clearAll() {
     gImages().clear();
     sprites().clear();
+    spritePosOverrides().clear();
     gExtra().pen.clear();
     gExtra().brush.clear();
     gExtra().font.clear();

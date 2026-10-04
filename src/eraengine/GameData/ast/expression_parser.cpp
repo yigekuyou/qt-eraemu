@@ -201,7 +201,7 @@ QSharedPointer<ExpressionNode> ExpressionParser::parseVariable() {
     if (name.startsWith(QLatin1Char('$'))) {
         varType = OperandType::Str;
     } else {
-        const OperandType sys = sysvar::systemVariableType(name.toStdString());
+        const OperandType sys = sysvar::systemVariableTypeDyn(name.toStdString());
         if (isKnown(sys)) varType = sys;
         // 未登记的标识符按 Int 处理（对齐 C#：未知标识符在归约期报错）
     }
@@ -264,7 +264,7 @@ QSharedPointer<ExpressionNode> ExpressionParser::parseIndexTerm(const QString& v
         if (identName.startsWith(QLatin1Char('$'))) {
             varType = OperandType::Str;
         } else {
-            const OperandType sys = sysvar::systemVariableType(identName.toStdString());
+            const OperandType sys = sysvar::systemVariableTypeDyn(identName.toStdString());
             if (isKnown(sys)) varType = sys;
         }
         return QSharedPointer<VariableNode>::create(identName, varType);
@@ -353,11 +353,11 @@ QSharedPointer<ExpressionNode> ExpressionParser::parseFunctionCall() {
             fn->setArityError(validateBuiltinCall(*s, args));
         }
     } else if (args.isEmpty()
-               && isKnown(sysvar::systemVariableType(token.value().toStdString()))) {
+               && isKnown(sysvar::systemVariableTypeDyn(token.value().toStdString()))) {
         // 伪变量写作 0 参调用：`LINECOUNT()` == `LINECOUNT`（eraTW/EE 惯用写法）。
         // 原版 C# 会按「未定義関数」报错，但测试规范（组28）与 EE 允许此写法。
         return QSharedPointer<VariableNode>::create(
-            token.value(), sysvar::systemVariableType(token.value().toStdString()));
+            token.value(), sysvar::systemVariableTypeDyn(token.value().toStdString()));
     } else {
         // C#：IdentifierDictionary.ThrowException(idStr, true) —— 未定义的関数
         fn->setValueType(OperandType::Unknown);

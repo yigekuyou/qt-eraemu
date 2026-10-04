@@ -41,7 +41,11 @@ class ExtensionRegistry;   // 前置声明（完整定义在 extension_registry.
 //     **真实现**（regExpr 登记；实参/返回类型等声明由注册类注入运行期扩展
 //     函数表，求值经 ExpressionEvaluator 的 BuiltinOp::Extension 回调转回）；
 //   · EE 扩展命令：test/data/emuera_ee_cmds.txt（C# 权威源码导出）——
-//     「留痕一次 + 跳过」桩（待补全，不报错，对齐 EE 的容错语义）。
+//     「留痕一次 + 跳过」桩（待补全，不报错，对齐 EE 的容错语义）；
+//   · EE 扩展**系统变量**（fork 专有 CSV 变量）：DAYNAME / TIMENAME /
+//     MONEYNAME 及 DAY/TIME/MONEY 的名表映射（regVariable / regNameTable）——
+//     对齐 EmueraEM+EE readme「DAY、TIME、MONEY に CSV を適用可能に」。
+//     （原版 Emuera 无这些变量；本移植此前写死进核心三处，现移到扩展。）
 // PUTFORM / FIND_CHARADATA 属核心（BuiltInFunctionCode.cs 枚举内），
 // 不在此登记 —— 扩展不得覆盖核心（注册类 fail-fast 拒绝）。
 //

@@ -16,6 +16,7 @@
  * along with this program.  If not, see <https://www.gnu.org/licenses/>.
  */
 #include "variable_config.h"
+#include "system_variables.h"   // sysvar::extensionDefault1DSizeOf（扩展变量默认长度）
 #include "text_encoding.h"
 #include <QFile>
 #include <QTextStream>
@@ -152,10 +153,9 @@ void VariableConfig::loadDefaults()
     variableSizes["FLAGNAME"] = VariableSizeInfo{10000, QPair<int, int>(), QVector<int>(), false, false};
     variableSizes["TFLAGNAME"] = VariableSizeInfo{1000, QPair<int, int>(), QVector<int>(), false, false};
     variableSizes["STR"] = VariableSizeInfo{20000, QPair<int, int>(), QVector<int>(), false, false};
-    // DAY.csv 名表（eraTW：`DAY:天気` / `DAYNAME:5`）。Emuera 原版无 DAYNAME，
-    // 但 eraTW 自带 CSV/DAY.csv，NAME 数组填充循环按 `<VAR>NAME` 约定登记。
-    variableSizes["DAYNAME"] = VariableSizeInfo{1000, QPair<int, int>(), QVector<int>(), false, false};
-    
+    // 注：DAYNAME/TIMENAME/MONEYNAME 等 fork（EE）专有 CSV 变量不在此原生默认表；
+    // 由扩展登记（ExtensionRegistry::regVariable -> getSize1D 兜底查扩展表）。
+
     // 1D character variables
     variableSizes["BASE"] = VariableSizeInfo{100, QPair<int, int>(), QVector<int>(), false, false};
     variableSizes["MAXBASE"] = VariableSizeInfo{100, QPair<int, int>(), QVector<int>(), false, false};
@@ -195,7 +195,9 @@ int VariableConfig::getSize1D(const QString& name) const
     if (it != variableSizes.end() && !it.value().is2D && !it.value().is3D) {
         return it.value().size1D;
     }
-    return 0;
+    // 实例表（含 VariableSize.csv 覆盖）未命中 -> 查扩展变量默认长度
+    // （fork 专有变量：DAYNAME/TIMENAME/MONEYNAME…，由 ee_extension 登记）。
+    return sysvar::extensionDefault1DSizeOf(name.toStdString());
 }
 
 QPair<int, int> VariableConfig::getSize2D(const QString& name) const

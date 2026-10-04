@@ -150,10 +150,38 @@ static void registerEeExpressionFunctions(ExtensionRegistry& ext)
 }
 
 // ---------------------------------------------------------------------------
+// EE 扩展系统变量（fork 专有 CSV 变量）—— 实现住扩展侧；经注册类登记
+//
+// EmueraEM+EE readme：「・DAY、TIME、MONEYにCSVを適用可能に。各『DAY.csv』
+// 『TIME.csv』『MONEY.csv』に対応しています。DAYNAME、TIMENAME、MONEYNAMEも実装」。
+// 原版 Emuera 无 DAY/TIME/MONEY 的名表，也無 DAYNAME/TIMENAME/MONEYNAME ——
+// 这些 CSV 变量专属于 fork（本移植此前把 DAYNAME / DAY→DAY.CSV 写死进核心：
+// system_variables.h / variable_config.cpp / constant_table.cpp）。现移到扩展：
+//   · regVariable  —— 登记变量本身（类型 + 默认一维长度）；
+//   · regNameTable —— 为原生基础变量补名表（`DAY:天気` -> DAY.CSV）。
+// 解析期经 systemVariableTypeDyn、名表经 ConstantTable::csvForVariable、
+// 尺寸经 VariableConfig::getSize1D 分别兜底查这张扩展表。
+// ---------------------------------------------------------------------------
+static void registerEeVariables(ExtensionRegistry& ext)
+{
+    // DAY/TIME/MONEY 的 NAME 名表（EE readme；默认长度与 VariableSize.csv 惯例一致）。
+    ext.regVariable(QStringLiteral("DAYNAME"), OperandType::Str, 1000);
+    ext.regVariable(QStringLiteral("TIMENAME"), OperandType::Str, 1000);
+    ext.regVariable(QStringLiteral("MONEYNAME"), OperandType::Str, 1000);
+    // 基础变量补名表：`DAY:天気` / `TIME:…` / `MONEY:…` 的「名字 -> 下标」。
+    ext.regNameTable(QStringLiteral("DAY"), QStringLiteral("DAY.CSV"));
+    ext.regNameTable(QStringLiteral("TIME"), QStringLiteral("TIME.CSV"));
+    ext.regNameTable(QStringLiteral("MONEY"), QStringLiteral("MONEY.CSV"));
+}
+
+// ---------------------------------------------------------------------------
 // EE 扩展登记（注册类构造时一次调用；默认全启用）
 // ---------------------------------------------------------------------------
 void registerEeExtensions(ExtensionRegistry& ext)
 {
+    // fork 专有 CSV 系统变量（DAYNAME/TIMENAME/MONEYNAME + 基础变量名表）
+    registerEeVariables(ext);
+
     // 式中函数（实现住本文件；见上）
     registerEeExpressionFunctions(ext);
 

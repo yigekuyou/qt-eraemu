@@ -151,7 +151,7 @@ OperandType VariableTable::typeOf(const QString& name, const QString& function) 
         if (isKnown(local)) return local;
     }
     // 用户未声明 -> 回退到系统变量表（FLAG/CFLAG/RESULTS/GLOBALS/…）
-    return sysvar::systemVariableType(name.toStdString());
+    return sysvar::systemVariableTypeDyn(name.toStdString());
 }
 
 int VariableTable::count() const {

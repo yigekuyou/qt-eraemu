@@ -15,7 +15,7 @@
 | `example/ERB/10_COVERAGE.ERB` | **自动生成**的全函数冒烟覆盖（勿手改） |
 | `data/emuera_standard_cmds.txt` | Emuera 原版命令清单（导出自 C#） |
 | `data/emuera_standard_funcs.txt` | Emuera 原版式中函数清单（导出自 C#） |
-| `data/emuera_ee_cmds.txt` | EmueraEE 扩展命令清单（**命令/桩与式中函数都在扩展侧** `src/eraengine/GameProc/ee_extension.cpp` 经注册类 `ExtensionRegistry`（`reg`/`regForm`/`regExpr`）逐一登记；式中函数如 `EXISTFUNCTION`/`GETDOINGFUNCTION`/`GETDISPLAYLINE` 亦在此实现，声明由注册类注入运行期扩展函数表。本文件仍为覆盖组名单来源） |
+| `data/emuera_ee_cmds.txt` | EmueraEE 扩展命令清单（**命令/桩与式中函数都在扩展侧** `src/eraengine/GameProc/ee_extension.cpp` 经注册类 `ExtensionRegistry`（`reg`/`regForm`/`regExpr`）逐一登记；式中函数如 `EXISTFUNCTION`/`GETDOINGFUNCTION`/`GETDISPLAYLINE` 亦在此实现，声明由注册类注入运行期扩展函数表。**扩展系统变量**（`DAYNAME`/`TIMENAME`/`MONEYNAME` 及 `DAY`/`TIME`/`MONEY` 名表）亦在此经 `regVariable`/`regNameTable` 登记进运行期扩展变量表 `system_variables.h`。本文件仍为覆盖组名单来源） |
 | `data/coverage_report.txt` | 覆盖率报告（生成） |
 | `run_example.sh` | 运行示例（唯一需要的入口） |
 | `export_command_tables.py` | 从 C# 源码导出上述命令清单 |
@@ -109,9 +109,13 @@ EmueraEE·私家改造版 readme**，不参考本移植实现：
   `"NAME body"` 并自引用膨胀（`DOC_HELLO "你好宏" "你好宏"…`、`DOC_MAC_27`→0）。
 * **SAVEDATA 字符串实参**：`SAVEDATA 40, "标题"` 的第二实参是整段引号字面量
   （已去引号、无 AST），此前被当表达式求值成 0 → `SAVEDATA_TEXT` 落空。
-* **`DAY.csv` 名表**：登记 `DAYNAME`（`VariableSize` + 系统字符串变量）与
-  `DAY→DAY.CSV`（`ConstantTable`），并修 `RESETGLOBAL` 不再清空 `<VAR>NAME`
-  名表（组 9 的 RESETGLOBAL 曾把 `DAYNAME` 清掉）。
+* **`DAY.csv` 名表（已移入扩展）**：`DAYNAME`（含 fork 一并实现的 `TIMENAME`/
+  `MONEYNAME`）与 `DAY/TIME/MONEY → *.CSV` 名表映射由 **EmueraEE 扩展**登记
+  （`ee_extension.cpp` 经 `ExtensionRegistry::regVariable`/`regNameTable` →
+  运行期扩展变量表），不再写死进核心：`system_variables.h`（类型表）、
+  `variable_config.cpp`（默认尺寸）、`constant_table.cpp`（名表映射）现只保留
+  **原生**条目。另修 `RESETGLOBAL` 不再清空 `<VAR>NAME` 名表（组 9 的
+  `RESETGLOBAL` 曾把 `DAYNAME` 清掉）。
 * **EE 式中函数**：`EXISTFUNCTION`（1/2/3/0 + 第二参大小写选项）、
   `GETDOINGFUNCTION`、`GETDISPLAYLINE`（按逻辑行、0 起算、越界空串）——
   **实现全在扩展侧**（`ee_extension.cpp` 经 `ExtensionRegistry::regExpr` 登记，

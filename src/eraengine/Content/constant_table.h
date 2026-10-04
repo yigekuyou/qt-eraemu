@@ -51,8 +51,13 @@ public:
     [[nodiscard]] bool hasTable(const QString& csvFileName) const;
     [[nodiscard]] QStringList tableNames() const;
 
-    // 变量名 → CSV 文件名（对齐 C# VariableCode 的 ～NAME 系变量）
+    // 变量名 → CSV 文件名（对齐 C# VariableCode 的 ～NAME 系变量）。
+    // = 原生映射（coreCsvForVariable）优先，其次扩展名表映射
+    // （ExtensionRegistry::regNameTable 登记的 fork 专有映射，如 DAY -> DAY.CSV）。
     [[nodiscard]] static QString csvForVariable(const QString& variableName);
+    // 仅原生映射（对齐 C# ConstantData.ResolveName 的固定表）；供扩展 fail-fast
+    // 判断「核心是否已映射该变量」。
+    [[nodiscard]] static QString coreCsvForVariable(const QString& variableName);
 
     // 变量 + 名字 → 下标（无对应表/未命中返回 -1）
     [[nodiscard]] int indexForVariable(const QString& variableName, const QString& name) const;

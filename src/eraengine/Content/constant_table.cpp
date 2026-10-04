@@ -22,6 +22,9 @@
 #include <QFileInfo>
 #include <QTextStream>
 #include <QDebug>
+#include <string>
+#include <string_view>
+#include "system_variables.h"   // sysvar::extensionNameTableCsvOf（扩展名表映射）
 #include "text_encoding.h"
 
 namespace {
@@ -163,8 +166,9 @@ void ConstantTable::clear() {
     m_nameCount = 0;
 }
 
-// 变量名 → CSV 文件名（对齐 C# VariableCode 的 NameTable 归属）
-QString ConstantTable::csvForVariable(const QString& variableName) {
+// 原生变量名 → CSV 文件名（对齐 C# VariableCode 的 NameTable 归属）。
+// 只含原生映射；fork 专有映射（DAY -> DAY.CSV）由扩展登记，见 csvForVariable。
+QString ConstantTable::coreCsvForVariable(const QString& variableName) {
     static const QHash<QString, QString> map = {
         {QStringLiteral("FLAG"),      QStringLiteral("FLAG.CSV")},
         {QStringLiteral("TFLAG"),     QStringLiteral("TFLAG.CSV")},
@@ -201,10 +205,19 @@ QString ConstantTable::csvForVariable(const QString& variableName) {
         {QStringLiteral("GLOBAL"),    QStringLiteral("GLOBAL.CSV")},
         {QStringLiteral("GLOBALS"),   QStringLiteral("GLOBALS.CSV")},
         {QStringLiteral("TSTR"),      QStringLiteral("TSTR.CSV")},
-        // eraTW：DAY.csv 使 DAY 获得命名索引（`DAY:天気` / `DAYNAME:5`）
-        {QStringLiteral("DAY"),       QStringLiteral("DAY.CSV")},
+        // 注：DAY/TIME/MONEY 的名表是 fork（EmueraEM+EE）专有，不在此原生表；
+        // 由扩展登记（ee_extension.cpp: regNameTable("DAY", "DAY.CSV")…）。
     };
     return map.value(variableName.toUpper());
+}
+
+// 合并查表：原生优先（核心不得被扩展改写），其次扩展名表映射。
+QString ConstantTable::csvForVariable(const QString& variableName) {
+    const QString core = coreCsvForVariable(variableName);
+    if (!core.isEmpty()) return core;
+    const std::string_view ext =
+        sysvar::extensionNameTableCsvOf(variableName.toStdString());
+    return ext.empty() ? QString() : QString::fromStdString(std::string(ext));
 }
 
 int ConstantTable::indexForVariable(const QString& variableName, const QString& name) const {

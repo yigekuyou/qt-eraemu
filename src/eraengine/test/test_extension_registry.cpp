@@ -40,6 +40,9 @@
 
 #include "ast/logical_line.h"
 #include "ast/ast_builder.h"
+#include "ast/system_variables.h"
+#include "constant_table.h"
+#include "variable_config.h"
 #include "process_state.h"
 #include "era_parse_table.h"
 #include "variable_storage.h"
@@ -208,6 +211,54 @@ int main(int argc, char* argv[]) {
         check(storage.getSystemStr(QStringLiteral("SAVEDATA_TEXT"), 0)
                   == QStringLiteral("3日目终"),
               "SAVEDATA_TEXT 累加 == 3日目终");
+    }
+
+    // ---- 8) 扩展系统变量：fork 专有 CSV 变量（EE：DAYNAME/TIMENAME/MONEYNAME）----
+    // 对齐 EmueraEM+EE readme「DAY、TIME、MONEY に CSV を適用可能に … DAYNAME、
+    // TIMENAME、MONEYNAME も実装」。这些变量原版 Emuera 没有，此前被写死进核心
+    // （system_variables.h / variable_config.cpp / constant_table.cpp），现移到扩展。
+    qDebug() << "\n8) 扩展系统变量（regVariable / regNameTable）";
+    {
+        // 原生表不再含 DAYNAME（解析期经 systemVariableTypeDyn 合并扩展表）。
+        check(sysvar::systemVariableType("DAYNAME") == OperandType::Unknown,
+              "原生系统变量表不含 DAYNAME（已移出核心）");
+
+        ExtensionRegistry ext;
+        check(ext.hasVariable("DAYNAME") && ext.hasVariable("TIMENAME")
+                  && ext.hasVariable("MONEYNAME"),
+              "注册类构造即登记 EE 的 DAYNAME/TIMENAME/MONEYNAME");
+        check(sysvar::systemVariableTypeDyn("DAYNAME") == OperandType::Str,
+              "systemVariableTypeDyn(DAYNAME) == Str（扩展表合并）");
+        check(sysvar::systemVariableTypeDyn("dayname") == OperandType::Str,
+              "扩展变量名大小写不敏感");
+
+        // 名表映射：基础变量（原生）-> fork 专有 CSV（DAY -> DAY.CSV）。
+        check(ConstantTable::coreCsvForVariable(QStringLiteral("DAY")).isEmpty(),
+              "原生名表不含 DAY（已移出核心）");
+        check(ConstantTable::csvForVariable(QStringLiteral("DAY")) == QStringLiteral("DAY.CSV"),
+              "csvForVariable(DAY) == DAY.CSV（扩展名表）");
+        check(ConstantTable::csvForVariable(QStringLiteral("day")) == QStringLiteral("DAY.CSV"),
+              "扩展名表大小写不敏感");
+        check(ConstantTable::csvForVariable(QStringLiteral("CFLAG")) == QStringLiteral("CFLAG.CSV"),
+              "原生名表优先（CFLAG 不被扩展覆盖）");
+        check(ext.hasNameTable("DAY") && ext.hasNameTable("TIME") && ext.hasNameTable("MONEY"),
+              "注册类登记 DAY/TIME/MONEY 名表映射");
+
+        // 默认长度：VariableConfig 兜底查扩展表（DAYNAME 一维长度 1000）。
+        VariableConfig cfg;
+        check(cfg.getSize1D(QStringLiteral("DAYNAME")) == 1000,
+              "VariableConfig::getSize1D(DAYNAME) == 1000（扩展兜底）");
+        check(cfg.getSize1D(QStringLiteral("FLAG")) == 10000,
+              "原生尺寸不受影响（FLAG == 10000）");
+
+        // fail-fast：原生系统变量 / 已映射名表拒绝注册。
+        ext.regVariable(QStringLiteral("FLAG"), OperandType::Int);
+        check(!ext.hasVariable("FLAG"), "原生变量 FLAG 拒绝注册（fail-fast）");
+        ext.regNameTable(QStringLiteral("CFLAG"), QStringLiteral("CFLAG.CSV"));
+        check(!ext.hasNameTable("CFLAG"), "核心已映射名表拒绝注册（fail-fast）");
+        // first-wins：同名扩展变量拒绝重复注册。
+        ext.regVariable(QStringLiteral("DAYNAME"), OperandType::Str, 1000);
+        check(ext.hasVariable("DAYNAME"), "DAYNAME 首次注册生效（first-wins 不覆盖）");
     }
 
     qDebug();

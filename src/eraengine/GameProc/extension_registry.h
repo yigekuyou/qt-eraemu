@@ -24,11 +24,13 @@
 #include <QtGlobal>
 #include <functional>
 
-#include "ast/ast_builder.h"     // registerFormArgFunction（注册类可以插入 AST）
-#include "ast/function_types.h"  // isBuiltinFunction（核心名 fail-fast）
-#include "ast/logical_line.h"    // LogicalLine / Operand
-#include "eraengine_log.h"       // eraTrace（桩留痕）
-#include "variable_storage.h"    // Services::storage（扩展实现写 RESULT/RESULTS）
+#include "ast/ast_builder.h"       // registerFormArgFunction（注册类可以插入 AST）
+#include "ast/function_types.h"    // isBuiltinFunction（核心名 fail-fast）
+#include "ast/logical_line.h"      // LogicalLine / Operand
+#include "ast/system_variables.h"  // regVariable（扩展系统变量 -> 运行期扩展表）
+#include "constant_table.h"        // ConstantTable::coreCsvForVariable（名表 fail-fast）
+#include "eraengine_log.h"         // eraTrace（桩留痕）
+#include "variable_storage.h"      // Services::storage（扩展实现写 RESULT/RESULTS）
 
 #include "ee_extension.h"        // EE 扩展（只在这里装入；ee_extension.h 前置声明本类）// ---------------------------------------------------------------------------
 // ExtensionRegistry —— 扩展注册类（扩展函数唯一入口）
@@ -50,6 +52,10 @@
 //     （ast_builder 零函数名，PUTFORM 专用分支撤出 AST，本类集中声明）；
 //     reg() 经 AstBuilder::registerExtensionStatement 注入扩展语句名
 //     （解析期不再报「未识别的指令」）。
+//   · 扩展系统变量：regVariable() 把 fork 专有 CSV 变量（EE 的 DAYNAME/
+//     TIMENAME/MONEYNAME…）登记进运行期扩展变量表（system_variables.h）；
+//     regNameTable() 为基础变量补名表映射（DAY -> DAY.CSV）。fail-fast：
+//     原生系统变量 / 核心已映射名表拒绝注册（扩展不得覆盖核心）。
 //
 // 启用语义：默认全启用 —— 无清单文件（游戏不会默认带 emuera_extensions.txt），
 // 没有运行期发现，也没有惰性绑定；EE 扩展在注册类构造时一次登记。
@@ -154,12 +160,54 @@ public:
         AstBuilder::registerExtensionStatement(upper);
     }
 
+    // ⑤ 登记扩展**系统变量**（fork 专有 CSV 变量：EE 的 DAYNAME/TIMENAME/
+    //    MONEYNAME…）。注入运行期扩展变量表（system_variables.h），解析期经
+    //    systemVariableTypeDyn 与原生的强类型表合并 —— 原生表 constexpr 不变。
+    //    size1D 为该变量默认一维长度（<=0 不指定，交由 VariableSize.csv）。
+    //    fail-fast：原生系统变量拒绝注册（扩展不得覆盖核心）；first-wins：同名拒绝。
+    void regVariable(const QString& name, OperandType type, int size1D = 0) {
+        const QString upper = failFastVariableChecked(name);
+        if (upper.isEmpty()) return;
+        m_variables.insert(upper);
+        sysvar::registerExtensionSystemVariable(upper.toStdString(), type,
+                                                std::string_view{}, size1D);
+    }
+
+    // ⑥ 为基础变量补**名表映射**（`变量:名字` -> 该变量对应的 CSV 名表，如
+    //    DAY -> DAY.CSV）。基础变量本身是原生变量，只是它的名表由扩展补齐。
+    //    fail-fast：核心已映射的变量拒绝注册（扩展不得改写核心名表）；
+    //    first-wins：同名拒绝。
+    void regNameTable(const QString& variableName, const QString& csvFileName) {
+        const QString upper = variableName.toUpper();
+        if (!ConstantTable::coreCsvForVariable(upper).isEmpty()) {
+            qWarning() << "[ext] 拒绝注册名表：" << variableName
+                       << "核心已映射（扩展不得改写核心名表）";
+            return;
+        }
+        if (m_nameTables.contains(upper)) {
+            qWarning() << "[ext] 拒绝注册名表：" << variableName
+                       << "已被其他扩展注册（first-wins）";
+            return;
+        }
+        m_nameTables.insert(upper);
+        sysvar::registerExtensionNameTable(upper.toStdString(), csvFileName.toStdString());
+    }
+
     // ---- 查询（执行引擎使用；查询侧零扩展名）------------------------------
 
     // 注册表是否认识该语句名（实现 / 桩 / 式中函数裸写）
     [[nodiscard]] bool hasStatement(const QString& upperName) const {
         return m_functions.contains(upperName) || m_stubs.contains(upperName)
                || m_exprFunctions.contains(upperName);
+    }
+
+    // 注册表是否登记了该扩展系统变量（名字规范为大写；查询侧零扩展名）
+    [[nodiscard]] bool hasVariable(const QString& upperName) const {
+        return m_variables.contains(upperName);
+    }
+    // 注册表是否登记了该变量的名表映射
+    [[nodiscard]] bool hasNameTable(const QString& upperVariable) const {
+        return m_nameTables.contains(upperVariable);
     }
 
     // 式中函数求值入口（ExpressionEvaluator 的 BuiltinOp::Extension 回调转来）。
@@ -210,10 +258,27 @@ private:
         return upper;
     }
 
+    // 扩展系统变量的 fail-fast + first-wins（原生变量段保留，扩展不得覆盖）。
+    [[nodiscard]] QString failFastVariableChecked(const QString& name) const {
+        const QString upper = name.toUpper();
+        if (sysvar::systemVariableType(upper.toStdString()) != OperandType::Unknown) {
+            qWarning() << "[ext] 拒绝注册：" << name
+                       << "属原生系统变量（system_variables.h），扩展不得覆盖";
+            return {};
+        }
+        if (m_variables.contains(upper)) {
+            qWarning() << "[ext] 拒绝注册：" << name << "已被其他扩展注册（first-wins）";
+            return {};
+        }
+        return upper;
+    }
+
     QHash<QString, StatementFn> m_functions;    // 扩展语句实现（名字 -> 执行器）
     QHash<QString, ExprFn>      m_exprFunctions;// 扩展式中函数（名字 -> 求值）
     QSet<QString> m_stubs;                      // 只登记名字的桩
     QSet<QString> m_traced;                     // 留痕去重（每个名字只一次）
+    QSet<QString> m_variables;                  // 扩展系统变量（名字，大写）
+    QSet<QString> m_nameTables;                 // 扩展名表映射（基础变量名，大写）
     Services m_services;                        // 扩展实现所需的服务（引擎填入）
 };
 

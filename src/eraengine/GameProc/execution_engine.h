@@ -128,6 +128,8 @@ signals:
     void consoleClearLines(int count);
     void consoleAlign(const QString& align);
     void consoleColor(const QString& colorName);
+    // CLEARTEXTBOX：清空 QML 侧输入栏（C# Console.ClearTextBox）
+    void clearTextBox();
     void consoleFontStyle(bool bold, bool italic, bool underline, bool strike);
     void consoleResetColor();
     // SETBGCOLOR / SETBGCOLORBYNAME / RESETBGCOLOR：文字**背景色**（C# SETBGCOLOR_Instruction）
@@ -253,10 +255,16 @@ public:
     // 打印一条 DATAFORM/DATA 行（求值 StrForm，**不换行**）；段内换行 / 段后换行 /
     // 等键由 ScriptRunner 按指令后缀（…L / …W）驱动。
     void printDataFormLine(const LogicalLine& line);
+    // 同上的「只求值不显示」版本：STRDATA 需要段文本本身（C# STRDATA 取所选段的字符串）
+    [[nodiscard]] QString printDataFormText(const LogicalLine& line);
     void printDataNewline();
     void requestPrintDataWaitKey();
     // PRINTDATA 的可选整型变量实参（如 `PRINTDATAW LOCAL:0`）：写入被选中的段下标。
     void assignPrintDataIndex(const QString& lhsText, qint64 value);
+
+    // STRDATA <字符串变量>：与 PRINTDATA 同段结构，但**不显示**，把被选中段的
+    // 文本写进这个变量（C# STRDATA = PRINTDATA 的不显示版）。
+    void assignPrintDataString(const QString& lhsText, const QString& value);
 
     void setGameDirectory(const QString& dir) { m_gameDirectory = dir; }
     QString m_gameDataDir;   // SAVEGLOBAL / LOADGLOBAL 的落盘目录

@@ -1155,14 +1155,27 @@ bool ExecutionEngine::executeInstruction(const LogicalLine& line) {
     if (name == QLatin1String("PRINT_IMG")) {
         if (m_skipDisp) return true;
         if (args.isEmpty()) return true;
+        // C#：ArgBuilder = STR_EXPRESSION，实参是**字符串表达式**
+        // （`func.Argument.IsConst ? ConstStr : Term.GetStrValue(exm)`）。
+        // 因此必须按字符串求值：`PRINT_IMG SV`（#DIMS 字符串变量）要拿到变量内容，
+        // 而不是按整数上下文求值得到 0。此前一律 `evaluate()`（整数上下文）：
+        //   PRINT_IMG 画像名   -> 0     （QML 就去找 image://emuera/0，日志刷 provider 失败）
+        //   PRINT_IMG 变量     -> 0
+        // 只有 `PRINT_IMG "名字"` 是对的。现在：引号字面量直接用，其余先按字符串
+        // 表达式求值，求不出来再退回原文（C# 这种情况报「标识符未定义」，我们选择
+        // 按字面量当资源名——和 HTML_PRINT 的 <img src='裸名'> 行为一致，且可从
+        // 日志看出到底找了哪个名字）。
         ExpressionEvaluator& ev = getEvaluator();
         const Operand& operand = args.first();
-        const QVariant value = operand.isString
-            ? QVariant(operand.raw)
-            : (operand.ast ? ev.evaluate(*operand.ast, m_storage, m_gameBaseData)
-                           : evalExpressionCached(m_parseTable, ev, operand.raw,
-                                                   m_storage, m_gameBaseData));
-        emit consolePrintImage(value.toString(), 0, 0, 0);
+        QString resName;
+        if (operand.isString) {
+            resName = operand.raw;
+        } else if (operand.ast) {
+            if (!ev.evaluateStr(*operand.ast, m_storage, resName)) resName = operand.raw;
+        } else if (!ev.evaluateStr(operand.raw, m_storage, resName)) {
+            resName = operand.raw;
+        }
+        emit consolePrintImage(resName, 0, 0, 0);
         return true;
     }
     if (name == "PRINTBUTTON" || name == "PRINTBUTTONC" || name == "PRINTBUTTONLC") {
@@ -1248,6 +1261,43 @@ bool ExecutionEngine::executeInstruction(const LogicalLine& line) {
         emit consoleResetColor();
         return true;
     }
+    // ---- SETCOLORBYNAME <色名>（对齐 C# SETCOLORBYNAME_Instruction）----
+    // C#：`Color.FromName(func.Argument.ConstStr)`，无效色名/透明 -> CodeEE。
+    // 实参是**字符串**（STR 型），所以去掉引号后按颜色名解析；解析不出来就报错
+    // （不静默忽略，否则「拼错色名」会变成随机颜色）。
+    if (name == QLatin1String("SETCOLORBYNAME")) {
+        if (m_skipDisp) return true;
+        QString nm = args.isEmpty() ? QString() : args.first().raw.trimmed();
+        if (nm.size() >= 2 && nm.startsWith(QLatin1Char('"')) && nm.endsWith(QLatin1Char('"'))) {
+            nm = nm.mid(1, nm.size() - 2);
+        }
+        const QColor c(nm);
+        if (!c.isValid() || c.alpha() == 0) {
+            emit errorOccurred(QStringLiteral("SETCOLORBYNAME: 无效的颜色名 \"%1\"（行 %2）")
+                                   .arg(nm, line.position.toString()));
+            return true;
+        }
+        m_colorValue = static_cast<qint64>(c.rgb() & 0xFFFFFF);
+        emit consoleColor(nm);
+        return true;
+    }
+
+    // ---- BAR / BARL <值>, <最大值>, <长度>（对齐 C# BAR_Instruction）----
+    // C#：`exm.Console.Print(exm.CreateBar(var, max, length))`，BARL 再换行。
+    // 三个实参都是**表达式**（`BAR 体力, MAXBASE:0, 10`），必须求值。
+    if (name == QLatin1String("BAR") || name == QLatin1String("BARL")) {
+        if (m_skipDisp) return true;
+        const QList<Operand>& ops = line.argument.params;
+        qint64 v[3] = {0, 0, 0};
+        ExpressionEvaluator& ev = getEvaluator();
+        for (int i = 0; i < 3 && i < ops.size(); ++i) {
+            v[i] = evalExpressionCached(m_parseTable, ev, ops.at(i).raw,
+                                        m_storage, m_gameBaseData).toLongLong();
+        }
+        emit consolePrint(ev.createBar(v[0], v[1], v[2]), name == QLatin1String("BARL"));
+        return true;
+    }
+
     if (name == "SETCOLOR") {
         // 参数是**表达式**：`SETCOLOR 0x70C070` / `SETCOLOR C_YELLOW` /
         // `SETCOLOR 現在指定の色`（eraTW 的 COLORMESSAGE 就靠后者还原颜色）。
@@ -1549,6 +1599,26 @@ bool ExecutionEngine::executeInstruction(const LogicalLine& line) {
         qCDebug(eraTrace).noquote() << "[debugprint]" << text;
         return true;
     }
+    // ---- PRINTDATA/STRDATA 段的成员行 ----
+    // DATA / DATAFORM / DATALIST / ENDLIST / ENDDATA 正常由宿主（PRINTDATA 系 /
+    // STRDATA）一次跳过整段（见 ScriptRunner 的 isPrintDataName 分支），不会单独
+    // 执行；只有「宿主没被识别」时才会落到这里。此时按 C# 的段语义**静默跳过** ——
+    // 它们是段的组成部分而不是独立指令，此前会误报 [未完成]（02_PRINT 的
+    // `DATA 随机串1` / `ENDDATA` 就是这么冒出来的）。
+    if (name == QLatin1String("DATA") || name == QLatin1String("DATAFORM")
+        || name == QLatin1String("DATALIST") || name == QLatin1String("ENDLIST")
+        || name == QLatin1String("ENDDATA")) {
+        return true;
+    }
+
+    // ---- CLEARTEXTBOX（对齐 C# CLEARTEXTBOX：清空最下方输入栏）----
+    // 输入栏在 QML 侧（Console.inputField），C++ 只负责发出清空请求，
+    // 由 ConsoleBackend 转发给 QML（不要在这里假装清空）。
+    if (name == QLatin1String("CLEARTEXTBOX")) {
+        emit clearTextBox();
+        return true;
+    }
+
     // ---- 存档系（普通语句形态：LOADDATA 等不经过 executeFunctionCall）----
     if (name == QLatin1String("SAVEDATA")) { handleSaveData(line); return true; }
     if (name == QLatin1String("LOADDATA"))  { handleLoadData(line); return true; }
@@ -1819,13 +1889,15 @@ bool ExecutionEngine::executeFunctionCall(const LogicalLine& line)
 // 段内多行的换行、段后的换行（…L/…W）、以及 …W 的等键均由 ScriptRunner 驱动。
 void ExecutionEngine::printDataFormLine(const LogicalLine& line) {
     if (m_skipDisp) return;
-    QString text;
-    if (!line.arguments.isEmpty()) {
-        const Operand& a = line.arguments.first();
-        if (a.ast) text = getEvaluator().evaluate(*a.ast, m_storage, m_gameBaseData).toString();
-        else text = a.raw;
-    }
-    emit consolePrint(text, false);
+    emit consolePrint(printDataFormText(line), false);
+}
+
+// 只求值不显示：STRDATA 用（C# STRDATA 把所选段的字符串写进变量）
+QString ExecutionEngine::printDataFormText(const LogicalLine& line) {
+    if (line.arguments.isEmpty()) return QString();
+    const Operand& a = line.arguments.first();
+    if (a.ast) return getEvaluator().evaluate(*a.ast, m_storage, m_gameBaseData).toString();
+    return a.raw;
 }
 
 void ExecutionEngine::printDataNewline() {
@@ -1845,6 +1917,13 @@ void ExecutionEngine::assignPrintDataIndex(const QString& lhsText, qint64 value)
     const LhsRef ref = parseLhsRef(name);
     if (ref.name.isEmpty()) return;
     writeLhs(ref, value);
+}
+
+// STRDATA <字符串变量>：把被选中段的文本写进变量（不显示）
+void ExecutionEngine::assignPrintDataString(const QString& lhsText, const QString& value) {
+    // 值已经是**求值后的字符串**，不能再当表达式文本走 handleStringAssignment
+    // （裸文本会被解析成变量名 -> 0）。与 SPLIT 一样直接用 writeStringValue。
+    writeStringValue(lhsText.trimmed(), value);
 }
 
 // 未实现接口的运行期留痕（同名只报一次，避免刷屏）

@@ -239,6 +239,8 @@ add_test(NAME test_getconfig COMMAND test_getconfig)
 add_test(NAME test_print_template COMMAND test_print_template)
 eraengine_add_test(test_print_whitespace)
 target_link_libraries(test_print_whitespace PRIVATE Qt6::Test)
+eraengine_add_test(test_image_layout)
+add_test(NAME test_image_layout COMMAND test_image_layout)
 
 # 需要外部目录参数的诊断/回归工具（编译校验，不进 CTest）
 eraengine_add_test(test_erb_loader)
@@ -252,7 +254,8 @@ if(TARGET Qt6::QuickTest)
     target_include_directories(test_qml_console PRIVATE ${ERAENGINE_TEST_INCLUDE_DIRS})
     target_compile_definitions(test_qml_console PRIVATE
         QUICK_TEST_SOURCE_DIR="${CMAKE_CURRENT_SOURCE_DIR}/test/qml"
-        CONSOLE_QML_PATH="${CMAKE_CURRENT_SOURCE_DIR}/../qml/Console.qml")
+        CONSOLE_QML_PATH="${CMAKE_CURRENT_SOURCE_DIR}/../qml/Console.qml"
+        EXAMPLE_RESOURCES_DIR="${CMAKE_CURRENT_SOURCE_DIR}/../../test/example/resources")
     add_test(NAME test_qml_console
              COMMAND test_qml_console -input ${CMAKE_CURRENT_SOURCE_DIR}/test/qml)
     set_tests_properties(test_qml_console PROPERTIES ENVIRONMENT "QT_QPA_PLATFORM=offscreen")

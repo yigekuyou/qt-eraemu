@@ -86,6 +86,12 @@ public:
     void setMoneyLabel(const QString& label, bool moneyFirst);
     void setBarChars(QChar filled, QChar empty);
 
+    // BAR / BARL 指令与 BARSTR(...) 函数共用的进度条串（C# ExpressionMediator.CreateBar）：
+    // "[" + BarChar1×n + BarChar2×(length-n) + "]"，n = var*length/max（clamp 0..length）。
+    // max<=0 / length<=0 / length>=100 在 C# 里是 CodeEE（脚本错误）；这里返回空串，
+    // 与既有 BARSTR 行为一致（保守，不打断脚本）。
+    [[nodiscard]] QString createBar(qint64 value, qint64 maxValue, qint64 length) const;
+
     // 角色数（SUMCARRAY/CMATCH/… 的范围上限，对齐 C# VEvaluator.CHARANUM）。
     // 默认回退到 CHARANUM 系统变量；执行链可注入实际值。
     // LINECOUNT：控制台当前行数（C# console.LineCount）

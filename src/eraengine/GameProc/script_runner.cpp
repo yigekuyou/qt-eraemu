@@ -363,6 +363,14 @@ bool isPrintDataName(const QString& n) {
     return false;
 }
 
+// STRDATA <字符串变量>：与 PRINTDATA 共用段结构，但**不显示**：把被选中段的
+// 文本写进变量（C# STRDATA = PRINTDATA 的不显示版，ecd 文档「未整理项目」）。
+// 之前 STRDATA 不在名单里 -> 整段被当普通行逐条执行 -> DATA/ENDDATA 报 [未完成]。
+bool isStrDataName(const QString& n) {
+    return n == QLatin1String("STRDATA") || n == QLatin1String("STRDATAL")
+           || n == QLatin1String("STRDATAW");
+}
+
 // 首次执行 PRINTDATA 时扫描其数据段（行内容装载后不可变，缓存进 LogicalLine）
 void buildPrintDataBlock(const LogicalLine& line, int pc, const ScriptData* sd) {
     QList<QList<int>> groups;
@@ -1422,6 +1430,28 @@ ExecState ScriptRunner::executeLine(const LogicalLine& line) {
         return ExecState::WaitInput;
     }
 
+    // ---- STRDATA 系（C# STRDATA_Instruction：PRINTDATA 的不显示版）----
+    // 段结构与 PRINTDATA 完全相同，区别：**不显示**，把被选中段的文本写进
+    // `STRDATA <字符串变量>` 的变量里。之前没有这个分支，整段被逐行当普通
+    // 指令执行，于是 `DATA`/`ENDDATA` 报 [未完成]（02_PRINT 的回归）。
+    if (isStrDataName(name)) {
+        if (!line.printDataReady) buildPrintDataBlock(line, pc, sd);
+        const int next = line.printDataEndLine >= 0 ? line.printDataEndLine + 1 : pc + 1;
+        if (sd && !line.printDataGroups.isEmpty() && !line.arguments.isEmpty() && m_engine) {
+            const int count = line.printDataGroups.size();
+            const int choice = static_cast<int>(getEvaluator().random().nextInt(count));
+            const QList<int>& grp = line.printDataGroups.at(choice);
+            QString value;
+            for (int k = 0; k < grp.size(); ++k) {
+                if (k > 0) value += QLatin1Char('\n');
+                value += m_engine->printDataFormText(sd->lines.at(grp.at(k)));
+            }
+            m_engine->assignPrintDataString(line.arguments.first().raw, value);
+        }
+        m_table->setPosition(script, next, false);
+        return ExecState::Continue;
+    }
+
     // ---- PRINTDATA 系（C# PRINT_DATA_Instruction）----
     if (isPrintDataName(name)) {
         if (!line.printDataReady) buildPrintDataBlock(line, pc, sd);
@@ -1560,7 +1590,12 @@ ExecState ScriptRunner::doCallLine(const LogicalLine& line, bool isForm, bool is
     // [qdbug]（保留的调试桩）：CALL 增加脚本名与源码位置。currentLine() 是
     // 0 基内部行号（比 ERB 源码行号小 1），line.position 才是源码位置；
     // 两者并列便于对照 eraTW 原始代码。
-    qDebug() << "[exec] CALL" << (isForm ? "(form)" : "") << label
+    // 注意用 eraTrace 而不是 qDebug()：这条是**每条 CALL** 都走的（eraTW 一帧
+    // 几万次），无条件 qDebug 会把 GUI 日志刷成 70%（每次还要走 Qt Creator 的
+    // QML/调试连接），既看不见重点也拖慢执行。要看时用
+    //   QT_LOGGING_RULES="era.trace.debug=true"
+    // 或运行期 D-Bus：setLoggingRules("era.trace.debug=true")。
+    qCDebug(eraTrace) << "[exec] CALL" << (isForm ? "(form)" : "") << label
              << (isTry ? "(try)" : "") << "line" << m_table->currentLine()
              << "src" << line.position.toString()
              << "script" << m_table->currentScript();

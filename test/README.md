@@ -61,9 +61,10 @@ cmake --build build --target test_cli
 | 30 | **音频·图片（用命令随机生成素材）**（`30_ASSET_GEN.ERB`） |
 | 31 | **GETCONFIG/GETCONFIGS（emuera.config 取值）**（`31_GETCONFIG.ERB`） |
 | 32 | **CSV 精灵偏移（立绘合成）与尺寸头回退**（`32_SPRITE_OFFSET.ERB`，素材 `example/resources/`） |
+| 33 | **`END` 是变量（`#DIM END`）不是指令**（`33_END_VARIABLE.ERB`，eraTW 角色移動 死循环回归） |
 
 「全部自动运行」（`./test/run_example.sh` 无参数）依次执行：
-**1–10、14、16、17、23–28、30、31、32 + 汇总**。
+**1–10、14、16、17、23–28、30、31、32、33 + 汇总**。
 
 不在自动路径、需单跑的组（`./test/run_example.sh <组号>`）：
 
@@ -451,6 +452,175 @@ GCLEAR id, cARGB, x, y, w, h     ; 只清除该矩形（SetClip + Clear + ResetC
 
 回归：`test_extension_registry`（§9 2..6 参 / 2 参不变 / 7 参报错 /
 非核心拒绝 / first-wins）、组 30（GCLEAR 6 参矩形还原底色、矩形外不变）。
+
+## eraTW「角色移動処理」无法退出：`END` 被当成指令（2026-10 修正）
+
+现象（eraTW 运行日志）：
+
+```
+[未完成] 指令 "END" 在运行期被忽略。行: "…/MOVEMENT_キャラ移動処理.ERB:25:1" 原文: "END = 0"
+[exec] 循环迭代异常偏多: "MOVEMENT_キャラ移動処理" 行 113 种类 2 … 已迭代 100000
+```
+
+根因：`ast_builder.cpp` 的「已知指令名」清单里列了 `"END"`，而**C# Emuera 的函数表
+里没有名为 END 的指令**（`BuiltInFunctionCode.cs` 只有 `ENDIF/ENDSELECT/ENDDATA/
+ENDLIST/ENDCATCH/ENDFUNC/ENDNOSKIP`）。eraTW 在 `@角色移動処理` 里用
+
+```erb
+#DIM END            ; ← 私有变量
+VARSET LOCAL
+END = 0             ; ← 被当指令吞掉（"= 0" 丢弃）
+SIF !AT_HOME(ARG) / 行動不能 / 仕事中 …
+	END = 1
+IF END … RETURN     ; ← 恒假 → 早退失效
+```
+
+于是本该跳过的角色也进入移动逻辑，`WHILE` 里 `G_POINT`/引力点 的路由找不到出口
+→ 单循环跑到十万次。
+
+修复：从清单里删掉 `"END"`（保留 `QUIT` 等真指令）。`END = 0` 恢复为**赋值**；
+`ENDIF/ENDSELECT/…` 不受影响（另有断言）。
+
+回归：`test_argument_types`（`static_assert(findInstructionSpec("END") == nullptr)`
++ `END = 0` 解析为 `=`）、组 33（`END` 作早退标志 / 循环退出标志 / WHILE 计数器；
+反证：把 `"END"` 加回清单，组 33 立刻 4 条 FAIL，含
+「`END` 作为循环退出标志（赋值被吞则跑满 1000 次）: got=1000 want=3」）。
+
+## `<img>` 只给 height 的尺寸（对齐 C# ConsoleImagePart · 2026-10 修正）
+
+C# `GameView/ConsoleImagePart.cs` 的度量：
+
+```
+height = raw_height==0 ? FontSize : FontSize*raw_height/100
+Width  = raw_width==0  ? DestBaseSize.Width*height/DestBaseSize.Height
+                       : FontSize*raw_width/100
+top    = raw_ypos * FontSize / 100
+```
+
+引擎此前把「width<=0 **或** height<=0」都当成「按资源固有像素排版」，于是 eraTW
+主立絵那条只给 height 的写法
+
+```erb
+HTML_PRINT @"<nobr><img src='%sRes_Name%' height='{iFont_Hei_mag}'>"   ; IMAGE.ERB:311
+```
+
+的 `height` 被整体丢弃 → 立絵永远画成资源原始像素，
+`GETCONFIG` 里的「画像サイズ 拡大/縮小」（`iSize`）**完全不起作用**；
+立絵高度也不再跨 10 行（`iSize=1000` → 200px），后续 `画像枠`/`時間停止`
+的负 `ypos` 叠层与 `<br>` 行数全部错位。
+
+修复：
+* `console_backend.cpp`：只有 **两个宽高都没写** 时才按固有像素排版（eraTW 标题
+  = 35 张 1041×16 的条图，保持原行为）；只写 height 的一律保留。
+* `console_types.h`：`ConsoleSpan` 新增 `imageIntrinsic`（生成 span 时查一次固有
+  尺寸，避免排版期反复解码）。
+* `console_layout.cpp::measurePart`：`raw_width==0` 且给了 height 时，宽度按
+  `固有宽*heightPx/固有高` 补（纵横比），与 C# 完全一致。
+* `resource_image_provider.cpp`：`loadResourceImage` 的直接文件分支改走
+  `loadImageFile`（与图集分支一致），Qt 解不了的 ダミー.webp 也按文件头回退。
+
+```erb
+<img src='wide' height='1000'><br>    ; 60×20 的资源，FontSize=16 / 行高 20
+;   height = 16*1000/100 = 160px（8 行）
+;   width  = 60*160/20 = 480px（60 列）  ← 旧实现得到 60×20（固有像素）
+```
+
+回归：`test_image_layout`（新，6 组断言：都不写 / 只 height / 只 width / 都写 /
+ypos）、`test_print_template`（`<img width='200'>` 不变）、QML 侧
+`tst_console.qml::test_imageLayer`（`source == image://emuera/<名>`、
+`fillMode`、非 ASCII 名 `encodeURIComponent`）。
+
+QML/C++ 图像绘制对照 Qt 文档（6.12）复查结果：
+* `requestImage` 的 `size` 必须回**原图**尺寸 —— 引擎已在缩放**之前**写 `*size`（✔）。
+* provider 名的 `image:` URL 大小写：provider 标识不敏感、id 其余保留 —— 引擎用
+  `encodeURIComponent` + `normalizeId`（`QUrl::fromPercentEncoding`）双向对齐（✔）。
+* provider 返回的图**自动进 QML 图缓存**；eraTW 的精灵名是「内容寻址」
+  （服装/表情/差分都在名字里，`@リソース登録` 同名拒绝重建），所以不需要
+  `cache:false`/nonce（已核查）。
+* `fillMode` 用 `PreserveAspectFit`（非 QML 默认 `Stretch`）：区块尺寸是网格量化
+  值，与 C# 的像素精确 destRect 有半格误差，`Stretch` 会把它放大成拉伸
+  （eraTW 标题条图会从 16px 被拉到行高）；`PreserveAspectFit` 视觉等价。
+* 加 `retainWhileLoading: true`：`asynchronous` 下 source 变化默认先清空旧图，
+  立絵/表情切换会闪。
+
+## GUI 端到端 + Qt 日志体检（D-Bus 驱动 · 2026-10）
+
+GUI（`appemuera`）现在可以完全用 D-Bus 控制跑同一套测试组，不用手点：
+
+```bash
+qdbus6 io.yigekuyou.emuera /debug io.yigekuyou.emuera.Debug.ping
+qdbus6 io.yigekuyou.emuera /debug io.yigekuyou.emuera.Debug.openDirectory $PWD/test/example
+qdbus6 io.yigekuyou.emuera /debug io.yigekuyou.emuera.Debug.resetPerf
+qdbus6 io.yigekuyou.emuera /debug io.yigekuyou.emuera.Debug.sendInput 0
+qdbus6 io.yigekuyou.emuera /debug io.yigekuyou.emuera.Debug.perf          # 区块构建计数/耗时
+qdbus6 io.yigekuyou.emuera /debug io.yigekuyou.emuera.Debug.dumpScreen 20 # 屏幕尾部
+```
+
+`openDirectory` 是本次新增（对齐「文件 > 打开目录…」）：无参启动的 GUI 也能被
+指到任意游戏目录；**同一个目录会 `reload()`**（脚本跑完 `QUIT` 后重跑）。
+配合 `state`（`waitingInput/inputKind`）能在等待输入时自动喂 `sendInput 0` /
+`sendAnyKey`，一次全组跑完 ≈ **0.4 s**（Debug 构建，`blockBuildMs` 合计 0）。
+
+Qt 日志体检（`qt-creator` 的 Application Output）修了两处：
+
+| 现象 | 根因 | 处理 |
+| --- | --- | --- |
+| `QML QQuickImage: Failed to get image from provider: image://emuera/0` ×51 | `PRINT_IMG` 一律走**整数上下文** `evaluate()`：字符串变量/裸名 → `0`。C# 的 PRINT_IMG 是 `FunctionArgType.STR_EXPRESSION`，取值 `func.Argument.IsConst ? ConstStr : Term.GetStrValue(exm)` | `execution_engine.cpp` 改走 `evaluateStr()`（字符串求值）；回归 `test_statements`「PRINT_IMG \<字符串变量\> 取变量内容」。测试夹具 `14_MISC.ERB` 的资源名加引号 |
+| `[exec] CALL …` 占日志 **70%**（718/1030 行） | `script_runner.cpp` / `system_state_machine.cpp` 用**无条件** `qDebug()`；每 CALL 一次，Debug 下还要经 Qt Creator 调试连接 | 改 `qCDebug(eraTrace)`（默认关，`QT_LOGGING_RULES="era.trace.debug=true"` 或 D-Bus `setLoggingRules` 打开）。全组日志 1030 → **454** 行 |
+
+日志里仍有（已知、非缺陷）：
+
+* `[未完成] "指令" … 在运行期被忽略` ×21 —— 解析得到、运行期未实现：
+  `ASSERT BAR BARL CALLEVENT CLEARTEXTBOX DATA ENDDATA HTML_TAGSPLIT LOADVAR
+   PRINT_ABL/EXP/ITEM/MARK/PALAM/SHOPITEM/TALENT SAVEVAR SETCOLORBYNAME
+   SORTCHARA STRDATA UPCHECK`（`PRINTDATA/STRDATA` 族只有 `printDataFormLine`
+   helper，没有接进语句分派 —— eraTW `TW_TIPS` 会显示空）。
+* `image://emuera/no_such_image_resource` —— `14_MISC` **故意**用一个不存在的
+  资源验证 AltText 回退，属预期噪声。
+* `qt.multimedia.ffmpeg … nonfree/unredistributable`、`Could not open media`、
+  `QSoundEffect: Error decoding source file://0` —— 组 30 故意播不存在的音频。
+* `kf.iconthemes: Icon theme "…" not found` —— KDE 主题缺失，无害。
+
+## 滚动性能与「[未完成] 指令」（2026-10 · 第二批）
+
+### 滚动卡顿：C++ 重排 → QML 整屏重建
+
+`Console.qml` 的三个 `Instantiator` 以 `backend.textBlocks / imageBlocks / shapeBlocks`
+（`NOTIFY windowChanged`）为模型。**任何一次滚动**都会让 C++ 重算窗口并重发这三个
+列表，于是整屏区块对象被销毁重建；每个文本区块内部还按**字符**建 `Repeater`
+（一屏 80×38 ≈ 数千个 `QQuickText`）。触摸板一秒上百个 wheel 事件 = 每秒上百次
+全屏重建 —— 这就是「滑动很卡」。（`perf` 显示 C++ 侧 `blockBuildMs` 恒为 0：
+慢的完全不是布局计算，而是 QML 对象创建。）
+
+两处修正（都不改视觉语义）：
+
+| 改动 | 效果 |
+| --- | --- |
+| `ConsoleBlock.qml`：文本按**等宽段**渲染（`glyphRuns`：相邻同格宽的字符合成一个 `Text`） | 半角行 1 个 Text、全角行 1 个 Text、混排 1~3 个；对象数降 1~2 个数量级。缩放仍按「段宽 = 字数 × 格宽」，等价于逐字缩放且不会字间漂移 |
+| `Console.qml`：`scrollByLines()` + `Timer` 合并滚动 | 一个渲染帧最多提交一次（Qt 文档的「合并更新到渲染帧」）；此前每事件一次全量重排 |
+
+回归：`tst_console.qml` 新增 `test_glyphRunsAreBatched`（10 半角 = 1 段 / 5 全角 = 1 段 /
+`AあB` = 3 段，且段宽之和 == 区块宽）；`test_gridGlyphBounds` / `test_buttonSpanIsGridText`
+的不变式从「每字一个对象」改为「每字占一格、总宽 == 区块宽」（锁布局而非实现）。
+
+### `[未完成] … 在运行期被忽略`：21 → 14
+
+解析得到、运行期没有分支的指令会在第一次执行时留痕（`reportUnfinished`）。本批补齐 7 个：
+
+| 指令 | 语义（对齐 C#） | 验证 |
+| --- | --- | --- |
+| `SETCOLORBYNAME <色名>` | `Color.FromName`；无效/透明 -> 报错（不静默） | `test_statements`（`consoleColor` 收到 "RED"） |
+| `BAR` / `BARL <值>,<最大>,<长度>` | `ExpressionMediator.CreateBar`：`[` + 实心×n + 空心×(len-n) + `]`，`BARL` 再换行；与 `BARSTR()` 共用 `ExpressionEvaluator::createBar()` | `test_statements`（`[*****.....]`、换行标志、max=0 空串） |
+| `STRDATA <字符串变量>` | PRINTDATA 的**不显示**版：随机选段后把文本写进变量 | `02_PRINT.ERB`（`S == 随机串1/2`） |
+| `DATA` / `ENDDATA` / `DATALIST` / `ENDLIST` / `DATAFORM` | 段的成员行，宿主已整段跳过；单独落到分发时**静默忽略**（此前误报 [未完成]） | 日志（`02_PRINT` 不再报 DATA/ENDDATA） |
+| `CLEARTEXTBOX` | 清空输入栏：`ExecutionEngine::clearTextBox` → `ConsoleBackend::clearTextBoxRequested` → QML 清 `inputField` | `test_statements`（信号计数） |
+
+剩余 14 个（eraTW 只用到其中 2 个，见下）：`ASSERT CALLEVENT HTML_TAGSPLIT LOADVAR SAVEVAR
+SORTCHARA UPCHECK PRINT_ABL PRINT_EXP PRINT_ITEM PRINT_MARK PRINT_PALAM PRINT_SHOPITEM
+PRINT_TALENT`。
+`grep` 统计 eraTW 的使用：**`HTML_TAGSPLIT`（2 文件）、`PRINT_MARK`（1 文件）**，
+其余只出现在本仓库测试夹具里 —— 按「eraTW 真的会跑」排序，这两个优先。
+
 ## 关于「自动输入」
 
 `INPUT` / `INPUTS` / `ONEINPUT` / `TINPUT` / `WAITANYKEY` / `AWAIT` 在 GUI 下会

@@ -326,15 +326,23 @@ void ConsoleBackend::printTemplate(const PrintTemplate& output) {
             span.kind = ConsoleSpanKind::Image; span.imageSize = QSizeF(part.width, part.height);
             span.yposRaw = part.y;
             span.altText = QStringLiteral("<img src='%1'>").arg(part.text);
-            // `<img src='X'>` 未指定宽高时，用资源图片的**固有像素尺寸**排版。
-            // 否则会被当成「一个字号见方」，整张图缩成小方块
-            // （eraTW 标题画面 = 35 张 1041×16 的条图，全被压成 16×16）。
-            if (part.width <= 0 || part.height <= 0) {
-                int iw = 0, ih = 0;
-                if (ResourceImageProvider::intrinsicSize(part.text, iw, ih)) {
-                    span.imageSize = QSizeF(iw, ih);
-                    span.imageSizeIsPixels = true;
-                }
+            // 资源固有像素尺寸（布局期算纵横比用）；取不到则为空。
+            // 只在**宽度缺省**时才查（立絵常态是「只给 height」或「都不给」）：
+            // 宽高都给了就不需要纵横比，省掉一次解码/拷贝（立絵每次刷新都打印）。
+            int iw = 0, ih = 0;
+            if (part.width <= 0 && ResourceImageProvider::intrinsicSize(part.text, iw, ih))
+                span.imageIntrinsic = QSizeF(iw, ih);
+            // C# ConsoleImagePart：
+            //   height = raw_height==0 ? FontSize : FontSize*raw_height/100
+            //   Width  = raw_width==0  ? 固有宽*height/固有高 : FontSize*raw_width/100
+            // 只有**两个都没写**时才整张按固有像素排版（eraTW 标题 = 35 张 1041×16
+            // 的条图，否则被压成 16×16）；只写了 height 的立絵
+            // （eraTW `<img src=… height='{iFont_Hei_mag}'>`）必须保留 height、
+            // 宽度由布局期按纵横比补 —— 此前「width<=0 || height<=0」把 height
+            // 一起覆盖成固有像素，导致「画像サイズ 拡大/縮小」设置完全失效。
+            if (part.width <= 0 && part.height <= 0 && !span.imageIntrinsic.isEmpty()) {
+                span.imageSize = span.imageIntrinsic;
+                span.imageSizeIsPixels = true;
             }
         } else if (part.kind == PrintTemplatePart::Kind::Shape) {
             span.kind = ConsoleSpanKind::Shape; span.shapeType = part.shapeType;
@@ -454,6 +462,14 @@ void ConsoleBackend::printImage(const QString& resourceName, int width, int heig
     part.altText = QStringLiteral("<img src='%1'>").arg(resourceName);   // C# AltText 回退
     part.imageSize = QSizeF(width, height);
     part.yposRaw = ypos;               // 字号百分比的纵向偏移（measurePart 折算成像素）
+    // 与 `<img>` 路径同源：固有尺寸供布局期补宽度；两个宽高都缺省时按固有像素排版。
+    int iw = 0, ih = 0;
+    if (width <= 0 && ResourceImageProvider::intrinsicSize(resourceName, iw, ih))
+        part.imageIntrinsic = QSizeF(iw, ih);
+    if (width <= 0 && height <= 0 && !part.imageIntrinsic.isEmpty()) {
+        part.imageSize = part.imageIntrinsic;
+        part.imageSizeIsPixels = true;
+    }
     part.style = m_style;
     appendPart(part);
     markDirty();

@@ -216,6 +216,8 @@ signals:
     void mouseKeySubmitted(int type, int r1, int r2, int r3, int r4);
     void inputSubmitted(qint64 value);
     void inputSubmittedString(const QString& value);
+    // CLEARTEXTBOX：QML 输入栏清空请求（C# Console.ClearTextBox）
+    void clearTextBoxRequested();
 
 public slots:
     void setVisibleCount(int count);

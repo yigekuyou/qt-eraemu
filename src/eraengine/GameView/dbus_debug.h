@@ -57,6 +57,7 @@ public Q_SLOTS:  // ---- 检查 ----
     QString dumpScreen(int lastLines);    // 抓控制台尾部文本
     QString listButtons();                // 当前屏的按钮值（输入候选）
 public Q_SLOTS:  // ---- 控制 ----
+    QString openDirectory(const QString& path);  // 等价「文件 > 打开目录…」：装载并进入标题画面
     void sendInput(qint64 value);         // 等价键入整数（INPUT/TINPUT…）
     void sendInputString(const QString& text);
     void sendAnyKey();                    // 等价回车/点击继续（WAIT 系）

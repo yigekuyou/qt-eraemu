@@ -40,6 +40,10 @@ static_assert(findInstructionSpec("IF")->kind == ArgKind::IntExpression);
 static_assert(findInstructionSpec("CALL")->kind == ArgKind::Call);
 static_assert(findInstructionSpec("ENDIF")->kind == ArgKind::Void);
 static_assert(findInstructionSpec("NOSUCH") == nullptr);
+// `END` **不是**指令：C# Emuera 的函数表里没有 END（只有 ENDIF/ENDSELECT/…）。
+// eraTW MOVEMENT_キャラ移動処理.ERB 用 `#DIM END` + `END = 0`，把它当指令会让
+// 赋值被吞、`IF END` 恒假、函数早退失效（角色移动死循环）。
+static_assert(findInstructionSpec("END") == nullptr);
 
 static int g_failures = 0;
 
@@ -69,6 +73,14 @@ int main(int argc, char* argv[]) {
     check(build(table, "ENDIF").argument.kind == ArgKind::Void, "ENDIF -> Void");
     check(build(table, "VARSET A, 0, 10").argument.kind == ArgKind::VarSet, "VARSET -> VarSet（SP_SET 族）");
     check(build(table, "SOMETHING 1 2").argument.kind == ArgKind::Raw, "未知指令 -> Raw");
+    // `END = 0`：ERA 的 END 是变量（eraTW `#DIM END`），不是指令。
+    // 回归：曾经 functionName == "END"（指令），右侧 "= 0" 被丢弃。
+    check(build(table, "END = 0").functionName == QLatin1String("="),
+          "END = 0 -> 赋值（END 是变量名，不是指令）");
+    check(build(table, "END = 1").functionName == QLatin1String("="),
+          "END = 1 -> 赋值");
+    check(build(table, "ENDIF").functionName == QLatin1String("ENDIF"),
+          "ENDIF 邻近关键字不受影响，仍是指令");
 
     qDebug() << "\n2) 归约后的参数与表达式";
     {

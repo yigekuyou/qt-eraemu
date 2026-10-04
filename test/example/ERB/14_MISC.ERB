@@ -62,7 +62,10 @@ CALL ASSERT_EQ, RESULT, 17, @"TRYCCALLFORM 命中并返回 17"
 NONG += RESULT
 
 ;---- PRINT_IMG / PRINT_RECT / PRINT_SPACE（行内图形；各自单独成行，避免重叠告警）----
-PRINT_IMG no_such_image_resource
+; 资源名要用**字符串表达式**：带引号（或字符串变量/拼接）。
+; `PRINT_IMG 裸标识符` 会被当整数表达式求值 -> 0 -> QML 去找 image://emuera/0
+;（C# 侧这种情况是「标识符未定义」错误，我们保留解析期告警）。
+PRINT_IMG "no_such_image_resource"
 PRINTL
 PRINT_RECT 20
 PRINTL

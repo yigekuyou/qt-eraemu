@@ -87,6 +87,37 @@ Item {
     // eraTW 的画像枠/時間停止/特效各自在被打印的那一行，靠它拉回来盖在立絵边缘。
     readonly property real offsetRows: blockData && blockData.offsetRows ? blockData.offsetRows : 0
 
+    // 文本按「等宽段」切分后渲染（性能）：
+    // 以前**每个字符**一个 Item+Text+Scale —— 一屏 80×38 就是数千个 QQuickText，
+    // 而每次窗口重排（滚动一步 / 输出一行 / 换字号）C++ 都会重发模型，Instantiator
+    // 把整屏区块对象销毁重建 -> 数千个 Text 反复创建，快速滚动直接卡死。
+    // 现在把**相邻、同格宽**的字符并成一段（run）：半角行 = 1 个 Text、全角行 = 1 个
+    // Text，混排才切段（通常 1~3 段），对象数降一到两个数量级。
+    // 缩放仍按「段宽 = 字数 × 格宽」做，与逐字缩放等价（且不会有字间漂移）。
+    readonly property var glyphRuns: {
+        const d = block.blockData;
+        if (!d || !d.text) return [];
+        const t = d.text;
+        const runs = [];
+        let buf = "";
+        let wide = null;
+        for (let i = 0; i < t.length; ++i) {
+            const u = t.charCodeAt(i);
+            const w = !(u < 128 || (u >= 0xff61 && u <= 0xff9f));   // 与逐字版同判定
+            if (wide === null || w === wide) {
+                buf += t[i];
+                wide = w;
+            } else {
+                runs.push({ text: buf, units: wide ? 2 : 1, count: buf.length });
+                buf = t[i];
+                wide = w;
+            }
+        }
+        if (buf !== "")
+            runs.push({ text: buf, units: wide ? 2 : 1, count: buf.length });
+        return runs;
+    }
+
     // 位置与尺寸：网格坐标 × 单元格大小（QML 说了算）
     // row 允许为负 / 超过行数：跨行图与带 ypos 的图层块会探出窗口，交给视口 clip。
     x: gridCol * cellWidth
@@ -123,15 +154,10 @@ Item {
         anchors.verticalCenter: parent.verticalCenter
         visible: block.kind === "text"
         Repeater {
-            model: block.visible && block.kind === "text"
-                   ? (block.blockData ? (block.blockData.text || "").split("") : []) : []
+            model: block.visible && block.kind === "text" ? block.glyphRuns : []
             delegate: Item {
-                required property string modelData
-                readonly property int units: {
-                    const u = modelData.charCodeAt(0);
-                    return u < 128 || (u >= 0xff61 && u <= 0xff9f) ? 1 : 2;
-                }
-                width: units * block.cellWidth
+                required property var modelData          // { text, units, count }
+                width: modelData.units * modelData.count * block.cellWidth
                 height: block.gridRows * block.cellHeight
                 clip: true
                 Text {
@@ -139,7 +165,7 @@ Item {
                     objectName: "gridGlyph"
                     anchors.verticalCenter: parent.verticalCenter
                     textFormat: Text.PlainText
-                    text: parent.modelData
+                    text: parent.modelData.text
                     // 空 family 交给 Qt 使用系统默认字体。
                     font.family: block.effectiveFontName
                     font.pixelSize: block.fontSize > 0 ? block.fontSize : undefined
@@ -158,19 +184,31 @@ Item {
 
     Image {
         id: imageItem
+        objectName: "blockImage"          // 供 QML 测试 findChild 命中
         visible: block.kind === "image"
         anchors.left: parent.left
         anchors.verticalCenter: parent.verticalCenter
+        // QQuickImageProvider（Qt 文档）："image:" scheme + provider 标识 + id；
+        // provider 名不区分大小写，id 其余部分保留大小写 —— 非 ASCII 资源名必须
+        // 先 encodeURIComponent（C++ 侧 normalizeId 再 QUrl::fromPercentEncoding 还原）。
         source: (visible && block.blockData && block.blockData.text)
                     ? ("image://emuera/" + encodeURIComponent(block.blockData.text)) : ""
         // ConsoleLayout supplies grid dimensions.  Keep the Image item at the
         // same size as its span so a loaded resource cannot paint into the
         // following line or leave a zero-sized QML item.
+        //
+        // fillMode 用 PreserveAspectFit 而非 QML 默认的 Stretch：区块尺寸是
+        // 「列数×半角宽 / 行数×行高」的**网格量化**值，与 C# 的像素精确 destRect
+        // 有半格误差。Stretch 会把这个误差变成拉伸（例：eraTW 标题 1041×16 的
+        // 条图被拉成 1040×行高）；PreserveAspectFit 保持原图纵横比，视觉等价。
         width: Math.max(1, block.width)
         height: Math.max(1, block.height)
         fillMode: Image.PreserveAspectFit
         smooth: true
         asynchronous: true
+        // 文档：source 变化时默认立即丢弃旧图（异步加载会闪一下）；
+        // 立絵/表情切换频繁，保留旧图直到新图就绪可避免闪烁。
+        retainWhileLoading: true
 
         // 资源取不到时按文本回退（对齐 C#：把 <img src='…'> 当文字画）
         Text {

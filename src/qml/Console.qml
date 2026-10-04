@@ -49,6 +49,35 @@ Item {
         syncCadence();
         syncLayout();
     }
+
+    // ---- 滚动合并（滚动卡顿的主因之一）----
+    // 以前每个 wheel 事件直接 `backend.scrollBy()`：C++ 立刻重算整窗并重发
+    // text/image/shape 三个模型 → QML 三个 Instantiator 把**整屏**区块对象销毁重建
+    // （每个文本区块内部还有按段/字的 Repeater）。触摸板一秒能发上百个事件，
+    // 就变成每秒上百次全屏重建。这里按屏幕刷新周期合并：一帧最多提交一次，
+    // 期间累计的增量一次性应用（Qt 文档推荐的「把多次更新合并到一个渲染帧」）。
+    property int pendingScroll: 0
+    function scrollByLines(lines) {
+        if (!backend)
+            return;
+        pendingScroll += lines;
+        if (!scrollCoalesce.running)
+            scrollCoalesce.start();
+    }
+    Timer {
+        id: scrollCoalesce
+        interval: root.refreshIntervalMs
+        repeat: true
+        onTriggered: {
+            if (!root.backend || root.pendingScroll === 0) {
+                scrollCoalesce.stop();
+                return;
+            }
+            const d = root.pendingScroll;
+            root.pendingScroll = 0;
+            root.backend.scrollBy(d);
+        }
+    }
     readonly property bool primitiveInput: backend && backend.waitingInput && backend.inputKind === "INPUTMOUSEKEY"
     // 当前等待的是否为「任意键」型（WAIT/WAITANYKEY/FORCEWAIT/ANYKEY）：
     // 点击控制台任意处或回车即继续（C# IsWaitingEnterKey）；不弹数字/文本输入框
@@ -300,7 +329,7 @@ Item {
             onWheel: e => {
                 if (!backend)
                     return;
-                backend.scrollBy(e.angleDelta.y > 0 ? 3 : -3);
+                root.scrollByLines(e.angleDelta.y > 0 ? 3 : -3);
             }
         }
 
@@ -341,11 +370,19 @@ Item {
                 return;
             }
             if (e.key === Qt.Key_PageUp)
-                backend.scrollBy(10);
+                root.scrollByLines(10);
             if (e.key === Qt.Key_PageDown)
-                backend.scrollBy(-10);
+                root.scrollByLines(-10);
             if (e.key === Qt.Key_End)
                 backend.scrollToBottom();
+        }
+    }
+
+    // CLEARTEXTBOX（C# Console.ClearTextBox）：清空输入栏内容
+    Connections {
+        target: root.backend
+        function onClearTextBoxRequested() {
+            inputField.text = "";
         }
     }
 

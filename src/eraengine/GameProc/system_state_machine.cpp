@@ -19,6 +19,7 @@
 
 #include "script_runner.h"
 #include "variable_storage.h"
+#include "eraengine_log.h"
 
 #include <QDateTime>
 #include <QDebug>
@@ -353,7 +354,8 @@ bool SystemStateMachine::callFunction(const QString& name, bool force, bool isEv
         return false;
     }
     const QList<LabelRef> refs = m_table->labels(name);
-    qDebug() << "[exec] callFunction @" << name << "force =" << force << "isEvent =" << isEvent;
+    // 每条（含事件的）函数调用都走这里 —— 用 eraTrace，默认关
+    qCDebug(eraTrace) << "[exec] callFunction @" << name << "force =" << force << "isEvent =" << isEvent;
 
     if (isEvent) {
         QList<LabelRef> events;

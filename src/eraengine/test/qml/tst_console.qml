@@ -103,20 +103,57 @@ TestCase {
         const block = view.blockAt(0);
         const row = findChild(block, "textCells");
         let total = 0;
-        let glyphs = 0;
+        let chars = 0;
         for (let i = 0; i < row.children.length; ++i) {
             const cell = row.children[i];
             const glyph = findChild(cell, "gridGlyph");
             if (!glyph) continue;
-            console.log("grid advance", glyph.text, glyph.implicitWidth, "cell", cell.width);
+            // 一个「段」承载相邻同格宽的若干字符（ConsoleBlock.glyphRuns）。
+            // 不变式：段宽 == 字数 × 格宽、缩放后正好铺满段宽、每段裁剪；
+            // 整行总宽 == 区块宽（字符不会漂移/重叠）。
+            const run = cell.modelData;
             verify(Math.abs(glyph.implicitWidth * glyph.transform[0].xScale - cell.width) < 0.01);
+            verify(Math.abs(cell.width - run.count * run.units * view.cellWidth) < 0.01);
             verify(cell.clip);
             total += cell.width;
-            ++glyphs;
+            chars += run.count;
         }
-        compare(glyphs, 9);
+        compare(chars, 9);
         compare(total, block.width);
         compare(view.blockAt(1).x, block.x + block.width);
+    }
+
+    // 文本按「段」渲染（性能回归）：相邻同格宽的字符合成一个 Text。
+    // 以前每字一个 Item+Text，一屏数千个；这里是数量级回归测试。
+    function test_glyphRunsAreBatched() {
+        backend.clearAll();
+        backend.print("ABCDEFGHIJ");                       // 10 个半角 -> 1 段
+        backend.newline();
+        backend.print("あいうえお");                        // 5 个全角 -> 1 段
+        backend.newline();
+        backend.print("AあB");                              // 混排 -> 3 段
+        backend.newline(); backend.flush();
+
+        const ascii = view.blockAt(0);
+        compare(ascii.glyphRuns.length, 1);
+        compare(ascii.glyphRuns[0].count, 10);
+        compare(ascii.glyphRuns[0].units, 1);
+
+        const wide = view.blockAt(1);
+        compare(wide.glyphRuns.length, 1);
+        compare(wide.glyphRuns[0].units, 2);
+
+        const mixed = view.blockAt(2);
+        compare(mixed.glyphRuns.length, 3);
+        compare(mixed.glyphRuns[0].text, "A");
+        compare(mixed.glyphRuns[1].text, "あ");
+        compare(mixed.glyphRuns[2].text, "B");
+
+        // 段宽之和 == 区块宽（布局不变式，与逐字版一致）
+        let sum = 0;
+        for (let i = 0; i < mixed.glyphRuns.length; ++i)
+            sum += mixed.glyphRuns[i].units * mixed.glyphRuns[i].count * view.cellWidth;
+        compare(sum, mixed.width);
     }
 
     // 按钮 span 按「网格文字」渲染：00097c1 曾把它换成原生 Button
@@ -131,10 +168,13 @@ TestCase {
         verify(block !== null && block.blockData.isButton === true, "按钮区块");
         const row = findChild(block, "textCells");
         verify(row !== null && row.visible, "按钮 span 用网格文字容器渲染");
-        let glyphs = 0;
-        for (let i = 0; i < row.children.length; ++i)
-            if (findChild(row.children[i], "gridGlyph")) ++glyphs;
-        compare(glyphs, block.blockData.text.length);
+        let chars = 0;
+        for (let i = 0; i < row.children.length; ++i) {
+            const cell = row.children[i];
+            if (findChild(cell, "gridGlyph"))
+                chars += cell.modelData.count;   // 段内的字符数
+        }
+        compare(chars, block.blockData.text.length);
         compare(block.width, block.blockData.cols * view.cellWidth);
         compare(block.height, view.cellHeight);
     }
@@ -173,6 +213,38 @@ TestCase {
         verify(backend.imageBlocks.length === 1, "1 个图片区块");
         compare(view.imageBlockCount, 1);
         compare(backend.imageBlocks[0].text, "face_01");
+
+        // 图片区块 -> QQuickImageProvider（image://emuera/<名>）。
+        // Qt 文档：示例 "image://myprovider/icons/home" 的 id 是 "icons/home"；
+        // 非 ASCII 资源名必须先 encodeURIComponent（C++ normalizeId 再解码）。
+        const image = findChild(view.imageBlockAt(0), "blockImage");
+        verify(image !== null, "图片区块里有 Image 元素");
+        compare(image.source, "image://emuera/face_01");
+        compare(image.fillMode, Image.PreserveAspectFit);
+        verify(image.asynchronous, "异步加载（QImage provider 支持）");
+
+        // 非 ASCII（eraTW 的立絵资源名就是日文）：编码一次，provider 侧还原
+        backend.clearAll();
+        backend.printImage("立絵_服_通常_55", 40, 40);
+        backend.newline(); backend.flush();
+        const image2 = findChild(view.imageBlockAt(0), "blockImage");
+        verify(image2 !== null);
+        // QUrl 会自己规范化百分号编码，所以比较「前缀 + 解码后的名字」。
+        const src2 = ("" + image2.source);
+        verify(src2.indexOf("image://emuera/") === 0, "provider scheme 前缀");
+        compare(decodeURIComponent(src2.substring("image://emuera/".length)),
+                "立絵_服_通常_55");
+
+        // 「真的能渲染」：example/resources/offset_atlas.png 是 8×8 的真实文件，
+        // provider 注册后 Image.status 必须到 Ready 且画出非零尺寸。
+        backend.clearAll();
+        backend.printImage("offset_atlas", 100, 100);
+        backend.newline(); backend.flush();
+        const real = findChild(view.imageBlockAt(0), "blockImage");
+        verify(real !== null);
+        tryCompare(real, "status", Image.Ready);
+        verify(real.paintedWidth > 0 && real.paintedHeight > 0,
+               "真实图片被解码并绘制（paintedWidth/Height > 0）");
     }
 
     // 跨行图片：QML 侧必须按 C++ 给的 rows 撑开（否则 PreserveAspectFit 把整张

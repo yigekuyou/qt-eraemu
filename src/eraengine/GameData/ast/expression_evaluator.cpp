@@ -978,6 +978,20 @@ void ExpressionEvaluator::setBarChars(QChar filled, QChar empty) {
     m_barEmpty = empty;
 }
 
+QString ExpressionEvaluator::createBar(qint64 value, qint64 maxValue, qint64 length) const {
+    if (maxValue <= 0 || length <= 0 || length >= 100) {
+        return QString();
+    }
+    qint64 count = value * length / maxValue;
+    if (count < 0) count = 0;
+    if (count > length) count = length;
+    QString bar = QStringLiteral("[");
+    bar += QString(int(count), m_barFilled);
+    bar += QString(int(length - count), m_barEmpty);
+    bar += QLatin1Char(']');
+    return bar;
+}
+
 // ---- 实参取值 ----
 bool ExpressionEvaluator::hasArg(const FunctionNode &node, int i) {
     return i >= 0 && i < node.arguments().size() && node.arguments().at(i);
@@ -1487,16 +1501,8 @@ bool ExpressionEvaluator::evaluateBuiltin(const FunctionNode &node, VariableStor
         return true;
     }
     case BuiltinOp::BarStr: {
-        const qint64 var = I(0), maxV = I(1), length = I(2);
-        if (maxV <= 0 || length <= 0 || length >= 100) { out = QVariant(QString()); return true; }
-        qint64 count = var * length / maxV;
-        if (count < 0) count = 0;
-        if (count > length) count = length;
-        QString bar = QStringLiteral("[");
-        bar += QString(int(count), m_barFilled);
-        bar += QString(int(length - count), m_barEmpty);
-        bar += QLatin1Char(']');
-        out = QVariant(bar);
+        // BARSTR(var, max, length) —— 与 BAR/BARL 指令共用 createBar()
+        out = QVariant(createBar(I(0), I(1), I(2)));
         return true;
     }
     case BuiltinOp::PrintCPerLine:

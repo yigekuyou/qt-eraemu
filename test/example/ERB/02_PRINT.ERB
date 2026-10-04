@@ -4,6 +4,7 @@
 @TEST_PRINT
 #DIM NONG
 #DIM I
+#DIMS S              ;STRDATA 的赋值目标必须是**字符串变量**（eraTW：STRDATA COMMENT:1 / LOCALS）
 
 PRINTL == 组2：PRINT 族 · 按钮 · 颜色 ==
 
@@ -118,10 +119,18 @@ ENDDATA
 PRINTL （PRINTDATAL）
 
 ;---- STRDATA 赋值随机一条 ----
+; STRDATA = PRINTDATA 的不显示版：段结构与 PRINTDATA 相同，但**不打印**，
+; 把被选中段的文本写进变量。回归：此前 STRDATA 不在宿主名单里 -> 整段被逐行
+; 当普通指令执行 -> DATA/ENDDATA 报 [未完成] 且 S 一直是空的。
+;CALL 后 S 必须是段里的一条
+STRDATAVAR = 0
 STRDATA S
 	DATA 随机串1
 	DATA 随机串2
 ENDDATA
+SIF S == "随机串1" || S == "随机串2"
+	STRDATAVAR = 1
+CALL ASSERT_EQ, STRDATAVAR, 1, @"STRDATA 把所选段文本写进变量（不显示）"
 PRINTFORML STRDATA -> %S%（随机一条）
 PRINTL
 

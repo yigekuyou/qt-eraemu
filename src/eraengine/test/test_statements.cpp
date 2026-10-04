@@ -239,8 +239,52 @@ int main(int argc, char* argv[]) {
         engine.executeInstruction(buildLines(table, {"PRINT_IMG \"face_01\""}).first());
         check(imageName == "face_01" && imageWidth == 0 && imageHeight == 0 && imageY == 0,
               "PRINT_IMG forwards the resource expression with inline defaults");
+
+        // 字符串变量形态（eraTW 惯用法：资源名几乎总是变量）：
+        // 此前 PRINT_IMG 一律走整数上下文 evaluate() -> 字符串变量得到 0
+        // -> QML 去找 image://emuera/0（provider 失败日志刷屏）。
+        // 现在按 C# 的 Term.GetStrValue 走字符串求值。
+        //（RESULTS = 引擎里现成的全局字符串变量）
+        storage.setGlobalStr1D(QStringLiteral("RESULTS"), 0, QStringLiteral("face_02"));
+        engine.executeInstruction(buildLines(table, {"PRINT_IMG RESULTS"}).first());
+        check(imageName == "face_02",
+              "PRINT_IMG <字符串变量> 取变量内容（不是 0）");
         QObject::disconnect(connection);
     }
+    // ecd/docs/reference/ERB_Commands.html：BAR / BARL / SETCOLORBYNAME /
+    // CLEARTEXTBOX 此前只在解析表登记，运行期落到「未完成」被静默忽略。
+    {
+        QString printed;
+        bool printedNewline = false;
+        int colorEmits = 0;
+        QString lastName;
+        int clearEmits = 0;
+        const auto c1 = QObject::connect(&engine, &ExecutionEngine::consolePrint,
+            [&](const QString& t, bool nl) { printed = t; printedNewline = nl; });
+        const auto c2 = QObject::connect(&engine, &ExecutionEngine::consoleColor,
+            [&](const QString& n) { ++colorEmits; lastName = n; });
+        const auto c3 = QObject::connect(&engine, &ExecutionEngine::clearTextBox,
+            [&] { ++clearEmits; });
+        evaluator.setBarChars(QLatin1Char('*'), QLatin1Char('.'));
+
+        engine.executeInstruction(buildLines(table, {"BAR 50, 100, 10"}).first());
+        check(printed == QStringLiteral("[*****.....]") && !printedNewline,
+              QStringLiteral("BAR <值>,<最大>,<长度> 画进度条（不换行） got=%1").arg(printed));
+        engine.executeInstruction(buildLines(table, {"BARL 0, 100, 4"}).first());
+        check(printed == QStringLiteral("[....]") && printedNewline, "BARL = BAR + 换行");
+        engine.executeInstruction(buildLines(table, {"BAR 1, 0, 4"}).first());
+        check(printed.isEmpty(), "BAR 最大值 0 -> 空串（C# 是 CodeEE，这里保守不报错）");
+
+        engine.executeInstruction(buildLines(table, {"SETCOLORBYNAME \"RED\""}).first());
+        check(colorEmits == 1 && lastName == QStringLiteral("RED"),
+              "SETCOLORBYNAME 按色名设置颜色（C# Color.FromName）");
+        engine.executeInstruction(buildLines(table, {"CLEARTEXTBOX"}).first());
+        check(clearEmits == 1, "CLEARTEXTBOX 发出清空输入栏请求");
+        QObject::disconnect(c1);
+        QObject::disconnect(c2);
+        QObject::disconnect(c3);
+    }
+
     qDebug() << "\n7) VARSET / SETS / CVARSET 族";
     // 以前 ArgKind::VarSet 只在 argument_parser 里登记，执行期没有任何分支：
     // `PRINT_STATE.ERB:336 VARSET TLNT_CNT` 被静默跳过 -> 计数器不清零 ->

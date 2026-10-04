@@ -1,0 +1,88 @@
+;=============================================================
+; [33] `END` 是变量（#DIM END），不是指令
+;
+; 依据（C# Emuera 权威）：BuiltInFunctionCode 里没有名为 END 的指令
+; ——只有 ENDIF / ENDSELECT / ENDDATA / ENDLIST / ENDCATCH / ENDFUNC /
+; ENDNOSKIP 等。所以 `END = 0` 在 C# 里是**变量赋值**。
+;
+; 缺陷现场（eraTW MOVEMENT_キャラ移動処理.ERB）：
+;   @角色移動処理(ARG)
+;   #DIM END                       ; ← 私有变量声明
+;   VARSET LOCAL
+;   END = 0                        ; ← 曾被当指令吞掉（"= 0" 丢弃）
+;   SIF !AT_HOME(ARG) / 行動不能 …
+;       END = 1
+;   IF END … RETURN                ; ← 恒假 → 早退失效
+; 后果：本该跳过的角色也进入移动逻辑，「循环迭代异常偏多」→ 无法退出。
+;=============================================================
+@TEST_END_VARIABLE
+#DIM NONG
+#DIM END
+#DIM I
+
+PRINTL == 组33：END 是变量（#DIM END）不是指令 ==
+
+;---- 直接复刻 eraTW 的早退模式：条件成立置 1，IF END 早退 ----
+I = 0
+END = 0
+SIF I >= 0
+	END = 1
+IF END
+	I = 42
+ENDIF
+CALL ASSERT_EQ, I, 42, @"`END = 1` 后 IF END 成立（赋值被吞则 I 仍为 0）"
+NONG += RESULT
+
+;---- 反向：`END = 0` 必须真的清掉标志 ----
+I = 0
+END = 1
+END = 0
+IF END
+	I = 1
+ELSE
+	I = 2
+ENDIF
+CALL ASSERT_EQ, I, 2, @"`END = 0` 清标志（若被吞则走 IF 分支得到 1）"
+NONG += RESULT
+
+;---- 关键回归：END 作为循环退出标志（eraTW 死循环的最小形态）----
+; 修复前 `END = 1` 被吞 -> IF END 恒假 -> 跑满 1000 次（这里必须 = 3）
+I = 0
+END = 0
+REPEAT 1000
+	I += 1
+	SIF I == 3
+		END = 1
+	IF END
+		BREAK
+	ENDIF
+REND
+CALL ASSERT_EQ, I, 3, @"`END` 作为循环退出标志（赋值被吞则跑满 1000 次）"
+NONG += RESULT
+
+;---- 变量身份：参与算术 / WHILE 条件 ----
+END = 5
+I = END * 2 + 1
+CALL ASSERT_EQ, I, 11, @"END 参与算术表达式"
+NONG += RESULT
+
+I = 0
+END = 3
+WHILE END > 0
+	I += 1
+	END -= 1
+WEND
+CALL ASSERT_EQ, I, 3, @"END 作为 WHILE 循环计数器"
+NONG += RESULT
+
+;---- 相邻关键字不能被误判：ENDIF/ENDSELECT 仍是指令 ----
+I = 0
+IF 1 == 1
+	I = 7
+ELSE
+	I = 8
+ENDIF
+CALL ASSERT_EQ, I, 7, @"ENDIF 不受影响"
+NONG += RESULT
+
+RETURN NONG

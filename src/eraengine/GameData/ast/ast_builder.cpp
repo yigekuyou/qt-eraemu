@@ -261,7 +261,13 @@ bool AstBuilder::isExactInstructionName(const QString& upperName) {
         "DO", "REND", "LOOP", "WHILE", "WEND", "REPEAT", "FOR", "NEXT",
         "BREAK", "CONTINUE", "RETURN", "RETURNF", "GOTO", "CALL", "BEGIN",
         "IF", "ELSEIF", "ELSE", "ENDIF", "SIF", "SELECTCASE", "CASE",
-        "CASEELSE", "ENDSELECT", "THROW", "END", "QUIT",
+        "CASEELSE", "ENDSELECT", "THROW", "QUIT",
+        // 注意：此处**不能**再列 "END"。C# Emuera 的函数表里没有名为 END 的
+        // 指令（只有 ENDIF/ENDSELECT/ENDDATA/ENDLIST/ENDCATCH/ENDFUNC/
+        // ENDNOSKIP 等），所以 `END = 0` 在 C# 里是**赋值**。eraTW 的
+        // MOVEMENT_キャラ移動処理.ERB 用 `#DIM END` 声明私有变量再 `END = 0`
+        // ——把 END 当指令会让赋值被吞、`IF END` 恒假、该函数的多处早退失效
+        //（角色移动进入死循环，见 script_runner 的循环超限告警）。
         // ecd/docs 命令表里、由执行链/引擎单独处理但不在指令规范表里的名字
         // （缺了会被当成「未识别的指令」静默跳过）：
         "RETURNFORM",      // RETURN 的格式化串版本（StrForm 实参）

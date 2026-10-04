@@ -114,6 +114,10 @@ struct ConsoleSpan {
     // Emuera 的 <img width=N> 里 N 是相对字号的百分比；而 `<img src='X'>` 不带尺寸时
     // 必须用资源自身像素尺寸，否则整张图会被压成一个字号见方。
     bool     imageSizeIsPixels = false;
+    // 资源自身的**固有像素**尺寸（宽度未指定时按它算纵横比，见 C# ConsoleImagePart：
+    //   raw_width==0 -> Width = DestBaseSize.Width * height / DestBaseSize.Height）。
+    // 由 ConsoleBackend 在生成 span 时一次性查好（避免排版期反复解码图片）。
+    QSizeF   imageIntrinsic;
     // `<img ypos=N>`：N 是**字号百分比**的纵向偏移（C# ConsoleImagePart.raw_ypos）。
     // eraTW 的画像枠・時間停止・特效都是「另一张图叠在立絵上」：它们各自在被打印的
     // 那一行，靠 ypos 负偏移被拉回去盖住立絵 —— 不实现 ypos，框就落在立絵下面一行。

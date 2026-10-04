@@ -59,12 +59,21 @@ void ConsoleLayout::measurePart(ConsoleSpan& part) const {
             wPx = static_cast<int>(part.imageSize.width());
             hPx = static_cast<int>(part.imageSize.height());
         } else {
-            wPx = part.imageSize.width() > 0
-                      ? static_cast<int>(part.imageSize.width() * m_fontSize / 100.0)
-                      : 0;
+            // C# ConsoleImagePart：
+            //   height = raw_height==0 ? FontSize : FontSize*raw_height/100
+            //   Width  = raw_width==0  ? 固有宽 * height / 固有高 : FontSize*raw_width/100
             hPx = part.imageSize.height() > 0
                       ? static_cast<int>(part.imageSize.height() * m_fontSize / 100.0)
                       : 0;
+            if (part.imageSize.width() > 0) {
+                wPx = static_cast<int>(part.imageSize.width() * m_fontSize / 100.0);
+            } else if (hPx > 0 && !part.imageIntrinsic.isEmpty()
+                       && part.imageIntrinsic.height() > 0) {
+                // 只写了 height（eraTW 立絵 `<img src=… height='{iFont_Hei_mag}'>`）：
+                // 宽度按资源纵横比补，这样「画像サイズ 拡大/縮小」设置才生效。
+                wPx = static_cast<int>(part.imageIntrinsic.width() * hPx
+                                       / part.imageIntrinsic.height());
+            }
         }
         if (wPx <= 0) wPx = m_fontSize;                  // 缺省 = 1 个全角宽
         if (hPx <= 0) hPx = m_lineHeight;

@@ -22,7 +22,10 @@
 
 #include <QDBusConnection>
 #include <QDateTime>
+#include <QDir>
+#include <QFileInfo>
 #include <QLoggingCategory>
+#include <QUrl>
 
 EraDBusDebug::EraDBusDebug(EraEngine* engine, QObject* parent)
     : QObject(parent), m_engine(engine) {}
@@ -112,6 +115,30 @@ QString EraDBusDebug::listButtons() {
                    .arg(value);
     }
     return out.join(QLatin1Char('\n'));
+}
+
+// 「文件 > 打开目录…」（Main.qml 的 FolderDialog 赋值 eraEngine.gameDirectory）
+// 的脚本等价物：装载该目录并走 scriptsLoaded -> runSystem()（标题画面）。
+// 有了它，无参启动的 GUI 也能被 D-Bus 指到任意游戏目录（自动化/性能测试用）。
+QString EraDBusDebug::openDirectory(const QString& path) {
+    if (!m_engine) return QStringLiteral("error: no engine");
+    QString dir = path;
+    if (dir.startsWith(QLatin1String("file://"))) dir = QUrl(dir).toLocalFile();
+    dir = dir.trimmed();
+    if (dir.isEmpty()) return QStringLiteral("error: empty path");
+    const QFileInfo info(dir);
+    if (!info.exists() || !info.isDir()) {
+        return QStringLiteral("error: not a directory: %1").arg(dir);
+    }
+    const QString abs = info.absoluteFilePath();
+    if (m_engine->getGameDirectory() == abs) {
+        // 同一目录：setGameDirectory 会提前返回（QML 的属性 setter 语义），
+        // 但自动化/性能测试需要「重跑一遍」，所以显式 reload()。
+        m_engine->reload();
+        return QStringLiteral("reloaded %1").arg(abs);
+    }
+    m_engine->setGameDirectory(abs);
+    return QStringLiteral("opened %1").arg(m_engine->getGameDirectory());
 }
 
 void EraDBusDebug::sendInput(qint64 value) {

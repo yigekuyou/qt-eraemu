@@ -35,6 +35,7 @@
 #include <QQuickWindow>
 #include <QtTest/QTest>
 #include "console_backend.h"
+#include "resource_image_provider.h"
 
 // 测试夹具：把不可创建的 ConsoleBackend 交给 QML 使用
 class ConsoleFixture : public QObject {
@@ -67,6 +68,11 @@ public slots:
         // Console.qml 的绝对路径（ConsoleLine.qml 与它同目录，相对导入可用）
         engine->rootContext()->setContextProperty(
             "consoleQmlPath", QStringLiteral(CONSOLE_QML_PATH));
+        // 图片 provider：让 ConsoleBlock 的 `Image { source: "image://emuera/…" }`
+        // 真的走一遍解码并画出像素（否则只有 AltText 回退，测不到“渲染”）。
+        // 根目录指向 test/example/resources（里面有 offset_atlas.png 等夹具）。
+        ResourceImageProvider::setRoot(QStringLiteral(EXAMPLE_RESOURCES_DIR));
+        engine->addImageProvider(QStringLiteral("emuera"), new ResourceImageProvider);
     }
 };
 

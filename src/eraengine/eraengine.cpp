@@ -302,6 +302,8 @@ EraEngine::EraEngine(QObject *parent)
 				});
 		connect(&m_executionEngine, &ExecutionEngine::consoleResetColor,
 				&m_console, &ConsoleBackend::resetColor);
+		connect(&m_executionEngine, &ExecutionEngine::clearTextBox, this,
+				[this] { emit m_console.clearTextBoxRequested(); });
 		connect(&m_executionEngine, &ExecutionEngine::consoleRedraw, this,
 				[this](const QString&) { m_console.flush(); });
 		connect(&m_executionEngine, &ExecutionEngine::consoleAlign, this,

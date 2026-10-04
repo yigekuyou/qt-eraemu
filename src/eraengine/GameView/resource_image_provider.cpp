@@ -342,7 +342,10 @@ QImage ResourceImageProvider::loadResourceImage(const QString& id) {
         }
     } else {
         const QString path = resolvePath(normalizedId);
-        if (!path.isEmpty()) image.load(path);
+        // 与图集分支一致：走 loadImageFile，Qt 解不了的图片（eraTW 的
+        // ダミー.webp：VP8L 全透明，libqwebp 拒读）按文件头尺寸回退，
+        // 否则 QML 的 <img src='ダミー.webp'> 会退化成 AltText。
+        if (!path.isEmpty()) image = loadImageFile(path);
     }
     return image;
 }

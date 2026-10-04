@@ -40,6 +40,7 @@ qt_add_qml_module(appemuera
         src/qml/EraRender.qml
         src/qml/Console.qml
         src/qml/ConsoleBlock.qml
+        src/qml/AudioPlayers.qml
         src/qml/SettingsDialog.qml
         src/qml/AboutDialog.qml
 )

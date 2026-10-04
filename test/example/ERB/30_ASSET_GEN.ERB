@@ -3,7 +3,8 @@
 ;
 ; 用命令**随机生成**素材来测：
 ;   * 图片：随机尺寸/颜色/像素；GCREATE -> GCLEAR -> GSETCOLOR
-;           -> GSETBRUSH -> GFILLRECTANGLE -> GGETCOLOR -> SPRITECREATE
+;           -> GSETBRUSH -> GFILLRECTANGLE -> GCLEAR(6参) -> GGETCOLOR
+;           -> SPRITECREATE
 ;           -> SPRITEGETCOLOR -> HTML_PRINT <img> -> GDISPOSE。
 ;     「随机」只影响数值，不影响断言含义：期望值就用同一批随机变量，
 ;     所以任何随机结果下断言都必须成立（不依赖固定种子）。
@@ -80,6 +81,13 @@ FOR I, 0, 8
 	CALL ASSERT_EQ, GGETCOLOR(GID, PX + 1, PY + 1), COL2, @"GGETCOLOR(矩形内) = 随机色2"
 	FAILS += RESULT
 	CALL ASSERT_EQ, GGETCOLOR(GID, -1, 0), -1, @"GGETCOLOR 越界 = -1"
+	FAILS += RESULT
+	;GCLEAR 6 参形态（EM 私家版拡張）：只清除该矩形（x,y,w,h），矩形外不变
+	CALL ASSERT_EQ, GCLEAR(GID, COL, PX, PY, 2, 2), 1, @"GCLEAR 6参(矩形还原底色)"
+	FAILS += RESULT
+	CALL ASSERT_EQ, GGETCOLOR(GID, PX + 1, PY + 1), COL, @"GCLEAR 6参 矩形内 = 底色"
+	FAILS += RESULT
+	CALL ASSERT_EQ, GGETCOLOR(GID, 0, 0), COL, @"GCLEAR 6参 不改矩形外"
 	FAILS += RESULT
 
 	;`= @"…"` 应当剥掉 @" 与引号（只展开 %…%）——回归

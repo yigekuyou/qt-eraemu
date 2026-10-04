@@ -272,6 +272,23 @@ void registerEeAudio(ExtensionRegistry& ext) {
         });
 }
 
+// ---------------------------------------------------------------------------
+// EM 私家版拡張（グラフィック系）------------------------------------------
+//
+// 权威来源：emuera.em（EE）`Runtime/Script/Statements/Function/Creator.Method.cs`
+//     GraphicsClearMethod: argumentTypeArrayEx = [ {Int,Int}, {Int ×6} ]
+//   即 GCLEAR 有两个形态（同一方法）：
+//     GCLEAR id, cARGB                     -> 全图清除（核心 BuiltinOp::GClear）
+//     GCLEAR id, cARGB, x, y, w, h         -> 只清除该矩形（SetClip + Clear + ResetClip）
+//
+//   核心命令本身不能被扩展覆盖（注册类 fail-fast 拒绝），所以这里用
+//   regCoreArgRange 只**放宽核心命令的实参个数区间** —— 对齐 C# 给同一个
+//   方法补第二个 argumentTypeArrayEx 形态；求值仍在核心的 GClear 分派处。
+// ---------------------------------------------------------------------------
+void registerEeGraphics(ExtensionRegistry& ext) {
+    ext.regCoreArgRange(QStringLiteral("GCLEAR"), 2, 6);
+}
+
 }  // namespace
 
 // ---------------------------------------------------------------------------
@@ -351,6 +368,9 @@ void registerEeExtensions(ExtensionRegistry& ext)
 
     // 音频（C# 原版没有；C++ 控制 + QML 维护播放，数量由扩展登记不硬编码）
     registerEeAudio(ext);
+
+    // EM 私家版拡張（GCLEAR 2/6 参：放宽核心命令的实参个数区间）
+    registerEeGraphics(ext);
 
     // ---- EE 存档系：真实现（reg 带实现的重载；经注册类 services() 取用）----
     // 实现是三参函数（line, args, ext）——经 lambda 绑定注册类实例

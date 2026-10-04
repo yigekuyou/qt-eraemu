@@ -22,7 +22,10 @@
 #include <deque>
 #include <string>
 #include <string_view>
+#include <optional>
 #include <unordered_map>
+#include <utility>
+#include <QString>
 #include <QtGlobal>
 #include "operand_type.h"
 
@@ -358,6 +361,49 @@ inline constexpr BuiltinFunctionSpec kBuiltinFunctions[] = {
 
 inline constexpr std::size_t kBuiltinFunctionCount = std::size(kBuiltinFunctions);
 
+// ---------------------------------------------------------------------------
+// 「核心命令的实参个数放宽」（EM 私家版拡張：GCLEAR 2/6 参等）
+//
+// 原生表 kBuiltinFunctions 保持 constexpr 不变；扩展（EM/EE）经注册类
+// （ExtensionRegistry::regCoreArgRange）注入本表 —— 只**放大**核心命令的
+// 实参个数区间（对齐 C# `argumentTypeArrayEx` 给同一个方法补第二个形态），
+// 不改写核心的返回类型/求值行为。查表时与原生声明合并（取并集）。
+// ---------------------------------------------------------------------------
+struct CoreArgWidenStore {
+    std::unordered_map<std::string, std::pair<int, int>> ranges;   // 名字（大写）-> [min, max]
+};
+
+inline CoreArgWidenStore& coreArgWidenStore() {
+    static CoreArgWidenStore store;
+    return store;
+}
+
+// 注册（覆盖式；名字规范为大写，min/max 与 EE 的 argumentTypeArrayEx 同义）
+inline void registerCoreArgWidenSpec(const std::string& upperName, int minArgs, int maxArgs) {
+    coreArgWidenStore().ranges.insert_or_assign(upperName,
+                                                std::pair<int, int>{minArgs, maxArgs});
+}
+
+// 便利重载（QString 名）。
+inline void registerCoreArgWiden(const QString& upperName, int minArgs, int maxArgs) {
+    registerCoreArgWidenSpec(upperName.toStdString(), minArgs, maxArgs);
+}
+
+[[nodiscard]] inline const std::pair<int, int>* findCoreArgWiden(std::string_view upperName) {
+    const auto& store = coreArgWidenStore();
+    const auto it = store.ranges.find(std::string(upperName));
+    return it == store.ranges.end() ? nullptr : &it->second;
+}
+
+// 原生声明与「扩展放宽」合并：只放大，不缩小（核心的 2 参形态不受影响）。
+inline void mergeCoreArgWiden(const std::string_view upperName, int& minArgs, int& maxArgs) {
+    if (const auto* w = findCoreArgWiden(upperName)) {
+        minArgs = qMin(minArgs, w->first);
+        maxArgs = (w->second < 0) ? -1 : qMax(maxArgs, w->second);
+    }
+}
+
+
 [[nodiscard]] constexpr const BuiltinFunctionSpec* findBuiltinFunction(std::string_view upperName) noexcept {
     for (const BuiltinFunctionSpec& s : kBuiltinFunctions) {
         if (s.name == upperName) return &s;
@@ -393,6 +439,7 @@ inline constexpr std::size_t kBuiltinFunctionCount = std::size(kBuiltinFunctions
     if (const BuiltinFunctionSpec* s = findBuiltinFunction(upperName)) {
         minArgs = s->minArgs;
         maxArgs = s->maxArgs;
+        mergeCoreArgWiden(upperName, minArgs, maxArgs);   // 扩展放宽（EM 私家版拡張）
         return true;
     }
     return false;

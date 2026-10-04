@@ -277,6 +277,26 @@ eraMegaten 的 `BTL_KOJO_RESULTS:0` 同样混用 —— 只有都剥引号才自
 回归：`test_statements`（§10 `"…"` / `@"…"` / 裸格式串三者）、组 30（精灵名改用
 `NAME = @"rand_sprite_%I%"`，图片 `src` 现在无引号）。
 
+## GCLEAR 6 参（EM 私家版拡張 · 2026-10）
+
+对齐 EE（`emuera.em` `Creator.Method.cs`）`GraphicsClearMethod` 的
+`argumentTypeArrayEx` 2/6 参：GCLEAR 有两个形态（**同一个方法**）。
+
+```erb
+GCLEAR id, cARGB                 ; 全图清除（核心 2 参形态，行为不变）
+GCLEAR id, cARGB, x, y, w, h     ; 只清除该矩形（SetClip + Clear + ResetClip）
+```
+
+实现：`ExtensionRegistry::regCoreArgRange(name, min, max)` 只**放宽核心命令的
+实参个数区间**（核心命令不能被扩展覆盖 —— 注册类 fail-fast 拒绝；first-wins 同名
+拒绝），对齐 C# 给同一个方法补第二个实参形态；校验在
+`validateBuiltinCall` / `builtinFunctionArgRange` 与原生声明合并（只放大不缩小）；
+6 参求值在核心 `BuiltinOp::GClear` 分派处（`GraphicsStore::gFillRectangle` 的
+`QPainter::fillRect` 自带裁剪，等价 SetClip+Clear+ResetClip）。
+登记住 `ee_extension.cpp`（`registerEeGraphics`）。
+
+回归：`test_extension_registry`（§9 2..6 参 / 2 参不变 / 7 参报错 /
+非核心拒绝 / first-wins）、组 30（GCLEAR 6 参矩形还原底色、矩形外不变）。
 ## 关于「自动输入」
 
 `INPUT` / `INPUTS` / `ONEINPUT` / `TINPUT` / `WAITANYKEY` / `AWAIT` 在 GUI 下会

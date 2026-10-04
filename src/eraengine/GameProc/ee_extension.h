@@ -50,6 +50,10 @@ class ExtensionRegistry;   // 前置声明（完整定义在 extension_registry.
 //     SETBGMVOLUME / SETSOUNDVOLUME（语句）+ EXISTSOUND（式中函数）—— **真实现**
 //     （经 regAudioPipelines 登记维护数量；C++ 的 AudioPipelinePool 是控制端，
 //     QML AudioPlayers 按数量维护播放器真正出声）。
+//   · EM 私家版拡張（グラフィック系）：GCLEAR 的 6 参形态
+//     `GCLEAR id, cARGB, x, y, w, h`（对齐 EE `GraphicsClearMethod` 的
+//     `argumentTypeArrayEx` 2/6 参）—— 经 regCoreArgRange 只放宽核心命令的
+//     实参个数区间（核心命令不能被扩展覆盖），求值在核心 GClear 分派处。
 // PUTFORM / FIND_CHARADATA 属核心（BuiltInFunctionCode.cs 枚举内），
 // 不在此登记 —— 扩展不得覆盖核心（注册类 fail-fast 拒绝）。
 //

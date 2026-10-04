@@ -39,6 +39,9 @@
 #include <QStringList>
 
 #include "ast/logical_line.h"
+#include "ast/expression_lexer.h"
+#include "ast/expression_parser.h"
+#include "ast/function_types.h"
 #include "ast/ast_builder.h"
 #include "ast/system_variables.h"
 #include "constant_table.h"
@@ -54,6 +57,19 @@ static int g_failed = 0;
 static void check(bool ok, const QString& what) {
     if (ok) qDebug() << "  [PASS]" << what;
     else { ++g_failed; qDebug() << "  [FAIL]" << what; }
+}
+
+// 表达式 -> AST（供 validateBuiltinCall 的参数构造）
+static QSharedPointer<ExpressionNode> parseExpr(const QString& text) {
+    ExpressionLexer lexer;
+    ExpressionParser parser;
+    return parser.parse(lexer.tokenize(text, 1));
+}
+
+static const BuiltinFunctionSpec& builtinSpec(const char* name) {
+    const BuiltinFunctionSpec* s = findBuiltinFunction(name);
+    Q_ASSERT(s != nullptr);
+    return *s;
 }
 
 int main(int argc, char* argv[]) {
@@ -259,6 +275,40 @@ int main(int argc, char* argv[]) {
         // first-wins：同名扩展变量拒绝重复注册。
         ext.regVariable(QStringLiteral("DAYNAME"), OperandType::Str, 1000);
         check(ext.hasVariable("DAYNAME"), "DAYNAME 首次注册生效（first-wins 不覆盖）");
+    }
+
+    // =====================================================================
+    qDebug() << "\n9) 放宽核心命令的实参个数（EM 私家版拡張：GCLEAR 2/6 参）";
+    {
+        // 注册类构造时已登记 EE 的 GCLEAR 2/6 参（argumentTypeArrayEx 第二形态）。
+        ExtensionRegistry ext;
+        int mn = 0, mx = 0;
+        check(builtinFunctionArgRange("GCLEAR", mn, mx) && mn == 2 && mx == 6,
+              "EE 扩展登记 GCLEAR 2..6 参（对齐 argumentTypeArrayEx 2/6）");
+
+        const auto args2 = QList<QSharedPointer<ExpressionNode>>{
+            parseExpr(QStringLiteral("1")), parseExpr(QStringLiteral("2"))};
+        const auto args6 = QList<QSharedPointer<ExpressionNode>>{
+            parseExpr(QStringLiteral("1")), parseExpr(QStringLiteral("2")),
+            parseExpr(QStringLiteral("3")), parseExpr(QStringLiteral("4")),
+            parseExpr(QStringLiteral("5")), parseExpr(QStringLiteral("6"))};
+        const auto args7 = QList<QSharedPointer<ExpressionNode>>{
+            parseExpr(QStringLiteral("1")), parseExpr(QStringLiteral("2")),
+            parseExpr(QStringLiteral("3")), parseExpr(QStringLiteral("4")),
+            parseExpr(QStringLiteral("5")), parseExpr(QStringLiteral("6")),
+            parseExpr(QStringLiteral("7"))};
+        check(validateBuiltinCall(builtinSpec("GCLEAR"), args2).isEmpty(), "GCLEAR(2) 仍通过");
+        check(validateBuiltinCall(builtinSpec("GCLEAR"), args6).isEmpty(), "GCLEAR(6) 通过（新形态）");
+        check(!validateBuiltinCall(builtinSpec("GCLEAR"), args7).isEmpty(), "GCLEAR(7) 参数过多");
+
+        // fail-fast：非核心命令拒绝放宽。
+        ext.regCoreArgRange(QStringLiteral("PLAYBGM"), 1, 2);
+        check(!builtinFunctionArgRange("PLAYBGM", mn, mx),
+              "非核心命令 PLAYBGM 拒绝放宽（fail-fast）");
+        // first-wins：同名拒绝重复登记（区间不被改写）。
+        ext.regCoreArgRange(QStringLiteral("GCLEAR"), 2, 8);
+        check(builtinFunctionArgRange("GCLEAR", mn, mx) && mx == 6,
+              "GCLEAR 重复登记被拒（first-wins 不覆盖）");
     }
 
     qDebug();

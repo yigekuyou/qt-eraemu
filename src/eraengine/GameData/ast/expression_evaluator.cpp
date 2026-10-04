@@ -1841,6 +1841,17 @@ bool ExpressionEvaluator::evaluateBuiltin(const FunctionNode &node, VariableStor
         return true;
     }
     case BuiltinOp::GClear: {
+        // GCLEAR 的两个形态（EM 私家版拡張；对齐 EE GraphicsClearMethod）：
+        //   2 参：id, cARGB                    -> 全图清除
+        //   6 参：id, cARGB, x, y, w, h        -> 只清除该矩形（SetClip+Clear+ResetClip）
+        // 6 参形态由扩展经 regCoreArgRange 放宽实参个数区间后到达这里。
+        if (node.arguments().size() >= 6) {
+            out = QVariant::fromValue<qint64>(GraphicsStore::gFillRectangle(
+                I(0), QColor::fromRgba(static_cast<QRgb>(I(1))),
+                QRect(static_cast<int>(I(2)), static_cast<int>(I(3)),
+                      static_cast<int>(I(4)), static_cast<int>(I(5)))) ? 1 : 0);
+            return true;
+        }
         out = QVariant::fromValue<qint64>(
             GraphicsStore::gClear(I(0), QColor::fromRgba(static_cast<QRgb>(I(1)))) ? 1 : 0);
         return true;

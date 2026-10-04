@@ -354,13 +354,18 @@ QString validateBuiltinCall(const BuiltinFunctionSpec& spec,
     const QString funcName = QString::fromUtf8(spec.name.data(), static_cast<int>(spec.name.size()));
     const int n = args.size();
 
-    if (n < spec.minArgs) {
+    // EM 私家版拡張（如 GCLEAR 2/6 参）：扩展可放宽核心命令的实参个数区间
+    // （对齐 C# `argumentTypeArrayEx` 给同一个方法补第二个形态）。
+    int minArgs = spec.minArgs, maxArgs = spec.maxArgs;
+    mergeCoreArgWiden(spec.name, minArgs, maxArgs);
+
+    if (n < minArgs) {
         return QStringLiteral("%1 参数过少（需要至少 %2 个，实得 %3）")
-            .arg(funcName).arg(spec.minArgs).arg(n);
+            .arg(funcName).arg(minArgs).arg(n);
     }
-    if (spec.maxArgs >= 0 && n > spec.maxArgs) {
+    if (maxArgs >= 0 && n > maxArgs) {
         return QStringLiteral("%1 参数过多（最多 %2 个，实得 %3）")
-            .arg(funcName).arg(spec.maxArgs).arg(n);
+            .arg(funcName).arg(maxArgs).arg(n);
     }
 
     const int patternLength = static_cast<int>(spec.argPattern.size());

@@ -64,6 +64,14 @@ public:
         registerExtensionFunctionSpec(upperName.toStdString(), ret, minArgs, maxArgs);
     }
 
+    // 放宽**核心命令**的实参个数区间（EM 私家版拡張：GCLEAR 2/6 参等）——
+    // 对齐 C# `argumentTypeArrayEx` 给同一个方法补第二个实参形态。
+    // 原生表 constexpr 不变；放宽区间住扩展侧的 CoreArgWidenStore，
+    // 校验（validateBuiltinCall / builtinFunctionArgRange）与原生声明合并。
+    static void registerCoreArgWiden(const QString& upperName, int minArgs, int maxArgs) {
+        registerCoreArgWidenSpec(upperName.toStdString(), minArgs, maxArgs);
+    }
+
     // ---- PRINT 族参数形态（对齐 C# PRINT_Instruction 的后缀扫描）----
     //   PRINT…(V)     -> PrintV        逗号分隔的整数值，直接拼接
     //   PRINT…(S)     -> StrExpression 字符串表达式

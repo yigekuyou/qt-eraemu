@@ -217,6 +217,26 @@ public:
     void setAudioPool(AudioPipelinePool* pool) { m_audioPool = pool; }
     [[nodiscard]] AudioPipelinePool* audioPool() const { return m_audioPool; }
 
+    // ---- 扩展**核心命令的实参个数**（EM 私家版拡張）----------------------
+    // ⑧ 对齐 C# `argumentTypeArrayEx`：给**同一个方法**补第二个实参形态
+    //    （如 GCLEAR 的 2 参 / 6 参）。只**放大**核心命令的实参个数区间，
+    //    不改写核心的返回类型/求值行为（实现仍住核心，BuiltinOp 不变）；
+    //    新形态的求值在核心的分派处按「2 参 / 6 参」两个形态处理。
+    //    fail-fast：必须是核心函数；first-wins：同名拒绝。
+    void regCoreArgRange(const QString& name, int minArgs, int maxArgs) {
+        const QString upper = name.toUpper();
+        if (!isBuiltinFunction(upper.toStdString())) {
+            qWarning() << "[ext] 拒绝放宽实参个数：" << name << "不是核心函数";
+            return;
+        }
+        if (m_argWidens.contains(upper)) {
+            qWarning() << "[ext] 拒绝放宽实参个数：" << name << "已被其他扩展登记（first-wins）";
+            return;
+        }
+        m_argWidens.insert(upper);
+        AstBuilder::registerCoreArgWiden(upper, minArgs, maxArgs);
+    }
+
     // ---- 查询（执行引擎使用；查询侧零扩展名）------------------------------
 
     // 注册表是否认识该语句名（实现 / 桩 / 式中函数裸写）
@@ -306,6 +326,7 @@ private:
     Services m_services;                        // 扩展实现所需的服务（引擎填入）
     quint32 m_audioPipelines = 0;               // 扩展登记的音频管线数（4 字节无符号）
     AudioPipelinePool* m_audioPool = nullptr;   // 音频播放池（引擎装配后注入）
+    QSet<QString> m_argWidens;                  // 已放宽实参个数的核心命令（first-wins）
 };
 
 // ---------------------------------------------------------------------------

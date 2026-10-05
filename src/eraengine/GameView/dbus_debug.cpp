@@ -90,6 +90,19 @@ void EraDBusDebug::resetPerf() {
     if (m_engine && m_engine->getConsole()) m_engine->getConsole()->resetPerfCounters();
 }
 
+QString EraDBusDebug::loadState() {
+    if (!m_engine) return QStringLiteral("no engine");
+    const auto* table = m_engine->getParseTable();
+    const bool loading = m_engine->isLoadingScripts();
+    // 语义阶段在后台线程跑，会并发往 m_parseWarnings 追加；装载中不读列表，
+    // 避免与后台写者竞争（只回一个哨兵值）。
+    return QStringLiteral("loading=%1\ngameDir=%2\nscripts=%3\nwarnings=%4")
+        .arg(loading)
+        .arg(m_engine->getGameDirectory())
+        .arg(table ? table->scriptNames().size() : -1)
+        .arg(loading ? -1 : (table ? table->parseWarningCount() : -1));
+}
+
 QString EraDBusDebug::dumpScreen(int lastLines) {
     if (!m_engine || !m_engine->getConsole()) return QStringLiteral("no console");
     const QList<ConsoleDisplayLine>& lines = m_engine->getConsole()->buffer().lines();
@@ -134,14 +147,12 @@ QString EraDBusDebug::openDirectory(const QString& path) {
         return QStringLiteral("error: not a directory: %1").arg(dir);
     }
     const QString abs = info.absoluteFilePath();
-    if (m_engine->getGameDirectory() == abs) {
-        // 同一目录：setGameDirectory 会提前返回（QML 的属性 setter 语义），
-        // 但自动化/性能测试需要「重跑一遍」，所以显式 reload()。
-        m_engine->reload();
-        return QStringLiteral("reloaded %1").arg(abs);
-    }
-    m_engine->setGameDirectory(abs);
-    return QStringLiteral("opened %1").arg(m_engine->getGameDirectory());
+    // 与 GUI（Main.qml）走同一条路径：异步装载（后台解析不阻塞界面）。
+    // 调用立即返回，用 loadState / state 轮询装载是否结束。
+    const bool same = (m_engine->getGameDirectory() == abs);
+    m_engine->loadAsync(abs);
+    return QStringLiteral("%1 %2 (async)").arg(same ? QStringLiteral("reloading")
+                                                    : QStringLiteral("opening"), abs);
 }
 
 void EraDBusDebug::sendInput(qint64 value) {

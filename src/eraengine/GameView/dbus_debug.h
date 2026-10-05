@@ -54,6 +54,7 @@ public Q_SLOTS:  // ---- 检查 ----
     QString consoleStats();               // 行数/逻辑行/可见窗口/滚动
     QString perf();                       // 区块构建计数与耗时（QML 卡顿定位）
     void resetPerf();                     // 清零性能计数器
+    QString loadState();                  // 异步装载状态（loading / 脚本数 / 告警数）
     QString dumpScreen(int lastLines);    // 抓控制台尾部文本
     QString listButtons();                // 当前屏的按钮值（输入候选）
     QString saveScreenshot(const QString& path);  // 保存当前画面，返回结果说明

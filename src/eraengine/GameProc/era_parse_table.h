@@ -292,8 +292,19 @@ private:
     // 把每个 FunctionNode 重新解析为 内置函数 / 用户自定义函数 / 未定义函数，
     // 并用最终（类型回填后）的实参 AST 复刻 C# FunctionMethod.CheckArgumentType()。
     void resolveFunctionNodes();
-    void collectFunctionWarnings(const QSharedPointer<ExpressionNode>& ast,
-                                 const QString& position, QSet<QString>& seen);
+    // 校验告警收集器：按脚本并行时每脚本各持一个，随后**按脚本顺序**合并。
+    //   warnings : 告警文本，保持脚本内产生顺序；
+    //   keys     : 与 warnings 一一对应；非空 = 该告警的「去重 key」
+    //              （同一函数表达式跨行共享时只报一次），空串 = 不去重（结构告警）；
+    //   seen     : 本脚本内去重（跨脚本去重在有序合并阶段再统一做）。
+    struct WarningCollector {
+        QList<QString> warnings;
+        QList<QString> keys;
+        QSet<QString> seen;
+    };
+    // 纯函数（不触碰成员）：只读 AST + 写入 out —— 线程安全，供并行校验使用。
+    static void collectFunctionWarnings(const QSharedPointer<ExpressionNode>& ast,
+                                        const QString& position, WarningCollector& out);
 
     void setCurrentLineInternal(int line, bool forceEmit = false);
     void pushFrame(const Frame& frame);

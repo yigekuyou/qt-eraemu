@@ -159,7 +159,9 @@ ApplicationWindow {
         id: folderDialog
         title: qsTr("选择游戏目录")
         currentFolder: "file://" + eraEngine.gui.startDirectory
-        onAccepted: eraEngine.gameDirectory = selectedFolder
+        // 走异步装载（后台解析 ERB -> AST，主线程只按块合并）：eraTW 有 2200+
+        // 个 ERB、200 万行，同步装载会把 GUI 线程锁死十几秒。loadAsync() 立即返回。
+        onAccepted: eraEngine.loadAsync(selectedFolder)
     }
 
     FileDialog {
@@ -224,7 +226,7 @@ ApplicationWindow {
         id: actReload
         text: qsTr("重新加载")
         shortcut: StandardKey.Refresh
-        onTriggered: eraEngine.reload()
+        onTriggered: eraEngine.reloadAsync()
     }
     Action {
         id: actSaveLog
@@ -376,6 +378,8 @@ ApplicationWindow {
         property bool loading: false      // 脚本装载中
         property bool errorState: eraEngine.hasError
         property int warningCount: 0      // 装载告警条数
+        property int loadDone: 0          // 装载进度（已处理文件数）
+        property int loadTotal: 0         // 装载进度（总文件数）
         readonly property bool waiting: eraEngine.console.waitingInput
         readonly property int audioChannels: audioPlayers.activeChannels
 
@@ -468,7 +472,8 @@ ApplicationWindow {
         for (let i = 1; i < args.length; ++i) {
             if (args[i].startsWith("-"))
                 continue;
-            eraEngine.gameDirectory = args[i];
+            // 异步装载：命令行的第一次装载同样不能在 GUI 线程里做全量解析
+            eraEngine.loadAsync(args[i]);
             break;
         }
     }
@@ -478,12 +483,57 @@ ApplicationWindow {
         target: eraEngine
         function onScriptsLoadStarted() {
             statusStrip.loading = true;
+            statusStrip.loadDone = 0;
+            statusStrip.loadTotal = 0;
+        }
+        function onScriptsLoadProgress(processed, total) {
+            statusStrip.loadDone = processed;
+            statusStrip.loadTotal = total;
         }
         function onScriptsLoaded(ok) {
             statusStrip.loading = false;
             statusStrip.warningCount = eraEngine.parseWarnings().length;
             if (ok)
                 eraEngine.runSystem();
+        }
+    }
+
+    // ---- 装载进度遮罩 ----
+    // 异步装载期间 GUI 线程是活的（可以在后台解析的同时重绘），但仍然需要
+    // 明确告知「正在装载 + 进度」，否则用户面对黑屏会以为卡死。
+    // 遮罩只在装载时出现，装载完成后自动消失（statusStrip.loading）。
+    Rectangle {
+        id: loadingOverlay
+        anchors.fill: parent
+        z: 5000
+        visible: statusStrip.loading
+        color: Qt.rgba(0, 0, 0, 0.55)
+
+        Column {
+            anchors.centerIn: parent
+            spacing: 12
+
+            Text {
+                anchors.horizontalCenter: parent.horizontalCenter
+                text: qsTr("正在装载脚本…")
+                color: "white"
+                font.pixelSize: 20
+            }
+            ProgressBar {
+                id: loadBar
+                width: 320
+                from: 0
+                to: Math.max(1, statusStrip.loadTotal)
+                value: statusStrip.loadDone
+            }
+            Text {
+                anchors.horizontalCenter: parent.horizontalCenter
+                text: statusStrip.loadTotal > 0
+                      ? statusStrip.loadDone + " / " + statusStrip.loadTotal
+                      : qsTr("准备中…")
+                color: "#cccccc"
+                font.pixelSize: 14
+            }
         }
     }
 }

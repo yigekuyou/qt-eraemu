@@ -31,9 +31,20 @@
 #include "ast/argument_parser.h"
 #include "ast/expression_evaluator.h"
 #include <QDebug>
+#include <QElapsedTimer>
 #include <QSet>
 #include <algorithm>
 #include <utility>
+#include <QtConcurrent/QtConcurrent>
+#include <QThreadPool>
+
+namespace {
+// 并行化开关：任务数 >1 且线程池 >1 时启用（==1 时顺序执行，避免自锁 ——
+// finalizeParse 本身可能已在 QtConcurrent 的线程上，blockingMap 会再切子任务）。
+inline bool canParallelize(int n) {
+    return n > 1 && QThreadPool::globalInstance()->maxThreadCount() > 1;
+}
+}  // namespace
 
 EraParseTable::EraParseTable(ProcessState* state, ExecutionEngine* execEngine, QObject* parent)
     : QObject(parent)
@@ -1189,15 +1200,24 @@ void EraParseTable::parseVariableDeclaration(const LogicalLine& line, const QStr
 }
 
 void EraParseTable::applyVariableTypes() {
-    // 1) 缓存里的 AST
+    // 1) 缓存里的 AST（共享容器，顺序）
     for (auto& ast : m_astCache) {
         if (ast) VariableTable::applyTypes(*ast, m_variables);
     }
-    // 2) 各行实际引用的 AST（并行装载时 worker 的 AST 不在主缓存中）
-    QHash<QString, QHash<const ExpressionNode*, QSharedPointer<ExpressionNode>>> bound;
-    QList<QSharedPointer<ExpressionNode>> originals; // keep identity keys alive while rebinding
-    for (auto sit = m_scripts.begin(); sit != m_scripts.end(); ++sit) {
-        for (LogicalLine& line : sit.value().lines) {
+    // 2) 各行实际引用的 AST（并行装载时 worker 的 AST 不在主缓存中）。
+    //    **按脚本并行**：每个脚本的克隆缓存原本就是按 ownerFunction 分的，
+    //    而函数名全局唯一（一个函数体只在一个脚本里），所以「按脚本」与
+    //    「全局按函数」的结果完全等价；VariableTable::applyTypes 取的是
+    //    const 变量表（只读），ArgumentParser::build 只改传入的行 —— 无共享写。
+    //    eraTW 实测这一步 ~5s（2.2M 行），是 finalizeParse 的最大热点。
+    QList<ScriptData*> scripts;
+    scripts.reserve(m_scripts.size());
+    for (auto it = m_scripts.begin(); it != m_scripts.end(); ++it) scripts.append(&it.value());
+
+    const auto processScript = [this](ScriptData* sd) {
+        QHash<QString, QHash<const ExpressionNode*, QSharedPointer<ExpressionNode>>> bound;
+        QList<QSharedPointer<ExpressionNode>> originals; // keep identity keys alive while rebinding
+        for (LogicalLine& line : sd->lines) {
             auto& cache = bound[line.ownerFunction.toUpper()];
             const auto bind = [&](QSharedPointer<ExpressionNode>& ast) {
                 if (!ast) return;
@@ -1220,6 +1240,11 @@ void EraParseTable::applyVariableTypes() {
                 for (auto& part : line.printTemplate->parts) bind(part.expression);
             }
         }
+    };
+    if (canParallelize(scripts.size())) {
+        QtConcurrent::blockingMap(scripts, processScript);
+    } else {
+        for (ScriptData* sd : scripts) processScript(sd);
     }
 }
 
@@ -1305,21 +1330,36 @@ void EraParseTable::finalizeParse() {
         const QVariant v = m_evaluator->evaluate(expr, m_variableStorage, m_gameBaseData);
         return v.isValid() ? v.toLongLong() : 0;
     });
+    QElapsedTimer sub;   // 语义阶段各步耗时：eraTW 上 finalizeParse ~10s，需定位热点
+    sub.start();
+    qint64 tDim = 0, tDefaults = 0, tFnTypes = 0, tStrAssign = 0, tVarTypes = 0,
+           tRebind = 0, tValidate = 0;
     m_variables.resolveDimensions();
+    tDim = sub.restart();
 
     applyGlobalVariableDefaults();   // #DIM X = 1 等初值（全局）
+    tDefaults = sub.restart();
     // 用户自定义函数的强类型化（形参类型回填 + 返回类型确定）
     resolveUserFunctionTypes();
+    tFnTypes = sub.restart();
     // 字符串赋值的右值改按 StrForm 解析（对齐 C# AnalyseFormattedString）
     applyStringAssignments();
+    tStrAssign = sub.restart();
     applyVariableTypes();
+    tVarTypes = sub.restart();
     // 函数调用重绑：装载顺序无关（并行分块时，某块的表达式可能先于
     // 它调用的 #FUNCTION 被解析，此时只能当「未定义」；到此处全部脚本已 merge）
     resolveFunctionNodes();
+    tRebind = sub.restart();
     // 参数/类型校验必须在「变量类型已回填」之后进行：
     // 否则 LFONTS 之类用户 #DIMS 变量在解析期还是默认的 Int，
     // 会误报「需要字符串表达式，实得 Int」。
     validateArguments();
+    tValidate = sub.restart();
+    qDebug().noquote() << "[parse] finalizeParse 分步(ms): resolveDimensions" << tDim
+                       << " defaults" << tDefaults << " fnTypes" << tFnTypes
+                       << " strAssign" << tStrAssign << " varTypes" << tVarTypes
+                       << " resolveFunctionNodes" << tRebind << " validateArguments" << tValidate;
     m_scopedAstCache.clear();
     m_finalized = true;
     qDebug() << "[parse] finalizeParse 完成：脚本" << m_scripts.size()
@@ -1571,9 +1611,15 @@ void EraParseTable::resolveFunctionNodes() {
     for (auto& ast : m_astCache) {
         if (ast) walkExpression(*ast, resolveNode);
     }
-    // 并行装载时 worker 的 AST 不在主缓存里，需按行再走一遍
-    for (auto sit = m_scripts.begin(); sit != m_scripts.end(); ++sit) {
-        for (LogicalLine& line : sit.value().lines) {
+    // 并行装载时 worker 的 AST 不在主缓存里，需按行再走一遍。
+    // **按脚本并行**：每个脚本的行走的是自己的 AST，互不相干；resolveNode 只读
+    // m_functions / 静态表，写入的是本脚本节点的字段 —— 无共享写。
+    QList<ScriptData*> scripts;
+    scripts.reserve(m_scripts.size());
+    for (auto it = m_scripts.begin(); it != m_scripts.end(); ++it) scripts.append(&it.value());
+
+    const auto processScript = [&resolveNode](ScriptData* sd) {
+        for (LogicalLine& line : sd->lines) {
             for (const Operand& op : line.arguments) {
                 if (op.ast) walkExpression(*op.ast, resolveNode);
             }
@@ -1585,38 +1631,56 @@ void EraParseTable::resolveFunctionNodes() {
             }
             if (line.condition) walkExpression(*line.condition, resolveNode);
         }
+    };
+    if (canParallelize(scripts.size())) {
+        QtConcurrent::blockingMap(scripts, processScript);
+    } else {
+        for (ScriptData* sd : scripts) processScript(sd);
     }
 }
 
 // 收集一个 AST 里的函数调用告警（内置函数参数不符 / 未定义的函数）。
-// position 为空时只报函数级消息；seen 用于去重（同一表达式被多行共享）。
+// position 为空时只报函数级消息；out.seen 用于本脚本内去重（同一表达式被多行共享）。
+// 纯函数：只读 AST，结果写入 out —— 可在线程池上按脚本并行调用。
 void EraParseTable::collectFunctionWarnings(const QSharedPointer<ExpressionNode>& ast,
-                                            const QString& position, QSet<QString>& seen) {
+                                            const QString& position, WarningCollector& out) {
     if (!ast) return;
-    walkExpression(*ast, [this, &seen, &position](ExpressionNode& node) {
+    walkExpression(*ast, [&out, &position](ExpressionNode& node) {
         if (node.kind() != NodeKind::Function) return;
         const auto& fn = static_cast<const FunctionNode&>(node);
         const QString& err = fn.arityError();
         if (err.isEmpty()) return;
         const QString key = fn.name().toUpper() + QLatin1Char('\x1f') + err;
-        if (seen.contains(key)) return;
-        seen.insert(key);
-        m_parseWarnings.append(QStringLiteral("%1: %2 [%3]")
-                                   .arg(position, err, fn.toString()));
+        if (out.seen.contains(key)) return;
+        out.seen.insert(key);
+        out.warnings.append(QStringLiteral("%1: %2 [%3]").arg(position, err, fn.toString()));
+        out.keys.append(key);
     });
 }
 
 void EraParseTable::validateArguments() {
-    QSet<QString> seenFunctions;   // 同一函数表达式被多行共享时只报一次
-    for (auto sit = m_scripts.begin(); sit != m_scripts.end(); ++sit) {
-        for (LogicalLine& line : sit.value().lines) {
+    // **按脚本并行 + 有序合并**：
+    //   · 每个脚本独立产出一份 (warnings, keys) —— 脚本内顺序与串行版逐字一致；
+    //   · 合并阶段按 m_scripts 的遍历顺序拼接，并用全局 seen 去重。
+    //   QHash 的遍历顺序与 keys() 一致，故并行版的「脚本顺序」= 串行版顺序，
+    //   于是告警文本、顺序、去重结果与串行实现**完全相同**（可在同一份数据上
+    //   逐字节比对）。eraTW 上这一步 ~2.8–3.6s，是 finalizeParse 的第二热点。
+    QList<ScriptData*> scripts;
+    scripts.reserve(m_scripts.size());
+    for (auto it = m_scripts.begin(); it != m_scripts.end(); ++it) scripts.append(&it.value());
+
+    const auto processScript = [](ScriptData* sd) -> WarningCollector {
+        WarningCollector out;
+        for (LogicalLine& line : sd->lines) {
             if (line.kind != LineKind::Instruction) continue;
             ArgumentParser::build(line);   // 幂等：重算 kind/params/exprs + 重新校验
             if (line.argument.hasError()) {
-                m_parseWarnings.append(QStringLiteral("%1: %2 (%3)")
-                                           .arg(line.position.toString(),
-                                                line.argument.typeError,
-                                                line.raw.trimmed()));
+                // 结构告警：不参与去重（与串行版一致，key 留空）
+                out.warnings.append(QStringLiteral("%1: %2 (%3)")
+                                        .arg(line.position.toString(),
+                                             line.argument.typeError,
+                                             line.raw.trimmed()));
+                out.keys.append(QString());
             }
             const QString pos = line.position.toString();
 
@@ -1625,16 +1689,39 @@ void EraParseTable::validateArguments() {
             // 强类型校验只发生在「式中调用」NAME(args) 处（见 resolveFunctionNodes）。
 
             // 函数调用（内部命令/内置函数）参数校验告警
-            collectFunctionWarnings(line.condition, pos, seenFunctions);
+            collectFunctionWarnings(line.condition, pos, out);
             for (const Operand& op : line.arguments) {
-                collectFunctionWarnings(op.ast, pos, seenFunctions);
+                collectFunctionWarnings(op.ast, pos, out);
             }
             for (const auto& e : line.argument.exprs) {
-                collectFunctionWarnings(e, pos, seenFunctions);
+                collectFunctionWarnings(e, pos, out);
             }
             for (const Operand& c : line.argument.cases) {
-                collectFunctionWarnings(c.ast, pos, seenFunctions);
+                collectFunctionWarnings(c.ast, pos, out);
             }
+        }
+        return out;
+    };
+
+    QList<WarningCollector> perScript;
+    if (canParallelize(scripts.size())) {
+        perScript = QtConcurrent::blockingMapped(scripts, processScript);
+    } else {
+        perScript.reserve(scripts.size());
+        for (ScriptData* sd : scripts) perScript.append(processScript(sd));
+    }
+
+    // 有序合并 + 跨脚本去重：只有第一次出现的 key 会被保留，等价于串行版
+    // 「脚本顺序 × 脚本内顺序」下的首次出现。
+    QSet<QString> seen;
+    for (const WarningCollector& c : perScript) {
+        for (int i = 0; i < c.warnings.size(); ++i) {
+            const QString& key = c.keys.at(i);
+            if (!key.isEmpty()) {
+                if (seen.contains(key)) continue;
+                seen.insert(key);
+            }
+            m_parseWarnings.append(c.warnings.at(i));
         }
     }
 }

@@ -22,6 +22,7 @@
 #include <QTimer>
 #include <memory>
 #include <QVariantList>
+#include <QFuture>
 #include <QQmlEngine>
 #include <QQmlContext>
 #include "csv_loader.h"
@@ -299,8 +300,9 @@ private:
     // 异步装载：连接句柄（避免重复连接）
     QMetaObject::Connection m_loadProgressConn;
     QMetaObject::Connection m_loadCompletedConn;
+    QFuture<void> m_semanticFuture;   // 后台语义阶段（finalizeParse）的 future
+    bool m_semanticRunning = false;   // 后台语义阶段（finalizeParse）进行中
     bool m_hasError = false;   // 最近一次执行出错（状态灯）
-
     // ---- 内部：目录解析与分批装载 ----
     void resolveGameDirs();          // 解析 CSV/ERB 目录（绝对路径 + 实际大小写）
     void loadConfigFiles();          // _default.config / emuera.config / _fixed.config

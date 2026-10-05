@@ -68,6 +68,7 @@ public:
     [[nodiscard]] const MacroTable& macroTable() const { return m_macroTable; }
 
     void setDebugMode(bool on) { m_debugMode = on; }
+    [[nodiscard]] bool debugMode() const { return m_debugMode; }
 
     // 处理整个文件内容。warnings 追加「fileName:行: 文本」形式的告警。
     [[nodiscard]] QList<ErbSourceLine> process(const QString& content,

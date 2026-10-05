@@ -27,9 +27,18 @@
 #include <iostream>
 #include <QFile>
 #include <QDir>
+#include <QElapsedTimer>
 #include <QObject>
+#include <QtConcurrent/QtConcurrent>
 
-EraEngine::~EraEngine() = default;
+EraEngine::~EraEngine() {
+		// 后台语义阶段（finalizeParse）若仍在跑必须等它结束：它直接改写
+		// m_parseTable / m_scripts，EraEngine 析构后再触碰就是释放后使用
+		// （退出应用时恰好赶上装载的最后一秒）。
+		if (m_semanticFuture.isRunning()) {
+				m_semanticFuture.waitForFinished();
+		}
+}
 
 EraEngine::EraEngine(QObject *parent)
 		: QObject(parent),
@@ -551,6 +560,11 @@ void EraEngine::loadAsync(const QString& directory)
 		// requests still point at the previous game (or at an empty root).
 		ResourceImageProvider::setRoot(dir);
 		m_audio.setSoundDirectory(dir);   // 音频资源检索目录（PLAYBGM/PLAYSOUND）
+		// 与 setGameDirectory() 保持同一套落盘目录：异步装载是 QML 的主路径，
+		// 这里若不设，SAVEGLOBAL / SAVETEXT / SAVECHARA / GSAVE 会落到空目录
+		// （或上一个游戏），存档静默丢失。
+		m_executionEngine.setGameDataDir(dir);
+		m_expressionEvaluator.setSaveDirectory(dir + QStringLiteral("/sav"));
 		reloadAsync();
 }
 
@@ -941,13 +955,27 @@ void EraEngine::reloadAsync()
 				emit scriptsLoaded(false);
 				return;
 		}
+		// 上一次装载的后台语义阶段还没结束：此时它会持续改写 m_parseTable，
+		// 再起一次装载必然互相踩踏。直接忽略本次重载（用户极少在这 10s 内
+		// 再次打开目录），等 scriptsLoaded 之后即可正常重载。
+		if (m_semanticRunning) {
+				qWarning() << "[EraEngine] 上一次装载的语义阶段尚未结束，忽略本次重载";
+				return;
+		}
 		m_processState.clearQuitRequest();   // 同 reload()：清掉上一局的 QUIT 请求
+		// 与 reload() 对齐：异步路径此前漏了 clear()，同名脚本/告警/事件会跨次
+		// 装载累积（第二次装载脚本数、告警数翻倍）。
+		m_parseTable.clear();
+		QElapsedTimer phase;   // 主线程各阶段耗时：定位「装载时界面卡一下」的来源
+		phase.start();
 		resolveGameDirs();
 		loadConfigFiles();
 		resolveTextConfig();
 		loadGameBaseData();
 		loadConstantData();
 		m_scriptProcessor.clear();
+		qInfo().noquote() << "[EraEngine] 异步装载·同步准备阶段(CSV/常量/探测)"
+		                  << phase.elapsed() << "ms";
 
 		ErbLoader& loader = m_executionEngine.getErbLoader();
 		if (m_loadProgressConn) disconnect(m_loadProgressConn);
@@ -955,11 +983,34 @@ void EraEngine::reloadAsync()
 		m_loadProgressConn = connect(&loader, &ErbLoader::loadProgress,
 		                             this, &EraEngine::scriptsLoadProgress);
 		m_loadCompletedConn = connect(&loader, &ErbLoader::loadCompleted, this, [this](bool ok) {
-				// 语义阶段（类型回填 + 参数校验 + 入口点收集）必须在全量装载之后
-				m_parseTable.finalizeParse();
-				collectEntryPoints();
-				loadFinishedHook();
-				emit scriptsLoaded(ok);
+				if (!ok) {
+						loadFinishedHook();
+						emit scriptsLoaded(false);
+						return;
+				}
+				// 语义阶段（类型回填 + 参数校验 + 入口点收集）是 eraTW 上**最大的一次
+				// 主线程开销**：实测 finalizeParse ≈ 10s（validateArguments 3.5s +
+				// applyVariableTypes 5.0s + resolveFunctionNodes 1.4s，2.2M 行 /
+				// 57846 个用户函数）。放在主线程 = 界面假死十秒。
+				// 装载期间 GUI 不读解析表（runSystem 要等 scriptsLoaded），因此把它
+				// 放到后台线程执行，完成后回主线程发 scriptsLoaded。
+				m_semanticRunning = true;
+				auto* watcher = new QFutureWatcher<void>(this);
+				connect(watcher, &QFutureWatcher<void>::finished, this, [this, watcher]() {
+						watcher->deleteLater();
+						m_semanticRunning = false;
+						loadFinishedHook();
+						emit scriptsLoaded(true);
+				});
+				m_semanticFuture = QtConcurrent::run([this]() {
+						QElapsedTimer fin;
+						fin.start();
+						m_parseTable.finalizeParse();
+						collectEntryPoints();
+						qInfo().noquote() << "[EraEngine] 后台语义阶段(finalizeParse+入口点)"
+						                  << fin.elapsed() << "ms";
+				});
+				watcher->setFuture(m_semanticFuture);
 		});
 
 		emit scriptsLoadStarted();

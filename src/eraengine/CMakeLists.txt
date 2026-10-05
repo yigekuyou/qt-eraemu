@@ -35,6 +35,8 @@ Content/csv_loader_chara.cpp
 Content/csv_loader.h
 Content/erb_loader.cpp
 Content/erb_loader.h
+Content/ast_disk_cache.cpp
+Content/ast_disk_cache.h
 Content/encoding/text_encoding.cpp
 Content/encoding/encoding_probe.cpp
 Content/encoding/encoding_probe.h

@@ -26,12 +26,15 @@
 #include <QFile>
 #include <QTextStream>
 #include <QPair>
+#include <QElapsedTimer>
 #include <QFutureWatcher>
+#include <memory>
 #include "text_encoding.h"
 #include "ast/logical_line.h"
 #include "ast/ast_builder.h"
 #include "ast/operand_type.h"
 #include "erb_preprocessor.h"
+#include "ast_disk_cache.h"
 
 class EraParseTable;
 
@@ -44,6 +47,9 @@ struct ParsedErbFile {
     QList<LogicalLine> lines;
     QStringList warnings;                                       // 预处理层面告警
     QHash<QString, QSharedPointer<ExpressionNode>> astCache;   // 该文件本地表达式缓存
+    // AST 磁盘缓存启用时：本文件解析结果的序列化 blob（在 worker 线程产出）。
+    // 装载成功后由 ErbLoader 落盘，供下次装载直接读回。
+    QByteArray cachedBlob;
 };
 
 // ERB 脚本装载器
@@ -74,7 +80,20 @@ public:
     void setParallelLoad(bool on) { m_parallel = on; }
     [[nodiscard]] bool parallelLoad() const { return m_parallel; }
     void setMaxThreads(int n) { m_maxThreads = n; }
-    void setChunkSize(int n) { m_chunkSize = n > 0 ? n : 64; }
+    void setChunkSize(int n) { m_chunkSize = n > 0 ? n : kDefaultChunkSize; }
+
+    // 逐文件 parseStarted/parseFinished 信号开关（默认关）。
+    // perf：eraTW 有 2200+ 文件 → 每次装载 ~4500 次信号发射 + 接收端 qDebug，
+    // 全部发生在**主线程合并**阶段，是合并耗时的一部分；这两个信号当前只被
+    // 诊断日志消费（进度改用 loadProgress），故默认关闭，需要时再打开。
+    void setEmitParseSignals(bool on) { m_emitParseSignals = on; }
+    [[nodiscard]] bool emitParseSignals() const { return m_emitParseSignals; }
+
+    // AST 磁盘缓存（对标 QML Disk Cache）：二次装载跳过「读/解码/预处理/词法/语法」。
+    // 默认取环境变量 EMUERA_AST_DISK_CACHE（见 ErbAstDiskCache::enabled）；
+    // 可用 setAstDiskCache 显式开关。key 随源文件/CSV/config 变化自动失效。
+    void setAstDiskCache(bool on) { m_astDiskCache = on; }
+    [[nodiscard]] bool astDiskCache() const { return m_astDiskCache; }
 
     // 文本读取编码（Auto = 逐文件嗅探；可强制 UTF-8 / Shift-JIS）
     void setReadEncoding(TextEncoding enc) { m_readEncoding = enc; }
@@ -133,11 +152,24 @@ private:
         QSet<QString> macros;
         ErbPreprocessor::MacroTable macroTable;
         FunctionTypes functionTypes;
+        // 预扫描时**一次读取并解码**的文件内容（path -> 文本）。
+        // 解析阶段直接复用，避免「预扫描读一遍、解析再读一遍」的重复 解码 +
+        // 每文件编码嗅探（eraTW 约 93MB × 2）。解析按块消费后即从 map 移除，
+        // 峰值内存 ≈ 全部源文本（解析开始后随块释放）。
+        QHash<QString, QString> decoded;
+        QString cacheKey;       // AST 磁盘缓存 key（空 = 不启用/无文件）
+        // AST 磁盘缓存命中：**整库**读回并在后台线程完成校验后再交给主线程合并
+        // （任何一文件反序列化失败即视为未命中，回落到正常解析 —— 绝不半途而废）。
+        QList<ParsedErbFile> cachedFiles;
+        bool cacheHit = false;
         bool ok = false;
     };
     LoadPrep prepareLoad(const QString& dirPath, int depth) const;
     // 主线程合并一批解析结果
     bool mergeChunk(QList<ParsedErbFile>&& parsed);
+    // 主线程合并「一小批」（见 kMergeBatch）：把一整块解析结果拆成多次
+    // 事件循环往返，单次阻塞从 ~80ms 降到 ~10ms（UI 抖动更平）。
+    void mergeStep();
 
     // 异步装载状态机
     struct AsyncState {
@@ -145,12 +177,24 @@ private:
         bool cancelled = false;
         bool ok = true;
         int total = 0;
-        int processed = 0;
+        int parsed = 0;         // 已完成后台解析的文件数（切片游标）
+        int merged = 0;         // 已并入解析表的文件数（进度用）
         int depth = 0;
         QString dirPath;
         QStringList files;      // 已排序（头文件优先），供分块切片
+        QHash<QString, QString> decoded;   // path -> 预扫描时已解码的源文本（解析后即释放）
+        // 待并入的结果队列（一整块解析完先入队，再由 mergeStep 分批消费）
+        QList<ParsedErbFile> pending;
+        int pendingPos = 0;
+        // AST 磁盘缓存：未命中时用 Writer 边解析边落盘（Worker 产出 blob）。
+        QString cacheKey;
+        std::unique_ptr<ErbAstDiskCache::Writer> cacheWriter;
+        bool fromCache = false;
+        QElapsedTimer clock;    // 异步装载总耗时（分析用）
+        qint64 mergeMs = 0;     // 主线程合并累计（分析用）
     };
     AsyncState m_async;
+    void finishAsync(bool ok);   // 统一收尾：记录耗时 -> 复位 -> 发 loadCompleted
     QFutureWatcher<LoadPrep> m_prepWatcher;
     QFutureWatcher<ParsedErbFile> m_chunkWatcher;   // QtConcurrent::mapped 的结果
     FunctionTypes m_asyncTypes;
@@ -172,8 +216,10 @@ private:
     // 预扫描：收集函数返回类型（#FUNCTION → Int，#FUNCTIONS → Str）
     FunctionTypes scanFunctionTypes(const QString& content) const;
 
-    // 解析单个文件（线程安全：不接触任何共享可变状态）
-    ParsedErbFile parseOneFile(const QString& filePath, const FunctionTypes& types) const;
+    // 解析单个文件（线程安全：不接触任何共享可变状态）。
+    // cachedContent != nullptr 时直接使用（预扫描已解码），免去重复读取+解码。
+    ParsedErbFile parseOneFile(const QString& filePath, const FunctionTypes& types,
+                               const QString* cachedContent = nullptr) const;
 
     // 主线程合并（确定性顺序）
     bool mergeParsedFile(ParsedErbFile&& pf);
@@ -209,7 +255,16 @@ private:
     // 可退回串行（dump_lines --parallel 可复核一致性）。
     bool m_parallel = true;
     int  m_maxThreads = 0;
-    int  m_chunkSize = 64;
+    // 后台解析块大小：解析在后台线程池，块大 → 调度轮次少、吞吐高
+    // （eraTW 实测 64/块比 16/块总耗时少 ~2s）。
+    static constexpr int kDefaultChunkSize = 64;
+    // 主线程合并批大小：一整块（64）解析结果由 mergeStep 分多次并入，
+    // 每批后回事件循环 —— 单次主线程阻塞 ≈ kMergeBatch × ~1.3ms/文件
+    // （eraTW 8 → ~10ms），远小于整块 80–240ms 的抖动。
+    static constexpr int kMergeBatch = 8;
+    int  m_chunkSize = kDefaultChunkSize;
+    bool m_emitParseSignals = false;   // 逐文件信号默认关闭（见 setEmitParseSignals）
+    bool m_astDiskCache = ErbAstDiskCache::enabled();   // AST 磁盘缓存（默认随环境变量）
 
     EraParseTable* m_parseTable;
 };

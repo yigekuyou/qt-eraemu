@@ -25,6 +25,7 @@
 #include "text_encoding.h"
 
 #include <QDir>
+#include <algorithm>
 #include <QFileInfo>
 #include <QtConcurrent/QtConcurrent>
 #include <QThreadPool>
@@ -126,16 +127,34 @@ QStringList ErbLoader::collectFiles(const QString& dirPath, int depth) const {
     QDir dir(dirPath);
     if (!dir.exists()) return out;
 
-    const QFileInfoList files = dir.entryInfoList(
-        QStringList{"*.ERB", "*.erb", "*.ERH", "*.erh"},
-        QDir::Files | QDir::Hidden | QDir::NoDotAndDotDot, QDir::Name);
-    for (const QFileInfo& fi : files) {
-        out.append(fi.absoluteFilePath());
-    }
+    // 顺序与排序都对齐 C# Config.getFiles：
+    //   · **先递归子目录，再本目录的文件**（C# 里 dirList 循环在 filepaths 之前）；
+    //   · 排序 = Array.Sort(..., OrdinalIgnoreCase)，即「大小写不敏感的码点序」，
+    //     不用 QDir::Name 的本地化排序（会随 locale 变、与 Emuera 不一致）。
+    // 这个顺序决定同名 @label / @EVENT* 谁生效：C# 的函数表是 first-wins
+    // （LabelDictionary：labelAtDic[id][0] 生效），事件函数组也按注册序执行。
+    // 实测 eraTW 有 148 组同名函数的两份定义分别落在「目录」与其「子目录」
+    // （如 TWけね/ 与 TWけね/未動工/ 各有一份 M_KOJO_MESSAGE_COM_K67_*），
+    // 旧顺序（本目录文件先）与 Emuera 正好相反 -> winner 也不同。
+    const auto ordinalIgnoreCaseLess = [](const QString& a, const QString& b) {
+        return QString::compare(a, b, Qt::CaseInsensitive) < 0;
+    };
 
-    const QStringList dirs = dir.entryList(QDir::Dirs | QDir::NoDotAndDotDot, QDir::Name);
+    QStringList dirs = dir.entryList(QDir::Dirs | QDir::NoDotAndDotDot, QDir::NoSort);
+    std::sort(dirs.begin(), dirs.end(), ordinalIgnoreCaseLess);
     for (const QString& d : dirs) {
         out.append(collectFiles(dirPath + "/" + d, depth + 1));
+    }
+
+    QFileInfoList files = dir.entryInfoList(
+        QStringList{"*.ERB", "*.erb", "*.ERH", "*.erh"},
+        QDir::Files | QDir::Hidden | QDir::NoDotAndDotDot, QDir::NoSort);
+    std::sort(files.begin(), files.end(),
+              [&ordinalIgnoreCaseLess](const QFileInfo& x, const QFileInfo& y) {
+                  return ordinalIgnoreCaseLess(x.fileName(), y.fileName());
+              });
+    for (const QFileInfo& fi : files) {
+        out.append(fi.absoluteFilePath());
     }
     return out;
 }

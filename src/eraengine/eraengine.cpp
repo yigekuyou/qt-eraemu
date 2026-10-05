@@ -604,6 +604,7 @@ void EraEngine::reload()
 {
 		setHasError(false);   // 重新装载 -> 清掉上一次的错误灯
 		// 新游戏从空控制台开始（清屏从 closeGame 挪到这里：QUIT 后保留末屏）
+		m_console.notifyInputDone();   // 收起上一局挂起的输入请求（旧 kind 立即失效）
 		m_console.clearAll();
 		// 上一局脚本可能 QUIT 过：不清掉会残留 Halt/quitRequested 把新局锁死
 		m_processState.clearQuitRequest();
@@ -967,7 +968,18 @@ void EraEngine::reloadAsync()
 				qWarning() << "[EraEngine] 上一次装载的语义阶段尚未结束，忽略本次重载";
 				return;
 		}
-		m_processState.clearQuitRequest();   // 同 reload()：清掉上一局的 QUIT 请求
+		// ---- 与同步 reload() 完全对齐的「重新开始」复位 ----
+		// 异步装载是 GUI（openDirectory / 打开目录…）的**唯一**路径，此前只清了
+		// QUIT 请求与解析表，漏了下面三项，导致「重写装载」后：
+		//   ① 控制台不清屏 —— 上一局画面残留，新画面往下堆（行数翻倍）；
+		//   ② execState 停在 Halt —— 上一局 QUIT/closeGame 后 run() 第一圈
+		//      isRunning()==false 直接退出，标题永不出现，控制台也不请求输入，
+		//      于是输入被拒（ConsoleBackend::submitInput 报 kind "" / 等待中 false）。
+		setHasError(false);                  // 清掉上一次的错误灯
+		m_console.notifyInputDone();         // 收起上一局挂起的输入请求（旧 kind 立即失效）
+		m_console.clearAll();                // 新游戏从空控制台开始
+		m_processState.clearQuitRequest();   // 清掉上一局的 QUIT 请求
+		m_processState.setExecState(ExecState::Continue);   // Halt -> Continue（否则标题不出来）
 		// 与 reload() 对齐：异步路径此前漏了 clear()，同名脚本/告警/事件会跨次
 		// 装载累积（第二次装载脚本数、告警数翻倍）。
 		m_parseTable.clear();

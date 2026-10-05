@@ -182,7 +182,7 @@ inline constexpr BuiltinFunctionSpec kBuiltinFunctions[] = {
     {"FINDCHARA"           , OperandType::Int, 2, 4, "vaii", false , BuiltinOp::FindChara},
     {"FINDLASTCHARA"       , OperandType::Int, 2, 4, "vaii", false , BuiltinOp::FindCharaLast},
     {"EXISTCSV"            , OperandType::Int, 1, 2, "ii", true , BuiltinOp::ExistCsv},
-    {"VARSIZE"             , OperandType::Int, 1, 2, "si", true , BuiltinOp::VarSize},
+    {"VARSIZE"             , OperandType::Int, 1, 2, "ai", true , BuiltinOp::VarSize},
     {"CHKFONT"             , OperandType::Int, 1, 1, "s", true , BuiltinOp::ChkFont},
     {"CHKDATA"             , OperandType::Int, 1, 1, "i", false, BuiltinOp::ChkData},
     {"ISSKIP"              , OperandType::Int, 0, 0, """", false, BuiltinOp::Isskip},

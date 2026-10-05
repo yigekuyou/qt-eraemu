@@ -630,6 +630,54 @@ int main(int argc, char* argv[]) {
         check(loudCalled && !quietCalled, "非赋值行（IF 条件）仍走 loud resolver");
     }
 
+    // 10) eraMegaten 解析告警清零（第二批）——共同验收面 = parseWarningCount()==0
+    qDebug() << "\n10) 解析告警清零（@\"%…%\" 跨度 / DEBUGPRINT 族 / VARSIZE 变量名 / 前缀 ++）";
+    {
+        ProcessState ps;
+        EraParseTable pt(&ps);
+        VariableStorage vs;
+        ExecutionEngine ex(&vs, nullptr);
+        ExpressionEvaluator ev;
+        ex.setParseTable(&pt); ex.setExpressionEvaluator(&ev);
+        pt.setVariableStorage(&vs); pt.setExpressionEvaluator(&ev);
+        ScriptRunner run(&pt, &ex, &ps, &vs);
+        run.setExpressionEvaluator(&ev);
+        run.setStepLimit(10000);
+
+        // (a) 只验解析：SIF 条件里 @"…%"expr, width, align"…"（内层引号 + 逗号参数）
+        const QStringList scriptA = {
+            QStringLiteral("@COND_ONLY"),
+            QStringLiteral("SIF ARGS == @\"%\"\uFF37\uFF21\uFF29\uFF34\", ACTOR_LENS, LEFT%\""),
+            QStringLiteral("\tRETURN 0"),
+            QStringLiteral("RETURN")
+        };
+        // (b) DEBUGPRINT 族实参是文本；(c) VARSIZE 取标识符名；(d) 前缀自增
+        const QStringList program = {
+            QStringLiteral("@MAIN"),
+            QStringLiteral("#DIM SHARED ARR_V, 4"),
+            QStringLiteral("#DIM SHARED RESULT2"),
+            QStringLiteral("DEBUGPRINTL 米吉多拉翁モードon(咬緊牙關フラグ)"),
+            QStringLiteral("DEBUGPRINTFORML {1 + 2}"),
+            QStringLiteral("ARR_V:0 = 7"),            // 元素值 7：若被当成值求值就会拿到 7
+            QStringLiteral("RESULT = VARSIZE(ARR_V)"),   // 标识符形态（eraMegaten 用法）
+            QStringLiteral("RESULT2 = VARSIZE(\"ARR_V\")"), // 字符串形态
+            QStringLiteral("++ARR_V"),
+            QStringLiteral("RETURN")
+        };
+        check(pt.loadScript("warnA", buildLines(pt, scriptA)), "load SIF '@\"%…%\"' script");
+        check(pt.loadScript("warnB", buildLines(pt, program)), "load DEBUGPRINT/VARSIZE/prefix script");
+        pt.finalizeParse();
+        check(pt.parseWarningCount() == 0,
+              QStringLiteral("解析告警为 0（实得 %1）").arg(pt.parseWarningCount()));
+        for (const QString& w : pt.parseWarnings()) qDebug().noquote() << "      warn:" << w;
+        pt.setEntryPoint("MAIN");
+        check(run.runToCompletion() == ExecState::Halt, "warning-regression script completes");
+        const qint64 vsIdent = vs.getSystemVariable(QStringLiteral("RESULT"), 0);
+        const qint64 vsStr   = vs.getSystemVariable(QStringLiteral("RESULT2"), 0);
+        check(vsIdent == vsStr && vsIdent != 7,
+              "VARSIZE(ARR_V) == VARSIZE(\"ARR_V\") != 元素值 7（标识符按变量名解析）");
+    }
+
     qDebug() << "\n======================================";
     if (g_failures == 0) {
         qDebug() << "[SUCCESS] statement tests passed";

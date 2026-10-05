@@ -33,6 +33,13 @@
 #include <QSet>
 #include <QFutureWatcher>
 
+// ERB 子目录递归扫描深度上限：**只是防御**（避免符号链接成环把扫描卡死）。
+// Emuera 对子目录没有深度限制，而 eraMegaten 的 ERB 树深达 7 层
+// （ERB/RPG/スキル関係/CSTR専用スキル/外部作品/アークナイツ/スルト/…）——
+// 旧的 `depth > 5` 会静默丢掉 271 个文件（8125/8396），那些文件里的 @函数
+// 于是全部「未定义」（AUTO_PU_SKILL_核融巨影 / AUTO_PU_SKILL_黃昏（ＡＮ） 等）。
+static constexpr int kMaxScanDepth = 32;
+
 ErbLoader::ErbLoader(QObject* parent) : QObject(parent), m_parseTable(nullptr) {}
 
 QString ErbLoader::readFileContent(const QString& filePath) const {
@@ -96,7 +103,7 @@ void ErbLoader::tryAutoLoadRename(const QString& dirPath) {    if (!m_preprocess
 // ---------------------------------------------------------------------------
 QStringList ErbLoader::collectFiles(const QString& dirPath, int depth) const {
     QStringList out;
-    if (depth > 5) return out;
+    if (depth > kMaxScanDepth) return out;
 
     QDir dir(dirPath);
     if (!dir.exists()) return out;
@@ -293,7 +300,7 @@ bool ErbLoader::loadFile(const QString& filePath) {
 }
 
 bool ErbLoader::loadDirectory(const QString& dirPath, int depth) {
-    if (depth > 5) return true;
+    if (depth > kMaxScanDepth) return true;
     QDir dir(dirPath);
     if (!dir.exists()) return false;
 

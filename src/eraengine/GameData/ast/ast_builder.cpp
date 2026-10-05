@@ -164,6 +164,15 @@ AstBuilder::PrintArgInfo AstBuilder::printInfo(const QString& upperName) {
         rest = upperName.mid(11);
     } else if (upperName.startsWith(QLatin1String("PRINT"))) {
         rest = upperName.mid(5);
+    } else if (upperName.startsWith(QLatin1String("DEBUGPRINTSINGLE"))) {
+        info.mode = PrintArgMode::Literal;      // DEBUGPRINT_SINGLE + EXTENDED
+        rest = upperName.mid(16);
+    } else if (upperName.startsWith(QLatin1String("DEBUGPRINT"))) {
+        // DEBUGPRINT 族与 PRINT 族同一套后缀规则（DEBUGPRINT[V|S|FORM|FORMS][L|W|C|K|D]）。
+        // 不识别的话实参会被当**表达式**归约：`DEBUGPRINTL 米吉多拉翁モードon(フラグ)`
+        // 这种纯调试文本会被判成「未定义的函数」，且 DEBUGPRINTFORML {…} 的
+        // 格式化串语义也拿不到。
+        rest = upperName.mid(10);
     } else {
         return info;                            // NotPrint
     }
@@ -705,6 +714,27 @@ LogicalLine AstBuilder::build(const QString& rawLine,
             // 只拒绝**顶层**赋值运算符：`IF A == B++` 不是自增语句，而
             // `LOCAL:(CFLAG:… == 0)++` 里的 == 在括号内，仍是合法自增。
             // 复用 splitAssignment（它按括号/引号深度扫描），语义一致。
+            QString bl, bo, br;
+            if (splitAssignment(body, bl, bo, br)) continue;
+            const QChar head = body.at(0);
+            if (!(head.isLetter() || head == QLatin1Char('_') || head.unicode() > 127)) continue;
+            line.kind = LineKind::Instruction;
+            line.functionName = QString::fromLatin1(opText);
+            line.assignOperator = line.functionName;
+            line.arguments = { Operand(body) };
+            return finalized(std::move(line));
+        }
+    }
+
+    // 前缀自增/自减**语句**：`++TFLAG:X` / `--BAG:COUNT`
+    // （对齐 C# LogicalLineParser 的前缀 Increment/Decrement：与后缀同义，
+    //  都是「左值 = 左值 ∓ 1」，运行期 execution_engine 用同一个 "++"/"--" 分支。）
+    // eraMegaten 的 SKILL_KE_クロスマジック.ERB 就写 `++TFLAG:技能用1`。
+    if (!firstIsInstruction) {
+        for (const char* opText : {"++", "--"}) {
+            if (!trimmed.startsWith(QLatin1String(opText))) continue;
+            const QString body = trimmed.mid(2).trimmed();
+            if (body.isEmpty()) continue;
             QString bl, bo, br;
             if (splitAssignment(body, bl, bo, br)) continue;
             const QChar head = body.at(0);

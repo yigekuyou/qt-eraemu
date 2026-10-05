@@ -16,6 +16,7 @@
  * along with this program.  If not, see <https://www.gnu.org/licenses/>.
  */
 #include "expression_lexer.h"
+#include "strform_parser.h"   // findPercentEnd：@"…%"expr,width,align"…" 的跨度切分
 
 ExpressionToken::ExpressionToken(TokenType type, const QString& value, int line, int column)
     : m_type(type), m_value(value), m_line(line), m_column(column) {}
@@ -307,6 +308,20 @@ ExpressionToken ExpressionLexer::readStrFormAt() {
     while (m_position < m_input.length()) {
         const QChar c = m_input.at(m_position);
         if (c == QLatin1Char('"') && depth == 0) { end = m_position; break; }
+        // `%...%` 跨度：里面的 " 是**内容**，不是终结符。
+        // Emuera 的 `%` 插值支持 `%expr, width, align%`，expr 本身可以是字符串
+        // （`%"ＷＡＩＴ", ACTOR_LENS, LEFT%`），所以 `@"` 词法必须先按 % 切跨度、
+        // 再在跨度外找 `"` —— 与 C# AnalyseFormattedString 的顺序一致。
+        // 否则 `SIF ARGS == @"%"ＷＡＩＴ", ACTOR_LENS, LEFT%"` 会在第一个内层 "
+        // 就截断（内容只剩 "%"），整条 SIF 条件解析失败。
+        if (c == QLatin1Char('%') && depth == 0) {
+            const int pe = StrFormParser::findPercentEnd(m_input, m_position + 1);
+            if (pe > m_position) {
+                m_column += (pe + 1) - m_position;
+                m_position = pe + 1;
+                continue;
+            }
+        }
         if (c == QLatin1Char('(') || c == QLatin1Char('{') || c == QLatin1Char('[')) ++depth;
         else if (c == QLatin1Char(')') || c == QLatin1Char('}') || c == QLatin1Char(']')) { if (depth > 0) --depth; }
         else if (c == QLatin1Char('\\')) { ++m_position; ++m_column; }

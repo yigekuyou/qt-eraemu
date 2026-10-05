@@ -1781,8 +1781,18 @@ bool ExpressionEvaluator::evaluateBuiltin(const FunctionNode &node, VariableStor
         return true;
     }
     case BuiltinOp::VarSize: {
-        // VARSIZE("变量名"[, 维])
-        const QString name = S(0);
+        // VARSIZE("变量名"[, 维])：名字给成**字符串**；
+        // VARSIZE 变量名          ：名字给成**标识符**（eraMegaten DUNGEON_POINTER
+        //                           `VARSIZE 迷宮00`；C# 的 VariableTerm 形态）。
+        // 之前只认字符串 -> 标识符形态先报「第 1 个参数需要字符串表达式」，
+        // 即便放过也会去求值变量（拿到元素值）而不是它的名字。
+        QString name;
+        const QSharedPointer<ExpressionNode>& a0 = node.arguments().value(0);
+        if (a0 && a0->kind() == NodeKind::Variable) {
+            name = static_cast<const VariableNode&>(*a0).name();
+        } else {
+            name = S(0);
+        }
         QString upperScratch;
         const QString& upper = eraUpperKey(name, upperScratch);
         const int dim = node.arguments().size() >= 2 ? static_cast<int>(I(1)) : 0;

@@ -516,18 +516,22 @@ void ConsoleBackend::clearLines(int n) {
         m_sealed.clear();
         m_pendingOpen = false;
     }
+    const int oldCount = m_buffer.count();          // 删除前的绝对行数
     m_buffer.removeLastLogicalLines(n);
+    const int newCount = m_buffer.count();          // 删除后
     m_lastLineTemporary = false;   // 末尾的「一時行」已被删 -> 清标记
     // 被删掉的行：按行缓存与版本作废（只波动尾部，其余行的缓存仍然有效）。
     // 版本必须一起删 —— 重打印会复用这些绝对行号，旧版本号残留会让模型误判
     // 「内容没变」而保留旧区块（点按钮后画面不刷新、按钮世代过期失效的根因）。
-    for (auto it = m_lineCache.begin(); it != m_lineCache.end(); ) {
-        if (it.key() >= m_buffer.count()) it = m_lineCache.erase(it);
-        else ++it;
-    }
-    for (auto it = m_lineVersion.begin(); it != m_lineVersion.end(); ) {
-        if (it.key() >= m_buffer.count()) it = m_lineVersion.erase(it);
-        else ++it;
+    //
+    // 只删 [newCount, oldCount) 这一段：缓存里**不可能**存在 >= newCount 之外的
+    // 失效键（lineBlocks 只缓存 abs < count 的行）。此前是遍历整个
+    // m_lineCache/m_lineVersion（最多 MaxLog=5000 行）再逐个判键 —— 每次
+    // clearLines(1) 都是 O(历史长度)，商店/训练每重画一屏就清一次，
+    // 于是「点一下非常卡」。改成 O(被删行数)。
+    for (int i = newCount; i < oldCount; ++i) {
+        m_lineCache.remove(i);
+        m_lineVersion.remove(i);
     }
     clampScroll();
     markDirty();

@@ -29,10 +29,35 @@
 #include <QFile>
 #include <QTextStream>
 #include <QRegularExpression>
+#include <QCache>
+#include <QFileInfo>
 
 QString ResourceImageProvider::s_root;
 QHash<QString, ResourceImageProvider::Sprite> ResourceImageProvider::s_atlas;
 QString ResourceImageProvider::s_atlasRoot;
+
+// ---- 解码/裁切缓存 ---------------------------------------------------------
+// 以前 loadImageFile 是「每次调用都 QImage::load(path)」，于是**每一次**
+// GDRAWSPRITE / SPRITEWIDTH / QML <img> 都会把整张图集 PNG 从磁盘重新解码，
+// 再 copy 出子矩形。eraTW 的立绘/地图合成一屏要做几十~上百次，实测
+// 「外出」那段（FIELD.ERB 画地图）就花了 ~470ms，全部耗在重复解码上。
+//
+// Emuera 的语义本来就是常驻内存：AppContents.LoadContents 一次性把所有
+// resources 解码进 imageDictionary（每个 sprite 各自持有一个 Bitmap）。
+// 这里改成「用过才缓存 + 上限」，效果等价而峰值更小。
+namespace {
+constexpr int kDecodedCacheBytes = 256 * 1024 * 1024;   // 解码后的文件缓存上限
+constexpr int kSpriteCacheBytes  = 128 * 1024 * 1024;   // 裁切后的精灵缓存上限
+
+QCache<QString, QImage>& decodedCache() {
+    static QCache<QString, QImage> cache(kDecodedCacheBytes);
+    return cache;
+}
+QCache<QString, QImage>& spriteCache() {
+    static QCache<QString, QImage> cache(kSpriteCacheBytes);
+    return cache;
+}
+} // namespace
 
 ResourceImageProvider::ResourceImageProvider()
     : QQuickImageProvider(QQuickImageProvider::Image)
@@ -45,6 +70,8 @@ void ResourceImageProvider::setRoot(const QString& dir) {
     s_root = normalized;
     s_atlas.clear();
     s_atlasRoot.clear();
+    decodedCache().clear();
+    spriteCache().clear();
 }
 
 void ResourceImageProvider::ensureAtlasLoaded(const QString& root) {
@@ -213,7 +240,12 @@ bool parseImageSizeFromHeader(const QByteArray& d, int& width, int& height) {
 QImage ResourceImageProvider::loadImageFile(const QString& path) {
     QImage image;
     if (path.isEmpty()) return image;
-    if (image.load(path) && !image.isNull()) return image;
+    const QString key = QFileInfo(path).absoluteFilePath();
+    if (const QImage* hit = decodedCache().object(key)) return *hit;   // 命中：免解码
+    if (image.load(path) && !image.isNull()) {
+        decodedCache().insert(key, new QImage(image), image.sizeInBytes());
+        return image;
+    }
 
     // 解码失败 -> 按文件头补一个同尺寸的全透明图（见头文件里的 ダミー.webp 说明）。
     QFile file(path);
@@ -225,6 +257,7 @@ QImage ResourceImageProvider::loadImageFile(const QString& path) {
     qCDebug(eraTrace) << "[load] 图片解码失败，按文件头尺寸回退" << path << QSize(w, h);
     image = QImage(w, h, QImage::Format_ARGB32);
     image.fill(Qt::transparent);
+    decodedCache().insert(key, new QImage(image), image.sizeInBytes());
     return image;
 }
 
@@ -326,6 +359,9 @@ bool ResourceImageProvider::spriteOffset(const QString& id, int& x, int& y) {
 QImage ResourceImageProvider::loadResourceImage(const QString& id) {
     const QString normalizedId = normalizeId(id);
     ensureAtlasLoaded(s_root);
+    // 已裁切过的精灵直接返回（Emuera 的 imageDictionary 也是这个语义）：
+    // 省掉「重新解码整张图集 + copy 子矩形」。
+    if (const QImage* hit = spriteCache().object(normalizedId)) return *hit;
 
     QImage image;
     const auto atlasIt = s_atlas.constFind(normalizedId);
@@ -347,6 +383,8 @@ QImage ResourceImageProvider::loadResourceImage(const QString& id) {
         // 否则 QML 的 <img src='ダミー.webp'> 会退化成 AltText。
         if (!path.isEmpty()) image = loadImageFile(path);
     }
+    if (!image.isNull())
+        spriteCache().insert(normalizedId, new QImage(image), image.sizeInBytes());
     return image;
 }
 

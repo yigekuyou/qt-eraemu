@@ -203,6 +203,32 @@ int main(int argc, char* argv[]) {
         check(ok.size() == QSize(4, 4), "能解码的图照常返回原图（4x4）");
     }
 
+    qDebug() << "\n6) 解码 / 裁切缓存（第二次起不再读盘）";
+    {
+        // eraTW 的立绘 / 地图合成一屏要做几十~上百次 GDRAWSPRITE。以前
+        // loadImageFile 每次都 QImage::load(path)，等于**每次**都把整张图集 PNG
+        // 从磁盘重新解码再 copy 子矩形；「外出」那段 42×128=5376 格的
+        // DRAW_COLOREDMAP 重画是主要受害者。缓存后第二次起不再读盘 —— 用
+        // 「先加载、删掉源文件、再加载仍能取到」来判定（没有缓存必然拿到空图）。
+        const QString p = QDir(root).filePath(QStringLiteral("resources/face_01.png"));
+        const QImage first = ResourceImageProvider::loadImageFile(p);
+        check(!first.isNull(), "loadImageFile 首次加载成功");
+        check(QFile::remove(p), "缓存测试：删除源文件");
+        const QImage again = ResourceImageProvider::loadImageFile(p);
+        check(!again.isNull() && again.size() == first.size(),
+              "loadImageFile 第二次命中解码缓存（源文件已删仍可取出）");
+    }
+    {
+        // 图集精灵的**裁切结果**也缓存（否则每次都要重新解码整张图集再 copy）
+        const QString p = QDir(root).filePath(QStringLiteral("resources/transparent.webp"));
+        const QImage first = ResourceImageProvider::loadResourceImage(QStringLiteral("transparent"));
+        check(!first.isNull(), "loadResourceImage 首次取图集精灵成功");
+        check(QFile::remove(p), "缓存测试：删除图集源文件");
+        const QImage again = ResourceImageProvider::loadResourceImage(QStringLiteral("transparent"));
+        check(!again.isNull() && again.size() == first.size(),
+              "loadResourceImage 第二次命中裁切缓存（图集源文件已删仍可取出）");
+    }
+
     qDebug() << "\n==========================";
     if (g_failures == 0) {
         qDebug() << "[SUCCESS] resource-image tests passed";

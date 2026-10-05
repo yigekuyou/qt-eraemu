@@ -1306,21 +1306,44 @@ ExecState ScriptRunner::executeLine(const LogicalLine& line) {
     //   有输入则取输入。eraMegaten 的 SYSTEM_TITLE.erb:62 TINPUTS 100, "-1", 0
     //   此前被静默忽略。TINPUTS 的缺省值为字符串（写 RESULTS）。
     if (name == QLatin1String("TINPUT") || name == QLatin1String("TINPUTS")) {
-        QSharedPointer<ExpressionNode> timeNode, defNode;
-        if (!line.arguments.isEmpty() && line.arguments.first().ast
-            && line.arguments.first().ast->kind() == NodeKind::Function) {
-            const auto& fn = static_cast<const FunctionNode&>(*line.arguments.first().ast);
-            if (!fn.arguments().isEmpty()) timeNode = fn.arguments().at(0);
-            if (fn.arguments().size() >= 2) defNode = fn.arguments().at(1);
-        }
+        // 参数是**独立操作数**（AstBuilder 按顶层逗号/空白切分）：
+        //   TINPUT  <超时ms>, <缺省整数>[, <跳过标记>]
+        //   TINPUTS <超时ms>, <缺省字符串>[, <跳过标记>]
+        // eraMegaten SYSTEM_TITLE.erb:62 的渐入循环 `TINPUTS 100, "-1", 0` 正是
+        // 靠这个超时逐步推进（SETCOLOR 从黑渐亮）。旧实现只在「首操作数恰好是
+        // Function 节点」时取参；而该行会被切成 [100]["-1"][0] 三个普通操作数，
+        // 于是 ms 恒为 0 -> waitTimedStringInput(0) 不装计时器 -> 标题画面永远
+        // 停在首帧（SETCOLOR 0,0,0 = 黑字），看起来就是「没有文字/整屏黑」。
         qint64 ms = 0, def = 0;
-        evalInt(timeNode, QString(), ms);
         QString defStr;
-        if (name == QLatin1String("TINPUTS") && defNode) {
-            ExpressionEvaluator* ev = &getEvaluator();
-            defStr = ev->evaluate(*defNode, m_storage, baseData()).toString();
-        } else {
-            evalInt(defNode, QString(), def);
+        if (!line.arguments.isEmpty()) {
+            const Operand& a0 = line.arguments.at(0);
+            const bool fnForm = a0.ast && a0.ast->kind() == NodeKind::Function;
+            if (fnForm) {
+                // 兼容 `NAME(args)` 形式（整行被归约成一个调用节点）
+                const auto& fn = static_cast<const FunctionNode&>(*a0.ast);
+                evalInt(fn.arguments().value(0), QString(), ms);
+                if (fn.arguments().size() >= 2) {
+                    if (name == QLatin1String("TINPUTS")) {
+                        ExpressionEvaluator* ev = &getEvaluator();
+                        defStr = ev->evaluate(*fn.arguments().at(1), m_storage, baseData()).toString();
+                    } else {
+                        evalInt(fn.arguments().at(1), QString(), def);
+                    }
+                }
+            } else {
+                evalInt(a0.ast, a0.raw, ms);
+                if (line.arguments.size() >= 2) {
+                    const Operand& a1 = line.arguments.at(1);
+                    if (name == QLatin1String("TINPUTS")) {
+                        ExpressionEvaluator* ev = &getEvaluator();
+                        defStr = a1.ast ? ev->evaluate(*a1.ast, m_storage, baseData()).toString()
+                                        : ev->evaluate(a1.raw, m_storage, baseData()).toString();
+                    } else {
+                        evalInt(a1.ast, a1.raw, def);
+                    }
+                }
+            }
         }
         if (ms < 0) ms = 0;
         advance();

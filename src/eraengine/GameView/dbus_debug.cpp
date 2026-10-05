@@ -113,6 +113,40 @@ QString EraDBusDebug::dumpScreen(int lastLines) {
     return out.join(QLatin1Char('\n'));
 }
 
+QString EraDBusDebug::diagBlocks() {
+    if (!m_engine || !m_engine->getConsole()) return QStringLiteral("no console");
+    auto* c = m_engine->getConsole();
+    auto* g = m_engine->getGuiManager();
+    QStringList out;
+    out << QStringLiteral("gui.fore=%1 back=%2 font=%3 size=%4 lh=%5")
+               .arg(g->foreColor().name(), g->backColor().name(), g->fontName())
+               .arg(g->fontSize()).arg(g->lineHeight());
+    out << QStringLiteral("console firstRow=%1 visibleCount=%2 buffer=%3 grid=%4x%5")
+               .arg(c->windowFirstLine()).arg(c->visibleCount())
+               .arg(c->buffer().count()).arg(c->gridColumns()).arg(c->gridRows());
+    if (QScreen* s = QGuiApplication::primaryScreen()) {
+        out << QStringLiteral("screen name=%1 geom=%2x%3 avail=%4x%5 minWin=%6x%7")
+                   .arg(s->name())
+                   .arg(s->geometry().width()).arg(s->geometry().height())
+                   .arg(s->availableGeometry().width()).arg(s->availableGeometry().height())
+                   .arg(g->minimumWindowWidth()).arg(g->minimumWindowHeight());
+    }
+    const QVariantList blocks = c->textBlocks();
+    out << QStringLiteral("textBlocks=%1").arg(blocks.size());
+    auto dump = [&out](int i, const QVariantMap& m) {
+        out << QStringLiteral("  [%1] row=%2 col=%3 cols=%4 rows=%5 color=%6 font=%7 kind=%8 btn=%9 text=%10")
+                   .arg(i)
+                   .arg(m.value("row").toInt()).arg(m.value("col").toInt())
+                   .arg(m.value("cols").toInt()).arg(m.value("rows").toInt())
+                   .arg(m.value("color").toString()).arg(m.value("fontName").toString())
+                   .arg(m.value("kind").toString()).arg(m.value("isButton").toBool())
+                   .arg(QString(m.value("text").toString()).left(40));
+    };
+    for (int i = 0; i < qMin(3, blocks.size()); ++i) dump(i, blocks.at(i).toMap());
+    for (int i = qMax(0, blocks.size() - 2); i < blocks.size(); ++i) dump(i, blocks.at(i).toMap());
+    return out.join(QLatin1Char('\n'));
+}
+
 QString EraDBusDebug::listButtons() {
     if (!m_engine || !m_engine->getConsole()) return QStringLiteral("no console");
     QStringList out;

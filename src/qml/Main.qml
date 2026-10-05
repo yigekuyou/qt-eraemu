@@ -18,6 +18,8 @@
 import QtQuick
 import QtQuick.Controls
 import QtQuick.Dialogs
+// Screen（窗口尺寸钳制用）在 QtQuick.Window 模块中（Qt 文档：Screen QML Type）
+import QtQuick.Window
 import io.yigekuoyou.eraengine
 
 // ---------------------------------------------------------------------------
@@ -33,8 +35,26 @@ ApplicationWindow {
 
     visible: true
     title: eraEngine.gui.windowTitle || "Emuera Engine"
-    width: eraEngine.gui.windowWidth
-    height: eraEngine.gui.windowHeight
+
+    // ---- 窗口尺寸：外部（设置/游戏 config）说了算，但**不得超出屏幕** ----
+    // 依据 Qt 文档：
+    //   * Window.width/height —— 窗口尺寸（x/y 相对屏幕）；
+    //   * Window.minimumWidth/minimumHeight —— 只是给窗口管理器的「下限提示」；
+    //   * Screen（QtQuick.Window）—— 屏幕信息，Window 上在组件完成后有效，
+    //     其中 desktopAvailableWidth/Height 已扣除任务栏/系统菜单。
+    // GuiManager（C++）里也按 QScreen::availableGeometry() 做了同样的钳制，
+    // 这里再兜一层：多屏 / C++ 尚未拿到屏幕（off-screen QPA）时同样不会越界。
+    // 尺寸只在外部值（config/设置）变化时重算 —— 用户手动拖动窗口大小后，
+    // 该绑定不会自己回弹，真正「外面变化大小而不是自动」。
+    readonly property int maxWindowWidth: Screen.desktopAvailableWidth > 0
+                                          ? Screen.desktopAvailableWidth
+                                          : eraEngine.gui.windowWidth
+    readonly property int maxWindowHeight: Screen.desktopAvailableHeight > 0
+                                           ? Screen.desktopAvailableHeight
+                                           : eraEngine.gui.windowHeight
+
+    width: Math.min(eraEngine.gui.windowWidth, maxWindowWidth)
+    height: Math.min(eraEngine.gui.windowHeight, maxWindowHeight)
     // 全屏(F11)优先；否则遵循设置里的「最大化」
     visibility: fullscreen ? Window.FullScreen : (eraEngine.gui.maximized ? Window.Maximized : Window.Windowed)
     color: eraEngine.gui.backColor
@@ -43,8 +63,9 @@ ApplicationWindow {
     // 引擎的逻辑网格是固定的（脚本看到的列/行数不随窗口变化），窗口小于
     // 「网格 × 单元格像素」时内容会被裁剪。下限由 GuiManager 依据当前字号
     // 与网格统一给出（那里也对保存的设置值做同样的钳制）。
-    minimumWidth: eraEngine.gui.minimumWindowWidth
-    minimumHeight: eraEngine.gui.minimumWindowHeight
+    // 这里再按屏幕可用尺寸封顶：下限一旦大于屏幕，窗口就再也放不进屏幕内。
+    minimumWidth: Math.min(eraEngine.gui.minimumWindowWidth, maxWindowWidth)
+    minimumHeight: Math.min(eraEngine.gui.minimumWindowHeight, maxWindowHeight)
 
     property bool fullscreen: false
 

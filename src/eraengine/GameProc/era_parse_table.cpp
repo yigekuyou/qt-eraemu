@@ -17,6 +17,7 @@
  */
 #include "era_parse_table.h"
 #include "process_state.h"
+#include "eraengine_log.h"   // eraTrace（逐文件高频日志）
 #include "variable_storage.h"
 #include "execution_engine.h"
 #include "ast/expression_lexer.h"
@@ -505,7 +506,7 @@ bool EraParseTable::loadScript(const QString& scriptName, const QList<LogicalLin
         m_currentScript = scriptName;
     }
 
-    qDebug() << "[parse] 脚本" << scriptName << (isHeaderFile ? "(头文件)" : "")
+    qCDebug(eraTrace) << "[parse] 脚本" << scriptName << (isHeaderFile ? "(头文件)" : "")
              << "逻辑行" << data.lines.size() << "标签" << data.labelPositions.size();
     emit parseCompleted(scriptName);
     return true;

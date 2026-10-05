@@ -94,8 +94,18 @@ public:
     };
     static PrintArgInfo printInfo(const QString& upperName);
 
-    // 指令名是否属于 PRINT 族（含 PRINTPLAIN*）
+    // 指令名是否属于 PRINT 族（含 PRINTPLAIN*）——**不含 DEBUGPRINT 族**。
+    //
+    // DEBUGPRINT* 的实参形态与 PRINT 族同规则（printInfo 里一并识别，C# 的
+    // DEBUGPRINT 用的也是 STR_NULLABLE / FORM_STR_NULLABLE），但它属于**另一条
+    // 执行路径**：C# DEBUGPRINT_Instruction -> Exm.Console.DebugPrint ->
+    // dConsoleLog（调试窗口日志），且 `if (!Program.DebugMode) return;` ——
+    // 也就是说**永远不进游戏画面**。若把它也算 PRINT 族，执行链会先命中
+    // handlePrintInstruction，把调试文本刷进控制台：eraTW 实测一屏 1458 行
+    //（ERB/MOVEMENTS/SLEEP.ERB:172 的 `DEBUGPRINTFORML %CALLNAME:CHARA%は
+    //  {TIME}に{CFLAG:CHARA:初期位置}で寝たよ` 会对每个角色打一行）。
     static bool isPrintFamily(const QString& upperName) {
+        if (upperName.startsWith(QLatin1String("DEBUGPRINT"))) return false;
         return printInfo(upperName).mode != PrintArgMode::NotPrint;
     }
 

@@ -161,9 +161,9 @@ void ExecutionEngine::executeLogicalLine(const LogicalLine& line) {
         return;   // 空行 / 注释 / 预处理指令
     }
 
-    qDebug() << "[executeLogicalLine]   Executing Instruction:" << line.functionName;
+    qCDebug(eraTrace) << "[executeLogicalLine]   Executing Instruction:" << line.functionName;
     if (!executeInstruction(line)) {
-        qDebug() << "[executeLogicalLine]   executeInstruction returned false";
+        qCDebug(eraTrace) << "[executeLogicalLine]   executeInstruction returned false";
     }
 }
 
@@ -540,7 +540,7 @@ bool ExecutionEngine::handleVarSet(const LogicalLine& line, bool eachChara) {
             return true;
         }
         if (start > end) std::swap(start, end);
-        qDebug() << "[varset] CVARSET" << name << "元素" << index << "值"
+        qCDebug(eraTrace) << "[varset] CVARSET" << name << "元素" << index << "值"
                  << (isString ? svalue : QString::number(value))
                  << "角色区间[" << start << "," << end << ")";
         for (int cid = start; cid < end; ++cid) {
@@ -566,7 +566,7 @@ bool ExecutionEngine::handleVarSet(const LogicalLine& line, bool eachChara) {
         m_storage->reduceCharaArgs(name, ref.indices, charaId, elems);
         if (cdim == 0) {
             // 标量角色变量：忽略范围，只写一个槽
-            qDebug() << "[varset] VARSET 标量角色变量" << name << "角色" << charaId;
+            qCDebug(eraTrace) << "[varset] VARSET 标量角色变量" << name << "角色" << charaId;
             if (isString) m_storage->setCharaStr(name, charaId, 0, svalue);
             else m_storage->setCharaInt(name, charaId, 0, value);
             return true;
@@ -576,7 +576,7 @@ bool ExecutionEngine::handleVarSet(const LogicalLine& line, bool eachChara) {
             const QList<int> lens = declaredLengths(name, fn);
             const int n0 = lens.size() >= 1 && lens.at(0) > 0 ? lens.at(0) : 1;
             const int n1 = lens.size() >= 2 && lens.at(1) > 0 ? lens.at(1) : 1;
-            qDebug() << "[varset] VARSET 二维角色数组" << name << "角色" << charaId
+            qCDebug(eraTrace) << "[varset] VARSET 二维角色数组" << name << "角色" << charaId
                      << "尺寸" << n0 << "x" << n1;
             for (int x = 0; x < n0; ++x)
                 for (int y = 0; y < n1; ++y)
@@ -585,7 +585,7 @@ bool ExecutionEngine::handleVarSet(const LogicalLine& line, bool eachChara) {
         }
         if (end < 0) end = variableLength1D(name, fn);
         if (start > end) std::swap(start, end);
-        qDebug() << "[varset] VARSET 角色数组" << name << "角色" << charaId
+        qCDebug(eraTrace) << "[varset] VARSET 角色数组" << name << "角色" << charaId
                  << "区间[" << start << "," << end << ") 值"
                  << (isString ? svalue : QString::number(value));
         for (int i = start; i < end; ++i) {
@@ -608,7 +608,7 @@ bool ExecutionEngine::handleVarSet(const LogicalLine& line, bool eachChara) {
         if (end < 0) end = variableLength1D(name, fn);
         if (start > end) std::swap(start, end);
         if (end <= 0) return true;
-        qDebug() << "[varset] VARSET" << upper << "区间[" << start << "," << end << ")";
+        qCDebug(eraTrace) << "[varset] VARSET" << upper << "区间[" << start << "," << end << ")";
         for (int i = start; i < end; ++i) {
             if (strSlot) {
                 if (upper == QLatin1String("ARGS")) m_storage->setArgStr(i, svalue);
@@ -632,7 +632,7 @@ bool ExecutionEngine::handleVarSet(const LogicalLine& line, bool eachChara) {
     if (m_storage->hasSystemVariable(name)) {
         if (end < 0) end = variableLength1D(name, fn);
         if (start > end) std::swap(start, end);
-        qDebug() << "[varset] VARSET 系统变量" << name << "区间[" << start << "," << end << ")";
+        qCDebug(eraTrace) << "[varset] VARSET 系统变量" << name << "区间[" << start << "," << end << ")";
         for (int i = start; i < end; ++i) {
             if (isString) m_storage->setSystemStr(name, i, svalue);
             else m_storage->setSystemVariable(name, i, value);
@@ -652,7 +652,7 @@ bool ExecutionEngine::handleVarSet(const LogicalLine& line, bool eachChara) {
         }
         const int n0 = qMax(1, lens.value(0, 1));
         const int n1 = qMax(1, lens.value(1, 1));
-        qDebug() << "[varset] VARSET 全局多维" << (isString ? "字符串" : "整数") << name
+        qCDebug(eraTrace) << "[varset] VARSET 全局多维" << (isString ? "字符串" : "整数") << name
                  << "维数" << lens;
         if (dim >= 3) {
             const int n2 = qMax(1, lens.value(2, 1));
@@ -673,7 +673,7 @@ bool ExecutionEngine::handleVarSet(const LogicalLine& line, bool eachChara) {
     // ---- 用户一维变量 ----
     if (end < 0) end = variableLength1D(name, fn);
     if (start > end) std::swap(start, end);
-    qDebug() << "[varset] VARSET 全局" << (isString ? "字符串" : "整数") << name
+    qCDebug(eraTrace) << "[varset] VARSET 全局" << (isString ? "字符串" : "整数") << name
              << "区间[" << start << "," << end << ") 值"
              << (isString ? svalue : QString::number(value));
     for (int i = start; i < end; ++i) {
@@ -905,7 +905,7 @@ bool ExecutionEngine::executeInstruction(const LogicalLine& line) {
             evalExpressionCached(m_parseTable, ev, args.first().raw,
                                  m_storage, m_gameBaseData).toLongLong();
         }
-        qDebug() << "[display]" << name << "(状态命令，当前渲染层忽略)";
+        qCDebug(eraTrace) << "[display]" << name << "(状态命令，当前渲染层忽略)";
         return true;
     }
 
@@ -939,7 +939,7 @@ bool ExecutionEngine::executeInstruction(const LogicalLine& line) {
     // ---- TOOLTIP_SETCOLOR / TOOLTIP_SETDELAY / TOOLTIP_SETDURATION ----
     // C# 设定 GUI 提示框样式；渲染层当前没有提示框实现，先求值并留痕。
     if (name == "TOOLTIP_SETCOLOR" || name == "TOOLTIP_SETDELAY" || name == "TOOLTIP_SETDURATION") {
-        qDebug() << "[display]" << name << "(tooltip 样式，渲染层暂未实现)";
+        qCDebug(eraTrace) << "[display]" << name << "(tooltip 样式，渲染层暂未实现)";
         return true;
     }
 
@@ -1727,7 +1727,7 @@ bool ExecutionEngine::handleSplit(const LogicalLine& line)
     } else {
         m_storage->setSystemVariable(QStringLiteral("RESULT"), 0, elements.size());
     }
-    qDebug() << "[funcstmt] SPLIT ->" << elements.size() << "个元素 行"
+    qCDebug(eraTrace) << "[funcstmt] SPLIT ->" << elements.size() << "个元素 行"
              << line.position.toString();
     return true;
 }
@@ -1771,7 +1771,7 @@ bool ExecutionEngine::executeFunctionCall(const LogicalLine& line)
     // （SETBGCOLORBYNAME 已在上面的 SETBGCOLOR 分支统一处理）
     // TOOLTIP_SETCOLOR/SETDELAY/SETDURATION（C# FunctionCode.TOOLTIP_*）
     if (name.startsWith(QLatin1String("TOOLTIP_"))) {
-        qDebug() << "[display] TOOLTIP 配置" << name
+        qCDebug(eraTrace) << "[display] TOOLTIP 配置" << name
                  << (line.arguments.isEmpty() ? QString() : line.arguments.first().raw.trimmed());
         return true;
     }
@@ -1807,7 +1807,7 @@ bool ExecutionEngine::executeFunctionCall(const LogicalLine& line)
         // 还原背景色（C# RESETBGCOLOR_Instruction -> Console.ResetBgColor）
         m_bgColorValue = -1;
         emit consoleResetBgColor();
-        qDebug() << "[display] RESETBGCOLOR" << "行" << line.position.toString();
+        qCDebug(eraTrace) << "[display] RESETBGCOLOR" << "行" << line.position.toString();
         return true;
     }
     if (upper == QLatin1String("INITRAND")) {
@@ -1822,7 +1822,7 @@ bool ExecutionEngine::executeFunctionCall(const LogicalLine& line)
         return true;
     }
     if (upper == QLatin1String("DEBUGCLEAR")) {
-        qDebug() << "[debugprint] DEBUGCLEAR" << "行" << line.position.toString();
+        qCDebug(eraTrace) << "[debugprint] DEBUGCLEAR" << "行" << line.position.toString();
         return true;
     }
     // ---- 存档系（核心：C# 原版全量，BuiltInFunctionCode.cs 枚举内）----
@@ -1894,7 +1894,7 @@ bool ExecutionEngine::executeFunctionCall(const LogicalLine& line)
     } else {
         m_storage->setSystemVariable(QStringLiteral("RESULT"), 0, value.toLongLong());
     }
-    qDebug() << "[funcstmt]" << upper << "->" << (returnsStr ? "RESULTS" : "RESULT")
+    qCDebug(eraTrace) << "[funcstmt]" << upper << "->" << (returnsStr ? "RESULTS" : "RESULT")
              << value << "行" << line.position.toString();
     return true;
 }

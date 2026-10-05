@@ -1760,7 +1760,7 @@ ExecState ScriptRunner::doCallLine(const LogicalLine& line, bool isForm, bool is
             qCDebug(eraTrace) << "[call] TRYC 目标不存在 -> 进入 CATCH" << catchLine + 1 << label;
             m_table->setPosition(sc, catchLine + 1, false);
         } else {
-            qDebug() << "[call] TRY* 目标不存在，跳过：" << label;
+            qCDebug(eraTrace) << "[call] TRY* 目标不存在，跳过：" << label;
             m_table->advance();
         }
         return ExecState::Continue;

@@ -678,6 +678,33 @@ int main(int argc, char* argv[]) {
               "VARSIZE(ARR_V) == VARSIZE(\"ARR_V\") != 元素值 7（标识符按变量名解析）");
     }
 
+    // 11) DEBUGPRINT 族：**实参形态**与 PRINT 族同规则（按后缀走 Literal/FormStr/
+    //     StrExpression），但**执行路径不同** —— 它写调试日志、不进游戏画面。
+    //     若 isPrintFamily 把它也算进去，执行链会先命中 handlePrintInstruction，
+    //     把游戏的调试文本刷进控制台（eraTW 实测一屏 1458 行 / 10680 行输出里
+    //     5541 行 VARSET + 1458 行 DEBUGPRINT）。
+    qDebug() << "\n11) DEBUGPRINT 族：解析形态同 PRINT，执行路径不同";
+    {
+        check(AstBuilder::printInfo(QStringLiteral("DEBUGPRINTFORML")).mode
+                  == AstBuilder::PrintArgMode::FormStr,
+              "DEBUGPRINTFORML 实参形态 = FormStr（按格式串解析）");
+        check(AstBuilder::printInfo(QStringLiteral("DEBUGPRINTL")).mode
+                  == AstBuilder::PrintArgMode::Literal,
+              "DEBUGPRINTL 实参形态 = Literal（原文，不再当表达式归约）");
+        check(AstBuilder::printInfo(QStringLiteral("DEBUGPRINTV")).mode
+                  == AstBuilder::PrintArgMode::PrintV,
+              "DEBUGPRINTV 实参形态 = PrintV");
+        check(!AstBuilder::isPrintFamily(QStringLiteral("DEBUGPRINTFORML"))
+                  && !AstBuilder::isPrintFamily(QStringLiteral("DEBUGPRINTL"))
+                  && !AstBuilder::isPrintFamily(QStringLiteral("DEBUGPRINT")),
+              "DEBUGPRINT* **不属于** PRINT 族（不写游戏控制台）");
+        check(AstBuilder::isPrintFamily(QStringLiteral("PRINTFORML"))
+                  && AstBuilder::isPrintFamily(QStringLiteral("PRINTL")),
+              "PRINT* 仍属于 PRINT 族（守卫不过度收窄）");
+        check(AstBuilder::isKnownInstructionName(QStringLiteral("DEBUGPRINTFORML")),
+              "DEBUGPRINTFORML 仍被认作已知指令名");
+    }
+
     qDebug() << "\n======================================";
     if (g_failures == 0) {
         qDebug() << "[SUCCESS] statement tests passed";

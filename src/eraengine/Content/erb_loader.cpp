@@ -40,6 +40,24 @@
 // 于是全部「未定义」（AUTO_PU_SKILL_核融巨影 / AUTO_PU_SKILL_黃昏（ＡＮ） 等）。
 static constexpr int kMaxScanDepth = 32;
 
+// 脚本名 = **相对装载根目录的路径**（含扩展名）。
+// 对齐 C# Config.GetFiles 返回的 KeyValuePair<相対パス, 完全パス>：脚本名是
+// 相对路径而不是 basename，所以不同子目录下的同名 .ERB 是**不同脚本**，不会
+// 互相覆盖。eraMegaten 有 512 组同名文件（mod 的「空ファイル化」惯例），
+// 旧实现用 basename -> m_scripts 后写覆盖先写，被覆盖文件的 @label 还会
+// 指向赢家文件的行号（跨文件跳错）。
+static QString scriptNameFor(const QString& root, const QString& filePath) {
+    const QString abs = QFileInfo(filePath).absoluteFilePath();
+    if (!root.isEmpty()) {
+        const QDir rootDir(QFileInfo(root).absoluteFilePath());
+        const QString rel = rootDir.relativeFilePath(abs);
+        if (!rel.startsWith(QLatin1String("..")) && !QDir::isAbsolutePath(rel)) {
+            return QDir::fromNativeSeparators(rel);
+        }
+    }
+    return QFileInfo(abs).fileName();
+}
+
 ErbLoader::ErbLoader(QObject* parent) : QObject(parent), m_parseTable(nullptr) {}
 
 QString ErbLoader::readFileContent(const QString& filePath) const {
@@ -200,10 +218,10 @@ ErbLoader::FunctionTypes ErbLoader::scanFunctionTypes(const QString& content) co
 // 单文件解析（线程安全）
 // ---------------------------------------------------------------------------
 ParsedErbFile ErbLoader::parseOneFile(const QString& filePath, const FunctionTypes& types,
-                                    const QString* cachedContent) const {
+                                    const QString* cachedContent, const QString& root) const {
     ParsedErbFile pf;
     pf.path = filePath;
-    pf.scriptName = QFileInfo(filePath).baseName();
+    pf.scriptName = scriptNameFor(root, filePath);
 
     // 预扫描阶段已读取并解码过：直接复用，省掉第二次读盘 + 解码 + 编码嗅探。
     const QString content = cachedContent ? *cachedContent : readFileContent(filePath);
@@ -282,7 +300,7 @@ bool ErbLoader::mergeParsedFile(ParsedErbFile&& pf) {
 // ---------------------------------------------------------------------------
 // 装载入口
 // ---------------------------------------------------------------------------
-bool ErbLoader::loadFile(const QString& filePath) {
+bool ErbLoader::loadFile(const QString& filePath, const QString& root) {
     const QString content = readFileContent(filePath);
     if (content.isEmpty()) {
         qWarning() << "[load] ERB 读取失败或为空:" << filePath;
@@ -290,9 +308,9 @@ bool ErbLoader::loadFile(const QString& filePath) {
     }
 
     ParsedErbFile pf;
-    pf.scriptName = QFileInfo(filePath).baseName();
+    pf.scriptName = scriptNameFor(root, filePath);
     pf.path = filePath;
-    pf.lines = buildAst(content, filePath);   // 串行路径：复用 parseTable 缓存
+    pf.lines = buildAst(content, filePath, root);   // 串行路径：复用 parseTable 缓存
     // buildAst 的预处理告警：再次预处理仅取告警（廉价且无副作用）
     prepareLines(content, filePath, &pf.warnings);
 
@@ -332,7 +350,7 @@ bool ErbLoader::loadDirectory(const QString& dirPath, int depth) {
     if (!m_parallel || files.size() < 2) {
         bool ok = true;
         for (const QString& f : files) {
-            if (!loadFile(f)) ok = false;
+            if (!loadFile(f, dirPath)) ok = false;
         }
         qDebug() << "[load] ERB（串行）" << dirPath << ":" << files.size() << "个文件,"
                  << "脚本" << m_scriptPaths.size() << "个,标签" << m_labels.size() << "个";
@@ -375,9 +393,9 @@ bool ErbLoader::loadDirectory(const QString& dirPath, int depth) {
         const QStringList slice = files.mid(base, chunk);
         QElapsedTimer pt; pt.start();
         QList<ParsedErbFile> parsed = QtConcurrent::blockingMapped(slice,
-            [this, &functionTypes, &decoded](const QString& f) {
+            [this, &functionTypes, &decoded, dirPath](const QString& f) {
                 const QString content = decoded.value(f);   // 浅拷贝（隐式共享）
-                return parseOneFile(f, functionTypes, &content);
+                return parseOneFile(f, functionTypes, &content, dirPath);
             });
         tParse += pt.elapsed();
         QElapsedTimer mt; mt.start();
@@ -635,7 +653,7 @@ void ErbLoader::scheduleNextChunk() {
     m_chunkWatcher.setFuture(QtConcurrent::mapped(slice,
         [this, types](const QString& f) {
             const QString content = m_async.decoded.value(f);   // 浅拷贝（隐式共享）
-            return parseOneFile(f, types, &content);
+            return parseOneFile(f, types, &content, m_async.dirPath);
         }));
 }
 
@@ -706,9 +724,10 @@ void ErbLoader::mergeStep() {
 // ---------------------------------------------------------------------------
 // 串行 AST 构建（loadFile 路径）
 // ---------------------------------------------------------------------------
-QList<LogicalLine> ErbLoader::buildAst(const QString& content, const QString& filePath) {
+QList<LogicalLine> ErbLoader::buildAst(const QString& content, const QString& filePath,
+                                      const QString& root) {
     QList<LogicalLine> logicalLines;
-    const QString scriptName = QFileInfo(filePath).baseName();
+    const QString scriptName = scriptNameFor(root, filePath);
 
     const AstResolver resolve = [this](const QString& expr) -> QSharedPointer<ExpressionNode> {
         return m_parseTable ? m_parseTable->expressionAst(expr) : nullptr;

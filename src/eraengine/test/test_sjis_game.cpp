@@ -130,7 +130,15 @@ int main(int argc, char* argv[]) {
     }
     {
         // @SYSTEM_TITLE 标签（日文游戏里常有日文函数名，此处验英文标签 + SJIS 文本）
-        const ScriptData* sd = engine.getParseTable()->script(QStringLiteral("MAIN"));
+        // 脚本名 = **相对游戏目录的路径（含扩展名）**，对齐 C# Config.GetFiles 的
+        // KeyValuePair<相対パス, 完全パス>；不再是 basename（否则同名 .ERB 会互相覆盖）。
+        QString mainName;
+        for (const QString& n : engine.getParseTable()->scriptNames()) {
+            if (n.endsWith(QLatin1String("MAIN.ERB"))) { mainName = n; break; }
+        }
+        check(!mainName.isEmpty(),
+              QStringLiteral("脚本名是相对路径且含扩展名（实得 %1）").arg(mainName));
+        const ScriptData* sd = engine.getParseTable()->script(mainName);
         bool found = false;
         if (sd) {
             for (const LogicalLine& l : sd->lines) {

@@ -66,7 +66,9 @@ public:
     explicit ErbLoader(QObject* parent = nullptr);
 
     // Load ERB files
-    bool loadFile(const QString& filePath);
+    // root：脚本名的基准目录（脚本名 = 相对 root 的路径，对齐 C# Config.GetFiles）。
+    // 缺省时回落到「文件名」——仅供单文件装载使用。
+    bool loadFile(const QString& filePath, const QString& root = QString());
     bool loadDirectory(const QString& dirPath, int depth = 0);
 
     // ---- 异步装载（分块：后台解析 -> 主线程合并，不阻塞 UI）----
@@ -221,13 +223,15 @@ private:
     // 解析单个文件（线程安全：不接触任何共享可变状态）。
     // cachedContent != nullptr 时直接使用（预扫描已解码），免去重复读取+解码。
     ParsedErbFile parseOneFile(const QString& filePath, const FunctionTypes& types,
-                               const QString* cachedContent = nullptr) const;
+                               const QString* cachedContent = nullptr,
+                               const QString& root = QString()) const;
 
     // 主线程合并（确定性顺序）
     bool mergeParsedFile(ParsedErbFile&& pf);
 
     // 逐行构建完整 AST（串行路径；会 emit parseLineReady）
-    QList<LogicalLine> buildAst(const QString& content, const QString& filePath);
+    QList<LogicalLine> buildAst(const QString& content, const QString& filePath,
+                                const QString& root = QString());
 
     QString readFileContent(const QString& filePath) const;
 

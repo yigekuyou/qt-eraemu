@@ -621,6 +621,41 @@ PRINT_TALENT`。
 `grep` 统计 eraTW 的使用：**`HTML_TAGSPLIT`（2 文件）、`PRINT_MARK`（1 文件）**，
 其余只出现在本仓库测试夹具里 —— 按「eraTW 真的会跑」排序，这两个优先。
 
+## 渲染回归修复（f64a919「修复渲染过慢」）与每帧抓取
+
+`f64a919` 把三个 `textBlocks/imageBlocks/shapeBlocks` 列表改成一个增量
+`ConsoleBlockModel`（`QAbstractListModel` + 按行区块缓存）。它引入两处回归：
+
+| 回归 | 根因 | 修复 | 回归测试 |
+| --- | --- | --- | --- |
+| eraTW `CLEARLINE→重打印` 复用同一批**绝对行号**（如 `OPTION.ERB` 的 `CLEARLINE 10+LOCAL:1` 后 `RESTART`），点按钮后画面不刷新、按钮世代过期失效 | 模型只按「行号是否还在窗口里」判断复用，行号复用时不发任何信号 | 按**行内容版本**判定：`ConsoleBackend::lineBlocks(abs,&ver)` 回填版本；版本变了 → **行程不变则原地改写 + 一条有界 `dataChanged(起始行, 终止行)`**（Qt 文档：现有条目数据变化用 dataChanged，视图只重绑区间内委托，**不销毁/重建、行数不变、滚动不受扰动**——绝不用 remove+insert 表达内容变化，否则历史委托被拆）；行程变了才摘除重插。`clearLines`/容量裁剪/字号行高变化都会使版本失效 | `test_console_backend`「CLEARLINE 重印复用行号 / 容量裁剪 / 未提交行 / 整表重摊平也不拆历史（纯 dataChanged）」 |
+| `RESETDATA` 后 `ADDCHARA`/`LOADCHARA` 的角色 NAME/ABL 全空（组 9 `LOADCHARA 后 NAME`、组 28 `ABL:技巧`） | `resetForNewGame()` 把存放 CSV 模板默认值的角色容器 `clear()` 了 | 改为从 CSV 模板快照恢复（`m_charaIntVars = m_csvIntVars` …） | `test/example/ERB/08`+`09`+`28` 全量回归 |
+
+实测（eraTW `1,0,400` 后点 [19]）：`modelSyncs=1 modelUpdates=42 modelInserts=3
+modelRemoves=1 modelResets=0` —— 42 行选项全部原地 `dataChanged` 刷新，历史行零拆除；
+像素级 diff 确认 [19] 行（是→否）与世代切换的按钮带重绘。
+
+### 每帧抓取渲染（GUI）
+
+桌面截屏抓不到 QML 合成内容；渲染自检必须走 `Item.grabToImage`（Qt 文档：
+异步把 Item 子树渲染进离屏，回调里 `ItemGrabResult.saveToFile` 落盘）。
+D-Bus 提供：
+
+```bash
+# 引擎每产生一次新画面（ConsoleBackend::windowChanged）抓一张 PNG
+qdbus6 io.yigekuyou.emuera /debug io.yigekuyou.emuera.Debug.startFrameCapture /tmp/f_ 0
+qdbus6 io.yigekuyou.emuera /debug io.yigekuyou.emuera.Debug.stopFrameCapture
+```
+
+`startFrameCapture(prefix, limit)`：`limit<=0` 不限（靠 stop 停），存成
+`<prefix>00000.png …`。一键脚本（打开目录 + 自动喂输入 + 逐帧落盘）：
+
+```bash
+./test/run_gui_frames.sh test/example /tmp/frames "0,x,x"
+```
+
+「点按钮后画面是否刷新」用帧序列直接对比：点击前后各一帧，按钮所在行像素应变化。
+
 ## 关于「自动输入」
 
 `INPUT` / `INPUTS` / `ONEINPUT` / `TINPUT` / `WAITANYKEY` / `AWAIT` 在 GUI 下会

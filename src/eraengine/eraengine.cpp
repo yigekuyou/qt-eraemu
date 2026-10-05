@@ -67,6 +67,11 @@ EraEngine::EraEngine(QObject *parent)
 		// /debug saveScreenshot -> QML（Item.grabToImage 保存渲染结果）
 		connect(m_dbusDebug.get(), &EraDBusDebug::screenshotRequested,
 		        this, &EraEngine::screenshotRequested);
+		// /debug startFrameCapture / stopFrameCapture -> QML（每帧抓取渲染）
+		connect(m_dbusDebug.get(), &EraDBusDebug::frameCaptureRequested,
+		        this, &EraEngine::frameCaptureRequested);
+		connect(m_dbusDebug.get(), &EraDBusDebug::frameCaptureStopRequested,
+		        this, &EraEngine::frameCaptureStopRequested);
 		m_dbusDebug->registerOnBus();
 
 		// ---- 系统状态机：依赖注入 ----

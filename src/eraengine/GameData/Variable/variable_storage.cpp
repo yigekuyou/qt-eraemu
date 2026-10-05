@@ -479,10 +479,14 @@ void VariableStorage::resetForNewGame()
 		purgePrivate(m_globalStr2D);
 		purgePrivate(m_globalStr3D);
 		m_privateScopeCache.clear();
-		// 角色运行时数据容器清空 —— 下次 ADDCHARA 由 CSV 模板快照重新填充
-		m_charaIntVars.clear();
-		m_charaIntVars3D.clear();
-		m_charaStrVars.clear();
+		// 角色数据回默认值。本移植把 CSV 模板默认值**直接写进角色存储**
+		// （m_charaIntVars/m_charaStrVars，按模板号存放），ADDCHARA/LOADCHARA 之后
+		// 都从这些容器取 NAME/ABL… 模板默认值 —— 因此这里必须从模板快照恢复，
+		// 而不是清空；否则清空后新增/载入的角色 NAME/ABL… 全空（组 9 LOADCHARA
+		// NAME、组 28 ABL:技巧 的回归根因）。运行时 2D 角色数组（无 CSV 快照）仍清空。
+		m_charaIntVars = m_csvIntVars;
+		m_charaIntVars3D = m_csvIntVars3D;
+		m_charaStrVars = m_csvStrVars;
 		m_charaInt2D.clear();
 		m_charaStr2D.clear();
 		// 本地槽（LOCAL/ARG/LOCALS/ARGS）与形参

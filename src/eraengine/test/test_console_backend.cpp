@@ -337,6 +337,146 @@ int main(int argc, char* argv[]) {
               "滚到顶部：立絵与框重新进入窗口");
     }
 
+    // ---- 增量模型：CLEARLINE 后**复用同一批绝对行号**重打印 ----
+    // eraTW 的标题/指令循环大量这么干（TITLE.ERB: `CLEARLINE LINECOUNT - LOCAL:2`
+    // 后重印整屏）。回归：模型此前只比「绝对行号是否还在窗口里」——行号被复用
+    // 时不会产生任何模型信号，点按钮后画面不刷新、按钮因世代过期而失效、选项
+    // 不变。修复：按**行内容版本**判定，版本变了就重建模型行。
+    qDebug() << "\n增量模型：CLEARLINE 重印复用行号";
+    {
+        ConsoleBackend c;
+        c.setVisibleCount(10);
+        const auto texts = [&c]() {
+            QStringList out;
+            for (const QVariant& v : c.visibleBlocks())
+                out << v.toMap().value(QStringLiteral("text")).toString();
+            return out;
+        };
+
+        c.print("OLD1"); c.newline();                 // abs 0（不动）
+        c.print("OLD2"); c.newline();                 // abs 1（将被复用）
+        c.notifyInputRequested("INPUT");
+        c.printButton(QString::fromUtf8("[1] 旧选项"), 1);   // abs 2（将被复用）
+        c.newline();
+        c.flush();
+        const QStringList before = texts();
+        check(before.contains("OLD1") && before.contains("OLD2")
+                  && before.contains(QString::fromUtf8("[1] 旧选项")),
+              "初始：模型含 OLD1/OLD2/旧选项");
+
+        // CLEARLINE 2（删 abs 1、2）-> 重打印 -> 复用 abs 1、2
+        // Qt 文档（QAbstractItemModel::dataChanged）：现有条目的数据变化必须走
+        // dataChanged(起始行, 终止行) 原地刷新，不得 removeRows+insertRows ——
+        // 否则委托被销毁重建、count 变化还会扰动滚动（「刷一次把历史吃了」）。
+        c.resetPerfCounters();
+        c.clearLines(2);
+        c.print("NEW2"); c.newline();                        // 复用 abs 1
+        c.notifyInputRequested("INPUT");
+        c.printButton(QString::fromUtf8("[1] 新选项"), 2);   // 复用 abs 2
+        c.newline();
+        c.flush();
+
+        const QStringList after = texts();
+        check(c.lineCount() == 3, "重印后仍 3 行（行号被复用）");
+        check(after.contains("NEW2"), "重印后模型含 NEW2（行号复用必须刷新）");
+        check(!after.contains("OLD2"), "重印后模型不含 OLD2（旧区块被替换）");
+        check(after.contains(QString::fromUtf8("[1] 新选项")), "重印后模型含新按钮文本");
+        check(!after.contains(QString::fromUtf8("旧选项")), "重印后模型不含旧按钮文本");
+
+        // 「不销毁历史」的硬约束：本轮只允许 dataChanged，行数与既有模型行不动。
+        const auto* model = qobject_cast<const ConsoleBlockModel*>(c.blockModel());
+        // NEW2（abs 1）行号复用且行程未变 -> 必须原地 dataChanged，绝不能摘了重插
+        check(model && model->updatedRows() >= 1,
+              "行号复用的行原地 dataChanged（updatedRows >= 1，不摘除重建）");
+        check(model && model->removedRows() <= 1 && model->insertedRows() <= 1,
+              "摘除/插入只发生在确实消失过的行（中间态 abs2，历史行不受扰动）");
+
+        // 复用行号上的新按钮仍可点击（世代已随新一批打印刷新）
+        int submitted = -1;
+        QObject::connect(&c, &ConsoleBackend::inputSubmitted,
+                         [&submitted](qint64 v) { submitted = static_cast<int>(v); });
+        c.clickAt(2, 0);
+        check(submitted == 2, "复用行号上的新按钮可点击 -> inputSubmitted(2)");
+    }
+
+    // ---- 增量模型：整表重摊平（字号变化）也绝不能拆历史 ----
+    // Qt 文档：现有条目数据变化走 dataChanged(起始行, 终止行)；这里构造
+    // 「每行内容都变、行程不变」的最干净场景，锁死 insert/remove 必须为 0。
+    qDebug() << "\n增量模型：整表重摊平也不拆历史（纯 dataChanged）";
+    {
+        ConsoleBackend c;
+        c.setVisibleCount(10);
+        c.print("L0"); c.newline();
+        c.print("L1"); c.newline();
+        c.print("L2"); c.newline();
+        c.flush();
+        const auto texts = [&c]() {
+            QStringList out;
+            for (const QVariant& v : c.visibleBlocks())
+                out << v.toMap().value(QStringLiteral("text")).toString();
+            return out;
+        };
+        const QStringList before = texts();
+        check(before.contains("L0") && before.contains("L1") && before.contains("L2"),
+              "初始：模型含 L0/L1/L2");
+
+        // 字号变化 -> 按行缓存整体作废 -> 每行版本都变、行程不变
+        c.resetPerfCounters();
+        c.setFontSize(qMax(1, c.fontSize() - 1));
+        c.flush();
+        const auto* model = qobject_cast<const ConsoleBlockModel*>(c.blockModel());
+        check(model && model->insertedRows() == 0 && model->removedRows() == 0,
+              "整表重摊平：insert/remove 为 0（无任何委托被拆）");
+        check(model && model->updatedRows() >= 3,
+              "整表重摊平：全部行走 dataChanged（updatedRows >= 3）");
+        const QStringList after = texts();
+        check(after == before, "重摊平后内容不变（L0/L1/L2 原样）");
+    }
+
+    // ---- 增量模型：容量裁剪使绝对行号整体前移 -> 按行缓存必须失效 ----
+    qDebug() << "\n增量模型：容量裁剪（行号前移）";
+    {
+        ConsoleBackend c;
+        c.setVisibleCount(3);
+        c.buffer().setCapacity(3);
+        const auto texts = [&c]() {
+            QStringList out;
+            for (const QVariant& v : c.visibleBlocks())
+                out << v.toMap().value(QStringLiteral("text")).toString();
+            return out;
+        };
+        c.print("L0"); c.newline();
+        c.print("L1"); c.newline();
+        c.print("L2"); c.newline();
+        c.flush();
+        check(texts() == QStringList{"L0", "L1", "L2"}, "裁剪前：模型 = L0/L1/L2");
+
+        c.print("L3"); c.newline();   // 超容量 -> 丢 L0，绝对行号前移
+        c.flush();
+        const QStringList t = texts();
+        check(t == QStringList{"L1", "L2", "L3"},
+              "裁剪后：模型随行号前移刷新为 L1/L2/L3（不返回陈旧区块）");
+    }
+
+    // ---- 增量模型：未提交行（尾行）随内容增长重建 ----
+    qDebug() << "\n增量模型：未提交行随内容更新";
+    {
+        ConsoleBackend c;
+        c.setVisibleCount(10);
+        const auto texts = [&c]() {
+            QStringList out;
+            for (const QVariant& v : c.visibleBlocks())
+                out << v.toMap().value(QStringLiteral("text")).toString();
+            return out;
+        };
+        c.print("AAA"); c.flush();
+        check(texts().contains("AAA"), "尾行 AAA 出现");
+        c.print("BBB"); c.flush();    // 同一结果行继续追加
+        const QStringList t = texts();
+        check(t.contains("AAA") && t.contains("BBB"),
+              "尾行内容增长 -> 新区块 BBB 进入模型");
+    }
+
     qDebug() << "\n===================";
     if (g_failures == 0) {
         qDebug() << "[SUCCESS] console backend tests passed";

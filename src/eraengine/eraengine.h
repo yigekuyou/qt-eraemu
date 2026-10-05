@@ -244,6 +244,9 @@ signals:
     void quitRequested();
     // D-Bus /debug saveScreenshot：请求 QML 把当前画面存成图片
     void screenshotRequested(const QString& path);
+    // D-Bus /debug startFrameCapture：每帧抓取渲染（QML 侧 Item.grabToImage）
+    void frameCaptureRequested(const QString& prefix, int limit);
+    void frameCaptureStopRequested();
 
 private:
     QString m_gameDirectory;

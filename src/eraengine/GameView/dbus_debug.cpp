@@ -193,3 +193,19 @@ QString EraDBusDebug::saveScreenshot(const QString& path) {
     emit screenshotRequested(path);
     return QStringLiteral("saved %1 (%2x%3)").arg(path).arg(img.width()).arg(img.height());
 }
+
+QString EraDBusDebug::startFrameCapture(const QString& prefix, int limit) {
+    // 真正的抓取在 QML 侧完成（Item.grabToImage 才能拿到合成后的画面）：
+    // 广播信号 -> Main.qml 逐帧落盘 <prefix>00000.png …
+    if (prefix.isEmpty())
+        return QStringLiteral("frame capture needs a non-empty prefix");
+    emit frameCaptureRequested(prefix, limit);
+    return QStringLiteral("frame capture started: %1####.png (limit=%2)")
+        .arg(prefix)
+        .arg(limit > 0 ? QString::number(limit) : QStringLiteral("∞"));
+}
+
+QString EraDBusDebug::stopFrameCapture() {
+    emit frameCaptureStopRequested();
+    return QStringLiteral("frame capture stopped");
+}

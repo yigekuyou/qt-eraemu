@@ -57,6 +57,10 @@ public Q_SLOTS:  // ---- 检查 ----
     QString dumpScreen(int lastLines);    // 抓控制台尾部文本
     QString listButtons();                // 当前屏的按钮值（输入候选）
     QString saveScreenshot(const QString& path);  // 保存当前画面，返回结果说明
+    // 每帧抓取渲染：引擎每产生一次新画面（ConsoleBackend::windowChanged）就抓一张，
+    // 存到 <prefix>00000.png …（prefix 不含扩展名）。limit<=0 表示不限（stopFrameCapture 停）。
+    QString startFrameCapture(const QString& prefix, int limit);
+    QString stopFrameCapture();                   // 停止每帧抓取，返回状态说明
 public Q_SLOTS:  // ---- 控制 ----
     QString openDirectory(const QString& path);  // 等价「文件 > 打开目录…」：装载并进入标题画面
     void sendInput(qint64 value);         // 等价键入整数（INPUT/TINPUT…）
@@ -71,6 +75,9 @@ Q_SIGNALS:
     // 转给 QML 层执行（Item.grabToImage -> ItemGrabResult.saveToFile）：
     // 桌面截屏工具截不到 QML 内容，渲染自检必须走 QML 自己的抓取。
     void screenshotRequested(const QString& path);
+    // 每帧抓取的启停（QML 侧用 Item.grabToImage 逐帧落盘）
+    void frameCaptureRequested(const QString& prefix, int limit);
+    void frameCaptureStopRequested();
 
 private:
     EraEngine* m_engine = nullptr;

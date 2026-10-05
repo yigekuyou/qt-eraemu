@@ -48,6 +48,10 @@ public:
     const ConsoleDisplayLine& at(int index) const { return m_lines.at(index); }
     const QList<ConsoleDisplayLine>& lines() const { return m_lines; }
 
+    // 从**头部**丢弃的行数（容量裁剪）。丢弃会让所有绝对行号整体前移，
+    // 按绝对行号为键的缓存（ConsoleBackend::m_lineCache）据此判定失效。
+    int droppedFromFront() const { return m_dropped; }
+
     ConsoleDisplayLine& lastMutable() { return m_lines.last(); }
 
     void appendLine(const ConsoleDisplayLine& line) {
@@ -82,6 +86,9 @@ public:
     void clear() {
         m_lines.clear();
         m_logicalCount = 0;
+        // 全部清空 -> 绝对行号重新从 0 开始；丢弃计数一并归零，
+        // 使「丢弃计数变化」不会在下一次 append 时误判为一次前移。
+        m_dropped = 0;
     }
 
     // 逻辑行计数 = C# logicalLineCount = LINECOUNT
@@ -90,12 +97,16 @@ public:
 private:
     void trim() {
         const int overflow = m_lines.size() - m_capacity;
-        if (overflow > 0) m_lines.erase(m_lines.begin(), m_lines.begin() + overflow);
+        if (overflow > 0) {
+            m_lines.erase(m_lines.begin(), m_lines.begin() + overflow);
+            m_dropped += overflow;   // 头部丢弃 -> 绝对行号前移
+        }
     }
 
     QList<ConsoleDisplayLine> m_lines;
     int m_capacity;
     int m_logicalCount = 0;
+    int m_dropped = 0;
 };
 
 #endif // CONSOLE_BUFFER_H

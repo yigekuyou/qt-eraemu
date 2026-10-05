@@ -70,6 +70,89 @@ ApplicationWindow {
         }
     }
 
+    // ------------------------------------------------------------------
+    // 每帧抓取渲染（D-Bus /debug startFrameCapture|stopFrameCapture）
+    //
+    // Qt 文档（Item::grabToImage / ItemGrabResult）：grabToImage(cb) **异步**把该
+    // Item 子树渲染进离屏并回调，回调里 ItemGrabResult.saveToFile(path) 落盘 ——
+    // 桌面截屏工具抓不到 QML 合成内容，这是「渲染结果」的唯一可靠来源
+    // （QQuickWindow::grabWindow 走的是另一条同步路径，见 EraDBusDebug）。
+    //
+    // 「每帧」= 引擎每产生一次新画面（ConsoleBackend::windowChanged）抓一张：
+    // 画面刷新与渲染抓取一一对应，才能定位「点按钮后画面没刷新」这类回归。
+    // 上一张尚未落盘时只记一个「待抓」标记（合并到最新一帧），避免逐帧堆积。
+    // ------------------------------------------------------------------
+    property bool frameCaptureOn: false
+    property string frameCapturePrefix: ""
+    property int frameCaptureLimit: 0        // <=0 = 不限，靠 stopFrameCapture 停
+    property int frameCaptureSaved: 0
+    property bool frameCaptureBusy: false
+    property bool frameCaptureQueued: false
+
+    function frameCaptureStart(prefix, limit) {
+        frameCapturePrefix = prefix;
+        frameCaptureLimit = limit;
+        frameCaptureSaved = 0;
+        frameCaptureBusy = false;
+        frameCaptureQueued = false;
+        frameCaptureOn = true;
+        // 先把「当前这一帧」抓下来，再随 windowChanged 逐帧抓
+        Qt.callLater(window.frameCaptureGrab);
+    }
+    function frameCaptureStop() {
+        if (!frameCaptureOn)
+            return;
+        frameCaptureOn = false;
+        frameCaptureBusy = false;
+        frameCaptureQueued = false;
+        console.log("frameCapture: 共保存 " + frameCaptureSaved + " 帧 -> "
+                    + frameCapturePrefix + "NNNNN.png");
+    }
+    function frameCaptureGrab() {
+        if (!frameCaptureOn)
+            return;
+        if (frameCaptureBusy) {      // 上一帧还没落盘 -> 合并到最新一帧
+            frameCaptureQueued = true;
+            return;
+        }
+        frameCaptureBusy = true;
+        const path = frameCapturePrefix
+                   + String(frameCaptureSaved).padStart(5, "0") + ".png";
+        // 抓渲染层（eraRender），与 saveScreenshot 的整窗抓取区分开
+        eraRender.grabToImage(function(result) {
+            if (!result.saveToFile(path))
+                console.warn("frameCapture: 保存失败 " + path);
+            ++frameCaptureSaved;
+            frameCaptureBusy = false;
+            if (frameCaptureLimit > 0 && frameCaptureSaved >= frameCaptureLimit) {
+                window.frameCaptureStop();
+                return;
+            }
+            if (frameCaptureQueued) {
+                frameCaptureQueued = false;
+                window.frameCaptureGrab();
+            }
+        });
+    }
+
+    Connections {
+        target: eraEngine
+        function onFrameCaptureRequested(prefix, limit) {
+            window.frameCaptureStart(prefix, limit);
+        }
+        function onFrameCaptureStopRequested() {
+            window.frameCaptureStop();
+        }
+    }
+    // 引擎每刷新一次画面（windowChanged）= 一帧渲染 -> 抓一张
+    Connections {
+        target: eraEngine.console
+        function onWindowChanged() {
+            if (window.frameCaptureOn)
+                window.frameCaptureGrab();
+        }
+    }
+
     // ---- 对话框 ----
     // 原生文件对话框（平台对话框，常驻即可）
     FolderDialog {

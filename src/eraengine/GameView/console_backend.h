@@ -68,13 +68,22 @@ public:
     //   rangeFirst/rangeEnd  扫描行范围 [rangeFirst, rangeEnd)（含探出行）
     //   windowFirst          窗口**顶行**（行级裁剪的锚点，与扫描起点不同）
     //   visibleCount         窗口可见行数（行级可见性判定用）
-    //   tailAbs              需要每轮重建的尾行（未提交行 / 一時行）；-1 = 无
-    //   tailVersion          尾行内容版本（不变则跳过重建）
-    //   lineBlocks           取行区块（带按行缓存；const 回调）
-    // 帧内多次调用是幂等的：内容相同则不产生任何信号。
+    //   lineBlocks(abs,ver)  取行区块并回填该行的**内容版本**（带按行缓存）
+    //
+    // 行是否刷新由「内容版本」决定，而不是「绝对行号是否还在窗口里」：
+    // eraTW 的 CLEARLINE + 重打印会把同一批绝对行号**复用**（标题画面
+    // `CLEARLINE LINECOUNT - LOCAL:2` 后重印整屏），若只比行号，模型会认为
+    // 「行还在」而保留旧区块 —— 表现为点按钮后画面不刷新、按钮世代过期失效。
+    // 版本不变（缓存命中且未失效）才跳过，帧内多次调用幂等。
+    //
+    // 刷新按 Qt 文档的信号语义分流（QAbstractItemModel）：
+    //   * 内容变了、行程不变 -> 原地改写 + **dataChanged(起始行, 终止行)**：
+    //     视图只在区间内重绑数据，不销毁/重建委托，行数不变也不扰动滚动。
+    //     绝不用 removeRows+insertRows 表达「内容变化」——那会把区间内的委托
+    //     全拆掉，历史区跟着遭殃（表现为「刷一次把上面的历史吃了」）。
+    //   * 行程变了（区块数不同）-> 摘除该行 + 重插（唯一该用增删信号的场景）。
     void setWindow(int rangeFirst, int rangeEnd, int windowFirst, int visibleCount,
-                   int tailAbs, quint64 tailVersion,
-                   const std::function<QVariantList(int)>& lineBlocks);
+                   const std::function<QVariantList(int, quint64&)>& lineBlocks);
     void reset();
 
     [[nodiscard]] QVariantList allBlocks() const;
@@ -83,6 +92,7 @@ public:
     // 性能计数（perfReport 汇总）
     [[nodiscard]] qint64 insertedRows() const { return m_insertedRows; }
     [[nodiscard]] qint64 removedRows() const { return m_removedRows; }
+    [[nodiscard]] qint64 updatedRows() const { return m_updatedRows; }  // dataChanged 原地刷新
     [[nodiscard]] qint64 resets() const { return m_resets; }
     [[nodiscard]] qint64 syncs() const { return m_syncs; }
     [[nodiscard]] qint64 lastSyncMs() const { return m_lastSyncMs; }
@@ -93,18 +103,20 @@ private:
         int abs = 0;        // 绝对行号
         int startRow = 0;   // 模型行起点
         int count = 0;      // 区块数（行程）
+        quint64 version = 0;// 该行内容的版本（相同则复用模型行）
     };
 
     [[nodiscard]] bool lineVisibleInWindow(const QVariantList& blocks, int abs,
                                            int first, int visibleCount) const;
+    // 摘除第 i 条行条目（连带其模型行），并修正后续条目的 startRow。
+    void removeEntryAt(int i);
 
     qint64 m_insertedRows = 0;
     qint64 m_removedRows = 0;
+    qint64 m_updatedRows = 0;
     qint64 m_resets = 0;
     qint64 m_syncs = 0;
     qint64 m_lastSyncMs = 0;
-    int    m_lastTailAbs = -2;
-    quint64 m_lastTailVersion = 0;
     QList<LineEntry> m_lines;      // 按 abs 升序（可能因行级裁剪有空隙）
     QVector<QVariantMap> m_flat;   // 行镜像：下标 = 模型行
 };
@@ -358,11 +370,20 @@ private:
 
     // ---- 按行区块缓存（显示行提交后不可变 -> 每行只摊平一次）----
     // key = 绝对行号；value = 该行的区块列表（绝对 row/z，窗口无关）。
-    // 失效：clearAll 全清；clearLines 清掉被删的尾行。
+    // 失效：clearAll 全清；clearLines 清掉被删的尾行；容量裁剪（绝对行号
+    // 前移）整表作废；字号/行高/网格变化（区块尺寸被烘焙进缓存）整表作废。
+    // m_lineVersion 记该行内容版本：重摊平（缓存失效后）会得到新版本号，
+    // 增量模型据此重建被复用行号的模型行。
     mutable QHash<int, QVariantList> m_lineCache;
+    mutable QHash<int, quint64> m_lineVersion;
+    mutable quint64 m_lineSerial = 0;        // 已提交行的版本号发号器
+    mutable int m_cacheDropped = 0;          // 缓存对应的「头部丢弃数」
     mutable qint64 m_lineCacheBuilds = 0;    // 摊平次数（缓存未命中）
     mutable qint64 m_lineCacheMs = 0;        // 摊平累计耗时
-    [[nodiscard]] QVariantList lineBlocks(int abs) const;
+    // 取某行的区块；versionOut 回填内容版本（未提交/一時行用内容版本号）。
+    [[nodiscard]] QVariantList lineBlocks(int abs, quint64* versionOut = nullptr) const;
+    // 整表作废（布局度量变化：字号/行高/网格 —— 区块宽高被烘焙进缓存）。
+    void invalidateLineCache();
 
     // 把当前窗口同步进增量模型（notifyWindowChanged 内调用；幂等）
     void syncBlockModel();

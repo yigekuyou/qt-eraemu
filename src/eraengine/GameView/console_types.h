@@ -122,6 +122,10 @@ struct ConsoleSpan {
     // eraTW 的画像枠・時間停止・特效都是「另一张图叠在立絵上」：它们各自在被打印的
     // 那一行，靠 ypos 负偏移被拉回去盖住立絵 —— 不实现 ypos，框就落在立絵下面一行。
     int      yposRaw = 0;
+    // `<img srcb=...>`：按钮**选中/悬停态**的替换图（C# ButtonResourceName：
+    // DrawTo 在 isSelecting||isFocus 时改画 cImageB —— eraTW 立绘在按钮里
+    // 平时显示 src、被指向时显示 srcb）。仅显示语义，不影响布局。
+    QString  imageButton;
     QString  shapeType;         // "space" | "rect" | "line" | "polygon"
     QList<int> shapeParams;     // 百分比参数（× FontSize / 100）
     bool     error = false;     // 字体/资源异常（C# part.Error）
@@ -165,6 +169,7 @@ struct ConsoleSpan {
         m.insert("imageId", imageId);
         m.insert("imageW", imageSize.width());
         m.insert("imageH", imageSize.height());
+        if (!imageButton.isEmpty()) m.insert("imageButton", imageButton);
         m.insert("shapeType", shapeType);
         QVariantList params;
         for (int p : shapeParams) params.append(p);

@@ -99,7 +99,32 @@ CALLEVENT MISC_NO_SUCH_EVENT
 CALL ASSERT_TRUE, 1, @"CALLEVENT 未定义事件时静默跳过"
 NONG += RESULT
 
+;---- CALLEVENT（事件函数链：#PRI -> 普通 -> #LATER 依次执行后回到下一行）----
+;EVENTTURNEND 在事件名表里，三份同名 @EVENTTURNEND 组成事件链。
+;TFLAG:9 用作累计器（组内其它断言不占用）。
+TFLAG:9 = 0
+CALLEVENT EVENTTURNEND
+CALL ASSERT_EQ, TFLAG:9, 7, @"CALLEVENT 事件链按 #PRI/普通/#LATER 顺序执行（1+2+4）"
+NONG += RESULT
+
 RETURN NONG
+
+;=============================================================
+; CALLEVENT 用的同名事件函数（EVENTTURNEND）
+;=============================================================
+@EVENTTURNEND
+#PRI
+TFLAG:9 += 1
+RETURN 0
+
+@EVENTTURNEND
+TFLAG:9 += 2
+RETURN 0
+
+@EVENTTURNEND
+#LATER
+TFLAG:9 += 4
+RETURN 0
 
 ;=============================================================
 ; 被调/被跳函数

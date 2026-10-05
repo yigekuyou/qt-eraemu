@@ -136,6 +136,11 @@ public:
 		// RESETGLOBAL（C#：全てのグローバル変数を初期化）
 		void resetGlobals();
 
+		// RESETDATA / 新开游戏（C# VariableEvaluator.ResetData）：
+		// 全部运行时变量回默认值 + 角色列表清空。NAME 表 / STR 等 CSV 装载期
+		// 默认值与模板快照保留。
+		void resetForNewGame();
+
 		// ================= CSV 模板快照（CSVNAME/CSVBASE/CSVABL/… 用）=================
 		// C# 里「CSV 模板」与「角色运行时数据」是两个存储：CSV* 函数读模板，
 		// VAR:角色:下标 读运行时可变量。本移植把模板值直接写进了角色存储，

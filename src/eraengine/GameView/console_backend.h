@@ -23,11 +23,91 @@
 #include <QColor>
 #include <QVariantMap>
 #include <QVariantList>
+#include <QAbstractListModel>
+#include <QHash>
+#include <functional>
 #include <QtQml/qqmlregistration.h>
 #include "console_types.h"
 #include "GameData/ast/logical_line.h"
 #include "console_buffer.h"
 #include "console_layout.h"
+
+// ---------------------------------------------------------------------------
+// ConsoleBlockModel —— 可见区块的增量列表模型（QAbstractListModel）
+//
+// 为什么不是 QVariantList（Qt Quick 性能指南 "Sequence tips"）：
+//   值序列每次变化都整表通知，Instantiator 收到的是「模型整体替换」，
+//   于是把整屏区块对象（~1000+）全部销毁重建。文档给出的出路是
+//   QAbstractItemModel 的细粒度信号：beginInsertRows/beginRemoveRows 让
+//   delegate 只对真正变化的行做增删，未变化的行原地复用。
+//
+// 行 = 可见窗口内的一个「最小单位区块」（ConsoleSpan），按行成组：
+//   * 显示行一旦提交就不可变（只追加；可变的只有尾部的「一時行」/未提交行），
+//     因此每行的区块只摊平一次（ConsoleBackend::lineBlocks 的按行缓存）；
+//   * 滚动 / 追加 = 只对进入或离开窗口的行 insertRows / removeRows；
+//   * 尾行每轮重建（行数少，代价可忽略），用 tailVersion 判重避免无谓churn。
+//
+// 坐标是**绝对坐标系**：row = 缓冲区行号，z = 打印顺序编码（abs*1024+序号）。
+// 滚动只改窗口锚点 windowTopRow（QML 侧一个 int 属性），不触碰任何行数据 ——
+// 这是增量成立的前提，也让滚动不再触发任何 delegate 重建。
+// ---------------------------------------------------------------------------
+class ConsoleBlockModel : public QAbstractListModel {
+    Q_OBJECT
+
+public:
+    enum Roles { BlockRole = Qt::UserRole + 1 };
+
+    explicit ConsoleBlockModel(QObject* parent = nullptr);
+
+    [[nodiscard]] int rowCount(const QModelIndex& parent = QModelIndex()) const override;
+    [[nodiscard]] QVariant data(const QModelIndex& index,
+                                int role = Qt::DisplayRole) const override;
+    [[nodiscard]] QHash<int, QByteArray> roleNames() const override;
+
+    // 同步可见窗口。
+    //   rangeFirst/rangeEnd  扫描行范围 [rangeFirst, rangeEnd)（含探出行）
+    //   windowFirst          窗口**顶行**（行级裁剪的锚点，与扫描起点不同）
+    //   visibleCount         窗口可见行数（行级可见性判定用）
+    //   tailAbs              需要每轮重建的尾行（未提交行 / 一時行）；-1 = 无
+    //   tailVersion          尾行内容版本（不变则跳过重建）
+    //   lineBlocks           取行区块（带按行缓存；const 回调）
+    // 帧内多次调用是幂等的：内容相同则不产生任何信号。
+    void setWindow(int rangeFirst, int rangeEnd, int windowFirst, int visibleCount,
+                   int tailAbs, quint64 tailVersion,
+                   const std::function<QVariantList(int)>& lineBlocks);
+    void reset();
+
+    [[nodiscard]] QVariantList allBlocks() const;
+    [[nodiscard]] QVariantList blocksOfKind(const QString& kind) const;
+
+    // 性能计数（perfReport 汇总）
+    [[nodiscard]] qint64 insertedRows() const { return m_insertedRows; }
+    [[nodiscard]] qint64 removedRows() const { return m_removedRows; }
+    [[nodiscard]] qint64 resets() const { return m_resets; }
+    [[nodiscard]] qint64 syncs() const { return m_syncs; }
+    [[nodiscard]] qint64 lastSyncMs() const { return m_lastSyncMs; }
+    void resetPerf();
+
+private:
+    struct LineEntry {
+        int abs = 0;        // 绝对行号
+        int startRow = 0;   // 模型行起点
+        int count = 0;      // 区块数（行程）
+    };
+
+    [[nodiscard]] bool lineVisibleInWindow(const QVariantList& blocks, int abs,
+                                           int first, int visibleCount) const;
+
+    qint64 m_insertedRows = 0;
+    qint64 m_removedRows = 0;
+    qint64 m_resets = 0;
+    qint64 m_syncs = 0;
+    qint64 m_lastSyncMs = 0;
+    int    m_lastTailAbs = -2;
+    quint64 m_lastTailVersion = 0;
+    QList<LineEntry> m_lines;      // 按 abs 升序（可能因行级裁剪有空隙）
+    QVector<QVariantMap> m_flat;   // 行镜像：下标 = 模型行
+};
 
 // ---------------------------------------------------------------------------
 // ConsoleBackend —— 显示层的 C++ 后端（C++ 决定「显示什么」，QML 决定「怎么画」）
@@ -77,27 +157,30 @@ public:
     Q_PROPERTY(QVariantList visibleLines READ visibleLines NOTIFY windowChanged)
     [[nodiscard]] QVariantList visibleLines() const;
     // ② 分层模型（root / text / image 三层直接用）：
-    //    扁平化的「最小单位区块」列表，**坐标已由 C++ 算好**（含对齐平移与行高）：
-    //      { kind, text, x, y, width, height, color, …,
-    //        lineIndex, segmentIndex, isButton, clickable, tooltip, generation }
-    //    QML 的 text 层只挑 kind=="text"，image 层只挑 kind=="image"/"shape"，
-    //    各自在层内按 x/y 自由摆放。
+    //    兼容入口：当前窗口的「最小单位区块」列表（= 增量模型的当前内容）。
+    //    QML 运行时**不再使用**这三个 QVariantList 属性（值序列整表替换会导致
+    //    Instantiator 全量重建 delegate）；保留给 test_cli / QML 测试做诊断。
     Q_PROPERTY(QVariantList visibleBlocks READ visibleBlocks NOTIFY windowChanged)
-    [[nodiscard]] QVariantList visibleBlocks() const;
+    [[nodiscard]] QVariantList visibleBlocks();
     [[nodiscard]] int windowFirstLine() const;
 
-    // ③ 三个「层」各自的区块列表（QML 里一一对应三个 Instantiator）
-    //    root 层 = 可见窗口容器；text 层 / image 层 = 区块的宿主
-    //    三个属性共享同一份按代数(epoch)的缓存：一次 visibleBlocks() 摊平，
-    //    三个层各自取用 —— 此前每个属性各建一遍，同一帧 3× 重复构建。
+    // ③ 增量区块模型（QML 运行时唯一的数据源）：
+    //    行 = 可见窗口内的一个区块；滚动/追加只产生 insertRows/removeRows 增量，
+    //    未变化的行原地复用（不再随每帧整屏重建）。
+    Q_PROPERTY(QAbstractListModel* blockModel READ blockModel CONSTANT)
+    [[nodiscard]] QAbstractListModel* blockModel() { return &m_blockModel; }
+    // 窗口顶行的**绝对行号**：区块 y = (row - windowTopRow + offsetRows) × 行高。
+    // 滚动只改这一个值（QML 绑定重求值），不触碰模型内容。
+    Q_PROPERTY(int windowTopRow READ windowFirstLine NOTIFY windowChanged)
+
     Q_PROPERTY(QVariantList textBlocks  READ textBlocks  NOTIFY windowChanged)
     Q_PROPERTY(QVariantList imageBlocks READ imageBlocks NOTIFY windowChanged)
     Q_PROPERTY(QVariantList shapeBlocks READ shapeBlocks NOTIFY windowChanged)
     Q_PROPERTY(int contentHeight READ contentHeight NOTIFY windowChanged)
-    [[nodiscard]] QVariantList textBlocks() const { return layerBlocks(QStringLiteral("text")); }
-    [[nodiscard]] QVariantList imageBlocks() const { return layerBlocks(QStringLiteral("image")); }
-    [[nodiscard]] QVariantList shapeBlocks() const { return layerBlocks(QStringLiteral("shape")); }
-    [[nodiscard]] QVariantList layerBlocks(const QString& layer) const;
+    [[nodiscard]] QVariantList textBlocks() { return layerBlocks(QStringLiteral("text")); }
+    [[nodiscard]] QVariantList imageBlocks() { return layerBlocks(QStringLiteral("image")); }
+    [[nodiscard]] QVariantList shapeBlocks() { return layerBlocks(QStringLiteral("shape")); }
+    [[nodiscard]] QVariantList layerBlocks(const QString& layer);
     [[nodiscard]] int contentHeight() const;
 
     // ---- 性能诊断（QML 卡顿定位；appemuera 的 D-Bus /debug 也读取）----
@@ -188,7 +271,7 @@ public:
     // ---- QML 调用 ----
     Q_INVOKABLE QVariantMap visibleLine(int index) const;
     Q_INVOKABLE int  visibleLineCount() const;
-    Q_INVOKABLE void clickAt(int visibleIndex, int segmentIndex);
+    Q_INVOKABLE void clickAt(int absLine, int segmentIndex);
     Q_INVOKABLE void scrollBy(int lines);
     Q_INVOKABLE void scrollToBottom();
     Q_INVOKABLE void tick();
@@ -268,16 +351,28 @@ private:
 
     QTimer m_timer;
 
-    // ---- 窗口内容代数与层缓存（见 notifyWindowChanged / layerBlocks）----
+    // ---- 窗口内容版本 + 增量区块模型 ----
     int  m_windowEpoch = 1;
-    mutable int          m_blockCacheEpoch = -1;   // 缓存对应的代数
-    mutable QVariantList m_textCache, m_imageCache, m_shapeCache;
+    // 内容版本：每次内容变更（markDirty）自增，供模型判定尾行是否需重建
+    quint64 m_contentVersion = 0;
+
+    // ---- 按行区块缓存（显示行提交后不可变 -> 每行只摊平一次）----
+    // key = 绝对行号；value = 该行的区块列表（绝对 row/z，窗口无关）。
+    // 失效：clearAll 全清；clearLines 清掉被删的尾行。
+    mutable QHash<int, QVariantList> m_lineCache;
+    mutable qint64 m_lineCacheBuilds = 0;    // 摊平次数（缓存未命中）
+    mutable qint64 m_lineCacheMs = 0;        // 摊平累计耗时
+    [[nodiscard]] QVariantList lineBlocks(int abs) const;
+
+    // 把当前窗口同步进增量模型（notifyWindowChanged 内调用；幂等）
+    void syncBlockModel();
+
+    ConsoleBlockModel m_blockModel;
+
     // 性能计数器（perfReport 读取；D-Bus /debug 转发）
     mutable qint64 m_layerBlockCalls = 0;
     mutable qint64 m_visibleBlockCalls = 0;
-    mutable qint64 m_blocksBuilt = 0;        // 累计生成的区块数（含三次层取用）
-    mutable qint64 m_blockBuildMs = 0;       // 累计构建耗时（毫秒）
-    mutable qint64 m_windowChangedCount = 0; // windowChanged 次数（≈ 模型重置次数）
+    mutable qint64 m_windowChangedCount = 0; // windowChanged 次数
 };
 
 #endif // CONSOLE_BACKEND_H

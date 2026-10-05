@@ -109,12 +109,15 @@ TestCase {
             const glyph = findChild(cell, "gridGlyph");
             if (!glyph) continue;
             // 一个「段」承载相邻同格宽的若干字符（ConsoleBlock.glyphRuns）。
-            // 不变式：段宽 == 字数 × 格宽、缩放后正好铺满段宽、每段裁剪；
+            // 不变式：段宽 == 字数 × 格宽、缩放后正好铺满段宽、缩放原点在
+            // Left（不外溢到相邻 span —— 取代 delegate 内 clip：Qt 文档
+            // 「Performance considerations」明确禁止在 delegate 里用 clip）；
             // 整行总宽 == 区块宽（字符不会漂移/重叠）。
             const run = cell.modelData;
             verify(Math.abs(glyph.implicitWidth * glyph.transform[0].xScale - cell.width) < 0.01);
             verify(Math.abs(cell.width - run.count * run.units * view.cellWidth) < 0.01);
-            verify(cell.clip);
+            verify(glyph.transform[0].origin.x === 0);
+            verify(!cell.clip);
             total += cell.width;
             chars += run.count;
         }
@@ -276,7 +279,8 @@ TestCase {
         // 夹具用 fontSize 18 / lineHeight 20：top = -800*18/100 = -144px -> -144/20 = -7.2 行
         verify(Math.abs(f.offsetRows - (-7.2)) < 0.001, "ypos=-800 -> offsetRows == -7.2");
         const fitem = view.imageBlockAt(0);
-        compare(fitem.y, (f.row + f.offsetRows) * view.cellHeight, "y 应用 offsetRows");
+        compare(fitem.y, (f.row - view.windowTopRow + f.offsetRows) * view.cellHeight,
+                "y 应用 offsetRows（row 为绝对行号，以 windowTopRow 为锚）");
     }
 
     // 有界窗口：区块数随可见行数受控

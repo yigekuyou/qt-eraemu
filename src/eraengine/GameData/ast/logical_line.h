@@ -154,6 +154,8 @@ struct PrintTemplatePart {
     enum class Kind : quint8 { Text, Expression, Break, Image, Shape, Button, EndButton, Alignment, EndAlignment, NoWrap, EndNoWrap, Style, EndStyle };
     Kind kind = Kind::Text;
     QString text;
+    // <img srcb='...'>：按钮选中态替换图（C# ConsoleImagePart.ButtonResourceName）
+    QString imageAlt;
     QSharedPointer<ExpressionNode> expression;
     PrintStyle style;
     QString buttonValue;

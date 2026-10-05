@@ -56,14 +56,21 @@ public Q_SLOTS:  // ---- 检查 ----
     void resetPerf();                     // 清零性能计数器
     QString dumpScreen(int lastLines);    // 抓控制台尾部文本
     QString listButtons();                // 当前屏的按钮值（输入候选）
+    QString saveScreenshot(const QString& path);  // 保存当前画面，返回结果说明
 public Q_SLOTS:  // ---- 控制 ----
     QString openDirectory(const QString& path);  // 等价「文件 > 打开目录…」：装载并进入标题画面
     void sendInput(qint64 value);         // 等价键入整数（INPUT/TINPUT…）
     void sendInputString(const QString& text);
     void sendAnyKey();                    // 等价回车/点击继续（WAIT 系）
+    void sendMouseKey(int type, int r1, int r2, int r3, int r4);  // 等价鼠标/原始键（INPUTMOUSEKEY）
     void scroll(int lines);               // 正=向上，负=向下
     void scrollToBottom();
     void setLoggingRules(const QString& rules);  // 运行期调 QLoggingCategory
+
+Q_SIGNALS:
+    // 转给 QML 层执行（Item.grabToImage -> ItemGrabResult.saveToFile）：
+    // 桌面截屏工具截不到 QML 内容，渲染自检必须走 QML 自己的抓取。
+    void screenshotRequested(const QString& path);
 
 private:
     EraEngine* m_engine = nullptr;

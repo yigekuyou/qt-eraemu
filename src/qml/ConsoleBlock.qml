@@ -45,6 +45,9 @@ Item {
 
     property var blockData: ({})
     property var backend: null
+    // 窗口顶行的绝对行号（根容器传入）：y = (row - windowTopRow + offsetRows) × 行高。
+    // 滚动只改这一个值，模型与区块数据不动（Qt 文档：绑定重求值，微秒级）。
+    property int windowTopRow: 0
     // ---- 单元格大小（由容器决定）----
     property real cellWidth: 9
     property real cellHeight: 19
@@ -121,10 +124,14 @@ Item {
     // 位置与尺寸：网格坐标 × 单元格大小（QML 说了算）
     // row 允许为负 / 超过行数：跨行图与带 ypos 的图层块会探出窗口，交给视口 clip。
     x: gridCol * cellWidth
-    y: (gridRow + offsetRows) * cellHeight
+    y: (gridRow - windowTopRow + offsetRows) * cellHeight
     // 外层至少覆盖 C++ 的网格测量；文本内容本身由 glyph 容器自动撑开。
     width: Math.max(gridCols * cellWidth, contentRow.implicitWidth)
     height: Math.max(gridRows * cellHeight, contentRow.implicitHeight)
+    // 叠放顺序 = 控制台打印顺序（C++ 给的扁平 z）。三个 Instantiator 共用同一个
+    // 父 Item 后，靠它把 text/image/shape 按真正的绘制顺序交叠 —— 对齐 C#
+    // 「逐 part 顺序绘制」：图可压住先打印的字，后打印的字也能盖住先打印的图。
+    z: blockData && blockData.z !== undefined ? blockData.z : 0
 
     // ---- 悬停高亮（可点击区块，含按钮 span）----
     Rectangle {
@@ -159,7 +166,9 @@ Item {
                 required property var modelData          // { text, units, count }
                 width: modelData.units * modelData.count * block.cellWidth
                 height: block.gridRows * block.cellHeight
-                clip: true
+                // 不启用 clip（Qt 文档「Performance considerations」：Clipping inside
+                // a delegate is especially bad, avoid at all costs）。缩放原点用
+                // Left：绘制严格落在本格宽度内，不会溢到相邻 span。
                 Text {
                     id: glyph
                     objectName: "gridGlyph"
@@ -170,6 +179,7 @@ Item {
                     font.family: block.effectiveFontName
                     font.pixelSize: block.fontSize > 0 ? block.fontSize : undefined
                     transform: Scale {
+                        origin.x: 0
                         xScale: glyph.implicitWidth > 0 ? glyph.parent.width / glyph.implicitWidth : 1
                     }
                     color: block.effectiveTextColor
@@ -182,10 +192,31 @@ Item {
         }
     }
 
+    // <img srcb='...'>：按钮选中/悬停态替换图（C# ConsoleImagePart.cImageB：
+    // isSelecting||isFocus 时**改画 srcb**，不是叠加 —— 平时 src、指向时 srcb）。
+    // 两张 Image 同几何叠放，按 hovered 切换可见性；无 srcb 时退化为单张。
+    Image {
+        id: imageItemB
+        visible: imageItem.visible && block.hovered
+                 && block.blockData && (block.blockData.imageButton || "") !== ""
+        anchors.left: parent.left
+        anchors.verticalCenter: parent.verticalCenter
+        source: (visible && block.blockData && block.blockData.imageButton)
+                    ? ("image://emuera/" + encodeURIComponent(block.blockData.imageButton)) : ""
+        width: Math.max(1, block.width)
+        height: Math.max(1, block.height)
+        fillMode: Image.PreserveAspectFit
+        // Qt 文档（Images）：「Enable image.smooth only if required」——
+        // 原尺寸显示时 smooth 无视觉效果还会更慢，仅在缩放时开启。
+        smooth: width < imageItemB.implicitWidth || height < imageItemB.implicitHeight
+        asynchronous: true
+        retainWhileLoading: true
+    }
+
     Image {
         id: imageItem
         objectName: "blockImage"          // 供 QML 测试 findChild 命中
-        visible: block.kind === "image"
+        visible: block.kind === "image" && !imageItemB.visible
         anchors.left: parent.left
         anchors.verticalCenter: parent.verticalCenter
         // QQuickImageProvider（Qt 文档）："image:" scheme + provider 标识 + id；
@@ -204,7 +235,7 @@ Item {
         width: Math.max(1, block.width)
         height: Math.max(1, block.height)
         fillMode: Image.PreserveAspectFit
-        smooth: true
+        smooth: width < imageItem.implicitWidth || height < imageItem.implicitHeight
         asynchronous: true
         // 文档：source 变化时默认立即丢弃旧图（异步加载会闪一下）；
         // 立絵/表情切换频繁，保留旧图直到新图就绪可避免闪烁。

@@ -61,11 +61,17 @@ CALL ASSERT_SEQ, NAME:0, "测试者", @"LOADCHARA 后 NAME 正确"
 NONG += RESULT
 
 ;---- SAVEVAR / LOADVAR ----
-;这两个是 EmueraEE 扩展（C# 原版与两个文档站的命令表里都没有），
-;本移植只做「识别不报错」；因此此处仅冒烟，不断言往返值。
+;EmueraEE 扩展。本移植实现为 JSON 往返（sav/ 目录）：
+;EE 顺序 SAVEVAR <变量>…, <文件名> / LOADVAR <文件名>。
+GLOBAL:3 = 555
+GLOBAL:4 = 777
 SAVEVAR GLOBAL, 0, "cov_varfile"
-LOADVAR GLOBAL, 0, "cov_varfile"
-CALL ASSERT_TRUE, 1, @"SAVEVAR/LOADVAR 被识别（EE 扩展，未实现往返）"
+GLOBAL:3 = 0
+GLOBAL:4 = 0
+LOADVAR "cov_varfile"
+CALL ASSERT_EQ, GLOBAL:3, 555, @"SAVEVAR/LOADVAR 往返（GLOBAL:3）"
+NONG += RESULT
+CALL ASSERT_EQ, GLOBAL:4, 777, @"SAVEVAR/LOADVAR 往返（GLOBAL:4）"
 NONG += RESULT
 
 ;---- SAVEGAME / LOADGAME（呼出标准存档流程；此处只验证调用不报错）----

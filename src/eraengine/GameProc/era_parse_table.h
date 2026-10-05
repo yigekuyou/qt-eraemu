@@ -137,6 +137,10 @@ public:
     bool loadScript(const QString& scriptName, const QList<LogicalLine>& lines,
                     bool isHeaderFile = false, const QString& path = QString());
 
+    // 卸载全部脚本（QUIT 关闭游戏）：释放 AST/标签/函数表/告警等解析期内存。
+    // 调用后脚本表为空，需重新 loadScript + finalizeParse 才能执行。
+    void clear();
+
     [[nodiscard]] QString scriptPath(const QString& scriptName) const;
     // 是否存在某标签（跨全部脚本）
     [[nodiscard]] bool hasLabel(const QString& label) const;

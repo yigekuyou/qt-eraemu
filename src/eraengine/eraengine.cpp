@@ -64,6 +64,9 @@ EraEngine::EraEngine(QObject *parent)
 
 		// ---- D-Bus 调试/控制入口（appemuera 的 /debug 对象；test_cli 无总线时静默）----
 		m_dbusDebug = std::make_unique<EraDBusDebug>(this, this);
+		// /debug saveScreenshot -> QML（Item.grabToImage 保存渲染结果）
+		connect(m_dbusDebug.get(), &EraDBusDebug::screenshotRequested,
+		        this, &EraEngine::screenshotRequested);
 		m_dbusDebug->registerOnBus();
 
 		// ---- 系统状态机：依赖注入 ----
@@ -272,6 +275,10 @@ EraEngine::EraEngine(QObject *parent)
 		connect(&m_scriptRunner, &ScriptRunner::errorOccurred, this, [](const QString& msg) {
 			qWarning() << "[ScriptRunner]" << msg;
 		});
+		// QUIT：脚本请求结束本局。queued 投递，等当前 pump/事件栈退出后再卸载，
+		// 避免在 pump() 栈内重入清理解析表。
+		connect(&m_systemStateMachine, &SystemStateMachine::quitRequestedByScript,
+		        this, &EraEngine::quitRequested, Qt::QueuedConnection);
 		connect(&m_scriptRunner, &ScriptRunner::inputRequested, this, [this](const QString& kind) {
 			qDebug() << "[ScriptRunner] waiting for user input:" << kind
 					 << "state=" << static_cast<int>(m_processState.getExecState());
@@ -577,6 +584,13 @@ void EraEngine::setGameDirectory(const QString& directory)
 void EraEngine::reload()
 {
 		setHasError(false);   // 重新装载 -> 清掉上一次的错误灯
+		// 新游戏从空控制台开始（清屏从 closeGame 挪到这里：QUIT 后保留末屏）
+		m_console.clearAll();
+		// 上一局脚本可能 QUIT 过：不清掉会残留 Halt/quitRequested 把新局锁死
+		m_processState.clearQuitRequest();
+		// closeGame 停在 Halt —— 必须复位成 Continue，否则新局 run()/pump()
+		// 第一圈 isRunning()==false 直接 break，标题永远不会出现
+		m_processState.setExecState(ExecState::Continue);
 		// Reload scripts from current directory
 		if (!m_gameDirectory.isEmpty()) {
 				// 对齐 C#：先解析 ErbDir / CsvDir（只在这两个目录内检索）
@@ -592,6 +606,10 @@ void EraEngine::reload()
 				loadConstantData();
 
 				// 脚本：只从 ERB 目录装载
+				// 先清掉上一局的解析数据：loadScript 是增量 append（同名事件
+				// 标签/告警会翻倍 —— 上一局 88 条告警第二局变 179 条，
+				// @EVENTFIRST 的 6 个声明变 12 个，事件组重复执行）
+				m_parseTable.clear();
 				qDebug() << "[DEBUG] Loading scripts from:" << m_erbDir;
 				m_executionEngine.loadScripts(m_erbDir);
 				m_parseTable.finalizeParse();   // 全量回填变量类型（一次性）
@@ -602,6 +620,36 @@ void EraEngine::reload()
 				// 同步装载完成（GUI 可据此启动系统状态机：runSystem()）
 				emit scriptsLoaded(true);
 		}
+}
+
+// QUIT（脚本）/ 关闭游戏：卸载当前目录的游戏并释放引擎内存，回到「未装载」
+// 状态（等价 C# 关闭游戏窗口，但本移植是单实例常驻，卸载后可再 openDirectory）。
+void EraEngine::closeGame()
+{
+		// 守卫：quitRequested 是 queued 投递 —— 若在此期间用户/脚本已经打开了
+		// 新目录（reload() 会 clearQuitRequest），这次排队中的卸载必须放弃，
+		// 否则会把刚装载好的新局拆掉（表现为新局 run() 立刻 Halt）。
+		if (!m_processState.quitRequested()) {
+				qDebug() << "[EraEngine] closeGame: QUIT 已被新装载消费，跳过卸载";
+				return;
+		}
+		qInfo() << "[EraEngine] closeGame: 卸载当前游戏并释放内存";
+		setHasError(false);
+		m_processState.requestHalt();        // 停掉执行链（若还在跑）
+		m_processState.clearQuitRequest();   // 消费掉 QUIT 请求
+		m_audio.stopBgm();
+		m_audio.stopSounds();
+		// 控制台不清屏：QUIT 后最后一屏（测试汇总等）留在窗口上供查看，
+		// 真正清屏发生在下一次装载（reload），届时新游戏从空控制台开始。
+		// 变量/角色运行时数据回默认（释放内建数组与角色容器）
+		m_executionEngine.handleResetData();
+		// 脚本 AST/标记区/函数表/标签/告警 全量释放
+		m_parseTable.clear();
+		m_gameDirectory.clear();
+		m_csvDir.clear();
+		m_erbDir.clear();
+		ResourceImageProvider::setRoot(QString());
+		emit gameDirectoryChanged();
 }
 
 void EraEngine::resolveGameDirs()
@@ -888,6 +936,7 @@ void EraEngine::reloadAsync()
 				emit scriptsLoaded(false);
 				return;
 		}
+		m_processState.clearQuitRequest();   // 同 reload()：清掉上一局的 QUIT 请求
 		resolveGameDirs();
 		loadConfigFiles();
 		resolveTextConfig();
@@ -1189,6 +1238,11 @@ void EraEngine::buildSystemHost()
 		host.titleMenuString = [](int index) {
 				return index == 0 ? QStringLiteral("开始游戏") : QStringLiteral("读取存档");
 		};
+
+		// ---- 数据层（RESETDATA 指令 / 标准标题「[0] 从头开始」）----
+		// 此前 resetData 从未接线：RESETDATA 只在 ExecutionEngine 里有一半实现，
+		// 系统层的新开游戏重置根本没被调用。
+		host.resetData = [this]() { m_executionEngine.handleResetData(); };
 
 		// ---- 存/读档（SAVEGAME / LOADGAME 系统画面）----
 		// 文件名/目录对齐 ExecutionEngine 的 SAVEDATA/LOADDATA（sav/save##.sav），

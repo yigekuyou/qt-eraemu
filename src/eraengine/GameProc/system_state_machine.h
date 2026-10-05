@@ -208,6 +208,9 @@ signals:
     void inputRequested(SystemStateCode state);   // 请求系统输入（TRAIN/SHOP/…）
     void stateAdvanced(SystemStateCode state);    // 每次处理函数执行后
     void errorOccurred(const QString& message);
+    // 脚本 QUIT：pump() 任何调用方（含定时器驱动的 pacing pump）都能收到，
+    // 不依赖「resume() 的返回值被 GUI 层检查」
+    void quitRequestedByScript();
 
 private:
     // ---- 事件调用（对齐 C# CalledFunction 的 4 组导航）----

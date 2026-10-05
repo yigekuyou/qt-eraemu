@@ -60,7 +60,11 @@ Item {
 
     // ---- SE（1..N 号管线，EE 的 `Sound[10]`）：每条一个播放器 ----
     // 数量来自 C++（扩展登记的 4 字节无符号数），QML 不硬编码「10」。
-    // Repeater 的 delegate 必须是 Item，故用隐藏 Item 包一层 SoundEffect。
+    //
+    // 后端选型（Qt 文档）：SoundEffect 只支持**未压缩 WAV**（低延迟），
+    // 而 EE 的 Sound 支持 wav/ogg/mp3/…（MF 解码）—— 用 SoundEffect 播
+    // ogg 会 status=Error 且**从不发声**，管线还被占住不放。这里统一用
+    // MediaPlayer（Qt Multimedia 文档：格式更全、资源占用更低），格式对齐 EE。
     Repeater {
         id: seRepeater
         model: root.audio ? root.audio.soundPipelines : 0
@@ -73,7 +77,7 @@ Item {
             visible: false
 
             function playSource(u, loops) {
-                se.loops = (loops === -1 ? SoundEffect.Infinite : Math.max(1, loops));
+                se.loops = (loops === -1 ? MediaPlayer.Infinite : Math.max(1, loops));
                 se.source = u;
                 se.play();
             }
@@ -81,16 +85,19 @@ Item {
                 se.stop();
                 se.source = "";
             }
-            function setVolume(v) {
-                se.volume = v;
-            }
 
-            SoundEffect {
+            MediaPlayer {
                 id: se
-                volume: root.audio ? Math.max(0, Math.min(1, root.audio.soundVolume / 100)) : 1
-                // 播完（自然结束）-> 归还管线
-                onPlayingChanged: {
-                    if (!playing && source !== "" && root.audio)
+                audioOutput: AudioOutput {
+                    volume: root.audio ? Math.max(0, Math.min(1, root.audio.soundVolume / 100)) : 1
+                }
+                // 播放结束（自然播完）或解码失败（InvalidMedia）-> 归还管线。
+                // 换源不会误报：换 source 后 status 走 Loading，不会发 EndOfMedia
+                //（此前 SoundEffect 的 onPlayingChanged(false) 在「替换管线上的
+                // 旧音效」时会把刚排上的新音效误标成已结束，导致管线被重复占用）。
+                onMediaStatusChanged: {
+                    if ((status === MediaPlayer.EndOfMedia || status === MediaPlayer.InvalidMedia)
+                        && root.audio)
                         root.audio.reportFinished(seSlot.pipelineChannel);
                 }
             }
@@ -126,12 +133,10 @@ Item {
         }
 
         function onChannelVolume(channel, volume) {
+            // SE 的音量由 delegate 里的声明式绑定跟随 soundVolume 属性自动更新
+            //（此前 setVolume 用命令式赋值**打断绑定**，之后改全局音量不再生效）。
             if (channel === 0) {
                 bgmPlayer.audioOutput.volume = Math.max(0, Math.min(1, volume / 100));
-            } else {
-                const item = seRepeater.itemAt(channel - 1);
-                if (item)
-                    item.setVolume(Math.max(0, Math.min(1, volume / 100)));
             }
         }
     }

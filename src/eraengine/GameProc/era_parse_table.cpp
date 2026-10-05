@@ -317,6 +317,28 @@ bool EraParseTable::evaluateCondition(const QString& scriptName, int line, bool&
 // 只读区：装载（AST 由 ErbLoader/AstBuilder 预先构建）
 // ---------------------------------------------------------------------------
 
+void EraParseTable::clear() {
+    // QUIT 关闭游戏：释放全部解析期数据（AST/标记区/函数表/标签/告警/变量声明）
+    m_scripts.clear();
+    m_astCache.clear();
+    m_scopedAstCache.clear();
+    m_hasLabelCache.clear();
+    m_functions.clear();
+    m_labelLists.clear();
+    m_parseWarnings.clear();
+    m_variables.clear();
+    m_entryPoint.clear();
+    // 执行位置一并复位：脚本已不存在，任何残留帧/位置都悬空
+    m_currentScript.clear();
+    m_currentLine = 0;
+    m_callStack.clear();
+    m_depth = 0;
+    m_jumped = false;
+    m_finalized = false;
+    emit positionChanged(QString(), 0);
+    emit callStackChanged(0);
+}
+
 bool EraParseTable::loadScript(const QString& scriptName, const QList<LogicalLine>& lines,
                               bool isHeaderFile, const QString& path) {
     if (scriptName.isEmpty() || lines.isEmpty()) {

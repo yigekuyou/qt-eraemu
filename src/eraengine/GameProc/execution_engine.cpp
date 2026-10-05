@@ -23,6 +23,7 @@
 #include <QJsonArray>
 #include <QJsonDocument>
 #include <QJsonObject>
+#include <algorithm>
 #include <cmath>
 #include "expression_evaluator.h"
 #include "ast/expression_ast.h"
@@ -855,7 +856,10 @@ bool ExecutionEngine::executeInstruction(const LogicalLine& line) {
             : evalExpressionCached(m_parseTable, ev, args.first().raw,
                                    m_storage, m_gameBaseData).toLongLong();
         if (target < 0 || target >= m_storage->charaNum()) return true;
-        const int length = m_storage->arraySize("PALAM");
+        // 角色变量的元素数来自 VariableSize.csv（arraySize 只查全局数组，对
+        // 角色变量恒为 0 —— 此前 CUPCHECK 因此从未真正应用过 CUP/CDOWN）
+        const int length = variableLength1D("PALAM", QString());
+        const int cupLength = variableLength1D("CUP", QString());
         for (int i = 0; i < length; ++i) {
             const qint64 up = m_storage->getCharaInt("CUP", static_cast<int>(target), i);
             const qint64 down = m_storage->getCharaInt("CDOWN", static_cast<int>(target), i);
@@ -872,7 +876,7 @@ bool ExecutionEngine::executeInstruction(const LogicalLine& line) {
             }
             m_storage->setCharaInt("PALAM", static_cast<int>(target), i, param);
         }
-        for (int i = 0; i < m_storage->arraySize("CUP"); ++i) {
+        for (int i = 0; i < cupLength; ++i) {
             m_storage->setCharaInt("CUP", static_cast<int>(target), i, 0);
             m_storage->setCharaInt("CDOWN", static_cast<int>(target), i, 0);
         }
@@ -1625,6 +1629,19 @@ bool ExecutionEngine::executeInstruction(const LogicalLine& line) {
     if (name == QLatin1String("DELDATA"))   { handleDelData(line); return true; }
     if (name == QLatin1String("CHKDATA"))   { handleChkData(line); return true; }
 
+    // ---- 状态打印 / 角色整理 / 变量存档族（此前未实现、运行期被忽略）----
+    // UPCHECK / PRINT_ABL / PRINT_TALENT / PRINT_MARK / PRINT_EXP / PRINT_PALAM /
+    // PRINT_ITEM / PRINT_SHOPITEM / HTML_TAGSPLIT / SORTCHARA / SAVEVAR / LOADVAR
+    if (name == QLatin1String("UPCHECK")
+        || name == QLatin1String("PRINT_ABL") || name == QLatin1String("PRINT_TALENT")
+        || name == QLatin1String("PRINT_MARK") || name == QLatin1String("PRINT_EXP")
+        || name == QLatin1String("PRINT_PALAM") || name == QLatin1String("PRINT_ITEM")
+        || name == QLatin1String("PRINT_SHOPITEM")
+        || name == QLatin1String("HTML_TAGSPLIT") || name == QLatin1String("SORTCHARA")
+        || name == QLatin1String("SAVEVAR") || name == QLatin1String("LOADVAR")) {
+        return handleStatusCommand(line);
+    }
+
     // ---- 扩展注册类（普通语句形态：扩展语句在这里分发）----
     // 语句形态的扩展函数（如 CHKVARDATA）不经过 executeFunctionCall ——
     // 在「其它指令」之前查注册类，命中即执行（桩 = 留痕一次 + 跳过，
@@ -2237,11 +2254,12 @@ int ExecutionEngine::printCWidth(const QString& text) {
 
 bool ExecutionEngine::handleResetData() {
     // 对齐 C# VariableEvaluator.ResetData：
-    //   SetDefaultLocalValue / SetDefaultValue(常量初值) / CharacterList.Clear()
+    //   SetDefaultValue(全部变量回默认) / SetDefaultLocalValue / CharacterList.Clear()
     // 角色列表必须清空 —— 否则 RESETDATA 之后残留旧角色（eraTW 新开游戏时
-    // 会出现「继承上一周目角色」的现象）。
+    // 会出现「继承上一周目角色」的现象）。此前只清了角色列表，内建整型数组
+    // （FLAG/DAY/…）、用户广域变量、角色运行时数据全部残留。
     if (m_storage) {
-        m_storage->clearCharaList();
+        m_storage->resetForNewGame();
         GraphicsStore::clearAll();
     }
     qDebug() << "[RESETDATA] 变量与角色列表已重置";
@@ -2517,4 +2535,463 @@ void ExecutionEngine::handleChkData(const LogicalLine& line)
     }
     qDebug() << "[save] CHKDATA" << idx << (exists ? "存在" : "不存在")
              << "行" << line.position.toString();
+}
+
+// ---------------------------------------------------------------------------
+// 状态打印 / 角色整理 / 变量存档族（此前未实现、运行期被忽略的指令集合）
+//
+//   UPCHECK / PRINT_ABL / PRINT_TALENT / PRINT_MARK / PRINT_EXP / PRINT_PALAM /
+//   PRINT_ITEM / PRINT_SHOPITEM / HTML_TAGSPLIT / SORTCHARA / SAVEVAR / LOADVAR
+//
+// 语义对齐 C# Process.ScriptProc.cs:174-262（PRINT_* / UPCHECK）、
+// VariableEvaluator（UpdateInUpcheck / GetCharacterDataString /
+// GetCharacterParamString / GetHavingItemsString）、Instraction.Child.cs
+// （HTML_TAGSPLIT / SORTCHARA）。
+// ---------------------------------------------------------------------------
+namespace {
+
+// 操作数整理：剔除「标点逗号」（引号字面量 "," 的 raw 同为逗号但 isString 为真）
+QList<const Operand*> statusOperands(const LogicalLine& line) {
+    QList<const Operand*> ops;
+    ops.reserve(line.arguments.size());
+    for (const Operand& a : line.arguments) {
+        if (a.isString || a.raw != QLatin1String(",")) ops.append(&a);
+    }
+    return ops;
+}
+
+} // namespace
+
+bool ExecutionEngine::handleStatusCommand(const LogicalLine& line)
+{
+    if (!m_storage) return true;
+    const QString& name = line.functionName;
+    ExpressionEvaluator& ev = getEvaluator();
+    const QList<const Operand*> ops = statusOperands(line);
+    const auto evalOp = [&](const Operand* op) -> QVariant {
+        if (!op) return {};
+        if (op->isString) return QVariant(op->raw);
+        return op->ast ? ev.evaluate(*op->ast, m_storage, m_gameBaseData)
+                       : ev.evaluate(op->raw, m_storage, m_gameBaseData);
+    };
+    // C# PRINT_PALAM / PRINT_SHOPITEM 的每行列数（Config.PrintCPerLine）
+    const int perLine = ev.printCLayout().second;
+
+    // ---- UPCHECK：全局 UP/DOWN -> TARGET 的 PALAM（C# UpdateInUpcheck）----
+    if (name == QLatin1String("UPCHECK")) {
+        const qint64 target = m_storage->getTarget(0);
+        const int length = std::min({variableLength1D("PALAM", QString()),
+                                     variableLength1D("UP", QString()),
+                                     variableLength1D("DOWN", QString())});
+        if (target >= 0 && target < m_storage->charaNum()) {
+            for (int i = 0; i < length; ++i) {
+                const qint64 up = m_storage->getUp(i);
+                const qint64 down = m_storage->getDown(i);
+                if (up <= 0 && down <= 0) continue;
+                const qint64 param = m_storage->getCharaInt("PALAM", static_cast<int>(target), i);
+                QString text;
+                if (!m_skipDisp) {
+                    text = m_storage->getGlobalStr1D("PALAMNAME", i) + QLatin1Char(' ')
+                           + QString::number(param);
+                    if (up > 0) text += QLatin1Char('+') + QString::number(up);
+                    if (down > 0) text += QLatin1Char('-') + QString::number(down);
+                }
+                const qint64 updated = param + up - down;   // C# unchecked：负值同样参与
+                m_storage->setCharaInt("PALAM", static_cast<int>(target), i, updated);
+                if (!m_skipDisp) {
+                    emit consolePrint(text + QLatin1Char('=') + QString::number(updated), true);
+                }
+            }
+        }
+        for (int i = 0; i < length; ++i) {
+            m_storage->setUp(i, 0);
+            m_storage->setDown(i, 0);
+        }
+        return true;
+    }
+
+    // ---- PRINT_ABL / PRINT_TALENT / PRINT_MARK / PRINT_EXP <角色编号> ----
+    //   （C# GetCharacterDataString：非 0 项按 CSV 名表拼串）
+    if (name == QLatin1String("PRINT_ABL") || name == QLatin1String("PRINT_TALENT")
+        || name == QLatin1String("PRINT_MARK") || name == QLatin1String("PRINT_EXP")) {
+        if (ops.isEmpty()) return true;   // 无实参（冒烟脚本）：静默
+        const qint64 target = evalOp(ops.first()).toLongLong();
+        if (target < 0 || target >= m_storage->charaNum()) {
+            m_state.setErrorState();
+            emit errorOccurred(QStringLiteral("存在しない登録キャラクタを参照しようとしました（%1 %2）")
+                                   .arg(name).arg(target));
+            return true;
+        }
+        const bool isTalent = name == QLatin1String("PRINT_TALENT");
+        const bool withLv = name != QLatin1String("PRINT_EXP");
+        const QString varName = name.mid(6);              // ABL / TALENT / MARK / EXP
+        const QString nameVar = varName + QLatin1String("NAME");
+        const int count = std::min(variableLength1D(varName, QString()),
+                                   m_storage->arraySize(nameVar));
+        QString text;
+        for (int i = 0; i < count; ++i) {
+            const qint64 v = m_storage->getCharaInt(varName, static_cast<int>(target), i);
+            const QString n = m_storage->getGlobalStr1D(nameVar, i);
+            if (v == 0 || n.isEmpty()) continue;
+            if (isTalent) text += QLatin1Char('[') + n + QLatin1Char(']');
+            else text += n + (withLv ? QLatin1String("LV") : QString())
+                       + QString::number(v) + QLatin1Char(' ');
+        }
+        if (!m_skipDisp) emit consolePrint(text, true);
+        return true;
+    }
+
+    // ---- PRINT_PALAM <角色编号>（C# GetCharacterParamString：PALAMLV 条形图）----
+    if (name == QLatin1String("PRINT_PALAM")) {
+        if (ops.isEmpty()) return true;
+        const qint64 target = evalOp(ops.first()).toLongLong();
+        if (target < 0 || target >= m_storage->charaNum()) {
+            m_state.setErrorState();
+            emit errorOccurred(QStringLiteral("存在しない登録キャラクタを参照しようとしました（%1 %2）")
+                                   .arg(name).arg(target));
+            return true;
+        }
+        // 100 以降は否定の珠とかなので表示しない（C# 注释原样）
+        const int count = std::min(100, m_storage->arraySize("PALAMNAME"));
+        int printed = 0;
+        for (int i = 0; i < count; ++i) {
+            const qint64 param = m_storage->getCharaInt("PALAM", static_cast<int>(target), i);
+            const QString pname = m_storage->getGlobalStr1D("PALAMNAME", i);
+            if (param == 0 && pname.isEmpty()) continue;
+            qint64 border = m_storage->getPalamlv(1);
+            QChar c = QLatin1Char('-');
+            if (param >= border) { c = QLatin1Char('='); border = m_storage->getPalamlv(2); }
+            if (param >= border) { c = QLatin1Char('>'); border = m_storage->getPalamlv(3); }
+            if (param >= border) { c = QLatin1Char('*'); border = m_storage->getPalamlv(4); }
+            QString bar;
+            if (border <= 0 || param >= border) bar.fill(c, 10);
+            else if (param <= 0) bar.fill(QLatin1Char('.'), 10);
+            else {
+                const int fill = static_cast<int>(param * 10 / border);
+                bar = QString(fill, c) + QString(10 - fill, QLatin1Char('.'));
+            }
+            const QString printStr = pname + QLatin1Char('[') + bar + QLatin1Char(']')
+                                   + QString::number(param).rightJustified(6);
+            if (!m_skipDisp) {
+                emit consolePrint(padPrintC(printStr, true), false);
+                ++printed;
+                if (perLine > 0 && printed % perLine == 0) emit consolePrint(QString(), true);
+            }
+        }
+        return true;
+    }
+
+    // ---- PRINT_ITEM（C# GetHavingItemsString：ITEM × ITEMNAME）----
+    if (name == QLatin1String("PRINT_ITEM")) {
+        const int count = std::min(variableLength1D("ITEM", QString()),
+                                   m_storage->arraySize("ITEMNAME"));
+        QString text = QStringLiteral("所持アイテム：");
+        int owned = 0;
+        for (int i = 0; i < count; ++i) {
+            const qint64 v = m_storage->getItem(i);
+            if (v == 0) continue;
+            ++owned;
+            const QString n = m_storage->getGlobalStr1D("ITEMNAME", i);
+            if (!n.isEmpty()) text += n;
+            text += QLatin1Char('(') + QString::number(v) + QLatin1String(") ");
+        }
+        if (owned == 0) text += QStringLiteral("なし");
+        if (!m_skipDisp) emit consolePrint(text, true);
+        return true;
+    }
+
+    // ---- PRINT_SHOPITEM（C# ScriptProc：ITEMSALES × ITEMNAME/ITEMPRICE）----
+    if (name == QLatin1String("PRINT_SHOPITEM")) {
+        const int count = std::min({variableLength1D("ITEMSALES", QString()),
+                                    variableLength1D("ITEMNAME", QString()),
+                                    variableLength1D("ITEMPRICE", QString())});
+        const QString label = ev.moneyLabel();
+        const bool moneyFirst = ev.moneyFirst();
+        int printed = 0;
+        for (int i = 0; i < count; ++i) {
+            if (m_storage->getItemsales(i) == 0) continue;
+            const QString n = m_storage->getGlobalStr1D("ITEMNAME", i);
+            const QString price = QString::number(m_storage->getGlobalInt1D("ITEMPRICE", i));
+            // 1.52a改変部分：MoneyFirst 对应金额单位前置 / 后置
+            const QString printStr = moneyFirst
+                ? QStringLiteral("[%1] %2(%3%4)").arg(i).arg(n, label, price)
+                : QStringLiteral("[%1] %2(%3%4)").arg(i).arg(n, price, label);
+            if (!m_skipDisp) {
+                emit consolePrint(padPrintC(printStr, true), false);
+                ++printed;
+                if (perLine > 0 && printed % perLine == 0) emit consolePrint(QString(), true);
+            }
+        }
+        return true;
+    }
+
+    // ---- HTML_TAGSPLIT <字符串>, <数组变量>[, <个数变量>] ----
+    //   （C# HtmlManager.HtmlTagSplit：按标签切成 [文本, <tag>, …]；
+    //     未闭合 '<' -> 个数变量写 -1）
+    if (name == QLatin1String("HTML_TAGSPLIT")) {
+        if (ops.isEmpty()) return true;
+        const Operand* first = ops.first();
+        // 实参可以是引号字面量 / 表达式；裸 HTML 文本（<b>～</b>）不是合法
+        // 表达式 —— 求值失败时按原文取用（对齐 ecd/docs 的示例写法）
+        QString str;
+        if (first->isString) str = first->raw;
+        else if (first->ast) str = ev.evaluate(*first->ast, m_storage, m_gameBaseData).toString();
+        else {
+            const QSharedPointer<ExpressionNode> ast =
+                m_parseTable ? m_parseTable->expressionAst(first->raw)
+                             : QSharedPointer<ExpressionNode>();
+            str = ast ? ev.evaluate(*ast, m_storage, m_gameBaseData).toString() : first->raw;
+        }
+        QStringList parts;
+        bool ok = true;
+        int pos = 0;
+        while (pos < str.size()) {
+            const int lt = str.indexOf(QLatin1Char('<'), pos);
+            if (lt < 0) { parts.append(str.mid(pos)); break; }
+            if (lt > pos) { parts.append(str.mid(pos, lt - pos)); pos = lt; }
+            const int gt = str.indexOf(QLatin1Char('>'), pos);
+            if (gt < 0) { ok = false; break; }
+            parts.append(str.mid(pos, gt + 1 - pos));
+            pos = gt + 1;
+        }
+        if (!ok) {
+            if (ops.size() >= 3) writeLhs(parseLhsRef(ops.at(2)->raw.trimmed()), -1);
+            return true;
+        }
+        if (ops.size() >= 2) {
+            // 第 2 实参：结果数组（可带起始下标，LOCALS:2 -> 从 2 号元素起）
+            QString base = ops.at(1)->raw.trimmed();
+            int start = 0;
+            const QStringList seg = splitTopLevelColon(base);
+            if (seg.size() >= 2) {
+                base = seg.first().trimmed();
+                start = seg.at(1).trimmed().toInt();
+            }
+            for (int k = 0; k < parts.size(); ++k) {
+                writeStringValue(base + QLatin1Char(':') + QString::number(start + k),
+                                 parts.at(k));
+            }
+        }
+        if (ops.size() >= 3) writeLhs(parseLhsRef(ops.at(2)->raw.trimmed()),
+                                      static_cast<qint64>(parts.size()));
+        return true;
+    }
+
+    // ---- SORTCHARA [<角色变量>[, FORWARD|BACK]] ----
+    //   （C# SP_SORTCHARA_ArgumentBuilder + VariableEvaluator.SortChara：
+    //     默认按 NO:0 升序；FORWARD=升序 / BACK=降序；MASTER 位置固定，
+    //     排序后重映射 TARGET / ASSI）
+    if (name == QLatin1String("SORTCHARA")) {
+        const int n = m_storage->charaNum();
+        if (n <= 1) return true;
+        QString keyName = QStringLiteral("NO");
+        QList<int> keyIdx;
+        bool ascending = true;
+        QList<const Operand*> rest = ops;
+        for (const Operand* op : ops) {
+            const QString raw = op->raw.trimmed().toUpper();
+            if (raw == QLatin1String("FORWARD") || raw == QLatin1String("BACK")) {
+                ascending = raw == QLatin1String("FORWARD");
+                rest.removeOne(op);
+            }
+        }
+        if (!rest.isEmpty() && !rest.first()->raw.trimmed().isEmpty()) {
+            const LhsRef ref = parseLhsRef(rest.first()->raw.trimmed());
+            if (!ref.name.isEmpty()) {
+                keyName = ref.name;
+                keyIdx = ref.indices;
+            }
+        }
+        if (!m_storage->isCharaDataVariable(keyName)) {
+            m_state.setErrorState();
+            emit errorOccurred(QStringLiteral("SORTCHARA 的第 1 参数必须是角色变量：%1").arg(keyName));
+            return true;
+        }
+        const bool keyIsStr = m_storage->isCharaDataString(keyName);
+        const qint64 oldTarget = m_storage->getTarget(0);
+        const qint64 oldAssi = m_storage->getAssi(0);
+        // MASTER 不参与排序（C# SortChara fixMaster=true）
+        const qint64 master = m_storage->getMaster(0);
+        const int masterPos = (master >= 0 && master < n) ? static_cast<int>(master) : -1;
+        QList<int> ordered;   // 注意：Qt 把 slots 定义为宏，变量名不能用 slots
+        ordered.reserve(n);
+        for (int i = 0; i < n; ++i) {
+            if (i != masterPos) ordered.append(i);
+        }
+        const int e0 = keyIdx.value(0, 0);
+        const auto keyValue = [&](int slot) -> QPair<QString, qint64> {
+            if (keyIsStr) return {m_storage->getCharaStr(keyName, slot, e0), 0};
+            if (keyIdx.size() >= 2)
+                return {QString(), m_storage->getCharaInt3D(keyName, slot, e0, keyIdx.at(1))};
+            return {QString(), m_storage->getCharaInt(keyName, slot, e0)};
+        };
+        std::stable_sort(ordered.begin(), ordered.end(), [&](int a, int b) {
+            const auto ka = keyValue(a);
+            const auto kb = keyValue(b);
+            int ret;
+            if (keyIsStr) ret = ka.first.compare(kb.first);
+            else ret = ka.second < kb.second ? -1 : (ka.second > kb.second ? 1 : 0);
+            if (!ascending) ret = -ret;
+            return ret < 0;   // 同值保持原顺序（C# 以 temp_CurrentOrder 决胜）
+        });
+        // 应用置换（desired[位置] = 应落位的原槽位；selection-swap，MASTER 不动）
+        QList<int> desired(n);
+        {
+            int p = 0;
+            for (int i = 0; i < n; ++i) desired[i] = (i == masterPos) ? i : ordered.at(p++);
+        }
+        QList<int> current(n);
+        for (int i = 0; i < n; ++i) current[i] = i;   // current[位置] = 当前所在原槽位
+        for (int pos = 0; pos < n; ++pos) {
+            if (current.at(pos) == desired.at(pos)) continue;
+            int j = pos + 1;
+            while (j < n && current.at(j) != desired.at(pos)) ++j;
+            if (j >= n) break;
+            m_storage->swapChara(pos, j);
+            std::swap(current[pos], current[j]);
+        }
+        // 重映射 TARGET / ASSI（C# fixMaster=true 时 MASTER 不变）
+        const auto findSlot = [&](qint64 oldSlot) -> qint64 {
+            for (int i = 0; i < n; ++i) {
+                if (current.at(i) == static_cast<int>(oldSlot)) return i;
+            }
+            return oldSlot;
+        };
+        if (oldTarget >= 0 && oldTarget < n) m_storage->setTarget(0, findSlot(oldTarget));
+        if (oldAssi >= 0 && oldAssi < n) m_storage->setAssi(0, findSlot(oldAssi));
+        return true;
+    }
+
+    // ---- SAVEVAR / LOADVAR（EE 扩展）----
+    if (name == QLatin1String("SAVEVAR") || name == QLatin1String("LOADVAR")) {
+        return handleSaveVarCommand(line);
+    }
+    return true;
+}
+
+// ---------------------------------------------------------------------------
+// SAVEVAR / LOADVAR（EmueraEE 扩展；C# 原版注册了但运行期抛 NotImpl）
+//
+//   EE 顺序：SAVEVAR <变量>…, <文件名>（末尾字符串字面量为文件名）
+//   C# 原型：SAVEVAR <文件名>, <保存文字列>, <变量>…（首参为字符串字面量时）
+//   LOADVAR <文件名>
+//
+// 格式：JSON 文本（sav/ 目录）。只存全局、非角色变量（对齐 C# 参数构建期的
+// 限制：角色/局部/私有/常量/引用变量不可存）。
+// ---------------------------------------------------------------------------
+bool ExecutionEngine::handleSaveVarCommand(const LogicalLine& line)
+{
+    if (!m_storage) return true;
+    const QString& name = line.functionName;
+    ExpressionEvaluator& ev = getEvaluator();
+    const QList<const Operand*> ops = statusOperands(line);
+    const auto evalString = [&](const Operand* op) -> QString {
+        if (!op) return QString();
+        if (op->isString) return op->raw;
+        if (op->ast) return ev.evaluate(*op->ast, m_storage, m_gameBaseData).toString();
+        return ev.evaluate(op->raw, m_storage, m_gameBaseData).toString();
+    };
+
+    // ---- LOADVAR <文件名>：读回并按记录的变量名/类型/尺寸恢复 ----
+    if (name == QLatin1String("LOADVAR")) {
+        if (ops.isEmpty()) return true;
+        const QString fileName = evalString(ops.first());
+        if (fileName.isEmpty()) return true;
+        const QString path = m_gameDirectory + QStringLiteral("/sav/") + fileName;
+        QFile f(path);
+        if (!f.open(QIODevice::ReadOnly)) {
+            qWarning() << "[save] LOADVAR 文件不存在:" << path;
+            return true;
+        }
+        const QJsonObject root = QJsonDocument::fromJson(f.readAll()).object();
+        f.close();
+        const QJsonObject vars = root.value(QStringLiteral("vars")).toObject();
+        for (auto it = vars.constBegin(); it != vars.constEnd(); ++it) {
+            const QString varName = it.key().toUpper();
+            const QJsonObject entry = it.value().toObject();
+            const bool isStr = entry.value(QStringLiteral("type")).toString() == QLatin1String("str");
+            const QJsonArray data = entry.value(QStringLiteral("data")).toArray();
+            m_storage->ensureArraySize(varName, data.size(), isStr);
+            for (int i = 0; i < data.size(); ++i) {
+                if (isStr) m_storage->setGlobalStr1D(varName, i, data.at(i).toString());
+                else m_storage->setGlobalInt1D(varName, i,
+                                               static_cast<qint64>(data.at(i).toDouble()));
+            }
+        }
+        qDebug() << "[save] LOADVAR" << fileName << "恢复" << vars.size() << "个变量";
+        return true;
+    }
+
+    // ---- SAVEVAR：拆出 文件名 / 保存文字列 / 变量名表 ----
+    QString fileName;
+    QString message;
+    QList<const Operand*> varOps;
+    if (!ops.isEmpty() && ops.first()->isString) {
+        // C# 原型：<文件名>, <保存文字列>, <变量>…
+        if (ops.size() >= 2) {
+            fileName = evalString(ops.at(0));
+            message = evalString(ops.at(1));
+            for (int i = 2; i < ops.size(); ++i) varOps.append(ops.at(i));
+        }
+    } else {
+        // EE 顺序：<变量>…, <文件名>（末尾的字符串字面量）
+        for (int i = 0; i < ops.size(); ++i) {
+            if (ops.at(i)->isString && i == ops.size() - 1) fileName = ops.at(i)->raw;
+            else varOps.append(ops.at(i));
+        }
+    }
+    if (fileName.isEmpty()) {
+        if (!varOps.isEmpty()) fileName = evalString(varOps.takeLast());
+        if (fileName.isEmpty()) {
+            qWarning() << "[save] SAVEVAR 缺少文件名，忽略。行:" << line.position.toString();
+            return true;
+        }
+    }
+
+    QJsonObject vars;
+    for (const Operand* op : varOps) {
+        const QString varName = op->raw.trimmed().toUpper();
+        if (varName.isEmpty() || varName == QLatin1String(",")) continue;
+        if (!varName.at(0).isLetter() && varName.at(0) != QLatin1Char('_')) continue;   // "0" 之类
+        if (m_storage->isCharaDataVariable(varName)) {
+            qWarning() << "[save] SAVEVAR 角色变量不可存（用 SAVECHARA）:" << varName;
+            continue;
+        }
+        if (varName == QLatin1String("LOCAL") || varName == QLatin1String("LOCALS")
+            || varName == QLatin1String("ARG") || varName == QLatin1String("ARGS")) {
+            qWarning() << "[save] SAVEVAR 局部变量不可存:" << varName;
+            continue;
+        }
+        const bool isStr = m_storage->isVariableString(varName);
+        const int size = variableLength1D(varName, QString());
+        if (size <= 0) {
+            qWarning() << "[save] SAVEVAR 变量尺寸为 0，跳过:" << varName;
+            continue;
+        }
+        QJsonArray data;
+        for (int i = 0; i < size; ++i) {
+            if (isStr) data.append(m_storage->getGlobalStr1D(varName, i));
+            else data.append(static_cast<double>(m_storage->getGlobalInt1D(varName, i)));
+        }
+        QJsonObject entry;
+        entry.insert(QStringLiteral("type"), isStr ? QStringLiteral("str") : QStringLiteral("int"));
+        entry.insert(QStringLiteral("data"), data);
+        vars.insert(varName, entry);
+    }
+
+    QDir().mkpath(m_gameDirectory + QStringLiteral("/sav"));
+    const QString path = m_gameDirectory + QStringLiteral("/sav/") + fileName;
+    QJsonObject root;
+    root.insert(QStringLiteral("format"), QStringLiteral("emuera-qt-savevar"));
+    root.insert(QStringLiteral("message"), message);
+    root.insert(QStringLiteral("vars"), vars);
+    QFile f(path);
+    if (!f.open(QIODevice::WriteOnly | QIODevice::Truncate)) {
+        emit errorOccurred(QStringLiteral("SAVEVAR 无法写入 %1").arg(path));
+        return true;
+    }
+    f.write(QJsonDocument(root).toJson(QJsonDocument::Compact));
+    f.close();
+    qDebug() << "[save] SAVEVAR" << fileName << vars.size() << "个变量 ->" << path;
+    return true;
 }

@@ -51,6 +51,23 @@ ApplicationWindow {
     // 引擎单例（QML 中实例化；也可作为 qmlRegisterSingletonInstance 注入）
     EraEngine {
         id: eraEngine
+        // 脚本 QUIT（C# 侧等价关闭游戏窗口）—— 卸载当前游戏并释放内存，
+        // 回到「未装载」状态（应用常驻，可重新打开目录）
+        onQuitRequested: eraEngine.closeGame()
+    }
+
+    // D-Bus /debug saveScreenshot(path)：QML 自己抓取渲染结果存盘。
+    // 桌面截屏工具抓不到 QML 场景（合成窗口可能拿到空帧），渲染自检必须
+    // 走 Item.grabToImage —— Qt 文档：grabToImage(cb) 异步渲染该 Item 子树，
+    // 回调里的 ItemGrabResult.saveToFile(path) 落盘。
+    Connections {
+        target: eraEngine
+        function onScreenshotRequested(path) {
+            window.contentItem.grabToImage(function(result) {
+                if (!result.saveToFile(path))
+                    console.warn("saveScreenshot: 保存失败 " + path);
+            });
+        }
     }
 
     // ---- 对话框 ----

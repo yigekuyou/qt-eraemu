@@ -674,7 +674,11 @@ ExecState SystemStateMachine::pump() {
                     break;
                 }
                 // QUIT：彻底结束（不能被当成「脚本回到底层」而重启标题）
-                if (m_state->quitRequested()) return m_state->getExecState();
+                if (m_state->quitRequested()) {
+                    m_pumpActive = false;   // 提前 return 也必须复位，否则 pump 永远直接弹出
+                    emit quitRequestedByScript();
+                    return m_state->getExecState();
+                }
                 const ExecState st = m_state->getExecState();
                 if (st == ExecState::WaitInput || st == ExecState::WaitSystemInput
                     || st == ExecState::Error) {
@@ -686,7 +690,11 @@ ExecState SystemStateMachine::pump() {
             }
         }
 
-        if (m_state->quitRequested()) return m_state->getExecState();
+        if (m_state->quitRequested()) {
+            m_pumpActive = false;   // 提前 return 也必须复位，否则 pump 永远直接弹出
+            emit quitRequestedByScript();
+            return m_state->getExecState();
+        }
         if (!m_state->isRunning()) {
             break;
         }

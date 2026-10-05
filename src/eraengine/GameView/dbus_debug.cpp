@@ -19,12 +19,15 @@
 
 #include "console_backend.h"
 #include "eraengine.h"
+#include "eraengine_log.h"
 
 #include <QDBusConnection>
 #include <QDateTime>
 #include <QDir>
 #include <QFileInfo>
+#include <QGuiApplication>
 #include <QLoggingCategory>
+#include <QQuickWindow>
 #include <QUrl>
 
 EraDBusDebug::EraDBusDebug(EraEngine* engine, QObject* parent)
@@ -153,6 +156,11 @@ void EraDBusDebug::sendAnyKey() {
     if (m_engine && m_engine->getConsole()) m_engine->getConsole()->submitAnyKey();
 }
 
+void EraDBusDebug::sendMouseKey(int type, int r1, int r2, int r3, int r4) {
+    if (m_engine && m_engine->getConsole())
+        m_engine->getConsole()->submitMouseKey(type, r1, r2, r3, r4);
+}
+
 void EraDBusDebug::scroll(int lines) {
     if (m_engine && m_engine->getConsole()) m_engine->getConsole()->scrollBy(lines);
 }
@@ -163,4 +171,25 @@ void EraDBusDebug::scrollToBottom() {
 
 void EraDBusDebug::setLoggingRules(const QString& rules) {
     QLoggingCategory::setFilterRules(rules);
+}
+
+QString EraDBusDebug::saveScreenshot(const QString& path) {
+    // 主路径：QQuickWindow::grabWindow()（Qt 文档：把窗口场景渲染成 QImage，
+    // 同步、不依赖桌面截屏 —— 桌面截屏工具抓不到 QML 合成内容）。
+    // 同时广播给 QML（Item.grabToImage -> ItemGrabResult.saveToFile）作双保险。
+    QQuickWindow* win = nullptr;
+    const auto windows = QGuiApplication::topLevelWindows();
+    for (QWindow* w : windows) {
+        if (w->isVisible() && (win = qobject_cast<QQuickWindow*>(w)))
+            break;
+    }
+    if (!win)
+        return QStringLiteral("no QQuickWindow (visible top-levels: %1)").arg(windows.size());
+    const QImage img = win->grabWindow();
+    if (img.isNull())
+        return QStringLiteral("grabWindow returned null image");
+    if (!img.save(path))
+        return QStringLiteral("save failed: %1").arg(path);
+    emit screenshotRequested(path);
+    return QStringLiteral("saved %1 (%2x%3)").arg(path).arg(img.width()).arg(img.height());
 }

@@ -188,6 +188,9 @@ public:
     Q_INVOKABLE bool loadScript(const QString& scriptPath);
     Q_INVOKABLE void executeScript(const QString& scriptName);
     Q_INVOKABLE void reload();
+    // 卸载当前游戏（脚本 QUIT / 用户关闭）：停执行、停音频、清控制台、
+    // 释放变量与脚本内存，回到「未装载」状态，可重新 openDirectory。
+    Q_INVOKABLE void closeGame();
     
     // Game base data loading
     void loadGameBaseData();
@@ -237,7 +240,11 @@ signals:
     void scriptsLoadProgress(int processed, int total);
     void scriptsLoaded(bool ok);
     void hasErrorChanged();
-    
+    // 脚本执行了 QUIT（C# 侧等价关闭游戏窗口）—— GUI 层应退出应用
+    void quitRequested();
+    // D-Bus /debug saveScreenshot：请求 QML 把当前画面存成图片
+    void screenshotRequested(const QString& path);
+
 private:
     QString m_gameDirectory;
     QString m_csvDir;     // 解析后的 CSV 目录（绝对路径，实际大小写）

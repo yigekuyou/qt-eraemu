@@ -266,6 +266,8 @@ public:
     // 系统状态机随后会重新驱动标题/主循环；QUIT 要求彻底停止）。
     void requestQuit() { m_quitRequested = true; setExecState(ExecState::Halt); }
     [[nodiscard]] bool quitRequested() const { return m_quitRequested; }
+    // 重新装载新游戏目录时清掉上一局的 QUIT 请求（m_quitRequested 只在此复位）
+    void clearQuitRequest() { m_quitRequested = false; }
     void requestResume();      // 置回 Continue
     void setErrorState();
 

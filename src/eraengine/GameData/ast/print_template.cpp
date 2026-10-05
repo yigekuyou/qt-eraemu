@@ -132,7 +132,11 @@ PrintTemplate PrintTemplateCompiler::evaluate(const PrintTemplate& source, const
             part.style.underline = part.text == "u"; part.style.strike = part.text == "s";
         }
         part.buttonValue = attrs.value("value"); part.tooltip = attrs.value("title");
-        if (part.kind == PrintTemplatePart::Kind::Image) part.text = attrs.value("src");
+        if (part.kind == PrintTemplatePart::Kind::Image) {
+            part.text = attrs.value("src");
+            // <img srcb='...'>：按钮选中/悬停态替换图（C# ButtonResourceName）
+            part.imageAlt = attrs.value("srcb");
+        }
         if (part.kind == PrintTemplatePart::Kind::Alignment) part.text = attrs.value("align");
         part.shapeType = attrs.value("type");
         for (const auto& value : attrs.value("param").split(',', Qt::SkipEmptyParts)) part.shapeParams.append(value.trimmed().toInt());

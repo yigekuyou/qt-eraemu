@@ -114,24 +114,50 @@ Item {
     readonly property real cellWidth: Math.max(1, width / gridColumns)
     readonly property real cellHeight: Math.max(1, viewport.height / gridRows)
 
-    // 三个层各自的区块模型（C++ 提供，坐标已算好）
-    readonly property var textModel: backend ? backend.textBlocks : []
-    readonly property var imageModel: backend ? backend.imageBlocks : []
-    readonly property var shapeModel: backend ? backend.shapeBlocks : []
+    // 单一「增量区块模型」（C++：QAbstractListModel，滚动/追加只产生
+    // insertRows/removeRows，未变化的行原地复用 —— 不再随每帧整屏重建）。
+    // Qt 文档（Performance considerations：Sequence tips）：值序列
+    // （QVariantList）每次变化都整表通知，delegate 全量重建；模型行 +
+    // 细粒度信号才是增量路径。
+    readonly property var blockModel: backend ? backend.blockModel : null
+    // 窗口顶行的绝对行号：区块 y = (row - windowTopRow + offsetRows) × 行高。
+    // 滚动只改这一个值（绑定重求值），模型内容不动。
+    readonly property int windowTopRow: backend ? backend.windowTopRow : 0
     readonly property int contentHeight: backend ? backend.contentHeight : 0
 
-    // 可见区块数（供测试）
-    readonly property int textBlockCount: textInst.count
-    readonly property int imageBlockCount: imageInst.count
-    readonly property int shapeBlockCount: shapeInst.count
+    // 可见区块数 / 按 kind 取区块（供测试与调试；运行时 QML 不读）
+    function countBlocksOfKind(kind) {
+        let n = 0;
+        for (let i = 0; i < blockInst.count; ++i) {
+            const o = blockInst.objectAt(i);
+            if (o && o.blockData && o.blockData.kind === kind)
+                ++n;
+        }
+        return n;
+    }
+    function blockOfKindAt(kind, i) {
+        let n = 0;
+        for (let k = 0; k < blockInst.count; ++k) {
+            const o = blockInst.objectAt(k);
+            if (o && o.blockData && o.blockData.kind === kind) {
+                if (n === i)
+                    return o;
+                ++n;
+            }
+        }
+        return null;
+    }
+    readonly property int textBlockCount: blockInst.count >= 0 ? countBlocksOfKind("text") : 0
+    readonly property int imageBlockCount: blockInst.count >= 0 ? countBlocksOfKind("image") : 0
+    readonly property int shapeBlockCount: blockInst.count >= 0 ? countBlocksOfKind("shape") : 0
     function textBlockAt(i) {
-        return textInst.objectAt(i);
+        return blockOfKindAt("text", i);
     }
     function imageBlockAt(i) {
-        return imageInst.objectAt(i);
+        return blockOfKindAt("image", i);
     }
     function shapeBlockAt(i) {
-        return shapeInst.objectAt(i);
+        return blockOfKindAt("shape", i);
     }
     function blockAt(i) {
         return textBlockAt(i);
@@ -174,7 +200,11 @@ Item {
     // delegate 抽成 inline component，消除三份重复；层本身保留显式 id
     // （Instantiator 的测试/调试入口：view.textBlockCount / blockAt(i)）。
     component BlockDelegate: ConsoleBlock {
-        blockData: modelData
+        // 模型角色名 "block"（ConsoleBlockModel::roleNames）。
+        // 用 required property 走 Qt 文档的模型角色绑定路径。
+        required property var block
+        blockData: block
+        windowTopRow: root.windowTopRow
         backend: root.backend
         cellWidth: root.cellWidth
         cellHeight: root.cellHeight
@@ -195,54 +225,25 @@ Item {
         clip: true
         focus: root.primitiveInput
 
-        // ---- text 层 ----
+        // ---- 单一区块层（text/image/shape 共用一个父 Item）----
+        // Qt 文档：Item 的叠放顺序只在**兄弟之间**由 z 决定 —— 以前分成三个
+        // 兄弟 Item 层，「后打印的文字盖住先打印的图」「图层特效压在立绘上」
+        // 这类跨 kind 叠加永远做不到（整层整体上下）。现在三个 Instantiator
+        // 都把对象挂进同一个 blockLayer，每个区块带 C++ 给的扁平 z
+        // （= 控制台打印顺序，见 ConsoleBlock.z），叠加与 C# 逐 part 绘制一致。
         Item {
-            id: textLayer
+            id: blockLayer
             anchors.fill: parent
 
+            // 单一 Instantiator：模型是 QAbstractListModel，行级增删信号驱动
+            // delegate 的增量创建/销毁（未变化的行原地复用）。
             Instantiator {
-                id: textInst
-                model: root.textModel
+                id: blockInst
+                model: root.blockModel
                 delegate: BlockDelegate {}
                 // Instantiator 不把对象挂进可视树：显式设 parent；销毁由它负责
                 onObjectAdded: (index, object) => {
-                    object.parent = textLayer;
-                }
-                onObjectRemoved: (index, object) => {
-                    object.parent = null;
-                }
-            }
-        }
-
-        // ---- image 层 ----
-        Item {
-            id: imageLayer
-            anchors.fill: parent
-
-            Instantiator {
-                id: imageInst
-                model: root.imageModel
-                delegate: BlockDelegate {}
-                onObjectAdded: (index, object) => {
-                    object.parent = imageLayer;
-                }
-                onObjectRemoved: (index, object) => {
-                    object.parent = null;
-                }
-            }
-        }
-
-        // ---- shape 层 ----
-        Item {
-            id: shapeLayer
-            anchors.fill: parent
-
-            Instantiator {
-                id: shapeInst
-                model: root.shapeModel
-                delegate: BlockDelegate {}
-                onObjectAdded: (index, object) => {
-                    object.parent = shapeLayer;
+                    object.parent = blockLayer;
                 }
                 onObjectRemoved: (index, object) => {
                     object.parent = null;

@@ -21,6 +21,15 @@
 #include "eraengine_log.h"
 #include "expression_evaluator.h"
 
+// PALAMLV/EXPLV 阈值默认表来自 C# ConfigData 的 _Replace.csv 默认值：
+//   PALAMLV {0,100,500,3000,10000,30000,60000,100000,150000,250000}
+//   EXPLV   {0,1,4,20,50,200}
+// GETPALAMLV/GETEXPLV 用第 i+1 项做阈值（C# VariableData.cs 构造时写入）。
+// 这两张表是**变量的默认值**：构造期与 RESETDATA（SetDefaultValue）共用，
+// ResetData 恢复默认值而不是清零。
+static const qint64 kPalamLvDef[] = {0, 100, 500, 3000, 10000, 30000, 60000, 100000, 150000, 250000};
+static const qint64 kExpLvDef[] = {0, 1, 4, 20, 50, 200};
+
 VariableStorage::VariableStorage(QObject *parent)
 		: QObject(parent)
 {
@@ -45,13 +54,7 @@ VariableStorage::VariableStorage(QObject *parent)
 		m_losebase.fill(0, 1000);
 		m_palamlv.fill(0, 1000);
 		m_explv.fill(0, 1000);
-		// 阈值默认表来自 C# ConfigData 的 _Replace.csv 默认值：
-		//   PALAMLV {0,100,500,3000,10000,30000,60000,100000,150000,250000}
-		//   EXPLV   {0,1,4,20,50,200}
-		// GETPALAMLV/GETEXPLV 用第 i+1 项做阈值（VariableData.cs 构造时写入）
-		static const qint64 kPalamLvDef[] = {0, 100, 500, 3000, 10000, 30000, 60000, 100000, 150000, 250000};
 		for (size_t i = 0; i < std::size(kPalamLvDef); ++i) m_palamlv[i] = kPalamLvDef[i];
-		static const qint64 kExpLvDef[] = {0, 1, 4, 20, 50, 200};
 		for (size_t i = 0; i < std::size(kExpLvDef); ++i) m_explv[i] = kExpLvDef[i];
 		m_ejac.fill(0, 1000);
 		m_prevcom.fill(0, 1000);
@@ -435,6 +438,60 @@ void VariableStorage::resetGlobals()
 		purge(m_globalStr2D);
 		purge(m_globalStr3D);
 		qDebug() << "[global] RESETGLOBAL（保留函数私有变量）";
+}
+
+// ================= RESETDATA / 新开游戏 =================
+// 对齐 C# VariableEvaluator.ResetData：SetDefaultValue(全部变量) + CharacterList.Clear()。
+// 保留：NAME 表、STR 等 CSV 装载期「默认值」数据、CSV 模板快照（ADDCHARA 重新
+// 填充角色时仍要用）；清除：全部运行时数值（内建整型数组、用户广域、角色运行时
+// 数据、本地槽）。
+void VariableStorage::resetForNewGame()
+{
+		clearCharaList();
+		resetGlobals();   // 用户广域变量回默认（内部保留私有键/NAME/内建字符串）
+		const auto zero = [](QList<qint64>& list) { list.fill(0); };
+		for (QList<qint64>* p : { &m_day, &m_money, &m_time, &m_item, &m_itemsales,
+		     &m_noitem, &m_bought, &m_pband, &m_flag, &m_tflag, &m_target,
+		     &m_master, &m_player, &m_assi, &m_assiplay, &m_up, &m_down,
+		     &m_losebase, &m_palamlv, &m_explv, &m_ejac, &m_prevcom,
+		     &m_selectcom, &m_nextcom, &m_result, &m_count, &m_a, &m_b, &m_c }) {
+			zero(*p);
+		}
+		// PALAMLV/EXPLV 的默认值表非零 —— SetDefaultValue 语义是恢复默认值
+		for (size_t i = 0; i < std::size(kPalamLvDef); ++i) m_palamlv[i] = kPalamLvDef[i];
+		for (size_t i = 0; i < std::size(kExpLvDef); ++i) m_explv[i] = kExpLvDef[i];
+		m_systemIntVars.clear();
+		m_systemStrVars.clear();
+		// 函数私有静态变量（键形如 `函数名\x1f变量名`，#DIM 静态局部）也要回默认
+		// —— 对齐 C# ResetData 的 SetDefaultLocalValue。RESETGLOBAL 保留它们
+		//（跨函数累积的统计量），但 ResetData 是「整个游戏回默认」，必须清。
+		// 此前不清 -> eraTW 之类重开游戏后静态计数器继承上一周目。
+		const auto purgePrivate = [&](auto& map) {
+			for (auto it = map.begin(); it != map.end(); ) {
+				if (it.key().contains(QChar(0x1f))) it = map.erase(it);
+				else ++it;
+			}
+		};
+		purgePrivate(m_globalInt1D);
+		purgePrivate(m_globalInt2D);
+		purgePrivate(m_globalInt3D);
+		purgePrivate(m_globalStr1D);
+		purgePrivate(m_globalStr2D);
+		purgePrivate(m_globalStr3D);
+		m_privateScopeCache.clear();
+		// 角色运行时数据容器清空 —— 下次 ADDCHARA 由 CSV 模板快照重新填充
+		m_charaIntVars.clear();
+		m_charaIntVars3D.clear();
+		m_charaStrVars.clear();
+		m_charaInt2D.clear();
+		m_charaStr2D.clear();
+		// 本地槽（LOCAL/ARG/LOCALS/ARGS）与形参
+		m_localIntVars.fill(0);
+		m_argIntVars.fill(0);
+		for (QString& s : m_localStrVars) s.clear();
+		for (QString& s : m_argStrVars) s.clear();
+		m_parameters.clear();
+		qDebug() << "[var] RESETDATA 变量回默认值，角色列表已清空";
 }
 
 // ================= CSV 模板快照 =================

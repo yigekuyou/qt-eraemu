@@ -141,6 +141,7 @@ void ScriptRunner::onSystemStateChanged(SystemStateCode state) {
 }
 
 void ScriptRunner::onHaltRequested() {
+    m_eventChain.active = false;   // 停止时放弃未完成的 CALLEVENT 事件链
     m_state->requestHalt();
 }
 
@@ -190,6 +191,11 @@ bool ScriptRunner::returnFromCall() {
 }
 
 bool ScriptRunner::stepOnce() {
+    // ---- CALLEVENT 事件链推进：前一个事件函数返回到续点（对齐 C# Return 后的
+    //      事件函数序列）。链未空 -> 调下一个事件函数；链跑完 -> 续点行照常执行。
+    if (maybeContinueEventChain()) {
+        return true;
+    }
     if (!m_table || !m_table->hasPosition()) {
         m_state->requestHalt();
         emit finished();
@@ -826,6 +832,20 @@ ExecState ScriptRunner::executeLine(const LogicalLine& line) {
         qCDebug(eraTrace) << "[qdbug] GOTO" << label << "from" << line.position.toString();
         return ExecState::Continue;
     }
+    // ---- CALLEVENT / TRYCALLEVENT（对齐 C# CALLEVENT_Instruction）----
+    // 依次调用同名事件函数（#PRI -> 普通 -> #LATER；#SINGLE 且 RETURN 1 跳过
+    // 剩余；#ONLY 返回后终止），全部返回后回到 CALLEVENT 的下一行。
+    // 目标不存在 -> 静默跳过；目标是普通函数 -> 报错（C# CodeEE）。
+    if (name == QLatin1String("CALLEVENT") || name == QLatin1String("TRYCALLEVENT")) {
+        const QString label = line.arguments.isEmpty()
+                                  ? QString() : line.arguments.first().raw.trimmed();
+        if (startEventCallChain(label)) {
+            return ExecState::Continue;
+        }
+        advance();
+        return ExecState::Continue;
+    }
+
     // ---- 调用族：CALL / TRYCALL / CALLFORM / TRYCALLFORM / TRYCCALLFORM ----
     // 以前这里**只认 CALL**：CALLFORM / TRYCALL / TRYCALLFORM 都落到
     // 「其它指令」被静默跳过。后果（eraTW 实测）：
@@ -1557,6 +1577,104 @@ ExecState ScriptRunner::executeLine(const LogicalLine& line) {
     }
     advance();
     return ExecState::Continue;
+}
+
+// ---------------------------------------------------------------------------
+// CALLEVENT 事件链（对齐 C# CalledFunction.CallEventFunction + Process.Return）
+//
+// 事件函数 = 带 #PRI/#SINGLE/#LATER/#ONLY 标记（或事件名表登记）的 @函数，
+// 同名可有多份。CALLEVENT <名> 依次调用：#PRI 组 -> 普通组 -> #LATER 组；
+// 全部返回后回到 CALLEVENT 的下一行（续点）。
+// ---------------------------------------------------------------------------
+bool ScriptRunner::startEventCallChain(const QString& label)
+{
+    if (label.isEmpty() || !m_table) return false;
+    const QList<LabelRef> refs = m_table->labels(label);
+    QList<LabelRef> events;
+    bool anyNonEvent = false;
+    for (const LabelRef& r : refs) {
+        if (r.isEvent) events.append(r);
+        else anyNonEvent = true;
+    }
+    if (events.isEmpty()) {
+        if (anyNonEvent) {
+            // C#：对普通函数做 EVENT 调用是错误（CompatiCallEvent 兼容项）
+            m_state->setErrorState();
+            emit errorOccurred(QStringLiteral("イベント関数でない関数@%1に対しEVENT呼び出しが行われました").arg(label));
+        }
+        return false;
+    }
+    EventChainCall chain;
+    chain.active = true;
+    chain.label = label;
+    chain.groups = QList<QList<LabelRef>>(3);
+    for (const LabelRef& r : events) {
+        if (r.isPri) chain.groups[0].append(r);
+        else if (r.isLater) chain.groups[2].append(r);
+        else chain.groups[1].append(r);
+    }
+    chain.group = 0;
+    chain.counter = -1;
+    chain.returnScript = m_table->currentScript();
+    chain.returnLine = m_table->currentLine() + 1;
+    chain.depth = m_table->depth();
+    m_eventChain = chain;
+    return advanceEventChain();
+}
+
+bool ScriptRunner::advanceEventChain()
+{
+    if (!m_eventChain.active || !m_table) return false;
+    if (m_eventChain.counter >= 0) {
+        // 前一个事件函数已返回：按 C# Process.Return 的分组规则推进
+        const LabelRef done = m_eventChain.groups.at(m_eventChain.group).at(m_eventChain.counter);
+        if (done.isOnly) {
+            m_eventChain.active = false;
+            return false;
+        }
+        if (done.isSingle && m_storage->getResult(0) == 1) {
+            // #SINGLE 且 RETURN 1：跳过剩余（C# ShiftNext 跳到下一组）
+            m_eventChain.group++;
+            m_eventChain.counter = -1;
+        } else {
+            m_eventChain.counter++;
+        }
+    } else {
+        m_eventChain.counter = 0;   // 首次：组内第一个
+    }
+    // 组耗尽则推进组；全部耗尽 -> 链结束
+    while (true) {
+        if (m_eventChain.group >= m_eventChain.groups.size()) {
+            m_eventChain.active = false;
+            return false;
+        }
+        if (m_eventChain.counter < m_eventChain.groups.at(m_eventChain.group).size()) break;
+        m_eventChain.group++;
+        m_eventChain.counter = 0;
+    }
+    const LabelRef ref = m_eventChain.groups.at(m_eventChain.group).at(m_eventChain.counter);
+    qCDebug(eraTrace) << "[exec] CALLEVENT @" << m_eventChain.label
+                      << "组" << m_eventChain.group << "条目" << m_eventChain.counter
+                      << ref.script << ref.line;
+    enterCall(m_eventChain.label);
+    m_table->applyPrivateVariableDefaults(m_table->labelNameAt(ref.script, ref.line));
+    // 每个事件函数的返回地址都是续点：返回后 maybeContinueEventChain 在续点接手
+    if (!m_table->callLabelAt(ref.script, ref.line,
+                              m_eventChain.returnScript, m_eventChain.returnLine)) {
+        m_eventChain.active = false;
+        if (!m_callContexts.isEmpty()) m_storage->setLocalContext(m_callContexts.takeLast().locals);
+        return false;
+    }
+    return true;
+}
+
+bool ScriptRunner::maybeContinueEventChain()
+{
+    if (!m_eventChain.active || !m_table) return false;
+    if (m_table->depth() != m_eventChain.depth) return false;
+    if (m_table->currentScript() != m_eventChain.returnScript) return false;
+    if (m_table->currentLine() != m_eventChain.returnLine) return false;
+    return advanceEventChain();
 }
 
 // ---------------------------------------------------------------------------

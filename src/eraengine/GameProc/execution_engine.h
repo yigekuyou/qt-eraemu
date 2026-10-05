@@ -145,6 +145,10 @@ public:
     // Execute a single instruction (public for testing)
     bool executeInstruction(const LogicalLine& line);
 
+    // RESETDATA（对齐 C# VariableEvaluator.ResetData）：变量回默认 + 角色清空。
+    // 供 RESETDATA 指令与系统层 resetData（新开游戏）、QUIT 卸载共用。
+    bool handleResetData();
+
     // ---- 扩展注册类（扩展函数唯一入口；复杂度由注册类承担）----
     // 注册 API 在 ExtensionRegistry（不再挂引擎）：
     //   · reg(name) / reg(name, 实现)（C++ 重载：参数不同 -> 不同重载）/
@@ -172,6 +176,14 @@ private:
     void handleLoadData(const LogicalLine& line);
     void handleDelData(const LogicalLine& line);
     void handleChkData(const LogicalLine& line);
+    // 状态打印 / 角色整理 / 变量存档族（此前未实现、运行期被忽略的指令集合）：
+    //   UPCHECK / PRINT_ABL / PRINT_TALENT / PRINT_MARK / PRINT_EXP / PRINT_PALAM /
+    //   PRINT_ITEM / PRINT_SHOPITEM / HTML_TAGSPLIT / SORTCHARA / SAVEVAR / LOADVAR
+    // 语义对齐 C# Process.ScriptProc.cs、Instraction.Child.cs 与 VariableEvaluator。
+    bool handleStatusCommand(const LogicalLine& line);
+    // SAVEVAR / LOADVAR（EE 扩展；C# 原版注册了但抛 NotImpl）：
+    // 把指定全局变量的整组元素写进/读回 JSON 文本（sav/ 目录）。
+    bool handleSaveVarCommand(const LogicalLine& line);
 
 private:
     
@@ -180,7 +192,6 @@ private:
     // PRINTC / PRINTLC 的定宽列补齐（对齐 C# CreateTypeCString）
     [[nodiscard]] QString padPrintC(const QString& text, bool padLeft) const;
     [[nodiscard]] static int printCWidth(const QString& text);
-    bool handleResetData();
     // LOADGLOBAL / SAVEGLOBAL（对齐 C# VEvaluator.LoadGlobal / SaveGlobal）：
     // GLOBAL / GLOBALS 系统数组 + `#DIM SAVEDATA GLOBAL` 用户变量 -> save_global.dat。
     // LOADGLOBAL 成功置 RESULT=1，文件缺失 / 校验失败置 RESULT=0。

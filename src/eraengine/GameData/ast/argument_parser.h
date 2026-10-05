@@ -130,8 +130,8 @@ inline constexpr auto kInstructionSpecs = std::to_array<InstructionSpec>({
     {"SAVEDATA",     ArgKind::SaveData,      2,  -1},
     {"SAVEGAME",     ArgKind::SaveData,      0,  -1},
     {"LOADGAME",     ArgKind::SaveData,      0,  -1},
-    {"SAVEVAR",      ArgKind::SaveData,      2,  -1},
-    {"LOADVAR",      ArgKind::SaveData,      2,  -1},
+    {"SAVEVAR",      ArgKind::SaveData,      2,  -1},   // <变量>…,<文件名>（EE）/ <文件名>,<文字列>,<变量>…（C# 原型）
+    {"LOADVAR",      ArgKind::SaveData,      1,  -1},
     {"SAVENOS",      ArgKind::SaveData,      0,  1},
     {"SPLIT",        ArgKind::Split,         1,  -1},
     {"STRDATA",      ArgKind::VarStr,        0,  1},   // VAR_STR：0 实参时目标为 RESULTS:0

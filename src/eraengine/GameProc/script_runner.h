@@ -28,6 +28,7 @@
 #include "process_state.h"
 #include "variable_storage.h"
 #include "ast/logical_line.h"
+#include "era_parse_table.h"   // LabelRef（CALLEVENT 事件链）
 
 class EraParseTable;
 class ExecutionEngine;
@@ -138,6 +139,29 @@ private:
     bool stepOnce();
     bool returnFromCall();
     void enterCall(const QString& function);
+
+    // CALLEVENT 事件链（对齐 C# CALLEVENT_Instruction + CalledFunction.CallEventFunction
+    // + Process.Return 的事件函数分组推进）：
+    //   * startEventCallChain：按 #PRI -> 普通 -> #LATER 排出事件函数组并调第一个；
+    //     目标不是事件函数且不存在 -> false（静默/报错由调用方语义决定）
+    //   * advanceEventChain：前一事件函数返回后调下一个；#SINGLE 且 RETURN 1 跳过
+    //     剩余，#ONLY 返回后终止整条链；链跑完 / 推进失败 -> false（回到续点）
+    //   * maybeContinueEventChain：每次 stepOnce 前检查——位置回到续点且链未空
+    //     时推进链。已知限制：链不可嵌套（后一个 CALLEVENT 覆盖前一个）。
+    struct EventChainCall {
+        bool active = false;
+        QString label;                    // 事件组名（CALLEVENT 实参）
+        QList<QList<LabelRef>> groups;    // [0]=#PRI [1]=普通 [2]=#LATER
+        int group = -1;
+        int counter = -1;
+        QString returnScript;             // 续点 = CALLEVENT 的下一行
+        int returnLine = -1;
+        int depth = 0;                    // CALLEVENT 时的调用深度
+    };
+    [[nodiscard]] bool startEventCallChain(const QString& label);
+    bool advanceEventChain();
+    [[nodiscard]] bool maybeContinueEventChain();
+    EventChainCall m_eventChain;
 
     // 执行一行；返回中心执行状态（Continue 表示可继续）
     ExecState executeLine(const LogicalLine& line);

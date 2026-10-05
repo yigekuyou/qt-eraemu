@@ -146,6 +146,13 @@ public:
     void setLineEmptyProvider(std::function<qint64()> provider) { m_lineEmptyProvider = std::move(provider); }
     // PRINTCLENGTH / PRINTCPERLINE（显示层排版参数，由 EraEngine 注入）
     void setPrintCProvider(std::function<QPair<int,int>()> provider) { m_printCProvider = std::move(provider); }
+    // PRINTC 排版参数读取（PRINT_PALAM / PRINT_SHOPITEM 的每行列数）
+    [[nodiscard]] QPair<int,int> printCLayout() const {
+        return m_printCProvider ? m_printCProvider() : qMakePair(25, 3);
+    }
+    // MONEYSTR 显示参数读取（PRINT_SHOPITEM 的金额前后置，对齐 C# Config.MoneyLabel/MoneyFirst）
+    [[nodiscard]] QString moneyLabel() const { return m_moneyLabel; }
+    [[nodiscard]] bool moneyFirst() const { return m_moneyFirst; }
 
     // 存档/文本类函数（SAVETEXT/LOADTEXT/SAVECHARA/LOADCHARA/GSAVE/GLOAD/SAVENOS）
     // 的落盘目录 = 游戏目录下的 sav/（对齐 C# VEvaluator 的保存路径），由 EraEngine 注入。

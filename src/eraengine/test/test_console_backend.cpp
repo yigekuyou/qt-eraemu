@@ -308,7 +308,8 @@ int main(int argc, char* argv[]) {
         const QVariantMap face = imageBlock(QStringLiteral("face"));
         check(!face.isEmpty(),
               "立絵从窗口上方探进来（还剩 3 行可见）-> 必须产出区块");
-        check(face.value("row").toInt() == -1, "row == -1（锚点行 7 - 窗口顶 8）");
+        check(face.value("row").toInt() == 7, "row == 7（**绝对行号**：锚点行 = 7）");
+        check(c.windowFirstLine() == 8, "windowTopRow == 8（窗口顶行是第 8 行）");
         check(face.value("rows").toInt() == 4, "跨行：rows == 4（64px / 行高 16）");
         check(face.value("height").toInt() == 64, "跨行：height == rows * 行高 = 64px");
         check(face.value("offsetRows").toDouble() == 0.0, "立絵本身没有 ypos");
@@ -316,7 +317,7 @@ int main(int argc, char* argv[]) {
         const QVariantMap frame = imageBlock(QStringLiteral("frame"));
         check(!frame.isEmpty(), "ypos 图层：框也在窗口里");
         check(frame.value("rows").toInt() == 4, "框同样 4 行高");
-        check(frame.value("row").toInt() == 7, "框锚点行 15 - 窗口顶 8 = 7");
+        check(frame.value("row").toInt() == 15, "框 row == 15（绝对行号：锚点行 = 15）");
         check(qFuzzyCompare(frame.value("offsetRows").toDouble(), -8.0),
               "ypos=-800 -> offsetRows == -8（-128px / 行高 16）");
         check(face.value("row").toInt() + face.value("offsetRows").toDouble()

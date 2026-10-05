@@ -325,6 +325,7 @@ void ConsoleBackend::printTemplate(const PrintTemplate& output) {
         if (part.kind == PrintTemplatePart::Kind::Image) {
             span.kind = ConsoleSpanKind::Image; span.imageSize = QSizeF(part.width, part.height);
             span.yposRaw = part.y;
+            span.imageButton = part.imageAlt;   // <img srcb=...> 按钮选中态替换图
             span.altText = QStringLiteral("<img src='%1'>").arg(part.text);
             // 资源固有像素尺寸（布局期算纵横比用）；取不到则为空。
             // 只在**宽度缺省**时才查（立絵常态是「只给 height」或「都不给」）：
@@ -517,6 +518,11 @@ void ConsoleBackend::clearLines(int n) {
     }
     m_buffer.removeLastLogicalLines(n);
     m_lastLineTemporary = false;   // 末尾的「一時行」已被删 -> 清标记
+    // 被删掉的行：按行缓存作废（只波动尾部，其余行的缓存仍然有效）
+    for (auto it = m_lineCache.begin(); it != m_lineCache.end(); ) {
+        if (it.key() >= m_buffer.count()) it = m_lineCache.erase(it);
+        else ++it;
+    }
     clampScroll();
     markDirty();
 }
@@ -545,11 +551,12 @@ void ConsoleBackend::clearAll() {
     m_sealed.clear();
     m_pendingOpen = false;
     m_scrollOffset = 0;
+    m_lineCache.clear();          // 行全部消失 -> 按行缓存作废
     ++m_generation;
     emit generationChanged();
     emit cleared();
     emit lineCountChanged();
-    notifyWindowChanged();
+    notifyWindowChanged();        // 模型随之 reset（beginResetModel）
 }
 
 void ConsoleBackend::setAlignment(ConsoleAlign align) {
@@ -580,28 +587,41 @@ void ConsoleBackend::setFontStyle(bool bold, bool italic, bool underline, bool s
 
 void ConsoleBackend::markDirty() {
     m_dirty = true;
+    // 内容版本：模型据此判定尾行（未提交/一時行）是否需重建
+    ++m_contentVersion;
 }
 
-// windowChanged 的统一出口：内容代数(epoch)自增后再广播，
-// 层缓存（m_*Cache）据此失效。
+// windowChanged 的统一出口：内容代数(epoch)自增后再广播。所有窗口变化必须走这里。
+// 同时把当前窗口同步进增量区块模型 —— 滚动/追加在这里产生 insertRows/removeRows
+// 增量，QML 的 Instantiator 只对变化的行做增删（不再整屏重建 delegate）。
 void ConsoleBackend::notifyWindowChanged() {
     ++m_windowChangedCount;
     ++m_windowEpoch;
+    syncBlockModel();
     emit windowChanged();
 }
 
 QString ConsoleBackend::perfReport() const {
     return QStringLiteral(
                "windowChanged=%1\nvisibleBlocksCalls=%2\nlayerBlocksCalls=%3\n"
-               "blocksBuilt=%4\nblockBuildMs=%5\ncacheEpoch=%6 windowEpoch=%7\n"
-               "bufferLines=%8 logicalLines=%9 visibleCount=%10 scrollOffset=%11")
+               "lineFlattenBuilds=%4\nlineFlattenMs=%5\n"
+               "modelRows=%6 modelInserts=%7 modelRemoves=%8 modelResets=%9 modelSyncs=%10 modelSyncMs=%11\n"
+               "lineCache=%12 lines=%13 maxSpanReach=%14\n"
+               "bufferLines=%15 logicalLines=%16 visibleCount=%17 scrollOffset=%18")
         .arg(m_windowChangedCount)
         .arg(m_visibleBlockCalls)
         .arg(m_layerBlockCalls)
-        .arg(m_blocksBuilt)
-        .arg(m_blockBuildMs)
-        .arg(m_blockCacheEpoch)
-        .arg(m_windowEpoch)
+        .arg(m_lineCacheBuilds)
+        .arg(m_lineCacheMs)
+        .arg(m_blockModel.rowCount())
+        .arg(m_blockModel.insertedRows())
+        .arg(m_blockModel.removedRows())
+        .arg(m_blockModel.resets())
+        .arg(m_blockModel.syncs())
+        .arg(m_blockModel.lastSyncMs())
+        .arg(m_lineCache.size())
+        .arg(displayLineCount())
+        .arg(m_maxSpanReach)
         .arg(m_buffer.count())
         .arg(m_buffer.logicalLineCount())
         .arg(m_visibleCount)
@@ -611,9 +631,10 @@ QString ConsoleBackend::perfReport() const {
 void ConsoleBackend::resetPerfCounters() {
     m_layerBlockCalls = 0;
     m_visibleBlockCalls = 0;
-    m_blocksBuilt = 0;
-    m_blockBuildMs = 0;
     m_windowChangedCount = 0;
+    m_lineCacheBuilds = 0;
+    m_lineCacheMs = 0;
+    m_blockModel.resetPerf();
 }
 
 void ConsoleBackend::flush() {
@@ -753,102 +774,285 @@ QVariantList ConsoleBackend::visibleLines() const {
 // 点击：segmentIndex 是**段**下标（C# ConsoleButtonString）
 // 分层模型：把可见窗口的「最小单位区块」摊平，并把坐标算好
 //
-//   y = 行序号（窗口内）× 行高
+//   y = (绝对行 - 窗口顶行) × 行高
 //   x = 行对齐平移 + 段内偏移
 //
-// text / image 两层各自挑出自己关心的 kind，然后按 x/y 摆放即可。
-QVariantList ConsoleBackend::visibleBlocks() const {
-    ++m_visibleBlockCalls;
+// QML 运行时通过**增量模型**（blockModel）取区块：滚动/追加只产生
+// insertRows/removeRows，未变化的行原地复用。下面的兼容入口（visibleBlocks /
+// textBlocks / imageBlocks / shapeBlocks）返回模型当前内容，供 test_cli 的
+// :geometry/:check 诊断与 QML 测试使用 —— 与 QML 看到的是同一份数据。
+// ---------------------------------------------------------------------------
+
+// ===========================================================================
+// ConsoleBlockModel
+// ===========================================================================
+
+ConsoleBlockModel::ConsoleBlockModel(QObject* parent) : QAbstractListModel(parent) {}
+
+int ConsoleBlockModel::rowCount(const QModelIndex& parent) const {
+    if (parent.isValid()) return 0;
+    return m_flat.size();
+}
+
+QVariant ConsoleBlockModel::data(const QModelIndex& index, int role) const {
+    if (!index.isValid() || index.row() < 0 || index.row() >= m_flat.size())
+        return {};
+    if (role == BlockRole) return m_flat.at(index.row());
+    return {};
+}
+
+QHash<int, QByteArray> ConsoleBlockModel::roleNames() const {
+    return { { BlockRole, QByteArrayLiteral("block") } };
+}
+
+void ConsoleBlockModel::resetPerf() {
+    m_insertedRows = m_removedRows = m_resets = m_syncs = m_lastSyncMs = 0;
+}
+
+QVariantList ConsoleBlockModel::allBlocks() const {
     QVariantList out;
-    const int n = displayLineCount();
-    const int first = windowFirstLine();
-    const int count = n - first;              // 窗口行数
-    // 跨行区块（立絵/顔絵、以及挂了 ypos 的图层图）可能从**窗口上方**伸进来：
-    // 锚点行已经滚出窗口，图的下半部分却还在可见区里。只遍历窗口内的行会让整张图
-    // 突然消失（「不完整显示立绘，立绘就消失」）。所以往上多扫 m_maxSpanReach 行，
-    // 再按「绘制矩形与窗口相交」过滤；坐标可以超出窗口（row 为负 / 大于行数），
-    // 由 QML 视口的 clip 裁掉多余部分。
-    const int scanFirst = std::max(0, first - m_maxSpanReach);
-    for (int abs = scanFirst; abs < n; ++abs) {
-        const ConsoleDisplayLine line = displayLine(abs);
-        const int lineIndex = abs - first;
-        // pointOffset 与 relCol 都是字符列单位；newline() 已经完成布局。
-        const int offset = line.pointOffset;
-        for (int si = 0; si < line.segments.size(); ++si) {
-            const ConsoleSegment& seg = line.segments.at(si);
-            for (const ConsoleSpan& part : seg.spans) {
-                QVariantMap m = part.toVariantMap();
-                m.insert("layer", part.layer());           // text / image / shape
-                m.insert("col", offset + part.relCol);     // 绝对列（单位 = 区块长）
-                m.insert("row", lineIndex);                // 绝对行（单位 = 区块高）
-                const int spanCols = qMax(1, part.cols);
-                // 区块占几行：文本/形状恒 1 行，**图片按资源尺寸跨多行**
-                // （ConsoleLayout::measurePart 已按 `<img width/height>` 算好 rows）。
-                // 此前这里对所有 kind 一律写 1 + height=行高，QML 的 Image 区块就永远
-                // 只有一行高，PreserveAspectFit 又把图压进那个扁盒子 —— 于是
-                // 「画像尺寸 档位/拡大/縮小」（eraTW OPTION 选项 4/5/6）改了状态、
-                // 改了 HTML 里的 height/width，画面上却一点变化都看不出来。
-                const int spanRows = qMax(1, part.rows);
-                // ypos：图片相对本行的纵向偏移（像素 -> 行数；负 = 往上盖）。QML 侧
-                // 按 row + offsetRows 摆放，图层（枠/特效）才会正好盖在立絵边缘。
-                const double offsetRows = m_lineHeight > 0
-                                              ? double(part.top) / double(m_lineHeight) : 0.0;
-                const double topRow = lineIndex + offsetRows;
-                if (topRow + spanRows <= 0.0) continue;   // 整块在窗口上方
-                if (topRow >= count) continue;            // 整块在窗口下方
-                m.insert("cols", spanCols);
-                m.insert("rows", spanRows);
-                m.insert("relCol", part.relCol);
-                m.insert("relRow", 0);
-                m.insert("offsetRows", offsetRows);
-                m.insert("width", spanCols * m_layout.columnWidthPx());
-                m.insert("height", spanRows * m_lineHeight);
-                // 段的点击信息（同一个段的所有区块共享）
-                m.insert("lineIndex", lineIndex);
-                m.insert("segmentIndex", si);
-                m.insert("isButton", seg.isButton);
-                m.insert("isInteger", seg.isInteger);
-                m.insert("clickable", seg.isButton && seg.enabled);
-                if (seg.isButton)
-                    // 按钮值（运行期合法输入）：test_cli 分支选择的兜底候选
-                    m.insert("btnValue", seg.isInteger ? QVariant(seg.intValue)
-                                                       : QVariant(seg.strValue));
-                m.insert("tooltip", seg.tooltip);
-                m.insert("generation", QVariant::fromValue<qulonglong>(seg.generation));
-                out.append(m);
-            }
-        }
+    out.reserve(m_flat.size());
+    for (const QVariantMap& m : m_flat) out.append(m);
+    return out;
+}
+
+QVariantList ConsoleBlockModel::blocksOfKind(const QString& kind) const {
+    QVariantList out;
+    const QString key = QStringLiteral("layer");
+    for (const QVariantMap& m : m_flat) {
+        if (m.value(key).toString() == kind) out.append(m);
     }
     return out;
 }
 
-// 三个层各自的区块列表：从摊平的可见区块里按 kind 挑
-QVariantList ConsoleBackend::layerBlocks(const QString& layer) const {
-    // 三个层共享一次 visibleBlocks() 摊平（按 m_windowEpoch 缓存）：
-    // QML 每帧会分别读 text/image/shape 三个属性 —— 此前每个属性各调一遍
-    // visibleBlocks()，同一帧 3× 重复构建（每行×每段×每区块一个 QVariantMap）。
-    ++m_layerBlockCalls;
-    if (m_blockCacheEpoch != m_windowEpoch) {
-        QElapsedTimer timer;
-        timer.start();
-        const QVariantList all = visibleBlocks();
-        m_textCache.clear();
-        m_imageCache.clear();
-        m_shapeCache.clear();
-        for (const QVariant& v : all) {
-            const QVariantMap m = v.toMap();
-            const QString k = m.value(QStringLiteral("layer")).toString();
-            if (k == QLatin1String("text")) m_textCache.append(m);
-            else if (k == QLatin1String("image")) m_imageCache.append(m);
-            else if (k == QLatin1String("shape")) m_shapeCache.append(m);
-        }
-        m_blocksBuilt += all.size();
-        m_blockBuildMs += timer.elapsed();
-        m_blockCacheEpoch = m_windowEpoch;
+void ConsoleBlockModel::reset() {
+    if (m_flat.isEmpty() && m_lines.isEmpty()) return;
+    beginResetModel();
+    m_lines.clear();
+    m_flat.clear();
+    m_lastTailAbs = -2;
+    m_lastTailVersion = 0;
+    ++m_resets;
+    endResetModel();
+}
+
+// 行级可见性（与旧 per-block 裁剪同语义：只裁「整块在窗口上方」）：
+//   存在区块满足 (abs - first + offsetRows) + rows > 0
+bool ConsoleBlockModel::lineVisibleInWindow(const QVariantList& blocks, int abs,
+                                            int first, int visibleCount) const {
+    Q_UNUSED(visibleCount);
+    for (const QVariant& v : blocks) {
+        const QVariantMap m = v.toMap();
+        const double topRow = double(abs - first) + m.value(QStringLiteral("offsetRows")).toDouble();
+        const int rows = qMax(1, m.value(QStringLiteral("rows")).toInt());
+        if (topRow + rows > 0.0) return true;
     }
-    if (layer == QLatin1String("text")) return m_textCache;
-    if (layer == QLatin1String("image")) return m_imageCache;
-    return m_shapeCache;
+    return false;
+}
+
+void ConsoleBlockModel::setWindow(int rangeFirst, int rangeEnd, int windowFirst,
+                                  int visibleCount, int tailAbs, quint64 tailVersion,
+                                  const std::function<QVariantList(int)>& lineBlocks) {
+    QElapsedTimer timer;
+    timer.start();
+    ++m_syncs;
+
+    if (rangeEnd <= rangeFirst) {
+        reset();
+        m_lastSyncMs = timer.elapsed();
+        return;
+    }
+
+    // 1) 收集新窗口的行（含行级裁剪；blocks 从按行缓存取，代价是引用拷贝）。
+    //    裁剪锚点 = **窗口顶行**（windowFirst），不是扫描起点（rangeFirst 只多了
+    //    窗口上方的探出行，用于接住跨行/负 ypos 的图）。
+    QList<int> wantedAbs;
+    QHash<int, QVariantList> wantedBlocks;
+    for (int abs = rangeFirst; abs < rangeEnd; ++abs) {
+        QVariantList blocks = lineBlocks(abs);
+        if (!lineVisibleInWindow(blocks, abs, windowFirst, visibleCount)) continue;
+        wantedAbs.append(abs);
+        wantedBlocks.insert(abs, blocks);
+    }
+
+    // 2) 尾行（未提交行 / 一時行）内容会变：强制重建（先摘除旧内容，
+    //    随后在步骤 4 用新一轮内容重插）。tailVersion 不变时跳过，避免无谓 churn。
+    if (tailAbs >= 0) {
+        const bool versionChanged = (tailAbs != m_lastTailAbs
+                                     || tailVersion != m_lastTailVersion);
+        m_lastTailAbs = tailAbs;
+        m_lastTailVersion = tailVersion;
+        if (versionChanged) {
+            for (int i = m_lines.size() - 1; i >= 0; --i) {
+                if (m_lines.at(i).abs != tailAbs) continue;
+                const LineEntry e = m_lines.at(i);
+                if (e.count > 0) {
+                    beginRemoveRows(QModelIndex(), e.startRow, e.startRow + e.count - 1);
+                    m_flat.remove(e.startRow, e.count);
+                    m_removedRows += e.count;
+                    endRemoveRows();
+                    for (int j = i + 1; j < m_lines.size(); ++j)
+                        m_lines[j].startRow -= e.count;
+                }
+                m_lines.removeAt(i);
+                break;
+            }
+        }
+    }
+
+    // 3) 移除不再需要的行（自底向上，保持行号稳定）
+    for (int i = m_lines.size() - 1; i >= 0; --i) {
+        if (wantedBlocks.contains(m_lines.at(i).abs)) continue;
+        const LineEntry e = m_lines.at(i);
+        if (e.count > 0) {
+            beginRemoveRows(QModelIndex(), e.startRow, e.startRow + e.count - 1);
+            m_flat.remove(e.startRow, e.count);
+            m_removedRows += e.count;
+            endRemoveRows();
+            for (int j = i + 1; j < m_lines.size(); ++j)
+                m_lines[j].startRow -= e.count;
+        }
+        m_lines.removeAt(i);
+    }
+
+    // 4) 插入新增的行（按 abs 升序，插到正确位置）
+    for (int abs : wantedAbs) {
+        bool exists = false;
+        for (const LineEntry& e : m_lines) {
+            if (e.abs == abs) { exists = true; break; }
+        }
+        if (exists) continue;
+        int pos = 0;
+        int row = 0;
+        while (pos < m_lines.size() && m_lines.at(pos).abs < abs) {
+            row += m_lines.at(pos).count;
+            ++pos;
+        }
+        const QVariantList blocks = wantedBlocks.value(abs);
+        if (blocks.isEmpty()) {
+            // 空行：占位条目（无行可发信号）
+            m_lines.insert(pos, LineEntry{ abs, row, 0 });
+            continue;
+        }
+        beginInsertRows(QModelIndex(), row, row + blocks.size() - 1);
+        for (int k = 0; k < blocks.size(); ++k)
+            m_flat.insert(row + k, blocks.at(k).toMap());
+        for (int j = pos; j < m_lines.size(); ++j)
+            m_lines[j].startRow += blocks.size();
+        m_lines.insert(pos, LineEntry{ abs, row, int(blocks.size()) });
+        m_insertedRows += blocks.size();
+        endInsertRows();
+    }
+
+    m_lastSyncMs = timer.elapsed();
+}
+
+// ===========================================================================
+// ConsoleBackend：按行摊平缓存
+// ===========================================================================
+
+// 取某绝对行的区块列表（**绝对坐标系**：row = abs，z = 打印顺序编码）。
+// 显示行一旦提交就不可变（可变的只有尾部的「一時行」/未提交行），故只有
+// 提交且非一時的行进缓存；行数据与窗口无关，滚动不失效。
+QVariantList ConsoleBackend::lineBlocks(int abs) const {
+    const bool cacheable = abs < m_buffer.count()
+        && !(m_lastLineTemporary && abs == m_buffer.count() - 1);
+    if (cacheable) {
+        const auto it = m_lineCache.constFind(abs);
+        if (it != m_lineCache.constEnd()) return it.value();
+    }
+
+    QElapsedTimer timer;
+    timer.start();
+    const ConsoleDisplayLine line = displayLine(abs);
+    // pointOffset 与 relCol 都是字符列单位；newline() 已经完成布局。
+    const int offset = line.pointOffset;
+    QVariantList out;
+    int idx = 0;
+    for (int si = 0; si < line.segments.size(); ++si) {
+        const ConsoleSegment& seg = line.segments.at(si);
+        for (const ConsoleSpan& part : seg.spans) {
+            QVariantMap m = part.toVariantMap();
+            m.insert("layer", part.layer());           // text / image / shape
+            // 扁平 z（= 控制台打印顺序）。所有区块挂在同一个父 Item 下，靠它
+            // 把 text/image/shape 按真正的绘制顺序叠放（对齐 C#：逐 part 顺序
+            // 绘制 —— 图可以压住先打印的字，后打印的字也能盖住先打印的图）。
+            // z = 绝对行 × 1024 + 行内序号：确定性、与摊平时机无关（缓存可用）。
+            m.insert("z", double(abs) * 1024.0 + double(qMin(idx, 1023)));
+            m.insert("col", offset + part.relCol);     // 绝对列（单位 = 区块长）
+            m.insert("row", abs);                      // **绝对行**（单位 = 区块高）
+            const int spanCols = qMax(1, part.cols);
+            // 区块占几行：文本/形状恒 1 行，**图片按资源尺寸跨多行**
+            // （ConsoleLayout::measurePart 已按 `<img width/height>` 算好 rows）。
+            const int spanRows = qMax(1, part.rows);
+            // ypos：图片相对本行的纵向偏移（像素 -> 行数；负 = 往上盖）。QML 侧
+            // 按 (row - windowTopRow + offsetRows) 摆放，图层（枠/特效）才会正好
+            // 盖在立絵边缘。
+            const double offsetRows = m_lineHeight > 0
+                                          ? double(part.top) / double(m_lineHeight) : 0.0;
+            m.insert("cols", spanCols);
+            m.insert("rows", spanRows);
+            m.insert("relCol", part.relCol);
+            m.insert("relRow", 0);
+            m.insert("offsetRows", offsetRows);
+            m.insert("width", spanCols * m_layout.columnWidthPx());
+            m.insert("height", spanRows * m_lineHeight);
+            // 段的点击信息（同一个段的所有区块共享）
+            m.insert("lineIndex", abs);                // 点击回传 = **绝对行号**
+            m.insert("segmentIndex", si);
+            m.insert("isButton", seg.isButton);
+            m.insert("isInteger", seg.isInteger);
+            m.insert("clickable", seg.isButton && seg.enabled);
+            if (seg.isButton)
+                // 按钮值（运行期合法输入）：test_cli 分支选择的兜底候选
+                m.insert("btnValue", seg.isInteger ? QVariant(seg.intValue)
+                                                   : QVariant(seg.strValue));
+            m.insert("tooltip", seg.tooltip);
+            m.insert("generation", QVariant::fromValue<qulonglong>(seg.generation));
+            out.append(m);
+            ++idx;
+        }
+    }
+    ++m_lineCacheBuilds;
+    m_lineCacheMs += timer.elapsed();
+    if (cacheable) m_lineCache.insert(abs, out);
+    return out;
+}
+
+// 兼容入口：当前窗口的全部区块（= 增量模型的当前内容，含行级裁剪）。
+// test_cli 的 :geometry/:check 与 QML 测试用它做诊断 —— 与 QML 展示同源。
+QVariantList ConsoleBackend::visibleBlocks() {
+    ++m_visibleBlockCalls;
+    syncBlockModel();
+    return m_blockModel.allBlocks();
+}
+
+// 三个层各自的区块列表：从模型的当前内容里按 layer 挑（诊断用）
+QVariantList ConsoleBackend::layerBlocks(const QString& layer) {
+    ++m_layerBlockCalls;
+    syncBlockModel();
+    return m_blockModel.blocksOfKind(layer);
+}
+
+// 把当前窗口同步进增量模型。窗口范围 = 可见行 ± 最长区块的探出量；
+// 行级裁剪（整块在窗口上方的不产出）在模型内完成。
+void ConsoleBackend::syncBlockModel() {
+    const int n = displayLineCount();
+    if (n <= 0 || m_visibleCount <= 0) {
+        m_blockModel.reset();
+        return;
+    }
+    const int first = windowFirstLine();
+    const int scanFirst = std::max(0, first - m_maxSpanReach);
+    const int scanEnd = std::min(n, first + m_visibleCount + m_maxSpanReach);
+    // 尾行：未提交行（pending）或 一時行（可被下一行替换）内容会变，需重建。
+    // 其余已提交行不可变 —— 按行缓存的正确性前提。
+    int tailAbs = -1;
+    if (m_pendingOpen) tailAbs = n - 1;
+    else if (m_lastLineTemporary) tailAbs = n - 1;
+    m_blockModel.setWindow(scanFirst, scanEnd, first, m_visibleCount, tailAbs,
+                           m_contentVersion,
+                           [this](int abs) { return lineBlocks(abs); });
 }
 
 // root 层的「内容高度」= 已排版可见行数 × 行高
@@ -856,10 +1060,11 @@ int ConsoleBackend::contentHeight() const {
     return (displayLineCount() - windowFirstLine()) * m_lineHeight;
 }
 
-void ConsoleBackend::clickAt(int visibleIndex, int segmentIndex) {
+void ConsoleBackend::clickAt(int absLine, int segmentIndex) {
     const int n = displayLineCount();
-    const int first = std::max(0, n - m_visibleCount - m_scrollOffset);
-    const int abs = first + visibleIndex;
+    // 区块里的 lineIndex 是**绝对行号**（增量模型的行数据与窗口无关，
+    // 滚动时不做任何数据改写）—— 点击按绝对行定位。
+    const int abs = absLine;
     if (abs < 0 || abs >= n) {
         return;
     }
@@ -880,7 +1085,7 @@ void ConsoleBackend::clickAt(int visibleIndex, int segmentIndex) {
     }
     // 只有当前世代的段可点击（对齐 C# selectingButton.Generation != lastButtonGeneration）
     if (seg.generation != m_generation) {
-        qDebug() << "[input] 点击忽略（世代过期）行" << visibleIndex << "段" << segmentIndex;
+        qDebug() << "[input] 点击忽略（世代过期）行" << abs << "段" << segmentIndex;
         return;
     }
     // 输入裁决：只有「正在等待输入」且「按钮类型与等待的输入类型一致」才响应。
@@ -891,7 +1096,7 @@ void ConsoleBackend::clickAt(int visibleIndex, int segmentIndex) {
                  << "等待中" << m_waitingInput << "段为整数" << seg.isInteger;
         return;
     }
-    qDebug() << "[input] 点击按钮 行" << visibleIndex << "段" << segmentIndex
+    qDebug() << "[input] 点击按钮 行" << abs << "段" << segmentIndex
              << (seg.isInteger ? QStringLiteral("整数=") + QString::number(seg.intValue)
                                : QStringLiteral("字符串=") + seg.strValue);
     if (seg.isInteger) submitInput(seg.intValue);

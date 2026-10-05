@@ -871,6 +871,7 @@ void SystemStateMachine::endCallShowStatus() {
     setState(SystemStateCode::Train_CallComAbleXX);
     m_lastCalledComable = -1;
     m_lastAddCom = -1;
+    m_rawComProbe = -1;   // 新一屏菜单：清掉可能残留的原始号探测
     m_printComCount = 0;
     for (int& v : m_comAble) v = -1;
     endCallComAbleXX();
@@ -923,6 +924,19 @@ void SystemStateMachine::endCallComAbleXX() {
     }
 
     if (m_lastCalledComable >= m_trainNames.size()) {
+        // 诊断（默认关，QT_LOGGING_RULES="era.trace.debug=true" 打开）：
+        // 本次扫描判定的「可用指令」数量 + 显示号/原始号的错位情况。
+        if (eraTrace().isDebugEnabled()) {
+            int able = 0;
+            QStringList shown;
+            for (int i = 0; i < m_comAble.size(); ++i) {
+                if (m_comAble.at(i) < 0) continue;
+                ++able;
+                if (m_comAble.at(i) != i) shown << QStringLiteral("%1->%2").arg(i).arg(m_comAble.at(i));
+            }
+            qCDebug(eraTrace).noquote() << "[comable] 可用" << able
+                                        << "显示号!=原始号" << shown.join(QLatin1Char(' '));
+        }
         setState(SystemStateCode::Train_CallShowUserCom);
         flushOut();
         refresh();
@@ -952,6 +966,45 @@ void SystemStateMachine::trainWaitInput() {
         if (m_systemResult >= 0 && m_systemResult < m_comAble.size()) {
             selectCom = m_comAble.at(m_systemResult);
         }
+        // ---- 兼容「原始指令号」输入（eraTW 的 @SHOW_USERCOM 自己画菜单）----
+        //
+        // comAble 是 C# 的**显示号 -> 原始号**表：@COM_ABLExx 扫描时只给
+        // «Train.csv 里定义了名字» 的指令发连号显示号（lastAddCom），打印成
+        // 「休憩[139]」这样。eraTW 的 @SHOW_USERCOM 不理会这套，直接
+        // `%TRAINNAME:LOCAL%[{LOCAL,3}]` 打印**原始号**（休憩[403]），它的
+        // @USERCOM 也按原始号解析（SELECTCOM = RESULT）。
+        //
+        // Train.csv 的编号连续时显示号 == 原始号，两种输入都对得上；一旦缺号
+        // （本中文版 Train.csv 在 0..403 里少了 264 个条目）显示号就 ≠ 原始号，
+        // 点 eraTW 自己画的「休憩[403]」落进 comAble[403] == -1，被当成
+        // 「不可用指令」丢给 @USERCOM 兜底 —— 而 @USERCOM 的收尾是
+        // `DOTRAIN 999`（eraTW 自带的空指令 @COM999 = RETURN 1），于是
+        // 表现成「点了没反应/执行错指令」。
+        //
+        // 这里按 eraTW 自己的口径补一次判定：输入落在 TRAINNAME 里定义的编号上
+        // 就直接问 @COM_ABLE{编号}（@USERCOM 正是这么验的），返回非 0 就执行。
+        // 该调用要经过系统层（callFunction），返回后会重新进入本处理函数，
+        // 用 m_rawComProbe 记住探测对象。
+        if (selectCom < 0 && m_systemResult >= 0
+            && m_systemResult < m_trainNames.size()
+            && !m_trainNames.at(static_cast<int>(m_systemResult)).isEmpty()) {
+            if (m_rawComProbe < 0) {
+                m_rawComProbe = static_cast<int>(m_systemResult);
+                if (!callFunction(QStringLiteral("COM_ABLE%1").arg(m_rawComProbe), false, false)) {
+                    m_rawComProbe = -1;   // 没有 @COM_ABLE{编号}：按不可用处理
+                } else {
+                    return;               // 等 @COM_ABLE 返回后重进本处理函数
+                }
+            } else {
+                const qint64 able = m_storage ? m_storage->getResult(0) : 0;
+                if (able != 0) {
+                    selectCom = m_rawComProbe;
+                    qCDebug(eraTrace).noquote()
+                        << "[trainwait] 原始号输入命中 com" << selectCom;
+                }
+                m_rawComProbe = -1;
+            }
+        }
     } else {
         for (int i = 0; i < m_comAble.size(); ++i) {
             if (m_comAble.at(i) == m_systemResult) {
@@ -965,6 +1018,12 @@ void SystemStateMachine::trainWaitInput() {
         if (m_storage) m_storage->setSelectcom(0, selectCom);
         callEventCom();
     } else {
+        // 落到 @USERCOM 兜底（eraTW 用它做「指令不可用」的提示/重画）
+        qCDebug(eraTrace).noquote()
+            << "[trainwait] 显示号未命中 -> @USERCOM, systemResult" << m_systemResult
+            << "comAble[in]=" << (m_systemResult >= 0 && m_systemResult < m_comAble.size()
+                                      ? m_comAble.at(static_cast<int>(m_systemResult)) : -999)
+            << "comAbleSize" << m_comAble.size();
         if (m_isCTrain) {
             printLine(QStringLiteral("无法执行指令"));
         }

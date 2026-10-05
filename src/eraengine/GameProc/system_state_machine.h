@@ -328,7 +328,10 @@ private:
     bool m_skipPrint = false;
     bool m_needWaitToEventComEnd = false;
     bool m_needCheck = true;
-    qint64 m_doTrainSelectCom = -1;
+    // 兼容「原始指令号」输入：探测 @COM_ABLE{编号} 期间记住待确认的编号
+    // （-1 = 无探测在途），见 trainWaitInput。
+    int  m_rawComProbe = -1;
+    qint64 m_doTrainSelectCom = -1;   // DOTRAIN 指定的指令
     int  m_saveTarget = -1;
     bool m_isFirstTime = true;
     int  m_page = 0;

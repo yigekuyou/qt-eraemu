@@ -407,7 +407,10 @@ WordCollection AstBuilder::tokenize(const QString& line) {
             const int start = i;
             while (i < n) {
                 const QChar c = line.at(i);
-                if (c.isLetterOrNumber() || c == '_' || c.unicode() > 127) {
+                // 续读**排除空白**：全角空格 U+3000 的 unicode() > 127，此前会被
+                // 吞进标识符（`IF　絶頂変動値` 变成一个词 → 整行变「未识别的指令」）。
+                // C# LexicalAnalyzer 以 char.IsWhiteSpace 断词，这里对齐。
+                if ((c.isLetterOrNumber() || c == '_' || c.unicode() > 127) && !c.isSpace()) {
                     ++i;
                 } else {
                     break;
@@ -471,16 +474,21 @@ bool AstBuilder::splitAssignment(const QString& line, QString& lhs, QString& op,
         }
         if (ch == '"') { quote = ch; continue; }
 
-        // 字符串赋值运算符 '=
+        // 字符串赋值运算符 '= ：LHS **允许含空白**（与下面的 = 分支对齐）。
+        // `LOCALS:(LOCAL + 1) '= …` / `CSTR:ARG:(29 + RESULT) '= RESULTS` 这类
+        // 带表达式下标的字符串赋值此前因「LHS 不许有空格」整行被丢弃，
+        // 导致 eraMegaten 深层界面的菜单/详情文本整行缺失。
         if (ch == '\'') {
             if (i + 1 < n && line.at(i + 1) == '=') {
                 lhs = line.left(i).trimmed();
                 op = QStringLiteral("'=");
                 rhs = line.mid(i + 2).trimmed();
-                for (const QChar c : lhs) {
-                    if (c.isSpace()) return false;
+                if (lhs.isEmpty()) return false;
+                const QChar head = lhs.at(0);
+                if (!(head.isLetter() || head == QLatin1Char('_') || head.unicode() > 127)) {
+                    return false;            // 必须以标识符开头
                 }
-                return !lhs.isEmpty();
+                return true;
             }
             quote = ch;
             continue;
@@ -567,7 +575,8 @@ QStringList AstBuilder::splitOperands(const QString& text, bool splitWhitespace)
 // ---------------------------------------------------------------------------
 LogicalLine AstBuilder::build(const QString& rawLine,
                               const ScriptPosition& position,
-                              const AstResolver& resolve) {
+                              const AstResolver& resolve,
+                              const AstResolver& resolveQuiet) {
     LogicalLine line;
     line.raw = rawLine;
     line.position = position;
@@ -677,18 +686,27 @@ LogicalLine AstBuilder::build(const QString& rawLine,
         line.assignOperator = op;
         Operand dest(lhs);
         Operand value(rhs);
-        if (resolve) value.ast = resolve(rhs);
+        // 右值在此处只是**临时**归约（变量类型尚未定稿）：字符串赋值的右值
+        // 会被最终 applyStringAssignments() 用 StrFormParser 替换掉。用静默
+        // resolver 解析，避免临时失败刷屏（705 条噪音的来源）。
+        if (resolveQuiet) value.ast = resolveQuiet(rhs);
+        else if (resolve) value.ast = resolve(rhs);
         line.arguments = { dest, value };
         return finalized(std::move(line));
     }
 
-    // 后缀自增/自减**语句**：`I++` / `BAG:COUNT--`
+    // 后缀自增/自减**语句**：`I++` / `BAG:COUNT--` / `LOCAL:(… == 0)++`
     // （对齐 C# LogicalLineParser 的 SETFunction + OperatorCode.Increment/Decrement）
     if (!firstIsInstruction) {
         for (const char* opText : {"++", "--"}) {
             if (!trimmed.endsWith(QLatin1String(opText))) continue;
             const QString body = trimmed.left(trimmed.size() - 2).trimmed();
-            if (body.isEmpty() || body.contains(QLatin1Char('='))) continue;
+            if (body.isEmpty()) continue;
+            // 只拒绝**顶层**赋值运算符：`IF A == B++` 不是自增语句，而
+            // `LOCAL:(CFLAG:… == 0)++` 里的 == 在括号内，仍是合法自增。
+            // 复用 splitAssignment（它按括号/引号深度扫描），语义一致。
+            QString bl, bo, br;
+            if (splitAssignment(body, bl, bo, br)) continue;
             const QChar head = body.at(0);
             if (!(head.isLetter() || head == QLatin1Char('_') || head.unicode() > 127)) continue;
             line.kind = LineKind::Instruction;

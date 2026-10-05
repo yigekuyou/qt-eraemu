@@ -578,6 +578,58 @@ int main(int argc, char* argv[]) {
               "E = @\"[PN:%N%]\" -> [PN:7]（eraTW 精灵名样式）");
     }
 
+    // 8) eraMegaten 解析回归（本次修复；原报 705 条「Expected #」+ 19 条「未识别的指令」）
+    qDebug() << "\n8) eraMegaten 解析回归（'= 空格 LHS / 全角空格断词 / 括号内 == 的自增）";
+    {
+        const AstResolver resolveOne = [&table](const QString& e) { return table.expressionAst(e); };
+
+        // (a) '= 的 LHS 允许含空格：`LOCALS:(LOCAL + 1) '= …` 此前整行被丢弃
+        const LogicalLine s1 = AstBuilder::build(
+            QStringLiteral("LOCALS:(LOCAL + 1) '= \" \" * 8 + \"x\""), {}, resolveOne);
+        check(s1.functionName == QLatin1String("'="),
+              "LOCALS:(LOCAL + 1) '= … 解析为 '= 赋值（LHS 含空格）");
+        check(s1.arguments.size() == 2
+                  && s1.arguments.at(0).raw.trimmed() == QStringLiteral("LOCALS:(LOCAL + 1)"),
+              "LHS 原样保留（含表达式下标）");
+        const LogicalLine s1b = AstBuilder::build(
+            QStringLiteral("CSTR:ARG:(29 + RESULT) '= RESULTS"), {}, resolveOne);
+        check(s1b.functionName == QLatin1String("'="),
+              "CSTR:ARG:(29 + RESULT) '= RESULTS 解析为 '= 赋值");
+
+        // (b) 全角空格 U+3000 断词：`IF　絶頂変動値:…` 此前把指令名吞成 "IF　絶頂変動値"
+        const LogicalLine s2 = AstBuilder::build(
+            QStringLiteral("IF\u3000絶頂変動値:0:(LOCAL+1)"), {}, resolveOne);
+        check(s2.functionName == QLatin1String("IF"),
+              "IF<U+3000>… 按 IF 指令解析（全角空格断词）");
+        check(s2.condition != nullptr, "IF 的条件表达式已归约");
+
+        // (c) 后缀自增：括号内的 == 不应否掉整条语句
+        const LogicalLine s3 = AstBuilder::build(
+            QStringLiteral("LOCAL:(CFLAG:(FLAG:LOCALS):ゲスト加入フラグ == 0)++"), {}, resolveOne);
+        check(s3.functionName == QLatin1String("++"),
+              "LOCAL:(… == 0)++ 仍是自增语句（== 在括号内）");
+        // 负向：顶层 == 的 `IF A == B++` 不是自增语句
+        const LogicalLine s4 = AstBuilder::build(QStringLiteral("IF A == B++"), {}, resolveOne);
+        check(s4.functionName != QLatin1String("++"), "IF A == B++ 不是自增语句");
+
+        // (d) 赋值右值走**静默** resolver（临时解析不刷语法错误；AST 与原来一致）
+        bool loudCalled = false, quietCalled = false;
+        const AstResolver loudR = [&](const QString&) -> QSharedPointer<ExpressionNode> {
+            loudCalled = true; return {};
+        };
+        const AstResolver quietR = [&](const QString&) -> QSharedPointer<ExpressionNode> {
+            quietCalled = true; return {};
+        };
+        const LogicalLine s5 = AstBuilder::build(
+            QStringLiteral("CSTR:ARG:(29 + RESULT) '= RESULTS"), {}, loudR, quietR);
+        check(s5.functionName == QLatin1String("'=") && quietCalled && !loudCalled,
+              "赋值右值走静默 resolver（loud 未被调用）");
+        // 负向：非赋值行（如 IF 的条件）仍走 loud resolver
+        loudCalled = quietCalled = false;
+        AstBuilder::build(QStringLiteral("IF A == B"), {}, loudR, quietR);
+        check(loudCalled && !quietCalled, "非赋值行（IF 条件）仍走 loud resolver");
+    }
+
     qDebug() << "\n======================================";
     if (g_failures == 0) {
         qDebug() << "[SUCCESS] statement tests passed";

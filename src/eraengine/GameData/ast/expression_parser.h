@@ -47,6 +47,12 @@ public:
     // 解析诊断输出开关（默认关闭；装载期批量解析时避免噪音）。
     void setVerbose(bool verbose) { m_verbose = verbose; }
 
+    // 静默模式：仍返回同样的 AST，但不打印「表达式语法错误」。
+    // 用于**赋值右值的临时解析**——装载期变量类型尚未定稿，字符串赋值的右值
+    // （含 %…%/{…}/? 的文本）必然解析失败，随后 applyStringAssignments() 会用
+    // StrFormParser 重新解释；此阶段的报错是纯噪音（eraMegaten 实测 705 条）。
+    void setQuiet(bool quiet) { m_quiet = quiet; }
+
     // 函数返回类型提供者（内置表 + 用户自定义函数 #FUNCTION(S)），用于强类型推断。
     using FunctionTypeProvider = std::function<OperandType(const QString&)>;
     void setFunctionTypeProvider(FunctionTypeProvider provider) { m_functionTypeProvider = std::move(provider); }
@@ -93,6 +99,7 @@ private:
     int m_current = 0;
     int m_depth = 0;
     bool m_verbose = false;
+    bool m_quiet = false;
     FunctionTypeProvider m_functionTypeProvider;
     FormProvider m_formProvider;
     ConstantNameProvider m_constantNameProvider;

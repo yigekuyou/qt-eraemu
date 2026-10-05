@@ -77,7 +77,7 @@ void EraParseTable::setExpressionEvaluator(ExpressionEvaluator* evaluator) {
 // 只读区：表达式 AST 缓存（唯一解析流水线）
 // ---------------------------------------------------------------------------
 
-QSharedPointer<ExpressionNode> EraParseTable::expressionAst(const QString& expr) {
+QSharedPointer<ExpressionNode> EraParseTable::expressionAst(const QString& expr, bool quiet) {
     const QString key = expr.trimmed();
     if (key.isEmpty()) {
         return nullptr;
@@ -105,6 +105,7 @@ QSharedPointer<ExpressionNode> EraParseTable::expressionAst(const QString& expr)
     }
 
     ExpressionParser parser;
+    parser.setQuiet(quiet);   // 赋值右值的临时解析：不刷「表达式语法错误」
     // 强类型：仅用户自定义函数由 Provider 决定；内置函数（内部命令）由
     // ExpressionParser 内部的 kBuiltinFunctions 目录解析（对齐 C# methodDic）。
     // 装载期间用户函数可能尚未 merge，finalizeParse 会再统一重绑一次。

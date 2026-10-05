@@ -45,9 +45,13 @@ public:
     static WordCollection tokenize(const QString& line);
 
     // 行 -> LogicalLine（归类、归约实参、预解析条件）。
+    // resolveQuiet：赋值右值**临时**归约用的静默 resolver（可选；为空时回落
+    // 到 resolve）。临时解析的失败是噪音 —— 字符串赋值随后由
+    // applyStringAssignments() 以 StrFormParser 重新解释。
     static LogicalLine build(const QString& rawLine,
                              const ScriptPosition& position,
-                             const AstResolver& resolve);
+                             const AstResolver& resolve,
+                             const AstResolver& resolveQuiet = {});
 
     // ExtensionRegistry::reg() 登记的扩展语句名：解析期不再报「未识别的指令」
     // （扩展默认全启用，登记过的名字是已认识的扩展；只消警告，

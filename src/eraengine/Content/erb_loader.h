@@ -210,8 +210,10 @@ private:
     QStringList collectFiles(const QString& dirPath, int depth) const;
 
     // 供线程内使用：只读函数类型表 + 本地缓存
+    // quiet=true：解析失败时不打印（用于赋值右值的临时归约，见 AstBuilder::build）
     QSharedPointer<ExpressionNode> resolveExpr(const QString& expr, const FunctionTypes& types,
-                                               QHash<QString, QSharedPointer<ExpressionNode>>& cache) const;
+                                               QHash<QString, QSharedPointer<ExpressionNode>>& cache,
+                                               bool quiet = false) const;
 
     // 预扫描：收集函数返回类型（#FUNCTION → Int，#FUNCTIONS → Str）
     FunctionTypes scanFunctionTypes(const QString& content) const;

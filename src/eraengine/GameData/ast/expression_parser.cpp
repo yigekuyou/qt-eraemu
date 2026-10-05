@@ -387,7 +387,8 @@ ExpressionToken ExpressionParser::consume(TokenType type, const QString& message
     }
     // 解析失败点：调用方通常只拿到 nullptr，这里给出「期望什么/实际读到什么」。
     // 附上 token 序列拼回的原文 —— 表达式本身没有位置信息，只有原文能定位到行。
-    {
+    // 静默模式（赋值右值的临时解析）只返回 EOF，不打印（见 setQuiet）。
+    if (!m_quiet) {
         QString text;
         for (const ExpressionToken& t : m_tokens) {
             if (!text.isEmpty()) text += QLatin1Char(' ');

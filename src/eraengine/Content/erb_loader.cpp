@@ -120,7 +120,7 @@ QStringList ErbLoader::collectFiles(const QString& dirPath, int depth) const {
 // ---------------------------------------------------------------------------
 QSharedPointer<ExpressionNode> ErbLoader::resolveExpr(
     const QString& expr, const FunctionTypes& types,
-    QHash<QString, QSharedPointer<ExpressionNode>>& cache) const {
+    QHash<QString, QSharedPointer<ExpressionNode>>& cache, bool quiet) const {
     const QString key = expr.trimmed();
     if (key.isEmpty()) return nullptr;
 
@@ -132,6 +132,7 @@ QSharedPointer<ExpressionNode> ErbLoader::resolveExpr(
     if (tokens.isEmpty()) return nullptr;
 
     ExpressionParser parser;
+    parser.setQuiet(quiet);   // 赋值右值的临时解析：不刷「表达式语法错误」
     parser.setFunctionTypeProvider([&types](const QString& name) -> OperandType {
         const auto fit = types.constFind(name.toUpper());
         return fit == types.constEnd() ? builtinFunctionReturnType(name.toUpper().toStdString())
@@ -206,9 +207,13 @@ ParsedErbFile ErbLoader::parseOneFile(const QString& filePath, const FunctionTyp
         const AstResolver resolver = [this, &types, &pf](const QString& e) {
             return resolveExpr(e, types, pf.astCache);
         };
+        // 赋值右值的临时归约：静默（字符串赋值随后由 StrFormParser 重新解释）
+        const AstResolver quietResolver = [this, &types, &pf](const QString& e) {
+            return resolveExpr(e, types, pf.astCache, /*quiet*/ true);
+        };
         for (int i = 0; i < source.size(); ++i) {
             const ScriptPosition pos(filePath, source.at(i).physicalLine, 1);
-            LogicalLine line = AstBuilder::build(source.at(i).text, pos, resolver);
+            LogicalLine line = AstBuilder::build(source.at(i).text, pos, resolver, quietResolver);
             line.lineIndex = i;
             pf.lines.append(line);
         }
@@ -701,13 +706,17 @@ QList<LogicalLine> ErbLoader::buildAst(const QString& content, const QString& fi
     const AstResolver resolve = [this](const QString& expr) -> QSharedPointer<ExpressionNode> {
         return m_parseTable ? m_parseTable->expressionAst(expr) : nullptr;
     };
+    // 赋值右值的临时归约：静默（见 AstBuilder::build 的 resolveQuiet）
+    const AstResolver quietResolve = [this](const QString& expr) -> QSharedPointer<ExpressionNode> {
+        return m_parseTable ? m_parseTable->expressionAst(expr, /*quiet*/ true) : nullptr;
+    };
 
     QStringList warnings;
     const QList<ErbSourceLine> source = prepareLines(content, filePath, &warnings);
     logicalLines.reserve(source.size());
     for (int i = 0; i < source.size(); ++i) {
         const ScriptPosition pos(filePath, source.at(i).physicalLine, 1);
-        LogicalLine line = AstBuilder::build(source.at(i).text, pos, resolve);
+        LogicalLine line = AstBuilder::build(source.at(i).text, pos, resolve, quietResolve);
         line.lineIndex = i;
         logicalLines.append(line);
         emit parseLineReady(scriptName, source.at(i).physicalLine, source.at(i).text);

@@ -166,7 +166,7 @@ public:
     // ---- 只读区查询 ----
     [[nodiscard]] const ScriptData* script(const QString& scriptName) const;
     [[nodiscard]] QStringList scriptNames() const { return m_scripts.keys(); }
-    [[nodiscard]] QSharedPointer<ExpressionNode> expressionAst(const QString& expr);
+    [[nodiscard]] QSharedPointer<ExpressionNode> expressionAst(const QString& expr, bool quiet = false);
     [[nodiscard]] const LogicalLine* lineAt(const QString& scriptName, int line) const;
     [[nodiscard]] int jumpTarget(const QString& scriptName, int line) const;
 

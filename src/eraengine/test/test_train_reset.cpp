@@ -73,6 +73,35 @@ int main(int argc, char* argv[]) {
     st.updateAfterInputCom();
     check(st.getCharaInt(QStringLiteral("NOWEX"), 1, 0) == 0, "角色 NOWEX 归零");
 
+    qDebug() << "\n3) UpdateInBeginTrain()（BEGIN TRAIN 入口复位）";
+    // NEXTCOM 是重点：初值必须从 0 变 -1，否则系统层 endCallEventTrain
+    // 的「NEXTCOM >= 0 → 自动执行调教指令」恒真，起床会跳进 COM0。
+    st.setAssiplay(0, 3);
+    st.setPrevcom(0, 7);
+    st.setNextcom(0, 0);            // 容器初值即 0（这正是 bug 的来源）
+    st.setTflag(5, 1);
+    st.setGlobalStr1D(QStringLiteral("TSTR"), 3, QStringLiteral("dirty"));
+    st.setCharaInt(QStringLiteral("GOTJUEL"), 1, 0, 5);
+    st.setCharaInt(QStringLiteral("TEQUIP"), 1, 0, 6);
+    st.setCharaInt(QStringLiteral("EX"), 1, 0, 7);
+    st.setCharaInt(QStringLiteral("PALAM"), 1, 0, 8);
+    st.setCharaInt(QStringLiteral("SOURCE"), 1, 0, 9);
+    st.setCharaInt(QStringLiteral("TCVAR"), 1, 0, 10);
+    st.setCharaInt(QStringLiteral("STAIN"), 1, 0, 11);
+    st.updateInBeginTrain();
+    check(st.getNextcom(0) == -1, "NEXTCOM 复位为 -1（否则起床自动执行 COM0）");
+    check(st.getPrevcom(0) == -1, "PREVCOM 复位为 -1");
+    check(st.getAssiplay(0) == 0, "ASSIPLAY 复位为 0");
+    check(st.getTflag(5) == 0, "TFLAG 归零（全部下标）");
+    check(st.getGlobalStr1D(QStringLiteral("TSTR"), 3).isEmpty(), "TSTR 清空");
+    check(st.getCharaInt(QStringLiteral("GOTJUEL"), 1, 0) == 0, "角色 GOTJUEL 归零");
+    check(st.getCharaInt(QStringLiteral("TEQUIP"), 1, 0) == 0, "角色 TEQUIP 归零");
+    check(st.getCharaInt(QStringLiteral("EX"), 1, 0) == 0, "角色 EX 归零");
+    check(st.getCharaInt(QStringLiteral("PALAM"), 1, 0) == 0, "角色 PALAM 归零");
+    check(st.getCharaInt(QStringLiteral("SOURCE"), 1, 0) == 0, "角色 SOURCE 归零");
+    check(st.getCharaInt(QStringLiteral("TCVAR"), 1, 0) == 0, "角色 TCVAR 归零");
+    check(st.getCharaInt(QStringLiteral("STAIN"), 1, 0) == 0, "角色 STAIN 归默认（0）");
+
     qDebug() << "\n==============================";
     if (g_failures == 0) {
         qDebug() << "[SUCCESS] 训练流程变量重置测试通过";

@@ -115,6 +115,13 @@ public:
 		// UpdateAfterInputCom：各角色 NOWEX 归零（对齐 C#「选择中以外的角色也全部重置」）。
 		//   在 @EVENTCOM 之前（callEventCom）调用。
 		void updateAfterInputCom();
+		// UpdateInBeginTrain：BEGIN TRAIN 入口（@EVENTTRAIN 之前）的全量复位。
+		//   ASSIPLAY=0 / PREVCOM=-1 / NEXTCOM=-1 / TFLAG 全 0 / TSTR 全 "" +
+		//   全角色 GOTJUEL/TEQUIP/EX/STAIN/PALAM/SOURCE/TCVAR 归零。
+		//   **NEXTCOM 必须复位成 -1**：系统层 endCallEventTrain 依据
+		//   「NEXTCOM >= 0」判定是否自动执行下一条调教指令（eramaker 的
+		//   連続実行机制）；若沿用容器初值 0，起床后会直接跳进 COM0。
+		void updateInBeginTrain();
 
 		void delAllChara() { m_charaList.clear(); m_charaSp.clear(); }
 		// SWAPCHARA / COPYCHARA / ADDCOPYCHARA / PICKUPCHARA（C# 同名命令）

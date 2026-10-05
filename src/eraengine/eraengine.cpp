@@ -801,6 +801,11 @@ void EraEngine::loadConstantData()
 		         << " 常量表:" << tables << "(" << m_constantTable.nameCount() << "项)"
 		         << " VariableSize:" << sizesLoaded
 		         << " 角色:" << charaLoaded;
+
+		// 每次装载完常量数据后重取 TRAINNAME 名表：SystemStateMachine::initialize()
+		// 只在首次 run()/pump() 时读一次 host.trainNames，切换游戏目录后必须刷新。
+		m_systemStateMachine.reloadTrainNames();
+		qDebug() << "[EraEngine] TRAINNAME 名表:" << m_systemStateMachine.trainCount() << "项";
 }
 
 // 从已加载配置里取「编码 / 子目录检索」等引擎级设置
@@ -1311,6 +1316,30 @@ void EraEngine::buildSystemHost()
 		host.saveDataNos = [intCfg]() {
 				return intCfg({QStringLiteral("セーブデータの数"),
 				               QStringLiteral("SaveDataNos")}, 20);
+		};
+
+		// ---- TRAINNAME（CSV/Train.csv 的调教指令名表）----
+		// C# Process.cs:143 `TrainName = constant.GetCsvNameList(TRAINNAME)`：
+		// 系统层拿它做三件事 ——
+		//   1) 逐个扫描 @COM_ABLE0..N，把「本次可用」的指令填进 comAble，
+		//      用户输入命中 comAble 时直接 @EVENTCOM -> @COMxx（eraTW 的正常路径）；
+		//   2) @SHOW_USERCOM 期间把编号翻译成指令名；
+		//   3) DOTRAIN 的范围检查（train >= TrainName.Length 报错）。
+		// 长度取 VariableSize.CSV 的 TRAINNAME（=1000），**不是** Train.csv 的行数
+		// —— eraTW 的 Train.csv 只有 ~325 行，@USERCOM:62 的 `DOTRAIN 999`
+		// 正是靠这个 1000 长度才合法。此前这个回调从未接线：m_trainNames 恒空，
+		// comAble 恒空 -> 点任何指令都走 @USERCOM 兜底（而不是 @COMxxx），
+		// 且 DOTRAIN 999 直接报「值超出 TRAINNAME 范围」。
+		host.trainNames = [this]() {
+				const int n = m_variableStorage.variableConfig()
+				                  .getSize1D(QStringLiteral("TRAINNAME"));
+				QStringList names;
+				names.reserve(n > 0 ? n : 0);
+				for (int i = 0; i < n; ++i) {
+						names.append(m_variableStorage.getGlobalStr1D(
+						    QStringLiteral("TRAINNAME"), i));
+				}
+				return names;
 		};
 		host.checkData = [this, savePath](int index, QString* message) {
 				const bool exists = QFile::exists(savePath(index));

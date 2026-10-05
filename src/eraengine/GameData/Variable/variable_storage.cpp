@@ -264,6 +264,47 @@ void VariableStorage::updateAfterInputCom()
 		for (QList<qint64>& vec : it.value()) vec.fill(0);
 }
 
+void VariableStorage::updateInBeginTrain()
+{
+		// 对齐 C# GameData/Variable/VariableEvaluator.cs UpdateInBeginTrain()：
+		// BEGIN TRAIN 的入口（@EVENTTRAIN 之前）把「上一轮调教」遗留的变量复位。
+		//
+		// 关键：NEXTCOM = -1。系统层 endCallEventTrain() 见到 NEXTCOM >= 0 就会
+		// 「不显示行动菜单、直接执行 NEXTCOM 指定的调教指令」（C# 的
+		// CALLTRAIN/連続実行 机制；C# 同一处还会把 NEXTCOM 写回 0，靠 ERB 自己
+		// 改值避免死循环 —— 参 Process.SystemProc.cs endCallEventTrain）。
+		// 本移植此前完全没有接这个复位，容器初值又是 0，于是执行到
+		// BEGIN TRAIN 时 NEXTCOM == 0 >= 0 恒成立 —— 起床后必然「跳」进
+		// COM0（eraTW 的 [0] 愛撫），行动菜单被整段跳过。
+		setAssiplay(0, 0);
+		setPrevcom(0, -1);
+		setNextcom(0, -1);
+
+		// TFLAG 全部 0、TSTR 全部 ""（C# 同处逐一 fill）
+		m_tflag.fill(0);
+		const int tstrSize = m_variableConfig.getSize1D(QStringLiteral("TSTR"));
+		for (int i = 0; i < tstrSize; ++i) {
+				setGlobalStr1D(QStringLiteral("TSTR"), i, QString());
+		}
+
+		// 全角色数值归零（C#：GOTJUEL/TEQUIP/EX/STAIN/PALAM/SOURCE/TCVAR）。
+		// 与 updateAfterShowUsercom 同款：直接遍历角色存储的每个角色槽。
+		static const char* const kCharaKeys[] = {
+			"GOTJUEL", "TEQUIP", "EX", "PALAM", "SOURCE", "TCVAR",
+		};
+		for (const char* k : kCharaKeys) {
+				auto it = m_charaIntVars.find(storageName(QString::fromLatin1(k)));
+				if (it == m_charaIntVars.end()) continue;
+				for (QList<qint64>& vec : it.value()) vec.fill(0);
+		}
+		// STAIN 走 C# 的 setDefaultStain()：_REPLACE.CSV 初值未装载时按 0
+		// （与 RESET_STAIN 内建指令取同一语义）。
+		auto stain = m_charaIntVars.find(storageName(QStringLiteral("STAIN")));
+		if (stain != m_charaIntVars.end()) {
+				for (QList<qint64>& vec : stain.value()) vec.fill(0);
+		}
+}
+
 qint64 VariableStorage::getCharaInt(const QString &name, int charaId, int index) const
 {
 		if (charaId < 0 || index < 0) return 0;

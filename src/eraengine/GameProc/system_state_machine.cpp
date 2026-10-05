@@ -836,7 +836,12 @@ void SystemStateMachine::endTitleLoadgame() {
 }
 
 void SystemStateMachine::beginTrain() {
-    // C# vEvaluator.UpdateInBeginTrain()：变量层的指令计数复位，本移植尚未接入
+    // C# beginTrain() 的第一件事：vEvaluator.UpdateInBeginTrain()。
+    // 复位 ASSIPLAY/PREVCOM/**NEXTCOM**/TFLAG/TSTR + 全角色 GOTJUEL/TEQUIP/
+    // EX/STAIN/PALAM/SOURCE/TCVAR。少了它 NEXTCOM 会保持容器初值 0，
+    // endCallEventTrain 的「NEXTCOM >= 0 → 自动执行该调教指令」恒真，
+    // 起床会直接跳进 COM0（跳过 @SHOW_STATUS/@SHOW_USERCOM 行动菜单）。
+    if (m_storage) m_storage->updateInBeginTrain();
     setState(SystemStateCode::Train_CallEventTrain);
     if (!callFunction(QStringLiteral("EVENTTRAIN"), false, true)) {
         endCallEventTrain();

@@ -1656,6 +1656,29 @@ void EraParseTable::collectFunctionWarnings(const QSharedPointer<ExpressionNode>
                                             const QString& position, WarningCollector& out) {
     if (!ast) return;
     walkExpression(*ast, [&out, &position](ExpressionNode& node) {
+        // 三元分支类型：对齐 C# OperatorMethodManager.ReduceTernaryTerm —— 只允许
+        // (long,long,long) 与 (long,string,string)，其余抛 CodeEE
+        //「三項演算子の使用法が不正です」（解析期 CodeEE 由 ParserMediator 收成告警）。
+        if (node.kind() == NodeKind::If) {
+            const auto& ifn = static_cast<const IfNode&>(node);
+            const OperandType ct = ifn.condition() ? ifn.condition()->valueType() : OperandType::Unknown;
+            const OperandType tt = ifn.thenExpr() ? ifn.thenExpr()->valueType() : OperandType::Unknown;
+            const OperandType et = ifn.elseExpr() ? ifn.elseExpr()->valueType() : OperandType::Unknown;
+            const bool condBad = isKnown(ct) && ct != OperandType::Int;
+            const bool branchBad = isKnown(tt) && isKnown(et)
+                                   && (tt != et || (tt != OperandType::Int && tt != OperandType::Str));
+            if (condBad || branchBad) {
+                const QString err = QStringLiteral(
+                    "三項演算子の使用法が不正です"
+                    "（条件须为整数；真/假分支须同为整数或同为字符串）");
+                const QString key = QStringLiteral("ternary\x1f") + err;
+                if (!out.seen.contains(key)) {
+                    out.seen.insert(key);
+                    out.warnings.append(QStringLiteral("%1: %2 [%3]").arg(position, err, node.toString()));
+                    out.keys.append(key);
+                }
+            }
+        }
         if (node.kind() != NodeKind::Function) return;
         const auto& fn = static_cast<const FunctionNode&>(node);
         const QString& err = fn.arityError();

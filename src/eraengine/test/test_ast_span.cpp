@@ -47,6 +47,11 @@ private slots:
     void childSpanIsSubRange();
     void unaryAndParenSpan();
     void parseErrorReportsColumn();
+    // 三元语义（对齐 C# TermStack；见 test/data/language/运算符.md「三元运算符」）
+    void ternaryIsLeftAssociative();
+    void ternaryBranchesAreNonTernary();
+    void parenthesizedNestedTernaryIsAccepted();
+    void ternaryMissingHashFails();
 };
 
 void TestAstSpan::rootSpanCoversWholeExpression() {
@@ -121,6 +126,46 @@ void TestAstSpan::parseErrorReportsColumn() {
     QVERIFY2(!captured.isEmpty(), "应输出「表达式语法错误」诊断");
     QVERIFY2(captured.contains(QStringLiteral("第 7 列")),
              qPrintable(QStringLiteral("诊断应带列号，实际: %1").arg(captured)));
+}
+
+void TestAstSpan::ternaryIsLeftAssociative() {
+    // A ? B # C ? D # E  ==  ((A ? B # C) ? D # E)
+    const auto ast = parseExpr(QStringLiteral("A ? B # C ? D # E"));
+    QVERIFY(ast);
+    QCOMPARE(ast->kind(), NodeKind::If);
+    const auto root = qSharedPointerCast<IfNode>(ast);
+    // 外层条件本身是三元 ⇒ 左结合
+    QVERIFY(root->condition());
+    QCOMPARE(root->condition()->kind(), NodeKind::If);
+    // 外层分支是普通变量 C/D/E 侧：then = D，else = E
+    QCOMPARE(root->thenExpr()->kind(), NodeKind::Variable);
+    QCOMPARE(root->elseExpr()->kind(), NodeKind::Variable);
+
+    const auto inner = qSharedPointerCast<IfNode>(root->condition());
+    QCOMPARE(inner->thenExpr()->kind(), NodeKind::Variable);   // B
+    QCOMPARE(inner->elseExpr()->kind(), NodeKind::Variable);   // C
+}
+
+void TestAstSpan::ternaryBranchesAreNonTernary() {
+    // 未加括号的嵌套 `?`：C# 因「式の数が不足しています」报错，本实现同样失败
+    QVERIFY2(!parseExpr(QStringLiteral("A ? B ? C # D # E")),
+             "未加括号的嵌套三元应解析失败（对齐 C#）");
+}
+
+void TestAstSpan::parenthesizedNestedTernaryIsAccepted() {
+    const auto ast = parseExpr(QStringLiteral("A ? (B ? C # D) # E"));
+    QVERIFY(ast);
+    QCOMPARE(ast->kind(), NodeKind::If);
+    const auto root = qSharedPointerCast<IfNode>(ast);
+    QVERIFY(root->thenExpr());
+    QCOMPARE(root->thenExpr()->kind(), NodeKind::If);          // 括号里的三元
+    QCOMPARE(root->elseExpr()->kind(), NodeKind::Variable);    // E
+}
+
+void TestAstSpan::ternaryMissingHashFails() {
+    // 表达式层缺 `#` = 错误（C# ReduceTernaryTerm 之前就因操作数不足抛 CodeEE）。
+    // 注意：StrForm（\@ … ? … \@）层缺 `#` 是「警告 + 假值空串」，见 strform_parser。
+    QVERIFY2(!parseExpr(QStringLiteral("A ? B")), "缺 # 应解析失败");
 }
 
 QTEST_APPLESS_MAIN(TestAstSpan)

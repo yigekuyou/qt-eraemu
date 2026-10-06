@@ -70,22 +70,32 @@ QSharedPointer<ExpressionNode> ExpressionParser::parseExpression() {
         return nullptr;
     }
 
+    const int startTok = m_current;
     QSharedPointer<ExpressionNode> node = parseBinary(1);
 
-    // 三元运算符：cond ? a # b （对应 OperatorCode Ternary_a / Ternary_b）
-    if (node && check(TokenType::QUESTION)) {
+    // 三元运算符：cond ? then # else（OperatorCode Ternary_a = "?" / Ternary_b = "#"）
+    //
+    // 结合性 = **左结合**。对齐 C# TermStack：`?`(0x05) 与 `#`(0x10) 同属三元且优先级
+    // 低于一切二元运算符；归约规则是「栈顶优先级 ≥ 新优先级即归约」→ 同级左结合
+    // （运算符.md「同优先级左结合」）。故
+    //     A ? B # C ? D # E   ==   ((A ? B # C) ? D # E)
+    // 分支只取**非三元**表达式（parseBinary）——`?` 在 C# 里是同级，未加括号的嵌套
+    // `?` 会先触发归约而栈内不足三个操作数，抛 CodeEE「式の数が不足しています」，
+    // 所以 `A ? B ? C # D # E` 不是合法写法（要嵌套必须加括号）。
+    while (node && check(TokenType::QUESTION)) {
         consume(TokenType::QUESTION, "Expected ?");
-        QSharedPointer<ExpressionNode> thenExpr = parseExpression();
-        // `#` 缺失是真正的语法错误：此时 consume 返回合成 EOF，不再继续吃 else
-        // 分支（否则会把后面的 token 当成 else，产出**语义错误**的 IfNode）。
+        QSharedPointer<ExpressionNode> thenExpr = parseBinary(1);
+        // `#` 缺失是真语法错误（C# 同样报错）：consume 返回合成 EOF，不再继续吃
+        // else 分支 —— 否则会把后续 token 当成 else，产出**语义错误**的 IfNode。
         const ExpressionToken sep = consume(TokenType::TERNARY_SEP, "Expected #");
         QSharedPointer<ExpressionNode> elseExpr =
-            (sep.type() == TokenType::END_OF_FILE) ? nullptr : parseExpression();
-        if (thenExpr && elseExpr) {
-            node = QSharedPointer<IfNode>::create(node, thenExpr, elseExpr);
-        } else {
+            (sep.type() == TokenType::END_OF_FILE) ? nullptr : parseBinary(1);
+        if (!thenExpr || !elseExpr) {
             node = nullptr;
+            break;
         }
+        node = QSharedPointer<IfNode>::create(node, thenExpr, elseExpr);
+        stampSpan(node, startTok);
     }
 
     --m_depth;

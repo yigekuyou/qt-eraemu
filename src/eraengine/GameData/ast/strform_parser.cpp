@@ -17,6 +17,8 @@
  */
 #include "strform_parser.h"
 
+#include <QDebug>
+
 bool StrFormParser::hasForm(const QString& text) {
     if (text.contains(QLatin1String("\\@"))) return true;
     if (text.contains(QLatin1Char('{')) && text.contains(QLatin1Char('}'))) return true;
@@ -120,6 +122,12 @@ QSharedPointer<ExpressionNode> StrFormParser::parseYenAt(const QString& inner,
         return parse(inner, resolve);
     }
     const int h = findTopLevel(inner, QLatin1Char('#'), q + 1, -1);
+    if (h < 0) {
+        // 对齐 C# LexicalAnalyzer.cs:1287-1293 -> StrForm.cs:103-104：
+        // `\@ cond ? left \@` 缺 `#` **只产生警告**，假值按空串处理
+        // （表达式.md 已注明这与「`#` 不能省略」的表述有出入）。
+        qWarning() << "[parse] \\@…?…\\@ 缺少 '#'：假值按空串处理：" << inner.left(120);
+    }
 
     const QString condText = inner.left(q).trimmed();
     QString leftText = (h >= 0) ? inner.mid(q + 1, h - q - 1) : inner.mid(q + 1);

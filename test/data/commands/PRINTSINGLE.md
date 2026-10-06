@@ -10,7 +10,7 @@
   - 配色：`K`＝应用 `FORCEKANA`；`D`＝忽略 `SETCOLOR` 用默认色（语义与 PRINT 族完全相同）
   - **没有 `L`/`W`/`C`/`LC` 后缀**：输出总是独占一个显示行（详见下）
   - 15 个可写名字：`PRINTSINGLE`、`PRINTSINGLEV`、`PRINTSINGLES`、`PRINTSINGLEFORM`、`PRINTSINGLEFORMS`、`PRINTSINGLEK`、`PRINTSINGLEVK`、`PRINTSINGLESK`、`PRINTSINGLEFORMK`、`PRINTSINGLEFORMSK`、`PRINTSINGLED`、`PRINTSINGLEVD`、`PRINTSINGLESD`、`PRINTSINGLEFORMD`、`PRINTSINGLEFORMSD`
-- **文档来源**：`ecd/docs/translation/Command.md`「### PRINTSINGLE(|V|S|FORM|FORMS)(|K|D)」「### PRINT系列指令辅助选择器」（「单行溢出：溢出后自动换行 / **溢出后不换行**」）；`Era-Chinese-Documentation/docs/translation/Command.html`（提取本 `_extracted/zh/Command.md`）「### # PrintSingle(|V|S|Form|FormS)(|K|D)」。两套文档的命令总表只以 `PRINTSINGLE` 一条基名列出（`ecd/docs/translation/ERB_Commands.md:132`），权威清单 `test/data/emuera_standard_cmds.txt` 未列出 15 个变体名，故由本文件按基名统一覆盖（语义以源码为准）
+- **文档来源**：`ecd/docs/translation/Command.md`「### PRINTSINGLE(|V|S|FORM|FORMS)(|K|D)」「### PRINT系列指令辅助选择器」（「单行溢出：溢出后自动换行 / **溢出后不换行**」）；`Era-Chinese-Documentation/docs/translation/Command.html`（提取本 `_extracted/zh/Command.md`）「### # PrintSingle(|V|S|Form|FormS)(|K|D)」。两套文档的命令总表只以 `PRINTSINGLE` 一条基名列出（`ecd/docs/translation/ERB_Commands.md:132`）；权威清单 `test/data/emuera_standard_cmds.txt` 已逐个收录这 15 个变体名，本文件把它们按基名统一说明（语义以源码为准）
 
 ## 语义
 

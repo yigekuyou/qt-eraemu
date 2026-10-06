@@ -1,7 +1,9 @@
 # 补写代理指南（清单遗漏命令）
 
 复核阶段发现：权威导出清单 `test/data/emuera_standard_cmds.txt` 漏收了
-`BuiltInFunctionCode.cs` 枚举中的 88 个成员。其中：
+`BuiltInFunctionCode.cs` 枚举中的 88 个成员。
+（该缺陷已随本批文档一并修复：`test/export_command_tables.py` 改为读取全部 C# 树取并集，
+修复后标准清单 263 条、EE 清单 59 条，并集覆盖全部枚举成员。以下描述保留当时的原始状态。）其中：
 - 69 个是 PRINT / PRINTSINGLE 族后缀变体 → 由 `PRINT.md`、`PRINTSINGLE.md` 两个基名文档统一覆盖；
 - 19 个是独立命令 → 各写一个 md。
 

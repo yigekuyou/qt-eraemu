@@ -11,7 +11,7 @@
   - `PRINT(|V|S|FORM|FORMS)N <同上参数>`（5 个成员：`PRINTN` / `PRINTVN` / `PRINTSN` / `PRINTFORMN` / `PRINTFORMSN`；N 不能与 L/W 组合，也不能与 C/LC 组合）
   - `PRINT(|FORM)(C|LC) <文本>|<FORM格式文本>`（4 个成员：`PRINTC` / `PRINTLC` / `PRINTFORMC` / `PRINTFORMLC`）
   - 54 个可写名字的完整一览见下文「## 用法」的变体表；`PRINTCK`／`PRINTCD`／`PRINTFORMCK` … 等带 K/D 的定宽变体属 EE 扩展，另有独立文档（`PRINTCK.md`、`PRINTCD.md`、`PRINTFORMCD.md`、`PRINTFORMCK.md`、`PRINTFORMLCD.md`、`PRINTFORMLCK.md`、`PRINTLCK.md`、`PRINTLCD.md`）
-- **文档来源**：`ecd/docs/translation/Command.md`「## PRINT系列」「### PRINT系列指令辅助选择器」「### PRINT(|V|S|FORM|FORMS)(|K|D)(|L|W)」「### PRINT(|FORM)(C|LC)(|K|D)」（权威语义描述）；`Era-Chinese-Documentation/docs/translation/Command.html`（提取本 `_extracted/zh/Command.md`）「## # Print系」「### # Print(|V|S|Form|FormS)(|K|D)(|L|W)」「### # Print(|Form)(C|LC)(|K|D)」。两套文档的命令总表（`ecd/docs/translation/ERB_Commands.md:131`、`:133`）只以「PRINT」两条基名列出该族，权威清单 `test/data/emuera_standard_cmds.txt` 亦未逐个列出后缀变体名，故这 54 个变体名由本文件按基名统一覆盖（语义仍以源码为准）
+- **文档来源**：`ecd/docs/translation/Command.md`「## PRINT系列」「### PRINT系列指令辅助选择器」「### PRINT(|V|S|FORM|FORMS)(|K|D)(|L|W)」「### PRINT(|FORM)(C|LC)(|K|D)」（权威语义描述）；`Era-Chinese-Documentation/docs/translation/Command.html`（提取本 `_extracted/zh/Command.md`）「## # Print系」「### # Print(|V|S|Form|FormS)(|K|D)(|L|W)」「### # Print(|Form)(C|LC)(|K|D)」。两套文档的命令总表（`ecd/docs/translation/ERB_Commands.md:131`、`:133`）只以「PRINT」两条基名列出该族，而权威清单 `test/data/emuera_standard_cmds.txt` 已逐个收录枚举中的全部变体名（标准清单 97 个 PRINT 族 + EE 清单 5 个 `*N` 变体）——本文件把这些变体的语义按基名统一说明（语义以源码为准）
 
 ## 语义
 

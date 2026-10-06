@@ -76,26 +76,39 @@
 | 语言层主题 | 两套站点文档全部参考页 | 12 | — |
 
 权威命令表由 `test/export_command_tables.py` 导出（`emuera_standard_cmds.txt`、
-`emuera_ee_cmds.txt`、`emuera_standard_funcs.txt`）。
+`emuera_ee_cmds.txt`、`emuera_standard_funcs.txt`）。当前导出结果：
 
-### 已知问题：导出脚本漏收 88 个枚举成员（文档已补齐，脚本待修）
+| 清单 | 条数 | 含义 |
+|---|---|---|
+| `emuera_standard_cmds.txt` | 263 | 原版（经典布局基线树）枚举 − 内部值；**含 PRINT 族全部后缀变体** |
+| `emuera_standard_funcs.txt` | 163 | 各棵树的 `Creator.cs` methodList 并集 |
+| `emuera_ee_cmds.txt` | 59 | (超集树 `emuera.em/Emuera` 枚举 − 原版枚举) ∪ EE 文档独有名字 |
 
-核对 `BuiltInFunctionCode.cs` 的 304 个枚举成员与上述三份清单时发现，**清单漏收 88 个成员**
-（`test/export_command_tables.py` 的问题，本套文档已全部补齐）：
+导出脚本自带自检：两清单的并集必须覆盖全部树的枚举成员且彼此不相交，运行时打印
+`[OK] 枚举成员 302 条全部收录，两清单无重复`。
 
-- **69 个 PRINT / PRINTSINGLE 族后缀变体**（`PRINTL`、`PRINTVW`、`PRINTSINGLEFORMSK` 等）。
-  这些是同一语法族的后缀组合，已由 `commands/PRINT.md`、`commands/PRINTSINGLE.md` 两个基名文档
-  统一覆盖（含全部后缀的行为表与执行流程伪代码），不逐个建文件。
-- **19 个独立命令**：`SET`、`CALLSHARP`、`SETBGIMAGE`、`CLEARBGIMAGE`、`REMOVEBGIMAGE`、
-  `REF`、`REFBYNAME`、`TOOLTIP_SETFONT`、`TOOLTIP_SETFONTSIZE`、`TOOLTIP_CUSTOM`、`TOOLTIP_FORMAT`、
-  `ONEBINPUT`、`ONEBINPUTS`、`BREAKBUTTON`、`DT_COLUMN_OPTIONS`、`VARI`、`VARS`、
-  `HTML_PRINT_ISLAND`、`HTML_PRINT_ISLAND_CLEAR`。这些均已补齐独立文档。
+### 导出脚本的两处历史缺陷（已修）
 
-建议后续修正 `test/export_command_tables.py`，使清单与枚举同步。
+写入本套文档的核对过程发现 `test/export_command_tables.py` 有两个缺陷，**均已修正**：
 
-### EE 清单中的伪名
+1. **漏收 88 个枚举成员**——原因是它只读经典布局的 `Emuera/` 树，而重构版
+   `emuera.em/Emuera` 是超集，多出 69 个 PRINT / PRINTSINGLE 族后缀变体与 19 个独立命令
+   （`SET`、`CALLSHARP`、`SETBGIMAGE`、`CLEARBGIMAGE`、`REMOVEBGIMAGE`、`REF`、`REFBYNAME`、
+   `TOOLTIP_SETFONT`、`TOOLTIP_SETFONTSIZE`、`TOOLTIP_CUSTOM`、`TOOLTIP_FORMAT`、`ONEBINPUT`、
+   `ONEBINPUTS`、`BREAKBUTTON`、`DT_COLUMN_OPTIONS`、`VARI`、`VARS`、`HTML_PRINT_ISLAND`、
+   `HTML_PRINT_ISLAND_CLEAR`）。现改为**读取全部 C# 树取并集**。
+   本套文档为这 88 个名字补了 21 篇（两个 PRINT 基名文档 + 19 个独立命令）。
+2. **PRINT 族过滤连基名一起跳过**——原先的过滤器把 `PRINT`、`PRINTSINGLE` 也排除了，
+   导致基名不在清单里。现已取消该过滤，清单忠实反映枚举；是否逐个冒烟由
+   `gen_coverage.py` 的 `PRINT_BASE` 规则决定。
 
-`test/data/emuera_ee_cmds.txt` 中有 5 个名字并非真实命令，源自 Shift-JIS 编码下的文本切分：
+相应地，`gen_coverage.py` 的 `PRINT_BASE` 补上了 `N` 后缀（超集树新增的 5 个 `*N` 变体），
+并为 35 个需图形/交互环境、或本仓库只有式中函数形态的条目补充了排除理由。
+
+### EE 清单中的伪名（已从清单移除）
+
+早期版本的 `emuera_ee_cmds.txt` 里有 5 个名字并非真实命令，源自 Shift-JIS 编码下的文本切分；
+已从清单移除，对应的说明文档保留在 `commands/` 下：
 
 | 伪名 | 真实指向 |
 |---|---|
@@ -104,8 +117,6 @@
 | `STRJOIN1` | `STRJOIN`（同上的另一种切分） |
 | `TINPUTAWAIT` | 无此命令，来自「TINPUT 与 AWAIT 的挙動変更」一句 |
 | `TOOLTIP_EXTENSION` | 无此命令，是 EM 文档站的参考页名 |
-
-对应文档已按「真实指向 + 伪名说明」撰写，未编造语义。
 
 ### 未实现 / 受限的条目
 

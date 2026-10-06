@@ -84,9 +84,24 @@ public:
     // 收集完整宏定义（#DEFINE name body / #DEFINE name(a,b) body）
     static MacroTable collectMacroTable(const QString& content);
 
-    // 对一行源文本应用宏替换（标识符边界匹配、跳过字符串字面量、
-    // 循环展开至不动点，上限防自引用死循环）
-    QString expandMacros(const QString& line) const;
+    // ---- 宏展开的中止条件（fuel；触发时停止展开、按原文保留该行并告警）----
+    // 主防线：单行**展开次数**上限 —— 对齐 C# `MAX_EXPAND_MACRO = 100`
+    // （LexicalAnalyzer.cs:68,1032-1035，超过即报「疑似自我引用/循环引用宏」）。
+    static constexpr int kMaxExpandMacro = 100;
+    // 轮数上限（既有）
+    static constexpr int kMaxMacroPasses = 32;
+    // 安全网：单行展开**体积**上限 —— 自引用宏（`#DEFINE A A A`）每轮翻倍，
+    // 仅限次数也可能先撑爆内存，故再加一道体积闸（1 MiB/行）。
+    static constexpr int kMaxExpandedLineLength = 1 << 20;
+
+    // 中止原因（展开触顶时经出参回传，由 process() 转成告警）
+    enum class MacroAbort { None, Count, Size };
+
+    // 对一行源文本应用宏替换（标识符边界匹配、跳过字符串字面量、循环展开至不动点）。
+    // 防自引用膨胀：次数上限 kMaxExpandMacro（主）+ 体积上限 kMaxExpandedLineLength（安全网）。
+    // abort 为**出参**（不用成员）：平行装载时同一个 ErbPreprocessor 被多个 worker 线程共用，
+    // 成员变量会被争用（实测把「次数触顶」写成了「体积触顶」）。
+    QString expandMacros(const QString& line, MacroAbort* abort = nullptr) const;
 
 private:
     RenameMap m_rename;

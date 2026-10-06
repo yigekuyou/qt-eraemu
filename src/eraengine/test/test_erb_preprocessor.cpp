@@ -195,6 +195,35 @@ int main(int argc, char* argv[]) {
         check(!warns.isEmpty(), "[SKIPSTART] 多余参数时告警");
     }
 
+    qDebug() << "\n8) 宏自引用膨胀防护（fuel）";
+    {
+        // 头文件 `#DEFINE A A A`：每轮翻倍 —— 仅限 32 轮的旧实现会让装载期卡死
+        // （实测 15s 不返回）。现在按体积上限截断：process 必须**返回**、给出告警、
+        // 且该行按原文保留。
+        ErbPreprocessor pp;
+        ErbPreprocessor::MacroTable t;
+        ErbPreprocessor::MacroDef def;
+        def.body = QStringLiteral("A A");       // 替换体含宏名自身
+        t.insert(QStringLiteral("A"), def);
+        pp.setMacroTable(t);
+
+        QStringList warns;
+        const QList<ErbSourceLine> out = pp.process(QStringLiteral("PRINTL A\n"), &warns, "t.ERB");
+        check(out.size() == 1, "自引用宏：process 正常返回（未卡死）");
+        if (out.size() == 1) {
+            check(out.first().text == QStringLiteral("PRINTL A"),
+                  "超限后本行按原文保留（不产出膨胀文本）");
+        }
+        bool warned = false;
+        for (const QString& w : warns) {
+            if (w.contains(QStringLiteral("自我引用")) || w.contains(QStringLiteral("宏展开超过"))) {
+                warned = true;
+                break;
+            }
+        }
+        check(warned, "宏展开触顶时给出告警（对齐 C# 疑似自我引用/循环引用宏）");
+    }
+
     qDebug() << "\n====================";
     if (g_failures == 0) {
         qDebug() << "[SUCCESS] preprocessor tests passed";

@@ -213,14 +213,23 @@ bool isIdentChar(QChar c) {
 
 } // namespace
 
-QString ErbPreprocessor::expandMacros(const QString& line) const {
+QString ErbPreprocessor::expandMacros(const QString& line, MacroAbort* abort) const {
     if (m_macroTable.isEmpty()) return line;
     QString text = line;
-    for (int pass = 0; pass < 32; ++pass) {
+    int expansions = 0;   // 本行累计展开次数（对齐 C# MAX_EXPAND_MACRO）
+    for (int pass = 0; pass < kMaxMacroPasses; ++pass) {
         QString out;
         int i = 0;
         bool changed = false;
         while (i < text.size()) {
+            // ---- 展开体积上限（fuel）----
+            // 自引用宏（如头文件里的 `#DEFINE A A A`）每轮翻倍：32 轮上限只限了**轮数**，
+            // 不限**体积** → 2^32 级膨胀，装载期卡死（实测 15s 不返回）。
+            // 给单行展开结果设上限，超出即停止并保留原行（宁可留未展开的宏名，也不卡死）。
+            if (out.size() > kMaxExpandedLineLength) {
+                if (abort) *abort = MacroAbort::Size;   // 安全网：体积
+                return line;
+            }
             const QChar c = text.at(i);
             if (c == QLatin1Char('"')) {
                 // 字符串字面量整体拷贝（C# 词法级展开不会进入字符串 token）
@@ -245,6 +254,10 @@ QString ErbPreprocessor::expandMacros(const QString& line) const {
                 continue;
             }
             const MacroDef& def = it.value();
+            if (++expansions > kMaxExpandMacro) {   // 主防线：单行展开次数
+                if (abort) *abort = MacroAbort::Count;
+                return line;
+            }
             if (def.params.isEmpty()) {
                 out += def.body;
                 i = j;
@@ -301,6 +314,10 @@ QString ErbPreprocessor::expandMacros(const QString& line) const {
                 }
                 body = replaced;
             }
+            if (++expansions > kMaxExpandMacro) {
+                if (abort) *abort = MacroAbort::Count;
+                return line;
+            }
             out += body;
             i = k + 1;
             changed = true;
@@ -348,7 +365,19 @@ QList<ErbSourceLine> ErbPreprocessor::process(const QString& content, QStringLis
         }
 
         // 宏替换（C# 在词法级展开；这里在行文本级做，先于一切解析）
-        line = expandMacros(line);
+        MacroAbort macroAbort = MacroAbort::None;
+        line = expandMacros(line, &macroAbort);
+        if (macroAbort != MacroAbort::None) {
+            const MacroAbort why = macroAbort;
+            if (warnings) {
+                warnings->append(
+                    why == MacroAbort::Count
+                        ? QStringLiteral("%1:%2: 疑似自我引用/循环引用宏（单行展开次数超过 %3），本行按原文保留")
+                              .arg(fileName).arg(lineNo).arg(kMaxExpandMacro)
+                        : QStringLiteral("%1:%2: 宏展开超过 %3 字符上限（疑似自引用膨胀），本行按原文保留")
+                              .arg(fileName).arg(lineNo).arg(kMaxExpandedLineLength));
+            }
+        }
         if (line.isEmpty() || line.trimmed().isEmpty()) {
             out.append(outLine);
             continue;

@@ -1,0 +1,734 @@
+;=============================================================
+; [35] 文档语义冒烟（由 test/gen_doc_smoke.py 从 test/data/*.md 生成，勿手改）
+;
+; 依据：test/data/commands/*.md、test/data/functions/*.md —— 每条命令/函数的
+;       签名、用法示例与副作用描述；参数取自文档，不再一律传 0 或写裸命令名。
+; 生成：python3 test/gen_doc_smoke.py
+; 复核清单：test/data/doc_smoke.tsv（mode=skip 的条目注明原因）
+;=============================================================
+@TEST_DOC_SMOKE
+#DIM NONG
+#DIM CVTMP
+#DIMS CVTMP_S
+
+PRINTL == 组35：文档语义冒烟（依据 test/data 的 md） ==
+
+;---- 35.1 式中函数 ----
+CVTMP = ABS(-5)
+CVTMP = ALLSAMES(1, 1, 1)
+FLAG:0 = 30
+FLAG:1 = 10
+FLAG:2 = 20
+STR:0 = "张三"
+STR:1 = "李四"
+STR:2 = "王五"
+CVTMP = ARRAYMSORT(FLAG, STR)
+CVTMP_S = BARSTR(50, 100, 10)
+CVTMP = CBGCLEAR()
+CVTMP = CBGCLEARBUTTON()
+CVTMP = CBGREMOVEBMAP()
+CVTMP = CBGREMOVERANGE(10, 20)
+CVTMP = GCREATE(4, 16, 16)
+CVTMP = CBGSETBMAPG(4)
+CVTMP = CBGSETBUTTONSPRITE(7, "off_part", "off_base", 0, 0, 3)
+CVTMP = GCREATE(3, 16, 16)
+CVTMP = CBGSETG(3, 0, 0, 1)
+CVTMP = CBGSETSPRITE("off_part", 0, 0, 2)
+CVTMP = CBRT(27)
+CVTMP_S = CHARATU("abcあいう", 3)
+CVTMP = CHKCHARADATA("chara.dat")
+CVTMP = CHKDATA(1)
+CVTMP = CHKFONT("ＭＳ ゴシック")
+; SKIP CHKGLOBALDATA —— 本仓库无实现：注册行被注释（//TODO:1810），文档「备注」写明调用会因函数未定义而解析失败
+; SKIP CHKVARDATA —— 本仓库无实现：注册行被注释（//TODO:1810），文档「备注」写明调用会因函数未定义而解析失败（与 CHKGLOBALDATA/FIND_VARDATA 同批）
+CVTMP = CLIENTHEIGHT()
+CVTMP = CLIENTWIDTH()
+ADDCHARA 0
+CVTMP = CMATCH(CFLAG, 0)
+CVTMP = COLOR_FROMNAME("Red")
+CVTMP = COLOR_FROMRGB(255, 0, 0)
+CVTMP_S = CONVERT(100, 16)
+CVTMP = CSVABL(0, 2)
+CVTMP = CSVBASE(0, 0)
+CVTMP_S = CSVCALLNAME(0)
+; SKIP CSVCFLAG —— example 的 Chara0.csv 以名称「初期位置」引用 CFLAG，而 CSV 目录没有 CFlag.csv 名称表，模板数组未建立；索引 0 也会触发「参照可能範囲外」CodeEE —— 语义未确证
+CVTMP_S = CSVCSTR(0, 0)
+; SKIP CSVEQUIP —— example 的 Chara0.csv 无 EQUIP(装着物) 行，模板数组未建立，任何索引都会越界报错 —— 语义未确证
+; SKIP CSVEXP —— example 的 Chara0.csv 无 EXP(経験) 行，模板数组未建立，任何索引都会越界报错 —— 语义未确证
+; SKIP CSVJUEL —— example 的 Chara0.csv 无 JUEL(珠) 行，模板数组未建立，任何索引都会越界报错 —— 语义未确证
+; SKIP CSVMARK —— example 的 Chara0.csv 无 MARK(刻印) 行，模板数组未建立，任何索引都会越界报错 —— 语义未确证
+CVTMP_S = CSVMASTERNAME(0)
+CVTMP_S = CSVNAME(0)
+CVTMP_S = CSVNICKNAME(0)
+; SKIP CSVRELATION —— example 的 Chara0.csv 无 RELATION(相性) 行，模板数组未建立，任何索引都会越界报错 —— 语义未确证
+; SKIP CSVTALENT —— example 的 Chara0.csv 的「素質」行以名称「性別」引用，而 CSV 目录没有 Talent.csv 名称表，模板数组未建立；索引 0 也会越界报错 —— 语义未确证
+CVTMP_S = CURRENTALIGN()
+CVTMP = CURRENTREDRAW()
+CVTMP = ENCODETOUNI("AあB", 1)
+CVTMP_S = ESCAPE("a.b(c)")
+CVTMP = EXISTCSV(0)
+CVTMP = EXPONENT(5)
+ADDCHARA 0
+CVTMP = FINDCHARA(NO, 0)
+FLAG:0 = 5
+FLAG:1 = 7
+CVTMP = FINDELEMENT(FLAG, 7, 0, 2)
+ADDCHARA 0
+CVTMP = FINDLASTCHARA(NO, 0)
+FLAG:0 = 5
+FLAG:1 = 7
+CVTMP = FINDLASTELEMENT(FLAG, 5, 0, 2)
+CVTMP = FIND_CHARADATA()
+; SKIP FIND_VARDATA —— 本仓库无实现：注册行被注释（//TODO:1810），文档「备注」写明调用必然失败（源索引标注与实际不符）
+CVTMP = GCREATE(0, 16, 16)
+CVTMP = GCLEAR(0, 0xFF000000)
+CVTMP = GDISPOSE(0)
+CVTMP = GCREATE(0, 200, 100)
+CVTMP = GCREATE(0, 16, 16)
+CVTMP = GCREATED(0)
+CVTMP = GCREATEFROMFILE(9, "offset_atlas.png")
+CVTMP = GCREATE(0, 16, 16)
+CVTMP = GDISPOSE(0)
+CVTMP = GCREATE(0, 16, 16)
+CVTMP = GCREATE(1, 16, 16)
+CVTMP = GDRAWG(0, 1, 0, 0, 16, 16, 0, 0, 16, 16)
+CVTMP = GCREATE(0, 16, 16)
+CVTMP = GCREATE(1, 16, 16)
+CVTMP = GCREATE(2, 16, 16)
+CVTMP = GDRAWGWITHMASK(0, 1, 2, 0, 0)
+CVTMP = GCREATE(0, 16, 16)
+CVTMP = GDRAWSPRITE(0, "off_part", 0, 0)
+CVTMP = GETBGCOLOR()
+CVTMP = GETBIT(10, 1)
+ADDCHARA 0
+CVTMP = GETCHARA(0)
+CVTMP = GETCOLOR()
+CVTMP = GETCONFIG("フォントサイズ")
+CVTMP_S = GETCONFIGS("フォント名")
+CVTMP = GETDEFBGCOLOR()
+CVTMP = GETDEFCOLOR()
+EXPLV:1 = 100
+EXPLV:2 = 200
+CVTMP = GETEXPLV(150, 2)
+CVTMP = GETFOCUSCOLOR()
+CVTMP_S = GETFONT()
+CVTMP = GETKEY(65)
+CVTMP = GETKEYTRIGGERED(65)
+CVTMP_S = GETLINESTR("─")
+CVTMP = GETMILLISECOND()
+CVTMP = GETNUM(ABL, "技巧")
+CVTMP = GETNUMB("ABL", "技巧")
+PALAMLV:1 = 1000
+PALAMLV:2 = 2000
+CVTMP = GETPALAMLV(1500, 2)
+CVTMP = GETSECOND()
+; SKIP GETSPCHARA —— 调用前提是兼容性选项「SPキャラを使用する / 使用 SP 角色」为 ON；该选项自 Emuera 1.816 起默认关闭，example 未开启，调用会抛 CodeEE（文档「语义」明示），冒烟组无法满足
+CVTMP = GETSTYLE()
+CVTMP = GETTIME()
+CVTMP_S = GETTIMES()
+CVTMP = GCREATE(400, 64, 64)
+CVTMP = GSETBRUSH(400, 4278190335)
+CVTMP = GFILLRECTANGLE(400, 0, 0, 8, 8)
+CVTMP = GCREATE(401, 4, 4)
+CVTMP = GSETCOLOR(401, 4294901760, 0, 0)
+CVTMP = GGETCOLOR(401, 0, 0)
+CVTMP = GCREATE(402, 300, 200)
+CVTMP = GHEIGHT(402)
+; SKIP GLOAD —— 成功路径需要 GSAVE 写盘生成的 save/imgXXXX.png（冒烟组禁止写盘）；无该文件时只会走失败分支返回 0，无法验证文档的加载语义
+CVTMP = GROUPMATCH(2, 1, 2, 3)
+; SKIP GSAVE —— 会写盘：把 Graphics 以 png 输出到存档目录 save/imgXXXX.png
+CVTMP = GCREATE(403, 64, 64)
+CVTMP = GSETBRUSH(403, 4278190335)
+CVTMP = GCREATE(404, 8, 8)
+CVTMP = GSETCOLOR(404, 4294901760, 0, 0)
+CVTMP = GCREATE(405, 64, 64)
+CVTMP = GSETFONT(405, "MS Gothic", 12)
+CVTMP = GCREATE(406, 64, 64)
+CVTMP = GSETPEN(406, 4294901760, 2)
+CVTMP = GCREATE(407, 300, 200)
+CVTMP = GWIDTH(407)
+CVTMP_S = HTML_ESCAPE("<a&b>")
+PRINTL 冒烟：HTML_GETPRINTEDSTR 取已显示行
+CVTMP_S = HTML_GETPRINTEDSTR(0)
+PRINTS "AB"
+CVTMP_S = HTML_POPPRINTINGSTR()
+CVTMP_S = HTML_TOPLAINTEXT("<b>纯文本</b>")
+CVTMP = INRANGE(5, 1, 10)
+LOCAL:0 = 10
+LOCAL:1 = 15
+LOCAL:2 = 20
+CVTMP = INRANGEARRAY(LOCAL, 10, 20, 0, 3)
+ADDCHARA 0
+CVTMP = INRANGECARRAY(CFLAG, 0, 100)
+CVTMP = ISACTIVE()
+CVTMP = ISNUMERIC("123")
+CVTMP = ISSKIP()
+CVTMP = LIMIT(15, 0, 10)
+CVTMP = LINEISEMPTY()
+CVTMP_S = LOADTEXT(1)
+CVTMP = LOG(10)
+CVTMP = LOG10(100)
+LOCAL:0 = 7
+LOCAL:1 = 7
+CVTMP = MATCH(LOCAL, 7, 0, 4)
+CVTMP = MAX(3, 1, 4, 1, 5)
+LOCAL:0 = 3
+LOCAL:1 = 9
+LOCAL:2 = 5
+CVTMP = MAXARRAY(LOCAL, 0, 3)
+ADDCHARA 0
+CVTMP = MAXCARRAY(CFLAG)
+CVTMP = MESSKIP()
+CVTMP = MIN(3, 1, 4, 1, 5)
+LOCAL:0 = 3
+LOCAL:1 = 9
+LOCAL:2 = 5
+CVTMP = MINARRAY(LOCAL, 0, 3)
+ADDCHARA 0
+CVTMP = MINCARRAY(CFLAG)
+CVTMP_S = MONEYSTR(10000)
+CVTMP = MOUSESKIP()
+CVTMP = MOUSEX()
+CVTMP = MOUSEY()
+CVTMP = NOSAMES(1, 2, 3)
+CVTMP = POWER(2, 10)
+CVTMP = PRINTCLENGTH()
+CVTMP = PRINTCPERLINE()
+CVTMP = RAND(1, 100)
+CVTMP_S = REPLACE("Hello, World", "o", "0")
+CVTMP = SAVENOS()
+; SKIP SAVETEXT —— 会写盘：把文本写入存档目录 txtNN.txt（或指定路径），冒烟组禁止写盘
+CVTMP = SETANIMETIMER(33)
+CVTMP = SIGN(-5)
+CVTMP = GCREATE(410, 8, 8)
+CVTMP = SPRITEANIMECREATE("SMK_ANIM_F", 8, 8)
+CVTMP = SPRITEANIMEADDFRAME("SMK_ANIM_F", 410, 0, 0, 8, 8, 0, 0, 250)
+CVTMP = SPRITEANIMECREATE("SMK_ANIM_C", 8, 8)
+CVTMP = GCREATE(411, 8, 8)
+CVTMP = SPRITECREATE("SMK_SPR_C", 411)
+CVTMP = GCREATE(412, 8, 8)
+CVTMP = SPRITECREATE("SMK_SPR_D", 412)
+CVTMP = SPRITECREATED("SMK_SPR_D")
+CVTMP = GCREATE(413, 8, 8)
+CVTMP = SPRITECREATE("SMK_SPR_E", 413)
+CVTMP = SPRITEDISPOSE("SMK_SPR_E")
+CVTMP = GCREATE(414, 4, 4)
+CVTMP = SPRITECREATE("SMK_SPR_F", 414)
+CVTMP = SPRITEGETCOLOR("SMK_SPR_F", 0, 0)
+CVTMP = GCREATE(415, 12, 6)
+CVTMP = SPRITECREATE("SMK_SPR_G", 415)
+CVTMP = SPRITEHEIGHT("SMK_SPR_G")
+CVTMP = GCREATE(416, 8, 8)
+CVTMP = SPRITECREATE("SMK_SPR_H", 416)
+CVTMP = SPRITEMOVE("SMK_SPR_H", 10, -5)
+CVTMP = GCREATE(417, 8, 8)
+CVTMP = SPRITECREATE("SMK_SPR_I", 417)
+CVTMP = SPRITEPOSX("SMK_SPR_I")
+CVTMP = GCREATE(418, 8, 8)
+CVTMP = SPRITECREATE("SMK_SPR_J", 418)
+CVTMP = SPRITEPOSY("SMK_SPR_J")
+CVTMP = GCREATE(419, 8, 8)
+CVTMP = SPRITECREATE("SMK_SPR_K", 419)
+CVTMP = SPRITESETPOS("SMK_SPR_K", 100, 50)
+CVTMP = GCREATE(420, 12, 6)
+CVTMP = SPRITECREATE("SMK_SPR_L", 420)
+CVTMP = SPRITEWIDTH("SMK_SPR_L")
+CVTMP = SQRT(16)
+CVTMP = STRCOUNT("banana", "a")
+CVTMP = STRFIND("abcabc", "abc", 1)
+CVTMP = STRFINDU("あいう", "い")
+CVTMP_S = STRFORM("{1 + 2}")
+LOCALS:0 = "a"
+LOCALS:1 = "b"
+LOCALS:2 = "c"
+CVTMP_S = STRJOIN(LOCALS, "-", 0, 3)
+CVTMP = STRLENS("AB漢字")
+CVTMP = STRLENSU("AB漢字")
+CVTMP_S = SUBSTRING("ABCDEF", 1, 3)
+CVTMP_S = SUBSTRINGU("ABCDEF", 2, 2)
+FLAG:0 = 3
+FLAG:1 = 5
+FLAG:2 = 7
+CVTMP = SUMARRAY(FLAG, 0, 3)
+ADDCHARA 0
+CVTMP = SUMCARRAY(CFLAG:0)
+CVTMP_S = TOFULL("A1")
+CVTMP_S = TOHALF("Ａ１")
+CVTMP = TOINT("42")
+CVTMP_S = TOLOWER("AbC")
+CVTMP_S = TOSTR(123, "D5")
+CVTMP_S = TOUPPER("aBc")
+CVTMP_S = UNICODE(0x2661)
+CVTMP = UNICODEBYTE("A")
+CVTMP = VARSIZE("FLAG")
+
+;---- 35.2 命令 ----
+ADDCHARA 0
+ADDCHARA 0
+ADDCOPYCHARA 0
+; SKIP ADDDEFCHARA —— 文档明示只能在 @SYSTEM_TITLE 函数中使用，在其他位置调用会抛 CodeEE；冒烟组不在 @SYSTEM_TITLE 上下文（组 14 已在受控流程中调用它）
+; SKIP ADDSPCHARA —— 调用前提是兼容性选项「SPキャラを使用する / 使用 SP 角色」为 ON；该选项自 Emuera 1.816 起默认关闭、example 的 _default.config 未开启，按文档调用会抛 CodeEE（与已判 skip 的 GETSPCHARA 同因）
+ADDVOIDCHARA
+ALIGNMENT RIGHT
+ALIGNMENT LEFT
+ARRAYCOPY "A", "B"
+ARRAYREMOVE FLAG, 5, 3
+ARRAYSHIFT FLAG, 1, 0
+ARRAYSORT FLAG
+ASSERT 1 == 1
+AWAIT 50
+;   ↑ 需注入输入：无需注入：AWAIT 50 等满 50ms 自动继续；若移植仍把 AWAIT 当「等待键」实现，则备 1 个数值 0
+BAR 5, 10, 20
+BARL 5, 10, 20
+; SKIP BEGIN —— 流程控制：按关键字切换系统状态并立即终止当前函数（相当于 RETURN 0），会改变全局流程；由组 12/29 单跑覆盖
+PRINTBUTTON "[0] 冒烟：BINPUT 确认", 0
+PRINTBUTTON "[1] 冒烟：BINPUT 取消", 1
+BINPUT 0
+;   ↑ 需注入输入：1 个数值：0（须命中画面已按钮化的 0/1 → RESULT=0；该命令会强制换行刷新后再扫按钮。移植若仍按 15_MOUSE.ERB 的「输入族桩」处理则不消费此值）
+PRINTBUTTON "[A] 冒烟：BINPUTS 甲", "A"
+PRINTBUTTON "[B] 冒烟：BINPUTS 乙", "B"
+BINPUTS "A"
+;   ↑ 需注入输入：1 个字符串：s A（须命中已按钮化的字符串 "A"/"B" → RESULTS="A"；键盘输入也须与按钮值一致，否则被弹回重等）
+; SKIP BREAK —— 循环控制关键字：只能写在 REPEAT/FOR/WHILE/DO 循环体内（编译期校验所在循环），不能单独作为语句；由组 3/28 覆盖
+; SKIP BREAKBUTTON —— 依赖 GUI 按钮世代：令画面已绘制按钮全部作废（test/data 覆盖率报告按「使旧按钮失效（GUI）」排除）；文档备注写明移植版未实现本命令，且两套中文文档均未收录、语义为源码推定 —— 语义未确证
+CALL ADDTEN, 5
+CALLEVENT EVENTTURNEND
+CALLF GETTEN(4)
+CALLFORM ADDTEN_%TOSTR(7)%
+CALLFORMF GETTEN(5)
+; SKIP CALLSHARP —— 需要外部 C# 插件：调用 Plugins/*.dll 里注册的 IPluginMethod 方法，example 无 Plugins 目录（覆盖率报告同因排除）
+; SKIP CALLTRAIN —— 流程接管：把 SELECTCOM:1..N 的命令队列交给系统 TRAIN 状态机执行（需 TRAIN.CSV、@EVENTCOM/@CALLTRAINEND 配套），属 GUIDE 禁则的变化全局流程命令（组 17 已做登记级调用）
+; SKIP CASE —— SELECTCASE 分支关键字：须嵌在 SELECTCASE～CASEELSE～ENDSELECT 结构内，单独执行会跳到下一锚点；由组 3/28 覆盖
+; SKIP CASEELSE —— SELECTCASE 的兜底分支关键字：须嵌在 SELECTCASE～ENDSELECT 结构内；由组 3/28 覆盖
+; SKIP CATCH —— TRYC 系失败分支的配对入口：须嵌入 TRYC…CATCH…ENDCATCH 结构（解析期配对检查）；由组 4/5 覆盖
+; SKIP CLEARBGIMAGE —— 需要背景图资源：其操作对象是 SETBGIMAGE 添加过的背景图（覆盖率报告按「需要背景图资源（EM）」排除）；example 无该资源，空列表调用虽安全但无验证价值
+CLEARBIT A, 0, 1
+PRINTL 冒烟：这一行随后被 CLEARLINE 删除
+CLEARLINE 1
+; SKIP CLEARMEMORY —— 文档备注明示它实为式中函数（用法是 `{CLEARMEMORY()}`），不能作为独立语句写，而本清单按 EE 命令表把它注册为命令（组 12c 也只按命令名留痕桩）—— 命令形态与文档形态不一致，语义未确证
+CLEARTEXTBOX
+; SKIP COLUMNBGCOLOR —— EE 列库 COLUMN_LIB 的 ERB 函数 COLUMNBGCOLOR(列ID, 色名)，非引擎命令；本仓库未实现、不含该库（覆盖率报告同因排除）
+; SKIP COLUMNCLEAR —— EE 列库 COLUMN_LIB 的函数，非引擎命令；EE readme 亦未收录、语义为按名推断（推测 COLUMNCLEAR(列ID)=清空列内容），本仓库未实现
+; SKIP COLUMNCOLOR —— EE 列库 COLUMN_LIB 的 ERB 函数 COLUMNCOLOR(列ID, 色名)，非引擎命令；本仓库未实现、不含该库（覆盖率报告同因排除）
+; SKIP COLUMNCREATE —— EE 列库 COLUMN_LIB 的 ERB 函数 COLUMNCREATE(列ID)，非引擎命令（基于 GDRAWTEXT 的试作库）；本仓库未实现、不含该库
+; SKIP COLUMNDIRECTION —— EE 列库 COLUMN_LIB 的 ERB 函数 COLUMNDIRECTION(列ID, 0or1)，非引擎命令；本仓库未实现、不含该库
+; SKIP COLUMNMOVE —— EE 列库 COLUMN_LIB 的 ERB 函数 COLUMNMOVE(列ID, X, Y)，非引擎命令；本仓库未实现、不含该库
+; SKIP COLUMNPRINT —— EE 列库 COLUMN_LIB 的 ERB 函数 COLUMNPRINT(列ID, 字符串)，非引擎命令；本仓库未实现、不含该库
+; SKIP COLUMNPRINTL —— EE 列库 COLUMN_LIB 的 ERB 函数 COLUMNPRINTL(列ID, 字符串)，非引擎命令；本仓库未实现、不含该库
+; SKIP COLUMNPRINTW —— EE 列库 COLUMN_LIB 的 ERB 函数 COLUMNPRINTW(列ID, 字符串)，非引擎命令；本仓库未实现、不含该库
+; SKIP COLUMNRESIZE —— EE 列库 COLUMN_LIB 的 ERB 函数 COLUMNRESIZE(列ID, 宽, 高)，非引擎命令；本仓库未实现、不含该库
+; SKIP COLUMNWAIT —— EE 列库 COLUMN_LIB 的 ERB 函数 COLUMNWAIT，非引擎命令；本仓库未实现、不含该库
+; SKIP CONTINUE —— 循环控制关键字：只能写在 REPEAT/FOR/WHILE/DO 循环体内，无对应循环时抛 ExeEE；由组 3/28 覆盖
+ADDCHARA 0
+ADDCHARA 0
+COPYCHARA 0, 1
+ADDCHARA 0
+CUPCHECK 0
+CUSTOMDRAWLINE -
+ADDCHARA 0
+CVARSET CFLAG, 0, 123
+; SKIP DATA —— PRINTDATA/STRDATA 语法块的成员行（PARTIAL 指令）：只声明候选文本、本身不被执行，出现在块外会被解析期标记为错误行；由组 23 覆盖
+; SKIP DATAFORM —— PRINTDATA/STRDATA 语法块的成员行（FORM 版，PARTIAL 指令）：选中时才做 FORM 展开，单独出现即解析期错误行；由组 23 覆盖
+; SKIP DATALIST —— PRINTDATA/STRDATA 内的多行候选组入口（PARTIAL 指令）：必须以 ENDLIST 收尾，不能独立出现；由组 23 覆盖
+DEBUGCLEAR
+DEBUGPRINT 冒烟：X=
+DEBUGPRINTFORM 冒烟值 = {1 + 1}
+DEBUGPRINTFORML 冒烟值 = {1 + 1}
+DEBUGPRINTL 冒烟：调试窗口输出
+DELALLCHARA
+ADDCHARA 0
+ADDCHARA 0
+DELCHARA 0
+; SKIP DELDATA —— 会删除存档目录中该编号的存档文件（改存档，GUIDE 明列 DELDATA）；冒烟组不写盘不删档，example 也无法保证该编号存在
+; SKIP DO —— DO～LOOP 循环的起始结构关键字，不能单独执行（会把组内后续行吞进循环体）；由组 3/28 覆盖
+; SKIP DOTRAIN —— 只能在 @EVENTTRAIN/@SHOW_STATUS/@SHOW_USERCOM/@USERCOM/@EVENTCOMEND 及其中调用的函数内使用，其它系统状态下执行抛 CodeEE（文档「语义」明示）；由组 19 覆盖
+DRAWLINE
+DRAWLINEFORM -=-
+; SKIP DT_COLUMN_OPTIONS —— 文档「备注」写明移植版未实现本命令；且需先 DT_CREATE 建表、列须已加入，而 DT_* 函数族在文档集中无条目，example 里无法构造前置状态
+DUMPRAND
+; SKIP ELSE —— IF～ENDIF 的分支关键字，不能单独作为语句执行（会吞掉后续行）；由组 3/28 覆盖
+; SKIP ELSEIF —— IF～ENDIF 的分支关键字，不能单独作为语句执行；由组 3/28 覆盖
+ENCODETOUNI あA
+; SKIP ENDCATCH —— TRYC～CATCH～ENDCATCH 结构的终点标记，运行期空操作、须嵌入结构；由组 5 覆盖
+; SKIP ENDDATA —— PRINTDATA/STRDATA 块的终点标记，只有装载期语义（PARTIAL），不能单独执行；由组 23 覆盖
+; SKIP ENDFUNC —— TRYCALLLIST/TRYJUMPLIST/TRYGOTOLIST 块的终点标记，不能单独执行；由组 5 覆盖
+; SKIP ENDIF —— IF 块的终点标记，运行期空操作、须与 IF 配对；由组 3/28 覆盖
+; SKIP ENDLIST —— DATALIST 块的终点标记，只有装载期语义（PARTIAL），不能单独执行；由组 23 覆盖
+NOSKIP
+ENDNOSKIP
+; SKIP ENDSELECT —— SELECTCASE 块的终点标记，运行期空操作、须嵌入结构；由组 3/28 覆盖
+CVTMP = EXISTFUNCTION("MY_CHECK_FUNC")
+CVTMP = EXISTSOUND("se01.wav")
+CVTMP = FLOWINPUT(0, 1, 1)
+;   ↑ 需注入输入：无需注入：调用即返回 0，不消费输入。若移植只登记了命令桩，可退化为 readme 形态 FLOWINPUT 0, 1, 1
+FONTBOLD
+FONTITALIC
+FONTREGULAR
+FONTSTYLE 1 + 2
+; SKIP FOR —— FOR～NEXT 的循环头，须与 NEXT 配对，单独执行会把组内后续行吞进循环体；由组 3/28 覆盖
+FORCEKANA 1
+FORCEWAIT
+;   ↑ 需注入输入：1 个数值：0（当作一次回车确认）
+; SKIP FORCE_BEGIN —— 破坏流程：绕过 __CAN_BEGIN__ 检查强制切换系统流程且不返回；GUIDE 明列 FORCE_*；由组 18 覆盖
+; SKIP FORCE_QUIT —— 不等待输入立即结束游戏并退出程序（文档「语义」）；GUIDE 明列 FORCE_*
+; SKIP FORCE_QUIT_AND_RESTART —— 不等待输入立即结束游戏并重启程序（文档「语义」）；GUIDE 明列 FORCE_*
+; SKIP FSTRJOIN —— 伪名：Shift-JIS 全角冒号「：」被误切成 F 而得到的名字，任何发行版都无此命令（文档「备注」）；真实命令为式中函数 STRJOIN
+; SKIP FTOOLTIP_SETDURATION —— 伪名：Shift-JIS 全角冒号「：」被误切成 F 得到的名字，任何发行版都无此命令（文档「备注」）；真实命令为 TOOLTIP_SETDURATION，且工具提示依赖 GUI 控件
+; SKIP FUNC —— 只能写在 TRYCALLLIST/TRYJUMPLIST/TRYGOTOLIST 与 ENDFUNC 之间作为候选列表项，不能单独执行；由组 5 覆盖
+CVTMP = GCREATE(430, 300, 100)
+CVTMP = GSETPEN(430, 4278190335, 3)
+CVTMP = GDASHSTYLE(430, 2, 2)
+CVTMP = GCREATE(431, 200, 100)
+CVTMP = GCREATE(432, 100, 200)
+CVTMP = GFILLRECTANGLE(431, 0, 0, 200, 100)
+CVTMP = GDRAWGWITHROTATE(432, 431, 90, 50, 50)
+CVTMP = GCREATE(433, 300, 200)
+CVTMP = GSETPEN(433, 4294901760, 2)
+CVTMP = GDRAWLINE(433, 10, 10, 290, 190)
+CVTMP = GCREATE(434, 300, 100)
+CVTMP = GSETFONT(434, "MS Gothic", 30)
+CVTMP = GSETBRUSH(434, 4294901760)
+CVTMP = GDRAWTEXT(434, "こんにちは", 10, 20)
+PRINTL 冒烟：GETDISPLAYLINE 取已显示行
+CVTMP_S = GETDISPLAYLINE(0)
+CVTMP_S = GETDOINGFUNCTION()
+CVTMP = GETMEMORYUSAGE()
+CVTMP_S = GETTEXTBOX()
+; SKIP GETTEXTSIZE —— 本仓库无实现：EE readme 该条目实为 GETTEXTBOX 的笔误（文档「备注」证据链），名字不存在；GUIDE 明列。需要文本框内容请用 GETTEXTBOX
+GETTIME
+CVTMP = GCREATE(435, 100, 100)
+CVTMP = GSETFONT(435, "MS Gothic", 100)
+CVTMP_S = GGETFONT(435)
+CVTMP = GCREATE(436, 100, 100)
+CVTMP = GSETFONT(436, "MS Gothic", 100)
+CVTMP = GGETFONTSIZE(436)
+CVTMP = GCREATE(437, 100, 100)
+CVTMP = GSETPEN(437, 4278255360, 5)
+CVTMP = GGETPEN(437)
+CVTMP = GCREATE(438, 100, 100)
+CVTMP = GSETPEN(438, 4278255360, 5)
+CVTMP = GGETPENWIDTH(438)
+GGETTEXTSIZE "USA", "Arial", 150
+; SKIP GOTO —— 同函数内 $ 标签跳转且不返回：目标标签须存在于本函数，执行后组内后续行不再执行；由组 3/21 覆盖
+; SKIP GOTOFORM —— FORM 版标签跳转（运行期求值标签名）且不返回，会中断冒烟组后续条目；由组 3 覆盖
+HTML_PRINT "<p align='right'><font color='red'>红色右对齐文本</font></p>"
+; SKIP HTML_PRINT_ISLAND —— 文档「备注」写明移植版未实现本命令；输出到与正文独立的 HTML 岛层，依赖 GUI 渲染与重绘
+; SKIP HTML_PRINT_ISLAND_CLEAR —— 文档「备注」写明移植版未实现本命令；且需先由 HTML_PRINT_ISLAND 建立岛层，无独立可验证的行为
+HTML_TAGSPLIT "<p align='right'>A<! --comment-->B<font color='red'>C</font></p>"
+; SKIP IF —— IF～ENDIF 复合语句头，须与 ENDIF 配对，单独执行会把组内后续行吞进分支；由组 3/28 覆盖
+DUMPRAND
+INITRAND
+INPUT 0
+;   ↑ 需注入输入：1 个数值：7（输入值 → RESULT；若直接回车/空输入则取默认 0）
+INPUTANY
+;   ↑ 需注入输入：1 个数值：7（可解析为整数 → RESULT；改喂 s 甲 则走字符串分支 → RESULTS，二者取一。不喂会一直等）
+INPUTMOUSEKEY 0
+;   ↑ 需注入输入：1 次鼠标注入：k 1 10 10 1 0（type=1 左键、坐标 10,10；与 run_example.sh 组 15 / 15_MOUSE.ERB 同形。本行参数 0 无时限，缺此注入会挂起）
+INPUTS 冒烟默认名
+;   ↑ 需注入输入：1 个字符串：s 冒烟名字（→ RESULTS；若直接回车/空输入则取默认「冒烟默认名」）
+CVTMP = 0
+INVERTBIT CVTMP, 3
+; SKIP JUMP —— 跳转到其它函数且不保留返回点（目标中 RETURN 等于本函数 RETURN），组内后续条目不再执行；由组 4 覆盖
+; SKIP JUMPFORM —— FORM 版函数跳转且不返回，会中断冒烟组后续条目；由组 4/14 覆盖
+; SKIP LCSVISASSI —— 无任何文档收录（两套中文文档、EE readme/changelog、在线文档均无），本仓库无实现，语义未确证；GUIDE 明列
+; SKIP LOADCHARA —— 存档系：从存档目录的 chara 子目录读取角色并追加到角色列表，改变全局角色状态；成功路径需 SAVECHARA 写出的 .dat 文件（冒烟组不写盘）；GUIDE 明列；由组 9 覆盖
+; SKIP LOADDATA —— 存档系：读取存档编号的数据，失败会出错终止，且读档改变全局状态；GUIDE 明列；由组 9 覆盖
+; SKIP LOADGAME —— 呼出标准读档界面（GUI 交互 + 流程切换），只能在可存读档状态使用；GUIDE 明列；由组 9 覆盖
+; SKIP LOADGLOBAL —— 存档系：从全局存档读取 GLOBAL/GLOBALS，会覆盖全局变量而影响其它组；GUIDE 明列；由组 9 覆盖
+; SKIP LOADVAR —— 本仓库无实现：命令虽已注册，执行时直接抛「未实现」异常（文档「备注」写明）；GUIDE 明列
+; SKIP LOOP —— DO～LOOP 的循环判定行，须与 DO 配对（单独出现会按缺配对处理）；由组 3/28 覆盖
+; SKIP NEXT —— FOR～NEXT 的循环终点，须与 FOR 配对；由组 3/28 覆盖
+NOSKIP
+ENDNOSKIP
+; SKIP OCLEARLINE —— 本仓库无实现：两套中文文档、EE readme/changelog、在线文档均未收录，无权威签名与语义（文档「备注」）；GUIDE 明列；删除已显示行的行为由组 16 覆盖
+PRINTBUTTON "[0] 冒烟：ONEBINPUT 确认", 0
+PRINTBUTTON "[1] 冒烟：ONEBINPUT 取消", 1
+ONEBINPUT 0
+;   ↑ 需注入输入：1 个数值：0（单字符即自动提交，须命中已按钮化的 0/1 → RESULT=0；多字符只取首位）
+PRINTBUTTON "[A] 冒烟：ONEBINPUTS 甲", "A"
+ONEBINPUTS "A"
+;   ↑ 需注入输入：1 个字符串：s A（只取首字符且自动提交，须命中已按钮化字符串 "A" → RESULTS="A"）
+ONEINPUT
+;   ↑ 需注入输入：1 个数值：7（单字符自动提交 → RESULT:0）
+ONEINPUTS
+;   ↑ 需注入输入：1 个字符串：s a（单字符输入即自动提交，结果代入 RESULTS:0）
+; SKIP OUTPUTLOG —— 会写盘：把控制台日志输出到 emuera.log（文档另载函数形式 OUTPUTLOG("文件名")，同样落盘）—— 组 9 覆盖
+ADDCHARA 0
+ADDCHARA 0
+PICKUPCHARA 0, 1
+; SKIP PLAYBGM —— 依赖音频后端：循环播放 sound/ 下音频（example/sound/bgm01.wav 存在，会真实出声）—— 由组 30 覆盖
+; SKIP PLAYSOUND —— 依赖音频后端：播放 sound/ 下音频（example/sound/se01.wav 存在，会真实出声）—— 由组 30 覆盖
+POWER CVTMP, 2, 10
+PRINT 冒烟：PRINT 输出行内原样文本
+PRINTL
+PRINTBUTTON "[0] 冒烟按钮", 0
+PRINTL
+PRINTBUTTONC "[0] 冒烟右对齐按钮", 0
+PRINTL
+PRINTBUTTONLC "[0] 冒烟左对齐按钮", 0
+PRINTL
+PRINTCD "冒烟：默认色右对齐"
+PRINTL
+PRINTCK "冒烟：右对齐文本"
+PRINTL
+PRINTCPERLINE CVTMP
+PRINTDATA
+DATA 冒烟候选甲
+DATA 冒烟候选乙
+ENDDATA
+PRINTDATAD
+DATA 冒烟候选甲
+DATA 冒烟候选乙
+ENDDATA
+PRINTDATADL
+DATA 冒烟候选甲
+DATA 冒烟候选乙
+ENDDATA
+PRINTDATADW
+DATA 冒烟候选甲
+DATA 冒烟候选乙
+ENDDATA
+;   ↑ 需注入输入：1 个数值（回车确认，填 0 即可；W＝显示后换行再等一次回车）
+PRINTDATAK
+DATA 冒烟候选甲
+DATA 冒烟候选乙
+ENDDATA
+PRINTDATAKL
+DATA 冒烟候选甲
+DATA 冒烟候选乙
+ENDDATA
+PRINTDATAKW
+DATA 冒烟候选甲
+DATA 冒烟候选乙
+ENDDATA
+;   ↑ 需注入输入：1 个数值（回车确认，填 0 即可；W＝显示后换行再等一次回车）
+PRINTDATAL
+DATA 冒烟候选甲
+DATA 冒烟候选乙
+ENDDATA
+PRINTDATAW
+DATA 冒烟候选甲
+DATA 冒烟候选乙
+ENDDATA
+;   ↑ 需注入输入：1 个数值（回车确认，填 0 即可；W＝显示后换行再等一次回车）
+PRINTFORMCD 冒烟：{1 + 2} 默认色右对齐
+PRINTL
+PRINTFORMCK 冒烟：{1 + 2} 右对齐
+PRINTL
+PRINTFORMLCD 冒烟：{1 + 2} 默认色左对齐
+PRINTL
+PRINTFORMLCK 冒烟：{1 + 2} 左对齐
+PRINTL
+PRINTLCD "冒烟：默认色左对齐"
+PRINTL
+PRINTLCK "冒烟：左对齐文本"
+PRINTL
+PRINTPLAIN [0] 这里的方括号只是普通文字
+PRINTL
+PRINTPLAINFORM 第{1 + 2}项 [0] 不是按钮
+PRINTL
+PRINTSINGLE 冒烟：PRINTSINGLE 单行输出，超出宽度不折行
+ADDCHARA 0
+PRINT_ABL 0
+ADDCHARA 0
+PRINT_EXP 0
+PRINT_IMG "offset_atlas.png"
+PRINTL
+PRINT_ITEM
+ADDCHARA 0
+PRINT_MARK 0
+ADDCHARA 0
+PRINT_PALAM 0
+PRINT_RECT 20
+PRINTL
+PRINT_SHOPITEM
+PRINT_SPACE 10
+PRINTL
+ADDCHARA 0
+PRINT_TALENT 0
+PUTFORM 冒烟：PUTFORM 追加文本 {1 + 2}
+; SKIP QUIT —— 会结束程序：把控制台置为退出状态，本组后续行不再执行 —— 组 12 覆盖
+; SKIP QUIT_AND_RESTART —— 会重启程序，且执行时先插入一次回车等待（交互 + 破坏流程）—— 组 12c 覆盖
+RANDOMIZE GETTIME()
+REDRAW 0
+REDRAW 1
+; SKIP REF —— 本仓库无实现（文档「语义」：ver1.815 起禁用，解析期即报「書式が間違っています」，执行体抛 NotImplCodeEE）
+; SKIP REFBYNAME —— 本仓库无实现（与 REF 同批禁用；文档「语义」：任何写法都在参数解析阶段报「書式が間違っています」）
+; SKIP REMOVEBGIMAGE —— 需先用 SETBGIMAGE 注册存在的大写背景图名；example 无背景图资源，对未注册名字调用会抛 .NET ArgumentOutOfRangeException（文档「语义」明示）
+; SKIP REND —— REPEAT～REND 循环的结束关键字，不能单独使用（须与 REPEAT 成对）—— 由组 3/28 覆盖
+; SKIP REPEAT —— 循环结构头（REPEAT～REND 必须成对，属结构关键字）—— 由组 3/28 覆盖
+RESETBGCOLOR
+RESETCOLOR
+; SKIP RESETDATA —— 破坏性：删除全部已登录角色并把通常/局部变量清零（会破坏其它组共享状态）—— 组 8 覆盖
+; SKIP RESETGLOBAL —— 破坏性：把 GLOBAL 全清零、GLOBALS 清空（其它组依赖的全局状态随之丢失）—— 组 9 覆盖
+ADDCHARA 0
+RESET_STAIN 0
+; SKIP RESTART —— 会改变控制流：跳回当前函数第一行（无退出路径时死循环）—— 组 12b 覆盖
+; SKIP RETURN —— 函数返回指令：会立刻结束当前函数（冒烟组将提前终止）—— 组 4/28 覆盖
+; SKIP RETURNF —— #FUNCTION/#FUNCTIONS 专用返回指令，需嵌入被调用函数体执行 —— 组 4/27 覆盖
+; SKIP RETURNFORM —— 返回指令（FORM 变体），在当前位置结束当前函数 —— 组 4 覆盖
+PRINT 冒烟：将被 REUSELASTLINE 替换的一行
+REUSELASTLINE 冒烟：REUSELASTLINE 覆盖上一行
+PRINTL
+; SKIP SAVECHARA —— 会写盘：把角色保存为角色存档 .dat（且各角色编号必须已登录）—— 组 9 覆盖
+; SKIP SAVEDATA —— 会写盘：把当前状态写入存档文件（第 1 参数为槽位号）—— 组 9 覆盖
+; SKIP SAVEGAME —— 呼出标准存档界面（GUI + 输入选槽位）并写盘；文档明示只能在 SHOP 等允许存档的流程中调用，冒烟组语境会报错终止
+; SKIP SAVEGLOBAL —— 会写盘：把 GLOBAL/GLOBALS 写入存档目录的 global.sav —— 组 9 覆盖
+SAVENOS CVTMP
+; SKIP SAVEVAR —— 本仓库无实现（文档「语义」：执行即抛「未实现」错误并终止脚本；设计上还会写盘）
+; SKIP SELECTCASE —— 多路分支结构头（SELECTCASE～CASE～CASEELSE～ENDSELECT）—— 由组 3/28 覆盖
+; SKIP SET —— 不是可书写的命令：文档明示 funcDic 无 SET 键，写 SET 会被当普通赋值行、解析左值失败；赋值语义由组 1/28 覆盖
+SETBGCOLOR 0, 0, 128
+RESETBGCOLOR
+SETBGCOLORBYNAME "DarkBlue"
+RESETBGCOLOR
+SETBGIMAGE off_norect
+; SKIP SETBGMVOLUME —— 依赖音频后端：设置 BGM 音量（WMP 播放器单例，无返回值）；本移植为留痕桩，冒烟无可验证行为 —— example 组17 已覆盖
+CVTMP = 0
+SETBIT CVTMP, 3
+SETCOLOR 255, 128, 0
+RESETCOLOR
+SETCOLORBYNAME "Orange"
+RESETCOLOR
+SETFONT "ＭＳ ゴシック"
+; SKIP SETSOUNDVOLUME —— 依赖音频后端：一次性设置 10 个音效声道音量（惰性创建 Sound）；本移植为留痕桩 —— example 组17 已覆盖
+; SKIP SETTEXTBOX —— 依赖 GUI 文本框控件（GUIDE 明列）：整体替换输入框内容，文档形态为式中函数 SETTEXTBOX("文字")；本移植为留痕桩，冒烟无可验证行为
+; SKIP SIF —— 单行条件结构头（SIF + 下一行语句），不能单独作为语句执行——会吞掉组内后续行；由组 3/28 覆盖
+SKIPDISP 1
+SKIPDISP 0
+SKIPLOG 1
+SKIPLOG 0
+ADDCHARA 0
+ADDCHARA 0
+SORTCHARA NO
+SPLIT "あい,うえ,,お", ",", LOCALS
+CVTMP = SPRITEDISPOSEALL(0)
+; SKIP STOPBGM —— 依赖音频后端：停止 BGM 通道（WMP 单例）；本移植为留痕桩 —— example 组17 已覆盖
+; SKIP STOPCALLTRAIN —— 流程控制族（GUIDE 明列，与 CALLTRAIN 成对）：终止 CALLTRAIN 指令队列并回调 @CALLTRAINEND，会打断当前指令流程 —— example 组17 作留痕桩
+; SKIP STOPSOUND —— 依赖音频后端：停止 10 个音效声道；本移植为留痕桩 —— example 组17 已覆盖
+STRDATA LOCALS
+DATA 冒烟候选甲
+DATA 冒烟候选乙
+ENDDATA
+; SKIP STRJOIN1 —— 伪名：清单提取时「STRJOINの第1引数」被误粘连（EM 系 readme 文本），文档与发行版 exe 中均无此命令；真实功能为式中函数 STRJOIN
+STRLEN abc
+STRLENFORM 名字是{1 + 2}字
+STRLENFORMU 名字是{1 + 2}字
+STRLENU あいう
+CVTMP = 1
+LOCAL:1 = 2
+SWAP CVTMP, LOCAL:1
+ADDCHARA 0
+ADDCHARA 0
+SWAPCHARA 0, 1
+; SKIP THROW —— 会强制抛运行时错误（CodeEE，错误信息取参数文本）并中断当前执行流，冒烟组将提前终止 —— 由组 13 覆盖
+CVTMP = 500
+TIMES CVTMP, 1.25
+TINPUT 5000, 100
+;   ↑ 需注入输入：1 个数值（限时 5 秒内输入，如 7；未喂入则超时取默认值 100）
+; SKIP TINPUTAWAIT —— 伪名：EM 系 readme「TINPUTとAWAITの挙動変更」一句被误粘连，无此命令；真实命令是 TINPUT 与 AWAIT 两条
+TINPUTS 5000, "无名氏"
+;   ↑ 需注入输入：1 个字符串：s abc（限时 5 秒内输入；未喂入则超时取默认值“无名氏”）
+TONEINPUT 3000, 0
+;   ↑ 需注入输入：1 个数值（单字符输入即自动提交，如 7；未喂入则 3 秒后超时取默认值 0）
+TONEINPUTS 3000, "z"
+;   ↑ 需注入输入：1 个字符串：s q（单字符输入即自动提交；未喂入则 3 秒后超时取默认值 z）
+; SKIP TOOLTIP_CUSTOM —— 依赖 GUI：工具提示自绘总开关（WinForms ToolTip.OwnerDraw），冒烟组无工具提示渲染路径 —— 覆盖率报告列为「工具提示需 GUI」
+; SKIP TOOLTIP_EXTENSION —— 伪名：EM 文档站「工具提示功能扩展」的参考页名，不是命令；组内真实命令为 TOOLTIP_CUSTOM/TOOLTIP_SETCOLOR 等
+; SKIP TOOLTIP_FORMAT —— 依赖 GUI：只写控制台 tooltip_format 字段，仅自绘工具提示（需先 TOOLTIP_CUSTOM 1）弹出时生效
+; SKIP TOOLTIP_IMG —— 依赖 GUI 与图像后端：非 0 时把按钮 title 里的整数当 g 图 ID 画进工具提示，需 TOOLTIP_CUSTOM 1 + 鼠标悬停才能体现
+; SKIP TOOLTIP_SETCOLOR —— 依赖 GUI：仅设置工具提示前景/背景色字段，只有弹出 tooltip（TOOLTIP_CUSTOM 1 + 鼠标悬停）时才生效 —— example 组10 仅留痕
+; SKIP TOOLTIP_SETDELAY —— 依赖 GUI：仅设置工具提示弹出延迟字段，只有弹出 tooltip 时才生效 —— example 组10 仅留痕
+; SKIP TOOLTIP_SETDURATION —— 依赖 GUI：仅设置工具提示最大显示时间字段（超 32767 被截断），只有弹出 tooltip 时才生效 —— example 组10 仅留痕
+; SKIP TOOLTIP_SETFONT —— 依赖 GUI：仅设置工具提示字体名字段，绘制端在 tooltip 弹出时才构造 Font（需 TOOLTIP_CUSTOM 1）
+; SKIP TOOLTIP_SETFONTSIZE —— 依赖 GUI：仅设置工具提示字号字段，绘制端在 tooltip 弹出时才构造 Font（需 TOOLTIP_CUSTOM 1）
+TRYCALL NO_SUCH_FUNC_SMOKE
+TRYCALLF NO_SUCH_METHOD_SMOKE
+TRYCALLFORM SHOW_DATA_{1 + 2}
+TRYCALLFORMF NO_SUCH_METHOD_{1 + 2}
+TRYCALLLIST
+FUNC NO_SUCH_SMOKE_A
+FUNC NO_SUCH_SMOKE_B
+ENDFUNC
+TRYCCALL SHOW_DETAIL_SMOKE, 3
+CATCH
+PRINTL 冒烟：函数不存在，进入 CATCH
+ENDCATCH
+TRYCCALLFORM KOJO_{1 + 2}_GREETING
+CATCH
+PRINTL 冒烟：展开后的函数名不存在，进入 CATCH
+ENDCATCH
+TRYCGOTO SKIP_PART_SMOKE
+CATCH
+PRINTL 冒烟：标签不存在，进入 CATCH
+ENDCATCH
+TRYCGOTOFORM LABEL_{1 + 2}
+CATCH
+PRINTL 冒烟：展开后的标签不存在，进入 CATCH
+ENDCATCH
+TRYCJUMP NO_SUCH_FUNC_SMOKE, CVTMP
+CATCH
+PRINTL 冒烟：函数不存在，进入 CATCH
+ENDCATCH
+TRYCJUMPFORM KOJO_{1 + 2}_EXTRA
+CATCH
+PRINTL 冒烟：展开后的函数名不存在，进入 CATCH
+ENDCATCH
+TRYGOTO NO_SUCH_LABEL_SMOKE
+TRYGOTOFORM NO_SUCH_LABEL_{1 + 2}
+TRYGOTOLIST
+FUNC $NO_SUCH_SMOKE_LABEL
+ENDFUNC
+TRYJUMP NO_SUCH_EXTRA_SCENE, CVTMP
+TRYJUMPFORM KOJO_{1 + 2}_EXTRA_SCENE
+TRYJUMPLIST
+FUNC NO_SUCH_SMOKE_A
+ENDFUNC
+TWAIT 3000, 0
+;   ↑ 需注入输入：2 个数值：先喂 0（实现里限时等待前先做一次无条件 ReadAnyKey 等按键，回车确认）；再喂 0（限时等待，输入接收标志=0，有输入即提前继续）
+ADDCHARA 0
+TARGET = 0
+PALAM:0:0 = 0
+UP:0 = 30
+DOWN:0 = 10
+UPCHECK
+; SKIP UPDATECHECK —— 依赖网络/外部资源：WebClient 同步访问 GameBase.csv 的「バージョン情報URL」做版本检查（无 URL 返回 3，有新版会弹对话框）；example 的 GameBase.csv 无该键，无可验证行为 —— example 组17 作留痕桩
+; SKIP VARI —— 仅在 setting.json 的 UseScopedVariableInstruction 开启时注册；默认关闭时写 VARI 会在解析期报「現在の設定では使用できません」（覆盖率报告明列），example 未开启该配置
+; SKIP VARS —— 与 VARI 共用开关（setting.json 的 UseScopedVariableInstruction）；默认关闭时解析期即报错，example 未开启该配置
+VARSET FLAG, 0
+VARSIZE FLAG
+WAIT
+;   ↑ 需注入输入：1 个数值（回车确认，填 0 即可）
+WAITANYKEY
+;   ↑ 需注入输入：1 个数值（任意键，填 0 即可；亦可用 k 1 10 10 1 0 注入鼠标左键点击）
+; SKIP WEND —— WHILE～WEND 循环的终点标记，不能单独执行（须与 WHILE 成对出现）—— 由组 3/28 覆盖
+; SKIP WHILE —— WHILE～WEND 循环头，不能单独执行（会把组内后续行吞进循环体）—— 由组 3/28 覆盖
+
+;---- 35.3 需注入输入的条目（供 runner 组 script 用） ----
+;   AWAIT: 无需注入：AWAIT 50 等满 50ms 自动继续；若移植仍把 AWAIT 当「等待键」实现，则备 1 个数值 0
+;   BINPUT: 1 个数值：0（须命中画面已按钮化的 0/1 → RESULT=0；该命令会强制换行刷新后再扫按钮。移植若仍按 15_MOUSE.ERB 的「输入族桩」处理则不消费此值）
+;   BINPUTS: 1 个字符串：s A（须命中已按钮化的字符串 "A"/"B" → RESULTS="A"；键盘输入也须与按钮值一致，否则被弹回重等）
+;   FLOWINPUT: 无需注入：调用即返回 0，不消费输入。若移植只登记了命令桩，可退化为 readme 形态 FLOWINPUT 0, 1, 1
+;   FORCEWAIT: 1 个数值：0（当作一次回车确认）
+;   INPUT: 1 个数值：7（输入值 → RESULT；若直接回车/空输入则取默认 0）
+;   INPUTANY: 1 个数值：7（可解析为整数 → RESULT；改喂 s 甲 则走字符串分支 → RESULTS，二者取一。不喂会一直等）
+;   INPUTMOUSEKEY: 1 次鼠标注入：k 1 10 10 1 0（type=1 左键、坐标 10,10；与 run_example.sh 组 15 / 15_MOUSE.ERB 同形。本行参数 0 无时限，缺此注入会挂起）
+;   INPUTS: 1 个字符串：s 冒烟名字（→ RESULTS；若直接回车/空输入则取默认「冒烟默认名」）
+;   ONEBINPUT: 1 个数值：0（单字符即自动提交，须命中已按钮化的 0/1 → RESULT=0；多字符只取首位）
+;   ONEBINPUTS: 1 个字符串：s A（只取首字符且自动提交，须命中已按钮化字符串 "A" → RESULTS="A"）
+;   ONEINPUT: 1 个数值：7（单字符自动提交 → RESULT:0）
+;   ONEINPUTS: 1 个字符串：s a（单字符输入即自动提交，结果代入 RESULTS:0）
+;   PRINTDATADW: 1 个数值（回车确认，填 0 即可；W＝显示后换行再等一次回车）
+;   PRINTDATAKW: 1 个数值（回车确认，填 0 即可；W＝显示后换行再等一次回车）
+;   PRINTDATAW: 1 个数值（回车确认，填 0 即可；W＝显示后换行再等一次回车）
+;   TINPUT: 1 个数值（限时 5 秒内输入，如 7；未喂入则超时取默认值 100）
+;   TINPUTS: 1 个字符串：s abc（限时 5 秒内输入；未喂入则超时取默认值“无名氏”）
+;   TONEINPUT: 1 个数值（单字符输入即自动提交，如 7；未喂入则 3 秒后超时取默认值 0）
+;   TONEINPUTS: 1 个字符串：s q（单字符输入即自动提交；未喂入则 3 秒后超时取默认值 z）
+;   TWAIT: 2 个数值：先喂 0（实现里限时等待前先做一次无条件 ReadAnyKey 等按键，回车确认）；再喂 0（限时等待，输入接收标志=0，有输入即提前继续）
+;   WAIT: 1 个数值（回车确认，填 0 即可）
+;   WAITANYKEY: 1 个数值（任意键，填 0 即可；亦可用 k 1 10 10 1 0 注入鼠标左键点击）
+
+CALL ASSERT_TRUE, 1, @"组35 文档语义冒烟执行完毕（无异常中断）"
+NONG += RESULT
+RETURN NONG

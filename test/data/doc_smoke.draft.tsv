@@ -1,0 +1,442 @@
+# name	kind	mode	snippet	note	input
+ABS	func	call	CVTMP = ABS(1)		
+ALLSAMES	func	call	CVTMP = ALLSAMES(1, 1, 1)		
+ARRAYMSORT	func	call	CVTMP = ARRAYMSORT(1, 1, 1, 1)		
+BARSTR	func	call	CVTMP = BARSTR(1, 1, 1)		
+CBGCLEAR	func	call	CVTMP = CBGCLEAR()		
+CBGCLEARBUTTON	func	call	CVTMP = CBGCLEARBUTTON()		
+CBGREMOVEBMAP	func	call	CVTMP = CBGREMOVEBMAP()		
+CBGREMOVERANGE	func	call	CVTMP = CBGREMOVERANGE(1, 1)		
+CBGSETBMAPG	func	call	CVTMP = CBGSETBMAPG(1)		
+CBGSETBUTTONSPRITE	func	call	CVTMP = CBGSETBUTTONSPRITE(1, "a", "a", 1, 1, 1)		
+CBGSETG	func	call	CVTMP = CBGSETG(1, 1, 1, 1)		
+CBGSETSPRITE	func	call	CVTMP = CBGSETSPRITE("a", 1, 1, 1)		
+CBRT	func	call	CVTMP = CBRT(1)		
+CHARATU	func	call	CVTMP = CHARATU("a", 1)		
+CHKCHARADATA	func	skip	CVTMP = CHKCHARADATA("a")	本仓库无实现	
+CHKDATA	func	call	CVTMP = CHKDATA(1)		
+CHKFONT	func	call	CVTMP = CHKFONT("a")		
+CHKGLOBALDATA	func	call	CVTMP = CHKGLOBALDATA(1)		
+CHKVARDATA	func	call	CVTMP = CHKVARDATA("a")		
+CLIENTHEIGHT	func	call	CVTMP = CLIENTHEIGHT()		
+CLIENTWIDTH	func	call	CVTMP = CLIENTWIDTH()		
+CMATCH	func	call	CVTMP = CMATCH(1, 1, 1, 1)		
+COLOR_FROMNAME	func	call	CVTMP = COLOR_FROMNAME("a")		
+COLOR_FROMRGB	func	call	CVTMP = COLOR_FROMRGB(1, 1, 1)		
+CONVERT	func	call	CVTMP = CONVERT(1, 1)		
+CSVABL	func	call	CVTMP = CSVABL(1, 1, 1)		
+CSVBASE	func	call	CVTMP = CSVBASE(1, 1, 1)		
+CSVCALLNAME	func	call	CVTMP = CSVCALLNAME(1, 1)		
+CSVCFLAG	func	call	CVTMP = CSVCFLAG(1, 1, 1)		
+CSVCSTR	func	call	CVTMP = CSVCSTR(1, 1, 1)		
+CSVEQUIP	func	call	CVTMP = CSVEQUIP(1, 1, 1)		
+CSVEXP	func	call	CVTMP = CSVEXP(1, 1, 1)		
+CSVJUEL	func	call	CVTMP = CSVJUEL(1, 1, 1)		
+CSVMARK	func	call	CVTMP = CSVMARK(1, 1, 1)		
+CSVMASTERNAME	func	call	CVTMP = CSVMASTERNAME(1, 1)		
+CSVNAME	func	call	CVTMP = CSVNAME(1, 1)		
+CSVNICKNAME	func	call	CVTMP = CSVNICKNAME(1, 1)		
+CSVRELATION	func	call	CVTMP = CSVRELATION(1, 1, 1)		
+CSVTALENT	func	call	CVTMP = CSVTALENT(1, 1, 1)		
+CURRENTALIGN	func	call	CVTMP = CURRENTALIGN()		
+CURRENTREDRAW	func	call	CVTMP = CURRENTREDRAW()		
+ENCODETOUNI	func	call	CVTMP = ENCODETOUNI("a", 1)		
+ESCAPE	func	call	CVTMP = ESCAPE("a")		
+EXISTCSV	func	call	CVTMP = EXISTCSV(1, 1)		
+EXPONENT	func	call	CVTMP = EXPONENT(1)		
+FINDCHARA	func	call	CVTMP = FINDCHARA(1, 1, 1, 1)		
+FINDELEMENT	func	call	CVTMP = FINDELEMENT(1, 1, 1, 1, 1)		
+FINDLASTCHARA	func	call	CVTMP = FINDLASTCHARA(1, 1, 1, 1)		
+FINDLASTELEMENT	func	call	CVTMP = FINDLASTELEMENT(1, 1, 1, 1, 1)		
+FIND_CHARADATA	func	skip	CVTMP = FIND_CHARADATA("a")	本仓库无实现	
+FIND_VARDATA	func	skip	CVTMP = FIND_VARDATA("a")	本仓库无实现	
+GCLEAR	func	call	CVTMP = GCLEAR(1, 1)		
+GCREATE	func	call	CVTMP = GCREATE(1, 1, 1)		
+GCREATED	func	call	CVTMP = GCREATED(1)		
+GCREATEFROMFILE	func	call	CVTMP = GCREATEFROMFILE(1, 1)		
+GDISPOSE	func	call	CVTMP = GDISPOSE(1)		
+GDRAWG	func	call	CVTMP = GDRAWG(1, 1, 1, 1, 1, 1, 1, 1, 1, 1)		
+GDRAWGWITHMASK	func	call	CVTMP = GDRAWGWITHMASK(1, 1, 1, 1, 1)		
+GDRAWSPRITE	func	call	CVTMP = GDRAWSPRITE(1, 1)		
+GETBGCOLOR	func	call	CVTMP = GETBGCOLOR()		
+GETBIT	func	call	CVTMP = GETBIT(1, 1)		
+GETCHARA	func	call	CVTMP = GETCHARA(1, 1)		
+GETCOLOR	func	call	CVTMP = GETCOLOR()		
+GETCONFIG	func	call	CVTMP = GETCONFIG("a")		
+GETCONFIGS	func	call	CVTMP = GETCONFIGS("a")		
+GETDEFBGCOLOR	func	call	CVTMP = GETDEFBGCOLOR()		
+GETDEFCOLOR	func	call	CVTMP = GETDEFCOLOR()		
+GETEXPLV	func	call	CVTMP = GETEXPLV(1, 1)		
+GETFOCUSCOLOR	func	call	CVTMP = GETFOCUSCOLOR()		
+GETFONT	func	call	CVTMP = GETFONT()		
+GETKEY	func	call	CVTMP = GETKEY(1)		
+GETKEYTRIGGERED	func	call	CVTMP = GETKEYTRIGGERED(1)		
+GETLINESTR	func	call	CVTMP = GETLINESTR("a")		
+GETMILLISECOND	func	call	CVTMP = GETMILLISECOND()		
+GETNUM	func	call	CVTMP = GETNUM(1, "a")		
+GETNUMB	func	call	CVTMP = GETNUMB("a", "a")		
+GETPALAMLV	func	call	CVTMP = GETPALAMLV(1, 1)		
+GETSECOND	func	call	CVTMP = GETSECOND()		
+GETSPCHARA	func	call	CVTMP = GETSPCHARA(1)		
+GETSTYLE	func	call	CVTMP = GETSTYLE()		
+GETTIME	func	call	CVTMP = GETTIME()		
+GETTIMES	func	call	CVTMP = GETTIMES()		
+GFILLRECTANGLE	func	call	CVTMP = GFILLRECTANGLE(1, 1, 1, 1, 1)		
+GGETCOLOR	func	call	CVTMP = GGETCOLOR(1, 1, 1)		
+GHEIGHT	func	call	CVTMP = GHEIGHT(1)		
+GLOAD	func	call	CVTMP = GLOAD(1, 1)		
+GROTATE	func	call	CVTMP = GROTATE(1, 1)		
+GROUPMATCH	func	call	CVTMP = GROUPMATCH(1, 1, 1, 1, 1)		
+GSAVE	func	call	CVTMP = GSAVE(1, 1)		
+GSETBRUSH	func	call	CVTMP = GSETBRUSH(1, 1)		
+GSETCOLOR	func	call	CVTMP = GSETCOLOR(1, 1, 1, 1)		
+GSETFONT	func	call	CVTMP = GSETFONT(1, 1, 1)		
+GSETPEN	func	call	CVTMP = GSETPEN(1, 1, 1)		
+GWIDTH	func	call	CVTMP = GWIDTH(1)		
+HOTKEY_STATE	func	call	CVTMP = HOTKEY_STATE(1, 1)		
+HTML_ESCAPE	func	call	CVTMP = HTML_ESCAPE(1)		
+HTML_GETPRINTEDSTR	func	call	CVTMP = HTML_GETPRINTEDSTR(1)		
+HTML_POPPRINTINGSTR	func	call	CVTMP = HTML_POPPRINTINGSTR()		
+HTML_TOPLAINTEXT	func	call	CVTMP = HTML_TOPLAINTEXT("a")		
+INRANGE	func	call	CVTMP = INRANGE(1, 1, 1)		
+INRANGEARRAY	func	call	CVTMP = INRANGEARRAY(1, 1, 1, 1, 1)		
+INRANGECARRAY	func	call	CVTMP = INRANGECARRAY(1, 1, 1, 1, 1)		
+ISACTIVE	func	call	CVTMP = ISACTIVE()		
+ISNUMERIC	func	call	CVTMP = ISNUMERIC("a")		
+ISSKIP	func	call	CVTMP = ISSKIP()		
+LIMIT	func	call	CVTMP = LIMIT(1, 1, 1)		
+LINEISEMPTY	func	call	CVTMP = LINEISEMPTY()		
+LOADTEXT	func	call	CVTMP = LOADTEXT(1, 1, 1)		
+LOG	func	call	CVTMP = LOG(1)		
+LOG10	func	call	CVTMP = LOG10(1)		
+MATCH	func	call	CVTMP = MATCH(1, 1, 1, 1)		
+MAX	func	call	CVTMP = MAX(1, 1, 1)		
+MAXARRAY	func	call	CVTMP = MAXARRAY(1, 1, 1)		
+MAXCARRAY	func	call	CVTMP = MAXCARRAY(1, 1, 1)		
+MESSKIP	func	call	CVTMP = MESSKIP()		
+MIN	func	call	CVTMP = MIN(1, 1, 1)		
+MINARRAY	func	call	CVTMP = MINARRAY(1, 1, 1)		
+MINCARRAY	func	call	CVTMP = MINCARRAY(1, 1, 1)		
+MONEYSTR	func	call	CVTMP = MONEYSTR(1, "a")		
+MOUSESKIP	func	call	CVTMP = MOUSESKIP()		
+MOUSEX	func	call	CVTMP = MOUSEX()		
+MOUSEY	func	call	CVTMP = MOUSEY()		
+NOSAMES	func	call	CVTMP = NOSAMES(1, 1, 1)		
+POWER	func	call	CVTMP = POWER(1, 1)		
+PRINTCLENGTH	func	call	CVTMP = PRINTCLENGTH()		
+PRINTCPERLINE	func	call	CVTMP = PRINTCPERLINE()		
+RAND	func	call	CVTMP = RAND(1, 1)		
+REPLACE	func	call	CVTMP = REPLACE("a", "a", "a")		
+SAVENOS	func	call	CVTMP = SAVENOS()		
+SAVETEXT	func	call	CVTMP = SAVETEXT("a", 1, 1, 1)		
+SETANIMETIMER	func	skip	CVTMP = SETANIMETIMER(1)	需要交互输入	
+SIGN	func	call	CVTMP = SIGN(1)		
+SPRITEANIMEADDFRAME	func	call	CVTMP = SPRITEANIMEADDFRAME("a", 1, 1, 1, 1, 1, 1, 1, 1)		
+SPRITEANIMECREATE	func	call	CVTMP = SPRITEANIMECREATE("a", 1, 1)		
+SPRITECREATE	func	call	CVTMP = SPRITECREATE("a", 1)		
+SPRITECREATED	func	call	CVTMP = SPRITECREATED("a")		
+SPRITEDISPOSE	func	call	CVTMP = SPRITEDISPOSE("a")		
+SPRITEGETCOLOR	func	call	CVTMP = SPRITEGETCOLOR("a", 1, 1)		
+SPRITEHEIGHT	func	call	CVTMP = SPRITEHEIGHT("a")		
+SPRITEMOVE	func	skip	CVTMP = SPRITEMOVE("a", 1, 1)	本仓库无实现	
+SPRITEPOSX	func	call	CVTMP = SPRITEPOSX("a")		
+SPRITEPOSY	func	call	CVTMP = SPRITEPOSY("a")		
+SPRITESETPOS	func	call	CVTMP = SPRITESETPOS("a", 1, 1)		
+SPRITEWIDTH	func	call	CVTMP = SPRITEWIDTH("a")		
+SQRT	func	call	CVTMP = SQRT(1)		
+STRCOUNT	func	call	CVTMP = STRCOUNT("a", "a")		
+STRFIND	func	call	CVTMP = STRFIND("a", "a", 1)		
+STRFINDU	func	call	CVTMP = STRFINDU("a", "a", 1)		
+STRFORM	func	call	CVTMP = STRFORM(1)		
+STRJOIN	func	call	CVTMP = STRJOIN(1, "a", 1)		
+STRLENS	func	call	CVTMP = STRLENS("a")		
+STRLENSU	func	call	CVTMP = STRLENSU("a")		
+SUBSTRING	func	call	CVTMP = SUBSTRING("a", 1, 1)		
+SUBSTRINGU	func	call	CVTMP = SUBSTRINGU("a", 1, 1)		
+SUMARRAY	func	call	CVTMP = SUMARRAY(1, 1, 1)		
+SUMCARRAY	func	call	CVTMP = SUMCARRAY(1, 1, 1)		
+TOFULL	func	call	CVTMP = TOFULL("a")		
+TOHALF	func	call	CVTMP = TOHALF("a")		
+TOINT	func	call	CVTMP = TOINT("a")		
+TOLOWER	func	call	CVTMP = TOLOWER("a")		
+TOSTR	func	call	CVTMP = TOSTR(1, "a")		
+TOUPPER	func	call	CVTMP = TOUPPER("a")		
+UNICODE	func	call	CVTMP = UNICODE(1)		
+UNICODEBYTE	func	call	CVTMP = UNICODEBYTE("a")		
+VARSIZE	func	call	CVTMP = VARSIZE("a", 1)		
+ADDCHARA	cmd	call	ADDCHARA 10, 11		
+ADDCOPYCHARA	cmd	call	ADDCOPYCHARA 0		
+ADDDEFCHARA	cmd	skip		文档未给出可合成的调用	
+ADDSPCHARA	cmd	call	ADDSPCHARA 10		
+ADDVOIDCHARA	cmd	call	ADDVOIDCHARA		
+ALIGNMENT	cmd	call	ALIGNMENT RIGHT		
+ARRAYCOPY	cmd	call	ARRAYCOPY "A", "B"		
+ARRAYREMOVE	cmd	call	ARRAYREMOVE FLAG, 5, 3		
+ARRAYSHIFT	cmd	call	ARRAYSHIFT FLAG, 1, 0		
+ARRAYSORT	cmd	call	ARRAYSORT FLAG		
+ASSERT	cmd	call	ASSERT CHARANUM > 0		
+AWAIT	cmd	skip		需要交互输入	
+BAR	cmd	skip		文档未给出可合成的调用	
+BARL	cmd	skip		文档未给出可合成的调用	
+BEGIN	cmd	skip		文档未给出可合成的调用	
+BINPUT	cmd	skip		需要交互输入	
+BINPUTS	cmd	skip		需要交互输入	
+BREAK	cmd	skip		文档未给出可合成的调用	
+BREAKBUTTON	cmd	skip		文档未给出可合成的调用	
+CALL	cmd	skip		文档未给出可合成的调用	
+CALLEVENT	cmd	skip		文档未给出可合成的调用	
+CALLF	cmd	skip		文档未给出可合成的调用	
+CALLFORM	cmd	call	CALLFORM KOJO_{NO:TARGET}_{SELECTCOM}		
+CALLFORMF	cmd	call	CALLFORMF INIT_{GROUP_NAME}		
+CALLSHARP	cmd	skip		文档未给出可合成的调用	
+CALLTRAIN	cmd	skip		文档未给出可合成的调用	
+CASE	cmd	skip		文档未给出可合成的调用	
+CASEELSE	cmd	skip		文档未给出可合成的调用	
+CATCH	cmd	skip		文档未给出可合成的调用	
+CLEARBGIMAGE	cmd	skip		文档未给出可合成的调用	
+CLEARBIT	cmd	skip		文档未给出可合成的调用	
+CLEARLINE	cmd	skip		文档未给出可合成的调用	
+CLEARMEMORY	cmd	skip		文档未给出可合成的调用	
+CLEARTEXTBOX	cmd	skip		文档未给出可合成的调用	
+COLUMNBGCOLOR	cmd	skip		文档未给出可合成的调用	
+COLUMNCLEAR	cmd	skip		文档未给出可合成的调用	
+COLUMNCOLOR	cmd	skip		文档未给出可合成的调用	
+COLUMNCREATE	cmd	skip		文档未给出可合成的调用	
+COLUMNDIRECTION	cmd	skip		文档未给出可合成的调用	
+COLUMNMOVE	cmd	skip		文档未给出可合成的调用	
+COLUMNPRINT	cmd	skip		文档未给出可合成的调用	
+COLUMNPRINTL	cmd	skip		文档未给出可合成的调用	
+COLUMNPRINTW	cmd	skip		文档未给出可合成的调用	
+COLUMNRESIZE	cmd	skip		文档未给出可合成的调用	
+COLUMNWAIT	cmd	skip		文档未给出可合成的调用	
+CONTINUE	cmd	skip		文档未给出可合成的调用	
+COPYCHARA	cmd	call	COPYCHARA 0, 3		
+CUPCHECK	cmd	skip		文档未给出可合成的调用	
+CUSTOMDRAWLINE	cmd	call	CUSTOMDRAWLINE -		
+CVARSET	cmd	call	CVARSET CFLAG, 10, 123		
+DATA	cmd	skip		文档未给出可合成的调用	
+DATAFORM	cmd	skip		文档未给出可合成的调用	
+DATALIST	cmd	skip		文档未给出可合成的调用	
+DEBUGCLEAR	cmd	skip		文档未给出可合成的调用	
+DEBUGPRINT	cmd	call	DEBUGPRINT 调试开始：X=		
+DEBUGPRINTFORM	cmd	skip		文档未给出可合成的调用	
+DEBUGPRINTFORML	cmd	skip		文档未给出可合成的调用	
+DEBUGPRINTL	cmd	call	DEBUGPRINTL 现在开始检查变量		
+DELALLCHARA	cmd	call	DELALLCHARA		
+DELCHARA	cmd	call	DELCHARA 2		
+DELDATA	cmd	call	DELDATA 14		
+DO	cmd	skip		可能陷入无限循环	
+DOTRAIN	cmd	skip		文档未给出可合成的调用	
+DRAWLINE	cmd	skip		文档未给出可合成的调用	
+DRAWLINEFORM	cmd	call	DRAWLINEFORM -=-		
+DT_COLUMN_OPTIONS	cmd	skip		文档未给出可合成的调用	
+DUMPRAND	cmd	skip		文档未给出可合成的调用	
+ELSE	cmd	skip		文档未给出可合成的调用	
+ELSEIF	cmd	skip		文档未给出可合成的调用	
+ENCODETOUNI	cmd	call	ENCODETOUNI "あA"		
+ENDCATCH	cmd	skip		文档未给出可合成的调用	
+ENDDATA	cmd	skip		文档未给出可合成的调用	
+ENDFUNC	cmd	skip		文档未给出可合成的调用	
+ENDIF	cmd	skip		文档未给出可合成的调用	
+ENDLIST	cmd	skip		文档未给出可合成的调用	
+ENDNOSKIP	cmd	skip		文档未给出可合成的调用	
+ENDSELECT	cmd	skip		文档未给出可合成的调用	
+EXISTFUNCTION	cmd	skip		文档未给出可合成的调用	
+EXISTSOUND	cmd	skip		文档未给出可合成的调用	
+FLOWINPUT	cmd	skip		需要交互输入	
+FONTBOLD	cmd	call	FONTBOLD		
+FONTITALIC	cmd	skip		文档未给出可合成的调用	
+FONTREGULAR	cmd	skip		文档未给出可合成的调用	
+FONTSTYLE	cmd	call	FONTSTYLE 1 + 2		
+FOR	cmd	call	FOR COUNT, 0, X		
+FORCEKANA	cmd	call	FORCEKANA 1		
+FORCEWAIT	cmd	skip		文档未给出可合成的调用	
+FORCE_BEGIN	cmd	call	FORCE_BEGIN SHOP		
+FORCE_QUIT	cmd	skip		需要交互输入	
+FORCE_QUIT_AND_RESTART	cmd	skip		需要交互输入	
+FSTRJOIN	cmd	skip		文档未给出可合成的调用	
+FTOOLTIP_SETDURATION	cmd	skip		文档未给出可合成的调用	
+FUNC	cmd	skip		文档未给出可合成的调用	
+GDASHSTYLE	cmd	skip		文档未给出可合成的调用	
+GDRAWGWITHROTATE	cmd	skip		文档未给出可合成的调用	
+GDRAWLINE	cmd	skip		文档未给出可合成的调用	
+GDRAWTEXT	cmd	skip		文档未给出可合成的调用	
+GETDISPLAYLINE	cmd	skip		文档未给出可合成的调用	
+GETDOINGFUNCTION	cmd	skip		文档未给出可合成的调用	
+GETMEMORYUSAGE	cmd	skip		文档未给出可合成的调用	
+GETTEXTBOX	cmd	skip		文档未给出可合成的调用	
+GETTEXTSIZE	cmd	skip		本仓库无实现	
+GETTIME	cmd	call	GETTIME		
+GGETFONT	cmd	skip		文档未给出可合成的调用	
+GGETFONTSIZE	cmd	skip		文档未给出可合成的调用	
+GGETPEN	cmd	skip		文档未给出可合成的调用	
+GGETPENWIDTH	cmd	skip		文档未给出可合成的调用	
+GGETTEXTSIZE	cmd	skip		文档未给出可合成的调用	
+GOTO	cmd	skip		文档未给出可合成的调用	
+GOTOFORM	cmd	skip		文档未给出可合成的调用	
+HTML_PRINT	cmd	call	HTML_PRINT "<p align='right'><font color='red'>红色右对齐文本</font></p>"		
+HTML_PRINT_ISLAND	cmd	skip	HTML_PRINT_ISLAND "<p align='right'><font color='#FF0000'>HUD：独立层</font></p>"	会结束/重启程序	
+HTML_PRINT_ISLAND_CLEAR	cmd	skip		会结束/重启程序	
+HTML_TAGSPLIT	cmd	call	HTML_TAGSPLIT "<p align='right'>A<! --comment-->B<font color='red'>C</font></p>"		
+IF	cmd	call	IF X > 100		
+INITRAND	cmd	skip		文档未给出可合成的调用	
+INPUT	cmd	skip		文档未给出可合成的调用	
+INPUTANY	cmd	skip		文档未给出可合成的调用	
+INPUTMOUSEKEY	cmd	skip		需要交互输入	
+INPUTS	cmd	skip		文档未给出可合成的调用	
+INVERTBIT	cmd	skip		文档未给出可合成的调用	
+JUMP	cmd	call	JUMP FOO		
+JUMPFORM	cmd	call	JUMPFORM KOJO_{NO:TARGET}_{SELECTCOM}		
+LCSVISASSI	cmd	skip		本仓库无实现	
+LOADCHARA	cmd	call	LOADCHARA "CHARA_01.dat"		
+LOADDATA	cmd	skip		文档未给出可合成的调用	
+LOADGAME	cmd	skip		文档未给出可合成的调用	
+LOADGLOBAL	cmd	skip		文档未给出可合成的调用	
+LOADVAR	cmd	skip	LOADVAR "vars.dat"	本仓库无实现	
+LOOP	cmd	skip		可能陷入无限循环	
+NEXT	cmd	skip		文档未给出可合成的调用	
+NOSKIP	cmd	skip		文档未给出可合成的调用	
+OCLEARLINE	cmd	skip	OCLEARLINE 1	本仓库无实现	
+ONEBINPUT	cmd	skip		需要交互输入	
+ONEBINPUTS	cmd	skip		需要交互输入	
+ONEINPUT	cmd	skip		需要交互输入	
+ONEINPUTS	cmd	skip		需要交互输入	
+OUTPUTLOG	cmd	call	OUTPUTLOG		
+PICKUPCHARA	cmd	call	PICKUPCHARA 0, 3		
+PLAYBGM	cmd	skip	PLAYBGM "title.mp3"	可能陷入无限循环	
+PLAYSOUND	cmd	call	PLAYSOUND "se_click.wav"		
+POWER	cmd	skip		文档未给出可合成的调用	
+PRINT	cmd	skip	PRINT 请输入数字：	需要交互输入	
+PRINTBUTTON	cmd	skip		文档未给出可合成的调用	
+PRINTBUTTONC	cmd	skip		文档未给出可合成的调用	
+PRINTBUTTONLC	cmd	skip		文档未给出可合成的调用	
+PRINTCD	cmd	skip		文档未给出可合成的调用	
+PRINTCK	cmd	call	PRINTCK "右对齐文本"		
+PRINTCPERLINE	cmd	call	PRINTCPERLINE RESULT:0		
+PRINTDATA	cmd	call	PRINTDATA		
+PRINTDATAD	cmd	skip		文档未给出可合成的调用	
+PRINTDATADL	cmd	skip		文档未给出可合成的调用	
+PRINTDATADW	cmd	skip		文档未给出可合成的调用	
+PRINTDATAK	cmd	skip		文档未给出可合成的调用	
+PRINTDATAKL	cmd	skip		文档未给出可合成的调用	
+PRINTDATAKW	cmd	skip		文档未给出可合成的调用	
+PRINTDATAL	cmd	call	PRINTDATAL		
+PRINTDATAW	cmd	call	PRINTDATAW		
+PRINTFORMCD	cmd	skip		需要交互输入	
+PRINTFORMCK	cmd	skip		需要交互输入	
+PRINTFORMLCD	cmd	skip		需要交互输入	
+PRINTFORMLCK	cmd	skip		需要交互输入	
+PRINTLCD	cmd	skip		需要交互输入	
+PRINTLCK	cmd	skip		需要交互输入	
+PRINTPLAIN	cmd	call	PRINTPLAIN [0] 这里的方括号只是普通文字		
+PRINTPLAINFORM	cmd	skip		文档未给出可合成的调用	
+PRINTSINGLE	cmd	skip	PRINTSINGLE 这一行太长时不会被折到下一行，超出窗口宽度的部分不显示	需要交互输入	
+PRINT_ABL	cmd	call	PRINT_ABL 0		
+PRINT_EXP	cmd	call	PRINT_EXP 0		
+PRINT_IMG	cmd	call	PRINT_IMG "title.png"		
+PRINT_ITEM	cmd	call	PRINT_ITEM		
+PRINT_MARK	cmd	call	PRINT_MARK 0		
+PRINT_PALAM	cmd	call	PRINT_PALAM 0		
+PRINT_RECT	cmd	skip		文档未给出可合成的调用	
+PRINT_SHOPITEM	cmd	skip		文档未给出可合成的调用	
+PRINT_SPACE	cmd	skip		文档未给出可合成的调用	
+PRINT_TALENT	cmd	call	PRINT_TALENT 0		
+PUTFORM	cmd	skip		文档未给出可合成的调用	
+QUIT	cmd	skip		会结束/重启程序	
+QUIT_AND_RESTART	cmd	skip		需要交互输入	
+RANDOMIZE	cmd	call	RANDOMIZE GETTIME()		
+REDRAW	cmd	call	REDRAW 0		
+REF	cmd	skip		本仓库无实现	
+REFBYNAME	cmd	skip		本仓库无实现	
+REMOVEBGIMAGE	cmd	skip		文档未给出可合成的调用	
+REND	cmd	skip		文档未给出可合成的调用	
+REPEAT	cmd	call	REPEAT 10		
+RESETBGCOLOR	cmd	skip		文档未给出可合成的调用	
+RESETCOLOR	cmd	skip		文档未给出可合成的调用	
+RESETDATA	cmd	skip		文档未给出可合成的调用	
+RESETGLOBAL	cmd	skip		文档未给出可合成的调用	
+RESET_STAIN	cmd	call	RESET_STAIN 0		
+RESTART	cmd	skip		可能陷入无限循环	
+RETURN	cmd	skip		文档未给出可合成的调用	
+RETURNF	cmd	skip		文档未给出可合成的调用	
+RETURNFORM	cmd	skip		文档未给出可合成的调用	
+REUSELASTLINE	cmd	skip		文档未给出可合成的调用	
+SAVECHARA	cmd	skip	SAVECHARA "chara_backup", "重要角色的备份", 0, 2	会写盘或改存档	
+SAVEDATA	cmd	skip		文档未给出可合成的调用	
+SAVEGAME	cmd	call	SAVEGAME		
+SAVEGLOBAL	cmd	skip		文档未给出可合成的调用	
+SAVENOS	cmd	call	SAVENOS SAVENOS_COUNT		
+SAVEVAR	cmd	skip	SAVEVAR DAY, MONEY, "savevars.dat", "变量存档"	本仓库无实现	
+SELECTCASE	cmd	call	SELECTCASE X		
+SET	cmd	skip		文档未给出可合成的调用	
+SETBGCOLOR	cmd	call	SETBGCOLOR 0, 0, 128		
+SETBGCOLORBYNAME	cmd	call	SETBGCOLORBYNAME "DarkBlue"		
+SETBGIMAGE	cmd	call	SETBGIMAGE bg_room.png		
+SETBGMVOLUME	cmd	skip		文档未给出可合成的调用	
+SETBIT	cmd	call	SETBIT X, A		
+SETCOLOR	cmd	call	SETCOLOR 255, 128, 0		
+SETCOLORBYNAME	cmd	call	SETCOLORBYNAME "Orange"		
+SETFONT	cmd	skip		文档未给出可合成的调用	
+SETSOUNDVOLUME	cmd	skip		文档未给出可合成的调用	
+SETTEXTBOX	cmd	skip	SETTEXTBOX GETTEXTBOX()	需要交互输入	
+SIF	cmd	call	SIF A > 0		
+SKIPDISP	cmd	skip	SKIPDISP 1	可能陷入无限循环	
+SKIPLOG	cmd	skip	SKIPLOG 1	需要交互输入	
+SORTCHARA	cmd	call	SORTCHARA		
+SPLIT	cmd	call	SPLIT "あい,うえ,,お", ",", LOCALS		
+SPRITEDISPOSEALL	cmd	skip		文档未给出可合成的调用	
+STOPBGM	cmd	skip		依赖音频后端	
+STOPCALLTRAIN	cmd	skip		文档未给出可合成的调用	
+STOPSOUND	cmd	skip		文档未给出可合成的调用	
+STRDATA	cmd	call	STRDATA LOCALS		
+STRJOIN1	cmd	skip		文档未给出可合成的调用	
+STRLEN	cmd	call	STRLEN abc		
+STRLENFORM	cmd	call	STRLENFORM 名字是%CALLNAME:MASTER%		
+STRLENFORMU	cmd	call	STRLENFORMU 名字是%CALLNAME:MASTER%		
+STRLENU	cmd	call	STRLENU あいう		
+SWAP	cmd	skip		文档未给出可合成的调用	
+SWAPCHARA	cmd	skip		文档未给出可合成的调用	
+THROW	cmd	skip		文档未给出可合成的调用	
+TIMES	cmd	skip		文档未给出可合成的调用	
+TINPUT	cmd	skip		需要交互输入	
+TINPUTAWAIT	cmd	skip		文档未给出可合成的调用	
+TINPUTS	cmd	skip		本仓库无实现	
+TONEINPUT	cmd	skip		文档未给出可合成的调用	
+TONEINPUTS	cmd	skip		文档未给出可合成的调用	
+TOOLTIP_CUSTOM	cmd	call	TOOLTIP_CUSTOM 1		
+TOOLTIP_EXTENSION	cmd	skip		依赖 GUI 控件	
+TOOLTIP_FORMAT	cmd	skip		文档未给出可合成的调用	
+TOOLTIP_IMG	cmd	skip		文档未给出可合成的调用	
+TOOLTIP_SETCOLOR	cmd	call	TOOLTIP_SETCOLOR 0x000000, 0xFFFFFF		
+TOOLTIP_SETDELAY	cmd	call	TOOLTIP_SETDELAY 1000		
+TOOLTIP_SETDURATION	cmd	call	TOOLTIP_SETDURATION 5000		
+TOOLTIP_SETFONT	cmd	skip		文档未给出可合成的调用	
+TOOLTIP_SETFONTSIZE	cmd	skip		文档未给出可合成的调用	
+TRYCALL	cmd	call	TRYCALL SHOW_DATA		
+TRYCALLF	cmd	call	TRYCALLF PRINT_ADDITIONAL_INFO		
+TRYCALLFORM	cmd	call	TRYCALLFORM SHOW_DATA_{SELECTCOM}		
+TRYCALLFORMF	cmd	skip		文档未给出可合成的调用	
+TRYCALLLIST	cmd	call	TRYCALLLIST		
+TRYCCALL	cmd	call	TRYCCALL SHOW_DETAIL, 3		
+TRYCCALLFORM	cmd	call	TRYCCALLFORM KOJO_{NO:TARGET}_GREETING		
+TRYCGOTO	cmd	call	TRYCGOTO SKIP_PART		
+TRYCGOTOFORM	cmd	call	TRYCGOTOFORM LABEL_{SELECTCOM}		
+TRYCJUMP	cmd	call	TRYCJUMP SHOW_EXTRA_SCENE, TARGET		
+TRYCJUMPFORM	cmd	call	TRYCJUMPFORM KOJO_{NO:TARGET}_EXTRA_SCENE		
+TRYGOTO	cmd	skip		文档未给出可合成的调用	
+TRYGOTOFORM	cmd	skip		文档未给出可合成的调用	
+TRYGOTOLIST	cmd	call	TRYGOTOLIST		
+TRYJUMP	cmd	call	TRYJUMP SHOW_EXTRA_SCENE, TARGET		
+TRYJUMPFORM	cmd	call	TRYJUMPFORM KOJO_{NO:TARGET}_EXTRA_SCENE		
+TRYJUMPLIST	cmd	call	TRYJUMPLIST		
+TWAIT	cmd	skip		文档未给出可合成的调用	
+UPCHECK	cmd	call	UPCHECK		
+UPDATECHECK	cmd	call	UPDATECHECK		
+VARI	cmd	skip		文档未给出可合成的调用	
+VARS	cmd	skip		文档未给出可合成的调用	
+VARSET	cmd	call	VARSET FLAG, 0		
+VARSIZE	cmd	call	VARSIZE FLAG		
+WAIT	cmd	skip		需要交互输入	
+WAITANYKEY	cmd	skip		文档未给出可合成的调用	
+WEND	cmd	skip		可能陷入无限循环	
+WHILE	cmd	skip		可能陷入无限循环	

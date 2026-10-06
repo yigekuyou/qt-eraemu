@@ -13,13 +13,18 @@
 | `example/` | 可运行的 era 游戏（CSV + ERB），测试载体 |
 | `example/ERB/0N_*.ERB` | 手写测试组（语义断言） |
 | `example/ERB/10_COVERAGE.ERB` | **自动生成**的全函数冒烟覆盖（勿手改） |
+| `example/ERB/35_DOC_SMOKE.ERB` | **自动生成**的文档语义冒烟组（由 `data/doc_smoke.tsv` 渲染，勿手改） |
 | `data/emuera_standard_cmds.txt` | Emuera 原版命令清单（导出自 C#） |
 | `data/emuera_standard_funcs.txt` | Emuera 原版式中函数清单（导出自 C#） |
 | `data/emuera_ee_cmds.txt` | EmueraEE 扩展命令清单（**命令/桩与式中函数都在扩展侧** `src/eraengine/GameProc/ee_extension.cpp` 经注册类 `ExtensionRegistry`（`reg`/`regForm`/`regExpr`）逐一登记；式中函数如 `EXISTFUNCTION`/`GETDOINGFUNCTION`/`GETDISPLAYLINE` 亦在此实现，声明由注册类注入运行期扩展函数表。**扩展系统变量**（`DAYNAME`/`TIMENAME`/`MONEYNAME` 及 `DAY`/`TIME`/`MONEY` 名表）亦在此经 `regVariable`/`regNameTable` 登记进运行期扩展变量表 `system_variables.h`。本文件仍为覆盖组名单来源） |
 | `data/coverage_report.txt` | 覆盖率报告（生成） |
+| `data/doc_smoke.tsv` | 文档语义冒烟的调用清单（经语义复核，`mode=skip` 的条目注明原因；第 6 列为注入输入） |
 | `run_example.sh` | 运行示例（唯一需要的入口） |
 | `export_command_tables.py` | 从 C# 源码导出上述命令清单 |
 | `gen_coverage.py` | 依据清单生成覆盖组 + 覆盖率报告 |
+| `gen_doc_smoke.py` | 从 `data/**/*.md` 的签名与用法合成调用 → 草稿 + 渲染 `35_DOC_SMOKE.ERB` |
+| `merge_doc_smoke.py` | 合并语义复核查出的修正行，回写 `data/doc_smoke.tsv` |
+| `check_doc_smoke.py` | 组 35 的静态校验（块配平/未知语句头/未声明变量/清单一致，**不执行 ERB**） |
 
 ## 快速开始
 
@@ -62,6 +67,7 @@ cmake --build build --target test_cli
 | 31 | **GETCONFIG/GETCONFIGS（emuera.config 取值）**（`31_GETCONFIG.ERB`） |
 | 32 | **通用图像处理（G / SPRITE / CBG 全族 + 真实图像文件 webp）**（`32_IMAGE.ERB`，素材 `example/resources/`；由原「组 32 CSV 精灵偏移」与「组 34 真实图像文件（webp）」合并，作者声明见 `example/resources/README_webp.md`） |
 | 33 | **`END` 是变量（`#DIM END`）不是指令**（`33_END_VARIABLE.ERB`，eraTW 角色移動 死循环回归） |
+| 35 | **文档语义冒烟**（`35_DOC_SMOKE.ERB`：由 `data/` 的 451 篇语义文档逐条生成调用——签名与参数取自文档，会写盘/结束程序/依赖音频 GUI 的条目留 `; SKIP` 注释并注明原因；需交互的条目在清单第 6 列给出要注入的输入。**单跑**：`./test/run_example.sh 35`） |
 
 「全部自动运行」（`./test/run_example.sh` 无参数）依次执行：
 **1–10、14、16、17、23–28、30–33 + 汇总**。
@@ -71,6 +77,7 @@ cmake --build build --target test_cli
 | 组 | 单跑原因 |
 | --- | --- |
 | 11 | 输入族，需 `test_cli` 自动喂输入 |
+| 35 | 文档语义冒烟：需按 `data/doc_smoke.tsv` 第 6 列注入数值/字符串/鼠标（`run_example.sh 35` 已内置序列） |
 | 12 | `BEGIN`：切换流程、不返回 |
 | 13 | `THROW`：**预期**「执行出错」 |
 | 15 | 鼠标/原始输入：`k` 注入 + 超时两条路径 |
@@ -689,6 +696,20 @@ python3 test/export_command_tables.py   # C# 源码 -> data/*.txt
 python3 test/gen_coverage.py            # 生成 10_COVERAGE.ERB + 报告
 python3 test/gen_coverage.py --check    # 只出报告
 ```
+
+## 文档语义冒烟（组 35，依据 `data/` 的 md）
+
+```bash
+python3 test/gen_doc_smoke.py       # 合成草稿 + 渲染 example/ERB/35_DOC_SMOKE.ERB
+python3 test/merge_doc_smoke.py     # 合并复核结果回 data/doc_smoke.tsv（--write 生效）
+python3 test/check_doc_smoke.py     # 静态校验（不执行）
+./test/run_example.sh 35            # 单跑（需注入输入，见下）
+```
+
+* 语义来源是 `data/commands/*.md` 与 `data/functions/*.md`（每条命令/函数的签名、用法示例、
+  副作用与实现现状），**不需要读 C# 源码**；
+* `data/doc_smoke.tsv` 是唯一事实来源，第 6 列写明该条需要 runner 注入的输入；
+* `mode=skip` 的条目在 ERB 里留成 `; SKIP <名字> —— <原因>`，覆盖率仍可见。
 
 命令清单来自：
 

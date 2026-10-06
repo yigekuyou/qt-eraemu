@@ -1,0 +1,69 @@
+SETBGIMAGE	cmd	call	SETBGIMAGE off_norect	
+SETBGMVOLUME	cmd	skip		依赖音频后端：设置 BGM 音量（WMP 播放器单例，无返回值）；本移植为留痕桩，冒烟无可验证行为 —— example 组17 已覆盖
+SETBIT	cmd	call	CVTMP = 0\nSETBIT CVTMP, 3	
+SETCOLOR	cmd	call	SETCOLOR 255, 128, 0\nRESETCOLOR	
+SETCOLORBYNAME	cmd	call	SETCOLORBYNAME "Orange"\nRESETCOLOR	
+SETFONT	cmd	call	SETFONT "ＭＳ ゴシック"	
+SETSOUNDVOLUME	cmd	skip		依赖音频后端：一次性设置 10 个音效声道音量（惰性创建 Sound）；本移植为留痕桩 —— example 组17 已覆盖
+SETTEXTBOX	cmd	skip		依赖 GUI 文本框控件（GUIDE 明列）：整体替换输入框内容，文档形态为式中函数 SETTEXTBOX("文字")；本移植为留痕桩，冒烟无可验证行为
+SIF	cmd	skip		单行条件结构头（SIF + 下一行语句），不能单独作为语句执行——会吞掉组内后续行；由组 3/28 覆盖
+SKIPDISP	cmd	call	SKIPDISP 1\nSKIPDISP 0	
+SKIPLOG	cmd	call	SKIPLOG 1\nSKIPLOG 0	
+SORTCHARA	cmd	call	ADDCHARA 0\nADDCHARA 0\nSORTCHARA NO	
+SPLIT	cmd	call	SPLIT "あい,うえ,,お", ",", LOCALS	
+SPRITEDISPOSEALL	cmd	call	CVTMP = SPRITEDISPOSEALL(0)	
+STOPBGM	cmd	skip		依赖音频后端：停止 BGM 通道（WMP 单例）；本移植为留痕桩 —— example 组17 已覆盖
+STOPCALLTRAIN	cmd	skip		流程控制族（GUIDE 明列，与 CALLTRAIN 成对）：终止 CALLTRAIN 指令队列并回调 @CALLTRAINEND，会打断当前指令流程 —— example 组17 作留痕桩
+STOPSOUND	cmd	skip		依赖音频后端：停止 10 个音效声道；本移植为留痕桩 —— example 组17 已覆盖
+STRDATA	cmd	call	STRDATA LOCALS\nDATA 冒烟候选甲\nDATA 冒烟候选乙\nENDDATA	
+STRJOIN1	cmd	skip		伪名：清单提取时「STRJOINの第1引数」被误粘连（EM 系 readme 文本），文档与发行版 exe 中均无此命令；真实功能为式中函数 STRJOIN
+STRLEN	cmd	call	STRLEN abc	
+STRLENFORM	cmd	call	STRLENFORM 名字是{1 + 2}字	
+STRLENFORMU	cmd	call	STRLENFORMU 名字是{1 + 2}字	
+STRLENU	cmd	call	STRLENU あいう	
+SWAP	cmd	call	CVTMP = 1\nLOCAL:1 = 2\nSWAP CVTMP, LOCAL:1	
+SWAPCHARA	cmd	call	ADDCHARA 0\nADDCHARA 0\nSWAPCHARA 0, 1	
+THROW	cmd	skip		会强制抛运行时错误（CodeEE，错误信息取参数文本）并中断当前执行流，冒烟组将提前终止 —— 由组 13 覆盖
+TIMES	cmd	call	CVTMP = 500\nTIMES CVTMP, 1.25	
+TINPUT	cmd	skip		需要交互：限时等待玩家输入整数并写入 RESULT —— 由组 11 覆盖
+TINPUTAWAIT	cmd	skip		伪名：EM 系 readme「TINPUTとAWAITの挙動変更」一句被误粘连，无此命令；真实命令是 TINPUT 与 AWAIT 两条
+TINPUTS	cmd	skip		需要交互：限时等待玩家输入字符串并写入 RESULTS —— 由组 11 覆盖
+TONEINPUT	cmd	skip		需要交互：限时单字符输入（写 RESULT，无需回车）—— 由组 11 覆盖
+TONEINPUTS	cmd	skip		需要交互：限时单字符字符串输入（写 RESULTS）—— 由组 11 覆盖
+TOOLTIP_CUSTOM	cmd	skip		依赖 GUI：工具提示自绘总开关（WinForms ToolTip.OwnerDraw），冒烟组无工具提示渲染路径 —— 覆盖率报告列为「工具提示需 GUI」
+TOOLTIP_EXTENSION	cmd	skip		伪名：EM 文档站「工具提示功能扩展」的参考页名，不是命令；组内真实命令为 TOOLTIP_CUSTOM/TOOLTIP_SETCOLOR 等
+TOOLTIP_FORMAT	cmd	skip		依赖 GUI：只写控制台 tooltip_format 字段，仅自绘工具提示（需先 TOOLTIP_CUSTOM 1）弹出时生效
+TOOLTIP_IMG	cmd	skip		依赖 GUI 与图像后端：非 0 时把按钮 title 里的整数当 g 图 ID 画进工具提示，需 TOOLTIP_CUSTOM 1 + 鼠标悬停才能体现
+TOOLTIP_SETCOLOR	cmd	skip		依赖 GUI：仅设置工具提示前景/背景色字段，只有弹出 tooltip（TOOLTIP_CUSTOM 1 + 鼠标悬停）时才生效 —— example 组10 仅留痕
+TOOLTIP_SETDELAY	cmd	skip		依赖 GUI：仅设置工具提示弹出延迟字段，只有弹出 tooltip 时才生效 —— example 组10 仅留痕
+TOOLTIP_SETDURATION	cmd	skip		依赖 GUI：仅设置工具提示最大显示时间字段（超 32767 被截断），只有弹出 tooltip 时才生效 —— example 组10 仅留痕
+TOOLTIP_SETFONT	cmd	skip		依赖 GUI：仅设置工具提示字体名字段，绘制端在 tooltip 弹出时才构造 Font（需 TOOLTIP_CUSTOM 1）
+TOOLTIP_SETFONTSIZE	cmd	skip		依赖 GUI：仅设置工具提示字号字段，绘制端在 tooltip 弹出时才构造 Font（需 TOOLTIP_CUSTOM 1）
+TRYCALL	cmd	call	TRYCALL NO_SUCH_FUNC_SMOKE	
+TRYCALLF	cmd	call	TRYCALLF NO_SUCH_METHOD_SMOKE	
+TRYCALLFORM	cmd	call	TRYCALLFORM SHOW_DATA_{1 + 2}	
+TRYCALLFORMF	cmd	call	TRYCALLFORMF NO_SUCH_METHOD_{1 + 2}	
+TRYCALLLIST	cmd	call	TRYCALLLIST\nFUNC NO_SUCH_SMOKE_A\nFUNC NO_SUCH_SMOKE_B\nENDFUNC	
+TRYCCALL	cmd	call	TRYCCALL SHOW_DETAIL_SMOKE, 3\nCATCH\nPRINTL 冒烟：函数不存在，进入 CATCH\nENDCATCH	
+TRYCCALLFORM	cmd	call	TRYCCALLFORM KOJO_{1 + 2}_GREETING\nCATCH\nPRINTL 冒烟：展开后的函数名不存在，进入 CATCH\nENDCATCH	
+TRYCGOTO	cmd	call	TRYCGOTO SKIP_PART_SMOKE\nCATCH\nPRINTL 冒烟：标签不存在，进入 CATCH\nENDCATCH	
+TRYCGOTOFORM	cmd	call	TRYCGOTOFORM LABEL_{1 + 2}\nCATCH\nPRINTL 冒烟：展开后的标签不存在，进入 CATCH\nENDCATCH	
+TRYCJUMP	cmd	call	TRYCJUMP NO_SUCH_FUNC_SMOKE, CVTMP\nCATCH\nPRINTL 冒烟：函数不存在，进入 CATCH\nENDCATCH	
+TRYCJUMPFORM	cmd	call	TRYCJUMPFORM KOJO_{1 + 2}_EXTRA\nCATCH\nPRINTL 冒烟：展开后的函数名不存在，进入 CATCH\nENDCATCH	
+TRYGOTO	cmd	call	TRYGOTO NO_SUCH_LABEL_SMOKE	
+TRYGOTOFORM	cmd	call	TRYGOTOFORM NO_SUCH_LABEL_{1 + 2}	
+TRYGOTOLIST	cmd	call	TRYGOTOLIST\nFUNC $NO_SUCH_SMOKE_LABEL\nENDFUNC	
+TRYJUMP	cmd	call	TRYJUMP NO_SUCH_EXTRA_SCENE, CVTMP	
+TRYJUMPFORM	cmd	call	TRYJUMPFORM KOJO_{1 + 2}_EXTRA_SCENE	
+TRYJUMPLIST	cmd	call	TRYJUMPLIST\nFUNC NO_SUCH_SMOKE_A\nENDFUNC	
+TWAIT	cmd	skip		需要交互：先无条件 ReadAnyKey 等一次按键（源码与文档差异），再进入限时等待；冒烟组无法供应按键
+UPCHECK	cmd	call	ADDCHARA 0\nTARGET = 0\nPALAM:0:0 = 0\nUP:0 = 30\nDOWN:0 = 10\nUPCHECK	
+UPDATECHECK	cmd	skip		依赖网络/外部资源：WebClient 同步访问 GameBase.csv 的「バージョン情報URL」做版本检查（无 URL 返回 3，有新版会弹对话框）；example 的 GameBase.csv 无该键，无可验证行为 —— example 组17 作留痕桩
+VARI	cmd	skip		仅在 setting.json 的 UseScopedVariableInstruction 开启时注册；默认关闭时写 VARI 会在解析期报「現在の設定では使用できません」（覆盖率报告明列），example 未开启该配置
+VARS	cmd	skip		与 VARI 共用开关（setting.json 的 UseScopedVariableInstruction）；默认关闭时解析期即报错，example 未开启该配置
+VARSET	cmd	call	VARSET FLAG, 0	
+VARSIZE	cmd	call	VARSIZE FLAG	
+WAIT	cmd	skip		需要交互：等待回车继续（冒烟组无法供应按键）—— 由组 11 覆盖
+WAITANYKEY	cmd	skip		需要交互：等待任意键/鼠标点击 —— 由组 11 覆盖
+WEND	cmd	skip		WHILE～WEND 循环的终点标记，不能单独执行（须与 WHILE 成对出现）—— 由组 3/28 覆盖
+WHILE	cmd	skip		WHILE～WEND 循环头，不能单独执行（会把组内后续行吞进循环体）—— 由组 3/28 覆盖

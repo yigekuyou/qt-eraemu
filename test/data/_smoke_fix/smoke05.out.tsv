@@ -1,0 +1,74 @@
+ONEBINPUT	cmd	skip		需要交互：等待按键输入（单字符即自动提交，结果代入 RESULT），冒烟组无法供应按键 —— 由组 11 覆盖
+ONEBINPUTS	cmd	skip		需要交互：等待按键输入（字符串版，结果代入 RESULTS），冒烟组无法供应按键 —— 由组 11 覆盖
+ONEINPUT	cmd	skip		需要交互：等待按键输入（单字符自动提交，结果代入 RESULT:0）—— 由组 11 覆盖
+ONEINPUTS	cmd	skip		需要交互：等待按键输入（字符串版，结果代入 RESULTS:0）—— 由组 11 覆盖
+OUTPUTLOG	cmd	skip		会写盘：把控制台日志输出到 emuera.log（文档另载函数形式 OUTPUTLOG("文件名")，同样落盘）—— 组 9 覆盖
+PICKUPCHARA	cmd	call	ADDCHARA 0\nADDCHARA 0\nPICKUPCHARA 0, 1	
+PLAYBGM	cmd	skip		依赖音频后端：循环播放 sound/ 下音频（example/sound/bgm01.wav 存在，会真实出声）—— 由组 30 覆盖
+PLAYSOUND	cmd	skip		依赖音频后端：播放 sound/ 下音频（example/sound/se01.wav 存在，会真实出声）—— 由组 30 覆盖
+POWER	cmd	call	POWER CVTMP, 2, 10	
+PRINT	cmd	call	PRINT 冒烟：PRINT 输出行内原样文本\nPRINTL	
+PRINTBUTTON	cmd	call	PRINTBUTTON "[0] 冒烟按钮", 0\nPRINTL	
+PRINTBUTTONC	cmd	call	PRINTBUTTONC "[0] 冒烟右对齐按钮", 0\nPRINTL	
+PRINTBUTTONLC	cmd	call	PRINTBUTTONLC "[0] 冒烟左对齐按钮", 0\nPRINTL	
+PRINTCD	cmd	call	PRINTCD "冒烟：默认色右对齐"\nPRINTL	
+PRINTCK	cmd	call	PRINTCK "冒烟：右对齐文本"\nPRINTL	
+PRINTCPERLINE	cmd	call	PRINTCPERLINE CVTMP	
+PRINTDATA	cmd	call	PRINTDATA\nDATA 冒烟候选甲\nDATA 冒烟候选乙\nENDDATA	
+PRINTDATAD	cmd	call	PRINTDATAD\nDATA 冒烟候选甲\nDATA 冒烟候选乙\nENDDATA	
+PRINTDATADL	cmd	call	PRINTDATADL\nDATA 冒烟候选甲\nDATA 冒烟候选乙\nENDDATA	
+PRINTDATADW	cmd	skip		W 后缀＝显示后换行并等待回车（等待输入），冒烟组自动运行无法供应按键（同族 W 变体由组 10/14 调用）
+PRINTDATAK	cmd	call	PRINTDATAK\nDATA 冒烟候选甲\nDATA 冒烟候选乙\nENDDATA	
+PRINTDATAKL	cmd	call	PRINTDATAKL\nDATA 冒烟候选甲\nDATA 冒烟候选乙\nENDDATA	
+PRINTDATAKW	cmd	skip		W 后缀＝显示后换行并等待回车（等待输入），冒烟组自动运行无法供应按键（同族 W 变体由组 10/14 调用）
+PRINTDATAL	cmd	call	PRINTDATAL\nDATA 冒烟候选甲\nDATA 冒烟候选乙\nENDDATA	
+PRINTDATAW	cmd	skip		W 后缀＝显示后换行并等待回车（等待输入），冒烟组无法供应按键 —— 由组 14 覆盖
+PRINTFORMCD	cmd	call	PRINTFORMCD 冒烟：{1 + 2} 默认色右对齐\nPRINTL	
+PRINTFORMCK	cmd	call	PRINTFORMCK 冒烟：{1 + 2} 右对齐\nPRINTL	
+PRINTFORMLCD	cmd	call	PRINTFORMLCD 冒烟：{1 + 2} 默认色左对齐\nPRINTL	
+PRINTFORMLCK	cmd	call	PRINTFORMLCK 冒烟：{1 + 2} 左对齐\nPRINTL	
+PRINTLCD	cmd	call	PRINTLCD "冒烟：默认色左对齐"\nPRINTL	
+PRINTLCK	cmd	call	PRINTLCK "冒烟：左对齐文本"\nPRINTL	
+PRINTPLAIN	cmd	call	PRINTPLAIN [0] 这里的方括号只是普通文字\nPRINTL	
+PRINTPLAINFORM	cmd	call	PRINTPLAINFORM 第{1 + 2}项 [0] 不是按钮\nPRINTL	
+PRINTSINGLE	cmd	call	PRINTSINGLE 冒烟：PRINTSINGLE 单行输出，超出宽度不折行	
+PRINT_ABL	cmd	call	ADDCHARA 0\nPRINT_ABL 0	
+PRINT_EXP	cmd	call	ADDCHARA 0\nPRINT_EXP 0	
+PRINT_IMG	cmd	call	PRINT_IMG "offset_atlas.png"\nPRINTL	
+PRINT_ITEM	cmd	call	PRINT_ITEM	
+PRINT_MARK	cmd	call	ADDCHARA 0\nPRINT_MARK 0	
+PRINT_PALAM	cmd	call	ADDCHARA 0\nPRINT_PALAM 0	
+PRINT_RECT	cmd	call	PRINT_RECT 20\nPRINTL	
+PRINT_SHOPITEM	cmd	call	PRINT_SHOPITEM	
+PRINT_SPACE	cmd	call	PRINT_SPACE 10\nPRINTL	
+PRINT_TALENT	cmd	call	ADDCHARA 0\nPRINT_TALENT 0	
+PUTFORM	cmd	call	PUTFORM 冒烟：PUTFORM 追加文本 {1 + 2}	
+QUIT	cmd	skip		会结束程序：把控制台置为退出状态，本组后续行不再执行 —— 组 12 覆盖
+QUIT_AND_RESTART	cmd	skip		会重启程序，且执行时先插入一次回车等待（交互 + 破坏流程）—— 组 12c 覆盖
+RANDOMIZE	cmd	call	RANDOMIZE GETTIME()	
+REDRAW	cmd	call	REDRAW 0\nREDRAW 1	
+REF	cmd	skip		本仓库无实现（文档「语义」：ver1.815 起禁用，解析期即报「書式が間違っています」，执行体抛 NotImplCodeEE）
+REFBYNAME	cmd	skip		本仓库无实现（与 REF 同批禁用；文档「语义」：任何写法都在参数解析阶段报「書式が間違っています」）
+REMOVEBGIMAGE	cmd	skip		需先用 SETBGIMAGE 注册存在的大写背景图名；example 无背景图资源，对未注册名字调用会抛 .NET ArgumentOutOfRangeException（文档「语义」明示）
+REND	cmd	skip		REPEAT～REND 循环的结束关键字，不能单独使用（须与 REPEAT 成对）—— 由组 3/28 覆盖
+REPEAT	cmd	skip		循环结构头（REPEAT～REND 必须成对，属结构关键字）—— 由组 3/28 覆盖
+RESETBGCOLOR	cmd	call	RESETBGCOLOR	
+RESETCOLOR	cmd	call	RESETCOLOR	
+RESETDATA	cmd	skip		破坏性：删除全部已登录角色并把通常/局部变量清零（会破坏其它组共享状态）—— 组 8 覆盖
+RESETGLOBAL	cmd	skip		破坏性：把 GLOBAL 全清零、GLOBALS 清空（其它组依赖的全局状态随之丢失）—— 组 9 覆盖
+RESET_STAIN	cmd	call	ADDCHARA 0\nRESET_STAIN 0	
+RESTART	cmd	skip		会改变控制流：跳回当前函数第一行（无退出路径时死循环）—— 组 12b 覆盖
+RETURN	cmd	skip		函数返回指令：会立刻结束当前函数（冒烟组将提前终止）—— 组 4/28 覆盖
+RETURNF	cmd	skip		#FUNCTION/#FUNCTIONS 专用返回指令，需嵌入被调用函数体执行 —— 组 4/27 覆盖
+RETURNFORM	cmd	skip		返回指令（FORM 变体），在当前位置结束当前函数 —— 组 4 覆盖
+REUSELASTLINE	cmd	call	PRINT 冒烟：将被 REUSELASTLINE 替换的一行\nREUSELASTLINE 冒烟：REUSELASTLINE 覆盖上一行\nPRINTL	
+SAVECHARA	cmd	skip		会写盘：把角色保存为角色存档 .dat（且各角色编号必须已登录）—— 组 9 覆盖
+SAVEDATA	cmd	skip		会写盘：把当前状态写入存档文件（第 1 参数为槽位号）—— 组 9 覆盖
+SAVEGAME	cmd	skip		呼出标准存档界面（GUI + 输入选槽位）并写盘；文档明示只能在 SHOP 等允许存档的流程中调用，冒烟组语境会报错终止
+SAVEGLOBAL	cmd	skip		会写盘：把 GLOBAL/GLOBALS 写入存档目录的 global.sav —— 组 9 覆盖
+SAVENOS	cmd	call	SAVENOS CVTMP	
+SAVEVAR	cmd	skip		本仓库无实现（文档「语义」：执行即抛「未实现」错误并终止脚本；设计上还会写盘）
+SELECTCASE	cmd	skip		多路分支结构头（SELECTCASE～CASE～CASEELSE～ENDSELECT）—— 由组 3/28 覆盖
+SET	cmd	skip		不是可书写的命令：文档明示 funcDic 无 SET 键，写 SET 会被当普通赋值行、解析左值失败；赋值语义由组 1/28 覆盖
+SETBGCOLOR	cmd	call	SETBGCOLOR 0, 0, 128\nRESETBGCOLOR	
+SETBGCOLORBYNAME	cmd	call	SETBGCOLORBYNAME "DarkBlue"\nRESETBGCOLOR	

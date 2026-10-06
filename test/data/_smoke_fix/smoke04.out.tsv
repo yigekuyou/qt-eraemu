@@ -1,0 +1,74 @@
+DELCHARA	cmd	call	ADDCHARA 0\nDELCHARA 0	
+DELDATA	cmd	skip		会删除存档目录中该编号的存档文件（改存档，GUIDE 明列 DELDATA）；冒烟组不写盘不删档，example 也无法保证该编号存在
+DO	cmd	skip		DO～LOOP 循环的起始结构关键字，不能单独执行（会把组内后续行吞进循环体）；由组 3/28 覆盖
+DOTRAIN	cmd	skip		只能在 @EVENTTRAIN/@SHOW_STATUS/@SHOW_USERCOM/@USERCOM/@EVENTCOMEND 及其中调用的函数内使用，其它系统状态下执行抛 CodeEE（文档「语义」明示）；由组 19 覆盖
+DRAWLINE	cmd	call	DRAWLINE	
+DRAWLINEFORM	cmd	call	DRAWLINEFORM -=-	
+DT_COLUMN_OPTIONS	cmd	skip		文档「备注」写明移植版未实现本命令；且需先 DT_CREATE 建表、列须已加入，而 DT_* 函数族在文档集中无条目，example 里无法构造前置状态
+DUMPRAND	cmd	call	DUMPRAND	
+ELSE	cmd	skip		IF～ENDIF 的分支关键字，不能单独作为语句执行（会吞掉后续行）；由组 3/28 覆盖
+ELSEIF	cmd	skip		IF～ENDIF 的分支关键字，不能单独作为语句执行；由组 3/28 覆盖
+ENCODETOUNI	func	call	CVTMP = ENCODETOUNI("AあB", 1)	
+ENDCATCH	cmd	skip		TRYC～CATCH～ENDCATCH 结构的终点标记，运行期空操作、须嵌入结构；由组 5 覆盖
+ENDDATA	cmd	skip		PRINTDATA/STRDATA 块的终点标记，只有装载期语义（PARTIAL），不能单独执行；由组 23 覆盖
+ENDFUNC	cmd	skip		TRYCALLLIST/TRYJUMPLIST/TRYGOTOLIST 块的终点标记，不能单独执行；由组 5 覆盖
+ENDIF	cmd	skip		IF 块的终点标记，运行期空操作、须与 IF 配对；由组 3/28 覆盖
+ENDLIST	cmd	skip		DATALIST 块的终点标记，只有装载期语义（PARTIAL），不能单独执行；由组 23 覆盖
+ENDNOSKIP	cmd	call	NOSKIP\nENDNOSKIP	
+ENDSELECT	cmd	skip		SELECTCASE 块的终点标记，运行期空操作、须嵌入结构；由组 3/28 覆盖
+EXISTFUNCTION	cmd	call	CVTMP = EXISTFUNCTION("MY_CHECK_FUNC")	
+EXISTSOUND	cmd	call	CVTMP = EXISTSOUND("se01.wav")	
+FLOWINPUT	cmd	skip		为系统流程输入预设默认值/左键视为回车等选项（GUIDE 归入需交互族）；且标志设置后不复位，会污染组 11 等后续系统流程输入
+FONTBOLD	cmd	call	FONTBOLD	
+FONTITALIC	cmd	call	FONTITALIC	
+FONTREGULAR	cmd	call	FONTREGULAR	
+FONTSTYLE	cmd	call	FONTSTYLE 1 + 2	
+FOR	cmd	skip		FOR～NEXT 的循环头，须与 NEXT 配对，单独执行会把组内后续行吞进循环体；由组 3/28 覆盖
+FORCEKANA	cmd	call	FORCEKANA 1	
+FORCEWAIT	cmd	skip		等待玩家按回车且不可被右键/快进跳过（文档「语义」），需要交互输入；由组 11 覆盖
+FORCE_BEGIN	cmd	skip		破坏流程：绕过 __CAN_BEGIN__ 检查强制切换系统流程且不返回；GUIDE 明列 FORCE_*；由组 18 覆盖
+FORCE_QUIT	cmd	skip		不等待输入立即结束游戏并退出程序（文档「语义」）；GUIDE 明列 FORCE_*
+FORCE_QUIT_AND_RESTART	cmd	skip		不等待输入立即结束游戏并重启程序（文档「语义」）；GUIDE 明列 FORCE_*
+FSTRJOIN	cmd	skip		伪名：Shift-JIS 全角冒号「：」被误切成 F 而得到的名字，任何发行版都无此命令（文档「备注」）；真实命令为式中函数 STRJOIN
+FTOOLTIP_SETDURATION	cmd	skip		伪名：Shift-JIS 全角冒号「：」被误切成 F 得到的名字，任何发行版都无此命令（文档「备注」）；真实命令为 TOOLTIP_SETDURATION，且工具提示依赖 GUI 控件
+FUNC	cmd	skip		只能写在 TRYCALLLIST/TRYJUMPLIST/TRYGOTOLIST 与 ENDFUNC 之间作为候选列表项，不能单独执行；由组 5 覆盖
+GDASHSTYLE	cmd	call	CVTMP = GCREATE(430, 300, 100)\nCVTMP = GSETPEN(430, 4278190335, 3)\nCVTMP = GDASHSTYLE(430, 2, 2)	
+GDRAWGWITHROTATE	cmd	call	CVTMP = GCREATE(431, 200, 100)\nCVTMP = GCREATE(432, 100, 200)\nCVTMP = GFILLRECTANGLE(431, 0, 0, 200, 100)\nCVTMP = GDRAWGWITHROTATE(432, 431, 90, 50, 50)	
+GDRAWLINE	cmd	call	CVTMP = GCREATE(433, 300, 200)\nCVTMP = GSETPEN(433, 4294901760, 2)\nCVTMP = GDRAWLINE(433, 10, 10, 290, 190)	
+GDRAWTEXT	cmd	call	CVTMP = GCREATE(434, 300, 100)\nCVTMP = GSETFONT(434, "MS Gothic", 30)\nCVTMP = GSETBRUSH(434, 4294901760)\nCVTMP = GDRAWTEXT(434, "こんにちは", 10, 20)	
+GETDISPLAYLINE	cmd	call	PRINTL 冒烟：GETDISPLAYLINE 取已显示行\nCVTMP_S = GETDISPLAYLINE(0)	
+GETDOINGFUNCTION	cmd	call	CVTMP_S = GETDOINGFUNCTION()	
+GETMEMORYUSAGE	cmd	call	CVTMP = GETMEMORYUSAGE()	
+GETTEXTBOX	cmd	call	CVTMP_S = GETTEXTBOX()	
+GETTEXTSIZE	cmd	skip		本仓库无实现：EE readme 该条目实为 GETTEXTBOX 的笔误（文档「备注」证据链），名字不存在；GUIDE 明列。需要文本框内容请用 GETTEXTBOX
+GETTIME	cmd	call	GETTIME	
+GGETFONT	cmd	call	CVTMP = GCREATE(435, 100, 100)\nCVTMP = GSETFONT(435, "MS Gothic", 100)\nCVTMP_S = GGETFONT(435)	
+GGETFONTSIZE	cmd	call	CVTMP = GCREATE(436, 100, 100)\nCVTMP = GSETFONT(436, "MS Gothic", 100)\nCVTMP = GGETFONTSIZE(436)	
+GGETPEN	cmd	call	CVTMP = GCREATE(437, 100, 100)\nCVTMP = GSETPEN(437, 4278255360, 5)\nCVTMP = GGETPEN(437)	
+GGETPENWIDTH	cmd	call	CVTMP = GCREATE(438, 100, 100)\nCVTMP = GSETPEN(438, 4278255360, 5)\nCVTMP = GGETPENWIDTH(438)	
+GGETTEXTSIZE	cmd	call	GGETTEXTSIZE "USA", "Arial", 150	
+GOTO	cmd	skip		同函数内 $ 标签跳转且不返回：目标标签须存在于本函数，执行后组内后续行不再执行；由组 3/21 覆盖
+GOTOFORM	cmd	skip		FORM 版标签跳转（运行期求值标签名）且不返回，会中断冒烟组后续条目；由组 3 覆盖
+HTML_PRINT	cmd	call	HTML_PRINT "<p align='right'><font color='red'>红色右对齐文本</font></p>"	
+HTML_PRINT_ISLAND	cmd	skip		文档「备注」写明移植版未实现本命令；输出到与正文独立的 HTML 岛层，依赖 GUI 渲染与重绘
+HTML_PRINT_ISLAND_CLEAR	cmd	skip		文档「备注」写明移植版未实现本命令；且需先由 HTML_PRINT_ISLAND 建立岛层，无独立可验证的行为
+HTML_TAGSPLIT	cmd	call	HTML_TAGSPLIT "<p align='right'>A<! --comment-->B<font color='red'>C</font></p>"	
+IF	cmd	skip		IF～ENDIF 复合语句头，须与 ENDIF 配对，单独执行会把组内后续行吞进分支；由组 3/28 覆盖
+INITRAND	cmd	call	DUMPRAND\nINITRAND	
+INPUT	cmd	skip		等待玩家输入数值，需要交互输入；由组 11 覆盖
+INPUTANY	cmd	skip		等待整数或字符串输入（可点按钮），需要交互输入；GUIDE 明列；由组 11 覆盖
+INPUTMOUSEKEY	cmd	skip		等待一次鼠标/按键输入，不传限制时间时无限等待；需要交互输入；GUIDE 明列；由组 15 覆盖
+INPUTS	cmd	skip		等待玩家输入字符串，需要交互输入；由组 11 覆盖
+INVERTBIT	cmd	call	CVTMP = 0\nINVERTBIT CVTMP, 3	
+JUMP	cmd	skip		跳转到其它函数且不保留返回点（目标中 RETURN 等于本函数 RETURN），组内后续条目不再执行；由组 4 覆盖
+JUMPFORM	cmd	skip		FORM 版函数跳转且不返回，会中断冒烟组后续条目；由组 4/14 覆盖
+LCSVISASSI	cmd	skip		无任何文档收录（两套中文文档、EE readme/changelog、在线文档均无），本仓库无实现，语义未确证；GUIDE 明列
+LOADCHARA	cmd	skip		存档系：从存档目录的 chara 子目录读取角色并追加到角色列表，改变全局角色状态；成功路径需 SAVECHARA 写出的 .dat 文件（冒烟组不写盘）；GUIDE 明列；由组 9 覆盖
+LOADDATA	cmd	skip		存档系：读取存档编号的数据，失败会出错终止，且读档改变全局状态；GUIDE 明列；由组 9 覆盖
+LOADGAME	cmd	skip		呼出标准读档界面（GUI 交互 + 流程切换），只能在可存读档状态使用；GUIDE 明列；由组 9 覆盖
+LOADGLOBAL	cmd	skip		存档系：从全局存档读取 GLOBAL/GLOBALS，会覆盖全局变量而影响其它组；GUIDE 明列；由组 9 覆盖
+LOADVAR	cmd	skip		本仓库无实现：命令虽已注册，执行时直接抛「未实现」异常（文档「备注」写明）；GUIDE 明列
+LOOP	cmd	skip		DO～LOOP 的循环判定行，须与 DO 配对（单独出现会按缺配对处理）；由组 3/28 覆盖
+NEXT	cmd	skip		FOR～NEXT 的循环终点，须与 FOR 配对；由组 3/28 覆盖
+NOSKIP	cmd	call	NOSKIP\nENDNOSKIP	
+OCLEARLINE	cmd	skip		本仓库无实现：两套中文文档、EE readme/changelog、在线文档均未收录，无权威签名与语义（文档「备注」）；GUIDE 明列；删除已显示行的行为由组 16 覆盖

@@ -1,0 +1,11 @@
+ONEINPUTS	cmd	call	ONEINPUTS		1 个字符串：s a（单字符输入即自动提交，结果代入 RESULTS:0）
+PRINTDATADW	cmd	call	PRINTDATADW\nDATA 冒烟候选甲\nDATA 冒烟候选乙\nENDDATA		1 个数值（回车确认，填 0 即可；W＝显示后换行再等一次回车）
+PRINTDATAKW	cmd	call	PRINTDATAKW\nDATA 冒烟候选甲\nDATA 冒烟候选乙\nENDDATA		1 个数值（回车确认，填 0 即可；W＝显示后换行再等一次回车）
+PRINTDATAW	cmd	call	PRINTDATAW\nDATA 冒烟候选甲\nDATA 冒烟候选乙\nENDDATA		1 个数值（回车确认，填 0 即可；W＝显示后换行再等一次回车）
+TINPUT	cmd	call	TINPUT 5000, 100		1 个数值（限时 5 秒内输入，如 7；未喂入则超时取默认值 100）
+TINPUTS	cmd	call	TINPUTS 5000, "无名氏"		1 个字符串：s abc（限时 5 秒内输入；未喂入则超时取默认值“无名氏”）
+TONEINPUT	cmd	call	TONEINPUT 3000, 0		1 个数值（单字符输入即自动提交，如 7；未喂入则 3 秒后超时取默认值 0）
+TONEINPUTS	cmd	call	TONEINPUTS 3000, "z"		1 个字符串：s q（单字符输入即自动提交；未喂入则 3 秒后超时取默认值 z）
+TWAIT	cmd	call	TWAIT 3000, 0		2 个数值：先喂 0（实现里限时等待前先做一次无条件 ReadAnyKey 等按键，回车确认）；再喂 0（限时等待，输入接收标志=0，有输入即提前继续）
+WAIT	cmd	call	WAIT		1 个数值（回车确认，填 0 即可）
+WAITANYKEY	cmd	call	WAITANYKEY		1 个数值（任意键，填 0 即可；亦可用 k 1 10 10 1 0 注入鼠标左键点击）

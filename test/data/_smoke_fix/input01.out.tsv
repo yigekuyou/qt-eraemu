@@ -1,0 +1,12 @@
+AWAIT	cmd	call	AWAIT 50	文档「语义/用法」：带 <时间> 参数即等待该毫秒数后继续，不等待输入（参数 0..10000，省略/为 0 才走控制台默认等待行为）；组 11 已按 AWAIT 50 形态自动跑通	无需注入：AWAIT 50 等满 50ms 自动继续；若移植仍把 AWAIT 当「等待键」实现，则备 1 个数值 0
+BINPUT	cmd	call	PRINTBUTTON "[0] 冒烟：BINPUT 确认", 0\nPRINTBUTTON "[1] 冒烟：BINPUT 取消", 1\nBINPUT 0	文档「用法」：先 PRINTBUTTON 把候选值按钮化，再 BINPUT（只接受已按钮化的值）；本行给默认值 0，画面无按钮时按 v31fix 不等待直接取默认	1 个数值：0（须命中画面已按钮化的 0/1 → RESULT=0；该命令会强制换行刷新后再扫按钮。移植若仍按 15_MOUSE.ERB 的「输入族桩」处理则不消费此值）
+BINPUTS	cmd	call	PRINTBUTTON "[A] 冒烟：BINPUTS 甲", "A"\nPRINTBUTTON "[B] 冒烟：BINPUTS 乙", "B"\nBINPUTS "A"	文档「用法」：字符串按钮版，第 1 参数为 FORM 字符串默认值（本行 "A"）；无按钮时不等待直接取默认	1 个字符串：s A（须命中已按钮化的字符串 "A"/"B" → RESULTS="A"；键盘输入也须与按钮值一致，否则被弹回重等）
+FLOWINPUT	cmd	call	CVTMP = FLOWINPUT(0, 1, 1)	文档「签名/备注」：EE readme 为命令形态，本仓库实现为式中函数（有括号、恒返回 0），只置 Process.flowinput* 标志、本身不等待输入；标志不复位，故只能排在其它系统流程输入之后（组 35 在菜单 0 流程中恰为最后）	无需注入：调用即返回 0，不消费输入。若移植只登记了命令桩，可退化为 readme 形态 FLOWINPUT 0, 1, 1
+FORCEWAIT	cmd	call	FORCEWAIT	文档「语义」：等一次回车，且该等待不可被右键/快进跳过（执行时强制解除跳过 StopMesskip）；只认回车键、无参数——组 11 已用填充值跑通	1 个数值：0（当作一次回车确认）
+INPUT	cmd	call	INPUT 0	文档「用法」：INPUT 0 —— 带默认值，空输入时采用 0（结果写入 RESULT）	1 个数值：7（输入值 → RESULT；若直接回车/空输入则取默认 0）
+INPUTANY	cmd	call	INPUTANY	文档「语义」：无参数、无默认值；整数输入 → RESULT、字符串输入 → RESULTS，另一者保持原值	1 个数值：7（可解析为整数 → RESULT；改喂 s 甲 则走字符串分支 → RESULTS，二者取一。不喂会一直等）
+INPUTMOUSEKEY	cmd	call	INPUTMOUSEKEY 0	文档「用法」：参数为限制毫秒数，0/负值/省略＝无时限（会一直等）；带时限时超时自动继续；不可被消息快进跳过	1 次鼠标注入：k 1 10 10 1 0（type=1 左键、坐标 10,10；与 run_example.sh 组 15 / 15_MOUSE.ERB 同形。本行参数 0 无时限，缺此注入会挂起）
+INPUTS	cmd	call	INPUTS 冒烟默认名	文档「用法」：INPUTS 冒烟默认名 —— 第 1 参数为 FORM 字符串默认值，空输入时采用（结果写入 RESULTS）	1 个字符串：s 冒烟名字（→ RESULTS；若直接回车/空输入则取默认「冒烟默认名」）
+ONEBINPUT	cmd	call	PRINTBUTTON "[0] 冒烟：ONEBINPUT 确认", 0\nPRINTBUTTON "[1] 冒烟：ONEBINPUT 取消", 1\nONEBINPUT 0	文档「语义/备注」：BINPUT 的单字符限定版（OneInput：只取首字符、按下即提交），参数与按钮扫描、默认值回退均同 BINPUT；两套中文文档与 EE readme 均未收录、语义据源码推定 —— 移植若未注册此名需回退 skip	1 个数值：0（单字符即自动提交，须命中已按钮化的 0/1 → RESULT=0；多字符只取首位）
+ONEBINPUTS	cmd	call	PRINTBUTTON "[A] 冒烟：ONEBINPUTS 甲", "A"\nONEBINPUTS "A"	文档「语义/备注」：BINPUTS 的单字符限定版（OneInput，字符串按钮版；只取首字符即提交），参数与按钮扫描同 BINPUTS；语义据源码推定 —— 移植若未注册此名需回退 skip	1 个字符串：s A（只取首字符且自动提交，须命中已按钮化字符串 "A" → RESULTS="A"）
+ONEINPUT	cmd	call	ONEINPUT	文档「用法」：ONEINPUT —— 仅接受一个字符、无需回车即自动进入下一步，结果代入 RESULT:0（粘贴多位只取第一位）	1 个数值：7（单字符自动提交 → RESULT:0）

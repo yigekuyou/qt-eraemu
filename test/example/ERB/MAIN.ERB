@@ -49,6 +49,7 @@ PRINTL  [30] 音频·图片（用命令随机生成素材）
 PRINTL  [31] GETCONFIG/GETCONFIGS（emuera.config 取值）
 PRINTL  [32] 通用图像处理（G/SPRITE/CBG + 真实图像文件 webp）
 PRINTL  [33] END 是变量（#DIM END）不是指令
+PRINTL  [35] 文档语义冒烟（由 test/data 的 md 生成·需注入输入）
 PRINTL  [-1] 退出
 DRAWLINE
 PRINTL 请输入编号（自动化时输入 0）
@@ -103,6 +104,7 @@ SELECTCASE RESULT
 		NONG += RESULT
 		CALL TEST_END_VARIABLE
 		NONG += RESULT
+		; 组35（文档语义冒烟）需注入字符串与鼠标输入，不进自动路径：./test/run_example.sh 35
 		CALL TEST_SUMMARY, NONG
 		QUIT
 	CASE 1
@@ -202,6 +204,10 @@ SELECTCASE RESULT
 		QUIT
 	CASE 33
 		CALL TEST_END_VARIABLE
+		CALL TEST_SUMMARY, RESULT
+		QUIT
+	CASE 35
+		CALL TEST_DOC_SMOKE
 		CALL TEST_SUMMARY, RESULT
 		QUIT
 	CASE -1

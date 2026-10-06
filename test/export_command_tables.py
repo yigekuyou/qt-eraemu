@@ -91,10 +91,19 @@ def enum_members(tree: pathlib.Path) -> set[str]:
 
 
 def creator_funcs(tree: pathlib.Path) -> set[str]:
+    """式中函数名：两种写法都要认。
+
+    - 经典布局：`methodList["NAME"] = new XMethod()`
+    - 重构布局：字典初始化 `["NAME"] = new XMethod()`（Creator.cs 的 methodList 表）
+    只认 methodList 会漏掉重构版新增的 EM/Emuera.NET 函数（DT_*/XML_*/MAP_*/ENUM*/…）。
+    """
     p = find(tree, CREATOR_REL)
     if p is None:
         return set()
-    return set(re.findall(r'methodList\["([A-Z_0-9]+)"\]', read_text(p)))
+    src = read_text(p)
+    names = set(re.findall(r'methodList\["([A-Z_0-9]+)"\]', src))
+    names |= set(re.findall(r'^\s*\["([A-Z_0-9]+)"\]\s*=\s*new\s+[A-Za-z_0-9]+Method\s*\(', src, re.M))
+    return names
 
 
 def export_standard_cmds() -> list[str]:

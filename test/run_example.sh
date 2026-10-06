@@ -61,6 +61,10 @@ elif [ "$SELECTION" = "21" ]; then
     # GOTO 标签作用域组：菜单选 21，@CHOICE_REPLICA 先喂 3（越界 ->
     # CASEELSE 惩罚 -> GOTO 回本函数 $INPUT_LOOP），再喂 1（合法 -> 返回 1）
     SCRIPT="21,3,1"
+elif [ "$SELECTION" = "35" ]; then
+    # 文档语义冒烟组：按 data/doc_smoke.tsv 第 6 列的注入序列喂入
+    # （数值 / `s 字符串` / `k` 鼠标；顺序=清单执行顺序，勿随意改动）
+    SCRIPT="35,0,0,s A,0,7,7,k 1 10 10 1 0,s 冒烟名字,0,s A,7,s a,0,0,0,7,s abc,7,s q,0,0,0,0"
 elif [ "$SELECTION" = "22" ]; then
     # MAP 绘制复现组（eraTW DRAW_MAP 逐字符热路径）：无输入；
     # 帧预算放宽到 0（不限）保证 21 张图画完并出汇总。

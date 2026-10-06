@@ -270,6 +270,7 @@ void SystemStateMachine::setWaitInput() {
     m_atFloor = true;
     if (m_host.waitInput) m_host.waitInput();
     emit inputRequested(m_state->getSystemState());
+    emit inputKindRequested(QStringLiteral("INPUT"));
     m_state->requestWaitSystemInput();
 }
 
@@ -277,6 +278,7 @@ void SystemStateMachine::setWait() {
     m_atFloor = true;
     if (m_host.readAnyKey) m_host.readAnyKey();
     emit inputRequested(m_state->getSystemState());
+    emit inputKindRequested(QStringLiteral("ANYKEY"));
     m_state->requestWaitSystemInput();
 }
 
@@ -575,6 +577,7 @@ void SystemStateMachine::waitMouseKey(int timeoutMs) {
     const auto wait = ++m_waitGeneration;
     m_state->setExecState(ExecState::WaitInput);
     emit inputRequested(m_state->getSystemState());
+    emit inputKindRequested(QStringLiteral("INPUTMOUSEKEY"));
     if (timeoutMs > 0 && m_timer) {
         m_timer(timeoutMs, [this, wait]() {
             if (wait != m_waitGeneration) return;
@@ -588,6 +591,7 @@ void SystemStateMachine::waitAnyKey() {
     // C# Console.ReadAnyKey()：挂起等待「任意键」（Enter/点击），无超时
     m_state->setExecState(ExecState::WaitInput);
     emit inputRequested(m_state->getSystemState());
+    emit inputKindRequested(QStringLiteral("ANYKEY"));
     if (m_host.readAnyKey) m_host.readAnyKey();   // 通知 UI 弹「任意键」等待
 }
 
@@ -595,6 +599,7 @@ void SystemStateMachine::waitTimedInput(int timeoutMs, qint64 defaultValue) {
     const auto wait = ++m_waitGeneration;
     m_state->setExecState(ExecState::WaitInput);
     emit inputRequested(m_state->getSystemState());
+    emit inputKindRequested(QStringLiteral("TINPUT"), QVariant(qint64(defaultValue)));
     if (timeoutMs > 0 && m_timer) {
         // [qdbug] C# 原版全量：TINPUT 超时交付**缺省值**（此前恒为 0）
         m_timer(timeoutMs, [this, wait, defaultValue]() {
@@ -609,6 +614,7 @@ void SystemStateMachine::waitTimedAnyKey(int timeoutMs) {
     const auto wait = ++m_waitGeneration;
     m_state->setExecState(ExecState::WaitInput);
     emit inputRequested(m_state->getSystemState());
+    emit inputKindRequested(QStringLiteral("TWAIT"));
     if (timeoutMs > 0 && m_timer) {
         m_timer(timeoutMs, [this, wait]() {
             if (wait == m_waitGeneration) resume(0);
@@ -622,6 +628,7 @@ void SystemStateMachine::waitTimedStringInput(int timeoutMs, const QString& defa
     const auto wait = ++m_waitGeneration;
     m_state->setExecState(ExecState::WaitInput);
     emit inputRequested(m_state->getSystemState());
+    emit inputKindRequested(QStringLiteral("TINPUTS"), QVariant(defaultValue));
     if (timeoutMs > 0 && m_timer) {
         m_timer(timeoutMs, [this, wait, defaultValue]() {
             if (wait != m_waitGeneration) return;

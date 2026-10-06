@@ -292,7 +292,8 @@ bool ScriptRunner::stepOnce() {
     if ((r == ExecState::WaitInput || r == ExecState::WaitSystemInput)
         && m_waitNotifiesUser) {
         // m_waitKind：任意键系等待（打印系 W 后缀）统一报 ANYKEY（点击任意处/回车）
-        emit inputRequested(m_waitKind.isEmpty() ? line.functionName : m_waitKind);
+        emit inputRequested(m_waitKind.isEmpty() ? line.functionName : m_waitKind,
+                            m_waitDefault);
     } else if (r == ExecState::Halt) {
         emit finished();
     } else if (r == ExecState::Error) {
@@ -428,6 +429,7 @@ ExecState ScriptRunner::executeLine(const LogicalLine& line) {
     // 每行重置：只有 AWAIT / TWAIT skip!=0（纯计时，C# InputType.Void）会覆盖为 false
     m_waitNotifiesUser = true;
     m_waitKind.clear();
+    m_waitDefault = QVariant();
 
     const auto gotoLine = [&](int npc) {
         m_table->setPosition(script, npc, false);   // 允许 npc == lines.size()（越过末尾 -> 结束）
@@ -1250,6 +1252,29 @@ ExecState ScriptRunner::executeLine(const LogicalLine& line) {
     // 重画菜单再等输入），引擎只负责把 RESTART/GOTO 跑对。
     if (name == QLatin1String("INPUT") || name == QLatin1String("ONEINPUT")
         || name == QLatin1String("INPUTS") || name == QLatin1String("ONEINPUTS")) {
+        const bool isStr = (name == QLatin1String("INPUTS")
+                            || name == QLatin1String("ONEINPUTS"));
+        // C# INPUT_Instruction：**给了实参**才 HasDefValue=true（DefIntValue=实参）。
+        // 这个缺省值决定「空回车」的语义 —— 有缺省交缺省、没有则忽略输入继续等
+        //（C# doInputToEmueraProgram）。eraTW 的外出列表用的是无参 `INPUT`：
+        // 空回车必须**什么都不发生**；以前 QML 把空输入当 0 交出去，恰好命中
+        // `ELSEIF RESULT == MAIN_MAP` -> 「从外面回家」，表现就是「没操作就自动返回」。
+        m_waitDefault = QVariant();
+        if (!line.arguments.isEmpty()) {
+            const Operand& a0 = line.arguments.first();
+            ExpressionEvaluator& ev = getEvaluator();
+            if (isStr) {
+                m_waitDefault = a0.ast
+                    ? ev.evaluate(*a0.ast, m_storage, baseData()).toString()
+                    : ev.evaluate(a0.raw, m_storage, baseData()).toString();
+            } else {
+                qint64 v = 0;
+                if (a0.ast) v = ev.evaluate(*a0.ast, m_storage, baseData()).toLongLong();
+                else if (a0.isString) v = a0.raw.toLongLong();
+                else v = ev.evaluate(a0.raw, m_storage, baseData()).toLongLong();
+                m_waitDefault = v;
+            }
+        }
         advance();                       // 指令已消费
         return ExecState::WaitInput;     // 挂起等待用户操作
     }

@@ -293,10 +293,11 @@ EraEngine::EraEngine(QObject *parent)
 		// 避免在 pump() 栈内重入清理解析表。
 		connect(&m_systemStateMachine, &SystemStateMachine::quitRequestedByScript,
 		        this, &EraEngine::quitRequested, Qt::QueuedConnection);
-		connect(&m_scriptRunner, &ScriptRunner::inputRequested, this, [this](const QString& kind) {
+		connect(&m_scriptRunner, &ScriptRunner::inputRequested, this,
+				[this](const QString& kind, const QVariant& def) {
 			qDebug() << "[ScriptRunner] waiting for user input:" << kind
 					 << "state=" << static_cast<int>(m_processState.getExecState());
-			m_console.notifyInputRequested(kind);
+			m_console.notifyInputRequested(kind, def);
 		});
 		// ---- 显示层：执行引擎输出 -> ConsoleBackend ----
 		connect(&m_executionEngine, &ExecutionEngine::consolePrint, this,
@@ -458,11 +459,13 @@ EraEngine::EraEngine(QObject *parent)
 		});
 		connect(&m_systemStateMachine, &SystemStateMachine::inputRequested,
 				&m_signalManager, &SignalManager::emitInputRequested);
-		connect(&m_systemStateMachine, &SystemStateMachine::inputRequested, this,
-				[this](SystemStateCode state) {
-			if (state != SystemStateCode::Normal)
-                m_console.notifyInputRequested(SystemStateMachine::stateName(state));
-		});
+		// 交给控制台的必须是**输入类型**（INPUT/TINPUT/ANYKEY…），不是系统状态名 ——
+		// 以前这里传 stateName(state)，QML 就显示「输入（Train_CallEventComEnd）」，
+		// 且 inputExpectsAnyKey/inputExpectsString 全判错。
+		connect(&m_systemStateMachine, &SystemStateMachine::inputKindRequested, this,
+				[this](const QString& kind, const QVariant& def) {
+					m_console.notifyInputRequested(kind, def);
+				});
 		connect(&m_systemStateMachine, &SystemStateMachine::errorOccurred, this,
 				[](const QString& message) {
 			qWarning().noquote() << "[SystemStateMachine]" << message;

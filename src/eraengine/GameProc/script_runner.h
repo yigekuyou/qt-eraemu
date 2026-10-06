@@ -95,7 +95,10 @@ signals:
     void suspended(ExecState state);          // 挂起（等待输入等）
     void finished();                          // 脚本结束
     void errorOccurred(const QString& message);
-    void inputRequested(const QString& kind);// 需要用户输入（INPUT/ONEINPUT/…）
+    // 需要用户输入（INPUT/ONEINPUT/…）。defaultValue 是本次等待的**缺省值**
+    //（C# InputRequest.HasDefValue/DefIntValue/DefStrValue）：它决定「空回车」的
+    // 语义 —— 有缺省就交缺省，没有就忽略输入继续等（见 ConsoleBackend::submitIntegerText）。
+    void inputRequested(const QString& kind, const QVariant& defaultValue = QVariant());
     void instructionExecuted(const QString& script, int line);
 
 public slots:
@@ -238,6 +241,7 @@ private:
     // 本轮挂起的输入种类覆盖（空 = functionName）。任意键系等待（打印系 W 后缀）
     // 统一报 ANYKEY，UI 侧按「点击任意处/回车」裁决（C# IsWaitingEnterKey）
     QString m_waitKind;
+    QVariant m_waitDefault;   // 本次等待的缺省值（无缺省 = 无效 QVariant）
     QHash<QString, VariableStorage::LocalContext> m_functionLocals;
     QList<CallContext> m_callContexts;   // Caller locals and loop depth, restored on every return
     bool m_running = false;

@@ -174,10 +174,14 @@ Item {
         }
         // 与 C++ 的 inputExpectsString 同源：INPUTS / SINPUTS / TONEINPUTS / ARGS 系
         // 都是字符串型输入，其余（INPUT/TINPUT/ONEINPUT…）走整数校验。
+        // 交由 C++ 判定空输入 / 非法输入（对齐 C# doInputToEmueraProgram）：
+        // 空回车在「有缺省值」时交缺省值，没有缺省值则忽略 —— 以前这里写
+        // `parseInt(text) || 0`，空回车会交 0（eraTW 外出列表里 0 == MAIN_MAP
+        // 就是「从外面回家」，即「没操作就自动返回」）。
         if (stringInputKind)
-            backend.submitInputString(inputField.text);
+            backend.submitStringText(inputField.text);
         else
-            backend.submitInput(parseInt(inputField.text) || 0);
+            backend.submitIntegerText(inputField.text);
         inputField.text = "";
     }
 

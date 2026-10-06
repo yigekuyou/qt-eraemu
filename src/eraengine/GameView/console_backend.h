@@ -273,7 +273,9 @@ public:
     [[nodiscard]] bool wrappingEnabled() const { return m_wrapLines; }
 
     // ---- 输入桥接 ----
-    void notifyInputRequested(const QString& kind);
+    // defaultValue：本次等待的缺省值（C# InputRequest.HasDefValue/DefIntValue/
+    // DefStrValue）。空回车时用它；无缺省则**忽略**这次回车（继续等输入）。
+    void notifyInputRequested(const QString& kind, const QVariant& defaultValue = QVariant());
     void notifyInputDone();
 
     // REUSELASTLINE（C# PrintTemporaryLine）：单行输出并标记「一時行」——
@@ -290,6 +292,14 @@ public:
     Q_INVOKABLE void submitMouseKey(int type, int r1, int r2, int r3, int r4);
     Q_INVOKABLE void submitInput(qint64 value);
     Q_INVOKABLE void submitInputString(const QString& value);
+    // 提交（整数型等待）。text 为空时按 C# doInputToEmueraProgram 处理：
+    //   有缺省值 -> 交缺省值；没有 -> **忽略**（不交付，继续等）；
+    //   非空但解析不出整数 -> 同样忽略。
+    // 以前 QML 直接交 `parseInt(text)||0`，空回车会变成 RESULT=0 ——
+    // eraTW 外出列表里 0 == MAIN_MAP 就是「从外面回家」=「没操作就自动返回」。
+    Q_INVOKABLE void submitIntegerText(const QString& text);
+    // 提交（字符串型等待）：空串同样按缺省值规则处理。
+    Q_INVOKABLE void submitStringText(const QString& text);
     // WAIT/WAITANYKEY/FORCEWAIT/ANYKEY：点击控制台任意处或回车即继续
     //（对齐 C# IsWaitingEnterKey 的鼠标/按键裁决）
     Q_INVOKABLE void submitAnyKey();
@@ -357,6 +367,9 @@ private:
 
     QStringList m_htmlLines;      // printHtml 原文（HTML_POPPRINTINGSTR 消费）
     QString m_inputKind;
+    // 本次等待的缺省值（C# InputRequest.HasDefValue/DefIntValue/DefStrValue）：
+    // 空回车时交付它；无效表示「无缺省」-> 空回车被忽略。
+    QVariant m_inputDefault;
     bool    m_waitingInput = false;
     // 最后一行是否为「一時行」（REUSELASTLINE）：下一行显示输出替换它
     bool    m_lastLineTemporary = false;

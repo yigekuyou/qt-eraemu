@@ -477,6 +477,55 @@ int main(int argc, char* argv[]) {
               "尾行内容增长 -> 新区块 BBB 进入模型");
     }
 
+    qDebug() << "\n空输入语义（对齐 C# doInputToEmueraProgram）";
+    {
+        // 以前 QML 交的是 `parseInt(text) || 0`：空回车变成 RESULT=0。
+        // eraTW 的外出列表用无参 `INPUT`，0 恰好等于 MAIN_MAP -> 走
+        // «从外面回家» 分支，表现就是「还没操作就自动返回了」。
+        // 现在：空 && 有缺省 -> 交缺省；空 && 无缺省 -> 忽略；非法 -> 忽略。
+        ConsoleBackend c;
+        qint64 got = -999;
+        QString gotStr = QStringLiteral("<none>");
+        int intCount = 0, strCount = 0;
+        QObject::connect(&c, &ConsoleBackend::inputSubmitted,
+                         [&](qint64 v) { got = v; ++intCount; });
+        QObject::connect(&c, &ConsoleBackend::inputSubmittedString,
+                         [&](const QString& v) { gotStr = v; ++strCount; });
+
+        // ① 无参 INPUT：空回车必须**什么都不发生**
+        c.notifyInputRequested(QStringLiteral("INPUT"));
+        c.submitIntegerText(QString());
+        check(intCount == 0, "无缺省值的 INPUT：空回车被忽略（不交付）");
+
+        // ② 非法文本同样忽略
+        c.submitIntegerText(QStringLiteral("abc"));
+        check(intCount == 0, "非整数文本被忽略（C# 的 Int64.TryParse 失败）");
+
+        // ③ 正常整数照常交付
+        c.submitIntegerText(QStringLiteral("7"));
+        check(intCount == 1 && got == 7, "正常整数 7 照常交付");
+
+        // ④ TINPUT 带缺省：空回车交缺省值（不是 0）
+        c.notifyInputRequested(QStringLiteral("TINPUT"), QVariant(qint64(1234)));
+        c.submitIntegerText(QString());
+        check(intCount == 2 && got == 1234, "TINPUT 缺省 1234：空回车交 1234");
+
+        // ⑤ INPUT 带实参：空回车交该缺省值
+        c.notifyInputRequested(QStringLiteral("INPUT"), QVariant(qint64(5)));
+        c.submitIntegerText(QString());
+        check(intCount == 3 && got == 5, "INPUT 5：空回车交 5");
+
+        // ⑥ 字符串型：空回车同样按缺省值
+        c.notifyInputRequested(QStringLiteral("TINPUTS"), QVariant(QStringLiteral("-1")));
+        c.submitStringText(QString());
+        check(strCount == 1 && gotStr == QLatin1String("-1"),
+              "TINPUTS 缺省 \"-1\"：空回车交 \"-1\"");
+
+        // ⑦ kind 必须是输入类型而不是系统状态名（QML 提示文本与校验路由都用它）
+        check(c.inputKind() == QLatin1String("TINPUTS") && c.waitingInput(),
+              "inputKind 是输入类型（TINPUTS），不是系统状态名");
+    }
+
     qDebug() << "\n===================";
     if (g_failures == 0) {
         qDebug() << "[SUCCESS] console backend tests passed";

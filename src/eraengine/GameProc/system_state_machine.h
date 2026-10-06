@@ -206,6 +206,20 @@ public:
 signals:
     void stateChanged(SystemStateCode oldState, SystemStateCode newState);
     void inputRequested(SystemStateCode state);   // 请求系统输入（TRAIN/SHOP/…）
+    // 输入**类型**（ConsoleBackend.inputKind：QML 提示文本 + 点击/任意键与字符串
+    // 校验的路由依据）。取值与 ScriptRunner 一侧一致 —— **指令名**
+    // （INPUT / TINPUT / TINPUTS / INPUTMOUSEKEY / ANYKEY / TWAIT …），
+    // 因为 inputExpectsString 判的是 "INPUTS"，inputExpectsAnyKey 判的是
+    // ANYKEY/WAIT 系。
+    //
+    // 以前没有这个信号：eraengine 把 inputRequested 的 SystemStateCode 用
+    // stateName() 转成字符串当输入类型用，于是 QML 底部显示
+    // 「输入（Train_CallEventComEnd）」，而且 inputExpectsAnyKey /
+    // inputExpectsString 全部判错 —— 点击「任意键继续」被拒、TINPUTS 这类
+    // 字符串等待被当成整数输入校验。
+    // defaultValue：本次等待的缺省值（TINPUT/TINPUTS 的缺省整数/字符串）；
+    // 无缺省 = 无效 QVariant。决定「空回车」交什么（见 ConsoleBackend::submitIntegerText）。
+    void inputKindRequested(const QString& kind, const QVariant& defaultValue = QVariant());
     void stateAdvanced(SystemStateCode state);    // 每次处理函数执行后
     void errorOccurred(const QString& message);
     // 脚本 QUIT：pump() 任何调用方（含定时器驱动的 pacing pump）都能收到，

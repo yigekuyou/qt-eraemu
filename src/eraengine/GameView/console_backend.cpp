@@ -39,7 +39,8 @@ bool inputExpectsString(const QString& kind) {
 bool inputExpectsAnyKey(const QString& kind) {
     const QString k = kind.toUpper();
     return k == QLatin1String("WAIT") || k == QLatin1String("WAITANYKEY")
-        || k == QLatin1String("FORCEWAIT") || k == QLatin1String("ANYKEY");
+        || k == QLatin1String("FORCEWAIT") || k == QLatin1String("ANYKEY")
+        || k == QLatin1String("TWAIT");   // TWAIT = 限时任意键（C# InputType.EnterKey + Timelimit）
 }
 } // namespace
 
@@ -712,8 +713,9 @@ void ConsoleBackend::tick() {
 // 输入桥接
 // ---------------------------------------------------------------------------
 
-void ConsoleBackend::notifyInputRequested(const QString& kind) {
+void ConsoleBackend::notifyInputRequested(const QString& kind, const QVariant& defaultValue) {
     m_inputKind = kind;
+    m_inputDefault = defaultValue;
     m_waitingInput = true;
     flush();
     emit inputRequested(kind);
@@ -726,6 +728,7 @@ void ConsoleBackend::notifyInputDone() {
     ++m_generation;
     emit generationChanged();
     m_inputKind.clear();
+    m_inputDefault = QVariant();
     m_waitingInput = false;
     emit waitingInputChanged();
 }
@@ -1230,6 +1233,58 @@ void ConsoleBackend::submitInput(qint64 value) {
     ++m_generation;   // 提交后旧按钮失效（C# forceUpdateGeneration）
     emit generationChanged();
     emit inputSubmitted(value);
+}
+
+// 空输入 / 非法输入的统一处理（对齐 C# EmueraConsole.doInputToEmueraProgram）：
+//   IntValue: 空 && HasDefValue && !计时中 -> 交 DefIntValue；
+//             空 && !HasDefValue               -> return false（**忽略**，继续等）；
+//             非空但 Int64.TryParse 失败        -> return false（忽略）
+//   StrValue: 空 && HasDefValue                -> 交 DefStrValue
+// eraTW 外出列表（无参 `INPUT`）依赖「空回车什么都不发生」——否则 0 会命中
+// `ELSEIF RESULT == MAIN_MAP` 变成「从外面回家」，也就是「没操作就自动返回」。
+void ConsoleBackend::submitIntegerText(const QString& text) {
+    if (!m_waitingInput || inputExpectsString(m_inputKind)) {
+        qWarning() << "[input] 整数文本提交被拒：kind" << m_inputKind
+                   << "等待中" << m_waitingInput;
+        return;
+    }
+    const QString t = text.trimmed();
+    if (t.isEmpty()) {
+        if (m_inputDefault.isValid()) {
+            const qint64 v = m_inputDefault.toLongLong();
+            qDebug() << "[input] 空输入 -> 交缺省值" << v << "kind" << m_inputKind;
+            submitInput(v);
+        } else {
+            qDebug() << "[input] 空输入且无缺省值 -> 忽略（继续等待）kind" << m_inputKind;
+        }
+        return;
+    }
+    bool ok = false;
+    const qint64 v = t.toLongLong(&ok);
+    if (!ok) {
+        qWarning() << "[input] 不是整数，忽略:" << t << "kind" << m_inputKind;
+        return;   // C#：Int64.TryParse 失败 -> return false，不交付
+    }
+    submitInput(v);
+}
+
+void ConsoleBackend::submitStringText(const QString& text) {
+    if (!m_waitingInput || !inputExpectsString(m_inputKind)) {
+        qWarning() << "[input] 字符串文本提交被拒：kind" << m_inputKind
+                   << "等待中" << m_waitingInput;
+        return;
+    }
+    if (text.isEmpty() && !m_inputDefault.isValid()) {
+        // 无缺省值的字符串等待：C# 交的是空串本身（StrValue 分支不拦空串）
+        submitInputString(text);
+        return;
+    }
+    if (text.isEmpty() && m_inputDefault.isValid()) {
+        qDebug() << "[input] 空输入 -> 交缺省字符串 kind" << m_inputKind;
+        submitInputString(m_inputDefault.toString());
+        return;
+    }
+    submitInputString(text);
 }
 
 void ConsoleBackend::submitInputString(const QString& value) {

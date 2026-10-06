@@ -88,6 +88,13 @@ struct SystemHost {
     std::function<QString()>                   scriptDetail;
     std::function<qint64()>                    scriptVersion;
 
+    // ---- 标准标题画面（QML 渲染）----
+    // 没有 @SYSTEM_TITLE 时，本类不再用 C++ 往控制台逐行打印标题，而是翻这个
+    // 开关让 **QML** 画标准标题画面（标题/版本/作者/年份/说明 + [0]/[1] 菜单），
+    // 输入仍走同一套 openingInput() 状态流。QML 点菜单时经 EraEngine::chooseTitle
+    // 交付输入。空函数 = 不启用（无 GUI 的宿主，如单测）。
+    std::function<void(bool)>                  setDefaultTitleVisible;
+
     // ---- TRAIN 命令名（Train.csv 第 0 列；空 = 没有 Train.csv）----
     std::function<QStringList()>               trainNames;
 };
@@ -341,6 +348,8 @@ private:
     int  m_count = 0;
     bool m_skipPrint = false;
     bool m_needWaitToEventComEnd = false;
+    // 标准标题画面当前是否由 QML 显示（重画标题 / 非法输入时据此再翻开）
+    bool m_defaultTitleShown = false;
     bool m_needCheck = true;
     // 兼容「原始指令号」输入：探测 @COM_ABLE{编号} 期间记住待确认的编号
     // （-1 = 无探测在途），见 trainWaitInput。

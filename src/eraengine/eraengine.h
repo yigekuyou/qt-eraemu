@@ -79,6 +79,13 @@ public:
 		Q_PROPERTY(AudioPipelinePool* audio READ getAudio CONSTANT)
 		// 最近一次执行是否出错（底部状态灯用；装载/重新运行会复位）
 		Q_PROPERTY(bool hasError READ hasError NOTIFY hasErrorChanged)
+		// ---- 标准标题画面（QML 渲染）----
+		// 无 @SYSTEM_TITLE 时，状态机翻开 defaultTitleVisible，由 QML 的
+		// TitleScreen 组件画标准标题（标题/版本/作者/年份/说明 + [0]/[1] 菜单）；
+		// QML 点菜单调用 chooseTitle() 交付输入。标题字符串来自 gameBaseData。
+		Q_PROPERTY(bool defaultTitleVisible READ defaultTitleVisible NOTIFY defaultTitleVisibleChanged)
+		Q_PROPERTY(QString titleMenu0 READ titleMenu0 CONSTANT)
+		Q_PROPERTY(QString titleMenu1 READ titleMenu1 CONSTANT)
     // Game base data
     GameBaseData* gameBaseData() { return &m_gameBaseData; }
     
@@ -123,6 +130,19 @@ public:
         m_hasError = on;
         emit hasErrorChanged();
     }
+
+    // ---- 标准标题画面（QML 渲染）----
+    [[nodiscard]] bool defaultTitleVisible() const { return m_defaultTitleVisible; }
+    void setDefaultTitleVisible(bool on) {
+        if (m_defaultTitleVisible == on) return;
+        m_defaultTitleVisible = on;
+        emit defaultTitleVisibleChanged();
+    }
+    // 标准标题的 [0]/[1] 菜单文案（对齐 C# Config.TitleMenuString0/1）
+    [[nodiscard]] QString titleMenu0() const { return QStringLiteral("开始游戏"); }
+    [[nodiscard]] QString titleMenu1() const { return QStringLiteral("读取存档"); }
+    // QML 标准标题点菜单：交付选择（0/1）并收起标题界面
+    Q_INVOKABLE void chooseTitle(int index);
 
     // ---- 目录解析（对齐 C# Program.ErbDir / Program.CsvDir）----
     // 只在这两个目录内检索脚本与数据，不再遍历整个游戏根目录
@@ -241,6 +261,8 @@ signals:
     void scriptsLoadProgress(int processed, int total);
     void scriptsLoaded(bool ok);
     void hasErrorChanged();
+    // 标准标题画面（QML）的显示状态变化
+    void defaultTitleVisibleChanged();
     // 脚本执行了 QUIT（C# 侧等价关闭游戏窗口）—— GUI 层应退出应用
     void quitRequested();
     // D-Bus /debug saveScreenshot：请求 QML 把当前画面存成图片
@@ -303,7 +325,7 @@ private:
     QFuture<void> m_semanticFuture;   // 后台语义阶段（finalizeParse）的 future
     bool m_semanticRunning = false;   // 后台语义阶段（finalizeParse）进行中
     bool m_hasError = false;   // 最近一次执行出错（状态灯）
-    // ---- 内部：目录解析与分批装载 ----
+    bool m_defaultTitleVisible = false;   // 标准标题画面（QML）是否显示    // ---- 内部：目录解析与分批装载 ----
     void resolveGameDirs();          // 解析 CSV/ERB 目录（绝对路径 + 实际大小写）
     void loadConfigFiles();          // _default.config / emuera.config / _fixed.config
     void loadConstantData();         // CSV 目录内的常量数据（VariableSize 等）

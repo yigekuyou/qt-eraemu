@@ -58,6 +58,14 @@ static const unsigned char kLosslessTransparentWebp[] = {
     0x56, 0x50, 0x38, 0x4c, 0x0d, 0x00, 0x00, 0x00, 0x2f, 0xb3, 0xc0, 0x2c,
     0x10, 0x07, 0x10, 0x11, 0x11, 0x88, 0x88, 0xfe, 0x07, 0x00};
 
+// 36 字节的 VP8L「4×4 纯品红」webp。Qt 的 libqwebp 同样读不了它，libwebp 能读。
+// 它是「图像覆盖」修正的守卫：Qt 解不了时**不能**退化成全透明（那会让精灵图
+// 拼接缺块、差分/特效画不出来），必须直连 libwebp 解出真像素。
+static const unsigned char kLosslessSolidMagentaWebp[] = {
+    0x52, 0x49, 0x46, 0x46, 0x1c, 0x00, 0x00, 0x00, 0x57, 0x45, 0x42, 0x50,
+    0x56, 0x50, 0x38, 0x4c, 0x10, 0x00, 0x00, 0x00, 0x2f, 0x03, 0xc0, 0x00,
+    0x00, 0x07, 0x10, 0xfd, 0xef, 0x7f, 0xff, 0x03, 0x11, 0xd1, 0xff, 0x00};
+
 int main(int argc, char* argv[]) {
     QCoreApplication app(argc, argv);
 
@@ -84,6 +92,14 @@ int main(int argc, char* argv[]) {
         if (webp.open(QIODevice::WriteOnly))
             webp.write(reinterpret_cast<const char*>(kLosslessTransparentWebp),
                        int(sizeof(kLosslessTransparentWebp)));
+    }
+    // 4×4 纯品红 VP8L：Qt 读不了，libwebp 能读 -> 用来守卫「解出真像素」。
+    const QString solidPath = QDir(root).filePath(QStringLiteral("resources/solid.webp"));
+    {
+        QFile webp(solidPath);
+        if (webp.open(QIODevice::WriteOnly))
+            webp.write(reinterpret_cast<const char*>(kLosslessSolidMagentaWebp),
+                       int(sizeof(kLosslessSolidMagentaWebp)));
     }
     {
         QFile atlas(QDir(root).filePath(QStringLiteral("resources/offset.csv")));
@@ -201,6 +217,21 @@ int main(int argc, char* argv[]) {
         const QImage ok = ResourceImageProvider::loadImageFile(
             QDir(root).filePath(QStringLiteral("resources/face_01.png")));
         check(ok.size() == QSize(4, 4), "能解码的图照常返回原图（4x4）");
+
+        // 关键：Qt 解不了的 webp 里有**内容非透明**的（4×4 纯品红）。若只做
+        // 「按文件头回退全透明」，这里会得到一块透明 —— 合成立绘/差分特效就会
+        // 缺块。修正后应直连 libwebp 解出真像素（对齐 C# WebPWrapper）。
+        const QImage directSolid(solidPath);
+        if (!directSolid.isNull())
+            qDebug() << "  [note] 本机 Qt 能解码纯色 webp，用例退化为普通解码路径";
+        else
+            check(true, "前提成立：QImage 直接读纯色 webp 失败");
+        const QImage solid = ResourceImageProvider::loadImageFile(solidPath);
+        check(solid.size() == QSize(4, 4), "纯色 webp 解出 4x4（不是 0x0）");
+        check(!solid.isNull() && qAlpha(solid.pixel(0, 0)) != 0,
+              "纯色 webp 解出不透明像素（未退化成全透明 = 图像内容没丢）");
+        check(!solid.isNull() && solid.pixel(0, 0) == 0xFFFF00FFu,
+              "纯色 webp 像素 = 品红 0xFFFF00FF（真解码）");
     }
 
     qDebug() << "\n6) 解码 / 裁切缓存（第二次起不再读盘）";

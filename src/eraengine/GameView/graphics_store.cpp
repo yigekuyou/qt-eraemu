@@ -260,23 +260,37 @@ bool GraphicsStore::gDrawGWithMask(int dstId, int srcId, int maskId, int dx, int
     const QImage mask = gImage(maskId);
     QImage dst = gImage(dstId);
     if (src.isNull() || mask.isNull() || dst.isNull()) return false;
-    // 掩码尺寸以 dst 可用区域为准（对齐 C#：以掩码图像的 alpha 通道为选中区）
-    const int w = qMin(qMin(src.width(), mask.width()), dst.width() - dx);
-    const int h = qMin(qMin(src.height(), mask.height()), dst.height() - dy);
-    if (w <= 0 || h <= 0) return false;
-    QImage overlay = dst.copy(dx, dy, w, h).convertToFormat(QImage::Format_ARGB32);
+    // 对齐 C# GraphicsDrawGWithMaskMethod（= Command.html 的失败条件）：
+    //   * srcID 与 maskID 的宽高必须完全一致；
+    //   * 绘制区域不得超出 destID。
+    if (src.width() != mask.width() || src.height() != mask.height()) return false;
+    if (dx + src.width() > dst.width() || dy + src.height() > dst.height()) return false;
     const QImage s = src.convertToFormat(QImage::Format_ARGB32);
     const QImage m = mask.convertToFormat(QImage::Format_ARGB32);
-    for (int y = 0; y < h; ++y) {
+    QImage out = dst.convertToFormat(QImage::Format_ARGB32);
+    // 文档：掩码图像的**蓝色值**作为不透明度应用到源图（纯白=原样、纯黑=全透明）。
+    // C# GraphicsImage.GDrawGWithMask 用的就是 BGRA 的首字节（= 蓝），并做
+    // (mask+1)/256 近似混合 —— 这里逐像素对齐。
+    const auto mix = [](int srcC, int dstC, int a256) {
+        return (srcC * a256 + dstC * (256 - a256)) >> 8;
+    };
+    for (int y = 0; y < s.height(); ++y) {
         const QRgb* mline = reinterpret_cast<const QRgb*>(m.constScanLine(y));
         const QRgb* sline = reinterpret_cast<const QRgb*>(s.constScanLine(y));
-        QRgb* oline = reinterpret_cast<QRgb*>(overlay.scanLine(y));
-        for (int x = 0; x < w; ++x) {
-            if (qAlpha(mline[x]) == 0) continue;   // 掩码透明处保留 dst
-            oline[x] = sline[x];
+        QRgb* oline = reinterpret_cast<QRgb*>(out.scanLine(dy + y));
+        for (int x = 0; x < s.width(); ++x) {
+            const int maskv = qBlue(mline[x]);
+            if (maskv == 0) continue;                 // 掩码蓝=0 -> 完全透明，保留 dst
+            QRgb* d = &oline[dx + x];
+            if (maskv == 255) { *d = sline[x]; continue; }
+            const int a256 = maskv + 1;
+            *d = qRgba(mix(qRed(sline[x]), qRed(*d), a256),
+                       mix(qGreen(sline[x]), qGreen(*d), a256),
+                       mix(qBlue(sline[x]), qBlue(*d), a256),
+                       mix(qAlpha(sline[x]), qAlpha(*d), a256));
         }
     }
-    gDrawImage(dstId, overlay, QRect(dx, dy, w, h));
+    gImages().insert(dstId, out);
     return true;
 }
 
@@ -290,7 +304,9 @@ bool GraphicsStore::cbgSetG(int gId, int x, int y, int z) {
 }
 
 bool GraphicsStore::cbgSetSprite(const QString& sprite, int x, int y, int z) {
-    if (!spriteCreated(sprite)) return false;
+    // C# CBGSetCIMGMethod 用 AppContents.GetSprite(name) —— imageDictionary 里
+    // 既有运行期精灵也有 resources/CSV 静态资源，所以这里同样接受静态资源。
+    if (!spriteCreated(sprite) && !ResourceImageProvider::hasResource(sprite)) return false;
     CbgLayer layer;
     layer.isSprite = true; layer.sprite = sprite.toUpper();
     layer.x = x; layer.y = y; layer.z = z;
@@ -301,7 +317,9 @@ bool GraphicsStore::cbgSetSprite(const QString& sprite, int x, int y, int z) {
 bool GraphicsStore::cbgSetButtonSprite(qint64 value, const QString& sprite,
                                        const QString& selectedSprite, int x, int y, int z,
                                        const QString& tooltip) {
-    if (!spriteCreated(sprite)) return false;
+    // C# CBGSetButtonSpriteMethod：只校验按钮值范围 0..0xFFFFFF，**不校验精灵是否存在**
+    // （`spriteName` / `spriteNameB` 允许空串 —— 空串/未知名的层在绘制时跳过）。
+    if (value < 0 || value > 0xFFFFFF) return false;
     CbgLayer layer;
     layer.isSprite = true; layer.isButton = true;
     layer.sprite = sprite.toUpper();
@@ -329,11 +347,15 @@ void GraphicsStore::cbgClearButton() {
 }
 
 bool GraphicsStore::cbgRemoveRange(int zMin, int zMax) {
+    // 对齐 C# CBG_ClearRange：zmin > zmax 什么都不做；zdepth == 0 的层（占位）不删。
+    // 注意 C# 的 CBGREMOVERANGE 命令**恒返回 1**（与本函数的返回值无关，
+    // 由 expression_evaluator 固定给出）。
+    if (zMin > zMax) return false;
     auto& cbg = gExtra().cbg;
     const int before = cbg.size();
     for (int i = cbg.size() - 1; i >= 0; --i) {
         const int z = cbg.at(i).z;
-        if (z >= zMin && z <= zMax) cbg.removeAt(i);
+        if (z != 0 && z >= zMin && z <= zMax) cbg.removeAt(i);
     }
     return cbg.size() != before;
 }

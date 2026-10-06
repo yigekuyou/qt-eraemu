@@ -1205,6 +1205,8 @@ void EraEngine::runSystem()
 
 void EraEngine::provideInput(qint64 value)
 {
+		// 输入交付即离开标题：收起 QML 标准标题界面（无标题时是空操作）
+		setDefaultTitleVisible(false);
 		// C# 语义：任何输入都写 RESULT 并继续执行。不在这里拦「非分支值」：
 		// SELECTCASE 落空后由脚本自己的流程兜底（RESTART / GOTO 重画菜单
 		// 再等输入）—— 引擎把 RESTART / GOTO 跑对即可。
@@ -1236,6 +1238,17 @@ void EraEngine::provideMouseKey(int type, int r1, int r2, int r3, int r4)
 {
 		// 对齐 C# InputResult5：RESULT:0..4
 		provideInputValues({type, r1, r2, r3, r4});
+}
+
+// ---------------------------------------------------------------------------
+// 标准标题画面（QML）：点 [0]/[1] 时交付选择。走与手动输入完全相同的
+// provideInput 通路（写 RESULT -> notifyInputDone -> 状态机 resume），
+// 因此「从头开始 / 读档」的后续流程、非法值重画都不需要另写。
+// ---------------------------------------------------------------------------
+void EraEngine::chooseTitle(int index)
+{
+		if (!m_defaultTitleVisible) return;
+		provideInput(index);   // provideInput 内部会收起标题界面
 }
 
 // ---------------------------------------------------------------------------
@@ -1314,6 +1327,11 @@ void EraEngine::buildSystemHost()
 		host.titleMenuString = [](int index) {
 				return index == 0 ? QStringLiteral("开始游戏") : QStringLiteral("读取存档");
 		};
+
+		// ---- 标准标题画面（QML 渲染）----
+		// 状态机只在「没有 @SYSTEM_TITLE」时把开关翻开；QML 的 TitleScreen 组件
+		// 绑 eraEngine.defaultTitleVisible 画标题，点菜单调 chooseTitle()。
+		host.setDefaultTitleVisible = [this](bool on) { setDefaultTitleVisible(on); };
 
 		// ---- 数据层（RESETDATA 指令 / 标准标题「[0] 从头开始」）----
 		// 此前 resetData 从未接线：RESETDATA 只在 ExecutionEngine 里有一半实现，

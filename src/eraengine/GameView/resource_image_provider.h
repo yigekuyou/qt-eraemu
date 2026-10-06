@@ -91,14 +91,16 @@ public:
     // 都是经 GDRAWSPRITE 参与合成的，直接 `<img>` 显示的精灵偏移都是 (0,0)。
     static bool spriteOffset(const QString& id, int& x, int& y);
 
-    // 图片解码（含**尺寸头回退**）。
-    //   Qt 的 webp 解码器对某些合法的「全透明」小体积 lossless 文件会失败：
+    // 图片解码（先 Qt -> 再 libwebp -> 最后尺寸头回退）。
+    //   Qt 的 webp 解码器对某些合法的 lossless 小图会失败：
     //   eraTW 的 resources/ダミー.webp 只有 34 字节（VP8L,180×180,全透明），
-    //   用 QImage/QImageReader 一律「Unable to read image data」，但 libwebp
-    //   （C# 走 WebPWrapper 直连）能正常读出 180×180。eraTW 的立绘合成第一步是
+    //   4×4 纯色小图同理；用 QImage/QImageReader 一律「Unable to read image data」，
+    //   但 libwebp（C# 走 WebPWrapper 直连）能正常读出真像素。
+    //   eraTW 的立绘合成第一步是
     //   `GCREATE(GID, SPRITEWIDTH("ダミー"), SPRITEHEIGHT("ダミー"))`，尺寸读成 0
-    //   会让整张合成图创建失败 —— 立绘不完整、差分图像盖不上去。
-    //   解码失败时按文件头（PNG/JPEG/BMP/GIF/WebP）解析出尺寸，返回同尺寸全透明图。
+    //   会让整张合成图创建失败；把有内容的图退化成全透明则会让拼接缺块、特效消失。
+    //   因此：Qt 失败时**直连 libwebp 解真像素**，实在解不出才按文件头
+    //   （PNG/JPEG/BMP/GIF/WebP）解析尺寸、返回同尺寸全透明图兜底排版。
     [[nodiscard]] static QImage loadImageFile(const QString& path);
 
 private:

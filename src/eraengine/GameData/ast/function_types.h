@@ -329,7 +329,10 @@ inline constexpr BuiltinFunctionSpec kBuiltinFunctions[] = {
     {"CBGREMOVERANGE"      , OperandType::Int, 2, 2, "ii", false, BuiltinOp::CbgRemoveRange},
     {"CBGREMOVEBMAP"       , OperandType::Int, 0, 0, """", false, BuiltinOp::CbgRemoveBmap},
     {"CBGSETBMAPG"         , OperandType::Int, 1, 1, "i", false, BuiltinOp::CbgSetBmapG},
-    {"CBGSETBUTTONSPRITE"  , OperandType::Int, 7, 7, "issiiis", false, BuiltinOp::CbgSetButtonSprite},
+    // CBGSETBUTTONSPRITE <按钮值>, <精灵名>, <选中精灵名>, <x>, <y>, <z>{, <tooltip>}
+    // C# CBGSETButtonSpriteMethod：ArgTypeList OmitStart=6 -> 第 7 参 tooltip 可省，
+    // 合法实参个数是 6 或 7（Command.html 也写了 6 参与 7 参两种形态）。
+    {"CBGSETBUTTONSPRITE"  , OperandType::Int, 6, 7, "issiiis", false, BuiltinOp::CbgSetButtonSprite},
     {"GSAVE"               , OperandType::Int, 2, 2, "ii", false, BuiltinOp::GSave},
     {"GLOAD"               , OperandType::Int, 2, 2, "ii", false, BuiltinOp::GLoad},
     {"SPRITEANIMECREATE"   , OperandType::Int, 3, 3, "sii", false, BuiltinOp::SpriteAnimeCreate},

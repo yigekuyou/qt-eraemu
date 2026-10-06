@@ -31,6 +31,7 @@
 #include <QRegularExpression>
 #include <QCache>
 #include <QFileInfo>
+#include <QLibrary>
 
 QString ResourceImageProvider::s_root;
 QHash<QString, ResourceImageProvider::Sprite> ResourceImageProvider::s_atlas;
@@ -235,6 +236,44 @@ bool parseImageSizeFromHeader(const QByteArray& d, int& width, int& height) {
     return false;
 }
 
+// ---- libwebp 直连兜底（对齐 C# WebPWrapper）--------------------------------
+// C# 的 ImgUtils.LoadImage 对 *.webp 走 WebPWrapper（P/Invoke libwebp），能解出
+// 真正的像素；Qt 的 libqwebp 插件在部分合法 VP8L 流上会失败（例：34 字节的
+// 4x4 纯色 / 180x180 全透明小图）。若此时只按文件头回退成全透明图，图像内容
+// 就丢了 —— 精灵图无法拼接、差分/特效画不出来。所以 Qt 解码失败后**再直连一次
+// libwebp**，把本来能解出来的图真正解出来；实在解不出才回退全透明。
+QImage decodeWebpViaLibwebp(const QByteArray& data) {
+    using GetInfoFn = int (*)(const uint8_t*, size_t, int*, int*);
+    using DecodeIntoFn = uint8_t* (*)(const uint8_t*, size_t, uint8_t*, size_t, int);
+
+    static QLibrary* lib = [] {
+        const char* kNames[] = {
+            "libwebp.so.7", "libwebp.so.6", "libwebp.so",   // Linux
+            "libwebp.dylib", "libwebp.7.dylib",             // macOS
+            "libwebp.dll", "webp",                          // Windows / 兜底
+        };
+        for (const char* name : kNames) {
+            auto* l = new QLibrary(QString::fromLatin1(name));
+            if (l->load()) return l;
+            delete l;
+        }
+        return static_cast<QLibrary*>(nullptr);
+    }();
+    if (lib == nullptr) return QImage();
+    auto getInfo = reinterpret_cast<GetInfoFn>(lib->resolve("WebPGetInfo"));
+    auto decodeInto = reinterpret_cast<DecodeIntoFn>(lib->resolve("WebPDecodeRGBAInto"));
+    if (getInfo == nullptr || decodeInto == nullptr) return QImage();
+
+    int w = 0, h = 0;
+    const auto* bytes = reinterpret_cast<const uint8_t*>(data.constData());
+    if (getInfo(bytes, size_t(data.size()), &w, &h) == 0 || w <= 0 || h <= 0) return QImage();
+    QImage image(w, h, QImage::Format_RGBA8888);
+    if (decodeInto(bytes, size_t(data.size()), image.bits(),
+                   size_t(image.sizeInBytes()), image.bytesPerLine()) == nullptr)
+        return QImage();
+    return image.convertToFormat(QImage::Format_ARGB32);
+}
+
 } // namespace
 
 QImage ResourceImageProvider::loadImageFile(const QString& path) {
@@ -247,7 +286,21 @@ QImage ResourceImageProvider::loadImageFile(const QString& path) {
         return image;
     }
 
-    // 解码失败 -> 按文件头补一个同尺寸的全透明图（见头文件里的 ダミー.webp 说明）。
+    // Qt 解不了 -> 若是 webp，直连 libwebp 再试一次（对齐 C# WebPWrapper）。
+    // 这一步让「Qt 读不了但内容是真的」的精灵能正常参与合成，而不是被
+    // 静默替换成全透明（那会让拼接出来的立绘/特效缺块）。
+    if (path.endsWith(QLatin1String(".webp"), Qt::CaseInsensitive)) {
+        QFile webpFile(path);
+        if (webpFile.open(QIODevice::ReadOnly)) {
+            const QImage webp = decodeWebpViaLibwebp(webpFile.readAll());
+            if (!webp.isNull()) {
+                decodedCache().insert(key, new QImage(webp), webp.sizeInBytes());
+                return webp;
+            }
+        }
+    }
+
+    // 仍失败 -> 按文件头补一个同尺寸的全透明图（见头文件里的 ダミー.webp 说明）。
     QFile file(path);
     if (!file.open(QIODevice::ReadOnly)) return QImage();
     const QByteArray head = file.read(64);   // 头解析最多用到 ~30 字节

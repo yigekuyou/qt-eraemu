@@ -60,12 +60,11 @@ cmake --build build --target test_cli
 | 29 | **文档语义·BEGIN FIRST 事件函数流** `#PRI/#LATER/#SINGLE/#ONLY`（破坏性·单独跑，`29_DOC_EVENT.ERB`） |
 | 30 | **音频·图片（用命令随机生成素材）**（`30_ASSET_GEN.ERB`） |
 | 31 | **GETCONFIG/GETCONFIGS（emuera.config 取值）**（`31_GETCONFIG.ERB`） |
-| 32 | **CSV 精灵偏移（立绘合成）与尺寸头回退**（`32_SPRITE_OFFSET.ERB`，素材 `example/resources/`） |
+| 32 | **通用图像处理（G / SPRITE / CBG 全族 + 真实图像文件 webp）**（`32_IMAGE.ERB`，素材 `example/resources/`；由原「组 32 CSV 精灵偏移」与「组 34 真实图像文件（webp）」合并，作者声明见 `example/resources/README_webp.md`） |
 | 33 | **`END` 是变量（`#DIM END`）不是指令**（`33_END_VARIABLE.ERB`，eraTW 角色移動 死循环回归） |
-| 34 | **真实图像文件（webp）× eraTW 式精灵堆叠 × 精灵序列**（`34_IMAGE.ERB`，素材 `example/resources/webp_atlas.webp`/`webp_item.webp`/gist 三张真实 webp，作者声明见 `example/resources/README_webp.md`） |
 
 「全部自动运行」（`./test/run_example.sh` 无参数）依次执行：
-**1–10、14、16、17、23–28、30–34 + 汇总**。
+**1–10、14、16、17、23–28、30–33 + 汇总**。
 
 不在自动路径、需单跑的组（`./test/run_example.sh <组号>`）：
 
@@ -317,17 +316,33 @@ CALL 画像合成(GID, "55_A1")   ->  GDRAWSPRITE GID, "55_A1", 0, 0, SPRITEWIDT
 | 缺陷 | 现象 | 修正 |
 | --- | --- | --- |
 | 第 7/8 列被丢弃 | 所有部件都落在 (0,0)：**立绘不完整**、**差分图像盖不到该盖的地方** | 解析为 `Sprite.offsetX/Y` → `GraphicsStore::spriteBasePos` → `GDRAWSPRITE` 按 C# `ASpriteSingle.GraphicsDraw(g,destRect)` 缩放偏移（`+ off*目标尺寸/源尺寸`） |
-| `ダミー.webp` 解不出来 | `resources/ダミー.webp` 是 34 字节、VP8L、180×180 的**全透明**图；Qt 的 webp 解码器读不了（C# 走 libwebp 直连能读）→ `SPRITEWIDTH("ダミー")=0` → 合成第一步 `GCREATE(GID,0,0)` 失败 → **整张立绘都建不出来** | `ResourceImageProvider::loadImageFile`：解码失败时按文件头（WebP VP8/VP8L/VP8X、PNG、JPEG、BMP、GIF）补齐尺寸，返回同尺寸全透明图 |
+| `ダミー.webp` 解不出来 | `resources/ダミー.webp` 是 34 字节、VP8L、180×180 的**全透明**图；Qt 的 webp 解码器读不了（C# 走 libwebp 直连能读）→ `SPRITEWIDTH("ダミー")=0` → 合成第一步 `GCREATE(GID,0,0)` 失败 → **整张立绘都建不出来** | `ResourceImageProvider::loadImageFile` 改为三级：Qt 解码 → **libwebp 直连**（对齐 C# `WebPWrapper`）→ 仍失败才按文件头（WebP VP8/VP8L/VP8X、PNG、JPEG、BMP、GIF）补齐尺寸、返回同尺寸全透明图兜底排版 |
+| Qt 解不了但**有内容**的 webp 被静默替换成全透明 | 4×4 纯色等小图 Qt 读不了；若直接「按文件头回退全透明」，精灵图拼接就**缺块**，差分/特效画不出来（= 「图像覆盖」失败的根因） | 同上：先直连 libwebp 把真像素解出来，解不出才回退全透明 |
 | `SPRITEPOSX/Y` 对静态资源返回 -1 | C# 返回 `DestBasePosition`（CSV 偏移），精灵不存在时返回 **0** | 同上；`SPRITEMOVE`/`SPRITESETPOS` 对静态资源也生效（C# 里静态精灵同样是可变对象） |
+
+### CBG 家族（ClientBackground）对齐 C#
+
+`Command.html`「图像处理相关」里的 `CBG*` 在 C# 侧是 `Creator.Method.cs` 的
+`CBGSet*Method` / `CBGRemoveRangeMethod`（绘制在 `EmueraConsole.CBG_*`）。本轮把
+返回值/条件对齐：
+
+| 命令 | C# 语义（已对齐） |
+| --- | --- |
+| `CBGSETSPRITE` | 用 `AppContents.GetSprite`（**含 `resources/` CSV 静态资源**），不存在返回 0 |
+| `CBGSETBUTTONSPRITE` | **只校验按钮值 `0..0xFFFFFF`**；精灵名允许空串/不存在（绘制时跳过空图）；第 7 参 tooltip 可省（`OmitStart=6`，6/7 参均可）—— 此前 C++ 表写成 7..7 参、且要求精灵已存在，均与 C# 不符 |
+| `CBGSETG` / `CBGSETBMAPG` | G 未创建返回 0 |
+| `CBGREMOVERANGE` / `CBGCLEAR` / `CBGCLEARBUTTON` / `CBGREMOVEBMAP` | **恒返回 1**（纯动作）；`CBGREMOVERANGE` 跳过 `zdepth==0` 的占位层 |
+
+> 注意：CBG 的**渲染**（把层按 zdepth 与文字合并画在客户端区域）目前尚未被核心
+> 渲染路径消费 —— `GraphicsStore::cbgLayers()` 只有数据层验证，QML 里还没有画它。
 
 验证方式（**不跑 eraTW**，全部毫秒级）：
 
 | 位置 | 断言 |
 | --- | --- |
-| `test_resource_image` §3/§4 | 第 7/8 列解析成 (3,2)／6 列旧写法 = (0,0)／非图集条目 = false；34 字节 webp `loadImageFile` 回退 180×180 且全透明、`intrinsicSize` 同值、正常图不受影响 |
-| `test/example/ERB/32_SPRITE_OFFSET.ERB`（组 32） | `SPRITEPOSX/Y` = CSV 列；`GDRAWSPRITE` 的落点 = 偏移（2 参与 6 参形态，放大时同比例）；**差分压在底图上的位置正确**（盖住处变差分色、其余仍是底图色）；`SPRITEWIDTH("off_dummy")=180` 并能当合成画布；`SPRITESETPOS/SPRITEMOVE` 对静态资源生效 |
-| 反证 | 关掉偏移应用 → 组 32 立刻 13 条 FAIL（`偏移原点没有东西`、`差分没覆盖到的 (0,0) 仍是底图红` …）；关掉尺寸头回退 → 4 条 FAIL（`解码失败也得从文件头拿到宽 180` …） |
-| 与独立实现比对 | 用 PIL 按同一份 `差し替え.csv` 重做 55_A1 / 55_A1+B19+C19+D19 的合成 → 引擎 `GSAVE` 出来的图 **逐像素相同**（180×180，差异 0 像素） |
+| `test_resource_image` §3/§4 | 第 7/8 列解析成 (3,2)／6 列旧写法 = (0,0)／非图集条目 = false；34 字节 webp `loadImageFile` 得 180×180 全透明、`intrinsicSize` 同值；**36 字节 4×4 纯品红 webp 解出真像素（= 图像内容没被回退丢掉）**；正常图不受影响 |
+| `test/example/ERB/32_IMAGE.ERB`（组 32「通用图像处理」） | `SPRITEPOSX/Y` = CSV 列；`GDRAWSPRITE` 的落点 = 偏移（2 参与 6 参形态，放大时同比例）；**差分压在底图上的位置正确**；`SPRITEWIDTH("off_dummy")=180` 并能当合成画布；`SPRITESETPOS/SPRITEMOVE` 对静态资源生效；真实 webp（lossless 比色 / 有损只验尺寸）；颜色矩阵特效；`GDRAWG`/`GDRAWGWITHMASK`/`GSAVE`-`GLOAD`；精灵序列；`CBG*` 返回值 |
+| 反证 | 关掉偏移应用 → 组 32 多条 FAIL（`偏移原点没有东西`、`差分没覆盖到的 (0,0) 仍是底图红` …）；关掉尺寸头回退 → `解码失败也得从文件头拿到宽 180` FAIL；关掉 libwebp 直连 → `纯色4x4 VP8L 真解码` FAIL |
 
 ## 音频播放（扩展能力 · 2026-10）
 

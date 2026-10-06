@@ -1,0 +1,565 @@
+;************************************************************************
+; 组 32：通用图像处理测试（G / SPRITE / CBG 全族 + 真实图像文件）
+;
+; 本组由原「组 32 CSV 精灵偏移（立绘合成）」与「组 34 真实图像文件（webp）」
+; 合并而成，并补齐 Command.html「图像处理相关」一节里 CBG 家族的覆盖
+; （ecd/docs/translation/Command.html → 图像处理相关）：
+;   * G 开头 = Graphics：可改绘制区（需 GRAPHICS/TEXTRENDERER 绘制方式）。
+;   * SPRITE 开头 = 精灵：与 resources CSV 声明的资源一样能在行内/HTML 显示。
+;   * CBG 开头 = ClientBackground：客户端区域的背景图像，按 zdepth 与文字分层。
+;   颜色一律 ARGB（0xAARRGGBB）；这些命令多可作为式中函数调用（返回值为结果）。
+;
+; 回归动机：
+;   1) eraTW 的立绘不是一张图，而是**把图集里的部件叠进一张 G** 再 SPRITECREATE
+;      （リソース作成.ERB @COMPOSE_SPRITE / モブ子表示.ERB @路人子生成）：
+;        GDRAWSPRITE(GID, 部件, 0, 0, SPRITEWIDTH(部件), SPRITEHEIGHT(部件))
+;      部件落点全部来自 CSV 第 7/8 列（C# SpriteF.DestBasePosition）。丢掉这两列
+;      -> 所有部件挤到 (0,0)：立绘不完整、差分图像盖不到该盖的地方。
+;   2) 「图像覆盖」：绘制是把源图**真像素**盖到目标上（不透明处覆盖、透明处保留
+;      目标），所以 Qt 解不了的 webp 绝不能静默退化成全透明 —— 那会让精灵图
+;      无法拼接、差分/特效整块消失。修正后走 libwebp 直连解出真像素（对齐 C#
+;      WebPWrapper）。eraTW 的 resources/ダミー.webp（34 字节、VP8L、180×180、
+;      全透明）还要能从文件头回退尺寸，否则 GCREATE(GID,0,0) 直接失败。
+;
+; 断言覆盖：
+;   A. CSV 第 7/8 列 = SPRITEPOSX/SPRITEPOSY；缺列 = 0；不存在 = 0（C# 语义）
+;   B. GDRAWSPRITE 落点按偏移缩放（目标尺寸/源尺寸），2 参/6 参形态一致
+;   C. 「差分」压在底图上的位置正确（盖住处变差分色，其余不变、透明处保留）
+;   D. 尺寸头回退：Qt 解不了的 webp 也能拿到尺寸，并能当合成画布
+;   E. SPRITESETPOS/SPRITEMOVE 对静态资源同样有效（C# 里静态精灵也可变）
+;   F. 真实 webp 文件解码（lossless 精确比色 / 有损只验尺寸与采样）
+;   G. eraTW 式堆叠 + SPRITECREATE 二次合成 + 颜色矩阵特效（红→绿）
+;   H. GDRAWG 源矩形拷贝 / GDRAWGWITHMASK 掩码合成 / GSAVE-GLOAD 往返
+;   I. 精灵图序列：SPRITEANIMECREATE/SPRITEANIMEADDFRAME + SETANIMETIMER
+;   J. CBG 家族：CBGSETG/CBGSETSPRITE/CBGSETBUTTONSPRITE/CBGSETBMAPG/
+;      CBGREMOVERANGE/CBGREMOVEBMAP/CBGCLEAR/CBGCLEARBUTTON 的返回与层簿记
+;   K. HTML_PRINT <img>（合成精灵 / 裸名 / 带扩展名 / 动画 webp）供 GUI 抓帧
+;************************************************************************
+
+@TEST_IMAGE
+#DIM FAILS
+#DIM GID
+#DIM GID2
+#DIM G2
+#DIM G3
+#DIM G4
+#DIM G5
+#DIM G6
+#DIM G7
+#DIM GSRC
+#DIM GMASK
+#DIM GF1
+#DIM GF2
+#DIM GF3
+FAILS = 0
+DRAWLINE
+PRINTL == 组32：通用图像处理（G/SPRITE/CBG + 真实图像文件 webp） ==
+DRAWLINE
+
+;========================================================================
+; A) CSV 第 7/8 列 = 输出偏移（立绘合成的落点来源）
+;========================================================================
+CALL ASSERT_EQ, SPRITEWIDTH("off_norect"), 8, @"无矩形列：整张 8x8"
+FAILS += RESULT
+CALL ASSERT_EQ, SPRITEHEIGHT("off_norect"), 8, @"无矩形列：整张 8x8"
+FAILS += RESULT
+CALL ASSERT_EQ, SPRITEWIDTH("off_part"), 4, @"图集矩形 w=4"
+FAILS += RESULT
+CALL ASSERT_EQ, SPRITEHEIGHT("off_part"), 4, @"图集矩形 h=4"
+FAILS += RESULT
+CALL ASSERT_EQ, SPRITEPOSX("off_part"), 3, @"SPRITEPOSX = CSV 第 7 列"
+FAILS += RESULT
+CALL ASSERT_EQ, SPRITEPOSY("off_part"), 2, @"SPRITEPOSY = CSV 第 8 列"
+FAILS += RESULT
+CALL ASSERT_EQ, SPRITEPOSX("off_base"), 0, @"显式 (0,0) 偏移"
+FAILS += RESULT
+CALL ASSERT_EQ, SPRITEPOSX("off_legacy"), 0, @"只有 6 列（旧写法）-> 偏移 0"
+FAILS += RESULT
+CALL ASSERT_EQ, SPRITEPOSY("off_legacy"), 0, @"只有 6 列（旧写法）-> 偏移 0"
+FAILS += RESULT
+CALL ASSERT_EQ, SPRITEPOSX("off_no_such_resource"), 0, @"不存在的精灵 -> 0（C# 语义，非 -1）"
+FAILS += RESULT
+
+;========================================================================
+; B) GDRAWSPRITE 必须按偏移落点
+;========================================================================
+GID = 50
+CALL ASSERT_EQ, GCREATE(GID, 8, 8), 1, @"GCREATE(8,8) 作为合成画布"
+FAILS += RESULT
+CALL ASSERT_EQ, GDRAWSPRITE(GID, "off_part"), 1, @"GDRAWSPRITE(2 参形态：目标矩形 = 部件自身尺寸)"
+FAILS += RESULT
+;偏移 (3,2) -> 蓝部件左上角落在 (3,2)，即 (0,0) 必须还是空的
+CALL ASSERT_EQ, GGETCOLOR(GID, 3, 2), 4278190335, @"部件左上角 = 偏移处（蓝）"
+FAILS += RESULT
+CALL ASSERT_EQ, GGETCOLOR(GID, 6, 5), 4278190335, @"部件右下角 = 偏移+尺寸-1（蓝）"
+FAILS += RESULT
+CALL ASSERT_EQ, GGETCOLOR(GID, 0, 0), 0, @"偏移原点没有东西（旧缺陷：部件全堆在 0,0）"
+FAILS += RESULT
+CALL ASSERT_EQ, GGETCOLOR(GID, 2, 1), 0, @"偏移左上角之外仍透明"
+FAILS += RESULT
+CALL ASSERT_EQ, GGETCOLOR(GID, 7, 7), 0, @"部件右下角之外仍透明"
+FAILS += RESULT
+
+;6 参形态：目标矩形比源大 2 倍时，偏移按同比例缩放（C# GraphicsDraw）
+CALL ASSERT_EQ, GCLEAR(GID, 0), 1, @"清空画布"
+FAILS += RESULT
+CALL ASSERT_EQ, GDRAWSPRITE(GID, "off_part", 0, 0, 8, 8), 1, @"GDRAWSPRITE(6 参形态, 放大 2 倍)"
+FAILS += RESULT
+CALL ASSERT_EQ, GGETCOLOR(GID, 6, 4), 4278190335, @"放大 2 倍：偏移 (3,2) -> (6,4)"
+FAILS += RESULT
+CALL ASSERT_EQ, GGETCOLOR(GID, 5, 3), 0, @"放大 2 倍：偏移处之前仍透明"
+FAILS += RESULT
+
+;========================================================================
+; C) 差分图像必须盖在正确的位置（覆盖底图）
+;========================================================================
+CALL ASSERT_EQ, GCLEAR(GID, 0), 1, @"清空画布"
+FAILS += RESULT
+CALL ASSERT_EQ, GDRAWSPRITE(GID, "off_base", 0, 0, SPRITEWIDTH("off_base"), SPRITEHEIGHT("off_base")), 1, @"底图（红 4x4，偏移 0,0）"
+FAILS += RESULT
+CALL ASSERT_EQ, GDRAWSPRITE(GID, "off_diff", 0, 0, SPRITEWIDTH("off_diff"), SPRITEHEIGHT("off_diff")), 1, @"差分（黄 4x4，偏移 1,1）"
+FAILS += RESULT
+CALL ASSERT_EQ, GGETCOLOR(GID, 0, 0), 4294901760, @"差分没覆盖到的 (0,0) 仍是底图红"
+FAILS += RESULT
+CALL ASSERT_EQ, GGETCOLOR(GID, 1, 1), 4294967040, @"差分左上角 (1,1) = 黄"
+FAILS += RESULT
+CALL ASSERT_EQ, GGETCOLOR(GID, 4, 4), 4294967040, @"差分右下角 (4,4) = 黄"
+FAILS += RESULT
+CALL ASSERT_EQ, GGETCOLOR(GID, 5, 5), 0, @"差分之外仍透明"
+FAILS += RESULT
+
+;========================================================================
+; D) 尺寸头回退：Qt 解不了的 34 字节全透明 webp（eraTW ダミー.webp）
+;========================================================================
+CALL ASSERT_EQ, SPRITECREATED("off_dummy"), 1, @"静态资源存在"
+FAILS += RESULT
+CALL ASSERT_EQ, SPRITEWIDTH("off_dummy"), 180, @"解码失败也得从文件头拿到宽 180"
+FAILS += RESULT
+CALL ASSERT_EQ, SPRITEHEIGHT("off_dummy"), 180, @"解码失败也得从文件头拿到高 180"
+FAILS += RESULT
+GID2 = 51
+CALL ASSERT_EQ, GCREATE(GID2, SPRITEWIDTH("off_dummy"), SPRITEHEIGHT("off_dummy")), 1, @"用回退尺寸当合成画布（eraTW 立绘合成的第一步）"
+FAILS += RESULT
+CALL ASSERT_EQ, GDRAWSPRITE(GID2, "off_dummy", 0, 0, SPRITEWIDTH("off_dummy"), SPRITEHEIGHT("off_dummy")), 1, @"把ダミー画上去（全透明，不报错）"
+FAILS += RESULT
+CALL ASSERT_EQ, GDISPOSE(GID2), 1, @"GDISPOSE"
+FAILS += RESULT
+
+;========================================================================
+; E) SPRITESETPOS / SPRITEMOVE 对静态资源同样有效
+;========================================================================
+CALL ASSERT_EQ, SPRITESETPOS("off_part", 1, 1), 1, @"SPRITESETPOS(静态资源) = 1"
+FAILS += RESULT
+CALL ASSERT_EQ, SPRITEPOSX("off_part"), 1, @"SPRITESETPOS 之后 SPRITEPOSX = 1"
+FAILS += RESULT
+CALL ASSERT_EQ, SPRITEMOVE("off_part", 2, 3), 1, @"SPRITEMOVE(静态资源) = 1（相对位移）"
+FAILS += RESULT
+CALL ASSERT_EQ, SPRITEPOSX("off_part"), 3, @"SPRITEMOVE 之后 SPRITEPOSX = 3"
+FAILS += RESULT
+CALL ASSERT_EQ, SPRITEPOSY("off_part"), 4, @"SPRITEMOVE 之后 SPRITEPOSY = 4"
+FAILS += RESULT
+CALL ASSERT_EQ, GCLEAR(GID, 0), 1, @"清空画布"
+FAILS += RESULT
+CALL ASSERT_EQ, GDRAWSPRITE(GID, "off_part", 0, 0, SPRITEWIDTH("off_part"), SPRITEHEIGHT("off_part")), 1, @"被 SPRITESETPOS 改过位置的精灵"
+FAILS += RESULT
+CALL ASSERT_EQ, GGETCOLOR(GID, 3, 4), 4278190335, @"落点跟着改：偏移 (3,4)（蓝）"
+FAILS += RESULT
+CALL ASSERT_EQ, GGETCOLOR(GID, 2, 2), 0, @"旧偏移 (2,2) 处已空"
+FAILS += RESULT
+CALL ASSERT_EQ, GDISPOSE(GID), 1, @"GDISPOSE"
+FAILS += RESULT
+
+;========================================================================
+; F) 真实图像文件（webp）：GCREATEFROMFILE + 静态资源按裸名解析
+;========================================================================
+;webp_atlas.webp 16×16 四象限（左上红/右上蓝/左下绿/右下黄），lossless 逐像素精确
+GID = 3400
+CALL ASSERT_EQ, GCREATEFROMFILE(GID, "webp_atlas.webp"), 1, @"GCREATEFROMFILE(lossless webp)"
+FAILS += RESULT
+CALL ASSERT_EQ, GCREATED(GID), 1, @"GCREATED"
+FAILS += RESULT
+CALL ASSERT_EQ, GWIDTH(GID), 16, @"GWIDTH = 16"
+FAILS += RESULT
+CALL ASSERT_EQ, GHEIGHT(GID), 16, @"GHEIGHT = 16"
+FAILS += RESULT
+;lossless：解码后逐像素精确（若 Qt 解码失败会走 libwebp 直连；两者都不该是全透明实色）
+CALL ASSERT_EQ, GGETCOLOR(GID, 0, 0), 4294901760, @"左上 = 红 0xFFFF0000（lossless 精确）"
+FAILS += RESULT
+CALL ASSERT_EQ, GGETCOLOR(GID, 15, 0), 4278190335, @"右上 = 蓝"
+FAILS += RESULT
+CALL ASSERT_EQ, GGETCOLOR(GID, 0, 15), 4278255360, @"左下 = 绿"
+FAILS += RESULT
+CALL ASSERT_EQ, GGETCOLOR(GID, 15, 15), 4294967040, @"右下 = 黄"
+FAILS += RESULT
+CALL ASSERT_EQ, GGETCOLOR(GID, 16, 0), -1, @"GGETCOLOR 越界 = -1"
+FAILS += RESULT
+CALL ASSERT_EQ, SPRITECREATED("webp_atlas"), 1, @"裸名（无扩展名）也能解析到 webp"
+FAILS += RESULT
+CALL ASSERT_EQ, SPRITECREATED("webp_atlas.webp"), 1, @"带扩展名同样解析到"
+FAILS += RESULT
+CALL ASSERT_EQ, SPRITEWIDTH("webp_atlas"), 16, @"SPRITEWIDTH(裸名) = 16"
+FAILS += RESULT
+CALL ASSERT_EQ, SPRITEHEIGHT("webp_atlas"), 16, @"SPRITEHEIGHT(裸名) = 16"
+FAILS += RESULT
+CALL ASSERT_EQ, SPRITEGETCOLOR("webp_atlas", 0, 0), 4294901760, @"SPRITEGETCOLOR 经 CSV 精灵 = 红"
+FAILS += RESULT
+;「图像覆盖」回归：Qt 解不了的纯色小图也必须解出真像素（走 libwebp 直连），
+;否则这里会得到 0（全透明回退）—— 那就是拼接缺块、特效消失的根因。
+CALL ASSERT_EQ, SPRITEGETCOLOR("webp_solid", 0, 0), 4294902015, @"纯色4x4 VP8L 真解码（libwebp 直连，非透明回退）"
+FAILS += RESULT
+
+;========================================================================
+; G) eraTW 式堆叠：底片 + 带偏移部件 + 中心差分（リソース作成.ERB 流水线）
+;========================================================================
+G2 = 3401
+CALL ASSERT_EQ, GCREATE(G2, 16, 16), 1, @"合成画布 16×16"
+FAILS += RESULT
+CALL ASSERT_EQ, GDRAWSPRITE(G2, "webp_base", 0, 0, 16, 16), 1, @"底片铺满"
+FAILS += RESULT
+CALL ASSERT_EQ, GGETCOLOR(G2, 4, 4), 4294901760, @"底片左上 = 红"
+FAILS += RESULT
+;部件1：红 8×8，CSV 偏移 (2,0) -> 画到 (8,8) 时落点右移 2 = (10,8)
+CALL ASSERT_EQ, GDRAWSPRITE(G2, "webp_red", 8, 8, 8, 8), 1, @"部件1（红，偏移(2,0)）"
+FAILS += RESULT
+CALL ASSERT_EQ, GGETCOLOR(G2, 12, 12), 4294901760, @"偏移落点 (12,12) = 红（右下黄被盖）"
+FAILS += RESULT
+CALL ASSERT_EQ, GGETCOLOR(G2, 8, 9), 4294967040, @"偏移未盖到处 (8,9) = 黄（落点没错到 (8,8)）"
+FAILS += RESULT
+;部件2：蓝 8×8，CSV 偏移 (0,1) -> 画到 (0,8) 时落点下移 1 = (0,9)
+CALL ASSERT_EQ, GDRAWSPRITE(G2, "webp_blue", 0, 8, 8, 8), 1, @"部件2（蓝，偏移(0,1)）"
+FAILS += RESULT
+CALL ASSERT_EQ, GGETCOLOR(G2, 4, 12), 4278190335, @"偏移落点 (4,12) = 蓝（左下绿被盖）"
+FAILS += RESULT
+CALL ASSERT_EQ, GGETCOLOR(G2, 4, 8), 4278255360, @"偏移未盖到 (4,8) = 绿"
+FAILS += RESULT
+;差分（特效）：品红 4×4 压中心
+CALL ASSERT_EQ, SPRITEGETCOLOR("webp_diff", 0, 0), 4294902015, @"webp_item.webp 真解码（非透明回退）"
+FAILS += RESULT
+CALL ASSERT_EQ, GDRAWSPRITE(G2, "webp_diff", 6, 6, 4, 4), 1, @"差分压中心 (6,6)"
+FAILS += RESULT
+CALL ASSERT_EQ, GGETCOLOR(G2, 6, 6), 4294902015, @"差分内 (6,6) = 品红"
+FAILS += RESULT
+CALL ASSERT_EQ, GGETCOLOR(G2, 9, 9), 4286578943, @"差分内 (9,9) = 紫 0xFF8000FF"
+FAILS += RESULT
+CALL ASSERT_EQ, GGETCOLOR(G2, 5, 5), 4294901760, @"差分外 (5,5) 仍 = 红"
+FAILS += RESULT
+
+;========================================================================
+; H) SPRITECREATE 合成精灵 -> 二次合成
+;========================================================================
+CALL ASSERT_EQ, SPRITECREATE("webp_stack", G2), 1, @"SPRITECREATE(堆叠合成图)"
+FAILS += RESULT
+CALL ASSERT_EQ, SPRITECREATED("webp_stack"), 1, @"SPRITECREATED"
+FAILS += RESULT
+CALL ASSERT_EQ, SPRITEWIDTH("webp_stack"), 16, @"合成精灵宽 = 16"
+FAILS += RESULT
+CALL ASSERT_EQ, SPRITEGETCOLOR("webp_stack", 12, 12), 4294901760, @"合成精灵 (12,12) = 红"
+FAILS += RESULT
+CALL ASSERT_EQ, SPRITEGETCOLOR("webp_stack", 9, 9), 4286578943, @"合成精灵 (9,9) = 紫"
+FAILS += RESULT
+;二次合成：合成精灵当素材再画进新 G（eraTW 立绘合成→再合成 同型）
+G3 = 3402
+CALL ASSERT_EQ, GCREATE(G3, 16, 16), 1, @"二次合成画布"
+FAILS += RESULT
+CALL ASSERT_EQ, GDRAWSPRITE(G3, "webp_stack"), 1, @"2 参 GDRAWSPRITE（按精灵自身尺寸铺）"
+FAILS += RESULT
+CALL ASSERT_EQ, GGETCOLOR(G3, 12, 12), 4294901760, @"二次合成 (12,12) = 红"
+FAILS += RESULT
+CALL ASSERT_EQ, GGETCOLOR(G3, 9, 9), 4286578943, @"二次合成 (9,9) = 紫"
+FAILS += RESULT
+CALL ASSERT_EQ, SPRITEDISPOSE("webp_stack"), 1, @"SPRITEDISPOSE"
+FAILS += RESULT
+CALL ASSERT_EQ, SPRITECREATED("webp_stack"), 0, @"dispose 后不存在"
+FAILS += RESULT
+
+;========================================================================
+; I) 颜色矩阵特效：GDRAWSPRITE 7 参，R→G 通道交换
+;========================================================================
+;矩阵行 = 输出通道：R 行全 0，G 行 = (256,0,0,0,0)（G'=R），A 行 = 单位
+;-> 红(255,0,0) 画成绿(0,255,0)
+VARSET WEBP_CM, 0
+WEBP_CM:1:0 = 256
+WEBP_CM:3:3 = 256
+CALL ASSERT_EQ, WEBP_CM:1:0, 256, @"探针:WEBP_CM:1:0 = 256"
+FAILS += RESULT
+CALL ASSERT_EQ, WEBP_CM:3:3, 256, @"探针:WEBP_CM:3:3 = 256"
+FAILS += RESULT
+CALL ASSERT_EQ, GDRAWSPRITE(G3, "webp_red", 0, 0, 8, 8, WEBP_CM:0:0), 1, @"GDRAWSPRITE 7参（颜色矩阵）"
+FAILS += RESULT
+;webp_red 带 CSV 偏移 (2,0) -> 画到 (0,0,8,8) 的实际落点是 (2,0)
+CALL ASSERT_EQ, GGETCOLOR(G3, 2, 0), 4278255360, @"红被矩阵画成绿（R→G 交换，落点含偏移）"
+FAILS += RESULT
+CALL ASSERT_EQ, GGETCOLOR(G3, 0, 0), 4294901760, @"偏移外 (0,0) = 上一层的红不变"
+FAILS += RESULT
+CALL ASSERT_EQ, GGETCOLOR(G3, 4, 12), 4278190335, @"矩阵只作用于本次绘制：(4,12) 的蓝不变"
+FAILS += RESULT
+
+;========================================================================
+; J) GDRAWG 源矩形拷贝 / GDRAWGWITHMASK 掩码合成 / GSAVE-GLOAD 往返
+;========================================================================
+GSRC = 3403
+CALL ASSERT_EQ, GCREATE(GSRC, 8, 8), 1, @"源 G 8×8"
+FAILS += RESULT
+CALL ASSERT_EQ, GCLEAR(GSRC, 4278255615), 1, @"源 G 涂青"
+FAILS += RESULT
+G4 = 3404
+CALL ASSERT_EQ, GCREATE(G4, 16, 16), 1, @"目标 G 16×16"
+FAILS += RESULT
+CALL ASSERT_EQ, GCLEAR(G4, 0), 1, @"目标 G 清成全透明"
+FAILS += RESULT
+;GDRAWG id, srcId, destX,destY,destW,destH, srcX,srcY,srcW,srcH
+CALL ASSERT_EQ, GDRAWG(G4, GSRC, 0, 0, 4, 4, 2, 2, 4, 4), 1, @"GDRAWG 源矩形(2,2,4,4)->目标(0,0,4,4)"
+FAILS += RESULT
+CALL ASSERT_EQ, GGETCOLOR(G4, 0, 0), 4278255615, @"拷贝落点 (0,0) = 青"
+FAILS += RESULT
+CALL ASSERT_EQ, GGETCOLOR(G4, 3, 3), 4278255615, @"拷贝内 (3,3) = 青"
+FAILS += RESULT
+CALL ASSERT_EQ, GGETCOLOR(G4, 4, 4), 0, @"拷贝外 (4,4) 透明"
+FAILS += RESULT
+;掩码：8×8 全透明 + 左上 4×4 不透明白 -> 只在掩码不透明处用源图覆盖
+GMASK = 3405
+CALL ASSERT_EQ, GCREATE(GMASK, 8, 8), 1, @"掩码 G 8×8"
+FAILS += RESULT
+CALL ASSERT_EQ, GCLEAR(GMASK, 0), 1, @"掩码全透明"
+FAILS += RESULT
+CALL ASSERT_EQ, GSETBRUSH(GMASK, 4294967295), 1, @"掩码画刷白"
+FAILS += RESULT
+CALL ASSERT_EQ, GFILLRECTANGLE(GMASK, 0, 0, 4, 4), 1, @"掩码左上 4×4 不透明"
+FAILS += RESULT
+G6 = 3406
+CALL ASSERT_EQ, GCREATE(G6, 8, 8), 1, @"掩码目标 G 8×8"
+FAILS += RESULT
+CALL ASSERT_EQ, GCLEAR(G6, 4278190080), 1, @"掩码目标涂黑（不透明）"
+FAILS += RESULT
+CALL ASSERT_EQ, GDRAWGWITHMASK(G6, GSRC, GMASK, 0, 0), 1, @"GDRAWGWITHMASK"
+FAILS += RESULT
+CALL ASSERT_EQ, GGETCOLOR(G6, 0, 0), 4278255615, @"掩码不透明处 = 源的青"
+FAILS += RESULT
+CALL ASSERT_EQ, GGETCOLOR(G6, 6, 6), 4278190080, @"掩码透明处 = 保留底的黑"
+FAILS += RESULT
+;掩码取的是**蓝色值**（Command.html 明写「把掩码图像的蓝色值作为不透明度」），
+;不是 alpha：纯红掩码 alpha=255 但蓝=0 -> 视为完全透明，目标一点不改。
+CALL ASSERT_EQ, GCLEAR(GMASK, 4294901760), 1, @"掩码改涂纯红（alpha=255, 蓝=0）"
+FAILS += RESULT
+CALL ASSERT_EQ, GCLEAR(G6, 4278190080), 1, @"目标重新涂黑（不透明）"
+FAILS += RESULT
+CALL ASSERT_EQ, GDRAWGWITHMASK(G6, GSRC, GMASK, 0, 0), 1, @"GDRAWGWITHMASK(纯红掩码) 执行成功"
+FAILS += RESULT
+CALL ASSERT_EQ, GGETCOLOR(G6, 0, 0), 4278190080, @"纯红掩码蓝=0 -> 视为全透明，目标仍是黑（不是源的青）"
+FAILS += RESULT
+;失败条件（对齐 C# GraphicsDrawGWithMaskMethod / Command.html）：
+;  srcID 与 maskID 宽高必须完全一致；绘制区域不得超出 destID。
+CALL ASSERT_EQ, GDRAWGWITHMASK(G6, GSRC, G4, 0, 0), 0, @"mask(16x16) != src(8x8) -> 0"
+FAILS += RESULT
+CALL ASSERT_EQ, GDRAWGWITHMASK(G6, GSRC, GMASK, 4, 4), 0, @"绘制区域超出 dest(8x8) -> 0"
+FAILS += RESULT
+;GSAVE/GLOAD 落盘往返（sav/imgNNNN.png）
+CALL ASSERT_EQ, GSAVE(GSRC, 3400), 1, @"GSAVE -> sav/img3400.png"
+FAILS += RESULT
+G7 = 3407
+CALL ASSERT_EQ, GLOAD(G7, 3400), 1, @"GLOAD 到新 ID"
+FAILS += RESULT
+CALL ASSERT_EQ, GWIDTH(G7), 8, @"往返后宽 = 8"
+FAILS += RESULT
+CALL ASSERT_EQ, GGETCOLOR(G7, 0, 0), 4278255615, @"往返后 (0,0) = 青"
+FAILS += RESULT
+
+;========================================================================
+; K) 精灵图序列（eraTW 映姫 30.csv 同名多行 = 帧；运行期 SPRITEANIME 系）
+;========================================================================
+;三帧 = 三张堆叠合成图：底片 -> 底片+部件 -> 底片+部件+差分（eraTW 差分轮播同型）
+GF1 = 3410
+CALL ASSERT_EQ, GCREATE(GF1, 16, 16), 1, @"序列帧1画布"
+FAILS += RESULT
+CALL ASSERT_EQ, GDRAWSPRITE(GF1, "webp_base", 0, 0, 16, 16), 1, @"帧1 = 底片"
+FAILS += RESULT
+GF2 = 3411
+CALL ASSERT_EQ, GCREATE(GF2, 16, 16), 1, @"序列帧2画布"
+FAILS += RESULT
+CALL ASSERT_EQ, GDRAWSPRITE(GF2, "webp_base", 0, 0, 16, 16), 1, @"帧2 = 底片"
+FAILS += RESULT
+CALL ASSERT_EQ, GDRAWSPRITE(GF2, "webp_red", 8, 8, 8, 8), 1, @"帧2 += 部件(红)"
+FAILS += RESULT
+GF3 = 3412
+CALL ASSERT_EQ, GCREATE(GF3, 16, 16), 1, @"序列帧3画布"
+FAILS += RESULT
+CALL ASSERT_EQ, GDRAWG(GF3, GF2, 0, 0, 16, 16, 0, 0, 16, 16), 1, @"帧3 = 帧2 全图拷贝"
+FAILS += RESULT
+CALL ASSERT_EQ, GDRAWSPRITE(GF3, "webp_diff", 6, 6, 4, 4), 1, @"帧3 += 差分(品红)"
+FAILS += RESULT
+CALL ASSERT_EQ, GGETCOLOR(GF1, 12, 12), 4294967040, @"帧1 (12,12) = 黄（无部件）"
+FAILS += RESULT
+CALL ASSERT_EQ, GGETCOLOR(GF2, 12, 12), 4294901760, @"帧2 (12,12) = 红（部件已叠）"
+FAILS += RESULT
+CALL ASSERT_EQ, GGETCOLOR(GF3, 9, 9), 4286578943, @"帧3 (9,9) = 紫（差分已压）"
+FAILS += RESULT
+CALL ASSERT_EQ, SPRITEANIMECREATE("webp_seq", 16, 16), 1, @"SPRITEANIMECREATE(序列声明)"
+FAILS += RESULT
+;延时取 eraTW 30.csv 的帧时间形态（首帧长驻 4500ms，后续 60/50ms）
+CALL ASSERT_EQ, SPRITEANIMEADDFRAME("webp_seq", GF1, 0, 0, 16, 16, 0, 0, 4500), 1, @"序列帧1（延时4500）"
+FAILS += RESULT
+CALL ASSERT_EQ, SPRITEANIMEADDFRAME("webp_seq", GF2, 0, 0, 16, 16, 0, 0, 60), 1, @"序列帧2（延时60）"
+FAILS += RESULT
+CALL ASSERT_EQ, SPRITEANIMEADDFRAME("webp_seq", GF3, 0, 0, 16, 16, 0, 0, 50), 1, @"序列帧3（延时50）"
+FAILS += RESULT
+CALL ASSERT_EQ, SPRITEANIMEADDFRAME("no_such_seq", GF1, 0, 0, 16, 16, 0, 0, 60), 0, @"未声明的序列加帧 = 0"
+FAILS += RESULT
+CALL ASSERT_EQ, SPRITEANIMECREATE("bad_seq", 0, 16), 0, @"尺寸 0 的序列声明 = 0"
+FAILS += RESULT
+CALL ASSERT_EQ, SETANIMETIMER(55), 0, @"SETANIMETIMER 接受（渲染层暂未消费，接受即 0）"
+FAILS += RESULT
+
+;========================================================================
+; L) 真实 webp（gist 文件）：有损 / 裸 VP8 / 动画
+;========================================================================
+;只断言「能解码出正确尺寸 + 像素采样有效」，不比色（有损无精确期望值）
+G5 = 3408
+CALL ASSERT_EQ, GCREATEFROMFILE(G5, "isotile_lossy.webp"), 1, @"GCREATEFROMFILE(VP8X 有损 2048²)"
+FAILS += RESULT
+CALL ASSERT_EQ, GWIDTH(G5), 2048, @"isotile 宽 = 2048"
+FAILS += RESULT
+CALL ASSERT_EQ, GHEIGHT(G5), 2048, @"isotile 高 = 2048"
+FAILS += RESULT
+CALL ASSERT_TRUE, GGETCOLOR(G5, 0, 0) >= 0, @"isotile 像素采样有效"
+FAILS += RESULT
+CALL ASSERT_EQ, GDISPOSE(G5), 1, @"GDISPOSE(isotile)"
+FAILS += RESULT
+CALL ASSERT_EQ, GCREATEFROMFILE(G5, "anim_add_lossy.webp"), 1, @"GCREATEFROMFILE(裸 VP8 有损帧图集)"
+FAILS += RESULT
+CALL ASSERT_EQ, GWIDTH(G5), 1408, @"anim_add 宽 = 1408（11×128）"
+FAILS += RESULT
+CALL ASSERT_EQ, GHEIGHT(G5), 1536, @"anim_add 高 = 1536（12×128）"
+FAILS += RESULT
+CALL ASSERT_TRUE, GGETCOLOR(G5, 100, 100) >= 0, @"anim_add 像素采样有效"
+FAILS += RESULT
+CALL ASSERT_EQ, GDISPOSE(G5), 1, @"GDISPOSE(anim_add)"
+FAILS += RESULT
+;动画 webp：QImage 读首帧，尺寸必须是 128×128
+CALL ASSERT_EQ, GCREATEFROMFILE(G5, "anim_alpha_animated_lossy.webp"), 1, @"GCREATEFROMFILE(VP8X 动画)"
+FAILS += RESULT
+CALL ASSERT_EQ, GWIDTH(G5), 128, @"动画 webp 宽 = 128（首帧）"
+FAILS += RESULT
+CALL ASSERT_EQ, GHEIGHT(G5), 128, @"动画 webp 高 = 128（首帧）"
+FAILS += RESULT
+CALL ASSERT_TRUE, GGETCOLOR(G5, 64, 64) >= 0, @"动画 webp 首帧像素采样有效"
+FAILS += RESULT
+CALL ASSERT_EQ, GDISPOSE(G5), 1, @"GDISPOSE(动画)"
+FAILS += RESULT
+
+;========================================================================
+; M) CBG 家族（ClientBackground · Command.html「图像处理相关」）
+;    客户端区域背景图像：按 zdepth 与文字分层（负 z 画在文字前）。
+;    本组只做数据层/返回值断言（渲染消费在 GUI 抓帧里看）。
+;    返回值对齐 C# Creator.Method.cs：
+;      CBGSETG/CBGSETBMAPG 需 G 存在；CBGSETSPRITE 需精灵/静态资源存在；
+;      CBGSETBUTTONSPRITE 只校验按钮值 0..0xFFFFFF（精灵可空串/不存在）；
+;      CBGREMOVERANGE / CBGCLEAR / CBGCLEARBUTTON / CBGREMOVEBMAP 恒返回 1。
+;========================================================================
+GID2 = 3420
+CALL ASSERT_EQ, GCREATE(GID2, 8, 8), 1, @"CBG 用 G 8×8"
+FAILS += RESULT
+CALL ASSERT_EQ, CBGSETG(GID2, 0, 0, 1), 1, @"CBGSETG(存在的 G) = 1"
+FAILS += RESULT
+CALL ASSERT_EQ, CBGSETG(9999, 0, 0, 1), 0, @"CBGSETG(不存在的 G) = 0"
+FAILS += RESULT
+CALL ASSERT_EQ, CBGSETBMAPG(GID2), 1, @"CBGSETBMAPG(存在的 G) = 1"
+FAILS += RESULT
+CALL ASSERT_EQ, CBGSETBMAPG(9999), 0, @"CBGSETBMAPG(不存在的 G) = 0"
+FAILS += RESULT
+CALL ASSERT_EQ, CBGSETSPRITE("off_part", 0, 0, 2), 1, @"CBGSETSPRITE(存在的静态资源) = 1"
+FAILS += RESULT
+CALL ASSERT_EQ, CBGSETSPRITE("no_such_sprite_xyz", 0, 0, 2), 0, @"CBGSETSPRITE(不存在) = 0"
+FAILS += RESULT
+;C# CBGSETBUTTONSPRITE <按钮值>, <精灵名>, <选中精灵名>, <x>, <y>, <z>{, <tooltip>}
+CALL ASSERT_EQ, CBGSETBUTTONSPRITE(7, "off_part", "off_base", 0, 0, 3), 1, @"CBGSETBUTTONSPRITE(6 参) = 1"
+FAILS += RESULT
+CALL ASSERT_EQ, CBGSETBUTTONSPRITE(8, "off_part", "off_base", 0, 0, 3, "提示"), 1, @"CBGSETBUTTONSPRITE(7 参 + tooltip) = 1"
+FAILS += RESULT
+;精灵名允许空串、甚至不存在（C# 不校验精灵）；只校验按钮值范围 0..0xFFFFFF
+CALL ASSERT_EQ, CBGSETBUTTONSPRITE(9, "", "", 0, 0, 3), 1, @"CBGSETBUTTONSPRITE(空精灵名) = 1（C# 不校验精灵）"
+FAILS += RESULT
+CALL ASSERT_EQ, CBGSETBUTTONSPRITE(-1, "off_part", "", 0, 0, 3), 0, @"CBGSETBUTTONSPRITE(按钮值 -1) = 0"
+FAILS += RESULT
+CALL ASSERT_EQ, CBGSETBUTTONSPRITE(16777216, "off_part", "", 0, 0, 3), 0, @"CBGSETBUTTONSPRITE(按钮值 0x1000000) = 0"
+FAILS += RESULT
+CALL ASSERT_EQ, CBGREMOVERANGE(3, 3), 1, @"CBGREMOVERANGE 恒返回 1（删 z=3 的按钮层）"
+FAILS += RESULT
+CALL ASSERT_EQ, CBGREMOVERANGE(3, 3), 1, @"CBGREMOVERANGE 再次调用仍返回 1（已无层）"
+FAILS += RESULT
+CALL ASSERT_EQ, CBGREMOVERANGE(0, 10), 1, @"CBGREMOVERANGE(0,10) 删掉剩余层 = 1"
+FAILS += RESULT
+;CBGCLEAR/CBGCLEARBUTTON/CBGREMOVEBMAP 也是纯动作，恒返回 1
+CBGSETG(GID2, 0, 0, 1)
+CBGSETBUTTONSPRITE(5, "off_part", "off_base", 0, 0, 4)
+CALL ASSERT_EQ, CBGCLEARBUTTON, 1, @"CBGCLEARBUTTON = 1"
+FAILS += RESULT
+CALL ASSERT_EQ, CBGREMOVEBMAP, 1, @"CBGREMOVEBMAP = 1"
+FAILS += RESULT
+CALL ASSERT_EQ, CBGCLEAR, 1, @"CBGCLEAR = 1"
+FAILS += RESULT
+CALL ASSERT_EQ, GDISPOSE(GID2), 1, @"GDISPOSE(CBG 用 G)"
+FAILS += RESULT
+
+;========================================================================
+; N) HTML_PRINT <img> 展示（QML 图像功能的截图检查素材）
+;    eraTW グラフィック表示.ERB 的 <img src=… width=… height=…> 生成式同型。
+;    width/height 是**字号百分比**（800 ≈ 8 倍字号）。展示精灵不销毁：QML 异步
+;    取图晚于本函数结束，销毁会让 <img> 退化成 AltText。
+;========================================================================
+PRINTL ---- HTML_PRINT 展示（webp 图像渲染） ----
+CALL ASSERT_EQ, SPRITECREATE("webp_stack2", G2), 1, @"SPRITECREATE(展示用合成精灵)"
+FAILS += RESULT
+HTML_PRINT @"<img src='webp_stack2' width='800' height='800'><img src='webp_atlas.webp' width='800' height='800'>"
+;图像跨 8 行（800% 字号），先占住行再打下一组，否则后打印的图会叠在上面
+PRINTL
+PRINTL
+PRINTL
+PRINTL
+PRINTL
+PRINTL
+PRINTL
+PRINTL
+HTML_PRINT @"<img src='webp_atlas' width='800' height='800'><img src='anim_alpha_animated_lossy.webp' width='800' height='800'>"
+PRINTL
+PRINTL
+PRINTL
+PRINTL
+PRINTL
+PRINTL
+PRINTL
+PRINTL
+PRINTL
+PRINTL
+PRINTL
+PRINTL
+PRINTL
+PRINTL
+PRINTL
+PRINTL
+PRINTL
+HTML_PRINT @"<p align='left'><img src='webp_base' width='400' height='400'> eraTW 式 img 行：src/width/height 生成</p>"
+
+;--- 清理（webp_stack2 展示精灵常驻，见上） ------------------------------
+CALL ASSERT_EQ, GDISPOSE(GID), 1, @"GDISPOSE(atlas)"
+FAILS += RESULT
+CALL ASSERT_EQ, GDISPOSE(G2), 1, @"GDISPOSE(合成)"
+FAILS += RESULT
+CALL ASSERT_EQ, GDISPOSE(G3), 1, @"GDISPOSE(二次合成)"
+FAILS += RESULT
+CALL ASSERT_EQ, GDISPOSE(GSRC), 1, @"GDISPOSE(源)"
+FAILS += RESULT
+CALL ASSERT_EQ, GDISPOSE(G4), 1, @"GDISPOSE(GDRAWG 目标)"
+FAILS += RESULT
+CALL ASSERT_EQ, GDISPOSE(GMASK), 1, @"GDISPOSE(掩码)"
+FAILS += RESULT
+CALL ASSERT_EQ, GDISPOSE(G6), 1, @"GDISPOSE(掩码目标)"
+FAILS += RESULT
+CALL ASSERT_EQ, GDISPOSE(G7), 1, @"GDISPOSE(GLOAD)"
+FAILS += RESULT
+CALL ASSERT_EQ, GDISPOSE(GF1), 1, @"GDISPOSE(帧1)"
+FAILS += RESULT
+CALL ASSERT_EQ, GDISPOSE(GF2), 1, @"GDISPOSE(帧2)"
+FAILS += RESULT
+CALL ASSERT_EQ, GDISPOSE(GF3), 1, @"GDISPOSE(帧3)"
+FAILS += RESULT
+RETURN FAILS

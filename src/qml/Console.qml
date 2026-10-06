@@ -51,6 +51,8 @@ Item {
 
     property var backend: null              // ConsoleBackend（兼行模型）
     readonly property var lineModel: backend
+    // 标准标题画面（QML）是否显示：为真时隐藏底部输入行与原始输入层。
+    property bool titleActive: false
     property int lineHeight: 19
     property string fontName: ""            // 来自 GuiManager
     property int fontSize: 18
@@ -360,7 +362,7 @@ Item {
         anchors.right: parent.right
         anchors.bottom: parent.bottom
         height: visible ? implicitHeight : 0
-        visible: backend && backend.waitingInput && !root.primitiveInput
+        visible: backend && backend.waitingInput && !root.primitiveInput && !root.titleActive
         background: null                 // 无边框：去掉 TextField 默认描边
         topPadding: 0
         bottomPadding: 0

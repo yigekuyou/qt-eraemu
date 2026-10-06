@@ -21,7 +21,7 @@
 #   ./test/run_example.sh 29       # 破坏性组（BEGIN FIRST：@EVENTFIRST #PRI/#LATER/#SINGLE/#ONLY 流）
 #   ./test/run_example.sh 30       # 音频·图片（用命令随机生成素材：G* 图像命令 + EE 音频命令）
 #   ./test/run_example.sh 31       # GETCONFIG/GETCONFIGS（emuera.config 取值白名单/类型/默认）
-#   ./test/run_example.sh 32       # CSV 精灵偏移（立绘合成：GDRAWSPRITE/差分覆盖/尺寸头回退）
+#   ./test/run_example.sh 32       # 通用图像处理（G/SPRITE/CBG + 真实图像文件 webp：GDRAWSPRITE 落点/覆盖、libwebp）
 #   ./test/run_example.sh 33       # END 是变量（#DIM END）不是指令（eraTW 角色移動 死循环回归）
 #
 # 依赖：build/src/eraengine/test_cli

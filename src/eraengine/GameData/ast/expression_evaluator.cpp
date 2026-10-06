@@ -2473,13 +2473,26 @@ bool ExpressionEvaluator::evaluateBuiltin(const FunctionNode &node, VariableStor
         out = QVariant::fromValue<qint64>(GraphicsStore::cbgSetBmapG(int(I(0))) ? 1 : 0);
         return true;
     }
-    case BuiltinOp::CbgClear:      GraphicsStore::cbgClear();           break;
-    case BuiltinOp::CbgClearButton: GraphicsStore::cbgClearButton();     break;
-    case BuiltinOp::CbgRemoveRange: {
-        out = QVariant::fromValue<qint64>(GraphicsStore::cbgRemoveRange(int(I(0)), int(I(1))) ? 1 : 0);
+    case BuiltinOp::CbgClear:
+        // C# CBGClearMethod：恒返回 1（纯动作）
+        GraphicsStore::cbgClear();
+        out = QVariant::fromValue<qint64>(1);
         return true;
-    }
-    case BuiltinOp::CbgRemoveBmap: GraphicsStore::cbgRemoveBmap();       break;
+    case BuiltinOp::CbgClearButton:
+        // C# CBGClearButtonMethod：恒返回 1；内部还会顺带清按钮映射
+        GraphicsStore::cbgClearButton();
+        out = QVariant::fromValue<qint64>(1);
+        return true;
+    case BuiltinOp::CbgRemoveRange:
+        // C# CBGRemoveRangeMethod：清 [zmin,zmax] 的层，**恒返回 1**
+        GraphicsStore::cbgRemoveRange(int(I(0)), int(I(1)));
+        out = QVariant::fromValue<qint64>(1);
+        return true;
+    case BuiltinOp::CbgRemoveBmap:
+        // C# CBGRemoveBMapMethod：恒返回 1
+        GraphicsStore::cbgRemoveBmap();
+        out = QVariant::fromValue<qint64>(1);
+        return true;
     case BuiltinOp::SpriteAnimeCreate: {
         out = QVariant::fromValue<qint64>(GraphicsStore::spriteAnimeCreate(S(0), int(I(1)), int(I(2))) ? 1 : 0);
         return true;

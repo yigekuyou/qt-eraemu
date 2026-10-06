@@ -773,30 +773,23 @@ void SystemStateMachine::beginTitle() {
     }
     m_skipPrint = false;
 
+    // 标准标题画面由 QML 渲染：先无条件收掉（自定义 @SYSTEM_TITLE / 重新进标题
+    // 都会先关，再由下面的分支决定是否重新翻开）。
+    if (m_host.setDefaultTitleVisible) m_host.setDefaultTitleVisible(false);
+    m_defaultTitleShown = false;
+
     // @SYSTEM_TITLE 存在则用自定义标题画面（对齐 C# callFunction("SYSTEM_TITLE", false, false)）
     if (callFunction(QStringLiteral("SYSTEM_TITLE"), false, false)) {
         setState(SystemStateCode::Normal);
         return;
     }
 
-    // 标准标题画面
-    if (m_host.printBar) m_host.printBar();
-    if (m_host.newLine) m_host.newLine();
-    if (m_host.setAlignment) m_host.setAlignment(1);   // Center
-    printLine(m_host.scriptTitle ? m_host.scriptTitle() : QString());
-    if ((m_host.scriptVersion ? m_host.scriptVersion() : 0) != 0) {
-        printLine(m_host.scriptVersionText ? m_host.scriptVersionText() : QString());
-    }
-    printLine(m_host.scriptAutherName ? m_host.scriptAutherName() : QString());
-    printLine(QStringLiteral("(%1)").arg(m_host.scriptYear ? m_host.scriptYear() : QString()));
-    if (m_host.newLine) m_host.newLine();
-    printLine(m_host.scriptDetail ? m_host.scriptDetail() : QString());
-    if (m_host.setAlignment) m_host.setAlignment(0);   // Left
-
-    if (m_host.printBar) m_host.printBar();
-    if (m_host.newLine) m_host.newLine();
-    printLine(QStringLiteral("[0] ") + (m_host.titleMenuString ? m_host.titleMenuString(0) : QString()));
-    printLine(QStringLiteral("[1] ") + (m_host.titleMenuString ? m_host.titleMenuString(1) : QString()));
+    // 标准标题画面：不再由 C++ 往控制台打印，而是翻开开关交给 QML 画
+    // （标题/版本/作者/年份/说明 + [0]/[1] 菜单）。输入仍走同一套 openingInput()，
+    // QML 点菜单 -> EraEngine::chooseTitle -> provideInput。无 GUI 的宿主
+    // （setDefaultTitleVisible 为空）行为与旧版一致：只进入等待输入。
+    if (m_host.setDefaultTitleVisible) m_host.setDefaultTitleVisible(true);
+    m_defaultTitleShown = true;
     openingInput();
 }
 
@@ -825,6 +818,9 @@ void SystemStateMachine::endOpenning() {
         // 输入非法：重画选项，要求重新选择
         deleteLines(1);
         printTemporary(QStringLiteral("无效的值"));
+        // 标准标题由 QML 画：非法输入后把标题界面再翻开（用户重新点菜单）。
+        if (m_defaultTitleShown && m_host.setDefaultTitleVisible)
+            m_host.setDefaultTitleVisible(true);
         openingInput();
     }
 }

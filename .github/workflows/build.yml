@@ -21,8 +21,10 @@
 # 缓存），再 qt-cmake 配置 → 编译 appemuera → 收运行库 → 传 Artifacts。
 #
 # 几点说明（改这个文件前值得一看）：
-#   * Qt 版本与本地开发环境对齐（作者本机 Qt 6.11.2）；cmake_minimum 上
-#     qt_standard_project_setup(REQUIRES 6.10) 要求 >= 6.10。
+#   * Qt 版本与本地开发环境对齐（作者本机 Qt 6.11.2，三平台同版本）。
+#     注意项目实际下限就是 6.11（text_encoding.cpp 用了 Qt 6.11 才有的
+#     QStringDecoder::finalize()），所以 CMakeLists 里也是 REQUIRES 6.11；
+#     Windows 上它得靠 aqtinstall 的 git 源才能装上，见 windows job 的注释。
 #   * 只编译 `appemuera` 目标，不跑单测：引擎单测里有 POSIX 专用代码
 #     （test_cli.cpp 的 <unistd.h>，还有 socket/TCP harness），MSVC 下编不过。
 #     三平台 CI 的目标是「应用能不能出包」，单测交给本地 Linux 跑。
@@ -47,22 +49,15 @@ concurrency:
   cancel-in-progress: true
 
 env:
-  # 与本地开发环境对齐（作者本机 Qt 6.11.2）；qt_standard_project_setup
-  # 里 REQUIRES 6.10，所以 6.10.x 也在项目允许范围内。
+  # 与本地开发环境对齐（作者本机 Qt 6.11.2）。
+  # 注意：项目实际下限是 6.11 而不是 CMakeLists 里写的 6.10 ——
+  # text_encoding.cpp 用了 QStringDecoder/QStringEncoder::finalize() 与
+  # QStringConverter::FinalizeResultError，这两样 Qt 文档标注
+  # "introduced in Qt 6.11"（改用 6.10.3 会在 MSVC/GCC 上报 C2039）。
   QT_VERSION: '6.11.2'
-  # 只有 Windows 用 6.10.3：Qt 6.11 的 Windows 仓库换了目录/包命名，
-  # aqtinstall（最新 v3.3.0）还认不出来，装 Qt 那一步会直接退出码 1。
-  # install-qt-action 自己的测试矩阵里就写着这句、把 6.11 的 Windows 用例
-  # 注释掉了：
-  #   "Installing Qt 6.11 on Windows is broken till aqtinstall v3.3.0
-  #    (the latest version so far)"
-  # 上游能装 6.11 之后，把 QT_VERSION_WINDOWS 删掉、统一用 QT_VERSION 即可。
-  QT_VERSION_WINDOWS: '6.10.3'
-  # install-qt-action 从 v4.4.1 起默认把 Python 拉到 3.14，而它随后要 pip
-  # 装的 py7zr==1.1.0 在 3.14 上未必有预编译 wheel，Windows runner 没有
-  # 可用的 MSVC 环境去现场编译（pip 退出码 1）。三个平台统一钉 3.12，
-  # 并用 setup-python: false 让 action 复用这个解释器。
-  PYTHON_VERSION: '3.12'
+  # Python 交给 install-qt-action 自己管（它内部用 actions/setup-python，
+  # 现在会拉到 3.14，而它的自查提示正好推荐 >=3.14：低版本在处理
+  # zipfile/7z 时有文件类型识别 bug，见 aqtinstall#1042）。
   # qmlimportscanner 会在部署阶段读 QML 的 import：
   #   * QtMultimedia —— AudioPlayers.qml（MediaPlayer / SoundEffect）
   #   * qtimageformats —— eraTW 的 *.webp（libqwebp 插件）
@@ -80,20 +75,26 @@ jobs:
       - name: 检出源码
         uses: actions/checkout@v4
 
-      - name: 准备 Python ${{ env.PYTHON_VERSION }}
-        uses: actions/setup-python@v5
-        with:
-          python-version: ${{ env.PYTHON_VERSION }}
-
-      - name: 安装 Qt ${{ env.QT_VERSION_WINDOWS }}
+      - name: 安装 Qt ${{ env.QT_VERSION }}（Windows 用 aqtinstall master）
         uses: jurplel/install-qt-action@v4
         with:
-          version: ${{ env.QT_VERSION_WINDOWS }}
+          version: ${{ env.QT_VERSION }}
           host: windows
           target: desktop
           arch: win64_msvc2022_64
           modules: ${{ env.QT_MODULES }}
-          setup-python: false
+          # 从 Qt 6.11 起，Qt 的 Windows 仓库换了目录结构：
+          #   .../windows_x86/desktop/qt6_6112/qt6_6112_msvc2022_64/Updates.xml
+          # （不再有内层同名的 qt6_6112 目录），而 aqtinstall 最新正式版
+          # 3.3.0（2025-06 发布）仍按老结构去找，于是报
+          #   ERROR: Failed to locate XML data for Qt version '6.11.2'
+          # 并以退出码 1 结束 —— 这正是之前 Windows 一直装不上 Qt 的原因
+          # （aqtinstall#959；install-qt-action 的测试矩阵也把 6.11 的
+          #  Windows 用例注释掉了）。
+          # 修它的 PR #1000「Support Qt 6.11+ for Windows x64」在 2026-03
+          # 就合进了 master，但至今没发版，所以这里直接从 git 源装。
+          # 上游发了新版之后，删掉这一行即可（aqtsource 会覆盖 aqtversion）。
+          aqtsource: 'git+https://github.com/miurahr/aqtinstall.git'
           cache: true
 
       - name: 配置（CMake + Visual Studio 2022，默认生成器）
@@ -158,11 +159,6 @@ jobs:
       - name: 检出源码
         uses: actions/checkout@v4
 
-      - name: 准备 Python ${{ env.PYTHON_VERSION }}
-        uses: actions/setup-python@v5
-        with:
-          python-version: ${{ env.PYTHON_VERSION }}
-
       - name: 安装 Qt ${{ env.QT_VERSION }}
         uses: jurplel/install-qt-action@v4
         with:
@@ -171,7 +167,6 @@ jobs:
           target: desktop
           arch: clang_64
           modules: ${{ env.QT_MODULES }}
-          setup-python: false
           cache: true
 
       - name: 配置（CMake + Ninja）
@@ -217,10 +212,7 @@ jobs:
           distribution: temurin
           java-version: '17'
 
-      - name: 准备 Python ${{ env.PYTHON_VERSION }}
-        uses: actions/setup-python@v5
-        with:
-          python-version: ${{ env.PYTHON_VERSION }}
+
 
       - name: 安装 Qt ${{ env.QT_VERSION }}（Android）
         uses: jurplel/install-qt-action@v4
@@ -229,7 +221,6 @@ jobs:
           target: android
           arch: android_arm64_v8a
           modules: ${{ env.QT_MODULES }}
-          setup-python: false
           cache: true
 
       - name: 准备 Android SDK / NDK

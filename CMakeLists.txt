@@ -36,7 +36,11 @@ find_package(OpenMP)
 # 所以不做 REQUIRED —— Windows/macOS 的 CI runner 不必额外安装。
 find_package(BISON)
 find_package(FLEX)
-qt_standard_project_setup(REQUIRES 6.10)
+# REQUIRES 6.11 而不是 6.10：engine 里用了 QStringDecoder/QStringEncoder
+# ::finalize() 与 QStringConverter::FinalizeResultError（Qt 文档标注
+# "introduced in Qt 6.11"，见 Content/encoding/text_encoding.cpp）；写 6.10
+# 的话配置能过、编译才炸 C2039，不如让 CMake 早一点报清楚。
+qt_standard_project_setup(REQUIRES 6.11)
 
 qt_add_executable(appemuera
     src/main.cpp

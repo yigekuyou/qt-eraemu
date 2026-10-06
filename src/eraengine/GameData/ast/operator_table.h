@@ -46,6 +46,9 @@ struct BinarySignature {
 struct OperatorDef {
     TokenType   op = TokenType::UNKNOWN;
     int         precedence = 0;               // 0 表示不是二元运算符
+    // 结合性：false = 左结合（EraBasic 全部运算符的默认，对齐 C# TermStack 的
+    // 「栈顶优先级 ≥ 新优先级即归约」）；true = 右结合（本表预留，见 operatorBindingPower）。
+    bool        rightAssoc = false;
     std::uint8_t unaryArity = 0;              // 0/1：是否可作一元
     OperandType  unaryOperand = OperandType::Unknown;
     OperandType  unaryResult = OperandType::Unknown;
@@ -85,6 +88,12 @@ constexpr OperatorDef asUnary(OperatorDef d, OperandType operand, OperandType re
     d.unaryArity = 1;
     d.unaryOperand = operand;
     d.unaryResult = result;
+    return d;
+}
+
+// 标记为右结合（EraBasic 原生运算符都是左结合，本表预留）
+constexpr OperatorDef asRightAssoc(OperatorDef d) {
+    d.rightAssoc = true;
     return d;
 }
 
@@ -151,6 +160,30 @@ inline constexpr auto kOperatorTable = std::to_array<OperatorDef>({
 [[nodiscard]] constexpr int operatorPrecedence(TokenType op) noexcept {
     const OperatorDef* d = findOperator(op);
     return d ? d->precedence : 0;
+}
+
+// ---------------------------------------------------------------------------
+// 绑定力（Pratt / precedence climbing 用）
+//
+//   left  = 与「当前最小绑定力」比较的阈值（< 则停止，交给外层）；
+//   right = 递归解析右操作数时传入的最小绑定力。
+//
+// 结合性由此自然表达（对齐 matklad「Simple but Powerful Pratt Parsing」）：
+//   左结合：{p, p+1}    —— 同优先级的下一个运算符会停止递归 → 先归约左边
+//   右结合：{p, p  }    —— 同优先级继续递归 → 归约到右边
+// 实测：A - B - C（左，p=9）=> ((A-B)-C)；若把 - 标为右结合 => (A-(B-C))。
+//
+// 非二元运算符返回 {0, 0}（left==0 即「不是二元运算符」的哨兵）。
+// ---------------------------------------------------------------------------
+struct BindingPower {
+    int left  = 0;
+    int right = 0;
+};
+
+[[nodiscard]] constexpr BindingPower operatorBindingPower(TokenType op) noexcept {
+    const OperatorDef* d = findOperator(op);
+    if (!d || d->precedence == 0) return BindingPower{0, 0};
+    return BindingPower{d->precedence, d->precedence + (d->rightAssoc ? 0 : 1)};
 }
 
 // 二元结果类型推断：返回 nullopt 表示类型不匹配（解析期类型错误）

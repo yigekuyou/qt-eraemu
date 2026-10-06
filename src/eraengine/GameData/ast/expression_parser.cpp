@@ -46,6 +46,11 @@ int ExpressionParser::binaryPrecedence(TokenType type) {
     return operatorPrecedence(type);
 }
 
+BindingPower ExpressionParser::binaryBindingPower(TokenType type) {
+    // 单一来源：运算符表（operator_table.h）—— 左结合 {p, p+1}、右结合 {p, p}
+    return operatorBindingPower(type);
+}
+
 QSharedPointer<ExpressionNode> ExpressionParser::parse(const QList<ExpressionToken>& tokens) {
     m_tokens = tokens;
     m_current = 0;
@@ -111,13 +116,18 @@ QSharedPointer<ExpressionNode> ExpressionParser::parseBinary(int minPrecedence) 
 
     while (true) {
         const ExpressionToken op = peek();
-        const int prec = binaryPrecedence(op.type());
-        if (prec == 0 || prec < minPrecedence) {
+        // 绑定力（Pratt）：单一来源 = 运算符表，或由 Provider 注入（见头文件）。
+        const BindingPower bp = m_bindingPowerProvider
+                                    ? m_bindingPowerProvider(op.type())
+                                    : binaryBindingPower(op.type());
+        if (bp.left == 0 || bp.left < minPrecedence) {
             break;
         }
         advance();  // consume operator
 
-        QSharedPointer<ExpressionNode> right = parseBinary(prec + 1);  // 左结合
+        // 右操作数的最小绑定力：左结合 {p, p+1} 会停在下个同级运算符（先归约左），
+        // 右结合 {p, p} 会继续递归吞进去（后归约右）。见 operator_table.h。
+        QSharedPointer<ExpressionNode> right = parseBinary(bp.right);
         if (!right) {
             return nullptr;
         }

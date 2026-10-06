@@ -52,6 +52,9 @@ private slots:
     void ternaryBranchesAreNonTernary();
     void parenthesizedNestedTernaryIsAccepted();
     void ternaryMissingHashFails();
+    // 绑定力表（Pratt）：默认全左结合；Provider 注入可表达右结合
+    void binaryBindingPowersAreLeftAssociative();
+    void rightAssociativeInjectionGivesRightAssoc();
 };
 
 void TestAstSpan::rootSpanCoversWholeExpression() {
@@ -166,6 +169,51 @@ void TestAstSpan::ternaryMissingHashFails() {
     // 表达式层缺 `#` = 错误（C# ReduceTernaryTerm 之前就因操作数不足抛 CodeEE）。
     // 注意：StrForm（\@ … ? … \@）层缺 `#` 是「警告 + 假值空串」，见 strform_parser。
     QVERIFY2(!parseExpr(QStringLiteral("A ? B")), "缺 # 应解析失败");
+}
+
+void TestAstSpan::binaryBindingPowersAreLeftAssociative() {
+    // EraBasic 原生运算符全部左结合：{p, p+1}
+    struct Case { TokenType op; int p; };
+    const Case cases[] = {
+        {TokenType::MULTIPLY, 10}, {TokenType::MINUS, 9}, {TokenType::SHIFT_LEFT, 8},
+        {TokenType::LESS_THAN, 7}, {TokenType::EQUALS, 6}, {TokenType::BIT_AND, 5},
+        {TokenType::AND, 4},
+    };
+    for (const Case& c : cases) {
+        const BindingPower bp = ExpressionParser::binaryBindingPower(c.op);
+        QCOMPARE(bp.left, c.p);
+        QCOMPARE(bp.right, c.p + 1);          // 左结合 ⇒ right > left
+    }
+    // 非二元运算符：哨兵 {0,0}
+    const BindingPower none = ExpressionParser::binaryBindingPower(TokenType::COMMA);
+    QCOMPARE(none.left, 0);
+    QCOMPARE(none.right, 0);
+}
+
+void TestAstSpan::rightAssociativeInjectionGivesRightAssoc() {
+    // 默认左结合：A - B - C == ((A - B) - C)
+    {
+        const auto ast = parseExpr(QStringLiteral("A - B - C"));
+        QVERIFY(ast);
+        const auto root = qSharedPointerCast<BinaryOpNode>(ast);
+        QCOMPARE(root->left()->kind(), NodeKind::BinaryOp);    // 左边先归约
+        QCOMPARE(root->right()->kind(), NodeKind::Variable);
+    }
+    // 注入：把 MINUS 声明为右结合（{9,9}）⇒ A - B - C == (A - (B - C))
+    {
+        ExpressionLexer lexer;
+        ExpressionParser parser;
+        parser.setBindingPowerProvider([](TokenType op) -> BindingPower {
+            BindingPower bp = ExpressionParser::binaryBindingPower(op);
+            if (op == TokenType::MINUS) bp.right = bp.left;    // 右结合
+            return bp;
+        });
+        const auto ast = parser.parse(lexer.tokenize(QStringLiteral("A - B - C"), 1));
+        QVERIFY(ast);
+        const auto root = qSharedPointerCast<BinaryOpNode>(ast);
+        QCOMPARE(root->left()->kind(), NodeKind::Variable);     // A
+        QCOMPARE(root->right()->kind(), NodeKind::BinaryOp);    // (B - C)
+    }
 }
 
 QTEST_APPLESS_MAIN(TestAstSpan)

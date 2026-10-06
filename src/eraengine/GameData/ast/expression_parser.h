@@ -78,6 +78,14 @@ public:
     // 二元运算符优先级（0 表示非二元运算符）；供测试与调试。
     static int binaryPrecedence(TokenType type);
 
+    // 二元结合性：(left, right) 绑定力。默认为运算符表（operator_table.h）；
+    // 可用 setBindingPowerProvider 注入 —— 与其它 Provider 同风格（函数类型/格式化串/
+    // 常量表），既便于测试右结合，也留出 EM/EE 私family 扩展运算符的接缝。
+    using BindingPowerProvider = std::function<BindingPower(TokenType)>;
+    static BindingPower binaryBindingPower(TokenType type);
+    void setBindingPowerProvider(BindingPowerProvider provider) {
+        m_bindingPowerProvider = std::move(provider);
+    }
 private:
     QSharedPointer<ExpressionNode> parseExpression();
     QSharedPointer<ExpressionNode> parseBinary(int minPrecedence);
@@ -106,6 +114,7 @@ private:
     FormProvider m_formProvider;
     ConstantNameProvider m_constantNameProvider;
     ConstantValueProvider m_constantValueProvider;
+    BindingPowerProvider m_bindingPowerProvider;   // 空 = 用 operator_table 默认
 };
 
 #endif // EXPRESSION_PARSER_H

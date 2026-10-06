@@ -48,6 +48,12 @@ concurrency:
 
 env:
   QT_VERSION: '6.11.2'
+  # install-qt-action 从 v4.4.1 起默认把 Python 拉到 3.14，而它要装的
+  # aqtinstall 3.3.0 的依赖（py7zr==1.1.0）在 3.14 上没有预编译 wheel，
+  # Windows runner 又没有 MSVC 环境去现场编译 —— pip 退出码 1，Qt 装不上
+  # （上游：install-qt-action#344 / aqtinstall#1042）。三个平台统一钉 3.12，
+  # 并用 setup-python: false 让 action 复用这个解释器。
+  PYTHON_VERSION: '3.12'
   # qmlimportscanner 会在部署阶段读 QML 的 import：
   #   * QtMultimedia —— AudioPlayers.qml（MediaPlayer / SoundEffect）
   #   * qtimageformats —— eraTW 的 *.webp（libqwebp 插件）
@@ -65,6 +71,11 @@ jobs:
       - name: 检出源码
         uses: actions/checkout@v4
 
+      - name: 准备 Python ${{ env.PYTHON_VERSION }}
+        uses: actions/setup-python@v5
+        with:
+          python-version: ${{ env.PYTHON_VERSION }}
+
       - name: 安装 Qt ${{ env.QT_VERSION }}
         uses: jurplel/install-qt-action@v4
         with:
@@ -73,6 +84,7 @@ jobs:
           target: desktop
           arch: win64_msvc2022_64
           modules: ${{ env.QT_MODULES }}
+          setup-python: false
           cache: true
 
       - name: 配置（CMake + Visual Studio 2022，默认生成器）
@@ -116,6 +128,11 @@ jobs:
       - name: 检出源码
         uses: actions/checkout@v4
 
+      - name: 准备 Python ${{ env.PYTHON_VERSION }}
+        uses: actions/setup-python@v5
+        with:
+          python-version: ${{ env.PYTHON_VERSION }}
+
       - name: 安装 Qt ${{ env.QT_VERSION }}
         uses: jurplel/install-qt-action@v4
         with:
@@ -124,6 +141,7 @@ jobs:
           target: desktop
           arch: clang_64
           modules: ${{ env.QT_MODULES }}
+          setup-python: false
           cache: true
 
       - name: 配置（CMake + Ninja）
@@ -169,6 +187,11 @@ jobs:
           distribution: temurin
           java-version: '17'
 
+      - name: 准备 Python ${{ env.PYTHON_VERSION }}
+        uses: actions/setup-python@v5
+        with:
+          python-version: ${{ env.PYTHON_VERSION }}
+
       - name: 安装 Qt ${{ env.QT_VERSION }}（Android）
         uses: jurplel/install-qt-action@v4
         with:
@@ -176,6 +199,7 @@ jobs:
           target: android
           arch: android_arm64_v8a
           modules: ${{ env.QT_MODULES }}
+          setup-python: false
           cache: true
 
       - name: 准备 Android SDK / NDK

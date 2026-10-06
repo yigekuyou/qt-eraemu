@@ -945,9 +945,15 @@ int main(int argc, char* argv[]) {
 
         // 实时等待（AWAIT / INPUTMOUSEKEY 超时）：没有输入 UI 请求 → 跑事件循环让 QTimer 到点
         // 限时/实时输入（TONEINPUT / INPUTMOUSEKEY）与 AWAIT：跑定时器，无需用户输入
+        // 注意：**限时输入也必须有这一条**。漏掉 TINPUT/TINPUTS/TWAIT 时，
+        // 这些等待会落到下面「等外部输入」的分支 —— 那片循环只盯着 pending，
+        // 定时器到点交付也不会回到主循环继续推进，于是看起来像「超时没生效」
+        //（排查 eraTW 地图动画的 1 秒重画时就被这个坑误导过一次）。
         const bool timerWait = (st == ExecState::WaitSystemInput && kind.isEmpty())
                                || kind.contains(QLatin1String("INPUTMOUSEKEY"))
-                               || kind.contains(QLatin1String("TONEINPUT"));
+                               || kind.contains(QLatin1String("TONEINPUT"))
+                               || kind.contains(QLatin1String("TINPUT"))
+                               || kind == QLatin1String("TWAIT");
         const bool hasExternal = !localClients.isEmpty() || !tcpClients.isEmpty() || useDBus;
         if (timerWait) {
             // 实时等待：AWAIT / TONEINPUT / INPUTMOUSEKEY 本身不需要用户操作，

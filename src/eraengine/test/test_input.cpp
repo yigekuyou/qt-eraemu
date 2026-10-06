@@ -332,6 +332,71 @@ int main(int argc, char* argv[]) {
               "answered mouse timeout cannot overwrite or resume next prompt");
     }
 
+    qDebug() << "\n限时输入超时交付缺省值（逗号是独立操作数，不能错位）";
+    {
+        // `TINPUT 300,1234,0,""` 的操作数列表里**逗号本身也是操作数**：
+        //     [300] [,] [1234] [,] [0] [,] [""]
+        // 按位置取参会整体错位 —— 缺省值读到的是 `,`（求值失败保持 0），
+        // 超时就交付 0 而不是 1234。eraTW 的地图动画
+        //   `TINPUT ANIMATERECOLOREDMAPS,1234,0,""`
+        // 每 1 秒超时一次，交 0 恰好命中 `ELSEIF RESULT == MAIN_MAP` ->
+        // 「从外面回家」，表现为「还没操作就自动返回 / 根本没机会选」。
+        // 另一处：字符串字面量 `"abc"` 在操作数里是 raw="abc"+isString，
+        // **不能**再当表达式求值（会被当成变量名 -> 0）。
+        ProcessState state;
+        EraParseTable table(&state);
+        VariableStorage storage;
+        ExpressionEvaluator evaluator;
+        table.setExpressionEvaluator(&evaluator);
+        table.setVariableStorage(&storage);
+        ExecutionEngine engine(&storage, nullptr);
+        engine.setParseTable(&table);
+        engine.setExpressionEvaluator(&evaluator);
+        ScriptRunner runner(&table, &engine, &state, &storage);
+        runner.setExpressionEvaluator(&evaluator);
+        SystemStateMachine machine(&state, &table);
+        machine.setVariableStorage(&storage);
+        machine.setScriptRunner(&runner);
+        runner.setSystemStateMachine(&machine);
+
+        struct Pending2 { int ms; std::function<void()> cb; };
+        QList<Pending2> pending;
+        machine.setTimer([&pending](int ms, std::function<void()> cb) {
+            pending.append({ms, cb});
+        });
+
+        const QStringList src = {
+            "@SYSTEM_TITLE",
+            "#DIMS S",                       // 未声明时按整数存，读取口径会不符
+            "#DIMS T2",
+            "TINPUT 300,1234,0,\"\"",     // 逗号形态 + 4 个参数
+            "A = RESULT",
+            "TINPUTS 300,\"abc\",0,\"\"",
+            "S = RESULTS",
+            "TONEINPUTS 300,\"p\",1",
+            "T2 = RESULTS",
+            "INPUT"
+        };
+        check(table.loadScript("main", buildLines(table, src)), "loadScript(TINPUT 缺省值)");
+        table.finalizeParse();
+        machine.initialize();
+        machine.run();
+        check(pending.size() == 1 && pending.first().ms == 300,
+              "TINPUT 300,... 登记 300ms 计时器");
+        auto fire = [&pending]() { if (!pending.isEmpty()) { auto p = pending.takeFirst(); p.cb(); } };
+        fire();
+        check(storage.getSystemVariable("A", 0) == 1234,
+              "TINPUT 超时交付**第 2 参缺省值 1234**（不是 0）");
+        check(pending.size() == 1 && pending.first().ms == 300, "TINPUTS 登记计时器");
+        fire();
+        check(storage.getGlobalStr1D("S", 0) == QLatin1String("abc"),
+              "TINPUTS 超时交付字符串缺省值 \"abc\"（字面量不可当表达式求值）");
+        check(pending.size() == 1 && pending.first().ms == 300, "TONEINPUTS 登记计时器");
+        fire();
+        check(storage.getGlobalStr1D("T2", 0) == QLatin1String("p"),
+              "TONEINPUTS 超时交付缺省值 \"p\"");
+    }
+
     {
         ProcessState state;
         EraParseTable table(&state);

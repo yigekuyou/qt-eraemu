@@ -29,6 +29,23 @@
 #include <bit>
 
 namespace {
+// 逗号形态的限时输入指令（`TINPUT 300,1234,0,""`）里，AstBuilder 会把**分隔用的
+// 逗号本身**也放进操作数列表：
+//     [300] [,] [1234] [,] [0] [,] [""]     （7 个操作数）
+// 于是按位置取参会整体错位 —— 缺省值读到的其实是 `,`（表达式求值失败 -> 保持 0），
+// 超时就交付 0 / 空串，而不是脚本写的 1234 / "abc"。
+// 实测（最小脚本 `TINPUT 300,1234,0,""`）：修复前 RESULT=0，应为 1234。
+// C# 没有这个问题：TINPUT 的参数是 SpTInputsArgument 的具名字段 Time/Def/Disp/Timeout。
+// 这里按位置取参前先把「纯逗号」操作数剔除。
+QList<Operand> inputArgs(const LogicalLine& line) {
+    QList<Operand> out;
+    out.reserve(line.arguments.size());
+    for (const Operand& o : line.arguments) {
+        if (o.raw == QLatin1String(",")) continue;
+        out.append(o);
+    }
+    return out;
+}
 
 // 去掉 Emuera 变量引用可能带的 % 前缀/后缀
 QString bareVarName(const QString& raw) {
@@ -1341,9 +1358,17 @@ ExecState ScriptRunner::executeLine(const LogicalLine& line) {
         // 停在首帧（SETCOLOR 0,0,0 = 黑字），看起来就是「没有文字/整屏黑」。
         qint64 ms = 0, def = 0;
         QString defStr;
-        if (!line.arguments.isEmpty()) {
-            const Operand& a0 = line.arguments.at(0);
+        const QList<Operand> args = inputArgs(line);   // 见 inputArgs：剔除逗号占位
+        if (!args.isEmpty()) {
+            const Operand& a0 = args.at(0);
             const bool fnForm = a0.ast && a0.ast->kind() == NodeKind::Function;
+            // 字符串字面量（`"abc"`）在操作数里已被剥成 raw="abc" + isString —— **不能**
+            // 再拿去当表达式求值（那样 `abc` 会被当成变量名 -> 0）。整数同理优先 ast。
+            const auto readStr = [&](const Operand& o) -> QString {
+                if (o.isString) return o.raw;
+                if (o.ast) return getEvaluator().evaluate(*o.ast, m_storage, baseData()).toString();
+                return getEvaluator().evaluate(o.raw, m_storage, baseData()).toString();
+            };
             if (fnForm) {
                 // 兼容 `NAME(args)` 形式（整行被归约成一个调用节点）
                 const auto& fn = static_cast<const FunctionNode&>(*a0.ast);
@@ -1358,12 +1383,10 @@ ExecState ScriptRunner::executeLine(const LogicalLine& line) {
                 }
             } else {
                 evalInt(a0.ast, a0.raw, ms);
-                if (line.arguments.size() >= 2) {
-                    const Operand& a1 = line.arguments.at(1);
+                if (args.size() >= 2) {
+                    const Operand& a1 = args.at(1);
                     if (name == QLatin1String("TINPUTS")) {
-                        ExpressionEvaluator* ev = &getEvaluator();
-                        defStr = a1.ast ? ev->evaluate(*a1.ast, m_storage, baseData()).toString()
-                                        : ev->evaluate(a1.raw, m_storage, baseData()).toString();
+                        defStr = readStr(a1);
                     } else {
                         evalInt(a1.ast, a1.raw, def);
                     }
@@ -1371,6 +1394,10 @@ ExecState ScriptRunner::executeLine(const LogicalLine& line) {
             }
         }
         if (ms < 0) ms = 0;
+        qDebug() << "[tinput]" << name << "超时" << ms << "ms 缺省"
+                          << (name == QLatin1String("TINPUTS") ? defStr
+                                                               : QString::number(def))
+                          << "操作数" << line.arguments.size();
         advance();
         if (name == QLatin1String("TINPUTS")) {
             m_machine->waitTimedStringInput(static_cast<int>(ms), defStr);
@@ -1383,19 +1410,25 @@ ExecState ScriptRunner::executeLine(const LogicalLine& line) {
         return ExecState::WaitInput;
     }
     if (name == QLatin1String("TONEINPUT") || name == QLatin1String("TONEINPUTS")) {
+        const QList<Operand> args = inputArgs(line);   // 逗号同样是独立操作数
         qint64 timeout = 0;
-        if (!line.arguments.isEmpty()) evalInt(line.arguments.first().ast, line.arguments.first().raw, timeout);
+        if (!args.isEmpty()) evalInt(args.first().ast, args.first().raw, timeout);
         // TONEINPUTS 是**字符串型**限时输入（ONEINPUTS + 超时，写 RESULTS）：
         // 超时交付第 2 参缺省值（eraTW BATTLE.ERB ASK_BATTLE 的
         // `TONEINPUTS 制限時間, "p", 1` -> SELECTCASE RESULTS CASEELSE）。
         // 此前误走整数 waitTimedInput：超时写 RESULT、RESULTS 保持陈旧值，
         // 跟在后面的 SELECTCASE RESULTS 全部判错（上一局 QTE 的 w/a/d/s）。
         QString defStr;
-        if (name == QLatin1String("TONEINPUTS") && line.arguments.size() >= 2) {
-            const Operand& def = line.arguments.at(1);
-            ExpressionEvaluator* ev = &getEvaluator();
-            defStr = def.ast ? ev->evaluate(*def.ast, m_storage, baseData()).toString()
-                             : ev->evaluate(def.raw, m_storage, baseData()).toString();
+        if (name == QLatin1String("TONEINPUTS") && args.size() >= 2) {
+            const Operand& def = args.at(1);
+            // 同上：字符串字面量（"p"）直接用 raw，别再当表达式求值
+            if (def.isString) {
+                defStr = def.raw;
+            } else if (def.ast) {
+                defStr = getEvaluator().evaluate(*def.ast, m_storage, baseData()).toString();
+            } else {
+                defStr = getEvaluator().evaluate(def.raw, m_storage, baseData()).toString();
+            }
         }
         if (timeout < 0) timeout = 0;
         advance();
@@ -1410,8 +1443,9 @@ ExecState ScriptRunner::executeLine(const LogicalLine& line) {
     }
     // AWAIT n：挂起 n 毫秒后自动继续（不阻塞、不请求输入；C# InputType.Void）
     if (name == QLatin1String("AWAIT")) {
+        const QList<Operand> args = inputArgs(line);
         qint64 ms = 0;
-        if (!line.arguments.isEmpty()) evalInt(line.arguments.first().ast, line.arguments.first().raw, ms);
+        if (!args.isEmpty()) evalInt(args.first().ast, args.first().raw, ms);
         if (ms < 0) ms = 0;
         m_waitNotifiesUser = false;
         advance();
@@ -1428,6 +1462,9 @@ ExecState ScriptRunner::executeLine(const LogicalLine& line) {
     //     flag == 0 -> InputType.EnterKey + Timelimit 点击/回车可提前结束
     //   计时路径完整（挂起 -> 计时器到点恢复）。
     if (name == QLatin1String("TWAIT")) {
+        // 两种写法都要认：`TWAIT(1000,0)`（整行被归约成 Function 节点）与
+        // `TWAIT 1000,0`（独立操作数，且逗号也在列表里）。以前只认前者，
+        // 逗号形态下 ms 恒为 0 -> 直接 Continue，等于**没有等待**。
         QSharedPointer<ExpressionNode> timeNode;
         QSharedPointer<ExpressionNode> skipNode;
         if (!line.arguments.isEmpty() && line.arguments.first().ast
@@ -1437,8 +1474,14 @@ ExecState ScriptRunner::executeLine(const LogicalLine& line) {
             if (fn.arguments().size() >= 2) skipNode = fn.arguments().at(1);
         }
         qint64 ms = 0, skip = 0;
-        evalInt(timeNode, QString(), ms);
-        evalInt(skipNode, QString(), skip);
+        if (timeNode) {
+            evalInt(timeNode, QString(), ms);
+            evalInt(skipNode, QString(), skip);
+        } else {
+            const QList<Operand> args = inputArgs(line);
+            if (args.size() >= 1) evalInt(args.at(0).ast, args.at(0).raw, ms);
+            if (args.size() >= 2) evalInt(args.at(1).ast, args.at(1).raw, skip);
+        }
         if (ms < 0) ms = 0;
         qCDebug(eraTrace) << "[twait] 等待" << ms << "ms 跳过标记" << skip
                           << "行" << line.position.toString();

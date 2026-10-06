@@ -142,8 +142,15 @@ GameView/audio_pipeline_pool.h
 
 # Add QtConcurrent and OpenMP after the library is defined
 target_link_libraries(eraengine
-    PRIVATE Qt6::Quick Qt6::Core Qt6::DBus Qt6::Quick Qt6::Widgets Qt6::Concurrent
-    PRIVATE OpenMP::OpenMP_CXX)
+    PRIVATE Qt6::Quick Qt6::Core Qt6::Quick Qt6::Widgets Qt6::Concurrent)
+# 可选依赖（见顶层 CMakeLists.txt 的说明）：有则用，没有就静默降级。
+if(TARGET Qt6::DBus)
+    target_link_libraries(eraengine PRIVATE Qt6::DBus)
+    target_compile_definitions(eraengine PRIVATE EMUERA_HAS_DBUS)
+endif()
+if(TARGET OpenMP::OpenMP_CXX)
+    target_link_libraries(eraengine PRIVATE OpenMP::OpenMP_CXX)
+endif()
 target_include_directories(eraengine PRIVATE
     ${CMAKE_CURRENT_SOURCE_DIR}/Config
     ${CMAKE_CURRENT_SOURCE_DIR}/Content
@@ -159,10 +166,17 @@ target_include_directories(eraengine PUBLIC ${CMAKE_CURRENT_SOURCE_DIR})
 
 # Keep warning policy explicit and compiler-specific.  Qt headers are included
 # under the same policy as project code so new compatibility issues are visible.
+    # 告警始终打开；「告警即错误」由 EMUERA_WARNINGS_AS_ERRORS（父作用域 option）决定
     if(MSVC)
-        target_compile_options(eraengine PRIVATE /W4 /WX)
+        target_compile_options(eraengine PRIVATE /W4)
+        if(EMUERA_WARNINGS_AS_ERRORS)
+            target_compile_options(eraengine PRIVATE /WX)
+        endif()
     elseif(CMAKE_CXX_COMPILER_ID MATCHES "GNU|Clang|AppleClang")
-        target_compile_options(eraengine PRIVATE -Wall -Wextra -Wpedantic -Werror)
+        target_compile_options(eraengine PRIVATE -Wall -Wextra -Wpedantic)
+        if(EMUERA_WARNINGS_AS_ERRORS)
+            target_compile_options(eraengine PRIVATE -Werror)
+        endif()
     endif()
 
 # ---------------------------------------------------------------------------
@@ -200,7 +214,10 @@ endfunction()
 # 应用入口 / 完整流程测试
 # test_cli 额外需要 DBus（外部输入通道：qdbus io.yigekuyou.emuera.testcli /testcli input 0）
 eraengine_add_test(test_cli)
-target_link_libraries(test_cli PRIVATE Qt6::DBus)
+if(TARGET Qt6::DBus)
+    target_link_libraries(test_cli PRIVATE Qt6::DBus)
+    target_compile_definitions(test_cli PRIVATE EMUERA_HAS_DBUS)
+endif()
 
 # 纯单元测试（自包含、无需外部目录）
 eraengine_add_test(test_era_parse_table)

@@ -16,9 +16,13 @@
  * along with this program.  If not, see <https://www.gnu.org/licenses/>.
  */
 #include <QQmlApplicationEngine>
+// 单实例唤起 / 全局菜单探针用 D-Bus；平台 Qt 未提供 QtDBus 时（如 Android）
+// 整块编译掉，程序照常运行（多开不再互斥）。
+#if defined(Q_OS_LINUX) && defined(EMUERA_HAS_DBUS)
 #include <QDBusConnection>
 #include <QDBusInterface>
 #include <QDBusReply>
+#endif
 #include <QDir>
 #include <QApplication>
 #include <QFileInfo>
@@ -66,6 +70,8 @@ int main(int argc, char *argv[])
 	QApplication app(argc, argv);
 	#ifdef Q_OS_LINUX
 	app.setApplicationName("emuera");
+	#endif
+	#if defined(Q_OS_LINUX) && defined(EMUERA_HAS_DBUS)
 	const QString serviceName = "io.yigekuyou.emuera";
 	if (!QDBusConnection::sessionBus().registerService(serviceName)) {
 		//注册失败=已有实例在跑：唤起它的窗口（D-Bus /emuera raiseWindow）后退出

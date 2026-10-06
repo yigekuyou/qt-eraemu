@@ -23,10 +23,19 @@ set(CMAKE_CXX_STANDARD 23)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 set(CMAKE_CXX_EXTENSIONS OFF)
 
-find_package(Qt6 REQUIRED COMPONENTS Quick QuickControls2 Core DBus Widgets Concurrent Test QuickTest)
-find_package(OpenMP REQUIRED)
-find_package(BISON REQUIRED)
-find_package(FLEX REQUIRED)
+# 必需模块：Android / Windows / macOS / Linux 的官方 Qt 都提供。
+find_package(Qt6 REQUIRED COMPONENTS Quick QuickControls2 Core Widgets Concurrent Test QuickTest)
+# QtDBus 只用于桌面 Linux（单实例唤起 + 全局菜单宿主探测，见 main.cpp 与
+# window_controller.cpp）。Android 的 Qt 不保证带这个模块，因此设为可选：
+# 找到就定义 EMUERA_HAS_DBUS，源码按该宏裁剪 D-Bus 实现（缺失时静默降级）。
+find_package(Qt6 OPTIONAL_COMPONENTS DBus)
+# OpenMP 目前没有任何使用点（源码里没有 #pragma omp），设为可选：macOS
+# （AppleClang 默认不带 libomp）与 Android NDK 上找不到也不会配置失败。
+find_package(OpenMP)
+# bison/flex 还没接上生成规则（没有 BISON_TARGET/FLEX_TARGET），
+# 所以不做 REQUIRED —— Windows/macOS 的 CI runner 不必额外安装。
+find_package(BISON)
+find_package(FLEX)
 qt_standard_project_setup(REQUIRES 6.10)
 
 qt_add_executable(appemuera
@@ -59,14 +68,28 @@ set_target_properties(appemuera PROPERTIES
 )
 
 target_link_libraries(appemuera
-    PRIVATE Qt6::Quick Qt6::QuickControls2 Qt6::DBus Qt6::Widgets eraengine
+    PRIVATE Qt6::Quick Qt6::QuickControls2 Qt6::Widgets eraengine
 )
+# D-Bus 可用时才链（实际只有桌面 Linux 用到），同时打开 EMUERA_HAS_DBUS
+if(TARGET Qt6::DBus)
+    target_link_libraries(appemuera PRIVATE Qt6::DBus)
+    target_compile_definitions(appemuera PRIVATE EMUERA_HAS_DBUS)
+endif()
 # qmltyperegistration 生成的 include 用短名（<tray_controller.h>）
 target_include_directories(appemuera PRIVATE src/platform)
+    # 告警始终打开；「告警即错误」由 EMUERA_WARNINGS_AS_ERRORS 决定。
+    # MSVC / AppleClang 的告警集合和开发用的 GCC 不同，CI 上可以关掉 -Werror，
+    # 只看告警而不让构建失败（默认仍为 ON，保持本地开发的行为不变）。
     if(MSVC)
-        target_compile_options(appemuera PRIVATE /W4 /WX)
+        target_compile_options(appemuera PRIVATE /W4)
+        if(EMUERA_WARNINGS_AS_ERRORS)
+            target_compile_options(appemuera PRIVATE /WX)
+        endif()
     elseif(CMAKE_CXX_COMPILER_ID MATCHES "GNU|Clang|AppleClang")
-        target_compile_options(appemuera PRIVATE -Wall -Wextra -Wpedantic -Werror)
+        target_compile_options(appemuera PRIVATE -Wall -Wextra -Wpedantic)
+        if(EMUERA_WARNINGS_AS_ERRORS)
+            target_compile_options(appemuera PRIVATE -Werror)
+        endif()
     endif()
 target_compile_definitions(appemuera
     PRIVATE

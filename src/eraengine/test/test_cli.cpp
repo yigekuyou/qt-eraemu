@@ -58,8 +58,10 @@
 #include <algorithm>
 #include <optional>
 #include <random>
+#ifdef EMUERA_HAS_DBUS
 #include <QDBusConnection>
 #include <QDBusMessage>
+#endif
 #include <QSocketNotifier>
 #include <QElapsedTimer>
 #include <unistd.h>   // STDIN_FILENO
@@ -453,7 +455,11 @@ int main(int argc, char* argv[]) {
             frameMs = qMax(1, QString::fromLocal8Bit(argv[++i]).toInt()); continue;
         }
         if (a == QLatin1String("--dbus")) {
+#ifdef EMUERA_HAS_DBUS
             useDBus = true;
+#else
+            std::cerr << "本平台的 Qt 未提供 QtDBus，--dbus 被忽略\n";
+#endif
             continue;
         }
         if (a == QLatin1String("--stderr-debug")) {
@@ -658,6 +664,7 @@ int main(int argc, char* argv[]) {
             std::cout << "== TCP 监听失败: " << tcpPort << " ==\n";
         }
     }
+#ifdef EMUERA_HAS_DBUS
     if (useDBus) {
         QDBusConnection bus = QDBusConnection::sessionBus();
         if (bus.registerObject(QStringLiteral("/testcli"), &control,
@@ -670,6 +677,7 @@ int main(int argc, char* argv[]) {
             std::cout << "== DBus 注册失败（是否已有实例？）==\n";
         }
     }
+#endif
 
     // 把屏幕推给已连接的 socket 客户端（方便外部 harness 读）
     auto pushScreen = [&]() {

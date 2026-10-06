@@ -21,7 +21,9 @@
 #include "eraengine.h"
 #include "eraengine_log.h"
 
+#ifdef EMUERA_HAS_DBUS
 #include <QDBusConnection>
+#endif
 #include <QDateTime>
 #include <QDir>
 #include <QFileInfo>
@@ -34,6 +36,7 @@ EraDBusDebug::EraDBusDebug(EraEngine* engine, QObject* parent)
     : QObject(parent), m_engine(engine) {}
 
 bool EraDBusDebug::registerOnBus() {
+#ifdef EMUERA_HAS_DBUS
     QDBusConnection bus = QDBusConnection::sessionBus();
     if (!bus.isConnected()) return false;
     // UnusualServiceName 不校验；重复注册（理论上只有一个 EraEngine 实例）覆盖即可
@@ -41,6 +44,11 @@ bool EraDBusDebug::registerOnBus() {
                               QDBusConnection::ExportAllSlots
                                   | QDBusConnection::ExportAllInvokables
                                   | QDBusConnection::ExportAllProperties);
+#else
+    // 该平台的 Qt 未提供 QtDBus（例：Android）：本类其余槽函数仍可用
+    // （test_cli / QML 侧直接调用），只是不对外暴露 D-Bus 服务。
+    return false;
+#endif
 }
 
 QString EraDBusDebug::ping() {

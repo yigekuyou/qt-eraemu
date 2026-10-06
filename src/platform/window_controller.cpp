@@ -17,8 +17,10 @@
  */
 #include "window_controller.h"
 
+#if defined(Q_OS_LINUX) && defined(EMUERA_HAS_DBUS)
 #include <QDBusConnection>
 #include <QDBusConnectionInterface>
+#endif
 #include <QGuiApplication>
 #include <QScreen>
 
@@ -32,7 +34,7 @@ constexpr const char* kModeBorderless = "borderless";
 WindowController::WindowController(QObject* parent) : QObject(parent) {}
 
 WindowController::~WindowController() {
-#ifdef Q_OS_LINUX
+#if defined(Q_OS_LINUX) && defined(EMUERA_HAS_DBUS)
     if (m_window)
         QDBusConnection::sessionBus().unregisterObject(QStringLiteral("/emuera"));
 #endif
@@ -43,7 +45,7 @@ void WindowController::setWindow(QQuickWindow* w) {
         return;
     m_window = w;
     if (m_window) {
-#ifdef Q_OS_LINUX
+#if defined(Q_OS_LINUX) && defined(EMUERA_HAS_DBUS)
         // 单实例服务（main.cpp 已注册 io.yigekuyou.emuera）：把唤起窗口
         // 导出为 D-Bus 方法，第二次启动的程序调 raiseWindow() 把窗口拉回前台
         if (!QDBusConnection::sessionBus().registerObject(
@@ -95,7 +97,7 @@ void WindowController::toggleFullscreen() {
 bool WindowController::hasGlobalMenuBar() {
 #if defined(Q_OS_MACOS)
     return true;   // macOS 系统菜单栏总是可用
-#elif defined(Q_OS_LINUX)
+#elif defined(Q_OS_LINUX) && defined(EMUERA_HAS_DBUS)
     // 手动回退开关：EMUERA_INLINE_MENU=1 强制用窗口内菜单栏（不喜欢全局
     // 菜单、或桌面环境的全局菜单宿主不完整时用）
     if (qEnvironmentVariableIsSet("EMUERA_INLINE_MENU"))

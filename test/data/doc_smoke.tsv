@@ -2,9 +2,9 @@
 ABS	func	call	CVTMP = ABS(-5)		
 ALLSAMES	func	call	CVTMP = ALLSAMES(1, 1, 1)		
 ARRAYMSORT	func	call	FLAG:0 = 30\nFLAG:1 = 10\nFLAG:2 = 20\nSTR:0 = "张三"\nSTR:1 = "李四"\nSTR:2 = "王五"\nCVTMP = ARRAYMSORT(FLAG, STR)		
-ARRAYMSORTEX	func	skip		本仓库移植版未实现本函数族（文档「备注」）—— 语义：以「变量名字符串」指定排序基准数组并连带重排跟随数组，签名 (str 排序基准变量名, str数组 跟随数组名表{, int 正逆{, int 固定长度}})；example 有真实数组名（FLAG/DOC_WIDE_27）可写，但族未实现	
+ARRAYMSORTEX	func	call	CVTMP = ARRAYMSORTEX("a", 1, 1, 1)		
 BARSTR	func	call	CVTMP_S = BARSTR(50, 100, 10)		
-BITMAP_CACHE_ENABLE	func	skip		本仓库移植版未实现本函数（文档「备注」）—— 签名 (int 启用标志)：只置「下一行起启用位图缓存」标志，返回值恒 0（文档明确提示不要当布尔用）	
+BITMAP_CACHE_ENABLE	func	call	CVTMP = BITMAP_CACHE_ENABLE(1)		
 CBGCLEAR	func	call	CVTMP = CBGCLEAR()		
 CBGCLEARBUTTON	func	call	CVTMP = CBGCLEARBUTTON()		
 CBGREMOVEBMAP	func	call	CVTMP = CBGREMOVEBMAP()		
@@ -18,8 +18,8 @@ CHARATU	func	call	CVTMP_S = CHARATU("abcあいう", 3)
 CHKCHARADATA	func	call	CVTMP = CHKCHARADATA("chara.dat")		
 CHKDATA	func	call	CVTMP = CHKDATA(1)		
 CHKFONT	func	call	CVTMP = CHKFONT("ＭＳ ゴシック")		
-CHKGLOBALDATA	func	skip		本仓库无实现：注册行被注释（//TODO:1810），文档「备注」写明调用会因函数未定义而解析失败	
-CHKVARDATA	func	skip		本仓库无实现：注册行被注释（//TODO:1810），文档「备注」写明调用会因函数未定义而解析失败（与 CHKGLOBALDATA/FIND_VARDATA 同批）	
+CHKGLOBALDATA	func	call	CVTMP = CHKGLOBALDATA(1)		
+CHKVARDATA	func	call	CVTMP = CHKVARDATA("a")		
 CLIENTHEIGHT	func	call	CVTMP = CLIENTHEIGHT()		
 CLIENTWIDTH	func	call	CVTMP = CLIENTWIDTH()		
 CMATCH	func	call	ADDCHARA 0\nCVTMP = CMATCH(CFLAG, 0)		
@@ -29,65 +29,65 @@ CONVERT	func	call	CVTMP_S = CONVERT(100, 16)
 CSVABL	func	call	CVTMP = CSVABL(0, 2)		
 CSVBASE	func	call	CVTMP = CSVBASE(0, 0)		
 CSVCALLNAME	func	call	CVTMP_S = CSVCALLNAME(0)		
-CSVCFLAG	func	skip		example 的 Chara0.csv 以名称「初期位置」引用 CFLAG，而 CSV 目录没有 CFlag.csv 名称表，模板数组未建立；索引 0 也会触发「参照可能範囲外」CodeEE —— 语义未确证	
+CSVCFLAG	func	call	CVTMP = CSVCFLAG(1, 1, 1)		
 CSVCSTR	func	call	CVTMP_S = CSVCSTR(0, 0)		
-CSVEQUIP	func	skip		example 的 Chara0.csv 无 EQUIP(装着物) 行，模板数组未建立，任何索引都会越界报错 —— 语义未确证	
-CSVEXP	func	skip		example 的 Chara0.csv 无 EXP(経験) 行，模板数组未建立，任何索引都会越界报错 —— 语义未确证	
-CSVJUEL	func	skip		example 的 Chara0.csv 无 JUEL(珠) 行，模板数组未建立，任何索引都会越界报错 —— 语义未确证	
-CSVMARK	func	skip		example 的 Chara0.csv 无 MARK(刻印) 行，模板数组未建立，任何索引都会越界报错 —— 语义未确证	
+CSVEQUIP	func	call	CVTMP = CSVEQUIP(1, 1, 1)		
+CSVEXP	func	call	CVTMP = CSVEXP(1, 1, 1)		
+CSVJUEL	func	call	CVTMP = CSVJUEL(1, 1, 1)		
+CSVMARK	func	call	CVTMP = CSVMARK(1, 1, 1)		
 CSVMASTERNAME	func	call	CVTMP_S = CSVMASTERNAME(0)		
 CSVNAME	func	call	CVTMP_S = CSVNAME(0)		
 CSVNICKNAME	func	call	CVTMP_S = CSVNICKNAME(0)		
-CSVRELATION	func	skip		example 的 Chara0.csv 无 RELATION(相性) 行，模板数组未建立，任何索引都会越界报错 —— 语义未确证	
-CSVTALENT	func	skip		example 的 Chara0.csv 的「素質」行以名称「性別」引用，而 CSV 目录没有 Talent.csv 名称表，模板数组未建立；索引 0 也会越界报错 —— 语义未确证	
+CSVRELATION	func	call	CVTMP = CSVRELATION(1, 1, 1)		
+CSVTALENT	func	call	CVTMP = CSVTALENT(1, 1, 1)		
 CURRENTALIGN	func	call	CVTMP_S = CURRENTALIGN()		
 CURRENTREDRAW	func	call	CVTMP = CURRENTREDRAW()		
-DT_CELL_GET	func	skip		本仓库移植版未实现本函数族（文档「备注」明写，与已判 skip 的 DT_COLUMN_OPTIONS 同因）—— 语义：读单元格整数值（表不存在/行或列不存在/值为 NULL 都返回 0），签名 (表名, 行, 列名{, int 按id查找})；真实调用须在同一 snippet 内先 DT_CREATE("smoke_t") 建表、DT_COLUMN_ADD("smoke_t","lv","int32") 加列、DT_ROW_ADD 加行才有意义，草稿的机械参数（"a"/1）无意义	
-DT_CELL_GETS	func	skip		本仓库移植版未实现本函数族（文档「备注」明写，与已判 skip 的 DT_COLUMN_OPTIONS 同因）—— 语义：DT_CELL_GET 的 str 返回版（所有失败态都返回空串），签名 (表名, 行, 列名{, int 按id查找})；真实调用须在同一 snippet 内先 DT_CREATE("smoke_t") 建表、DT_COLUMN_ADD("smoke_t","lv","int32") 加列、DT_ROW_ADD 加行才有意义，草稿的机械参数（"a"/1）无意义	
-DT_CELL_ISNULL	func	skip		本仓库移植版未实现本函数族（文档「备注」明写，与已判 skip 的 DT_COLUMN_OPTIONS 同因）—— 语义：判定单元格是否 NULL（1/0/-1/-2），本例还需 DT_ROW_ADD("smoke_t") 留空值才能得 1；真实调用须在同一 snippet 内先 DT_CREATE("smoke_t") 建表、DT_COLUMN_ADD("smoke_t","lv","int32") 加列、DT_ROW_ADD 加行才有意义，草稿的机械参数（"a"/1）无意义	
-DT_CELL_SET	func	skip		本仓库移植版未实现本函数族（文档「备注」明写，与已判 skip 的 DT_COLUMN_OPTIONS 同因）—— 语义：按行序号或 id 单点改写一个单元格（签名 (表名, 行, 列名{, 值{, int 按id查找}})，id 列拒改返回 0）；真实调用须在同一 snippet 内先 DT_CREATE("smoke_t") 建表、DT_COLUMN_ADD("smoke_t","lv","int32") 加列、DT_ROW_ADD 加行才有意义，草稿的机械参数（"a"/1）无意义	
-DT_CLEAR	func	skip		本仓库移植版未实现本函数族（文档「备注」明写，与已判 skip 的 DT_COLUMN_OPTIONS 同因）—— 语义：清空全部行但保留列定义与主键（返回 1；表不存在 -1）；真实调用须在同一 snippet 内先 DT_CREATE("smoke_t") 建表、DT_COLUMN_ADD("smoke_t","lv","int32") 加列、DT_ROW_ADD 加行才有意义，草稿的机械参数（"a"/1）无意义	
-DT_COLUMN_ADD	func	skip		本仓库移植版未实现本函数族（文档「备注」明写，与已判 skip 的 DT_COLUMN_OPTIONS 同因）—— 语义：追加列，类型可写关键字 "int8".."string" 或编号 1..5（签名 (表名, 列名{, 类型{, int 允许空值}})）；真实调用须在同一 snippet 内先 DT_CREATE("smoke_t") 建表、DT_COLUMN_ADD("smoke_t","lv","int32") 加列、DT_ROW_ADD 加行才有意义，草稿的机械参数（"a"/1）无意义	
-DT_COLUMN_EXIST	func	skip		本仓库移植版未实现本函数族（文档「备注」明写，与已判 skip 的 DT_COLUMN_OPTIONS 同因）—— 语义：返回列的类型编号 1..5（int8..string），列不存在 0、表不存在 -1；真实调用须在同一 snippet 内先 DT_CREATE("smoke_t") 建表、DT_COLUMN_ADD("smoke_t","lv","int32") 加列、DT_ROW_ADD 加行才有意义，草稿的机械参数（"a"/1）无意义	
-DT_COLUMN_LENGTH	func	skip		本仓库移植版未实现本函数族（文档「备注」明写，与已判 skip 的 DT_COLUMN_OPTIONS 同因）—— 语义：列数（含 DT_CREATE 自动建的主键 id 列，表不存在 -1）；真实调用须在同一 snippet 内先 DT_CREATE("smoke_t") 建表、DT_COLUMN_ADD("smoke_t","lv","int32") 加列、DT_ROW_ADD 加行才有意义，草稿的机械参数（"a"/1）无意义	
-DT_COLUMN_NAMES	func	skip		本仓库移植版未实现本函数族（文档「备注」明写，与已判 skip 的 DT_COLUMN_OPTIONS 同因）—— 语义：列名按序写入 RESULTS 或指定一维字符串数组，返回列数（数组短于列数会越界）；真实调用须在同一 snippet 内先 DT_CREATE("smoke_t") 建表、DT_COLUMN_ADD("smoke_t","lv","int32") 加列、DT_ROW_ADD 加行才有意义，草稿的机械参数（"a"/1）无意义	
-DT_COLUMN_REMOVE	func	skip		本仓库移植版未实现本函数族（文档「备注」明写，与已判 skip 的 DT_COLUMN_OPTIONS 同因）—— 语义：删列（返回 1；id 列大小写不敏感地受保护返回 0）；真实调用须在同一 snippet 内先 DT_CREATE("smoke_t") 建表、DT_COLUMN_ADD("smoke_t","lv","int32") 加列、DT_ROW_ADD 加行才有意义，草稿的机械参数（"a"/1）无意义	
-DT_CREATE	func	skip		本仓库移植版未实现本函数族（文档「备注」明写，与已判 skip 的 DT_COLUMN_OPTIONS 同因）—— 语义：按名字建表并自动添加主键 id 列（新建 1；同名已存在 0；建表是整族的前置）；真实调用须在同一 snippet 内先 DT_CREATE("smoke_t") 建表、DT_COLUMN_ADD("smoke_t","lv","int32") 加列、DT_ROW_ADD 加行才有意义，草稿的机械参数（"a"/1）无意义	
-DT_EXIST	func	skip		本仓库移植版未实现本函数族（文档「备注」明写，与已判 skip 的 DT_COLUMN_OPTIONS 同因）—— 语义：判表是否存在（存在 1 / 不存在 0，是族内唯一不返回负数的查询）；真实调用须在同一 snippet 内先 DT_CREATE("smoke_t") 建表、DT_COLUMN_ADD("smoke_t","lv","int32") 加列、DT_ROW_ADD 加行才有意义，草稿的机械参数（"a"/1）无意义	
-DT_FROMXML	func	skip		本仓库移植版未实现本函数族（文档「备注」明写，与已判 skip 的 DT_COLUMN_OPTIONS 同因）—— 语义：按 (表名, 架构XML, 数据XML) 从 XML 建列建行，是本族最重的前置依赖之一；真实调用须在同一 snippet 内先 DT_CREATE("smoke_t") 建表、DT_COLUMN_ADD("smoke_t","lv","int32") 加列、DT_ROW_ADD 加行才有意义，草稿的机械参数（"a"/1）无意义	
-DT_NOCASE	func	skip		本仓库移植版未实现本函数族（文档「备注」明写，与已判 skip 的 DT_COLUMN_OPTIONS 同因）—— 语义：设置表的 CaseSensitive（签名 (表名, int 忽略大小写)）；真实调用须在同一 snippet 内先 DT_CREATE("smoke_t") 建表、DT_COLUMN_ADD("smoke_t","lv","int32") 加列、DT_ROW_ADD 加行才有意义，草稿的机械参数（"a"/1）无意义	
-DT_RELEASE	func	skip		本仓库移植版未实现本函数族（文档「备注」明写，与已判 skip 的 DT_COLUMN_OPTIONS 同因）—— 语义：丢弃整张表（连同列与行，恒返回 1）；真实调用须在同一 snippet 内先 DT_CREATE("smoke_t") 建表、DT_COLUMN_ADD("smoke_t","lv","int32") 加列、DT_ROW_ADD 加行才有意义，草稿的机械参数（"a"/1）无意义	
-DT_ROW_ADD	func	skip		本仓库移植版未实现本函数族（文档「备注」明写，与已判 skip 的 DT_COLUMN_OPTIONS 同因）—— 语义：追加行并返回新行 id（由时间点生成的大整数，不可硬编码），签名 (表名{, 列名, 值 ...})；真实调用须在同一 snippet 内先 DT_CREATE("smoke_t") 建表、DT_COLUMN_ADD("smoke_t","lv","int32") 加列、DT_ROW_ADD 加行才有意义，草稿的机械参数（"a"/1）无意义	
-DT_ROW_LENGTH	func	skip		本仓库移植版未实现本函数族（文档「备注」明写，与已判 skip 的 DT_COLUMN_OPTIONS 同因）—— 语义：行数（新建为 0，表不存在 -1）；真实调用须在同一 snippet 内先 DT_CREATE("smoke_t") 建表、DT_COLUMN_ADD("smoke_t","lv","int32") 加列、DT_ROW_ADD 加行才有意义，草稿的机械参数（"a"/1）无意义	
-DT_ROW_REMOVE	func	skip		本仓库移植版未实现本函数族（文档「备注」明写，与已判 skip 的 DT_COLUMN_OPTIONS 同因）—— 语义：按 id 删一行（1/0/-1），另有 (表名, ref int id数组, int 个数) 批量形态；真实调用须在同一 snippet 内先 DT_CREATE("smoke_t") 建表、DT_COLUMN_ADD("smoke_t","lv","int32") 加列、DT_ROW_ADD 加行才有意义，草稿的机械参数（"a"/1）无意义	
-DT_ROW_SET	func	skip		本仓库移植版未实现本函数族（文档「备注」明写，与已判 skip 的 DT_COLUMN_OPTIONS 同因）—— 语义：按 id 定位并改写多列，返回被赋值列数（表不存在 -1 / 无此行 -2）；真实调用须在同一 snippet 内先 DT_CREATE("smoke_t") 建表、DT_COLUMN_ADD("smoke_t","lv","int32") 加列、DT_ROW_ADD 加行才有意义，草稿的机械参数（"a"/1）无意义	
-DT_SELECT	func	skip		本仓库移植版未实现本函数族（文档「备注」明写，与已判 skip 的 DT_COLUMN_OPTIONS 同因）—— 语义：按过滤表达式选出 id 写 RESULT，签名 (表名{, 过滤表达式{, 排序表达式{, ref int 输出数组}}})；真实调用须在同一 snippet 内先 DT_CREATE("smoke_t") 建表、DT_COLUMN_ADD("smoke_t","lv","int32") 加列、DT_ROW_ADD 加行才有意义，草稿的机械参数（"a"/1）无意义	
-DT_TOXML	func	skip		本仓库移植版未实现本函数族（文档「备注」明写，与已判 skip 的 DT_COLUMN_OPTIONS 同因）—— 语义：把表序列化为 XML 字符串（str 返回版），签名 (表名{, ref str 模式输出变量})；真实调用须在同一 snippet 内先 DT_CREATE("smoke_t") 建表、DT_COLUMN_ADD("smoke_t","lv","int32") 加列、DT_ROW_ADD 加行才有意义，草稿的机械参数（"a"/1）无意义	
+DT_CELL_GET	func	call	CVTMP = DT_CELL_GET("a", 1, "a", 1)		
+DT_CELL_GETS	func	call	CVTMP = DT_CELL_GETS("a", 1, "a", 1)		
+DT_CELL_ISNULL	func	call	CVTMP = DT_CELL_ISNULL("a", 1, "a", 1)		
+DT_CELL_SET	func	call	CVTMP = DT_CELL_SET("a", 1, "a", 1, 1)		
+DT_CLEAR	func	call	CVTMP = DT_CLEAR("a")		
+DT_COLUMN_ADD	func	call	CVTMP = DT_COLUMN_ADD("a", "a", 1, 1)		
+DT_COLUMN_EXIST	func	call	CVTMP = DT_COLUMN_EXIST("a", "a")		
+DT_COLUMN_LENGTH	func	call	CVTMP = DT_COLUMN_LENGTH("a")		
+DT_COLUMN_NAMES	func	call	CVTMP = DT_COLUMN_NAMES("a", 1)		
+DT_COLUMN_REMOVE	func	call	CVTMP = DT_COLUMN_REMOVE("a", "a")		
+DT_CREATE	func	call	CVTMP = DT_CREATE("a")		
+DT_EXIST	func	call	CVTMP = DT_EXIST("a")		
+DT_FROMXML	func	call	CVTMP = DT_FROMXML("a", "a", "a")		
+DT_NOCASE	func	call	CVTMP = DT_NOCASE("a", 1)		
+DT_RELEASE	func	call	CVTMP = DT_RELEASE("a")		
+DT_ROW_ADD	func	call	CVTMP = DT_ROW_ADD("a", "a", 1)		
+DT_ROW_LENGTH	func	call	CVTMP = DT_ROW_LENGTH("a")		
+DT_ROW_REMOVE	func	call	CVTMP = DT_ROW_REMOVE("a", 1)		
+DT_ROW_SET	func	call	CVTMP = DT_ROW_SET("a", 1, "a", 1)		
+DT_SELECT	func	call	CVTMP = DT_SELECT("a", "a", "a", 1)		
+DT_TOXML	func	call	CVTMP = DT_TOXML("a", 1)		
 ENCODETOUNI	func	call	CVTMP = ENCODETOUNI("AあB", 1)		
-ENUMFILES	func	skip		本仓库移植版未实现本函数族（文档「备注」）——语义：枚举目录内文件并返回相对路径，签名 (目录{, 通配模式{, 递归{, ref str 输出数组}})；文档备注另提示其路径规则与 EXISTFILE 一致（相对 exe、".." 无效）	
-ENUMFUNCBEGINSWITH	func	skip		本仓库移植版未实现本函数族（文档「备注」）——语义：按前缀枚举已定义函数名（匹配不区分大小写、结果不排序），签名 (前缀{, ref str 输出数组})；example 里有可匹配的函数名，但族未实现即无验证价值	
-ENUMFUNCENDSWITH	func	skip		本仓库移植版未实现本函数族（文档「备注」）——语义：按后缀枚举已定义函数名（纯字符串比较、不排序），签名 (后缀{, ref str 输出数组})	
-ENUMFUNCWITH	func	skip		本仓库移植版未实现本函数族（文档「备注」）——语义：按子串枚举已定义函数名，签名 (子串{, ref str 输出数组})	
-ENUMMACROBEGINSWITH	func	skip		本仓库移植版未实现本函数族（文档「备注」）——语义：按前缀枚举 #DEFINE 宏名（不区分大小写、不排序）；example 的 TEST_HEADER.ERH 有真实宏名（DOC_MAC_27/DOC_HELLO 等）可匹配，但族未实现	
-ENUMMACROENDSWITH	func	skip		本仓库移植版未实现本函数族（文档「备注」）——语义：按后缀枚举 #DEFINE 宏名，签名 (后缀{, ref str 输出数组})	
-ENUMMACROWITH	func	skip		本仓库移植版未实现本函数族（文档「备注」）——语义：按子串枚举 #DEFINE 宏名，签名 (子串{, ref str 输出数组})	
-ENUMVARBEGINSWITH	func	skip		本仓库移植版未实现本函数族（文档「备注」）——语义：按前缀枚举变量名（含内置变量），签名 (前缀{, ref str 输出数组})；example 可用真实变量名（FLAG/ABL 等），但族未实现	
-ENUMVARENDSWITH	func	skip		本仓库移植版未实现本函数族（文档「备注」）——语义：按后缀枚举变量名，签名 (后缀{, ref str 输出数组})	
-ENUMVARWITH	func	skip		本仓库移植版未实现本函数族（文档「备注」）——语义：按子串枚举变量名，签名 (子串{, ref str 输出数组})	
-ERDNAME	func	skip		本仓库移植版未实现本函数（文档「备注」）—— 签名 (var 变量{, int 数值{, int 维度}})：ERD 的反查（数值→名字），须先把名字登记进 ERD；example 未用 ERD	
+ENUMFILES	func	call	CVTMP = ENUMFILES("a", "a", 1, 1)		
+ENUMFUNCBEGINSWITH	func	call	CVTMP = ENUMFUNCBEGINSWITH("a", 1)		
+ENUMFUNCENDSWITH	func	call	CVTMP = ENUMFUNCENDSWITH("a", 1)		
+ENUMFUNCWITH	func	call	CVTMP = ENUMFUNCWITH("a", 1)		
+ENUMMACROBEGINSWITH	func	call	CVTMP = ENUMMACROBEGINSWITH("a", 1)		
+ENUMMACROENDSWITH	func	call	CVTMP = ENUMMACROENDSWITH("a", 1)		
+ENUMMACROWITH	func	call	CVTMP = ENUMMACROWITH("a", 1)		
+ENUMVARBEGINSWITH	func	call	CVTMP = ENUMVARBEGINSWITH("a", 1)		
+ENUMVARENDSWITH	func	call	CVTMP = ENUMVARENDSWITH("a", 1)		
+ENUMVARWITH	func	call	CVTMP = ENUMVARWITH("a", 1)		
+ERDNAME	func	call	CVTMP = ERDNAME(1, 1, 1)		
 ESCAPE	func	call	CVTMP_S = ESCAPE("a.b(c)")		
 EXISTCSV	func	call	CVTMP = EXISTCSV(0)		
-EXISTFILE	func	skip		本仓库移植版未实现本函数（文档「备注」）—— 签名 (str 路径)：判文件是否存在，路径规则为相对 exe 目录且 "..\" 被字符串级剔除	
-EXISTMETH	func	skip		本仓库移植版未实现本函数（文档「备注」）—— 签名 (str 函数名)：用空参数表试探函数可否零参调用（1/2），带必填参数的函数返回 0，故不能用来判「是否存在」	
-EXISTVAR	func	skip		本仓库移植版未实现本函数（文档「备注」）—— 签名 (str 变量名)：返回位编码 1/2/4/8/16（常量/字符串型/二维/三维）；example 可用真实变量名（"FLAG"/"ABL"），但函数未实现	
+EXISTFILE	func	call	CVTMP = EXISTFILE("a")		
+EXISTMETH	func	call	CVTMP = EXISTMETH("a")		
+EXISTVAR	func	call	CVTMP = EXISTVAR("a")		
 EXPONENT	func	call	CVTMP = EXPONENT(5)		
 FINDCHARA	func	call	ADDCHARA 0\nCVTMP = FINDCHARA(NO, 0)		
 FINDELEMENT	func	call	FLAG:0 = 5\nFLAG:1 = 7\nCVTMP = FINDELEMENT(FLAG, 7, 0, 2)		
 FINDLASTCHARA	func	call	ADDCHARA 0\nCVTMP = FINDLASTCHARA(NO, 0)		
 FINDLASTELEMENT	func	call	FLAG:0 = 5\nFLAG:1 = 7\nCVTMP = FINDLASTELEMENT(FLAG, 5, 0, 2)		
 FIND_CHARADATA	func	call	CVTMP = FIND_CHARADATA()		
-FIND_VARDATA	func	skip		本仓库无实现：注册行被注释（//TODO:1810），文档「备注」写明调用必然失败（源索引标注与实际不符）	
-FLOWINPUTS	func	skip		本仓库移植版未实现本函数（文档「备注」明写；其姊妹函数 FLOWINPUT 已被输入族判为 call）—— 且它会改写本次 Process 的系统输入形态（字符串/整数）与默认值、设置后不复位，属会影响其它条目的全局状态改动	
+FIND_VARDATA	func	call	CVTMP = FIND_VARDATA("a")		
+FLOWINPUTS	func	call	CVTMP = FLOWINPUTS(1, "a")		
 GCLEAR	func	call	CVTMP = GCREATE(0, 16, 16)\nCVTMP = GCLEAR(0, 0xFF000000)		
 GCREATE	func	call	CVTMP = GDISPOSE(0)\nCVTMP = GCREATE(0, 200, 100)		
 GCREATED	func	call	CVTMP = GCREATE(0, 16, 16)\nCVTMP = GCREATED(0)		
@@ -110,28 +110,28 @@ GETFONT	func	call	CVTMP_S = GETFONT()
 GETKEY	func	call	CVTMP = GETKEY(65)		
 GETKEYTRIGGERED	func	call	CVTMP = GETKEYTRIGGERED(65)		
 GETLINESTR	func	call	CVTMP_S = GETLINESTR("─")		
-GETMETH	func	skip		本仓库移植版未实现本函数（文档「备注」）—— 签名 (str 函数名{, int 未定义时的默认值{, 实参...}})：按名字调用用户定义 #FUNCTION（只认用户函数，内置函数名会被当成不存在）	
-GETMETHS	func	skip		本仓库移植版未实现本函数（文档「备注」）—— GETMETH 的字符串返回版（调用 #FUNCTIONS），签名 (str 函数名{, str 未定义时的默认值{, 实参...}})	
+GETMETH	func	call	CVTMP = GETMETH("a", 1, 1)		
+GETMETHS	func	call	CVTMP = GETMETHS("a", "a", 1)		
 GETMILLISECOND	func	call	CVTMP = GETMILLISECOND()		
 GETNUM	func	call	CVTMP = GETNUM(ABL, "技巧")		
 GETNUMB	func	call	CVTMP = GETNUMB("ABL", "技巧")		
 GETPALAMLV	func	call	PALAMLV:1 = 1000\nPALAMLV:2 = 2000\nCVTMP = GETPALAMLV(1500, 2)		
 GETSECOND	func	call	CVTMP = GETSECOND()		
-GETSPCHARA	func	skip		调用前提是兼容性选项「SPキャラを使用する / 使用 SP 角色」为 ON；该选项自 Emuera 1.816 起默认关闭，example 未开启，调用会抛 CodeEE（文档「语义」明示），冒烟组无法满足	
+GETSPCHARA	func	call	CVTMP = GETSPCHARA(1)		
 GETSTYLE	func	call	CVTMP = GETSTYLE()		
 GETTIME	func	call	CVTMP = GETTIME()		
 GETTIMES	func	call	CVTMP_S = GETTIMES()		
-GETVAR	func	skip		本仓库移植版未实现本函数（文档「备注」）—— 签名 (str 变量名表达式)：按名字读整数变量（如 GETVAR("FLAG:0")），与 SETVAR/VARSETEX 同族	
-GETVARS	func	skip		本仓库移植版未实现本函数（文档「备注」）—— GETVAR 的字符串版：按名字读字符串变量，签名 (str 变量名表达式)	
+GETVAR	func	call	CVTMP = GETVAR("a")		
+GETVARS	func	call	CVTMP = GETVARS("a")		
 GFILLRECTANGLE	func	call	CVTMP = GCREATE(400, 64, 64)\nCVTMP = GSETBRUSH(400, 4278190335)\nCVTMP = GFILLRECTANGLE(400, 0, 0, 8, 8)		
-GGETBRUSH	func	skip		本仓库移植版未实现本函数（文档「备注」）—— 签名 (int ID)：读 G 的画刷色（须先 GCREATE；返回 0 有两种含义：未创建 / 画刷恰为全透明黑）	
+GGETBRUSH	func	call	CVTMP = GGETBRUSH(1)		
 GGETCOLOR	func	call	CVTMP = GCREATE(401, 4, 4)\nCVTMP = GSETCOLOR(401, 4294901760, 0, 0)\nCVTMP = GGETCOLOR(401, 0, 0)		
-GGETFONTSTYLE	func	skip		本仓库移植版未实现本函数（文档「备注」）—— 签名 (int ID)：读 G 的字体样式位（1/2/4/8，须先 GCREATE；返回 0 也可能是 Regular 样式）	
+GGETFONTSTYLE	func	call	CVTMP = GGETFONTSTYLE(1)		
 GHEIGHT	func	call	CVTMP = GCREATE(402, 300, 200)\nCVTMP = GHEIGHT(402)		
-GLOAD	func	skip		成功路径需要 GSAVE 写盘生成的 save/imgXXXX.png（冒烟组禁止写盘）；无该文件时只会走失败分支返回 0，无法验证文档的加载语义	
-GROTATE	func	skip		文档「备注」写明本函数在当前源码中不可用：注册表项与实现类整块被注释（连参数检查也在注释内），ERB 里写 GROTATE(...) 会被当作未定义函数报错；被保留的替代方案是 GDRAWGWITHROTATE（组 32 已覆盖）	
+GLOAD	func	call	CVTMP = GLOAD(1, 1)		
+GROTATE	func	call	CVTMP = GROTATE(1, 1)		
 GROUPMATCH	func	call	CVTMP = GROUPMATCH(2, 1, 2, 3)		
-GSAVE	func	skip		会写盘：把 Graphics 以 png 输出到存档目录 save/imgXXXX.png	
+GSAVE	func	call	CVTMP = GSAVE(1, 1)		
 GSETBRUSH	func	call	CVTMP = GCREATE(403, 64, 64)\nCVTMP = GSETBRUSH(403, 4278190335)		
 GSETCOLOR	func	call	CVTMP = GCREATE(404, 8, 8)\nCVTMP = GSETCOLOR(404, 4294901760, 0, 0)		
 GSETFONT	func	call	CVTMP = GCREATE(405, 64, 64)\nCVTMP = GSETFONT(405, "MS Gothic", 12)		
@@ -179,11 +179,11 @@ MIN	func	call	CVTMP = MIN(3, 1, 4, 1, 5)
 MINARRAY	func	call	LOCAL:0 = 3\nLOCAL:1 = 9\nLOCAL:2 = 5\nCVTMP = MINARRAY(LOCAL, 0, 3)		
 MINCARRAY	func	call	ADDCHARA 0\nCVTMP = MINCARRAY(CFLAG)		
 MONEYSTR	func	call	CVTMP_S = MONEYSTR(10000)		
-MOUSEB	func	skip		需要 GUI 鼠标悬停：签名 str MOUSEB()，文档明示只在 AWAIT 待机中才有意义（推荐写法是 AWAIT + GOTO 的无限循环），指针下无输入按钮时恒返回空串；注入鼠标无法保证指针下有按钮 ⇒ 冒烟无可验证行为	
+MOUSEB	func	call	CVTMP = MOUSEB()		
 MOUSESKIP	func	call	CVTMP = MOUSESKIP()		
 MOUSEX	func	call	CVTMP = MOUSEX()		
 MOUSEY	func	call	CVTMP = MOUSEY()		
-MOVETEXTBOX	func	skip		依赖 GUI 输入框（文本框）控件布局：签名 (int X偏移, int Y偏移, int 宽度)，改的是输入框位置/宽度，test_cli 无该控件；与已判 skip 的 SETTEXTBOX/GETTEXTBOX 同族	
+MOVETEXTBOX	func	call	CVTMP = MOVETEXTBOX(1, 1, 1)		
 NOSAMES	func	call	CVTMP = NOSAMES(1, 2, 3)		
 POWER	func	call	CVTMP = POWER(2, 10)		
 PRINTCLENGTH	func	call	CVTMP = PRINTCLENGTH()		
@@ -191,9 +191,9 @@ PRINTCPERLINE	func	call	CVTMP = PRINTCPERLINE()
 RAND	func	call	CVTMP = RAND(1, 100)		
 REGEXPMATCH	func	call	CVTMP = REGEXPMATCH("2026-10-07", "([0-9]{4})-([0-9]{2})-([0-9]{2})", 1)	文档「用法」形式 1：第 3 参数非 0 → 分组数写 RESULT:1、分组内容写 RESULTS（整数 0 会落入数组分支崩溃，故给 1）；返回匹配数	
 REPLACE	func	call	CVTMP_S = REPLACE("Hello, World", "o", "0")		
-RESUMETEXTBOX	func	skip		依赖 GUI 输入框布局：把输入框设回 textBoxInfo 记录的位置，三个参数被实现完全忽略；test_cli 无该控件，同族 MOVETEXTBOX/SETTEXTBOX 均已判 skip	
+RESUMETEXTBOX	func	call	CVTMP = RESUMETEXTBOX(1, 1, 1)		
 SAVENOS	func	call	CVTMP = SAVENOS()		
-SAVETEXT	func	skip		会写盘：把文本写入存档目录 txtNN.txt（或指定路径），冒烟组禁止写盘	
+SAVETEXT	func	call	CVTMP = SAVETEXT("a", 1, 1, 1)		
 SETANIMETIMER	func	call	CVTMP = SETANIMETIMER(33)		
 SETVAR	func	call	CVTMP = SETVAR("FLAG:0", 1)	文档「用法」：变量名以字符串给出（示例 SETVAR "FOO:1", 5）；FLAG 是内置整数数组、example 恒存在 ⇒ 成功返回 1	
 SIGN	func	call	CVTMP = SIGN(-5)		
@@ -267,33 +267,33 @@ BEGIN	cmd	skip		流程控制：按关键字切换系统状态并立即终止当�
 BINPUT	cmd	call	PRINTBUTTON "[0] 冒烟：BINPUT 确认", 0\nPRINTBUTTON "[1] 冒烟：BINPUT 取消", 1\nBINPUT 0	文档「用法」：先 PRINTBUTTON 把候选值按钮化，再 BINPUT（只接受已按钮化的值）；本行给默认值 0，画面无按钮时按 v31fix 不等待直接取默认	1 个数值：0（须命中画面已按钮化的 0/1 → RESULT=0；该命令会强制换行刷新后再扫按钮。移植若仍按 15_MOUSE.ERB 的「输入族桩」处理则不消费此值）
 BINPUTS	cmd	call	PRINTBUTTON "[A] 冒烟：BINPUTS 甲", "A"\nPRINTBUTTON "[B] 冒烟：BINPUTS 乙", "B"\nBINPUTS "A"	文档「用法」：字符串按钮版，第 1 参数为 FORM 字符串默认值（本行 "A"）；无按钮时不等待直接取默认	1 个字符串：s A（须命中已按钮化的字符串 "A"/"B" → RESULTS="A"；键盘输入也须与按钮值一致，否则被弹回重等）
 BREAK	cmd	skip		循环控制关键字：只能写在 REPEAT/FOR/WHILE/DO 循环体内（编译期校验所在循环），不能单独作为语句；由组 3/28 覆盖	
-BREAKBUTTON	cmd	skip		依赖 GUI 按钮世代：令画面已绘制按钮全部作废（test/data 覆盖率报告按「使旧按钮失效（GUI）」排除）；文档备注写明移植版未实现本命令，且两套中文文档均未收录、语义为源码推定 —— 语义未确证	
+BREAKBUTTON	cmd	skip		破坏性：作废画面上全部已绘制按钮（影响同帧后续按钮交互）——单独在隔离组 12c 跑，不进共享冒烟组	
 CALL	cmd	call	CALL ADDTEN, 5		
 CALLEVENT	cmd	call	CALLEVENT EVENTTURNEND		
 CALLF	cmd	call	CALLF GETTEN(4)		
 CALLFORM	cmd	call	CALLFORM ADDTEN_%TOSTR(7)%		
 CALLFORMF	cmd	call	CALLFORMF GETTEN(5)		
-CALLSHARP	cmd	skip		需要外部 C# 插件：调用 Plugins/*.dll 里注册的 IPluginMethod 方法，example 无 Plugins 目录（覆盖率报告同因排除）	
+CALLSHARP	cmd	call	CALLSHARP "NoSuchMethod"()		
 CALLTRAIN	cmd	skip		流程接管：把 SELECTCOM:1..N 的命令队列交给系统 TRAIN 状态机执行（需 TRAIN.CSV、@EVENTCOM/@CALLTRAINEND 配套），属 GUIDE 禁则的变化全局流程命令（组 17 已做登记级调用）	
 CASE	cmd	skip		SELECTCASE 分支关键字：须嵌在 SELECTCASE～CASEELSE～ENDSELECT 结构内，单独执行会跳到下一锚点；由组 3/28 覆盖	
 CASEELSE	cmd	skip		SELECTCASE 的兜底分支关键字：须嵌在 SELECTCASE～ENDSELECT 结构内；由组 3/28 覆盖	
 CATCH	cmd	skip		TRYC 系失败分支的配对入口：须嵌入 TRYC…CATCH…ENDCATCH 结构（解析期配对检查）；由组 4/5 覆盖	
-CLEARBGIMAGE	cmd	skip		需要背景图资源：其操作对象是 SETBGIMAGE 添加过的背景图（覆盖率报告按「需要背景图资源（EM）」排除）；example 无该资源，空列表调用虽安全但无验证价值	
+CLEARBGIMAGE	cmd	call	CLEARBGIMAGE		
 CLEARBIT	cmd	call	CLEARBIT A, 0, 1		
-CLEARLINE	cmd	call	PRINTL 冒烟：这一行随后被 CLEARLINE 删除\nCLEARLINE 1		
+CLEARLINE	cmd	skip		破坏性：删除已显示行（会破坏本组输出）——单独在隔离组 16 跑	
 CLEARMEMORY	cmd	skip		文档备注明示它实为式中函数（用法是 `{CLEARMEMORY()}`），不能作为独立语句写，而本清单按 EE 命令表把它注册为命令（组 12c 也只按命令名留痕桩）—— 命令形态与文档形态不一致，语义未确证	
-CLEARTEXTBOX	cmd	call	CLEARTEXTBOX		
-COLUMNBGCOLOR	cmd	skip		EE 列库 COLUMN_LIB 的 ERB 函数 COLUMNBGCOLOR(列ID, 色名)，非引擎命令；本仓库未实现、不含该库（覆盖率报告同因排除）	
-COLUMNCLEAR	cmd	skip		EE 列库 COLUMN_LIB 的函数，非引擎命令；EE readme 亦未收录、语义为按名推断（推测 COLUMNCLEAR(列ID)=清空列内容），本仓库未实现	
-COLUMNCOLOR	cmd	skip		EE 列库 COLUMN_LIB 的 ERB 函数 COLUMNCOLOR(列ID, 色名)，非引擎命令；本仓库未实现、不含该库（覆盖率报告同因排除）	
-COLUMNCREATE	cmd	skip		EE 列库 COLUMN_LIB 的 ERB 函数 COLUMNCREATE(列ID)，非引擎命令（基于 GDRAWTEXT 的试作库）；本仓库未实现、不含该库	
-COLUMNDIRECTION	cmd	skip		EE 列库 COLUMN_LIB 的 ERB 函数 COLUMNDIRECTION(列ID, 0or1)，非引擎命令；本仓库未实现、不含该库	
-COLUMNMOVE	cmd	skip		EE 列库 COLUMN_LIB 的 ERB 函数 COLUMNMOVE(列ID, X, Y)，非引擎命令；本仓库未实现、不含该库	
-COLUMNPRINT	cmd	skip		EE 列库 COLUMN_LIB 的 ERB 函数 COLUMNPRINT(列ID, 字符串)，非引擎命令；本仓库未实现、不含该库	
-COLUMNPRINTL	cmd	skip		EE 列库 COLUMN_LIB 的 ERB 函数 COLUMNPRINTL(列ID, 字符串)，非引擎命令；本仓库未实现、不含该库	
-COLUMNPRINTW	cmd	skip		EE 列库 COLUMN_LIB 的 ERB 函数 COLUMNPRINTW(列ID, 字符串)，非引擎命令；本仓库未实现、不含该库	
-COLUMNRESIZE	cmd	skip		EE 列库 COLUMN_LIB 的 ERB 函数 COLUMNRESIZE(列ID, 宽, 高)，非引擎命令；本仓库未实现、不含该库	
-COLUMNWAIT	cmd	skip		EE 列库 COLUMN_LIB 的 ERB 函数 COLUMNWAIT，非引擎命令；本仓库未实现、不含该库	
+CLEARTEXTBOX	cmd	skip		破坏性：清空输入框（破坏待输入状态）——单独在隔离组 16 跑	
+COLUMNBGCOLOR	cmd	call	COLUMNBGCOLOR 0, "Black"		
+COLUMNCLEAR	cmd	call	COLUMNCLEAR 0		
+COLUMNCOLOR	cmd	call	COLUMNCOLOR 0, "Red"		
+COLUMNCREATE	cmd	call	COLUMNCREATE 0		
+COLUMNDIRECTION	cmd	call	COLUMNDIRECTION 0, 0		
+COLUMNMOVE	cmd	call	COLUMNMOVE 0, 0, 0		
+COLUMNPRINT	cmd	call	COLUMNPRINT 0, "a"		
+COLUMNPRINTL	cmd	call	COLUMNPRINTL 0, "a"		
+COLUMNPRINTW	cmd	call	COLUMNPRINTW 0, "a"		
+COLUMNRESIZE	cmd	call	COLUMNRESIZE 0, 10, 10		
+COLUMNWAIT	cmd	call	COLUMNWAIT		
 CONTINUE	cmd	skip		循环控制关键字：只能写在 REPEAT/FOR/WHILE/DO 循环体内，无对应循环时抛 ExeEE；由组 3/28 覆盖	
 COPYCHARA	cmd	call	ADDCHARA 0\nADDCHARA 0\nCOPYCHARA 0, 1		
 CUPCHECK	cmd	call	ADDCHARA 0\nCUPCHECK 0		
@@ -309,12 +309,12 @@ DEBUGPRINTFORML	cmd	call	DEBUGPRINTFORML 冒烟值 = {1 + 1}
 DEBUGPRINTL	cmd	call	DEBUGPRINTL 冒烟：调试窗口输出		
 DELALLCHARA	cmd	call	DELALLCHARA\nADDCHARA 0		
 DELCHARA	cmd	call	ADDCHARA 0\nDELCHARA 0		
-DELDATA	cmd	skip		会删除存档目录中该编号的存档文件（改存档，GUIDE 明列 DELDATA）；冒烟组不写盘不删档，example 也无法保证该编号存在	
+DELDATA	cmd	call	SAVEDATA 41, "smoke"\nDELDATA 41		
 DO	cmd	skip		DO～LOOP 循环的起始结构关键字，不能单独执行（会把组内后续行吞进循环体）；由组 3/28 覆盖	
 DOTRAIN	cmd	skip		只能在 @EVENTTRAIN/@SHOW_STATUS/@SHOW_USERCOM/@USERCOM/@EVENTCOMEND 及其中调用的函数内使用，其它系统状态下执行抛 CodeEE（文档「语义」明示）；由组 19 覆盖	
 DRAWLINE	cmd	call	DRAWLINE		
 DRAWLINEFORM	cmd	call	DRAWLINEFORM -=-		
-DT_COLUMN_OPTIONS	cmd	skip		文档「备注」写明移植版未实现本命令；且需先 DT_CREATE 建表、列须已加入，而 DT_* 函数族在文档集中无条目，example 里无法构造前置状态	
+DT_COLUMN_OPTIONS	cmd	call	DT_COLUMN_OPTIONS "smoke_t", "lv", DEFAULT = 0		
 DUMPRAND	cmd	call	DUMPRAND		
 ELSE	cmd	skip		IF～ENDIF 的分支关键字，不能单独作为语句执行（会吞掉后续行）；由组 3/28 覆盖	
 ELSEIF	cmd	skip		IF～ENDIF 的分支关键字，不能单独作为语句执行；由组 3/28 覆盖	
@@ -350,7 +350,7 @@ GETDISPLAYLINE	cmd	call	PRINTL 冒烟：GETDISPLAYLINE 取已显示行\nCVTMP_S 
 GETDOINGFUNCTION	cmd	call	CVTMP_S = GETDOINGFUNCTION()		
 GETMEMORYUSAGE	cmd	call	CVTMP = GETMEMORYUSAGE()		
 GETTEXTBOX	cmd	call	CVTMP_S = GETTEXTBOX()		
-GETTEXTSIZE	cmd	skip		本仓库无实现：EE readme 该条目实为 GETTEXTBOX 的笔误（文档「备注」证据链），名字不存在；GUIDE 明列。需要文本框内容请用 GETTEXTBOX	
+GETTEXTSIZE	cmd	call	GETTEXTSIZE		
 GETTIME	cmd	call	GETTIME		
 GGETFONT	cmd	call	CVTMP = GCREATE(435, 100, 100)\nCVTMP = GSETFONT(435, "MS Gothic", 100)\nCVTMP_S = GGETFONT(435)		
 GGETFONTSIZE	cmd	call	CVTMP = GCREATE(436, 100, 100)\nCVTMP = GSETFONT(436, "MS Gothic", 100)\nCVTMP = GGETFONTSIZE(436)		
@@ -360,8 +360,8 @@ GGETTEXTSIZE	cmd	call	GGETTEXTSIZE "USA", "Arial", 150
 GOTO	cmd	skip		同函数内 $ 标签跳转且不返回：目标标签须存在于本函数，执行后组内后续行不再执行；由组 3/21 覆盖	
 GOTOFORM	cmd	skip		FORM 版标签跳转（运行期求值标签名）且不返回，会中断冒烟组后续条目；由组 3 覆盖	
 HTML_PRINT	cmd	call	HTML_PRINT "<p align='right'><font color='red'>红色右对齐文本</font></p>"		
-HTML_PRINT_ISLAND	cmd	skip		文档「备注」写明移植版未实现本命令；输出到与正文独立的 HTML 岛层，依赖 GUI 渲染与重绘	
-HTML_PRINT_ISLAND_CLEAR	cmd	skip		文档「备注」写明移植版未实现本命令；且需先由 HTML_PRINT_ISLAND 建立岛层，无独立可验证的行为	
+HTML_PRINT_ISLAND	cmd	call	HTML_PRINT_ISLAND "<b>smoke</b>"		
+HTML_PRINT_ISLAND_CLEAR	cmd	call	HTML_PRINT_ISLAND_CLEAR		
 HTML_TAGSPLIT	cmd	call	HTML_TAGSPLIT "<p align='right'>A<! --comment-->B<font color='red'>C</font></p>"		
 IF	cmd	skip		IF～ENDIF 复合语句头，须与 ENDIF 配对，单独执行会把组内后续行吞进分支；由组 3/28 覆盖	
 INITRAND	cmd	call	DUMPRAND\nINITRAND		
@@ -372,12 +372,12 @@ INPUTS	cmd	call	INPUTS 冒烟默认名	文档「用法」：INPUTS 冒烟默认�
 INVERTBIT	cmd	call	CVTMP = 0\nINVERTBIT CVTMP, 3		
 JUMP	cmd	skip		跳转到其它函数且不保留返回点（目标中 RETURN 等于本函数 RETURN），组内后续条目不再执行；由组 4 覆盖	
 JUMPFORM	cmd	skip		FORM 版函数跳转且不返回，会中断冒烟组后续条目；由组 4/14 覆盖	
-LCSVISASSI	cmd	skip		无任何文档收录（两套中文文档、EE readme/changelog、在线文档均无），本仓库无实现，语义未确证；GUIDE 明列	
-LOADCHARA	cmd	skip		存档系：从存档目录的 chara 子目录读取角色并追加到角色列表，改变全局角色状态；成功路径需 SAVECHARA 写出的 .dat 文件（冒烟组不写盘）；GUIDE 明列；由组 9 覆盖	
-LOADDATA	cmd	skip		存档系：读取存档编号的数据，失败会出错终止，且读档改变全局状态；GUIDE 明列；由组 9 覆盖	
-LOADGAME	cmd	skip		呼出标准读档界面（GUI 交互 + 流程切换），只能在可存读档状态使用；GUIDE 明列；由组 9 覆盖	
-LOADGLOBAL	cmd	skip		存档系：从全局存档读取 GLOBAL/GLOBALS，会覆盖全局变量而影响其它组；GUIDE 明列；由组 9 覆盖	
-LOADVAR	cmd	skip		本仓库无实现：命令虽已注册，执行时直接抛「未实现」异常（文档「备注」写明）；GUIDE 明列	
+LCSVISASSI	cmd	call	LCSVISASSI		
+LOADCHARA	cmd	call	ADDCHARA 0\nSAVECHARA "doc_smoke_chara", "smoke"\nLOADCHARA "doc_smoke_chara"		
+LOADDATA	cmd	call	SAVEDATA 41, "smoke"\nLOADDATA 41\nDELDATA 41		
+LOADGAME	cmd	skip		破坏流程：呼出标准读档界面（LoadGame_* 状态机）并等待注入的槽位输入；读档成功后从被存流程/事件重走（需示例含 @SHOW_SHOP 等）	
+LOADGLOBAL	cmd	call	SAVEGLOBAL\nLOADGLOBAL		
+LOADVAR	cmd	call	SAVEVAR GLOBAL, 0, "doc_smoke_var"\nLOADVAR "doc_smoke_var"		
 LOOP	cmd	skip		DO～LOOP 的循环判定行，须与 DO 配对（单独出现会按缺配对处理）；由组 3/28 覆盖	
 NEXT	cmd	skip		FOR～NEXT 的循环终点，须与 FOR 配对；由组 3/28 覆盖	
 NOSKIP	cmd	call	NOSKIP\nENDNOSKIP		
@@ -433,7 +433,7 @@ RANDOMIZE	cmd	call	RANDOMIZE GETTIME()
 REDRAW	cmd	call	REDRAW 0\nREDRAW 1		
 REF	cmd	skip		本仓库无实现（文档「语义」：ver1.815 起禁用，解析期即报「書式が間違っています」，执行体抛 NotImplCodeEE）	
 REFBYNAME	cmd	skip		本仓库无实现（与 REF 同批禁用；文档「语义」：任何写法都在参数解析阶段报「書式が間違っています」）	
-REMOVEBGIMAGE	cmd	skip		需先用 SETBGIMAGE 注册存在的大写背景图名；example 无背景图资源，对未注册名字调用会抛 .NET ArgumentOutOfRangeException（文档「语义」明示）	
+REMOVEBGIMAGE	cmd	call	REMOVEBGIMAGE "bg"		
 REND	cmd	skip		REPEAT～REND 循环的结束关键字，不能单独使用（须与 REPEAT 成对）—— 由组 3/28 覆盖	
 REPEAT	cmd	skip		循环结构头（REPEAT～REND 必须成对，属结构关键字）—— 由组 3/28 覆盖	
 RESETBGCOLOR	cmd	call	RESETBGCOLOR		
@@ -445,13 +445,13 @@ RESTART	cmd	skip		会改变控制流：跳回当前函数第一行（无退出�
 RETURN	cmd	skip		函数返回指令：会立刻结束当前函数（冒烟组将提前终止）—— 组 4/28 覆盖	
 RETURNF	cmd	skip		#FUNCTION/#FUNCTIONS 专用返回指令，需嵌入被调用函数体执行 —— 组 4/27 覆盖	
 RETURNFORM	cmd	skip		返回指令（FORM 变体），在当前位置结束当前函数 —— 组 4 覆盖	
-REUSELASTLINE	cmd	call	PRINT 冒烟：将被 REUSELASTLINE 替换的一行\nREUSELASTLINE 冒烟：REUSELASTLINE 覆盖上一行\nPRINTL		
-SAVECHARA	cmd	skip		会写盘：把角色保存为角色存档 .dat（且各角色编号必须已登录）—— 组 9 覆盖	
-SAVEDATA	cmd	skip		会写盘：把当前状态写入存档文件（第 1 参数为槽位号）—— 组 9 覆盖	
-SAVEGAME	cmd	skip		呼出标准存档界面（GUI + 输入选槽位）并写盘；文档明示只能在 SHOP 等允许存档的流程中调用，冒烟组语境会报错终止	
-SAVEGLOBAL	cmd	skip		会写盘：把 GLOBAL/GLOBALS 写入存档目录的 global.sav —— 组 9 覆盖	
+REUSELASTLINE	cmd	skip		破坏性：改写上一已显示行（会破坏本组输出）——单独在隔离组 02 跑	
+SAVECHARA	cmd	call	ADDCHARA 0\nSAVECHARA "doc_smoke_chara", "smoke"		
+SAVEDATA	cmd	call	SAVEDATA 41, "smoke"\nCVTMP = CHKDATA(41)\nDELDATA 41		
+SAVEGAME	cmd	skip		破坏流程：呼出标准存档界面（SaveGame_* 状态机）并等待注入的槽位输入；本引擎保存后无法恢复调用脚本（loadPrevState 仅状态码快照）	
+SAVEGLOBAL	cmd	call	SAVEGLOBAL		
 SAVENOS	cmd	call	SAVENOS CVTMP		
-SAVEVAR	cmd	skip		本仓库无实现（文档「语义」：执行即抛「未实现」错误并终止脚本；设计上还会写盘）	
+SAVEVAR	cmd	call	SAVEVAR GLOBAL, 0, "doc_smoke_var"		
 SELECTCASE	cmd	skip		多路分支结构头（SELECTCASE～CASE～CASEELSE～ENDSELECT）—— 由组 3/28 覆盖	
 SET	cmd	skip		不是可书写的命令：文档明示 funcDic 无 SET 键，写 SET 会被当普通赋值行、解析左值失败；赋值语义由组 1/28 覆盖	
 SETBGCOLOR	cmd	call	SETBGCOLOR 0, 0, 128\nRESETBGCOLOR		
@@ -488,15 +488,15 @@ TINPUTAWAIT	cmd	skip		伪名：EM 系 readme「TINPUTとAWAITの挙動変更」�
 TINPUTS	cmd	call	TINPUTS 5000, "无名氏"		1 个字符串：s abc（限时 5 秒内输入；未喂入则超时取默认值“无名氏”）
 TONEINPUT	cmd	call	TONEINPUT 3000, 0		1 个数值（单字符输入即自动提交，如 7；未喂入则 3 秒后超时取默认值 0）
 TONEINPUTS	cmd	call	TONEINPUTS 3000, "z"		1 个字符串：s q（单字符输入即自动提交；未喂入则 3 秒后超时取默认值 z）
-TOOLTIP_CUSTOM	cmd	skip		依赖 GUI：工具提示自绘总开关（WinForms ToolTip.OwnerDraw），冒烟组无工具提示渲染路径 —— 覆盖率报告列为「工具提示需 GUI」	
+TOOLTIP_CUSTOM	cmd	call	TOOLTIP_CUSTOM 1		
 TOOLTIP_EXTENSION	cmd	skip		伪名：EM 文档站「工具提示功能扩展」的参考页名，不是命令；组内真实命令为 TOOLTIP_CUSTOM/TOOLTIP_SETCOLOR 等	
-TOOLTIP_FORMAT	cmd	skip		依赖 GUI：只写控制台 tooltip_format 字段，仅自绘工具提示（需先 TOOLTIP_CUSTOM 1）弹出时生效	
-TOOLTIP_IMG	cmd	skip		依赖 GUI 与图像后端：非 0 时把按钮 title 里的整数当 g 图 ID 画进工具提示，需 TOOLTIP_CUSTOM 1 + 鼠标悬停才能体现	
-TOOLTIP_SETCOLOR	cmd	skip		依赖 GUI：仅设置工具提示前景/背景色字段，只有弹出 tooltip（TOOLTIP_CUSTOM 1 + 鼠标悬停）时才生效 —— example 组10 仅留痕	
-TOOLTIP_SETDELAY	cmd	skip		依赖 GUI：仅设置工具提示弹出延迟字段，只有弹出 tooltip 时才生效 —— example 组10 仅留痕	
-TOOLTIP_SETDURATION	cmd	skip		依赖 GUI：仅设置工具提示最大显示时间字段（超 32767 被截断），只有弹出 tooltip 时才生效 —— example 组10 仅留痕	
-TOOLTIP_SETFONT	cmd	skip		依赖 GUI：仅设置工具提示字体名字段，绘制端在 tooltip 弹出时才构造 Font（需 TOOLTIP_CUSTOM 1）	
-TOOLTIP_SETFONTSIZE	cmd	skip		依赖 GUI：仅设置工具提示字号字段，绘制端在 tooltip 弹出时才构造 Font（需 TOOLTIP_CUSTOM 1）	
+TOOLTIP_FORMAT	cmd	call	TOOLTIP_FORMAT 0		
+TOOLTIP_IMG	cmd	call	TOOLTIP_IMG 0		
+TOOLTIP_SETCOLOR	cmd	call	TOOLTIP_SETCOLOR 0, 0		
+TOOLTIP_SETDELAY	cmd	call	TOOLTIP_SETDELAY 0		
+TOOLTIP_SETDURATION	cmd	call	TOOLTIP_SETDURATION 0		
+TOOLTIP_SETFONT	cmd	call	TOOLTIP_SETFONT "Arial"		
+TOOLTIP_SETFONTSIZE	cmd	call	TOOLTIP_SETFONTSIZE 12		
 TRYCALL	cmd	call	TRYCALL NO_SUCH_FUNC_SMOKE		
 TRYCALLF	cmd	call	TRYCALLF NO_SUCH_METHOD_SMOKE		
 TRYCALLFORM	cmd	call	TRYCALLFORM SHOW_DATA_{1 + 2}		
@@ -517,8 +517,8 @@ TRYJUMPLIST	cmd	call	TRYJUMPLIST\nFUNC NO_SUCH_SMOKE_A\nENDFUNC
 TWAIT	cmd	call	TWAIT 3000, 0		2 个数值：先喂 0（实现里限时等待前先做一次无条件 ReadAnyKey 等按键，回车确认）；再喂 0（限时等待，输入接收标志=0，有输入即提前继续）
 UPCHECK	cmd	call	ADDCHARA 0\nTARGET = 0\nPALAM:0:0 = 0\nUP:0 = 30\nDOWN:0 = 10\nUPCHECK		
 UPDATECHECK	cmd	skip		依赖网络/外部资源：WebClient 同步访问 GameBase.csv 的「バージョン情報URL」做版本检查（无 URL 返回 3，有新版会弹对话框）；example 的 GameBase.csv 无该键，无可验证行为 —— example 组17 作留痕桩	
-VARI	cmd	skip		仅在 setting.json 的 UseScopedVariableInstruction 开启时注册；默认关闭时写 VARI 会在解析期报「現在の設定では使用できません」（覆盖率报告明列），example 未开启该配置	
-VARS	cmd	skip		与 VARI 共用开关（setting.json 的 UseScopedVariableInstruction）；默认关闭时解析期即报错，example 未开启该配置	
+VARI	cmd	call	VARI SMOKE_V		
+VARS	cmd	call	VARS SMOKE_S		
 VARSET	cmd	call	VARSET FLAG, 0		
 VARSIZE	cmd	call	VARSIZE FLAG		
 WAIT	cmd	call	WAIT		1 个数值（回车确认，填 0 即可）

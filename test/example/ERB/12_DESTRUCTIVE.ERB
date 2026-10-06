@@ -28,8 +28,9 @@ RETURN 0
 ;                —— 用「自重启一次」的子函数测：LOCAL 标记防止无限重启
 ;                （RESTART 是同帧跳转，LOCAL/ARG 跨重启保留）。
 ;   * FORCE_BEGIN / FORCE_QUIT / FORCE_QUIT_AND_RESTART /
-;     QUIT_AND_RESTART / CLEARMEMORY      EE 命令（当前「留痕跳过」桩，执行
-;                不报错；C# 语义上破坏流程/内存，故单独成组不进自动路径）。
+;     QUIT_AND_RESTART / CLEARMEMORY / BREAKBUTTON   EE 命令（当前「留痕跳过」
+;                桩，执行不报错；C# 语义上破坏流程/内存/按钮世代，故单独成组、
+;                不进自动路径）。
 ;   * DOTRAIN    仅训练流程状态合法（example 无 TRAINNAME，同样报错）——
 ;                预期「执行出错」，用 ./test/run_example.sh 19 单独跑。
 ;-------------------------------------------------------------
@@ -58,6 +59,7 @@ FORCE_QUIT
 FORCE_QUIT_AND_RESTART
 QUIT_AND_RESTART
 CLEARMEMORY
+BREAKBUTTON
 CALL ASSERT_TRUE, 1, @"EE 破坏性命令（桩）执行不报错"
 NONG = RESULT
 RETURN NONG

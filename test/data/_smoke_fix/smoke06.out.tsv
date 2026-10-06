@@ -30,15 +30,15 @@ TINPUTAWAIT	cmd	skip		伪名：EM 系 readme「TINPUTとAWAITの挙動変更」�
 TINPUTS	cmd	skip		需要交互：限时等待玩家输入字符串并写入 RESULTS —— 由组 11 覆盖
 TONEINPUT	cmd	skip		需要交互：限时单字符输入（写 RESULT，无需回车）—— 由组 11 覆盖
 TONEINPUTS	cmd	skip		需要交互：限时单字符字符串输入（写 RESULTS）—— 由组 11 覆盖
-TOOLTIP_CUSTOM	cmd	skip		依赖 GUI：工具提示自绘总开关（WinForms ToolTip.OwnerDraw），冒烟组无工具提示渲染路径 —— 覆盖率报告列为「工具提示需 GUI」
+TOOLTIP_CUSTOM	cmd	call	TOOLTIP_CUSTOM 1	
 TOOLTIP_EXTENSION	cmd	skip		伪名：EM 文档站「工具提示功能扩展」的参考页名，不是命令；组内真实命令为 TOOLTIP_CUSTOM/TOOLTIP_SETCOLOR 等
-TOOLTIP_FORMAT	cmd	skip		依赖 GUI：只写控制台 tooltip_format 字段，仅自绘工具提示（需先 TOOLTIP_CUSTOM 1）弹出时生效
-TOOLTIP_IMG	cmd	skip		依赖 GUI 与图像后端：非 0 时把按钮 title 里的整数当 g 图 ID 画进工具提示，需 TOOLTIP_CUSTOM 1 + 鼠标悬停才能体现
-TOOLTIP_SETCOLOR	cmd	skip		依赖 GUI：仅设置工具提示前景/背景色字段，只有弹出 tooltip（TOOLTIP_CUSTOM 1 + 鼠标悬停）时才生效 —— example 组10 仅留痕
-TOOLTIP_SETDELAY	cmd	skip		依赖 GUI：仅设置工具提示弹出延迟字段，只有弹出 tooltip 时才生效 —— example 组10 仅留痕
-TOOLTIP_SETDURATION	cmd	skip		依赖 GUI：仅设置工具提示最大显示时间字段（超 32767 被截断），只有弹出 tooltip 时才生效 —— example 组10 仅留痕
-TOOLTIP_SETFONT	cmd	skip		依赖 GUI：仅设置工具提示字体名字段，绘制端在 tooltip 弹出时才构造 Font（需 TOOLTIP_CUSTOM 1）
-TOOLTIP_SETFONTSIZE	cmd	skip		依赖 GUI：仅设置工具提示字号字段，绘制端在 tooltip 弹出时才构造 Font（需 TOOLTIP_CUSTOM 1）
+TOOLTIP_FORMAT	cmd	call	TOOLTIP_FORMAT 0	
+TOOLTIP_IMG	cmd	call	TOOLTIP_IMG 0	
+TOOLTIP_SETCOLOR	cmd	call	TOOLTIP_SETCOLOR 0, 0	
+TOOLTIP_SETDELAY	cmd	call	TOOLTIP_SETDELAY 0	
+TOOLTIP_SETDURATION	cmd	call	TOOLTIP_SETDURATION 0	
+TOOLTIP_SETFONT	cmd	call	TOOLTIP_SETFONT "Arial"	
+TOOLTIP_SETFONTSIZE	cmd	call	TOOLTIP_SETFONTSIZE 12	
 TRYCALL	cmd	call	TRYCALL NO_SUCH_FUNC_SMOKE	
 TRYCALLF	cmd	call	TRYCALLF NO_SUCH_METHOD_SMOKE	
 TRYCALLFORM	cmd	call	TRYCALLFORM SHOW_DATA_{1 + 2}	
@@ -59,8 +59,8 @@ TRYJUMPLIST	cmd	call	TRYJUMPLIST\nFUNC NO_SUCH_SMOKE_A\nENDFUNC
 TWAIT	cmd	skip		需要交互：先无条件 ReadAnyKey 等一次按键（源码与文档差异），再进入限时等待；冒烟组无法供应按键
 UPCHECK	cmd	call	ADDCHARA 0\nTARGET = 0\nPALAM:0:0 = 0\nUP:0 = 30\nDOWN:0 = 10\nUPCHECK	
 UPDATECHECK	cmd	skip		依赖网络/外部资源：WebClient 同步访问 GameBase.csv 的「バージョン情報URL」做版本检查（无 URL 返回 3，有新版会弹对话框）；example 的 GameBase.csv 无该键，无可验证行为 —— example 组17 作留痕桩
-VARI	cmd	skip		仅在 setting.json 的 UseScopedVariableInstruction 开启时注册；默认关闭时写 VARI 会在解析期报「現在の設定では使用できません」（覆盖率报告明列），example 未开启该配置
-VARS	cmd	skip		与 VARI 共用开关（setting.json 的 UseScopedVariableInstruction）；默认关闭时解析期即报错，example 未开启该配置
+VARI	cmd	call	VARI SMOKE_V	
+VARS	cmd	call	VARS SMOKE_S	
 VARSET	cmd	call	VARSET FLAG, 0	
 VARSIZE	cmd	call	VARSIZE FLAG	
 WAIT	cmd	skip		需要交互：等待回车继续（冒烟组无法供应按键）—— 由组 11 覆盖

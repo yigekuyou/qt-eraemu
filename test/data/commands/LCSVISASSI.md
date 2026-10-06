@@ -34,5 +34,5 @@ EE 发行版的预期行为：无任何文档与源码可考，语义不明。
 ## 备注
 
 - 在全部提取材料（ecd、zh、EE readme/changelog、EM+EE 在线文档 sitemap、eraTW khp）中均检索不到 LCSVISASSI；在线检索（Web）亦无结果。
-- 本仓库的测试桩 `test/example/ERB/10_COVERAGE.ERB:173` 仅以裸名字出现，未给出语义。
+- 本仓库的测试桩（`test/example/ERB/35_DOC_SMOKE.ERB`，由 `test/data/doc_smoke.tsv` 生成）仅以裸名字出现，未给出语义。
 - 属「清单收录但完全无据可考」的条目，文档按「语义不明」如实记录。

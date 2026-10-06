@@ -1,52 +1,52 @@
 # name	kind	mode	snippet	note	input
-DT_CELL_GET	func	skip		本仓库移植版未实现本函数族（文档「备注」明写，与已判 skip 的 DT_COLUMN_OPTIONS 同因）—— 语义：读单元格整数值（表不存在/行或列不存在/值为 NULL 都返回 0），签名 (表名, 行, 列名{, int 按id查找})；真实调用须在同一 snippet 内先 DT_CREATE("smoke_t") 建表、DT_COLUMN_ADD("smoke_t","lv","int32") 加列、DT_ROW_ADD 加行才有意义，草稿的机械参数（"a"/1）无意义	
-DT_CELL_GETS	func	skip		本仓库移植版未实现本函数族（文档「备注」明写，与已判 skip 的 DT_COLUMN_OPTIONS 同因）—— 语义：DT_CELL_GET 的 str 返回版（所有失败态都返回空串），签名 (表名, 行, 列名{, int 按id查找})；真实调用须在同一 snippet 内先 DT_CREATE("smoke_t") 建表、DT_COLUMN_ADD("smoke_t","lv","int32") 加列、DT_ROW_ADD 加行才有意义，草稿的机械参数（"a"/1）无意义	
-DT_CELL_ISNULL	func	skip		本仓库移植版未实现本函数族（文档「备注」明写，与已判 skip 的 DT_COLUMN_OPTIONS 同因）—— 语义：判定单元格是否 NULL（1/0/-1/-2），本例还需 DT_ROW_ADD("smoke_t") 留空值才能得 1；真实调用须在同一 snippet 内先 DT_CREATE("smoke_t") 建表、DT_COLUMN_ADD("smoke_t","lv","int32") 加列、DT_ROW_ADD 加行才有意义，草稿的机械参数（"a"/1）无意义	
-DT_CELL_SET	func	skip		本仓库移植版未实现本函数族（文档「备注」明写，与已判 skip 的 DT_COLUMN_OPTIONS 同因）—— 语义：按行序号或 id 单点改写一个单元格（签名 (表名, 行, 列名{, 值{, int 按id查找}})，id 列拒改返回 0）；真实调用须在同一 snippet 内先 DT_CREATE("smoke_t") 建表、DT_COLUMN_ADD("smoke_t","lv","int32") 加列、DT_ROW_ADD 加行才有意义，草稿的机械参数（"a"/1）无意义	
-DT_CLEAR	func	skip		本仓库移植版未实现本函数族（文档「备注」明写，与已判 skip 的 DT_COLUMN_OPTIONS 同因）—— 语义：清空全部行但保留列定义与主键（返回 1；表不存在 -1）；真实调用须在同一 snippet 内先 DT_CREATE("smoke_t") 建表、DT_COLUMN_ADD("smoke_t","lv","int32") 加列、DT_ROW_ADD 加行才有意义，草稿的机械参数（"a"/1）无意义	
-DT_COLUMN_ADD	func	skip		本仓库移植版未实现本函数族（文档「备注」明写，与已判 skip 的 DT_COLUMN_OPTIONS 同因）—— 语义：追加列，类型可写关键字 "int8".."string" 或编号 1..5（签名 (表名, 列名{, 类型{, int 允许空值}})）；真实调用须在同一 snippet 内先 DT_CREATE("smoke_t") 建表、DT_COLUMN_ADD("smoke_t","lv","int32") 加列、DT_ROW_ADD 加行才有意义，草稿的机械参数（"a"/1）无意义	
-DT_COLUMN_EXIST	func	skip		本仓库移植版未实现本函数族（文档「备注」明写，与已判 skip 的 DT_COLUMN_OPTIONS 同因）—— 语义：返回列的类型编号 1..5（int8..string），列不存在 0、表不存在 -1；真实调用须在同一 snippet 内先 DT_CREATE("smoke_t") 建表、DT_COLUMN_ADD("smoke_t","lv","int32") 加列、DT_ROW_ADD 加行才有意义，草稿的机械参数（"a"/1）无意义	
-DT_COLUMN_LENGTH	func	skip		本仓库移植版未实现本函数族（文档「备注」明写，与已判 skip 的 DT_COLUMN_OPTIONS 同因）—— 语义：列数（含 DT_CREATE 自动建的主键 id 列，表不存在 -1）；真实调用须在同一 snippet 内先 DT_CREATE("smoke_t") 建表、DT_COLUMN_ADD("smoke_t","lv","int32") 加列、DT_ROW_ADD 加行才有意义，草稿的机械参数（"a"/1）无意义	
-DT_COLUMN_NAMES	func	skip		本仓库移植版未实现本函数族（文档「备注」明写，与已判 skip 的 DT_COLUMN_OPTIONS 同因）—— 语义：列名按序写入 RESULTS 或指定一维字符串数组，返回列数（数组短于列数会越界）；真实调用须在同一 snippet 内先 DT_CREATE("smoke_t") 建表、DT_COLUMN_ADD("smoke_t","lv","int32") 加列、DT_ROW_ADD 加行才有意义，草稿的机械参数（"a"/1）无意义	
-DT_COLUMN_REMOVE	func	skip		本仓库移植版未实现本函数族（文档「备注」明写，与已判 skip 的 DT_COLUMN_OPTIONS 同因）—— 语义：删列（返回 1；id 列大小写不敏感地受保护返回 0）；真实调用须在同一 snippet 内先 DT_CREATE("smoke_t") 建表、DT_COLUMN_ADD("smoke_t","lv","int32") 加列、DT_ROW_ADD 加行才有意义，草稿的机械参数（"a"/1）无意义	
-DT_CREATE	func	skip		本仓库移植版未实现本函数族（文档「备注」明写，与已判 skip 的 DT_COLUMN_OPTIONS 同因）—— 语义：按名字建表并自动添加主键 id 列（新建 1；同名已存在 0；建表是整族的前置）；真实调用须在同一 snippet 内先 DT_CREATE("smoke_t") 建表、DT_COLUMN_ADD("smoke_t","lv","int32") 加列、DT_ROW_ADD 加行才有意义，草稿的机械参数（"a"/1）无意义	
-DT_EXIST	func	skip		本仓库移植版未实现本函数族（文档「备注」明写，与已判 skip 的 DT_COLUMN_OPTIONS 同因）—— 语义：判表是否存在（存在 1 / 不存在 0，是族内唯一不返回负数的查询）；真实调用须在同一 snippet 内先 DT_CREATE("smoke_t") 建表、DT_COLUMN_ADD("smoke_t","lv","int32") 加列、DT_ROW_ADD 加行才有意义，草稿的机械参数（"a"/1）无意义	
-DT_FROMXML	func	skip		本仓库移植版未实现本函数族（文档「备注」明写，与已判 skip 的 DT_COLUMN_OPTIONS 同因）—— 语义：按 (表名, 架构XML, 数据XML) 从 XML 建列建行，是本族最重的前置依赖之一；真实调用须在同一 snippet 内先 DT_CREATE("smoke_t") 建表、DT_COLUMN_ADD("smoke_t","lv","int32") 加列、DT_ROW_ADD 加行才有意义，草稿的机械参数（"a"/1）无意义	
-DT_NOCASE	func	skip		本仓库移植版未实现本函数族（文档「备注」明写，与已判 skip 的 DT_COLUMN_OPTIONS 同因）—— 语义：设置表的 CaseSensitive（签名 (表名, int 忽略大小写)）；真实调用须在同一 snippet 内先 DT_CREATE("smoke_t") 建表、DT_COLUMN_ADD("smoke_t","lv","int32") 加列、DT_ROW_ADD 加行才有意义，草稿的机械参数（"a"/1）无意义	
-DT_RELEASE	func	skip		本仓库移植版未实现本函数族（文档「备注」明写，与已判 skip 的 DT_COLUMN_OPTIONS 同因）—— 语义：丢弃整张表（连同列与行，恒返回 1）；真实调用须在同一 snippet 内先 DT_CREATE("smoke_t") 建表、DT_COLUMN_ADD("smoke_t","lv","int32") 加列、DT_ROW_ADD 加行才有意义，草稿的机械参数（"a"/1）无意义	
-DT_ROW_ADD	func	skip		本仓库移植版未实现本函数族（文档「备注」明写，与已判 skip 的 DT_COLUMN_OPTIONS 同因）—— 语义：追加行并返回新行 id（由时间点生成的大整数，不可硬编码），签名 (表名{, 列名, 值 ...})；真实调用须在同一 snippet 内先 DT_CREATE("smoke_t") 建表、DT_COLUMN_ADD("smoke_t","lv","int32") 加列、DT_ROW_ADD 加行才有意义，草稿的机械参数（"a"/1）无意义	
-DT_ROW_LENGTH	func	skip		本仓库移植版未实现本函数族（文档「备注」明写，与已判 skip 的 DT_COLUMN_OPTIONS 同因）—— 语义：行数（新建为 0，表不存在 -1）；真实调用须在同一 snippet 内先 DT_CREATE("smoke_t") 建表、DT_COLUMN_ADD("smoke_t","lv","int32") 加列、DT_ROW_ADD 加行才有意义，草稿的机械参数（"a"/1）无意义	
-DT_ROW_REMOVE	func	skip		本仓库移植版未实现本函数族（文档「备注」明写，与已判 skip 的 DT_COLUMN_OPTIONS 同因）—— 语义：按 id 删一行（1/0/-1），另有 (表名, ref int id数组, int 个数) 批量形态；真实调用须在同一 snippet 内先 DT_CREATE("smoke_t") 建表、DT_COLUMN_ADD("smoke_t","lv","int32") 加列、DT_ROW_ADD 加行才有意义，草稿的机械参数（"a"/1）无意义	
-DT_ROW_SET	func	skip		本仓库移植版未实现本函数族（文档「备注」明写，与已判 skip 的 DT_COLUMN_OPTIONS 同因）—— 语义：按 id 定位并改写多列，返回被赋值列数（表不存在 -1 / 无此行 -2）；真实调用须在同一 snippet 内先 DT_CREATE("smoke_t") 建表、DT_COLUMN_ADD("smoke_t","lv","int32") 加列、DT_ROW_ADD 加行才有意义，草稿的机械参数（"a"/1）无意义	
-DT_SELECT	func	skip		本仓库移植版未实现本函数族（文档「备注」明写，与已判 skip 的 DT_COLUMN_OPTIONS 同因）—— 语义：按过滤表达式选出 id 写 RESULT，签名 (表名{, 过滤表达式{, 排序表达式{, ref int 输出数组}}})；真实调用须在同一 snippet 内先 DT_CREATE("smoke_t") 建表、DT_COLUMN_ADD("smoke_t","lv","int32") 加列、DT_ROW_ADD 加行才有意义，草稿的机械参数（"a"/1）无意义	
-DT_TOXML	func	skip		本仓库移植版未实现本函数族（文档「备注」明写，与已判 skip 的 DT_COLUMN_OPTIONS 同因）—— 语义：把表序列化为 XML 字符串（str 返回版），签名 (表名{, ref str 模式输出变量})；真实调用须在同一 snippet 内先 DT_CREATE("smoke_t") 建表、DT_COLUMN_ADD("smoke_t","lv","int32") 加列、DT_ROW_ADD 加行才有意义，草稿的机械参数（"a"/1）无意义	
-ENUMFILES	func	skip		本仓库移植版未实现本函数族（文档「备注」）——语义：枚举目录内文件并返回相对路径，签名 (目录{, 通配模式{, 递归{, ref str 输出数组}})；文档备注另提示其路径规则与 EXISTFILE 一致（相对 exe、".." 无效）	
-ENUMFUNCBEGINSWITH	func	skip		本仓库移植版未实现本函数族（文档「备注」）——语义：按前缀枚举已定义函数名（匹配不区分大小写、结果不排序），签名 (前缀{, ref str 输出数组})；example 里有可匹配的函数名，但族未实现即无验证价值	
-ENUMFUNCENDSWITH	func	skip		本仓库移植版未实现本函数族（文档「备注」）——语义：按后缀枚举已定义函数名（纯字符串比较、不排序），签名 (后缀{, ref str 输出数组})	
-ENUMFUNCWITH	func	skip		本仓库移植版未实现本函数族（文档「备注」）——语义：按子串枚举已定义函数名，签名 (子串{, ref str 输出数组})	
-ENUMMACROBEGINSWITH	func	skip		本仓库移植版未实现本函数族（文档「备注」）——语义：按前缀枚举 #DEFINE 宏名（不区分大小写、不排序）；example 的 TEST_HEADER.ERH 有真实宏名（DOC_MAC_27/DOC_HELLO 等）可匹配，但族未实现	
-ENUMMACROENDSWITH	func	skip		本仓库移植版未实现本函数族（文档「备注」）——语义：按后缀枚举 #DEFINE 宏名，签名 (后缀{, ref str 输出数组})	
-ENUMMACROWITH	func	skip		本仓库移植版未实现本函数族（文档「备注」）——语义：按子串枚举 #DEFINE 宏名，签名 (子串{, ref str 输出数组})	
-ENUMVARBEGINSWITH	func	skip		本仓库移植版未实现本函数族（文档「备注」）——语义：按前缀枚举变量名（含内置变量），签名 (前缀{, ref str 输出数组})；example 可用真实变量名（FLAG/ABL 等），但族未实现	
-ENUMVARENDSWITH	func	skip		本仓库移植版未实现本函数族（文档「备注」）——语义：按后缀枚举变量名，签名 (后缀{, ref str 输出数组})	
-ENUMVARWITH	func	skip		本仓库移植版未实现本函数族（文档「备注」）——语义：按子串枚举变量名，签名 (子串{, ref str 输出数组})	
-ARRAYMSORTEX	func	skip		本仓库移植版未实现本函数族（文档「备注」）—— 语义：以「变量名字符串」指定排序基准数组并连带重排跟随数组，签名 (str 排序基准变量名, str数组 跟随数组名表{, int 正逆{, int 固定长度}})；example 有真实数组名（FLAG/DOC_WIDE_27）可写，但族未实现	
-BITMAP_CACHE_ENABLE	func	skip		本仓库移植版未实现本函数（文档「备注」）—— 签名 (int 启用标志)：只置「下一行起启用位图缓存」标志，返回值恒 0（文档明确提示不要当布尔用）	
-ERDNAME	func	skip		本仓库移植版未实现本函数（文档「备注」）—— 签名 (var 变量{, int 数值{, int 维度}})：ERD 的反查（数值→名字），须先把名字登记进 ERD；example 未用 ERD	
-EXISTFILE	func	skip		本仓库移植版未实现本函数（文档「备注」）—— 签名 (str 路径)：判文件是否存在，路径规则为相对 exe 目录且 "..\" 被字符串级剔除	
-EXISTMETH	func	skip		本仓库移植版未实现本函数（文档「备注」）—— 签名 (str 函数名)：用空参数表试探函数可否零参调用（1/2），带必填参数的函数返回 0，故不能用来判「是否存在」	
-EXISTVAR	func	skip		本仓库移植版未实现本函数（文档「备注」）—— 签名 (str 变量名)：返回位编码 1/2/4/8/16（常量/字符串型/二维/三维）；example 可用真实变量名（"FLAG"/"ABL"），但函数未实现	
-FLOWINPUTS	func	skip		本仓库移植版未实现本函数（文档「备注」明写；其姊妹函数 FLOWINPUT 已被输入族判为 call）—— 且它会改写本次 Process 的系统输入形态（字符串/整数）与默认值、设置后不复位，属会影响其它条目的全局状态改动	
-GETMETH	func	skip		本仓库移植版未实现本函数（文档「备注」）—— 签名 (str 函数名{, int 未定义时的默认值{, 实参...}})：按名字调用用户定义 #FUNCTION（只认用户函数，内置函数名会被当成不存在）	
-GETMETHS	func	skip		本仓库移植版未实现本函数（文档「备注」）—— GETMETH 的字符串返回版（调用 #FUNCTIONS），签名 (str 函数名{, str 未定义时的默认值{, 实参...}})	
-GETVAR	func	skip		本仓库移植版未实现本函数（文档「备注」）—— 签名 (str 变量名表达式)：按名字读整数变量（如 GETVAR("FLAG:0")），与 SETVAR/VARSETEX 同族	
-GETVARS	func	skip		本仓库移植版未实现本函数（文档「备注」）—— GETVAR 的字符串版：按名字读字符串变量，签名 (str 变量名表达式)	
-GGETBRUSH	func	skip		本仓库移植版未实现本函数（文档「备注」）—— 签名 (int ID)：读 G 的画刷色（须先 GCREATE；返回 0 有两种含义：未创建 / 画刷恰为全透明黑）	
-GGETFONTSTYLE	func	skip		本仓库移植版未实现本函数（文档「备注」）—— 签名 (int ID)：读 G 的字体样式位（1/2/4/8，须先 GCREATE；返回 0 也可能是 Regular 样式）	
-GROTATE	func	skip		文档「备注」写明本函数在当前源码中不可用：注册表项与实现类整块被注释（连参数检查也在注释内），ERB 里写 GROTATE(...) 会被当作未定义函数报错；被保留的替代方案是 GDRAWGWITHROTATE（组 32 已覆盖）	
-MOUSEB	func	skip		需要 GUI 鼠标悬停：签名 str MOUSEB()，文档明示只在 AWAIT 待机中才有意义（推荐写法是 AWAIT + GOTO 的无限循环），指针下无输入按钮时恒返回空串；注入鼠标无法保证指针下有按钮 ⇒ 冒烟无可验证行为	
-MOVETEXTBOX	func	skip		依赖 GUI 输入框（文本框）控件布局：签名 (int X偏移, int Y偏移, int 宽度)，改的是输入框位置/宽度，test_cli 无该控件；与已判 skip 的 SETTEXTBOX/GETTEXTBOX 同族	
-RESUMETEXTBOX	func	skip		依赖 GUI 输入框布局：把输入框设回 textBoxInfo 记录的位置，三个参数被实现完全忽略；test_cli 无该控件，同族 MOVETEXTBOX/SETTEXTBOX 均已判 skip	
+DT_CELL_GET	func	call	CVTMP = DT_CELL_GET("a", 1, "a", 1)	
+DT_CELL_GETS	func	call	CVTMP = DT_CELL_GETS("a", 1, "a", 1)	
+DT_CELL_ISNULL	func	call	CVTMP = DT_CELL_ISNULL("a", 1, "a", 1)	
+DT_CELL_SET	func	call	CVTMP = DT_CELL_SET("a", 1, "a", 1, 1)	
+DT_CLEAR	func	call	CVTMP = DT_CLEAR("a")	
+DT_COLUMN_ADD	func	call	CVTMP = DT_COLUMN_ADD("a", "a", 1, 1)	
+DT_COLUMN_EXIST	func	call	CVTMP = DT_COLUMN_EXIST("a", "a")	
+DT_COLUMN_LENGTH	func	call	CVTMP = DT_COLUMN_LENGTH("a")	
+DT_COLUMN_NAMES	func	call	CVTMP = DT_COLUMN_NAMES("a", 1)	
+DT_COLUMN_REMOVE	func	call	CVTMP = DT_COLUMN_REMOVE("a", "a")	
+DT_CREATE	func	call	CVTMP = DT_CREATE("a")	
+DT_EXIST	func	call	CVTMP = DT_EXIST("a")	
+DT_FROMXML	func	call	CVTMP = DT_FROMXML("a", "a", "a")	
+DT_NOCASE	func	call	CVTMP = DT_NOCASE("a", 1)	
+DT_RELEASE	func	call	CVTMP = DT_RELEASE("a")	
+DT_ROW_ADD	func	call	CVTMP = DT_ROW_ADD("a", "a", 1)	
+DT_ROW_LENGTH	func	call	CVTMP = DT_ROW_LENGTH("a")	
+DT_ROW_REMOVE	func	call	CVTMP = DT_ROW_REMOVE("a", 1)	
+DT_ROW_SET	func	call	CVTMP = DT_ROW_SET("a", 1, "a", 1)	
+DT_SELECT	func	call	CVTMP = DT_SELECT("a", "a", "a", 1)	
+DT_TOXML	func	call	CVTMP = DT_TOXML("a", 1)	
+ENUMFILES	func	call	CVTMP = ENUMFILES("a", "a", 1, 1)	
+ENUMFUNCBEGINSWITH	func	call	CVTMP = ENUMFUNCBEGINSWITH("a", 1)	
+ENUMFUNCENDSWITH	func	call	CVTMP = ENUMFUNCENDSWITH("a", 1)	
+ENUMFUNCWITH	func	call	CVTMP = ENUMFUNCWITH("a", 1)	
+ENUMMACROBEGINSWITH	func	call	CVTMP = ENUMMACROBEGINSWITH("a", 1)	
+ENUMMACROENDSWITH	func	call	CVTMP = ENUMMACROENDSWITH("a", 1)	
+ENUMMACROWITH	func	call	CVTMP = ENUMMACROWITH("a", 1)	
+ENUMVARBEGINSWITH	func	call	CVTMP = ENUMVARBEGINSWITH("a", 1)	
+ENUMVARENDSWITH	func	call	CVTMP = ENUMVARENDSWITH("a", 1)	
+ENUMVARWITH	func	call	CVTMP = ENUMVARWITH("a", 1)	
+ARRAYMSORTEX	func	call	CVTMP = ARRAYMSORTEX("a", 1, 1, 1)	
+BITMAP_CACHE_ENABLE	func	call	CVTMP = BITMAP_CACHE_ENABLE(1)	
+ERDNAME	func	call	CVTMP = ERDNAME(1, 1, 1)	
+EXISTFILE	func	call	CVTMP = EXISTFILE("a")	
+EXISTMETH	func	call	CVTMP = EXISTMETH("a")	
+EXISTVAR	func	call	CVTMP = EXISTVAR("a")	
+FLOWINPUTS	func	call	CVTMP = FLOWINPUTS(1, "a")	
+GETMETH	func	call	CVTMP = GETMETH("a", 1, 1)	
+GETMETHS	func	call	CVTMP = GETMETHS("a", "a", 1)	
+GETVAR	func	call	CVTMP = GETVAR("a")	
+GETVARS	func	call	CVTMP = GETVARS("a")	
+GGETBRUSH	func	call	CVTMP = GGETBRUSH(1)	
+GGETFONTSTYLE	func	call	CVTMP = GGETFONTSTYLE(1)	
+GROTATE	func	call	CVTMP = GROTATE(1, 1)	
+MOUSEB	func	call	CVTMP = MOUSEB()	
+MOVETEXTBOX	func	call	CVTMP = MOVETEXTBOX(1, 1, 1)	
+RESUMETEXTBOX	func	call	CVTMP = RESUMETEXTBOX(1, 1, 1)	
 XML_DOCUMENT	func	call	CVTMP = XML_DOCUMENT(90, "<root><a>x</a></root>")	文档「用法」：解析 XML 文本并以 ID 90（整数/字符串等价）存入文档表，成功返回 1；其余 XML_* 条目均以它作前置	
 XML_EXIST	func	call	CVTMP = XML_DOCUMENT(91, "<root/>")\nCVTMP = XML_EXIST(91)	文档「用法」：先建 91 号文档再查存在性 → 1（ID 不存在返回 0，是全族唯一的 0 而非 -1）	
 XML_GET	func	call	CVTMP = XML_DOCUMENT(92, "<root><a>aaa</a><a>bbb</a></root>")\nCVTMP = XML_GET(92, "//a", 1, 1)	文档「用法」：整数第 1 参数=文档表 ID；第 3 参数非 0 → 节点内容写 RESULTS，第 4 参数 1=InnerText；返回匹配数 2	

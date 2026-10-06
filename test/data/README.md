@@ -102,8 +102,11 @@
    导致基名不在清单里。现已取消该过滤，清单忠实反映枚举；是否逐个冒烟由
    `gen_coverage.py` 的 `PRINT_BASE` 规则决定。
 
-相应地，`gen_coverage.py` 的 `PRINT_BASE` 补上了 `N` 后缀（超集树新增的 5 个 `*N` 变体），
-并为 35 个需图形/交互环境、或本仓库只有式中函数形态的条目补充了排除理由。
+相应地，`gen_coverage.py` 的 `PRINT_BASE` 补上了 `N` 后缀（超集树新增的 5 个 `*N` 变体）。
+「某条目为何不自动执行」不再在 `gen_coverage.py` 里另抄一份，而是**直接读本目录
+`doc_smoke.tsv` 的 mode/note**：`mode=call` 的条目 = 组35 已真实调用（无需理由），
+`mode=skip` 的条目 = 仍跳过、note 即原因。要「消除」某条理由，就在复核清单/`_smoke_fix`
+批处理里把它改成 `call` 并给出可执行 snippet。
 
 ### EE 清单中的伪名（已从清单移除）
 

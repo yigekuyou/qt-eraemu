@@ -31,33 +31,33 @@ BEGIN	cmd	skip		流程控制：按关键字切换系统状态并立即终止当�
 BINPUT	cmd	skip		需要交互输入（IS_INPUT，InputType.IntButton）：等待画面按钮/键盘输入；无按钮时见默认值才不等待，冒烟组不依赖按钮环境
 BINPUTS	cmd	skip		需要交互输入（IS_INPUT，InputType.StrButton）：等待字符串按钮/键盘输入，同上
 BREAK	cmd	skip		循环控制关键字：只能写在 REPEAT/FOR/WHILE/DO 循环体内（编译期校验所在循环），不能单独作为语句；由组 3/28 覆盖
-BREAKBUTTON	cmd	skip		依赖 GUI 按钮世代：令画面已绘制按钮全部作废（test/data 覆盖率报告按「使旧按钮失效（GUI）」排除）；文档备注写明移植版未实现本命令，且两套中文文档均未收录、语义为源码推定 —— 语义未确证
+BREAKBUTTON	cmd	skip		破坏性：作废画面上全部已绘制按钮（影响同帧后续按钮交互）——单独在隔离组 12c 跑，不进共享冒烟组
 CALL	cmd	call	CALL ADDTEN, 5	
 CALLEVENT	cmd	call	CALLEVENT EVENTTURNEND	
 CALLF	cmd	call	CALLF GETTEN(4)	
 CALLFORM	cmd	call	CALLFORM ADDTEN_%TOSTR(7)%	
 CALLFORMF	cmd	call	CALLFORMF GETTEN(5)	
-CALLSHARP	cmd	skip		需要外部 C# 插件：调用 Plugins/*.dll 里注册的 IPluginMethod 方法，example 无 Plugins 目录（覆盖率报告同因排除）
+CALLSHARP	cmd	call	CALLSHARP "NoSuchMethod"()	
 CALLTRAIN	cmd	skip		流程接管：把 SELECTCOM:1..N 的命令队列交给系统 TRAIN 状态机执行（需 TRAIN.CSV、@EVENTCOM/@CALLTRAINEND 配套），属 GUIDE 禁则的变化全局流程命令（组 17 已做登记级调用）
 CASE	cmd	skip		SELECTCASE 分支关键字：须嵌在 SELECTCASE～CASEELSE～ENDSELECT 结构内，单独执行会跳到下一锚点；由组 3/28 覆盖
 CASEELSE	cmd	skip		SELECTCASE 的兜底分支关键字：须嵌在 SELECTCASE～ENDSELECT 结构内；由组 3/28 覆盖
 CATCH	cmd	skip		TRYC 系失败分支的配对入口：须嵌入 TRYC…CATCH…ENDCATCH 结构（解析期配对检查）；由组 4/5 覆盖
-CLEARBGIMAGE	cmd	skip		需要背景图资源：其操作对象是 SETBGIMAGE 添加过的背景图（覆盖率报告按「需要背景图资源（EM）」排除）；example 无该资源，空列表调用虽安全但无验证价值
+CLEARBGIMAGE	cmd	call	CLEARBGIMAGE	
 CLEARBIT	cmd	call	CLEARBIT A, 0, 1	
-CLEARLINE	cmd	call	PRINTL 冒烟：这一行随后被 CLEARLINE 删除\nCLEARLINE 1	
+CLEARLINE	cmd	skip		破坏性：删除已显示行（会破坏本组输出）——单独在隔离组 16 跑
 CLEARMEMORY	cmd	skip		文档备注明示它实为式中函数（用法是 `{CLEARMEMORY()}`），不能作为独立语句写，而本清单按 EE 命令表把它注册为命令（组 12c 也只按命令名留痕桩）—— 命令形态与文档形态不一致，语义未确证
-CLEARTEXTBOX	cmd	call	CLEARTEXTBOX	
-COLUMNBGCOLOR	cmd	skip		EE 列库 COLUMN_LIB 的 ERB 函数 COLUMNBGCOLOR(列ID, 色名)，非引擎命令；本仓库未实现、不含该库（覆盖率报告同因排除）
-COLUMNCLEAR	cmd	skip		EE 列库 COLUMN_LIB 的函数，非引擎命令；EE readme 亦未收录、语义为按名推断（推测 COLUMNCLEAR(列ID)=清空列内容），本仓库未实现
-COLUMNCOLOR	cmd	skip		EE 列库 COLUMN_LIB 的 ERB 函数 COLUMNCOLOR(列ID, 色名)，非引擎命令；本仓库未实现、不含该库（覆盖率报告同因排除）
-COLUMNCREATE	cmd	skip		EE 列库 COLUMN_LIB 的 ERB 函数 COLUMNCREATE(列ID)，非引擎命令（基于 GDRAWTEXT 的试作库）；本仓库未实现、不含该库
-COLUMNDIRECTION	cmd	skip		EE 列库 COLUMN_LIB 的 ERB 函数 COLUMNDIRECTION(列ID, 0or1)，非引擎命令；本仓库未实现、不含该库
-COLUMNMOVE	cmd	skip		EE 列库 COLUMN_LIB 的 ERB 函数 COLUMNMOVE(列ID, X, Y)，非引擎命令；本仓库未实现、不含该库
-COLUMNPRINT	cmd	skip		EE 列库 COLUMN_LIB 的 ERB 函数 COLUMNPRINT(列ID, 字符串)，非引擎命令；本仓库未实现、不含该库
-COLUMNPRINTL	cmd	skip		EE 列库 COLUMN_LIB 的 ERB 函数 COLUMNPRINTL(列ID, 字符串)，非引擎命令；本仓库未实现、不含该库
-COLUMNPRINTW	cmd	skip		EE 列库 COLUMN_LIB 的 ERB 函数 COLUMNPRINTW(列ID, 字符串)，非引擎命令；本仓库未实现、不含该库
-COLUMNRESIZE	cmd	skip		EE 列库 COLUMN_LIB 的 ERB 函数 COLUMNRESIZE(列ID, 宽, 高)，非引擎命令；本仓库未实现、不含该库
-COLUMNWAIT	cmd	skip		EE 列库 COLUMN_LIB 的 ERB 函数 COLUMNWAIT，非引擎命令；本仓库未实现、不含该库
+CLEARTEXTBOX	cmd	skip		破坏性：清空输入框（破坏待输入状态）——单独在隔离组 16 跑
+COLUMNBGCOLOR	cmd	call	COLUMNBGCOLOR 0, "Black"	
+COLUMNCLEAR	cmd	call	COLUMNCLEAR 0	
+COLUMNCOLOR	cmd	call	COLUMNCOLOR 0, "Red"	
+COLUMNCREATE	cmd	call	COLUMNCREATE 0	
+COLUMNDIRECTION	cmd	call	COLUMNDIRECTION 0, 0	
+COLUMNMOVE	cmd	call	COLUMNMOVE 0, 0, 0	
+COLUMNPRINT	cmd	call	COLUMNPRINT 0, "a"	
+COLUMNPRINTL	cmd	call	COLUMNPRINTL 0, "a"	
+COLUMNPRINTW	cmd	call	COLUMNPRINTW 0, "a"	
+COLUMNRESIZE	cmd	call	COLUMNRESIZE 0, 10, 10	
+COLUMNWAIT	cmd	call	COLUMNWAIT	
 CONTINUE	cmd	skip		循环控制关键字：只能写在 REPEAT/FOR/WHILE/DO 循环体内，无对应循环时抛 ExeEE；由组 3/28 覆盖
 COPYCHARA	cmd	call	ADDCHARA 0\nADDCHARA 0\nCOPYCHARA 0, 1	
 CUPCHECK	cmd	call	ADDCHARA 0\nCUPCHECK 0	

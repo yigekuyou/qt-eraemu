@@ -1,10 +1,10 @@
 DELCHARA	cmd	call	ADDCHARA 0\nDELCHARA 0	
-DELDATA	cmd	skip		会删除存档目录中该编号的存档文件（改存档，GUIDE 明列 DELDATA）；冒烟组不写盘不删档，example 也无法保证该编号存在
+DELDATA	cmd	call	SAVEDATA 41, "smoke"\nDELDATA 41
 DO	cmd	skip		DO～LOOP 循环的起始结构关键字，不能单独执行（会把组内后续行吞进循环体）；由组 3/28 覆盖
 DOTRAIN	cmd	skip		只能在 @EVENTTRAIN/@SHOW_STATUS/@SHOW_USERCOM/@USERCOM/@EVENTCOMEND 及其中调用的函数内使用，其它系统状态下执行抛 CodeEE（文档「语义」明示）；由组 19 覆盖
 DRAWLINE	cmd	call	DRAWLINE	
 DRAWLINEFORM	cmd	call	DRAWLINEFORM -=-	
-DT_COLUMN_OPTIONS	cmd	skip		文档「备注」写明移植版未实现本命令；且需先 DT_CREATE 建表、列须已加入，而 DT_* 函数族在文档集中无条目，example 里无法构造前置状态
+DT_COLUMN_OPTIONS	cmd	call	DT_COLUMN_OPTIONS "smoke_t", "lv", DEFAULT = 0	
 DUMPRAND	cmd	call	DUMPRAND	
 ELSE	cmd	skip		IF～ENDIF 的分支关键字，不能单独作为语句执行（会吞掉后续行）；由组 3/28 覆盖
 ELSEIF	cmd	skip		IF～ENDIF 的分支关键字，不能单独作为语句执行；由组 3/28 覆盖
@@ -40,7 +40,7 @@ GETDISPLAYLINE	cmd	call	PRINTL 冒烟：GETDISPLAYLINE 取已显示行\nCVTMP_S 
 GETDOINGFUNCTION	cmd	call	CVTMP_S = GETDOINGFUNCTION()	
 GETMEMORYUSAGE	cmd	call	CVTMP = GETMEMORYUSAGE()	
 GETTEXTBOX	cmd	call	CVTMP_S = GETTEXTBOX()	
-GETTEXTSIZE	cmd	skip		本仓库无实现：EE readme 该条目实为 GETTEXTBOX 的笔误（文档「备注」证据链），名字不存在；GUIDE 明列。需要文本框内容请用 GETTEXTBOX
+GETTEXTSIZE	cmd	call	GETTEXTSIZE	
 GETTIME	cmd	call	GETTIME	
 GGETFONT	cmd	call	CVTMP = GCREATE(435, 100, 100)\nCVTMP = GSETFONT(435, "MS Gothic", 100)\nCVTMP_S = GGETFONT(435)	
 GGETFONTSIZE	cmd	call	CVTMP = GCREATE(436, 100, 100)\nCVTMP = GSETFONT(436, "MS Gothic", 100)\nCVTMP = GGETFONTSIZE(436)	
@@ -50,8 +50,8 @@ GGETTEXTSIZE	cmd	call	GGETTEXTSIZE "USA", "Arial", 150
 GOTO	cmd	skip		同函数内 $ 标签跳转且不返回：目标标签须存在于本函数，执行后组内后续行不再执行；由组 3/21 覆盖
 GOTOFORM	cmd	skip		FORM 版标签跳转（运行期求值标签名）且不返回，会中断冒烟组后续条目；由组 3 覆盖
 HTML_PRINT	cmd	call	HTML_PRINT "<p align='right'><font color='red'>红色右对齐文本</font></p>"	
-HTML_PRINT_ISLAND	cmd	skip		文档「备注」写明移植版未实现本命令；输出到与正文独立的 HTML 岛层，依赖 GUI 渲染与重绘
-HTML_PRINT_ISLAND_CLEAR	cmd	skip		文档「备注」写明移植版未实现本命令；且需先由 HTML_PRINT_ISLAND 建立岛层，无独立可验证的行为
+HTML_PRINT_ISLAND	cmd	call	HTML_PRINT_ISLAND "<b>smoke</b>"	
+HTML_PRINT_ISLAND_CLEAR	cmd	call	HTML_PRINT_ISLAND_CLEAR	
 HTML_TAGSPLIT	cmd	call	HTML_TAGSPLIT "<p align='right'>A<! --comment-->B<font color='red'>C</font></p>"	
 IF	cmd	skip		IF～ENDIF 复合语句头，须与 ENDIF 配对，单独执行会把组内后续行吞进分支；由组 3/28 覆盖
 INITRAND	cmd	call	DUMPRAND\nINITRAND	
@@ -62,12 +62,12 @@ INPUTS	cmd	skip		等待玩家输入字符串，需要交互输入；由组 11 �
 INVERTBIT	cmd	call	CVTMP = 0\nINVERTBIT CVTMP, 3	
 JUMP	cmd	skip		跳转到其它函数且不保留返回点（目标中 RETURN 等于本函数 RETURN），组内后续条目不再执行；由组 4 覆盖
 JUMPFORM	cmd	skip		FORM 版函数跳转且不返回，会中断冒烟组后续条目；由组 4/14 覆盖
-LCSVISASSI	cmd	skip		无任何文档收录（两套中文文档、EE readme/changelog、在线文档均无），本仓库无实现，语义未确证；GUIDE 明列
-LOADCHARA	cmd	skip		存档系：从存档目录的 chara 子目录读取角色并追加到角色列表，改变全局角色状态；成功路径需 SAVECHARA 写出的 .dat 文件（冒烟组不写盘）；GUIDE 明列；由组 9 覆盖
-LOADDATA	cmd	skip		存档系：读取存档编号的数据，失败会出错终止，且读档改变全局状态；GUIDE 明列；由组 9 覆盖
-LOADGAME	cmd	skip		呼出标准读档界面（GUI 交互 + 流程切换），只能在可存读档状态使用；GUIDE 明列；由组 9 覆盖
-LOADGLOBAL	cmd	skip		存档系：从全局存档读取 GLOBAL/GLOBALS，会覆盖全局变量而影响其它组；GUIDE 明列；由组 9 覆盖
-LOADVAR	cmd	skip		本仓库无实现：命令虽已注册，执行时直接抛「未实现」异常（文档「备注」写明）；GUIDE 明列
+LCSVISASSI	cmd	call	LCSVISASSI	
+LOADCHARA	cmd	call	ADDCHARA 0\nSAVECHARA "doc_smoke_chara", "smoke"\nLOADCHARA "doc_smoke_chara"
+LOADDATA	cmd	call	SAVEDATA 41, "smoke"\nLOADDATA 41\nDELDATA 41
+LOADGAME	cmd	skip		破坏流程：呼出标准读档界面（LoadGame_* 状态机）并等待注入的槽位输入；读档成功后从被存流程/事件重走（需示例含 @SHOW_SHOP 等）
+LOADGLOBAL	cmd	call	SAVEGLOBAL\nLOADGLOBAL
+LOADVAR	cmd	call	SAVEVAR GLOBAL, 0, "doc_smoke_var"\nLOADVAR "doc_smoke_var"
 LOOP	cmd	skip		DO～LOOP 的循环判定行，须与 DO 配对（单独出现会按缺配对处理）；由组 3/28 覆盖
 NEXT	cmd	skip		FOR～NEXT 的循环终点，须与 FOR 配对；由组 3/28 覆盖
 NOSKIP	cmd	call	NOSKIP\nENDNOSKIP	

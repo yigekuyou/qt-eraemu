@@ -15,8 +15,8 @@ CHARATU	func	call	CVTMP_S = CHARATU("abcあいう", 3)
 CHKCHARADATA	func	call	CVTMP = CHKCHARADATA("chara.dat")	
 CHKDATA	func	call	CVTMP = CHKDATA(1)	
 CHKFONT	func	call	CVTMP = CHKFONT("ＭＳ ゴシック")	
-CHKGLOBALDATA	func	skip		本仓库无实现：注册行被注释（//TODO:1810），文档「备注」写明调用会因函数未定义而解析失败
-CHKVARDATA	func	skip		本仓库无实现：注册行被注释（//TODO:1810），文档「备注」写明调用会因函数未定义而解析失败（与 CHKGLOBALDATA/FIND_VARDATA 同批）
+CHKGLOBALDATA	func	call	CVTMP = CHKGLOBALDATA(1)	
+CHKVARDATA	func	call	CVTMP = CHKVARDATA("a")	
 CLIENTHEIGHT	func	call	CVTMP = CLIENTHEIGHT()	
 CLIENTWIDTH	func	call	CVTMP = CLIENTWIDTH()	
 CMATCH	func	call	ADDCHARA 0\nCVTMP = CMATCH(CFLAG, 0)	
@@ -26,17 +26,17 @@ CONVERT	func	call	CVTMP_S = CONVERT(100, 16)
 CSVABL	func	call	CVTMP = CSVABL(0, 2)	
 CSVBASE	func	call	CVTMP = CSVBASE(0, 0)	
 CSVCALLNAME	func	call	CVTMP_S = CSVCALLNAME(0)	
-CSVCFLAG	func	skip		example 的 Chara0.csv 以名称「初期位置」引用 CFLAG，而 CSV 目录没有 CFlag.csv 名称表，模板数组未建立；索引 0 也会触发「参照可能範囲外」CodeEE —— 语义未确证
+CSVCFLAG	func	call	CVTMP = CSVCFLAG(1, 1, 1)	
 CSVCSTR	func	call	CVTMP_S = CSVCSTR(0, 0)	
-CSVEQUIP	func	skip		example 的 Chara0.csv 无 EQUIP(装着物) 行，模板数组未建立，任何索引都会越界报错 —— 语义未确证
-CSVEXP	func	skip		example 的 Chara0.csv 无 EXP(経験) 行，模板数组未建立，任何索引都会越界报错 —— 语义未确证
-CSVJUEL	func	skip		example 的 Chara0.csv 无 JUEL(珠) 行，模板数组未建立，任何索引都会越界报错 —— 语义未确证
-CSVMARK	func	skip		example 的 Chara0.csv 无 MARK(刻印) 行，模板数组未建立，任何索引都会越界报错 —— 语义未确证
+CSVEQUIP	func	call	CVTMP = CSVEQUIP(1, 1, 1)	
+CSVEXP	func	call	CVTMP = CSVEXP(1, 1, 1)	
+CSVJUEL	func	call	CVTMP = CSVJUEL(1, 1, 1)	
+CSVMARK	func	call	CVTMP = CSVMARK(1, 1, 1)	
 CSVMASTERNAME	func	call	CVTMP_S = CSVMASTERNAME(0)	
 CSVNAME	func	call	CVTMP_S = CSVNAME(0)	
 CSVNICKNAME	func	call	CVTMP_S = CSVNICKNAME(0)	
-CSVRELATION	func	skip		example 的 Chara0.csv 无 RELATION(相性) 行，模板数组未建立，任何索引都会越界报错 —— 语义未确证
-CSVTALENT	func	skip		example 的 Chara0.csv 的「素質」行以名称「性別」引用，而 CSV 目录没有 Talent.csv 名称表，模板数组未建立；索引 0 也会越界报错 —— 语义未确证
+CSVRELATION	func	call	CVTMP = CSVRELATION(1, 1, 1)	
+CSVTALENT	func	call	CVTMP = CSVTALENT(1, 1, 1)	
 CURRENTALIGN	func	call	CVTMP_S = CURRENTALIGN()	
 CURRENTREDRAW	func	call	CVTMP = CURRENTREDRAW()	
 ENCODETOUNI	cmd	call	ENCODETOUNI あA	
@@ -48,7 +48,7 @@ FINDELEMENT	func	call	FLAG:0 = 5\nFLAG:1 = 7\nCVTMP = FINDELEMENT(FLAG, 7, 0, 2)
 FINDLASTCHARA	func	call	ADDCHARA 0\nCVTMP = FINDLASTCHARA(NO, 0)	
 FINDLASTELEMENT	func	call	FLAG:0 = 5\nFLAG:1 = 7\nCVTMP = FINDLASTELEMENT(FLAG, 5, 0, 2)	
 FIND_CHARADATA	func	call	CVTMP = FIND_CHARADATA()	
-FIND_VARDATA	func	skip		本仓库无实现：注册行被注释（//TODO:1810），文档「备注」写明调用必然失败（源索引标注与实际不符）
+FIND_VARDATA	func	call	CVTMP = FIND_VARDATA("a")	
 GCLEAR	func	call	CVTMP = GCREATE(0, 16, 16)\nCVTMP = GCLEAR(0, 0xFF000000)	
 GCREATE	func	call	CVTMP = GDISPOSE(0)\nCVTMP = GCREATE(0, 200, 100)	
 GCREATED	func	call	CVTMP = GCREATE(0, 16, 16)\nCVTMP = GCREATED(0)	

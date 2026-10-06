@@ -1,51 +1,24 @@
 # 覆盖率报告（依据 C# 权威命令表）
+#
+# 用例来源：test/example/ERB —— 手写组 + 组35（由 gen_doc_smoke.py 生成）。
+# 判定：代码行出现=已执行；doc_smoke.tsv mode=skip=跳过（附原因）；其余=未覆盖。
 
 ## Emuera 原版命令（263 条）
-  手写用例已覆盖    ：172
-  自动生成冒烟覆盖  ：28
-  不由自动段执行    ：0
+  已有用例执行      ：206
+  跳过（未执行）    ：2
+      · LOADGAME —— 破坏流程：呼出标准读档界面（LoadGame_* 状态机）并等待注入的槽位输入
+      · SAVEGAME —— 破坏流程：呼出标准存档界面（SaveGame_* 状态机）并等待注入的槽位输入
   PRINT 族后缀变体  ：72（由基名规则覆盖，不逐个列）
-  未覆盖            ：0（全部登记项均有对应用例）
-## Emuera 原版式中函数（163 条）
-  手写用例已覆盖    ：120
-  自动生成冒烟覆盖  ：43
-  不由自动段执行    ：0
+  未覆盖            ：0（全部登记项均有用例或已登记跳过原因）
+## Emuera 原版式中函数（269 条）
+  已有用例执行      ：269
+  跳过（未执行）    ：0
+    其中引擎桩（仅登记名字·留痕跳过，真实现待补全）：5
   PRINT 族后缀变体  ：0（由基名规则覆盖，不逐个列）
-  未覆盖            ：0（全部登记项均有对应用例）
+  未覆盖            ：0（全部登记项均有用例或已登记跳过原因）
 ## EmueraEE 扩展命令（59 条）
-  手写用例已覆盖    ：22
-  自动生成冒烟覆盖  ：1
-  不由自动段执行    ：31
-      · BREAKBUTTON —— 使旧按钮失效（GUI）
-      · CALLSHARP —— 需要插件 DLL（Emuera.NET）
-      · CLEARBGIMAGE —— 需要背景图资源（EM）
-      · COLUMNBGCOLOR —— EE 列库（ERB 实现，非引擎命令）
-      · COLUMNCLEAR —— EE 列库（ERB 实现，非引擎命令）
-      · COLUMNCOLOR —— EE 列库（ERB 实现，非引擎命令）
-      · COLUMNCREATE —— EE 列库（ERB 实现，非引擎命令）
-      · COLUMNDIRECTION —— EE 列库（ERB 实现，非引擎命令）
-      · COLUMNMOVE —— EE 列库（ERB 实现，非引擎命令）
-      · COLUMNPRINT —— EE 列库（ERB 实现，非引擎命令）
-      · COLUMNPRINTL —— EE 列库（ERB 实现，非引擎命令）
-      · COLUMNPRINTW —— EE 列库（ERB 实现，非引擎命令）
-      · COLUMNRESIZE —— EE 列库（ERB 实现，非引擎命令）
-      · COLUMNWAIT —— EE 列库（ERB 实现，非引擎命令）
-      · DT_COLUMN_OPTIONS —— DataTable 列选项（EM）
-      · GETMEMORYUSAGE —— 本仓库为式中函数，无命令形态
-      · GETTEXTSIZE —— 本仓库无实现（疑为 GETTEXTBOX 笔误）
-      · HTML_PRINT_ISLAND —— 悬浮 HTML 层（Emuera.NET）
-      · HTML_PRINT_ISLAND_CLEAR —— 悬浮 HTML 层（Emuera.NET）
-      · LCSVISASSI —— 本仓库无实现（语义未确证）
-      · ONEBINPUT —— 需要鼠标按钮输入（EE）
-      · ONEBINPUTS —— 需要鼠标按钮输入（EE）
-      · REMOVEBGIMAGE —— 需要背景图资源（EM）
-      · SETBGIMAGE —— 需要背景图资源（EM）
-      · TOOLTIP_CUSTOM —— 工具提示需 GUI
-      · TOOLTIP_FORMAT —— 工具提示需 GUI
-      · TOOLTIP_SETFONT —— 工具提示需 GUI
-      · TOOLTIP_SETFONTSIZE —— 工具提示需 GUI
-      · TRYCALLF —— 需要已存在的用户函数
-      · VARI —— 需 setting.json 的 UseScopedVariableInstruction 开启（Emuera.NET）
-      · VARS —— 需 setting.json 的 UseScopedVariableInstruction 开启（Emuera.NET）
+  已有用例执行      ：54
+  跳过（未执行）    ：0
+    其中引擎桩（仅登记名字·留痕跳过，真实现待补全）：28
   PRINT 族后缀变体  ：5（由基名规则覆盖，不逐个列）
-  未覆盖            ：0（全部登记项均有对应用例）
+  未覆盖            ：0（全部登记项均有用例或已登记跳过原因）

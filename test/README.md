@@ -12,7 +12,6 @@
 | --- | --- |
 | `example/` | 可运行的 era 游戏（CSV + ERB），测试载体 |
 | `example/ERB/0N_*.ERB` | 手写测试组（语义断言） |
-| `example/ERB/10_COVERAGE.ERB` | **自动生成**的全函数冒烟覆盖（勿手改） |
 | `example/ERB/35_DOC_SMOKE.ERB` | **自动生成**的文档语义冒烟组（由 `data/doc_smoke.tsv` 渲染，勿手改） |
 | `data/emuera_standard_cmds.txt` | Emuera 原版命令清单（导出自 C#） |
 | `data/emuera_standard_funcs.txt` | Emuera 原版式中函数清单（导出自 C#） |
@@ -21,7 +20,7 @@
 | `data/doc_smoke.tsv` | 文档语义冒烟的调用清单（经语义复核，`mode=skip` 的条目注明原因；第 6 列为注入输入） |
 | `run_example.sh` | 运行示例（唯一需要的入口） |
 | `export_command_tables.py` | 从 C# 源码导出上述命令清单 |
-| `gen_coverage.py` | 依据清单生成覆盖组 + 覆盖率报告 |
+| `gen_coverage.py` | 依据清单出**覆盖率报告**（不生成 ERB） |
 | `gen_doc_smoke.py` | 从 `data/**/*.md` 的签名与用法合成调用 → 草稿 + 渲染 `35_DOC_SMOKE.ERB` |
 | `merge_doc_smoke.py` | 合并语义复核查出的修正行，回写 `data/doc_smoke.tsv` |
 | `check_doc_smoke.py` | 组 35 的静态校验（块配平/未知语句头/未声明变量/清单一致，**不执行 ERB**） |
@@ -55,7 +54,6 @@ cmake --build build --target test_cli
 | 7 | 数值函数 · 随机数控制 |
 | 8 | CSV / 角色函数 · 角色列表操作 |
 | 9 | 存档 SAVE/LOAD/DEL/CHK · SAVEGLOBAL · SAVETEXT/LOADTEXT · SAVECHARA/LOADCHARA |
-| 10 | **全函数覆盖**（依据 C# 命令表自动生成的冒烟段） |
 | 11 | 输入族 · 等待（`INPUT`/`INPUTS`/`ONEINPUT`/`TINPUT`/`WAITANYKEY`/`AWAIT`…） |
 | 12 | `BEGIN`（破坏性：切换流程、不返回） |
 | 13 | `THROW`（破坏性：主动报错终止，**预期**「执行出错」） |
@@ -693,9 +691,12 @@ qdbus6 io.yigekuyou.emuera /debug io.yigekuyou.emuera.Debug.stopFrameCapture
 
 ```bash
 python3 test/export_command_tables.py   # C# 源码 -> data/*.txt
-python3 test/gen_coverage.py            # 生成 10_COVERAGE.ERB + 报告
-python3 test/gen_coverage.py --check    # 只出报告
+python3 test/gen_coverage.py            # 只出覆盖率报告（不写 ERB）
+python3 test/gen_coverage.py --check    # 同 --check：只打印，不写文件
 ```
+
+用例本身统一由 `gen_doc_smoke.py` 生成（组35）；覆盖率报告只**测量**：某名字是否
+出现在 `example/ERB/*.ERB` 的代码行里。
 
 ## 文档语义冒烟（组 35，依据 `data/` 的 md）
 
@@ -718,9 +719,38 @@ python3 test/check_doc_smoke.py     # 静态校验（不执行）
 * **EmueraEE 扩展**：EE 发行版自带文档（`eraTW/README集/EmueraEE Readme/`）里的
   新增命令（EE 未附带 C# 源码，清单见 `export_command_tables.py` 的 `EE_EXTENSIONS`）。
 
-当前覆盖（详见 `data/coverage_report.txt`）：原版命令 199 条、式中函数 163 条、
-EE 扩展 56 条，**全部 0 未覆盖**。少量命令刻意不由自动段执行（声音/文本框/多列/
-内存等需要运行环境，或会改流程），报告中逐条给出原因。
+当前覆盖（详见 `data/coverage_report.txt`）：原版命令 263 条、式中函数 269 条、
+EE 扩展 59 条，**全部 0 未覆盖**；仅 `SAVEGAME` / `LOADGAME` 两条跳过——它们会
+呼出存/读档界面并**切换系统状态机**（`SaveGame_*` 流程）且需 GUI 交互，属「破坏流程」
+不能与其它用例同组跑。用例只有一处来源：`example/ERB/*.ERB`（手写组 1..33 + 组35）；
+覆盖判定只看**代码行**（`; SKIP …` 注释行不算；断言文案里的字符串字面量也不算——
+在 `@"…SAVEGAME…"` 里提到某命令名 ≠ 调用过它）。
+
+原则：**实现形式（原生 / ERB 库 / DLL 插件 / Emuera.NET）不决定能否测试**——清单里
+每个条目都进测试。引擎尚未实现的，先以 `call` 占位（`data/doc_smoke.tsv` 里给可执行
+snippet），能解析就跑解析路径，补全实现后即自动成为真测试；运行期对「已识别但未实现」
+的条目会打 `[未完成] "指令" "NAME" 在运行期被忽略`，这就是**完成度**的权威信号
+（例：跑组35 有 15 条此类痕迹）。报告里的「引擎桩」计数（`ee_extension.cpp` 的
+`kEeCommands`）是另一个完成度刻度。
+
+**唯一合法的 `skip` 理由 = 会破坏周围状态**：按钮世代 / 显示缓冲 / 角色列表 /
+全局变量 / 存档文件 / 流程。这类命令不与其它用例同组跑，而是放进**隔离的单跑组**
+（组09 存档、组12 破坏流程与 EE 破坏系、组16 显示行、组19 训练…），因此仍有用例、
+报告里不会计为「跳过」。除破坏性外的任何情形（需要 GUI / 音频 / 网络 / 桩未实现 /
+只有 ERB 库或 DLL 形态）都照常进测试。
+
+**存档类**尤其如此：只要**槽位/文件名不与别的组重名**，就照常 `call`，用
+**生成 → 检查 → 销毁**的写法自我清理，例如组35 用槽位 41：
+
+```erb
+SAVEDATA 41, "smoke"
+CVTMP = CHKDATA(41)
+DELDATA 41
+```
+
+（组09 用槽位 5、组27 用槽位 40；组35 用 41，互不干扰。）要改某条的状态，就改复核
+清单（`data/doc_smoke.tsv` 及其 `_smoke_fix/` 批处理源）后
+`merge_doc_smoke.py --write`。
 
 ## 相关
 

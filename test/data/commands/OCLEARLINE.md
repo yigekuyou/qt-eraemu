@@ -3,7 +3,7 @@
 - **类别**：EE 扩展命令
 - **签名**：
   - `OCLEARLINE <行数>`（按仓库内测试桩推断的签名）
-- **文档来源**：无权威文档收录——`ecd/Command.md` 未收录；zh 套件未收录；`EmueraEE_readme.txt` / `EmueraEE_changelog.txt` 未提及；EM+EE 在线文档 Reference 列表中无此页；eraTW `ERB_EXCOM.khp` 中亦无此条目。本仓库自带的覆盖测试（`test/gen_coverage.py`）将其注为「删除已显示行（EE）」。
+- **文档来源**：无权威文档收录——`ecd/Command.md` 未收录；zh 套件未收录；`EmueraEE_readme.txt` / `EmueraEE_changelog.txt` 未提及；EM+EE 在线文档 Reference 列表中无此页；eraTW `ERB_EXCOM.khp` 中亦无此条目。本仓库自带的覆盖测试（`test/data/doc_smoke.tsv`，组35 清单）将其按「删除已显示行（EE）」造桩。
 
 ## 语义
 
@@ -37,5 +37,5 @@ EE 发行版的预期行为：推测为「删除已显示行」的 EM/EE 变体�
 ## 备注
 
 - 在 ecd、zh、EE readme/changelog、EM+EE 在线文档 sitemap、eraTW khp 中均检索不到 OCLEARLINE；在线检索（Web）亦无结果。
-- 本仓库测试桩（`test/example/ERB/16_DISPLAY.ERB:31-33`）只验证「执行不报错」，`test/gen_coverage.py:90` 注为「删除已显示行（EE）」，均为本仓库作者的同名推测，非权威语义。
+- 本仓库测试桩（`test/example/ERB/16_DISPLAY.ERB:31-33`）只验证「执行不报错」，`test/data/doc_smoke.tsv` 里的复核原因注为「删除已显示行（EE）」，均为本仓库作者的同名推测，非权威语义。
 - 若要确定其真实语义，需取得 EM+EE 原始发行版的 Emuera.exe/源码或其 wiki 的 EM 扩展命令页查证。

@@ -1,0 +1,430 @@
+# 命令/函数 → 源码位置索引（已回读校验）
+
+每个行号都由脚本回读该行、断言其中含被索引的名字，故无 off-by-one。
+
+## 标准命令（199）
+
+- **ADDCHARA**: enum: BuiltInFunctionCode.cs:71 ; register: FunctionIdentifier.cs:211 → new ADDCHARA_Instruction(false, false) ; instr-class: Instraction.Child.cs:1400
+- **ADDCOPYCHARA**: enum: BuiltInFunctionCode.cs:121 ; register: FunctionIdentifier.cs:268 → new ADDCOPYCHARA_Instruction() ; instr-class: Instraction.Child.cs:1493
+- **ADDDEFCHARA**: enum: BuiltInFunctionCode.cs:73 ; register: FunctionIdentifier.cs:213 → argb[FunctionArgType.VOID], METHOD_SAFE | EXTENDED ; switch-case: Process.ScriptProc.cs:279
+- **ADDSPCHARA**: enum: BuiltInFunctionCode.cs:72 ; register: FunctionIdentifier.cs:212 → new ADDCHARA_Instruction(true, false)
+- **ADDVOIDCHARA**: enum: BuiltInFunctionCode.cs:74 ; register: FunctionIdentifier.cs:214 → new ADDVOIDCHARA_Instruction() ; instr-class: Instraction.Child.cs:1446
+- **ALIGNMENT**: enum: BuiltInFunctionCode.cs:185 ; register: FunctionIdentifier.cs:285 → argb[FunctionArgType.STR], METHOD_SAFE | EXTENDED ; switch-case: Process.ScriptProc.cs:508
+- **ARRAYCOPY**: enum: BuiltInFunctionCode.cs:255 ; register: FunctionIdentifier.cs:332 → argb[FunctionArgType.SP_COPY_ARRAY], METHOD_SAFE | EXTENDED ; switch-case: Process.ScriptProc.cs:687
+- **ARRAYREMOVE**: enum: BuiltInFunctionCode.cs:253 ; register: FunctionIdentifier.cs:330 → argb[FunctionArgType.SP_CONTROL_ARRAY], METHOD_SAFE | EXTENDED ; switch-case: Process.ScriptProc.cs:647
+- **ARRAYSHIFT**: enum: BuiltInFunctionCode.cs:252 ; register: FunctionIdentifier.cs:329 → argb[FunctionArgType.SP_SHIFT_ARRAY], METHOD_SAFE | EXTENDED ; switch-case: Process.ScriptProc.cs:612
+- **ARRAYSORT**: enum: BuiltInFunctionCode.cs:254 ; register: FunctionIdentifier.cs:331 → argb[FunctionArgType.SP_SORTARRAY], METHOD_SAFE | EXTENDED ; switch-case: Process.ScriptProc.cs:664
+- **ASSERT**: enum: BuiltInFunctionCode.cs:264 ; register: FunctionIdentifier.cs:377 → argb[FunctionArgType.INT_EXPRESSION], METHOD_SAFE | EXTENDED | DEBUG_FUNC ; switch-case: Process.ScriptProc.cs:747
+- **AWAIT**: enum: BuiltInFunctionCode.cs:54 ; register: FunctionIdentifier.cs:397 → new AWAIT_Instruction() ; instr-class: Instraction.Child.cs:2662
+- **BAR**: enum: BuiltInFunctionCode.cs:57 ; register: FunctionIdentifier.cs:189 → new BAR_Instruction(false) ; instr-class: Instraction.Child.cs:1341
+- **BARL**: enum: BuiltInFunctionCode.cs:58 ; register: FunctionIdentifier.cs:190 → new BAR_Instruction(true)
+- **BEGIN**: enum: BuiltInFunctionCode.cs:81 ; register: FunctionIdentifier.cs:224 → new BEGIN_Instruction() ; instr-class: Instraction.Child.cs:3037
+- **BREAK**: enum: BuiltInFunctionCode.cs:95 ; register: FunctionIdentifier.cs:255 → new BREAK_Instruction() ; instr-class: Instraction.Child.cs:3440
+- **CALL**: enum: BuiltInFunctionCode.cs:100 ; register: FunctionIdentifier.cs:340 → new CALL_Instruction(false, false, false, false) ; instr-class: Instraction.Child.cs:3623
+- **CALLEVENT**: enum: BuiltInFunctionCode.cs:101 ; register: FunctionIdentifier.cs:351 → new CALLEVENT_Instruction() ; instr-class: Instraction.Child.cs:3718
+- **CALLF**: enum: BuiltInFunctionCode.cs:167 ; register: FunctionIdentifier.cs:352 → new CALLF_Instruction(false) ; instr-class: Instraction.Child.cs:1153
+- **CALLFORM**: enum: BuiltInFunctionCode.cs:147 ; register: FunctionIdentifier.cs:344 → new CALL_Instruction(true, false, false, false), EXTENDED
+- **CALLFORMF**: enum: BuiltInFunctionCode.cs:168 ; register: FunctionIdentifier.cs:353 → new CALLF_Instruction(true)
+- **CALLTRAIN**: enum: BuiltInFunctionCode.cs:152 ; register: FunctionIdentifier.cs:300 → argb[FunctionArgType.INT_EXPRESSION], EXTENDED | FLOW_CONTROL ; switch-case: Process.ScriptProc.cs:878
+- **CASE**: enum: BuiltInFunctionCode.cs:213 ; register: FunctionIdentifier.cs:242 → new ELSEIF_Instruction(FunctionArgType.CASE), EXTENDED
+- **CASEELSE**: enum: BuiltInFunctionCode.cs:214 ; register: FunctionIdentifier.cs:243 → new ELSEIF_Instruction(FunctionArgType.VOID), EXTENDED
+- **CATCH**: enum: BuiltInFunctionCode.cs:154 ; register: FunctionIdentifier.cs:364 → new CATCH_Instruction() ; instr-class: Instraction.Child.cs:3413
+- **CLEARBIT**: enum: BuiltInFunctionCode.cs:234 ; register: FunctionIdentifier.cs:312 → new SETBIT_Instruction(0)
+- **CLEARLINE**: enum: BuiltInFunctionCode.cs:39 ; register: FunctionIdentifier.cs:205 → new CLEARLINE_Instruction() ; instr-class: Instraction.Child.cs:676
+- **CLEARTEXTBOX**: enum: BuiltInFunctionCode.cs:188 ; register: FunctionIdentifier.cs:288 → argb[FunctionArgType.VOID], METHOD_SAFE | EXTENDED ; switch-case: Process.ScriptProc.cs:753
+- **CONTINUE**: enum: BuiltInFunctionCode.cs:94 ; register: FunctionIdentifier.cs:254 → new CONTINUE_Instruction() ; instr-class: Instraction.Child.cs:3465
+- **COPYCHARA**: enum: BuiltInFunctionCode.cs:120 ; register: FunctionIdentifier.cs:267 → new COPYCHARA_Instruction() ; instr-class: Instraction.Child.cs:1476
+- **CUPCHECK**: enum: BuiltInFunctionCode.cs:70 ; register: FunctionIdentifier.cs:210 → argb[FunctionArgType.INT_EXPRESSION], METHOD_SAFE | EXTENDED ; switch-case: Process.ScriptProc.cs:251
+- **CUSTOMDRAWLINE**: enum: BuiltInFunctionCode.cs:186 ; register: FunctionIdentifier.cs:286 → new CUSTOMDRAWLINE_Instruction() ; instr-class: Instraction.Child.cs:507 ; switch-case: Process.ScriptProc.cs:162
+- **CVARSET**: enum: BuiltInFunctionCode.cs:240 ; register: FunctionIdentifier.cs:318 → new CVARSET_Instruction() ; instr-class: Instraction.Child.cs:1706
+- **DATA**: enum: BuiltInFunctionCode.cs:223 ; register: FunctionIdentifier.cs:304 → argb[FunctionArgType.STR_NULLABLE], METHOD_SAFE | EXTENDED | PARTIAL | PARTIAL
+- **DATAFORM**: enum: BuiltInFunctionCode.cs:224 ; register: FunctionIdentifier.cs:305 → argb[FunctionArgType.FORM_STR_NULLABLE], METHOD_SAFE | EXTENDED | PARTIAL
+- **DATALIST**: enum: BuiltInFunctionCode.cs:226 ; register: FunctionIdentifier.cs:307 → argb[FunctionArgType.VOID], METHOD_SAFE | EXTENDED | PARTIAL
+- **DEBUGCLEAR**: enum: BuiltInFunctionCode.cs:263 ; register: FunctionIdentifier.cs:376 → new DEBUGCLEAR_Instruction() ; instr-class: Instraction.Child.cs:566
+- **DEBUGPRINT**: enum: BuiltInFunctionCode.cs:259 ; register: FunctionIdentifier.cs:372 → new DEBUGPRINT_Instruction(false, false) ; instr-class: Instraction.Child.cs:541
+- **DEBUGPRINTFORM**: enum: BuiltInFunctionCode.cs:261 ; register: FunctionIdentifier.cs:374 → new DEBUGPRINT_Instruction(true, false)
+- **DEBUGPRINTFORML**: enum: BuiltInFunctionCode.cs:262 ; register: FunctionIdentifier.cs:375 → new DEBUGPRINT_Instruction(true, true)
+- **DEBUGPRINTL**: enum: BuiltInFunctionCode.cs:260 ; register: FunctionIdentifier.cs:373 → new DEBUGPRINT_Instruction(false, true)
+- **DELALLCHARA**: enum: BuiltInFunctionCode.cs:236 ; register: FunctionIdentifier.cs:314 → argb[FunctionArgType.VOID], METHOD_SAFE | EXTENDED ; switch-case: Process.ScriptProc.cs:258
+- **DELCHARA**: enum: BuiltInFunctionCode.cs:75 ; register: FunctionIdentifier.cs:215 → new ADDCHARA_Instruction(false, true)
+- **DELDATA**: enum: BuiltInFunctionCode.cs:140 ; register: FunctionIdentifier.cs:230 → new DELDATA_Instruction() ; instr-class: Instraction.Child.cs:1996
+- **DO**: enum: BuiltInFunctionCode.cs:217 ; register: FunctionIdentifier.cs:252 → new ENDIF_Instruction(), METHOD_SAFE | EXTENDED
+- **DOTRAIN**: enum: BuiltInFunctionCode.cs:210 ; register: FunctionIdentifier.cs:302 → argb[FunctionArgType.INT_EXPRESSION], EXTENDED | FLOW_CONTROL ; switch-case: Process.ScriptProc.cs:894
+- **DRAWLINE**: enum: BuiltInFunctionCode.cs:56 ; register: FunctionIdentifier.cs:188 → argb[FunctionArgType.VOID], METHOD_SAFE ; switch-case: Process.ScriptProc.cs:156
+- **DRAWLINEFORM**: enum: BuiltInFunctionCode.cs:187 ; register: FunctionIdentifier.cs:287 → argb[FunctionArgType.FORM_STR], METHOD_SAFE | EXTENDED ; switch-case: Process.ScriptProc.cs:163
+- **DUMPRAND**: enum: BuiltInFunctionCode.cs:206 ; register: FunctionIdentifier.cs:295 → new DUMPRAND_Instruction() ; instr-class: Instraction.Child.cs:1810
+- **ELSE**: enum: BuiltInFunctionCode.cs:88 ; register: FunctionIdentifier.cs:238 → new ELSEIF_Instruction(FunctionArgType.VOID)
+- **ELSEIF**: enum: BuiltInFunctionCode.cs:89 ; register: FunctionIdentifier.cs:239 → new ELSEIF_Instruction(FunctionArgType.INT_EXPRESSION) ; instr-class: Instraction.Child.cs:3187
+- **ENCODETOUNI**: enum: BuiltInFunctionCode.cs:257 ; register: FunctionIdentifier.cs:404 → argb[FunctionArgType.FORM_STR_NULLABLE], METHOD_SAFE | EXTENDED ; switch-case: Process.ScriptProc.cs:727
+- **ENDCATCH**: enum: BuiltInFunctionCode.cs:155 ; register: FunctionIdentifier.cs:365 → new ENDIF_Instruction(), METHOD_SAFE | EXTENDED
+- **ENDDATA**: enum: BuiltInFunctionCode.cs:225 ; register: FunctionIdentifier.cs:306 → new DO_NOTHING_Instruction()
+- **ENDFUNC**: enum: BuiltInFunctionCode.cs:166 ; register: FunctionIdentifier.cs:370 → new ENDIF_Instruction(), EXTENDED
+- **ENDIF**: enum: BuiltInFunctionCode.cs:90 ; register: FunctionIdentifier.cs:240 → new ENDIF_Instruction(), METHOD_SAFE ; instr-class: Instraction.Child.cs:3204
+- **ENDLIST**: enum: BuiltInFunctionCode.cs:227 ; register: FunctionIdentifier.cs:308 → argb[FunctionArgType.VOID], METHOD_SAFE | EXTENDED | PARTIAL
+- **ENDNOSKIP**: enum: BuiltInFunctionCode.cs:250 ; register: FunctionIdentifier.cs:327 → argb[FunctionArgType.VOID], METHOD_SAFE | EXTENDED | PARTIAL ; switch-case: Process.ScriptProc.cs:590
+- **ENDSELECT**: enum: BuiltInFunctionCode.cs:215 ; register: FunctionIdentifier.cs:244 → new ENDIF_Instruction(), METHOD_SAFE | EXTENDED
+- **FONTBOLD**: enum: BuiltInFunctionCode.cs:180 ; register: FunctionIdentifier.cs:280 → new FONTBOLD_Instruction() ; instr-class: Instraction.Child.cs:1618
+- **FONTITALIC**: enum: BuiltInFunctionCode.cs:181 ; register: FunctionIdentifier.cs:281 → new FONTITALIC_Instruction() ; instr-class: Instraction.Child.cs:1633
+- **FONTREGULAR**: enum: BuiltInFunctionCode.cs:182 ; register: FunctionIdentifier.cs:282 → new FONTREGULAR_Instruction() ; instr-class: Instraction.Child.cs:1648
+- **FONTSTYLE**: enum: BuiltInFunctionCode.cs:184 ; register: FunctionIdentifier.cs:284 → argb[FunctionArgType.INT_EXPRESSION_NULLABLE], METHOD_SAFE | EXTENDED ; switch-case: Process.ScriptProc.cs:483
+- **FOR**: enum: BuiltInFunctionCode.cs:192 ; register: FunctionIdentifier.cs:248 → new REPEAT_Instruction(true), EXTENDED
+- **FORCEKANA**: enum: BuiltInFunctionCode.cs:246 ; register: FunctionIdentifier.cs:322 → argb[FunctionArgType.INT_EXPRESSION], METHOD_SAFE | EXTENDED ; switch-case: Process.ScriptProc.cs:566
+- **FORCEWAIT**: enum: BuiltInFunctionCode.cs:49 ; register: FunctionIdentifier.cs:202 → new WAIT_Instruction(true)
+- **FUNC**: enum: BuiltInFunctionCode.cs:165 ; register: FunctionIdentifier.cs:369 → argb[FunctionArgType.SP_CALLFORM], EXTENDED | FLOW_CONTROL | PARTIAL | FORCE_SETARG
+- **GETTIME**: enum: BuiltInFunctionCode.cs:141 ; register: FunctionIdentifier.cs:400 → argb[FunctionArgType.VOID], METHOD_SAFE | EXTENDED ; switch-case: Process.ScriptProc.cs:383
+- **GOTO**: enum: BuiltInFunctionCode.cs:97 ; register: FunctionIdentifier.cs:356 → new GOTO_Instruction(false, false, false) ; instr-class: Instraction.Child.cs:3746
+- **GOTOFORM**: enum: BuiltInFunctionCode.cs:148 ; register: FunctionIdentifier.cs:358 → new GOTO_Instruction(true, false, false), EXTENDED
+- **HTML_PRINT**: enum: BuiltInFunctionCode.cs:347 ; register: FunctionIdentifier.cs:386 → new HTML_PRINT_Instruction() ; instr-class: Instraction.Child.cs:312
+- **HTML_TAGSPLIT**: enum: BuiltInFunctionCode.cs:348 ; register: FunctionIdentifier.cs:387 → new HTML_TAGSPLIT_Instruction() ; instr-class: Instraction.Child.cs:339
+- **IF**: enum: BuiltInFunctionCode.cs:87 ; register: FunctionIdentifier.cs:237 → new IF_Instruction() ; instr-class: Instraction.Child.cs:3216
+- **INITRAND**: enum: BuiltInFunctionCode.cs:207 ; register: FunctionIdentifier.cs:296 → new INITRAND_Instruction() ; instr-class: Instraction.Child.cs:1788
+- **INPUT**: enum: BuiltInFunctionCode.cs:43 ; register: FunctionIdentifier.cs:194 → new INPUT_Instruction() ; instr-class: Instraction.Child.cs:806
+- **INPUTMOUSEKEY**: enum: BuiltInFunctionCode.cs:358 ; register: FunctionIdentifier.cs:396 → new INPUTMOUSEKEY_Instruction() ; instr-class: Instraction.Child.cs:2182
+- **INPUTS**: enum: BuiltInFunctionCode.cs:44 ; register: FunctionIdentifier.cs:195 → new INPUTS_Instruction() ; instr-class: Instraction.Child.cs:862
+- **INVERTBIT**: enum: BuiltInFunctionCode.cs:235 ; register: FunctionIdentifier.cs:313 → new SETBIT_Instruction(-1)
+- **JUMP**: enum: BuiltInFunctionCode.cs:99 ; register: FunctionIdentifier.cs:339 → new CALL_Instruction(false, true, false, false)
+- **JUMPFORM**: enum: BuiltInFunctionCode.cs:146 ; register: FunctionIdentifier.cs:343 → new CALL_Instruction(true, true, false, false), EXTENDED
+- **LOADCHARA**: enum: BuiltInFunctionCode.cs:271 ; register: FunctionIdentifier.cs:383 → new LOADCHARA_Instruction() ; instr-class: Instraction.Child.cs:1935
+- **LOADDATA**: enum: BuiltInFunctionCode.cs:139 ; register: FunctionIdentifier.cs:229 → argb[FunctionArgType.INT_EXPRESSION], EXTENDED | FLOW_CONTROL ; switch-case: Process.ScriptProc.cs:810
+- **LOADGAME**: enum: BuiltInFunctionCode.cs:84 ; register: FunctionIdentifier.cs:227 → new SAVELOADGAME_Instruction(false)
+- **LOADGLOBAL**: enum: BuiltInFunctionCode.cs:199 ; register: FunctionIdentifier.cs:232 → new LOADGLOBAL_Instruction() ; instr-class: Instraction.Child.cs:1847
+- **LOADVAR**: enum: BuiltInFunctionCode.cs:268 ; register: FunctionIdentifier.cs:381 → new LOADVAR_Instruction() ; instr-class: Instraction.Child.cs:1974
+- **LOOP**: enum: BuiltInFunctionCode.cs:218 ; register: FunctionIdentifier.cs:253 → new LOOP_Instruction() ; instr-class: Instraction.Child.cs:3564
+- **NEXT**: enum: BuiltInFunctionCode.cs:193 ; register: FunctionIdentifier.cs:249 → new REND_Instruction(), EXTENDED
+- **NOSKIP**: enum: BuiltInFunctionCode.cs:249 ; register: FunctionIdentifier.cs:326 → argb[FunctionArgType.VOID], METHOD_SAFE | EXTENDED | PARTIAL ; switch-case: Process.ScriptProc.cs:581
+- **ONEINPUT**: enum: BuiltInFunctionCode.cs:50 ; register: FunctionIdentifier.cs:203 → new ONEINPUT_Instruction() ; instr-class: Instraction.Child.cs:918
+- **ONEINPUTS**: enum: BuiltInFunctionCode.cs:51 ; register: FunctionIdentifier.cs:204 → new ONEINPUTS_Instruction() ; instr-class: Instraction.Child.cs:983
+- **OUTPUTLOG**: register: FunctionIdentifier.cs:220 → argb[FunctionArgType.VOID] ; register: FunctionIdentifier.cs:221 → argb[FunctionArgType.STR_EXPRESSION_NULLABLE] ; switch-case: Process.ScriptProc.cs:600
+- **PICKUPCHARA**: enum: BuiltInFunctionCode.cs:237 ; register: FunctionIdentifier.cs:315 → argb[FunctionArgType.INT_ANY], METHOD_SAFE | EXTENDED ; switch-case: Process.ScriptProc.cs:263
+- **POWER**: enum: BuiltInFunctionCode.cs:197 ; register: FunctionIdentifier.cs:401 → argb[FunctionArgType.SP_POWER], METHOD_SAFE | EXTENDED ; switch-case: Process.ScriptProc.cs:341
+- **PRINTBUTTON**: enum: BuiltInFunctionCode.cs:131 ; register: FunctionIdentifier.cs:173 → argb[FunctionArgType.SP_BUTTON], METHOD_SAFE | EXTENDED ; switch-case: Process.ScriptProc.cs:111
+- **PRINTBUTTONC**: enum: BuiltInFunctionCode.cs:132 ; register: FunctionIdentifier.cs:174 → argb[FunctionArgType.SP_BUTTON], METHOD_SAFE | EXTENDED ; switch-case: Process.ScriptProc.cs:127
+- **PRINTBUTTONLC**: enum: BuiltInFunctionCode.cs:133 ; register: FunctionIdentifier.cs:175 → argb[FunctionArgType.SP_BUTTON], METHOD_SAFE | EXTENDED ; switch-case: Process.ScriptProc.cs:128
+- **PRINTCD**: enum: BuiltInFunctionCode.cs:332
+- **PRINTCK**: enum: BuiltInFunctionCode.cs:297
+- **PRINTCPERLINE**: enum: BuiltInFunctionCode.cs:230 ; register: FunctionIdentifier.cs:402 → argb[FunctionArgType.SP_GETINT], METHOD_SAFE | EXTENDED ; switch-case: Process.ScriptProc.cs:554
+- **PRINTDATA**: enum: BuiltInFunctionCode.cs:220
+- **PRINTDATAD**: enum: BuiltInFunctionCode.cs:343
+- **PRINTDATADL**: enum: BuiltInFunctionCode.cs:344
+- **PRINTDATADW**: enum: BuiltInFunctionCode.cs:345
+- **PRINTDATAK**: enum: BuiltInFunctionCode.cs:308
+- **PRINTDATAKL**: enum: BuiltInFunctionCode.cs:309
+- **PRINTDATAKW**: enum: BuiltInFunctionCode.cs:310
+- **PRINTDATAL**: enum: BuiltInFunctionCode.cs:221
+- **PRINTDATAW**: enum: BuiltInFunctionCode.cs:222
+- **PRINTFORMCD**: enum: BuiltInFunctionCode.cs:334
+- **PRINTFORMCK**: enum: BuiltInFunctionCode.cs:299
+- **PRINTFORMLCD**: enum: BuiltInFunctionCode.cs:335
+- **PRINTFORMLCK**: enum: BuiltInFunctionCode.cs:300
+- **PRINTLCD**: enum: BuiltInFunctionCode.cs:333
+- **PRINTLCK**: enum: BuiltInFunctionCode.cs:298
+- **PRINTPLAIN**: enum: BuiltInFunctionCode.cs:135 ; register: FunctionIdentifier.cs:177 → argb[FunctionArgType.STR_NULLABLE], METHOD_SAFE | EXTENDED ; switch-case: Process.ScriptProc.cs:145
+- **PRINTPLAINFORM**: enum: BuiltInFunctionCode.cs:136 ; register: FunctionIdentifier.cs:178 → argb[FunctionArgType.FORM_STR_NULLABLE], METHOD_SAFE | EXTENDED ; switch-case: Process.ScriptProc.cs:146
+- **PRINT_ABL**: enum: BuiltInFunctionCode.cs:61 ; register: FunctionIdentifier.cs:180 → argb[FunctionArgType.INT_EXPRESSION], METHOD_SAFE ; switch-case: Process.ScriptProc.cs:176
+- **PRINT_EXP**: enum: BuiltInFunctionCode.cs:64 ; register: FunctionIdentifier.cs:183 → argb[FunctionArgType.INT_EXPRESSION], METHOD_SAFE ; switch-case: Process.ScriptProc.cs:179
+- **PRINT_IMG**: enum: BuiltInFunctionCode.cs:354 ; register: FunctionIdentifier.cs:388 → new PRINT_IMG_Instruction() ; instr-class: Instraction.Child.cs:402
+- **PRINT_ITEM**: enum: BuiltInFunctionCode.cs:66 ; register: FunctionIdentifier.cs:185 → argb[FunctionArgType.VOID], METHOD_SAFE ; switch-case: Process.ScriptProc.cs:212
+- **PRINT_MARK**: enum: BuiltInFunctionCode.cs:63 ; register: FunctionIdentifier.cs:182 → argb[FunctionArgType.INT_EXPRESSION], METHOD_SAFE ; switch-case: Process.ScriptProc.cs:178
+- **PRINT_PALAM**: enum: BuiltInFunctionCode.cs:65 ; register: FunctionIdentifier.cs:184 → argb[FunctionArgType.INT_EXPRESSION], METHOD_SAFE ; switch-case: Process.ScriptProc.cs:189
+- **PRINT_RECT**: enum: BuiltInFunctionCode.cs:355 ; register: FunctionIdentifier.cs:389 → new PRINT_RECT_Instruction() ; instr-class: Instraction.Child.cs:441
+- **PRINT_SHOPITEM**: enum: BuiltInFunctionCode.cs:67 ; register: FunctionIdentifier.cs:186 → argb[FunctionArgType.VOID], METHOD_SAFE ; switch-case: Process.ScriptProc.cs:218
+- **PRINT_SPACE**: enum: BuiltInFunctionCode.cs:356 ; register: FunctionIdentifier.cs:390 → new PRINT_SPACE_Instruction() ; instr-class: Instraction.Child.cs:474
+- **PRINT_TALENT**: enum: BuiltInFunctionCode.cs:62 ; register: FunctionIdentifier.cs:181 → argb[FunctionArgType.INT_EXPRESSION], METHOD_SAFE ; switch-case: Process.ScriptProc.cs:177
+- **PUTFORM**: enum: BuiltInFunctionCode.cs:77 ; register: FunctionIdentifier.cs:217 → argb[FunctionArgType.FORM_STR_NULLABLE], METHOD_SAFE ; switch-case: Process.ScriptProc.cs:289
+- **QUIT**: enum: BuiltInFunctionCode.cs:78 ; register: FunctionIdentifier.cs:218 → argb[FunctionArgType.VOID] ; switch-case: Process.ScriptProc.cs:299
+- **RANDOMIZE**: enum: BuiltInFunctionCode.cs:205 ; register: FunctionIdentifier.cs:294 → new RANDOMIZE_Instruction() ; instr-class: Instraction.Child.cs:1762
+- **REDRAW**: enum: BuiltInFunctionCode.cs:209 ; register: FunctionIdentifier.cs:298 → argb[FunctionArgType.INT_EXPRESSION], METHOD_SAFE | EXTENDED ; switch-case: Process.ScriptProc.cs:520
+- **REND**: enum: BuiltInFunctionCode.cs:93 ; register: FunctionIdentifier.cs:247 → new REND_Instruction() ; instr-class: Instraction.Child.cs:3521
+- **REPEAT**: enum: BuiltInFunctionCode.cs:92 ; register: FunctionIdentifier.cs:246 → new REPEAT_Instruction(false) ; instr-class: Instraction.Child.cs:3098
+- **RESETBGCOLOR**: enum: BuiltInFunctionCode.cs:177 ; register: FunctionIdentifier.cs:277 → new RESETBGCOLOR_Instruction() ; instr-class: Instraction.Child.cs:1548
+- **RESETCOLOR**: enum: BuiltInFunctionCode.cs:173 ; register: FunctionIdentifier.cs:273 → new RESETCOLOR_Instruction() ; instr-class: Instraction.Child.cs:1534
+- **RESETDATA**: enum: BuiltInFunctionCode.cs:202 ; register: FunctionIdentifier.cs:233 → new RESETDATA_Instruction() ; instr-class: Instraction.Child.cs:1864
+- **RESETGLOBAL**: enum: BuiltInFunctionCode.cs:203 ; register: FunctionIdentifier.cs:234 → new RESETGLOBAL_Instruction() ; instr-class: Instraction.Child.cs:1879
+- **RESET_STAIN**: enum: BuiltInFunctionCode.cs:242 ; register: FunctionIdentifier.cs:320 → argb[FunctionArgType.INT_EXPRESSION], METHOD_SAFE | EXTENDED ; switch-case: Process.ScriptProc.cs:528
+- **RESTART**: enum: BuiltInFunctionCode.cs:105 ; register: FunctionIdentifier.cs:355 → new RESTART_Instruction() ; instr-class: Instraction.Child.cs:3427
+- **RETURN**: enum: BuiltInFunctionCode.cs:102 ; register: FunctionIdentifier.cs:257 → new RETURN_Instruction() ; instr-class: Instraction.Child.cs:3383
+- **RETURNF**: enum: BuiltInFunctionCode.cs:104 ; register: FunctionIdentifier.cs:259 → new RETURNF_Instruction() ; instr-class: Instraction.Child.cs:3580
+- **RETURNFORM**: enum: BuiltInFunctionCode.cs:103 ; register: FunctionIdentifier.cs:258 → new RETURNFORM_Instruction() ; instr-class: Instraction.Child.cs:3340
+- **REUSELASTLINE**: enum: BuiltInFunctionCode.cs:40 ; register: FunctionIdentifier.cs:206 → new REUSELASTLINE_Instruction() ; instr-class: Instraction.Child.cs:661
+- **SAVECHARA**: enum: BuiltInFunctionCode.cs:270 ; register: FunctionIdentifier.cs:382 → new SAVECHARA_Instruction() ; instr-class: Instraction.Child.cs:1903
+- **SAVEDATA**: enum: BuiltInFunctionCode.cs:138 ; register: FunctionIdentifier.cs:228 → argb[FunctionArgType.SP_SAVEDATA], METHOD_SAFE | EXTENDED ; switch-case: Process.ScriptProc.cs:323
+- **SAVEGAME**: enum: BuiltInFunctionCode.cs:83 ; register: FunctionIdentifier.cs:226 → new SAVELOADGAME_Instruction(true)
+- **SAVEGLOBAL**: enum: BuiltInFunctionCode.cs:198 ; register: FunctionIdentifier.cs:231 → new SAVEGLOBAL_Instruction() ; instr-class: Instraction.Child.cs:1833
+- **SAVENOS**: enum: BuiltInFunctionCode.cs:244 ; register: FunctionIdentifier.cs:403 → argb[FunctionArgType.SP_GETINT], METHOD_SAFE | EXTENDED ; switch-case: Process.ScriptProc.cs:560
+- **SAVEVAR**: enum: BuiltInFunctionCode.cs:267 ; register: FunctionIdentifier.cs:380 → new SAVEVAR_Instruction() ; instr-class: Instraction.Child.cs:1956
+- **SELECTCASE**: enum: BuiltInFunctionCode.cs:212 ; register: FunctionIdentifier.cs:241 → new SELECTCASE_Instruction() ; instr-class: Instraction.Child.cs:3271
+- **SETBGCOLOR**: enum: BuiltInFunctionCode.cs:174 ; register: FunctionIdentifier.cs:274 → argb[FunctionArgType.SP_COLOR], METHOD_SAFE | EXTENDED ; switch-case: Process.ScriptProc.cs:436
+- **SETBGCOLORBYNAME**: enum: BuiltInFunctionCode.cs:176 ; register: FunctionIdentifier.cs:276 → argb[FunctionArgType.STR], METHOD_SAFE | EXTENDED ; switch-case: Process.ScriptProc.cs:470
+- **SETBIT**: enum: BuiltInFunctionCode.cs:233 ; register: FunctionIdentifier.cs:311 → new SETBIT_Instruction(1) ; instr-class: Instraction.Child.cs:718
+- **SETCOLOR**: enum: BuiltInFunctionCode.cs:171 ; register: FunctionIdentifier.cs:271 → argb[FunctionArgType.SP_COLOR], METHOD_SAFE | EXTENDED ; switch-case: Process.ScriptProc.cs:396
+- **SETCOLORBYNAME**: enum: BuiltInFunctionCode.cs:172 ; register: FunctionIdentifier.cs:272 → argb[FunctionArgType.STR], METHOD_SAFE | EXTENDED ; switch-case: Process.ScriptProc.cs:423
+- **SETFONT**: enum: BuiltInFunctionCode.cs:190 ; register: FunctionIdentifier.cs:290 → argb[FunctionArgType.STR_EXPRESSION_NULLABLE], METHOD_SAFE | EXTENDED ; switch-case: Process.ScriptProc.cs:501
+- **SIF**: enum: BuiltInFunctionCode.cs:86 ; register: FunctionIdentifier.cs:236 → new SIF_Instruction() ; instr-class: Instraction.Child.cs:3145
+- **SKIPDISP**: enum: BuiltInFunctionCode.cs:248 ; register: FunctionIdentifier.cs:324 → argb[FunctionArgType.INT_EXPRESSION], METHOD_SAFE | EXTENDED ; switch-case: Process.ScriptProc.cs:573
+- **SORTCHARA**: enum: BuiltInFunctionCode.cs:183 ; register: FunctionIdentifier.cs:283 → new SORTCHARA_Instruction() ; instr-class: Instraction.Child.cs:1509
+- **SPLIT**: enum: BuiltInFunctionCode.cs:123 ; register: FunctionIdentifier.cs:269 → argb[FunctionArgType.SP_SPLIT], METHOD_SAFE | EXTENDED ; switch-case: Process.ScriptProc.cs:537
+- **STOPCALLTRAIN**: enum: BuiltInFunctionCode.cs:153 ; register: FunctionIdentifier.cs:301 → argb[FunctionArgType.VOID], EXTENDED | FLOW_CONTROL ; switch-case: Process.ScriptProc.cs:885
+- **STRDATA**: enum: BuiltInFunctionCode.cs:228 ; register: FunctionIdentifier.cs:309 → argb[FunctionArgType.VAR_STR], METHOD_SAFE | EXTENDED | PARTIAL ; switch-case: Process.ScriptProc.cs:756
+- **STRLEN**: enum: BuiltInFunctionCode.cs:108 ; register: FunctionIdentifier.cs:261 → new STRLEN_Instruction(false, false) ; instr-class: Instraction.Child.cs:692
+- **STRLENFORM**: enum: BuiltInFunctionCode.cs:110 ; register: FunctionIdentifier.cs:262 → new STRLEN_Instruction(true, false)
+- **STRLENFORMU**: enum: BuiltInFunctionCode.cs:113 ; register: FunctionIdentifier.cs:264 → new STRLEN_Instruction(true, true)
+- **STRLENU**: enum: BuiltInFunctionCode.cs:111 ; register: FunctionIdentifier.cs:263 → new STRLEN_Instruction(false, true)
+- **SWAP**: enum: BuiltInFunctionCode.cs:200 ; register: FunctionIdentifier.cs:292 → argb[FunctionArgType.SP_SWAPVAR], METHOD_SAFE | EXTENDED ; switch-case: Process.ScriptProc.cs:356
+- **SWAPCHARA**: enum: BuiltInFunctionCode.cs:119 ; register: FunctionIdentifier.cs:266 → new SWAPCHARA_Instruction() ; instr-class: Instraction.Child.cs:1460
+- **THROW**: enum: BuiltInFunctionCode.cs:265 ; register: FunctionIdentifier.cs:378 → argb[FunctionArgType.FORM_STR_NULLABLE], METHOD_SAFE | EXTENDED ; switch-case: Process.ScriptProc.cs:751
+- **TIMES**: enum: BuiltInFunctionCode.cs:59 ; register: FunctionIdentifier.cs:191 → new TIMES_Instruction() ; instr-class: Instraction.Child.cs:1363
+- **TINPUT**: enum: BuiltInFunctionCode.cs:45 ; register: FunctionIdentifier.cs:196 → new TINPUT_Instruction(false) ; instr-class: Instraction.Child.cs:1046
+- **TINPUTS**: enum: BuiltInFunctionCode.cs:46 ; register: FunctionIdentifier.cs:197 → new TINPUTS_Instruction(false) ; instr-class: Instraction.Child.cs:1103
+- **TONEINPUT**: enum: BuiltInFunctionCode.cs:52 ; register: FunctionIdentifier.cs:198 → new TINPUT_Instruction(true)
+- **TONEINPUTS**: enum: BuiltInFunctionCode.cs:53 ; register: FunctionIdentifier.cs:199 → new TINPUTS_Instruction(true)
+- **TOOLTIP_SETCOLOR**: enum: BuiltInFunctionCode.cs:350 ; register: FunctionIdentifier.cs:392 → new TOOLTIP_SETCOLOR_Instruction() ; instr-class: Instraction.Child.cs:2113
+- **TOOLTIP_SETDELAY**: enum: BuiltInFunctionCode.cs:351 ; register: FunctionIdentifier.cs:393 → new TOOLTIP_SETDELAY_Instruction() ; instr-class: Instraction.Child.cs:2136
+- **TOOLTIP_SETDURATION**: enum: BuiltInFunctionCode.cs:352 ; register: FunctionIdentifier.cs:394 → new TOOLTIP_SETDURATION_Instruction() ; instr-class: Instraction.Child.cs:2158
+- **TRYCALL**: enum: BuiltInFunctionCode.cs:144 ; register: FunctionIdentifier.cs:342 → new CALL_Instruction(false, false, true, false), EXTENDED
+- **TRYCALLFORM**: enum: BuiltInFunctionCode.cs:150 ; register: FunctionIdentifier.cs:346 → new CALL_Instruction(true, false, true, false), EXTENDED
+- **TRYCALLLIST**: enum: BuiltInFunctionCode.cs:162 ; register: FunctionIdentifier.cs:366 → argb[FunctionArgType.VOID], EXTENDED | FLOW_CONTROL | PARTIAL | IS_TRY ; switch-case: Process.ScriptProc.cs:830
+- **TRYCCALL**: enum: BuiltInFunctionCode.cs:157 ; register: FunctionIdentifier.cs:348 → new CALL_Instruction(false, false, true, true), EXTENDED
+- **TRYCCALLFORM**: enum: BuiltInFunctionCode.cs:160 ; register: FunctionIdentifier.cs:350 → new CALL_Instruction(true, false, true, true), EXTENDED
+- **TRYCGOTO**: enum: BuiltInFunctionCode.cs:158 ; register: FunctionIdentifier.cs:360 → new GOTO_Instruction(false, true, true), EXTENDED
+- **TRYCGOTOFORM**: enum: BuiltInFunctionCode.cs:161 ; register: FunctionIdentifier.cs:361 → new GOTO_Instruction(true, true, true), EXTENDED
+- **TRYCJUMP**: enum: BuiltInFunctionCode.cs:156 ; register: FunctionIdentifier.cs:347 → new CALL_Instruction(false, true, true, true), EXTENDED
+- **TRYCJUMPFORM**: enum: BuiltInFunctionCode.cs:159 ; register: FunctionIdentifier.cs:349 → new CALL_Instruction(true, true, true, true), EXTENDED
+- **TRYGOTO**: enum: BuiltInFunctionCode.cs:145 ; register: FunctionIdentifier.cs:357 → new GOTO_Instruction(false, true, false), EXTENDED
+- **TRYGOTOFORM**: enum: BuiltInFunctionCode.cs:151 ; register: FunctionIdentifier.cs:359 → new GOTO_Instruction(true, true, false), EXTENDED
+- **TRYGOTOLIST**: enum: BuiltInFunctionCode.cs:164 ; register: FunctionIdentifier.cs:368 → argb[FunctionArgType.VOID], EXTENDED | FLOW_CONTROL | PARTIAL | IS_TRY ; switch-case: Process.ScriptProc.cs:859
+- **TRYJUMP**: enum: BuiltInFunctionCode.cs:143 ; register: FunctionIdentifier.cs:341 → new CALL_Instruction(false, true, true, false), EXTENDED
+- **TRYJUMPFORM**: enum: BuiltInFunctionCode.cs:149 ; register: FunctionIdentifier.cs:345 → new CALL_Instruction(true, true, true, false), EXTENDED
+- **TRYJUMPLIST**: enum: BuiltInFunctionCode.cs:163 ; register: FunctionIdentifier.cs:367 → argb[FunctionArgType.VOID], EXTENDED | FLOW_CONTROL | PARTIAL | IS_JUMP | IS_TRY ; switch-case: Process.ScriptProc.cs:831
+- **TWAIT**: enum: BuiltInFunctionCode.cs:47 ; register: FunctionIdentifier.cs:200 → new TWAIT_Instruction() ; instr-class: Instraction.Child.cs:781
+- **UPCHECK**: enum: BuiltInFunctionCode.cs:69 ; register: FunctionIdentifier.cs:209 → argb[FunctionArgType.VOID], METHOD_SAFE ; switch-case: Process.ScriptProc.cs:248
+- **VARSET**: enum: BuiltInFunctionCode.cs:239 ; register: FunctionIdentifier.cs:317 → new VARSET_Instruction() ; instr-class: Instraction.Child.cs:1664
+- **VARSIZE**: enum: BuiltInFunctionCode.cs:122 ; register: FunctionIdentifier.cs:399 → argb[FunctionArgType.SP_VAR], METHOD_SAFE | EXTENDED ; switch-case: Process.ScriptProc.cs:316
+- **WAIT**: enum: BuiltInFunctionCode.cs:42 ; register: FunctionIdentifier.cs:193 → new WAIT_Instruction(false) ; instr-class: Instraction.Child.cs:750
+- **WAITANYKEY**: enum: BuiltInFunctionCode.cs:48 ; register: FunctionIdentifier.cs:201 → new WAITANYKEY_Instruction() ; instr-class: Instraction.Child.cs:768
+- **WEND**: enum: BuiltInFunctionCode.cs:195 ; register: FunctionIdentifier.cs:251 → new WEND_Instruction() ; instr-class: Instraction.Child.cs:3549
+- **WHILE**: enum: BuiltInFunctionCode.cs:194 ; register: FunctionIdentifier.cs:250 → new WHILE_Instruction() ; instr-class: Instraction.Child.cs:3129
+
+## EE 扩展命令（56）
+
+- **BINPUT**: enum: BuiltInFunctionCode.cs:381 ; register: FunctionIdentifier.cs:427 → new BINPUT_Instruction() ; instr-class: Instraction.Child.cs:2228
+- **BINPUTS**: enum: BuiltInFunctionCode.cs:382 ; register: FunctionIdentifier.cs:428 → new BINPUTS_Instruction() ; instr-class: Instraction.Child.cs:2318
+- **CLEARMEMORY**: （无直接注册/实现，见文档）
+- **COLUMNBGCOLOR**: （无直接注册/实现，见文档）
+- **COLUMNCLEAR**: （无直接注册/实现，见文档）
+- **COLUMNCOLOR**: （无直接注册/实现，见文档）
+- **COLUMNCREATE**: （无直接注册/实现，见文档）
+- **COLUMNDIRECTION**: （无直接注册/实现，见文档）
+- **COLUMNMOVE**: （无直接注册/实现，见文档）
+- **COLUMNPRINT**: （无直接注册/实现，见文档）
+- **COLUMNPRINTL**: （无直接注册/实现，见文档）
+- **COLUMNPRINTW**: （无直接注册/实现，见文档）
+- **COLUMNRESIZE**: （无直接注册/实现，见文档）
+- **COLUMNWAIT**: （无直接注册/实现，见文档）
+- **EXISTFUNCTION**: （无直接注册/实现，见文档）
+- **EXISTSOUND**: （无直接注册/实现，见文档）
+- **FLOWINPUT**: （无直接注册/实现，见文档）
+- **FORCE_BEGIN**: enum: BuiltInFunctionCode.cs:373 ; register: FunctionIdentifier.cs:420 → new FORCE_BEGIN_Instruction() ; instr-class: Instraction.Child.cs:3056
+- **FORCE_QUIT**: enum: BuiltInFunctionCode.cs:371 ; register: FunctionIdentifier.cs:418 → argb[FunctionArgType.VOID] ; switch-case: Process.ScriptProc.cs:307
+- **FORCE_QUIT_AND_RESTART**: enum: BuiltInFunctionCode.cs:372 ; register: FunctionIdentifier.cs:419 → argb[FunctionArgType.VOID] ; switch-case: Process.ScriptProc.cs:310
+- **FSTRJOIN**: （无直接注册/实现，见文档）
+- **FTOOLTIP_SETDURATION**: （无直接注册/实现，见文档）
+- **GDASHSTYLE**: （无直接注册/实现，见文档）
+- **GDRAWGWITHROTATE**: （无直接注册/实现，见文档）
+- **GDRAWLINE**: （无直接注册/实现，见文档）
+- **GDRAWTEXT**: （无直接注册/实现，见文档）
+- **GETDISPLAYLINE**: （无直接注册/实现，见文档）
+- **GETDOINGFUNCTION**: （无直接注册/实现，见文档）
+- **GETMEMORYUSAGE**: （无直接注册/实现，见文档）
+- **GETTEXTBOX**: （无直接注册/实现，见文档）
+- **GETTEXTSIZE**: （无直接注册/实现，见文档）
+- **GGETFONT**: （无直接注册/实现，见文档）
+- **GGETFONTSIZE**: （无直接注册/实现，见文档）
+- **GGETPEN**: （无直接注册/实现，见文档）
+- **GGETPENWIDTH**: （无直接注册/实现，见文档）
+- **GGETTEXTSIZE**: （无直接注册/实现，见文档）
+- **INPUTANY**: enum: BuiltInFunctionCode.cs:374 ; register: FunctionIdentifier.cs:421 → new INPUTANY_Instruction() ; instr-class: Instraction.Child.cs:2208
+- **LCSVISASSI**: （无直接注册/实现，见文档）
+- **OCLEARLINE**: （无直接注册/实现，见文档）
+- **PLAYBGM**: enum: BuiltInFunctionCode.cs:363 ; register: FunctionIdentifier.cs:410 → new PLAYBGM_Instruction() ; instr-class: Instraction.Child.cs:2756
+- **PLAYSOUND**: enum: BuiltInFunctionCode.cs:361 ; register: FunctionIdentifier.cs:408 → new PLAYSOUND_Instruction() ; instr-class: Instraction.Child.cs:2692
+- **QUIT_AND_RESTART**: enum: BuiltInFunctionCode.cs:370 ; register: FunctionIdentifier.cs:417 → argb[FunctionArgType.VOID] ; switch-case: Process.ScriptProc.cs:303
+- **SETBGMVOLUME**: enum: BuiltInFunctionCode.cs:366 ; register: FunctionIdentifier.cs:413 → new SETBGMVOLUME_Instruction()
+- **SETSOUNDVOLUME**: enum: BuiltInFunctionCode.cs:365 ; register: FunctionIdentifier.cs:412 → new SETSOUNDVOLUME_Instruction()
+- **SETTEXTBOX**: （无直接注册/实现，见文档）
+- **SKIPLOG**: enum: BuiltInFunctionCode.cs:380 ; register: FunctionIdentifier.cs:335 → argb[FunctionArgType.INT_EXPRESSION], METHOD_SAFE | EXTENDED ; switch-case: Process.ScriptProc.cs:784
+- **SPRITEDISPOSEALL**: （无直接注册/实现，见文档）
+- **STOPBGM**: enum: BuiltInFunctionCode.cs:364 ; register: FunctionIdentifier.cs:411 → new STOPBGM_Instruction()
+- **STOPSOUND**: enum: BuiltInFunctionCode.cs:362 ; register: FunctionIdentifier.cs:409 → new STOPSOUND_Instruction()
+- **STRJOIN1**: （无直接注册/实现，见文档）
+- **TINPUTAWAIT**: （无直接注册/实现，见文档）
+- **TOOLTIP_EXTENSION**: （无直接注册/实现，见文档）
+- **TOOLTIP_IMG**: enum: BuiltInFunctionCode.cs:379 ; register: FunctionIdentifier.cs:426 → new TOOLTIP_IMG_Instruction() ; instr-class: Instraction.Child.cs:3000
+- **TRYCALLF**: enum: BuiltInFunctionCode.cs:367 ; register: FunctionIdentifier.cs:414 → new TRYCALLF_Instruction(false) ; instr-class: Instraction.Child.cs:1284
+- **TRYCALLFORMF**: enum: BuiltInFunctionCode.cs:368 ; register: FunctionIdentifier.cs:415 → new TRYCALLF_Instruction(true)
+- **UPDATECHECK**: enum: BuiltInFunctionCode.cs:369 ; register: FunctionIdentifier.cs:416 → new UPDATECHECK_Instruction()
+
+## 函数（163）
+
+- **ABS**: register: Creator.cs:77 → AbsMethod ; class: Creator.Method.cs:3068
+- **ALLSAMES**: register: Creator.cs:94 → AllsamesMethod ; class: Creator.Method.cs:3547
+- **ARRAYMSORT**: register: Creator.cs:110 → ArrayMultiSortMethod ; class: Creator.Method.cs:4068
+- **BARSTR**: register: Creator.cs:50 → BarStringMethod ; class: Creator.Method.cs:2661
+- **CBGCLEAR**: register: Creator.cs:197 → CBGClearMethod ; class: Creator.Method.cs:6553
+- **CBGCLEARBUTTON**: register: Creator.cs:199 → CBGClearButtonMethod ; class: Creator.Method.cs:6596
+- **CBGREMOVEBMAP**: register: Creator.cs:201 → CBGRemoveBMapMethod ; class: Creator.Method.cs:6615
+- **CBGREMOVERANGE**: register: Creator.cs:200 → CBGRemoveRangeMethod ; class: Creator.Method.cs:6573
+- **CBGSETBMAPG**: register: Creator.cs:202 → CBGSetBMapGMethod ; class: Creator.Method.cs:6665
+- **CBGSETBUTTONSPRITE**: register: Creator.cs:203 → CBGSETButtonSpriteMethod ; class: Creator.Method.cs:6723
+- **CBGSETG**: register: Creator.cs:195 → CBGSetGraphicsMethod ; class: Creator.Method.cs:6634
+- **CBGSETSPRITE**: register: Creator.cs:196 → CBGSetCIMGMethod ; class: Creator.Method.cs:6691
+- **CBRT**: register: Creator.cs:80 → CbrtMethod ; class: Creator.Method.cs:3130
+- **CHARATU**: register: Creator.cs:134 → CharAtMethod ; class: Creator.Method.cs:4851
+- **CHKCHARADATA**: register: Creator.cs:58 → CheckdataStrMethod ; class: Creator.Method.cs:2465
+- **CHKDATA**: register: Creator.cs:39 → CheckdataMethod ; class: Creator.Method.cs:2435
+- **CHKFONT**: register: Creator.cs:38 → CheckfontMethod ; class: Creator.Method.cs:2399
+- **CHKGLOBALDATA**: register: Creator.cs:59 → CheckdataMethod ; class: Creator.Method.cs:2435
+- **CHKVARDATA**: register: Creator.cs:57 → CheckdataStrMethod ; class: Creator.Method.cs:2465
+- **CLIENTHEIGHT**: register: Creator.cs:159 → ClientSizeMethod ; class: Creator.Method.cs:5916
+- **CLIENTWIDTH**: register: Creator.cs:158 → ClientSizeMethod ; class: Creator.Method.cs:5916
+- **CMATCH**: register: Creator.cs:91 → MatchMethod ; class: Creator.Method.cs:3333
+- **COLOR_FROMNAME**: register: Creator.cs:53 → ColorFromNameMethod ; class: Creator.Method.cs:2711
+- **COLOR_FROMRGB**: register: Creator.cs:54 → ColorFromRGBMethod ; class: Creator.Method.cs:2738
+- **CONVERT**: register: Creator.cs:130 → ConvertIntMethod ; class: Creator.Method.cs:4736
+- **CSVABL**: register: Creator.cs:24 → CsvDataMethod ; class: Creator.Method.cs:2157
+- **CSVBASE**: register: Creator.cs:23 → CsvDataMethod ; class: Creator.Method.cs:2157
+- **CSVCALLNAME**: register: Creator.cs:19 → CsvStrDataMethod ; class: Creator.Method.cs:2064
+- **CSVCFLAG**: register: Creator.cs:29 → CsvDataMethod ; class: Creator.Method.cs:2157
+- **CSVCSTR**: register: Creator.cs:22 → CsvcstrMethod ; class: Creator.Method.cs:2114
+- **CSVEQUIP**: register: Creator.cs:30 → CsvDataMethod ; class: Creator.Method.cs:2157
+- **CSVEXP**: register: Creator.cs:26 → CsvDataMethod ; class: Creator.Method.cs:2157
+- **CSVJUEL**: register: Creator.cs:31 → CsvDataMethod ; class: Creator.Method.cs:2157
+- **CSVMARK**: register: Creator.cs:25 → CsvDataMethod ; class: Creator.Method.cs:2157
+- **CSVMASTERNAME**: register: Creator.cs:21 → CsvStrDataMethod ; class: Creator.Method.cs:2064
+- **CSVNAME**: register: Creator.cs:18 → CsvStrDataMethod ; class: Creator.Method.cs:2064
+- **CSVNICKNAME**: register: Creator.cs:20 → CsvStrDataMethod ; class: Creator.Method.cs:2064
+- **CSVRELATION**: register: Creator.cs:27 → CsvDataMethod ; class: Creator.Method.cs:2157
+- **CSVTALENT**: register: Creator.cs:28 → CsvDataMethod ; class: Creator.Method.cs:2157
+- **CURRENTALIGN**: register: Creator.cs:51 → CurrentAlignMethod ; class: Creator.Method.cs:2678
+- **CURRENTREDRAW**: register: Creator.cs:52 → CurrentRedrawMethod ; class: Creator.Method.cs:2697
+- **ENCODETOUNI**: register: Creator.cs:133 → EncodeToUniMethod ; class: Creator.Method.cs:4809 ; enum: BuiltInFunctionCode.cs:257
+- **ESCAPE**: register: Creator.cs:132 → EscapeMethod ; class: Creator.Method.cs:4795
+- **EXISTCSV**: register: Creator.cs:34 → ExistCsvMethod ; class: Creator.Method.cs:2292
+- **EXPONENT**: register: Creator.cs:83 → ExpMethod ; class: Creator.Method.cs:3192
+- **FINDCHARA**: register: Creator.cs:32 → FindcharaMethod ; class: Creator.Method.cs:2212
+- **FINDELEMENT**: register: Creator.cs:103 → FindElementMethod ; class: Creator.Method.cs:3872
+- **FINDLASTCHARA**: register: Creator.cs:33 → FindcharaMethod ; class: Creator.Method.cs:2212
+- **FINDLASTELEMENT**: register: Creator.cs:104 → FindElementMethod ; class: Creator.Method.cs:3872
+- **FIND_CHARADATA**: register: Creator.cs:61 → FindFilesMethod ; class: Creator.Method.cs:2488
+- **FIND_VARDATA**: register: Creator.cs:60 → FindFilesMethod ; class: Creator.Method.cs:2488
+- **GCLEAR**: register: Creator.cs:181 → GraphicsClearMethod ; class: Creator.Method.cs:6172
+- **GCREATE**: register: Creator.cs:178 → GraphicsCreateMethod ; class: Creator.Method.cs:5937
+- **GCREATED**: register: Creator.cs:172 → GraphicsStateMethod ; class: Creator.Method.cs:5305
+- **GCREATEFROMFILE**: register: Creator.cs:179 → GraphicsCreateFromFileMethod ; class: Creator.Method.cs:5975
+- **GDISPOSE**: register: Creator.cs:180 → GraphicsDisposeMethod ; class: Creator.Method.cs:6038
+- **GDRAWG**: register: Creator.cs:185 → GraphicsDrawGMethod ; class: Creator.Method.cs:6247
+- **GDRAWGWITHMASK**: register: Creator.cs:186 → GraphicsDrawGWithMaskMethod ; class: Creator.Method.cs:6326
+- **GDRAWSPRITE**: register: Creator.cs:183 → GraphicsDrawSpriteMethod ; class: Creator.Method.cs:6368
+- **GETBGCOLOR**: register: Creator.cs:46 → GetBGColorMethod ; class: Creator.Method.cs:2604
+- **GETBIT**: register: Creator.cs:99 → GetbitMethod ; class: Creator.Method.cs:3692
+- **GETCHARA**: register: Creator.cs:16 → GetcharaMethod ; class: Creator.Method.cs:1992
+- **GETCOLOR**: register: Creator.cs:43 → GetColorMethod ; class: Creator.Method.cs:2572
+- **GETCONFIG**: register: Creator.cs:139 → GetConfigMethod ; class: Creator.Method.cs:5015
+- **GETCONFIGS**: register: Creator.cs:140 → GetConfigMethod ; class: Creator.Method.cs:5015
+- **GETDEFBGCOLOR**: register: Creator.cs:47 → GetBGColorMethod ; class: Creator.Method.cs:2604
+- **GETDEFCOLOR**: register: Creator.cs:44 → GetColorMethod ; class: Creator.Method.cs:2572
+- **GETEXPLV**: register: Creator.cs:102 → GetExpLVMethod ; class: Creator.Method.cs:3846
+- **GETFOCUSCOLOR**: register: Creator.cs:45 → GetFocusColorMethod ; class: Creator.Method.cs:2590
+- **GETFONT**: register: Creator.cs:49 → GetFontMethod ; class: Creator.Method.cs:2647
+- **GETKEY**: register: Creator.cs:161 → GetKeyStateMethod ; class: Creator.Method.cs:6784
+- **GETKEYTRIGGERED**: register: Creator.cs:162 → GetKeyStateMethod ; class: Creator.Method.cs:6784
+- **GETLINESTR**: register: Creator.cs:135 → GetLineStrMethod ; class: Creator.Method.cs:4869
+- **GETMILLISECOND**: register: Creator.cs:70 → GetmsMethod ; class: Creator.Method.cs:2918
+- **GETNUM**: register: Creator.cs:100 → GetnumMethod ; class: Creator.Method.cs:3725
+- **GETNUMB**: register: Creator.cs:108 → GetnumBMethod ; class: Creator.Method.cs:3778
+- **GETPALAMLV**: register: Creator.cs:101 → GetPalamLVMethod ; class: Creator.Method.cs:3820
+- **GETSECOND**: register: Creator.cs:71 → GetSecondMethod ; class: Creator.Method.cs:2933
+- **GETSPCHARA**: register: Creator.cs:17 → GetspcharaMethod ; class: Creator.Method.cs:2046
+- **GETSTYLE**: register: Creator.cs:48 → GetStyleMethod ; class: Creator.Method.cs:2622
+- **GETTIME**: register: Creator.cs:68 → GettimeMethod ; class: Creator.Method.cs:2883 ; enum: BuiltInFunctionCode.cs:141
+- **GETTIMES**: register: Creator.cs:69 → GettimesMethod ; class: Creator.Method.cs:2904
+- **GFILLRECTANGLE**: register: Creator.cs:182 → GraphicsFillRectangleMethod ; class: Creator.Method.cs:6221
+- **GGETCOLOR**: register: Creator.cs:175 → GraphicsGetColorMethod ; class: Creator.Method.cs:5373
+- **GHEIGHT**: register: Creator.cs:174 → GraphicsStateMethod ; class: Creator.Method.cs:5305
+- **GLOAD**: register: Creator.cs:206 → GraphicsLoadMethod ; class: Creator.Method.cs:7142
+- **GROUPMATCH**: register: Creator.cs:92 → GroupMatchMethod ; class: Creator.Method.cs:3440
+- **GSAVE**: register: Creator.cs:205 → GraphicsSaveMethod ; class: Creator.Method.cs:7105
+- **GSETBRUSH**: register: Creator.cs:188 → GraphicsSetBrushMethod ; class: Creator.Method.cs:5424
+- **GSETCOLOR**: register: Creator.cs:184 → GraphicsSetColorMethod ; class: Creator.Method.cs:5399
+- **GSETFONT**: register: Creator.cs:189 → GraphicsSetFontMethod ; class: Creator.Method.cs:5447
+- **GSETPEN**: register: Creator.cs:190 → GraphicsSetPenMethod ; class: Creator.Method.cs:5518
+- **GWIDTH**: register: Creator.cs:173 → GraphicsStateMethod ; class: Creator.Method.cs:5305
+- **HTML_ESCAPE**: register: Creator.cs:146 → HtmlEscapeMethod ; class: Creator.Method.cs:5140
+- **HTML_GETPRINTEDSTR**: register: Creator.cs:143 → HtmlGetPrintedStrMethod ; class: Creator.Method.cs:5071
+- **HTML_POPPRINTINGSTR**: register: Creator.cs:144 → HtmlPopPrintingStrMethod ; class: Creator.Method.cs:5109
+- **HTML_TOPLAINTEXT**: register: Creator.cs:145 → HtmlToPlainTextMethod ; class: Creator.Method.cs:5127
+- **INRANGE**: register: Creator.cs:105 → InRangeMethod ; class: Creator.Method.cs:3969
+- **INRANGEARRAY**: register: Creator.cs:106 → InRangeArrayMethod ; class: Creator.Method.cs:3986
+- **INRANGECARRAY**: register: Creator.cs:107 → InRangeArrayMethod ; class: Creator.Method.cs:3986
+- **ISACTIVE**: register: Creator.cs:168 → IsActiveMethod ; class: Creator.Method.cs:6862
+- **ISNUMERIC**: register: Creator.cs:131 → IsNumericMethod ; class: Creator.Method.cs:4754
+- **ISSKIP**: register: Creator.cs:40 → IsSkipMethod ; class: Creator.Method.cs:2530
+- **LIMIT**: register: Creator.cs:85 → GetLimitMethod ; class: Creator.Method.cs:3234
+- **LINEISEMPTY**: register: Creator.cs:126 → LineIsEmptyMethod ; class: Creator.Method.cs:4584
+- **LOADTEXT**: register: Creator.cs:170 → LoadTextMethod ; class: Creator.Method.cs:7007
+- **LOG**: register: Creator.cs:81 → LogMethod ; class: Creator.Method.cs:3148
+- **LOG10**: register: Creator.cs:82 → LogMethod ; class: Creator.Method.cs:3148
+- **MATCH**: register: Creator.cs:90 → MatchMethod ; class: Creator.Method.cs:3333
+- **MAX**: register: Creator.cs:76 → MaxMethod ; class: Creator.Method.cs:3010
+- **MAXARRAY**: register: Creator.cs:95 → MaxArrayMethod ; class: Creator.Method.cs:3598
+- **MAXCARRAY**: register: Creator.cs:96 → MaxArrayMethod ; class: Creator.Method.cs:3598
+- **MESSKIP**: register: Creator.cs:42 → MesSkipMethod ; class: Creator.Method.cs:2544
+- **MIN**: register: Creator.cs:75 → MaxMethod ; class: Creator.Method.cs:3010
+- **MINARRAY**: register: Creator.cs:97 → MaxArrayMethod ; class: Creator.Method.cs:3598
+- **MINCARRAY**: register: Creator.cs:98 → MaxArrayMethod ; class: Creator.Method.cs:3598
+- **MONEYSTR**: register: Creator.cs:64 → MoneyStrMethod ; class: Creator.Method.cs:2795
+- **MOUSESKIP**: register: Creator.cs:41 → MesSkipMethod ; class: Creator.Method.cs:2544
+- **MOUSEX**: register: Creator.cs:163 → MousePosMethod ; class: Creator.Method.cs:6811
+- **MOUSEY**: register: Creator.cs:164 → MousePosMethod ; class: Creator.Method.cs:6811
+- **NOSAMES**: register: Creator.cs:93 → NosamesMethod ; class: Creator.Method.cs:3492
+- **POWER**: register: Creator.cs:78 → PowerMethod ; class: Creator.Method.cs:3086 ; enum: BuiltInFunctionCode.cs:197
+- **PRINTCLENGTH**: register: Creator.cs:66 → PrintCLengthMethod ; class: Creator.Method.cs:2855
+- **PRINTCPERLINE**: register: Creator.cs:65 → GetPrintCPerLineMethod ; class: Creator.Method.cs:2841 ; enum: BuiltInFunctionCode.cs:230
+- **RAND**: register: Creator.cs:74 → RandMethod ; class: Creator.Method.cs:2951
+- **REPLACE**: register: Creator.cs:127 → ReplaceMethod ; class: Creator.Method.cs:4599
+- **SAVENOS**: register: Creator.cs:67 → GetSaveNosMethod ; class: Creator.Method.cs:2869 ; enum: BuiltInFunctionCode.cs:244
+- **SAVETEXT**: register: Creator.cs:169 → SaveTextMethod ; class: Creator.Method.cs:6898
+- **SETANIMETIMER**: register: Creator.cs:211 → SetAnimeTimerMethod ; class: Creator.Method.cs:6876
+- **SIGN**: register: Creator.cs:84 → SignMethod ; class: Creator.Method.cs:3218
+- **SPRITEANIMEADDFRAME**: register: Creator.cs:210 → SpriteAnimeAddFrameMethod ; class: Creator.Method.cs:6509
+- **SPRITEANIMECREATE**: register: Creator.cs:209 → SpriteAnimeCreateMethod ; class: Creator.Method.cs:6467
+- **SPRITECREATE**: register: Creator.cs:192 → SpriteCreateMethod ; class: Creator.Method.cs:6062
+- **SPRITECREATED**: register: Creator.cs:150 → SpriteStateMethod ; class: Creator.Method.cs:5830
+- **SPRITEDISPOSE**: register: Creator.cs:193 → SpriteDisposeMethod ; class: Creator.Method.cs:6135
+- **SPRITEGETCOLOR**: register: Creator.cs:176 → SpriteGetColorMethod ; class: Creator.Method.cs:5889
+- **SPRITEHEIGHT**: register: Creator.cs:152 → SpriteStateMethod ; class: Creator.Method.cs:5830
+- **SPRITEMOVE**: register: Creator.cs:153 → SpriteSetPosMethod ; class: Creator.Method.cs:5861
+- **SPRITEPOSX**: register: Creator.cs:155 → SpriteStateMethod ; class: Creator.Method.cs:5830
+- **SPRITEPOSY**: register: Creator.cs:156 → SpriteStateMethod ; class: Creator.Method.cs:5830
+- **SPRITESETPOS**: register: Creator.cs:154 → SpriteSetPosMethod ; class: Creator.Method.cs:5861
+- **SPRITEWIDTH**: register: Creator.cs:151 → SpriteStateMethod ; class: Creator.Method.cs:5830
+- **SQRT**: register: Creator.cs:79 → SqrtMethod ; class: Creator.Method.cs:3112
+- **STRCOUNT**: register: Creator.cs:119 → StrCountMethod ; class: Creator.Method.cs:4425
+- **STRFIND**: register: Creator.cs:117 → StrfindMethod ; class: Creator.Method.cs:4361
+- **STRFINDU**: register: Creator.cs:118 → StrfindMethod ; class: Creator.Method.cs:4361
+- **STRFORM**: register: Creator.cs:136 → StrFormMethod ; class: Creator.Method.cs:4887
+- **STRJOIN**: register: Creator.cs:137 → JoinMethod ; class: Creator.Method.cs:4944
+- **STRLENS**: register: Creator.cs:113 → StrlenMethod ; class: Creator.Method.cs:4228
+- **STRLENSU**: register: Creator.cs:114 → StrlenuMethod ; class: Creator.Method.cs:4243
+- **SUBSTRING**: register: Creator.cs:115 → SubstringMethod ; class: Creator.Method.cs:4258
+- **SUBSTRINGU**: register: Creator.cs:116 → SubstringuMethod ; class: Creator.Method.cs:4303
+- **SUMARRAY**: register: Creator.cs:88 → SumArrayMethod ; class: Creator.Method.cs:3260
+- **SUMCARRAY**: register: Creator.cs:89 → SumArrayMethod ; class: Creator.Method.cs:3260
+- **TOFULL**: register: Creator.cs:125 → StrChangeStyleMethod ; class: Creator.Method.cs:4547
+- **TOHALF**: register: Creator.cs:124 → StrChangeStyleMethod ; class: Creator.Method.cs:4547
+- **TOINT**: register: Creator.cs:121 → ToIntMethod ; class: Creator.Method.cs:4496
+- **TOLOWER**: register: Creator.cs:123 → StrChangeStyleMethod ; class: Creator.Method.cs:4547
+- **TOSTR**: register: Creator.cs:120 → ToStrMethod ; class: Creator.Method.cs:4449
+- **TOUPPER**: register: Creator.cs:122 → StrChangeStyleMethod ; class: Creator.Method.cs:4547
+- **UNICODE**: register: Creator.cs:128 → UnicodeMethod ; class: Creator.Method.cs:4680
+- **UNICODEBYTE**: register: Creator.cs:129 → UnicodeByteMethod ; class: Creator.Method.cs:4716
+- **VARSIZE**: register: Creator.cs:37 → VarsizeMethod ; class: Creator.Method.cs:2333 ; enum: BuiltInFunctionCode.cs:122

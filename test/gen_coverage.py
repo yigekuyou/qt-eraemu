@@ -60,6 +60,42 @@ EXCLUDE = {
     # EE 扩展里需要运行环境（声音/文本框/多列/内存）的，冒烟无意义
     "PLAYBGM", "STOPBGM", "SETBGMVOLUME", "PLAYSOUND", "STOPSOUND",
     "SETSOUNDVOLUME", "SETTEXTBOX", "GETTEXTBOX", "UPDATECHECK", "SKIPLOG",
+    # EM/EE 扩展：需要图形/交互环境、或本仓库只有式中函数形态（详见 EXCLUDE_REASON）
+    "SETBGIMAGE",
+    "CLEARBGIMAGE",
+    "REMOVEBGIMAGE",
+    "HTML_PRINT_ISLAND",
+    "HTML_PRINT_ISLAND_CLEAR",
+    "BREAKBUTTON",
+    "ONEBINPUT",
+    "ONEBINPUTS",
+    "DT_COLUMN_OPTIONS",
+    "CALLSHARP",
+    "TOOLTIP_CUSTOM",
+    "TOOLTIP_FORMAT",
+    "TOOLTIP_SETFONT",
+    "TOOLTIP_SETFONTSIZE",
+    "EXISTSOUND",
+    "EXISTFUNCTION",
+    "GETMEMORYUSAGE",
+    "GETDOINGFUNCTION",
+    "VARI",
+    "VARS",
+    "TRYCALLF",
+    "TRYCALLFORMF",
+    "COLUMNCREATE",
+    "COLUMNDIRECTION",
+    "COLUMNMOVE",
+    "COLUMNRESIZE",
+    "COLUMNCLEAR",
+    "COLUMNPRINT",
+    "COLUMNPRINTL",
+    "COLUMNPRINTW",
+    "COLUMNWAIT",
+    "COLUMNCOLOR",
+    "COLUMNBGCOLOR",
+    "LCSVISASSI",
+    "GETTEXTSIZE",
 }
 # 被排除项的**原因**（写进覆盖率报告，说明为什么不由自动段执行）
 EXCLUDE_REASON = {
@@ -99,11 +135,47 @@ EXCLUDE_REASON = {
     "UPDATECHECK": "需要网络（EE）",
     "SKIPLOG": "控制日志输出（EE）",
     "CLEARMEMORY": "释放内存（EE，破坏性）",
+    "SETBGIMAGE": "需要背景图资源（EM）",
+    "CLEARBGIMAGE": "需要背景图资源（EM）",
+    "REMOVEBGIMAGE": "需要背景图资源（EM）",
+    "HTML_PRINT_ISLAND": "悬浮 HTML 层（Emuera.NET）",
+    "HTML_PRINT_ISLAND_CLEAR": "悬浮 HTML 层（Emuera.NET）",
+    "BREAKBUTTON": "使旧按钮失效（GUI）",
+    "ONEBINPUT": "需要鼠标按钮输入（EE）",
+    "ONEBINPUTS": "需要鼠标按钮输入（EE）",
+    "DT_COLUMN_OPTIONS": "DataTable 列选项（EM）",
+    "CALLSHARP": "需要插件 DLL（Emuera.NET）",
+    "TOOLTIP_CUSTOM": "工具提示需 GUI",
+    "TOOLTIP_FORMAT": "工具提示需 GUI",
+    "TOOLTIP_SETFONT": "工具提示需 GUI",
+    "TOOLTIP_SETFONTSIZE": "工具提示需 GUI",
+    "EXISTSOUND": "本仓库为式中函数，无命令形态",
+    "EXISTFUNCTION": "本仓库为式中函数，无命令形态",
+    "GETMEMORYUSAGE": "本仓库为式中函数，无命令形态",
+    "GETDOINGFUNCTION": "本仓库为式中函数，无命令形态",
+    "VARI": "需 setting.json 的 UseScopedVariableInstruction 开启（Emuera.NET）",
+    "VARS": "需 setting.json 的 UseScopedVariableInstruction 开启（Emuera.NET）",
+    "TRYCALLF": "需要已存在的用户函数",
+    "TRYCALLFORMF": "需要已存在的用户函数",
+    "LCSVISASSI": "本仓库无实现（语义未确证）",
+    "GETTEXTSIZE": "本仓库无实现（疑为 GETTEXTBOX 笔误）",
+    "COLUMNCREATE": "EE 列库（ERB 实现，非引擎命令）",
+    "COLUMNDIRECTION": "EE 列库（ERB 实现，非引擎命令）",
+    "COLUMNMOVE": "EE 列库（ERB 实现，非引擎命令）",
+    "COLUMNRESIZE": "EE 列库（ERB 实现，非引擎命令）",
+    "COLUMNCLEAR": "EE 列库（ERB 实现，非引擎命令）",
+    "COLUMNPRINT": "EE 列库（ERB 实现，非引擎命令）",
+    "COLUMNPRINTL": "EE 列库（ERB 实现，非引擎命令）",
+    "COLUMNPRINTW": "EE 列库（ERB 实现，非引擎命令）",
+    "COLUMNWAIT": "EE 列库（ERB 实现，非引擎命令）",
+    "COLUMNCOLOR": "EE 列库（ERB 实现，非引擎命令）",
+    "COLUMNBGCOLOR": "EE 列库（ERB 实现，非引擎命令）",
 }
 
 # PRINT 族以「基名 + 后缀」组合，逐个生成无意义
-# PRINT 族 = 基名 + 任意顺序的修饰后缀（C/LC、K、D、L/W 可组合）
-PRINT_BASE = re.compile(r"^PRINT(SINGLE)?(V|S|FORMS|FORM)?(K|D|C|LC|L|W)*$")
+# PRINT 族 = 基名 + 任意顺序的修饰后缀（值类型 V/S/FORM/FORMS、对齐 C/LC、
+#            配色 K/D、行尾 L/W、EM/EE 新增的 N 后缀可组合）
+PRINT_BASE = re.compile(r"^PRINT(SINGLE)?(V|S|FORMS|FORM)?(K|D|C|LC|L|W|N)*$")
 
 
 def load(path: pathlib.Path) -> list[str]:

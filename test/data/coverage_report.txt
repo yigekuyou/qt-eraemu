@@ -1,20 +1,51 @@
 # 覆盖率报告（依据 C# 权威命令表）
 
-## Emuera 原版命令（199 条）
-  手写用例已覆盖    ：152
-  自动生成冒烟覆盖  ：39
+## Emuera 原版命令（263 条）
+  手写用例已覆盖    ：172
+  自动生成冒烟覆盖  ：28
   不由自动段执行    ：0
-  PRINT 族后缀变体  ：8（由基名规则覆盖，不逐个列）
+  PRINT 族后缀变体  ：72（由基名规则覆盖，不逐个列）
   未覆盖            ：0（全部登记项均有对应用例）
 ## Emuera 原版式中函数（163 条）
-  手写用例已覆盖    ：76
-  自动生成冒烟覆盖  ：87
+  手写用例已覆盖    ：120
+  自动生成冒烟覆盖  ：43
   不由自动段执行    ：0
   PRINT 族后缀变体  ：0（由基名规则覆盖，不逐个列）
   未覆盖            ：0（全部登记项均有对应用例）
-## EmueraEE 扩展命令（56 条）
-  手写用例已覆盖    ：21
-  自动生成冒烟覆盖  ：35
-  不由自动段执行    ：0
-  PRINT 族后缀变体  ：0（由基名规则覆盖，不逐个列）
+## EmueraEE 扩展命令（59 条）
+  手写用例已覆盖    ：22
+  自动生成冒烟覆盖  ：1
+  不由自动段执行    ：31
+      · BREAKBUTTON —— 使旧按钮失效（GUI）
+      · CALLSHARP —— 需要插件 DLL（Emuera.NET）
+      · CLEARBGIMAGE —— 需要背景图资源（EM）
+      · COLUMNBGCOLOR —— EE 列库（ERB 实现，非引擎命令）
+      · COLUMNCLEAR —— EE 列库（ERB 实现，非引擎命令）
+      · COLUMNCOLOR —— EE 列库（ERB 实现，非引擎命令）
+      · COLUMNCREATE —— EE 列库（ERB 实现，非引擎命令）
+      · COLUMNDIRECTION —— EE 列库（ERB 实现，非引擎命令）
+      · COLUMNMOVE —— EE 列库（ERB 实现，非引擎命令）
+      · COLUMNPRINT —— EE 列库（ERB 实现，非引擎命令）
+      · COLUMNPRINTL —— EE 列库（ERB 实现，非引擎命令）
+      · COLUMNPRINTW —— EE 列库（ERB 实现，非引擎命令）
+      · COLUMNRESIZE —— EE 列库（ERB 实现，非引擎命令）
+      · COLUMNWAIT —— EE 列库（ERB 实现，非引擎命令）
+      · DT_COLUMN_OPTIONS —— DataTable 列选项（EM）
+      · GETMEMORYUSAGE —— 本仓库为式中函数，无命令形态
+      · GETTEXTSIZE —— 本仓库无实现（疑为 GETTEXTBOX 笔误）
+      · HTML_PRINT_ISLAND —— 悬浮 HTML 层（Emuera.NET）
+      · HTML_PRINT_ISLAND_CLEAR —— 悬浮 HTML 层（Emuera.NET）
+      · LCSVISASSI —— 本仓库无实现（语义未确证）
+      · ONEBINPUT —— 需要鼠标按钮输入（EE）
+      · ONEBINPUTS —— 需要鼠标按钮输入（EE）
+      · REMOVEBGIMAGE —— 需要背景图资源（EM）
+      · SETBGIMAGE —— 需要背景图资源（EM）
+      · TOOLTIP_CUSTOM —— 工具提示需 GUI
+      · TOOLTIP_FORMAT —— 工具提示需 GUI
+      · TOOLTIP_SETFONT —— 工具提示需 GUI
+      · TOOLTIP_SETFONTSIZE —— 工具提示需 GUI
+      · TRYCALLF —— 需要已存在的用户函数
+      · VARI —— 需 setting.json 的 UseScopedVariableInstruction 开启（Emuera.NET）
+      · VARS —— 需 setting.json 的 UseScopedVariableInstruction 开启（Emuera.NET）
+  PRINT 族后缀变体  ：5（由基名规则覆盖，不逐个列）
   未覆盖            ：0（全部登记项均有对应用例）

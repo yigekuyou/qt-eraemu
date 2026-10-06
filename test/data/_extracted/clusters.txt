@@ -1,0 +1,129 @@
+## CALL_Instruction (12)
+commands/CALL.md
+commands/CALLFORM.md
+commands/JUMP.md
+commands/JUMPFORM.md
+commands/TRYCALL.md
+commands/TRYCALLFORM.md
+commands/TRYCCALL.md
+commands/TRYCCALLFORM.md
+commands/TRYCJUMP.md
+commands/TRYCJUMPFORM.md
+commands/TRYJUMP.md
+commands/TRYJUMPFORM.md
+
+## ENDIF_Instruction (10)
+commands/CATCH.md
+commands/DO.md
+commands/ENDCATCH.md
+commands/ENDFUNC.md
+commands/ENDIF.md
+commands/ENDSELECT.md
+commands/FUNC.md
+commands/LOOP.md
+commands/SELECTCASE.md
+commands/TRYCCALL.md
+
+## PRINT_DATA_Instruction (9)
+commands/PRINTDATA.md
+commands/PRINTDATAD.md
+commands/PRINTDATADL.md
+commands/PRINTDATADW.md
+commands/PRINTDATAK.md
+commands/PRINTDATAKL.md
+commands/PRINTDATAKW.md
+commands/PRINTDATAL.md
+commands/PRINTDATAW.md
+
+## GOTO_Instruction (8)
+commands/CALL.md
+commands/GOTO.md
+commands/GOTOFORM.md
+commands/TRYCCALL.md
+commands/TRYCGOTO.md
+commands/TRYCGOTOFORM.md
+commands/TRYGOTO.md
+commands/TRYGOTOFORM.md
+
+## PRINT_Instruction (8)
+commands/PRINTCD.md
+commands/PRINTCK.md
+commands/PRINTFORMCD.md
+commands/PRINTFORMCK.md
+commands/PRINTFORMLCD.md
+commands/PRINTFORMLCK.md
+commands/PRINTLCD.md
+commands/PRINTLCK.md
+
+## ELSEIF_Instruction (7)
+commands/CASE.md
+commands/CASEELSE.md
+commands/ELSE.md
+commands/ELSEIF.md
+commands/ENDSELECT.md
+commands/IF.md
+commands/SELECTCASE.md
+
+## SELECTCASE_Instruction (5)
+commands/CASE.md
+commands/CASEELSE.md
+commands/ELSEIF.md
+commands/ENDSELECT.md
+commands/SELECTCASE.md
+
+## DEBUGPRINT_Instruction (4)
+commands/DEBUGPRINT.md
+commands/DEBUGPRINTFORM.md
+commands/DEBUGPRINTFORML.md
+commands/DEBUGPRINTL.md
+
+## ADDCHARA_Instruction (4)
+commands/ADDCHARA.md
+commands/ADDSPCHARA.md
+commands/DELALLCHARA.md
+commands/DELCHARA.md
+
+## CATCH_Instruction (4)
+commands/CATCH.md
+commands/TRYCCALL.md
+commands/TRYCGOTO.md
+commands/TRYCJUMP.md
+
+## IF_Instruction (4)
+commands/ELSE.md
+commands/ELSEIF.md
+commands/ENDIF.md
+commands/IF.md
+
+## REPEAT_Instruction (4)
+commands/FOR.md
+commands/NEXT.md
+commands/REND.md
+commands/REPEAT.md
+
+## STRLEN_Instruction (4)
+commands/STRLEN.md
+commands/STRLENFORM.md
+commands/STRLENFORMU.md
+commands/STRLENU.md
+
+## REND_Instruction (3)
+commands/FOR.md
+commands/NEXT.md
+commands/REND.md
+
+## SETBIT_Instruction (3)
+commands/CLEARBIT.md
+commands/INVERTBIT.md
+commands/SETBIT.md
+
+## SAVELOADGAME_Instruction (3)
+commands/LOADDATA.md
+commands/LOADGAME.md
+commands/SAVEGAME.md
+
+## PRINTDATA_Instruction (3)
+commands/DATA.md
+commands/DATAFORM.md
+commands/DATALIST.md
+

@@ -1,0 +1,10 @@
+functions/SUMCARRAY.md
+functions/TOFULL.md
+functions/TOHALF.md
+functions/TOINT.md
+functions/TOLOWER.md
+functions/TOSTR.md
+functions/TOUPPER.md
+functions/UNICODE.md
+functions/UNICODEBYTE.md
+functions/VARSIZE.md

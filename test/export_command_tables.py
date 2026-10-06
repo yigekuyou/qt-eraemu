@@ -8,13 +8,20 @@
 #   test/data/emuera_ee_cmds.txt         EmueraEE 扩展命令（EE 发行版清单 - 原版）
 #
 # 来源（全部是 C#/上游发行物，不是本移植的 C++ 表）：
-#   1) Emuera/GameProc/Function/BuiltInFunctionCode.cs
+#   1) 各棵 C# 源码树的 BuiltInFunctionCode.cs
 #        `enum FunctionCode` —— 每个枚举名就是 ERB 里写的命令名
 #        （FunctionIdentifier.addFunction 用 code.ToString() 作为字典键）
-#   2) Emuera/GameData/Function/Creator.cs
+#        本仓库存在多棵树（重构版 emuera.em/Emuera 是超集，另有经典布局的
+#        Emuera/ 与 eraTW 内置的补丁树），脚本取**全部树的并集**，避免漏收。
+#   2) 各棵树的 Creator.cs
 #        `methodList["NAME"] = …` —— 式中函数名
 #   3) eraTW/改造…/eratohoTWサクラエディタ用キーワードヘルプ/ERB_EXCOM.khp
 #        EM+EE 发行版自带的命令关键字帮助（EE 扩展命令的来源清单）
+#
+# 分类规则：
+#   emuera_standard_cmds.txt  = 原版（经典布局树）枚举 − INTERNAL
+#   emuera_ee_cmds.txt        = (超集树枚举 − 原版枚举) ∪ EE 文档独有名字
+# 两个清单的并集 == 全部树的枚举成员，既不漏也不重。
 #
 # 用法：python3 test/export_command_tables.py
 # ---------------------------------------------------------------------------
@@ -25,17 +32,39 @@ import sys
 ROOT = pathlib.Path(__file__).resolve().parent.parent
 OUTDIR = ROOT / "test/data"
 
-ENUM_CS = ROOT / "Emuera/GameProc/Function/BuiltInFunctionCode.cs"
-CREATOR_CS = ROOT / "Emuera/GameData/Function/Creator.cs"
+# 候选源码树（枚举/函数表实际所在路径，按优先级列出；取并集）
+TREES = [
+    ROOT / "emuera.em/Emuera",
+    ROOT / "Emuera",
+    ROOT / "eraTW/パッチ/Emuera1824+v11+webp+test+fix/src1824+v11+webp+test+fix/Emuera",
+]
+# 原版基线树（用于判定「哪些枚举成员属于 EM/EE 扩展」）
+BASELINE_TREES = [
+    ROOT / "Emuera",
+    ROOT / "eraTW/パッチ/Emuera1824+v11+webp+test+fix/src1824+v11+webp+test+fix/Emuera",
+]
 KHP = (ROOT / "eraTW/改造とかしてみたい人のためのあれこれ"
        / "eratohoTWサクラエディタ用キーワードヘルプ/ERB_EXCOM.khp")
 
 # 枚举里的内部值（不是 ERB 命令）
 INTERNAL = {"SET", "REF", "REFBYNAME"}
 
-# PRINT 族后缀组合是「由基名 + 后缀」在解析期生成的，不逐个当独立命令列
-PRINT_BASE = re.compile(
-    r"^PRINT(SINGLE)?(V|S|FORMS|FORM)?(K|D)?(C|LC)?(L|W)?$")
+ENUM_REL = [
+    "Runtime/Script/Statements/BuiltInFunctionCode.cs",  # 重构版布局
+    "GameProc/Function/BuiltInFunctionCode.cs",          # 经典布局
+]
+CREATOR_REL = [
+    "Runtime/Script/Statements/Function/Creator.cs",
+    "GameData/Function/Creator.cs",
+]
+
+
+def find(tree: pathlib.Path, rels: list[str]) -> pathlib.Path | None:
+    for rel in rels:
+        p = tree / rel
+        if p.exists():
+            return p
+    return None
 
 
 def read_text(p: pathlib.Path) -> str:
@@ -47,89 +76,116 @@ def read_text(p: pathlib.Path) -> str:
     return p.read_bytes().decode("utf-8", errors="ignore")
 
 
-def export_standard_cmds() -> list[str]:
-    src = read_text(ENUM_CS)
-    m = re.search(r"enum\s+FunctionCode\s*\{(.*?)\n\t\}", src, re.S)
+def enum_members(tree: pathlib.Path) -> set[str]:
+    """读一棵树的 FunctionCode 枚举成员（去掉内部值）。"""
+    p = find(tree, ENUM_REL)
+    if p is None:
+        return set()
+    src = read_text(p)
+    # 两种布局的收尾缩进不同（经典版 `\n\t}`、重构版顶级 `\n}`），取行首的 `}`
+    m = re.search(r"enum\s+FunctionCode\s*\{(.*?)\n\s*\}", src, re.S)
     if not m:
-        raise SystemExit(f"未能解析 FunctionCode 枚举：{ENUM_CS}")
-    body = m.group(1)
-    names = re.findall(r"^\s*([A-Z][A-Z_0-9]*)\s*,?\s*(?://[^\n]*)?$", body, re.M)
-    seen, out = set(), []
-    for n in names:
-        if n in INTERNAL or n in seen:
-            continue
-        # PRINT 族：只保留基名与少量代表形态（其余是后缀组合）
-        if n.startswith("PRINT") and PRINT_BASE.match(n):
-            continue
-        seen.add(n)
-        out.append(n)
-    return sorted(out)
+        raise SystemExit(f"未能解析 FunctionCode 枚举：{p}")
+    names = re.findall(r"^\s*([A-Z][A-Z_0-9]*)\s*,?\s*(?://[^\n]*)?$", m.group(1), re.M)
+    return set(names)
+
+
+def creator_funcs(tree: pathlib.Path) -> set[str]:
+    p = find(tree, CREATOR_REL)
+    if p is None:
+        return set()
+    return set(re.findall(r'methodList\["([A-Z_0-9]+)"\]', read_text(p)))
+
+
+def export_standard_cmds() -> list[str]:
+    """原版命令 = 经典布局基线树的枚举 − 内部值。保留全部枚举成员（含 PRINT
+    族后缀变体）——清单要忠实反映枚举，是否逐个冒烟由 gen_coverage.py 的
+    PRINT_BASE 规则决定。"""
+    names: set[str] = set()
+    for t in BASELINE_TREES:
+        names |= enum_members(t)
+    if not names:
+        raise SystemExit("未找到任何基线树的 FunctionCode 枚举")
+    return sorted(names - INTERNAL)
 
 
 def export_standard_funcs() -> list[str]:
-    src = read_text(CREATOR_CS)
-    names = re.findall(r'methodList\["([A-Z_0-9]+)"\]', src)
-    return sorted(set(names))
+    names: set[str] = set()
+    for t in TREES:
+        names |= creator_funcs(t)
+    return sorted(names)
 
 
-# EmueraEE 相对 Emuera 原版**新增**的命令/函数。EE 未附带 C# 源码，此清单取自
-# EE 发行版自带的文档（EmueraEE_readme.txt / EmueraEE_changelog.txt，均位于
-# eraTW/README集/EmueraEE Readme/），并剔除文档里的普通名词（TYPO/WINAPI 等）。
-EE_EXTENSIONS = [
-    # 声音
-    "PLAYBGM", "STOPBGM", "SETBGMVOLUME", "PLAYSOUND", "STOPSOUND",
-    "SETSOUNDVOLUME", "EXISTSOUND",
-    # 多列文本（COLUMN_*）
+# EE 文档独有、但**不在任何 C# 枚举里**的名字（EE 发行版以 ERB 库/式中函数形式
+# 提供，或仅见于 EE readme）。这些只能从文档清单来，故在此显式维护。
+EE_DOC_ONLY = [
+    # 多列文本列库（ERB 实现，见 eraTW/README集/EmueraEE Readme/read me(COLUMN_LIB).txt）
     "COLUMNCREATE", "COLUMNDIRECTION", "COLUMNMOVE", "COLUMNRESIZE",
     "COLUMNCLEAR", "COLUMNPRINT", "COLUMNPRINTL", "COLUMNPRINTW",
     "COLUMNWAIT", "COLUMNCOLOR", "COLUMNBGCOLOR",
-    # 内存 / 调试
+    # 只在 EE readme 出现、本仓库 C# 侧无对应枚举的条目
+    # （GETTEXTBOX 的笔误 GETTEXTSIZE、以及式中函数形态的 EXISTSOUND/
+    #   CLEARMEMORY/GETMEMORYUSAGE/GETDOINGFUNCTION/EXISTFUNCTION/FLOWINPUT 等）
+    "GETTEXTSIZE", "LCSVISASSI", "OCLEARLINE", "EXISTSOUND",
     "CLEARMEMORY", "GETMEMORYUSAGE", "GETDOINGFUNCTION", "EXISTFUNCTION",
-    "UPDATECHECK",
-    # 输入扩展
-    "BINPUT", "BINPUTS", "FLOWINPUT", "INPUTANY", "TINPUTAWAIT",
-    # 流程扩展
-    "FORCE_BEGIN", "FORCE_QUIT", "FORCE_QUIT_AND_RESTART", "QUIT_AND_RESTART",
-    # 图形扩展
-    "GDRAWTEXT", "GDRAWLINE", "GDASHSTYLE", "GDRAWGWITHROTATE",
-    "GGETTEXTSIZE", "GGETFONT", "GGETFONTSIZE", "GGETPEN", "GGETPENWIDTH",
-    "SPRITEDISPOSEALL", "GETTEXTSIZE",
-    # 文本框 / 显示
-    "SETTEXTBOX", "GETTEXTBOX", "GETDISPLAYLINE", "OCLEARLINE",
-    "SKIPLOG", "LCSVISASSI",
-    # 工具提示扩展
-    "TOOLTIP_IMG", "TOOLTIP_EXTENSION", "FTOOLTIP_SETDURATION",
-    # 字符串 / 调用扩展
-    "FSTRJOIN", "STRJOIN1", "TRYCALLF", "TRYCALLFORMF",
+    "FLOWINPUT",
 ]
+# 注意：EE readme 里出现的 TOOLTIP_EXTENSION 是**文档站页面名**而非命令
+# （页面内记载的是 TOOLTIP_CUSTOM/SETFONT/SETFONTSIZE/FORMAT），故不列入清单；
+# 早期版本由 Shift-JIS 文本切分误产生的伪名（FSTRJOIN / FTOOLTIP_SETDURATION /
+# STRJOIN1 / TINPUTAWAIT）也已移除，其真实指向分别是 STRJOIN、TOOLTIP_SETDURATION
+# 与「TINPUT 与 AWAIT 的挙動変更」一句。
 
 
-def export_ee_cmds(standard: list[str], std_funcs: list[str]) -> list[str]:
-    """EE 扩展命令清单（见 EE_EXTENSIONS；再减去原版同名项）。"""
-    if not KHP.exists():
-        return []
-    known = set(standard) | set(std_funcs)
-    return sorted(n for n in set(EE_EXTENSIONS) if n not in known)
+def export_ee_cmds(standard: list[str]) -> list[str]:
+    """EE 扩展命令 = (超集树枚举 − 原版枚举) ∪ EE 文档独有名字。
+
+    超集（重构版）树里有、基线树里没有的枚举成员，即 EM/EE 扩展；
+    文档独有名再补上不在枚举里的部分。两者都不与原版清单重叠。
+    """
+    baseline: set[str] = set()
+    for t in BASELINE_TREES:
+        baseline |= enum_members(t)
+    superset: set[str] = set()
+    for t in TREES:
+        superset |= enum_members(t)
+    names = ((superset - baseline) - INTERNAL) | set(EE_DOC_ONLY)
+    return sorted(names - set(standard))
 
 
 def main() -> int:
     OUTDIR.mkdir(parents=True, exist_ok=True)
     std_cmds = export_standard_cmds()
     std_funcs = export_standard_funcs()
-    ee_cmds = export_ee_cmds(std_cmds, std_funcs)
+    ee_cmds = export_ee_cmds(std_cmds)
 
     hdr = ("# 由 test/export_command_tables.py 从 C# 权威源码导出，勿手改\n"
            "# 每行一个名字；'#' 开头为注释\n")
 
     (OUTDIR / "emuera_standard_cmds.txt").write_text(
-        hdr + "# 源: Emuera/GameProc/Function/BuiltInFunctionCode.cs (enum FunctionCode)\n"
+        hdr + "# 源: 经典布局基线树 Emuera/GameProc/Function/BuiltInFunctionCode.cs\n"
+        "#     (enum FunctionCode；含 PRINT 族全部后缀变体，忠实反映枚举)\n"
         + "\n".join(std_cmds) + "\n", encoding="utf-8")
     (OUTDIR / "emuera_standard_funcs.txt").write_text(
-        hdr + "# 源: Emuera/GameData/Function/Creator.cs (methodList)\n"
+        hdr + "# 源: 各棵树的 Creator.cs (methodList) 并集\n"
         + "\n".join(std_funcs) + "\n", encoding="utf-8")
     (OUTDIR / "emuera_ee_cmds.txt").write_text(
-        hdr + "# 源: eraTW/…/ERB_EXCOM.khp（EM+EE 发行版命令关键字帮助）− 原版命令\n"
+        hdr + "# 源: (超集树 emuera.em/Emuera 枚举 − 原版枚举) ∪ EE 文档独有名字\n"
         + "\n".join(ee_cmds) + "\n", encoding="utf-8")
+
+    # 自检：两清单并集必须覆盖全部树的枚举成员，且两清单不相交
+    allenum: set[str] = set()
+    for t in TREES:
+        allenum |= enum_members(t)
+    std_s, ee_s = set(std_cmds), set(ee_cmds)
+    missed = sorted((allenum - INTERNAL) - std_s - ee_s)
+    both = sorted(std_s & ee_s)
+    if missed:
+        print(f"[!] 仍未收录的枚举成员 {len(missed)}: {missed}")
+    if both:
+        print(f"[!] 两清单重复 {len(both)}: {both}")
+    if not missed and not both:
+        print(f"[OK] 枚举成员 {len(allenum - INTERNAL)} 条全部收录，两清单无重复")
 
     print(f"标准命令 {len(std_cmds)} 条 -> emuera_standard_cmds.txt")
     print(f"式中函数 {len(std_funcs)} 条 -> emuera_standard_funcs.txt")

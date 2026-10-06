@@ -1,6 +1,6 @@
 # 由 test/export_command_tables.py 从 C# 权威源码导出，勿手改
 # 每行一个名字；'#' 开头为注释
-# 源: Emuera/GameData/Function/Creator.cs (methodList)
+# 源: 各棵树的 Creator.cs (methodList) 并集
 ABS
 ALLSAMES
 ARRAYMSORT

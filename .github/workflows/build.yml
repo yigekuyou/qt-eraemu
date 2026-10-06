@@ -100,7 +100,28 @@ jobs:
         run: cmake -S . -B build -DCMAKE_PREFIX_PATH="$env:QT_ROOT_DIR" ${{ env.WARNINGS_FLAG }}
 
       - name: 编译 appemuera
-        run: cmake --build build --config Release --target appemuera --parallel
+        shell: pwsh
+        run: |
+          # 编译输出落到 build.log：失败时下一步会把它里面的错误抛成 annotation
+          cmake --build build --config Release --target appemuera --parallel > build.log 2>&1
+          $code = $LASTEXITCODE
+          Get-Content build.log -Tail 30
+          exit $code
+
+      - name: 编译失败时汇总错误
+        if: failure()
+        shell: pwsh
+        run: |
+          # Actions 的原始日志只有仓库管理员能下载，这里把编译错误转成
+          # annotation，任何人（含 API）都能在 Checks / 注解里看到。
+          if (-not (Test-Path build.log)) { Write-Host "::error::没有生成 build.log"; exit 0 }
+          $errs = Select-String -Path build.log -Pattern 'error [A-Z]+[0-9]+' |
+                  ForEach-Object { $_.Line.Trim() } | Select-Object -Unique
+          if ($errs) {
+            $errs | Select-Object -First 8 | ForEach-Object { Write-Host "::error::$_" }
+          } else {
+            Get-Content build.log -Tail 12 | ForEach-Object { Write-Host "::error::$_" }
+          }
 
       - name: 收运行库（windeployqt）
         shell: pwsh

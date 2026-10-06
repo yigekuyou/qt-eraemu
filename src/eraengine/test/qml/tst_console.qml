@@ -248,6 +248,65 @@ TestCase {
                "真实图片被解码并绘制（paintedWidth/Height > 0）");
     }
 
+    // `<img srcb='…'>`：按钮选中/悬停态的替换图（C# ConsoleImagePart.cImageB，
+    // 悬停时**改画 srcb**，不是叠加 —— 同一时刻只有一张可见）。
+    //
+    // 回归背景：两张 Image 的 visible 曾经互为输入（A 读 `!imageItemB.visible`、
+    // B 读 `imageItem.visible && …`），运行期报
+    //   QML Image: Binding loop detected for property "visible"
+    // 成环时 QML 仍会算出一个看得过去的值，所以只断言取值抓不到回归 —— 告警
+    // 必须一并断言（夹具把 qWarning 收集起来，见 test_qml_console.cpp）。
+    function test_imageButtonSwapsOnHoverWithoutBindingLoop() {
+        consoleFixture.clearBindingLoopWarnings();
+        backend.clearAll();
+        backend.print("A");
+        backend.newline(); backend.flush(); view.syncView();
+
+        const block = view.blockAt(0, 0);
+        verify(block !== null, "第 0 行有区块对象");
+        const sel = "face_01_sel";
+        block.blockData = {
+            kind: "image", text: "face_01", imageButton: sel,
+            clickable: true, generation: backend.generation,
+            col: 0, row: 0, cols: 4, rows: 2
+        };
+
+        const plain = findChild(block, "blockImage");
+        const swap = findChild(block, "blockImageButton");
+        verify(plain !== null && swap !== null, "src 与 srcb 各一张 Image");
+        compare(block.hasImageButton, true);
+        compare(block.showImageButton, false, "未悬停：画 src");
+        compare(plain.visible, true);
+        compare(swap.visible, false, "未悬停：srcb 不可见");
+        compare("" + plain.source, "image://emuera/face_01");
+        compare("" + swap.source, "", "不可见的那张不加载 source");
+
+        // 悬停 -> 改画 srcb
+        mouseMove(block, block.width / 2, block.height / 2);
+        tryVerify(function() { return block.hovered; });
+        compare(block.showImageButton, true, "悬停：改画 srcb");
+        compare(plain.visible, false, "悬停：src 让位");
+        compare(swap.visible, true);
+        compare("" + swap.source, "image://emuera/" + sel);
+        compare("" + plain.source, "", "让位的那张不再持有 source");
+
+        // 移开 -> 回到 src（换一张 Image 承载，不叠加）
+        mouseMove(view, view.width - 2, view.height - 2);
+        tryVerify(function() { return !block.hovered; });
+        compare(plain.visible, true);
+        compare(swap.visible, false);
+
+        // 没有 srcb 的图片区块退化成单张：B 永远不参与
+        block.blockData = { kind: "image", text: "face_01", col: 0, row: 0, cols: 1, rows: 1 };
+        compare(block.hasImageButton, false);
+        compare(block.showImageButton, false);
+        compare(swap.visible, false);
+        compare(plain.visible, true);
+
+        const loops = consoleFixture.bindingLoopWarnings();
+        compare(loops.length, 0, "Image.visible 不得成环：" + loops.join(" | "));
+    }
+
     // 跨行图片：区块按 C++ 给的 rows 撑开（否则 PreserveAspectFit 把整张立絵
     // 压进一行），并应用 ypos 的纵向偏移（画像枠/特效靠它盖在立絵边缘）。
     // 行高恒一格：图片溢出绘制，不推挤后续行。

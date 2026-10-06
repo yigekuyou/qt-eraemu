@@ -83,6 +83,15 @@ Item {
     readonly property bool clickable: blockData && backend
         ? blockData.clickable === true && blockData.generation === backend.generation : false
     readonly property bool hovered: mouse.containsMouse && clickable
+    // 图片区块是否有 `<img srcb='…'>` 按钮替换图（纯数据判定）。
+    // 两张 Image 的可见性必须**同时**从这个只依赖 blockData 的属性推导：
+    // 若 B 写 `imageItem.visible && …`、A 写 `!imageItemB.visible`，两者互为输入，
+    // QML 会报 "Binding loop detected for property visible"。
+    readonly property bool hasImageButton: blockData
+        ? (blockData.imageButton || "") !== "" : false
+    // 按钮替换图的绘制时机：C# ConsoleImagePart.cImageB 在 isSelecting||isFocus
+    // （本组件对应 hovered）时改画 srcb，否则画 src。
+    readonly property bool showImageButton: block.kind === "image" && hasImageButton && hovered
 
     // 图片的 `<img ypos=N>`：C++ 折算成「行数」的纵向偏移（负 = 往上盖）。
     // eraTW 的画像枠/時間停止/特效各自在被打印的那一行，靠它拉回来盖在立絵边缘。
@@ -197,8 +206,8 @@ Item {
     // 两张 Image 同几何叠放，按 hovered 切换可见性；无 srcb 时退化为单张。
     Image {
         id: imageItemB
-        visible: imageItem.visible && block.hovered
-                 && block.blockData && (block.blockData.imageButton || "") !== ""
+        objectName: "blockImageButton"   // 供 QML 测试 findChild 命中
+        visible: block.showImageButton
         anchors.left: parent.left
         anchors.verticalCenter: parent.verticalCenter
         source: (visible && block.blockData && block.blockData.imageButton)
@@ -216,7 +225,7 @@ Item {
     Image {
         id: imageItem
         objectName: "blockImage"          // 供 QML 测试 findChild 命中
-        visible: block.kind === "image" && !imageItemB.visible
+        visible: block.kind === "image" && !block.showImageButton
         anchors.left: parent.left
         anchors.verticalCenter: parent.verticalCenter
         // QQuickImageProvider（Qt 文档）："image:" scheme + provider 标识 + id；

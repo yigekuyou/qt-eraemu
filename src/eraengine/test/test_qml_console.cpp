@@ -30,18 +30,62 @@
 #include <QtQuickTest/quicktest.h>
 #include <QQmlEngine>
 #include <QQmlContext>
+#include <QMessageLogContext>
 #include <QObject>
 #include <QQuickItem>
 #include <QQuickWindow>
+#include <QStringList>
 #include <QtTest/QTest>
 #include "console_backend.h"
 #include "resource_image_provider.h"
+
+// QML 的绑定成环（"Binding loop detected for property …"）只在运行期以 qWarning
+// 形式出现，QML 侧看不见也断言不了 —— 挂了这两个函数的绑定的取值可能仍然是
+// 「对的」，所以没有告警捕获就无法给它写回归测试。
+// 这里串一个消息处理器把它收集起来，供 QML 测试取用；其余消息原样转发给
+// QuickTest 自己的处理器（否则测试输出会被吃掉）。
+namespace {
+QStringList g_bindingLoops;
+QtMessageHandler g_previousHandler = nullptr;
+
+void captureBindingLoopWarnings(QtMsgType type, const QMessageLogContext& context,
+                                const QString& message);
+
+// 接管消息处理器，并把当时生效的（框架的）处理器存起来用于转发 ——
+// 不转发的话用例的普通输出/告警就被吃掉了。
+// 可以重复调用：QTest/QuickTest 之后会把自己的处理器装回去，把这次顶掉，
+// 所以每次开启捕获都要重新接管一次。重复接管拿到的「前一个」可能是我们自己，
+// 那种情况下不能把它链给对方，否则消息会在两个处理器之间来回递归。
+void installCapture() {
+    const QtMessageHandler previous = qInstallMessageHandler(captureBindingLoopWarnings);
+    if (previous != captureBindingLoopWarnings)
+        g_previousHandler = previous;
+}
+
+void captureBindingLoopWarnings(QtMsgType type, const QMessageLogContext& context,
+                                const QString& message) {
+    if (type == QtWarningMsg && message.contains(QStringLiteral("Binding loop detected")))
+        g_bindingLoops.append(message);
+    if (g_previousHandler)
+        g_previousHandler(type, context, message);
+}
+}  // namespace
 
 // 测试夹具：把不可创建的 ConsoleBackend 交给 QML 使用
 class ConsoleFixture : public QObject {
     Q_OBJECT
 public:
     explicit ConsoleFixture(QObject* parent = nullptr) : QObject(parent) {}
+
+    // 本次（清空后）收集到的绑定成环告警。
+    // 注意安装时机：QuickTest/QTest 会在用例执行期间自己反复接管消息处理器，
+    // 在 qmlEngineAvailable（引擎创建时）装的会被覆盖掉 —— 实测收不到任何消息；
+    // 所以改由用例显式开启（发生在用例函数体内，晚于框架的最后一次接管）。
+    Q_INVOKABLE QStringList bindingLoopWarnings() const { return g_bindingLoops; }
+    Q_INVOKABLE void clearBindingLoopWarnings() {
+        installCapture();
+        g_bindingLoops.clear();
+    }
     Q_INVOKABLE void pressLeft(QObject* object) {
         auto* item = qobject_cast<QQuickItem*>(object);
         QTest::keyClick(item->window(), Qt::Key_Left);
@@ -62,6 +106,8 @@ public:
 public slots:
     // QuickTest 会在引擎就绪时调用该槽（必须是实例槽，而非静态函数）
     void qmlEngineAvailable(QQmlEngine* engine) {
+        // 引擎就绪、用例尚未执行：此刻接管消息处理器，才能收到用例期间的告警。
+        installCapture();
         // 用 context property 提供夹具与路径（QuickTest 会对 import 做静态检查，
         // 因此不引入自定义模块，避免 "module not installed"）。
         engine->rootContext()->setContextProperty("consoleFixture", new ConsoleFixture(engine));

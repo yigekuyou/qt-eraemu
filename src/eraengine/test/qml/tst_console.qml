@@ -102,7 +102,7 @@ TestCase {
         backend.print("WWiii■■□　");
         backend.printButton("[HOLD]", 8);
         backend.newline(); backend.flush(); view.syncView();
-        compare(view.cellWidth, view.width / backend.gridColumns);
+        compare(view.cellWidth, (view.width - view.scrollBarWidth) / backend.gridColumns);
         const block = view.blockAt(0, 0);
         const row = findChild(block, "textCells");
         let total = 0;
@@ -280,7 +280,7 @@ TestCase {
     function test_boundedWindow() {
         printLines(50);
         compare(view.rowCount, 50, "模型行数 == 缓冲行数");
-        compare(view.cellWidth, view.width / backend.gridColumns);
+        compare(view.cellWidth, (view.width - view.scrollBarWidth) / backend.gridColumns);
         // 虚拟化：只实例化可见 + cacheBuffer 的委托，50 行不会全部创建
         let alive = 0;
         for (let r = 0; r < 50; ++r)
@@ -369,6 +369,75 @@ TestCase {
         compare(spy.signalArguments[1][0], 3);
         compare(spy.signalArguments[1][1], 37);
         spy.destroy();
+    }
+
+    // 历史满（MaxLog）时头部逐行裁剪也在改 contentY —— 每次刷新照样停在末尾。
+    function test_followsTailWhileTrimming() {
+        const lv = findChild(view, "consoleListView");
+        backend.setMaxLog(30);          // <= kTrimBatch：溢出即逐行裁头部
+        backend.clearAll();
+        for (let i = 0; i < 80; ++i) {
+            backend.print("L" + i);
+            backend.newline();
+            backend.flush();
+            wait(1);
+            verify(lv.contentY + lv.height >= lv.contentHeight - 1,
+                   "第 " + i + " 行刷新后仍停在末尾（contentY=" + lv.contentY
+                   + " contentHeight=" + lv.contentHeight + "）");
+        }
+        verify(lv.atTail, "头部裁剪没有打断跟随");
+        backend.setMaxLog(5000);
+    }
+
+    // 每次刷新（flush 发布新行）之后都停在末尾：最新行在视口里，而不是每次
+    // 差最新那一行（ListView::forceLayout 之后再 positionViewAtEnd）。
+    // 走真实路径：只 flush，不手动 syncView，等 Qt.callLater 的锚底跑完。
+    function test_followsTailOnEveryFlush() {
+        const lv = findChild(view, "consoleListView");
+        verify(lv !== null, "ListView 已创建");
+        backend.clearAll();
+        view.syncView();
+
+        const n = 60;   // 远超一屏
+        for (let i = 0; i < n; ++i) {
+            backend.print("L" + i);
+            backend.newline();
+            backend.flush();
+            wait(1);    // 事件循环：Qt.callLater(scrollToTail)
+            verify(lv.contentY + lv.height >= lv.contentHeight - 1,
+                   "第 " + i + " 次刷新后停在末尾（contentY=" + lv.contentY
+                   + " contentHeight=" + lv.contentHeight + "）");
+        }
+
+        compare(view.rowCount, n, "模型行数");
+        const last = view.lineItem(n - 1);
+        verify(last !== null, "最新行委托已创建");
+        const top = last.y - lv.contentY;
+        verify(top >= 0 && top + view.cellHeight <= lv.height + 1,
+               "最新行落在视口内（top=" + top + " viewport=" + lv.height + "）");
+
+        // 用户上滚 = 履历（回看）状态；但下一次输出（C# verticalScrollBarUpdate
+        // 的 move > 0）立刻贴回最新行 —— C# 没有「上滚就退出跟随」的粘滞开关。
+        mouseDrag(lv, lv.width / 2, lv.height / 2, 0, 60,
+                  Qt.LeftButton, Qt.NoModifier, 200);
+        tryCompare(lv, "moving", false);
+        verify(lv.contentY + lv.height < lv.contentHeight - 1, "上滚后离开末尾");
+        verify(!lv.atTail, "上滚 = 履历（isBacklog）状态");
+
+        backend.print("L" + n);
+        backend.newline(); backend.flush(); wait(1);
+        verify(lv.contentY + lv.height >= lv.contentHeight - 1,
+               "新行一来即贴回最新行（contentY=" + lv.contentY + "）");
+        verify(lv.atTail, "回到末尾");
+
+        // 菜单/C++ 的「滚动到底部」（requestScrollToBottom）同样贴底
+        backend.print("L" + (n + 1));
+        backend.newline(); backend.flush(); wait(1);
+        backend.requestScrollBy(3);               // D-Bus/菜单滚动：向上 3 行
+        verify(lv.contentY + lv.height < lv.contentHeight - 1, "向上滚动后离开末尾");
+        backend.requestScrollToBottom(); wait(1);
+        verify(lv.contentY + lv.height >= lv.contentHeight - 1, "滚动到底部请求生效");
+        verify(lv.atTail, "回到末尾");
     }
 
 }

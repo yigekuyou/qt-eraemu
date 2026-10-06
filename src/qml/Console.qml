@@ -62,7 +62,12 @@ Item {
     // ---- 固定逻辑网格，固定像素格子 ----
     readonly property int gridColumns: backend && backend.gridColumns > 0 ? backend.gridColumns : 80
     readonly property int gridRows: backend && backend.gridRows > 0 ? backend.gridRows : 25
-    readonly property real cellWidth: Math.max(1, width / gridColumns)
+    // 滚动条独占的宽度：视口右缘常驻让出一条空档，滚动条画在空档里
+    // 而非盖在内容上（Qt 文档：attached ScrollBar 自动贴边安放且不预留
+    // 空间，会遮住最右列文字）。常驻预留而不是 AsNeeded 时才让位，
+    // 否则滚动条一出现网格就重排，正在读的行会跳。
+    readonly property real scrollBarWidth: 10
+    readonly property real cellWidth: Math.max(1, view.width / gridColumns)
     readonly property real cellHeight: Math.max(1, viewport.height / gridRows)
 
     // ---- 委托（一行 = 一个 delegate；行内区块用 Repeater 建出）----
@@ -88,7 +93,7 @@ Item {
                 foreColor: root.foreColor
                 focusColor: root.focusColor
                 logColor: root.logColor
-                isBacklog: !view.stickyTail
+                isBacklog: !view.atTail    // C# isBackLog：不在末尾 = 履历（回看）
             }
         }
     }
@@ -175,7 +180,13 @@ Item {
         ListView {
             id: view
             objectName: "consoleListView"
-            anchors.fill: parent
+            // 右侧让出滚动条宽度：view 收窄到滚动条左缘，最右列文字
+            // 不再被滑条盖住；cellWidth 按收窄后的宽度重算，网格仍然满宽
+            anchors.left: parent.left
+            anchors.right: parent.right
+            anchors.rightMargin: root.scrollBarWidth
+            anchors.top: parent.top
+            anchors.bottom: parent.bottom
             clip: true                     // 溢出的跨行图在视口边缘裁剪
             model: root.lineModel
             reuseItems: true               // 滚出视口的委托进池复用（Qt 文档 Reusing items）
@@ -183,27 +194,42 @@ Item {
             interactive: !root.primitiveInput
             boundsBehavior: Flickable.StopAtBounds
 
-            // 跟随底部（C# 输出后贴最新行；用户上滚即退出跟随，滚回底部恢复）
-            property bool stickyTail: true
-            onContentYChanged: {
-                const atEnd = contentY >= contentHeight - height - 1;
-                if (atEnd !== stickyTail)
-                    stickyTail = atEnd;
-            }
-            onHeightChanged: if (stickyTail)
-                Qt.callLater(positionViewAtEnd)
-            Component.onCompleted: positionViewAtEnd()
+            // 每次刷新只要有新行就贴到最新行 —— 对齐 C# EmueraConsole 的
+            // verticalScrollBarUpdate（每次 RefreshStrings 调用：move > 0 即
+            // `ScrollBar.Value += move`，把滚动条推到最底）。C# 没有「上滚就退出
+            // 跟随」的粘滞开关：上滚只是回看（履历），下一次输出立刻贴回最新行。
+            //
+            // 「是否停在末尾」= C# 的 isBackLog（`ScrollBar.Value != Maximum`）：
+            // 用 Qt 文档定义的 Flickable.atYEnd（"true if the flickable view is
+            // positioned at the end"）；再容一像素 —— 委托高度由视图估算，末尾
+            // 可能差一点。
+            readonly property bool atTail: count === 0 || atYEnd
+                    || contentY >= contentHeight - height - 1
 
-            // 新行/重置：贴底时把视图锚回末尾（Qt 文档：模型变更中不要直接
-            // positionView*，用 Qt.callLater 推迟到事件循环）
+            // 锚到末尾（= C# 把 ScrollBar.Value 设成 Maximum）。
+            // Qt 文档（ListView::forceLayout）：ListView 对模型变更的响应按帧批处理
+            // —— 收到 rowsInserted 时，新行往往还没被算进 contentHeight，此时
+            // positionViewAtEnd() 只能停在**上一帧的末尾**，最新那一行落在视口外；
+            // 每次刷新都差一行。先 forceLayout() 让视图立即处理挂起的行插入/删除，
+            // 再锚底才落到真正的末尾。
+            function scrollToTail() {
+                forceLayout();
+                positionViewAtEnd();
+            }
+
+            onHeightChanged: if (atTail) Qt.callLater(scrollToTail)
+            Component.onCompleted: scrollToTail()
+
+            // 新行 / 清屏（C# verticalScrollBarUpdate 的 move > 0 分支）：贴到最新行。
+            // Qt 文档：模型变更中不要直接 positionView*，用 Qt.callLater 推迟到事件
+            // 循环；推迟里再 forceLayout（见 scrollToTail）。
             Connections {
                 target: root.lineModel
                 function onRowsInserted() {
-                    if (view.stickyTail)
-                        Qt.callLater(view.positionViewAtEnd);
+                    Qt.callLater(view.scrollToTail);
                 }
                 function onModelReset() {
-                    view.positionViewAtEnd();
+                    Qt.callLater(view.scrollToTail);
                 }
             }
 
@@ -215,7 +241,7 @@ Item {
                     view.contentY = Math.max(0, Math.min(max, view.contentY - lines * root.cellHeight));
                 }
                 function onScrollToBottomRequested() {
-                    view.positionViewAtEnd();
+                    view.scrollToTail();
                 }
             }
 
@@ -223,10 +249,15 @@ Item {
 
             ScrollBar.vertical: ScrollBar {
                 objectName: "consoleScrollBar"
+                // Qt 文档（ScrollBar Attached Properties）：attached 滚动条
+                // 默认贴着 Flickable 边缘安放且不预留空间（盖在内容上）；
+                // 指定别的 parent 即关闭自动几何管理，改为自行布局。
+                // 这里挪进右缘让出的空档：不遮内容，高度随视口。
                 parent: viewport
                 anchors.right: parent.right
                 anchors.top: parent.top
                 anchors.bottom: parent.bottom
+                width: root.scrollBarWidth
             }
         }
 
@@ -307,7 +338,7 @@ Item {
                                          view.contentY + page * root.cellHeight);
                 e.accepted = true;
             } else if (e.key === Qt.Key_End) {
-                view.positionViewAtEnd();
+                view.scrollToTail();
                 e.accepted = true;
             }
         }

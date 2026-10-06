@@ -338,7 +338,7 @@ void EraParseTable::clear() {
     m_hasLabelCache.clear();
     m_functions.clear();
     m_labelLists.clear();
-    m_parseWarnings.clear();
+    m_diagnostics.clear();
     m_variables.clear();
     m_entryPoint.clear();
     // 执行位置一并复位：脚本已不存在，任何残留帧/位置都悬空
@@ -384,8 +384,10 @@ bool EraParseTable::loadScript(const QString& scriptName, const QList<LogicalLin
             if (isHeaderFile || afterLabel) {
                 parseVariableDeclaration(line, currentFunction, isHeaderFile);
             } else {
-                m_parseWarnings.append(QStringLiteral("%1: 函数声明之外使用了 # 行 (%2)")
-                                           .arg(line.position.toString(), line.raw.trimmed()));
+                m_diagnostics.add(DiagSeverity::Warning, DiagCode::kSharpLine,
+                                  line.position.toString(),
+                                  QStringLiteral("函数声明之外使用了 # 行 (%1)")
+                                      .arg(line.raw.trimmed()));
             }
         }
         if (line.kind == LineKind::FunctionLabel) {
@@ -1110,8 +1112,9 @@ void EraParseTable::parseVariableDeclaration(const LogicalLine& line, const QStr
     }
 
     if (rest.isEmpty()) {
-        m_parseWarnings.append(QStringLiteral("%1: #%2 缺少变量名")
-                                   .arg(line.position.toString(), directive));
+        m_diagnostics.add(DiagSeverity::Warning, DiagCode::kSharpLine,
+                          line.position.toString(),
+                          QStringLiteral("#%1 缺少变量名").arg(directive));
         return;
     }
 
@@ -1191,13 +1194,15 @@ void EraParseTable::parseVariableDeclaration(const LogicalLine& line, const QStr
         // 游戏里很常见（同名 @label 被口上补丁覆盖），保持静默。
         const VariableTable::DeclStatus status = m_variables.addChecked(decl);
         if (status != VariableTable::DeclStatus::Added && decl.scope == VarScope::Global) {
-            m_parseWarnings.append(QStringLiteral("%1: 全局变量 %2 重复定义")
-                                       .arg(line.position.toString(), decl.name));
+            m_diagnostics.add(DiagSeverity::Warning, DiagCode::kDeclError,
+                              line.position.toString(),
+                              QStringLiteral("全局变量 %1 重复定义").arg(decl.name));
         }
     } catch (const std::exception& e) {
-        m_parseWarnings.append(QStringLiteral("%1: #%2 声明错误：%3 (%4)")
-                                   .arg(line.position.toString(), directive,
-                                        QString::fromUtf8(e.what()), rest));
+        m_diagnostics.add(DiagSeverity::Error, DiagCode::kDeclError,
+                          line.position.toString(),
+                          QStringLiteral("#%1 声明错误：%2 (%3)")
+                              .arg(directive, QString::fromUtf8(e.what()), rest));
     }
 }
 
@@ -1366,7 +1371,10 @@ void EraParseTable::finalizeParse() {
     m_finalized = true;
     qDebug() << "[parse] finalizeParse 完成：脚本" << m_scripts.size()
              << "变量" << m_variables.count() << "用户函数" << m_functions.size()
-             << "告警" << m_parseWarnings.size();
+             << "告警" << m_diagnostics.size();
+    if (!m_diagnostics.isEmpty()) {
+        qDebug().noquote() << "[parse] 诊断汇总：" << m_diagnostics.summarize();
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -1723,7 +1731,8 @@ void EraParseTable::validateArguments() {
                 if (seen.contains(key)) continue;
                 seen.insert(key);
             }
-            m_parseWarnings.append(c.warnings.at(i));
+            m_diagnostics.addText(DiagSeverity::Warning, DiagCode::kArgCheck,
+                                  c.warnings.at(i));
         }
     }
 }

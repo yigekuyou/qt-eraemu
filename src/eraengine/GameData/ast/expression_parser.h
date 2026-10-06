@@ -89,11 +89,13 @@ private:
     QSharedPointer<ExpressionNode> parseFunctionCall();
 
     bool match(TokenType type);
-    bool check(TokenType type);
-    ExpressionToken consume(TokenType type, const QString& message);
+    bool check(TokenType type);    ExpressionToken consume(TokenType type, const QString& message);
     ExpressionToken peek();
     bool isAtEnd();
     ExpressionToken advance();
+
+    // 用已消费的 token 区间 [startToken, m_current) 给节点打源码 span（表达式内偏移）。
+    void stampSpan(const QSharedPointer<ExpressionNode>& node, int startToken);
 
     QList<ExpressionToken> m_tokens;
     int m_current = 0;

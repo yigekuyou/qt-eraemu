@@ -24,6 +24,7 @@
 #include <QStringList>
 #include "logical_line.h"
 #include "function_types.h"   // 运行期扩展式中函数表（registerExtensionFunction）
+#include "parse_diagnostic.h" // 结构化诊断（装载期分级告警）
 
 // 把表达式文本归约为 AST 的回调（由 EraParseTable 的 m_astCache 提供，
 // 保证同一表达式只解析一次并跨脚本共享）。
@@ -48,10 +49,13 @@ public:
     // resolveQuiet：赋值右值**临时**归约用的静默 resolver（可选；为空时回落
     // 到 resolve）。临时解析的失败是噪音 —— 字符串赋值随后由
     // applyStringAssignments() 以 StrFormParser 重新解释。
+    // diagnostics：结构化诊断出口（可选）。未登记指令等以 DiagSeverity 分级 + code
+    //              记录，供调用方统一汇总/按类统计（见 parse_diagnostic.h）。
     static LogicalLine build(const QString& rawLine,
                              const ScriptPosition& position,
                              const AstResolver& resolve,
-                             const AstResolver& resolveQuiet = {});
+                             const AstResolver& resolveQuiet = {},
+                             ParseDiagnostics* diagnostics = nullptr);
 
     // ExtensionRegistry::reg() 登记的扩展语句名：解析期不再报「未识别的指令」
     // （扩展默认全启用，登记过的名字是已认识的扩展；只消警告，

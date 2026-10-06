@@ -67,6 +67,8 @@ GameData/ast/expression_parser.h
 GameData/ast/operand_type.h
 GameData/ast/operator_table.h
 GameData/ast/function_types.h
+GameData/ast/parse_diagnostic.cpp
+GameData/ast/parse_diagnostic.h
 GameData/ast/strform_parser.cpp
 GameData/ast/strform_parser.h
 GameData/ast/argument_parser.cpp
@@ -256,6 +258,12 @@ add_test(NAME test_audio_pipeline COMMAND test_audio_pipeline)
 eraengine_add_test(test_getconfig)
 add_test(NAME test_getconfig COMMAND test_getconfig)
 add_test(NAME test_print_template COMMAND test_print_template)
+eraengine_add_test(test_ast_span)
+target_link_libraries(test_ast_span PRIVATE Qt6::Test)
+add_test(NAME test_ast_span COMMAND test_ast_span)
+eraengine_add_test(test_parse_diagnostic)
+target_link_libraries(test_parse_diagnostic PRIVATE Qt6::Test)
+add_test(NAME test_parse_diagnostic COMMAND test_parse_diagnostic)
 eraengine_add_test(test_print_whitespace)
 target_link_libraries(test_print_whitespace PRIVATE Qt6::Test)
 eraengine_add_test(test_image_layout)

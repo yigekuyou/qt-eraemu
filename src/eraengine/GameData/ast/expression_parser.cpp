@@ -28,6 +28,19 @@ constexpr int kMaxDepth = 2048;   // 防止畸形输入导致栈溢出
 
 ExpressionParser::ExpressionParser() = default;
 
+void ExpressionParser::stampSpan(const QSharedPointer<ExpressionNode>& node, int startToken) {
+    if (!node) return;
+    if (startToken < 0 || startToken >= m_tokens.size()) return;
+    const int endTok = m_current - 1;              // 刚消费的最后一个 token
+    if (endTok < startToken) return;
+    const int begin = m_tokens.at(startToken).column();
+    if (begin < 0) return;                         // 无位置信息（合成 token）
+    const ExpressionToken& last = m_tokens.at(endTok);
+    int end = last.column();
+    if (end >= 0) end += last.value().size();
+    node->setSpan(SourceSpan{begin, end});
+}
+
 int ExpressionParser::binaryPrecedence(TokenType type) {
     // 单一来源：运算符表（operator_table.h）
     return operatorPrecedence(type);
@@ -63,8 +76,11 @@ QSharedPointer<ExpressionNode> ExpressionParser::parseExpression() {
     if (node && check(TokenType::QUESTION)) {
         consume(TokenType::QUESTION, "Expected ?");
         QSharedPointer<ExpressionNode> thenExpr = parseExpression();
-        consume(TokenType::TERNARY_SEP, "Expected #");
-        QSharedPointer<ExpressionNode> elseExpr = parseExpression();
+        // `#` 缺失是真正的语法错误：此时 consume 返回合成 EOF，不再继续吃 else
+        // 分支（否则会把后面的 token 当成 else，产出**语义错误**的 IfNode）。
+        const ExpressionToken sep = consume(TokenType::TERNARY_SEP, "Expected #");
+        QSharedPointer<ExpressionNode> elseExpr =
+            (sep.type() == TokenType::END_OF_FILE) ? nullptr : parseExpression();
         if (thenExpr && elseExpr) {
             node = QSharedPointer<IfNode>::create(node, thenExpr, elseExpr);
         } else {
@@ -77,6 +93,7 @@ QSharedPointer<ExpressionNode> ExpressionParser::parseExpression() {
 }
 
 QSharedPointer<ExpressionNode> ExpressionParser::parseBinary(int minPrecedence) {
+    const int startTok = m_current;
     QSharedPointer<ExpressionNode> left = parseUnary();
     if (!left) {
         return nullptr;
@@ -95,8 +112,10 @@ QSharedPointer<ExpressionNode> ExpressionParser::parseBinary(int minPrecedence) 
             return nullptr;
         }
         left = QSharedPointer<BinaryOpNode>::create(left, op, right);
+        stampSpan(left, startTok);
     }
 
+    stampSpan(left, startTok);
     return left;
 }
 
@@ -105,12 +124,15 @@ QSharedPointer<ExpressionNode> ExpressionParser::parseUnary() {
     if (check(TokenType::MINUS) || check(TokenType::PLUS) || check(TokenType::NOT)
         || check(TokenType::BIT_NOT) || check(TokenType::INCREMENT)
         || check(TokenType::DECREMENT)) {
+        const int startTok = m_current;
         const ExpressionToken op = advance();
         QSharedPointer<ExpressionNode> operand = parseUnary();
         if (!operand) {
             return nullptr;
         }
-        return QSharedPointer<UnaryOpNode>::create(op, operand);
+        auto node = QSharedPointer<UnaryOpNode>::create(op, operand);
+        stampSpan(node, startTok);
+        return node;
     }
 
     QSharedPointer<ExpressionNode> node = parsePrimary();
@@ -120,26 +142,37 @@ QSharedPointer<ExpressionNode> ExpressionParser::parseUnary() {
 
     // 后置一元运算符（++ / --）：返回值是**自增前**的值，但变量本身要自增
     if (check(TokenType::INCREMENT) || check(TokenType::DECREMENT)) {
+        const int startTok = m_current - 1;
         const ExpressionToken op = advance();
         node = QSharedPointer<UnaryOpNode>::create(op, node, /*postfix=*/true);
+        stampSpan(node, startTok < 0 ? 0 : startTok);
     }
     return node;
 }
 
 QSharedPointer<ExpressionNode> ExpressionParser::parsePrimary() {
+    const int startTok = m_current;   // 供 stampSpan 用（各 return 前给节点打区间）
     if (check(TokenType::STRFORM_AT) || check(TokenType::YEN_AT)) {
-        return parseFormTerm();
+        auto n = parseFormTerm();
+        stampSpan(n, startTok);
+        return n;
     }
     if (check(TokenType::NUMBER)) {
-        return QSharedPointer<LiteralNode>::create(consume(TokenType::NUMBER, "Expected number"));
+        auto n = QSharedPointer<LiteralNode>::create(consume(TokenType::NUMBER, "Expected number"));
+        stampSpan(n, startTok);
+        return n;
     }
     if (check(TokenType::STRING)) {
-        return QSharedPointer<LiteralNode>::create(consume(TokenType::STRING, "Expected string"));
+        auto n = QSharedPointer<LiteralNode>::create(consume(TokenType::STRING, "Expected string"));
+        stampSpan(n, startTok);
+        return n;
     }
     if (check(TokenType::IDENTIFIER)) {
         if (m_current + 1 < m_tokens.size() &&
             m_tokens[m_current + 1].type() == TokenType::LEFT_PAREN) {
-            return parseFunctionCall();
+            auto n = parseFunctionCall();
+            stampSpan(n, startTok);
+            return n;
         }
         // 无括号的**0 参内建函数**（PRINTCLENGTH / GETCOLOR / GETTIME / …）：
         // C# 把方法名与变量名放同一标识符字典，没有同名变量时按方法调用
@@ -162,6 +195,7 @@ QSharedPointer<ExpressionNode> ExpressionParser::parsePrimary() {
                 fn->setValueType(OperandType::Unknown);
                 fn->setArityError(QStringLiteral("未定义的函数 %1").arg(token.value()));
             }
+            stampSpan(fn, startTok);
             return fn;
         }
         // `#DIM CONST NAME = value`：在解析期折叠为字面量（对齐 C# 的常数）
@@ -171,15 +205,20 @@ QSharedPointer<ExpressionNode> ExpressionParser::parsePrimary() {
             const QVariant cv = m_constantValueProvider(m_tokens[m_current].value());
             if (cv.isValid() && !hasIndex) {
                 advance();
-                if (cv.typeId() == QMetaType::QString) {
-                    return QSharedPointer<LiteralNode>::create(cv.toString());
-                }
-                return QSharedPointer<LiteralNode>::create(cv.toLongLong());
+                QSharedPointer<ExpressionNode> n =
+                    (cv.typeId() == QMetaType::QString)
+                        ? QSharedPointer<ExpressionNode>(QSharedPointer<LiteralNode>::create(cv.toString()))
+                        : QSharedPointer<ExpressionNode>(QSharedPointer<LiteralNode>::create(cv.toLongLong()));
+                stampSpan(n, startTok);
+                return n;
             }
         }
-        return parseVariable();
+        auto n = parseVariable();
+        stampSpan(n, startTok);
+        return n;
     }
     if (check(TokenType::LEFT_PAREN)) {
+        const int startTok = m_current;
         advance();
         QSharedPointer<ExpressionNode> expr = parseExpression();
         if (!check(TokenType::RIGHT_PAREN)) {
@@ -187,6 +226,7 @@ QSharedPointer<ExpressionNode> ExpressionParser::parsePrimary() {
             return nullptr;
         }
         advance();
+        stampSpan(expr, startTok);   // 含外层括号
         return expr;
     }
     return nullptr;
@@ -394,9 +434,18 @@ ExpressionToken ExpressionParser::consume(TokenType type, const QString& message
             if (!text.isEmpty()) text += QLatin1Char(' ');
             text += t.value();
         }
-        qWarning() << "[parse] 表达式语法错误:" << message
-                   << "实际 token:" << peek().value()
-                   << "表达式:" << text.left(160);
+        const ExpressionToken at = peek();
+        // 位置：表达式文本内的列（1 基）。绝对定位由调用方按行的 ScriptPosition 换算。
+        if (at.column() >= 0) {
+            qWarning() << "[parse] 表达式语法错误:" << message
+                       << "第" << at.column() << "列"
+                       << "实际 token:" << at.value()
+                       << "表达式:" << text.left(160);
+        } else {
+            qWarning() << "[parse] 表达式语法错误:" << message
+                       << "实际 token:" << at.value()
+                       << "表达式:" << text.left(160);
+        }
     }
     return ExpressionToken(TokenType::END_OF_FILE, "", -1, -1);
 }

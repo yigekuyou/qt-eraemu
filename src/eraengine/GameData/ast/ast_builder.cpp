@@ -585,7 +585,8 @@ QStringList AstBuilder::splitOperands(const QString& text, bool splitWhitespace)
 LogicalLine AstBuilder::build(const QString& rawLine,
                               const ScriptPosition& position,
                               const AstResolver& resolve,
-                              const AstResolver& resolveQuiet) {
+                              const AstResolver& resolveQuiet,
+                              ParseDiagnostics* diagnostics) {
     LogicalLine line;
     line.raw = rawLine;
     line.position = position;
@@ -1074,6 +1075,15 @@ LogicalLine AstBuilder::build(const QString& rawLine,
         && !s_extensionStatements.contains(line.functionName)) {
         qWarning() << "[parse] 未识别的指令:" << line.functionName
                    << "原文:" << trimmed.left(80);
+        // 结构化诊断：Warning 级（按宽容语义继续执行 = no-op），带位置与原文，
+        // 供装载期按类汇总（见 parse_diagnostic.h / 调试与错误.md 的警告等级）。
+        line.errMes = QStringLiteral("未识别的指令: %1").arg(line.functionName);
+        if (diagnostics) {
+            diagnostics->add(DiagSeverity::Warning, DiagCode::kUnknownInstruction,
+                             line.position.toString(),
+                             QStringLiteral("未识别的指令: %1").arg(line.functionName),
+                             trimmed.left(80));
+        }
     }
 
     return finalized(std::move(line));

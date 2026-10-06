@@ -35,6 +35,7 @@
 #include "ast/operand_type.h"
 #include "erb_preprocessor.h"
 #include "ast_disk_cache.h"
+#include "ast/parse_diagnostic.h"
 
 class EraParseTable;
 
@@ -46,6 +47,7 @@ struct ParsedErbFile {
     QString path;
     QList<LogicalLine> lines;
     QStringList warnings;                                       // 预处理层面告警
+    ParseDiagnostics diagnostics;                               // 结构化诊断（分级+代码+位置）
     QHash<QString, QSharedPointer<ExpressionNode>> astCache;   // 该文件本地表达式缓存
     // AST 磁盘缓存启用时：本文件解析结果的序列化 blob（在 worker 线程产出）。
     // 装载成功后由 ErbLoader 落盘，供下次装载直接读回。
@@ -231,7 +233,8 @@ private:
 
     // 逐行构建完整 AST（串行路径；会 emit parseLineReady）
     QList<LogicalLine> buildAst(const QString& content, const QString& filePath,
-                                const QString& root = QString());
+                                const QString& root = QString(),
+                                ParseDiagnostics* diagnostics = nullptr);
 
     QString readFileContent(const QString& filePath) const;
 

@@ -51,6 +51,22 @@ enum class NodeKind : quint8 {
     Literal, Variable, BinaryOp, UnaryOp, Function, If, StrForm
 };
 
+// ---------------------------------------------------------------------------
+// 节点在「表达式文本」内的字符区间（源码位置 span）。
+//
+// 为什么存偏移而不是文件/行/列：表达式 AST 按**文本**缓存并跨行/跨脚本共享
+// （EraParseTable::m_astCache / ErbLoader::resolveExpr），同一节点会在许多调用点
+// 复用，绝对位置无从归属；而「在表达式文本内的偏移」对同一文本恒定，缓存安全。
+// 绝对位置由调用方按行的 ScriptPosition 换算（列 = 行首列 + span.begin）。
+//   begin/end 为相对偏移，begin 含、end 不含；-1 表示未知。
+// ---------------------------------------------------------------------------
+struct SourceSpan {
+    int begin = -1;
+    int end   = -1;
+    [[nodiscard]] bool valid() const noexcept { return begin >= 0 && end >= begin; }
+    [[nodiscard]] int length() const noexcept { return valid() ? end - begin : 0; }
+};
+
 // 整数/进制字面量求值（对齐 C# LexicalAnalyzer.ReadInt64）：
 //   0x.. 十六进制、0b.. 二进制、p/P 2 的幂、e/E 10 的幂（如 "1p0"）。
 //   成功返回 true 并写出结果。
@@ -67,6 +83,13 @@ public:
     [[nodiscard]] bool isString() const { return valueType() == OperandType::Str; }
     // 是否在解析期就已确定类型（未知类型走执行期宽松/分支预测路径）
     [[nodiscard]] bool isStaticallyTyped() const { return isKnown(valueType()); }
+
+    // 源码区间（表达式文本内偏移；见 SourceSpan 说明）。解析器填充。
+    [[nodiscard]] SourceSpan span() const noexcept { return m_span; }
+    void setSpan(const SourceSpan& s) noexcept { m_span = s; }
+
+private:
+    SourceSpan m_span;
 };
 
 // SingleTerm：字面量（整数或字符串）

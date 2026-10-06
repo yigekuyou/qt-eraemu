@@ -248,8 +248,20 @@ ParsedErbFile ErbLoader::parseOneFile(const QString& filePath, const FunctionTyp
         const QList<ErbSourceLine> source = prepareLines(content, filePath, &pf.warnings);
         pf.lines.reserve(source.size());
 
-        const AstResolver resolver = [this, &types, &pf](const QString& e) {
-            return resolveExpr(e, types, pf.astCache);
+        // 结构化诊断出口（本文件；随后经 ParsedErbFile 汇总回灌解析表）
+        QSet<QString> exprFailed;   // 同一文件的同一表达式文本只记一次
+        const AstResolver resolver = [this, &types, &pf, &exprFailed](const QString& e) {
+            auto ast = resolveExpr(e, types, pf.astCache);
+            if (!ast) {
+                const QString key = e.trimmed();
+                if (!key.isEmpty() && !exprFailed.contains(key)) {
+                    exprFailed.insert(key);
+                    pf.diagnostics.add(DiagSeverity::Warning, DiagCode::kExprParse,
+                                       QString(),
+                                       QStringLiteral("表达式无法归约: %1").arg(key.left(80)));
+                }
+            }
+            return ast;
         };
         // 赋值右值的临时归约：静默（字符串赋值随后由 StrFormParser 重新解释）
         const AstResolver quietResolver = [this, &types, &pf](const QString& e) {
@@ -257,7 +269,8 @@ ParsedErbFile ErbLoader::parseOneFile(const QString& filePath, const FunctionTyp
         };
         for (int i = 0; i < source.size(); ++i) {
             const ScriptPosition pos(filePath, source.at(i).physicalLine, 1);
-            LogicalLine line = AstBuilder::build(source.at(i).text, pos, resolver, quietResolver);
+            LogicalLine line = AstBuilder::build(source.at(i).text, pos, resolver, quietResolver,
+                                                  &pf.diagnostics);
             line.lineIndex = i;
             pf.lines.append(line);
         }
@@ -305,6 +318,9 @@ bool ErbLoader::mergeParsedFile(ParsedErbFile&& pf) {
         if (!pf.warnings.isEmpty()) {
             m_parseTable->addParseWarnings(pf.warnings);
         }
+        if (!pf.diagnostics.isEmpty()) {
+            m_parseTable->addParseDiagnostics(pf.diagnostics);
+        }
         // 不合并 worker 缓存：行内 AST 已自带，运行期新表达式按需再解析（懒加载）
         pf.astCache.clear();
         pf.lines.clear();
@@ -329,7 +345,7 @@ bool ErbLoader::loadFile(const QString& filePath, const QString& root) {
     ParsedErbFile pf;
     pf.scriptName = scriptNameFor(root, filePath);
     pf.path = filePath;
-    pf.lines = buildAst(content, filePath, root);   // 串行路径：复用 parseTable 缓存
+    pf.lines = buildAst(content, filePath, root, &pf.diagnostics);   // 串行路径：复用 parseTable 缓存
     // buildAst 的预处理告警：再次预处理仅取告警（廉价且无副作用）
     prepareLines(content, filePath, &pf.warnings);
 
@@ -744,7 +760,7 @@ void ErbLoader::mergeStep() {
 // 串行 AST 构建（loadFile 路径）
 // ---------------------------------------------------------------------------
 QList<LogicalLine> ErbLoader::buildAst(const QString& content, const QString& filePath,
-                                      const QString& root) {
+                                      const QString& root, ParseDiagnostics* diagnostics) {
     QList<LogicalLine> logicalLines;
     const QString scriptName = scriptNameFor(root, filePath);
 
@@ -761,7 +777,7 @@ QList<LogicalLine> ErbLoader::buildAst(const QString& content, const QString& fi
     logicalLines.reserve(source.size());
     for (int i = 0; i < source.size(); ++i) {
         const ScriptPosition pos(filePath, source.at(i).physicalLine, 1);
-        LogicalLine line = AstBuilder::build(source.at(i).text, pos, resolve, quietResolve);
+        LogicalLine line = AstBuilder::build(source.at(i).text, pos, resolve, quietResolve, diagnostics);
         line.lineIndex = i;
         logicalLines.append(line);
         emit parseLineReady(scriptName, source.at(i).physicalLine, source.at(i).text);

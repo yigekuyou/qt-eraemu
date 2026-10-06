@@ -27,6 +27,7 @@
 #include "ast/logical_line.h"
 #include "ast/variable_table.h"
 #include "ast/user_function.h"
+#include "ast/parse_diagnostic.h"
 
 // Forward declarations
 class ConstantTable;
@@ -205,11 +206,21 @@ public:
     // 返回地址 = 该脚本末尾 → 函数体结束即回到系统层）
     bool callLabelAt(const QString& script, int line, const QString& returnScript, int returnLine);
 
-    // 解析期告警（参数个数/类型错误等，对齐 C# ParserMediator 的结构化告警）
-    [[nodiscard]] const QList<QString>& parseWarnings() const { return m_parseWarnings; }
-    [[nodiscard]] int parseWarningCount() const { return m_parseWarnings.size(); }
-    // 装载期（预处理/词法/结构）告警：由 ErbLoader 汇总后回灌
-    void addParseWarnings(const QStringList& warnings) { m_parseWarnings.append(warnings); }
+    // 解析期诊断（分级 + 代码 + 位置；对齐 C# ParserMediator 的结构化告警）。
+    // texts() 为兼容既有「文本告警」消费者（dbus loadState 的计数）而保留。
+    [[nodiscard]] const ParseDiagnostics& parseDiagnostics() const { return m_diagnostics; }
+    [[nodiscard]] const QStringList& parseWarnings() const { return m_diagnostics.texts(); }
+    [[nodiscard]] int parseWarningCount() const { return m_diagnostics.size(); }
+    // 装载期（预处理/词法/结构）告警：由 ErbLoader 汇总后回灌（Warning，code=preprocess）
+    void addParseWarnings(const QStringList& warnings) {
+        for (const QString& w : warnings) {
+            m_diagnostics.addText(DiagSeverity::Warning, DiagCode::kPreprocess, w);
+        }
+    }
+    // 装载期结构化诊断（ErbLoader 在 worker 线程收集：未识别指令/表达式归约失败等）
+    void addParseDiagnostics(const ParseDiagnostics& d) {
+        for (const ParseDiagnostic& x : d.all()) m_diagnostics.add(x);
+    }
 
     // 变量表（#DIM/#DIMS/#GLOBAL/#PRIVATE + 函数形参）
     [[nodiscard]] const VariableTable& variableTable() const { return m_variables; }
@@ -322,7 +333,7 @@ private:
     QHash<QString, UserFunctionInfo> m_functions;
     // 名称 -> 全部声明（同名函数可重复声明；事件函数靠它做 4 组导航）
     QHash<QString, QList<LabelRef>> m_labelLists;
-    QList<QString> m_parseWarnings;
+    ParseDiagnostics m_diagnostics;
     const ConstantTable* m_constantTable = nullptr;
     VariableTable m_variables;
 

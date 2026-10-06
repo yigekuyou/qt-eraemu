@@ -84,8 +84,8 @@ int main(int argc, char* argv[]) {
     ConsoleBackend console;
     console.setFontSize(kFontSize);
     console.setLineHeight(kLineHeight);
-    console.setWindowWidth(640);
-    console.setVisibleCount(50);
+    console.setGridColumns(80);        // 640px ÷ 8px = 80 列
+    console.setGridRows(50);
 
     // 打印一段 `<img …><br>` 并取回首行唯一的 span（flush 之后才做过排版测量）
     const auto spanOf = [&](const QString& html) -> ConsoleSpan {

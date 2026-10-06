@@ -60,7 +60,7 @@ int main(int argc, char** argv) {
     engine.executeInstruction(line);
     check(console.buffer().count() == 1 && console.buffer().at(0).plainText() == "[  1] [1  ]", "format width and alignment preserve actual value");
     console.clearAll();
-    console.setWindowWidth(36);
+    console.setGridColumns(4);          // 36px ÷ 9px = 4 列
     console.setWrappingEnabled(true);
     console.printHtml("<p align='right'><nobr>abcdefghijk</nobr></p>");
     check(console.buffer().count() == 1 && console.buffer().at(0).align == ConsoleAlign::Right,

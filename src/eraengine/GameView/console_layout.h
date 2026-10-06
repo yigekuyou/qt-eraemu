@@ -29,7 +29,9 @@
 //   * 区块大小（cols/rows）由 C++ **动态测量**：文本按字符宽度（全角 2、半角 1），
 //     图片/图形按 <img>、<shape> 的百分比参数；
 //   * **像素大小由 QML/容器决定**：QML 用自己的 cell 宽高换算
-//     （px = col × cellW…）。C++ 只把窗口宽度换算成列数用于折行判定。
+//     （px = col × cellW…）。逻辑网格（列/行数）只来自 emuera.config 推导
+//     （EraEngine::syncConsoleGrid），**不随窗口像素变化**——窗口缩放是
+//     QML 舞台（stage）的等比 transform，折行与布局永远稳定。
 // ---------------------------------------------------------------------------
 class ConsoleLayout {
 public:
@@ -37,23 +39,15 @@ public:
     // （半角 = FontSize/2 px）。注入后 cols 仍以单位计，只影响窗口列数与像素参考值。
     using MeasureFn = int (*)(const QString&, const ConsoleStyle&, int fontSize);
 
-    // 字号同时决定单元格像素宽（半角 = FontSize/2），故列数需一并重算
-    void setFontSize(int px) { if (px > 0) { m_fontSize = px; deriveGridFromWindow(); } }
+    void setFontSize(int px) { if (px > 0) m_fontSize = px; }
     [[nodiscard]] int fontSize() const { return m_fontSize; }
 
     void setLineHeight(int px) { if (px > 0) m_lineHeight = px; }
     [[nodiscard]] int lineHeight() const { return m_lineHeight; }
 
-    // 窗口像素宽度变化 -> 逻辑列数随之重算（列数 = 窗口宽 / 单元格宽）。
-    // 这里的「窗口宽」来自配置（GuiManager），**不是** QML 视口宽度：
-    // 视口缩放只改像素格子大小，绝不能反过来改折行（见 Console.qml 注释）。
-    void setWindowWidth(int px) { if (px > 0) { m_windowWidth = px; deriveGridFromWindow(); } }
-    [[nodiscard]] int windowWidth() const { return m_windowWidth; }
-
     // 一个「区块长」（列）等于多少像素 —— QML 侧也应取同一个值
     [[nodiscard]] int columnWidthPx() const { return qMax(1, m_fontSize / 2); }
-    // 逻辑网格列数：默认由「窗口宽 / 单元格宽」推导；装载完成后引擎可再显式
-    // 固定一次（同一公式，之后不再随窗口变化）。
+    // 逻辑网格列/行数：只由配置推导后显式固定（syncConsoleGrid），不再随窗口变化
     void setGridColumns(int columns) { if (columns > 0) m_gridColumns = columns; }
     [[nodiscard]] int gridColumns() const { return m_gridColumns; }
     void setGridRows(int rows) { if (rows > 0) m_gridRows = rows; }
@@ -83,12 +77,6 @@ public:
 private:
     int  m_fontSize = 18;
     int  m_lineHeight = 19;
-    int  m_windowWidth = 760;
-    // 列数 = 窗口宽 / 单元格宽（半角 = FontSize/2）；至少 1 列
-    void deriveGridFromWindow() {
-        const int col = columnWidthPx();
-        if (m_windowWidth > 0) m_gridColumns = qMax(1, m_windowWidth / col);
-    }
 
     int  m_gridColumns = 80;
     int  m_gridRows = 25;

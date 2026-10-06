@@ -125,11 +125,11 @@ QString EraDBusDebug::diagBlocks() {
                .arg(c->windowFirstLine()).arg(c->visibleCount())
                .arg(c->buffer().count()).arg(c->gridColumns()).arg(c->gridRows());
     if (QScreen* s = QGuiApplication::primaryScreen()) {
-        out << QStringLiteral("screen name=%1 geom=%2x%3 avail=%4x%5 minWin=%6x%7")
+        out << QStringLiteral("screen name=%1 geom=%2x%3 avail=%4x%5 stage=%6x%7")
                    .arg(s->name())
                    .arg(s->geometry().width()).arg(s->geometry().height())
                    .arg(s->availableGeometry().width()).arg(s->availableGeometry().height())
-                   .arg(g->minimumWindowWidth()).arg(g->minimumWindowHeight());
+                   .arg(g->windowWidth()).arg(g->windowHeight());
     }
     const QVariantList blocks = c->textBlocks();
     out << QStringLiteral("textBlocks=%1").arg(blocks.size());

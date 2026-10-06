@@ -664,15 +664,9 @@ void ConsoleBackend::setFontSize(int px) {
     notifyWindowChanged();
 }
 
-void ConsoleBackend::setWindowWidth(int px) {
-    // 窗口宽决定逻辑列数 -> 折行结果，同样是行内容的一部分。
-    if (px > 0 && px != m_layout.windowWidth()) invalidateLineCache();
-    m_layout.setWindowWidth(px);
-    notifyWindowChanged();
-}
-
 // 逻辑网格列/行数：脚本看到的列数（居中、换行都以它为准）。
-// 与「窗口像素 / 单元格像素」同源，装载后固定。
+// 只来自 emuera.config 推导（EraEngine::syncConsoleGrid），装载后固定；
+// 可见行数恒等于行数（窗口缩放是 QML 舞台 transform，不影响行数）。
 void ConsoleBackend::setGridColumns(int columns) {
     if (columns <= 0 || columns == m_layout.gridColumns()) return;
     m_layout.setGridColumns(columns);
@@ -683,6 +677,9 @@ void ConsoleBackend::setGridColumns(int columns) {
 void ConsoleBackend::setGridRows(int rows) {
     if (rows <= 0 || rows == m_layout.gridRows()) return;
     m_layout.setGridRows(rows);
+    // 可见行数恒等于逻辑行数（配置舞台高度 ÷ 行高），不再由 QML 按像素回写
+    m_visibleCount = rows;
+    clampScroll();
     invalidateLineCache();
     notifyWindowChanged();
 }
@@ -1303,16 +1300,6 @@ void ConsoleBackend::submitInputString(const QString& value) {
 // ---------------------------------------------------------------------------
 // 属性
 // ---------------------------------------------------------------------------
-
-void ConsoleBackend::setVisibleCount(int count) {
-    count = std::max(1, count);
-    if (count == m_visibleCount) {
-        return;
-    }
-    m_visibleCount = count;
-    clampScroll();
-    notifyWindowChanged();
-}
 
 void ConsoleBackend::setScrollOffset(int offset) {
     offset = std::max(0, offset);

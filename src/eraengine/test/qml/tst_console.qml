@@ -291,11 +291,9 @@ TestCase {
             backend.newline();
         }
         backend.flush();
-        // 逻辑列数由 C++ 按「窗口宽 ÷ 单元格宽（FontSize/2）」推导（与 QML 同源），
-        // 所以这里按公式核对，而不是写死旧的默认 80 列。
-        // 窗口宽取 ConsoleLayout 的默认值（760px；QML 侧不暴露该属性）。
-        const colPx = Math.max(1, Math.floor(view.fontSize / 2));
-        compare(backend.gridColumns, Math.max(1, Math.floor(760 / colPx)));
+        // 逻辑网格只由配置推导（QML 测试环境未装载配置 → C++ 默认 80x25），
+        // 不再随窗口宽度变化；窗口缩放是舞台外层的整体 transform。
+        compare(backend.gridColumns, 80);
         compare(backend.gridRows, 25);
         compare(view.cellWidth, view.width / backend.gridColumns);
         compare(view.cellHeight, 8);

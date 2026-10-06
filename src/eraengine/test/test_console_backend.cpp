@@ -53,7 +53,7 @@ int main(int argc, char* argv[]) {
     qDebug() << "===================";
 
     ConsoleBackend console;
-    console.setVisibleCount(3);
+    console.setGridRows(3);
 
     // ---- 1. 输出写入 ----
     qDebug() << "\n1) 输出写入（print/newline）";
@@ -276,8 +276,7 @@ int main(int argc, char* argv[]) {
         c.setFontSize(16);
         c.setLineHeight(16);
         c.setGridColumns(40);
-        c.setGridRows(10);
-        c.setVisibleCount(10);                     // 窗口 = 10 行
+        c.setGridRows(10);                         // 窗口 = 10 行（可见行数恒等于逻辑行数）
 
         auto imageBlock = [&c](const QString& name) -> QVariantMap {
             for (const QVariant& v : c.imageBlocks()) {
@@ -345,7 +344,7 @@ int main(int argc, char* argv[]) {
     qDebug() << "\n增量模型：CLEARLINE 重印复用行号";
     {
         ConsoleBackend c;
-        c.setVisibleCount(10);
+        c.setGridRows(10);
         const auto texts = [&c]() {
             QStringList out;
             for (const QVariant& v : c.visibleBlocks())
@@ -405,7 +404,7 @@ int main(int argc, char* argv[]) {
     qDebug() << "\n增量模型：整表重摊平也不拆历史（纯 dataChanged）";
     {
         ConsoleBackend c;
-        c.setVisibleCount(10);
+        c.setGridRows(10);
         c.print("L0"); c.newline();
         c.print("L1"); c.newline();
         c.print("L2"); c.newline();
@@ -437,7 +436,7 @@ int main(int argc, char* argv[]) {
     qDebug() << "\n增量模型：容量裁剪（行号前移）";
     {
         ConsoleBackend c;
-        c.setVisibleCount(3);
+        c.setGridRows(3);
         c.buffer().setCapacity(3);
         const auto texts = [&c]() {
             QStringList out;
@@ -462,7 +461,7 @@ int main(int argc, char* argv[]) {
     qDebug() << "\n增量模型：未提交行随内容更新";
     {
         ConsoleBackend c;
-        c.setVisibleCount(10);
+        c.setGridRows(10);
         const auto texts = [&c]() {
             QStringList out;
             for (const QVariant& v : c.visibleBlocks())

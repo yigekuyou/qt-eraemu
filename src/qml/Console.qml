@@ -107,8 +107,9 @@ Item {
     property string focusColor: ""
     property string logColor: ""
 
-    // ---- 固定逻辑网格，动态像素格子 ----
-    // C++/EraEngine 固定脚本看到的列数；窗口改变时只改变每格像素大小。
+    // ---- 固定逻辑网格，固定像素格子 ----
+    // 网格与格子尺寸都只由舞台（配置）决定：本组件的宽高 = 舞台尺寸，
+    // 窗口缩放是外层的整体 transform，不会触发这里任何绑定重算。
     readonly property int gridColumns: backend && backend.gridColumns > 0 ? backend.gridColumns : 80
     readonly property int gridRows: backend && backend.gridRows > 0 ? backend.gridRows : 25
     readonly property real cellWidth: Math.max(1, width / gridColumns)
@@ -194,11 +195,6 @@ Item {
     }
     onFontSizeChanged: syncLayout()
     onLineHeightChanged: syncLayout()
-    onWidthChanged: {
-        // Width changes resize cells only. Do not feed the viewport width back
-        // into the logical layout, otherwise ERB line wrapping changes.
-        syncLayout();
-    }
 
     // ---- 分层（text/image/shape 结构相同，仅模型不同）----
     // delegate 抽成 inline component，消除三份重复；层本身保留显式 id
@@ -424,14 +420,10 @@ Item {
         regularExpression: /-?[0-9]+/
     }
 
-    onHeightChanged: {
-        if (backend)
-            backend.visibleCount = Math.max(1, Math.floor(viewport.height / cellHeight));
-    }
     Component.onCompleted: {
         syncCadence();
         syncLayout();
-        if (backend)
-            backend.visibleCount = Math.max(1, Math.floor(viewport.height / cellHeight));
+        // visibleCount 由 C++ 按 gridRows 固定（可见行数 = 逻辑行数），
+        // 不再按视口像素高度回写
     }
 }

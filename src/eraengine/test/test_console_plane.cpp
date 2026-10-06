@@ -91,9 +91,9 @@ int main(int argc, char** argv) {
         ConsoleLayout layout;
         layout.setFontSize(18);
         layout.setLineHeight(19);
-        layout.setWindowWidth(760);
+        layout.setGridColumns(84);            // 760px ÷ 9px ≈ 84 列（列数只由配置网格决定）
         check(layout.columnWidthPx() == 9, "列宽 = FontSize/2 = 9px");
-        check(layout.maxCols() == 84, "root 宽度 760px -> 84 列");
+        check(layout.maxCols() == 84, "网格 84 列");
         check(layout.measureUnits(QString::fromUtf8("あ")) == 2, "全角 1 字 = 2 单位");
         check(layout.measureUnits(QStringLiteral("ab")) == 2, "半角 2 字 = 2 单位");
 
@@ -117,7 +117,7 @@ int main(int argc, char** argv) {
         ConsoleBackend c;
         c.setFontSize(18);
         c.setLineHeight(19);
-        c.setWindowWidth(760);
+        c.setGridColumns(84);                 // 760px ÷ 9px ≈ 84 列
 
         // 第 1 行：文本 + 5 个全角空格 + 文本（用空格把第 2 个区块推到第 11 列）
         c.print(QStringLiteral("A"));
@@ -133,7 +133,7 @@ int main(int argc, char** argv) {
         check(parts.size() == 3, "each print operation remains a distinct span");
 
         ConsolePlaneOptions opt;
-        opt.windowWidth = c.windowWidth();
+        opt.windowWidth = c.gridColumns() * c.columnWidth();
         opt.terminalSafe = false;           // 这里要看原始占位符
         const QStringList plane = ConsolePlane::render(c.buffer(), c.layout(), opt);
         check(plane.size() == 2, "2 行 -> 平面 2 行");
@@ -168,7 +168,7 @@ int main(int argc, char** argv) {
         ConsoleBuffer buffer;
         ConsoleLayout layout;
         layout.setFontSize(18);
-        layout.setWindowWidth(760);
+        layout.setGridColumns(84);
 
         ConsoleDisplayLine line;
         ConsoleSegment left;
@@ -234,13 +234,13 @@ int main(int argc, char** argv) {
         ConsoleBackend c;
         c.setFontSize(18);
         c.setLineHeight(19);
-        c.setWindowWidth(90);                 // 只有 10 列（90 / 9）
+        c.setGridColumns(10);                 // 只有 10 列
 
         c.print(QStringLiteral("0123456789ABCDEF"));   // 16 列 > 10 列
         c.newline();
 
         ConsolePlaneOptions opt;
-        opt.windowWidth = c.windowWidth();
+        opt.windowWidth = c.gridColumns() * c.columnWidth();
         const QList<ConsolePlaneIssue> issues =
             ConsolePlane::inspect(c.buffer(), c.layout(), opt);
         check(!issues.isEmpty(), "越界被检出");

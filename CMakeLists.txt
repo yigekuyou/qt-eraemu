@@ -23,7 +23,7 @@ set(CMAKE_CXX_STANDARD 23)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 set(CMAKE_CXX_EXTENSIONS OFF)
 
-find_package(Qt6 REQUIRED COMPONENTS Quick Core DBus Widgets Concurrent Test QuickTest)
+find_package(Qt6 REQUIRED COMPONENTS Quick QuickControls2 Core DBus Widgets Concurrent Test QuickTest)
 find_package(OpenMP REQUIRED)
 find_package(BISON REQUIRED)
 find_package(FLEX REQUIRED)
@@ -31,12 +31,17 @@ qt_standard_project_setup(REQUIRES 6.10)
 
 qt_add_executable(appemuera
     src/main.cpp
+    src/platform/window_controller.cpp
+    src/platform/window_controller.h
+    src/platform/tray_controller.cpp
+    src/platform/tray_controller.h
 )
 
 qt_add_qml_module(appemuera
     URI io.yigekuoyou.appemuera
     QML_FILES
         src/qml/Main.qml
+        src/qml/NativeMenuBar.qml
         src/qml/EraRender.qml
         src/qml/Console.qml
         src/qml/ConsoleBlock.qml
@@ -53,8 +58,10 @@ set_target_properties(appemuera PROPERTIES
 )
 
 target_link_libraries(appemuera
-    PRIVATE Qt6::Quick Qt6::DBus Qt6::Widgets eraengine
+    PRIVATE Qt6::Quick Qt6::QuickControls2 Qt6::DBus Qt6::Widgets eraengine
 )
+# qmltyperegistration 生成的 include 用短名（<tray_controller.h>）
+target_include_directories(appemuera PRIVATE src/platform)
     if(MSVC)
         target_compile_options(appemuera PRIVATE /W4 /WX)
     elseif(CMAKE_CXX_COMPILER_ID MATCHES "GNU|Clang|AppleClang")

@@ -280,7 +280,7 @@ bool renderScreen(ConsoleBackend* console, QList<QString>& last, bool withAnnota
 // ---------------------------------------------------------------------------
 ConsolePlaneOptions planeOptions(ConsoleBackend* console, bool withDebug = false, bool withColor = false) {
     ConsolePlaneOptions opt;
-    opt.windowWidth = console ? console->windowWidth() : 760;
+    opt.windowWidth = console ? console->gridColumns() * console->columnWidth() : 760;
     // 终端安全：把 □ ■ ▨ ─ 这些「宽度有歧义」的符号换成 2 个 ASCII 字符，
     // 于是任何终端/字体下都严格「1 字符 = 1 个区块长」，列才对得齐；
     // 行尾附带本行占用的单位数，便于核对（不依赖终端字体）。
@@ -807,7 +807,7 @@ int main(int argc, char* argv[]) {
             std::cout << "  区块数 " << blocks.size()
                       << "  行高 " << (console ? console->lineHeight() : 0)
                       << "  字号 " << (console ? console->fontSize() : 0)
-                      << "  root 宽 " << (console ? console->windowWidth() : 0)
+                      << "  root 宽 " << (console ? console->gridColumns() * console->columnWidth() : 0)
                       << "  列宽 " << (console ? console->columnWidth() : 0) << "\n";
             for (const QVariant& v : blocks) {
                 const QVariantMap m = v.toMap();

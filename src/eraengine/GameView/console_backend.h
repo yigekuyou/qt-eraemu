@@ -147,7 +147,9 @@ class ConsoleBackend : public QObject {
     QML_UNCREATABLE("ConsoleBackend 由 EraEngine 提供")
 
     Q_PROPERTY(int  lineCount        READ lineCount        NOTIFY lineCountChanged)
-    Q_PROPERTY(int  visibleCount     READ visibleCount     WRITE setVisibleCount     NOTIFY windowChanged)
+    // 可见行数：**恒等于 gridRows**（emuera.config 推导的逻辑行数）。
+    // 窗口缩放是 QML 舞台的 transform，可见行数不随窗口像素变化，故只读。
+    Q_PROPERTY(int  visibleCount     READ visibleCount     NOTIFY windowChanged)
     Q_PROPERTY(int  scrollOffset     READ scrollOffset     WRITE setScrollOffset     NOTIFY windowChanged)
     Q_PROPERTY(bool followTail       READ followTail                                  NOTIFY windowChanged)
     Q_PROPERTY(int  frameMs          READ frameMs          WRITE setFrameMs          NOTIFY frameMsChanged)
@@ -257,15 +259,14 @@ public:
 
     // ---- 排版参数（GuiManager / 配置接线）----
     Q_INVOKABLE void setFontSize(int px);
-    Q_INVOKABLE void setWindowWidth(int px);
-    // 逻辑网格（脚本看到的列/行数）——由引擎按配置窗口与字号设定，装载后不变
+    // 逻辑网格（脚本看到的列/行数）——由引擎按配置窗口与字号设定，装载后不变；
+    // 没有「随窗口像素重排」的入口（窗口缩放是 QML 舞台的等比 transform）
     Q_INVOKABLE void setGridColumns(int columns);
     Q_INVOKABLE void setGridRows(int rows);
     // 行高（GuiManager 的 LineHeight）：分层模型里 y = 行序号 × 行高
     Q_INVOKABLE void setLineHeight(int px);
     [[nodiscard]] int lineHeight() const { return m_lineHeight; }
     [[nodiscard]] int fontSize() const { return m_layout.fontSize(); }
-    [[nodiscard]] int windowWidth() const { return m_layout.windowWidth(); }
     // 平面重建用的「一列」宽度（半角字符宽）＝ fontPx / 2
     [[nodiscard]] int columnWidth() const { return qMax(1, m_layout.fontSize() / 2); }
     // 是否由 C++ 折行。默认 false：**容器自由渲染位置**，C++ 只给区块与位置数据
@@ -325,7 +326,6 @@ signals:
     void clearTextBoxRequested();
 
 public slots:
-    void setVisibleCount(int count);
     void setScrollOffset(int offset);
     void setFrameMs(int ms);
 
@@ -356,7 +356,7 @@ private:
     bool         m_wrapLines = false;         // 容器自由 → 默认不折行
 
     int  m_lineHeight = 19;
-    int  m_visibleCount = 40;
+    int  m_visibleCount = 25;   // = 默认 gridRows；由 setGridRows 同步
     int  m_scrollOffset = 0;
     // 缓冲里**最长**的区块能往上探出几行（立絵跨行 + 图片 ypos 负偏移）。
     // visibleBlocks() 靠它决定「窗口上方多扫几行」，否则跨行图会整张消失。

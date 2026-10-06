@@ -18,8 +18,6 @@
 import QtQuick
 import QtQuick.Controls
 import QtQuick.Dialogs
-// Screen（窗口尺寸钳制用）在 QtQuick.Window 模块中（Qt 文档：Screen QML Type）
-import QtQuick.Window
 import io.yigekuoyou.eraengine
 
 // ---------------------------------------------------------------------------
@@ -27,47 +25,30 @@ import io.yigekuoyou.eraengine
 //
 //   * EraEngine 单例 + GuiManager（设置）+ ConsoleBackend（控制台数据）；
 //   * 菜单：文件 / 编辑 / 视图 / 帮助（对齐 C# MainWindow 的 ToolStrip）；
+//     平台差异：桌面用 QtQuick.Controls MenuBar（Linux=KDE/Kirigami 风格、
+//     Windows=系统默认、macOS=系统风格），macOS 另建 Qt.labs.platform 原生
+//     菜单栏挂系统菜单栏 / Linux 全局菜单（NativeMenuBar.qml），Android 用悬浮按钮 + 弹出菜单；
+//   * 窗口几何/模式（窗口化/全屏/无边框全屏）由 C++ WindowController 直控，
+//     QML 不再绑定 width/height/visibility；
+//   * 后台托盘由 C++ TrayController 提供（关闭可隐藏到托盘常驻）；
 //   * 对话框：目录选择 / 保存日志 / 设置 / 关于；
-//   * 窗口标题、尺寸、字体、颜色全部来自 GuiManager（可在设置里改、可持久化）。
+//   * 窗口标题、字体、颜色全部来自 GuiManager（可在设置里改、可持久化）。
 // ---------------------------------------------------------------------------
 ApplicationWindow {
     id: window
 
     visible: true
     title: eraEngine.gui.windowTitle || "Emuera Engine"
-
-    // ---- 窗口尺寸：外部（设置/游戏 config）说了算，但**不得超出屏幕** ----
-    // 依据 Qt 文档：
-    //   * Window.width/height —— 窗口尺寸（x/y 相对屏幕）；
-    //   * Window.minimumWidth/minimumHeight —— 只是给窗口管理器的「下限提示」；
-    //   * Screen（QtQuick.Window）—— 屏幕信息，Window 上在组件完成后有效，
-    //     其中 desktopAvailableWidth/Height 已扣除任务栏/系统菜单。
-    // GuiManager（C++）里也按 QScreen::availableGeometry() 做了同样的钳制，
-    // 这里再兜一层：多屏 / C++ 尚未拿到屏幕（off-screen QPA）时同样不会越界。
-    // 尺寸只在外部值（config/设置）变化时重算 —— 用户手动拖动窗口大小后，
-    // 该绑定不会自己回弹，真正「外面变化大小而不是自动」。
-    readonly property int maxWindowWidth: Screen.desktopAvailableWidth > 0
-                                          ? Screen.desktopAvailableWidth
-                                          : eraEngine.gui.windowWidth
-    readonly property int maxWindowHeight: Screen.desktopAvailableHeight > 0
-                                           ? Screen.desktopAvailableHeight
-                                           : eraEngine.gui.windowHeight
-
-    width: Math.min(eraEngine.gui.windowWidth, maxWindowWidth)
-    height: Math.min(eraEngine.gui.windowHeight, maxWindowHeight)
-    // 全屏(F11)优先；否则遵循设置里的「最大化」
-    visibility: fullscreen ? Window.FullScreen : (eraEngine.gui.maximized ? Window.Maximized : Window.Windowed)
     color: eraEngine.gui.backColor
 
-    // ---- 最小窗口尺寸 ----
-    // 引擎的逻辑网格是固定的（脚本看到的列/行数不随窗口变化），窗口小于
-    // 「网格 × 单元格像素」时内容会被裁剪。下限由 GuiManager 依据当前字号
-    // 与网格统一给出（那里也对保存的设置值做同样的钳制）。
-    // 这里再按屏幕可用尺寸封顶：下限一旦大于屏幕，窗口就再也放不进屏幕内。
-    minimumWidth: Math.min(eraEngine.gui.minimumWindowWidth, maxWindowWidth)
-    minimumHeight: Math.min(eraEngine.gui.minimumWindowHeight, maxWindowHeight)
-
-    property bool fullscreen: false
+    // 平台差异总开关：移动端没有菜单栏/托盘/F11，走触屏适配
+    readonly property bool isMobile: Qt.platform.os === "android" || Qt.platform.os === "ios"
+    // 原生菜单栏：macOS 总是走系统菜单栏；Linux 探测 D-Bus 全局菜单宿主
+    // （com.canonical.AppMenu.Registrar，Plasma/Unity），有宿主走 labs 原生
+    // 菜单栏（NativeMenuBar.qml），否则窗口内 MenuBar
+    readonly property bool useNativeMenuBar: Qt.platform.os === "macos"
+                                             || (Qt.platform.os === "linux"
+                                                 && windowController.hasGlobalMenuBar())
 
     // 引擎单例（QML 中实例化；也可作为 qmlRegisterSingletonInstance 注入）
     EraEngine {
@@ -75,6 +56,38 @@ ApplicationWindow {
         // 脚本 QUIT（C# 侧等价关闭游戏窗口）—— 卸载当前游戏并释放内存，
         // 回到「未装载」状态（应用常驻，可重新打开目录）
         onQuitRequested: eraEngine.closeGame()
+    }
+
+    // ---- 窗口几何/模式：C++ 直控 ----
+    // 尺寸来源（GuiManager 的 config/设置）变化时由 WindowController 直接
+    // 改变窗口大小（含屏幕钳制、sizableWindow=false 锁死尺寸、启动最大化）；
+    // 全屏(F11)/无边框全屏/窗口化也在那边管理。这里只负责把窗口交给它。
+    WindowController {
+        id: windowController
+        window: window
+        gui: eraEngine.gui
+    }
+
+    // ---- 后台托盘 ----
+    // available=false（Android/iOS 或无托盘的桌面环境）时 enabled 自动无效，
+    // C++ 侧不会创建图标。信号全部由窗口侧处理：窗口归 QML 所有。
+    TrayController {
+        id: tray
+        tooltip: window.title
+        onShowWindowRequested: {
+            window.show();
+            window.raise();
+            window.requestActivate();
+        }
+        onHideWindowRequested: window.hide()
+        onQuitRequested: Qt.quit()
+    }
+    // 托盘菜单勾选「关闭时隐藏到托盘」后：关闭 = 退到后台常驻（吞掉 close）
+    onClosing: function(close) {
+        if (tray.enabled && tray.closeToTray) {
+            close.accepted = false;
+            window.hide();   // 退到托盘常驻（hide 不触发 quitOnLastWindowClosed）
+        }
     }
 
     // D-Bus /debug saveScreenshot(path)：QML 自己抓取渲染结果存盘。
@@ -296,86 +309,157 @@ ApplicationWindow {
         shortcut: "Ctrl+-"
         onTriggered: eraEngine.gui.adjustFontSize(-1)
     }
+    // ---- 窗口模式（C++ WindowController 执行）----
+    Action {
+        id: actWindowed
+        text: qsTr("窗口化")
+        checkable: true
+        checked: windowController.windowMode === "windowed"
+        onTriggered: windowController.setWindowMode("windowed")
+    }
+    Action {
+        id: actFullscreen
+        text: qsTr("全屏")
+        shortcut: StandardKey.FullScreen
+        checkable: true
+        checked: windowController.windowMode === "fullscreen"
+        onTriggered: windowController.setWindowMode("fullscreen")
+    }
+    Action {
+        id: actBorderless
+        text: qsTr("无边框全屏")
+        checkable: true
+        checked: windowController.windowMode === "borderless"
+        onTriggered: windowController.setWindowMode("borderless")
+    }
     Action {
         id: actAbout
         text: qsTr("关于…")
         onTriggered: window.openAbout()
     }
 
-    // ---- 菜单栏 ----
-    menuBar: MenuBar {
-        Menu {
-            title: qsTr("文件(&F)")
-            MenuItem {
-                action: actOpen
-            }
-            MenuItem {
-                action: actReload
-            }
-            MenuItem {
-                action: actSaveLog
-            }
-            MenuItem {
-                action: actTitle
-            }
-            MenuSeparator {}
-            MenuItem {
-                action: actSettings
-            }
-            MenuSeparator {}
-            MenuItem {
-                action: actQuit
-            }
-        }
+    // 菜单结构共享给两套菜单实现：
+    //   * 桌面 MenuBar / 移动端弹出菜单：直接用 id（action: actOpen）；
+    //   * 原生菜单栏 NativeMenuBar.qml：labs MenuItem 没有 action 属性，
+    //     靠这个映射逐项绑定状态、转发 trigger()。
+    readonly property var menuActions: ({
+        open: actOpen, reload: actReload, saveLog: actSaveLog, title: actTitle,
+        settings: actSettings, quit: actQuit, clear: actClear, bottom: actBottom,
+        zoomIn: actZoomIn, zoomOut: actZoomOut, about: actAbout,
+        windowed: actWindowed, fullscreen: actFullscreen, borderless: actBorderless,
+        fpsUp: function() { eraEngine.gui.fps = eraEngine.gui.fps + 1; },
+        fpsDown: function() { eraEngine.gui.fps = eraEngine.gui.fps - 1; },
+    })
 
-        Menu {
-            title: qsTr("编辑(&E)")
-            MenuItem {
-                action: actClear
-            }
-            MenuItem {
-                action: actBottom
-            }
-        }
+    // ---- 菜单栏（平台差异）----
+    // * Windows/Linux 桌面：QtQuick.Controls MenuBar（Linux 由 main.cpp 选的
+    //   org.kde.desktop/Kirigami 风格着色，Windows 走系统默认风格）；
+    // * macOS：窗口内不放，Component.onCompleted 里创建 Qt.labs.platform 的
+    //   NativeMenuBar 挂到系统菜单栏 / Linux 全局菜单；
+    // * Android/iOS：不创建，改用下方悬浮按钮 + 弹出菜单。
+    // labs MenuBar 是 QObject，Loader 装不了，这里只装 Controls MenuBar。
+    menuBar: menuBarLoader.item
 
-        Menu {
-            title: qsTr("视图(&V)")
-            MenuItem {
-                action: actZoomIn
+    Loader {
+        id: menuBarLoader
+        active: !window.isMobile && !window.useNativeMenuBar
+        sourceComponent: MenuBar {
+            Menu {
+                title: qsTr("文件(&F)")
+                MenuItem { action: actOpen }
+                MenuItem { action: actReload }
+                MenuItem { action: actSaveLog }
+                MenuItem { action: actTitle }
+                MenuSeparator {}
+                MenuItem { action: actSettings }
+                MenuSeparator {}
+                MenuItem { action: actQuit }
             }
-            MenuItem {
-                action: actZoomOut
-            }
-            MenuItem {
-                text: qsTr("全屏")
-                checkable: true
-                checked: window.fullscreen
-                onTriggered: window.fullscreen = !window.fullscreen
-            }
-            MenuSeparator {}
-            MenuItem {
-                text: qsTr("刷新帧率 +")
-                onTriggered: eraEngine.gui.fps = eraEngine.gui.fps + 1
-            }
-            MenuItem {
-                text: qsTr("刷新帧率 −")
-                onTriggered: eraEngine.gui.fps = eraEngine.gui.fps - 1
-            }
-        }
 
-        Menu {
-            title: qsTr("帮助(&H)")
-            MenuItem {
-                action: actAbout
+            Menu {
+                title: qsTr("编辑(&E)")
+                MenuItem { action: actClear }
+                MenuItem { action: actBottom }
+            }
+
+            Menu {
+                title: qsTr("视图(&V)")
+                MenuItem { action: actZoomIn }
+                MenuItem { action: actZoomOut }
+                MenuSeparator {}
+                MenuItem { action: actWindowed }
+                MenuItem { action: actFullscreen }
+                MenuItem { action: actBorderless }
+                MenuSeparator {}
+                MenuItem {
+                    text: qsTr("刷新帧率 +")
+                    onTriggered: eraEngine.gui.fps = eraEngine.gui.fps + 1
+                }
+                MenuItem {
+                    text: qsTr("刷新帧率 −")
+                    onTriggered: eraEngine.gui.fps = eraEngine.gui.fps - 1
+                }
+            }
+
+            Menu {
+                title: qsTr("帮助(&H)")
+                MenuItem { action: actAbout }
             }
         }
     }
 
-    // ---- 控制台（渲染层）----
-    EraRender {
-        id: eraRender
-        anchors.fill: parent
-        engine: eraEngine
+    // ---- 移动端（Android/iOS）触屏菜单 ----
+    // 桌面菜单栏的触控目标太小；改悬浮圆按钮 + 弹出菜单（Material/系统风格
+    // 的 MenuItem 自带触屏级尺寸）。动作与桌面菜单完全同一套。
+    RoundButton {
+        visible: window.isMobile
+        anchors.top: parent.top
+        anchors.right: parent.right
+        anchors.margins: 12
+        width: 48
+        height: 48
+        radius: 24
+        z: 1000
+        text: qsTr("☰")
+        font.pixelSize: 24
+        onClicked: mobileMenu.open()
+    }
+    Menu {
+        id: mobileMenu
+        width: Math.min(window.width - 24, 320)
+        MenuItem { action: actOpen }
+        MenuItem { action: actReload }
+        MenuItem { action: actSaveLog }
+        MenuItem { action: actTitle }
+        MenuSeparator {}
+        MenuItem { action: actSettings }
+        MenuItem { action: actAbout }
+        MenuSeparator {}
+        MenuItem { action: actWindowed }
+        MenuItem { action: actFullscreen }
+        MenuItem { action: actBorderless }
+        MenuSeparator {}
+        MenuItem { action: actQuit }
+    }
+
+    // ---- 控制台（渲染层）：虚拟舞台 ----
+    // 舞台尺寸 = 配置舞台（emuera.config 的ウィンドウ幅/高さ推导），QML 对整个
+    // 舞台做**一次等比 transform** 缩放并居中进窗口。窗口拖拽/全屏/跨分辨率
+    // 都只是变焦：折行、网格、C++ 排版永远只由舞台尺寸决定，边缘露出
+    // window.color（背景色）= 信箱。Qt 文档：Item.scale 级联到全部子项，
+    // 输入事件坐标自动按逆变换映射（MouseArea 拿到的仍是舞台本地坐标）。
+    Item {
+        anchors.centerIn: parent
+        width: eraEngine.gui.windowWidth
+        height: eraEngine.gui.windowHeight
+        scale: Math.min(window.contentItem.width / width,
+                        window.contentItem.height / height)
+
+        EraRender {
+            id: eraRender
+            anchors.fill: parent
+            engine: eraEngine
+        }
     }
 
     // ---- 音频播放维护层（QML 按 C++ 登记的管线数量维护播放器）----
@@ -481,14 +565,33 @@ ApplicationWindow {
         ToolTip.text: light.label + "：" + light.detail
     }
 
-    // ---- 快捷键：全屏 ----
+    // ---- 快捷键：全屏/窗口化切换（执行在 C++ WindowController）----
     Shortcut {
         sequence: "F11"
-        onActivated: window.fullscreen = !window.fullscreen
+        onActivated: windowController.toggleFullscreen()
+    }
+    // Esc 退出全屏（移动端/无边框全屏下没有菜单可点，留这条退路）
+    Shortcut {
+        sequence: StandardKey.Cancel
+        enabled: windowController.windowMode !== "windowed"
+        onActivated: windowController.setWindowMode("windowed")
     }
 
-    // 支持命令行直接带游戏目录启动：appemuera <dir>
+    // ---- 启动收尾 ----
     Component.onCompleted: {
+        // macOS：挂 Qt.labs.platform 原生菜单栏到系统菜单栏
+        if (useNativeMenuBar) {
+            const comp = Qt.createComponent(Qt.resolvedUrl("NativeMenuBar.qml"));
+            if (comp.status === Component.Error)
+                console.error("加载 NativeMenuBar 失败:", comp.errorString());
+            else
+                comp.createObject(window, { window: window, actions: menuActions });
+        }
+        // 移动端默认全屏（窗口模式在 C++，Wayland 之外的桌面不受影响）
+        if (isMobile)
+            windowController.setWindowMode("fullscreen");
+
+        // 支持命令行直接带游戏目录启动：appemuera <dir>
         const args = Qt.application.arguments;
         for (let i = 1; i < args.length; ++i) {
             if (args[i].startsWith("-"))

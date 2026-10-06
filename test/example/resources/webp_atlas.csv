@@ -1,0 +1,18 @@
+;------------------------------------------------------------
+; 组34 用：webp 图集精灵（eraTW 式「底片 + 部件堆叠」素材）
+;
+; 格式对齐 C# AppContents.CreateFromCsv（见 offset.csv 注释）：
+;   名, 源文件 [, x, y, w, h [, offsetX, offsetY [, delay]]]
+; 源图 webp_atlas.webp 是 lossless WebP（VP8L）16×16 四象限：
+;   左上红 / 右上蓝 / 左下绿 / 右下黄（各 8×8，不透明）——
+;   lossless 保证解码逐像素精确，GGETCOLOR 可做精确断言。
+;------------------------------------------------------------
+;整张图集就是「底片」（eraTW 立绘合成的最底层）
+webp_base,webp_atlas.webp
+
+;部件：红 8×8，输出偏移 (2,0)（eraTW 部件落点靠 CSV 第 7/8 列）
+webp_red,webp_atlas.webp,0,0,8,8,2,0
+;部件：蓝 8×8，输出偏移 (0,1)
+webp_blue,webp_atlas.webp,8,0,8,8,0,1
+;差分：4×4 品红，压在合成图中心当「特效」
+webp_diff,webp_item.webp

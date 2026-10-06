@@ -25,3 +25,8 @@
 
 ;---- 全局变量（SAVEGLOBAL/LOADGLOBAL 持久化）----
 #DIM GLOBAL DOC_GVAR_27
+
+;---- 组34 用：GDRAWSPRITE 第 7 实参的颜色矩阵（eraTW CN_GRAPHIC 的カラーマトリクス同型）----
+;以 `WEBP_CM:0:0` 传入，运行期从该元素起读 5×5 个整数各除以 256。
+;行 = 输出通道（R,G,B,A,平移），列 = 输入分量（R,G,B,A,w）—— GDI+ ColorMatrix 语义。
+#DIM WEBP_CM, 5, 5

@@ -62,9 +62,10 @@ cmake --build build --target test_cli
 | 31 | **GETCONFIG/GETCONFIGS（emuera.config 取值）**（`31_GETCONFIG.ERB`） |
 | 32 | **CSV 精灵偏移（立绘合成）与尺寸头回退**（`32_SPRITE_OFFSET.ERB`，素材 `example/resources/`） |
 | 33 | **`END` 是变量（`#DIM END`）不是指令**（`33_END_VARIABLE.ERB`，eraTW 角色移動 死循环回归） |
+| 34 | **真实图像文件（webp）× eraTW 式精灵堆叠 × 精灵序列**（`34_IMAGE.ERB`，素材 `example/resources/webp_atlas.webp`/`webp_item.webp`/gist 三张真实 webp，作者声明见 `example/resources/README_webp.md`） |
 
 「全部自动运行」（`./test/run_example.sh` 无参数）依次执行：
-**1–10、14、16、17、23–28、30、31、32、33 + 汇总**。
+**1–10、14、16、17、23–28、30–34 + 汇总**。
 
 不在自动路径、需单跑的组（`./test/run_example.sh <组号>`）：
 

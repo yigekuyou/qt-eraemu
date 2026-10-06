@@ -88,6 +88,8 @@ FAILS += RESULT
 CALL ASSERT_EQ, SPRITEHEIGHT("webp_atlas"), 16, @"SPRITEHEIGHT(裸名) = 16"
 FAILS += RESULT
 CALL ASSERT_EQ, SPRITEGETCOLOR("webp_atlas", 0, 0), 4294901760, @"SPRITEGETCOLOR 经 CSV 精灵 = 红"
+CALL ASSERT_EQ, SPRITEGETCOLOR("webp_solid", 0, 0), 4294902015, @"纯色4x4 VP8L 真解码"
+FAILS += RESULT
 FAILS += RESULT
 
 ;--- 3) eraTW 式堆叠：底片 + 带偏移部件 + 中心差分 ----------------------

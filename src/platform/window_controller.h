@@ -99,6 +99,10 @@ private:
     QString       m_windowMode = QStringLiteral("windowed");
     // 只跟随设置里的「最大化」开关：用户手动还原后不会因设置刷新被强行回弹
     bool m_appliedMaximized = false;
+    // 上次实际应用的窗口尺寸（Wayland 上 QWindow::width 是「请求值」，
+    // 与组合器的实际表面可以不一致 —— 判断是否需要 hide/show 重映射时
+    // 只能信自己记录的值）
+    QSize m_appliedSize;
 };
 
 #endif // WINDOW_CONTROLLER_H

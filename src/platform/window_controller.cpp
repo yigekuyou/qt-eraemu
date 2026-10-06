@@ -149,6 +149,24 @@ void WindowController::applyWindowSize() {
     m_window->setWidth(w);
     m_window->setHeight(h);
 
+    // Wayland 规避（xdg-toplevel 没有客户端强制几何的协议）：对已显示的
+    // 窗口 setWidth/setHeight 只是「请求」，组合器不改变实际渲染表面，Qt
+    // 却乐观地更新内部几何 —— 表现为「QML 按新尺寸排版、表面还是旧尺寸」
+    // → 舞台被窗口边缘裁掉（config 1400x750、窗口仍停在初始 760x480 时，
+    // 居中的立絵右半会被裁）。可靠的办法：撤下窗口再以新尺寸重新映射，
+    // 重新 map 的初始提交尺寸组合器会接受。X11 直接 resize 即可，不走这里。
+    const QSize requested(w, h);
+    if (QGuiApplication::platformName() == QLatin1String("wayland")
+            && m_window->isVisible() && m_appliedSize != requested) {
+        m_window->hide();
+        m_window->resize(w, h);
+        m_window->show();
+    }
+    m_appliedSize = requested;
+    qDebug() << "[window] applyWindowSize" << requested << "platform"
+             << QGuiApplication::platformName() << "visible" << m_window->isVisible()
+             << "qtGeom" << m_window->width() << "x" << m_window->height();
+
     // 最大化只跟随设置开关（用户手动还原后不回弹）
     const bool wantMax = m_gui->maximized();
     if (wantMax && !m_appliedMaximized)

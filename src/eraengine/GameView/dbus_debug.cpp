@@ -130,6 +130,15 @@ QString EraDBusDebug::diagBlocks() {
                    .arg(s->availableGeometry().width()).arg(s->availableGeometry().height())
                    .arg(g->windowWidth()).arg(g->windowHeight());
     }
+    out << QStringLiteral("platform=%1 topLevelWindows=%2")
+               .arg(QGuiApplication::platformName())
+               .arg(QGuiApplication::topLevelWindows().size());
+    // 顶层窗口实际尺寸（saveScreenshot 抓的是第一个可见 QQuickWindow）
+    for (const QWindow* w : QGuiApplication::topLevelWindows()) {
+        out << QStringLiteral("window %1x%2 visible=%3 dpr=%4")
+                       .arg(w->width()).arg(w->height())
+                       .arg(w->isVisible()).arg(w->devicePixelRatio());
+    }
     const QVariantList blocks = c->screenBlocks();
     out << QStringLiteral("textBlocks=%1").arg(blocks.size());
     auto dump = [&out](int i, const QVariantMap& m) {

@@ -39,14 +39,19 @@ def load(path: pathlib.Path) -> list[tuple[str, str, str, str, str, str]]:
 
 
 def main() -> int:
-    draft = {(r[0], r[1]): r for r in load(TSV)}
+    # 基表 = 生成器草稿（含所有新名字）→ 用当前清单覆盖（保住已复核的结论）
+    draft_rows = load(DATA / "doc_smoke.draft.tsv") if (DATA / "doc_smoke.draft.tsv").exists() else []
+    draft = {(r[0], r[1]): r for r in draft_rows}
+    if TSV.exists():
+        for r in load(TSV):
+            draft[(r[0], r[1])] = r
     merged: dict[tuple[str, str], tuple] = {}
     problems: list[str] = []
 
     # 先铺草稿，再用各批产出覆盖：smoke*.out.tsv 按 (name,kind) 覆盖，
     # input*.out.tsv（输入族改造）按 name 覆盖（同一名字可能有 func/cmd 两行）
     merged = dict(draft)
-    outs = sorted(FIX_DIR.glob("smoke*.out.tsv"))
+    outs = sorted(FIX_DIR.glob("*.out.tsv"))
     if not outs:
         print("没有找到 smoke*.out.tsv")
         return 1

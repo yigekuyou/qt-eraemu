@@ -23,7 +23,9 @@ STR:0 = "张三"
 STR:1 = "李四"
 STR:2 = "王五"
 CVTMP = ARRAYMSORT(FLAG, STR)
+; SKIP ARRAYMSORTEX —— 本仓库移植版未实现本函数族（文档「备注」）—— 语义：以「变量名字符串」指定排序基准数组并连带重排跟随数组，签名 (str 排序基准变量名, str数组 跟随数组名表{, int 正逆{, int 固定长度}})；example 有真实数组名（FLAG/DOC_WIDE_27）可写，但族未实现
 CVTMP_S = BARSTR(50, 100, 10)
+; SKIP BITMAP_CACHE_ENABLE —— 本仓库移植版未实现本函数（文档「备注」）—— 签名 (int 启用标志)：只置「下一行起启用位图缓存」标志，返回值恒 0（文档明确提示不要当布尔用）
 CVTMP = CBGCLEAR()
 CVTMP = CBGCLEARBUTTON()
 CVTMP = CBGREMOVEBMAP()
@@ -64,9 +66,44 @@ CVTMP_S = CSVNICKNAME(0)
 ; SKIP CSVTALENT —— example 的 Chara0.csv 的「素質」行以名称「性別」引用，而 CSV 目录没有 Talent.csv 名称表，模板数组未建立；索引 0 也会越界报错 —— 语义未确证
 CVTMP_S = CURRENTALIGN()
 CVTMP = CURRENTREDRAW()
+; SKIP DT_CELL_GET —— 本仓库移植版未实现本函数族（文档「备注」明写，与已判 skip 的 DT_COLUMN_OPTIONS 同因）—— 语义：读单元格整数值（表不存在/行或列不存在/值为 NULL 都返回 0），签名 (表名, 行, 列名{, int 按id查找})；真实调用须在同一 snippet 内先 DT_CREATE("smoke_t") 建表、DT_COLUMN_ADD("smoke_t","lv","int32") 加列、DT_ROW_ADD 加行才有意义，草稿的机械参数（"a"/1）无意义
+; SKIP DT_CELL_GETS —— 本仓库移植版未实现本函数族（文档「备注」明写，与已判 skip 的 DT_COLUMN_OPTIONS 同因）—— 语义：DT_CELL_GET 的 str 返回版（所有失败态都返回空串），签名 (表名, 行, 列名{, int 按id查找})；真实调用须在同一 snippet 内先 DT_CREATE("smoke_t") 建表、DT_COLUMN_ADD("smoke_t","lv","int32") 加列、DT_ROW_ADD 加行才有意义，草稿的机械参数（"a"/1）无意义
+; SKIP DT_CELL_ISNULL —— 本仓库移植版未实现本函数族（文档「备注」明写，与已判 skip 的 DT_COLUMN_OPTIONS 同因）—— 语义：判定单元格是否 NULL（1/0/-1/-2），本例还需 DT_ROW_ADD("smoke_t") 留空值才能得 1；真实调用须在同一 snippet 内先 DT_CREATE("smoke_t") 建表、DT_COLUMN_ADD("smoke_t","lv","int32") 加列、DT_ROW_ADD 加行才有意义，草稿的机械参数（"a"/1）无意义
+; SKIP DT_CELL_SET —— 本仓库移植版未实现本函数族（文档「备注」明写，与已判 skip 的 DT_COLUMN_OPTIONS 同因）—— 语义：按行序号或 id 单点改写一个单元格（签名 (表名, 行, 列名{, 值{, int 按id查找}})，id 列拒改返回 0）；真实调用须在同一 snippet 内先 DT_CREATE("smoke_t") 建表、DT_COLUMN_ADD("smoke_t","lv","int32") 加列、DT_ROW_ADD 加行才有意义，草稿的机械参数（"a"/1）无意义
+; SKIP DT_CLEAR —— 本仓库移植版未实现本函数族（文档「备注」明写，与已判 skip 的 DT_COLUMN_OPTIONS 同因）—— 语义：清空全部行但保留列定义与主键（返回 1；表不存在 -1）；真实调用须在同一 snippet 内先 DT_CREATE("smoke_t") 建表、DT_COLUMN_ADD("smoke_t","lv","int32") 加列、DT_ROW_ADD 加行才有意义，草稿的机械参数（"a"/1）无意义
+; SKIP DT_COLUMN_ADD —— 本仓库移植版未实现本函数族（文档「备注」明写，与已判 skip 的 DT_COLUMN_OPTIONS 同因）—— 语义：追加列，类型可写关键字 "int8".."string" 或编号 1..5（签名 (表名, 列名{, 类型{, int 允许空值}})）；真实调用须在同一 snippet 内先 DT_CREATE("smoke_t") 建表、DT_COLUMN_ADD("smoke_t","lv","int32") 加列、DT_ROW_ADD 加行才有意义，草稿的机械参数（"a"/1）无意义
+; SKIP DT_COLUMN_EXIST —— 本仓库移植版未实现本函数族（文档「备注」明写，与已判 skip 的 DT_COLUMN_OPTIONS 同因）—— 语义：返回列的类型编号 1..5（int8..string），列不存在 0、表不存在 -1；真实调用须在同一 snippet 内先 DT_CREATE("smoke_t") 建表、DT_COLUMN_ADD("smoke_t","lv","int32") 加列、DT_ROW_ADD 加行才有意义，草稿的机械参数（"a"/1）无意义
+; SKIP DT_COLUMN_LENGTH —— 本仓库移植版未实现本函数族（文档「备注」明写，与已判 skip 的 DT_COLUMN_OPTIONS 同因）—— 语义：列数（含 DT_CREATE 自动建的主键 id 列，表不存在 -1）；真实调用须在同一 snippet 内先 DT_CREATE("smoke_t") 建表、DT_COLUMN_ADD("smoke_t","lv","int32") 加列、DT_ROW_ADD 加行才有意义，草稿的机械参数（"a"/1）无意义
+; SKIP DT_COLUMN_NAMES —— 本仓库移植版未实现本函数族（文档「备注」明写，与已判 skip 的 DT_COLUMN_OPTIONS 同因）—— 语义：列名按序写入 RESULTS 或指定一维字符串数组，返回列数（数组短于列数会越界）；真实调用须在同一 snippet 内先 DT_CREATE("smoke_t") 建表、DT_COLUMN_ADD("smoke_t","lv","int32") 加列、DT_ROW_ADD 加行才有意义，草稿的机械参数（"a"/1）无意义
+; SKIP DT_COLUMN_REMOVE —— 本仓库移植版未实现本函数族（文档「备注」明写，与已判 skip 的 DT_COLUMN_OPTIONS 同因）—— 语义：删列（返回 1；id 列大小写不敏感地受保护返回 0）；真实调用须在同一 snippet 内先 DT_CREATE("smoke_t") 建表、DT_COLUMN_ADD("smoke_t","lv","int32") 加列、DT_ROW_ADD 加行才有意义，草稿的机械参数（"a"/1）无意义
+; SKIP DT_CREATE —— 本仓库移植版未实现本函数族（文档「备注」明写，与已判 skip 的 DT_COLUMN_OPTIONS 同因）—— 语义：按名字建表并自动添加主键 id 列（新建 1；同名已存在 0；建表是整族的前置）；真实调用须在同一 snippet 内先 DT_CREATE("smoke_t") 建表、DT_COLUMN_ADD("smoke_t","lv","int32") 加列、DT_ROW_ADD 加行才有意义，草稿的机械参数（"a"/1）无意义
+; SKIP DT_EXIST —— 本仓库移植版未实现本函数族（文档「备注」明写，与已判 skip 的 DT_COLUMN_OPTIONS 同因）—— 语义：判表是否存在（存在 1 / 不存在 0，是族内唯一不返回负数的查询）；真实调用须在同一 snippet 内先 DT_CREATE("smoke_t") 建表、DT_COLUMN_ADD("smoke_t","lv","int32") 加列、DT_ROW_ADD 加行才有意义，草稿的机械参数（"a"/1）无意义
+; SKIP DT_FROMXML —— 本仓库移植版未实现本函数族（文档「备注」明写，与已判 skip 的 DT_COLUMN_OPTIONS 同因）—— 语义：按 (表名, 架构XML, 数据XML) 从 XML 建列建行，是本族最重的前置依赖之一；真实调用须在同一 snippet 内先 DT_CREATE("smoke_t") 建表、DT_COLUMN_ADD("smoke_t","lv","int32") 加列、DT_ROW_ADD 加行才有意义，草稿的机械参数（"a"/1）无意义
+; SKIP DT_NOCASE —— 本仓库移植版未实现本函数族（文档「备注」明写，与已判 skip 的 DT_COLUMN_OPTIONS 同因）—— 语义：设置表的 CaseSensitive（签名 (表名, int 忽略大小写)）；真实调用须在同一 snippet 内先 DT_CREATE("smoke_t") 建表、DT_COLUMN_ADD("smoke_t","lv","int32") 加列、DT_ROW_ADD 加行才有意义，草稿的机械参数（"a"/1）无意义
+; SKIP DT_RELEASE —— 本仓库移植版未实现本函数族（文档「备注」明写，与已判 skip 的 DT_COLUMN_OPTIONS 同因）—— 语义：丢弃整张表（连同列与行，恒返回 1）；真实调用须在同一 snippet 内先 DT_CREATE("smoke_t") 建表、DT_COLUMN_ADD("smoke_t","lv","int32") 加列、DT_ROW_ADD 加行才有意义，草稿的机械参数（"a"/1）无意义
+; SKIP DT_ROW_ADD —— 本仓库移植版未实现本函数族（文档「备注」明写，与已判 skip 的 DT_COLUMN_OPTIONS 同因）—— 语义：追加行并返回新行 id（由时间点生成的大整数，不可硬编码），签名 (表名{, 列名, 值 ...})；真实调用须在同一 snippet 内先 DT_CREATE("smoke_t") 建表、DT_COLUMN_ADD("smoke_t","lv","int32") 加列、DT_ROW_ADD 加行才有意义，草稿的机械参数（"a"/1）无意义
+; SKIP DT_ROW_LENGTH —— 本仓库移植版未实现本函数族（文档「备注」明写，与已判 skip 的 DT_COLUMN_OPTIONS 同因）—— 语义：行数（新建为 0，表不存在 -1）；真实调用须在同一 snippet 内先 DT_CREATE("smoke_t") 建表、DT_COLUMN_ADD("smoke_t","lv","int32") 加列、DT_ROW_ADD 加行才有意义，草稿的机械参数（"a"/1）无意义
+; SKIP DT_ROW_REMOVE —— 本仓库移植版未实现本函数族（文档「备注」明写，与已判 skip 的 DT_COLUMN_OPTIONS 同因）—— 语义：按 id 删一行（1/0/-1），另有 (表名, ref int id数组, int 个数) 批量形态；真实调用须在同一 snippet 内先 DT_CREATE("smoke_t") 建表、DT_COLUMN_ADD("smoke_t","lv","int32") 加列、DT_ROW_ADD 加行才有意义，草稿的机械参数（"a"/1）无意义
+; SKIP DT_ROW_SET —— 本仓库移植版未实现本函数族（文档「备注」明写，与已判 skip 的 DT_COLUMN_OPTIONS 同因）—— 语义：按 id 定位并改写多列，返回被赋值列数（表不存在 -1 / 无此行 -2）；真实调用须在同一 snippet 内先 DT_CREATE("smoke_t") 建表、DT_COLUMN_ADD("smoke_t","lv","int32") 加列、DT_ROW_ADD 加行才有意义，草稿的机械参数（"a"/1）无意义
+; SKIP DT_SELECT —— 本仓库移植版未实现本函数族（文档「备注」明写，与已判 skip 的 DT_COLUMN_OPTIONS 同因）—— 语义：按过滤表达式选出 id 写 RESULT，签名 (表名{, 过滤表达式{, 排序表达式{, ref int 输出数组}}})；真实调用须在同一 snippet 内先 DT_CREATE("smoke_t") 建表、DT_COLUMN_ADD("smoke_t","lv","int32") 加列、DT_ROW_ADD 加行才有意义，草稿的机械参数（"a"/1）无意义
+; SKIP DT_TOXML —— 本仓库移植版未实现本函数族（文档「备注」明写，与已判 skip 的 DT_COLUMN_OPTIONS 同因）—— 语义：把表序列化为 XML 字符串（str 返回版），签名 (表名{, ref str 模式输出变量})；真实调用须在同一 snippet 内先 DT_CREATE("smoke_t") 建表、DT_COLUMN_ADD("smoke_t","lv","int32") 加列、DT_ROW_ADD 加行才有意义，草稿的机械参数（"a"/1）无意义
 CVTMP = ENCODETOUNI("AあB", 1)
+; SKIP ENUMFILES —— 本仓库移植版未实现本函数族（文档「备注」）——语义：枚举目录内文件并返回相对路径，签名 (目录{, 通配模式{, 递归{, ref str 输出数组}})；文档备注另提示其路径规则与 EXISTFILE 一致（相对 exe、".." 无效）
+; SKIP ENUMFUNCBEGINSWITH —— 本仓库移植版未实现本函数族（文档「备注」）——语义：按前缀枚举已定义函数名（匹配不区分大小写、结果不排序），签名 (前缀{, ref str 输出数组})；example 里有可匹配的函数名，但族未实现即无验证价值
+; SKIP ENUMFUNCENDSWITH —— 本仓库移植版未实现本函数族（文档「备注」）——语义：按后缀枚举已定义函数名（纯字符串比较、不排序），签名 (后缀{, ref str 输出数组})
+; SKIP ENUMFUNCWITH —— 本仓库移植版未实现本函数族（文档「备注」）——语义：按子串枚举已定义函数名，签名 (子串{, ref str 输出数组})
+; SKIP ENUMMACROBEGINSWITH —— 本仓库移植版未实现本函数族（文档「备注」）——语义：按前缀枚举 #DEFINE 宏名（不区分大小写、不排序）；example 的 TEST_HEADER.ERH 有真实宏名（DOC_MAC_27/DOC_HELLO 等）可匹配，但族未实现
+; SKIP ENUMMACROENDSWITH —— 本仓库移植版未实现本函数族（文档「备注」）——语义：按后缀枚举 #DEFINE 宏名，签名 (后缀{, ref str 输出数组})
+; SKIP ENUMMACROWITH —— 本仓库移植版未实现本函数族（文档「备注」）——语义：按子串枚举 #DEFINE 宏名，签名 (子串{, ref str 输出数组})
+; SKIP ENUMVARBEGINSWITH —— 本仓库移植版未实现本函数族（文档「备注」）——语义：按前缀枚举变量名（含内置变量），签名 (前缀{, ref str 输出数组})；example 可用真实变量名（FLAG/ABL 等），但族未实现
+; SKIP ENUMVARENDSWITH —— 本仓库移植版未实现本函数族（文档「备注」）——语义：按后缀枚举变量名，签名 (后缀{, ref str 输出数组})
+; SKIP ENUMVARWITH —— 本仓库移植版未实现本函数族（文档「备注」）——语义：按子串枚举变量名，签名 (子串{, ref str 输出数组})
+; SKIP ERDNAME —— 本仓库移植版未实现本函数（文档「备注」）—— 签名 (var 变量{, int 数值{, int 维度}})：ERD 的反查（数值→名字），须先把名字登记进 ERD；example 未用 ERD
 CVTMP_S = ESCAPE("a.b(c)")
 CVTMP = EXISTCSV(0)
+; SKIP EXISTFILE —— 本仓库移植版未实现本函数（文档「备注」）—— 签名 (str 路径)：判文件是否存在，路径规则为相对 exe 目录且 "..\" 被字符串级剔除
+; SKIP EXISTMETH —— 本仓库移植版未实现本函数（文档「备注」）—— 签名 (str 函数名)：用空参数表试探函数可否零参调用（1/2），带必填参数的函数返回 0，故不能用来判「是否存在」
+; SKIP EXISTVAR —— 本仓库移植版未实现本函数（文档「备注」）—— 签名 (str 变量名)：返回位编码 1/2/4/8/16（常量/字符串型/二维/三维）；example 可用真实变量名（"FLAG"/"ABL"），但函数未实现
 CVTMP = EXPONENT(5)
 ADDCHARA 0
 CVTMP = FINDCHARA(NO, 0)
@@ -80,6 +117,7 @@ FLAG:1 = 7
 CVTMP = FINDLASTELEMENT(FLAG, 5, 0, 2)
 CVTMP = FIND_CHARADATA()
 ; SKIP FIND_VARDATA —— 本仓库无实现：注册行被注释（//TODO:1810），文档「备注」写明调用必然失败（源索引标注与实际不符）
+; SKIP FLOWINPUTS —— 本仓库移植版未实现本函数（文档「备注」明写；其姊妹函数 FLOWINPUT 已被输入族判为 call）—— 且它会改写本次 Process 的系统输入形态（字符串/整数）与默认值、设置后不复位，属会影响其它条目的全局状态改动
 CVTMP = GCREATE(0, 16, 16)
 CVTMP = GCLEAR(0, 0xFF000000)
 CVTMP = GDISPOSE(0)
@@ -115,6 +153,8 @@ CVTMP_S = GETFONT()
 CVTMP = GETKEY(65)
 CVTMP = GETKEYTRIGGERED(65)
 CVTMP_S = GETLINESTR("─")
+; SKIP GETMETH —— 本仓库移植版未实现本函数（文档「备注」）—— 签名 (str 函数名{, int 未定义时的默认值{, 实参...}})：按名字调用用户定义 #FUNCTION（只认用户函数，内置函数名会被当成不存在）
+; SKIP GETMETHS —— 本仓库移植版未实现本函数（文档「备注」）—— GETMETH 的字符串返回版（调用 #FUNCTIONS），签名 (str 函数名{, str 未定义时的默认值{, 实参...}})
 CVTMP = GETMILLISECOND()
 CVTMP = GETNUM(ABL, "技巧")
 CVTMP = GETNUMB("ABL", "技巧")
@@ -126,15 +166,20 @@ CVTMP = GETSECOND()
 CVTMP = GETSTYLE()
 CVTMP = GETTIME()
 CVTMP_S = GETTIMES()
+; SKIP GETVAR —— 本仓库移植版未实现本函数（文档「备注」）—— 签名 (str 变量名表达式)：按名字读整数变量（如 GETVAR("FLAG:0")），与 SETVAR/VARSETEX 同族
+; SKIP GETVARS —— 本仓库移植版未实现本函数（文档「备注」）—— GETVAR 的字符串版：按名字读字符串变量，签名 (str 变量名表达式)
 CVTMP = GCREATE(400, 64, 64)
 CVTMP = GSETBRUSH(400, 4278190335)
 CVTMP = GFILLRECTANGLE(400, 0, 0, 8, 8)
+; SKIP GGETBRUSH —— 本仓库移植版未实现本函数（文档「备注」）—— 签名 (int ID)：读 G 的画刷色（须先 GCREATE；返回 0 有两种含义：未创建 / 画刷恰为全透明黑）
 CVTMP = GCREATE(401, 4, 4)
 CVTMP = GSETCOLOR(401, 4294901760, 0, 0)
 CVTMP = GGETCOLOR(401, 0, 0)
+; SKIP GGETFONTSTYLE —— 本仓库移植版未实现本函数（文档「备注」）—— 签名 (int ID)：读 G 的字体样式位（1/2/4/8，须先 GCREATE；返回 0 也可能是 Regular 样式）
 CVTMP = GCREATE(402, 300, 200)
 CVTMP = GHEIGHT(402)
 ; SKIP GLOAD —— 成功路径需要 GSAVE 写盘生成的 save/imgXXXX.png（冒烟组禁止写盘）；无该文件时只会走失败分支返回 0，无法验证文档的加载语义
+; SKIP GROTATE —— 文档「备注」写明本函数在当前源码中不可用：注册表项与实现类整块被注释（连参数检查也在注释内），ERB 里写 GROTATE(...) 会被当作未定义函数报错；被保留的替代方案是 GDRAWGWITHROTATE（组 32 已覆盖）
 CVTMP = GROUPMATCH(2, 1, 2, 3)
 ; SKIP GSAVE —— 会写盘：把 Graphics 以 png 输出到存档目录 save/imgXXXX.png
 CVTMP = GCREATE(403, 64, 64)
@@ -147,11 +192,17 @@ CVTMP = GCREATE(406, 64, 64)
 CVTMP = GSETPEN(406, 4294901760, 2)
 CVTMP = GCREATE(407, 300, 200)
 CVTMP = GWIDTH(407)
+CVTMP = HOTKEY_STATE_INIT(3)
+CVTMP = HOTKEY_STATE(0, 1)
+CVTMP = HOTKEY_STATE_INIT(3)
 CVTMP_S = HTML_ESCAPE("<a&b>")
 PRINTL 冒烟：HTML_GETPRINTEDSTR 取已显示行
 CVTMP_S = HTML_GETPRINTEDSTR(0)
 PRINTS "AB"
 CVTMP_S = HTML_POPPRINTINGSTR()
+CVTMP = HTML_STRINGLEN("AB<b>CD</b>EFG", 1)
+CVTMP = HTML_STRINGLINES("AB<b>CD</b>EFG", 4)
+CVTMP_S = HTML_SUBSTRING("AB<b>CD</b>EFG", 4)
 CVTMP_S = HTML_TOPLAINTEXT("<b>纯文本</b>")
 CVTMP = INRANGE(5, 1, 10)
 LOCAL:0 = 10
@@ -161,6 +212,7 @@ CVTMP = INRANGEARRAY(LOCAL, 10, 20, 0, 3)
 ADDCHARA 0
 CVTMP = INRANGECARRAY(CFLAG, 0, 100)
 CVTMP = ISACTIVE()
+CVTMP = ISDEFINED("DOC_MAC_27")
 CVTMP = ISNUMERIC("123")
 CVTMP = ISSKIP()
 CVTMP = LIMIT(15, 0, 10)
@@ -168,6 +220,36 @@ CVTMP = LINEISEMPTY()
 CVTMP_S = LOADTEXT(1)
 CVTMP = LOG(10)
 CVTMP = LOG10(100)
+CVTMP = MAP_CREATE("smoke_clear")
+CVTMP = MAP_SET("smoke_clear", "a", "1")
+CVTMP = MAP_CLEAR("smoke_clear")
+CVTMP = MAP_CREATE("smoke_create")
+CVTMP = MAP_CREATE("smoke_exist")
+CVTMP = MAP_EXIST("smoke_exist")
+CVTMP = MAP_CREATE("smoke_fromxml")
+CVTMP = MAP_FROMXML("smoke_fromxml", "<map><p><k>y</k><v>2</v></p></map>")
+CVTMP = MAP_CREATE("smoke_get")
+CVTMP = MAP_SET("smoke_get", "药水", "50")
+CVTMP_S = MAP_GET("smoke_get", "药水")
+CVTMP = MAP_CREATE("smoke_keys")
+CVTMP = MAP_SET("smoke_keys", "药水", "50")
+CVTMP_S = MAP_GETKEYS("smoke_keys")
+CVTMP = MAP_CREATE("smoke_has")
+CVTMP = MAP_SET("smoke_has", "药水", "50")
+CVTMP = MAP_HAS("smoke_has", "药水")
+CVTMP = MAP_CREATE("smoke_release")
+CVTMP = MAP_RELEASE("smoke_release")
+CVTMP = MAP_CREATE("smoke_remove")
+CVTMP = MAP_SET("smoke_remove", "药水", "50")
+CVTMP = MAP_REMOVE("smoke_remove", "药水")
+CVTMP = MAP_CREATE("smoke_set")
+CVTMP = MAP_SET("smoke_set", "Alice", "100")
+CVTMP = MAP_CREATE("smoke_size")
+CVTMP = MAP_SET("smoke_size", "Alice", "100")
+CVTMP = MAP_SIZE("smoke_size")
+CVTMP = MAP_CREATE("smoke_toxml")
+CVTMP = MAP_SET("smoke_toxml", "药水", "50")
+CVTMP_S = MAP_TOXML("smoke_toxml")
 LOCAL:0 = 7
 LOCAL:1 = 7
 CVTMP = MATCH(LOCAL, 7, 0, 4)
@@ -187,18 +269,23 @@ CVTMP = MINARRAY(LOCAL, 0, 3)
 ADDCHARA 0
 CVTMP = MINCARRAY(CFLAG)
 CVTMP_S = MONEYSTR(10000)
+; SKIP MOUSEB —— 需要 GUI 鼠标悬停：签名 str MOUSEB()，文档明示只在 AWAIT 待机中才有意义（推荐写法是 AWAIT + GOTO 的无限循环），指针下无输入按钮时恒返回空串；注入鼠标无法保证指针下有按钮 ⇒ 冒烟无可验证行为
 CVTMP = MOUSESKIP()
 CVTMP = MOUSEX()
 CVTMP = MOUSEY()
+; SKIP MOVETEXTBOX —— 依赖 GUI 输入框（文本框）控件布局：签名 (int X偏移, int Y偏移, int 宽度)，改的是输入框位置/宽度，test_cli 无该控件；与已判 skip 的 SETTEXTBOX/GETTEXTBOX 同族
 CVTMP = NOSAMES(1, 2, 3)
 CVTMP = POWER(2, 10)
 CVTMP = PRINTCLENGTH()
 CVTMP = PRINTCPERLINE()
 CVTMP = RAND(1, 100)
+CVTMP = REGEXPMATCH("2026-10-07", "([0-9]{4})-([0-9]{2})-([0-9]{2})", 1)
 CVTMP_S = REPLACE("Hello, World", "o", "0")
+; SKIP RESUMETEXTBOX —— 依赖 GUI 输入框布局：把输入框设回 textBoxInfo 记录的位置，三个参数被实现完全忽略；test_cli 无该控件，同族 MOVETEXTBOX/SETTEXTBOX 均已判 skip
 CVTMP = SAVENOS()
 ; SKIP SAVETEXT —— 会写盘：把文本写入存档目录 txtNN.txt（或指定路径），冒烟组禁止写盘
 CVTMP = SETANIMETIMER(33)
+CVTMP = SETVAR("FLAG:0", 1)
 CVTMP = SIGN(-5)
 CVTMP = GCREATE(410, 8, 8)
 CVTMP = SPRITEANIMECREATE("SMK_ANIM_F", 8, 8)
@@ -260,7 +347,45 @@ CVTMP_S = TOSTR(123, "D5")
 CVTMP_S = TOUPPER("aBc")
 CVTMP_S = UNICODE(0x2661)
 CVTMP = UNICODEBYTE("A")
+CVTMP = VARSETEX("FLAG", 7, 1, 0, 2)
 CVTMP = VARSIZE("FLAG")
+CVTMP = XML_DOCUMENT(95, "<root><a>x</a></root>")
+CVTMP = XML_ADDATTRIBUTE(95, "//a", "id", "5")
+CVTMP = XML_DOCUMENT("smoke_addattr", "<root><a>x</a></root>")
+CVTMP = XML_ADDATTRIBUTE_BYNAME("smoke_addattr", "//a", "id", "5")
+CVTMP = XML_DOCUMENT(94, "<root><a>1</a></root>")
+CVTMP = XML_ADDNODE(94, "//a", "<b>new</b>")
+CVTMP = XML_DOCUMENT("smoke_addnode", "<root><a/></root>")
+CVTMP = XML_ADDNODE_BYNAME("smoke_addnode", "//a", "<b>1</b>")
+CVTMP = XML_DOCUMENT(90, "<root><a>x</a></root>")
+CVTMP = XML_DOCUMENT(91, "<root/>")
+CVTMP = XML_EXIST(91)
+CVTMP = XML_DOCUMENT(92, "<root><a>aaa</a><a>bbb</a></root>")
+CVTMP = XML_GET(92, "//a", 1, 1)
+CVTMP = XML_DOCUMENT("smoke_get", "<chara><name>Alice</name><lv>3</lv></chara>")
+CVTMP = XML_GET_BYNAME("smoke_get", "//lv", 1, 1)
+CVTMP = XML_DOCUMENT(100, "<root><a>x</a></root>")
+CVTMP = XML_RELEASE(100)
+CVTMP = XML_DOCUMENT(97, "<root><a>x</a></root>")
+CVTMP = XML_ADDATTRIBUTE(97, "//a", "id", "5")
+CVTMP = XML_REMOVEATTRIBUTE(97, "//a/@id")
+CVTMP = XML_DOCUMENT("smoke_rmattr", "<root><a>x</a></root>")
+CVTMP = XML_ADDATTRIBUTE_BYNAME("smoke_rmattr", "//a", "id", "5")
+CVTMP = XML_REMOVEATTRIBUTE_BYNAME("smoke_rmattr", "//a/@id")
+CVTMP = XML_DOCUMENT(96, "<root><a>1</a><b>2</b></root>")
+CVTMP = XML_REMOVENODE(96, "//b")
+CVTMP = XML_DOCUMENT("smoke_rmnode", "<root><keep/><drop/></root>")
+CVTMP = XML_REMOVENODE_BYNAME("smoke_rmnode", "//drop")
+CVTMP = XML_DOCUMENT(98, "<old><a>1</a></old>")
+CVTMP = XML_REPLACE(98, "<new><b>2</b></new>")
+CVTMP = XML_DOCUMENT("smoke_replace", "<root><a>1</a></root>")
+CVTMP = XML_REPLACE_BYNAME("smoke_replace", "//a", "<a>NEW</a>")
+CVTMP = XML_DOCUMENT(93, "<root><a>old</a></root>")
+CVTMP = XML_SET(93, "//a", "new", 0, 1)
+CVTMP = XML_DOCUMENT("smoke_set", "<root><name>old</name></root>")
+CVTMP = XML_SET_BYNAME("smoke_set", "//name", "Alice", 0, 1)
+CVTMP = XML_DOCUMENT(99, "<root><a>x</a></root>")
+CVTMP_S = XML_TOSTR(99)
 
 ;---- 35.2 命令 ----
 ADDCHARA 0

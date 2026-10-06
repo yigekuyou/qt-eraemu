@@ -69,13 +69,12 @@ QString EraDBusDebug::consoleStats() {
     if (!m_engine || !m_engine->getConsole()) return QStringLiteral("no console");
     const auto* c = m_engine->getConsole();
     return QStringLiteral(
-               "bufferLines=%1\nlogicalLines=%2\nvisibleCount=%3\nscrollOffset=%4\n"
-               "followTail=%5\ngeneration=%6\ngridColumns=%7 gridRows=%8")
+               "bufferLines=%1\nlogicalLines=%2\nmodelRows=%3\n"
+               "maxSpanReach=%4\ngeneration=%5\ngridColumns=%6 gridRows=%7")
         .arg(c->buffer().count())
         .arg(c->buffer().logicalLineCount())
-        .arg(c->visibleCount())
-        .arg(c->scrollOffset())
-        .arg(c->followTail())
+        .arg(c->rowCount())
+        .arg(c->maxSpanReach())
         .arg(c->generation())
         .arg(c->gridColumns())
         .arg(c->gridRows());
@@ -121,9 +120,9 @@ QString EraDBusDebug::diagBlocks() {
     out << QStringLiteral("gui.fore=%1 back=%2 font=%3 size=%4 lh=%5")
                .arg(g->foreColor().name(), g->backColor().name(), g->fontName())
                .arg(g->fontSize()).arg(g->lineHeight());
-    out << QStringLiteral("console firstRow=%1 visibleCount=%2 buffer=%3 grid=%4x%5")
-               .arg(c->windowFirstLine()).arg(c->visibleCount())
-               .arg(c->buffer().count()).arg(c->gridColumns()).arg(c->gridRows());
+    out << QStringLiteral("console modelRows=%1 buffer=%2 maxSpanReach=%3 grid=%4x%5")
+               .arg(c->rowCount()).arg(c->buffer().count()).arg(c->maxSpanReach())
+               .arg(c->gridColumns()).arg(c->gridRows());
     if (QScreen* s = QGuiApplication::primaryScreen()) {
         out << QStringLiteral("screen name=%1 geom=%2x%3 avail=%4x%5 stage=%6x%7")
                    .arg(s->name())
@@ -131,7 +130,7 @@ QString EraDBusDebug::diagBlocks() {
                    .arg(s->availableGeometry().width()).arg(s->availableGeometry().height())
                    .arg(g->windowWidth()).arg(g->windowHeight());
     }
-    const QVariantList blocks = c->textBlocks();
+    const QVariantList blocks = c->screenBlocks();
     out << QStringLiteral("textBlocks=%1").arg(blocks.size());
     auto dump = [&out](int i, const QVariantMap& m) {
         out << QStringLiteral("  [%1] row=%2 col=%3 cols=%4 rows=%5 color=%6 font=%7 kind=%8 btn=%9 text=%10")
@@ -144,13 +143,19 @@ QString EraDBusDebug::diagBlocks() {
     };
     for (int i = 0; i < qMin(3, blocks.size()); ++i) dump(i, blocks.at(i).toMap());
     for (int i = qMax(0, blocks.size() - 2); i < blocks.size(); ++i) dump(i, blocks.at(i).toMap());
+    // 非文本区块（图/形）全量输出 —— 立絵坐标核对用
+    for (int i = 0; i < blocks.size(); ++i) {
+        const QVariantMap m = blocks.at(i).toMap();
+        if (m.value(QStringLiteral("kind")).toString() != QLatin1String("text"))
+            dump(i, m);
+    }
     return out.join(QLatin1Char('\n'));
 }
 
 QString EraDBusDebug::listButtons() {
     if (!m_engine || !m_engine->getConsole()) return QStringLiteral("no console");
     QStringList out;
-    const QVariantList blocks = m_engine->getConsole()->textBlocks();
+    const QVariantList blocks = m_engine->getConsole()->screenBlocks();
     for (const QVariant& v : blocks) {
         const QVariantMap m = v.toMap();
         if (!m.value(QStringLiteral("isButton")).toBool()
@@ -207,11 +212,11 @@ void EraDBusDebug::sendMouseKey(int type, int r1, int r2, int r3, int r4) {
 }
 
 void EraDBusDebug::scroll(int lines) {
-    if (m_engine && m_engine->getConsole()) m_engine->getConsole()->scrollBy(lines);
+    if (m_engine && m_engine->getConsole()) m_engine->getConsole()->requestScrollBy(lines);
 }
 
 void EraDBusDebug::scrollToBottom() {
-    if (m_engine && m_engine->getConsole()) m_engine->getConsole()->scrollToBottom();
+    if (m_engine && m_engine->getConsole()) m_engine->getConsole()->requestScrollToBottom();
 }
 
 void EraDBusDebug::setLoggingRules(const QString& rules) {

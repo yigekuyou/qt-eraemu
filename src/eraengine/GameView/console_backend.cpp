@@ -45,7 +45,7 @@ bool inputExpectsAnyKey(const QString& kind) {
 } // namespace
 
 ConsoleBackend::ConsoleBackend(QObject* parent)
-    : QObject(parent)
+    : QAbstractListModel(parent)
 {
     m_timer.setInterval(m_frameMs);
     m_timer.setTimerType(Qt::CoarseTimer);
@@ -53,12 +53,32 @@ ConsoleBackend::ConsoleBackend(QObject* parent)
     m_timer.start();
 }
 
-int ConsoleBackend::lineCount() const {
-    return m_buffer.count();
+// ---------------------------------------------------------------------------
+// QAbstractListModel
+// ---------------------------------------------------------------------------
+
+int ConsoleBackend::rowCount(const QModelIndex& parent) const {
+    if (parent.isValid()) return 0;
+    return m_buffer.count() + (m_tailRow ? 1 : 0);
 }
 
-int ConsoleBackend::logicalLineCount() const {
-    return m_buffer.logicalLineCount();
+QHash<int, QByteArray> ConsoleBackend::roleNames() const {
+    return {
+        { BlocksRole,    "blocks" },
+        { LineIndexRole, "lineIndex" },
+        { SpanRowsRole,  "spanRows" },
+    };
+}
+
+QVariant ConsoleBackend::data(const QModelIndex& index, int role) const {
+    const int row = index.row();
+    if (row < 0 || row >= rowCount() || index.column() != 0) return {};
+    switch (role) {
+    case BlocksRole:    return lineBlocks(row);
+    case LineIndexRole: return row;
+    case SpanRowsRole:  return lineSpanRows(displayLine(row));
+    default:            return {};
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -390,25 +410,46 @@ void ConsoleBackend::newline() {
     m_sealed.clear();
     m_pendingParts.clear();
     m_pendingOpen = false;
+    m_tailDirty = false;
 
+    QList<ConsoleDisplayLine> committed;
     if (m_wrapLines) {
-        const QList<ConsoleDisplayLine> lines = m_layout.wrapSegments(std::move(line.segments),
-                                                                     line.align);
-        int row = m_buffer.count();
-        for (ConsoleDisplayLine l : lines) {
-            // wrapSegments 只负责切分逻辑行；绝对列/对齐仍由同一入口计算。
-            m_layout.placeLine(l, row++);
-            trackSpanReach(l);
-            m_buffer.appendLine(l);
-        }
+        // wrapSegments 只负责切分逻辑行；绝对列/对齐仍由同一入口计算。
+        committed = m_layout.wrapSegments(std::move(line.segments), line.align);
     } else {
-        // pointOffset/part.col 的单位是字符列，不是像素。统一走 placeLine，
-        // 由 maxCols() 和 widthUnits() 计算对齐，避免 760px 被误当成 760 列。
-        m_layout.placeLine(line, m_buffer.count());
-        trackSpanReach(line);
-        m_buffer.appendLine(line);
+        committed.append(line);
     }
-    markDirty();
+
+    const int firstRow = m_buffer.count();
+    // 尾行（未定型行）提交：摘除尾行 -> 追加进缓冲 -> 插入已提交行。
+    // Qt 文档（QAbstractItemModel）：begin/end 必须括住数据变更。
+    if (m_tailRow) {
+        beginRemoveRows(QModelIndex(), firstRow, firstRow);
+        m_tailRow = false;
+        endRemoveRows();
+        ++m_removedRows;
+    }
+    // 头部批量裁剪：先发信号再裁（appendLine 内部的 trim 不再触发，见 trimFront）
+    const int total = firstRow + committed.size();
+    const int trim = ConsoleBuffer::trimAmount(total, m_buffer.capacity());
+    if (trim > 0) {
+        beginRemoveRows(QModelIndex(), 0, trim - 1);
+        m_buffer.trimFront(trim);
+        endRemoveRows();
+        m_removedRows += trim;
+        pruneHeadCacheIfNeeded();
+    }
+    for (int i = 0; i < committed.size(); ++i) {
+        m_layout.placeLine(committed[i], firstRow + i);
+        trackSpanReach(committed[i]);
+        m_buffer.appendLine(committed[i]);
+    }
+    if (!committed.isEmpty()) {
+        beginInsertRows(QModelIndex(), firstRow, firstRow + committed.size() - 1);
+        endInsertRows();
+        m_insertedRows += committed.size();
+    }
+    emit lineCountChanged();
 }
 
 void ConsoleBackend::printButton(const QString& text, qint64 value, const QString& tooltip) {
@@ -516,58 +557,48 @@ void ConsoleBackend::clearLines(int n) {
         m_pendingParts.clear();
         m_sealed.clear();
         m_pendingOpen = false;
+        m_tailDirty = false;
     }
-    const int oldCount = m_buffer.count();          // 删除前的绝对行数
-    m_buffer.removeLastLogicalLines(n);
-    const int newCount = m_buffer.count();          // 删除后
+    const int oldCount = m_buffer.count();
+    // CLEARLINE：从尾部删掉 n 个**逻辑行**（连同其折行续行）。
+    // 先预告物理行数，才能把 beginRemoveRows 括在真正的删除外面。
+    const int physical = m_buffer.physicalTailCount(n);
+    if (physical > 0) {
+        beginRemoveRows(QModelIndex(), oldCount - physical, oldCount - 1);
+        m_buffer.removeLastLogicalLines(n);
+        endRemoveRows();
+        m_removedRows += physical;
+        emit lineCountChanged();
+        pruneTailCache();
+    }
+    if (m_tailRow) {
+        beginRemoveRows(QModelIndex(), m_buffer.count(), m_buffer.count());
+        m_tailRow = false;
+        endRemoveRows();
+        ++m_removedRows;
+    }
     m_lastLineTemporary = false;   // 末尾的「一時行」已被删 -> 清标记
-    // 被删掉的行：按行缓存与版本作废（只波动尾部，其余行的缓存仍然有效）。
-    // 版本必须一起删 —— 重打印会复用这些绝对行号，旧版本号残留会让模型误判
-    // 「内容没变」而保留旧区块（点按钮后画面不刷新、按钮世代过期失效的根因）。
-    //
-    // 只删 [newCount, oldCount) 这一段：缓存里**不可能**存在 >= newCount 之外的
-    // 失效键（lineBlocks 只缓存 abs < count 的行）。此前是遍历整个
-    // m_lineCache/m_lineVersion（最多 MaxLog=5000 行）再逐个判键 —— 每次
-    // clearLines(1) 都是 O(历史长度)，商店/训练每重画一屏就清一次，
-    // 于是「点一下非常卡」。改成 O(被删行数)。
-    for (int i = newCount; i < oldCount; ++i) {
-        m_lineCache.remove(i);
-        m_lineVersion.remove(i);
-    }
-    clampScroll();
-    markDirty();
-}
-
-// 记录「区块最多往上探出窗口几行」：rows 本身，加上 ypos 的负偏移折算的行数。
-// 只在行定型（measurePart 算完 cols/rows/top）之后调用。
-void ConsoleBackend::trackSpanReach(const ConsoleDisplayLine& line) {
-    for (const ConsoleSegment& seg : line.segments) {
-        for (const ConsoleSpan& part : seg.spans) {
-            int reach = qMax(1, part.rows);
-            if (m_lineHeight > 0 && part.top < 0) {
-                const int offRows = int(-part.top) / qMax(1, m_lineHeight);
-                reach += offRows;
-            }
-            m_maxSpanReach = std::max(m_maxSpanReach, reach);
-        }
-    }
 }
 
 void ConsoleBackend::clearAll() {
     qDebug() << "[render] clearAll（清屏，行数" << m_buffer.count() << "）";
+    beginResetModel();
     m_buffer.clear();
-    m_maxSpanReach = 1;
-    m_lastLineTemporary = false;
     m_pendingParts.clear();
     m_sealed.clear();
     m_pendingOpen = false;
-    m_scrollOffset = 0;
-    invalidateLineCache();        // 行全部消失 -> 按行缓存与版本作废
+    m_tailRow = false;
+    m_tailDirty = false;
+    m_dirty = false;
+    m_lastLineTemporary = false;
+    m_maxSpanReach = 1;
+    m_publishedLineCount = 0;
+    invalidateLineCache();        // 行全部消失 -> 按行缓存作废
     ++m_generation;
+    endResetModel();
     emit generationChanged();
     emit cleared();
     emit lineCountChanged();
-    notifyWindowChanged();        // 模型随之 reset（beginResetModel）
 }
 
 void ConsoleBackend::setAlignment(ConsoleAlign align) {
@@ -584,7 +615,7 @@ void ConsoleBackend::resetColor() {
     m_style.colorChanged = false;
 }
 
-// SETBGCOLOR / RESETBGCOLOR：文字背景色（与前景色同样作用到后续 span）
+// SETBGCOLOR / RESETBGCOLOR（文字背景色，与前景色同样作用到后续 span）
 void ConsoleBackend::setBgColor(const QColor& color) { m_style.bgColor = color; }
 
 void ConsoleBackend::resetBgColor() { m_style.bgColor = QColor(); }
@@ -596,92 +627,91 @@ void ConsoleBackend::setFontStyle(bool bold, bool italic, bool underline, bool s
     m_style.strike = strike;
 }
 
+// ---------------------------------------------------------------------------
+// 发布（脏状态 -> 模型信号；每帧一次）
+// ---------------------------------------------------------------------------
+
 void ConsoleBackend::markDirty() {
     m_dirty = true;
-    // 内容版本：模型据此判定尾行（未提交/一時行）是否需重建
-    ++m_contentVersion;
+    m_tailDirty = true;
 }
 
-// windowChanged 的统一出口：内容代数(epoch)自增后再广播。所有窗口变化必须走这里。
-// 同时把当前窗口同步进增量区块模型 —— 滚动/追加在这里产生 insertRows/removeRows
-// 增量，QML 的 Instantiator 只对变化的行做增删（不再整屏重建 delegate）。
-void ConsoleBackend::notifyWindowChanged() {
-    ++m_windowChangedCount;
-    ++m_windowEpoch;
-    syncBlockModel();
-    emit windowChanged();
+void ConsoleBackend::flush() {
+    m_dirty = false;
+    const int n = m_buffer.count();
+    if (m_pendingOpen && !m_tailRow) {
+        // 未定型行首次入模：insert 1 行（print 打开行缓冲后，到帧才发布）
+        beginInsertRows(QModelIndex(), n, n);
+        m_tailRow = true;
+        endInsertRows();
+        ++m_insertedRows;
+        m_tailDirty = false;    // 新行的数据即最新
+    } else if (m_tailRow && m_tailDirty) {
+        emit dataChanged(index(n), index(n));
+        m_tailDirty = false;
+    }
+    if (m_publishedLineCount != n) {
+        m_publishedLineCount = n;
+        emit lineCountChanged();
+    }
+}
+
+void ConsoleBackend::tick() {
+    if (m_dirty) flush();
 }
 
 QString ConsoleBackend::perfReport() const {
     return QStringLiteral(
-               "windowChanged=%1\nvisibleBlocksCalls=%2\nlayerBlocksCalls=%3\n"
-               "lineFlattenBuilds=%4\nlineFlattenMs=%5\n"
-               "modelRows=%6 modelInserts=%7 modelRemoves=%8 modelUpdates=%19 modelResets=%9 modelSyncs=%10 modelSyncMs=%11\n"
-               "lineCache=%12 lines=%13 maxSpanReach=%14\n"
-               "bufferLines=%15 logicalLines=%16 visibleCount=%17 scrollOffset=%18")
-        .arg(m_windowChangedCount)
-        .arg(m_visibleBlockCalls)
-        .arg(m_layerBlockCalls)
+               "lineFlattenBuilds=%1\nlineFlattenMs=%2\n"
+               "modelRows=%3 modelInserts=%4 modelRemoves=%5\n"
+               "lineCache=%6 maxSpanReach=%7\n"
+               "bufferLines=%8 logicalLines=%9 gridColumns=%10 gridRows=%11")
         .arg(m_lineCacheBuilds)
         .arg(m_lineCacheMs)
-        .arg(m_blockModel.rowCount())
-        .arg(m_blockModel.insertedRows())
-        .arg(m_blockModel.removedRows())
-        .arg(m_blockModel.resets())
-        .arg(m_blockModel.syncs())
-        .arg(m_blockModel.lastSyncMs())
+        .arg(rowCount())
+        .arg(m_insertedRows)
+        .arg(m_removedRows)
         .arg(m_lineCache.size())
-        .arg(displayLineCount())
         .arg(m_maxSpanReach)
         .arg(m_buffer.count())
         .arg(m_buffer.logicalLineCount())
-        .arg(m_visibleCount)
-        .arg(m_scrollOffset)
-        .arg(m_blockModel.updatedRows());
+        .arg(m_layout.gridColumns())
+        .arg(m_layout.gridRows());
 }
 
 void ConsoleBackend::resetPerfCounters() {
-    m_layerBlockCalls = 0;
-    m_visibleBlockCalls = 0;
-    m_windowChangedCount = 0;
     m_lineCacheBuilds = 0;
     m_lineCacheMs = 0;
-    m_blockModel.resetPerf();
-}
-
-void ConsoleBackend::flush() {
-    if (!m_dirty) return;
-    m_dirty = false;
-    emit lineCountChanged();
-    notifyWindowChanged();
+    m_insertedRows = 0;
+    m_removedRows = 0;
 }
 
 void ConsoleBackend::setFontSize(int px) {
     // 字号决定「区块长」像素（columnWidthPx = 字号/2），区块宽被烘焙进按行缓存
     // —— 变了就整表作废，否则改字号后画面（尤其图片尺寸档位）不更新。
-    if (px > 0 && px != m_layout.fontSize()) invalidateLineCache();
-    m_layout.setFontSize(px);
-    notifyWindowChanged();
+    if (px > 0 && px != m_layout.fontSize()) {
+        m_layout.setFontSize(px);
+        invalidateLineCache();
+        if (rowCount() > 0) emit dataChanged(index(0), index(rowCount() - 1));
+    }
 }
 
 // 逻辑网格列/行数：脚本看到的列数（居中、换行都以它为准）。
 // 只来自 emuera.config 推导（EraEngine::syncConsoleGrid），装载后固定；
-// 可见行数恒等于行数（窗口缩放是 QML 舞台 transform，不影响行数）。
+// 窗口缩放是 QML 舞台的等比 transform，不影响行数。
 void ConsoleBackend::setGridColumns(int columns) {
     if (columns <= 0 || columns == m_layout.gridColumns()) return;
     m_layout.setGridColumns(columns);
     invalidateLineCache();   // 列数变 -> 折行/对齐变 -> 缓存失效
-    notifyWindowChanged();   // 行位置在读取时按当前网格惰性重算
+    if (rowCount() > 0) emit dataChanged(index(0), index(rowCount() - 1));
 }
 
 void ConsoleBackend::setGridRows(int rows) {
     if (rows <= 0 || rows == m_layout.gridRows()) return;
     m_layout.setGridRows(rows);
-    // 可见行数恒等于逻辑行数（配置舞台高度 ÷ 行高），不再由 QML 按像素回写
-    m_visibleCount = rows;
-    clampScroll();
+    // 可见行数由 QML 视口决定（ListView 虚拟化），这里只更新布局
     invalidateLineCache();
-    notifyWindowChanged();
+    if (rowCount() > 0) emit dataChanged(index(0), index(rowCount() - 1));
 }
 
 void ConsoleBackend::setLineHeight(int px) {
@@ -689,20 +719,22 @@ void ConsoleBackend::setLineHeight(int px) {
     m_lineHeight = px;
     m_layout.setLineHeight(px);     // 区块「高」也按行高算
     invalidateLineCache();          // 行高被烘焙进区块 height/offsetRows
-    notifyWindowChanged();
+    if (rowCount() > 0) emit dataChanged(index(0), index(rowCount() - 1));
 }
 
 void ConsoleBackend::setMaxLog(int lines) {
     const int cap = lines > 0 ? lines : 1;
     if (m_buffer.capacity() == cap) return;
-    m_buffer.setCapacity(cap);
-    clampScroll();
-    markDirty();
-}
-
-void ConsoleBackend::tick() {
-    if (m_dirty) {
-        flush();
+    const int removing = ConsoleBuffer::trimAmount(m_buffer.count(), cap);
+    if (removing > 0) {
+        beginRemoveRows(QModelIndex(), 0, removing - 1);
+        m_buffer.setCapacity(cap);
+        endRemoveRows();
+        m_removedRows += removing;
+        emit lineCountChanged();
+        pruneHeadCacheIfNeeded();
+    } else {
+        m_buffer.setCapacity(cap);
     }
 }
 
@@ -744,6 +776,7 @@ void ConsoleBackend::notifyReuseLastLine(const QString& text) {
     newline();
     m_lastLineTemporary = true;    // 本行是「一時行」
 }
+
 // ---------------------------------------------------------------------------
 // 窗口 / 滚动
 // ---------------------------------------------------------------------------
@@ -755,291 +788,73 @@ ConsoleDisplayLine ConsoleBackend::displayLine(int index) const {
     return pending;
 }
 
-int ConsoleBackend::visibleLineCount() const {
-    const int n = displayLineCount();
-    const int first = std::max(0, n - m_visibleCount - m_scrollOffset);
-    return n - first;
-}
-
-QVariantMap ConsoleBackend::visibleLine(int index) const {
-    const int n = displayLineCount();
-    const int first = std::max(0, n - m_visibleCount - m_scrollOffset);
-    const int abs = first + index;
-    if (index < 0 || abs >= n) {
-        return QVariantMap();
-    }
-    QVariantMap m = displayLine(abs).toVariantMap();
-    m.insert("absIndex", abs);
-    return m;
-}
-
-int ConsoleBackend::windowFirstLine() const {
-    const int n = displayLineCount();
-    return std::max(0, n - m_visibleCount - m_scrollOffset);
-}
-
-QVariantList ConsoleBackend::visibleLines() const {
-    QVariantList out;
-    const int n = displayLineCount();
-    const int first = windowFirstLine();
-    for (int abs = first; abs < n; ++abs) {
-        QVariantMap m = displayLine(abs).toVariantMap();
-        m.insert("absIndex", abs);
-        out.append(m);
-    }
-    return out;
-}
-
-// 点击：segmentIndex 是**段**下标（C# ConsoleButtonString）
-// 分层模型：把可见窗口的「最小单位区块」摊平，并把坐标算好
-//
-//   y = (绝对行 - 窗口顶行) × 行高
-//   x = 行对齐平移 + 段内偏移
-//
-// QML 运行时通过**增量模型**（blockModel）取区块：滚动/追加只产生
-// insertRows/removeRows，未变化的行原地复用。下面的兼容入口（visibleBlocks /
-// textBlocks / imageBlocks / shapeBlocks）返回模型当前内容，供 test_cli 的
-// :geometry/:check 诊断与 QML 测试使用 —— 与 QML 看到的是同一份数据。
 // ---------------------------------------------------------------------------
-
-// ===========================================================================
-// ConsoleBlockModel
-// ===========================================================================
-
-ConsoleBlockModel::ConsoleBlockModel(QObject* parent) : QAbstractListModel(parent) {}
-
-int ConsoleBlockModel::rowCount(const QModelIndex& parent) const {
-    if (parent.isValid()) return 0;
-    return m_flat.size();
-}
-
-QVariant ConsoleBlockModel::data(const QModelIndex& index, int role) const {
-    if (!index.isValid() || index.row() < 0 || index.row() >= m_flat.size())
-        return {};
-    if (role == BlockRole) return m_flat.at(index.row());
-    return {};
-}
-
-QHash<int, QByteArray> ConsoleBlockModel::roleNames() const {
-    return { { BlockRole, QByteArrayLiteral("block") } };
-}
-
-void ConsoleBlockModel::resetPerf() {
-    m_insertedRows = m_removedRows = m_updatedRows = m_resets = m_syncs = m_lastSyncMs = 0;
-}
-
-QVariantList ConsoleBlockModel::allBlocks() const {
-    QVariantList out;
-    out.reserve(m_flat.size());
-    for (const QVariantMap& m : m_flat) out.append(m);
-    return out;
-}
-
-QVariantList ConsoleBlockModel::blocksOfKind(const QString& kind) const {
-    QVariantList out;
-    const QString key = QStringLiteral("layer");
-    for (const QVariantMap& m : m_flat) {
-        if (m.value(key).toString() == kind) out.append(m);
-    }
-    return out;
-}
-
-void ConsoleBlockModel::reset() {
-    if (m_flat.isEmpty() && m_lines.isEmpty()) return;
-    beginResetModel();
-    m_lines.clear();
-    m_flat.clear();
-    ++m_resets;
-    endResetModel();
-}
-
-// 摘除第 i 条行条目（连带其模型行），后续条目的 startRow 前移。
-void ConsoleBlockModel::removeEntryAt(int i) {
-    const LineEntry e = m_lines.at(i);
-    if (e.count > 0) {
-        beginRemoveRows(QModelIndex(), e.startRow, e.startRow + e.count - 1);
-        m_flat.remove(e.startRow, e.count);
-        m_removedRows += e.count;
-        endRemoveRows();
-        for (int j = i + 1; j < m_lines.size(); ++j)
-            m_lines[j].startRow -= e.count;
-    }
-    m_lines.removeAt(i);
-}
-
-// 行级可见性（与旧 per-block 裁剪同语义：只裁「整块在窗口上方」）：
-//   存在区块满足 (abs - first + offsetRows) + rows > 0
-bool ConsoleBlockModel::lineVisibleInWindow(const QVariantList& blocks, int abs,
-                                            int first, int visibleCount) const {
-    Q_UNUSED(visibleCount);
-    for (const QVariant& v : blocks) {
-        const QVariantMap m = v.toMap();
-        const double topRow = double(abs - first) + m.value(QStringLiteral("offsetRows")).toDouble();
-        const int rows = qMax(1, m.value(QStringLiteral("rows")).toInt());
-        if (topRow + rows > 0.0) return true;
-    }
-    return false;
-}
-
-void ConsoleBlockModel::setWindow(int rangeFirst, int rangeEnd, int windowFirst,
-                                  int visibleCount,
-                                  const std::function<QVariantList(int, quint64&)>& lineBlocks) {
-    QElapsedTimer timer;
-    timer.start();
-    ++m_syncs;
-
-    if (rangeEnd <= rangeFirst) {
-        reset();
-        m_lastSyncMs = timer.elapsed();
-        return;
-    }
-
-    // 1) 收集新窗口的行（含行级裁剪；blocks 从按行缓存取，代价是引用拷贝）。
-    //    裁剪锚点 = **窗口顶行**（windowFirst），不是扫描起点（rangeFirst 只多了
-    //    窗口上方的探出行，用于接住跨行/负 ypos 的图）。
-    //    同时记录每行的**内容版本**，供步骤 2 判定「行号没变但内容变了」。
-    QList<int> wantedAbs;
-    QHash<int, QVariantList> wantedBlocks;
-    QHash<int, quint64> wantedVersion;
-    for (int abs = rangeFirst; abs < rangeEnd; ++abs) {
-        quint64 version = 0;
-        QVariantList blocks = lineBlocks(abs, version);
-        if (!lineVisibleInWindow(blocks, abs, windowFirst, visibleCount)) continue;
-        wantedAbs.append(abs);
-        wantedBlocks.insert(abs, blocks);
-        wantedVersion.insert(abs, version);
-    }
-
-    // 2) 结构性摘除（自底向上，保持行号稳定）：
-    //      * 不在新窗口里的行；
-    //      * 区块数变了的行 —— 行程不同，只能摘除后由步骤 3 重插。
-    //    区块数没变的「内容已变」行**留在原地**（startRow 不动），交给步骤 4
-    //    原地刷新 —— 只摘真正必须摘的，历史行绝不动。
-    QList<int> inPlaceAbs;
-    for (int i = m_lines.size() - 1; i >= 0; --i) {
-        const LineEntry& e = m_lines.at(i);
-        const auto wb = wantedBlocks.constFind(e.abs);
-        if (wb == wantedBlocks.constEnd()) { removeEntryAt(i); continue; }
-        if (wantedVersion.value(e.abs) == e.version) continue;   // 内容未变 -> 复用
-        if (e.count == wb.value().size())
-            inPlaceAbs.append(e.abs);                            // 原地刷新
-        else
-            removeEntryAt(i);                                    // 行程变了 -> 重插
-    }
-
-    // 3) 插入新增/重建的行（按 abs 升序，插到正确位置）
-    for (int abs : wantedAbs) {
-        bool exists = false;
-        for (const LineEntry& e : m_lines) {
-            if (e.abs == abs) { exists = true; break; }
-        }
-        if (exists) continue;
-        int pos = 0;
-        int row = 0;
-        while (pos < m_lines.size() && m_lines.at(pos).abs < abs) {
-            row += m_lines.at(pos).count;
-            ++pos;
-        }
-        const QVariantList blocks = wantedBlocks.value(abs);
-        const quint64 version = wantedVersion.value(abs);
-        if (blocks.isEmpty()) {
-            // 空行：占位条目（无行可发信号）
-            m_lines.insert(pos, LineEntry{ abs, row, 0, version });
-            continue;
-        }
-        beginInsertRows(QModelIndex(), row, row + blocks.size() - 1);
-        for (int k = 0; k < blocks.size(); ++k)
-            m_flat.insert(row + k, blocks.at(k).toMap());
-        for (int j = pos; j < m_lines.size(); ++j)
-            m_lines[j].startRow += blocks.size();
-        m_lines.insert(pos, LineEntry{ abs, row, int(blocks.size()), version });
-        m_insertedRows += blocks.size();
-        endInsertRows();
-    }
-
-    // 4) 原地刷新：Qt 文档（QAbstractItemModel::dataChanged）——「现有条目的数据
-    //    变化」发 **dataChanged(topLeft, bottomRight)**：视图只在 [起始行,
-    //    终止行] 区间内原地重绑数据，**不销毁/重建委托**；行数不变，也就不会
-    //    触发 count 变化引发的重排/滚动扰动。绝不能用 removeRows + insertRows
-    //    表达内容变化 —— 那会先拆掉区间内的委托，历史区跟着遭殃。
-    //    相邻区间合并成一条 dataChanged（起始行号 + 终止行号）。
-    if (!inPlaceAbs.isEmpty()) {
-        struct Span { int first, last; };
-        QList<Span> spans;
-        for (int abs : inPlaceAbs) {
-            LineEntry* entry = nullptr;
-            for (LineEntry& e : m_lines) {
-                if (e.abs == abs) { entry = &e; break; }
-            }
-            if (!entry) continue;
-            const QVariantList blocks = wantedBlocks.value(abs);
-            entry->version = wantedVersion.value(abs);
-            m_updatedRows += blocks.size();
-            for (int k = 0; k < blocks.size(); ++k)
-                m_flat[entry->startRow + k] = blocks.at(k).toMap();
-            if (!blocks.isEmpty())
-                spans.append({ entry->startRow,
-                               entry->startRow + int(blocks.size()) - 1 });
-        }
-        std::sort(spans.begin(), spans.end(),
-                  [](const Span& a, const Span& b) { return a.first < b.first; });
-        int first = -1, last = -1;
-        const auto flush = [&]() {
-            if (first >= 0) emit dataChanged(index(first), index(last));
-        };
-        for (const Span& s : spans) {
-            if (first >= 0 && s.first <= last + 1) {
-                last = qMax(last, s.last);
-            } else {
-                flush();
-                first = s.first;
-                last = s.last;
-            }
-        }
-        flush();
-    }
-
-    m_lastSyncMs = timer.elapsed();
-}
-
-// ===========================================================================
-// ConsoleBackend：按行摊平缓存
-// ===========================================================================
+// 按行摊平 + 模型数据
+// ---------------------------------------------------------------------------
 
 // 整表作废（布局度量变化：字号/行高/网格）。区块的 width/height/offsetRows
 // 是按当前字号与行高**烘焙**进缓存值的 —— 度量一变，旧缓存全部失效，
 // 否则「画像サイズ 拡大/縮小」之类改字号后画面不更新。
 void ConsoleBackend::invalidateLineCache() {
     m_lineCache.clear();
-    m_lineVersion.clear();
-    m_cacheDropped = m_buffer.droppedFromFront();
+    m_cacheFirstSerial = 0;
 }
 
-// 取某绝对行的区块列表（**绝对坐标系**：row = abs，z = 打印顺序编码）。
-// versionOut 回填该行内容版本：已提交行 = 摊平时的发号（缓存失效后重摊平
-// 会得到新号）；未提交行/一時行 = 内容版本号（每次 markDirty 自增）。
-// 显示行一旦提交就不可变（可变的只有尾部的「一時行」/未提交行），故只有
-// 提交且非一時的行进缓存；行数据与窗口无关，滚动不失效。
-QVariantList ConsoleBackend::lineBlocks(int abs, quint64* versionOut) const {
-    // 容量裁剪会让所有绝对行号前移 -> 按行号为键的缓存整体作废。
-    if (m_buffer.droppedFromFront() != m_cacheDropped) {
-        m_lineCache.clear();
-        m_lineVersion.clear();
-        m_cacheDropped = m_buffer.droppedFromFront();
+// 头部裁剪后，死行（serial < 现存最小 serial）的缓存条目按区间清理。
+// 只在 firstSerial 变化时触发 —— 摊平缓存永不因「行号前移」整表作废。
+void ConsoleBackend::pruneHeadCacheIfNeeded() const {
+    const quint64 first = m_buffer.firstSerial();
+    if (m_cacheFirstSerial == first) return;
+    m_cacheFirstSerial = first;
+    for (auto it = m_lineCache.begin(); it != m_lineCache.end();) {
+        if (it.key() < first) it = m_lineCache.erase(it);
+        else ++it;
     }
-    const bool cacheable = abs < m_buffer.count()
-        && !(m_lastLineTemporary && abs == m_buffer.count() - 1);
-    if (cacheable) {
-        const auto it = m_lineCache.constFind(abs);
-        if (it != m_lineCache.constEnd()) {
-            if (versionOut) *versionOut = m_lineVersion.value(abs);
-            return it.value();
-        }
+}
+
+// 尾部删除（CLEARLINE）后，被删行的缓存条目成为孤儿 —— 同样按区间清理。
+void ConsoleBackend::pruneTailCache() const {
+    const quint64 last = m_buffer.lastSerial();
+    for (auto it = m_lineCache.begin(); it != m_lineCache.end();) {
+        if (it.key() > last) it = m_lineCache.erase(it);
+        else ++it;
+    }
+}
+
+// 该行最高的区块行距（文本恒 1；立絵按资源尺寸跨多行）。委托高度恒为一格，
+// 此值供诊断/测试 —— 控制台的行进不因图片变高（网格叠加语义）。
+int ConsoleBackend::lineSpanRows(const ConsoleDisplayLine& line) const {
+    int rows = 1;
+    for (const ConsoleSegment& seg : line.segments)
+        for (const ConsoleSpan& part : seg.spans)
+            rows = std::max(rows, part.rows);
+    return rows;
+}
+
+// 摊平一行 = 把行内的段/区块转成 QML 可渲染的数据（网格坐标 + 点击信息）。
+// 缓存键 = 行 serial（缓冲下标会被裁剪平移，serial 不会）；行提交后不可变，
+// 故只有「已提交且非一時行」进缓存；未定型尾行每次重摊（内容随打印增长）。
+QVariantList ConsoleBackend::lineBlocks(int row) const {
+    if (row < 0 || row >= rowCount()) return {};
+    const bool isTail = m_tailRow && row == m_buffer.count();
+    const bool temporaryTail = m_lastLineTemporary && row == m_buffer.count() - 1;
+    if (!isTail && !temporaryTail) {
+        pruneHeadCacheIfNeeded();
+        const auto it = m_lineCache.constFind(m_buffer.at(row).serial);
+        if (it != m_lineCache.constEnd()) return it.value();
     }
 
     QElapsedTimer timer;
     timer.start();
-    const ConsoleDisplayLine line = displayLine(abs);
+    const QVariantList out = flattenLine(displayLine(row), row);
+    ++m_lineCacheBuilds;
+    m_lineCacheMs += timer.elapsed();
+    if (!isTail && !temporaryTail)
+        m_lineCache.insert(m_buffer.at(row).serial, out);
+    return out;
+}
+
+QVariantList ConsoleBackend::flattenLine(const ConsoleDisplayLine& line, int row) const {
     // pointOffset 与 relCol 都是字符列单位；newline() 已经完成布局。
     const int offset = line.pointOffset;
     QVariantList out;
@@ -1049,20 +864,17 @@ QVariantList ConsoleBackend::lineBlocks(int abs, quint64* versionOut) const {
         for (const ConsoleSpan& part : seg.spans) {
             QVariantMap m = part.toVariantMap();
             m.insert("layer", part.layer());           // text / image / shape
-            // 扁平 z（= 控制台打印顺序）。所有区块挂在同一个父 Item 下，靠它
-            // 把 text/image/shape 按真正的绘制顺序叠放（对齐 C#：逐 part 顺序
-            // 绘制 —— 图可以压住先打印的字，后打印的字也能盖住先打印的图）。
-            // z = 绝对行 × 1024 + 行内序号：确定性、与摊平时机无关（缓存可用）。
-            m.insert("z", double(abs) * 1024.0 + double(qMin(idx, 1023)));
+            // 行内叠放顺序（委托内兄弟 z）：图压住先打印的字，后打印的字盖住图。
+            // 跨行叠放（立絵/图层）由「后打印的行 = 后创建的委托」天然保序。
+            m.insert("z", idx);
             m.insert("col", offset + part.relCol);     // 绝对列（单位 = 区块长）
-            m.insert("row", abs);                      // **绝对行**（单位 = 区块高）
+            m.insert("row", row);                      // 行号（单位 = 区块高）
             const int spanCols = qMax(1, part.cols);
             // 区块占几行：文本/形状恒 1 行，**图片按资源尺寸跨多行**
             // （ConsoleLayout::measurePart 已按 `<img width/height>` 算好 rows）。
             const int spanRows = qMax(1, part.rows);
-            // ypos：图片相对本行的纵向偏移（像素 -> 行数；负 = 往上盖）。QML 侧
-            // 按 (row - windowTopRow + offsetRows) 摆放，图层（枠/特效）才会正好
-            // 盖在立絵边缘。
+            // ypos：图片相对本行的纵向偏移（像素 -> 行数；负 = 往上盖）。
+            // 图层（枠/特效）才会正好盖在立絵边缘。
             const double offsetRows = m_lineHeight > 0
                                           ? double(part.top) / double(m_lineHeight) : 0.0;
             m.insert("cols", spanCols);
@@ -1073,7 +885,7 @@ QVariantList ConsoleBackend::lineBlocks(int abs, quint64* versionOut) const {
             m.insert("width", spanCols * m_layout.columnWidthPx());
             m.insert("height", spanRows * m_lineHeight);
             // 段的点击信息（同一个段的所有区块共享）
-            m.insert("lineIndex", abs);                // 点击回传 = **绝对行号**
+            m.insert("lineIndex", row);                // 点击回传 = 模型行号
             m.insert("segmentIndex", si);
             m.insert("isButton", seg.isButton);
             m.insert("isInteger", seg.isInteger);
@@ -1088,70 +900,29 @@ QVariantList ConsoleBackend::lineBlocks(int abs, quint64* versionOut) const {
             ++idx;
         }
     }
-    ++m_lineCacheBuilds;
-    m_lineCacheMs += timer.elapsed();
-    if (cacheable) {
-        const quint64 serial = ++m_lineSerial;
-        m_lineCache.insert(abs, out);
-        m_lineVersion.insert(abs, serial);
-        if (versionOut) *versionOut = serial;
-    } else if (versionOut) {
-        // 未提交行/一時行：内容版本直接当行版本（内容不变 -> 版本不变 ->
-        // 模型跳过重建；一有改动 markDirty 自增，版本必变）。高位打标记，
-        // 与已提交行的发号（小整数）永不冲突。
-        *versionOut = (quint64(1) << 63) | m_contentVersion;
+    return out;
+}
+
+// 「当前屏幕」（尾部 gridRows 行）的扁平区块列表 —— test_cli 的 :geometry、
+// --auto-branch 与 D-Bus /debug 诊断用；QML 运行时不读（视图走模型）。
+QVariantList ConsoleBackend::screenBlocks() const {
+    QVariantList out;
+    const int n = rowCount();
+    const int first = std::max(0, n - std::max(1, m_layout.gridRows()));
+    for (int r = first; r < n; ++r) {
+        for (const QVariant& b : lineBlocks(r)) out.append(b);
     }
     return out;
 }
 
-// 兼容入口：当前窗口的全部区块（= 增量模型的当前内容，含行级裁剪）。
-// test_cli 的 :geometry/:check 与 QML 测试用它做诊断 —— 与 QML 展示同源。
-QVariantList ConsoleBackend::visibleBlocks() {
-    ++m_visibleBlockCalls;
-    syncBlockModel();
-    return m_blockModel.allBlocks();
-}
-
-// 三个层各自的区块列表：从模型的当前内容里按 layer 挑（诊断用）
-QVariantList ConsoleBackend::layerBlocks(const QString& layer) {
-    ++m_layerBlockCalls;
-    syncBlockModel();
-    return m_blockModel.blocksOfKind(layer);
-}
-
-// 把当前窗口同步进增量模型。窗口范围 = 可见行 ± 最长区块的探出量；
-// 行级裁剪（整块在窗口上方的不产出）在模型内完成。
-void ConsoleBackend::syncBlockModel() {
-    const int n = displayLineCount();
-    if (n <= 0 || m_visibleCount <= 0) {
-        m_blockModel.reset();
+// 点击：segmentIndex 是**段**下标（C# ConsoleButtonString）
+void ConsoleBackend::clickAt(int lineIndex, int segmentIndex) {
+    const int n = rowCount();
+    // 区块里的 lineIndex 是模型行号 —— 点击按行定位。
+    if (lineIndex < 0 || lineIndex >= n) {
         return;
     }
-    const int first = windowFirstLine();
-    const int scanFirst = std::max(0, first - m_maxSpanReach);
-    const int scanEnd = std::min(n, first + m_visibleCount + m_maxSpanReach);
-    // 行的重建由**内容版本**驱动（见 ConsoleBlockModel::setWindow）：已提交行
-    // 版本稳定（缓存命中即跳过），未提交/一時行版本 = 内容版本（内容变才重建）。
-    m_blockModel.setWindow(scanFirst, scanEnd, first, m_visibleCount,
-                           [this](int abs, quint64& version) {
-                               return lineBlocks(abs, &version);
-                           });
-}
-
-// root 层的「内容高度」= 已排版可见行数 × 行高
-int ConsoleBackend::contentHeight() const {
-    return (displayLineCount() - windowFirstLine()) * m_lineHeight;
-}
-
-void ConsoleBackend::clickAt(int absLine, int segmentIndex) {
-    const int n = displayLineCount();
-    // 区块里的 lineIndex 是**绝对行号**（增量模型的行数据与窗口无关，
-    // 滚动时不做任何数据改写）—— 点击按绝对行定位。
-    const int abs = absLine;
-    if (abs < 0 || abs >= n) {
-        return;
-    }
-    const ConsoleDisplayLine line = displayLine(abs);
+    const ConsoleDisplayLine line = displayLine(lineIndex);
     // WAIT/ANYKEY 系：点击任意位置（含按钮文本）都视为「按任意键」继续。
     // 对齐 C# IsWaitingEnterKey —— EnterKey 等待时点击按钮也不会选中按钮，
     // 只会 PressEnterKey 结束等待（SelectedString 对 EnterKey 请求恒为 null）。
@@ -1168,7 +939,7 @@ void ConsoleBackend::clickAt(int absLine, int segmentIndex) {
     }
     // 只有当前世代的段可点击（对齐 C# selectingButton.Generation != lastButtonGeneration）
     if (seg.generation != m_generation) {
-        qDebug() << "[input] 点击忽略（世代过期）行" << abs << "段" << segmentIndex;
+        qDebug() << "[input] 点击忽略（世代过期）行" << lineIndex << "段" << segmentIndex;
         return;
     }
     // 输入裁决：只有「正在等待输入」且「按钮类型与等待的输入类型一致」才响应。
@@ -1179,19 +950,11 @@ void ConsoleBackend::clickAt(int absLine, int segmentIndex) {
                  << "等待中" << m_waitingInput << "段为整数" << seg.isInteger;
         return;
     }
-    qDebug() << "[input] 点击按钮 行" << abs << "段" << segmentIndex
+    qDebug() << "[input] 点击按钮 行" << lineIndex << "段" << segmentIndex
              << (seg.isInteger ? QStringLiteral("整数=") + QString::number(seg.intValue)
                                : QStringLiteral("字符串=") + seg.strValue);
     if (seg.isInteger) submitInput(seg.intValue);
     else submitInputString(seg.strValue);
-}
-
-void ConsoleBackend::scrollBy(int lines) {
-    setScrollOffset(m_scrollOffset + lines);
-}
-
-void ConsoleBackend::scrollToBottom() {
-    setScrollOffset(0);
 }
 
 void ConsoleBackend::submitMouseKey(int type, int r1, int r2, int r3, int r4) {
@@ -1287,7 +1050,8 @@ void ConsoleBackend::submitStringText(const QString& text) {
 void ConsoleBackend::submitInputString(const QString& value) {
     // 字符串提交只在等待字符串型输入（INPUTS/SINPUTS/TONEINPUTS…）时有效
     if (!m_waitingInput || !inputExpectsString(m_inputKind)) {
-        qWarning() << "[input] 字符串提交被拒：kind" << m_inputKind << "等待中" << m_waitingInput;
+        qWarning() << "[input] 字符串提交被拒：kind" << m_inputKind
+                   << "等待中" << m_waitingInput;
         return;
     }
     qDebug() << "[input] 提交字符串" << value << "kind" << m_inputKind;
@@ -1301,17 +1065,6 @@ void ConsoleBackend::submitInputString(const QString& value) {
 // 属性
 // ---------------------------------------------------------------------------
 
-void ConsoleBackend::setScrollOffset(int offset) {
-    offset = std::max(0, offset);
-    const int maxOffset = std::max(0, displayLineCount() - m_visibleCount);
-    offset = std::min(offset, maxOffset);
-    if (offset == m_scrollOffset) {
-        return;
-    }
-    m_scrollOffset = offset;
-    notifyWindowChanged();
-}
-
 void ConsoleBackend::setFrameMs(int ms) {
     ms = std::max(1, ms);
     if (ms == m_frameMs) {
@@ -1322,7 +1075,18 @@ void ConsoleBackend::setFrameMs(int ms) {
     emit frameMsChanged();
 }
 
-void ConsoleBackend::clampScroll() {
-    const int maxOffset = std::max(0, displayLineCount() - m_visibleCount);
-    m_scrollOffset = std::min(m_scrollOffset, maxOffset);
+// 记录「区块最多往上探出窗口几行」：rows 本身，加上 ypos 的负偏移折算的行数。
+// 只在行定型（measurePart 算完 cols/rows/top）之后调用。QML 拿它设
+// ListView 的 cacheBuffer，跨行图在锚点行滚出视口后仍保持可见。
+void ConsoleBackend::trackSpanReach(const ConsoleDisplayLine& line) {
+    for (const ConsoleSegment& seg : line.segments) {
+        for (const ConsoleSpan& part : seg.spans) {
+            int reach = qMax(1, part.rows);
+            if (m_lineHeight > 0 && part.top < 0) {
+                const int offRows = int(-part.top) / qMax(1, m_lineHeight);
+                reach += offRows;
+            }
+            m_maxSpanReach = std::max(m_maxSpanReach, reach);
+        }
+    }
 }

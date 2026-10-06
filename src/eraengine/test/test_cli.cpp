@@ -789,21 +789,9 @@ int main(int argc, char* argv[]) {
                          QStringLiteral("当前平面（%1）").arg(withPlane ? "开" : "关"), withPlane, withDebug, withColor, withAnsi);
             return true;
         }
-        if (cmd.startsWith(QLatin1String(":scroll"))) {   // 滚动历史（正=向上翻），复核历史视图区块
-            int lines = 10;
-            bool ok = false;
-            const int parsed = cmd.mid(7).trimmed().toInt(&ok);
-            if (ok) lines = parsed;
-            if (console) {
-                console->scrollBy(lines);
-                std::cout << "  滚动 " << lines << " 行 -> scrollOffset "
-                          << console->scrollOffset() << "（followTail="
-                          << (console->followTail() ? "true" : "false") << "）\n";
-            }
-            return true;
-        }
         if (cmd == ":geometry") {       // 逐区块的 绝对/相对 位置与尺寸
-            const QVariantList blocks = console ? console->visibleBlocks() : QVariantList();
+            // 滚动/窗口簿记已移交 QML ListView；这里看的是「当前屏幕」（尾部 gridRows 行）
+            const QVariantList blocks = console ? console->screenBlocks() : QVariantList();
             std::cout << "  区块数 " << blocks.size()
                       << "  行高 " << (console ? console->lineHeight() : 0)
                       << "  字号 " << (console ? console->fontSize() : 0)
@@ -1040,7 +1028,7 @@ int main(int argc, char* argv[]) {
             QVariantList picks;
             if (console) {
                 QSet<qint64> btns;
-                const QVariantList blocks = console->visibleBlocks();
+                const QVariantList blocks = console->screenBlocks();
                 for (const QVariant& v : blocks) {
                     const QVariantMap m = v.toMap();
                     if (!m.value(QStringLiteral("isButton")).toBool()) continue;

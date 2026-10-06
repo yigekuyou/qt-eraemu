@@ -262,6 +262,10 @@ struct ConsoleDisplayLine {
     bool isLogicalLine = true;         // 折行产生的续行为 false
     bool isTemporary = false;          // 临时行（下一行加入时被顶掉）
     int  pointOffset = 0;              // 对齐产生的整行平移（C# SetAlignment）
+    // 行的**稳定身份**（ConsoleBuffer 在 appendLine 时发号，单调递增）。
+    // 按行缓存用它作键：头部裁剪/CLEARLINE 会平移缓冲下标，但 serial 不变
+    // —— 缓存不再因「行号前移」整表作废。
+    quint64 serial = 0;
 
     [[nodiscard]] bool isEmpty() const { return segments.isEmpty(); }
 

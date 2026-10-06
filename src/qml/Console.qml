@@ -19,26 +19,25 @@ import QtQuick
 import QtQuick.Controls
 import QtQuick.Window
 
-// 控制台视图 —— root 层 + 分层渲染
+// 控制台视图 —— ListView 虚拟化渲染
 //
-//   root 层（本组件）     ：可见窗口容器（滚动/裁剪/输入条/原生滚动条）
-//   text 层（textLayer）  ：所有文本区块
-//   image 层（imageLayer）：所有图片区块
-//   shape 层（shapeLayer）：所有图形区块
+//   C++（ConsoleBackend，本身就是 QAbstractListModel）只负责「规划如何绘制」：
+//   打印/排版/摊平某一行，缓冲变更直接翻译成区间信号
+//   （insertRows / removeRows / dataChanged / modelReset）。
+//   「哪些行需要存在、委托何时创建/复用、滚到哪」全部交给 ListView：
+//     * 虚拟化：只实例化可见 + cacheBuffer 范围内的委托（Qt 文档：
+//       "ListView will only load as many delegate items as needed"）；
+//     * reuseItems: true：滚出视口的委托进池复用（pooled/reused）；
+//     * cacheBuffer = maxSpanReach × 行高：跨行立絵/负 ypos 图层在锚点行
+//       滚出视口后仍保持可见（池化的前提是「完全滚出视口 + cacheBuffer」）。
 //
-// 三个层用 inline component `BlockLayer` 建模（结构相同、模型不同），
-// 都是 root 的子 Item，坐标同源：
-//   * 区块的**绝对位置**就是它在层内的 x/y（同 root 坐标系）；
-//   * 尺寸（cols/rows）由 C++ 按当前字体/字号/资源**动态测量**后给出。
-//
-// **位置与尺寸都是 C++ 说了算**（对齐 C# 的 SetAlignment / CalcPointX / SetWidth）：
-// QML 只负责「按数据把区块对象创建到对应的层里」。层内对象用 Instantiator 创建，
-// 模型变化（滚动/输出/换字号）时自动增删。
+// 委托 = 一个**显示行**（高度恒为一格）：行内每个最小单位区块一个
+// ConsoleBlock（Repeater 建出），跨行图/图层靠溢出绘制 + 视口 clip 裁剪。
+// 跨行叠放（后打印的图盖住先打印的立絵）由「后打印的行 = 后创建的委托」
+// 天然保序 —— 打印顺序 z 随行号单调，与 C# 逐 part 绘制一致。
 Item {
     id: root
 
-    // Timer pacing follows the display cadence. QML may combine notifications in
-    // one rendered frame; a model update is not a promise of a physical frame.
     property int refreshIntervalMs: Math.max(1, Math.ceil(1000 / (Screen.refreshRate > 0 ? Screen.refreshRate : 60)))
     function syncCadence() {
         if (backend)
@@ -50,55 +49,8 @@ Item {
         syncLayout();
     }
 
-    // ---- 滚动合并（滚动卡顿的主因之一）----
-    // 以前每个 wheel 事件直接 `backend.scrollBy()`：C++ 立刻重算整窗并重发
-    // text/image/shape 三个模型 → QML 三个 Instantiator 把**整屏**区块对象销毁重建
-    // （每个文本区块内部还有按段/字的 Repeater）。触摸板一秒能发上百个事件，
-    // 就变成每秒上百次全屏重建。这里按屏幕刷新周期合并：一帧最多提交一次，
-    // 期间累计的增量一次性应用（Qt 文档推荐的「把多次更新合并到一个渲染帧」）。
-    property int pendingScroll: 0
-    function scrollByLines(lines) {
-        if (!backend)
-            return;
-        pendingScroll += lines;
-        if (!scrollCoalesce.running)
-            scrollCoalesce.start();
-    }
-    Timer {
-        id: scrollCoalesce
-        interval: root.refreshIntervalMs
-        repeat: true
-        onTriggered: {
-            if (!root.backend || root.pendingScroll === 0) {
-                scrollCoalesce.stop();
-                return;
-            }
-            const d = root.pendingScroll;
-            root.pendingScroll = 0;
-            root.backend.scrollBy(d);
-        }
-    }
-    readonly property bool primitiveInput: backend && backend.waitingInput && backend.inputKind === "INPUTMOUSEKEY"
-    // 当前等待的是否为「任意键」型（WAIT/WAITANYKEY/FORCEWAIT/ANYKEY）：
-    // 点击控制台任意处或回车即继续（C# IsWaitingEnterKey）；不弹数字/文本输入框
-    readonly property bool anyKeyInput: {
-        if (!backend || !backend.waitingInput)
-            return false;
-        const k = backend.inputKind.toUpperCase();
-        return k === "WAIT" || k === "WAITANYKEY" || k === "FORCEWAIT" || k === "ANYKEY";
-    }
-    // 当前等待的是否为字符串型输入（INPUTS 系）；整数型 INPUT 一律走数字校验
-    readonly property bool stringInputKind: {
-        if (!backend || !backend.waitingInput)
-            return false;
-        const k = backend.inputKind.toUpperCase();
-        return k.indexOf("INPUTS") >= 0 || k.indexOf("ARGS") >= 0;
-    }
-    onPrimitiveInputChanged: {
-        if (primitiveInput)
-            viewport.forceActiveFocus();
-    }
-    property var backend: null              // ConsoleBackend
+    property var backend: null              // ConsoleBackend（兼行模型）
+    readonly property var lineModel: backend
     property int lineHeight: 19
     property string fontName: ""            // 来自 GuiManager
     property int fontSize: 18
@@ -108,60 +60,77 @@ Item {
     property string logColor: ""
 
     // ---- 固定逻辑网格，固定像素格子 ----
-    // 网格与格子尺寸都只由舞台（配置）决定：本组件的宽高 = 舞台尺寸，
-    // 窗口缩放是外层的整体 transform，不会触发这里任何绑定重算。
     readonly property int gridColumns: backend && backend.gridColumns > 0 ? backend.gridColumns : 80
     readonly property int gridRows: backend && backend.gridRows > 0 ? backend.gridRows : 25
     readonly property real cellWidth: Math.max(1, width / gridColumns)
     readonly property real cellHeight: Math.max(1, viewport.height / gridRows)
 
-    // 单一「增量区块模型」（C++：QAbstractListModel，滚动/追加只产生
-    // insertRows/removeRows，未变化的行原地复用 —— 不再随每帧整屏重建）。
-    // Qt 文档（Performance considerations：Sequence tips）：值序列
-    // （QVariantList）每次变化都整表通知，delegate 全量重建；模型行 +
-    // 细粒度信号才是增量路径。
-    readonly property var blockModel: backend ? backend.blockModel : null
-    // 窗口顶行的绝对行号：区块 y = (row - windowTopRow + offsetRows) × 行高。
-    // 滚动只改这一个值（绑定重求值），模型内容不动。
-    readonly property int windowTopRow: backend ? backend.windowTopRow : 0
-    readonly property int contentHeight: backend ? backend.contentHeight : 0
-
-    // 可见区块数 / 按 kind 取区块（供测试与调试；运行时 QML 不读）
-    function countBlocksOfKind(kind) {
-        let n = 0;
-        for (let i = 0; i < blockInst.count; ++i) {
-            const o = blockInst.objectAt(i);
-            if (o && o.blockData && o.blockData.kind === kind)
-                ++n;
+    // ---- 委托（一行 = 一个 delegate；行内区块用 Repeater 建出）----
+    component LineDelegate: Item {
+        id: lineItem
+        required property var model
+        required property int index
+        readonly property var blocks: model.blocks
+        width: ListView.view.width
+        height: root.cellHeight
+        // 行内区块：文本在行首（col 从 0 算），跨行图/ypos 图层溢出本行绘制，
+        // 委托不 clip（Qt 文档禁止 delegate 内 clip），交给 ListView 的 clip。
+        Repeater {
+            model: lineItem.blocks
+            delegate: ConsoleBlock {
+                required property var modelData
+                blockData: modelData
+                backend: root.backend
+                cellWidth: root.cellWidth
+                cellHeight: root.cellHeight
+                fontName: root.fontName
+                fontSize: root.fontSize
+                foreColor: root.foreColor
+                focusColor: root.focusColor
+                logColor: root.logColor
+                isBacklog: !view.stickyTail
+            }
         }
-        return n;
     }
-    function blockOfKindAt(kind, i) {
+
+    // ---- 测试/调试入口（委托按需实例化，可能为 null）----
+    // 模型行数（ListView.count 的透传；根 Item 上没有 count）
+    readonly property int rowCount: view.count
+    // 立即完成 ListView 的挂起布局（同步建出模型变更对应的委托；测试用）
+    function syncView() {
+        view.forceLayout();
+    }
+    function lineItem(row) {
+        return view.itemAtIndex(row);
+    }
+    // 第 row 行的第 i 个区块对象（行内顺序 = C++ 打平顺序）
+    function blockAt(row, i) {
+        const li = view.itemAtIndex(row);
+        if (!li)
+            return null;
         let n = 0;
-        for (let k = 0; k < blockInst.count; ++k) {
-            const o = blockInst.objectAt(k);
-            if (o && o.blockData && o.blockData.kind === kind) {
+        for (let k = 0; k < li.children.length; ++k) {
+            const c = li.children[k];
+            if (c && c.blockData !== undefined && c.blockData !== null) {
                 if (n === i)
-                    return o;
+                    return c;
                 ++n;
             }
         }
         return null;
     }
-    readonly property int textBlockCount: blockInst.count >= 0 ? countBlocksOfKind("text") : 0
-    readonly property int imageBlockCount: blockInst.count >= 0 ? countBlocksOfKind("image") : 0
-    readonly property int shapeBlockCount: blockInst.count >= 0 ? countBlocksOfKind("shape") : 0
-    function textBlockAt(i) {
-        return blockOfKindAt("text", i);
-    }
-    function imageBlockAt(i) {
-        return blockOfKindAt("image", i);
-    }
-    function shapeBlockAt(i) {
-        return blockOfKindAt("shape", i);
-    }
-    function blockAt(i) {
-        return textBlockAt(i);
+    // 存活委托里所有区块（诊断用；与 C++ 的 screenBlocks 不同源 —— 只含已建出的）
+    function aliveBlockCount() {
+        let n = 0;
+        for (let r = 0; r < view.count; ++r) {
+            const li = view.itemAtIndex(r);
+            if (!li)
+                continue;
+            for (let k = 0; k < li.children.length; ++k)
+                if (li.children[k] && li.children[k].blockData)
+                    ++n;
+        }
+        return n;
     }
 
     function submit() {
@@ -176,9 +145,7 @@ Item {
         // 与 C++ 的 inputExpectsString 同源：INPUTS / SINPUTS / TONEINPUTS / ARGS 系
         // 都是字符串型输入，其余（INPUT/TINPUT/ONEINPUT…）走整数校验。
         // 交由 C++ 判定空输入 / 非法输入（对齐 C# doInputToEmueraProgram）：
-        // 空回车在「有缺省值」时交缺省值，没有缺省值则忽略 —— 以前这里写
-        // `parseInt(text) || 0`，空回车会交 0（eraTW 外出列表里 0 == MAIN_MAP
-        // 就是「从外面回家」，即「没操作就自动返回」）。
+        // 空回车在「有缺省值」时交缺省值，没有缺省值则忽略。
         if (stringInputKind)
             backend.submitStringText(inputField.text);
         else
@@ -196,102 +163,71 @@ Item {
     onFontSizeChanged: syncLayout()
     onLineHeightChanged: syncLayout()
 
-    // ---- 分层（text/image/shape 结构相同，仅模型不同）----
-    // delegate 抽成 inline component，消除三份重复；层本身保留显式 id
-    // （Instantiator 的测试/调试入口：view.textBlockCount / blockAt(i)）。
-    component BlockDelegate: ConsoleBlock {
-        // 模型角色名 "block"（ConsoleBlockModel::roleNames）。
-        // 用 required property 走 Qt 文档的模型角色绑定路径。
-        required property var block
-        blockData: block
-        windowTopRow: root.windowTopRow
-        backend: root.backend
-        cellWidth: root.cellWidth
-        cellHeight: root.cellHeight
-        fontName: root.fontName
-        fontSize: root.fontSize
-        foreColor: root.foreColor
-        focusColor: root.focusColor
-        logColor: root.logColor
-        isBacklog: root.backend ? !root.backend.followTail : false
-    }
-
+    // ---- 可视区 ----
     Item {
         id: viewport
         anchors.left: parent.left
         anchors.right: parent.right
         anchors.top: parent.top
         anchors.bottom: inputField.top
-        clip: true
         focus: root.primitiveInput
 
-        // ---- 单一区块层（text/image/shape 共用一个父 Item）----
-        // Qt 文档：Item 的叠放顺序只在**兄弟之间**由 z 决定 —— 以前分成三个
-        // 兄弟 Item 层，「后打印的文字盖住先打印的图」「图层特效压在立绘上」
-        // 这类跨 kind 叠加永远做不到（整层整体上下）。现在三个 Instantiator
-        // 都把对象挂进同一个 blockLayer，每个区块带 C++ 给的扁平 z
-        // （= 控制台打印顺序，见 ConsoleBlock.z），叠加与 C# 逐 part 绘制一致。
-        Item {
-            id: blockLayer
+        ListView {
+            id: view
+            objectName: "consoleListView"
             anchors.fill: parent
+            clip: true                     // 溢出的跨行图在视口边缘裁剪
+            model: root.lineModel
+            reuseItems: true               // 滚出视口的委托进池复用（Qt 文档 Reusing items）
+            cacheBuffer: root.cellHeight * Math.max(2, backend ? backend.maxSpanReach : 2)
+            interactive: !root.primitiveInput
+            boundsBehavior: Flickable.StopAtBounds
 
-            // 单一 Instantiator：模型是 QAbstractListModel，行级增删信号驱动
-            // delegate 的增量创建/销毁（未变化的行原地复用）。
-            Instantiator {
-                id: blockInst
-                model: root.blockModel
-                delegate: BlockDelegate {}
-                // Instantiator 不把对象挂进可视树：显式设 parent；销毁由它负责
-                onObjectAdded: (index, object) => {
-                    object.parent = blockLayer;
-                }
-                onObjectRemoved: (index, object) => {
-                    object.parent = null;
-                }
+            // 跟随底部（C# 输出后贴最新行；用户上滚即退出跟随，滚回底部恢复）
+            property bool stickyTail: true
+            onContentYChanged: {
+                const atEnd = contentY >= contentHeight - height - 1;
+                if (atEnd !== stickyTail)
+                    stickyTail = atEnd;
             }
-        }
+            onHeightChanged: if (stickyTail)
+                Qt.callLater(positionViewAtEnd)
+            Component.onCompleted: positionViewAtEnd()
 
-        // ---- 原生纵向滚动条（绑定 C++ 的滚动状态，可拖拽）----
-        ScrollBar {
-            id: vbar
-            orientation: Qt.Vertical
-            anchors.right: parent.right
-            anchors.top: parent.top
-            anchors.bottom: parent.bottom
-            visible: backend && backend.lineCount > backend.visibleCount
-            property bool syncing: false      // 程序性回设不当作用户拖动
-            function syncFromBackend() {
-                syncing = true;
-                const total = backend ? backend.lineCount : 0;
-                if (total <= 0) {
-                    size = 1;
-                    position = 0;
-                    syncing = false;
-                    return;
-                }
-                const maxOffset = Math.max(0, total - backend.visibleCount);
-                const first = Math.max(0, total - backend.visibleCount - backend.scrollOffset);
-                size = Math.max(0.02, Math.min(1, backend.visibleCount / total));
-                position = Math.min(1 - size, Math.max(0, first / total));
-                syncing = false;
-            }
-            onPositionChanged: {
-                if (syncing || !backend)
-                    return;
-                const total = backend.lineCount;
-                const maxOffset = Math.max(0, total - backend.visibleCount);
-                // 窗口顶行 = position × 总行数；换算回「距底部」的 scrollOffset
-                const first = position * total;
-                backend.scrollOffset = Math.max(0, Math.min(maxOffset, Math.round(maxOffset - first)));
-                syncFromBackend();
-            }
+            // 新行/重置：贴底时把视图锚回末尾（Qt 文档：模型变更中不要直接
+            // positionView*，用 Qt.callLater 推迟到事件循环）
             Connections {
-                target: backend
-                function onWindowChanged() {
-                    vbar.syncFromBackend();
+                target: root.lineModel
+                function onRowsInserted() {
+                    if (view.stickyTail)
+                        Qt.callLater(view.positionViewAtEnd);
+                }
+                function onModelReset() {
+                    view.positionViewAtEnd();
                 }
             }
-            Component.onCompleted: syncFromBackend()
+
+            // C++/D-Bus/菜单的滚动请求（滚动状态归本视图所有）
+            Connections {
+                target: root.backend
+                function onScrollRequested(lines) {
+                    const max = Math.max(0, view.contentHeight - view.height);
+                    view.contentY = Math.max(0, Math.min(max, view.contentY - lines * root.cellHeight));
+                }
+                function onScrollToBottomRequested() {
+                    view.positionViewAtEnd();
+                }
+            }
+
+            delegate: LineDelegate {}
+
+            ScrollBar.vertical: ScrollBar {
+                objectName: "consoleScrollBar"
+                parent: viewport
+                anchors.right: parent.right
+                anchors.top: parent.top
+                anchors.bottom: parent.bottom
+            }
         }
 
         MouseArea {
@@ -309,9 +245,7 @@ Item {
         }
 
         // 任意键型等待（WAIT/WAITANYKEY/FORCEWAIT/ANYKEY）：点击控制台任意处即继续。
-        // 对齐 C# MainWindow：IsWaitingEnterKey 时左/右键都走 PressEnterKey —— 此前
-        // 点击控制台毫无响应（MouseArea 只在 INPUTMOUSEKEY 启用），DQPRINT 结尾的
-        // WAIT 只能靠底部输入框提交数字才能通过，看起来「一直等待」。
+        // 对齐 C# MainWindow：IsWaitingEnterKey 时左/右键都走 PressEnterKey。
         MouseArea {
             objectName: "anyKeyMouse"
             anchors.fill: parent
@@ -324,15 +258,8 @@ Item {
             }
         }
 
-        WheelHandler {
-            enabled: !root.primitiveInput
-            acceptedDevices: PointerDevice.Mouse | PointerDevice.TouchPad
-            onWheel: e => {
-                if (!backend)
-                    return;
-                root.scrollByLines(e.angleDelta.y > 0 ? 3 : -3);
-            }
-        }
+        // 滚轮：交给 ListView（Flickable）原生处理 —— 像素级平滑滚动，
+        // 触摸板手势直接可用；委托增删由模型信号驱动，不触碰任何数据。
 
         Keys.onPressed: e => {
             if (!backend)
@@ -370,12 +297,19 @@ Item {
                 }
                 return;
             }
-            if (e.key === Qt.Key_PageUp)
-                root.scrollByLines(10);
-            if (e.key === Qt.Key_PageDown)
-                root.scrollByLines(-10);
-            if (e.key === Qt.Key_End)
-                backend.scrollToBottom();
+            // 网格滚动的键盘语义（旧实现的 PageUp/PageDown/End）
+            const page = root.gridRows;
+            if (e.key === Qt.Key_PageUp) {
+                view.contentY = Math.max(0, view.contentY - page * root.cellHeight);
+                e.accepted = true;
+            } else if (e.key === Qt.Key_PageDown) {
+                view.contentY = Math.min(Math.max(0, view.contentHeight - view.height),
+                                         view.contentY + page * root.cellHeight);
+                e.accepted = true;
+            } else if (e.key === Qt.Key_End) {
+                view.positionViewAtEnd();
+                e.accepted = true;
+            }
         }
     }
 
@@ -388,8 +322,7 @@ Item {
     }
 
     // 底部输入行：等待输入时贴着最下面出现——无边框、无背景、无按钮，
-    // 高度只有一行文字（去掉旧 inputBar 的 38px 背景条，不再撑大控制台）；
-    // 直接键入、回车即提交。非等待状态高度为 0，不影响布局。
+    // 高度只有一行文字；直接键入、回车即提交。非等待状态高度为 0。
     TextField {
         id: inputField
         anchors.left: parent.left
@@ -420,10 +353,27 @@ Item {
         regularExpression: /-?[0-9]+/
     }
 
+    // 等待类型分支（与旧实现一致）
+    readonly property bool primitiveInput: backend && backend.waitingInput && backend.inputKind === "INPUTMOUSEKEY"
+    readonly property bool anyKeyInput: {
+        if (!backend || !backend.waitingInput)
+            return false;
+        const k = backend.inputKind.toUpperCase();
+        return k === "WAIT" || k === "WAITANYKEY" || k === "FORCEWAIT" || k === "ANYKEY";
+    }
+    readonly property bool stringInputKind: {
+        if (!backend || !backend.waitingInput)
+            return false;
+        const k = backend.inputKind.toUpperCase();
+        return k.indexOf("INPUTS") >= 0 || k.indexOf("ARGS") >= 0;
+    }
+    onPrimitiveInputChanged: {
+        if (primitiveInput)
+            viewport.forceActiveFocus();
+    }
+
     Component.onCompleted: {
         syncCadence();
         syncLayout();
-        // visibleCount 由 C++ 按 gridRows 固定（可见行数 = 逻辑行数），
-        // 不再按视口像素高度回写
     }
 }

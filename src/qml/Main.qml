@@ -294,7 +294,8 @@ ApplicationWindow {
         id: actBottom
         text: qsTr("滚动到底部")
         shortcut: "End"
-        onTriggered: eraEngine.console.scrollToBottom()
+        // 滚动状态归 QML 视图所有：C++ 只发请求，Console.qml 消费
+        onTriggered: eraEngine.console.requestScrollToBottom()
     }
 
     Action {

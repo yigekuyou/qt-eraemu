@@ -19,6 +19,7 @@ import QtQuick
 import QtTest
 
 // QML 侧测试：只验证“接线/呈现”，逻辑在 C++（test_console_backend）已覆盖。
+// 视图形态：ListView（一行一委托，行内 Repeater 建区块）——
 // 夹具经 context property 注入（consoleFixture / consoleQmlPath）。
 TestCase {
     id: tc
@@ -55,41 +56,43 @@ TestCase {
         backend.clearAll();
     }
 
-    // 分层：text 层的区块数 == C++ 给的 textBlocks 数（C++ 说了算）
-    function test_layers() {
+    // 打印 n 行并等模型/视图同步（flush 一帧 + 事件循环）
+    function printLines(n) {
         backend.clearAll();
-        backend.print("A"); backend.newline();
-        backend.print("B"); backend.newline();
-        backend.print("C"); backend.newline();
-        backend.flush();
-
-        compare(view.textBlockCount, backend.textBlocks.length);
-        compare(view.imageBlockCount, backend.imageBlocks.length);
-        // 每行一个文本区块
-        verify(backend.textBlocks.length === 3, "3 行 -> 3 个文本区块");
+        for (let i = 0; i < n; ++i) {
+            backend.print("L" + i);
+            backend.newline();
+        }
+        backend.flush(); view.syncView();
     }
 
-    // 位置/尺寸来自 C++（绝对位置 x/y、相对位置 relX/relY、动态尺寸 w/h）
+    // 模型行数与视图行数一致（小内容时委托全部存活）
+    function test_modelRowsAndDelegates() {
+        printLines(3);
+        compare(view.rowCount, 3, "模型 3 行");
+        for (let r = 0; r < 3; ++r)
+            verify(view.lineItem(r) !== null, "第 " + r + " 行委托已创建");
+        const b = view.blockAt(0, 0);
+        verify(b !== null, "第 0 行有区块对象");
+        verify(b.blockData.text === "L0", "区块数据来自模型");
+    }
+
+    // 位置/尺寸来自 C++（绝对列 x、动态尺寸），委托行高恒一格
     function test_blockGeometryFromCpp() {
         backend.clearAll();
         backend.print("hello");
         backend.newline();
-        backend.flush();
+        backend.flush(); view.syncView();
 
-        const blocks = backend.textBlocks;
-        verify(blocks.length === 1, "1 个区块");
-        const b = blocks[0];
-        verify(b.col !== undefined && b.row !== undefined, "区块带绝对网格坐标 col/row");
-        verify(b.relCol !== undefined && b.relRow !== undefined, "区块带相对网格坐标 relCol/relRow");
-        verify(b.cols > 0 && b.rows > 0, "区块带格子数（单位：区块长/区块高）");
-
-        // 像素大小由 QML 决定：QML 用自己的 cell 宽高 × 格子数
-        const item = view.blockAt(0);
-        verify(item !== null, "no block item");
-        compare(item.x, b.col * view.cellWidth);
-        compare(item.y, b.row * view.cellHeight);
-        compare(item.width, b.cols * view.cellWidth);
-        compare(item.height, b.rows * view.cellHeight);
+        const line = view.lineItem(0);
+        verify(line !== null, "第 0 行委托");
+        compare(line.height, view.cellHeight, "行高恒为一格（图片溢出绘制，不推挤后续行）");
+        const b = view.blockAt(0, 0);
+        verify(b !== null, "no block item");
+        verify(b.blockData.col !== undefined && b.blockData.row !== undefined, "区块带网格坐标 col/row");
+        compare(b.x, b.blockData.col * view.cellWidth);
+        compare(b.y, 0, "无 ypos 的区块 y == 0（锚点行即所属委托）");
+        compare(b.width, b.blockData.cols * view.cellWidth);
     }
 
     function test_gridGlyphBounds() {
@@ -98,9 +101,9 @@ TestCase {
         backend.clearAll();
         backend.print("WWiii■■□　");
         backend.printButton("[HOLD]", 8);
-        backend.newline(); backend.flush();
+        backend.newline(); backend.flush(); view.syncView();
         compare(view.cellWidth, view.width / backend.gridColumns);
-        const block = view.blockAt(0);
+        const block = view.blockAt(0, 0);
         const row = findChild(block, "textCells");
         let total = 0;
         let chars = 0;
@@ -111,8 +114,7 @@ TestCase {
             // 一个「段」承载相邻同格宽的若干字符（ConsoleBlock.glyphRuns）。
             // 不变式：段宽 == 字数 × 格宽、缩放后正好铺满段宽、缩放原点在
             // Left（不外溢到相邻 span —— 取代 delegate 内 clip：Qt 文档
-            // 「Performance considerations」明确禁止在 delegate 里用 clip）；
-            // 整行总宽 == 区块宽（字符不会漂移/重叠）。
+            // 「Performance considerations」明确禁止在 delegate 里用 clip）。
             const run = cell.modelData;
             verify(Math.abs(glyph.implicitWidth * glyph.transform[0].xScale - cell.width) < 0.01);
             verify(Math.abs(cell.width - run.count * run.units * view.cellWidth) < 0.01);
@@ -123,11 +125,12 @@ TestCase {
         }
         compare(chars, 9);
         compare(total, block.width);
-        compare(view.blockAt(1).x, block.x + block.width);
+        const next = view.blockAt(0, 1);
+        verify(next !== null, "同一行还有第二个区块（按钮）");
+        compare(next.x, block.x + block.width);
     }
 
     // 文本按「段」渲染（性能回归）：相邻同格宽的字符合成一个 Text。
-    // 以前每字一个 Item+Text，一屏数千个；这里是数量级回归测试。
     function test_glyphRunsAreBatched() {
         backend.clearAll();
         backend.print("ABCDEFGHIJ");                       // 10 个半角 -> 1 段
@@ -135,18 +138,18 @@ TestCase {
         backend.print("あいうえお");                        // 5 个全角 -> 1 段
         backend.newline();
         backend.print("AあB");                              // 混排 -> 3 段
-        backend.newline(); backend.flush();
+        backend.newline(); backend.flush(); view.syncView();
 
-        const ascii = view.blockAt(0);
+        const ascii = view.blockAt(0, 0);
         compare(ascii.glyphRuns.length, 1);
         compare(ascii.glyphRuns[0].count, 10);
         compare(ascii.glyphRuns[0].units, 1);
 
-        const wide = view.blockAt(1);
+        const wide = view.blockAt(1, 0);
         compare(wide.glyphRuns.length, 1);
         compare(wide.glyphRuns[0].units, 2);
 
-        const mixed = view.blockAt(2);
+        const mixed = view.blockAt(2, 0);
         compare(mixed.glyphRuns.length, 3);
         compare(mixed.glyphRuns[0].text, "A");
         compare(mixed.glyphRuns[1].text, "あ");
@@ -159,15 +162,13 @@ TestCase {
         compare(sum, mixed.width);
     }
 
-    // 按钮 span 按「网格文字」渲染：00097c1 曾把它换成原生 Button
-    // （内边距/最小尺寸让按钮比文字宽，和相邻区块对不齐），现已移除。
-    // 这里锁住：逐字格子数 == 文字长度、宽高 == 网格尺寸。
+    // 按钮 span 按「网格文字」渲染（不用原生 Button —— 对不齐）。
     function test_buttonSpanIsGridText() {
         backend.clearAll();
         backend.printButton("[HOLD]", 8);
-        backend.newline(); backend.flush();
+        backend.newline(); backend.flush(); view.syncView();
 
-        const block = view.blockAt(0);
+        const block = view.blockAt(0, 0);
         verify(block !== null && block.blockData.isButton === true, "按钮区块");
         const row = findChild(block, "textCells");
         verify(row !== null && row.visible, "按钮 span 用网格文字容器渲染");
@@ -184,8 +185,8 @@ TestCase {
 
     function test_spanStyleOverridesAndDefaults() {
         backend.clearAll();
-        backend.print("A"); backend.newline(); backend.flush();
-        const block = view.blockAt(0);
+        backend.print("A"); backend.newline(); backend.flush(); view.syncView();
+        const block = view.blockAt(0, 0);
         const original = block.blockData;
         block.blockData = {
             kind: "text", text: "A", cols: 1, rows: 1,
@@ -205,22 +206,20 @@ TestCase {
         verify(!glyph.font.bold && !glyph.font.italic);
     }
 
-    // 图片层：image 区块进 imageLayer
+    // 图片区块：image://emuera/<资源名>（QQuickImageProvider），非 ASCII 资源名
+    // 必须 encodeURIComponent；真实资源能解码并画出像素。
     function test_imageLayer() {
         backend.clearAll();
         backend.print("A");
         backend.printImage("face_01", 40, 40);
         backend.newline();
-        backend.flush();
+        backend.flush(); view.syncView();
 
-        verify(backend.imageBlocks.length === 1, "1 个图片区块");
-        compare(view.imageBlockCount, 1);
-        compare(backend.imageBlocks[0].text, "face_01");
-
-        // 图片区块 -> QQuickImageProvider（image://emuera/<名>）。
-        // Qt 文档：示例 "image://myprovider/icons/home" 的 id 是 "icons/home"；
-        // 非 ASCII 资源名必须先 encodeURIComponent（C++ normalizeId 再解码）。
-        const image = findChild(view.imageBlockAt(0), "blockImage");
+        // 同一行两个区块：文本 + 图片
+        const block = view.blockAt(0, 1);
+        verify(block !== null, "第 0 行第 2 个区块是图片");
+        compare(block.blockData.text, "face_01");
+        const image = findChild(block, "blockImage");
         verify(image !== null, "图片区块里有 Image 元素");
         compare(image.source, "image://emuera/face_01");
         compare(image.fillMode, Image.PreserveAspectFit);
@@ -229,8 +228,8 @@ TestCase {
         // 非 ASCII（eraTW 的立絵资源名就是日文）：编码一次，provider 侧还原
         backend.clearAll();
         backend.printImage("立絵_服_通常_55", 40, 40);
-        backend.newline(); backend.flush();
-        const image2 = findChild(view.imageBlockAt(0), "blockImage");
+        backend.newline(); backend.flush(); view.syncView();
+        const image2 = findChild(view.blockAt(0, 0), "blockImage");
         verify(image2 !== null);
         // QUrl 会自己规范化百分号编码，所以比较「前缀 + 解码后的名字」。
         const src2 = ("" + image2.source);
@@ -238,66 +237,56 @@ TestCase {
         compare(decodeURIComponent(src2.substring("image://emuera/".length)),
                 "立絵_服_通常_55");
 
-        // 「真的能渲染」：example/resources/offset_atlas.png 是 8×8 的真实文件，
-        // provider 注册后 Image.status 必须到 Ready 且画出非零尺寸。
+        // 「真的能渲染」：example/resources/offset_atlas.png 是 8×8 的真实文件
         backend.clearAll();
         backend.printImage("offset_atlas", 100, 100);
-        backend.newline(); backend.flush();
-        const real = findChild(view.imageBlockAt(0), "blockImage");
+        backend.newline(); backend.flush(); view.syncView();
+        const real = findChild(view.blockAt(0, 0), "blockImage");
         verify(real !== null);
         tryCompare(real, "status", Image.Ready);
         verify(real.paintedWidth > 0 && real.paintedHeight > 0,
                "真实图片被解码并绘制（paintedWidth/Height > 0）");
     }
 
-    // 跨行图片：QML 侧必须按 C++ 给的 rows 撑开（否则 PreserveAspectFit 把整张
-    // 立絵压进一行，eraTW 的「画像尺寸 拡大/縮小」在画面上看不出任何变化），
-    // 并应用 ypos 的纵向偏移（eraTW 的画像枠/特效靠它盖在立絵边缘）。
+    // 跨行图片：区块按 C++ 给的 rows 撑开（否则 PreserveAspectFit 把整张立絵
+    // 压进一行），并应用 ypos 的纵向偏移（画像枠/特效靠它盖在立絵边缘）。
+    // 行高恒一格：图片溢出绘制，不推挤后续行。
     function test_imageBlockSpansRowsAndYpos() {
         backend.clearAll();
         backend.printImage("face_01", 400, 400);   // 400% * 16px = 64px = 4 行
         backend.newline();
-        backend.flush();
+        backend.flush(); view.syncView();
 
-        verify(backend.imageBlocks.length === 1, "1 个图片区块");
-        const b = backend.imageBlocks[0];
+        const b = view.blockAt(0, 0).blockData;
         compare(b.rows, 4, "C++ 给出 rows == 4");
-        const item = view.imageBlockAt(0);
-        verify(item !== null, "no image block item");
-        compare(item.width, b.cols * view.cellWidth);
+        const item = view.blockAt(0, 0);
         compare(item.height, b.rows * view.cellHeight, "区块高度 = rows × 行高（跨行）");
+        compare(view.lineItem(0).height, view.cellHeight, "行高仍是一格");
 
-        // ypos：C++ 折算成行数偏移（负 = 往上盖）。
-        // 先垫 8 行文本，让 ypos=-8 的框正好落在窗口里（全在窗口上方时会被裁掉）。
+        // ypos：C++ 折算成行数偏移（负 = 往上盖）；y 在**行内**相对定位
         backend.clearAll();
-        for (let i = 0; i < 8; ++i) { backend.print("x"); backend.newline(); }
         backend.printImage("frame", 400, 400, -800);
         backend.newline();
-        backend.flush();
-        verify(backend.imageBlocks.length === 1, "1 个 ypos 图片区块");
-        const f = backend.imageBlocks[0];
+        backend.flush(); view.syncView();
+        const f = view.blockAt(0, 0).blockData;
         // 夹具用 fontSize 18 / lineHeight 20：top = -800*18/100 = -144px -> -144/20 = -7.2 行
         verify(Math.abs(f.offsetRows - (-7.2)) < 0.001, "ypos=-800 -> offsetRows == -7.2");
-        const fitem = view.imageBlockAt(0);
-        compare(fitem.y, (f.row - view.windowTopRow + f.offsetRows) * view.cellHeight,
-                "y 应用 offsetRows（row 为绝对行号，以 windowTopRow 为锚）");
+        const fitem = view.blockAt(0, 0);
+        compare(fitem.y, f.offsetRows * view.cellHeight,
+                "y 应用 offsetRows（行内相对坐标，负 = 往上探出本行）");
     }
 
-    // 有界窗口：区块数随可见行数受控
+    // 模型行数随缓冲受控；虚拟化下委托按需创建
     function test_boundedWindow() {
-        backend.clearAll();
-        for (let i = 0; i < 50; ++i) {
-            backend.print("line " + i);
-            backend.newline();
-        }
-        backend.flush();
-        // 逻辑网格只由配置推导（QML 测试环境未装载配置 → C++ 默认 80x25），
-        // 不再随窗口宽度变化；窗口缩放是舞台外层的整体 transform。
-        compare(backend.gridColumns, 80);
-        compare(backend.gridRows, 25);
+        printLines(50);
+        compare(view.rowCount, 50, "模型行数 == 缓冲行数");
         compare(view.cellWidth, view.width / backend.gridColumns);
-        compare(view.cellHeight, 8);
-        compare(view.textBlockCount, backend.textBlocks.length);
+        // 虚拟化：只实例化可见 + cacheBuffer 的委托，50 行不会全部创建
+        let alive = 0;
+        for (let r = 0; r < 50; ++r)
+            if (view.lineItem(r) !== null) ++alive;
+        verify(alive < 50, "虚拟化：存活委托 < 总行数（reuseItems 生效前提）");
+        verify(alive >= 1, "至少可见行已创建");
     }
 
     // 按钮命中 -> ConsoleBackend::clickAt -> inputSubmitted
@@ -309,9 +298,9 @@ TestCase {
         backend.clearAll();
         backend.printButton("[1] 选择", 1);
         backend.newline();
-        backend.flush();
+        backend.flush(); view.syncView();
 
-        const item = view.blockAt(0);
+        const item = view.blockAt(0, 0);
         verify(item !== null && item !== undefined, "no block item");
         compare(item.clickable, true, "区块应可点击");
 
@@ -332,25 +321,28 @@ TestCase {
     function test_consecutiveInputKinds() {
         let ints = 0;
         let strings = 0;
-        function next(value) {
+        function next() {
             ++ints;
             backend.clearAll();
             backend.printButtonStr("next", "accepted");
             backend.newline();
             consoleFixture.request(backend, "INPUTS");
+            view.syncView();   // 信号回调里重建的委托要同步布局
         }
+        view.syncView();
         function done(value) { compare(value, "accepted"); ++strings; }
         backend.inputSubmitted.connect(next);
         backend.inputSubmittedString.connect(done);
         backend.printButton("start", 0);
         backend.newline();
         consoleFixture.request(backend, "INPUT");
-        mouseClick(findChild(view.blockAt(0), "blockButtonMouse"));
+        view.syncView();
+        mouseClick(findChild(view.blockAt(0, 0), "blockButtonMouse"));
         compare(ints, 1);
-        compare(view.blockAt(0).clickable, true);
-        mouseClick(findChild(view.blockAt(0), "blockButtonMouse"));
+        compare(view.blockAt(0, 0).clickable, true);
+        mouseClick(findChild(view.blockAt(0, 0), "blockButtonMouse"));
         compare(strings, 1);
-        compare(view.blockAt(0).clickable, false, "submitted buttons are visibly inactive");
+        compare(view.blockAt(0, 0).clickable, false, "submitted buttons are visibly inactive");
         backend.inputSubmitted.disconnect(next);
         backend.inputSubmittedString.disconnect(done);
     }

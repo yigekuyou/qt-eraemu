@@ -42,12 +42,10 @@ import QtQuick.Controls
 // （「命中 → clickAt → submitInput」，与 C++ 世代校验同源）。
 Item {
     id: block
+    objectName: "consoleBlock"
 
     property var blockData: ({})
     property var backend: null
-    // 窗口顶行的绝对行号（根容器传入）：y = (row - windowTopRow + offsetRows) × 行高。
-    // 滚动只改这一个值，模型与区块数据不动（Qt 文档：绑定重求值，微秒级）。
-    property int windowTopRow: 0
     // ---- 单元格大小（由容器决定）----
     property real cellWidth: 9
     property real cellHeight: 19
@@ -121,10 +119,12 @@ Item {
         return runs;
     }
 
-    // 位置与尺寸：网格坐标 × 单元格大小（QML 说了算）
-    // row 允许为负 / 超过行数：跨行图与带 ypos 的图层块会探出窗口，交给视口 clip。
+    // 位置与尺寸：网格坐标 × 单元格大小（QML 说了算）。
+    // x = 绝对列 × 格宽（含对齐平移）；y = ypos 行数偏移 —— 区块的锚点行
+    // 就是所属委托（显示行），行内不再需要 windowTopRow 锚定。
+    // y 允许为负 / 超过行高：跨行图与带 ypos 的图层块会探出行外，交给视口 clip。
     x: gridCol * cellWidth
-    y: (gridRow - windowTopRow + offsetRows) * cellHeight
+    y: offsetRows * cellHeight
     // 外层至少覆盖 C++ 的网格测量；文本内容本身由 glyph 容器自动撑开。
     width: Math.max(gridCols * cellWidth, contentRow.implicitWidth)
     height: Math.max(gridRows * cellHeight, contentRow.implicitHeight)

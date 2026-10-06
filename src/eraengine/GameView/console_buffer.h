@@ -32,6 +32,14 @@
 //
 // 注意：C# 的 MaxLog 裁剪**不会**回退 logicalLineCount，这里同样保持
 // 「逻辑行计数只增不减（除 deleteLine）」的语义。
+//
+// 身份与裁剪（配合「全量 append-only 行模型」）：
+//   * 每行在 appendLine 时领一个单调递增的 serial（ConsoleDisplayLine.serial），
+//     它是按行摊平缓存的键 —— 缓冲下标会被头部裁剪/CLEARLINE 平移，serial 不会；
+//   * 裁剪是**批量化**的：攒够 kTrimBatch 行溢出才一次性 erase 头部，
+//     摊销后追加为 O(1)（此前每追加一行都把整段缓冲前移一格）；
+//     代价是 lineCount 最多超容量 kTrimBatch-1 行（历史多留几行，无语义影响）；
+//   * firstSerial()/lastSerial() 供缓存按 serial 区间清理孤儿条目。
 // ---------------------------------------------------------------------------
 class ConsoleBuffer {
 public:
@@ -45,18 +53,35 @@ public:
     int  count() const { return m_lines.size(); }
     bool isEmpty() const { return m_lines.isEmpty(); }
 
+    // 批量裁剪的批次（public：ConsoleBackend 预测头部裁剪行数，先发信号再裁）
+    static constexpr int kTrimBatch = 32;
+
+    // 预测：projectedCount 行会在现容量下触发多大的头部裁剪（0 = 不裁）。
+    // 小容量（<= kTrimBatch）溢出即裁（对齐 C# 逐行 RemoveAt(0) 语义），
+    // 大容量攒 kTrimBatch 行摊销 O(1)。
+    static int trimAmount(int projectedCount, int capacity) {
+        const int cap = capacity > 0 ? capacity : 1;
+        const int overflow = projectedCount - cap;
+        if (overflow <= 0) return 0;
+        return (cap <= kTrimBatch || overflow >= kTrimBatch) ? overflow : 0;
+    }
+
+    // 立即从头部裁掉 n 行（模型先发 beginRemoveRows(0, n-1) 再调用本函数）
+    void trimFront(int n) {
+        if (n <= 0) return;
+        m_lines.erase(m_lines.begin(), m_lines.begin() + qMin(n, m_lines.size()));
+    }
+
     const ConsoleDisplayLine& at(int index) const { return m_lines.at(index); }
     const QList<ConsoleDisplayLine>& lines() const { return m_lines; }
-
-    // 从**头部**丢弃的行数（容量裁剪）。丢弃会让所有绝对行号整体前移，
-    // 按绝对行号为键的缓存（ConsoleBackend::m_lineCache）据此判定失效。
-    int droppedFromFront() const { return m_dropped; }
 
     ConsoleDisplayLine& lastMutable() { return m_lines.last(); }
 
     void appendLine(const ConsoleDisplayLine& line) {
-        m_lines.append(line);
-        if (line.isLogicalLine) ++m_logicalCount;
+        ConsoleDisplayLine committed = line;
+        committed.serial = ++m_nextSerial;
+        if (committed.isLogicalLine) ++m_logicalCount;
+        m_lines.append(committed);
         trim();
     }
 
@@ -67,46 +92,57 @@ public:
         }
         if (m_lines.last().isLogicalLine) --m_logicalCount;
         m_lines.last() = line;
+        m_lines.last().serial = ++m_nextSerial;
         if (line.isLogicalLine) ++m_logicalCount;
     }
 
-    // CLEARLINE：从尾部删掉 n 个**逻辑行**（连同其折行续行）
-    void removeLastLogicalLines(int n) {
+    // 返回本次实际删除的**物理**行数（含折行续行）
+    int removeLastLogicalLines(int n) {
         int deleted = 0;
         while (deleted < n && !m_lines.isEmpty()) {
             const bool logical = m_lines.last().isLogicalLine;
             m_lines.removeLast();
-            if (logical) {
-                ++deleted;
-                if (m_logicalCount > 0) --m_logicalCount;
-            }
+            ++deleted;
+            if (logical && m_logicalCount > 0) --m_logicalCount;
         }
+        return deleted;
+    }
+
+    // 预告：从尾部删 n 个逻辑行会动掉多少**物理**行（不删）。
+    // 模型发 beginRemoveRows 前需要先知道区间。
+    int physicalTailCount(int n) const {
+        int logical = 0, physical = 0;
+        for (int i = m_lines.size() - 1; i >= 0 && logical < n; --i, ++physical) {
+            if (m_lines.at(i).isLogicalLine) ++logical;
+        }
+        return physical;
     }
 
     void clear() {
         m_lines.clear();
         m_logicalCount = 0;
-        // 全部清空 -> 绝对行号重新从 0 开始；丢弃计数一并归零，
-        // 使「丢弃计数变化」不会在下一次 append 时误判为一次前移。
-        m_dropped = 0;
+        m_nextSerial = 0;   // 绝对行号重新从 0 开始；缓存由 clearAll 整表作废
     }
 
     // 逻辑行计数 = C# logicalLineCount = LINECOUNT
     int logicalLineCount() const { return m_logicalCount; }
 
+    // 现存行的 serial 区间（缓存按区间清理孤儿条目）。空缓冲时返回
+    // [m_nextSerial+1, m_nextSerial] —— 空区间，任何缓存键都应被清掉。
+    quint64 firstSerial() const { return m_lines.isEmpty() ? m_nextSerial + 1 : m_lines.first().serial; }
+    quint64 lastSerial() const { return m_lines.isEmpty() ? m_nextSerial : m_lines.last().serial; }
+
 private:
+    // 批量裁剪：攒够批次才动一次头部（摊销 O(1)；小容量按容量）
     void trim() {
-        const int overflow = m_lines.size() - m_capacity;
-        if (overflow > 0) {
-            m_lines.erase(m_lines.begin(), m_lines.begin() + overflow);
-            m_dropped += overflow;   // 头部丢弃 -> 绝对行号前移
-        }
+        const int n = trimAmount(m_lines.size(), m_capacity);
+        if (n > 0) trimFront(n);
     }
 
     QList<ConsoleDisplayLine> m_lines;
     int m_capacity;
     int m_logicalCount = 0;
-    int m_dropped = 0;
+    quint64 m_nextSerial = 0;
 };
 
 #endif // CONSOLE_BUFFER_H

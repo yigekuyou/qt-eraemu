@@ -18,6 +18,7 @@
 #include "console_backend.h"
 #include "button_string_creator.h"
 #include "resource_image_provider.h"
+#include "key_map.h"
 #include "GameData/ast/print_template.h"
 
 #include <algorithm>
@@ -967,6 +968,16 @@ void ConsoleBackend::submitMouseKey(int type, int r1, int r2, int r3, int r4) {
     ++m_generation;
     emit generationChanged();
     emit mouseKeySubmitted(type, r1, r2, r3, r4);
+}
+
+// QML 键盘入口：把 Qt 键码/修饰符交给键码模型换算成 Emuera 的
+// （keycode, keydata），再走与 submitMouseKey(type=3) 完全相同的通路
+// （对齐 C# MainWindow.richTextBox1_KeyDown -> PressPrimitiveKey ->
+//  InputMouseKey(3, keycode, keydata, 0, 0)）。
+// 换算表在 GameView/key_map.h —— QML 侧不再出现任何数字键码。
+void ConsoleBackend::submitQtKey(int qtKey, int qtModifiers) {
+    const KeyMap::MouseKey k = KeyMap::toMouseKey(qtKey, qtModifiers);
+    submitMouseKey(3, k.keyCode, k.keyData, 0, 0);
 }
 
 // WAIT/WAITANYKEY/FORCEWAIT/ANYKEY 系等待：点击任意处/回车即继续（C# PressEnterKey）。

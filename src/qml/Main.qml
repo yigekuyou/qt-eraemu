@@ -460,6 +460,9 @@ ApplicationWindow {
             id: eraRender
             anchors.fill: parent
             engine: eraEngine
+            // 屏幕刷新率来自 C++（QScreen::refreshRate）——QML 的 Screen 没有
+            // refreshRate 属性，供控制台计算刷新节拍（见 Console.qml）。
+            screenRefreshRate: windowController.screenRefreshRate
         }
     }
 

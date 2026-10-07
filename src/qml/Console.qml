@@ -17,7 +17,7 @@
  */
 import QtQuick
 import QtQuick.Controls
-import QtQuick.Window
+import QtQml.Models
 
 // 控制台视图 —— ListView 虚拟化渲染
 //
@@ -38,7 +38,11 @@ import QtQuick.Window
 Item {
     id: root
 
-    property int refreshIntervalMs: Math.max(1, Math.ceil(1000 / (Screen.refreshRate > 0 ? Screen.refreshRate : 60)))
+    // 屏幕刷新率（Hz）由 C++ 注入（QScreen::refreshRate）——Qt 的 QML Screen
+    // 附着类型**没有** refreshRate 属性（Qt 文档 Screen QML Type），旧代码写的
+    // `Screen.refreshRate` 恒为 undefined，等于永远按 60 兜底。0 = 未知，按 60。
+    property int screenRefreshRate: 0
+    property int refreshIntervalMs: Math.max(1, Math.ceil(1000 / (screenRefreshRate > 0 ? screenRefreshRate : 60)))
     function syncCadence() {
         if (backend)
             backend.frameMs = refreshIntervalMs;
@@ -191,6 +195,10 @@ Item {
             anchors.bottom: parent.bottom
             clip: true                     // 溢出的跨行图在视口边缘裁剪
             model: root.lineModel
+            // Qt 文档（ListView::delegateModelAccess，Qt 6.10+）：模型是只读的
+            // C++ 模型（ConsoleBackend），委托只**读** role，不写回模型 —— 用
+            // DelegateModel.ReadOnly 省掉默认 Qt5ReadWrite 的写保护开销。
+            delegateModelAccess: DelegateModel.ReadOnly
             reuseItems: true               // 滚出视口的委托进池复用（Qt 文档 Reusing items）
             cacheBuffer: root.cellHeight * Math.max(2, backend ? backend.maxSpanReach : 2)
             interactive: !root.primitiveInput
@@ -298,27 +306,13 @@ Item {
             if (!backend)
                 return;
             if (root.primitiveInput) {
-                const special = {};
-                special[Qt.Key_Return] = 13;
-                special[Qt.Key_Enter] = 13;
-                special[Qt.Key_Escape] = 27;
-                special[Qt.Key_Backspace] = 8;
-                special[Qt.Key_Tab] = 9;
-                special[Qt.Key_Left] = 37;
-                special[Qt.Key_Up] = 38;
-                special[Qt.Key_Right] = 39;
-                special[Qt.Key_Down] = 40;
-                special[Qt.Key_PageUp] = 33;
-                special[Qt.Key_PageDown] = 34;
-                special[Qt.Key_End] = 35;
-                special[Qt.Key_Home] = 36;
-                special[Qt.Key_Insert] = 45;
-                special[Qt.Key_Delete] = 46;
-                let key = special[e.key] !== undefined ? special[e.key] : e.key;
-                if (e.key >= Qt.Key_F1 && e.key <= Qt.Key_F24)
-                    key = 112 + e.key - Qt.Key_F1;
-                const mods = ((e.modifiers & Qt.ShiftModifier) ? 65536 : 0) | ((e.modifiers & Qt.ControlModifier) ? 131072 : 0) | ((e.modifiers & Qt.AltModifier) ? 262144 : 0);
-                backend.submitMouseKey(3, key, key | mods, 0, 0);
+                // INPUTMOUSEKEY：把**原始 Qt 键码与 Qt 修饰符**交给后端，
+                // 由 C++ 的键码模型（GameView/key_map.h）在**编译期**已定死的
+                // Qt→Emuera 对应关系换算成 (keycode, keydata)（对齐 C#
+                // PressPrimitiveKey）。这里不再出现任何数字键码 —— 旧实现把
+                // Qt::Key → WinForms Keys 的映射表、F 键算术、修饰位都硬编码在
+                // 本文件里，Windows 之外无处复用；现在对应关系只在 C++ 一份。
+                backend.submitQtKey(e.key, e.modifiers);
                 e.accepted = true;
                 return;
             }

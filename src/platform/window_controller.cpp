@@ -53,11 +53,23 @@ void WindowController::setWindow(QQuickWindow* w) {
             qWarning("WindowController: 注册 D-Bus 对象 /emuera 失败");
 #endif
         // 跨屏 / 分辨率变化后重新按新屏幕钳制窗口
-        connect(m_window, &QQuickWindow::screenChanged, this, [this](QScreen*) { applyWindowSize(); });
+        connect(m_window, &QQuickWindow::screenChanged, this, [this](QScreen*) {
+            applyWindowSize();
+            emit screenRefreshRateChanged();   // 刷新率随屏幕变化（QScreen::refreshRate）
+        });
         // 装配完成立刻由 C++ 定尺寸，避免 QML 默认尺寸闪一帧
         applyWindowSize();
     }
     emit windowChanged();
+    emit screenRefreshRateChanged();
+}
+
+// 当前屏幕刷新率（Hz）：Qt 文档 QScreen::refreshRate()，未知返回 0。
+// QML 的 Screen 附着类型没有这个属性（见 window_controller.h 的说明）。
+int WindowController::screenRefreshRate() const {
+    if (!m_window || !m_window->screen())
+        return 0;
+    return qRound(m_window->screen()->refreshRate());
 }
 
 void WindowController::setGui(GuiManager* g) {

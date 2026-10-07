@@ -60,4 +60,3 @@ GetIntValue(exm, args)（Creator.Method.cs:5313-5344）:
 - 与既有文档的关系：`test/data/functions/GCREATED.md` 已说明该类同时服务 `GGETBRUSH` 等 8 个名字，但当时 `GGETBRUSH` 自身尚无条目（本批补上）；`ecd/Command.md` 的图像处理章节也未列本名字，故本条目为纯源码语义。
 - 返回 `0` 的两种情况要区分：**未创建**（合法 ID 但没 `GCREATE`）与「画刷颜色恰为 0x00000000」（全透明黑）。要区分可先用 `GCREATED`。
 - ARGB 的位序与 `GSETBRUSH`/`GSETCOLOR` 接受的颜色常量一致（`0xAARRGGBB`），可直接互相传递。
-- 本仓库移植版（`src/eraengine/`）未实现本函数。

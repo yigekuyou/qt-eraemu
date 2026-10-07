@@ -74,4 +74,3 @@ GetStrValue(exm, args)（Creator.Method.cs:7510-7527）:
 - readme 与中文文档均无记载；与 `GETMETH` 同区（daughter-patch），二者是同一实现思路的类型双胞胎。
 - 「默认值只在函数不存在时生效」；函数存在但签名不匹配（实参个数/类型错）会直接报错，**不会**退回默认值（源码分支结构使然）。
 - 被调用函数的返回值也会做类型匹配：`#FUNCTIONS` 用本函数、`#FUNCTION` 用 `GETMETH`，写反会报 `IsNotStr`/`IsNotInt`。
-- 本仓库移植版（`src/eraengine/`）未实现本函数。

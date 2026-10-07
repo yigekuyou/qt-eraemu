@@ -297,5 +297,4 @@ if displayLineList.Count != 0 and not displayLineList[^1].IsLineEnd:
   - `PRINTV`（以及 `PRINTVL` 等 V 系）**允许一个参数都不写**（`Runtime/Script/Statements/ArgumentBuilder.cs:503-516`：空参数表不产生警告），此时输出空串；因此 `PRINTVL` 单独一行等价于「只换行」。
   - `PRINTN` 中若字符串本身含 `\n`，`Console.Print` 的递归拆分会让**尾部片段按 `lineEnd = true`（默认值）追加**（`UI/Game/EmueraConsole.Print.cs:466-470` 的 `Print(lower)` 未传递 lineEnd），"非行尾"标记只在首段生效——属边缘情形。
   - `PRINTSINGLE` 族在构造函数里也被打上 `EXTENDED` 位（`:96-100`）；定宽系中 `PRINTFORMC`（`:136-137`）与 `PRINTLC`／`PRINTFORMLC`（`LC` 分支无条件置位，`:128-133`）同样带 `EXTENDED`，只有 `PRINTC` 不打。
-- **生态差异**：本仓库另有 C++/Qt 移植 `src/eraengine`，其 PRINT 族后缀解析在 `GameData/ast/ast_builder.cpp:146-232`（`AstBuilder::printInfo`）复刻了同一套顺序，但**字符集里不含 `N`**（`:183` 的 `"VSLWCKDFORM"`），即该移植尚未支持 `PRINTN`/`PRINTVN`/`PRINTSN`/`PRINTFORMN`/`PRINTFORMSN` 这 5 个成员。
 - **相关文档**：`PRINTSINGLE.md`（另 15 个成员）、`PRINTPLAIN.md`、`PRINTBUTTON.md`、`PRINTDATA.md`、`PRINTCPERLINE.md`、`PRINTCK.md`/`PRINTCD.md`/`PRINTFORMCK.md`/`PRINTFORMCD.md`/`PRINTFORMLCK.md`/`PRINTFORMLCD.md`/`PRINTLCK.md`/`PRINTLCD.md`（EE 定宽变体）。

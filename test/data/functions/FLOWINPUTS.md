@@ -77,4 +77,3 @@ GetIntValue(exm, args)（Creator.Method.cs:7456-7463）:
 - 只设 `FLOWINPUTS 1` 时输入类型确实变字符串，但默认值不生效（需要同时 `FLOWINPUT` 打开默认值开关）——这是最容易踩的坑，源码结构决定的（推定）。
 - 返回值恒 0，别用它判断设置是否成功。
 - 作为**语句**调用（如示例）也合法：所有式中函数都被登记为 `METHOD_SAFE | EXTENDED` 的指令，语句形态下返回值写入 `RESULT`，见 `Runtime/Script/Statements/Instraction.Child.cs:579-598`（`METHOD_Instruction`）、`Runtime/Script/Statements/FunctionIdentifier.cs:458`（所有式中函数注册为 `methodInstruction`，其 flag 于 `Runtime/Script/Statements/Instraction.Child.cs:584` 为 `METHOD_SAFE | EXTENDED`）。
-- 本仓库移植版（`src/eraengine/`）未实现本函数。

@@ -61,4 +61,3 @@ GetStrValue(exm, args)（Creator.Method.cs:302-320）:
 - readme 只给了 `GETVAR` 的示例（数值），字符串版仅有签名行；本条的示例与错误行为由源码推出。
 - 因为没有 `SETVARS`，字符串变量的「按名字赋值」要用 `SETVAR`（其第 2 参数为 `Any`，字符串值原样写入字符串变量；见 `SetVarMethod` 的参数表 `{ String, Any }`，`Runtime/Script/Statements/Function/Creator.Method.cs:508-510`）。
 - 与 `GETVAR` 一样每次调用都要解析字符串，且**解析失败即报错**（不像 `MAP_GET` 那样返回空串吞掉错误）——脚本里要容错应先 `EXISTVAR`。
-- 本仓库移植版（`src/eraengine/`）未实现本函数。

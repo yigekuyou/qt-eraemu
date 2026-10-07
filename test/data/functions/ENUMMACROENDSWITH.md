@@ -61,4 +61,3 @@ GetIntValue(exm, args)（Creator.Method.cs:177-221）:
 
 - 与 `ENUMMACROBEGINSWITH` 只差比较方向；枚举结果同样是「宏关键字」，不能用于动态求值。
 - 结果顺序取决于 `macroDic` 的枚举顺序，**不要假设与 `#DEFINE` 书写顺序一致**（Dictionary 实现细节）。
-- 本仓库移植版（`src/eraengine/`）未实现本函数族。

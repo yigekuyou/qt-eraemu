@@ -54,4 +54,3 @@ GetIntValue(exm, args)（Creator.Method.cs:1284-1299）:
 - 无既有文档可对照。
 - 与 `MAP_CLEAR`（`Emuera.EM_readme.txt:252`）行为差异明显：`MAP_CLEAR` 清空键值对（等价于删全部元素）而 DT 保留列结构；返回码 -1（表不存在）两者一致。
 - `Clear()` 不会重置 `CaseSensitive`、列默认值（`DT_COLUMN_OPTIONS` 设定的 `DefaultValue`）等列属性。
-- 本仓库移植版（`src/eraengine/`）未实现本函数族。

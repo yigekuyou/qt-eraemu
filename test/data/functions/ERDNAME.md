@@ -75,4 +75,3 @@ UniqueRestructure（Creator.Method.cs:7373-7377）:
 - 第 1 参数传「非变量」时会在参数检查期报错（`RefAny` 要求变量）；传「未登记 ERD 的变量名」不报错，只是返回空串。
 - 第 3 参数只影响查表键的拼法（`名字@N`），不校验维度号范围；给 3 维变量传 `1`..`3`，给 1 维变量传第 3 参会查不到（因为一维的表键没有 `@N` 后缀）。
 - ERD 功能受配置开关 `Config.Config.UseERD` 控制（`Runtime/Script/Loader/ErhLoader.cs:45`、`Runtime/Script/Data/ConstantData.cs:1101-1102`）；开关关闭时没有 ERD 表，本函数一律返回空串（推定）。
-- 本仓库移植版（`src/eraengine/`）未实现本函数。

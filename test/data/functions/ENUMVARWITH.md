@@ -68,4 +68,3 @@ GetIntValue(exm, args)（Creator.Method.cs:177-221）:
 - 三个 VAR 版（`ENUMVARBEGINSWITH` / `ENUMVARENDSWITH` / `ENUMVARWITH`）只差比较方式；实测时注意结果里会包含**系统变量**（例如子串 `"RESULT"` 会命中 `RESULT` 和 `RESULTS`）。
 - 典型组合拳：`ENUMVARWITH` 找到一族变量名 → `GETVAR`/`GETVARS` 逐个读、`SETVAR`/`VARSETEX` 批量写（后两者的名字参数同样是字符串，见 `Emuera.EM_readme.txt:79-104`）。
 - 返回值受目标容量限制（`RESULTS` 默认 100），命中很多时建议显式传大数组。
-- 本仓库移植版（`src/eraengine/`）未实现本函数族。

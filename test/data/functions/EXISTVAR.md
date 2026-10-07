@@ -79,4 +79,3 @@ GetIntValue(exm, args)（Creator.Method.cs:331-345）:
 - readme 与源码**一致**：正文用「setbit 1..5」（从 1 起数位，即值 1/2/4/8/16）描述，示例中的宏写作 `VAR_IS_CONST 1p2`（= 4）、`VAR_IS_2DARRAY 1p3`（= 8）、`VAR_IS_3DARRAY 1p4`（= 16）——`1pN` 是「1 左移 N 位」，与源码的位值一一对应。阅读 readme 时勿把「setbit 3」误读成「值 3」。
 - 一维数组没有对应位：`#DIMS BAR`（字符串一维）返回 2，`#DIM` 标量与一维数组同样是 `1`，无法靠本函数区分标量/一维数组。
 - `#DIM` 在函数内部声明的是该函数的私有变量（局部作用域），本函数按名字在全局表里查找，因此测不到（推定；写进 ERH 的 `#DIM` 才是广域变量，见 `Runtime/Script/Loader/ErhLoader.cs:290`/`Runtime/Script/Data/IdentifierDictionary.cs:431-433`）。
-- 本仓库移植版（`src/eraengine/`）未实现本函数。

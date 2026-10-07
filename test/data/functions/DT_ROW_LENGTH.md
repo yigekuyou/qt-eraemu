@@ -48,4 +48,3 @@ GetIntValue(exm, args)（Creator.Method.cs:1523-1529）:
 
 - 无既有文档可对照。
 - 与 `MAP_SIZE`（`Emuera.EM_readme.txt:248`，返回键值对数量）对应：都是「容器元素计数 + 不存在返回 -1」。
-- 本仓库移植版（`src/eraengine/`）未实现本函数族。

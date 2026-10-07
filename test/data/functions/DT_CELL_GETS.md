@@ -77,4 +77,3 @@ GetStrValue(exm, args)（Creator.Method.cs:1609-1635）:
 - 无既有文档可对照。
 - 与 `DT_CELL_GET` 的对照：整数版对 NULL 返回 0、对数值列必然可用；字符串版对 NULL 返回空串、且**按 id 形态对数值列不安全**。取数值列请用 `DT_CELL_GET`。
 - 返回空串的失败态过多（表缺失、行列缺失、NULL、空串本身），属于「宽容返回」风格，与 `MAP_GET`（`Emuera.EM_readme.txt:229`：不存在也返回空字符串，建议用 `MAP_HAS` 确认）一致。
-- 本仓库移植版（`src/eraengine/`）未实现本函数族。

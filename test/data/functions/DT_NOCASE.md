@@ -60,4 +60,3 @@ GetIntValue(exm, args)（Creator.Method.cs:1284-1308）:
 - 无既有文档可对照；参数方向由源码 `== 0` 硬编码决定，容易被反向理解，移植时务必照抄这一关系。
 - `CaseSensitive` 只影响字符串比较；`id` 列是整数，`Rows.Find(id)` 不受影响。
 - 与 `DT_COLUMN_OPTIONS`（命令形态的同族成员）无关：那是列选项（DEFAULT 值）命令，本函数只切换比较方式。
-- 本仓库移植版（`src/eraengine/`）未实现本函数族。

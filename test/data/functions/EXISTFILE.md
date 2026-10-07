@@ -51,4 +51,3 @@ GetIntValue(exm, args)（Creator.Method.cs:1263-1268）:
 - readme 与源码一致（含「相对 Emuera.exe」「".." 无效」的说明），无冲突。
 - 与 `ENUMFILES`（同区新增）的关系：`ENUMFILES` 枚举目录内容、返回相对路径；本函数只判单个文件的存否。
 - 注意 `..\` 的删除发生在字符串层面（`Replace("..\\", "")`）：`"a..\\b"` 会被改成 `"ab"`（推定副作用，源码直接替换），路径安全是真但没有正规化。
-- 本仓库移植版（`src/eraengine/`）未实现本函数。

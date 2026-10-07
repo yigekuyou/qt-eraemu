@@ -62,4 +62,3 @@ GetIntValue(exm, args)（Creator.Method.cs:177-221）:
 
 - 与 `ENUMVARBEGINSWITH` 只差比较方向；「枚举某前缀的变量后逐个 `GETVAR`/`VARSETEX` 批量处理」是这类函数的典型用法（`VARSETEX` 见 `Emuera.EM_readme.txt:91`）。
 - 结果顺序不保证（`strs.Sort()` 被注释），若需要确定性顺序请自行排序。
-- 本仓库移植版（`src/eraengine/`）未实现本函数族。

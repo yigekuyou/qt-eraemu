@@ -61,4 +61,3 @@ GetIntValue(exm, args)（Creator.Method.cs:177-221）:
 
 - 三个 MACRO 版（`ENUMMACRO*`）与 FUNC/VAR 版共享实现，只有枚举源不同；EM readme 也把它们列在同一小节（`:64-78`）。
 - 与 `ISDEFINED`（判断单个宏是否存在，`Emuera.EM_readme.txt:30-31`）互补：本函数用于「批量发现」，`ISDEFINED` 用于「精确确认」。
-- 本仓库移植版（`src/eraengine/`）未实现本函数族。

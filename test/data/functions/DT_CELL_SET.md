@@ -87,4 +87,3 @@ GetIntValue(exm, args)（Creator.Method.cs:1647-1677）:
 - 与 `DT_CELL_GET/GETS` 的定位参数位置一致（按 id 标志固定在末位），但本函数的「值」插在第 4 位，写作 `DT_CELL_SET("t", id, "col", v, 1)` 时 `1` 是「按 id」而不是值。
 - `id` 判定用 `ToLower()`，因此 `ID`/`Id` 也返回 0（即使表区分大小写、且确实存在另一个名为 `ID` 的用户列——那种情况下 `ID` 列会被误判为不可写：源码先判名字再查列，这是实现上的一个副作用，推定）。
 - 类型不符返回 `-2`（不是抛 CodeEE），与 `DT_ROW_SET`/`DT_ROW_ADD` 的 `SetValue` 抛 CodeEE 的行为**不同**——同一族里两种错误风格并存。
-- 本仓库移植版（`src/eraengine/`）未实现本函数族。

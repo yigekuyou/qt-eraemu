@@ -74,4 +74,3 @@ GetStrValue(exm, args)（Creator.Method.cs:1725-1743）:
 - 命名容易误解：函数名只提 XML，但实际有「两个产物」——返回值是数据、输出参数才是架构；`DT_FROMXML` 需要两个都要，故单靠 `DT_TOXML` 的返回值**不足以**还原表（列类型与主键信息在架构里）。
 - 省略第 2 参数时写 `RESULTS:1`（不是 `RESULTS:0`），若调用方之前用 `RESULTS` 存过别的内容要注意被覆盖。
 - 对应 MAP 系的 `MAP_TOXML`（`Emuera.EM_readme.txt:266`，返回 `<map><p><k>..</k><v>..</v></p>...</map>`），但 MAP 版没有架构、没有输出参数。
-- 本仓库移植版（`src/eraengine/`）未实现本函数族。

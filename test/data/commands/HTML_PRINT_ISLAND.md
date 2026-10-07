@@ -68,4 +68,4 @@ EmueraConsole.PrintHTMLIsland(html)（EmueraConsole.Print.cs:136）:
 - 本命令不主动刷新画面（指令内无刷新调用）；输出在下一次画面重绘时才可见（推定：绘制发生在重绘路径中）。
 - 与 `PRINT`/`CLEARLINE` 的隔离是由「独立列表 + 独立绘制循环」实现的；`CLEARLINE` 系命令操作的正文行列表与 `_htmlElementList` 无关（`ClearDisplay` 才同时清空两者，见源码调用点）。
 - 参数构建器的报错级别为 2（致命），因此「第 1 参非字符串」「多余参数」都会导致解析错误，而不是静默忽略（与 `HTML_PRINT.md` 记载的同一构建器行为一致）。
-- 名字中的 ISLAND（孤岛）即「独立层」之意；本仓库移植版（`src/eraengine/`）未实现本命令。
+- 名字中的 ISLAND（孤岛）即「独立层」之意。

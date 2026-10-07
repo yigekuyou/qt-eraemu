@@ -71,6 +71,5 @@ GetIntValue(exm, args)（Creator.Method.cs:1284-1322）:
 - 两套中文文档与 EM readme 均无 `DT_*` 条目；本函数族是 EM 私家版（`#region EM_私家版_追加関数` 自 `Runtime/Script/Statements/Function/Creator.cs:217`）新增功能，语义完全由源码得出。
 - 与同名的既存概念无关：EraBasic 里没有 DataTable 变量类型，表只能通过这套函数访问（另有命令形态的 `DT_COLUMN_OPTIONS`）。
 - `id` 列不能删除（`DT_COLUMN_REMOVE` 拒绝）也不能改（`DT_CELL_SET`/`DT_ROW_SET` 拒绝），只能随行自动生成。
-- 表体不会自动进入存档：EM 私家版用 `VarExt*.csv` 的 `SAVE_DTS` / `GLOBAL_DTS` 行登记要保存的表名（`Runtime/Script/Data/ConstantData.cs:1341-1354`），未登记的表读档后不存在——此点源码可证，属移植实现必须注意的行为。
+- 表体不会自动进入存档：EM 私家版用 `VarExt*.csv` 的 `SAVE_DTS` / `GLOBAL_DTS` 行登记要保存的表名（`Runtime/Script/Data/ConstantData.cs:1341-1354`），未登记的表读档后不存在——此点源码可证，属**实现**必须注意的行为。
 - 作为**语句**调用（如示例）也合法：所有式中函数都被登记为 `METHOD_SAFE | EXTENDED` 的指令，语句形态下返回值写入 `RESULT`，见 `Runtime/Script/Statements/Instraction.Child.cs:579-598`（`METHOD_Instruction`）、`Runtime/Script/Statements/FunctionIdentifier.cs:458`（所有式中函数注册为 `methodInstruction`，其 flag 于 `Runtime/Script/Statements/Instraction.Child.cs:584` 为 `METHOD_SAFE | EXTENDED`）。DT 族全套都可这样当语句写。
-- 本仓库移植版（`src/eraengine/`）未实现本函数族。

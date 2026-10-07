@@ -69,4 +69,3 @@ GetIntValue(exm, args)（Creator.Method.cs:1753-1777）:
 - 与 `DT_CREATE` 的语义分工：`DT_CREATE` 只建空表并保证有 `id` 主键；`DT_FROMXML` 完全按 XML 还原结构，不保证有 `id` 列，也不保证主键存在。缺主键时 `DT_ROW_SET`/`DT_CELL_SET(…, 按id=1)`/`DT_ROW_REMOVE(单行)` 依赖的 `Rows.Find` 会抛 `MissingPrimaryKeyException`（推定：.NET 行为，非 CodeEE）。
 - 成功后 `CaseSensitive` 等表属性由 XML 架构决定（`DT_TOXML` 的 schema 会带上这些设置，推定）。
 - 与 MAP 系的 `MAP_FROMXML`（`Emuera.EM_readme.txt:279`）对照：MAP 版要求固定 `<map><p><k>..</k><v>..</v></p></map>` 结构、表不存在返回 0（只有已存在的 map 才写入）；DT 版则是「新建或替换」，语义更宽松。
-- 本仓库移植版（`src/eraengine/`）未实现本函数族。

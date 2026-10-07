@@ -81,4 +81,3 @@ GetIntValue(exm, args)（Creator.Method.cs:1542-1567）:
 - 批量形态返回的是**删除数**（`rows.Length`），单行形态返回 `1`/`0`，两者语义一致但含义不同：批量形态即便只删到 1 行也返回 1，不会返回 `-2` 之类的「不存在」码。
 - 「第一个数组元素」的处理有个小瑕疵：拼串时第 0 个元素直接 `array[0].ToString()`，其余加逗号前缀（`Runtime/Script/Statements/Function/Creator.Method.cs:1556-1557`），拼出的字符串语法正确，但**不做参数注入防护**——`id` 是整数数组，注入风险仅存在于整数范围（推定无实际风险）。
 - `dt.Select("id IN (...)")` 依赖 `id` 列名与主键定义，故只对 `DT_CREATE` 建立的表（或含 `id` 列的 `DT_FROMXML` 表）有效；表若被 `DT_COLUMN_REMOVE` 之外的手段改名则不能删除（`id` 本就不可删）。
-- 本仓库移植版（`src/eraengine/`）未实现本函数族。

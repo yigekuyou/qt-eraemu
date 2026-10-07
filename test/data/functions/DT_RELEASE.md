@@ -48,4 +48,3 @@ GetIntValue(exm, args)（Creator.Method.cs:1284-1288, 1310）:
 - 「已存在但已释放」和「从未创建」两种情况返回值都是 1，调用方若需要区分，应先 `DT_EXIST`。
 - 对应 MAP 系的 `MAP_RELEASE`（`Emuera.EM_readme.txt:226`：「第一引数で指定した連想配列を削除します。1を返す」），两者语义一致（都不检查存在性、都返回 1），可互相参照。
 - 若该表在 `VarExt*.csv` 中登记为存档对象，`DT_RELEASE` 后存档时字典里已无此键，写档循环会跳过（`Runtime/Script/Statements/Variable/VariableData.cs:1017-1019`：`if (DataDataTables.ContainsKey(key))`）。
-- 本仓库移植版（`src/eraengine/`）未实现本函数族。

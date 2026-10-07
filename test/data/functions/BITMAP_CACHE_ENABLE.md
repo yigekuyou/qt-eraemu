@@ -52,4 +52,3 @@ GetIntValue(exm, args)（Creator.Method.cs:7579-7584）:
 - 返回值无意义（恒 0），不要写 `IF BITMAP_CACHE_ENABLE(1) == 1`。
 - 作为**语句**调用（如示例）也合法：所有式中函数都被登记为 `METHOD_SAFE | EXTENDED` 的指令，语句形态下返回值写入 `RESULT`（字符串返回型写 `RESULTS`），见 `Runtime/Script/Statements/Instraction.Child.cs:579-598`（`METHOD_Instruction`）、`Runtime/Script/Statements/FunctionIdentifier.cs:458`（所有式中函数注册为 `methodInstruction`，其 flag 于 `Runtime/Script/Statements/Instraction.Child.cs:584` 为 `METHOD_SAFE | EXTENDED`）。
 - 与本函数同区的还有 `HOTKEY_STATE`、`HOTKEY_STATE_INIT`（`Runtime/Script/Statements/Function/Creator.cs:350-351`）。
-- 本仓库移植版（`src/eraengine/`）未实现本函数。

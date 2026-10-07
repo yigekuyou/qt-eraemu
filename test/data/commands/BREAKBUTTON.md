@@ -63,4 +63,4 @@ EmueraConsole.forceUpdateGeneration()（EmueraConsole.cs:535）:
 - 源码中 `forceUpdateGeneration` 的既有用途是报错时清空可点击状态（`UI/Game/EmueraConsole.cs:513`）与绘图/标题返回等场景（`:1376`）；本命令把它暴露给脚本，属 EE 的脚本化入口。
 - 与 `CLEARLINE` 类命令的区别：本命令**不删除任何显示内容**，只作废按钮的「可操作性」；画面刷新由后续的绘制/输入命令触发（本命令不主动刷新画面——推定：源码无刷新调用）。
 - 与 `BINPUT.md:91` 提到的世代机制一致：`BINPUT` 系命令的按钮扫描依赖 `LastButtonGeneration`，因此 `BREAKBUTTON` 会让它们看不到旧按钮。
-- 名字可理解为「break（断开）button」，即断开旧按钮与当前输入流程的关联；本仓库移植版（`src/eraengine/`）未实现本命令。
+- 名字可理解为「break（断开）button」，即断开旧按钮与当前输入流程的关联。

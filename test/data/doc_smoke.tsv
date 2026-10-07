@@ -457,22 +457,22 @@ SET	cmd	skip		不是可书写的命令：文档明示 funcDic 无 SET 键，写 
 SETBGCOLOR	cmd	call	SETBGCOLOR 0, 0, 128\nRESETBGCOLOR		
 SETBGCOLORBYNAME	cmd	call	SETBGCOLORBYNAME "DarkBlue"\nRESETBGCOLOR		
 SETBGIMAGE	cmd	call	SETBGIMAGE off_norect		
-SETBGMVOLUME	cmd	skip		依赖音频后端：设置 BGM 音量（WMP 播放器单例，无返回值）；本移植为留痕桩，冒烟无可验证行为 —— example 组17 已覆盖	
+SETBGMVOLUME	cmd	skip		依赖音频后端：设置 BGM 音量（WMP 播放器单例，无返回值）；冒烟无可验证行为 —— example 组17 已覆盖	
 SETBIT	cmd	call	CVTMP = 0\nSETBIT CVTMP, 3		
 SETCOLOR	cmd	call	SETCOLOR 255, 128, 0\nRESETCOLOR		
 SETCOLORBYNAME	cmd	call	SETCOLORBYNAME "Orange"\nRESETCOLOR		
 SETFONT	cmd	call	SETFONT "ＭＳ ゴシック"		
-SETSOUNDVOLUME	cmd	skip		依赖音频后端：一次性设置 10 个音效声道音量（惰性创建 Sound）；本移植为留痕桩 —— example 组17 已覆盖	
-SETTEXTBOX	cmd	skip		依赖 GUI 文本框控件（GUIDE 明列）：整体替换输入框内容，文档形态为式中函数 SETTEXTBOX("文字")；本移植为留痕桩，冒烟无可验证行为	
+SETSOUNDVOLUME	cmd	skip		依赖音频后端：一次性设置 10 个音效声道音量（惰性创建 Sound） —— example 组17 已覆盖	
+SETTEXTBOX	cmd	skip		依赖 GUI 文本框控件（GUIDE 明列）：整体替换输入框内容，文档形态为式中函数 SETTEXTBOX("文字")；冒烟无可验证行为	
 SIF	cmd	skip		单行条件结构头（SIF + 下一行语句），不能单独作为语句执行——会吞掉组内后续行；由组 3/28 覆盖	
 SKIPDISP	cmd	call	SKIPDISP 1\nSKIPDISP 0		
 SKIPLOG	cmd	call	SKIPLOG 1\nSKIPLOG 0		
 SORTCHARA	cmd	call	ADDCHARA 0\nADDCHARA 0\nSORTCHARA NO		
 SPLIT	cmd	call	SPLIT "あい,うえ,,お", ",", LOCALS		
 SPRITEDISPOSEALL	cmd	call	CVTMP = SPRITEDISPOSEALL(0)		
-STOPBGM	cmd	skip		依赖音频后端：停止 BGM 通道（WMP 单例）；本移植为留痕桩 —— example 组17 已覆盖	
+STOPBGM	cmd	skip		依赖音频后端：停止 BGM 通道（WMP 单例） —— example 组17 已覆盖	
 STOPCALLTRAIN	cmd	skip		流程控制族（GUIDE 明列，与 CALLTRAIN 成对）：终止 CALLTRAIN 指令队列并回调 @CALLTRAINEND，会打断当前指令流程 —— example 组17 作留痕桩	
-STOPSOUND	cmd	skip		依赖音频后端：停止 10 个音效声道；本移植为留痕桩 —— example 组17 已覆盖	
+STOPSOUND	cmd	skip		依赖音频后端：停止 10 个音效声道 —— example 组17 已覆盖	
 STRDATA	cmd	call	STRDATA LOCALS\nDATA 冒烟候选甲\nDATA 冒烟候选乙\nENDDATA		
 STRJOIN1	cmd	skip		伪名：清单提取时「STRJOINの第1引数」被误粘连（EM 系 readme 文本），文档与发行版 exe 中均无此命令；真实功能为式中函数 STRJOIN	
 STRLEN	cmd	call	STRLEN abc		

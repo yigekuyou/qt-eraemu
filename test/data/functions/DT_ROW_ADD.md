@@ -116,4 +116,3 @@ SetValue(row, dt, name, key, exm, v)（Creator.Method.cs:1413-1436）:
 - 成对形态里「值」写 `Any`（`VariadicAny`）而非限定类型，类型校验推迟到运行期 `SetValue`（不一致即抛 CodeEE）；数组形态则按值数组的静态类型整批处理，**不能混用**：一批里既有字符串列又有数值列时，数组形态会因类型不符抛 `DTInvalidDataType`（源码 `SetValue(row,dt,name,key,long)` 要求列不是字符串列）。
 - 返回值是新行 `id`（不是 1/0）。id 值来自计时器，同一脚本多次运行不同，**不要**写 `IF DT_ROW_ADD(...) == 1` 这类判断。
 - 主键唯一性由 .NET 保证；理论上同一 tick 连加两行会撞主键抛 `ConstraintException`（非 CodeEE）——概率极低，但属于潜在缺陷（推定）。
-- 本仓库移植版（`src/eraengine/`）未实现本函数族。

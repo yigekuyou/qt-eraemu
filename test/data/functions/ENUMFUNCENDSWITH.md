@@ -70,4 +70,3 @@ GetIntValue(exm, args)（Creator.Method.cs:177-221）:
 
 - 与 readme 的「総数を返します」表述存在与 `ENUMFUNCBEGINSWITH` 相同的差异（返回写入数而非命中总数）。
 - 后缀匹配按「最后一次出现的位置正好在末尾」实现，故模式里含通配符并不会被解释——它是纯字符串比较，不是通配匹配。
-- 本仓库移植版（`src/eraengine/`）未实现本函数族。

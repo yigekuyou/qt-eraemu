@@ -47,4 +47,3 @@ GetIntValue(exm, args)（Creator.Method.cs:1284-1288, 1309）:
 - 无任何既有文档可对照（两套中文文档、EM readme、EE readme 均无 `DT_*`）。
 - 判定是**字典键是否命中**，不做格式校验；空字符串是合法键名（`DT_CREATE ""` 与 `DT_EXIST ""` 可成对使用）。
 - 与 `MAP_EXIST`（连想数组版，见 `Emuera.EM_readme.txt:222`）语义同型，互为 Map/DT 两套容器的对应函数。
-- 本仓库移植版（`src/eraengine/`）未实现本函数族。

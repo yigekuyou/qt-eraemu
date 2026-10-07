@@ -64,4 +64,3 @@ GetIntValue(exm, args)（Creator.Method.cs:177-221）:
 - 关于「何谓宏」：`#DEFINE` 定义的名字（`DefineMacro.Keyword`，`Runtime/Script/Data/DefineMacro.cs:5-18`）；与变量、函数名分属不同命名空间，故 `ENUMMACRO*` 不会枚举到变量或函数。
 - 宏在 Emuera 中属于「编译期符号」：枚举出来之后不能再按名字动态取值（没有「求宏值」的函数），通常只用于诊断/自检类脚本（例如检查配置用的宏是否齐全）。
 - 与 `ENUMFUNC*`、`ENUMVAR*` 同源实现，返回/输出约定完全一致。
-- 本仓库移植版（`src/eraengine/`）未实现本函数族。

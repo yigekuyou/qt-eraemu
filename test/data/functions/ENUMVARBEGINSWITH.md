@@ -66,4 +66,3 @@ GetIntValue(exm, args)（Creator.Method.cs:177-221）:
 - 返回的名字是**变量名而非值**；取得值请用 `GETVAR`/`GETVARS`（按变量名表达式求值）。
 - 因为包含系统变量，前缀如 `"RESULT"` 会命中 `RESULT`、`RESULTS`（以及玩家自定义的同前缀变量）——按名字批量操作变量时要意识到系统变量也在集合里。
 - 与 `ENUMFUNC*`（函数名）、`ENUMMACRO*`（`#DEFINE` 宏名）同源实现。
-- 本仓库移植版（`src/eraengine/`）未实现本函数族。

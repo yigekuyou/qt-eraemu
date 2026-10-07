@@ -48,4 +48,3 @@ GetIntValue(exm, args)（Creator.Method.cs:1523-1529）:
 
 - 无既有文档可对照。
 - 列数永远 ≥ 1（`id` 列无法删除，`DT_COLUMN_REMOVE` 对 `id` 返回 0），所以本函数不会返回 0（表存在时）。
-- 本仓库移植版（`src/eraengine/`）未实现本函数族。

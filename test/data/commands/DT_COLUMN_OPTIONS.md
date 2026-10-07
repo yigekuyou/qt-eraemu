@@ -87,4 +87,3 @@ DoInstruction(exm, func, state):
 - 与 `COLUMNCREATE.md:40` 的结论一致（本命令与 `COLUMNCREATE` 无关），但该处把 `DT_COLUMN_OPTIONS` 描述为「下拉列框选项的枚举」并不准确：据 `Runtime/Script/Statements/BuiltInFunctionCode.cs:389` 与 `Runtime/Script/Statements/Instraction.Child.cs:2620` 的指令类核实，它实际是 DataTable 的列选项**命令**（EM 区唯一成员），与 COLUMN 系的「下拉列框」是两回事。
 - 数值默认值会被裁剪而非报错（`ConvertInt` 用 `Math.Min/Max`），字符串/数值类型不符才报 `DTInvalidDataType`。
 - 缺陷提示（供移植参考）：表/列不存在时缺少提前返回，`RESULT=-1/0` 不可依赖；若要在移植版复刻「返回状态码」的意图，应补 `return`。
-- 本仓库移植版（`src/eraengine/`）未实现本命令。

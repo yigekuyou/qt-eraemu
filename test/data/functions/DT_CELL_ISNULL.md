@@ -73,4 +73,3 @@ GetIntValue(exm, args)（Creator.Method.cs:1582-1608，op == IsNull 分支）:
 - 无既有文档可对照。
 - 本函数是判断「单元格取不到值」的正确手段：`DT_CELL_GET` 把 NULL 与 0 混同、`DT_CELL_GETS` 把 NULL 与空串混同。
 - 列被 `DT_COLUMN_ADD` 追加到已有行上时，旧行在该列上都是 NULL（推定：.NET 行为），此时本函数返回 1。
-- 本仓库移植版（`src/eraengine/`）未实现本函数族。

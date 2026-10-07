@@ -70,4 +70,3 @@ GraphicsImage.Fontstyle（GraphicsImage.cs:612-628）:
 - 与既有文档的关系：`GSETFONT.md` 已写明「所设置的字体可被 `GGETFONT`/`GGETFONTSIZE`/`GGETFONTSTYLE` 读取」，其中的位含义（1/2/4/8）与本条目的源码分支完全一致；`GCREATED.md` 也记载了本名字与实现类的对应。`ecd/Command.md` 未单独列出本名字。
 - 返回 `0` 的两种情况：**未创建** 与 **Regular 样式**（既没有粗/斜/删/下划线）。要区分请先 `GCREATED(ID)`。
 - 样式位与 `GSETFONT` 第 4 参数同编码，可直接中转（`GSETFONT 0, "字体", 16, GGETFONTSTYLE(0)`）。
-- 本仓库移植版（`src/eraengine/`）未实现本函数。

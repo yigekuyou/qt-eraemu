@@ -67,4 +67,3 @@ GetIntValue(exm, args)（Creator.Method.cs:177-221）:
 
 - 三个 FUNC 版（`ENUMFUNC*`）只差比较方式：`BEGINSWITH` 前缀 / `ENDSWITH` 后缀 / `WITH` 包含。
 - 「命中数 > 100（`RESULTS` 默认容量）」时只写前 100 个、返回值也是 100；EM readme 的「総数を返します」在此情形不成立（同族共同差异）。
-- 本仓库移植版（`src/eraengine/`）未实现本函数族。

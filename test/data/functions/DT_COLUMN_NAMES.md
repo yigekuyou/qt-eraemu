@@ -64,4 +64,3 @@ GetIntValue(exm, args)（Creator.Method.cs:1345-1358）:
 - 无既有文档可对照。
 - 与 `MAP_GETKEYS`（`Emuera.EM_readme.txt:256`）风格一致（都可写入指定字符串数组），但 `MAP_GETKEYS` 还有「往RESULTS写」与「返回逗号串」等 3 种形态；DT 版只有两种形态且返回值含义不同（本函数返回列数而非写入数）。
 - 第 2 参数省略时写 `RESULTS`，注意不要与 `RESULT`（整数数组）混淆；`RESULTS` 长度由系统决定，列数超过其容量时同样会越界抛异常。
-- 本仓库移植版（`src/eraengine/`）未实现本函数族。

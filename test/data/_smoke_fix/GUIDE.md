@@ -11,7 +11,6 @@
 
 | 目录 | 原因 |
 |---|---|
-| `src/**`（含 `src/eraengine/**`） | C++/Qt 移植版，开发初期会剧烈变动，不能作为语义依据 |
 | `Emuera/**`、`emuera.em/**`、`eraTW/**` 等 C# 源码树 | 第三方源码；语义已抽取进 `test/data` 的 md，无需再读 |
 | `build/`、`build-debug/` | 构建产物 |
 

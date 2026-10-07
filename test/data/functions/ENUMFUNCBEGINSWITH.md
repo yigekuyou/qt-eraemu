@@ -80,4 +80,3 @@ GetIntValue(exm, args)（Creator.Method.cs:177-221）:
 - 文档与源码差异：EM readme 只写 1 个参数、并称「総数を返します」；源码支持可选的第 2 参输出数组，返回值为**写入数**（受目标容量限制）。当命中数超过 100（`RESULTS` 默认容量）时两者不等。
 - 源码里 `// strs.Sort();` 被注释掉 → 结果**不排序**；若依赖稳定顺序（如与另一份结果按下标配对），应自行排序或改用 `ARRAYMSORT` 之类手段。
 - 与变量版（`ENUMVARBEGINSWITH`）、宏版（`ENUMMACROBEGINSWITH`）同源，仅枚举对象不同。
-- 本仓库移植版（`src/eraengine/`）未实现本函数族。

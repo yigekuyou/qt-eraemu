@@ -80,4 +80,3 @@ GetIntValue(exm, args)（Creator.Method.cs:233-263）:
 - 与 `EXISTFILE` 同属「按路径访问文件系统」的 EM 私家版函数，路径规则一致（相对 Emuera.exe、绝对路径不可用）。
 - 没有文件类型过滤（`*.erb` 需自行写模式）；也不会区分文件/目录（`EnumerateFiles` 只返回文件）。
 - 结果数可能受 `RESULTS`（默认 100）限制：枚举大目录时必须显式传足够大的输出数组。
-- 本仓库移植版（`src/eraengine/`）未实现本函数族。

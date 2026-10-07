@@ -79,4 +79,3 @@ GetIntValue(exm, args)（Creator.Method.cs:1582-1608）:
 - 无既有文档可对照。
 - 「值恰为 0」「值为 NULL」「行/列不存在」「表不存在」在 `DT_CELL_GET` 下都是 `0`，无法区分；需要精确判定请用 `DT_CELL_ISNULL`（错误态会用 -1/-2 表达）。
 - 字符串列也能取整数（`Convert.ToInt64`），且非数字内容会抛 .NET 异常而非 CodeEE → 实际使用中建议对字符串列统一用 `DT_CELL_GETS`。
-- 本仓库移植版（`src/eraengine/`）未实现本函数族。

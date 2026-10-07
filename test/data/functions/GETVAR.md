@@ -64,4 +64,3 @@ GetIntValue(exm, args)（Creator.Method.cs:274-292）:
 - 与 `VARSIZE("名字")`（按名字取数组大小）的区别：本函数取值，`VARSIZE` 取尺寸；`GETVAR` 不接受非变量词项。
 - 因为走解析器，参数字符串里写**函数调用**（如 `"RAND:1"`）不会被当作表达式求值——`ReduceExpressionTerm` 取到的是词项；只有「变量词（可带下标）」能通过 `term is VariableTerm` 判定（推定：下标里的表达式是否展开取决于词项解析细节，本函数不强求）。
 - 每次调用都做一次字符串解析，热的循环里应改用普通变量访问。
-- 本仓库移植版（`src/eraengine/`）未实现本函数。

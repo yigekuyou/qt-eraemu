@@ -58,4 +58,3 @@ GetIntValue(exm, args)（Creator.Method.cs:1345-1350, 1359-1372）:
 - 无既有文档可对照。
 - `id` 保护用 `ToLower()` 而非 `ToUpper()`，对英文字母效果相同；该判断不受 `CaseSensitive` 影响，因此 `DT_NOCASE "t", 1` 也删不掉大小写变体的 `id`。
 - 删除列会把该列在全部行上的值一并丢弃（System.Data 语义），不存在的别名列不会报错，只返回 0。
-- 本仓库移植版（`src/eraengine/`）未实现本函数族。

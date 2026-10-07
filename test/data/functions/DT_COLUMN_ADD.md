@@ -81,4 +81,3 @@ GetIntValue(exm, args)（Creator.Method.cs:1345-1391）:
 - 名称分支的大小写敏感：`NameToType` 用精确匹配查 `"int8"/"int16"/"int32"/"int64"/"string"`（`Runtime/Utils/EvilMask/Utils.cs:291-297, 313-317`），写成 `"STRING"`、`"Int32"` 会**报错**而不是被接受（与 EraBasic 标识符本身忽略大小写的习惯不同，容易踩坑）。
 - 列顺序即添加顺序，`DT_CREATE` 建的 `id` 永远是第 0 列（`DT_COLUMN_NAMES` 可读出）。
 - 源码没有提供「修改列类型」的功能：改类型只能删列重加（`DT_COLUMN_REMOVE` 不允许删 `id`）。
-- 本仓库移植版（`src/eraengine/`）未实现本函数族。

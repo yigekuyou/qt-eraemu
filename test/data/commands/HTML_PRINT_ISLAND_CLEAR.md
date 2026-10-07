@@ -52,4 +52,3 @@ EmueraConsole.ClearHTMLIsland()（EmueraConsole.Print.cs:140）:
 - 与 `HTML_PRINT_ISLAND.md` 成对：一个追加行、一个整体清空；HTML 标签解析与绘制位置说明见该文件。
 - 参数构建器 `VOID` 的告警级别为 1（非致命），所以误写参数不会让脚本解析失败（与 `HTML_PRINT_ISLAND` 的严格参数校验形成对比）。
 - 本命令等同于「清空独立层」，不会恢复被 `HTML_PRINT_ISLAND` 覆盖前的画面内容（岛层是叠加绘制，没有备份）。
-- 本仓库移植版（`src/eraengine/`）未实现本命令。

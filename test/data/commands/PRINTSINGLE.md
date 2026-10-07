@@ -153,5 +153,4 @@ PRINTSINGLE:
   - 文档写的是 `PRINTSINGLE(|V|S|FORM|FORMS)(|K|D)`，与枚举名集合完全一致（无 `L`/`W`/`C`/`LC` 变体）。
 - **两套文档都没有逐个收录**这 15 个后缀变体名（只给出模板形式），权威清单 `emuera_standard_cmds.txt` 亦然——这是需要本基名文档的原因。
 - **实现细节**：`PRINTSINGLE` 在构造函数里被打了 `EXTENDED` 位（`Runtime/Script/Statements/Instraction.Child.cs:96-100`），但 ecd 与 zh 两套文档都把它当作标准命令收录，不属 EE 私有扩展。
-- **生态差异**：本仓库的 C++/Qt 移植 `src/eraengine` 把 `PRINTSINGLE` 前缀归为普通 `Literal` 打印（`GameData/ast/ast_builder.cpp:162-164`），其 PRINT 族执行通路 `ExecutionEngine::handlePrintInstruction`（`GameProc/execution_engine.cpp:2159-2216`）**没有 `PRINT_SINGLE` 分支**，即该移植目前不会做「不折行单行显示」处理（另需注意该移植的 `notifyReuseLastLine` 对应的是 C# 的 `REUSELASTLINE`/`PrintTemporaryLine`，即 `temporary: true` 那一支，不能用于对照本族）。
 - **相关文档**：`PRINT.md`（PRINT 族 54 个成员与统一执行流程）、`PRINTPLAIN.md`、`PRINTBUTTON.md`、`PRINTDATA.md`、`PRINTCPERLINE.md`。

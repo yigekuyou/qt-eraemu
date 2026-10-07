@@ -186,6 +186,11 @@ public:
     // ---- QML 调用 ----
     Q_INVOKABLE void clickAt(int lineIndex, int segmentIndex);
     Q_INVOKABLE void submitMouseKey(int type, int r1, int r2, int r3, int r4);
+    // QML 键盘入口：直接上报 Qt 键码与 Qt 修饰符（KeyEvent.key /
+    // KeyEvent.modifiers），由 C++ 的键码模型（GameView/key_map.h）换算成
+    // INPUTMOUSEKEY 期待的 Emuera 键码 —— QML 不再硬编码任何数字键码。
+    // 等价于 submitMouseKey(3, keyCode, keyData, 0, 0)（对齐 C# PressPrimitiveKey）。
+    Q_INVOKABLE void submitQtKey(int qtKey, int qtModifiers);
     Q_INVOKABLE void submitInput(qint64 value);
     Q_INVOKABLE void submitInputString(const QString& value);
     // 提交（整数型等待）。text 为空时按 C# doInputToEmueraProgram 处理：

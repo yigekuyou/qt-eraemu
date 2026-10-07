@@ -118,6 +118,7 @@ GameProc/user_defined_variable_data.h
 
 GameView/input_handler.cpp
 GameView/input_handler.h
+GameView/key_map.h
 GameView/rendering_system.cpp
 GameView/rendering_system.h
 GameView/console_types.h
@@ -233,6 +234,8 @@ eraengine_add_test(test_gui_manager)
 eraengine_add_test(test_resource_image)
 eraengine_add_test(test_system_flow)
 eraengine_add_test(test_input)
+eraengine_add_test(test_key_map)
+add_test(NAME test_key_map COMMAND test_key_map)
 eraengine_add_test(test_statements)
 eraengine_add_test(test_expression_system)
 eraengine_add_test(test_expression_types)

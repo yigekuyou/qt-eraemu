@@ -58,6 +58,10 @@ class WindowController : public QObject {
     Q_PROPERTY(GuiManager* gui READ gui WRITE setGui NOTIFY guiChanged FINAL)
     // "windowed" | "fullscreen" | "borderless"
     Q_PROPERTY(QString windowMode READ windowMode WRITE setWindowMode NOTIFY windowModeChanged FINAL)
+    // 当前屏幕的刷新率（Hz；未知为 0）。QML 的 Screen 附着类型**没有**
+    // refreshRate（Qt 文档 Screen QML Type 的属性表里不存在），所以刷新节拍
+    // 由 C++ 提供：QScreen::refreshRate()（Qt 文档 QScreen）。
+    Q_PROPERTY(int screenRefreshRate READ screenRefreshRate NOTIFY screenRefreshRateChanged FINAL)
 
 public:
     explicit WindowController(QObject* parent = nullptr);
@@ -69,6 +73,8 @@ public:
     void setGui(GuiManager* g);
     [[nodiscard]] QString windowMode() const { return m_windowMode; }
     void setWindowMode(const QString& mode);
+    // 当前屏幕刷新率（Hz）；窗口/屏幕未知时为 0
+    [[nodiscard]] int screenRefreshRate() const;
 
     // 按 GuiManager 的设置直接改变窗口大小（钳制在当前屏幕内）
     Q_INVOKABLE void applyWindowSize();
@@ -89,6 +95,7 @@ Q_SIGNALS:
     void windowChanged();
     void guiChanged();
     void windowModeChanged();
+    void screenRefreshRateChanged();
 
 private:
     void applyWindowState();

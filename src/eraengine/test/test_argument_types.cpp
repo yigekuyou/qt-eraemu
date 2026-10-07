@@ -44,6 +44,14 @@ static_assert(findInstructionSpec("NOSUCH") == nullptr);
 // eraTW MOVEMENT_キャラ移動処理.ERB 用 `#DIM END` + `END = 0`，把它当指令会让
 // 赋值被吞、`IF END` 恒假、函数早退失效（角色移动死循环）。
 static_assert(findInstructionSpec("END") == nullptr);
+// 原版指令补全（2026-10）：此前这些名字回落 Raw（无个数/类型校验）
+static_assert(findInstructionSpec("ASSERT")->kind == ArgKind::IntExpression);
+static_assert(findInstructionSpec("ADDCHARA")->kind == ArgKind::Expressions);
+static_assert(findInstructionSpec("TOOLTIP_SETCOLOR")->minArgs == 2);
+static_assert(findInstructionSpec("FONTBOLD")->kind == ArgKind::Void);
+// 同时是内置函数的名字**不得**入规范表（行会转函数语句，加规范会误报「参数过多」）
+static_assert(findInstructionSpec("PUTFORM") == nullptr);
+static_assert(findInstructionSpec("STRLEN") == nullptr);
 
 static int g_failures = 0;
 
@@ -110,6 +118,28 @@ int main(int argc, char* argv[]) {
     check(build(table, "FOR II, 0, 2").argument.typeOk, "FOR II,0,2 合法");
     check(!build(table, "SETFONT 1").argument.typeOk, "SETFONT 1 -> 需要字符串");
     check(build(table, "SETFONT \"msgothic\"").argument.typeOk, "SETFONT \"..\" 合法");
+
+    // ---- 原版指令补全（2026-10）：此前回落 Raw（无个数/类型校验）----
+    // ASSERT <整型表达式>（整行一个表达式：`1 == 1` 不能被空白切散）
+    check(build(table, "ASSERT 1 == 1").argument.typeOk, "ASSERT 1 == 1 合法（整行归约）");
+    check(!build(table, "ASSERT").argument.typeOk, "ASSERT 无参 -> 参数过少");
+    // 注：引号字面量按既有规则豁免（isString 跳过类型检查，同 IF 的实现）；
+    // 用静态字符串变量 RESULTS 验证整型检查确实生效。
+    check(!build(table, "ASSERT RESULTS").argument.typeOk, "ASSERT RESULTS（字符串变量）-> 需要整型");
+    // 多参族必须走 Expressions（逗号族逐参归约），不能用 IntExpression（整行归约）
+    check(build(table, "ADDCHARA 3").argument.typeOk, "ADDCHARA 3 合法");
+    check(build(table, "ADDCHARA 3, 5").argument.typeOk,
+          "ADDCHARA 3, 5 合法（多参，按顶层逗号切分）");
+    check(!build(table, "ADDCHARA").argument.typeOk, "ADDCHARA 无参 -> 参数过少");
+    check(build(table, "TOOLTIP_SETCOLOR 0, 0").argument.typeOk, "TOOLTIP_SETCOLOR 0,0 合法");
+    check(!build(table, "TOOLTIP_SETCOLOR 0").argument.typeOk, "TOOLTIP_SETCOLOR 0 -> 参数过少");
+    // VOID 族
+    check(build(table, "FONTBOLD").argument.typeOk, "FONTBOLD 无参合法");
+    check(!build(table, "FONTBOLD 1").argument.typeOk, "FONTBOLD 1 -> 参数过多");
+    check(build(table, "FONTSTYLE").argument.typeOk, "FONTSTYLE 无参合法（可省略）");
+    check(build(table, "FONTSTYLE 1 + 2").argument.typeOk, "FONTSTYLE 1 + 2 合法");
+    // 裸记号型（CALLEVENT <事件名>：eraTW 不加引号）——用 Expressions 只校验个数
+    check(build(table, "CALLEVENT EVENTTURNEND").argument.typeOk, "CALLEVENT 裸名合法");
 
     qDebug() << "\n4) 结构化解析告警（EraParseTable）";
     AstResolver resolve = [&table](const QString& e) { return table.expressionAst(e); };

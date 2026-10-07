@@ -161,8 +161,53 @@ inline constexpr auto kInstructionSpecs = std::to_array<InstructionSpec>({
     {"TINPUTS",      ArgKind::Input,         1,  4},
     {"ONEINPUTS",    ArgKind::Input,         0,  2},
     {"TONEINPUTS",   ArgKind::Input,         1,  4},
-});
 
+    // ---- 原版指令补全（2026-10）：此前回落 Raw（无 ArgKind/个数/类型校验）----
+    // 来源：C# FunctionIdentifier.cs 的 addFunction / Instraction.Child.cs 的
+    // GetArgumentBuilder(FunctionArgType.X)；个数范围取 test/data/commands/*.md 的签名。
+    // 注：同时是内置函数的名字（COPYCHARA/PICKUPCHARA/PUTFORM/STRLEN*…）不在此列 ——
+    //     那些行由 AstBuilder 转成函数语句（isFunctionCall），加规范会误报「参数过多」。
+    // 角色列表（INT_ANY：可变个整数）——注意必须用 **Expressions**（逗号族）：
+    // 本引擎的 IntExpression 是「整行归约为一个表达式」，`ADDCHARA 3, 5` 会被并成
+    // 一个操作数而破坏多参；Expressions 按顶层逗号切分，逐参归约（见 ast_builder）。
+    {"ADDCHARA",     ArgKind::Expressions,    1, -1},
+    {"ADDSPCHARA",   ArgKind::Expressions,    1, -1},
+    {"DELCHARA",     ArgKind::Expressions,    1, -1},
+    {"ADDVOIDCHARA", ArgKind::Void,          0,  0},
+    {"ADDDEFCHARA",  ArgKind::Void,          0,  0},
+    {"DELALLCHARA",  ArgKind::Void,          0,  0},
+    // 调试/系统
+    {"ASSERT",       ArgKind::IntExpression, 1,  1},
+    {"DOTRAIN",      ArgKind::IntExpression, 1,  1},
+    {"RESTART",      ArgKind::Void,          0,  0},
+    {"RESETDATA",    ArgKind::Void,          0,  0},
+    {"RESETGLOBAL",  ArgKind::Void,          0,  0},
+    {"OUTPUTLOG",    ArgKind::Void,          0,  0},   // 命令形式；式中函数形式另有 1..2
+    {"UPCHECK",      ArgKind::Void,          0,  0},
+    // 事件：C# STR（裸记号）——eraTW 实际写法是 `CALLEVENT 事件名`（无引号），
+    // 若用 StrExpression 会把裸标识符按 Int 误报，故用类型无关的 Expressions 只校验个数。
+    {"CALLEVENT",    ArgKind::Expressions,   1,  1},
+    // 显示/样式
+    {"CLEARTEXTBOX", ArgKind::Void,          0,  0},
+    {"FONTBOLD",     ArgKind::Void,          0,  0},
+    {"FONTITALIC",   ArgKind::Void,          0,  0},
+    {"FONTREGULAR",  ArgKind::Void,          0,  0},
+    {"FONTSTYLE",    ArgKind::IntExpression, 0,  1},   // 参数可省略（省略按 0）
+    {"FORCEKANA",    ArgKind::IntExpression, 1,  1},
+    {"FORCEWAIT",    ArgKind::Void,          0,  0},
+    {"DRAWLINEFORM", ArgKind::FormStr,      1,  1},
+    {"REUSELASTLINE", ArgKind::FormStr,     0,  1},    // FORM_STR_NULLABLE：可省略
+    // C# STR：eraTW 可能写裸名字，同 CALLEVENT 用 Expressions 只校验个数
+    {"SETBGCOLORBYNAME", ArgKind::Expressions, 1, 1},
+    {"SKIPDISP",     ArgKind::IntExpression, 1,  1},
+    // 存档/训练辅助
+    {"DELDATA",      ArgKind::IntExpression, 1,  1},
+    {"CUPCHECK",     ArgKind::IntExpression, 1,  1},
+    // 工具提示（C# SP_SWAP = <数値>,<数値>；不是「变量交换」，勿映射 ArgKind::Swap）
+    {"TOOLTIP_SETCOLOR",    ArgKind::Expressions, 2, 2},
+    {"TOOLTIP_SETDELAY",    ArgKind::IntExpression, 1, 1},
+    {"TOOLTIP_SETDURATION", ArgKind::IntExpression, 1, 1},
+});
 [[nodiscard]] constexpr const InstructionSpec* findInstructionSpec(std::string_view upperName) noexcept {
     for (const auto& s : kInstructionSpecs) {
         if (s.name == upperName) return &s;

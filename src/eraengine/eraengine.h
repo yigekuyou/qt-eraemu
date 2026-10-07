@@ -265,6 +265,10 @@ signals:
     void defaultTitleVisibleChanged();
     // 脚本执行了 QUIT（C# 侧等价关闭游戏窗口）—— GUI 层应退出应用
     void quitRequested();
+    // 脚本执行了 QUIT_AND_RESTART / FORCE_QUIT_AND_RESTART（EE v11；C# 侧等价
+    // Program.rebootFlag + 关闭窗口后重开）—— 宿主应重新装载本目录
+    // （GUI：reloadAsync()；test_cli：reload() + runSystem()）
+    void restartRequested();
     // D-Bus /debug saveScreenshot：请求 QML 把当前画面存成图片
     void screenshotRequested(const QString& path);
     // D-Bus /debug startFrameCapture：每帧抓取渲染（QML 侧 Item.grabToImage）

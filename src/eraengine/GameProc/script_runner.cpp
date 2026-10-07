@@ -585,6 +585,42 @@ ExecState ScriptRunner::executeLine(const LogicalLine& line) {
         return ExecState::Continue;
     }
 
+    // ---- ASSERT（C# ASSERT_Instruction / FunctionCode.ASSERT）----
+    // 运行期断言：条件为 0 时抛 CodeEE（「ASSERT の条件が不正です」），
+    // 非 0 静默通过。此前只被「已知指令名」兜住、运行期落到「其它指令」被忽略
+    // —— 断言形同虚设（组 17 的 `ASSERT 1 == 1` 一度是「不报错」而非「通过」）。
+    if (name == QLatin1String("ASSERT")) {
+        // 实参形态是 INT_EXPRESSION（argument_parser.h:180），条件就是第一个操作数
+        // （不是 IF 系的 line.condition —— 此前误用 evalCondition 恒为假）。
+        qint64 v = 0;
+        if (!line.arguments.isEmpty()) {
+            evalInt(line.arguments.first().ast, line.arguments.first().raw, v);
+        }
+        if (v == 0) {
+            m_state->setErrorState();
+            emit errorOccurred(QStringLiteral("ASSERT 的条件不成立：%1（%2）")
+                                   .arg(line.raw.trimmed(), line.position.toString()));
+            return ExecState::Error;
+        }
+        advance();
+        return ExecState::Continue;
+    }
+
+    // ---- SKIPLOG（EE）：设置「消息跳过中」状态（C# console.MesSkip = n != 0）----
+    // 非 0 -> 进入跳过：可跳过的任意键等待（WAIT/WAITANYKEY/PRINTW 系）自动放行；
+    // 0    -> 强制解除。INPUT 族（需要输入值）与 FORCEWAIT（不可跳过）会把跳过
+    // 状态清掉（对齐 C# EmueraConsole 的 MesSkip 循环语义）。
+    if (name == QLatin1String("SKIPLOG")) {
+        qint64 v = 0;
+        if (!line.arguments.isEmpty()) {
+            evalInt(line.arguments.first().ast, line.arguments.first().raw, v);
+        }
+        if (m_engine) m_engine->setMesSkip(v != 0);
+        qCDebug(eraTrace) << "[skiplog]" << v << "行" << line.position.toString();
+        advance();
+        return ExecState::Continue;
+    }
+
     // ---- THROW（C# THROW_Instruction -> throw new CodeEE）----
     // 语义要点一：Emuera 的 CATCH **不是**通用异常捕获 ——
     //   文档《异常分支：TRYC / CATCH / ENDCATCH》：「用于捕获『函数不存在』的情况」。
@@ -828,6 +864,29 @@ ExecState ScriptRunner::executeLine(const LogicalLine& line) {
         return ExecState::Halt;
     }
 
+    // ---- EE QUIT 族（v11）：QUIT_AND_RESTART / FORCE_QUIT / FORCE_QUIT_AND_RESTART ----
+    //   QUIT_AND_RESTART       = QUIT + 重启标志（C# Program.rebootFlag；
+    //                            退出流程收到回车后 Reboot() 重载本目录）
+    //   FORCE_QUIT             = 不等待输入立即退出（C# Console.ForceQuit()）
+    //   FORCE_QUIT_AND_RESTART = 不等待输入立即退出 + 重启标志
+    // 与 C# 的差别（有意为之，注释存档）：C# 的 QUIT 会先停在一个「按回车继续」
+    // 的等待上，FORCE_* 跳过该等待。本移植的 QUIT 本就是同步结束（不插等待），
+    // 因此 QUIT 与 FORCE_QUIT 在此等价；重启请求由 restartRequested 标志区分，
+    // 宿主收到 restartRequestedByScript 后 reload()（等价 C# Reboot）。
+    if (name == QLatin1String("QUIT_AND_RESTART") || name == QLatin1String("FORCE_QUIT")
+        || name == QLatin1String("FORCE_QUIT_AND_RESTART")) {
+        if (name == QLatin1String("QUIT_AND_RESTART")
+            || name == QLatin1String("FORCE_QUIT_AND_RESTART")) {
+            m_state->requestRestart();   // = requestQuit() + 重启标志
+        } else {
+            m_state->requestQuit();
+        }
+        qCDebug(eraTrace) << "[quit]" << name << "重启标志" << m_state->restartRequested()
+                          << "行" << line.position.toString();
+        emit finished();
+        return ExecState::Halt;
+    }
+
     // ---- 跳转 / 调用 ----
     if (name == QLatin1String("GOTO")) {
         QString label = line.arguments.isEmpty() ? QString() : line.arguments.first().raw;
@@ -974,9 +1033,25 @@ ExecState ScriptRunner::executeLine(const LogicalLine& line) {
     // 会把调用者刚写入的 LOCALS 覆盖掉（eraTW 的 TEMP_RE_STR 因此恒返回空串，
     // GET_STR/OBJ 系全链失效）。
     // 以前这条完全没有实现 -> EXIST 系列函数形同虚设。
-    if (name == QLatin1String("CALLF") || name == QLatin1String("CALLFORMF")) {
+    // ---- TRYCALLF / TRYCALLFORMF（EE，C# TRYCALLF_Instruction）----
+    // CALLF 的 TRY 版：目标是**式中関数**（#FUNCTION/#FUNCTIONS）时正常调用并
+    // **丢弃返回值**；目标不存在（未定义 / 不是函数而是普通标签）时**静默跳过**，
+    // 不报错、不触发 CATCH（EE readme：想捕获请改用 EXISTFUNCTION 判断）。
+    // C#：GetFunctionMethod(..., try=true) 返回 null 则直接 return。
+    if (name == QLatin1String("TRYCALLF") || name == QLatin1String("TRYCALLFORMF")
+        || name == QLatin1String("CALLF") || name == QLatin1String("CALLFORMF")) {
+        const bool isTry = name.startsWith(QLatin1String("TRY"));
+        const bool isForm = name.endsWith(QLatin1String("FORMF"));
         QString funcName = line.arguments.isEmpty() ? QString() : line.arguments.first().raw;
-        if (name == QLatin1String("CALLFORMF")) funcName = expandCallFormLabel(funcName);
+        if (isForm) funcName = expandCallFormLabel(funcName);
+        // TRY：先做存在性判定（0=未定义 1=普通関数(标签) 2=#FUNCTION 3=#FUNCTIONS）。
+        // 只有 2/3 才是 CALLF 系列的目标 —— 与 C# 的 null 判定等价。
+        if (isTry && (!m_table || m_table->functionExistsKind(funcName, true) < 2)) {
+            qCDebug(eraTrace) << "[trycallf]" << funcName << "不存在（TRYCALLF 静默跳过）行"
+                              << line.position.toString();
+            advance();
+            return ExecState::Continue;
+        }
         QStringList argTexts;
         for (int i = 1; i < line.arguments.size(); ++i) {
             const Operand& op = line.arguments.at(i);
@@ -995,7 +1070,7 @@ ExecState ScriptRunner::executeLine(const LogicalLine& line) {
             m_table ? m_table->expressionAst(callText) : QSharedPointer<ExpressionNode>();
         const QVariant value = ast ? ev.evaluate(*ast, m_storage, baseData())
                                    : ev.evaluate(callText, m_storage, baseData());
-        Q_UNUSED(value);   // 对齐 C#：CALLF 的返回值不落任何寄存器
+        Q_UNUSED(value);   // 对齐 C#：CALLF / TRYCALLF 的返回值不落任何寄存器
         qCDebug(eraTrace) << "[callf]" << callText << "->" << value
                           << "行" << line.position.toString();
         advance();
@@ -1255,6 +1330,20 @@ ExecState ScriptRunner::executeLine(const LogicalLine& line) {
     // 三者都挂起等输入；「跳过模式下的差异」属于输入层能力，此处统一等任意键。
     if (name == QLatin1String("WAIT") || name == QLatin1String("WAITANYKEY")
         || name == QLatin1String("FORCEWAIT")) {
+        // SKIPLOG 跳过中（C# MesSkip）：
+        //   WAIT / WAITANYKEY（ReadAnyKey 可跳过）-> 直接放行，保持跳过状态；
+        //   FORCEWAIT（ReadAnyKey(false,true) 的 StopMesskip）-> 不可跳过，
+        //   但会把跳过状态清掉（C# 循环 break 后 MesSkip = false）。
+        if (m_engine && m_engine->mesSkip()) {
+            if (name == QLatin1String("FORCEWAIT")) {
+                m_engine->setMesSkip(false);
+            } else {
+                qCDebug(eraTrace) << "[skiplog]" << name << "跳过中自动放行，行"
+                                  << line.position.toString();
+                advance();
+                return ExecState::Continue;
+            }
+        }
         advance();
         if (m_machine) {
             m_machine->waitAnyKey();
@@ -1293,16 +1382,38 @@ ExecState ScriptRunner::executeLine(const LogicalLine& line) {
             }
         }
         advance();                       // 指令已消费
+        // 需要输入值的等待（NeedValue）会把 SKIPLOG 跳过状态清掉
+        // （C# MesSkip 循环：`if (inputReq.NeedValue) break;` 后 MesSkip = false）
+        if (m_engine) m_engine->setMesSkip(false);
         return ExecState::WaitInput;     // 挂起等待用户操作
+    }
+    // ---- INPUTANY（EE v22）----
+    //   同时接受整数与字符串的 INPUT（C# INPUTANY_Instruction -> InputType.AnyValue）：
+    //   整数输入写 RESULT，字符串输入写 RESULTS（另一者**保持原值**，C# 语义）。
+    //   无缺省值（与 INPUT 一样必须等玩家输入；空回车由输入层忽略）。
+    //   画面上 PRINTBUTTON 生成的整数/字符串按钮都可以点。
+    if (name == QLatin1String("INPUTANY")) {
+        m_waitDefault = QVariant();
+        if (m_engine) m_engine->setMesSkip(false);
+        advance();
+        return ExecState::WaitInput;
     }
     // ---- BINPUT / BINPUTS（EE v31fix）----
     //   実行時点でボタン化されている値のみを受け付ける INPUT(S)。ボタンが
     //   一つも無い状態なら、デフォルト値があれば**入力待ちをせずに**
     //   RESULT(S) にデフォルト値を入れる（缺省值も無ければエラー）。
     //   有按钮时退化为普通 INPUT/INPUTS 等待（按钮值白名单校验暂不强制）。
-    if (name == QLatin1String("BINPUT") || name == QLatin1String("BINPUTS")) {
-        const bool isStr = (name == QLatin1String("BINPUTS"));
+    if (name == QLatin1String("BINPUT") || name == QLatin1String("BINPUTS")
+        || name == QLatin1String("ONEBINPUT") || name == QLatin1String("ONEBINPUTS")) {
+        const bool isStr = (name == QLatin1String("BINPUTS")
+                            || name == QLatin1String("ONEBINPUTS"));
+        // ONEBINPUT/ONEBINPUTS：BINPUT 系的「单字符输入」版（C# OneInput：
+        // 输入框只接受首字符、按键即提交）。引擎侧等待/缺省/按钮白名单语义与
+        // BINPUT 完全相同；「只取首字符」是输入控件的约束（QML 输入栏），
+        // 这里不做截断 —— 与 C# 一致（C# 也在控件层限定）。
         const bool anyButton = m_buttonAvailable && m_buttonAvailable();
+        // 需要输入值的等待 -> 清掉 SKIPLOG 跳过状态（C# NeedValue -> break -> MesSkip=false）
+        if (m_engine) m_engine->setMesSkip(false);
         if (anyButton) {
             advance();
             return ExecState::WaitInput;
@@ -1337,6 +1448,8 @@ ExecState ScriptRunner::executeLine(const LogicalLine& line) {
         qint64 timeout = 0;
         if (!line.arguments.isEmpty()) evalInt(line.arguments.first().ast, line.arguments.first().raw, timeout);
         advance();
+        // 需要输入值 -> 清掉 SKIPLOG 跳过状态（C# NeedValue）
+        if (m_engine) m_engine->setMesSkip(false);
         if (m_machine) {
             m_machine->waitMouseKey(static_cast<int>(timeout));
             return m_state->getExecState();
@@ -1399,6 +1512,8 @@ ExecState ScriptRunner::executeLine(const LogicalLine& line) {
                                                                : QString::number(def))
                           << "操作数" << line.arguments.size();
         advance();
+        // 需要输入值 -> 清掉 SKIPLOG 跳过状态（C# NeedValue）
+        if (m_engine) m_engine->setMesSkip(false);
         if (name == QLatin1String("TINPUTS")) {
             m_machine->waitTimedStringInput(static_cast<int>(ms), defStr);
             return m_state->getExecState();
@@ -1432,6 +1547,8 @@ ExecState ScriptRunner::executeLine(const LogicalLine& line) {
         }
         if (timeout < 0) timeout = 0;
         advance();
+        // 需要输入值 -> 清掉 SKIPLOG 跳过状态（C# NeedValue）
+        if (m_engine) m_engine->setMesSkip(false);
         if (m_machine) {
             if (name == QLatin1String("TONEINPUTS"))
                 m_machine->waitTimedStringInput(static_cast<int>(timeout), defStr);
@@ -1485,6 +1602,15 @@ ExecState ScriptRunner::executeLine(const LogicalLine& line) {
         if (ms < 0) ms = 0;
         qCDebug(eraTrace) << "[twait] 等待" << ms << "ms 跳过标记" << skip
                           << "行" << line.position.toString();
+        // SKIPLOG 跳过中：TWAIT 的「可跳过」形态（skip == 0，C# EnterKey+Timelimit）
+        // 直接放行；skip != 0 是纯计时 Void 等待，与跳过状态无关。
+        if (skip == 0 && m_engine && m_engine->mesSkip()) {
+            qCDebug(eraTrace) << "[skiplog] TWAIT 跳过中自动放行，行"
+                              << line.position.toString();
+            m_waitNotifiesUser = false;
+            advance();
+            return ExecState::Continue;
+        }
         m_waitNotifiesUser = (skip == 0);
         advance();
         if (m_machine && ms > 0) {
@@ -1499,11 +1625,15 @@ ExecState ScriptRunner::executeLine(const LogicalLine& line) {
     }
 
     // ---- BEGIN：设置 BEGIN 类型并返回当前函数（对齐 C# BEGIN_Instruction）----
-    if (name == QLatin1String("BEGIN")) {
+    // FORCE_BEGIN（EE v12）走同一条分支，只是 force=true —— 跳过 __CAN_BEGIN__
+    // 状态检查（强制切换流程，C# SetBegin(keyword, true)）。
+    // 非法关键字两者都报错（关键字校验先于 force 检查）。
+    if (name == QLatin1String("BEGIN") || name == QLatin1String("FORCE_BEGIN")) {
+        const bool force = (name == QLatin1String("FORCE_BEGIN"));
         const QString keyword = line.arguments.isEmpty() ? QString() : line.arguments.first().raw;
         QString error;
-        const bool ok = m_machine ? m_machine->beginWithKeyword(keyword, &error)
-                                  : m_state->setBeginKeyword(keyword, &error);
+        const bool ok = m_machine ? m_machine->beginWithKeyword(keyword, &error, force)
+                                  : m_state->setBeginKeyword(keyword, &error, QString(), force);
         if (!ok) {
             m_state->setErrorState();
             emit errorOccurred(error);
@@ -1587,9 +1717,13 @@ ExecState ScriptRunner::executeLine(const LogicalLine& line) {
         }
         m_table->setPosition(script, next, false);   // 跳过整段（endLine 可能是 lines.size()）
         // PRINTDATAW：打印后等任意键（C# PRINT_DATA_Instruction 的 W 后缀 ->
-        // Console.ReadAnyKey）；此前 requestAnyKey 无人接线，等待被忽略
+        // Console.ReadAnyKey）；此前 requestAnyKey 无人接线，等待被忽略。
+        // SKIPLOG 跳过中：ReadAnyKey 可跳过 -> 不等待（保持跳过状态）。
         if (m_engine && m_engine->consumePrintWaitKey()) {
             m_waitKind = QStringLiteral("ANYKEY");
+            if (m_engine->mesSkip()) {
+                return ExecState::Continue;
+            }
             if (m_machine) {
                 m_machine->waitAnyKey();
                 return m_state->getExecState();
@@ -1656,9 +1790,13 @@ ExecState ScriptRunner::executeLine(const LogicalLine& line) {
         // PRINTW / PRINTFORMW / PRINTFORMLW…（W 后缀）：打印后等任意键。
         // C# PRINT_WAITINPUT -> Console.ReadAnyKey（阻塞）—— 此前 requestAnyKey
         // 信号无人接线，等待被完全忽略（eraTW 教学的段落不会停顿）。
+        // SKIPLOG 跳过中：可跳过 -> 不等待（保持跳过状态）。
         if (m_engine->consumePrintWaitKey()) {
             m_waitKind = QStringLiteral("ANYKEY");
             advance();
+            if (m_engine->mesSkip()) {
+                return ExecState::Continue;
+            }
             if (m_machine) {
                 m_machine->waitAnyKey();
                 return m_state->getExecState();

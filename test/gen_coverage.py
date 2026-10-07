@@ -49,15 +49,23 @@ EXCLUDE_REASON_EXTRA: dict[str, str] = {}
 # EE 扩展命令里**引擎只登记名字**（留痕跳过、真实现待补全）的名单——
 # 来源 src/eraengine/GameProc/ee_extension.cpp 的 kEeCommands。
 # 报告用它把「已执行」再分成「真实现 / 桩（待补全）」，给出完成度参考。
+# EE 名单里**仍为引擎桩**的项（只登记名字、运行期留痕跳过，真实现待补全）。
+# 本轮把有权威语义、且不需要新 GUI/网络后端的 12 项做成了真实现 —— 从本表移除：
+#   BINPUT/BINPUTS、ONEBINPUT/ONEBINPUTS（ScriptRunner 的按钮白名单输入）
+#   FORCE_BEGIN / FORCE_QUIT / FORCE_QUIT_AND_RESTART / QUIT_AND_RESTART（流程）
+#   INPUTANY（整数/字符串双通道输入）
+#   SKIPLOG（MesSkip：MESSKIP() + WAIT 族自动放行）
+#   TRYCALLF / TRYCALLFORMF（TRY 版 CALLF）
+#   GETMEMORYUSAGE / CLEARMEMORY / GETTEXTBOX / SETTEXTBOX（式中函数）
+#   FLOWINPUT / FLOWINPUTS（系统流程输入选项）
+#   UPDATECHECK（RESULT = 3/4 的确定性路径）
+# 余下 17 项皆为「无后端 / 无据可考」：见 ee_extension.cpp 的 kStubs 注释。
 EE_STUB = {
-    "BINPUT", "BINPUTS", "CLEARMEMORY",
     "COLUMNBGCOLOR", "COLUMNCLEAR", "COLUMNCOLOR", "COLUMNCREATE",
     "COLUMNDIRECTION", "COLUMNMOVE", "COLUMNPRINT", "COLUMNPRINTL",
     "COLUMNPRINTW", "COLUMNRESIZE", "COLUMNWAIT",
-    "FLOWINPUT", "FORCE_BEGIN", "FORCE_QUIT", "FORCE_QUIT_AND_RESTART",
-    "GETMEMORYUSAGE", "GETTEXTBOX", "GETTEXTSIZE", "INPUTANY", "LCSVISASSI",
-    "OCLEARLINE", "QUIT_AND_RESTART", "SETTEXTBOX", "SKIPLOG", "TINPUTAWAIT",
-    "TRYCALLF", "TRYCALLFORMF", "UPDATECHECK",
+    "GETTEXTSIZE", "LCSVISASSI",
+    "OCLEARLINE", "TINPUTAWAIT",
 }
 
 # PRINT 族以「基名 + 后缀」组合，逐个列无意义

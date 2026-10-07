@@ -183,6 +183,75 @@ int main(int argc, char* argv[]) {
     runner.runSlice(4096, 1000);
     check(printed.size() == 3, "one execution slice crosses consecutive print instructions");
 
+    // =====================================================================
+    // EE 扩展命令的状态语义（ProcessState / ExecutionEngine 侧，可离线断言）
+    // =====================================================================
+    qDebug() << "\n--- EE 状态语义（FORCE_BEGIN / QUIT 族 / SKIPLOG / FLOWINPUT）---";
+
+    // FORCE_BEGIN：BEGIN 需要 __CAN_BEGIN__ 状态放行，FORCE_BEGIN 跳过该检查
+    // （C# Process.State.cs:216 `if (force == true) break;`）。
+    // Shop_CallShowShop（@SHOW_SHOP 所在状态）**没有** __CAN_BEGIN__ 位：
+    // 这里 BEGIN SHOP 应失败，而 FORCE_BEGIN SHOP 应成功。
+    {
+        state.setSystemState(SystemStateCode::Shop_CallShowShop);
+        check(!state.canBegin(), "Shop_CallShowShop 状态不允许 BEGIN（无 __CAN_BEGIN__）");
+
+        QString err;
+        const bool plain = state.setBeginKeyword(QStringLiteral("SHOP"), &err,
+                                                 QStringLiteral("@SHOW_SHOP"), false);
+        check(!plain && !err.isEmpty(),
+              "BEGIN SHOP 在该状态被拒（错误消息：" + err + "）");
+
+        const bool forced = state.setBeginKeyword(QStringLiteral("SHOP"), &err,
+                                                  QStringLiteral("@SHOW_SHOP"), true);
+        check(forced, "FORCE_BEGIN SHOP 跳过 __CAN_BEGIN__ 检查（成功）");
+        state.clearFunctionList();
+        state.setSystemState(SystemStateCode::Normal);
+
+        // 关键字合法性先于 force 检查：FORCE_BEGIN 传非法关键字照样报错
+        QString err2;
+        const bool badKeyword = state.setBeginKeyword(QStringLiteral("0"), &err2,
+                                                      QStringLiteral("@X"), true);
+        check(!badKeyword && err2.contains(QStringLiteral("未定义")),
+              "FORCE_BEGIN 非法关键字仍报错（force 不豁免关键字校验）");
+    }
+
+    // QUIT 族：QUIT / FORCE_QUIT 只置 quit；QUIT_AND_RESTART / FORCE_QUIT_AND_RESTART
+    // 另置重启标志（宿主据此 reload）。
+    {
+        ProcessState q;
+        q.requestQuit();
+        check(q.quitRequested() && !q.restartRequested(), "requestQuit：仅 quit 请求");
+        ProcessState r;
+        r.requestRestart();
+        check(r.quitRequested() && r.restartRequested(),
+              "requestRestart：quit + 重启标志（QUIT_AND_RESTART 系）");
+        r.clearRestartRequest();
+        check(r.restartRequested() == false, "clearRestartRequest 消费重启标志");
+    }
+
+    // SKIPLOG -> MesSkip（MESSKIP() 的数据源；引擎默认关闭）
+    {
+        check(!engine.mesSkip(), "MesSkip 默认关闭");
+        engine.setMesSkip(true);
+        check(engine.mesSkip(), "SKIPLOG 置位后 mesSkip() = true（MESSKIP() 反映）");
+        engine.setMesSkip(false);
+        check(!engine.mesSkip(), "SKIPLOG 0 解除跳过状态");
+    }
+
+    // FLOWINPUT / FLOWINPUTS：选项落在 ProcessState（不自动复位；由系统层输入消费）
+    {
+        ProcessState p;
+        check(!p.flowInput() && p.flowInputDef() == 0, "flowinput 默认关闭");
+        p.setFlowInput(42, true, /*canSkip*/ true, /*forceSkip*/ false);
+        check(p.flowInput() && p.flowInputDef() == 42 && p.flowInputCanSkip()
+                  && !p.flowInputForceSkip(),
+              "FLOWINPUT(42,1,1,0)：缺省 42 / 启用 / 可跳过 / 非强制");
+        p.setFlowInputString(true, QStringLiteral("文本"));
+        check(p.flowInputString() && p.flowInputDefString() == QStringLiteral("文本"),
+              "FLOWINPUTS(1,\"文本\")：字符串模式 + 缺省串");
+    }
+
     qDebug() << "\n================================";
     if (g_failures == 0) {
         qDebug() << "[SUCCESS] execution-chain tests passed";

@@ -97,7 +97,10 @@ ExecutionEngine::ExecutionEngine(VariableStorage* storage, GameBaseData* gameBas
                 }
             }
             return getEvaluator().evaluate(e, m_storage, m_gameBaseData);
-        }
+        },
+        // 宿主侧服务（文本框 / FLOWINPUT / UPDATECHECK）：由 EraEngine 装配后经
+        // setHostServices 注入（这里留空 —— ExecutionEngine 拿不到控制台/配置）。
+        nullptr, nullptr, nullptr, nullptr, nullptr, nullptr
     });
 }
 

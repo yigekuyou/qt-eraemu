@@ -190,8 +190,9 @@ public:
     
     // Process state management (BEGIN command handling)
     // SetBegin(BeginType) + Begin()：校验 __CAN_BEGIN__ 后立即切换状态。
+    // force=true 即 EE FORCE_BEGIN：跳过 __CAN_BEGIN__ 检查（C# SetBegin(BeginType, force)）
     bool processBegin(BeginType type, QString* error = nullptr,
-                      const QString& funcName = QString());
+                      const QString& funcName = QString(), bool force = false);
     
     // Line management
     LogicalLine* getCurrentLine() const;
@@ -237,8 +238,11 @@ public:
 
     // C# Process.SetBegin(string)：把关键字解析为 BeginType，未定义则失败
     // funcName：发起 BEGIN 的函数名（用于错误消息，对齐 C# functionList[0].FunctionName）
+    // force=true 即 EE 的 FORCE_BEGIN：跳过 __CAN_BEGIN__ 状态检查
+    // （C# SetBegin(keyword, bool force) / SetBegin(BeginType, bool force)，
+    //   Process.State.cs:181/207 —— 关键字合法性仍先校验，非法关键字照样报错）
     bool setBeginKeyword(const QString& keyword, QString* error = nullptr,
-                         const QString& funcName = QString());
+                         const QString& funcName = QString(), bool force = false);
 
     // C# ProcessState.Begin()：按已设置的 begintype 切换系统状态、清空函数栈、
     // 复位 begintype。由系统状态机在脚本执行到帧底时调用。
@@ -271,10 +275,54 @@ public:
     void requestResume();      // 置回 Continue
     void setErrorState();
 
+    // QUIT_AND_RESTART / FORCE_QUIT_AND_RESTART（EE v11）：QUIT 之上再置
+    // 「重启」标志（C# Program.rebootFlag —— 退出流程收到回车后 Reboot()
+    // 重新装载本目录）。本引擎单实例常驻：标志由系统状态机转成
+    // restartRequestedByScript 信号，宿主收到后 reload()（GUI）/
+    // reload+runSystem（test_cli），语义等价 C# Reboot。
+    void requestRestart() { m_restartRequested = true; m_quitRequested = true;
+                            setExecState(ExecState::Halt); }
+    [[nodiscard]] bool restartRequested() const { return m_restartRequested; }
+    // reload() / closeGame() 消费重启请求时复位（与 clearQuitRequest 同一现场）
+    void clearRestartRequest() { m_restartRequested = false; }
+
+    // ---- FLOWINPUT / FLOWINPUTS（EE「システム入力拡張」）------------------
+    // C# FlowInputMethod（Creator.Method.cs:7423）把选项写进 Process 的
+    // flowinput* 字段，**不自动复位**；消费点是系统层输入
+    // （Process.SystemProc.cs:108 setWaitInput —— 下一次（以及之后每一次）
+    // 系统流程输入都套用这些选项）。本引擎同样由系统状态机的 setWaitInput()
+    // 读取；普通 INPUT/INPUTS 不受影响。
+    void setFlowInput(qint64 def, bool enable, bool canSkip, bool forceSkip) {
+        m_flowInputDef = def;                // arguments[0]
+        m_flowInput = enable;                // arguments[1]（左键当 Enter / 启用缺省）
+        m_flowInputCanSkip = canSkip;         // arguments[2]（MesSkip 时可跳过）
+        m_flowInputForceSkip = forceSkip;     // arguments[3]（源码扩展：直接交缺省）
+    }
+    // FLOWINPUTS(isString, defStr)（Creator.Method.cs:7446 FlowInputsMethod）
+    void setFlowInputString(bool isString, const QString& defStr) {
+        m_flowInputString = isString;
+        m_flowInputDefString = defStr;
+    }
+    [[nodiscard]] bool flowInput() const { return m_flowInput; }
+    [[nodiscard]] qint64 flowInputDef() const { return m_flowInputDef; }
+    [[nodiscard]] bool flowInputCanSkip() const { return m_flowInputCanSkip; }
+    [[nodiscard]] bool flowInputForceSkip() const { return m_flowInputForceSkip; }
+    [[nodiscard]] bool flowInputString() const { return m_flowInputString; }
+    [[nodiscard]] QString flowInputDefString() const { return m_flowInputDefString; }
+
     // Set the entry point script name for state tracking
     void setEntryPointScript(const QString& scriptName);
     
     bool m_quitRequested = false;
+    bool m_restartRequested = false;   // EE QUIT_AND_RESTART 系的重启标志
+
+    // EE flowinput*（Process.SystemProc.cs:107-114 的六个字段，一名一义）
+    qint64 m_flowInputDef = 0;
+    bool m_flowInput = false;
+    bool m_flowInputCanSkip = false;
+    QString m_flowInputDefString;
+    bool m_flowInputString = false;
+    bool m_flowInputForceSkip = false;
 
 signals:
     // State changed signal - emitted when state changes

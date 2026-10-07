@@ -3,8 +3,8 @@
 ;
 ; * ASSERT 只测「条件为真」的通过路径 —— 失败即终止，由组 13 模式覆盖；
 ; * CALLTRAIN/STOPCALLTRAIN 只登记训练流程（在训练状态外使用才非法）；
-; * EE 音频/文本框/网络族当前是「留痕跳过」桩 —— 执行不报错即通过；
-;   它们需要真实后端（音频/网络/文本框控件），冒烟无意义所以不自动生成。
+; * EE 文本框/网络/日志族已真实现（GETTEXTBOX/SETTEXTBOX 读回、UPDATECHECK
+;   RESULT=3、SKIPLOG 置 MESSKIP）；音频族仍是留痕桩（需要真实音频后端）。
 ;=============================================================
 @TEST_ENV
 #DIM NONG
@@ -32,17 +32,33 @@ SETSOUNDVOLUME 50
 CALL ASSERT_TRUE, 1, @"音频族（EE 桩）执行不报错"
 NONG += RESULT
 
-;---- EE 文本框族（留痕桩）----
+;---- EE 文本框族（真实现）----
+; SETTEXTBOX/GETTEXTBOX 是**式中函数**（C# 注册在 methodList；命令形态不存在）：
+;   SETTEXTBOX(s) 整体替换输入框内容、恒返回 1；GETTEXTBOX 读回当前内容。
+CALL ASSERT_EQ, SETTEXTBOX("预填文本"), 1, @"SETTEXTBOX(…) 恒返回 1（C# ChangeTextBoxMethod）"
+NONG += RESULT
+CALL ASSERT_SEQ, GETTEXTBOX(), "预填文本", @"GETTEXTBOX() 读回 SETTEXTBOX 写入的内容"
+NONG += RESULT
+; 命令形态的 SETTEXTBOX / GETTEXTBOX（裸写）在 C# 里不是有效写法；
+; 本移植按「式中函数裸写」静默跳过（不报错）——覆盖组只断言执行不报错。
 SETTEXTBOX 0
 GETTEXTBOX
-CALL ASSERT_TRUE, 1, @"文本框族（EE 桩）执行不报错"
+CALL ASSERT_TRUE, 1, @"SETTEXTBOX/GETTEXTBOX 裸写（非 C# 合法形态）执行不报错"
 NONG += RESULT
 
-;---- EE 网络 / 日志（留痕桩）----
+;---- EE 网络 / 日志（真实现）----
+; UPDATECHECK：配置未禁止 + GameBase.csv 无「バージョン情報URL」-> RESULT = 3
+;（C#：url == null || "" -> 3；「UPDATECHECKを許可しない」-> 4）。
 UPDATECHECK
-CALL ASSERT_TRUE, 1, @"UPDATECHECK（EE 桩）执行不报错"
+CALL ASSERT_EQ, RESULT, 3, @"UPDATECHECK 无版本信息 URL -> RESULT = 3"
+NONG += RESULT
+; SKIPLOG：置/解「消息跳过中」状态；MESSKIP() 反映该状态。
+CALL ASSERT_EQ, MESSKIP(), 0, @"初始 MESSKIP() = 0"
+NONG += RESULT
+SKIPLOG 1
+CALL ASSERT_EQ, MESSKIP(), 1, @"SKIPLOG 1 -> MESSKIP() = 1"
 NONG += RESULT
 SKIPLOG 0
-CALL ASSERT_TRUE, 1, @"SKIPLOG（EE 桩）执行不报错"
+CALL ASSERT_EQ, MESSKIP(), 0, @"SKIPLOG 0 -> MESSKIP() = 0"
 NONG += RESULT
 RETURN NONG

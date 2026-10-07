@@ -118,6 +118,25 @@ public:
         // 表达式求值（扩展命令实参：PLAYBGM 的字符串式 / SET*VOLUME 的整数式）。
         // 惰性：解析表装配后才可用；未注入时扩展退回按字面量处理。
         std::function<QVariant(const QString&)>  evaluate;
+
+        // ---- EE 文本框族（GETTEXTBOX / SETTEXTBOX）----
+        // C# 直接读写主窗口输入框（MainWindow.ChangeTextBox / TextBox.Text）。
+        // 本移植由控制台后端持有该字符串（QML 输入栏），扩展只经这两个服务访问。
+        std::function<QString()>                 textboxText;   // GETTEXTBOX
+        std::function<void(const QString&)>      setTextbox;    // SETTEXTBOX
+
+        // ---- EE FLOWINPUT / FLOWINPUTS ----
+        // C# FlowInputMethod 写 Process.flowinput*（不自动复位），消费点在
+        // 系统状态机的 setWaitInput。这里转给 ProcessState。
+        std::function<void(qint64, bool, bool, bool)> setFlowInput;   // def, enable, canSkip, forceSkip
+        std::function<void(bool, const QString&)>     setFlowInputString;  // isString, defStr
+
+        // ---- EE UPDATECHECK ----
+        // GameBase.csv 取值（バージョン名 / バージョン情報URL）与配置开关
+        // （UPDATECHECKを許可しない）。C#：Config.ForbidUpdateCheck -> RESULT=4，
+        // URL 空/不可达 -> 3，网络不可用 -> 5，版本相同 -> 0，不同 -> 询问 1/2。
+        std::function<QString(const QString&)>   gameBaseValue;
+        std::function<bool()>                    forbidUpdateCheck;
     };
     void setServices(Services s) { m_services = std::move(s); }
     // 引擎在运行期补挂「式中函数」服务（构造期 storage 已知，但这些 provider
@@ -128,6 +147,22 @@ public:
         m_services.functionExists = std::move(functionExists);
         m_services.doingFunction = std::move(doingFunction);
         m_services.displayLine = std::move(displayLine);
+    }
+    // 宿主侧（EraEngine）在装配完成后补挂「控制台 / 流程 / GameBase」服务：
+    // 文本框（GETTEXTBOX/SETTEXTBOX）、FLOWINPUT 选项、UPDATECHECK 的环境取值
+    // —— 这些只有 EraEngine 才拿得到（ConsoleBackend / ProcessState / 配置）。
+    void setHostServices(std::function<QString()> textboxText,
+                         std::function<void(const QString&)> setTextbox,
+                         std::function<void(qint64, bool, bool, bool)> setFlowInput,
+                         std::function<void(bool, const QString&)> setFlowInputString,
+                         std::function<QString(const QString&)> gameBaseValue,
+                         std::function<bool()> forbidUpdateCheck) {
+        m_services.textboxText = std::move(textboxText);
+        m_services.setTextbox = std::move(setTextbox);
+        m_services.setFlowInput = std::move(setFlowInput);
+        m_services.setFlowInputString = std::move(setFlowInputString);
+        m_services.gameBaseValue = std::move(gameBaseValue);
+        m_services.forbidUpdateCheck = std::move(forbidUpdateCheck);
     }
     [[nodiscard]] const Services& services() const { return m_services; }
 

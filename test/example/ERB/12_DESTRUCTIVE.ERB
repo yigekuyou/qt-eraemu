@@ -28,9 +28,13 @@ RETURN 0
 ;                —— 用「自重启一次」的子函数测：LOCAL 标记防止无限重启
 ;                （RESTART 是同帧跳转，LOCAL/ARG 跨重启保留）。
 ;   * FORCE_BEGIN / FORCE_QUIT / FORCE_QUIT_AND_RESTART /
-;     QUIT_AND_RESTART / CLEARMEMORY / BREAKBUTTON   EE 命令（当前「留痕跳过」
-;                桩，执行不报错；C# 语义上破坏流程/内存/按钮世代，故单独成组、
-;                不进自动路径）。
+;     QUIT_AND_RESTART / CLEARMEMORY / BREAKBUTTON   EE 命令 —— **已真实现**：
+;       FORCE_QUIT 族与 QUIT 一样立即结束本次执行（组 12c 末尾触发，
+;       `★不应出现★` 未被打印即通过）；FORCE_QUIT_AND_RESTART /
+;       QUIT_AND_RESTART 另置重启标志（宿主 reload），见菜单 [36]/[37]；
+;       FORCE_BEGIN 的 force 语义（跳过 __CAN_BEGIN__）由单测覆盖
+;       （test_execution_chain：Shop_CallShowShop 状态下 BEGIN 失败 /
+;        FORCE_BEGIN 成功）；CLEARMEMORY 为式中函数（裸写静默跳过）。
 ;   * DOTRAIN    仅训练流程状态合法（example 无 TRAINNAME，同样报错）——
 ;                预期「执行出错」，用 ./test/run_example.sh 19 单独跑。
 ;-------------------------------------------------------------
@@ -53,20 +57,67 @@ RETURN LOCAL:0
 
 @TEST_DESTRUCTIVE_EE
 #DIM NONG
-PRINTL == 组12c：EE 破坏性命令（当前留痕跳过桩） ==
-FORCE_BEGIN 0
-FORCE_QUIT
-FORCE_QUIT_AND_RESTART
-QUIT_AND_RESTART
-CLEARMEMORY
+PRINTL == 组12c：EE 破坏性命令（真实现：内存/日志族 + QUIT 族） ==
+
+;---- 非终止段：内存族 / 日志族（真实现，断言语义）----
+; GETMEMORYUSAGE()：进程 RSS（C# 用 WorkingSet64，语义同族）
+CALL ASSERT_TRUE, GETMEMORYUSAGE() > 0, @"GETMEMORYUSAGE() > 0（当前进程内存用量）"
+NONG += RESULT
+; CLEARMEMORY()：回收并返回**释放的字节数**（C# GC.Collect 前后差值）——
+; 刚跑完的值可能为 0（无可回收），断言「>= 0」。
+CALL ASSERT_TRUE, CLEARMEMORY() >= 0, @"CLEARMEMORY() >= 0（返回释放字节数）"
+NONG += RESULT
+; BREAKBUTTON：作废画面上的按钮世代（GUI 后端专属）——留痕桩。
 BREAKBUTTON
-CALL ASSERT_TRUE, 1, @"EE 破坏性命令（桩）执行不报错"
-NONG = RESULT
-RETURN NONG
+CALL ASSERT_TRUE, 1, @"BREAKBUTTON（GUI 桩）执行不报错"
+NONG += RESULT
+; 命令形态的 CLEARMEMORY（裸写）在 C# 里是**式中函数**，非法写法；
+; 本移植按式中函数裸写静默跳过（不报错）。
+CLEARMEMORY
+CALL ASSERT_TRUE, 1, @"CLEARMEMORY 裸写（非 C# 合法形态）执行不报错"
+NONG += RESULT
+
+;先出汇总 —— 下面是终止段，执行到 QUIT 命令后脚本立即结束
+CALL TEST_SUMMARY, NONG
+
+;---- 终止段：FORCE_QUIT 真实现（不等待立即结束；组18 单跑到此为止）----
+PRINTL [标记] FORCE_QUIT：以下应立即结束，★不应出现★ 的行不该被打印
+FORCE_QUIT
+PRINTL ★不应出现在这里★（FORCE_QUIT 未生效）
+RETURN 0
 
 @TEST_DOTRAIN
 PRINTL == 组13b：DOTRAIN（训练流程外非法，预期「执行出错」） ==
 PRINTL 即将执行 DOTRAIN —— 无 TRAINNAME 时应「执行出错」，这是预期行为
 DOTRAIN 0
 PRINTL 不应执行到这里（DOTRAIN 已报错）
+RETURN 0
+
+;=============================================================
+; [36]/[37] QUIT_AND_RESTART / FORCE_QUIT_AND_RESTART（EE v11）
+;
+; 语义（对齐 C# Program.rebootFlag + Reboot()）：QUIT 之上再置「重启」标志。
+; 本引擎：ProcessState.requestRestart() -> 系统状态机的
+; restartRequestedByScript -> EraEngine::restartRequested（queued）——
+;   * GUI（appemuera）：Main.qml 收到后 reloadAsync()，重新装载本目录回启动状态；
+;   * test_cli：收到后 reload() + runSystem()，于是**标题画面重新出现**
+;     （观察点：重启后菜单再次绘制，且不再有脚本输入 -> 「输入源用尽，退出」）。
+; 这两条是**终止类**命令（和 QUIT 一样不返回），所以单独成组、各自单跑：
+;     ./test/run_example.sh 36   # QUIT_AND_RESTART
+;     ./test/run_example.sh 37   # FORCE_QUIT_AND_RESTART
+; 通过判据（结构性）：[标记] 行之后【没有】★不应出现★ 行，且外壳输出里能看到
+; 「[restart] 脚本请求重启」与重启后的标题菜单。
+;=============================================================
+@TEST_RESTART_QUIT
+PRINTL == 组36：QUIT_AND_RESTART（QUIT + 重启标志） ==
+PRINTL [标记] QUIT_AND_RESTART：应立即结束并请求宿主重启，★不应出现★ 的行不该被打印
+QUIT_AND_RESTART
+PRINTL ★不应出现在这里★（QUIT_AND_RESTART 未生效）
+RETURN 0
+
+@TEST_FORCE_RESTART_QUIT
+PRINTL == 组37：FORCE_QUIT_AND_RESTART（不等待 + 重启标志） ==
+PRINTL [标记] FORCE_QUIT_AND_RESTART：应立即结束并请求宿主重启，★不应出现★ 的行不该被打印
+FORCE_QUIT_AND_RESTART
+PRINTL ★不应出现在这里★（FORCE_QUIT_AND_RESTART 未生效）
 RETURN 0

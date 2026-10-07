@@ -112,7 +112,8 @@ bool ProcessState::canBegin() const {
 // BEGIN 状态迁移（对齐 C# Process.SetBegin / ProcessState.Begin）
 // ---------------------------------------------------------------------------
 
-bool ProcessState::setBeginKeyword(const QString& keyword, QString* error, const QString& funcName) {
+bool ProcessState::setBeginKeyword(const QString& keyword, QString* error,
+                                   const QString& funcName, bool force) {
     const QString upperKeyword = keyword.trimmed().toUpper();
     BeginType type = BeginType::NONE;
     if (upperKeyword == QLatin1String("SHOP")) type = BeginType::SHOP;
@@ -123,17 +124,21 @@ bool ProcessState::setBeginKeyword(const QString& keyword, QString* error, const
     else if (upperKeyword == QLatin1String("FIRST")) type = BeginType::FIRST;
     else if (upperKeyword == QLatin1String("TITLE")) type = BeginType::TITLE;
     else {
+        // 关键字合法性先于 force 检查（C# SetBegin(keyword, force) 的 switch
+        // 不认识关键字一律 InvalidBeginArg —— FORCE_BEGIN 传非法关键字同样报错）
         if (error) *error = QStringLiteral("BEGIN 的关键字\"%1\"未定义").arg(keyword);
         return false;
     }
-    return processBegin(type, error, funcName);
+    return processBegin(type, error, funcName, force);
 }
 
-bool ProcessState::processBegin(BeginType type, QString* error, const QString& funcName) {
+bool ProcessState::processBegin(BeginType type, QString* error, const QString& funcName,
+                                bool force) {
     // SetBegin(BeginType)：除 TITLE 外都要求当前状态允许 BEGIN
     // （C#：SHOP/TRAIN/AFTERTRAIN/ABLUP/TURNEND/FIRST 需 __CAN_BEGIN__；
-    //  1.729 起 BEGIN TITLE 在任何状态都可用）
-    if (type != BeginType::TITLE && type != BeginType::NONE && !canBegin()) {
+    //  1.729 起 BEGIN TITLE 在任何状态都可用；force=true 跳过检查 —— EE
+    //  FORCE_BEGIN，Process.State.cs:216 的 `if (force == true) break;`）
+    if (type != BeginType::TITLE && type != BeginType::NONE && !force && !canBegin()) {
         if (error) {
             QString name = funcName;
             if (name.isEmpty() && !m_functionList.isEmpty()) {

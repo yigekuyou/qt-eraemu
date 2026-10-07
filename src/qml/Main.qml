@@ -56,6 +56,10 @@ ApplicationWindow {
         // 脚本 QUIT（C# 侧等价关闭游戏窗口）—— 卸载当前游戏并释放内存，
         // 回到「未装载」状态（应用常驻，可重新打开目录）
         onQuitRequested: eraEngine.closeGame()
+        // 脚本 QUIT_AND_RESTART / FORCE_QUIT_AND_RESTART（EE v11）：
+        // 语义等价 C# 的 Program.Reboot()（rebootFlag + 重新打开本目录）——
+        // 异步重载本目录，装载完成后由 onScriptsLoaded -> runSystem() 回到标题。
+        onRestartRequested: eraEngine.reloadAsync()
     }
 
     // ---- 窗口几何/模式：C++ 直控 ----

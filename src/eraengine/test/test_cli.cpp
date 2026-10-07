@@ -765,6 +765,20 @@ int main(int argc, char* argv[]) {
     showScreen(QStringLiteral("首屏"));
     drainLog();
 
+    // ---- 脚本 QUIT_AND_RESTART / FORCE_QUIT_AND_RESTART（EE v11）----
+    // 语义等价 C# 的 Program.Reboot()：重载本目录（reload）+ 重新驱动系统状态机
+    // （runSystem）—— 与 GUI 侧 Main.qml 的 `onRestartRequested: reloadAsync()`
+    // 走同一条通路（那里 scriptsLoaded -> runSystem 由 QML 负责）。
+    // 打印标记行，供 run_example.sh / 人工观察「重启请求已受理 + 标题重新出现」。
+    bool scriptRestarted = false;   // 重启后主循环继续（观察标题重画）
+    QObject::connect(&engine, &EraEngine::restartRequested, &engine, [&engine, &scriptRestarted]() {
+        std::cout << "\n[restart] 脚本请求重启（QUIT_AND_RESTART / FORCE_QUIT_AND_RESTART）"
+                     " -> reload() + runSystem()\n";
+        engine.reload();
+        engine.runSystem();
+        scriptRestarted = true;
+    }, Qt::QueuedConnection);
+
     // ---- 调试命令（任何状态下都能执行：:state / :v / :plane / :geometry …）----
     // 返回 true = 已处理；false = 请求退出
     auto runDebugCommand = [&](const QString& cmd) -> bool {
@@ -925,6 +939,18 @@ int main(int argc, char* argv[]) {
         const QString stName = SystemStateMachine::stateName(state->getSystemState());
 
         if (st == ExecState::Halt) {
+            // QUIT_AND_RESTART 系：quitRequestedByScript / restartRequestedByScript 是
+            // queued 投递 —— 退出前先清一次事件队列，让宿主侧（本文件的
+            // restartRequested 处理器）收到并执行 reload()，否则「重启」会被
+            // 主循环的 break 抢在前面（信号留在队列里没人派发）。
+            QCoreApplication::processEvents(QEventLoop::AllEvents, 50);
+            if (scriptRestarted) {
+                // 重启已受理：不退出，继续驱动（标题菜单会重新绘制，随后按
+                // 常规流程走 —— 无更多脚本输入时以「输入源用尽」收尾）。
+                scriptRestarted = false;
+                pushScreen();
+                continue;
+            }
             std::cout << "\n== 脚本结束（Halt） 状态=" << stName.toStdString() << " ==\n";
             break;
         }

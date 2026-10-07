@@ -268,9 +268,38 @@ void SystemStateMachine::setState(SystemStateCode state) {
 
 void SystemStateMachine::setWaitInput() {
     m_atFloor = true;
+    // ---- EE FLOWINPUT / FLOWINPUTS（C# Process.SystemProc.cs:108 setWaitInput）----
+    //   flowinput                    -> 本次（及之后每次）系统输入带缺省值
+    //   flowinputString              -> 输入按字符串型（StrValue，写 RESULTS）
+    //   flowinputForceSkip           -> **不等待**，直接交缺省值继续（源码扩展）
+    //   flowinputCanSkip && MesSkip  -> 同上（SKIPLOG 跳过中，系统输入自动放行）
+    // C# 在这两种情况下写 systemResult = req.DefIntValue（字符串模式另写 RESULTS）
+    // 后仍调 console.WaitInput(req) —— 由输入层「跳过/缺省即返回」实现不等；
+    // 本引擎同步执行，直接把值交付给状态处理器（m_inputDeliveredImmediately
+    // 让 pump 重跑本状态处理器，等价输入已到达）。
+    const bool strMode = m_state->flowInputString();
+    const bool mesSkip = m_host.mesSkip ? m_host.mesSkip() : false;
+    const bool skipNow = m_state->flowInputForceSkip()
+                         || (m_state->flowInputCanSkip() && mesSkip);
+    if (skipNow) {
+        m_systemResult = m_state->flowInputDef();
+        if (strMode && m_storage) {
+            m_storage->setGlobalStr1D(QStringLiteral("RESULTS"), 0,
+                                      m_state->flowInputDefString());
+        }
+        m_inputDeliveredImmediately = true;
+        return;                       // 不请求 UI 输入、不挂起
+    }
     if (m_host.waitInput) m_host.waitInput();
     emit inputRequested(m_state->getSystemState());
-    emit inputKindRequested(QStringLiteral("INPUT"));
+    if (m_state->flowInput()) {
+        // 缺省值随请求交给 UI：空回车交缺省（对齐 InputRequest.HasDefValue）
+        emit inputKindRequested(strMode ? QStringLiteral("INPUTS") : QStringLiteral("INPUT"),
+                                strMode ? QVariant(m_state->flowInputDefString())
+                                        : QVariant(m_state->flowInputDef()));
+    } else {
+        emit inputKindRequested(QStringLiteral("INPUT"));
+    }
     m_state->requestWaitSystemInput();
 }
 
@@ -435,10 +464,10 @@ bool SystemStateMachine::callLabelRef(const LabelRef& ref) {
 // BEGIN / 指令钩子
 // ---------------------------------------------------------------------------
 
-bool SystemStateMachine::beginWithKeyword(const QString& keyword, QString* error) {
+bool SystemStateMachine::beginWithKeyword(const QString& keyword, QString* error, bool force) {
     // 错误消息里带上发起 BEGIN 的函数名（对齐 C# functionList[0].FunctionName）
     const QString funcName = m_table ? m_table->currentFrame().callLabel : QString();
-    return m_state->setBeginKeyword(keyword, error, funcName);
+    return m_state->setBeginKeyword(keyword, error, funcName, force);
 }
 
 bool SystemStateMachine::beginWithType(BeginType type, QString* error) {
@@ -535,7 +564,16 @@ ExecState SystemStateMachine::resumeString(const QString& value) {
         //   INPUTS 写入的 RESULTS 在任何函数里都应读到）
         m_storage->setGlobalStr1D(QStringLiteral("RESULTS"), 0, value);
     }
-    return resume(0);
+    // 字符串输入**不写 RESULT**（C#：INPUTS/INPUTANY 的字符串分支只写 RESULTS，
+    // 「另一者保持原值」）。此前这里复用 resume(0)，会把 RESULT 清成 0 ——
+    // INPUTANY 的测试因此看不到「整数输入后 RESULT 保留」的语义。
+    if (m_state->getExecState() == ExecState::Error) {
+        return ExecState::Error;
+    }
+    ++m_waitGeneration;
+    m_systemResult = 0;
+    m_state->setExecState(ExecState::Continue);
+    return pump();
 }
 
 ExecState SystemStateMachine::deliverInputValues(const QList<qint64>& values) {
@@ -683,7 +721,12 @@ ExecState SystemStateMachine::pump() {
                 // QUIT：彻底结束（不能被当成「脚本回到底层」而重启标题）
                 if (m_state->quitRequested()) {
                     m_pumpActive = false;   // 提前 return 也必须复位，否则 pump 永远直接弹出
-                    emit quitRequestedByScript();
+                    // QUIT_AND_RESTART / FORCE_QUIT_AND_RESTART（EE v11）：
+                    // 重启标志在 → 转发重启（宿主 reload()，等价 C# Reboot）
+                    if (m_state->restartRequested())
+                        emit restartRequestedByScript();
+                    else
+                        emit quitRequestedByScript();
                     return m_state->getExecState();
                 }
                 const ExecState st = m_state->getExecState();
@@ -699,7 +742,10 @@ ExecState SystemStateMachine::pump() {
 
         if (m_state->quitRequested()) {
             m_pumpActive = false;   // 提前 return 也必须复位，否则 pump 永远直接弹出
-            emit quitRequestedByScript();
+            if (m_state->restartRequested())
+                emit restartRequestedByScript();
+            else
+                emit quitRequestedByScript();
             return m_state->getExecState();
         }
         if (!m_state->isRunning()) {
@@ -728,6 +774,17 @@ ExecState SystemStateMachine::pump() {
         const int depthBefore = m_table ? m_table->depth() : 0;
         runSystemProc();
         emit stateAdvanced(m_state->getSystemState());
+
+        // 3b) EE FLOWINPUT forceSkip/canSkip：setWaitInput 已把缺省值交付给内部
+        // systemResult（未挂起）。重跑本状态处理器一次，让它像「输入已到达」
+        // 那样推进 —— 对齐 C# 输入层「缺省即返回」后系统层继续跑的行为。
+        // （状态处理器多数会在 setWaitInput 之后 setState，下一圈自然处理；
+        //   少数「非法值重来」路径原地重试，靠这一支避免被当成停滞。）
+        if (m_inputDeliveredImmediately) {
+            m_inputDeliveredImmediately = false;
+            m_state->setExecState(ExecState::Continue);
+            continue;
+        }
 
         if (!m_state->isRunning()) {
             break;   // 处理函数请求了系统输入

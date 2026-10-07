@@ -429,7 +429,7 @@ CALLSHARP "NoSuchMethod"()
 CLEARBGIMAGE
 CLEARBIT A, 0, 1
 ; SKIP CLEARLINE —— 破坏性：删除已显示行（会破坏本组输出）——单独在隔离组 16 跑
-; SKIP CLEARMEMORY —— 文档备注明示它实为式中函数（用法是 `{CLEARMEMORY()}`），不能作为独立语句写，而本清单按 EE 命令表把它注册为命令（组 12c 也只按命令名留痕桩）—— 命令形态与文档形态不一致，语义未确证
+CVTMP = CLEARMEMORY()
 ; SKIP CLEARTEXTBOX —— 破坏性：清空输入框（破坏待输入状态）——单独在隔离组 16 跑
 COLUMNBGCOLOR 0, "Black"
 COLUMNCLEAR 0
@@ -494,9 +494,9 @@ FONTSTYLE 1 + 2
 FORCEKANA 1
 FORCEWAIT
 ;   ↑ 需注入输入：1 个数值：0（当作一次回车确认）
-; SKIP FORCE_BEGIN —— 破坏流程：绕过 __CAN_BEGIN__ 检查强制切换系统流程且不返回；GUIDE 明列 FORCE_*；由组 18 覆盖
-; SKIP FORCE_QUIT —— 不等待输入立即结束游戏并退出程序（文档「语义」）；GUIDE 明列 FORCE_*
-; SKIP FORCE_QUIT_AND_RESTART —— 不等待输入立即结束游戏并重启程序（文档「语义」）；GUIDE 明列 FORCE_*
+; SKIP FORCE_BEGIN —— BEGIN + force：跳过 __CAN_BEGIN__ 状态检查（非法关键字照样报错）；需要「BEGIN 会失败」的状态才能观察差异，故由单测覆盖（test_execution_chain：Shop_CallShowShop 状态下 BEGIN 拒绝 / FORCE_BEGIN 成功）
+; SKIP FORCE_QUIT —— 不等待输入立即结束本次执行（C# ForceQuit）；本移植的 QUIT 本就是同步结束，故与 QUIT 同效 —— 组 12c 末尾触发（★不应出现★ 未打印即通过）
+; SKIP FORCE_QUIT_AND_RESTART —— 不等待输入立即结束 + 置重启标志（C# rebootFlag -> Reboot()）；本移植转成 EraEngine::restartRequested -> 宿主 reload —— 组 37 单跑（结构性判据）
 ; SKIP FSTRJOIN —— 伪名：Shift-JIS 全角冒号「：」被误切成 F 而得到的名字，任何发行版都无此命令（文档「备注」）；真实命令为式中函数 STRJOIN
 ; SKIP FTOOLTIP_SETDURATION —— 伪名：Shift-JIS 全角冒号「：」被误切成 F 得到的名字，任何发行版都无此命令（文档「备注」）；真实命令为 TOOLTIP_SETDURATION，且工具提示依赖 GUI 控件
 ; SKIP FUNC —— 只能写在 TRYCALLLIST/TRYJUMPLIST/TRYGOTOLIST 与 ENDFUNC 之间作为候选列表项，不能单独执行；由组 5 覆盖
@@ -679,7 +679,7 @@ ADDCHARA 0
 PRINT_TALENT 0
 PUTFORM 冒烟：PUTFORM 追加文本 {1 + 2}
 ; SKIP QUIT —— 会结束程序：把控制台置为退出状态，本组后续行不再执行 —— 组 12 覆盖
-; SKIP QUIT_AND_RESTART —— 会重启程序，且执行时先插入一次回车等待（交互 + 破坏流程）—— 组 12c 覆盖
+; SKIP QUIT_AND_RESTART —— QUIT + 重启标志；本移植不插回车等待（QUIT 即同步结束），重启由宿主 reload 执行 —— 组 36 单跑（结构性判据）
 RANDOMIZE GETTIME()
 REDRAW 0
 REDRAW 1
@@ -715,7 +715,7 @@ RESETBGCOLOR
 SETBGCOLORBYNAME "DarkBlue"
 RESETBGCOLOR
 SETBGIMAGE off_norect
-; SKIP SETBGMVOLUME —— 依赖音频后端：设置 BGM 音量（WMP 播放器单例，无返回值）；本移植为留痕桩，冒烟无可验证行为 —— example 组17 已覆盖
+; SKIP SETBGMVOLUME —— 依赖音频后端：设置 BGM 音量（WMP 播放器单例，无返回值）；冒烟无可验证行为 —— example 组17 已覆盖
 CVTMP = 0
 SETBIT CVTMP, 3
 SETCOLOR 255, 128, 0
@@ -723,8 +723,8 @@ RESETCOLOR
 SETCOLORBYNAME "Orange"
 RESETCOLOR
 SETFONT "ＭＳ ゴシック"
-; SKIP SETSOUNDVOLUME —— 依赖音频后端：一次性设置 10 个音效声道音量（惰性创建 Sound）；本移植为留痕桩 —— example 组17 已覆盖
-; SKIP SETTEXTBOX —— 依赖 GUI 文本框控件（GUIDE 明列）：整体替换输入框内容，文档形态为式中函数 SETTEXTBOX("文字")；本移植为留痕桩，冒烟无可验证行为
+; SKIP SETSOUNDVOLUME —— 依赖音频后端：一次性设置 10 个音效声道音量（惰性创建 Sound） —— example 组17 已覆盖
+CVTMP = SETTEXTBOX("冒烟")
 ; SKIP SIF —— 单行条件结构头（SIF + 下一行语句），不能单独作为语句执行——会吞掉组内后续行；由组 3/28 覆盖
 SKIPDISP 1
 SKIPDISP 0
@@ -735,9 +735,9 @@ ADDCHARA 0
 SORTCHARA NO
 SPLIT "あい,うえ,,お", ",", LOCALS
 CVTMP = SPRITEDISPOSEALL(0)
-; SKIP STOPBGM —— 依赖音频后端：停止 BGM 通道（WMP 单例）；本移植为留痕桩 —— example 组17 已覆盖
+; SKIP STOPBGM —— 依赖音频后端：停止 BGM 通道（WMP 单例） —— example 组17 已覆盖
 ; SKIP STOPCALLTRAIN —— 流程控制族（GUIDE 明列，与 CALLTRAIN 成对）：终止 CALLTRAIN 指令队列并回调 @CALLTRAINEND，会打断当前指令流程 —— example 组17 作留痕桩
-; SKIP STOPSOUND —— 依赖音频后端：停止 10 个音效声道；本移植为留痕桩 —— example 组17 已覆盖
+; SKIP STOPSOUND —— 依赖音频后端：停止 10 个音效声道 —— example 组17 已覆盖
 STRDATA LOCALS
 DATA 冒烟候选甲
 DATA 冒烟候选乙
@@ -824,7 +824,7 @@ PALAM:0:0 = 0
 UP:0 = 30
 DOWN:0 = 10
 UPCHECK
-; SKIP UPDATECHECK —— 依赖网络/外部资源：WebClient 同步访问 GameBase.csv 的「バージョン情報URL」做版本检查（无 URL 返回 3，有新版会弹对话框）；example 的 GameBase.csv 无该键，无可验证行为 —— example 组17 作留痕桩
+UPDATECHECK
 VARI SMOKE_V
 VARS SMOKE_S
 VARSET FLAG, 0

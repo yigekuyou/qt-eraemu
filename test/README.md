@@ -78,16 +78,51 @@ cmake --build build --target test_cli
 | 35 | 文档语义冒烟：需按 `data/doc_smoke.tsv` 第 6 列注入数值/字符串/鼠标（`run_example.sh 35` 已内置序列） |
 | 12 | `BEGIN`：切换流程、不返回 |
 | 13 | `THROW`：**预期**「执行出错」 |
-| 15 | 鼠标/原始输入：`k` 注入 + 超时两条路径 |
-| 18 | `RESTART` + EE 破坏系 |
+| 15 | 鼠标/原始输入：`k` 注入 + 超时两条路径（另含 EE 输入族 `BINPUT`/`INPUTANY`/`FLOWINPUT` 真语义断言） |
+| 18 | `RESTART` + EE 破坏系（末尾 `FORCE_QUIT` 终止，观察 `★不应出现★` 未打印） |
 | 19 | `DOTRAIN`：**预期**「执行出错」 |
 | 20/21 | `RESTART` 菜单复刻 / GOTO 标签作用域 |
 | 22 | MAP 绘制复现（计时用） |
 | 29 | `BEGIN FIRST` 事件函数流（破坏性） |
+| 36 | `QUIT_AND_RESTART`：结束本局 + 请求宿主重启（结构性判据：`[restart]` 标记出现、标题重画、`★不应出现★` 未打印） |
+| 37 | `FORCE_QUIT_AND_RESTART`：同上（不等待输入版） |
 
 注意：单跑组若未调用 `TEST_SUMMARY`（组 1–10 等子集）或本就**预期出错**
 （组 13/19），`run_example.sh` 的汇总行会显示「失败」——这是外壳判定
 （它靠输出里的 `全部断言通过` 判定），看 `[FAIL]` 与否才是真正的断言结果。
+
+## EE 扩展「引擎桩」第一批真实现（2026-10）
+
+背景：覆盖率报告（`data/coverage_report.txt`）把 EE 扩展里「只登记了名字、运行期留痕跳过」
+的项标为**引擎桩**。本轮按「C# 权威语义可考 + 不需要新 GUI/网络后端」两条标准，
+把其中 12 项做成真实现，桩数从 26 降到 14（其余是 COLUMN 库函数、C# 插件互操作、
+GUI 后端专属、无据可考的伪名 —— 见 `ee_extension.cpp` 的 `kStubs` 注释与
+`gen_coverage.py` 的 `EE_STUB` 说明）。
+
+| 命令/函数 | 语义（C# 依据） | 实现位置 | 回归 |
+| --- | --- | --- | --- |
+| `TRYCALLF` / `TRYCALLFORMF` | `CALLF` 的 TRY 版：目标是式中関数时调用并**丢弃返回值**；不存在（`GetFunctionMethod(..., try=true) == null`）则静默跳过（`Instraction.Child.cs:1284`） | `script_runner.cpp`（CALLF 族分支 + `functionExistsKind >= 2` 预判） | 组 28（存在→副作用生效 / 不存在→静默） |
+| `FORCE_QUIT` | 立即结束，不等输入（`Console.ForceQuit`） | `script_runner.cpp` QUIT 族 | 组 18 末尾（`★不应出现★` 未打印即通过） |
+| `QUIT_AND_RESTART` / `FORCE_QUIT_AND_RESTART` | `QUIT` + 重启标志（`Program.rebootFlag` → `Reboot()`）；本移植经 `ProcessState::requestRestart()` → `SystemStateMachine::restartRequestedByScript` → `EraEngine::restartRequested` → 宿主 `reload()`（GUI：`Main.qml` 的 `reloadAsync()`；CLI：`reload()+runSystem()`） | `process_state.h` / `system_state_machine.cpp` / `eraengine.cpp` / `Main.qml` / `test_cli.cpp` | 组 36/37（结构性判据：重启标记 + 标题重画） |
+| `FORCE_BEGIN` | `BEGIN` + `force`：跳过 `__CAN_BEGIN__` 状态检查，**关键字合法性仍先校验**（`Process.State.cs:181/207`） | `process_state.cpp` / `system_state_machine.*` / `script_runner.cpp` | 单测 `test_execution_chain`（`Shop_CallShowShop` 下 `BEGIN` 被拒 / `FORCE_BEGIN` 成功 / 非法关键字照错） |
+| `SKIPLOG` | 置「消息跳过中」（`console.MesSkip = n != 0`）。跳过中：`WAIT`/`WAITANYKEY`/`PRINT*W`/可跳过 `TWAIT` **自动放行**；`FORCEWAIT`（StopMesskip）与 `INPUT` 族（NeedValue）**不放行并清掉跳过状态**（`EmueraConsole.cs:1279` 的 `while (MesSkip && state == WaitInput)` 循环语义） | `execution_engine.h`（`m_mesSkip`）+ `script_runner.cpp` 各等待分支 + `eraengine.cpp` 的 `skipProvider(kind==1)` | 组 17（`MESSKIP()` 往返）、组 12c |
+| `INPUTANY` | 整数/字符串**双通道**：整数 → `RESULT`、字符串 → `RESULTS`，**另一者保持原值**；画面上两种按钮都可点 | `script_runner.cpp` + `console_backend.cpp`（`inputAcceptsAny`）+ `system_state_machine.cpp`（`resumeString` 不再清 `RESULT` —— 原实现复用 `resume(0)`，违反 C#「另一者保持原值」） | 组 15（哨兵值验证字符串分支不动 `RESULT`） |
+| `ONEBINPUT` / `ONEBINPUTS` | `BINPUT` 系的单字符版（C# `OneInput`）：等待/缺省/按钮白名单同 `BINPUT`，「只取首字符」属输入控件约束 | `script_runner.cpp`（BINPUT 族分支） | 组 35 冒烟（清单原为「未注册名」告警，现为真实现） |
+| `GETMEMORYUSAGE()` | 进程内存用量（C# `Process.WorkingSet64`）：Linux 取 `/proc/self/statm` 的 RSS | `ee_extension.cpp` | 组 12c、35 |
+| `CLEARMEMORY()` | 强制回收并返回释放字节数（C# `GC.Collect()` 前后差值）。Qt 里**没有**内存用量 API（`qt_documentation_search` 核实：QCoreApplication 只有 `applicationPid()`、QSysInfo 无内存项），但**有回收原语**：`QCoreApplication::sendPostedEvents(nullptr, QEvent::DeferredDelete)`（冲刷排队中的 `deleteLater()` 对象，文档明说这类事件只由事件循环/sendPostedEvents 分派）+ glibc `malloc_trim(0)` | `ee_extension.cpp` | 组 12c、35 |
+| `GETTEXTBOX()` / `SETTEXTBOX(s)` | 读/写输入框内容；`SETTEXTBOX` 恒返回 1（C# `ChangeTextBoxMethod`） | `console_backend.cpp`（`textboxText`/`setTextboxText` + `textboxTextChanged`）+ `ee_extension.cpp` | 组 17（写入后读回） |
+| `FLOWINPUT` / `FLOWINPUTS` | 系统流程输入的选项（缺省值 / 字符串模式 / MesSkip 可跳过 / 强制跳过）：写在 `ProcessState.flowinput*`、**不自动复位**；由 `setWaitInput()` 消费 —— `forceSkip` 或 `canSkip && MesSkip` 时**不等待直接交付缺省值**（`Process.SystemProc.cs:108`） | `process_state.h` / `system_state_machine.cpp`（`setWaitInput` + `m_inputDeliveredImmediately` 重跑处理器）/ `ee_extension.cpp` | 组 15、35 + 单测 |
+| `UPDATECHECK` | 结果写 `RESULT`：配置「UPDATECHECKを許可しない」→ 4；GameBase.csv 的「バージョン情報URL」未配置 → 3；有 URL 时 C# 走 `WebClient` 比对版本（本移植未接入网络栈，按失败路径记 3 并留痕）（`Instraction.Child.cs:2833`） | `main.qml` 无关；`eraengine.cpp` 注入 GameBase/配置服务 + `ee_extension.cpp` | 组 17（`RESULT == 3`）、35 |
+| `ASSERT` | 运行期断言：条件为 0 → 报错终止（原实现只在解析期兜住名字、运行期被忽略） | `script_runner.cpp` | 组 17（`ASSERT 1 == 1` 现在真的通过） |
+
+其余 14 项**保持桩**（并在 `ee_extension.cpp` 注明原因）：`COLUMN*`（EE 发行版的 ERB 库
+`COLUMN_LIB`，不是引擎命令）、`DT_COLUMN_OPTIONS`（.NET DataTable）、`SETBGIMAGE` 族 /
+`TOOLTIP_*` / `HTML_PRINT_ISLAND*` / `BREAKBUTTON`（GUI 后端专属）、`CALLSHARP`（C# 插件 ABI）、
+`VARI`/`VARS`（C# 默认关闭的作用域变量声明）、`GETTEXTSIZE`（readme 笔误名）、
+`LCSVISASSI`/`OCLEARLINE`/`TINPUTAWAIT`（无据可考/伪名）。
+
+回归口径（本轮实测）：`ctest` **34/34**；`./test/run_example.sh`（自动组）通过；
+单跑组 11/12/13/15/18/19/20/21/22/28/29/35/36/37 全部 **`[FAIL] = 0`**。
 
 ## 文档语义测试（组 27–29）
 

@@ -195,7 +195,9 @@ EraEngine::EraEngine(QObject *parent)
 		});
 		m_expressionEvaluator.setSkipProvider([this](int kind) -> int {
 			// kind：0=ISSKIP（SKIPDISP） 1=MESSKIP 2=MOUSESKIP（GUI 专属，恒 0）
-			return kind == 0 && m_executionEngine.skipDisp() ? 1 : 0;
+			if (kind == 0) return m_executionEngine.skipDisp() ? 1 : 0;
+			if (kind == 1) return m_executionEngine.mesSkip() ? 1 : 0;   // SKIPLOG 置位
+			return 0;
 		});
 		m_expressionEvaluator.setLineStrProvider([this](int lineNo) -> QString {
 			return m_console.lineText(lineNo);
@@ -216,6 +218,32 @@ EraEngine::EraEngine(QObject *parent)
 			},
 			[this](int lineNo) -> QString {
 				return m_console.displayLineText(lineNo);
+			});
+		// 宿主侧服务（控制台文本框 / 流程状态 / GameBase / 配置）：
+		// GETTEXTBOX・SETTEXTBOX・FLOWINPUT(S)・UPDATECHECK 的实现经这里访问。
+		m_executionEngine.extensions().setHostServices(
+			[this]() -> QString { return m_console.textboxText(); },
+			[this](const QString& text) { m_console.setTextboxText(text); },
+			[this](qint64 def, bool enable, bool canSkip, bool forceSkip) {
+				m_processState.setFlowInput(def, enable, canSkip, forceSkip);
+			},
+			[this](bool isString, const QString& defStr) {
+				m_processState.setFlowInputString(isString, defStr);
+			},
+			[this](const QString& key) -> QString { return m_gameBaseData.get(key); },
+			[this]() -> bool {
+				// 「UPDATECHECKを許可しない」（C# Config.ForbidUpdateCheck，bool，默认 false）
+				bool forbid = false;
+				for (const QString& k : {QStringLiteral("UPDATECHECKを許可しない"),
+				                          QStringLiteral("DisallowUPDATECHECK")}) {
+					if (m_configLoader.hasConfig(k)) {
+						const QString v = m_configLoader.getConfig(k).trimmed();
+						forbid = !(v.isEmpty() || v == QLatin1String("0")
+						           || v.compare(QLatin1String("false"), Qt::CaseInsensitive) == 0);
+						break;
+					}
+				}
+				return forbid;
 			});
 		// BuiltinOp::Extension 的节点按名字转回注册类的 runExpression。
 		m_expressionEvaluator.setExtensionFunctionInvoker(
@@ -293,6 +321,8 @@ EraEngine::EraEngine(QObject *parent)
 		// 避免在 pump() 栈内重入清理解析表。
 		connect(&m_systemStateMachine, &SystemStateMachine::quitRequestedByScript,
 		        this, &EraEngine::quitRequested, Qt::QueuedConnection);
+		connect(&m_systemStateMachine, &SystemStateMachine::restartRequestedByScript,
+		        this, &EraEngine::restartRequested, Qt::QueuedConnection);
 		connect(&m_scriptRunner, &ScriptRunner::inputRequested, this,
 				[this](const QString& kind, const QVariant& def) {
 			qDebug() << "[ScriptRunner] waiting for user input:" << kind
@@ -611,6 +641,9 @@ void EraEngine::reload()
 		m_console.clearAll();
 		// 上一局脚本可能 QUIT 过：不清掉会残留 Halt/quitRequested 把新局锁死
 		m_processState.clearQuitRequest();
+		// QUIT_AND_RESTART 系的重启标志同理：本次 reload 就是「重启」本身的执行，
+		// 残留会让下一局的首个 quitRequested 又被当成重启。
+		m_processState.clearRestartRequest();
 		// closeGame 停在 Halt —— 必须复位成 Continue，否则新局 run()/pump()
 		// 第一圈 isRunning()==false 直接 break，标题永远不会出现
 		m_processState.setExecState(ExecState::Continue);
@@ -660,6 +693,7 @@ void EraEngine::closeGame()
 		setHasError(false);
 		m_processState.requestHalt();        // 停掉执行链（若还在跑）
 		m_processState.clearQuitRequest();   // 消费掉 QUIT 请求
+		m_processState.clearRestartRequest();// 关闭游戏不走重启路径（restart 由宿主 reload 消费）
 		m_audio.stopBgm();
 		m_audio.stopSounds();
 		// 控制台不清屏：QUIT 后最后一屏（测试汇总等）留在窗口上供查看，
@@ -1288,6 +1322,9 @@ void EraEngine::buildSystemHost()
 
 		// ---- 输入等待（UI 通知由 inputRequested 信号统一处理）----
 		host.readAnyKey = [this]() { m_console.notifyInputRequested(QStringLiteral("ANYKEY")); };
+		// EE FLOWINPUT canSkip：系统流程输入在 SKIPLOG 跳过中直接交缺省
+		// （C# setWaitInput 的 `flowinputCanSkip && Console.MesSkip`）
+		host.mesSkip = [this]() { return m_executionEngine.mesSkip(); };
 
 		// ---- GameBase（标准标题画面）----
 		host.scriptTitle = [this]() { return m_gameBaseData.title(); };

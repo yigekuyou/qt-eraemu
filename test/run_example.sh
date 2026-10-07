@@ -8,8 +8,10 @@
 #   ./test/run_example.sh 12       # 破坏性组（BEGIN TITLE，会回到标题画面）
 #   ./test/run_example.sh 13       # 破坏性组（THROW，预期「执行出错」）
 #   ./test/run_example.sh 15       # 鼠标组（INPUTMOUSEKEY：k 注入 + 超时两条路径）
-#   ./test/run_example.sh 18       # 破坏性组（RESTART + EE 破坏系桩）
+#   ./test/run_example.sh 18       # 破坏性组（RESTART + EE 破坏系：QUIT 族真实现）
 #   ./test/run_example.sh 19       # 破坏性组（DOTRAIN，预期「执行出错」）
+#   ./test/run_example.sh 36       # QUIT_AND_RESTART（重启请求·结构性判据）
+#   ./test/run_example.sh 37       # FORCE_QUIT_AND_RESTART（立即重启·结构性判据）
 #   ./test/run_example.sh 20       # RESTART 菜单复刻（eraTW NEWGAME_CUSTOM 回归）
 #   ./test/run_example.sh 21       # GOTO $标签 函数作用域（eraTW COMMON @CHOICE 回归）
 #   ./test/run_example.sh 23       # PRINTDATA/DATAFORM/ENDDATA（eraTW TW_TIPS 复现·特征化）
@@ -50,8 +52,10 @@ if [ "$SELECTION" = "0" ]; then
     SCRIPT="0,0,0,0,0,0,0,0,0,0,0,0,0,0,0"
 elif [ "$SELECTION" = "15" ]; then
     # 鼠标组：菜单选 15 + `k 1 10 10 1 0` 注入（type=1 左键）——
-    # 组15 的 INPUTMOUSEKEY(0) 吃注入，INPUTMOUSEKEY(50) 靠超时自动继续
-    SCRIPT="15,k 1 10 10 1 0"
+    # 组15 的 INPUTMOUSEKEY(0) 吃注入，INPUTMOUSEKEY(50) 靠超时自动继续；
+    # 之后 EE 输入族：`1` 给第一个 INPUTANY（整数分支），
+    # `s 任意文本` 给第二个 INPUTANY（字符串分支）。
+    SCRIPT="15,k 1 10 10 1 0,1,s 任意文本"
 elif [ "$SELECTION" = "20" ]; then
     # RESTART 菜单复刻组：菜单选 20，随后按 @CUSTOM_TERMINAL_REPLICA 的
     # INPUT/INPUTS 序列喂入（0 命中 CASE 0 TO 999 是本次回归的关键）：
@@ -89,6 +93,21 @@ else
 fi
 if printf '%s' "$OUT" | grep -q "\[FAIL\]"; then
     ASSERT_OK=0
+fi
+
+# QUIT_AND_RESTART / FORCE_QUIT_AND_RESTART（组 36/37）：这两条是**终止类**命令，
+# 不打印断言汇总 —— 判据是结构性的：
+#   ① 出现宿主受理重启的标记（[restart] 脚本请求重启）；
+#   ② 命令之后的行（★不应出现★）没有被打印；
+#   ③ 重启后标题菜单重新出现（标记之后再次出现"请输入编号"）——
+#      说明 reload() + runSystem() 真的把游戏重新驱动起来了。
+if [ "$SELECTION" = "36" ] || [ "$SELECTION" = "37" ]; then
+    ASSERT_OK=0
+    if printf '%s' "$OUT" | grep -q "\[restart\] 脚本请求重启" \
+       && ! printf '%s' "$OUT" | grep -q "★不应出现在这里★" \
+       && printf '%s' "$OUT" | awk '/\[restart\] 脚本请求重启/{f=1} f&&/请输入编号/{ok=1} END{exit ok?0:1}'; then
+        ASSERT_OK=1
+    fi
 fi
 
 echo

@@ -32,6 +32,8 @@
 #include <QDir>
 #include <QFile>
 #include <QStringList>
+#include <QCoreApplication>
+#include <QEvent>
 
 #include "ee_extension.h"
 #include "extension_registry.h"
@@ -43,6 +45,84 @@ namespace {
 // 对齐 C# EraDataState：0=OK / 1=FILENOTFOUND；RESULTS = 状态说明文本
 constexpr int kDataOk = 0;
 constexpr int kDataFileNotFound = 1;
+
+// ---- 内存用量 / 回收（EE GETMEMORYUSAGE / CLEARMEMORY）------------------------
+// C# 用 Process.WorkingSet64 与 GC.Collect()。Qt 侧核实（qt_documentation_search /
+// qcoreapplication.html，Qt 6.12）：
+//   · **QtCore 没有进程内存用量的可移植 API** —— QCoreApplication 只有
+//     applicationPid()，QSysInfo 只有 CPU/系统标识，QStorageInfo 是磁盘；
+//     即「用量」这一半 Qt 给不了，必须落到操作系统。
+//   · 「回收」这一半 Qt 有原语：QCoreApplication::sendPostedEvents(nullptr,
+//     QEvent::DeferredDelete) —— 文档明说 DeferredDelete 事件「只由事件循环或
+//     sendPostedEvents 分派」（aboutToQuit 一节）：正在排队的 deleteLater()
+//     对象只有冲刷了才真正析构、内存才归还。这是 Qt 里最接近 GC.Collect() 的动作。
+// 因此实现：用量 = OS 探针（Linux /proc/self/statm 的 RSS，语义最接近工作集）；
+// 回收 = 冲刷 DeferredDelete（Qt 原生） + glibc malloc_trim（把空闲堆还给 OS）。
+#ifdef Q_OS_LINUX
+#  include <cstdio>
+#  include <unistd.h>
+#  ifdef __GLIBC__
+#    include <malloc.h>
+#  endif
+#endif
+
+// 当前进程内存用量（字节）。
+//   Linux：/proc/self/statm 的驻留页数 × 页大小（RSS）—— 真实值。
+//   其他平台：Qt 没有探针，直接「假装」返回一个固定数（64MB）。
+qint64 eeCurrentMemoryUsage() {
+#if defined(Q_OS_LINUX)
+    FILE* f = std::fopen("/proc/self/statm", "r");
+    if (!f) return 0;
+    long total = 0, resident = 0;
+    const int n = std::fscanf(f, "%ld %ld", &total, &resident);
+    std::fclose(f);
+    if (n < 2 || resident <= 0) return 0;
+    const long pageSize = ::sysconf(_SC_PAGESIZE);
+    if (pageSize <= 0) return 0;
+    return static_cast<qint64>(resident) * static_cast<qint64>(pageSize);
+#else
+    qCDebug(eraTrace) << "[ee-ext] GETMEMORYUSAGE：本平台无内存探针，返回固定值";
+    return 64LL * 1024 * 1024;
+#endif
+}
+
+// 强制回收（C# GC.Collect 的 Qt 对应物）：
+//   ① 冲刷 DeferredDelete 队列 —— 让 deleteLater() 排队的 QObject 真正析构
+//      （QCoreApplication 文档：这类事件只由事件循环/sendPostedEvents 分派）；
+//   ② glibc：malloc_trim(0) 把空闲堆归还 OS。
+void eeTrimHeap() {
+    if (QCoreApplication* app = QCoreApplication::instance()) {
+        Q_UNUSED(app);
+        QCoreApplication::sendPostedEvents(nullptr, QEvent::DeferredDelete);
+    }
+#ifdef __GLIBC__
+    malloc_trim(0);
+#endif
+}
+
+// ---- UPDATECHECK（EE v11；C# UPDATECHECK_Instruction，Instraction.Child.cs:2833）--
+// 检查游戏是否有新版本，结果写 RESULT：
+//   0 已是最新版 / 1 玩家选「否」 / 2 玩家选「是」（已开链接）
+//   3 各种失败（URL 未配置、读不到版本名/链接、打开失败） / 4 配置禁止 / 5 无网络
+// C# 用的环境：GameBase.csv 的「バージョン名」「バージョン情報URL」+ 网络 WebClient
+// + MessageBox + 浏览器。本移植的确定性部分全部落地：
+//   · 配置「UPDATECHECKを許可しない」-> 4（C# Config.ForbidUpdateCheck 先行判断）；
+//   · URL 未配置 -> 3（C# url == null || url == "" 分支）；
+//   · URL 有配置 -> 本移植**未接入网络栈**，无法取版本文件，按 C# 的失败路径
+//     记 3（C# 里这对应 catch 块）——并把原因留痕，便于将来接网络后替换。
+int updateCheck(const ExtensionRegistry& ext) {
+    const ExtensionRegistry::Services& sv = ext.services();
+    if (sv.forbidUpdateCheck && sv.forbidUpdateCheck()) return 4;
+
+    const QString url = sv.gameBaseValue ? sv.gameBaseValue(QStringLiteral("バージョン情報URL"))
+                                         : QString();
+    if (url.isEmpty()) {
+        qCDebug(eraTrace) << "[ee-ext] UPDATECHECK: GameBase.csv 未配置「バージョン情報URL」-> RESULT=3";
+        return 3;
+    }
+    qCDebug(eraTrace) << "[ee-ext] UPDATECHECK: 已配置 URL 但本移植未接入网络栈 -> RESULT=3（C# 的失败路径）";
+    return 3;
+}
 
 // ---- 存档探测（注册类的服务桥接；实现不直接依赖引擎）-----------------------
 
@@ -328,6 +408,72 @@ static void registerEeExpressionFunctions(ExtensionRegistry& ext)
             out = sv.displayLine ? sv.displayLine(lineNo) : QString();
             return true;
         });
+
+    // ---- EE 内存族（C# Creator.Method.cs:7277/7294）--------------------------------
+    // GETMEMORYUSAGE()：当前进程**工作集**字节数（C# Process.WorkingSet64）。
+    //   本移植在 Linux 上取 /proc/self/statm 的驻留页数 × 页大小（RSS，语义最接近
+    //   工作集）；其他平台回退 0（Qt 无跨平台工作集 API）。
+    ext.regExpr(QStringLiteral("GETMEMORYUSAGE"), OperandType::Int, 0, 0,
+        [](const QList<QVariant>&, const QList<const ExpressionNode*>&, QVariant& out) {
+            out = QVariant::fromValue<qint64>(eeCurrentMemoryUsage());
+            return true;
+        });
+
+    // CLEARMEMORY()：强制回收并返回**释放掉的字节数**
+    //   （C#：GC.Collect() 前后各取 WorkingSet64 相减）。
+    //   本移植用 glibc 的 malloc_trim(0) 把空闲堆还给 OS，再取 RSS 差值；
+    //   无 malloc_trim 的平台回退 0（语义仍成立：**没有可释放的内存**）。
+    ext.regExpr(QStringLiteral("CLEARMEMORY"), OperandType::Int, 0, 0,
+        [](const QList<QVariant>&, const QList<const ExpressionNode*>&, QVariant& out) {
+            const qint64 before = eeCurrentMemoryUsage();
+            eeTrimHeap();
+            const qint64 after = eeCurrentMemoryUsage();
+            out = QVariant::fromValue<qint64>(qMax<qint64>(0, before - after));
+            return true;
+        });
+
+    // ---- EE 文本框族（C# Creator.Method.cs:7318/7331）------------------------------
+    // GETTEXTBOX：输入框当前内容（执行时点读一次）。
+    ext.regExpr(QStringLiteral("GETTEXTBOX"), OperandType::Str, 0, 0,
+        [&ext](const QList<QVariant>&, const QList<const ExpressionNode*>&, QVariant& out) {
+            const ExtensionRegistry::Services& sv = ext.services();
+            out = sv.textboxText ? sv.textboxText() : QString();
+            return true;
+        });
+    // SETTEXTBOX(s)：整体替换输入框内容，**恒返回 1**（C# ChangeTextBoxMethod）。
+    ext.regExpr(QStringLiteral("SETTEXTBOX"), OperandType::Int, 1, 1,
+        [&ext](const QList<QVariant>& a, const QList<const ExpressionNode*>&, QVariant& out) {
+            const ExtensionRegistry::Services& sv = ext.services();
+            const QString text = a.isEmpty() ? QString() : a.at(0).toString();
+            if (sv.setTextbox) sv.setTextbox(text);
+            out = QVariant::fromValue<qint64>(1);   // C# 恒 1
+            return true;
+        });
+
+    // ---- EE 系统输入扩展：FLOWINPUT / FLOWINPUTS（C# Creator.Method.cs:7423/7446）--
+    // FLOWINPUT(<缺省值>{, <启用>, <MesSkip 可跳过>, <强制跳过>}) -> 恒返回 0；
+    // FLOWINPUTS(<是否字符串模式>{, "<缺省字符串>"})             -> 恒返回 0。
+    // 选项写进 ProcessState 的 flowinput*（**不自动复位**），由系统层输入消费。
+    ext.regExpr(QStringLiteral("FLOWINPUT"), OperandType::Int, 1, 4,
+        [&ext](const QList<QVariant>& a, const QList<const ExpressionNode*>&, QVariant& out) {
+            const ExtensionRegistry::Services& sv = ext.services();
+            const qint64 def = a.isEmpty() ? 0 : a.at(0).toLongLong();
+            const bool enable  = a.size() > 1 && a.at(1).toLongLong() != 0;
+            const bool canSkip = a.size() > 2 && a.at(2).toLongLong() != 0;
+            const bool forceSkip = a.size() > 3 && a.at(3).toLongLong() != 0;
+            if (sv.setFlowInput) sv.setFlowInput(def, enable, canSkip, forceSkip);
+            out = QVariant::fromValue<qint64>(0);
+            return true;
+        });
+    ext.regExpr(QStringLiteral("FLOWINPUTS"), OperandType::Int, 1, 2,
+        [&ext](const QList<QVariant>& a, const QList<const ExpressionNode*>&, QVariant& out) {
+            const ExtensionRegistry::Services& sv = ext.services();
+            const bool isString = !a.isEmpty() && a.at(0).toLongLong() != 0;
+            const QString defStr = a.size() > 1 ? a.at(1).toString() : QString();
+            if (sv.setFlowInputString) sv.setFlowInputString(isString, defStr);
+            out = QVariant::fromValue<qint64>(0);
+            return true;
+        });
 }
 
 // ---------------------------------------------------------------------------
@@ -382,12 +528,53 @@ void registerEeExtensions(ExtensionRegistry& ext)
     ext.reg(QStringLiteral("FIND_VARDATA"),
             [&ext](const LogicalLine& l, const QList<Operand>& a) { return findVarData(l, a, ext); });
 
+    // ---- UPDATECHECK：真实现（结果写 RESULT；见 updateCheck）----
+    ext.reg(QStringLiteral("UPDATECHECK"),
+            [&ext](const LogicalLine&, const QList<Operand>&) -> bool {
+                const int result = updateCheck(ext);
+                if (ext.services().storage) {
+                    ext.services().storage->setSystemVariable(QStringLiteral("RESULT"), 0, result);
+                }
+                return true;
+            });
+
     // ---- EE 扩展命令（源: test/data/emuera_ee_cmds.txt，C# 权威源码导出）----
-    // 只登记名字 -> 注册类统一「留痕一次 + 跳过」桩（待补全，不报错）。
-    static const QStringList kEeCommands = {
+    //
+    // 分两组登记（本轮的实现状态盘点）：
+    //   ① kRunnerImplemented：名字在此登记（解析期认名 + 运行期兜底桩），
+    //      **真实现住 ScriptRunner**（语句级流程/输入/内存语义，需要挂起/改
+    //      执行状态，注册类拿不到那些能力，所以在 ScriptRunner 的指令分派里）。
+    //      经 regExpr 登记过的名字不在此列（regExpr 自带解析登记）。
+    //   ② kStubs：只有名字、真实现待补全 —— 统一「留痕一次 + 跳过」，不报错。
+    //      （对齐 EE 的容错语义：未知/未实现的 EE 名字不应中断脚本。）
+    static const QStringList kRunnerImplemented = {
+        // BINPUT 族（组15/35）：EE v31fix 的「只接受已按钮化值」输入
         QStringLiteral("BINPUT"),
         QStringLiteral("BINPUTS"),
-        QStringLiteral("CLEARMEMORY"),
+        QStringLiteral("ONEBINPUT"),        // BINPUT 的单字符版（C# OneInput）
+        QStringLiteral("ONEBINPUTS"),
+        // 流程控制（组12/12c/18/29）
+        QStringLiteral("FORCE_BEGIN"),      // BEGIN + force（跳过 __CAN_BEGIN__）
+        QStringLiteral("FORCE_QUIT"),       // 立即结束
+        QStringLiteral("FORCE_QUIT_AND_RESTART"),
+        QStringLiteral("QUIT_AND_RESTART"),
+        // 输入（组15）
+        QStringLiteral("INPUTANY"),         // 整数/字符串双通道输入
+        // 显示/日志（组17）
+        QStringLiteral("SKIPLOG"),          // MesSkip（MESSKIP()/WAIT 自动放行）
+        // 调用族（组14/35）：TRY 版 CALLF
+        QStringLiteral("TRYCALLF"),
+        QStringLiteral("TRYCALLFORMF"),
+    };
+    for (const QString& name : kRunnerImplemented) {
+        ext.reg(name);
+    }
+
+    static const QStringList kStubs = {
+        // COLUMN 族（13 条）：EE 发行版附带的 **ERB 库 COLUMN_LIB** 的函数
+        // （作者 Enter，基于 GDRAWTEXT），不是引擎内建命令 —— 真实游戏用
+        // `CALL COLUMNCREATE, …` 调用自己附带的 ERB 实现；引擎侧只保证
+        // 「名字不报未识别、裸写不炸」。语义见 test/data/commands/COLUMN*.md。
         QStringLiteral("COLUMNBGCOLOR"),
         QStringLiteral("COLUMNCLEAR"),
         QStringLiteral("COLUMNCOLOR"),
@@ -399,40 +586,52 @@ void registerEeExtensions(ExtensionRegistry& ext)
         QStringLiteral("COLUMNPRINTW"),
         QStringLiteral("COLUMNRESIZE"),
         QStringLiteral("COLUMNWAIT"),
-        QStringLiteral("FLOWINPUT"),
-        QStringLiteral("FORCE_BEGIN"),
-        QStringLiteral("FORCE_QUIT"),
-        QStringLiteral("FORCE_QUIT_AND_RESTART"),
-        QStringLiteral("FSTRJOIN"),
-        QStringLiteral("FTOOLTIP_SETDURATION"),
+        QStringLiteral("DT_COLUMN_OPTIONS"),   // EM 的 DataTable 列默认值（.NET DataTable 专属）
+        // GUI 专属（本移植暂无对应后端：背景图 / 按钮世代 / 工具提示自绘 /
+        // HTML 浮岛）。真实现需要 QML 侧能力，登记为桩以保持解析期容忍。
+        QStringLiteral("BREAKBUTTON"),         // 作废当前画面全部按钮世代
+        QStringLiteral("SETBGIMAGE"),          // 背景图（C# ConsoleBackground）
+        QStringLiteral("CLEARBGIMAGE"),
+        QStringLiteral("REMOVEBGIMAGE"),
+        QStringLiteral("TOOLTIP_CUSTOM"),      // 工具提示 OwnerDraw 总开关
+        QStringLiteral("TOOLTIP_FORMAT"),
+        QStringLiteral("TOOLTIP_SETFONT"),
+        QStringLiteral("TOOLTIP_SETFONTSIZE"),
+        QStringLiteral("TOOLTIP_EXTENSION"),
+        QStringLiteral("TOOLTIP_IMG"),
+        QStringLiteral("HTML_PRINT_ISLAND"),   // HTML 浮岛（可滚动 HTML 层）
+        QStringLiteral("HTML_PRINT_ISLAND_CLEAR"),
+        // C# 插件互操作：CALLSHARP 调 **C# 插件 DLL** 里注册的方法
+        // （emuera.em/EmueraPluginExample 的 IPluginMethod）。C++ 移植若要支持
+        // 需另立原生插件 ABI，属独立特性 -> 桩。
+        QStringLiteral("CALLSHARP"),
+        // 作用域变量声明（EM+EE：VARI/VARS 声明函数私有变量）。C# 里由配置
+        // 「VAR系命令を利用可能にする」门控，**默认关闭**（默认写 VARI 在解析期
+        // 就报错）。本移植暂无该配置项，按「不可用」处理成静默跳过桩。
+        QStringLiteral("VARI"),
+        QStringLiteral("VARS"),
+        // 图形族里尚未实现的部分（G 系画笔/字体/虚线与 G 绘图；见 test/data/commands/
+        // GDRAWLINE.md 等）。真实现需要 Graphics 画布后端 + QML 绘制。
         QStringLiteral("GDASHSTYLE"),
         QStringLiteral("GDRAWGWITHROTATE"),
         QStringLiteral("GDRAWLINE"),
         QStringLiteral("GDRAWTEXT"),
-        QStringLiteral("GETMEMORYUSAGE"),
-        QStringLiteral("GETTEXTBOX"),
-        QStringLiteral("GETTEXTSIZE"),
         QStringLiteral("GGETFONT"),
         QStringLiteral("GGETFONTSIZE"),
         QStringLiteral("GGETPEN"),
         QStringLiteral("GGETPENWIDTH"),
         QStringLiteral("GGETTEXTSIZE"),
-        QStringLiteral("INPUTANY"),
-        QStringLiteral("LCSVISASSI"),
-        QStringLiteral("OCLEARLINE"),
-        QStringLiteral("QUIT_AND_RESTART"),
-        QStringLiteral("SETTEXTBOX"),
-        QStringLiteral("SKIPLOG"),
         QStringLiteral("SPRITEDISPOSEALL"),
-        QStringLiteral("STRJOIN1"),
-        QStringLiteral("TINPUTAWAIT"),
-        QStringLiteral("TOOLTIP_EXTENSION"),
-        QStringLiteral("TOOLTIP_IMG"),
-        QStringLiteral("TRYCALLF"),
-        QStringLiteral("TRYCALLFORMF"),
-        QStringLiteral("UPDATECHECK"),
+        // 清单收录但**无据可考 / 疑似伪名**（文档已在 test/data/commands/ 记录）：
+        QStringLiteral("GETTEXTSIZE"),          // EE readme 的笔误（实为 GETTEXTBOX）
+        QStringLiteral("LCSVISASSI"),           // 任何文档/源码均无记载
+        QStringLiteral("OCLEARLINE"),           // 仅名字，语义无权威来源
+        QStringLiteral("FSTRJOIN"),             // 「F+STRJOIN」伪名（分栏场景）
+        QStringLiteral("STRJOIN1"),             // 同上
+        QStringLiteral("FTOOLTIP_SETDURATION"), // 「F+TOOLTIP_SETDURATION」伪名
+        QStringLiteral("TINPUTAWAIT"),          // 「TINPUT+AWAIT」伪名
     };
-    for (const QString& name : kEeCommands) {
+    for (const QString& name : kStubs) {
         ext.reg(name);
     }
 }

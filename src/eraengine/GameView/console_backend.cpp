@@ -20,6 +20,7 @@
 #include "resource_image_provider.h"
 #include "key_map.h"
 #include "GameData/ast/print_template.h"
+#include "eraengine_log.h"   // eraTrace（文本框/输入裁决留痕）
 
 #include <algorithm>
 #include <QElapsedTimer>
@@ -33,6 +34,12 @@ namespace {
 bool inputExpectsString(const QString& kind) {
     const QString k = kind.toUpper();
     return k.contains(QLatin1String("INPUTS")) || k.contains(QLatin1String("ARGS"));
+}
+// EE INPUTANY（C# InputType.AnyValue）：整数与字符串**都**接受 ——
+// 整数写 RESULT、字符串写 RESULTS（另一者保持原值）。因此本类型既不算
+// 「只等字符串」，也不算「只等整数」：两种提交与两种按钮都放行。
+bool inputAcceptsAny(const QString& kind) {
+    return kind.toUpper() == QLatin1String("INPUTANY");
 }
 // 当前等待的输入是否为「任意键」型（WAIT/WAITANYKEY/FORCEWAIT/ANYKEY）。
 // 对齐 C# IsWaitingEnterKey：这类等待点击控制台任意位置（或回车）即继续，
@@ -763,6 +770,19 @@ void ConsoleBackend::notifyInputDone() {
     emit waitingInputChanged();
 }
 
+// ---------------------------------------------------------------------------
+// EE 文本框（GETTEXTBOX / SETTEXTBOX）
+// ---------------------------------------------------------------------------
+
+// SETTEXTBOX <字符串>：整体替换输入栏内容（C# MainWindow.ChangeTextBox：
+// `richTextBox1.Text = str`），并通知 QML 输入栏同步显示。
+void ConsoleBackend::setTextboxText(const QString& text) {
+    if (m_textboxText == text) return;
+    m_textboxText = text;
+    qCDebug(eraTrace) << "[textbox] SETTEXTBOX ->" << text;
+    emit textboxTextChanged(text);
+}
+
 // REUSELASTLINE（C# PrintTemporaryLine -> PrintSingleLine(str, temporary=true)）：
 // 先定型未定型缓冲（PrintFlush），再把文本作为一条「一時行」加入。
 // 空文本不产生任何输出（C# IsNullOrEmpty 早退）。
@@ -946,7 +966,10 @@ void ConsoleBackend::clickAt(int lineIndex, int segmentIndex) {
     // 输入裁决：只有「正在等待输入」且「按钮类型与等待的输入类型一致」才响应。
     // 否则静默忽略——不推进世代（点击无效但按钮保持可重试），
     // 杜绝「点击杀死了按钮却没有产生任何效果」的不确定响应。
-    if (!m_waitingInput || inputExpectsString(m_inputKind) == seg.isInteger) {
+    // INPUTANY（AnyValue）：两种按钮都接受（整数按钮交 RESULT、字符串按钮交 RESULTS）。
+    if (!m_waitingInput
+        || (!inputAcceptsAny(m_inputKind)
+            && inputExpectsString(m_inputKind) == seg.isInteger)) {
         qDebug() << "[input] 点击忽略（未等待输入或类型不符）kind" << m_inputKind
                  << "等待中" << m_waitingInput << "段为整数" << seg.isInteger;
         return;
@@ -1040,7 +1063,8 @@ void ConsoleBackend::submitIntegerText(const QString& text) {
 }
 
 void ConsoleBackend::submitStringText(const QString& text) {
-    if (!m_waitingInput || !inputExpectsString(m_inputKind)) {
+    if (!m_waitingInput
+        || !(inputExpectsString(m_inputKind) || inputAcceptsAny(m_inputKind))) {
         qWarning() << "[input] 字符串文本提交被拒：kind" << m_inputKind
                    << "等待中" << m_waitingInput;
         return;
@@ -1059,8 +1083,10 @@ void ConsoleBackend::submitStringText(const QString& text) {
 }
 
 void ConsoleBackend::submitInputString(const QString& value) {
-    // 字符串提交只在等待字符串型输入（INPUTS/SINPUTS/TONEINPUTS…）时有效
-    if (!m_waitingInput || !inputExpectsString(m_inputKind)) {
+    // 字符串提交在等待字符串型输入（INPUTS/SINPUTS/TONEINPUTS…）时有效；
+    // EE INPUTANY（AnyValue）双通道，字符串提交同样有效（写 RESULTS）。
+    if (!m_waitingInput
+        || !(inputExpectsString(m_inputKind) || inputAcceptsAny(m_inputKind))) {
         qWarning() << "[input] 字符串提交被拒：kind" << m_inputKind
                    << "等待中" << m_waitingInput;
         return;

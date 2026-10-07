@@ -56,6 +56,9 @@ struct SystemHost {
     // ---- 输入等待（通知 UI；真正的等待由中心执行状态 ExecState 表达）----
     std::function<void()>                      waitInput;   // 请求整数输入
     std::function<void()>                      readAnyKey;  // 请求任意键
+    // EE SKIPLOG（MesSkip）探测：系统流程输入的 FLOWINPUT canSkip 路径要读
+    // （C# setWaitInput: `flowinputCanSkip && Console.MesSkip` 即交缺省不停等）。
+    std::function<bool()>                      mesSkip;
 
     // ---- 控制台末行状态（对齐 C# EmueraConsole.LastLineIsTemporary/LastLineIsEmpty）----
     std::function<bool()>                      lastLineIsTemporary;
@@ -184,7 +187,9 @@ public:
     [[nodiscard]] int eventGroup() const { return m_event.group; }
 
     // ---- BEGIN ----
-    bool beginWithKeyword(const QString& keyword, QString* error = nullptr);
+    // force=true 即 EE FORCE_BEGIN（跳过 __CAN_BEGIN__ 检查；关键字合法性仍校验）
+    bool beginWithKeyword(const QString& keyword, QString* error = nullptr,
+                          bool force = false);
     bool beginWithType(BeginType type, QString* error = nullptr);
 
     // ---- CALLTRAIN / STOPCALLTRAIN / DOTRAIN 指令钩子 ----
@@ -232,6 +237,10 @@ signals:
     // 脚本 QUIT：pump() 任何调用方（含定时器驱动的 pacing pump）都能收到，
     // 不依赖「resume() 的返回值被 GUI 层检查」
     void quitRequestedByScript();
+    // 脚本 QUIT_AND_RESTART / FORCE_QUIT_AND_RESTART（EE v11）：QUIT 之上
+    // 再置重启标志（C# Program.rebootFlag）。宿主收到后 reload()（C# Reboot：
+    // 重新装载本目录 ERB/CSV 回启动状态）。两条信号互斥 —— pump 里先判重启。
+    void restartRequestedByScript();
 
 private:
     // ---- 事件调用（对齐 C# CalledFunction 的 4 组导航）----
@@ -336,6 +345,9 @@ private:
     quint64 m_waitGeneration = 0;
     void schedulePump();
     bool m_atFloor = false;      // true = 函数栈回到帧底（系统层）
+    // EE FLOWINPUT：setWaitInput 直接交付缺省值（未挂起）时置位 ——
+    // pump 据此重跑本状态处理器（对齐 C#「缺省即返回」后系统层继续推进）
+    bool m_inputDeliveredImmediately = false;
 
     // ---- 运行期状态（对齐 C# Process 的成员）----
     qint64 m_systemResult = 0;

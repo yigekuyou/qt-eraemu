@@ -179,6 +179,13 @@ public:
     void notifyInputRequested(const QString& kind, const QVariant& defaultValue = QVariant());
     void notifyInputDone();
 
+    // ---- EE 文本框（GETTEXTBOX / SETTEXTBOX）--------------------------------
+    // C# 直接读写主窗口输入框（MainWindow.ChangeTextBox / TextBox.Text）。
+    // 本移植把「输入栏当前文本」放在控制台后端：SETTEXTBOX 整体替换（返回 1），
+    // GETTEXTBOX 读回；QML 侧输入栏绑到本值（textboxTextChanged）。
+    Q_INVOKABLE QString textboxText() const { return m_textboxText; }
+    Q_INVOKABLE void setTextboxText(const QString& text);
+
     // REUSELASTLINE（C# PrintTemporaryLine）：单行输出并标记「一時行」——
     // 下一个显示行输出会**替换**它（C# addDisplayLine 的 LastLineIsTemporary）。
     // DQPRINT 逐字动画靠它把整句动画在一行内完成。
@@ -230,6 +237,9 @@ signals:
     void inputSubmittedString(const QString& value);
     // CLEARTEXTBOX：QML 输入栏清空请求（C# Console.ClearTextBox）
     void clearTextBoxRequested();
+    // EE SETTEXTBOX：输入栏整体替换为指定文本（C# MainWindow.ChangeTextBox）
+    // —— QML 侧输入栏据此更新显示（引擎侧状态见 textboxText()）
+    void textboxTextChanged(const QString& text);
     // 滚动请求（D-Bus /debug、菜单栏；QML 视图消费 —— contentY 是视图的状态）
     void scrollRequested(int lines);
     void scrollToBottomRequested();
@@ -281,6 +291,9 @@ private:
     bool    m_waitingInput = false;
     // 最后一行是否为「一時行」（REUSELASTLINE）：下一行显示输出替换它
     bool    m_lastLineTemporary = false;
+
+    // EE 文本框内容（GETTEXTBOX / SETTEXTBOX；C# MainWindow 输入框文本）
+    QString m_textboxText;
 
     QTimer m_timer;
 

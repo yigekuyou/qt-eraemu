@@ -93,6 +93,15 @@ public:
     bool consumePrintWaitKey() { const bool v = m_printWaitKey; m_printWaitKey = false; return v; }
     // CURRENTALIGN / GETFONT 的状态源（ALIGNMENT / SETFONT 语句维护）
     [[nodiscard]] bool skipDisp() const { return m_skipDisp; }
+    // ---- EE SKIPLOG / MESSKIP（MesSkip）------------------------------------
+    // SKIPLOG <n> 直接把「消息跳过中」状态置为 (n != 0)（C# Process.ScriptProc.cs:783
+    // 的 console.MesSkip = (iValue != 0)）。MESSKIP() 打印时反映本值；WAIT/
+    // WAITANYKEY（可跳过的任意键等待）在跳过中自动放行，而 INPUT 族（需要输入值）
+    // 与 FORCEWAIT（不可跳过）会把跳过状态清掉 —— 对齐 C# EmueraConsole 的
+    // `while (MesSkip && state == WaitInput) { if (inputReq.NeedValue) break;
+    //  if (inputReq.StopMesskip) break; RunEmueraProgram(""); }` 后 MesSkip = false。
+    void setMesSkip(bool on) { m_mesSkip = on; }
+    [[nodiscard]] bool mesSkip() const { return m_mesSkip; }
     // 默认文字色的惰性读取（配置在 setGameDirectory 之后才可用）
     void setDefaultColorProvider(std::function<qint64()> provider) {
         m_defaultColorProvider = std::move(provider);
@@ -298,6 +307,8 @@ public:
     int m_printCLength = 25;      // PRINTC 一列的文字宽度（C# Config.PrintCLength）
     // SKIPDISP <n>：置位后所有 PRINT 输出被跳过（C# Process.SkipPrint）
     bool m_skipDisp = false;
+    // SKIPLOG <n>：消息跳过状态（C# Console.MesSkip；见 mesSkip()）
+    bool m_mesSkip = false;
     // 默认文字色（C# Config.ForeColor，RESETCOLOR 还原到此；由 EraEngine 依配置注入）
     std::function<qint64()> m_defaultColorProvider;
     qint64 m_currentAlign = 0;    // 0=LEFT 1=CENTER 2=RIGHT（CURRENTALIGN）

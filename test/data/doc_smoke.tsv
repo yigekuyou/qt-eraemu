@@ -281,7 +281,7 @@ CATCH	cmd	skip		TRYC 系失败分支的配对入口：须嵌入 TRYC…CATCH…E
 CLEARBGIMAGE	cmd	call	CLEARBGIMAGE		
 CLEARBIT	cmd	call	CLEARBIT A, 0, 1		
 CLEARLINE	cmd	skip		破坏性：删除已显示行（会破坏本组输出）——单独在隔离组 16 跑	
-CLEARMEMORY	cmd	skip		文档备注明示它实为式中函数（用法是 `{CLEARMEMORY()}`），不能作为独立语句写，而本清单按 EE 命令表把它注册为命令（组 12c 也只按命令名留痕桩）—— 命令形态与文档形态不一致，语义未确证	
+CLEARMEMORY	cmd	call	CVTMP = CLEARMEMORY()	式中函数（C# GC.Collect 的对应物：冲刷 Qt 的 DeferredDelete 队列 + malloc_trim 把空闲堆还给 OS，返回释放的字节数）；命令形态 CLEARMEMORY 不是 C# 合法写法（readme 备注误记）	
 CLEARTEXTBOX	cmd	skip		破坏性：清空输入框（破坏待输入状态）——单独在隔离组 16 跑	
 COLUMNBGCOLOR	cmd	call	COLUMNBGCOLOR 0, "Black"		
 COLUMNCLEAR	cmd	call	COLUMNCLEAR 0		
@@ -336,9 +336,9 @@ FONTSTYLE	cmd	call	FONTSTYLE 1 + 2
 FOR	cmd	skip		FOR～NEXT 的循环头，须与 NEXT 配对，单独执行会把组内后续行吞进循环体；由组 3/28 覆盖	
 FORCEKANA	cmd	call	FORCEKANA 1		
 FORCEWAIT	cmd	call	FORCEWAIT	文档「语义」：等一次回车，且该等待不可被右键/快进跳过（执行时强制解除跳过 StopMesskip）；只认回车键、无参数——组 11 已用填充值跑通	1 个数值：0（当作一次回车确认）
-FORCE_BEGIN	cmd	skip		破坏流程：绕过 __CAN_BEGIN__ 检查强制切换系统流程且不返回；GUIDE 明列 FORCE_*；由组 18 覆盖	
-FORCE_QUIT	cmd	skip		不等待输入立即结束游戏并退出程序（文档「语义」）；GUIDE 明列 FORCE_*	
-FORCE_QUIT_AND_RESTART	cmd	skip		不等待输入立即结束游戏并重启程序（文档「语义」）；GUIDE 明列 FORCE_*	
+FORCE_BEGIN	cmd	skip		BEGIN + force：跳过 __CAN_BEGIN__ 状态检查（非法关键字照样报错）；需要「BEGIN 会失败」的状态才能观察差异，故由单测覆盖（test_execution_chain：Shop_CallShowShop 状态下 BEGIN 拒绝 / FORCE_BEGIN 成功）	
+FORCE_QUIT	cmd	skip		不等待输入立即结束本次执行（C# ForceQuit）；本移植的 QUIT 本就是同步结束，故与 QUIT 同效 —— 组 12c 末尾触发（★不应出现★ 未打印即通过）	
+FORCE_QUIT_AND_RESTART	cmd	skip		不等待输入立即结束 + 置重启标志（C# rebootFlag -> Reboot()）；本移植转成 EraEngine::restartRequested -> 宿主 reload —— 组 37 单跑（结构性判据）	
 FSTRJOIN	cmd	skip		伪名：Shift-JIS 全角冒号「：」被误切成 F 而得到的名字，任何发行版都无此命令（文档「备注」）；真实命令为式中函数 STRJOIN	
 FTOOLTIP_SETDURATION	cmd	skip		伪名：Shift-JIS 全角冒号「：」被误切成 F 得到的名字，任何发行版都无此命令（文档「备注」）；真实命令为 TOOLTIP_SETDURATION，且工具提示依赖 GUI 控件	
 FUNC	cmd	skip		只能写在 TRYCALLLIST/TRYJUMPLIST/TRYGOTOLIST 与 ENDFUNC 之间作为候选列表项，不能单独执行；由组 5 覆盖	
@@ -382,8 +382,8 @@ LOOP	cmd	skip		DO～LOOP 的循环判定行，须与 DO 配对（单独出现会
 NEXT	cmd	skip		FOR～NEXT 的循环终点，须与 FOR 配对；由组 3/28 覆盖	
 NOSKIP	cmd	call	NOSKIP\nENDNOSKIP		
 OCLEARLINE	cmd	skip		本仓库无实现：两套中文文档、EE readme/changelog、在线文档均未收录，无权威签名与语义（文档「备注」）；GUIDE 明列；删除已显示行的行为由组 16 覆盖	
-ONEBINPUT	cmd	call	PRINTBUTTON "[0] 冒烟：ONEBINPUT 确认", 0\nPRINTBUTTON "[1] 冒烟：ONEBINPUT 取消", 1\nONEBINPUT 0	文档「语义/备注」：BINPUT 的单字符限定版（OneInput：只取首字符、按下即提交），参数与按钮扫描、默认值回退均同 BINPUT；两套中文文档与 EE readme 均未收录、语义据源码推定 —— 移植若未注册此名需回退 skip	1 个数值：0（单字符即自动提交，须命中已按钮化的 0/1 → RESULT=0；多字符只取首位）
-ONEBINPUTS	cmd	call	PRINTBUTTON "[A] 冒烟：ONEBINPUTS 甲", "A"\nONEBINPUTS "A"	文档「语义/备注」：BINPUTS 的单字符限定版（OneInput，字符串按钮版；只取首字符即提交），参数与按钮扫描同 BINPUTS；语义据源码推定 —— 移植若未注册此名需回退 skip	1 个字符串：s A（只取首字符且自动提交，须命中已按钮化字符串 "A" → RESULTS="A"）
+ONEBINPUT	cmd	call	PRINTBUTTON "[0] 冒烟：ONEBINPUT 确认", 0\nPRINTBUTTON "[1] 冒烟：ONEBINPUT 取消", 1\nONEBINPUT 0	文档「语义/备注」：BINPUT 的单字符限定版（OneInput：只取首字符、按下即提交），参数与按钮扫描、默认值回退均同 BINPUT；两套中文文档与 EE readme 均未收录、语义据源码推定；本移植由 ScriptRunner 的 BINPUT 族分支实现（只取首字符属输入控件约束）	1 个数值：0（单字符即自动提交，须命中已按钮化的 0/1 → RESULT=0；多字符只取首位）
+ONEBINPUTS	cmd	call	PRINTBUTTON "[A] 冒烟：ONEBINPUTS 甲", "A"\nONEBINPUTS "A"	文档「语义/备注」：BINPUTS 的单字符限定版（OneInput，字符串按钮版；只取首字符即提交），参数与按钮扫描同 BINPUTS；语义据源码推定；本移植由 ScriptRunner 的 BINPUT 族分支实现（只取首字符属输入控件约束）	1 个字符串：s A（只取首字符且自动提交，须命中已按钮化字符串 "A" → RESULTS="A"）
 ONEINPUT	cmd	call	ONEINPUT	文档「用法」：ONEINPUT —— 仅接受一个字符、无需回车即自动进入下一步，结果代入 RESULT:0（粘贴多位只取第一位）	1 个数值：7（单字符自动提交 → RESULT:0）
 ONEINPUTS	cmd	call	ONEINPUTS		1 个字符串：s a（单字符输入即自动提交，结果代入 RESULTS:0）
 OUTPUTLOG	cmd	skip		会写盘：把控制台日志输出到 emuera.log（文档另载函数形式 OUTPUTLOG("文件名")，同样落盘）—— 组 9 覆盖	
@@ -428,7 +428,7 @@ PRINT_SPACE	cmd	call	PRINT_SPACE 10\nPRINTL
 PRINT_TALENT	cmd	call	ADDCHARA 0\nPRINT_TALENT 0		
 PUTFORM	cmd	call	PUTFORM 冒烟：PUTFORM 追加文本 {1 + 2}		
 QUIT	cmd	skip		会结束程序：把控制台置为退出状态，本组后续行不再执行 —— 组 12 覆盖	
-QUIT_AND_RESTART	cmd	skip		会重启程序，且执行时先插入一次回车等待（交互 + 破坏流程）—— 组 12c 覆盖	
+QUIT_AND_RESTART	cmd	skip		QUIT + 重启标志；本移植不插回车等待（QUIT 即同步结束），重启由宿主 reload 执行 —— 组 36 单跑（结构性判据）	
 RANDOMIZE	cmd	call	RANDOMIZE GETTIME()		
 REDRAW	cmd	call	REDRAW 0\nREDRAW 1		
 REF	cmd	skip		本仓库无实现（文档「语义」：ver1.815 起禁用，解析期即报「書式が間違っています」，执行体抛 NotImplCodeEE）	
@@ -463,7 +463,7 @@ SETCOLOR	cmd	call	SETCOLOR 255, 128, 0\nRESETCOLOR
 SETCOLORBYNAME	cmd	call	SETCOLORBYNAME "Orange"\nRESETCOLOR		
 SETFONT	cmd	call	SETFONT "ＭＳ ゴシック"		
 SETSOUNDVOLUME	cmd	skip		依赖音频后端：一次性设置 10 个音效声道音量（惰性创建 Sound） —— example 组17 已覆盖	
-SETTEXTBOX	cmd	skip		依赖 GUI 文本框控件（GUIDE 明列）：整体替换输入框内容，文档形态为式中函数 SETTEXTBOX("文字")；冒烟无可验证行为	
+SETTEXTBOX	cmd	call	CVTMP = SETTEXTBOX("冒烟")	式中函数：整体替换输入框内容并恒返回 1（C# ChangeTextBoxMethod）；引擎侧文本框状态由 ConsoleBackend 持有，QML 输入栏经 textboxTextChanged 同步	
 SIF	cmd	skip		单行条件结构头（SIF + 下一行语句），不能单独作为语句执行——会吞掉组内后续行；由组 3/28 覆盖	
 SKIPDISP	cmd	call	SKIPDISP 1\nSKIPDISP 0		
 SKIPLOG	cmd	call	SKIPLOG 1\nSKIPLOG 0		
@@ -516,7 +516,7 @@ TRYJUMPFORM	cmd	call	TRYJUMPFORM KOJO_{1 + 2}_EXTRA_SCENE
 TRYJUMPLIST	cmd	call	TRYJUMPLIST\nFUNC NO_SUCH_SMOKE_A\nENDFUNC		
 TWAIT	cmd	call	TWAIT 3000, 0		2 个数值：先喂 0（实现里限时等待前先做一次无条件 ReadAnyKey 等按键，回车确认）；再喂 0（限时等待，输入接收标志=0，有输入即提前继续）
 UPCHECK	cmd	call	ADDCHARA 0\nTARGET = 0\nPALAM:0:0 = 0\nUP:0 = 30\nDOWN:0 = 10\nUPCHECK		
-UPDATECHECK	cmd	skip		依赖网络/外部资源：WebClient 同步访问 GameBase.csv 的「バージョン情報URL」做版本检查（无 URL 返回 3，有新版会弹对话框）；example 的 GameBase.csv 无该键，无可验证行为 —— example 组17 作留痕桩	
+UPDATECHECK	cmd	call	UPDATECHECK	RESULT：配置「UPDATECHECKを許可しない」=4；GameBase.csv 的「バージョン情報URL」未配置=3（example 无该键 -> 3）；有 URL 时 C# 走 WebClient 比对版本（本移植未接入网络栈，按失败路径 3）	
 VARI	cmd	call	VARI SMOKE_V		
 VARS	cmd	call	VARS SMOKE_S		
 VARSET	cmd	call	VARSET FLAG, 0		

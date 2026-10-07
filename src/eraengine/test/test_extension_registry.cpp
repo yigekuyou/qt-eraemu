@@ -311,6 +311,47 @@ int main(int argc, char* argv[]) {
               "GCLEAR 重复登记被拒（first-wins 不覆盖）");
     }
 
+
+    // ---- 8) EM/Emuera.NET fork 族（MAP_/ENUM*/XML_/DT_/CALLSHARP）----
+    // 「仿照语义」自研：这些名字经 regExpr/reg 登记，**不是桩**；
+    // 且式中函数的「裸写」形态（`MAP_SET "m", "k", "v"`）必须真执行 ——
+    // C# 里方法与函数同表，语句位置调用=调用并丢弃返回值。
+    qDebug() << "\n8) EM/Emuera.NET fork 族（MAP/ENUM/XML/DT）";
+    {
+        ExtensionRegistry fresh;
+        for (const char* n : { "MAP_CREATE", "MAP_SET", "MAP_GET", "ENUMFUNCBEGINSWITH",
+                               "ENUMFILES", "XML_DOCUMENT", "XML_GET", "DT_CREATE",
+                               "DT_ROW_ADD", "DT_SELECT", "DT_COLUMN_OPTIONS", "CALLSHARP" }) {
+            check(fresh.hasStatement(QLatin1String(n)),
+                  QStringLiteral("注册类认识 %1（.NET 族）").arg(QLatin1String(n)));
+        }
+        // 含 `=` 的扩展语句必须被当成「指令」而不是赋值（否则到不了扩展分派）
+        check(AstBuilder::isKnownInstructionName(QStringLiteral("DT_COLUMN_OPTIONS")),
+              "DT_COLUMN_OPTIONS 被认作指令（`DEFAULT = 值` 不被误判为赋值）");
+
+        VariableStorage storage;
+        ExecutionEngine engine(&storage, nullptr);
+        // 直接验扩展求值入口（表达式路径）与语句路径的**同一实现**
+        QVariant out;
+        QList<QVariant> args{ QStringLiteral("m") };
+        QList<const ExpressionNode*> nodes;
+        check(engine.extensions().runExpression(QStringLiteral("MAP_CREATE"), args, nodes, out)
+                  && out.toLongLong() == 1,
+              "MAP_CREATE 新建返回 1（表达式求值入口）");
+        check(engine.extensions().runExpression(QStringLiteral("MAP_EXIST"), args, nodes, out)
+                  && out.toLongLong() == 1,
+              "MAP_EXIST 存在返回 1");
+        QList<QVariant> setArgs{ QStringLiteral("m"), QStringLiteral("k"), QStringLiteral("v") };
+        check(engine.extensions().runExpression(QStringLiteral("MAP_SET"), setArgs, nodes, out),
+              "MAP_SET 命中扩展实现");
+        QList<QVariant> getArgs{ QStringLiteral("m"), QStringLiteral("k") };
+        check(engine.extensions().runExpression(QStringLiteral("MAP_GET"), getArgs, nodes, out)
+                  && out.toString() == QStringLiteral("v"),
+              "MAP_GET 读回值 v（写读两路径一致）");
+        check(!engine.extensions().runExpression(QStringLiteral("NOT_A_FORK_FUNC"), args, nodes, out),
+              "未登记的名字返回 false（未命中）");
+    }
+
     qDebug();
     if (g_failed == 0) { qDebug() << "ALL PASS"; return 0; }
     qDebug() << g_failed << "check(s) failed";

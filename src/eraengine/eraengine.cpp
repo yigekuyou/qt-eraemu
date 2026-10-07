@@ -245,6 +245,43 @@ EraEngine::EraEngine(QObject *parent)
 				}
 				return forbid;
 			});
+		// ---- EM/Emuera.NET fork 族（MAP_/ENUM*/XML_/DT_）服务 ----
+		// 这些 .NET 扩展要的是「引擎内省（名字表）/ 文件系统 / 游戏目录」，
+		// 引擎在这里一次性注入（惰性 provider，装载后才有内容）。
+		//（CALLSHARP 保持桩 —— 跨平台宿主不实现本机插件装载，见 fork_extension.cpp）
+		m_executionEngine.extensions().setForkServices(
+			[this]() -> QStringList {
+				// ENUMFUNC*：非事件函数名（保原样大小写）—— 对齐 C# NoneventKeys
+				QStringList out;
+				const auto& fns = m_parseTable.userFunctions();
+				out.reserve(fns.size());
+				for (auto it = fns.constBegin(); it != fns.constEnd(); ++it) {
+					if (it.value().isEvent) continue;
+					out.append(it.value().originalName.isEmpty() ? it.key()
+					                                             : it.value().originalName);
+				}
+				return out;
+			},
+			[this]() -> QStringList {
+				// ENUMVAR*：系统变量（原生 + 扩展）+ 用户广域变量（ERH 的 #DIM/#DIMS）
+				QStringList out;
+				for (const std::string_view n : sysvar::kIntegerNames)
+					out.append(QString::fromStdString(std::string(n)));
+				for (const std::string_view n : sysvar::kStringNames)
+					out.append(QString::fromStdString(std::string(n)));
+				for (const auto& kv : sysvar::extensionVariableStore().defs)
+					out.append(QString::fromStdString(kv.first));
+				for (const VariableDecl& d : m_parseTable.variableTable().declarations()) {
+					if (d.scope != VarScope::Global) continue;      // 函数私有变量不在其中
+					out.append(d.name);
+				}
+				return out;
+			},
+			[this]() -> QStringList {
+				// ENUMMACRO*：#DEFINE 宏名（预处理器的宏表）
+				return m_executionEngine.getErbLoader().preprocessor().macroTable().keys();
+			},
+			[this]() -> QString { return m_gameDirectory; });
 		// BuiltinOp::Extension 的节点按名字转回注册类的 runExpression。
 		m_expressionEvaluator.setExtensionFunctionInvoker(
 			[this](const QString& name, const QList<QVariant>& args,

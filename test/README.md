@@ -66,9 +66,11 @@ cmake --build build --target test_cli
 | 32 | **通用图像处理（G / SPRITE / CBG 全族 + 真实图像文件 webp）**（`32_IMAGE.ERB`，素材 `example/resources/`；由原「组 32 CSV 精灵偏移」与「组 34 真实图像文件（webp）」合并，作者声明见 `example/resources/README_webp.md`） |
 | 33 | **`END` 是变量（`#DIM END`）不是指令**（`33_END_VARIABLE.ERB`，eraTW 角色移動 死循环回归） |
 | 35 | **文档语义冒烟**（`35_DOC_SMOKE.ERB`：由 `data/` 的 451 篇语义文档逐条生成调用——签名与参数取自文档，会写盘/结束程序/依赖音频 GUI 的条目留 `; SKIP` 注释并注明原因；需交互的条目在清单第 6 列给出要注入的输入。**单跑**：`./test/run_example.sh 35`） |
+| 38 | **EE 库 COLUMN_LIB（手写 CALL 用例）**（`38_COLUMN_LIB.ERB` + 夹具 `COLUMN_LIB.ERB/ERH`：`COLUMN*` 不是引擎命令而是 EmueraEE 附带的 ERB 库，组 35 的生成器只会写裸命令名（命中引擎名字容忍桩、什么都没跑），故这 11 条**手写**成 `CALL` 调用并断言文档语义——见下文「COLUMN 库」） |
+| 39 | **EM / Emuera.NET fork 族（`MAP_*` / `ENUM*` / `XML_*` / `DT_*`；`CALLSHARP` 除外——它是桩）**（`39_FORK_NET.ERB`，手写断言；这些命令原版是 .NET 运行期能力的封装——Dictionary / XmlDocument+XPath / DataTable——本移植**仿照语义自研**，见下文「.NET 系 fork 扩展」） |
 
 「全部自动运行」（`./test/run_example.sh` 无参数）依次执行：
-**1–10、14、16、17、23–28、30–33 + 汇总**。
+**1–10、14、16、17、23–28、30–33、38、39 + 汇总**。
 
 不在自动路径、需单跑的组（`./test/run_example.sh <组号>`）：
 
@@ -95,9 +97,9 @@ cmake --build build --target test_cli
 
 背景：覆盖率报告（`data/coverage_report.txt`）把 EE 扩展里「只登记了名字、运行期留痕跳过」
 的项标为**引擎桩**。本轮按「C# 权威语义可考 + 不需要新 GUI/网络后端」两条标准，
-把其中 12 项做成真实现，桩数从 26 降到 14（其余是 COLUMN 库函数、C# 插件互操作、
-GUI 后端专属、无据可考的伪名 —— 见 `ee_extension.cpp` 的 `kStubs` 注释与
-`gen_coverage.py` 的 `EE_STUB` 说明）。
+把其中 12 项做成真实现，桩数从 26 降到 **3**（不含 `COLUMN*`——它们是 ERB 库，
+引擎无需实现，报告单列一行；其余是 C# 插件互操作、GUI 后端专属、无据可考的伪名 ——
+见 `ee_extension.cpp` 的 `kStubs` 注释与 `gen_coverage.py` 的 `EE_STUB`/`EE_ERB_LIBRARY`）。
 
 | 命令/函数 | 语义（C# 依据） | 实现位置 | 回归 |
 | --- | --- | --- | --- |
@@ -115,14 +117,132 @@ GUI 后端专属、无据可考的伪名 —— 见 `ee_extension.cpp` 的 `kStu
 | `UPDATECHECK` | 结果写 `RESULT`：配置「UPDATECHECKを許可しない」→ 4；GameBase.csv 的「バージョン情報URL」未配置 → 3；有 URL 时 C# 走 `WebClient` 比对版本（本移植未接入网络栈，按失败路径记 3 并留痕）（`Instraction.Child.cs:2833`） | `main.qml` 无关；`eraengine.cpp` 注入 GameBase/配置服务 + `ee_extension.cpp` | 组 17（`RESULT == 3`）、35 |
 | `ASSERT` | 运行期断言：条件为 0 → 报错终止（原实现只在解析期兜住名字、运行期被忽略） | `script_runner.cpp` | 组 17（`ASSERT 1 == 1` 现在真的通过） |
 
-其余 14 项**保持桩**（并在 `ee_extension.cpp` 注明原因）：`COLUMN*`（EE 发行版的 ERB 库
-`COLUMN_LIB`，不是引擎命令）、`DT_COLUMN_OPTIONS`（.NET DataTable）、`SETBGIMAGE` 族 /
-`TOOLTIP_*` / `HTML_PRINT_ISLAND*` / `BREAKBUTTON`（GUI 后端专属）、`CALLSHARP`（C# 插件 ABI）、
-`VARI`/`VARS`（C# 默认关闭的作用域变量声明）、`GETTEXTSIZE`（readme 笔误名）、
-`LCSVISASSI`/`OCLEARLINE`/`TINPUTAWAIT`（无据可考/伪名）。
+其余**保持桩**（并在 `ee_extension.cpp` / `fork_extension.cpp` 注明原因）：
+`SETBGIMAGE` 族 / `TOOLTIP_*` / `HTML_PRINT_ISLAND*` / `BREAKBUTTON`（GUI 后端专属）、
+`VARI`/`VARS`（C# 默认关闭的作用域变量声明）、
+`GETTEXTSIZE`（readme 笔误名）、`LCSVISASSI`/`OCLEARLINE`/`TINPUTAWAIT`（无据可考/伪名）。
+`CALLSHARP` 是**明确标记为「不可能实现」**的一条（qtcpp 跨平台 + 目标是 C# 托管 DLL），
+见下文「.NET 系 fork 扩展」与 `test/data/commands/CALLSHARP.md` 备注；
+`DT_COLUMN_OPTIONS` 已随 .NET 族**真实现**（不再是桩）。
 
-回归口径（本轮实测）：`ctest` **34/34**；`./test/run_example.sh`（自动组）通过；
-单跑组 11/12/13/15/18/19/20/21/22/28/29/35/36/37 全部 **`[FAIL] = 0`**。
+`COLUMN*` 单独说明（见下文「COLUMN 库」与 `gen_coverage.py` 的 `EE_ERB_LIBRARY`）：
+它们是 **ERB 库**而非引擎命令，引擎侧没有东西要「实现」，故**不计入**「引擎桩/完成度」；
+报告里单列「其中 ERB 库（引擎无需实现）」一行。覆盖率不再靠裸命令名（那是名字容忍桩、
+零执行），而是靠手写组 38 的 `CALL`（`gen_coverage` 的 `EE_STUB` 因此从 14 收到 **3**）。
+
+回归口径（本轮实测）：`ctest` **34/34**；`./test/run_example.sh`（自动组，含组 38）通过；
+单跑组 11/12/13/15/16/18/19/20/21/22/23/28/29/36/37 全部 **`[FAIL] = 0`**
+（组 35 断言全过；它自带两条「区块越出 root 宽度」的渲染自检告警，属夹具里刻意打印的
+超长行，非本轮引入）。
+
+## COLUMN 库（`COLUMN*` = EmueraEE 的 COLUMN_LIB，不是引擎命令）
+
+### 它是什么
+
+`COLUMNCREATE` / `COLUMNRESIZE` / `COLUMNMOVE` / `COLUMNCOLOR` / `COLUMNBGCOLOR` /
+`COLUMNDIRECTION` / `COLUMNPRINT` / `COLUMNPRINTL` / `COLUMNPRINTW` / `COLUMNWAIT`
+（再加一条 `COLUMNCLEAR`：readme 未列它，签名与语义是按同族命名**推断**的，见
+`test/data/commands/COLUMNCLEAR.md`）是 **EmueraEE 发行版附带的一份 ERB 库**：
+
+* 名称为「カラム機能試作ライブラリ COLUMN_LIB」，作者 **Enter**，源码不随 EmueraEE
+  发行（`read me(COLUMN_LIB).txt` 原文只说「拙作 EmueraEE の GDRAWTEXT を使用した
+  カラム生成ライブラリです」）；本仓库两份 C# 源码（`Emuera/`、`emuera.em/`）里
+  `grep COLUMN` **无任何命中**——即**引擎里没有对应枚举/方法**。
+* 它做的事：用 EE 的 `GDRAWTEXT` 在画面上开一块**独立的可滚动文本区（列）**，
+  再往里面打印。所以「列」不是引擎窗口控件，而是「库函数 + 图像命令」的组合。
+* 本仓库只保留其说明文档（`eraTW/README集/EmueraEE Readme/read me(COLUMN_LIB).txt`），
+  **没有库本体**。
+
+### 它怎么加载 / 怎么调
+
+* **加载**：与普通 ERB 一样 —— 把 `COLUMN_LIB.ERB` 放进游戏的 `ERB/` 目录，
+  启动时被 ERB 加载器连同其它脚本一起扫描进来（`.ERH` 头文件同理自动加载）；
+  引擎不参与、也不需要登记。`test/export_command_tables.py` 之所以把 `COLUMN*`
+  放进「EE 扩展命令」清单，是因为它们**只在 EE 文档清单里出现**（`EE_DOC_ONLY`），
+  并不代表引擎内建。
+* **调用**：全部是**普通用户函数**，一律 `CALL`：
+  ```erb
+  CALL COLUMNCREATE, 0
+  SIF RESULT == 0
+      PRINTL 列 0 已存在。
+  CALL COLUMNRESIZE, 0, 2000, 3000
+  CALL COLUMNPRINTL, 0, "你好，列世界。"
+  CALL COLUMNWAIT
+  ```
+* **本移植的登记只是「名字容忍」**：`ee_extension.cpp` 的 `kStubs` 登记了这些名字，
+  让**裸写**形态（`COLUMNCREATE 0`）在**装载/运行期不报「未知命令」**（静默桩）。
+  它**不改变** `CALL` 的解析：`CALL COLUMNCREATE, …` 仍只会找到游戏自带的
+  `@COLUMNCREATE`，**找不到就报 `CALL label not found`**（与 C# 一致）。
+  组 38 专门钉住这个差别：库在时 `CALL` 生效、裸写不进入库。
+
+### 测试为什么「手写」而不是生成
+
+组 35 由 `gen_doc_smoke.py` 从文档签名合成，命令类只会写**裸命令名**
+（`COLUMNCREATE 0`）——对 `COLUMN*` 而言那就是命中名字容忍桩、**零执行**，
+测不出任何东西（这正是「无法自动测试的内容」）。所以：
+
+* `doc_smoke.tsv` 里这 11 条改回 `mode=skip`，注明「ERB 库函数…由手写组 38 覆盖」；
+* 手写组 **38** 随 `test/example` 提供一份**夹具库**（`COLUMN_LIB.ERB`/`COLUMN_LIB.ERH`，
+  复现文档写明的状态机与返回值；原版绘制依赖 `GDRAWTEXT`，本移植仍是桩，故夹具只存状态），
+  用 `CALL` 逐条断言，并额外断言「裸写 ≠ 调用」。
+
+### 顺带修掉的引擎缺陷（组 38 暴露）
+
+手写夹具用 `#DIMS BUFFER, 32, 64`（每列一行缓冲）时发现：**2 维字符串数组的元素赋值
+从不生效**。根因 `execution_engine.cpp::writeStringValue`：它算出 `ref.indices` 后
+**只取第一个下标**写进 1 维表（`setGlobalStr1D`），而读侧按 2 维取值
+（`getGlobalStr2D`）——写读不同表，`X:i:j = …` 读回恒为空串（`COLUMNCREATE` 这类
+「每列一条字符串缓冲」的 ERB 库整个失效）。修：按声明维数 + 左值下标个数分派到
+`setGlobalStr2D`。回归：单测 `test_statements` §7（写入 2 维表 / 不落 1 维表 /
+写读两路径一致）、组 38 的缓冲断言。
+
+## .NET 系 fork 扩展（`MAP_*` / `ENUM*` / `XML_*` / `DT_*` / `CALLSHARP`）
+
+这一族（61 个式中函数 + 2 条命令）在 Emuera 原版是**对 .NET 运行期能力的封装**：
+`Dictionary<string,string>`（MAP）、名字内省＋`Directory.EnumerateFiles`（ENUM）、
+`System.Xml.XmlDocument` + **XPath `SelectNodes`**（XML）、`System.Data.DataTable`
+（DT，类型化列 + `id` 主键 + `DBNull` + `DataView` 过滤语言 + XSD/XML 序列化）、
+以及 `Assembly.LoadFrom` + `IPluginMethod`（CALLSHARP）。
+
+设计文档：`thoughts/design/2026-10-07-dotnet-fork-extension-commands.md`。结论是
+**「仿照语义」自研，不引入数据库/第三方 XML 库**（依据：① 语义本来就窄；
+② `eraTW`/`eraMegaten` 对整族**零使用**，不必复刻 .NET 全部边角；
+③ 唯一没有现成替代品的只有 XPath —— Qt 6 已移除 XML Patterns，反正要自己写）。
+
+| 族 | 实现（`GameProc/fork_*.cpp`） | 依赖 |
+| --- | --- | --- |
+| `MAP_*`（12） | `QHash` + 插入有序键表；`MAP_TOXML` 按文档**逐字**拼 `<map><p><k>/<v></p></map>`（不转义） | 无 |
+| `ENUM*`（10） | 引擎名字表（`userFunctions()` / 变量表 / 宏表，经 `setForkServices` 注入）+ `QDirIterator`；匹配**不区分大小写**、输出保持原样、**不排序** | `Qt6::Core` |
+| `XML_*`（18） | 自建小 DOM（元素/文本/属性/注释/PI + 父指针）+ **自研 XPath 子集**（`/a/b`、`./k`、`//t`、`.`、`..`、`@attr`、`*`、`[n]`）；解析/序列化用 `QXmlStreamReader/Writer` | `Qt6::Core`（**不链 `Qt6::Xml`**） |
+| `DT_*`（21） | 内存类型化表（`id` long 主键、`int8/16/32/64/string`、`DBNull`、列默认值）+ **自研过滤/排序子集**（`= <> < > <= >= AND OR NOT LIKE IN IS [NOT] NULL`、`col [ASC\|DESC]`）；`DT_TOXML/FROMXML` 的 XML **形状自定**（只要求「命令调用成功 + 返回值/往返正确」，不与 .NET 的 `WriteXmlSchema/WriteXml` 逐位互换） | 无 |
+| `CALLSHARP`（1） | **保持桩（本移植不实现 —— 标记为「不可能实现」，非「待补全」）**：目标是 C# 托管 DLL（`Assembly.LoadFrom` + `IPluginMethod`），① 本移植是 qtcpp **跨平台**项目，装载本机共享库要平台相关代码（`LoadLibrary`/`dlopen`/APK 内 `.so`）；② 托管程序集任何 C/C++ 宿主都执行不了，照原样兼容不可达；③ .NET 侧自标「危险功能」、样例游戏零使用 | 无 |
+
+**新增依赖 = 0**（只用已链接的 `Qt6::Core`）。返回值/边界语义逐条对齐
+`test/data/functions/{MAP_*,ENUM*,XML_*,DT_*}.md`，并由**手写组 39** 断言（约 120 条，覆盖 61 条；
+`CALLSHARP` 不含在内 —— 见上表与 `test/data/commands/CALLSHARP.md` 的「备注」）。
+
+### 为此改动的引擎行为（两处，都会影响所有扩展）
+
+1. **式中函数的「裸写」形态现在真的执行**（`ExtensionRegistry::runStatement`）：
+   C# 里方法与函数同表，`DT_ROW_ADD "t", "lv", 1` 这类**语句位置**调用就是
+   「调用该函数并丢弃返回值」。此前本移植把这种形态当「式中函数裸写」静默跳过，
+   于是 `.NET` 族全部命令（`DT_CREATE`/`MAP_SET`/`XML_DOCUMENT`…）在游戏里等于空操作。
+   现在按实参 AST 求值后调用（并跳过逗号族切分产生的 `,`/`:` 标记操作数）。
+2. **注册过的扩展语句参与「是不是指令」的判定**（`AstBuilder::isExactInstructionName`）：
+   否则含 `=` 的行 —— 典型是 `DT_COLUMN_OPTIONS "t", "c", DEFAULT = 1` ——
+   会被先判成赋值语句，永远到不了扩展语句分派。
+
+回归：`ctest` **34/34**；`run_example` 自动组（含 38/39）通过；单跑组
+11/12/13/15/16/17/18/19/20/21/22/23/28/29/36/37 全部 `[FAIL] = 0`；
+组 35 断言全过；eraTW 冒烟（`1,0,410,99`、`1,0,400,97,0`）无执行错误、
+装载告警无「未识别」。
+
+> `CALLSHARP` **保持桩**：本移植把它标记为「**不可能实现**」（而不是「待补全」）。
+> 理由见 `test/data/commands/CALLSHARP.md` 的「备注」与 `fork_extension.cpp` 的说明 ——
+> ① qtcpp **跨平台**项目，装载本机共享库需平台相关代码（Windows `LoadLibrary` /
+> Linux `dlopen` / Android 还要处理 APK 内 `.so` 的路径与权限）；
+> ② C# 插件是**托管程序集**，任何 C/C++ 宿主都无法执行，照原样兼容不可达；
+> ③ .NET 侧自标「危险功能」，样例游戏零使用。覆盖清单里它标 `mode=skip` 并注明原因。
 
 ## 文档语义测试（组 27–29）
 

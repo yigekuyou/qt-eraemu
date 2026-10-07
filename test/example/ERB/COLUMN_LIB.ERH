@@ -1,0 +1,31 @@
+;=============================================================
+; COLUMN_LIB.ERH —— 手写夹具：EmueraEE「カラム機能試作ライブラリ」的存储声明
+;
+; 背景（见 test/data/commands/COLUMN*.md 与 test/README.md 的「COLUMN 库」一节）：
+;   COLUMN* **不是引擎命令**，而是 EmueraEE 发行版附带的 ERB 库 COLUMN_LIB
+;   （作者 Enter，基于 EE 的 GDRAWTEXT）。它随游戏放在 ERB/ 目录里，
+;   由 ERB 加载器像普通脚本一样扫描进来，用 `CALL COLUMNCREATE, …` 调用。
+;
+; 本文件是**测试夹具**，不是原版库：真正绘制列要 GDRAWTEXT（本移植尚为桩），
+; 所以这里只复现「文档写明的状态机与返回值」（创建/已存在、尺寸/位置/颜色/
+; 方向、惰性重绘的行缓冲），供手写组 38 用 CALL 逐条断言。
+;
+; 注意：这些名字同时在引擎侧登记为「名字容忍桩」（ee_extension.cpp 的 kStubs），
+;   那只作用于**裸写**形态（`COLUMNCREATE 0`，静默忽略）；`CALL` 形态只会
+;   找到本文件里的用户函数 —— 组 38 专门断言了这两种形态的差别。
+;=============================================================
+
+; 支持的列 ID 数（夹具上限；原版库无固定上限，此处够测试用）
+#DIM COLUMN_EXISTS, 32
+#DIM COLUMN_W, 32
+#DIM COLUMN_H, 32
+#DIM COLUMN_X, 32
+#DIM COLUMN_Y, 32
+#DIM COLUMN_DIRECTION, 32
+#DIM COLUMN_LINES, 32
+; 累计重绘次数：COLUMNPRINTW / COLUMNWAIT 每次 +1（惰性重绘的证据）
+#DIM COLUMN_REDRAWS
+#DIMS COLUMN_TEXTCOLOR, 32
+#DIMS COLUMN_BGCOLOR, 32
+; 每列的字符串行缓冲（2 维字符串数组：列 ID × 行号）
+#DIMS COLUMN_BUFFER, 32, 64

@@ -37,7 +37,7 @@ CALLEVENT	cmd	call	CALLEVENT EVENTTURNEND
 CALLF	cmd	call	CALLF GETTEN(4)	
 CALLFORM	cmd	call	CALLFORM ADDTEN_%TOSTR(7)%	
 CALLFORMF	cmd	call	CALLFORMF GETTEN(5)	
-CALLSHARP	cmd	call	CALLSHARP "NoSuchMethod"()	
+CALLSHARP	cmd	skip		EE 私有插件机制：目标为 C# 托管 DLL（Assembly.LoadFrom），本移植**不可能实现** —— ① qtcpp 跨平台项目（Linux/Windows/macOS/Android），装载本机共享库需平台相关代码（LoadLibrary/dlopen/APK 内 .so），与一份源码多平台冲突；② 托管程序集任何 C/C++ 宿主都无法执行，照原样兼容不可达；③ .NET 侧自标「危险功能」，样例游戏零使用。见 test/data/commands/CALLSHARP.md 备注
 CALLTRAIN	cmd	skip		流程接管：把 SELECTCOM:1..N 的命令队列交给系统 TRAIN 状态机执行（需 TRAIN.CSV、@EVENTCOM/@CALLTRAINEND 配套），属 GUIDE 禁则的变化全局流程命令（组 17 已做登记级调用）
 CASE	cmd	skip		SELECTCASE 分支关键字：须嵌在 SELECTCASE～CASEELSE～ENDSELECT 结构内，单独执行会跳到下一锚点；由组 3/28 覆盖
 CASEELSE	cmd	skip		SELECTCASE 的兜底分支关键字：须嵌在 SELECTCASE～ENDSELECT 结构内；由组 3/28 覆盖
@@ -47,17 +47,17 @@ CLEARBIT	cmd	call	CLEARBIT A, 0, 1
 CLEARLINE	cmd	skip		破坏性：删除已显示行（会破坏本组输出）——单独在隔离组 16 跑
 CLEARMEMORY	cmd	skip		文档备注明示它实为式中函数（用法是 `{CLEARMEMORY()}`），不能作为独立语句写，而本清单按 EE 命令表把它注册为命令（组 12c 也只按命令名留痕桩）—— 命令形态与文档形态不一致，语义未确证
 CLEARTEXTBOX	cmd	skip		破坏性：清空输入框（破坏待输入状态）——单独在隔离组 16 跑
-COLUMNBGCOLOR	cmd	call	COLUMNBGCOLOR 0, "Black"	
-COLUMNCLEAR	cmd	call	COLUMNCLEAR 0	
-COLUMNCOLOR	cmd	call	COLUMNCOLOR 0, "Red"	
-COLUMNCREATE	cmd	call	COLUMNCREATE 0	
-COLUMNDIRECTION	cmd	call	COLUMNDIRECTION 0, 0	
-COLUMNMOVE	cmd	call	COLUMNMOVE 0, 0, 0	
-COLUMNPRINT	cmd	call	COLUMNPRINT 0, "a"	
-COLUMNPRINTL	cmd	call	COLUMNPRINTL 0, "a"	
-COLUMNPRINTW	cmd	call	COLUMNPRINTW 0, "a"	
-COLUMNRESIZE	cmd	call	COLUMNRESIZE 0, 10, 10	
-COLUMNWAIT	cmd	call	COLUMNWAIT	
+COLUMNBGCOLOR	cmd	skip		ERB 库函数（EmueraEE 附带 COLUMN_LIB，非引擎命令）：CALL 形态由手写组 38 覆盖；组35 的裸写只命中引擎名字容忍桩，无执行语义
+COLUMNCLEAR	cmd	skip		ERB 库函数（EmueraEE 附带 COLUMN_LIB，非引擎命令）：CALL 形态由手写组 38 覆盖；组35 的裸写只命中引擎名字容忍桩，无执行语义
+COLUMNCOLOR	cmd	skip		ERB 库函数（EmueraEE 附带 COLUMN_LIB，非引擎命令）：CALL 形态由手写组 38 覆盖；组35 的裸写只命中引擎名字容忍桩，无执行语义
+COLUMNCREATE	cmd	skip		ERB 库函数（EmueraEE 附带 COLUMN_LIB，非引擎命令）：CALL 形态由手写组 38 覆盖；组35 的裸写只命中引擎名字容忍桩，无执行语义
+COLUMNDIRECTION	cmd	skip		ERB 库函数（EmueraEE 附带 COLUMN_LIB，非引擎命令）：CALL 形态由手写组 38 覆盖；组35 的裸写只命中引擎名字容忍桩，无执行语义
+COLUMNMOVE	cmd	skip		ERB 库函数（EmueraEE 附带 COLUMN_LIB，非引擎命令）：CALL 形态由手写组 38 覆盖；组35 的裸写只命中引擎名字容忍桩，无执行语义
+COLUMNPRINT	cmd	skip		ERB 库函数（EmueraEE 附带 COLUMN_LIB，非引擎命令）：CALL 形态由手写组 38 覆盖；组35 的裸写只命中引擎名字容忍桩，无执行语义
+COLUMNPRINTL	cmd	skip		ERB 库函数（EmueraEE 附带 COLUMN_LIB，非引擎命令）：CALL 形态由手写组 38 覆盖；组35 的裸写只命中引擎名字容忍桩，无执行语义
+COLUMNPRINTW	cmd	skip		ERB 库函数（EmueraEE 附带 COLUMN_LIB，非引擎命令）：CALL 形态由手写组 38 覆盖；组35 的裸写只命中引擎名字容忍桩，无执行语义
+COLUMNRESIZE	cmd	skip		ERB 库函数（EmueraEE 附带 COLUMN_LIB，非引擎命令）：CALL 形态由手写组 38 覆盖；组35 的裸写只命中引擎名字容忍桩，无执行语义
+COLUMNWAIT	cmd	skip		ERB 库函数（EmueraEE 附带 COLUMN_LIB，非引擎命令）：CALL 形态由手写组 38 覆盖；组35 的裸写只命中引擎名字容忍桩，无执行语义
 CONTINUE	cmd	skip		循环控制关键字：只能写在 REPEAT/FOR/WHILE/DO 循环体内，无对应循环时抛 ExeEE；由组 3/28 覆盖
 COPYCHARA	cmd	call	ADDCHARA 0\nADDCHARA 0\nCOPYCHARA 0, 1	
 CUPCHECK	cmd	call	ADDCHARA 0\nCUPCHECK 0	

@@ -101,6 +101,11 @@ GameProc/execution_engine.h
 GameProc/ee_extension.h
 GameProc/extension_registry.h
 GameProc/ee_extension.cpp
+GameProc/fork_extension.h
+GameProc/fork_support.h
+GameProc/fork_extension.cpp
+GameProc/fork_xml.cpp
+GameProc/fork_datatable.cpp
 GameProc/script_runner.cpp
 GameProc/script_runner.h
 GameProc/process_state.cpp

@@ -295,7 +295,8 @@ int main(int argc, char* argv[]) {
         table.loadScript("v.ERH",
                          buildLines(table, {"#DIM VSCNT, 6",
                                             "#DIM VSNO, 6, 100",
-                                            "#DIMS VSSARR, 4"}),
+                                            "#DIMS VSSARR, 4",
+                                            "#DIMS VSS2D, 6, 100"}),
                          true);
         table.finalizeParse();
         const auto execV = [&](const QString& src) {
@@ -322,6 +323,22 @@ int main(int argc, char* argv[]) {
         execV(QStringLiteral("VARSET VSSARR, \"x\""));
         check(storage.getGlobalStr1D("VSSARR", 2) == QStringLiteral("x"),
               "VARSET 字符串数组赋 \"x\"");
+
+        // --- 2D 字符串数组：元素赋值必须写进**2 维**表（读侧按 getGlobalStr2D 取）---
+        // 此前 writeStringValue 无论几个下标都只取第一个写 1 维表，于是
+        // `#DIMS X, a, b` 的 `X:i:j = …` 读回恒为空串（COLUMN_LIB 这类
+        // 「每列一条字符串缓冲」的 ERB 库整个失效）。
+        execV(QStringLiteral("VSS2D:3:7 = \"hi\""));
+        check(storage.getGlobalStr2D("VSS2D", 3, 7) == QStringLiteral("hi"),
+              "2D 字符串数组元素赋值写进 2 维表（VSS2D:3:7 = \"hi\"）");
+        check(storage.getGlobalStr1D("VSS2D", 3).isEmpty(),
+              "2D 字符串数组元素赋值不落进 1 维表（不与单下标读混槽）");
+        const auto evalStr2D = [&](const QString& e) {
+            const auto ast = table.expressionAst(e);
+            return evaluator.evaluate(*ast, &storage, nullptr).toString();
+        };
+        check(evalStr2D(QStringLiteral("VSS2D:3:7")) == QStringLiteral("hi"),
+              "表达式求值 VSS2D:3:7 读回同一槽（写/读两路径一致）");
 
         // --- 显式范围 + start>end 自动交换 ---
         for (int i = 1; i <= 4; ++i) storage.setGlobalInt1D("VSCNT", i, 7);

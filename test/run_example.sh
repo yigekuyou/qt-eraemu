@@ -25,6 +25,9 @@
 #   ./test/run_example.sh 31       # GETCONFIG/GETCONFIGS（emuera.config 取值白名单/类型/默认）
 #   ./test/run_example.sh 32       # 通用图像处理（G/SPRITE/CBG + 真实图像文件 webp：GDRAWSPRITE 落点/覆盖、libwebp）
 #   ./test/run_example.sh 33       # END 是变量（#DIM END）不是指令（eraTW 角色移動 死循环回归）
+#   ./test/run_example.sh 38       # EE 库 COLUMN_LIB（手写 CALL 用例；COLUMN* 是
+#                                  #   EmueraEE 附带的 ERB 库而非引擎命令，无注入输入）
+#   ./test/run_example.sh 39       # EM/Emuera.NET fork 族（MAP_/ENUM*/XML_/DT_ 手写断言）
 #
 # 依赖：build/src/eraengine/test_cli
 #       （cmake --build build --target test_cli）

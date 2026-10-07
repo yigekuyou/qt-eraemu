@@ -571,10 +571,14 @@ void registerEeExtensions(ExtensionRegistry& ext)
     }
 
     static const QStringList kStubs = {
-        // COLUMN 族（13 条）：EE 发行版附带的 **ERB 库 COLUMN_LIB** 的函数
+        // COLUMN 族（11 条）：EE 发行版附带的 **ERB 库 COLUMN_LIB** 的函数
         // （作者 Enter，基于 GDRAWTEXT），不是引擎内建命令 —— 真实游戏用
-        // `CALL COLUMNCREATE, …` 调用自己附带的 ERB 实现；引擎侧只保证
-        // 「名字不报未识别、裸写不炸」。语义见 test/data/commands/COLUMN*.md。
+        // `CALL COLUMNCREATE, …` 调用自己附带的 ERB 实现（loader 像普通脚本一样
+        // 扫描 ERB/ 目录，引擎不必登记）；`CALL` 找不到函数就报 label not found，
+        // 与本登记无关。此处登记只为**裸写**形态（`COLUMNCREATE 0`）不报未知命令。
+        // 语义见 test/data/commands/COLUMN*.md；CALL 形态的手写回归见**组 38**
+        // （test/example/ERB/38_COLUMN_LIB.ERB + 夹具 COLUMN_LIB.ERB/ERH），
+        // 覆盖报告把它单列「ERB 库（引擎无需实现）」，不计入引擎桩完成度。
         QStringLiteral("COLUMNBGCOLOR"),
         QStringLiteral("COLUMNCLEAR"),
         QStringLiteral("COLUMNCOLOR"),
@@ -586,7 +590,6 @@ void registerEeExtensions(ExtensionRegistry& ext)
         QStringLiteral("COLUMNPRINTW"),
         QStringLiteral("COLUMNRESIZE"),
         QStringLiteral("COLUMNWAIT"),
-        QStringLiteral("DT_COLUMN_OPTIONS"),   // EM 的 DataTable 列默认值（.NET DataTable 专属）
         // GUI 专属（本移植暂无对应后端：背景图 / 按钮世代 / 工具提示自绘 /
         // HTML 浮岛）。真实现需要 QML 侧能力，登记为桩以保持解析期容忍。
         QStringLiteral("BREAKBUTTON"),         // 作废当前画面全部按钮世代
@@ -601,10 +604,9 @@ void registerEeExtensions(ExtensionRegistry& ext)
         QStringLiteral("TOOLTIP_IMG"),
         QStringLiteral("HTML_PRINT_ISLAND"),   // HTML 浮岛（可滚动 HTML 层）
         QStringLiteral("HTML_PRINT_ISLAND_CLEAR"),
-        // C# 插件互操作：CALLSHARP 调 **C# 插件 DLL** 里注册的方法
-        // （emuera.em/EmueraPluginExample 的 IPluginMethod）。C++ 移植若要支持
-        // 需另立原生插件 ABI，属独立特性 -> 桩。
-        QStringLiteral("CALLSHARP"),
+        // CALLSHARP / DT_COLUMN_OPTIONS：**已在 fork_extension.cpp 真实现**
+        // （原生插件 ABI + `DEFAULT =` 解析），不再在此登记桩 —— 避免
+        // first-wins 抢註（注册类后者会被拒绝）。
         // 作用域变量声明（EM+EE：VARI/VARS 声明函数私有变量）。C# 里由配置
         // 「VAR系命令を利用可能にする」门控，**默认关闭**（默认写 VARI 在解析期
         // 就报错）。本移植暂无该配置项，按「不可用」处理成静默跳过桩。

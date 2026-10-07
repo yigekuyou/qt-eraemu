@@ -16,9 +16,12 @@
   PRINT 族后缀变体  ：0（由基名规则覆盖，不逐个列）
   未覆盖            ：0（全部登记项均有用例或已登记跳过原因）
 ## EmueraEE 扩展命令（59 条）
-  已有用例执行      ：53
-  跳过（未执行）    ：1
-    其中引擎桩（仅登记名字·留痕跳过，真实现待补全）：14
+  已有用例执行      ：52
+  跳过（未执行）    ：2
+    其中引擎桩（仅登记名字·留痕跳过，真实现待补全）：3
+    其中 ERB 库（EE 附带 ERB 实现·引擎无需实现）：11 -> COLUMNBGCOLOR COLUMNCLEAR COLUMNCOLOR COLUMNCREATE COLUMNDIRECTION COLUMNMOVE COLUMNPRINT COLUMNPRINTL COLUMNPRINTW COLUMNRESIZE COLUMNWAIT
+      （COLUMN 族 = COLUMN_LIB：CALL 形态由手写组 38 覆盖）
+      · CALLSHARP —— EE 私有插件机制：目标为 C# 托管 DLL（Assembly.LoadFrom），本移植**不可能实现**
       · FORCE_BEGIN —— 破坏流程：绕过 __CAN_BEGIN__ 检查强制切换系统流程且不返回
   PRINT 族后缀变体  ：5（由基名规则覆盖，不逐个列）
   未覆盖            ：0（全部登记项均有用例或已登记跳过原因）

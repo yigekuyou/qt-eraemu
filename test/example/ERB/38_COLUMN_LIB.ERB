@@ -1,0 +1,94 @@
+;=============================================================
+; [38] EE 库 COLUMN_LIB（手写 CALL 用例）
+;
+; 为什么单独一组（而不是并进自动生成的组 35）：
+;   COLUMN* **不是引擎命令**，是 EmueraEE 发行版自带的 ERB 库 COLUMN_LIB
+;   （作者 Enter，基于 EE 的 GDRAWTEXT）。文档清单里它是「命令」，但真实用法
+;   一律是 `CALL COLUMNCREATE, …`；把它当命令裸写只是命中引擎的「名字容忍桩」，
+;   什么都没执行（组 35 生成器不会写 CALL，所以那里测不出东西）。
+;   故这里**手写**：随 test/example 提供一份 COLUMN_LIB 夹具（COLUMN_LIB.ERB/ERH），
+;   用 CALL 逐条断言文档语义，并顺带钉住「裸写 ≠ 调用」这一事实。
+;
+; 夹具不绘制（GDRAWTEXT 本移植仍是桩），只复现文档写明的状态机与返回值。
+;=============================================================
+@TEST_COLUMN_LIB
+#DIM NONG
+#DIM R
+
+DRAWLINE
+PRINTL == 组38：EE 库 COLUMN_LIB（手写 CALL 用例）==
+
+COLUMN_REDRAWS = 0
+
+;---- 1) 创建语义：新建返回非 0；重复调用返回 0（readme 原文）----
+CALL COLUMNCREATE, 5
+CALL ASSERT_TRUE, RESULT != 0, @"COLUMNCREATE 新建列返回非 0"
+NONG += RESULT
+CALL COLUMNCREATE, 5
+CALL ASSERT_EQ, RESULT, 0, @"COLUMNCREATE 重复调用返回 0（readme：已生成则返回 0）"
+NONG += RESULT
+
+;---- 2) 裸写（无 CALL）**不是**对库的调用：引擎名字容忍桩静默吞掉 ----
+COLUMNCREATE 9
+CALL ASSERT_EQ, COLUMN_EXISTS:9, 0, @"裸写 COLUMNCREATE 不进入 ERB 库（引擎名容忍桩）"
+NONG += RESULT
+COLUMNRESIZE 5, 111, 222
+CALL ASSERT_EQ, COLUMN_W:5, 0, @"裸写 COLUMNRESIZE 不改库状态（同上）"
+NONG += RESULT
+
+;---- 3) 未创建的列：改属性返回 0 且不落状态 ----
+CALL COLUMNRESIZE, 7, 100, 100
+CALL ASSERT_EQ, RESULT, 0, @"未创建列的 COLUMNRESIZE 返回 0"
+NONG += RESULT
+CALL ASSERT_EQ, COLUMN_W:7, 0, @"未创建列不被写入"
+NONG += RESULT
+
+;---- 4) 尺寸 / 位置 / 颜色 / 方向（全角 1 字 = 1000 的单位原样保存）----
+CALL COLUMNRESIZE, 5, 2000, 3000
+CALL ASSERT_EQ, COLUMN_W:5, 2000, @"COLUMNRESIZE 宽（2000 = 20 字）"
+NONG += RESULT
+CALL ASSERT_EQ, COLUMN_H:5, 3000, @"COLUMNRESIZE 高（3000 = 30 字）"
+NONG += RESULT
+CALL COLUMNMOVE, 5, 500, 2000
+CALL ASSERT_EQ, COLUMN_X:5, 500, @"COLUMNMOVE X"
+NONG += RESULT
+CALL ASSERT_EQ, COLUMN_Y:5, 2000, @"COLUMNMOVE Y"
+NONG += RESULT
+CALL COLUMNCOLOR, 5, "Yellow"
+CALL ASSERT_SEQ, COLUMN_TEXTCOLOR:5, "Yellow", @"COLUMNCOLOR 第 2 参是字符串色名"
+NONG += RESULT
+CALL COLUMNBGCOLOR, 5, "Black"
+CALL ASSERT_SEQ, COLUMN_BGCOLOR:5, "Black", @"COLUMNBGCOLOR 第 2 参是字符串色名"
+NONG += RESULT
+CALL COLUMNDIRECTION, 5, 1
+CALL ASSERT_EQ, COLUMN_DIRECTION:5, 1, @"COLUMNDIRECTION 1 = 自上而下（文档式）"
+NONG += RESULT
+
+;---- 5) 惰性重绘：PRINT 不换行、PRINTL 换行、PRINTW/WAIT 才重绘 ----
+CALL COLUMNPRINT, 5, "abc"
+CALL ASSERT_SEQ, COLUMN_BUFFER:5:0, "abc", @"COLUMNPRINT 追加到当前行（不换行）"
+NONG += RESULT
+CALL ASSERT_EQ, COLUMN_LINES:5, 0, @"COLUMNPRINT 不换行：仍是第 0 行"
+NONG += RESULT
+CALL COLUMNPRINTL, 5, "def"
+CALL ASSERT_SEQ, COLUMN_BUFFER:5:0, "abcdef", @"COLUMNPRINTL 拼到同一行再换行"
+NONG += RESULT
+CALL ASSERT_EQ, COLUMN_LINES:5, 1, @"COLUMNPRINTL 后行数 +1"
+NONG += RESULT
+CALL COLUMNPRINTW, 5, "ghi"
+CALL ASSERT_SEQ, COLUMN_BUFFER:5:1, "ghi", @"COLUMNPRINTW 写第 1 行"
+NONG += RESULT
+CALL ASSERT_EQ, COLUMN_REDRAWS, 1, @"COLUMNPRINTW 触发一次重绘（此前 PRINT/PRINTL 没有）"
+NONG += RESULT
+CALL COLUMNWAIT
+CALL ASSERT_EQ, COLUMN_REDRAWS, 2, @"COLUMNWAIT 触发重绘"
+NONG += RESULT
+
+;---- 6) 清空 ----
+CALL COLUMNCLEAR, 5
+CALL ASSERT_EQ, COLUMN_LINES:5, 0, @"COLUMNCLEAR 清空列缓冲"
+NONG += RESULT
+CALL ASSERT_SEQ, COLUMN_BUFFER:5:0, "", @"COLUMNCLEAR 后第 0 行为空"
+NONG += RESULT
+
+RETURN NONG

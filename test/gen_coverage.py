@@ -59,13 +59,22 @@ EXCLUDE_REASON_EXTRA: dict[str, str] = {}
 #   GETMEMORYUSAGE / CLEARMEMORY / GETTEXTBOX / SETTEXTBOX（式中函数）
 #   FLOWINPUT / FLOWINPUTS（系统流程输入选项）
 #   UPDATECHECK（RESULT = 3/4 的确定性路径）
-# 余下 17 项皆为「无后端 / 无据可考」：见 ee_extension.cpp 的 kStubs 注释。
+# 余下的项 = 「无后端 / 无据可考」，见 ee_extension.cpp 的 kStubs 注释；
+# ERB 库形态的项见下方 EE_ERB_LIBRARY（引擎无需实现，不计入完成度刻度）。
 EE_STUB = {
+    "GETTEXTSIZE", "LCSVISASSI",
+    "OCLEARLINE", "TINPUTAWAIT",
+}
+
+# EE 扩展里**是 ERB 库、不是引擎命令**的项：引擎侧没有任何东西要「实现」，
+# 故不计入「引擎桩/待补全」。COLUMN 族 = EmueraEE 发行版附带的 COLUMN_LIB
+# （作者 Enter，基于 GDRAWTEXT）；真实用法是 `CALL COLUMNxxx, …`，由**手写组 38**
+# 覆盖（随 test/example 提供 COLUMN_LIB 夹具）。它们在同一份清单里以「命令」出现，
+# 是文档清单的口径（EE_DOC_ONLY），不是引擎内建 —— 见 ee_extension.cpp 的 kStubs 注释。
+EE_ERB_LIBRARY = {
     "COLUMNBGCOLOR", "COLUMNCLEAR", "COLUMNCOLOR", "COLUMNCREATE",
     "COLUMNDIRECTION", "COLUMNMOVE", "COLUMNPRINT", "COLUMNPRINTL",
     "COLUMNPRINTW", "COLUMNRESIZE", "COLUMNWAIT",
-    "GETTEXTSIZE", "LCSVISASSI",
-    "OCLEARLINE", "TINPUTAWAIT",
 }
 
 # PRINT 族以「基名 + 后缀」组合，逐个列无意义
@@ -159,6 +168,11 @@ def main() -> int:
         lines.append(f"  跳过（未执行）    ：{len(skipped)}")
         if stubs:
             lines.append(f"    其中引擎桩（仅登记名字·留痕跳过，真实现待补全）：{len(stubs)}")
+        erb_lib = sorted(set(hand) & EE_ERB_LIBRARY)
+        if erb_lib:
+            lines.append(f"    其中 ERB 库（EE 附带 ERB 实现·引擎无需实现）：{len(erb_lib)}"
+                         f" -> {' '.join(erb_lib)}")
+            lines.append("      （COLUMN 族 = COLUMN_LIB：CALL 形态由手写组 38 覆盖）")
         for n in sorted(skipped):
             lines.append(f"      · {n} —— {reasons[n]}")
         lines.append(f"  PRINT 族后缀变体  ：{len(variant)}（由基名规则覆盖，不逐个列）")

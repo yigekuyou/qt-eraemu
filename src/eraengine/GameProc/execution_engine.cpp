@@ -98,9 +98,17 @@ ExecutionEngine::ExecutionEngine(VariableStorage* storage, GameBaseData* gameBas
             }
             return getEvaluator().evaluate(e, m_storage, m_gameBaseData);
         },
+        // 语句形实参（式中函数裸写）：AST 直接求值。
+        [this](const ExpressionNode* node) -> QVariant {
+            if (node == nullptr) return QVariant();
+            return getEvaluator().evaluate(*node, m_storage, m_gameBaseData);
+        },
         // 宿主侧服务（文本框 / FLOWINPUT / UPDATECHECK）：由 EraEngine 装配后经
         // setHostServices 注入（这里留空 —— ExecutionEngine 拿不到控制台/配置）。
-        nullptr, nullptr, nullptr, nullptr, nullptr, nullptr
+        nullptr, nullptr, nullptr, nullptr, nullptr, nullptr,
+        // EM/Emuera.NET fork 族服务（ENUM* 名字表 / ENUMFILES 基准目录）：
+        // 同样由 EraEngine 装配后经 setForkServices 注入。
+        nullptr, nullptr, nullptr, nullptr
     });
 }
 
@@ -2073,13 +2081,14 @@ bool ExecutionEngine::handleStringAssignment(const QString& lhs, const QString& 
                       << "=> value =" << value
                       << "(ast?" << (ast != nullptr) << ")";
 
-    return writeStringValue(lhs, value);
+    return writeStringValue(lhs, value, ownerFunction);
 }
 
 // 把**已求值**的字符串写入左值（从 handleStringAssignment 抽出，供 SPLIT 等
 // 「值不是表达式文本」的调用方复用 —— SPLIT 的分割结果若再当表达式求值，
 // 裸文本 "x" 会被解析成变量 x -> 0）。
-bool ExecutionEngine::writeStringValue(const QString& lhs, const QString& value) {
+bool ExecutionEngine::writeStringValue(const QString& lhs, const QString& value,
+                                      const QString& ownerFunction) {
     const LhsRef ref = parseLhsRef(lhs);
     const QString varName = ref.name;
     const int index = ref.hasIndex() ? ref.first() : -1;
@@ -2118,6 +2127,16 @@ bool ExecutionEngine::writeStringValue(const QString& lhs, const QString& value)
         QList<int> elems;
         m_storage->reduceCharaArgs(varName, ref.indices, charaId, elems);
         m_storage->setCharaStr(varName, charaId, elems.value(0), value);
+        return true;
+    }
+    // 用户字符串数组：**按左值下标个数分派** —— 此前无论几个下标都只取
+    // ref.first() 写进 1 维表，于是 `#DIMS X, a, b` 的 `X:i:j = …` 写进
+    // 1 维表、读侧却按 2 维表（getGlobalStr2D）取值 → 读回恒为空串
+    // （字符串 2 维数组元素赋值/读回全部失效）。维数按声明判定，与读侧一致。
+    const VariableDecl* decl = m_parseTable
+        ? m_parseTable->variableTable().find(varName, ownerFunction) : nullptr;
+    if (decl && decl->dimension >= 2 && ref.indices.size() >= 2) {
+        m_storage->setGlobalStr2D(varName, ref.indices.at(0), ref.indices.at(1), value);
         return true;
     }
     m_storage->setGlobalStr1D(varName, index >= 0 ? index : 0, value);

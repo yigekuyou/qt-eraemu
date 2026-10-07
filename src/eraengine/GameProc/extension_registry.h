@@ -32,7 +32,9 @@
 #include "eraengine_log.h"         // eraTrace（桩留痕）
 #include "variable_storage.h"      // Services::storage（扩展实现写 RESULT/RESULTS）
 
-#include "ee_extension.h"        // EE 扩展（只在这里装入；ee_extension.h 前置声明本类）// ---------------------------------------------------------------------------
+#include "ee_extension.h"        // EE 扩展（只在这里装入；ee_extension.h 前置声明本类）
+#include "fork_extension.h"      // EM/Emuera.NET fork 族（同上：只在这里装入）
+// ---------------------------------------------------------------------------
 // ExtensionRegistry —— 扩展注册类（扩展函数唯一入口）
 //
 // 对提交 f25cb92 的修正：复杂度全部由注册类承担，扩展侧只剩简单函数调用。
@@ -102,6 +104,9 @@ public:
         regForm(QStringLiteral("STRLENFORMU"));
         // EE 扩展默认全启用（EE 头只在注册类里被实现 —— 见顶部 #include）
         registerEeExtensions(*this);
+        // EM/Emuera.NET fork 族（MAP_/ENUM*/XML_/DT_/CALLSHARP）：同样只在此登记，
+        // 实现住 GameProc/fork_extension.*（+ fork_xml.* / fork_datatable.*）。
+        registerForkExtensions(*this);
     }
 
     // ---- 扩展实现所需的服务（复杂度由注册类承担）--------------------------
@@ -118,6 +123,10 @@ public:
         // 表达式求值（扩展命令实参：PLAYBGM 的字符串式 / SET*VOLUME 的整数式）。
         // 惰性：解析表装配后才可用；未注入时扩展退回按字面量处理。
         std::function<QVariant(const QString&)>  evaluate;
+
+        // 语句形实参求值（式中函数的**裸写**形态，如 `DT_ROW_ADD "t", "lv", 1`）：
+        // 解析器已把实参归约成 AST，这里直接求值（避免再按文本重解析）。
+        std::function<QVariant(const ExpressionNode*)> evaluateNode;
 
         // ---- EE 文本框族（GETTEXTBOX / SETTEXTBOX）----
         // C# 直接读写主窗口输入框（MainWindow.ChangeTextBox / TextBox.Text）。
@@ -137,6 +146,14 @@ public:
         // URL 空/不可达 -> 3，网络不可用 -> 5，版本相同 -> 0，不同 -> 询问 1/2。
         std::function<QString(const QString&)>   gameBaseValue;
         std::function<bool()>                    forbidUpdateCheck;
+
+        // ---- EM/Emuera.NET fork 族（MAP_/ENUM*/XML_/DT_/CALLSHARP）----
+        // 这些 .NET 扩展要的是「引擎内省 / 文件系统 / 游戏目录」三类信息，
+        // 由引擎在装配后注入（与 functionExists 同模式；惰性 provider）。
+        std::function<QStringList()> enumFunctionNames;  // 非事件函数名（原样大小写）
+        std::function<QStringList()> enumVariableNames;  // 系统变量 + 广域用户变量名
+        std::function<QStringList()> enumMacroNames;     // #DEFINE 宏名
+        std::function<QString()>     exeDir;             // 相对路径基准（= 游戏目录）
     };
     void setServices(Services s) { m_services = std::move(s); }
     // 引擎在运行期补挂「式中函数」服务（构造期 storage 已知，但这些 provider
@@ -148,6 +165,19 @@ public:
         m_services.doingFunction = std::move(doingFunction);
         m_services.displayLine = std::move(displayLine);
     }
+
+    // ---- EM/Emuera.NET fork 族（MAP_/ENUM*/XML_/DT_/CALLSHARP）所需的服务 ----
+    // 引擎在装配后注入；未注入时相应函数按「空结果」降级（名称集为空、目录为空）。
+    void setForkServices(std::function<QStringList()> enumFunctionNames,
+                         std::function<QStringList()> enumVariableNames,
+                         std::function<QStringList()> enumMacroNames,
+                         std::function<QString()> exeDir) {
+        m_services.enumFunctionNames = std::move(enumFunctionNames);
+        m_services.enumVariableNames = std::move(enumVariableNames);
+        m_services.enumMacroNames = std::move(enumMacroNames);
+        m_services.exeDir = std::move(exeDir);
+    }
+
     // 宿主侧（EraEngine）在装配完成后补挂「控制台 / 流程 / GameBase」服务：
     // 文本框（GETTEXTBOX/SETTEXTBOX）、FLOWINPUT 选项、UPDATECHECK 的环境取值
     // —— 这些只有 EraEngine 才拿得到（ConsoleBackend / ProcessState / 配置）。
@@ -312,9 +342,33 @@ public:
             }
             return true;
         }
-        // 式中函数裸写（无参数、非表达式用法）：静默跳过（式中函数应带参数）。
-        if (m_exprFunctions.contains(upperName)) {
-            return true;
+        // 式中函数裸写（**方法与函数同表**）：C# 里 `DT_ROW_ADD "t", …` 这种
+        // 语句形态就是调用该函数并丢弃返回值；这里按语句执行（实参 AST 已归约）。
+        if (const auto it = m_exprFunctions.constFind(upperName); it != m_exprFunctions.constEnd()) {
+            QList<QVariant> args;
+            QList<const ExpressionNode*> nodes;
+            args.reserve(line.arguments.size());
+            nodes.reserve(line.arguments.size());
+            for (const Operand& op : line.arguments) {
+                // 逗号族切分把「,」本身也当一个操作数（见 ast_builder 的 Raw 切分）；
+                // 语句形态要的是**实参**，故跳过未加引号的逗号/冒号标记
+                // （引号包起来的 "," 是合法字符串实参，isString=true，不能误删）。
+                if (!op.isString && (op.raw == QLatin1String(",") || op.raw == QLatin1String(":")))
+                    continue;
+                nodes.append(op.ast.get());
+                if (op.ast && m_services.evaluateNode) {
+                    args.append(m_services.evaluateNode(op.ast.get()));
+                } else if (op.isString) {
+                    // 整串引号包裹的实参：解析器已剥掉引号，raw 就是字符串值
+                    args.append(QVariant(op.raw));
+                } else if (m_services.evaluate) {
+                    args.append(m_services.evaluate(op.raw));
+                } else {
+                    args.append(QVariant(op.raw));
+                }
+            }
+            QVariant ignored;
+            return it.value()(args, nodes, ignored);
         }
         return false;
     }

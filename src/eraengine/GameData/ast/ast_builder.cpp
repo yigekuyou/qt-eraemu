@@ -240,6 +240,10 @@ AstBuilder::PrintArgMode AstBuilder::classifyPrintArg(const QString& upperName) 
 // 所以那些位置必须先确认「这一行不是赋值」再用。
 bool AstBuilder::isExactInstructionName(const QString& upperName) {
     if (upperName.isEmpty()) return false;
+    // 注册类登记的扩展语句（registerExtensionStatement）：它们也是「指令」。
+    // 必须在这里认，否则含 `=` 的行（如 `DT_COLUMN_OPTIONS "t", "c", DEFAULT = 1`）
+    // 会先被 splitAssignment 判成赋值语句，永远到不了扩展语句分派。
+    if (s_extensionStatements.contains(upperName)) return true;
     if (findInstructionSpec(upperName.toStdString())) return true;      // 指令规范表
     if (printInfo(upperName).mode != PrintArgMode::NotPrint) return true; // PRINT 族
     if (isCallFamilyInstruction(upperName)) return true;                // CALL/JUMP/BEGIN

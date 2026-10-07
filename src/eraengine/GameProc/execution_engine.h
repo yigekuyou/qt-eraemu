@@ -223,7 +223,10 @@ private:
                                 const QSharedPointer<ExpressionNode>& ast = {},
                                 const QString& ownerFunction = QString());
     // 已求值字符串写入左值（SPLIT 等复用；不做表达式求值）
-    bool writeStringValue(const QString& lhs, const QString& value);
+    // ownerFunction：左值所属函数（解析**本函数私有**的 #DIMS 声明维数要用；
+    //   广域/全局声明可省）。
+    bool writeStringValue(const QString& lhs, const QString& value,
+                          const QString& ownerFunction = QString());
     bool handleCompoundAssignment(const QString& lhs, const QString& op, const QString& rhs, const QSharedPointer<ExpressionNode>& ast = {});
 
     // VARSET 族（对齐 C# VARSET_Instruction / CVARSET_Instruction）

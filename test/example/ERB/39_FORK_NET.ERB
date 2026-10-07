@@ -1,0 +1,444 @@
+;=============================================================
+; [39] EM / Emuera.NET fork 族（MAP_/ENUM*/XML_/DT_/CALLSHARP）
+;
+; 这些命令原版是 .NET 运行期能力的封装（Dictionary / XmlDocument+XPath /
+; DataTable / 反射）。本移植**仿照语义自研**（不用数据库、不用第三方 XML 库）：
+;   · MAP_*  : QHash + 自造 <map><p><k>/<v></p></map>
+;   · ENUM*  : 引擎名字表 + QDirIterator（XPath 之外全在 Qt6::Core 上）
+;   · XML_*  : 小 DOM（QXmlStream*）+ **自研 XPath 子集**
+;   · DT_*   : 内存类型化表 + 过滤/排序子集 + 自洽 XML 往返
+;
+; 组 35 里这些条目是「按文档签名合成的调用」，本组才是**逐条语义断言**。
+; 断言值全部来自 test/data/functions/{MAP_*,ENUM*,XML_*,DT_*}.md 的「语义」节。
+;=============================================================
+
+;---- ENUM* 的探针函数/宏（供 ENUMFUNC*/ENUMMACRO* 断言用）----
+@ENUM_PROBE_ALPHA
+RETURN 1
+
+@ENUM_PROBE_BETA
+RETURN 2
+
+@TEST_FORK_NET
+#DIM NONG
+#DIM R
+#DIM IDS, 20
+#DIM NTMP
+#DIM CNT
+#DIM TMPI
+#DIMS SARR, 20
+#DIMS SCHEMA
+#DIMS XDATA
+
+DRAWLINE
+PRINTL == 组39：EM/Emuera.NET fork 族（MAP/ENUM/XML/DT）==
+
+;=============================================================
+; 1) MAP_*：字符串关联数组
+;=============================================================
+PRINTL ---- 1) MAP_* ----
+
+CALL ASSERT_EQ, MAP_CREATE("g39m"), 1, @"MAP_CREATE 新建返回 1"
+NONG += RESULT
+CALL ASSERT_EQ, MAP_CREATE("g39m"), 0, @"MAP_CREATE 同名已存在返回 0"
+NONG += RESULT
+CALL ASSERT_EQ, MAP_EXIST("g39m"), 1, @"MAP_EXIST 存在返回 1"
+NONG += RESULT
+CALL ASSERT_EQ, MAP_EXIST("g39_none"), 0, @"MAP_EXIST 不存在返回 0"
+NONG += RESULT
+CALL ASSERT_EQ, MAP_SET("g39_none", "k", "v"), -1, @"MAP_SET 目标 map 不存在返回 -1（不自动建）"
+NONG += RESULT
+
+R = MAP_SET("g39m", "a", "1")
+R = MAP_SET("g39m", "b", "2")
+CALL ASSERT_EQ, MAP_SIZE("g39m"), 2, @"MAP_SET 两次后 MAP_SIZE = 2"
+NONG += RESULT
+CALL ASSERT_SEQ, MAP_GET("g39m", "a"), "1", @"MAP_GET 取到值"
+NONG += RESULT
+CALL ASSERT_SEQ, MAP_GET("g39m", "zz"), "", @"MAP_GET 键不存在返回空串"
+NONG += RESULT
+CALL ASSERT_SEQ, MAP_GET("g39_none", "a"), "", @"MAP_GET map 不存在也返回空串（不报错）"
+NONG += RESULT
+CALL ASSERT_EQ, MAP_HAS("g39m", "b"), 1, @"MAP_HAS 含键返回 1"
+NONG += RESULT
+CALL ASSERT_EQ, MAP_HAS("g39m", "zz"), 0, @"MAP_HAS 不含键返回 0"
+NONG += RESULT
+CALL ASSERT_EQ, MAP_HAS("g39_none", "a"), -1, @"MAP_HAS map 不存在返回 -1"
+NONG += RESULT
+
+CALL ASSERT_SEQ, MAP_GETKEYS("g39m"), "a,b", @"MAP_GETKEYS 形式 1：逗号拼接、按插入顺序"
+NONG += RESULT
+; 注意：RESULT 会被后续 CALL ASSERT_* 覆盖 —— 先把它抓进局部变量再断言
+R = MAP_GETKEYS("g39m", 1)
+NTMP = RESULT
+CALL ASSERT_EQ, NTMP, 2, @"MAP_GETKEYS 形式 2：个数写 RESULT"
+NONG += RESULT
+CALL ASSERT_SEQ, RESULTS:0, "a", @"MAP_GETKEYS 形式 2：返回 RESULTS:0"
+NONG += RESULT
+CALL ASSERT_SEQ, RESULTS:1, "b", @"MAP_GETKEYS 形式 2：RESULTS:1 = 第二个键"
+NONG += RESULT
+R = MAP_GETKEYS("g39m", SARR, 1)
+NTMP = RESULT
+CALL ASSERT_EQ, NTMP, 2, @"MAP_GETKEYS 形式 3：个数写 RESULT"
+NONG += RESULT
+CALL ASSERT_SEQ, SARR:0, "a", @"MAP_GETKEYS 形式 3：写入调用者数组（从头覆盖）"
+NONG += RESULT
+CALL ASSERT_SEQ, MAP_GETKEYS("g39m", 0), "", @"MAP_GETKEYS 形式 2 但第 2 参为 0 → 空串"
+NONG += RESULT
+CALL ASSERT_SEQ, MAP_GETKEYS("g39_none"), "", @"MAP_GETKEYS map 不存在 → 空串"
+NONG += RESULT
+
+CALL ASSERT_SEQ, MAP_TOXML("g39m"), "<map><p><k>a</k><v>1</v></p><p><k>b</k><v>2</v></p></map>", @"MAP_TOXML 的确切格式（无换行/转义）"
+NONG += RESULT
+CALL ASSERT_SEQ, MAP_TOXML("g39_none"), "", @"MAP_TOXML map 不存在 → 空串"
+NONG += RESULT
+
+R = MAP_CREATE("g39x")
+R = MAP_FROMXML("g39x", "<map><p><k>y</k><v>2</v></p></map>")
+CALL ASSERT_EQ, R, 1, @"MAP_FROMXML 成功返回 1"
+NONG += RESULT
+CALL ASSERT_SEQ, MAP_GET("g39x", "y"), "2", @"MAP_FROMXML 读入键值"
+NONG += RESULT
+CALL ASSERT_EQ, MAP_FROMXML("g39_none", "<map></map>"), 0, @"MAP_FROMXML map 不存在 → 0（不是 -1）"
+NONG += RESULT
+; 往返：TOXML 再 FROMXML 应还原
+R = MAP_CREATE("g39rt")
+R = MAP_SET("g39rt", "k", "v")
+R = MAP_CLEAR("g39rt")
+CALL ASSERT_EQ, MAP_SIZE("g39rt"), 0, @"MAP_CLEAR 清空键值但保留 map 本身"
+NONG += RESULT
+R = MAP_FROMXML("g39rt", MAP_TOXML("g39m"))
+CALL ASSERT_SEQ, MAP_GET("g39rt", "b"), "2", @"MAP_TOXML/FROMXML 自往返"
+NONG += RESULT
+CALL ASSERT_EQ, MAP_REMOVE("g39m", "zz"), 1, @"MAP_REMOVE 键不存在也返回 1"
+NONG += RESULT
+CALL ASSERT_EQ, MAP_RELEASE("g39m"), 1, @"MAP_RELEASE 恒返回 1"
+NONG += RESULT
+CALL ASSERT_EQ, MAP_EXIST("g39m"), 0, @"MAP_RELEASE 后不存在"
+NONG += RESULT
+CALL ASSERT_EQ, MAP_CLEAR("g39_none"), -1, @"MAP_CLEAR map 不存在 → -1"
+NONG += RESULT
+
+;=============================================================
+; 2) ENUM*：名字枚举
+;=============================================================
+PRINTL ---- 2) ENUM* ----
+
+; ENUMFUNC*：本组上方定义了 @ENUM_PROBE_ALPHA / @ENUM_PROBE_BETA
+R = ENUMFUNCBEGINSWITH("ENUM_PROBE_")
+CALL ASSERT_EQ, R, 2, @"ENUMFUNCBEGINSWITH 命中 2 个探针函数"
+NONG += RESULT
+; 顺序不保证（文档明示）→ 断言两个名字都出现在 RESULTS 里
+CNT = 0
+FOR TMPI, 0, R
+	IF RESULTS:TMPI == "ENUM_PROBE_ALPHA"
+		CNT += 1
+	ENDIF
+	IF RESULTS:TMPI == "ENUM_PROBE_BETA"
+		CNT += 1
+	ENDIF
+NEXT
+CALL ASSERT_EQ, CNT, 2, @"ENUMFUNC* 两个探针名都写进 RESULTS（顺序不保证）"
+NONG += RESULT
+R = ENUMFUNCENDSWITH("PROBE_BETA")
+CALL ASSERT_EQ, R, 1, @"ENUMFUNCENDSWITH"
+NONG += RESULT
+R = ENUMFUNCWITH("PROBE_")
+CALL ASSERT_EQ, R, 2, @"ENUMFUNCWITH（子串匹配）"
+NONG += RESULT
+R = ENUMFUNCBEGINSWITH("enum_probe_")
+CALL ASSERT_EQ, R, 2, @"ENUM* 匹配不区分大小写"
+NONG += RESULT
+CALL ASSERT_EQ, ENUMFUNCBEGINSWITH(""), 0, @"空前缀不枚举 → 0"
+NONG += RESULT
+R = ENUMFUNCBEGINSWITH("ENUM_PROBE_", SARR)
+CALL ASSERT_EQ, R, 2, @"ENUMFUNC* 形式 2：写入调用者数组"
+NONG += RESULT
+CNT = 0
+FOR TMPI, 0, R
+	IF SARR:TMPI == "ENUM_PROBE_ALPHA"
+		CNT += 1
+	ENDIF
+	IF SARR:TMPI == "ENUM_PROBE_BETA"
+		CNT += 1
+	ENDIF
+NEXT
+CALL ASSERT_EQ, CNT, 2, @"ENUMFUNC* 数组写入内容（两个名字都在）"
+NONG += RESULT
+
+; ENUMVAR*：系统变量（TARGET 必在）与广域用户变量都能枚举
+CALL ASSERT_TRUE, ENUMVARBEGINSWITH("TARGET") >= 1, @"ENUMVARBEGINSWITH 能枚举到系统变量 TARGET"
+NONG += RESULT
+CALL ASSERT_TRUE, ENUMVARENDSWITH("NAME") >= 1, @"ENUMVARENDSWITH 能枚举到以 NAME 结尾的变量"
+NONG += RESULT
+CALL ASSERT_EQ, ENUMVARBEGINSWITH(""), 0, @"空前缀不枚举 → 0"
+NONG += RESULT
+
+; ENUMMACRO*：TEST_HEADER.ERH 里的 DOC_* 宏
+CALL ASSERT_TRUE, ENUMMACROBEGINSWITH("DOC_") >= 1, @"ENUMMACROBEGINSWITH 能枚举到 #DEFINE 宏"
+NONG += RESULT
+CALL ASSERT_EQ, ENUMMACROBEGINSWITH(""), 0, @"空前缀不枚举 → 0"
+NONG += RESULT
+
+; ENUMFILES：相对 exeDir 输出；绝对路径/不存在的目录 → -1
+CALL ASSERT_TRUE, ENUMFILES("ERB", "MAIN.ERB") >= 1, @"ENUMFILES 列出 ERB/MAIN.ERB"
+NONG += RESULT
+CALL ASSERT_SEQ, RESULTS:0, "ERB/MAIN.ERB", @"ENUMFILES 输出的是相对路径"
+NONG += RESULT
+CALL ASSERT_EQ, ENUMFILES("/etc"), -1, @"ENUMFILES 拒绝绝对路径 → -1"
+NONG += RESULT
+CALL ASSERT_EQ, ENUMFILES("no_such_dir_39"), -1, @"ENUMFILES 目录不存在 → -1"
+NONG += RESULT
+R = ENUMFILES("ERB", "*.ERB", 0, SARR)
+CALL ASSERT_TRUE, R >= 1, @"ENUMFILES 数组形态（写入调用者数组）"
+NONG += RESULT
+
+;=============================================================
+; 3) XML_*：小 DOM + XPath 子集
+;=============================================================
+PRINTL ---- 3) XML_* ----
+
+R = XML_DOCUMENT(39, "<root><a>t1</a><a>t2</a><b>bt</b></root>")
+CALL ASSERT_EQ, R, 1, @"XML_DOCUMENT 新建返回 1"
+NONG += RESULT
+CALL ASSERT_EQ, XML_DOCUMENT(39, "<x/>"), 0, @"XML_DOCUMENT 同 ID 已存在返回 0"
+NONG += RESULT
+CALL ASSERT_EQ, XML_EXIST(39), 1, @"XML_EXIST 存在返回 1"
+NONG += RESULT
+CALL ASSERT_EQ, XML_EXIST(38), 0, @"XML_EXIST 不存在返回 0"
+NONG += RESULT
+
+CALL ASSERT_EQ, XML_GET(39, "//a"), 2, @"XML_GET //a 命中 2 个"
+NONG += RESULT
+CALL ASSERT_EQ, XML_GET(39, "/root/a"), 2, @"XML_GET 绝对路径 /root/a"
+NONG += RESULT
+CALL ASSERT_EQ, XML_GET(39, "/root/a[2]"), 1, @"XML_GET 位置谓词 [2]"
+NONG += RESULT
+CALL ASSERT_EQ, XML_GET(39, "/root/nosuch"), 0, @"XML_GET 无命中返回 0"
+NONG += RESULT
+CALL ASSERT_EQ, XML_GET(38, "//a"), -1, @"XML_GET 文档 ID 不存在返回 -1"
+NONG += RESULT
+
+; 取值样式：0=Value 1=InnerText 2=InnerXml 3=OuterXml 4=Name
+R = XML_GET(39, "//a", 1, 1)
+CALL ASSERT_SEQ, RESULTS:0, "t1", @"样式 1 = InnerText"
+NONG += RESULT
+CALL ASSERT_SEQ, RESULTS:1, "t2", @"样式 1 = InnerText（第 2 个节点）"
+NONG += RESULT
+CALL ASSERT_EQ, XML_GET(39, "/root/b", SARR, 1), 1, @"XML_GET 写调用者数组"
+NONG += RESULT
+CALL ASSERT_SEQ, SARR:0, "bt", @"XML_GET 数组内容"
+NONG += RESULT
+CALL ASSERT_EQ, XML_GET(39, "/root/b", SARR, 4), 1, @"样式 4 = Name"
+NONG += RESULT
+CALL ASSERT_SEQ, SARR:0, "b", @"样式 4 取到元素名"
+NONG += RESULT
+; 属性步：单独用一份带属性的文档（期望串里避免双引号）
+R = XML_DOCUMENT(37, "<r><e k='v1'/></r>")
+CALL ASSERT_EQ, XML_GET(37, "/r/e/@k", SARR, 0), 1, @"XPath 属性步 @k"
+NONG += RESULT
+CALL ASSERT_SEQ, SARR:0, "v1", @"样式 0 = Value（属性值）"
+NONG += RESULT
+CALL ASSERT_EQ, XML_GET(39, "/root/a", SARR, 3), 2, @"样式 3 = OuterXml"
+NONG += RESULT
+CALL ASSERT_SEQ, SARR:0, "<a>t1</a>", @"OuterXml 原样序列化"
+NONG += RESULT
+CALL ASSERT_SEQ, XML_TOSTR(39), "<root><a>t1</a><a>t2</a><b>bt</b></root>", @"XML_TOSTR = OuterXml"
+NONG += RESULT
+
+; 改写
+R = XML_SET(39, "/root/b", "NEW", 0, 1)
+CALL ASSERT_EQ, R, 1, @"XML_SET 单匹配返回 1"
+NONG += RESULT
+CALL ASSERT_EQ, XML_GET(39, "/root/b", SARR, 1), 1, @"XML_SET 后能读到"
+NONG += RESULT
+CALL ASSERT_SEQ, SARR:0, "NEW", @"XML_SET 样式 1 = InnerText"
+NONG += RESULT
+R = XML_ADDNODE(39, "/root", "<c>cc</c>")
+CALL ASSERT_EQ, R, 1, @"XML_ADDNODE 返回匹配数 1"
+NONG += RESULT
+CALL ASSERT_SEQ, XML_TOSTR(39), "<root><a>t1</a><a>t2</a><b>NEW</b><c>cc</c></root>", @"XML_ADDNODE 追加为最后一个子节点"
+NONG += RESULT
+R = XML_ADDATTRIBUTE(39, "/root/b", "k", "v")
+CALL ASSERT_EQ, R, 1, @"XML_ADDATTRIBUTE 返回匹配数 1"
+NONG += RESULT
+CALL ASSERT_EQ, XML_GET(39, "/root/b/@k", SARR, 0), 1, @"XML_ADDATTRIBUTE 后能按属性路径选中"
+NONG += RESULT
+CALL ASSERT_SEQ, SARR:0, "v", @"属性值 = v"
+NONG += RESULT
+R = XML_REMOVEATTRIBUTE(39, "/root/b/@k")
+CALL ASSERT_EQ, R, 1, @"XML_REMOVEATTRIBUTE 选中属性节点并删除"
+NONG += RESULT
+CALL ASSERT_EQ, XML_GET(39, "/root/b/@k"), 0, @"属性已删除（路径无命中）"
+NONG += RESULT
+R = XML_REMOVENODE(39, "/root/c")
+CALL ASSERT_EQ, R, 1, @"XML_REMOVENODE 单匹配直接删"
+NONG += RESULT
+CALL ASSERT_SEQ, XML_TOSTR(39), "<root><a>t1</a><a>t2</a><b>NEW</b></root>", @"节点已删除"
+NONG += RESULT
+R = XML_REPLACE(39, "/root/b", "<bb>replaced</bb>")
+CALL ASSERT_EQ, R, 1, @"XML_REPLACE 按 XPath 替换"
+NONG += RESULT
+CALL ASSERT_SEQ, XML_TOSTR(39), "<root><a>t1</a><a>t2</a><bb>replaced</bb></root>", @"替换结果"
+NONG += RESULT
+
+; _BYNAME 变体：第 1 参是「文档表的名字」
+R = XML_DOCUMENT("g39x", "<chara><name>Alice</name><lv>3</lv></chara>")
+CALL ASSERT_EQ, R, 1, @"XML_DOCUMENT 也可用字符串 ID"
+NONG += RESULT
+CALL ASSERT_EQ, XML_GET_BYNAME("g39x", "//lv"), 1, @"XML_GET_BYNAME 按名字取文档"
+NONG += RESULT
+CALL ASSERT_EQ, XML_GET_BYNAME("g39x", "//lv", SARR, 1), 1, @"XML_GET_BYNAME 带输出"
+NONG += RESULT
+CALL ASSERT_SEQ, SARR:0, "3", @"XML_GET_BYNAME 取到值"
+NONG += RESULT
+R = XML_SET_BYNAME("g39x", "//name", "Bob", 0, 1)
+CALL ASSERT_SEQ, XML_GET_BYNAME("g39x", "//name", SARR, 1), 1, @"XML_SET_BYNAME 后能读到"
+NONG += RESULT
+CALL ASSERT_SEQ, SARR:0, "Bob", @"XML_SET_BYNAME 写入生效（留在文档表）"
+NONG += RESULT
+CALL ASSERT_EQ, XML_RELEASE(39), 1, @"XML_RELEASE 已存在返回 1"
+NONG += RESULT
+CALL ASSERT_EQ, XML_RELEASE(39), 0, @"XML_RELEASE 不存在返回 0"
+NONG += RESULT
+
+;=============================================================
+; 4) DT_*：内存类型化表 + 过滤/排序 + XML 往返
+;=============================================================
+PRINTL ---- 4) DT_* ----
+
+CALL ASSERT_EQ, DT_CREATE("g39t"), 1, @"DT_CREATE 新建返回 1（第 0 列 id 由引擎建）"
+NONG += RESULT
+CALL ASSERT_EQ, DT_CREATE("g39t"), 0, @"DT_CREATE 同名已存在返回 0"
+NONG += RESULT
+CALL ASSERT_EQ, DT_EXIST("g39t"), 1, @"DT_EXIST"
+NONG += RESULT
+CALL ASSERT_EQ, DT_COLUMN_LENGTH("g39t"), 1, @"DT_CREATE 后只有 id 列"
+NONG += RESULT
+
+CALL ASSERT_EQ, DT_COLUMN_ADD("g39t", "name", "string"), 1, @"DT_COLUMN_ADD 字符串列"
+NONG += RESULT
+CALL ASSERT_EQ, DT_COLUMN_ADD("g39t", "lv", "int32"), 1, @"DT_COLUMN_ADD int32 列"
+NONG += RESULT
+CALL ASSERT_EQ, DT_COLUMN_ADD("g39t", "lv", "int32"), 0, @"DT_COLUMN_ADD 同名已存在返回 0"
+NONG += RESULT
+CALL ASSERT_EQ, DT_COLUMN_ADD("g39_none", "x"), -1, @"DT_COLUMN_ADD 表不存在返回 -1"
+NONG += RESULT
+CALL ASSERT_EQ, DT_COLUMN_EXIST("g39t", "lv"), 3, @"DT_COLUMN_EXIST 返回类型码（int32 = 3）"
+NONG += RESULT
+CALL ASSERT_EQ, DT_COLUMN_EXIST("g39t", "name"), 5, @"DT_COLUMN_EXIST 返回类型码（string = 5）"
+NONG += RESULT
+CALL ASSERT_EQ, DT_COLUMN_EXIST("g39t", "zz"), 0, @"DT_COLUMN_EXIST 无此列返回 0"
+NONG += RESULT
+CALL ASSERT_EQ, DT_COLUMN_LENGTH("g39t"), 3, @"DT_COLUMN_LENGTH = 3（id + name + lv）"
+NONG += RESULT
+R = DT_COLUMN_NAMES("g39t", SARR)
+CALL ASSERT_SEQ, SARR:0, "id", @"DT_COLUMN_NAMES 第 0 列是 id"
+NONG += RESULT
+CALL ASSERT_SEQ, SARR:1, "name", @"DT_COLUMN_NAMES 第 1 列"
+NONG += RESULT
+
+; 行：成对形态（id 由 TimePoint 生成，不可预测故不硬编码）
+DT_ROW_ADD "g39t", "name", "甲", "lv", 10
+DT_ROW_ADD "g39t", "name", "乙", "lv", 30
+DT_ROW_ADD "g39t", "name", "丙", "lv", 20
+CALL ASSERT_EQ, DT_ROW_LENGTH("g39t"), 3, @"DT_ROW_ADD 三次后行数 3"
+NONG += RESULT
+CALL ASSERT_EQ, DT_CELL_GET("g39t", 0, "lv"), 10, @"DT_CELL_GET 按行号取整数"
+NONG += RESULT
+CALL ASSERT_SEQ, DT_CELL_GETS("g39t", 1, "name"), "乙", @"DT_CELL_GETS 按行号取字符串"
+NONG += RESULT
+CALL ASSERT_EQ, DT_CELL_ISNULL("g39t", 0, "name"), 0, @"DT_CELL_ISNULL 有值返回 0"
+NONG += RESULT
+
+; 过滤 / 排序（DataView 语法子集）
+R = DT_SELECT("g39t", "lv >= 20")
+NTMP = RESULT:0
+CALL ASSERT_EQ, R, 2, @"DT_SELECT 过滤 lv >= 20 → 2 行"
+NONG += RESULT
+CALL ASSERT_EQ, NTMP, 2, @"DT_SELECT 也把行数写 RESULT:0"
+NONG += RESULT
+R = DT_CELL_GET("g39t", RESULT:1, "lv", 1)     ; 第 3 参 asId 非 0：按 id 取
+CALL ASSERT_EQ, R, 30, @"RESULT:1 = 命中行 id 之一（asId 形态取到 lv=30）"
+NONG += RESULT
+CALL ASSERT_EQ, DT_SELECT("g39t", "lv >= 10", "lv DESC"), 3, @"DT_SELECT 排序 lv DESC"
+NONG += RESULT
+CALL ASSERT_EQ, DT_CELL_GET("g39t", RESULT:1, "lv", 1), 30, @"DESC 第一行 lv = 30"
+NONG += RESULT
+CALL ASSERT_EQ, DT_CELL_GET("g39t", RESULT:3, "lv", 1), 10, @"DESC 第三行 lv = 10"
+NONG += RESULT
+CALL ASSERT_EQ, DT_SELECT("g39t", "name = '乙'"), 1, @"DT_SELECT 字符串等值（单引号字面量）"
+NONG += RESULT
+CALL ASSERT_EQ, DT_SELECT("g39t", "lv > 5 AND lv < 25"), 2, @"DT_SELECT AND 组合"
+NONG += RESULT
+CALL ASSERT_EQ, DT_SELECT("g39t", "name IS NOT NULL"), 3, @"DT_SELECT IS NOT NULL"
+NONG += RESULT
+R = DT_SELECT("g39t", "lv >= 20", "", IDS)
+CALL ASSERT_EQ, R, 2, @"DT_SELECT 数组形态返回值 = 命中数"
+NONG += RESULT
+CALL ASSERT_EQ, DT_CELL_GET("g39t", IDS:0, "lv", 1), 30, @"DT_SELECT 数组形态写出 id（第 0 个是 lv=30 的行）"
+NONG += RESULT
+
+; 单元格改写 / 列默认值 / 行删除
+R = DT_CELL_SET("g39t", 0, "name", "甲改")
+CALL ASSERT_EQ, R, 1, @"DT_CELL_SET 成功返回 1"
+NONG += RESULT
+CALL ASSERT_SEQ, DT_CELL_GETS("g39t", 0, "name"), "甲改", @"DT_CELL_SET 写入生效"
+NONG += RESULT
+CALL ASSERT_EQ, DT_CELL_SET("g39t", 0, "id", 999), 0, @"DT_CELL_SET 不能改 id 列 → 0"
+NONG += RESULT
+CALL ASSERT_EQ, DT_CELL_SET("g39t", 0, "lv", "字符串"), -2, @"DT_CELL_SET 类型不符 → -2"
+NONG += RESULT
+CALL ASSERT_EQ, DT_CELL_SET("g39t", 999, "lv", 1, 1), -3, @"DT_CELL_SET 行不存在（asId）→ -3"
+NONG += RESULT
+
+DT_COLUMN_OPTIONS "g39t", "name", DEFAULT = "无名"
+DT_ROW_ADD "g39t"
+CALL ASSERT_SEQ, DT_CELL_GETS("g39t", 3, "name"), "无名", @"DT_COLUMN_OPTIONS DEFAULT 对新行生效"
+NONG += RESULT
+
+R = DT_ROW_REMOVE("g39t", IDS, 1)
+CALL ASSERT_EQ, R, 1, @"DT_ROW_REMOVE 数组形态按 id 删 1 行"
+NONG += RESULT
+CALL ASSERT_EQ, DT_ROW_LENGTH("g39t"), 3, @"删除后行数 3"
+NONG += RESULT
+
+; 列删除（id 不可删）
+CALL ASSERT_EQ, DT_COLUMN_REMOVE("g39t", "id"), 0, @"DT_COLUMN_REMOVE 不能删 id 列 → 0"
+NONG += RESULT
+CALL ASSERT_EQ, DT_COLUMN_REMOVE("g39t", "name"), 1, @"DT_COLUMN_REMOVE 删普通列 → 1"
+NONG += RESULT
+CALL ASSERT_EQ, DT_COLUMN_LENGTH("g39t"), 2, @"删除后列数 2"
+NONG += RESULT
+
+; XML 往返（自洽）
+DT_TOXML "g39t", SCHEMA
+XDATA = DT_TOXML("g39t")
+CALL ASSERT_TRUE, SCHEMA != "", @"DT_TOXML 第 2 参写出架构 XML"
+NONG += RESULT
+CALL ASSERT_EQ, DT_CREATE("g39c"), 1, @"（前置）建一张空表准备 FROMXML"
+NONG += RESULT
+CALL ASSERT_EQ, DT_FROMXML("g39c", SCHEMA, XDATA), 1, @"DT_FROMXML 读回成功返回 1"
+NONG += RESULT
+CALL ASSERT_EQ, DT_ROW_LENGTH("g39c"), 3, @"DT_FROMXML 后行数与原表一致"
+NONG += RESULT
+CALL ASSERT_EQ, DT_COLUMN_LENGTH("g39c"), 2, @"DT_FROMXML 后列数与架构一致"
+NONG += RESULT
+CALL ASSERT_EQ, DT_CELL_GET("g39c", 0, "lv"), 10, @"DT_FROMXML 单元格值（按 lv 列名读；第 0 行是 lv=10 的行）"
+NONG += RESULT
+
+; 清空 / 释放
+CALL ASSERT_EQ, DT_CLEAR("g39t"), 1, @"DT_CLEAR 清空行返回 1"
+NONG += RESULT
+CALL ASSERT_EQ, DT_ROW_LENGTH("g39t"), 0, @"DT_CLEAR 后行数 0"
+NONG += RESULT
+CALL ASSERT_EQ, DT_RELEASE("g39t"), 1, @"DT_RELEASE 恒返回 1"
+NONG += RESULT
+CALL ASSERT_EQ, DT_EXIST("g39t"), 0, @"DT_RELEASE 后不存在"
+NONG += RESULT
+CALL ASSERT_EQ, DT_ROW_LENGTH("g39_none"), -1, @"表不存在：DT_ROW_LENGTH → -1"
+NONG += RESULT
+CALL ASSERT_EQ, DT_SELECT("g39_none"), -1, @"表不存在：DT_SELECT → -1"
+NONG += RESULT
+
+RETURN NONG

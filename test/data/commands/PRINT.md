@@ -39,6 +39,19 @@ PRINT [值类型: 无|V|S|FORM|FORMS] [对齐: 无|C|LC] [配色: 无|K|D] [N] [
 
 > 注：`PRINTS <字符串表达式>` 与 `PRINT <文本>` 的差别正在于前者走表达式求值（`PRINTS "abc" + TOSTR(X)` 合法），后者是字面文本（`PRINT 1 + 2` 原样显示 `1 + 2`）。
 
+### PRINTV 的单引号文本前缀
+
+`AnalyzePrintV` 模式遇到单引号时，读取至下一个未转义逗号或行尾；不存在闭合单引号。示例：
+
+```erb
+PRINTVL 'LV,A,'(,A * 4,')
+; A=2 时输出 LV2(8)
+PRINTVL 'hello
+; 输出 hello，无需闭合引号
+```
+
+单引号后的文本保持原样（含空格、括号、额外引号），支持 `\s` / `\S` / `\t` / `\n` 等转义，但不展开 FORM。普通表达式仍使用双引号。C# 依据：`LexicalAnalyzer.Analyse` 的 `AnalyzePrintV` 分支、`ReadString(StrEndWith.Comma)`、`SP_PRINTV_ArgumentBuilder`。
+
 ### 配色选择器（第 2 位）
 
 执行期先无条件设 `Console.UseUserStyle = true` 与 `Console.UseSetColorStyle = !IsPrintDFunction()`（`Runtime/Script/Statements/Instraction.Child.cs:184-185`），`Console.Style` 的取值逻辑在 `UI/Game/EmueraConsole.Print.cs:75-88`。

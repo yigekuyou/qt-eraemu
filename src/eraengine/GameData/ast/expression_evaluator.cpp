@@ -830,10 +830,12 @@ QVariant ExpressionEvaluator::evaluateBinaryOp(const BinaryOpNode &node, Variabl
     const TokenType logicalOp = node.op().type();
     if (node.left()->valueType() == OperandType::Int) {
         const bool truth = left.toLongLong() != 0;
-        // C# OperatorMethod 只对 && / || 短路；!& / !| 必须求值两侧。
-        if (!truth && logicalOp == TokenType::AND)
+        // C# NAND uses || and NOR uses && internally, so both short-circuit.
+        if ((!truth && logicalOp == TokenType::AND)
+            || (truth && logicalOp == TokenType::LOGICAL_NOR))
             return QVariant::fromValue<qint64>(0);
-        if (truth && logicalOp == TokenType::OR)
+        if ((truth && logicalOp == TokenType::OR)
+            || (!truth && logicalOp == TokenType::LOGICAL_NAND))
             return QVariant::fromValue<qint64>(1);
     }
     QVariant right = evaluateNode(*node.right(), storage, gameBaseData);

@@ -695,6 +695,31 @@ int main(int argc, char* argv[]) {
               "VARSIZE(ARR_V) == VARSIZE(\"ARR_V\") != 元素值 7（标识符按变量名解析）");
     }
 
+    // C# AnalyzePrintV apostrophe ends at comma, not a matching quote.
+    {
+        EraParseTable pt(&state);
+        const AstResolver resolve = [&pt](const QString& e) { return pt.expressionAst(e); };
+        ExpressionEvaluator ev;
+        auto render = [&](const QString& source) {
+            const auto line = AstBuilder::build(source, ScriptPosition("printv.ERB", 1, 1), resolve);
+            QString result;
+            for (const auto& arg : line.arguments)
+                result += arg.isString ? arg.raw : (arg.ast ? ev.evaluate(*arg.ast, &storage).toString() : "<missing>");
+            return result;
+        };
+        storage.setGlobalInt1D("PRINTV_A", 0, 2);
+        const auto printvLine = AstBuilder::build("PRINTV 'LV,PRINTV_A,'(,PRINTV_A * 4,')",
+                                                   ScriptPosition("printv.ERB", 1, 1), resolve);
+        check(printvLine.arguments.size() == 5, "PRINTV splits legacy label into five arguments");
+        check(render("PRINTV 'LV,PRINTV_A,'(,PRINTV_A * 4,')") == "LV2(8)",
+              "PRINTV preserves label and literal parentheses");
+        check(render("PRINTVL '(,1,')") == "(1)", "PRINTVL legacy literal parentheses");
+        check(render("PRINTV 'hello") == "hello", "PRINTV apostrophe needs no closing quote");
+        check(render("PRINTV 'hello' world") == "hello' world", "PRINTV extra apostrophe is literal");
+        check(render("PRINTV 'a\\,b,MAX(2, 3),')") == "a,b3)", "PRINTV escaped comma and nested function arguments");
+        check(render("PRINTV '{A}%A%") == "{A}%A%", "PRINTV apostrophe text does not expand FORM");
+    }
+
     // 11) DEBUGPRINT 族：**实参形态**与 PRINT 族同规则（按后缀走 Literal/FormStr/
     //     StrExpression），但**执行路径不同** —— 它写调试日志、不进游戏画面。
     //     若 isPrintFamily 把它也算进去，执行链会先命中 handlePrintInstruction，

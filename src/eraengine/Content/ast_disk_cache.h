@@ -58,7 +58,7 @@ namespace ErbAstDiskCache {
 // 2: 脚本名从 basename 改为「相对装载根目录的路径」（见 erb_loader 的 scriptNameFor）
 // 3: literal CUSTOMDRAWLINE, CASE clauses and quoted conditional forms.
 // 4: TIMES constant semantics and shared FORM expression spans.
-constexpr int kFormatVersion = 5;
+constexpr int kFormatVersion = 6;
 
 // 由装载输入算出缓存 key（十六进制）。key 已包含上面列出的全部失效因子。
 [[nodiscard]] QString computeKey(const QString& dirPath, const QStringList& files,

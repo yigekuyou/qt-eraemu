@@ -169,6 +169,22 @@ int main(int argc, char* argv[]) {
     const QString rendered = evaluator.evaluate(*sfEval, &storage).toString();
     check(rendered == "HP=30/7", QString("StrForm 求值 == HP=30/7（得到 %1）").arg(rendered));
 
+    // Observe RHS side effects, not only the logical truth table.
+    for (const QString& expr : {QStringLiteral("0 && VB++"), QStringLiteral("1 || VB++"),
+                                QStringLiteral("0 !& VB++"), QStringLiteral("1 !| VB++")}) {
+        storage.setGlobalInt1D("VB", 0, 7);
+        auto root = parse(evalParser, expr);
+        evaluator.evaluate(*root, &storage);
+        check(storage.getGlobalInt1D("VB", 0) == 7, expr + " skips RHS");
+    }
+    for (const QString& expr : {QStringLiteral("1 !& VB++"), QStringLiteral("0 !| VB++"),
+                                QStringLiteral("0 ^^ VB++")}) {
+        storage.setGlobalInt1D("VB", 0, 7);
+        auto root = parse(evalParser, expr);
+        evaluator.evaluate(*root, &storage);
+        check(storage.getGlobalInt1D("VB", 0) == 8, expr + " evaluates RHS once");
+    }
+
     qDebug() << "\n8) 系统变量类型表（system_variables.h）";
     check(parse(parser, "RESULTS")->valueType() == OperandType::Str, "RESULTS -> Str");
     check(parse(parser, "GLOBALS:3")->valueType() == OperandType::Str, "GLOBALS:3 -> Str");

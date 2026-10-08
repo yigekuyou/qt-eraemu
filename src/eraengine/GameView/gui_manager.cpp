@@ -102,10 +102,16 @@ void GuiManager::loadFromConfig(const ConfigLoader& cfg) {
     if (lookup(cfg, kKeyFps, kAliasFps, text))              setFps(text.toInt());
     if (lookup(cfg, kKeyMaxLog, kAliasMaxLog, text))        setMaxLog(text.toInt());
     if (lookup(cfg, kKeyScrollLines, kAliasScrollLines, text)) setScrollLines(text.toInt());
-    if (lookup(cfg, kKeySizable, kAliasSizable, text))      setSizableWindow(cfg.getBool(kKeySizable, m_sizableWindow)
-                                                                             || cfg.getBool(kAliasSizable.value(0), m_sizableWindow));
-    if (lookup(cfg, kKeyMaximized, kAliasMaximized, text))  setMaximized(cfg.getBool(kKeyMaximized, m_maximized)
-                                                                          || cfg.getBool(kAliasMaximized.value(0), m_maximized));
+    if (lookup(cfg, kKeySizable, kAliasSizable, text)) {
+        setSizableWindow(cfg.hasConfig(kKeySizable)
+                              ? cfg.getBool(kKeySizable, m_sizableWindow)
+                              : cfg.getBool(kAliasSizable.first(), m_sizableWindow));
+    }
+    if (lookup(cfg, kKeyMaximized, kAliasMaximized, text)) {
+        setMaximized(cfg.hasConfig(kKeyMaximized)
+                         ? cfg.getBool(kKeyMaximized, m_maximized)
+                         : cfg.getBool(kAliasMaximized.first(), m_maximized));
+    }
     if (lookup(cfg, kKeyWindowWidth, kAliasWindowWidth, text))  setWindowWidth(text.toInt());
     if (lookup(cfg, kKeyWindowHeight, kAliasWindowHeight, text)) setWindowHeight(text.toInt());
 

@@ -745,17 +745,24 @@ void EraEngine::loadConfigFiles()
 		// 2. emuera.config（中等优先级，位于游戏根目录）
 		// 3. _fixed.config（最高优先级，位于 CSV 目录）
 		if (!m_csvDir.isEmpty()) {
-				const QString defaultConfig = QDir(m_csvDir).absoluteFilePath("_default.config");
+				// C# 同时兼容 _default.config / default.config。
+				QString defaultConfig = QDir(m_csvDir).absoluteFilePath("_default.config");
+				if (!m_fileSystem.fileExists(defaultConfig))
+					defaultConfig = QDir(m_csvDir).absoluteFilePath("default.config");
 				if (m_fileSystem.fileExists(defaultConfig)) m_configLoader.loadConfigFile(defaultConfig, 0);
 		}
 		const QString mainConfig = QDir(m_gameDirectory).absoluteFilePath("emuera.config");
 		if (m_fileSystem.fileExists(mainConfig)) m_configLoader.loadConfigFile(mainConfig, 1);
 		if (!m_csvDir.isEmpty()) {
-				const QString fixedConfig = QDir(m_csvDir).absoluteFilePath("_fixed.config");
+				// C# 同时兼容 _fixed.config / fixed.config。
+				QString fixedConfig = QDir(m_csvDir).absoluteFilePath("_fixed.config");
+				if (!m_fileSystem.fileExists(fixedConfig))
+					fixedConfig = QDir(m_csvDir).absoluteFilePath("fixed.config");
 				if (m_fileSystem.fileExists(fixedConfig)) m_configLoader.loadConfigFile(fixedConfig, 2);
-				// _Rename.csv：行内 [[..]] 替换（对齐 C# ParserMediator.LoadEraExRenameFile）
+				// _Rename.csv 只有在配置明确启用时才加载（C# UseRenameFile，默认 false）。
+				const bool useRename = m_configLoader.getBool(QStringLiteral("_Rename.csvを利用する"), false);
 				const QString renameCsv = QDir(m_csvDir).absoluteFilePath("_Rename.csv");
-				if (m_fileSystem.fileExists(renameCsv)) {
+				if (useRename && m_fileSystem.fileExists(renameCsv)) {
 						m_executionEngine.getErbLoader().loadRenameFile(renameCsv);
 				}
 		}
@@ -860,7 +867,8 @@ void EraEngine::loadConstantData()
 //  · TextEncoding / テキストエンコーディング / 文字コード —— 强制读编码（缺省 AUTO = 逐文件嗅探）
 void EraEngine::resolveTextConfig()
 {
-		m_searchSubdirectory = m_configLoader.getBool(QString::fromUtf8("サブディレクトリを検索する"), true);
+		// C# ConfigData 的默认值是 false；游戏需要递归时由配置文件显式开启。
+		m_searchSubdirectory = m_configLoader.getBool(QString::fromUtf8("サブディレクトリを検索する"), false);
 
 		TextEncoding enc = TextEncoding::Auto;
 		const QStringList keys = {
@@ -1360,15 +1368,15 @@ void EraEngine::buildSystemHost()
 				}
 				return fallback;
 		};
-		host.autoSave = [boolCfg]() { return boolCfg({QStringLiteral("オートセーブ"),
-		                                               QStringLiteral("AutoSave")}, false); };
-		host.maxShopItem = [intCfg]() { return intCfg({QStringLiteral("アイテムの最大数"),
+		host.autoSave = [boolCfg]() { return boolCfg({QStringLiteral("オートセーブを行なう"),
+		                                               QStringLiteral("AutoSave")}, true); };
+		host.maxShopItem = [intCfg]() { return intCfg({QStringLiteral("販売アイテム数"),
 		                                                QStringLiteral("MaxShopItem")}, 100); };
 		host.comAbleDefault = [intCfg]() { return intCfg({QStringLiteral("COM_ABLE初期値"),
 		                                                   QStringLiteral("ComAbleDefault")}, 1); };
-		host.printCPerLine = [intCfg]() { return intCfg({QStringLiteral("PRINTC の表示数"),
-		                                                  QStringLiteral("PrintCPerLine")}, 0); };
-		host.compatiCallEvent = [boolCfg]() { return boolCfg({QStringLiteral("イベント関数のCALLを許可"),
+		host.printCPerLine = [intCfg]() { return intCfg({QStringLiteral("PRINTCを並べる数"),
+		                                                  QStringLiteral("PrintCPerLine")}, 3); };
+		host.compatiCallEvent = [boolCfg]() { return boolCfg({QStringLiteral("イベント関数のCALLを許可する"),
 		                                                       QStringLiteral("CompatiCallEvent")}, false); };
 		host.titleMenuString = [](int index) {
 				return index == 0 ? QStringLiteral("开始游戏") : QStringLiteral("读取存档");

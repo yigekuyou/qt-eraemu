@@ -27,28 +27,57 @@ Dialog {
 
     title: qsTr("关于")
     modal: true
-    width: 360
+    parent: Overlay.overlay
+    anchors.centerIn: parent
+    margins: 12
+    focus: true
+    width: Math.max(0, Math.min(360, parent.width - 24))
+    height: Math.min(implicitHeight, Math.max(0, parent.height - 24))
     standardButtons: Dialog.Ok
 
-    contentItem: Grid {
-        columns: 2
-        columnSpacing: 12
-        rowSpacing: 8
-        width: dlg.width - 40
+    contentItem: ScrollView {
+        id: aboutScroll
+        contentWidth: availableWidth
+        implicitHeight: details.implicitHeight
+        ScrollBar.horizontal.policy: ScrollBar.AlwaysOff
 
-        Label { text: qsTr("标题") }
-        Label { text: (dlg.gameBase && dlg.gameBase.title) || qsTr("未知") }
-        Label { text: qsTr("作者") }
-        Label { text: (dlg.gameBase && dlg.gameBase.author) || qsTr("未知") }
-        Label { text: qsTr("版本") }
-        Label { text: (dlg.gameBase && dlg.gameBase.version) || qsTr("未知") }
-        Label { text: qsTr("发布年") }
-        Label { text: (dlg.gameBase && dlg.gameBase.releaseYear) || qsTr("未知") }
-        Label { text: qsTr("附加信息") }
-        Label {
-            text: (dlg.gameBase && dlg.gameBase.additionalInfo) || qsTr("无")
-            wrapMode: Text.WordWrap
-            width: 220
+        Grid {
+            id: details
+            width: aboutScroll.availableWidth
+            columns: width < 280 ? 1 : 2
+            columnSpacing: 12
+            rowSpacing: 8
+
+            Label { width: details.columns === 1 ? details.width : 64; text: qsTr("标题") }
+            Label {
+                width: Math.max(0, details.columns === 1 ? details.width : details.width - 76)
+                text: (dlg.gameBase && dlg.gameBase.title) || qsTr("未知")
+                wrapMode: Text.Wrap
+            }
+            Label { width: details.columns === 1 ? details.width : 64; text: qsTr("作者") }
+            Label {
+                width: Math.max(0, details.columns === 1 ? details.width : details.width - 76)
+                text: (dlg.gameBase && dlg.gameBase.author) || qsTr("未知")
+                wrapMode: Text.Wrap
+            }
+            Label { width: details.columns === 1 ? details.width : 64; text: qsTr("版本") }
+            Label {
+                width: Math.max(0, details.columns === 1 ? details.width : details.width - 76)
+                text: (dlg.gameBase && dlg.gameBase.version) || qsTr("未知")
+                wrapMode: Text.Wrap
+            }
+            Label { width: details.columns === 1 ? details.width : 64; text: qsTr("发布年") }
+            Label {
+                width: Math.max(0, details.columns === 1 ? details.width : details.width - 76)
+                text: (dlg.gameBase && dlg.gameBase.releaseYear) || qsTr("未知")
+                wrapMode: Text.Wrap
+            }
+            Label { width: details.columns === 1 ? details.width : 64; text: qsTr("附加信息") }
+            Label {
+                width: Math.max(0, details.columns === 1 ? details.width : details.width - 76)
+                text: (dlg.gameBase && dlg.gameBase.additionalInfo) || qsTr("无")
+                wrapMode: Text.Wrap
+            }
         }
     }
 }

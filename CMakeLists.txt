@@ -15,7 +15,7 @@
 # along with this program.  If not, see <https://www.gnu.org/licenses/>.
 cmake_minimum_required(VERSION 3.16)
 
-project(emuera VERSION 0.1 LANGUAGES CXX)
+project(emuera VERSION 0.0.1 LANGUAGES CXX)
 
 option(EMUERA_WARNINGS_AS_ERRORS "Treat warnings as errors for project targets" ON)
 
@@ -109,8 +109,12 @@ target_link_libraries(appemuera
 #  来自构建树的库还必须有依赖关系 —— 上面 target_link_libraries 已提供）。
 # QTP0002（Qt 6.6+）允许这里用生成器表达式。
 if(ANDROID)
-    set_property(TARGET appemuera APPEND PROPERTY
-        QT_ANDROID_EXTRA_LIBS "$<TARGET_FILE:eraengine>")
+    # androiddeployqt does not reliably discover shared QML module libraries
+    # through a CMake target dependency. Include both the module backend and
+    # its plugin explicitly so import io.yigekuoyou.eraengine can initialize.
+    set_property(TARGET appemuera APPEND PROPERTY QT_ANDROID_EXTRA_LIBS
+        "$<TARGET_FILE:eraengine>"
+        "$<TARGET_FILE:eraengineplugin>")
 endif()
 # D-Bus 可用时才链（实际只有桌面 Linux 用到），同时打开 EMUERA_HAS_DBUS
 if(TARGET Qt6::DBus)

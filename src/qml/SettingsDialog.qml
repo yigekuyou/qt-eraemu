@@ -34,7 +34,12 @@ Dialog {
 
     title: qsTr("设置")
     modal: true
-    width: 460
+    parent: Overlay.overlay
+    anchors.centerIn: parent
+    margins: 12
+    focus: true
+    width: Math.max(0, Math.min(460, parent.width - 24))
+    height: Math.min(implicitHeight, Math.max(0, parent.height - 24))
     standardButtons: Dialog.Ok | Dialog.Cancel
 
     // 取色器：目标属性名（"fore"/"back"/"focus"/"log"）
@@ -68,146 +73,163 @@ Dialog {
             gui.logColor = c;
     }
 
-    contentItem: Column {
-        spacing: 8
-        width: dlg.width - 40
+    contentItem: ScrollView {
+        id: settingsScroll
+        contentWidth: availableWidth
+        implicitHeight: settingsContent.implicitHeight
+        ScrollBar.horizontal.policy: ScrollBar.AlwaysOff
 
-        Grid {
-            columns: 2
-            columnSpacing: 12
-            rowSpacing: 8
+        Column {
+            id: settingsContent
+            spacing: 8
+            width: settingsScroll.availableWidth
 
-            Label {
-                text: qsTr("字号")
-            }
-            SpinBox {
-                from: 8
-                to: 72
-                value: dlg.gui ? dlg.gui.fontSize : 18
-                onValueModified: if (dlg.gui)
-                    dlg.gui.fontSize = value
-            }
+            Grid {
+                id: settingsGrid
+                width: parent.width
+                columns: width < 320 ? 1 : 2
+                columnSpacing: 12
+                rowSpacing: 8
 
-            Label {
-                text: qsTr("行高")
-            }
-            SpinBox {
-                from: 8
-                to: 96
-                value: dlg.gui ? dlg.gui.lineHeight : 19
-                onValueModified: if (dlg.gui)
-                    dlg.gui.lineHeight = value
-            }
-
-            Label {
-                text: qsTr("刷新帧率")
-            }
-            SpinBox {
-                from: 1
-                to: 2000
-                value: dlg.gui ? dlg.gui.fps : 60
-                onValueModified: if (dlg.gui)
-                    dlg.gui.fps = value
-            }
-
-            Label {
-                text: qsTr("历史行数")
-            }
-            SpinBox {
-                from: 100
-                to: 100000
-                stepSize: 100
-                value: dlg.gui ? dlg.gui.maxLog : 5000
-                onValueModified: if (dlg.gui)
-                    dlg.gui.maxLog = value
-            }
-
-            Label {
-                text: qsTr("字体")
-            }
-            ComboBox {
-                id: fontBox
-                width: 240
-                editable: true
-                model: dlg.gui ? dlg.gui.availableFontFamilies() : []
-                Component.onCompleted: if (dlg.gui)
-                    editText = dlg.gui.fontName
-                onActivated: if (dlg.gui)
-                    dlg.gui.fontName = currentText
-                onAccepted: if (dlg.gui)
-                    dlg.gui.fontName = editText
-            }
-        }
-
-        // ---- 颜色 ----
-        Repeater {
-            model: [
-                {
-                    key: "fore",
-                    label: qsTr("文字色")
-                },
-                {
-                    key: "back",
-                    label: qsTr("背景色")
-                },
-                {
-                    key: "focus",
-                    label: qsTr("选中文字色")
-                },
-                {
-                    key: "log",
-                    label: qsTr("历史文字色")
-                }
-            ]
-            delegate: Row {
-                id: colorRow
-                required property var modelData
-                spacing: 8
                 Label {
-                    text: colorRow.modelData.label
-                    width: 90
+                    text: qsTr("字号")
                 }
-                Rectangle {
-                    width: 48
-                    height: 22
-                    border.color: "#888888"
-                    color: dlg.colorOf(colorRow.modelData.key)
+                SpinBox {
+                    from: 8
+                    to: 72
+                    value: dlg.gui ? dlg.gui.fontSize : 18
+                    onValueModified: if (dlg.gui)
+                        dlg.gui.fontSize = value
                 }
+
                 Label {
-                    text: dlg.gui ? dlg.gui.colorToString(dlg.colorOf(colorRow.modelData.key)) : ""
-                    width: 90
+                    text: qsTr("行高")
                 }
-                Button {
-                    text: qsTr("选择…")
-                    onClicked: {
-                        picker.which = colorRow.modelData.key;
-                        picker.selectedColor = dlg.colorOf(colorRow.modelData.key);
-                        picker.open();
+                SpinBox {
+                    from: 8
+                    to: 96
+                    value: dlg.gui ? dlg.gui.lineHeight : 19
+                    onValueModified: if (dlg.gui)
+                        dlg.gui.lineHeight = value
+                }
+
+                Label {
+                    text: qsTr("刷新帧率")
+                }
+                SpinBox {
+                    from: 1
+                    to: 2000
+                    value: dlg.gui ? dlg.gui.fps : 60
+                    onValueModified: if (dlg.gui)
+                        dlg.gui.fps = value
+                }
+
+                Label {
+                    text: qsTr("历史行数")
+                }
+                SpinBox {
+                    from: 100
+                    to: 100000
+                    stepSize: 100
+                    value: dlg.gui ? dlg.gui.maxLog : 5000
+                    onValueModified: if (dlg.gui)
+                        dlg.gui.maxLog = value
+                }
+
+                Label {
+                    text: qsTr("字体")
+                }
+                ComboBox {
+                    id: fontBox
+                    width: Math.max(0, Math.min(240, settingsGrid.columns === 1
+                                                 ? settingsGrid.width : settingsGrid.width - 100))
+                    editable: true
+                    model: dlg.gui ? dlg.gui.availableFontFamilies() : []
+                    Component.onCompleted: if (dlg.gui)
+                        editText = dlg.gui.fontName
+                    onActivated: if (dlg.gui)
+                        dlg.gui.fontName = currentText
+                    onAccepted: if (dlg.gui)
+                        dlg.gui.fontName = editText
+                }
+            }
+
+            // ---- 颜色 ----
+            Repeater {
+                model: [
+                    {
+                        key: "fore",
+                        label: qsTr("文字色")
+                    },
+                    {
+                        key: "back",
+                        label: qsTr("背景色")
+                    },
+                    {
+                        key: "focus",
+                        label: qsTr("选中文字色")
+                    },
+                    {
+                        key: "log",
+                        label: qsTr("历史文字色")
+                    }
+                ]
+                delegate: Flow {
+                    id: colorRow
+                    required property var modelData
+                    spacing: 8
+                    width: settingsContent.width
+                    Label {
+                        text: colorRow.modelData.label
+                        width: 90
+                    }
+                    Rectangle {
+                        width: 48
+                        height: 32
+                        border.color: "#888888"
+                        color: dlg.colorOf(colorRow.modelData.key)
+                    }
+                    Label {
+                        text: dlg.gui ? dlg.gui.colorToString(dlg.colorOf(colorRow.modelData.key)) : ""
+                        width: 90
+                    }
+                    Button {
+                        text: qsTr("选择…")
+                        height: Math.max(48, implicitHeight)
+                        onClicked: {
+                            picker.which = colorRow.modelData.key;
+                            picker.selectedColor = dlg.colorOf(colorRow.modelData.key);
+                            picker.open();
+                        }
                     }
                 }
             }
+
+            Flow {
+                width: parent.width
+                spacing: 8
+                Button {
+                    text: qsTr("恢复默认")
+                    onClicked: if (dlg.gui)
+                        dlg.gui.resetToDefaults()
+                }
+                Button {
+                    text: qsTr("保存到配置文件")
+                    enabled: dlg.gui !== null
+                    onClicked: if (dlg.engine)
+                        dlg.engine.saveConfigFiles()
+                }
+            }
+
+            Label {
+                width: parent.width
+                wrapMode: Text.WordWrap
+                text: qsTr("※ 修改即时生效；「保存到配置文件」写入 emuera.config")
+                color: "#909090"
+                font.pixelSize: 11
+            }
         }
 
-        Row {
-            spacing: 8
-            Button {
-                text: qsTr("恢复默认")
-                onClicked: if (dlg.gui)
-                    dlg.gui.resetToDefaults()
-            }
-            Button {
-                text: qsTr("保存到配置文件")
-                enabled: dlg.gui !== null
-                onClicked: if (dlg.engine)
-                    dlg.engine.saveConfigFiles()
-            }
-        }
-
-        Label {
-            text: qsTr("※ 修改即时生效；「保存到配置文件」写入 emuera.config")
-            color: "#909090"
-            font.pixelSize: 11
-        }
     }
 
     // 供「保存到配置文件」使用（由 Main.qml 注入）

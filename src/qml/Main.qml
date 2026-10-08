@@ -39,7 +39,7 @@ import io.yigekuoyou.eraengine
 //   * 菜单：文件 / 编辑 / 视图 / 帮助（对齐 C# MainWindow 的 ToolStrip）；
 //     平台差异：桌面用 QtQuick.Controls MenuBar（Linux=KDE/Kirigami 风格、
 //     Windows=系统默认、macOS=系统风格），macOS 另建 Qt.labs.platform 原生
-//     菜单栏挂系统菜单栏 / Linux 全局菜单（NativeMenuBar.qml），Android 用悬浮按钮 + 弹出菜单；
+//     菜单栏挂系统菜单栏 / Linux 全局菜单（NativeMenuBar.qml），Android 用工具栏 + 弹出菜单；
 //   * 窗口几何/模式（窗口化/全屏/无边框全屏）由 C++ WindowController 直控，
 //     QML 不再绑定 width/height/visibility；
 //   * 后台托盘由 C++ TrayController 提供（关闭可隐藏到托盘常驻）；
@@ -235,6 +235,7 @@ ApplicationWindow {
     //（SettingsDialog / AboutDialog 都派生自 Dialog），所以这里保持 var；
     // 调用点只用到 .open()/.closed/.destroy()。
     property var activeDialog: null
+    property bool hasPresentedGame: false
 
     function openLazyDialog(url, props) {
         if (activeDialog) {
@@ -386,7 +387,7 @@ ApplicationWindow {
     //   org.kde.desktop/Kirigami 风格着色，Windows 走系统默认风格）；
     // * macOS：窗口内不放，Component.onCompleted 里创建 Qt.labs.platform 的
     //   NativeMenuBar 挂到系统菜单栏 / Linux 全局菜单；
-    // * Android/iOS：不创建，改用下方悬浮按钮 + 弹出菜单。
+    // * Android/iOS：不创建，改用下方工具栏 + 弹出菜单。
     // labs MenuBar 是 QObject，Loader 装不了，这里只装 Controls MenuBar。
     // Loader.item 的静态类型是 Item（QObject），而 ApplicationWindow.menuBar 要 Item：
     // 用 QML 的 as 转型给出确定类型（qmllint 的 incompatible-type 也就消失）。
@@ -440,38 +441,59 @@ ApplicationWindow {
         }
     }
 
-    // ---- 移动端（Android/iOS）触屏菜单 ----
-    // 桌面菜单栏的触控目标太小；改悬浮圆按钮 + 弹出菜单（Material/系统风格
-    // 的 MenuItem 自带触屏级尺寸）。动作与桌面菜单完全同一套。
-    RoundButton {
+    // 工具栏占据 header 空间，舞台只缩放到剩余的 contentItem。
+    header: ToolBar {
+        id: mobileToolbar
         visible: window.isMobile
-        anchors.top: parent.top
-        anchors.right: parent.right
-        anchors.margins: 12
-        width: 48
-        height: 48
-        radius: 24
-        z: 1000
-        text: qsTr("☰")
-        font.pixelSize: 24
-        onClicked: mobileMenu.open()
+        height: visible ? 56 : 0
+
+        Label {
+            anchors.left: parent.left
+            anchors.leftMargin: 16
+            anchors.right: mobileMenuButton.left
+            anchors.rightMargin: 8
+            anchors.verticalCenter: parent.verticalCenter
+            text: window.title
+            elide: Text.ElideRight
+        }
+        ToolButton {
+            id: mobileMenuButton
+            anchors.right: parent.right
+            anchors.rightMargin: 4
+            anchors.verticalCenter: parent.verticalCenter
+            width: 48
+            height: 48
+            text: qsTr("☰")
+            font.pixelSize: 24
+            Accessible.name: qsTr("菜单")
+            enabled: !statusStrip.loading
+            onClicked: mobileMenu.open()
+        }
     }
     Menu {
         id: mobileMenu
-        width: Math.min(window.width - 24, 320)
-        MenuItem { action: actOpen }
-        MenuItem { action: actReload }
-        MenuItem { action: actSaveLog }
-        MenuItem { action: actTitle }
+        parent: Overlay.overlay
+        popupType: Popup.Item
+        x: Math.max(8, parent.width - width - 8)
+        y: mobileToolbar.height
+        width: Math.max(0, Math.min(parent.width - 16, 320))
+        height: Math.min(implicitHeight, Math.max(0, parent.height - y - 8))
+        margins: 8
+        modal: true
+        focus: true
+        component TouchMenuItem: MenuItem {
+            implicitHeight: Math.max(48, implicitContentHeight + topPadding + bottomPadding)
+        }
+        TouchMenuItem { action: actOpen }
+        TouchMenuItem { action: actReload; enabled: eraEngine.gameDirectory !== "" }
+        TouchMenuItem { action: actSaveLog }
+        TouchMenuItem { action: actTitle; enabled: eraEngine.gameDirectory !== "" }
         MenuSeparator {}
-        MenuItem { action: actSettings }
-        MenuItem { action: actAbout }
+        TouchMenuItem { action: actSettings }
+        TouchMenuItem { action: actAbout }
         MenuSeparator {}
-        MenuItem { action: actWindowed }
-        MenuItem { action: actFullscreen }
-        MenuItem { action: actBorderless }
-        MenuSeparator {}
-        MenuItem { action: actQuit }
+        TouchMenuItem { action: actBottom }
+        TouchMenuItem { action: actQuit }
     }
 
     // ---- 控制台（渲染层）：虚拟舞台 ----
@@ -481,19 +503,51 @@ ApplicationWindow {
     // window.color（背景色）= 信箱。Qt 文档：Item.scale 级联到全部子项，
     // 输入事件坐标自动按逆变换映射（MouseArea 拿到的仍是舞台本地坐标）。
     Item {
-        anchors.centerIn: parent
-        width: eraEngine.gui.windowWidth
-        height: eraEngine.gui.windowHeight
-        scale: Math.min(window.contentItem.width / width,
-                        window.contentItem.height / height)
+        id: gameViewport
+        anchors.fill: parent
+        // Android normally resizes the window above the keyboard. Keep the
+        // viewport clipped so the scaled stage cannot draw below that area.
+        clip: true
 
-        EraRender {
-            id: eraRender
-            anchors.fill: parent
-            engine: eraEngine
-            // 屏幕刷新率来自 C++（QScreen::refreshRate）——QML 的 Screen 没有
-            // refreshRate 属性，供控制台计算刷新节拍（见 Console.qml）。
-            screenRefreshRate: windowController.screenRefreshRate
+        Item {
+            id: gameStage
+            anchors.centerIn: parent
+            width: eraEngine.gui.windowWidth
+            height: eraEngine.gui.windowHeight
+            scale: Math.max(0, Math.min(gameViewport.width / width,
+                            gameViewport.height / height))
+
+            EraRender {
+                id: eraRender
+                anchors.fill: parent
+                engine: eraEngine
+                // 屏幕刷新率来自 C++（QScreen::refreshRate）——QML 的 Screen 没有
+                // refreshRate 属性，供控制台计算刷新节拍（见 Console.qml）。
+                screenRefreshRate: windowController.screenRefreshRate
+            }
+        }
+
+    }
+
+    // 未装载时在屏幕空间显示操作，不随游戏舞台缩小。
+    Column {
+        anchors.centerIn: gameViewport
+        width: Math.max(0, Math.min(gameViewport.width - 32, 360))
+        spacing: 16
+        visible: eraEngine.gameDirectory === "" && !statusStrip.loading
+                 && !window.hasPresentedGame
+        Label {
+            width: parent.width
+            text: qsTr("打开游戏目录以开始")
+            horizontalAlignment: Text.AlignHCenter
+            wrapMode: Text.WordWrap
+            color: eraEngine.gui.foreColor
+        }
+        Button {
+            anchors.horizontalCenter: parent.horizontalCenter
+            text: qsTr("打开目录…")
+            height: Math.max(48, implicitHeight)
+            onClicked: actOpen.trigger()
         }
     }
 
@@ -603,6 +657,7 @@ ApplicationWindow {
     // ---- 快捷键：全屏/窗口化切换（执行在 C++ WindowController）----
     Shortcut {
         sequence: "F11"
+        enabled: !window.isMobile
         onActivated: windowController.toggleFullscreen()
     }
     // Esc 退出全屏（移动端/无边框全屏下没有菜单可点，留这条退路）。
@@ -613,7 +668,8 @@ ApplicationWindow {
     // “Only binding to one of multiple key bindings associated with 70”）。
     Shortcut {
         sequences: [StandardKey.Cancel]
-        enabled: windowController.windowMode !== "windowed"
+        enabled: !window.isMobile && !mobileMenu.visible && !window.activeDialog
+                 && windowController.windowMode !== "windowed"
         onActivated: windowController.windowMode = "windowed"
     }
 
@@ -657,8 +713,10 @@ ApplicationWindow {
         function onScriptsLoaded(ok) {
             statusStrip.loading = false;
             statusStrip.warningCount = eraEngine.parseWarnings().length;
-            if (ok)
+            if (ok) {
+                window.hasPresentedGame = true;
                 eraEngine.runSystem();
+            }
         }
     }
 
@@ -675,6 +733,7 @@ ApplicationWindow {
 
         Column {
             anchors.centerIn: parent
+            width: Math.max(0, Math.min(parent.width - 32, 320))
             spacing: 12
 
             Text {
@@ -685,7 +744,8 @@ ApplicationWindow {
             }
             ProgressBar {
                 id: loadBar
-                width: 320
+                width: parent.width
+                indeterminate: statusStrip.loadTotal <= 0
                 from: 0
                 to: Math.max(1, statusStrip.loadTotal)
                 value: statusStrip.loadDone

@@ -31,6 +31,10 @@ set(QT_QML_OUTPUT_DIRECTORY  ${CMAKE_BINARY_DIR})
 #     QML 导入路径后，任何 QML 应用（不链接本工程）都能 import io.yigekuoyou.eraengine。
 # 显式写 SHARED（不用关键字时「Qt 是共享库就建共享库」，但显式更明确）。
 qt_add_library(eraengine SHARED)
+# appemuera uses a few C++ helper types directly on Windows. Export all public
+# symbols from the DLL so MSVC can resolve GuiManager's meta-object and the
+# ResourceImageProvider constructor when linking the executable.
+set_target_properties(eraengine PROPERTIES WINDOWS_EXPORT_ALL_SYMBOLS ON)
 qt_add_qml_module(eraengine
     URI io.yigekuoyou.eraengine
     VERSION 1.0

@@ -40,8 +40,15 @@ on:
     branches:
       - master
       - 'feat/**'
+    tags:
+      - 'v*.*.*'
   pull_request:
+  release:
+    types: [published]
   workflow_dispatch:
+
+permissions:
+  contents: write
 
 # 同一分支连着推时，取消上一次还没跑完的构建
 concurrency:
@@ -66,6 +73,37 @@ env:
   WARNINGS_FLAG: '-DEMUERA_WARNINGS_AS_ERRORS=OFF'
 
 jobs:
+  tests:
+    name: Linux tests and QML lint
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    steps:
+      - name: 检出源码
+        uses: actions/checkout@v4
+      - name: 安装 Qt ${{ env.QT_VERSION }}
+        uses: jurplel/install-qt-action@v4
+        with:
+          version: ${{ env.QT_VERSION }}
+          host: linux
+          target: desktop
+          arch: gcc_64
+          modules: ${{ env.QT_MODULES }}
+          cache: true
+      - name: 配置
+        run: |
+          cmake -S . -B build -G Ninja \
+            -DCMAKE_BUILD_TYPE=Release \
+            -DCMAKE_PREFIX_PATH="$QT_ROOT_DIR" \
+            -DEMUERA_WARNINGS_AS_ERRORS=OFF
+      - name: 编译测试目标
+        run: cmake --build build --parallel
+      - name: QML 静态检查
+        run: cmake --build build --target all_qmllint
+      - name: 运行 CTest
+        env:
+          QT_QPA_PLATFORM: offscreen
+        run: ctest --test-dir build --output-on-failure --parallel 2
+
   # ------------------------------------------------------------------ Windows
   windows:
     name: Windows x64 (MSVC 2022)
@@ -283,11 +321,64 @@ jobs:
       - name: 编译 APK（cmake --build --target apk）
         run: cmake --build build --target apk
 
-      - name: 上传产物
+      - name: 校验 APK 并整理下载目录
+        shell: bash
+        run: |
+          set -euo pipefail
+          APK="$(find build -type f -path '*/outputs/apk/*/*.apk' | head -n 1)"
+          [ -n "$APK" ] && [ -f "$APK" ] || { echo '未找到 APK' >&2; find build -type f -name '*.apk' -print; exit 1; }
+          echo "APK=$APK"
+          mkdir -p dist/android
+          cp "$APK" dist/android/emuera-android-arm64-v8a-debug.apk
+          # APK 本身是 ZIP：先验证目录结构和中央目录完整，再验证 debug 签名。
+          unzip -t dist/android/emuera-android-arm64-v8a-debug.apk >/dev/null
+          APKSIGNER="$(find "$ANDROID_HOME/build-tools" -type f -name apksigner | sort -V | tail -n 1)"
+          [ -x "$APKSIGNER" ] || { echo '找不到 apksigner' >&2; exit 1; }
+          "$APKSIGNER" verify --verbose dist/android/emuera-android-arm64-v8a-debug.apk
+          sha256sum dist/android/emuera-android-arm64-v8a-debug.apk | tee dist/android/SHA256SUMS
+          ls -lh dist/android
+
+      - name: 上传 APK（下载后解压即可得到可安装文件）
         uses: actions/upload-artifact@v4
         with:
           name: emuera-android-apk
-          path: |
-            build/android-build/build/outputs/apk/**/*.apk
-            build/android-build-*/build/outputs/apk/**/*.apk
+          path: dist/android/emuera-android-arm64-v8a-debug.apk
           if-no-files-found: error
+
+      - name: 上传 APK 校验和
+        uses: actions/upload-artifact@v4
+        with:
+          name: emuera-android-apk-checksum
+          path: dist/android/SHA256SUMS
+          if-no-files-found: error
+
+  release:
+    name: Publish release assets
+    needs: [windows, macos, android]
+    if: startsWith(github.ref, 'refs/tags/v') || github.event_name == 'release'
+    runs-on: ubuntu-latest
+    steps:
+      - name: 下载构建产物
+        uses: actions/download-artifact@v4
+        with:
+          path: dist
+          merge-multiple: true
+      - name: 生成校验和与抗干扰压缩包
+        run: |
+          set -euo pipefail
+          find dist -type f -print
+          cd dist
+          sha256sum *.apk *.zip *.dmg > SHA256SUMS
+          tar --zstd -cf "emuera-${GITHUB_REF_NAME}.tar.zst" *.apk *.zip *.dmg SHA256SUMS
+      - name: 发布 GitHub Release 资产
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ github.ref_name }}
+          files: |
+            dist/*.apk
+            dist/*.zip
+            dist/*.dmg
+            dist/*.tar.zst
+            dist/SHA256SUMS
+          generate_release_notes: true
+          prerelease: ${{ github.ref_name != 'v0.0.1' }}

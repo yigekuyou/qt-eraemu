@@ -46,6 +46,7 @@ import io.yigekuoyou.eraengine
 FocusScope {
     id: root
     focus: true
+    readonly property bool isMobile: Qt.platform.os === "android" || Qt.platform.os === "ios"
 
     // 屏幕刷新率（Hz）由 C++ 注入（QScreen::refreshRate）——Qt 的 QML Screen
     // 附着类型**没有** refreshRate 属性（Qt 文档 Screen QML Type），旧代码写的
@@ -191,7 +192,7 @@ FocusScope {
         anchors.right: parent.right
         anchors.top: parent.top
         anchors.bottom: inputField.top
-        focus: root.primitiveInput
+        focus: root.primitiveInput || (root.isMobile && root.anyKeyInput)
 
         ListView {
             id: view
@@ -371,8 +372,8 @@ FocusScope {
         objectName: "consoleInputField"
         // 输入控件始终存在并保留焦点目标；只有真正等待 INPUT 时才可见、可编辑。
         // 这样重绘/翻页期间不会因控件销毁重建抢走鼠标事件。
-        focus: root.inputActive
-        enabled: root.inputActive
+        focus: root.inputActive && !root.isMobile
+        enabled: root.inputActive && !(root.isMobile && root.anyKeyInput)
         anchors.left: parent.left
         anchors.right: parent.right
         anchors.bottom: parent.bottom
@@ -395,6 +396,8 @@ FocusScope {
             : ""
         // 输入类型分支限制：整数型输入只接受数字（INPUT 可负）
         validator: root.backend && root.backend.waitingInput && !root.stringInputKind ? intOnly : null
+        inputMethodHints: root.stringInputKind ? Qt.ImhNone
+                          : Qt.ImhPreferNumbers | Qt.ImhNoPredictiveText
         onAccepted: root.submit()
     }
     RegularExpressionValidator {

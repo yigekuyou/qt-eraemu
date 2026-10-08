@@ -24,10 +24,11 @@
 void ParseDiagnostics::addText(DiagSeverity sev, const QString& code, const QString& text) {
     // 既有形态："文件:行: 文本" / "文件:行:列: 文本"；拆出位置便于按位置检索。
     static const QRegularExpression prefix(
-        QStringLiteral(R"(^(.+?:\d+(?::\d+)?):\s+(.*)$)"));
+        QStringLiteral(R"(^(.+?):(\d+)(?::(\d+))?:\s+(.*)$)"));
     const QRegularExpressionMatch m = prefix.match(text);
     if (m.hasMatch()) {
-        add(sev, code, m.captured(1), m.captured(2));
+        add(sev, code, m.captured(1), m.captured(2).toInt(),
+            m.captured(3).isEmpty() ? -1 : m.captured(3).toInt(), 0, m.captured(4));
     } else {
         add(sev, code, QString(), text);
     }

@@ -16,6 +16,7 @@
  * along with this program.  If not, see <https://www.gnu.org/licenses/>.
  */
 #include "config_loader.h"
+#include "GameData/file_system_io.h"   // FileSystem::resolvePathCase（加载前还原真实大小写）
 
 #include <QFile>
 #include <QFileInfo>
@@ -65,7 +66,9 @@ bool ConfigLoader::parseConfigFile(const QString& filePath, QHash<QString, QStri
     // 文本文件编码：嗅探（BOM → UTF-8 → Shift-JIS → Latin-1），内部统一 Unicode
     bool ok = false;
     TextEncoding detected = TextEncoding::Auto;
-    const QString text = TextCodecUtil::readFile(filePath, m_readEncoding, &detected, &ok);
+    // 大小写：加载前把路径逐段还原成磁盘上的真实名字（Windows→Linux 移植问题）。
+    const QString text = TextCodecUtil::readFile(FileSystem::resolvePathCase(filePath),
+                                                 m_readEncoding, &detected, &ok);
     if (!ok) {
         qDebug() << "[ConfigLoader] 无法读取配置文件:" << filePath;
         return false;

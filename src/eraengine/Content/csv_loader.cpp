@@ -16,6 +16,7 @@
  * along with this program.  If not, see <https://www.gnu.org/licenses/>.
  */
 #include "csv_loader.h"
+#include "GameData/file_system_io.h"   // FileSystem::resolvePathCase（加载前还原真实大小写）
 #include "text_encoding.h"
 #include <QRegularExpression>
 #include <QDebug>
@@ -29,7 +30,8 @@ CsvLoader::CsvLoader(QObject* parent)
 bool CsvLoader::loadFile(const QString& filePath) {
     // 编码按文件嗅探（CSV 在日文游戏里常为 Shift-JIS，汉化版为 UTF-8）
     bool ok = false;
-    const QString content = TextCodecUtil::readFile(filePath, TextEncoding::Auto, nullptr, &ok);
+    const QString content = TextCodecUtil::readFile(FileSystem::resolvePathCase(filePath),
+                                                    TextEncoding::Auto, nullptr, &ok);
     if (!ok) {
         qWarning() << "[load] CSV 读取失败:" << filePath;
         return false;

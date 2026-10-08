@@ -70,13 +70,35 @@ inline constexpr auto kDeclError          = "decl-error";          // 变量声�
 struct ParseDiagnostic {
     DiagSeverity severity = DiagSeverity::Warning;
     QString code;
-    QString position;   // "文件:行[:列]"，可空
+    QString position;   // "文件:行[:列]"（兼容文本视图，可空）
     QString message;
     QString snippet;    // 原文片段，可空
 
+    // ---- 结构化定位：**LSP / MCP 用这份，不要用 position 字符串** ----
+    //   LSP 的 Diagnostic.range 要 0 基的 (行, 列) **外加长度**（高亮跨度）；
+    //   MCP 工具输出同样只要数字 —— 不该让 agent 去正则拆 "文件:行:列"。
+    //   position 字符串保留只为兼容既有文本消费者（dbus 告警计数等）：
+    //   它在 Windows 盘符（C:\dir\x.erb）下本来就有二义性，也表达不了跨度。
+    //   口径与引擎一致：line/column 从 **1** 起；-1 = 未知（LSP 侧统一减 1）。
+    QString file;
+    int line = -1;
+    int column = -1;
+    int length = 0;     // 0 = 点到点（无跨度）
+
+    [[nodiscard]] bool hasPosition() const { return line > 0; }
+
+    // 由结构化字段拼出文本位置（position 已给则原样用）
+    [[nodiscard]] QString positionText() const {
+        if (!position.isEmpty()) return position;
+        if (!hasPosition()) return {};
+        return column > 0 ? QStringLiteral("%1:%2:%3").arg(file).arg(line).arg(column)
+                          : QStringLiteral("%1:%2").arg(file).arg(line);
+    }
+
     // 兼容既有文本形态："position: message"（无位置时只有 message）
     [[nodiscard]] QString toString() const {
-        return position.isEmpty() ? message : (position + QStringLiteral(": ") + message);
+        const QString p = positionText();
+        return p.isEmpty() ? message : (p + QStringLiteral(": ") + message);
     }
 };
 
@@ -89,7 +111,34 @@ public:
 
     void add(DiagSeverity sev, const QString& code, const QString& position,
              const QString& message, const QString& snippet = {}) {
-        add(ParseDiagnostic{sev, code, position, message, snippet});
+        // 显式逐字段赋值（不用聚合初始化）：ParseDiagnostic 字段较多，
+        // 聚合初始化会触发 -Wmissing-field-initializers（本项目 -Werror）。
+        ParseDiagnostic d;
+        d.severity = sev;
+        d.code = code;
+        d.position = position;
+        d.message = message;
+        d.snippet = snippet;
+        add(d);
+    }
+
+    // 结构化定位版本（**LSP/MCP 走这条**）：file/line/column 为引擎口径（从 1 起），
+    // length = 高亮跨度（0 = 点到点）。position 字符串自动派生，文本消费者不受影响。
+    void add(DiagSeverity sev, const QString& code, const QString& file, int line, int column,
+             int length, const QString& message, const QString& snippet = {}) {
+        ParseDiagnostic d;
+        d.severity = sev;
+        d.code = code;
+        d.file = file;
+        d.line = line;
+        d.column = column;
+        d.length = length;
+        d.message = message;
+        d.snippet = snippet;
+        // 同时派生文本位置：既有消费者直接读 .position（如 test_parse_diagnostic、
+        // dbus 告警计数），不能让它们因为新增结构化字段而拿到空串。
+        d.position = d.positionText();
+        add(d);
     }
 
     // 收下一条既有文本告警；若形如 "文件:行: 文本" 则把前缀拆进 position。

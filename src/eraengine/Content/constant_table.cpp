@@ -16,6 +16,7 @@
  * along with this program.  If not, see <https://www.gnu.org/licenses/>.
  */
 #include "constant_table.h"
+#include "GameData/file_system_io.h"   // FileSystem::resolvePathCase（加载前还原真实大小写）
 
 #include <QDir>
 #include <QFile>
@@ -63,7 +64,8 @@ QStringList ConstantTable::parseCsvLine(const QString& line) {
 bool ConstantTable::loadCsvFile(const QString& filePath, const QString& tableKey) {
     // CSV 名表：同样按文件嗅探编码（CSV 可能是 Shift-JIS 或 UTF-8）
     bool ok = false;
-    QString text = TextCodecUtil::readFile(filePath, TextEncoding::Auto, nullptr, &ok);
+    QString text = TextCodecUtil::readFile(FileSystem::resolvePathCase(filePath),
+                                           TextEncoding::Auto, nullptr, &ok);
     if (!ok) {
         return false;
     }

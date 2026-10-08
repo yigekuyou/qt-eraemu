@@ -1083,8 +1083,15 @@ LogicalLine AstBuilder::build(const QString& rawLine,
         // 供装载期按类汇总（见 parse_diagnostic.h / 调试与错误.md 的警告等级）。
         line.errMes = QStringLiteral("未识别的指令: %1").arg(line.functionName);
         if (diagnostics) {
+            // 结构化定位（LSP/MCP 直接可用）：LSP 要 0 基 (行, 列) + 长度，MCP 要数字。
+            // AstBuilder 没有 token 列号（Word 只带类别+文本），但指令名就是本行的
+            // **首个 token**，故 列 = 缩进 + 1、跨度 = 指令名长度 —— 足够精确，
+            // 且无需为了一个列号去改词法模型。
+            const int indent = raw.indexOf(trimmed);
+            const int column1 = (indent >= 0 ? indent : 0) + 1;
             diagnostics->add(DiagSeverity::Warning, DiagCode::kUnknownInstruction,
-                             line.position.toString(),
+                             position.filename, position.lineNumber, column1,
+                             line.functionName.size(),
                              QStringLiteral("未识别的指令: %1").arg(line.functionName),
                              trimmed.left(80));
         }

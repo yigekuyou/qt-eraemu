@@ -311,11 +311,12 @@ private:
     struct WarningCollector {
         QList<QString> warnings;
         QList<QString> keys;
+        QList<ScriptPosition> positions;
         QSet<QString> seen;
     };
     // 纯函数（不触碰成员）：只读 AST + 写入 out —— 线程安全，供并行校验使用。
     static void collectFunctionWarnings(const QSharedPointer<ExpressionNode>& ast,
-                                        const QString& position, WarningCollector& out);
+                                        const ScriptPosition& position, WarningCollector& out);
 
     void setCurrentLineInternal(int line, bool forceEmit = false);
     void pushFrame(const Frame& frame);

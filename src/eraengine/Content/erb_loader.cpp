@@ -17,6 +17,7 @@
  */
 #include "erb_loader.h"
 #include "era_parse_table.h"
+#include "GameData/file_system_io.h"   // FileSystem::resolvePathCase（加载前还原真实大小写）
 #include "ast/expression_lexer.h"
 #include "ast/expression_parser.h"
 #include "ast/function_types.h"
@@ -64,8 +65,14 @@ ErbLoader::ErbLoader(QObject* parent) : QObject(parent), m_parseTable(nullptr) {
 QString ErbLoader::readFileContent(const QString& filePath) const {
     // 编码按文件嗅探（BOM → UTF-8 → Shift-JIS → Latin-1）：
     // 同一游戏目录里 UTF-8 的汉化 ERB 与 Shift-JIS 的原始 ERB 可以共存。
+    //
+    // 大小写：先用引擎自带的「扫目录还原真实文件名」把整条路径逐段还原
+    //（= Windows 的大小写不敏感文件系统在 Linux 上的模拟）。否则「在 Windows 上
+    // 能跑、到 Linux 就 file not found」——脚本/头文件/include 里写的
+    // `Foo.ERB` 而磁盘上是 `foo.erb` 时必然踩中。已在磁盘上存在时走快路径。
+    const QString realPath = FileSystem::resolvePathCase(filePath);
     TextEncoding detected = TextEncoding::Auto;
-    return TextCodecUtil::readFile(filePath, m_readEncoding, &detected, nullptr);
+    return TextCodecUtil::readFile(realPath, m_readEncoding, &detected, nullptr);
 }
 
 // ---------------------------------------------------------------------------
@@ -78,7 +85,8 @@ QList<ErbSourceLine> ErbLoader::prepareLines(const QString& content, const QStri
 
 bool ErbLoader::loadRenameFile(const QString& filePath) {
     bool ok = false;
-    const QString text = TextCodecUtil::readFile(filePath, m_readEncoding, nullptr, &ok);
+    const QString text = TextCodecUtil::readFile(FileSystem::resolvePathCase(filePath),
+                                                 m_readEncoding, nullptr, &ok);
     if (!ok) return false;
     m_preprocessor.setRenameMap(ErbPreprocessor::parseRenameCsv(text));
     return true;

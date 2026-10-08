@@ -58,8 +58,10 @@ public:
     QString getRootDir() const;
     
     // Case-insensitive directory lookup
-    QString findActualDir(const QString& basePath, const QString& targetName) const;
-    QString getPathWithActualCase(const QString& basePath, const QString& targetPath) const;
+    static QString findActualDir(const QString& basePath, const QString& targetName);
+    static QString getPathWithActualCase(const QString& basePath, const QString& targetPath);
+    // Exact paths win; otherwise resolve each missing component case-insensitively.
+    static QString resolvePathCase(const QString& path);
 
     // 解析子目录的**绝对路径**（大小写不敏感）；不存在返回空字符串。
     // 对齐 C# 的 Program.ErbDir / Program.CsvDir（只在该目录内检索）。

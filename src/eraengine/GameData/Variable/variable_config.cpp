@@ -16,6 +16,7 @@
  * along with this program.  If not, see <https://www.gnu.org/licenses/>.
  */
 #include "variable_config.h"
+#include "GameData/file_system_io.h"   // FileSystem::resolvePathCase（加载前还原真实大小写）
 #include "system_variables.h"   // sysvar::extensionDefault1DSizeOf（扩展变量默认长度）
 #include "text_encoding.h"
 #include <QFile>
@@ -31,7 +32,8 @@ bool VariableConfig::loadFromCSV(const QString& filePath)
 {
     // 编码按文件嗅探（VariableSize.csv 常见 Shift-JIS 或 UTF-8）
     bool readOk = false;
-    const QString text = TextCodecUtil::readFile(filePath, TextEncoding::Auto, nullptr, &readOk);
+    const QString text = TextCodecUtil::readFile(FileSystem::resolvePathCase(filePath),
+                                                 TextEncoding::Auto, nullptr, &readOk);
     if (!readOk) {
         return false;
     }

@@ -157,3 +157,7 @@ enable_testing()
 include(CTest)
 
 add_subdirectory(src/eraengine)
+option(EMUERA_BUILD_TOOLS "Build engine-backed LSP and MCP servers" ON)
+if(EMUERA_BUILD_TOOLS AND NOT ANDROID)
+    add_subdirectory(src/tools)
+endif()

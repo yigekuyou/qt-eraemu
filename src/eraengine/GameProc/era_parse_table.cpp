@@ -385,7 +385,7 @@ bool EraParseTable::loadScript(const QString& scriptName, const QList<LogicalLin
                 parseVariableDeclaration(line, currentFunction, isHeaderFile);
             } else {
                 m_diagnostics.add(DiagSeverity::Warning, DiagCode::kSharpLine,
-                                  line.position.toString(),
+                                  line.position.filename, line.position.lineNumber, line.position.column, 0,
                                   QStringLiteral("函数声明之外使用了 # 行 (%1)")
                                       .arg(line.raw.trimmed()));
             }
@@ -1113,7 +1113,7 @@ void EraParseTable::parseVariableDeclaration(const LogicalLine& line, const QStr
 
     if (rest.isEmpty()) {
         m_diagnostics.add(DiagSeverity::Warning, DiagCode::kSharpLine,
-                          line.position.toString(),
+                          line.position.filename, line.position.lineNumber, line.position.column, 0,
                           QStringLiteral("#%1 缺少变量名").arg(directive));
         return;
     }
@@ -1195,12 +1195,12 @@ void EraParseTable::parseVariableDeclaration(const LogicalLine& line, const QStr
         const VariableTable::DeclStatus status = m_variables.addChecked(decl);
         if (status != VariableTable::DeclStatus::Added && decl.scope == VarScope::Global) {
             m_diagnostics.add(DiagSeverity::Warning, DiagCode::kDeclError,
-                              line.position.toString(),
+                              line.position.filename, line.position.lineNumber, line.position.column, 0,
                               QStringLiteral("全局变量 %1 重复定义").arg(decl.name));
         }
     } catch (const std::exception& e) {
         m_diagnostics.add(DiagSeverity::Error, DiagCode::kDeclError,
-                          line.position.toString(),
+                          line.position.filename, line.position.lineNumber, line.position.column, 0,
                           QStringLiteral("#%1 声明错误：%2 (%3)")
                               .arg(directive, QString::fromUtf8(e.what()), rest));
     }
@@ -1650,10 +1650,10 @@ void EraParseTable::resolveFunctionNodes() {
 }
 
 // 收集一个 AST 里的函数调用告警（内置函数参数不符 / 未定义的函数）。
-// position 为空时只报函数级消息；out.seen 用于本脚本内去重（同一表达式被多行共享）。
+// 同一位置的重复 AST 引用去重；其它行/文件保留各自的诊断。
 // 纯函数：只读 AST，结果写入 out —— 可在线程池上按脚本并行调用。
 void EraParseTable::collectFunctionWarnings(const QSharedPointer<ExpressionNode>& ast,
-                                            const QString& position, WarningCollector& out) {
+                                            const ScriptPosition& position, WarningCollector& out) {
     if (!ast) return;
     walkExpression(*ast, [&out, &position](ExpressionNode& node) {
         // 三元分支类型：对齐 C# OperatorMethodManager.ReduceTernaryTerm —— 只允许
@@ -1671,10 +1671,10 @@ void EraParseTable::collectFunctionWarnings(const QSharedPointer<ExpressionNode>
                 const QString err = QStringLiteral(
                     "三項演算子の使用法が不正です"
                     "（条件须为整数；真/假分支须同为整数或同为字符串）");
-                const QString key = QStringLiteral("ternary\x1f") + err;
+                const QString key = position.toString() + QStringLiteral("\x1fternary\x1f") + err;
                 if (!out.seen.contains(key)) {
                     out.seen.insert(key);
-                    out.warnings.append(QStringLiteral("%1: %2 [%3]").arg(position, err, node.toString()));
+                    out.warnings.append(QStringLiteral("%1 [%2]").arg(err, node.toString()));
                     out.keys.append(key);
                 }
             }
@@ -1683,10 +1683,10 @@ void EraParseTable::collectFunctionWarnings(const QSharedPointer<ExpressionNode>
         const auto& fn = static_cast<const FunctionNode&>(node);
         const QString& err = fn.arityError();
         if (err.isEmpty()) return;
-        const QString key = fn.name().toUpper() + QLatin1Char('\x1f') + err;
+        const QString key = position.toString() + QLatin1Char('\x1f') + fn.name().toUpper() + QLatin1Char('\x1f') + err;
         if (out.seen.contains(key)) return;
         out.seen.insert(key);
-        out.warnings.append(QStringLiteral("%1: %2 [%3]").arg(position, err, fn.toString()));
+        out.warnings.append(QStringLiteral("%1 [%2]").arg(err, fn.toString()));
         out.keys.append(key);
     });
 }
@@ -1706,16 +1706,15 @@ void EraParseTable::validateArguments() {
         WarningCollector out;
         for (LogicalLine& line : sd->lines) {
             if (line.kind != LineKind::Instruction) continue;
+            const qsizetype before = out.warnings.size();
             ArgumentParser::build(line);   // 幂等：重算 kind/params/exprs + 重新校验
             if (line.argument.hasError()) {
                 // 结构告警：不参与去重（与串行版一致，key 留空）
-                out.warnings.append(QStringLiteral("%1: %2 (%3)")
-                                        .arg(line.position.toString(),
-                                             line.argument.typeError,
-                                             line.raw.trimmed()));
+                out.warnings.append(QStringLiteral("%1 (%2)")
+                                        .arg(line.argument.typeError, line.raw.trimmed()));
                 out.keys.append(QString());
             }
-            const QString pos = line.position.toString();
+            const ScriptPosition& pos = line.position;
 
             // 注：CALL 语句**不做**实参类型校验 —— 对齐 C#（SP_CALL_ArgumentBuilder 不调用
             // ConvertArg，实参按「实际类型」装进 Transporter 后由被调函数自行解释）。
@@ -1732,6 +1731,8 @@ void EraParseTable::validateArguments() {
             for (const Operand& c : line.argument.cases) {
                 collectFunctionWarnings(c.ast, pos, out);
             }
+            for (qsizetype i = before; i < out.warnings.size(); ++i)
+                out.positions.append(line.position);
         }
         return out;
     };
@@ -1754,8 +1755,10 @@ void EraParseTable::validateArguments() {
                 if (seen.contains(key)) continue;
                 seen.insert(key);
             }
-            m_diagnostics.addText(DiagSeverity::Warning, DiagCode::kArgCheck,
-                                  c.warnings.at(i));
+            const auto& pos = c.positions.at(i);
+            m_diagnostics.add(DiagSeverity::Warning, DiagCode::kArgCheck,
+                              pos.filename, pos.lineNumber, pos.column, 0,
+                              c.warnings.at(i));
         }
     }
 }

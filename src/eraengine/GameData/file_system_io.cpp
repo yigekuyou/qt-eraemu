@@ -37,18 +37,14 @@ QString FileSystem::getRootDir() const
     return m_rootDir;
 }
 
-QString FileSystem::findActualDir(const QString& basePath, const QString& targetName) const
+QString FileSystem::findActualDir(const QString& basePath, const QString& targetName)
 {
-		QDir dir(basePath);
-    if (!dir.exists()) {
-				qDebug() << "Game directory not exists:" << basePath;
-    }
-
-    QStringList entries = dir.entryList(QDir::AllEntries | QDir::NoDotAndDotDot);
-    for (const QString& subDir : entries) {
-        if (subDir.compare(targetName, Qt::CaseInsensitive) == 0) {
-            return subDir;
-        }
+    QDir dir(basePath);
+    if (QFileInfo::exists(dir.filePath(targetName))) return targetName;
+    const QStringList entries = dir.entryList(
+        QDir::AllEntries | QDir::Hidden | QDir::System | QDir::NoDotAndDotDot, QDir::Name);
+    for (const QString& entry : entries) {
+        if (entry.compare(targetName, Qt::CaseInsensitive) == 0) return entry;
     }
     return targetName;
 }
@@ -108,34 +104,23 @@ QStringList FileSystem::listFiles(const QString& dirPath, const QStringList& suf
     return out;
 }
 
-QString FileSystem::getPathWithActualCase(const QString& basePath, const QString& targetPath) const
+QString FileSystem::getPathWithActualCase(const QString& basePath, const QString& targetPath)
 {
-    // Split the path into components
-    QDir baseDir(basePath);
-    if (!baseDir.exists()) {
-        qDebug() << "Base path does not exist:" << basePath;
-        return targetPath;
-    }
+    return resolvePathCase(QDir(basePath).absoluteFilePath(targetPath));
+}
 
-    QFileInfo targetInfo(targetPath);
-    QString relativePath = baseDir.relativeFilePath(targetPath);
-    
-    if (relativePath.isEmpty() || relativePath == ".") {
-        return basePath;
-    }
-
-    // Split into components
-    QStringList components = relativePath.split('/', Qt::SkipEmptyParts);
-    QStringList actualComponents;
-    
-    QDir currentDir = baseDir;
-    for (const QString& component : components) {
-        QString actualName = findActualDir(currentDir.absolutePath(), component);
-        actualComponents.append(actualName);
-        currentDir.cd(actualName);
-    }
-    
-    return currentDir.absolutePath();
+QString FileSystem::resolvePathCase(const QString& path)
+{
+    if (path.isEmpty()) return path;
+    const QFileInfo info(path);
+    if (info.exists()) return info.absoluteFilePath();
+    // Resolve parents without assuming a Unix root: QFileInfo retains Windows
+    // drive roots and UNC shares. Stop when the parent no longer changes.
+    const QString absolute = info.absoluteFilePath();
+    const QString parent = info.absolutePath();
+    if (parent == absolute || info.fileName().isEmpty()) return absolute;
+    const QString actualParent = resolvePathCase(parent);
+    return QDir(actualParent).filePath(findActualDir(actualParent, info.fileName()));
 }
 
 IoResult FileSystem::readFile(const QString& filePath, QString& content)

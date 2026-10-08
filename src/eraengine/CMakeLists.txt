@@ -167,7 +167,10 @@ if(TARGET Qt6::DBus)
     target_link_libraries(eraengine PRIVATE Qt6::DBus)
     target_compile_definitions(eraengine PRIVATE EMUERA_HAS_DBUS)
 endif()
-if(TARGET OpenMP::OpenMP_CXX)
+# Android's NDK OpenMP target links libomp.so, but androiddeployqt does not
+# package that host runtime automatically. The engine has no OpenMP pragmas;
+# keep it optional and disable it on Android to make the shared library load.
+if(TARGET OpenMP::OpenMP_CXX AND NOT ANDROID)
     target_link_libraries(eraengine PRIVATE OpenMP::OpenMP_CXX)
 endif()
 target_include_directories(eraengine PRIVATE

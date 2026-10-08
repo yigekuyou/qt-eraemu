@@ -35,12 +35,10 @@
 #include <QSet>
 #include <QFutureWatcher>
 
-// ERB 子目录递归扫描深度上限：**只是防御**（避免符号链接成环把扫描卡死）。
-// Emuera 对子目录没有深度限制，而 eraMegaten 的 ERB 树深达 7 层
-// （ERB/RPG/スキル関係/CSTR専用スキル/外部作品/アークナイツ/スルト/…）——
-// 旧的 `depth > 5` 会静默丢掉 271 个文件（8125/8396），那些文件里的 @函数
-// 于是全部「未定义」（AUTO_PU_SKILL_核融巨影 / AUTO_PU_SKILL_黃昏（ＡＮ） 等）。
-static constexpr int kMaxScanDepth = 32;
+// ERB 子目录递归扫描深度上限：仅作防御，避免异常目录树导致递归失控。
+// Emuera 本身不限制子目录深度；这里保留一个足够大的上限，且统一使用 255
+//（Windows 路径/目录层级的兼容上限），不能因为正常的深层数据目录漏载脚本。
+static constexpr int kMaxScanDepth = 255;
 
 // 脚本名 = **相对装载根目录的路径**（含扩展名）。
 // 对齐 C# Config.GetFiles 返回的 KeyValuePair<相対パス, 完全パス>：脚本名是

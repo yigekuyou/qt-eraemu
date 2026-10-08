@@ -1065,18 +1065,62 @@ LogicalLine AstBuilder::build(const QString& rawLine,
     }
 
     // 逗号族（CALL/ForNext/Case/Expressions）：仅按顶层逗号切分；Raw：空白+逗号
-    const QStringList tokens = splitOperands(remainder, argKind == ArgKind::Raw);
+    QStringList tokens = splitOperands(remainder, argKind == ArgKind::Raw);
+    // PRINTV 的传统写法允许格式串字面量紧接表达式：
+    //   PRINTV 'LV,...,'(, A * 1,')
+    // 这不是一个表达式，不能把两部分拼成一个 token 交给归约器。
+    // 在顶层拆分时把单引号格式串与其后的括号表达式拆开，避免 test_cli
+    // 在 eraTW 装载时报告“表达式无法归约”。
+    if (line.functionName.startsWith(QLatin1String("PRINTV"))) {
+        QStringList expanded;
+        for (const QString& token : tokens) {
+            const QString t = token.trimmed();
+            if (t.startsWith(QLatin1Char('\''))) {
+                const int close = t.indexOf(QLatin1Char('\''), 1);
+                if (close > 0 && close + 1 < t.size() && t.at(close + 1) == QLatin1Char('(')) {
+                    expanded.append(t.left(close + 1));
+                    expanded.append(t.mid(close + 1));
+                    continue;
+                }
+            }
+            // 兼容旧版 PRINTV 的括号包裹格式：`'(,EXPR,')`。
+            // 括号和分隔引号是 PRINTV 语法，不属于表达式本身。
+            QString legacy = t;
+            if (legacy.startsWith(QLatin1Char('\'')) && legacy.mid(1).startsWith(QLatin1String("(,")))
+                legacy.remove(0, 1);
+            if (legacy.startsWith(QLatin1String("(,"))) {
+                QString expr = legacy.mid(2);
+                if (expr.endsWith(QLatin1String(",')"))) expr.chop(3);
+                else if (expr.endsWith(QLatin1Char(','))) expr.chop(1);
+                if (!expr.trimmed().isEmpty()) expanded.append(expr.trimmed());
+                continue;
+            }
+            expanded.append(token);
+        }
+        tokens = expanded;
+    }
     for (const QString& token : tokens) {
-        Operand operand(token);
-        if (wholeQuoted(token)) {
+        QString normalizedToken = token;
+        if (line.functionName.startsWith(QLatin1String("PRINTV"))) {
+            if (normalizedToken.startsWith(QLatin1Char('\''))
+                && normalizedToken.mid(1).startsWith(QLatin1String("(,")))
+                normalizedToken.remove(0, 1);
+            if (normalizedToken.startsWith(QLatin1String("(,"))) {
+                normalizedToken = normalizedToken.mid(2);
+                if (normalizedToken.endsWith(QLatin1String(",')"))) normalizedToken.chop(3);
+            }
+        }
+        if (normalizedToken.isEmpty()) continue;
+        Operand operand(normalizedToken);
+        if (wholeQuoted(normalizedToken)) {
             operand.isString = true;
-            operand.raw = token.mid(1, token.length() - 2);
-        } else if (token.startsWith('%') || token.startsWith('$')) {
+            operand.raw = normalizedToken.mid(1, normalizedToken.length() - 2);
+        } else if (normalizedToken.startsWith('%') || normalizedToken.startsWith('$')) {
             operand.isVariable = true;
-        } else if (token != QLatin1String(",") && token != QLatin1String(":")) {
+        } else if (normalizedToken != QLatin1String(",") && normalizedToken != QLatin1String(":")) {
             if (resolve && argKind != ArgKind::Case
                 && !(argKind == ArgKind::Times && line.arguments.size() >= 2))
-                operand.ast = resolve(token);
+                operand.ast = resolve(normalizedToken);
         }
         line.arguments.append(operand);
     }

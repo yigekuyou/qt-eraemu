@@ -248,6 +248,12 @@ FocusScope {
                 function onRowsInserted() {
                     Qt.callLater(view.scrollToTail);
                 }
+                // CLEARLINE 先删除旧页再插入新页。仅监听 rowsInserted 时，
+                // ListView 可能在删除阶段保留上一页的 contentY，导致新选择项
+                // 只有鼠标悬停时才暴露出来。
+                function onRowsRemoved() {
+                    Qt.callLater(view.scrollToTail);
+                }
                 function onModelReset() {
                     Qt.callLater(view.scrollToTail);
                 }
@@ -363,7 +369,10 @@ FocusScope {
     TextField {
         id: inputField
         objectName: "consoleInputField"
-        focus: !root.primitiveInput
+        // 输入控件始终存在并保留焦点目标；只有真正等待 INPUT 时才可见、可编辑。
+        // 这样重绘/翻页期间不会因控件销毁重建抢走鼠标事件。
+        focus: root.inputActive
+        enabled: root.inputActive
         anchors.left: parent.left
         anchors.right: parent.right
         anchors.bottom: parent.bottom
@@ -376,7 +385,10 @@ FocusScope {
         rightPadding: 4
         font.family: root.fontName
         font.pixelSize: root.fontSize
-        color: root.foreColor !== "" ? root.foreColor : palette.windowText
+        // TextField 的 palette.windowText 在深色主题下可能与控制台背景相同；
+        // 使用控制台前景色，并让 placeholder 明确采用 disabled/次级颜色。
+        color: root.foreColor !== "" ? root.foreColor : palette.text
+        placeholderTextColor: root.foreColor !== "" ? root.foreColor : palette.placeholderText
         placeholderText: root.backend && root.backend.waitingInput
             ? (root.anyKeyInput ? ("回车/点击继续（" + root.backend.inputKind + "）")
                                 : ("输入（" + root.backend.inputKind + "）"))
@@ -391,6 +403,7 @@ FocusScope {
     }
 
     // 等待类型分支（与旧实现一致）
+    readonly property bool inputActive: backend && backend.waitingInput && !primitiveInput && !titleActive
     readonly property bool primitiveInput: backend && backend.waitingInput && backend.inputKind === "INPUTMOUSEKEY"
     readonly property bool anyKeyInput: {
         if (!backend || !backend.waitingInput)
@@ -406,9 +419,11 @@ FocusScope {
     }
     // Timed input briefly completes before the script redraws and requests it
     // again. Coalesce these transitions so the viewport and focus stay stable.
-    property bool inputRowVisible: false
+    // 输入栏始终保留在布局中，避免等待状态切换时 viewport 高度和页面位置
+    // 突然变化；真正的提交权限由 enabled / submitInput* 的 C++ 状态校验决定。
+    property bool inputRowVisible: true
     function syncInputPresentation(): void {
-        inputRowVisible = backend && backend.waitingInput && !primitiveInput && !titleActive;
+        inputRowVisible = true;
     }
     onTitleActiveChanged: Qt.callLater(root.syncInputPresentation)
     Connections {

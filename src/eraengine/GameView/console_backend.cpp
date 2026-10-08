@@ -755,7 +755,12 @@ void ConsoleBackend::notifyInputRequested(const QString& kind, const QVariant& d
     m_inputKind = kind;
     m_inputDefault = defaultValue;
     m_waitingInput = true;
+    // clickable is derived from the active input channel; invalidate cached
+    // block roles before the view receives the input notification.
+    invalidateLineCache();
     flush();
+    if (rowCount() > 0)
+        emit dataChanged(index(0), index(rowCount() - 1));
     emit inputRequested(kind);
     emit waitingInputChanged();
 }
@@ -768,6 +773,9 @@ void ConsoleBackend::notifyInputDone() {
     m_inputKind.clear();
     m_inputDefault = QVariant();
     m_waitingInput = false;
+    invalidateLineCache();
+    if (rowCount() > 0)
+        emit dataChanged(index(0), index(rowCount() - 1));
     emit waitingInputChanged();
 }
 
@@ -911,7 +919,15 @@ QVariantList ConsoleBackend::flattenLine(const ConsoleDisplayLine& line, int row
             m.insert("segmentIndex", si);
             m.insert("isButton", seg.isButton);
             m.insert("isInteger", seg.isInteger);
-            m.insert("clickable", seg.isButton && seg.enabled);
+            // A PRINTBUTTON is only interactive when its value type matches
+            // the current input channel.  Title animations use TINPUTS while
+            // their full-width background is emitted as integer button 0;
+            // exposing those spans as clickable makes every animation line
+            // hover-highlight and steal mouse/focus events.
+            const bool acceptsButton = inputAcceptsAny(m_inputKind)
+                || (inputExpectsString(m_inputKind) != seg.isInteger);
+            m.insert("clickable", seg.isButton && seg.enabled && m_waitingInput
+                     && acceptsButton);
             if (seg.isButton)
                 // 按钮值（运行期合法输入）：test_cli 分支选择的兜底候选
                 m.insert("btnValue", seg.isInteger ? QVariant(seg.intValue)

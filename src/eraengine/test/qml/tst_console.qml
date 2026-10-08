@@ -386,6 +386,8 @@ TestCase {
         backend.newline();
         backend.flush(); view.syncView();
 
+        consoleFixture.request(backend, "INPUT");
+        backend.flush(); view.syncView();
         const item = view.blockAt(0, 0);
         verify(item !== null && item !== undefined, "no block item");
         compare(item.clickable, true, "区块应可点击");
@@ -393,17 +395,32 @@ TestCase {
         const mouse = findChild(item, "blockButtonMouse");
         verify(mouse !== null, "找不到区块 MouseArea");
 
-        // 输入裁决：未等待输入时点击不产生提交，也不失效按钮
-        mouseClick(mouse);
-        compare(spy.count, 0, "未等待输入时点击被忽略");
-        compare(item.clickable, true, "被忽略的点击不应使按钮失效");
-
-        // 等待整数输入后，同一按钮的点击生效
-        consoleFixture.request(backend, "INPUT");
+        // 等待整数输入后，按钮可命中并提交
         mouseClick(mouse);
         compare(spy.count, 1, "点击应触发 1 次 inputSubmitted");
         compare(spy.signalArguments[0][0], 1, "按钮值应为 1");
     }
+    function test_stringWaitDisablesIntegerBackgroundButtons() {
+        backend.clearAll();
+        backend.printButton("                                                                                ", 0);
+        backend.newline();
+        consoleFixture.request(backend, "TINPUTS");
+        backend.flush(); view.syncView();
+        const item = view.blockAt(0, 0);
+        verify(item !== null && item.blockData.isButton === true);
+        compare(item.blockData.isInteger, true);
+        compare(item.clickable, false, "字符串等待时整数背景按钮不可点击");
+        compare(item.hovered, false, "整数背景按钮不可高亮");
+
+        backend.clearAll();
+        backend.printButton("next", 1);
+        backend.newline();
+        backend.flush(); view.syncView();
+        compare(view.blockAt(0, 0).clickable, false,
+                "字符串等待时整数菜单按钮也不可点击");
+        consoleFixture.finishInput(backend);
+    }
+
     function test_consecutiveInputKinds() {
         let ints = 0;
         let strings = 0;

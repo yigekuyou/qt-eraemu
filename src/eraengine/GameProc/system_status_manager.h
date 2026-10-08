@@ -22,12 +22,16 @@
 #include <QString>
 #include <QMap>
 #include <QTimer>
+#include <QtQml/qqmlregistration.h>
 #include "process_state.h"
 #include "game_base_data.h"
 
 // System status manager - tracks and manages the overall system status
 class SystemStatusManager : public QObject {
     Q_OBJECT
+    // Qt 6 的声明式 QML 类型注册（qt_add_qml_module 扫描 SOURCES 自动生成注册代码）：
+    // 取代旧代码里从未被调用的 EraEngine::registerTypes() 手写 qmlRegisterType。
+    QML_ELEMENT
     
     Q_PROPERTY(bool isRunning READ isRunning NOTIFY statusChanged)
     Q_PROPERTY(bool isInGame READ isInGame NOTIFY statusChanged)

@@ -35,6 +35,7 @@
 #include <QMap>
 #include <QVariant>
 #include <functional>
+#include <QtQml/qqmlregistration.h>
 
 // Forward declarations
 class LogicalLine;
@@ -192,6 +193,8 @@ Q_DECLARE_METATYPE(StateChangeData)
 
 class SignalManager : public QObject {
     Q_OBJECT
+    // 声明式 QML 注册（取代旧的手写 qmlRegisterType / registerTypes()）
+    QML_ELEMENT
 
 public:
     explicit SignalManager(QObject* parent = nullptr);

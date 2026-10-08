@@ -15,6 +15,10 @@
  * You should have received a copy of the GNU General Public License
  * along with this program.  If not, see <https://www.gnu.org/licenses/>.
  */
+// Qt 文档（qmllint / ComponentBehavior: Bound）：颜色行的 delegate 与它的子对象
+// 访问外层（dlg / picker）一律用 id；委托自己的 modelData 也要用委托的 id 限定。
+pragma ComponentBehavior: Bound
+
 import QtQuick
 import QtQuick.Controls
 import QtQuick.Dialogs
@@ -156,27 +160,28 @@ Dialog {
                 }
             ]
             delegate: Row {
+                id: colorRow
                 required property var modelData
                 spacing: 8
                 Label {
-                    text: modelData.label
+                    text: colorRow.modelData.label
                     width: 90
                 }
                 Rectangle {
                     width: 48
                     height: 22
                     border.color: "#888888"
-                    color: dlg.colorOf(modelData.key)
+                    color: dlg.colorOf(colorRow.modelData.key)
                 }
                 Label {
-                    text: dlg.gui ? dlg.gui.colorToString(dlg.colorOf(modelData.key)) : ""
+                    text: dlg.gui ? dlg.gui.colorToString(dlg.colorOf(colorRow.modelData.key)) : ""
                     width: 90
                 }
                 Button {
                     text: qsTr("选择…")
                     onClicked: {
-                        picker.which = modelData.key;
-                        picker.selectedColor = dlg.colorOf(modelData.key);
+                        picker.which = colorRow.modelData.key;
+                        picker.selectedColor = dlg.colorOf(colorRow.modelData.key);
                         picker.open();
                     }
                 }
@@ -193,8 +198,8 @@ Dialog {
             Button {
                 text: qsTr("保存到配置文件")
                 enabled: dlg.gui !== null
-                onClicked: if (engine)
-                    engine.saveConfigFiles()
+                onClicked: if (dlg.engine)
+                    dlg.engine.saveConfigFiles()
             }
         }
 
@@ -206,5 +211,5 @@ Dialog {
     }
 
     // 供「保存到配置文件」使用（由 Main.qml 注入）
-    property var engine: null
+    property EraEngine engine: null
 }

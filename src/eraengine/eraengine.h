@@ -202,8 +202,11 @@ public:
     Q_INVOKABLE void provideInputValues(const QVariantList& values);
     Q_INVOKABLE void provideMouseKey(int type, int r1, int r2, int r3, int r4);
     
-    // QML registration
-    static void registerTypes();
+    // QML 类型注册：走 Qt 6 的声明式方式 —— 各类型在自己的头文件里写
+    // QML_ELEMENT / QML_NAMED_ELEMENT / QML_SINGLETON / QML_UNCREATABLE，
+    // 由 qt_add_qml_module 扫描 SOURCES 生成注册代码。
+    // （此处原来的 registerTypes() 是 Qt 5 风格的命令式注册，且从未被调用 ——
+    //  与声明式注册重复；已删除，见 prd.md 的历史设计。）
     
     // Script loading helper (callable from QML)
     Q_INVOKABLE bool loadScript(const QString& scriptPath);

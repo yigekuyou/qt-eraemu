@@ -15,9 +15,17 @@
  * You should have received a copy of the GNU General Public License
  * along with this program.  If not, see <https://www.gnu.org/licenses/>.
  */
+// Qt 文档（qmllint / ComponentBehavior: Bound）：LineDelegate、行内区块委托等
+// 「嵌套组件」里引用外层 id（root / view / lineItem）在 Bound 下改为**编译期绑定
+// 的静态查找**——不再依赖动态作用域，可被 qmlsc 编译进 C++，qmllint 的
+// unqualified access 也随之消失。配套要求：外层“属性”（如 backend）在嵌套对象里
+// 必须写成 root.backend，模型注入的 model/index 必须声明成 required property。
+pragma ComponentBehavior: Bound
+
 import QtQuick
 import QtQuick.Controls
 import QtQml.Models
+import io.yigekuoyou.eraengine
 
 // 控制台视图 —— ListView 虚拟化渲染
 //
@@ -43,7 +51,7 @@ Item {
     // `Screen.refreshRate` 恒为 undefined，等于永远按 60 兜底。0 = 未知，按 60。
     property int screenRefreshRate: 0
     property int refreshIntervalMs: Math.max(1, Math.ceil(1000 / (screenRefreshRate > 0 ? screenRefreshRate : 60)))
-    function syncCadence() {
+    function syncCadence(): void {
         if (backend)
             backend.frameMs = refreshIntervalMs;
     }
@@ -53,8 +61,8 @@ Item {
         syncLayout();
     }
 
-    property var backend: null              // ConsoleBackend（兼行模型）
-    readonly property var lineModel: backend
+    property ConsoleBackend backend: null   // ConsoleBackend（兼行模型）
+    readonly property ConsoleBackend lineModel: backend
     // 标准标题画面（QML）是否显示：为真时隐藏底部输入行与原始输入层。
     property bool titleActive: false
     property int lineHeight: 19
@@ -165,7 +173,7 @@ Item {
     }
 
     // 把字号/行高/字体推给 C++（C++ 据此动态重算所有区块的位置与尺寸）
-    function syncLayout() {
+    function syncLayout(): void {
         if (!backend)
             return;
         backend.setFontSize(fontSize);
@@ -200,7 +208,7 @@ Item {
             // DelegateModel.ReadOnly 省掉默认 Qt5ReadWrite 的写保护开销。
             delegateModelAccess: DelegateModel.ReadOnly
             reuseItems: true               // 滚出视口的委托进池复用（Qt 文档 Reusing items）
-            cacheBuffer: root.cellHeight * Math.max(2, backend ? backend.maxSpanReach : 2)
+            cacheBuffer: root.cellHeight * Math.max(2, root.backend ? root.backend.maxSpanReach : 2)
             interactive: !root.primitiveInput
             boundsBehavior: Flickable.StopAtBounds
 
@@ -280,9 +288,9 @@ Item {
             onPressed: e => {
                 // WinForms MouseButtons values; coordinates relative to the lower left.
                 const button = e.button === Qt.LeftButton ? 1048576 : e.button === Qt.RightButton ? 2097152 : e.button === Qt.MiddleButton ? 4194304 : e.button === Qt.BackButton ? 8388608 : 16777216;
-                backend.submitMouseKey(1, button, Math.round(e.x), Math.round(e.y - viewport.height), -1);
+                root.backend.submitMouseKey(1, button, Math.round(e.x), Math.round(e.y - viewport.height), -1);
             }
-            onWheel: e => backend.submitMouseKey(2, e.angleDelta.y, Math.round(e.x), Math.round(e.y - viewport.height), 0)
+            onWheel: e => root.backend.submitMouseKey(2, e.angleDelta.y, Math.round(e.x), Math.round(e.y - viewport.height), 0)
         }
 
         // 任意键型等待（WAIT/WAITANYKEY/FORCEWAIT/ANYKEY）：点击控制台任意处即继续。
@@ -294,7 +302,7 @@ Item {
             enabled: root.anyKeyInput
             acceptedButtons: Qt.AllButtons
             onPressed: e => {
-                backend.submitAnyKey();
+                root.backend.submitAnyKey();
                 e.accepted = true;
             }
         }
@@ -303,7 +311,7 @@ Item {
         // 触摸板手势直接可用；委托增删由模型信号驱动，不触碰任何数据。
 
         Keys.onPressed: e => {
-            if (!backend)
+            if (!root.backend)
                 return;
             if (root.primitiveInput) {
                 // INPUTMOUSEKEY：把**原始 Qt 键码与 Qt 修饰符**交给后端，
@@ -312,14 +320,14 @@ Item {
                 // PressPrimitiveKey）。这里不再出现任何数字键码 —— 旧实现把
                 // Qt::Key → WinForms Keys 的映射表、F 键算术、修饰位都硬编码在
                 // 本文件里，Windows 之外无处复用；现在对应关系只在 C++ 一份。
-                backend.submitQtKey(e.key, e.modifiers);
+                root.backend.submitQtKey(e.key, e.modifiers);
                 e.accepted = true;
                 return;
             }
             if (root.anyKeyInput) {
                 // 任意键型等待：回车即继续（点击由 anyKeyMouse 处理）
                 if (e.key === Qt.Key_Return || e.key === Qt.Key_Enter) {
-                    backend.submitAnyKey();
+                    root.backend.submitAnyKey();
                     e.accepted = true;
                 }
                 return;
@@ -356,7 +364,7 @@ Item {
         anchors.right: parent.right
         anchors.bottom: parent.bottom
         height: visible ? implicitHeight : 0
-        visible: backend && backend.waitingInput && !root.primitiveInput && !root.titleActive
+        visible: root.backend && root.backend.waitingInput && !root.primitiveInput && !root.titleActive
         background: null                 // 无边框：去掉 TextField 默认描边
         topPadding: 0
         bottomPadding: 0
@@ -365,12 +373,12 @@ Item {
         font.family: root.fontName
         font.pixelSize: root.fontSize
         color: root.foreColor !== "" ? root.foreColor : palette.windowText
-        placeholderText: backend && backend.waitingInput
-            ? (root.anyKeyInput ? ("回车/点击继续（" + backend.inputKind + "）")
-                                : ("输入（" + backend.inputKind + "）"))
+        placeholderText: root.backend && root.backend.waitingInput
+            ? (root.anyKeyInput ? ("回车/点击继续（" + root.backend.inputKind + "）")
+                                : ("输入（" + root.backend.inputKind + "）"))
             : ""
         // 输入类型分支限制：整数型输入只接受数字（INPUT 可负）
-        validator: backend && backend.waitingInput && !root.stringInputKind ? intOnly : null
+        validator: root.backend && root.backend.waitingInput && !root.stringInputKind ? intOnly : null
         onVisibleChanged: if (visible)
             inputField.forceActiveFocus()
         onAccepted: root.submit()

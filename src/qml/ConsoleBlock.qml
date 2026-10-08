@@ -15,8 +15,16 @@
  * You should have received a copy of the GNU General Public License
  * along with this program.  If not, see <https://www.gnu.org/licenses/>.
  */
+// Qt 文档（qmllint / ComponentBehavior: Bound）：委托、内联组件等「嵌套组件」
+// 里引用外层 id（本文件的 `block`）在 Bound 下改为**编译期绑定的静态查找**——
+// 消除动态作用域查找（更快、可被 qmlsc 编译进 C++），也消除 qmllint 的
+// unqualified access 告警。代价：不能再享受「动态作用域」，访问外层的东西必须
+// 用它的 id（或做成 required property）；本文件用的都是 id，故只需这一行。
+pragma ComponentBehavior: Bound
+
 import QtQuick
 import QtQuick.Controls
+import io.yigekuoyou.eraengine
 
 
 // 最小单位区块（QML 侧的「一个区块对象」）
@@ -45,7 +53,7 @@ Item {
     objectName: "consoleBlock"
 
     property var blockData: ({})
-    property var backend: null
+    property ConsoleBackend backend: null
     // ---- 单元格大小（由容器决定）----
     property real cellWidth: 9
     property real cellHeight: 19

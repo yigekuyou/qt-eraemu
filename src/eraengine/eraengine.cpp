@@ -568,39 +568,11 @@ EraEngine::EraEngine(QObject *parent)
 		});
 }
 
-void EraEngine::registerTypes()
-{
-		qmlRegisterType<GameBaseData>("io.yigekuoyou.eraengine", 1, 0, "GameBaseData");
-		qmlRegisterType<EraEngine>("io.yigekuoyou.eraengine", 1, 0, "EraEngine");
-		qmlRegisterType<SystemStatusManager>("io.yigekuoyou.eraengine", 1, 0, "SystemStatusManager");
-		qmlRegisterType<SignalManager>("io.yigekuoyou.eraengine", 1, 0, "SignalManager");
-
-		// Register rendering system types
-		qmlRegisterSingletonType<ConsoleDisplay>("io.yigekuoyou.eraengine", 1, 0, "ConsoleDisplay",
-				[](QQmlEngine *engine, QJSEngine *scriptEngine) -> QObject* {
-					Q_UNUSED(engine)
-					Q_UNUSED(scriptEngine)
-					return new ConsoleDisplay();
-				});
-
-		// Register input system types
-		qmlRegisterUncreatableType<EraTetrisInputSystem>("io.yigekuoyou.eraengine", 1, 0, "EraTetrisInputSystem",
-				"EraTetrisInputSystem is created by EraEngine");
-
-		// Register enum types
-		qRegisterMetaType<StateCode>("StateCode");
-		qRegisterMetaType<BeginType>("BeginType");
-		qRegisterMetaType<LineKind>("LineKind");
-		qRegisterMetaType<VariableTypes::Type>("VariableTypes::Type");
-		qRegisterMetaType<VariableTypes::Scope>("VariableTypes::Scope");
-		qRegisterMetaType<VariableTypes::Dimension>("VariableTypes::Dimension");
-		qRegisterMetaType<VariableTypes::Flag>("VariableTypes::Flag");
-		qRegisterMetaType<ScriptPosition>("ScriptPosition");
-		qRegisterMetaType<CalledFunction>("CalledFunction");
-		qRegisterMetaType<SignalType>("SignalType");
-		qRegisterMetaType<ExecutionLineData>("ExecutionLineData");
-		qRegisterMetaType<ParseLineData>("ParseLineData");
-}
+// QML 类型注册已全部改为声明式（各类型的 QML_ELEMENT / QML_NAMED_ELEMENT /
+// QML_SINGLETON / QML_UNCREATABLE 宏 + qt_add_qml_module 扫描 SOURCES 生成的
+// 注册代码）。此处原有的 EraEngine::registerTypes() 是 Qt 5 风格的命令式注册
+//（qmlRegisterType / qmlRegisterSingletonType / qmlRegisterUncreatableType），
+// 与声明式注册重复，而且**从未被任何地方调用** —— 已移除。
 
 bool EraEngine::loadScript(const QString& scriptPath)
 {

@@ -13,3 +13,9 @@
 #
 # You should have received a copy of the GNU General Public License
 # along with this program.  If not, see <https://www.gnu.org/licenses/>.
+
+# ---- 构建产物与工具生成物 ----
+# build：仓库里的构建目录（本机是指向 /tmp/build/eraemu 的符号链接）
+build
+# .qmlls.ini：配置阶段由 QT_QML_GENERATE_QMLLS_INI 生成（QML Language Server 用）
+.qmlls.ini

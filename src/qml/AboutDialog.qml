@@ -17,12 +17,13 @@
  */
 import QtQuick
 import QtQuick.Controls
+import io.yigekuoyou.eraengine
 
 // 关于对话框：显示 GameBase.csv 的作者/版本/年份等信息。
 Dialog {
     id: dlg
 
-    property var gameBase: null
+    property GameBaseData gameBase: null
 
     title: qsTr("关于")
     modal: true

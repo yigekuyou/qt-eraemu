@@ -3,7 +3,7 @@
 # run_gui_frames.sh —— GUI（appemuera）端到端 + 每帧抓取渲染
 #
 # 用 D-Bus 驱动真实 GUI 跑 test/example（不用手点），同时把**每一次画面刷新**
-# （ConsoleBackend::windowChanged，即一次渲染帧）抓成 PNG 序列：
+# （ConsoleBackend::generationChanged，即一次渲染帧）抓成 PNG 序列：
 #
 #   test/example + eraTW 的 CLEARLINE→重打印 复用行号场景，此前会
 #   「点按钮后画面不刷新」（增量模型按行号复用旧区块）；帧序列能直接

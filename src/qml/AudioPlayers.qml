@@ -15,6 +15,11 @@
  * You should have received a copy of the GNU General Public License
  * along with this program.  If not, see <https://www.gnu.org/licenses/>.
  */
+// Qt 文档（qmllint / ComponentBehavior: Bound）：SE 槽是 Repeater 的委托（嵌套
+// 组件），里面引用外层 root 的 id 与属性在 Bound 下走编译期绑定；模型注入的
+// index 必须显式声明为 required property。
+pragma ComponentBehavior: Bound
+
 import QtQuick
 import QtMultimedia
 import io.yigekuoyou.eraengine
@@ -65,79 +70,91 @@ Item {
     // 而 EE 的 Sound 支持 wav/ogg/mp3/…（MF 解码）—— 用 SoundEffect 播
     // ogg 会 status=Error 且**从不发声**，管线还被占住不放。这里统一用
     // MediaPlayer（Qt Multimedia 文档：格式更全、资源占用更低），格式对齐 EE。
-    Repeater {
-        id: seRepeater
-        model: root.audio ? root.audio.soundPipelines : 0
-        delegate: Item {
-            id: seSlot
-            // index 从 0 起，对应管线 = index + 1
-            readonly property int pipelineChannel: index + 1
-            width: 0
-            height: 0
-            visible: false
+    // 每个 SE 槽自己接 C++ 的播放请求（按 pipelineChannel 过滤），而不是在外层
+    // 用 `seRepeater.itemAt(n)` 取对象再调方法：itemAt() 的静态类型只有
+    // QQuickItem，QML 里加的方法（playSource/stopSource）既不被 qmllint 认识
+    //（missing-property），Repeater 的委托又按需创建、itemAt 可能为 null。
+    // 委托自治后「请求 ↔ 播放器」一一对应，没有动态查找，也没有类型擦除。
+    component SoundSlot: Item {
+        id: seSlot
 
-            function playSource(u, loops) {
+        // index 从 0 起，对应管线 = index + 1（qmllint：模型注入的 index 要显式声明）
+        required property int index
+        readonly property int pipelineChannel: index + 1
+
+        width: 0
+        height: 0
+        visible: false
+
+        MediaPlayer {
+            id: se
+            audioOutput: AudioOutput {
+                volume: root.audio ? Math.max(0, Math.min(1, root.audio.soundVolume / 100)) : 1
+            }
+            // 播放结束（自然播完）或解码失败（InvalidMedia）-> 归还管线。
+            // 换源不会误报：换 source 后 status 走 Loading，不会发 EndOfMedia
+            //（此前 SoundEffect 的 onPlayingChanged(false) 在「替换管线上的
+            // 旧音效」时会把刚排上的新音效误标成已结束，导致管线被重复占用）。
+            // 处理函数显式接收 status 参数（qmllint：不声明参数时 status 语义有歧义）。
+            onMediaStatusChanged: function (status) {
+                if ((status === MediaPlayer.EndOfMedia || status === MediaPlayer.InvalidMedia)
+                    && root.audio)
+                    root.audio.reportFinished(seSlot.pipelineChannel);
+            }
+        }
+
+        Connections {
+            target: root.audio
+            enabled: root.audio !== null
+
+            function onChannelPlay(channel, source, volume, loops) {
+                if (channel !== seSlot.pipelineChannel)
+                    return;
                 se.loops = (loops === -1 ? MediaPlayer.Infinite : Math.max(1, loops));
-                se.source = u;
+                se.source = root.toUrl(source);
                 se.play();
             }
-            function stopSource() {
+
+            function onChannelStop(channel) {
+                if (channel !== seSlot.pipelineChannel)
+                    return;
                 se.stop();
                 se.source = "";
-            }
-
-            MediaPlayer {
-                id: se
-                audioOutput: AudioOutput {
-                    volume: root.audio ? Math.max(0, Math.min(1, root.audio.soundVolume / 100)) : 1
-                }
-                // 播放结束（自然播完）或解码失败（InvalidMedia）-> 归还管线。
-                // 换源不会误报：换 source 后 status 走 Loading，不会发 EndOfMedia
-                //（此前 SoundEffect 的 onPlayingChanged(false) 在「替换管线上的
-                // 旧音效」时会把刚排上的新音效误标成已结束，导致管线被重复占用）。
-                onMediaStatusChanged: {
-                    if ((status === MediaPlayer.EndOfMedia || status === MediaPlayer.InvalidMedia)
-                        && root.audio)
-                        root.audio.reportFinished(seSlot.pipelineChannel);
-                }
             }
         }
     }
 
-    // ---- 监听 C++ 控制端的播放请求 ----
+    Repeater {
+        model: root.audio ? root.audio.soundPipelines : 0
+        delegate: SoundSlot {}
+    }
+
+    // ---- 监听 C++ 控制端的播放请求（0 号管线 = BGM；SE 由各自的 SoundSlot 处理）----
     Connections {
         target: root.audio
         enabled: root.audio !== null
 
         function onChannelPlay(channel, source, volume, loops) {
-            if (channel === 0) {
-                bgmPlayer.loops = (loops === -1 ? MediaPlayer.Infinite : Math.max(1, loops));
-                bgmPlayer.source = root.toUrl(source);
-                bgmPlayer.play();
-            } else {
-                const item = seRepeater.itemAt(channel - 1);
-                if (item)
-                    item.playSource(root.toUrl(source), loops);
-            }
+            if (channel !== 0)
+                return;
+            bgmPlayer.loops = (loops === -1 ? MediaPlayer.Infinite : Math.max(1, loops));
+            bgmPlayer.source = root.toUrl(source);
+            bgmPlayer.play();
         }
 
         function onChannelStop(channel) {
-            if (channel === 0) {
-                bgmPlayer.stop();
-                bgmPlayer.source = "";
-            } else {
-                const item = seRepeater.itemAt(channel - 1);
-                if (item)
-                    item.stopSource();
-            }
+            if (channel !== 0)
+                return;
+            bgmPlayer.stop();
+            bgmPlayer.source = "";
         }
 
         function onChannelVolume(channel, volume) {
-            // SE 的音量由 delegate 里的声明式绑定跟随 soundVolume 属性自动更新
+            // SE 的音量由各 SoundSlot 里的声明式绑定跟随 soundVolume 属性自动更新
             //（此前 setVolume 用命令式赋值**打断绑定**，之后改全局音量不再生效）。
-            if (channel === 0) {
-                bgmPlayer.audioOutput.volume = Math.max(0, Math.min(1, volume / 100));
-            }
+            if (channel !== 0)
+                return;
+            bgmPlayer.audioOutput.volume = Math.max(0, Math.min(1, volume / 100));
         }
     }
 }

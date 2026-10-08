@@ -23,11 +23,9 @@
 #include <QDBusInterface>
 #include <QDBusReply>
 #endif
-#include <QDir>
 #include <QApplication>
 #include <QFileInfo>
 #include <QLibraryInfo>
-#include <QQmlContext>
 #include <QQuickStyle>
 #include "GameView/resource_image_provider.h"
 
@@ -89,7 +87,10 @@ int main(int argc, char *argv[])
 	QObject::connect(&engine, &QQmlApplicationEngine::objectCreationFailed,
 									 &app, []() { QCoreApplication::exit(-1); },
 	Qt::QueuedConnection);
-	engine.rootContext()->setContextProperty("currentDir", QDir::currentPath());
+	// 不再往根上下文塞 context property（旧代码注入过 currentDir，QML 侧从未使用）：
+	// Qt 文档《QML and C++ Integration》明确「Context properties should be avoided」——
+	// 它们不可被静态检查（qmllint 的 ContextProperties / unqualified access 都报它们），
+	// 也绕开了类型系统。要暴露给 QML 的东西应走单例类型或 required property。
 	engine.loadFromModule("io.yigekuoyou.appemuera", "Main");
 
 	return app.exec();

@@ -15,6 +15,18 @@
  * You should have received a copy of the GNU General Public License
  * along with this program.  If not, see <https://www.gnu.org/licenses/>.
  */
+// Qt 文档（qmllint / ComponentBehavior: Bound）：Loader 的 sourceComponent（桌面
+// 菜单栏）就是一个嵌套组件，里面引用本文件的 Action id（actOpen…）在 Bound 下
+// 改为编译期绑定；不再依赖动态作用域。
+pragma ComponentBehavior: Bound
+
+// 自导入：本文件属于 io.yigekuoyou.appemuera，而 QML 文件放在 src/qml/（与模块
+// URI 的目录结构不一致）——隐式导入对 qmllint/qmlls 不可见，显式写出来后
+// WindowController / TrayController 这类「同模块 C++ 注册类型」才可被静态解析。
+// Qt 文档《Best Practices》：QML 文件应与 qt_add_qml_module 的 CMakeLists 同目录，
+// 否则隐式导入与模块归属对不上；这里用显式导入消除该差异（运行期是同一模块，无副作用）。
+import io.yigekuoyou.appemuera
+
 import QtQuick
 import QtQuick.Controls
 import QtQuick.Dialogs
@@ -116,7 +128,7 @@ ApplicationWindow {
     // 桌面截屏工具抓不到 QML 合成内容，这是「渲染结果」的唯一可靠来源
     // （QQuickWindow::grabWindow 走的是另一条同步路径，见 EraDBusDebug）。
     //
-    // 「每帧」= 引擎每产生一次新画面（ConsoleBackend::windowChanged）抓一张：
+    // 「每帧」= 引擎每产生一次新画面（ConsoleBackend::generationChanged）抓一张：
     // 画面刷新与渲染抓取一一对应，才能定位「点按钮后画面没刷新」这类回归。
     // 上一张尚未落盘时只记一个「待抓」标记（合并到最新一帧），避免逐帧堆积。
     // ------------------------------------------------------------------
@@ -127,17 +139,17 @@ ApplicationWindow {
     property bool frameCaptureBusy: false
     property bool frameCaptureQueued: false
 
-    function frameCaptureStart(prefix, limit) {
+    function frameCaptureStart(prefix: string, limit: int): void {
         frameCapturePrefix = prefix;
         frameCaptureLimit = limit;
         frameCaptureSaved = 0;
         frameCaptureBusy = false;
         frameCaptureQueued = false;
         frameCaptureOn = true;
-        // 先把「当前这一帧」抓下来，再随 windowChanged 逐帧抓
+        // 先把「当前这一帧」抓下来，再随 generationChanged 逐帧抓
         Qt.callLater(window.frameCaptureGrab);
     }
-    function frameCaptureStop() {
+    function frameCaptureStop(): void {
         if (!frameCaptureOn)
             return;
         frameCaptureOn = false;
@@ -146,7 +158,7 @@ ApplicationWindow {
         console.log("frameCapture: 共保存 " + frameCaptureSaved + " 帧 -> "
                     + frameCapturePrefix + "NNNNN.png");
     }
-    function frameCaptureGrab() {
+    function frameCaptureGrab(): void {
         if (!frameCaptureOn)
             return;
         if (frameCaptureBusy) {      // 上一帧还没落盘 -> 合并到最新一帧
@@ -182,10 +194,15 @@ ApplicationWindow {
             window.frameCaptureStop();
         }
     }
-    // 引擎每刷新一次画面（windowChanged）= 一帧渲染 -> 抓一张
+    // 引擎每推进一次画面状态（ConsoleBackend::generation 自增 -> generationChanged）
+    // = 一次新画面 -> 抓一张。
+    // 说明：这里以前接的是 `windowChanged`，但 ConsoleBackend 从来没有这个信号
+    // （Qt 运行期会报 “no signal of the target matches the name”），于是「每帧抓取」
+    // 实际只在起始抓了一张。generation 是引擎自己的画面/状态版本号（QML 侧同样用它
+    // 判定区块可点击性是否失效），拿它当「画面变了」的触发点与语义一致。
     Connections {
         target: eraEngine.console
-        function onWindowChanged() {
+        function onGenerationChanged() {
             if (window.frameCaptureOn)
                 window.frameCaptureGrab();
         }
@@ -214,6 +231,9 @@ ApplicationWindow {
 
     // ---- 自建窗口/对话框（Qt6 QML 惯用法：Qt.createComponent + createObject）----
     // QML 自己按需创建对象并持有引用；重开时先销毁旧的，关闭即释放。
+    // 懒创建的对话框（Qt.createComponent -> createObject）：类型只有运行期才知道
+    //（SettingsDialog / AboutDialog 都派生自 Dialog），所以这里保持 var；
+    // 调用点只用到 .open()/.closed/.destroy()。
     property var activeDialog: null
 
     function openLazyDialog(url, props) {
@@ -241,13 +261,13 @@ ApplicationWindow {
             obj.open();
         return obj;
     }
-    function openSettings() {
+    function openSettings(): void {
         openLazyDialog("SettingsDialog.qml", {
             "gui": eraEngine.gui,
             "engine": eraEngine
         });
     }
-    function openAbout() {
+    function openAbout(): void {
         openLazyDialog("AboutDialog.qml", {
             "gameBase": eraEngine.gameBaseData
         });
@@ -320,22 +340,27 @@ ApplicationWindow {
         text: qsTr("窗口化")
         checkable: true
         checked: windowController.windowMode === "windowed"
-        onTriggered: windowController.setWindowMode("windowed")
+        onTriggered: windowController.windowMode = "windowed"
     }
     Action {
         id: actFullscreen
         text: qsTr("全屏")
-        shortcut: StandardKey.FullScreen
+        // 不在这里绑快捷键，两个原因（Qt 文档《Action QML Type》+ 实测）：
+        //   * Action 只有 `shortcut`（没有 `Shortcut` 那样的 `sequences` 列表），
+        //     标准键在某个平台对应多个序列时只能绑其中一个；
+        //   * 窗口里已有一条全局 `Shortcut{ sequence: "F11" }` 在**切换**窗口模式，
+        //     这里再绑同一个键会「一次按键跑两个动作」（toggle + 强制 fullscreen），
+        //     反而切不回窗口化。
         checkable: true
         checked: windowController.windowMode === "fullscreen"
-        onTriggered: windowController.setWindowMode("fullscreen")
+        onTriggered: windowController.windowMode = "fullscreen"
     }
     Action {
         id: actBorderless
         text: qsTr("无边框全屏")
         checkable: true
         checked: windowController.windowMode === "borderless"
-        onTriggered: windowController.setWindowMode("borderless")
+        onTriggered: windowController.windowMode = "borderless"
     }
     Action {
         id: actAbout
@@ -363,7 +388,9 @@ ApplicationWindow {
     //   NativeMenuBar 挂到系统菜单栏 / Linux 全局菜单；
     // * Android/iOS：不创建，改用下方悬浮按钮 + 弹出菜单。
     // labs MenuBar 是 QObject，Loader 装不了，这里只装 Controls MenuBar。
-    menuBar: menuBarLoader.item
+    // Loader.item 的静态类型是 Item（QObject），而 ApplicationWindow.menuBar 要 Item：
+    // 用 QML 的 as 转型给出确定类型（qmllint 的 incompatible-type 也就消失）。
+    menuBar: menuBarLoader.item as MenuBar
 
     Loader {
         id: menuBarLoader
@@ -578,11 +605,16 @@ ApplicationWindow {
         sequence: "F11"
         onActivated: windowController.toggleFullscreen()
     }
-    // Esc 退出全屏（移动端/无边框全屏下没有菜单可点，留这条退路）
+    // Esc 退出全屏（移动端/无边框全屏下没有菜单可点，留这条退路）。
+    // 用 sequences 而不是 sequence：Qt 文档（Shortcut QML Type）对标准键的建议是
+    // 「Given that standard keys can resolve to one shortcut on some platforms, but
+    // multiple shortcuts on other platforms, we recommend always using sequences for
+    // standard keys」——StandardKey.Cancel 在本机就映射多个序列（只绑一个会报
+    // “Only binding to one of multiple key bindings associated with 70”）。
     Shortcut {
-        sequence: StandardKey.Cancel
+        sequences: [StandardKey.Cancel]
         enabled: windowController.windowMode !== "windowed"
-        onActivated: windowController.setWindowMode("windowed")
+        onActivated: windowController.windowMode = "windowed"
     }
 
     // ---- 启动收尾 ----
@@ -597,7 +629,7 @@ ApplicationWindow {
         }
         // 移动端默认全屏（窗口模式在 C++，Wayland 之外的桌面不受影响）
         if (isMobile)
-            windowController.setWindowMode("fullscreen");
+            windowController.windowMode = "fullscreen";
 
         // 支持命令行直接带游戏目录启动：appemuera <dir>
         const args = Qt.application.arguments;

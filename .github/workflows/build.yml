@@ -136,6 +136,17 @@ jobs:
           Write-Host "exe = $exe"
           New-Item -ItemType Directory -Force dist | Out-Null
           Copy-Item $exe dist\
+          # eraengine 已改为动态库（SHARED QML 模块）：windeployqt 只收 Qt 自己的
+          # 运行库，项目自己的 DLL 得自己拷到 exe 旁边，否则解压后跑不起来。
+          $dll = Get-ChildItem build -Recurse -Filter eraengine.dll |
+                 Where-Object { $_.FullName -notmatch 'CMakeFiles' } |
+                 Select-Object -First 1
+          if ($dll) {
+            Write-Host "dll = $($dll.FullName)"
+            Copy-Item $dll.FullName dist\
+          } else {
+            Write-Host "警告：没找到 eraengine.dll（若 eraengine 又变回静态库可忽略）"
+          }
           # 默认会带上 opengl32sw.dll（软渲染兜底）与所需 QML 插件
           & "$env:QT_ROOT_DIR\bin\windeployqt.exe" --release --no-translations "dist\appemuera.exe"
           # eraTW 之类的游戏目录放进来即可直接双击运行
@@ -175,6 +186,13 @@ jobs:
             -DCMAKE_BUILD_TYPE=Release \
             -DCMAKE_PREFIX_PATH="$QT_ROOT_DIR" \
             -DEMUERA_WARNINGS_AS_ERRORS=OFF
+
+      # QML 静态检查（qmllint）：零告警是项目口径（根目录 .qmllint.ini 的
+      # MaxWarnings=0），所以出现新告警会在这里失败。用 Qt 自己生成的
+      # all_qmllint 目标 —— 它按模块传好 import path，不需要手工 -I。
+      # 放在 macOS job：与其它平台同为 Qt 6.11.2 桌面工具链（qmllint 随 Tools 安装）。
+      - name: QML 静态检查（qmllint，零告警）
+        run: cmake --build build --target all_qmllint
 
       - name: 编译 appemuera
         run: cmake --build build --target appemuera --parallel

@@ -23,7 +23,14 @@ set(QT_QML_OUTPUT_DIRECTORY  ${CMAKE_BINARY_DIR})
 
 
 
-qt_add_library(eraengine STATIC)
+# 动态（SHARED）QML 模块 —— 而不是静态库。
+# 理由（Qt 文档《qt_add_qml_module》Target Structure / 《qt_add_library》）：
+#   * 静态 QML 模块没有可部署的实体：类型注册代码会被链进宿主可执行文件，
+#     别人 install 之后既没有 qmldir/插件可加载，也没法 import；
+#   * SHARED 时 Qt 会生成「后端库 + 独立插件库 + qmldir/typeinfo」，install 到
+#     QML 导入路径后，任何 QML 应用（不链接本工程）都能 import io.yigekuoyou.eraengine。
+# 显式写 SHARED（不用关键字时「Qt 是共享库就建共享库」，但显式更明确）。
+qt_add_library(eraengine SHARED)
 qt_add_qml_module(eraengine
     URI io.yigekuoyou.eraengine
     VERSION 1.0
@@ -172,6 +179,94 @@ target_include_directories(eraengine PRIVATE
 )
 target_include_directories(eraengine PUBLIC ${CMAKE_CURRENT_SOURCE_DIR})
 
+# ---- 安装：把 io.yigekuoyou.eraengine 装成「可被其它 QML 应用 import」的模块 ----
+# 依据 Qt 文档《qt_query_qml_module》（Example 一节）：一个 QML 模块的可部署部件是
+#   ① 后端库  ② 插件库  ③ qmldir  ④ typeinfo  ⑤ QML_FILES / RESOURCES（本模块无）
+# 目录约定（qml/<URI 路径> 就是使用方的 QML 导入路径）：
+#   <prefix>/<libdir>/qml/io/yigekuoyou/eraengine/   ← qmldir / typeinfo / 插件
+#   <prefix>/<libdir>/                               ← 后端库
+# 使用方：
+#   * 环境变量：QML_IMPORT_PATH=<prefix>/<libdir>/qml
+#   * 或 CMake：qt_generate_deploy_qml_app_script() 默认就取 qml/ 这一层
+#     （见 QT_DEPLOY_QML_DIR / QT_DEPLOY_PREFIX）。
+include(GNUInstallDirs)
+set(EMUERA_QML_INSTALL_DIR "${CMAKE_INSTALL_LIBDIR}/qml"
+    CACHE STRING "QML 模块安装目录（相对安装前缀；即使用方的 QML 导入路径根）")
+
+qt_query_qml_module(eraengine
+    URI module_uri
+    TARGET_PATH module_target_path
+    PLUGIN_TARGET module_plugin_target
+    QMLDIR module_qmldir
+    TYPEINFO module_typeinfo
+    QML_FILES module_qml_files
+    QML_FILES_DEPLOY_PATHS module_qml_deploy_paths
+    RESOURCES module_resources
+    RESOURCES_DEPLOY_PATHS module_resources_deploy_paths
+)
+set(em_eraengine_module_dir "${EMUERA_QML_INSTALL_DIR}/${module_target_path}")
+
+# ① 后端库：别人链接它（C++ 侧）或由插件在运行期依赖它
+set_target_properties(eraengine PROPERTIES
+    VERSION ${PROJECT_VERSION}
+    SOVERSION ${PROJECT_VERSION_MAJOR})
+install(TARGETS eraengine
+    ARCHIVE DESTINATION "${CMAKE_INSTALL_LIBDIR}"
+    LIBRARY DESTINATION "${CMAKE_INSTALL_LIBDIR}"
+    RUNTIME DESTINATION "${CMAKE_INSTALL_BINDIR}")
+
+# ② 插件库：与 qmldir 同目录（QML 引擎在这一层找 plugin）
+if(module_plugin_target AND NOT module_plugin_target STREQUAL eraengine)
+    install(TARGETS ${module_plugin_target}
+        LIBRARY DESTINATION "${em_eraengine_module_dir}"
+        RUNTIME DESTINATION "${em_eraengine_module_dir}")
+    # 插件在 <libdir>/qml/<URI…>/ 下，后端库在 <libdir>：用 $ORIGIN 相对定位。
+    # 不用绝对路径——绝对 RPATH 只在「配置时的 CMAKE_INSTALL_PREFIX」下正确，
+    # 而 `cmake --install --prefix <别的目录>` 不会重写 RPATH。
+    # （Windows 没有 RPATH，需把后端 DLL 放在 exe 旁或用 windeployqt，另行处理。）
+    if(UNIX)
+        file(RELATIVE_PATH em_plugin_rel
+             "${CMAKE_INSTALL_PREFIX}/${em_eraengine_module_dir}"
+             "${CMAKE_INSTALL_PREFIX}/${CMAKE_INSTALL_LIBDIR}")
+        set_target_properties(${module_plugin_target} PROPERTIES
+            INSTALL_RPATH "$ORIGIN/${em_plugin_rel}")
+    endif()
+endif()
+
+# ③④ 模块元信息
+install(FILES "${module_qmldir}" DESTINATION "${em_eraengine_module_dir}")
+if(module_typeinfo)
+    install(FILES "${module_typeinfo}" DESTINATION "${em_eraengine_module_dir}")
+endif()
+
+# ⑤ QML 文件与资源（本模块目前是纯 C++ 类型，两个列表为空；保留以备用）
+list(LENGTH module_qml_files em_qml_count)
+if(em_qml_count GREATER 0)
+    math(EXPR em_qml_last "${em_qml_count} - 1")
+    foreach(i RANGE 0 ${em_qml_last})
+        list(GET module_qml_files ${i} em_qml_src)
+        list(GET module_qml_deploy_paths ${i} em_qml_dst)
+        get_filename_component(em_qml_name "${em_qml_dst}" NAME)
+        get_filename_component(em_qml_subdir "${em_qml_dst}" DIRECTORY)
+        install(FILES "${em_qml_src}"
+            DESTINATION "${em_eraengine_module_dir}/${em_qml_subdir}"
+            RENAME "${em_qml_name}")
+    endforeach()
+endif()
+list(LENGTH module_resources em_res_count)
+if(em_res_count GREATER 0)
+    math(EXPR em_res_last "${em_res_count} - 1")
+    foreach(i RANGE 0 ${em_res_last})
+        list(GET module_resources ${i} em_res_src)
+        list(GET module_resources_deploy_paths ${i} em_res_dst)
+        get_filename_component(em_res_name "${em_res_dst}" NAME)
+        get_filename_component(em_res_subdir "${em_res_dst}" DIRECTORY)
+        install(FILES "${em_res_src}"
+            DESTINATION "${em_eraengine_module_dir}/${em_res_subdir}"
+            RENAME "${em_res_name}")
+    endforeach()
+endif()
+
 # Keep warning policy explicit and compiler-specific.  Qt headers are included
 # under the same policy as project code so new compatibility issues are visible.
     # 告警始终打开；「告警即错误」由 EMUERA_WARNINGS_AS_ERRORS（父作用域 option）决定
@@ -285,6 +380,11 @@ eraengine_add_test(test_execution_engine)
 # QML 侧测试（Qt Quick Test）：测 Console/ConsoleLine 的接线与呈现
 if(TARGET Qt6::QuickTest)
     add_executable(test_qml_console test/test_qml_console.cpp)
+    # eraengine 现在是**动态** QML 模块：链接后端库即完成类型注册，模块资源
+    #（qmldir/typeinfo 的 qrc）随库一起加载，于是「按路径加载的 QML」也能
+    # `import io.yigekuoyou.eraengine`。不再需要静态构建那套
+    #「链接 eraengineplugin + Q_IMPORT_QML_PLUGIN」——Qt 文档《qt_import_qml_plugins》：
+    # 该机制「只在 Qt 以静态方式构建时有效，非静态 Qt 下直接返回」。
     target_link_libraries(test_qml_console PRIVATE eraengine Qt6::QuickTest Qt6::Quick Qt6::Qml)
     target_include_directories(test_qml_console PRIVATE ${ERAENGINE_TEST_INCLUDE_DIRS})
     target_compile_definitions(test_qml_console PRIVATE

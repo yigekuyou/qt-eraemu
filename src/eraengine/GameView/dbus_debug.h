@@ -59,7 +59,7 @@ public Q_SLOTS:  // ---- 检查 ----
     QString diagBlocks();                 // 诊断：颜色/字体/区块数据（临时）
     QString listButtons();                // 当前屏的按钮值（输入候选）
     QString saveScreenshot(const QString& path);  // 保存当前画面，返回结果说明
-    // 每帧抓取渲染：引擎每产生一次新画面（ConsoleBackend::windowChanged）就抓一张，
+    // 每帧抓取渲染：引擎每产生一次新画面（ConsoleBackend::generationChanged）就抓一张，
     // 存到 <prefix>00000.png …（prefix 不含扩展名）。limit<=0 表示不限（stopFrameCapture 停）。
     QString startFrameCapture(const QString& prefix, int limit);
     QString stopFrameCapture();                   // 停止每帧抓取，返回状态说明

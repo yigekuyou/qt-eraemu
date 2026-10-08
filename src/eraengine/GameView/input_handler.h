@@ -23,10 +23,16 @@
 #include <QFuture>
 #include <QMutex>
 #include <QWaitCondition>
+#include <QtQml/qqmlregistration.h>
 
 class InputHandler : public QObject
 {
     Q_OBJECT
+    // 声明式 QML 注册：EraEngine 以 Q_PROPERTY(InputHandler*) 暴露它，
+    // 类型本身不进 QML 类型系统的话该属性在 QML 里无法解析（旧代码只注册了
+    // EraTetrisInputSystem，漏了这个）。同样由 EraEngine 创建。
+    QML_NAMED_ELEMENT(InputHandler)
+    QML_UNCREATABLE("InputHandler is created by EraEngine")
 
 public:
     explicit InputHandler(QObject *parent = nullptr);
@@ -62,6 +68,10 @@ private:
 class EraTetrisInputSystem : public QObject
 {
 		Q_OBJECT
+		// 声明式 QML 注册（对齐旧代码里的 qmlRegisterUncreatableType：
+		// 类型可见但由 EraEngine 创建，QML 里不能自己 new）
+		QML_NAMED_ELEMENT(EraTetrisInputSystem)
+		QML_UNCREATABLE("EraTetrisInputSystem is created by EraEngine")
 
 public:
 		explicit EraTetrisInputSystem(QObject *parent = nullptr);

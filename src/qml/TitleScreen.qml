@@ -15,7 +15,12 @@
  * You should have received a copy of the GNU General Public License
  * along with this program.  If not, see <https://www.gnu.org/licenses/>.
  */
+// Qt 文档（qmllint / ComponentBehavior: Bound）：委托等嵌套组件里用外层 id
+// 改为编译期绑定（静态查找），代价是必须显式写 id（见菜单项 delegate）。
+pragma ComponentBehavior: Bound
+
 import QtQuick
+import io.yigekuoyou.eraengine
 
 // ---------------------------------------------------------------------------
 // 标准标题画面（QML 渲染）
@@ -36,13 +41,13 @@ Item {
     objectName: "titleScreen"
 
     // 由 EraRender 注入的引擎
-    property var engine: null
+    property EraEngine engine: null
     property bool active: root.engine ? root.engine.defaultTitleVisible : false
     visible: active
     z: 500   // 盖在控制台（及其输入行）之上
 
-    readonly property var  gb:     root.engine ? root.engine.gameBaseData : null
-    readonly property var  gui:    root.engine ? root.engine.gui : null
+    readonly property GameBaseData gb:  root.engine ? root.engine.gameBaseData : null
+    readonly property GuiManager  gui:  root.engine ? root.engine.gui : null
     readonly property color fore:  gui ? gui.foreColor : "#c0c0c0"
     readonly property color focusColor: gui ? gui.focusColor : "#ffff00"
     readonly property string family: gui ? gui.fontName : ""
@@ -152,6 +157,7 @@ Item {
                 { value: 1, text: root.engine ? root.engine.titleMenu1 : "" }
             ]
             delegate: Text {
+                id: menuEntry                 // 子对象（MouseArea）引用委托自己的属性要走它的 id
                 required property var modelData
                 width: parent.width
                 textFormat: Text.PlainText
@@ -166,7 +172,7 @@ Item {
                     anchors.margins: -4
                     hoverEnabled: true
                     cursorShape: Qt.PointingHandCursor
-                    onClicked: if (root.engine) root.engine.chooseTitle(modelData.value)
+                    onClicked: if (root.engine) root.engine.chooseTitle(menuEntry.modelData.value)
                 }
             }
         }

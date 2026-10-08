@@ -81,6 +81,25 @@ int main(int argc, char* argv[]) {
               "缓冲行序 A..E");
     }
 
+    // Insertion notifications must bracket the mutation, including head trim.
+    {
+        ConsoleBackend c;
+        c.setMaxLog(3);
+        int before = -1;
+        QObject::connect(&c, &QAbstractItemModel::rowsAboutToBeInserted,
+                         [&](const QModelIndex&, int first, int) {
+            before = c.rowCount();
+            check(first == before, "insert starts at pre-mutation rowCount");
+        });
+        QObject::connect(&c, &QAbstractItemModel::rowsInserted,
+                         [&](const QModelIndex&, int first, int last) {
+            check(c.rowCount() == before + last - first + 1,
+                  "rowsInserted observes the completed mutation");
+        });
+        for (int i = 0; i < 6; ++i) { c.print(QString::number(i)); c.newline(); }
+        check(c.rowCount() == 3 && c.lineText(0) == "3", "trimmed insertion preserves rows");
+    }
+
     // ---- 2. 行模型信号：未定型尾行 ----
     qDebug() << "\n2) 行模型信号（尾行 insert/dataChanged）";
     {

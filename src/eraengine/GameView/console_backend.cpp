@@ -447,13 +447,14 @@ void ConsoleBackend::newline() {
         m_removedRows += trim;
         pruneHeadCacheIfNeeded();
     }
-    for (int i = 0; i < committed.size(); ++i) {
-        m_layout.placeLine(committed[i], firstRow + i);
-        trackSpanReach(committed[i]);
-        m_buffer.appendLine(committed[i]);
-    }
     if (!committed.isEmpty()) {
-        beginInsertRows(QModelIndex(), firstRow, firstRow + committed.size() - 1);
+        const int insertRow = m_buffer.count();
+        beginInsertRows(QModelIndex(), insertRow, insertRow + committed.size() - 1);
+        for (int i = 0; i < committed.size(); ++i) {
+            m_layout.placeLine(committed[i], insertRow + i);
+            trackSpanReach(committed[i]);
+            m_buffer.appendLine(committed[i]);
+        }
         endInsertRows();
         m_insertedRows += committed.size();
     }

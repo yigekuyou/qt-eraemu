@@ -52,6 +52,7 @@ TestCase {
     }
 
     function cleanup() {
+        consoleFixture.finishInput(backend);
         if (view) { view.destroy(); view = null; }
         backend.clearAll();
     }
@@ -64,6 +65,32 @@ TestCase {
             backend.newline();
         }
         backend.flush(); view.syncView();
+    }
+
+    function test_timedRedrawKeepsInputGeometryAndFocus() {
+        consoleFixture.request(backend, "TINPUTS");
+        const field = findChild(view, "consoleInputField");
+        tryCompare(field, "visible", true);
+        field.forceActiveFocus();
+        const height = view.cellHeight;
+        for (let i = 0; i < 20; ++i) {
+            consoleFixture.finishInput(backend);
+            backend.clearAll();
+            backend.print("RESET: " + i);
+            backend.newline();
+            consoleFixture.request(backend, "TINPUTS");
+            compare(field.visible, true);
+            compare(view.cellHeight, height);
+            verify(field.activeFocus);
+            wait(1);
+            compare(view.rowCount, 1);
+        }
+        // A subsequent input request must not steal focus from another control.
+        host.forceActiveFocus();
+        consoleFixture.finishInput(backend);
+        consoleFixture.request(backend, "TINPUTS");
+        wait(1);
+        verify(!field.activeFocus);
     }
 
     // 模型行数与视图行数一致（小内容时委托全部存活）

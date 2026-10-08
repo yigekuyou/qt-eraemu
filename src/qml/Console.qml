@@ -43,8 +43,9 @@ import io.yigekuoyou.eraengine
 // ConsoleBlock（Repeater 建出），跨行图/图层靠溢出绘制 + 视口 clip 裁剪。
 // 跨行叠放（后打印的图盖住先打印的立絵）由「后打印的行 = 后创建的委托」
 // 天然保序 —— 打印顺序 z 随行号单调，与 C# 逐 part 绘制一致。
-Item {
+FocusScope {
     id: root
+    focus: true
 
     // 屏幕刷新率（Hz）由 C++ 注入（QScreen::refreshRate）——Qt 的 QML Screen
     // 附着类型**没有** refreshRate 属性（Qt 文档 Screen QML Type），旧代码写的
@@ -59,6 +60,7 @@ Item {
     onBackendChanged: {
         syncCadence();
         syncLayout();
+        Qt.callLater(root.syncInputPresentation);
     }
 
     property ConsoleBackend backend: null   // ConsoleBackend（兼行模型）
@@ -360,11 +362,13 @@ Item {
     // 高度只有一行文字；直接键入、回车即提交。非等待状态高度为 0。
     TextField {
         id: inputField
+        objectName: "consoleInputField"
+        focus: !root.primitiveInput
         anchors.left: parent.left
         anchors.right: parent.right
         anchors.bottom: parent.bottom
         height: visible ? implicitHeight : 0
-        visible: root.backend && root.backend.waitingInput && !root.primitiveInput && !root.titleActive
+        visible: root.inputRowVisible
         background: null                 // 无边框：去掉 TextField 默认描边
         topPadding: 0
         bottomPadding: 0
@@ -379,8 +383,6 @@ Item {
             : ""
         // 输入类型分支限制：整数型输入只接受数字（INPUT 可负）
         validator: root.backend && root.backend.waitingInput && !root.stringInputKind ? intOnly : null
-        onVisibleChanged: if (visible)
-            inputField.forceActiveFocus()
         onAccepted: root.submit()
     }
     RegularExpressionValidator {
@@ -402,13 +404,22 @@ Item {
         const k = backend.inputKind.toUpperCase();
         return k.indexOf("INPUTS") >= 0 || k.indexOf("ARGS") >= 0;
     }
-    onPrimitiveInputChanged: {
-        if (primitiveInput)
-            viewport.forceActiveFocus();
+    // Timed input briefly completes before the script redraws and requests it
+    // again. Coalesce these transitions so the viewport and focus stay stable.
+    property bool inputRowVisible: false
+    function syncInputPresentation(): void {
+        inputRowVisible = backend && backend.waitingInput && !primitiveInput && !titleActive;
+    }
+    onTitleActiveChanged: Qt.callLater(root.syncInputPresentation)
+    Connections {
+        target: root.backend
+        function onWaitingInputChanged() { Qt.callLater(root.syncInputPresentation); }
+        function onInputRequested() { Qt.callLater(root.syncInputPresentation); }
     }
 
     Component.onCompleted: {
         syncCadence();
         syncLayout();
+        syncInputPresentation();
     }
 }

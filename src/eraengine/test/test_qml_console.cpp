@@ -93,6 +93,9 @@ public:
     Q_INVOKABLE void request(QObject* object, const QString& kind) {
         static_cast<ConsoleBackend*>(object)->notifyInputRequested(kind);
     }
+    Q_INVOKABLE void finishInput(QObject* object) {
+        static_cast<ConsoleBackend*>(object)->notifyInputDone();
+    }
     Q_INVOKABLE QObject* create(QObject* parent = nullptr) {
         return new ConsoleBackend(parent);
     }

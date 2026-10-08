@@ -1,5 +1,7 @@
 # REF
 
+> 来源范围：本文的“本仓库”“当前实现”在描述语义、注册或源码行为时，指 C# 参考树 `emuera.em/Emuera/`；其他 C# 版本另按文中路径标注。资料收录范围仍指仓库内的参考材料。
+
 - **类别**：命令（Emuera 枚举成员 `Runtime/Script/Statements/BuiltInFunctionCode.cs:274`）
 - **实现状态**：**已禁用（而且是双重失效）**。名字仍注册（`Runtime/Script/Statements/FunctionIdentifier.cs:384`），参数构造器、参数类、引用型变量（`#DIM REF`）都还在，但：
   1. 参数构造器里的守卫条件写错了，任何写法都会走进「格式错误」分支（`Runtime/Script/Statements/ArgumentBuilder.cs:2212~2214`，详见「备注」），行被标记为错误行；

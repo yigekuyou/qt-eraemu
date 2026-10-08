@@ -72,34 +72,19 @@ bool isSymbolChar(QChar c) {
 // 顶层逗号切分（跳过引号 / 括号嵌套）——用于形参列表
 QStringList splitTopLevelComma(const QString& text) {
     QStringList out;
-    QString current;
-    int depth = 0;
-    QChar quote;
-    for (const QChar ch : text) {
-        if (!quote.isNull()) { current += ch; if (ch == quote) quote = QChar(); continue; }
-        if (ch == QLatin1Char('"') || ch == QLatin1Char('\'')) { quote = ch; current += ch; continue; }
-        if (ch == QLatin1Char('(') || ch == QLatin1Char('[')) { ++depth; current += ch; continue; }
-        if (ch == QLatin1Char(')') || ch == QLatin1Char(']')) { if (depth > 0) --depth; current += ch; continue; }
-        if (depth == 0 && ch == QLatin1Char(',')) { out << current.trimmed(); current.clear(); continue; }
-        current += ch;
+    int begin = 0;
+    while (begin < text.size()) {
+        const int end = StrFormParser::findTopLevel(text, ',', begin, -1);
+        if (end < 0) { out << text.mid(begin).trimmed(); break; }
+        out << text.mid(begin, end - begin).trimmed();
+        begin = end + 1;
     }
-    if (!current.trimmed().isEmpty()) out << current.trimmed();
     return out;
 }
 
 // 顶层 '=' 的位置（-1 = 无）；用于剥离形参默认值
 int topLevelEquals(const QString& text) {
-    int depth = 0;
-    QChar quote;
-    for (int i = 0; i < text.size(); ++i) {
-        const QChar ch = text.at(i);
-        if (!quote.isNull()) { if (ch == quote) quote = QChar(); continue; }
-        if (ch == QLatin1Char('"') || ch == QLatin1Char('\'')) { quote = ch; continue; }
-        if (ch == QLatin1Char('(') || ch == QLatin1Char('[')) { ++depth; continue; }
-        if (ch == QLatin1Char(')') || ch == QLatin1Char(']')) { if (depth > 0) --depth; continue; }
-        if (depth == 0 && ch == QLatin1Char('=')) return i;
-    }
-    return -1;
+    return StrFormParser::findTopLevel(text, '=', 0, -1);
 }
 
 } // namespace
@@ -550,7 +535,6 @@ QStringList AstBuilder::splitOperands(const QString& text, bool splitWhitespace)
     QStringList tokens;
     QString current;
     int depth = 0;
-    QChar quote;
     const int n = text.length();
 
     auto flush = [&]() {
@@ -562,12 +546,12 @@ QStringList AstBuilder::splitOperands(const QString& text, bool splitWhitespace)
     for (int i = 0; i < n; ++i) {
         const QChar ch = text.at(i);
 
-        if (!quote.isNull()) {
-            current += ch;
-            if (ch == quote) quote = QChar();
+        const int span = StrFormParser::expressionSpanEnd(text, i);
+        if (span > i) {
+            current += text.mid(i, span - i);
+            i = span - 1;
             continue;
         }
-        if (ch == '"' || ch == '\'') { quote = ch; current += ch; continue; }
 
         if (ch == '(' || ch == '[' || ch == '{') { ++depth; current += ch; continue; }
         if (ch == ')' || ch == ']' || ch == '}') { if (depth > 0) --depth; current += ch; continue; }
@@ -785,7 +769,8 @@ LogicalLine AstBuilder::build(const QString& rawLine,
         // 与式中函数 POWER(X, Y)（2 参）不同形 —— 语句不能按函数调用归约，
         // 否则 eraTW TRACHECK_ORGASM.ERB:92 `POWER Multiplier, 2, MultipleEc`
         // 既触发参数数目双重告警、又丢掉对变量的赋值。
-        && line.functionName != QLatin1String("POWER")) {
+        && line.functionName != QLatin1String("POWER")
+        && line.functionName != QLatin1String("ENCODETOUNI")) {
         const QString callText = trimmed.mid(first.text.length()).trimmed();
         // 实参形态声明外置（注册类可以插入 AST）：ExtensionRegistry::regForm()
         // 声明的函数（如 PUTFORM），实参是**格式化串**（文本 + {…}/%…%），
@@ -809,6 +794,16 @@ LogicalLine AstBuilder::build(const QString& rawLine,
         return finalized(std::move(line));
     }
 
+    // C# ENCODETOUNI statement uses FORM_STR_NULLABLE, unlike its expression
+    // function. Quotes and commas are literal FORM text; an empty argument is valid.
+    if (line.functionName == QLatin1String("ENCODETOUNI")) {
+        const QString text = trimmed.mid(first.text.length()).trimmed();
+        Operand form(text);
+        if (resolve) form.ast = StrFormParser::parse(text, resolve);
+        line.arguments.append(form);
+        return finalized(std::move(line));
+    }
+
     // CALL 族特例：CALL / CALLFORM / CALLF / TRYCALL* / JUMP* / BEGIN
     // 第一个操作数是**标签名**（可含 %...% 格式串），不是表达式 ——
     // 对齐 C# 的 SP_CALL / SP_CALLFORM / CALLF_Instruction（目标按标签解析）。
@@ -817,29 +812,31 @@ LogicalLine AstBuilder::build(const QString& rawLine,
         QString rest = trimmed.mid(first.text.length()).trimmed();
         QString funcName;
         QString args;
-        // 标签名 = 第一个 token（到 空白 / 逗号 / '(' 为止）。只有当 '(' **紧跟**
-        // 标签名时才按括号形式取实参 —— 否则逗号形式的实参里若含 '('
+        // 标签名 = 第一个 token（到 空白 / 逗号 / '(' 为止）。跳过标签后的空白，
+        // 遇 '(' 时按括号形式取实参 —— 否则逗号形式的实参里若含 '('
         // （如 `CALL F, !(1)`），rest.indexOf('(') 会命中实参里的括号，
         // 把标签名错切成 "F, !" -> "CALL label not found"。
         int nameEnd = 0;
-        bool inPercentForm = false;   // %…% 是格式串区，内部的 ( , 空格不属于名字边界
         while (nameEnd < rest.size()) {
             const QChar c = rest.at(nameEnd);
-            if (c == QLatin1Char('%')) {
-                inPercentForm = !inPercentForm;
-            } else if (!inPercentForm
-                       && (c.isSpace() || c == QLatin1Char(',')
-                           || c == QLatin1Char('('))) {
-                break;
+            if (c == '%' || c == '{') {
+                const int end = c == '%' ? StrFormParser::findPercentEnd(rest, nameEnd + 1)
+                    : StrFormParser::findTopLevel(rest, '}', nameEnd + 1, -1);
+                if (end >= 0) { nameEnd = end + 1; continue; }
             }
+            const int span = StrFormParser::expressionSpanEnd(rest, nameEnd);
+            if (span > nameEnd) { nameEnd = span; continue; }
+            if (c.isSpace() || c == ',' || c == '(') break;
             ++nameEnd;
         }
         funcName = rest.left(nameEnd).trimmed();
-        const QChar afterName = (nameEnd < rest.size()) ? rest.at(nameEnd) : QChar();
+        int argsBegin = nameEnd;
+        while (argsBegin < rest.size() && rest.at(argsBegin).isSpace()) ++argsBegin;
+        const QChar afterName = (argsBegin < rest.size()) ? rest.at(argsBegin) : QChar();
         if (afterName == QLatin1Char('(')) {
             const int close = rest.lastIndexOf(')');
-            args = (close > nameEnd) ? rest.mid(nameEnd + 1, close - nameEnd - 1)
-                                     : rest.mid(nameEnd + 1);
+            args = (close > argsBegin) ? rest.mid(argsBegin + 1, close - argsBegin - 1)
+                                       : rest.mid(argsBegin + 1);
         } else {
             // 逗号形式 `CALL 标签, 实参1, 实参2`（Emuera 与括号形式等价，eraTW 大量使用）。
             int argStart = nameEnd;
@@ -996,6 +993,22 @@ LogicalLine AstBuilder::build(const QString& rawLine,
         return finalized(std::move(line));
     }
 
+    // CUSTOMDRAWLINE takes literal text (C# CUSTOMDRAWLINE_Instruction),
+    // including quotes, commas and spaces; it must never call the resolver.
+    if (line.functionName == QLatin1String("CUSTOMDRAWLINE")) {
+        QString text = source.mid(source.indexOf(first.text) + first.text.size());
+        int begin = 0;
+        while (begin < text.size() && (text[begin] == ' ' || text[begin] == '\t')) ++begin;
+        text = text.mid(begin);
+        if (!text.isEmpty()) {
+            Operand operand(text);
+            operand.isString = true;
+            operand.ast = QSharedPointer<LiteralNode>::create(text);
+            line.arguments.append(operand);
+        }
+        return finalized(std::move(line));
+    }
+
     // 格式化串指令：整行操作数按 StrForm 解析（文本 + {expr}/%expr%）
     if (isStrFormInstruction(line.functionName)) {
         const QString rest = trimmed.mid(first.text.length()).trimmed();
@@ -1061,9 +1074,18 @@ LogicalLine AstBuilder::build(const QString& rawLine,
         } else if (token.startsWith('%') || token.startsWith('$')) {
             operand.isVariable = true;
         } else if (token != QLatin1String(",") && token != QLatin1String(":")) {
-            if (resolve) operand.ast = resolve(token);
+            if (resolve && argKind != ArgKind::Case
+                && !(argKind == ArgKind::Times && line.arguments.size() >= 2))
+                operand.ast = resolve(token);
         }
         line.arguments.append(operand);
+    }
+    if (argKind == ArgKind::Case) {
+        buildCaseClauses(line, resolve);
+        // Runtime resolves clauses in their owning function scope, after DIM
+        // declarations and user function types have been finalized.
+        line.caseCache.clear();
+        line.caseCacheReady = false;
     }
 
     // 条件指令：用「原始整行文本」作为条件表达式归约（保留引号等字面量）
@@ -1098,4 +1120,96 @@ LogicalLine AstBuilder::build(const QString& rawLine,
     }
 
     return finalized(std::move(line));
+}
+
+namespace {
+// 顶层逗号切分（跳过引号与括号嵌套）—— 供 CASE 的参数列表使用
+QStringList splitCaseArgs(const QString& text) {
+    return splitTopLevelComma(text);
+}
+// CASE 臂解析（对齐 C# CASE_ArgumentBuilder）：只认引号/括号外的 IS / TO。
+// perf：CASE 行装载后不可变，结果缓存在 LogicalLine::caseCache —— 首次
+// caseMatches 时解析一次（含 expressionAst 预解析），之后直接复用。
+// 此前每字符 × 每 CASE 臂都要重新 splitCaseArgs + expressionAst，是 eraTW
+// 地图逐字符 SELECTCASE 热路径上的最大热点。
+} // namespace
+
+void AstBuilder::buildCaseClauses(const LogicalLine& caseLine, const AstResolver& resolve)
+{
+    caseLine.caseCache.clear();
+    QString spec = stripLineComment(caseLine.raw).trimmed();
+    // 去掉前导 'CASE'
+    if (spec.left(4).compare(QLatin1String("CASE"), Qt::CaseInsensitive) == 0) {
+        spec = spec.mid(4);
+    }
+    spec = spec.trimmed();
+
+    for (const QString& part : splitCaseArgs(spec)) {
+        const QString t = part.trimmed();
+        if (t.isEmpty()) continue;
+        CaseClause clause;
+        if (t.size() > 2 && t.left(2).compare("IS", Qt::CaseInsensitive) == 0 && t[2].isSpace()) {
+            const QString rest = t.mid(3).trimmed();
+            static const QStringList ops = {"<=", ">=", "==", "!=", "<", ">"};
+            bool opMatched = false;
+            for (const QString& op : ops) {
+                if (!rest.startsWith(op)) continue;
+                clause.kind = CaseClause::Kind::IsOp;
+                clause.op = op;
+                clause.textA = rest.mid(op.size()).trimmed();
+                opMatched = true;
+                break;
+            }
+            if (!opMatched) continue;   // 与原实现一致：无操作数的 IS 臂被忽略
+        } else {
+            int to = -1, depth = 0;
+            for (int i = 0; i < t.size(); ++i) {
+                const QChar c = t[i];
+                const int span = StrFormParser::expressionSpanEnd(t, i);
+                if (span > i) { i = span - 1; continue; }
+                if (c == '(' || c == '[') ++depth;
+                if (c == ')' || c == ']') --depth;
+                if (depth == 0 && i > 0 && i + 2 < t.size() && t[i-1].isSpace()
+                    && t.mid(i, 2).compare("TO", Qt::CaseInsensitive) == 0 && t[i+2].isSpace()) {
+                    to = i;
+                    break;
+                }
+            }
+            if (to >= 0) {
+                clause.kind = CaseClause::Kind::Range;
+                clause.textA = t.left(to).trimmed();
+                clause.textB = t.mid(to + 2).trimmed();
+            } else {
+                clause.kind = CaseClause::Kind::Equal;
+                clause.textA = t;
+            }
+        }
+        if (resolve) {
+            clause.astA = resolve(clause.textA);
+            if (clause.kind == CaseClause::Kind::Range)
+                clause.astB = resolve(clause.textB);
+        }
+        // 纯字符串字面量（无转义 / 无 %..% 形式）预存字面值：匹配期直接 QString 比较
+        if (clause.kind == CaseClause::Kind::Equal) {
+            const QString& s = clause.textA;
+            if (s.size() >= 2 && s.startsWith(QLatin1Char('"'))
+                && s.endsWith(QLatin1Char('"'))) {
+                bool simple = true;
+                for (int i = 1; i + 1 < s.size(); ++i) {
+                    const QChar c = s.at(i);
+                    if (c == QLatin1Char('"') || c == QLatin1Char('\\')
+                        || c == QLatin1Char('%')) {
+                        simple = false;
+                        break;
+                    }
+                }
+                if (simple) {
+                    clause.isSimpleStr = true;
+                    clause.strLiteral = s.mid(1, s.size() - 2);
+                }
+            }
+        }
+        caseLine.caseCache.append(clause);
+    }
+    caseLine.caseCacheReady = true;
 }

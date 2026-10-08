@@ -1,5 +1,7 @@
 # DUMPRAND
 
+> 来源范围：本文的“本仓库”“当前实现”在描述语义、注册或源码行为时，指 C# 参考树 `emuera.em/Emuera/`；其他 C# 版本另按文中路径标注。资料收录范围仍指仓库内的参考材料。
+
 - **类别**：命令
 - **签名**：`DUMPRAND`
 - **文档来源**：`ecd/docs/translation/Command.md`（「随机数的控制」节）；`Era-Chinese-Documentation` 仅在 `zh/Variable.md:614` 提到「它由 `DUMPRAND` 记录，由 `INITRAND` 读取」，无独立小节。

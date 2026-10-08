@@ -1,5 +1,7 @@
 # VARI
 
+> 来源范围：本文的“本仓库”“当前实现”在描述语义、注册或源码行为时，指 C# 参考树 `emuera.em/Emuera/`；其他 C# 版本另按文中路径标注。资料收录范围仍指仓库内的参考材料。
+
 - **类别**：EE 扩展命令（Emuera 枚举成员 `Runtime/Script/Statements/BuiltInFunctionCode.cs:393`，位于文件的 `#region Emuera.NET`（第 392 行）；两套中文文档均未收录，语义据源码）
 - **签名**（据 `LogicalLineParser` 的专用解析分支推定；`VARI` 不走通用参数构造器）：
   - `VARI <变量名>`：声明一维长度 1 的整数私有变量，初值 0

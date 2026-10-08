@@ -1,5 +1,7 @@
 # PRINT_SHOPITEM
 
+> 来源范围：本文的“本仓库”“当前实现”在描述语义、注册或源码行为时，指 C# 参考树 `emuera.em/Emuera/`；其他 C# 版本另按文中路径标注。资料收录范围仍指仓库内的参考材料。
+
 - **类别**：命令
 - **签名**：`PRINT_SHOPITEM`（无参数）
 - **文档来源**：`ecd/docs/translation/Command.md` 未收录独立小节；语义见 `Era-Chinese-Documentation/docs/Replace_CSV.md`（「在 Eramaker 通常的 `SHOP` 处理中，`PRINT_SHOPITEM` 会显示所有 `ITEMSALES` 非 0 的 `ITEMNAME`（0～999）」等）与 `ecd/EraBasic_Structure.md:160`（「调用 `PRINT_SHOPITEM` 显示出售中的物品」）；实现细节来自源码。

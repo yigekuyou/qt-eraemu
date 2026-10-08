@@ -74,6 +74,71 @@ int main(int argc, char* argv[]) {
     ProcessState state;
     EraParseTable table(&state);
 
+    // These command arguments are not ordinary expressions. Record every failed
+    // reduction, as ErbLoader does, to catch false-positive load diagnostics.
+    QStringList failed;
+    const AstResolver strict = [&table, &failed](const QString& text) {
+        auto ast = table.expressionAst(text);
+        if (!ast) failed.append(text);
+        return ast;
+    };
+    for (const QString& text : QStringList{"CUSTOMDRAWLINE =", "CASE 1101 TO 1106",
+            "CASE 4510 TO 4512", "CASE 4000 TO 4839", "CASE IS >= 8, 1 TO 3"})
+        AstBuilder::build(text, {}, strict);
+    check(failed.isEmpty(), "literal and CASE grammar produce no expression diagnostics");
+    const auto literal = AstBuilder::build("customdrawline a, {LOCAL} ", {}, strict);
+    check(literal.arguments.size() == 1 && literal.arguments.first().raw == "a, {LOCAL} ",
+          "CUSTOMDRAWLINE preserves comma, form text and trailing space");
+    AstBuilder::build("CASE 1 TO (", {}, strict);
+    check(!failed.isEmpty(), "invalid CASE endpoint still reaches diagnostic resolver");
+
+    failed.clear();
+    for (const QString& factor : QStringList{"1.50", "0.80", "-2.5", "1e-2", "+.5"}) {
+        const auto line = AstBuilder::build("TIMES LOCAL, " + factor, {}, strict);
+        check(line.argument.typeOk && !line.arguments.last().ast,
+              "TIMES real constant is not an integer AST: " + factor);
+    }
+    check(failed.isEmpty(), "TIMES valid multipliers never reach expression resolver");
+    for (const QString& text : QStringList{"TIMES LOCAL, 1+2", "TIMES LOCAL, nan",
+            "TIMES LOCAL, \"1.5\"", "TIMES LOCALS, 2", "TIMES LOCAL", "CUSTOMDRAWLINE"})
+        check(!build(table, text).argument.typeOk, "invalid special argument diagnosed: " + text);
+    const QString form = QString::fromUtf8(R"ERB(@"\@ARGS == "a,b TO c" ? 是 # 否\@")ERB");
+    for (const QString& prefix : QStringList{"PRINTBUTTON ", "CALL F, ", "RETURN "}) {
+        const auto line = AstBuilder::build(prefix + form + ",1", {}, strict);
+        check(line.argument.operands.size() == (prefix.startsWith("CALL") ? 3 : 2),
+              "FORM internal quotes and commas stay inside argument: " + prefix);
+    }
+    auto caseLine = AstBuilder::build("CASE " + form + ", IS\t>= 2, 3 TO 5", {}, strict);
+    AstBuilder::buildCaseClauses(caseLine, strict);
+    check(caseLine.caseCache.size() == 3 && caseLine.caseCache[0].kind == CaseClause::Kind::Equal
+          && caseLine.caseCache[1].kind == CaseClause::Kind::IsOp
+          && caseLine.caseCache[2].kind == CaseClause::Kind::Range,
+          "CASE skips FORM spans for commas/TO and accepts tab after IS");
+    for (const QString& target : QStringList{"COMTYPE_{ARG % 10000}",
+            "CGEX_{LOCAL:(LOCAL:10)}", QString::fromUtf8(R"ERB(\@!LOCAL ? FGO # EX\@_SUMMON_{LOCAL})ERB")}) {
+        const auto line = AstBuilder::build("TRYCCALLFORM " + target + ", 1", {}, strict);
+        check(line.arguments.size() == 2 && line.arguments.first().raw == target,
+              "CALLFORM target retains complete interpolation: " + target);
+    }
+    check(failed.isEmpty(), "shared FORM spans produce no false expression failures");
+
+    failed.clear();
+    for (const QString& text : QStringList{"CALL INPUTINT (0,99)", "CALL INPUTINT\t(1,2,3,4)",
+            "CALL ADDS_ABNORMAL_EXP (\"拡張初体験\", LOCAL)", "CALL F, !(1), (2 + 3)"}) {
+        const auto line = AstBuilder::build(text, {}, strict);
+        check(line.arguments.size() == (text.contains("1,2,3,4") ? 5 : 3),
+              "CALL whitespace before parentheses preserves arguments: " + text);
+    }
+    for (const QString& text : QStringList{"%RESULTS%", "%NAME:CHARA%", "%NAME:LOCAL%", "a,b,", "\"A\"", ""}) {
+        const auto line = AstBuilder::build("ENCODETOUNI " + text, {}, strict);
+        check(!line.isFunctionCall && line.argument.kind == ArgKind::FormStr
+              && line.argument.typeOk && line.arguments.first().raw == text,
+              "ENCODETOUNI statement keeps FORM text: " + text);
+    }
+    check(failed.isEmpty(), "CALL and ENCODETOUNI FORM produce no false diagnostics");
+    check(!table.expressionAst("ENCODETOUNI(%RESULTS%)"), "ordinary expression rejects bare FORM");
+    check(bool(table.expressionAst("ENCODETOUNI(\"A\")")), "expression function still accepts string");
+
     qDebug() << "\n1) 分类（ArgKind）";
     check(build(table, "FOR II, 0, 2").argument.kind == ArgKind::ForNext, "FOR -> ForNext");
     check(build(table, "IF 1 == 1").argument.kind == ArgKind::IntExpression, "IF -> IntExpression");

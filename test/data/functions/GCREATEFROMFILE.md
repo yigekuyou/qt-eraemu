@@ -1,5 +1,7 @@
 # GCREATEFROMFILE
 
+> 来源范围：本文的“本仓库”“当前实现”在描述语义、注册或源码行为时，指 C# 参考树 `emuera.em/Emuera/`；其他 C# 版本另按文中路径标注。资料收录范围仍指仓库内的参考材料。
+
 - **类别**：式中函数（G 系图像处理指令，可作命令或函数使用）
 - **签名**：int GCREATEFROMFILE(`<ID>`, `<文件路径>`)；EE 扩展另支持 int GCREATEFROMFILE(`<ID>`, `<文件路径>`, `<相对路径标志>`)
 - **文档来源**：`ecd/Command.md`「### GCREATEFROMFILE `<ID>`, `<文件路径>`」（图像处理相关章节）；`ecd/Expression.md` 未收录（签名列表不含 G 系）；zh 套件未收录

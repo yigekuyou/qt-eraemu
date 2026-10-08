@@ -24,6 +24,7 @@
 #include "system_state_machine.h"
 #include "ast/expression_evaluator.h"
 #include "ast/strform_parser.h"
+#include "ast/ast_builder.h"
 #include <QDebug>
 #include <QElapsedTimer>
 #include <bit>
@@ -2142,124 +2143,14 @@ int ScriptRunner::findGotoLabelInFunction(const QString& label, const QString& o
 //   CASEELSE           -> 由调用方处理（默认分支）
 // 字符串 SELECTCASE 走字符串比较；数值走整数比较。
 // ---------------------------------------------------------------------------
-namespace {
-// 顶层逗号切分（跳过引号与括号嵌套）—— 供 CASE 的参数列表使用
-QStringList splitCaseArgs(const QString& text)
-{
-    QStringList out;
-    QString current;
-    int depth = 0;
-    QChar quote;
-    for (const QChar c : text) {
-        if (!quote.isNull()) {
-            current += c;
-            if (c == quote) quote = QChar();
-            continue;
-        }
-        if (c == QLatin1Char('"') || c == QLatin1Char('\'')) { quote = c; current += c; continue; }
-        if (c == QLatin1Char('(') || c == QLatin1Char('[')) { ++depth; current += c; continue; }
-        if (c == QLatin1Char(')') || c == QLatin1Char(']')) { --depth; current += c; continue; }
-        if (c == QLatin1Char(',') && depth == 0) { out.append(current); current.clear(); continue; }
-        current += c;
-    }
-    if (!current.trimmed().isEmpty()) out.append(current);
-    return out;
-}
-// CASE 臂解析（对齐 C# CASE_ArgumentBuilder）：只认引号/括号外的 IS / TO。
-// perf：CASE 行装载后不可变，结果缓存在 LogicalLine::caseCache —— 首次
-// caseMatches 时解析一次（含 expressionAst 预解析），之后直接复用。
-// 此前每字符 × 每 CASE 臂都要重新 splitCaseArgs + expressionAst，是 eraTW
-// 地图逐字符 SELECTCASE 热路径上的最大热点。
-void buildCaseCache(const LogicalLine& caseLine, EraParseTable* table)
-{
-    QString spec = caseLine.raw.trimmed();
-    // 去掉前导 'CASE'
-    if (spec.left(4).compare(QLatin1String("CASE"), Qt::CaseInsensitive) == 0) {
-        spec = spec.mid(4);
-    }
-    spec = spec.trimmed();
-
-    for (const QString& part : splitCaseArgs(spec)) {
-        const QString t = part.trimmed();
-        if (t.isEmpty()) continue;
-        CaseClause clause;
-        if (t.startsWith("IS ", Qt::CaseInsensitive)) {
-            const QString rest = t.mid(3).trimmed();
-            static const QStringList ops = {"<=", ">=", "==", "!=", "<", ">"};
-            bool opMatched = false;
-            for (const QString& op : ops) {
-                if (!rest.startsWith(op)) continue;
-                clause.kind = CaseClause::Kind::IsOp;
-                clause.op = op;
-                clause.textA = rest.mid(op.size()).trimmed();
-                opMatched = true;
-                break;
-            }
-            if (!opMatched) continue;   // 与原实现一致：无操作数的 IS 臂被忽略
-        } else {
-            int to = -1, depth = 0;
-            QChar quote;
-            for (int i = 0; i < t.size(); ++i) {
-                const QChar c = t[i];
-                if (!quote.isNull()) {
-                    if (c == '\\') { ++i; continue; }
-                    if (c == quote) quote = QChar();
-                    continue;
-                }
-                if (c == '\"' || c == '\'') { quote = c; continue; }
-                if (c == '(' || c == '[') ++depth;
-                if (c == ')' || c == ']') --depth;
-                if (depth == 0 && i > 0 && i + 2 < t.size() && t[i-1].isSpace()
-                    && t.mid(i, 2).compare("TO", Qt::CaseInsensitive) == 0 && t[i+2].isSpace()) {
-                    to = i;
-                    break;
-                }
-            }
-            if (to >= 0) {
-                clause.kind = CaseClause::Kind::Range;
-                clause.textA = t.left(to).trimmed();
-                clause.textB = t.mid(to + 2).trimmed();
-            } else {
-                clause.kind = CaseClause::Kind::Equal;
-                clause.textA = t;
-            }
-        }
-        if (table) {
-            clause.astA = table->expressionAst(clause.textA);
-            if (clause.kind == CaseClause::Kind::Range)
-                clause.astB = table->expressionAst(clause.textB);
-        }
-        // 纯字符串字面量（无转义 / 无 %..% 形式）预存字面值：匹配期直接 QString 比较
-        if (clause.kind == CaseClause::Kind::Equal) {
-            const QString& s = clause.textA;
-            if (s.size() >= 2 && s.startsWith(QLatin1Char('"'))
-                && s.endsWith(QLatin1Char('"'))) {
-                bool simple = true;
-                for (int i = 1; i + 1 < s.size(); ++i) {
-                    const QChar c = s.at(i);
-                    if (c == QLatin1Char('"') || c == QLatin1Char('\\')
-                        || c == QLatin1Char('%')) {
-                        simple = false;
-                        break;
-                    }
-                }
-                if (simple) {
-                    clause.isSimpleStr = true;
-                    clause.strLiteral = s.mid(1, s.size() - 2);
-                }
-            }
-        }
-        caseLine.caseCache.append(clause);
-    }
-    caseLine.caseCacheReady = true;
-}
-
-} // namespace
 
 bool ScriptRunner::caseMatches(const LogicalLine& caseLine,
                                const QVariant& valueVar, bool valueIsStr)
 {
-    if (!caseLine.caseCacheReady) buildCaseCache(caseLine, m_table);
+    if (!caseLine.caseCacheReady)
+        AstBuilder::buildCaseClauses(caseLine, [this](const QString& text) {
+            return m_table ? m_table->expressionAst(text) : QSharedPointer<ExpressionNode>();
+        });
 
     ExpressionEvaluator& ev = getEvaluator();
     // perf：SELECTCASE 值只转一次字符串（此前每个 CASE 臂都 toString 一次）

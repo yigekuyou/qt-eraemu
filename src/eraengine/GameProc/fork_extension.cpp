@@ -247,7 +247,7 @@ void registerEnumFamily(ExtensionRegistry& ext, const QString& base,
 //      EE_CALLSHARP注意`），且仓库里的样例游戏（eraTW / eraMegaten）**零使用**。
 //
 // 因此按仓库的桩政策处理：**只登记名字**（装载/运行期不报「未知命令」，
-// 运行期静默跳过），并在 test/data/commands/CALLSHARP.md 的「备注」里注明上述原因。
+// 运行期静默跳过），并在 test/change/commands.md 的 CALLSHARP 节里注明上述原因。
 // ===========================================================================
 } // namespace
 

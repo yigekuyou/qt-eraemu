@@ -1,5 +1,7 @@
 # HTML_PRINT_ISLAND
 
+> 来源范围：本文的“本仓库”“当前实现”在描述语义、注册或源码行为时，指 C# 参考树 `emuera.em/Emuera/`；其他 C# 版本另按文中路径标注。资料收录范围仍指仓库内的参考材料。
+
 - **类别**：EE 扩展命令（Emuera 枚举成员；Emuera.NET 区扩展；两套中文文档未收录，语义据源码推定）
 - **签名**：`HTML_PRINT_ISLAND <HTML 字符串表达式>{, <第二参数（整数表达式，本命令不使用）>}`
 - **文档来源**：无文档收录。两套中文文档均未收录——`test/data/_extracted/ecd/HTML_PRINT.md` 与 `test/data/_extracted/zh/HTML_PRINT.md` 对 `ISLAND` 的 grep 命中数均为 0（即 HTML_PRINT 页没有提到本命令）；`eraTW/README集/EmueraEE Readme/` 亦无本命令。已有文档 `test/data/language/HTML显示.md:37` 仅点到为止（给出实现位置），本文件是首个完整文档；语义据源码推定。

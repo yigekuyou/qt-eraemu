@@ -135,6 +135,7 @@ inline constexpr auto kInstructionSpecs = std::to_array<InstructionSpec>({
     {"SAVENOS",      ArgKind::SaveData,      0,  1},
     {"SPLIT",        ArgKind::Split,         1,  -1},
     {"STRDATA",      ArgKind::VarStr,        0,  1},   // VAR_STR：0 实参时目标为 RESULTS:0
+    {"ENCODETOUNI",  ArgKind::FormStr,       0,  1},   // statement: FORM_STR_NULLABLE
     {"DATAFORM",     ArgKind::FormStr,       0,  1},   // FORM_STR_NULLABLE
     // DATA：C# 是 STR_NULLABLE，但 era 脚本一律写「DATA <原文文本>」
     // （PRINTDATA/DATALIST/STRDATA 的数据行），而裸标识符在表达式里会被当成
@@ -157,7 +158,7 @@ inline constexpr auto kInstructionSpecs = std::to_array<InstructionSpec>({
     {"PRINT_PALAM",  ArgKind::PrintV,        1,  -1},
     {"PRINT_ITEM",   ArgKind::PrintV,        1,  -1},
     {"PRINT_SHOPITEM", ArgKind::PrintV,      0,  -1},
-    {"CUSTOMDRAWLINE", ArgKind::Raw,        0,  -1},
+    {"CUSTOMDRAWLINE", ArgKind::Raw,        1,   1},
     {"TINPUTS",      ArgKind::Input,         1,  4},
     {"ONEINPUTS",    ArgKind::Input,         0,  2},
     {"TONEINPUTS",   ArgKind::Input,         1,  4},

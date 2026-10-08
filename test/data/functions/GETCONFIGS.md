@@ -1,5 +1,7 @@
 # GETCONFIGS
 
+> 来源范围：本文的“本仓库”“当前实现”在描述语义、注册或源码行为时，指 C# 参考树 `emuera.em/Emuera/`；其他 C# 版本另按文中路径标注。资料收录范围仍指仓库内的参考材料。
+
 - **类别**：式中函数（EE 扩展）
 - **签名**：str GETCONFIGS(str configName)
 - **文档来源**：`ecd/Expression.md`、`ecd/Command.md`、zh 套件均未收录；语义完全依据源码（`Runtime/Script/Statements/Function/Creator.Method.cs` 的 `GetConfigMethod` 与 `Runtime/Config/ConfigData.cs` 的 `GetConfigValueInERB`）

@@ -299,45 +299,12 @@ ExpressionToken ExpressionLexer::readCurlyBracedIdentifier() {
 
 // @"..." —— 终止引号由「顶层」的引号决定：括号/引号内出现的 " 不算（如 @"%A+(" "*(B))%"）
 ExpressionToken ExpressionLexer::readStrFormAt() {
-    m_position += 2;   // 跳过 @"
-    m_column += 2;
-
-    const int start = m_position;
-    int depth = 0;
-    int end = -1;
-    while (m_position < m_input.length()) {
-        const QChar c = m_input.at(m_position);
-        if (c == QLatin1Char('"') && depth == 0) { end = m_position; break; }
-        // `%...%` 跨度：里面的 " 是**内容**，不是终结符。
-        // Emuera 的 `%` 插值支持 `%expr, width, align%`，expr 本身可以是字符串
-        // （`%"ＷＡＩＴ", ACTOR_LENS, LEFT%`），所以 `@"` 词法必须先按 % 切跨度、
-        // 再在跨度外找 `"` —— 与 C# AnalyseFormattedString 的顺序一致。
-        // 否则 `SIF ARGS == @"%"ＷＡＩＴ", ACTOR_LENS, LEFT%"` 会在第一个内层 "
-        // 就截断（内容只剩 "%"），整条 SIF 条件解析失败。
-        if (c == QLatin1Char('%') && depth == 0) {
-            const int pe = StrFormParser::findPercentEnd(m_input, m_position + 1);
-            if (pe > m_position) {
-                m_column += (pe + 1) - m_position;
-                m_position = pe + 1;
-                continue;
-            }
-        }
-        if (c == QLatin1Char('(') || c == QLatin1Char('{') || c == QLatin1Char('[')) ++depth;
-        else if (c == QLatin1Char(')') || c == QLatin1Char('}') || c == QLatin1Char(']')) { if (depth > 0) --depth; }
-        else if (c == QLatin1Char('\\')) { ++m_position; ++m_column; }
-        ++m_position;
-        ++m_column;
-    }
-
-    QString value;
-    if (end >= 0) {
-        value = m_input.mid(start, end - start);
-        m_position = end + 1;
-        ++m_column;
-    } else {
-        value = m_input.mid(start);
-        m_position = m_input.length();
-    }
+    const int start = m_position + 2;
+    const int after = StrFormParser::expressionSpanEnd(m_input, m_position);
+    const bool closed = after > start && m_input[after - 1] == '"';
+    const QString value = m_input.mid(start, after - start - (closed ? 1 : 0));
+    m_column += after - m_position;
+    m_position = after;
     return ExpressionToken(TokenType::STRFORM_AT, value, m_line, m_column);
 }
 

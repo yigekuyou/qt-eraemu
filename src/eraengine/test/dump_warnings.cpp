@@ -18,19 +18,20 @@
 // 告警导出工具：装载一个游戏目录的全部脚本，把 parseTable 的所有告警
 // 按「脚本:行号: 文本」写到 stdout（或 --out 指定的文件），便于逐条核对。
 //
-// 用法： dump_warnings <gameDir> [outFile]
+// 用法： dump_warnings <gameDir> [outFile] [--async]
 #include <QCoreApplication>
 #include <QDebug>
 #include <QDir>
 #include <QFile>
 #include <QTextStream>
 #include <QElapsedTimer>
+#include <QEventLoop>
 #include "eraengine.h"
 
 int main(int argc, char* argv[]) {
     QCoreApplication app(argc, argv);
     if (argc < 2) {
-        qWarning() << "usage: dump_warnings <gameDir> [outFile]";
+        qWarning() << "usage: dump_warnings <gameDir> [outFile] [--async]";
         return 2;
     }
     const QString dir = QString::fromLocal8Bit(argv[1]);
@@ -40,7 +41,19 @@ int main(int argc, char* argv[]) {
     timer.start();
 
     EraEngine engine;
-    engine.setGameDirectory(dir);
+    if (app.arguments().contains(QStringLiteral("--async"))) {
+        QEventLoop loop;
+        bool ok = false;
+        QObject::connect(&engine, &EraEngine::scriptsLoaded, &loop, [&](bool loaded) {
+            ok = loaded;
+            loop.quit();
+        });
+        engine.loadAsync(dir);
+        if (engine.isLoadingScripts()) loop.exec();
+        if (!ok) return 1;
+    } else {
+        engine.setGameDirectory(dir);
+    }
 
     const int n = engine.getParseTable()->parseWarningCount();
     const QStringList warns = engine.getParseTable()->parseWarnings();

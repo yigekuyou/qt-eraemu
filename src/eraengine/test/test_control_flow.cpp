@@ -43,6 +43,20 @@ static void run(const QString& name, const QStringList& source, qint64 expected,
 }
 int main(int argc, char** argv) {
     QCoreApplication app(argc, argv);
+    run("CALL spaced parentheses", {"CALL SUB (2,3)", "RETURN", "@SUB(A,B)", "CHECK = A * 10 + B", "RETURN"}, 23);
+    run("ENCODETOUNI expands FORM into RESULT array", {"RESULTS '= \"あA\"", "ENCODETOUNI %RESULTS%",
+        "CHECK = (RESULT:0 == 2) && (RESULT:1 == 12354) && (RESULT:2 == 65)"}, 1);
+    run("ENCODETOUNI literal punctuation", {"ENCODETOUNI a,b,", "CHECK = RESULT:0 * 1000 + RESULT:4"}, 4044);
+    run("ENCODETOUNI literal quotes", {"ENCODETOUNI \"A\"", "CHECK = RESULT:0 * 100 + RESULT:1"}, 334);
+    run("ENCODETOUNI empty FORM", {"RESULT = 9", "ENCODETOUNI", "CHECK = RESULT"}, 0);
+    run("ENCODETOUNI expression scalar", {"CHECK = ENCODETOUNI(\"A\")"}, 65);
+    for (int value : {1100, 1101, 1106, 1107})
+        run(QString("CASE inclusive boundary %1").arg(value),
+            {QString("SELECTCASE %1").arg(value), "CASE 1101 TO 1106", "CHECK = 1",
+             "CASEELSE", "CHECK = 2", "ENDSELECT"}, value >= 1101 && value <= 1106 ? 1 : 2);
+    run("CASE mixed IS/range and comment", {"SELECTCASE 4512", "CASE IS < 0, 4510 TO 4512 ; comment",
+        "CHECK = 7", "CASEELSE", "CHECK = 99", "ENDSELECT"}, 7);
+    run("CASE strings with TO text", {"SELECTCASE \"A TO B\"", "CASE \"A TO B\"", "CHECK = 3", "ENDSELECT"}, 3);
     run("64 bit IF/SIF/ELSEIF", {"IF 4294967296", "CHECK += 1", "ENDIF",
         "SIF -4294967296", "CHECK += 2", "IF 0", "CHECK = 999", "ELSEIF 4294967296", "CHECK += 4", "ENDIF"}, 7);
     run("nested branches and loops", {"FOR A, 0, 3", "IF A == 1", "CONTINUE", "ELSE", "WHILE 1",

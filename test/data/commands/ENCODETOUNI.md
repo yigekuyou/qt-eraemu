@@ -1,5 +1,7 @@
 # ENCODETOUNI
 
+> 来源范围：本文的“本仓库”“当前实现”在描述语义、注册或源码行为时，指 C# 参考树 `emuera.em/Emuera/`；其他 C# 版本另按文中路径标注。资料收录范围仍指仓库内的参考材料。
+
 - **类别**：命令（另有同名式中函数，签名不同，见备注）
 - **签名**：`ENCODETOUNI <对象字符串(FORM格式字符串)>`
 - **文档来源**：`ecd/docs/translation/Command.md`（「字符串操作·引用」节 `### ENCODETOUNI`）；`Era-Chinese-Documentation` 未收录。
@@ -12,10 +14,10 @@
 
 ### `ENCODETOUNI <对象字符串>`
 
-- `<对象字符串>`：FORM 格式字符串表达式，要编码的文本。
+- `<对象字符串>`：FORM 格式字符串，要编码的文本。外层双引号是字面文本，不会被剥除；例如 `ENCODETOUNI "あA"` 会连同两个双引号一起编码，`RESULT:0` 为 4。
 
 ```erb
-ENCODETOUNI "あA"
+ENCODETOUNI あA
 ;RESULT:0 = 2（字符数）
 ;RESULT:1 = 12354（'あ' 的码点 0x3042）
 ;RESULT:2 = 65（'A' 的码点）

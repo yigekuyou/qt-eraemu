@@ -49,7 +49,10 @@ public:
 
     // 在 text[from, end) 中查找顶层（跳过引号/({[]嵌套）的字符 c；找不到返回 -1
     [[nodiscard]] static int findTopLevel(const QString& text, QChar c, int from, int end);
-    // `%expr%` 的右端 `%`（只跳括号，不跳引号）
+    // Exclusive end of a quoted string, @"FORM", or \@ conditional at start.
+    // Returns start for ordinary characters. Shared by argument/clause scanners.
+    [[nodiscard]] static int expressionSpanEnd(const QString& text, int start);
+    // `%expr%` 的右端 `%`（跳过表达式中的括号、引号及 FORM）
     [[nodiscard]] static int findPercentEnd(const QString& text, int from);
 };
 

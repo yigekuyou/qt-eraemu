@@ -1,5 +1,7 @@
 # TIMES
 
+> 来源范围：本文的“本仓库”“当前实现”在描述语义、注册或源码行为时，指 C# 参考树 `emuera.em/Emuera/`；其他 C# 版本另按文中路径标注。资料收录范围仍指仓库内的参考材料。
+
 - **类别**：命令（Eramaker 基本命令）
 - **签名**：TIMES `<数值型变量>`, `<小数常数>`
 - **文档来源**：`ecd/docs/translation/ERB_File_Format.md`「### 其他基本命令」（TIMES 作为基本命令列出）；Era-Chinese-Documentation `ERB_File_Format.md`「`TIMES`：支持小数的乘法运算」（内容一致）；两套 Command.md 均无独立小节

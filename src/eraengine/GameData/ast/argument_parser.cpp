@@ -16,6 +16,7 @@
  * along with this program.  If not, see <https://www.gnu.org/licenses/>.
  */
 #include "argument_parser.h"
+#include <cmath>
 
 namespace {
 
@@ -144,6 +145,18 @@ void ArgumentParser::build(LogicalLine& line) {
         arg.typeOk = false;
         arg.typeError = QStringLiteral("%1 参数过多（最多 %2 个，实得 %3）")
                             .arg(upper).arg(arg.maxArgs).arg(n);
+    }
+
+    if (arg.typeOk && arg.kind == ArgKind::Times) {
+        bool valid = false;
+        const double factor = ops.at(1).raw.toDouble(&valid);
+        if (ops.at(1).isString || !valid || !std::isfinite(factor)) {
+            arg.typeOk = false;
+            arg.typeError = QStringLiteral("TIMES 的倍率需要有限实数常量：%1").arg(ops.at(1).raw);
+        } else if (!ops.first().ast || ops.first().ast->valueType() == OperandType::Str) {
+            arg.typeOk = false;
+            arg.typeError = QStringLiteral("TIMES 的第一个参数需要数值变量");
+        }
     }
 
     // ---- 表达式可解析性校验（单表达式族）----

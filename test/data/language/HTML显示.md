@@ -1,5 +1,7 @@
 # HTML 显示
 
+> 来源范围：本文的“本仓库”“当前实现”在描述语义、注册或源码行为时，指 C# 参考树 `emuera.em/Emuera/`；其他 C# 版本另按文中路径标注。资料收录范围仍指仓库内的参考材料。
+
 > 来源：ecd/docs/HTML_PRINT.md、Era-Chinese-Documentation/docs/HTML_PRINT.md（两套文档内容一致，均为 https://osdn.net/projects/emuera/wiki/exhtml 的翻译）；源码 `UI/Game/HtmlManager.cs` 等已实际核对。
 
 ## 概述

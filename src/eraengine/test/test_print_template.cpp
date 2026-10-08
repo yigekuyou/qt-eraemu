@@ -18,8 +18,48 @@ int main(int argc, char** argv) {
     ExecutionEngine engine(&storage);
     engine.setParseTable(&table); engine.setExpressionEvaluator(&evaluator);
     const auto resolve = [&](const QString& e) { return table.expressionAst(e); };
+    // Quoted strings in a yen-at condition do not end the outer @"...".
+    for (int truth : {0, 1}) {
+        storage.setLocalStr(0, truth ? "变身形態" : "通常");
+        auto ast = table.expressionAst(QString::fromUtf8(R"ERB(@"\@LOCALS=="变身形態" ? 惡魔變身 # \@技能ロック設定")ERB"));
+        check(bool(ast), "quoted conditional form parses");
+        if (ast) check(evaluator.evaluate(*ast, &storage).toString() ==
+            (truth ? QString::fromUtf8("惡魔變身技能ロック設定") : QString::fromUtf8("技能ロック設定")),
+            "conditional prefix selects correct branch, including empty false branch");
+    }
+    auto indexed = table.expressionAst(QString::fromUtf8(R"ERB(CFLAG:ARG:@"\@形態=="变身形態" ? 惡魔變身 # \@技能ロック設定")ERB"));
+    check(indexed && indexed->kind() == NodeKind::Variable &&
+          static_cast<const VariableNode&>(*indexed).indices().size() == 2,
+          "Megaten formatted CFLAG index retains both indices");
+    auto spaces = table.expressionAst(QString::fromUtf8(R"ERB(@"\@1 ? 　x　 # y\@")ERB"));
+    check(spaces && evaluator.evaluate(*spaces, &storage).toString() == QString::fromUtf8("　x　"),
+          "conditional branch preserves full-width spaces");
+    for (const auto& sample : QList<QPair<QString, QString>>{
+        {QString::fromUtf8(R"ERB(@"\@1 ? " # 否\@")ERB"), "\""},
+        {QString::fromUtf8(R"ERB(@"\@0 ? " # 否\@")ERB"), QString::fromUtf8("否")},
+        {QString::fromUtf8(R"ERB(@"%"a%b",6,LEFT%")ERB"), "a%b   "},
+        {QString::fromUtf8(R"ERB(@"{STRLEN("}"),3}")ERB"), "  1"},
+        {QString::fromUtf8(R"ERB(@"\@1 ? {1 ? 2 # 3} # no\@")ERB"), "2"}}) {
+        auto ast = table.expressionAst(sample.first);
+        check(ast && evaluator.evaluate(*ast, &storage).toString() == sample.second,
+              "FORM separators respect expression spans and literal branch quotes");
+    }
+    storage.setLocalInt(0, 7);
+    engine.executeInstruction(AstBuilder::build("TIMES LOCAL, -1.5", {}, resolve));
+    check(storage.getLocalInt(0) == -10, "TIMES multiplies real constant and truncates toward zero");
+    storage.setLocalInt(0, 1000);
+    engine.executeInstruction(AstBuilder::build("TIMES LOCAL, 1e-2", {}, resolve));
+    check(storage.getLocalInt(0) == 10, "TIMES accepts scientific notation");
     ConsoleBackend console;
     QObject::connect(&engine, &ExecutionEngine::consolePrintTemplate, &console, &ConsoleBackend::printTemplate);
+    QString drawn;
+    const auto drawConnection = QObject::connect(&engine, &ExecutionEngine::consolePrint,
+        [&drawn](const QString& text, bool) { drawn = text; });
+    engine.executeInstruction(AstBuilder::build("CUSTOMDRAWLINE =", {}, resolve));
+    check(!drawn.isEmpty() && drawn == QString(drawn.size(), '='), "literal equals draws separator");
+    engine.executeInstruction(AstBuilder::build("CUSTOMDRAWLINE a,b", {}, resolve));
+    check(drawn.startsWith("a,ba,b"), "CUSTOMDRAWLINE repeats entire comma-containing pattern");
+    QObject::disconnect(drawConnection);
     auto line = AstBuilder::build(QStringLiteral("HTML_PRINT @\"<button value='{LOCAL++}' title='a > b'><b>{LOCAL++}</b><i>%LOCALS%</i></button><br>\""), {}, resolve);
     check(bool(line.printTemplate), "formatted literal compiles at load time");
     storage.setLocalInt(0, 7); storage.setLocalStr(0, "<b>&amp;</b>");

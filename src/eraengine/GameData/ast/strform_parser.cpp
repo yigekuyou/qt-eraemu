@@ -19,6 +19,34 @@
 
 #include <QDebug>
 
+int StrFormParser::expressionSpanEnd(const QString& text, int start) {
+    if (start >= text.size()) return start;
+    const QChar ch = text[start];
+    if (ch == '\\' && text.mid(start, 2) == QLatin1String("\\@")) {
+        const int close = text.indexOf(QLatin1String("\\@"), start + 2);
+        return close < 0 ? text.size() : close + 2;
+    }
+    const bool form = ch == '@' && start + 1 < text.size() && text[start + 1] == '"';
+    if (!form && ch != '"' && ch != '\'') return start;
+    const QChar quote = form ? QChar('"') : ch;
+    for (int i = start + (form ? 2 : 1); i < text.size(); ++i) {
+        if (text[i] == quote) return i + 1;
+        if (form) {
+            if (text.mid(i, 2) == QLatin1String("\\@")) {
+                i = expressionSpanEnd(text, i) - 1;
+                continue;
+            }
+            if (text[i] == '%' || text[i] == '{') {
+                const int end = text[i] == '%' ? findPercentEnd(text, i + 1)
+                    : findTopLevel(text, '}', i + 1, -1);
+                if (end >= 0) { i = end; continue; }
+            }
+        }
+        if (text[i] == '\\') ++i;
+    }
+    return text.size();
+}
+
 bool StrFormParser::hasForm(const QString& text) {
     if (text.contains(QLatin1String("\\@"))) return true;
     if (text.contains(QLatin1Char('{')) && text.contains(QLatin1Char('}'))) return true;
@@ -28,7 +56,7 @@ bool StrFormParser::hasForm(const QString& text) {
     return first >= 0 && findPercentEnd(text, first + 1) > 0;
 }
 
-// `%expr%` 的右端 `%`：只跳括号嵌套与 \@...\@ 跨度，**不**把引号当特殊字符
+// `%expr%` 的右端 `%`：跳过表达式中的括号、字符串和 FORM 跨度
 // （C# 用 LexEndWith.Percent 单独做词法，引号只在表达式内部有含义）
 //
 // [qdbug] 修复（eraTW 实测差距）：此前不知道 \@...\@（条件三元）跨度，
@@ -39,42 +67,19 @@ bool StrFormParser::hasForm(const QString& text) {
 // 路人子素質栏显示「種族：[…][ARGS]」。对齐 C# LexicalAnalyzer：
 // AnalyseFormattedString 的 \@ 跨度先于 % 词法，右分支完整保留。
 int StrFormParser::findPercentEnd(const QString& text, int from) {
-    int depth = 0;
-    for (int i = from; i < text.size(); ++i) {
-        const QChar ch = text.at(i);
-        // \@ ... \@ —— 条件三元跨度：整体跳过（其中的 %..% 属于三元分支）
-        if (ch == QLatin1Char('\\') && i + 1 < text.size()
-            && text.at(i + 1) == QLatin1Char('@')) {
-            int j = i + 2;
-            while (j + 1 < text.size()) {
-                if (text.at(j) == QLatin1Char('\\') && text.at(j + 1) == QLatin1Char('@')) break;
-                ++j;
-            }
-            i = (j + 1 < text.size()) ? j + 1 : text.size();
-            continue;
-        }
-        if (ch == QLatin1Char('(') || ch == QLatin1Char('[') || ch == QLatin1Char('{')) { ++depth; continue; }
-        if (ch == QLatin1Char(')') || ch == QLatin1Char(']') || ch == QLatin1Char('}')) { if (depth > 0) --depth; continue; }
-        if (depth == 0 && ch == QLatin1Char('%')) return i;
-    }
-    return -1;
+    return findTopLevel(text, '%', from, -1);
 }
 
 int StrFormParser::findTopLevel(const QString& text, QChar c, int from, int end) {
     if (end < 0 || end > text.length()) end = text.length();
     int depth = 0;
-    QChar quote;
     for (int i = from; i < end; ++i) {
         const QChar ch = text.at(i);
-        if (!quote.isNull()) {
-            if (ch == QLatin1Char('\\')) { ++i; continue; }
-            if (ch == quote) quote = QChar();
-            continue;
-        }
-        if (ch == QLatin1Char('"') || ch == QLatin1Char('\'')) { quote = ch; continue; }
-        if (ch == QLatin1Char('(') || ch == QLatin1Char('{') || ch == QLatin1Char('[')) { ++depth; continue; }
-        if (ch == QLatin1Char(')') || ch == QLatin1Char('}') || ch == QLatin1Char(']')) { if (depth > 0) --depth; continue; }
+        const int span = expressionSpanEnd(text, i);
+        if (span > i) { i = span - 1; continue; }
         if (depth == 0 && ch == c) return i;
+        if (ch == '(' || ch == '{' || ch == '[') { ++depth; continue; }
+        if (ch == ')' || ch == '}' || ch == ']') { if (depth > 0) --depth; }
     }
     return -1;
 }
@@ -121,7 +126,17 @@ QSharedPointer<ExpressionNode> StrFormParser::parseYenAt(const QString& inner,
         // 缺少 '?'：C# 视为错误；这里退化为普通文本串
         return parse(inner, resolve);
     }
-    const int h = findTopLevel(inner, QLatin1Char('#'), q + 1, -1);
+    // Branches are FORM text: quotes and parentheses are literal. Only
+    // interpolation spans hide a branch separator.
+    int h = -1;
+    for (int i = q + 1; i < inner.size(); ++i) {
+        if (inner[i] == '#') { h = i; break; }
+        if (inner[i] == '%' || inner[i] == '{') {
+            const int end = inner[i] == '%' ? findPercentEnd(inner, i + 1)
+                : findTopLevel(inner, '}', i + 1, -1);
+            if (end >= 0) i = end;
+        } else if (inner[i] == '\\') ++i;
+    }
     if (h < 0) {
         // 对齐 C# LexicalAnalyzer.cs:1287-1293 -> StrForm.cs:103-104：
         // `\@ cond ? left \@` 缺 `#` **只产生警告**，假值按空串处理
@@ -134,8 +149,15 @@ QSharedPointer<ExpressionNode> StrFormParser::parseYenAt(const QString& inner,
     QString rightText = (h >= 0) ? inner.mid(h + 1) : QString();
 
     // C# AnalyseFormattedString(trim:true)：左侧 TrimStart、右侧 TrimEnd
-    leftText = leftText.trimmed();
-    rightText = rightText.trimmed();
+    // C# trims only ASCII space/tab, preserving full-width layout spaces.
+    const auto trimBranch = [](QString text) {
+        int begin = 0, end = text.size();
+        while (begin < end && (text[begin] == ' ' || text[begin] == '\t')) ++begin;
+        while (end > begin && (text[end - 1] == ' ' || text[end - 1] == '\t')) --end;
+        return text.mid(begin, end - begin);
+    };
+    leftText = trimBranch(leftText);
+    rightText = trimBranch(rightText);
 
     QSharedPointer<ExpressionNode> cond = resolve ? resolve(condText) : nullptr;
     if (!cond) cond = QSharedPointer<LiteralNode>::create(0);
@@ -191,14 +213,8 @@ QSharedPointer<StrFormNode> StrFormParser::parse(const QString& text, const Expr
         }
 
         if (ch == QLatin1Char('{')) {
-            // 匹配 '}'（允许嵌套）
-            int depth = 1;
-            int j = i + 1;
-            for (; j < n; ++j) {
-                if (text.at(j) == QLatin1Char('{')) ++depth;
-                else if (text.at(j) == QLatin1Char('}')) { if (--depth == 0) break; }
-            }
-            if (j >= n) { b.pending += ch; continue; }   // 未闭合 -> 普通文本
+            const int j = findTopLevel(text, '}', i + 1, -1);
+            if (j < 0 || j >= n) { b.pending += ch; continue; }   // 未闭合 -> 普通文本
             addExpr(text.mid(i + 1, j - i - 1));
             i = j;
             continue;

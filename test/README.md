@@ -122,7 +122,7 @@ cmake --build build --target test_cli
 `VARI`/`VARS`（C# 默认关闭的作用域变量声明）、
 `GETTEXTSIZE`（readme 笔误名）、`LCSVISASSI`/`OCLEARLINE`/`TINPUTAWAIT`（无据可考/伪名）。
 `CALLSHARP` 是**明确标记为「不可能实现」**的一条（qtcpp 跨平台 + 目标是 C# 托管 DLL），
-见下文「.NET 系 fork 扩展」与 `test/data/commands/CALLSHARP.md` 备注；
+见下文「.NET 系 fork 扩展」与 `test/change/commands.md` 的 CALLSHARP 节；
 `DT_COLUMN_OPTIONS` 已随 .NET 族**真实现**（不再是桩）。
 
 `COLUMN*` 单独说明（见下文「COLUMN 库」与 `gen_coverage.py` 的 `EE_ERB_LIBRARY`）：
@@ -219,7 +219,7 @@ cmake --build build --target test_cli
 
 **新增依赖 = 0**（只用已链接的 `Qt6::Core`）。返回值/边界语义逐条对齐
 `test/data/functions/{MAP_*,ENUM*,XML_*,DT_*}.md`，并由**手写组 39** 断言（约 120 条，覆盖 61 条；
-`CALLSHARP` 不含在内 —— 见上表与 `test/data/commands/CALLSHARP.md` 的「备注」）。
+`CALLSHARP` 不含在内 —— 见上表与 `test/change/commands.md` 的「CALLSHARP」节）。
 
 ### 为此改动的引擎行为（两处，都会影响所有扩展）
 
@@ -238,7 +238,7 @@ cmake --build build --target test_cli
 装载告警无「未识别」。
 
 > `CALLSHARP` **保持桩**：本移植把它标记为「**不可能实现**」（而不是「待补全」）。
-> 理由见 `test/data/commands/CALLSHARP.md` 的「备注」与 `fork_extension.cpp` 的说明 ——
+> 理由见 `test/change/commands.md` 的「CALLSHARP」节与 `fork_extension.cpp` 的说明 ——
 > ① qtcpp **跨平台**项目，装载本机共享库需平台相关代码（Windows `LoadLibrary` /
 > Linux `dlopen` / Android 还要处理 APK 内 `.so` 的路径与权限）；
 > ② C# 插件是**托管程序集**，任何 C/C++ 宿主都无法执行，照原样兼容不可达；

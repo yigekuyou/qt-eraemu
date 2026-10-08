@@ -1,5 +1,7 @@
 # CLEARBGIMAGE
 
+> 来源范围：本文的“本仓库”“当前实现”在描述语义、注册或源码行为时，指 C# 参考树 `emuera.em/Emuera/`；其他 C# 版本另按文中路径标注。资料收录范围仍指仓库内的参考材料。
+
 - **类别**：EE 扩展命令（Emuera 枚举成员 `Runtime/Script/Statements/BuiltInFunctionCode.cs:178`；两套中文文档均未收录，语义据源码）
 - **签名**：`CLEARBGIMAGE`（无参数；多写参数只会得到一条级别 1 的警告，命令仍执行）
 - **文档来源**：无中文文档收录。ecd 里功能最接近的是 `CBGCLEAR`（`ecd/docs/translation/Command.md:2586`「解除由 CBG 系各指令设置的全部背景图像设置」），但那是另一套 ClientBackground 机制；`grep -rn "CLEARBGIMAGE\|BGIMAGE" test/data/_extracted/` 无本命令的任何记载。依据源码：`Runtime/Script/Statements/FunctionIdentifier.cs:278`、`Runtime/Script/Statements/Instraction.Child.cs:1604`、`UI/Game/EmueraConsole.cs:693`

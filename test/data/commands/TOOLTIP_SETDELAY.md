@@ -1,5 +1,7 @@
 # TOOLTIP_SETDELAY
 
+> 来源范围：本文的“本仓库”“当前实现”在描述语义、注册或源码行为时，指 C# 参考树 `emuera.em/Emuera/`；其他 C# 版本另按文中路径标注。资料收录范围仍指仓库内的参考材料。
+
 - **类别**：命令（EE 扩展命令，Eramaker 无）
 - **签名**：TOOLTIP_SETDELAY `<数值表达式>`
 - **文档来源**：`ecd/docs/translation/Command.md`「## 工具提示系 / ### TOOLTIP_SETDELAY」；Era-Chinese-Documentation 无对应小节

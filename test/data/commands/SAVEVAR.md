@@ -1,5 +1,7 @@
 # SAVEVAR
 
+> 来源范围：本文的“本仓库”“当前实现”在描述语义、注册或源码行为时，指 C# 参考树 `emuera.em/Emuera/`；其他 C# 版本另按文中路径标注。资料收录范围仍指仓库内的参考材料。
+
 - **类别**：命令
 - **签名**：`SAVEVAR <变量名列表>, <文件名表达式>, <注释>`（按参数类型 SP_SAVEVAR 推定；两套文档均未给出正式签名）
 - **文档来源**：`ecd/docs/translation/Command.md` 未收录；`Era-Chinese-Documentation/docs/` 未收录

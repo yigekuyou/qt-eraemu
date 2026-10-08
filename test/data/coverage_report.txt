@@ -1,27 +1,2 @@
-# 覆盖率报告（依据 C# 权威命令表）
-#
-# 用例来源：test/example/ERB —— 手写组 + 组35（由 gen_doc_smoke.py 生成）。
-# 判定：代码行出现=已执行；doc_smoke.tsv mode=skip=跳过（附原因）；其余=未覆盖。
-
-## Emuera 原版命令（263 条）
-  已有用例执行      ：206
-  跳过（未执行）    ：2
-      · LOADGAME —— 破坏流程：呼出标准读档界面（LoadGame_* 状态机）并等待注入的槽位输入
-      · SAVEGAME —— 破坏流程：呼出标准存档界面（SaveGame_* 状态机）并等待注入的槽位输入
-  PRINT 族后缀变体  ：72（由基名规则覆盖，不逐个列）
-  未覆盖            ：0（全部登记项均有用例或已登记跳过原因）
-## Emuera 原版式中函数（269 条）
-  已有用例执行      ：269
-  跳过（未执行）    ：0
-  PRINT 族后缀变体  ：0（由基名规则覆盖，不逐个列）
-  未覆盖            ：0（全部登记项均有用例或已登记跳过原因）
-## EmueraEE 扩展命令（59 条）
-  已有用例执行      ：52
-  跳过（未执行）    ：2
-    其中引擎桩（仅登记名字·留痕跳过，真实现待补全）：3
-    其中 ERB 库（EE 附带 ERB 实现·引擎无需实现）：11 -> COLUMNBGCOLOR COLUMNCLEAR COLUMNCOLOR COLUMNCREATE COLUMNDIRECTION COLUMNMOVE COLUMNPRINT COLUMNPRINTL COLUMNPRINTW COLUMNRESIZE COLUMNWAIT
-      （COLUMN 族 = COLUMN_LIB：CALL 形态由手写组 38 覆盖）
-      · CALLSHARP —— EE 私有插件机制：目标为 C# 托管 DLL（Assembly.LoadFrom），本移植**不可能实现**
-      · FORCE_BEGIN —— 破坏流程：绕过 __CAN_BEGIN__ 检查强制切换系统流程且不返回
-  PRINT 族后缀变体  ：5（由基名规则覆盖，不逐个列）
-  未覆盖            ：0（全部登记项均有用例或已登记跳过原因）
+覆盖记录已移至 ../change/coverage_report.txt（历史静态清单，非执行成功证明）。
+C# 参考语义见 README.md；C++ 实现与覆盖取舍见 ../change/tooling.md。

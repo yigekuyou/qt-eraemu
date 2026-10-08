@@ -1,5 +1,7 @@
 # RESUMETEXTBOX
 
+> 来源范围：本文的“本仓库”“当前实现”在描述语义、注册或源码行为时，指 C# 参考树 `emuera.em/Emuera/`；其他 C# 版本另按文中路径标注。资料收录范围仍指仓库内的参考材料。
+
 - **类别**：式中函数（EE 扩展 / 输入框布局）
 - **签名**：`int RESUMETEXTBOX(int X偏移, int Y偏移, int 宽度)`
 - **文档来源**：两套中文文档（`ecd/`、`zh/`）、EE readme、EM readme 均未收录本函数；同族 `GETTEXTBOX`/`SETTEXTBOX` 的既有文档（`test/data/commands/GETTEXTBOX.md`）提到 EM+EE 在线文档的 TEXTBOX 页把 `MOVETEXTBOX`/`RESUMETEXTBOX` 与之同页收录，但该页不在本仓库提取材料中。本文语义据源码（`Runtime/Script/Statements/Function/Creator.Method.cs:1969` 的 `MoveTextBoxMethod`（`resume = true` 分支）与 `UI/Framework/Forms/MainWindow.cs:188` 的 `ResetTextBoxPos`）。

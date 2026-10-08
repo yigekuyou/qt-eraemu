@@ -1,5 +1,7 @@
 # 文件参考：CSV 与配置（CSV 部分）
 
+> 来源范围：本文的“本仓库”“当前实现”在描述语义、注册或源码行为时，指 C# 参考树 `emuera.em/Emuera/`；其他 C# 版本另按文中路径标注。资料收录范围仍指仓库内的参考材料。
+
 > 来源：ecd/docs/CSV_File_Format.md（Eramaker 的 CSV 文件格式）、ecd/docs/Replace_CSV.md（关于 _replace.csv）、ecd/docs/CSV_File.md（CSV 文件参考）；交叉核对 zh 套件 CSV_File_Format.md、Replace_CSV.md、CSV_File.md
 
 ## 概述

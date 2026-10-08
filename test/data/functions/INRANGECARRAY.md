@@ -1,5 +1,7 @@
 # INRANGECARRAY
 
+> 来源范围：本文的“本仓库”“当前实现”在描述语义、注册或源码行为时，指 C# 参考树 `emuera.em/Emuera/`；其他 C# 版本另按文中路径标注。资料收录范围仍指仓库内的参考材料。
+
 - **类别**：式中函数
 - **签名**：int INRANGECARRAY(var carray, int min, int max, int start = 0, int end = CHARANUM)
 - **文档来源**：ecd/zh 两套文档均未收录本函数（`ecd/Expression.md` 签名列表中亦无）；语义依据源码推定，错误行为可交叉参考 `ecd/Error_Index.md`（INRANGECARRAY 範囲指定错误条目）

@@ -1,5 +1,7 @@
 # PRINTCK
 
+> 来源范围：本文的“本仓库”“当前实现”在描述语义、注册或源码行为时，指 C# 参考树 `emuera.em/Emuera/`；其他 C# 版本另按文中路径标注。资料收录范围仍指仓库内的参考材料。
+
 - **类别**：命令
 - **签名**：`PRINTCK <字符串表达式>`（右对齐，应用 FORCEKANA；另有 `PRINTLCK` / `PRINTFORMCK` / `PRINTFORMLCK` 变体，不在本文件范围）
 - **文档来源**：`ecd/docs/translation/Command.md` 之 `### PRINT(|FORM)(C|LC)(|K|D)` 小节（PRINTCK 本身无独立小节，由该节的关键字组合规则涵盖）；`Era-Chinese-Documentation/docs/Command.md` 之 `### # Print(|Form)(C|LC)(|K|D)`

@@ -1,5 +1,7 @@
 # GFILLRECTANGLE
 
+> 来源范围：本文的“本仓库”“当前实现”在描述语义、注册或源码行为时，指 C# 参考树 `emuera.em/Emuera/`；其他 C# 版本另按文中路径标注。资料收录范围仍指仓库内的参考材料。
+
 - **类别**：式中函数（图像处理系；ecd/Command.md 按指令形式记载）
 - **签名**：int GFILLRECTANGLE(int ID, int x, int y, int width, int height)
 - **文档来源**：`ecd/Command.md`「### GFILLRECTANGLE `<ID>`, `<x>`, `<y>`, `<宽度>`, `<高度>`」（图像处理系小节）；ecd/Expression.md 未收录；zh 套件未收录

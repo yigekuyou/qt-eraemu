@@ -1,5 +1,7 @@
 # TOOLTIP_SETFONTSIZE
 
+> 来源范围：本文的“本仓库”“当前实现”在描述语义、注册或源码行为时，指 C# 参考树 `emuera.em/Emuera/`；其他 C# 版本另按文中路径标注。资料收录范围仍指仓库内的参考材料。
+
 - **类别**：EE 扩展命令（Emuera 枚举成员；EE 扩展；两套中文文档未收录，语义据 EmueraEE readme + 源码）
 - **签名**：`TOOLTIP_SETFONTSIZE <字号（数值表达式）>`
 - **文档来源**：无中文文档收录；`eraTW/README集/EmueraEE Readme/EmueraEE_readme.txt:236`（「GSETFONTとTOOLTIP_SETFONTにも対応」为工具提示字体功能的总述，字号含在内）；`EmueraEE_changelog.txt:94`（v26「ツールチップ機能拡張命令追加」）；实现依据本仓库源码。参数类型与单位系据源码推定。

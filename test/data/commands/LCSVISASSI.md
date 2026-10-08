@@ -1,5 +1,7 @@
 # LCSVISASSI
 
+> 来源范围：本文的“本仓库”“当前实现”在描述语义、注册或源码行为时，指 C# 参考树 `emuera.em/Emuera/`；其他 C# 版本另按文中路径标注。资料收录范围仍指仓库内的参考材料。
+
 - **类别**：EE 扩展命令
 - **签名**：
   - （无权威签名；仅作为 EM+EE 发行版关键字收录）
@@ -34,5 +36,5 @@ EE 发行版的预期行为：无任何文档与源码可考，语义不明。
 ## 备注
 
 - 在全部提取材料（ecd、zh、EE readme/changelog、EM+EE 在线文档 sitemap、eraTW khp）中均检索不到 LCSVISASSI；在线检索（Web）亦无结果。
-- 本仓库的测试桩（`test/example/ERB/35_DOC_SMOKE.ERB`，由 `test/data/doc_smoke.tsv` 生成）仅以裸名字出现，未给出语义。
+- 本地测试条目的背景见 [测试推测记录](../../change/tooling.md#未确证名字的测试推测)，不构成 C# 语义依据。
 - 属「清单收录但完全无据可考」的条目，文档按「语义不明」如实记录。

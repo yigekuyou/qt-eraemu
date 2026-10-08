@@ -1,5 +1,7 @@
 # MOUSEB
 
+> 来源范围：本文的“本仓库”“当前实现”在描述语义、注册或源码行为时，指 C# 参考树 `emuera.em/Emuera/`；其他 C# 版本另按文中路径标注。资料收录范围仍指仓库内的参考材料。
+
 - **类别**：式中函数（EE 扩展 / 鼠标相关）
 - **签名**：`str MOUSEB()`
 - **文档来源**：两套中文文档（`ecd/`、`zh/`）未收录；EE readme `eraTW/README集/EmueraEE Readme/EmueraEE_readme.txt:185-187` 有记载（「・MOUSEB 現在マウスオーバー中のボタン内容を取得する。MOUSEX,MOUSEYと同様にAWAITと組み合わせて使う / 実行時点でINPUTかINPUTSか確定していないため文字列型として返される点に注意」），`EmueraEE_changelog.txt:80`「MOUSEB追加」。语义以源码为准（本仓库 `emuera.em/Readme/EmueraEE_readme.txt` 版本未含此条）。

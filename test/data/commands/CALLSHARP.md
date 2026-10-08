@@ -1,5 +1,7 @@
 # CALLSHARP
 
+> 来源范围：本文的“本仓库”“当前实现”在描述语义、注册或源码行为时，指 C# 参考树 `emuera.em/Emuera/`；其他 C# 版本另按文中路径标注。资料收录范围仍指仓库内的参考材料。
+
 - **类别**：EE 扩展命令（Emuera 枚举成员 `Runtime/Script/Statements/BuiltInFunctionCode.cs:169`；两套中文文档均未收录，语义据源码）
 - **签名**（从 `SP_CALLSHARP_ArgumentBuilder` 推定的完整形式；函数名部分是**字符串字面量**，不是表达式，也不是 FORM 文本）：
   - `CALLSHARP <C# 方法名>()`
@@ -108,8 +110,4 @@ CALLSHARP ERBExecutionExample()
 - 「下标记法」`CALLSHARP Foo[SUB]` 会被解析进 `arg.SubNames`，但 `DoInstruction` 只使用 `arg.RowArgs`，下标被忽略；估计是从 `CALLF` 的下标语法沿用而来。
 - 装载期 `SetJumpTo` 里 `if (!func.Argument.IsConst)` 的分支实际不可达（构造器恒置 `IsConst=true`），因此不存在「运行期才知道方法名」的路径；运行期不会出现 `GetMethod` 的 `KeyNotFoundException`，方法缺失一律在装载期变成错误行。
 - `MethodNotFound` 的文案写成 `"[0]"メソッドが見つかりません`（`Runtime/Utils/EvilMask/Lang.cs:1204`），占位符用了 `[0]` 而不是 .NET 的 `{0}`，`string.Format` 不会代入方法名——报告中该方法名只会原样打印（推定，语言 XML 若把该文本改写为 `{0}` 则可正常代入）。
-- **本移植（qtcpp 跨平台项目）不实现本命令** —— 保持「只登记名字」的桩（装载/运行期不报未知命令，运行期静默跳过）。原因是**这条技术路线在本项目里不可能实现**，不是懒得做：
-  1. **跨平台宿主**：本项目是 Qt6 + QML/C++ 的**跨平台**移植（Linux / Windows / macOS / Android，见 `.github/workflows/build.yml` 三平台出包 + Android APK）。「装载本机共享库」这一步本身就要**平台相关代码**（Windows `LoadLibrary` / Linux `dlopen` / Android 还要处理 APK 内 `.so` 的打包与加载路径和权限），与本项目「一份源码多平台」的取向冲突。
-  2. **目标不可达**：C# 插件的 `Plugins/*.dll` 是**托管程序集**，任何 C/C++ 宿主都无法直接执行（需要 .NET/CLR）。即「照原样兼容」在这里根本做不到；另立一套原生 ABI 已经不是 CALLSHARP 的语义——**存量插件一个也跑不起来**。
-  3. **能力面**：.NET 侧自己就把该功能标为「危险功能」（源码多处 `#region EE_CALLSHARP注意`），且仓库里的样例游戏（`eraTW` / `eraMegaten`）**零使用**。
-- 据此，覆盖清单（`test/data/doc_smoke.tsv`）里本命令标 `mode=skip` 并注明上述原因；组 39（EM/Emuera.NET fork 族）覆盖其余 61 条，**不含** CALLSHARP。
+- 移植实现与覆盖取舍另见 [CALLSHARP 移植说明](../../change/commands.md#callsharp)。

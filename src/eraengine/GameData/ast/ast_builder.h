@@ -57,6 +57,9 @@ public:
                              const AstResolver& resolveQuiet = {},
                              ParseDiagnostics* diagnostics = nullptr);
 
+    // CASE has its own IS / TO grammar, shared by loading and lazy cache restore.
+    static void buildCaseClauses(const LogicalLine& line, const AstResolver& resolve);
+
     // ExtensionRegistry::reg() 登记的扩展语句名：解析期不再报「未识别的指令」
     // （扩展默认全启用，登记过的名字是已认识的扩展；只消警告，
     // 不影响命令文/赋值分类）。

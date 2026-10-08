@@ -1,5 +1,7 @@
 # SETBGIMAGE
 
+> 来源范围：本文的“本仓库”“当前实现”在描述语义、注册或源码行为时，指 C# 参考树 `emuera.em/Emuera/`；其他 C# 版本另按文中路径标注。资料收录范围仍指仓库内的参考材料。
+
 - **类别**：EE 扩展命令（Emuera 枚举成员 `Runtime/Script/Statements/BuiltInFunctionCode.cs:175`；两套中文文档均未收录，语义据源码）
 - **签名**（从 `FORM_STR_ANY_ArgumentBuilder` 推定的完整形式）：`SETBGIMAGE <图片名>{, <深度>, <不透明度>}`
   - `<图片名>`：FORM 格式文本（必须求值为已在 `resources` 中注册的**静止**图片名）

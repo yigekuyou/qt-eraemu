@@ -421,7 +421,7 @@ CALLEVENT EVENTTURNEND
 CALLF GETTEN(4)
 CALLFORM ADDTEN_%TOSTR(7)%
 CALLFORMF GETTEN(5)
-; SKIP CALLSHARP —— EE 私有插件机制：目标为 C# 托管 DLL（Assembly.LoadFrom），本移植**不可能实现** —— ① qtcpp 跨平台项目（Linux/Windows/macOS/Android），装载本机共享库需平台相关代码（LoadLibrary/dlopen/APK 内 .so），与一份源码多平台冲突；② 托管程序集任何 C/C++ 宿主都无法执行，照原样兼容不可达；③ .NET 侧自标「危险功能」，样例游戏零使用。见 test/data/commands/CALLSHARP.md 备注
+; SKIP CALLSHARP —— EE 私有插件机制：目标为 C# 托管 DLL（Assembly.LoadFrom），本移植**不可能实现** —— ① qtcpp 跨平台项目（Linux/Windows/macOS/Android），装载本机共享库需平台相关代码（LoadLibrary/dlopen/APK 内 .so），与一份源码多平台冲突；② 托管程序集任何 C/C++ 宿主都无法执行，照原样兼容不可达；③ .NET 侧自标「危险功能」，样例游戏零使用。见 test/change/commands.md 的 CALLSHARP 节
 ; SKIP CALLTRAIN —— 流程接管：把 SELECTCOM:1..N 的命令队列交给系统 TRAIN 状态机执行（需 TRAIN.CSV、@EVENTCOM/@CALLTRAINEND 配套），属 GUIDE 禁则的变化全局流程命令（组 17 已做登记级调用）
 ; SKIP CASE —— SELECTCASE 分支关键字：须嵌在 SELECTCASE～CASEELSE～ENDSELECT 结构内，单独执行会跳到下一锚点；由组 3/28 覆盖
 ; SKIP CASEELSE —— SELECTCASE 的兜底分支关键字：须嵌在 SELECTCASE～ENDSELECT 结构内；由组 3/28 覆盖

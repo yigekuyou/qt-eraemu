@@ -800,15 +800,10 @@ bool ExecutionEngine::executeInstruction(const LogicalLine& line) {
         if (ops.size() >= 2) {
             const LhsRef ref = parseLhsRef(ops.first()->raw);
             if (ref.valid) {
-                ExpressionEvaluator& ev = getEvaluator();
-                // C# SP_TIMES 的实参由 LexicalAnalyzer.ReadDouble 直接读原始文本
-                // （表达式解析器不支持小数字面量），这里同样按 raw.toDouble()
-                double factor = 0;
-                if (ops.at(1)->ast) {
-                    factor = ev.evaluate(*ops.at(1)->ast, m_storage, m_gameBaseData).toDouble();
-                } else {
-                    factor = ops.at(1)->raw.trimmed().toDouble();
-                }
+                // TIMES takes a real constant, never an integer expression.
+                bool valid = false;
+                double factor = ops.at(1)->raw.trimmed().toDouble(&valid);
+                if (!valid || !std::isfinite(factor) || ops.at(1)->isString) factor = 0;
                 const double product = static_cast<double>(readLhs(ref)) * factor;
                 writeLhs(ref, static_cast<qint64>(product));   // C# unchecked 强转截断
             }
@@ -951,6 +946,43 @@ bool ExecutionEngine::executeInstruction(const LogicalLine& line) {
     // C# 设定 GUI 提示框样式；渲染层当前没有提示框实现，先求值并留痕。
     if (name == "TOOLTIP_SETCOLOR" || name == "TOOLTIP_SETDELAY" || name == "TOOLTIP_SETDURATION") {
         qCDebug(eraTrace) << "[display]" << name << "(tooltip 样式，渲染层暂未实现)";
+        return true;
+    }
+
+    // ENCODETOUNI command: expand FORM and fill RESULT:0..N. The expression
+    // function remains a separate scalar operation in ExpressionEvaluator.
+    if (name == "ENCODETOUNI") {
+        if (!m_storage) return true;
+        QString text;
+        if (!args.isEmpty()) {
+            const Operand& a = args.first();
+            text = a.ast ? getEvaluator().evaluate(*a.ast, m_storage, m_gameBaseData).toString()
+                         : a.raw;
+        }
+        const int capacity = variableLength1D(QStringLiteral("RESULT"), QString());
+        if (text.size() > capacity - 1) {
+            m_state.setErrorState();
+            emit errorOccurred(QStringLiteral("ENCODETOUNI 的字符串长度 %1 超过 RESULT 可用长度 %2")
+                               .arg(text.size()).arg(capacity - 1));
+            return true;
+        }
+        // C# iterates UTF-16 indices using char.ConvertToUtf32. Validate all
+        // indices before writing so an invalid surrogate leaves RESULT intact.
+        QList<qint64> codes;
+        for (qsizetype i = 0; i < text.size(); ++i) {
+            const QChar c = text.at(i);
+            if (c.isLowSurrogate() || (c.isHighSurrogate()
+                && (i + 1 == text.size() || !text.at(i + 1).isLowSurrogate()))) {
+                m_state.setErrorState();
+                emit errorOccurred(QStringLiteral("ENCODETOUNI 的 UTF-16 代理字符无效"));
+                return true;
+            }
+            codes.append(c.isHighSurrogate() ? QChar::surrogateToUcs4(c, text.at(i + 1))
+                                            : c.unicode());
+        }
+        m_storage->setSystemVariable("RESULT", 0, codes.size());
+        for (qsizetype i = 0; i < codes.size(); ++i)
+            m_storage->setSystemVariable("RESULT", i + 1, codes.at(i));
         return true;
     }
 

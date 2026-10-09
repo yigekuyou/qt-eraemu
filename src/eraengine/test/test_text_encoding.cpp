@@ -259,6 +259,50 @@ int main(int argc, char* argv[]) {
         check(sysText == QStringLiteral("abc"), "System(Locale) 编码解码 ASCII 正确");
     }
 
+    qDebug() << "\n11) 偏离声明编码（唯一需要上报的编码类问题）";
+    {
+        QTemporaryDir tmp;
+        const QString utf8 = tmp.filePath(QStringLiteral("utf8.ERB"));
+        check(TextCodecUtil::writeFile(utf8, QString::fromUtf8("@MAIN\nPRINTL 你好\n"),
+                                      TextEncoding::Utf8Bom),
+              "写出 UTF-8+BOM 的 ERB");
+        // 读文件层不绑定声明编码：它保证「读得进来」，并告诉你**实际按哪个编码读的**。
+        TextEncoding detected = TextEncoding::Auto;
+        bool ok = false;
+        (void)TextCodecUtil::readFile(utf8, TextEncoding::Auto, &detected, &ok);
+        check(ok && detected == TextEncoding::Utf8Bom,
+              QString("detected = UTF-8-BOM（得到 %1）")
+                  .arg(QString::fromLatin1(TextCodecUtil::name(detected))));
+        // 与声明的 SHIFT-JIS 不符 -> 报；一致 / 未声明 -> 不报
+        check(!TextCodecUtil::describeEncodingMismatch(detected, TextEncoding::ShiftJis).isEmpty(),
+              "实际 UTF-8-BOM != 声明 SHIFT-JIS -> 报「编码不符」");
+        check(TextCodecUtil::describeEncodingMismatch(detected, detected).isEmpty(),
+              "与声明一致 -> 不报");
+        check(TextCodecUtil::describeEncodingMismatch(detected, TextEncoding::Auto).isEmpty(),
+              "未声明编码 -> 不判定");
+        // 读不到：ok=false（调用方自己决定怎么办，不得静默当成空文件）
+        ok = true;
+        (void)TextCodecUtil::readFile(tmp.filePath(QStringLiteral("nope.ERB")), TextEncoding::Auto,
+                                      &detected, &ok);
+        check(!ok, "读不到 -> ok=false");
+    }
+
+    qDebug() << "\n12) encode(report=false) 静默（运行期求值路径不得刷编码告警）";
+    {
+        static int g_warned = 0;
+        g_warned = 0;
+        QtMessageHandler prev = qInstallMessageHandler(
+            [](QtMsgType, const QMessageLogContext&, const QString& message) {
+                if (message.contains(QLatin1String("无法表示"))) ++g_warned;
+            });
+        bool ok = true;
+        (void)TextCodecUtil::encode(QString::fromUtf8("你"), TextEncoding::ShiftJis, &ok,
+                                    /*report=*/false);
+        qInstallMessageHandler(prev);
+        check(!ok, "SHIFT-JIS 无法表示简体字 -> ok=false");
+        check(g_warned == 0, "report=false 时不打告警（LangManager 拿不到宽度不是编码故障）");
+    }
+
     qDebug() << "\n===========================";
     if (g_failures == 0) {
         qDebug() << "[SUCCESS] text encoding tests passed";

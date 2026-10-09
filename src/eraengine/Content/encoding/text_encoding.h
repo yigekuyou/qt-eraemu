@@ -100,6 +100,25 @@ namespace TextCodecUtil {
 void setFallbackEncoding(TextEncoding enc);
 [[nodiscard]] TextEncoding fallbackEncoding();
 
+// ---------------------------------------------------------------------------
+// 「偏离声明编码」的唯一编码类告警（**只发生在装载/读取期间**）
+//
+// 定位：读文件层负责「任何编码的文件都读得进来」—— 不严格绑定 `Config.Encode`，
+// 逐文件嗅探（`detect`）后**在装载期间就把文本转成 Qt 原生字符**（QString），
+// 之后整条链路（AST/求值/显示）都只处理 Qt 原生字符，不再有任何编码转换。
+// 因此解码本身的细节（回退到哪个编码、是否可能乱码）不构成需要上报的「问题」：
+// 结论只有一个 —— **实际按哪个编码读的**（`detected`）。
+//
+// 唯一要报的是**偏离**：实际编码 != 游戏声明的编码（`TextEncoding` /
+// `内部で使用する東アジア言語`）。由调用方拿 `readFile` 的 `detected` 与声明值
+// 比较得到（见 describeEncodingMismatch），不需要解码层再给额外状态。
+// ---------------------------------------------------------------------------
+
+// 「偏离声明编码」的一句话说明（**空串 = 没偏离 / 未声明**）。
+// detected/declared 都是 `name()` 口径的编码；declared = Auto 表示未声明，不判定。
+// 由 LSP / MCP / 装载器共用，避免各处各写一份文案。
+[[nodiscard]] QString describeEncodingMismatch(TextEncoding detected, TextEncoding declared);
+
 // ---- 解码 / 编码 ----
 // hint != Auto 时强制使用该编码；否则先检测。
 // detected（可空）输出实际使用的编码（BOM 会被剥离）。
@@ -109,10 +128,14 @@ void setFallbackEncoding(TextEncoding enc);
 [[nodiscard]] bool isValidInEncoding(const QByteArray& data, TextEncoding enc);
 // 编码为字节流。ok（可空）：字节流能否**忠实**表示原文本
 // （false = 要么没有该编码的转换器、要么有字符无法表示；此时返回尽力而为的字节 / UTF-8）
+// report（默认 true）：无法忠实表示时是否打 qWarning。**运行期求值必须传 false** ——
+// 那里（如 LangManager 的字节长度）只是拿不到该字符的宽度，不是「编码问题」，
+// 不该往 stderr 刷告警（编码只在装载/读取期间转换，之后不存在编码问题）。
 [[nodiscard]] QByteArray encode(const QString& text, TextEncoding enc = TextEncoding::Utf8,
-                                bool* ok = nullptr);
+                                bool* ok = nullptr, bool report = true);
 
 // 便捷：读/写文件（自动嗅探 / 默认 UTF-8）
+// detected（可空）输出**实际按哪个编码读的** —— 调用方据此与声明值比较（见上）。
 [[nodiscard]] QString readFile(const QString& filePath, TextEncoding hint = TextEncoding::Auto,
                               TextEncoding* detected = nullptr, bool* ok = nullptr);
 // 写文件。目标编码不可用或无法忠实表示时**拒绝写入**并返回 false

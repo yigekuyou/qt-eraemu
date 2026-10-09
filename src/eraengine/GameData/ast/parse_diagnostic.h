@@ -65,6 +65,11 @@ inline constexpr auto kExprParse          = "expr-parse";          // 表达式�
 inline constexpr auto kArgCheck           = "arg-check";           // 参数个数/类型校验
 inline constexpr auto kSharpLine          = "sharp-line";          // # 行非法位置/缺名
 inline constexpr auto kDeclError          = "decl-error";          // 变量声明错误/重复定义
+// 偏离声明编码（**装载期**产生；运行期不做编码转换）：
+// 实际按哪个编码读出 != 游戏声明的编码。读文件层不严格绑定声明（保证每个文件
+// 都读得进来），但偏离本身要报 —— 见 Content/encoding/text_encoding.h 的
+// describeEncodingMismatch()。
+inline constexpr auto kEncoding           = "encoding";
 }  // namespace DiagCode
 
 struct ParseDiagnostic {

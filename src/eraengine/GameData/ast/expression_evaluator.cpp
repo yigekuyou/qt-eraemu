@@ -1193,7 +1193,7 @@ int ExpressionEvaluator::langByteCountOfChar(QChar c) const {
     if (it != cache.constEnd()) return it.value();
 
     bool ok = true;
-    const QByteArray bytes = TextCodecUtil::encode(QString(c), m_langEncoding, &ok);
+    const QByteArray bytes = TextCodecUtil::encode(QString(c), m_langEncoding, &ok, /*report=*/false);
     const int width = (ok && !bytes.isEmpty()) ? bytes.size() : 1;
     cache.insert(key, width);
     return width;
@@ -1207,7 +1207,7 @@ int ExpressionEvaluator::langByteCount(const QString &s) const {
         if (s.at(i).isHighSurrogate() && i + 1 < s.size() && s.at(i + 1).isLowSurrogate()) {
             const QString pair = s.mid(i, 2);
             bool ok = true;
-            const QByteArray bytes = TextCodecUtil::encode(pair, m_langEncoding, &ok);
+            const QByteArray bytes = TextCodecUtil::encode(pair, m_langEncoding, &ok, /*report=*/false);
             total += (ok && !bytes.isEmpty()) ? bytes.size() : 1;
             i += 2;
         } else {

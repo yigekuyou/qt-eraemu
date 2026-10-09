@@ -80,6 +80,14 @@ public:
     [[nodiscard]] QMap<QString, ErbDocument> analyzeWorkspace(
         const QMap<QString, QString>& sources) const;
 
+    // 工作区/游戏目录「声明的编码」名（读 `emuera.config` / `CSV/_fixed.config` 的
+    // `TextEncoding`/`テキストエンコーディング`/`文字コード`，或 `内部で使用する東アジア言語`）。
+    // 返回空 = 没声明。刻意返回**编码名字符串**（派生数据），不把引擎的 TextEncoding
+    // 类型带进这个头（理由见文件头）。
+    // 用途：读文件层不严格绑定 `Config.Encode`（保证每个文件都读得进来），
+    // 但「实际按什么编码读出」与「声明的是什么」不符时，要让编辑器看得到（DiagCode::encoding）。
+    [[nodiscard]] static QString declaredEncodingName(const QString& dir);
+
     // ---- 引擎登记表（来自 eraemu 自己的 constexpr 表）----
     [[nodiscard]] static QStringList instructionNames();   // kInstructionSpecs
     [[nodiscard]] static QStringList functionNames();      // kBuiltinFunctions

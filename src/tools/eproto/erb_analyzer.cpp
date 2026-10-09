@@ -17,10 +17,13 @@
  */
 #include "erb_analyzer.h"
 
+#include <QFileInfo>
 #include <QSet>
 #include <algorithm>
 
 // eraemu 的前端与 AST（**语义唯一来源**）——只在本 .cpp 里出现，不进公共头。
+#include "Config/config_loader.h"           // declaredEncodingName（读游戏配置声明）
+#include "Content/encoding/text_encoding.h" // TextCodecUtil::fromName/fromLanguageName
 #include "Content/erb_preprocessor.h"       // ErbPreprocessor / ErbSourceLine
 #include "GameData/ast/argument_parser.h"   // kInstructionSpecs / findInstructionSpec
 #include "GameData/ast/ast_builder.h"       // AstBuilder::build
@@ -199,6 +202,33 @@ QMap<QString, ErbDocument> analyzeSources(const QMap<QString, QString>& sources,
 }
 
 } // namespace
+
+QString ErbAnalyzer::declaredEncodingName(const QString& dir) {
+    if (dir.isEmpty()) return {};
+    ConfigLoader loader;
+    bool any = false;
+    for (const QString& rel : {QStringLiteral("emuera.config"), QStringLiteral("CSV/_fixed.config"),
+                               QStringLiteral("_fixed.config")}) {
+        const QString path = dir + QLatin1Char('/') + rel;
+        if (!QFileInfo::exists(path)) continue;
+        loader.mergeConfig(path);
+        any = true;
+    }
+    if (!any) return {};
+    for (const QString& key : {QStringLiteral("TextEncoding"), QStringLiteral("TextCodec"),
+                               QString::fromUtf8("テキストエンコーディング"),
+                               QString::fromUtf8("文字コード")}) {
+        if (!loader.hasConfig(key)) continue;
+        const TextEncoding e = TextCodecUtil::fromName(loader.getConfig(key));
+        if (e != TextEncoding::Auto) return QString::fromLatin1(TextCodecUtil::name(e));
+    }
+    const QString langKey = QString::fromUtf8("内部で使用する東アジア言語");
+    if (loader.hasConfig(langKey)) {
+        const TextEncoding e = TextCodecUtil::fromLanguageName(loader.getConfig(langKey));
+        if (e != TextEncoding::Auto) return QString::fromLatin1(TextCodecUtil::name(e));
+    }
+    return {};
+}
 
 ErbDocument ErbAnalyzer::parse(const QString& text, const QString& fileName) const {
     // Keep the original syntax-only contract for existing protocol consumers.

@@ -146,6 +146,40 @@ private slots:
         const auto closed = send(server, "textDocument/didClose", {{"textDocument", QJsonObject{{"uri", callee}}}});
         QVERIFY(hasMissing(closed));
     }
+    void workspaceEncodingDiagnostics() {
+        // 读文件层不严格绑定 `Config.Encode`（要求每个文件都读得进来），但**偏离**声明
+        // 编码时必须报给编辑器 —— 否则「读进来了」和「不存在」看起来一样。
+        QTemporaryDir dir;
+        QVERIFY(dir.isValid());
+        QFile config(dir.filePath(QStringLiteral("emuera.config")));
+        QVERIFY(config.open(QIODevice::WriteOnly));
+        config.write(QByteArray("TextEncoding:SHIFT-JIS\n"));
+        config.close();
+        QFile erb(dir.filePath(QStringLiteral("main.erb")));
+        QVERIFY(erb.open(QIODevice::WriteOnly));
+        erb.write(QString::fromUtf8("@MAIN\nPRINTL 你好\n").toUtf8());   // 实际是 UTF-8
+        erb.close();
+
+        LspServer server;
+        request(server, QStringLiteral("initialize"),
+                {{"rootUri", QUrl::fromLocalFile(dir.path()).toString()}});
+        // `initialized` 通知里会 indexWorkspace() + analyzeOpenDocuments()，
+        // 返回的就是本次发布出去的诊断。
+        const auto messages = send(server, QStringLiteral("initialized"));
+        bool found = false;
+        for (const auto& message : messages) {
+            const auto params = message.value(QStringLiteral("params")).toObject();
+            if (!params.value(QStringLiteral("uri")).toString().contains(QLatin1String("main.erb"))) continue;
+            for (const auto& diagnostic : params.value(QStringLiteral("diagnostics")).toArray()) {
+                if (diagnostic.toObject().value(QStringLiteral("code")).toString()
+                    == QLatin1String("encoding")) {
+                    found = true;
+                }
+            }
+        }
+        QVERIFY(found);
+    }
+
     void lifecycle() {
         LspServer server;
         QCOMPARE(errorCode(request(server, "shutdown")), -32002);

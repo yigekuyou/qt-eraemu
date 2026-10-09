@@ -70,6 +70,10 @@ private:
     QHash<QString, QString>     m_paths;     // uri -> 本地路径（供 ScriptPosition）
     QHash<QString, int>         m_versions; // open buffers
     QMap<QString, QString> m_diskSources;
+    // uri -> 读取/解码期间的编码问题（DiagCode::kEncoding）。
+    // 读文件层保证「任何编码的文件都能读进来」，但「读干净了没有」必须让编辑器
+    // 看得到 —— 以前 indexWorkspace() 里 `if (ok)` 会把读不出来的文件静默丢掉。
+    QHash<QString, QString> m_encodingIssues;
     bool    m_initialized = false;
     bool    m_ready = false;
     bool    m_shutdown = false;

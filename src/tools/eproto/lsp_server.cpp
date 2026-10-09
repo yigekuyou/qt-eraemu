@@ -20,7 +20,9 @@
 #include <QJsonArray>
 #include <QDirListing>
 #include <QFileInfo>
+#include "Config/config_loader.h"
 #include "Content/encoding/text_encoding.h"
+#include "GameData/ast/parse_diagnostic.h"   // DiagCode::kEncoding
 #include <QUrl>
 #include <QSet>
 #include <algorithm>
@@ -301,15 +303,35 @@ void LspServer::reparse(const QString& uri, const QString& text) {
     m_docs.insert(uri, doc);
 }
 
+namespace {
+
+// 工作区「声明的编码」：emuera.config / CSV/_fixed.config 里的
+// `TextEncoding`/`テキストエンコーディング`/`文字コード`，或 `内部で使用する東アジア言語`。
+// Auto = 没声明（此时不做「编码不符」判定）。
+TextEncoding declaredEncodingOf(const QString& root) {
+    return TextCodecUtil::fromName(ErbAnalyzer::declaredEncodingName(root));
+}
+
+} // namespace
+
 void LspServer::indexWorkspace() {
     m_diskSources.clear();
+    m_encodingIssues.clear();
     if (m_rootPath.isEmpty() || !QFileInfo(m_rootPath).isDir()) return;
+    const TextEncoding declared = declaredEncodingOf(m_rootPath);
     using F = QDirListing::IteratorFlag;
     for (const auto& entry : QDirListing(m_rootPath, {QStringLiteral("*.erb"), QStringLiteral("*.erh")},
                                          F::FilesOnly | F::Recursive)) {
+        const QString uri = QUrl::fromLocalFile(entry.fileInfo().absoluteFilePath()).toString();
+        TextEncoding detected = TextEncoding::Auto;
         bool ok = false;
-        const QString text = TextCodecUtil::readFile(entry.filePath(), TextEncoding::Auto, nullptr, &ok);
-        if (ok) m_diskSources.insert(QUrl::fromLocalFile(entry.fileInfo().absoluteFilePath()).toString(), text);
+        const QString text = TextCodecUtil::readFile(entry.filePath(), TextEncoding::Auto,
+                                                     &detected, &ok);
+        if (ok) m_diskSources.insert(uri, text);
+        // 唯一要报的编码类问题：**偏离声明的编码**。解码细节（回退到哪个编码、
+        // 会不会乱码）不构成需要上报的问题 —— 装载期间就已经转成 Qt 原生字符了。
+        const QString message = TextCodecUtil::describeEncodingMismatch(detected, declared);
+        if (!message.isEmpty()) m_encodingIssues.insert(uri, message);
     }
 }
 
@@ -320,8 +342,24 @@ void LspServer::analyzeOpenDocuments(QList<QJsonObject>& out) {
     const auto workspace = m_analyzer.analyzeWorkspace(sources);
     m_docs.clear();
     for (auto it = workspace.constBegin(); it != workspace.constEnd(); ++it) {
-        m_docs.insert(it.key(), it.value());
-        if (m_versions.contains(it.key())) publishDiagnostics(it.key(), out);
+        ErbDocument doc = it.value();
+        // 读取/解码期间的编码问题（DiagCode::kEncoding）：挂在文档上一起发布 ——
+        // 这些问题在装载/读取期间就已确定，运行期拿到的一律是 Qt 原生字符。
+        const QString issue = m_encodingIssues.value(it.key());
+        if (!issue.isEmpty()) {
+            ErbDiagnostic d;
+            d.line = 0;
+            d.startCol = 0;
+            d.endCol = 0;
+            d.severity = QStringLiteral("warning");
+            d.code = QString::fromLatin1(DiagCode::kEncoding);
+            d.message = issue;
+            doc.attributed.append(d);
+        }
+        m_docs.insert(it.key(), doc);
+        // 有编码问题的文件即使没被打开也要发布：否则「读不出来的文件」在编辑器里
+        // 等同于不存在（原实现就是这样静默丢掉的）。
+        if (m_versions.contains(it.key()) || !issue.isEmpty()) publishDiagnostics(it.key(), out);
     }
 }
 

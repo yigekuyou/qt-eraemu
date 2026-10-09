@@ -330,6 +330,14 @@ TextEncoding detect(const QByteArray& data) {
     return TextEncoding::Latin1;
 }
 
+QString describeEncodingMismatch(TextEncoding detected, TextEncoding declared) {
+    if (declared == TextEncoding::Auto || detected == TextEncoding::Auto) return {};
+    if (detected == declared) return {};
+    return QStringLiteral("编码不符：实际按 %1 读出，游戏声明的是 %2")
+        .arg(QString::fromLatin1(name(detected)), QString::fromLatin1(name(declared)));
+}
+
+
 QString decode(const QByteArray& data, TextEncoding hint, TextEncoding* detected) {
     TextEncoding enc = (hint == TextEncoding::Auto) ? detect(data) : hint;
     if (enc == TextEncoding::Auto) enc = detect(data);
@@ -370,7 +378,7 @@ QString decode(const QByteArray& data, TextEncoding hint, TextEncoding* detected
     }
 
     // 严格解码失败（真实游戏里存在「声明是 UTF-8 实际是 SJIS」的文件 / 半截文件）：
-    // 回退 Shift-JIS → 声明的编码 → Latin-1，保证不丢内容
+    // 回退 Shift-JIS → 声明的编码 → Latin-1，保证不丢内容。
     if (enc != TextEncoding::ShiftJis && canDecode(TextEncoding::ShiftJis)
         && isValidInEncoding(body, TextEncoding::ShiftJis)
         && decodeWithQtStrict(body, qtCodecFor(TextEncoding::ShiftJis), out)) {
@@ -388,7 +396,7 @@ QString decode(const QByteArray& data, TextEncoding hint, TextEncoding* detected
     return latin;
 }
 
-QByteArray encode(const QString& text, TextEncoding enc, bool* ok) {
+QByteArray encode(const QString& text, TextEncoding enc, bool* ok, bool report) {
     if (ok) *ok = true;
     if (enc == TextEncoding::Auto) enc = TextEncoding::Utf8;
 
@@ -399,7 +407,7 @@ QByteArray encode(const QString& text, TextEncoding enc, bool* ok) {
     if (!canEncode(enc)) {
         if (ok) *ok = false;
         static bool warned = false;
-        if (!warned) {
+        if (report && !warned) {
             warned = true;
             qWarning() << "[TextCodecUtil] 本机 Qt 不支持编码" << name(enc) << "（无转换器）；"
                        << "已退化为 UTF-8。可用编解码器数:" << availableCodecs().size();
@@ -414,7 +422,11 @@ QByteArray encode(const QString& text, TextEncoding enc, bool* ok) {
     // 有字符无法用目标编码表示（finalize 报 InvalidCharacters）：仍返回尽力而为的字节，
     // 但 ok=false，让调用方决定（写文件时会被拒绝）
     if (ok) *ok = false;
-    qWarning() << "[TextCodecUtil] 编码" << name(enc) << "无法表示部分字符（已用替代字符）";
+    // report=false：调用方（运行期求值，如 LangManager 的字节长度）只是拿不到该字符的
+    // 宽度，不是「编码故障」，不该刷 stderr —— 编码只在装载/读取期间转换，之后不存在编码问题。
+    if (report) {
+        qWarning() << "[TextCodecUtil] 编码" << name(enc) << "无法表示部分字符（已用替代字符）";
+    }
     return out;
 }
 

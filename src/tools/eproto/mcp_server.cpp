@@ -17,12 +17,14 @@
  */
 #include "mcp_server.h"
 
+#include <QFileInfo>
 #include <QJsonArray>
 #include <QJsonDocument>
 #include <QSet>
 #include <cmath>
 
 #include "Content/encoding/text_encoding.h"
+#include "GameData/ast/parse_diagnostic.h"   // DiagCode::kEncoding
 
 namespace eproto {
 namespace {
@@ -229,13 +231,31 @@ QJsonObject McpServer::toolSearch(const QJsonObject& args) const {
 QJsonObject McpServer::toolValidate(const QJsonObject& args) const {
     QString source = args.value("source").toString();
     const QString path = args.value("path").toString();
+    TextEncoding detected = TextEncoding::Auto;
     if (args.contains("path")) {
         bool ok = false;
-        source = TextCodecUtil::readFile(path, TextEncoding::Auto, nullptr, &ok);
+        source = TextCodecUtil::readFile(path, TextEncoding::Auto, &detected, &ok);
         if (!ok) return toolError("Unable to read file: " + path);
     }
     const QString fileName = args.value("fileName").toString(path.isEmpty() ? QStringLiteral("<source>") : path);
-    const auto doc = m_analyzer.analyzeWorkspace({{fileName, source}}).value(fileName);
+    ErbDocument doc = m_analyzer.analyzeWorkspace({{fileName, source}}).value(fileName);
+    // 唯一的编码类告警：**实际按哪个编码读出** != 游戏声明的编码（DiagCode::encoding）。
+    // 转换在装载/读取期间完成，运行期不再有任何编码处理；这里只是把装载期的事实报给 agent。
+    if (!path.isEmpty()) {
+        const TextEncoding declared = TextCodecUtil::fromName(
+            ErbAnalyzer::declaredEncodingName(QFileInfo(path).absolutePath()));
+        const QString message = TextCodecUtil::describeEncodingMismatch(detected, declared);
+        if (!message.isEmpty()) {
+            ErbDiagnostic d;
+            d.line = 0;
+            d.startCol = 0;
+            d.endCol = 0;
+            d.severity = QStringLiteral("warning");
+            d.code = QString::fromLatin1(DiagCode::kEncoding);
+            d.message = message;
+            doc.attributed.append(d);
+        }
+    }
     return toolResult(documentSummary(doc), !doc.parsed);
 }
 

@@ -43,6 +43,7 @@ using AstResolver = std::function<QSharedPointer<ExpressionNode>(const QString&)
 class AstBuilder {
 public:
     // 行 -> token 序列（对齐 C# LexicalAnalyzer）。
+    static QStringList assignmentValues(const QString& text);
     static WordCollection tokenize(const QString& line);
 
     // 行 -> LogicalLine（归类、归约实参、预解析条件）。

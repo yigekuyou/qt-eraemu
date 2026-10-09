@@ -162,8 +162,8 @@ int main(int argc, char* argv[]) {
         const LogicalLine eqAssign = execOne(QStringLiteral("CALLNAME:4 = \"克勞恩皮絲\""));
         check(eqAssign.functionName == QLatin1String("="),
               "CALLNAME:4 = … 解析为赋值");
-        check(storage.getCharaStr(QStringLiteral("CALLNAME"), 4, 0) == QStringLiteral("克勞恩皮絲"),
-              "= 写入生效");
+        check(storage.getCharaStr(QStringLiteral("CALLNAME"), 4, 0) == QStringLiteral("\"克勞恩皮絲\""),
+              "= 写入原始 FORM（保留双引号）");
 
         // 负向：真指令不能被误判成赋值
         check(AstBuilder::build(QStringLiteral("PRINTFORML a = b"), {}, resolveOne)
@@ -328,9 +328,9 @@ int main(int argc, char* argv[]) {
         // 此前 writeStringValue 无论几个下标都只取第一个写 1 维表，于是
         // `#DIMS X, a, b` 的 `X:i:j = …` 读回恒为空串（COLUMN_LIB 这类
         // 「每列一条字符串缓冲」的 ERB 库整个失效）。
-        execV(QStringLiteral("VSS2D:3:7 = \"hi\""));
+        execV(QStringLiteral("VSS2D:3:7 '= \"hi\""));
         check(storage.getGlobalStr2D("VSS2D", 3, 7) == QStringLiteral("hi"),
-              "2D 字符串数组元素赋值写进 2 维表（VSS2D:3:7 = \"hi\"）");
+              "2D 字符串数组元素赋值写进 2 维表（VSS2D:3:7 '= \"hi\"）");
         check(storage.getGlobalStr1D("VSS2D", 3).isEmpty(),
               "2D 字符串数组元素赋值不落进 1 维表（不与单下标读混槽）");
         const auto evalStr2D = [&](const QString& e) {
@@ -498,14 +498,9 @@ int main(int argc, char* argv[]) {
     }
 
     // =====================================================================
-    // 字符串 `=` 赋值的右值 = 格式化串（裸文本一律字面量，即使与**整数**
-    // 变量/常量同名）；只有裸**字符串**变量名才按变量引用求值。
-    // 回归：eraTW `DIM.ERH:91 #DIM CONST 斜角的竹林 = 430`（地图地点编号）
-    // 与 `@ForagePlaceName` 的 `LOCALS = 斜角的竹林`（地点名字符串）**同名
-    // 碰撞** —— 旧实现把任何「已知变量」都当引用，于是「採集場所一覧」整列
-    // 显示成 430/460/470… 数字，且把 PLACE 名判断 `!= ""` 永远当真，
-    // 输入 99 无法返回。
-    qDebug() << "\n9) 字符串 = 赋值：整数名当字面量，字符串名当引用";
+    // C# 字符串 '='：右侧为原始 FORM，裸变量名一律保留为文本。
+    // 字符串引用使用 '= 或 %…%；整数插值使用 {…}。
+    qDebug() << "\n9) 字符串 = 原始 FORM 与 '= 表达式引用";
     {
         VariableStorage vs;
         ProcessState ps;
@@ -524,10 +519,18 @@ int main(int argc, char* argv[]) {
             QStringLiteral("#DIMS OUT_SYS"),
             QStringLiteral("#DIMS OUT_REF"),
             QStringLiteral("#DIMS SRC_STR"),
-            QStringLiteral("SRC_STR = \"值\""),
+            QStringLiteral("#DIMS OUT_EXPR"),
+            QStringLiteral("#DIMS OUT_FORM"),
+            QStringLiteral("#DIMS OUT_INDEX"),
+            QStringLiteral("#DIMS OUT_CALL"),
+            QStringLiteral("SRC_STR '= \"值\""),
             QStringLiteral("OUT_LIT = 斜角的竹林"),          // 整数常量名 -> 字面量
             QStringLiteral("OUT_SYS = FLAG"),                // 整数系统变量名 -> 字面量
-            QStringLiteral("OUT_REF = SRC_STR"),             // 字符串变量名 -> 取当前值
+            QStringLiteral("OUT_REF = SRC_STR"),             // 字符串变量名 -> 字面量
+            QStringLiteral("OUT_EXPR '= SRC_STR"),           // 字符串表达式引用
+            QStringLiteral("OUT_FORM = %SRC_STR%"),          // FORM 字符串插值
+            QStringLiteral("OUT_INDEX = SRC_STR:0"),         // 下标引用形态也是字面量
+            QStringLiteral("OUT_CALL = GETDOINGFUNCTION()"), // 函数调用形态也是字面量
             QStringLiteral("RETURN")
         };
         check(pt.loadScript("strap", buildLines(pt, program)), "load string-assignment script");
@@ -536,21 +539,28 @@ int main(int argc, char* argv[]) {
         check(run.runToCompletion() == ExecState::Halt, "string-assignment script completes");
         vs.setPrivateScope(QStringLiteral("MAIN"),
                            {QStringLiteral("OUT_LIT"), QStringLiteral("OUT_SYS"),
-                            QStringLiteral("OUT_REF"), QStringLiteral("SRC_STR")});
+                            QStringLiteral("OUT_REF"), QStringLiteral("SRC_STR"),
+                            QStringLiteral("OUT_EXPR"), QStringLiteral("OUT_FORM"),
+                            QStringLiteral("OUT_INDEX"), QStringLiteral("OUT_CALL")});
         check(vs.getGlobalStr1D(QStringLiteral("OUT_LIT"), 0) == QStringLiteral("斜角的竹林"),
               "OUT_LIT = 斜角的竹林（整数常量名）-> 字面量，而非常量值 430");
         check(vs.getGlobalStr1D(QStringLiteral("OUT_SYS"), 0) == QStringLiteral("FLAG"),
               "OUT_SYS = FLAG（整数系统变量名）-> 字面量 \"FLAG\"");
-        check(vs.getGlobalStr1D(QStringLiteral("OUT_REF"), 0) == QStringLiteral("值"),
-              "OUT_REF = SRC_STR（字符串变量名）-> 取该变量当前值");
+        check(vs.getGlobalStr1D(QStringLiteral("OUT_REF"), 0) == QStringLiteral("SRC_STR"),
+              "OUT_REF = SRC_STR -> 字面量变量名");
+        check(vs.getGlobalStr1D(QStringLiteral("OUT_EXPR"), 0) == QStringLiteral("值"),
+              "OUT_EXPR '= SRC_STR -> 字符串变量的值");
+        check(vs.getGlobalStr1D(QStringLiteral("OUT_FORM"), 0) == QStringLiteral("值"),
+              "OUT_FORM = %SRC_STR% -> FORM 字符串插值");
+        check(vs.getGlobalStr1D(QStringLiteral("OUT_INDEX"), 0) == QStringLiteral("SRC_STR:0"),
+              "= 不求值裸字符串下标引用");
+        check(vs.getGlobalStr1D(QStringLiteral("OUT_CALL"), 0) == QStringLiteral("GETDOINGFUNCTION()"),
+              "= 不求值裸函数调用");
     }
 
     // =====================================================================
-    // 字符串 = 赋值：带引号的字符串字面量（"…" / @"…"）引号是定界符，要剥掉。
-    // 回归：eraTW `LOCALS = @"[目瞳:…][表情:…]"`（精灵名）此前落到**格式化串**
-    // 路径，`@"` 与引号原样落进变量；同一变量在别处又用 `LOCALS = 倒錯的`
-    // （裸文本）/ `LOCALS = "Ｃ感度"`（引号）——三者必须等价才自洽。
-    qDebug() << "\n10) 字符串 = 赋值：\"…\" 与 @\"…\" 都剥引号（@\"…\" 展开 %…%）";
+    // 原始 FORM 中的双引号和 @ 均是普通文本；'= 才按表达式剥除定界符。
+    qDebug() << "\n10) 字符串 = 保留引号、严格插值类型与参数 gate";
     {
         VariableStorage vs;
         ProcessState ps;
@@ -571,11 +581,15 @@ int main(int argc, char* argv[]) {
             QStringLiteral("#DIMS F"),
             QStringLiteral("#DIMS B"),
             QStringLiteral("#DIMS E"),
+            QStringLiteral("#DIMS QE"),
+            QStringLiteral("#DIMS FE"),
             QStringLiteral("N = 7"),
             QStringLiteral("Q = \"quote\""),          // 字符串字面量 -> quote
-            QStringLiteral("F = @\"lit_%N%\""),        // 格式化字符串字面量 -> lit_7
-            QStringLiteral("B = bare_%N%"),            // 裸格式化串 -> bare_7
-            QStringLiteral("E = @\"[PN:%N%]\""),       // eraTW 精灵名样式 -> [PN:7]
+            QStringLiteral("F = @\"lit_{N}\""),        // 格式化字符串字面量 -> lit_7
+            QStringLiteral("B = bare_{N}"),            // 裸格式化串 -> bare_7
+            QStringLiteral("E = @\"[PN:{N}]\""),       // eraTW 精灵名样式 -> [PN:7]
+            QStringLiteral("QE '= \"quote\""),
+            QStringLiteral("FE '= @\"lit_{N}\""),
             QStringLiteral("RETURN")
         };
         check(pt.loadScript("qstr", buildLines(pt, program)), "load quoted string-assignment script");
@@ -584,15 +598,38 @@ int main(int argc, char* argv[]) {
         check(run.runToCompletion() == ExecState::Halt, "quoted string-assignment script completes");
         vs.setPrivateScope(QStringLiteral("MAIN"),
                            {QStringLiteral("Q"), QStringLiteral("F"), QStringLiteral("B"),
-                            QStringLiteral("E")});
-        check(vs.getGlobalStr1D(QStringLiteral("Q"), 0) == QStringLiteral("quote"),
-              "Q = \"quote\" -> quote（引号是定界符）");
-        check(vs.getGlobalStr1D(QStringLiteral("F"), 0) == QStringLiteral("lit_7"),
-              "F = @\"lit_%N%\" -> lit_7（剥 @\"…\" 并展开 %…%）");
+                            QStringLiteral("E"), QStringLiteral("QE"), QStringLiteral("FE")});
+        check(vs.getGlobalStr1D(QStringLiteral("Q"), 0) == QStringLiteral("\"quote\""),
+              "Q = \"quote\" -> 保留双引号");
+        check(vs.getGlobalStr1D(QStringLiteral("F"), 0) == QStringLiteral("@\"lit_7\""),
+              "F = @\"lit_{N}\" -> 保留 @ 与双引号，并插值");
         check(vs.getGlobalStr1D(QStringLiteral("B"), 0) == QStringLiteral("bare_7"),
-              "B = bare_%N% -> bare_7（裸格式化串）");
-        check(vs.getGlobalStr1D(QStringLiteral("E"), 0) == QStringLiteral("[PN:7]"),
-              "E = @\"[PN:%N%]\" -> [PN:7]（eraTW 精灵名样式）");
+              "B = bare_{N} -> 整数插值");
+        check(vs.getGlobalStr1D(QStringLiteral("E"), 0) == QStringLiteral("@\"[PN:7]\""),
+              "E = @\"[PN:{N}]\" -> 保留原始 FORM 定界文本");
+        check(vs.getGlobalStr1D(QStringLiteral("QE"), 0) == QStringLiteral("quote"),
+              "QE '= \"quote\" -> 字符串表达式去引号");
+        check(vs.getGlobalStr1D(QStringLiteral("FE"), 0) == QStringLiteral("lit_7"),
+              "FE '= @\"lit_{N}\" -> 格式化字符串表达式");
+
+        const AstResolver resolve = [&pt](const QString& text) { return pt.expressionAst(text); };
+        const QStringList invalidForms = {
+            "B = %N%", "B = {QE}", "B = %QE", "B = {N", "B = % %", "B = {}"
+        };
+        for (const auto& source : invalidForms) {
+            vs.setGlobalStr1D("B", 0, "unchanged");
+            auto line = AstBuilder::build(source, {}, resolve);
+            line.ownerFunction = "MAIN";
+            check(!ex.executeInstruction(line), "非法 FORM 拒绝：" + source);
+            check(vs.getGlobalStr1D("B", 0) == "unchanged", "非法 FORM 不写入：" + source);
+        }
+        auto blocked = AstBuilder::build("B = valid_{N}", {}, resolve);
+        blocked.ownerFunction = "MAIN";
+        blocked.argument.typeOk = false;
+        blocked.argument.typeError = "assignment validation failed";
+        vs.setGlobalStr1D("B", 0, "unchanged");
+        check(!ex.executeInstruction(blocked), "typeOk=false 的字符串 = 必须拒绝");
+        check(vs.getGlobalStr1D("B", 0) == "unchanged", "参数 gate 拒绝时不写入");
     }
 
     // 8) eraMegaten 解析回归（本次修复；原报 705 条「Expected #」+ 19 条「未识别的指令」）

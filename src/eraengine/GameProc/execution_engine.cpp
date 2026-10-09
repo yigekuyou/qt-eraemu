@@ -259,6 +259,7 @@ ExecutionEngine::LhsRef ExecutionEngine::parseLhsRef(const QString& lhs)
             if (ast) {
                 ExpressionEvaluator& ev = getEvaluator();
                 const QVariant v = ev.evaluate(*ast, m_storage, m_gameBaseData);
+                if (!v.isValid()) { ref.valid = false; return ref; }
                 if (v.userType() == QMetaType::QString) {
                     // 运行期字符串下标（FLAG:ARGS ++，ARGS="兒童の性別"）：
                     // 对齐 ExpressionEvaluator::resolveIndex —— 先按变量名表
@@ -271,7 +272,8 @@ ExecutionEngine::LhsRef ExecutionEngine::parseLhsRef(const QString& lhs)
                         if (const ConstantTable* ct = m_parseTable->constantTable())
                             mapped = ct->indexForVariable(ref.name, s);
                     }
-                    value = mapped >= 0 ? mapped : s.toLongLong();
+                    if (mapped < 0) { ref.valid = false; emit errorOccurred(QStringLiteral("未知字符串下标")); return ref; }
+                    value = mapped;
                 } else {
                     value = v.toLongLong();
                 }
@@ -384,35 +386,20 @@ void ExecutionEngine::writeLhs(const LhsRef& ref, qint64 value) {
 }
 
 bool ExecutionEngine::handleCompoundAssignment(const QString& lhs, const QString& op, const QString& rhs, const QSharedPointer<ExpressionNode>& ast) {
-    // Parse the LHS to get variable name and index（支持 2D/3D 下标）
-    const LhsRef ref = parseLhsRef(lhs);
-    qint64 currentValue = readLhs(ref);
-    
-    // Evaluate the RHS expression (prefer cached AST)
     ExpressionEvaluator& evaluator = getEvaluator();
     const QVariant rhsVar = ast ? evaluator.evaluate(*ast, m_storage, m_gameBaseData)
         : evalExpressionCached(m_parseTable, evaluator, rhs, m_storage, m_gameBaseData);
-    qint64 rhsValue = rhsVar.isValid() ? rhsVar.toLongLong() : rhs.toLongLong();
-    
-    // Apply the operation
-    if (op == "+=") {
-        currentValue += rhsValue;
-    } else if (op == "-=") {
-        currentValue -= rhsValue;
-    } else if (op == "*=") {
-        currentValue *= rhsValue;
-    } else if (op == "/=") {
-        if (rhsValue != 0) {
-            currentValue /= rhsValue;
-        }
-    } else if (op == "%=") {
-        if (rhsValue != 0) {
-            currentValue %= rhsValue;
-        }
-    }
-    
-    // Set the updated value
-    writeLhs(ref, currentValue);
+    if (!rhsVar.isValid() || rhsVar.typeId() == QMetaType::QString) return false;
+    const LhsRef ref = parseLhsRef(lhs);
+    if (!ref.valid) return false;
+    auto left = QSharedPointer<LiteralNode>::create(readLhs(ref));
+    auto right = QSharedPointer<LiteralNode>::create(rhsVar.toLongLong());
+    ExpressionLexer lexer;
+    const auto tokens = lexer.tokenize(op.left(1));
+    BinaryOpNode operation(left, tokens.first(), right);
+    const QVariant result = evaluator.evaluate(operation, m_storage, m_gameBaseData);
+    if (!result.isValid()) return false;
+    writeLhs(ref, result.toLongLong());
     return true;
 }
 
@@ -1507,6 +1494,10 @@ bool ExecutionEngine::executeInstruction(const LogicalLine& line) {
     }
 
     // ---- 赋值 ----
+    if (!line.argument.typeOk && !line.assignOperator.isEmpty()) {
+        emit errorOccurred(line.argument.typeError);
+        return false;
+    }
     if (name == "=") {
         if (args.size() >= 2) {
             // 目的变量是字符串 -> 字符串赋值（此前只有整数路径）。
@@ -1566,8 +1557,32 @@ bool ExecutionEngine::executeInstruction(const LogicalLine& line) {
                 qWarning() << "[exec] 整数型变量不能使用 '= 赋值，已忽略：" << lhsName;
                 return true;
             }
-            return handleStringAssignment(args[0].raw, args[1].raw, args[1].ast,
-                                          line.ownerFunction);
+            const auto texts = AstBuilder::assignmentValues(args[1].raw);
+            QList<QVariant> values;
+            for (const auto& text : texts) {
+                const auto node = m_parseTable ? m_parseTable->expressionAst(text) : QSharedPointer<ExpressionNode>();
+                const auto value = node ? getEvaluator().evaluate(*node, m_storage, m_gameBaseData) : QVariant();
+                if (!value.isValid() || value.typeId() != QMetaType::QString) return false;
+                values.append(value);
+            }
+            const auto ref = parseLhsRef(args[0].raw);
+            if (!ref.valid) return false;
+            const auto* decl = m_parseTable ? m_parseTable->variableTable().find(ref.name, line.ownerFunction) : nullptr;
+            const int start = ref.indices.isEmpty() ? 0 : ref.indices.last();
+            const int size = decl && !decl->lengths.isEmpty() ? decl->lengths.last() : m_storage->arraySize(ref.name);
+            if ((decl && decl->isConst) || (values.size() > 1 && size > 0
+                && (start < 0 || qint64(start)+values.size() > size))) {
+                emit errorOccurred(QStringLiteral("字符串数组赋值越界或const左值")); return false;
+            }
+            for (int i = 0; i < values.size(); ++i) {
+                QList<int> indices = ref.indices;
+                if (indices.isEmpty()) indices.append(0);
+                indices.last() += i;
+                QString target = ref.name;
+                for (int index : indices) target += QLatin1Char(':') + QString::number(index);
+                if (!writeStringValue(target, values[i].toString(), line.ownerFunction)) return false;
+            }
+            return true;
         }
         return true;
     }
@@ -1580,11 +1595,18 @@ bool ExecutionEngine::executeInstruction(const LogicalLine& line) {
                 m_parseTable ? m_parseTable->variableTable().typeOf(lhsName, line.ownerFunction)
                              : OperandType::Unknown;
             if (destType == OperandType::Str) {
-                return handleStringAssignment(args[0].raw,
-                                              args[0].raw + QLatin1String(" + ") + args[1].raw,
-                                              {}, line.ownerFunction);
+                const QVariant value = evalExpressionCached(m_parseTable, getEvaluator(),
+                    args[0].raw + QLatin1String(" + ") + args[1].raw, m_storage, m_gameBaseData);
+                if (!value.isValid()) return false;
+                return writeStringValue(args[0].raw, value.toString(), line.ownerFunction);
             }
         }
+    }
+    if (name == "*=" && args.size() >= 2 && isStringVariable(splitTopLevelColon(args[0].raw).first(), line.ownerFunction)) {
+        const QVariant value = evalExpressionCached(m_parseTable, getEvaluator(),
+            args[0].raw + QLatin1String(" * ") + args[1].raw, m_storage, m_gameBaseData);
+        if (!value.isValid() || value.typeId() != QMetaType::QString) return false;
+        return writeStringValue(args[0].raw, value.toString(), line.ownerFunction);
     }
     if (name == "+=" || name == "-=" || name == "*=" || name == "/=" || name == "%=") {
         if (args.size() >= 2) {
@@ -2006,114 +2028,15 @@ bool ExecutionEngine::handleStringAssignment(const QString& lhs, const QString& 
         return false;
     }
     ExpressionEvaluator& evaluator = getEvaluator();
-
-    // 装载期为「字符串赋值的右值」统一建了格式化串节点（对齐 C# AnalyseFormattedString），
-    // 但右值是**裸变量名**（如 `NAME = RESULTS`）时它会被当成字面量文本。
-    // 这类情况按普通表达式求值（变量引用）。
-    QString value;
-    const QString trimmed = rhs.trimmed();
-    bool bareIdent = !trimmed.isEmpty()
-                     && (trimmed.at(0).isLetter() || trimmed.at(0) == QLatin1Char('_'));
-    for (int i = 0; bareIdent && i < trimmed.size(); ++i) {
-        const QChar c = trimmed.at(i);
-        if (!(c.isLetterOrNumber() || c == QLatin1Char('_') || c == QLatin1Char(':')
-              || c == QLatin1Char('.'))) {
-            bareIdent = false;
-        }
-    }
-    bool evaluated = false;
-    // 右值是**带引号的字符串字面量**时按普通表达式求值（引号是定界符，要剥掉）：
-    //   "X"        -> X            （字符串字面量）
-    //   @"X%V%"    -> X<展开>       （格式化字符串字面量：`%..%`/`{..}`/`\@..\@` 展开）
-    //   "X" + S    -> 拼接          （字符串表达式）
-    // 二者必须一致：eraTW / eraMegaten 对**同一个变量、同一条显示路径**混用
-    // `= 文本`、`= "文本"`、`= @"文本"`（如 eraTW `LOCALS = 倒錯的` 与
-    // `LOCALS = "Ｃ感度"` 同处一个 SELECTCASE），只有都剥引号才等价。
-    // 此前只认 `"` 开头，`= @"..."` 落到**格式化串**路径 -> `@"` 与引号原样
-    // 落进变量（eraTW `LOCALS = @"[目瞳:...]"` 的精灵名会带 `@"`）。
-    const bool quotedLiteral =
-        trimmed.startsWith(QLatin1Char('"')) || trimmed.startsWith(QLatin1String("@\""));
-    if (quotedLiteral && m_parseTable) {
-        const QSharedPointer<ExpressionNode> exprAst = m_parseTable->expressionAst(trimmed);
-        if (exprAst) {
-            value = evaluator.evaluate(*exprAst, m_storage, m_gameBaseData).toString();
-            evaluated = true;
-        }
-    }
-    if (!evaluated && bareIdent && m_parseTable) {
-        // 裸变量引用（`NAME = RESULTS` / `L = RESULTS:0` / `P = SA:0`）按**普通表达式**
-        // 优先求值 —— 但仅当该名字确实是**已知变量**（含 :/. 的下标/成员引用、
-        // 已声明变量、系统/角色变量）。C# 对字符串变量的普通 = 赋值按**格式化串**
-        // 解析（bare 文本是字面量，只有 %…%/{…}/\@…\@ 展开）：
-        // `RESULTS:0 = 文本設定` 的「文本設定」不是变量 -> 字面量；
-        // 此前被当变量引用求值 -> 未定义变量 = 0 -> OPTION 菜单的名字列显示 0。
-        const bool indexedRef = trimmed.contains(QLatin1Char(':'))
-                                || trimmed.contains(QLatin1Char('.'));
-        // 仅当裸名字确实是**字符串**变量时才按变量引用求值 —— 对齐 C#
-        // （字符串 `=` 的右值按格式化串解析，裸文本是字面量；只有字符串
-        // 变量名才可能意指「取该变量当前值」）。**整数**变量/常量绝不能当
-        // 引用：eraTW `DIM.ERH:91 #DIM CONST 斜角的竹林 = 430`（地图地点编号）
-        // 与 `@ForagePlaceName` 里的 `LOCALS = 斜角的竹林`（地点名字符串）同名
-        // 碰撞，一旦把整数常量当引用，「採集場所一覧」就整列显示成数字
-        // （430/460/470…）而非地点名。此前用「任意已知变量/系统变量/角色变量」
-        // 判定，FLAG、MONEY、#DIM CONST 等整数名全部误命中。
-        const bool stringVarRef = m_parseTable
-            && m_parseTable->variableTable().typeOf(trimmed, ownerFunction) == OperandType::Str;
-        const bool charaStrRef = m_storage && m_storage->isCharaDataString(trimmed);
-        const bool knownVariable = indexedRef || stringVarRef || charaStrRef;
-        if (knownVariable) {
-            const QSharedPointer<ExpressionNode> exprAst = m_parseTable->expressionAst(trimmed);
-            if (exprAst) {
-                value = evaluator.evaluate(*exprAst, m_storage, m_gameBaseData).toString();
-                evaluated = true;
-            }
-        }
-    }
-    // 右值是「单个函数调用」（`RESULTS:0 = GETDOINGFUNCTION()`）时按普通表达式
-    // 求值。C# 的字符串赋值右值本按格式化串解析（裸文本为字面量），但函数调用
-    // 形态不含 %..%/{..} 展开，按表达式求值才符合直觉，且测试规范（组28）要求。
-    if (!evaluated && m_parseTable && trimmed.endsWith(QLatin1Char(')'))
-        && !trimmed.contains(QLatin1Char('%'))
-        && !trimmed.contains(QLatin1Char('{')) && !trimmed.contains(QLatin1Char('}'))) {
-        const int paren = trimmed.indexOf(QLatin1Char('('));
-        bool identOnly = paren > 0;
-        for (int i = 0; identOnly && i < paren; ++i) {
-            const QChar c = trimmed.at(i);
-            if (!(c.isLetterOrNumber() || c == QLatin1Char('_') || c == QLatin1Char(':')))
-                identOnly = false;
-        }
-        if (identOnly) {
-            const QSharedPointer<ExpressionNode> exprAst = m_parseTable->expressionAst(trimmed);
-            if (exprAst && exprAst->kind() == NodeKind::Function) {
-                value = evaluator.evaluate(*exprAst, m_storage, m_gameBaseData).toString();
-                evaluated = true;
-            }
-        }
-    }
-    if (!evaluated) {
-        const QVariant rhsValue = ast ? evaluator.evaluate(*ast, m_storage, m_gameBaseData)
-        : evalExpressionCached(m_parseTable, evaluator, rhs, m_storage, m_gameBaseData);
-        if (rhsValue.isValid()) {
-            value = rhsValue.toString();
-        } else {
-            // eramaker 兼容：字符串变量可以赋**裸字符串**（无引号、不是表达式）。
-            // eraTW 口上 `RESULTS:0 = 図書館にどんな本を増やしたらいいですかね?`
-            // —— 句末的 ? 会被表达式解析器当成三元运算符（「Expected #」），
-            // 右值解析失败；此时右值按字面文本写入（对齐 C# 裸字符串赋值兼容）。
-            value = trimmed;
-        }
-    }
-
-    // [qdbug] 字符串赋值跟踪（保留的调试桩）：追查 eraTW 的右值展开问题 ——
-    //   * MOBGIRL_GENERATOR.ERB:146 `CSTR:ARG:路人子種族 = %ARGS%` 落到字面 "ARGS"；
-    //   * 同文件 1059/1061 `処女喪失履歴 = 献给了%TEXTR(...)%...` 的 %..% 段丢失。
-    // rhs 是解析期原文、value 是运行期求值结果；若两者语义不符
-    // （%ARGS% 原样写入 / %..% 段被截断），即为展开链路缺陷。
-    // 用 QT_LOGGING_RULES="era.trace.debug=true" 打开。
-    qCDebug(eraTrace) << "[qdbug] str-assign" << lhs << "<-" << trimmed
-                      << "=> value =" << value
-                      << "(ast?" << (ast != nullptr) << ")";
-
+    Q_UNUSED(ast); // '=' 消费原始 FORM；'=' 在 executeInstruction 中按字符串表达式求值。
+    const auto resolve = [this](const QString& e) {
+        return m_parseTable ? m_parseTable->expressionAst(e) : QSharedPointer<ExpressionNode>();
+    };
+    const auto form = StrFormParser::parse(rhs.trimmed(), resolve, evaluator.ignoreTripleSymbols());
+    if (!form) { emit errorOccurred(QStringLiteral("字符串赋值FORM无效")); return false; }
+    const QVariant result = evaluator.evaluate(*form, m_storage, m_gameBaseData);
+    if (!result.isValid() || result.typeId() != QMetaType::QString) return false;
+    const QString value = result.toString();
     return writeStringValue(lhs, value, ownerFunction);
 }
 
@@ -2125,7 +2048,7 @@ bool ExecutionEngine::writeStringValue(const QString& lhs, const QString& value,
     const LhsRef ref = parseLhsRef(lhs);
     const QString varName = ref.name;
     const int index = ref.hasIndex() ? ref.first() : -1;
-    if (varName.isEmpty()) return false;
+    if (varName.isEmpty() || !ref.valid) return false;
     if (m_storage->hasParameter(varName)) {
         m_storage->setParameter(varName, value);
         return true;
@@ -2177,28 +2100,31 @@ bool ExecutionEngine::writeStringValue(const QString& lhs, const QString& value,
 }
 
 bool ExecutionEngine::handleAssignment(const QString& lhs, const QString& rhs, const QSharedPointer<ExpressionNode>& ast) {
-
-    // Parse the LHS to get variable name and index（支持 2D/3D 下标）
-    const LhsRef ref = parseLhsRef(lhs);
-
-    // Evaluate the RHS expression using the parse table's cached AST.
-    // Pass m_gameBaseData if available so GameBase variables can be resolved.
     ExpressionEvaluator& evaluator = getEvaluator();
-    QVariant rhsValue = ast ? evaluator.evaluate(*ast, m_storage, m_gameBaseData)
-        : evalExpressionCached(m_parseTable, evaluator, rhs, m_storage, m_gameBaseData);
-    
-    
-    // If the evaluated result is not valid, try direct conversion
-    if (!rhsValue.isValid() || rhsValue.toString().isEmpty()) {
-        bool ok = false;
-        int intValue = rhs.toInt(&ok);
-        if (ok) {
-            rhsValue = QVariant(intValue);
-        }
+    const auto texts = AstBuilder::assignmentValues(rhs);
+    QList<qint64> values;
+    for (int i = 0; i < texts.size(); ++i) {
+        if (texts[i].isEmpty()) { emit errorOccurred(QStringLiteral("数组赋值包含空项")); return false; }
+        auto node = texts.size() == 1 ? ast : QSharedPointer<ExpressionNode>();
+        const QVariant value = node ? evaluator.evaluate(*node, m_storage, m_gameBaseData)
+            : evalExpressionCached(m_parseTable, evaluator, texts[i], m_storage, m_gameBaseData);
+        if (!value.isValid() || value.typeId() == QMetaType::QString) return false;
+        values.append(value.toLongLong());
     }
-    
-    
-    writeLhs(ref, rhsValue.toLongLong());
+    LhsRef ref = parseLhsRef(lhs);
+    if (!ref.valid) return false;
+    const auto* decl = m_parseTable ? m_parseTable->variableTable().find(ref.name) : nullptr;
+    const int start = ref.indices.isEmpty() ? 0 : ref.indices.last();
+    int size = decl && !decl->lengths.isEmpty() ? decl->lengths.last() : m_storage->arraySize(ref.name);
+    if (values.size() > 1 && size > 0 && (start < 0 || qint64(start)+values.size() > size)) {
+        emit errorOccurred(QStringLiteral("连续数组赋值越界")); return false;
+    }
+    if (decl && decl->isConst) { emit errorOccurred(QStringLiteral("不能赋值const变量")); return false; }
+    if (ref.indices.isEmpty()) ref.indices.append(0);
+    for (int i = 0; i < values.size(); ++i) {
+        ref.indices.last() = start+i;
+        writeLhs(ref, values[i]);
+    }
     return true;
 }
 

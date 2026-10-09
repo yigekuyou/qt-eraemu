@@ -37,12 +37,12 @@ public:
 
     // 解析整段格式化串；无内嵌表达式时也可返回（普通文本）
     [[nodiscard]] static QSharedPointer<StrFormNode> parse(const QString& text,
-                                                           const ExprResolver& resolve);
+                                                           const ExprResolver& resolve, bool ignoreTripleSymbols = false);
 
     // \@ cond ? left # right \@ —— 传入不含 \@ 的内部文本，返回 If 节点
     // （C# LexicalAnalyzer.AnalyseYenAt / YenAtSubWord）
     [[nodiscard]] static QSharedPointer<ExpressionNode> parseYenAt(const QString& inner,
-                                                                  const ExprResolver& resolve);
+                                                                  const ExprResolver& resolve, bool ignoreTripleSymbols = false);
 
     // 是否含有内嵌表达式（用于判断要不要走 StrForm）
     [[nodiscard]] static bool hasForm(const QString& text);

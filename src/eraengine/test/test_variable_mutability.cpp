@@ -90,6 +90,12 @@ int main(int argc, char* argv[]) {
     const QStringList main = {
         "@MAIN",
         // 1) 用户全局 int（1D）：大小写不敏感读写
+        "G_ONE:0 = 1, 2, 3,",
+        "LIST_SUM = G_ONE:0 + G_ONE:1 + G_ONE:2",
+        "G_SNAME:0 '= \"a\", \"b\",",
+        "LIST_STR_LEN = STRLENS(G_SNAME:0 + G_SNAME:1)",
+        "G_SNAME:2 = \"a{LIST_SUM}b\"",
+        "RAW_FORM_LEN = STRLENS(G_SNAME:2)",
         "G_ONE:0 = 10",
         "g_one:1 = 20",
         "R_ONE_A = G_ONE:0",
@@ -149,6 +155,10 @@ int main(int argc, char* argv[]) {
     check(st == ExecState::Halt, "run finished (Halt)");
 
     const auto g = [&](const QString& n) { return storage.getGlobalInt1D(n, 0); };
+
+    check(g("LIST_SUM") == 6, "integer list and trailing comma");
+    check(g("LIST_STR_LEN") == 2, "string expression list");
+    check(storage.getGlobalStr1D("G_SNAME", 2) == QStringLiteral("\"a6b\""), "string equals preserves quotes and expands FORM");
 
     qDebug() << "\n1) 用户全局变量（1D/2D/3D，大小写不敏感）";
     check(storage.getGlobalInt1D("G_ONE", 0) == 10, "G_ONE:0 == 10");

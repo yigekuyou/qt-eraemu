@@ -29,6 +29,7 @@ static void run(const QString& name, const QStringList& source, qint64 expected,
         lines.append(AstBuilder::build(script[i], ScriptPosition("flow.ERB", i, 0),
             [&table](const QString& text) { return table.expressionAst(text); }));
     table.loadScript("flow", lines);
+    table.finalizeParse();
     table.setEntryPoint("MAIN");
     auto result = runner.runToCompletion();
     if (restart) {
@@ -75,7 +76,7 @@ int main(int argc, char** argv) {
     // （eraTW `CALLFORM CUSTOM_%ARGS%_MENU(ARG)` 不执行 -> 菜单空白）。
     run("CALLFORM 格式化标签", {
         "A = 7",
-        "CALLFORM SUB_%A%(A)",
+        "CALLFORM SUB_{A}(A)",
         "RETURN",
         "@SUB_7(NUM)",
         "CHECK = NUM * 10",
@@ -97,7 +98,7 @@ int main(int argc, char** argv) {
     //   * 目标不存在 -> 从 CATCH 的**下一行**开始执行异常体
     run("TRYCCALLFORM 命中 = 正常调用", {
         "A = 1",
-        "TRYCCALLFORM SUB_%A%",
+        "TRYCCALLFORM SUB_{A}",
         "CHECK = 10",
         "CATCH",
         "CHECK = 999",
@@ -108,7 +109,7 @@ int main(int argc, char** argv) {
         "RETURN"}, 10);
     run("TRYCCALLFORM 未命中 = 进入 CATCH", {
         "A = 2",
-        "TRYCCALLFORM SUB_%A%",
+        "TRYCCALLFORM SUB_{A}",
         "CHECK = 10",
         "CATCH",
         "CHECK = 7",
@@ -119,7 +120,7 @@ int main(int argc, char** argv) {
         "RETURN"}, 7);
     run("TRY 无 CATCH 未命中 = 静默跳过", {
         "A = 3",
-        "TRYCCALLFORM SUB_%A%",
+        "TRYCCALLFORM SUB_{A}",
         "CHECK = 1",
         "RETURN",
         "@SUB_1",
@@ -155,7 +156,7 @@ int main(int argc, char** argv) {
         "RETURNF N * 2"}, 42);
     run("CALLFORMF 格式化函数名（返回值丢弃，副作用生效）", {
         "A = 7",
-        "CALLFORMF TRIPLE_%A%(A)",
+        "CALLFORMF TRIPLE_{A}(A)",
         "CHECK = CHECK:1",
         "RETURN",
         "@TRIPLE_7(N)",

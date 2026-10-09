@@ -33,6 +33,7 @@ QList<ExpressionToken> ExpressionLexer::tokenize(const QString& input, int line)
     
     while (!isAtEnd()) {
         skipWhitespace();
+        if (isAtEnd()) break;
         const int before = m_position;
         ExpressionToken token = readNextToken();
         if (m_position == before) {
@@ -41,9 +42,7 @@ QList<ExpressionToken> ExpressionLexer::tokenize(const QString& input, int line)
             m_column++;
             continue;
         }
-        if (token.type() != TokenType::UNKNOWN) {
-            tokens.append(token);
-        }
+        tokens.append(token);
     }
     
     // Add end of file token
@@ -148,7 +147,8 @@ ExpressionToken ExpressionLexer::readNextToken() {
     case '\'':
         // "'=" 字符串赋值；否则是单引号字符串字面量
         if (next == '=') return two(TokenType::ASSIGN_STR, "'=");
-        return readString();
+        if (m_allowSingleQuotation) return readString();
+        return one(TokenType::UNKNOWN, "'");
     case '"':
         return readString();
     case '@':
@@ -164,7 +164,7 @@ ExpressionToken ExpressionLexer::readNextToken() {
         m_column++;
         return ExpressionToken(TokenType::UNKNOWN, ch, m_line, m_column);
     case '{':
-        return readCurlyBracedIdentifier();
+        return one(TokenType::UNKNOWN, "{");
     default:
         if (ch.isDigit() && ch.unicode() < 128) {
             // 仅 ASCII 数字才是数值字面量（C# LexicalAnalyzer.Analyse 的 case '0'..'9'）；
@@ -206,7 +206,7 @@ ExpressionToken ExpressionLexer::readNumber() {
     }
 
     // 指数：p/P 为 2 的幂、e/E 为 10 的幂（C# 支持 "1p0" 这种 2 进制指数写法）
-    if (base == 10 && m_position < m_input.length()
+    if (m_position < m_input.length()
         && (m_input[m_position] == 'p' || m_input[m_position] == 'P'
             || m_input[m_position] == 'e' || m_input[m_position] == 'E')) {
         m_position++;
@@ -216,7 +216,7 @@ ExpressionToken ExpressionLexer::readNumber() {
             m_position++;
             m_column++;
         }
-        while (m_position < m_input.length() && m_input[m_position].isDigit()) {
+        while (m_position < m_input.length() && digitOk(m_input[m_position])) {
             m_position++;
             m_column++;
         }
@@ -242,7 +242,7 @@ ExpressionToken ExpressionLexer::readString() {
             case 'n':  value += '\n'; break;
             case 't':  value += '\t'; break;
             case 's':  value += ' ';  break;
-            case 'r':  value += '\r'; break;
+            case 'S':  value += QChar(0x3000); break;
             case '\\': value += '\\'; break;
             case '"':  value += '"';  break;
             case '\'': value += '\''; break;
@@ -257,6 +257,8 @@ ExpressionToken ExpressionLexer::readString() {
         ++m_column;
     }
 
+    if (m_position >= m_input.length())
+        return ExpressionToken(TokenType::UNKNOWN, value, m_line, m_column);
     if (m_position < m_input.length()) {
         ++m_position;   // skip closing quote
         ++m_column;
@@ -305,7 +307,7 @@ ExpressionToken ExpressionLexer::readStrFormAt() {
     const QString value = m_input.mid(start, after - start - (closed ? 1 : 0));
     m_column += after - m_position;
     m_position = after;
-    return ExpressionToken(TokenType::STRFORM_AT, value, m_line, m_column);
+    return ExpressionToken(closed ? TokenType::STRFORM_AT : TokenType::UNKNOWN, value, m_line, m_column);
 }
 
 // \@ cond ? A # B \@ —— 取到下一个 \@ 为止的内部文本
@@ -334,7 +336,7 @@ ExpressionToken ExpressionLexer::readYenAt() {
         value = m_input.mid(start);
         m_position = m_input.length();
     }
-    return ExpressionToken(TokenType::YEN_AT, value, m_line, m_column);
+    return ExpressionToken(end >= 0 ? TokenType::YEN_AT : TokenType::UNKNOWN, value, m_line, m_column);
 }
 
 

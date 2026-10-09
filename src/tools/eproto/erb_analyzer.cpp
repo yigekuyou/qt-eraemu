@@ -136,9 +136,56 @@ QMap<QString, ErbDocument> analyzeSources(const QMap<QString, QString>& sources,
     }
     if (complete) {
         table.finalizeParse();
-        for (const auto& diagnostic : table.parseDiagnostics().all()) {
+        const auto appendSemantic = [&](const ParseDiagnostic& diagnostic) {
             auto doc = documents.find(diagnostic.file);
-            if (doc != documents.end()) doc->attributed.append(exportDiagnostic(diagnostic));
+            if (doc == documents.end()) return;
+            const auto exported = exportDiagnostic(diagnostic);
+            // Argument validation can report the same error as a bare semantic
+            // error, a statement warning or a function warning. Their context
+            // suffixes are presentation details, not additional occurrences.
+            const auto messageKey = [](const ErbDiagnostic& d) {
+                if (d.code != QLatin1String(DiagCode::kArgCheck)) return d.message;
+                return d.message.section(QStringLiteral(" ["), 0, 0)
+                                .section(QStringLiteral(" ("), 0, 0);
+            };
+            const bool exists = std::any_of(doc->attributed.cbegin(), doc->attributed.cend(),
+                                           [&](const ErbDiagnostic& prior) {
+                return prior.line == exported.line && prior.code == exported.code
+                    && messageKey(prior) == messageKey(exported);
+            });
+            if (!exists) doc->attributed.append(exported);
+        };
+        for (const auto& diagnostic : table.parseDiagnostics().all())
+            appendSemantic(diagnostic);
+        // Engine warnings may be deduplicated across shared expression ASTs.
+        // Read finalized calls at every source location so workspace consumers
+        // retain each occurrence, without repeating the same line's AST aliases.
+        for (const QString& name : names) {
+            const auto* script = table.script(name.isEmpty() ? QStringLiteral("<document>") : name);
+            if (!script) continue;
+            for (const auto& line : script->lines) {
+                const auto collect = [&](const QSharedPointer<ExpressionNode>& ast) {
+                    if (!ast) return;
+                    walkExpression(*ast, [&](ExpressionNode& node) {
+                        if (node.kind() != NodeKind::Function) return;
+                        const auto& fn = static_cast<const FunctionNode&>(node);
+                        if (fn.arityError().isEmpty()) return;
+                        ParseDiagnostic diagnostic;
+                        diagnostic.severity = DiagSeverity::Warning;
+                        diagnostic.code = DiagCode::kArgCheck;
+                        diagnostic.file = name;
+                        diagnostic.line = line.position.lineNumber;
+                        diagnostic.column = line.position.column;
+                        diagnostic.message = QStringLiteral("%1 [%2]")
+                            .arg(fn.arityError(), fn.toString());
+                        appendSemantic(diagnostic);
+                    });
+                };
+                collect(line.condition);
+                for (const auto& operand : line.arguments) collect(operand.ast);
+                for (const auto& expression : line.argument.exprs) collect(expression);
+                for (const auto& operand : line.argument.cases) collect(operand.ast);
+            }
         }
     }
     for (auto& doc : documents) {

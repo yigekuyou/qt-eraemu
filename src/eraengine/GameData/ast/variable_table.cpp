@@ -34,6 +34,18 @@ void walkApply(ExpressionNode& node, const VariableTable& table, const QString& 
         auto& var = static_cast<VariableNode&>(node);
         const OperandType t = table.typeOf(var.name(), function);
         if (isKnown(t)) var.setValueType(t);
+        if (const auto* d = table.find(var.name(), function)) {
+            var.dimension = d->dimension; var.characterData = d->isCharaData;
+            var.readOnly = d->isConst; var.lengths = d->isReference ? QList<int>() : d->lengths;
+        } else {
+            const auto meta = sysvar::systemVariableMetadataDyn(var.name().toStdString());
+            if (meta.type != OperandType::Unknown) {
+                var.dimension = meta.dimension;
+                var.characterData = meta.characterData;
+                var.readOnly = meta.readOnly;
+                var.lengths.clear();
+            }
+        }
         for (auto& idx : var.indices()) {
             if (idx) walkApply(*idx, table, function);
         }

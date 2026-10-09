@@ -18,6 +18,8 @@
 #include "expression_ast.h"
 #include "operator_table.h"
 #include <cmath>
+#include <bit>
+#include <stdexcept>
 #include <QJsonArray>
 #include <QJsonValue>
 
@@ -39,52 +41,41 @@ bool parseIntegerLiteral(const QString& text, qint64& out) {
         i = 2;
     }
 
-    bool ok = false;
+    const auto digitOk = [base](QChar c) {
+        return (c >= '0' && c <= (base == 2 ? '1' : '9'))
+            || (base == 16 && c.toLower() >= 'a' && c.toLower() <= 'f');
+    };
+    const auto read = [&](std::size_t& pos, qint64& value, bool signedDecimal) {
+        const std::size_t start = pos;
+        bool negative = false;
+        if (pos < std::size_t(s.size()) && (s.at(pos) == '+' || s.at(pos) == '-')) {
+            negative = s.at(pos++) == '-';
+        }
+        const std::size_t digits = pos;
+        while (pos < std::size_t(s.size()) && digitOk(s.at(pos))) ++pos;
+        if (pos == digits) return false;
+        bool ok = false;
+        if (base == 10 && signedDecimal) {
+            value = s.mid(int(start), int(pos-start)).toLongLong(&ok, base);
+        } else {
+            const quint64 raw = s.mid(int(digits), int(pos-digits)).toULongLong(&ok, base);
+            value = std::bit_cast<qint64>(negative ? quint64(0)-raw : raw);
+        }
+        return ok;
+    };
     qint64 significand = 0;
-    {
-        const auto digitOk = [base](QChar c) {
-            if (c.isDigit()) return base == 2 ? (c == QLatin1Char('0') || c == QLatin1Char('1')) : true;
-            if (base == 16) {
-                const QChar lower = c.toLower();
-                return c.isLetter() && lower >= QLatin1Char('a') && lower <= QLatin1Char('f');
-            }
-            return false;
-        };
-        std::size_t j = i;
-        while (j < static_cast<std::size_t>(s.size()) && digitOk(s.at(j))) ++j;
-        const QString digits = s.mid(static_cast<int>(i), static_cast<int>(j - i));
-        if (digits.isEmpty()) return false;
-        significand = digits.toLongLong(&ok, base);
-        if (!ok) return false;
-        i = j;
-    }
-
-    // 指数
-    int expBase = 0;
-    if (i < static_cast<std::size_t>(s.size())) {
-        const QChar c = s.at(i);
-        if (c == QLatin1Char('p') || c == QLatin1Char('P')) { expBase = 2; ++i; }
-        else if (c == QLatin1Char('e') || c == QLatin1Char('E')) { expBase = 10; ++i; }
-    }
-    if (expBase == 0) {
-        out = significand;
-        return i == static_cast<std::size_t>(s.size());   // 尾部必须干净（如 "1.5" 不是整数字面量）
-    }
-
+    if (!read(i, significand, true)) return false;
+    if (i == std::size_t(s.size())) { out = significand; return true; }
+    const QChar marker = s.at(i++).toLower();
+    if (marker != 'p' && marker != 'e') return false;
     qint64 exponent = 0;
-    {
-        std::size_t j = i;
-        if (j < static_cast<std::size_t>(s.size())
-            && (s.at(j) == QLatin1Char('+') || s.at(j) == QLatin1Char('-'))) ++j;
-        while (j < static_cast<std::size_t>(s.size()) && s.at(j).isDigit()) ++j;
-        if (j == i) return false;
-        exponent = s.mid(static_cast<int>(i), static_cast<int>(j - i)).toLongLong(&ok, 10);
-        if (!ok) return false;
-        i = j;
-    }
-    const double d = static_cast<double>(significand) * std::pow(static_cast<double>(expBase),
-                                                                 static_cast<double>(exponent));
-    out = static_cast<qint64>(d);
+    if (!read(i, exponent, true) || i != std::size_t(s.size())) return false;
+    // C# casts the exponent to Int32 without overflow checking.
+    const qint32 power = std::bit_cast<qint32>(quint32(exponent));
+    if (power == 0) { out = significand; return true; }
+    const double d = double(significand) * std::pow(marker == 'p' ? 2.0 : 10.0, double(power));
+    if (!std::isfinite(d) || d < -0x1p63 || d >= 0x1p63) return false;
+    out = qint64(d);
     return true;
 }
 
@@ -182,7 +173,9 @@ LiteralNode::LiteralNode(const ExpressionToken& token)
     } else {
         m_type = OperandType::Int;
         qint64 v = 0;
-        m_int = parseIntegerLiteral(token.value(), v) ? v : 0;
+        if (!parseIntegerLiteral(token.value(), v))
+            throw std::invalid_argument("Invalid or overflowing integer literal");
+        m_int = v;
     }
 }
 
@@ -341,7 +334,17 @@ bool argMatches(BuiltinArg want, const QSharedPointer<ExpressionNode>& arg, QStr
             why = QStringLiteral("需要字符串变量，实得 %1 变量").arg(QString::fromLatin1(operandTypeName(t)));
             return false;
         }
-        Q_UNUSED(var);
+        if (var && var->dimension >= 0) {
+            if ((want == BuiltinArg::VarArray || want == BuiltinArg::VarIntArray)
+                && (var->dimension != 1 || var->characterData)) {
+                why = QStringLiteral("需要普通一维数组变量");
+                return false;
+            }
+            if (want == BuiltinArg::VarChara && !var->characterData) {
+                why = QStringLiteral("需要角色变量");
+                return false;
+            }
+        }
         return true;
     }
     return true;
@@ -490,6 +493,8 @@ QSharedPointer<ExpressionNode> cloneExpression(const QSharedPointer<ExpressionNo
     case NodeKind::Variable: {
         const auto& n = static_cast<const VariableNode&>(*node);
         auto copy = QSharedPointer<VariableNode>::create(n.name(), n.valueType());
+        copy->dimension = n.dimension; copy->characterData = n.characterData;
+        copy->readOnly = n.readOnly; copy->lengths = n.lengths;
         for (const auto& i : n.indices()) copy->addIndex(cloneExpression(i));
         return copy;
     }
@@ -525,6 +530,93 @@ QSharedPointer<ExpressionNode> cloneExpression(const QSharedPointer<ExpressionNo
         QList<StrFormPart> parts = static_cast<const StrFormNode&>(*node).parts();
         for (auto& p : parts) { p.expression = cloneExpression(p.expression); p.width = cloneExpression(p.width); }
         return QSharedPointer<StrFormNode>::create(parts);
+    }
+    }
+    return {};
+}
+
+QString validateExpression(const ExpressionNode& node, bool requireIndices) {
+    const auto check = [](const QSharedPointer<ExpressionNode>& child, bool indices = true) {
+        return child ? validateExpression(*child, indices) : QStringLiteral("缺少表达式");
+    };
+    const auto first = [](QString a, QString b) { return a.isEmpty() ? b : a; };
+    switch (node.kind()) {
+    case NodeKind::Literal: return {};
+    case NodeKind::Variable: {
+        const auto& v = static_cast<const VariableNode&>(node);
+        const int n = v.indices().size();
+        if (n > 3) return QStringLiteral("变量下标超过三项");
+        if (v.dimension >= 0) {
+            const QString upper = v.name().toUpper();
+            const bool argSlot = upper == QLatin1String("ARG") || upper == QLatin1String("ARGS");
+            const int full = v.dimension + (v.characterData ? 1 : 0);
+            if (n > full || (!argSlot && n > 0 && v.dimension >= 2 && n != full)
+                || (!argSlot && requireIndices && n == 0 && v.dimension >= 2))
+                return QStringLiteral("变量 %1 缺少参数或下标维数错误").arg(v.name());
+        }
+        for (int i = 0; i < n; ++i) {
+            const QString e = check(v.indices()[i]);
+            if (!e.isEmpty()) return e;
+            if (const auto* l = dynamic_cast<const LiteralNode*>(v.indices()[i].data()); l && !l->isString()) {
+                const int dim = i - (v.characterData && n > v.dimension ? 1 : 0);
+                if (dim >= 0 && dim < v.lengths.size() && v.lengths[dim] > 0
+                    && (l->intValue() < 0 || l->intValue() >= v.lengths[dim]))
+                    return QStringLiteral("变量 %1 常量下标越界").arg(v.name());
+            }
+        }
+        return {};
+    }
+    case NodeKind::BinaryOp: {
+        const auto& b = static_cast<const BinaryOpNode&>(node);
+        if (!b.typesValid()) return QStringLiteral("二元运算类型错误");
+        return first(check(b.left()), check(b.right()));
+    }
+    case NodeKind::UnaryOp: {
+        const auto& u = static_cast<const UnaryOpNode&>(node);
+        if (!u.typesValid()) return QStringLiteral("单目运算类型错误");
+        if (u.op().type() == TokenType::INCREMENT || u.op().type() == TokenType::DECREMENT) {
+            const auto* v = dynamic_cast<const VariableNode*>(u.operand().data());
+            if (!v || v->readOnly || v->valueType() != OperandType::Int)
+                return QStringLiteral("自增需要非const整数变量");
+        }
+        return check(u.operand());
+    }
+    case NodeKind::If: {
+        const auto& i = static_cast<const IfNode&>(node);
+        if (!i.condition() || !i.thenExpr() || !i.elseExpr()
+            || i.condition()->valueType() != OperandType::Int
+            || i.thenExpr()->valueType() != i.elseExpr()->valueType())
+            return QStringLiteral("三元条件或分支类型错误");
+        return first(check(i.condition()), first(check(i.thenExpr()), check(i.elseExpr())));
+    }
+    case NodeKind::Function: {
+        const auto& f = static_cast<const FunctionNode&>(node);
+        if (!f.arityError().isEmpty()) return f.arityError();
+        const auto* spec = f.builtinSpec();
+        for (int i = 0; i < f.arguments().size(); ++i) {
+            if (f.isArgOmitted(i)) continue;
+            const bool array = spec && i < int(spec->argPattern.size())
+                && (spec->argPattern[i] == 'v' || spec->argPattern[i] == 'A' || spec->argPattern[i] == '1' || spec->argPattern[i] == 'c');
+            const QString e = check(f.arguments()[i], !array);
+            if (!e.isEmpty()) return e;
+        }
+        return {};
+    }
+    case NodeKind::StrForm: {
+        const auto& f = static_cast<const StrFormNode&>(node);
+        for (const auto& p : f.parts()) {
+            if (p.type == StrFormPartType::Text) continue;
+            if (isKnown(p.expectedType) && p.expression && p.expression->valueType() != p.expectedType)
+                return QStringLiteral("FORM插值类型错误");
+            const QString e = check(p.expression);
+            if (!e.isEmpty()) return e;
+            if (p.width) {
+                if (p.width->valueType() != OperandType::Int) return QStringLiteral("FORM宽度必须为整数");
+                const QString w = check(p.width);
+                if (!w.isEmpty()) return w;
+            }
+        }
+        return {};
     }
     }
     return {};

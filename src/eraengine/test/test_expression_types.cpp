@@ -40,6 +40,7 @@
 #include "expression_parser.h"
 #include "expression_ast.h"
 #include "expression_evaluator.h"
+#include "variable_table.h"
 #include "strform_parser.h"
 #include "variable_storage.h"
 #include "constant_table.h"
@@ -148,13 +149,13 @@ int main(int argc, char* argv[]) {
         check(sf->parts()[2].text == "/", "片段2 = 文本 /");
         check(sf->parts()[3].type == StrFormPartType::Expression, "片段3 = 表达式");
     }
-    auto sfPct = StrFormParser::parse("%VA%円", nullptr);
+    auto sfPct = StrFormParser::parse("%RESULTS%円", [&sfParser](const QString& e) { return parse(sfParser, e); });
     check(sfPct && sfPct->parts().size() == 2
           && sfPct->parts()[0].type == StrFormPartType::Expression
-          && sfPct->parts()[1].text == "円", "%VA%円 -> [Expr, Text(円)]");
+          && sfPct->parts()[1].text == "円", "{VA}円 -> [Expr, Text(円)]");
     // 格式串里的引号**只是普通字符**（对齐 C# AnalyseFormattedString）：
     // 只有 @"…" 这种上下文才把 " 当终止符，所以这里引号照原样输出
-    auto sfQuote = StrFormParser::parse("\"hello\" {VA}", nullptr);
+    auto sfQuote = StrFormParser::parse("\"hello\" {VA}", [&sfParser](const QString& e) { return parse(sfParser, e); });
     check(sfQuote && sfQuote->parts()[0].type == StrFormPartType::Text
           && sfQuote->parts()[0].text == "\"hello\" ", "引号原样保留为文本");
 
@@ -193,6 +194,23 @@ int main(int argc, char* argv[]) {
     check(parse(parser, "CFLAG:1:2")->valueType() == OperandType::Int, "CFLAG:1:2 -> Int");
     check(parse(parser, "CSTR:1:2")->valueType() == OperandType::Str, "CSTR:1:2 -> Str");
     check(parse(parser, "FLAG:7")->valueType() == OperandType::Int, "FLAG:7 -> Int");
+    qDebug() << "\\n8b) 系统变量维数与表达式校验";
+    VariableTable systemTable;
+    auto checkSystem = [&](const QString& text, const QString& function = QString()) {
+        auto node = parse(parser, text);
+        VariableTable::applyTypes(*node, systemTable, function);
+        return node;
+    };
+    auto cflag = checkSystem("CFLAG:0:1");
+    auto badCflag = checkSystem("CFLAG:0");
+    auto cdflag = checkSystem("CDFLAG:0:1:2");
+    auto badCdflag = checkSystem("CDFLAG:0:1");
+    auto time = checkSystem("TIME:0");
+    check(cflag && validateExpression(*cflag).isEmpty(), "系统角色一维 CFLAG 接受角色+元素下标");
+    check(badCflag && validateExpression(*badCflag).isEmpty(), "角色一维 CFLAG 单下标为元素，角色默认 TARGET");
+    check(cdflag && validateExpression(*cdflag).isEmpty(), "系统角色二维 CDFLAG 接受三项下标");
+    check(badCdflag && !validateExpression(*badCdflag).isEmpty(), "系统角色二维 CDFLAG 拒绝缺少下标");
+    check(time && validateExpression(*time).isEmpty(), "普通一维 TIME 接受单项下标");
 
     qDebug() << "\n9) 下标只取单项（对齐 C# ReduceVariableArgument）";
     auto indexed = parse(parser, "LOCALS:LOCAL == \"0\" || TOINT(LOCALS:LOCAL)");
@@ -222,16 +240,16 @@ int main(int argc, char* argv[]) {
         return QSharedPointer<ExpressionNode>(StrFormParser::parse(text, formResolve));
     });
     storage.setSystemVariable(QStringLiteral("FLAG"), 0, 1);
-    auto yenAt = formParser.parse(formLexer.tokenize("\\@ FLAG:0 ? %VA% # 零 \\@", 1));
+    auto yenAt = formParser.parse(formLexer.tokenize("\\@ FLAG:0 ? {VA} # 零 \\@", 1));
     check(yenAt && yenAt->valueType() == OperandType::Str, "\\@..\\@ -> Str");
     check(yenAt && evaluator.evaluate(*yenAt, &storage).toString() == "30",
-          "\\@ 1 ? %VA% # 零 \\@ -> 30");
+          "\\@ 1 ? {VA} # 零 \\@ -> 30");
     storage.setSystemVariable(QStringLiteral("FLAG"), 0, 0);
     check(yenAt && evaluator.evaluate(*yenAt, &storage).toString() == "零",
-          "\\@ 0 ? %VA% # 零 \\@ -> 零");
-    auto atStr = formParser.parse(formLexer.tokenize("@\"HP=%VA%\"", 1));
+          "\\@ 0 ? {VA} # 零 \\@ -> 零");
+    auto atStr = formParser.parse(formLexer.tokenize("@\"HP={VA}\"", 1));
     check(atStr && evaluator.evaluate(*atStr, &storage).toString() == "HP=30",
-          "@\"HP=%VA%\" -> HP=30");
+          "@\"HP={VA}\" -> HP=30");
 
     qDebug() << "\n12) 字符串下标（CSV 常量名）经 ConstantTable 解析";
     {
@@ -275,6 +293,48 @@ int main(int argc, char* argv[]) {
         check(numIdx && idxEval.evaluate(*numIdx, &storage).toLongLong() == 99,
               "FLAG:3 -> FLAG[3]（整数下标不受影响）");
     }
+
+
+    qDebug() << "Compatibility boundaries";
+    const QList<QPair<QString, qint64>> numbers = {
+        {"012", 12}, {"0x1e3", 483}, {"0x1p10", 65536}, {"0b1p10", 4},
+        {"3e-1", 0}, {"9007199254740993p0", 9007199254740993LL},
+        {"0xFFFFFFFFFFFFFFFF", -1}, {"0x8000000000000000", std::numeric_limits<qint64>::min()}
+    };
+    for (const auto& [text, expected] : numbers) {
+        auto n = parse(parser, text);
+        check(n && evaluator.evaluate(*n, &storage).toLongLong() == expected, text);
+    }
+    for (const char* text : {"0x", "0b2", "1e", "1e+", "1e309", "0x10000000000000000",
+                                "9223372036854775808", "!!1", "-~1", "++1", "!VA++", "VA++++",
+                                "LOCAL:", "LOCAL::1", "A:1:2:3:4", "'abc'", "{A}", "1$2", "\"abc"})
+        check(!parse(parser, text), QString(text) + " rejects");
+    check(parse(parser, "!(VA++)") != nullptr, "parenthesized postfix under NOT");
+    check(parse(parser, "!(!1)") != nullptr, "parenthesized unary operators");
+    for (const char* text : {"{}", "%%", "%1%", "{\"a\"}", "{1,,LEFT}", "{1,2,CENTER}",
+                            "{1,2,LEFT,3}", "{1", "%RESULTS", "\\@ 1 ? x", "\\@ x \\@"})
+        check(!StrFormParser::parse(text, resolve), QString(text) + " FORM rejects");
+    for (const char* text : {"1 / 0", "1 % 0", "1 ? 1 # \"x\"", "\"x\" ? 1 # 2", "{VA}"}) {
+        check(!evaluator.evaluate(text, &storage).isValid(), QString(text) + " invalid result");
+    }
+    storage.setGlobalInt1D("VA", 0, 2);
+    check(evaluator.evaluate("VA++ / VA++", &storage).toLongLong() == 1
+          && storage.getGlobalInt1D("VA", 0) == 4, "division evaluates right before left");
+    check(evaluator.evaluate("1 << 64", &storage).toLongLong() == 1, "shift count masked");
+    check(evaluator.evaluate("0x7FFFFFFFFFFFFFFF + 1", &storage).toLongLong() == std::numeric_limits<qint64>::min(), "unchecked addition wraps");
+    check(!evaluator.evaluate("0x8000000000000000 / -1", &storage).isValid(), "division overflow rejects");
+    check(evaluator.evaluate("@\"HP={VA}\"", &storage).toString() == "HP=4", "direct FORM binding");
+    check(evaluator.evaluate("STRFORM(\"HP={VA}\")", &storage).toString() == "HP=4", "STRFORM binding");
+    check(!evaluator.evaluate("FLAG:\"unknown\"", &storage).isValid(), "unknown keyword rejects");
+    const auto triple = StrFormParser::parse("***+++===///$$$", resolve);
+    check(triple && triple->parts().size() == 5, "triple symbols bind role variables");
+    const auto ignoredTriple = StrFormParser::parse("***", resolve, true);
+    check(ignoredTriple && ignoredTriple->parts().first().text == "***", "triple symbol disabling preserves text");
+    ExpressionLexer singleLexer;
+    singleLexer.setAllowSingleQuotation(true);
+    check(parser.parse(singleLexer.tokenize("'abc'")) != nullptr, "dedicated single quote context");
+    auto trailing = parse(parser, "TOSTR(1,)");
+    check(trailing && static_cast<FunctionNode*>(trailing.data())->arguments().size() == 1, "trailing comma has no extra slot");
 
     qDebug() << "\n=====================";
     if (g_failures == 0) {

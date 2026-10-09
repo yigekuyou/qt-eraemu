@@ -244,6 +244,9 @@ public:
         void setReference(const QString& name, const QString& targetStorage) {
             m_references.insert(name.toUpper(), targetStorage);
         }
+        [[nodiscard]] bool hasReference(const QString& name) const {
+            return m_references.contains(name.toUpper());
+        }
         // REF 形参别名解析：`#DIM REF ターゲット` ← 实参 TARGET 时，m_references 把
         // 形参名映射到实参的存储键（"TARGET"）。系统变量按**名字**分派到各自数组
         // （m_target / m_flag …），并不走 m_globalInt1D —— 若不做这一步解析，
@@ -258,6 +261,7 @@ public:
         }
         [[nodiscard]] QString resolvedStorageName(const QString& name) const { return storageName(name); }
         [[nodiscard]] int arraySize(const QString& name) const;
+        [[nodiscard]] int arraySizeRaw(const QString& storageKey) const;
         void ensureArraySize(const QString& name, int size, bool stringArray);
         bool hasParameter(const QString& name) const { return m_parameters.contains(name.toUpper()); }
         QVariant parameter(const QString& name) const { return m_parameters.value(name.toUpper()); }
@@ -339,6 +343,8 @@ public:
 		// Emuera 的用户字符串变量（#DIMS/#GLOBALS 声明）；此前完全缺失。
 		Q_INVOKABLE void setGlobalStr1D(const QString &name, int x, const QString &value);
 		Q_INVOKABLE QString getGlobalStr1D(const QString &name, int x) const;
+        // 传入已经解析过作用域/REF 的内部存储键；不再次套用当前作用域。
+        [[nodiscard]] QString getGlobalStr1DRaw(const QString& storageKey, int x) const;
 		Q_INVOKABLE void setGlobalStr2D(const QString &name, int x, int y, const QString &value);
 		Q_INVOKABLE QString getGlobalStr2D(const QString &name, int x, int y) const;
 

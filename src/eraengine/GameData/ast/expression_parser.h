@@ -41,6 +41,7 @@
 class ExpressionParser {
 public:
     ExpressionParser();
+    void setIgnoreTripleSymbols(bool ignore) { m_ignoreTripleSymbols = ignore; }
 
     QSharedPointer<ExpressionNode> parse(const QList<ExpressionToken>& tokens);
 
@@ -64,6 +65,8 @@ public:
     void setConstantValueProvider(ConstantValueProvider provider) {
         m_constantValueProvider = std::move(provider);
     }
+
+    void setVariableTypeProvider(FunctionTypeProvider p) { m_variableTypeProvider = std::move(p); }
 
     using ConstantNameProvider = std::function<bool(const QString& variable, const QString& name)>;
     void setConstantNameProvider(ConstantNameProvider provider) {
@@ -108,9 +111,11 @@ private:
     QList<ExpressionToken> m_tokens;
     int m_current = 0;
     int m_depth = 0;
+    bool m_ignoreTripleSymbols = false;
     bool m_verbose = false;
     bool m_quiet = false;
     FunctionTypeProvider m_functionTypeProvider;
+    FunctionTypeProvider m_variableTypeProvider;
     FormProvider m_formProvider;
     ConstantNameProvider m_constantNameProvider;
     ConstantValueProvider m_constantValueProvider;

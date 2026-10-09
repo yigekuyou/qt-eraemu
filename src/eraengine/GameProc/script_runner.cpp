@@ -69,10 +69,12 @@ ScriptRunner::ScriptRunner(EraParseTable* table,
     , m_state(state)
     , m_storage(storage)
 {
-    connect(m_engine, &ExecutionEngine::consolePrint, this, [this] { m_printed = true; });
-    connect(m_engine, &ExecutionEngine::consolePrintButton, this, [this] { m_printed = true; });
-    connect(m_engine, &ExecutionEngine::consolePrintTemplate, this, [this] { m_printed = true; });
-    connect(m_table, &EraParseTable::entryPointReached, this, [this](const QString&) {
+    if (m_engine) {
+        connect(m_engine, &ExecutionEngine::consolePrint, this, [this] { m_printed = true; });
+        connect(m_engine, &ExecutionEngine::consolePrintButton, this, [this] { m_printed = true; });
+        connect(m_engine, &ExecutionEngine::consolePrintTemplate, this, [this] { m_printed = true; });
+    }
+    if (m_table) connect(m_table, &EraParseTable::entryPointReached, this, [this](const QString&) {
         while (!m_callContexts.isEmpty())
             m_storage->setLocalContext(m_callContexts.takeLast().locals);
         m_loops.clear();
@@ -353,15 +355,21 @@ GameBaseData* ScriptRunner::baseData() const {
 
 bool ScriptRunner::evalInt(const QSharedPointer<ExpressionNode>& ast, const QString& raw, qint64& out) {
     ExpressionEvaluator* ev = &getEvaluator();
+    QVariant value;
     if (ast) {
-        out = ev->evaluate(*ast, m_storage, baseData()).toLongLong();
-        return true;
-    }
-    if (raw.trimmed().isEmpty()) {
+        value = ev->evaluate(*ast, m_storage, baseData());
+    } else if (raw.trimmed().isEmpty()) {
         out = 0;
         return true;
+    } else {
+        value = ev->evaluate(raw, m_storage, baseData());
     }
-    out = ev->evaluate(raw, m_storage, baseData()).toLongLong();
+    if (!value.isValid() || value.typeId() == QMetaType::QString || !value.canConvert<qint64>()) {
+        m_state->setErrorState();
+        emit errorOccurred(QStringLiteral("表达式求值失败：%1").arg(raw.trimmed()));
+        return false;
+    }
+    out = value.toLongLong();
     return true;
 }
 
@@ -765,6 +773,7 @@ ExecState ScriptRunner::executeLine(const LogicalLine& line) {
         return ExecState::Continue;
     }
     if (name == QLatin1String("FOR")) {
+        qDebug() << "[for-enter]" << line.raw << line.argument.params.size() << line.arguments.size();
         // FOR var, start, end[, step]
         // 优先使用 AST 已归约的类型化参数（TypedArgument::params / exprs）
         QList<const Operand*> ops;
@@ -791,6 +800,7 @@ ExecState ScriptRunner::executeLine(const LogicalLine& line) {
             if (ops.size() >= 4) evalInt(ops[3]->ast, ops[3]->raw, f.step);
 
             const bool enters = (f.step > 0 && f.value < f.end) || (f.step < 0 && f.value > f.end);
+            qDebug() << "[for]" << f.varName << f.value << f.end << f.step << ops.size();
             if (!enters) {
                 gotoLine(endLine >= 0 ? endLine + 1 : pc + 1);
             } else {
@@ -1923,7 +1933,8 @@ QString ScriptRunner::expandCallFormLabel(const QString& raw)
     const auto resolve = [this](const QString& e) -> QSharedPointer<ExpressionNode> {
         return m_table ? m_table->expressionAst(e) : QSharedPointer<ExpressionNode>();
     };
-    const QSharedPointer<StrFormNode> form = StrFormParser::parse(text, resolve);
+    const QSharedPointer<StrFormNode> form = StrFormParser::parse(text, resolve,
+        getEvaluator().ignoreTripleSymbols());
     if (!form) return text;
     ExpressionEvaluator& ev = getEvaluator();
     const QString out = ev.evaluate(*form.staticCast<ExpressionNode>(), m_storage, baseData()).toString();
@@ -2402,10 +2413,20 @@ void ScriptRunner::bindArguments(const UserFunctionDecl* info, const QList<Opera
     for (int position = 0; position < supplied; ++position) {
         const Operand& a = callArgs.at(position + 1);
         qint64 intValue = 0;
-        if (!a.isString) evalInt(a.ast, a.raw, intValue);
-
         const UserParamDecl* param = nullptr;
         if (info && position < info->params.size()) param = &info->params.at(position);
+        // REF arguments are lvalue names, not values.  In particular a string
+        // array passed by REF must survive binding unchanged; evaluating its
+        // bare name as an integer turns the reference into an invalid value.
+        if (!param || !param->isReference) {
+            if (!a.isString) {
+                // doCallLine 已在调用者上下文求值；没有 AST 的 transport 数值
+                // 是值而非原始表达式，包含 long.MinValue 时不能再按字面量解析。
+                bool transported = false;
+                if (!a.ast) intValue = a.raw.toLongLong(&transported);
+                if (!transported) evalInt(a.ast, a.raw, intValue);
+            }
+        }
         bindOne(param, position, a.isString, a.raw, intValue);
     }
     if (!info) return;
@@ -2472,10 +2493,22 @@ bool ScriptRunner::invokeUserFunction(const QString& name, const QList<QVariant>
     const int savedLoops = m_loops.size();
     const int savedContextDepth = m_callContexts.size();
 
+    // 在切换到被调函数作用域前解析 REF 目标；否则同名私有数组会被
+    // 新作用域的 privateNames 重新映射成 INSPECT 自身的槽位。
+    QHash<QString, QString> refTargets;
+    for (int i = 0; i < args.size() && i < info->params.size(); ++i) {
+        const UserParamDecl& p = info->params.at(i);
+        if (!p.isReference || p.target != UserParamTarget::LocalVar || !argNodes.value(i)) continue;
+        const auto* v = dynamic_cast<const VariableNode*>(argNodes.at(i));
+        if (v && v->indices().isEmpty())
+            refTargets.insert(p.varName.toUpper(), m_storage->resolvedStorageName(v->name()));
+    }
     // 绑定实参（按声明的形参表：ARG/ARGS/私有变量）
     enterCall(name);
     m_table->applyPrivateVariableDefaults(name);
     m_storage->clearLocalAliases();
+    for (auto it = refTargets.constBegin(); it != refTargets.constEnd(); ++it)
+        m_storage->setReference(it.key(), it.value());
     for (int i = 0; i < args.size(); ++i) {
         const QVariant& v = args.at(i);
         const bool isStr = (v.typeId() == QMetaType::QString);
@@ -2486,7 +2519,7 @@ bool ScriptRunner::invokeUserFunction(const QString& name, const QList<QVariant>
         // 对形参的读写直接落到调用方变量。eraTW 的 画像合成(グラフィックID
         // 为 REF) 全靠这个把分配到的 G 编号写回调用者。
         if (param && param->isReference && param->target == UserParamTarget::LocalVar
-            && argNodes.value(i)) {
+            && !refTargets.contains(param->varName.toUpper()) && argNodes.value(i)) {
             const auto* argVarNode = dynamic_cast<const VariableNode*>(argNodes.at(i));
             if (argVarNode && argVarNode->indices().isEmpty()) {
                 const QString actualName = argVarNode->name();

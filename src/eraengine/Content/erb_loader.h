@@ -34,7 +34,6 @@
 #include "ast/ast_builder.h"
 #include "ast/operand_type.h"
 #include "erb_preprocessor.h"
-#include "ast_disk_cache.h"
 #include "ast/parse_diagnostic.h"
 
 class EraParseTable;
@@ -49,9 +48,6 @@ struct ParsedErbFile {
     QStringList warnings;                                       // 预处理层面告警
     ParseDiagnostics diagnostics;                               // 结构化诊断（分级+代码+位置）
     QHash<QString, QSharedPointer<ExpressionNode>> astCache;   // 该文件本地表达式缓存
-    // AST 磁盘缓存启用时：本文件解析结果的序列化 blob（在 worker 线程产出）。
-    // 装载成功后由 ErbLoader 落盘，供下次装载直接读回。
-    QByteArray cachedBlob;
 };
 
 // ERB 脚本装载器
@@ -92,12 +88,6 @@ public:
     // 诊断日志消费（进度改用 loadProgress），故默认关闭，需要时再打开。
     void setEmitParseSignals(bool on) { m_emitParseSignals = on; }
     [[nodiscard]] bool emitParseSignals() const { return m_emitParseSignals; }
-
-    // AST 磁盘缓存（对标 QML Disk Cache）：二次装载跳过「读/解码/预处理/词法/语法」。
-    // 默认取环境变量 EMUERA_AST_DISK_CACHE（见 ErbAstDiskCache::enabled）；
-    // 可用 setAstDiskCache 显式开关。key 随源文件/CSV/config 变化自动失效。
-    void setAstDiskCache(bool on) { m_astDiskCache = on; }
-    [[nodiscard]] bool astDiskCache() const { return m_astDiskCache; }
 
     // 文本读取编码（Auto = 逐文件嗅探；可强制 UTF-8 / Shift-JIS）
     void setReadEncoding(TextEncoding enc) { m_readEncoding = enc; }
@@ -161,11 +151,6 @@ private:
         // 每文件编码嗅探（eraTW 约 93MB × 2）。解析按块消费后即从 map 移除，
         // 峰值内存 ≈ 全部源文本（解析开始后随块释放）。
         QHash<QString, QString> decoded;
-        QString cacheKey;       // AST 磁盘缓存 key（空 = 不启用/无文件）
-        // AST 磁盘缓存命中：**整库**读回并在后台线程完成校验后再交给主线程合并
-        // （任何一文件反序列化失败即视为未命中，回落到正常解析 —— 绝不半途而废）。
-        QList<ParsedErbFile> cachedFiles;
-        bool cacheHit = false;
         bool ok = false;
     };
     LoadPrep prepareLoad(const QString& dirPath, int depth) const;
@@ -190,10 +175,6 @@ private:
         // 待并入的结果队列（一整块解析完先入队，再由 mergeStep 分批消费）
         QList<ParsedErbFile> pending;
         int pendingPos = 0;
-        // AST 磁盘缓存：未命中时用 Writer 边解析边落盘（Worker 产出 blob）。
-        QString cacheKey;
-        std::unique_ptr<ErbAstDiskCache::Writer> cacheWriter;
-        bool fromCache = false;
         QElapsedTimer clock;    // 异步装载总耗时（分析用）
         qint64 mergeMs = 0;     // 主线程合并累计（分析用）
     };
@@ -273,8 +254,6 @@ private:
     static constexpr int kMergeBatch = 8;
     int  m_chunkSize = kDefaultChunkSize;
     bool m_emitParseSignals = false;   // 逐文件信号默认关闭（见 setEmitParseSignals）
-    bool m_astDiskCache = ErbAstDiskCache::enabled();   // AST 磁盘缓存（默认随环境变量）
-
     EraParseTable* m_parseTable;
 };
 

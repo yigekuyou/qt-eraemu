@@ -20,6 +20,7 @@
 #include "operator_table.h"
 #include "function_types.h"
 #include "system_variables.h"
+#include "strform_parser.h"
 #include <QDebug>
 
 namespace {
@@ -60,6 +61,11 @@ QSharedPointer<ExpressionNode> ExpressionParser::parse(const QList<ExpressionTok
         return nullptr;
     }
 
+    for (const auto& token : tokens) {
+        qint64 value = 0;
+        if (token.type() == TokenType::UNKNOWN
+            || (token.type() == TokenType::NUMBER && !parseIntegerLiteral(token.value(), value))) return nullptr;
+    }
     QSharedPointer<ExpressionNode> ast = parseExpression();
     // 容忍尾随的 END_OF_FILE；其余多余 token 视为解析失败。
     if (ast && !isAtEnd() && !check(TokenType::END_OF_FILE)) {
@@ -146,7 +152,14 @@ QSharedPointer<ExpressionNode> ExpressionParser::parseUnary() {
         || check(TokenType::DECREMENT)) {
         const int startTok = m_current;
         const ExpressionToken op = advance();
+        if (check(TokenType::MINUS) || check(TokenType::PLUS) || check(TokenType::NOT)
+            || check(TokenType::BIT_NOT) || check(TokenType::INCREMENT) || check(TokenType::DECREMENT)) return nullptr;
+        const bool parenthesized = check(TokenType::LEFT_PAREN);
         QSharedPointer<ExpressionNode> operand = parseUnary();
+        if (!parenthesized && op.type() == TokenType::NOT && operand && operand->kind() == NodeKind::UnaryOp
+            && static_cast<const UnaryOpNode&>(*operand).isPostfix()) return nullptr;
+        if ((op.type() == TokenType::INCREMENT || op.type() == TokenType::DECREMENT)
+            && operand && (operand->kind() != NodeKind::Variable || operand->valueType() != OperandType::Int)) return nullptr;
         if (!operand) {
             return nullptr;
         }
@@ -164,6 +177,7 @@ QSharedPointer<ExpressionNode> ExpressionParser::parseUnary() {
     if (check(TokenType::INCREMENT) || check(TokenType::DECREMENT)) {
         const int startTok = m_current - 1;
         const ExpressionToken op = advance();
+        if (node->kind() != NodeKind::Variable || node->valueType() != OperandType::Int) return nullptr;
         node = QSharedPointer<UnaryOpNode>::create(op, node, /*postfix=*/true);
         stampSpan(node, startTok < 0 ? 0 : startTok);
     }
@@ -257,6 +271,8 @@ QSharedPointer<ExpressionNode> ExpressionParser::parseVariable() {
 
     // 强类型：$ 前缀 = 字符串变量；否则查系统变量表（RESULTS/LOCALS/GLOBALS/…）
     const QString name = token.value();
+    if (name.compare(QLatin1String("TO"), Qt::CaseInsensitive) == 0
+        || name.compare(QLatin1String("IS"), Qt::CaseInsensitive) == 0) return nullptr;
     OperandType varType = OperandType::Int;
     if (name.startsWith(QLatin1Char('$'))) {
         varType = OperandType::Str;
@@ -266,6 +282,10 @@ QSharedPointer<ExpressionNode> ExpressionParser::parseVariable() {
         // 未登记的标识符按 Int 处理（对齐 C#：未知标识符在归约期报错）
     }
 
+    if (m_variableTypeProvider) {
+        const auto t = m_variableTypeProvider(name);
+        if (isKnown(t)) varType = t;
+    }
     auto varNode = QSharedPointer<VariableNode>::create(name, varType);
 
     // 数组下标：VAR:index[:index2...]
@@ -278,9 +298,10 @@ QSharedPointer<ExpressionNode> ExpressionParser::parseVariable() {
         advance();
         QSharedPointer<ExpressionNode> index = parseIndexTerm(name);
         if (!index) {
-            break;   // 防止畸形输入导致死循环
+            return nullptr;
         }
         varNode->addIndex(index);
+        if (varNode->indices().size() > 3) return nullptr;
     }
 
     return varNode;
@@ -308,7 +329,9 @@ QSharedPointer<ExpressionNode> ExpressionParser::parseIndexTerm(const QString& v
         // （对齐 C#：ConstantData.isDefined(varCode, idStr) → SingleTerm(string)）
         if (m_constantNameProvider) {
             const QString ident = m_tokens.at(m_current).value();
-            if (m_constantNameProvider(variableName, ident)) {
+            if ((!m_variableTypeProvider || !isKnown(m_variableTypeProvider(ident)))
+                && !isKnown(sysvar::systemVariableTypeDyn(ident.toStdString()))
+                && m_constantNameProvider(variableName, ident)) {
                 advance();
                 return QSharedPointer<LiteralNode>::create(ident);
             }
@@ -326,6 +349,10 @@ QSharedPointer<ExpressionNode> ExpressionParser::parseIndexTerm(const QString& v
         } else {
             const OperandType sys = sysvar::systemVariableTypeDyn(identName.toStdString());
             if (isKnown(sys)) varType = sys;
+        }
+        if (m_variableTypeProvider) {
+            const auto t = m_variableTypeProvider(identName);
+            if (isKnown(t)) varType = t;
         }
         return QSharedPointer<VariableNode>::create(identName, varType);
     }
@@ -347,12 +374,15 @@ QSharedPointer<ExpressionNode> ExpressionParser::parseFormTerm() {
     const bool yenAt = check(TokenType::YEN_AT);
     const ExpressionToken tok = advance();
     if (m_formProvider) {
-        if (QSharedPointer<ExpressionNode> node = m_formProvider(tok.value(), yenAt)) {
-            return node;
-        }
+        return m_formProvider(tok.value(), yenAt);
     }
-    // 无提供者时退化为字符串字面量
-    return QSharedPointer<LiteralNode>::create(tok.value());
+    const auto resolve = [this](const QString& text) {
+        ExpressionLexer lexer;
+        ExpressionParser nested = *this;
+        return nested.parse(lexer.tokenize(text));
+    };
+    return yenAt ? StrFormParser::parseYenAt(tok.value(), resolve, m_ignoreTripleSymbols)
+                 : QSharedPointer<ExpressionNode>(StrFormParser::parse(tok.value(), resolve, m_ignoreTripleSymbols));
 }
 
 QSharedPointer<ExpressionNode> ExpressionParser::parseFunctionCall() {
@@ -374,8 +404,6 @@ QSharedPointer<ExpressionNode> ExpressionParser::parseFunctionCall() {
                 continue;
             }
             if (check(TokenType::RIGHT_PAREN)) {
-                omittedArgs.append(args.size());
-                args.append(QSharedPointer<LiteralNode>::create(0));
                 break;
             }
             QSharedPointer<ExpressionNode> arg = parseExpression();

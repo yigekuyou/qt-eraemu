@@ -1250,3 +1250,18 @@ void AstBuilder::buildCaseClauses(const LogicalLine& caseLine, const AstResolver
     }
     caseLine.caseCacheReady = true;
 }
+
+QStringList AstBuilder::assignmentValues(const QString& text) {
+    QStringList values;
+    int start = 0;
+    while (true) {
+        const int end = StrFormParser::findTopLevel(text, ',', start, -1);
+        if (end < 0) {
+            const QString value = text.mid(start).trimmed();
+            if (!value.isEmpty() || values.isEmpty()) values.append(value);
+            return values;
+        }
+        values.append(text.mid(start, end-start).trimmed());
+        start = end + 1;
+    }
+}

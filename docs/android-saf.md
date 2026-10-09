@@ -22,9 +22,8 @@ providers/URIs creates a separate save identity. Existing saves in a read-only
 source are not imported automatically. Local games retain their original save
 locations. Android uninstallation may remove local saves.
 
-The optional disk AST cache is disabled for SAF loads because providers may omit
-reliable modification times and QFileInfo::absolutePath() is not a portable parent
-operation. In-memory parsed ASTs are used normally. Local game caching is unchanged.
+AST disk caching has been removed. SAF loads and local game loads use the in-memory
+parsed AST cache; no parsed AST is persisted to app storage or the game directory.
 
 Source references verified against the v6.11.2 tag:
 - qtbase/src/plugins/platforms/android/androidcontentfileengine.cpp:

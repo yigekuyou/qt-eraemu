@@ -73,6 +73,7 @@ int main(int argc, char* argv[]) {
         ProcessState state;
         EraParseTable table(&state);
         ExpressionEvaluator evaluator;
+        evaluator.setLanguageEncoding(TextEncoding::ShiftJis);
         table.setExpressionEvaluator(&evaluator);
         table.setVariableStorage(&storage);
         ExecutionEngine engine(&storage, nullptr);
@@ -128,6 +129,7 @@ int main(int argc, char* argv[]) {
         ProcessState state;
         EraParseTable table(&state);
         ExpressionEvaluator evaluator;
+        evaluator.setLanguageEncoding(TextEncoding::ShiftJis);
         table.setExpressionEvaluator(&evaluator);
         table.setVariableStorage(&storage);
         ExecutionEngine engine(&storage, nullptr);
@@ -140,10 +142,10 @@ int main(int argc, char* argv[]) {
 
         const QStringList src = {
             "@MAIN",              // 0
-            "#DIMS NAME",         // 1（NAME 声明为字符串变量，RESULTS -> NAME 才走字符串赋值）
+            "#DIMS INPUT_TEXT",         // 1（INPUT_TEXT 声明为字符串变量，RESULTS -> INPUT_TEXT 才走字符串赋值）
             "INPUTS",             // 2
-            "NAME = RESULTS",     // 3
-            "LEN = STRLENS(NAME)" // 4
+            "INPUT_TEXT '= RESULTS",     // 3
+            "LEN = STRLENS(INPUT_TEXT)" // 4
         };
         check(table.loadScript("main", buildLines(table, src)), "loadScript(INPUTS)");
         table.setEntryPoint("MAIN");
@@ -170,6 +172,7 @@ int main(int argc, char* argv[]) {
         ProcessState state;
         EraParseTable table(&state);
         ExpressionEvaluator evaluator;
+        evaluator.setLanguageEncoding(TextEncoding::ShiftJis);
         table.setExpressionEvaluator(&evaluator);
         table.setVariableStorage(&storage);
         ExecutionEngine engine(&storage, nullptr);
@@ -256,6 +259,7 @@ int main(int argc, char* argv[]) {
         ProcessState state;
         EraParseTable table(&state);
         ExpressionEvaluator evaluator;
+        evaluator.setLanguageEncoding(TextEncoding::ShiftJis);
         table.setExpressionEvaluator(&evaluator);
         table.setVariableStorage(&storage);
         ExecutionEngine engine(&storage, nullptr);
@@ -347,6 +351,7 @@ int main(int argc, char* argv[]) {
         EraParseTable table(&state);
         VariableStorage storage;
         ExpressionEvaluator evaluator;
+        evaluator.setLanguageEncoding(TextEncoding::ShiftJis);
         table.setExpressionEvaluator(&evaluator);
         table.setVariableStorage(&storage);
         ExecutionEngine engine(&storage, nullptr);
@@ -372,9 +377,9 @@ int main(int argc, char* argv[]) {
             "TINPUT 300,1234,0,\"\"",     // 逗号形态 + 4 个参数
             "A = RESULT",
             "TINPUTS 300,\"abc\",0,\"\"",
-            "S = RESULTS",
+            "S '= RESULTS",
             "TONEINPUTS 300,\"p\",1",
-            "T2 = RESULTS",
+            "T2 '= RESULTS",
             "INPUT"
         };
         check(table.loadScript("main", buildLines(table, src)), "loadScript(TINPUT 缺省值)");
@@ -430,6 +435,7 @@ int main(int argc, char* argv[]) {
         ProcessState state;
         EraParseTable table(&state);
         ExpressionEvaluator evaluator;
+        evaluator.setLanguageEncoding(TextEncoding::ShiftJis);
         table.setExpressionEvaluator(&evaluator);
         table.setVariableStorage(&storage);
         ExecutionEngine engine(&storage, nullptr);
@@ -489,6 +495,7 @@ int main(int argc, char* argv[]) {
         ProcessState state;
         EraParseTable table(&state);
         ExpressionEvaluator evaluator;
+        evaluator.setLanguageEncoding(TextEncoding::ShiftJis);
         table.setExpressionEvaluator(&evaluator);
         table.setVariableStorage(&storage);
         ExecutionEngine engine(&storage, nullptr);
@@ -528,6 +535,7 @@ int main(int argc, char* argv[]) {
         ProcessState state;
         EraParseTable table(&state);
         ExpressionEvaluator evaluator;
+        evaluator.setLanguageEncoding(TextEncoding::ShiftJis);
         table.setExpressionEvaluator(&evaluator);
         table.setVariableStorage(&storage);
         ExecutionEngine engine(&storage, nullptr);

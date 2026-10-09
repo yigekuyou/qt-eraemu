@@ -125,6 +125,10 @@ public:
     void setValueType(OperandType t) { m_type = t; }
 
     [[nodiscard]] const QString& name() const { return m_name; }
+    int dimension = -1;
+    bool characterData = false;
+    bool readOnly = false;
+    QList<int> lengths;
     [[nodiscard]] bool isArray() const { return !m_indices.isEmpty(); }
 
     void addIndex(QSharedPointer<ExpressionNode> index);
@@ -307,7 +311,7 @@ public:
     [[nodiscard]] OperandType valueType() const override {
         const OperandType tt = m_thenExpr ? m_thenExpr->valueType() : OperandType::Unknown;
         const OperandType et = m_elseExpr ? m_elseExpr->valueType() : OperandType::Unknown;
-        if (isKnown(tt) && isKnown(et)) return tt == et ? tt : OperandType::Int;
+        if (isKnown(tt) && isKnown(et)) return tt == et ? tt : OperandType::Unknown;
         if (isKnown(tt)) return tt;
         if (isKnown(et)) return et;
         return OperandType::Int;
@@ -336,6 +340,7 @@ struct StrFormPart {
 
     QSharedPointer<ExpressionNode> width;
     bool leftAlign = false;
+    OperandType expectedType = OperandType::Unknown;
 
     static StrFormPart makeText(const QString& t) {
         StrFormPart part;
@@ -365,6 +370,8 @@ public:
 private:
     QList<StrFormPart> m_parts;
 };
+
+[[nodiscard]] QString validateExpression(const ExpressionNode& node, bool requireIndices = true);
 
 QSharedPointer<ExpressionNode> cloneExpression(const QSharedPointer<ExpressionNode>& node);
 

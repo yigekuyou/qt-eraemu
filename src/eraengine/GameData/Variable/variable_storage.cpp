@@ -145,7 +145,12 @@ bool VariableStorage::loadVariableSizes(const QString& csvPath)
 
 int VariableStorage::arraySize(const QString& name) const
 {
-		const QString key = storageName(name);
+        return arraySizeRaw(storageName(name));
+}
+
+int VariableStorage::arraySizeRaw(const QString& key) const
+{
+
 		// 局部/实参槽不在 m_global* 容器里，单独报尺寸（VARSIZE("LOCAL")）
 		if (key == QLatin1String("LOCAL")) return m_localIntVars.size();
 		if (key == QLatin1String("LOCALS")) return m_localStrVars.size();
@@ -884,12 +889,15 @@ void VariableStorage::setGlobalStr1D(const QString &name, int x, const QString &
 
 QString VariableStorage::getGlobalStr1D(const QString &name, int x) const
 {
-		if (x < 0) return QString();
-		auto it = m_globalStr1D.constFind(storageName(name));
-		if (it != m_globalStr1D.constEnd() && x < it.value().size()) {
-				return it.value().at(x);
-		}
-		return QString();
+        return getGlobalStr1DRaw(storageName(name), x);
+}
+
+QString VariableStorage::getGlobalStr1DRaw(const QString& storageKey, int x) const
+{
+        if (x < 0) return QString();
+        auto it = m_globalStr1D.constFind(storageKey);
+        if (it != m_globalStr1D.constEnd() && x < it.value().size()) return it.value().at(x);
+        return QString();
 }
 
 void VariableStorage::setGlobalStr2D(const QString &name, int x, int y, const QString &value)

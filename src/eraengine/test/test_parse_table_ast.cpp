@@ -37,6 +37,7 @@
 #include "variable_storage.h"
 #include "ast/expression_lexer.h"
 #include "ast/expression_parser.h"
+#include "ast/expression_evaluator.h"
 
 static int g_failures = 0;
 
@@ -214,7 +215,7 @@ int main(int argc, char* argv[]) {
             "LOCAL_TEXT = 白狼天狗服(色固定)",
             "LOCAL_TEXT = 妖怪之山 {ARG}",
             "LOCAL_TEXT '= 既定の文字列",
-            "LOCAL_TEXT = %KNOWN(ARG)%",
+            "LOCAL_TEXT = %TOSTR(ARG)%",
             "LOCAL_TEXT '= missing_function(ARG)"
         };
         QList<LogicalLine> stringLines;
@@ -250,6 +251,27 @@ int main(int argc, char* argv[]) {
             }
             check(hasMissing, "true undefined function remains diagnosed");
         }
+    }
+
+    {
+        ProcessState ps;
+        VariableStorage vars;
+        ExpressionEvaluator evaluator;
+        EraParseTable boundary(&ps);
+        boundary.setVariableStorage(&vars);
+        boundary.setExpressionEvaluator(&evaluator);
+        const QStringList source = {"@BOUNDARY", "#DIM GRID, 2, 3", "A = 0 && (1 / 0)",
+            "B = 1 ? 7 # (1 / 0)", "C = 1 ? 1 # \"bad\"", "D = 1,,2",
+            "E = GRID:1", "F = GRID:2:0"};
+        QList<LogicalLine> lines;
+        for (int i = 0; i < source.size(); ++i)
+            lines.append(AstBuilder::build(source[i], ScriptPosition("boundary.ERB", i),
+                [&](const QString& e) { return boundary.expressionAst(e); }));
+        boundary.loadScript("boundary", lines);
+        boundary.finalizeParse();
+        const auto* data = boundary.script("boundary");
+        for (int i : {2, 3, 4, 5, 6, 7})
+            check(data && !data->lines[i].argument.typeOk, QStringLiteral("load rejects boundary line %1").arg(i));
     }
 
     qDebug() << "\n8) 表达式优先级/运算符对齐 C#";

@@ -40,6 +40,12 @@ class ExpressionEvaluator : public QObject
 public:
     explicit ExpressionEvaluator(QObject *parent = nullptr);
 
+    using AstProvider = std::function<QSharedPointer<ExpressionNode>(const QString&)>;
+    void setAstProvider(AstProvider provider) { m_astProvider = std::move(provider); }
+    using FormIgnoreProvider = std::function<bool()>;
+    void setFormIgnoreProvider(FormIgnoreProvider provider) { m_formIgnoreProvider = std::move(provider); }
+    bool ignoreTripleSymbols() const { return m_formIgnoreProvider && m_formIgnoreProvider(); }
+
     // Existing entry points (parse string + evaluate)
     Q_INVOKABLE QVariant evaluate(const QString &expression, VariableStorage *storage, GameBaseData *gameBaseData = nullptr);
     Q_INVOKABLE bool evaluateInt(const QString &expression, VariableStorage *storage, qint64 &result);
@@ -249,6 +255,8 @@ private:
     // Helper methods for expression evaluation
     bool parseAndEvaluate(const QString &expression, VariableStorage *storage);
 
+    AstProvider m_astProvider;
+    FormIgnoreProvider m_formIgnoreProvider;
     UserFunctionInvoker m_userInvoker;
     ConfigProvider m_configProvider;
     CharaCountProvider m_charaNumProvider;

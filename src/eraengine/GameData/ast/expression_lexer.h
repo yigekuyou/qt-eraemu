@@ -108,6 +108,7 @@ private:
 class ExpressionLexer {
 public:
     ExpressionLexer();
+    void setAllowSingleQuotation(bool allow) { m_allowSingleQuotation = allow; }
     QList<ExpressionToken> tokenize(const QString& input, int line = 1);
     
 private:
@@ -121,6 +122,7 @@ private:
     ExpressionToken readYenAt();
     bool isAtEnd() const;
     
+    bool m_allowSingleQuotation = false;
     QString m_input;
     int m_position;
     int m_line;

@@ -70,6 +70,10 @@ CaseExpression.GetBool(Is, exm):    # 单个条件式的判定
     Normal:          返回 (LeftTerm == Is)                # 单值相等
 ```
 
+## 表达式解析补充
+
+C# 的 IS 解析入口检查的是二元运算符，并非仅限比较符号；执行时把 SELECTCASE 的值作为左项运算，再判断结果非零。字符串 IS 使用 <= 或 >= 时继承参考实现的字符串比较缺陷：两者均实际使用严格小于。字符串 TO 范围则直接调用 string.Compare，包含相等端点，不继承该缺陷。依据：`Runtime/Script/Statements/Expression/ExpressionParser.cs:324-366`、`Runtime/Script/Statements/CaseExpression.cs:48-72`。详见 [表达式解析边界.md](../language/表达式解析边界.md)。
+
 ## 备注
 
 - 文档「与 `switch` 不同，不会从 `CASE` 顺序落到下一个 `CASE`，也不能用 `BREAK` 跳入 `ENDSELECT`」与实现一致：CASE 行执行体是 `JumpTo(下一锚点)`，天然带 fall-through 抑制。

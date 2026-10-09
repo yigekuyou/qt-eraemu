@@ -195,9 +195,9 @@ QSharedPointer<ExpressionNode> ErbLoader::resolveExpr(
     const AstResolver self = [this, &types, &cache](const QString& e) {
         return resolveExpr(e, types, cache);
     };
-    parser.setFormProvider([self](const QString& text, bool yenAt) -> QSharedPointer<ExpressionNode> {
-        if (yenAt) return StrFormParser::parseYenAt(text, self);
-        return QSharedPointer<ExpressionNode>(StrFormParser::parse(text, self));
+    parser.setFormProvider([this, self](const QString& text, bool yenAt) -> QSharedPointer<ExpressionNode> {
+        if (yenAt) return StrFormParser::parseYenAt(text, self, m_parseTable && m_parseTable->ignoreTripleSymbols());
+        return QSharedPointer<ExpressionNode>(StrFormParser::parse(text, self, m_parseTable && m_parseTable->ignoreTripleSymbols()));
     });
     // 常量名下标：CFLAG:ARG:現在位置（对齐 C# ConstantData.isDefined）
     if (m_constantTable) {
@@ -259,14 +259,15 @@ ParsedErbFile ErbLoader::parseOneFile(const QString& filePath, const FunctionTyp
 
         // 结构化诊断出口（本文件；随后经 ParsedErbFile 汇总回灌解析表）
         QSet<QString> exprFailed;   // 同一文件的同一表达式文本只记一次
-        const AstResolver resolver = [this, &types, &pf, &exprFailed](const QString& e) {
+        int currentPhysicalLine = 0;
+        const AstResolver resolver = [this, &types, &pf, &exprFailed, &currentPhysicalLine, &filePath](const QString& e) {
             auto ast = resolveExpr(e, types, pf.astCache);
             if (!ast) {
                 const QString key = e.trimmed();
                 if (!key.isEmpty() && !exprFailed.contains(key)) {
                     exprFailed.insert(key);
                     pf.diagnostics.add(DiagSeverity::Warning, DiagCode::kExprParse,
-                                       QString(),
+                                       filePath, currentPhysicalLine, 1, 0,
                                        QStringLiteral("表达式无法归约: %1").arg(key.left(80)));
                 }
             }
@@ -277,17 +278,13 @@ ParsedErbFile ErbLoader::parseOneFile(const QString& filePath, const FunctionTyp
             return resolveExpr(e, types, pf.astCache, /*quiet*/ true);
         };
         for (int i = 0; i < source.size(); ++i) {
+            currentPhysicalLine = source.at(i).physicalLine;
             const ScriptPosition pos(filePath, source.at(i).physicalLine, 1);
             LogicalLine line = AstBuilder::build(source.at(i).text, pos, resolver, quietResolver,
                                                   &pf.diagnostics);
             line.lineIndex = i;
             pf.lines.append(line);
         }
-    }
-    // AST 磁盘缓存：在 worker 线程上序列化**每一个**文件（含空/读取失败者 —— 保证
-    // 缓存文件的条目数与文件数一一对应，否则读回时条数不符会被当作损坏）。
-    if (m_astDiskCache) {
-        pf.cachedBlob = ErbAstDiskCache::serializeParsedFile(pf);
     }
     return pf;
 }
@@ -299,8 +296,9 @@ bool ErbLoader::mergeParsedFile(ParsedErbFile&& pf) {
     if (pf.scriptName.isEmpty()) {
         return false;
     }
-    // 空文件是合法的（例如只含注释的 .ERH）：不视为失败
+    // 空文件是合法的（例如只含注释的 .ERH）：不视为失败，但保留诊断。
     if (pf.lines.isEmpty()) {
+        if (m_parseTable && !pf.diagnostics.isEmpty()) m_parseTable->addParseDiagnostics(pf.diagnostics);
         return true;
     }
 
@@ -321,9 +319,15 @@ bool ErbLoader::mergeParsedFile(ParsedErbFile&& pf) {
 
     if (m_parseTable) {
         // 行数据只存一份：交给解析表（省内存）
-        m_parseTable->loadScript(pf.scriptName, pf.lines,
-                                 pf.path.endsWith(QLatin1String(".erh"), Qt::CaseInsensitive),
-                                 pf.path);
+        const bool loaded = m_parseTable->loadScript(
+            pf.scriptName, pf.lines,
+            pf.path.endsWith(QLatin1String(".erh"), Qt::CaseInsensitive), pf.path);
+        if (!loaded) {
+            pf.diagnostics.add(DiagSeverity::Error, DiagCode::kArgCheck, pf.path, 1, 1, 0,
+                               QStringLiteral("脚本装载失败"));
+            m_parseTable->addParseDiagnostics(pf.diagnostics);
+            return false;
+        }
         if (!pf.warnings.isEmpty()) {
             m_parseTable->addParseWarnings(pf.warnings);
         }
@@ -485,62 +489,6 @@ ErbLoader::LoadPrep ErbLoader::prepareLoad(const QString& dirPath, int depth) co
     // 是「点开目录后长时间没有任何反应」的主因之一；这里并行化（每文件仍只读一次）。
     // prepareLoad 本身已运行在线程池线程上，blockingMapped 会再切出 N 个子任务；
     // QThreadPool 默认允许多个线程，故线程数 >1 时不会自锁，==1 时退化为顺序。
-    // ---- AST 磁盘缓存命中检查（对标 QML Disk Cache）----
-    // 命中则**整库**读回并在本后台线程完成校验，随后跳过全部「读/解码/预处理/
-    // 词法/语法」；未命中（含任一文件反序列化失败）删除坏缓存并回落正常解析。
-    if (m_astDiskCache && !GamePaths::isContent(dirPath)) {
-        prep.cacheKey = ErbAstDiskCache::computeKey(dirPath, prep.files, int(m_readEncoding),
-                                                   m_preprocessor.debugMode());
-        ErbAstDiskCache::Reader reader(prep.cacheKey);
-        qDebug().noquote() << "[ErbLoader] AST 缓存探测 key=" << prep.cacheKey.left(12)
-                           << " open=" << reader.isOpen() << " count=" << reader.count()
-                           << " files=" << prep.files.size();
-        if (reader.isOpen() && reader.count() == int(prep.files.size())) {
-            // 分批：顺序读一批 blob（纯 I/O + 拷贝）→ **并行**反序列化 → 释放该批
-            // （单线程反序列化 ≈ 并行解析的耗时，必须并行才有收益；分批是为了
-            // 不让 382MB 的 blob 与解析结果同时常驻）。
-            const auto deser = [](const QByteArray& b) {
-                ParsedErbFile pf;
-                if (!ErbAstDiskCache::deserializeParsedFile(b, pf)) return ParsedErbFile();
-                return pf;
-            };
-            const bool parallel = QThreadPool::globalInstance()->maxThreadCount() > 1;
-            const int batch = 256;
-            QList<ParsedErbFile> all;
-            all.reserve(reader.count());
-            bool okAll = true;
-            while (okAll && reader.isOpen()) {
-                QList<QByteArray> blobs;
-                blobs.reserve(batch);
-                for (int i = 0; i < batch; ++i) {
-                    QByteArray b;
-                    if (!reader.readBlob(b)) break;
-                    blobs.append(std::move(b));
-                }
-                if (blobs.isEmpty()) break;
-                QList<ParsedErbFile> part;
-                if (parallel) {
-                    part = QtConcurrent::blockingMapped(blobs, deser);
-                } else {
-                    part.reserve(blobs.size());
-                    for (const QByteArray& b : blobs) part.append(deser(b));
-                }
-                if (part.size() != blobs.size()) { okAll = false; break; }
-                for (ParsedErbFile& pf : part) all.append(std::move(pf));
-            }
-            for (int i = 0; okAll && i < all.size(); ++i) {
-                if (all.at(i).path != prep.files.at(i)) okAll = false;   // 失败项 scriptName/path 为空
-            }
-            if (okAll && all.size() == prep.files.size()) {
-                prep.cachedFiles = std::move(all);
-                prep.cacheHit = true;
-                prep.ok = true;
-                return prep;
-            }
-            ErbAstDiskCache::remove(prep.cacheKey);   // 损坏：丢弃，重新解析
-        }
-    }
-
     // 读+解码**一次**，同时产出：(a) 函数返回类型表，(b) 解码后的源文本缓存。
     // 解析阶段复用 (b)，免去 eraTW 约 93MB 的第二次读取 + 解码 + 编码嗅探。
     const auto scanOne = [this](const QString& f) {
@@ -581,17 +529,7 @@ void ErbLoader::finishAsync(bool ok) {
     qInfo().noquote() << "[ErbLoader] 异步装载结束 ok=" << ok
                       << " 文件" << m_async.total
                       << " 总耗时" << totalMs << "ms"
-                      << " 主线程合并" << m_async.mergeMs << "ms"
-                      << (m_async.fromCache ? QStringLiteral(" (AST 缓存命中)")
-                                            : QStringLiteral(""));
-    // AST 磁盘缓存：仅当本次**全部成功**且未命中（即本次是新解析）时才提交。
-    if (m_async.cacheWriter) {
-        if (ok) {
-            if (!m_async.cacheWriter->commit()) qWarning() << "[ErbLoader] AST 缓存写入失败";
-        } else {
-            m_async.cacheWriter->abort();
-        }
-    }
+                      << " 主线程合并" << m_async.mergeMs << "ms";
     m_async = AsyncState{};
     emit loadCompleted(ok);
 }
@@ -645,29 +583,6 @@ void ErbLoader::onPrepFinished() {
     m_async.parsed = 0;
     m_async.merged = 0;
 
-    // ---- AST 磁盘缓存命中：跳过解析，直接把读回的结果交给分批合并 ----
-    if (prep.cacheHit) {
-        m_async.fromCache = true;
-        m_async.parsed = m_async.total;
-        for (ParsedErbFile& pf : prep.cachedFiles) m_async.pending.append(std::move(pf));
-        qInfo().noquote() << "[ErbLoader] AST 磁盘缓存命中（跳过解析）："
-                          << m_async.total << "个文件，预扫描+读回"
-                          << m_async.clock.elapsed() << "ms";
-        emit loadProgress(0, m_async.total);
-        mergeStep();
-        return;
-    }
-    // AST 磁盘缓存未命中：边解析边把结果写盘（Writer 在 worker 侧已产出每个
-    // 文件的 blob；这里只做顺序追加，装载成功后原子提交）。
-    m_async.cacheKey = prep.cacheKey;
-    if (m_astDiskCache && !prep.cacheKey.isEmpty()) {
-        auto writer = std::make_unique<ErbAstDiskCache::Writer>(prep.cacheKey);
-        if (writer->begin(m_async.total)) {
-            m_async.cacheWriter = std::move(writer);
-        } else {
-            writer->abort();
-        }
-    }
     // 预扫描（列举 + 宏表 + 函数返回类型）已在后台完成：这里能看出它为 UI
     // 首帧前贡献了多少等待时间。
     qInfo().noquote() << "[ErbLoader] 异步预扫描完成(读文件+函数类型)"
@@ -737,15 +652,6 @@ void ErbLoader::mergeStep() {
     int n = 0;
     while (n < kMergeBatch && m_async.pendingPos < m_async.pending.size()) {
         ParsedErbFile& pf = m_async.pending[m_async.pendingPos];
-        // AST 磁盘缓存：先把本文件的序列化 blob 落盘，再并入（merge 会清空 lines）。
-        // blob 为空（序列化异常）说明缓存不完整 —— 直接放弃本次写盘，避免产出
-        // 条目数不符的坏缓存。
-        if (m_async.cacheWriter) {
-            if (pf.cachedBlob.isEmpty() || !m_async.cacheWriter->writeBlob(pf.cachedBlob)) {
-                m_async.cacheWriter->abort();
-                m_async.cacheWriter.reset();
-            }
-        }
         if (!mergeParsedFile(std::move(pf))) m_async.ok = false;
         ++m_async.pendingPos;
         ++n;

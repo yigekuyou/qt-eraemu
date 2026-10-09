@@ -61,12 +61,17 @@ EraParseTable::EraParseTable(ProcessState* state, QObject* parent)
 
 EraParseTable::~EraParseTable() = default;
 
+bool EraParseTable::ignoreTripleSymbols() const {
+    return m_evaluator && m_evaluator->ignoreTripleSymbols();
+}
+
 void EraParseTable::setVariableStorage(VariableStorage* storage) {
     m_variableStorage = storage;
 }
 
 void EraParseTable::setExpressionEvaluator(ExpressionEvaluator* evaluator) {
     m_evaluator = evaluator;
+    if (evaluator) evaluator->setAstProvider([this](const QString& text) { return expressionAst(text); });
     if (evaluator) evaluator->setVariableDimProvider([this](const QString& name) {
         const auto* line = lineAt(m_currentScript, m_currentLine);
         const auto* decl = m_variables.find(name, line ? line->ownerFunction : QString());
@@ -106,7 +111,8 @@ QSharedPointer<ExpressionNode> EraParseTable::expressionAst(const QString& expr,
     }
 
     ExpressionParser parser;
-    parser.setQuiet(quiet);   // 赋值右值的临时解析：不刷「表达式语法错误」
+    parser.setQuiet(quiet);
+    parser.setVariableTypeProvider([this, scope](const QString& name) { return m_variables.typeOf(name, scope); });   // 赋值右值的临时解析：不刷「表达式语法错误」
     // 强类型：仅用户自定义函数由 Provider 决定；内置函数（内部命令）由
     // ExpressionParser 内部的 kBuiltinFunctions 目录解析（对齐 C# methodDic）。
     // 装载期间用户函数可能尚未 merge，finalizeParse 会再统一重绑一次。
@@ -123,8 +129,8 @@ QSharedPointer<ExpressionNode> EraParseTable::expressionAst(const QString& expr,
     // 格式化串：@"..." / \@...#...\@
     parser.setFormProvider([this](const QString& text, bool yenAt) -> QSharedPointer<ExpressionNode> {
         const AstResolver resolve = [this](const QString& e) { return expressionAst(e); };
-        if (yenAt) return StrFormParser::parseYenAt(text, resolve);
-        return QSharedPointer<ExpressionNode>(StrFormParser::parse(text, resolve));
+        if (yenAt) return StrFormParser::parseYenAt(text, resolve, m_evaluator && m_evaluator->ignoreTripleSymbols());
+        return QSharedPointer<ExpressionNode>(StrFormParser::parse(text, resolve, m_evaluator && m_evaluator->ignoreTripleSymbols()));
     });
     if (m_constantTable) {
         const ConstantTable* ct = m_constantTable;
@@ -291,25 +297,27 @@ bool EraParseTable::callLabelAt(const QString& scriptName, int line,
 
 bool EraParseTable::evaluateAst(const QSharedPointer<ExpressionNode>& ast, bool& out) {
     if (!ast) {
+        if (m_state) m_state->setErrorState();
         return false;
     }
     ExpressionEvaluator local;
     ExpressionEvaluator* ev = m_evaluator ? m_evaluator : &local;
     const QVariant v = ev->evaluate(*ast, m_variableStorage, m_gameBaseData);
-    out = v.isValid() && v.toLongLong() != 0;
+    if (!v.isValid()) {
+        if (m_state) m_state->setErrorState();
+        return false;
+    }
+    out = v.toLongLong() != 0;
     return true;
 }
 
 bool EraParseTable::evaluateExpression(const QString& expr, bool& out) {
     const QSharedPointer<ExpressionNode> ast = expressionAst(expr);
-    if (ast) {
-        return evaluateAst(ast, out);
+    if (!ast) {
+        if (m_state) m_state->setErrorState();
+        return false;
     }
-    ExpressionEvaluator local;
-    ExpressionEvaluator* ev = m_evaluator ? m_evaluator : &local;
-    const QVariant v = ev->evaluate(expr, m_variableStorage, m_gameBaseData);
-    out = v.isValid() && v.toLongLong() != 0;
-    return true;
+    return evaluateAst(ast, out);
 }
 
 bool EraParseTable::evaluateCondition(const QString& scriptName, int line, bool& out, int argIndex) {
@@ -317,8 +325,8 @@ bool EraParseTable::evaluateCondition(const QString& scriptName, int line, bool&
     if (!ll) {
         return false;
     }
-    if (ll->condition && evaluateAst(ll->condition, out)) {
-        return true;
+    if (ll->condition) {
+        return evaluateAst(ll->condition, out);
     }
     if (argIndex >= 0 && argIndex < ll->arguments.size() && ll->arguments.at(argIndex).ast) {
         return evaluateAst(ll->arguments.at(argIndex).ast, out);
@@ -1358,6 +1366,88 @@ void EraParseTable::finalizeParse() {
     // 它调用的 #FUNCTION 被解析，此时只能当「未定义」；到此处全部脚本已 merge）
     resolveFunctionNodes();
     tRebind = sub.restart();
+    // Validate every subtree before runtime short circuiting. Only operator/literal
+    // trees are evaluated here; user functions and variable values remain dynamic.
+    const auto constantTree = [](const ExpressionNode& root) {
+        bool constant = true;
+        walkExpression(const_cast<ExpressionNode&>(root), [&](ExpressionNode& n) {
+            if (n.kind() == NodeKind::Variable || n.kind() == NodeKind::Function) constant = false;
+            if (n.kind() == NodeKind::UnaryOp) {
+                const auto op = static_cast<const UnaryOpNode&>(n).op().type();
+                if (op == TokenType::INCREMENT || op == TokenType::DECREMENT) constant = false;
+            }
+        });
+        return constant;
+    };
+    for (auto& script : m_scripts) {
+        for (auto& line : script.lines) {
+            const auto validate = [&](const QSharedPointer<ExpressionNode>& ast) {
+                if (!ast) return;
+                QString error = validateExpression(*ast);
+                if (error.isEmpty() && m_evaluator && m_variableStorage) {
+                    walkExpression(*ast, [&](ExpressionNode& n) {
+                        if (error.isEmpty() && n.kind() != NodeKind::Literal && constantTree(n)
+                            && !m_evaluator->evaluate(n, m_variableStorage, m_gameBaseData).isValid())
+                            error = QStringLiteral("装载期常量表达式求值失败");
+                    });
+                }
+                if (!error.isEmpty()) {
+                    line.argument.typeOk = false;
+                    line.argument.typeError = error;
+                    line.isError = true;
+                    line.errMes = error;
+                    m_diagnostics.add(DiagSeverity::Error, DiagCode::kArgCheck,
+                        line.position.filename, line.position.lineNumber, line.position.column, 0, error);
+                }
+            };
+            validate(line.condition);
+            for (const auto& operand : line.arguments) validate(operand.ast);
+            if (!line.assignOperator.isEmpty() && line.arguments.size() == 2) {
+                const auto& dest = line.arguments[0].raw;
+                const QString name = dest.section(':', 0, 0).trimmed();
+                const auto* decl = m_variables.find(name, line.ownerFunction);
+                auto target = cloneExpression(expressionAst(dest, true));
+                if (target) VariableTable::applyTypes(*target, m_variables, line.ownerFunction);
+                if (!target || target->kind() != NodeKind::Variable || !validateExpression(*target).isEmpty()) {
+                    line.argument.typeOk = false;
+                    line.argument.typeError = QStringLiteral("赋值左值必须为有效变量项");
+                    line.isError = true;
+                    line.errMes = line.argument.typeError;
+                    m_diagnostics.add(DiagSeverity::Error, DiagCode::kArgCheck, line.position.filename,
+                        line.position.lineNumber, line.position.column, 0, line.argument.typeError);
+                }
+                const bool rawForm = line.assignOperator == "=" && m_variables.typeOf(name, line.ownerFunction) == OperandType::Str;
+                if (!rawForm) {
+                    const auto values = AstBuilder::assignmentValues(line.arguments[1].raw);
+                    for (const auto& text : values) {
+                        auto ast = cloneExpression(expressionAst(text, true));
+                        if (ast) { VariableTable::applyTypes(*ast, m_variables, line.ownerFunction); validate(ast); }
+                        else {
+                            line.argument.typeOk = false;
+                            line.argument.typeError = QStringLiteral("赋值右值无法解析或包含空项");
+                            line.isError = true;
+                            line.errMes = line.argument.typeError;
+                            m_diagnostics.add(DiagSeverity::Error, DiagCode::kArgCheck, line.position.filename,
+                                line.position.lineNumber, line.position.column, 0, line.argument.typeError);
+                        }
+                    }
+                    if (values.size() > 1 && line.assignOperator != "=" && line.assignOperator != "'=") {
+                        line.argument.typeOk = false;
+                        line.argument.typeError = QStringLiteral("复合赋值不允许列表");
+                        line.isError = true;
+                        line.errMes = line.argument.typeError;
+                    }
+                }
+                if (decl && decl->isConst) {
+                    line.argument.typeOk = false;
+                    line.argument.typeError = QStringLiteral("不能赋值const变量");
+                    line.isError = true;
+                    line.errMes = line.argument.typeError;
+                }
+            }
+        }
+    }
+
     // 参数/类型校验必须在「变量类型已回填」之后进行：
     // 否则 LFONTS 之类用户 #DIMS 变量在解析期还是默认的 Int，
     // 会误报「需要字符串表达式，实得 Int」。
@@ -1464,27 +1554,16 @@ void EraParseTable::applyStringAssignments() {
             if (varName.isEmpty()) continue;
             if (m_variables.typeOf(varName, line.ownerFunction) != OperandType::Str) continue;
 
-            // A bare, declared string variable is a value reference (`NAME = RESULTS`).
-            // Other RHS text uses formatted-string semantics, even when it looks
-            // like a call (`CLOTH = 白狼天狗服(色固定)`).
-            const QString rhsName = value.raw.trimmed();
-            bool bareName = !rhsName.isEmpty()
-                            && (rhsName.at(0).isLetter() || rhsName.at(0) == QLatin1Char('_'));
-            for (int i = 1; bareName && i < rhsName.size(); ++i) {
-                const QChar c = rhsName.at(i);
-                bareName = c.isLetterOrNumber() || c == QLatin1Char('_');
+            value.ast = StrFormParser::parse(value.raw.trimmed(), resolve, m_evaluator && m_evaluator->ignoreTripleSymbols());
+            if (!value.ast) {
+                const QString error = QStringLiteral("字符串赋值FORM无效");
+                line.argument.typeOk = false;
+                line.argument.typeError = error;
+                line.isError = true;
+                line.errMes = error;
+                m_diagnostics.add(DiagSeverity::Error, DiagCode::kArgCheck,
+                    line.position.filename, line.position.lineNumber, line.position.column, 0, error);
             }
-            // 带引号的字符串字面量（"…" / @"…"）当**表达式**建节点：引号是定界符，
-            // `@"…"` 里的 %…%/{…}/\\@…\\@ 也照常展开（与运行期 handleStringAssignment
-            // 的判定保持一致）。
-            const bool quotedLiteral = rhsName.startsWith(QLatin1Char('"'))
-                                       || rhsName.startsWith(QLatin1String("@\""));
-            if (quotedLiteral && resolve)
-                value.ast = resolve(rhsName);
-            else if (bareName && m_variables.typeOf(rhsName, line.ownerFunction) == OperandType::Str)
-                value.ast = resolve(rhsName);
-            else
-                value.ast = StrFormParser::parse(value.raw, resolve);
         }
     }
 }
@@ -1707,7 +1786,14 @@ void EraParseTable::validateArguments() {
         for (LogicalLine& line : sd->lines) {
             if (line.kind != LineKind::Instruction) continue;
             const qsizetype before = out.warnings.size();
+            const QString semanticError = !line.argument.typeOk ? line.argument.typeError : QString();
             ArgumentParser::build(line);   // 幂等：重算 kind/params/exprs + 重新校验
+            if (!semanticError.isEmpty()) {
+                line.argument.typeOk = false;
+                line.argument.typeError = semanticError;
+                line.isError = true;
+                line.errMes = semanticError;
+            }
             if (line.argument.hasError()) {
                 // 结构告警：不参与去重（与串行版一致，key 留空）
                 out.warnings.append(QStringLiteral("%1 (%2)")

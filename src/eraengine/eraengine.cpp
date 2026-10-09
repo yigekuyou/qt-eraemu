@@ -162,6 +162,15 @@ EraEngine::EraEngine(QObject *parent)
 		//   `画像横幅 = 默认角色画像横幅 * 拡大比率 / GETCONFIG("フォントサイズ")` -> 0，
 		//   于是 `<img ... height='0' width='0'>`，「画像尺寸 拡大/縮小」（选项 5/6）
 		//   与尺寸档位（选项 4）在画面上完全看不出变化。
+        m_expressionEvaluator.setFormIgnoreProvider([this]() {
+            for (const QString& key : {QStringLiteral("SystemIgnoreTripleSymbol"), QStringLiteral("FORM中の三連記号を展開しない")}) {
+                if (m_configLoader.hasConfig(key)) {
+                    const QString value = m_configLoader.getConfig(key).trimmed().toUpper();
+                    return value == "YES" || value == "TRUE" || value == "1";
+                }
+            }
+            return false;
+        });
 		m_expressionEvaluator.setConfigProvider([this](const QString& key, QString& value) -> bool {
 			// 取值的白名单与类型转换在 ConfigLoader::configValueInErb（可单测）；
 			// 这里只负责把「配置对象」接到求值器上。

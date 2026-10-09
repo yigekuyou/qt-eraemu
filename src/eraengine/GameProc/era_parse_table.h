@@ -164,6 +164,8 @@ public:
     void setConstantTable(const ConstantTable* table) { m_constantTable = table; }
     [[nodiscard]] const ConstantTable* constantTable() const { return m_constantTable; }
 
+    [[nodiscard]] bool ignoreTripleSymbols() const;
+
     // ---- 只读区查询 ----
     [[nodiscard]] const ScriptData* script(const QString& scriptName) const;
     [[nodiscard]] QStringList scriptNames() const { return m_scripts.keys(); }

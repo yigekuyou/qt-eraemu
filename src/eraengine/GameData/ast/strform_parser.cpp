@@ -99,7 +99,7 @@ struct PartBuilder {
     }
     void addExpr(QSharedPointer<ExpressionNode> e) {
         flush();
-        if (!e) e = QSharedPointer<LiteralNode>::create(0);
+        if (!e) return;
         parts.append(StrFormPart::makeExpr(e));
     }
     void trimStart() {
@@ -119,12 +119,12 @@ struct PartBuilder {
 } // namespace
 
 QSharedPointer<ExpressionNode> StrFormParser::parseYenAt(const QString& inner,
-                                                         const ExprResolver& resolve) {
+                                                         const ExprResolver& resolve, bool ignoreTripleSymbols) {
     // \@ cond ? left # right \@
     const int q = findTopLevel(inner, QLatin1Char('?'), 0, -1);
     if (q < 0) {
         // 缺少 '?'：C# 视为错误；这里退化为普通文本串
-        return parse(inner, resolve);
+        return nullptr;
     }
     // Branches are FORM text: quotes and parentheses are literal. Only
     // interpolation spans hide a branch separator.
@@ -160,43 +160,72 @@ QSharedPointer<ExpressionNode> StrFormParser::parseYenAt(const QString& inner,
     rightText = trimBranch(rightText);
 
     QSharedPointer<ExpressionNode> cond = resolve ? resolve(condText) : nullptr;
-    if (!cond) cond = QSharedPointer<LiteralNode>::create(0);
+    if (!cond || cond->valueType() != OperandType::Int) return nullptr;
 
     // 空分支也要是「空字符串」而不是 nullptr（求值器会直接解引用分支）
-    const auto branch = [&resolve](const QString& t) -> QSharedPointer<ExpressionNode> {
+    const auto branch = [&resolve, ignoreTripleSymbols](const QString& t) -> QSharedPointer<ExpressionNode> {
         if (t.isEmpty()) {
             QList<StrFormPart> parts;
             parts.append(StrFormPart::makeText(QString()));
             return QSharedPointer<StrFormNode>::create(parts);
         }
-        return QSharedPointer<ExpressionNode>(parse(t, resolve));
+        return QSharedPointer<ExpressionNode>(parse(t, resolve, ignoreTripleSymbols));
     };
     QSharedPointer<ExpressionNode> left = branch(leftText);
     QSharedPointer<ExpressionNode> right = branch(rightText);
 
+    if (!left || !right) return nullptr;
     return QSharedPointer<IfNode>::create(cond, left, right);
 }
 
-QSharedPointer<StrFormNode> StrFormParser::parse(const QString& text, const ExprResolver& resolve) {
+QSharedPointer<StrFormNode> StrFormParser::parse(const QString& text, const ExprResolver& resolve, bool ignoreTripleSymbols) {
     PartBuilder b;
     const int n = text.length();
 
-    const auto addExpr = [&](const QString& inner) {
-        const int comma = findTopLevel(inner, QLatin1Char(','), 0, -1);
+    const auto addExpr = [&](const QString& inner, OperandType type) -> bool {
+        const int comma = findTopLevel(inner, ',', 0, -1);
         const QString value = comma < 0 ? inner : inner.left(comma);
-        QSharedPointer<ExpressionNode> expr = resolve ? resolve(value.trimmed()) : nullptr;
-        if (!expr) expr = QSharedPointer<LiteralNode>::create(0);
+        auto expr = resolve ? resolve(value.trimmed()) : nullptr;
+        if (!expr) return false;
+        if (expr->valueType() != type && expr->kind() != NodeKind::Variable && expr->kind() != NodeKind::Function) return false;
         b.addExpr(expr);
+        b.parts.last().expectedType = type;
         if (comma >= 0) {
-            const int second = findTopLevel(inner, QLatin1Char(','), comma + 1, -1);
+            const int second = findTopLevel(inner, ',', comma + 1, -1);
             const QString width = second < 0 ? inner.mid(comma + 1) : inner.mid(comma + 1, second-comma-1);
-            b.parts.last().width = resolve ? resolve(width.trimmed()) : nullptr;
-            b.parts.last().leftAlign = second >= 0 && inner.mid(second+1).trimmed().compare("LEFT", Qt::CaseInsensitive) == 0;
+            if (second >= 0 || !width.trimmed().isEmpty()) {
+                auto w = resolve ? resolve(width.trimmed()) : nullptr;
+                if (!w || w->valueType() != OperandType::Int) return false;
+                b.parts.last().width = w;
+            }
+            if (second >= 0) {
+                const QString align = inner.mid(second+1).trimmed();
+                if (!align.isEmpty() && align.compare("LEFT", Qt::CaseInsensitive) != 0
+                    && align.compare("RIGHT", Qt::CaseInsensitive) != 0) return false;
+                b.parts.last().leftAlign = align.compare("LEFT", Qt::CaseInsensitive) == 0;
+            }
         }
+        return true;
     };
 
     for (int i = 0; i < n; ++i) {
         const QChar ch = text.at(i);
+
+        if (!ignoreTripleSymbols && i+2 < n && text[i+1] == ch && text[i+2] == ch) {
+            QString expression;
+            if (ch == '*') expression = QStringLiteral("NAME:TARGET");
+            else if (ch == '+') expression = QStringLiteral("CALLNAME:MASTER");
+            else if (ch == '=') expression = QStringLiteral("CALLNAME:PLAYER");
+            else if (ch == '/') expression = QStringLiteral("NAME:ASSI");
+            else if (ch == '$') expression = QStringLiteral("CALLNAME:TARGET");
+            if (!expression.isEmpty()) {
+                auto node = resolve ? resolve(expression) : nullptr;
+                if (!node || node->valueType() != OperandType::Str) return nullptr;
+                b.addExpr(node);
+                i += 2;
+                continue;
+            }
+        }
 
         // \@ cond ? A # B \@ —— 条件三元（对齐 C# AnalyseYenAt）
         if (ch == QLatin1Char('\\') && i + 1 < n && text.at(i + 1) == QLatin1Char('@')) {
@@ -206,24 +235,26 @@ QSharedPointer<StrFormNode> StrFormParser::parse(const QString& text, const Expr
                 if (text.at(j) == QLatin1Char('\\') && text.at(j + 1) == QLatin1Char('@')) { end = j; break; }
                 ++j;
             }
-            if (end < 0) { b.pending += ch; continue; }   // 未闭合 -> 普通文本
-            b.addExpr(parseYenAt(text.mid(i + 2, end - i - 2), resolve));
+            if (end < 0) return nullptr;   // 未闭合 -> 普通文本
+            auto conditional = parseYenAt(text.mid(i + 2, end - i - 2), resolve, ignoreTripleSymbols);
+            if (!conditional) return nullptr;
+            b.addExpr(conditional);
             i = end + 1;
             continue;
         }
 
         if (ch == QLatin1Char('{')) {
             const int j = findTopLevel(text, '}', i + 1, -1);
-            if (j < 0 || j >= n) { b.pending += ch; continue; }   // 未闭合 -> 普通文本
-            addExpr(text.mid(i + 1, j - i - 1));
+            if (j < 0 || j >= n) return nullptr;   // 未闭合 -> 普通文本
+            if (!addExpr(text.mid(i + 1, j - i - 1), ch == '{' ? OperandType::Int : OperandType::Str)) return nullptr;
             i = j;
             continue;
         }
 
         if (ch == QLatin1Char('%')) {
             const int j = findPercentEnd(text, i + 1);
-            if (j < 0) { b.pending += ch; continue; }    // 无成对 % -> 普通文本
-            addExpr(text.mid(i + 1, j - i - 1));
+            if (j < 0) return nullptr;    // 无成对 % -> 普通文本
+            if (!addExpr(text.mid(i + 1, j - i - 1), ch == '{' ? OperandType::Int : OperandType::Str)) return nullptr;
             i = j;
             continue;
         }
@@ -244,6 +275,7 @@ QSharedPointer<StrFormNode> StrFormParser::parse(const QString& text, const Expr
 
         // 引号在格式串里**只是普通字符**（C# 仅在 @"…" 上下文才把 " 当终止符）；
         // 所以 `PRINTFORML "分数={S}"` 的 {} 照样展开，引号也照样输出。
+        if (ch == '\\') return nullptr;
         b.pending += ch;
     }
 

@@ -49,6 +49,15 @@ struct SystemVariableDef {
     OperandType type;
 };
 
+// 解析期所需的 VariableCode 位属性。dimension 是元素维数；角色变量
+// 额外隐含一个角色参数（因此 CFLAG 是 2 项，CDFLAG 是 3 项）。
+struct SystemVariableMetadata {
+    OperandType type = OperandType::Unknown;
+    int dimension = -1;
+    bool characterData = false;
+    bool readOnly = false;
+};
+
 // 数值型系统变量（VariableCode.__INTEGER__）
 inline constexpr std::string_view kIntegerNames[] = {
     // --- 一般数値変数 ---
@@ -106,6 +115,48 @@ inline constexpr std::string_view kStringNames[] = {
         if (same) return true;
     }
     return false;
+}
+
+// 系统变量元数据（大小写不敏感）；未知返回 dimension=-1。
+[[nodiscard]] constexpr SystemVariableMetadata systemVariableMetadata(std::string_view name) noexcept {
+    const auto has = [name](const auto& table) {
+        for (std::string_view n : table) {
+            if (n.size() != name.size()) continue;
+            bool same = true;
+            for (std::size_t i = 0; i < n.size(); ++i) {
+                char a = n[i], b = name[i];
+                if (a >= 'a' && a <= 'z') a = static_cast<char>(a - 'a' + 'A');
+                if (b >= 'a' && b <= 'z') b = static_cast<char>(b - 'a' + 'A');
+                if (a != b) { same = false; break; }
+            }
+            if (same) return true;
+        }
+        return false;
+    };
+    if (has(kIntegerNames)) {
+        if (has(std::array<std::string_view, 2>{"TA", "TB"}))
+            return {OperandType::Int, 3, false, false};
+        if (has(std::array<std::string_view, 1>{"CDFLAG"}))
+            return {OperandType::Int, 2, true, false};
+        if (has(std::array<std::string_view, 6>{"DITEMTYPE", "DA", "DB", "DC", "DD", "DE"}))
+            return {OperandType::Int, 2, false, false};
+        if (has(std::array<std::string_view, 2>{"ISASSI", "NO"}))
+            return {OperandType::Int, 0, true, false};
+        if (has(std::array<std::string_view, 21>{"BASE", "MAXBASE", "ABL", "TALENT", "EXP", "MARK", "PALAM", "SOURCE", "EX", "CFLAG", "JUEL", "RELATION", "EQUIP", "TEQUIP", "STAIN", "GOTJUEL", "NOWEX", "DOWNBASE", "CUP", "CDOWN", "TCVAR"}))
+            return {OperandType::Int, 1, true, false};
+        if (has(std::array<std::string_view, 13>{"CHARANUM", "GAMEBASE_GAMECODE", "GAMEBASE_VERSION", "GAMEBASE_ALLOWVERSION", "GAMEBASE_DEFAULTCHARA", "GAMEBASE_NOITEM", "LASTLOAD_VERSION", "LASTLOAD_NO", "__LINE__", "LINECOUNT", "ISTIMEOUT", "__INT_MAX__", "__INT_MIN__"}))
+            return {OperandType::Int, 0, false, true};
+        return {OperandType::Int, 1, false, has(std::array<std::string_view, 2>{"RAND", "ITEMPRICE"})};
+    }
+    if (has(kStringNames)) {
+        if (has(std::array<std::string_view, 4>{"NAME", "CALLNAME", "NICKNAME", "MASTERNAME"}))
+            return {OperandType::Str, 0, true, false};
+        if (has(std::array<std::string_view, 1>{"CSTR"})) return {OperandType::Str, 1, true, false};
+        if (has(std::array<std::string_view, 14>{"SAVEDATA_TEXT", "WINDOW_TITLE", "__FILE__", "__FUNCTION__", "GAMEBASE_AUTHER", "GAMEBASE_AUTHOR", "GAMEBASE_INFO", "GAMEBASE_YEAR", "GAMEBASE_TITLE", "MONEYLABEL", "DRAWLINESTR", "EMUERA_VERSION", "LASTLOAD_TEXT", "GAMEBASE_VERSIONNAME"}))
+            return {OperandType::Str, 0, false, name != "SAVEDATA_TEXT"};
+        return {OperandType::Str, 1, false, false};
+    }
+    return {};
 }
 
 // 系统变量类型（大小写不敏感）；未知返回 OperandType::Unknown
@@ -183,6 +234,14 @@ findExtensionSystemVariable(std::string_view name) {
     if (core != OperandType::Unknown) return core;
     if (const ExtensionVariableDef* d = findExtensionSystemVariable(name)) return d->type;
     return OperandType::Unknown;
+}
+
+[[nodiscard]] inline SystemVariableMetadata systemVariableMetadataDyn(std::string_view name) noexcept {
+    const SystemVariableMetadata core = systemVariableMetadata(name);
+    if (core.type != OperandType::Unknown) return core;
+    if (const ExtensionVariableDef* d = findExtensionSystemVariable(name))
+        return {d->type, d->size1D > 0 ? 1 : -1, false, false};
+    return {};
 }
 
 [[nodiscard]] inline std::string_view extensionNameTableCsvOf(std::string_view variableName) {

@@ -94,7 +94,7 @@ int main(int argc, char* argv[]) {
         "CC = CC + 1",        // 8
         "LOOP",               // 9
         "FOR II, 0, 2",       // 10
-        "DD = DD + 1",        // 11
+        "LOOP_DD = LOOP_DD + 1", // 11
         "NEXT",               // 12
         "EE = 0",             // 13
         "WHILE EE < 2",       // 14
@@ -121,6 +121,7 @@ int main(int argc, char* argv[]) {
     check(table.userFunction("DOUBLE") && table.userFunction("DOUBLE")->isMethod,
           "user function DOUBLE is method (#FUNCTION)");
 
+    table.finalizeParse();
     table.setEntryPoint("MAIN");
     const ExecState st = runner.runToCompletion();
 
@@ -129,7 +130,7 @@ int main(int argc, char* argv[]) {
     check(storage.getGlobalInt1D("AA", 0) == 7, "AA == 1 + 2 * 3 == 7");
     check(storage.getGlobalInt1D("BB", 0) == 10, "IF branch taken -> BB == 10");
     check(storage.getGlobalInt1D("CC", 0) == 3, "REPEAT 3 -> CC == 3");
-    check(storage.getGlobalInt1D("DD", 0) == 2, "FOR II,0,2 -> DD == 2");
+    check(storage.getGlobalInt1D("LOOP_DD", 0) == 2, "FOR II,0,2 -> LOOP_DD == 2");
     check(storage.getGlobalInt1D("EE", 0) == 2, "WHILE EE<2 -> EE == 2");
     check(storage.getGlobalInt1D("HH", 0) == 1, "GOTO DONE -> HH == 1");
     check(storage.getGlobalInt1D("BB", 0) != 999, "line after GOTO skipped");

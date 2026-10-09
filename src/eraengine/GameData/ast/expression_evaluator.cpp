@@ -41,6 +41,8 @@
 #include <QTime>
 #include <QVector>
 #include <cmath>
+#include <bit>
+#include <stdexcept>
 #include <algorithm>
 #include <cstdio>
 #include <utility>
@@ -274,14 +276,18 @@ QVariant ExpressionEvaluator::evaluate(const QString &expression, VariableStorag
     }
 
     ExpressionParser parser;
-    auto ast = parser.parse(tokens);
+    parser.setIgnoreTripleSymbols(ignoreTripleSymbols());
+    parser.setConstantNameProvider([this](const QString& var, const QString& key) {
+        return m_constantTable && m_constantTable->indexForVariable(var, key) >= 0;
+    });
+    auto ast = m_astProvider ? m_astProvider(expression) : parser.parse(tokens);
 
     if (!ast) {
         emit evaluationError(expression, "Failed to parse expression AST");
         return QVariant();
     }
 
-    QVariant result = evaluateNode(*ast, storage, gameBaseData);
+    QVariant result = evaluate(*ast, storage, gameBaseData);
 
     emit evaluationFinished(expression, result);
     return result;
@@ -294,8 +300,14 @@ QVariant ExpressionEvaluator::evaluate(const ExpressionNode &node, VariableStora
         return QVariant();
     }
 
-    QVariant result = evaluateNode(node, storage, gameBaseData);
-    return result;
+    try {
+        const QString error = validateExpression(node);
+        if (!error.isEmpty()) throw std::runtime_error(error.toStdString());
+        return evaluateNode(node, storage, gameBaseData);
+    } catch (const std::exception& error) {
+        emit evaluationError(node.toString(), QString::fromUtf8(error.what()));
+        return QVariant();
+    }
 }
 
 bool ExpressionEvaluator::evaluateInt(const ExpressionNode &node, VariableStorage *storage, qint64 &result)
@@ -353,7 +365,11 @@ QVariant ExpressionEvaluator::evaluateNode(const ExpressionNode &node, VariableS
         return evaluateStrForm(static_cast<const StrFormNode&>(node), storage, gameBaseData);
     case NodeKind::If: {
         const auto& ifNode = static_cast<const IfNode&>(node);
+        if (ifNode.condition()->valueType() != OperandType::Int
+            || ifNode.thenExpr()->valueType() != ifNode.elseExpr()->valueType())
+            throw std::runtime_error("Invalid ternary operand types");
         const QVariant cond = evaluateNode(*ifNode.condition(), storage, gameBaseData);
+        if (!cond.isValid()) throw std::runtime_error("Invalid ternary condition");
         if (cond.toLongLong() != 0) [[likely]] {
             return evaluateNode(*ifNode.thenExpr(), storage, gameBaseData);
         }
@@ -384,11 +400,17 @@ QVariant ExpressionEvaluator::evaluateIntBinary(TokenType op, qint64 l, qint64 r
 {
     using QT = QVariant;
     switch (op) {
-    case TokenType::PLUS:          return QT::fromValue<qint64>(l + r);
-    case TokenType::MINUS:         return QT::fromValue<qint64>(l - r);
-    case TokenType::MULTIPLY:      return QT::fromValue<qint64>(l * r);
-    case TokenType::DIVIDE:        return QT::fromValue<qint64>(r == 0 ? 0 : l / r);
-    case TokenType::MODULO:        return QT::fromValue<qint64>(r == 0 ? 0 : l % r);
+    case TokenType::PLUS:          return QT::fromValue<qint64>(std::bit_cast<qint64>(quint64(l) + quint64(r)));
+    case TokenType::MINUS:         return QT::fromValue<qint64>(std::bit_cast<qint64>(quint64(l) - quint64(r)));
+    case TokenType::MULTIPLY:      return QT::fromValue<qint64>(std::bit_cast<qint64>(quint64(l) * quint64(r)));
+    case TokenType::DIVIDE:
+    case TokenType::MODULO:
+        if (r == 0) throw std::runtime_error("Division or remainder by zero");
+        if (l == std::numeric_limits<qint64>::min() && r == -1) {
+            if (op == TokenType::MODULO) return QT::fromValue<qint64>(0);
+            throw std::runtime_error("Integer division overflow");
+        }
+        return QT::fromValue<qint64>(op == TokenType::DIVIDE ? l / r : l % r);
     case TokenType::LESS_THAN:     return QT::fromValue<qint64>(l <  r ? 1 : 0);
     case TokenType::LESS_EQUAL:    return QT::fromValue<qint64>(l <= r ? 1 : 0);
     case TokenType::GREATER_THAN:  return QT::fromValue<qint64>(l >  r ? 1 : 0);
@@ -403,8 +425,8 @@ QVariant ExpressionEvaluator::evaluateIntBinary(TokenType op, qint64 l, qint64 r
     case TokenType::BIT_AND:       return QT::fromValue<qint64>(l & r);
     case TokenType::BIT_OR:        return QT::fromValue<qint64>(l | r);
     case TokenType::BIT_XOR:       return QT::fromValue<qint64>(l ^ r);
-    case TokenType::SHIFT_LEFT:    return QT::fromValue<qint64>(l << r);
-    case TokenType::SHIFT_RIGHT:   return QT::fromValue<qint64>(l >> r);
+    case TokenType::SHIFT_LEFT:    return QT::fromValue<qint64>(std::bit_cast<qint64>(quint64(l) << (quint64(r) & 63)));
+    case TokenType::SHIFT_RIGHT:   return QT::fromValue<qint64>(l >> (quint64(r) & 63));
     default: break;
     }
     return QVariant();
@@ -449,12 +471,21 @@ QVariant ExpressionEvaluator::evaluateStrForm(const StrFormNode &node, VariableS
             continue;
         }
         if (!part.expression) continue;
+        if (isKnown(part.expectedType) && part.expression->valueType() != part.expectedType)
+            throw std::runtime_error("FORM interpolation type mismatch");
         const QVariant v = evaluateNode(*part.expression, storage, gameBaseData);
+        if (!v.isValid()) throw std::runtime_error("Invalid FORM value");
         QString value = v.toString();
         if (part.width) {
-            const qint64 width = qBound<qint64>(0LL, evaluateNode(*part.width, storage, gameBaseData).toLongLong(), 1000000LL);
+            const auto widthValue = evaluateNode(*part.width, storage, gameBaseData);
+            if (!widthValue.isValid()) throw std::runtime_error("Invalid FORM width");
+            const qint64 width = std::bit_cast<qint32>(quint32(widthValue.toLongLong()));
+            if (width < 0 && part.expression->valueType() == OperandType::Int)
+                throw std::runtime_error("Negative numeric FORM width");
+            if (width > 1000000) throw std::runtime_error("FORM width exceeds allocation limit");
             int units = 0;
-            for (const QChar c : value) units += c.unicode() < 0x80 || (c.unicode() >= 0xff61 && c.unicode() <= 0xff9f) ? 1 : 2;
+            units = langByteCount(value);
+            if (part.expression->valueType() == OperandType::Int) units = value.size();
             const QString padding(int(qMax<qint64>(0, width - units)), QLatin1Char(' '));
             value = part.leftAlign ? value + padding : padding + value;
         }
@@ -471,6 +502,7 @@ qint64 ExpressionEvaluator::resolveIndex(const VariableNode& node, int index,
     if (index < 0 || index >= node.indices().size()) return 0;
     const ExpressionNode& idx = *node.indices().at(index);
     QVariant value = evaluateNode(idx, storage, gameBaseData);
+    if (!value.isValid()) throw std::runtime_error("Invalid variable index");
     // 字符串下标判定：解析期已定型（强类型）或运行期确实是字符串
     const bool isStr = (idx.valueType() == OperandType::Str)
                        || value.userType() == QMetaType::QString;
@@ -480,7 +512,7 @@ qint64 ExpressionEvaluator::resolveIndex(const VariableNode& node, int index,
             const int mapped = m_constantTable->indexForVariable(node.name(), name);
             if (mapped >= 0) return mapped;
         }
-        return name.toLongLong();   // 退化为数值字面量（如 "3"）
+        throw std::runtime_error("Unknown variable index keyword");
     }
     // 裸标识符下标的运行期兜底：内部解析路径（evaluate(QString) / evalExpressionCached
     // 的回退分支）没有挂常量名提供器，`TALENT:ARG:性別` 的 `性別` 会解析成未知变量
@@ -582,12 +614,32 @@ QVariant ExpressionEvaluator::evaluateVariable(const VariableNode &node, Variabl
     }
     
     QString varName = node.name();
+    const int count = node.indices().size();
+    const bool aliased = storage->resolvedStorageName(varName) != varName;
+    if (aliased && node.valueType() == OperandType::Str) {
+        const QString target = storage->resolvedStorageName(varName);
+        const int idx = node.indices().isEmpty() ? 0
+            : static_cast<int>(resolveIndex(node, 0, storage, gameBaseData));
+        const QString text = storage->getGlobalStr1DRaw(target, idx);
+        return QVariant(text);
+    }
+    if (aliased && storage->hasReference(node.name())) {
+        // 只有已登记为 REF 的整数形参才切换到目标系统变量路由；
+        // 普通私有作用域名称解析为 COLLECT\x1fCHOICES 仍应保留原变量语义。
+        varName = storage->resolvedStorageName(varName);
+    }
+    const bool chara = node.characterData
+        || (node.dimension < 0 && storage->isCharaDataVariable(varName));
+    const int dimension = chara ? storage->charaDataDimension(varName) : variableDimension(varName);
+    const int full = dimension + (chara ? 1 : 0);
+    if (!aliased && (count > full || (dimension >= 2 && count != full)))
+        throw std::runtime_error("Missing variable parameters or invalid index dimension");
     if (storage->hasParameter(varName)) return storage->parameter(varName);
 
     // ---- 角色数据变量（CFLAG/TALENT/… 内建 + 用户 #DIM(S) CHARADATA）----
     // 必须按 (角色号, 元素下标) 存取。此前走通用 1D 全局路径，把角色号之后的
     // 元素下标整个丢掉，导致同一角色的所有元素挤在一个槽位互相覆盖。
-    if (storage->isCharaDataVariable(varName)) {
+    if (chara) {
         const QList<int> ids = resolveIndices(node, storage, gameBaseData);
         int charaId = 0;
         QList<int> elems;
@@ -823,6 +875,13 @@ QVariant ExpressionEvaluator::evaluateIndexedVariable(const QString &varName, in
 
 QVariant ExpressionEvaluator::evaluateBinaryOp(const BinaryOpNode &node, VariableStorage *storage, GameBaseData *gameBaseData)
 {
+    const bool rightFirst = node.op().type() == TokenType::DIVIDE || node.op().type() == TokenType::MODULO;
+    QVariant right;
+    if (rightFirst) {
+        right = evaluateNode(*node.right(), storage, gameBaseData);
+        if (!right.isValid()) return QVariant();
+        if (right.toLongLong() == 0) throw std::runtime_error("Division or remainder by zero");
+    }
     QVariant left = evaluateNode(*node.left(), storage, gameBaseData);
     if (!left.isValid()) return QVariant();
     // Match OperatorMethod.cs: logical operators short-circuit before evaluating
@@ -838,7 +897,7 @@ QVariant ExpressionEvaluator::evaluateBinaryOp(const BinaryOpNode &node, Variabl
             || (!truth && logicalOp == TokenType::LOGICAL_NAND))
             return QVariant::fromValue<qint64>(1);
     }
-    QVariant right = evaluateNode(*node.right(), storage, gameBaseData);
+    if (!rightFirst) right = evaluateNode(*node.right(), storage, gameBaseData);
     if (!left.isValid() || !right.isValid()) [[unlikely]] {
         return QVariant();
     }
@@ -870,14 +929,23 @@ QVariant ExpressionEvaluator::evaluateBinaryOp(const BinaryOpNode &node, Variabl
 
 QVariant ExpressionEvaluator::evaluateUnaryOp(const UnaryOpNode &node, VariableStorage *storage, GameBaseData *gameBaseData)
 {
-    QVariant operand = evaluateNode(*node.operand().get(), storage, gameBaseData);
+    if (node.operand()->valueType() != OperandType::Int) throw std::runtime_error("Unary operand must be integer");
+    QSharedPointer<VariableNode> fixedTarget;
+    const bool increment = node.op().type() == TokenType::INCREMENT || node.op().type() == TokenType::DECREMENT;
+    if (increment && node.operand()->kind() == NodeKind::Variable) {
+        const auto& original = static_cast<const VariableNode&>(*node.operand());
+        fixedTarget = QSharedPointer<VariableNode>::create(original.name(), original.valueType());
+        for (int i = 0; i < original.indices().size(); ++i)
+            fixedTarget->addIndex(QSharedPointer<LiteralNode>::create(resolveIndex(original, i, storage, gameBaseData)));
+    }
+    QVariant operand = evaluateNode(fixedTarget ? *fixedTarget : *node.operand(), storage, gameBaseData);
     if (!operand.isValid()) {
         return QVariant();
     }
     const qint64 v = operand.toLongLong();
     switch (node.op().type()) {
     case TokenType::NOT:       return QVariant::fromValue<qint64>(v == 0 ? 1 : 0);
-    case TokenType::MINUS:     return QVariant::fromValue<qint64>(-v);
+    case TokenType::MINUS:     return QVariant::fromValue<qint64>(std::bit_cast<qint64>(quint64(0)-quint64(v)));
     case TokenType::PLUS:      return QVariant::fromValue<qint64>(v);
     case TokenType::BIT_NOT:   return QVariant::fromValue<qint64>(~v);
     case TokenType::INCREMENT:
@@ -887,11 +955,16 @@ QVariant ExpressionEvaluator::evaluateUnaryOp(const UnaryOpNode &node, VariableS
         // C# OperatorMethod：++x -> PlusValue(1)（返回新值）；x++ -> PlusValue(1)-1（返回旧值）
         // 两者**都会写回变量**（CanRestructure = false）。
         if (target && target->kind() == NodeKind::Variable) {
-            const VariableNode& var = static_cast<const VariableNode&>(*target);
-            assignVariable(var, storage, gameBaseData, v + delta);
-            return QVariant::fromValue<qint64>(node.isPostfix() ? v : v + delta);
+            const VariableNode& var = fixedTarget ? *fixedTarget : static_cast<const VariableNode&>(*target);
+            QVariant constant;
+            if ((m_constProvider && m_constProvider(var.name(), constant))
+                || (m_constArrayChecker && m_constArrayChecker(var.name())))
+                throw std::runtime_error("Cannot increment a constant");
+            const qint64 updated = std::bit_cast<qint64>(quint64(v)+quint64(delta));
+            if (!assignVariable(var, storage, gameBaseData, updated)) throw std::runtime_error("Invalid increment target");
+            return QVariant::fromValue<qint64>(node.isPostfix() ? v : updated);
         }
-        return QVariant::fromValue<qint64>(v + delta);
+        throw std::runtime_error("Increment requires an integer variable");
     }
     default: break;
     }
@@ -1438,11 +1511,11 @@ bool ExpressionEvaluator::evaluateBuiltin(const FunctionNode &node, VariableStor
         const QString text = S(0);
         ExpressionLexer lexer;
         ExpressionParser parser;
-        const StrFormParser::ExprResolver resolve = [&parser, &lexer](const QString& e) {
-            return parser.parse(lexer.tokenize(e, 1));
+        const StrFormParser::ExprResolver resolve = [this, &parser, &lexer](const QString& e) {
+            return m_astProvider ? m_astProvider(e) : parser.parse(lexer.tokenize(e, 1));
         };
-        const QSharedPointer<ExpressionNode> form = StrFormParser::parse(text, resolve);
-        if (!form) { out = QVariant(text); return true; }
+        const QSharedPointer<ExpressionNode> form = StrFormParser::parse(text, resolve, ignoreTripleSymbols());
+        if (!form) throw std::runtime_error("Invalid STRFORM");
         out = evaluateNode(*form, storage, gameBaseData);
         return true;
     }
@@ -1799,7 +1872,7 @@ bool ExpressionEvaluator::evaluateBuiltin(const FunctionNode &node, VariableStor
         const int dim = node.arguments().size() >= 2 ? static_cast<int>(I(1)) : 0;
         qint64 size = 0;
         if (storage) {
-            size = storage->arraySize(name);
+            size = storage->arraySizeRaw(storage->resolvedStorageName(name));
             const VariableConfig& cfg = storage->variableConfig();
             if (size <= 0 && dim == 0) {
                 size = cfg.getSize1D(name);

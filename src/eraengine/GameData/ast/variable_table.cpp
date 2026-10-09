@@ -301,7 +301,11 @@ void VariableTable::resolveDimensions() {
 void VariableTable::setConstArray(const QString& name, const QList<qint64>& values)
 {
     m_constArray.insert(nk(name), values);
-    if (!values.isEmpty()) m_constInt.insert(nk(name), values.first());
+    // 只有**单元素**常量才当作标量常数参与表达式折叠（`#DIM CONST W = 12`）。
+    // 多元素常量数组（`#DIM CONST K17C_RTF = 0,1p0,…`）**不**折叠：把整数组名
+    // 折成首个元素会让 `FINDELEMENT(K17C_RTF, v)` 之类「把数组本身当变量用」的
+    // 调用变成「实得表达式」，也会掩盖真正的下标缺失。数组访问走 constArrayAt()。
+    if (values.size() == 1) m_constInt.insert(nk(name), values.first());
 }
 
 void VariableTable::setConstExprs(const QString& name, const QStringList& exprs)

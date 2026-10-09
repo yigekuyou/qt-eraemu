@@ -34,7 +34,16 @@ QString stripLineComment(const QString& text) {
             if (c == quote) quote = QChar();
             continue;
         }
-        if (c == QLatin1Char('"') || c == QLatin1Char('\'')) { quote = c; continue; }
+        if (c == QLatin1Char('"')) { quote = c; continue; }
+        if (c == QLatin1Char('\'')) {
+            // `'=` 是字符串赋值运算符，**不是**引号（对齐 C# LexicalAnalyzer：`'` 只在
+            // AllowSingleQuotationStr 上下文里才是字符串界符）。此前一律把 `'` 当引号，
+            // 于是 `X '= SUBSTRINGU(…); 说明` 的 ';' 被吞进"字符串"，注释没被剥掉，
+            // 右值整段解析失败 ->「赋值右值无法解析或包含空项」。
+            if (i + 1 < text.size() && text.at(i + 1) == QLatin1Char('=')) continue;
+            quote = c;
+            continue;
+        }
         if (c == QLatin1Char(';')) return text.left(i);
     }
     return text;

@@ -44,79 +44,79 @@
         <translation type="unfinished"></translation>
     </message>
     <message>
-        <location filename="../src/eraengine/GameData/ast/expression_ast.cpp" line="341"/>
-        <source>需要普通一维数组变量</source>
+        <location filename="../src/eraengine/GameData/ast/expression_ast.cpp" line="345"/>
+        <source>需要一维数组变量</source>
         <translation type="unfinished"></translation>
     </message>
     <message>
-        <location filename="../src/eraengine/GameData/ast/expression_ast.cpp" line="345"/>
+        <location filename="../src/eraengine/GameData/ast/expression_ast.cpp" line="349"/>
         <source>需要角色变量</source>
         <translation type="unfinished"></translation>
     </message>
     <message>
-        <location filename="../src/eraengine/GameData/ast/expression_ast.cpp" line="367"/>
+        <location filename="../src/eraengine/GameData/ast/expression_ast.cpp" line="371"/>
         <location filename="../src/eraengine/GameData/ast/argument_parser.cpp" line="143"/>
         <source>%1 参数过少（需要至少 %2 个，实得 %3）</source>
         <translation type="unfinished"></translation>
     </message>
     <message>
-        <location filename="../src/eraengine/GameData/ast/expression_ast.cpp" line="371"/>
+        <location filename="../src/eraengine/GameData/ast/expression_ast.cpp" line="375"/>
         <location filename="../src/eraengine/GameData/ast/argument_parser.cpp" line="147"/>
         <source>%1 参数过多（最多 %2 个，实得 %3）</source>
         <translation type="unfinished"></translation>
     </message>
     <message>
-        <location filename="../src/eraengine/GameData/ast/expression_ast.cpp" line="382"/>
+        <location filename="../src/eraengine/GameData/ast/expression_ast.cpp" line="386"/>
         <source>%1 第 %2 个参数%3</source>
         <translation type="unfinished"></translation>
     </message>
     <message>
-        <location filename="../src/eraengine/GameData/ast/expression_ast.cpp" line="541"/>
+        <location filename="../src/eraengine/GameData/ast/expression_ast.cpp" line="545"/>
         <source>缺少表达式</source>
         <translation type="unfinished"></translation>
     </message>
     <message>
-        <location filename="../src/eraengine/GameData/ast/expression_ast.cpp" line="549"/>
+        <location filename="../src/eraengine/GameData/ast/expression_ast.cpp" line="553"/>
         <source>变量下标超过三项</source>
         <translation type="unfinished"></translation>
     </message>
     <message>
-        <location filename="../src/eraengine/GameData/ast/expression_ast.cpp" line="556"/>
+        <location filename="../src/eraengine/GameData/ast/expression_ast.cpp" line="560"/>
         <source>变量 %1 缺少参数或下标维数错误</source>
         <translation type="unfinished"></translation>
     </message>
     <message>
-        <location filename="../src/eraengine/GameData/ast/expression_ast.cpp" line="565"/>
+        <location filename="../src/eraengine/GameData/ast/expression_ast.cpp" line="569"/>
         <source>变量 %1 常量下标越界</source>
         <translation type="unfinished"></translation>
     </message>
     <message>
-        <location filename="../src/eraengine/GameData/ast/expression_ast.cpp" line="572"/>
+        <location filename="../src/eraengine/GameData/ast/expression_ast.cpp" line="576"/>
         <source>二元运算类型错误</source>
         <translation type="unfinished"></translation>
     </message>
     <message>
-        <location filename="../src/eraengine/GameData/ast/expression_ast.cpp" line="577"/>
+        <location filename="../src/eraengine/GameData/ast/expression_ast.cpp" line="581"/>
         <source>单目运算类型错误</source>
         <translation type="unfinished"></translation>
     </message>
     <message>
-        <location filename="../src/eraengine/GameData/ast/expression_ast.cpp" line="581"/>
+        <location filename="../src/eraengine/GameData/ast/expression_ast.cpp" line="585"/>
         <source>自增需要非const整数变量</source>
         <translation type="unfinished"></translation>
     </message>
     <message>
-        <location filename="../src/eraengine/GameData/ast/expression_ast.cpp" line="590"/>
+        <location filename="../src/eraengine/GameData/ast/expression_ast.cpp" line="594"/>
         <source>三元条件或分支类型错误</source>
         <translation type="unfinished"></translation>
     </message>
     <message>
-        <location filename="../src/eraengine/GameData/ast/expression_ast.cpp" line="611"/>
+        <location filename="../src/eraengine/GameData/ast/expression_ast.cpp" line="615"/>
         <source>FORM插值类型错误</source>
         <translation type="unfinished"></translation>
     </message>
     <message>
-        <location filename="../src/eraengine/GameData/ast/expression_ast.cpp" line="615"/>
+        <location filename="../src/eraengine/GameData/ast/expression_ast.cpp" line="619"/>
         <source>FORM宽度必须为整数</source>
         <translation type="unfinished"></translation>
     </message>
@@ -181,8 +181,8 @@
         <translation type="unfinished"></translation>
     </message>
     <message>
-        <location filename="../src/eraengine/GameData/ast/ast_builder.cpp" line="1160"/>
-        <location filename="../src/eraengine/GameData/ast/ast_builder.cpp" line="1171"/>
+        <location filename="../src/eraengine/GameData/ast/ast_builder.cpp" line="1169"/>
+        <location filename="../src/eraengine/GameData/ast/ast_builder.cpp" line="1180"/>
         <source>未识别的指令: %1</source>
         <translation type="unfinished"></translation>
     </message>
@@ -207,62 +207,62 @@
         <translation type="unfinished"></translation>
     </message>
     <message>
-        <location filename="../src/eraengine/GameProc/era_parse_table.cpp" line="1441"/>
+        <location filename="../src/eraengine/GameProc/era_parse_table.cpp" line="1452"/>
         <source>装载期常量表达式求值失败</source>
         <translation type="unfinished"></translation>
     </message>
     <message>
-        <location filename="../src/eraengine/GameProc/era_parse_table.cpp" line="1463"/>
+        <location filename="../src/eraengine/GameProc/era_parse_table.cpp" line="1474"/>
         <source>左值表达式解析失败</source>
         <translation type="unfinished"></translation>
     </message>
     <message>
-        <location filename="../src/eraengine/GameProc/era_parse_table.cpp" line="1464"/>
+        <location filename="../src/eraengine/GameProc/era_parse_table.cpp" line="1475"/>
         <source>左值不是变量项</source>
         <translation type="unfinished"></translation>
     </message>
     <message>
-        <location filename="../src/eraengine/GameProc/era_parse_table.cpp" line="1468"/>
+        <location filename="../src/eraengine/GameProc/era_parse_table.cpp" line="1479"/>
         <source>赋值左值必须为有效变量项（%1：%2）</source>
         <translation type="unfinished"></translation>
     </message>
     <message>
-        <location filename="../src/eraengine/GameProc/era_parse_table.cpp" line="1483"/>
+        <location filename="../src/eraengine/GameProc/era_parse_table.cpp" line="1494"/>
         <source>赋值右值无法解析或包含空项</source>
         <translation type="unfinished"></translation>
     </message>
     <message>
-        <location filename="../src/eraengine/GameProc/era_parse_table.cpp" line="1492"/>
+        <location filename="../src/eraengine/GameProc/era_parse_table.cpp" line="1503"/>
         <source>复合赋值不允许列表</source>
         <translation type="unfinished"></translation>
     </message>
     <message>
-        <location filename="../src/eraengine/GameProc/era_parse_table.cpp" line="1499"/>
+        <location filename="../src/eraengine/GameProc/era_parse_table.cpp" line="1510"/>
         <source>不能赋值const变量</source>
         <translation type="unfinished"></translation>
     </message>
     <message>
-        <location filename="../src/eraengine/GameProc/era_parse_table.cpp" line="1620"/>
+        <location filename="../src/eraengine/GameProc/era_parse_table.cpp" line="1631"/>
         <source>字符串赋值FORM无效</source>
         <translation type="unfinished"></translation>
     </message>
     <message>
-        <location filename="../src/eraengine/GameProc/era_parse_table.cpp" line="1690"/>
+        <location filename="../src/eraengine/GameProc/era_parse_table.cpp" line="1701"/>
         <source>函数 %1 的实参过多（形参 %2 个，实得 %3 个）</source>
         <translation type="unfinished"></translation>
     </message>
     <message>
-        <location filename="../src/eraengine/GameProc/era_parse_table.cpp" line="1698"/>
+        <location filename="../src/eraengine/GameProc/era_parse_table.cpp" line="1709"/>
         <source>函数 %1 第 %2 个实参需要%3，实得字符串（不能从字符串转换为整数）</source>
         <translation type="unfinished"></translation>
     </message>
     <message>
-        <location filename="../src/eraengine/GameProc/era_parse_table.cpp" line="1756"/>
+        <location filename="../src/eraengine/GameProc/era_parse_table.cpp" line="1767"/>
         <source>未定义的函数 %1</source>
         <translation type="unfinished"></translation>
     </message>
     <message>
-        <location filename="../src/eraengine/GameProc/era_parse_table.cpp" line="1813"/>
+        <location filename="../src/eraengine/GameProc/era_parse_table.cpp" line="1824"/>
         <source>三項演算子の使用法が不正です（条件须为整数；真/假分支须同为整数或同为字符串）</source>
         <translation type="unfinished"></translation>
     </message>

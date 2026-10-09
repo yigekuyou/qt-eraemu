@@ -116,8 +116,10 @@ UserDefinedVariableData UserDefinedVariableData::create(QString streamContent, b
 		// 2. 解析维数与长度指定 (如: , 10, 20)
 		stream = stream.trimmed();
 		QList<int> sizeNum;
+		bool dimsGiven = false;
 
 		if (stream.startsWith(',')) {
+				dimsGiven = true;
 				stream.remove(0, 1);
 
 				// 分割维度与初始值部分（顶层 '='，避免 VARSIZE("X=Y",1) 之类误切）
@@ -151,20 +153,12 @@ UserDefinedVariableData UserDefinedVariableData::create(QString streamContent, b
 				}
 		}
 
-		if (sizeNum.isEmpty()) sizeNum.append(1);
-
-		data.dimension = sizeNum.size();
-		data.lengths = sizeNum;
-
-		if (data.dimension > 3) {
-				throw std::runtime_error("不支持 4 维以上的数组");
-		}
-
 		// 3. 解析默认初始值 (如: = "A", "B")
 		stream = stream.trimmed();
+		QList<QString> initialValues;
 		if (stream.startsWith('=')) {
 				stream.remove(0, 1);
-				const QStringList initialValues = splitTopLevel(stream, QLatin1Char(','));
+				initialValues = splitTopLevel(stream, QLatin1Char(','));
 
 				for (QString val : initialValues) {
 						val = val.trimmed();
@@ -184,6 +178,26 @@ UserDefinedVariableData UserDefinedVariableData::create(QString streamContent, b
 				}
 		} else if (data.isConst) {
 				throw std::runtime_error("CONST 变量必须赋予初始值");
+		}
+
+		// 4. 未显式给尺寸时，数组长度 = 初值个数（对齐 C# UserDefinedVariableData.Create:
+		//    `if (sizeNum.Count == 0) sizeNum.Add(terms.Count);`）。
+		//    `#DIM CONST SNOW = 0xFFFFFF,0xEBEBEB,0xD2D2D2,0x969696` 是**长度 4** 的
+		//    常量数组；此前恒按长度 1 登记，于是 SNOW:1..3 被误判「常量下标越界」。
+		if (!dimsGiven) {
+				int count = 0;
+				for (const QString& v : initialValues) {
+						if (!v.trimmed().isEmpty()) ++count;
+				}
+				if (count > 0) sizeNum.append(count);
+		}
+		if (sizeNum.isEmpty()) sizeNum.append(1);
+
+		data.dimension = sizeNum.size();
+		data.lengths = sizeNum;
+
+		if (data.dimension > 3) {
+				throw std::runtime_error("不支持 4 维以上的数组");
 		}
 
 		return data;

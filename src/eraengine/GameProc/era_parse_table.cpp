@@ -1431,9 +1431,20 @@ void EraParseTable::finalizeParse() {
     };
     for (auto& script : m_scripts) {
         for (auto& line : script.lines) {
-            const auto validate = [&](const QSharedPointer<ExpressionNode>& ast) {
+            // 指令的「变量槽」实参允许整数组出现（`VARSET 集合`、`CALL F(集合)`）：
+            // 这些位置**不该**要求下标，否则 2 维以上数组会被误判「缺少参数或下标维数错误」
+            // （eraTW 里 CALL 的 REF 实参 / VARSET 的整数组实参全是这种写法）。
+            const ArgKind argKind = line.argument.kind;
+            const bool varSlotArgs = argKind == ArgKind::Call || argKind == ArgKind::CallF
+                || argKind == ArgKind::Var || argKind == ArgKind::VarSet
+                || argKind == ArgKind::Swap || argKind == ArgKind::Bit
+                || argKind == ArgKind::Power || argKind == ArgKind::GetInt
+                || argKind == ArgKind::VarStr || argKind == ArgKind::ArrayControl
+                || argKind == ArgKind::SortChara || argKind == ArgKind::ForNext;
+            const auto validate = [&](const QSharedPointer<ExpressionNode>& ast,
+                                      bool requireIndices = true) {
                 if (!ast) return;
-                QString error = validateExpression(*ast);
+                QString error = validateExpression(*ast, requireIndices);
                 if (error.isEmpty() && m_evaluator && m_variableStorage) {
                     walkExpression(*ast, [&](ExpressionNode& n) {
                         if (error.isEmpty() && n.kind() != NodeKind::Literal && constantTree(n)
@@ -1451,7 +1462,7 @@ void EraParseTable::finalizeParse() {
                 }
             };
             validate(line.condition);
-            for (const auto& operand : line.arguments) validate(operand.ast);
+            for (const auto& operand : line.arguments) validate(operand.ast, !varSlotArgs);
             if (!line.assignOperator.isEmpty() && line.arguments.size() == 2) {
                 const auto& dest = line.arguments[0].raw;
                 const QString name = dest.section(':', 0, 0).trimmed();

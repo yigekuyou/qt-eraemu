@@ -291,6 +291,48 @@ int main(int argc, char* argv[]) {
     check(parseToString("A = B") == "<null>", "'=' 不是表达式运算符（赋值由指令层处理）");
     check(parseToString("") == "<null>", "空表达式解析为空");
 
+    qDebug() << "\n9) 字符串赋值 '= 的行内注释 + 变量槽实参";
+    {
+        // `'=` 是字符串赋值运算符，不是引号：其后的 ';' 必须仍然剥成注释，
+        // 否则右值整段解析失败（eraTW _List.ERB「赋值右值无法解析或包含空项」）。
+        ProcessState st2;
+        EraParseTable t2(&st2);
+        VariableStorage vs2;
+        t2.setVariableStorage(&vs2);
+        const AstResolver r2 = [&t2](const QString& e) { return t2.expressionAst(e); };
+        const LogicalLine assign =
+            AstBuilder::build("X '= SUBSTRINGU(Y, 0, 1); 这里是注释",
+                              ScriptPosition("s.ERB", 1, 0), r2);
+        check(assign.isInstruction() && assign.assignOperator == "'=",
+              "'= 识别为字符串赋值运算符");
+        check(assign.arguments.size() == 2 && assign.arguments[1].raw == "SUBSTRINGU(Y, 0, 1)",
+              QString("'= 右值剥离行内注释（实得 %1）")
+                  .arg(assign.arguments.size() > 1 ? assign.arguments[1].raw : QStringLiteral("<无>")));
+    }
+    {
+        // 2 维数组整数组出现在「变量槽」实参（VARSET / CALL 的 REF 实参）里不该要求下标；
+        // MAXARRAY 的 RefInt1D 也接受角色一维数组（TCVAR）。
+        ProcessState st3;
+        EraParseTable t3(&st3);
+        VariableStorage vs3;
+        t3.setVariableStorage(&vs3);
+        const AstResolver r3 = [&t3](const QString& e) { return t3.expressionAst(e); };
+        const QStringList vsrc = {
+            "@MAIN",
+            "#DIM 集合, 100, 3",
+            "VARSET 集合",
+            "RESULT = MAXARRAY(TCVAR, 390, 394)"
+        };
+        QList<LogicalLine> vlines;
+        for (int i = 0; i < vsrc.size(); ++i)
+            vlines.append(AstBuilder::build(vsrc.at(i), ScriptPosition("v.ERB", i + 1, 0), r3));
+        t3.loadScript("v", vlines);
+        t3.finalizeParse();
+        for (const QString& w : t3.parseWarnings()) qDebug().noquote() << "      warn:" << w;
+        check(t3.parseWarningCount() == 0,
+              QString("变量槽实参不误报（实得 %1 条告警）").arg(t3.parseWarningCount()));
+    }
+
     qDebug() << "\n===============================";
     if (g_failures == 0) {
         qDebug() << "[SUCCESS] parse-table complete-AST tests passed";

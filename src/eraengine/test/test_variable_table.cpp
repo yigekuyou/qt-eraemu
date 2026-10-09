@@ -142,6 +142,36 @@ int main(int argc, char* argv[]) {
                   .arg(grid && !grid->lengths.isEmpty() ? QString::number(grid->lengths.value(0)) : "?"));
         const VariableDecl* nums = table.variableTable().find("NUMS", "MAIN");
         check(nums != nullptr && nums->lengths == QList<int>({3, 4}), "NUMS 维数 == [3,4]（字面量）");
+
+        // 未显式给尺寸时，长度 = 初值个数（C# sizeNum.Add(terms.Count)）。
+        // `#DIM CONST SNOW = a,b,c,d` 是长度 4 的常量数组：曾按长度 1 登记，
+        // 使 SNOW:1..3 被误判「常量下标越界」（eraTW DRAW_COLOREDMAP.ERB）。
+        const QStringList constArrSrc = {
+            "@MAIN",
+            "#DIM CONST SNOW = 0x111111,0x222222,0x333333,0x444444",
+            "#DIM CONST SCALAR = 7"
+        };
+        const AstResolver r3 = [&table](const QString& e) { return table.expressionAst(e); };
+        QList<LogicalLine> s3;
+        for (int i = 0; i < constArrSrc.size(); ++i) {
+            s3.append(AstBuilder::build(constArrSrc.at(i), ScriptPosition("ca.ERB", i, 1), r3));
+        }
+        table.loadScript("carr", s3);
+        table.finalizeParse();
+        const VariableDecl* snow = table.variableTable().find("SNOW", "MAIN");
+        check(snow != nullptr && snow->lengths == QList<int>({4}),
+              QString("SNOW 长度 == [4]（得到 %1）")
+                  .arg(snow && !snow->lengths.isEmpty() ? QString::number(snow->lengths.value(0)) : "?"));
+        qint64 snow1 = 0;
+        check(table.variableTable().constArrayAt("SNOW", 1, snow1) && snow1 == 0x222222,
+              "SNOW:1 == 0x222222");
+        // 单元素常量仍然参与「常量折叠」；多元素常量数组不折叠
+        qint64 scalar = 0;
+        check(table.variableTable().constInt("SCALAR", scalar) && scalar == 7,
+              "#DIM CONST SCALAR = 7 -> 标量常数");
+        qint64 snowScalar = 0;
+        check(!table.variableTable().constInt("SNOW", snowScalar),
+              "常量数组 SNOW 不当作标量常数折叠");
     }
 
     qDebug() << "\n4) 类型回填（强类型）";

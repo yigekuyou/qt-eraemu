@@ -336,9 +336,13 @@ bool argMatches(BuiltinArg want, const QSharedPointer<ExpressionNode>& arg, QStr
             return false;
         }
         if (var && var->dimension >= 0) {
+            // 对齐 C# FunctionMethod.ArgumentTypeCheck：`ArgType.CharacterData` 只是
+            // **额外要求**（有则必须角色变量），没有它并不**禁止**角色变量。
+            // `RefInt1D` 只要求「一维整型数组」，TCVAR（角色一维数组）同样满足 ——
+            // 所以 MAXARRAY(TCVAR, a, b) 在 C# 合法（eraTW 的 口上 就这么写）。
             if ((want == BuiltinArg::VarArray || want == BuiltinArg::VarIntArray)
-                && (var->dimension != 1 || var->characterData)) {
-                why = QCoreApplication::translate("ParseDiagnostics", "需要普通一维数组变量");
+                && var->dimension != 1) {
+                why = QCoreApplication::translate("ParseDiagnostics", "需要一维数组变量");
                 return false;
             }
             if (want == BuiltinArg::VarChara && !var->characterData) {

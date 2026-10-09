@@ -280,6 +280,7 @@ signals:
 
 private:
     QString m_gameDirectory;
+    QString m_storageRoot;
     QString m_csvDir;     // 解析后的 CSV 目录（绝对路径，实际大小写）
     QString m_erbDir;     // 解析后的 ERB 目录（绝对路径，实际大小写）
     bool    m_searchSubdirectory = true;   // Config.SearchSubdirectory（子目录内检索）

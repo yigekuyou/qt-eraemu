@@ -81,6 +81,7 @@ qt_add_qml_module(appemuera
     # 带上 `import io.yigekuoyou.eraengine`（DEPENDENCIES 写的是 target 名
     # "eraengine"，qmllint 按模块 URI 解析会找不到）—— qmllint/qmlls 也才能解析这些类型。
     IMPORTS io.yigekuoyou.eraengine
+    SOURCES src/platform/game_library.cpp src/platform/game_library.h
     QML_FILES
         src/qml/Main.qml
         src/qml/NativeMenuBar.qml
@@ -109,6 +110,7 @@ target_link_libraries(appemuera
 #  来自构建树的库还必须有依赖关系 —— 上面 target_link_libraries 已提供）。
 # QTP0002（Qt 6.6+）允许这里用生成器表达式。
 if(ANDROID)
+    set_property(TARGET appemuera PROPERTY QT_ANDROID_PACKAGE_SOURCE_DIR "${CMAKE_CURRENT_SOURCE_DIR}/android")
     # androiddeployqt does not reliably discover shared QML module libraries
     # through a CMake target dependency. Include both the module backend and
     # its plugin explicitly so import io.yigekuoyou.eraengine can initialize.
@@ -164,4 +166,13 @@ add_subdirectory(src/eraengine)
 option(EMUERA_BUILD_TOOLS "Build engine-backed LSP and MCP servers" ON)
 if(EMUERA_BUILD_TOOLS AND NOT ANDROID)
     add_subdirectory(src/tools)
+endif()
+
+if(BUILD_TESTING AND NOT ANDROID)
+    qt_add_executable(test_game_library test/test_game_library.cpp
+        src/platform/game_library.cpp src/platform/game_library.h)
+    target_include_directories(test_game_library PRIVATE src/platform src/eraengine)
+    target_link_libraries(test_game_library PRIVATE Qt6::Quick Qt6::Concurrent Qt6::Test eraengine)
+    add_test(NAME test_game_library COMMAND test_game_library)
+    set_tests_properties(test_game_library PROPERTIES ENVIRONMENT "QT_QPA_PLATFORM=offscreen")
 endif()

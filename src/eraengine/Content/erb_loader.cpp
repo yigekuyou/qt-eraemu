@@ -1,3 +1,4 @@
+#include "../GameData/game_paths.h"
 /*
  * emuera —— Emuera（ERB 脚本引擎）的 Qt6 + QML/C++ 移植
  * Copyright (C) 2026  yigekuyou
@@ -47,6 +48,7 @@ static constexpr int kMaxScanDepth = 255;
 // 旧实现用 basename -> m_scripts 后写覆盖先写，被覆盖文件的 @label 还会
 // 指向赢家文件的行号（跨文件跳错）。
 static QString scriptNameFor(const QString& root, const QString& filePath) {
+    if (GamePaths::isContent(filePath)) return filePath; // unique even for opaque IDs
     const QString abs = QFileInfo(filePath).absoluteFilePath();
     if (!root.isEmpty()) {
         const QDir rootDir(QFileInfo(root).absoluteFilePath());
@@ -94,6 +96,7 @@ void ErbLoader::tryAutoLoadRename(const QString& dirPath) {    if (!m_preprocess
         return;
     }
     // ERB 目录的兄弟目录 CSV / Csv / csv
+    if (GamePaths::isContent(dirPath)) return; // EraEngine loads sibling CSV explicitly
     const QDir erbDir(dirPath);
     const QString parent = QFileInfo(dirPath).absolutePath();
     QStringList candidates;
@@ -149,7 +152,7 @@ QStringList ErbLoader::collectFiles(const QString& dirPath, int depth) const {
     QStringList dirs = dir.entryList(QDir::Dirs | QDir::NoDotAndDotDot, QDir::NoSort);
     std::sort(dirs.begin(), dirs.end(), ordinalIgnoreCaseLess);
     for (const QString& d : dirs) {
-        out.append(collectFiles(dirPath + "/" + d, depth + 1));
+        out.append(collectFiles(GamePaths::join(dirPath, d), depth + 1));
     }
 
     QFileInfoList files = dir.entryInfoList(
@@ -485,7 +488,7 @@ ErbLoader::LoadPrep ErbLoader::prepareLoad(const QString& dirPath, int depth) co
     // ---- AST 磁盘缓存命中检查（对标 QML Disk Cache）----
     // 命中则**整库**读回并在本后台线程完成校验，随后跳过全部「读/解码/预处理/
     // 词法/语法」；未命中（含任一文件反序列化失败）删除坏缓存并回落正常解析。
-    if (m_astDiskCache) {
+    if (m_astDiskCache && !GamePaths::isContent(dirPath)) {
         prep.cacheKey = ErbAstDiskCache::computeKey(dirPath, prep.files, int(m_readEncoding),
                                                    m_preprocessor.debugMode());
         ErbAstDiskCache::Reader reader(prep.cacheKey);

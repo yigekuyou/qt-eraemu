@@ -30,6 +30,7 @@ import io.yigekuoyou.appemuera
 import QtQuick
 import QtQuick.Controls
 import QtQuick.Dialogs
+import QtQuick.Layouts
 import io.yigekuoyou.eraengine
 
 // ---------------------------------------------------------------------------
@@ -55,6 +56,7 @@ ApplicationWindow {
 
     // 平台差异总开关：移动端没有菜单栏/托盘/F11，走触屏适配
     readonly property bool isMobile: Qt.platform.os === "android" || Qt.platform.os === "ios"
+    readonly property bool isAndroid: Qt.platform.os === "android"
     // 原生菜单栏：macOS 总是走系统菜单栏；Linux 探测 D-Bus 全局菜单宿主
     // （com.canonical.AppMenu.Registrar，Plasma/Unity），有宿主走 labs 原生
     // 菜单栏（NativeMenuBar.qml），否则窗口内 MenuBar
@@ -210,13 +212,70 @@ ApplicationWindow {
 
     // ---- 对话框 ----
     // 原生文件对话框（平台对话框，常驻即可）
+    GameLibrary {
+        id: gameLibrary
+        onErrorChanged: {
+            if (window.isAndroid && error !== "" && !gamePicker.visible)
+                gamePicker.open();
+        }
+        onGameReady: function(path) {
+            eraEngine.loadAsync(path);
+        }
+    }
     FolderDialog {
         id: folderDialog
-        title: qsTr("选择游戏目录")
-        currentFolder: "file://" + eraEngine.gui.startDirectory
-        // 走异步装载（后台解析 ERB -> AST，主线程只按块合并）：eraTW 有 2200+
-        // 个 ERB、200 万行，同步装载会把 GUI 线程锁死十几秒。loadAsync() 立即返回。
-        onAccepted: eraEngine.loadAsync(selectedFolder)
+        title: window.isAndroid ? qsTr("设置游戏扫描目录（eraemu）") : qsTr("选择游戏目录")
+        currentFolder: window.isAndroid ? gameLibrary.scanRoot
+                                        : "file://" + eraEngine.gui.startDirectory
+        onAccepted: {
+            if (window.isAndroid)
+                gameLibrary.scanRoot = selectedFolder;
+            else
+                eraEngine.loadAsync(selectedFolder);
+        }
+    }
+    Dialog {
+        id: gamePicker
+        parent: Overlay.overlay
+        modal: true
+        title: qsTr("选择游戏")
+        anchors.centerIn: parent
+        width: Math.min(parent.width - 32, 560)
+        height: Math.min(parent.height - 32, 400)
+        onOpened: {
+            gameLibrary.refresh();
+            if (gameLibrary.scanRoot === "")
+                folderDialog.open();
+        }
+        contentItem: ColumnLayout {
+            Label {
+                Layout.fillWidth: true
+                text: gameLibrary.error || (gameLibrary.busy ? qsTr("正在准备游戏…")
+                      : qsTr("从已授权的扫描目录选择游戏"))
+                wrapMode: Text.WordWrap
+            }
+            ListView {
+                Layout.fillWidth: true
+                Layout.fillHeight: true
+                clip: true
+                model: gameLibrary.games
+                delegate: ItemDelegate {
+                    required property var modelData
+                    width: ListView.view.width
+                    text: modelData.name
+                    enabled: !gameLibrary.busy
+                    onClicked: {
+                        gameLibrary.selectGame(modelData.path);
+                        gamePicker.close();
+                    }
+                }
+            }
+            Button {
+                text: qsTr("设置游戏扫描目录…")
+                enabled: !gameLibrary.busy
+                onClicked: folderDialog.open()
+            }
+        }
     }
 
     FileDialog {
@@ -277,9 +336,9 @@ ApplicationWindow {
     // ---- 菜单动作（QtQuick.Controls 的 MenuItem 用 action 承载快捷键）----
     Action {
         id: actOpen
-        text: qsTr("打开目录…")
+        text: window.isAndroid ? qsTr("选择游戏…") : qsTr("打开目录…")
         shortcut: StandardKey.Open
-        onTriggered: folderDialog.open()
+        onTriggered: window.isAndroid ? gamePicker.open() : folderDialog.open()
     }
     Action {
         id: actReload
@@ -370,7 +429,7 @@ ApplicationWindow {
     }
 
     // 菜单结构共享给两套菜单实现：
-    //   * 桌面 MenuBar / 移动端弹出菜单：直接用 id（action: actOpen）；
+    //   * 桌面 MenuBar / 移动端弹出菜单：直接用 id（action: window.menuActions.open）；
     //   * 原生菜单栏 NativeMenuBar.qml：labs MenuItem 没有 action 属性，
     //     靠这个映射逐项绑定状态、转发 trigger()。
     readonly property var menuActions: ({
@@ -399,30 +458,30 @@ ApplicationWindow {
         sourceComponent: MenuBar {
             Menu {
                 title: qsTr("文件(&F)")
-                MenuItem { action: actOpen }
-                MenuItem { action: actReload }
-                MenuItem { action: actSaveLog }
-                MenuItem { action: actTitle }
+                MenuItem { action: window.menuActions.open }
+                MenuItem { action: window.menuActions.reload }
+                MenuItem { action: window.menuActions.saveLog }
+                MenuItem { action: window.menuActions.title }
                 MenuSeparator {}
-                MenuItem { action: actSettings }
+                MenuItem { action: window.menuActions.settings }
                 MenuSeparator {}
-                MenuItem { action: actQuit }
+                MenuItem { action: window.menuActions.quit }
             }
 
             Menu {
                 title: qsTr("编辑(&E)")
-                MenuItem { action: actClear }
-                MenuItem { action: actBottom }
+                MenuItem { action: window.menuActions.clear }
+                MenuItem { action: window.menuActions.bottom }
             }
 
             Menu {
                 title: qsTr("视图(&V)")
-                MenuItem { action: actZoomIn }
-                MenuItem { action: actZoomOut }
+                MenuItem { action: window.menuActions.zoomIn }
+                MenuItem { action: window.menuActions.zoomOut }
                 MenuSeparator {}
-                MenuItem { action: actWindowed }
-                MenuItem { action: actFullscreen }
-                MenuItem { action: actBorderless }
+                MenuItem { action: window.menuActions.windowed }
+                MenuItem { action: window.menuActions.fullscreen }
+                MenuItem { action: window.menuActions.borderless }
                 MenuSeparator {}
                 MenuItem {
                     text: qsTr("刷新帧率 +")
@@ -436,7 +495,7 @@ ApplicationWindow {
 
             Menu {
                 title: qsTr("帮助(&H)")
-                MenuItem { action: actAbout }
+                MenuItem { action: window.menuActions.about }
             }
         }
     }
@@ -484,16 +543,16 @@ ApplicationWindow {
         component TouchMenuItem: MenuItem {
             implicitHeight: Math.max(48, implicitContentHeight + topPadding + bottomPadding)
         }
-        TouchMenuItem { action: actOpen }
-        TouchMenuItem { action: actReload; enabled: eraEngine.gameDirectory !== "" }
-        TouchMenuItem { action: actSaveLog }
-        TouchMenuItem { action: actTitle; enabled: eraEngine.gameDirectory !== "" }
+        TouchMenuItem { action: window.menuActions.open }
+        TouchMenuItem { action: window.menuActions.reload; enabled: eraEngine.gameDirectory !== "" }
+        TouchMenuItem { action: window.menuActions.saveLog; visible: !window.isAndroid }
+        TouchMenuItem { action: window.menuActions.title; enabled: eraEngine.gameDirectory !== "" }
         MenuSeparator {}
-        TouchMenuItem { action: actSettings }
-        TouchMenuItem { action: actAbout }
+        TouchMenuItem { action: window.menuActions.settings }
+        TouchMenuItem { action: window.menuActions.about }
         MenuSeparator {}
-        TouchMenuItem { action: actBottom }
-        TouchMenuItem { action: actQuit }
+        TouchMenuItem { action: window.menuActions.bottom }
+        TouchMenuItem { action: window.menuActions.quit }
     }
 
     // ---- 控制台（渲染层）：虚拟舞台 ----
@@ -502,134 +561,139 @@ ApplicationWindow {
     // 都只是变焦：折行、网格、C++ 排版永远只由舞台尺寸决定，边缘露出
     // window.color（背景色）= 信箱。Qt 文档：Item.scale 级联到全部子项，
     // 输入事件坐标自动按逆变换映射（MouseArea 拿到的仍是舞台本地坐标）。
-    Item {
-        id: gameViewport
+    ColumnLayout {
         anchors.fill: parent
-        // Android normally resizes the window above the keyboard. Keep the
-        // viewport clipped so the scaled stage cannot draw below that area.
-        clip: true
-
+        spacing: 0
         Item {
-            id: gameStage
-            anchors.centerIn: parent
-            width: eraEngine.gui.windowWidth
-            height: eraEngine.gui.windowHeight
-            scale: Math.max(0, Math.min(gameViewport.width / width,
-                            gameViewport.height / height))
+            id: gameViewport
+            Layout.fillWidth: true
+            Layout.fillHeight: true
+            // Android normally resizes the window above the keyboard. Keep the
+            // viewport clipped so the scaled stage cannot draw below that area.
+            clip: true
 
-            EraRender {
-                id: eraRender
+            Item {
+                id: gameStage
+                anchors.centerIn: parent
+                width: eraEngine.gui.windowWidth
+                height: eraEngine.gui.windowHeight
+                scale: Math.max(0, Math.min(gameViewport.width / width,
+                                gameViewport.height / height))
+
+                EraRender {
+                    id: eraRender
+                    anchors.fill: parent
+                    engine: eraEngine
+                    // 屏幕刷新率来自 C++（QScreen::refreshRate）——QML 的 Screen 没有
+                    // refreshRate 属性，供控制台计算刷新节拍（见 Console.qml）。
+                    screenRefreshRate: windowController.screenRefreshRate
+                }
+            }
+
+        // 未装载时在屏幕空间显示操作，不随游戏舞台缩小。
+        Column {
+            anchors.centerIn: parent
+            width: Math.max(0, Math.min(gameViewport.width - 32, 360))
+            spacing: 16
+            visible: eraEngine.gameDirectory === "" && !statusStrip.loading
+                     && !window.hasPresentedGame
+            Label {
+                width: parent.width
+                text: window.isAndroid ? qsTr("选择扫描目录中的游戏以开始") : qsTr("打开游戏目录以开始")
+                horizontalAlignment: Text.AlignHCenter
+                wrapMode: Text.WordWrap
+                color: eraEngine.gui.foreColor
+            }
+            Button {
+                anchors.horizontalCenter: parent.horizontalCenter
+                text: actOpen.text
+                height: Math.max(48, implicitHeight)
+                onClicked: actOpen.trigger()
+            }
+        }
+
+
+        }
+
+        // ---- 音频播放维护层（QML 按 C++ 登记的管线数量维护播放器）----
+        AudioPlayers {
+            id: audioPlayers
+            audio: eraEngine.audio
+        }
+
+        // ---- 底部「红绿灯」状态条 ----
+        // 状态条占据布局最下方；每个灯一个含义，
+        // 悬浮（Hover）弹出 ToolTip 说明。灯亮/灭 = 该状态此刻是否成立。
+        Item {
+            id: statusStrip
+            Layout.fillWidth: true
+            Layout.preferredHeight: window.isAndroid ? 24 : 12
+            Layout.alignment: Qt.AlignBottom
+            implicitHeight: 12
+
+            property bool loading: false      // 脚本装载中
+            property bool errorState: eraEngine.hasError
+            property int warningCount: 0      // 装载告警条数
+            property int loadDone: 0          // 装载进度（已处理文件数）
+            property int loadTotal: 0         // 装载进度（总文件数）
+            readonly property bool waiting: eraEngine.console.waitingInput
+            readonly property int audioChannels: audioPlayers.activeChannels
+
+            Rectangle {
                 anchors.fill: parent
-                engine: eraEngine
-                // 屏幕刷新率来自 C++（QScreen::refreshRate）——QML 的 Screen 没有
-                // refreshRate 属性，供控制台计算刷新节拍（见 Console.qml）。
-                screenRefreshRate: windowController.screenRefreshRate
+                radius: height / 2
+                color: Qt.rgba(0, 0, 0, 0.5)
+                border.width: 1
+                border.color: Qt.rgba(1, 1, 1, 0.15)
+            }
+
+            Row {
+                id: lightRow
+                anchors.centerIn: parent
+                spacing: 5
+
+                // ① 错误：最近一次执行/装载出错
+                StatusLight {
+                    litColor: "#e0483c"
+                    lit: statusStrip.errorState
+                    label: qsTr("错误")
+                    detail: lit ? qsTr("最近一次执行出错") : qsTr("正常")
+                }
+                // ② 载入：正在装载脚本
+                StatusLight {
+                    litColor: "#e0c040"
+                    lit: statusStrip.loading
+                    label: qsTr("载入")
+                    detail: lit ? qsTr("正在装载脚本") : qsTr("空闲")
+                }
+                // ③ 等待输入：脚本停在 INPUT 等玩家操作
+                StatusLight {
+                    litColor: "#48c048"
+                    lit: statusStrip.waiting
+                    label: qsTr("等待输入")
+                    detail: lit ? qsTr("等待：%1").arg(eraEngine.console.inputKind)
+                                : qsTr("脚本运行中")
+                }
+                // ④ 音频：有音频管线正在出声
+                StatusLight {
+                    litColor: "#48a0e0"
+                    lit: statusStrip.audioChannels > 0
+                    label: qsTr("音频")
+                    detail: lit ? qsTr("播放中：%1 路").arg(statusStrip.audioChannels)
+                                : qsTr("静音")
+                }
+                // ⑤ 装载告警：解析期告警条数
+                StatusLight {
+                    litColor: "#e08a30"
+                    lit: statusStrip.warningCount > 0
+                    label: qsTr("装载告警")
+                    detail: statusStrip.warningCount > 0
+                            ? qsTr("%1 条").arg(statusStrip.warningCount) : qsTr("无")
+                }
             }
         }
 
-    }
-
-    // 未装载时在屏幕空间显示操作，不随游戏舞台缩小。
-    Column {
-        anchors.centerIn: gameViewport
-        width: Math.max(0, Math.min(gameViewport.width - 32, 360))
-        spacing: 16
-        visible: eraEngine.gameDirectory === "" && !statusStrip.loading
-                 && !window.hasPresentedGame
-        Label {
-            width: parent.width
-            text: qsTr("打开游戏目录以开始")
-            horizontalAlignment: Text.AlignHCenter
-            wrapMode: Text.WordWrap
-            color: eraEngine.gui.foreColor
-        }
-        Button {
-            anchors.horizontalCenter: parent.horizontalCenter
-            text: qsTr("打开目录…")
-            height: Math.max(48, implicitHeight)
-            onClicked: actOpen.trigger()
-        }
-    }
-
-    // ---- 音频播放维护层（QML 按 C++ 登记的管线数量维护播放器）----
-    AudioPlayers {
-        id: audioPlayers
-        audio: eraEngine.audio
-    }
-
-    // ---- 底部「红绿灯」状态条 ----
-    // 高度最小、悬浮在内容之上（不占布局、不挤动控制台）；每个灯一个含义，
-    // 悬浮（Hover）弹出 ToolTip 说明。灯亮/灭 = 该状态此刻是否成立。
-    Item {
-        id: statusStrip
-        anchors.left: parent.left
-        anchors.bottom: parent.bottom
-        anchors.margins: 4
-        width: lightRow.width + 10
-        height: 12
-        z: 1000
-
-        property bool loading: false      // 脚本装载中
-        property bool errorState: eraEngine.hasError
-        property int warningCount: 0      // 装载告警条数
-        property int loadDone: 0          // 装载进度（已处理文件数）
-        property int loadTotal: 0         // 装载进度（总文件数）
-        readonly property bool waiting: eraEngine.console.waitingInput
-        readonly property int audioChannels: audioPlayers.activeChannels
-
-        Rectangle {
-            anchors.fill: parent
-            radius: height / 2
-            color: Qt.rgba(0, 0, 0, 0.5)
-            border.width: 1
-            border.color: Qt.rgba(1, 1, 1, 0.15)
-        }
-
-        Row {
-            id: lightRow
-            anchors.centerIn: parent
-            spacing: 5
-
-            // ① 错误：最近一次执行/装载出错
-            StatusLight {
-                litColor: "#e0483c"
-                lit: statusStrip.errorState
-                label: qsTr("错误")
-                detail: lit ? qsTr("最近一次执行出错") : qsTr("正常")
-            }
-            // ② 载入：正在装载脚本
-            StatusLight {
-                litColor: "#e0c040"
-                lit: statusStrip.loading
-                label: qsTr("载入")
-                detail: lit ? qsTr("正在装载脚本") : qsTr("空闲")
-            }
-            // ③ 等待输入：脚本停在 INPUT 等玩家操作
-            StatusLight {
-                litColor: "#48c048"
-                lit: statusStrip.waiting
-                label: qsTr("等待输入")
-                detail: lit ? qsTr("等待：%1").arg(eraEngine.console.inputKind)
-                            : qsTr("脚本运行中")
-            }
-            // ④ 音频：有音频管线正在出声
-            StatusLight {
-                litColor: "#48a0e0"
-                lit: statusStrip.audioChannels > 0
-                label: qsTr("音频")
-                detail: lit ? qsTr("播放中：%1 路").arg(statusStrip.audioChannels)
-                            : qsTr("静音")
-            }
-            // ⑤ 装载告警：解析期告警条数
-            StatusLight {
-                litColor: "#e08a30"
-                lit: statusStrip.warningCount > 0
-                label: qsTr("装载告警")
-                detail: statusStrip.warningCount > 0
-                        ? qsTr("%1 条").arg(statusStrip.warningCount) : qsTr("无")
-            }
-        }
-    }
+    } // ColumnLayout：状态条始终位于游戏视口下方
 
     // 状态灯（最小尺寸圆点；悬浮显示含义 + 当前状态）
     component StatusLight: Rectangle {
@@ -687,6 +751,11 @@ ApplicationWindow {
         if (isMobile)
             windowController.windowMode = "fullscreen";
 
+        if (isAndroid) {
+            gamePicker.open();
+            return;
+        }
+
         // 支持命令行直接带游戏目录启动：appemuera <dir>
         const args = Qt.application.arguments;
         for (let i = 1; i < args.length; ++i) {
@@ -728,7 +797,7 @@ ApplicationWindow {
         id: loadingOverlay
         anchors.fill: parent
         z: 5000
-        visible: statusStrip.loading
+        visible: statusStrip.loading || gameLibrary.busy
         color: Qt.rgba(0, 0, 0, 0.55)
 
         Column {
@@ -738,14 +807,14 @@ ApplicationWindow {
 
             Text {
                 anchors.horizontalCenter: parent.horizontalCenter
-                text: qsTr("正在装载脚本…")
+                text: gameLibrary.busy ? qsTr("正在准备游戏…") : qsTr("正在装载脚本…")
                 color: "white"
                 font.pixelSize: 20
             }
             ProgressBar {
                 id: loadBar
                 width: parent.width
-                indeterminate: statusStrip.loadTotal <= 0
+                indeterminate: gameLibrary.busy || statusStrip.loadTotal <= 0
                 from: 0
                 to: Math.max(1, statusStrip.loadTotal)
                 value: statusStrip.loadDone

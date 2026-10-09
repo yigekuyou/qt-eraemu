@@ -1,3 +1,4 @@
+#include "../GameData/game_paths.h"
 /*
  * emuera —— Emuera（ERB 脚本引擎）的 Qt6 + QML/C++ 移植
  * Copyright (C) 2026  yigekuyou
@@ -81,7 +82,7 @@ ExecutionEngine::ExecutionEngine(VariableStorage* storage, GameBaseData* gameBas
         m_storage,
         [this] {
             return m_gameDirectory.isEmpty()
-                ? QString() : m_gameDirectory + QStringLiteral("/sav");
+                ? QString() : GamePaths::join(m_gameDirectory, QStringLiteral("sav"));
         },
         nullptr,   // functionExists（EraEngine 装配后经 setExpressionServices 注入）
         nullptr,   // doingFunction
@@ -2360,7 +2361,7 @@ bool ExecutionEngine::handleLoadGlobal() {
     // 对齐 C# LOADGLOBAL_Instruction：文件缺失 / 校验失败 -> RESULT=0 并返回
     //（C# 里 LOADGLOBAL 失败不是错误，脚本以 `RESULT = 0` 分支处理）。
     bool ok = false;
-    const QString path = m_gameDataDir + QLatin1String("/save_global.dat");
+    const QString path = GamePaths::join(m_gameDataDir, QStringLiteral("save_global.dat"));
     QFile file(path);
     if (file.open(QIODevice::ReadOnly)) {
         const QJsonDocument doc = QJsonDocument::fromJson(file.readAll());
@@ -2452,7 +2453,7 @@ bool ExecutionEngine::handleSaveGlobal() {
         qWarning() << "SAVEGLOBAL：游戏目录未知，跳过保存";
         return true;
     }
-    const QString path = m_gameDataDir + QLatin1String("/save_global.dat");
+    const QString path = GamePaths::join(m_gameDataDir, QStringLiteral("save_global.dat"));
     QFile file(path);
     if (!file.open(QIODevice::WriteOnly | QIODevice::Truncate)) {
         emit errorOccurred(QStringLiteral("SAVEGLOBAL 无法写入 %1").arg(path));
@@ -2519,9 +2520,8 @@ void ExecutionEngine::handleSaveData(const LogicalLine& line)
         emit errorOccurred(QStringLiteral("SAVEDATAのセーブテキストに改行文字が与えられました"));
         return;
     }
-    QDir().mkpath(m_gameDirectory + QStringLiteral("/sav"));
-    const QString path = m_gameDirectory + QStringLiteral("/sav/save%1.sav")
-                             .arg(idx, 2, 10, QLatin1Char('0'));
+    QDir().mkpath(GamePaths::join(m_gameDirectory, QStringLiteral("sav")));
+    const QString path = GamePaths::join(m_gameDirectory, QStringLiteral("sav/save%1.sav").arg(idx, 2, 10, QLatin1Char('0')));
     QString body = m_storage ? m_storage->dumpSaveData() : QString();
     // SAVETEXT（PUTFORM 累积文本）写进存档头（对齐 C# SaveToStream 第3项）
     body.replace(QStringLiteral("eraemu-save-v1"),
@@ -2545,8 +2545,7 @@ void ExecutionEngine::handleLoadData(const LogicalLine& line)
     const Operand& op = line.arguments.first();
     const qint64 idx = op.ast ? ev.evaluate(*op.ast, m_storage, m_gameBaseData).toLongLong()
                               : ev.evaluate(op.raw, m_storage, m_gameBaseData).toLongLong();
-    const QString path = m_gameDirectory + QStringLiteral("/sav/save%1.sav")
-                             .arg(idx, 2, 10, QLatin1Char('0'));
+    const QString path = GamePaths::join(m_gameDirectory, QStringLiteral("sav/save%1.sav").arg(idx, 2, 10, QLatin1Char('0')));
     QFile f(path);
     if (f.open(QIODevice::ReadOnly | QIODevice::Text)) {
         const QString body = QString::fromUtf8(f.readAll());
@@ -2565,8 +2564,7 @@ void ExecutionEngine::handleDelData(const LogicalLine& line)
     const Operand& op = line.arguments.first();
     const qint64 idx = op.ast ? ev.evaluate(*op.ast, m_storage, m_gameBaseData).toLongLong()
                               : ev.evaluate(op.raw, m_storage, m_gameBaseData).toLongLong();
-    const QString path = m_gameDirectory + QStringLiteral("/sav/save%1.sav")
-                             .arg(idx, 2, 10, QLatin1Char('0'));
+    const QString path = GamePaths::join(m_gameDirectory, QStringLiteral("sav/save%1.sav").arg(idx, 2, 10, QLatin1Char('0')));
     if (QFile::exists(path) && QFile::remove(path))
         qDebug() << "[save] DELDATA" << idx << "删除" << path;
 }
@@ -2577,8 +2575,7 @@ void ExecutionEngine::handleChkData(const LogicalLine& line)
     const Operand& op = line.arguments.isEmpty() ? Operand() : line.arguments.first();
     const qint64 idx = op.ast ? ev.evaluate(*op.ast, m_storage, m_gameBaseData).toLongLong()
                               : ev.evaluate(op.raw, m_storage, m_gameBaseData).toLongLong();
-    const QString path = m_gameDirectory + QStringLiteral("/sav/save%1.sav")
-                             .arg(idx, 2, 10, QLatin1Char('0'));
+    const QString path = GamePaths::join(m_gameDirectory, QStringLiteral("sav/save%1.sav").arg(idx, 2, 10, QLatin1Char('0')));
     const bool exists = QFile::exists(path);
     // 对齐 C# CheckdataMethod：RESULT = EraDataState（0=OK / 1=FILENOTFOUND），
     // RESULTS = 状态说明文本。
@@ -2951,7 +2948,7 @@ bool ExecutionEngine::handleSaveVarCommand(const LogicalLine& line)
         if (ops.isEmpty()) return true;
         const QString fileName = evalString(ops.first());
         if (fileName.isEmpty()) return true;
-        const QString path = m_gameDirectory + QStringLiteral("/sav/") + fileName;
+        const QString path = GamePaths::join(m_gameDirectory, QStringLiteral("sav/") + fileName);
         QFile f(path);
         if (!f.open(QIODevice::ReadOnly)) {
             qWarning() << "[save] LOADVAR 文件不存在:" << path;
@@ -3033,8 +3030,8 @@ bool ExecutionEngine::handleSaveVarCommand(const LogicalLine& line)
         vars.insert(varName, entry);
     }
 
-    QDir().mkpath(m_gameDirectory + QStringLiteral("/sav"));
-    const QString path = m_gameDirectory + QStringLiteral("/sav/") + fileName;
+    QDir().mkpath(GamePaths::join(m_gameDirectory, QStringLiteral("sav")));
+    const QString path = GamePaths::join(m_gameDirectory, QStringLiteral("sav/") + fileName);
     QJsonObject root;
     root.insert(QStringLiteral("format"), QStringLiteral("emuera-qt-savevar"));
     root.insert(QStringLiteral("message"), message);

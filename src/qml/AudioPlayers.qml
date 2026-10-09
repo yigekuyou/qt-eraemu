@@ -49,7 +49,7 @@ Item {
     function toUrl(s) {
         if (!s)
             return "";
-        if (s.indexOf("file:") === 0 || s.indexOf("qrc:") === 0 || s.indexOf("http") === 0)
+        if (s.indexOf("content:") === 0 || s.indexOf("file:") === 0 || s.indexOf("qrc:") === 0 || s.indexOf("http") === 0)
             return s;
         return "file://" + s;
     }

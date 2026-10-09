@@ -1,3 +1,4 @@
+#include "game_paths.h"
 /*
  * emuera —— Emuera（ERB 脚本引擎）的 Qt6 + QML/C++ 移植
  * Copyright (C) 2026  yigekuyou
@@ -58,7 +59,7 @@ QString FileSystem::resolveSubDir(const QString& basePath, const QString& name) 
     const QStringList entries = base.entryList(QDir::Dirs | QDir::NoDotAndDotDot, QDir::Name);
     for (const QString& e : entries) {
         if (e.compare(name, Qt::CaseInsensitive) == 0) {
-            return base.absoluteFilePath(e);
+            return GamePaths::join(basePath, e);
         }
     }
     return QString();
@@ -98,7 +99,7 @@ QStringList FileSystem::listFiles(const QString& dirPath, const QStringList& suf
     if (recursive) {
         const QStringList dirs = dir.entryList(QDir::Dirs | QDir::NoDotAndDotDot, QDir::Name);
         for (const QString& d : dirs) {
-            out += listFiles(dir.absoluteFilePath(d), suffixes, true);
+            out += listFiles(GamePaths::join(dirPath, d), suffixes, true);
         }
     }
     return out;
@@ -106,12 +107,12 @@ QStringList FileSystem::listFiles(const QString& dirPath, const QStringList& suf
 
 QString FileSystem::getPathWithActualCase(const QString& basePath, const QString& targetPath)
 {
-    return resolvePathCase(QDir(basePath).absoluteFilePath(targetPath));
+    return resolvePathCase(GamePaths::join(basePath, targetPath));
 }
 
 QString FileSystem::resolvePathCase(const QString& path)
 {
-    if (path.isEmpty()) return path;
+    if (path.isEmpty() || GamePaths::isContent(path)) return path;
     const QFileInfo info(path);
     if (info.exists()) return info.absoluteFilePath();
     // Resolve parents without assuming a Unix root: QFileInfo retains Windows
@@ -244,6 +245,8 @@ QString FileSystem::getFileName(const QString& filePath) const
 
 QString FileSystem::normalizePath(const QString& path) const
 {
+    if (GamePaths::isContent(path)) return path;
+    if (GamePaths::isContent(m_rootDir)) return GamePaths::join(m_rootDir, path);
     if (m_rootDir.isEmpty()) {
         QFileInfo fileInfo(path);
         return fileInfo.canonicalFilePath();
@@ -261,14 +264,16 @@ QString FileSystem::normalizePath(const QString& path) const
 
 QString FileSystem::getDirectoryPath(const QString& filePath) const
 {
+    // SAF documents have opaque IDs and no portable parent URI. Callers must
+    // retain the directory used to enumerate the document instead.
+    if (GamePaths::isContent(filePath)) return {};
     QFileInfo fileInfo(filePath);
     return fileInfo.absolutePath();
 }
 
 QString FileSystem::combinePath(const QString& basePath, const QString& relativePath) const
 {
-    QDir baseDir(basePath);
-    return baseDir.absoluteFilePath(relativePath);
+    return GamePaths::join(basePath, relativePath);
 }
 
 IoResult FileSystem::readTextFile(const QString& filePath, QString& content)
@@ -599,6 +604,6 @@ QString FileSystem::getConfigPath(const QString& basePath, const QString& config
     if (csvDir.isEmpty()) {
         return QString();
     }
-    const QString path = QDir(csvDir).absoluteFilePath(configName);
+    const QString path = GamePaths::join(csvDir, configName);
     return QFile::exists(path) ? path : QString();
 }

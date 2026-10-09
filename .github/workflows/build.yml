@@ -88,6 +88,8 @@ jobs:
           target: desktop
           arch: gcc_64
           modules: ${{ env.QT_MODULES }}
+          # Use the same Qt 6.11-aware installer as the Windows job.
+          aqtsource: 'git+https://github.com/miurahr/aqtinstall.git'
           cache: true
       - name: 配置
         run: |

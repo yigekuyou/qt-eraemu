@@ -1,3 +1,4 @@
+#include "GameData/game_paths.h"
 /*
  * emuera —— Emuera（ERB 脚本引擎）的 Qt6 + QML/C++ 移植
  * Copyright (C) 2026  yigekuyou
@@ -119,8 +120,7 @@ EraEngine::EraEngine(QObject *parent)
 		// 「存在 -> 0」是必须的（此前返回 1 语义相反）。
 		m_expressionEvaluator.setSaveExistsProvider([this](const QString& saveName) -> qint64 {
 			const qint64 idx = saveName.toLongLong();
-			const QString path = m_gameDirectory + QStringLiteral("/sav/save%1.sav")
-			                         .arg(idx, 2, 10, QLatin1Char('0'));
+			const QString path = GamePaths::join(m_storageRoot, QStringLiteral("sav/save%1.sav").arg(idx, 2, 10, QLatin1Char('0')));
 			return QFile::exists(path) ? 0 : 1;
 		});
 		// GETCOLOR / GETSTYLE：由执行引擎维护的当前颜色与样式位
@@ -318,7 +318,7 @@ EraEngine::EraEngine(QObject *parent)
 			return { len, per };
 		});
 		// SAVETEXT / LOADTEXT / SAVECHARA / LOADCHARA / GSAVE / GLOAD 的落盘目录
-		m_expressionEvaluator.setSaveDirectory(m_gameDirectory + QStringLiteral("/sav"));
+		m_expressionEvaluator.setSaveDirectory(GamePaths::join(m_storageRoot, QStringLiteral("sav")));
 		// 解析期也需要常量名表（CFLAG:ARG:現在位置 之类的常量名下标）
 		m_parseTable.setConstantTable(&m_constantTable);
 		m_parseTable.setGameBaseData(&m_gameBaseData);
@@ -586,7 +586,7 @@ void EraEngine::executeScript(const QString& scriptName)
 
 void EraEngine::loadAsync(const QString& directory)
 {
-		QString dir = directory;
+		QString dir = GamePaths::normalize(directory);
 		if (dir.startsWith(QLatin1String("file://"))) {
 				dir = QUrl(dir).toLocalFile();
 		}
@@ -605,8 +605,9 @@ void EraEngine::loadAsync(const QString& directory)
 		// 与 setGameDirectory() 保持同一套落盘目录：异步装载是 QML 的主路径，
 		// 这里若不设，SAVEGLOBAL / SAVETEXT / SAVECHARA / GSAVE 会落到空目录
 		// （或上一个游戏），存档静默丢失。
-		m_executionEngine.setGameDataDir(dir);
-		m_expressionEvaluator.setSaveDirectory(dir + QStringLiteral("/sav"));
+		m_storageRoot = GamePaths::storageRoot(dir);
+		m_executionEngine.setGameDataDir(m_storageRoot);
+		m_expressionEvaluator.setSaveDirectory(GamePaths::join(m_storageRoot, QStringLiteral("sav")));
 		reloadAsync();
 }
 
@@ -619,7 +620,7 @@ void EraEngine::setGameDirectory(const QString& directory)
 {
 		if (m_gameDirectory != directory) {
 				// Ensure the directory path is properly formatted
-				QString dir = directory;
+				QString dir = GamePaths::normalize(directory);
 				// If it's a URL (starts with file://), convert to local path
 				if (dir.startsWith("file://")) {
 						dir = QUrl(dir).toLocalFile();
@@ -631,9 +632,10 @@ void EraEngine::setGameDirectory(const QString& directory)
 				ResourceImageProvider::setRoot(dir);
 				m_audio.setSoundDirectory(dir);   // 音频资源检索目录（PLAYBGM/PLAYSOUND）
 				// SAVEGLOBAL / LOADGLOBAL 的落盘目录（对齐 C# getSaveDataPathG）
-				m_executionEngine.setGameDataDir(dir);
+				m_storageRoot = GamePaths::storageRoot(dir);
+		m_executionEngine.setGameDataDir(m_storageRoot);
 				// SAVETEXT / LOADTEXT / SAVECHARA / LOADCHARA / GSAVE / GLOAD 的落盘目录
-				m_expressionEvaluator.setSaveDirectory(dir + QStringLiteral("/sav"));
+				m_expressionEvaluator.setSaveDirectory(GamePaths::join(m_storageRoot, QStringLiteral("sav")));
 				qDebug() << "[DEBUG] About to call reload()";
 				reload();
 				qDebug() << "[DEBUG] reload() complete";
@@ -735,7 +737,7 @@ void EraEngine::resolveGameDirs()
 				qWarning() << "[EraEngine] ERB 目录未找到：" << m_gameDirectory;
 		}
 		// 存档目录注入（SAVEDATA/LOADDATA/DELDATA/CHKDATA 用）
-		m_executionEngine.setGameDirectory(m_gameDirectory);
+		m_executionEngine.setGameDirectory(m_storageRoot);
 }
 
 void EraEngine::loadConfigFiles()
@@ -746,22 +748,22 @@ void EraEngine::loadConfigFiles()
 		// 3. _fixed.config（最高优先级，位于 CSV 目录）
 		if (!m_csvDir.isEmpty()) {
 				// C# 同时兼容 _default.config / default.config。
-				QString defaultConfig = QDir(m_csvDir).absoluteFilePath("_default.config");
+				QString defaultConfig = GamePaths::join(m_csvDir, "_default.config");
 				if (!m_fileSystem.fileExists(defaultConfig))
-					defaultConfig = QDir(m_csvDir).absoluteFilePath("default.config");
+					defaultConfig = GamePaths::join(m_csvDir, "default.config");
 				if (m_fileSystem.fileExists(defaultConfig)) m_configLoader.loadConfigFile(defaultConfig, 0);
 		}
-		const QString mainConfig = QDir(m_gameDirectory).absoluteFilePath("emuera.config");
+		const QString mainConfig = GamePaths::join(m_gameDirectory, "emuera.config");
 		if (m_fileSystem.fileExists(mainConfig)) m_configLoader.loadConfigFile(mainConfig, 1);
 		if (!m_csvDir.isEmpty()) {
 				// C# 同时兼容 _fixed.config / fixed.config。
-				QString fixedConfig = QDir(m_csvDir).absoluteFilePath("_fixed.config");
+				QString fixedConfig = GamePaths::join(m_csvDir, "_fixed.config");
 				if (!m_fileSystem.fileExists(fixedConfig))
-					fixedConfig = QDir(m_csvDir).absoluteFilePath("fixed.config");
+					fixedConfig = GamePaths::join(m_csvDir, "fixed.config");
 				if (m_fileSystem.fileExists(fixedConfig)) m_configLoader.loadConfigFile(fixedConfig, 2);
 				// _Rename.csv 只有在配置明确启用时才加载（C# UseRenameFile，默认 false）。
 				const bool useRename = m_configLoader.getBool(QStringLiteral("_Rename.csvを利用する"), false);
-				const QString renameCsv = QDir(m_csvDir).absoluteFilePath("_Rename.csv");
+				const QString renameCsv = GamePaths::join(m_csvDir, "_Rename.csv");
 				if (useRename && m_fileSystem.fileExists(renameCsv)) {
 						m_executionEngine.getErbLoader().loadRenameFile(renameCsv);
 				}
@@ -847,7 +849,7 @@ void EraEngine::loadConstantData()
 		}
 		// 角色 CSV（对齐 C# ConstantData 读 <Csv>/Chara）：NAME/CALLNAME/BASE/ABL/…
 		const int charaLoaded = CsvLoader::loadCharaDirectory(
-		    m_csvDir + QStringLiteral("/Chara"), &m_constantTable, &m_variableStorage);
+		    GamePaths::join(m_csvDir, QStringLiteral("Chara")), &m_constantTable, &m_variableStorage);
 		// CSV* 系函数读「模板值」：装载完角色 CSV 后立刻快照一份
 		// （此后脚本对 VAR:角色:下标 的修改不再污染模板）
 		m_variableStorage.snapshotCharaTemplates();
@@ -962,7 +964,7 @@ QString EraEngine::probeGameEncoding()
 bool EraEngine::saveEncodingToConfig()
 {
 		if (m_csvDir.isEmpty()) return false;
-		const QString path = QDir(m_csvDir).absoluteFilePath(QStringLiteral("_fixed.config"));
+		const QString path = GamePaths::join(m_csvDir, QStringLiteral("_fixed.config"));
 		// 显式设置优先；否则用探测结论（前端可以「探测 -> 落盘」一步完成）
 		TextEncoding toSave = m_textEncoding;
 		if (toSave == TextEncoding::Auto) {
@@ -1397,8 +1399,7 @@ void EraEngine::buildSystemHost()
 		// 内容 = VariableStorage::dumpSaveData（eraemu-save-v1）+ SAVETEXT 概要头。
 		// 此前这四个回调从未接线：读档画面所有槽位恒判「没有数据」、保存恒失败。
 		const auto savePath = [this](int index) {
-				return m_gameDirectory + QStringLiteral("/sav/save%1.sav")
-						.arg(index, 2, 10, QLatin1Char('0'));
+				return GamePaths::join(m_storageRoot, QStringLiteral("sav/save%1.sav").arg(index, 2, 10, QLatin1Char('0')));
 		};
 		host.saveDataNos = [intCfg]() {
 				return intCfg({QStringLiteral("セーブデータの数"),
@@ -1437,7 +1438,7 @@ void EraEngine::buildSystemHost()
 				return exists;
 		};
 		host.saveTo = [this, savePath](int index, const QString& saveText) -> bool {
-				QDir().mkpath(m_gameDirectory + QStringLiteral("/sav"));
+				QDir().mkpath(GamePaths::join(m_storageRoot, QStringLiteral("sav")));
 				QString body = m_variableStorage.dumpSaveData();
 				if (!saveText.isEmpty()) {
 						body.replace(QStringLiteral("eraemu-save-v1"),

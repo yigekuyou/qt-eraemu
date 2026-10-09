@@ -1,3 +1,4 @@
+#include "../GameData/game_paths.h"
 /*
  * emuera —— Emuera（ERB 脚本引擎）的 Qt6 + QML/C++ 移植
  * Copyright (C) 2026  yigekuyou
@@ -65,7 +66,7 @@ void AudioPipelinePool::setSoundDirectory(const QString& dir) {
 QString AudioPipelinePool::resolveInDirectory(const QString& source) const {
     if (source.isEmpty()) return {};
     const QFileInfo direct(source);
-    if (direct.isAbsolute()) return direct.exists() ? direct.absoluteFilePath() : QString();
+    if (GamePaths::isContent(source) || direct.isAbsolute()) return direct.exists() ? direct.absoluteFilePath() : QString();
 
     // EE 的下载目录是 `<游戏目录>/sound/`（Program.SoundDir）；这里以它为**首选**，
     // 顺带兼容直接放在游戏根目录 / 常见子目录的情况。
@@ -81,14 +82,14 @@ QString AudioPipelinePool::resolveInDirectory(const QString& source) const {
         return fi.exists() && fi.isFile() ? fi.absoluteFilePath() : QString();
     };
     for (const QString& sub : kSubdirs) {
-        const QString dir = sub.isEmpty() ? base : (base.isEmpty() ? sub : base + QLatin1Char('/') + sub);
+        const QString dir = sub.isEmpty() ? base : (base.isEmpty() ? sub : GamePaths::join(base, sub));
         if (dir.isEmpty()) continue;
-        const QString prefix = dir + QLatin1Char('/') + source;
+        const QString prefix = GamePaths::join(dir, source);
         if (hasNameSuffix) {
             if (const QString hit = tryOne(prefix); !hit.isEmpty()) return hit;
         } else {
             for (const QString& ext : audioSuffixes()) {
-                if (const QString hit = tryOne(prefix + QLatin1Char('.') + ext); !hit.isEmpty())
+                if (const QString hit = tryOne(GamePaths::join(dir, source + QLatin1Char('.') + ext)); !hit.isEmpty())
                     return hit;
             }
         }

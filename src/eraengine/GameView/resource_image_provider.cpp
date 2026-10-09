@@ -1,3 +1,6 @@
+#include "../GameData/game_paths.h"
+#include <functional>
+#include <QSet>
 /*
  * emuera —— Emuera（ERB 脚本引擎）的 Qt6 + QML/C++ 移植
  * Copyright (C) 2026  yigekuyou
@@ -66,7 +69,7 @@ ResourceImageProvider::ResourceImageProvider()
 }
 
 void ResourceImageProvider::setRoot(const QString& dir) {
-    const QString normalized = QDir(dir).absolutePath();
+    const QString normalized = (GamePaths::isContent(dir) ? dir : QDir(dir).absolutePath());
     if (s_root == normalized) return;
     s_root = normalized;
     s_atlas.clear();
@@ -76,7 +79,7 @@ void ResourceImageProvider::setRoot(const QString& dir) {
 }
 
 void ResourceImageProvider::ensureAtlasLoaded(const QString& root) {
-    const QString base = root.isEmpty() ? s_root : QDir(root).absolutePath();
+    const QString base = root.isEmpty() ? s_root : (GamePaths::isContent(root) ? root : QDir(root).absolutePath());
     if (base.isEmpty() || s_atlasRoot == base) return;
 
     s_atlas.clear();
@@ -85,15 +88,22 @@ void ResourceImageProvider::ensureAtlasLoaded(const QString& root) {
     // （eraTW 的 差し替え.csv / 39_コマンド.csv 等也注册精灵；
     //   只读 list.csv 会让 SPRITECREATED("55_A1") 恒假 -> 立绘合成被跳过）。
     // 源图片路径相对于**该 csv 所在目录**（C# 用 csv 的目录拼接）。
-    const QString resDir = QDir(base).filePath(QStringLiteral("resources"));
-    QDirIterator csvIt(resDir, QStringList{QStringLiteral("*.csv")},
-                       QDir::Files, QDirIterator::Subdirectories);
-    while (csvIt.hasNext()) {
-        QFile file(csvIt.next());
-        // 源文件相对路径：resources/ 之下的 csv 子目录前缀
-        QString relDir = QDir(resDir).relativeFilePath(QFileInfo(csvIt.fileInfo()).absolutePath());
-        if (relDir == QLatin1String(".")) relDir.clear();
-        else relDir += QLatin1Char('/');
+    const QString resDir = GamePaths::join(base, QStringLiteral("resources"));
+    QList<QPair<QString, QString>> csvFiles; // file URI and actual containing directory
+    QSet<QString> visited;
+    std::function<void(const QString&, int)> collect = [&](const QString& dir, int depth) {
+        if (depth > 64 || visited.contains(dir)) return;
+        visited.insert(dir);
+        for (const QFileInfo& entry : QDir(dir).entryInfoList(QDir::AllEntries | QDir::NoDotAndDotDot)) {
+            if (entry.isSymLink()) continue;
+            if (entry.isDir()) collect(entry.absoluteFilePath(), depth + 1);
+            else if (entry.fileName().endsWith(QLatin1String(".csv"), Qt::CaseInsensitive))
+                csvFiles.append({entry.absoluteFilePath(), dir});
+        }
+    };
+    collect(resDir, 0);
+    for (const auto& csv : csvFiles) {
+        QFile file(csv.first);
         if (!file.open(QIODevice::ReadOnly | QIODevice::Text)) continue;
 
         while (!file.atEnd()) {
@@ -108,7 +118,7 @@ void ResourceImageProvider::ensureAtlasLoaded(const QString& root) {
             if (name.isEmpty() || source.isEmpty()) continue;
 
             Sprite sprite;
-            sprite.sourceFile = relDir + source;
+            sprite.sourceFile = GamePaths::join(csv.second, source);
             if (fields.size() >= 6) {
                 bool okX = false, okY = false, okW = false, okH = false;
                 sprite.x = fields.at(2).trimmed().toInt(&okX);
@@ -315,6 +325,7 @@ QImage ResourceImageProvider::loadImageFile(const QString& path) {
 }
 
 QString ResourceImageProvider::resolvePath(const QString& id, const QString& root) {
+    if (GamePaths::isContent(id)) return QFileInfo::exists(id) ? id : QString();
     const QString name = normalizeId(id);
     if (name.isEmpty()) {
         return QString();
@@ -329,11 +340,11 @@ QString ResourceImageProvider::resolvePath(const QString& id, const QString& roo
                                  : QStringList{QStringLiteral(".png"), QStringLiteral(".jpg"),
                                                QStringLiteral(".jpeg"), QStringLiteral(".bmp"),
                                                QStringLiteral(".webp"), QStringLiteral(".gif")};
-    const QStringList dirs = {QDir(base).filePath(QStringLiteral("resources")), base};
+    const QStringList dirs = {GamePaths::join(base, QStringLiteral("resources")), base};
 
     for (const QString& dir : dirs) {
         for (const QString& ext : exts) {
-            const QString candidate = QDir(dir).filePath(name + ext);
+            const QString candidate = GamePaths::join(dir, name + ext);
             if (QFileInfo::exists(candidate)) {
                 return QFileInfo(candidate).absoluteFilePath();
             }
@@ -375,8 +386,7 @@ bool ResourceImageProvider::intrinsicSize(const QString& id, int& width, int& he
             height = sprite.h;
             return true;
         }
-        const QString source = QDir(s_root).filePath(
-            QStringLiteral("resources/%1").arg(sprite.sourceFile));
+        const QString source = sprite.sourceFile;
         const QImage image = loadImageFile(source);
         if (!image.isNull()) {
             width = image.width();
@@ -420,7 +430,7 @@ QImage ResourceImageProvider::loadResourceImage(const QString& id) {
     const auto atlasIt = s_atlas.constFind(normalizedId);
     if (atlasIt != s_atlas.constEnd()) {
         const Sprite& sprite = atlasIt.value();
-        const QString source = QDir(s_root).filePath(QStringLiteral("resources/%1").arg(sprite.sourceFile));
+        const QString source = sprite.sourceFile;
         image = loadImageFile(source);
         if (!image.isNull() && sprite.hasRect) {
             const QRect rect(sprite.x, sprite.y, sprite.w, sprite.h);

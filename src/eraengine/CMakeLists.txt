@@ -57,6 +57,8 @@ Content/constant_table.h
 Content/erb_preprocessor.cpp
 Content/erb_preprocessor.h
 
+GameData/game_paths.cpp
+GameData/game_paths.h
 GameData/file_system_io.cpp
 GameData/file_system_io.h
 GameData/game_base_data.cpp

@@ -40,7 +40,19 @@ class ConsoleBackend;
 // 数据模型：QML 只读绑定；设置对话框写回后 `settingsChanged` 触发控制台重绘。
 // 纯逻辑（默认值/配置往返/颜色解析/日志文本）可无 UI 单测（见 test_gui_manager）。
 // ---------------------------------------------------------------------------
-class GuiManager : public QObject {
+// MSVC requires dllimport for data symbols such as staticMetaObject even when
+// WINDOWS_EXPORT_ALL_SYMBOLS exports the DLL's functions. CMake defines
+// eraengine_EXPORTS while compiling the shared library.
+#if defined(Q_OS_WIN)
+#  if defined(eraengine_EXPORTS)
+#    define EMUERA_GUI_EXPORT Q_DECL_EXPORT
+#  else
+#    define EMUERA_GUI_EXPORT Q_DECL_IMPORT
+#  endif
+#else
+#  define EMUERA_GUI_EXPORT
+#endif
+class EMUERA_GUI_EXPORT GuiManager : public QObject {
     Q_OBJECT
     QML_ELEMENT
     QML_UNCREATABLE("GuiManager 由 EraEngine 提供")

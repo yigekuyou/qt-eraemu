@@ -16,6 +16,7 @@
  * along with this program.  If not, see <https://www.gnu.org/licenses/>.
  */
 #include "constant_table.h"
+#include "GameData/game_paths.h"
 #include "GameData/file_system_io.h"   // FileSystem::resolvePathCase（加载前还原真实大小写）
 
 #include <QDir>
@@ -123,7 +124,7 @@ int ConstantTable::loadCsvDirectory(const QString& csvDir, bool recursive) {
     if (recursive) {
         const QStringList dirs = dir.entryList(QDir::Dirs | QDir::NoDotAndDotDot, QDir::Name);
         for (const QString& d : dirs) {
-            loaded += loadCsvDirectory(dir.absoluteFilePath(d), true);
+            loaded += loadCsvDirectory(GamePaths::join(csvDir, d), true);
         }
     }
     return loaded;

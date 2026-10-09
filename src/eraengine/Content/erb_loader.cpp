@@ -17,6 +17,7 @@
  * along with this program.  If not, see <https://www.gnu.org/licenses/>.
  */
 #include "erb_loader.h"
+#include <QCoreApplication>
 #include "era_parse_table.h"
 #include "GameData/file_system_io.h"   // FileSystem::resolvePathCase（加载前还原真实大小写）
 #include "ast/expression_lexer.h"
@@ -227,9 +228,10 @@ ErbLoader::FunctionTypes ErbLoader::scanFunctionTypes(const QString& content) co
         label = label.trimmed();
         if (label.isEmpty()) continue;
 
-        // 紧随其后的 #FUNCTION / #FUNCTIONS 决定返回类型
+        // 紧随其后的 #FUNCTION / #FUNCTIONS 决定返回类型；注释/空行不结束声明区
         for (int j = i + 1; j < lines.size(); ++j) {
             const QString dir = lines.at(j).trimmed();
+            if (dir.isEmpty() || dir.startsWith(QLatin1Char(';'))) continue;
             if (!dir.startsWith(QLatin1Char('#'))) break;
             const QString upper = dir.toUpper();
             if (upper.startsWith(QLatin1String("#FUNCTIONS"))) {
@@ -268,7 +270,7 @@ ParsedErbFile ErbLoader::parseOneFile(const QString& filePath, const FunctionTyp
                     exprFailed.insert(key);
                     pf.diagnostics.add(DiagSeverity::Warning, DiagCode::kExprParse,
                                        filePath, currentPhysicalLine, 1, 0,
-                                       QStringLiteral("表达式无法归约: %1").arg(key.left(80)));
+                                       QCoreApplication::translate("ParseDiagnostics", "表达式无法归约: %1").arg(key.left(80)));
                 }
             }
             return ast;
@@ -324,7 +326,7 @@ bool ErbLoader::mergeParsedFile(ParsedErbFile&& pf) {
             pf.path.endsWith(QLatin1String(".erh"), Qt::CaseInsensitive), pf.path);
         if (!loaded) {
             pf.diagnostics.add(DiagSeverity::Error, DiagCode::kArgCheck, pf.path, 1, 1, 0,
-                               QStringLiteral("脚本装载失败"));
+                               QCoreApplication::translate("ParseDiagnostics", "脚本装载失败"));
             m_parseTable->addParseDiagnostics(pf.diagnostics);
             return false;
         }

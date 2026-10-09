@@ -28,6 +28,7 @@
 #include <QLibraryInfo>
 #include <QQuickStyle>
 #include "GameView/resource_image_provider.h"
+#include "Config/i18n.h"
 
 // ---------------------------------------------------------------------------
 // 分平台 Quick Controls 样式（QQuickStyle::setStyle 必须在加载 QML 前调用）：
@@ -66,6 +67,9 @@ int main(int argc, char *argv[])
 {
 	applyPlatformStyle();
 	QApplication app(argc, argv);
+	// 尽早安装翻译器：QML 装载前装好，界面与装载期告警才会命中 .qm。
+	// 未提供 .qm 时无副作用（源文本即中文）。
+	eraengine::installTranslators();
 	#ifdef Q_OS_LINUX
 	app.setApplicationName("emuera");
 	#endif

@@ -170,6 +170,12 @@ public:
     [[nodiscard]] const ScriptData* script(const QString& scriptName) const;
     [[nodiscard]] QStringList scriptNames() const { return m_scripts.keys(); }
     [[nodiscard]] QSharedPointer<ExpressionNode> expressionAst(const QString& expr, bool quiet = false);
+    // 同上，但**显式指定作用域**（ownerFunction）。finalize 阶段 m_currentScript/
+    // m_currentLine 是陈旧值，直接调 expressionAst 会按「无作用域」解析 ——
+    // 私有变量遮蔽同名 #DIM CONST、FORM 插值里的局部变量都会解析错。
+    [[nodiscard]] QSharedPointer<ExpressionNode> expressionAstInScope(const QString& expr,
+                                                                      const QString& scope,
+                                                                      bool quiet = false);
     [[nodiscard]] const LogicalLine* lineAt(const QString& scriptName, int line) const;
     [[nodiscard]] int jumpTarget(const QString& scriptName, int line) const;
 
@@ -188,6 +194,10 @@ public:
 
     // 用户自定义函数注册表（对齐 C# FunctionLabelLine）
     [[nodiscard]] const UserFunctionInfo* userFunction(const QString& name) const;
+    // 式子调用该名字时的返回类型；Unknown = 交给内置函数解析。
+    // 对齐 C#：用户 @label 优先于内置函数，但无 #FUNCTION/#FUNCTIONS 的 @label
+    // 不覆盖同名内置函数（1.721「#FUNCTION の無い関数は組み込み関数を上書きしない」）。
+    [[nodiscard]] OperandType userCallReturnType(const QString& name) const;
     [[nodiscard]] const QHash<QString, UserFunctionInfo>& userFunctions() const { return m_functions; }
     // EXISTFUNCTION 语义（EmueraEE）：通常=1 / #FUNCTION=2 / #FUNCTIONS=3 / 未知=0。
     // caseInsensitive=false 时按声明处原始大小写精确匹配。

@@ -16,6 +16,7 @@
  * along with this program.  If not, see <https://www.gnu.org/licenses/>.
  */
 #include "expression_ast.h"
+#include <QCoreApplication>
 #include "operator_table.h"
 #include <cmath>
 #include <bit>
@@ -293,7 +294,7 @@ namespace {
 
 // 单个实参是否满足位置形态约束；ok=false 时写出期望/实得的说明。
 bool argMatches(BuiltinArg want, const QSharedPointer<ExpressionNode>& arg, QString& why) {
-    if (!arg) { why = QStringLiteral("实参缺失"); return false; }
+    if (!arg) { why = QCoreApplication::translate("ParseDiagnostics", "实参缺失"); return false; }
     const OperandType t = arg->valueType();
     const bool isVar = (arg->kind() == NodeKind::Variable);
     const auto* var = isVar ? static_cast<const VariableNode*>(arg.get()) : nullptr;
@@ -303,13 +304,13 @@ bool argMatches(BuiltinArg want, const QSharedPointer<ExpressionNode>& arg, QStr
         return true;
     case BuiltinArg::Int:
         if (isKnown(t) && t != OperandType::Int) {
-            why = QStringLiteral("需要整型表达式，实得 %1").arg(QString::fromLatin1(operandTypeName(t)));
+            why = QCoreApplication::translate("ParseDiagnostics", "需要整型表达式，实得 %1").arg(QString::fromLatin1(operandTypeName(t)));
             return false;
         }
         return true;
     case BuiltinArg::Str:
         if (isKnown(t) && t != OperandType::Str) {
-            why = QStringLiteral("需要字符串表达式，实得 %1").arg(QString::fromLatin1(operandTypeName(t)));
+            why = QCoreApplication::translate("ParseDiagnostics", "需要字符串表达式，实得 %1").arg(QString::fromLatin1(operandTypeName(t)));
             return false;
         }
         return true;
@@ -323,25 +324,25 @@ bool argMatches(BuiltinArg want, const QSharedPointer<ExpressionNode>& arg, QStr
         // 本移植的 AST 上只有「是不是变量 + 已知的 Int/Str 类型」，
         // 无法可靠判断数组维数/角色属性 —— 因此只校验「必须是变量」+ 类型，
         // 避免把 SUMCARRAY(初期貞操) 之类合法调用误报为错误。
-        if (!isVar) { why = QStringLiteral("需要变量，实得表达式"); return false; }
+        if (!isVar) { why = QCoreApplication::translate("ParseDiagnostics", "需要变量，实得表达式"); return false; }
         if ((want == BuiltinArg::VarInt || want == BuiltinArg::VarIntArray
              || want == BuiltinArg::VarChara)
             && isKnown(t) && t != OperandType::Int) {
-            why = QStringLiteral("需要整型变量，实得 %1 变量").arg(QString::fromLatin1(operandTypeName(t)));
+            why = QCoreApplication::translate("ParseDiagnostics", "需要整型变量，实得 %1 变量").arg(QString::fromLatin1(operandTypeName(t)));
             return false;
         }
         if (want == BuiltinArg::VarStr && isKnown(t) && t != OperandType::Str) {
-            why = QStringLiteral("需要字符串变量，实得 %1 变量").arg(QString::fromLatin1(operandTypeName(t)));
+            why = QCoreApplication::translate("ParseDiagnostics", "需要字符串变量，实得 %1 变量").arg(QString::fromLatin1(operandTypeName(t)));
             return false;
         }
         if (var && var->dimension >= 0) {
             if ((want == BuiltinArg::VarArray || want == BuiltinArg::VarIntArray)
                 && (var->dimension != 1 || var->characterData)) {
-                why = QStringLiteral("需要普通一维数组变量");
+                why = QCoreApplication::translate("ParseDiagnostics", "需要普通一维数组变量");
                 return false;
             }
             if (want == BuiltinArg::VarChara && !var->characterData) {
-                why = QStringLiteral("需要角色变量");
+                why = QCoreApplication::translate("ParseDiagnostics", "需要角色变量");
                 return false;
             }
         }
@@ -363,11 +364,11 @@ QString validateBuiltinCall(const BuiltinFunctionSpec& spec,
     mergeCoreArgWiden(spec.name, minArgs, maxArgs);
 
     if (n < minArgs) {
-        return QStringLiteral("%1 参数过少（需要至少 %2 个，实得 %3）")
+        return QCoreApplication::translate("ParseDiagnostics", "%1 参数过少（需要至少 %2 个，实得 %3）")
             .arg(funcName).arg(minArgs).arg(n);
     }
     if (maxArgs >= 0 && n > maxArgs) {
-        return QStringLiteral("%1 参数过多（最多 %2 个，实得 %3）")
+        return QCoreApplication::translate("ParseDiagnostics", "%1 参数过多（最多 %2 个，实得 %3）")
             .arg(funcName).arg(maxArgs).arg(n);
     }
 
@@ -378,7 +379,7 @@ QString validateBuiltinCall(const BuiltinFunctionSpec& spec,
         if (want == BuiltinArg::Any) continue;
         QString why;
         if (!argMatches(want, args.at(i), why)) {
-            return QStringLiteral("%1 第 %2 个参数%3").arg(funcName).arg(i + 1).arg(why);
+            return QCoreApplication::translate("ParseDiagnostics", "%1 第 %2 个参数%3").arg(funcName).arg(i + 1).arg(why);
         }
     }
     return QString();
@@ -537,7 +538,7 @@ QSharedPointer<ExpressionNode> cloneExpression(const QSharedPointer<ExpressionNo
 
 QString validateExpression(const ExpressionNode& node, bool requireIndices) {
     const auto check = [](const QSharedPointer<ExpressionNode>& child, bool indices = true) {
-        return child ? validateExpression(*child, indices) : QStringLiteral("缺少表达式");
+        return child ? validateExpression(*child, indices) : QCoreApplication::translate("ParseDiagnostics", "缺少表达式");
     };
     const auto first = [](QString a, QString b) { return a.isEmpty() ? b : a; };
     switch (node.kind()) {
@@ -545,14 +546,14 @@ QString validateExpression(const ExpressionNode& node, bool requireIndices) {
     case NodeKind::Variable: {
         const auto& v = static_cast<const VariableNode&>(node);
         const int n = v.indices().size();
-        if (n > 3) return QStringLiteral("变量下标超过三项");
+        if (n > 3) return QCoreApplication::translate("ParseDiagnostics", "变量下标超过三项");
         if (v.dimension >= 0) {
             const QString upper = v.name().toUpper();
             const bool argSlot = upper == QLatin1String("ARG") || upper == QLatin1String("ARGS");
             const int full = v.dimension + (v.characterData ? 1 : 0);
             if (n > full || (!argSlot && n > 0 && v.dimension >= 2 && n != full)
                 || (!argSlot && requireIndices && n == 0 && v.dimension >= 2))
-                return QStringLiteral("变量 %1 缺少参数或下标维数错误").arg(v.name());
+                return QCoreApplication::translate("ParseDiagnostics", "变量 %1 缺少参数或下标维数错误").arg(v.name());
         }
         for (int i = 0; i < n; ++i) {
             const QString e = check(v.indices()[i]);
@@ -561,23 +562,23 @@ QString validateExpression(const ExpressionNode& node, bool requireIndices) {
                 const int dim = i - (v.characterData && n > v.dimension ? 1 : 0);
                 if (dim >= 0 && dim < v.lengths.size() && v.lengths[dim] > 0
                     && (l->intValue() < 0 || l->intValue() >= v.lengths[dim]))
-                    return QStringLiteral("变量 %1 常量下标越界").arg(v.name());
+                    return QCoreApplication::translate("ParseDiagnostics", "变量 %1 常量下标越界").arg(v.name());
             }
         }
         return {};
     }
     case NodeKind::BinaryOp: {
         const auto& b = static_cast<const BinaryOpNode&>(node);
-        if (!b.typesValid()) return QStringLiteral("二元运算类型错误");
+        if (!b.typesValid()) return QCoreApplication::translate("ParseDiagnostics", "二元运算类型错误");
         return first(check(b.left()), check(b.right()));
     }
     case NodeKind::UnaryOp: {
         const auto& u = static_cast<const UnaryOpNode&>(node);
-        if (!u.typesValid()) return QStringLiteral("单目运算类型错误");
+        if (!u.typesValid()) return QCoreApplication::translate("ParseDiagnostics", "单目运算类型错误");
         if (u.op().type() == TokenType::INCREMENT || u.op().type() == TokenType::DECREMENT) {
             const auto* v = dynamic_cast<const VariableNode*>(u.operand().data());
             if (!v || v->readOnly || v->valueType() != OperandType::Int)
-                return QStringLiteral("自增需要非const整数变量");
+                return QCoreApplication::translate("ParseDiagnostics", "自增需要非const整数变量");
         }
         return check(u.operand());
     }
@@ -586,7 +587,7 @@ QString validateExpression(const ExpressionNode& node, bool requireIndices) {
         if (!i.condition() || !i.thenExpr() || !i.elseExpr()
             || i.condition()->valueType() != OperandType::Int
             || i.thenExpr()->valueType() != i.elseExpr()->valueType())
-            return QStringLiteral("三元条件或分支类型错误");
+            return QCoreApplication::translate("ParseDiagnostics", "三元条件或分支类型错误");
         return first(check(i.condition()), first(check(i.thenExpr()), check(i.elseExpr())));
     }
     case NodeKind::Function: {
@@ -607,11 +608,11 @@ QString validateExpression(const ExpressionNode& node, bool requireIndices) {
         for (const auto& p : f.parts()) {
             if (p.type == StrFormPartType::Text) continue;
             if (isKnown(p.expectedType) && p.expression && p.expression->valueType() != p.expectedType)
-                return QStringLiteral("FORM插值类型错误");
+                return QCoreApplication::translate("ParseDiagnostics", "FORM插值类型错误");
             const QString e = check(p.expression);
             if (!e.isEmpty()) return e;
             if (p.width) {
-                if (p.width->valueType() != OperandType::Int) return QStringLiteral("FORM宽度必须为整数");
+                if (p.width->valueType() != OperandType::Int) return QCoreApplication::translate("ParseDiagnostics", "FORM宽度必须为整数");
                 const QString w = check(p.width);
                 if (!w.isEmpty()) return w;
             }

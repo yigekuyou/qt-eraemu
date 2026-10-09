@@ -75,6 +75,13 @@ inline constexpr auto kInstructionSpecs = std::to_array<InstructionSpec>({
     {"/=",           ArgKind::Raw,           2,  2},
     {"'=",           ArgKind::Raw,           2,  2},
     {"%=",           ArgKind::Raw,           2,  2},
+    // 位复合赋值（C# ReadAssignmentOperator 全集）。缺了这几项时 classify 退化成
+    // Raw(0,-1) 也能跑，但显式登记才能和 += 族一起被个数/类型校验覆盖。
+    {"&=",           ArgKind::Raw,           2,  2},
+    {"|=",           ArgKind::Raw,           2,  2},
+    {"^=",           ArgKind::Raw,           2,  2},
+    {"<<=",          ArgKind::Raw,           2,  2},
+    {">>=",          ArgKind::Raw,           2,  2},
     {"SET",          ArgKind::VarSet,        1,  4},
     {"VARSET",       ArgKind::VarSet,        1,  -1},   // 值可省略
     {"VARSIZE",      ArgKind::Expressions,   1,  -1},

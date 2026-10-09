@@ -395,7 +395,11 @@ bool ExecutionEngine::handleCompoundAssignment(const QString& lhs, const QString
     auto left = QSharedPointer<LiteralNode>::create(readLhs(ref));
     auto right = QSharedPointer<LiteralNode>::create(rhsVar.toLongLong());
     ExpressionLexer lexer;
-    const auto tokens = lexer.tokenize(op.left(1));
+    // `op` 是赋值运算符（"+=" … ">>="）；去掉尾部的 '=' 得到二元运算符。
+    // 此前固定取首字符：`>>=` 会退化成 `>`（比较），`<<=` 退化成 `<`。
+    const QString binOp = op.left(op.size() - 1);
+    const auto tokens = lexer.tokenize(binOp);
+    if (tokens.isEmpty()) return false;
     BinaryOpNode operation(left, tokens.first(), right);
     const QVariant result = evaluator.evaluate(operation, m_storage, m_gameBaseData);
     if (!result.isValid()) return false;
@@ -1608,7 +1612,8 @@ bool ExecutionEngine::executeInstruction(const LogicalLine& line) {
         if (!value.isValid() || value.typeId() != QMetaType::QString) return false;
         return writeStringValue(args[0].raw, value.toString(), line.ownerFunction);
     }
-    if (name == "+=" || name == "-=" || name == "*=" || name == "/=" || name == "%=") {
+    if (name == "+=" || name == "-=" || name == "*=" || name == "/=" || name == "%="
+        || name == "&=" || name == "|=" || name == "^=" || name == "<<=" || name == ">>=") {
         if (args.size() >= 2) {
             return handleCompoundAssignment(args[0].raw, name, args[1].raw, args[1].ast);
         }

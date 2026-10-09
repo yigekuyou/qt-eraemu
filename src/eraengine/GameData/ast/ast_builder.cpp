@@ -16,6 +16,7 @@
  * along with this program.  If not, see <https://www.gnu.org/licenses/>.
  */
 #include "ast_builder.h"
+#include <QCoreApplication>
 #include <QDebug>
 #include "strform_parser.h"
 #include "print_template.h"
@@ -500,9 +501,25 @@ bool AstBuilder::splitAssignment(const QString& line, QString& lhs, QString& op,
         if (next == '=') { ++i; continue; }   // ==
         if (i > 0) {
             const QChar prev = line.at(i - 1);
-            if (prev == '!' || prev == '<' || prev == '>') continue;
+            if (prev == '!') continue;                       // !=
 
-            if (prev == '+' || prev == '-' || prev == '*' || prev == '/' || prev == '%') {
+            // 位复合赋值 <<= >>= &= |= ^=（C# ReadAssignmentOperator 全集）。
+            // 此前只认 += -= *= /= %=：`||` 之类不受影响，但
+            //   `STAIN:ARG:3 |= STAIN:PLAYER:0`（eraTW COMF150/CCOMF70/COMF19/修
+            //   助手）与 `FLAG:999 &= ~(15 << 5)`（守矢くじ）会被切成
+            //   lhs="STAIN:ARG:3 |" op="="，左值解析失败 -> 整行失效。
+            // `<<=`/`>>=` 必须先于单字符的 `<=`/`>=` 判断（它们的前两位是 `<<`/`>>`）。
+            if ((prev == '<' || prev == '>') && i >= 2 && line.at(i - 2) == prev) {
+                lhs = line.left(i - 2).trimmed();
+                op = QString(prev) + prev + '=';
+                rhs = line.mid(i + 1).trimmed();
+            } else if (prev == '<' || prev == '>') {
+                continue;                                    // <= >=
+            } else if (prev == '&' || prev == '|' || prev == '^') {
+                lhs = line.left(i - 1).trimmed();
+                op = QString(prev) + '=';
+                rhs = line.mid(i + 1).trimmed();
+            } else if (prev == '+' || prev == '-' || prev == '*' || prev == '/' || prev == '%') {
                 lhs = line.left(i - 1).trimmed();
                 op = QString(prev) + '=';
                 rhs = line.mid(i + 1).trimmed();
@@ -1140,7 +1157,7 @@ LogicalLine AstBuilder::build(const QString& rawLine,
                    << "原文:" << trimmed.left(80);
         // 结构化诊断：Warning 级（按宽容语义继续执行 = no-op），带位置与原文，
         // 供装载期按类汇总（见 parse_diagnostic.h / 调试与错误.md 的警告等级）。
-        line.errMes = QStringLiteral("未识别的指令: %1").arg(line.functionName);
+        line.errMes = QCoreApplication::translate("ParseDiagnostics", "未识别的指令: %1").arg(line.functionName);
         if (diagnostics) {
             // 结构化定位（LSP/MCP 直接可用）：LSP 要 0 基 (行, 列) + 长度，MCP 要数字。
             // AstBuilder 没有 token 列号（Word 只带类别+文本），但指令名就是本行的
@@ -1151,7 +1168,7 @@ LogicalLine AstBuilder::build(const QString& rawLine,
             diagnostics->add(DiagSeverity::Warning, DiagCode::kUnknownInstruction,
                              position.filename, position.lineNumber, column1,
                              line.functionName.size(),
-                             QStringLiteral("未识别的指令: %1").arg(line.functionName),
+                             QCoreApplication::translate("ParseDiagnostics", "未识别的指令: %1").arg(line.functionName),
                              trimmed.left(80));
         }
     }
@@ -1185,8 +1202,16 @@ void AstBuilder::buildCaseClauses(const LogicalLine& caseLine, const AstResolver
         const QString t = part.trimmed();
         if (t.isEmpty()) continue;
         CaseClause clause;
-        if (t.size() > 2 && t.left(2).compare("IS", Qt::CaseInsensitive) == 0 && t[2].isSpace()) {
-            const QString rest = t.mid(3).trimmed();
+        // `CASE IS >= n` / `CASE IS>=n`：'IS' 之后允许没有空白。
+        // eraTW 的 M_KOJO_K17_イベント.ERB 就写 `CASE IS>=K17C_思慕诶嘿嘿`；
+        // 旧代码要求 t[2] 是空白，于是整段 `IS>=…` 落到 Equal 臂，
+        // 既解析不出表达式（新解析器把裸 IS 判为无效标识符 -> 「表达式无法归约」），
+        // 该 CASE 臂也永远不命中。判据改为「IS 后面不是标识符字符」。
+        const bool startsWithIs = t.size() > 2
+            && t.left(2).compare("IS", Qt::CaseInsensitive) == 0
+            && !t.at(2).isLetterOrNumber();
+        if (startsWithIs) {
+            const QString rest = t.mid(2).trimmed();
             static const QStringList ops = {"<=", ">=", "==", "!=", "<", ">"};
             bool opMatched = false;
             for (const QString& op : ops) {

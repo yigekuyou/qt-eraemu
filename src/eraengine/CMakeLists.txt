@@ -41,6 +41,8 @@ qt_add_qml_module(eraengine
     SOURCES eraengine.cpp eraengine.h eraengine_log.cpp eraengine_log.h
 Config/config_loader.cpp
 Config/config_loader.h
+Config/i18n.cpp
+Config/i18n.h
 Content/csv_loader.cpp
 Content/csv_loader_chara.cpp
 Content/csv_loader.h
@@ -444,3 +446,37 @@ eraengine_add_test(dump_lines)
 target_compile_definitions(eraengine
     PRIVATE
 $<$<NOT:$<CONFIG:Debug>>:QT_NO_DEBUG_OUTPUT>)
+
+# ---------------------------------------------------------------------------
+# 翻译（i18n）：用户可见文本的 .ts / .qm（含装载期告警，见 Config/i18n.h）。
+#
+# 源文本直接写在代码里（简体中文），运行期由 QTranslator 提供译文；
+# 未提供 .qm 时 translate() 原样返回源文本，所以「未翻译」即「默认语言」。
+#
+#   默认关闭：不依赖 Qt Linguist 工具，未安装 lupdate/lrelease 也能构建。
+#   开启：
+#       cmake -DEMUERA_BUILD_TRANSLATIONS=ON …
+#       ninja eraengine_lupdate     # 提取源文本到 i18n/*.ts
+#       ninja eraengine_lrelease    # 编译 i18n/*.qm
+#   生成的 .qm 打进 :/i18n/ 资源，installTranslators() 会自动加载。
+# ---------------------------------------------------------------------------
+option(EMUERA_BUILD_TRANSLATIONS "生成 i18n 翻译（需要 Qt Linguist 的 lupdate/lrelease）" OFF)
+if(EMUERA_BUILD_TRANSLATIONS)
+    find_package(Qt6 REQUIRED COMPONENTS LinguistTools)
+    set(EMUERA_TS_FILES
+        "${CMAKE_SOURCE_DIR}/i18n/emuera_en.ts"
+        "${CMAKE_SOURCE_DIR}/i18n/emuera_ja.ts")
+    # 源文本是简体中文（不是 Qt 默认的 en），显式声明以便 lupdate/lrelease 与
+    # Qt Linguist 正确标注 <TS sourcelanguage>。
+    set(EMUERA_LUPDATE_OPTIONS -source-language zh_CN)
+    qt_add_lupdate(eraengine TS_FILES ${EMUERA_TS_FILES} OPTIONS ${EMUERA_LUPDATE_OPTIONS})
+    qt_add_lrelease(eraengine TS_FILES ${EMUERA_TS_FILES}
+        QM_FILES_OUTPUT_VARIABLE emuera_qm_files)
+    # lrelease 把 .qm 写在构建目录（与 .ts 同级的相对输出落在 build/ 下）；
+    # BASE 取构建目录，资源路径才是 :/i18n/emuera_<lang>.qm —— 与
+    # installTranslators() 的查找位置一致。
+    qt_add_resources(eraengine "emuera_translations"
+        PREFIX "/i18n"
+        BASE "${CMAKE_CURRENT_BINARY_DIR}"
+        FILES ${emuera_qm_files})
+endif()

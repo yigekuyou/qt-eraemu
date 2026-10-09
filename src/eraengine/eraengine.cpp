@@ -23,6 +23,7 @@
 #include "system_status_manager.h"
 #include "signal_hub.h"
 #include "erb_loader.h"
+#include "i18n.h"
 #include "GameView/dbus_debug.h"
 #include <memory>
 #include <iostream>
@@ -66,6 +67,11 @@ EraEngine::EraEngine(QObject *parent)
 			m_eventManager(),
 			m_connectionManager(this)
 {
+		// 告警/诊断文本的 i18n：装载期在**解析之前**把翻译器装好，之后所有
+		// eraengine::diagTr() 才会命中 .qm（未提供 .qm 时原样输出中文源文本）。
+		// 幂等，重复构造 EraEngine 不会重复安装。
+		eraengine::installTranslators();
+
 		// Set variable storage in parse table for condition evaluation
 		m_parseTable.setVariableStorage(&m_variableStorage);
 

@@ -19,6 +19,12 @@
 //
 // 传输：stdin/stdout，一行一个 JSON-RPC 消息（见 eproto/json_rpc.h）。
 // 工具：era_lookup / era_search / era_validate / era_stats（语义来自 eraemu 的 AST）。
+//
+// 命令行：QCommandLineParser（Qt 文档《QCommandLineParser》）—— --help / --version。
+// 用 parse() 而非 process()：MCP 主机（AI 客户端）会带自己的参数，未知参数只提示、
+// 不退出，协议循环照常运行。
+#include <QCommandLineOption>
+#include <QCommandLineParser>
 #include <QCoreApplication>
 #include <QFile>
 #include <QString>
@@ -28,14 +34,51 @@
 #include "json_rpc.h"
 #include "mcp_server.h"
 
-int main(int argc, char** argv) {
-    QFile in;
-    QFile out;
-    if (!eproto::openProtocolStdio(in, out)) return 2;
+namespace {
 
+// 命令行文本走 QCoreApplication::translate（context = "eramcp"），便于 lupdate 提取。
+QString cmdTr(const char* source) {
+    return QCoreApplication::translate("eramcp", source);
+}
+
+// QCommandLineParser 不可复制（Q_DISABLE_COPY），所以按引用配置而非按值返回。
+void setupParser(QCommandLineParser& parser) {
+    parser.setApplicationDescription(
+        cmdTr("ERB 的 Model Context Protocol 服务器（stdio 传输）。"));
+    parser.addHelpOption();
+    parser.addVersionOption();
+    parser.addOption(QCommandLineOption(
+        QStringLiteral("stdio"),
+        cmdTr("通过标准输入/输出通信（默认；兼容 MCP 主机的 --stdio 约定）。")));
+}
+
+}  // namespace
+
+int main(int argc, char** argv) {
     QCoreApplication app(argc, argv);
     app.setApplicationName(QStringLiteral("eramcp"));
     app.setApplicationVersion(QStringLiteral("0.2.0"));
+
+    // 先解析命令行，再动标准流（openProtocolStdio 会把 stdout 重定向到 stderr）。
+    QCommandLineParser parser;
+    setupParser(parser);
+    const bool parsed = parser.parse(QCoreApplication::arguments());
+    if (parser.isSet(QStringLiteral("help"))) {
+        std::fputs(qPrintable(parser.helpText()), stdout);
+        return 0;
+    }
+    if (parser.isSet(QStringLiteral("version"))) {
+        std::fprintf(stdout, "%s %s\n", qPrintable(app.applicationName()),
+                     qPrintable(app.applicationVersion()));
+        return 0;
+    }
+    if (!parsed) {
+        std::fprintf(stderr, "eramcp: %s\n", qPrintable(parser.errorText()));
+    }
+
+    QFile in;
+    QFile out;
+    if (!eproto::openProtocolStdio(in, out)) return 2;
 
     eproto::McpServer server;
     for (;;) {

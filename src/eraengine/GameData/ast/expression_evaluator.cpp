@@ -617,6 +617,14 @@ QVariant ExpressionEvaluator::evaluateVariable(const VariableNode &node, Variabl
     const int count = node.indices().size();
     const bool aliased = storage->resolvedStorageName(varName) != varName;
     if (aliased && node.valueType() == OperandType::Str) {
+        // 形参（`@F(A)` + `#DIMS A`）的值绑定在 m_parameters（script_runner 的
+        // setParameter），而私有槽 m_globalStr1D 只存**声明默认值**。这里必须
+        // 先查 m_parameters，否则读到的是默认值：eraTW 的
+        //   CALLF SET_EXIST(CLASS_NAME, O_ID) -> RETURNF OBJ_EXIST("SET", CLASS_NAME, O_ID)
+        // 里 CLASS_NAME/COMMAND 恒为空串，OBJ_EXIST 的 SELECTCASE 落 CASEELSE
+        // -> THROW 未設定命令（装载期 5 处 execution error）。
+        // 整数形参走的是下面的 hasParameter 检查，所以只有字符串形参有这个缺口。
+        if (count == 0 && storage->hasParameter(varName)) return storage->parameter(varName);
         const QString target = storage->resolvedStorageName(varName);
         const int idx = node.indices().isEmpty() ? 0
             : static_cast<int>(resolveIndex(node, 0, storage, gameBaseData));

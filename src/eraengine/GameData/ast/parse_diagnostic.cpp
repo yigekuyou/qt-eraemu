@@ -16,6 +16,7 @@
  * along with this program.  If not, see <https://www.gnu.org/licenses/>.
  */
 #include "parse_diagnostic.h"
+#include <QCoreApplication>
 
 #include <QRegularExpression>
 #include <QStringList>
@@ -45,24 +46,24 @@ int ParseDiagnostics::count(DiagSeverity sev) const {
 QMap<QString, int> ParseDiagnostics::countByCode() const {
     QMap<QString, int> byCode;
     for (const ParseDiagnostic& d : m_items) {
-        byCode[d.code.isEmpty() ? QStringLiteral("(未分类)") : d.code] += 1;
+        byCode[d.code.isEmpty() ? QCoreApplication::translate("ParseDiagnostics", "(未分类)") : d.code] += 1;
     }
     return byCode;
 }
 
 QString ParseDiagnostics::summarize() const {
     if (m_items.isEmpty()) {
-        return QStringLiteral("无");
+        return QCoreApplication::translate("ParseDiagnostics", "无");
     }
     QStringList head;
     if (const int e = count(DiagSeverity::Error); e > 0) {
-        head << QStringLiteral("错误 %1").arg(e);
+        head << QCoreApplication::translate("ParseDiagnostics", "错误 %1").arg(e);
     }
     if (const int w = count(DiagSeverity::Warning); w > 0) {
-        head << QStringLiteral("警告 %1").arg(w);
+        head << QCoreApplication::translate("ParseDiagnostics", "警告 %1").arg(w);
     }
     if (const int i = count(DiagSeverity::Info); i > 0) {
-        head << QStringLiteral("提示 %1").arg(i);
+        head << QCoreApplication::translate("ParseDiagnostics", "提示 %1").arg(i);
     }
 
     // 按类计数：数量降序，取前 5 类，其余并入「其它」
@@ -86,8 +87,8 @@ QString ParseDiagnostics::summarize() const {
             rest += r.first;
         }
     }
-    if (rest > 0) cats << QStringLiteral("其它 %1").arg(rest);
+    if (rest > 0) cats << QCoreApplication::translate("ParseDiagnostics", "其它 %1").arg(rest);
 
-    return QStringLiteral("%1（%2）").arg(head.join(QStringLiteral(" / ")),
+    return QCoreApplication::translate("ParseDiagnostics", "%1（%2）").arg(head.join(QStringLiteral(" / ")),
                                           cats.join(QStringLiteral(" / ")));
 }

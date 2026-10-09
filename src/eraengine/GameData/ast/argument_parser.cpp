@@ -16,6 +16,7 @@
  * along with this program.  If not, see <https://www.gnu.org/licenses/>.
  */
 #include "argument_parser.h"
+#include <QCoreApplication>
 #include <cmath>
 
 namespace {
@@ -139,11 +140,11 @@ void ArgumentParser::build(LogicalLine& line) {
 
     if (arg.minArgs > 0 && n < arg.minArgs) {
         arg.typeOk = false;
-        arg.typeError = QStringLiteral("%1 参数过少（需要至少 %2 个，实得 %3）")
+        arg.typeError = QCoreApplication::translate("ParseDiagnostics", "%1 参数过少（需要至少 %2 个，实得 %3）")
                             .arg(upper).arg(arg.minArgs).arg(n);
     } else if (arg.maxArgs >= 0 && n > arg.maxArgs) {
         arg.typeOk = false;
-        arg.typeError = QStringLiteral("%1 参数过多（最多 %2 个，实得 %3）")
+        arg.typeError = QCoreApplication::translate("ParseDiagnostics", "%1 参数过多（最多 %2 个，实得 %3）")
                             .arg(upper).arg(arg.maxArgs).arg(n);
     }
 
@@ -152,10 +153,10 @@ void ArgumentParser::build(LogicalLine& line) {
         const double factor = ops.at(1).raw.toDouble(&valid);
         if (ops.at(1).isString || !valid || !std::isfinite(factor)) {
             arg.typeOk = false;
-            arg.typeError = QStringLiteral("TIMES 的倍率需要有限实数常量：%1").arg(ops.at(1).raw);
+            arg.typeError = QCoreApplication::translate("ParseDiagnostics", "TIMES 的倍率需要有限实数常量：%1").arg(ops.at(1).raw);
         } else if (!ops.first().ast || ops.first().ast->valueType() == OperandType::Str) {
             arg.typeOk = false;
-            arg.typeError = QStringLiteral("TIMES 的第一个参数需要数值变量");
+            arg.typeError = QCoreApplication::translate("ParseDiagnostics", "TIMES 的第一个参数需要数值变量");
         }
     }
 
@@ -167,7 +168,7 @@ void ArgumentParser::build(LogicalLine& line) {
             if (o.raw.trimmed().isEmpty() || o.isString || o.isVariable) continue;
             if (!o.ast) {
                 arg.typeOk = false;
-                arg.typeError = QStringLiteral("%1 的操作数无法解析为表达式：%2").arg(upper, o.raw);
+                arg.typeError = QCoreApplication::translate("ParseDiagnostics", "%1 的操作数无法解析为表达式：%2").arg(upper, o.raw);
                 break;
             }
         }
@@ -183,7 +184,7 @@ void ArgumentParser::build(LogicalLine& line) {
             const Operand& first = arg.params.first();
             if (first.ast && first.ast->kind() != NodeKind::Variable) {
                 arg.typeOk = false;
-                arg.typeError = QStringLiteral("%1 的第一个参数需要变量，实得表达式").arg(upper);
+                arg.typeError = QCoreApplication::translate("ParseDiagnostics", "%1 的第一个参数需要变量，实得表达式").arg(upper);
             }
         }
     }
@@ -196,7 +197,7 @@ void ArgumentParser::build(LogicalLine& line) {
                 const OperandType t = e->valueType();
                 if (isKnown(t) && t != want) {
                     arg.typeOk = false;
-                    arg.typeError = QStringLiteral("%1 需要%2表达式，实得 %3")
+                    arg.typeError = QCoreApplication::translate("ParseDiagnostics", "%1 需要%2表达式，实得 %3")
                                         .arg(upper, QString::fromUtf8(what),
                                              QString::fromUtf8(operandTypeName(t)));
                     return;

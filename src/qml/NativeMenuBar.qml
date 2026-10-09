@@ -53,11 +53,18 @@ MenuBar {
             shortcut: root.actions.reload.shortcut
             onTriggered: root.actions.reload.trigger()
         }
+        MenuItem { text: root.actions.reloadFolder.text; onTriggered: root.actions.reloadFolder.trigger() }
+        MenuItem { text: root.actions.reloadFile.text; onTriggered: root.actions.reloadFile.trigger() }
         MenuItem {
             text: root.actions.saveLog.text
             enabled: root.actions.saveLog.enabled
             shortcut: root.actions.saveLog.shortcut
             onTriggered: root.actions.saveLog.trigger()
+        }
+        MenuItem {
+            text: root.actions.copyLog.text
+            enabled: root.actions.copyLog.enabled
+            onTriggered: root.actions.copyLog.trigger()
         }
         MenuItem {
             text: root.actions.title.text
@@ -69,6 +76,16 @@ MenuBar {
             text: root.actions.settings.text
             enabled: root.actions.settings.enabled
             onTriggered: root.actions.settings.trigger()
+        }
+        MenuItem {
+            text: root.actions.config.text
+            enabled: root.actions.config.enabled
+            onTriggered: root.actions.config.trigger()
+        }
+        MenuItem {
+            text: root.actions.debug.text
+            enabled: root.actions.debug.enabled
+            onTriggered: root.actions.debug.trigger()
         }
         MenuSeparator {}
         MenuItem {
@@ -140,6 +157,17 @@ MenuBar {
             text: qsTr("刷新帧率 −")
             onTriggered: root.actions.fpsDown()
         }
+    }
+
+    Menu {
+        title: qsTr("マクロ")
+        MenuItem { text: root.actions.macro01.text; onTriggered: root.actions.macro01.trigger() }
+        MenuItem { text: root.actions.macro02.text; onTriggered: root.actions.macro02.trigger() }
+        MenuItem { text: root.actions.macro03.text; onTriggered: root.actions.macro03.trigger() }
+        MenuItem { text: root.actions.macro04.text; onTriggered: root.actions.macro04.trigger() }
+        MenuItem { text: root.actions.macro05.text; onTriggered: root.actions.macro05.trigger() }
+        MenuItem { text: root.actions.macro06.text; onTriggered: root.actions.macro06.trigger() }
+        MenuItem { text: root.actions.macro07.text; onTriggered: root.actions.macro07.trigger() }
     }
 
     Menu {

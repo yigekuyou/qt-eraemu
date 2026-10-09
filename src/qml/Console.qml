@@ -65,6 +65,7 @@ FocusScope {
     }
 
     property ConsoleBackend backend: null   // ConsoleBackend（兼行模型）
+    property EraEngine engine: null
     readonly property ConsoleBackend lineModel: backend
     // 标准标题画面（QML）是否显示：为真时隐藏底部输入行与原始输入层。
     property bool titleActive: false
@@ -158,6 +159,13 @@ FocusScope {
     function submit() {
         if (!backend)
             return;
+        const commandText = inputField.text.trim();
+        if (commandText.startsWith("\\")) {
+            if (root.engine)
+                root.engine.executeConsoleCommand(commandText);
+            inputField.text = "";
+            return;
+        }
         // 任意键型等待（WAIT/WAITANYKEY/FORCEWAIT/ANYKEY）：回车即继续，输入内容不使用
         if (anyKeyInput) {
             backend.submitAnyKey();

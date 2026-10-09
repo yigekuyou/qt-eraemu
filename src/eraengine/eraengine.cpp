@@ -17,6 +17,11 @@
  * along with this program.  If not, see <https://www.gnu.org/licenses/>.
  */
 #include "eraengine.h"
+#include <QClipboard>
+#include <QGuiApplication>
+#include <QCoreApplication>
+#include <QFileInfo>
+#include <QRegularExpression>
 
 // Include ConsoleDisplay for QML singleton registration
 #include "rendering_system.h"
@@ -1021,6 +1026,189 @@ bool EraEngine::saveEncodingToConfig()
 				m_configLoader.setConfig(QStringLiteral("TextEncoding"), value);
 		}
 		return ok;
+}
+
+void EraEngine::copyTextToClipboard(const QString& text)
+{
+    if (auto *clipboard = QGuiApplication::clipboard())
+        clipboard->setText(text, QClipboard::Clipboard);
+}
+
+bool EraEngine::debugMode() const
+{
+const QStringList args = QCoreApplication::arguments();
+    for (const QString& arg : args)
+        if (arg.compare(QStringLiteral("-Debug"), Qt::CaseInsensitive) == 0
+            || arg.compare(QStringLiteral("--debug"), Qt::CaseInsensitive) == 0)
+            return true;
+    return false;
+}
+
+bool EraEngine::executeConsoleCommand(const QString& command)
+{
+    QString text = command.trimmed();
+    if (text.startsWith(QLatin1Char('\\'))) text.remove(0, 1);
+    const QStringList parts = text.split(QRegularExpression(QStringLiteral("\\s+")), Qt::SkipEmptyParts);
+    if (parts.isEmpty()) return true;
+    const QString op = parts.first().toUpper();
+    if (op == QStringLiteral("CONFIG")) {
+        emit consoleCommandRequested(QStringLiteral("CONFIG"));
+        return true;
+    }
+    if (op == QStringLiteral("QUIT") || op == QStringLiteral("EXIT")) {
+        closeGame();
+        emit quitRequested();
+        return true;
+    }
+    if (op == QStringLiteral("REBOOT")) {
+        emit restartRequested();
+        return true;
+    }
+    if (op == QStringLiteral("OUTPUT") || op == QStringLiteral("OUTPUTLOG")) {
+        const QString path = m_gameDirectory + QStringLiteral("/emuera.log");
+        return m_console.outputLog(path);
+    }
+    if (op == QStringLiteral("DEBUG")) {
+        if (!debugMode()) {
+            m_console.printPlain(QStringLiteral("デバッグウインドウは-Debug引数付きで起動したときのみ使えます"));
+            m_console.newline();
+            return false;
+        }
+        emit consoleCommandRequested(QStringLiteral("DEBUG"));
+        return true;
+    }
+    if (!m_configLoader.getBool(QStringLiteral("デバッグコマンドを使用する"), false)
+        && !m_configLoader.getBool(QStringLiteral("UseDebugCommand"), false)) {
+        m_console.printPlain(QStringLiteral("不明なコンソールコマンド: ") + command);
+        m_console.newline();
+        return false;
+    }
+    m_console.printPlain(QStringLiteral("デバッグコマンドは未実装です: ") + command);
+    m_console.newline();
+    return false;
+}
+
+QVariantList EraEngine::configItems() const
+{
+    static const QList<QStringList> defs = {
+        {QStringLiteral("大文字小文字の違いを無視する"),QStringLiteral("bool"),QStringLiteral("システム")},
+        {QStringLiteral("_Rename.csvを利用する"),QStringLiteral("bool"),QStringLiteral("システム")},
+        {QStringLiteral("_Replace.csvを利用する"),QStringLiteral("bool"),QStringLiteral("システム")},
+        {QStringLiteral("マウスを使用する"),QStringLiteral("bool"),QStringLiteral("システム")},
+        {QStringLiteral("メニューを使用する"),QStringLiteral("bool"),QStringLiteral("システム")},
+        {QStringLiteral("デバッグコマンドを使用する"),QStringLiteral("bool"),QStringLiteral("システム")},
+        {QStringLiteral("多重起動を許可する"),QStringLiteral("bool"),QStringLiteral("システム")},
+        {QStringLiteral("オートセーブを行なう"),QStringLiteral("bool"),QStringLiteral("システム")},
+        {QStringLiteral("キーボードマクロを使用する"),QStringLiteral("bool"),QStringLiteral("システム")},
+        {QStringLiteral("ウィンドウの高さを可変にする"),QStringLiteral("bool"),QStringLiteral("システム")},
+        {QStringLiteral("描画インターフェース"),QStringLiteral("enum"),QStringLiteral("システム")},
+        {QStringLiteral("ウィンドウ幅"),QStringLiteral("int"),QStringLiteral("システム")},
+        {QStringLiteral("ウィンドウ高さ"),QStringLiteral("int"),QStringLiteral("システム")},
+        {QStringLiteral("ウィンドウ位置X"),QStringLiteral("int"),QStringLiteral("システム")},
+        {QStringLiteral("ウィンドウ位置Y"),QStringLiteral("int"),QStringLiteral("システム")},
+        {QStringLiteral("起動時のウィンドウ位置を指定する"),QStringLiteral("bool"),QStringLiteral("システム")},
+        {QStringLiteral("起動時にウィンドウを最大化する"),QStringLiteral("bool"),QStringLiteral("システム")},
+        {QStringLiteral("履歴ログの行数"),QStringLiteral("int"),QStringLiteral("システム")},
+        {QStringLiteral("PRINTCを並べる数"),QStringLiteral("int"),QStringLiteral("システム")},
+        {QStringLiteral("PRINTCの文字数"),QStringLiteral("int"),QStringLiteral("システム")},
+        {QStringLiteral("フォント名"),QStringLiteral("string"),QStringLiteral("システム")},
+        {QStringLiteral("フォントサイズ"),QStringLiteral("int"),QStringLiteral("システム")},
+        {QStringLiteral("一行の高さ"),QStringLiteral("int"),QStringLiteral("システム")},
+        {QStringLiteral("文字色"),QStringLiteral("string"),QStringLiteral("システム")},
+        {QStringLiteral("背景色"),QStringLiteral("string"),QStringLiteral("システム")},
+        {QStringLiteral("選択中文字色"),QStringLiteral("string"),QStringLiteral("システム")},
+        {QStringLiteral("履歴文字色"),QStringLiteral("string"),QStringLiteral("システム")},
+        {QStringLiteral("フレーム毎秒"),QStringLiteral("int"),QStringLiteral("システム")},
+        {QStringLiteral("最大スキップフレーム数"),QStringLiteral("int"),QStringLiteral("システム")},
+        {QStringLiteral("スクロール行数"),QStringLiteral("int"),QStringLiteral("システム")},
+        {QStringLiteral("無限ループ警告までのミリ秒数"),QStringLiteral("int"),QStringLiteral("システム")},
+        {QStringLiteral("表示する最低警告レベル"),QStringLiteral("int"),QStringLiteral("システム")},
+        {QStringLiteral("ロード時にレポートを表示する"),QStringLiteral("bool"),QStringLiteral("システム")},
+        {QStringLiteral("ロード時に引数を解析する"),QStringLiteral("enum"),QStringLiteral("システム")},
+        {QStringLiteral("呼び出されなかった関数を無視する"),QStringLiteral("bool"),QStringLiteral("システム")},
+        {QStringLiteral("関数が見つからない警告の扱い"),QStringLiteral("enum"),QStringLiteral("システム")},
+        {QStringLiteral("関数が呼び出されなかった警告の扱い"),QStringLiteral("enum"),QStringLiteral("システム")},
+        {QStringLiteral("デバッグコマンドを使用した時にMASTERの名前を変更する"),QStringLiteral("bool"),QStringLiteral("システム")},
+        {QStringLiteral("ボタンの途中で行を折りかえさない"),QStringLiteral("bool"),QStringLiteral("システム")},
+        {QStringLiteral("サブディレクトリを検索する"),QStringLiteral("bool"),QStringLiteral("システム")},
+        {QStringLiteral("読み込み順をファイル名順にソートする"),QStringLiteral("bool"),QStringLiteral("システム")},
+        {QStringLiteral("最終更新コード"),QStringLiteral("int"),QStringLiteral("システム")},
+        {QStringLiteral("表示するセーブデータ数"),QStringLiteral("int"),QStringLiteral("システム")},
+        {QStringLiteral("eramaker互換性に関する警告を表示する"),QStringLiteral("bool"),QStringLiteral("システム")},
+        {QStringLiteral("システム関数の上書きを許可する"),QStringLiteral("bool"),QStringLiteral("システム")},
+        {QStringLiteral("システム関数が上書きされたとき警告を表示する"),QStringLiteral("bool"),QStringLiteral("システム")},
+        {QStringLiteral("関連づけるテキストエディタ"),QStringLiteral("string"),QStringLiteral("システム")},
+        {QStringLiteral("テキストエディタコマンドライン指定"),QStringLiteral("enum"),QStringLiteral("システム")},
+        {QStringLiteral("エディタに渡す行指定引数"),QStringLiteral("string"),QStringLiteral("システム")},
+        {QStringLiteral("同名の非イベント関数が複数定義されたとき警告する"),QStringLiteral("bool"),QStringLiteral("システム")},
+        {QStringLiteral("解釈不可能な行があっても実行する"),QStringLiteral("bool"),QStringLiteral("システム")},
+        {QStringLiteral("CALLNAMEが空文字列の時にNAMEを代入する"),QStringLiteral("bool"),QStringLiteral("システム")},
+        {QStringLiteral("セーブデータをsavフォルダ内に作成する"),QStringLiteral("bool"),QStringLiteral("システム")},
+        {QStringLiteral("擬似変数RANDの仕様をeramakerに合わせる"),QStringLiteral("bool"),QStringLiteral("システム")},
+        {QStringLiteral("DRAWLINEを常に新しい行で行う"),QStringLiteral("bool"),QStringLiteral("システム")},
+        {QStringLiteral("関数・属性については大文字小文字を無視しない"),QStringLiteral("bool"),QStringLiteral("システム")},
+        {QStringLiteral("全角スペースをホワイトスペースに含める"),QStringLiteral("bool"),QStringLiteral("システム")},
+        {QStringLiteral("ver1739以前の非ボタン折り返しを再現する"),QStringLiteral("bool"),QStringLiteral("システム")},
+        {QStringLiteral("内部で使用する東アジア言語"),QStringLiteral("enum"),QStringLiteral("システム")},
+        {QStringLiteral("ONEINPUT系命令でマウスによる2文字以上の入力を許可する"),QStringLiteral("bool"),QStringLiteral("システム")},
+        {QStringLiteral("イベント関数のCALLを許可する"),QStringLiteral("bool"),QStringLiteral("システム")},
+        {QStringLiteral("SPキャラを使用する"),QStringLiteral("bool"),QStringLiteral("システム")},
+        {QStringLiteral("セーブデータをバイナリ形式で保存する"),QStringLiteral("bool"),QStringLiteral("システム")},
+        {QStringLiteral("ユーザー関数の全ての引数の省略を許可する"),QStringLiteral("bool"),QStringLiteral("システム")},
+        {QStringLiteral("ユーザー関数の引数に自動的にTOSTRを補完する"),QStringLiteral("bool"),QStringLiteral("システム")},
+        {QStringLiteral("FORM中の三連記号を展開しない"),QStringLiteral("bool"),QStringLiteral("システム")},
+        {QStringLiteral("TIMESの計算をeramakerにあわせる"),QStringLiteral("bool"),QStringLiteral("システム")},
+        {QStringLiteral("キャラクタ変数の引数を補完しない"),QStringLiteral("bool"),QStringLiteral("システム")},
+        {QStringLiteral("文字列変数の代入に文字列式を強制する"),QStringLiteral("bool"),QStringLiteral("システム")},
+        {QStringLiteral("UPDATECHECKを許可しない"),QStringLiteral("bool"),QStringLiteral("システム")},
+        {QStringLiteral("ERD機能を利用する"),QStringLiteral("bool"),QStringLiteral("システム")},
+        {QStringLiteral("VARSIZEの次元指定をERD機能に合わせる"),QStringLiteral("bool"),QStringLiteral("システム")},
+        {QStringLiteral("ERDで定義した識別子とローカル変数の重複を確認する"),QStringLiteral("bool"),QStringLiteral("システム")},
+        {QStringLiteral("行連結の改行コードの置換文字列"),QStringLiteral("string"),QStringLiteral("システム")},
+        {QStringLiteral("外部プラグインが有効時に警告を表示する"),QStringLiteral("bool"),QStringLiteral("システム")},
+        {QStringLiteral("セーブデータを圧縮して保存する"),QStringLiteral("bool"),QStringLiteral("システム")},
+        {QStringLiteral("CONFIGファイルの内容を英語で保存する"),QStringLiteral("bool"),QStringLiteral("システム")},
+        {QStringLiteral("Emueraの表示言語"),QStringLiteral("string"),QStringLiteral("システム")},
+        {QStringLiteral("Emueraのアイコンのパス"),QStringLiteral("string"),QStringLiteral("システム")},
+        {QStringLiteral("表示したテキストをクリップボードにコピーする"),QStringLiteral("bool"),QStringLiteral("システム")},
+        {QStringLiteral("テキスト中の<>タグを無視する"),QStringLiteral("bool"),QStringLiteral("システム")},
+        {QStringLiteral("<>を次の文で置き換える"),QStringLiteral("string"),QStringLiteral("システム")},
+        {QStringLiteral("新しい行のみコピーする"),QStringLiteral("bool"),QStringLiteral("システム")},
+        {QStringLiteral("画面のリフレッシュ時にクリップボードとバッファを消去する"),QStringLiteral("bool"),QStringLiteral("システム")},
+        {QStringLiteral("左クリックをトリガーにする"),QStringLiteral("bool"),QStringLiteral("システム")},
+        {QStringLiteral("ホイールクリックをトリガーにする"),QStringLiteral("bool"),QStringLiteral("システム")},
+        {QStringLiteral("ダブルクリックをトリガーにする"),QStringLiteral("bool"),QStringLiteral("システム")},
+        {QStringLiteral("WAITをトリガーにする"),QStringLiteral("bool"),QStringLiteral("システム")},
+        {QStringLiteral("INPUTをトリガーにする"),QStringLiteral("bool"),QStringLiteral("システム")},
+        {QStringLiteral("クリップボードに貼り付ける行数"),QStringLiteral("int"),QStringLiteral("システム")},
+        {QStringLiteral("総バッファサイズ"),QStringLiteral("int"),QStringLiteral("システム")},
+        {QStringLiteral("スクロールの行数"),QStringLiteral("int"),QStringLiteral("システム")},
+        {QStringLiteral("クリップボードの更新間隔(ミリ秒)"),QStringLiteral("int"),QStringLiteral("システム")},
+        {QStringLiteral("Rikaichanを使用する"),QStringLiteral("bool"),QStringLiteral("システム")},
+        {QStringLiteral("Rikaichanのファイルパス"),QStringLiteral("string"),QStringLiteral("システム")},
+        {QStringLiteral("ポップアップの背景色"),QStringLiteral("string"),QStringLiteral("システム")},
+        {QStringLiteral("ポップアップの文字色"),QStringLiteral("string"),QStringLiteral("システム")},
+        {QStringLiteral("翻訳中の語句を強調表示する"),QStringLiteral("bool"),QStringLiteral("システム")},
+        {QStringLiteral("Ctrl-Zで元に戻す機能を有効にする"),QStringLiteral("bool"),QStringLiteral("システム")},
+        {QStringLiteral("起動時にデバッグウインドウを表示する"),QStringLiteral("bool"),QStringLiteral("システム")},
+        {QStringLiteral("デバッグウインドウを最前面に表示する"),QStringLiteral("bool"),QStringLiteral("システム")},
+        {QStringLiteral("デバッグウィンドウ幅"),QStringLiteral("int"),QStringLiteral("システム")},
+        {QStringLiteral("デバッグウィンドウ高さ"),QStringLiteral("int"),QStringLiteral("システム")},
+        {QStringLiteral("デバッグウィンドウ位置を指定する"),QStringLiteral("bool"),QStringLiteral("システム")},
+        {QStringLiteral("デバッグウィンドウ位置X"),QStringLiteral("int"),QStringLiteral("システム")},
+        {QStringLiteral("デバッグウィンドウ位置Y"),QStringLiteral("int"),QStringLiteral("システム")}
+    };
+    QVariantList out;
+    for (const auto& d : defs) { QVariantMap m; m[QStringLiteral("key")]=d[0]; m[QStringLiteral("type")]=d[1]; m[QStringLiteral("group")]=d[2]; m[QStringLiteral("value")]=configValue(d[0]); out.append(m); }
+    return out;
+}
+
+QString EraEngine::configValue(const QString& key) const { return m_configLoader.getConfig(key); }
+bool EraEngine::setConfigValue(const QString& key, const QString& value)
+{
+    m_configLoader.setConfig(key, value);
+    emit m_configLoader.configChanged(key, value);
+    return true;
 }
 
 int EraEngine::saveConfigFiles()

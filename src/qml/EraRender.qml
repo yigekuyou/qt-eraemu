@@ -44,6 +44,7 @@ Item {
         focusColor: eraRender.engine ? eraRender.engine.gui.focusColor : "#ffff00"
         logColor: eraRender.engine ? eraRender.engine.gui.logColor : "#9a9a9a"
         backend: eraRender.engine ? eraRender.engine.console : null
+        engine: eraRender.engine
         // 标准标题画面（QML）显示时，隐藏控制台底部输入行 —— 标题的 [0]/[1]
         // 由 TitleScreen 自己的按钮交付，避免两套输入 UI 同时出现。
         titleActive: eraRender.engine ? eraRender.engine.defaultTitleVisible : false

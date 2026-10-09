@@ -74,6 +74,8 @@ public:
 		Q_PROPERTY(ExecutionEngine* executionEngine READ getExecutionEngine CONSTANT)
 		Q_PROPERTY(EraParseTable* parseTable READ getParseTable CONSTANT)
 		Q_PROPERTY(ConsoleBackend* console READ getConsole CONSTANT)
+        Q_PROPERTY(VariableStorage* variableStorage READ getVariableStorage CONSTANT)
+        Q_PROPERTY(ExpressionEvaluator* expressionEvaluator READ getExpressionEvaluator CONSTANT)
 		Q_PROPERTY(GuiManager* gui READ getGuiManager CONSTANT)
 		// 音频播放管线池（C++ 控制端）：QML 按 capacity() 维护播放器并监听其信号
 		Q_PROPERTY(AudioPipelinePool* audio READ getAudio CONSTANT)
@@ -215,6 +217,14 @@ public:
     // 卸载当前游戏（脚本 QUIT / 用户关闭）：停执行、停音频、清控制台、
     // 释放变量与脚本内存，回到「未装载」状态，可重新 openDirectory。
     Q_INVOKABLE void closeGame();
+    // C# Emuera 控制台命令：由 QML 控制台直接调用，不经过 ERB 输入通路。
+    Q_INVOKABLE bool executeConsoleCommand(const QString& command);
+    Q_INVOKABLE void copyTextToClipboard(const QString& text);
+    Q_INVOKABLE bool debugMode() const;
+    // ConfigData 的可编辑元数据：QML 只负责控件，配置读写仍由 C++ ConfigLoader 负责。
+    Q_INVOKABLE QVariantList configItems() const;
+    Q_INVOKABLE QString configValue(const QString& key) const;
+    Q_INVOKABLE bool setConfigValue(const QString& key, const QString& value);
     
     // Game base data loading
     void loadGameBaseData();
@@ -277,6 +287,7 @@ signals:
     // D-Bus /debug startFrameCapture：每帧抓取渲染（QML 侧 Item.grabToImage）
     void frameCaptureRequested(const QString& prefix, int limit);
     void frameCaptureStopRequested();
+    void consoleCommandRequested(const QString& command);
 
 private:
     QString m_gameDirectory;

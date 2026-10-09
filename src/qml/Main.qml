@@ -332,6 +332,20 @@ ApplicationWindow {
             "gameBase": eraEngine.gameBaseData
         });
     }
+    function openConfig(): void {
+        openLazyDialog("ConfigDialog.qml", { "engine": eraEngine, "gui": eraEngine.gui });
+    }
+    function openDebug(): void {
+        if (eraEngine.debugMode())
+            openLazyDialog("DebugDialog.qml", { "engine": eraEngine });
+    }
+    Connections {
+        target: eraEngine
+        function onConsoleCommandRequested(command) {
+            if (command === "CONFIG") window.openConfig();
+            else if (command === "DEBUG") window.openDebug();
+        }
+    }
 
     // ---- 菜单动作（QtQuick.Controls 的 MenuItem 用 action 承载快捷键）----
     Action {
@@ -342,16 +356,39 @@ ApplicationWindow {
     }
     Action {
         id: actReload
-        text: qsTr("重新加载")
+        text: qsTr("重新加载（全部代码）")
         shortcut: StandardKey.Refresh
         onTriggered: eraEngine.reloadAsync()
     }
+    Action { id: actReloadFolder; text: qsTr("读取直し（文件夹）"); onTriggered: eraEngine.reloadAsync() }
+    Action { id: actReloadFile; text: qsTr("读取直し（文件）"); onTriggered: eraEngine.reloadAsync() }
+    Action { id: actMacro01; text: qsTr("マクロ 01"); onTriggered: eraEngine.console.submitStringText("\\MACRO 01") }
+    Action { id: actMacro02; text: qsTr("マクロ 02"); onTriggered: eraEngine.console.submitStringText("\\MACRO 02") }
+    Action { id: actMacro03; text: qsTr("マクロ 03"); onTriggered: eraEngine.console.submitStringText("\\MACRO 03") }
+    Action { id: actMacro04; text: qsTr("マクロ 04"); onTriggered: eraEngine.console.submitStringText("\\MACRO 04") }
+    Action { id: actMacro05; text: qsTr("マクロ 05"); onTriggered: eraEngine.console.submitStringText("\\MACRO 05") }
+    Action { id: actMacro06; text: qsTr("マクロ 06"); onTriggered: eraEngine.console.submitStringText("\\MACRO 06") }
+    Action { id: actMacro07; text: qsTr("マクロ 07"); onTriggered: eraEngine.console.submitStringText("\\MACRO 07") }
     Action {
         id: actSaveLog
         text: qsTr("保存日志…")
         shortcut: StandardKey.Save
         onTriggered: logDialog.open()
     }
+    Action {
+        id: actCopyLog
+        text: qsTr("日志をクリップボードにコピー")
+        onTriggered: window.copyLogToClipboard()
+    }
+    function copyLogToClipboard(): void {
+        let lines = [];
+        const count = eraEngine.console.lineCount;
+        for (let i = 0; i < count; ++i)
+            lines.push(eraEngine.console.lineText(i));
+        eraEngine.copyTextToClipboard(lines.join("\n"));
+    }
+    Action { id: actConfig; text: qsTr("設定…"); onTriggered: window.openConfig() }
+    Action { id: actDebug; text: qsTr("デバッグウインドウを開く"); enabled: eraEngine.debugMode(); onTriggered: window.openDebug() }
     Action {
         id: actTitle
         text: qsTr("返回标题")
@@ -433,7 +470,12 @@ ApplicationWindow {
     //   * 原生菜单栏 NativeMenuBar.qml：labs MenuItem 没有 action 属性，
     //     靠这个映射逐项绑定状态、转发 trigger()。
     readonly property var menuActions: ({
-        open: actOpen, reload: actReload, saveLog: actSaveLog, title: actTitle,
+        open: actOpen, reload: actReload, reloadFolder: actReloadFolder, reloadFile: actReloadFile,
+        saveLog: actSaveLog, copyLog: actCopyLog,
+        config: actConfig, debug: actDebug,
+        macro01: actMacro01, macro02: actMacro02, macro03: actMacro03,
+        macro04: actMacro04, macro05: actMacro05, macro06: actMacro06, macro07: actMacro07,
+        title: actTitle,
         settings: actSettings, quit: actQuit, clear: actClear, bottom: actBottom,
         zoomIn: actZoomIn, zoomOut: actZoomOut, about: actAbout,
         windowed: actWindowed, fullscreen: actFullscreen, borderless: actBorderless,
@@ -461,9 +503,12 @@ ApplicationWindow {
                 MenuItem { action: window.menuActions.open }
                 MenuItem { action: window.menuActions.reload }
                 MenuItem { action: window.menuActions.saveLog }
+                MenuItem { action: window.menuActions.copyLog }
                 MenuItem { action: window.menuActions.title }
                 MenuSeparator {}
                 MenuItem { action: window.menuActions.settings }
+                MenuItem { action: window.menuActions.config }
+                MenuItem { action: window.menuActions.debug }
                 MenuSeparator {}
                 MenuItem { action: window.menuActions.quit }
             }

@@ -91,6 +91,8 @@ qt_add_qml_module(appemuera
         src/qml/ConsoleBlock.qml
         src/qml/AudioPlayers.qml
         src/qml/SettingsDialog.qml
+        src/qml/ConfigDialog.qml
+        src/qml/DebugDialog.qml
         src/qml/AboutDialog.qml
 )
 set_target_properties(appemuera PROPERTIES

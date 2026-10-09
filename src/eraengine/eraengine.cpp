@@ -931,6 +931,20 @@ void EraEngine::resolveTextConfig()
 		}
 		TextCodecUtil::setFallbackEncoding(fallback);
 
+		// ---- 语言编码（对齐 C# LangManager.setEncode(Config.Encode)）----
+		// STRLENS / SUBSTRING / STRFIND / STRLENFORM 的「位置/长度」按该编码的字节数计
+		// （见 expression_evaluator.h 的 LangManager 一节）。
+		// 来源**只有**配置里显式的 `内部で使用する東アジア言語`（= C# 的 Config.Encode，
+		// 932/936/949/950）：它是「游戏语言」这一声明本身。ROM 探测与逐文件嗅探只服务于
+		// 「把文件读进来」（内部一律转成 Qt 原生字符 / UTF-8），不参与任何运行期语义 ——
+		// 所以这里**不**取探测结论，也不取回退编码。
+		// 配置没写时用 C# 默认值 SHIFT-JIS。
+		// （此前从未调用 setLanguageEncoding，m_langEncoding 恒为 Shift-Jis：中文/韩文
+		//   游戏即便声明了 CHINESE_HANS，LENGTHBYTE 类函数仍按日文语义算。）
+		TextEncoding langEnc = TextEncoding::ShiftJis;   // C# Config.Encode 默认（JAPANESE）
+		if (fallbackFromConfig) langEnc = fallback;
+		m_expressionEvaluator.setLanguageEncoding(langEnc);
+
 		// 配置文件的编码也受回退编码影响（中文/韩文游戏的 emuera.config 本身就是 GBK/Big5）：
 		// 若回退编码变了且不是 Latin-1，用新回退重读一次配置（3 个小文件，代价可忽略）。
 		// 注意顺序：loadConfigFiles() -> resolveTextConfig() -> 其余装载都在这之后。
@@ -943,6 +957,7 @@ void EraEngine::resolveTextConfig()
 		qDebug() << "[EraEngine] 文本编码:" << TextCodecUtil::name(enc)
 		         << " 回退编码:" << TextCodecUtil::name(fallback)
 		         << "(" << TextCodecUtil::backendFor(fallback) << ")"
+		         << " 语言编码:" << TextCodecUtil::name(langEnc)
 		         << " 子目录检索:" << m_searchSubdirectory;
 }
 

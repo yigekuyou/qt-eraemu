@@ -36,6 +36,7 @@
 #include <QTimer>
 
 #include "eraengine.h"
+#include "expression_evaluator.h"
 #include "text_encoding.h"
 
 static int g_failures = 0;
@@ -112,6 +113,13 @@ int main(int argc, char* argv[]) {
                        ? engine.getParseTable()->parseWarnings().first() : QString()));
     check(engine.erbDir().endsWith(QLatin1String("ERB")), "ERB 目录解析正确");
     check(engine.csvDir().endsWith(QLatin1String("CSV")), "CSV 目录解析正确");
+    // 语言编码（LangManager / Config.Encode）：日文游戏 = Shift-JIS。
+    // 配置里没写 内部で使用する東アジア言語，故取 C# 默认值；它**不**受
+    // 「引擎内部统一 UTF-8」影响（UTF-8 只是内部表示，不参与字节语义）。
+    check(engine.getExpressionEvaluator()->languageEncoding() == TextEncoding::ShiftJis,
+          QString("语言编码 = SHIFT-JIS（得到 %1）")
+              .arg(QString::fromLatin1(TextCodecUtil::name(
+                  engine.getExpressionEvaluator()->languageEncoding()))));
 
     qDebug() << "\n3) 日文内容无乱码";
     check(engine.getConfig(QString::fromUtf8("ウィンドウ幅")) == QStringLiteral("1400"),
@@ -243,6 +251,39 @@ int main(int argc, char* argv[]) {
         }
         check(hasShuliang, "#DIM 数量 解析成功（GBK 中文变量名）");
         check(hasWenhou, "#DIMS 问候 解析成功且为字符串型");
+        // 这个游戏的配置**没有**声明 内部で使用する東アジア言語，所以语言编码取
+        // C# 默认值 SHIFT-JIS —— 探测结论（GB18030）**不得**泄漏到运行期语义：
+        // 探测/嗅探只负责把文件读进来（内部统一 UTF-8）。
+        check(gbkEngine.getExpressionEvaluator()->languageEncoding() == TextEncoding::ShiftJis,
+              QString("探测不影响语言编码（仍为 SHIFT-JIS，得到 %1）")
+                  .arg(QString::fromLatin1(TextCodecUtil::name(
+                      gbkEngine.getExpressionEvaluator()->languageEncoding()))));
+    }
+
+    qDebug() << "\n6) 内部で使用する東アジア言語 显式声明 -> 语言编码";
+    if (!TextCodecUtil::hasCodec(QStringLiteral("GB18030"))) {
+        qDebug().noquote() << "   [skip] 本机 Qt 未编入 ICU（无 GB18030 转换器）";
+    } else {
+        QTemporaryDir tmp3;
+        const QString g = tmp3.filePath(QStringLiteral("langGame"));
+        QDir().mkpath(g + QStringLiteral("/CSV"));
+        QDir().mkpath(g + QStringLiteral("/ERB"));
+        // 配置用 UTF-8+BOM：ROM 探测**永远不会**得出 GB18030（探测只接受东亚代码页的
+        // 结论，UTF-8 被排除），所以 GB18030 只可能来自这条配置项本身。
+        TextCodecUtil::writeFile(g + QStringLiteral("/emuera.config"),
+                                 QString::fromUtf8("内部で使用する東アジア言語:CHINESE_HANS\n"),
+                                 TextEncoding::Utf8Bom);
+        TextCodecUtil::writeFile(g + QStringLiteral("/CSV/GameBase.csv"),
+                                 QString::fromUtf8("タイトル,t\n"), TextEncoding::Utf8Bom);
+        TextCodecUtil::writeFile(g + QStringLiteral("/ERB/MAIN.ERB"),
+                                 QString::fromUtf8("@SYSTEM_TITLE\nRETURN\n"), TextEncoding::Utf8Bom);
+
+        EraEngine langEngine;
+        langEngine.setGameDirectory(g);
+        check(langEngine.getExpressionEvaluator()->languageEncoding() == TextEncoding::Gbk,
+              QString("CHINESE_HANS -> 语言编码 GB18030（得到 %1）")
+                  .arg(QString::fromLatin1(TextCodecUtil::name(
+                      langEngine.getExpressionEvaluator()->languageEncoding()))));
     }
 
     qDebug() << "\n=============================";

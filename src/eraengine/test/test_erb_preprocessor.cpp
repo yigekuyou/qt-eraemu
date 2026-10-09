@@ -224,6 +224,50 @@ int main(int argc, char* argv[]) {
         check(warned, "宏展开触顶时给出告警（对齐 C# 疑似自我引用/循环引用宏）");
     }
 
+    qDebug() << "\n9) #DEFINE 替换体不得吞掉行尾 ';' 注释";
+    {
+        // 回归：_SYSTEM_RPG.ERH 的宏体后带 `;注释`，收集时若不剥离，展开到
+        // 语句中间会把本行剩余部分整段注释掉 —— 报「未识别的指令」且赋值被丢弃。
+        const QString erh =
+            "#DEFINE DG_フィルタ1\t\t 0250\t;フィルタ\n"
+            "#DEFINE DEFRPG_EVENT_DB\t\tTRPG_FLAG_EVENT:(FLAG:RPG_進行中イベント)\t\t;イベント\n"
+            "#DEFINE DEFRPG_CHARA_ALL_NUM (7000 + 100)\t;総キャラ数\n"
+            "#DEFINE QUOTED \"a;b\"\t;字符串里的分号要保留\n";
+        const ErbPreprocessor::MacroTable t = ErbPreprocessor::collectMacroTable(erh);
+
+        check(t.value(QStringLiteral("DG_フィルタ1")).body == QStringLiteral("0250"),
+              QString("对象宏体剥掉注释（得到 '%1'）")
+                  .arg(t.value(QStringLiteral("DG_フィルタ1")).body));
+        check(t.value(QStringLiteral("DEFRPG_EVENT_DB")).body
+                  == QStringLiteral("TRPG_FLAG_EVENT:(FLAG:RPG_進行中イベント)"),
+              QString("含下标/括号的宏体剥掉注释（得到 '%1'）")
+                  .arg(t.value(QStringLiteral("DEFRPG_EVENT_DB")).body));
+        check(t.value(QStringLiteral("DEFRPG_CHARA_ALL_NUM")).body
+                  == QStringLiteral("(7000 + 100)"),
+              QString("括号表达式宏体不被截断（得到 '%1'）")
+                  .arg(t.value(QStringLiteral("DEFRPG_CHARA_ALL_NUM")).body));
+        check(t.value(QStringLiteral("QUOTED")).body == QStringLiteral("\"a;b\""),
+              QString("字符串字面量内的 ';' 保留（得到 '%1'）")
+                  .arg(t.value(QStringLiteral("QUOTED")).body));
+
+        // 端到端：`DEFRPG_EVENT_DB:0 = 0001` 展开后必须仍是完整赋值语句
+        ErbPreprocessor pp;
+        pp.setMacroTable(t);
+        QStringList warns;
+        const QList<ErbSourceLine> out =
+            pp.process(QStringLiteral("DEFRPG_EVENT_DB:0 = 0001\n"), &warns, "t.ERB");
+        check(out.value(0).text
+                  == QStringLiteral("TRPG_FLAG_EVENT:(FLAG:RPG_進行中イベント):0 = 0001"),
+              QString("展开后赋值语句完整（得到 '%1'）").arg(out.value(0).text));
+
+        // 宏体里的 ';' 若属于注释，展开到表达式中同样不得截断后续代码
+        QStringList w2;
+        const QList<ErbSourceLine> out2 =
+            pp.process(QStringLiteral("FOR L_I, 0, DEFRPG_CHARA_ALL_NUM\n"), &w2, "t.ERB");
+        check(out2.value(0).text == QStringLiteral("FOR L_I, 0, (7000 + 100)"),
+              QString("表达式位置展开不被截断（得到 '%1'）").arg(out2.value(0).text));
+    }
+
     qDebug() << "\n====================";
     if (g_failures == 0) {
         qDebug() << "[SUCCESS] preprocessor tests passed";

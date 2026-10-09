@@ -33,6 +33,43 @@ QString readIdentifier(const QString& s, int& i) {
     return s.mid(start, i - start);
 }
 
+// 剥离宏替换体里的行尾 ';' 注释（Emuera 注释语义），尊重字符串字面量。
+//
+// 为什么必须在**收集宏定义时**就剥掉：
+//   C# Emuera 的 #DEFINE 替换体是词法 token 流（HeaderFileLoader.
+//   analyzeSharpDefine -> LexicalAnalyzer.Analyse），';' 在词法阶段即被当作
+//   注释终止，**永远进不了宏体**；而本移植版是文本级替换，若把 `;注释`
+//   一并收进 body，展开到某条语句中间时，就会从该 ';' 起把**本行剩余代码
+//   整段注释掉**。实测 _SYSTEM_RPG.ERH：
+//     #DEFINE DEFRPG_EVENT_DB TRPG_FLAG_EVENT:(FLAG:RPG_進行中イベント) ;イベント
+//   `DEFRPG_EVENT_DB:0 = 0001` 展开成
+//     `TRPG_FLAG_EVENT:(FLAG:RPG_進行中イベント) ;イベント:0 = 0001`
+//   被截断为 `TRPG_FLAG_EVENT:(FLAG:RPG_進行中イベント)`，于是报
+//   「未识别的指令: TRPG_FLAG_EVENT」+「表达式无法归约: :(FLAG:…)」，
+//   并且 `= 0001` 的赋值被静默丢弃（语义错误，不只是噪音）。
+//
+// 语义需与 ast_builder.cpp 的 stripLineComment 保持一致：宏体展开到使用处
+// 后仍要过那一关，两处判定必须同源（含 `'=` 不是引号的特例）。
+QString stripMacroBodyComment(const QString& text) {
+    QChar quote;
+    for (int i = 0; i < text.size(); ++i) {
+        const QChar c = text.at(i);
+        if (!quote.isNull()) {
+            if (c == quote) quote = QChar();
+            continue;
+        }
+        if (c == QLatin1Char('"')) { quote = c; continue; }
+        if (c == QLatin1Char('\'')) {
+            // `'=` 是字符串赋值运算符，不是引号
+            if (i + 1 < text.size() && text.at(i + 1) == QLatin1Char('=')) continue;
+            quote = c;
+            continue;
+        }
+        if (c == QLatin1Char(';')) return text.left(i);
+    }
+    return text;
+}
+
 // 预处理状态机（对齐 C# ErbLoader.PPState）
 struct PPState {
     bool skip = false;
@@ -198,7 +235,8 @@ ErbPreprocessor::MacroTable ErbPreprocessor::collectMacroTable(const QString& co
             // "DOC_MAC_27 33 33 …"（自引用膨胀），完全错误。
             s = s.mid(i);
         }
-        def.body = s.trimmed();
+        // 行尾 `;注释` 不属于替换体（见 stripMacroBodyComment 的说明）。
+        def.body = stripMacroBodyComment(s).trimmed();
         table.insert(name, def);
     }
     return table;

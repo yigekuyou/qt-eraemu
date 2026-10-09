@@ -839,6 +839,30 @@ bool ExecutionEngine::executeInstruction(const LogicalLine& line) {
         return true;
     }
 
+    // ---- SAVENOS / PRINTCPERLINE <数值变量>（对齐 C# SP_GETINT 指令形式）----
+    // 语句形式是「把配置值**写进**该变量」：
+    //   Process.ScriptProc.cs:560  case SAVENOS:
+    //       ((SpGetIntArgument)func.Argument).VarToken.SetValue(Config.SaveDataNos, exm);
+    //   Process.ScriptProc.cs:554  case PRINTCPERLINE: 同上，写 Config.PrintCPerLine
+    // 与 0 参式中函数 SAVENOS() / PRINTCPERLINE() 同名不同形：ast_builder 已把语句
+    // 形式按指令解析，argument_parser.h 用 ArgKind::GetInt 保证首参是可赋值变量。
+    if (name == "SAVENOS" || name == "PRINTCPERLINE") {
+        if (!m_storage) return true;
+        QList<const Operand*> ops;
+        for (const Operand& a : args) {
+            if (a.isString || a.raw != QLatin1String(",")) ops.append(&a);
+        }
+        if (ops.isEmpty()) return true;          // 裸写：C# 会报缺参，这里按宽容处理
+        const LhsRef ref = parseLhsRef(ops.first()->raw);
+        if (ref.valid) {
+            ExpressionEvaluator& ev = getEvaluator();
+            writeLhs(ref, name == QLatin1String("SAVENOS")
+                              ? ev.saveDataNos()          // Config.SaveDataNos（默认 20）
+                              : ev.printCLayout().second); // Config.PrintCPerLine（默认 3）
+        }
+        return true;
+    }
+
     // ---- RESETGLOBAL（对齐 C# RESETGLOBAL_Instruction：全全局变量归零/清空）----
     if (name == "RESETGLOBAL") {
         if (m_storage) m_storage->resetGlobals();

@@ -43,4 +43,5 @@ case SAVENOS:                    // Process.ScriptProc.cs
 - 同名式中函数：注册于 `Runtime/Script/Statements/Function/Creator.cs:67`（`GetSaveNosMethod`），实现在 `Runtime/Script/Statements/Function/Creator.Method.cs:2869`，同样返回 `Config.SaveDataNos`。索引中两个条目均记作 SAVENOS。
 - 源码注释（FunctionIdentifier.cs:403 附近）说明该指令复用 SP_GETINT 参数类型但「引数的规格不同」——普通 SP_GETINT 用于读取配置的指令族，SAVENOS 借用它实现「向变量写入」。
 - 与 `PRINTCPERLINE`（`Runtime/Script/Process.ScriptProc.cs:554`）实现完全同构，仅读取的配置项不同。
+- **无文件副作用**：两种形态都只读 `Config.SaveDataNos`（命令形态把它写入目标变量、式中函数形态把它当返回值），参考树 `emuera.em/Emuera/` 中没有任何 nos 相关落盘（全树无 `nos.dat` / `SaveNosToFile`）。配置值的读取与夹紧见 `Runtime/Config/Config.cs`（默认 20，范围 20～80）。
 - `zh/` 文档套件未收录本命令，无从交叉核对。

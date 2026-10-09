@@ -198,6 +198,35 @@ int main(int argc, char* argv[]) {
     }
 
 
+    // SYSTEM_DATA_FUNC.ERB:49/197 `SAVENOS L_MAX`：SAVENOS / PRINTCPERLINE 的
+    // **语句形式**是 SP_GETINT 指令「<数值变量>」——把配置值写进该变量
+    // （C# Process.ScriptProc.cs 的 `SpGetIntArgument.VarToken.SetValue(Config.…, exm)`），
+    // 与 0 参式中函数 SAVENOS() / PRINTCPERLINE() 同名不同形。此前语句被
+    // 「内置函数名开头 -> 整行按函数调用归约」劫持：报「参数过多（最多 0 个，实得 1）」，
+    // 并且丢掉对变量的赋值。
+    qDebug() << "\n8) SAVENOS / PRINTCPERLINE 语句（变量 = 配置值）";
+    {
+        const AstResolver resolveOne = [&table](const QString& e) { return table.expressionAst(e); };
+        const ScriptPosition pos(QStringLiteral("t.ERB"), 0, 0);
+        LogicalLine s = AstBuilder::build(QStringLiteral("SAVENOS BAG:3"), pos, resolveOne);
+        check(s.functionName == QLatin1String("SAVENOS") && !s.isFunctionCall,
+              "SAVENOS 语句按指令解析（不再被归约为函数调用）");
+        check(!s.argument.hasError(), "SAVENOS 语句通过校验（" + s.argument.typeError + "）");
+        storage.setPrivateScope("MAIN", {"BAG"});
+        engine.executeInstruction(s);
+        check(storage.getGlobalInt1D("BAG", 3) == 20,
+              QString("SAVENOS BAG:3 -> 20（Config.SaveDataNos 默认值；得到 %1）")
+                  .arg(storage.getGlobalInt1D("BAG", 3)));
+
+        LogicalLine p = AstBuilder::build(QStringLiteral("PRINTCPERLINE BAG:3"), pos, resolveOne);
+        check(p.functionName == QLatin1String("PRINTCPERLINE") && !p.isFunctionCall,
+              "PRINTCPERLINE 语句按指令解析");
+        engine.executeInstruction(p);
+        check(storage.getGlobalInt1D("BAG", 3) == 3,
+              QString("PRINTCPERLINE BAG:3 -> 3（Config.PrintCPerLine 默认值；得到 %1）")
+                  .arg(storage.getGlobalInt1D("BAG", 3)));
+    }
+
     // ecd/docs/translation/Command.html: PRINTBUTTON accepts integer or string values.
     {
         QString text, stringValue;

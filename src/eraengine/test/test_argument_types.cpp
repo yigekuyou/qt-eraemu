@@ -205,6 +205,21 @@ int main(int argc, char* argv[]) {
     check(build(table, "FONTSTYLE 1 + 2").argument.typeOk, "FONTSTYLE 1 + 2 合法");
     // 裸记号型（CALLEVENT <事件名>：eraTW 不加引号）——用 Expressions 只校验个数
     check(build(table, "CALLEVENT EVENTTURNEND").argument.typeOk, "CALLEVENT 裸名合法");
+    // SAVENOS / PRINTCPERLINE：**语句形式**是 SP_GETINT「<数值变量>」，与 0 参式中
+    // 函数同名不同形（C# FunctionIdentifier.cs 的 argb[SP_GETINT]）。它们必须按
+    // 指令解析（否则被归约成 SAVENOS() 而报「参数过多」），且首参必须是变量。
+    {
+        const LogicalLine savenos = build(table, "SAVENOS L_MAX");
+        check(savenos.functionName == QLatin1String("SAVENOS") && !savenos.isFunctionCall,
+              "SAVENOS <变量> 按指令解析（不归约为函数调用）");
+        check(savenos.argument.typeOk, "SAVENOS L_MAX 合法：" + savenos.argument.typeError);
+        check(!build(table, "SAVENOS").argument.typeOk, "SAVENOS 无参 -> 参数过少");
+        check(!build(table, "SAVENOS 3").argument.typeOk, "SAVENOS 3（字面量）-> 需要变量");
+        const LogicalLine perline = build(table, "PRINTCPERLINE L_MAX");
+        check(perline.functionName == QLatin1String("PRINTCPERLINE") && !perline.isFunctionCall,
+              "PRINTCPERLINE <变量> 按指令解析");
+        check(perline.argument.typeOk, "PRINTCPERLINE L_MAX 合法：" + perline.argument.typeError);
+    }
 
     qDebug() << "\n4) 结构化解析告警（EraParseTable）";
     AstResolver resolve = [&table](const QString& e) { return table.expressionAst(e); };

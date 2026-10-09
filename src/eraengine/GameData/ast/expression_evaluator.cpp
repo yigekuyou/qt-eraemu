@@ -2360,16 +2360,12 @@ bool ExpressionEvaluator::evaluateBuiltin(const FunctionNode &node, VariableStor
         return true;
     }
     case BuiltinOp::SaveNos: {
-        // SAVENOS <数值变量>：NOS 数组写入 sav/nos.dat
-        QFile file(saveFilePath(QStringLiteral("nos.dat")));
-        if (!file.open(QIODevice::WriteOnly | QIODevice::Text | QIODevice::Truncate)) {
-            out = QVariant::fromValue<qint64>(0);
-            return true;
-        }
-        const int n = storage->arraySize(QStringLiteral("NOS"));
-        for (int i = 0; i < n; ++i)
-            file.write(QString("%1\n").arg(storage->getGlobalInt1D(QStringLiteral("NOS"), i)).toUtf8());
-        out = QVariant::fromValue<qint64>(1);
+        // SAVENOS()（式中函数，0 参）—— 对齐 C# GetSaveNosMethod：返回
+        // Config.SaveDataNos（「表示するセーブデータ数」，默认 20）。
+        // 此前这里把 NOS 数组写进 sav/nos.dat 并返回 1：C# 全库没有 nos.dat
+        // （grep -i "nos.dat" Emuera/ 为空），SAVENOS 不碰任何文件。
+        // 语句形式 `SAVENOS <数值变量>` 由执行链处理（ArgKind::GetInt）。
+        out = QVariant::fromValue<qint64>(saveDataNos());
         return true;
     }
     case BuiltinOp::DebugClear: {

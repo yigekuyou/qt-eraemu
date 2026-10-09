@@ -796,7 +796,13 @@ LogicalLine AstBuilder::build(const QString& rawLine,
         // 否则 eraTW TRACHECK_ORGASM.ERB:92 `POWER Multiplier, 2, MultipleEc`
         // 既触发参数数目双重告警、又丢掉对变量的赋值。
         && line.functionName != QLatin1String("POWER")
-        && line.functionName != QLatin1String("ENCODETOUNI")) {
+        && line.functionName != QLatin1String("ENCODETOUNI")
+        // SAVENOS / PRINTCPERLINE 例外：语句形式是 SP_GETINT「<数值变量>」——
+        // 把配置值（Config.SaveDataNos / PrintCPerLine）**写进该变量**，与 0 参
+        // 式中函数同名不同形。归约成 `SAVENOS()` 会报「参数过多」，并且丢掉赋值。
+        // 语句形式的 ArgKind::GetInt 登记在 argument_parser.h，语义在执行链。
+        && line.functionName != QLatin1String("SAVENOS")
+        && line.functionName != QLatin1String("PRINTCPERLINE")) {
         const QString callText = trimmed.mid(first.text.length()).trimmed();
         // 实参形态声明外置（注册类可以插入 AST）：ExtensionRegistry::regForm()
         // 声明的函数（如 PUTFORM），实参是**格式化串**（文本 + {…}/%…%），

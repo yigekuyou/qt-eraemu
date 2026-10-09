@@ -7,7 +7,7 @@
 
 ## 语义
 
-执行游戏开始时的系统性角色添加处理。会添加 `chara0*.csv` 中定义的角色，以及 `gamebase.csv` 中指定的初始角色（`デフォルトキャラ`）。
+执行游戏开始时的系统性角色添加处理。会添加 `chara0*.csv` 中定义的角色，以及 `gamebase.csv` 的 `最初からいるキャラ` 指定的初始角色（`Runtime/Script/Data/GameBase.cs:126`；`GameBase.DefaultCharacter`，未指定时为 -1）。
 
 `ADDCHARA 0` 是查找并添加角色编号（番号）为 0 的角色，而 `ADDDEFCHARA` 是按 CSV 文件编号（`chara0*.csv` 的编号）逐个添加。如果对应的 CSV 不存在，就与 `ADDVOIDCHARA` 一样创建空角色。
 

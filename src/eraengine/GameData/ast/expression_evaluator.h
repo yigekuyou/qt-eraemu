@@ -156,6 +156,10 @@ public:
     [[nodiscard]] QPair<int,int> printCLayout() const {
         return m_printCProvider ? m_printCProvider() : qMakePair(25, 3);
     }
+    // SAVENOS()（式中函数）：C# GetSaveNosMethod 返回 Config.SaveDataNos
+    // （「表示するセーブデータ数」，默认 20）——**不涉及任何文件读写**。
+    void setSaveDataNosProvider(std::function<qint64()> provider) { m_saveDataNosProvider = std::move(provider); }
+    [[nodiscard]] qint64 saveDataNos() const { return m_saveDataNosProvider ? m_saveDataNosProvider() : 20; }
     // MONEYSTR 显示参数读取（PRINT_SHOPITEM 的金额前后置，对齐 C# Config.MoneyLabel/MoneyFirst）
     [[nodiscard]] QString moneyLabel() const { return m_moneyLabel; }
     [[nodiscard]] bool moneyFirst() const { return m_moneyFirst; }
@@ -281,6 +285,7 @@ private:
     std::function<qint64()> m_lineEmptyProvider;             // LINEISEMPTY
     QString m_saveDirectory;
     std::function<QPair<int,int>()> m_printCProvider;        // PRINTCLENGTH/PERLINE
+    std::function<qint64()> m_saveDataNosProvider;           // SAVENOS()
     Mt19937 m_rand;                       // MT19937（启动时随机种子）
     VariableDimProvider m_variableDimProvider;
     ConstArrayProvider  m_constArrayProvider;

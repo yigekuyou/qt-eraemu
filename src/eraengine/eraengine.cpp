@@ -332,6 +332,19 @@ EraEngine::EraEngine(QObject *parent)
 			}
 			return { len, per };
 		});
+		// SAVENOS()（式中函数）与语句 `SAVENOS <数值变量>`：C# Config.SaveDataNos
+		// —— 配置键是「表示するセーブデータ数」（Config.cs:75/153-161），默认 20、
+		// 加载后夹紧到 20..80。此前 C++ 侧查的是「セーブデータの数」/「SaveDataNos」，
+		// 与 C# 的键名对不上，恒取默认值。
+		m_expressionEvaluator.setSaveDataNosProvider([this]() -> qint64 {
+			for (const QString& k : {QString::fromUtf8("表示するセーブデータ数"),
+			                         QString::fromUtf8("セーブデータの数"),
+			                         QStringLiteral("SaveDataNos")}) {
+				if (m_configLoader.hasConfig(k))
+					return static_cast<qint64>(qBound(20, m_configLoader.getInt(k, 20), 80));
+			}
+			return 20;
+		});
 		// SAVETEXT / LOADTEXT / SAVECHARA / LOADCHARA / GSAVE / GLOAD 的落盘目录
 		m_expressionEvaluator.setSaveDirectory(GamePaths::join(m_storageRoot, QStringLiteral("sav")));
 		// 解析期也需要常量名表（CFLAG:ARG:現在位置 之类的常量名下标）
@@ -1423,6 +1436,16 @@ void EraEngine::buildSystemHost()
 		// 此前 resetData 从未接线：RESETDATA 只在 ExecutionEngine 里有一半实现，
 		// 系统层的新开游戏重置根本没被调用。
 		host.resetData = [this]() { m_executionEngine.handleResetData(); };
+		// 新游戏开局注册角色（C# Process.SystemProc.cs:198-206 的
+		// `ResetData(); AddCharacterFromCsvNo(0); if (DefaultCharacter > 0) …`）。
+		// 此前这两个回调从未接线：state machine 里的 `if (m_host.addCharacterFromCsvNo)`
+		// 恒为假 -> 一个角色都没登记 -> CHARANUM 停在 0 -> 脚本惯例的
+		// `DELCHARA 0`（删掉开局那个 0 号角色）直接报「番号超出角色范围」。
+		host.addCharacterFromCsvNo = [this](int csvNo) { m_variableStorage.addChara(csvNo); };
+		host.defaultCharacter = [this]() -> int {
+				// GameBase.csv 的「最初からいるキャラ」（C# GameBase.cs:124，默认 -1）
+				return int(m_gameBaseData.get(QString::fromUtf8("最初からいるキャラ")).toLongLong());
+		};
 
 		// ---- 存/读档（SAVEGAME / LOADGAME 系统画面）----
 		// 文件名/目录对齐 ExecutionEngine 的 SAVEDATA/LOADDATA（sav/save##.sav），
@@ -1431,10 +1454,9 @@ void EraEngine::buildSystemHost()
 		const auto savePath = [this](int index) {
 				return GamePaths::join(m_storageRoot, QStringLiteral("sav/save%1.sav").arg(index, 2, 10, QLatin1Char('0')));
 		};
-		host.saveDataNos = [intCfg]() {
-				return intCfg({QStringLiteral("セーブデータの数"),
-				               QStringLiteral("SaveDataNos")}, 20);
-		};
+		// 存档槽位数：与 SAVENOS 同源（C# 两处都读 Config.SaveDataNos），
+		// 走求值器已接好的 provider，避免两处键名/夹紧规则各写一遍。
+		host.saveDataNos = [this]() { return int(m_expressionEvaluator.saveDataNos()); };
 
 		// ---- TRAINNAME（CSV/Train.csv 的调教指令名表）----
 		// C# Process.cs:143 `TrainName = constant.GetCsvNameList(TRAINNAME)`：

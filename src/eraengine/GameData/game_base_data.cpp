@@ -39,6 +39,7 @@ void GameBaseData::set(const QString& key, const QString& value)
 		else if (key == "バージョン") { m_version = value; updated = true; }
 		else if (key == "製作年") { m_releaseYear = value; updated = true; }
 		else if (key == "追加情報") { m_additionalInfo = value; updated = true; }
+		else { m_extra.insert(key, value); updated = true; }   // 未建模的键（见头文件）
 
 		if (updated) {
 				qDebug() << "[load] GameBase" << key << "=" << value;
@@ -69,7 +70,9 @@ QString GameBaseData::get(const QString& key) const
     if (mappedKey == "バージョン") return m_version;
     if (mappedKey == "製作年") return m_releaseYear;
     if (mappedKey == "追加情報") return m_additionalInfo;
-    return QString();
+    // 未建模的键（「最初からいるキャラ」等）：留存值原样返回，不用则空
+    if (m_extra.contains(mappedKey)) return m_extra.value(mappedKey);
+    return m_extra.value(key);
 }
 
 QVariantMap GameBaseData::toMap() const

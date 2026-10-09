@@ -272,6 +272,11 @@ int main(int argc, char* argv[]) {
     check(num("STRFIND(\"あいう\", \"う\")") == 4, "STRFIND(\"あいう\",\"う\") == 4（语言字节位置）");
     check(num("STRFINDU(\"abcde\", \"cd\")") == 2, "STRFINDU(\"abcde\",\"cd\") == 2");
     check(num("STRCOUNT(\"abcabc\", \"abc\")") == 2, "STRCOUNT == 2");
+    // SAVENOS()（式中函数）：对齐 C# GetSaveNosMethod —— 返回 Config.SaveDataNos
+    // （默认 20），**不碰任何文件**。此前这里被实现成「把 NOS 数组写进
+    // sav/nos.dat 并返回 1」，与 C# 语义不符（C# 全库没有 nos.dat）。
+    check(num("SAVENOS()") == 20, "SAVENOS() == 20（Config.SaveDataNos 默认值）");
+    check(num("PRINTCPERLINE()") == 3, "PRINTCPERLINE() == 3（Config.PrintCPerLine 默认值）");
     check(str("TOSTR(123)") == QStringLiteral("123"), "TOSTR(123) == \"123\"");
     check(num("TOINT(\"123\")") == 123 && num("TOINT(\"abc\")") == 0 && num("TOINT(\"１２３\")") == 0,
           "TOINT：数字/非数字/全角");

@@ -19,6 +19,7 @@
 #define GAME_BASE_DATA_H
 
 #include <QObject>
+#include <QMap>
 #include <QString>
 #include <QVariantMap>
 #include <QQmlEngine>
@@ -61,6 +62,13 @@ private:
     QString m_version;
     QString m_releaseYear;
     QString m_additionalInfo;
+    // GameBase.csv 其余键的原样留存。C# 的 GameBase.cs 用 switch 把它们逐个解析成
+    // 具名字段（コード / バージョン / バージョン違い認める / 最初からいるキャラ /
+    // アイテムなし / …），本移植只建模了上面 6 个显示用键，其余此前**直接丢弃**：
+    // 于是 `get("最初からいるキャラ")` 恒空 —— 开局默认角色与 ADDDEFCHARA 都因此失效
+    // （新开游戏 CHARANUM 停在 0，脚本惯例的 `DELCHARA 0` 直接越界报错）。
+    // 未建模的键保存在这里，保证 get() 对这些键与 C# 的字段读取等价。
+    QMap<QString, QString> m_extra;
 };
 
 #endif // GAME_BASE_DATA_H

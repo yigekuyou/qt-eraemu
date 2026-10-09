@@ -41,4 +41,5 @@ GetIntValue(exm, args):
 
 - ecd/Command.md 小节描述的是命令形态（赋值给数值变量）；ecd/Expression.md 只给出签名 `int SAVENOS()`。两者读取同一配置，语义一致。
 - 源码会把配置值夹紧到 20～80；文档只提到默认 20，未提夹紧范围。
+- **无文件副作用**：式中函数只返回 `Config.SaveDataNos`，命令形态只把它写入目标变量；参考树 `emuera.em/Emuera/` 中 `SAVENOS` 不读写任何文件（全树 grep 无 `nos.dat` / `SaveNosToFile`）。
 - zh 套件未收录本函数。

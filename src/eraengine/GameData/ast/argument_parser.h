@@ -139,7 +139,12 @@ inline constexpr auto kInstructionSpecs = std::to_array<InstructionSpec>({
     {"LOADGAME",     ArgKind::SaveData,      0,  -1},
     {"SAVEVAR",      ArgKind::SaveData,      2,  -1},   // <变量>…,<文件名>（EE）/ <文件名>,<文字列>,<变量>…（C# 原型）
     {"LOADVAR",      ArgKind::SaveData,      1,  -1},
-    {"SAVENOS",      ArgKind::SaveData,      0,  1},
+    // SAVENOS / PRINTCPERLINE：语句形式是 SP_GETINT「<数值变量>」——
+    // 把配置值**写进**该变量（C# Process.ScriptProc.cs 的 SpGetIntArgument.VarToken.SetValue），
+    // 与 0 参式中函数 SAVENOS() / PRINTCPERLINE() 不同形，故按变量槽指令登记。
+    // 参数不可省略（C# SP_GETINT 少参会报参数不足）。
+    {"SAVENOS",      ArgKind::GetInt,        1,  1},
+    {"PRINTCPERLINE",ArgKind::GetInt,        1,  1},
     {"SPLIT",        ArgKind::Split,         1,  -1},
     {"STRDATA",      ArgKind::VarStr,        0,  1},   // VAR_STR：0 实参时目标为 RESULTS:0
     {"ENCODETOUNI",  ArgKind::FormStr,       0,  1},   // statement: FORM_STR_NULLABLE
@@ -175,6 +180,9 @@ inline constexpr auto kInstructionSpecs = std::to_array<InstructionSpec>({
     // GetArgumentBuilder(FunctionArgType.X)；个数范围取 test/data/commands/*.md 的签名。
     // 注：同时是内置函数的名字（COPYCHARA/PICKUPCHARA/PUTFORM/STRLEN*…）不在此列 ——
     //     那些行由 AstBuilder 转成函数语句（isFunctionCall），加规范会误报「参数过多」。
+    //     例外是**语句形式与式中函数不同形**的几个（POWER/TIMES/SORTCHARA/SAVENOS/
+    //     PRINTCPERLINE…）：它们既在 AstBuilder 的例外名单里，又必须在此登记语句
+    //     形式的 ArgKind，否则语句会退化成「按函数归约」而报参数过多。
     // 角色列表（INT_ANY：可变个整数）——注意必须用 **Expressions**（逗号族）：
     // 本引擎的 IntExpression 是「整行归约为一个表达式」，`ADDCHARA 3, 5` 会被并成
     // 一个操作数而破坏多参；Expressions 按顶层逗号切分，逐参归约（见 ast_builder）。

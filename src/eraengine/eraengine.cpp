@@ -1038,8 +1038,7 @@ bool EraEngine::debugMode() const
 {
 const QStringList args = QCoreApplication::arguments();
     for (const QString& arg : args)
-        if (arg.compare(QStringLiteral("-Debug"), Qt::CaseInsensitive) == 0
-            || arg.compare(QStringLiteral("--debug"), Qt::CaseInsensitive) == 0)
+        if (arg == QStringLiteral("--debug"))
             return true;
     return false;
 }
@@ -1070,7 +1069,7 @@ bool EraEngine::executeConsoleCommand(const QString& command)
     }
     if (op == QStringLiteral("DEBUG")) {
         if (!debugMode()) {
-            m_console.printPlain(QStringLiteral("デバッグウインドウは-Debug引数付きで起動したときのみ使えます"));
+            m_console.printPlain(QStringLiteral("デバッグウインドウは--debug引数付きで起動したときのみ使えます"));
             m_console.newline();
             return false;
         }

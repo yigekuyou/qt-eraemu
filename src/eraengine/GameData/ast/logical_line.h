@@ -25,6 +25,7 @@
 #include <QSharedPointer>
 #include <QColor>
 #include <QHash>
+#include <optional>
 
 #include "expression_ast.h"
 #include "word.h"
@@ -84,6 +85,9 @@ struct Operand {
     bool                           isString = false;   // 字符串字面量
     bool                           isVariable = false; // %VAR% / $VAR 形式
     QSharedPointer<ExpressionNode> ast;          // 归约后的表达式 AST（可空）
+
+    // 命令 AST 专用实数常量；装载期校验/转换一次，不参与整数表达式。
+    std::optional<double> realValue;
 
     Operand() = default;
     explicit Operand(const QString& text) : raw(text) {}

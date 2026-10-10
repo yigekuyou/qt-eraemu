@@ -7,7 +7,7 @@ C# 语义依据：`test/data/commands/{CUSTOMDRAWLINE,CASE,TIMES,ENCODETOUNI}.md
 - `CASE` 按值、闭区间 `TO`、`IS` 比较条件解析；装载期与运行期共用条件拆分，运行期在完成声明处理后重建缓存。
 - FORM、普通字符串及插值跨度统一用于表达式词法、参数分割和 CASE 扫描；条件内引号、逗号、`TO` 不再提前截断外层内容。
 - 条件 FORM 的分支按文本读取分隔符，保留全角空格，仅裁剪 ASCII 空格和制表符。
-- `TIMES` 倍率按有限实数常量校验，不再交给整数表达式解析；当前运行期仍采用 double 乘法后截断，不代表已实现 C# 配置控制的 decimal 精度分支。
+- `TIMES` 倍率按有限实数常量校验，不再交给整数表达式解析；写回规则见下方 2026-10-10 更新，当前采用可配置取整，不代表已实现 C# 配置控制的 decimal 精度分支。
 - CALL 支持函数名与括号参数间的空白；CALLFORM 目标中的插值不再被内部空白、逗号或括号切断。
 - ENCODETOUNI 命令与同名式中函数分流：命令展开 FORM 并写入 RESULT 数组，式中函数仍接收普通字符串表达式。
 - AST 磁盘缓存已移除；告警导出工具的 `--async` 仍用于验证并行装载。
@@ -60,3 +60,22 @@ C# 语义依据：`test/data/language/内置流程.md`（`endOpenning`）、`tes
   （`execution_engine.cpp` 读同一键）都因此失效。修复：未建模的键原样留存，`get()` 回退查它。
 - 回归：`test_new_game`（自建「无 `@SYSTEM_TITLE`」小游戏 → `runSystem()` →
   `chooseTitle(0)`，断言 `CHARANUM` 与 `charaCsvNo`）。
+
+## 浮点倍率与三种取整方式（2026-10-10）
+
+- TIMES 的第二参数属于命令 AST 实数常量，普通整数表达式仍统一为 qint64。
+  装载期以 QDoubleValidator 校验（C locale、拒绝分组符、ScientificNotation、
+  不限制小数位，只接受 Acceptable），用同一 locale 转为有限 double 后存入
+  Operand::realValue。参数类型回填复用解析结果，执行期间不再从 raw 转换。
+- Qt 扩展配置 `RealRounding`：`round`（默认）、`floor`、`ceil`。
+  QML 设置通过可翻译的 ComboBox 编辑，复用 ConfigLoader 的配置保存路径。
+  `round` 使用 qRound64，半值远离零；floor/ceil 使用 std::floor/std::ceil，
+  因为 Qt qFloor/qCeil 的返回类型是 int，无法覆盖 qint64 范围。
+- 三种方式均在整数转换前检查有限性和 qint64 边界。溢出报告执行错误，保留目标值。
+- 有意移植差异：C# TIMES 的 `(long)d` 向零截断，本移植默认四舍五入。
+  `10 * 0.75` 在 C# 中为 7，在默认 Qt 模式下为 8；`-10 * 0.75` 为 -8。
+  C# double/decimal 配置分支仍未完整移植，旧配置不覆盖新增取整选项。
+- Qt 官方依据：QDoubleValidator、QtNumeric::qRound64、QtMath::qFloor/qCeil、
+  Qt Quick Controls ComboBox（textRole/valueRole/currentValue/onActivated）。
+- 回归覆盖科学计数法、小数缓存、非法/非有限倍率、三种正负数取整、
+  超出 int 范围的结果和乘法溢出。

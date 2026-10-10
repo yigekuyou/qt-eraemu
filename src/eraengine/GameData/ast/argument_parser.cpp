@@ -18,6 +18,8 @@
 #include "argument_parser.h"
 #include <QCoreApplication>
 #include <cmath>
+#include <QDoubleValidator>
+#include <QLocale>
 
 namespace {
 
@@ -66,6 +68,26 @@ void ArgumentParser::build(LogicalLine& line) {
     arg.minArgs = mn;
     arg.maxArgs = mx;
 
+    // TIMES 的实数倍率直接存入命令 AST；后续类型回填重建参数时复用数值。
+    if (arg.kind == ArgKind::Times) {
+        int index = 0;
+        for (Operand& operand : line.arguments) {
+            if (isSeparator(operand)) continue;
+            if (index++ != 1 || operand.isString || operand.realValue) continue;
+            QString text = operand.raw.trimmed();
+            QLocale locale = QLocale::c();
+            locale.setNumberOptions(locale.numberOptions() | QLocale::RejectGroupSeparator);
+            QDoubleValidator validator;
+            validator.setLocale(locale);
+            validator.setNotation(QDoubleValidator::ScientificNotation);
+            validator.setDecimals(-1);
+            int pos = 0;
+            if (validator.validate(text, pos) != QValidator::Acceptable) continue;
+            bool valid = false;
+            const double value = locale.toDouble(text, &valid);
+            if (valid && std::isfinite(value)) operand.realValue = value;
+        }
+    }
     const QList<Operand> ops = nonSeparators(line.arguments);
     arg.operands = ops;
 
@@ -149,9 +171,7 @@ void ArgumentParser::build(LogicalLine& line) {
     }
 
     if (arg.typeOk && arg.kind == ArgKind::Times) {
-        bool valid = false;
-        const double factor = ops.at(1).raw.toDouble(&valid);
-        if (ops.at(1).isString || !valid || !std::isfinite(factor)) {
+        if (!ops.at(1).realValue) {
             arg.typeOk = false;
             arg.typeError = QCoreApplication::translate("ParseDiagnostics", "TIMES 的倍率需要有限实数常量：%1").arg(ops.at(1).raw);
         } else if (!ops.first().ast || ops.first().ast->valueType() == OperandType::Str) {

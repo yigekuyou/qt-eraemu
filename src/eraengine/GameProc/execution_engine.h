@@ -71,6 +71,11 @@ public:
     // GameBase.csv 数据（GAMEBASE_TITLE 等）；求值器需要它
     [[nodiscard]] GameBaseData* gameBaseData() const { return m_gameBaseData; }
 
+    enum class RealRounding { Round, Floor, Ceil };
+    void setRealRoundingProvider(std::function<RealRounding()> provider) {
+        m_realRoundingProvider = std::move(provider);
+    }
+
     // PRINTC / PRINTLC 的定宽（C# Config.PrintCLength，默认 25）
     void setPrintCLength(int n) { if (n > 0) m_printCLength = n; }
     [[nodiscard]] int printCLength() const { return m_printCLength; }
@@ -314,6 +319,7 @@ public:
     bool m_mesSkip = false;
     // 默认文字色（C# Config.ForeColor，RESETCOLOR 还原到此；由 EraEngine 依配置注入）
     std::function<qint64()> m_defaultColorProvider;
+    std::function<RealRounding()> m_realRoundingProvider;
     qint64 m_currentAlign = 0;    // 0=LEFT 1=CENTER 2=RIGHT（CURRENTALIGN）
     QString m_fontName;           // 当前字体（SETFONT；空 = 默认）
     QString m_drawLineString = QStringLiteral("-");   // C# Config.DrawLineString

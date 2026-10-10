@@ -782,23 +782,27 @@ bool ExecutionEngine::executeInstruction(const LogicalLine& line) {
         return true;
     }
 
-    // ---- TIMES <变量>, <实数>（对齐 C# SP_TIMES_Instruction：double 乘后截断）----
+    // TIMES：装载期 double 常量，写回 qint64 时应用配置中的取整方式。
     if (name == "TIMES") {
         if (!m_storage) return true;
-        QList<const Operand*> ops;
-        for (const Operand& a : args) {
-            if (a.isString || a.raw != QLatin1String(",")) ops.append(&a);
+        const auto& ops = line.argument.params;
+        if (!line.argument.typeOk || ops.size() != 2 || !ops.at(1).realValue) {
+            emit errorOccurred(QStringLiteral("TIMES 的实数参数未通过装载期校验"));
+            return true;
         }
-        if (ops.size() >= 2) {
-            const LhsRef ref = parseLhsRef(ops.first()->raw);
-            if (ref.valid) {
-                // TIMES takes a real constant, never an integer expression.
-                bool valid = false;
-                double factor = ops.at(1)->raw.trimmed().toDouble(&valid);
-                if (!valid || !std::isfinite(factor) || ops.at(1)->isString) factor = 0;
-                const double product = static_cast<double>(readLhs(ref)) * factor;
-                writeLhs(ref, static_cast<qint64>(product));   // C# unchecked 强转截断
+        const LhsRef ref = parseLhsRef(ops.first().raw);
+        if (ref.valid) {
+            const double product = static_cast<double>(readLhs(ref)) * *ops.at(1).realValue;
+            const RealRounding mode = m_realRoundingProvider ? m_realRoundingProvider() : RealRounding::Round;
+            // qFloor/qCeil 返回 int；用标准库同义操作保留 qint64 的范围。
+            const double rounded = mode == RealRounding::Floor ? std::floor(product)
+                : mode == RealRounding::Ceil ? std::ceil(product) : std::round(product);
+            // double(qint64::max()) 等于 2^63，所以用严格上界，避免未定义转换。
+            if (!std::isfinite(rounded) || rounded < -0x1p63 || rounded >= 0x1p63) {
+                emit errorOccurred(QStringLiteral("TIMES 的计算结果超出 qint64 范围"));
+                return true;
             }
+            writeLhs(ref, mode == RealRounding::Round ? qRound64(product) : static_cast<qint64>(rounded));
         }
         return true;
     }

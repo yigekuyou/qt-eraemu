@@ -138,6 +138,12 @@ EraEngine::EraEngine(QObject *parent)
 		m_expressionEvaluator.setColorProvider([this]() -> qint64 {
 			return m_executionEngine.currentColorValue();
 		});
+        m_executionEngine.setRealRoundingProvider([this]() {
+            const QString value = configValue(QStringLiteral("RealRounding"));
+            if (value == QLatin1String("floor")) return ExecutionEngine::RealRounding::Floor;
+            if (value == QLatin1String("ceil")) return ExecutionEngine::RealRounding::Ceil;
+            return ExecutionEngine::RealRounding::Round;
+        });
 		m_expressionEvaluator.setStyleProvider([this]() -> qint64 {
 			return m_executionEngine.currentStyleBits();
 		});
@@ -1156,6 +1162,7 @@ QVariantList EraEngine::configItems() const
         {QStringLiteral("ユーザー関数の全ての引数の省略を許可する"),QStringLiteral("bool"),QStringLiteral("システム")},
         {QStringLiteral("ユーザー関数の引数に自動的にTOSTRを補完する"),QStringLiteral("bool"),QStringLiteral("システム")},
         {QStringLiteral("FORM中の三連記号を展開しない"),QStringLiteral("bool"),QStringLiteral("システム")},
+        {QStringLiteral("RealRounding"),QStringLiteral("rounding"),QStringLiteral("システム")},
         {QStringLiteral("TIMESの計算をeramakerにあわせる"),QStringLiteral("bool"),QStringLiteral("システム")},
         {QStringLiteral("キャラクタ変数の引数を補完しない"),QStringLiteral("bool"),QStringLiteral("システム")},
         {QStringLiteral("文字列変数の代入に文字列式を強制する"),QStringLiteral("bool"),QStringLiteral("システム")},
@@ -1202,9 +1209,17 @@ QVariantList EraEngine::configItems() const
     return out;
 }
 
-QString EraEngine::configValue(const QString& key) const { return m_configLoader.getConfig(key); }
+QString EraEngine::configValue(const QString& key) const {
+    if (key == QLatin1String("RealRounding")) {
+        const QString value = m_configLoader.getConfig(key);
+        return value == QLatin1String("floor") || value == QLatin1String("ceil") ? value : QStringLiteral("round");
+    }
+    return m_configLoader.getConfig(key);
+}
 bool EraEngine::setConfigValue(const QString& key, const QString& value)
 {
+    if (key == QLatin1String("RealRounding") && value != QLatin1String("round")
+        && value != QLatin1String("floor") && value != QLatin1String("ceil")) return false;
     m_configLoader.setConfig(key, value);
     emit m_configLoader.configChanged(key, value);
     return true;

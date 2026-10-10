@@ -28,7 +28,7 @@ Dialog {
                     id: row
                     required property var modelData
                     Layout.fillWidth: true
-                    Label { text: row.modelData.group + " / " + row.modelData.key; Layout.fillWidth: true; wrapMode: Text.WordWrap }
+                    Label { text: row.modelData.key === "RealRounding" ? qsTr("浮点结果取整方式（TIMES）") : row.modelData.group + " / " + row.modelData.key; Layout.fillWidth: true; wrapMode: Text.WordWrap }
                     CheckBox {
                         visible: row.modelData.type === "bool"
                         checked: dlg.engine.configValue(row.modelData.key).toLowerCase() === "true"
@@ -48,6 +48,19 @@ Dialog {
                                : ["AUTO", "UTF-8", "UTF-8-BOM", "SHIFT-JIS", "GB18030", "BIG5"]
                         currentIndex: Math.max(0, indexOfValue(dlg.engine.configValue(row.modelData.key)))
                         onActivated: dlg.engine.setConfigValue(row.modelData.key, currentText)
+                    }
+                    ComboBox {
+                        objectName: "realRoundingCombo"
+                        visible: row.modelData.type === "rounding"
+                        textRole: "text"
+                        valueRole: "value"
+                        model: [
+                            { text: qsTr("四舍五入"), value: "round" },
+                            { text: qsTr("向下取整"), value: "floor" },
+                            { text: qsTr("向上取整"), value: "ceil" }
+                        ]
+                        currentIndex: Math.max(0, indexOfValue(dlg.engine.configValue(row.modelData.key)))
+                        onActivated: dlg.engine.setConfigValue(row.modelData.key, currentValue)
                     }
                     TextField {
                         visible: row.modelData.type === "string"

@@ -46,10 +46,40 @@ int main(int argc, char** argv) {
     }
     storage.setLocalInt(0, 7);
     engine.executeInstruction(AstBuilder::build("TIMES LOCAL, -1.5", {}, resolve));
-    check(storage.getLocalInt(0) == -10, "TIMES multiplies real constant and truncates toward zero");
+    check(storage.getLocalInt(0) == -11, "TIMES defaults to round half away from zero");
     storage.setLocalInt(0, 1000);
     engine.executeInstruction(AstBuilder::build("TIMES LOCAL, 1e-2", {}, resolve));
     check(storage.getLocalInt(0) == 10, "TIMES accepts scientific notation");
+    auto rounding = ExecutionEngine::RealRounding::Round;
+    engine.setRealRoundingProvider([&rounding] { return rounding; });
+    auto times = AstBuilder::build("TIMES LOCAL, 0.75", {}, resolve);
+    // 原始文本变化不应改变装载期保存的 double 倍率。
+    times.arguments.last().raw = "invalid";
+    times.argument.params.last().raw = "invalid";
+    for (const auto mode : {ExecutionEngine::RealRounding::Round,
+                           ExecutionEngine::RealRounding::Floor,
+                           ExecutionEngine::RealRounding::Ceil}) {
+        rounding = mode;
+        storage.setLocalInt(0, 10);
+        engine.executeInstruction(times);
+        check(storage.getLocalInt(0) == (mode == ExecutionEngine::RealRounding::Floor ? 7 : 8),
+              "positive product uses selected rounding and cached double");
+        storage.setLocalInt(0, -10);
+        engine.executeInstruction(times);
+        check(storage.getLocalInt(0) == (mode == ExecutionEngine::RealRounding::Ceil ? -7 : -8),
+              "negative product uses selected rounding");
+        storage.setLocalInt(0, 4294967296LL);
+        engine.executeInstruction(AstBuilder::build("TIMES LOCAL, 1.25", {}, resolve));
+        check(storage.getLocalInt(0) == 5368709120LL, "rounding keeps values beyond 32-bit range");
+    }
+    QString timesError;
+    const auto timesErrorConnection = QObject::connect(&engine, &ExecutionEngine::errorOccurred,
+        [&timesError](const QString& text) { timesError = text; });
+    storage.setLocalInt(0, 10);
+    engine.executeInstruction(AstBuilder::build("TIMES LOCAL, 1e308", {}, resolve));
+    check(!timesError.isEmpty() && storage.getLocalInt(0) == 10,
+          "overflow reports error and keeps target unchanged");
+    QObject::disconnect(timesErrorConnection);
     ConsoleBackend console;
     QObject::connect(&engine, &ExecutionEngine::consolePrintTemplate, &console, &ConsoleBackend::printTemplate);
     QString drawn;

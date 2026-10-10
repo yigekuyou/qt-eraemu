@@ -95,11 +95,13 @@ int main(int argc, char* argv[]) {
     failed.clear();
     for (const QString& factor : QStringList{"1.50", "0.80", "-2.5", "1e-2", "+.5"}) {
         const auto line = AstBuilder::build("TIMES LOCAL, " + factor, {}, strict);
-        check(line.argument.typeOk && !line.arguments.last().ast,
+        check(line.argument.typeOk && !line.arguments.last().ast
+                  && line.arguments.last().realValue && *line.arguments.last().realValue == factor.toDouble(),
               "TIMES real constant is not an integer AST: " + factor);
     }
     check(failed.isEmpty(), "TIMES valid multipliers never reach expression resolver");
-    for (const QString& text : QStringList{"TIMES LOCAL, 1+2", "TIMES LOCAL, nan",
+    for (const QString& text : QStringList{"TIMES LOCAL, 1+2", "TIMES LOCAL, nan", "TIMES LOCAL, inf", "TIMES LOCAL, 1e309",
+            "TIMES LOCAL, 1e", "TIMES LOCAL, 0x1.8",
             "TIMES LOCAL, \"1.5\"", "TIMES LOCALS, 2", "TIMES LOCAL", "CUSTOMDRAWLINE"})
         check(!build(table, text).argument.typeOk, "invalid special argument diagnosed: " + text);
     const QString form = QString::fromUtf8(R"ERB(@"\@ARGS == "a,b TO c" ? 是 # 否\@")ERB");

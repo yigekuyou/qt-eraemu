@@ -205,28 +205,6 @@ struct CaseClause {
     QString strLiteral;
 };
 
-// ---------------------------------------------------------------------------
-// 命令式字符串内置函数（STRLENS/STRLENSU/SUBSTRING/SUBSTRINGU 的**语句形式**）
-// 实参解析缓存。这些指令（尤其 SUBSTRINGU）此前每次执行都要：line.raw 扫描 +
-// mid/trimmed + split(',') + trimmed + expressionAst(QString) 查表 —— eraTW 地图
-// 逐字符时是最大的热点之一（一次绘制上万次）。行内容装载后不可变，故首次执行
-// 解析一次进 LogicalLine::strArgs，之后直接复用 AST。
-// ---------------------------------------------------------------------------
-struct StrBuiltinArgs {
-    enum class Mode : quint8 { None, Substring, StrLen } mode = Mode::None;
-    enum class Src : quint8 { Expr, Results, PlainName } src = Src::Expr;
-    QString plainName;                            // Src::PlainName 的变量名 / 下标
-    int     plainIndex = -1;
-    QString sourceText;                           // Src::Expr 的文本回退（AST 为空时）
-    QString startText;
-    QString lengthText;
-    QString exprText;                             // Mode::StrLen 的文本回退
-    QSharedPointer<ExpressionNode> sourceAst;
-    QSharedPointer<ExpressionNode> startAst;
-    QSharedPointer<ExpressionNode> lengthAst;
-    QSharedPointer<ExpressionNode> lenAst;
-};
-
 struct TypedArgument {
     ArgKind kind = ArgKind::Raw;
     QList<Operand> operands;                          // 原始操作数（raw + ast）
@@ -280,9 +258,7 @@ struct LogicalLine {
     mutable bool caseCacheReady = false;
     mutable QList<CaseClause> caseCache;
 
-    // 命令式字符串内置函数实参缓存（见 StrBuiltinArgs 注释）
-    mutable bool strArgsReady = false;
-    mutable StrBuiltinArgs strArgs;
+
 
     // PRINTDATA 段的惰性解析缓存（见 execution_engine.cpp printDataFormLine 说明）：
     // printDataGroups = 各「段」的行号列表（DATAFORM/DATA 各自成段；DATALIST..ENDLIST

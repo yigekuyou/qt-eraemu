@@ -759,7 +759,23 @@ void ConsoleBackend::setMaxLog(int lines) {
 
 void ConsoleBackend::updateStageModels() {
     const int total = rowCount();
-    const int start = qMax(0, total - m_layout.gridRows());
+    int start = qMax(0, total - m_layout.gridRows());
+    // A line is only the anchor of an image, not its full drawing extent.
+    // Keep earlier anchors whose image still overlaps the current stage. The
+    // extra rows scroll above the viewport; ListView clips the image itself.
+    const int viewportStart = start;
+    for (int row = 0; row < viewportStart; ++row) {
+        const auto line = displayLine(row);
+        for (const auto& segment : line.segments) {
+            for (const auto& part : segment.spans) {
+                if (part.kind != ConsoleSpanKind::Image) continue;
+                const double top = row + (m_lineHeight > 0
+                    ? double(part.top) / m_lineHeight : 0.0);
+                if (top < total && top + qMax(1, part.rows) > viewportStart)
+                    start = qMin(start, row);
+            }
+        }
+    }
     const bool visible = m_stageMode && start < total;
     const int oldStart = m_stageStart;
     const bool oldVisible = m_stageMode && m_stageModel.rowCount() > 0;

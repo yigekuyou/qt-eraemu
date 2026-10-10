@@ -84,7 +84,7 @@ inline constexpr auto kInstructionSpecs = std::to_array<InstructionSpec>({
     {">>=",          ArgKind::Raw,           2,  2},
     {"SET",          ArgKind::VarSet,        1,  4},
     {"VARSET",       ArgKind::VarSet,        1,  -1},   // 值可省略
-    {"VARSIZE",      ArgKind::Expressions,   1,  -1},
+    {"VARSIZE",      ArgKind::Var,           1,   1},
     {"ARRAYCOPY",    ArgKind::ArrayControl,  2,  -1},
     {"ARRAYSORT",    ArgKind::ArrayControl,  1,  -1},
     {"SWAP",         ArgKind::Swap,          2,  2},

@@ -102,7 +102,37 @@ QSharedPointer<PrintTemplate> PrintTemplateCompiler::compile(const QString& mark
 QSharedPointer<PrintTemplate> PrintTemplateCompiler::compile(const QSharedPointer<ExpressionNode>& node) {
     if (!node) return {};
     if (node->kind() == NodeKind::Literal && node->isString()) return compile(static_cast<const LiteralNode&>(*node).strValue());
-    if (node->kind() != NodeKind::StrForm) return {};
+    if (node->kind() == NodeKind::BinaryOp) {
+        const auto& binary = static_cast<const BinaryOpNode&>(*node);
+        if (binary.op().type() == TokenType::PLUS && node->isString()) {
+            QString markup;
+            QList<QSharedPointer<ExpressionNode>> expressions;
+            const auto append = [&](const auto& self, const QSharedPointer<ExpressionNode>& part) -> void {
+                if (part->kind() == NodeKind::BinaryOp) {
+                    const auto& sum = static_cast<const BinaryOpNode&>(*part);
+                    if (sum.op().type() == TokenType::PLUS && part->isString()) {
+                        self(self, sum.left()); self(self, sum.right()); return;
+                    }
+                }
+                if (part->kind() == NodeKind::Literal && part->isString())
+                    markup += static_cast<const LiteralNode&>(*part).strValue();
+                else {
+                    markup += marker(expressions.size());
+                    expressions.append(part);
+                }
+            };
+            append(append, node);
+            return compileMarkup(markup, expressions);
+        }
+    }
+    if (node->kind() != NodeKind::StrForm) {
+        auto out = QSharedPointer<PrintTemplate>::create();
+        PrintTemplatePart part;
+        part.kind = PrintTemplatePart::Kind::Expression;
+        part.expression = node;
+        out->parts.append(part);
+        return out;
+    }
     QString markup; QList<QSharedPointer<ExpressionNode>> expressions;
     for (const auto& part : static_cast<const StrFormNode&>(*node).parts()) {
         if (part.expression) { markup += marker(expressions.size()); expressions.append(part.width ? QSharedPointer<ExpressionNode>(QSharedPointer<StrFormNode>::create(QList<StrFormPart>{part})) : part.expression); }

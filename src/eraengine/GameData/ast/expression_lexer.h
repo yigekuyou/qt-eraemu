@@ -20,6 +20,8 @@
 
 #include <QString>
 #include <QList>
+#include <cstdint>
+#include <bit>
 
 // ---------------------------------------------------------------------------
 // Token types + token value.
@@ -95,7 +97,8 @@ public:
     int column() const { return m_column; }
 
     bool integerValid() const { return m_integerValid; }
-    qint64 integerValue() const { return m_integerValue; }
+    qint64 integerValue() const { return std::bit_cast<qint64>(m_integerBits); }
+    quint64 integerBits() const { return m_integerBits; }
 
     bool isOperator() const { return m_type >= TokenType::EQUALS && m_type < TokenType::UNKNOWN; }
     bool isLiteral() const { return m_type == TokenType::NUMBER || m_type == TokenType::STRING; }
@@ -104,7 +107,7 @@ public:
 private:
     TokenType m_type = TokenType::UNKNOWN;
     QString m_value;
-    qint64 m_integerValue = 0;
+    quint64 m_integerBits = 0;
     bool m_integerValid = false;
     int m_line;
     int m_column;

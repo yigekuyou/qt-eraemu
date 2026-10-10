@@ -22,6 +22,8 @@
 #include <QList>
 #include <QSharedPointer>
 #include <functional>
+#include <variant>
+#include <bit>
 #include <QJsonObject>
 #include <QJsonDocument>
 #include "expression_lexer.h"
@@ -70,9 +72,11 @@ struct SourceSpan {
 // 装载期整数/进制字面量归约（对齐 C# LexicalAnalyzer.ReadInt64）：
 //   0x.. 十六进制、0b.. 二进制；`e/E` 使用十进制指数，`p/P` 使用二进制指数
 //   （如 `1e3`、`0x1p4`、`0b1p10`）。
-//   成功后 AST 统一只保存 qint64；Expression 求值不再从文本重新转换进制。
+//   AST 字面量保存 Signed64 或 Bits64；Expression 求值不再从文本重新转换进制。
 //   失败返回 false，由装载调用方生成 numeric-conversion 错误诊断。
 [[nodiscard]] bool parseIntegerLiteral(const QString& text, qint64& out);
+// 64 位位模式解析：允许 1p63 这类合法的最高位掩码，返回无符号位模式。
+[[nodiscard]] bool parseIntegerLiteralBits(const QString& text, quint64& out);
 
 class ExpressionNode {
 public:
@@ -105,14 +109,22 @@ public:
     [[nodiscard]] QString toString() const override;
     [[nodiscard]] OperandType valueType() const override { return m_type; }
 
-    [[nodiscard]] qint64 intValue() const { return m_int; }
+    enum class IntegerRepresentation { Signed64, Bits64 };
+    [[nodiscard]] IntegerRepresentation integerRepresentation() const {
+        return std::holds_alternative<quint64>(m_integer) ? IntegerRepresentation::Bits64 : IntegerRepresentation::Signed64;
+    }
+    [[nodiscard]] qint64 intValue() const {
+        return std::holds_alternative<qint64>(m_integer) ? std::get<qint64>(m_integer)
+            : std::bit_cast<qint64>(std::get<quint64>(m_integer));
+    }
+    [[nodiscard]] quint64 integerBits() const { return std::bit_cast<quint64>(intValue()); }
     [[nodiscard]] const QString& strValue() const { return m_str; }
     [[nodiscard]] ExpressionToken token() const { return m_token; }
 
 private:
     ExpressionToken m_token;
     OperandType m_type = OperandType::Int;
-    qint64  m_int = 0;
+    std::variant<qint64, quint64> m_integer = qint64(0);
     QString m_str;
 };
 
@@ -360,7 +372,9 @@ struct StrFormPart {
 
 class StrFormNode : public ExpressionNode {
 public:
-    explicit StrFormNode(QList<StrFormPart> parts);
+    // rawText 是该节点对应的原始 FORM 文本；parts 是同一文本在装载期生成的
+    // 可执行结构。读取原始参数时使用 rawText()，求值时使用本节点本身。
+    explicit StrFormNode(QList<StrFormPart> parts, QString rawText = {});
 
     [[nodiscard]] NodeKind kind() const noexcept override { return NodeKind::StrForm; }
     [[nodiscard]] QString toString() const override;
@@ -369,8 +383,11 @@ public:
     [[nodiscard]] const QList<StrFormPart>& parts() const { return m_parts; }
     [[nodiscard]] bool isConst() const;   // 所有内嵌表达式均为字面量（供常量折叠）
 
+    [[nodiscard]] const QString& rawText() const { return m_rawText; }
+
 private:
     QList<StrFormPart> m_parts;
+    QString m_rawText;
 };
 
 [[nodiscard]] QString validateExpression(const ExpressionNode& node, bool requireIndices = true);

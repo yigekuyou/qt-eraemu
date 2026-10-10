@@ -53,6 +53,7 @@ TestCase {
 
     function cleanup() {
         consoleFixture.finishInput(backend);
+        backend.stageMode = false;
         if (view) { view.destroy(); view = null; }
         backend.clearAll();
     }
@@ -273,6 +274,42 @@ TestCase {
         tryCompare(real, "status", Image.Ready);
         verify(real.paintedWidth > 0 && real.paintedHeight > 0,
                "真实图片被解码并绘制（paintedWidth/Height > 0）");
+    }
+
+    function test_stageKeepsOverflowingImageAcrossRefresh() {
+        backend.stageMode = true;
+        backend.printImage("offset_atlas", 400, 400);
+        backend.newline();
+        // Move the anchor above the last gridRows lines while its bottom
+        // still reaches into the stage. The anchor must remain in the model.
+        for (let i = 0; i < backend.gridRows; ++i) {
+            backend.print("line " + i);
+            backend.newline();
+        }
+        backend.flush(); view.syncView();
+        compare(backend.stageStart, 0);
+        const stage = findChild(view, "consoleStageView");
+        tryCompare(stage, "atYEnd", true);
+        const block = view.blockAt(0, 0);
+        verify(block !== null, "stage retains the overlapping image anchor");
+        verify(view.lineItem(0).visible, "offscreen image anchor participates in painting");
+        const image = findChild(block, "blockImage");
+        tryCompare(image, "status", Image.Ready);
+        const point = image.mapToItem(stage, 0, image.height);
+        verify(point.y > 0, "image bottom still overlaps the viewport");
+
+        // Same row count: a frame publication must restore the stage position.
+        stage.contentY = 0;
+        backend.flush();
+        tryCompare(stage, "atYEnd", true);
+
+        // Once its entire extent is above the viewport, drop the anchor.
+        for (let i = 0; i < 4; ++i) {
+            backend.print("next " + i);
+            backend.newline();
+        }
+        backend.flush(); view.syncView();
+        verify(backend.stageStart > 0);
     }
 
     // `<img srcb='…'>`：按钮选中/悬停态的替换图（C# ConsoleImagePart.cImageB，

@@ -1086,7 +1086,14 @@ qint64 ExpressionEvaluator::argInt(const FunctionNode &node, int i, VariableStor
 
 QString ExpressionEvaluator::argStr(const FunctionNode &node, int i, VariableStorage *storage, GameBaseData *g) {
     if (!hasArg(node, i)) return QString();
-    return evaluateNode(*node.arguments().at(i), storage, g).toString();
+    const ExpressionNode& argument = *node.arguments().at(i);
+    // StrForm 同时携带原始文本和装载期节点。普通字符串参数读取的是
+    // 原始属性值；FORM 专用路径直接调用 evaluateNode，才会展开节点。
+    if (argument.kind() == NodeKind::StrForm) {
+        const auto& form = static_cast<const StrFormNode&>(argument);
+        if (!form.rawText().isNull()) return form.rawText();
+    }
+    return evaluateNode(argument, storage, g).toString();
 }
 
 const VariableNode* ExpressionEvaluator::argVar(const FunctionNode &node, int i) const {
@@ -1316,6 +1323,15 @@ bool ExpressionEvaluator::evaluateBuiltin(const FunctionNode &node, VariableStor
     const BuiltinOp op = node.builtinOp();
     const auto I = [&](int i) { return argInt(node, i, storage, gameBaseData); };
     const auto S = [&](int i) { return argStr(node, i, storage, gameBaseData); };
+    // FORM consumers use the load-time StrForm AST. Other string consumers use
+    // argStr(), which intentionally reads StrFormNode::rawText().
+    const auto FORM = [&](int i) {
+        if (!hasArg(node, i)) return QString();
+        const auto& argument = *node.arguments().at(i);
+        if (argument.kind() == NodeKind::StrForm)
+            return evaluateNode(argument, storage, gameBaseData).toString();
+        return argStr(node, i, storage, gameBaseData);
+    };
     const auto V = [&]() -> const BuiltinFunctionSpec* { return node.builtinSpec(); };
 
     switch (op) {
@@ -1514,17 +1530,14 @@ bool ExpressionEvaluator::evaluateBuiltin(const FunctionNode &node, VariableStor
         return true;
     }
     case BuiltinOp::StrForm: {
-        // STRFORM("...") —— 运行期展开格式串（{expr} / %expr%）
-        // 对齐 C# StrFormMethod：把字符串当格式化串重新解析后求值。
-        const QString text = S(0);
-        ExpressionLexer lexer;
-        ExpressionParser parser;
-        const StrFormParser::ExprResolver resolve = [this, &parser, &lexer](const QString& e) {
-            return m_astProvider ? m_astProvider(e) : parser.parse(lexer.tokenize(e, 1));
-        };
-        const QSharedPointer<ExpressionNode> form = StrFormParser::parse(text, resolve, ignoreTripleSymbols());
-        if (!form) throw std::runtime_error("Invalid STRFORM");
-        out = evaluateNode(*form, storage, gameBaseData);
+        // STRFORM is the explicit expansion operator. Its argument may be a
+        // StrFormNode carrying both the source attribute and its load-time AST;
+        // this path deliberately evaluates the node. A variable/function
+        // argument remains an independent read and therefore supplies raw text.
+        if (hasArg(node, 0) && node.arguments().at(0)->kind() == NodeKind::StrForm)
+            out = evaluateNode(*node.arguments().at(0), storage, gameBaseData);
+        else
+            out = S(0);
         return true;
     }
     case BuiltinOp::LineIsEmpty:
@@ -1845,19 +1858,7 @@ bool ExpressionEvaluator::evaluateBuiltin(const FunctionNode &node, VariableStor
         // 对齐 C# STRLEN_Instruction(argisform=true)：FORM_STR 求值后
         //   STRLENFORM  -> LangManager.GetStrlenLang(str)（按语言编码的字节数）
         //   STRLENFORMU -> str.Length（UTF-16 码元数）
-        QString text = hasArg(node, 0) ? argStr(node, 0, storage, gameBaseData) : QString();
-        // C# 的 STRLENFORM 实参是 FORM_STR（装载期已把 {…}/%…% 建成展开节点）；
-        // 这里拿到的是字面量原文，含展开标记时再按格式串求值一次。
-        if (text.contains(QLatin1Char('{')) || text.contains(QLatin1Char('%'))) {
-            const auto resolve = [](const QString& e) -> QSharedPointer<ExpressionNode> {
-                ExpressionLexer lexer;
-                ExpressionParser parser;
-                return parser.parse(lexer.tokenize(e, 1));
-            };
-            if (auto form = StrFormParser::parse(text, resolve)) {
-                text = evaluate(*form.staticCast<ExpressionNode>(), storage, gameBaseData).toString();
-            }
-        }
+        QString text = hasArg(node, 0) ? FORM(0) : QString();
         if (op == BuiltinOp::StrLenFormU) out = QVariant::fromValue<qint64>(text.size());
         else out = QVariant::fromValue<qint64>(langByteCount(text));
         return true;
@@ -2355,7 +2356,7 @@ bool ExpressionEvaluator::evaluateBuiltin(const FunctionNode &node, VariableStor
         // 此前写 setGlobalStr1D -> m_globalStr1D，读取 getSystemStr -> m_systemStrVars，
         // 两张表不一致导致概要永不生效）
         const QString prev = storage->getSystemStr(QStringLiteral("SAVEDATA_TEXT"), 0);
-        storage->setSystemStr(QStringLiteral("SAVEDATA_TEXT"), 0, prev + S(0));
+        storage->setSystemStr(QStringLiteral("SAVEDATA_TEXT"), 0, prev + FORM(0));
         out = QVariant::fromValue<qint64>(0);
         return true;
     }

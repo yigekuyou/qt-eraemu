@@ -79,3 +79,91 @@ C# 语义依据：`test/data/language/内置流程.md`（`endOpenning`）、`tes
   Qt Quick Controls ComboBox（textRole/valueRole/currentValue/onActivated）。
 - 回归覆盖科学计数法、小数缓存、非法/非有限倍率、三种正负数取整、
   超出 int 范围的结果和乘法溢出。
+
+## 字符串装载期 AST（2026-10-10）
+
+- 普通字符串参数在装载期创建 LiteralNode；`@"..."` 和 `\@...\@`
+  经表达式词法的 FORM token 去除定界符，FORM provider 再生成文本、插值、
+  条件分支等 StrForm AST。普通引号里的 `%`/`{}` 不自动变成 FORM，整数取模仍为整数表达式。
+- FORM 条件里的用户函数在首次装载时允许 Unknown 返回类型，后续函数类型回填与
+  validateExpression 继续检查 Int 约束，避免把尚未登记的用户函数当作格式错误。
+- 已知字符串左值的 `=` 立即生成原始 FORM AST，其余用户声明在 finalizeParse
+  的 applyStringAssignments 中完成；保留 `=` 的引号文本语义以及 `'=` 的字符串表达式语义。
+- 字符串赋值、REUSELASTLINE、DRAWLINEFORM、DEBUGPRINT、SPLIT、按钮、
+  存档文字、HTML_TAGSPLIT 等执行入口使用已装载的 AST；移除这些入口从 raw
+  重新解析字符串的回退。STRLENFORM 不再对已经求出的文本二次展开。
+- PRINTFORMS 已按后续要求改为装载期静态分片，见下方更新；显式运行期表达式接口独立保留。
+- 回归：FORM 定界符去除、插值/条件文本、普通字符串 Literal AST、整数取模、
+  原始 FORM 赋值引号保留；完整构建与 42/42 测试通过。
+- Megaten 真实装载检查：8344 脚本、14514 变量、352 条诊断（原日志 374）。
+  FORM 无法归约的误报消失，剩余 expr-parse 1 条为 `CFLAG:800 & 1p63`；
+  arg-check 347 条、numeric-conversion 4 条仍需分别处理，未宣称全部告警清零。
+
+## PRINTFORMS 静态片段（2026-10-10）
+
+- PRINTFORMS 的静态字符串字面量在装载期由 StrFormParser 分词，文本、
+  `%变量%`、`{表达式}` 和条件分支保存在 AST；字符串拼接编译为有序片段。
+- 裸字符串变量或函数调用作为独立表达式运算节点，执行时读取当前值。
+  读取结果作为文本拼接，不重新词法分析，也不把结果中的格式标记二次展开。
+- 移除 handlePrint 中运行期 StrFormParser::parse(text) 分支。
+  这是对 C# PRINTFORMS 动态二次展开语义的有意调整。
+- 示例：`PRINTFORMS "score={LOCAL}; " + LOCALS`；LOCAL=42、
+  LOCALS=`value {LOCAL}` 时输出 `score=42; value {LOCAL}`。
+- 回归覆盖静态字面量插值、字符串拼接、独立变量读取、变量当前值变化、
+  原始参数文本修改不影响 AST、变量值中的格式标记保持文本；42/42 测试通过。
+
+## 剩余字符串执行入口迁移（2026-10-10）
+
+- CALLFORM/CALLFORMF 与 TRY 变体的目标名在装载期保存 FORM AST，运行期只求值目标。
+  RETURNFORM 直接求值已编译参数，不再从 raw 重建 FORM。
+- CALLF 使用已有参数 AST 构造调用节点，移除运行期拼接调用源码、补引号并重新分词的路径。
+- 移除 StrBuiltinArgs/strArgsReady 的首次执行参数解析缓存；字符串内置命令使用装载期函数调用 AST。
+- STRFORM 静态字面量在 ExpressionParser 中编译为 FORM 节点；变量参数返回原始文本。
+  STRLENFORM/STRLENFORMU 求值器不再二次解析求值结果。
+- HTML_PRINT 只使用装载期模板；字符串变量/函数表达式编译为取值片段，其返回标签作为原始文本。
+  ConsoleBackend::printHtml 是独立直接绘制 API，脚本 HTML_PRINT 不调用它。
+- ExecutionEngine、ScriptRunner、ExpressionEvaluator 不再调用 StrFormParser::parse 或 HTML 模板 compile。
+  调试器/交互输入的表达式前端与显式文本处理（正则、SPLIT、HTML_TAGSPLIT 等）仍执行语言运算，
+  不属于将变量结果重新解释为 ERB/FORM 源码。
+- 严格 FORM 类型保留：数字插值用 `{A}`，字符串插值用 `%S%`；修正旧测试中 `NOPE_%A%` 为 `NOPE_{A}`。
+- 验证：完整构建、42/42 ctest、git diff --check 通过；测试覆盖 CALLFORM/TRY/CALLF、
+  STRFORM 字面量与变量、静态 HTML 与变量原始文本、字符串赋值和 PRINTFORMS 分片。
+
+## 整数字面量 Signed64 / Bits64（2026-10-10）
+
+- LiteralNode 使用 std::variant<qint64, quint64> 保存整数，分别表示 Signed64
+  数值与 Bits64 位模式；语言层 OperandType 仍为 Int，字符串类型约束不变。
+- NUMBER token 在装载期保存转换后的 64 位数据。指数归约使用精确整数乘除，
+  允许正数指数结果覆盖全部 64 位位模式，因此 1p63 保存为 Bits64，
+  integerBits() 为 0x8000000000000000。1p64 仍拒绝，未引入任意精度整数。
+- intValue() 显式通过 std::bit_cast 将 Bits64 解释为二补码有符号值，
+  供现有 ERB 运算器、变量存储、函数参数接口使用。未改变这些接口的有符号语义，
+  也未把 Bits64 当成通用无符号算术类型；不使用 double 转换。
+- AST JSON 输出 integerRepresentation 与十六进制 integerBits，保留表示信息。
+- 回归覆盖 1p63 的 Bits64 标记、最高位位与结果、1p64 拒绝；42/42 测试通过。
+- Megaten CLI 装载完成 8344 脚本、14514 变量、340 告警，日志中没有 1p63
+  转换/归约错误。验证进程在进入游戏循环后由 90 秒 timeout 结束。
+
+## eraTW 条件 FORM 与标题图片（2026-10-10）
+
+- FORM_STR 命令优先按参数规范解析整段，避免以\@条件\@开头的
+  REUSELASTLINE、DATAFORM 等被误送普通表达式前端，丢失条件后的文本与插值。
+  真实 eraTW 装载 2258 脚本、9739 变量、0 告警，进入标题等待输入。
+- HTML_PRINT 字符串加法在装载期展开为静态标签片段及动态表达式引用。
+  eraTW 标题的固定 p/img 标签直接编译为图片模板，TOSTR(LOCAL, "000")
+  只在运行期求值 src 属性。不重新解析运行期字符串；裸变量返回标签仍保持文本。
+- 图片跨舞台边界时保留仍与视口相交的锚点行，QML 使用 displayMargin
+  绘制视口外锚点的溢出部分；舞台快照更新后完成布局并锚底。
+- EraRender 在 backend 延迟注入时也开启舞台模式。
+- 回归覆盖条件 FORM 后缀、HTML 拼接动态图片名、图片跨舞台边界；42/42 通过。
+
+## VARSIZE 命令的数组身份（2026-10-10）
+
+- Megaten OPTION.ERB:258 为 VARSIZE ARG_COM，ARG_COM 是二维 REF 字符串数组。
+  根据 test/data/commands/VARSIZE.md，此处传数组本身，省略下标合法。
+- 命令改为 ArgKind::Var（一个变量参数），不再构造 VARSIZE(...) 函数调用；
+  装载校验忽略该命令的元素索引，普通元素读取仍要求多维下标完整。
+- 执行从已有 VariableNode 获取数组身份，解析 REF 目标和私有作用域，按声明
+  或存储形状将各维长度写入 RESULT:0..2，不求值索引或索引内的副作用。
+- 回归覆盖二维 REF、省略下标、忽略索引副作用、未写入数组的声明长度；42/42 通过。
+- 真实 Megaten 装载8344脚本、14514变量、52告警，OPTION.ERB:258 告警消失。

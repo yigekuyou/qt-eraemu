@@ -1466,7 +1466,13 @@ void EraParseTable::finalizeParse() {
                 }
             };
             validate(line.condition);
-            for (const auto& operand : line.arguments) validate(operand.ast, !varSlotArgs);
+            for (const auto& operand : line.arguments) {
+                // VARSIZE consumes only array identity; its indices (including
+                // out-of-range constants) are ignored by the language command.
+                if (line.functionName == QLatin1String("VARSIZE") && operand.ast
+                    && operand.ast->kind() == NodeKind::Variable) continue;
+                validate(operand.ast, !varSlotArgs);
+            }
             if (!line.assignOperator.isEmpty() && line.arguments.size() == 2) {
                 const auto& dest = line.arguments[0].raw;
                 const QString name = dest.section(':', 0, 0).trimmed();

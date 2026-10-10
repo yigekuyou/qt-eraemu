@@ -97,7 +97,7 @@ public:
         bool waitInput = false;   // W：换行后等待输入
         bool clearPad  = false;   // C / LC：按 PRINTC 的定宽列布局打印
         bool padLeft   = false;   // C（右对齐补左）；LC 时 false（左对齐补右）
-        bool forms     = false;   // FORMS：求值结果再当格式串展开
+        bool forms     = false;   // FORMS：装载期编译文本与独立表达式片段
         bool debug     = false;   // D 后缀
     };
     static PrintArgInfo printInfo(const QString& upperName);

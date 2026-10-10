@@ -163,6 +163,34 @@ int VariableStorage::arraySizeRaw(const QString& key) const
 		return 0;
 }
 
+QList<int> VariableStorage::arrayLengths(const QString& name) const
+{
+    const QString key = resolvedStorageName(name);
+    const auto shape2 = [](const auto& values) -> QList<int> {
+        int columns = 0;
+        for (const auto& row : values) columns = qMax(columns, int(row.size()));
+        return {int(values.size()), columns};
+    };
+    const auto shape3 = [](const auto& values) -> QList<int> {
+        int rows = 0, columns = 0;
+        for (const auto& plane : values) {
+            rows = qMax(rows, int(plane.size()));
+            for (const auto& row : plane) columns = qMax(columns, int(row.size()));
+        }
+        return {int(values.size()), rows, columns};
+    };
+    if (auto it = m_globalInt3D.constFind(key); it != m_globalInt3D.constEnd()) return shape3(*it);
+    if (auto it = m_globalStr3D.constFind(key); it != m_globalStr3D.constEnd()) return shape3(*it);
+    if (auto it = m_globalInt2D.constFind(key); it != m_globalInt2D.constEnd()) return shape2(*it);
+    if (auto it = m_globalStr2D.constFind(key); it != m_globalStr2D.constEnd()) return shape2(*it);
+    const auto sizes3 = m_variableConfig.getSize3D(key);
+    if (!sizes3.isEmpty()) return sizes3;
+    const auto sizes2 = m_variableConfig.getSize2D(key);
+    if (sizes2.first > 0 || sizes2.second > 0) return {sizes2.first, sizes2.second};
+    const int stored = arraySizeRaw(key);
+    return {stored > 0 ? stored : m_variableConfig.getSize1D(key)};
+}
+
 void VariableStorage::ensureArraySize(const QString& name, int size, bool stringArray)
 {
 		if (size <= 0) return;

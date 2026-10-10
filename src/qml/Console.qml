@@ -224,7 +224,11 @@ FocusScope {
             // DelegateModel.ReadOnly 省掉默认 Qt5ReadWrite 的写保护开销。
             delegateModelAccess: DelegateModel.ReadOnly
             reuseItems: true               // 滚出视口的委托进池复用（Qt 文档 Reusing items）
-            cacheBuffer: root.cellHeight * Math.max(2, root.backend ? root.backend.maxSpanReach : 2)
+            // cacheBuffer retains instances but does not paint offscreen anchors.
+            // Display margins let their overflowing images reach the viewport.
+            displayMarginBeginning: root.cellHeight * Math.max(2, root.backend ? root.backend.maxSpanReach : 2)
+            displayMarginEnd: displayMarginBeginning
+            cacheBuffer: displayMarginBeginning
             interactive: !root.primitiveInput
             boundsBehavior: Flickable.StopAtBounds
 
@@ -316,10 +320,23 @@ FocusScope {
             clip: true
             reuseItems: true
             delegateModelAccess: DelegateModel.ReadOnly
-            cacheBuffer: root.cellHeight * Math.max(2, root.backend ? root.backend.maxSpanReach : 2)
+            // cacheBuffer retains instances but does not paint offscreen anchors.
+            // Display margins let their overflowing images reach the viewport.
+            displayMarginBeginning: root.cellHeight * Math.max(2, root.backend ? root.backend.maxSpanReach : 2)
+            displayMarginEnd: displayMarginBeginning
+            cacheBuffer: displayMarginBeginning
             delegate: LineDelegate {}
-            onCountChanged: Qt.callLater(positionViewAtEnd)
-            Component.onCompleted: positionViewAtEnd()
+            function scrollToTail() {
+                forceLayout();
+                positionViewAtEnd();
+            }
+            onCountChanged: Qt.callLater(scrollToTail)
+            onHeightChanged: Qt.callLater(scrollToTail)
+            Component.onCompleted: scrollToTail()
+            Connections {
+                target: root.backend
+                function onStageChanged() { Qt.callLater(stageView.scrollToTail); }
+            }
         }
 
         MouseArea {

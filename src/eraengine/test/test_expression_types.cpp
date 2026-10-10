@@ -303,13 +303,14 @@ int main(int argc, char* argv[]) {
         {"9007199254740993e1", 90071992547409930LL},
         {"9223372036854775807p-1", 4611686018427387903LL},
         {"0x8000000000000000p0", std::numeric_limits<qint64>::min()}, {"9007199254740993p0", 9007199254740993LL},
-        {"0xFFFFFFFFFFFFFFFF", -1}, {"0x8000000000000000", std::numeric_limits<qint64>::min()}
+        {"0xFFFFFFFFFFFFFFFF", -1}, {"0x8000000000000000", std::numeric_limits<qint64>::min()},
+        {"1p63", std::numeric_limits<qint64>::min()}
     };
     for (const auto& [text, expected] : numbers) {
         auto n = parse(parser, text);
         check(n && evaluator.evaluate(*n, &storage).toLongLong() == expected, text);
         check(n && evaluator.evaluate(*n, &storage).typeId() == QMetaType::LongLong,
-              text + " uses the single qint64 AST value type");
+              text + " uses the integer AST value type");
     }
     for (const char* text : {"0x", "0b2", "1e", "1e+", "1e309", "0x10000000000000000",
                                 "9223372036854775808", "!!1", "-~1", "++1", "!VA++", "VA++++",
@@ -326,6 +327,11 @@ int main(int argc, char* argv[]) {
     storage.setGlobalInt1D("VA", 0, 2);
     check(evaluator.evaluate("VA++ / VA++", &storage).toLongLong() == 1
           && storage.getGlobalInt1D("VA", 0) == 4, "division evaluates right before left");
+    auto mask = parse(parser, "1p63");
+    check(mask && static_cast<const LiteralNode&>(*mask).integerRepresentation() == LiteralNode::IntegerRepresentation::Bits64
+          && static_cast<const LiteralNode&>(*mask).integerBits() == (quint64(1) << 63), "highest bit has Bits64 AST representation");
+    check(evaluator.evaluate("0xFFFFFFFFFFFFFFFF & 1p63", &storage).toLongLong() == std::numeric_limits<qint64>::min(), "highest bit mask evaluates exactly");
+    check(!parse(parser, "1p64"), "bit pattern overflow rejects");
     check(evaluator.evaluate("1 << 64", &storage).toLongLong() == 1, "shift count masked");
     check(evaluator.evaluate("0x7FFFFFFFFFFFFFFF + 1", &storage).toLongLong() == std::numeric_limits<qint64>::min(), "unchecked addition wraps");
     check(!evaluator.evaluate("0x8000000000000000 / -1", &storage).isValid(), "division overflow rejects");

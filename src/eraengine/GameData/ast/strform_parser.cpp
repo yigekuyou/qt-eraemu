@@ -160,7 +160,7 @@ QSharedPointer<ExpressionNode> StrFormParser::parseYenAt(const QString& inner,
     rightText = trimBranch(rightText);
 
     QSharedPointer<ExpressionNode> cond = resolve ? resolve(condText) : nullptr;
-    if (!cond || cond->valueType() != OperandType::Int) return nullptr;
+    if (!cond || (isKnown(cond->valueType()) && cond->valueType() != OperandType::Int)) return nullptr;
 
     // 空分支也要是「空字符串」而不是 nullptr（求值器会直接解引用分支）
     const auto branch = [&resolve, ignoreTripleSymbols](const QString& t) -> QSharedPointer<ExpressionNode> {
@@ -187,7 +187,8 @@ QSharedPointer<StrFormNode> StrFormParser::parse(const QString& text, const Expr
         const QString value = comma < 0 ? inner : inner.left(comma);
         auto expr = resolve ? resolve(value.trimmed()) : nullptr;
         if (!expr) return false;
-        if (expr->valueType() != type && expr->kind() != NodeKind::Variable && expr->kind() != NodeKind::Function) return false;
+        if (expr->valueType() != type
+            && expr->kind() != NodeKind::Variable && expr->kind() != NodeKind::Function) return false;
         b.addExpr(expr);
         b.parts.last().expectedType = type;
         if (comma >= 0) {
@@ -286,5 +287,5 @@ QSharedPointer<StrFormNode> StrFormParser::parse(const QString& text, const Expr
         b.parts.append(StrFormPart::makeText(QString()));
     }
 
-    return QSharedPointer<StrFormNode>::create(b.parts);
+    return QSharedPointer<StrFormNode>::create(b.parts, text);
 }

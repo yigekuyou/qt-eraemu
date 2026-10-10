@@ -27,7 +27,8 @@
 
 // 整数/进制字面量求值（对齐 C# LexicalAnalyzer.ReadInt64）：
 //   0x.. 十六进制、0b.. 二进制；p/P 为 2 的幂指数、e/E 为 10 的幂指数（如 "1p0"）。
-bool parseIntegerLiteral(const QString& text, qint64& out) {
+namespace {
+bool parseIntegerValue(const QString& text, qint64& out, bool allowBitPattern) {
     const QString s = text.trimmed();
     if (s.isEmpty()) return false;
 
@@ -80,7 +81,9 @@ bool parseIntegerLiteral(const QString& text, qint64& out) {
     const quint64 factor = marker == 'p' ? 2 : 10;
     const bool negative = significand < 0;
     quint64 magnitude = negative ? quint64(0) - quint64(significand) : quint64(significand);
-    const quint64 limit = negative ? (quint64(1) << 63) : quint64(std::numeric_limits<qint64>::max());
+    const quint64 limit = negative ? (quint64(1) << 63)
+        : allowBitPattern ? std::numeric_limits<quint64>::max()
+                          : quint64(std::numeric_limits<qint64>::max());
     qint64 remaining = power;
     if (remaining > 0) {
         while (remaining-- > 0 && magnitude != 0) {
@@ -91,6 +94,19 @@ bool parseIntegerLiteral(const QString& text, qint64& out) {
         while (remaining++ < 0 && magnitude != 0) magnitude /= factor;
     }
     out = std::bit_cast<qint64>(negative ? quint64(0) - magnitude : magnitude);
+    return true;
+}
+
+} // namespace
+
+bool parseIntegerLiteral(const QString& text, qint64& out) {
+    return parseIntegerValue(text, out, false);
+}
+
+bool parseIntegerLiteralBits(const QString& text, quint64& out) {
+    qint64 value = 0;
+    if (!parseIntegerValue(text, value, true)) return false;
+    out = std::bit_cast<quint64>(value);
     return true;
 }
 
@@ -125,7 +141,11 @@ QJsonObject astJson(const ExpressionNode& node) {
     if (node.kind() == NodeKind::Literal) {
         const auto& n = static_cast<const LiteralNode&>(node);
         if (n.isString()) out.insert(QStringLiteral("value"), n.strValue());
-        else out.insert(QStringLiteral("value"), n.intValue());
+        else {
+            out.insert(QStringLiteral("value"), n.intValue());
+            out.insert(QStringLiteral("integerRepresentation"), n.integerRepresentation() == LiteralNode::IntegerRepresentation::Bits64 ? "Bits64" : "Signed64");
+            out.insert(QStringLiteral("integerBits"), QString::number(n.integerBits(), 16));
+        }
     } else if (node.kind() == NodeKind::Variable) {
         const auto& n = static_cast<const VariableNode&>(node);
         out.insert(QStringLiteral("name"), n.name());
@@ -155,6 +175,7 @@ QJsonObject astJson(const ExpressionNode& node) {
         if (n.elseExpr()) children.append(astJson(*n.elseExpr()));
     } else if (node.kind() == NodeKind::StrForm) {
         const auto& n = static_cast<const StrFormNode&>(node);
+        if (!n.rawText().isNull()) out.insert(QStringLiteral("rawText"), n.rawText());
         for (const auto& part : n.parts()) {
             QJsonObject p;
             p.insert(QStringLiteral("part"), part.type == StrFormPartType::Text ? QStringLiteral("text") : QStringLiteral("expression"));
@@ -189,17 +210,20 @@ LiteralNode::LiteralNode(const ExpressionToken& token)
         m_type = OperandType::Int;
         if (!token.integerValid())
             throw std::invalid_argument("Invalid or overflowing integer literal");
-        m_int = token.integerValue();
+        if (token.integerBits() > quint64(std::numeric_limits<qint64>::max()))
+            m_integer = token.integerBits();
+        else
+            m_integer = token.integerValue();
     }
 }
 
-LiteralNode::LiteralNode(qint64 value) : m_type(OperandType::Int), m_int(value) {}
+LiteralNode::LiteralNode(qint64 value) : m_type(OperandType::Int), m_integer(value) {}
 
 LiteralNode::LiteralNode(const QString& value) : m_type(OperandType::Str), m_str(value) {}
 
 QString LiteralNode::toString() const {
     if (m_type == OperandType::Str) return QStringLiteral("Literal(\"%1\")").arg(m_str);
-    return QStringLiteral("Literal(%1)").arg(m_int);
+    return QStringLiteral("Literal(%1)").arg(intValue());
 }
 
 // ---------------------------------------------------------------------------
@@ -477,7 +501,8 @@ QString IfNode::toString() const {
 // ---------------------------------------------------------------------------
 // StrFormNode
 // ---------------------------------------------------------------------------
-StrFormNode::StrFormNode(QList<StrFormPart> parts) : m_parts(std::move(parts)) {}
+StrFormNode::StrFormNode(QList<StrFormPart> parts, QString rawText)
+    : m_parts(std::move(parts)), m_rawText(std::move(rawText)) {}
 
 QString StrFormNode::toString() const {
     QString s = QStringLiteral("StrForm(");
@@ -545,9 +570,10 @@ QSharedPointer<ExpressionNode> cloneExpression(const QSharedPointer<ExpressionNo
         return QSharedPointer<IfNode>::create(cloneExpression(n.condition()), cloneExpression(n.thenExpr()), cloneExpression(n.elseExpr()));
     }
     case NodeKind::StrForm: {
-        QList<StrFormPart> parts = static_cast<const StrFormNode&>(*node).parts();
+        const auto& form = static_cast<const StrFormNode&>(*node);
+        QList<StrFormPart> parts = form.parts();
         for (auto& p : parts) { p.expression = cloneExpression(p.expression); p.width = cloneExpression(p.width); }
-        return QSharedPointer<StrFormNode>::create(parts);
+        return QSharedPointer<StrFormNode>::create(parts, form.rawText());
     }
     }
     return {};

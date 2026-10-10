@@ -51,6 +51,11 @@ QString stripLineComment(const QString& text) {
 
 // 构建完成后做「语句参数类型化 + 解析期校验」
 LogicalLine finalized(LogicalLine line) {
+    // Every literal string parameter has a load-time LiteralNode as well.
+    for (Operand& operand : line.arguments) {
+        if (operand.isString && !operand.ast)
+            operand.ast = QSharedPointer<LiteralNode>::create(operand.raw);
+    }
     ArgumentParser::build(line);
     return line;
 }
@@ -67,6 +72,42 @@ bool wholeQuoted(const QString& t) {
         if (c == QLatin1Char('"')) return j == t.size() - 1;
     }
     return false;
+}
+
+// FORM 字面量/条件 FORM 在装载期必须走 StrFormParser，不能送进普通表达式
+// parser。CALL 的字符串参数尤其常见：`CALL F, @"文本/\\@A ? 男 # 女\\@"`。
+bool isFormArgument(const QString& text) {
+    const QString t = text.trimmed();
+    // Only language FORM terms, not percent operators or text inside plain quotes.
+    return t.startsWith(QLatin1String("@\"")) || t.startsWith(QLatin1String("\\@"));
+}
+
+void parseFormOperand(Operand& operand, const QString& text, const AstResolver& resolve) {
+    operand.raw = text;
+    // Use the expression frontend to remove FORM delimiters and preserve composite
+    // string expressions. Its FORM provider splits content into StrFormPart nodes.
+    if (resolve) operand.ast = resolve(text);
+}
+
+// FORMS: compile statically known string content; variable/function reads remain
+// independent expression operations. Never reinterpret their result as source.
+QSharedPointer<ExpressionNode> compileFormsParts(const QSharedPointer<ExpressionNode>& node,
+                                               const AstResolver& resolve) {
+    if (!node) return {};
+    if (node->kind() == NodeKind::Literal && node->isString())
+        return StrFormParser::parse(static_cast<const LiteralNode&>(*node).strValue(), resolve);
+    if (node->kind() == NodeKind::BinaryOp) {
+        const auto& binary = static_cast<const BinaryOpNode&>(*node);
+        if (binary.op().type() == TokenType::PLUS && binary.valueType() == OperandType::Str) {
+            auto left = compileFormsParts(binary.left(), resolve);
+            auto right = compileFormsParts(binary.right(), resolve);
+            if (!left || !right) return {};
+            return QSharedPointer<StrFormNode>::create(QList<StrFormPart>{
+                StrFormPart::makeExpr(left), StrFormPart::makeExpr(right)});
+        }
+    }
+    if (node->kind() == NodeKind::StrForm) return node;
+    return QSharedPointer<StrFormNode>::create(QList<StrFormPart>{StrFormPart::makeExpr(node)});
 }
 
 bool isOperatorStart(QChar c) {
@@ -134,7 +175,7 @@ bool AstBuilder::isCallFamilyInstruction(const QString& upperName) {
 // PRINT 族的参数形态（对齐 C# PRINT_Instruction 扫描后缀选 ArgumentBuilder）：
 //   PRINT…(V)     -> SP_PRINTV        逗号分隔的整型表达式
 //   PRINT…(S)     -> STR_EXPRESSION   字符串表达式
-//   PRINT…(FORMS) -> STR_EXPRESSION   字符串表达式（结果再按格式串展开）
+//   PRINT…(FORMS) -> STR_EXPRESSION   字符串表达式（装载期编译静态片段）
 //   PRINT…(FORM)  -> FORM_STR_NULLABLE 格式化串（文本 + {…}/%…%）
 //   PRINT…(其它)  -> STR_NULLABLE     整行**字面文本**（不是表达式！）
 // 最后一条很关键：eramaker 风格的 `PRINTL [0] 结缘(\1000)` 整行是文本。
@@ -721,6 +762,14 @@ LogicalLine AstBuilder::build(const QString& rawLine,
         // resolver 解析，避免临时失败刷屏（705 条噪音的来源）。
         if (resolveQuiet) value.ast = resolveQuiet(rhs);
         else if (resolve) value.ast = resolve(rhs);
+        // 已知字符串左值（系统变量/已登记声明）立即按原始 FORM 编译。
+        // 其余声明由 finalizeParse 的 applyStringAssignments 完成定型。
+        const auto& lookup = resolveQuiet ? resolveQuiet : resolve;
+        if (op == QLatin1String("=") && lookup) {
+            const auto target = lookup(lhs);
+            if (target && target->valueType() == OperandType::Str)
+                value.ast = StrFormParser::parse(rhs, lookup);
+        }
         line.arguments = { dest, value };
         return finalized(std::move(line));
     }
@@ -803,6 +852,7 @@ LogicalLine AstBuilder::build(const QString& rawLine,
         // 既触发参数数目双重告警、又丢掉对变量的赋值。
         && line.functionName != QLatin1String("POWER")
         && line.functionName != QLatin1String("ENCODETOUNI")
+        && line.functionName != QLatin1String("VARSIZE")
         // SAVENOS / PRINTCPERLINE 例外：语句形式是 SP_GETINT「<数值变量>」——
         // 把配置值（Config.SaveDataNos / PrintCPerLine）**写进该变量**，与 0 参
         // 式中函数同名不同形。归约成 `SAVENOS()` 会报「参数过多」，并且丢掉赋值。
@@ -884,7 +934,13 @@ LogicalLine AstBuilder::build(const QString& rawLine,
         }
         if (funcName.startsWith('@')) funcName = funcName.mid(1);
 
-        line.arguments.append(Operand(funcName));
+        Operand target(funcName);
+        // CALLFORM targets are FORM values compiled at load time; CALL targets
+        // remain raw labels. The execution side only evaluates this AST.
+        if (line.functionName.contains(QLatin1String("FORM")) && resolve) {
+            target.ast = StrFormParser::parse(funcName, resolve);
+        }
+        line.arguments.append(target);
         if (!args.trimmed().isEmpty()) {
             // 对齐 C# ExpressionParser.ReduceArguments：只按**顶层**逗号切分
             // （CALL F(GET_STR(a, b, c), "x") 是 2 个实参，不是 5 个）
@@ -892,7 +948,10 @@ LogicalLine AstBuilder::build(const QString& rawLine,
             for (const QString& a : argList) {
                 const QString t = a.trimmed();
                 Operand operand(t);
-                if (wholeQuoted(t)) {
+                if (isFormArgument(t)) {
+                    // FORM 在装载期分词并保存 StrForm AST；运行期只求值该 AST。
+                    parseFormOperand(operand, t, resolve);
+                } else if (wholeQuoted(t)) {
                     operand.isString = true;
                     operand.raw = t.mid(1, t.length() - 2);
                 } else if (resolve) {
@@ -928,7 +987,9 @@ LogicalLine AstBuilder::build(const QString& rawLine,
                     }
                 }
             }
-            if (wholeString) {
+            if (isFormArgument(text)) {
+                parseFormOperand(operand, text, resolve);
+            } else if (wholeString) {
                 operand.isString = true;
                 operand.raw = text.mid(1, text.size() - 2);
             } else if (resolve) {
@@ -1011,10 +1072,17 @@ LogicalLine AstBuilder::build(const QString& rawLine,
             }
             return finalized(std::move(line));
         }
-        // StrExpression（含 FORMS：结果在运行期再当格式串展开）
+        // StrExpression / FORMS：装载期生成独立的文本与求值片段
         if (!expr.isEmpty()) {
             Operand operand(expr);
-            if (wholeQuoted(expr)) {
+            if (printInfo.forms) {
+                // PRINTFORMS 在装载期拆成文本片段与独立表达式片段。
+                // 有 FORM 标记时生成 StrForm AST；裸字符串变量/表达式则作为
+                // 一个独立 AST 运算，不把运行期结果再次当作源码解析。
+                if (resolve) operand.ast = compileFormsParts(resolve(expr), resolve);
+            } else if (isFormArgument(expr)) {
+                parseFormOperand(operand, expr, resolve);
+            } else if (wholeQuoted(expr)) {
                 operand.isString = true;
                 operand.raw = expr.mid(1, expr.length() - 2);
             } else if (resolve) {
@@ -1115,16 +1183,16 @@ LogicalLine AstBuilder::build(const QString& rawLine,
         }
         if (!rest.isEmpty()) {
             Operand operand(rest);
-            if (wholeQuoted(rest)) {
+            if (argKind == ArgKind::FormStr) {
+                // The command schema determines FORM parsing before inspecting
+                // leading syntax. A leading yen-at is only one part of the FORM,
+                // and following text/interpolations belong to the same node.
+                if (resolve) operand.ast = StrFormParser::parse(rest, resolve);
+            } else if (isFormArgument(rest)) {
+                parseFormOperand(operand, rest, resolve);
+            } else if (wholeQuoted(rest)) {
                 operand.isString = true;
                 operand.raw = rest.mid(1, rest.length() - 2);
-            } else if (argKind == ArgKind::FormStr) {
-                // FORM_STR：整行是格式化串（文本 + {…}/%…%），不是表达式。
-                // 否则 DATAFORM 開玩笑也要有个限度啊！(在心里) 会被当成函数调用。
-                Operand form(rest);
-                if (resolve) form.ast = StrFormParser::parse(rest, resolve);
-                line.arguments.append(form);
-                return finalized(std::move(line));
             } else if (rest.startsWith('%') || rest.startsWith('$')) {
                 operand.isVariable = true;
             } else if (resolve) {
@@ -1143,7 +1211,9 @@ LogicalLine AstBuilder::build(const QString& rawLine,
     const QStringList tokens = splitOperands(remainder, argKind == ArgKind::Raw);
     for (const QString& token : tokens) {
         Operand operand(token);
-        if (wholeQuoted(token)) {
+        if (isFormArgument(token)) {
+            parseFormOperand(operand, token, resolve);
+        } else if (wholeQuoted(token)) {
             operand.isString = true;
             operand.raw = token.mid(1, token.length() - 2);
         } else if (token.startsWith('%') || token.startsWith('$')) {

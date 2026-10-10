@@ -761,6 +761,36 @@ int main(int argc, char* argv[]) {
               "VARSIZE(ARR_V) == VARSIZE(\"ARR_V\") != 元素值 7（标识符按变量名解析）");
     }
 
+    {
+        ProcessState ps;
+        EraParseTable pt(&ps);
+        VariableStorage vs;
+        ExpressionEvaluator ev;
+        ExecutionEngine ex(&vs);
+        pt.setVariableStorage(&vs); pt.setExpressionEvaluator(&ev);
+        ex.setParseTable(&pt); ex.setExpressionEvaluator(&ev);
+        const QStringList program{"@SIZE_TEST", "#DIMS REF ARG_COM, 0, 0", "#DIMS DECLARED_COM, 5, 7", "VARSIZE ARG_COM", "RETURN"};
+        pt.loadScript("varsize_ref", buildLines(pt, program)); pt.finalizeParse();
+        check(pt.parseWarningCount() == 0, "VARSIZE multidimensional REF array needs no indices");
+        vs.setGlobalStr2D("ACTUAL_COM", 2, 3, "x");
+        vs.setReference("ARG_COM", "ACTUAL_COM");
+        const AstResolver resolve = [&](const QString& text) { return pt.expressionAst(text); };
+        ex.executeInstruction(AstBuilder::build("VARSIZE ARG_COM", {}, resolve));
+        check(vs.getSystemVariable("RESULT", 0) == 3 && vs.getSystemVariable("RESULT", 1) == 4,
+              "VARSIZE REF resolves target and writes all dimension lengths");
+        vs.setLocalInt(0, 8);
+        ex.executeInstruction(AstBuilder::build("VARSIZE ARG_COM:(LOCAL++):999", {}, resolve));
+        check(vs.getLocalInt(0) == 8 && vs.getSystemVariable("RESULT", 1) == 4,
+              "VARSIZE ignores supplied index values and side effects");
+        pt.setPosition("varsize_ref", 3);
+        ex.executeInstruction(AstBuilder::build("VARSIZE DECLARED_COM", {}, resolve));
+        check(vs.getSystemVariable("RESULT", 0) == 5 && vs.getSystemVariable("RESULT", 1) == 7,
+              "VARSIZE uses declared dimensions before array elements are written");
+        auto array = QSharedPointer<VariableNode>::create("ARG_COM", OperandType::Str);
+        array->dimension = 2;
+        check(!validateExpression(*array).isEmpty(), "ordinary multidimensional element read still requires indices");
+    }
+
     // C# AnalyzePrintV apostrophe ends at comma, not a matching quote.
     {
         EraParseTable pt(&state);

@@ -18,6 +18,37 @@ int main(int argc, char** argv) {
     ExecutionEngine engine(&storage);
     engine.setParseTable(&table); engine.setExpressionEvaluator(&evaluator);
     const auto resolve = [&](const QString& e) { return table.expressionAst(e); };
+    for (const QString& source : QStringList{
+        QString::fromUtf8(R"ERB(CALL F, @"前缀/\@1 ? 哥哥 # 姐姐\@后缀")ERB"),
+        QString::fromUtf8(R"ERB(SPLIT @"前缀/\@1 ? 哥哥 # 姐姐\@后缀", ",", LOCALS)ERB")}) {
+        const auto line = AstBuilder::build(source, {}, resolve);
+        const auto& operand = line.arguments.at(source.startsWith("CALL") ? 1 : 0);
+        check(operand.ast && evaluator.evaluate(*operand.ast, &storage).toString()
+              == QString::fromUtf8("前缀/哥哥后缀"), "load-time FORM AST removes delimiters and evaluates parts");
+    }
+    for (const QString& command : QStringList{"REUSELASTLINE", "DATAFORM", "THROW"}) {
+        const QString source = command + QString::fromUtf8(R"ERB( \@ LOCAL ? yes # no \@tail.%"." * LOCAL%)ERB");
+        int wholeSourceResolutions = 0;
+        const auto formResolve = [&](const QString& text) {
+            if (text.startsWith("\\@")) ++wholeSourceResolutions;
+            return resolve(text);
+        };
+        auto formLine = AstBuilder::build(source, {}, formResolve);
+        storage.setLocalInt(0, 2);
+        check(formLine.arguments.first().ast
+              && evaluator.evaluate(*formLine.arguments.first().ast, &storage).toString() == "yestail..."
+              && wholeSourceResolutions == 0, "FORM command parses conditional plus trailing text at load time");
+        storage.setLocalInt(0, 0);
+        check(formLine.arguments.first().ast
+              && evaluator.evaluate(*formLine.arguments.first().ast, &storage).toString() == "notail.",
+              "FORM command evaluates false branch and trailing interpolation");
+    }
+    const auto quoted = AstBuilder::build(QStringLiteral("CALL F, \"literal {1} % text\""), {}, resolve);
+    check(quoted.arguments.at(1).ast && quoted.arguments.at(1).ast->kind() == NodeKind::Literal,
+          "plain quoted string has Literal AST and no FORM interpolation");
+    const auto modulo = AstBuilder::build("CALL F, 10 % 3 % 2", {}, resolve);
+    check(modulo.arguments.at(1).ast && modulo.arguments.at(1).ast->valueType() == OperandType::Int,
+          "percent operators remain integer expressions");
     // Quoted strings in a yen-at condition do not end the outer @"...".
     for (int truth : {0, 1}) {
         storage.setLocalStr(0, truth ? "变身形態" : "通常");
@@ -116,9 +147,9 @@ int main(int argc, char** argv) {
     console.clearAll();
     storage.setLocalStr(0, "<u>runtime</u><br>");
     line = AstBuilder::build("HTML_PRINT LOCALS", {}, resolve);
-    check(!line.printTemplate, "runtime string remains expression until execution");
+    check(line.arguments.first().ast && line.printTemplate, "HTML string is compiled during load");
     engine.executeInstruction(line);
-    check(console.buffer().count() == 1 && console.buffer().at(0).plainText() == "runtime" && console.buffer().at(0).flatSpans().first().style.underline, "runtime string uses same template compiler");
+    check(console.buffer().count() == 1 && console.buffer().at(0).plainText() == "<u>runtime</u><br>" && !console.buffer().at(0).flatSpans().first().style.underline, "variable HTML value remains raw text");
     console.clearAll();
     storage.setLocalStr(0, "blue");
     line = AstBuilder::build("HTML_PRINT @\"<font color='%LOCALS%'><b>blue</b></font><br>\"", {}, resolve);
@@ -141,6 +172,14 @@ int main(int argc, char** argv) {
           "paragraph alignment does not leak into ordinary print");
     console.setWrappingEnabled(false);
 
+    console.clearAll();
+    storage.setLocalInt(0, 4);
+    auto titleImage = AstBuilder::build(R"ERB(HTML_PRINT "<p align='center'><img src='TW_title" + TOSTR(LOCAL, "000") + "'></p>")ERB", {}, resolve);
+    engine.executeInstruction(titleImage);
+    check(console.buffer().count() > 0
+          && console.buffer().at(0).flatSpans().first().kind == ConsoleSpanKind::Image
+          && console.buffer().at(0).flatSpans().first().text == "TW_title004",
+          "concatenated HTML compiles image structure at load time with dynamic src");
     QList<LogicalLine> lines;
     for (const QString& text : QStringList{"@STR", "#DIMS SHARED", "PRINTS SHARED", "@INT", "#DIM SHARED", "PRINTV SHARED"}) lines.append(AstBuilder::build(text, {}, resolve));
     table.loadScript("scope", lines); table.finalizeParse();
@@ -156,6 +195,40 @@ int main(int argc, char** argv) {
     assignment.arguments[1].raw = "999";
     engine.executeInstruction(assignment);
     check(storage.getLocalInt(0) == 11 && storage.getSystemVariable("RESULT", 0) == 10, "assignment consumes AST exactly once");
+    auto staticForm = table.expressionAst("STRFORM(\"value={LOCAL}\")");
+    storage.setLocalInt(0, 23);
+    check(staticForm && staticForm->kind() == NodeKind::StrForm
+          && static_cast<const StrFormNode&>(*staticForm).rawText() == "value={LOCAL}"
+          && evaluator.evaluate(*staticForm, &storage).toString() == "value=23",
+          "STRFORM keeps raw text while evaluating its load-time FORM node");
+    auto rawConsumer = table.expressionAst("STRLEN(STRFORM(\"value={LOCAL}\"))");
+    check(rawConsumer && evaluator.evaluate(*rawConsumer, &storage).toLongLong() == 13,
+          "non-FORM string consumer reads STRFORM raw text");
+    storage.setLocalStr(0, "raw {LOCAL}");
+    auto rawForm = table.expressionAst("STRFORM(LOCALS)");
+    check(rawForm && evaluator.evaluate(*rawForm, &storage).toString() == "raw {LOCAL}",
+          "STRFORM variable reads raw text without runtime parsing");
+    QString formsOutput;
+    const auto formsConnection = QObject::connect(&engine, &ExecutionEngine::consolePrint,
+        [&formsOutput](const QString& text, bool) { formsOutput = text; });
+    storage.setLocalInt(0, 42);
+    storage.setLocalStr(0, "value {LOCAL} %LOCALS%");
+    auto forms = AstBuilder::build("PRINTFORMSL \"score={LOCAL}; \" + LOCALS", {}, resolve);
+    check(forms.arguments.first().ast && forms.arguments.first().ast->kind() == NodeKind::StrForm,
+          "FORMS concatenation compiles to static parts");
+    forms.arguments.first().raw = "invalid source";
+    engine.executeInstruction(forms);
+    check(formsOutput == "score=42; value {LOCAL} %LOCALS%",
+          "FORMS literal interpolates once and variable result remains text");
+    storage.setLocalInt(0, 9);
+    storage.setLocalStr(0, "changed");
+    engine.executeInstruction(forms);
+    check(formsOutput == "score=9; changed", "FORMS parts read current variable values without parsing");
+    engine.executeInstruction(AstBuilder::build("PRINTFORMS \"{LOCAL}\"", {}, resolve));
+    check(formsOutput == "9", "FORMS quoted literal compiles interpolation at load time");
+    engine.executeInstruction(AstBuilder::build("PRINTFORMS LOCALS", {}, resolve));
+    check(formsOutput == "changed", "FORMS variable is an independent AST operation");
+    QObject::disconnect(formsConnection);
     qInfo() << "print template failures:" << failures;
     return failures ? 1 : 0;
 }

@@ -113,7 +113,7 @@ void diagnoseIntegerLiterals(const QString& expression, const QString& file, int
         if (alreadyReported) continue;
         diagnostics.add(DiagSeverity::Error, DiagCode::kNumericConversion, file, line,
             tokenColumn, token.value().size(),
-            QCoreApplication::translate("ParseDiagnostics", "整数转换失败（格式错误或超出 qint64 范围）：%1")
+            QCoreApplication::translate("ParseDiagnostics", "整数转换失败（格式错误或超出 64 位整数表示范围）：%1")
                 .arg(token.value()), expression);
     }
 }

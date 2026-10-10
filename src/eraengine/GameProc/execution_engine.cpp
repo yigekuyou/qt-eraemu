@@ -507,7 +507,7 @@ bool ExecutionEngine::handleVarSet(const LogicalLine& line, bool eachChara) {
     const auto evalStr = [&](const Operand& o) -> QString {
         if (o.isString) return o.raw;
         if (o.ast) return ev.evaluate(*o.ast, m_storage, m_gameBaseData).toString();
-        return evalExpressionCached(m_parseTable, ev, o.raw, m_storage, m_gameBaseData).toString();
+        throw std::runtime_error("String operand has no load-time AST");
     };
 
     const LhsRef ref = parseLhsRef(a[0]->raw.trimmed());
@@ -1019,16 +1019,9 @@ bool ExecutionEngine::executeInstruction(const LogicalLine& line) {
             const Operand& a = args.first();
             if (a.ast) {
                 text = ev.evaluate(*a.ast, m_storage, m_gameBaseData).toString();
-            } else if (StrFormParser::hasForm(a.raw)) {
-                // FORM 格式串：展开 {…}/%…%（% 是 UNKNOWN token，不能按表达式解析）
-                const auto resolve = [this](const QString& e) {
-                    return m_parseTable ? m_parseTable->expressionAst(e)
-                                        : QSharedPointer<ExpressionNode>(); };
-                if (auto form = StrFormParser::parse(a.raw, resolve))
-                    text = ev.evaluate(*form.staticCast<ExpressionNode>(),
-                                       m_storage, m_gameBaseData).toString();
             } else {
-                text = a.raw;
+                emit errorOccurred(QStringLiteral("REUSELASTLINE 缺少装载期字符串 AST"));
+                return true;
             }
         }
         // C# PrintSingleLine：空文本不产生任何输出（IsNullOrEmpty 早退）；
@@ -1088,114 +1081,44 @@ bool ExecutionEngine::executeInstruction(const LogicalLine& line) {
         // perf：实参解析（扫空白 / split / trimmed / expressionAst 查表）只在
         // 首次执行做一次，缓存进 LogicalLine::strArgs —— eraTW 地图逐字符时
         // 这几条指令一次绘制执行上万次，重复解析是最大热点。行内容装载后不可变。
-        if (!line.strArgsReady) {
-            StrBuiltinArgs a;
-            // 取命令后的实参文本：先跳过**前导缩进**（eraTW/示例里 IF/WHILE/FOR
-            // 体内的行以制表符/空格缩进，否则缩进处就是首个空白，命令名会混进
-            // 实参串 —— eraTW 逐字符地图「画不出图」的根因），再跳到命令名后的空白。
-            const QString& raw = line.raw;
-            int scan = 0;
-            while (scan < raw.size() && raw.at(scan).isSpace()) ++scan;
-            int commandEnd = -1;
-            for (int i = scan; i < raw.size(); ++i) {
-                const QChar c = raw.at(i);
-                if (c == QLatin1Char(' ') || c == QLatin1Char('\t') || c == QChar(0x3000)) {
-                    commandEnd = i;
-                    break;
-                }
-            }
-            QString callText = commandEnd >= 0 ? raw.mid(commandEnd).trimmed() : raw;
-            if (callText.isEmpty()) {
-                QStringList callArgs;
-                for (const Operand& arg : args) {
-                    if (arg.raw != QLatin1String(",")) callArgs << arg.raw;
-                }
-                callText = callArgs.join(QLatin1Char(','));
-            }
-            if (name == QLatin1String("SUBSTRING") || name == QLatin1String("SUBSTRINGU")) {
-                const QStringList pieces = callText.split(QLatin1Char(','), Qt::KeepEmptyParts);
-                if (pieces.size() >= 3) {
-                    a.mode = StrBuiltinArgs::Mode::Substring;
-                    const QString sourceName = pieces.at(0).trimmed();
-                    // RESULTS 与全引擎一致走全局字符串槽（expression_evaluator /
-                    // 赋值 / 函数返回都用 get/setGlobalStr1D）——此前这里读的是
-                    // 另一个 LocalStr 槽，SUBSTRINGU 写回后脚本仍读到旧值，导致
-                    // eraTW `WHILE RESULTS != "" && STRLENSU(RESULTS) < 3` 空转。
-                    if (sourceName.compare(QLatin1String("RESULTS"), Qt::CaseInsensitive) == 0) {
-                        a.src = StrBuiltinArgs::Src::Results;
-                    } else {
-                        const QPair<QString, int> sourceRef = parseLHS(sourceName);
-                        if (m_storage && sourceRef.first == sourceName
-                            && sourceRef.first.size() > 0) {
-                            a.src = StrBuiltinArgs::Src::PlainName;
-                            a.plainName = sourceRef.first;
-                            a.plainIndex = sourceRef.second;
-                        } else {
-                            a.src = StrBuiltinArgs::Src::Expr;
-                            a.sourceText = sourceName;
-                            if (m_parseTable) a.sourceAst = m_parseTable->expressionAst(sourceName);
-                        }
-                    }
-                    a.startText = pieces.at(1).trimmed();
-                    a.lengthText = pieces.at(2).trimmed();
-                    if (m_parseTable) {
-                        a.startAst = m_parseTable->expressionAst(a.startText);
-                        a.lengthAst = m_parseTable->expressionAst(a.lengthText);
-                    }
-                }
-            } else {
-                // STRLENS / STRLENSU：按 `STRLENSU(实参)` 函数调用求值。
-                a.mode = StrBuiltinArgs::Mode::StrLen;
-                a.exprText = name + QLatin1Char('(') + callText + QLatin1Char(')');
-                if (m_parseTable) a.lenAst = m_parseTable->expressionAst(a.exprText);
-            }
-            line.strArgs = std::move(a);
-            line.strArgsReady = true;
+        // The function-call AST is produced by AstBuilder during script load.
+        // There is deliberately no first-execution tokenizer or expression fallback.
+        if (line.arguments.isEmpty() || !line.arguments.first().ast) {
+            emit errorOccurred(QStringLiteral("字符串内置命令缺少装载期 AST"));
+            return true;
         }
-
-        const StrBuiltinArgs& a = line.strArgs;
-        ExpressionEvaluator& ev = getEvaluator();
-        // AST 命中直接求值；未命中回退文本入口（与 evalExpressionCached 等价）。
-        const auto evalArg = [&](const QSharedPointer<ExpressionNode>& ast,
-                                 const QString& text) -> QVariant {
-            if (ast) return ev.evaluate(*ast, m_storage, m_gameBaseData);
-            return ev.evaluate(text, m_storage, m_gameBaseData);
-        };
-        QVariant value;
-        if (a.mode == StrBuiltinArgs::Mode::Substring) {
-            QString source;
-            if (a.src == StrBuiltinArgs::Src::Results) {
-                source = m_storage ? m_storage->getGlobalStr1D(QStringLiteral("RESULTS"), 0)
-                                   : QString();
-            } else if (a.src == StrBuiltinArgs::Src::PlainName) {
-                source = m_storage
-                             ? m_storage->getGlobalStr1D(a.plainName,
-                                                         a.plainIndex >= 0 ? a.plainIndex : 0)
-                             : QString();
-            } else {
-                source = evalArg(a.sourceAst, a.sourceText).toString();
-            }
-            const qint64 start = evalArg(a.startAst, a.startText).toLongLong();
-            const qint64 length = evalArg(a.lengthAst, a.lengthText).toLongLong();
-            if (start < 0) {
-                // Emuera 的版本字符串按四位小数部分处理：2 -> 0002。
-                // 负位置从该四位字符串末尾计算。
-                source = QStringLiteral("0000").right(4 - qMin(4, source.size())) + source;
-            }
-            const int safeStart = start < 0
-                                       ? qMax(0, source.size() + static_cast<int>(start))
-                                       : static_cast<int>(start);
-            value = source.mid(safeStart, length < 0 ? -1 : static_cast<int>(length));
-        } else if (a.mode == StrBuiltinArgs::Mode::StrLen) {
-            value = evalArg(a.lenAst, a.exprText);
-        }
+        const QVariant value = getEvaluator().evaluate(*line.arguments.first().ast,
+                                                        m_storage, m_gameBaseData);
         if (name == QLatin1String("STRLENS") || name == QLatin1String("STRLENSU")) {
             if (m_storage) m_storage->setSystemVariable(QStringLiteral("RESULT"), 0,
                                                           value.toLongLong());
         } else if (m_storage) {
-            // SUBSTRINGU 的结果写 RESULTS —— 与全引擎同一存储（见上方说明）
             m_storage->setGlobalStr1D(QStringLiteral("RESULTS"), 0, value.toString());
         }
+        return true;
+    }
+
+    if (name == QLatin1String("VARSIZE")) {
+        if (!m_storage || args.isEmpty() || !args.first().ast
+            || args.first().ast->kind() != NodeKind::Variable) {
+            emit errorOccurred(QStringLiteral("VARSIZE 的参数必须是装载期变量节点"));
+            return true;
+        }
+        const auto& variable = static_cast<const VariableNode&>(*args.first().ast);
+        // Array identity, not element value: do not evaluate any supplied indices.
+        auto lengths = m_storage->arrayLengths(variable.name());
+        if (!variable.lengths.isEmpty()) lengths = variable.lengths;
+        if (m_parseTable) {
+            const QString key = m_storage->resolvedStorageName(variable.name());
+            const int separator = key.indexOf(QChar(0x1f));
+            const QString scope = separator >= 0 ? key.left(separator) : QString();
+            const QString target = separator >= 0 ? key.mid(separator + 1) : key;
+            const auto* declaration = m_parseTable->variableTable().find(target, scope);
+            if (declaration && !declaration->isReference && !declaration->lengths.isEmpty())
+                lengths = declaration->lengths;
+        }
+        for (int dim = 0; dim < lengths.size(); ++dim)
+            m_storage->setSystemVariable(QStringLiteral("RESULT"), dim, lengths[dim]);
         return true;
     }
 
@@ -1204,12 +1127,12 @@ bool ExecutionEngine::executeInstruction(const LogicalLine& line) {
         const auto eval = [&](const ExpressionNode& node) {
             return evaluator.evaluate(node, m_storage, m_gameBaseData).toString();
         };
-        auto compiled = line.printTemplate;
-        if (!compiled && !args.isEmpty()) {
-            const auto& arg = args.first();
-            compiled = PrintTemplateCompiler::compile(arg.ast ? eval(*arg.ast) : arg.raw);
+        const auto compiled = line.printTemplate;
+        if (!compiled) {
+            emit errorOccurred(QStringLiteral("HTML_PRINT 缺少装载期模板"));
+            return true;
         }
-        if (compiled) emit consolePrintTemplate(PrintTemplateCompiler::evaluate(*compiled, eval));
+        emit consolePrintTemplate(PrintTemplateCompiler::evaluate(*compiled, eval));
         return true;
     }
 
@@ -1239,8 +1162,9 @@ bool ExecutionEngine::executeInstruction(const LogicalLine& line) {
             resName = operand.raw;
         } else if (operand.ast) {
             if (!ev.evaluateStr(*operand.ast, m_storage, resName)) resName = operand.raw;
-        } else if (!ev.evaluateStr(operand.raw, m_storage, resName)) {
-            resName = operand.raw;
+        } else {
+            emit errorOccurred(QStringLiteral("PRINT_IMG 的字符串参数缺少装载期 AST"));
+            return true;
         }
         emit consolePrintImage(resName, 0, 0, 0);
         return true;
@@ -1266,8 +1190,7 @@ bool ExecutionEngine::executeInstruction(const LogicalLine& line) {
             const auto evaluateOperand = [&](const Operand& operand) -> QVariant {
                 if (operand.isString) return QVariant(operand.raw);
                 if (operand.ast) return ev.evaluate(*operand.ast, m_storage, m_gameBaseData);
-                return evalExpressionCached(m_parseTable, ev, operand.raw,
-                                            m_storage, m_gameBaseData);
+                throw std::runtime_error("Button operand has no load-time AST");
             };
             const QVariant textValue = evaluateOperand(*ops[0]);
             QString text = textValue.toString();
@@ -1495,16 +1418,12 @@ bool ExecutionEngine::executeInstruction(const LogicalLine& line) {
                 // （eraTW OPTION.ERB 的 `DRAWLINEFORM =` / `DRAWLINEFORM －`）
                 // 必须按**字面量**处理 —— 此前按表达式求值，`－` 被当负号求成 0、
                 // `=` 解析失败，分隔线成了 "0000…" 或空行。
-                const QString raw = args.first().raw;
-                ExpressionEvaluator& ev = getEvaluator();
-                barStr.clear();
-                if (m_parseTable) {
-                    const StrFormParser::ExprResolver resolve =
-                        [this](const QString& e) { return m_parseTable->expressionAst(e); };
-                    if (const QSharedPointer<StrFormNode> node = StrFormParser::parse(raw, resolve))
-                        barStr = ev.evaluate(*node, m_storage, m_gameBaseData).toString();
+                const auto& ast = args.first().ast;
+                if (!ast) {
+                    emit errorOccurred(QStringLiteral("DRAWLINEFORM 缺少装载期字符串 AST"));
+                    return true;
                 }
-                if (barStr.isEmpty()) barStr = raw;   // 展开失败/为空 -> 按字面量兜底
+                barStr = getEvaluator().evaluate(*ast, m_storage, m_gameBaseData).toString();
             }
             if (barStr.isEmpty()) {
                 emit errorOccurred(QStringLiteral("空文字列によるDRAWLINEが行われました"));
@@ -1676,26 +1595,10 @@ bool ExecutionEngine::executeInstruction(const LogicalLine& line) {
     // 后缀语义与 PRINT 族一致：V/S=变量求值、FORM=格式串、L/W=换行。
     if (name.startsWith(QLatin1String("DEBUGPRINT"))) {
         ExpressionEvaluator& ev = getEvaluator();
-        const QString rest = line.raw.trimmed().mid(name.size()).trimmed();
         QString text;
-        if (name.contains(QLatin1String("FORM"))) {
-            // FORM 变体：整段按**格式串**展开（%..%/{..}/\@…\@）——
-            // 对齐 C# AnalyseFormattedString；不能当普通表达式解析
-            //（% 是 UNKNOWN token，会解析失败 -> 原样输出）。
-            const auto resolve = m_parseTable
-                ? [this](const QString& e) { return m_parseTable->expressionAst(e); }
-                : std::function<QSharedPointer<ExpressionNode>(const QString&)>();
-            const QSharedPointer<ExpressionNode> ast =
-                StrFormParser::parse(rest, resolve);
-            text = ast ? ev.evaluate(*ast.staticCast<ExpressionNode>(), m_storage, m_gameBaseData).toString()
-                       : rest;
-        } else if (!rest.isEmpty()) {
-            const QVariant v = ev.evaluate(rest, m_storage, m_gameBaseData);
-            text = v.toString();
-        }
-        if (name.contains(QLatin1String("FORMS"))) {
-            // FORMS 变体：实参是字符串表达式
-            text = ev.evaluate(rest, m_storage, m_gameBaseData).toString();
+        for (const Operand& operand : args) {
+            if (operand.ast) text += ev.evaluate(*operand.ast, m_storage, m_gameBaseData).toString();
+            else if (operand.isString) text += operand.raw;
         }
         if (!name.endsWith(QLatin1Char('L')) && !name.endsWith(QLatin1Char('W')))
             text += QLatin1Char('\n');
@@ -1782,7 +1685,7 @@ bool ExecutionEngine::handleSplit(const LogicalLine& line)
     const auto evalStr = [&](const Operand& op) -> QString {
         if (op.isString) return op.raw;
         return op.ast ? ev.evaluate(*op.ast, m_storage, m_gameBaseData).toString()
-                      : ev.evaluate(op.raw, m_storage, m_gameBaseData).toString();
+                      : throw std::runtime_error("String operand has no load-time AST");
     };
     // 顶层逗号切分（逗号可能是独立 Operand，也可能是表达式的一部分）
     QList<Operand> parts;
@@ -1953,18 +1856,6 @@ bool ExecutionEngine::executeFunctionCall(const LogicalLine& line)
             if (a.ast) text = ev.evaluate(*a.ast, m_storage, m_gameBaseData).toString();
             else text = a.raw;
         }
-        // 兜底：仍含格式标记（实参未归约成 StrForm）时再按格式串展开一次
-        if (text.contains(QLatin1Char('{')) || text.contains(QLatin1Char('%'))) {
-            const StrFormParser::ExprResolver resolve =
-                [this](const QString& e) -> QSharedPointer<ExpressionNode> {
-                return m_parseTable ? m_parseTable->expressionAst(e)
-                                    : QSharedPointer<ExpressionNode>();
-            };
-            if (const QSharedPointer<StrFormNode> form = StrFormParser::parse(text, resolve)) {
-                text = ev.evaluate(*form.staticCast<ExpressionNode>(), m_storage, m_gameBaseData)
-                           .toString();
-            }
-        }
         const qint64 len = (upper == QLatin1String("STRLENFORMU"))
                                ? static_cast<qint64>(text.size())
                                : static_cast<qint64>(ev.langByteCount(text));
@@ -2061,13 +1952,9 @@ bool ExecutionEngine::handleStringAssignment(const QString& lhs, const QString& 
         return false;
     }
     ExpressionEvaluator& evaluator = getEvaluator();
-    Q_UNUSED(ast); // '=' 消费原始 FORM；'=' 在 executeInstruction 中按字符串表达式求值。
-    const auto resolve = [this](const QString& e) {
-        return m_parseTable ? m_parseTable->expressionAst(e) : QSharedPointer<ExpressionNode>();
-    };
-    const auto form = StrFormParser::parse(rhs.trimmed(), resolve, evaluator.ignoreTripleSymbols());
-    if (!form) { emit errorOccurred(QStringLiteral("字符串赋值FORM无效")); return false; }
-    const QVariant result = evaluator.evaluate(*form, m_storage, m_gameBaseData);
+    Q_UNUSED(rhs);
+    if (!ast) { emit errorOccurred(QStringLiteral("字符串赋值缺少装载期 AST")); return false; }
+    const QVariant result = evaluator.evaluate(*ast, m_storage, m_gameBaseData);
     if (!result.isValid() || result.typeId() != QMetaType::QString) return false;
     const QString value = result.toString();
     return writeStringValue(lhs, value, ownerFunction);
@@ -2167,7 +2054,7 @@ bool ExecutionEngine::handleAssignment(const QString& lhs, const QString& rhs, c
 //   mode == PrintV         ：多个值直接拼接（不补分隔符）
 //   mode == StrExpression  ：求一个字符串表达式
 //   mode == FormStr        ：求一个 StrForm（文本 + {…}/%…%），装载期已建好节点
-//   forms  （FORMS 后缀）  ：求值结果再当格式串展开一次（C# isForms）
+//   forms  （FORMS 后缀）  ：装载期分片，变量读取为独立 AST 运算
 //   clearPad（C/LC 后缀）  ：按 PRINTC 的定宽列布局补齐后打印
 //   newline L/W            ：打印后换行（W 还要等一次按键）
 bool ExecutionEngine::handlePrintInstruction(const LogicalLine& line) {
@@ -2210,15 +2097,6 @@ bool ExecutionEngine::handlePrintInstruction(const LogicalLine& line) {
     default:   // StrExpression / FormStr
         if (!args.isEmpty()) text = valueOf(args.first());
         break;
-    }
-
-    // FORMS：先把字符串求出来，再把它当格式串展开（C# isForms 分支）
-    if (info.forms && m_parseTable && !text.isEmpty()) {
-        const StrFormParser::ExprResolver resolve =
-            [this](const QString& e) { return m_parseTable->expressionAst(e); };
-        if (const QSharedPointer<StrFormNode> node = StrFormParser::parse(text, resolve)) {
-            text = evaluator.evaluate(*node, m_storage, m_gameBaseData).toString();
-        }
     }
 
     if (info.clearPad) {
@@ -2465,7 +2343,7 @@ void ExecutionEngine::handleSaveData(const LogicalLine& line)
         // 且无 AST；若再当表达式求值会把中文标题当未定义标识符 -> 0。
         if (op.isString) return QVariant(op.raw);
         return op.ast ? ev.evaluate(*op.ast, m_storage, m_gameBaseData)
-                      : ev.evaluate(op.raw, m_storage, m_gameBaseData);
+                      : throw std::runtime_error("Operand has no load-time AST");
     };
     const qint64 idx = evalOp(parts[0]).toLongLong();
     const QString saveText = evalOp(parts[1]).toString();
@@ -2582,7 +2460,7 @@ bool ExecutionEngine::handleStatusCommand(const LogicalLine& line)
         if (!op) return {};
         if (op->isString) return QVariant(op->raw);
         return op->ast ? ev.evaluate(*op->ast, m_storage, m_gameBaseData)
-                       : ev.evaluate(op->raw, m_storage, m_gameBaseData);
+                       : throw std::runtime_error("Operand has no load-time AST");
     };
     // C# PRINT_PALAM / PRINT_SHOPITEM 的每行列数（Config.PrintCPerLine）
     const int perLine = ev.printCLayout().second;
@@ -2747,10 +2625,8 @@ bool ExecutionEngine::handleStatusCommand(const LogicalLine& line)
         if (first->isString) str = first->raw;
         else if (first->ast) str = ev.evaluate(*first->ast, m_storage, m_gameBaseData).toString();
         else {
-            const QSharedPointer<ExpressionNode> ast =
-                m_parseTable ? m_parseTable->expressionAst(first->raw)
-                             : QSharedPointer<ExpressionNode>();
-            str = ast ? ev.evaluate(*ast, m_storage, m_gameBaseData).toString() : first->raw;
+            emit errorOccurred(QStringLiteral("HTML_TAGSPLIT 的字符串参数缺少装载期 AST"));
+            return true;
         }
         QStringList parts;
         bool ok = true;
@@ -2899,7 +2775,7 @@ bool ExecutionEngine::handleSaveVarCommand(const LogicalLine& line)
         if (!op) return QString();
         if (op->isString) return op->raw;
         if (op->ast) return ev.evaluate(*op->ast, m_storage, m_gameBaseData).toString();
-        return ev.evaluate(op->raw, m_storage, m_gameBaseData).toString();
+        throw std::runtime_error("String operand has no load-time AST");
     };
 
     // ---- LOADVAR <文件名>：读回并按记录的变量名/类型/尺寸恢复 ----

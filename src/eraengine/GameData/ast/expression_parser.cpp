@@ -450,6 +450,18 @@ QSharedPointer<ExpressionNode> ExpressionParser::parseFunctionCall() {
         fn->setValueType(OperandType::Unknown);
         fn->setArityError(QStringLiteral("未定义的函数 %1").arg(token.value()));
     }
+    if (res.isBuiltin && fn->builtinSpec() && fn->builtinSpec()->op == BuiltinOp::StrForm
+        && args.size() == 1 && args.first()->kind() == NodeKind::Literal && args.first()->isString()) {
+        const auto resolve = [this](const QString& text) {
+            ExpressionLexer lexer;
+            ExpressionParser nested = *this;
+            return nested.parse(lexer.tokenize(text));
+        };
+        auto form = StrFormParser::parse(static_cast<const LiteralNode&>(*args.first()).strValue(),
+                                         resolve, m_ignoreTripleSymbols);
+        if (!form) return nullptr;
+        return form;
+    }
     return fn;
 }
 

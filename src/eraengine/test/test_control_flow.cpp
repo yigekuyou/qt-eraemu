@@ -91,7 +91,7 @@ int main(int argc, char** argv) {
     run("TRYCALLFORM 不存在则静默跳过", {
         "A = 3",
         "CHECK = 1",
-        "TRYCALLFORM NOPE_%A%",
+        "TRYCALLFORM NOPE_{A}",
         "CHECK += 1"}, 2);
     // TRYC 系 + CATCH + THROW（eraTW 的 EXISTOBJ：TRYCCALLFORM EXIST_xxx + CALLF SET_EXIST）
     //   * 目标存在   -> 执行 TRY 体，落到 CATCH 时跳到 ENDCATCH 之后

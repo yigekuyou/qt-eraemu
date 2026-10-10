@@ -262,6 +262,7 @@ public:
         [[nodiscard]] QString resolvedStorageName(const QString& name) const { return storageName(name); }
         [[nodiscard]] int arraySize(const QString& name) const;
         [[nodiscard]] int arraySizeRaw(const QString& storageKey) const;
+        [[nodiscard]] QList<int> arrayLengths(const QString& name) const;
         void ensureArraySize(const QString& name, int size, bool stringArray);
         bool hasParameter(const QString& name) const { return m_parameters.contains(name.toUpper()); }
         QVariant parameter(const QString& name) const { return m_parameters.value(name.toUpper()); }

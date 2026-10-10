@@ -969,7 +969,9 @@ ExecState ScriptRunner::executeLine(const LogicalLine& line) {
     if (name == QLatin1String("GOTOFORM") || name == QLatin1String("TRYGOTO")
         || name == QLatin1String("TRYGOTOFORM")) {
         QString label = line.arguments.isEmpty() ? QString() : line.arguments.first().raw;
-        if (name != QLatin1String("TRYGOTO")) label = expandCallFormLabel(label);
+        if (name != QLatin1String("TRYGOTO") && !line.arguments.isEmpty() && line.arguments.first().ast)
+            label = getEvaluator().evaluate(*line.arguments.first().ast, m_storage, baseData()).toString();
+        else if (name != QLatin1String("TRYGOTO")) label = expandCallFormLabel(label);
         label = label.trimmed();
         if (label.startsWith(QLatin1Char('$'))) label.remove(0, 1);
         const int pos = label.isEmpty() ? -1 : findGotoLabelInFunction(label);
@@ -1001,7 +1003,9 @@ ExecState ScriptRunner::executeLine(const LogicalLine& line) {
         // 语法/跳转语义与 TRYGOTO(FORM) 相同（TRYCGOTO 的 CATCH 配对在
         // findGotoLabelInFunction 失败分支里处理）。
         QString label = line.arguments.isEmpty() ? QString() : line.arguments.first().raw;
-        if (name == QLatin1String("TRYCGOTOFORM")) label = expandCallFormLabel(label);
+        if (name == QLatin1String("TRYCGOTOFORM") && !line.arguments.isEmpty() && line.arguments.first().ast)
+            label = getEvaluator().evaluate(*line.arguments.first().ast, m_storage, baseData()).toString();
+        else if (name == QLatin1String("TRYCGOTOFORM")) label = expandCallFormLabel(label);
         label = label.trimmed();
         if (label.startsWith(QLatin1Char('$'))) label.remove(0, 1);
         const int pos = label.isEmpty() ? -1 : findGotoLabelInFunction(label);
@@ -1054,7 +1058,11 @@ ExecState ScriptRunner::executeLine(const LogicalLine& line) {
         const bool isTry = name.startsWith(QLatin1String("TRY"));
         const bool isForm = name.endsWith(QLatin1String("FORMF"));
         QString funcName = line.arguments.isEmpty() ? QString() : line.arguments.first().raw;
-        if (isForm) funcName = expandCallFormLabel(funcName);
+        if (isForm && !line.arguments.isEmpty() && line.arguments.first().ast) {
+            funcName = getEvaluator().evaluate(*line.arguments.first().ast, m_storage, baseData()).toString();
+        } else if (isForm) {
+            funcName = expandCallFormLabel(funcName);
+        }
         // TRY：先做存在性判定（0=未定义 1=普通関数(标签) 2=#FUNCTION 3=#FUNCTIONS）。
         // 只有 2/3 才是 CALLF 系列的目标 —— 与 C# 的 null 判定等价。
         if (isTry && (!m_table || m_table->functionExistsKind(funcName, true) < 2)) {
@@ -1063,27 +1071,30 @@ ExecState ScriptRunner::executeLine(const LogicalLine& line) {
             advance();
             return ExecState::Continue;
         }
-        QStringList argTexts;
+        QList<QSharedPointer<ExpressionNode>> arguments;
         for (int i = 1; i < line.arguments.size(); ++i) {
-            const Operand& op = line.arguments.at(i);
-            if (op.raw == QLatin1String(",")) continue;
-            // 装载期把字符串实参剥掉引号存进 raw（isString 标记）。
-            // 这里必须把引号**加回去**再拼成调用表达式，否则 `"VARX"` 会变成
-            // 裸标识符按变量求值（未知变量 -> 0），TEMPVAR/OBJ 系全链断掉。
-            argTexts << (op.isString
-                             ? QLatin1Char('"') + op.raw + QLatin1Char('"')
-                             : op.raw);
+            const Operand& operand = line.arguments.at(i);
+            if (!operand.isString && operand.raw == QLatin1String(",")) continue;
+            if (!operand.ast) {
+                emit errorOccurred(QStringLiteral("CALLF 参数缺少装载期 AST"));
+                return ExecState::Error;
+            }
+            arguments.append(operand.ast);
         }
-        const QString callText = funcName + QLatin1Char('(')
-                                 + argTexts.join(QLatin1Char(',')) + QLatin1Char(')');
-        ExpressionEvaluator& ev = getEvaluator();
-        const QSharedPointer<ExpressionNode> ast =
-            m_table ? m_table->expressionAst(callText) : QSharedPointer<ExpressionNode>();
-        const QVariant value = ast ? ev.evaluate(*ast, m_storage, baseData())
-                                   : ev.evaluate(callText, m_storage, baseData());
-        Q_UNUSED(value);   // 对齐 C#：CALLF / TRYCALLF 的返回值不落任何寄存器
-        qCDebug(eraTrace) << "[callf]" << callText << "->" << value
-                          << "行" << line.position.toString();
+        // Function dispatch may depend on a FORM label, but its arguments are
+        // already compiled nodes. Do not rebuild or tokenize a call string.
+        FunctionNode call(funcName, arguments);
+        const auto resolution = resolveFunctionCall(funcName, [this](const QString& name) {
+            return m_table ? m_table->userCallReturnType(name) : OperandType::Unknown;
+        });
+        if (resolution.isUserFunction) { call.setUserFunction(true); call.setValueType(resolution.returnType); }
+        else if (resolution.isBuiltin) {
+            call.setValueType(resolution.returnType);
+            if (resolution.extensionSpec) call.setExtensionSpec(resolution.extensionSpec);
+            else call.setBuiltinIndex(resolution.builtinIndex);
+        }
+        const QVariant value = getEvaluator().evaluate(call, m_storage, baseData());
+        Q_UNUSED(value);
         advance();
         return ExecState::Continue;
     }
@@ -1100,14 +1111,9 @@ ExecState ScriptRunner::executeLine(const LogicalLine& line) {
             QString text;
             if (op.isString) text = op.raw;
             else if (op.ast) {
-                const auto resolve = [this](const QString& e) {
-                    return m_table ? m_table->expressionAst(e)
-                                   : QSharedPointer<ExpressionNode>(); };
-                const QSharedPointer<ExpressionNode> form = StrFormParser::parse(op.raw, resolve);
-                text = form ? ev->evaluate(*form.staticCast<ExpressionNode>(), m_storage, baseData()).toString()
-                            : ev->evaluate(op.raw, m_storage, baseData()).toString();
+                text = ev->evaluate(*op.ast, m_storage, baseData()).toString();
             } else {
-                text = ev->evaluate(op.raw, m_storage, baseData()).toString();
+                text = op.raw;
             }
             // RESULTS 全局（C# VariableData.cs:202，跨函数共享）
             m_storage->setGlobalStr1D(QStringLiteral("RESULTS"), 0, text);
@@ -1929,23 +1935,19 @@ QString ScriptRunner::expandCallFormLabel(const QString& raw)
 {
     QString text = raw.trimmed();
     if (text.isEmpty()) return text;
-    if (!StrFormParser::hasForm(text)) return text;   // 纯文本标签：不展开
-    const auto resolve = [this](const QString& e) -> QSharedPointer<ExpressionNode> {
-        return m_table ? m_table->expressionAst(e) : QSharedPointer<ExpressionNode>();
-    };
-    const QSharedPointer<StrFormNode> form = StrFormParser::parse(text, resolve,
-        getEvaluator().ignoreTripleSymbols());
-    if (!form) return text;
-    ExpressionEvaluator& ev = getEvaluator();
-    const QString out = ev.evaluate(*form.staticCast<ExpressionNode>(), m_storage, baseData()).toString();
-    return out.isEmpty() ? text : out;
+    // Script FORM labels are compiled into the first operand by AstBuilder.
+    // This helper remains for non-script/legacy callers, but script execution must
+    // never reconstruct a StrForm AST from the evaluated string.
+    return text;
 }
 
 ExecState ScriptRunner::doCallLine(const LogicalLine& line, bool isForm, bool isTry,
                                    bool isJump, int returnLine)
 {
     QString label = line.arguments.isEmpty() ? QString() : line.arguments.first().raw;
-    if (isForm) label = expandCallFormLabel(label);
+    if (isForm && !line.arguments.isEmpty() && line.arguments.first().ast)
+        label = getEvaluator().evaluate(*line.arguments.first().ast, m_storage, baseData()).toString();
+    else if (isForm) label = expandCallFormLabel(label);
     // [qdbug]（保留的调试桩）：CALL 增加脚本名与源码位置。currentLine() 是
     // 0 基内部行号（比 ERB 源码行号小 1），line.position 才是源码位置；
     // 两者并列便于对照 eraTW 原始代码。
@@ -2093,7 +2095,11 @@ ExecState ScriptRunner::doTryListLine(const LogicalLine& line) {
         QString target = entry->arguments.first().raw;
         if (target.startsWith(QLatin1Char('@')) || target.startsWith(QLatin1Char('$')))
             target.remove(0, 1);
-        target = expandCallFormLabel(target).trimmed();
+        if (!entry->arguments.first().ast)
+            target = expandCallFormLabel(target);
+        else
+            target = getEvaluator().evaluate(*entry->arguments.first().ast, m_storage, baseData()).toString();
+        target = target.trimmed();
         if (target.isEmpty()) continue;
 
         if (isGotoList) {

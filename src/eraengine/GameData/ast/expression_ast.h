@@ -67,9 +67,11 @@ struct SourceSpan {
     [[nodiscard]] int length() const noexcept { return valid() ? end - begin : 0; }
 };
 
-// 整数/进制字面量求值（对齐 C# LexicalAnalyzer.ReadInt64）：
-//   0x.. 十六进制、0b.. 二进制、p/P 2 的幂、e/E 10 的幂（如 "1p0"）。
-//   成功返回 true 并写出结果。
+// 装载期整数/进制字面量归约（对齐 C# LexicalAnalyzer.ReadInt64）：
+//   0x.. 十六进制、0b.. 二进制；`e/E` 使用十进制指数，`p/P` 使用二进制指数
+//   （如 `1e3`、`0x1p4`、`0b1p10`）。
+//   成功后 AST 统一只保存 qint64；Expression 求值不再从文本重新转换进制。
+//   失败返回 false，由装载调用方生成 expr-parse/decl-error 诊断。
 [[nodiscard]] bool parseIntegerLiteral(const QString& text, qint64& out);
 
 class ExpressionNode {

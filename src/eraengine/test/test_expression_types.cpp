@@ -298,7 +298,11 @@ int main(int argc, char* argv[]) {
     qDebug() << "Compatibility boundaries";
     const QList<QPair<QString, qint64>> numbers = {
         {"012", 12}, {"0x1e3", 483}, {"0x1p10", 65536}, {"0b1p10", 4},
-        {"3e-1", 0}, {"9007199254740993p0", 9007199254740993LL},
+        {"3e-1", 0}, {"0x1p4", 16},
+        {"9007199254740993p1", 18014398509481986LL},
+        {"9007199254740993e1", 90071992547409930LL},
+        {"9223372036854775807p-1", 4611686018427387903LL},
+        {"0x8000000000000000p0", std::numeric_limits<qint64>::min()}, {"9007199254740993p0", 9007199254740993LL},
         {"0xFFFFFFFFFFFFFFFF", -1}, {"0x8000000000000000", std::numeric_limits<qint64>::min()}
     };
     for (const auto& [text, expected] : numbers) {

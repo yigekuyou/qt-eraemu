@@ -20,6 +20,7 @@
 #include "operator_table.h"
 #include <cmath>
 #include <bit>
+#include <limits>
 #include <stdexcept>
 #include <QJsonArray>
 #include <QJsonValue>
@@ -74,9 +75,22 @@ bool parseIntegerLiteral(const QString& text, qint64& out) {
     // C# casts the exponent to Int32 without overflow checking.
     const qint32 power = std::bit_cast<qint32>(quint32(exponent));
     if (power == 0) { out = significand; return true; }
-    const double d = double(significand) * std::pow(marker == 'p' ? 2.0 : 10.0, double(power));
-    if (!std::isfinite(d) || d < -0x1p63 || d >= 0x1p63) return false;
-    out = qint64(d);
+    // 指数数字沿尾数进制读取；p/P 的底数为 2，e/E 的底数为 10。
+    // 用整数乘除归约，避免 double 在 2^53 以上丢失低位。
+    const quint64 factor = marker == 'p' ? 2 : 10;
+    const bool negative = significand < 0;
+    quint64 magnitude = negative ? quint64(0) - quint64(significand) : quint64(significand);
+    const quint64 limit = negative ? (quint64(1) << 63) : quint64(std::numeric_limits<qint64>::max());
+    qint64 remaining = power;
+    if (remaining > 0) {
+        while (remaining-- > 0 && magnitude != 0) {
+            if (magnitude > limit / factor) return false;
+            magnitude *= factor;
+        }
+    } else {
+        while (remaining++ < 0 && magnitude != 0) magnitude /= factor;
+    }
+    out = std::bit_cast<qint64>(negative ? quint64(0) - magnitude : magnitude);
     return true;
 }
 

@@ -24,6 +24,8 @@
 #include <QVariantMap>
 #include <QVariantList>
 #include <QAbstractListModel>
+#include <QSortFilterProxyModel>
+#include <QVector>
 #include <QHash>
 #include <QtQml/qqmlregistration.h>
 #include "console_types.h"
@@ -56,6 +58,69 @@
 // 缓冲下标会被头部裁剪/CLEARLINE 平移，serial 不会 —— 缓存只在
 // [firstSerial, lastSerial] 区间外清理孤儿条目，永不整表作废。
 // ---------------------------------------------------------------------------
+class ConsoleBackend;
+
+// 历史视图按源行分流；显式刷新避免依赖已废弃的 invalidateFilter API。
+class ConsoleLineProxyModel final : public QSortFilterProxyModel {
+    Q_OBJECT
+public:
+    enum class ViewPart { History, Stage };
+    explicit ConsoleLineProxyModel(ViewPart part, QObject* parent = nullptr)
+        : QSortFilterProxyModel(parent), m_part(part) {}
+    void setStageStart(int row) { m_stageStart = qMax(0, row); }
+    void setStageVisible(bool on) { m_stageVisible = on; }
+    void refresh() { beginResetModel(); endResetModel(); }
+protected:
+    bool filterAcceptsRow(int sourceRow, const QModelIndex& sourceParent) const override {
+        Q_UNUSED(sourceParent);
+        if (!m_stageVisible) return m_part == ViewPart::History;
+        return m_part == ViewPart::History ? sourceRow < m_stageStart : sourceRow >= m_stageStart;
+    }
+private:
+    ViewPart m_part;
+    int m_stageStart = 0;
+    bool m_stageVisible = false;
+};
+
+// 舞台是帧边界发布的稳定快照，不直接观察正在修改的历史源模型。
+class ConsoleStageSnapshotModel final : public QAbstractListModel {
+    Q_OBJECT
+public:
+    explicit ConsoleStageSnapshotModel(QObject* parent = nullptr) : QAbstractListModel(parent) {}
+    int rowCount(const QModelIndex& parent = {}) const override { return parent.isValid() ? 0 : m_rows.size(); }
+    QVariant data(const QModelIndex& index, int role) const override {
+        if (!index.isValid() || index.row() < 0 || index.row() >= m_rows.size()) return {};
+        return m_rows.at(index.row()).value(role);
+    }
+    QHash<int, QByteArray> roleNames() const override {
+        return {{Qt::UserRole + 1, "blocks"}, {Qt::UserRole + 2, "lineIndex"},
+                {Qt::UserRole + 3, "spanRows"}};
+    }
+    void setRows(const QVector<QHash<int, QVariant>>& rows) {
+        const int common = qMin(m_rows.size(), rows.size());
+        for (int i = 0; i < common; ++i) {
+            if (m_rows.at(i) != rows.at(i)) {
+                m_rows[i] = rows.at(i);
+                emit dataChanged(index(i), index(i));
+            }
+        }
+        if (rows.size() < m_rows.size()) {
+            beginRemoveRows({}, rows.size(), m_rows.size() - 1);
+            m_rows.resize(rows.size());
+            endRemoveRows();
+        } else if (rows.size() > m_rows.size()) {
+            const int first = m_rows.size();
+            beginInsertRows({}, first, rows.size() - 1);
+            m_rows = rows;
+            endInsertRows();
+            return;
+        }
+        m_rows = rows;
+    }
+private:
+    QVector<QHash<int, QVariant>> m_rows;
+};
+
 class ConsoleBackend : public QAbstractListModel {
     Q_OBJECT
     QML_NAMED_ELEMENT(ConsoleBackend)
@@ -79,6 +144,10 @@ class ConsoleBackend : public QAbstractListModel {
     Q_PROPERTY(int gridRows READ gridRows NOTIFY lineCountChanged)
     // 本体即行模型（QML ListView 直接用；CONSTANT：指针生命周期 = 后端本身）
     Q_PROPERTY(QAbstractListModel* lineModel READ lineModel CONSTANT)
+    Q_PROPERTY(QAbstractItemModel* historyModel READ historyModel CONSTANT)
+    Q_PROPERTY(QAbstractItemModel* stageModel READ stageModel CONSTANT)
+    Q_PROPERTY(int stageStart READ stageStart NOTIFY stageChanged)
+    Q_PROPERTY(bool stageMode READ stageMode WRITE setStageMode NOTIFY stageChanged)
 
 public:
     enum Roles {
@@ -88,6 +157,12 @@ public:
     };
 
     explicit ConsoleBackend(QObject* parent = nullptr);
+
+    [[nodiscard]] QAbstractItemModel* historyModel() { return &m_historyModel; }
+    [[nodiscard]] QAbstractItemModel* stageModel() { return &m_stageSnapshot; }
+    [[nodiscard]] int stageStart() const { return m_stageStart; }
+    [[nodiscard]] bool stageMode() const { return m_stageMode; }
+    void setStageMode(bool on) { if (m_stageMode == on) return; m_stageMode = on; updateStageModels(); }
 
     // ---- QAbstractListModel ----
     [[nodiscard]] int rowCount(const QModelIndex& parent = QModelIndex()) const override;
@@ -230,6 +305,7 @@ signals:
     void cleared();
     void frameMsChanged();
     void generationChanged();
+    void stageChanged();
     void inputRequested(const QString& kind);
     void waitingInputChanged();
     void mouseKeySubmitted(int type, int r1, int r2, int r3, int r4);
@@ -266,9 +342,15 @@ private:
     void pruneTailCache() const;
     void invalidateLineCache();
     void notifyButtonRowsChanged();
+    void updateStageModels();
 
     ConsoleBuffer m_buffer;
     ConsoleLayout m_layout;
+    ConsoleLineProxyModel m_historyModel{ConsoleLineProxyModel::ViewPart::History, this};
+    ConsoleLineProxyModel m_stageModel{ConsoleLineProxyModel::ViewPart::Stage, this};
+    ConsoleStageSnapshotModel m_stageSnapshot{this};
+    int m_stageStart = 0;
+    bool m_stageMode = false;
 
     // ---- 「当前行」打印缓冲（C# PrintStringBuffer）----
     QList<ConsoleSpan>    m_pendingParts;     // 还没成段的 part（m_stringList/builder）

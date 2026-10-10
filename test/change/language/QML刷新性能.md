@@ -1,46 +1,76 @@
-# 移植差异 · QML 刷新性能与 eraTetris
+# 移植差异 · QML 历史模型与当前舞台分离
 
-## 定位结果
+## Qt 官方依据
 
-`eraTetris/ERB/MAIN.ERB` 的游戏循环每次绘制都会：
+Qt 6.11 文档《Using C++ Models with Qt Quick Views》说明，复杂动态数据应使用 `QAbstractItemModel`/`QAbstractListModel`，模型通过 `dataChanged()`、`beginInsertRows()`、`beginRemoveRows()` 等标准信号通知 QML view。
 
-1. `DRAW_STAGE()` 输出整个棋盘；
-2. 输出控制按钮；
-3. `TONEINPUT` 等待输入；
-4. `CLEARLINE LINECOUNT - FIRSTLINE` 删除本轮画面；
-5. 收到输入后重新执行循环。
+Qt 6.11 `ListView` 文档说明：
 
-因此棋盘内容变化时，删除旧行并插入新行是脚本显示语义要求，不能简单改成只更新一两个 QML 属性，否则会留下旧方块或旧图层。
+- view 会按可见区域创建 delegate，并可用 `reuseItems` 复用；
+- delegate 可能被销毁和重新创建，不应在 delegate 中保存状态；
+- 模型变化通常按帧批处理，`forceLayout()` 才会立即处理挂起变化；
+- `QSortFilterProxyModel` 可以过滤不应显示的模型项。
 
-此前 `ConsoleBackend::notifyInputRequested()` 和 `notifyInputDone()` 还会对整个模型发出：
+Qt 6.11 `Repeater` 文档说明，模型变化会触发 delegate 的添加和移除；因此只用过滤代理分离历史与舞台，仍可能让当前舞台随着源模型 `CLEARLINE` 的删行/插行重建。
 
-```cpp
-emit dataChanged(index(0), index(rowCount() - 1));
+## 当前实现
+
+`ConsoleBackend` 现在提供两种 QML 模型：
+
+- `historyModel`：历史日志代理模型，负责滚动、回看和日志行；
+- `stageModel`：独立的 `ConsoleStageSnapshotModel`，负责当前舞台。
+
+`stageModel` 只在 `ConsoleBackend::flush()` 的帧边界发布：
+
+```text
+脚本 CLEARLINE
+  -> 修改历史源缓冲
+脚本重新 PRINT 完整棋盘
+  -> flush()
+  -> 生成舞台快照
+  -> 逐行比较旧快照
+  -> 只对变化行发 dataChanged
 ```
 
-输入状态实际只改变按钮的 `clickable` role，却会让所有文本、图片和 shape 行都重新取 `BlocksRole`，造成额外的整屏绑定重算。
+这样 QML 不会看到 `CLEARLINE` 与下一次 `PRINT` 之间的空舞台。
 
-## 修复
+当舞台行数相同时：
 
-新增 `notifyButtonRowsChanged()`：
+- 不发送 `rowsRemoved`；
+- 不发送 `rowsInserted`；
+- 只对内容变化的舞台行发送 `dataChanged`；
+- 已有舞台 delegate 可以保留和复用。
 
-- 只扫描含 `ConsoleSegment::isButton` 的行；
-- 只删除这些行的扁平化缓存；
-- 只发该行的 `dataChanged`；
-- `roles` 限定为 `ConsoleBackend::BlocksRole`；
-- 普通文本、图片和 shape 行不会因为输入状态切换而重新生成。
+只有舞台行数确实变化时，才发送行插入或删除信号。
 
-Qt 官方 `QAbstractItemModel::dataChanged()` 文档规定，`topLeft/bottomRight` 可以限定变化范围，`roles` 可以限定实际变化的 role；空 role 列表才表示全部 role。Qt Quick 性能文档也要求减少绑定重算、保持 view delegate 简单，并使用适当的 C++ 模型增量通知。
+每个舞台 block 仍保存源模型的 `lineIndex`，所以按钮点击、跨行图片和调试定位继续使用原始控制台行号。
+
+## QML 结构
+
+`Console.qml` 同时保留两个 `ListView`：
+
+```text
+历史 ListView：可滚动，使用 historyModel
+当前舞台 ListView：固定在视口，使用 stageModel，interactive=false
+```
+
+舞台使用与历史相同的 `LineDelegate`，但只负责当前帧的固定行；历史视图仍保留原有 PageUp/PageDown/End 和滚动条语义。
+
+`EraRender.qml` 开启：
+
+```qml
+stageMode: true
+```
+
+测试夹具默认仍关闭舞台模式，保持原有 QML 行模型测试的行号语义。
 
 ## 性能边界
 
-这项修复消除了输入状态切换带来的额外全量刷新。`CLEARLINE` 后重新绘制棋盘仍会产生真实的行删除/插入，这是 eraTetris 的当前脚本输出方式，属于必要重画。
+这项改动消除了 Tetris 每轮 `CLEARLINE` 对当前舞台 delegate 的直接删行/插行影响。脚本仍会重画整个棋盘，C++ 仍需生成新舞台行数据，但 QML 当前舞台不再把每次历史源模型删行/插行当作自己的生命周期变化。
 
-继续优化时应使用 Qt Creator QML Profiler 和 `ConsoleBackend::perfReport()` 测量，重点区分：
+后续性能分析应使用：
 
-- `dataChanged` 的行数和 role；
-- `beginRemoveRows` / `beginInsertRows` 的行数；
-- `lineFlattenBuilds` / `lineFlattenMs`；
-- `ConsoleBlock` delegate 与 `glyphRuns` 的创建数量。
-
-不要为了减少模型信号而发送不完整的棋盘数据，也不要在 QML 每帧用 JavaScript 重建整个舞台。
+- `ConsoleBackend::perfReport()` 的 `lineFlattenBuilds` / `lineFlattenMs`；
+- Qt Creator QML Profiler；
+- `stageModel` 的 `dataChanged`、`rowsInserted`、`rowsRemoved` 信号计数；
+- QML delegate 创建和复用数量。

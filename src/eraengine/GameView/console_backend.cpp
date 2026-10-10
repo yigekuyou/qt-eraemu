@@ -55,6 +55,9 @@ bool inputExpectsAnyKey(const QString& kind) {
 ConsoleBackend::ConsoleBackend(QObject* parent)
     : QAbstractListModel(parent)
 {
+    m_historyModel.setSourceModel(this);
+    m_historyModel.setStageStart(0);
+    m_stageModel.setStageStart(0);
     m_timer.setInterval(m_frameMs);
     m_timer.setTimerType(Qt::CoarseTimer);
     connect(&m_timer, &QTimer::timeout, this, &ConsoleBackend::tick);
@@ -608,6 +611,7 @@ void ConsoleBackend::clearAll() {
     emit generationChanged();
     emit cleared();
     emit lineCountChanged();
+    updateStageModels();
 }
 
 void ConsoleBackend::setAlignment(ConsoleAlign align) {
@@ -663,6 +667,8 @@ void ConsoleBackend::flush() {
         m_publishedLineCount = n;
         emit lineCountChanged();
     }
+    // 帧边界统一发布舞台快照，避免 CLEARLINE 到 PRINT 中间状态被呈现。
+    updateStageModels();
 }
 
 void ConsoleBackend::tick() {
@@ -751,6 +757,33 @@ void ConsoleBackend::setMaxLog(int lines) {
 // 输入桥接
 // ---------------------------------------------------------------------------
 
+void ConsoleBackend::updateStageModels() {
+    const int total = rowCount();
+    const int start = qMax(0, total - m_layout.gridRows());
+    const bool visible = m_stageMode && start < total;
+    const int oldStart = m_stageStart;
+    const bool oldVisible = m_stageMode && m_stageModel.rowCount() > 0;
+    QVector<QHash<int, QVariant>> rows;
+    if (visible) {
+        rows.reserve(total - start);
+        for (int row = start; row < total; ++row) {
+            QHash<int, QVariant> item;
+            item.insert(BlocksRole, lineBlocks(row));
+            item.insert(LineIndexRole, row);
+            item.insert(SpanRowsRole, lineSpanRows(displayLine(row)));
+            rows.append(item);
+        }
+    }
+    m_stageSnapshot.setRows(rows);
+    m_stageStart = start;
+    m_historyModel.setStageStart(start);
+    m_historyModel.setStageVisible(visible);
+    // 代理只有在舞台边界改变时需要重算，普通舞台 dataChanged 不触碰历史视图。
+    if (oldStart != start || oldVisible != visible)
+        m_historyModel.refresh();
+    emit stageChanged();
+}
+
 void ConsoleBackend::notifyButtonRowsChanged() {
     for (int row = 0; row < rowCount(); ++row) {
         const auto line = displayLine(row);
@@ -763,6 +796,8 @@ void ConsoleBackend::notifyButtonRowsChanged() {
             m_lineCache.remove(m_buffer.at(row).serial);
         emit dataChanged(index(row), index(row), {BlocksRole});
     }
+    // 输入通道改变按钮可点击状态，舞台快照也必须在同一更新点重建。
+    updateStageModels();
 }
 
 void ConsoleBackend::notifyInputRequested(const QString& kind, const QVariant& defaultValue) {

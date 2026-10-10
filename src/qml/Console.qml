@@ -66,7 +66,8 @@ FocusScope {
 
     property ConsoleBackend backend: null   // ConsoleBackend（兼行模型）
     property EraEngine engine: null
-    readonly property ConsoleBackend lineModel: backend
+    readonly property var lineModel: backend ? backend.historyModel : null
+    readonly property var stageModel: backend ? backend.stageModel : null
     // 标准标题画面（QML）是否显示：为真时隐藏底部输入行与原始输入层。
     property bool titleActive: false
     property int lineHeight: 19
@@ -111,24 +112,25 @@ FocusScope {
                 foreColor: root.foreColor
                 focusColor: root.focusColor
                 logColor: root.logColor
-                isBacklog: !view.atTail    // C# isBackLog：不在末尾 = 履历（回看）
+                isBacklog: stageView.visible ? false : !view.atTail    // 舞台始终是当前画面；历史视图按滚动位置回看
             }
         }
     }
 
     // ---- 测试/调试入口（委托按需实例化，可能为 null）----
     // 模型行数（ListView.count 的透传；根 Item 上没有 count）
-    readonly property int rowCount: view.count
+    readonly property bool showingStage: root.backend && root.backend.stageMode && stageView.visible
+    readonly property int rowCount: showingStage ? stageView.count : view.count
     // 立即完成 ListView 的挂起布局（同步建出模型变更对应的委托；测试用）
     function syncView() {
-        view.forceLayout();
+        (showingStage ? stageView : view).forceLayout();
     }
     function lineItem(row) {
-        return view.itemAtIndex(row);
+        return (showingStage ? stageView : view).itemAtIndex(row);
     }
     // 第 row 行的第 i 个区块对象（行内顺序 = C++ 打平顺序）
     function blockAt(row, i) {
-        const li = view.itemAtIndex(row);
+        const li = (showingStage ? stageView : view).itemAtIndex(row);
         if (!li)
             return null;
         let n = 0;
@@ -145,8 +147,9 @@ FocusScope {
     // 存活委托里所有区块（诊断用；与 C++ 的 screenBlocks 不同源 —— 只含已建出的）
     function aliveBlockCount() {
         let n = 0;
-        for (let r = 0; r < view.count; ++r) {
-            const li = view.itemAtIndex(r);
+        const activeView = showingStage ? stageView : view;
+        for (let r = 0; r < activeView.count; ++r) {
+            const li = activeView.itemAtIndex(r);
             if (!li)
                 continue;
             for (let k = 0; k < li.children.length; ++k)
@@ -205,6 +208,7 @@ FocusScope {
         ListView {
             id: view
             objectName: "consoleListView"
+            visible: true
             // 右侧让出滚动条宽度：view 收窄到滚动条左缘，最右列文字
             // 不再被滑条盖住；cellWidth 按收窄后的宽度重算，网格仍然满宽
             anchors.left: parent.left
@@ -214,6 +218,7 @@ FocusScope {
             anchors.bottom: parent.bottom
             clip: true                     // 溢出的跨行图在视口边缘裁剪
             model: root.lineModel
+            // 舞台显示时历史视图仍保留为回看源；舞台覆盖在其上，避免切换导致历史 delegate 重建。
             // Qt 文档（ListView::delegateModelAccess，Qt 6.10+）：模型是只读的
             // C++ 模型（ConsoleBackend），委托只**读** role，不写回模型 —— 用
             // DelegateModel.ReadOnly 省掉默认 Qt5ReadWrite 的写保护开销。
@@ -294,6 +299,27 @@ FocusScope {
                 anchors.bottom: parent.bottom
                 width: root.scrollBarWidth
             }
+        }
+
+        // 当前舞台固定在视口，历史模型独立保留；同一源行的点击信息保留 source row。
+        ListView {
+            id: stageView
+            objectName: "consoleStageView"
+            anchors.left: parent.left
+            anchors.right: parent.right
+            anchors.rightMargin: root.scrollBarWidth
+            anchors.top: parent.top
+            anchors.bottom: parent.bottom
+            visible: root.backend && root.backend.stageMode && count > 0
+            model: root.stageModel
+            interactive: false
+            clip: true
+            reuseItems: true
+            delegateModelAccess: DelegateModel.ReadOnly
+            cacheBuffer: root.cellHeight * Math.max(2, root.backend ? root.backend.maxSpanReach : 2)
+            delegate: LineDelegate {}
+            onCountChanged: Qt.callLater(positionViewAtEnd)
+            Component.onCompleted: positionViewAtEnd()
         }
 
         MouseArea {

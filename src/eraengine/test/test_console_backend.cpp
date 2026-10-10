@@ -195,6 +195,20 @@ int main(int argc, char* argv[]) {
         console.newline();
         console.clickAt(console.lineCount() - 1, 0);
         check(submitted == 3, "new generation button clickable");
+
+        // 输入状态只影响按钮 role；普通文本行不应收到全量 dataChanged。
+        ConsoleBackend partial;
+        partial.print("静态文本");
+        partial.newline();
+        partial.printButton("按钮", 1);
+        partial.newline();
+        int changedRows = 0;
+        QObject::connect(&partial, &QAbstractItemModel::dataChanged,
+                         [&](const QModelIndex&, const QModelIndex&, const QList<int>& roles) {
+            if (roles == QList<int>{ConsoleBackend::BlocksRole}) ++changedRows;
+        });
+        partial.notifyInputRequested("INPUT");
+        check(changedRows == 1, "输入状态只更新含按钮的行和 BlocksRole");
     }
     {
         ConsoleBackend c;

@@ -751,16 +751,27 @@ void ConsoleBackend::setMaxLog(int lines) {
 // 输入桥接
 // ---------------------------------------------------------------------------
 
+void ConsoleBackend::notifyButtonRowsChanged() {
+    for (int row = 0; row < rowCount(); ++row) {
+        const auto line = displayLine(row);
+        bool hasButton = false;
+        for (const auto& segment : line.segments) {
+            if (segment.isButton) { hasButton = true; break; }
+        }
+        if (!hasButton) continue;
+        if (row < m_buffer.count())
+            m_lineCache.remove(m_buffer.at(row).serial);
+        emit dataChanged(index(row), index(row), {BlocksRole});
+    }
+}
+
 void ConsoleBackend::notifyInputRequested(const QString& kind, const QVariant& defaultValue) {
     m_inputKind = kind;
     m_inputDefault = defaultValue;
     m_waitingInput = true;
-    // clickable is derived from the active input channel; invalidate cached
-    // block roles before the view receives the input notification.
-    invalidateLineCache();
     flush();
-    if (rowCount() > 0)
-        emit dataChanged(index(0), index(rowCount() - 1));
+    // Only button rows depend on the input channel. Preserve text/image caches.
+    notifyButtonRowsChanged();
     emit inputRequested(kind);
     emit waitingInputChanged();
 }
@@ -773,9 +784,7 @@ void ConsoleBackend::notifyInputDone() {
     m_inputKind.clear();
     m_inputDefault = QVariant();
     m_waitingInput = false;
-    invalidateLineCache();
-    if (rowCount() > 0)
-        emit dataChanged(index(0), index(rowCount() - 1));
+    notifyButtonRowsChanged();
     emit waitingInputChanged();
 }
 

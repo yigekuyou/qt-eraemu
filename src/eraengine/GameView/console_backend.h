@@ -265,6 +265,7 @@ private:
     void pruneHeadCacheIfNeeded() const;
     void pruneTailCache() const;
     void invalidateLineCache();
+    void notifyButtonRowsChanged();
 
     ConsoleBuffer m_buffer;
     ConsoleLayout m_layout;

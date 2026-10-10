@@ -92,3 +92,28 @@ QString ParseDiagnostics::summarize() const {
     return QCoreApplication::translate("ParseDiagnostics", "%1（%2）").arg(head.join(QStringLiteral(" / ")),
                                           cats.join(QStringLiteral(" / ")));
 }
+
+#include "expression_lexer.h"
+
+void diagnoseIntegerLiterals(const QString& expression, const QString& file, int line,
+                             int column, ParseDiagnostics& diagnostics) {
+    ExpressionLexer lexer;
+    for (const auto& token : lexer.tokenize(expression)) {
+        if (token.type() == TokenType::STRFORM_AT || token.type() == TokenType::YEN_AT) {
+            // FORM 文本本身不是数值表达式；只在插值 resolver 中检查数字。
+            continue;
+        }
+        if (token.type() != TokenType::NUMBER || token.integerValid()) continue;
+        const int tokenColumn = column + token.column() - token.value().size();
+        bool alreadyReported = false;
+        for (const auto& d : diagnostics.all()) {
+            if (d.code == QLatin1String(DiagCode::kNumericConversion) && d.file == file
+                && d.line == line && d.column == tokenColumn) { alreadyReported = true; break; }
+        }
+        if (alreadyReported) continue;
+        diagnostics.add(DiagSeverity::Error, DiagCode::kNumericConversion, file, line,
+            tokenColumn, token.value().size(),
+            QCoreApplication::translate("ParseDiagnostics", "整数转换失败（格式错误或超出 qint64 范围）：%1")
+                .arg(token.value()), expression);
+    }
+}

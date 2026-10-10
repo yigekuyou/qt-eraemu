@@ -94,6 +94,9 @@ public:
     int line() const { return m_line; }
     int column() const { return m_column; }
 
+    bool integerValid() const { return m_integerValid; }
+    qint64 integerValue() const { return m_integerValue; }
+
     bool isOperator() const { return m_type >= TokenType::EQUALS && m_type < TokenType::UNKNOWN; }
     bool isLiteral() const { return m_type == TokenType::NUMBER || m_type == TokenType::STRING; }
     bool isIdentifier() const { return m_type == TokenType::IDENTIFIER; }
@@ -101,6 +104,8 @@ public:
 private:
     TokenType m_type = TokenType::UNKNOWN;
     QString m_value;
+    qint64 m_integerValue = 0;
+    bool m_integerValid = false;
     int m_line;
     int m_column;
 };

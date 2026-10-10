@@ -41,6 +41,7 @@ int errorCode(const QJsonObject& response) { return response.value("error").toOb
 class TestMcp : public QObject {
     Q_OBJECT
 private slots:
+    void numericConversionDiagnostics();
     void lifecycle();
     void discoveryAndStructuredResults();
     void argumentValidation_data();
@@ -50,6 +51,23 @@ private slots:
     void workspaceDocuments();
     void encodedFileAndEmptySource();
 };
+
+void TestMcp::numericConversionDiagnostics() {
+    McpServer server;
+    ready(server);
+    const auto summary = data(call(server, "era_validate", {{"source",
+        "@MAIN\nA = 0x10000000000000000\nPRINTV 1e309\nPRINT 1e309\n"}}));
+    int errors = 0;
+    for (const auto& value : summary.value("diagnostics").toArray()) {
+        const auto d = value.toObject();
+        if (d.value("code") != QJsonValue("numeric-conversion")) continue;
+        QCOMPARE(d.value("severity").toString(), QString("error"));
+        QVERIFY(d.value("line").toInt() == 1 || d.value("line").toInt() == 2);
+        QVERIFY(d.value("endCol").toInt() > d.value("startCol").toInt());
+        ++errors;
+    }
+    QCOMPARE(errors, 2);
+}
 
 void TestMcp::lifecycle() {
     McpServer server;

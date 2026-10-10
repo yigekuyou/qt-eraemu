@@ -61,6 +61,20 @@ int main(int argc, char** argv) {
         {caller, QStringLiteral("#DEFINE SCRIPT_ONLY\n@MAIN\n[IF SCRIPT_ONLY]\nBAD_INSTRUCTION\n[ENDIF]\n")}});
     check(!hasCode(erbDefine[caller], QStringLiteral("unknown-instruction")),
           "script defines must not enter the global header macro table");
+    const auto numeric = analyzer.analyzeWorkspace({
+        {header, QStringLiteral("#DIM CONST BAD = 1e309\n#DIMS TEXT\n")},
+        {caller, QStringLiteral("@MAIN\nA = 9223372036854775808\n"
+                                "TEXT = raw 1e309\nTEXT = value {1e309}\n")}});
+    int numericErrors = 0;
+    for (const auto& d : numeric[caller].attributed) {
+        if (d.code != QLatin1String("numeric-conversion")) continue;
+        check(d.severity == QLatin1String("error"), "numeric failures must be errors");
+        check(d.line == 1 || d.line == 3, "raw FORM text must not be diagnosed as a number");
+        ++numericErrors;
+    }
+    check(numericErrors == 2, "assignment and FORM numeric diagnostics");
+    check(hasCode(numeric[header], QStringLiteral("numeric-conversion")),
+          "declaration numeric diagnostic");
     check(analyzer.analyzeWorkspace({}).isEmpty(), "empty workspace");
     return failures == 0 ? 0 : 1;
 }

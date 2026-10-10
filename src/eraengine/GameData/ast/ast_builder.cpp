@@ -598,12 +598,18 @@ QStringList AstBuilder::splitOperands(const QString& text, bool splitWhitespace)
 // ---------------------------------------------------------------------------
 LogicalLine AstBuilder::build(const QString& rawLine,
                               const ScriptPosition& position,
-                              const AstResolver& resolve,
+                              const AstResolver& resolveInput,
                               const AstResolver& resolveQuiet,
                               ParseDiagnostics* diagnostics) {
     LogicalLine line;
     line.raw = rawLine;
     line.position = position;
+    const AstResolver resolve = resolveInput ? AstResolver([&](const QString& expression) -> QSharedPointer<ExpressionNode> {
+        if (diagnostics) diagnoseIntegerLiterals(expression, position.filename,
+            position.lineNumber, position.column + qMax(0, int(rawLine.indexOf(expression))), *diagnostics);
+        return resolveInput(expression);
+    }) : AstResolver{};
+
 
     // 防御：调用方可能传入带行终止符的行（CRLF）。C# 的行永远不会带 CR。
     QString raw = rawLine;

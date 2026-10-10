@@ -62,9 +62,8 @@ QSharedPointer<ExpressionNode> ExpressionParser::parse(const QList<ExpressionTok
     }
 
     for (const auto& token : tokens) {
-        qint64 value = 0;
         if (token.type() == TokenType::UNKNOWN
-            || (token.type() == TokenType::NUMBER && !parseIntegerLiteral(token.value(), value))) return nullptr;
+            || (token.type() == TokenType::NUMBER && !token.integerValid())) return nullptr;
     }
     QSharedPointer<ExpressionNode> ast = parseExpression();
     // 容忍尾随的 END_OF_FILE；其余多余 token 视为解析失败。

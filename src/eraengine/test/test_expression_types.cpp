@@ -308,6 +308,8 @@ int main(int argc, char* argv[]) {
     for (const auto& [text, expected] : numbers) {
         auto n = parse(parser, text);
         check(n && evaluator.evaluate(*n, &storage).toLongLong() == expected, text);
+        check(n && evaluator.evaluate(*n, &storage).typeId() == QMetaType::LongLong,
+              text + " uses the single qint64 AST value type");
     }
     for (const char* text : {"0x", "0b2", "1e", "1e+", "1e309", "0x10000000000000000",
                                 "9223372036854775808", "!!1", "-~1", "++1", "!VA++", "VA++++",

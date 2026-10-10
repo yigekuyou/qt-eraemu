@@ -99,6 +99,23 @@ int errorCode(const QJsonObject& reply) {
 class TestLsp : public QObject {
     Q_OBJECT
 private slots:
+    void numericConversionDiagnostics() {
+        LspServer server;
+        initialize(server);
+        const auto replies = open(server, "@MAIN\nA = 9223372036854775808\nPRINTV 1e309\nPRINT 1e309\n");
+        QVERIFY(!replies.isEmpty());
+        int errors = 0;
+        for (const auto& value : replies.first().value("params").toObject().value("diagnostics").toArray()) {
+            const auto d = value.toObject();
+            if (d.value("code") != QJsonValue("numeric-conversion")) continue;
+            QCOMPARE(d.value("severity").toInt(), 1);
+            const auto start = d.value("range").toObject().value("start").toObject();
+            QVERIFY(start.value("line").toInt() == 1 || start.value("line").toInt() == 2);
+            QCOMPARE(start.value("character").toInt(), start.value("line").toInt() == 1 ? 4 : 7);
+            ++errors;
+        }
+        QCOMPARE(errors, 2);
+    }
     void diskWorkspaceOverlay() {
         QTemporaryDir dir;
         QVERIFY(dir.isValid());

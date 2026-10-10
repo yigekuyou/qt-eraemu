@@ -61,6 +61,7 @@ enum class DiagSeverity : quint8 {
 namespace DiagCode {
 inline constexpr auto kPreprocess         = "preprocess";          // 预处理（[宏]/行连接…）
 inline constexpr auto kUnknownInstruction = "unknown-instruction"; // 未登记的指令名
+inline constexpr auto kNumericConversion  = "numeric-conversion"; // 非法或超范围整数字面量
 inline constexpr auto kExprParse          = "expr-parse";          // 表达式归约失败
 inline constexpr auto kArgCheck           = "arg-check";           // 参数个数/类型校验
 inline constexpr auto kSharpLine          = "sharp-line";          // # 行非法位置/缺名
@@ -169,5 +170,9 @@ private:
     QList<ParseDiagnostic> m_items;
     QStringList m_texts;
 };
+
+// 仅供表达式上下文使用；普通 PRINT/字符串原文不得送入数字诊断。
+void diagnoseIntegerLiterals(const QString& expression, const QString& file, int line,
+                             int column, ParseDiagnostics& diagnostics);
 
 #endif  // ERAENGINE_AST_PARSE_DIAGNOSTIC_H

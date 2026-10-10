@@ -1176,6 +1176,10 @@ void EraParseTable::parseVariableDeclaration(const LogicalLine& line, const QStr
         return;
     }
 
+    const int priorDiagnostics = m_diagnostics.size();
+    diagnoseIntegerLiterals(rest, line.position.filename, line.position.lineNumber,
+                            line.position.column + qMax(0, int(line.raw.indexOf(rest))), m_diagnostics);
+    if (m_diagnostics.size() != priorDiagnostics) return; // 错误初值不得登记成 0。
     try {
         const UserDefinedVariableData d =
             UserDefinedVariableData::create(rest, isStr, /*isPrivate=*/true, line.position);
@@ -1487,6 +1491,8 @@ void EraParseTable::finalizeParse() {
                 if (!rawForm) {
                     const auto values = AstBuilder::assignmentValues(line.arguments[1].raw);
                     for (const auto& text : values) {
+                        diagnoseIntegerLiterals(text, line.position.filename, line.position.lineNumber,
+                            line.position.column + qMax(0, int(line.raw.indexOf(text))), m_diagnostics);
                         auto ast = cloneExpression(expressionAstInScope(text, line.ownerFunction, true));
                         if (ast) { VariableTable::applyTypes(*ast, m_variables, line.ownerFunction); validate(ast); }
                         else {
@@ -1604,7 +1610,9 @@ void EraParseTable::applyStringAssignments() {
     for (auto sit = m_scripts.begin(); sit != m_scripts.end(); ++sit) {
         for (LogicalLine& line : sit.value().lines) {
             const QString owner = line.ownerFunction;
-            const AstResolver resolve = [this, owner](const QString& e) {
+            const AstResolver resolve = [this, owner, &line](const QString& e) {
+                diagnoseIntegerLiterals(e, line.position.filename, line.position.lineNumber,
+                    line.position.column + qMax(0, int(line.raw.indexOf(e))), m_diagnostics);
                 return expressionAstInScope(e, owner);
             };
             if (line.kind != LineKind::Instruction) continue;

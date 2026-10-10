@@ -16,10 +16,13 @@
  * along with this program.  If not, see <https://www.gnu.org/licenses/>.
  */
 #include "expression_lexer.h"
+#include "expression_ast.h"
 #include "strform_parser.h"   // findPercentEnd：@"…%"expr,width,align"…" 的跨度切分
 
 ExpressionToken::ExpressionToken(TokenType type, const QString& value, int line, int column)
-    : m_type(type), m_value(value), m_line(line), m_column(column) {}
+    : m_type(type), m_value(value), m_line(line), m_column(column) {
+    if (type == TokenType::NUMBER) m_integerValid = parseIntegerLiteral(value, m_integerValue);
+}
 
 ExpressionLexer::ExpressionLexer() : m_position(0), m_line(1), m_column(0) {}
 

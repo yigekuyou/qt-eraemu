@@ -187,10 +187,9 @@ LiteralNode::LiteralNode(const ExpressionToken& token)
         m_str = token.value();
     } else {
         m_type = OperandType::Int;
-        qint64 v = 0;
-        if (!parseIntegerLiteral(token.value(), v))
+        if (!token.integerValid())
             throw std::invalid_argument("Invalid or overflowing integer literal");
-        m_int = v;
+        m_int = token.integerValue();
     }
 }
 

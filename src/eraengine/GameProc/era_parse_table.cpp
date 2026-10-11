@@ -1333,7 +1333,6 @@ void EraParseTable::applyVariableTypes() {
                 line.printTemplate = QSharedPointer<CompiledPrintTemplate>::create(*line.printTemplate);
                 for (auto& part : line.printTemplate->parts) {
                     bind(part.expression);
-                    bind(part.buttonValueExpression);
                     for (auto& ast : part.attributes) bind(ast);
                 }
             }

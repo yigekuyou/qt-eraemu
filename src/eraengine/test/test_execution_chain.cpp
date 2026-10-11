@@ -121,6 +121,13 @@ int main(int argc, char* argv[]) {
     check(table.userFunction("DOUBLE") && table.userFunction("DOUBLE")->isMethod,
           "user function DOUBLE is method (#FUNCTION)");
 
+    // Compile every script before ownership transfers to the finalized table.
+    const QStringList waitSrc = {"@WAIT", "ONEINPUT", "JJ = RESULT"};
+    const QStringList outSrc = {"@OUT", "VA = 3", "PRINTFORML \"hello\"",
+                                "PRINT world", "PRINTFORML HP={VA}"};
+    check(table.loadScript("wait", buildLines(table, waitSrc)), "loadScript(wait)");
+    check(table.loadScript("out", buildLines(table, outSrc)), "loadScript(out)");
+
     table.finalizeParse();
     table.setEntryPoint("MAIN");
     const ExecState st = runner.runToCompletion();
@@ -140,12 +147,6 @@ int main(int argc, char* argv[]) {
     check(storage.getGlobalInt1D("KK", 0) == 42, "expression func DOUBLE(21) -> KK == 42");
 
     // ---- IO 挂起（只有等待输入才中断）---------------------------------
-    const QStringList waitSrc = {
-        "@WAIT",
-        "ONEINPUT",
-        "JJ = RESULT"
-    };
-    check(table.loadScript("wait", buildLines(table, waitSrc)), "loadScript(wait)");
     table.setEntryPoint("WAIT");
 
     qDebug() << "\n3) 只有等待 IO 才挂起";
@@ -164,9 +165,6 @@ int main(int argc, char* argv[]) {
     QObject::connect(&engine, &ExecutionEngine::consolePrint,
                      [&printed](const QString& t, bool nl) { printed.append({t.trimmed(), nl}); });
 
-    const QStringList outSrc = {"@OUT", "VA = 3", "PRINTFORML \"hello\"",
-                                "PRINT world", "PRINTFORML HP={VA}"};
-    check(table.loadScript("out", buildLines(table, outSrc)), "loadScript(out)");
     table.setEntryPoint("OUT");
     runner.runToCompletion();
     check(printed.size() == 3, "PRINTFORML + PRINT + PRINTFORM -> 3 consolePrint");

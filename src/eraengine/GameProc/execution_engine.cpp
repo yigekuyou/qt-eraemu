@@ -503,7 +503,7 @@ bool ExecutionEngine::handleVarSet(const LogicalLine& line, bool eachChara) {
 
     // ---- 引用变量（参数别名）----
     if (m_storage->hasParameter(name)) {
-        m_storage->setParameter(name, isString ? QVariant(svalue) : QVariant(value));
+        m_storage->setParameter(name, isString ? toVariant(FlatStringValue(svalue)) : QVariant(value));
         return true;
     }
 
@@ -1024,6 +1024,7 @@ bool ExecutionEngine::executeInstruction(const LogicalLine& line) {
     if (name == QLatin1String("HTML_PRINT")) {
         if (line.arguments.isEmpty() || !line.arguments.first().ast) return false;
         const auto value = getEvaluator().evaluate(*line.arguments.first().ast, m_storage, m_gameBaseData);
+        if (!value.isValid() || !isStringValue(value)) return false;
         emit consolePrintTemplate(valueMarkup(value));
         return true;
     }
@@ -1080,7 +1081,7 @@ bool ExecutionEngine::executeInstruction(const LogicalLine& line) {
             // AstBuilder 已把带引号的字面量标记为 isString 并去掉外层引号；
             // 再按 raw 解析会把 "123" 错当整数、把 "A" 错当变量。
             const auto evaluateOperand = [&](const Operand& operand) -> QVariant {
-                if (operand.isString) return QVariant(operand.raw);
+                if (operand.isString) return toVariant(flatString(QVariant(operand.raw)));
                 if (operand.ast) return ev.evaluate(*operand.ast, m_storage, m_gameBaseData);
                 throw std::runtime_error("Button operand has no load-time AST");
             };

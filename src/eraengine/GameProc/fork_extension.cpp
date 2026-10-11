@@ -31,6 +31,7 @@
 //   不引入第三方 XML 库：按文档语义**自己实现等价物**，只用已链接的 Qt6::Core。
 // ---------------------------------------------------------------------------
 
+#include "print_template.h"
 #include <QDir>
 #include <QDirIterator>
 #include <QFileInfo>
@@ -217,7 +218,7 @@ void registerEnumFamily(ExtensionRegistry& ext, const QString& base,
             [&ext, namesProvider, action](const QList<QVariant>& a,
                                           const QList<const ExpressionNode*>& nodes,
                                           QVariant& out) {
-                const QString pattern = a.value(0).toString();
+                const QString pattern = stringText(a.value(0));
                 const QStringList names = namesProvider ? namesProvider() : QStringList();
                 const qint64 n = enumNames(names, pattern, action, nodes,
                                            ext.services().storage);
@@ -259,7 +260,7 @@ void registerForkExtensions(ExtensionRegistry& ext)
     // ---------------- MAP_* （12 条，Creator.cs:265-278） ----------------
     ext.regExpr(QStringLiteral("MAP_CREATE"), OperandType::Int, 1, 1,
         [](const QList<QVariant>& a, const QList<const ExpressionNode*>&, QVariant& out) {
-            const QString key = a.value(0).toString();
+            const QString key = stringText(a.value(0));
             auto& store = mapStore();
             if (store.contains(key)) { out = QVariant::fromValue<qint64>(0); return true; }
             store.insert(key, OrderedMap{});
@@ -269,13 +270,13 @@ void registerForkExtensions(ExtensionRegistry& ext)
 
     ext.regExpr(QStringLiteral("MAP_EXIST"), OperandType::Int, 1, 1,
         [](const QList<QVariant>& a, const QList<const ExpressionNode*>&, QVariant& out) {
-            out = QVariant::fromValue<qint64>(mapStore().contains(a.value(0).toString()) ? 1 : 0);
+            out = QVariant::fromValue<qint64>(mapStore().contains(stringText(a.value(0))) ? 1 : 0);
             return true;
         });
 
     ext.regExpr(QStringLiteral("MAP_RELEASE"), OperandType::Int, 1, 1,
         [](const QList<QVariant>& a, const QList<const ExpressionNode*>&, QVariant& out) {
-            mapStore().remove(a.value(0).toString());      // C#：存在或不存在都返回 1
+            mapStore().remove(stringText(a.value(0)));      // C#：存在或不存在都返回 1
             out = QVariant::fromValue<qint64>(1);
             return true;
         });
@@ -283,9 +284,9 @@ void registerForkExtensions(ExtensionRegistry& ext)
     ext.regExpr(QStringLiteral("MAP_SET"), OperandType::Int, 3, 3,
         [](const QList<QVariant>& a, const QList<const ExpressionNode*>&, QVariant& out) {
             auto& store = mapStore();
-            const QString key = a.value(0).toString();
+            const QString key = stringText(a.value(0));
             if (!store.contains(key)) { out = QVariant::fromValue<qint64>(-1); return true; }
-            store[key].set(a.value(1).toString(), a.value(2).toString());
+            store[key].set(stringText(a.value(1)), stringText(a.value(2)));
             out = QVariant::fromValue<qint64>(1);
             return true;
         });
@@ -293,18 +294,18 @@ void registerForkExtensions(ExtensionRegistry& ext)
     ext.regExpr(QStringLiteral("MAP_HAS"), OperandType::Int, 2, 2,
         [](const QList<QVariant>& a, const QList<const ExpressionNode*>&, QVariant& out) {
             auto& store = mapStore();
-            const QString key = a.value(0).toString();
+            const QString key = stringText(a.value(0));
             if (!store.contains(key)) { out = QVariant::fromValue<qint64>(-1); return true; }
-            out = QVariant::fromValue<qint64>(store[key].has(a.value(1).toString()) ? 1 : 0);
+            out = QVariant::fromValue<qint64>(store[key].has(stringText(a.value(1))) ? 1 : 0);
             return true;
         });
 
     ext.regExpr(QStringLiteral("MAP_REMOVE"), OperandType::Int, 2, 2,
         [](const QList<QVariant>& a, const QList<const ExpressionNode*>&, QVariant& out) {
             auto& store = mapStore();
-            const QString key = a.value(0).toString();
+            const QString key = stringText(a.value(0));
             if (!store.contains(key)) { out = QVariant::fromValue<qint64>(-1); return true; }
-            store[key].remove(a.value(1).toString());
+            store[key].remove(stringText(a.value(1)));
             out = QVariant::fromValue<qint64>(1);
             return true;
         });
@@ -312,7 +313,7 @@ void registerForkExtensions(ExtensionRegistry& ext)
     ext.regExpr(QStringLiteral("MAP_CLEAR"), OperandType::Int, 1, 1,
         [](const QList<QVariant>& a, const QList<const ExpressionNode*>&, QVariant& out) {
             auto& store = mapStore();
-            const QString key = a.value(0).toString();
+            const QString key = stringText(a.value(0));
             if (!store.contains(key)) { out = QVariant::fromValue<qint64>(-1); return true; }
             store[key].clear();
             out = QVariant::fromValue<qint64>(1);
@@ -322,7 +323,7 @@ void registerForkExtensions(ExtensionRegistry& ext)
     ext.regExpr(QStringLiteral("MAP_SIZE"), OperandType::Int, 1, 1,
         [](const QList<QVariant>& a, const QList<const ExpressionNode*>&, QVariant& out) {
             auto& store = mapStore();
-            const QString key = a.value(0).toString();
+            const QString key = stringText(a.value(0));
             out = QVariant::fromValue<qint64>(store.contains(key) ? store[key].size() : -1);
             return true;
         });
@@ -330,15 +331,15 @@ void registerForkExtensions(ExtensionRegistry& ext)
     ext.regExpr(QStringLiteral("MAP_GET"), OperandType::Str, 2, 2,
         [](const QList<QVariant>& a, const QList<const ExpressionNode*>&, QVariant& out) {
             auto& store = mapStore();
-            const QString key = a.value(0).toString();
-            out = store.contains(key) ? store[key].get(a.value(1).toString()) : QString();
+            const QString key = stringText(a.value(0));
+            out = store.contains(key) ? store[key].get(stringText(a.value(1))) : QString();
             return true;
         });
 
     ext.regExpr(QStringLiteral("MAP_TOXML"), OperandType::Str, 1, 1,
         [](const QList<QVariant>& a, const QList<const ExpressionNode*>&, QVariant& out) {
             auto& store = mapStore();
-            const QString key = a.value(0).toString();
+            const QString key = stringText(a.value(0));
             out = store.contains(key) ? mapToXml(store[key]) : QString();
             return true;
         });
@@ -346,9 +347,9 @@ void registerForkExtensions(ExtensionRegistry& ext)
     ext.regExpr(QStringLiteral("MAP_FROMXML"), OperandType::Int, 2, 2,
         [](const QList<QVariant>& a, const QList<const ExpressionNode*>&, QVariant& out) {
             auto& store = mapStore();
-            const QString key = a.value(0).toString();
+            const QString key = stringText(a.value(0));
             if (!store.contains(key)) { out = QVariant::fromValue<qint64>(0); return true; }  // C#：不存在 -> 0
-            if (!mapFromXml(a.value(1).toString(), store[key])) {
+            if (!mapFromXml(stringText(a.value(1)), store[key])) {
                 out = QVariant::fromValue<qint64>(0);   // C# 抛 CodeEE；容错实现：按失败记 0
                 return true;
             }
@@ -364,7 +365,7 @@ void registerForkExtensions(ExtensionRegistry& ext)
         [&ext](const QList<QVariant>& a, const QList<const ExpressionNode*>& nodes,
                QVariant& out) {
             auto& store = mapStore();
-            const QString key = a.value(0).toString();
+            const QString key = stringText(a.value(0));
             if (!store.contains(key)) { out = QString(); return true; }
             const OrderedMap& m = store[key];
             VariableStorage* st = ext.services().storage;
@@ -410,13 +411,13 @@ void registerForkExtensions(ExtensionRegistry& ext)
                QVariant& out) {
             const ExtensionRegistry::Services& sv = ext.services();
             const QString base = sv.exeDir ? sv.exeDir() : QString();
-            QString dir = a.value(0).toString();
+            QString dir = stringText(a.value(0));
             // Utils.GetValidPath：绝对路径直接拒绝；'..' 段拒绝；'/' 归一为 '/'
             if (dir.isEmpty() || QDir::isAbsolutePath(dir) || dir.contains(QLatin1String(".."))) {
                 out = QVariant::fromValue<qint64>(-1);
                 return true;
             }
-            const QString pattern = a.size() > 1 ? a.value(1).toString() : QStringLiteral("*");
+            const QString pattern = a.size() > 1 ? stringText(a.value(1)) : QStringLiteral("*");
             const bool recursive = a.size() > 2 && a.value(2).toLongLong() != 0;
             const QDir root(base);
             const QDir target(root.absoluteFilePath(dir));

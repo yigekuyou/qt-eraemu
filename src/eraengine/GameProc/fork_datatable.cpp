@@ -28,6 +28,7 @@
 //   · TOXML/FROMXML：自洽的架构+数据 XML（形状对齐 .NET DataSet，见文件尾说明）
 // ---------------------------------------------------------------------------
 
+#include "print_template.h"
 #include <QDateTime>
 #include <QHash>
 #include <QList>
@@ -148,7 +149,7 @@ struct DValue {
     static DValue fromVariant(const QVariant& v) {
         DValue d;
         if (!v.isValid()) return d;
-        if (v.userType() == QMetaType::QString) { d.kind = Str; d.s = v.toString(); return d; }
+        if (isStringValue(v)) { d.kind = Str; d.s = stringText(v); return d; }
         d.kind = Int;
         d.i = v.toLongLong();
         return d;
@@ -433,10 +434,10 @@ void applyCell(DTable& t, QList<QVariant>& row, int col, const QVariant& v, SetO
     const DColumn& c = t.columns.at(col);
     if (!v.isValid()) { row[col] = QVariant(); ++r.written; return; }    // DBNull
     if (c.type == DType::Str) {
-        if (v.userType() != QMetaType::QString) { r.typeMismatch = true; return; }
-        row[col] = v.toString();
+        if (!isStringValue(v)) { r.typeMismatch = true; return; }
+        row[col] = stringText(v);
     } else {
-        if (v.userType() == QMetaType::QString) { r.typeMismatch = true; return; }
+        if (isStringValue(v)) { r.typeMismatch = true; return; }
         row[col] = clampInt(v.toLongLong(), c.type);
     }
     ++r.written;
@@ -523,7 +524,7 @@ QString tableDataXml(const DTable& t) {
         for (int i = 0; i < t.columns.size(); ++i) {
             const QVariant& v = row.value(i);
             x += QStringLiteral("    <") + xmlEscape(t.columns.at(i).name) + QStringLiteral(">");
-            if (v.isValid()) x += xmlEscape(v.toString());
+            if (v.isValid()) x += xmlEscape(stringText(v));
             x += QStringLiteral("</") + xmlEscape(t.columns.at(i).name) + QStringLiteral(">\n");
         }
         x += QStringLiteral("  </") + xmlEscape(t.name) + QStringLiteral(">\n");
@@ -542,7 +543,7 @@ void registerDataTableExtensions(ExtensionRegistry& ext)
     // ---- 生命周期（Creator.Method.cs:1270）----
     ext.regExpr(QStringLiteral("DT_CREATE"), OperandType::Int, 1, 1,
         [](const QList<QVariant>& a, const QList<const ExpressionNode*>&, QVariant& out) {
-            const QString key = a.value(0).toString();
+            const QString key = stringText(a.value(0));
             auto& store = tableStore();
             if (store.contains(key)) { out = QVariant::fromValue<qint64>(0); return true; }
             DTable t;
@@ -555,13 +556,13 @@ void registerDataTableExtensions(ExtensionRegistry& ext)
 
     ext.regExpr(QStringLiteral("DT_EXIST"), OperandType::Int, 1, 1,
         [](const QList<QVariant>& a, const QList<const ExpressionNode*>&, QVariant& out) {
-            out = QVariant::fromValue<qint64>(tableStore().contains(a.value(0).toString()) ? 1 : 0);
+            out = QVariant::fromValue<qint64>(tableStore().contains(stringText(a.value(0))) ? 1 : 0);
             return true;
         });
 
     ext.regExpr(QStringLiteral("DT_RELEASE"), OperandType::Int, 1, 1,
         [](const QList<QVariant>& a, const QList<const ExpressionNode*>&, QVariant& out) {
-            tableStore().remove(a.value(0).toString());
+            tableStore().remove(stringText(a.value(0)));
             out = QVariant::fromValue<qint64>(1);
             return true;
         });
@@ -569,7 +570,7 @@ void registerDataTableExtensions(ExtensionRegistry& ext)
     ext.regExpr(QStringLiteral("DT_CLEAR"), OperandType::Int, 1, 1,
         [](const QList<QVariant>& a, const QList<const ExpressionNode*>&, QVariant& out) {
             auto& store = tableStore();
-            const QString key = a.value(0).toString();
+            const QString key = stringText(a.value(0));
             if (!store.contains(key)) { out = QVariant::fromValue<qint64>(-1); return true; }
             store[key].rows.clear();
             out = QVariant::fromValue<qint64>(1);
@@ -579,7 +580,7 @@ void registerDataTableExtensions(ExtensionRegistry& ext)
     ext.regExpr(QStringLiteral("DT_NOCASE"), OperandType::Int, 2, 2,
         [](const QList<QVariant>& a, const QList<const ExpressionNode*>&, QVariant& out) {
             auto& store = tableStore();
-            const QString key = a.value(0).toString();
+            const QString key = stringText(a.value(0));
             if (!store.contains(key)) { out = QVariant::fromValue<qint64>(-1); return true; }
             store[key].caseSensitive = a.value(1).toLongLong() == 0;   // C#: flag==0 -> CaseSensitive=true
             out = QVariant::fromValue<qint64>(1);
@@ -590,16 +591,16 @@ void registerDataTableExtensions(ExtensionRegistry& ext)
     ext.regExpr(QStringLiteral("DT_COLUMN_ADD"), OperandType::Int, 2, 4,
         [](const QList<QVariant>& a, const QList<const ExpressionNode*>&, QVariant& out) {
             auto& store = tableStore();
-            const QString key = a.value(0).toString();
+            const QString key = stringText(a.value(0));
             if (!store.contains(key)) { out = QVariant::fromValue<qint64>(-1); return true; }
             DTable& t = store[key];
-            const QString name = a.value(1).toString();
+            const QString name = stringText(a.value(1));
             if (t.columnIndex(name) >= 0) { out = QVariant::fromValue<qint64>(0); return true; }
 
             DType type = DType::Str;                 // 未指定类型：默认字符串（C# Add(name) 语义）
             bool haveType = false;
             if (a.size() >= 3 && !omitted(a.at(2))) {
-                if (a.at(2).userType() == QMetaType::QString) haveType = nameToType(a.at(2).toString(), type);
+                if (isStringValue(a.at(2))) haveType = nameToType(stringText(a.at(2)), type);
                 else haveType = codeToType(static_cast<int>(a.at(2).toLongLong()), type);
                 if (!haveType) { out = QVariant::fromValue<qint64>(0); return true; }
             }
@@ -613,10 +614,10 @@ void registerDataTableExtensions(ExtensionRegistry& ext)
     ext.regExpr(QStringLiteral("DT_COLUMN_EXIST"), OperandType::Int, 2, 2,
         [](const QList<QVariant>& a, const QList<const ExpressionNode*>&, QVariant& out) {
             auto& store = tableStore();
-            const QString key = a.value(0).toString();
+            const QString key = stringText(a.value(0));
             if (!store.contains(key)) { out = QVariant::fromValue<qint64>(-1); return true; }
             const DTable& t = store[key];
-            const int idx = t.columnIndex(a.value(1).toString());
+            const int idx = t.columnIndex(stringText(a.value(1)));
             out = QVariant::fromValue<qint64>(idx < 0 ? 0 : typeToCode(t.columns.at(idx).type));
             return true;
         });
@@ -624,10 +625,10 @@ void registerDataTableExtensions(ExtensionRegistry& ext)
     ext.regExpr(QStringLiteral("DT_COLUMN_REMOVE"), OperandType::Int, 2, 2,
         [](const QList<QVariant>& a, const QList<const ExpressionNode*>&, QVariant& out) {
             auto& store = tableStore();
-            const QString key = a.value(0).toString();
+            const QString key = stringText(a.value(0));
             if (!store.contains(key)) { out = QVariant::fromValue<qint64>(-1); return true; }
             DTable& t = store[key];
-            const int idx = t.columnIndex(a.value(1).toString());
+            const int idx = t.columnIndex(stringText(a.value(1)));
             if (idx <= 0) { out = QVariant::fromValue<qint64>(0); return true; }   // id 不可删
             t.columns.removeAt(idx);
             for (QList<QVariant>& row : t.rows) if (row.size() > idx) row.removeAt(idx);
@@ -639,7 +640,7 @@ void registerDataTableExtensions(ExtensionRegistry& ext)
         [&ext](const QList<QVariant>& a, const QList<const ExpressionNode*>& nodes,
                QVariant& out) {
             auto& store = tableStore();
-            const QString key = a.value(0).toString();
+            const QString key = stringText(a.value(0));
             if (!store.contains(key)) { out = QVariant::fromValue<qint64>(-1); return true; }
             const DTable& t = store[key];
             const QString target = nodes.size() >= 2 ? refTargetName(nodes.at(1)) : QString();
@@ -653,7 +654,7 @@ void registerDataTableExtensions(ExtensionRegistry& ext)
     ext.regExpr(QStringLiteral("DT_COLUMN_LENGTH"), OperandType::Int, 1, 1,
         [](const QList<QVariant>& a, const QList<const ExpressionNode*>&, QVariant& out) {
             auto& store = tableStore();
-            const QString key = a.value(0).toString();
+            const QString key = stringText(a.value(0));
             out = QVariant::fromValue<qint64>(store.contains(key) ? store[key].columns.size() : -1);
             return true;
         });
@@ -661,7 +662,7 @@ void registerDataTableExtensions(ExtensionRegistry& ext)
     ext.regExpr(QStringLiteral("DT_ROW_LENGTH"), OperandType::Int, 1, 1,
         [](const QList<QVariant>& a, const QList<const ExpressionNode*>&, QVariant& out) {
             auto& store = tableStore();
-            const QString key = a.value(0).toString();
+            const QString key = stringText(a.value(0));
             out = QVariant::fromValue<qint64>(store.contains(key) ? store[key].rows.size() : -1);
             return true;
         });
@@ -671,7 +672,7 @@ void registerDataTableExtensions(ExtensionRegistry& ext)
         [&ext](const QList<QVariant>& a, const QList<const ExpressionNode*>& nodes,
                QVariant& out) {
             auto& store = tableStore();
-            const QString key = a.value(0).toString();
+            const QString key = stringText(a.value(0));
             if (!store.contains(key)) { out = QVariant::fromValue<qint64>(-1); return true; }
             DTable& t = store[key];
             bool ok = false;
@@ -691,7 +692,7 @@ void registerDataTableExtensions(ExtensionRegistry& ext)
                 }
             } else {
                 for (int i = 1; i + 1 < a.size(); i += 2) {
-                    const int col = t.columnIndex(a.value(i).toString());
+                    const int col = t.columnIndex(stringText(a.value(i)));
                     applyCell(t, row, col, a.at(i + 1), r);
                 }
             }
@@ -710,7 +711,7 @@ void registerDataTableExtensions(ExtensionRegistry& ext)
         [&ext](const QList<QVariant>& a, const QList<const ExpressionNode*>& nodes,
                QVariant& out) {
             auto& store = tableStore();
-            const QString key = a.value(0).toString();
+            const QString key = stringText(a.value(0));
             if (!store.contains(key)) { out = QVariant::fromValue<qint64>(-1); return true; }
             DTable& t = store[key];
             const qint64 id = a.value(1).toLongLong();
@@ -730,7 +731,7 @@ void registerDataTableExtensions(ExtensionRegistry& ext)
                               QVariant(st->getGlobalStr1D(valsVar, i)), r);
             } else {
                 for (int i = 2; i + 1 < a.size(); i += 2)
-                    applyCell(t, t.rows[rowIndex], t.columnIndex(a.value(i).toString()), a.at(i + 1), r);
+                    applyCell(t, t.rows[rowIndex], t.columnIndex(stringText(a.value(i))), a.at(i + 1), r);
             }
             out = QVariant::fromValue<qint64>(r.written);
             return true;
@@ -740,7 +741,7 @@ void registerDataTableExtensions(ExtensionRegistry& ext)
         [&ext](const QList<QVariant>& a, const QList<const ExpressionNode*>& nodes,
                QVariant& out) {
             auto& store = tableStore();
-            const QString key = a.value(0).toString();
+            const QString key = stringText(a.value(0));
             if (!store.contains(key)) { out = QVariant::fromValue<qint64>(-1); return true; }
             DTable& t = store[key];
             QList<qint64> ids;
@@ -772,12 +773,12 @@ void registerDataTableExtensions(ExtensionRegistry& ext)
     ext.regExpr(QStringLiteral("DT_CELL_GET"), OperandType::Int, 3, 4,
         [cellIndex](const QList<QVariant>& a, const QList<const ExpressionNode*>&, QVariant& out) {
             auto& store = tableStore();
-            const QString key = a.value(0).toString();
+            const QString key = stringText(a.value(0));
             if (!store.contains(key)) { out = QVariant::fromValue<qint64>(0); return true; }
             const DTable& t = store[key];
             const bool asId = a.size() == 4 && a.value(3).toLongLong() != 0;
             const int row = cellIndex(t, a.value(1).toLongLong(), asId);
-            const int col = t.columnIndex(a.value(2).toString());
+            const int col = t.columnIndex(stringText(a.value(2)));
             if (row < 0 || col < 0) { out = QVariant::fromValue<qint64>(0); return true; }
             const QVariant& v = t.rows.at(row).value(col);
             out = QVariant::fromValue<qint64>(v.isValid() ? v.toLongLong() : 0);
@@ -787,12 +788,12 @@ void registerDataTableExtensions(ExtensionRegistry& ext)
     ext.regExpr(QStringLiteral("DT_CELL_ISNULL"), OperandType::Int, 3, 4,
         [cellIndex](const QList<QVariant>& a, const QList<const ExpressionNode*>&, QVariant& out) {
             auto& store = tableStore();
-            const QString key = a.value(0).toString();
+            const QString key = stringText(a.value(0));
             if (!store.contains(key)) { out = QVariant::fromValue<qint64>(-1); return true; }
             const DTable& t = store[key];
             const bool asId = a.size() == 4 && a.value(3).toLongLong() != 0;
             const int row = cellIndex(t, a.value(1).toLongLong(), asId);
-            const int col = t.columnIndex(a.value(2).toString());
+            const int col = t.columnIndex(stringText(a.value(2)));
             if (row < 0 || col < 0) { out = QVariant::fromValue<qint64>(-2); return true; }
             out = QVariant::fromValue<qint64>(t.rows.at(row).value(col).isValid() ? 0 : 1);
             return true;
@@ -801,27 +802,27 @@ void registerDataTableExtensions(ExtensionRegistry& ext)
     ext.regExpr(QStringLiteral("DT_CELL_GETS"), OperandType::Str, 3, 4,
         [cellIndex](const QList<QVariant>& a, const QList<const ExpressionNode*>&, QVariant& out) {
             auto& store = tableStore();
-            const QString key = a.value(0).toString();
+            const QString key = stringText(a.value(0));
             if (!store.contains(key)) { out = QString(); return true; }
             const DTable& t = store[key];
             const bool asId = a.size() == 4 && a.value(3).toLongLong() != 0;
             const int row = cellIndex(t, a.value(1).toLongLong(), asId);
-            const int col = t.columnIndex(a.value(2).toString());
+            const int col = t.columnIndex(stringText(a.value(2)));
             if (row < 0 || col < 0) { out = QString(); return true; }
             const QVariant& v = t.rows.at(row).value(col);
-            out = v.isValid() ? v.toString() : QString();
+            out = v.isValid() ? stringText(v) : QString();
             return true;
         });
 
     ext.regExpr(QStringLiteral("DT_CELL_SET"), OperandType::Int, 3, 5,
         [cellIndex](const QList<QVariant>& a, const QList<const ExpressionNode*>&, QVariant& out) {
             auto& store = tableStore();
-            const QString key = a.value(0).toString();
+            const QString key = stringText(a.value(0));
             if (!store.contains(key)) { out = QVariant::fromValue<qint64>(-1); return true; }
             DTable& t = store[key];
             const bool asId = a.size() == 5 && a.value(4).toLongLong() != 0;
             const int row = cellIndex(t, a.value(1).toLongLong(), asId);
-            const QString colName = a.value(2).toString();
+            const QString colName = stringText(a.value(2));
             const int col = t.columnIndex(colName);
             if (col == 0) { out = QVariant::fromValue<qint64>(0); return true; }      // id 不可改
             if (row < 0 || col < 0) { out = QVariant::fromValue<qint64>(-3); return true; }
@@ -838,11 +839,11 @@ void registerDataTableExtensions(ExtensionRegistry& ext)
         [&ext](const QList<QVariant>& a, const QList<const ExpressionNode*>& nodes,
                QVariant& out) {
             auto& store = tableStore();
-            const QString key = a.value(0).toString();
+            const QString key = stringText(a.value(0));
             if (!store.contains(key)) { out = QVariant::fromValue<qint64>(-1); return true; }
             const DTable& t = store[key];
-            const QString filter = a.size() > 1 ? a.value(1).toString() : QString();
-            const QString sort = a.size() > 2 ? a.value(2).toString() : QString();
+            const QString filter = a.size() > 1 ? stringText(a.value(1)) : QString();
+            const QString sort = a.size() > 2 ? stringText(a.value(2)) : QString();
             QList<int> ids;
             if (!selectRows(t, filter, sort, ids)) { out = QVariant::fromValue<qint64>(0); return true; }
 
@@ -870,7 +871,7 @@ void registerDataTableExtensions(ExtensionRegistry& ext)
         [&ext](const QList<QVariant>& a, const QList<const ExpressionNode*>& nodes,
                QVariant& out) {
             auto& store = tableStore();
-            const QString key = a.value(0).toString();
+            const QString key = stringText(a.value(0));
             if (!store.contains(key)) { out = QString(); return true; }
             const DTable& t = store[key];
             const QString schema = tableSchemaXml(t);
@@ -886,9 +887,9 @@ void registerDataTableExtensions(ExtensionRegistry& ext)
 
     ext.regExpr(QStringLiteral("DT_FROMXML"), OperandType::Int, 3, 3,
         [](const QList<QVariant>& a, const QList<const ExpressionNode*>&, QVariant& out) {
-            const QString key = a.value(0).toString();
-            const QString schemaXml = a.value(1).toString();
-            const QString dataXml = a.value(2).toString();
+            const QString key = stringText(a.value(0));
+            const QString schemaXml = stringText(a.value(1));
+            const QString dataXml = stringText(a.value(2));
             if (!schemaXml.contains(QLatin1String("<xs:schema")) || schemaXml.trimmed().isEmpty()) {
                 out = QVariant::fromValue<qint64>(0);
                 return true;
@@ -960,17 +961,17 @@ void registerDataTableExtensions(ExtensionRegistry& ext)
                 throw std::runtime_error("Invalid DT_COLUMN_OPTIONS arguments");
             const auto tableName = evaluate(line.arguments[0].ast);
             const auto columnName = evaluate(line.arguments[1].ast);
-            if (tableName.typeId() != QMetaType::QString || columnName.typeId() != QMetaType::QString)
+            if (!isStringValue(tableName) || !isStringValue(columnName))
                 throw std::runtime_error("Data table and column names need strings");
             auto& store = tableStore();
-            if (!store.contains(tableName.toString())) throw std::runtime_error("Unknown data table");
-            DTable& table = store[tableName.toString()];
-            const int col = table.columnIndex(columnName.toString());
+            if (!store.contains(stringText(tableName))) throw std::runtime_error("Unknown data table");
+            DTable& table = store[stringText(tableName)];
+            const int col = table.columnIndex(stringText(columnName));
             if (col < 0) throw std::runtime_error("Unknown data table column");
             DColumn& column = table.columns[col];
             for (const auto& ast : line.columnDefaults) {
                 const auto value = evaluate(ast);
-                if ((column.type == DType::Str) != (value.typeId() == QMetaType::QString))
+                if ((column.type == DType::Str) != isStringValue(value))
                     throw std::runtime_error("Data table default type mismatch");
                 column.defaultValue = column.type == DType::Str ? value : QVariant(clampInt(value.toLongLong(), column.type));
             }

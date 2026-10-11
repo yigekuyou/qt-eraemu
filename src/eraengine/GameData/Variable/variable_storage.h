@@ -200,8 +200,6 @@ public:
 		void setLocalAliases(const QHash<QString, int> &aliases) { m_localAliases = aliases; }
 		void clearLocalAliases() { m_localAliases.clear(); }
 
-        QVariant stringValueRaw(const QString& key, int index, const QString& text) const;
-        void setStringProvenance(const QString& name, int index, const QVariant& value);
         [[nodiscard]] FlatStringValue getStringSlot(const QString& name, const QList<int>& indices = {}) const;
         bool setStringSlot(const QString& name, const QList<int>& indices, const FlatStringValue& value);
 

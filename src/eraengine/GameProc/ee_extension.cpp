@@ -29,6 +29,7 @@
 // 其余 EE 扩展命令（test/data/emuera_ee_cmds.txt）保持「留痕跳过」桩。
 // ---------------------------------------------------------------------------
 
+#include "print_template.h"
 #include <QDir>
 #include <QFile>
 #include <QStringList>
@@ -221,8 +222,8 @@ QVariant audioOperand(const Operand& operand, const ExtensionRegistry& ext) {
 bool audioPlayBgm(const LogicalLine&, const QList<Operand>& args, const ExtensionRegistry& ext) {
     if (args.isEmpty()) throw std::runtime_error("Missing PLAYBGM operand");
     const auto source = audioOperand(args.first(), ext);
-    if (source.typeId() != QMetaType::QString) throw std::runtime_error("PLAYBGM needs a string");
-    if (auto* pool = ext.audioPool()) pool->playBgm(source.toString());
+    if (!isStringValue(source)) throw std::runtime_error("PLAYBGM needs a string");
+    if (auto* pool = ext.audioPool()) pool->playBgm(stringText(source));
     return true;
 }
 
@@ -230,10 +231,10 @@ bool audioPlaySound(const LogicalLine& line, const QList<Operand>&, const Extens
     const auto& args = line.argument.operands;
     if (args.isEmpty()) throw std::runtime_error("Missing PLAYSOUND operand");
     const auto source = audioOperand(args.first(), ext);
-    if (source.typeId() != QMetaType::QString) throw std::runtime_error("PLAYSOUND needs a string");
+    if (!isStringValue(source)) throw std::runtime_error("PLAYSOUND needs a string");
     const auto repeat = args.size() > 1 ? audioOperand(args[1], ext) : QVariant::fromValue<qint64>(1);
-    if (repeat.typeId() == QMetaType::QString) throw std::runtime_error("PLAYSOUND repeat needs an integer");
-    if (auto* pool = ext.audioPool()) pool->playSound(source.toString(), int(repeat.toLongLong()));
+    if (isStringValue(repeat)) throw std::runtime_error("PLAYSOUND repeat needs an integer");
+    if (auto* pool = ext.audioPool()) pool->playSound(stringText(source), int(repeat.toLongLong()));
     return true;
 }
 
@@ -256,7 +257,7 @@ bool audioSetVolume(const LogicalLine& line, const ExtensionRegistry& ext, bool 
     AudioPipelinePool* pool = ext.audioPool();
     if (line.arguments.isEmpty()) throw std::runtime_error("Missing audio volume operand");
     const QVariant v = audioOperand(line.arguments.first(), ext);
-    if (v.typeId() == QMetaType::QString) throw std::runtime_error("Audio volume needs an integer");
+    if (isStringValue(v)) throw std::runtime_error("Audio volume needs an integer");
     const int volume = int(v.toLongLong());
     if (!pool) return true;
     if (bgm) pool->setBgmVolume(volume);
@@ -290,7 +291,7 @@ void registerEeAudio(ExtensionRegistry& ext) {
     ext.regExpr(QStringLiteral("EXISTSOUND"), OperandType::Int, 1, 1,
         [&ext](const QList<QVariant>& a, const QList<const ExpressionNode*>&, QVariant& out) {
             AudioPipelinePool* pool = ext.audioPool();
-            const QString name = a.isEmpty() ? QString() : a.at(0).toString();
+            const QString name = a.isEmpty() ? QString() : stringText(a.at(0));
             out = QVariant::fromValue<qint64>(pool && pool->sourceExists(name) ? 1 : 0);
             return true;
         });
@@ -331,7 +332,7 @@ static void registerEeExpressionFunctions(ExtensionRegistry& ext)
     ext.regExpr(QStringLiteral("EXISTFUNCTION"), OperandType::Int, 1, 2,
         [&ext](const QList<QVariant>& a, const QList<const ExpressionNode*>&, QVariant& out) {
             const ExtensionRegistry::Services& sv = ext.services();
-            const QString name = a.isEmpty() ? QString() : a.at(0).toString();
+            const QString name = a.isEmpty() ? QString() : stringText(a.at(0));
             const bool caseInsensitive = a.size() >= 2 && a.at(1).toLongLong() != 0;
             const int kind = sv.functionExists ? sv.functionExists(name, caseInsensitive) : 0;
             out = QVariant::fromValue<qint64>(kind);
@@ -388,7 +389,7 @@ static void registerEeExpressionFunctions(ExtensionRegistry& ext)
     ext.regExpr(QStringLiteral("SETTEXTBOX"), OperandType::Int, 1, 1,
         [&ext](const QList<QVariant>& a, const QList<const ExpressionNode*>&, QVariant& out) {
             const ExtensionRegistry::Services& sv = ext.services();
-            const QString text = a.isEmpty() ? QString() : a.at(0).toString();
+            const QString text = a.isEmpty() ? QString() : stringText(a.at(0));
             if (sv.setTextbox) sv.setTextbox(text);
             out = QVariant::fromValue<qint64>(1);   // C# 恒 1
             return true;
@@ -413,7 +414,7 @@ static void registerEeExpressionFunctions(ExtensionRegistry& ext)
         [&ext](const QList<QVariant>& a, const QList<const ExpressionNode*>&, QVariant& out) {
             const ExtensionRegistry::Services& sv = ext.services();
             const bool isString = !a.isEmpty() && a.at(0).toLongLong() != 0;
-            const QString defStr = a.size() > 1 ? a.at(1).toString() : QString();
+            const QString defStr = a.size() > 1 ? stringText(a.at(1)) : QString();
             if (sv.setFlowInputString) sv.setFlowInputString(isString, defStr);
             out = QVariant::fromValue<qint64>(0);
             return true;

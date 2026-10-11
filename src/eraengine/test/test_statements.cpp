@@ -49,8 +49,19 @@ static void check(bool cond, const QString& what) {
     else { qDebug().noquote() << "  [FAIL]" << what; ++g_failures; }
 }
 
+// Ad hoc instruction fixtures compile in their own loading table. The engine's
+// finalized table owns executable ASTs and cannot compile new source.
+static QSharedPointer<ExpressionNode> compileFixture(EraParseTable& runtime, const QString& text) {
+    EraParseTable compiler(nullptr);
+    auto ast = compiler.expressionAst(text);
+    const auto* current = runtime.lineAt(runtime.currentScript(), runtime.currentLine());
+    if (ast) VariableTable::applyTypes(*ast, runtime.variableTable(),
+                                     current ? current->ownerFunction : QString());
+    return ast;
+}
+
 static QList<LogicalLine> buildLines(EraParseTable& table, const QStringList& src) {
-    const AstResolver resolve = [&table](const QString& e) { return table.expressionAst(e); };
+    const AstResolver resolve = [&table](const QString& e) { return compileFixture(table, e); };
     QList<LogicalLine> out;
     for (int i = 0; i < src.size(); ++i) {
         out.append(AstBuilder::build(src.at(i), ScriptPosition("s.ERB", i, 0), resolve));
@@ -142,7 +153,7 @@ int main(int argc, char* argv[]) {
     //     -> 整行被当成 CALL 族指令，连赋值都不是。
     // 后果：点了改名/称呼没反应；函数内静态串（#DIMS html）不再重置，重绘时越接越长。
     {
-        const AstResolver resolveOne = [&table](const QString& e) { return table.expressionAst(e); };
+        const AstResolver resolveOne = [&table](const QString& e) { return compileFixture(table, e); };
         const auto execOne = [&](const QString& src) {
             LogicalLine l = AstBuilder::build(src, ScriptPosition("t.ERB", 0, 0), resolveOne);
             engine.executeInstruction(l);
@@ -187,7 +198,7 @@ int main(int argc, char* argv[]) {
     // 函数侧 2 参收到 3 个），又丢掉对变量的赋值。
     qDebug() << "\n7) POWER 语句（变量 = X^Y）";
     {
-        const AstResolver resolveOne = [&table](const QString& e) { return table.expressionAst(e); };
+        const AstResolver resolveOne = [&table](const QString& e) { return compileFixture(table, e); };
         LogicalLine p = AstBuilder::build(QStringLiteral("POWER BAG:2, 2, 10"),
                                           ScriptPosition("t.ERB", 0, 0), resolveOne);
         check(p.functionName == QLatin1String("POWER") && !p.isFunctionCall,
@@ -209,7 +220,7 @@ int main(int argc, char* argv[]) {
     // 并且丢掉对变量的赋值。
     qDebug() << "\n8) SAVENOS / PRINTCPERLINE 语句（变量 = 配置值）";
     {
-        const AstResolver resolveOne = [&table](const QString& e) { return table.expressionAst(e); };
+        const AstResolver resolveOne = [&table](const QString& e) { return compileFixture(table, e); };
         const ScriptPosition pos(QStringLiteral("t.ERB"), 0, 0);
         LogicalLine s = AstBuilder::build(QStringLiteral("SAVENOS BAG:3"), pos, resolveOne);
         check(s.functionName == QLatin1String("SAVENOS") && !s.isFunctionCall,
@@ -322,7 +333,7 @@ int main(int argc, char* argv[]) {
     // `PRINT_STATE.ERB:336 VARSET TLNT_CNT` 被静默跳过 -> 计数器不清零 ->
     // 素質/性的特徴/身体的特徴 列表越叠越长。这里覆盖各目标类型与范围语义。
     {
-        const AstResolver resolveOne = [&table](const QString& e) { return table.expressionAst(e); };
+        const AstResolver resolveOne = [&table](const QString& e) { return compileFixture(table, e); };
         // 全局声明（头文件级 -> 全局作用域）：1D 整型 / 2D 整型 / 1D 字符串
         table.loadScript("v.ERH",
                          buildLines(table, {"#DIM VSCNT, 6",
@@ -366,8 +377,8 @@ int main(int argc, char* argv[]) {
         check(storage.getGlobalStr1D("VSS2D", 3).isEmpty(),
               "2D 字符串数组元素赋值不落进 1 维表（不与单下标读混槽）");
         const auto evalStr2D = [&](const QString& e) {
-            const auto ast = table.expressionAst(e);
-            return evaluator.evaluate(*ast, &storage, nullptr).toString();
+            const auto ast = compileFixture(table, e);
+            return stringText(evaluator.evaluate(*ast, &storage, nullptr));
         };
         check(evalStr2D(QStringLiteral("VSS2D:3:7")) == QStringLiteral("hi"),
               "表达式求值 VSS2D:3:7 读回同一槽（写/读两路径一致）");
@@ -412,7 +423,7 @@ int main(int argc, char* argv[]) {
         storage.setGlobalStr1D("VSSARR", 1, QStringLiteral("気力"));
         {
             const QSharedPointer<ExpressionNode> ast =
-                table.expressionAst(QStringLiteral("FINDELEMENT(VSSARR, \"気力\")"));
+                compileFixture(table, QStringLiteral("FINDELEMENT(VSSARR, \"気力\")"));
             const qint64 idx = ast ? evaluator.evaluate(*ast, &storage, nullptr).toLongLong() : -999;
             check(idx == 1, "FINDELEMENT 字符串数组按字符串比较（気力 -> 1）");
 
@@ -422,12 +433,12 @@ int main(int argc, char* argv[]) {
             // -> eraTW 的 EXISTOBJ 抛「未設定の変数です」并卡住新开局。
             storage.setGlobalStr1D("VSSARR", 2, QStringLiteral("Ｃ感"));
             const QSharedPointer<ExpressionNode> ast2 =
-                table.expressionAst(QStringLiteral("FINDELEMENT(VSSARR, ESCAPE(\"気力\"), 1, , 1)"));
+                compileFixture(table, QStringLiteral("FINDELEMENT(VSSARR, ESCAPE(\"気力\"), 1, , 1)"));
             const qint64 idx2 = ast2 ? evaluator.evaluate(*ast2, &storage, nullptr).toLongLong() : -999;
             check(idx2 == 1, "FINDELEMENT 第4实参省略 = 数组末尾，且 ESCAPE 模式按正则整串匹配");
 
             const QSharedPointer<ExpressionNode> ast3 =
-                table.expressionAst(QStringLiteral("FINDELEMENT(VSSARR, \"^Ｃ感$\", 1, , 1)"));
+                compileFixture(table, QStringLiteral("FINDELEMENT(VSSARR, \"^Ｃ感$\", 1, , 1)"));
             const qint64 idx3 = ast3 ? evaluator.evaluate(*ast3, &storage, nullptr).toLongLong() : -999;
             check(idx3 == 2, "FINDELEMENT 字符串分支按正则匹配（^Ｃ感$ -> 2）");
         }
@@ -447,7 +458,7 @@ int main(int argc, char* argv[]) {
     // eraTW 里 GETMILLISECOND / CURRENTREDRAW / GETTIME / REPLACE / SUBSTRING …
     // 全都是这种写法，以前整行落到「未知指令」被静默丢弃。
     {
-        const AstResolver resolveOne = [&table](const QString& e) { return table.expressionAst(e); };
+        const AstResolver resolveOne = [&table](const QString& e) { return compileFixture(table, e); };
         const auto execOne = [&](const QString& src) {
             LogicalLine l = AstBuilder::build(src, ScriptPosition("f.ERB", 0, 0), resolveOne);
             engine.executeInstruction(l);
@@ -644,7 +655,7 @@ int main(int argc, char* argv[]) {
         check(vs.getGlobalStr1D(QStringLiteral("FE"), 0) == QStringLiteral("lit_7"),
               "FE '= @\"lit_{N}\" -> 格式化字符串表达式");
 
-        const AstResolver resolve = [&pt](const QString& text) { return pt.expressionAst(text); };
+        const AstResolver resolve = [&pt](const QString& text) { return compileFixture(pt, text); };
         const QStringList invalidForms = {
             "B = %N%", "B = {QE}", "B = %QE", "B = {N", "B = % %", "B = {}"
         };
@@ -667,7 +678,7 @@ int main(int argc, char* argv[]) {
     // 8) eraMegaten 解析回归（本次修复；原报 705 条「Expected #」+ 19 条「未识别的指令」）
     qDebug() << "\n8) eraMegaten 解析回归（'= 空格 LHS / 全角空格断词 / 括号内 == 的自增）";
     {
-        const AstResolver resolveOne = [&table](const QString& e) { return table.expressionAst(e); };
+        const AstResolver resolveOne = [&table](const QString& e) { return compileFixture(table, e); };
 
         // (a) '= 的 LHS 允许含空格：`LOCALS:(LOCAL + 1) '= …` 此前整行被丢弃
         const LogicalLine s1 = AstBuilder::build(
@@ -777,7 +788,7 @@ int main(int argc, char* argv[]) {
         check(pt.parseWarningCount() == 0, "VARSIZE multidimensional REF array needs no indices");
         vs.setGlobalStr2D("ACTUAL_COM", 2, 3, "x");
         vs.setReference("ARG_COM", "ACTUAL_COM");
-        const AstResolver resolve = [&](const QString& text) { return pt.expressionAst(text); };
+        const AstResolver resolve = [&](const QString& text) { return compileFixture(pt, text); };
         ex.executeInstruction(AstBuilder::build("VARSIZE ARG_COM", {}, resolve));
         check(vs.getSystemVariable("RESULT", 0) == 3 && vs.getSystemVariable("RESULT", 1) == 4,
               "VARSIZE REF resolves target and writes all dimension lengths");
@@ -803,7 +814,7 @@ int main(int argc, char* argv[]) {
             const auto line = AstBuilder::build(source, ScriptPosition("printv.ERB", 1, 1), resolve);
             QString result;
             for (const auto& arg : line.arguments)
-                result += arg.isString ? arg.raw : (arg.ast ? ev.evaluate(*arg.ast, &storage).toString() : "<missing>");
+                result += arg.isString ? arg.raw : (arg.ast ? stringText(ev.evaluate(*arg.ast, &storage)) : "<missing>");
             return result;
         };
         storage.setGlobalInt1D("PRINTV_A", 0, 2);
@@ -856,7 +867,7 @@ int main(int argc, char* argv[]) {
         ExecutionEngine ex(&vs);
         pt.setVariableStorage(&vs); pt.setExpressionEvaluator(&ev);
         ex.setParseTable(&pt); ex.setExpressionEvaluator(&ev);
-        const AstResolver resolve = [&](const QString& text) { return pt.expressionAst(text); };
+        const AstResolver resolve = [&](const QString& text) { return compileFixture(pt, text); };
         QStringList errors;
         QObject::connect(&ex, &ExecutionEngine::errorOccurred, [&](const QString& error) { errors.append(error); });
         const QString root = QDir(QFileInfo(QString::fromUtf8(__FILE__)).absolutePath()).absoluteFilePath("../../..");

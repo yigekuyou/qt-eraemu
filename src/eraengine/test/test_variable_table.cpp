@@ -59,7 +59,8 @@ int main(int argc, char* argv[]) {
         "#DIM A",         // 5  与上面 A 重名 -> 告警
         "B = A + 1",      // 6
         "C = S + 1",      // 7  S 是字符串，+1 类型不匹配
-        "@OTHER",         // 8
+        "PRINTS S",       // 8  持有已回填的字符串表达式
+        "@OTHER",         // 9
         "#DIM A"          // 9  另一个函数的 A（局部，允许）
     };
 
@@ -102,7 +103,8 @@ int main(int argc, char* argv[]) {
 
         // 全局重复：C# 经 IdentifierDictionary.CheckUserVarName（跨文件）→ 告警
         const QStringList gsrc = {"@MAIN", "#DIM GLOBAL GD", "#DIM GLOBAL GD"};
-        const AstResolver gr = [&table](const QString& e) { return table.expressionAst(e); };
+        EraParseTable compiler(nullptr);
+        const AstResolver gr = [&compiler](const QString& e) { return compiler.expressionAst(e); };
         QList<LogicalLine> gs;
         for (int i = 0; i < gsrc.size(); ++i) {
             gs.append(AstBuilder::build(gsrc.at(i), ScriptPosition("g.ERB", i, 1), gr));
@@ -125,7 +127,8 @@ int main(int argc, char* argv[]) {
             "#DIM CONST H = 24",    // 3
             "#DIM NUMS, 3, 4"       // 4 纯字面量
         };
-        const AstResolver r2 = [&table](const QString& e) { return table.expressionAst(e); };
+        EraParseTable compiler(nullptr);
+        const AstResolver r2 = [&compiler](const QString& e) { return compiler.expressionAst(e); };
         QList<LogicalLine> s2;
         for (int i = 0; i < dimSrc.size(); ++i) {
             s2.append(AstBuilder::build(dimSrc.at(i), ScriptPosition("d.ERB", i, 1), r2));
@@ -151,7 +154,8 @@ int main(int argc, char* argv[]) {
             "#DIM CONST SNOW = 0x111111,0x222222,0x333333,0x444444",
             "#DIM CONST SCALAR = 7"
         };
-        const AstResolver r3 = [&table](const QString& e) { return table.expressionAst(e); };
+        EraParseTable compiler3(nullptr);
+        const AstResolver r3 = [&compiler3](const QString& e) { return compiler3.expressionAst(e); };
         QList<LogicalLine> s3;
         for (int i = 0; i < constArrSrc.size(); ++i) {
             s3.append(AstBuilder::build(constArrSrc.at(i), ScriptPosition("ca.ERB", i, 1), r3));
@@ -176,14 +180,14 @@ int main(int argc, char* argv[]) {
 
     qDebug() << "\n4) 类型回填（强类型）";
     // A 是 Int -> A + 1 合法
-    auto add = table.expressionAst("A + 1");
+    auto add = table.lineAt("vt", 6)->arguments[1].ast;
     check(add && add->valueType() == OperandType::Int, "A + 1 -> Int");
     check(add && static_cast<BinaryOpNode*>(add.get())->typesValid(), "A + 1 类型合法");
     // S 是 Str -> S + 1 类型不匹配
-    auto bad = table.expressionAst("S + 1");
+    auto bad = table.lineAt("vt", 7)->arguments[1].ast;
     check(bad && !static_cast<BinaryOpNode*>(bad.get())->typesValid(), "S + 1 类型不匹配（S 为字符串）");
     // 变量节点本身也被定型
-    auto sOnly = table.expressionAst("S");
+    auto sOnly = table.lineAt("vt", 8)->arguments[0].ast;
     check(sOnly && sOnly->valueType() == OperandType::Str, "S -> Str（变量表回填）");
     check(vt.typeOf("G") == OperandType::Int, "typeOf(G) == Int");
 

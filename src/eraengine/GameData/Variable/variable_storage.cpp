@@ -370,7 +370,7 @@ void VariableStorage::setCharaStrRaw(const QString &name, int charaId, int index
 		if (charaList.size() <= charaId) charaList.resize(charaId + 1);
 		auto &vec = charaList[charaId];
 		if (vec.size() <= index) vec.resize(index + 1);
-		vec[index] = flatString(QVariant(value));
+		vec[index] = FlatStringValue(value);
 }
 
 QString VariableStorage::getCharaStr(const QString &name, int charaId, int index) const
@@ -736,7 +736,7 @@ void VariableStorage::setLocalStr(int index, const QString &value)
 				m_localIntVars.resize(index + 1);
 				m_localStrVars.resize(index + 1);
 		}
-		m_localStrVars[index] = flatString(QVariant(value));
+		m_localStrVars[index] = FlatStringValue(value);
 }
 
 QString VariableStorage::getLocalStr(int index) const
@@ -764,7 +764,7 @@ void VariableStorage::setArgStr(int index, const QString& value)
 {
 		if (index < 0) return;
 		if (index >= m_argStrVars.size()) m_argStrVars.resize(index + 1);
-		m_argStrVars[index] = flatString(QVariant(value));
+		m_argStrVars[index] = FlatStringValue(value);
 }
 
 QString VariableStorage::getArgStr(int index) const
@@ -953,7 +953,7 @@ void VariableStorage::setGlobalStr1D(const QString &name, int x, const QString &
 		if (x < 0) return;
 		auto &vec = m_globalStr1D[storageName(name)];
 		if (vec.size() <= x) vec.resize(x + 1);
-		vec[x] = flatString(QVariant(value));
+		vec[x] = FlatStringValue(value);
 }
 
 QString VariableStorage::getGlobalStr1D(const QString &name, int x) const
@@ -975,7 +975,7 @@ void VariableStorage::setGlobalStr2D(const QString &name, int x, int y, const QS
 		auto &table = m_globalStr2D[storageName(name)];
 		if (table.size() <= x) table.resize(x + 1);
 		if (table[x].size() <= y) table[x].resize(y + 1);
-		table[x][y] = flatString(QVariant(value));
+		table[x][y] = FlatStringValue(value);
 }
 
 QString VariableStorage::getGlobalStr2D(const QString &name, int x, int y) const
@@ -990,7 +990,7 @@ QString VariableStorage::getGlobalStr2D(const QString &name, int x, int y) const
 void VariableStorage::setSystemStr(const QString &name, int index, const QString &value)
 {
 		if (index != 0) return;   // 系统字符串变量目前只有单值（RESULTS / SAVEDATA_TEXT）
-		m_systemStrVars[eraUpperKey(name)] = flatString(QVariant(value));
+		m_systemStrVars[eraUpperKey(name)] = FlatStringValue(value);
 }
 
 QString VariableStorage::getSystemStr(const QString &name, int index) const
@@ -1283,7 +1283,7 @@ void VariableStorage::applyBinarySave(const EraBinaryData::Document& document) {
                     const QString value=d.defaultStr.value(i);
                     if(d.dimension<=1) setGlobalStr1D(key,x,value);
                     else if(d.dimension==2) setGlobalStr2D(key,x,y,value);
-                    else { auto& a=m_globalStr3D[key]; if(a.size()<=x)a.resize(x+1); if(a[x].size()<=y)a[x].resize(y+1); if(a[x][y].size()<=z)a[x][y].resize(z+1); a[x][y][z]=flatString(QVariant(value)); }
+                    else { auto& a=m_globalStr3D[key]; if(a.size()<=x)a.resize(x+1); if(a[x].size()<=y)a[x].resize(y+1); if(a[x][y].size()<=z)a[x][y].resize(z+1); a[x][y][z]=FlatStringValue(value); }
                 } else {
                     qint64 value=d.defaultInt.value(i);
                     if(d.dimension<=1) setGlobalInt1D(key,x,value);
@@ -1308,11 +1308,11 @@ void VariableStorage::applyBinarySave(const EraBinaryData::Document& document) {
             if(character>=0) {
                 if(s.string) {
                     if(p.size()<2) setCharaStr(s.name,character,x,text);
-                    else { auto& a=m_charaStr2D[s.name]; int slot=resolveCharaIndex(character); if(a.size()<=slot)a.resize(slot+1); if(a[slot].size()<=x)a[slot].resize(x+1); if(a[slot][x].size()<=y)a[slot][x].resize(y+1); a[slot][x][y]=flatString(QVariant(text)); }
+                    else { auto& a=m_charaStr2D[s.name]; int slot=resolveCharaIndex(character); if(a.size()<=slot)a.resize(slot+1); if(a[slot].size()<=x)a[slot].resize(x+1); if(a[slot][x].size()<=y)a[slot][x].resize(y+1); a[slot][x][y]=FlatStringValue(text); }
                 } else if(p.size()<2) setCharaInt(s.name,character,x,number); else setCharaInt3D(s.name,character,x,y,number);
             } else if(s.string) {
                 if(p.size()<2) setGlobalStr1D(s.name,x,text); else if(p.size()==2) setGlobalStr2D(s.name,x,y,text);
-                else { auto& a=m_globalStr3D[s.name]; if(a.size()<=x)a.resize(x+1); if(a[x].size()<=y)a[x].resize(y+1); if(a[x][y].size()<=z)a[x][y].resize(z+1); a[x][y][z]=flatString(QVariant(text)); }
+                else { auto& a=m_globalStr3D[s.name]; if(a.size()<=x)a.resize(x+1); if(a[x].size()<=y)a[x].resize(y+1); if(a[x][y].size()<=z)a[x][y].resize(z+1); a[x][y][z]=FlatStringValue(text); }
             } else if(p.size()<2) { if(hasSystemVariable(s.name)) setSystemVariable(s.name,x,number); else setGlobalInt1D(s.name,x,number); }
             else if(p.size()==2) setGlobalInt2D(s.name,x,y,number); else setGlobalInt3D(s.name,x,y,z,number);
         }
@@ -1337,15 +1337,6 @@ void VariableStorage::applyBinarySave(const EraBinaryData::Document& document) {
     auto shapes=saveShapes(m_variableConfig,m_saveVariableTable,false,document.type==EraBinaryData::FileType::Global);
     if(document.type==EraBinaryData::FileType::Var) shapes.append(saveShapes(m_variableConfig,m_saveVariableTable,false,true));
     applyList(document.variables,shapes,-1);
-}
-
-// Compatibility adapters now read/write the actual slot; no provenance sidecar.
-QVariant VariableStorage::stringValueRaw(const QString& key, int index, const QString&) const {
-    const auto slot = getStringSlot(key, {index});
-    return slot.markup.parts.isEmpty() ? QVariant(slot.text) : toVariant(slot);
-}
-void VariableStorage::setStringProvenance(const QString& name, int index, const QVariant& value) {
-    setStringSlot(name, {index}, flatString(value));
 }
 
 FlatStringValue VariableStorage::getStringSlot(const QString& name, const QList<int>& indices) const {

@@ -15,6 +15,7 @@
  * You should have received a copy of the GNU General Public License
  * along with this program.  If not, see <https://www.gnu.org/licenses/>.
  */
+#include "print_template.h"
 #include "function_system.h"
 #include "GameData/Variable/variable_storage.h"
 #include <functional>
@@ -138,12 +139,12 @@ void FunctionSystem::registerBuiltInFunctions()
     // String functions
     m_builtInFunctions["LEN"] = [](const QList<QVariant>& args, VariableStorage*) -> QVariant {
         if (args.isEmpty()) return QVariant(0);
-        return QVariant(args.first().toString().length());
+        return QVariant(stringText(args.first()).length());
     };
     
     m_builtInFunctions["MID"] = [](const QList<QVariant>& args, VariableStorage*) -> QVariant {
         if (args.size() < 2) return QVariant("");
-        QString str = args.first().toString();
+        QString str = stringText(args.first());
         int start = args.at(1).toInt();
         if (start <= 0 || start > str.length()) return QVariant("");
         if (args.size() >= 3) {
@@ -155,7 +156,7 @@ void FunctionSystem::registerBuiltInFunctions()
     
     m_builtInFunctions["LEFT"] = [](const QList<QVariant>& args, VariableStorage*) -> QVariant {
         if (args.size() < 2) return QVariant("");
-        QString str = args.first().toString();
+        QString str = stringText(args.first());
         int length = args.at(1).toInt();
         if (length <= 0) return QVariant("");
         return QVariant(str.left(length));
@@ -163,7 +164,7 @@ void FunctionSystem::registerBuiltInFunctions()
     
     m_builtInFunctions["RIGHT"] = [](const QList<QVariant>& args, VariableStorage*) -> QVariant {
         if (args.size() < 2) return QVariant("");
-        QString str = args.first().toString();
+        QString str = stringText(args.first());
         int length = args.at(1).toInt();
         if (length <= 0 || length > str.length()) return QVariant(str);
         return QVariant(str.right(length));

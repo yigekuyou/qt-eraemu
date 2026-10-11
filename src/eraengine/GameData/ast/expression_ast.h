@@ -351,6 +351,9 @@ struct StrFormPart {
     StrFormPartType type = StrFormPartType::Text;
     QString text;                                   // Text
     QSharedPointer<ExpressionNode> expression;      // Expression
+    // Occurrence within one compiled template; equal IDs are the raw/markup views
+    // of one source occurrence, distinct IDs must be evaluated independently.
+    int occurrenceId = -1;
 
     QSharedPointer<ExpressionNode> width;
     bool leftAlign = false;

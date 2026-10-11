@@ -34,7 +34,10 @@ QList<StrFormPart> fragments(const QString& text, const QList<QSharedPointer<Exp
         auto m = matches.next(); const int index = m.captured(1).toInt();
         if (index >= expressions.size()) continue;
         if (m.capturedStart() > pos) out.append(StrFormPart::makeText(decode(text.mid(pos, m.capturedStart()-pos))));
-        out.append(StrFormPart::makeExpr(expressions[index])); pos = m.capturedEnd();
+        auto part = StrFormPart::makeExpr(expressions[index]);
+        part.occurrenceId = index;
+        out.append(std::move(part));
+        pos = m.capturedEnd();
     }
     if (pos < text.size()) out.append(StrFormPart::makeText(decode(text.mid(pos))));
     return out;
@@ -45,6 +48,7 @@ QSharedPointer<CompiledPrintTemplate> compileMarkup(const QString& markup, const
     auto text = [&](const QString& value) {
         for (const auto& f : fragments(value, expressions)) {
             CompiledPrintTemplatePart part; part.text = f.text; part.expression = f.expression;
+            part.occurrenceId = f.occurrenceId;
             part.kind = f.expression ? PrintTemplatePart::Kind::Expression : PrintTemplatePart::Kind::Text;
             out->parts.append(part);
         }
@@ -149,23 +153,29 @@ QSharedPointer<CompiledPrintTemplate> PrintTemplateCompiler::compile(const QShar
     for (int i = 0; i < expressions.size(); ++i) {
         const auto at = markup.indexOf(marker(i), pos);
         result->rawParts.append(StrFormPart::makeText(markup.mid(pos, at-pos)));
-        StrFormPart part; part.expression = expressions[i]; result->rawParts.append(part);
+        StrFormPart part; part.expression = expressions[i]; part.occurrenceId = i; result->rawParts.append(part);
         pos = at + marker(i).size();
     }
     result->rawParts.append(StrFormPart::makeText(markup.mid(pos)));
     return result;
 }
-PrintTemplate PrintTemplateCompiler::evaluate(const CompiledPrintTemplate& source, const std::function<QString(const ExpressionNode&)>& eval) {
+PrintTemplate PrintTemplateCompiler::evaluateOccurrences(const CompiledPrintTemplate& source,
+    const std::function<QVariant(const ExpressionNode&, int)>& eval) {
     PrintTemplate out;
     out.alignment = source.alignment; out.noWrap = source.noWrap;
     for (const auto& compiled : source.parts) {
         PrintTemplatePart part = compiled;
-        if (compiled.expression) { part.text = eval(*compiled.expression); part.kind = PrintTemplatePart::Kind::Text; }
+        if (compiled.expression) {
+            const auto value = flatString(eval(*compiled.expression, compiled.occurrenceId));
+            out.parts.append(value.markup.parts);
+            continue;
+        }
         QHash<QString, QString> attrs;
         for (const auto& key : compiled.attributeOrder) {
             const auto& form = static_cast<const StrFormNode&>(*compiled.attributes.value(key));
             QString value;
-            for (const auto& fragment : form.parts()) value += fragment.expression ? eval(*fragment.expression) : fragment.text;
+            for (const auto& fragment : form.parts())
+                value += fragment.expression ? stringText(eval(*fragment.expression, fragment.occurrenceId)) : fragment.text;
             attrs[key] = value;
         }
         if (part.kind == PrintTemplatePart::Kind::Style) {
@@ -177,11 +187,7 @@ PrintTemplate PrintTemplateCompiler::evaluate(const CompiledPrintTemplate& sourc
             part.style.underline = part.text == "u"; part.style.strike = part.text == "s";
         }
         part.buttonValue = attrs.value("value"); part.tooltip = attrs.value("title");
-        if (part.kind == PrintTemplatePart::Kind::Image) {
-            part.text = attrs.value("src");
-            // <img srcb='...'>：按钮选中/悬停态替换图（C# ButtonResourceName）
-            part.imageAlt = attrs.value("srcb");
-        }
+        if (part.kind == PrintTemplatePart::Kind::Image) { part.text = attrs.value("src"); part.imageAlt = attrs.value("srcb"); }
         if (part.kind == PrintTemplatePart::Kind::Alignment) part.text = attrs.value("align");
         part.shapeType = attrs.value("type");
         for (const auto& value : attrs.value("param").split(',', Qt::SkipEmptyParts)) part.shapeParams.append(value.trimmed().toInt());

@@ -52,7 +52,7 @@ namespace {
 // 运行期类型探测（仅当 AST 类型未知时使用）
 inline bool isRuntimeString(const QVariant& v) noexcept {
     const int id = v.typeId();
-    return id == QMetaType::QString || id == QMetaType::QChar || isStructuredString(v);
+    return id == QMetaType::QString || id == QMetaType::QChar || isFlatStringValue(v);
 }
 
 // ---------------------------------------------------------------------------
@@ -322,32 +322,32 @@ FlatStringValue ExpressionEvaluator::evaluateFlat(const ExpressionNode& node, Va
 QVariant ExpressionEvaluator::evaluateNode(const ExpressionNode &node, VariableStorage *storage, GameBaseData *gameBaseData)
 {
     if (!node.markupTemplate) return evaluateUnstructuredNode(node, storage, gameBaseData);
-    QHash<const ExpressionNode*, QVariant> snapshots;
-    const auto eval = [&](const ExpressionNode& expression) {
-        if (!snapshots.contains(&expression)) snapshots.insert(&expression, evaluateNode(expression, storage, gameBaseData));
-        return snapshots.value(&expression);
-    };
-    QString raw;
-    for (const auto& part : node.markupTemplate->rawParts)
-        raw += part.expression ? stringValue(eval(*part.expression)) : part.text;
-    auto markup = PrintTemplateCompiler::evaluate(*node.markupTemplate,
-        [&](const ExpressionNode& expression) { return stringText(eval(expression)); });
-    // Replace standalone expression leaves with their typed, already evaluated parts.
-    QList<PrintTemplatePart> parts;
-    // `evaluate()` preserves one output part per compiled source part. Iterate
-    // over the source shape: structured expression values may expand into
-    // several parts, so indexing by the growing output list corrupts memory.
-    const int sourceCount = node.markupTemplate->parts.size();
-    for (int i = 0; i < sourceCount && i < markup.parts.size(); ++i) {
-        const auto& source = node.markupTemplate->parts.at(i);
-        const QVariant value = source.expression ? eval(*source.expression) : QVariant();
-        if (source.expression && isStructuredString(value))
-            parts.append(valueMarkup(value).parts);
-        else
-            parts.append(markup.parts.at(i));
-    }
-    markup.parts = parts;
-    return structuredString(raw, markup);
+    class OccurrenceContext {
+    public:
+        OccurrenceContext(const CompiledPrintTemplate& source, const std::function<QVariant(const ExpressionNode&)>& eval) {
+            for (const auto& part : source.rawParts) {
+                if (!part.expression) { text += part.text; continue; }
+                if (part.occurrenceId != values.size()) throw std::runtime_error("Invalid template occurrence");
+                const QVariant value = eval(*part.expression);
+                if (!value.isValid()) throw std::runtime_error("Invalid template value");
+                values.append(value);
+                text += stringText(value);
+            }
+        }
+        QVariant value(int occurrence) const {
+            if (occurrence < 0 || occurrence >= values.size()) throw std::runtime_error("Missing template occurrence");
+            return values.at(occurrence);
+        }
+        QString text;
+    private:
+        QList<QVariant> values;
+    } context(*node.markupTemplate, [&](const ExpressionNode& expression) {
+        return evaluateNode(expression, storage, gameBaseData);
+    });
+    auto markup = PrintTemplateCompiler::evaluateOccurrences(*node.markupTemplate,
+        [&](const ExpressionNode&, int occurrence) { return context.value(occurrence); });
+    FlatStringValue result(context.text, std::move(markup));
+    return toVariant(result);
 }
 
 QVariant ExpressionEvaluator::evaluateUnstructuredNode(const ExpressionNode &node, VariableStorage *storage, GameBaseData *gameBaseData)
@@ -508,7 +508,7 @@ qint64 ExpressionEvaluator::resolveIndex(const VariableNode& node, int index,
     if (!value.isValid()) throw std::runtime_error("Invalid variable index");
     // 字符串下标判定：解析期已定型（强类型）或运行期确实是字符串
     const bool isStr = (idx.valueType() == OperandType::Str)
-                       || value.userType() == QMetaType::QString;
+                       || isStringValue(value);
     if (isStr) {
         const QString name = stringText(value);
         if (m_constantTable) {
@@ -621,8 +621,7 @@ QVariant ExpressionEvaluator::evaluateVariable(const VariableNode &node, Variabl
         const QString target = storage->resolvedStorageName(varName);
         const int idx = node.indices().isEmpty() ? 0
             : static_cast<int>(resolveIndex(node, 0, storage, gameBaseData));
-        const QString text = storage->getGlobalStr1DRaw(target, idx);
-        return storage->stringValueRaw(target, idx, text);
+        return toVariant(storage->getStringSlot(target, {idx}));
     }
     if (aliased && storage->hasReference(node.name())) {
         // 只有已登记为 REF 的整数形参才切换到目标系统变量路由；
@@ -687,7 +686,7 @@ QVariant ExpressionEvaluator::evaluateVariable(const VariableNode &node, Variabl
             if (node.isArray() && !node.indices().isEmpty()) {
                 idx = static_cast<int>(resolveIndex(node, 0, storage, gameBaseData));
             }
-            return storage->stringValueRaw("ARGS", idx, storage->getArgStr(idx));
+            return toVariant(storage->getStringSlot(QStringLiteral("ARGS"), {idx}));
         }
         if (upper == QLatin1String("LOCALS")) {
             // LOCALS = 字符串局部槽
@@ -695,7 +694,7 @@ QVariant ExpressionEvaluator::evaluateVariable(const VariableNode &node, Variabl
             if (node.isArray() && !node.indices().isEmpty()) {
                 idx = static_cast<int>(resolveIndex(node, 0, storage, gameBaseData));
             }
-            return storage->stringValueRaw("LOCALS", idx, storage->getLocalStr(idx));
+            return toVariant(storage->getStringSlot(QStringLiteral("LOCALS"), {idx}));
         }
         if (upper == QLatin1String("RESULTS")) {
             // [qdbug] 修复：RESULTS 是**全局**字符串数组（C# VariableData.cs:202
@@ -708,7 +707,7 @@ QVariant ExpressionEvaluator::evaluateVariable(const VariableNode &node, Variabl
             if (node.isArray() && !node.indices().isEmpty()) {
                 idx = static_cast<int>(resolveIndex(node, 0, storage, gameBaseData));
             }
-            return storage->stringValueRaw("RESULTS", idx, storage->getGlobalStr1D(QStringLiteral("RESULTS"), idx));
+            return toVariant(storage->getStringSlot(QStringLiteral("RESULTS"), {idx}));
         }
         // 用户函数形参别名（@F(A,B) 内的 A/B -> LOCAL 槽位）
         const int aliasIdx = storage->localAliasIndex(varName);
@@ -788,7 +787,7 @@ QVariant ExpressionEvaluator::evaluateVariable(const VariableNode &node, Variabl
             if (node.isArray() && !node.indices().isEmpty()) {
                 idx = static_cast<int>(resolveIndex(node, 0, storage, gameBaseData));
             }
-            return storage->stringValueRaw("RESULTS", idx, storage->getGlobalStr1D(QStringLiteral("RESULTS"), idx));
+            return toVariant(storage->getStringSlot(QStringLiteral("RESULTS"), {idx}));
         }
         if (upper == QLatin1String("LASTLOAD_TEXT")) return QVariant(storage->getGlobalStr1D(upper,0));
         if (upper == QLatin1String("SAVEDATA_TEXT")) {
@@ -804,7 +803,7 @@ QVariant ExpressionEvaluator::evaluateVariable(const VariableNode &node, Variabl
             }
             idx = static_cast<int>(resolveIndex(node, 0, storage, gameBaseData));
         }
-        return storage->stringValueRaw(storage->resolvedStorageName(varName), idx, storage->getGlobalStr1D(varName, idx));
+        return toVariant(storage->getStringSlot(storage->resolvedStorageName(varName), {idx}));
     }
 
     if(varName.compare(QLatin1String("LASTLOAD_NO"),Qt::CaseInsensitive)==0 || varName.compare(QLatin1String("LASTLOAD_VERSION"),Qt::CaseInsensitive)==0)

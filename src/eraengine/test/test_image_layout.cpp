@@ -92,7 +92,7 @@ int main(int argc, char* argv[]) {
     const auto spanOf = [&](const QString& html) -> ConsoleSpan {
         console.clearAll();
         const auto compiled = PrintTemplateCompiler::compile(QSharedPointer<LiteralNode>::create(html + QStringLiteral("<br>")));
-        console.printTemplate(PrintTemplateCompiler::evaluate(*compiled, [](const ExpressionNode&) { return QString(); }));
+        console.printTemplate(PrintTemplateCompiler::evaluateOccurrences(*compiled, [](const ExpressionNode&, int) { return QVariant(QString()); }));
         console.flush();
         if (console.buffer().count() == 0) return ConsoleSpan{};
         const QList<ConsoleSpan> spans = console.buffer().at(0).flatSpans();

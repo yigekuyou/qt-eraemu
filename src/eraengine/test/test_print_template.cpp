@@ -1,11 +1,15 @@
 #include <QCoreApplication>
 #include <QDebug>
+#include <type_traits>
+
 #include "print_template.h"
 #include "ast_builder.h"
 #include "era_parse_table.h"
 #include "execution_engine.h"
 #include "expression_evaluator.h"
 #include "console_backend.h"
+
+static_assert(!std::is_convertible_v<QString, FlatStringValue>);
 
 int main(int argc, char** argv) {
     QCoreApplication app(argc, argv);
@@ -17,6 +21,64 @@ int main(int argc, char** argv) {
     ExpressionEvaluator evaluator;
     ExecutionEngine engine(&storage);
     engine.setParseTable(&table); engine.setExpressionEvaluator(&evaluator);
+    {
+        // Two source occurrences intentionally use exactly the same AST pointer.
+        const auto increment = table.expressionAst("LOCAL++");
+        const auto repeated = QSharedPointer<StrFormNode>::create(QList<StrFormPart>{
+            StrFormPart::makeText("<button value='"), StrFormPart::makeExpr(increment),
+            StrFormPart::makeText("'>"), StrFormPart::makeExpr(increment),
+            StrFormPart::makeText("</button>")});
+        PrintTemplateCompiler::prepare(repeated);
+        storage.setLocalInt(0, 7);
+        auto value = evaluator.evaluateFlat(*repeated, &storage);
+        check(value.text == "<button value='7'>8</button>" && storage.getLocalInt(0) == 9
+              && value.markup.parts.at(0).buttonValue == "7" && value.markup.parts.at(1).text == "8",
+              "shared AST pointer executes once for each source occurrence, raw/markup reuse its value");
+        const auto failing = table.expressionAst("1 / 0");
+        const auto aborting = QSharedPointer<StrFormNode>::create(QList<StrFormPart>{
+            StrFormPart::makeText("<b>"), StrFormPart::makeExpr(increment),
+            StrFormPart::makeExpr(failing), StrFormPart::makeExpr(increment), StrFormPart::makeText("</b>")});
+        PrintTemplateCompiler::prepare(aborting);
+        storage.setLocalInt(0, 10);
+        check(!evaluator.evaluate(*aborting, &storage).isValid() && storage.getLocalInt(0) == 11,
+              "failed occurrence aborts flattening before later side effects");
+        storage.setStringSlot("LOCALS", {0}, value);
+        storage.setStringSlot("ARGS", {0}, value);
+        auto frame = storage.localContext();
+        storage.setLocalStr(0, "replacement"); storage.setArgStr(0, "replacement");
+        storage.setLocalContext(frame);
+        check(storage.getStringSlot("LOCALS", {0}).markup.parts.at(0).buttonValue == "7"
+              && storage.getStringSlot("ARGS", {0}).text == value.text,
+              "local and argument frames preserve eager values after evaluation");
+        storage.setStringSlot("FLAT3D", {1, 2, 3}, value);
+        storage.registerCharaDataVariable("FLATCHARA", true, 2);
+        storage.addChara(20); storage.addChara(30);
+        storage.setStringSlot("FLATCHARA", {0, 1, 2}, value);
+        storage.swapChara(0, 1);
+        check(storage.getStringSlot("FLAT3D", {1, 2, 3}).markup.parts.at(0).buttonValue == "7"
+              && storage.getStringSlot("FLATCHARA", {1, 1, 2}).text == value.text,
+              "multidimensional and reordered character slots preserve flattened structure");
+        storage.setStringSlot("FLAT3D", {1, 2, 3}, FlatStringValue(value.text));
+        check(storage.getStringSlot("FLAT3D", {1, 2, 3}).markup.parts.size() == 1,
+              "plain multidimensional writes replace structure with opaque text");
+    }
+    {
+        FlatStringValue detached;
+        QWeakPointer<ExpressionNode> sourceLifetime;
+        {
+            auto source = QSharedPointer<LiteralNode>::create(QStringLiteral("<b>retained</b>"));
+            sourceLifetime = source;
+            PrintTemplateCompiler::prepare(source);
+            detached = evaluator.evaluateFlat(*source, &storage);
+            storage.setStringSlot("ARGS", {1}, detached);
+        }
+        check(sourceLifetime.isNull() && detached.text == "<b>retained</b>"
+              && detached.markup.parts.first().kind == PrintTemplatePart::Kind::Style
+              && storage.getStringSlot("ARGS", {1}).text == detached.text,
+              "flat result and argument slot release all source AST references on return");
+        check(!toVariant(detached).canConvert<QString>() && toVariant(detached).toString().isEmpty(),
+              "flat values require explicit text conversion");
+    }
     const auto resolve = [&](const QString& e) { return table.expressionAst(e); };
     for (const QString& source : QStringList{
         QString::fromUtf8(R"ERB(CALL F, @"前缀/\@1 ? 哥哥 # 姐姐\@后缀")ERB"),
@@ -137,7 +199,7 @@ int main(int argc, char** argv) {
     }
     const auto printHtmlFixture = [&](const QString& text) {
         const auto compiled = PrintTemplateCompiler::compile(QSharedPointer<LiteralNode>::create(text));
-        console.printTemplate(PrintTemplateCompiler::evaluate(*compiled, [](const ExpressionNode&) { return QString(); }));
+        console.printTemplate(PrintTemplateCompiler::evaluateOccurrences(*compiled, [](const ExpressionNode&, int) { return QVariant(QString()); }));
     };
     console.clearAll();
     printHtmlFixture("<shape type = 'space' param = '100'><button value = '0' title = 'start'>START</button><br>");

@@ -1,4 +1,5 @@
 #include <QCoreApplication>
+#include <algorithm>
 #include <QDebug>
 #include "ast/ast_builder.h"
 #include "ast/expression_evaluator.h"
@@ -68,6 +69,7 @@ static void htmlFlow() {
     for (int i = 0; i < script.size(); ++i)
         lines.append(AstBuilder::build(script[i], ScriptPosition("html.ERB", i, 0),
             [&table](const QString& text) { return table.expressionAst(text); }));
+    const auto ast = table.expressionAst("\"<button value='7'>same</button>\"");
     table.loadScript("html", lines); table.finalizeParse(); table.setEntryPoint("MAIN");
     // Identical markup obtained through an ordinary runtime write stays opaque.
     storage.setLocalStr(0, "<button value='99'>opaque</button>");
@@ -88,14 +90,21 @@ static void htmlFlow() {
     }
     if (!good) { qCritical() << "HTML function/accumulation provenance failed" << int(result) << printed.size(); ++failures; }
     else qInfo() << "PASS HTML function/accumulation provenance";
-    auto ast = table.expressionAst("\"<button value='7'>same</button>\"");
     const auto tracked = evaluator.evaluate(*ast, &storage);
-    storage.setGlobalStr1D("RESULTS", 0, tracked.toString());
-    storage.setStringProvenance("RESULTS", 0, tracked);
-    storage.setGlobalStr1D("RESULTS", 0, tracked.toString());
-    good = !isStructuredString(storage.stringValueRaw("RESULTS", 0, tracked.toString()));
-    storage.setStringProvenance("RESULTS", 0, tracked); storage.resetGlobals();
-    good &= !isStructuredString(storage.stringValueRaw("RESULTS", 0, tracked.toString()));
+    const auto hasButton = [](const FlatStringValue& value) {
+        return std::any_of(value.markup.parts.cbegin(), value.markup.parts.cend(),
+            [](const PrintTemplatePart& part) { return part.kind == PrintTemplatePart::Kind::Button; });
+    };
+    storage.setStringSlot("RESULTS", {0}, flatString(tracked));
+    good = hasButton(storage.getStringSlot("RESULTS", {0}));
+    storage.setGlobalStr1D("RESULTS", 0, stringText(tracked));
+    good &= !hasButton(storage.getStringSlot("RESULTS", {0}))
+        && storage.getStringSlot("RESULTS", {0}).text == stringText(tracked);
+    // RESETGLOBAL clears user globals; built-in RESULTS is preserved.
+    storage.setStringSlot("HTML_GLOBAL", {0}, flatString(tracked));
+    storage.resetGlobals();
+    good &= storage.getStringSlot("HTML_GLOBAL", {0}).text.isEmpty()
+        && !hasButton(storage.getStringSlot("HTML_GLOBAL", {0}));
     if (!good) { qCritical() << "HTML provenance invalidation failed"; ++failures; }
 }
 int main(int argc, char** argv) {

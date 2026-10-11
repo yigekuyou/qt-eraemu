@@ -52,6 +52,7 @@
 #include "variable_storage.h"
 #include "execution_engine.h"
 #include "extension_registry.h"
+#include "print_template.h"
 
 static int g_failed = 0;
 
@@ -319,6 +320,15 @@ int main(int argc, char* argv[]) {
         engine.setExpressionEvaluator(&evaluator);
         const auto load = [](const QString& text) { return AstBuilder::build(text, {}, parseExpr); };
         const auto execute = [&](const QString& text) { return engine.executeInstruction(load(text)); };
+        QVariant extensionResult;
+        const auto flatKey = toVariant(FlatStringValue(QStringLiteral("<b>opaque-table</b>")));
+        check(engine.extensions().runExpression("DT_CREATE", {flatKey}, {}, extensionResult)
+              && extensionResult.toLongLong() == 1, "DT_CREATE accepts explicit flat text");
+        check(engine.extensions().runExpression("DT_EXIST", {flatKey}, {}, extensionResult)
+              && extensionResult.toLongLong() == 1, "DT keys preserve opaque markup spelling");
+        const auto flatName = toVariant(FlatStringValue(QStringLiteral("<i>column</i>")));
+        check(engine.extensions().runExpression("DT_COLUMN_ADD", {flatKey, flatName, QString("string")}, {}, extensionResult)
+              && extensionResult.toLongLong() == 1, "DT column names accept flat text without rendering");
         check(execute("DT_CREATE \"ast-table\""), "DT create through AST statement path");
         check(execute("DT_COLUMN_ADD \"ast-table\", \"value\", \"string\""), "DT string column");
         storage.setLocalStr(0, "ast-table"); storage.setArgStr(0, "value");

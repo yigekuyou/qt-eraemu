@@ -369,7 +369,7 @@ int main(int argc, char* argv[]) {
         if (!line.arguments.isEmpty() && line.arguments.first().ast) {
             ExpressionEvaluator htmlEval;
             VariableStorage htmlStorage;
-            check(htmlEval.evaluate(*line.arguments.first().ast, &htmlStorage).toString()
+            check(stringText(htmlEval.evaluate(*line.arguments.first().ast, &htmlStorage))
                   == QString::fromUtf8("<button title='say \"hello\"; keep &amp; tail'>START</button><br>"),
                   "complete HTML suffix survives comment stripping");
         }

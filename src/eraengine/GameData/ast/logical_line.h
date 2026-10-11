@@ -184,7 +184,7 @@ struct PrintTemplate {
 // Only load-time templates own interpolation ASTs. Runtime print data above is pure data.
 struct CompiledPrintTemplatePart : PrintTemplatePart {
     QSharedPointer<ExpressionNode> expression;
-    QSharedPointer<ExpressionNode> buttonValueExpression;
+    int occurrenceId = -1;
     QHash<QString, QSharedPointer<ExpressionNode>> attributes;
     QStringList attributeOrder;
 };

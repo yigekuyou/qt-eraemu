@@ -30,6 +30,7 @@
 // 取值样式（XML_GET/SET）：0=Value / 1=InnerText / 2=InnerXml / 3=OuterXml / 4=Name。
 // ---------------------------------------------------------------------------
 
+#include "print_template.h"
 #include <QList>
 #include <QString>
 #include <QStringList>
@@ -365,12 +366,12 @@ bool resolveDocArg(const QList<QVariant>& a, const QList<const ExpressionNode*>&
     const bool argIsInt = node0 != nullptr && node0->valueType() == OperandType::Int;
     const bool argIsStr = node0 != nullptr && node0->valueType() == OperandType::Str;
     if (argIsInt || (byName && argIsStr)) {
-        docId = a.value(0).toString();
+        docId = stringText(a.value(0));
         return true;
     }
     // 临时文档：解析 XML 文本
     bool parsed = false;
-    tempDoc = parseXml(a.value(0).toString(), parsed);
+    tempDoc = parseXml(stringText(a.value(0)), parsed);
     if (!parsed) { ok = false; return false; }
     saveToVar = nodes.isEmpty() ? QString() : refTargetName(node0);
     return false;
@@ -493,11 +494,11 @@ void registerXmlExtensions(ExtensionRegistry& ext)
     // XML_DOCUMENT / XML_EXIST / XML_RELEASE（Creator.Method.cs:739）
     ext.regExpr(QStringLiteral("XML_DOCUMENT"), OperandType::Int, 2, 2,
         [](const QList<QVariant>& a, const QList<const ExpressionNode*>&, QVariant& out) {
-            const QString id = a.value(0).toString();
+            const QString id = stringText(a.value(0));
             auto& store = docStore();
             if (store.contains(id)) { out = QVariant::fromValue<qint64>(0); return true; }
             bool ok = false;
-            XNodePtr doc = parseXml(a.value(1).toString(), ok);
+            XNodePtr doc = parseXml(stringText(a.value(1)), ok);
             if (!ok) { out = QVariant::fromValue<qint64>(0); return true; }   // C# 抛 CodeEE；容错记 0
             store.insert(id, doc);
             out = QVariant::fromValue<qint64>(1);
@@ -506,20 +507,20 @@ void registerXmlExtensions(ExtensionRegistry& ext)
 
     ext.regExpr(QStringLiteral("XML_EXIST"), OperandType::Int, 1, 1,
         [](const QList<QVariant>& a, const QList<const ExpressionNode*>&, QVariant& out) {
-            out = QVariant::fromValue<qint64>(docStore().contains(a.value(0).toString()) ? 1 : 0);
+            out = QVariant::fromValue<qint64>(docStore().contains(stringText(a.value(0))) ? 1 : 0);
             return true;
         });
 
     ext.regExpr(QStringLiteral("XML_RELEASE"), OperandType::Int, 1, 1,
         [](const QList<QVariant>& a, const QList<const ExpressionNode*>&, QVariant& out) {
-            out = QVariant::fromValue<qint64>(docStore().remove(a.value(0).toString()) > 0 ? 1 : 0);
+            out = QVariant::fromValue<qint64>(docStore().remove(stringText(a.value(0))) > 0 ? 1 : 0);
             return true;
         });
 
     ext.regExpr(QStringLiteral("XML_TOSTR"), OperandType::Str, 1, 1,
         [](const QList<QVariant>& a, const QList<const ExpressionNode*>&, QVariant& out) {
             auto& store = docStore();
-            const QString id = a.value(0).toString();
+            const QString id = stringText(a.value(0));
             out = store.contains(id) ? serialize(store.value(id)) : QString();
             return true;
         });
@@ -537,7 +538,7 @@ void registerXmlExtensions(ExtensionRegistry& ext)
             if (!doc) { out = QVariant::fromValue<qint64>(-1); return true; }
 
             bool pathOk = false;
-            const QList<XNodePtr> hits = selectNodes(doc, a.value(1).toString(), pathOk);
+            const QList<XNodePtr> hits = selectNodes(doc, stringText(a.value(1)), pathOk);
             if (!pathOk) { out = QVariant::fromValue<qint64>(0); return true; }
 
             const qint64 style = a.size() >= 4 ? a.value(3).toLongLong() : 0;
@@ -567,7 +568,7 @@ void registerXmlExtensions(ExtensionRegistry& ext)
             if (!doc) { out = QVariant::fromValue<qint64>(-1); return true; }
 
             bool pathOk = false;
-            const QList<XNodePtr> hits = selectNodes(doc, a.value(1).toString(), pathOk);
+            const QList<XNodePtr> hits = selectNodes(doc, stringText(a.value(1)), pathOk);
             if (!pathOk) { out = QVariant::fromValue<qint64>(0); return true; }
 
             const qint64 style = a.size() >= 4 ? a.value(3).toLongLong() : 0;
@@ -597,9 +598,9 @@ void registerXmlExtensions(ExtensionRegistry& ext)
             XNodePtr doc = byId ? docStore().value(docId) : temp;
             if (!doc) { out = QVariant::fromValue<qint64>(-1); return; }
             bool pathOk = false;
-            const QList<XNodePtr> hits = selectNodes(doc, a.value(1).toString(), pathOk);
+            const QList<XNodePtr> hits = selectNodes(doc, stringText(a.value(1)), pathOk);
             if (!pathOk) { out = QVariant::fromValue<qint64>(0); return; }
-            const QString val = a.value(2).toString();
+            const QString val = stringText(a.value(2));
             const bool setAll = a.size() >= 4 && a.value(3).toLongLong() != 0;
             qint64 style = a.size() >= 5 ? a.value(4).toLongLong() : 0;
             if (style < 0 || style > 2) style = 0;
@@ -640,7 +641,7 @@ void registerXmlExtensions(ExtensionRegistry& ext)
             XNodePtr doc = byId ? docStore().value(docId) : temp;
             if (!doc) { out = QVariant::fromValue<qint64>(-1); return; }
             bool pathOk = false;
-            const QList<XNodePtr> hits = selectNodes(doc, a.value(1).toString(), pathOk);
+            const QList<XNodePtr> hits = selectNodes(doc, stringText(a.value(1)), pathOk);
             if (!pathOk) { out = QVariant::fromValue<qint64>(0); return; }
 
             const int methodPos = attribute ? 5 : 4;      // C#: methodPos
@@ -650,11 +651,11 @@ void registerXmlExtensions(ExtensionRegistry& ext)
             XNodePtr child = std::make_shared<XNode>();
             if (attribute) {
                 child->kind = XNode::Attribute;
-                child->name = a.value(2).toString();
-                if (a.size() >= 4) child->text = a.value(3).toString();
+                child->name = stringText(a.value(2));
+                if (a.size() >= 4) child->text = stringText(a.value(3));
             } else {
                 bool parsed = false;
-                XNodePtr frag = parseXml(a.value(2).toString(), parsed);
+                XNodePtr frag = parseXml(stringText(a.value(2)), parsed);
                 if (!parsed || frag->children.isEmpty()) { out = QVariant::fromValue<qint64>(0); return; }
                 const XNodePtr rootEl = frag->children.at(0);
                 child->kind = rootEl->kind;
@@ -712,7 +713,7 @@ void registerXmlExtensions(ExtensionRegistry& ext)
             XNodePtr doc = byId ? docStore().value(docId) : temp;
             if (!doc) { out = QVariant::fromValue<qint64>(-1); return; }
             bool pathOk = false;
-            const QList<XNodePtr> hits = selectNodes(doc, a.value(1).toString(), pathOk);
+            const QList<XNodePtr> hits = selectNodes(doc, stringText(a.value(1)), pathOk);
             if (!pathOk) { out = QVariant::fromValue<qint64>(0); return; }
             if (!hits.isEmpty()) {
                 const bool setAll = a.size() == 3 && a.value(2).toLongLong() != 0;
@@ -753,16 +754,16 @@ void registerXmlExtensions(ExtensionRegistry& ext)
             // 2 参形态：XML_REPLACE(id, xml) —— 整份文档替换
             if (a.size() == 2 && (byName || (nodes.value(0) && nodes.at(0)->valueType() != OperandType::Int))) {
                 auto& store = docStore();
-                const QString id = a.value(0).toString();
+                const QString id = stringText(a.value(0));
                 if (!store.contains(id)) { out = QVariant::fromValue<qint64>(-1); return; }
                 bool ok = false;
-                XNodePtr doc = parseXml(a.value(1).toString(), ok);
+                XNodePtr doc = parseXml(stringText(a.value(1)), ok);
                 if (!ok) { out = QVariant::fromValue<qint64>(0); return; }
                 store[id] = doc;
                 out = QVariant::fromValue<qint64>(1);
                 return;
             }
-            const QString xml = a.value(a.size() > 2 ? 2 : 1).toString();
+            const QString xml = stringText(a.value(a.size() > 2 ? 2 : 1));
             bool parsed = false;
             XNodePtr frag = parseXml(xml, parsed);
             if (!parsed || frag->children.isEmpty()) { out = QVariant::fromValue<qint64>(0); return; }
@@ -775,7 +776,7 @@ void registerXmlExtensions(ExtensionRegistry& ext)
             XNodePtr doc = byId ? docStore().value(docId) : temp;
             if (!doc) { out = QVariant::fromValue<qint64>(-1); return; }
             bool pathOk = false;
-            const QList<XNodePtr> hits = selectNodes(doc, a.value(1).toString(), pathOk);
+            const QList<XNodePtr> hits = selectNodes(doc, stringText(a.value(1)), pathOk);
             if (!pathOk) { out = QVariant::fromValue<qint64>(0); return; }
             if (!hits.isEmpty()) {
                 const XNodePtr src = frag->children.at(0);

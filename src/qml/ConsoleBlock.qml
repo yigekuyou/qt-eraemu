@@ -89,7 +89,9 @@ Item {
     readonly property int gridCols: blockData && blockData.cols > 0 ? blockData.cols : 1
     readonly property int gridRows: blockData && blockData.rows > 0 ? blockData.rows : 1
     readonly property bool clickable: blockData && backend
-        ? blockData.clickable === true && blockData.generation === backend.generation : false
+        ? blockData.clickable === true && blockData.generation === backend.generation
+          && (blockData.isInteger ? backend.acceptsIntegerButtons : backend.acceptsStringButtons)
+        : false
     readonly property bool hovered: mouse.containsMouse && clickable
     // 图片区块是否有 `<img srcb='…'>` 按钮替换图（纯数据判定）。
     // 两张 Image 的可见性必须**同时**从这个只依赖 blockData 的属性推导：

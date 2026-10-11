@@ -438,8 +438,9 @@ EraEngine::EraEngine(QObject *parent)
 				&m_console, &ConsoleBackend::resetColor);
 		connect(&m_executionEngine, &ExecutionEngine::clearTextBox, this,
 				[this] { emit m_console.clearTextBoxRequested(); });
-		connect(&m_executionEngine, &ExecutionEngine::consoleRedraw, this,
-				[this](const QString&) { m_console.flush(); });
+        connect(&m_executionEngine, &ExecutionEngine::consoleRedraw,
+                &m_console, &ConsoleBackend::setRedraw);
+        m_expressionEvaluator.setRedrawProvider([this] { return m_console.currentRedraw(); });
 		connect(&m_executionEngine, &ExecutionEngine::consoleAlign, this,
 				[this](const QString& align) {
 					const QString a = align.toUpper();

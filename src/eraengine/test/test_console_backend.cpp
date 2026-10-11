@@ -196,7 +196,7 @@ int main(int argc, char* argv[]) {
         console.clickAt(console.lineCount() - 1, 0);
         check(submitted == 3, "new generation button clickable");
 
-        // 输入状态只影响按钮 role；普通文本行不应收到全量 dataChanged。
+        // 输入权限通过 QObject 属性更新，不替换任何行的绘制数据。
         ConsoleBackend partial;
         partial.print("静态文本");
         partial.newline();
@@ -208,7 +208,9 @@ int main(int argc, char* argv[]) {
             if (roles == QList<int>{ConsoleBackend::BlocksRole}) ++changedRows;
         });
         partial.notifyInputRequested("INPUT");
-        check(changedRows == 1, "输入状态只更新含按钮的行和 BlocksRole");
+        check(changedRows == 0, "输入请求不替换按钮行的 BlocksRole");
+        partial.notifyInputDone();
+        check(changedRows == 0, "输入结束不替换绘制数据");
     }
     {
         ConsoleBackend c;

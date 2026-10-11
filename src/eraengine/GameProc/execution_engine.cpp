@@ -1113,7 +1113,7 @@ bool ExecutionEngine::executeInstruction(const LogicalLine& line) {
         return true;
     }
     if (name == "REDRAW") {
-        emit consoleRedraw(args.size() >= 1 ? args[0].raw : QStringLiteral("1"));
+        emit consoleRedraw(args.isEmpty() ? 1 : evaluateOperand(getEvaluator(), args.first(), m_storage, m_gameBaseData).toLongLong());
         return true;
     }
     // 后缀自增/自减语句：`I++` / `BAG:COUNT--`

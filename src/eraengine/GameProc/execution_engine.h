@@ -157,7 +157,7 @@ signals:
     // SETBGCOLOR / SETBGCOLORBYNAME / RESETBGCOLOR：文字**背景色**（C# SETBGCOLOR_Instruction）
     void consoleBgColor(const QString& colorName);
     void consoleResetBgColor();
-    void consoleRedraw(const QString& mode);
+    void consoleRedraw(qint64 mode);
     // PRINT_RECT / PRINT_SPACE：行内图形（C# Console.PrintShape）
     void consolePrintShape(const QString& type, const QList<int>& params);
     // OUTPUTLOG：把显示行日志写进 emuera.log（C# Console.OutputLog(null)）

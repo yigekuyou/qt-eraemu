@@ -61,7 +61,6 @@ FocusScope {
     onBackendChanged: {
         syncCadence();
         syncLayout();
-        Qt.callLater(root.syncInputPresentation);
     }
 
     property ConsoleBackend backend: null   // ConsoleBackend（兼行模型）
@@ -136,6 +135,20 @@ FocusScope {
                 isBacklog: root.reviewingHistory || (!root.showingStage && !view.atTail)    // 舞台始终是当前画面；历史视图按滚动位置回看
             }
         }
+    }
+
+    // 历史与舞台共用几何、委托和跨行图片显示范围。
+    component ConsoleView: ListView {
+        anchors.fill: parent
+        anchors.rightMargin: root.scrollBarWidth
+        clip: true
+        reuseItems: true
+        delegateModelAccess: DelegateModel.ReadOnly
+        // cacheBuffer 只保留实例；displayMargin 才允许离屏锚点绘制。
+        displayMarginBeginning: root.cellHeight * Math.max(2, root.backend ? root.backend.maxSpanReach : 2)
+        displayMarginEnd: displayMarginBeginning
+        cacheBuffer: displayMarginBeginning
+        delegate: LineDelegate {}
     }
 
     // ---- 测试/调试入口（委托按需实例化，可能为 null）----
@@ -226,30 +239,11 @@ FocusScope {
         anchors.bottom: inputField.top
         focus: root.primitiveInput || (root.isMobile && root.anyKeyInput)
 
-        ListView {
+        ConsoleView {
             id: view
             objectName: "consoleListView"
             visible: !root.showingStage
-            // 右侧让出滚动条宽度：view 收窄到滚动条左缘，最右列文字
-            // 不再被滑条盖住；cellWidth 按收窄后的宽度重算，网格仍然满宽
-            anchors.left: parent.left
-            anchors.right: parent.right
-            anchors.rightMargin: root.scrollBarWidth
-            anchors.top: parent.top
-            anchors.bottom: parent.bottom
-            clip: true                     // 溢出的跨行图在视口边缘裁剪
             model: root.lineModel
-            // 隐藏历史页面仍保留模型和委托，但不参与当前舞台绘制。
-            // Qt 文档（ListView::delegateModelAccess，Qt 6.10+）：模型是只读的
-            // C++ 模型（ConsoleBackend），委托只**读** role，不写回模型 —— 用
-            // DelegateModel.ReadOnly 省掉默认 Qt5ReadWrite 的写保护开销。
-            delegateModelAccess: DelegateModel.ReadOnly
-            reuseItems: true               // 滚出视口的委托进池复用（Qt 文档 Reusing items）
-            // cacheBuffer retains instances but does not paint offscreen anchors.
-            // Display margins let their overflowing images reach the viewport.
-            displayMarginBeginning: root.cellHeight * Math.max(2, root.backend ? root.backend.maxSpanReach : 2)
-            displayMarginEnd: displayMarginBeginning
-            cacheBuffer: displayMarginBeginning
             interactive: !root.primitiveInput
             boundsBehavior: Flickable.StopAtBounds
 
@@ -312,8 +306,6 @@ FocusScope {
                 }
             }
 
-            delegate: LineDelegate {}
-
             WheelHandler {
                 enabled: root.reviewingHistory && view.atTail && !root.primitiveInput
                 target: null
@@ -342,26 +334,12 @@ FocusScope {
         }
 
         // 当前舞台固定在视口，历史模型独立保留；同一源行的点击信息保留 source row。
-        ListView {
+        ConsoleView {
             id: stageView
             objectName: "consoleStageView"
-            anchors.left: parent.left
-            anchors.right: parent.right
-            anchors.rightMargin: root.scrollBarWidth
-            anchors.top: parent.top
-            anchors.bottom: parent.bottom
             visible: root.stageActive && !root.reviewingHistory
             model: root.stageModel
             interactive: false
-            clip: true
-            reuseItems: true
-            delegateModelAccess: DelegateModel.ReadOnly
-            // cacheBuffer retains instances but does not paint offscreen anchors.
-            // Display margins let their overflowing images reach the viewport.
-            displayMarginBeginning: root.cellHeight * Math.max(2, root.backend ? root.backend.maxSpanReach : 2)
-            displayMarginEnd: displayMarginBeginning
-            cacheBuffer: displayMarginBeginning
-            delegate: LineDelegate {}
             function positionStage() {
                 forceLayout();
                 // positionViewAtEnd() 会把不足一屏的内容也贴到底部。
@@ -512,36 +490,13 @@ FocusScope {
     // 等待类型分支（与旧实现一致）
     readonly property bool inputActive: backend && backend.waitingInput && !primitiveInput && !titleActive
     readonly property bool primitiveInput: backend && backend.waitingInput && backend.inputKind === "INPUTMOUSEKEY"
-    readonly property bool anyKeyInput: {
-        if (!backend || !backend.waitingInput)
-            return false;
-        const k = backend.inputKind.toUpperCase();
-        return k === "WAIT" || k === "WAITANYKEY" || k === "FORCEWAIT" || k === "ANYKEY";
-    }
-    readonly property bool stringInputKind: {
-        if (!backend || !backend.waitingInput)
-            return false;
-        const k = backend.inputKind.toUpperCase();
-        return k.indexOf("INPUTS") >= 0 || k.indexOf("ARGS") >= 0;
-    }
-    // Timed input briefly completes before the script redraws and requests it
-    // again. Coalesce these transitions so the viewport and focus stay stable.
-    // 输入栏始终保留在布局中，避免等待状态切换时 viewport 高度和页面位置
-    // 突然变化；真正的提交权限由 enabled / submitInput* 的 C++ 状态校验决定。
-    property bool inputRowVisible: true
-    function syncInputPresentation(): void {
-        inputRowVisible = true;
-    }
-    onTitleActiveChanged: Qt.callLater(root.syncInputPresentation)
-    Connections {
-        target: root.backend
-        function onWaitingInputChanged() { Qt.callLater(root.syncInputPresentation); }
-        function onInputRequested() { Qt.callLater(root.syncInputPresentation); }
-    }
+    readonly property bool anyKeyInput: backend && backend.anyKeyInput
+    readonly property bool stringInputKind: backend && backend.stringInput
+    // 始终预留输入栏，避免限时输入切换时改变视口高度。
+    readonly property bool inputRowVisible: true
 
     Component.onCompleted: {
         syncCadence();
         syncLayout();
-        syncInputPresentation();
     }
 }

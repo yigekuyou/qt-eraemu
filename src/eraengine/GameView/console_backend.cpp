@@ -749,7 +749,15 @@ void ConsoleBackend::setMaxLog(int lines) {
 // 输入桥接
 // ---------------------------------------------------------------------------
 
-void ConsoleBackend::updateStageModels() {
+void ConsoleBackend::setRedraw(qint64 mode) {
+    m_autoRedraw = (mode & 1) != 0;
+    if ((mode & 2) != 0)
+        updateStageModels(true);
+}
+
+void ConsoleBackend::updateStageModels(bool force) {
+    // REDRAW 0 只保留当前舞台前帧；源模型仍遵守正常的 Qt 通知契约。
+    if (!force && !m_autoRedraw) return;
     const int total = rowCount();
     int start = qMax(0, total - m_layout.gridRows());
     // A line is only the anchor of an image, not its full drawing extent.
@@ -787,20 +795,20 @@ void ConsoleBackend::updateStageModels() {
     emit stageChanged();
 }
 
-void ConsoleBackend::notifyButtonRowsChanged() {
-    for (int row = 0; row < rowCount(); ++row) {
-        const auto line = displayLine(row);
-        bool hasButton = false;
-        for (const auto& segment : line.segments) {
-            if (segment.isButton) { hasButton = true; break; }
-        }
-        if (!hasButton) continue;
-        if (row < m_buffer.count())
-            m_lineCache.remove(m_buffer.at(row).serial);
-        emit dataChanged(index(row), index(row), {BlocksRole});
-    }
-    // 输入通道改变按钮可点击状态，舞台快照也必须在同一更新点重建。
-    updateStageModels();
+bool ConsoleBackend::anyKeyInput() const {
+    return m_waitingInput && inputExpectsAnyKey(m_inputKind);
+}
+
+bool ConsoleBackend::stringInput() const {
+    return m_waitingInput && inputExpectsString(m_inputKind);
+}
+
+bool ConsoleBackend::acceptsIntegerButtons() const {
+    return m_waitingInput && (inputAcceptsAny(m_inputKind) || !inputExpectsString(m_inputKind));
+}
+
+bool ConsoleBackend::acceptsStringButtons() const {
+    return m_waitingInput && (inputAcceptsAny(m_inputKind) || inputExpectsString(m_inputKind));
 }
 
 void ConsoleBackend::notifyInputRequested(const QString& kind, const QVariant& defaultValue) {
@@ -808,8 +816,7 @@ void ConsoleBackend::notifyInputRequested(const QString& kind, const QVariant& d
     m_inputDefault = defaultValue;
     m_waitingInput = true;
     flush();
-    // Only button rows depend on the input channel. Preserve text/image caches.
-    notifyButtonRowsChanged();
+    updateStageModels(true);
     emit inputRequested(kind);
     emit waitingInputChanged();
 }
@@ -822,7 +829,6 @@ void ConsoleBackend::notifyInputDone() {
     m_inputKind.clear();
     m_inputDefault = QVariant();
     m_waitingInput = false;
-    notifyButtonRowsChanged();
     emit waitingInputChanged();
 }
 
@@ -966,21 +972,15 @@ QVariantList ConsoleBackend::flattenLine(const ConsoleDisplayLine& line, int row
             m.insert("segmentIndex", si);
             m.insert("isButton", seg.isButton);
             m.insert("isInteger", seg.isInteger);
-            // A PRINTBUTTON is only interactive when its value type matches
-            // the current input channel.  Title animations use TINPUTS while
-            // their full-width background is emitted as integer button 0;
-            // exposing those spans as clickable makes every animation line
-            // hover-highlight and steal mouse/focus events.
-            const bool acceptsButton = inputAcceptsAny(m_inputKind)
-                || (inputExpectsString(m_inputKind) != seg.isInteger);
-            m.insert("clickable", seg.isButton && seg.enabled && m_waitingInput
-                     && acceptsButton);
+            // 绘制缓存只保存按钮自身状态；输入权限由 NOTIFY 属性绑定控制。
+            m.insert("clickable", seg.isButton && seg.enabled);
             if (seg.isButton)
                 // 按钮值（运行期合法输入）：test_cli 分支选择的兜底候选
                 m.insert("btnValue", seg.isInteger ? QVariant(seg.intValue)
                                                    : QVariant(seg.strValue));
             m.insert("tooltip", seg.tooltip);
-            m.insert("generation", QVariant::fromValue<qulonglong>(seg.generation));
+            if (seg.isButton)
+                m.insert("generation", QVariant::fromValue<qulonglong>(seg.generation));
             out.append(m);
             ++idx;
         }

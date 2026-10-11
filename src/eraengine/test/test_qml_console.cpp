@@ -37,6 +37,7 @@
 #include <QStringList>
 #include <QtTest/QTest>
 #include "console_backend.h"
+#include "audio_pipeline_pool.h"
 #include "resource_image_provider.h"
 
 // QML 的绑定成环（"Binding loop detected for property …"）只在运行期以 qWarning
@@ -93,8 +94,14 @@ public:
     Q_INVOKABLE void request(QObject* object, const QString& kind) {
         static_cast<ConsoleBackend*>(object)->notifyInputRequested(kind);
     }
+    Q_INVOKABLE void redraw(QObject* object, int mode) {
+        qobject_cast<ConsoleBackend*>(object)->setRedraw(mode);
+    }
     Q_INVOKABLE void finishInput(QObject* object) {
         static_cast<ConsoleBackend*>(object)->notifyInputDone();
+    }
+    Q_INVOKABLE QObject* createAudio(QObject* parent = nullptr) {
+        return new AudioPipelinePool(parent);
     }
     Q_INVOKABLE QObject* create(QObject* parent = nullptr) {
         return new ConsoleBackend(parent);

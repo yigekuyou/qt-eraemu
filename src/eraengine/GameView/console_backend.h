@@ -64,9 +64,8 @@ class ConsoleBackend;
 class ConsoleLineProxyModel final : public QSortFilterProxyModel {
     Q_OBJECT
 public:
-    enum class ViewPart { History, Stage };
-    explicit ConsoleLineProxyModel(ViewPart part, QObject* parent = nullptr)
-        : QSortFilterProxyModel(parent), m_part(part) {}
+    explicit ConsoleLineProxyModel(QObject* parent = nullptr)
+        : QSortFilterProxyModel(parent) {}
     void setStage(int row, bool visible) {
         row = qMax(0, row);
         if (m_stageStart == row && m_stageVisible == visible) return;
@@ -78,11 +77,9 @@ public:
 protected:
     bool filterAcceptsRow(int sourceRow, const QModelIndex& sourceParent) const override {
         Q_UNUSED(sourceParent);
-        if (!m_stageVisible) return m_part == ViewPart::History;
-        return m_part == ViewPart::History ? sourceRow < m_stageStart : sourceRow >= m_stageStart;
+        return !m_stageVisible || sourceRow < m_stageStart;
     }
 private:
-    ViewPart m_part;
     int m_stageStart = 0;
     bool m_stageVisible = false;
 };
@@ -92,38 +89,47 @@ class ConsoleStageSnapshotModel final : public QAbstractListModel {
     Q_OBJECT
 public:
     explicit ConsoleStageSnapshotModel(QObject* parent = nullptr) : QAbstractListModel(parent) {}
-    int rowCount(const QModelIndex& parent = {}) const override { return parent.isValid() ? 0 : m_rows.size(); }
+    int rowCount(const QModelIndex& parent = {}) const override { return parent.isValid() ? 0 : m_frontRows.size(); }
     QVariant data(const QModelIndex& index, int role) const override {
-        if (!index.isValid() || index.row() < 0 || index.row() >= m_rows.size()) return {};
-        return m_rows.at(index.row()).value(role);
+        if (!index.isValid() || index.row() < 0 || index.row() >= m_frontRows.size()) return {};
+        return m_frontRows.at(index.row()).value(role);
     }
     QHash<int, QByteArray> roleNames() const override {
         return {{Qt::UserRole + 1, "blocks"}, {Qt::UserRole + 2, "lineIndex"},
                 {Qt::UserRole + 3, "spanRows"}};
     }
+    // 后台准备完整快照；前台保持可读，交换后只发布变化的行/角色。
     void setRows(const QVector<QHash<int, QVariant>>& rows) {
-        const int common = qMin(m_rows.size(), rows.size());
-        for (int i = 0; i < common; ++i) {
-            if (m_rows.at(i) != rows.at(i)) {
-                m_rows[i] = rows.at(i);
-                emit dataChanged(index(i), index(i));
-            }
-        }
-        if (rows.size() < m_rows.size()) {
-            beginRemoveRows({}, rows.size(), m_rows.size() - 1);
-            m_rows.resize(rows.size());
-            endRemoveRows();
-        } else if (rows.size() > m_rows.size()) {
-            const int first = m_rows.size();
-            beginInsertRows({}, first, rows.size() - 1);
-            m_rows = rows;
-            endInsertRows();
+        if (m_frontRows == rows)
             return;
+        m_backRows = rows;
+        const int oldSize = m_frontRows.size();
+        const int newSize = m_backRows.size();
+        const int common = qMin(oldSize, newSize);
+        if (newSize < oldSize)
+            beginRemoveRows({}, newSize, oldSize - 1);
+        else if (newSize > oldSize)
+            beginInsertRows({}, oldSize, newSize - 1);
+        m_frontRows.swap(m_backRows);
+        if (newSize < oldSize)
+            endRemoveRows();
+        else if (newSize > oldSize)
+            endInsertRows();
+        // back 此时保存上一帧。新帧在首个 dataChanged 前已完整可见。
+        for (int row = 0; row < common; ++row) {
+            QList<int> roles;
+            for (int role = Qt::UserRole + 1; role <= Qt::UserRole + 3; ++role) {
+                if (m_frontRows.at(row).value(role) != m_backRows.at(row).value(role))
+                    roles.append(role);
+            }
+            if (!roles.isEmpty())
+                emit dataChanged(index(row), index(row), roles);
         }
-        m_rows = rows;
     }
+
 private:
-    QVector<QHash<int, QVariant>> m_rows;
+    QVector<QHash<int, QVariant>> m_frontRows;
+    QVector<QHash<int, QVariant>> m_backRows;
 };
 
 class ConsoleBackend : public QAbstractListModel {
@@ -139,6 +145,10 @@ class ConsoleBackend : public QAbstractListModel {
     Q_PROPERTY(int  maxSpanReach     READ maxSpanReach                         NOTIFY lineCountChanged)
     Q_PROPERTY(int  frameMs          READ frameMs          WRITE setFrameMs    NOTIFY frameMsChanged)
     Q_PROPERTY(QString inputKind     READ inputKind                            NOTIFY inputRequested)
+    Q_PROPERTY(bool anyKeyInput READ anyKeyInput NOTIFY waitingInputChanged)
+    Q_PROPERTY(bool stringInput READ stringInput NOTIFY waitingInputChanged)
+    Q_PROPERTY(bool acceptsIntegerButtons READ acceptsIntegerButtons NOTIFY waitingInputChanged)
+    Q_PROPERTY(bool acceptsStringButtons READ acceptsStringButtons NOTIFY waitingInputChanged)
     Q_PROPERTY(bool waitingInput     READ waitingInput                         NOTIFY waitingInputChanged)
     Q_PROPERTY(quint64 generation    READ generation                           NOTIFY generationChanged)
     // 逻辑网格列/行数：**不是**常量。装载配置后会按「窗口宽 ÷ 单元格宽」重算
@@ -167,6 +177,8 @@ public:
     [[nodiscard]] QAbstractItemModel* stageModel() { return &m_stageSnapshot; }
     [[nodiscard]] int stageStart() const { return m_stageStart; }
     [[nodiscard]] bool stageMode() const { return m_stageMode; }
+    void setRedraw(qint64 mode);
+    [[nodiscard]] qint64 currentRedraw() const { return m_autoRedraw ? 1 : 0; }
     void setStageMode(bool on) { if (m_stageMode == on) return; m_stageMode = on; updateStageModels(); }
 
     // ---- QAbstractListModel ----
@@ -182,6 +194,10 @@ public:
     [[nodiscard]] int  maxSpanReach() const { return m_maxSpanReach; }
     [[nodiscard]] int  frameMs() const { return m_frameMs; }
     [[nodiscard]] QString inputKind() const { return m_inputKind; }
+    [[nodiscard]] bool anyKeyInput() const;
+    [[nodiscard]] bool stringInput() const;
+    [[nodiscard]] bool acceptsIntegerButtons() const;
+    [[nodiscard]] bool acceptsStringButtons() const;
     [[nodiscard]] bool waitingInput() const { return m_waitingInput; }
     [[nodiscard]] quint64 generation() const { return m_generation; }
     [[nodiscard]] int gridColumns() const { return m_layout.gridColumns(); }
@@ -345,15 +361,15 @@ private:
     void pruneHeadCacheIfNeeded() const;
     void pruneTailCache() const;
     void invalidateLineCache();
-    void notifyButtonRowsChanged();
-    void updateStageModels();
+    void updateStageModels(bool force = false);
 
     ConsoleBuffer m_buffer;
     ConsoleLayout m_layout;
-    ConsoleLineProxyModel m_historyModel{ConsoleLineProxyModel::ViewPart::History, this};
+    ConsoleLineProxyModel m_historyModel{this};
     ConsoleStageSnapshotModel m_stageSnapshot{this};
     int m_stageStart = 0;
     bool m_stageMode = false;
+    bool m_autoRedraw = true;
 
     // ---- 「当前行」打印缓冲（C# PrintStringBuffer）----
     QList<ConsoleSpan>    m_pendingParts;     // 还没成段的 part（m_stringList/builder）

@@ -53,6 +53,7 @@ TestCase {
 
     function cleanup() {
         consoleFixture.finishInput(backend);
+        consoleFixture.redraw(backend, 1);
         backend.stageMode = false;
         if (view) { view.destroy(); view = null; }
         backend.clearAll();
@@ -92,6 +93,18 @@ TestCase {
         consoleFixture.request(backend, "TINPUTS");
         wait(1);
         verify(!field.activeFocus);
+    }
+
+    function test_inputKindsFollowBackend() {
+        const kinds = ["WAIT", "WAITANYKEY", "FORCEWAIT", "ANYKEY", "TWAIT", "INPUT", "INPUTS", "TINPUTS"];
+        for (let i = 0; i < kinds.length; ++i) {
+            consoleFixture.request(backend, kinds[i]);
+            compare(view.anyKeyInput, i < 5);
+            compare(view.stringInputKind, i >= 6);
+            consoleFixture.finishInput(backend);
+            compare(view.anyKeyInput, false);
+            compare(view.stringInputKind, false);
+        }
     }
 
     // 模型行数与视图行数一致（小内容时委托全部存活）
@@ -332,6 +345,121 @@ TestCase {
         compare(stage.itemAtIndex(0).y - stage.contentY, 0);
     }
 
+    function test_stageDoubleBufferPreservesUnchangedDelegates() {
+        backend.stageMode = true;
+        printLines(3);
+        const first = view.lineItem(0);
+        const block = view.blockAt(0, 0);
+        const reset = Qt.createQmlObject('import QtTest; SignalSpy {}', tc);
+        reset.target = backend.stageModel;
+        reset.signalName = "modelReset";
+        const changed = Qt.createQmlObject('import QtTest; SignalSpy {}', tc);
+        changed.target = backend.stageModel;
+        changed.signalName = "dataChanged";
+        backend.flush();
+        wait(1);
+        compare(changed.count, 0, "unchanged snapshot emits no data update");
+        backend.print("new tail");
+        backend.newline();
+        backend.flush();
+        view.syncView();
+        wait(1);
+        compare(reset.count, 0, "stage publication never resets all delegates");
+        compare(changed.count, 0, "append leaves existing rows unchanged");
+        compare(view.lineItem(0), first);
+        compare(view.blockAt(0, 0), block);
+        reset.destroy();
+        changed.destroy();
+    }
+
+    function test_bufferedBoardPublishesOnlyAtInputBoundary() {
+        backend.stageMode = true;
+        printLines(8);
+        consoleFixture.request(backend, "TONEINPUT");
+        view.syncView();
+        const first = view.lineItem(0);
+        const firstBlock = view.blockAt(0, 0);
+        const changed = Qt.createQmlObject('import QtTest; SignalSpy {}', tc);
+        changed.target = backend.stageModel;
+        changed.signalName = "dataChanged";
+        const reset = Qt.createQmlObject('import QtTest; SignalSpy {}', tc);
+        reset.target = backend.stageModel;
+        reset.signalName = "modelReset";
+        consoleFixture.redraw(backend, 0);
+        consoleFixture.finishInput(backend);
+        backend.clearLines(8);
+        backend.flush();
+        wait(30);
+        compare(view.rowCount, 8, "previous full stage remains during CLEARLINE");
+        for (let i = 0; i < 8; ++i) {
+            backend.print(i === 4 ? "moved piece" : "L" + i);
+            backend.newline();
+            backend.flush();
+            wait(20); // Allow multiple timer/render frames during board construction.
+            compare(view.rowCount, 8);
+            compare(changed.count, 0, "partially built board is never published");
+            compare(view.blockAt(0, 0), firstBlock);
+        }
+        consoleFixture.request(backend, "TONEINPUT");
+        view.syncView();
+        wait(1);
+        compare(changed.count, 1, "complete frame updates only the changed row");
+        compare(reset.count, 0);
+        compare(view.lineItem(0), first);
+        compare(view.blockAt(0, 0), firstBlock);
+        changed.destroy();
+        reset.destroy();
+    }
+
+    function test_inputTransitionsKeepStageAndButtonObjects() {
+        backend.stageMode = true;
+        backend.print("board");
+        backend.newline();
+        backend.printButton("left", 4);
+        backend.newline();
+        consoleFixture.request(backend, "TONEINPUT");
+        view.syncView();
+        const field = findChild(view, "consoleInputField");
+        const stage = findChild(view, "consoleStageView");
+        const line = view.lineItem(1);
+        const button = view.blockAt(1, 0);
+        const height = stage.height;
+        const y = stage.contentY;
+        const changed = Qt.createQmlObject('import QtTest; SignalSpy {}', tc);
+        changed.target = backend.stageModel;
+        changed.signalName = "dataChanged";
+        verify(button.clickable);
+        consoleFixture.finishInput(backend);
+        wait(1);
+        compare(button.clickable, false);
+        compare(changed.count, 0, "input completion only updates interaction properties");
+        compare(view.lineItem(1), line);
+        compare(view.blockAt(1, 0), button);
+        compare(field.visible, true);
+        compare(stage.height, height);
+        compare(stage.contentY, y);
+        consoleFixture.request(backend, "TONEINPUT");
+        wait(1);
+        compare(changed.count, 0, "next input request preserves unchanged drawing data");
+        compare(view.blockAt(1, 0), button);
+        compare(button.clickable, false, "previous generation remains disabled");
+        // Reproduce CLEARLINE + full board redraw with only one text row changed.
+        consoleFixture.finishInput(backend);
+        backend.clearLines(2);
+        backend.print("board moved");
+        backend.newline();
+        backend.printButton("left", 4);
+        backend.newline();
+        consoleFixture.request(backend, "TONEINPUT");
+        view.syncView();
+        wait(1);
+        compare(view.lineItem(1), line, "same stage row survives board replacement");
+        compare(view.blockAt(1, 0).clickable, true);
+        compare(stage.height, height);
+        compare(field.visible, true);
+        changed.destroy();
+    }
+
     function test_historyPositionSurvivesStagePublication() {
         backend.stageMode = true;
         printLines(80);
@@ -398,11 +526,12 @@ TestCase {
         backend.print("A");
         backend.newline(); backend.flush(); view.syncView();
 
+        consoleFixture.request(backend, "INPUT");
         const block = view.blockAt(0, 0);
         verify(block !== null, "第 0 行有区块对象");
         const sel = "face_01_sel";
         block.blockData = {
-            kind: "image", text: "face_01", imageButton: sel,
+            kind: "image", text: "face_01", imageButton: sel, isInteger: true,
             clickable: true, generation: backend.generation,
             col: 0, row: 0, cols: 4, rows: 2
         };

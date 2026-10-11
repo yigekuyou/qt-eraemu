@@ -249,8 +249,7 @@ FocusScope {
 
             // 普通日志模式跟随新增输出；舞台模式下历史回看位置独立保存。
             // Qt ListView 删除头部行后 originY 可以改变，末尾判断必须减去它。
-            readonly property bool atTail: count === 0 || atYEnd
-                    || contentY - originY >= contentHeight - height - 1
+            readonly property bool atTail: count === 0 || atYEnd || contentY - originY >= contentHeight - height - 1
 
             // 锚到末尾（= C# 把 ScrollBar.Value 设成 Maximum）。
             // Qt 文档（ListView::forceLayout）：ListView 对模型变更的响应按帧批处理
@@ -275,7 +274,8 @@ FocusScope {
                     scrollToTail();
             }
 
-            onHeightChanged: if (atTail && !root.reviewingHistory) Qt.callLater(followOutput)
+            onHeightChanged: if (atTail && !root.reviewingHistory)
+                Qt.callLater(followOutput)
             Component.onCompleted: scrollToTail()
 
             // 合并模型通知，布局完成后仅为普通日志模式定位到末尾。
@@ -354,8 +354,12 @@ FocusScope {
             Component.onCompleted: positionStage()
             Connections {
                 target: root.backend
-                function onStageChanged() { Qt.callLater(stageView.positionStage); }
-                function onCleared() { root.reviewingHistory = false; }
+                function onStageChanged() {
+                    Qt.callLater(stageView.positionStage);
+                }
+                function onCleared() {
+                    root.reviewingHistory = false;
+                }
             }
             WheelHandler {
                 enabled: root.showingStage && !root.primitiveInput
@@ -455,7 +459,7 @@ FocusScope {
         // 输入控件始终存在并保留焦点目标；只有真正等待 INPUT 时才可见、可编辑。
         // 这样重绘/翻页期间不会因控件销毁重建抢走鼠标事件。
         focus: root.inputActive && !root.isMobile
-        enabled: root.inputActive && !(root.isMobile && root.anyKeyInput)
+        enabled: true //这里设置true 为了放置每次刷新导致false 和true转换导致屏幕渲染去颤动
         anchors.left: parent.left
         anchors.right: parent.right
         anchors.bottom: parent.bottom
@@ -472,14 +476,10 @@ FocusScope {
         // 使用控制台前景色，并让 placeholder 明确采用 disabled/次级颜色。
         color: root.foreColor !== "" ? root.foreColor : palette.text
         placeholderTextColor: root.foreColor !== "" ? root.foreColor : palette.placeholderText
-        placeholderText: root.backend && root.backend.waitingInput
-            ? (root.anyKeyInput ? ("回车/点击继续（" + root.backend.inputKind + "）")
-                                : ("输入（" + root.backend.inputKind + "）"))
-            : ""
+        placeholderText: root.backend && root.backend.waitingInput ? (root.anyKeyInput ? ("回车/点击继续（" + root.backend.inputKind + "）") : ("输入（" + root.backend.inputKind + "）")) : ""
         // 输入类型分支限制：整数型输入只接受数字（INPUT 可负）
         validator: root.backend && root.backend.waitingInput && !root.stringInputKind ? intOnly : null
-        inputMethodHints: root.stringInputKind ? Qt.ImhNone
-                          : Qt.ImhPreferNumbers | Qt.ImhNoPredictiveText
+        inputMethodHints: root.stringInputKind ? Qt.ImhNone : Qt.ImhPreferNumbers | Qt.ImhNoPredictiveText
         onAccepted: root.submit()
     }
     RegularExpressionValidator {

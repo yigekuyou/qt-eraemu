@@ -421,12 +421,6 @@ QString arrayNameOf(const QList<const ExpressionNode*>& nodes, int i) {
 }
 
 // 去掉一层引号（DT_COLUMN_OPTIONS 的 raw 文本解析用）
-QString unquote(const QString& s) {
-    if (s.size() >= 2 && s.startsWith(QLatin1Char('"')) && s.endsWith(QLatin1Char('"')))
-        return s.mid(1, s.size() - 2);
-    return s;
-}
-
 // ---------------------------------------------------------------------------
 // 通用：把「列名 → 值」写进行（成对形态 / 数组形态共用）
 //   return: 写入个数；blk 报告错误（列不存在 / id 列 / 类型不符）
@@ -952,37 +946,34 @@ void registerDataTableExtensions(ExtensionRegistry& ext)
             return true;
         });
 
-    // ---- DT_COLUMN_OPTIONS（命令：`DT_COLUMN_OPTIONS 表, 列, DEFAULT = 值`）----
-    // 非常规实参语法（`KEY = 值`），故直接解析 LogicalLine::raw（对齐 C#
-    // SP_DT_COLUMN_OPTIONS_ArgumentBuilder）。
+    // Ordered DEFAULT nodes are compiled by AstBuilder during loading.
     ext.reg(QStringLiteral("DT_COLUMN_OPTIONS"),
         [&ext](const LogicalLine& line, const QList<Operand>&) -> bool {
-            // raw 是整行原文（含指令名）；先剥掉指令名再按顶层逗号切分实参
-            QString body = line.raw.trimmed();
-            const int sp = body.indexOf(QRegularExpression(QStringLiteral("\\s")));
-            if (sp > 0) body = body.mid(sp + 1).trimmed();
-            const QStringList parts = body.split(QLatin1Char(','));
-            if (parts.size() < 3) return true;
-            const QString tableName = unquote(parts.at(0).trimmed());
-            const QString columnName = unquote(parts.at(1).trimmed());
-            QString rest = parts.at(2);
-            for (int i = 3; i < parts.size(); ++i) rest += QLatin1Char(',') + parts.at(i);
-            const int eq = rest.indexOf(QLatin1Char('='));
-            if (eq < 0) return true;
-            const QString kw = rest.left(eq).trimmed();
-            const QString valText = rest.mid(eq + 1).trimmed();
-            if (kw.compare(QLatin1String("DEFAULT"), Qt::CaseInsensitive) != 0) return true;
-
+            const auto& sv = ext.services();
+            const auto evaluate = [&](const QSharedPointer<ExpressionNode>& ast) {
+                if (!ast || !sv.evaluateNode) throw std::runtime_error("Missing DT_COLUMN_OPTIONS AST");
+                const auto value = sv.evaluateNode(ast.data());
+                if (!value.isValid()) throw std::runtime_error("Invalid DT_COLUMN_OPTIONS value");
+                return value;
+            };
+            if (line.isError || line.arguments.size() < 3 || line.columnDefaults.isEmpty())
+                throw std::runtime_error("Invalid DT_COLUMN_OPTIONS arguments");
+            const auto tableName = evaluate(line.arguments[0].ast);
+            const auto columnName = evaluate(line.arguments[1].ast);
+            if (tableName.typeId() != QMetaType::QString || columnName.typeId() != QMetaType::QString)
+                throw std::runtime_error("Data table and column names need strings");
             auto& store = tableStore();
-            if (!store.contains(tableName)) return true;        // C# 会抛错；此处静默
-            DTable& t = store[tableName];
-            const int col = t.columnIndex(columnName);
-            if (col < 0) return true;
-            const ExtensionRegistry::Services& sv = ext.services();
-            const QVariant v = sv.evaluate ? sv.evaluate(valText) : QVariant(valText);
-            DColumn& c = t.columns[col];
-            if (c.type == DType::Str) c.defaultValue = v.userType() == QMetaType::QString ? v : QVariant(v.toString());
-            else c.defaultValue = clampInt(v.toLongLong(), c.type);
+            if (!store.contains(tableName.toString())) throw std::runtime_error("Unknown data table");
+            DTable& table = store[tableName.toString()];
+            const int col = table.columnIndex(columnName.toString());
+            if (col < 0) throw std::runtime_error("Unknown data table column");
+            DColumn& column = table.columns[col];
+            for (const auto& ast : line.columnDefaults) {
+                const auto value = evaluate(ast);
+                if ((column.type == DType::Str) != (value.typeId() == QMetaType::QString))
+                    throw std::runtime_error("Data table default type mismatch");
+                column.defaultValue = column.type == DType::Str ? value : QVariant(clampInt(value.toLongLong(), column.type));
+            }
             return true;
         });
 }

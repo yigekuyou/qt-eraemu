@@ -41,6 +41,7 @@
 #include "ast/logical_line.h"
 #include "ast/expression_lexer.h"
 #include "ast/expression_parser.h"
+#include "ast/expression_evaluator.h"
 #include "ast/function_types.h"
 #include "ast/ast_builder.h"
 #include "ast/system_variables.h"
@@ -195,11 +196,10 @@ int main(int argc, char* argv[]) {
 
         // SPLIT（核心实现，引擎专用分支分发）：第3引数是裸数组变量，
         // 指令分发处命中核心分支 -> handleSplit
-        // （实参用空 resolver：PARTS 无 AST，handleSplit 按 raw 取裸变量名）
-        const AstResolver noResolve = nullptr;
+        // 实参在装载期归约，执行消费变量节点。
         const LogicalLine splitLine = AstBuilder::build(
             QStringLiteral("SPLIT \"a,b,c\", \",\", PARTS"),
-            ScriptPosition("t.ERB", 3, 1), noResolve);
+            ScriptPosition("t.ERB", 3, 1), parseExpr);
         check(engine.executeInstruction(splitLine), "引擎：SPLIT 语句分发（核心分支命中）");
         check(storage.getGlobalStr1D(QStringLiteral("PARTS"), 0) == QStringLiteral("a"),
               "SPLIT 第 1 段写入 PARTS:0");
@@ -311,6 +311,55 @@ int main(int argc, char* argv[]) {
               "GCLEAR 重复登记被拒（first-wins 不覆盖）");
     }
 
+
+    {
+        VariableStorage storage;
+        ExpressionEvaluator evaluator;
+        ExecutionEngine engine(&storage);
+        engine.setExpressionEvaluator(&evaluator);
+        const auto load = [](const QString& text) { return AstBuilder::build(text, {}, parseExpr); };
+        const auto execute = [&](const QString& text) { return engine.executeInstruction(load(text)); };
+        check(execute("DT_CREATE \"ast-table\""), "DT create through AST statement path");
+        check(execute("DT_COLUMN_ADD \"ast-table\", \"value\", \"string\""), "DT string column");
+        storage.setLocalStr(0, "ast-table"); storage.setArgStr(0, "value");
+        auto options = load("DT_COLUMN_OPTIONS LOCALS, ARGS, DEFAULT = \"first,=value\", default = \"last,=value\"");
+        check(!options.argument.hasError() && options.columnDefaults.size() == 2, "ordered repeated DEFAULT ASTs");
+        options.raw = "DT_COLUMN_OPTIONS raw-is-never-read";
+        for (auto& operand : options.arguments) operand.raw = "invalid raw";
+        check(engine.executeInstruction(options) && execute("DT_ROW_ADD \"ast-table\""), "DT options consume AST despite poisoned raw");
+        evaluator.setExtensionFunctionInvoker([&](const QString& name, const QList<QVariant>& args, const QList<const ExpressionNode*>& nodes, QVariant& out) {
+            return engine.extensions().runExpression(name, args, nodes, out);
+        });
+        const auto result = parseExpr("DT_CELL_GETS(\"ast-table\", 0, \"value\")");
+        check(result && evaluator.evaluate(*result, &storage).toString() == "last,=value", "last repeated DEFAULT wins and punctuation stays string data");
+        check(execute("DT_COLUMN_ADD \"ast-table\", \"number\", \"int8\""), "DT numeric column");
+        storage.setLocalInt(0, 3);
+        check(execute("DT_COLUMN_OPTIONS \"ast-table\", \"number\", DEFAULT = MAX(1, 2), DEFAULT = LOCAL++"),
+              "DEFAULT nested comma expression compiles during loading");
+        check(storage.getLocalInt(0) == 4 && execute("DT_ROW_ADD \"ast-table\""), "DEFAULT index-free expression side effect occurs once");
+        QVariant numeric;
+        engine.extensions().runExpression("DT_CELL_GET", {QString("ast-table"), 1, QString("number")}, {}, numeric);
+        check(numeric.toLongLong() == 3, "ordered numeric DEFAULT value retained");
+        bool mismatch = false;
+        try { execute("DT_COLUMN_OPTIONS \"ast-table\", \"number\", DEFAULT = \"string\""); }
+        catch (const std::exception&) { mismatch = true; }
+        check(mismatch, "DEFAULT type mismatch raises execution error");
+        for (const QString& text : QStringList{
+            "DT_COLUMN_OPTIONS \"t\", \"c\", OTHER = 1",
+            "DT_COLUMN_OPTIONS \"t\", \"c\", DEFAULT =",
+            "DT_COLUMN_OPTIONS 1, \"c\", DEFAULT = 1",
+            "DT_COLUMN_OPTIONS \"t\", \"c\""}) {
+            const auto bad = load(text);
+            check(bad.isError || bad.argument.hasError(), "bad DEFAULT syntax diagnosed at load time: " + text);
+        }
+        bool rejected = false;
+        auto missing = load("DT_COLUMN_OPTIONS \"ast-table\", \"value\", DEFAULT = 1");
+        missing.columnDefaults[0].clear();
+        try { engine.executeInstruction(missing); } catch (const std::exception&) { rejected = true; }
+        check(rejected, "missing DEFAULT AST is an error");
+
+
+    }
 
     // ---- 8) EM/Emuera.NET fork 族（MAP_/ENUM*/XML_/DT_/CALLSHARP）----
     // 「仿照语义」自研：这些名字经 regExpr/reg 登记，**不是桩**；

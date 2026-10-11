@@ -51,6 +51,8 @@ struct VariableDecl {
     bool        isArg = false;               // 来自 @F(A,B) 形参表
     bool        isReference = false;         // #DIM(S) REF：调用方数组的别名
     bool        isCharaData = false;         // #DIM(S) CHARADATA：每角色一份
+    bool        isSavedata = false;
+    bool        isGlobal = false;
     bool        isGlobalSave = false;        // #DIM SAVEDATA GLOBAL：随 SAVEGLOBAL 持久化
     QList<qint64> defaultInt;   // #DIM X = 1,2 的初值（进入函数时写入）
     QStringList   defaultStr;   // #DIMS S = "a" 的初值

@@ -28,6 +28,7 @@
 #include <optional>
 
 #include "expression_ast.h"
+#include "runner_instruction.h"
 #include "word.h"
 
 // ---------------------------------------------------------------------------
@@ -88,6 +89,8 @@ struct Operand {
 
     // 命令 AST 专用实数常量；装载期校验/转换一次，不参与整数表达式。
     std::optional<double> realValue;
+    // Eager caller-context value for CALL transport; never parsed or evaluated again.
+    QVariant snapshot;
 
     Operand() = default;
     explicit Operand(const QString& text) : raw(text) {}
@@ -160,12 +163,8 @@ struct PrintTemplatePart {
     QString text;
     // <img srcb='...'>：按钮选中态替换图（C# ConsoleImagePart.ButtonResourceName）
     QString imageAlt;
-    QSharedPointer<ExpressionNode> expression;
     PrintStyle style;
     QString buttonValue;
-    QSharedPointer<ExpressionNode> buttonValueExpression;
-    QHash<QString, QSharedPointer<ExpressionNode>> attributes;
-    QStringList attributeOrder;
     QString tooltip;
     int width = 0;
     int height = 0;
@@ -182,14 +181,26 @@ struct PrintTemplate {
     bool noWrap = false;
 };
 
+// Only load-time templates own interpolation ASTs. Runtime print data above is pure data.
+struct CompiledPrintTemplatePart : PrintTemplatePart {
+    QSharedPointer<ExpressionNode> expression;
+    QSharedPointer<ExpressionNode> buttonValueExpression;
+    QHash<QString, QSharedPointer<ExpressionNode>> attributes;
+    QStringList attributeOrder;
+};
+struct CompiledPrintTemplate {
+    QList<CompiledPrintTemplatePart> parts;
+    QList<StrFormPart> rawParts;
+    int alignment = 0;
+    bool noWrap = false;
+};
+
 // ---------------------------------------------------------------------------
 // SELECTCASE 的 CASE 臂（perf 缓存）
 //
 // 此前 caseMatches 每次执行都重新 splitCaseArgs + expressionAst —— eraTW
 // 地图这类「每字符一个 SELECTCASE × 25 个 CASE」的热路径上是最大热点。
-// CASE 行装载后不可变，解析结果在**首次匹配时**填充进 LogicalLine::caseCache，
-// 之后直接复用（表达式 AST 解析需要 ownerFunction 作用域，装载期无法完全
-// 预解析，所以惰性做一次）。
+// CASE 结构在装载期构建，finalizeParse 按 ownerFunction 重绑；执行只消费节点。
 // ---------------------------------------------------------------------------
 struct CaseClause {
     enum class Kind : quint8 { Equal, IsOp, Range };
@@ -197,7 +208,7 @@ struct CaseClause {
     QString op;                                   // IsOp：<= >= == != < >
     QString textA;                                // Equal：比较文本；IsOp：操作数；Range：左端
     QString textB;                                // Range：右端
-    QSharedPointer<ExpressionNode> astA;          // 预解析结果（可空 -> 运行期按文本求值）
+    QSharedPointer<ExpressionNode> astA;          // 装载期表达式节点（缺失为错误）
     QSharedPointer<ExpressionNode> astB;
     // perf：CASE 臂是**纯字符串字面量**（如 "林"）时预存字面值 —— 逐字符
     // SELECTCASE 时免去每臂 AST 求值 + QVariant 分配（eraTW 地图最大 CASE 热点）。
@@ -230,6 +241,7 @@ struct LogicalLine {
 
     // 指令（Instruction）
     QString        functionName;     // 大写指令名
+    RunnerInstruction runnerInstruction = RunnerInstruction::Other; // 装载期指令分派
     QString        assignOperator;   // "=" / "+=" …（C# InstructionLine.AssignOperator）
     // 「函数语句」标记（对齐 C# LogicalLineType.Function）：
     // 一行以**内置函数名**开头、又不是已知指令/赋值时，整行是一次函数调用，
@@ -237,12 +249,14 @@ struct LogicalLine {
     //   GETMILLISECOND / CURRENTREDRAW / GETTIME / REPLACE LOCALS, "a", "b" …
     bool           isFunctionCall = false;
     QList<Operand> arguments;
+    QList<QSharedPointer<ExpressionNode>> columnDefaults; // ordered DEFAULT expressions
+    QList<QSharedPointer<ExpressionNode>> assignmentAsts; // load-time RHS list
     TypedArgument  argument;                    // 类型化参数（C# InstructionLine.Argument）
     QSharedPointer<ExpressionNode> condition;   // IF/SIF/ELSEIF/WHILE/REPEAT 条件
 
     // 原始 token 与文本（C# argprimitive / WordCollection）
     QString        raw;
-    QSharedPointer<PrintTemplate> printTemplate;
+    QSharedPointer<CompiledPrintTemplate> printTemplate;
 
     // 扁平控制流（行号索引，替代 C# 的 NextLine / JumpTo 指针）
     int  lineIndex      = -1;
@@ -260,12 +274,10 @@ struct LogicalLine {
 
 
 
-    // PRINTDATA 段的惰性解析缓存（见 execution_engine.cpp printDataFormLine 说明）：
-    // printDataGroups = 各「段」的行号列表（DATAFORM/DATA 各自成段；DATALIST..ENDLIST
-    // 之间的 DATA 并成一段）；printDataEndLine = 对应 ENDDATA 的行号（跳转目标 = +1）。
-    mutable bool printDataReady = false;
-    mutable QList<QList<int>> printDataGroups;
-    mutable int printDataEndLine = -1;
+    // PRINTDATA/STRDATA 段的装载期索引（由 EraParseTable 构建，运行时只读）：
+    // printDataGroups = 各「段」的行号列表；printDataEndLine = 对应 ENDDATA 行号。
+    QList<QList<int>> printDataGroups;
+    int printDataEndLine = -1;
 
     bool isNull() const { return kind == LineKind::Null; }
     bool isInstruction() const { return kind == LineKind::Instruction; }

@@ -16,6 +16,7 @@
  * along with this program.  If not, see <https://www.gnu.org/licenses/>.
  */
 #include "erb_preprocessor.h"
+#include "ast/strform_parser.h"
 
 namespace {
 
@@ -55,7 +56,16 @@ QString stripMacroBodyComment(const QString& text) {
     for (int i = 0; i < text.size(); ++i) {
         const QChar c = text.at(i);
         if (!quote.isNull()) {
+            // Escaped quotes belong to the literal; they cannot expose an
+            // entity semicolon or the remaining HTML to comment stripping.
+            if (c == QLatin1Char('\\') && i + 1 < text.size()) { ++i; continue; }
             if (c == quote) quote = QChar();
+            continue;
+        }
+        // FORM contains its own quoted expressions. Skip the whole load-time
+        // span so their delimiters never expose entity/comment semicolons.
+        if (c == QLatin1Char('@') && i + 1 < text.size() && text.at(i + 1) == QLatin1Char('"')) {
+            i = StrFormParser::expressionSpanEnd(text, i) - 1;
             continue;
         }
         if (c == QLatin1Char('"')) { quote = c; continue; }

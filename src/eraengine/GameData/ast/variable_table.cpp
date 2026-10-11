@@ -99,7 +99,8 @@ namespace {
 bool sameDeclaration(const VariableDecl& a, const VariableDecl& b) {
     return a.type == b.type && a.scope == b.scope && a.dimension == b.dimension
            && a.lengths == b.lengths && a.isConst == b.isConst
-           && a.isReference == b.isReference && a.isCharaData == b.isCharaData;
+           && a.isReference == b.isReference && a.isCharaData == b.isCharaData
+           && a.isSavedata == b.isSavedata && a.isGlobal == b.isGlobal;
 }
 
 } // namespace

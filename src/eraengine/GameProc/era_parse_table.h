@@ -122,7 +122,7 @@ Q_DECLARE_METATYPE(LabelRef)
 // ---------------------------------------------------------------------------
 // EraParseTable —— 内存运行时容器（只读区 / 标记区 / 位置区）
 //
-//   只读区 : m_scripts（ScriptData）+ m_astCache（表达式串 -> 不可变 AST）
+//   只读区 : m_scripts（ScriptData，包含装载期绑定的 AST）
 //   标记区 : ScriptData 内的 endifLines / elseLines / loopEndLines / jumpTo
 //   位置区 : m_currentScript / m_currentLine(PC) / m_callStack / m_depth
 // ---------------------------------------------------------------------------
@@ -169,6 +169,7 @@ public:
     // ---- 只读区查询 ----
     [[nodiscard]] const ScriptData* script(const QString& scriptName) const;
     [[nodiscard]] QStringList scriptNames() const { return m_scripts.keys(); }
+    // Load-time compilation only; finalized tables reject source text.
     [[nodiscard]] QSharedPointer<ExpressionNode> expressionAst(const QString& expr, bool quiet = false);
     // 同上，但**显式指定作用域**（ownerFunction）。finalize 阶段 m_currentScript/
     // m_currentLine 是陈旧值，直接调 expressionAst 会按「无作用域」解析 ——
@@ -242,12 +243,10 @@ public:
     void finalizeParse();
 
     // 并行装载 merge：把 worker 的本地表达式缓存并入主缓存（first-wins）
-    void mergeAstCache(const QHash<QString, QSharedPointer<ExpressionNode>>& localCache);
 
     // 用缓存 AST 求值条件；返回 false 表示求值失败。
     bool evaluateCondition(const QString& scriptName, int line, bool& out, int argIndex = -1);
     bool evaluateAst(const QSharedPointer<ExpressionNode>& ast, bool& out);
-    bool evaluateExpression(const QString& expr, bool& out);
 
     // ---- 位置区查询 ----
     // perf：返回引用而非按值拷贝（stepOnce/executeLine 每条指令都调用，
@@ -336,13 +335,11 @@ private:
     int lineCountFor(const QString& script) const;
 
     bool m_finalized = false;
-    QHash<QString, QSharedPointer<ExpressionNode>> m_scopedAstCache;
     QHash<QString, ScriptData> m_scripts;
     // perf：hasLabel 的结果按标签名记忆（此前每次 TRYCALL/TRYCALLFORM 都遍历
     // 全部脚本的 labelPositions；eraTW 地图逐字符 TRYCALLFORM 时是热点）。
     // 装载期每插入一个脚本即失效重建。
     mutable QHash<QString, bool> m_hasLabelCache;
-    QHash<QString, QSharedPointer<ExpressionNode>> m_astCache;
     QHash<QString, UserFunctionInfo> m_functions;
     // 名称 -> 全部声明（同名函数可重复声明；事件函数靠它做 4 组导航）
     QHash<QString, QList<LabelRef>> m_labelLists;

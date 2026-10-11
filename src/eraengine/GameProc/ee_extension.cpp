@@ -209,87 +209,31 @@ bool findVarData(const LogicalLine& line, const QList<Operand>& args,
 // ---------------------------------------------------------------------------
 constexpr quint32 kEeAudioPipelines = 10;   // 对齐 EE `Sound[10]`（4 字节无符号）
 
-// 顶层逗号切分（尊重引号 / 括号 / 方括号）：PLAYSOUND 的第 2 段是可选重复次数。
-QStringList splitTopLevelComma(const QString& text) {
-    QStringList out;
-    QString cur;
-    int depth = 0;
-    QChar quote;
-    for (const QChar c : text) {
-        if (!quote.isNull()) {
-            cur += c;
-            if (c == quote) quote = {};
-            continue;
-        }
-        if (c == QLatin1Char('"') || c == QLatin1Char('\'')) { quote = c; cur += c; continue; }
-        if (c == QLatin1Char('(') || c == QLatin1Char('[')) ++depth;
-        else if (c == QLatin1Char(')') || c == QLatin1Char(']')) { if (depth > 0) --depth; }
-        if (c == QLatin1Char(',') && depth == 0) { out.append(cur); cur.clear(); continue; }
-        cur += c;
-    }
-    out.append(cur);
-    return out;
+QVariant audioOperand(const Operand& operand, const ExtensionRegistry& ext) {
+    const auto& services = ext.services();
+    if (!operand.ast || !services.evaluateNode)
+        throw std::runtime_error("Audio operand has no load-time AST");
+    const QVariant value = services.evaluateNode(operand.ast.data());
+    if (!value.isValid()) throw std::runtime_error("Invalid audio operand");
+    return value;
 }
 
-// 语句「去掉命令名后的剩余部分」（EE 的 STR_EXPRESSION / SP_HTML_PRINT 都取整段）。
-QString statementRemainder(const LogicalLine& line, const QString& command) {
-    QString rest = line.raw.trimmed();
-    if (rest.left(command.length()).compare(command, Qt::CaseInsensitive) == 0)
-        rest = rest.mid(command.length());
-    return rest.trimmed();
-}
-
-// 求值一个表达式文本（扩展实参）；未注入求值服务时返回无效 QVariant。
-QVariant audioEval(const QString& expr, const ExtensionRegistry& ext) {
-    const ExtensionRegistry::Services& sv = ext.services();
-    if (!sv.evaluate || expr.isEmpty()) return {};
-    return sv.evaluate(expr);
-}
-
-// 去掉一层外层引号（兜底：求值失败时把文本原样当字符串用）。
-QString stripOuterQuotes(QString s) {
-    s = s.trimmed();
-    if (s.size() >= 2) {
-        const QChar first = s.front(), last = s.back();
-        if ((first == QLatin1Char('"') && last == QLatin1Char('"'))
-            || (first == QLatin1Char('\'') && last == QLatin1Char('\''))) {
-            s = s.mid(1, s.size() - 2);
-        }
-    }
-    return s;
-}
-
-// 字符串式实参：优先求值（变量 / 拼接 / 函数），失败退回去引号的原文。
-QString audioStrExpr(const QString& expr, const ExtensionRegistry& ext) {
-    const QVariant v = audioEval(expr, ext);
-    if (v.isValid()) return v.toString();
-    return stripOuterQuotes(expr);
-}
-
-// PLAYBGM <字符串式>：循环播放 BGM（0 号管线）。对齐 EE PLAYBGM_Instruction。
-bool audioPlayBgm(const LogicalLine& line, const QList<Operand>&, const ExtensionRegistry& ext) {
-    AudioPipelinePool* pool = ext.audioPool();
-    if (!pool) return true;   // 无音频池：静默（等同未装音频扩展）
-    const QString source = audioStrExpr(statementRemainder(line, QStringLiteral("PLAYBGM")), ext);
-    const QString used = pool->playBgm(source);
-    qDebug() << "[ee-ext] PLAYBGM" << source << "->" << used;
+bool audioPlayBgm(const LogicalLine&, const QList<Operand>& args, const ExtensionRegistry& ext) {
+    if (args.isEmpty()) throw std::runtime_error("Missing PLAYBGM operand");
+    const auto source = audioOperand(args.first(), ext);
+    if (source.typeId() != QMetaType::QString) throw std::runtime_error("PLAYBGM needs a string");
+    if (auto* pool = ext.audioPool()) pool->playBgm(source.toString());
     return true;
 }
 
-// PLAYSOUND <字符串式>{, <重复次数>}：一次性音效。对齐 EE PLAYSOUND_Instruction。
 bool audioPlaySound(const LogicalLine& line, const QList<Operand>&, const ExtensionRegistry& ext) {
-    AudioPipelinePool* pool = ext.audioPool();
-    if (!pool) return true;
-    const QStringList parts =
-        splitTopLevelComma(statementRemainder(line, QStringLiteral("PLAYSOUND")));
-    const QString source = audioStrExpr(parts.value(0), ext);
-    int repeat = 1;
-    if (parts.size() >= 2 && !parts.at(1).trimmed().isEmpty()) {
-        const QVariant v = audioEval(parts.at(1), ext);
-        repeat = static_cast<int>(v.isValid() ? v.toLongLong() : parts.at(1).trimmed().toLongLong());
-    }
-    const QString used = pool->playSound(source, repeat);
-    qDebug() << "[ee-ext] PLAYSOUND" << source << "x" << repeat << "->" << used;
+    const auto& args = line.argument.operands;
+    if (args.isEmpty()) throw std::runtime_error("Missing PLAYSOUND operand");
+    const auto source = audioOperand(args.first(), ext);
+    if (source.typeId() != QMetaType::QString) throw std::runtime_error("PLAYSOUND needs a string");
+    const auto repeat = args.size() > 1 ? audioOperand(args[1], ext) : QVariant::fromValue<qint64>(1);
+    if (repeat.typeId() == QMetaType::QString) throw std::runtime_error("PLAYSOUND repeat needs an integer");
+    if (auto* pool = ext.audioPool()) pool->playSound(source.toString(), int(repeat.toLongLong()));
     return true;
 }
 
@@ -308,13 +252,13 @@ bool audioStopSound(const LogicalLine&, const QList<Operand>&, const ExtensionRe
 }
 
 // SETBGMVOLUME / SETSOUNDVOLUME <整数式>：设置音量（EE Math.Clamp 在池内做）。
-bool audioSetVolume(const LogicalLine& line, const QString& command,
-                    const ExtensionRegistry& ext, bool bgm) {
+bool audioSetVolume(const LogicalLine& line, const ExtensionRegistry& ext, bool bgm) {
     AudioPipelinePool* pool = ext.audioPool();
+    if (line.arguments.isEmpty()) throw std::runtime_error("Missing audio volume operand");
+    const QVariant v = audioOperand(line.arguments.first(), ext);
+    if (v.typeId() == QMetaType::QString) throw std::runtime_error("Audio volume needs an integer");
+    const int volume = int(v.toLongLong());
     if (!pool) return true;
-    const QString expr = statementRemainder(line, command);
-    const QVariant v = audioEval(expr, ext);
-    const int volume = static_cast<int>(v.isValid() ? v.toLongLong() : expr.toLongLong());
     if (bgm) pool->setBgmVolume(volume);
     else pool->setSoundVolume(volume);
     return true;
@@ -334,11 +278,11 @@ void registerEeAudio(ExtensionRegistry& ext) {
             [&ext](const LogicalLine& l, const QList<Operand>& a) { return audioStopSound(l, a, ext); });
     ext.reg(QStringLiteral("SETBGMVOLUME"),
             [&ext](const LogicalLine& l, const QList<Operand>&) {
-                return audioSetVolume(l, QStringLiteral("SETBGMVOLUME"), ext, true);
+                return audioSetVolume(l, ext, true);
             });
     ext.reg(QStringLiteral("SETSOUNDVOLUME"),
             [&ext](const LogicalLine& l, const QList<Operand>&) {
-                return audioSetVolume(l, QStringLiteral("SETSOUNDVOLUME"), ext, false);
+                return audioSetVolume(l, ext, false);
             });
 
     // EXISTSOUND(<字符串式>)：sound 目录下是否存在该资源（0/1）。

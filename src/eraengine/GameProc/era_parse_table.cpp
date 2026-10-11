@@ -72,7 +72,6 @@ void EraParseTable::setVariableStorage(VariableStorage* storage) {
 
 void EraParseTable::setExpressionEvaluator(ExpressionEvaluator* evaluator) {
     m_evaluator = evaluator;
-    if (evaluator) evaluator->setAstProvider([this](const QString& text) { return expressionAst(text); });
     if (evaluator) evaluator->setVariableDimProvider([this](const QString& name) {
         const auto* line = lineAt(m_currentScript, m_currentLine);
         const auto* decl = m_variables.find(name, line ? line->ownerFunction : QString());
@@ -98,20 +97,10 @@ QSharedPointer<ExpressionNode> EraParseTable::expressionAst(const QString& expr,
 QSharedPointer<ExpressionNode> EraParseTable::expressionAstInScope(const QString& expr,
                                                                   const QString& scope,
                                                                   bool quiet) {
+    if (m_finalized) return nullptr; // Source compilation is restricted to loading.
     const QString key = expr.trimmed();
     if (key.isEmpty()) {
         return nullptr;
-    }
-
-    const QString scopedKey = scope.toUpper() + QChar(0x1f) + key;
-    if (!scope.isEmpty() && m_scopedAstCache.contains(scopedKey)) return m_scopedAstCache.value(scopedKey);
-    auto it = m_astCache.constFind(key);
-    if (it != m_astCache.constEnd()) {
-        if (scope.isEmpty()) return it.value();
-        auto copy = cloneExpression(it.value());
-        VariableTable::applyTypes(*copy, m_variables, scope);
-        m_scopedAstCache.insert(scopedKey, copy);
-        return copy;
     }
 
     ExpressionLexer lexer;
@@ -169,9 +158,8 @@ QSharedPointer<ExpressionNode> EraParseTable::expressionAstInScope(const QString
     if (ast) {
         // 立即按变量表定型（新解析的 AST 也保持强类型）
         VariableTable::applyTypes(*ast, m_variables, scope);
-        if (scope.isEmpty()) m_astCache.insert(key, ast);
-        else m_scopedAstCache.insert(scopedKey, ast);
     }
+    PrintTemplateCompiler::prepare(ast);
     return ast;
 }
 
@@ -353,15 +341,6 @@ bool EraParseTable::evaluateAst(const QSharedPointer<ExpressionNode>& ast, bool&
     return true;
 }
 
-bool EraParseTable::evaluateExpression(const QString& expr, bool& out) {
-    const QSharedPointer<ExpressionNode> ast = expressionAst(expr);
-    if (!ast) {
-        if (m_state) m_state->setErrorState();
-        return false;
-    }
-    return evaluateAst(ast, out);
-}
-
 bool EraParseTable::evaluateCondition(const QString& scriptName, int line, bool& out, int argIndex) {
     const LogicalLine* ll = lineAt(scriptName, line);
     if (!ll) {
@@ -373,7 +352,8 @@ bool EraParseTable::evaluateCondition(const QString& scriptName, int line, bool&
     if (argIndex >= 0 && argIndex < ll->arguments.size() && ll->arguments.at(argIndex).ast) {
         return evaluateAst(ll->arguments.at(argIndex).ast, out);
     }
-    return evaluateExpression(ll->raw, out);
+    if (m_state) m_state->setErrorState();
+    return false;
 }
 
 // ---------------------------------------------------------------------------
@@ -383,8 +363,6 @@ bool EraParseTable::evaluateCondition(const QString& scriptName, int line, bool&
 void EraParseTable::clear() {
     // QUIT 关闭游戏：释放全部解析期数据（AST/标记区/函数表/标签/告警/变量声明）
     m_scripts.clear();
-    m_astCache.clear();
-    m_scopedAstCache.clear();
     m_hasLabelCache.clear();
     m_functions.clear();
     m_labelLists.clear();
@@ -411,6 +389,47 @@ bool EraParseTable::loadScript(const QString& scriptName, const QList<LogicalLin
     ScriptData data;
     data.lines = lines;
     data.path = path;
+
+    // PRINTDATA/STRDATA 段结构属于脚本静态索引，装载时一次构建，运行期只读。
+    auto isDataConsumer = [](const QString& name) {
+        return name == QLatin1String("STRDATA") || name == QLatin1String("STRDATAL")
+               || name == QLatin1String("STRDATAW") || name == QLatin1String("PRINTDATA")
+               || name == QLatin1String("PRINTDATAL") || name == QLatin1String("PRINTDATAW")
+               || name == QLatin1String("PRINTDATAD") || name == QLatin1String("PRINTDATADL")
+               || name == QLatin1String("PRINTDATADW") || name == QLatin1String("PRINTDATAK")
+               || name == QLatin1String("PRINTDATAKL") || name == QLatin1String("PRINTDATAKW");
+    };
+    for (int i = 0; i < data.lines.size(); ++i) {
+        LogicalLine& line = data.lines[i];
+        // Also bind callers that supply LogicalLine directly rather than AstBuilder.
+        line.runnerInstruction = classifyRunnerInstruction(line.functionName);
+        if (!isDataConsumer(line.functionName)) continue;
+        line.printDataGroups.clear();
+        line.printDataEndLine = -1;
+        bool inList = false;
+        for (int j = i + 1; j < data.lines.size(); ++j) {
+            const QString& name = data.lines.at(j).functionName;
+            if (name == QLatin1String("ENDDATA")) {
+                line.printDataEndLine = j;
+                break;
+            }
+            if (name == QLatin1String("DATALIST")) {
+                inList = true;
+                line.printDataGroups.append(QList<int>());
+            } else if (name == QLatin1String("ENDLIST")) {
+                inList = false;
+            } else if (name == QLatin1String("DATA") || name == QLatin1String("DATAFORM")) {
+                if (inList) {
+                    if (line.printDataGroups.isEmpty()) line.printDataGroups.append(QList<int>());
+                    line.printDataGroups.last().append(j);
+                } else {
+                    line.printDataGroups.append(QList<int>{j});
+                }
+            } else {
+                break;
+            }
+        }
+    }
 
     QString currentFunction;   // 用于 #DIM 的作用域判定
     bool afterLabel = false;   // .ERB 中 # 行必须紧跟函数标签（对齐 C# ErbLoader）
@@ -469,7 +488,12 @@ bool EraParseTable::loadScript(const QString& scriptName, const QList<LogicalLin
                     if (p.hasDefault) {
                         bool ok = false;
                         p.defaultInt = defaultValue.toLongLong(&ok);
-                        if (!ok) p.defaultStr = defaultValue;
+                        if (!ok) {
+                            p.defaultStr = defaultValue;
+                            if (p.defaultStr.size() >= 2 && p.defaultStr.startsWith(QLatin1Char('"'))
+                                && p.defaultStr.endsWith(QLatin1Char('"')))
+                                p.defaultStr = p.defaultStr.mid(1, p.defaultStr.size() - 2);
+                        }
                     }
                     if (p.target == UserParamTarget::Arg
                         && p.index > decl.maxArgIndex) decl.maxArgIndex = p.index;
@@ -1238,7 +1262,9 @@ void EraParseTable::parseVariableDeclaration(const LogicalLine& line, const QStr
         //（ecd/docs「全局变量随 SAVEGLOBAL/LOADGLOBAL 往返」）都算。
         // 注意 `#DIM GLOBAL X` 的 GLOBAL 写在变量名前（d.global），与
         // `#GLOBAL X` 指令（isGlobal）两种写法都要认。
-        decl.isGlobalSave = (d.save || d.global) && (d.global || isGlobal);
+        decl.isSavedata = d.save;
+        decl.isGlobal = d.global || isGlobal;
+        decl.isGlobalSave = decl.isSavedata && decl.isGlobal;
 
         // 用户 `#DIM(S) CHARADATA`：登记为角色数据变量，供读写路径按
         // (角色号, 元素下标) 存取（否则元素互相覆盖，表现为「变量似乎不可变」）。
@@ -1269,10 +1295,6 @@ void EraParseTable::parseVariableDeclaration(const LogicalLine& line, const QStr
 }
 
 void EraParseTable::applyVariableTypes() {
-    // 1) 缓存里的 AST（共享容器，顺序）
-    for (auto& ast : m_astCache) {
-        if (ast) VariableTable::applyTypes(*ast, m_variables);
-    }
     // 2) 各行实际引用的 AST（并行装载时 worker 的 AST 不在主缓存中）。
     //    **按脚本并行**：每个脚本的克隆缓存原本就是按 ownerFunction 分的，
     //    而函数名全局唯一（一个函数体只在一个脚本里），所以「按脚本」与
@@ -1295,18 +1317,25 @@ void EraParseTable::applyVariableTypes() {
                     originals.append(ast);
                     auto copy = cloneExpression(ast);
                     VariableTable::applyTypes(*copy, m_variables, line.ownerFunction);
+                    PrintTemplateCompiler::prepare(copy);
                     cache.insert(original, copy);
                 }
                 ast = cache.value(original);
             };
             for (auto& op : line.arguments) bind(op.ast);
             bind(line.condition);
+            for (auto& ast : line.columnDefaults) bind(ast);
             ArgumentParser::build(line);
+            for (const auto& ast : line.assignmentAsts) PrintTemplateCompiler::prepare(ast);
             if (line.functionName == "HTML_PRINT" && !line.arguments.isEmpty())
                 line.printTemplate = PrintTemplateCompiler::compile(line.arguments.first().ast);
             else if (line.printTemplate) {
-                line.printTemplate = QSharedPointer<PrintTemplate>::create(*line.printTemplate);
-                for (auto& part : line.printTemplate->parts) bind(part.expression);
+                line.printTemplate = QSharedPointer<CompiledPrintTemplate>::create(*line.printTemplate);
+                for (auto& part : line.printTemplate->parts) {
+                    bind(part.expression);
+                    bind(part.buttonValueExpression);
+                    for (auto& ast : part.attributes) bind(ast);
+                }
             }
         }
     };
@@ -1314,14 +1343,6 @@ void EraParseTable::applyVariableTypes() {
         QtConcurrent::blockingMap(scripts, processScript);
     } else {
         for (ScriptData* sd : scripts) processScript(sd);
-    }
-}
-
-void EraParseTable::mergeAstCache(const QHash<QString, QSharedPointer<ExpressionNode>>& localCache) {
-    for (auto it = localCache.constBegin(); it != localCache.constEnd(); ++it) {
-        if (!m_astCache.contains(it.key())) {
-            m_astCache.insert(it.key(), it.value());
-        }
     }
 }
 
@@ -1333,26 +1354,35 @@ void EraParseTable::finalizeParse() {
     // #DIM CONST 常量：交给求值器在求值时查表（装载顺序无关）
     if (m_evaluator) {
         const VariableTable* vt = &m_variables;
+        // Compile constant expressions while source compilation is still permitted.
+        QHash<QString, QList<QSharedPointer<ExpressionNode>>> constantNodes;
+        for (const auto& declaration : vt->declarations()) {
+            const auto name = declaration.name.toUpper();
+            if (constantNodes.contains(name)) continue;
+            for (const auto& source : vt->constExprs(name))
+                constantNodes[name].append(expressionAstInScope(source, QString()));
+        }
         // 惰性常量表达式缓存（`#DIM CONST OBJ_ID_LAST = 人物数量上限`）
         //   LazyConst = 逐元素的求值结果（标量常量就是单元素）
         using LazyConst = QList<QVariant>;
         auto lazyConst = QSharedPointer<QHash<QString, LazyConst>>::create();
         auto lazyDepth = QSharedPointer<int>::create(0);
         // 求值并缓存某个常量声明的全部元素；返回 nullptr 表示「不是表达式型常量」
-        const auto lazyConstValues = [this, vt, lazyConst, lazyDepth](const QString& name)
+        const auto lazyConstValues = [this, constantNodes, lazyConst, lazyDepth](const QString& name)
             -> QSharedPointer<LazyConst> {
             const QString key = name.toUpper();
             const auto cached = lazyConst->constFind(key);
             if (cached != lazyConst->constEnd())
                 return QSharedPointer<LazyConst>::create(cached.value());
-            const QStringList exprs = vt->constExprs(name);
+            const auto exprs = constantNodes.value(key);
             if (exprs.isEmpty() || !m_evaluator) return QSharedPointer<LazyConst>();
             if (*lazyDepth >= 16) return QSharedPointer<LazyConst>();   // 循环定义保护
             ++*lazyDepth;
             LazyConst values;
             values.reserve(exprs.size());
-            for (const QString& e : exprs)
-                values.append(m_evaluator->evaluate(e.trimmed(), m_variableStorage, m_gameBaseData));
+            for (const auto& ast : exprs) {
+                values.append(ast ? m_evaluator->evaluate(*ast, m_variableStorage, m_gameBaseData) : QVariant());
+            }
             --*lazyDepth;
             lazyConst->insert(key, values);
             return QSharedPointer<LazyConst>::create(values);
@@ -1396,7 +1426,8 @@ void EraParseTable::finalizeParse() {
     // 用求值器把维数表达式折叠成整数
     m_variables.setDimEvaluator([this](const QString& expr) -> qint64 {
         if (!m_evaluator) return 0;
-        const QVariant v = m_evaluator->evaluate(expr, m_variableStorage, m_gameBaseData);
+        const auto ast = expressionAstInScope(expr, QString());
+        const QVariant v = ast ? m_evaluator->evaluate(*ast, m_variableStorage, m_gameBaseData) : QVariant();
         return v.isValid() ? v.toLongLong() : 0;
     });
     QElapsedTimer sub;   // 语义阶段各步耗时：eraTW 上 finalizeParse ~10s，需定位热点
@@ -1465,6 +1496,27 @@ void EraParseTable::finalizeParse() {
                         line.position.filename, line.position.lineNumber, line.position.column, 0, error);
                 }
             };
+            // Increment/decrement statements have one LHS, unlike assignments.
+            // Rebind it after declarations are known, in the owning function scope.
+            if ((line.functionName == "++" || line.functionName == "--")
+                && line.arguments.size() == 1) {
+                auto& operand = line.arguments[0];
+                operand.ast = cloneExpression(expressionAstInScope(operand.raw, line.ownerFunction, true));
+                if (operand.ast) VariableTable::applyTypes(*operand.ast, m_variables, line.ownerFunction);
+                if (!operand.ast || operand.ast->kind() != NodeKind::Variable
+                    || static_cast<const VariableNode&>(*operand.ast).readOnly
+                    || operand.ast->valueType() == OperandType::Str) {
+                    const QString error = QCoreApplication::translate("ParseDiagnostics",
+                        "%1 的变量参数无法装载：%2 (%3)")
+                        .arg(line.functionName, operand.raw, line.position.toString());
+                    line.argument.typeOk = false;
+                    line.argument.typeError = error;
+                    line.isError = true;
+                    line.errMes = error;
+                    m_diagnostics.add(DiagSeverity::Error, DiagCode::kArgCheck,
+                        line.position.filename, line.position.lineNumber, line.position.column, 0, error);
+                }
+            }
             validate(line.condition);
             for (const auto& operand : line.arguments) {
                 // VARSIZE consumes only array identity; its indices (including
@@ -1479,6 +1531,7 @@ void EraParseTable::finalizeParse() {
                 const auto* decl = m_variables.find(name, line.ownerFunction);
                 auto target = cloneExpression(expressionAstInScope(dest, line.ownerFunction, true));
                 if (target) VariableTable::applyTypes(*target, m_variables, line.ownerFunction);
+                line.arguments[0].ast = target;
                 // 诊断带上**具体原因**（未定义变量 / 维数不符 / AST 解析失败）：
                 // 只报「必须为有效变量项」时，eraTW 这种 10k 变量的工程无从下手。
                 const QString lvalueError = !target ? QCoreApplication::translate("ParseDiagnostics", "左值表达式解析失败")
@@ -1496,10 +1549,12 @@ void EraParseTable::finalizeParse() {
                 const bool rawForm = line.assignOperator == "=" && m_variables.typeOf(name, line.ownerFunction) == OperandType::Str;
                 if (!rawForm) {
                     const auto values = AstBuilder::assignmentValues(line.arguments[1].raw);
+                    line.assignmentAsts.clear();
                     for (const auto& text : values) {
                         diagnoseIntegerLiterals(text, line.position.filename, line.position.lineNumber,
                             line.position.column + qMax(0, int(line.raw.indexOf(text))), m_diagnostics);
                         auto ast = cloneExpression(expressionAstInScope(text, line.ownerFunction, true));
+                        line.assignmentAsts.append(ast);
                         if (ast) { VariableTable::applyTypes(*ast, m_variables, line.ownerFunction); validate(ast); }
                         else {
                             line.argument.typeOk = false;
@@ -1536,7 +1591,6 @@ void EraParseTable::finalizeParse() {
                        << " defaults" << tDefaults << " fnTypes" << tFnTypes
                        << " strAssign" << tStrAssign << " varTypes" << tVarTypes
                        << " resolveFunctionNodes" << tRebind << " validateArguments" << tValidate;
-    m_scopedAstCache.clear();
     m_finalized = true;
     qDebug() << "[parse] finalizeParse 完成：脚本" << m_scripts.size()
              << "变量" << m_variables.count() << "用户函数" << m_functions.size()
@@ -1622,6 +1676,10 @@ void EraParseTable::applyStringAssignments() {
                 return expressionAstInScope(e, owner);
             };
             if (line.kind != LineKind::Instruction) continue;
+            if (line.argument.kind == ArgKind::Case) {
+                line.caseCache.clear();
+                AstBuilder::buildCaseClauses(line, resolve);
+            }
             // C# uses two assignment operators with different RHS semantics:
             //   =  : string variables consume the remaining source as a StrForm
             //        (plain text plus {expr}/%expr% interpolation).
@@ -1641,6 +1699,7 @@ void EraParseTable::applyStringAssignments() {
             if (m_variables.typeOf(varName, line.ownerFunction) != OperandType::Str) continue;
 
             value.ast = StrFormParser::parse(value.raw.trimmed(), resolve, m_evaluator && m_evaluator->ignoreTripleSymbols());
+            PrintTemplateCompiler::prepare(value.ast);
             if (!value.ast) {
                 const QString error = QCoreApplication::translate("ParseDiagnostics", "字符串赋值FORM无效");
                 line.argument.typeOk = false;
@@ -1793,7 +1852,6 @@ void EraParseTable::resolveFunctionNodes() {
         for (auto it = nodes.crbegin(); it != nodes.crend(); ++it) resolveNode(**it);
     };
 
-    for (auto& ast : m_astCache) resolveAst(ast);
     // 并行装载时 worker 的 AST 不在主缓存里，需按行再走一遍。
     // **按脚本并行**：每个脚本的行走的是自己的 AST，互不相干；resolveNode 只读
     // m_functions / 静态表，写入的是本脚本节点的字段 —— 无共享写。
@@ -1875,7 +1933,8 @@ void EraParseTable::validateArguments() {
             if (line.kind != LineKind::Instruction) continue;
             const qsizetype before = out.warnings.size();
             const QString semanticError = !line.argument.typeOk ? line.argument.typeError : QString();
-            ArgumentParser::build(line);   // 幂等：重算 kind/params/exprs + 重新校验
+            ArgumentParser::build(line);
+            for (const auto& ast : line.assignmentAsts) PrintTemplateCompiler::prepare(ast);   // 幂等：重算 kind/params/exprs + 重新校验
             if (!semanticError.isEmpty()) {
                 line.argument.typeOk = false;
                 line.argument.typeError = semanticError;

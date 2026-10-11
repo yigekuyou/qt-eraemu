@@ -26,8 +26,7 @@
 #include "function_types.h"   // 运行期扩展式中函数表（registerExtensionFunction）
 #include "parse_diagnostic.h" // 结构化诊断（装载期分级告警）
 
-// 把表达式文本归约为 AST 的回调（由 EraParseTable 的 m_astCache 提供，
-// 保证同一表达式只解析一次并跨脚本共享）。
+// 装载期把表达式文本直接归约为 AST 的回调。
 using AstResolver = std::function<QSharedPointer<ExpressionNode>(const QString&)>;
 
 // ---------------------------------------------------------------------------

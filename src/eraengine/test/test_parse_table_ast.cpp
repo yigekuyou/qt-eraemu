@@ -106,6 +106,31 @@ int main(int argc, char* argv[]) {
     check(data != nullptr, "script(test) available");
     if (!data) { return 1; }
 
+    // 数据段必须在 loadScript 返回时就已建好，覆盖分组、空段、各后缀及重装载。
+    for (const QString& consumer : QStringList{
+             "PRINTDATA", "PRINTDATAL", "PRINTDATAW", "PRINTDATAD", "PRINTDATADL",
+             "PRINTDATADW", "PRINTDATAK", "PRINTDATAKL", "PRINTDATAKW",
+             "STRDATA", "STRDATAL", "STRDATAW"}) {
+        const QStringList blockSource = {
+            "@DATA_MAIN", consumer, "DATA first", "DATALIST", "DATA second",
+            "DATAFORM third", "ENDLIST", "DATALIST", "ENDLIST", "ENDDATA", "RETURN"
+        };
+        QList<LogicalLine> block;
+        for (int i = 0; i < blockSource.size(); ++i)
+            block.append(AstBuilder::build(blockSource.at(i), ScriptPosition("data.ERB", i, 0), resolve));
+        check(table.loadScript("data", block), consumer + " loadScript");
+        const LogicalLine& indexed = table.script("data")->lines.at(1);
+        check(indexed.printDataGroups == QList<QList<int>>{{2}, {4, 5}, {}},
+              consumer + " groups built before execution");
+        check(indexed.printDataEndLine == 9, consumer + " ENDDATA indexed before execution");
+        // 传入已有索引的 LogicalLine 也必须重建，避免重复追加。
+        const QList<LogicalLine> indexedLines = table.script("data")->lines;
+        table.loadScript("data", indexedLines);
+        check(table.script("data")->lines.at(1).printDataGroups == QList<QList<int>>{{2}, {4, 5}, {}},
+              consumer + " reload rebuilds groups");
+    }
+
+    data = table.script("test");
     qDebug() << "\n1) 完整 AST：lines 即 LogicalLine 数组";
     check(data->lines.size() == source.size(), "lines.size() == source lines");
     check(data->lines[0].kind == LineKind::FunctionLabel, "line0 is FunctionLabel");
@@ -192,8 +217,8 @@ int main(int argc, char* argv[]) {
     qDebug() << "\n6) AST 缓存去重共享";
     const QSharedPointer<ExpressionNode> a1 = table.expressionAst("1 + 2 * 3");
     const QSharedPointer<ExpressionNode> a2 = table.expressionAst(" 1 + 2 * 3 ");
-    check(!a1.isNull() && a1 == a2, "expressionAst cache returns shared AST");
-    check(a1 == assign.arguments[1].ast, "compiled arg shares cached AST");
+    check(a1 && a2 && a1 != a2 && a1->toString() == a2->toString(), "load compiler builds independent equivalent ASTs");
+    check(assign.arguments[1].ast && a1->toString() == assign.arguments[1].ast->toString(), "compiled argument owns equivalent AST");
 
     qDebug() << "\n6) 条件求值走缓存 AST";
     bool condTrue = false, condFalse = true;
@@ -331,6 +356,23 @@ int main(int argc, char* argv[]) {
         for (const QString& w : t3.parseWarnings()) qDebug().noquote() << "      warn:" << w;
         check(t3.parseWarningCount() == 0,
               QString("变量槽实参不误报（实得 %1 条告警）").arg(t3.parseWarningCount()));
+    }
+
+    {
+        ProcessState htmlState;
+        EraParseTable htmlTable(&htmlState);
+        const AstResolver htmlResolve = [&htmlTable](const QString& e) { return htmlTable.expressionAst(e); };
+        const QString source = QString::fromUtf8(R"ERB(HTML_PRINT "<button title='say \"hello\"; keep &amp; tail'>START</button><br>" ; comment)ERB");
+        const auto line = AstBuilder::build(source, {}, htmlResolve);
+        check(line.arguments.size() == 1 && line.arguments.first().ast,
+              "HTML escaped quotes and entity semicolons survive load-time comment stripping");
+        if (!line.arguments.isEmpty() && line.arguments.first().ast) {
+            ExpressionEvaluator htmlEval;
+            VariableStorage htmlStorage;
+            check(htmlEval.evaluate(*line.arguments.first().ast, &htmlStorage).toString()
+                  == QString::fromUtf8("<button title='say \"hello\"; keep &amp; tail'>START</button><br>"),
+                  "complete HTML suffix survives comment stripping");
+        }
     }
 
     qDebug() << "\n===============================";

@@ -1,0 +1,15 @@
+{
+  "generator": "/tmp/emuera-native-text26/Program.cs linked unmodified Emuera/Sub/EraDataStream.cs",
+  "source_sha256": "89f39382427f1e6d51d76463fd97b2d3535417304f4182f2dd96c53ddd759684",
+  "files": [
+    {
+      "name": "normal-text.sav",
+      "sha256": "a870f23c3782b3d134781a1ec80bf399449123e822c5a91b5f72f0f6352e6156"
+    },
+    {
+      "name": "global-text.sav",
+      "sha256": "bbb0f71084a3fb520992c109de1a2c435558cc8b93aab724f1fa821e78900e4d"
+    }
+  ],
+  "coverage": "Real EraDataWriter output; synthetic keys exercise native text sections; not a full gameplay fixture"
+}

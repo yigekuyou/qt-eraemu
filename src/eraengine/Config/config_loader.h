@@ -72,6 +72,7 @@ public:
     // 布尔/整数便捷读取（对齐 C# AConfigItem.TryParse 的宽松语义）
     bool getBool(const QString& key, bool defaultValue = false) const;
     int getInt(const QString& key, int defaultValue = 0) const;
+    qint64 getColor(const QString& key, qint64 fallback) const { return m_colors.value(key, fallback); }
 
     // ---- 编码 ----
     // 强制读取编码（Auto = 逐文件嗅探，默认）
@@ -94,7 +95,7 @@ public:
     int saveAll();
 
     // 清空已加载文件（供「用新的回退编码重读配置」使用）
-    void clearFiles() { m_configFiles.clear(); }
+    void clearFiles() { m_configFiles.clear(); rebuildValues(); }
 
     // ---- ERB 侧取值：GETCONFIG / GETCONFIGS ----
     // 对齐 C# ConfigData.GetConfigValueInERB：**只有白名单里的配置项**允许被
@@ -105,6 +106,7 @@ public:
     //   <string>/<char>/<TextDrawingMode> -> 原样文本（GETCONFIGS 用）
     // 配置项缺省时回落到 C# 的内建默认值。
     // 命中返回 true；白名单外返回 false（调用方：GETCONFIG -> 0 / GETCONFIGS -> ""）。
+    bool integerConfigValueInErb(const QString& key, qint64& out) const;
     [[nodiscard]] bool configValueInErb(const QString& key, QString& out) const;
 
     // 该键是否属于 GETCONFIG/GETCONFIGS 白名单（用于 GETCONFIGS 的类型校验提示）
@@ -120,6 +122,13 @@ signals:
 
 private:
     QList<ConfigFile> m_configFiles;
+    QHash<QString, QString> m_erbValues;
+    QHash<QString, qint64> m_erbIntegerValues;
+    QHash<QString, int> m_intValues;
+    QHash<QString, bool> m_boolValues;
+    QHash<QString, qint64> m_colors;
+    void rebuildValues();
+    bool convertErbValue(const QString& key, QString& out) const;
     TextEncoding m_readEncoding = TextEncoding::Auto;
     TextEncoding m_writeEncoding = TextEncoding::Utf8Bom;
 

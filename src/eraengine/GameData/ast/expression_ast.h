@@ -56,9 +56,7 @@ enum class NodeKind : quint8 {
 // ---------------------------------------------------------------------------
 // 节点在「表达式文本」内的字符区间（源码位置 span）。
 //
-// 为什么存偏移而不是文件/行/列：表达式 AST 按**文本**缓存并跨行/跨脚本共享
-// （EraParseTable::m_astCache / ErbLoader::resolveExpr），同一节点会在许多调用点
-// 复用，绝对位置无从归属；而「在表达式文本内的偏移」对同一文本恒定，缓存安全。
+// 节点使用表达式内的相对偏移；所属指令提供绝对文件、行和列。
 // 绝对位置由调用方按行的 ScriptPosition 换算（列 = 行首列 + span.begin）。
 //   begin/end 为相对偏移，begin 含、end 不含；-1 表示未知。
 // ---------------------------------------------------------------------------
@@ -78,9 +76,11 @@ struct SourceSpan {
 // 64 位位模式解析：允许 1p63 这类合法的最高位掩码，返回无符号位模式。
 [[nodiscard]] bool parseIntegerLiteralBits(const QString& text, quint64& out);
 
+struct CompiledPrintTemplate;
 class ExpressionNode {
 public:
     virtual ~ExpressionNode() = default;
+    QSharedPointer<CompiledPrintTemplate> markupTemplate;
     [[nodiscard]] virtual NodeKind kind() const noexcept = 0;
     [[nodiscard]] virtual QString toString() const = 0;
     [[nodiscard]] virtual OperandType valueType() const = 0;

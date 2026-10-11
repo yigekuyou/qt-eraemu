@@ -63,6 +63,8 @@ public:
     // 资源根目录（游戏目录）；由 EraEngine 在装载时设置
     static void setRoot(const QString& dir);
     [[nodiscard]] static QString root();
+    // Explicit loading boundary; lookup never parses CSV. Also invalidates pixels.
+    static void reloadAtlas();
 
     // 解析资源名到绝对文件路径（不存在返回空串）。root 为空时用已设置的根。
     [[nodiscard]] static QString resolvePath(const QString& id, const QString& root = QString());
@@ -108,7 +110,7 @@ private:
     static QHash<QString, Sprite> s_atlas;
     static QString s_atlasRoot;
 
-    static void ensureAtlasLoaded(const QString& root);
+
 };
 
 #endif // RESOURCE_IMAGE_PROVIDER_H

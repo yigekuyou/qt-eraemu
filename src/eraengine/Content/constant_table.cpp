@@ -118,7 +118,7 @@ int ConstantTable::loadCsvDirectory(const QString& csvDir, bool recursive) {
         if (base.startsWith(QLatin1Char('_'))) continue;
         const QString key = tableKeyOf(fi.fileName());
         if (m_tables.contains(key)) continue;   // 同名（不同目录）只取先出现的
-        if (loadCsvFile(fi.absoluteFilePath(), key)) ++loaded;
+        if (loadCsvFile(GamePaths::join(csvDir, fi.fileName()), key)) ++loaded;
     }
     qDebug() << "[load] 常量名表" << csvDir << ":" << loaded << "张（累计" << m_tables.size() << "张/" << m_nameCount << "名）";
     if (recursive) {

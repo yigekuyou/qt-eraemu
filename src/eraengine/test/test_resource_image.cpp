@@ -135,6 +135,19 @@ int main(int argc, char* argv[]) {
     check(ResourceImageProvider::resolvePath(QStringLiteral("face_01"), QString()).isEmpty(),
           "根目录为空 -> 空");
 
+    ResourceImageProvider::setRoot(root);
+    {
+        QFile atlas(QDir(root).filePath(QStringLiteral("resources/reload.csv")));
+        check(atlas.open(QIODevice::WriteOnly), "create late atlas");
+        atlas.write("late,title.webp,0,0,1,1\n"); atlas.close();
+        check(!ResourceImageProvider::hasResource(QStringLiteral("late")), "lookup does not parse late CSV");
+        ResourceImageProvider::reloadAtlas();
+        check(ResourceImageProvider::hasResource(QStringLiteral("late")), "explicit reload sees external CSV");
+        atlas.remove();
+        check(ResourceImageProvider::hasResource(QStringLiteral("late")), "loaded atlas survives CSV removal");
+        ResourceImageProvider::reloadAtlas();
+        check(!ResourceImageProvider::hasResource(QStringLiteral("late")), "reload removes stale atlas");
+    }
     qDebug() << "\n2) requestImage";
     {
         ResourceImageProvider::setRoot(root);

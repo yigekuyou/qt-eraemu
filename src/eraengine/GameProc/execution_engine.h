@@ -81,7 +81,14 @@ public:
     [[nodiscard]] int printCLength() const { return m_printCLength; }
 
     // SAVEGLOBAL / LOADGLOBAL 的落盘目录（游戏根目录；由 EraEngine 接线）
-    void setGameDataDir(const QString& dir) { m_gameDataDir = dir; }
+    void setGameDataDir(const QString& dir) { m_gameDataDir = dir; reloadSaveSnapshots(); }
+    // Return {binary, gzip}; native text must never silently produce binary bytes.
+    void setSaveFormatProvider(std::function<QPair<bool,bool>()> provider) { m_saveFormatProvider=std::move(provider); }
+    void reloadSaveSnapshots();
+    bool loadSaveSnapshot(qint64 index);
+    bool writeSaveSnapshot(qint64 index, const QString& description);
+    int checkSaveSnapshot(qint64 index) const;
+
     [[nodiscard]] QString gameDataDir() const { return m_gameDataDir; }
 
     // DRAWLINE 用字符（C# Config.DrawLineString，键「DRAWLINE文字」，默认 "-"）
@@ -124,6 +131,7 @@ public:
     const ErbLoader& getErbLoader() const { return m_erbLoader; }
     
 signals:
+    void gameStateLoaded();
     void executionStarted(const QString& scriptName);
     void lineExecuted(int line);
     void executionFinished();
@@ -196,7 +204,7 @@ private:
     // 语义对齐 C# Process.ScriptProc.cs、Instraction.Child.cs 与 VariableEvaluator。
     bool handleStatusCommand(const LogicalLine& line);
     // SAVEVAR / LOADVAR（EE 扩展；C# 原版注册了但抛 NotImpl）：
-    // 把指定全局变量的整组元素写进/读回 JSON 文本（sav/ 目录）。
+    // 把指定全局变量的整组元素写进/读回 C#1808 Var 二进制（命令仍为扩展）（sav/ 目录）。
     bool handleSaveVarCommand(const LogicalLine& line);
 
 private:
@@ -207,11 +215,11 @@ private:
     [[nodiscard]] QString padPrintC(const QString& text, bool padLeft) const;
     [[nodiscard]] static int printCWidth(const QString& text);
     // LOADGLOBAL / SAVEGLOBAL（对齐 C# VEvaluator.LoadGlobal / SaveGlobal）：
-    // GLOBAL / GLOBALS 系统数组 + `#DIM SAVEDATA GLOBAL` 用户变量 -> save_global.dat。
+    // GLOBAL / GLOBALS 系统数组 + `#DIM SAVEDATA GLOBAL` 用户变量 -> sav/global.sav。
     // LOADGLOBAL 成功置 RESULT=1，文件缺失 / 校验失败置 RESULT=0。
     bool handleLoadGlobal();
     bool handleSaveGlobal();
-    // 游戏唯一码（对齐 C# gamebase.ScriptUniqueCode，由标题/版本派生）
+    // 游戏唯一码（对齐 C# gamebase.ScriptUniqueCode，读取 GameBase.csv コード）
     [[nodiscard]] qint64 globalUniqueCode() const;
 
     // 语句形式的内部函数（对齐 C# LogicalLineType.Function / METHOD_Instruction）：
@@ -222,17 +230,17 @@ private:
     QSet<QString> m_reportedUnfinished;
     
     // Assignment handling
-    bool handleAssignment(const QString& lhs, const QString& rhs, const QSharedPointer<ExpressionNode>& ast = {});
+    bool handleAssignment(const ExpressionNode* lhs, const QString& rhs, const QSharedPointer<ExpressionNode>& ast = {}, const QList<QSharedPointer<ExpressionNode>>& values = {});
     // 字符串赋值（目的变量是字符串变量时）：右侧按字符串求值后写入字符串容器
-    bool handleStringAssignment(const QString& lhs, const QString& rhs,
+    bool handleStringAssignment(const ExpressionNode* lhs, const QString& rhs,
                                 const QSharedPointer<ExpressionNode>& ast = {},
                                 const QString& ownerFunction = QString());
     // 已求值字符串写入左值（SPLIT 等复用；不做表达式求值）
     // ownerFunction：左值所属函数（解析**本函数私有**的 #DIMS 声明维数要用；
     //   广域/全局声明可省）。
-    bool writeStringValue(const QString& lhs, const QString& value,
+    bool writeStringValue(const ExpressionNode* lhs, const QString& value,
                           const QString& ownerFunction = QString());
-    bool handleCompoundAssignment(const QString& lhs, const QString& op, const QString& rhs, const QSharedPointer<ExpressionNode>& ast = {});
+    bool handleCompoundAssignment(const ExpressionNode* lhs, const QString& op, const QString& rhs, const QSharedPointer<ExpressionNode>& ast = {});
 
     // VARSET 族（对齐 C# VARSET_Instruction / CVARSET_Instruction）
     //   eachChara == false: SET / VARSET / SETS / VAR_SET  —— 一个变量的元素区间赋值
@@ -245,10 +253,6 @@ private:
     // VARSET 里 1 次元变量的元素个数（对齐 C# VariableTerm.GetLength）
     [[nodiscard]] int variableLength1D(const QString& name, const QString& function) const;
     
-    // Parse LHS (left-hand side) of assignment
-    // 兼容旧接口：返回 (名字, 第一个下标)（无下标时下标为 -1）
-    QPair<QString, int> parseLHS(const QString& lhs);
-
 public:
     // LHS 引用（支持 2D/3D 下标：`A:i:j` / `A:i:j:k` / `BAG:COUNT` / `BAG:(COUNT+1)`）
     struct LhsRef {
@@ -260,7 +264,10 @@ public:
     };
 
 private:
-    [[nodiscard]] LhsRef parseLhsRef(const QString& lhs);
+    const LogicalLine* m_activeInstruction = nullptr; // scoped execution diagnostic context
+    [[nodiscard]] LhsRef resolveLhsRef(const ExpressionNode* ast);
+    bool writeStructuredValue(const LhsRef& ref, const QVariant& value, const QString& ownerFunction = {});
+    bool writeStringValue(const LhsRef& ref, const QString& value, const QString& ownerFunction = {});
     // 依据声明维度写入（1D/2D/3D）
     void writeLhs(const LhsRef& ref, qint64 value);
     [[nodiscard]] qint64 readLhs(const LhsRef& ref);
@@ -288,13 +295,21 @@ public:
     void printDataNewline();
     void requestPrintDataWaitKey();
     // PRINTDATA 的可选整型变量实参（如 `PRINTDATAW LOCAL:0`）：写入被选中的段下标。
-    void assignPrintDataIndex(const QString& lhsText, qint64 value);
+    void assignPrintDataIndex(const Operand& lhs, qint64 value);
 
     // STRDATA <字符串变量>：与 PRINTDATA 同段结构，但**不显示**，把被选中段的
     // 文本写进这个变量（C# STRDATA = PRINTDATA 的不显示版）。
-    void assignPrintDataString(const QString& lhsText, const QString& value);
+    void assignPrintDataString(const Operand& lhs, const QString& value);
 
     void setGameDirectory(const QString& dir) { m_gameDirectory = dir; }
+    QHash<qint64, EraBinaryData::Document> m_saveSnapshots;
+    QSet<qint64> m_invalidSaves;
+    EraBinaryData::Document m_globalSnapshot;
+    bool m_globalSnapshotValid = false;
+    using VariableSnapshot = EraBinaryData::Document;
+    QHash<QString, VariableSnapshot> m_variableSnapshots;
+    static bool decodeVariableSnapshot(const QByteArray& data, VariableSnapshot& snapshot);
+    void decodeGlobalSnapshot(const QByteArray& data);
     QString m_gameDataDir;   // SAVEGLOBAL / LOADGLOBAL 的落盘目录
     
     // ParseTable reference for CALL/RETURN integration
@@ -312,6 +327,7 @@ public:
     bool m_qdbugTrace = qEnvironmentVariableIsSet("EMUERA_QDBUG_TRACE");
     
     bool m_running;
+    std::function<QPair<bool,bool>()> m_saveFormatProvider;
     int m_printCLength = 25;      // PRINTC 一列的文字宽度（C# Config.PrintCLength）
     // SKIPDISP <n>：置位后所有 PRINT 输出被跳过（C# Process.SkipPrint）
     bool m_skipDisp = false;

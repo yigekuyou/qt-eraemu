@@ -175,6 +175,19 @@ int main(int argc, char* argv[]) {
         check(clamped > 0, QString("窗口宽限幅计算 = %1 (>0)").arg(clamped));
     }
 
+    {
+        QTemporaryDir tmp;
+        const QString path = tmp.filePath(QStringLiteral("emuera.config"));
+        writeConfig(path, QString::fromUtf8("フォントサイズ:21\n文字色:1,2,3\n"));
+        ConfigLoader loader;
+        loader.loadConfigFile(path);
+        writeConfig(path, QString::fromUtf8("フォントサイズ:31\n文字色:3,2,1\n"));
+        check(erbValue(loader, kFont) == "21", "runtime config reads loaded snapshot");
+        loader.clearFiles(); loader.loadConfigFile(path);
+        check(erbValue(loader, kFont) == "31", "explicit reload reads external changes");
+        loader.setConfig(QString::fromUtf8("文字色"), "4,5,6");
+        check(erbValue(loader, kFore) == "263430", "settings edit rebuilds converted values");
+    }
     qDebug() << "\n==========================";
     if (g_failures == 0) {
         qDebug() << "[SUCCESS] getconfig tests passed";

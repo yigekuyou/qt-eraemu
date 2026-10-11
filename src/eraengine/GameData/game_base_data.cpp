@@ -87,3 +87,29 @@ QVariantMap GameBaseData::toMap() const
     map["追加情報"] = m_additionalInfo;
     return map;
 }
+
+namespace {
+qint64 scriptNumber(const QString& text, bool* valid = nullptr) {
+    bool ok = false;
+    qint64 value = text.toLongLong(&ok);
+    if (!ok) {
+        int end = 0;
+        while (end < text.size() && text[end].isDigit()) {
+            ++end;
+        }
+        value = text.left(end).toLongLong(&ok);
+    }
+    if (valid) {
+        *valid = ok;
+    }
+    return value;
+}
+}
+qint64 GameBaseData::scriptUniqueCode() const { return scriptNumber(get(QStringLiteral("コード"))); }
+qint64 GameBaseData::scriptVersion() const { return scriptNumber(version()); }
+bool GameBaseData::acceptsSave(qint64 code,qint64 target) const {
+    bool defined=false; scriptNumber(version(),&defined);
+    bool minimumDefined=false; qint64 minimum=scriptNumber(get(QStringLiteral("バージョン違い認める")),&minimumDefined);
+    if(!minimumDefined) minimum=-1;
+    return (code==0 || code==scriptUniqueCode()) && ((!defined && target!=1000) || target>=minimum || target==scriptVersion());
+}

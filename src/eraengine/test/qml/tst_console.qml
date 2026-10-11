@@ -312,6 +312,78 @@ TestCase {
         verify(backend.stageStart > 0);
     }
 
+    function test_stageAndHistoryAreExclusiveAndShortStageStartsAtTop() {
+        backend.stageMode = true;
+        printLines(2);
+        const history = findChild(view, "consoleListView");
+        const stage = findChild(view, "consoleStageView");
+        tryCompare(stage, "visible", true);
+        compare(history.visible, false);
+        tryVerify(function() {
+            const first = stage.itemAtIndex(0);
+            return first !== null && Math.abs(first.y - stage.contentY) < 0.01;
+        });
+        backend.flush();
+        wait(1);
+        compare(history.visible, false);
+        compare(stage.itemAtIndex(0).y - stage.contentY, 0);
+        view.height = 250;
+        wait(1);
+        compare(stage.itemAtIndex(0).y - stage.contentY, 0);
+    }
+
+    function test_historyPositionSurvivesStagePublication() {
+        backend.stageMode = true;
+        printLines(80);
+        const history = findChild(view, "consoleListView");
+        const stage = findChild(view, "consoleStageView");
+        backend.requestScrollBy(10);
+        tryCompare(history, "visible", true);
+        compare(stage.visible, false);
+        history.forceLayout();
+        const y = history.contentY;
+        const first = history.indexAt(1, y + 1);
+        const reset = Qt.createQmlObject('import QtTest; SignalSpy {}', tc);
+        reset.target = backend.historyModel;
+        reset.signalName = "modelReset";
+        backend.flush();
+        wait(1);
+        compare(reset.count, 0, "unchanged stage must not reset history");
+        compare(history.contentY, y);
+        backend.print("next");
+        backend.newline();
+        backend.flush();
+        wait(1);
+        compare(reset.count, 0, "moving stage boundary uses filter row updates");
+        compare(history.indexAt(1, history.contentY + 1), first);
+        compare(stage.visible, false);
+        backend.requestScrollToBottom();
+        tryCompare(stage, "visible", true);
+        compare(history.visible, false);
+        backend.clearAll();
+        backend.print("short page");
+        backend.newline();
+        backend.flush();
+        wait(1);
+        compare(stage.itemAtIndex(0).y - stage.contentY, 0);
+        reset.destroy();
+    }
+
+    function test_wheelSwitchesBetweenStageAndHistory() {
+        backend.stageMode = true;
+        printLines(80);
+        const history = findChild(view, "consoleListView");
+        const stage = findChild(view, "consoleStageView");
+        tryCompare(stage, "visible", true);
+        mouseWheel(stage, stage.width / 2, stage.height / 2, 0, 120);
+        tryCompare(history, "visible", true);
+        compare(stage.visible, false);
+        history.positionViewAtEnd();
+        mouseWheel(history, history.width / 2, history.height / 2, 0, -120);
+        tryCompare(stage, "visible", true);
+        compare(history.visible, false);
+    }
+
     // `<img srcb='…'>`：按钮选中/悬停态的替换图（C# ConsoleImagePart.cImageB，
     // 悬停时**改画 srcb**，不是叠加 —— 同一时刻只有一张可见）。
     //

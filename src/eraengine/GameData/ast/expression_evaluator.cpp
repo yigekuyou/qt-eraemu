@@ -1,3 +1,5 @@
+#include "print_template.h"
+#include "game_paths.h"
 /*
  * emuera —— Emuera（ERB 脚本引擎）的 Qt6 + QML/C++ 移植
  * Copyright (C) 2026  yigekuyou
@@ -18,17 +20,16 @@
 #include "expression_evaluator.h"
 #include "system_variables.h"
 #include "constant_table.h"
-#include "expression_parser.h"
 #include "expression_ast.h"
-#include "expression_lexer.h"
 #include "operator_table.h"
-#include "strform_parser.h"
 #include "variable_storage.h"
 #include "variable_config.h"
 #include "../../GameView/graphics_store.h"
 #include "../../GameView/resource_image_provider.h"
 #include "game_base_data.h"
 #include <QDir>
+#include <QDirIterator>
+#include <QSaveFile>
 #include <QThread>
 #include <QFile>
 #include <QFontDatabase>
@@ -51,7 +52,7 @@ namespace {
 // 运行期类型探测（仅当 AST 类型未知时使用）
 inline bool isRuntimeString(const QVariant& v) noexcept {
     const int id = v.typeId();
-    return id == QMetaType::QString || id == QMetaType::QChar;
+    return id == QMetaType::QString || id == QMetaType::QChar || isStructuredString(v);
 }
 
 // ---------------------------------------------------------------------------
@@ -262,37 +263,6 @@ ExpressionEvaluator::ExpressionEvaluator(QObject *parent)
 {
 }
 
-QVariant ExpressionEvaluator::evaluate(const QString &expression, VariableStorage *storage, GameBaseData *gameBaseData)
-{
-    if (!storage) {
-        emit evaluationError(expression, "VariableStorage is null");
-        return QVariant();
-    }
-
-    ExpressionLexer lexer;
-    auto tokens = lexer.tokenize(expression);
-    if (tokens.isEmpty()) {
-        return QVariant();
-    }
-
-    ExpressionParser parser;
-    parser.setIgnoreTripleSymbols(ignoreTripleSymbols());
-    parser.setConstantNameProvider([this](const QString& var, const QString& key) {
-        return m_constantTable && m_constantTable->indexForVariable(var, key) >= 0;
-    });
-    auto ast = m_astProvider ? m_astProvider(expression) : parser.parse(tokens);
-
-    if (!ast) {
-        emit evaluationError(expression, "Failed to parse expression AST");
-        return QVariant();
-    }
-
-    QVariant result = evaluate(*ast, storage, gameBaseData);
-
-    emit evaluationFinished(expression, result);
-    return result;
-}
-
 // NEW: Direct AST evaluation entry points (for cached AST)
 QVariant ExpressionEvaluator::evaluate(const ExpressionNode &node, VariableStorage *storage, GameBaseData *gameBaseData)
 {
@@ -334,20 +304,53 @@ bool ExpressionEvaluator::evaluateStr(const ExpressionNode &node, VariableStorag
 
     QVariant value = evaluate(node, storage);
     
-    if (value.isValid() && value.canConvert<QString>()) {
-        result = value.toString();
+    if (value.isValid() && isStringValue(value)) {
+        result = stringText(value);
         return true;
     }
     
     return false;
 }
 
-QVariant ExpressionEvaluator::slotEvaluate(const QString &expression, VariableStorage *storage, GameBaseData *gameBaseData)
-{
-    return evaluate(expression, storage, gameBaseData);
+QString ExpressionEvaluator::evaluateText(const ExpressionNode& node, VariableStorage* storage, GameBaseData* data) {
+    return stringText(evaluate(node, storage, data));
+}
+FlatStringValue ExpressionEvaluator::evaluateFlat(const ExpressionNode& node, VariableStorage* storage, GameBaseData* data) {
+    return flatString(evaluate(node, storage, data));
 }
 
 QVariant ExpressionEvaluator::evaluateNode(const ExpressionNode &node, VariableStorage *storage, GameBaseData *gameBaseData)
+{
+    if (!node.markupTemplate) return evaluateUnstructuredNode(node, storage, gameBaseData);
+    QHash<const ExpressionNode*, QVariant> snapshots;
+    const auto eval = [&](const ExpressionNode& expression) {
+        if (!snapshots.contains(&expression)) snapshots.insert(&expression, evaluateNode(expression, storage, gameBaseData));
+        return snapshots.value(&expression);
+    };
+    QString raw;
+    for (const auto& part : node.markupTemplate->rawParts)
+        raw += part.expression ? stringValue(eval(*part.expression)) : part.text;
+    auto markup = PrintTemplateCompiler::evaluate(*node.markupTemplate,
+        [&](const ExpressionNode& expression) { return stringText(eval(expression)); });
+    // Replace standalone expression leaves with their typed, already evaluated parts.
+    QList<PrintTemplatePart> parts;
+    // `evaluate()` preserves one output part per compiled source part. Iterate
+    // over the source shape: structured expression values may expand into
+    // several parts, so indexing by the growing output list corrupts memory.
+    const int sourceCount = node.markupTemplate->parts.size();
+    for (int i = 0; i < sourceCount && i < markup.parts.size(); ++i) {
+        const auto& source = node.markupTemplate->parts.at(i);
+        const QVariant value = source.expression ? eval(*source.expression) : QVariant();
+        if (source.expression && isStructuredString(value))
+            parts.append(valueMarkup(value).parts);
+        else
+            parts.append(markup.parts.at(i));
+    }
+    markup.parts = parts;
+    return structuredString(raw, markup);
+}
+
+QVariant ExpressionEvaluator::evaluateUnstructuredNode(const ExpressionNode &node, VariableStorage *storage, GameBaseData *gameBaseData)
 {
     // tag 分派：switch 生成跳转表，分支可预测；避免 dynamic_cast(RTTI) 热路径开销。
     switch (node.kind()) {
@@ -437,7 +440,7 @@ QVariant ExpressionEvaluator::evaluateStrBinary(TokenType op, const QString& ls,
 {
     switch (op) {
     case TokenType::PLUS:
-        return QVariant(ls + rs);
+        return concatenateStrings(left, right);
     case TokenType::MULTIPLY: {
         // C# MultStrInt：str * n 与 n * str 均为字符串重复（双向）
         const QVariant& strSide  = isRuntimeString(left) ? left : right;
@@ -448,7 +451,7 @@ QVariant ExpressionEvaluator::evaluateStrBinary(TokenType op, const QString& ls,
                                  QStringLiteral("文字列に負の値または10000以上の値(%1)を乗算しようとしました").arg(count));
             return QVariant();
         }
-        return QVariant(strSide.toString().repeated(static_cast<int>(count)));
+        return QVariant(stringText(strSide).repeated(static_cast<int>(count)));
     }
     case TokenType::EQUALS:        return QVariant::fromValue<qint64>(ls == rs ? 1 : 0);
     case TokenType::NOT_EQUALS:    return QVariant::fromValue<qint64>(ls != rs ? 1 : 0);
@@ -475,7 +478,7 @@ QVariant ExpressionEvaluator::evaluateStrForm(const StrFormNode &node, VariableS
             throw std::runtime_error("FORM interpolation type mismatch");
         const QVariant v = evaluateNode(*part.expression, storage, gameBaseData);
         if (!v.isValid()) throw std::runtime_error("Invalid FORM value");
-        QString value = v.toString();
+        QString value = stringText(v);
         if (part.width) {
             const auto widthValue = evaluateNode(*part.width, storage, gameBaseData);
             if (!widthValue.isValid()) throw std::runtime_error("Invalid FORM width");
@@ -507,22 +510,12 @@ qint64 ExpressionEvaluator::resolveIndex(const VariableNode& node, int index,
     const bool isStr = (idx.valueType() == OperandType::Str)
                        || value.userType() == QMetaType::QString;
     if (isStr) {
-        const QString name = value.toString();
+        const QString name = stringText(value);
         if (m_constantTable) {
             const int mapped = m_constantTable->indexForVariable(node.name(), name);
             if (mapped >= 0) return mapped;
         }
         throw std::runtime_error("Unknown variable index keyword");
-    }
-    // 裸标识符下标的运行期兜底：内部解析路径（evaluate(QString) / evalExpressionCached
-    // 的回退分支）没有挂常量名提供器，`TALENT:ARG:性別` 的 `性別` 会解析成未知变量
-    // 求值成 0。若该标识符恰好是本变量的 CSV 常量名（C# isDefined 优先于变量引用），
-    // 必须按常量名映射。
-    if (const auto* varIdx = dynamic_cast<const VariableNode*>(&idx)) {
-        if (varIdx->indices().isEmpty() && m_constantTable) {
-            const int mapped = m_constantTable->indexForVariable(node.name(), varIdx->name());
-            if (mapped >= 0) return mapped;
-        }
     }
     return value.toLongLong();
 }
@@ -629,7 +622,7 @@ QVariant ExpressionEvaluator::evaluateVariable(const VariableNode &node, Variabl
         const int idx = node.indices().isEmpty() ? 0
             : static_cast<int>(resolveIndex(node, 0, storage, gameBaseData));
         const QString text = storage->getGlobalStr1DRaw(target, idx);
-        return QVariant(text);
+        return storage->stringValueRaw(target, idx, text);
     }
     if (aliased && storage->hasReference(node.name())) {
         // 只有已登记为 REF 的整数形参才切换到目标系统变量路由；
@@ -653,7 +646,7 @@ QVariant ExpressionEvaluator::evaluateVariable(const VariableNode &node, Variabl
         QList<int> elems;
         storage->reduceCharaArgs(varName, ids, charaId, elems);
         if (storage->isCharaDataString(varName)) {
-            return QVariant(storage->getCharaStr(varName, charaId, elems.value(0)));
+            return toVariant(storage->getStringSlot(varName, ids));
         }
         if (storage->charaDataDimension(varName) >= 2) {
             return QVariant::fromValue<qint64>(
@@ -694,7 +687,7 @@ QVariant ExpressionEvaluator::evaluateVariable(const VariableNode &node, Variabl
             if (node.isArray() && !node.indices().isEmpty()) {
                 idx = static_cast<int>(resolveIndex(node, 0, storage, gameBaseData));
             }
-            return QVariant(storage->getArgStr(idx));
+            return storage->stringValueRaw("ARGS", idx, storage->getArgStr(idx));
         }
         if (upper == QLatin1String("LOCALS")) {
             // LOCALS = 字符串局部槽
@@ -702,7 +695,7 @@ QVariant ExpressionEvaluator::evaluateVariable(const VariableNode &node, Variabl
             if (node.isArray() && !node.indices().isEmpty()) {
                 idx = static_cast<int>(resolveIndex(node, 0, storage, gameBaseData));
             }
-            return QVariant(storage->getLocalStr(idx));
+            return storage->stringValueRaw("LOCALS", idx, storage->getLocalStr(idx));
         }
         if (upper == QLatin1String("RESULTS")) {
             // [qdbug] 修复：RESULTS 是**全局**字符串数组（C# VariableData.cs:202
@@ -715,7 +708,7 @@ QVariant ExpressionEvaluator::evaluateVariable(const VariableNode &node, Variabl
             if (node.isArray() && !node.indices().isEmpty()) {
                 idx = static_cast<int>(resolveIndex(node, 0, storage, gameBaseData));
             }
-            return QVariant(storage->getGlobalStr1D(QStringLiteral("RESULTS"), idx));
+            return storage->stringValueRaw("RESULTS", idx, storage->getGlobalStr1D(QStringLiteral("RESULTS"), idx));
         }
         // 用户函数形参别名（@F(A,B) 内的 A/B -> LOCAL 槽位）
         const int aliasIdx = storage->localAliasIndex(varName);
@@ -795,23 +788,27 @@ QVariant ExpressionEvaluator::evaluateVariable(const VariableNode &node, Variabl
             if (node.isArray() && !node.indices().isEmpty()) {
                 idx = static_cast<int>(resolveIndex(node, 0, storage, gameBaseData));
             }
-            return QVariant(storage->getGlobalStr1D(QStringLiteral("RESULTS"), idx));
+            return storage->stringValueRaw("RESULTS", idx, storage->getGlobalStr1D(QStringLiteral("RESULTS"), idx));
         }
+        if (upper == QLatin1String("LASTLOAD_TEXT")) return QVariant(storage->getGlobalStr1D(upper,0));
         if (upper == QLatin1String("SAVEDATA_TEXT")) {
-            return QVariant(storage->getSystemStr(upper, 0));
+            return toVariant(storage->getStringSlot(upper));
         }
         int idx = 0;
         if (node.isArray() && !node.indices().isEmpty()) {
             if (variableDimension(varName) >= 2 && node.indices().size() >= 2) {
                 const QList<int> ids = resolveIndices(node, storage, gameBaseData);
                 if (ids.size() >= 2) {
-                    return QVariant(storage->getGlobalStr2D(varName, ids.at(0), ids.at(1)));
+                    return toVariant(storage->getStringSlot(varName, ids));
                 }
             }
             idx = static_cast<int>(resolveIndex(node, 0, storage, gameBaseData));
         }
-        return QVariant(storage->getGlobalStr1D(varName, idx));
+        return storage->stringValueRaw(storage->resolvedStorageName(varName), idx, storage->getGlobalStr1D(varName, idx));
     }
+
+    if(varName.compare(QLatin1String("LASTLOAD_NO"),Qt::CaseInsensitive)==0 || varName.compare(QLatin1String("LASTLOAD_VERSION"),Qt::CaseInsensitive)==0)
+        return QVariant::fromValue<qint64>(storage->getSystemVariable(varName,0));
 
     // Check if this is an array access
     if (node.isArray()) {
@@ -932,7 +929,7 @@ QVariant ExpressionEvaluator::evaluateBinaryOp(const BinaryOpNode &node, Variabl
                                       QString::fromLatin1(operandTypeName(rt))));
         return QVariant();
     }
-    return evaluateStrBinary(op, left.toString(), right.toString(), left, right);
+    return evaluateStrBinary(op, stringText(left), stringText(right), left, right);
 }
 
 QVariant ExpressionEvaluator::evaluateUnaryOp(const UnaryOpNode &node, VariableStorage *storage, GameBaseData *gameBaseData)
@@ -1093,7 +1090,7 @@ QString ExpressionEvaluator::argStr(const FunctionNode &node, int i, VariableSto
         const auto& form = static_cast<const StrFormNode&>(argument);
         if (!form.rawText().isNull()) return form.rawText();
     }
-    return evaluateNode(argument, storage, g).toString();
+    return stringText(evaluateNode(argument, storage, g));
 }
 
 const VariableNode* ExpressionEvaluator::argVar(const FunctionNode &node, int i) const {
@@ -1329,7 +1326,7 @@ bool ExpressionEvaluator::evaluateBuiltin(const FunctionNode &node, VariableStor
         if (!hasArg(node, i)) return QString();
         const auto& argument = *node.arguments().at(i);
         if (argument.kind() == NodeKind::StrForm)
-            return evaluateNode(argument, storage, gameBaseData).toString();
+            return stringText(evaluateNode(argument, storage, gameBaseData));
         return argStr(node, i, storage, gameBaseData);
     };
     const auto V = [&]() -> const BuiltinFunctionSpec* { return node.builtinSpec(); };
@@ -1901,6 +1898,12 @@ bool ExpressionEvaluator::evaluateBuiltin(const FunctionNode &node, VariableStor
     // ---------------- 配置 ----------------
     case BuiltinOp::GetConfig:
     case BuiltinOp::GetConfigs: {
+        if (op == BuiltinOp::GetConfig && m_integerConfigProvider) {
+            qint64 value = 0;
+            m_integerConfigProvider(S(0), value);
+            out = QVariant::fromValue<qint64>(value);
+            return true;
+        }
         QString value;
         if (!m_configProvider || !m_configProvider(S(0), value)) {
             out = (op == BuiltinOp::GetConfig) ? QVariant::fromValue<qint64>(0) : QVariant(QString());
@@ -2291,28 +2294,26 @@ bool ExpressionEvaluator::evaluateBuiltin(const FunctionNode &node, VariableStor
     }
     case BuiltinOp::SaveChara: {
         // SAVECHARA <文件名>, <摘要>{, <角色番号>…}：角色清单写入 sav/
-        const QString path = saveFilePath(S(0));
-        if (node.arguments().size() >= 3) {
-            QList<int> indexes;
-            for (int i = 2; i < node.arguments().size(); ++i)
-                indexes.append(int(I(i)));
-            storage->pickupChara(indexes);
-        }
-        QFile file(path);
-        out = QVariant::fromValue<qint64>(
-            (file.open(QIODevice::WriteOnly | QIODevice::Text | QIODevice::Truncate)
-                 && file.write(storage->dumpCharaList().toUtf8()) >= 0) ? 1 : 0);
+        const QString path = characterFilePath(S(0));
+        QList<int> indexes;
+        for (int i = 2; i < node.arguments().size(); ++i) indexes.append(int(I(i)));
+        auto captured = storage->captureBinarySave(EraBinaryData::FileType::Character,indexes);
+        captured.description=S(1);
+        captured.uniqueCode=gameBaseData ? gameBaseData->scriptUniqueCode() : 0;
+        captured.scriptVersion=gameBaseData ? gameBaseData->scriptVersion() : 0;
+        QByteArray bytes;
+        if(!EraBinaryData::encode(captured,bytes,nullptr,m_saveCompressionProvider && m_saveCompressionProvider())) { out=QVariant::fromValue<qint64>(0); return true; }
+        QSaveFile file(path);
+        const bool ok = file.open(QIODevice::WriteOnly) && file.write(bytes) == bytes.size() && file.commit();
+        if (ok) m_characterSnapshots.insert(QDir::cleanPath(path), captured);
+        out = QVariant::fromValue<qint64>(ok ? 1 : 0);
         return true;
     }
     case BuiltinOp::LoadChara: {
-        // LOADCHARA <文件名>：把角色清单追加进当前列表
-        QFile file(saveFilePath(S(0)));
-        if (!file.open(QIODevice::ReadOnly | QIODevice::Text)) {
-            out = QVariant::fromValue<qint64>(0);
-            return true;
-        }
-        storage->appendCharaList(QString::fromUtf8(file.readAll()));
-        out = QVariant::fromValue<qint64>(1);
+        const auto found = m_characterSnapshots.constFind(QDir::cleanPath(characterFilePath(S(0))));
+        const bool ok = found != m_characterSnapshots.constEnd() && (!gameBaseData || gameBaseData->acceptsSave(found->uniqueCode,found->scriptVersion));
+        if (ok) storage->applyBinarySave(found.value());
+        out = QVariant::fromValue<qint64>(ok ? 1 : 0);
         return true;
     }
     case BuiltinOp::ResetStain: {
@@ -2601,6 +2602,27 @@ bool ExpressionEvaluator::evaluateBuiltin(const FunctionNode &node, VariableStor
 }
 
 
+void ExpressionEvaluator::setSaveDirectory(const QString& directory)
+{
+    m_saveDirectory = directory;
+    m_characterDirectory=QDir::cleanPath(directory+QStringLiteral("/../dat"));
+    reloadCharacterSnapshots();
+}
+
+void ExpressionEvaluator::reloadCharacterSnapshots()
+{
+    m_characterSnapshots.clear();
+    if (m_saveDirectory.isEmpty()) return;
+    QDirIterator entries(m_characterDirectory, QStringList{QStringLiteral("chara_*.dat")}, QDir::Files);
+    while (entries.hasNext()) {
+        const QString path = entries.next();
+        QFile file(path);
+        EraBinaryData::Document snapshot;
+        if (file.open(QIODevice::ReadOnly) && EraBinaryData::decode(file.readAll(), snapshot) && snapshot.type==EraBinaryData::FileType::Character)
+            m_characterSnapshots.insert(QDir::cleanPath(path), std::move(snapshot));
+    }
+}
+
 QString ExpressionEvaluator::saveFilePath(const QString& fileName) const {
     if (m_saveDirectory.isEmpty()) return fileName;
     QDir().mkpath(m_saveDirectory);   // 首次写盘时按需创建 sav/
@@ -2641,62 +2663,8 @@ bool ExpressionEvaluator::readColorMatrix(const FunctionNode &node, int argNo,
     return false;
 }
 
-bool ExpressionEvaluator::evaluateInt(const QString &expression, VariableStorage *storage, qint64 &result)
-{
-    if (!storage) {
-        return false;
-    }
-    
-    QVariant value = evaluate(expression, storage);
-    
-    if (value.isValid() && value.canConvert<qint64>()) {
-        result = value.value<qint64>();
-        return true;
-    }
-    
-    return false;
-}
-
-bool ExpressionEvaluator::evaluateStr(const QString &expression, VariableStorage *storage, QString &result)
-{
-    if (!storage) {
-        return false;
-    }
-    
-    QVariant value = evaluate(expression, storage);
-    
-    if (value.isValid() && value.canConvert<QString>()) {
-        result = value.toString();
-        return true;
-    }
-    
-    return false;
-}
-
-// Helper method that would actually perform the evaluation
-bool ExpressionEvaluator::parseAndEvaluate(const QString &expression, VariableStorage *storage)
-{
-    if (!storage) {
-        return false;
-    }
-    
-    // Parse the expression into an AST
-    ExpressionLexer lexer;
-    auto tokens = lexer.tokenize(expression);
-    
-    if (tokens.isEmpty()) {
-        return false;
-    }
-    
-    ExpressionParser parser;
-    auto ast = parser.parse(tokens);
-    
-    if (!ast) {
-        return false;
-    }
-    
-    // Evaluate the AST
-    evaluateNode(*ast, storage);
-    
-    return true;
+QString ExpressionEvaluator::characterFilePath(const QString& name) const {
+    const QString directory=m_characterDirectory;
+    QDir().mkpath(directory);
+    return GamePaths::join(directory,QStringLiteral("chara_")+name+QStringLiteral(".dat"));
 }

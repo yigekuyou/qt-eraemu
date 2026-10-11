@@ -57,6 +57,8 @@ Content/constant_table.h
 Content/erb_preprocessor.cpp
 Content/erb_preprocessor.h
 
+GameData/era_binary_data.cpp
+GameData/era_binary_data.h
 GameData/game_paths.cpp
 GameData/game_paths.h
 GameData/file_system_io.cpp
@@ -162,6 +164,8 @@ GameView/audio_pipeline_pool.h
 )
 
 # Add QtConcurrent and OpenMP after the library is defined
+find_package(ZLIB REQUIRED)
+target_link_libraries(eraengine PRIVATE ZLIB::ZLIB)
 target_link_libraries(eraengine
     PRIVATE Qt6::Quick Qt6::Core Qt6::Quick Qt6::Widgets Qt6::Concurrent)
 # 可选依赖（见顶层 CMakeLists.txt 的说明）：有则用，没有就静默降级。
@@ -361,6 +365,11 @@ eraengine_add_test(test_encoding_probe)
 eraengine_add_test(test_file_case)
 eraengine_add_test(test_game_base_data)
 eraengine_add_test(test_variable_storage)
+eraengine_add_test(test_load_snapshots)
+add_test(NAME test_load_snapshots COMMAND test_load_snapshots)
+eraengine_add_test(test_era_binary_data)
+target_compile_definitions(test_era_binary_data PRIVATE ERA_TEST_SOURCE_DIR="${CMAKE_CURRENT_SOURCE_DIR}/test")
+add_test(NAME test_era_binary_data COMMAND test_era_binary_data)
 eraengine_add_test(test_variable_mutability)
 eraengine_add_test(test_csv_name_tables)
 eraengine_add_test(test_train_reset)

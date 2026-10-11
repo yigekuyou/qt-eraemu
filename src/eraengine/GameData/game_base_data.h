@@ -47,6 +47,10 @@ public:
     QString releaseYear() const;
     QString additionalInfo() const;
     
+    qint64 scriptUniqueCode() const;
+    qint64 scriptVersion() const;
+    bool acceptsSave(qint64 code, qint64 version) const;
+
     // Data manipulation
     void set(const QString& key, const QString& value);
     QString get(const QString& key) const;

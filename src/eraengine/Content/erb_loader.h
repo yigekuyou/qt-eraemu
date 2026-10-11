@@ -47,7 +47,6 @@ struct ParsedErbFile {
     QList<LogicalLine> lines;
     QStringList warnings;                                       // 预处理层面告警
     ParseDiagnostics diagnostics;                               // 结构化诊断（分级+代码+位置）
-    QHash<QString, QSharedPointer<ExpressionNode>> astCache;   // 该文件本地表达式缓存
 };
 
 // ERB 脚本装载器
@@ -194,10 +193,9 @@ private:
     // 递归收集 .erb/.erh 文件（确定性顺序）
     QStringList collectFiles(const QString& dirPath, int depth) const;
 
-    // 供线程内使用：只读函数类型表 + 本地缓存
+    // 供线程内使用：只读函数类型表
     // quiet=true：解析失败时不打印（用于赋值右值的临时归约，见 AstBuilder::build）
     QSharedPointer<ExpressionNode> resolveExpr(const QString& expr, const FunctionTypes& types,
-                                               QHash<QString, QSharedPointer<ExpressionNode>>& cache,
                                                bool quiet = false) const;
 
     // 预扫描：收集函数返回类型（#FUNCTION → Int，#FUNCTIONS → Str）

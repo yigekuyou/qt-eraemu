@@ -138,6 +138,12 @@ public:
     // 重新读取 TRAIN 命令名（Train.csv 变化后调用）
     void reloadTrainNames();
 
+    // LOADDATA only schedules the post-load state.  The pump must reach the
+    // system layer before beginDataLoaded() invokes SYSTEM_LOADEND; invoking it
+    // synchronously lets the current script slice run the old state handler and
+    // skip the first line of SYSTEM_LOADEND.
+    void dataLoaded() { setState(SystemStateCode::LoadData_DataLoaded); }
+
     // ---- 驱动 ----
     // 从当前状态开始，交替执行脚本与状态处理器，直到挂起/停止/出错。
     ExecState run();

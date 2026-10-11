@@ -4,7 +4,7 @@ C# 语义依据：`test/data/commands/{CUSTOMDRAWLINE,CASE,TIMES,ENCODETOUNI}.md
 `test/data/language/表达式.md` 及对应参考源码。以下记录 C++ 移植改动。
 
 - `CUSTOMDRAWLINE` 按单个原始文本参数处理，保留逗号、引号和尾部空白，空参数产生诊断。
-- `CASE` 按值、闭区间 `TO`、`IS` 比较条件解析；装载期与运行期共用条件拆分，运行期在完成声明处理后重建缓存。
+- `CASE` 按值、闭区间 `TO`、`IS` 比较条件解析；装载期完成声明处理后重建缓存，执行期只消费 AST。
 - FORM、普通字符串及插值跨度统一用于表达式词法、参数分割和 CASE 扫描；条件内引号、逗号、`TO` 不再提前截断外层内容。
 - 条件 FORM 的分支按文本读取分隔符，保留全角空格，仅裁剪 ASCII 空格和制表符。
 - `TIMES` 倍率按有限实数常量校验，不再交给整数表达式解析；写回规则见下方 2026-10-10 更新，当前采用可配置取整，不代表已实现 C# 配置控制的 decimal 精度分支。
@@ -121,7 +121,7 @@ C# 语义依据：`test/data/language/内置流程.md`（`endOpenning`）、`tes
 - STRFORM 静态字面量在 ExpressionParser 中编译为 FORM 节点；变量参数返回原始文本。
   STRLENFORM/STRLENFORMU 求值器不再二次解析求值结果。
 - HTML_PRINT 只使用装载期模板；字符串变量/函数表达式编译为取值片段，其返回标签作为原始文本。
-  ConsoleBackend::printHtml 是独立直接绘制 API，脚本 HTML_PRINT 不调用它。
+  ConsoleBackend 仅消费已求值的 PrintTemplate，不提供运行时 HTML 字符串编译 API。
 - ExecutionEngine、ScriptRunner、ExpressionEvaluator 不再调用 StrFormParser::parse 或 HTML 模板 compile。
   调试器/交互输入的表达式前端与显式文本处理（正则、SPLIT、HTML_TAGSPLIT 等）仍执行语言运算，
   不属于将变量结果重新解释为 ERB/FORM 源码。
@@ -167,3 +167,89 @@ C# 语义依据：`test/data/language/内置流程.md`（`endOpenning`）、`tes
   或存储形状将各维长度写入 RESULT:0..2，不求值索引或索引内的副作用。
 - 回归覆盖二维 REF、省略下标、忽略索引副作用、未写入数组的声明长度；42/42 通过。
 - 真实 Megaten 装载8344脚本、14514变量、52告警，OPTION.ERB:258 告警消失。
+
+
+## 运行期解析入口清理（2026-10-10）
+
+依据 `test/data/commands/CASE.md`、`test/data/language/表达式.md`、
+`test/data/functions/STRFORM.md`。reference 与 test/data 保持原样。
+
+- ExpressionEvaluator 的 QString 适配器只查询已装载 AST；删除其内部 Lexer、
+  ExpressionParser 和未使用的 parseAndEvaluate。未装配 provider 或缓存未命中返回无效值。
+- QString 兼容适配器使用 loadedExpressionAst 只读查表，不在运行期解析或
+  重绑定作用域；执行器的 BAR/颜色/字体/显示等命令直接消费 Operand.ast，
+  已删除 evalExpressionCached helper，避免装载结束清空作用域缓存后执行失败。
+- CASE 在 AstBuilder 装载时生成条件，在 finalizeParse 以 ownerFunction 重建；
+  ScriptRunner::caseMatches 不再构建语法结构。
+- 连续数值和字符串表达式赋值的 RHS 列表保存为 LogicalLine::assignmentAsts；
+  执行期不再 assignmentValues 分割源码。字符串 +=、*= 直接组合节点，
+  数值复合赋值通过固定 opcode 映射调用运算节点，不再调用 Lexer。
+- SPLIT 写回元素数量直接写变量值，不再拼出数字表达式交给赋值解析。
+- STRFORM 保持 StrFormNode 的 rawText/node 双行为：直接 FORM 求值展开装载节点，
+  普通字符串消费者读取 rawText。运行期变量/函数产出字符串按数据使用，不二次解析。
+  这与 C# STRFORM 可以对运行期字符串进行 FORM 解析的行为存在有意差异。
+- 保留入口：装载期 expressionAst/InScope、ExpressionParser/Lexer、StrFormParser、
+  ArgumentParser（声明/类型/源码绑定）；QString 求值仅兼容已装载 AST 查询；
+  TOINT/ISNUMERIC、SPLIT、正则、HTML_TAGSPLIT 属于显式数据处理。
+  左值及 SPLIT/HTML_TAGSPLIT 内部写回均消费变量节点或已经求值的 LhsRef，
+  不再拆分变量引用源码。
+
+回归覆盖缓存未命中、未装配 provider、已装载 AST 查询、CASE 装载缓存，
+以及改写 raw 后的连续赋值；既有 FORM/STRFORM 双行为回归继续运行。
+
+
+## 左值、音频、DataTable 与调试编译入口完成迁移（2026-10-10）
+
+依据 `test/data/commands/{PLAYSOUND,PLAYBGM,SETBGMVOLUME,SETSOUNDVOLUME,DT_COLUMN_OPTIONS}.md`、
+`test/data/commands/CASE.md` 与表达式文档；参考树和 test/data 未修改。
+
+- 删除 ExecutionEngine::parseLhsRef、冒号拆分 helper、parseLHS、ScriptRunner 的
+  extractVarRef 原文回退与 bareVarName。左值接口改为接收 ExpressionNode，必须是
+  VariableNode；下标统一由 ExpressionEvaluator::resolveIndices 消费已有节点，含 CSV
+  字符串映射、变量和表达式副作用。字符串赋值/复合赋值的左值下标仅求值一次。
+- FOR LoopFrame 保存装载期 counter 操作数，NEXT/BREAK 读取并写回同一引用；
+  FOR A:B 不再丢失下标，行移动后修改计数器的循环正确重检相邻行。
+- PLAYBGM/PLAYSOUND/SET*VOLUME 增加参数 schema，音频扩展只消费参数 AST，
+  删除 statementRemainder、splitTopLevelComma、audioEval、去引号/原文求值回退。
+  PLAYSOUND 重复次数仍为可选整数，默认 1，参数中的副作用只求值一次。
+- DT_COLUMN_OPTIONS 在 AstBuilder 装载期解析字符串表名/列名及有序 DEFAULT 节点；
+  支持多个重复 DEFAULT（最后一次生效）、嵌套表达式及字符串内逗号/等号。
+  未知选项、空值、非法名字类型在装载期诊断；运行期类型不匹配、缺失 AST、
+  未知表/列报错，禁止把原文或失败值转成默认 0。
+- 扩展函数语句不再调用 evaluate(raw)；CASE 缺少条件节点立即报错。
+  ConsoleBackend::printHtml(QString) 编译便利入口已删除，后端只消费 PrintTemplate；
+  布局测试显式在夹具阶段编译 HTML。DT_SELECT 的字符串 DSL、DT_FROMXML 的 XML、
+  输出按钮标记与 SPLIT/HTML_TAGSPLIT 保持为显式数据操作。
+- DebugDialog 继续调用 VariableStorage::evaluateExpression。该入口显式编译即时输入，
+  包括字符串类型和 FORM 子表达式，然后调用 AST 求值；与脚本 QString 适配器的
+  只读查询路径隔离。非法 debug 输入返回无效值，未装配脚本 provider 不会开始解析。
+- 修正打印测试作用域夹具：表达式在哪个作用域装载，就在该作用域查询；连续 LOCAL
+  赋值测试先分配第二槽，保留已有数组长度边界校验，不放宽越界行为。
+
+验证：cmake --build build -j6 成功；ctest --test-dir build --output-on-failure 42/42 通过；
+另外单独运行 test_extension_registry（未登记到现有 42 项 CTest）通过，覆盖动态表/列名、
+重复 DEFAULT、原文篡改、非法选项、缺失 AST 和 debug 即时表达式/FORM。
+音频测试覆盖原文篡改、变量文件名、整数表达式、重复次数副作用和缺失 AST。
+打印测试覆盖左值原文篡改、字符串复合赋值下标副作用和缺失左值 AST。
+不代表已验证所有真实游戏交互；未提交，未添加 PRD、参考游戏或构建输出。
+
+### 最终块结构与默认字符串补漏
+
+- PRINTDATA/STRDATA 全部变体的 DATALIST/ENDLIST/ENDDATA 分组和结束位置在
+  EraParseTable::loadScript 构建；删除首次执行扫描和 mutable 解析缓存。
+  回归验证装载后即可读取完整组索引，重复装载不会重复追加。
+- RETURNF、CALL 实参、输入缺省值、POWER、ASSERT 和存档索引删除 raw 求值回退；
+  缺失表达式 AST 明确失败。字符串字面量和已求值的传输值仍作为数据读取。
+- 函数默认字符串的外层引号在装载形参声明时处理，语句调用与式中调用只读保存值。
+
+最终验证：cmake --build build-debug -j4 成功；offscreen ctest 42/42 通过；
+独立 test_extension_registry ALL PASS；git diff --check 通过。
+
+## HTML 装载期完整结构与字符串解析边界（2026-10-11）
+
+- HTML 模板编译器仅接受 AST，删除公开 `compile(QString)` 入口；脚本执行器、表达式求值器和控制台没有运行时模板编译入口。
+- 字符串字面量、字符串加法和 FORM 的静态文本统一在装载期展开，允许标签和属性跨这些 AST 边界组合；插值保持独立节点，求值后的标签和实体不再解释。
+- 注释剥离尊重转义引号及完整 FORM 跨度，HTML 实体分号和 FORM 内嵌引号不会截断后续标签；宏定义采用相同规则。
+- 不完整标签保留全部尾部文本，遇到下一个未被引号包围的 `<` 后恢复扫描，不吞掉后续完整标签；动态标签名保持文本。
+- 运行时仍支持明确的数据操作（SPLIT、正则、XML、HTML_TAGSPLIT、TOINT 等）和调试器显式输入编译；这些不会把脚本变量字符串重新编译为 ERB、FORM 或显示 HTML。
+- 验证：完整构建、44/44 CTest、git diff --check 通过。包含混合 FORM 拼接、跨节点标签、动态属性、格式宽度、副作用只求值一次、不完整标签和原始动态文本回归。

@@ -870,16 +870,6 @@ int main(int argc, char* argv[]) {
             }
             return true;
         }
-        if (cmd.startsWith(QLatin1String(":e "))) {   // :e EXPR —— 求值任意表达式
-            const QString expr = cmd.mid(3);
-            ExpressionEvaluator* ev = engine.getExpressionEvaluator();
-            const QVariant r = ev ? ev->evaluate(expr, engine.getVariableStorage(),
-                                                 engine.gameBaseData())
-                                  : QVariant();
-            std::cout << "  " << expr.toStdString() << " = " << r.toString().toStdString()
-                      << "  (int " << r.toLongLong() << ")\n";
-            return true;
-        }
         if (cmd.startsWith(QLatin1String(":v "))) {   // :v NAME[:i[:j]] —— dump 任意变量
             const QString spec = cmd.mid(3);
             const QStringList parts = spec.split(QLatin1Char(':'));

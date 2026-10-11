@@ -42,6 +42,11 @@
 #include "audio_pipeline_pool.h"
 #include "extension_registry.h"
 #include "ast/logical_line.h"
+#include "ast/ast_builder.h"
+#include "ast/expression_lexer.h"
+#include "ast/expression_parser.h"
+#include "ast/expression_evaluator.h"
+#include "variable_storage.h"
 
 static int g_failures = 0;
 
@@ -50,14 +55,13 @@ static void check(bool cond, const QString& what) {
     else { qDebug().noquote() << "  [FAIL]" << what; ++g_failures; }
 }
 
-// 造一个扩展语句行：functionName + 原文（实现按 line.raw 取「命令后的剩余部分」，
-// 与引擎里语句型扩展一致）。
 static LogicalLine stmtLine(const QString& name, const QString& remainder) {
-    LogicalLine line;
-    line.kind = LineKind::Instruction;
-    line.functionName = name.toUpper();
-    line.raw = remainder.isEmpty() ? name : name + QLatin1Char(' ') + remainder;
-    return line;
+    return AstBuilder::build(name + " " + remainder, {}, [](const QString& text) {
+        ExpressionLexer lexer;
+        ExpressionParser parser;
+        parser.setVariableTypeProvider([](const QString& n) { return n == "F" ? OperandType::Str : OperandType::Int; });
+        return parser.parse(lexer.tokenize(text));
+    });
 }
 
 int main(int argc, char* argv[]) {
@@ -180,18 +184,12 @@ int main(int argc, char* argv[]) {
     {
         AudioPipelinePool pool;
         ExtensionRegistry ext;
-        // 注入最小「表达式求值」服务（引擎装配时注入真求值器）：
-        // 让 PLAYBGM 变量式 / SETBGMVOLUME 表达式走「求值」而非字面量回退。
-        {
-            ExtensionRegistry::Services sv;
-            sv.evaluate = [](const QString& e) -> QVariant {
-                const QString t = e.trimmed();
-                if (t == QLatin1String("F")) return QVariant(QStringLiteral("bgm"));
-                if (t == QLatin1String("30 + 12")) return QVariant(42);
-                return {};
-            };
-            ext.setServices(sv);
-        }
+        VariableStorage storage;
+        storage.setGlobalStr1D("F", 0, "bgm");
+        ExpressionEvaluator evaluator;
+        ExtensionRegistry::Services services;
+        services.evaluateNode = [&](const ExpressionNode* ast) { return evaluator.evaluate(*ast, &storage); };
+        ext.setServices(services);
         check(ext.audioPipelines() == 10u,
               "扩展登记 SE 管线数 = 10（对齐 EE Sound[10]；核心不含此常量）");
         check(ext.hasStatement(QStringLiteral("PLAYBGM"))
@@ -222,6 +220,22 @@ int main(int argc, char* argv[]) {
         ext.runStatement(QStringLiteral("SETBGMVOLUME"),
                          stmtLine(QStringLiteral("SETBGMVOLUME"), QStringLiteral("30 + 12")));
         check(pool.bgmVolume() == 42, "SETBGMVOLUME 30 + 12（整数式经求值服务 -> 42）");
+        auto poisoned = stmtLine("PLAYBGM", "F");
+        poisoned.raw = "PLAYBGM invalid-source";
+        poisoned.arguments.first().raw = "invalid-source";
+        ext.runStatement("PLAYBGM", poisoned);
+        check(pool.bgmSource().endsWith("bgm.ogg"), "PLAYBGM ignores poisoned raw");
+        storage.setLocalInt(0, 2);
+        auto repeat = stmtLine("PLAYSOUND", "\"se1\", LOCAL++");
+        repeat.raw = "PLAYSOUND invalid,invalid";
+        ext.runStatement("PLAYSOUND", repeat);
+        check(storage.getLocalInt(0) == 3, "PLAYSOUND repeat AST evaluates once");
+        bool rejected = false;
+        auto missing = stmtLine("PLAYBGM", "F");
+        missing.arguments.first().ast.clear();
+        try { ext.runStatement("PLAYBGM", missing); } catch (const std::exception&) { rejected = true; }
+        check(rejected, "audio missing AST reports error");
+        check(stmtLine("PLAYSOUND", "1, \"bad\"").argument.hasError(), "audio schema rejects wrong types at load time");
         ext.runStatement(QStringLiteral("STOPBGM"), stmtLine(QStringLiteral("STOPBGM"), {}));
         ext.runStatement(QStringLiteral("STOPSOUND"), stmtLine(QStringLiteral("STOPSOUND"), {}));
         check(pool.activeChannels() == 0, "STOPBGM + STOPSOUND -> 全部停");

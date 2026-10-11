@@ -39,12 +39,12 @@ QList<StrFormPart> fragments(const QString& text, const QList<QSharedPointer<Exp
     if (pos < text.size()) out.append(StrFormPart::makeText(decode(text.mid(pos))));
     return out;
 }
-QSharedPointer<PrintTemplate> compileMarkup(const QString& markup, const QList<QSharedPointer<ExpressionNode>>& expressions) {
-    auto out = QSharedPointer<PrintTemplate>::create();
+QSharedPointer<CompiledPrintTemplate> compileMarkup(const QString& markup, const QList<QSharedPointer<ExpressionNode>>& expressions) {
+    auto out = QSharedPointer<CompiledPrintTemplate>::create();
     QStringList stack;
     auto text = [&](const QString& value) {
         for (const auto& f : fragments(value, expressions)) {
-            PrintTemplatePart part; part.text = f.text; part.expression = f.expression;
+            CompiledPrintTemplatePart part; part.text = f.text; part.expression = f.expression;
             part.kind = f.expression ? PrintTemplatePart::Kind::Expression : PrintTemplatePart::Kind::Text;
             out->parts.append(part);
         }
@@ -59,16 +59,20 @@ QSharedPointer<PrintTemplate> compileMarkup(const QString& markup, const QList<Q
             const auto c = markup[gt];
             if (!quote.isNull()) { if (c == quote) quote = {}; }
             else if (c == '\'' || c == '"') quote = c;
-            else if (c == '>') break;
+            else if (c == '>' || c == '<') break;
         }
         if (gt == markup.size()) { text(markup.mid(lt)); break; }
+        // A new unquoted tag cannot complete an earlier unfinished tag.
+        // Preserve that prefix and resume at the new '<', rather than swallowing
+        // both tags (and any interpolations between them).
+        if (markup[gt] == '<') { text(markup.mid(lt, gt-lt)); pos = gt; continue; }
         const QString token = markup.mid(lt+1, gt-lt-1).trimmed();
-        static const QRegularExpression tagRe("^(/?)\\s*([a-zA-Z][a-zA-Z0-9]*)");
+        static const QRegularExpression tagRe("^(/?)\\s*([a-zA-Z][a-zA-Z0-9]*)(?=\\s|/|$)");
         const auto tagMatch = tagRe.match(token);
         if (!tagMatch.hasMatch()) { text(markup.mid(lt, gt-lt+1)); pos = gt+1; continue; }
         const QString tag = tagMatch.captured(2).toLower();
         const bool closing = !tagMatch.captured(1).isEmpty();
-        PrintTemplatePart part; part.style = {};
+        CompiledPrintTemplatePart part; part.style = {};
         static const QRegularExpression attrRe("([a-zA-Z][a-zA-Z0-9_-]*)\\s*=\\s*(?:\"([^\"]*)\"|'([^']*)'|([^\\s/]+))");
         auto am = attrRe.globalMatch(token.mid(tagMatch.capturedEnd()));
         while (am.hasNext()) {
@@ -98,61 +102,72 @@ QSharedPointer<PrintTemplate> compileMarkup(const QString& markup, const QList<Q
     return out;
 }
 }
-QSharedPointer<PrintTemplate> PrintTemplateCompiler::compile(const QString& markup) { return compileMarkup(markup, {}); }
-QSharedPointer<PrintTemplate> PrintTemplateCompiler::compile(const QSharedPointer<ExpressionNode>& node) {
+QSharedPointer<CompiledPrintTemplate> PrintTemplateCompiler::compile(const QSharedPointer<ExpressionNode>& node) {
     if (!node) return {};
-    if (node->kind() == NodeKind::Literal && node->isString()) return compile(static_cast<const LiteralNode&>(*node).strValue());
-    if (node->kind() == NodeKind::BinaryOp) {
-        const auto& binary = static_cast<const BinaryOpNode&>(*node);
-        if (binary.op().type() == TokenType::PLUS && node->isString()) {
-            QString markup;
-            QList<QSharedPointer<ExpressionNode>> expressions;
-            const auto append = [&](const auto& self, const QSharedPointer<ExpressionNode>& part) -> void {
-                if (part->kind() == NodeKind::BinaryOp) {
-                    const auto& sum = static_cast<const BinaryOpNode&>(*part);
-                    if (sum.op().type() == TokenType::PLUS && part->isString()) {
-                        self(self, sum.left()); self(self, sum.right()); return;
-                    }
-                }
-                if (part->kind() == NodeKind::Literal && part->isString())
-                    markup += static_cast<const LiteralNode&>(*part).strValue();
-                else {
-                    markup += marker(expressions.size());
-                    expressions.append(part);
-                }
-            };
-            append(append, node);
-            return compileMarkup(markup, expressions);
+    QString markup;
+    QList<QSharedPointer<ExpressionNode>> expressions;
+    const auto expression = [&](const QSharedPointer<ExpressionNode>& value) {
+        markup += marker(expressions.size());
+        expressions.append(value);
+    };
+    // Flatten the structural AST before scanning. In particular, a FORM can
+    // complete a tag begun in a literal on either side of a string addition.
+    // Interpolation leaves are opaque, even when their value is constant HTML.
+    const auto append = [&](const auto& self, const QSharedPointer<ExpressionNode>& value) -> void {
+        if (!value) return;
+        if (value->kind() == NodeKind::Literal && value->isString()) {
+            markup += static_cast<const LiteralNode&>(*value).strValue();
+            return;
         }
+        if (value->kind() == NodeKind::BinaryOp && value->isString()) {
+            const auto& sum = static_cast<const BinaryOpNode&>(*value);
+            if (sum.op().type() == TokenType::PLUS) {
+                self(self, sum.left()); self(self, sum.right()); return;
+            }
+        }
+        if (value->kind() == NodeKind::StrForm) {
+            for (const auto& part : static_cast<const StrFormNode&>(*value).parts()) {
+                if (!part.expression) markup += part.text;
+                else if (!part.width && part.expectedType == OperandType::Unknown
+                         && part.expression->kind() == NodeKind::StrForm)
+                    self(self, part.expression);
+                else {
+                    // Keep FORM width/alignment and expected-type checks when
+                    // extracting an interpolation into a template expression.
+                    expression(QSharedPointer<StrFormNode>::create(QList<StrFormPart>{part}));
+                }
+            }
+            return;
+        }
+        expression(value);
+    };
+    append(append, node);
+    auto result = compileMarkup(markup, expressions);
+    // Keep the raw spelling alongside compiled tags, sharing interpolation identities.
+    // Raw string values retain entity spelling.
+    qsizetype pos = 0;
+    for (int i = 0; i < expressions.size(); ++i) {
+        const auto at = markup.indexOf(marker(i), pos);
+        result->rawParts.append(StrFormPart::makeText(markup.mid(pos, at-pos)));
+        StrFormPart part; part.expression = expressions[i]; result->rawParts.append(part);
+        pos = at + marker(i).size();
     }
-    if (node->kind() != NodeKind::StrForm) {
-        auto out = QSharedPointer<PrintTemplate>::create();
-        PrintTemplatePart part;
-        part.kind = PrintTemplatePart::Kind::Expression;
-        part.expression = node;
-        out->parts.append(part);
-        return out;
-    }
-    QString markup; QList<QSharedPointer<ExpressionNode>> expressions;
-    for (const auto& part : static_cast<const StrFormNode&>(*node).parts()) {
-        if (part.expression) { markup += marker(expressions.size()); expressions.append(part.width ? QSharedPointer<ExpressionNode>(QSharedPointer<StrFormNode>::create(QList<StrFormPart>{part})) : part.expression); }
-        else markup += part.text;
-    }
-    return compileMarkup(markup, expressions);
+    result->rawParts.append(StrFormPart::makeText(markup.mid(pos)));
+    return result;
 }
-PrintTemplate PrintTemplateCompiler::evaluate(const PrintTemplate& source, const std::function<QString(const ExpressionNode&)>& eval) {
-    PrintTemplate out = source;
-    for (auto& part : out.parts) {
-        if (part.expression) { part.text = eval(*part.expression); part.expression.clear(); part.kind = PrintTemplatePart::Kind::Text; }
+PrintTemplate PrintTemplateCompiler::evaluate(const CompiledPrintTemplate& source, const std::function<QString(const ExpressionNode&)>& eval) {
+    PrintTemplate out;
+    out.alignment = source.alignment; out.noWrap = source.noWrap;
+    for (const auto& compiled : source.parts) {
+        PrintTemplatePart part = compiled;
+        if (compiled.expression) { part.text = eval(*compiled.expression); part.kind = PrintTemplatePart::Kind::Text; }
         QHash<QString, QString> attrs;
-        for (const auto& key : part.attributeOrder) {
-            const auto& form = static_cast<const StrFormNode&>(*part.attributes.value(key));
+        for (const auto& key : compiled.attributeOrder) {
+            const auto& form = static_cast<const StrFormNode&>(*compiled.attributes.value(key));
             QString value;
             for (const auto& fragment : form.parts()) value += fragment.expression ? eval(*fragment.expression) : fragment.text;
             attrs[key] = value;
         }
-        part.attributeOrder.clear();
-        part.attributes.clear();
         if (part.kind == PrintTemplatePart::Kind::Style) {
             part.style.color = QColor(attrs.value("color"));
             part.style.buttonColor = QColor(attrs.value("bcolor"));
@@ -171,6 +186,36 @@ PrintTemplate PrintTemplateCompiler::evaluate(const PrintTemplate& source, const
         part.shapeType = attrs.value("type");
         for (const auto& value : attrs.value("param").split(',', Qt::SkipEmptyParts)) part.shapeParams.append(value.trimmed().toInt());
         part.width = attrs.value("width").toInt(); part.height = attrs.value("height").toInt(); part.y = attrs.value("ypos").toInt();
+        out.parts.append(std::move(part));
     }
     return out;
+}
+
+void PrintTemplateCompiler::prepare(const QSharedPointer<ExpressionNode>& node) {
+    if (!node) return;
+    switch (node->kind()) {
+    case NodeKind::BinaryOp: {
+        const auto& n = static_cast<const BinaryOpNode&>(*node);
+        prepare(n.left()); prepare(n.right()); break;
+    }
+    case NodeKind::Function:
+        for (const auto& arg : static_cast<const FunctionNode&>(*node).arguments()) prepare(arg);
+        break;
+    case NodeKind::If: {
+        const auto& n = static_cast<const IfNode&>(*node);
+        prepare(n.condition()); prepare(n.thenExpr()); prepare(n.elseExpr()); break;
+    }
+    default: break;
+    }
+    const bool sum = node->kind() == NodeKind::BinaryOp
+        && static_cast<const BinaryOpNode&>(*node).op().type() == TokenType::PLUS;
+    if (node->kind() == NodeKind::StrForm || (node->isString() &&
+        (node->kind() == NodeKind::Literal || sum))) {
+        const auto compiled = compile(node);
+        for (const auto& part : compiled->parts) {
+            if (part.kind != PrintTemplatePart::Kind::Text && part.kind != PrintTemplatePart::Kind::Expression) {
+                node->markupTemplate = compiled; break;
+            }
+        }
+    }
 }

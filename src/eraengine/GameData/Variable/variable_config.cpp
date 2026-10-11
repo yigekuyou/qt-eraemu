@@ -182,6 +182,14 @@ void VariableConfig::loadDefaults()
     variableSizes["CSTR"] = VariableSizeInfo{100, QPair<int, int>(), QVector<int>(), false, false};
     variableSizes["CFLAGNAME"] = VariableSizeInfo{10000, QPair<int, int>(), QVector<int>(), false, false};
     
+    // C# ConstantData defaults used by binary persistence as well as evaluation.
+    variableSizes["GLOBAL"] = VariableSizeInfo{1000, {}, {}, false, false};
+    variableSizes["GLOBALS"] = VariableSizeInfo{100, {}, {}, false, false};
+    variableSizes["RANDDATA"] = VariableSizeInfo{625, {}, {}, false, false};
+    variableSizes["CDFLAG"] = VariableSizeInfo{0, {1, 1}, {}, true, false};
+    variableSizes["TA"] = VariableSizeInfo{0, {}, {100, 100, 100}, false, true};
+    variableSizes["TB"] = VariableSizeInfo{0, {}, {100, 100, 100}, false, true};
+
     // 2D variables
     variableSizes["DITEMTYPE"] = VariableSizeInfo{0, QPair<int, int>(1000, 1000), QVector<int>(), true, false};
     variableSizes["DA"] = VariableSizeInfo{0, QPair<int, int>(100, 100), QVector<int>(), true, false};

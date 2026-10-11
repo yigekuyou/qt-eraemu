@@ -24,7 +24,7 @@
 namespace {
 
 inline bool isSeparator(const Operand& o) {
-    return o.raw == QLatin1String(",") || o.raw == QLatin1String(":");
+    return !o.isString && (o.raw == QLatin1String(",") || o.raw == QLatin1String(":"));
 }
 
 // 把操作数中的「分隔符」剔除（逗号/冒号）
@@ -194,6 +194,22 @@ void ArgumentParser::build(LogicalLine& line) {
         }
     }
 
+    if (upper == "DT_COLUMN_OPTIONS" || upper == "PLAYSOUND") {
+        for (int i = 0; arg.typeOk && i < ops.size(); ++i) {
+            const auto ast = ops[i].ast;
+            const auto want = upper == "DT_COLUMN_OPTIONS" ? (i < 2 ? OperandType::Str : OperandType::Unknown)
+                                                             : (i == 0 ? OperandType::Str : OperandType::Int);
+            if (!ast || (isKnown(want) && isKnown(ast->valueType()) && ast->valueType() != want)) {
+                arg.typeOk = false;
+                arg.typeError = QCoreApplication::translate("ParseDiagnostics", "%1 的参数缺少 AST 或类型错误").arg(upper);
+            }
+        }
+        if (upper == "DT_COLUMN_OPTIONS" && (line.isError || line.columnDefaults.isEmpty())) {
+            arg.typeOk = false;
+            arg.typeError = QCoreApplication::translate("ParseDiagnostics", "DT_COLUMN_OPTIONS 需要合法 DEFAULT 选项");
+        }
+    }
+
     // ---- 首参必须是变量的软校验（SP_SET/SP_VAR/BIT_ARG/SP_POWER…）----
     if (arg.typeOk && !arg.params.isEmpty()) {
         const ArgKind k = arg.kind;
@@ -204,7 +220,7 @@ void ArgumentParser::build(LogicalLine& line) {
             const Operand& first = arg.params.first();
             if (first.ast && first.ast->kind() != NodeKind::Variable) {
                 arg.typeOk = false;
-                arg.typeError = QCoreApplication::translate("ParseDiagnostics", "%1 的第一个参数需要变量，实得表达式").arg(upper);
+                arg.typeError = QCoreApplication::translate("ParseDiagnostics", "%1 的第一个参数需要装载期变量节点：%2 (%3)").arg(upper, first.raw, line.position.toString());
             }
         }
     }

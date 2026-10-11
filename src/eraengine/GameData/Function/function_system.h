@@ -107,7 +107,6 @@ private:
     QStack<QPair<QString, ScriptPosition>> m_callStack;
     
     // Helper methods
-    QVariant evaluateExpression(const QString& expression, VariableStorage* storage);
 };
 
 #endif // FUNCTION_SYSTEM_H

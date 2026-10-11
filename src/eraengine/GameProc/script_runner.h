@@ -127,6 +127,7 @@ private:
         int depth = 0;
         QString script;
         QString varName;         // FOR 变量
+        Operand counter;
         qint64 value = 0;        // FOR 当前值
         qint64 end = 0;          // FOR 终值
         qint64 step = 1;         // FOR 步长
@@ -195,8 +196,6 @@ private:
     // 用它定位函数入口；有帧时用帧的 entryLine。
     [[nodiscard]] int findGotoLabelInFunction(const QString& label,
                                               const QString& ownerFunction = QString()) const;
-    // 把 CALLFORM 的标签名（含 %..%/{..}）展开为实际标签
-    [[nodiscard]] QString expandCallFormLabel(const QString& raw);
     // 标签/函数
     int  labelLine(const QString& label) const;
     // GAMEBASE_* 等需要 GameBase 数据（经 ExecutionEngine 取得）
@@ -206,6 +205,7 @@ private:
                        const QHash<QString, QString>& references = {});
     // FOR/NEXT 的循环变量写入：LOCAL/ARG 写局部槽（脚本读法一致），其余写系统/全局
     void writeLoopCounter(const QString& name, qint64 value);
+    void writeLoopCounter(const Operand& counter, qint64 value);
 
     // 整型变量统一读写（LOCAL/ARG -> 局部槽；系统变量 -> 系统槽；角色数据变量 ->
     // 角色存储；其余 -> 全局）。QList<int> 重载保留全部下标（角色变量需要）。

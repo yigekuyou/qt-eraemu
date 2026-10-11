@@ -27,6 +27,9 @@
 
 #include "variable_types.h"
 #include "variable_config.h"
+#include "era_binary_data.h"
+#include "ast/variable_table.h"
+#include "ast/print_template.h"
 
 // perf：变量名（eraTW/MUGEN 惯例）几乎都是大写，QString::toUpper() 即使无变化
 // 也会 detach + 逐字符大小写转换。这里先扫一遍：无 a-z 且无非 ASCII 字符时
@@ -77,6 +80,7 @@ public:
 		Q_INVOKABLE qint64 getCharaInt(const QString &name, int charaId, int index) const;
 		// 按运行时下标直接存取（不做 运行时->模板 翻译）：供角色列表自身（NO）使用
 		void setCharaIntRaw(const QString &name, int charaId, int index, qint64 value);
+		void setCharaStrRaw(const QString &name, int charaId, int index, const QString &value);
 		Q_INVOKABLE void setCharaInt3D(const QString &name, int charaId, int x, int y, qint64 value);
 		Q_INVOKABLE qint64 getCharaInt3D(const QString &name, int charaId, int x, int y) const;
 		// 角色字符串变量（CSTR / NAME / 用户 #DIMS CHARADATA）
@@ -131,6 +135,12 @@ public:
 		// PICKUPCHARA：角色列表重排为给定的运行时下标序列（可少于原数量）
 		void pickupChara(const QList<int>& indexes);
 		// SAVECHARA / LOADCHARA：角色清单（模板号 + SP 标记）的文本序列化
+        struct CharacterEntry { int number = 0; bool special = false; };
+        using CharacterSnapshot = QList<CharacterEntry>;
+        CharacterSnapshot captureCharacterSnapshot(const QList<int>& indexes = {}) const;
+        static bool decodeCharacterSnapshot(const QString& text, CharacterSnapshot& snapshot);
+        static QString serializeCharacterSnapshot(const CharacterSnapshot& snapshot);
+        void appendCharacterSnapshot(const CharacterSnapshot& snapshot);
 		[[nodiscard]] QString dumpCharaList() const;
 		void appendCharaList(const QString& text);
 		[[nodiscard]] int charaNum() const { return m_charaList.size(); }
@@ -156,14 +166,11 @@ public:
 		[[nodiscard]] qint64 csvCharaInt(const QString& name, int charaId, int index) const;
 		[[nodiscard]] QString csvCharaStr(const QString& name, int charaId, int index) const;
 
-		// ================= 存档序列化（SAVEDATA/LOADDATA/DELDATA/CHKDATA 支持）=================
-		// 对齐 C# VariableEvaluator.SaveTo/LoadFrom 的语义：
-		//   * 文件名 save{index:00}.sav（C# VariableEvaluator.cs:1746）
-		//   * 内容：唯一码/版本/SAVETEXT(PUTFORM)/角色清单/全局变量/系统变量
-		//   * 格式为移植版行式文本 —— C# 的 EraDataWriter 格式不兼容，
-		//     C# 存档不可载入（已知限制）；移植版自身存档可完整往返。
-		Q_INVOKABLE QString dumpSaveData() const;
-		Q_INVOKABLE void restoreSaveData(const QString& text);
+        // C#1808 typed snapshots used by all engine persistence entry points.
+        void setSaveVariableTable(const VariableTable* table) { m_saveVariableTable = table; }
+        EraBinaryData::Document captureBinarySave(EraBinaryData::FileType type,
+                                                  const QList<int>& characters = {}) const;
+        void applyBinarySave(const EraBinaryData::Document& document);
 
 		// ================= 本地变量 =================
 		Q_INVOKABLE void setLocalInt(int index, qint64 value);
@@ -193,11 +200,16 @@ public:
 		void setLocalAliases(const QHash<QString, int> &aliases) { m_localAliases = aliases; }
 		void clearLocalAliases() { m_localAliases.clear(); }
 
+        QVariant stringValueRaw(const QString& key, int index, const QString& text) const;
+        void setStringProvenance(const QString& name, int index, const QVariant& value);
+        [[nodiscard]] FlatStringValue getStringSlot(const QString& name, const QList<int>& indices = {}) const;
+        bool setStringSlot(const QString& name, const QList<int>& indices, const FlatStringValue& value);
+
         struct LocalContext {
             QList<qint64> integers;
-            QList<QString> strings;
+            QList<FlatStringValue> strings;
             QList<qint64> argIntegers;
-            QList<QString> argStrings;
+            QList<FlatStringValue> argStrings;
             QHash<QString, int> aliases;
             QHash<QString, QVariant> parameters;
             QHash<QString, QString> privateNames;
@@ -371,34 +383,34 @@ public:
 		Q_INVOKABLE bool loadVariables(const QString &filePath);
 		
 		// ================= Expression Evaluation =================
-		Q_INVOKABLE QVariant evaluateExpression(const QString &expression);
 
 private:
 		// 扩展 3D 字符串及更多维度的全局容器
-		QHash<QString, QList<QList<QList<QString>>>> m_globalStr3D;
+		QHash<QString, QList<QList<QList<FlatStringValue>>>> m_globalStr3D;
 
 		// 角色 2D/3D 变量容器
 		QHash<QString, QList<QList<QList<qint64>>>> m_charaInt2D;
-		QHash<QString, QList<QList<QList<QString>>>> m_charaStr2D;
+		QHash<QString, QList<QList<QList<FlatStringValue>>>> m_charaStr2D;
 
 		// 内置系统状态映射（例如 DAY, MONEY, FLAG 等）
 		QHash<QString, qint64> m_systemIntVars;
-		QHash<QString, QString> m_systemStrVars;
+		QHash<QString, FlatStringValue> m_systemStrVars;
 
 		// 全局变量容器 (支持 1D, 2D, 3D)
 		QHash<QString, QList<qint64>> m_globalInt1D;
 		QHash<QString, QList<QList<qint64>>> m_globalInt2D;
 		QHash<QString, QList<QList<QList<qint64>>>> m_globalInt3D;
 
-		QHash<QString, QList<QString>> m_globalStr1D;
-		QHash<QString, QList<QList<QString>>> m_globalStr2D;
+		QHash<QString, QList<FlatStringValue>> m_globalStr1D;
+		QHash<QString, QList<QList<FlatStringValue>>> m_globalStr2D;
 
 		// 角色变量容器 (支持 1D/2D 对应 CharaId + Index，可扩展到 3D)
 		QHash<QString, QList<QList<qint64>>> m_charaIntVars;
 		QHash<QString, QList<QList<QList<qint64>>>> m_charaIntVars3D;
-		QHash<QString, QList<QList<QString>>> m_charaStrVars;
+		QHash<QString, QList<QList<FlatStringValue>>> m_charaStrVars;
 
 		// 本地变量
+		const VariableTable* m_saveVariableTable = nullptr;
 		QHash<QString, QVariant> m_parameters;
         QHash<QString, QString> m_privateNames;
         QHash<QString, QString> m_references;
@@ -406,8 +418,8 @@ private:
         QHash<QString, QHash<QString, QString>> m_privateScopeCache;
 		QList<qint64> m_localIntVars;
 		QList<qint64> m_argIntVars;   // ARG（与 LOCAL 分离）
-		QList<QString> m_localStrVars;
-		QList<QString> m_argStrVars;  // ARGS
+		QList<FlatStringValue> m_localStrVars;
+		QList<FlatStringValue> m_argStrVars;  // ARGS
 		QHash<QString, int> m_localAliases;   // 形参名 -> LOCAL 槽位
 
 		// System variable containers (1D arrays)
@@ -452,7 +464,7 @@ private:
 		// CSV 模板快照（按模板号存放）
 		QHash<QString, QList<QList<qint64>>> m_csvIntVars;
 		QHash<QString, QList<QList<QList<qint64>>>> m_csvIntVars3D;
-		QHash<QString, QList<QList<QString>>> m_csvStrVars;
+		QHash<QString, QList<QList<FlatStringValue>>> m_csvStrVars;
 
 		// Variable type information and identifiers
 		QHash<QString, VariableTypeInfo> m_variableTypes;

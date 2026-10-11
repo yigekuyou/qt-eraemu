@@ -1,3 +1,5 @@
+#include "era_parse_table.h"
+#include "expression_evaluator.h"
 /*
  * emuera —— Emuera（ERB 脚本引擎）的 Qt6 + QML/C++ 移植
  * Copyright (C) 2026  yigekuyou
@@ -127,13 +129,15 @@ int main(int argc, char *argv[]) {
     
     // Test 13: Test expression evaluation
     qDebug() << "\n15. Testing Expression Evaluation:";
+    EraParseTable compiler(nullptr);
+    ExpressionEvaluator evaluator;
     QString expr = "10 + 20";
-    QVariant exprResult = storage.evaluateExpression(expr);
-    qDebug() << "   storage.evaluateExpression(\"" << expr << "\") = " << exprResult.toString();
+    QVariant exprResult = evaluator.evaluate(*compiler.expressionAst(expr), &storage);
+    qDebug() << "   compiled AST evaluation(\"" << expr << "\") = " << exprResult.toString();
     
     expr = "DAY + 100";
-    exprResult = storage.evaluateExpression(expr);
-    qDebug() << "   storage.evaluateExpression(\"" << expr << "\") = " << exprResult.toString();
+    exprResult = evaluator.evaluate(*compiler.expressionAst(expr), &storage);
+    qDebug() << "   compiled AST evaluation(\"" << expr << "\") = " << exprResult.toString();
     
     // Test 14: Test variable type enumeration
     qDebug() << "\n16. Testing Variable Types Enumeration:";

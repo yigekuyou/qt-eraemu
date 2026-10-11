@@ -1537,7 +1537,10 @@ void SystemStateMachine::loadGameWaitInput() {
     // 若不清掉，会在 SHOW_SHOP 返回后复活（标题重画进载入后的游戏）。
     if (m_table) m_table->resetPosition();
     deletePrevState();
-    beginDataLoaded();
+    // LOADGAME 与 LOADDATA 共用异步读档收尾；直接调用 beginDataLoaded()
+    // 会在当前 LOADGAME 状态处理器内启动 SYSTEM_LOADEND，导致 pump
+    // 跳过事件函数的首行。先排队状态，交还给下一轮系统层处理。
+    dataLoaded();
 }
 
 void SystemStateMachine::endNormal() {

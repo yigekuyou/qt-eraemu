@@ -1,3 +1,4 @@
+#include "ast/print_template.h"
 /*
  * emuera —— Emuera（ERB 脚本引擎）的 Qt6 + QML/C++ 移植
  * Copyright (C) 2026  yigekuyou
@@ -20,6 +21,7 @@
 #include <QDebug>
 #include "eraengine_log.h"
 #include "expression_evaluator.h"
+#include "ast/system_variables.h"
 
 // PALAMLV/EXPLV 阈值默认表来自 C# ConfigData 的 _Replace.csv 默认值：
 //   PALAMLV {0,100,500,3000,10000,30000,60000,100000,150000,250000}
@@ -210,7 +212,7 @@ void VariableStorage::initialize(int maxCharacters, int localSize)
 		m_privateScopeCache.clear();   // 脚本（重）装载后私有作用域可能变化
 		if (localSize > 0) {
 				m_localIntVars.fill(0, localSize);
-				m_localStrVars.fill(QString(), localSize);
+				m_localStrVars.fill(FlatStringValue{}, localSize);
 		}
 }
 
@@ -358,13 +360,17 @@ qint64 VariableStorage::getCharaInt(const QString &name, int charaId, int index)
 void VariableStorage::setCharaStr(const QString &name, int charaId, int index, const QString &value)
 {
 		if (charaId < 0 || index < 0) return;
-		charaId = resolveCharaIndex(charaId);
-		if (charaId < 0) return;   // VOID 角色：无模板数据
+		setCharaStrRaw(name, resolveCharaIndex(charaId), index, value);
+}
+
+void VariableStorage::setCharaStrRaw(const QString &name, int charaId, int index, const QString &value)
+{
+		if (charaId < 0 || index < 0) return;
 		auto &charaList = m_charaStrVars[storageName(name)];
 		if (charaList.size() <= charaId) charaList.resize(charaId + 1);
 		auto &vec = charaList[charaId];
 		if (vec.size() <= index) vec.resize(index + 1);
-		vec[index] = value;
+		vec[index] = flatString(QVariant(value));
 }
 
 QString VariableStorage::getCharaStr(const QString &name, int charaId, int index) const
@@ -375,7 +381,7 @@ QString VariableStorage::getCharaStr(const QString &name, int charaId, int index
 		auto it = m_charaStrVars.constFind(storageName(name));
 		if (it != m_charaStrVars.constEnd() && charaId < it.value().size()) {
 				const auto &vec = it.value().at(charaId);
-				if (index < vec.size()) return vec.at(index);
+				if (index < vec.size()) return vec.at(index).text;
 		}
 		return QString();
 }
@@ -453,25 +459,60 @@ void VariableStorage::pickupChara(const QList<int>& indexes)
 		m_charaSp = newSp;
 }
 
+VariableStorage::CharacterSnapshot VariableStorage::captureCharacterSnapshot(const QList<int>& indexes) const
+{
+    CharacterSnapshot result;
+    if (indexes.isEmpty()) {
+        for (int i = 0; i < m_charaList.size(); ++i)
+            result.append({m_charaList.at(i), m_charaSp.contains(i)});
+    } else for (int i : indexes) {
+        if (i >= 0 && i < m_charaList.size())
+            result.append({m_charaList.at(i), m_charaSp.contains(i)});
+    }
+    return result;
+}
+
+bool VariableStorage::decodeCharacterSnapshot(const QString& text, CharacterSnapshot& snapshot)
+{
+    const auto fields = text.split(QLatin1Char(' '), Qt::SkipEmptyParts);
+    if (fields.size() % 2) return false;
+    CharacterSnapshot next;
+    for (int i = 0; i < fields.size(); i += 2) {
+        bool okNumber = false, okSpecial = false;
+        const int number = fields.at(i).toInt(&okNumber);
+        const int special = fields.at(i + 1).toInt(&okSpecial);
+        if (!okNumber || number < 0 || !okSpecial || (special != 0 && special != 1)) return false;
+        next.append({number, special != 0});
+    }
+    snapshot = std::move(next);
+    return true;
+}
+
+QString VariableStorage::serializeCharacterSnapshot(const CharacterSnapshot& snapshot)
+{
+    QStringList fields;
+    for (const auto& entry : snapshot)
+        fields << QString::number(entry.number) << (entry.special ? QStringLiteral("1") : QStringLiteral("0"));
+    return fields.join(QLatin1Char(' '));
+}
+
+void VariableStorage::appendCharacterSnapshot(const CharacterSnapshot& snapshot)
+{
+    for (const auto& entry : snapshot) {
+        m_charaList.append(entry.number);
+        if (entry.special) m_charaSp.insert(m_charaList.size() - 1);
+    }
+}
+
 QString VariableStorage::dumpCharaList() const
 {
-		QStringList out;
-		for (int i = 0; i < m_charaList.size(); ++i)
-			out << QString::number(m_charaList.at(i)) << (m_charaSp.contains(i) ? QStringLiteral("1") : QStringLiteral("0"));
-		return out.join(QLatin1Char(' '));
+    return serializeCharacterSnapshot(captureCharacterSnapshot());
 }
 
 void VariableStorage::appendCharaList(const QString& text)
 {
-		const QStringList f = text.split(QLatin1Char(' '), Qt::SkipEmptyParts);
-		for (int i = 0; i + 1 < f.size(); i += 2) {
-			bool okNo = false, okSp = false;
-			const int no = f.at(i).toInt(&okNo);
-			const int sp = f.at(i + 1).toInt(&okSp);
-			if (!okNo || no < 0) continue;
-			m_charaList.append(no);
-			if (okSp && sp != 0) m_charaSp.insert(m_charaList.size() - 1);
-		}
+    CharacterSnapshot snapshot;
+    if (decodeCharacterSnapshot(text, snapshot)) appendCharacterSnapshot(snapshot);
 }
 
 void VariableStorage::resetGlobals()
@@ -566,8 +607,8 @@ void VariableStorage::resetForNewGame()
 		// 本地槽（LOCAL/ARG/LOCALS/ARGS）与形参
 		m_localIntVars.fill(0);
 		m_argIntVars.fill(0);
-		for (QString& s : m_localStrVars) s.clear();
-		for (QString& s : m_argStrVars) s.clear();
+		m_localStrVars.fill(FlatStringValue{});
+		m_argStrVars.fill(FlatStringValue{});
 		m_parameters.clear();
 		qDebug() << "[var] RESETDATA 变量回默认值，角色列表已清空";
 }
@@ -602,7 +643,7 @@ QString VariableStorage::csvCharaStr(const QString& name, int charaId, int index
 		if (it == m_csvStrVars.constEnd()) return QString();
 		if (charaId >= it.value().size()) return QString();
 		const auto& vec = it.value().at(charaId);
-		return index < vec.size() ? vec.at(index) : QString();
+		return index < vec.size() ? vec.at(index).text : QString();
 }
 
 // ================= 角色数据变量（CHARADATA） =================
@@ -695,13 +736,13 @@ void VariableStorage::setLocalStr(int index, const QString &value)
 				m_localIntVars.resize(index + 1);
 				m_localStrVars.resize(index + 1);
 		}
-		m_localStrVars[index] = value;
+		m_localStrVars[index] = flatString(QVariant(value));
 }
 
 QString VariableStorage::getLocalStr(int index) const
 {
 		if (index >= 0 && index < m_localStrVars.size()) {
-				return m_localStrVars.at(index);
+				return m_localStrVars.at(index).text;
 		}
 		return QString();
 }
@@ -723,12 +764,12 @@ void VariableStorage::setArgStr(int index, const QString& value)
 {
 		if (index < 0) return;
 		if (index >= m_argStrVars.size()) m_argStrVars.resize(index + 1);
-		m_argStrVars[index] = value;
+		m_argStrVars[index] = flatString(QVariant(value));
 }
 
 QString VariableStorage::getArgStr(int index) const
 {
-		return (index >= 0 && index < m_argStrVars.size()) ? m_argStrVars.at(index) : QString();
+		return (index >= 0 && index < m_argStrVars.size()) ? m_argStrVars.at(index).text : QString();
 }
 
 void VariableStorage::setLocalAlias(const QString &name, int index){
@@ -911,8 +952,8 @@ void VariableStorage::setGlobalStr1D(const QString &name, int x, const QString &
 {
 		if (x < 0) return;
 		auto &vec = m_globalStr1D[storageName(name)];
-		if (vec.size() <= x) vec.resize(x + 1, QString());
-		vec[x] = value;
+		if (vec.size() <= x) vec.resize(x + 1);
+		vec[x] = flatString(QVariant(value));
 }
 
 QString VariableStorage::getGlobalStr1D(const QString &name, int x) const
@@ -924,7 +965,7 @@ QString VariableStorage::getGlobalStr1DRaw(const QString& storageKey, int x) con
 {
         if (x < 0) return QString();
         auto it = m_globalStr1D.constFind(storageKey);
-        if (it != m_globalStr1D.constEnd() && x < it.value().size()) return it.value().at(x);
+        if (it != m_globalStr1D.constEnd() && x < it.value().size()) return it.value().at(x).text;
         return QString();
 }
 
@@ -933,8 +974,8 @@ void VariableStorage::setGlobalStr2D(const QString &name, int x, int y, const QS
 		if (x < 0 || y < 0) return;
 		auto &table = m_globalStr2D[storageName(name)];
 		if (table.size() <= x) table.resize(x + 1);
-		if (table[x].size() <= y) table[x].resize(y + 1, QString());
-		table[x][y] = value;
+		if (table[x].size() <= y) table[x].resize(y + 1);
+		table[x][y] = flatString(QVariant(value));
 }
 
 QString VariableStorage::getGlobalStr2D(const QString &name, int x, int y) const
@@ -943,19 +984,19 @@ QString VariableStorage::getGlobalStr2D(const QString &name, int x, int y) const
 		auto it = m_globalStr2D.constFind(storageName(name));
 		if (it == m_globalStr2D.constEnd()) return QString();
 		if (x >= it.value().size() || y >= it.value().at(x).size()) return QString();
-		return it.value().at(x).at(y);
+		return it.value().at(x).at(y).text;
 }
 
 void VariableStorage::setSystemStr(const QString &name, int index, const QString &value)
 {
 		if (index != 0) return;   // 系统字符串变量目前只有单值（RESULTS / SAVEDATA_TEXT）
-		m_systemStrVars[eraUpperKey(name)] = value;
+		m_systemStrVars[eraUpperKey(name)] = flatString(QVariant(value));
 }
 
 QString VariableStorage::getSystemStr(const QString &name, int index) const
 {
 		if (index != 0) return QString();
-		return m_systemStrVars.value(eraUpperKey(name));
+		return m_systemStrVars.value(eraUpperKey(name)).text;
 }
 
 qint64 VariableStorage::getGlobalInt1D(const QString &name, int x) const
@@ -1044,7 +1085,7 @@ bool VariableStorage::loadVariables(const QString &path)
 bool VariableStorage::hasSystemVariable(const QString &name) const
 {
 		static const QSet<QString> kNames = {
-QStringLiteral("DAY"),QStringLiteral("MONEY"),QStringLiteral("TIME"),QStringLiteral("ITEM"),QStringLiteral("ITEMSALES"),QStringLiteral("NOITEM"),QStringLiteral("BOUGHT"),QStringLiteral("PBAND"),QStringLiteral("FLAG"),QStringLiteral("TFLAG"),QStringLiteral("TARGET"),QStringLiteral("MASTER"),QStringLiteral("PLAYER"),QStringLiteral("ASSI"),QStringLiteral("ASSIPLAY"),QStringLiteral("UP"),QStringLiteral("DOWN"),QStringLiteral("LOSEBASE"),QStringLiteral("PALAMLV"),QStringLiteral("EXPLV"),QStringLiteral("EJAC"),QStringLiteral("PREVCOM"),QStringLiteral("SELECTCOM"),QStringLiteral("NEXTCOM"),QStringLiteral("RESULT"),QStringLiteral("COUNT"),QStringLiteral("A"),QStringLiteral("B"),QStringLiteral("C"),QStringLiteral("CHARANUM")
+QStringLiteral("DAY"),QStringLiteral("MONEY"),QStringLiteral("TIME"),QStringLiteral("ITEM"),QStringLiteral("ITEMSALES"),QStringLiteral("NOITEM"),QStringLiteral("BOUGHT"),QStringLiteral("PBAND"),QStringLiteral("FLAG"),QStringLiteral("TFLAG"),QStringLiteral("TARGET"),QStringLiteral("MASTER"),QStringLiteral("PLAYER"),QStringLiteral("ASSI"),QStringLiteral("ASSIPLAY"),QStringLiteral("UP"),QStringLiteral("DOWN"),QStringLiteral("LOSEBASE"),QStringLiteral("PALAMLV"),QStringLiteral("EXPLV"),QStringLiteral("EJAC"),QStringLiteral("PREVCOM"),QStringLiteral("SELECTCOM"),QStringLiteral("NEXTCOM"),QStringLiteral("RESULT"),QStringLiteral("COUNT"),QStringLiteral("A"),QStringLiteral("B"),QStringLiteral("C"),QStringLiteral("CHARANUM"),QStringLiteral("LASTLOAD_NO"),QStringLiteral("LASTLOAD_VERSION")
 		};
 		// 先经 REF 形参别名解析（`#DIM REF X` ← 系统变量实参），再判名。
 		return kNames.contains(systemVariableName(name));
@@ -1088,6 +1129,7 @@ qint64 VariableStorage::getSystemVariable(const QString &name, int index) const
 		// CHARANUM：已登记角色数（对齐 C# VEvaluator.CHARANUM，由 ADDCHARA/DELCHARA 维护）
 		if (key == "CHARANUM") return m_charaList.size();
 		
+		if(key=="LASTLOAD_NO" || key=="LASTLOAD_VERSION") return m_systemIntVars.value(key);
 		// Not a system variable, return 0
 		return 0;
 }
@@ -1096,7 +1138,8 @@ void VariableStorage::setSystemVariable(const QString &name, int index, qint64 v
 {
 		// 系统变量名同样大小写不敏感（ICVariable）；并先经 REF 形参别名解析
 		const QString key = systemVariableName(name);
-		// Check for system variables and call appropriate setter
+		if(key=="LASTLOAD_NO" || key=="LASTLOAD_VERSION") { if(index==0) m_systemIntVars[key]=value; return; }
+        // Check for system variables and call appropriate setter
 		if (key == "DAY") { setDay(index, value); return; }
 		if (key == "MONEY") { setMoney(index, value); return; }
 		if (key == "TIME") { setTime(index, value); return; }
@@ -1128,167 +1171,220 @@ void VariableStorage::setSystemVariable(const QString &name, int index, qint64 v
 		if (key == "C") { setC(index, value); return; }
 }
 
-// ================= Expression Evaluation =================
-QVariant VariableStorage::evaluateExpression(const QString &expression)
-{
-    ExpressionEvaluator evaluator;
-    return evaluator.evaluate(expression, this);
-}
-
-// ---------------------------------------------------------------------------
-// 存档序列化（SAVEDATA/LOADDATA 支持；对齐 C# VariableEvaluator.SaveTo/LoadFrom）
-//   文件名 save{index:00}.sav（C# VariableEvaluator.cs:1746）；
-//   格式为移植版行式文本（eraemu-save-v1）—— C# 的 EraDataWriter 格式不
-//   兼容，C# 存档不可载入（已知限制）；移植版自身存档可完整往返。
-//   只序列化**运行期游戏状态**：角色清单、全局变量、角色变量、系统变量。
-//   局部变量（LOCAL/LOCALS/ARGS/私有变量）不入档（对齐 C#：存档只存全局）。
-// ---------------------------------------------------------------------------
-QString VariableStorage::dumpSaveData() const
-{
-    QStringList out;
-    out << QStringLiteral("eraemu-save-v1");
-
-    // 角色清单（运行时下标 -> 模板号；对齐 C# CharacterList）
-    QStringList csvNos;
-    for (int v : m_charaList) csvNos << QString::number(v);
-    out << QStringLiteral("CHARALIST\t") + csvNos.join(QLatin1Char(','));
-
-    // 全局整数 1D/2D
-    for (auto it = m_globalInt1D.constBegin(); it != m_globalInt1D.constEnd(); ++it) {
-        const auto &cells = it.value();
-        for (int i = 0; i < cells.size(); ++i) {
-            if (cells.at(i) != 0)
-                out << QStringLiteral("GI\t%1\t%2\t%3").arg(it.key(), QString::number(i)).arg(cells.at(i));
-        }
-    }
-    for (auto it = m_globalInt2D.constBegin(); it != m_globalInt2D.constEnd(); ++it) {
-        const auto &rows = it.value();
-        for (int x = 0; x < rows.size(); ++x) {
-            const auto &cols = rows.at(x);
-            for (int y = 0; y < cols.size(); ++y) {
-                if (cols.at(y) != 0)
-                    out << QStringLiteral("GI2\t%1\t%2\t%3\t%4").arg(it.key(), QString::number(x), QString::number(y)).arg(cols.at(y));
-            }
-        }
-    }
-    // 全局字符串 1D/2D
-    for (auto it = m_globalStr1D.constBegin(); it != m_globalStr1D.constEnd(); ++it) {
-        const auto &cells = it.value();
-        for (int i = 0; i < cells.size(); ++i) {
-            if (!cells.at(i).isEmpty())
-                out << QStringLiteral("GS\t%1\t%2\t%3").arg(it.key(), QString::number(i), cells.at(i));
-        }
-    }
-    for (auto it = m_globalStr2D.constBegin(); it != m_globalStr2D.constEnd(); ++it) {
-        const auto &rows = it.value();
-        for (int x = 0; x < rows.size(); ++x) {
-            const auto &cols = rows.at(x);
-            for (int y = 0; y < cols.size(); ++y) {
-                if (!cols.at(y).isEmpty())
-                    out << QStringLiteral("GS2\t%1\t%2\t%3\t%4").arg(it.key(), QString::number(x), QString::number(y), cols.at(y));
-            }
-        }
-    }
-    // 角色变量（int/str：m_charaIntVars / m_charaStrVars 的 charaId -> 槽位）
-    for (auto it = m_charaIntVars.constBegin(); it != m_charaIntVars.constEnd(); ++it) {
-        const auto &rows = it.value();
-        for (int c = 0; c < rows.size(); ++c) {
-            const auto &cells = rows.at(c);
-            for (int i = 0; i < cells.size(); ++i) {
-                if (cells.at(i) != 0)
-                    out << QStringLiteral("CI\t%1\t%2\t%3\t%4").arg(it.key(), QString::number(c), QString::number(i)).arg(cells.at(i));
-            }
-        }
-    }
-    for (auto it = m_charaStrVars.constBegin(); it != m_charaStrVars.constEnd(); ++it) {
-        const auto &rows = it.value();
-        for (int c = 0; c < rows.size(); ++c) {
-            const auto &cells = rows.at(c);
-            for (int i = 0; i < cells.size(); ++i) {
-                if (!cells.at(i).isEmpty())
-                    out << QStringLiteral("CS\t%1\t%2\t%3\t%4").arg(it.key(), QString::number(c), QString::number(i), cells.at(i));
-            }
-        }
-    }
-    // 专用系统变量成员（DAY/MONEY/TIME/ITEM/FLAG/TFLAG/…：m_day 等专用 QList，
-    //   不在 m_systemIntVars 哈希里 —— 此前漏档导致读档后 DAY/MONEY 不还原）
-    //   成员名 -> 系统变量名（restore 侧经 setSystemVariable 的既有分发落位）
-    // 成员名 -> 系统变量名（restore 侧经 setSystemVariable 的既有分发落位）
-    struct DedicatedVar { const QList<qint64>* list; const char* name; };
-    static const DedicatedVar kDedicated[] = {
-        {&m_day, "DAY"},   {&m_money, "MONEY"},   {&m_time, "TIME"},
-        {&m_item, "ITEM"}, {&m_itemsales, "ITEMSALES"}, {&m_noitem, "NOITEM"},
-        {&m_bought, "BOUGHT"}, {&m_pband, "PBAND"}, {&m_flag, "FLAG"},
-        {&m_tflag, "TFLAG"}, {&m_target, "TARGET"}, {&m_master, "MASTER"},
-        {&m_player, "PLAYER"}, {&m_assi, "ASSI"}, {&m_assiplay, "ASSIPLAY"},
-        {&m_up, "UP"}, {&m_down, "DOWN"}, {&m_losebase, "LOSEBASE"},
-        {&m_palamlv, "PALAMLV"}, {&m_explv, "EXPLV"}, {&m_ejac, "EJAC"},
-        {&m_prevcom, "PREVCOM"}, {&m_selectcom, "SELECTCOM"}, {&m_nextcom, "NEXTCOM"},
-        {&m_result, "RESULT"}, {&m_count, "COUNT"},
-        {&m_a, "A"}, {&m_b, "B"}, {&m_c, "C"},
+namespace {
+struct SaveShape { QString name; bool string = false; QList<int> dimensions; bool user = false; };
+QList<SaveShape> saveShapes(const VariableConfig& config, const VariableTable* table,
+                           bool character, bool global) {
+    QList<SaveShape> shapes;
+    const auto add = [&](const QString& name, bool string, int rank) {
+        QList<int> dims;
+        if (rank == 1) dims = {qMax(0, config.getSize1D(name))};
+        if (rank == 2) { auto d = config.getSize2D(name); dims = {qMax(0,d.first),qMax(0,d.second)}; }
+        if (rank == 3) { auto d = config.getSize3D(name); dims = {qMax(0,d.value(0)),qMax(0,d.value(1)),qMax(0,d.value(2))}; }
+        shapes.append({name,string,dims,false});
     };
-    for (const DedicatedVar& dv : kDedicated) {
-        const QList<qint64>& cells = *dv.list;
-        for (int i = 0; i < cells.size(); ++i) {
-            if (cells.at(i) != 0)
-                out << QStringLiteral("SI\t%1\t%2\t%3").arg(QString::fromLatin1(dv.name), QString::number(i)).arg(cells.at(i));
-        }
+    const auto words = [](const char* text) { return QString::fromLatin1(text).split(' ', Qt::SkipEmptyParts); };
+    if (global) { add("GLOBAL",false,1); add("GLOBALS",true,1); }
+    else if (character) {
+        for (const auto& n : words("ISASSI NO")) add(n,false,0);
+        for (const auto& n : words("NAME CALLNAME NICKNAME MASTERNAME")) add(n,true,0);
+        for (const auto& n : words("BASE MAXBASE ABL TALENT EXP MARK PALAM SOURCE EX CFLAG JUEL RELATION EQUIP TEQUIP STAIN GOTJUEL NOWEX DOWNBASE CUP CDOWN TCVAR")) add(n,false,1);
+        add("CSTR",true,1); add("CDFLAG",false,2);
+    } else {
+        for (const auto& n : words("DAY MONEY ITEM FLAG TFLAG UP PALAMLV EXPLV EJAC DOWN RESULT COUNT TARGET ASSI MASTER NOITEM LOSEBASE SELECTCOM ASSIPLAY PREVCOM TIME ITEMSALES PLAYER NEXTCOM PBAND BOUGHT RANDDATA")) add(n,false,1);
+        for (char c='A'; c<='Z'; ++c) add(QString(QChar(c)),false,1);
+        add("SAVESTR",true,1); add("TSTR",true,1);
+        for (const auto& n : words("DITEMTYPE DA DB DC DD DE")) add(n,false,2);
+        add("TA",false,3); add("TB",false,3);
     }
-    // 其他系统变量（int/str 哈希）
-    for (auto it = m_systemIntVars.constBegin(); it != m_systemIntVars.constEnd(); ++it) {
-        if (it.value() != 0)
-            out << QStringLiteral("SI\t%1\t%2").arg(it.key()).arg(it.value());
+    if (table) for (const auto& d : table->declarations()) {
+        if (!d.isSavedata || d.isConst || d.isReference || d.isArg
+            || d.scope != VarScope::Global || d.isCharaData != character || d.isGlobal != global) continue;
+        // The reference character loader has no 3D case.
+        if (character && d.dimension > 2) continue;
+        shapes.append({d.name,d.type == OperandType::Str,d.lengths.isEmpty() ? QList<int>{1} : d.lengths,true});
     }
-    for (auto it = m_systemStrVars.constBegin(); it != m_systemStrVars.constEnd(); ++it) {
-        if (!it.value().isEmpty())
-            out << QStringLiteral("SS\t%1\t%2").arg(it.key(), it.value());
-    }
-    return out.join(QLatin1Char('\n'));
+    return shapes;
+}
+int shapeCount(const QList<int>& dims) {
+    qint64 count=1;
+    for (int n : dims) { if (n < 0 || n > 16*1024*1024 || (n && count > 16*1024*1024/n)) return 0; count*=n; }
+    return int(count);
+}
+QList<int> coordinates(int index, const QList<int>& dims) {
+    QList<int> result(dims.size());
+    for (int axis=dims.size()-1;axis>=0;--axis) { result[axis]=dims[axis] ? index%dims[axis] : 0; if(dims[axis]) index/=dims[axis]; }
+    return result;
+}
 }
 
-void VariableStorage::restoreSaveData(const QString& text)
-{
-    if (text.isEmpty() || !text.startsWith(QStringLiteral("eraemu-save-v1"))) {
-        qWarning() << "[save] 存档格式不识别（eraemu-save-v1）";
-        return;
-    }
-    const QStringList lines = text.split(QLatin1Char('\n'));
-    // 先清运行期状态（对齐 C# LoadFromStream：SetDefaultValue 后再载入）
-    for (const QString& line : lines) {
-        const QList<QString> f = line.split(QLatin1Char('\t'));
-        if (f.isEmpty()) continue;
-        const QString& tag = f.first();
-        if (tag == QLatin1String("CHARALIST")) {
-            m_charaList.clear();
-            if (f.size() >= 2 && !f.at(1).isEmpty()) {
-                const QStringList nos = f.at(1).split(QLatin1Char(','));
-                for (const QString& n : nos) m_charaList.append(n.toInt());
-            }
-        } else if (tag == QLatin1String("GI") && f.size() >= 4) {
-            setGlobalInt1D(f.at(1), f.at(2).toInt(), f.at(3).toLongLong());
-        } else if (tag == QLatin1String("GI2") && f.size() >= 5) {
-            setGlobalInt2D(f.at(1), f.at(2).toInt(), f.at(3).toInt(), f.at(4).toLongLong());
-        } else if (tag == QLatin1String("GS") && f.size() >= 4) {
-            setGlobalStr1D(f.at(1), f.at(2).toInt(), f.at(3));
-        } else if (tag == QLatin1String("GS2") && f.size() >= 5) {
-            setGlobalStr2D(f.at(1), f.at(2).toInt(), f.at(3).toInt(), f.at(4));
-        } else if (tag == QLatin1String("CI") && f.size() >= 5) {
-            setCharaInt(f.at(1), f.at(2).toInt(), f.at(3).toInt(), f.at(4).toLongLong());
-        } else if (tag == QLatin1String("CS") && f.size() >= 5) {
-            setCharaStr(f.at(1), f.at(2).toInt(), f.at(3).toInt(), f.at(4));
-        } else if (tag == QLatin1String("SI")) {
-            // 格式 SI\t<名>\t<下标>\t<值>；无下标形态（3 字段）按标量
-            if (f.size() >= 4)
-                setSystemVariable(f.at(1), f.at(2).toInt(), f.at(3).toLongLong());
-            else if (f.size() >= 3)
-                setSystemVariable(f.at(1), 0, f.at(2).toLongLong());
-        } else if (tag == QLatin1String("SS")) {
-            // 格式 SS\t<名>\t<下标>\t<值>；无下标形态（3 字段）按标量
-            if (f.size() >= 4)
-                setSystemStr(f.at(1).toUpper(), f.at(2).toInt(), f.at(3));
-            else if (f.size() >= 3)
-                setSystemStr(f.at(1).toUpper(), 0, f.at(2));
+EraBinaryData::Document VariableStorage::captureBinarySave(EraBinaryData::FileType type,
+                                                           const QList<int>& selected) const {
+    auto* self=const_cast<VariableStorage*>(this);
+    const auto context=localContext(); self->setLocalContext({});
+    EraBinaryData::Document document; document.type=type;
+    const auto capture = [&](const SaveShape& s, int character) {
+        EraBinaryData::Variable v; v.name=s.name; v.string=s.string; v.dimensions=s.dimensions;
+        const int n=shapeCount(s.dimensions);
+        for(int i=0;i<n;++i) {
+            const auto p=coordinates(i,s.dimensions); const int x=p.value(0),y=p.value(1),z=p.value(2);
+            if(character>=0) {
+                if(s.string) v.strings.append(s.dimensions.size()<2 ? getCharaStr(s.name,character,x)
+                    : m_charaStr2D.value(s.name).value(resolveCharaIndex(character)).value(x).value(y).text);
+                else v.integers.append(s.dimensions.size()<2 ? getCharaInt(s.name,character,x) : getCharaInt3D(s.name,character,x,y));
+            } else if(s.string) {
+                v.strings.append(s.dimensions.size()<2 ? getGlobalStr1D(s.name,x) : s.dimensions.size()==2 ? getGlobalStr2D(s.name,x,y) : m_globalStr3D.value(s.name).value(x).value(y).value(z).text);
+            } else v.integers.append(s.dimensions.size()<2 ? (hasSystemVariable(s.name) ? getSystemVariable(s.name,x) : getGlobalInt1D(s.name,x))
+                                      : s.dimensions.size()==2 ? getGlobalInt2D(s.name,x,y) : getGlobalInt3D(s.name,x,y,z));
+        }
+        return v;
+    };
+    if(type==EraBinaryData::FileType::Normal || type==EraBinaryData::FileType::Character) {
+        QList<int> indexes=selected;
+        if(indexes.isEmpty()) for(int i=0;i<charaNum();++i) indexes.append(i);
+        const auto shapes=saveShapes(m_variableConfig,m_saveVariableTable,true,false);
+        for(int index : indexes) {
+            if(index<0 || index>=charaNum()) continue;
+            EraBinaryData::Character c;
+            for(const auto& s:shapes) (s.user ? c.userDefined : c.builtins).append(capture(s,index));
+            document.characters.append(c);
         }
     }
-    qCDebug(eraTrace) << "[save] 存档载入：行" << lines.size();
+    if(type!=EraBinaryData::FileType::Character)
+        for(const auto& s:saveShapes(m_variableConfig,m_saveVariableTable,false,type==EraBinaryData::FileType::Global)) document.variables.append(capture(s,-1));
+    self->setLocalContext(context);
+    return document;
+}
+
+void VariableStorage::applyBinarySave(const EraBinaryData::Document& document) {
+    const bool normal=document.type==EraBinaryData::FileType::Normal;
+    // GLOBAL is a separate lifetime and does not belong to a normal load.
+    const auto globals=normal ? captureBinarySave(EraBinaryData::FileType::Global) : EraBinaryData::Document{};
+    // Keep every GLOBAL declaration, including tokens that are deliberately not SAVEDATA.
+    QSet<QString> globalKeys{QStringLiteral("GLOBAL"), QStringLiteral("GLOBALS")};
+    if (m_saveVariableTable) for (const auto& d : m_saveVariableTable->declarations())
+        if (d.isGlobal) globalKeys.insert(d.name.toUpper());
+    const auto preserve = [&](const auto& map) {
+        auto kept = map;
+        for (auto it = kept.begin(); it != kept.end(); )
+            if (!globalKeys.contains(it.key().toUpper())) it = kept.erase(it); else ++it;
+        return kept;
+    };
+    const auto keptI1=preserve(m_globalInt1D); const auto keptI2=preserve(m_globalInt2D); const auto keptI3=preserve(m_globalInt3D);
+    const auto keptS1=preserve(m_globalStr1D); const auto keptS2=preserve(m_globalStr2D); const auto keptS3=preserve(m_globalStr3D);
+    if(normal) {
+        resetForNewGame(); setLocalContext({});
+        if(m_saveVariableTable) for(const auto& d:m_saveVariableTable->declarations()) {
+            if(d.isConst || d.isReference || d.isCharaData || d.isGlobal) continue;
+            const QString key=d.scope==VarScope::Local ? d.function.toUpper()+QChar(0x1f)+d.name.toUpper() : d.name;
+            for(int i=0;i<shapeCount(d.lengths.isEmpty() ? QList<int>{1} : d.lengths);++i) {
+                const auto p=coordinates(i,d.lengths); int x=p.value(0),y=p.value(1),z=p.value(2);
+                if(d.type==OperandType::Str) {
+                    const QString value=d.defaultStr.value(i);
+                    if(d.dimension<=1) setGlobalStr1D(key,x,value);
+                    else if(d.dimension==2) setGlobalStr2D(key,x,y,value);
+                    else { auto& a=m_globalStr3D[key]; if(a.size()<=x)a.resize(x+1); if(a[x].size()<=y)a[x].resize(y+1); if(a[x][y].size()<=z)a[x][y].resize(z+1); a[x][y][z]=flatString(QVariant(value)); }
+                } else {
+                    qint64 value=d.defaultInt.value(i);
+                    if(d.dimension<=1) setGlobalInt1D(key,x,value);
+                    else if(d.dimension==2) setGlobalInt2D(key,x,y,value);
+                    else setGlobalInt3D(key,x,y,z,value);
+                }
+            }
+        }
+        applyBinarySave(globals);
+        const auto restore=[](auto& map,const auto& kept) { for(auto it=kept.begin();it!=kept.end();++it) map.insert(it.key(),it.value()); };
+        restore(m_globalInt1D,keptI1); restore(m_globalInt2D,keptI2); restore(m_globalInt3D,keptI3);
+        restore(m_globalStr1D,keptS1); restore(m_globalStr2D,keptS2); restore(m_globalStr3D,keptS3);
+    }
+    const auto apply = [&](const EraBinaryData::Variable& v,const SaveShape& s,int character) {
+        if(v.string!=s.string || v.dimensions.size()!=s.dimensions.size()) return;
+        for(int i=0;i<shapeCount(s.dimensions);++i) {
+            const auto p=coordinates(i,s.dimensions); int source=0; bool overlap=true;
+            for(int axis=0;axis<p.size();++axis) { if(p[axis]>=v.dimensions[axis]) overlap=false; source=source*v.dimensions[axis]+p[axis]; }
+            const qint64 number=overlap ? v.integers.value(source) : 0;
+            const QString text=overlap ? v.strings.value(source) : QString();
+            const int x=p.value(0),y=p.value(1),z=p.value(2);
+            if(character>=0) {
+                if(s.string) {
+                    if(p.size()<2) setCharaStr(s.name,character,x,text);
+                    else { auto& a=m_charaStr2D[s.name]; int slot=resolveCharaIndex(character); if(a.size()<=slot)a.resize(slot+1); if(a[slot].size()<=x)a[slot].resize(x+1); if(a[slot][x].size()<=y)a[slot][x].resize(y+1); a[slot][x][y]=flatString(QVariant(text)); }
+                } else if(p.size()<2) setCharaInt(s.name,character,x,number); else setCharaInt3D(s.name,character,x,y,number);
+            } else if(s.string) {
+                if(p.size()<2) setGlobalStr1D(s.name,x,text); else if(p.size()==2) setGlobalStr2D(s.name,x,y,text);
+                else { auto& a=m_globalStr3D[s.name]; if(a.size()<=x)a.resize(x+1); if(a[x].size()<=y)a[x].resize(y+1); if(a[x][y].size()<=z)a[x][y].resize(z+1); a[x][y][z]=flatString(QVariant(text)); }
+            } else if(p.size()<2) { if(hasSystemVariable(s.name)) setSystemVariable(s.name,x,number); else setGlobalInt1D(s.name,x,number); }
+            else if(p.size()==2) setGlobalInt2D(s.name,x,y,number); else setGlobalInt3D(s.name,x,y,z,number);
+        }
+    };
+    const auto applyList = [&](const QList<EraBinaryData::Variable>& list,const QList<SaveShape>& shapes,int character) {
+        for(const auto& v:list) for(const auto& s:shapes) if(v.name==s.name) { apply(v,s,character); break; }
+    };
+    if(document.type==EraBinaryData::FileType::Normal || document.type==EraBinaryData::FileType::Character) {
+        const auto shapes=saveShapes(m_variableConfig,m_saveVariableTable,true,false);
+        for(const auto& c:document.characters) {
+            // Runtime slots must be distinct even when NO is repeated or the original list was reordered.
+            int slot=0; for(int n:m_charaList) slot=qMax(slot,n+1);
+            const int index=m_charaList.size(); m_charaList.append(slot);
+            for(const auto& s:shapes) {
+                EraBinaryData::Variable zero; zero.name=s.name; zero.string=s.string; zero.dimensions=s.dimensions;
+                if(s.string) zero.strings.resize(shapeCount(s.dimensions)); else zero.integers.resize(shapeCount(s.dimensions));
+                apply(zero,s,index);
+            }
+            applyList(c.builtins,shapes,index); applyList(c.userDefined,shapes,index);
+        }
+    }
+    auto shapes=saveShapes(m_variableConfig,m_saveVariableTable,false,document.type==EraBinaryData::FileType::Global);
+    if(document.type==EraBinaryData::FileType::Var) shapes.append(saveShapes(m_variableConfig,m_saveVariableTable,false,true));
+    applyList(document.variables,shapes,-1);
+}
+
+// Compatibility adapters now read/write the actual slot; no provenance sidecar.
+QVariant VariableStorage::stringValueRaw(const QString& key, int index, const QString&) const {
+    const auto slot = getStringSlot(key, {index});
+    return slot.markup.parts.isEmpty() ? QVariant(slot.text) : toVariant(slot);
+}
+void VariableStorage::setStringProvenance(const QString& name, int index, const QVariant& value) {
+    setStringSlot(name, {index}, flatString(value));
+}
+
+FlatStringValue VariableStorage::getStringSlot(const QString& name, const QList<int>& indices) const {
+    const QString key = storageName(name);
+    const int x = indices.value(0), y = indices.value(1), z = indices.value(2);
+    if (x < 0 || y < 0 || z < 0) return {};
+    if (key == "LOCALS") return m_localStrVars.value(x);
+    if (key == "ARGS") return m_argStrVars.value(x);
+    if (key == "SAVEDATA_TEXT") return m_systemStrVars.value(key);
+    if (isCharaDataString(name)) {
+        int character; QList<int> elements; reduceCharaArgs(name, indices, character, elements);
+        const int slot = resolveCharaIndex(character);
+        if (charaDataDimension(name) >= 2)
+            return m_charaStr2D.value(key).value(slot).value(elements.value(0)).value(elements.value(1));
+        return m_charaStrVars.value(key).value(slot).value(elements.value(0));
+    }
+    if (indices.size() >= 3) return m_globalStr3D.value(key).value(x).value(y).value(z);
+    if (indices.size() >= 2) return m_globalStr2D.value(key).value(x).value(y);
+    return m_globalStr1D.value(key).value(x);
+}
+bool VariableStorage::setStringSlot(const QString& name, const QList<int>& indices, const FlatStringValue& value) {
+    const QString key = storageName(name);
+    const int x = indices.value(0), y = indices.value(1), z = indices.value(2);
+    if (x < 0 || y < 0 || z < 0) return false;
+    const auto put1 = [&](auto& list, int i) { if (list.size() <= i) list.resize(i+1); list[i] = value; };
+    const auto put2 = [&](auto& list, int i, int j) { if (list.size() <= i) list.resize(i+1); put1(list[i], j); };
+    const auto put3 = [&](auto& list, int i, int j, int k) { if (list.size() <= i) list.resize(i+1); put2(list[i], j, k); };
+    if (key == "LOCALS") put1(m_localStrVars, x);
+    else if (key == "ARGS") put1(m_argStrVars, x);
+    else if (key == "SAVEDATA_TEXT") m_systemStrVars[key] = value;
+    else if (isCharaDataString(name)) {
+        int character; QList<int> elements; reduceCharaArgs(name, indices, character, elements);
+        const int slot = resolveCharaIndex(character);
+        if (slot < 0 || elements.value(0) < 0 || elements.value(1) < 0) return false;
+        if (charaDataDimension(name) >= 2) put3(m_charaStr2D[key], slot, elements.value(0), elements.value(1));
+        else put2(m_charaStrVars[key], slot, elements.value(0));
+    }
+    else if (indices.size() >= 3) put3(m_globalStr3D[key], x, y, z);
+    else if (indices.size() >= 2) put2(m_globalStr2D[key], x, y);
+    else put1(m_globalStr1D[key], x);
+    return true;
 }

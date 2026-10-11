@@ -252,7 +252,8 @@ int main(int argc, char* argv[]) {
             QStringLiteral("OUT1 = ARG"),
         QStringLiteral("OUT2 = STRLENS(ARGS)"),                // 20
             QStringLiteral("#FUNCTION"),             // 21
-            QStringLiteral("RETURN A")               // 22
+            QStringLiteral("RETURN A"),              // 22
+            QStringLiteral("@CONCAT"), QStringLiteral("RESULTS = AUTOCONV(1) + \"x\"")
         };
         t3.loadScript(QStringLiteral("typed"), buildLines(t3, typed));
         t3.finalizeParse();
@@ -283,13 +284,13 @@ int main(int argc, char* argv[]) {
               "实参过多：报错");
 
         // 式中调用：返回类型进入 AST 强类型
-        const QSharedPointer<ExpressionNode> intCall = t3.expressionAst(QStringLiteral("TYPED(1, \"s\")"));
+        const QSharedPointer<ExpressionNode> intCall = t3.lineAt("typed", 1)->arguments.at(1).ast;
         check(intCall && intCall->valueType() == OperandType::Int, "TYPED(...) 的 AST 类型 == Int");
-        const QSharedPointer<ExpressionNode> strCall = t3.expressionAst(QStringLiteral("AUTOCONV(1)"));
+        const QSharedPointer<ExpressionNode> strCall = t3.lineAt("typed", 3)->arguments.at(1).ast;
         check(strCall && strCall->valueType() == OperandType::Str, "AUTOCONV(...) 的 AST 类型 == Str");
         // 字符串返回值可直接参与字符串运算（强类型传播）
         const QSharedPointer<ExpressionNode> concat =
-            t3.expressionAst(QStringLiteral("AUTOCONV(1) + \"x\""));
+            t3.lineAt("typed", typed.size() - 1)->arguments.at(1).ast;
         check(concat && concat->valueType() == OperandType::Str, "AUTOCONV(1) + \"x\" -> Str");
     }
 
@@ -489,7 +490,8 @@ int main(int argc, char* argv[]) {
         check(inspect && inspect->params.value(1).hasDefault
                   && inspect->params.value(1).defaultInt == -1,
               "function default parameter is retained in AST");
-        const auto ast = pt.expressionAst(QStringLiteral("\"ROLE\" + \"!\""));
+        EraParseTable compiler(nullptr);
+        const auto ast = compiler.expressionAst(QStringLiteral("\"ROLE\" + \"!\""));
         check(ast && ast->valueType() == OperandType::Str && ast->isStaticallyTyped(),
               "string concatenation remains statically string-typed");
     }

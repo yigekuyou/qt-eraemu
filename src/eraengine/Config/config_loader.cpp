@@ -58,6 +58,7 @@ bool splitConfigLine(const QString& line, QString& key, QString& value) {
 ConfigLoader::ConfigLoader(QObject *parent)
     : QObject(parent)
 {
+    rebuildValues();
 }
 
 bool ConfigLoader::parseConfigFile(const QString& filePath, QHash<QString, QString>& config,
@@ -105,6 +106,7 @@ bool ConfigLoader::loadConfigFile(const QString& filePath, int precedence)
         return false;
     }
     m_configFiles.append(config);
+    rebuildValues();
     if (precedence >= 0) {
         for (auto it = config.config.constBegin(); it != config.config.constEnd(); ++it) {
             emit configChanged(it.key(), it.value());
@@ -124,6 +126,7 @@ void ConfigLoader::mergeConfig(const QString& filePath, int precedence)
         return;
     }
     m_configFiles.append(config);
+    rebuildValues();
 }
 
 QString ConfigLoader::getConfig(const QString& key) const
@@ -160,6 +163,7 @@ void ConfigLoader::setConfig(const QString& key, const QString& value)
         m_configFiles.append(mem);
     }
     m_configFiles.last().config.insert(key, value);
+    rebuildValues();
     emit configChanged(key, value);
 }
 
@@ -188,15 +192,13 @@ bool ConfigLoader::parseBool(const QString& value, bool defaultValue)
 bool ConfigLoader::getBool(const QString& key, bool defaultValue) const
 {
     if (!hasConfig(key)) return defaultValue;
-    return parseBool(getConfig(key), defaultValue);
+    return m_boolValues.value(key, defaultValue);
 }
 
 int ConfigLoader::getInt(const QString& key, int defaultValue) const
 {
     if (!hasConfig(key)) return defaultValue;
-    bool ok = false;
-    const int v = getConfig(key).trimmed().toInt(&ok);
-    return ok ? v : defaultValue;
+    return m_intValues.value(key, defaultValue);
 }
 
 // ---------------------------------------------------------------------------
@@ -264,7 +266,7 @@ bool ConfigLoader::isErbConfigKey(const QString& key)
     return findErbConfig(key) != nullptr;
 }
 
-bool ConfigLoader::configValueInErb(const QString& key, QString& out) const
+bool ConfigLoader::convertErbValue(const QString& key, QString& out) const
 {
     const ErbConfigItem* item = findErbConfig(key);
     if (!item) return false;
@@ -289,6 +291,53 @@ bool ConfigLoader::configValueInErb(const QString& key, QString& out) const
         out = raw;
         return true;
     }
+}
+
+void ConfigLoader::rebuildValues()
+{
+    m_erbValues.clear();
+    m_erbIntegerValues.clear();
+    m_intValues.clear();
+    m_boolValues.clear();
+    m_colors.clear();
+    for (const auto& item : erbConfigTable()) {
+        const QString key = QString::fromUtf8(item.key);
+        QString value;
+        convertErbValue(key, value);
+        m_erbValues.insert(key, value);
+        if (item.type != ErbConfigType::Text) m_erbIntegerValues.insert(key, value.toLongLong());
+    }
+    for (const auto& file : m_configFiles) {
+        for (auto it = file.config.constBegin(); it != file.config.constEnd(); ++it) {
+            const QString raw = getConfig(it.key()).trimmed();
+            bool ok = false;
+            const int value = raw.toInt(&ok);
+            if (ok) m_intValues.insert(it.key(), value);
+            const auto rgb = raw.split(QLatin1Char(','));
+            if (rgb.size() >= 3) m_colors.insert(it.key(),
+                qint64((rgb.at(0).toInt() << 16) | (rgb.at(1).toInt() << 8) | rgb.at(2).toInt()) & 0xFFFFFF);
+            const QString upper = raw.toUpper();
+            if (upper == "YES" || upper == "TRUE" || upper == "ON" || upper == "1"
+                || upper == "NO" || upper == "FALSE" || upper == "OFF" || upper == "0")
+                m_boolValues.insert(it.key(), parseBool(raw, false));
+        }
+    }
+}
+
+bool ConfigLoader::integerConfigValueInErb(const QString& key, qint64& out) const
+{
+    const auto found = m_erbIntegerValues.constFind(key);
+    if (found == m_erbIntegerValues.constEnd()) return false;
+    out = found.value();
+    return true;
+}
+
+bool ConfigLoader::configValueInErb(const QString& key, QString& out) const
+{
+    const auto it = m_erbValues.constFind(key);
+    if (it == m_erbValues.constEnd()) return false;
+    out = it.value();
+    return true;
 }
 
 QString ConfigLoader::serialize(const QHash<QString, QString>& config)
@@ -379,6 +428,7 @@ bool ConfigLoader::setConfigValueInFile(const QString& filePath, const QString& 
     for (ConfigFile& f : m_configFiles) {
         if (f.filePath == filePath) f.config.insert(key, value);
     }
+    rebuildValues();
     qDebug() << "[ConfigLoader]" << (replaced ? "更新" : "追加") << "配置项"
              << key << "->" << value << "于" << QFileInfo(filePath).fileName()
              << "编码:" << TextCodecUtil::name(writeEnc);

@@ -104,7 +104,7 @@ int main(int argc, char *argv[]) {
     
     if (ast) {
         qDebug() << "   AST:" << ast->toString();
-        QVariant result = evaluator.evaluate(ast->toString(), &storage);
+        QVariant result = evaluator.evaluate(*ast, &storage);
         qDebug() << "   Result:" << result.toString();
     }
     
@@ -116,7 +116,7 @@ int main(int argc, char *argv[]) {
     
     if (ast) {
         qDebug() << "   AST:" << ast->toString();
-        QVariant result = evaluator.evaluate(ast->toString(), &storage);
+        QVariant result = evaluator.evaluate(*ast, &storage);
         qDebug() << "   Result:" << result.toString();
         qDebug() << "   Expected: 70 (10 + 60)";
     }
@@ -130,7 +130,7 @@ int main(int argc, char *argv[]) {
     
     if (ast) {
         qDebug() << "   AST:" << ast->toString();
-        QVariant result = evaluator.evaluate(ast->toString(), &storage);
+        QVariant result = evaluator.evaluate(*ast, &storage);
         qDebug() << "   Result:" << result.toString();
         qDebug() << "   Expected: true (5 > 3)";
     }
@@ -152,7 +152,7 @@ int main(int argc, char *argv[]) {
         
         if (ast) {
             qDebug() << "   AST:" << ast->toString();
-            QVariant result = evaluator.evaluate(ast->toString(), &storage);
+            QVariant result = evaluator.evaluate(*ast, &storage);
             qDebug() << "   Result:" << result.toString();
         } else {
             qDebug() << "   Failed to parse";
@@ -172,7 +172,7 @@ int main(int argc, char *argv[]) {
     ast = parser.parse(evalTokens);
     
     if (ast) {
-        QVariant result = evaluator.evaluate(ast->toString(), &storage);
+        QVariant result = evaluator.evaluate(*ast, &storage);
         qDebug() << "   Result:" << result.toString();
         qDebug() << "   Expected: 60 (10 + 50)";
     }

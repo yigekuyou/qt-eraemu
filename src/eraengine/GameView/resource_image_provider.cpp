@@ -69,21 +69,24 @@ ResourceImageProvider::ResourceImageProvider()
 }
 
 void ResourceImageProvider::setRoot(const QString& dir) {
-    const QString normalized = (GamePaths::isContent(dir) ? dir : QDir(dir).absolutePath());
-    if (s_root == normalized) return;
+    const QString normalized = dir.isEmpty() ? QString() : (GamePaths::isContent(dir) ? dir : QDir(dir).absolutePath());
+
     s_root = normalized;
     s_atlas.clear();
     s_atlasRoot.clear();
     decodedCache().clear();
     spriteCache().clear();
+    reloadAtlas();
 }
 
-void ResourceImageProvider::ensureAtlasLoaded(const QString& root) {
-    const QString base = root.isEmpty() ? s_root : (GamePaths::isContent(root) ? root : QDir(root).absolutePath());
-    if (base.isEmpty() || s_atlasRoot == base) return;
+void ResourceImageProvider::reloadAtlas() {
+    const QString base = s_root;
+    decodedCache().clear();
+    spriteCache().clear();
 
     s_atlas.clear();
     s_atlasRoot = base;
+    if (base.isEmpty()) return;
     // 对齐 C# AppContents.LoadContents：递归扫描 resources/ 下**所有** csv
     // （eraTW 的 差し替え.csv / 39_コマンド.csv 等也注册精灵；
     //   只读 list.csv 会让 SPRITECREATED("55_A1") 恒假 -> 立绘合成被跳过）。
@@ -96,9 +99,10 @@ void ResourceImageProvider::ensureAtlasLoaded(const QString& root) {
         visited.insert(dir);
         for (const QFileInfo& entry : QDir(dir).entryInfoList(QDir::AllEntries | QDir::NoDotAndDotDot)) {
             if (entry.isSymLink()) continue;
-            if (entry.isDir()) collect(entry.absoluteFilePath(), depth + 1);
+            const QString entryPath = GamePaths::join(dir, entry.fileName());
+            if (entry.isDir()) collect(entryPath, depth + 1);
             else if (entry.fileName().endsWith(QLatin1String(".csv"), Qt::CaseInsensitive))
-                csvFiles.append({entry.absoluteFilePath(), dir});
+                csvFiles.append({entryPath, dir});
         }
     };
     collect(resDir, 0);
@@ -289,7 +293,7 @@ QImage decodeWebpViaLibwebp(const QByteArray& data) {
 QImage ResourceImageProvider::loadImageFile(const QString& path) {
     QImage image;
     if (path.isEmpty()) return image;
-    const QString key = QFileInfo(path).absoluteFilePath();
+    const QString key = GamePaths::isContent(path) ? path : QFileInfo(path).absoluteFilePath();
     if (const QImage* hit = decodedCache().object(key)) return *hit;   // 命中：免解码
     if (image.load(path) && !image.isNull()) {
         decodedCache().insert(key, new QImage(image), image.sizeInBytes());
@@ -346,7 +350,7 @@ QString ResourceImageProvider::resolvePath(const QString& id, const QString& roo
         for (const QString& ext : exts) {
             const QString candidate = GamePaths::join(dir, name + ext);
             if (QFileInfo::exists(candidate)) {
-                return QFileInfo(candidate).absoluteFilePath();
+                return candidate;
             }
         }
     }
@@ -356,7 +360,6 @@ QString ResourceImageProvider::resolvePath(const QString& id, const QString& roo
 bool ResourceImageProvider::hasResource(const QString& id) {
     const QString normalized = normalizeId(id);
     if (normalized.isEmpty()) return false;
-    ensureAtlasLoaded(s_root);
     if (s_atlas.contains(normalized)) return true;
     return !resolvePath(normalized).isEmpty();
 }
@@ -365,7 +368,6 @@ bool ResourceImageProvider::hasResource(const QString& id) {
 // 否则退回加载文件取原始尺寸。只用于排版测量；失败不影响实际渲染。
 bool ResourceImageProvider::intrinsicSize(const QString& id, int& width, int& height) {
     const QString normalized = normalizeId(id);
-    ensureAtlasLoaded(s_root);
 
     // 运行期精灵（SPRITECREATE 的产物）优先 —— 对齐 C# AppContents.GetSprite：
     // 精灵名覆盖同名静态资源。
@@ -407,7 +409,6 @@ bool ResourceImageProvider::intrinsicSize(const QString& id, int& width, int& he
 
 bool ResourceImageProvider::spriteOffset(const QString& id, int& x, int& y) {
     const QString normalized = normalizeId(id);
-    ensureAtlasLoaded(s_root);
     const auto it = s_atlas.constFind(normalized);
     if (it == s_atlas.constEnd()) return false;
     x = it.value().offsetX;
@@ -421,7 +422,6 @@ bool ResourceImageProvider::spriteOffset(const QString& id, int& x, int& y) {
 // 两者不得互相递归。
 QImage ResourceImageProvider::loadResourceImage(const QString& id) {
     const QString normalizedId = normalizeId(id);
-    ensureAtlasLoaded(s_root);
     // 已裁切过的精灵直接返回（Emuera 的 imageDictionary 也是这个语义）：
     // 省掉「重新解码整张图集 + copy 子矩形」。
     if (const QImage* hit = spriteCache().object(normalizedId)) return *hit;
@@ -453,7 +453,6 @@ QImage ResourceImageProvider::loadResourceImage(const QString& id) {
 
 QImage ResourceImageProvider::requestImage(const QString& id, QSize* size, const QSize& requestedSize) {
     const QString normalizedId = normalizeId(id);
-    ensureAtlasLoaded(s_root);
 
     QImage image;
     // 运行期精灵优先（SPRITECREATE 产物，同名覆盖静态资源）

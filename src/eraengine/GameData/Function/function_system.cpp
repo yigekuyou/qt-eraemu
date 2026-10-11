@@ -169,10 +169,3 @@ void FunctionSystem::registerBuiltInFunctions()
         return QVariant(str.right(length));
     };
 }
-
-QVariant FunctionSystem::evaluateExpression(const QString&, VariableStorage*)
-{
-    // This would use the expression evaluator to process expressions
-    // For now return a placeholder
-    return QVariant();
-}

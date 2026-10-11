@@ -16,23 +16,13 @@ Dialog {
 
     ColumnLayout {
         anchors.fill: parent
-        TextField {
-            id: expression
-            Layout.fillWidth: true
-            placeholderText: qsTr("输入表达式")
-            onAccepted: {
-                const value = dlg.engine.variableStorage.evaluateExpression(text);
-                result.text = text + " = " + value;
-            }
-        }
-        Label { id: result; Layout.fillWidth: true; wrapMode: Text.WordWrap }
         GroupBox {
             title: qsTr("变量与运行状态")
             Layout.fillWidth: true
             Layout.fillHeight: true
             Label {
                 anchors.fill: parent
-                text: qsTr("调试窗口已打开。变量表和表达式求值通过同一个 EraEngine C++ 接口扩展。\n当前目录：") + dlg.engine.gameDirectory
+                text: qsTr("调试窗口已打开。变量和运行状态通过 EraEngine C++ 接口提供。\n当前目录：") + dlg.engine.gameDirectory
                 wrapMode: Text.WordWrap
             }
         }

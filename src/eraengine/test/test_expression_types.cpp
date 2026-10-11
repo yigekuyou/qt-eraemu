@@ -27,6 +27,7 @@
 // ---------------------------------------------------------------------------
 
 #include <QCoreApplication>
+#include "era_parse_table.h"
 #include <QDebug>
 #include <QDir>
 #include <QFile>
@@ -166,6 +167,11 @@ int main(int argc, char* argv[]) {
     ExpressionEvaluator evaluator;
     ExpressionParser evalParser;
     const auto resolve = [&evalParser](const QString& e) { return parse(evalParser, e); };
+    EraParseTable expressionTable(nullptr);
+    const auto evalSource = [&](const QString& text) {
+        const auto ast = expressionTable.expressionAst(text);
+        return ast ? evaluator.evaluate(*ast, &storage) : QVariant();
+    };
     auto sfEval = StrFormParser::parse("HP={VA}/{VB}", resolve);
     const QString rendered = evaluator.evaluate(*sfEval, &storage).toString();
     check(rendered == "HP=30/7", QString("StrForm 求值 == HP=30/7（得到 %1）").arg(rendered));
@@ -322,22 +328,22 @@ int main(int argc, char* argv[]) {
                             "{1,2,LEFT,3}", "{1", "%RESULTS", "\\@ 1 ? x", "\\@ x \\@"})
         check(!StrFormParser::parse(text, resolve), QString(text) + " FORM rejects");
     for (const char* text : {"1 / 0", "1 % 0", "1 ? 1 # \"x\"", "\"x\" ? 1 # 2", "{VA}"}) {
-        check(!evaluator.evaluate(text, &storage).isValid(), QString(text) + " invalid result");
+        check(!evalSource(text).isValid(), QString(text) + " invalid result");
     }
     storage.setGlobalInt1D("VA", 0, 2);
-    check(evaluator.evaluate("VA++ / VA++", &storage).toLongLong() == 1
+    check(evalSource("VA++ / VA++").toLongLong() == 1
           && storage.getGlobalInt1D("VA", 0) == 4, "division evaluates right before left");
     auto mask = parse(parser, "1p63");
     check(mask && static_cast<const LiteralNode&>(*mask).integerRepresentation() == LiteralNode::IntegerRepresentation::Bits64
           && static_cast<const LiteralNode&>(*mask).integerBits() == (quint64(1) << 63), "highest bit has Bits64 AST representation");
-    check(evaluator.evaluate("0xFFFFFFFFFFFFFFFF & 1p63", &storage).toLongLong() == std::numeric_limits<qint64>::min(), "highest bit mask evaluates exactly");
+    check(evalSource("0xFFFFFFFFFFFFFFFF & 1p63").toLongLong() == std::numeric_limits<qint64>::min(), "highest bit mask evaluates exactly");
     check(!parse(parser, "1p64"), "bit pattern overflow rejects");
-    check(evaluator.evaluate("1 << 64", &storage).toLongLong() == 1, "shift count masked");
-    check(evaluator.evaluate("0x7FFFFFFFFFFFFFFF + 1", &storage).toLongLong() == std::numeric_limits<qint64>::min(), "unchecked addition wraps");
-    check(!evaluator.evaluate("0x8000000000000000 / -1", &storage).isValid(), "division overflow rejects");
-    check(evaluator.evaluate("@\"HP={VA}\"", &storage).toString() == "HP=4", "direct FORM binding");
-    check(evaluator.evaluate("STRFORM(\"HP={VA}\")", &storage).toString() == "HP=4", "STRFORM binding");
-    check(!evaluator.evaluate("FLAG:\"unknown\"", &storage).isValid(), "unknown keyword rejects");
+    check(evalSource("1 << 64").toLongLong() == 1, "shift count masked");
+    check(evalSource("0x7FFFFFFFFFFFFFFF + 1").toLongLong() == std::numeric_limits<qint64>::min(), "unchecked addition wraps");
+    check(!evalSource("0x8000000000000000 / -1").isValid(), "division overflow rejects");
+    check(evalSource("@\"HP={VA}\"").toString() == "HP=4", "direct FORM binding");
+    check(evalSource("STRFORM(\"HP={VA}\")").toString() == "HP=4", "STRFORM binding");
+    check(!evalSource("FLAG:\"unknown\"").isValid(), "unknown keyword rejects");
     const auto triple = StrFormParser::parse("***+++===///$$$", resolve);
     check(triple && triple->parts().size() == 5, "triple symbols bind role variables");
     const auto ignoredTriple = StrFormParser::parse("***", resolve, true);

@@ -164,22 +164,20 @@ QStringList ErbLoader::collectFiles(const QString& dirPath, int depth) const {
                   return ordinalIgnoreCaseLess(x.fileName(), y.fileName());
               });
     for (const QFileInfo& fi : files) {
-        out.append(fi.absoluteFilePath());
+        out.append(GamePaths::join(dirPath, fi.fileName()));
     }
     return out;
 }
 
 // ---------------------------------------------------------------------------
-// 线程内表达式归约（本地缓存 + 只读函数类型表）
+// 线程内表达式归约（只读函数类型表）
 // ---------------------------------------------------------------------------
 QSharedPointer<ExpressionNode> ErbLoader::resolveExpr(
     const QString& expr, const FunctionTypes& types,
-    QHash<QString, QSharedPointer<ExpressionNode>>& cache, bool quiet) const {
+    bool quiet) const {
     const QString key = expr.trimmed();
     if (key.isEmpty()) return nullptr;
 
-    const auto it = cache.constFind(key);
-    if (it != cache.constEnd()) return it.value();
 
     ExpressionLexer lexer;
     const QList<ExpressionToken> tokens = lexer.tokenize(key, 1);
@@ -192,9 +190,9 @@ QSharedPointer<ExpressionNode> ErbLoader::resolveExpr(
         return fit == types.constEnd() ? builtinFunctionReturnType(name.toUpper().toStdString())
                                        : fit.value();
     });
-    // 格式化串：@"..." / \@...#...\@（内部表达式继续走同一缓存/函数类型表）
-    const AstResolver self = [this, &types, &cache](const QString& e) {
-        return resolveExpr(e, types, cache);
+    // 格式化串：@"..." / \@...#...\@（内部表达式继续使用同一函数类型表）
+    const AstResolver self = [this, &types](const QString& e) {
+        return resolveExpr(e, types);
     };
     parser.setFormProvider([this, self](const QString& text, bool yenAt) -> QSharedPointer<ExpressionNode> {
         if (yenAt) return StrFormParser::parseYenAt(text, self, m_parseTable && m_parseTable->ignoreTripleSymbols());
@@ -208,7 +206,6 @@ QSharedPointer<ExpressionNode> ErbLoader::resolveExpr(
         });
     }
     QSharedPointer<ExpressionNode> ast = parser.parse(tokens);
-    if (ast) cache.insert(key, ast);
     return ast;
 }
 
@@ -263,7 +260,7 @@ ParsedErbFile ErbLoader::parseOneFile(const QString& filePath, const FunctionTyp
         QSet<QString> exprFailed;   // 同一文件的同一表达式文本只记一次
         int currentPhysicalLine = 0;
         const AstResolver resolver = [this, &types, &pf, &exprFailed, &currentPhysicalLine, &filePath](const QString& e) {
-            auto ast = resolveExpr(e, types, pf.astCache);
+            auto ast = resolveExpr(e, types);
             if (!ast) {
                 const QString key = e.trimmed();
                 if (!key.isEmpty() && !exprFailed.contains(key)) {
@@ -277,7 +274,7 @@ ParsedErbFile ErbLoader::parseOneFile(const QString& filePath, const FunctionTyp
         };
         // 赋值右值的临时归约：静默（字符串赋值随后由 StrFormParser 重新解释）
         const AstResolver quietResolver = [this, &types, &pf](const QString& e) {
-            return resolveExpr(e, types, pf.astCache, /*quiet*/ true);
+            return resolveExpr(e, types, /*quiet*/ true);
         };
         for (int i = 0; i < source.size(); ++i) {
             currentPhysicalLine = source.at(i).physicalLine;
@@ -337,7 +334,6 @@ bool ErbLoader::mergeParsedFile(ParsedErbFile&& pf) {
             m_parseTable->addParseDiagnostics(pf.diagnostics);
         }
         // 不合并 worker 缓存：行内 AST 已自带，运行期新表达式按需再解析（懒加载）
-        pf.astCache.clear();
         pf.lines.clear();
     } else {
         m_logicalLines.insert(pf.scriptName, pf.lines);

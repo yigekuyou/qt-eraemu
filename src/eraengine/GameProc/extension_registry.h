@@ -120,10 +120,6 @@ public:
         std::function<int(const QString&, bool)> functionExists;   // EXISTFUNCTION(name, ci)
         std::function<QString()>                 doingFunction;    // GETDOINGFUNCTION()
         std::function<QString(int)>              displayLine;      // GETDISPLAYLINE(lineNo)
-        // 表达式求值（扩展命令实参：PLAYBGM 的字符串式 / SET*VOLUME 的整数式）。
-        // 惰性：解析表装配后才可用；未注入时扩展退回按字面量处理。
-        std::function<QVariant(const QString&)>  evaluate;
-
         // 语句形实参求值（式中函数的**裸写**形态，如 `DT_ROW_ADD "t", "lv", 1`）：
         // 解析器已把实参归约成 AST，这里直接求值（避免再按文本重解析）。
         std::function<QVariant(const ExpressionNode*)> evaluateNode;
@@ -358,13 +354,8 @@ public:
                 nodes.append(op.ast.get());
                 if (op.ast && m_services.evaluateNode) {
                     args.append(m_services.evaluateNode(op.ast.get()));
-                } else if (op.isString) {
-                    // 整串引号包裹的实参：解析器已剥掉引号，raw 就是字符串值
-                    args.append(QVariant(op.raw));
-                } else if (m_services.evaluate) {
-                    args.append(m_services.evaluate(op.raw));
                 } else {
-                    args.append(QVariant(op.raw));
+                    throw std::runtime_error("Extension operand has no load-time AST");
                 }
             }
             QVariant ignored;

@@ -31,7 +31,16 @@ QString stripLineComment(const QString& text) {
     for (int i = 0; i < text.size(); ++i) {
         const QChar c = text.at(i);
         if (!quote.isNull()) {
+            // Escaped quotes belong to the literal; they cannot expose an
+            // entity semicolon or the remaining HTML to comment stripping.
+            if (c == QLatin1Char('\\') && i + 1 < text.size()) { ++i; continue; }
             if (c == quote) quote = QChar();
+            continue;
+        }
+        // FORM contains its own quoted expressions. Skip the whole load-time
+        // span so their delimiters never expose entity/comment semicolons.
+        if (c == QLatin1Char('@') && i + 1 < text.size() && text.at(i + 1) == QLatin1Char('"')) {
+            i = StrFormParser::expressionSpanEnd(text, i) - 1;
             continue;
         }
         if (c == QLatin1Char('"')) { quote = c; continue; }
@@ -51,6 +60,7 @@ QString stripLineComment(const QString& text) {
 
 // 构建完成后做「语句参数类型化 + 解析期校验」
 LogicalLine finalized(LogicalLine line) {
+    line.runnerInstruction = classifyRunnerInstruction(line.functionName);
     // Every literal string parameter has a load-time LiteralNode as well.
     for (Operand& operand : line.arguments) {
         if (operand.isString && !operand.ast)
@@ -87,6 +97,15 @@ void parseFormOperand(Operand& operand, const QString& text, const AstResolver& 
     // Use the expression frontend to remove FORM delimiters and preserve composite
     // string expressions. Its FORM provider splits content into StrFormPart nodes.
     if (resolve) operand.ast = resolve(text);
+}
+
+// Quoted operands keep their unquoted raw value for the legacy string consumers,
+// while also carrying the same load-time node required by CALLF and other AST-only
+// execution paths.
+void parseQuotedOperand(Operand& operand, const QString& text) {
+    operand.isString = true;
+    operand.raw = text.mid(1, text.length() - 2);
+    operand.ast = QSharedPointer<LiteralNode>::create(operand.raw);
 }
 
 // FORMS: compile statically known string content; variable/function reads remain
@@ -756,6 +775,8 @@ LogicalLine AstBuilder::build(const QString& rawLine,
         line.functionName = op;
         line.assignOperator = op;
         Operand dest(lhs);
+        if (resolveQuiet) dest.ast = resolveQuiet(lhs);
+        else if (resolve) dest.ast = resolve(lhs);
         Operand value(rhs);
         // 右值在此处只是**临时**归约（变量类型尚未定稿）：字符串赋值的右值
         // 会被最终 applyStringAssignments() 用 StrFormParser 替换掉。用静默
@@ -769,6 +790,9 @@ LogicalLine AstBuilder::build(const QString& rawLine,
             const auto target = lookup(lhs);
             if (target && target->valueType() == OperandType::Str)
                 value.ast = StrFormParser::parse(rhs, lookup);
+        }
+        if (lookup && !(op == "=" && value.ast && value.ast->kind() == NodeKind::StrForm)) {
+            for (const auto& text : assignmentValues(rhs)) line.assignmentAsts.append(lookup(text));
         }
         line.arguments = { dest, value };
         return finalized(std::move(line));
@@ -791,7 +815,10 @@ LogicalLine AstBuilder::build(const QString& rawLine,
             line.kind = LineKind::Instruction;
             line.functionName = QString::fromLatin1(opText);
             line.assignOperator = line.functionName;
-            line.arguments = { Operand(body) };
+            Operand target(body);
+            if (resolveQuiet) target.ast = resolveQuiet(body);
+            else if (resolve) target.ast = resolve(body);
+            line.arguments = { target };
             return finalized(std::move(line));
         }
     }
@@ -812,7 +839,10 @@ LogicalLine AstBuilder::build(const QString& rawLine,
             line.kind = LineKind::Instruction;
             line.functionName = QString::fromLatin1(opText);
             line.assignOperator = line.functionName;
-            line.arguments = { Operand(body) };
+            Operand target(body);
+            if (resolveQuiet) target.ast = resolveQuiet(body);
+            else if (resolve) target.ast = resolve(body);
+            line.arguments = { target };
             return finalized(std::move(line));
         }
     }
@@ -947,13 +977,15 @@ LogicalLine AstBuilder::build(const QString& rawLine,
             const QStringList argList = splitTopLevelComma(args);
             for (const QString& a : argList) {
                 const QString t = a.trimmed();
+                // CALLF 的逗号参数语法允许省略参数（例如 `F(, "x")`）。
+                // 空片段不是运行时参数，不能创建一个永远没有 AST 的 Operand。
+                if (t.isEmpty()) continue;
                 Operand operand(t);
                 if (isFormArgument(t)) {
                     // FORM 在装载期分词并保存 StrForm AST；运行期只求值该 AST。
                     parseFormOperand(operand, t, resolve);
                 } else if (wholeQuoted(t)) {
-                    operand.isString = true;
-                    operand.raw = t.mid(1, t.length() - 2);
+                    parseQuotedOperand(operand, t);
                 } else if (resolve) {
                     operand.ast = resolve(t);
                 }
@@ -990,8 +1022,7 @@ LogicalLine AstBuilder::build(const QString& rawLine,
             if (isFormArgument(text)) {
                 parseFormOperand(operand, text, resolve);
             } else if (wholeString) {
-                operand.isString = true;
-                operand.raw = text.mid(1, text.size() - 2);
+                parseQuotedOperand(operand, text);
             } else if (resolve) {
                 operand.ast = resolve(text);
             }
@@ -1045,8 +1076,8 @@ LogicalLine AstBuilder::build(const QString& rawLine,
             Operand operand(rest);
             operand.isString = true;      // 字面文本（含引号，C# 不剥引号）
             line.arguments.append(operand);
-            line.printTemplate = QSharedPointer<PrintTemplate>::create();
-            PrintTemplatePart part;
+            line.printTemplate = QSharedPointer<CompiledPrintTemplate>::create();
+            CompiledPrintTemplatePart part;
             part.kind = PrintTemplatePart::Kind::Text;
             part.text = rest;
             line.printTemplate->parts.append(part);
@@ -1063,9 +1094,10 @@ LogicalLine AstBuilder::build(const QString& rawLine,
                 Operand operand(expr);
                 if (resolve) operand.ast = StrFormParser::parse(expr, resolve);
                 line.arguments.append(operand);
-                line.printTemplate = QSharedPointer<PrintTemplate>::create();
-                PrintTemplatePart part;
-                part.kind = operand.ast ? PrintTemplatePart::Kind::Expression : PrintTemplatePart::Kind::Text;
+                line.printTemplate = QSharedPointer<CompiledPrintTemplate>::create();
+                CompiledPrintTemplatePart part;
+                part.kind = operand.isString ? PrintTemplatePart::Kind::Text
+                                             : (operand.ast ? PrintTemplatePart::Kind::Expression : PrintTemplatePart::Kind::Text);
                 part.text = operand.raw;
                 part.expression = operand.ast;
                 line.printTemplate->parts.append(part);
@@ -1083,15 +1115,15 @@ LogicalLine AstBuilder::build(const QString& rawLine,
             } else if (isFormArgument(expr)) {
                 parseFormOperand(operand, expr, resolve);
             } else if (wholeQuoted(expr)) {
-                operand.isString = true;
-                operand.raw = expr.mid(1, expr.length() - 2);
+                parseQuotedOperand(operand, expr);
             } else if (resolve) {
                 operand.ast = resolve(expr);
             }
             line.arguments.append(operand);
-            line.printTemplate = QSharedPointer<PrintTemplate>::create();
-            PrintTemplatePart part;
-            part.kind = operand.ast ? PrintTemplatePart::Kind::Expression : PrintTemplatePart::Kind::Text;
+            line.printTemplate = QSharedPointer<CompiledPrintTemplate>::create();
+            CompiledPrintTemplatePart part;
+            part.kind = operand.isString ? PrintTemplatePart::Kind::Text
+                                         : (operand.ast ? PrintTemplatePart::Kind::Expression : PrintTemplatePart::Kind::Text);
             part.text = operand.raw;
             part.expression = operand.ast;
             line.printTemplate->parts.append(part);
@@ -1170,6 +1202,27 @@ LogicalLine AstBuilder::build(const QString& rawLine,
     int mn = 0, mx = -1;
     const ArgKind argKind = classifyInstructionKind(line.functionName.toStdString(), mn, mx);
 
+    if (line.functionName == "DT_COLUMN_OPTIONS") {
+        const auto parts = splitTopLevelComma(remainder);
+        const auto fail = [&] { line.isError = true; line.errMes = "Invalid DT_COLUMN_OPTIONS arguments"; };
+        if (parts.size() < 3) fail();
+        for (int i = 0; i < parts.size(); ++i) {
+            QString text = parts[i].trimmed();
+            if (i >= 2) {
+                const int eq = topLevelEquals(text);
+                if (eq < 0 || text.left(eq).trimmed().compare("DEFAULT", Qt::CaseInsensitive) != 0) { fail(); continue; }
+                text = text.mid(eq + 1).trimmed();
+            }
+            Operand operand(text);
+            if (resolve) operand.ast = resolve(text);
+            if (!operand.ast) fail();
+            if (i < 2 && operand.ast && operand.ast->valueType() != OperandType::Str) fail();
+            if (i >= 2) line.columnDefaults.append(operand.ast);
+            line.arguments.append(operand);
+        }
+        return finalized(std::move(line));
+    }
+
     // 单表达式参数（INT/STR/EXPRESSION/FORM_STR）：整行作为一个表达式
     // （C# 也是「取剩余全部词」），避免把 "LINECOUNT + 1" 拆成 3 个 token。
     if (argKind == ArgKind::IntExpression || argKind == ArgKind::StrExpression
@@ -1193,6 +1246,7 @@ LogicalLine AstBuilder::build(const QString& rawLine,
             } else if (wholeQuoted(rest)) {
                 operand.isString = true;
                 operand.raw = rest.mid(1, rest.length() - 2);
+                operand.ast = QSharedPointer<LiteralNode>::create(operand.raw);
             } else if (rest.startsWith('%') || rest.startsWith('$')) {
                 operand.isVariable = true;
             } else if (resolve) {
@@ -1214,8 +1268,7 @@ LogicalLine AstBuilder::build(const QString& rawLine,
         if (isFormArgument(token)) {
             parseFormOperand(operand, token, resolve);
         } else if (wholeQuoted(token)) {
-            operand.isString = true;
-            operand.raw = token.mid(1, token.length() - 2);
+            parseQuotedOperand(operand, token);
         } else if (token.startsWith('%') || token.startsWith('$')) {
             operand.isVariable = true;
         } else if (token != QLatin1String(",") && token != QLatin1String(":")) {
@@ -1227,10 +1280,7 @@ LogicalLine AstBuilder::build(const QString& rawLine,
     }
     if (argKind == ArgKind::Case) {
         buildCaseClauses(line, resolve);
-        // Runtime resolves clauses in their owning function scope, after DIM
-        // declarations and user function types have been finalized.
-        line.caseCache.clear();
-        line.caseCacheReady = false;
+        // finalizeParse rebuilds these clauses in their owning function scope.
     }
 
     // 条件指令：用「原始整行文本」作为条件表达式归约（保留引号等字面量）

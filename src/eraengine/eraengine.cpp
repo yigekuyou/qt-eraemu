@@ -131,8 +131,7 @@ EraEngine::EraEngine(QObject *parent)
 		// 「存在 -> 0」是必须的（此前返回 1 语义相反）。
 		m_expressionEvaluator.setSaveExistsProvider([this](const QString& saveName) -> qint64 {
 			const qint64 idx = saveName.toLongLong();
-			const QString path = GamePaths::join(m_storageRoot, QStringLiteral("sav/save%1.sav").arg(idx, 2, 10, QLatin1Char('0')));
-			return QFile::exists(path) ? 0 : 1;
+			return m_executionEngine.checkSaveSnapshot(idx);
 		});
 		// GETCOLOR / GETSTYLE：由执行引擎维护的当前颜色与样式位
 		m_expressionEvaluator.setColorProvider([this]() -> qint64 {
@@ -160,12 +159,7 @@ EraEngine::EraEngine(QObject *parent)
 			for (const QString& k : {QStringLiteral("選択中文字色"),
 			                          QStringLiteral("FocusColor")}) {
 				if (m_configLoader.hasConfig(k)) {
-					const QStringList rgb = m_configLoader.getConfig(k).split(QLatin1Char(','));
-					if (rgb.size() >= 3) {
-						return qint64((rgb.at(0).toInt() << 16)
-						              | (rgb.at(1).toInt() << 8)
-						              | rgb.at(2).toInt()) & 0xFFFFFF;
-					}
+                    return m_configLoader.getColor(k, 0xFFFF00);
 				}
 			}
 			return 0xFFFF00;
@@ -182,11 +176,29 @@ EraEngine::EraEngine(QObject *parent)
         m_expressionEvaluator.setFormIgnoreProvider([this]() {
             for (const QString& key : {QStringLiteral("SystemIgnoreTripleSymbol"), QStringLiteral("FORM中の三連記号を展開しない")}) {
                 if (m_configLoader.hasConfig(key)) {
-                    const QString value = m_configLoader.getConfig(key).trimmed().toUpper();
-                    return value == "YES" || value == "TRUE" || value == "1";
+                    return m_configLoader.getBool(key, false);
                 }
             }
             return false;
+        });
+        m_expressionEvaluator.setSaveCompressionProvider([this]() {
+            bool binary=false, zip=false;
+            for(const auto& key:QStringList{QStringLiteral("セーブデータをバイナリ形式で保存する"),QStringLiteral("SystemSaveInBinary")})
+                if(m_configLoader.hasConfig(key)) { binary=m_configLoader.getBool(key); break; }
+            for(const auto& key:QStringList{QStringLiteral("セーブデータを圧縮して保存する"),QStringLiteral("ZipSaveData")})
+                if(m_configLoader.hasConfig(key)) { zip=m_configLoader.getBool(key); break; }
+            return binary && zip;
+        });
+        m_executionEngine.setSaveFormatProvider([this]() {
+            const auto setting=[this](const QStringList& keys,bool fallback) {
+                for(const auto& key:keys) if(m_configLoader.hasConfig(key)) return m_configLoader.getBool(key,fallback);
+                return fallback;
+            };
+            return QPair<bool,bool>{setting({QStringLiteral("セーブデータをバイナリ形式で保存する"),QStringLiteral("SystemSaveInBinary")},false),
+                                    setting({QStringLiteral("セーブデータを圧縮して保存する"),QStringLiteral("ZipSaveData")},false)};
+        });
+        m_expressionEvaluator.setIntegerConfigProvider([this](const QString& key, qint64& value) {
+            return m_configLoader.integerConfigValueInErb(key, value);
         });
 		m_expressionEvaluator.setConfigProvider([this](const QString& key, QString& value) -> bool {
 			// 取值的白名单与类型转换在 ConfigLoader::configValueInErb（可单测）；
@@ -201,12 +213,7 @@ EraEngine::EraEngine(QObject *parent)
 		const auto defaultForeColor = [this]() -> qint64 {
 			for (const QString& k : {QStringLiteral("文字色"), QStringLiteral("ForeColor")}) {
 				if (m_configLoader.hasConfig(k)) {
-					const QStringList rgb = m_configLoader.getConfig(k).split(QLatin1Char(','));
-					if (rgb.size() >= 3) {
-						return qint64((rgb.at(0).toInt() << 16)
-						              | (rgb.at(1).toInt() << 8)
-						              | rgb.at(2).toInt()) & 0xFFFFFF;
-					}
+                    return m_configLoader.getColor(k, 0xFFFFFF);
 				}
 			}
 			return qint64(0xFFFFFF);
@@ -263,9 +270,7 @@ EraEngine::EraEngine(QObject *parent)
 				for (const QString& k : {QStringLiteral("UPDATECHECKを許可しない"),
 				                          QStringLiteral("DisallowUPDATECHECK")}) {
 					if (m_configLoader.hasConfig(k)) {
-						const QString v = m_configLoader.getConfig(k).trimmed();
-						forbid = !(v.isEmpty() || v == QLatin1String("0")
-						           || v.compare(QLatin1String("false"), Qt::CaseInsensitive) == 0);
+                        forbid = m_configLoader.getBool(k, false);
 						break;
 					}
 				}
@@ -358,6 +363,7 @@ EraEngine::EraEngine(QObject *parent)
 		});
 		// SAVETEXT / LOADTEXT / SAVECHARA / LOADCHARA / GSAVE / GLOAD 的落盘目录
 		m_expressionEvaluator.setSaveDirectory(GamePaths::join(m_storageRoot, QStringLiteral("sav")));
+        m_expressionEvaluator.setCharacterDirectory(GamePaths::join(m_storageRoot, QStringLiteral("dat")));
 		// 解析期也需要常量名表（CFLAG:ARG:現在位置 之类的常量名下标）
 		m_parseTable.setConstantTable(&m_constantTable);
 		m_parseTable.setGameBaseData(&m_gameBaseData);
@@ -647,6 +653,7 @@ void EraEngine::loadAsync(const QString& directory)
 		m_storageRoot = GamePaths::storageRoot(dir);
 		m_executionEngine.setGameDataDir(m_storageRoot);
 		m_expressionEvaluator.setSaveDirectory(GamePaths::join(m_storageRoot, QStringLiteral("sav")));
+        m_expressionEvaluator.setCharacterDirectory(GamePaths::join(m_storageRoot, QStringLiteral("dat")));
 		reloadAsync();
 }
 
@@ -675,6 +682,7 @@ void EraEngine::setGameDirectory(const QString& directory)
 		m_executionEngine.setGameDataDir(m_storageRoot);
 				// SAVETEXT / LOADTEXT / SAVECHARA / LOADCHARA / GSAVE / GLOAD 的落盘目录
 				m_expressionEvaluator.setSaveDirectory(GamePaths::join(m_storageRoot, QStringLiteral("sav")));
+        m_expressionEvaluator.setCharacterDirectory(GamePaths::join(m_storageRoot, QStringLiteral("dat")));
 				qDebug() << "[DEBUG] About to call reload()";
 				reload();
 				qDebug() << "[DEBUG] reload() complete";
@@ -753,6 +761,9 @@ void EraEngine::closeGame()
 		// 脚本 AST/标记区/函数表/标签/告警 全量释放
 		m_parseTable.clear();
 		m_gameDirectory.clear();
+        m_storageRoot.clear();
+        m_executionEngine.setGameDataDir(QString());
+        m_configLoader.clearFiles();
 		m_csvDir.clear();
 		m_erbDir.clear();
 		ResourceImageProvider::setRoot(QString());
@@ -1243,8 +1254,17 @@ void EraEngine::collectEntryPoints()
 		m_scriptProcessor.collectFromParseTable(&m_parseTable);
 }
 
+void EraEngine::reloadSavedData()
+{
+    m_executionEngine.reloadSaveSnapshots();
+    m_expressionEvaluator.reloadCharacterSnapshots();
+}
+
 void EraEngine::loadFinishedHook()
 {
+        ResourceImageProvider::reloadAtlas();
+        m_executionEngine.reloadSaveSnapshots();
+        m_expressionEvaluator.reloadCharacterSnapshots();
 		qDebug() << "[EraEngine] 装载完成：脚本" << m_parseTable.scriptNames().size()
 		         << "个，告警" << m_parseTable.parseWarningCount()
 		         << "条，变量" << m_parseTable.variableTable().count() << "个";
@@ -1651,11 +1671,8 @@ void EraEngine::buildSystemHost()
 
 		// ---- 存/读档（SAVEGAME / LOADGAME 系统画面）----
 		// 文件名/目录对齐 ExecutionEngine 的 SAVEDATA/LOADDATA（sav/save##.sav），
-		// 内容 = VariableStorage::dumpSaveData（eraemu-save-v1）+ SAVETEXT 概要头。
+		// 内容 = C#1808 EraBinaryData document + 描述。
 		// 此前这四个回调从未接线：读档画面所有槽位恒判「没有数据」、保存恒失败。
-		const auto savePath = [this](int index) {
-				return GamePaths::join(m_storageRoot, QStringLiteral("sav/save%1.sav").arg(index, 2, 10, QLatin1Char('0')));
-		};
 		// 存档槽位数：与 SAVENOS 同源（C# 两处都读 Config.SaveDataNos），
 		// 走求值器已接好的 provider，避免两处键名/夹紧规则各写一遍。
 		host.saveDataNos = [this]() { return int(m_expressionEvaluator.saveDataNos()); };
@@ -1683,32 +1700,15 @@ void EraEngine::buildSystemHost()
 				}
 				return names;
 		};
-		host.checkData = [this, savePath](int index, QString* message) {
-				const bool exists = QFile::exists(savePath(index));
-				if (message) {
-						*message = exists ? QStringLiteral("ＯＫ")
-					                      : QStringLiteral("ファイルが存在しません");
-				}
-				return exists;
-		};
-		host.saveTo = [this, savePath](int index, const QString& saveText) -> bool {
-				QDir().mkpath(GamePaths::join(m_storageRoot, QStringLiteral("sav")));
-				QString body = m_variableStorage.dumpSaveData();
-				if (!saveText.isEmpty()) {
-						body.replace(QStringLiteral("eraemu-save-v1"),
-						             QStringLiteral("eraemu-save-v1\nSAVETEXT\t%1").arg(saveText));
-				}
-				QFile f(savePath(index));
-				if (!f.open(QIODevice::WriteOnly | QIODevice::Text)) return false;
-				f.write(body.toUtf8());
-				return true;
-		};
-		host.loadFrom = [this, savePath](int index) -> bool {
-				QFile f(savePath(index));
-				if (!f.open(QIODevice::ReadOnly | QIODevice::Text)) return false;
-				m_variableStorage.restoreSaveData(QString::fromUtf8(f.readAll()));
-				return true;
-		};
+        host.checkData = [this](int index, QString* message) {
+            const int status = m_executionEngine.checkSaveSnapshot(index);
+            if (message) *message = status == 0 ? QStringLiteral("ＯＫ") : QStringLiteral("无法加载存档");
+            return status == 0;
+        };
+        host.saveTo = [this](int index, const QString& text) {
+            return m_executionEngine.writeSaveSnapshot(index, text);
+        };
+        host.loadFrom = [this](int index) { return m_executionEngine.loadSaveSnapshot(index); };
 
 		m_systemStateMachine.setHost(std::move(host));
 }

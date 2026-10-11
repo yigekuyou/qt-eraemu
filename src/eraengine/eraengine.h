@@ -228,6 +228,7 @@ public:
     
     // Game base data loading
     void loadGameBaseData();
+    Q_INVOKABLE void reloadSavedData();
 
     // 把「配置窗口 ÷ 单元格像素」同步成控制台逻辑网格列/行数。
     // 居中（offset = 网格列/2 - 行宽/2）、DRAWLINE 铺满宽度都以它为准，

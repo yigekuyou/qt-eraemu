@@ -67,9 +67,14 @@ public:
     enum class ViewPart { History, Stage };
     explicit ConsoleLineProxyModel(ViewPart part, QObject* parent = nullptr)
         : QSortFilterProxyModel(parent), m_part(part) {}
-    void setStageStart(int row) { m_stageStart = qMax(0, row); }
-    void setStageVisible(bool on) { m_stageVisible = on; }
-    void refresh() { beginResetModel(); endResetModel(); }
+    void setStage(int row, bool visible) {
+        row = qMax(0, row);
+        if (m_stageStart == row && m_stageVisible == visible) return;
+        beginFilterChange();
+        m_stageStart = row;
+        m_stageVisible = visible;
+        endFilterChange(Direction::Rows);
+    }
 protected:
     bool filterAcceptsRow(int sourceRow, const QModelIndex& sourceParent) const override {
         Q_UNUSED(sourceParent);
@@ -192,7 +197,6 @@ public:
     // ---- 显示写入接口（对齐 C# EmueraConsole.Print）----
     Q_INVOKABLE void print(const QString& text);                  // 追加文本（不换行）
     Q_INVOKABLE void printPlain(const QString& text);             // 整段不可点击（PRINTPLAIN）
-    Q_INVOKABLE void printHtml(const QString& html);              // HTML_PRINT 常用标签子集
     Q_INVOKABLE void newline();                                   // 结束当前行（flush）
     Q_INVOKABLE void printButton(const QString& text, qint64 value, const QString& tooltip = QString());
     Q_INVOKABLE void printButtonStr(const QString& text, const QString& value, const QString& tooltip = QString());
@@ -209,7 +213,7 @@ public:
     [[nodiscard]] QString displayLineText(int lineNo) const;
     // BINPUT/BINPUTS：是否存在「当前屏幕刚打印的」可点击按钮（尾部按钮块 + 当前行）。
     [[nodiscard]] bool hasEnabledButton() const;
-    // HTML_GETPRINTEDSTR / HTML_POPPRINTINGSTR：printHtml 收到的原文缓冲
+    // HTML_GETPRINTEDSTR / HTML_POPPRINTINGSTR：脚本 HTML 输出的原文缓冲
     Q_INVOKABLE QString htmlPrintedStr(int lineNo) const;
     Q_INVOKABLE QString htmlPopPrintingStr();
     // LINEISEMPTY（C# Console.EmptyLine）：当前打印缓冲是否为空
@@ -347,7 +351,6 @@ private:
     ConsoleBuffer m_buffer;
     ConsoleLayout m_layout;
     ConsoleLineProxyModel m_historyModel{ConsoleLineProxyModel::ViewPart::History, this};
-    ConsoleLineProxyModel m_stageModel{ConsoleLineProxyModel::ViewPart::Stage, this};
     ConsoleStageSnapshotModel m_stageSnapshot{this};
     int m_stageStart = 0;
     bool m_stageMode = false;
@@ -366,7 +369,7 @@ private:
     int  m_frameMs = 16;
     quint64 m_generation = 1;
 
-    QStringList m_htmlLines;      // printHtml 原文（HTML_POPPRINTINGSTR 消费）
+    QStringList m_htmlLines;      // HTML 原文（HTML_POPPRINTINGSTR 消费）
     QString m_inputKind;
     // 本次等待的缺省值（C# InputRequest.HasDefValue/DefIntValue/DefStrValue）：
     // 空回车时交付它；无效表示「无缺省」-> 空回车被忽略。

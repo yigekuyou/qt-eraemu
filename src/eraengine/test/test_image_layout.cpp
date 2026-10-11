@@ -44,6 +44,7 @@
 #include <QTemporaryDir>
 
 #include "console_backend.h"
+#include "print_template.h"
 #include "console_types.h"
 #include "resource_image_provider.h"
 
@@ -90,7 +91,8 @@ int main(int argc, char* argv[]) {
     // 打印一段 `<img …><br>` 并取回首行唯一的 span（flush 之后才做过排版测量）
     const auto spanOf = [&](const QString& html) -> ConsoleSpan {
         console.clearAll();
-        console.printHtml(html + QStringLiteral("<br>"));
+        const auto compiled = PrintTemplateCompiler::compile(QSharedPointer<LiteralNode>::create(html + QStringLiteral("<br>")));
+        console.printTemplate(PrintTemplateCompiler::evaluate(*compiled, [](const ExpressionNode&) { return QString(); }));
         console.flush();
         if (console.buffer().count() == 0) return ConsoleSpan{};
         const QList<ConsoleSpan> spans = console.buffer().at(0).flatSpans();

@@ -26,6 +26,8 @@
 #include <functional>
 
 #include "expression_ast.h"
+#include "print_template.h"
+#include "variable_storage.h"
 #include "../game_base_data.h"
 #include "../mt19937.h"
 #include "text_encoding.h"
@@ -40,21 +42,24 @@ class ExpressionEvaluator : public QObject
 public:
     explicit ExpressionEvaluator(QObject *parent = nullptr);
 
-    using AstProvider = std::function<QSharedPointer<ExpressionNode>(const QString&)>;
-    void setAstProvider(AstProvider provider) { m_astProvider = std::move(provider); }
     using FormIgnoreProvider = std::function<bool()>;
     void setFormIgnoreProvider(FormIgnoreProvider provider) { m_formIgnoreProvider = std::move(provider); }
     bool ignoreTripleSymbols() const { return m_formIgnoreProvider && m_formIgnoreProvider(); }
 
-    // Existing entry points (parse string + evaluate)
-    Q_INVOKABLE QVariant evaluate(const QString &expression, VariableStorage *storage, GameBaseData *gameBaseData = nullptr);
-    Q_INVOKABLE bool evaluateInt(const QString &expression, VariableStorage *storage, qint64 &result);
-    Q_INVOKABLE bool evaluateStr(const QString &expression, VariableStorage *storage, QString &result);
 
     // NEW: Direct AST evaluation entry points (for cached AST)
     QVariant evaluate(const ExpressionNode &node, VariableStorage *storage, GameBaseData *gameBaseData = nullptr);
     bool evaluateInt(const ExpressionNode &node, VariableStorage *storage, qint64 &result);
     bool evaluateStr(const ExpressionNode &node, VariableStorage *storage, QString &result);
+
+    // Explicit string views. evaluateText discards structural meaning;
+    // evaluateFlat performs one evaluation and returns an already-flattened value.
+    [[nodiscard]] QString evaluateText(const ExpressionNode& node,
+                                       VariableStorage* storage,
+                                       GameBaseData* gameBaseData = nullptr);
+    [[nodiscard]] FlatStringValue evaluateFlat(const ExpressionNode& node,
+                                               VariableStorage* storage,
+                                               GameBaseData* gameBaseData = nullptr);
 
     // 用户自定义函数回调：表达式 `NAME(args)` 命中用户函数时调用（由执行链提供）。
     // 返回 true 表示已处理，out 为返回值。
@@ -85,6 +90,8 @@ public:
     [[nodiscard]] int langByteCount(const QString& s) const;
 
     // GETCONFIG / GETCONFIGS 的配置取值回调（返回 false = 未命中）。
+    using IntegerConfigProvider = std::function<bool(const QString& key, qint64& value)>;
+    void setIntegerConfigProvider(IntegerConfigProvider provider) { m_integerConfigProvider = std::move(provider); }
     using ConfigProvider = std::function<bool(const QString& key, QString& value)>;
     void setConfigProvider(ConfigProvider provider) { m_configProvider = std::move(provider); }
 
@@ -166,7 +173,10 @@ public:
 
     // 存档/文本类函数（SAVETEXT/LOADTEXT/SAVECHARA/LOADCHARA/GSAVE/GLOAD/SAVENOS）
     // 的落盘目录 = 游戏目录下的 sav/（对齐 C# VEvaluator 的保存路径），由 EraEngine 注入。
-    void setSaveDirectory(const QString& dir) { m_saveDirectory = dir; }
+    void setSaveDirectory(const QString& dir);
+    void setSaveCompressionProvider(std::function<bool()> provider) { m_saveCompressionProvider=std::move(provider); }
+    void reloadCharacterSnapshots();
+    void setCharacterDirectory(const QString& directory) { m_characterDirectory=directory; reloadCharacterSnapshots(); }
     [[nodiscard]] QString saveFilePath(const QString& fileName) const;
 
     // `#DIM CONST NAME, N = …` 常数数组的下标查询（注入自 VariableTable）
@@ -198,7 +208,6 @@ signals:
     void evaluationError(const QString &expression, const QString &errorString);
 
 public slots:
-    QVariant slotEvaluate(const QString &expression, VariableStorage *storage, GameBaseData *gameBaseData = nullptr);
     
 private:
     // 变量下标求值：字符串下标经 ConstantTable 映射为整数（如 CFLAG:ARG:現在位置）
@@ -206,6 +215,7 @@ private:
                         VariableStorage* storage, GameBaseData* gameBaseData);
 
     // AST evaluation methods
+    QVariant evaluateUnstructuredNode(const ExpressionNode &node, VariableStorage *storage, GameBaseData *gameBaseData);
     QVariant evaluateNode(const ExpressionNode &node, VariableStorage *storage, GameBaseData *gameBaseData = nullptr);
     QVariant evaluateLiteral(const LiteralNode &node);
     // 二元求值的两条路径（整数快路径 / 字符串慢路径）
@@ -257,12 +267,12 @@ private:
     [[nodiscard]] int langIndexOf(const QString& target, const QString& word, int langStart) const;
 
     // Helper methods for expression evaluation
-    bool parseAndEvaluate(const QString &expression, VariableStorage *storage);
 
-    AstProvider m_astProvider;
     FormIgnoreProvider m_formIgnoreProvider;
     UserFunctionInvoker m_userInvoker;
+    IntegerConfigProvider m_integerConfigProvider;
     ConfigProvider m_configProvider;
+    std::function<bool()> m_saveCompressionProvider;
     CharaCountProvider m_charaNumProvider;
     LineCountProvider m_lineCountProvider;
     std::function<qint64(const QString&)> m_saveExistsProvider;
@@ -284,6 +294,9 @@ private:
     std::function<void()> m_clearProvider;                   // DEBUGCLEAR
     std::function<qint64()> m_lineEmptyProvider;             // LINEISEMPTY
     QString m_saveDirectory;
+    QString m_characterDirectory;
+    QHash<QString, EraBinaryData::Document> m_characterSnapshots;
+    QString characterFilePath(const QString& name) const;
     std::function<QPair<int,int>()> m_printCProvider;        // PRINTCLENGTH/PERLINE
     std::function<qint64()> m_saveDataNosProvider;           // SAVENOS()
     Mt19937 m_rand;                       // MT19937（启动时随机种子）

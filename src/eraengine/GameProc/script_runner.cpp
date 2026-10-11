@@ -1,3 +1,4 @@
+#include "ast/print_template.h"
 /*
  * emuera —— Emuera（ERB 脚本引擎）的 Qt6 + QML/C++ 移植
  * Copyright (C) 2026  yigekuyou
@@ -23,13 +24,21 @@
 #include "variable_storage.h"
 #include "system_state_machine.h"
 #include "ast/expression_evaluator.h"
-#include "ast/strform_parser.h"
 #include "ast/ast_builder.h"
 #include <QDebug>
 #include <QElapsedTimer>
 #include <bit>
 
 namespace {
+QVariant evaluateLoadedOperand(ExpressionEvaluator& evaluator, const Operand& operand,
+                               VariableStorage* storage, GameBaseData* baseData) {
+    if (operand.snapshot.isValid()) return operand.snapshot;
+    if (operand.isString) return QVariant(operand.raw);
+    if (!operand.ast) throw std::runtime_error("Missing load-time operand AST");
+    const auto value = evaluator.evaluate(*operand.ast, storage, baseData);
+    if (!value.isValid()) throw std::runtime_error("Invalid operand expression");
+    return value;
+}
 // 逗号形态的限时输入指令（`TINPUT 300,1234,0,""`）里，AstBuilder 会把**分隔用的
 // 逗号本身**也放进操作数列表：
 //     [300] [,] [1234] [,] [0] [,] [""]     （7 个操作数）
@@ -48,14 +57,6 @@ QList<Operand> inputArgs(const LogicalLine& line) {
     return out;
 }
 
-// 去掉 Emuera 变量引用可能带的 % 前缀/后缀
-QString bareVarName(const QString& raw) {
-    QString n = raw;
-    if (n.startsWith('%')) n = n.mid(1);
-    if (n.endsWith('%')) n.chop(1);
-    return n;
-}
-
 } // namespace
 
 ScriptRunner::ScriptRunner(EraParseTable* table,
@@ -70,6 +71,10 @@ ScriptRunner::ScriptRunner(EraParseTable* table,
     , m_storage(storage)
 {
     if (m_engine) {
+        connect(m_engine, &ExecutionEngine::gameStateLoaded, this, [this] {
+            m_loops.clear(); m_callContexts.clear(); m_functionLocals.clear();
+            m_eventChain.active=false; m_lastPrivateScope.clear();
+        });
         connect(m_engine, &ExecutionEngine::consolePrint, this, [this] { m_printed = true; });
         connect(m_engine, &ExecutionEngine::consolePrintButton, this, [this] { m_printed = true; });
         connect(m_engine, &ExecutionEngine::consolePrintTemplate, this, [this] { m_printed = true; });
@@ -362,9 +367,11 @@ bool ScriptRunner::evalInt(const QSharedPointer<ExpressionNode>& ast, const QStr
         out = 0;
         return true;
     } else {
-        value = ev->evaluate(raw, m_storage, baseData());
+        m_state->setErrorState();
+        emit errorOccurred(QStringLiteral("表达式缺少装载期 AST：%1").arg(raw.trimmed()));
+        return false;
     }
-    if (!value.isValid() || value.typeId() == QMetaType::QString || !value.canConvert<qint64>()) {
+    if (!value.isValid() || isStringValue(value) || !value.canConvert<qint64>()) {
         m_state->setErrorState();
         emit errorOccurred(QStringLiteral("表达式求值失败：%1").arg(raw.trimmed()));
         return false;
@@ -384,66 +391,7 @@ bool ScriptRunner::evalCondition(const LogicalLine& line, bool& out) {
 //   * 每个 DATAFORM/DATA 行自成一个段；DATALIST..ENDLIST 之间的 DATA 并成一段。
 //   * ENDDATA 之后继续（跳转目标 = ENDDATA 下一行）。
 // ---------------------------------------------------------------------------
-namespace {
 
-bool isPrintDataName(const QString& n) {
-    static const char* const kNames[] = {"PRINTDATA",  "PRINTDATAL",  "PRINTDATAW",
-                                         "PRINTDATAD", "PRINTDATADL", "PRINTDATADW",
-                                         "PRINTDATAK", "PRINTDATAKL", "PRINTDATAKW"};
-    for (const char* s : kNames) {
-        if (n == QLatin1String(s)) return true;
-    }
-    return false;
-}
-
-// STRDATA <字符串变量>：与 PRINTDATA 共用段结构，但**不显示**：把被选中段的
-// 文本写进变量（C# STRDATA = PRINTDATA 的不显示版，ecd 文档「未整理项目」）。
-// 之前 STRDATA 不在名单里 -> 整段被当普通行逐条执行 -> DATA/ENDDATA 报 [未完成]。
-bool isStrDataName(const QString& n) {
-    return n == QLatin1String("STRDATA") || n == QLatin1String("STRDATAL")
-           || n == QLatin1String("STRDATAW");
-}
-
-// 首次执行 PRINTDATA 时扫描其数据段（行内容装载后不可变，缓存进 LogicalLine）
-void buildPrintDataBlock(const LogicalLine& line, int pc, const ScriptData* sd) {
-    QList<QList<int>> groups;
-    int endLine = -1;
-    bool inList = false;
-    if (sd) {
-        for (int i = pc + 1; i < sd->lines.size(); ++i) {
-            const LogicalLine& l = sd->lines.at(i);
-            const QString& fn = l.functionName;
-            if (fn == QLatin1String("ENDDATA")) {
-                endLine = i;
-                break;
-            }
-            if (fn == QLatin1String("DATALIST")) {
-                inList = true;
-                groups.append(QList<int>());
-                continue;
-            }
-            if (fn == QLatin1String("ENDLIST")) {
-                inList = false;
-                continue;
-            }
-            if (fn == QLatin1String("DATA") || fn == QLatin1String("DATAFORM")) {
-                if (inList) {
-                    if (groups.isEmpty()) groups.append(QList<int>());
-                    groups.last().append(i);
-                } else {
-                    groups.append(QList<int>{i});
-                }
-                continue;
-            }
-            break;   // 非数据段成员：结束扫描
-        }
-    }
-    line.printDataGroups = groups;
-    line.printDataEndLine = endLine;
-    line.printDataReady = true;
-}
-
-} // namespace
 
 ExecState ScriptRunner::executeLine(const LogicalLine& line) {
     const QString script = m_table->currentScript();
@@ -491,121 +439,81 @@ ExecState ScriptRunner::executeLine(const LogicalLine& line) {
 
     const QString& name = line.functionName;
 
-    // ---- 条件 ----
-    if (name == QLatin1String("IF")) {
-        // C# 语义：依次检查 IF 自身条件 -> ELSEIF 条件 -> ELSE，命中即进入其分支体
+    // ---- 条件 / SELECTCASE / 异常标记 ----
+    // 指令名在装载期已经分类；执行期只消费 enum，避免重复字符串比较。
+    switch (line.runnerInstruction) {
+    case RunnerInstruction::If: {
         const QList<int> branches = m_table->ifBranches(script, pc);
-        bool taken = false;
-        bool cond = false;
-        if (evalCondition(line, cond) && cond) {
+        bool taken = false, condition = false;
+        if (evalCondition(line, condition) && condition) {
             taken = true;
-            advance();               // 命中 IF 自身 -> 进入主体
+            advance();
         } else {
-            for (int b : branches) {
-                const LogicalLine* bl = m_table->lineAt(script, b);
-                if (!bl) continue;
-                if (bl->is("ELSE")) {
+            for (const int branch : branches) {
+                const auto* candidate = m_table->lineAt(script, branch);
+                if (!candidate) continue;
+                if (candidate->runnerInstruction == RunnerInstruction::Else) {
                     taken = true;
-                    gotoLine(b + 1);     // 进入 ELSE 体
+                    gotoLine(branch + 1);
                     break;
                 }
-                bool bc = false;
-                if (evalCondition(*bl, bc) && bc) {
+                bool branchCondition = false;
+                if (evalCondition(*candidate, branchCondition) && branchCondition) {
                     taken = true;
-                    gotoLine(b + 1);     // 进入该 ELSEIF 体
+                    gotoLine(branch + 1);
                     break;
                 }
             }
-            if (!taken) {
-                gotoLine(m_table->jumpTarget(script, pc));   // 无分支命中 -> ENDIF 之后
-            }
+            if (!taken) gotoLine(m_table->jumpTarget(script, pc));
         }
         return ExecState::Continue;
     }
-    if (name == QLatin1String("ELSEIF") || name == QLatin1String("ELSE")) {
-        // 顺序落入（上一个分支体执行完）-> 跳到 ENDIF 之后
+    case RunnerInstruction::ElseIf:
+    case RunnerInstruction::Else:
         gotoLine(m_table->jumpTarget(script, pc));
         return ExecState::Continue;
-    }
-    if (name == QLatin1String("ENDIF")) {
+    case RunnerInstruction::EndIf:
         advance();
         return ExecState::Continue;
-    }
-    // ---- SELECTCASE（对齐 C# SELECTCASE_Instruction / CASE_Instruction）----
-    if (name == QLatin1String("SELECTCASE")) {
-        // 求值 -> 顺序比较各 CASE 行；命中就跳到该 CASE 的下一行
-        // 支持：`CASE v1, v2` / `CASE IS >= n` / `CASE a TO b` / `CASEELSE`
-        QVariant valueVar;
-        ExpressionEvaluator& ev = getEvaluator();
-        if (line.condition) {
-            valueVar = ev.evaluate(*line.condition, m_storage, baseData());
-        } else if (!line.arguments.isEmpty()) {
-            const Operand& op = line.arguments.first();
-            if (op.isString) {
-                valueVar = op.raw;
-            } else if (op.ast) {
-                valueVar = ev.evaluate(*op.ast, m_storage, baseData());
-            } else if (m_table) {
-                const QSharedPointer<ExpressionNode> ast = m_table->expressionAst(op.raw);
-                valueVar = ast ? ev.evaluate(*ast, m_storage, baseData())
-                               : QVariant::fromValue<qint64>(op.raw.toLongLong());
-            }
-        }
-            const bool valueIsStr = (valueVar.typeId() == QMetaType::QString);
-
-        const QList<int> caseLines = m_table->ifBranches(script, pc);
-        for (int caseLine : caseLines) {
-            const LogicalLine* cl = m_table->lineAt(script, caseLine);
-            if (!cl) continue;
-            if (cl->is("CASEELSE")) {
-                gotoLine(caseLine + 1);          // 默认分支
-                return ExecState::Continue;
-            }
-            if (caseMatches(*cl, valueVar, valueIsStr)) {
+    case RunnerInstruction::SelectCase: {
+        QVariant value;
+        auto& evaluator = getEvaluator();
+        const auto ast = line.condition ? line.condition
+            : (!line.arguments.isEmpty() ? line.arguments.first().ast : QSharedPointer<ExpressionNode>());
+        if (!ast) throw std::runtime_error("SELECTCASE operand has no load-time AST");
+        value = evaluator.evaluate(*ast, m_storage, baseData());
+        const bool stringValue = isStringValue(value);
+        for (const int caseLine : m_table->ifBranches(script, pc)) {
+            const auto* candidate = m_table->lineAt(script, caseLine);
+            if (!candidate) continue;
+            if (candidate->runnerInstruction == RunnerInstruction::CaseElse
+                || caseMatches(*candidate, value, stringValue)) {
                 gotoLine(caseLine + 1);
                 return ExecState::Continue;
             }
         }
-        gotoLine(m_table->jumpTarget(script, pc));   // 无命中 -> ENDSELECT 之后
-        return ExecState::Continue;
-    }
-    if (name == QLatin1String("CASE") || name == QLatin1String("CASEELSE")) {
-        // 顺序落入（上一个 CASE 体执行完）-> 跳到 ENDSELECT 之后
         gotoLine(m_table->jumpTarget(script, pc));
         return ExecState::Continue;
     }
-    if (name == QLatin1String("ENDSELECT")) {
+    case RunnerInstruction::Case:
+    case RunnerInstruction::CaseElse:
+        gotoLine(m_table->jumpTarget(script, pc));
+        return ExecState::Continue;
+    case RunnerInstruction::EndSelect:
         advance();
         return ExecState::Continue;
-    }
-
-    // ---- CATCH / ENDCATCH（TRYC 系异常块的标记，对齐 C# CATCH_Instruction）----
-    // 顺序落入 CATCH 说明 TRYC 体的目标函数**找到了**（没跳走），此时异常体不能执行
-    // -> 跳到配对的 ENDCATCH 之后。
-    // 「TRYC 失败」的落地在 doCallLine 里直接落到 CATCH 的下一行，不会命中这里。
-    if (name == QLatin1String("CATCH")) {
+    case RunnerInstruction::Catch: {
         const int endCatch = m_table->endCatchTarget(script, pc);
-        if (endCatch >= 0) gotoLine(endCatch + 1);
-        else advance();
+        if (endCatch >= 0) gotoLine(endCatch + 1); else advance();
         return ExecState::Continue;
     }
-    if (name == QLatin1String("ENDCATCH")) {
+    case RunnerInstruction::EndCatch:
         advance();
         return ExecState::Continue;
-    }
-
-    // ---- ASSERT（C# ASSERT_Instruction / FunctionCode.ASSERT）----
-    // 运行期断言：条件为 0 时抛 CodeEE（「ASSERT の条件が不正です」），
-    // 非 0 静默通过。此前只被「已知指令名」兜住、运行期落到「其它指令」被忽略
-    // —— 断言形同虚设（组 17 的 `ASSERT 1 == 1` 一度是「不报错」而非「通过」）。
-    if (name == QLatin1String("ASSERT")) {
-        // 实参形态是 INT_EXPRESSION（argument_parser.h:180），条件就是第一个操作数
-        // （不是 IF 系的 line.condition —— 此前误用 evalCondition 恒为假）。
-        qint64 v = 0;
-        if (!line.arguments.isEmpty()) {
-            evalInt(line.arguments.first().ast, line.arguments.first().raw, v);
-        }
-        if (v == 0) {
+    case RunnerInstruction::Assert: {
+        qint64 value = 0;
+        if (!line.arguments.isEmpty()) evalInt(line.arguments.first().ast, line.arguments.first().raw, value);
+        if (value == 0) {
             m_state->setErrorState();
             emit errorOccurred(QStringLiteral("ASSERT 的条件不成立：%1（%2）")
                                    .arg(line.raw.trimmed(), line.position.toString()));
@@ -614,22 +522,14 @@ ExecState ScriptRunner::executeLine(const LogicalLine& line) {
         advance();
         return ExecState::Continue;
     }
-
-    // ---- SKIPLOG（EE）：设置「消息跳过中」状态（C# console.MesSkip = n != 0）----
-    // 非 0 -> 进入跳过：可跳过的任意键等待（WAIT/WAITANYKEY/PRINTW 系）自动放行；
-    // 0    -> 强制解除。INPUT 族（需要输入值）与 FORCEWAIT（不可跳过）会把跳过
-    // 状态清掉（对齐 C# EmueraConsole 的 MesSkip 循环语义）。
-    if (name == QLatin1String("SKIPLOG")) {
-        qint64 v = 0;
-        if (!line.arguments.isEmpty()) {
-            evalInt(line.arguments.first().ast, line.arguments.first().raw, v);
-        }
-        if (m_engine) m_engine->setMesSkip(v != 0);
-        qCDebug(eraTrace) << "[skiplog]" << v << "行" << line.position.toString();
+    case RunnerInstruction::SkipLog: {
+        qint64 value = 0;
+        if (!line.arguments.isEmpty()) evalInt(line.arguments.first().ast, line.arguments.first().raw, value);
+        if (m_engine) m_engine->setMesSkip(value != 0);
+        qCDebug(eraTrace) << "[skiplog]" << value << "行" << line.position.toString();
         advance();
         return ExecState::Continue;
     }
-
     // ---- THROW（C# THROW_Instruction -> throw new CodeEE）----
     // 语义要点一：Emuera 的 CATCH **不是**通用异常捕获 ——
     //   文档《异常分支：TRYC / CATCH / ENDCATCH》：「用于捕获『函数不存在』的情况」。
@@ -638,12 +538,12 @@ ExecState ScriptRunner::executeLine(const LogicalLine& line) {
     //   曾经这里「只告警不中断」以便观察上游求值缺陷；CALLF 字符串实参丢引号、
     //   省略实参整数化 "0"、缺省形参未绑定、ARRAYREMOVE 未实现、CALLF 返回值
     //   覆盖 LOCALS[0] 这一串上游缺陷修复后，eraTW 冒烟已无 THROW，恢复中断语义。
-    if (name == QLatin1String("THROW")) {
+    case RunnerInstruction::THROW: {
         QString message;
         if (!line.arguments.isEmpty()) {
             ExpressionEvaluator& ev = getEvaluator();
             const Operand& op = line.arguments.first();
-            message = op.ast ? ev.evaluate(*op.ast, m_storage, baseData()).toString() : op.raw;
+            message = op.ast ? stringText(ev.evaluate(*op.ast, m_storage, baseData())) : op.raw;
         }
         m_state->setErrorState();
         emit errorOccurred(QStringLiteral("THROW: %1（%2）").arg(message, line.position.toString()));
@@ -653,7 +553,7 @@ ExecState ScriptRunner::executeLine(const LogicalLine& line) {
     // ---- RESTART：回到当前函数的第一行（Emuera 的 RESTART 指令）----
     // eraTW 的各类菜单（角色自定义、服装选择、商店…）靠它重绘并重新等待输入；
     // 此前未实现，导致「改完一项后菜单不再刷新」。
-    if (name == QLatin1String("RESTART")) {
+    case RunnerInstruction::RESTART: {
         const QString fn = line.ownerFunction;
         const int labelLine = fn.isEmpty() ? -1 : m_table->getLabelPosition(script, fn);
         if (labelLine < 0) {
@@ -666,7 +566,7 @@ ExecState ScriptRunner::executeLine(const LogicalLine& line) {
         return ExecState::Continue;
     }
 
-    if (name == QLatin1String("SIF")) {
+    case RunnerInstruction::SIF: {
         bool cond = false;
         evalCondition(line, cond);
         if (cond) advance();
@@ -675,7 +575,7 @@ ExecState ScriptRunner::executeLine(const LogicalLine& line) {
     }
 
     // ---- 循环 ----
-    if (name == QLatin1String("REPEAT")) {
+    case RunnerInstruction::REPEAT: {
         qint64 count = 0;
         writeLoopCounter(QStringLiteral("COUNT"), 0);
         evalInt(line.condition, line.raw, count);
@@ -689,6 +589,7 @@ ExecState ScriptRunner::executeLine(const LogicalLine& line) {
         f.depth = m_table->depth();
         f.script = script;
         f.varName = QStringLiteral("COUNT");
+        f.counter.ast = QSharedPointer<VariableNode>::create(QStringLiteral("COUNT"));
         f.end = count;
         f.startLine = pc;
         f.endLine = endLine;
@@ -696,7 +597,7 @@ ExecState ScriptRunner::executeLine(const LogicalLine& line) {
         advance();
         return ExecState::Continue;
     }
-    if (name == QLatin1String("DO")) {
+    case RunnerInstruction::DO: {
         LoopFrame f;
         f.kind = LoopFrame::Kind::Do;
         f.depth = m_table->depth();
@@ -707,15 +608,21 @@ ExecState ScriptRunner::executeLine(const LogicalLine& line) {
         advance();
         return ExecState::Continue;
     }
-    if (name == QLatin1String("LOOP") && topLoop(LoopFrame::Kind::Do)) {
-        const LoopFrame f = *topLoop(LoopFrame::Kind::Do);
-        bool cond = false;
-        evalCondition(line, cond);
-        if (cond) gotoLine(f.startLine + 1);
-        else { m_loops.removeLast(); advance(); }
-        return ExecState::Continue;
-    }
-    if (name == QLatin1String("LOOP") || name == QLatin1String("REND")) {
+    case RunnerInstruction::LOOP:
+    case RunnerInstruction::REND: {
+        if (const auto* loop = topLoop(LoopFrame::Kind::Do);
+            line.runnerInstruction == RunnerInstruction::LOOP && loop) {
+            const LoopFrame frame = *loop;
+            bool condition = false;
+            evalCondition(line, condition);
+            if (condition) {
+                gotoLine(frame.startLine + 1);
+            } else {
+                m_loops.removeLast();
+                advance();
+            }
+            return ExecState::Continue;
+        }
         LoopFrame* f = topLoop(LoopFrame::Kind::Repeat);
         if (f) {
             f->value = std::bit_cast<qint64>(quint64(readIntVar("COUNT", 0)) + 1);
@@ -731,7 +638,7 @@ ExecState ScriptRunner::executeLine(const LogicalLine& line) {
         }
         return ExecState::Continue;
     }
-    if (name == QLatin1String("WHILE")) {
+    case RunnerInstruction::WHILE: {
         LoopFrame* existing = topLoop(LoopFrame::Kind::While);
         if (existing && existing->startLine == pc) {
             // 由 WEND 回跳而来：重新判断，不重复压栈
@@ -763,7 +670,7 @@ ExecState ScriptRunner::executeLine(const LogicalLine& line) {
         }
         return ExecState::Continue;
     }
-    if (name == QLatin1String("WEND")) {
+    case RunnerInstruction::WEND: {
         LoopFrame* f = topLoop(LoopFrame::Kind::While);
         if (f) {
             gotoLine(f->startLine);   // 回到 WHILE 重新判断
@@ -772,7 +679,7 @@ ExecState ScriptRunner::executeLine(const LogicalLine& line) {
         }
         return ExecState::Continue;
     }
-    if (name == QLatin1String("FOR")) {
+    case RunnerInstruction::FOR: {
         qDebug() << "[for-enter]" << line.raw << line.argument.params.size() << line.arguments.size();
         // FOR var, start, end[, step]
         // 优先使用 AST 已归约的类型化参数（TypedArgument::params / exprs）
@@ -792,9 +699,10 @@ ExecState ScriptRunner::executeLine(const LogicalLine& line) {
             f.script = script;
             f.startLine = pc;
             f.endLine = endLine;
-            f.varName = bareVarName(ops[0]->raw);
+            f.counter = *ops[0];
+            f.varName = static_cast<const VariableNode&>(*f.counter.ast).name();
             evalInt(ops[1]->ast, ops[1]->raw, f.value);
-            writeLoopCounter(f.varName, f.value);
+            writeLoopCounter(f.counter, f.value);
             evalInt(ops[2]->ast, ops[2]->raw, f.end);
             f.step = 1;
             if (ops.size() >= 4) evalInt(ops[3]->ast, ops[3]->raw, f.step);
@@ -812,17 +720,16 @@ ExecState ScriptRunner::executeLine(const LogicalLine& line) {
         }
         return ExecState::Continue;
     }
-    if (name == QLatin1String("NEXT")) {
+    case RunnerInstruction::NEXT: {
         LoopFrame* f = topLoop(LoopFrame::Kind::For);
         if (f) {
             // The body may change the counter (e.g. recheck a shifted Tetris row).
-            Operand counter;
-            counter.raw = f->varName;
+            const Operand& counter = f->counter;
             QString counterName;
             QList<int> counterIndices;
             extractVarRef(counter, counterName, counterIndices);
             f->value = std::bit_cast<qint64>(quint64(readIntVar(counterName, counterIndices)) + quint64(f->step));
-            writeLoopCounter(f->varName, f->value);
+            writeLoopCounter(f->counter, f->value);
             const bool more = (f->step > 0 && f->value < f->end) || (f->step < 0 && f->value > f->end);
             if (more) {
                 gotoLine(f->startLine + 1);
@@ -835,12 +742,12 @@ ExecState ScriptRunner::executeLine(const LogicalLine& line) {
         }
         return ExecState::Continue;
     }
-    if (name == QLatin1String("BREAK")) {
+    case RunnerInstruction::BREAK: {
         if (!m_loops.isEmpty() && m_loops.last().depth == m_table->depth()
             && m_loops.last().script == script) {
             const LoopFrame f = m_loops.takeLast();
             if (f.kind == LoopFrame::Kind::Repeat || f.kind == LoopFrame::Kind::For) {
-                Operand counter(f.varName);
+                Operand counter = f.counter;
                 QString counterName;
                 QList<int> indices;
                 extractVarRef(counter, counterName, indices);
@@ -853,7 +760,7 @@ ExecState ScriptRunner::executeLine(const LogicalLine& line) {
         }
         return ExecState::Continue;
     }
-    if (name == QLatin1String("CONTINUE")) {
+    case RunnerInstruction::CONTINUE: {
         if (!m_loops.isEmpty() && m_loops.last().depth == m_table->depth()
             && m_loops.last().script == script) {
             // 跳到**循环末尾行**（NEXT / LOOP / WEND），让「自增 + 条件」正常执行。
@@ -869,7 +776,7 @@ ExecState ScriptRunner::executeLine(const LogicalLine& line) {
     // ---- QUIT（对齐 C# FunctionCode.QUIT：结束本次执行）
     // 此前 QUIT 只被识别为指令名、没有任何执行分支 —— 脚本里的 QUIT
     // 被静默忽略，程序不会退出（自动化跑测试时表现为「菜单被反复重跑」）。
-    if (name == QLatin1String("QUIT")) {
+    case RunnerInstruction::QUIT: {
         m_state->requestQuit();   // 结束程序（Halt 会被系统层当成「回到底层」）
         emit finished();
         return ExecState::Halt;
@@ -884,8 +791,9 @@ ExecState ScriptRunner::executeLine(const LogicalLine& line) {
     // 的等待上，FORCE_* 跳过该等待。本移植的 QUIT 本就是同步结束（不插等待），
     // 因此 QUIT 与 FORCE_QUIT 在此等价；重启请求由 restartRequested 标志区分，
     // 宿主收到 restartRequestedByScript 后 reload()（等价 C# Reboot）。
-    if (name == QLatin1String("QUIT_AND_RESTART") || name == QLatin1String("FORCE_QUIT")
-        || name == QLatin1String("FORCE_QUIT_AND_RESTART")) {
+    case RunnerInstruction::QUIT_AND_RESTART:
+    case RunnerInstruction::FORCE_QUIT:
+    case RunnerInstruction::FORCE_QUIT_AND_RESTART: {
         if (name == QLatin1String("QUIT_AND_RESTART")
             || name == QLatin1String("FORCE_QUIT_AND_RESTART")) {
             m_state->requestRestart();   // = requestQuit() + 重启标志
@@ -899,7 +807,7 @@ ExecState ScriptRunner::executeLine(const LogicalLine& line) {
     }
 
     // ---- 跳转 / 调用 ----
-    if (name == QLatin1String("GOTO")) {
+    case RunnerInstruction::GOTO: {
         QString label = line.arguments.isEmpty() ? QString() : line.arguments.first().raw;
         label = label.trimmed();
         if (label.startsWith(QLatin1Char('$'))) label.remove(0, 1);
@@ -925,7 +833,8 @@ ExecState ScriptRunner::executeLine(const LogicalLine& line) {
     // 依次调用同名事件函数（#PRI -> 普通 -> #LATER；#SINGLE 且 RETURN 1 跳过
     // 剩余；#ONLY 返回后终止），全部返回后回到 CALLEVENT 的下一行。
     // 目标不存在 -> 静默跳过；目标是普通函数 -> 报错（C# CodeEE）。
-    if (name == QLatin1String("CALLEVENT") || name == QLatin1String("TRYCALLEVENT")) {
+    case RunnerInstruction::CALLEVENT:
+    case RunnerInstruction::TRYCALLEVENT: {
         const QString label = line.arguments.isEmpty()
                                   ? QString() : line.arguments.first().raw.trimmed();
         if (startEventCallChain(label)) {
@@ -942,9 +851,12 @@ ExecState ScriptRunner::executeLine(const LogicalLine& line) {
     //     菜单一片空白（点按钮像没反应）；
     //   * 大量 `TRYCALLFORM 口上_%…%`（956 处）口上全都不显示。
     // 语义对齐 C# CALL_Instruction(form, isJump, isTry, isTryCatch)。
-    if (name == QLatin1String("CALL") || name == QLatin1String("TRYCALL")
-        || name == QLatin1String("CALLFORM") || name == QLatin1String("TRYCALLFORM")
-        || name == QLatin1String("TRYCCALL") || name == QLatin1String("TRYCCALLFORM")) {
+    case RunnerInstruction::CALL:
+    case RunnerInstruction::TRYCALL:
+    case RunnerInstruction::CALLFORM:
+    case RunnerInstruction::TRYCALLFORM:
+    case RunnerInstruction::TRYCCALL:
+    case RunnerInstruction::TRYCCALLFORM: {
         const bool isForm = name.contains(QLatin1String("FORM"));
         const bool isTry  = name.startsWith(QLatin1String("TRY"));
         return doCallLine(line, isForm, isTry);
@@ -954,8 +866,10 @@ ExecState ScriptRunner::executeLine(const LogicalLine& line) {
     // 对齐 C# CALL_Instruction(isJump=true)：跳转但**不产生新的返回地址**，
     // 目标函数 RETURN 时直接回到当前函数的调用者。此前这四条完全未实现，
     // 落到「其它指令」被静默跳过。
-    if (name == QLatin1String("JUMP") || name == QLatin1String("TRYJUMP")
-        || name == QLatin1String("JUMPFORM") || name == QLatin1String("TRYJUMPFORM")) {
+    case RunnerInstruction::JUMP:
+    case RunnerInstruction::TRYJUMP:
+    case RunnerInstruction::JUMPFORM:
+    case RunnerInstruction::TRYJUMPFORM: {
         const bool isForm = name.contains(QLatin1String("FORM"));
         const bool isTry  = name.startsWith(QLatin1String("TRY"));
         return doCallLine(line, isForm, isTry, true);
@@ -966,12 +880,13 @@ ExecState ScriptRunner::executeLine(const LogicalLine& line) {
     // 的 $ 标签里找（C# LabelDictionary.GetLabelDollar(func.ParentLabelLine)）。
     // TRY 系找不到目标时静默跳过（有配对 CATCH 则落到 CATCH 下一行）。
     // 跳转不压栈 —— 没有返回地址。
-    if (name == QLatin1String("GOTOFORM") || name == QLatin1String("TRYGOTO")
-        || name == QLatin1String("TRYGOTOFORM")) {
+    case RunnerInstruction::GOTOFORM:
+    case RunnerInstruction::TRYGOTO:
+    case RunnerInstruction::TRYGOTOFORM: {
         QString label = line.arguments.isEmpty() ? QString() : line.arguments.first().raw;
         if (name != QLatin1String("TRYGOTO") && !line.arguments.isEmpty() && line.arguments.first().ast)
-            label = getEvaluator().evaluate(*line.arguments.first().ast, m_storage, baseData()).toString();
-        else if (name != QLatin1String("TRYGOTO")) label = expandCallFormLabel(label);
+            label = stringText(getEvaluator().evaluate(*line.arguments.first().ast, m_storage, baseData()));
+        else if (name != QLatin1String("TRYGOTO")) throw std::runtime_error("FORM label has no load-time AST");
         label = label.trimmed();
         if (label.startsWith(QLatin1Char('$'))) label.remove(0, 1);
         const int pos = label.isEmpty() ? -1 : findGotoLabelInFunction(label);
@@ -995,17 +910,19 @@ ExecState ScriptRunner::executeLine(const LogicalLine& line) {
     // ---- TRYCJUMP / TRYCJUMPFORM / TRYCGOTO / TRYCGOTOFORM 的 C 变体 ----
     // 对齐 C# CALL_Instruction(isJump/isTry=true, isTryCatch=true)：JUMP/GOTO 的
     // TRYC 版本，目标不存在时落到配对 CATCH。此前未分发、被静默跳过。
-    if (name == QLatin1String("TRYCJUMP") || name == QLatin1String("TRYCJUMPFORM")) {
+    case RunnerInstruction::TRYCJUMP:
+    case RunnerInstruction::TRYCJUMPFORM: {
         const bool isForm = name.contains(QLatin1String("FORM"));
         return doCallLine(line, isForm, true, true);
     }
-    if (name == QLatin1String("TRYCGOTO") || name == QLatin1String("TRYCGOTOFORM")) {
+    case RunnerInstruction::TRYCGOTO:
+    case RunnerInstruction::TRYCGOTOFORM: {
         // 语法/跳转语义与 TRYGOTO(FORM) 相同（TRYCGOTO 的 CATCH 配对在
         // findGotoLabelInFunction 失败分支里处理）。
         QString label = line.arguments.isEmpty() ? QString() : line.arguments.first().raw;
         if (name == QLatin1String("TRYCGOTOFORM") && !line.arguments.isEmpty() && line.arguments.first().ast)
-            label = getEvaluator().evaluate(*line.arguments.first().ast, m_storage, baseData()).toString();
-        else if (name == QLatin1String("TRYCGOTOFORM")) label = expandCallFormLabel(label);
+            label = stringText(getEvaluator().evaluate(*line.arguments.first().ast, m_storage, baseData()));
+        else if (name == QLatin1String("TRYCGOTOFORM")) throw std::runtime_error("FORM label has no load-time AST");
         label = label.trimmed();
         if (label.startsWith(QLatin1Char('$'))) label.remove(0, 1);
         const int pos = label.isEmpty() ? -1 : findGotoLabelInFunction(label);
@@ -1025,8 +942,10 @@ ExecState ScriptRunner::executeLine(const LogicalLine& line) {
     // ---- TRYCALLLIST / TRYJUMPLIST / TRYGOTOLIST（GOTOLIST 为宽松别名）----
     // 依次尝试体内 FUNC 条目，命中即去；全部失败 -> ENDFUNC 之后
     // （对齐 C# doFlowControlFunction 的 callList 遍历 + state.JumpTo(func.JumpTo)）。
-    if (name == QLatin1String("TRYCALLLIST") || name == QLatin1String("TRYJUMPLIST")
-        || name == QLatin1String("TRYGOTOLIST") || name == QLatin1String("GOTOLIST")) {
+    case RunnerInstruction::TRYCALLLIST:
+    case RunnerInstruction::TRYJUMPLIST:
+    case RunnerInstruction::TRYGOTOLIST:
+    case RunnerInstruction::GOTOLIST: {
         return doTryListLine(line);
     }
 
@@ -1034,7 +953,8 @@ ExecState ScriptRunner::executeLine(const LogicalLine& line) {
     // 只允许出现在 TRY*LIST 体内（C# ErbLoader 装载期校验）；正常执行流经
     // TRY*LIST 分派不会顺序落入这两行。顺序落入 = 装载期结构异常或 ENDFUNC
     // 落点，一律空过（不报错，保持与三游戏数据兼容）。
-    if (name == QLatin1String("FUNC") || name == QLatin1String("ENDFUNC")) {
+    case RunnerInstruction::FUNC:
+    case RunnerInstruction::ENDFUNC: {
         advance();
         return ExecState::Continue;
     }
@@ -1053,15 +973,17 @@ ExecState ScriptRunner::executeLine(const LogicalLine& line) {
     // **丢弃返回值**；目标不存在（未定义 / 不是函数而是普通标签）时**静默跳过**，
     // 不报错、不触发 CATCH（EE readme：想捕获请改用 EXISTFUNCTION 判断）。
     // C#：GetFunctionMethod(..., try=true) 返回 null 则直接 return。
-    if (name == QLatin1String("TRYCALLF") || name == QLatin1String("TRYCALLFORMF")
-        || name == QLatin1String("CALLF") || name == QLatin1String("CALLFORMF")) {
+    case RunnerInstruction::TRYCALLF:
+    case RunnerInstruction::TRYCALLFORMF:
+    case RunnerInstruction::CALLF:
+    case RunnerInstruction::CALLFORMF: {
         const bool isTry = name.startsWith(QLatin1String("TRY"));
         const bool isForm = name.endsWith(QLatin1String("FORMF"));
         QString funcName = line.arguments.isEmpty() ? QString() : line.arguments.first().raw;
         if (isForm && !line.arguments.isEmpty() && line.arguments.first().ast) {
-            funcName = getEvaluator().evaluate(*line.arguments.first().ast, m_storage, baseData()).toString();
+            funcName = stringText(getEvaluator().evaluate(*line.arguments.first().ast, m_storage, baseData()));
         } else if (isForm) {
-            funcName = expandCallFormLabel(funcName);
+            throw std::runtime_error("FORM function name has no load-time AST");
         }
         // TRY：先做存在性判定（0=未定义 1=普通関数(标签) 2=#FUNCTION 3=#FUNCTIONS）。
         // 只有 2/3 才是 CALLF 系列的目标 —— 与 C# 的 null 判定等价。
@@ -1076,7 +998,8 @@ ExecState ScriptRunner::executeLine(const LogicalLine& line) {
             const Operand& operand = line.arguments.at(i);
             if (!operand.isString && operand.raw == QLatin1String(",")) continue;
             if (!operand.ast) {
-                emit errorOccurred(QStringLiteral("CALLF 参数缺少装载期 AST"));
+                emit errorOccurred(QStringLiteral("CALLF 参数缺少装载期 AST at %1 raw[%2]=<%3> line=<%4>")
+                    .arg(line.position.toString()).arg(i).arg(operand.raw, line.raw));
                 return ExecState::Error;
             }
             arguments.append(operand.ast);
@@ -1103,7 +1026,7 @@ ExecState ScriptRunner::executeLine(const LogicalLine& line) {
     //   RETURNFORM <格式串> -> RESULTS:0 = 展开结果（RESULTS 全局，跨函数共享）
     //   然后与 RETURN 相同地弹栈返回。此前未实现 -> 落「其它指令」静默跳过，
     //   函数返回值丢失。eraTW 基础版枚举（BuiltInFunctionCode.cs）含 RETURNFORM。
-    if (name == QLatin1String("RETURNFORM")) {
+    case RunnerInstruction::RETURNFORM: {
         ExpressionEvaluator* ev = &getEvaluator();
         m_lastReturnValue = QVariant::fromValue<qint64>(0);
         if (!line.arguments.isEmpty()) {
@@ -1111,7 +1034,7 @@ ExecState ScriptRunner::executeLine(const LogicalLine& line) {
             QString text;
             if (op.isString) text = op.raw;
             else if (op.ast) {
-                text = ev->evaluate(*op.ast, m_storage, baseData()).toString();
+                text = stringText(ev->evaluate(*op.ast, m_storage, baseData()));
             } else {
                 text = op.raw;
             }
@@ -1124,7 +1047,8 @@ ExecState ScriptRunner::executeLine(const LogicalLine& line) {
         if (!returnFromCall()) return ExecState::Halt;
         return ExecState::Continue;
     }
-    if (name == QLatin1String("RETURN") || name == QLatin1String("RETURNF")) {
+    case RunnerInstruction::RETURN:
+    case RunnerInstruction::RETURNF: {
         m_lastReturnValue = QVariant::fromValue<qint64>(0);
         ExpressionEvaluator* ev = &getEvaluator();
         if (name == QLatin1String("RETURNF")) {
@@ -1132,7 +1056,7 @@ ExecState ScriptRunner::executeLine(const LogicalLine& line) {
                 const Operand& op = line.arguments.first();
                 m_lastReturnValue = op.isString ? QVariant(op.raw)
                     : op.ast ? ev->evaluate(*op.ast, m_storage, baseData())
-                             : ev->evaluate(op.raw, m_storage, baseData());
+                             : evaluateLoadedOperand(*ev, op, m_storage, baseData());
             } else {
                 // 裸 RETURNF：对齐 C# ReturnF(null) —— MethodReturnValue=null，
                 // 调用方按函数类型读缺省值。#FUNCTIONS 必须取**空串**而非把整数
@@ -1173,7 +1097,8 @@ ExecState ScriptRunner::executeLine(const LogicalLine& line) {
     }
 
     // ---- SWAP / SWAPVAR：交换两个变量的值（对齐 C# SP_SWAP_Instruction）----
-    if (name == QLatin1String("SWAP") || name == QLatin1String("SWAPVAR")) {
+    case RunnerInstruction::SWAP:
+    case RunnerInstruction::SWAPVAR: {
         QList<const Operand*> ops;
         if (line.argument.kind == ArgKind::Swap && line.argument.params.size() >= 2) {
             for (const Operand& a : line.argument.params) ops.append(&a);
@@ -1201,8 +1126,10 @@ ExecState ScriptRunner::executeLine(const LogicalLine& line) {
     // ARRAYREMOVE 从临时变量数组里删除元素 —— 空操作导致元素残留、VAR_CNT
     // 涨到上限后 THROW「保持変数が上限に達しています」。
     // 这里实现 1 次元（整数/字符串）数组；角色变量暂不支持（C# 也仅限 1D）。
-    if (name == QLatin1String("ARRAYCOPY") || name == QLatin1String("ARRAYSHIFT")
-        || name == QLatin1String("ARRAYREMOVE") || name == QLatin1String("ARRAYSORT")) {
+    case RunnerInstruction::ARRAYCOPY:
+    case RunnerInstruction::ARRAYSHIFT:
+    case RunnerInstruction::ARRAYREMOVE:
+    case RunnerInstruction::ARRAYSORT: {
         advance();
         QList<Operand> ops;
         for (const Operand& a : line.arguments) {
@@ -1345,8 +1272,9 @@ ExecState ScriptRunner::executeLine(const LogicalLine& line) {
     //   WAITANYKEY -> Console.ReadAnyKey(true,false)
     //   FORCEWAIT  -> Console.ReadAnyKey(false,true) 跳过功能不能略过的 WAIT
     // 三者都挂起等输入；「跳过模式下的差异」属于输入层能力，此处统一等任意键。
-    if (name == QLatin1String("WAIT") || name == QLatin1String("WAITANYKEY")
-        || name == QLatin1String("FORCEWAIT")) {
+    case RunnerInstruction::WAIT:
+    case RunnerInstruction::WAITANYKEY:
+    case RunnerInstruction::FORCEWAIT: {
         // SKIPLOG 跳过中（C# MesSkip）：
         //   WAIT / WAITANYKEY（ReadAnyKey 可跳过）-> 直接放行，保持跳过状态；
         //   FORCEWAIT（ReadAnyKey(false,true) 的 StopMesskip）-> 不可跳过，
@@ -1373,8 +1301,10 @@ ExecState ScriptRunner::executeLine(const LogicalLine& line) {
     // 非分支数不在这里拦：C# 语义是任何输入都写 RESULT 继续执行，
     // 落空分支由脚本自己的流程兜底（SELECTCASE 落空 -> RESTART/GOTO
     // 重画菜单再等输入），引擎只负责把 RESTART/GOTO 跑对。
-    if (name == QLatin1String("INPUT") || name == QLatin1String("ONEINPUT")
-        || name == QLatin1String("INPUTS") || name == QLatin1String("ONEINPUTS")) {
+    case RunnerInstruction::INPUT:
+    case RunnerInstruction::ONEINPUT:
+    case RunnerInstruction::INPUTS:
+    case RunnerInstruction::ONEINPUTS: {
         const bool isStr = (name == QLatin1String("INPUTS")
                             || name == QLatin1String("ONEINPUTS"));
         // C# INPUT_Instruction：**给了实参**才 HasDefValue=true（DefIntValue=实参）。
@@ -1386,15 +1316,19 @@ ExecState ScriptRunner::executeLine(const LogicalLine& line) {
         if (!line.arguments.isEmpty()) {
             const Operand& a0 = line.arguments.first();
             ExpressionEvaluator& ev = getEvaluator();
+            if (!a0.ast && !a0.isString) {
+                m_state->setErrorState();
+                emit errorOccurred(QStringLiteral("%1 参数缺少装载期 AST：%2").arg(name, a0.raw));
+                return ExecState::Error;
+            }
             if (isStr) {
                 m_waitDefault = a0.ast
-                    ? ev.evaluate(*a0.ast, m_storage, baseData()).toString()
-                    : ev.evaluate(a0.raw, m_storage, baseData()).toString();
+                    ? stringText(ev.evaluate(*a0.ast, m_storage, baseData()))
+                    : a0.raw;
             } else {
                 qint64 v = 0;
                 if (a0.ast) v = ev.evaluate(*a0.ast, m_storage, baseData()).toLongLong();
                 else if (a0.isString) v = a0.raw.toLongLong();
-                else v = ev.evaluate(a0.raw, m_storage, baseData()).toLongLong();
                 m_waitDefault = v;
             }
         }
@@ -1409,7 +1343,7 @@ ExecState ScriptRunner::executeLine(const LogicalLine& line) {
     //   整数输入写 RESULT，字符串输入写 RESULTS（另一者**保持原值**，C# 语义）。
     //   无缺省值（与 INPUT 一样必须等玩家输入；空回车由输入层忽略）。
     //   画面上 PRINTBUTTON 生成的整数/字符串按钮都可以点。
-    if (name == QLatin1String("INPUTANY")) {
+    case RunnerInstruction::INPUTANY: {
         m_waitDefault = QVariant();
         if (m_engine) m_engine->setMesSkip(false);
         advance();
@@ -1420,8 +1354,10 @@ ExecState ScriptRunner::executeLine(const LogicalLine& line) {
     //   一つも無い状態なら、デフォルト値があれば**入力待ちをせずに**
     //   RESULT(S) にデフォルト値を入れる（缺省值も無ければエラー）。
     //   有按钮时退化为普通 INPUT/INPUTS 等待（按钮值白名单校验暂不强制）。
-    if (name == QLatin1String("BINPUT") || name == QLatin1String("BINPUTS")
-        || name == QLatin1String("ONEBINPUT") || name == QLatin1String("ONEBINPUTS")) {
+    case RunnerInstruction::BINPUT:
+    case RunnerInstruction::BINPUTS:
+    case RunnerInstruction::ONEBINPUT:
+    case RunnerInstruction::ONEBINPUTS: {
         const bool isStr = (name == QLatin1String("BINPUTS")
                             || name == QLatin1String("ONEBINPUTS"));
         // ONEBINPUT/ONEBINPUTS：BINPUT 系的「单字符输入」版（C# OneInput：
@@ -1446,22 +1382,22 @@ ExecState ScriptRunner::executeLine(const LogicalLine& line) {
         const Operand& def = line.arguments.first();
         if (isStr) {
             const QString v = def.ast
-                ? getEvaluator().evaluate(*def.ast, m_storage, baseData()).toString()
+                ? stringText(getEvaluator().evaluate(*def.ast, m_storage, baseData()))
                 : (def.isString ? def.raw
-                                : getEvaluator().evaluate(def.raw, m_storage, baseData()).toString());
+                                : stringText(evaluateLoadedOperand(getEvaluator(), def, m_storage, baseData())));
             if (m_storage) m_storage->setGlobalStr1D(QStringLiteral("RESULTS"), 0, v);
         } else {
             qint64 v = 0;
             if (def.ast) v = getEvaluator().evaluate(*def.ast, m_storage, baseData()).toLongLong();
             else if (def.isString) v = def.raw.toLongLong();
-            else v = getEvaluator().evaluate(def.raw, m_storage, baseData()).toLongLong();
+            else v = evaluateLoadedOperand(getEvaluator(), def, m_storage, baseData()).toLongLong();
             if (m_storage) m_storage->setSystemVariable(QStringLiteral("RESULT"), 0, v);
         }
         advance();
         return ExecState::Continue;
     }
     // ---- 实时 / 限时输入（对齐 C# INPUTMOUSEKEY / TONEINPUT）----
-    if (name == QLatin1String("INPUTMOUSEKEY")) {
+    case RunnerInstruction::INPUTMOUSEKEY: {
         qint64 timeout = 0;
         if (!line.arguments.isEmpty()) evalInt(line.arguments.first().ast, line.arguments.first().raw, timeout);
         advance();
@@ -1477,7 +1413,8 @@ ExecState ScriptRunner::executeLine(const LogicalLine& line) {
     //   暂停 <超时>ms 等输入；到点没输入则按缺省值交付（RESULT/RESULTS）；
     //   有输入则取输入。eraMegaten 的 SYSTEM_TITLE.erb:62 TINPUTS 100, "-1", 0
     //   此前被静默忽略。TINPUTS 的缺省值为字符串（写 RESULTS）。
-    if (name == QLatin1String("TINPUT") || name == QLatin1String("TINPUTS")) {
+    case RunnerInstruction::TINPUT:
+    case RunnerInstruction::TINPUTS: {
         // 参数是**独立操作数**（AstBuilder 按顶层逗号/空白切分）：
         //   TINPUT  <超时ms>, <缺省整数>[, <跳过标记>]
         //   TINPUTS <超时ms>, <缺省字符串>[, <跳过标记>]
@@ -1496,8 +1433,8 @@ ExecState ScriptRunner::executeLine(const LogicalLine& line) {
             // 再拿去当表达式求值（那样 `abc` 会被当成变量名 -> 0）。整数同理优先 ast。
             const auto readStr = [&](const Operand& o) -> QString {
                 if (o.isString) return o.raw;
-                if (o.ast) return getEvaluator().evaluate(*o.ast, m_storage, baseData()).toString();
-                return getEvaluator().evaluate(o.raw, m_storage, baseData()).toString();
+                if (o.ast) return stringText(getEvaluator().evaluate(*o.ast, m_storage, baseData()));
+                return stringText(evaluateLoadedOperand(getEvaluator(), o, m_storage, baseData()));
             };
             if (fnForm) {
                 // 兼容 `NAME(args)` 形式（整行被归约成一个调用节点）
@@ -1506,7 +1443,7 @@ ExecState ScriptRunner::executeLine(const LogicalLine& line) {
                 if (fn.arguments().size() >= 2) {
                     if (name == QLatin1String("TINPUTS")) {
                         ExpressionEvaluator* ev = &getEvaluator();
-                        defStr = ev->evaluate(*fn.arguments().at(1), m_storage, baseData()).toString();
+                        defStr = stringText(ev->evaluate(*fn.arguments().at(1), m_storage, baseData()));
                     } else {
                         evalInt(fn.arguments().at(1), QString(), def);
                     }
@@ -1541,7 +1478,8 @@ ExecState ScriptRunner::executeLine(const LogicalLine& line) {
         }
         return ExecState::WaitInput;
     }
-    if (name == QLatin1String("TONEINPUT") || name == QLatin1String("TONEINPUTS")) {
+    case RunnerInstruction::TONEINPUT:
+    case RunnerInstruction::TONEINPUTS: {
         const QList<Operand> args = inputArgs(line);   // 逗号同样是独立操作数
         qint64 timeout = 0;
         if (!args.isEmpty()) evalInt(args.first().ast, args.first().raw, timeout);
@@ -1557,9 +1495,9 @@ ExecState ScriptRunner::executeLine(const LogicalLine& line) {
             if (def.isString) {
                 defStr = def.raw;
             } else if (def.ast) {
-                defStr = getEvaluator().evaluate(*def.ast, m_storage, baseData()).toString();
+                defStr = stringText(getEvaluator().evaluate(*def.ast, m_storage, baseData()));
             } else {
-                defStr = getEvaluator().evaluate(def.raw, m_storage, baseData()).toString();
+                defStr = stringText(evaluateLoadedOperand(getEvaluator(), def, m_storage, baseData()));
             }
         }
         if (timeout < 0) timeout = 0;
@@ -1576,7 +1514,7 @@ ExecState ScriptRunner::executeLine(const LogicalLine& line) {
         return ExecState::WaitInput;
     }
     // AWAIT n：挂起 n 毫秒后自动继续（不阻塞、不请求输入；C# InputType.Void）
-    if (name == QLatin1String("AWAIT")) {
+    case RunnerInstruction::AWAIT: {
         const QList<Operand> args = inputArgs(line);
         qint64 ms = 0;
         if (!args.isEmpty()) evalInt(args.first().ast, args.first().raw, ms);
@@ -1595,7 +1533,7 @@ ExecState ScriptRunner::executeLine(const LogicalLine& line) {
     //     flag != 0 -> InputType.Void   纯计时等待，输入不能跳过（DQPRINT 逐字动画）
     //     flag == 0 -> InputType.EnterKey + Timelimit 点击/回车可提前结束
     //   计时路径完整（挂起 -> 计时器到点恢复）。
-    if (name == QLatin1String("TWAIT")) {
+    case RunnerInstruction::TWAIT: {
         // 两种写法都要认：`TWAIT(1000,0)`（整行被归约成 Function 节点）与
         // `TWAIT 1000,0`（独立操作数，且逗号也在列表里）。以前只认前者，
         // 逗号形态下 ms 恒为 0 -> 直接 Continue，等于**没有等待**。
@@ -1645,7 +1583,8 @@ ExecState ScriptRunner::executeLine(const LogicalLine& line) {
     // FORCE_BEGIN（EE v12）走同一条分支，只是 force=true —— 跳过 __CAN_BEGIN__
     // 状态检查（强制切换流程，C# SetBegin(keyword, true)）。
     // 非法关键字两者都报错（关键字校验先于 force 检查）。
-    if (name == QLatin1String("BEGIN") || name == QLatin1String("FORCE_BEGIN")) {
+    case RunnerInstruction::BEGIN:
+    case RunnerInstruction::FORCE_BEGIN: {
         const bool force = (name == QLatin1String("FORCE_BEGIN"));
         const QString keyword = line.arguments.isEmpty() ? QString() : line.arguments.first().raw;
         QString error;
@@ -1666,8 +1605,27 @@ ExecState ScriptRunner::executeLine(const LogicalLine& line) {
         return ExecState::Halt;
     }
 
+    case RunnerInstruction::LOADDATA: {
+        if (!m_engine) {
+            m_state->setErrorState();
+            return ExecState::Error;
+        }
+        m_engine->executeLogicalLine(line);
+        if (m_state->getExecState() == ExecState::Error) return ExecState::Error;
+        m_loops.clear();
+        m_callContexts.clear();
+        m_functionLocals.clear();
+        m_eventChain.active = false;
+        m_lastPrivateScope.clear();
+        m_table->resetPosition();
+        m_state->clearFunctionList();
+        if (m_machine) m_machine->dataLoaded();
+        return ExecState::WaitEvent;
+    }
+
     // ---- SAVEGAME / LOADGAME：记录返回状态并切换（对齐 C# SAVELOADGAME_Instruction）----
-    if (name == QLatin1String("SAVEGAME") || name == QLatin1String("LOADGAME")) {
+    case RunnerInstruction::SAVEGAME:
+    case RunnerInstruction::LOADGAME: {
         if (!m_state->canSave()) {
             m_state->setErrorState();
             emit errorOccurred(QStringLiteral("@%1 中不能执行 SAVEGAME/LOADGAME 命令")
@@ -1692,8 +1650,7 @@ ExecState ScriptRunner::executeLine(const LogicalLine& line) {
     // 段结构与 PRINTDATA 完全相同，区别：**不显示**，把被选中段的文本写进
     // `STRDATA <字符串变量>` 的变量里。之前没有这个分支，整段被逐行当普通
     // 指令执行，于是 `DATA`/`ENDDATA` 报 [未完成]（02_PRINT 的回归）。
-    if (isStrDataName(name)) {
-        if (!line.printDataReady) buildPrintDataBlock(line, pc, sd);
+    case RunnerInstruction::StrData: {
         const int next = line.printDataEndLine >= 0 ? line.printDataEndLine + 1 : pc + 1;
         if (sd && !line.printDataGroups.isEmpty() && !line.arguments.isEmpty() && m_engine) {
             const int count = line.printDataGroups.size();
@@ -1704,22 +1661,21 @@ ExecState ScriptRunner::executeLine(const LogicalLine& line) {
                 if (k > 0) value += QLatin1Char('\n');
                 value += m_engine->printDataFormText(sd->lines.at(grp.at(k)));
             }
-            m_engine->assignPrintDataString(line.arguments.first().raw, value);
+            m_engine->assignPrintDataString(line.arguments.first(), value);
         }
         m_table->setPosition(script, next, false);
         return ExecState::Continue;
     }
 
     // ---- PRINTDATA 系（C# PRINT_DATA_Instruction）----
-    if (isPrintDataName(name)) {
-        if (!line.printDataReady) buildPrintDataBlock(line, pc, sd);
+    case RunnerInstruction::PrintData: {
         const int next = line.printDataEndLine >= 0 ? line.printDataEndLine + 1 : pc + 1;
         if (sd && !line.printDataGroups.isEmpty()) {
             const int count = line.printDataGroups.size();
             const int choice = static_cast<int>(getEvaluator().random().nextInt(count));
             // 可选整型变量实参（如 `PRINTDATAW LOCAL:0`）：写入被选中的段下标
             if (!line.arguments.isEmpty() && m_engine) {
-                m_engine->assignPrintDataIndex(line.arguments.first().raw, choice);
+                m_engine->assignPrintDataIndex(line.arguments.first(), choice);
             }
             const QList<int>& grp = line.printDataGroups.at(choice);
             for (int k = 0; k < grp.size(); ++k) {
@@ -1751,7 +1707,9 @@ ExecState ScriptRunner::executeLine(const LogicalLine& line) {
     }
 
     // ---- CALLTRAIN / STOPCALLTRAIN / DOTRAIN ----
-    if (m_machine && name == QLatin1String("CALLTRAIN")) {
+    case RunnerInstruction::CALLTRAIN: {
+        if (!m_machine) break;
+
         qint64 count = 0;
         evalInt(line.arguments.isEmpty() ? QSharedPointer<ExpressionNode>()
                                          : line.arguments.first().ast,
@@ -1760,14 +1718,18 @@ ExecState ScriptRunner::executeLine(const LogicalLine& line) {
         advance();
         return ExecState::Continue;
     }
-    if (m_machine && name == QLatin1String("STOPCALLTRAIN")) {
+    case RunnerInstruction::STOPCALLTRAIN: {
+        if (!m_machine) break;
+
         if (m_machine->isContinuousTrain()) {
             m_machine->clearCommands();
         }
         advance();
         return ExecState::Continue;
     }
-    if (m_machine && name == QLatin1String("DOTRAIN")) {
+    case RunnerInstruction::DOTRAIN: {
+        if (!m_machine) break;
+
         // 位置守卫（对齐 C# DOTRAIN_Instruction）：仅 @EVENTTRAIN / @SHOW_STATUS /
         // @SHOW_USERCOM / @USERCOM / @EVENTCOMEND 上下文合法，其余位置报错。
         // 文档 Command.html：「只能在 @EVENTTRAIN、@SHOW_STATUS、@SHOW_USERCOM、
@@ -1797,6 +1759,10 @@ ExecState ScriptRunner::executeLine(const LogicalLine& line) {
         m_state->setSystemState(SystemStateCode::Train_DoTrain);
         advance();
         return ExecState::Continue;
+    }
+
+    case RunnerInstruction::Other:
+        break;
     }
 
     // ---- 其它指令：交给 ExecutionEngine 执行（赋值 / PRINT / …）----
@@ -1931,23 +1897,13 @@ bool ScriptRunner::maybeContinueEventChain()
 //   * isTry ：找不到函数时静默跳过（不回退、不报错）
 // 其余（实参求值、引用形参、固定下标数组展开、私有变量初值）与旧 CALL 一致。
 // ---------------------------------------------------------------------------
-QString ScriptRunner::expandCallFormLabel(const QString& raw)
-{
-    QString text = raw.trimmed();
-    if (text.isEmpty()) return text;
-    // Script FORM labels are compiled into the first operand by AstBuilder.
-    // This helper remains for non-script/legacy callers, but script execution must
-    // never reconstruct a StrForm AST from the evaluated string.
-    return text;
-}
-
 ExecState ScriptRunner::doCallLine(const LogicalLine& line, bool isForm, bool isTry,
                                    bool isJump, int returnLine)
 {
     QString label = line.arguments.isEmpty() ? QString() : line.arguments.first().raw;
     if (isForm && !line.arguments.isEmpty() && line.arguments.first().ast)
-        label = getEvaluator().evaluate(*line.arguments.first().ast, m_storage, baseData()).toString();
-    else if (isForm) label = expandCallFormLabel(label);
+        label = stringText(getEvaluator().evaluate(*line.arguments.first().ast, m_storage, baseData()));
+    else if (isForm) throw std::runtime_error("FORM label has no load-time AST");
     // [qdbug]（保留的调试桩）：CALL 增加脚本名与源码位置。currentLine() 是
     // 0 基内部行号（比 ERB 源码行号小 1），line.position 才是源码位置；
     // 两者并列便于对照 eraTW 原始代码。
@@ -1999,7 +1955,9 @@ ExecState ScriptRunner::doCallLine(const LogicalLine& line, bool isForm, bool is
         const UserParamDecl* param = info && i - 1 < info->params.size()
                                          ? &info->params.at(i - 1) : nullptr;
         if (param && param->isReference) {
-            const QString actualName = bareVarName(source.raw);
+            if (!source.ast || source.ast->kind() != NodeKind::Variable)
+                throw std::runtime_error("Reference argument has no VariableNode");
+            const QString actualName = static_cast<const VariableNode&>(*source.ast).name();
             if (!actualName.isEmpty()) {
                 references.insert(param->name.toUpper(), m_storage->resolvedStorageName(actualName));
             }
@@ -2009,15 +1967,18 @@ ExecState ScriptRunner::doCallLine(const LogicalLine& line, bool isForm, bool is
         const QVariant value = source.isString ? QVariant(source.raw)
             : source.ast
                 ? getEvaluator().evaluate(*source.ast, m_storage, baseData())
-                : getEvaluator().evaluate(source.raw, m_storage, baseData());
-        Operand arg(value.toString());
-        arg.isString = value.typeId() == QMetaType::QString;
+                : evaluateLoadedOperand(getEvaluator(), source, m_storage, baseData());
+        Operand arg(stringText(value));
+        arg.isString = isStringValue(value);
+        arg.snapshot = value;
         evaluated.append(arg);
     }
     // Emuera 允许 CALL F(array) 对应 F(array:0, array:1, ...)。
     // 在绑定前按固定下标形参展开，避免数组被错误求值为单个标量。
     if (evaluated.size() == 2 && info && !info->params.isEmpty()) {
-        QString actualName = bareVarName(line.arguments.value(1).raw);
+        const auto actual = line.arguments.value(1).ast;
+        QString actualName = actual && actual->kind() == NodeKind::Variable
+            ? static_cast<const VariableNode&>(*actual).name() : QString();
         bool expandable = !actualName.isEmpty();
         for (const UserParamDecl& p : info->params)
             expandable = expandable && p.fixedIndex >= 0 && p.varName.compare(actualName, Qt::CaseInsensitive) == 0;
@@ -2096,9 +2057,9 @@ ExecState ScriptRunner::doTryListLine(const LogicalLine& line) {
         if (target.startsWith(QLatin1Char('@')) || target.startsWith(QLatin1Char('$')))
             target.remove(0, 1);
         if (!entry->arguments.first().ast)
-            target = expandCallFormLabel(target);
+            throw std::runtime_error("FORM list entry has no load-time AST");
         else
-            target = getEvaluator().evaluate(*entry->arguments.first().ast, m_storage, baseData()).toString();
+            target = stringText(getEvaluator().evaluate(*entry->arguments.first().ast, m_storage, baseData()));
         target = target.trimmed();
         if (target.isEmpty()) continue;
 
@@ -2164,23 +2125,21 @@ int ScriptRunner::findGotoLabelInFunction(const QString& label, const QString& o
 bool ScriptRunner::caseMatches(const LogicalLine& caseLine,
                                const QVariant& valueVar, bool valueIsStr)
 {
-    if (!caseLine.caseCacheReady)
-        AstBuilder::buildCaseClauses(caseLine, [this](const QString& text) {
-            return m_table ? m_table->expressionAst(text) : QSharedPointer<ExpressionNode>();
-        });
+    if (!caseLine.caseCacheReady) throw std::runtime_error("CASE has no load-time clauses");
 
     ExpressionEvaluator& ev = getEvaluator();
     // perf：SELECTCASE 值只转一次字符串（此前每个 CASE 臂都 toString 一次）
-    const QString valueStr = valueIsStr ? valueVar.toString() : QString();
+    const QString valueStr = valueIsStr ? stringText(valueVar) : QString();
     const auto evalClause = [&](const CaseClause& clause, bool right) -> QVariant {
-        const QString& text = right ? clause.textB : clause.textA;
         const auto& ast = right ? clause.astB : clause.astA;
-        if (ast) return ev.evaluate(*ast, m_storage, baseData());
-        return ev.evaluate(text, m_storage, baseData());
+        if (!ast) throw std::runtime_error("CASE clause has no load-time AST");
+        const auto value = ev.evaluate(*ast, m_storage, baseData());
+        if (!value.isValid()) throw std::runtime_error("Invalid CASE expression");
+        return value;
     };
 
     const auto compare = [&](const QVariant& lhs, const QVariant& rhs) {
-        if (valueIsStr) return QString::compare(lhs.toString(), rhs.toString(), Qt::CaseSensitive);
+        if (valueIsStr) return QString::compare(stringText(lhs), stringText(rhs), Qt::CaseSensitive);
         const qint64 l = lhs.toLongLong(), r = rhs.toLongLong();
         return l < r ? -1 : l > r ? 1 : 0;
     };
@@ -2202,7 +2161,7 @@ bool ScriptRunner::caseMatches(const LogicalLine& caseLine,
                 // 纯字符串字面量臂：不经 AST/ QVariant，直接比较（eraTW 地图热点）
                 if (clause.isSimpleStr) {
                     if (valueStr == clause.strLiteral) return true;
-                } else if (valueStr == evalClause(clause, false).toString()) {
+                } else if (valueStr == stringText(evalClause(clause, false))) {
                     return true;
                 }
             } else if (compare(valueVar, evalClause(clause, false)) == 0) {
@@ -2285,71 +2244,14 @@ void ScriptRunner::writeIntVar(const QString& name, const QList<int>& indices, q
     m_storage->setGlobalInt1D(name, indices.value(0), value);
 }
 
-// 顶层 ':' 切分（尊重括号/引号），把 `VAR:a:b` 拆成 [VAR, a, b]
-static QStringList splitColonTopLevel(const QString& text) {
-    QStringList out;
-    QString cur;
-    int depth = 0;
-    QChar quote;
-    for (const QChar c : text) {
-        if (!quote.isNull()) { cur += c; if (c == quote) quote = QChar(); continue; }
-        if (c == QLatin1Char('"') || c == QLatin1Char('\'')) { quote = c; cur += c; continue; }
-        if (c == QLatin1Char('(') || c == QLatin1Char('[')) { ++depth; cur += c; continue; }
-        if (c == QLatin1Char(')') || c == QLatin1Char(']')) { --depth; cur += c; continue; }
-        if (c == QLatin1Char(':') && depth == 0) { out.append(cur); cur.clear(); continue; }
-        cur += c;
-    }
-    out.append(cur);
-    return out;
-}
-
 bool ScriptRunner::extractVarRef(const Operand& op, QString& name, QList<int>& indices) {
-    indices.clear();
-    if (op.ast && op.ast->kind() == NodeKind::Variable) {
-        const VariableNode& var = static_cast<const VariableNode&>(*op.ast);
-        name = var.name();
-        for (const QSharedPointer<ExpressionNode>& idxNode : var.indices()) {
-            if (!idxNode) { indices.append(0); continue; }
-            if (m_evaluator) {
-                indices.append(static_cast<int>(
-                    m_evaluator->evaluate(*idxNode, m_storage, baseData()).toLongLong()));
-            } else {
-                qint64 v = 0;
-                evalInt(idxNode, QString(), v);
-                indices.append(static_cast<int>(v));
-            }
-        }
-        return true;
-    }
-    // 退化：从 raw 文本解析 "NAME[:下标[:下标…]]"（下标可以是变量/表达式）
-    QString raw = op.raw.trimmed();
-    const QStringList parts = splitColonTopLevel(raw);
-    if (parts.size() > 1) {
-        for (int i = 1; i < parts.size(); ++i) {
-            const QString idxText = parts.at(i).trimmed();
-            bool ok = false;
-            const int direct = idxText.toInt(&ok);
-            if (ok) { indices.append(direct); continue; }
-            int value = 0;
-            if (m_table) {
-                const QSharedPointer<ExpressionNode> ast = m_table->expressionAst(idxText);
-                if (ast) {
-                    if (m_evaluator) {
-                        value = static_cast<int>(
-                            m_evaluator->evaluate(*ast, m_storage, baseData()).toLongLong());
-                    } else {
-                        qint64 v = 0;
-                        evalInt(ast, QString(), v);
-                        value = static_cast<int>(v);
-                    }
-                }
-            }
-            indices.append(value);
-        }
-        raw = parts.first();
-    }
-    name = bareVarName(raw);
-    return !name.isEmpty();
+    if (!op.ast || op.ast->kind() != NodeKind::Variable)
+        throw std::runtime_error("Variable reference has no load-time VariableNode");
+    const auto& variable = static_cast<const VariableNode&>(*op.ast);
+    name = variable.name();
+    ExpressionEvaluator fallback;
+    indices = (m_evaluator ? *m_evaluator : fallback).resolveIndices(variable, m_storage, baseData());
+    return true;
 }
 
 bool ScriptRunner::extractVarRef(const Operand& op, QString& name, int& index) {
@@ -2360,7 +2262,12 @@ bool ScriptRunner::extractVarRef(const Operand& op, QString& name, int& index) {
 }
 
 void ScriptRunner::writeLoopCounter(const QString& rawName, qint64 value) {
-    Operand counter(rawName);
+    Operand counter;
+    counter.ast = QSharedPointer<VariableNode>::create(rawName);
+    writeLoopCounter(counter, value);
+}
+
+void ScriptRunner::writeLoopCounter(const Operand& counter, qint64 value) {
     QString name;
     QList<int> indices;
     if (extractVarRef(counter, name, indices)) writeIntVar(name, indices, value);
@@ -2369,7 +2276,7 @@ void ScriptRunner::writeLoopCounter(const QString& rawName, qint64 value) {
 void ScriptRunner::bindArguments(const UserFunctionDecl* info, const QList<Operand>& callArgs,
                                  const QHash<QString, QString>& references) {
     const auto bindOne = [this, &references](const UserParamDecl* p, int position,
-                                bool argIsString, const QString& strValue, qint64 intValue) {
+                                bool argIsString, const QString& strValue, qint64 intValue, const QVariant& snapshot = {}) {
         switch (p ? p->target : UserParamTarget::Unknown) {
         case UserParamTarget::Arg:
             m_storage->setArgInt(p->index, intValue);
@@ -2377,7 +2284,7 @@ void ScriptRunner::bindArguments(const UserFunctionDecl* info, const QList<Opera
             m_storage->setLocalAlias(p->name, p->index);
             break;
         case UserParamTarget::Args:
-            m_storage->setArgStr(p->index, argIsString ? strValue : QString::number(intValue));
+            m_storage->setStringSlot("ARGS", {p->index}, flatString(snapshot.isValid() ? snapshot : QVariant(argIsString ? strValue : QString::number(intValue))));
             m_storage->setLocalAlias(p->name, p->index);
             break;
         case UserParamTarget::LocalVar:
@@ -2391,8 +2298,8 @@ void ScriptRunner::bindArguments(const UserFunctionDecl* info, const QList<Opera
                 const int dim = (m_table && m_table->variableTable().find(vn))
                                     ? m_table->variableTable().find(vn)->dimension : 1;
                 if (p->type == OperandType::Str) {
-                    m_storage->setGlobalStr1D(vn, p->fixedIndex,
-                                              argIsString ? strValue : QString::number(intValue));
+                    m_storage->setStringSlot(vn, p->fixedIndices.isEmpty() ? QList<int>{p->fixedIndex} : p->fixedIndices,
+                        flatString(snapshot.isValid() ? snapshot : QVariant(argIsString ? strValue : QString::number(intValue))));
                 } else if (dim >= 2 && p->fixedIndices.size() >= 2) {
                     m_storage->setGlobalInt2D(vn, p->fixedIndices.at(0), p->fixedIndices.at(1),
                                               intValue);
@@ -2402,13 +2309,13 @@ void ScriptRunner::bindArguments(const UserFunctionDecl* info, const QList<Opera
                 break;
             }
             m_storage->setParameter(p->varName.isEmpty() ? p->name : p->varName,
-                p->type == OperandType::Str ? QVariant(argIsString ? strValue : QString::number(intValue))
+                p->type == OperandType::Str ? (snapshot.isValid() ? snapshot : QVariant(argIsString ? strValue : QString::number(intValue)))
                                             : QVariant(intValue));
             break;
         case UserParamTarget::Unknown:
         default:
             // 未归类（或无声明）：退化为按位置绑定到 ARG/ARGS
-            if (argIsString) m_storage->setArgStr(position, strValue);
+            if (argIsString) m_storage->setStringSlot("ARGS", {position}, flatString(snapshot.isValid() ? snapshot : QVariant(strValue)));
             else             m_storage->setArgInt(position, intValue);
             break;
         }
@@ -2429,20 +2336,19 @@ void ScriptRunner::bindArguments(const UserFunctionDecl* info, const QList<Opera
                 // doCallLine 已在调用者上下文求值；没有 AST 的 transport 数值
                 // 是值而非原始表达式，包含 long.MinValue 时不能再按字面量解析。
                 bool transported = false;
-                if (!a.ast) intValue = a.raw.toLongLong(&transported);
+                if (a.snapshot.isValid()) { intValue = a.snapshot.toLongLong(); transported = true; }
+                else if (!a.ast) intValue = a.raw.toLongLong(&transported);
                 if (!transported) evalInt(a.ast, a.raw, intValue);
             }
         }
-        bindOne(param, position, a.isString, a.raw, intValue);
+        bindOne(param, position, a.isString, a.raw, intValue, a.snapshot);
     }
     if (!info) return;
     for (int position = supplied; position < info->params.size(); ++position) {
         const UserParamDecl& param = info->params.at(position);
         if (param.hasDefault) {
             const bool stringDefault = param.type == OperandType::Str && !param.defaultStr.isEmpty();
-            QString text = param.defaultStr;
-            if (stringDefault && text.size() >= 2 && text.startsWith(QLatin1Char('"'))
-                && text.endsWith(QLatin1Char('"'))) text = text.mid(1, text.size() - 2);
+            const QString& text = param.defaultStr;
             bindOne(&param, position, stringDefault, text, param.defaultInt);
             continue;
         }
@@ -2517,7 +2423,7 @@ bool ScriptRunner::invokeUserFunction(const QString& name, const QList<QVariant>
         m_storage->setReference(it.key(), it.value());
     for (int i = 0; i < args.size(); ++i) {
         const QVariant& v = args.at(i);
-        const bool isStr = (v.typeId() == QMetaType::QString);
+        const bool isStr = (isStringValue(v));
         const bool omitted = !v.isValid();   // 省略实参（evaluateFunction 记为无效 QVariant）
         const UserParamDecl* param = (i < info->params.size()) ? &info->params.at(i) : nullptr;
         // `#DIM REF` 引用形参：实参必须是裸变量名（对齐语句 CALL 路径的
@@ -2543,7 +2449,7 @@ bool ScriptRunner::invokeUserFunction(const QString& name, const QList<QVariant>
             break;
         case UserParamTarget::Args:
             // 省略 -> 空串（对齐 C# 缺省值）；此前整数化成 "0" 污染字符串形参
-            m_storage->setArgStr(param->index, omitted ? QString() : v.toString());
+            m_storage->setStringSlot("ARGS", {param->index}, flatString(omitted ? QVariant(QString()) : v));
             m_storage->setLocalAlias(param->name, param->index);
             break;
         case UserParamTarget::LocalVar:
@@ -2559,7 +2465,7 @@ bool ScriptRunner::invokeUserFunction(const QString& name, const QList<QVariant>
         case UserParamTarget::Unknown:
         default:
             m_storage->setArgInt(i, omitted ? 0 : v.toLongLong());
-            if (omitted || isStr) m_storage->setArgStr(i, omitted ? QString() : v.toString());
+            if (omitted || isStr) m_storage->setStringSlot("ARGS", {i}, flatString(omitted ? QVariant(QString()) : v));
             break;
         }
     }
@@ -2571,9 +2477,7 @@ bool ScriptRunner::invokeUserFunction(const QString& name, const QList<QVariant>
         const UserParamDecl& param = info->params.at(position);
         if (param.hasDefault) {
             const bool stringDefault = param.type == OperandType::Str && !param.defaultStr.isEmpty();
-            QString text = param.defaultStr;
-            if (stringDefault && text.size() >= 2 && text.startsWith(QLatin1Char('"'))
-                && text.endsWith(QLatin1Char('"'))) text = text.mid(1, text.size() - 2);
+            const QString& text = param.defaultStr;
             switch (param.target) {
             case UserParamTarget::Arg:
                 m_storage->setArgInt(param.index, param.defaultInt);

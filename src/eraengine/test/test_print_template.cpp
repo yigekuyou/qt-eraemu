@@ -135,8 +135,36 @@ int main(int argc, char** argv) {
         check(spans.size() == 2 && spans[0].style.bold && !spans[0].style.italic && spans[1].style.italic && !spans[1].style.bold, "nested button styles restored");
         check(row.segments.first().tooltip == "a > b", "quoted greater-than scanner");
     }
+    const auto printHtmlFixture = [&](const QString& text) {
+        const auto compiled = PrintTemplateCompiler::compile(QSharedPointer<LiteralNode>::create(text));
+        console.printTemplate(PrintTemplateCompiler::evaluate(*compiled, [](const ExpressionNode&) { return QString(); }));
+    };
     console.clearAll();
-    console.printHtml("<font color='red'><img src='a&amp;b' width='200'><shape type='rect' param='100,50'></font><b>x</b>y &amp;lt; &#65; &#x1F600;<br/>");
+    printHtmlFixture("<shape type = 'space' param = '100'><button value = '0' title = 'start'>START</button><br>");
+    check(console.buffer().count() == 1
+          && console.buffer().at(0).segments.size() == 2
+          && !console.buffer().at(0).segments.first().isButton
+          && console.buffer().at(0).segments.last().isButton
+          && console.buffer().at(0).segments.last().intValue == 0
+          && console.buffer().at(0).segments.last().tooltip == "start",
+          "HTML button retains value and tooltip after a nonbutton spacer");
+    console.notifyInputRequested("INPUT");
+    qint64 submittedButton = -1;
+    const auto inputConnection = QObject::connect(&console, &ConsoleBackend::inputSubmitted,
+        [&](qint64 value) { submittedButton = value; });
+    const auto blocks = console.lineBlocks(0);
+    bool clickableStart = false;
+    for (const auto& block : blocks) {
+        const auto data = block.toMap();
+        if (data.value("text").toString() != "START") continue;
+        clickableStart = data.value("clickable").toBool();
+        console.clickAt(data.value("lineIndex").toInt(), data.value("segmentIndex").toInt());
+    }
+    check(clickableStart && submittedButton == 0, "HTML button zero submits through flattened block coordinates");
+    QObject::disconnect(inputConnection);
+    console.notifyInputDone();
+    console.clearAll();
+    printHtmlFixture("<font color='red'><img src='a&amp;b' width='200'><shape type='rect' param='100,50'></font><b>x</b>y &amp;lt; &#65; &#x1F600;<br/>");
     check(console.buffer().count() == 1, "self closing break");
     if (console.buffer().count()) {
         const auto& row = console.buffer().at(0); const auto spans = row.flatSpans();
@@ -163,7 +191,7 @@ int main(int argc, char** argv) {
     console.clearAll();
     console.setGridColumns(4);          // 36px ÷ 9px = 4 列
     console.setWrappingEnabled(true);
-    console.printHtml("<p align='right'><nobr>abcdefghijk</nobr></p>");
+    printHtmlFixture("<p align='right'><nobr>abcdefghijk</nobr></p>");
     check(console.buffer().count() == 1 && console.buffer().at(0).align == ConsoleAlign::Right,
           "nobr keeps long paragraph together with requested alignment");
     check(console.wrappingEnabled(), "wrapping restored after template");
@@ -180,32 +208,79 @@ int main(int argc, char** argv) {
           && console.buffer().at(0).flatSpans().first().kind == ConsoleSpanKind::Image
           && console.buffer().at(0).flatSpans().first().text == "TW_title004",
           "concatenated HTML compiles image structure at load time with dynamic src");
+    // Truncated markup must preserve its text and the next complete tag.
+    for (const QString& source : QStringList{
+        "prefix<font color='red'", "prefix<font title='a > b", "prefix<"}) {
+        console.clearAll();
+        printHtmlFixture(source);
+        console.flush();
+        check(console.buffer().count() == 1 && console.buffer().at(0).plainText() == source,
+              "unfinished tag and quoted attribute preserve the complete tail");
+    }
+    console.clearAll();
+    printHtmlFixture("prefix<font color=red<b>bold</b>tail<br>");
+    check(console.buffer().count() == 1
+          && console.buffer().at(0).plainText() == "prefix<font color=redboldtail"
+          && console.buffer().at(0).flatSpans().at(2).style.bold,
+          "unfinished tag does not swallow the next complete tag");
+    console.clearAll();
+    storage.setLocalStr(0, "suffix");
+    line = AstBuilder::build(R"ERB(HTML_PRINT "<font title='a > " + @"b' color='red'>%LOCALS%" + "</font><br>")ERB", {}, resolve);
+    engine.executeInstruction(line);
+    check(console.buffer().count() == 1
+          && console.buffer().at(0).plainText() == "suffix"
+          && console.buffer().at(0).flatSpans().first().style.color == QColor("red"),
+          "FORM inside concatenation completes a quoted tag across AST boundaries");
+    console.clearAll();
+    line = AstBuilder::build(R"ERB(HTML_PRINT @"<but" + @"ton value='{LOCAL++}' title='a > b'>" + @"[%LOCALS,8,LEFT%]</button><br>")ERB", {}, resolve);
+    storage.setLocalInt(0, 12);
+    storage.setLocalStr(0, "<b>");
+    engine.executeInstruction(line);
+    check(console.buffer().count() == 1 && console.buffer().at(0).plainText() == "[<b>     ]"
+          && console.buffer().at(0).segments.first().isButton
+          && console.buffer().at(0).segments.first().intValue == 12
+          && console.buffer().at(0).segments.first().tooltip == "a > b"
+          && storage.getLocalInt(0) == 13,
+          "FORM composite retains structure, alignment and exactly-once interpolation");
+    console.clearAll();
+    line = AstBuilder::build(R"ERB(HTML_PRINT @"%"<b>literal</b>&amp;"%<br>")ERB", {}, resolve);
+    engine.executeInstruction(line);
+    check(console.buffer().count() == 1
+          && console.buffer().at(0).plainText() == "<b>literal</b>&amp;"
+          && !console.buffer().at(0).flatSpans().first().style.bold,
+          "literal interpolation stays opaque text including markup and entities");
+    console.clearAll();
+    line = AstBuilder::build(R"ERB(HTML_PRINT @"<b%LOCALS%>tail<br>")ERB", {}, resolve);
+    storage.setLocalStr(0, "r");
+    engine.executeInstruction(line);
+    check(console.buffer().count() == 1 && console.buffer().at(0).plainText() == "<br>tail",
+          "dynamic tag name cannot discard an interpolation or generate structure");
     QList<LogicalLine> lines;
     for (const QString& text : QStringList{"@STR", "#DIMS SHARED", "PRINTS SHARED", "@INT", "#DIM SHARED", "PRINTV SHARED"}) lines.append(AstBuilder::build(text, {}, resolve));
     table.loadScript("scope", lines); table.finalizeParse();
     const auto str = table.lineAt("scope", 2)->arguments.first().ast;
     const auto num = table.lineAt("scope", 5)->arguments.first().ast;
     check(str && num && str != num && str->valueType() == OperandType::Str && num->valueType() == OperandType::Int, "same text bound independently in distinct scopes");
-    table.setPosition("scope", 2); auto cachedStr = table.expressionAst("SHARED");
-    table.setPosition("scope", 5); auto cachedInt = table.expressionAst("SHARED");
-    check(cachedStr && cachedInt && cachedStr != cachedInt && cachedStr->isString() && cachedInt->isInteger(), "runtime expression cache includes scope");
+    check(!table.expressionAst("SHARED"), "finalized table rejects source compilation");
+    EraParseTable loadCompiler(nullptr);
+    const auto compile = [&](const QString& source) { return loadCompiler.expressionAst(source); };
     // The statement's AST is authoritative; raw text must not be reparsed.
     storage.setLocalInt(0, 10);
-    auto assignment = AstBuilder::build("RESULT = LOCAL++", {}, resolve);
+    auto assignment = AstBuilder::build("RESULT = LOCAL++", {}, compile);
     assignment.arguments[1].raw = "999";
     engine.executeInstruction(assignment);
     check(storage.getLocalInt(0) == 11 && storage.getSystemVariable("RESULT", 0) == 10, "assignment consumes AST exactly once");
-    auto staticForm = table.expressionAst("STRFORM(\"value={LOCAL}\")");
+    auto staticForm = compile("STRFORM(\"value={LOCAL}\")");
     storage.setLocalInt(0, 23);
     check(staticForm && staticForm->kind() == NodeKind::StrForm
           && static_cast<const StrFormNode&>(*staticForm).rawText() == "value={LOCAL}"
           && evaluator.evaluate(*staticForm, &storage).toString() == "value=23",
           "STRFORM keeps raw text while evaluating its load-time FORM node");
-    auto rawConsumer = table.expressionAst("STRLEN(STRFORM(\"value={LOCAL}\"))");
+    auto rawConsumer = compile("STRLEN(STRFORM(\"value={LOCAL}\"))");
     check(rawConsumer && evaluator.evaluate(*rawConsumer, &storage).toLongLong() == 13,
           "non-FORM string consumer reads STRFORM raw text");
     storage.setLocalStr(0, "raw {LOCAL}");
-    auto rawForm = table.expressionAst("STRFORM(LOCALS)");
+    auto rawForm = compile("STRFORM(LOCALS)");
     check(rawForm && evaluator.evaluate(*rawForm, &storage).toString() == "raw {LOCAL}",
           "STRFORM variable reads raw text without runtime parsing");
     QString formsOutput;
@@ -213,7 +288,7 @@ int main(int argc, char** argv) {
         [&formsOutput](const QString& text, bool) { formsOutput = text; });
     storage.setLocalInt(0, 42);
     storage.setLocalStr(0, "value {LOCAL} %LOCALS%");
-    auto forms = AstBuilder::build("PRINTFORMSL \"score={LOCAL}; \" + LOCALS", {}, resolve);
+    auto forms = AstBuilder::build("PRINTFORMSL \"score={LOCAL}; \" + LOCALS", {}, compile);
     check(forms.arguments.first().ast && forms.arguments.first().ast->kind() == NodeKind::StrForm,
           "FORMS concatenation compiles to static parts");
     forms.arguments.first().raw = "invalid source";
@@ -224,11 +299,40 @@ int main(int argc, char** argv) {
     storage.setLocalStr(0, "changed");
     engine.executeInstruction(forms);
     check(formsOutput == "score=9; changed", "FORMS parts read current variable values without parsing");
-    engine.executeInstruction(AstBuilder::build("PRINTFORMS \"{LOCAL}\"", {}, resolve));
+    engine.executeInstruction(AstBuilder::build("PRINTFORMS \"{LOCAL}\"", {}, compile));
     check(formsOutput == "9", "FORMS quoted literal compiles interpolation at load time");
-    engine.executeInstruction(AstBuilder::build("PRINTFORMS LOCALS", {}, resolve));
+    engine.executeInstruction(AstBuilder::build("PRINTFORMS LOCALS", {}, compile));
     check(formsOutput == "changed", "FORMS variable is an independent AST operation");
     QObject::disconnect(formsConnection);
+    auto preloaded = compile("123 + 456");
+    check(preloaded && evaluator.evaluate(*preloaded, &storage).toLongLong() == 579,
+          "runtime evaluator consumes compiled node");
+    storage.setLocalInt(1, 0); // allocate the second local slot before bounded list assignment
+    auto listAssignment = AstBuilder::build("LOCAL = 11, 22", {}, compile);
+    listAssignment.arguments[1].raw = "999, LOCAL++";
+    engine.executeInstruction(listAssignment);
+    check(storage.getLocalInt(0) == 11 && storage.getLocalInt(1) == 22,
+          "array assignment evaluates stored list ASTs without splitting raw source");
+    auto lhsAssignment = AstBuilder::build("LOCAL:2 = 77", {}, compile);
+    lhsAssignment.arguments[0].raw = "LOCAL:999";
+    engine.executeInstruction(lhsAssignment);
+    check(storage.getLocalInt(2) == 77, "assignment uses VariableNode instead of raw colon parsing");
+    storage.setLocalInt(0, 0);
+    storage.setLocalStr(0, "left");
+    auto compoundString = AstBuilder::build("LOCALS:(LOCAL++) += \"+\"", {}, compile);
+    engine.executeInstruction(compoundString);
+    check(storage.getLocalInt(0) == 1 && storage.getLocalStr(0) == "left+",
+          "string compound assignment evaluates lvalue index exactly once");
+    int missingErrors = 0;
+    const auto errorConnection = QObject::connect(&engine, &ExecutionEngine::errorOccurred, [&] { ++missingErrors; });
+    auto missingLhs = AstBuilder::build("LOCAL:2 = 99", {}, compile);
+    missingLhs.arguments[0].ast.clear();
+    check(!engine.executeInstruction(missingLhs) && missingErrors > 0 && storage.getLocalInt(2) == 77,
+          "missing lvalue AST fails without modifying slot zero");
+    QObject::disconnect(errorConnection);
+    auto caseLine = AstBuilder::build("CASE 1 TO 3, IS >= 8", {}, compile);
+    check(caseLine.caseCacheReady && caseLine.caseCache.size() == 2,
+          "CASE clauses are ready before execution");
     qInfo() << "print template failures:" << failures;
     return failures ? 1 : 0;
 }

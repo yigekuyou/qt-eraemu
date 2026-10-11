@@ -106,7 +106,13 @@ int main(int argc, char* argv[]) {
         "",                  // 9
         "@SHOW_SHOP",        // 10
         "PRINTL shop",       // 11
-        "ONEINPUT"           // 12
+        "ONEINPUT",          // 12
+        "",                  // 13
+        "@SYSTEM_LOADEND",   // 14
+        "PRINTL system-loadend", // 15
+        "",                  // 16
+        "@EVENTLOAD",        // 17
+        "PRINTL eventload"   // 18
     };
     check(table.loadScript("t", buildLines(table, src)), "loadScript");
     table.finalizeParse();

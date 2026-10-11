@@ -56,8 +56,6 @@ ConsoleBackend::ConsoleBackend(QObject* parent)
     : QAbstractListModel(parent)
 {
     m_historyModel.setSourceModel(this);
-    m_historyModel.setStageStart(0);
-    m_stageModel.setStageStart(0);
     m_timer.setInterval(m_frameMs);
     m_timer.setTimerType(Qt::CoarseTimer);
     connect(&m_timer, &QTimer::timeout, this, &ConsoleBackend::tick);
@@ -209,12 +207,6 @@ void ConsoleBackend::print(const QString& text) {
     part.style = m_style;
     appendPart(part);
     markDirty();
-}
-
-void ConsoleBackend::printHtml(const QString& html) {
-    m_htmlLines.append(html);
-    printTemplate(PrintTemplateCompiler::evaluate(*PrintTemplateCompiler::compile(html),
-        [](const ExpressionNode&) { return QString(); }));
 }
 
 QString ConsoleBackend::lineText(int lineNo) const {
@@ -777,8 +769,6 @@ void ConsoleBackend::updateStageModels() {
         }
     }
     const bool visible = m_stageMode && start < total;
-    const int oldStart = m_stageStart;
-    const bool oldVisible = m_stageMode && m_stageModel.rowCount() > 0;
     QVector<QHash<int, QVariant>> rows;
     if (visible) {
         rows.reserve(total - start);
@@ -792,11 +782,8 @@ void ConsoleBackend::updateStageModels() {
     }
     m_stageSnapshot.setRows(rows);
     m_stageStart = start;
-    m_historyModel.setStageStart(start);
-    m_historyModel.setStageVisible(visible);
-    // 代理只有在舞台边界改变时需要重算，普通舞台 dataChanged 不触碰历史视图。
-    if (oldStart != start || oldVisible != visible)
-        m_historyModel.refresh();
+    // 仅在过滤边界变化时发布行过滤更新，保留历史视图的委托和回看位置。
+    m_historyModel.setStage(start, visible);
     emit stageChanged();
 }
 

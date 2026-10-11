@@ -7,6 +7,7 @@
 #include "execution_engine.h"
 #include "script_runner.h"
 #include "variable_storage.h"
+#include "ast/print_template.h"
 
 static int failures = 0;
 static void run(const QString& name, const QStringList& source, qint64 expected, ExecState expectedState = ExecState::Halt, bool restart = false) {
@@ -42,8 +43,64 @@ static void run(const QString& name, const QStringList& source, qint64 expected,
         ++failures;
     } else qInfo() << "PASS" << name;
 }
+static void htmlFlow() {
+    VariableStorage storage;
+    ProcessState state;
+    EraParseTable table(&state);
+    ExecutionEngine engine(&storage, nullptr);
+    ExpressionEvaluator evaluator;
+    engine.setParseTable(&table); engine.setExpressionEvaluator(&evaluator);
+    table.setExpressionEvaluator(&evaluator); table.setVariableStorage(&storage);
+    ScriptRunner runner(&table, &engine, &state, &storage);
+    runner.setExpressionEvaluator(&evaluator); runner.setStepLimit(1000);
+    QList<PrintTemplate> printed;
+    QObject::connect(&engine, &ExecutionEngine::consolePrintTemplate,
+        [&](const PrintTemplate& output) { printed.append(output); });
+    const QStringList script = {
+        "@MAIN", "#DIMS html", "#DIMS copy", "html '= \"\"",
+        "FOR LOCAL, 0, 2", "html += HTML_SPACE(2) + HTML_BUTTON(LOCALS, LOCAL)", "NEXT",
+        "copy '= html", "HTML_PRINT copy", "HTML_PRINT html", "html '= LOCALS", "HTML_PRINT html",
+        "RETURN", "@HTML_SPACE(ARG)", "#FUNCTIONS",
+        "RETURNF @\"<shape type='space' param='{50*ARG}'>\"",
+        "@HTML_BUTTON(ARGS, ARG)", "#FUNCTIONS",
+        "RETURNF @\"<button value='{ARG}' title='tip{ARG}'>\" + @\"[{ARG}]\" + HTML_SPACE(1) + ARGS + \"</button>\""};
+    QList<LogicalLine> lines;
+    for (int i = 0; i < script.size(); ++i)
+        lines.append(AstBuilder::build(script[i], ScriptPosition("html.ERB", i, 0),
+            [&table](const QString& text) { return table.expressionAst(text); }));
+    table.loadScript("html", lines); table.finalizeParse(); table.setEntryPoint("MAIN");
+    // Identical markup obtained through an ordinary runtime write stays opaque.
+    storage.setLocalStr(0, "<button value='99'>opaque</button>");
+    const auto result = runner.runToCompletion();
+    bool good = result == ExecState::Halt && printed.size() == 3;
+    if (good) {
+        for (int output = 0; output < 2; ++output) {
+            QStringList values, tips; int spaces = 0; QString text;
+            for (const auto& part : printed[output].parts) {
+                if (part.kind == PrintTemplatePart::Kind::Button) { values.append(part.buttonValue); tips.append(part.tooltip); }
+                if (part.kind == PrintTemplatePart::Kind::Shape) ++spaces;
+                if (part.kind == PrintTemplatePart::Kind::Text) text += part.text;
+            }
+            good &= values == QStringList({"0", "1"}) && tips == QStringList({"tip0", "tip1"})
+                && spaces == 4 && text.contains("<button value='99'>opaque</button>");
+        }
+        good &= printed[2].parts.size() == 1 && printed[2].parts[0].kind == PrintTemplatePart::Kind::Text;
+    }
+    if (!good) { qCritical() << "HTML function/accumulation provenance failed" << int(result) << printed.size(); ++failures; }
+    else qInfo() << "PASS HTML function/accumulation provenance";
+    auto ast = table.expressionAst("\"<button value='7'>same</button>\"");
+    const auto tracked = evaluator.evaluate(*ast, &storage);
+    storage.setGlobalStr1D("RESULTS", 0, tracked.toString());
+    storage.setStringProvenance("RESULTS", 0, tracked);
+    storage.setGlobalStr1D("RESULTS", 0, tracked.toString());
+    good = !isStructuredString(storage.stringValueRaw("RESULTS", 0, tracked.toString()));
+    storage.setStringProvenance("RESULTS", 0, tracked); storage.resetGlobals();
+    good &= !isStructuredString(storage.stringValueRaw("RESULTS", 0, tracked.toString()));
+    if (!good) { qCritical() << "HTML provenance invalidation failed"; ++failures; }
+}
 int main(int argc, char** argv) {
     QCoreApplication app(argc, argv);
+    htmlFlow();
     run("CALL spaced parentheses", {"CALL SUB (2,3)", "RETURN", "@SUB(A,B)", "CHECK = A * 10 + B", "RETURN"}, 23);
     run("ENCODETOUNI expands FORM into RESULT array", {"RESULTS '= \"あA\"", "ENCODETOUNI %RESULTS%",
         "CHECK = (RESULT:0 == 2) && (RESULT:1 == 12354) && (RESULT:2 == 65)"}, 1);
@@ -163,6 +220,26 @@ int main(int argc, char** argv) {
         "#FUNCTION",
         "CHECK:1 = N * 3",
         "RETURNF N * 3"}, 21);
+    run("CALLF quoted and nested comma arguments", {
+        "CALLF TAKE_TEXT, \"a,b\"",
+        "CALLF TAKE_PAIR(\"x,y\", 7)",
+        "RETURN",
+        "@TAKE_TEXT(ARGS)",
+        "#FUNCTIONS",
+        "CHECK = STRLENS(ARGS)",
+        "RETURNF ARGS",
+        "@TAKE_PAIR(ARGS, ARG)",
+        "#FUNCTIONS",
+        "CHECK += STRLENS(ARGS) * 10 + ARG",
+        "RETURNF TOSTR(ARG)"}, 40);
+    run("CALLF dynamic variable argument", {
+        "LOCALS '= \"dynamic\"",
+        "CALLF TAKE_TEXT, LOCALS",
+        "RETURN",
+        "@TAKE_TEXT(ARGS)",
+        "#FUNCTIONS",
+        "CHECK = STRLENS(ARGS)",
+        "RETURNF ARGS"}, 7);
     run("CASE mixed forms", {"SELECTCASE 5", "CASE 1, 4 TO 6, IS > 10", "CHECK = 1", "CASEELSE", "CHECK = 999", "ENDSELECT"}, 1);
     run("CASE reversed range", {"SELECTCASE 5", "CASE 6 TO 4", "CHECK = 999", "CASEELSE", "CHECK = 1", "ENDSELECT"}, 1);
     run("CASE string relation", {"SELECTCASE \"abc\"", "CASE IS > \"zzz\"", "CHECK = 999", "CASE IS < \"def\"", "CHECK = 1", "ENDSELECT"}, 1);

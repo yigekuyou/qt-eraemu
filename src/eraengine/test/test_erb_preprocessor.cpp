@@ -268,6 +268,14 @@ int main(int argc, char* argv[]) {
               QString("表达式位置展开不被截断（得到 '%1'）").arg(out2.value(0).text));
     }
 
+    {
+        const QString literal = QString::fromUtf8(R"ERB("<button title='say \"hello\"; &amp; tail'>START</button><br>")ERB");
+        const auto macros = ErbPreprocessor::collectMacroTable(
+            QStringLiteral("#DEFINE HTML_TEXT ") + literal + QStringLiteral(" ; comment\n"));
+        check(macros.value(QStringLiteral("HTML_TEXT")).body == literal,
+              "HTML macro escaped quotes do not expose entity semicolons to comments");
+    }
+
     qDebug() << "\n====================";
     if (g_failures == 0) {
         qDebug() << "[SUCCESS] preprocessor tests passed";

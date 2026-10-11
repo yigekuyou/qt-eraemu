@@ -89,6 +89,27 @@ FocusScope {
     readonly property real cellWidth: Math.max(1, view.width / gridColumns)
     readonly property real cellHeight: Math.max(1, viewport.height / gridRows)
 
+    // 当前舞台和历史是互斥页面；历史刷新不能覆盖用户的回看位置。
+    property bool reviewingHistory: false
+    readonly property bool stageActive: backend && backend.stageMode && stageView.count > 0
+    function showCurrent(): void {
+        reviewingHistory = false;
+        if (stageActive)
+            Qt.callLater(stageView.positionStage);
+        else
+            view.scrollToTail();
+    }
+    function scrollHistory(lines): void {
+        if (stageActive && !reviewingHistory) {
+            if (lines <= 0 || view.count === 0)
+                return;
+            reviewingHistory = true;
+            view.forceLayout();
+            view.positionViewAtEnd();
+        }
+        view.scrollByLines(lines);
+    }
+
     // ---- 委托（一行 = 一个 delegate；行内区块用 Repeater 建出）----
     component LineDelegate: Item {
         id: lineItem
@@ -112,7 +133,7 @@ FocusScope {
                 foreColor: root.foreColor
                 focusColor: root.focusColor
                 logColor: root.logColor
-                isBacklog: stageView.visible ? false : !view.atTail    // 舞台始终是当前画面；历史视图按滚动位置回看
+                isBacklog: root.reviewingHistory || (!root.showingStage && !view.atTail)    // 舞台始终是当前画面；历史视图按滚动位置回看
             }
         }
     }
@@ -208,7 +229,7 @@ FocusScope {
         ListView {
             id: view
             objectName: "consoleListView"
-            visible: true
+            visible: !root.showingStage
             // 右侧让出滚动条宽度：view 收窄到滚动条左缘，最右列文字
             // 不再被滑条盖住；cellWidth 按收窄后的宽度重算，网格仍然满宽
             anchors.left: parent.left
@@ -218,7 +239,7 @@ FocusScope {
             anchors.bottom: parent.bottom
             clip: true                     // 溢出的跨行图在视口边缘裁剪
             model: root.lineModel
-            // 舞台显示时历史视图仍保留为回看源；舞台覆盖在其上，避免切换导致历史 delegate 重建。
+            // 隐藏历史页面仍保留模型和委托，但不参与当前舞台绘制。
             // Qt 文档（ListView::delegateModelAccess，Qt 6.10+）：模型是只读的
             // C++ 模型（ConsoleBackend），委托只**读** role，不写回模型 —— 用
             // DelegateModel.ReadOnly 省掉默认 Qt5ReadWrite 的写保护开销。
@@ -232,17 +253,10 @@ FocusScope {
             interactive: !root.primitiveInput
             boundsBehavior: Flickable.StopAtBounds
 
-            // 每次刷新只要有新行就贴到最新行 —— 对齐 C# EmueraConsole 的
-            // verticalScrollBarUpdate（每次 RefreshStrings 调用：move > 0 即
-            // `ScrollBar.Value += move`，把滚动条推到最底）。C# 没有「上滚就退出
-            // 跟随」的粘滞开关：上滚只是回看（履历），下一次输出立刻贴回最新行。
-            //
-            // 「是否停在末尾」= C# 的 isBackLog（`ScrollBar.Value != Maximum`）：
-            // 用 Qt 文档定义的 Flickable.atYEnd（"true if the flickable view is
-            // positioned at the end"）；再容一像素 —— 委托高度由视图估算，末尾
-            // 可能差一点。
+            // 普通日志模式跟随新增输出；舞台模式下历史回看位置独立保存。
+            // Qt ListView 删除头部行后 originY 可以改变，末尾判断必须减去它。
             readonly property bool atTail: count === 0 || atYEnd
-                    || contentY >= contentHeight - height - 1
+                    || contentY - originY >= contentHeight - height - 1
 
             // 锚到末尾（= C# 把 ScrollBar.Value 设成 Maximum）。
             // Qt 文档（ListView::forceLayout）：ListView 对模型变更的响应按帧批处理
@@ -255,25 +269,35 @@ FocusScope {
                 positionViewAtEnd();
             }
 
-            onHeightChanged: if (atTail) Qt.callLater(scrollToTail)
+            function scrollByLines(lines) {
+                forceLayout();
+                const first = indexAt(1, contentY + 1);
+                const row = first >= 0 ? first : 0;
+                positionViewAtIndex(Math.max(0, Math.min(count - 1, row - lines)), ListView.Beginning);
+            }
+
+            function followOutput() {
+                if (!root.backend || !root.backend.stageMode)
+                    scrollToTail();
+            }
+
+            onHeightChanged: if (atTail && !root.reviewingHistory) Qt.callLater(followOutput)
             Component.onCompleted: scrollToTail()
 
-            // 新行 / 清屏（C# verticalScrollBarUpdate 的 move > 0 分支）：贴到最新行。
-            // Qt 文档：模型变更中不要直接 positionView*，用 Qt.callLater 推迟到事件
-            // 循环；推迟里再 forceLayout（见 scrollToTail）。
+            // 合并模型通知，布局完成后仅为普通日志模式定位到末尾。
             Connections {
                 target: root.lineModel
                 function onRowsInserted() {
-                    Qt.callLater(view.scrollToTail);
+                    Qt.callLater(view.followOutput);
                 }
                 // CLEARLINE 先删除旧页再插入新页。仅监听 rowsInserted 时，
                 // ListView 可能在删除阶段保留上一页的 contentY，导致新选择项
                 // 只有鼠标悬停时才暴露出来。
                 function onRowsRemoved() {
-                    Qt.callLater(view.scrollToTail);
+                    Qt.callLater(view.followOutput);
                 }
                 function onModelReset() {
-                    Qt.callLater(view.scrollToTail);
+                    Qt.callLater(view.followOutput);
                 }
             }
 
@@ -281,15 +305,26 @@ FocusScope {
             Connections {
                 target: root.backend
                 function onScrollRequested(lines) {
-                    const max = Math.max(0, view.contentHeight - view.height);
-                    view.contentY = Math.max(0, Math.min(max, view.contentY - lines * root.cellHeight));
+                    root.scrollHistory(lines);
                 }
                 function onScrollToBottomRequested() {
-                    view.scrollToTail();
+                    root.showCurrent();
                 }
             }
 
             delegate: LineDelegate {}
+
+            WheelHandler {
+                enabled: root.reviewingHistory && view.atTail && !root.primitiveInput
+                target: null
+                acceptedDevices: PointerDevice.Mouse | PointerDevice.TouchPad
+                onWheel: event => {
+                    if (event.angleDelta.y < 0 || event.pixelDelta.y < 0)
+                        root.showCurrent();
+                    else
+                        event.accepted = false;
+                }
+            }
 
             ScrollBar.vertical: ScrollBar {
                 objectName: "consoleScrollBar"
@@ -302,6 +337,7 @@ FocusScope {
                 anchors.top: parent.top
                 anchors.bottom: parent.bottom
                 width: root.scrollBarWidth
+                visible: view.visible
             }
         }
 
@@ -314,7 +350,7 @@ FocusScope {
             anchors.rightMargin: root.scrollBarWidth
             anchors.top: parent.top
             anchors.bottom: parent.bottom
-            visible: root.backend && root.backend.stageMode && count > 0
+            visible: root.stageActive && !root.reviewingHistory
             model: root.stageModel
             interactive: false
             clip: true
@@ -326,16 +362,31 @@ FocusScope {
             displayMarginEnd: displayMarginBeginning
             cacheBuffer: displayMarginBeginning
             delegate: LineDelegate {}
-            function scrollToTail() {
+            function positionStage() {
                 forceLayout();
-                positionViewAtEnd();
+                // positionViewAtEnd() 会把不足一屏的内容也贴到底部。
+                // 短页面从顶部开始；保留的跨行图片锚点在完整页面上方。
+                if (count <= root.gridRows)
+                    positionViewAtBeginning();
+                else
+                    positionViewAtIndex(count - root.gridRows, ListView.Beginning);
             }
-            onCountChanged: Qt.callLater(scrollToTail)
-            onHeightChanged: Qt.callLater(scrollToTail)
-            Component.onCompleted: scrollToTail()
+            onCountChanged: Qt.callLater(positionStage)
+            onHeightChanged: Qt.callLater(positionStage)
+            Component.onCompleted: positionStage()
             Connections {
                 target: root.backend
-                function onStageChanged() { Qt.callLater(stageView.scrollToTail); }
+                function onStageChanged() { Qt.callLater(stageView.positionStage); }
+                function onCleared() { root.reviewingHistory = false; }
+            }
+            WheelHandler {
+                enabled: root.showingStage && !root.primitiveInput
+                target: null
+                acceptedDevices: PointerDevice.Mouse | PointerDevice.TouchPad
+                onWheel: event => {
+                    if (event.angleDelta.y > 0 || event.pixelDelta.y > 0)
+                        root.scrollHistory(3);
+                }
             }
         }
 
@@ -395,14 +446,16 @@ FocusScope {
             // 网格滚动的键盘语义（旧实现的 PageUp/PageDown/End）
             const page = root.gridRows;
             if (e.key === Qt.Key_PageUp) {
-                view.contentY = Math.max(0, view.contentY - page * root.cellHeight);
+                root.scrollHistory(page);
                 e.accepted = true;
             } else if (e.key === Qt.Key_PageDown) {
-                view.contentY = Math.min(Math.max(0, view.contentHeight - view.height),
-                                         view.contentY + page * root.cellHeight);
+                if (root.reviewingHistory && view.atTail)
+                    root.showCurrent();
+                else
+                    root.scrollHistory(-page);
                 e.accepted = true;
             } else if (e.key === Qt.Key_End) {
-                view.scrollToTail();
+                root.showCurrent();
                 e.accepted = true;
             }
         }

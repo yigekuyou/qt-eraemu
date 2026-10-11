@@ -30,6 +30,9 @@
 #include <QCoreApplication>
 #include <QDebug>
 #include <QStringList>
+#include <QFile>
+#include <QFileInfo>
+#include <QDir>
 
 #include "ast/ast_builder.h"
 #include "ast/expression_evaluator.h"
@@ -841,6 +844,93 @@ int main(int argc, char* argv[]) {
               "PRINT* 仍属于 PRINT 族（守卫不过度收窄）");
         check(AstBuilder::isKnownInstructionName(QStringLiteral("DEBUGPRINTFORML")),
               "DEBUGPRINTFORML 仍被认作已知指令名");
+    }
+
+    // Standalone increment statements used by both real games must carry a
+    // VariableNode even before finalize; finalize restores missing legacy nodes.
+    {
+        ProcessState ps;
+        EraParseTable pt(&ps);
+        VariableStorage vs;
+        ExpressionEvaluator ev;
+        ExecutionEngine ex(&vs);
+        pt.setVariableStorage(&vs); pt.setExpressionEvaluator(&ev);
+        ex.setParseTable(&pt); ex.setExpressionEvaluator(&ev);
+        const AstResolver resolve = [&](const QString& text) { return pt.expressionAst(text); };
+        QStringList errors;
+        QObject::connect(&ex, &ExecutionEngine::errorOccurred, [&](const QString& error) { errors.append(error); });
+        const QString root = QDir(QFileInfo(QString::fromUtf8(__FILE__)).absolutePath()).absoluteFilePath("../../..");
+        const QList<QPair<QString, int>> fixtures{
+            {"eraTW/ERB/COLOREDMAPS/DRAW_COLOREDMAP.ERB", 318},
+            {"eraMegaten/data/ERB/SHOW_STATUS.ERB", 1925},
+            {"eraMegaten/data/ERB/RPG/スキル関係/CSTR専用スキル/外部作品/KingExit/1.ベロー/SKILL_KE_クロスマジック.ERB", 118}
+        };
+        for (const auto& fixture : fixtures) {
+            QFile file(root + '/' + fixture.first);
+            if (!file.exists()) { qDebug() << "optional game fixture absent:" << fixture.first; continue; }
+            check(file.open(QIODevice::ReadOnly), "open actual game increment fixture");
+            const auto physical = QString::fromUtf8(file.readAll()).split('\n');
+            check(physical.size() >= fixture.second, "real fixture has source line");
+            if (physical.size() < fixture.second) continue;
+            auto line = AstBuilder::build(physical.at(fixture.second - 1),
+                ScriptPosition(fixture.first, fixture.second), resolve);
+            check(line.functionName == "++" && line.arguments.size() == 1
+                  && line.arguments.first().ast && line.arguments.first().ast->kind() == NodeKind::Variable,
+                  "actual eraTW/eraMegaten increment has load-time VariableNode: " + fixture.first);
+            // Named CSV index is checked structurally here; numeric/system and
+            // user variables run the same instruction directly without reparsing.
+            if (fixture.second == 318) {
+                vs.setGlobalInt1D("EFFECT_SEED", 0, 7);
+                ex.executeInstruction(line);
+                check(vs.getGlobalInt1D("EFFECT_SEED", 0) == 8, "eraTW EFFECT_SEED++ executes");
+            } else if (fixture.second == 1925) {
+                vs.setLocalInt(1, 9);
+                ex.executeInstruction(line);
+                check(vs.getLocalInt(1) == 10, "eraMegaten LOCAL:1++ executes");
+            }
+        }
+        const QStringList source{"@INCREMENT", "#DIM COUNTERS, 4", "COUNTERS:0 = 5",
+            "COUNTERS:(SIDE_EFFECT++)++", "--COUNTERS:0", "++COUNTERS:0", "COUNTERS:0--", "RETURN"};
+        auto lines = buildLines(pt, source);
+        check(lines[3].arguments.first().ast && lines[4].arguments.first().ast,
+              "prefix and postfix build LHS AST before finalize");
+        // Simulate an already built flattened row whose old fast path omitted AST.
+        lines[3].arguments[0].ast.clear();
+        pt.loadScript("increments", lines); pt.finalizeParse();
+        const auto* script = pt.script("increments");
+        check(script && script->lines[3].arguments.first().ast
+              && script->lines[3].argument.params.first().ast,
+              "finalize repairs missing increment LHS and typed params in owner scope");
+        ScriptRunner run(&pt, &ex, &ps, &vs); run.setExpressionEvaluator(&ev);
+        vs.setGlobalInt1D("SIDE_EFFECT", 0, 0);
+        pt.setEntryPoint("INCREMENT");
+        check(run.runToCompletion() == ExecState::Halt, "increment program completes");
+        vs.setPrivateScope("INCREMENT", {"COUNTERS"});
+        check(vs.getGlobalInt1D("COUNTERS", 0) == 5 && vs.getGlobalInt1D("SIDE_EFFECT", 0) == 1,
+              "four increment forms write private array and evaluate index once");
+        ex.executeInstruction(AstBuilder::build("HTML_TAGSPLIT \"<b>x</b>\"", {}, resolve));
+        ex.executeInstruction(AstBuilder::build("SPLIT \"a/b\", \"/\", LOCALS", {}, resolve));
+        check(vs.getSystemVariable("RESULT", 0) == 2, "SPLIT omitted count writes RESULT");
+        ex.executeInstruction(AstBuilder::build("SORTCHARA BACK", {}, resolve));
+        check(errors.isEmpty(), "optional variable parameters do not resolve a null node");
+        check(errors.isEmpty(), "valid increment statements emit no missing-node errors");
+        const auto oldLocal = vs.getLocalInt(1);
+        auto broken = AstBuilder::build("LOCAL:1++", ScriptPosition("broken.ERB", 42), resolve);
+        broken.arguments[0].ast.clear();
+        ex.executeInstruction(broken);
+        check(errors.size() == 1 && errors.first().contains("++")
+              && errors.first().contains("broken.ERB:42") && errors.first().contains("LOCAL:1"),
+              "missing-node error includes instruction, source line and argument");
+        check(vs.getLocalInt(1) == oldLocal,
+              "missing node never invokes runtime parsing fallback");
+        ProcessState badState;
+        EraParseTable bad(&badState);
+        bad.setExpressionEvaluator(&ev); bad.setVariableStorage(&vs);
+        bad.loadScript("bad_increment", buildLines(bad, {"@BAD", "#DIMS INCREMENT_STRING", "#DIM CONST INCREMENT_CONST = 1", "++INCREMENT_STRING", "INCREMENT_CONST++"}));
+        bad.finalizeParse();
+        check(bad.script("bad_increment")->lines[3].isError
+              && bad.script("bad_increment")->lines[4].isError,
+              "string and const increment targets fail at load time");
     }
 
     qDebug() << "\n======================================";

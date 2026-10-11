@@ -39,6 +39,13 @@ struct InstructionSpec {
 
 // 覆盖当前已处理/常用的指令族；未列出者按 ArgKind::Raw 宽松处理。
 inline constexpr auto kInstructionSpecs = std::to_array<InstructionSpec>({
+    {"PLAYBGM", ArgKind::StrExpression, 1, 1},
+    {"PLAYSOUND", ArgKind::Expressions, 1, 2},
+    {"SETBGMVOLUME", ArgKind::IntExpression, 1, 1},
+    {"SETSOUNDVOLUME", ArgKind::IntExpression, 1, 1},
+    {"STOPBGM", ArgKind::Void, 0, 0},
+    {"STOPSOUND", ArgKind::Void, 0, 0},
+    {"DT_COLUMN_OPTIONS", ArgKind::Expressions, 3, -1},
     {"IF",           ArgKind::IntExpression, 1,  1},
     {"SIF",          ArgKind::IntExpression, 1,  1},
     {"ELSEIF",       ArgKind::IntExpression, 1,  1},
@@ -88,6 +95,8 @@ inline constexpr auto kInstructionSpecs = std::to_array<InstructionSpec>({
     {"ARRAYCOPY",    ArgKind::ArrayControl,  2,  -1},
     {"ARRAYSORT",    ArgKind::ArrayControl,  1,  -1},
     {"SWAP",         ArgKind::Swap,          2,  2},
+    {"++",           ArgKind::Var,           1,  1},
+    {"--",           ArgKind::Var,           1,  1},
     {"SETBIT",       ArgKind::Bit,           1,  -1},
     {"PRINT",        ArgKind::Raw,           0,  -1},
     {"PRINTL",       ArgKind::Raw,           0,  -1},

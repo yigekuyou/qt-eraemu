@@ -709,6 +709,7 @@ void ConsoleBackend::setFontSize(int px) {
 void ConsoleBackend::setGridColumns(int columns) {
     if (columns <= 0 || columns == m_layout.gridColumns()) return;
     m_layout.setGridColumns(columns);
+    emit gridChanged();
     invalidateLineCache();   // 列数变 -> 折行/对齐变 -> 缓存失效
     if (rowCount() > 0) emit dataChanged(index(0), index(rowCount() - 1));
 }
@@ -716,6 +717,7 @@ void ConsoleBackend::setGridColumns(int columns) {
 void ConsoleBackend::setGridRows(int rows) {
     if (rows <= 0 || rows == m_layout.gridRows()) return;
     m_layout.setGridRows(rows);
+    emit gridChanged();
     // 可见行数由 QML 视口决定（ListView 虚拟化），这里只更新布局
     invalidateLineCache();
     if (rowCount() > 0) emit dataChanged(index(0), index(rowCount() - 1));
@@ -788,11 +790,14 @@ void ConsoleBackend::updateStageModels(bool force) {
             rows.append(item);
         }
     }
+    const bool boundaryChanged = m_stageStart != start || m_stageVisible != visible;
     m_stageSnapshot.setRows(rows);
     m_stageStart = start;
-    // 仅在过滤边界变化时发布行过滤更新，保留历史视图的委托和回看位置。
+    m_stageVisible = visible;
+    // 仅在过滤边界变化时更新历史代理和定位；普通行 dataChanged 不重置舞台位置。
     m_historyModel.setStage(start, visible);
-    emit stageChanged();
+    if (boundaryChanged)
+        emit stageChanged();
 }
 
 bool ConsoleBackend::anyKeyInput() const {

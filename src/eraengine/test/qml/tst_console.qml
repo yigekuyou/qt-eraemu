@@ -38,6 +38,7 @@ TestCase {
     property var backend: consoleFixture.create(tc)
     property var comp: null
     property var view: null
+    property var inputBar: null
 
     function init() {
         comp = Qt.createComponent("file://" + consoleQmlPath);
@@ -49,12 +50,18 @@ TestCase {
             "height": 200
         });
         verify(view !== null, "Console.qml 创建失败");
+        const inputComp = Qt.createComponent("file://" + consoleQmlPath.replace("Console.qml", "ConsoleInput.qml"));
+        verify(inputComp.status === Component.Ready, inputComp.errorString());
+        inputBar = inputComp.createObject(host, { backend: backend, width: 320, height: 26, y: 250 });
+        verify(inputBar !== null);
+
     }
 
     function cleanup() {
         consoleFixture.finishInput(backend);
         consoleFixture.redraw(backend, 1);
         backend.stageMode = false;
+        if (inputBar) { inputBar.destroy(); inputBar = null; }
         if (view) { view.destroy(); view = null; }
         backend.clearAll();
     }
@@ -69,9 +76,37 @@ TestCase {
         backend.flush(); view.syncView();
     }
 
+    function test_inputOutsideScaledStageKeepsGeometry() {
+        const field = findChild(inputBar, "consoleInputField");
+        verify(findChild(view, "consoleInputField") === null);
+        compare(inputBar.parent, view.parent, "input and stage are siblings");
+        view.scale = 0.6;
+        const width = view.cellWidth;
+        const height = view.cellHeight;
+        const bounds = field.mapToItem(host, 0, 0);
+        const spy = Qt.createQmlObject('import QtTest; SignalSpy {}', tc);
+        spy.target = view;
+        spy.signalName = "cellHeightChanged";
+        for (let i = 0; i < 5; ++i) {
+            consoleFixture.request(backend, i % 2 === 0 ? "TONEINPUT" : "INPUTS");
+            wait(1);
+            consoleFixture.finishInput(backend);
+            wait(1);
+            compare(view.cellWidth, width);
+            compare(view.cellHeight, height);
+            compare(field.mapToItem(host, 0, 0), bounds);
+            compare(field.visible, true);
+            compare(field.enabled, true);
+        }
+        compare(spy.count, 0);
+        view.scale = 1.2;
+        compare(field.mapToItem(host, 0, 0), bounds, "input does not inherit stage scale");
+        spy.destroy();
+    }
+
     function test_timedRedrawKeepsInputGeometryAndFocus() {
         consoleFixture.request(backend, "TINPUTS");
-        const field = findChild(view, "consoleInputField");
+        const field = findChild(inputBar, "consoleInputField");
         tryCompare(field, "visible", true);
         field.forceActiveFocus();
         const height = view.cellHeight;
@@ -311,9 +346,13 @@ TestCase {
         const point = image.mapToItem(stage, 0, image.height);
         verify(point.y > 0, "image bottom still overlaps the viewport");
 
-        // Same row count: a frame publication must restore the stage position.
+        // An unchanged frame must not reposition; explicitly returning to the
+        // current stage restores the viewport through the Qt positioning API.
         stage.contentY = 0;
         backend.flush();
+        wait(1);
+        compare(stage.contentY, 0);
+        backend.requestScrollToBottom();
         tryCompare(stage, "atYEnd", true);
 
         // Once its entire extent is above the viewport, drop the anchor.
@@ -343,6 +382,43 @@ TestCase {
         view.height = 250;
         wait(1);
         compare(stage.itemAtIndex(0).y - stage.contentY, 0);
+    }
+
+    function test_frameUpdatesDoNotChangeGeometryOrPosition() {
+        backend.stageMode = true;
+        printLines(8);
+        wait(1);
+        const stage = findChild(view, "consoleStageView");
+        const width = view.cellWidth;
+        const height = view.cellHeight;
+        const changed = Qt.createQmlObject('import QtTest; SignalSpy {}', tc);
+        changed.target = backend;
+        changed.signalName = "gridChanged";
+        const moved = Qt.createQmlObject('import QtTest; SignalSpy {}', tc);
+        moved.target = stage;
+        moved.signalName = "contentYChanged";
+        const published = Qt.createQmlObject('import QtTest; SignalSpy {}', tc);
+        published.target = backend;
+        published.signalName = "stageChanged";
+        for (let frame = 0; frame < 5; ++frame) {
+            consoleFixture.finishInput(backend);
+            consoleFixture.redraw(backend, 0);
+            backend.clearLines(8);
+            for (let row = 0; row < 8; ++row) {
+                backend.print(row === 4 ? "piece " + frame : "L" + row);
+                backend.newline();
+            }
+            consoleFixture.request(backend, "TONEINPUT");
+            wait(20);
+            compare(view.cellWidth, width);
+            compare(view.cellHeight, height);
+        }
+        compare(changed.count, 0, "frames do not notify UI grid dimensions");
+        compare(published.count, 0, "same stage boundary does not request positioning");
+        compare(moved.count, 0, "content updates do not move the viewport");
+        changed.destroy();
+        moved.destroy();
+        published.destroy();
     }
 
     function test_stageDoubleBufferPreservesUnchangedDelegates() {
@@ -419,7 +495,7 @@ TestCase {
         backend.newline();
         consoleFixture.request(backend, "TONEINPUT");
         view.syncView();
-        const field = findChild(view, "consoleInputField");
+        const field = findChild(inputBar, "consoleInputField");
         const stage = findChild(view, "consoleStageView");
         const line = view.lineItem(1);
         const button = view.blockAt(1, 0);

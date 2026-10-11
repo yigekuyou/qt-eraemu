@@ -738,6 +738,21 @@ ApplicationWindow {
             }
         }
 
+        ConsoleInput {
+            objectName: "windowConsoleInput"
+            Layout.fillWidth: true
+            Layout.preferredHeight: implicitHeight
+            Layout.minimumHeight: implicitHeight
+            Layout.maximumHeight: implicitHeight
+            backend: eraEngine.console
+            engine: eraEngine
+            titleActive: eraEngine.defaultTitleVisible
+            fontName: eraEngine.gui.fontName
+            fontSize: eraEngine.gui.fontSize
+            foreColor: String(eraEngine.gui.foreColor)
+        }
+
+
     } // ColumnLayout：状态条始终位于游戏视口下方
 
     // 状态灯（最小尺寸圆点；悬浮显示含义 + 当前状态）

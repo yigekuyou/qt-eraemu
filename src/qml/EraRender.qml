@@ -49,8 +49,7 @@ Item {
         onBackendChanged: if (backend) backend.stageMode = true
         Component.onCompleted: if (backend) backend.stageMode = true
         engine: eraRender.engine
-        // 标准标题画面（QML）显示时，隐藏控制台底部输入行 —— 标题的 [0]/[1]
-        // 由 TitleScreen 自己的按钮交付，避免两套输入 UI 同时出现。
+        // 标准标题画面的输入由 TitleScreen 交付。
         titleActive: eraRender.engine ? eraRender.engine.defaultTitleVisible : false
     }
 

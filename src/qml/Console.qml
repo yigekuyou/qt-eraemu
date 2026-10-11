@@ -193,33 +193,6 @@ FocusScope {
         return n;
     }
 
-    function submit() {
-        if (!backend)
-            return;
-        const commandText = inputField.text.trim();
-        if (commandText.startsWith("\\")) {
-            if (root.engine)
-                root.engine.executeConsoleCommand(commandText);
-            inputField.text = "";
-            return;
-        }
-        // 任意键型等待（WAIT/WAITANYKEY/FORCEWAIT/ANYKEY）：回车即继续，输入内容不使用
-        if (anyKeyInput) {
-            backend.submitAnyKey();
-            inputField.text = "";
-            return;
-        }
-        // 与 C++ 的 inputExpectsString 同源：INPUTS / SINPUTS / TONEINPUTS / ARGS 系
-        // 都是字符串型输入，其余（INPUT/TINPUT/ONEINPUT…）走整数校验。
-        // 交由 C++ 判定空输入 / 非法输入（对齐 C# doInputToEmueraProgram）：
-        // 空回车在「有缺省值」时交缺省值，没有缺省值则忽略。
-        if (stringInputKind)
-            backend.submitStringText(inputField.text);
-        else
-            backend.submitIntegerText(inputField.text);
-        inputField.text = "";
-    }
-
     // 把字号/行高/字体推给 C++（C++ 据此动态重算所有区块的位置与尺寸）
     function syncLayout(): void {
         if (!backend)
@@ -236,7 +209,7 @@ FocusScope {
         anchors.left: parent.left
         anchors.right: parent.right
         anchors.top: parent.top
-        anchors.bottom: inputField.top
+        anchors.bottom: parent.bottom
         focus: root.primitiveInput || (root.isMobile && root.anyKeyInput)
 
         ConsoleView {
@@ -342,13 +315,12 @@ FocusScope {
             interactive: false
             function positionStage() {
                 forceLayout();
-                // positionViewAtEnd() 会把不足一屏的内容也贴到底部。
-                // 短页面从顶部开始；保留的跨行图片锚点在完整页面上方。
                 if (count <= root.gridRows)
                     positionViewAtBeginning();
                 else
                     positionViewAtIndex(count - root.gridRows, ListView.Beginning);
             }
+            // 仅结构或视口变化需要定位；普通行数据更新保持位置和缩放。
             onCountChanged: Qt.callLater(positionStage)
             onHeightChanged: Qt.callLater(positionStage)
             Component.onCompleted: positionStage()
@@ -443,57 +415,10 @@ FocusScope {
         }
     }
 
-    // CLEARTEXTBOX（C# Console.ClearTextBox）：清空输入栏内容
-    Connections {
-        target: root.backend
-        function onClearTextBoxRequested() {
-            inputField.text = "";
-        }
-    }
-
-    // 底部输入行：等待输入时贴着最下面出现——无边框、无背景、无按钮，
-    // 高度只有一行文字；直接键入、回车即提交。非等待状态高度为 0。
-    TextField {
-        id: inputField
-        objectName: "consoleInputField"
-        // 输入控件始终存在并保留焦点目标；只有真正等待 INPUT 时才可见、可编辑。
-        // 这样重绘/翻页期间不会因控件销毁重建抢走鼠标事件。
-        focus: root.inputActive && !root.isMobile
-        enabled: true //这里设置true 为了放置每次刷新导致false 和true转换导致屏幕渲染去颤动
-        anchors.left: parent.left
-        anchors.right: parent.right
-        anchors.bottom: parent.bottom
-        height: visible ? implicitHeight : 0
-        visible: root.inputRowVisible
-        background: null                 // 无边框：去掉 TextField 默认描边
-        topPadding: 0
-        bottomPadding: 0
-        leftPadding: 4
-        rightPadding: 4
-        font.family: root.fontName
-        font.pixelSize: root.fontSize
-        // TextField 的 palette.windowText 在深色主题下可能与控制台背景相同；
-        // 使用控制台前景色，并让 placeholder 明确采用 disabled/次级颜色。
-        color: root.foreColor !== "" ? root.foreColor : palette.text
-        placeholderTextColor: root.foreColor !== "" ? root.foreColor : palette.placeholderText
-        placeholderText: root.backend && root.backend.waitingInput ? (root.anyKeyInput ? ("回车/点击继续（" + root.backend.inputKind + "）") : ("输入（" + root.backend.inputKind + "）")) : ""
-        // 输入类型分支限制：整数型输入只接受数字（INPUT 可负）
-        validator: root.backend && root.backend.waitingInput && !root.stringInputKind ? intOnly : null
-        inputMethodHints: root.stringInputKind ? Qt.ImhNone : Qt.ImhPreferNumbers | Qt.ImhNoPredictiveText
-        onAccepted: root.submit()
-    }
-    RegularExpressionValidator {
-        id: intOnly
-        regularExpression: /-?[0-9]+/
-    }
-
     // 等待类型分支（与旧实现一致）
-    readonly property bool inputActive: backend && backend.waitingInput && !primitiveInput && !titleActive
     readonly property bool primitiveInput: backend && backend.waitingInput && backend.inputKind === "INPUTMOUSEKEY"
     readonly property bool anyKeyInput: backend && backend.anyKeyInput
     readonly property bool stringInputKind: backend && backend.stringInput
-    // 始终预留输入栏，避免限时输入切换时改变视口高度。
-    readonly property bool inputRowVisible: true
 
     Component.onCompleted: {
         syncCadence();

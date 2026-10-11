@@ -155,8 +155,8 @@ class ConsoleBackend : public QAbstractListModel {
     // （eraTW 是 175 列，代码默认只有 80）。若声明为 CONSTANT，QML 会一直用旧值
     // 换算像素格子，而 C++ 给出的区块坐标已按新网格计算，两者比例不一致
     // ——表现就是「内容比窗口宽/高出一倍，只能看见一半」。
-    Q_PROPERTY(int gridColumns READ gridColumns NOTIFY lineCountChanged)
-    Q_PROPERTY(int gridRows READ gridRows NOTIFY lineCountChanged)
+    Q_PROPERTY(int gridColumns READ gridColumns NOTIFY gridChanged)
+    Q_PROPERTY(int gridRows READ gridRows NOTIFY gridChanged)
     // 本体即行模型（QML ListView 直接用；CONSTANT：指针生命周期 = 后端本身）
     Q_PROPERTY(QAbstractListModel* lineModel READ lineModel CONSTANT)
     Q_PROPERTY(QAbstractItemModel* historyModel READ historyModel CONSTANT)
@@ -179,7 +179,7 @@ public:
     [[nodiscard]] bool stageMode() const { return m_stageMode; }
     void setRedraw(qint64 mode);
     [[nodiscard]] qint64 currentRedraw() const { return m_autoRedraw ? 1 : 0; }
-    void setStageMode(bool on) { if (m_stageMode == on) return; m_stageMode = on; updateStageModels(); }
+    void setStageMode(bool on) { if (m_stageMode == on) return; m_stageMode = on; updateStageModels(true); emit stageChanged(); }
 
     // ---- QAbstractListModel ----
     [[nodiscard]] int rowCount(const QModelIndex& parent = QModelIndex()) const override;
@@ -321,6 +321,7 @@ public slots:
     void setFrameMs(int ms);
 
 signals:
+    void gridChanged();
     void lineCountChanged();
     void cleared();
     void frameMsChanged();
@@ -369,6 +370,7 @@ private:
     ConsoleStageSnapshotModel m_stageSnapshot{this};
     int m_stageStart = 0;
     bool m_stageMode = false;
+    bool m_stageVisible = false;
     bool m_autoRedraw = true;
 
     // ---- 「当前行」打印缓冲（C# PrintStringBuffer）----

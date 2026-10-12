@@ -51,7 +51,7 @@ ApplicationWindow {
     id: window
 
     visible: true
-    title: eraEngine.gui.windowTitle || "Emuera Engine"
+    title: eraEngine.gui.windowTitle || qsTr("Emuera 引擎")
     color: eraEngine.gui.backColor
 
     // 平台差异总开关：移动端没有菜单栏/托盘/F11，走触屏适配
@@ -360,15 +360,15 @@ ApplicationWindow {
         shortcut: StandardKey.Refresh
         onTriggered: eraEngine.reloadAsync()
     }
-    Action { id: actReloadFolder; text: qsTr("读取直し（文件夹）"); onTriggered: eraEngine.reloadAsync() }
-    Action { id: actReloadFile; text: qsTr("读取直し（文件）"); onTriggered: eraEngine.reloadAsync() }
-    Action { id: actMacro01; text: qsTr("マクロ 01"); onTriggered: eraEngine.console.submitStringText("\\MACRO 01") }
-    Action { id: actMacro02; text: qsTr("マクロ 02"); onTriggered: eraEngine.console.submitStringText("\\MACRO 02") }
-    Action { id: actMacro03; text: qsTr("マクロ 03"); onTriggered: eraEngine.console.submitStringText("\\MACRO 03") }
-    Action { id: actMacro04; text: qsTr("マクロ 04"); onTriggered: eraEngine.console.submitStringText("\\MACRO 04") }
-    Action { id: actMacro05; text: qsTr("マクロ 05"); onTriggered: eraEngine.console.submitStringText("\\MACRO 05") }
-    Action { id: actMacro06; text: qsTr("マクロ 06"); onTriggered: eraEngine.console.submitStringText("\\MACRO 06") }
-    Action { id: actMacro07; text: qsTr("マクロ 07"); onTriggered: eraEngine.console.submitStringText("\\MACRO 07") }
+    Action { id: actReloadFolder; text: qsTr("重新读取（文件夹）"); onTriggered: eraEngine.reloadAsync() }
+    Action { id: actReloadFile; text: qsTr("重新读取（文件）"); onTriggered: eraEngine.reloadAsync() }
+    Action { id: actMacro01; text: qsTr("宏 01"); onTriggered: eraEngine.console.submitStringText("\\MACRO 01") }
+    Action { id: actMacro02; text: qsTr("宏 02"); onTriggered: eraEngine.console.submitStringText("\\MACRO 02") }
+    Action { id: actMacro03; text: qsTr("宏 03"); onTriggered: eraEngine.console.submitStringText("\\MACRO 03") }
+    Action { id: actMacro04; text: qsTr("宏 04"); onTriggered: eraEngine.console.submitStringText("\\MACRO 04") }
+    Action { id: actMacro05; text: qsTr("宏 05"); onTriggered: eraEngine.console.submitStringText("\\MACRO 05") }
+    Action { id: actMacro06; text: qsTr("宏 06"); onTriggered: eraEngine.console.submitStringText("\\MACRO 06") }
+    Action { id: actMacro07; text: qsTr("宏 07"); onTriggered: eraEngine.console.submitStringText("\\MACRO 07") }
     Action {
         id: actSaveLog
         text: qsTr("保存日志…")
@@ -377,7 +377,7 @@ ApplicationWindow {
     }
     Action {
         id: actCopyLog
-        text: qsTr("日志をクリップボードにコピー")
+        text: qsTr("复制日志到剪贴板")
         onTriggered: window.copyLogToClipboard()
     }
     function copyLogToClipboard(): void {
@@ -629,9 +629,6 @@ ApplicationWindow {
                     id: eraRender
                     anchors.fill: parent
                     engine: eraEngine
-                    // 屏幕刷新率来自 C++（QScreen::refreshRate）——QML 的 Screen 没有
-                    // refreshRate 属性，供控制台计算刷新节拍（见 Console.qml）。
-                    screenRefreshRate: windowController.screenRefreshRate
                 }
             }
 

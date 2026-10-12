@@ -48,20 +48,11 @@ FocusScope {
     focus: true
     readonly property bool isMobile: Qt.platform.os === "android" || Qt.platform.os === "ios"
 
-    // 屏幕刷新率（Hz）由 C++ 注入（QScreen::refreshRate）——Qt 的 QML Screen
-    // 附着类型**没有** refreshRate 属性（Qt 文档 Screen QML Type），旧代码写的
-    // `Screen.refreshRate` 恒为 undefined，等于永远按 60 兜底。0 = 未知，按 60。
-    property int screenRefreshRate: 0
-    property int refreshIntervalMs: Math.max(1, Math.ceil(1000 / (screenRefreshRate > 0 ? screenRefreshRate : 60)))
-    function syncCadence(): void {
-        if (backend)
-            backend.frameMs = refreshIntervalMs;
-    }
-    onRefreshIntervalMsChanged: syncCadence()
-    onBackendChanged: {
-        syncCadence();
-        syncLayout();
-    }
+    // C++ ConsoleBackend.frameMs 是游戏配置的逻辑刷新节拍（C# FPS）。
+    // 它不能绑定屏幕刷新率：eraTetris 的 FPS=5 意味着 200ms 一帧，
+    // 若按显示器的 60Hz 改成 16ms，TONEINPUT/按钮循环会比原版快很多。
+    // Qt Quick 自己负责合成和屏幕刷新；控制台模型只按游戏节拍发布快照。
+    onBackendChanged: syncLayout()
 
     property ConsoleBackend backend: null   // ConsoleBackend（兼行模型）
     property EraEngine engine: null

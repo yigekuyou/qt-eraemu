@@ -95,7 +95,7 @@ FocusScope {
         // 使用控制台前景色，并让 placeholder 明确采用 disabled/次级颜色。
         color: root.foreColor !== "" ? root.foreColor : palette.text
         placeholderTextColor: root.foreColor !== "" ? root.foreColor : palette.placeholderText
-        placeholderText: root.backend && root.backend.waitingInput ? (root.anyKeyInput ? ("回车/点击继续（" + root.backend.inputKind + "）") : ("输入（" + root.backend.inputKind + "）")) : ""
+        placeholderText: root.backend && root.backend.waitingInput ? (root.anyKeyInput ? qsTr("回车/点击继续（%1）").arg(root.backend.inputKind) : qsTr("输入（%1）").arg(root.backend.inputKind)) : ""
         // 输入类型分支限制：整数型输入只接受数字（INPUT 可负）
         validator: root.backend && root.backend.waitingInput && !root.stringInputKind ? intOnly : null
         inputMethodHints: root.stringInputKind ? Qt.ImhNone : Qt.ImhPreferNumbers | Qt.ImhNoPredictiveText

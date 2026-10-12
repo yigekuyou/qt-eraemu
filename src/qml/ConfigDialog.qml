@@ -11,7 +11,7 @@ Dialog {
     id: dlg
     required property EraEngine engine
     property GuiManager gui: null
-    title: qsTr("コンフィグ / 设置")
+    title: qsTr("配置 / 设置")
     modal: true
     parent: Overlay.overlay
     anchors.centerIn: parent

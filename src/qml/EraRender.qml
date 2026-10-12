@@ -36,7 +36,6 @@ Item {
     Console {
         anchors.fill: parent
         anchors.margins: 6
-        screenRefreshRate: eraRender.screenRefreshRate
         lineHeight: eraRender.engine ? eraRender.engine.gui.lineHeight : 22
         fontName: eraRender.engine ? eraRender.engine.gui.fontName : ""
         fontSize: eraRender.engine ? eraRender.engine.gui.fontSize : 16

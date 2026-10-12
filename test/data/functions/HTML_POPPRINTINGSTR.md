@@ -19,7 +19,7 @@
 - 返回值：待打印缓冲区内容的 HTML 格式字符串（不含 p 标签），随后缓冲区被清空。
 ```erb
 PRINTS "A", "B"          ; 进入缓冲区但尚未换行
-S = HTML_POPPRINTINGSTR()  ; 取走并清空缓冲区
+S '= HTML_POPPRINTINGSTR()  ; 取走并清空缓冲区
 PRINTL C                 ; 此时控制台上是 "C"（AB 未被显示）
 HTML_PRINT S             ; 再把取出的内容以 HTML 画出来
 ```

@@ -13,9 +13,9 @@
 
 ### `str TOSTR(int value, str format = "")`
 ```erb
-STR:0 = TOSTR(255, "X")     ; STR:0 = "FF"
-STR:0 = TOSTR(7, "000")     ; STR:0 = "007"
-STR:0 = TOSTR(123)          ; STR:0 = "123"（省略格式）
+STR:0 '= TOSTR(255, "X")     ; STR:0 = "FF"
+STR:0 '= TOSTR(7, "000")     ; STR:0 = "007"
+STR:0 '= TOSTR(123)          ; STR:0 = "123"（省略格式）
 PRINTFORML %TOSTR(5, "D3")% ; 输出 005
 ```
 

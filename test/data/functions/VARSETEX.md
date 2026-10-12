@@ -25,8 +25,8 @@
 - 起始索引 / 终止索引：最低次元的半开区间，终止索引须写满 5 个参数才生效。
 - 返回值：恒 `1`。
 ```erb
-; EM readme 的原始示例（readme 中 #DIM FOO,2,3 应为 #DIM FOO = 2,3）
-#DIM FOO = 2,3
+; 二维数组尺寸为 2×3；多维元素访问必须提供完整下标
+#DIM FOO, 2, 3
 
 VARSETEX "FOO:1:1", 5, 0
 PRINTFORML {FOO:1:0} {FOO:1:2}    ; 0 5
@@ -36,12 +36,12 @@ PRINTFORML {FOO:0:0} {FOO:1:2}    ; 10 10
 
 ```erb
 ; 用下标变量指定范围
-#DIM A = 100
+#DIM A, 100
 VARSETEX "A", 7, 1, 10, 20        ; A:10 ~ A:19 = 7
 VARSETEX "A", 0                   ; 整个数组清零
 
 ; 字符串变量
-#DIMS S = 10
+#DIMS S, 10
 VARSETEX "S", "空", 1
 ```
 

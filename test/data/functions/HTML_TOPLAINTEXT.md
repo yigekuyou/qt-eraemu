@@ -16,8 +16,8 @@
 - `value`：字符串表达式，待转换的 html 字符串。
 - 返回值：去掉 html 标签、扩展字符参考后的纯文本字符串。
 ```erb
-S = HTML_TOPLAINTEXT(HTML_ESCAPE("<b>粗体</b>"))  ; S = "<b>粗体</b>"（转义被还原）
-S = HTML_TOPLAINTEXT("<p>abc</p>")                ; S = "abc"（标签被删除）
+S '= HTML_TOPLAINTEXT(HTML_ESCAPE("<b>粗体</b>"))  ; S = "<b>粗体</b>"（转义被还原）
+S '= HTML_TOPLAINTEXT("<p>abc</p>")                ; S = "abc"（标签被删除）
 ```
 
 ## 源码实现（emuera.em/Emuera）

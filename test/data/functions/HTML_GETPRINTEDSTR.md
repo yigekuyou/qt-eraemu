@@ -20,7 +20,7 @@
 - 返回值：该行内容的 HTML 格式字符串；行不存在时为空字符串。
 ```erb
 PRINTL Hello, World!
-S = HTML_GETPRINTEDSTR(0)
+S '= HTML_GETPRINTEDSTR(0)
 ; S ≈ "<p align='left'><nobr>Hello, World!</nobr></p>"
 PRINTL --
 HTML_PRINT HTML_GETPRINTEDSTR(0)   ; 把刚显示过的行再画一遍

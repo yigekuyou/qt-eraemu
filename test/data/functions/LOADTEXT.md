@@ -23,8 +23,8 @@
 - `force_UTF8`：整数，省略时为 0；现行实现中**无效**（旧实现中非 0 强制按 UTF-8 读取）。
 - 返回值：文件全部文本内容；文件不存在或读取异常时 `""`。
 ```erb
-S = LOADTEXT(0)            ; 读取 SavDir\txt00.txt
-S = LOADTEXT(1, 1)         ; 读取 ForceSavDir\txt01.txt
+S '= LOADTEXT(0)            ; 读取 SavDir\txt00.txt
+S '= LOADTEXT(1, 1)         ; 读取 ForceSavDir\txt01.txt
 ```
 
 ### str LOADTEXT(str filepath)
@@ -32,7 +32,7 @@ S = LOADTEXT(1, 1)         ; 读取 ForceSavDir\txt01.txt
 - 扩展名不在允许列表（`Config.ValidExtension`）内时返回 `""`。
 - 返回值：文件全部文本内容（`\r` 已被删除）；不存在或异常时 `""`。
 ```erb
-S = LOADTEXT("data/memo.txt")
+S '= LOADTEXT("data/memo.txt")
 ```
 
 ## 源码实现（emuera.em/Emuera）

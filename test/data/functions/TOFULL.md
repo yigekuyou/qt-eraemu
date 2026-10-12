@@ -17,9 +17,9 @@
 - `value`：要转换的字符串表达式。
 
 ```erb
-STR = TOFULL("ABC123")     ; STR = "ＡＢＣ１２３"
-STR = TOFULL("ｱｲｳ")         ; STR = "アイウ"
-STR = TOFULL("漢字!")      ; "漢字"无变化，"!" → "！"
+STR '= TOFULL("ABC123")     ; STR = "ＡＢＣ１２３"
+STR '= TOFULL("ｱｲｳ")         ; STR = "アイウ"
+STR '= TOFULL("漢字!")      ; "漢字"无变化，"!" → "！"
 ```
 
 ## 源码实现（emuera.em/Emuera）

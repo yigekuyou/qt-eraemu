@@ -56,7 +56,7 @@ PRINTL XML_TOSTR(1)                                ; <root><b>X</b><b>X</b></roo
 - 第 1 参数是**字符串变量**，替换后该变量被改写为结果文本。
 ```erb
 #DIMS DOC = 4
-DOC = "<r><a>1</a></r>"
+DOC '= "<r><a>1</a></r>"
 XML_REPLACE DOC, "//a", "<a>9</a>"
 PRINTL DOC        ; <r><a>9</a></r>
 ```

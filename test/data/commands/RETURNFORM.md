@@ -19,7 +19,7 @@ CALL TEST
 PRINTFORMW RESULT == {RESULT}    ;→ RESULT == 1000
 
 @TEST
-  STR = A * 10
+  STR = {A * 10}
   RETURNFORM %STR%
 ```
 

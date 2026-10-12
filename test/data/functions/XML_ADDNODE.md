@@ -47,7 +47,7 @@ PRINTL XML_ADDNODE(0, "/root", "<z/>", 1)           ; 0
 - 第 1 参数是**字符串变量**，插入后该变量被改写为结果文本。
 ```erb
 #DIMS DOC = 4
-DOC = "<r><x/></r>"
+DOC '= "<r><x/></r>"
 
 ; 多匹配 + 全部添加=0 → 不插
 XML_ADDNODE DOC, "//x", "<y/>", 0, 0

@@ -39,7 +39,7 @@ PRINTL XML_REMOVENODE(0, "/root")          ; 0（无父节点，删除失败）
 - 第 1 参数是**字符串变量**，删除后该变量被改写为结果文本。
 ```erb
 #DIMS DOC = 4
-DOC = "<root><a>1</a><a>2</a></root>"
+DOC '= "<root><a>1</a><a>2</a></root>"
 
 XML_REMOVENODE DOC, "//a", 0
 PRINTL DOC                                  ; <root><a>1</a><a>2</a></root>（多匹配 + setall=0，未删）

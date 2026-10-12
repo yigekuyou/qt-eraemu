@@ -13,7 +13,7 @@
 
 ### `str TOLOWER(str value)`
 ```erb
-STR:0 = TOLOWER("AbC")          ; STR:0 = "abc"
+STR:0 '= TOLOWER("AbC")          ; STR:0 = "abc"
 PRINTFORML {TOLOWER("ABC")}     ; 输出 abc
 ```
 

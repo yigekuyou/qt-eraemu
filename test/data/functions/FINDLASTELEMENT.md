@@ -19,7 +19,7 @@
 - value：检索值，类型与数组元素一致。
 - 检索整个第一维，返回最后（最靠后）一个匹配下标，找不到返回 -1。
 ```erb
-LOCALS = "abc", "def", "abc"
+LOCALS '= "abc", "def", "abc"
 idx = FINDLASTELEMENT(LOCALS, "abc")   ; idx = 2
 ```
 ### int FINDLASTELEMENT(array, value, start, end)

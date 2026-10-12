@@ -30,12 +30,14 @@
 - `length`：连接的元素个数；省略时取到数组末尾。
 
 ```erb
-LOCALS:0 = "a" ; LOCALS:1 = "b" ; LOCALS:2 = "c"
-STR = STRJOIN(LOCALS)              ; STR = "a,b,c"
-STR = STRJOIN(LOCALS, "-")         ; STR = "a-b-c"
-STR = STRJOIN(LOCALS, "-", 1)      ; STR = "b-c"
-STR = STRJOIN(LOCALS, "-", 0, 2)   ; STR = "a-b"
-DAY = STRJOIN(DAYNAME, "、")        ; 数值数组：元素逐个转成字符串连接
+LOCALS:0 '= "a"
+LOCALS:1 '= "b"
+LOCALS:2 '= "c"
+STR '= STRJOIN(LOCALS)              ; STR = "a,b,c"
+STR '= STRJOIN(LOCALS, "-")         ; STR = "a-b-c"
+STR '= STRJOIN(LOCALS, "-", 1)      ; STR = "b-c"
+STR '= STRJOIN(LOCALS, "-", 0, 2)   ; STR = "a-b"
+DAY '= STRJOIN(DAYNAME, "、")        ; 数值数组：元素逐个转成字符串连接
 ```
 
 ## 源码实现（emuera.em/Emuera）

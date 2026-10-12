@@ -34,7 +34,7 @@ PRINTL XML_TOSTR(0)                        ; <root><a>new</a></root>
 - 第 1 参数必须是**字符串变量**，指向 XML 文本；调用后该变量被改写为结果文本。
 ```erb
 #DIMS DOC = 4
-DOC = "<root><a>1</a><a>2</a></root>"
+DOC '= "<root><a>1</a><a>2</a></root>"
 
 ; 多个匹配：必须给「全部设置 = 1」才会写
 XML_SET DOC, "//a", "X", 0, 1

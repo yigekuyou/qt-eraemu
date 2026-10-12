@@ -28,7 +28,7 @@
 #DIMS SCHEMA
 #DIMS DATA
 ; 假设此前已 DT_CREATE "src" 等建表并写数据
-DATA = DT_TOXML("src", SCHEMA)
+DATA '= DT_TOXML("src", SCHEMA)
 
 PRINTFORML {DT_FROMXML("copy", SCHEMA, DATA)}    ;→ 1
 PRINTFORML {DT_ROW_LENGTH("copy")}               ;→ 与原表相同

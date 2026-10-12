@@ -27,7 +27,7 @@ PRINTSL RESULTS:1      ; <b>D</b>EFG
 
 ```erb
 ; 手动做两行折行显示（第一行 + 余下部分）
-S = "这是一段<b>很长很长的</b>文本"
+S '= "这是一段<b>很长很长的</b>文本"
 HTML_SUBSTRING S, 20
 HTML_PRINT RESULTS        ; 前半段，标签已自动闭合
 HTML_PRINT RESULTS:1      ; 后半段，标签已自动重新打开

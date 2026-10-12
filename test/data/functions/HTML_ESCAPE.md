@@ -20,7 +20,7 @@
 - value：待转义的字符串表达式。
 - 返回值：特殊字符已被替换为字符实体引用的字符串。
 ```erb
-S = HTML_ESCAPE("<b>""引用""</b>")
+S '= HTML_ESCAPE("<b>\"引用\"</b>")
 ; S = "&lt;b&gt;&quot;引用&quot;&lt;/b&gt;"
 HTML_PRINT S   ; 按字面文本显示 "<b>"引用""</b>"，而非被解释为标签
 ```

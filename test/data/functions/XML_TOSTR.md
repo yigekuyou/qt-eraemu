@@ -30,7 +30,7 @@ PRINTL XML_TOSTR(0)              ; <root><a>y</a></root>
 
 ```erb
 ; 把改好的文档存回普通字符串变量，便于 SAVETEXT 落盘
-S = XML_TOSTR(0)
+S '= XML_TOSTR(0)
 ```
 
 ## 源码实现（emuera.em/Emuera）

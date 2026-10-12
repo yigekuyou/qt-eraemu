@@ -16,7 +16,7 @@
 - `s`：被取字符的字符串表达式。
 - `position`：字符位置（从 0 起）。越界返回空串。
 ```erb
-STR:0 = "abcあいう"
+STR:0 '= "abcあいう"
 PRINTFORML CHARATU(STR:0, 0)   ; → a
 PRINTFORML CHARATU(STR:0, 3)   ; → あ（Unicode 计数，全角算 1 字符）
 PRINTFORML CHARATU(STR:0, 99)  ; → （空字符串）

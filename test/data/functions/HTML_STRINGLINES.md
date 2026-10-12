@@ -19,7 +19,7 @@
 - 每行宽度：半角字符宽单位的行宽。
 - 返回值：折行后的行数；`html` 为空时返回 `0`。
 ```erb
-S = "AB<b>CD</b>EFG"
+S '= "AB<b>CD</b>EFG"
 PRINTL HTML_STRINGLINES(S, 4)      ; 按 4 半角字符宽排版需要几行
 PRINTL HTML_STRINGLINES("<br>", 10) ; <br> 也算换行
 

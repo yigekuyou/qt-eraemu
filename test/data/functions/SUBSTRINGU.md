@@ -19,9 +19,9 @@
 - `length`：要取的字符数；负值表示取到末尾，可省略，默认 -1。
 
 ```erb
-STR = SUBSTRINGU("あいうえお", 2, 2)   ; STR = "いう"
-STR = SUBSTRINGU("あいう", 1)          ; STR = "いう"（取到末尾）
-STR = SUBSTRINGU("あいう", 5)          ; STR = ""（起点越界）
+STR '= SUBSTRINGU("あいうえお", 2, 2)   ; STR = "いう"
+STR '= SUBSTRINGU("あいう", 1)          ; STR = "いう"（取到末尾）
+STR '= SUBSTRINGU("あいう", 5)          ; STR = ""（起点越界）
 ```
 
 ## 源码实现（emuera.em/Emuera）

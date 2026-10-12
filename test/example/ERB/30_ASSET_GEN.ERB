@@ -90,8 +90,8 @@ FOR I, 0, 8
 	CALL ASSERT_EQ, GGETCOLOR(GID, 0, 0), COL, @"GCLEAR 6参 不改矩形外"
 	FAILS += RESULT
 
-	;`= @"…"` 应当剥掉 @" 与引号（只展开 %…%）——回归
-	NAME = @"rand_sprite_%I%"
+	; 字符串表达式用 '=，整数插值使用 {…}
+	NAME '= @"rand_sprite_{I}"
 	CALL ASSERT_EQ, SPRITECREATE(NAME, GID), 1, @"SPRITECREATE(随机命名)"
 	FAILS += RESULT
 	CALL ASSERT_EQ, SPRITECREATED(NAME), 1, @"SPRITECREATED"
@@ -105,7 +105,7 @@ FOR I, 0, 8
 
 	;把随机图作为图片区块送进渲染层（仅首个，避免刷屏）
 	SIF I == 0
-		HTML_PRINT @"<p align='left'><img src='%NAME%' width='%W%' height='%H%'></p>"
+		HTML_PRINT @"<p align='left'><img src='%NAME%' width='{W}' height='{H}'></p>"
 
 	CALL ASSERT_EQ, GDISPOSE(GID), 1, @"GDISPOSE"
 	FAILS += RESULT
@@ -139,7 +139,7 @@ FOR I, 0, 12
 	REP = RAND:4 + 1
 	;随机资源名（基本不可能命中磁盘）
 	TMP = RAND:99999
-	NAME = @"rand_%I%_%TMP%.wav"
+	NAME '= @"rand_{I}_{TMP}.wav"
 	CALL ASSERT_EQ, EXISTSOUND(NAME), 0, @"EXISTSOUND(随机名) = 0"
 	FAILS += RESULT
 

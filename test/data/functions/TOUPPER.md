@@ -13,7 +13,7 @@
 
 ### `str TOUPPER(str value)`
 ```erb
-STR:0 = TOUPPER("aBc")          ; STR:0 = "ABC"
+STR:0 '= TOUPPER("aBc")          ; STR:0 = "ABC"
 PRINTFORML %TOUPPER("abc")%     ; 输出 ABC
 ```
 

@@ -145,7 +145,7 @@ PRINTSW "按回车继续"
 
 ```erb
 PRINTFORML 好感度：{LOCAL:0} / 名字：%NAME:MASTER%
-PRINTS S = "结果 {RESULT} 点"      ; 先拼字符串
+PRINTS S '= "结果 {RESULT} 点"      ; 先拼字符串
 PRINTFORMS S                       ; 再把字符串当 FORM 文本展开
 PRINTFORMSN "计算完成：" + TOSTR(RESULT)   ; 不换行等待输入
 ```

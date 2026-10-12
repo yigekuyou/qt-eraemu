@@ -25,7 +25,7 @@
 
 ### int XML_REMOVEATTRIBUTE(id, xpath{, 全部删除})
 ```erb
-XML_DOCUMENT(0, "<root><a id=""1"" x=""9"">t</a></root>")
+XML_DOCUMENT(0, "<root><a id=\"1\" x=\"9\">t</a></root>")
 
 ; 单个属性：直接删
 PRINTL XML_REMOVEATTRIBUTE(0, "//a/@x")        ; 1
@@ -43,7 +43,7 @@ PRINTL XML_TOSTR(0)                             ; <root><a>t</a></root>
 - 第 1 参数是**字符串变量**，删除后该变量被改写为结果文本。
 ```erb
 #DIMS DOC = 4
-DOC = "<r><i a=""1"" b=""2"">x</i></r>"
+DOC '= "<r><i a=\"1\" b=\"2\">x</i></r>"
 
 XML_REMOVEATTRIBUTE DOC, "//i/@*", 0
 PRINTL DOC        ; <r><i a="1" b="2">x</i></r>（多匹配 + setall=0，未删）

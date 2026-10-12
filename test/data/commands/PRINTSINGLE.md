@@ -49,7 +49,7 @@ PRINTSINGLES "状态：" + NAME:MASTER
 先求值成字符串，再当 FORM 文本二次展开：
 
 ```erb
-S = "第 %LOCAL:0% 回合：{LOCAL:1} 点"
+S '= "第 %LOCAL:0% 回合：{LOCAL:1} 点"
 PRINTSINGLEFORMS S
 ```
 

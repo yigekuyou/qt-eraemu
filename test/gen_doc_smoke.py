@@ -94,11 +94,11 @@ def first_example(text: str) -> str | None:
 
 
 def func_call(name: str, text: str) -> str | None:
-    m = re.search(rf"\b(?:int|str|long|float)\s+{re.escape(name)}\s*\(([^)]*)\)", text)
+    m = re.search(rf"\b(int|str|long|float)\s+{re.escape(name)}\s*\(([^)]*)\)", text)
     if not m:
         return None
     args = []
-    for raw in m.group(1).split(","):
+    for raw in m.group(2).split(","):
         p = raw.strip()
         if not p:
             continue
@@ -110,14 +110,15 @@ def func_call(name: str, text: str) -> str | None:
         p = p.split("=")[0].strip()
         typ = p.split()[0] if p.split() else "int"
         args.append(FUNC_ARG_OF.get(typ, "1"))
-    return f"CVTMP = {name}({', '.join(args)})"
+    target = "CVTMP_S '=" if m.group(1) == "str" else "CVTMP ="
+    return f"{target} {name}({', '.join(args)})"
 
 
 def cmd_call(name: str, text: str) -> str | None:
     """优先用文档示例首句；否则按签名的必填占位符合成。"""
     ex = first_example(text)
     if ex:
-        head = re.split(r"[\s,]", ex, 1)[0]
+        head = re.split(r"[\s,]", ex, maxsplit=1)[0]
         if head == name:
             return ex.split(";")[0].rstrip()
     ss = signatures(text)
@@ -179,12 +180,17 @@ def build_draft():
 
 def main() -> int:
     draft = build_draft()
-    OUT_TSV.write_text(
-        "# name\tkind\tmode\tsnippet\tnote\tinput\n"
-        + "\n".join("\t".join(r) for r in draft) + "\n", encoding="utf-8")
+    if "--check" not in sys.argv:
+        OUT_TSV.write_text(
+            "# name\tkind\tmode\tsnippet\tnote\tinput\n"
+            + "\n".join("\t".join(r).rstrip() for r in draft) + "\n",
+            encoding="utf-8")
 
     rows = load_reviewed()
     if rows is None:
+        if "--check" in sys.argv:
+            print("复核清单不存在，无法验证生成结果")
+            return 1
         print(f"[!] 未见复核清单 {REVIEWED_TSV.name}，先按草稿生成（生成后应经复核再回写）")
         rows = draft
         # 复核清单缺失时，草稿即当前清单

@@ -23,8 +23,8 @@ B = 2
 SWAP A, B
 PRINTFORML A={A}, B={B}   ;A=2, B=1
 
-STR:0 = "あ"
-STR:1 = "い"
+STR:0 '= "あ"
+STR:1 '= "い"
 SWAP STR:0, STR:1         ;字符串变量也可交换
 ```
 

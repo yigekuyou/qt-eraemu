@@ -33,7 +33,7 @@ PRINTFORML [{DT_TOXML("no_such")}]   ;→ []（表不存在）
 ```erb
 #DIMS SCHEMA              ; 字符串变量（长度 1 的一维数组即可）
 #DIMS DATA
-DATA = DT_TOXML("t", SCHEMA)  ; DATA = 数据 XML，SCHEMA = 架构 XML
+DATA '= DT_TOXML("t", SCHEMA)  ; DATA = 数据 XML，SCHEMA = 架构 XML
 DT_RELEASE "t"
 DT_FROMXML "t", SCHEMA, DATA  ;→ 1（往返复原）
 PRINTFORML {DT_CELL_GETS("t", 0, "name")}   ;→ 甲

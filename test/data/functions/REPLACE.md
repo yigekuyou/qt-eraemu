@@ -26,8 +26,8 @@
 - `newvalue`：替换文本（可用正则替换引用 `$1` 等）。
 - 返回值：替换后的字符串。
 ```erb
-	STR = REPLACE("Hello, World", "o", "0")	; "Hell0, W0rld"
-	STR = REPLACE("abc", @"a.c", "X")		; "X"（正则匹配）
+	STR '= REPLACE("Hello, World", "o", "0")	; "Hell0, W0rld"
+	STR '= REPLACE("abc", @"a.c", "X")		; "X"（正则匹配）
 ```
 ### str REPLACE(str source, str match, str refArray, int type)
 - `source`：原始字符串。
@@ -36,8 +36,8 @@
 - `type`：`1` = 依次用数组元素替换；`2` = 不用正则的普通替换；其他 = 正则替换。
 - 返回值：替换后的字符串。
 ```erb
-	STR = REPLACE("a-b-c", "-", "/", 2)		; "a/b/c"（普通替换）
-	STR = REPLACE("a,b,c", "b", LOCALS, 1)	; 用 LOCALS 的元素依次替换
+	STR '= REPLACE("a-b-c", "-", "/", 2)		; "a/b/c"（普通替换）
+	STR '= REPLACE("a,b,c", "b", LOCALS, 1)	; 用 LOCALS 的元素依次替换
 ```
 
 ## 源码实现（emuera.em/Emuera）

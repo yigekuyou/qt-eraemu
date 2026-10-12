@@ -23,11 +23,11 @@
 - `length`：要取的字节数；负值表示取到末尾，可省略，默认 -1。
 
 ```erb
-STR = SUBSTRING(RESULTS)          ; 整个 RESULTS
-STR = SUBSTRING(RESULTS, 0)       ; 同上（start=0，length=-1）
-STR = SUBSTRING(RESULTS, , -1)    ; 同上（省略 start 保留 length 位置）
-STR = SUBSTRING(RESULTS, 0, -1)   ; 同上
-LOCALS:0 = %SUBSTRING(STR:0, A, 1)%   ; 取 STR:0 从 A 字节起的 1 个"字符"
+STR '= SUBSTRING(RESULTS)          ; 整个 RESULTS
+STR '= SUBSTRING(RESULTS, 0)       ; 同上（start=0，length=-1）
+STR '= SUBSTRING(RESULTS, , -1)    ; 同上（省略 start 保留 length 位置）
+STR '= SUBSTRING(RESULTS, 0, -1)   ; 同上
+LOCALS:0 '= %SUBSTRING(STR:0, A, 1)%   ; 取 STR:0 从 A 字节起的 1 个"字符"
 SUBSTRING "あいう", 2, 2           ; 命令形式：RESULTS:0 = "い"
 ```
 

@@ -18,9 +18,9 @@
 ### `STRJOIN(<数组变量>{, <分隔符>{, <起始位置>{, <元素数>}}})`
 ```erb
 DIM LOCALS, 100
-LOCALS:0 = "苹果"
-LOCALS:1 = "香蕉"
-LOCALS:2 = "橘子"
+LOCALS:0 '= "苹果"
+LOCALS:1 '= "香蕉"
+LOCALS:2 '= "橘子"
 PRINTL STRJOIN(LOCALS)              ;苹果,香蕉,橘子
 PRINTL STRJOIN(LOCALS, "、")        ;苹果、香蕉、橘子
 PRINTL STRJOIN(LOCALS, "+", 1, 2)   ;香蕉+橘子

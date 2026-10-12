@@ -48,7 +48,7 @@ PRINTL XML_ADDATTRIBUTE(0, "//a", "z", "1", 1)      ; 0
 - 第 1 参数是**字符串变量**，添加后该变量被改写为结果文本。
 ```erb
 #DIMS DOC = 4
-DOC = "<r><i>x</i><i>y</i></r>"
+DOC '= "<r><i>x</i><i>y</i></r>"
 
 ; 多匹配 + 全部添加=0 → 不加
 XML_ADDATTRIBUTE DOC, "//i", "k", "1", 0, 0

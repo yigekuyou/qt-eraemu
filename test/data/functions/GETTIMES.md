@@ -18,7 +18,7 @@
 ```erb
 PRINTFORML 现在时刻：%GETTIMES()%
 ;常与 SAVEDATA 注释配合：
-STR:0 = @"%GETTIMES()% {DAY}日目"
+STR:0 '= @"%GETTIMES()% {DAY}日目"
 ```
 
 ## 源码实现（emuera.em/Emuera）

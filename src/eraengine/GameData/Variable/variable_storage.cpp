@@ -23,6 +23,11 @@
 #include "expression_evaluator.h"
 #include "ast/system_variables.h"
 
+namespace {
+int shapeCount(const QList<int>& dims);
+QList<int> coordinates(int index, const QList<int>& dims);
+}
+
 // PALAMLV/EXPLV 阈值默认表来自 C# ConfigData 的 _Replace.csv 默认值：
 //   PALAMLV {0,100,500,3000,10000,30000,60000,100000,150000,250000}
 //   EXPLV   {0,1,4,20,50,200}
@@ -628,8 +633,28 @@ void VariableStorage::resetGlobals()
 // 数据、本地槽）。
 void VariableStorage::resetForNewGame()
 {
+		// C# ResetData deliberately keeps GLOBAL/GLOBALS alive. Preserve both
+		// built-ins and declared #GLOBAL variables while clearing ordinary data.
+		const QSet<QString> globalNames = [&] {
+			QSet<QString> names{QStringLiteral("GLOBAL"), QStringLiteral("GLOBALS")};
+			if (m_saveVariableTable) for (const VariableDecl& d : m_saveVariableTable->declarations())
+				if (d.isGlobal) names.insert(d.name.toUpper());
+			return names;
+		}();
+		const auto keep = [&](const auto& map) {
+			auto result = map;
+			for (auto it = result.begin(); it != result.end(); )
+				if (!globalNames.contains(it.key().toUpper())) it = result.erase(it); else ++it;
+			return result;
+		};
+		const auto keptI1 = keep(m_globalInt1D);
+		const auto keptI2 = keep(m_globalInt2D);
+		const auto keptI3 = keep(m_globalInt3D);
+		const auto keptS1 = keep(m_globalStr1D);
+		const auto keptS2 = keep(m_globalStr2D);
+		const auto keptS3 = keep(m_globalStr3D);
 		clearCharaList();
-		resetGlobals();   // 用户广域变量回默认（内部保留私有键/NAME/内建字符串）
+		resetGlobals();   // 用户普通广域变量回默认；GLOBAL/GLOBALS 稍后恢复
 		const auto zero = [](QList<qint64>& list) { list.fill(0); };
 		for (QList<qint64>* p : { &m_day, &m_money, &m_time, &m_item, &m_itemsales,
 		     &m_noitem, &m_bought, &m_pband, &m_flag, &m_tflag, &m_target,
@@ -660,6 +685,40 @@ void VariableStorage::resetForNewGame()
 		purgePrivate(m_globalStr2D);
 		purgePrivate(m_globalStr3D);
 		m_privateScopeCache.clear();
+
+		// RESETDATA matches C# SetDefaultValue + SetDefaultLocalValue. Runtime
+		// declarations are cleared above, so restore their ERB/ERH initializers
+		// from the immutable parse table. GLOBAL/GLOBALS have a separate lifetime.
+		if (m_saveVariableTable) {
+			for (const VariableDecl& d : m_saveVariableTable->declarations()) {
+				if (d.isConst || d.isReference || d.isCharaData || d.isGlobal || d.isArg) continue;
+				const QString key = d.scope == VarScope::Local
+					? d.function.toUpper() + QChar(0x1f) + d.name.toUpper()
+					: d.name.toUpper();
+				const QList<int> dims = d.lengths.isEmpty() ? QList<int>{1} : d.lengths;
+				for (int i = 0; i < shapeCount(dims); ++i) {
+					const auto p = coordinates(i, dims);
+					const int x = p.value(0), y = p.value(1), z = p.value(2);
+					if (d.type == OperandType::Str) {
+						const QString value = d.defaultStr.value(i);
+						if (d.dimension <= 1) setGlobalStr1D(key, x, value);
+						else if (d.dimension == 2) setGlobalStr2D(key, x, y, value);
+						else {
+							auto& a = m_globalStr3D[key];
+							if (a.size() <= x) a.resize(x + 1);
+							if (a[x].size() <= y) a[x].resize(y + 1);
+							if (a[x][y].size() <= z) a[x][y].resize(z + 1);
+							a[x][y][z] = FlatStringValue(value);
+						}
+					} else {
+						const qint64 value = d.defaultInt.value(i);
+						if (d.dimension <= 1) setGlobalInt1D(key, x, value);
+						else if (d.dimension == 2) setGlobalInt2D(key, x, y, value);
+						else setGlobalInt3D(key, x, y, z, value);
+					}
+				}
+			}
+		}
 		// 角色数据回默认值。本移植把 CSV 模板默认值**直接写进角色存储**
 		// （m_charaIntVars/m_charaStrVars，按模板号存放），ADDCHARA/LOADCHARA 之后
 		// 都从这些容器取 NAME/ABL… 模板默认值 —— 因此这里必须从模板快照恢复，
@@ -676,6 +735,11 @@ void VariableStorage::resetForNewGame()
 		m_localStrVars.fill(FlatStringValue{});
 		m_argStrVars.fill(FlatStringValue{});
 		m_parameters.clear();
+		const auto restore = [](auto& map, const auto& saved) {
+			for (auto it = saved.constBegin(); it != saved.constEnd(); ++it) map.insert(it.key(), it.value());
+		};
+		restore(m_globalInt1D, keptI1); restore(m_globalInt2D, keptI2); restore(m_globalInt3D, keptI3);
+		restore(m_globalStr1D, keptS1); restore(m_globalStr2D, keptS2); restore(m_globalStr3D, keptS3);
 		qDebug() << "[var] RESETDATA 变量回默认值，角色列表已清空";
 }
 

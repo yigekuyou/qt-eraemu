@@ -52,7 +52,37 @@ FocusScope {
     // 它不能绑定屏幕刷新率：eraTetris 的 FPS=5 意味着 200ms 一帧，
     // 若按显示器的 60Hz 改成 16ms，TONEINPUT/按钮循环会比原版快很多。
     // Qt Quick 自己负责合成和屏幕刷新；控制台模型只按游戏节拍发布快照。
-    onBackendChanged: syncLayout()
+
+    // ---- 帧节拍闸门（C# EmueraConsole.need_settimer）----
+    // C++ 的限时输入不在语句处启动计时器：先请视图处理完这一帧（建委托、定位），
+    // 视图回报 notifyFramePresented() 后才开始倒计时。视图挂上即置真，
+    // 销毁时摘掉（此后 C++ 退回「立即计时」，不会因为没人应答而卡死）。
+    function attachFramePacing(): void {
+        if (backend)
+            backend.framePacingAttached = true;
+    }
+    onBackendChanged: {
+        attachFramePacing();
+        syncLayout();
+    }
+    Component.onDestruction: if (backend) backend.framePacingAttached = false
+
+    // 输入等待这一帧：把新帧的委托同步建出来并摆好位置，再放行 C++ 的计时器。
+    // Qt.callLater：等模型的 rowsInserted/removeRows 通知在本轮事件循环处理完，
+    // 且晚于 C++ 在 emit 之后设置「等待中的计时器」。
+    Connections {
+        target: root.backend
+        function onPresentationRequested() {
+            Qt.callLater(function() {
+                if (!root.backend)
+                    return;
+                root.syncView();
+                if (root.showingStage)
+                    stageView.positionStage();   // id 不是属性：不能写 root.stageView
+                root.backend.notifyFramePresented();
+            });
+        }
+    }
 
     property ConsoleBackend backend: null   // ConsoleBackend（兼行模型）
     property EraEngine engine: null
@@ -416,5 +446,8 @@ FocusScope {
     readonly property bool anyKeyInput: backend && backend.anyKeyInput
     readonly property bool stringInputKind: backend && backend.stringInput
 
-    Component.onCompleted: syncLayout()
+    Component.onCompleted: {
+        attachFramePacing();
+        syncLayout();
+    }
 }

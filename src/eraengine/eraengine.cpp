@@ -140,6 +140,13 @@ EraEngine::EraEngine(QObject *parent)
 		m_systemStateMachine.setTimer([this](int ms, std::function<void()> cb) {
 			QTimer::singleShot(ms, this, [cb]() { cb(); });
 		});
+		// 帧节拍闸门（C# need_settimer）：有 QML 控制台视图时，限时输入的
+		// 计时器改为「舞台变更呈现完毕」后启动 —— 视图在 Console.qml 里
+		// 把 framePacingAttached 置真，并在处理完这一帧后回报 framePresented。
+		m_systemStateMachine.setFramePacingProbe(
+			[this]() { return m_console.framePacingAttached(); });
+		connect(&m_console, &ConsoleBackend::framePresented,
+				&m_systemStateMachine, &SystemStateMachine::onFramePresented);
 		buildSystemHost();
 
 		// ---- 执行链：信号与槽，由程序状态控制器驱动 ----

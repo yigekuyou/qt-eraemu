@@ -183,6 +183,42 @@ int main(int argc, char* argv[]) {
               "error state cannot advance to unexpected script end");
     }
 
+    qDebug() << "\n4) 帧节拍闸门：限时计时器等「舞台变更呈现完毕」才启动";
+    {
+        ProcessState pacingState;
+        EraParseTable pacingTable(&pacingState);
+        SystemStateMachine pacingMachine(&pacingState, &pacingTable);
+        struct Pending { int ms; std::function<void()> cb; };
+        QList<Pending> pending;
+        pacingMachine.setTimer([&pending](int ms, std::function<void()> cb) {
+            pending.append(Pending{ms, std::move(cb)});
+        });
+
+        // 无视图（CLI/CTest）：保持老行为，立刻计时
+        pacingMachine.waitTimedInput(250, 99);
+        check(pending.size() == 1 && pending.first().ms == 250,
+              "无视图时限时计时器立即启动");
+        pending.clear();
+
+        // 有视图：语句处不启动，等舞台呈现完毕才启动
+        pacingMachine.setFramePacingProbe([]() { return true; });
+        pacingMachine.waitTimedInput(250, 99);
+        check(pending.isEmpty(), "有视图时不在语句处启动计时器");
+        pacingMachine.onFramePresented();
+        check(pending.size() == 1 && pending.first().ms == 250,
+              "舞台呈现完毕后才启动，且用完整超时时长");
+        pending.clear();
+        pacingMachine.onFramePresented();
+        check(pending.isEmpty(), "重复的呈现回报不会重复启动");
+
+        // 新一轮等待覆盖尚未启动的旧计时器（旧的世代已过期，不再有意义）
+        pacingMachine.waitTimedInput(250, 99);
+        pacingMachine.waitTimedInput(300, 99);
+        pacingMachine.onFramePresented();
+        check(pending.size() == 1 && pending.first().ms == 300,
+              "新一轮等待覆盖未启动的旧计时器");
+    }
+
     qDebug() << "\n===========================";
     if (g_failures == 0) {
         qDebug() << "[SUCCESS] system-flow tests passed";

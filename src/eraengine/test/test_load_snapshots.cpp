@@ -94,6 +94,22 @@ int main(int argc,char** argv) {
     VariableStorage resized;VariableTable resizedTable;auto resizeDecl=saved;resizeDecl.lengths={3,2};resizedTable.add(resizeDecl);resized.setSaveVariableTable(&resizedTable);
     document={};document.type=EraBinaryData::FileType::Normal;EraBinaryData::Variable matrix;matrix.name="SAVED";matrix.dimensions={2,3};matrix.integers={1,2,3,4,5,6};document.variables={matrix};resized.applyBinarySave(document);
     check(resized.getGlobalInt2D("SAVED",1,0)==4 && resized.getGlobalInt2D("SAVED",1,1)==5 && resized.getGlobalInt2D("SAVED",2,0)==0,"resize copies per axis instead of flattened prefix");
+    // RESETDATA restores ERB/ERH declaration initializers but leaves GLOBAL lifetime intact.
+    VariableDecl resetDim; resetDim.name="RESET_DIM"; resetDim.defaultInt={500};
+    const_cast<VariableTable&>(table.variableTable()).add(resetDim);
+    VariableDecl resetDims; resetDims.name="RESET_DIMS"; resetDims.type=OperandType::Str; resetDims.defaultStr={"ready"};
+    const_cast<VariableTable&>(table.variableTable()).add(resetDims);
+    VariableDecl resetGlobal=resetDim; resetGlobal.name="RESET_GLOBAL"; resetGlobal.isGlobal=true;
+    const_cast<VariableTable&>(table.variableTable()).add(resetGlobal);
+    storage.setGlobalInt1D("RESET_DIM",0,1);
+    storage.setGlobalStr1D("RESET_DIMS",0,"changed");
+    storage.setGlobalInt1D("RESET_GLOBAL",0,77);
+    storage.resetForNewGame();
+    check(storage.getGlobalInt1D("RESET_DIM",0)==500,"RESETDATA restores #DIM initializer");
+    check(storage.getGlobalStr1D("RESET_DIMS",0)=="ready","RESETDATA restores #DIMS initializer");
+    check(storage.getGlobalInt1D("RESET_GLOBAL",0)==77,"RESETDATA preserves #GLOBAL value");
+    storage.setSystemVariable("DAY",0,7);
+
     engine.setSaveFormatProvider([]{return QPair<bool,bool>{true,true};});
     check(engine.writeSaveSnapshot(2,"gzip"),"engine compressed save writes");
     const auto compressed=read(second.filePath("sav/save02.sav"));
@@ -105,7 +121,9 @@ int main(int argc,char** argv) {
     const auto textBytes=read(second.filePath("sav/save03.sav"));
     check(textBytes.startsWith(QByteArray::fromHex("efbbbf")) && textBytes.contains("__EMUERA_1808_STRAT__"),"text mode honors binary false even if zip true");
     engine.reloadSaveSnapshots();storage.setSystemVariable("DAY",0,123);
-    check(engine.loadSaveSnapshot(3) && storage.getSystemVariable("DAY",0)==7,"native text reload restores state");
+    const bool nativeTextLoaded = engine.loadSaveSnapshot(3);
+    check(nativeTextLoaded,"native text reload succeeds");
+    check(storage.getSystemVariable("DAY",0)==7,"native text reload restores state");
     run("SAVEGLOBAL");const auto textGlobal=read(second.filePath("sav/global.sav"));
     EraBinaryData::Document globalSchema;globalSchema.type=EraBinaryData::FileType::Global;
     check(EraBinaryData::decodeText(textGlobal,globalSchema,document),"native GLOBAL text decodes");

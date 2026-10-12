@@ -292,8 +292,16 @@ Item {
         // 滚动/鼠标移动卡顿的主要来源之一（不可点击区块永远不需要高亮）。
         hoverEnabled: block.clickable
         enabled: block.clickable
+        // Qt 文档（MouseArea::preventStealing）：MouseArea 位于 Flickable
+        // （历史视图本身是 ListView）内部时，父项一旦识别出拖动手势就会把
+        // 鼠标事件夺走，本区域收到 canceled 而不是 clicked。按钮按下即提交
+        // （见 onPressed），不允许被夺走才是 C# 的语义。
+        preventStealing: true
         cursorShape: block.clickable ? Qt.PointingHandCursor : Qt.ArrowCursor
-        onClicked: {
+        // C# MainWindow.mainPicBox_MouseDown 在按下时提交选择。
+        // 不等待松开：限时输入可能在按住期间超时或重绘并替换委托，
+        // 此时 MouseArea 不会再发 clicked，导致有效的按下被丢弃。
+        onPressed: event => {
             if (block.backend && block.clickable && block.blockData)
                 block.backend.clickAt(block.blockData.lineIndex, block.blockData.segmentIndex);
         }

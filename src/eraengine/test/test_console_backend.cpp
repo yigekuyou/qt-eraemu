@@ -31,6 +31,8 @@
 
 #include <QCoreApplication>
 #include <QDebug>
+#include <QEventLoop>
+#include <QTimer>
 
 #include "console_backend.h"
 
@@ -397,6 +399,81 @@ int main(int argc, char* argv[]) {
         // ⑦ kind 必须是输入类型而不是系统状态名（QML 提示文本与校验路由都用它）
         check(c.inputKind() == QLatin1String("TINPUTS") && c.waitingInput(),
               "inputKind 是输入类型（TINPUTS），不是系统状态名");
+    }
+
+    // ---- 单字符即时输入（C# InputRequest.OneInput / doInputToEmueraProgram）----
+    qDebug() << "\n单字符即时输入（OneInput）";
+    {
+        ConsoleBackend c;
+        check(!c.oneInput(), "没有等待输入时不是 OneInput");
+
+        // TONEINPUT：单字符即时输入（eraTetris 的限时按钮/按键循环）
+        c.notifyInputRequested(QStringLiteral("TONEINPUT"));
+        check(c.oneInput(), "TONEINPUT 是 OneInput");
+        qint64 gotInt = -1;
+        int intCount = 0;
+        QObject::connect(&c, &ConsoleBackend::inputSubmitted,
+                         [&](qint64 v) { gotInt = v; ++intCount; });
+        c.submitIntegerText(QStringLiteral("12"));
+        check(intCount == 1 && gotInt == 1,
+              "OneInput 的键盘输入只取第 1 个字符（12 -> 1）");
+
+        // ONEINPUT / ONEINPUTS 同样是 OneInput
+        c.notifyInputDone();
+        c.notifyInputRequested(QStringLiteral("ONEINPUT"));
+        check(c.oneInput(), "ONEINPUT 是 OneInput");
+        c.notifyInputDone();
+        c.notifyInputRequested(QStringLiteral("TONEINPUTS"));
+        check(c.oneInput(), "TONEINPUTS 是 OneInput");
+
+        QString gotStr;
+        int strCount = 0;
+        QObject::connect(&c, &ConsoleBackend::inputSubmittedString,
+                         [&](const QString& v) { gotStr = v; ++strCount; });
+        c.submitStringText(QStringLiteral("ab"));
+        check(strCount == 1 && gotStr == QLatin1String("a"),
+              "OneInput 的字符串输入只取第 1 个字符（ab -> a）");
+
+        // 普通（非 OneInput）输入保持原样：多字符不截断
+        c.notifyInputDone();
+        c.notifyInputRequested(QStringLiteral("TINPUT"));
+        check(!c.oneInput(), "TINPUT 不是 OneInput");
+        gotInt = -1;
+        c.submitIntegerText(QStringLiteral("12"));
+        check(gotInt == 12, "普通 TINPUT 不截断（12 -> 12）");
+        c.notifyInputDone();
+        c.notifyInputRequested(QStringLiteral("INPUTS"));
+        check(!c.oneInput(), "INPUTS 不是 OneInput");
+        gotStr.clear();
+        c.submitStringText(QStringLiteral("ab"));
+        check(gotStr == QLatin1String("ab"), "普通 INPUTS 不截断（ab -> ab）");
+    }
+
+    // ---- 帧呈现闸门（C# need_settimer：计时器等这一帧画完再启动）----
+    qDebug() << "\n帧呈现闸门";
+    {
+        ConsoleBackend c;
+        int presented = 0;
+        int asked = 0;
+        QObject::connect(&c, &ConsoleBackend::framePresented, [&] { ++presented; });
+        QObject::connect(&c, &ConsoleBackend::presentationRequested, [&] { ++asked; });
+
+        c.notifyInputRequested(QStringLiteral("TINPUT"));
+        check(asked == 0, "没有 QML 视图时不请求呈现（CLI 立即计时）");
+
+        c.setFramePacingAttached(true);
+        c.notifyInputRequested(QStringLiteral("TINPUT"));
+        check(asked == 1, "有视图时请求一次呈现");
+        check(presented == 0, "视图还没回报就不放行");
+        c.notifyFramePresented();
+        check(presented == 1, "视图回报后放行计时器");
+
+        // 兜底：视图没能回报（销毁/未接线）时也必须放行，否则限时输入会卡死
+        c.notifyInputRequested(QStringLiteral("TINPUT"));
+        QEventLoop loop;
+        QTimer::singleShot(200, &loop, &QEventLoop::quit);
+        loop.exec();
+        check(presented == 2, "视图未回报时 50ms 兜底放行");
     }
 
     qDebug() << "\n===================";

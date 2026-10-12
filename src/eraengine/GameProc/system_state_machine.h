@@ -161,17 +161,29 @@ public:
     // 计时器注入：GUI 用 QTimer；测试可手动触发。未注入时回调**立即**执行（无延迟）。
     using TimerFn = std::function<void(int ms, std::function<void()> cb)>;
     void setTimer(TimerFn fn) { m_timer = std::move(fn); }
+    // 帧节拍闸门（C# EmueraConsole.need_settimer）：
+    //   C# 的限时输入**不在语句处**启动计时器，而是先置 need_settimer，
+    //   等这一帧真正画完（PrintFlush 的绘制路径）才 setTimer() ——
+    //   否则计时器会和「重画这一帧」本身赛跑，玩家看到画面时窗口已经少了一截。
+    //   本工程的「画完」= QML 把舞台变更处理完毕（委托建好、ListView 摆好）后
+    //   回报 ConsoleBackend::framePresented。probe 返回 false（无 QML 视图：
+    //   test_cli / CTest）时退回「立即计时」，行为与以前一致。
+    void setFramePacingProbe(std::function<bool()> probe) { m_framePacingProbe = std::move(probe); }
+    // 由 ConsoleBackend::framePresented 驱动：启动等待中的限时计时器
+    void onFramePresented();
     // AWAIT n：挂起 n 毫秒后自动继续（n<=0 立即继续）
     void awaitDelay(int ms);
     // INPUTMOUSEKEY [time]：等待鼠标/键盘；time>0 超时按 [4,0,0,0,0] 返回
     void waitMouseKey(int timeoutMs);
-    // TONEINPUT time：限时输入；超时按默认值（RESULT=0）返回
-    void waitTimedInput(int timeoutMs, qint64 defaultValue = 0);
+    // TINPUT/TONEINPUT time[, def[, disp]]：限时输入；超时交付缺省值（RESULT=def）。
+    // oneInput = C# InputRequest.OneInput（TONEINPUT/TONEINPUTS）：
+    //   单字符即时提交（收到第一个字符就结束等待，不需要回车）。
+    void waitTimedInput(int timeoutMs, qint64 defaultValue = 0, bool oneInput = false);
     // TWAIT 时间[, 0]：限时**任意键**等待（C# InputType.EnterKey + Timelimit）；
     //   到点自动继续，点击/回车可提前结束（区别于 skip!=0 的纯计时 Void 等待）
     void waitTimedAnyKey(int timeoutMs);
-    // TINPUTS：限时字符串输入，超时交付缺省字符串（写 RESULTS 全局槽）
-    void waitTimedStringInput(int timeoutMs, const QString& defaultValue);
+    // TINPUTS/TONEINPUTS：限时字符串输入，超时交付缺省字符串（写 RESULTS 全局槽）
+    void waitTimedStringInput(int timeoutMs, const QString& defaultValue, bool oneInput = false);
     // PRINTW / WAITANYKEY：等待任意键（无超时，结果不使用）——对齐 C# Console.ReadAnyKey
     void waitAnyKey();
 
@@ -342,6 +354,19 @@ private:
     VariableStorage* m_storage = nullptr;
     SystemHost       m_host;
     TimerFn          m_timer;
+    // 帧节拍闸门（见 setFramePacingProbe）：等待中的限时计时器。
+    // armed=false 表示当前没有待启动的计时器；回调里已带世代校验，
+    // 被覆盖（新一轮等待开始）时旧的直接丢弃 —— 与「立刻启动、到点发现
+    // 世代过期」等价，只是不会白等一个超时时长。
+    struct PendingTimedWait {
+        bool armed = false;
+        int ms = 0;
+        std::function<void()> callback;
+    };
+    PendingTimedWait m_pendingTimedWait;
+    std::function<bool()> m_framePacingProbe;
+    // 限时等待的统一入口：有视图则等「帧画完」，否则立即计时
+    void armTimedWait(int ms, std::function<void()> callback);
 
     QHash<SystemStateCode, Handler> m_handlers;
     bool m_initialized = false;

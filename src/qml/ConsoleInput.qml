@@ -31,6 +31,12 @@ FocusScope {
     readonly property bool isMobile: Qt.platform.os === "android" || Qt.platform.os === "ios"
     readonly property bool anyKeyInput: backend && backend.anyKeyInput
     readonly property bool stringInputKind: backend && backend.stringInput
+    // C# InputRequest.OneInput（ONEINPUT/ONEINPUTS/TONEINPUT/TONEINPUTS）：
+    // 单字符即时提交 —— 收到第一个字符就结束等待，不需要回车。
+    readonly property bool oneInputKind: backend && backend.oneInput
+    // C# MainWindow.last_inputed：等待开始时的输入栏内容。只有**新增**字符
+    // 才算「输入」（删除或内容不变不提交）。
+    property string lastInputed: ""
     // 固定高度，placeholder、validator、waitingInput 均不能改变底栏尺寸。
     implicitHeight: Math.max(24, fontSize + 8)
     focus: true
@@ -57,11 +63,64 @@ FocusScope {
         // 都是字符串型输入，其余（INPUT/TINPUT/ONEINPUT…）走整数校验。
         // 交由 C++ 判定空输入 / 非法输入（对齐 C# doInputToEmueraProgram）：
         // 空回车在「有缺省值」时交缺省值，没有缺省值则忽略。
-        if (stringInputKind)
-            backend.submitStringText(inputField.text);
-        else
-            backend.submitIntegerText(inputField.text);
+        submitText(inputField.text);
         inputField.text = "";
+        lastInputed = "";
+    }
+
+    // 提交一段文本（不读输入栏）：回车路径与单字符即时提交共用。
+    function submitText(commandText) {
+        if (!backend)
+            return;
+        if (commandText.startsWith("\\")) {
+            if (root.engine)
+                root.engine.executeConsoleCommand(commandText);
+            return;
+        }
+        if (!backend.waitingInput || root.titleActive || backend.inputKind === "INPUTMOUSEKEY")
+            return;
+        if (anyKeyInput) {
+            backend.submitAnyKey();
+            return;
+        }
+        // 空输入 / 非法输入一律交给 C++ 按 C# doInputToEmueraProgram 裁决。
+        if (stringInputKind)
+            backend.submitStringText(commandText);
+        else
+            backend.submitIntegerText(commandText);
+    }
+
+    // C# MainWindow.richTextBox1_TextChanged（单字符即时提交）：
+    //   * 只在 ONEINPUT 系等待或「任意键等待」时生效；
+    //   * 输入栏为空不提交（C# string.IsNullOrEmpty 直接返回）；
+    //   * 删除或内容没有变化不算输入（长度不增长）；
+    //   * 否则收到第一个字符就提交，不用回车。
+    // 单字符截断（C# inputs.Remove(1)）在 C++ 的 submitStringText/submitIntegerText
+    // 里按 OneInput 统一处理 —— 鼠标点按钮（changedByMouse）不截断。
+    function handleTextEdited() {
+        if (!backend || !backend.waitingInput)
+            return;
+        if (!oneInputKind && !anyKeyInput)
+            return;
+        if (inputField.text.length === 0)
+            return;
+        if (inputField.text.length <= lastInputed.length) {
+            lastInputed = inputField.text;      // 删除/无变化：只更新基线
+            return;
+        }
+        const typed = inputField.text.slice(lastInputed.length);
+        lastInputed = inputField.text;
+        inputField.text = "";
+        lastInputed = "";
+        submitText(typed);
+    }
+
+    // 等待类型变化（开始等待 / 结束等待）以及脚本改文本框（SETTEXTBOX）时
+    // 重设基线，避免把「上一轮残留的文本」当成这一轮的输入。
+    Connections {
+        target: root.backend
+        function onWaitingInputChanged() { root.lastInputed = inputField.text; }
+        function onTextboxTextChanged() { root.lastInputed = inputField.text; }
     }
 
     // CLEARTEXTBOX（C# Console.ClearTextBox）：清空输入栏内容
@@ -100,6 +159,8 @@ FocusScope {
         validator: root.backend && root.backend.waitingInput && !root.stringInputKind ? intOnly : null
         inputMethodHints: root.stringInputKind ? Qt.ImhNone : Qt.ImhPreferNumbers | Qt.ImhNoPredictiveText
         onAccepted: root.submit()
+        // 用户编辑（程序性赋值不触发）：单字符即时提交入口
+        onTextEdited: root.handleTextEdited()
     }
     RegularExpressionValidator {
         id: intOnly

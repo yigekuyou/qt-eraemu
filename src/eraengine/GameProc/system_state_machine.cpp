@@ -625,8 +625,8 @@ void SystemStateMachine::waitMouseKey(int timeoutMs) {
     m_state->setExecState(ExecState::WaitInput);
     emit inputRequested(m_state->getSystemState());
     emit inputKindRequested(QStringLiteral("INPUTMOUSEKEY"));
-    if (timeoutMs > 0 && m_timer) {
-        m_timer(timeoutMs, [this, wait]() {
+    if (timeoutMs > 0) {
+        armTimedWait(timeoutMs, [this, wait]() {
             if (wait != m_waitGeneration) return;
             // C#：INPUTMOUSEKEY 超时 -> InputMouseKey(4,0,0,0,0)
             deliverInputValues({4, 0, 0, 0, 0});
@@ -642,14 +642,36 @@ void SystemStateMachine::waitAnyKey() {
     if (m_host.readAnyKey) m_host.readAnyKey();   // 通知 UI 弹「任意键」等待
 }
 
-void SystemStateMachine::waitTimedInput(int timeoutMs, qint64 defaultValue) {
+// 限时等待统一入口：等「舞台变更呈现完毕」再启动计时器（C# need_settimer）。
+// 调用点在 emit inputKindRequested 之后，而 QML 对 presentationRequested 的应答
+// 走 Qt.callLater（事件循环之后），因此这里设置的等待一定先于应答被记下。
+void SystemStateMachine::armTimedWait(int ms, std::function<void()> callback) {
+    if (!m_timer) return;
+    if (m_framePacingProbe && m_framePacingProbe()) {
+        m_pendingTimedWait = PendingTimedWait{true, ms, std::move(callback)};
+        return;
+    }
+    m_timer(ms, std::move(callback));
+}
+
+void SystemStateMachine::onFramePresented() {
+    if (!m_pendingTimedWait.armed) return;
+    PendingTimedWait pending = std::move(m_pendingTimedWait);
+    m_pendingTimedWait = PendingTimedWait{};
+    if (!m_timer || !pending.callback) return;
+    m_timer(pending.ms, std::move(pending.callback));   // 这一刻起才真正倒计时
+}
+
+void SystemStateMachine::waitTimedInput(int timeoutMs, qint64 defaultValue, bool oneInput) {
     const auto wait = ++m_waitGeneration;
     m_state->setExecState(ExecState::WaitInput);
     emit inputRequested(m_state->getSystemState());
-    emit inputKindRequested(QStringLiteral("TINPUT"), QVariant(qint64(defaultValue)));
-    if (timeoutMs > 0 && m_timer) {
+    // oneInput 的输入类型就是 TONEINPUT（QML 由类型串判定单字符即时提交）
+    emit inputKindRequested(oneInput ? QStringLiteral("TONEINPUT") : QStringLiteral("TINPUT"),
+                            QVariant(qint64(defaultValue)));
+    if (timeoutMs > 0) {
         // [qdbug] C# 原版全量：TINPUT 超时交付**缺省值**（此前恒为 0）
-        m_timer(timeoutMs, [this, wait, defaultValue]() {
+        armTimedWait(timeoutMs, [this, wait, defaultValue]() {
             if (wait == m_waitGeneration) deliverInputValues({defaultValue});
         });
     }
@@ -662,8 +684,8 @@ void SystemStateMachine::waitTimedAnyKey(int timeoutMs) {
     m_state->setExecState(ExecState::WaitInput);
     emit inputRequested(m_state->getSystemState());
     emit inputKindRequested(QStringLiteral("TWAIT"));
-    if (timeoutMs > 0 && m_timer) {
-        m_timer(timeoutMs, [this, wait]() {
+    if (timeoutMs > 0) {
+        armTimedWait(timeoutMs, [this, wait]() {
             if (wait == m_waitGeneration) resume(0);
         });
     }
@@ -671,13 +693,15 @@ void SystemStateMachine::waitTimedAnyKey(int timeoutMs) {
 
 // TINPUTS：限时字符串输入；超时没输入则 RESULTS = 缺省字符串并继续
 //（RESULTS 全局，C# VariableData.cs:202）
-void SystemStateMachine::waitTimedStringInput(int timeoutMs, const QString& defaultValue) {
+void SystemStateMachine::waitTimedStringInput(int timeoutMs, const QString& defaultValue,
+                                             bool oneInput) {
     const auto wait = ++m_waitGeneration;
     m_state->setExecState(ExecState::WaitInput);
     emit inputRequested(m_state->getSystemState());
-    emit inputKindRequested(QStringLiteral("TINPUTS"), QVariant(defaultValue));
-    if (timeoutMs > 0 && m_timer) {
-        m_timer(timeoutMs, [this, wait, defaultValue]() {
+    emit inputKindRequested(oneInput ? QStringLiteral("TONEINPUTS") : QStringLiteral("TINPUTS"),
+                            QVariant(defaultValue));
+    if (timeoutMs > 0) {
+        armTimedWait(timeoutMs, [this, wait, defaultValue]() {
             if (wait != m_waitGeneration) return;
             m_storage->setGlobalStr1D(QStringLiteral("RESULTS"), 0, defaultValue);
             resume(0);

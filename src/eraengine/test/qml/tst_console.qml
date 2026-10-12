@@ -714,6 +714,77 @@ TestCase {
         compare(spy.count, 1, "点击应触发 1 次 inputSubmitted");
         compare(spy.signalArguments[0][0], 1, "按钮值应为 1");
     }
+    // 舞台模式（eraTetris 的 PRINTBUTTON + TONEINPUT 循环）下按钮必须可点：
+    // 游戏先打印 [←][↓][→] 等按钮，再进入限时输入；玩家看到的是**舞台**快照，
+    // 点击命中的也是舞台委托，历史视图此时完全不可见。
+    function test_stageButtonsAreClickableDuringTimedInput() {
+        const spy = Qt.createQmlObject('import QtTest 1.0; SignalSpy {}', tc);
+        spy.target = backend;
+        spy.signalName = "inputSubmitted";
+
+        backend.stageMode = true;
+        backend.clearAll();
+        backend.printButton("[←]", 4);
+        backend.printButton("[→]", 6);
+        backend.newline();
+        backend.flush(); view.syncView();
+
+        consoleFixture.request(backend, "TONEINPUT");
+        backend.flush(); view.syncView();
+
+        const stage = findChild(view, "consoleStageView");
+        compare(stage.visible, true, "舞台视图应可见");
+        const item = view.blockAt(0, 0);
+        verify(item !== null && item !== undefined, "舞台没有区块");
+        compare(item.clickable, true, "舞台按钮应可点击");
+        compare(item.blockData.isInteger, true, "PRINTBUTTON 是整数按钮");
+
+        mouseClick(findChild(item, "blockButtonMouse"));
+        compare(spy.count, 1, "舞台按钮点击应提交 1 次");
+        compare(spy.signalArguments[0][0], 4, "按钮值应为 4");
+        spy.destroy();
+    }
+
+    // 按下即提交必须挺过「按下之后整屏重画、按钮委托被销毁重建」：
+    // eraTetris 每次落下或输入超时都会 CLEARLINE 重画（PRINTBUTTON 重新打印），
+    // 绑在 clicked（按下 + 松开）上的提交会因为松开时委托已换人而丢失。
+    function test_pressCommitsEvenWhenFrameIsRedrawnBeforeRelease() {
+        const spy = Qt.createQmlObject('import QtTest 1.0; SignalSpy {}', tc);
+        spy.target = backend;
+        spy.signalName = "inputSubmitted";
+
+        backend.stageMode = true;
+        backend.clearAll();
+        backend.printButton("[←]", 4);
+        backend.newline();
+        consoleFixture.request(backend, "TONEINPUT");
+        view.syncView();
+
+        const item = view.blockAt(0, 0);
+        verify(item !== null, "舞台没有区块");
+        const mouse = findChild(item, "blockButtonMouse");
+        const px = mouse.width / 2;
+        const py = mouse.height / 2;
+        const at = mouse.mapToItem(host, px, py);   // 松开时按屏幕坐标投递
+
+        mousePress(mouse, px, py);
+        compare(spy.count, 1, "按下就应提交");
+        compare(spy.signalArguments[0][0], 4);
+
+        // 下一帧：CLEARLINE + 重新打印 + 新的限时输入（委托全部重建）
+        backend.clearAll();
+        backend.print("frame");
+        backend.newline();
+        backend.printButton("[→]", 6);
+        backend.newline();
+        consoleFixture.request(backend, "TONEINPUT");
+        backend.flush(); view.syncView();
+
+        mouseRelease(host, at.x, at.y);
+        compare(spy.count, 1, "松开不得再提交一次");
+        spy.destroy();
+    }
+
     function test_stringWaitDisablesIntegerBackgroundButtons() {
         backend.clearAll();
         backend.printButton("                                                                                ", 0);
@@ -762,6 +833,92 @@ TestCase {
         compare(view.blockAt(0, 0).clickable, false, "submitted buttons are visibly inactive");
         backend.inputSubmitted.disconnect(next);
         backend.inputSubmittedString.disconnect(done);
+    }
+
+    // C# MainWindow.richTextBox1_TextChanged：ONEINPUT 系等待时，收到第一个
+    // 字符就提交（不需要回车）—— eraTetris 的标题 / 游戏结束都是 ONEINPUT。
+    // 帧节拍闸门：视图收到 presentationRequested 后必须处理完这一帧并回报
+    // notifyFramePresented()（否则 C++ 只能等 50ms 兜底，等于把计时器推迟到
+    // 画面之外）。窗口取 30ms —— 小于兜底的 50ms，所以只有 QML 自己回报
+    // 才可能通过；handler 里任何 JS 错误都会让这次回报丢失。
+    function test_inputFrameIsReportedBackToBackend() {
+        const spy = Qt.createQmlObject('import QtTest 1.0; SignalSpy {}', tc);
+        spy.target = backend;
+        spy.signalName = "framePresented";
+        compare(backend.framePacingAttached, true, "视图挂上后闸门置真");
+        // 必须走舞台分支（eraTetris 就是舞台模式）：只有这时 handler 才会
+        // 走到「摆好这一帧」的那段代码。
+        backend.stageMode = true;
+        backend.printButton("[←]", 4);
+        backend.newline();
+        backend.flush(); view.syncView();
+        compare(view.showingStage, true, "舞台模式生效");
+        consoleFixture.request(backend, "TONEINPUT");
+        spy.wait(30);
+        compare(spy.count, 1, "QML 必须回报这一帧已呈现");
+        spy.destroy();
+    }
+
+    function test_oneInputSubmitsOnFirstCharacter() {
+        const spy = Qt.createQmlObject('import QtTest 1.0; SignalSpy {}', tc);
+        spy.target = backend;
+        spy.signalName = "inputSubmitted";
+        const field = findChild(inputBar, "consoleInputField");
+        win.requestActivate();
+        tryCompare(win, "active", true);
+
+        consoleFixture.request(backend, "TONEINPUT");
+        tryCompare(field, "visible", true);
+        field.forceActiveFocus();
+        tryCompare(field, "activeFocus", true);
+
+        keyClick("7");
+        compare(spy.count, 1, "收到第 1 个字符就提交");
+        compare(spy.signalArguments[0][0], 7);
+        compare(field.text, "", "提交后输入栏清空");
+        spy.destroy();
+    }
+
+    // 字符串型 ONEINPUT（ONEINPUTS / TONEINPUTS）同为单字符即时提交
+    function test_oneInputStringSubmitsOnFirstCharacter() {
+        const spy = Qt.createQmlObject('import QtTest 1.0; SignalSpy {}', tc);
+        spy.target = backend;
+        spy.signalName = "inputSubmittedString";
+        const field = findChild(inputBar, "consoleInputField");
+        win.requestActivate();
+        tryCompare(win, "active", true);
+
+        consoleFixture.request(backend, "TONEINPUTS");
+        tryCompare(field, "visible", true);
+        field.forceActiveFocus();
+        tryCompare(field, "activeFocus", true);
+
+        keyClick("a");
+        compare(spy.count, 1, "字符串型 OneInput 也是单字符即时提交");
+        compare(spy.signalArguments[0][0], "a");
+        spy.destroy();
+    }
+
+    // 普通输入（TINPUT/INPUT）必须回车：单字符不得提前提交
+    function test_normalInputWaitsForEnter() {
+        const spy = Qt.createQmlObject('import QtTest 1.0; SignalSpy {}', tc);
+        spy.target = backend;
+        spy.signalName = "inputSubmitted";
+        const field = findChild(inputBar, "consoleInputField");
+        win.requestActivate();
+        tryCompare(win, "active", true);
+
+        consoleFixture.request(backend, "TINPUT");
+        tryCompare(field, "visible", true);
+        field.forceActiveFocus();
+        tryCompare(field, "activeFocus", true);
+
+        keyClick("7");
+        compare(spy.count, 0, "普通输入打完字符不能即时提交");
+        keyClick(Qt.Key_Return);
+        compare(spy.count, 1, "回车才提交");
+        compare(spy.signalArguments[0][0], 7);
+        spy.destroy();
     }
 
     function test_primitiveMouseAndKey() {

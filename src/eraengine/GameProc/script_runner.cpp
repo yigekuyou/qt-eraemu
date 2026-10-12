@@ -1562,6 +1562,10 @@ ExecState ScriptRunner::executeLine(const LogicalLine& line) {
         const QList<Operand> args = inputArgs(line);   // 逗号同样是独立操作数
         qint64 timeout = 0;
         if (!args.isEmpty()) evalInt(args.first().ast, args.first().raw, timeout);
+        // 与 TINPUT 同款的诊断：限时窗口是「难度/手感」最直接的证据
+        // （eraTetris 的窗口 = MAX(落下速度 - 落下速度_入力バッファ, 100)）。
+        qDebug() << "[tinput]" << name << "超时" << timeout << "ms 操作数"
+                 << line.arguments.size();
         // TONEINPUTS 是**字符串型**限时输入（ONEINPUTS + 超时，写 RESULTS）：
         // 超时交付第 2 参缺省值（eraTW BATTLE.ERB ASK_BATTLE 的
         // `TONEINPUTS 制限時間, "p", 1` -> SELECTCASE RESULTS CASEELSE）。
@@ -1579,15 +1583,29 @@ ExecState ScriptRunner::executeLine(const LogicalLine& line) {
                 defStr = stringText(evaluateLoadedOperand(getEvaluator(), def, m_storage, baseData()));
             }
         }
+        // TONEINPUT 的第 2 参是整数缺省值（C# TINPUT_Instruction：DefIntValue = Def）；
+        // 超时交付它。此前恒按 0 交付 —— `TONEINPUT 300,1234,0` 会给出 1234。
+        qint64 defInt = 0;
+        if (name != QLatin1String("TONEINPUTS") && args.size() >= 2) {
+            const Operand& def = args.at(1);
+            if (def.ast) {
+                defInt = getEvaluator().evaluate(*def.ast, m_storage, baseData()).toLongLong();
+            } else if (def.isString) {
+                defInt = def.raw.toLongLong();
+            }
+        }
         if (timeout < 0) timeout = 0;
         advance();
         // 需要输入值 -> 清掉 SKIPLOG 跳过状态（C# NeedValue）
         if (m_engine) m_engine->setMesSkip(false);
         if (m_machine) {
+            const bool oneInput = name.endsWith(QLatin1String("ONEINPUT"))
+                || name.endsWith(QLatin1String("ONEINPUTS"));
             if (name == QLatin1String("TONEINPUTS"))
-                m_machine->waitTimedStringInput(static_cast<int>(timeout), defStr);
+                // 单字符即时提交（C# OneInput）：TONEINPUTS 是 TINPUTS 的单字符版本
+                m_machine->waitTimedStringInput(static_cast<int>(timeout), defStr, oneInput);
             else
-                m_machine->waitTimedInput(static_cast<int>(timeout));
+                m_machine->waitTimedInput(static_cast<int>(timeout), defInt, oneInput);
             return m_state->getExecState();
         }
         return ExecState::WaitInput;

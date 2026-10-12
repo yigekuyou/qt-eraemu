@@ -150,6 +150,13 @@ class ConsoleBackend : public QAbstractListModel {
     Q_PROPERTY(bool acceptsIntegerButtons READ acceptsIntegerButtons NOTIFY waitingInputChanged)
     Q_PROPERTY(bool acceptsStringButtons READ acceptsStringButtons NOTIFY waitingInputChanged)
     Q_PROPERTY(bool waitingInput     READ waitingInput                         NOTIFY waitingInputChanged)
+    // C# InputRequest.OneInput（ONEINPUT/ONEINPUTS/TONEINPUT/TONEINPUTS）：
+    // 单字符即时提交 —— 收到第一个字符就结束等待，不需要回车。
+    Q_PROPERTY(bool oneInput READ oneInput NOTIFY waitingInputChanged)
+    // 帧节拍闸门：QML 控制台视图挂上后置真。限时输入的计时器据此改为
+    // 「舞台变更呈现完毕」后才启动（见 SystemStateMachine::setFramePacingProbe）。
+    Q_PROPERTY(bool framePacingAttached READ framePacingAttached
+               WRITE setFramePacingAttached NOTIFY framePacingAttachedChanged)
     Q_PROPERTY(quint64 generation    READ generation                           NOTIFY generationChanged)
     // 逻辑网格列/行数：**不是**常量。装载配置后会按「窗口宽 ÷ 单元格宽」重算
     // （eraTW 是 175 列，代码默认只有 80）。若声明为 CONSTANT，QML 会一直用旧值
@@ -196,6 +203,11 @@ public:
     [[nodiscard]] QString inputKind() const { return m_inputKind; }
     [[nodiscard]] bool anyKeyInput() const;
     [[nodiscard]] bool stringInput() const;
+    [[nodiscard]] bool oneInput() const;
+    [[nodiscard]] bool framePacingAttached() const { return m_framePacingAttached; }
+    void setFramePacingAttached(bool attached);
+    // QML 控制台把「舞台变更处理完毕」回报到这里 -> 放行限时输入的计时器
+    Q_INVOKABLE void notifyFramePresented();
     [[nodiscard]] bool acceptsIntegerButtons() const;
     [[nodiscard]] bool acceptsStringButtons() const;
     [[nodiscard]] bool waitingInput() const { return m_waitingInput; }
@@ -340,6 +352,12 @@ signals:
     // 滚动请求（D-Bus /debug、菜单栏；QML 视图消费 —— contentY 是视图的状态）
     void scrollRequested(int lines);
     void scrollToBottomRequested();
+    // 输入等待的帧已发布（notifyInputRequested 里 flush + updateStageModels 之后）：
+    // QML 收到后把这一帧的委托建好再回报 notifyFramePresented()。
+    void presentationRequested();
+    // 舞台变更呈现完毕：限时输入的计时器到这一刻才开始倒计时
+    void framePresented();
+    void framePacingAttachedChanged();
 
 private:
     int displayLineCount() const { return m_buffer.count() + (m_pendingOpen ? 1 : 0); }
@@ -400,6 +418,10 @@ private:
     QString m_textboxText;
 
     QTimer m_timer;
+    bool m_framePacingAttached = false;
+    // 呈现应答的兜底：QML 因任何原因没回报（视图销毁/未接线）时，限时输入的
+    // 计时器不能永远不启动 —— 超时后自行放行一次。
+    QTimer m_presentationFallback;
 
     // ---- 模型发布状态 ----
     // 尾部「未定型行」是否已在模型里（print 打开后由 flush 插入，newline 摘除）。

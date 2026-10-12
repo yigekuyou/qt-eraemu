@@ -60,6 +60,11 @@ ConsoleBackend::ConsoleBackend(QObject* parent)
     m_timer.setTimerType(Qt::CoarseTimer);
     connect(&m_timer, &QTimer::timeout, this, &ConsoleBackend::tick);
     m_timer.start();
+    // 帧呈现应答的兜底（见 notifyInputRequested）：50ms 内没等到 QML 的
+    // 呈现回报就自行放行，宁可少等待一点也不能让限时输入卡死。
+    m_presentationFallback.setSingleShot(true);
+    m_presentationFallback.setInterval(50);
+    connect(&m_presentationFallback, &QTimer::timeout, this, &ConsoleBackend::notifyFramePresented);
 }
 
 // ---------------------------------------------------------------------------
@@ -808,6 +813,23 @@ bool ConsoleBackend::stringInput() const {
     return m_waitingInput && inputExpectsString(m_inputKind);
 }
 
+// C# InputRequest.OneInput：ONEINPUT/ONEINPUTS/TONEINPUT/TONEINPUTS 四者
+// 都是「单字符即时提交」（FunctionIdentifier：TONEINPUT → TINPUT_Instruction(true)）。
+bool ConsoleBackend::oneInput() const {
+    return m_waitingInput && m_inputKind.toUpper().contains(QLatin1String("ONEINPUT"));
+}
+
+void ConsoleBackend::setFramePacingAttached(bool attached) {
+    if (m_framePacingAttached == attached) return;
+    m_framePacingAttached = attached;
+    emit framePacingAttachedChanged();
+}
+
+void ConsoleBackend::notifyFramePresented() {
+    m_presentationFallback.stop();
+    emit framePresented();
+}
+
 bool ConsoleBackend::acceptsIntegerButtons() const {
     return m_waitingInput && (inputAcceptsAny(m_inputKind) || !inputExpectsString(m_inputKind));
 }
@@ -824,6 +846,14 @@ void ConsoleBackend::notifyInputRequested(const QString& kind, const QVariant& d
     updateStageModels(true);
     emit inputRequested(kind);
     emit waitingInputChanged();
+    // C# EmueraConsole：限时输入不在语句处启动计时器，等这一帧画完再启动
+    //（need_settimer，消费点在 PrintFlush 的绘制路径）。本工程由 QML 视图
+    // 把「舞台变更处理完毕」回报回来：这里先请它处理这一帧。
+    // 没有视图（test_cli / CTest）时不做闸门，计时器在语句处立即启动。
+    if (m_framePacingAttached) {
+        emit presentationRequested();
+        m_presentationFallback.start();
+    }
 }
 
 void ConsoleBackend::notifyInputDone() {
@@ -1111,7 +1141,10 @@ void ConsoleBackend::submitIntegerText(const QString& text) {
                    << "等待中" << m_waitingInput;
         return;
     }
-    const QString t = text.trimmed();
+    // C# doInputToEmueraProgram：OneInput 时键盘输入只取**第 1 个字符**
+    //（`if (inputReq.OneInput && … && inputs.Length > 1) inputs = inputs.Remove(1);`）。
+    // 鼠标选择按钮走 submitInput（changedByMouse），不做截断。
+    const QString t = oneInput() ? text.trimmed().left(1) : text.trimmed();
     if (t.isEmpty()) {
         if (m_inputDefault.isValid()) {
             const qint64 v = m_inputDefault.toLongLong();
@@ -1148,7 +1181,8 @@ void ConsoleBackend::submitStringText(const QString& text) {
         submitInputString(m_inputDefault.toString());
         return;
     }
-    submitInputString(text);
+    // 同上：OneInput 的键盘输入只取第 1 个字符（C# inputs.Remove(1)）
+    submitInputString(oneInput() ? text.left(1) : text);
 }
 
 void ConsoleBackend::submitInputString(const QString& value) {

@@ -63,6 +63,10 @@ static QString scriptNameFor(const QString& root, const QString& filePath) {
 
 ErbLoader::ErbLoader(QObject* parent) : QObject(parent), m_parseTable(nullptr) {}
 
+ErbLoader::~ErbLoader() {
+    cancelAndWait();
+}
+
 QString ErbLoader::readFileContent(const QString& filePath) const {
     // 编码按文件嗅探（BOM → UTF-8 → Shift-JIS → Latin-1）：
     // 同一游戏目录里 UTF-8 的汉化 ERB 与 Shift-JIS 的原始 ERB 可以共存。
@@ -333,7 +337,7 @@ bool ErbLoader::mergeParsedFile(ParsedErbFile&& pf) {
         if (!pf.diagnostics.isEmpty()) {
             m_parseTable->addParseDiagnostics(pf.diagnostics);
         }
-        // 不合并 worker 缓存：行内 AST 已自带，运行期新表达式按需再解析（懒加载）
+        // 行内 AST 已交给解析表，释放本文件的临时行持有者。
         pf.lines.clear();
     } else {
         m_logicalLines.insert(pf.scriptName, pf.lines);
@@ -416,7 +420,7 @@ bool ErbLoader::loadDirectory(const QString& dirPath, int depth) {
 
     // 1) 预扫描（并行）：**读+解码一次**，产出函数返回类型表 + 解码文本缓存；
     //    解析阶段复用该文本，避免第二次读盘/解码/编码嗅探。
-    const QList<QPair<QString, FunctionTypes>> scans =
+    QList<QPair<QString, FunctionTypes>> scans =
         QtConcurrent::blockingMapped(files, [this](const QString& f) {
             const QString content = readFileContent(f);
             return qMakePair(content, scanFunctionTypes(content));
@@ -432,6 +436,8 @@ bool ErbLoader::loadDirectory(const QString& dirPath, int depth) {
         }
     }
 
+    // decoded 接管源文本；扫描结果不能继续持有已消费文件的共享字符串。
+    scans.clear();
     tScan = timer.elapsed();
 
     // 2) 分块并行解析 + 主线程合并（限制内存峰值）
@@ -530,6 +536,13 @@ void ErbLoader::finishAsync(bool ok) {
                       << " 文件" << m_async.total
                       << " 总耗时" << totalMs << "ms"
                       << " 主线程合并" << m_async.mergeMs << "ms";
+    if (m_prepWatcher) disconnect(m_prepWatcher.get(), nullptr, this, nullptr);
+    if (m_chunkWatcher) disconnect(m_chunkWatcher.get(), nullptr, this, nullptr);
+    if (m_prepWatcher) m_prepWatcher->setFuture(QFuture<LoadPrep>());
+    if (m_chunkWatcher) m_chunkWatcher->setFuture(QFuture<ParsedErbFile>());
+    m_prepFuture = {};
+    m_chunkFuture = {};
+    m_asyncTypes.clear();
     m_async = AsyncState{};
     emit loadCompleted(ok);
 }
@@ -553,24 +566,58 @@ void ErbLoader::loadDirectoryAsync(const QString& dirPath, int depth) {
         QThreadPool::globalInstance()->setMaxThreadCount(m_maxThreads);
     }
 
-    connect(&m_prepWatcher, &QFutureWatcher<LoadPrep>::finished,
-            this, &ErbLoader::onPrepFinished, Qt::UniqueConnection);
-    connect(&m_chunkWatcher, &QFutureWatcher<ParsedErbFile>::finished,
-            this, &ErbLoader::onChunkFinished, Qt::UniqueConnection);
-    m_prepWatcher.setFuture(QtConcurrent::run([this, dirPath, depth] { return prepareLoad(dirPath, depth); }));
+    const auto generation = ++m_generation;
+    m_prepWatcher = std::make_unique<QFutureWatcher<LoadPrep>>();
+    m_chunkWatcher = std::make_unique<QFutureWatcher<ParsedErbFile>>();
+    connect(m_prepWatcher.get(), &QFutureWatcher<LoadPrep>::finished, this, [this, generation] {
+        if (generation == m_generation && m_async.active && m_prepFuture.isFinished() && m_prepFuture.isValid()) onPrepFinished();
+    });
+    connect(m_chunkWatcher.get(), &QFutureWatcher<ParsedErbFile>::finished, this, [this, generation] {
+        if (generation == m_generation && m_async.active && m_chunkFuture.isFinished()) onChunkFinished();
+    });
+    m_prepFuture = QtConcurrent::run([this, dirPath, depth] { return prepareLoad(dirPath, depth); });
+    m_prepWatcher->setFuture(m_prepFuture);
 }
 
 void ErbLoader::cancelLoad() {
     if (!m_async.active) return;
     m_async.cancelled = true;
+    m_prepFuture.cancel();
+    m_chunkFuture.cancel();
+}
+
+void ErbLoader::cancelAndWait() {
+    ++m_generation;
+    cancelLoad();
+    if (m_prepFuture.isRunning()) m_prepFuture.waitForFinished();
+    if (m_chunkFuture.isRunning()) m_chunkFuture.waitForFinished();
+    // QtConcurrent::mapped 可能已经完成但 watcher 尚未送出 finished；先断开
+    // 已排队的完成通知，避免下一轮装载误消费旧 future 的结果。
+    if (m_prepWatcher) disconnect(m_prepWatcher.get(), nullptr, this, nullptr);
+    if (m_chunkWatcher) disconnect(m_chunkWatcher.get(), nullptr, this, nullptr);
+    m_prepWatcher.reset();
+    m_chunkWatcher.reset();
+
+    m_prepFuture = {};
+    m_chunkFuture = {};
+    m_preprocessor = ErbPreprocessor{};
+    m_async = AsyncState{};
+    m_asyncTypes.clear();
+    m_logicalLines.clear();
+    m_scriptPaths.clear();
+    m_labels.clear();
+    m_labelPositions.clear();
+    m_scriptLineCounts.clear();
 }
 
 void ErbLoader::onPrepFinished() {
-    LoadPrep prep = m_prepWatcher.result();
     if (m_async.cancelled) {
         finishAsync(false);
         return;
     }
+    LoadPrep prep = m_prepFuture.takeResult();
+    m_prepWatcher->setFuture(QFuture<LoadPrep>());
+    m_prepFuture = {};
     if (!prep.ok) {
         finishAsync(false);
         return;
@@ -592,8 +639,9 @@ void ErbLoader::onPrepFinished() {
     // 首帧前贡献了多少等待时间。
     qInfo().noquote() << "[ErbLoader] 异步预扫描完成(读文件+函数类型)"
                       << m_async.clock.elapsed() << "ms，" << m_async.total << "个文件";
+    const auto generation = m_generation;
     emit loadProgress(0, m_async.total);
-    scheduleNextChunk();
+    if (generation == m_generation && m_async.active) scheduleNextChunk();
 }
 
 void ErbLoader::scheduleNextChunk() {
@@ -614,11 +662,12 @@ void ErbLoader::scheduleNextChunk() {
     const FunctionTypes types = m_asyncTypes;
     // 复用预扫描已解码的源文本（m_async.decoded 在本次 mapped 运行期间只读，
     // 直到 onChunkFinished 才回收 —— 无并发写）。
-    m_chunkWatcher.setFuture(QtConcurrent::mapped(slice,
+    m_chunkFuture = QtConcurrent::mapped(slice,
         [this, types](const QString& f) {
             const QString content = m_async.decoded.value(f);   // 浅拷贝（隐式共享）
             return parseOneFile(f, types, &content, m_async.dirPath);
-        }));
+        });
+    m_chunkWatcher->setFuture(m_chunkFuture);
 }
 
 void ErbLoader::onChunkFinished() {
@@ -626,7 +675,10 @@ void ErbLoader::onChunkFinished() {
         finishAsync(false);
         return;
     }
-    QList<ParsedErbFile> parsed = m_chunkWatcher.future().results();
+    QList<ParsedErbFile> parsed = m_chunkFuture.results();
+    // results() 复制结果：先释放 future/watcher 的原件，再开始修改和合并行数据。
+    m_chunkWatcher->setFuture(QFuture<ParsedErbFile>());
+    m_chunkFuture = {};
     const int n = parsed.size();
     // 本块后台解析已完成：立即释放其解码文本（解析阶段用完即弃）
     const int base = m_async.parsed;
@@ -663,17 +715,23 @@ void ErbLoader::mergeStep() {
     }
     m_async.mergeMs += mergeClock.elapsed();
     m_async.merged += n;
+    const auto generation = m_generation;
     emit loadProgress(m_async.merged, m_async.total);
+    if (generation != m_generation || !m_async.active) return;
 
     if (m_async.pendingPos < m_async.pending.size()) {
         // 还有待并：让主线程回事件循环后再继续（保持 UI 响应）
-        QMetaObject::invokeMethod(this, &ErbLoader::mergeStep, Qt::QueuedConnection);
+        QMetaObject::invokeMethod(this, [this, generation = m_generation] {
+            if (generation == m_generation && m_async.active) mergeStep();
+        }, Qt::QueuedConnection);
         return;
     }
     m_async.pending.clear();
     m_async.pendingPos = 0;
     // 本块全部并入：继续下一块的解析
-    QMetaObject::invokeMethod(this, &ErbLoader::scheduleNextChunk, Qt::QueuedConnection);
+    QMetaObject::invokeMethod(this, [this, generation = m_generation] {
+        if (generation == m_generation && m_async.active) scheduleNextChunk();
+    }, Qt::QueuedConnection);
 }
 
 // ---------------------------------------------------------------------------

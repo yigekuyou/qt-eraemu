@@ -61,6 +61,7 @@ class ErbLoader : public QObject {
 
 public:
     explicit ErbLoader(QObject* parent = nullptr);
+    ~ErbLoader() override;
 
     // Load ERB files
     // root：脚本名的基准目录（脚本名 = 相对 root 的路径，对齐 C# Config.GetFiles）。
@@ -74,6 +75,8 @@ public:
     void loadDirectoryAsync(const QString& dirPath, int depth = 0);
     [[nodiscard]] bool isLoading() const { return m_async.active; }
     void cancelLoad();
+    // 停止后台任务并等待其退出；调用后释放 loader 持有的脚本/拍平结果。
+    void cancelAndWait();
 
     // 并行装载开关与线程数（默认开启；线程数 <=0 表示用 QThreadPool 默认）
     void setParallelLoad(bool on) { m_parallel = on; }
@@ -179,9 +182,12 @@ private:
     };
     AsyncState m_async;
     void finishAsync(bool ok);   // 统一收尾：记录耗时 -> 复位 -> 发 loadCompleted
-    QFutureWatcher<LoadPrep> m_prepWatcher;
-    QFutureWatcher<ParsedErbFile> m_chunkWatcher;   // QtConcurrent::mapped 的结果
+    std::unique_ptr<QFutureWatcher<LoadPrep>> m_prepWatcher;
+    std::unique_ptr<QFutureWatcher<ParsedErbFile>> m_chunkWatcher;   // QtConcurrent::mapped 的结果
+    QFuture<LoadPrep> m_prepFuture;
+    QFuture<ParsedErbFile> m_chunkFuture;
     FunctionTypes m_asyncTypes;
+    quint64 m_generation = 0;
 
 private slots:
     void onPrepFinished();

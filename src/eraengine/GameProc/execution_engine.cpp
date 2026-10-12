@@ -1984,6 +1984,22 @@ int ExecutionEngine::printCWidth(const QString& text) {
     return w;
 }
 
+void ExecutionEngine::clearForReload() {
+    m_saveSnapshots.clear();
+    m_invalidSaves.clear();
+    m_globalSnapshot = {};
+    m_globalSnapshotValid = false;
+    m_variableSnapshots.clear();
+    m_currentScript.clear();
+    m_currentLine = 0;
+    m_executionPosition = 0;
+    m_running = false;
+    m_totalInstructionsExecuted = 0;
+    m_skipDisp = false;
+    m_mesSkip = false;
+    m_printWaitKey = false;
+}
+
 bool ExecutionEngine::handleResetData() {
     // 对齐 C# VariableEvaluator.ResetData：
     //   SetDefaultValue(全部变量回默认) / SetDefaultLocalValue / CharacterList.Clear()

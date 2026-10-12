@@ -30,6 +30,7 @@
 #include "erb_loader.h"
 #include "i18n.h"
 #include "GameView/dbus_debug.h"
+#include "GameView/graphics_store.h"
 #include <memory>
 #include <iostream>
 #include <QFile>
@@ -39,12 +40,42 @@
 #include <QtConcurrent/QtConcurrent>
 
 EraEngine::~EraEngine() {
-		// 后台语义阶段（finalizeParse）若仍在跑必须等它结束：它直接改写
-		// m_parseTable / m_scripts，EraEngine 析构后再触碰就是释放后使用
-		// （退出应用时恰好赶上装载的最后一秒）。
-		if (m_semanticFuture.isRunning()) {
-				m_semanticFuture.waitForFinished();
-		}
+        stopAsyncLoad();
+}
+
+void EraEngine::stopAsyncLoad() {
+        m_systemStateMachine.stopForReload();
+        ++m_loadGeneration;
+        auto& loader = m_executionEngine.getErbLoader();
+        if (m_loadProgressConn) disconnect(m_loadProgressConn);
+        if (m_loadCompletedConn) disconnect(m_loadCompletedConn);
+        loader.cancelAndWait();
+        if (m_semanticFuture.isRunning()) {
+                m_semanticFuture.waitForFinished();
+        }
+        m_semanticFuture = {};
+        m_semanticRunning = false;
+}
+
+void EraEngine::clearLoadedGame() {
+        m_systemStateMachine.stopForReload();
+        m_scriptRunner.clearForReload();
+        m_executionEngine.clearForReload();
+        m_expressionEvaluator.setConstProvider({});
+        m_expressionEvaluator.setConstArrayProvider({});
+        m_expressionEvaluator.setConstArrayChecker({});
+        m_parseTable.clear();
+        m_variableStorage.clearForReload();
+        m_constantTable.clear();
+        m_gameBaseData.clear();
+        m_configLoader.clearFiles();
+        m_scriptProcessor.clear();
+        m_eventManager.clearEventQueue();
+        m_console.notifyInputDone();
+        m_console.clearAll();
+        m_audio.stopBgm();
+        m_audio.stopSounds();
+        GraphicsStore::clearAll();
 }
 
 EraEngine::EraEngine(QObject *parent)
@@ -627,11 +658,13 @@ bool EraEngine::loadScript(const QString& scriptPath)
 
 void EraEngine::executeScript(const QString& scriptName)
 {
+        if (isLoadingScripts()) return;
 		m_executionEngine.executeScript(scriptName);
 }
 
 void EraEngine::loadAsync(const QString& directory)
 {
+        stopAsyncLoad();
 		QString dir = GamePaths::normalize(directory);
 		if (dir.startsWith(QLatin1String("file://"))) {
 				dir = QUrl(dir).toLocalFile();
@@ -666,6 +699,7 @@ QString EraEngine::getGameDirectory() const
 void EraEngine::setGameDirectory(const QString& directory)
 {
 		if (m_gameDirectory != directory) {
+                stopAsyncLoad();
 				// Ensure the directory path is properly formatted
 				QString dir = GamePaths::normalize(directory);
 				// If it's a URL (starts with file://), convert to local path
@@ -694,10 +728,9 @@ void EraEngine::setGameDirectory(const QString& directory)
 
 void EraEngine::reload()
 {
+        stopAsyncLoad();
+        clearLoadedGame();
 		setHasError(false);   // 重新装载 -> 清掉上一次的错误灯
-		// 新游戏从空控制台开始（清屏从 closeGame 挪到这里：QUIT 后保留末屏）
-		m_console.notifyInputDone();   // 收起上一局挂起的输入请求（旧 kind 立即失效）
-		m_console.clearAll();
 		// 上一局脚本可能 QUIT 过：不清掉会残留 Halt/quitRequested 把新局锁死
 		m_processState.clearQuitRequest();
 		// QUIT_AND_RESTART 系的重启标志同理：本次 reload 就是「重启」本身的执行，
@@ -728,7 +761,6 @@ void EraEngine::reload()
 				// 先清掉上一局的解析数据：loadScript 是增量 append（同名事件
 				// 标签/告警会翻倍 —— 上一局 88 条告警第二局变 179 条，
 				// @EVENTFIRST 的 6 个声明变 12 个，事件组重复执行）
-				m_parseTable.clear();
 				qDebug() << "[DEBUG] Loading scripts from:" << m_erbDir;
 				m_executionEngine.loadScripts(m_erbDir);
 				m_parseTable.finalizeParse();   // 全量回填变量类型（一次性）
@@ -752,6 +784,7 @@ void EraEngine::closeGame()
 				qDebug() << "[EraEngine] closeGame: QUIT 已被新装载消费，跳过卸载";
 				return;
 		}
+        stopAsyncLoad();
 		qInfo() << "[EraEngine] closeGame: 卸载当前游戏并释放内存";
 		setHasError(false);
 		m_processState.requestHalt();        // 停掉执行链（若还在跑）
@@ -1288,15 +1321,11 @@ void EraEngine::loadFinishedHook()
 
 void EraEngine::reloadAsync()
 {
+        // 新会话必须先完整终止旧 loader/语义任务，再清空旧 AST 和变量表。
+        stopAsyncLoad();
+        clearLoadedGame();
 		if (m_gameDirectory.isEmpty()) {
 				emit scriptsLoaded(false);
-				return;
-		}
-		// 上一次装载的后台语义阶段还没结束：此时它会持续改写 m_parseTable，
-		// 再起一次装载必然互相踩踏。直接忽略本次重载（用户极少在这 10s 内
-		// 再次打开目录），等 scriptsLoaded 之后即可正常重载。
-		if (m_semanticRunning) {
-				qWarning() << "[EraEngine] 上一次装载的语义阶段尚未结束，忽略本次重载";
 				return;
 		}
 		// ---- 与同步 reload() 完全对齐的「重新开始」复位 ----
@@ -1307,13 +1336,10 @@ void EraEngine::reloadAsync()
 		//      isRunning()==false 直接退出，标题永不出现，控制台也不请求输入，
 		//      于是输入被拒（ConsoleBackend::submitInput 报 kind "" / 等待中 false）。
 		setHasError(false);                  // 清掉上一次的错误灯
-		m_console.notifyInputDone();         // 收起上一局挂起的输入请求（旧 kind 立即失效）
-		m_console.clearAll();                // 新游戏从空控制台开始
 		m_processState.clearQuitRequest();   // 清掉上一局的 QUIT 请求
-		m_processState.setExecState(ExecState::Continue);   // Halt -> Continue（否则标题不出来）
-		// 与 reload() 对齐：异步路径此前漏了 clear()，同名脚本/告警/事件会跨次
-		// 装载累积（第二次装载脚本数、告警数翻倍）。
-		m_parseTable.clear();
+        m_processState.clearRestartRequest();
+        // 构建期间保持 Halt；完整发布后再允许脚本执行。
+
 		QElapsedTimer phase;   // 主线程各阶段耗时：定位「装载时界面卡一下」的来源
 		phase.start();
 		if (!resolveGameDirs()) {
@@ -1333,7 +1359,9 @@ void EraEngine::reloadAsync()
 		if (m_loadCompletedConn) disconnect(m_loadCompletedConn);
 		m_loadProgressConn = connect(&loader, &ErbLoader::loadProgress,
 		                             this, &EraEngine::scriptsLoadProgress);
-		m_loadCompletedConn = connect(&loader, &ErbLoader::loadCompleted, this, [this](bool ok) {
+        const quint64 generation = m_loadGeneration;
+		m_loadCompletedConn = connect(&loader, &ErbLoader::loadCompleted, this, [this, generation](bool ok) {
+                if (generation != m_loadGeneration) return;
 				if (!ok) {
 						loadFinishedHook();
 						emit scriptsLoaded(false);
@@ -1347,9 +1375,13 @@ void EraEngine::reloadAsync()
 				// 放到后台线程执行，完成后回主线程发 scriptsLoaded。
 				m_semanticRunning = true;
 				auto* watcher = new QFutureWatcher<void>(this);
-				connect(watcher, &QFutureWatcher<void>::finished, this, [this, watcher]() {
+                const quint64 semanticGeneration = m_loadGeneration;
+				connect(watcher, &QFutureWatcher<void>::finished, this, [this, watcher, semanticGeneration]() {
 						watcher->deleteLater();
+                        if (semanticGeneration != m_loadGeneration) return;
+                        m_semanticFuture = {};
 						m_semanticRunning = false;
+                        m_processState.setExecState(ExecState::Continue);
 						loadFinishedHook();
 						emit scriptsLoaded(true);
 				});
@@ -1365,16 +1397,17 @@ void EraEngine::reloadAsync()
 		});
 
 		emit scriptsLoadStarted();
-		loader.loadDirectoryAsync(m_erbDir);
+        if (generation == m_loadGeneration) loader.loadDirectoryAsync(m_erbDir);
 }
 
 bool EraEngine::isLoadingScripts() const
 {
-		return m_executionEngine.getErbLoader().isLoading();
+		return m_semanticRunning || m_executionEngine.getErbLoader().isLoading();
 }
 
 QStringList EraEngine::parseWarnings() const
 {
+        if (isLoadingScripts()) return {};
 		return m_parseTable.parseWarnings();
 }
 
@@ -1504,6 +1537,7 @@ void EraEngine::executeSystemTitleEntry()
 
 void EraEngine::runSystem()
 {
+        if (isLoadingScripts()) return;
 		qDebug() << "[EraEngine] Running system...";
 
 		if (m_parseTable.scriptNames().isEmpty()) {
@@ -1536,6 +1570,7 @@ void EraEngine::runSystem()
 
 void EraEngine::provideInput(qint64 value)
 {
+        if (isLoadingScripts()) return;
 		// 输入交付即离开标题：收起 QML 标准标题界面（无标题时是空操作）
 		setDefaultTitleVisible(false);
 		// C# 语义：任何输入都写 RESULT 并继续执行。不在这里拦「非分支值」：
@@ -1548,6 +1583,7 @@ void EraEngine::provideInput(qint64 value)
 }
 void EraEngine::provideInputString(const QString& value)
 {
+        if (isLoadingScripts()) return;
 		// 字符串输入：写入 RESULTS（局部字符串槽）后继续
 		qDebug() << "[input] provideInputString" << value;
 		m_console.notifyInputDone();
@@ -1556,6 +1592,7 @@ void EraEngine::provideInputString(const QString& value)
 
 void EraEngine::provideInputValues(const QVariantList& values)
 {
+        if (isLoadingScripts()) return;
 		// 多值输入（INPUTMOUSEKEY：RESULT:0..4 = 类型 / 坐标 / 按键）
 		qDebug() << "[input] provideInputValues" << values;
 		m_console.notifyInputDone();

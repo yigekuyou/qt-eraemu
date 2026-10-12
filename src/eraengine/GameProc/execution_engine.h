@@ -170,6 +170,7 @@ public:
     // RESETDATA（对齐 C# VariableEvaluator.ResetData）：变量回默认 + 角色清空。
     // 供 RESETDATA 指令与系统层 resetData（新开游戏）、QUIT 卸载共用。
     bool handleResetData();
+    void clearForReload();
 
     // ---- 扩展注册类（扩展函数唯一入口；复杂度由注册类承担）----
     // 注册 API 在 ExtensionRegistry（不再挂引擎）：

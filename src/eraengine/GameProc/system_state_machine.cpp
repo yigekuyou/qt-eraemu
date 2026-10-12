@@ -529,6 +529,13 @@ void SystemStateMachine::deletePrevState() {
 // 驱动循环（C# Process.DoScript 的门控循环）
 // ---------------------------------------------------------------------------
 
+void SystemStateMachine::stopForReload() {
+    ++m_waitGeneration;
+    ++m_runGeneration;
+    m_pumpScheduled = false;
+    m_state->requestHalt();
+}
+
 ExecState SystemStateMachine::run() {
     ++m_waitGeneration;
     ++m_runGeneration;

@@ -113,6 +113,7 @@ public slots:
 
     // 请求停止
     void onHaltRequested();
+    void clearForReload();
 
 private:
     // perf：求值器统一入口。热路径（每条指令）上不再无条件构造 fallback

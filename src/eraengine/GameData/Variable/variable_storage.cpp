@@ -99,6 +99,72 @@ VariableStorage::VariableStorage(QObject *parent)
 		registerCharaDataVariable(QStringLiteral("CSTR"), true, 1);
 }
 
+void VariableStorage::clearForReload()
+{
+    VariableStorage defaults;
+    std::swap(m_globalStr3D, defaults.m_globalStr3D);
+    std::swap(m_charaInt2D, defaults.m_charaInt2D);
+    std::swap(m_charaStr2D, defaults.m_charaStr2D);
+    std::swap(m_systemIntVars, defaults.m_systemIntVars);
+    std::swap(m_systemStrVars, defaults.m_systemStrVars);
+    std::swap(m_globalInt1D, defaults.m_globalInt1D);
+    std::swap(m_globalInt2D, defaults.m_globalInt2D);
+    std::swap(m_globalInt3D, defaults.m_globalInt3D);
+    std::swap(m_globalStr1D, defaults.m_globalStr1D);
+    std::swap(m_globalStr2D, defaults.m_globalStr2D);
+    std::swap(m_charaIntVars, defaults.m_charaIntVars);
+    std::swap(m_charaIntVars3D, defaults.m_charaIntVars3D);
+    std::swap(m_charaStrVars, defaults.m_charaStrVars);
+    std::swap(m_parameters, defaults.m_parameters);
+    std::swap(m_privateNames, defaults.m_privateNames);
+    std::swap(m_references, defaults.m_references);
+    std::swap(m_privateScopeCache, defaults.m_privateScopeCache);
+    std::swap(m_localIntVars, defaults.m_localIntVars);
+    std::swap(m_argIntVars, defaults.m_argIntVars);
+    std::swap(m_localStrVars, defaults.m_localStrVars);
+    std::swap(m_argStrVars, defaults.m_argStrVars);
+    std::swap(m_localAliases, defaults.m_localAliases);
+    std::swap(m_day, defaults.m_day);
+    std::swap(m_money, defaults.m_money);
+    std::swap(m_time, defaults.m_time);
+    std::swap(m_item, defaults.m_item);
+    std::swap(m_itemsales, defaults.m_itemsales);
+    std::swap(m_noitem, defaults.m_noitem);
+    std::swap(m_bought, defaults.m_bought);
+    std::swap(m_pband, defaults.m_pband);
+    std::swap(m_flag, defaults.m_flag);
+    std::swap(m_tflag, defaults.m_tflag);
+    std::swap(m_target, defaults.m_target);
+    std::swap(m_master, defaults.m_master);
+    std::swap(m_player, defaults.m_player);
+    std::swap(m_assi, defaults.m_assi);
+    std::swap(m_assiplay, defaults.m_assiplay);
+    std::swap(m_up, defaults.m_up);
+    std::swap(m_down, defaults.m_down);
+    std::swap(m_losebase, defaults.m_losebase);
+    std::swap(m_palamlv, defaults.m_palamlv);
+    std::swap(m_explv, defaults.m_explv);
+    std::swap(m_ejac, defaults.m_ejac);
+    std::swap(m_prevcom, defaults.m_prevcom);
+    std::swap(m_selectcom, defaults.m_selectcom);
+    std::swap(m_nextcom, defaults.m_nextcom);
+    std::swap(m_result, defaults.m_result);
+    std::swap(m_count, defaults.m_count);
+    std::swap(m_a, defaults.m_a);
+    std::swap(m_b, defaults.m_b);
+    std::swap(m_c, defaults.m_c);
+    std::swap(m_charaDataVars, defaults.m_charaDataVars);
+    std::swap(m_charaList, defaults.m_charaList);
+    std::swap(m_charaSp, defaults.m_charaSp);
+    std::swap(m_existCsv, defaults.m_existCsv);
+    std::swap(m_csvIntVars, defaults.m_csvIntVars);
+    std::swap(m_csvIntVars3D, defaults.m_csvIntVars3D);
+    std::swap(m_csvStrVars, defaults.m_csvStrVars);
+    std::swap(m_variableTypes, defaults.m_variableTypes);
+    std::swap(m_variableIdentifiers, defaults.m_variableIdentifiers);
+    std::swap(m_variableConfig, defaults.m_variableConfig);
+}
+
 // 从 VariableSize.csv 读取系统数组尺寸并应用
 // （对齐 C# GameData/Variable/VariableData.cs 的 processSystemVariableSize）
 bool VariableStorage::loadVariableSizes(const QString& csvPath)

@@ -165,6 +165,21 @@ void ScriptRunner::onSystemStateChanged(SystemStateCode state) {
     // 系统状态变化由控制器决定是否恢复；此处保留挂钩。
 }
 
+void ScriptRunner::clearForReload() {
+    onHaltRequested();
+    m_eventChain = {};
+    m_loops.clear();
+    m_functionLocals.clear();
+    m_callContexts.clear();
+    m_lastPrivateScope.clear();
+    m_waitKind.clear();
+    m_waitDefault = {};
+    m_lastReturnValue = {};
+    m_steps = 0;
+    m_running = false;
+    m_continuingSlice = false;
+}
+
 void ScriptRunner::onHaltRequested() {
     m_eventChain.active = false;   // 停止时放弃未完成的 CALLEVENT 事件链
     m_state->requestHalt();

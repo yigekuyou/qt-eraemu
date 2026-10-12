@@ -353,6 +353,10 @@ private:
     void resolveTextConfig();        // 从配置读编码/子目录检索设置（Config.SearchSubdirectory 等）
     void loadFinishedHook();         // 装载完成后的统一收尾（日志/告警）
     void buildSystemHost();          // 系统状态机 -> 引擎子系统 适配层
+    void clearLoadedGame();           // 重载边界：释放旧 AST/拍平/变量/常量
+    void stopAsyncLoad();             // 取消并等待旧加载会话，随后才能清理解析表
+
+    quint64 m_loadGeneration = 0;     // 丢弃过期的 loader/语义完成回调
 };
 
 #endif // ERAENGINE_H

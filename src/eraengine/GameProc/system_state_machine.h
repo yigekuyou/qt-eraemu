@@ -147,6 +147,7 @@ public:
     // ---- 驱动 ----
     // 从当前状态开始，交替执行脚本与状态处理器，直到挂起/停止/出错。
     ExecState run();
+    void stopForReload();
     void setPacingEnabled(bool enabled) { m_pacingEnabled = enabled; }
     bool pacingEnabled() const { return m_pacingEnabled; }
     // 用户交付整数输入后继续（写入 RESULT/systemResult）

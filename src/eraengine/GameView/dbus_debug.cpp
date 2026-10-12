@@ -106,7 +106,7 @@ QString EraDBusDebug::loadState() {
     return QStringLiteral("loading=%1\ngameDir=%2\nscripts=%3\nwarnings=%4")
         .arg(loading)
         .arg(m_engine->getGameDirectory())
-        .arg(table ? table->scriptNames().size() : -1)
+        .arg(loading ? -1 : (table ? table->scriptNames().size() : -1))
         .arg(loading ? -1 : (table ? table->parseWarningCount() : -1));
 }
 

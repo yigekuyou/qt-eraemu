@@ -220,6 +220,12 @@ bool VariableTable::constStr(const QString& name, QString& out) const {
 }
 
 void VariableTable::clear() {
+    m_constInt.clear();
+    m_constArray.clear();
+    m_constStrArray.clear();
+    m_constStr.clear();
+    m_constExpr.clear();
+    m_dimEvaluator = {};
     m_globals.clear();
     m_locals.clear();
     m_localNameCount.clear();

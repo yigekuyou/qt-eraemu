@@ -30,6 +30,18 @@ QString GameBaseData::version() const { return m_version; }
 QString GameBaseData::releaseYear() const { return m_releaseYear; }
 QString GameBaseData::additionalInfo() const { return m_additionalInfo; }
 
+void GameBaseData::clear()
+{
+    m_windowTitle.clear();
+    m_title.clear();
+    m_author.clear();
+    m_version.clear();
+    m_releaseYear.clear();
+    m_additionalInfo.clear();
+    m_extra.clear();
+    emit dataChanged();
+}
+
 void GameBaseData::set(const QString& key, const QString& value)
 {
 		bool updated = false;

@@ -1308,9 +1308,17 @@ void EraEngine::loadFinishedHook()
         ResourceImageProvider::reloadAtlas();
         m_executionEngine.reloadSaveSnapshots();
         m_expressionEvaluator.reloadCharacterSnapshots();
-		qDebug() << "[EraEngine] 装载完成：脚本" << m_parseTable.scriptNames().size()
-		         << "个，告警" << m_parseTable.parseWarningCount()
-		         << "条，变量" << m_parseTable.variableTable().count() << "个";
+        const auto& loader = m_executionEngine.getErbLoader();
+        qDebug() << "[EraEngine] 装载完成：目录" << m_gameDirectory
+                 << "ERB" << m_erbDir << "CSV" << m_csvDir
+                 << "文件" << loader.loadedFileCount()
+                 << "脚本" << m_parseTable.scriptNames().size()
+                 << "个，告警" << m_parseTable.parseWarningCount()
+                 << "条，变量" << m_parseTable.variableTable().count() << "个";
+        if (loader.loadedFileCount() > 0 && !m_parseTable.hasLabel(QStringLiteral("SYSTEM_TITLE"))) {
+                qWarning() << "[EraEngine] 已装载脚本但未找到 @SYSTEM_TITLE：请检查游戏目录和 SYSTEM_TITLE 所在 ERB"
+                           << "ERB=" << m_erbDir;
+        }
 		// 随机种子：启动时自动产生；`--seed` / setRandomSeed 固定后可整局复现
 		qDebug() << "[EraEngine] 随机种子:" << m_expressionEvaluator.randomSeed()
 		         << "（MT19937，可用 --seed 复现）";
@@ -1550,11 +1558,14 @@ void EraEngine::runSystem()
 		// （不存在则绘制标准标题画面）。@SYSTEM_TITLE 里的 BEGIN FIRST/SHOP 由脚本发出。
 		// —— 不能把 @SYSTEM_TITLE 当普通入口脚本直接执行（那样状态还是 Title_Begin，
 		//    脚本里的 BEGIN FIRST 会被判为「不允许 BEGIN」）。
-		qDebug() << "[EraEngine] 系统状态机启动（Title_Begin）"
-		         << " SYSTEM_TITLE:" << (m_parseTable.hasLabel(QStringLiteral("SYSTEM_TITLE")) ? "有" : "无")
-		         << " 脚本数:" << m_parseTable.scriptNames().size()
-		         << " 告警:" << m_parseTable.parseWarningCount()
-		         << " 变量:" << m_parseTable.variableTable().count();
+        qDebug() << "[EraEngine] 系统状态机启动（Title_Begin）"
+                 << "SYSTEM_TITLE:" << (m_parseTable.hasLabel(QStringLiteral("SYSTEM_TITLE")) ? "有" : "无")
+                 << "目录:" << m_gameDirectory
+                 << "ERB:" << m_erbDir
+                 << "脚本数:" << m_parseTable.scriptNames().size()
+                 << "文件数:" << m_executionEngine.getErbLoader().loadedFileCount()
+                 << "告警:" << m_parseTable.parseWarningCount()
+                 << "变量:" << m_parseTable.variableTable().count();
 
 		m_processState.setSystemState(SystemStateCode::Title_Begin);
 

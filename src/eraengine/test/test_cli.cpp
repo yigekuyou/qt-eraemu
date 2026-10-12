@@ -37,14 +37,14 @@
 //     :e EXPR         -> 求值任意表达式（调试表达式/常量）
 //     :vars           -> 打印若干系统变量（RESULT / 常用变量）
 //     :model          -> 显示模型：逐 span（文本/颜色/粗斜体/内联图/图形）逐按钮
-//     :check          -> 渲染自检：未展开的 %..%/{..}、本应是按钮的 [n]、空行、对齐
+//     :check          -> 渲染自检：本应是按钮的 [n]、空行、对齐与几何
 //     x               -> 注入一次鼠标点击（INPUTMOUSEKEY）
 //     :branches       -> 打印当前输入的「合法分支」（引擎 AST 静态分析）
 //
 // 渲染诊断（「错误渲染」怎么测）：
-//   * 每行输出都会附带注解：[CENTER]/[btn:0,1]/[!未展开格式]/[!字面按钮] …
+//   * 每行输出都会附带注解：[CENTER]/[btn:0,1]/[!字面按钮] …
 //   * `--dump-model`：非交互模式下也打印显示模型结构
-//   * `--check`     ：非交互模式下做渲染自检，**发现可疑即退出码 2**（可进 CI）
+//   * `--check`     ：非交互模式下做结构与几何自检，**发现可疑即退出码 2**（可进 CI）
 // ---------------------------------------------------------------------------
 // ---------------------------------------------------------------------------
 
@@ -90,14 +90,6 @@ const char* alignName(int a) {
     switch (a) { case 1: return "CENTER"; case 2: return "RIGHT"; default: return "LEFT"; }
 }
 
-// 该行是否含「未展开的格式化标记」（%VAR% / {EXPR}）——说明 StrForm 没生效
-bool hasUnresolvedForm(const QString& text) {
-    if (text.contains(QLatin1Char('{'))) return true;
-    // % 成对出现才可疑（避免误判百分号）
-    const int first = text.indexOf(QLatin1Char('%'));
-    return first >= 0 && text.indexOf(QLatin1Char('%'), first + 1) > first + 1;
-}
-
 // 文本是不是「[数字] …」这种选中项？（Emuera 里应被 ButtonStringCreator 变成按钮）
 bool looksLikeMenuButton(const QString& text) {
     const QString t = text.trimmed();
@@ -122,7 +114,6 @@ QString lineAnnotation(const ConsoleDisplayLine& line) {
     }
     if (!vals.isEmpty()) a += QStringLiteral("[btn:%1]").arg(vals.join(QLatin1Char(',')));
     const QString text = line.plainText();
-    if (hasUnresolvedForm(text)) a += QStringLiteral("[!未展开格式]");
     if (vals.isEmpty() && looksLikeMenuButton(text)) a += QStringLiteral("[!字面按钮未生效]");
     if (text.trimmed().isEmpty()) a += QStringLiteral("[空行]");
     return a;
@@ -252,7 +243,7 @@ QStringList planeIssues(ConsoleBackend* console, bool withDebug);
 
 // 把「当前屏幕」打印出来（仅在变化时）；用于发现渲染错误：
 //   * 帧没有被 CLEARLINE 清掉（越堆越多）
-//   * 未展开的 %..% / {..}、本应是按钮的 [n]
+//   * 本应是按钮的 [n]
 //   * 对齐/颜色/内联图/图形
 //   * withPlane：用「二维字符平面」呈现（root/text/image 分层模型重建）
 bool renderScreen(ConsoleBackend* console, QList<QString>& last, bool withAnnotation,
@@ -319,8 +310,6 @@ QStringList renderSuspects(ConsoleBackend* console) {
         const ConsoleDisplayLine& l = lines.at(i);
         const QString t = l.plainText();
         if (t.trimmed().isEmpty()) { ++blanks; continue; }
-        if (hasUnresolvedForm(t))
-            out << QStringLiteral("第 %1 行有未展开的格式化标记: %2").arg(i).arg(t.left(60));
         if (l.buttonIndices().isEmpty() && looksLikeMenuButton(t))
             out << QStringLiteral("第 %1 行像选中项但没有按钮: %2").arg(i).arg(t.left(60));
     }
@@ -429,7 +418,7 @@ int main(int argc, char* argv[]) {
                 << "  --color   调试颜色模式：用 ANSI 颜色表示位置矩阵（需配合 --debug）\n"
                 << "  --ansi    按 span 样式输出 ANSI 真彩色（自动启用 --plane；显示彩色方块）\n"
                 << "  --frames N  最多打印 N 帧屏幕快照（默认 30，0=不限）\n"
-                << "  --check   渲染自检（未展开格式/%/无按钮的 [n]/空行过多）→ 可疑时退出码 2\n"
+                << "  --check   渲染自检（无按钮的 [n]/空行过多/几何）→ 可疑时退出码 2\n"
                 << "  --dbus           注册 DBus 服务 io.yigekuyou.emuera.testcli (/testcli)\n"
                 << "                   方法：input/inputString/mouseKey/sendCommand/screen/debugInfo/suspects/quit\n"
                 << "                   信号：screenChanged/debugMessage\n"

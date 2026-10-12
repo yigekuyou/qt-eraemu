@@ -150,6 +150,39 @@ int main(int argc, char* argv[]) {
         check(err.contains(QStringLiteral("BEGIN")), "错误消息说明是 BEGIN");
     }
 
+    // C# force calls are fatal when their required entry is absent. Do not
+    // continue into Normal and emit a second, unrelated script-end error.
+    {
+        VariableStorage missingStorage;
+        ProcessState missingState;
+        EraParseTable missingTable(&missingState);
+        ExpressionEvaluator missingEvaluator;
+        missingTable.setExpressionEvaluator(&missingEvaluator);
+        missingTable.setVariableStorage(&missingStorage);
+        ExecutionEngine missingEngine(&missingStorage, nullptr);
+        missingEngine.setParseTable(&missingTable);
+        missingEngine.setExpressionEvaluator(&missingEvaluator);
+        ScriptRunner missingRunner(&missingTable, &missingEngine, &missingState, &missingStorage);
+        missingRunner.setExpressionEvaluator(&missingEvaluator);
+        SystemStateMachine missingMachine(&missingState, &missingTable);
+        missingMachine.setVariableStorage(&missingStorage);
+        missingMachine.setScriptRunner(&missingRunner);
+        missingRunner.setSystemStateMachine(&missingMachine);
+        QStringList missingErrors;
+        QObject::connect(&missingMachine, &SystemStateMachine::errorOccurred,
+            [&missingErrors](const QString& error) { missingErrors.append(error); });
+        missingTable.loadScript("missing", buildLines(missingTable,
+            {"@SYSTEM_TITLE", "BEGIN FIRST"}));
+        missingTable.finalizeParse();
+        missingState.setSystemState(SystemStateCode::Title_Begin);
+        check(missingMachine.run() == ExecState::Error,
+              "missing required EVENTFIRST stops system execution");
+        check(missingErrors.size() == 1 && missingErrors.first().contains("@EVENTFIRST"),
+              "missing EVENTFIRST reports only its root cause");
+        check(missingMachine.run() == ExecState::Error && missingErrors.size() == 1,
+              "error state cannot advance to unexpected script end");
+    }
+
     qDebug() << "\n===========================";
     if (g_failures == 0) {
         qDebug() << "[SUCCESS] system-flow tests passed";

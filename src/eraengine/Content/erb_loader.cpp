@@ -573,7 +573,14 @@ void ErbLoader::loadDirectoryAsync(const QString& dirPath, int depth) {
         if (generation == m_generation && m_async.active && m_prepFuture.isFinished() && m_prepFuture.isValid()) onPrepFinished();
     });
     connect(m_chunkWatcher.get(), &QFutureWatcher<ParsedErbFile>::finished, this, [this, generation] {
-        if (generation == m_generation && m_async.active && m_chunkFuture.isFinished()) onChunkFinished();
+        // setFuture(QFuture<ParsedErbFile>()) below also emits finished on some
+        // Qt versions.  That empty future is only cleanup; it must never be
+        // treated as an empty parsed chunk, otherwise loading stops after the
+        // first merge batch.
+        if (generation == m_generation && m_async.active
+            && m_chunkFuture.isValid() && m_chunkFuture.isFinished()) {
+            onChunkFinished();
+        }
     });
     m_prepFuture = QtConcurrent::run([this, dirPath, depth] { return prepareLoad(dirPath, depth); });
     m_prepWatcher->setFuture(m_prepFuture);

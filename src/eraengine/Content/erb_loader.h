@@ -127,6 +127,8 @@ public:
     int getLabelPosition(const QString& scriptName, const QString& labelName);
     int getScriptLineCount(const QString& scriptName);
     QString getScriptPath(const QString& scriptName) const;
+    // Number of non-empty ERB/ERH files merged into the parse table.
+    [[nodiscard]] int loadedFileCount() const { return m_scriptPaths.size(); }
 
 signals:
     void parseStarted(const QString& scriptName);

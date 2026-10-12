@@ -395,6 +395,7 @@ bool SystemStateMachine::callFunction(const QString& name, bool force, bool isEv
         }
         if (events.isEmpty()) {
             if (force) {
+                m_state->setErrorState();
                 emit errorOccurred(QStringLiteral("找不到函数\"@%1\"").arg(name));
             }
             return false;
@@ -441,6 +442,7 @@ bool SystemStateMachine::callFunction(const QString& name, bool force, bool isEv
             return false;
         }
         if (force) {
+            m_state->setErrorState();
             emit errorOccurred(QStringLiteral("找不到函数\"@%1\"").arg(name));
         }
         return false;

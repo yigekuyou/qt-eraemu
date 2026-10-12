@@ -128,6 +128,11 @@ struct ConsoleSpan {
     QString  imageButton;
     QString  shapeType;         // "space" | "rect" | "line" | "polygon"
     QList<int> shapeParams;     // 百分比参数（× FontSize / 100）
+    // rect 四参数按 C# 语义为 x, y, width, height；这里保存换算后的像素几何。
+    int shapeX = 0;
+    int shapeY = 0;
+    int shapeWidth = 0;
+    int shapeHeight = 0;
     bool     error = false;     // 字体/资源异常（C# part.Error）
 
     [[nodiscard]] bool canDivide() const { return kind == ConsoleSpanKind::Text && !error; }
@@ -171,6 +176,10 @@ struct ConsoleSpan {
         m.insert("imageH", imageSize.height());
         if (!imageButton.isEmpty()) m.insert("imageButton", imageButton);
         m.insert("shapeType", shapeType);
+        m.insert("shapeX", shapeX);
+        m.insert("shapeY", shapeY);
+        m.insert("shapeWidth", shapeWidth);
+        m.insert("shapeHeight", shapeHeight);
         QVariantList params;
         for (int p : shapeParams) params.append(p);
         m.insert("shapeParams", params);

@@ -103,16 +103,23 @@ MenuBar {
             enabled: root.actions.clear.enabled
             onTriggered: root.actions.clear.trigger()
         }
+    }
+
+    Menu {
+        title: qsTr("视图")
+        MenuItem {
+            text: root.actions.history.text
+            enabled: root.actions.history.enabled
+            shortcut: root.actions.history.shortcut
+            onTriggered: root.actions.history.trigger()
+        }
         MenuItem {
             text: root.actions.bottom.text
             enabled: root.actions.bottom.enabled
             shortcut: root.actions.bottom.shortcut
             onTriggered: root.actions.bottom.trigger()
         }
-    }
-
-    Menu {
-        title: qsTr("视图")
+        MenuSeparator {}
         MenuItem {
             text: root.actions.zoomIn.text
             enabled: root.actions.zoomIn.enabled

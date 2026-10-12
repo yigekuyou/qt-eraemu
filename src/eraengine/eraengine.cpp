@@ -1312,7 +1312,7 @@ void EraEngine::reloadSavedData()
 
 void EraEngine::loadFinishedHook()
 {
-        ResourceImageProvider::reloadAtlas();
+        // setRoot() already scans and installs the resource atlas for this game.
         m_executionEngine.reloadSaveSnapshots();
         m_expressionEvaluator.reloadCharacterSnapshots();
         const auto& loader = m_executionEngine.getErbLoader();

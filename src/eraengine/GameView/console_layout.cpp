@@ -90,15 +90,33 @@ void ConsoleLayout::measurePart(ConsoleSpan& part) const {
         break;
     }
     case ConsoleSpanKind::Shape: {
-        int wPx = part.shapeParams.isEmpty()
-                      ? 0
-                      : (part.shapeParams.first() * m_fontSize / 100);
+        // C# ConsoleShapePart uses rect=(x,y,width,height), with bare numbers
+        // expressed as percentages of FontSize. The old port treated only the
+        // first value as width, so SET_MASTER's 0,y,width,500 rectangles became
+        // a one-cell strip instead of the intended full-height background.
+        const auto px = [this](int value) { return value * m_fontSize / 100; };
+        int xPx = 0;
+        int yPx = 0;
+        int wPx = 0;
+        int hPx = m_lineHeight;
+        if (part.shapeParams.size() >= 4) {
+            xPx = px(part.shapeParams.at(0));
+            yPx = px(part.shapeParams.at(1));
+            wPx = px(part.shapeParams.at(2));
+            hPx = px(part.shapeParams.at(3));
+        } else if (!part.shapeParams.isEmpty()) {
+            wPx = px(part.shapeParams.first());
+        }
+        part.shapeX = xPx;
+        part.shapeY = yPx;
+        part.shapeWidth = qMax(0, wPx);
+        part.shapeHeight = qMax(1, hPx);
         part.cols = wPx > 0 ? qMax(1, qRound(wPx / static_cast<double>(columnWidthPx()))) : 0;
-        part.rows = 1;
-        part.width = part.cols * columnWidthPx();
-        part.height = m_lineHeight;
-        part.top = 0;
-        part.bottom = m_lineHeight;
+        part.rows = qMax(1, qRound(hPx / static_cast<double>(qMax(1, m_lineHeight))));
+        part.width = qMax(0, wPx);
+        part.height = qMax(1, hPx);
+        part.top = yPx;
+        part.bottom = yPx + part.height;
         break;
     }
     default:

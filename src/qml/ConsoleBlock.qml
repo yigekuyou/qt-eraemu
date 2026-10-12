@@ -275,10 +275,18 @@ Item {
     Rectangle {
         id: shapeRect
         visible: block.kind === "shape"
-        anchors.left: parent.left
-        anchors.verticalCenter: parent.verticalCenter
-        width: block.width
-        height: (block.blockData && block.blockData.shapeType === "line") ? 1 : block.height
+        // C# rect coordinates are pixel offsets from the current line origin.
+        // Convert them back to the logical grid used by the scaled QML stage.
+        x: block.blockData && block.blockData.shapeWidth !== undefined
+           ? (block.blockData.shapeX / Math.max(1, block.fontSize / 2)) * block.cellWidth : 0
+        y: block.blockData && block.blockData.shapeHeight !== undefined
+           ? (block.blockData.shapeY / Math.max(1, block.cellHeight)) * block.cellHeight : 0
+        width: block.blockData && block.blockData.shapeWidth !== undefined
+               ? (block.blockData.shapeWidth / Math.max(1, block.fontSize / 2)) * block.cellWidth
+               : block.width
+        height: block.blockData && block.blockData.shapeHeight !== undefined
+                ? (block.blockData.shapeHeight / Math.max(1, block.cellHeight)) * block.cellHeight
+                : block.height
         opacity: (block.blockData && block.blockData.shapeType === "space") ? 0 : 1
         color: block.effectiveTextColor
     }

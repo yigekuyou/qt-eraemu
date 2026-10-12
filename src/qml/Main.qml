@@ -413,10 +413,17 @@ ApplicationWindow {
     }
     Action {
         id: actBottom
-        text: qsTr("滚动到底部")
+        text: qsTr("回到当前舞台")
         shortcut: "End"
         // 滚动状态归 QML 视图所有：C++ 只发请求，Console.qml 消费
         onTriggered: eraEngine.console.requestScrollToBottom()
+    }
+    Action {
+        id: actHistory
+        text: qsTr("查看历史")
+        shortcut: "Ctrl+Up"
+        // 从当前舞台切到历史模型，并向上移动一行；后续滚动仍由 Console.qml 管理。
+        onTriggered: eraEngine.console.requestScrollBy(1)
     }
 
     Action {
@@ -476,7 +483,7 @@ ApplicationWindow {
         macro01: actMacro01, macro02: actMacro02, macro03: actMacro03,
         macro04: actMacro04, macro05: actMacro05, macro06: actMacro06, macro07: actMacro07,
         title: actTitle,
-        settings: actSettings, quit: actQuit, clear: actClear, bottom: actBottom,
+        settings: actSettings, quit: actQuit, clear: actClear, bottom: actBottom, history: actHistory,
         zoomIn: actZoomIn, zoomOut: actZoomOut, about: actAbout,
         windowed: actWindowed, fullscreen: actFullscreen, borderless: actBorderless,
         fpsUp: function() { eraEngine.gui.fps = eraEngine.gui.fps + 1; },
@@ -516,11 +523,13 @@ ApplicationWindow {
             Menu {
                 title: qsTr("编辑(&E)")
                 MenuItem { action: window.menuActions.clear }
-                MenuItem { action: window.menuActions.bottom }
             }
 
             Menu {
                 title: qsTr("视图(&V)")
+                MenuItem { action: window.menuActions.history }
+                MenuItem { action: window.menuActions.bottom }
+                MenuSeparator {}
                 MenuItem { action: window.menuActions.zoomIn }
                 MenuItem { action: window.menuActions.zoomOut }
                 MenuSeparator {}
@@ -596,6 +605,7 @@ ApplicationWindow {
         TouchMenuItem { action: window.menuActions.settings }
         TouchMenuItem { action: window.menuActions.about }
         MenuSeparator {}
+        TouchMenuItem { action: window.menuActions.history }
         TouchMenuItem { action: window.menuActions.bottom }
         TouchMenuItem { action: window.menuActions.quit }
     }

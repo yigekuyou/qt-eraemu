@@ -415,6 +415,12 @@ ExecState ScriptRunner::executeLine(const LogicalLine& line) {
         return ExecState::Error;
     }
     const int pc = m_table->currentLine();
+    if (line.isError || !line.argument.typeOk) {
+        m_state->setErrorState();
+        emit errorOccurred(QStringLiteral("%1：%2").arg(line.position.toString(),
+            line.errMes.isEmpty() ? line.argument.typeError : line.errMes));
+        return ExecState::Error;
+    }
     // 每行重置：只有 AWAIT / TWAIT skip!=0（纯计时，C# InputType.Void）会覆盖为 false
     m_waitNotifiesUser = true;
     m_waitKind.clear();

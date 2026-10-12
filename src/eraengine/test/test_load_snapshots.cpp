@@ -67,7 +67,9 @@ int main(int argc,char** argv) {
     check(storage.getGlobalStr1D("SAVESTR",0)=="界😀\t\n\r","binary string newlines and unicode survive");
     write(first.filePath("sav/save00.sav"),"eraemu-save-v1\nCHARALIST\t");
     check(engine.loadSaveSnapshot(0),"runtime cache ignores external edits"); engine.reloadSaveSnapshots();
-    check(engine.checkSaveSnapshot(0)==4 && !engine.loadSaveSnapshot(0),"old Qt format rejected");
+    check(engine.checkSaveSnapshot(0)==1 && !engine.loadSaveSnapshot(0),"old Qt format treated as no data");
+    check(engine.writeSaveSnapshot(0,"overwrite unsupported"),"unsupported save can be overwritten");
+    check(engine.checkSaveSnapshot(0)==0 && engine.loadSaveSnapshot(0),"overwritten unsupported save loads");
     write(first.filePath("sav/save00.sav"),original);engine.reloadSaveSnapshots();check(engine.loadSaveSnapshot(0),"binary disk reload");
     base.set("コード","43");check(engine.checkSaveSnapshot(0)==2,"mismatched game code rejected");base.set("コード","42");
     base.set("バージョン違い認める","1900");base.set("バージョン","2000");check(engine.checkSaveSnapshot(0)==3,"compatibility minimum enforced");

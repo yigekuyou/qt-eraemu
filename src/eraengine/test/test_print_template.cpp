@@ -108,6 +108,35 @@ int main(int argc, char** argv) {
     const auto quoted = AstBuilder::build(QStringLiteral("CALL F, \"literal {1} % text\""), {}, resolve);
     check(quoted.arguments.at(1).ast && quoted.arguments.at(1).ast->kind() == NodeKind::Literal,
           "plain quoted string has Literal AST and no FORM interpolation");
+    const auto invalidFormCall = AstBuilder::build(R"ERB(CALL F, @"A %= 2")ERB", {}, resolve);
+    check(!invalidFormCall.argument.typeOk && !invalidFormCall.arguments.at(1).ast,
+          "invalid CALL FORM is diagnosed during loading");
+    const auto escapedFormCall = AstBuilder::build(R"ERB(CALL F, @"A \%= 2")ERB", {}, resolve);
+    check(escapedFormCall.argument.typeOk && escapedFormCall.arguments.at(1).ast
+          && evaluator.evaluate(*escapedFormCall.arguments.at(1).ast, &storage).toString() == "A %= 2",
+          "escaped FORM percent compiles and evaluates without runtime parsing");
+    const auto parenthesizedStatement = AstBuilder::build("ABS(-7)", {}, resolve);
+    check(parenthesizedStatement.arguments.first().ast
+          && evaluator.evaluate(*parenthesizedStatement.arguments.first().ast, &storage).toLongLong() == 7,
+          "parenthesized function statement is not wrapped twice");
+    {
+        ProcessState scopedState;
+        EraParseTable scoped(&scopedState);
+        scoped.setVariableStorage(&storage);
+        ExpressionEvaluator scopedEvaluator;
+        scoped.setExpressionEvaluator(&scopedEvaluator);
+        const auto localResolve = [&](const QString& e) { return scoped.expressionAst(e); };
+        QList<LogicalLine> localLines;
+        for (const auto& source : QStringList{"@FIRST", "#DIMS SHARED", R"ERB(PRINTS @"%SHARED%")ERB",
+                                              "@SECOND", "#DIM SHARED", "RETURN"})
+            localLines.append(AstBuilder::build(source, {}, localResolve));
+        scoped.loadScript("private_form", localLines);
+        scoped.finalizeParse();
+        const auto* loaded = scoped.lineAt("private_form", 2);
+        check(loaded && loaded->arguments.first().ast && !loaded->isError
+              && loaded->argument.typeOk && validateExpression(*loaded->arguments.first().ast).isEmpty(),
+              "FORM recompiles at load time with owner private string type");
+    }
     const auto modulo = AstBuilder::build("CALL F, 10 % 3 % 2", {}, resolve);
     check(modulo.arguments.at(1).ast && modulo.arguments.at(1).ast->valueType() == OperandType::Int,
           "percent operators remain integer expressions");

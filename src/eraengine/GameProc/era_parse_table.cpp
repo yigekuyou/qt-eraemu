@@ -1688,6 +1688,17 @@ void EraParseTable::applyStringAssignments() {
                 return expressionAstInScope(e, owner);
             };
             if (line.kind != LineKind::Instruction) continue;
+            // FORM construction may need private string types unavailable in a worker.
+            // Recompile the source in its owner scope while compilation is permitted.
+            if (line.assignOperator.isEmpty() && (line.raw.contains("@\"")
+                || AstBuilder::printInfo(line.functionName).mode == AstBuilder::PrintArgMode::FormStr
+                || line.argument.kind == ArgKind::FormStr)) {
+                const auto compiled = AstBuilder::build(line.raw, line.position, resolve, resolve);
+                line.arguments = compiled.arguments;
+                line.condition = compiled.condition;
+                line.printTemplate = compiled.printTemplate;
+                ArgumentParser::build(line);
+            }
             if (line.argument.kind == ArgKind::Case) {
                 line.caseCache.clear();
                 AstBuilder::buildCaseClauses(line, resolve);

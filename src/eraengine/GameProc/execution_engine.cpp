@@ -1986,7 +1986,6 @@ int ExecutionEngine::printCWidth(const QString& text) {
 
 void ExecutionEngine::clearForReload() {
     m_saveSnapshots.clear();
-    m_invalidSaves.clear();
     m_globalSnapshot = {};
     m_globalSnapshotValid = false;
     m_variableSnapshots.clear();
@@ -2061,7 +2060,7 @@ void ExecutionEngine::decodeGlobalSnapshot(const QByteArray& data) {
 }
 
 void ExecutionEngine::reloadSaveSnapshots() {
-    m_saveSnapshots.clear(); m_invalidSaves.clear(); m_globalSnapshot = {}; m_globalSnapshotValid=false; m_variableSnapshots.clear();
+    m_saveSnapshots.clear(); m_globalSnapshot = {}; m_globalSnapshotValid=false; m_variableSnapshots.clear();
     if (m_gameDataDir.isEmpty()) return;
     const QString directory = GamePaths::join(m_gameDataDir, QStringLiteral("sav"));
     for (const QString& name : QDir(directory).entryList(QStringList{QStringLiteral("save*.sav")}, QDir::Files)) {
@@ -2075,7 +2074,7 @@ void ExecutionEngine::reloadSaveSnapshots() {
             decoded=EraBinaryData::decode(bytes,snapshot) || EraBinaryData::decodeText(bytes,schema,snapshot); }
         if (decoded && snapshot.type==EraBinaryData::FileType::Normal)
             m_saveSnapshots.insert(index, std::move(snapshot));
-        else m_invalidSaves.insert(index);
+        else qWarning().noquote() << "[save] 无法读取或不支持的存档，视为无数据，可覆盖：" << file.fileName();
     }
     // QDir::relativeFilePath() cannot recover a relative name from SAF document
     // URIs: document IDs are opaque and providers may return a different URI for
@@ -2091,8 +2090,12 @@ void ExecutionEngine::reloadSaveSnapshots() {
                 VariableSnapshot snapshot;
                 const QString key = relative.isEmpty() ? info.fileName()
                     : relative + QLatin1Char('/') + info.fileName();
+                if (info.fileName().startsWith("save") && info.fileName().endsWith(".sav")) continue;
+                if (info.fileName() == "global.sav") continue;
                 if (file.open(QIODevice::ReadOnly) && decodeVariableSnapshot(file.readAll(), snapshot))
                     m_variableSnapshots.insert(QDir::cleanPath(key), std::move(snapshot));
+                else if (info.suffix().isEmpty())
+                    qWarning().noquote() << "[save] 无法读取或不支持的变量存档，视为无数据，可覆盖：" << path;
             }
             const QStringList dirs = dir.entryList(QDir::Dirs | QDir::NoDotAndDotDot, QDir::Name);
             for (const QString& child : dirs) {
@@ -2104,12 +2107,18 @@ void ExecutionEngine::reloadSaveSnapshots() {
         };
     loadVariables(directory, {});
     QFile global(GamePaths::join(m_gameDataDir, QStringLiteral("sav/global.sav")));
-    if (global.open(QIODevice::ReadOnly)) decodeGlobalSnapshot(global.readAll());
+    if (global.open(QIODevice::ReadOnly)) {
+        decodeGlobalSnapshot(global.readAll());
+        if (!m_globalSnapshotValid) {
+            m_globalSnapshot = {};
+            qWarning().noquote() << "[save] 无法读取或不支持的存档，视为无数据，可覆盖：" << global.fileName();
+        }
+    }
 }
 
 int ExecutionEngine::checkSaveSnapshot(qint64 index) const {
     const auto it=m_saveSnapshots.constFind(index);
-    if(it==m_saveSnapshots.constEnd()) return m_invalidSaves.contains(index) ? 4 : 1;
+    if(it==m_saveSnapshots.constEnd()) return 1;
     if(m_gameBaseData && it->uniqueCode!=0 && it->uniqueCode!=m_gameBaseData->scriptUniqueCode()) return 2;
     if(m_gameBaseData && !m_gameBaseData->acceptsSave(it->uniqueCode,it->scriptVersion)) return 3;
     return 0;
@@ -2138,7 +2147,7 @@ bool ExecutionEngine::writeSaveSnapshot(qint64 index,const QString& description)
     const QString directory=GamePaths::join(m_gameDataDir,QStringLiteral("sav")); QDir().mkpath(directory);
     QSaveFile file(GamePaths::join(directory,QStringLiteral("save%1.sav").arg(index,2,10,QLatin1Char('0'))));
     if(!file.open(QIODevice::WriteOnly) || file.write(bytes)!=bytes.size() || !file.commit()) return false;
-    m_saveSnapshots.insert(index,std::move(snapshot)); m_invalidSaves.remove(index); return true;
+    m_saveSnapshots.insert(index,std::move(snapshot)); return true;
 }
 
 bool ExecutionEngine::handleLoadGlobal() {
@@ -2241,7 +2250,7 @@ void ExecutionEngine::handleDelData(const LogicalLine& line)
     if (idx < 0 || idx > INT_MAX) { setError(QStringLiteral("DELDATA 无效编号")); return; }
     const QString path = GamePaths::join(m_gameDataDir, QStringLiteral("sav/save%1.sav").arg(idx, 2, 10, QLatin1Char('0')));
     if (QFile::exists(path) && !QFile::remove(path)) { setError(QStringLiteral("DELDATA 删除失败")); return; }
-    m_saveSnapshots.remove(idx); m_invalidSaves.remove(idx);
+    m_saveSnapshots.remove(idx);
 }
 
 void ExecutionEngine::handleChkData(const LogicalLine& line)

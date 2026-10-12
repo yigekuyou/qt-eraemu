@@ -183,7 +183,8 @@ void ArgumentParser::build(LogicalLine& line) {
     // ---- 表达式可解析性校验（单表达式族）----
     if (arg.typeOk
         && (arg.kind == ArgKind::IntExpression || arg.kind == ArgKind::StrExpression
-            || arg.kind == ArgKind::Expression)) {
+            || arg.kind == ArgKind::Expression || arg.kind == ArgKind::FormStr
+            || line.isFunctionCall)) {
         for (const Operand& o : arg.operands) {
             if (o.raw.trimmed().isEmpty() || o.isString || o.isVariable) continue;
             if (!o.ast) {
@@ -207,6 +208,19 @@ void ArgumentParser::build(LogicalLine& line) {
         if (upper == "DT_COLUMN_OPTIONS" && (line.isError || line.columnDefaults.isEmpty())) {
             arg.typeOk = false;
             arg.typeError = QCoreApplication::translate("ParseDiagnostics", "DT_COLUMN_OPTIONS 需要合法 DEFAULT 选项");
+        }
+    }
+
+    if (arg.typeOk && (arg.kind == ArgKind::Call || arg.kind == ArgKind::CallForm || arg.kind == ArgKind::CallF)) {
+        for (int i = 0; i < ops.size(); ++i) {
+            // Static target labels are identities, not evaluated operands.
+            if (i == 0 && !upper.contains("FORM")) continue;
+            if (!ops[i].ast) {
+                arg.typeOk = false;
+                arg.typeError = QCoreApplication::translate("ParseDiagnostics", "%1 的参数缺少装载期 AST：%2")
+                    .arg(upper, ops[i].raw);
+                break;
+            }
         }
     }
 

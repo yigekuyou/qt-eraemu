@@ -153,6 +153,19 @@ int main(int argc, char** argv) {
         check(replaced && completions == 1, "merge continuation from old load is discarded");
         check(engine.getParseTable()->scriptNames() == QStringList{"SECOND.ERB"}, "merge replacement contains only new script");
     }
+    {
+        const QString scopedRoot = tmp.filePath("scoped");
+        QDir().mkpath(scopedRoot + "/CSV"); QDir().mkpath(scopedRoot + "/ERB");
+        write(scopedRoot + "/ERB/SCOPED.ERB",
+              "@SYSTEM_TITLE\n#DIMS SHARED\nPRINTS @\"%SHARED%\"\nRETURN\n@SECOND\n#DIM SHARED\nRETURN\n");
+        EraEngine engine;
+        engine.loadAsync(scopedRoot);
+        check(waitLoaded(engine), "private FORM async load succeeds");
+        const auto* line = engine.getParseTable()->lineAt("SCOPED.ERB", 2);
+        check(line && line->arguments.first().ast && !line->isError && line->argument.typeOk,
+              "worker FORM receives owner private type before publication");
+        check(engine.parseWarnings().isEmpty(), "valid private FORM emits no load diagnostics");
+    }
     { EraEngine engine; engine.loadAsync(first); } // destruction during preparation
     { ErbLoader loader; loader.loadDirectoryAsync(first + "/ERB"); }
     QCoreApplication::processEvents();

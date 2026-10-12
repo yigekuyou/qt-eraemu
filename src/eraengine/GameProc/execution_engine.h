@@ -304,7 +304,6 @@ public:
 
     void setGameDirectory(const QString& dir) { m_gameDirectory = dir; }
     QHash<qint64, EraBinaryData::Document> m_saveSnapshots;
-    QSet<qint64> m_invalidSaves;
     EraBinaryData::Document m_globalSnapshot;
     bool m_globalSnapshotValid = false;
     using VariableSnapshot = EraBinaryData::Document;

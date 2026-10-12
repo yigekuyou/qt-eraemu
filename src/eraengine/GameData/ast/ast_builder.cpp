@@ -904,7 +904,8 @@ LogicalLine AstBuilder::build(const QString& rawLine,
             return finalized(std::move(line));
         }
         const QString exprText =
-            line.functionName + QLatin1Char('(') + callText + QLatin1Char(')');
+            line.functionName + (callText.startsWith('(') ? callText
+                : QLatin1Char('(') + callText + QLatin1Char(')'));
         Operand call(exprText);
         if (resolve) call.ast = resolve(exprText);
         line.arguments.append(call);

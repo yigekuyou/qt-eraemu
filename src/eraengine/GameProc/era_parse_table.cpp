@@ -1446,6 +1446,20 @@ void EraParseTable::finalizeParse() {
     tStrAssign = sub.restart();
     applyVariableTypes();
     tVarTypes = sub.restart();
+    // 赋值列表的 AST 也必须先建立，再统一绑定函数形参上下文。
+    for (auto& script : m_scripts) {
+        for (auto& line : script.lines) {
+            if (line.assignOperator.isEmpty() || line.arguments.size() != 2) continue;
+            const QString name = line.arguments[0].raw.section(':', 0, 0).trimmed();
+            if (line.assignOperator == "=" && m_variables.typeOf(name, line.ownerFunction) == OperandType::Str) continue;
+            line.assignmentAsts.clear();
+            for (const auto& text : AstBuilder::assignmentValues(line.arguments[1].raw)) {
+                auto ast = cloneExpression(expressionAstInScope(text, line.ownerFunction, true));
+                if (ast) VariableTable::applyTypes(*ast, m_variables, line.ownerFunction);
+                line.assignmentAsts.append(ast);
+            }
+        }
+    }
     // 函数调用重绑：装载顺序无关（并行分块时，某块的表达式可能先于
     // 它调用的 #FUNCTION 被解析，此时只能当「未定义」；到此处全部脚本已 merge）
     resolveFunctionNodes();
@@ -1548,13 +1562,12 @@ void EraParseTable::finalizeParse() {
                 const bool rawForm = line.assignOperator == "=" && m_variables.typeOf(name, line.ownerFunction) == OperandType::Str;
                 if (!rawForm) {
                     const auto values = AstBuilder::assignmentValues(line.arguments[1].raw);
-                    line.assignmentAsts.clear();
-                    for (const auto& text : values) {
+                    for (int valueIndex = 0; valueIndex < values.size(); ++valueIndex) {
+                        const auto& text = values[valueIndex];
                         diagnoseIntegerLiterals(text, line.position.filename, line.position.lineNumber,
                             line.position.column + qMax(0, int(line.raw.indexOf(text))), m_diagnostics);
-                        auto ast = cloneExpression(expressionAstInScope(text, line.ownerFunction, true));
-                        line.assignmentAsts.append(ast);
-                        if (ast) { VariableTable::applyTypes(*ast, m_variables, line.ownerFunction); validate(ast); }
+                        const auto& ast = line.assignmentAsts[valueIndex];
+                        if (ast) validate(ast);
                         else {
                             line.argument.typeOk = false;
                             line.argument.typeError = QCoreApplication::translate("ParseDiagnostics", "赋值右值无法解析或包含空项");
@@ -1796,6 +1809,7 @@ void EraParseTable::resolveFunctionNodes() {
     const auto resolveNode = [this, &userType](ExpressionNode& node) {
         if (node.kind() != NodeKind::Function) return;
         auto& fn = static_cast<FunctionNode&>(node);
+        fn.setReferenceArguments({});
         fn.setUserFunction(false);
         fn.setBuiltinIndex(-1);
         fn.setExtensionSpec(nullptr);
@@ -1838,6 +1852,29 @@ void EraParseTable::resolveFunctionNodes() {
             fn.setValueType(OperandType::Unknown);
             fn.setArityError(QCoreApplication::translate("ParseDiagnostics", "未定义的函数 %1").arg(fn.name()));
         }
+        if (fn.isUserFunction()) {
+            const auto* decl = userFunction(fn.name().toUpper());
+            if (!decl) return;
+            QList<bool> refs;
+            for (int i = 0; i < decl->params.size(); ++i) {
+                const auto& param = decl->params[i];
+                refs.append(param.isReference);
+                if (!param.isReference || !fn.arityError().isEmpty()) continue;
+                const auto* formal = m_variables.find(param.varName, decl->name);
+                const auto* actual = i < fn.arguments().size() && fn.arguments()[i]
+                    ? dynamic_cast<const VariableNode*>(fn.arguments()[i].data()) : nullptr;
+                // C# CalledFunction.ConvertArg / ReferenceToken.MatchType：REF 必须
+                // 接收同类型、同维数的非角色数组，不能使用标量自动转换。
+                if (!actual || fn.isArgOmitted(i) || !formal || actual->characterData || actual->readOnly
+                    || actual->valueType() != formal->type
+                    || actual->dimension != formal->dimension || actual->dimension <= 0) {
+                    fn.setArityError(QCoreApplication::translate("ParseDiagnostics",
+                        "函数 %1 第 %2 个 REF 实参需要同类型、同维数的非角色数组变量")
+                        .arg(decl->name).arg(i + 1));
+                }
+            }
+            fn.setReferenceArguments(refs);
+        }
     };
 
     // 自底向上解析：`STRLENS(RAND(100))` 里内层 RAND 的返回类型必须先定下来，
@@ -1861,6 +1898,7 @@ void EraParseTable::resolveFunctionNodes() {
     const auto processScript = [&resolveAst](ScriptData* sd) {
         for (LogicalLine& line : sd->lines) {
             for (const Operand& op : line.arguments) resolveAst(op.ast);
+            for (const auto& ast : line.assignmentAsts) resolveAst(ast);
             for (const auto& e : line.argument.exprs) resolveAst(e);
             for (const Operand& c : line.argument.cases) resolveAst(c.ast);
             resolveAst(line.condition);

@@ -28,6 +28,7 @@
 
 #include <QCoreApplication>
 #include "era_parse_table.h"
+#include "ast/ast_builder.h"
 #include <QDebug>
 #include <QDir>
 #include <QFile>
@@ -217,6 +218,52 @@ int main(int argc, char* argv[]) {
     check(cdflag && validateExpression(*cdflag).isEmpty(), "系统角色二维 CDFLAG 接受三项下标");
     check(badCdflag && !validateExpression(*badCdflag).isEmpty(), "系统角色二维 CDFLAG 拒绝缺少下标");
     check(time && validateExpression(*time).isEmpty(), "普通一维 TIME 接受单项下标");
+
+    qDebug() << "\n8c) 装载期数组身份只在对应实参位置生效";
+    const auto loadArrayCall = [&](const QString& expression, bool valid) {
+        EraParseTable table(nullptr);
+        const QStringList source = {
+            "@MAIN", "#DIM keys, 4", "#DIM matrix, 4, 3", "#DIMS texts, 4, 3",
+            "#DIM cube, 4, 3, 2", "#DIM CONST fixed, 4 = 1,2,3,4",
+            "LOCAL = " + expression, "RETURN",
+            "@MouseUIStore_Select_ItemType(rDisplays,aCurType)", "#FUNCTION",
+            "#DIM REF rDisplays,0,0", "#DIM aCurType", "RETURNF aCurType",
+            "@ByValue(value)", "#FUNCTION", "#DIM value", "RETURNF value",
+            "@Forward(rDisplays)", "#FUNCTION", "#DIM REF rDisplays,0,0",
+            "RETURNF MouseUIStore_Select_ItemType(rDisplays,0)"
+        };
+        QList<LogicalLine> lines;
+        const AstResolver resolve = [&table](const QString& text) { return table.expressionAst(text); };
+        for (int i = 0; i < source.size(); ++i)
+            lines.append(AstBuilder::build(source[i], ScriptPosition("arrays.ERB", i, 0), resolve));
+        check(table.loadScript("arrays", lines), "load array argument fixture");
+        table.finalizeParse();
+        const auto* main = table.lineAt("arrays", 6);
+        if (main && main->isError == valid) qDebug() << main->errMes << table.parseWarnings();
+        check(main && main->isError != valid, expression + (valid ? " accepts" : " rejects"));
+        const auto* forward = table.lineAt("arrays", source.size() - 1);
+        check(forward && !forward->isError, "REF-to-REF forwarding accepts");
+        if (main && valid) {
+            for (const auto& ast : main->assignmentAsts) {
+                const auto clone = cloneExpression(ast);
+                check(clone && validateExpression(*clone).isEmpty(), "assignment array argument retains binding after clone");
+            }
+        }
+    };
+    for (const QString& expression : QStringList{
+             "ARRAYMSORT(keys,matrix)", "ARRAYMSORT(keys,matrix,texts,matrix)",
+             "MouseUIStore_Select_ItemType(matrix,0)", "Forward(matrix)"})
+        loadArrayCall(expression, true);
+    for (const QString& expression : QStringList{
+             "matrix", "matrix + 1", "ABS(matrix)", "ByValue(matrix)",
+             "MouseUIStore_Select_ItemType(matrix,matrix)",
+             "MouseUIStore_Select_ItemType(keys,0)", "MouseUIStore_Select_ItemType(texts,0)",
+             "MouseUIStore_Select_ItemType(matrix + 1,0)",
+             "MouseUIStore_Select_ItemType(,0)", "MouseUIStore_Select_ItemType()",
+             "ARRAYMSORT(matrix,keys)", "ARRAYMSORT(keys,matrix + 1)",
+             "ARRAYMSORT(keys,fixed)", "ARRAYMSORT(keys,matrix:keys:0:0)",
+             "ARRAYMSORT(keys,matrix:99:0)", "ARRAYMSORT(keys,matrix:matrix:0)"})
+        loadArrayCall(expression, false);
 
     qDebug() << "\n9) 下标只取单项（对齐 C# ReduceVariableArgument）";
     auto indexed = parse(parser, "LOCALS:LOCAL == \"0\" || TOINT(LOCALS:LOCAL)");

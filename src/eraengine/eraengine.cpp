@@ -709,7 +709,11 @@ void EraEngine::reload()
 		// Reload scripts from current directory
 		if (!m_gameDirectory.isEmpty()) {
 				// 对齐 C#：先解析 ErbDir / CsvDir（只在这两个目录内检索）
-				resolveGameDirs();
+				if (!resolveGameDirs()) {
+						m_parseTable.clear();
+						emit scriptsLoaded(false);
+						return;
+				}
 
 				// 配置文件：_default.config / _fixed.config 在 CSV 目录，
 				// emuera.config 在游戏根目录（C# ConfigData.configPath = ExeDir + "emuera.config"）
@@ -771,12 +775,12 @@ void EraEngine::closeGame()
 		emit gameDirectoryChanged();
 }
 
-void EraEngine::resolveGameDirs()
+bool EraEngine::resolveGameDirs()
 {
 		if (m_gameDirectory.isEmpty()) {
 				m_csvDir.clear();
 				m_erbDir.clear();
-				return;
+				return false;
 		}
 		// 与 C# 的 Program.CsvDir / Program.ErbDir 对齐：大小写不敏感地定位子目录
 		m_csvDir = m_fileSystem.resolveSubDir(m_gameDirectory, QStringList{"CSV", "csv"});
@@ -787,8 +791,13 @@ void EraEngine::resolveGameDirs()
 		if (m_erbDir.isEmpty()) {
 				qWarning() << "[EraEngine] ERB 目录未找到：" << m_gameDirectory;
 		}
+		if (m_csvDir.isEmpty() || m_erbDir.isEmpty()) {
+				setHasError(true);
+				return false;
+		}
 		// 存档目录注入（SAVEDATA/LOADDATA/DELDATA/CHKDATA 用）
 		m_executionEngine.setGameDirectory(m_storageRoot);
+		return true;
 }
 
 void EraEngine::loadConfigFiles()
@@ -1307,7 +1316,10 @@ void EraEngine::reloadAsync()
 		m_parseTable.clear();
 		QElapsedTimer phase;   // 主线程各阶段耗时：定位「装载时界面卡一下」的来源
 		phase.start();
-		resolveGameDirs();
+		if (!resolveGameDirs()) {
+				emit scriptsLoaded(false);
+				return;
+		}
 		loadConfigFiles();
 		resolveTextConfig();
 		loadGameBaseData();

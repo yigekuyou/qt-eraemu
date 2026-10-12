@@ -132,7 +132,7 @@ void ErbLoader::tryAutoLoadRename(const QString& dirPath) {    if (!m_preprocess
 // ---------------------------------------------------------------------------
 QStringList ErbLoader::collectFiles(const QString& dirPath, int depth) const {
     QStringList out;
-    if (depth > kMaxScanDepth) return out;
+    if (dirPath.isEmpty() || depth > kMaxScanDepth) return out;
 
     QDir dir(dirPath);
     if (!dir.exists()) return out;
@@ -364,9 +364,11 @@ bool ErbLoader::loadFile(const QString& filePath, const QString& root) {
 }
 
 bool ErbLoader::loadDirectory(const QString& dirPath, int depth) {
+    if (dirPath.isEmpty() || !QFileInfo(dirPath).isDir()) {
+        qWarning() << "[load] ERB 目录无效:" << dirPath;
+        return false;
+    }
     if (depth > kMaxScanDepth) return true;
-    QDir dir(dirPath);
-    if (!dir.exists()) return false;
 
     const QStringList allFiles = collectFiles(dirPath, depth);
     if (allFiles.isEmpty()) return true;
@@ -534,6 +536,11 @@ void ErbLoader::finishAsync(bool ok) {
 
 void ErbLoader::loadDirectoryAsync(const QString& dirPath, int depth) {
     if (m_async.active) {
+        return;
+    }
+    if (dirPath.isEmpty() || !QFileInfo(dirPath).isDir()) {
+        qWarning() << "[load] ERB 目录无效:" << dirPath;
+        emit loadCompleted(false);
         return;
     }
     m_async = AsyncState{};

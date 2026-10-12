@@ -346,7 +346,7 @@ private:
     bool m_semanticRunning = false;   // 后台语义阶段（finalizeParse）进行中
     bool m_hasError = false;   // 最近一次执行出错（状态灯）
     bool m_defaultTitleVisible = false;   // 标准标题画面（QML）是否显示    // ---- 内部：目录解析与分批装载 ----
-    void resolveGameDirs();          // 解析 CSV/ERB 目录（绝对路径 + 实际大小写）
+    bool resolveGameDirs();          // 解析 CSV/ERB 目录（绝对路径 + 实际大小写）
     void loadConfigFiles();          // _default.config / emuera.config / _fixed.config
     void loadConstantData();         // CSV 目录内的常量数据（VariableSize 等）
     void collectEntryPoints();       // 从已装载 AST 收集入口点（不再二次扫文件）

@@ -231,6 +231,12 @@ public:
     [[nodiscard]] bool isUserFunction() const { return m_isUserFunction; }
     void setUserFunction(bool v) { m_isUserFunction = v; }
 
+    // 装载期按用户函数 REF 形参绑定；仅该实参的变量根节点允许数组身份。
+    void setReferenceArguments(const QList<bool>& args) { m_referenceArguments = args; }
+    [[nodiscard]] bool isReferenceArgument(int index) const {
+        return index >= 0 && index < m_referenceArguments.size() && m_referenceArguments.at(index);
+    }
+
     // ---- 内置函数（内部命令）+ 扩展式中函数 ----
     //   两者都「是函数、有返回类型」，但求值来源不同：内置走 kBuiltinFunctions，
     //   扩展走注册类的回调（BuiltinOp::Extension）。isBuiltin() 覆盖两者，
@@ -272,6 +278,7 @@ public:
 private:
     QString m_name;
     QList<QSharedPointer<ExpressionNode>> m_args;
+    QList<bool> m_referenceArguments;
     QList<bool> m_argOmitted;   // 该位实参是否写成空（见 markArgOmitted）
     OperandType m_type = OperandType::Int;   // 默认整数（C# 未标注时的宽松处理）
     bool m_isUserFunction = false;

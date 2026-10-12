@@ -413,6 +413,18 @@ QString validateBuiltinCall(const BuiltinFunctionSpec& spec,
             .arg(funcName).arg(maxArgs).arg(n);
     }
 
+    // ARRAYMSORT 的可变长尾部也全是数组身份（C# ArrayMultiSortMethod）。
+    if (spec.op == BuiltinOp::ArrayMSort) {
+        for (int i = 0; i < n; ++i) {
+            const auto* var = args[i] ? dynamic_cast<const VariableNode*>(args[i].data()) : nullptr;
+            if (!var || var->readOnly || var->characterData
+                || (var->dimension >= 0 && (var->dimension == 0 || (i == 0 && var->dimension != 1))))
+                return QCoreApplication::translate("ParseDiagnostics", "%1 第 %2 个参数需要可写非角色数组变量（首参须为一维数组）")
+                    .arg(funcName).arg(i + 1);
+        }
+        return {};
+    }
+
     const int patternLength = static_cast<int>(spec.argPattern.size());
     const int checked = (patternLength < n) ? patternLength : n;
     for (int i = 0; i < checked; ++i) {
@@ -559,6 +571,9 @@ QSharedPointer<ExpressionNode> cloneExpression(const QSharedPointer<ExpressionNo
             if (n.builtinIndex() < 0) copy->setExtensionSpec(ext);   // 扩展式中函数
         }
         copy->setUserFunction(n.isUserFunction()); copy->setArityError(n.arityError());
+        QList<bool> refs;
+        for (int i = 0; i < args.size(); ++i) refs.append(n.isReferenceArgument(i));
+        copy->setReferenceArguments(refs);
         // 空实参占位（`F(a, , b)`）必须一起克隆：丢了它 FINDELEMENT 的第 4 实参
         // 会被当成显式 0（结束位置 0 -> 恒返回 -1）
         for (int i = 0; i < args.size(); ++i)
@@ -639,8 +654,10 @@ QString validateExpression(const ExpressionNode& node, bool requireIndices) {
         const auto* spec = f.builtinSpec();
         for (int i = 0; i < f.arguments().size(); ++i) {
             if (f.isArgOmitted(i)) continue;
-            const bool array = spec && i < int(spec->argPattern.size())
-                && (spec->argPattern[i] == 'v' || spec->argPattern[i] == 'A' || spec->argPattern[i] == '1' || spec->argPattern[i] == 'c');
+            const bool array = f.isReferenceArgument(i)
+                || (spec && spec->op == BuiltinOp::ArrayMSort)
+                || (spec && i < int(spec->argPattern.size())
+                    && (spec->argPattern[i] == 'v' || spec->argPattern[i] == 'A' || spec->argPattern[i] == '1' || spec->argPattern[i] == 'c'));
             const QString e = check(f.arguments()[i], !array);
             if (!e.isEmpty()) return e;
         }

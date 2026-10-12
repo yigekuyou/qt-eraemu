@@ -41,6 +41,7 @@
 #include <QTemporaryDir>
 
 #include "Content/erb_loader.h"
+#include "eraengine.h"
 #include "GameData/file_system_io.h"
 
 static int g_failures = 0;
@@ -123,6 +124,56 @@ int main(int argc, char* argv[]) {
     ErbLoader loader2;
     check(loader2.loadFile(wrongDir + QStringLiteral("/FOO.erb")),
           QStringLiteral("ErbLoader::loadFile 混大小写路径也读得到"));
+
+    // 空路径不能被 QDir 当作工作目录；包装目录不探测其 data 子目录。
+    const QString oldCwd = QDir::currentPath();
+    check(QDir::setCurrent(tmp.path()), "设置含 ERB 文件的工作目录");
+    ErbLoader invalid;
+    check(!invalid.loadDirectory(QString()), "同步加载拒绝空路径");
+    check(invalid.getLoadedScripts().isEmpty(), "空路径不扫描工作目录");
+    int completed = 0;
+    QObject::connect(&invalid, &ErbLoader::loadCompleted, [&](bool ok) {
+        ++completed;
+        check(!ok, "异步无效路径报告失败");
+    });
+    invalid.loadDirectoryAsync(QString());
+    invalid.loadDirectoryAsync(tmp.filePath("missing"));
+    check(completed == 2 && !invalid.isLoading(), "异步无效路径立即返回且未启动任务");
+    check(invalid.getLoadedScripts().isEmpty(), "异步无效路径不扫描工作目录");
+
+    check(QDir(tmp.path()).mkpath("wrapped/data/CSV"), "创建包装目录 CSV");
+    check(QDir(tmp.path()).mkpath("wrapped/data/ERB"), "创建包装目录 ERB");
+    check(writeFileAt(tmp.filePath("wrapped/data/ERB/MAIN.ERB"),
+                      "@SYSTEM_TITLE\nPRINTL loaded\nINPUT\n"), "写入合法子目录脚本");
+    const QString wrapper = tmp.filePath("wrapped");
+    for (bool async : {false, true}) {
+        EraEngine engine;
+        int resultCount = 0;
+        QObject::connect(&engine, &EraEngine::scriptsLoaded, [&](bool ok) {
+            ++resultCount;
+            check(!ok, "游戏路径错误发出 scriptsLoaded(false)");
+        });
+        if (async) engine.loadAsync(wrapper);
+        else engine.setGameDirectory(wrapper);
+        check(resultCount == 1 && engine.hasError(), "路径错误立即报告失败");
+        check(engine.getGameDirectory() == wrapper, "不探测或重定向到 data");
+        check(engine.getParseTable()->scriptNames().isEmpty(), "错误游戏路径未载入脚本");
+        check(!engine.isLoadingScripts(), "错误路径未启动后台装载");
+    }
+    // 只有直接选择正确的目录才加载；缺少任一必需目录仍失败。
+    EraEngine valid;
+    valid.setGameDirectory(tmp.filePath("wrapped/data"));
+    check(!valid.hasError() && valid.getParseTable()->scriptNames().size() == 1,
+          "直接选择 CSV/ERB 所在目录正常装载");
+    check(QDir(tmp.path()).mkpath("incomplete/CSV"), "创建缺 ERB 的目录");
+    valid.setGameDirectory(tmp.filePath("incomplete"));
+    check(valid.hasError() && valid.getParseTable()->scriptNames().isEmpty(),
+          "缺 ERB 时失败并清除前一次解析表");
+    check(QDir(tmp.path()).mkpath("no-csv/ERB"), "创建缺 CSV 的目录");
+    valid.setGameDirectory(tmp.filePath("no-csv"));
+    check(valid.hasError() && valid.getParseTable()->scriptNames().isEmpty(),
+          "缺 CSV 时失败且不加载 ERB");
+    check(QDir::setCurrent(oldCwd), "还原工作目录");
 
     qDebug() << (g_failures == 0 ? "\n全部通过" : "\n有失败");
     return g_failures == 0 ? 0 : 1;

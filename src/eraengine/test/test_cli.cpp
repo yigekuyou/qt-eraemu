@@ -549,6 +549,10 @@ int main(int argc, char* argv[]) {
     EraEngine engine;
     std::cout << "== 装载 " << directory.toStdString() << " ==\n";
     engine.setGameDirectory(directory);   // 与 appemuera 相同：装载并停在等待输入
+    if (engine.csvDir().isEmpty() || engine.erbDir().isEmpty()) {
+        qWarning().noquote() << "装载失败：游戏目录必须直接包含 CSV 和 ERB:" << directory;
+        return 2;
+    }
 
     ConsoleBackend* console = engine.getConsole();
     ProcessState* state = engine.getProcessState();

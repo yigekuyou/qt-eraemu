@@ -203,6 +203,16 @@ FocusScope {
         anchors.bottom: parent.bottom
         focus: root.primitiveInput || (root.isMobile && root.anyKeyInput)
 
+        // 独立的滚动条槽位。两个 ListView 都让出这段宽度，滚动条不会
+        // 覆盖舞台最右列，也不会因为滚动条出现/消失而改变舞台网格宽度。
+        Item {
+            id: scrollBarSlot
+            anchors.right: parent.right
+            anchors.top: parent.top
+            anchors.bottom: parent.bottom
+            width: root.scrollBarWidth
+        }
+
         ConsoleView {
             id: view
             objectName: "consoleListView"
@@ -284,15 +294,10 @@ FocusScope {
 
             ScrollBar.vertical: ScrollBar {
                 objectName: "consoleScrollBar"
-                // Qt 文档（ScrollBar Attached Properties）：attached 滚动条
-                // 默认贴着 Flickable 边缘安放且不预留空间（盖在内容上）；
-                // 指定别的 parent 即关闭自动几何管理，改为自行布局。
-                // 这里挪进右缘让出的空档：不遮内容，高度随视口。
-                parent: viewport
-                anchors.right: parent.right
-                anchors.top: parent.top
-                anchors.bottom: parent.bottom
-                width: root.scrollBarWidth
+                // attached ScrollBar 仍由 view 提供位置和范围，但实际控件
+                // 放在独立槽位中；因此它不会盖住最后一列舞台内容。
+                parent: scrollBarSlot
+                anchors.fill: parent
                 visible: view.visible
             }
         }
@@ -411,8 +416,5 @@ FocusScope {
     readonly property bool anyKeyInput: backend && backend.anyKeyInput
     readonly property bool stringInputKind: backend && backend.stringInput
 
-    Component.onCompleted: {
-        syncCadence();
-        syncLayout();
-    }
+    Component.onCompleted: syncLayout()
 }

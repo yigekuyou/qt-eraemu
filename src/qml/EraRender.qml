@@ -25,9 +25,6 @@ Item {
 
     // 绑定到 C++ 引擎
     property EraEngine engine: null
-    // 屏幕刷新率（Hz）由 Main.qml 从 WindowController 注入（见 Console.qml 说明）
-    property int screenRefreshRate: 0
-
     Rectangle {
         anchors.fill: parent
         color: eraRender.engine ? eraRender.engine.gui.backColor : "#101010"

@@ -903,9 +903,36 @@ LogicalLine AstBuilder::build(const QString& rawLine,
             line.isFunctionCall = true;
             return finalized(std::move(line));
         }
-        const QString exprText =
-            line.functionName + (callText.startsWith('(') ? callText
-                : QLatin1Char('(') + callText + QLatin1Char(')'));
+        // Function statements use the command spelling `NAME arg1, arg2`.
+        // A leading parenthesized operand is still only one operand; it does
+        // not turn the remainder into a complete call.  For example,
+        // `TWAIT (S_TIME:(COUNT - 1)), 0` must become
+        // `TWAIT(S_TIME:(COUNT - 1), 0)`, while `TWAIT(1, 0)` is already a
+        // complete call.  Find the matching outer parenthesis before deciding
+        // whether the source is call syntax.
+        bool completeCall = callText.startsWith(QLatin1Char('('));
+        if (completeCall) {
+            int depth = 0;
+            bool quoted = false;
+            bool escaped = false;
+            int close = -1;
+            for (int i = 0; i < callText.size(); ++i) {
+                const QChar c = callText.at(i);
+                if (quoted) {
+                    if (escaped) escaped = false;
+                    else if (c == QLatin1Char('\\')) escaped = true;
+                    else if (c == QLatin1Char('"')) quoted = false;
+                    continue;
+                }
+                if (c == QLatin1Char('"')) { quoted = true; continue; }
+                if (c == QLatin1Char('(')) ++depth;
+                else if (c == QLatin1Char(')') && --depth == 0) { close = i; break; }
+            }
+            completeCall = close == callText.size() - 1;
+        }
+        const QString exprText = completeCall
+            ? line.functionName + callText
+            : line.functionName + QLatin1Char('(') + callText + QLatin1Char(')');
         Operand call(exprText);
         if (resolve) call.ast = resolve(exprText);
         line.arguments.append(call);

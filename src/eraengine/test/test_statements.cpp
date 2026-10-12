@@ -919,7 +919,47 @@ int main(int argc, char* argv[]) {
         vs.setPrivateScope("INCREMENT", {"COUNTERS"});
         check(vs.getGlobalInt1D("COUNTERS", 0) == 5 && vs.getGlobalInt1D("SIDE_EFFECT", 0) == 1,
               "four increment forms write private array and evaluate index once");
-        ex.executeInstruction(AstBuilder::build("HTML_TAGSPLIT \"<b>x</b>\"", {}, resolve));
+        // C# HTML_TAGSPLIT uses source, string-array destination, count LHS;
+        // omitted destinations default to RESULTS and RESULT respectively.
+        ex.executeInstruction(AstBuilder::build(
+            "HTML_TAGSPLIT \"<b>x</b>\"", {}, resolve));
+        check(vs.getSystemVariable("RESULT", 0) == 3,
+              "HTML_TAGSPLIT default count writes RESULT");
+        check(vs.getGlobalStr1D("RESULTS", 0) == "<b>"
+              && vs.getGlobalStr1D("RESULTS", 1) == "x"
+              && vs.getGlobalStr1D("RESULTS", 2) == "</b>",
+              "HTML_TAGSPLIT default parts write RESULTS:0..2");
+
+        vs.setGlobalStr1D("HTML_PARTS", 0, "old0");
+        vs.setGlobalStr1D("HTML_PARTS", 1, "old1");
+        vs.setGlobalStr1D("HTML_PARTS", 2, "old2");
+        vs.setGlobalStr1D("HTML_PARTS", 3, "old3");
+        vs.setGlobalStr1D("HTML_PARTS", 4, "old4");
+        ex.executeInstruction(AstBuilder::build(
+            "HTML_TAGSPLIT \"a<i>b</i>c\", HTML_PARTS:2, LOCAL:4", {}, resolve));
+        check(vs.getLocalInt(4) == 5,
+              "HTML_TAGSPLIT explicit count writes full part count");
+        check(vs.getGlobalStr1D("HTML_PARTS", 0) == "a"
+              && vs.getGlobalStr1D("HTML_PARTS", 1) == "<i>"
+              && vs.getGlobalStr1D("HTML_PARTS", 2) == "b"
+              && vs.getGlobalStr1D("HTML_PARTS", 3) == "</i>"
+              && vs.getGlobalStr1D("HTML_PARTS", 4) == "c",
+              "HTML_TAGSPLIT ignores destination start index like C# Array.Copy");
+
+        ex.executeInstruction(AstBuilder::build(
+            "HTML_TAGSPLIT \"a<i>b</i>c<u>d\", HTML_PARTS, LOCAL:4", {}, resolve));
+        check(vs.getLocalInt(4) == 7 && vs.arraySize("HTML_PARTS") == 5,
+              "HTML_TAGSPLIT truncates parts but reports the full count");
+        ex.executeInstruction(AstBuilder::build(
+            "HTML_TAGSPLIT \"broken<i\", HTML_PARTS, LOCAL:4", {}, resolve));
+        check(vs.getLocalInt(4) == -1,
+              "HTML_TAGSPLIT malformed input writes -1 to count");
+        check(vs.getGlobalStr1D("HTML_PARTS", 0) == "a"
+              && vs.getGlobalStr1D("HTML_PARTS", 4) == "c",
+              "HTML_TAGSPLIT malformed input leaves destination unchanged");
+        ex.executeInstruction(AstBuilder::build("HTML_TAGSPLIT \"broken<i\"", {}, resolve));
+        check(vs.getSystemVariable("RESULT", 0) == -1,
+              "HTML_TAGSPLIT malformed input defaults count to RESULT");
         ex.executeInstruction(AstBuilder::build("SPLIT \"a/b\", \"/\", LOCALS", {}, resolve));
         check(vs.getSystemVariable("RESULT", 0) == 2, "SPLIT omitted count writes RESULT");
         ex.executeInstruction(AstBuilder::build("SORTCHARA BACK", {}, resolve));

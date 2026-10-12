@@ -966,9 +966,10 @@ LogicalLine AstBuilder::build(const QString& rawLine,
         if (funcName.startsWith('@')) funcName = funcName.mid(1);
 
         Operand target(funcName);
-        // CALLFORM targets are FORM values compiled at load time; CALL targets
-        // remain raw labels. The execution side only evaluates this AST.
-        if (line.functionName.contains(QLatin1String("FORM")) && resolve) {
+        // FUNC uses SP_CALLFORM too: every list target, including a static
+        // name, is a FORM AST. The execution side only evaluates this AST.
+        if ((line.functionName.contains(QLatin1String("FORM"))
+             || line.functionName == QLatin1String("FUNC")) && resolve) {
             target.ast = StrFormParser::parse(funcName, resolve);
         }
         line.arguments.append(target);

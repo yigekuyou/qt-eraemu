@@ -2459,7 +2459,7 @@ bool ExecutionEngine::handleStatusCommand(const LogicalLine& line)
         return true;
     }
 
-    // ---- HTML_TAGSPLIT <字符串>, <数组变量>[, <个数变量>] ----
+    // ---- HTML_TAGSPLIT <字符串>[, <数组变量>, <个数变量>] ----
     //   （C# HtmlManager.HtmlTagSplit：按标签切成 [文本, <tag>, …]；
     //     未闭合 '<' -> 个数变量写 -1）
     if (name == QLatin1String("HTML_TAGSPLIT")) {
@@ -2486,28 +2486,48 @@ bool ExecutionEngine::handleStatusCommand(const LogicalLine& line)
             parts.append(str.mid(pos, gt + 1 - pos));
             pos = gt + 1;
         }
-        if (!ok) {
-            if (ops.size() >= 3 && !ops.at(2)->raw.trimmed().isEmpty()) {
-                const auto count = resolveLhsRef(ops.at(2)->ast.data());
-                if (!count.valid) return false;
-                writeLhs(count, -1);
-            }
-            return true;
-        }
+        // C# defaults are RESULT (count) and RESULTS (parts).  The source
+        // operand order is string, destination array, optional count.
+        LhsRef count;
+        count.name = QStringLiteral("RESULT");
+        count.valid = true;
+        LhsRef target;
+        target.name = QStringLiteral("RESULTS");
+        target.valid = true;
         if (ops.size() >= 2 && !ops.at(1)->raw.trimmed().isEmpty()) {
-            // 第 2 实参：结果数组（可带起始下标，LOCALS:2 -> 从 2 号元素起）
-            LhsRef target = resolveLhsRef(ops.at(1)->ast.data());
-            if (!target.valid) return false;
-            const int start = target.first();
-            for (int k = 0; k < parts.size(); ++k) {
-                target.indices = {start + k};
-                writeStringValue(target, parts.at(k));
+            const auto* ast = ops.at(1)->ast.data();
+            if (!ast || ast->kind() != NodeKind::Variable) {
+                (void)resolveLhsRef(ast); // emit the standard missing-LHS diagnostic
+                return false;
             }
+            // C# retains only VariableToken: destination indices are ignored.
+            target.name = static_cast<const VariableNode&>(*ast).name();
         }
         if (ops.size() >= 3 && !ops.at(2)->raw.trimmed().isEmpty()) {
-            const auto count = resolveLhsRef(ops.at(2)->ast.data());
+            count = resolveLhsRef(ops.at(2)->ast.data());
             if (!count.valid) return false;
-            writeLhs(count, static_cast<qint64>(parts.size()));
+        }
+        if (!ok) {
+            writeLhs(count, -1);
+            return true;
+        }
+
+        // C# Array.Copy starts at zero, regardless of the destination's
+        // supplied subscript, and leaves unused destination elements intact.
+        const auto* destinationDecl = m_parseTable
+            ? m_parseTable->variableTable().find(target.name, line.ownerFunction) : nullptr;
+        const int configured = m_storage->variableConfig().getSize1D(target.name.toUpper());
+        const int capacity = destinationDecl && !destinationDecl->lengths.isEmpty()
+            ? destinationDecl->lengths.first()
+            : qMax(configured, m_storage->arraySize(target.name));
+        const bool localArray = target.name == QLatin1String("LOCALS") || target.name == QLatin1String("ARGS");
+        const int writable = capacity > 0 && !localArray
+            ? qMin(static_cast<int>(parts.size()), capacity)
+            : static_cast<int>(parts.size());
+        writeLhs(count, static_cast<qint64>(parts.size()));
+        for (int k = 0; k < writable; ++k) {
+            target.indices = {k};
+            if (!writeStringValue(target, parts.at(k))) return false;
         }
         return true;
     }

@@ -1444,6 +1444,27 @@ void EraParseTable::finalizeParse() {
     // 字符串赋值的右值改按 StrForm 解析（对齐 C# AnalyseFormattedString）
     applyStringAssignments();
     tStrAssign = sub.restart();
+    // FUNC is SP_CALLFORM in C#. Recompile after declarations are merged, using
+    // the owning function rather than the loader/current execution scope. This
+    // also prevents private names from retaining an earlier global CONST fold.
+    for (auto& script : m_scripts) {
+        for (auto& line : script.lines) {
+            if (line.functionName != QLatin1String("FUNC")) continue;
+            const AstResolver resolve = [this, scope = line.ownerFunction](const QString& text) {
+                return expressionAstInScope(text, scope);
+            };
+            for (int i = 0; i < line.arguments.size(); ++i) {
+                auto& operand = line.arguments[i];
+                if (i == 0)
+                    operand.ast = StrFormParser::parse(operand.raw, resolve,
+                        m_evaluator && m_evaluator->ignoreTripleSymbols());
+                else if (operand.isString)
+                    operand.ast = QSharedPointer<LiteralNode>::create(operand.raw);
+                else
+                    operand.ast = resolve(operand.raw);
+            }
+        }
+    }
     applyVariableTypes();
     tVarTypes = sub.restart();
     // 赋值列表的 AST 也必须先建立，再统一绑定函数形参上下文。
@@ -1522,6 +1543,21 @@ void EraParseTable::finalizeParse() {
                     const QString error = QCoreApplication::translate("ParseDiagnostics",
                         "%1 的变量参数无法装载：%2 (%3)")
                         .arg(line.functionName, operand.raw, line.position.toString());
+                    line.argument.typeOk = false;
+                    line.argument.typeError = error;
+                    line.isError = true;
+                    line.errMes = error;
+                    m_diagnostics.add(DiagSeverity::Error, DiagCode::kArgCheck,
+                        line.position.filename, line.position.lineNumber, line.position.column, 0, error);
+                }
+            }
+            // ArgumentParser treats a FUNC name as a raw CALL identity; list
+            // execution requires an AST for it just as for every actual argument.
+            if (line.functionName == QLatin1String("FUNC")) {
+                for (const auto& operand : line.arguments) {
+                    if (operand.ast) continue;
+                    const QString error = QCoreApplication::translate("ParseDiagnostics",
+                        "%1 的参数缺少装载期 AST：%2").arg(line.functionName, operand.raw);
                     line.argument.typeOk = false;
                     line.argument.typeError = error;
                     line.isError = true;

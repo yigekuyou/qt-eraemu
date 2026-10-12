@@ -28,6 +28,7 @@
 #include <QDebug>
 #include <QElapsedTimer>
 #include <bit>
+#include "system_variables.h"
 
 namespace {
 QVariant evaluateLoadedOperand(ExpressionEvaluator& evaluator, const Operand& operand,
@@ -1146,7 +1147,7 @@ ExecState ScriptRunner::executeLine(const LogicalLine& line) {
     // 此前完全没实现：解析通过但执行期静默跳过。eraTW 的 TEMPVAR.OBJ 系靠
     // ARRAYREMOVE 从临时变量数组里删除元素 —— 空操作导致元素残留、VAR_CNT
     // 涨到上限后 THROW「保持変数が上限に達しています」。
-    // 这里实现 1 次元（整数/字符串）数组；角色变量暂不支持（C# 也仅限 1D）。
+    // COPY 支持 1–3 维；SHIFT/REMOVE/SORT 支持一维，角色数组不支持。
     case RunnerInstruction::ARRAYCOPY:
     case RunnerInstruction::ARRAYSHIFT:
     case RunnerInstruction::ARRAYREMOVE:
@@ -1271,20 +1272,77 @@ ExecState ScriptRunner::executeLine(const LogicalLine& line) {
             }
             return ExecState::Continue;
         }
-        // ARRAYCOPY dest, src：整体拷贝（C# CopyArray：src[0..len) -> dest[0..len)）
-        if (ops.size() >= 2) {
-            const QString dest = ops.at(0).raw.trimmed();
-            const QString src = ops.at(1).raw.trimmed();
-            const int len = length1D(src);
-            const bool strArr = isStrArray(src);
-            for (int i = 0; i < len; ++i) {
-                if (strArr) {
-                    m_storage->setGlobalStr1D(dest, i, m_storage->getGlobalStr1D(src, i));
-                } else {
-                    m_storage->setGlobalInt1D(dest, i, m_storage->getGlobalInt1D(src, i));
-                }
-            }
+        // C# CopyArray: evaluate string names once, copy source to destination
+        // over the per-axis intersection without resizing either declaration.
+        const auto failCopy = [&](const QString& reason) {
+            m_state->setErrorState();
+            emit errorOccurred(QStringLiteral("ARRAYCOPY (%1): %2").arg(line.position.toString(), reason));
+            return ExecState::Error;
+        };
+        if (ops.size() != 2) return failCopy(QStringLiteral("需要两个字符串参数"));
+        QStringList names;
+        for (const Operand& operand : ops) {
+            if (!operand.ast || operand.ast->valueType() != OperandType::Str)
+                return failCopy(QStringLiteral("数组名需要装载期字符串表达式 AST"));
+            names.append(stringText(getEvaluator().evaluate(*operand.ast, m_storage, baseData())).toUpper());
         }
+        struct CopyArrayInfo {
+            QString name;
+            OperandType type;
+            QList<int> shape;
+            bool system = false;
+        };
+        QList<CopyArrayInfo> arrays;
+        for (int i = 0; i < 2; ++i) {
+            const QString& var = names[i];
+            const auto* decl = m_table->variableTable().find(var, line.ownerFunction);
+            const auto meta = sysvar::systemVariableMetadataDyn(var.toStdString());
+            const int rank = decl ? decl->dimension : meta.dimension;
+            const auto type = decl ? decl->type : meta.type;
+            if (type == OperandType::Unknown || rank < 1 || rank > 3)
+                return failCopy(QStringLiteral("未定义的数组：%1").arg(var));
+            if ((decl ? decl->isCharaData : meta.characterData)
+                || (i == 1 && (decl ? decl->isConst : meta.readOnly)))
+                return failCopy(QStringLiteral("不支持角色数组或只读目标：%1").arg(var));
+            const auto shape = decl && !decl->lengths.isEmpty() ? decl->lengths : m_storage->arrayLengths(var);
+            if (shape.size() != rank) return failCopy(QStringLiteral("数组尺寸不可用：%1").arg(var));
+            arrays.append({var, type, shape, !decl && m_storage->hasSystemVariable(var)});
+        }
+        const auto& src = arrays[0];
+        const auto& dest = arrays[1];
+        if (src.type != dest.type || src.shape.size() != dest.shape.size())
+            return failCopy(QStringLiteral("源和目标的类型或维数不同"));
+        const int rank = src.shape.size();
+        QList<int> extent;
+        for (int axis = 0; axis < rank; ++axis) extent.append(qMin(src.shape[axis], dest.shape[axis]));
+        const auto readInt = [&](const CopyArrayInfo& array, int x, int y, int z) {
+            if (rank == 3) return m_storage->getGlobalInt3D(array.name, x, y, z);
+            if (rank == 2) return m_storage->getGlobalInt2D(array.name, x, y);
+            if (array.system) {
+                if (array.name == QLatin1String("LOCAL")) return m_storage->getLocalInt(x);
+                if (array.name == QLatin1String("ARG")) return m_storage->getArgInt(x);
+                return m_storage->getSystemVariable(array.name, x);
+            }
+            return m_storage->getGlobalInt1D(array.name, x);
+        };
+        for (int x = 0; x < extent[0]; ++x)
+            for (int y = 0; y < (rank >= 2 ? extent[1] : 1); ++y)
+                for (int z = 0; z < (rank == 3 ? extent[2] : 1); ++z) {
+                    QList<int> indices{x};
+                    if (rank >= 2) indices.append(y);
+                    if (rank == 3) indices.append(z);
+                    if (src.type == OperandType::Str) {
+                        m_storage->setStringSlot(dest.name, indices, m_storage->getStringSlot(src.name, indices));
+                    } else {
+                        const qint64 value = readInt(src, x, y, z);
+                        if (rank == 3) m_storage->setGlobalInt3D(dest.name, x, y, z, value);
+                        else if (rank == 2) m_storage->setGlobalInt2D(dest.name, x, y, value);
+                        else if (!dest.system) m_storage->setGlobalInt1D(dest.name, x, value);
+                        else if (dest.name == QLatin1String("LOCAL")) m_storage->setLocalInt(x, value);
+                        else if (dest.name == QLatin1String("ARG")) m_storage->setArgInt(x, value);
+                        else m_storage->setSystemVariable(dest.name, x, value);
+                    }
+                }
         return ExecState::Continue;
     }
 
@@ -2075,13 +2133,13 @@ ExecState ScriptRunner::doTryListLine(const LogicalLine& line) {
         const LogicalLine* entry = m_table->lineAt(script, entryLine);
         if (!entry || entry->arguments.isEmpty()) continue;
         QString target = entry->arguments.first().raw;
-        if (target.startsWith(QLatin1Char('@')) || target.startsWith(QLatin1Char('$')))
-            target.remove(0, 1);
         if (!entry->arguments.first().ast)
             throw std::runtime_error("FORM list entry has no load-time AST");
         else
             target = stringText(getEvaluator().evaluate(*entry->arguments.first().ast, m_storage, baseData()));
         target = target.trimmed();
+        if (target.startsWith(QLatin1Char('@')) || target.startsWith(QLatin1Char('$')))
+            target.remove(0, 1);
         if (target.isEmpty()) continue;
 
         if (isGotoList) {
@@ -2092,7 +2150,9 @@ ExecState ScriptRunner::doTryListLine(const LogicalLine& line) {
         }
         // CALL/JUMP 候选：目标不存在就静默试下一个（对齐 C# callto == null -> continue）
         if (!m_table->hasLabel(target)) continue;
-        return doCallLine(*entry, false, /*isTry=*/true, isJumpList, afterEnd);
+        LogicalLine call = *entry;
+        call.arguments[0].raw = target;
+        return doCallLine(call, false, /*isTry=*/true, isJumpList, afterEnd);
     }
     // 没有候选命中（或体内无 FUNC 条目）-> ENDFUNC 之后
     m_table->setPosition(script, afterEnd, false);

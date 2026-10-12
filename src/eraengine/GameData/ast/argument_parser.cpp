@@ -195,6 +195,16 @@ void ArgumentParser::build(LogicalLine& line) {
         }
     }
 
+    if (upper == "ARRAYCOPY") {
+        for (const auto& operand : ops) {
+            if (!operand.ast || operand.ast->valueType() != OperandType::Str) {
+                arg.typeOk = false;
+                arg.typeError = QCoreApplication::translate("ParseDiagnostics", "ARRAYCOPY 需要两个字符串表达式数组名");
+                break;
+            }
+        }
+    }
+
     if (upper == "DT_COLUMN_OPTIONS" || upper == "PLAYSOUND") {
         for (int i = 0; arg.typeOk && i < ops.size(); ++i) {
             const auto ast = ops[i].ast;

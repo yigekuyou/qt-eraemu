@@ -251,6 +251,51 @@ int main(int argc, char* argv[]) {
               "FLOWINPUTS(1,\"文本\")：字符串模式 + 缺省串");
     }
 
+    // ARRAYCOPY names are string expressions, source first; each dimension
+    // uses the overlap and destination cells outside it retain their value.
+    {
+        VariableStorage values;
+        ProcessState copyState;
+        EraParseTable copyTable(&copyState);
+        ExecutionEngine copyEngine(&values, nullptr);
+        ExpressionEvaluator copyEvaluator;
+        copyEngine.setParseTable(&copyTable);
+        copyEngine.setExpressionEvaluator(&copyEvaluator);
+        copyTable.setExpressionEvaluator(&copyEvaluator);
+        copyTable.setVariableStorage(&values);
+        ScriptRunner copyRunner(&copyTable, &copyEngine, &copyState, &values);
+        copyRunner.setExpressionEvaluator(&copyEvaluator);
+        QObject::connect(&copyRunner, &ScriptRunner::errorOccurred, [](const QString& message) { qWarning().noquote() << message; });
+        QObject::connect(&copyEngine, &ExecutionEngine::errorOccurred, [](const QString& message) { qWarning().noquote() << message; });
+        const QStringList source = {
+            "@COPY", "#DIM SRC, 2, 3", "#DIM DST, 3, 2", "#DIMS COPY_NAME",
+            "#DIMS SS, 1, 2, 2", "#DIMS DS, 2, 2, 1",
+            "#DIM SMALL, 2", "#DIM BIG, 3",
+            "SRC:1:1 = 71", "SRC:1:2 = 99", "DST:2:1 = 88",
+            "COPY_NAME '= \"SRC\"", "ARRAYCOPY COPY_NAME, \"DST\"",
+            "SS:0:1:0 '= \"payload%{opaque}\"", "DS:1:1:0 '= \"tail\"",
+            "ARRAYCOPY \"SS\", \"DS\"",
+            "SMALL:1 = 17", "BIG:2 = 33", "ARRAYCOPY \"SMALL\", \"BIG\"",
+            "ARRAYCOPY \"BIG\", \"SMALL\"", "RETURN"};
+        copyTable.loadScript("copy", buildLines(copyTable, source));
+        copyTable.finalizeParse();
+        copyTable.setEntryPoint("COPY");
+        check(copyRunner.runToCompletion() == ExecState::Halt, "ARRAYCOPY program completes");
+        values.setPrivateScope("COPY", {"SRC", "DST", "SS", "DS", "SMALL", "BIG", "COPY_NAME"});
+        check(values.getGlobalInt2D("DST", 1, 1) == 71
+              && values.getGlobalInt2D("DST", 2, 1) == 88,
+              "ARRAYCOPY 2D per-axis overlap preserves destination tail");
+        check(values.getStringSlot("DS", {0, 1, 0}).text == "payload%{opaque}"
+              && values.getStringSlot("DS", {1, 1, 0}).text == "tail",
+              "ARRAYCOPY 3D strings preserve opaque text and destination tail");
+        check(values.getGlobalInt1D("BIG", 1) == 17 && values.getGlobalInt1D("BIG", 2) == 33
+              && values.arraySize("SMALL") == 2,
+              "ARRAYCOPY 1D clips both directions without growing destination");
+        const auto invalid = AstBuilder::build("ARRAYCOPY 1, 2", {},
+            [&copyTable](const QString& text) { return copyTable.expressionAst(text); });
+        check(!invalid.argument.typeOk, "ARRAYCOPY rejects numeric names at load time");
+    }
+
     qDebug() << "\n================================";
     if (g_failures == 0) {
         qDebug() << "[SUCCESS] execution-chain tests passed";

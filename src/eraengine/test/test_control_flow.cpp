@@ -32,6 +32,17 @@ static void run(const QString& name, const QStringList& source, qint64 expected,
             [&table](const QString& text) { return table.expressionAst(text); }));
     table.loadScript("flow", lines);
     table.finalizeParse();
+    for (int i = 0; i < lines.size(); ++i) {
+        const auto* loaded = table.lineAt("flow", i);
+        if (!loaded || loaded->functionName != "FUNC") continue;
+        bool compiled = !loaded->isError && loaded->argument.typeOk;
+        for (const auto& operand : loaded->arguments) compiled &= bool(operand.ast);
+        if (!compiled) {
+            qCritical() << name << "FUNC not compiled at load time" << i << loaded->errMes;
+            ++failures;
+            return;
+        }
+    }
     table.setEntryPoint("MAIN");
     auto result = runner.runToCompletion();
     if (restart) {
@@ -43,6 +54,55 @@ static void run(const QString& name, const QStringList& source, qint64 expected,
         qCritical() << name << "state" << int(result) << "actual" << actual << "expected" << expected;
         ++failures;
     } else qInfo() << "PASS" << name;
+}
+// Build with a global CONST already visible, then merge a private declaration.
+// Finalization must restore the private variable in both FORM and actual args.
+static void tryListLoadTime() {
+    VariableStorage storage;
+    ProcessState state;
+    EraParseTable table(&state);
+    ExpressionEvaluator evaluator;
+    table.setExpressionEvaluator(&evaluator);
+    table.setVariableStorage(&storage);
+    table.loadScript("globals", {AstBuilder::build("#DIM CONST LIST_NAME = 99",
+        ScriptPosition("globals.ERH", 0, 0),
+        [&table](const QString& text) { return table.expressionAst(text); })});
+    const QStringList source = {"@MAIN", "#DIMS LIST_NAME", "TRYCALLLIST",
+        "FUNC %LIST_NAME%(LIST_NAME)", "ENDFUNC", "RETURN"};
+    QList<LogicalLine> lines;
+    for (int i = 0; i < source.size(); ++i)
+        lines.append(AstBuilder::build(source[i], ScriptPosition("list.ERB", i, 0),
+            [&table](const QString& text) { return table.expressionAst(text, true); }));
+    table.loadScript("list", lines);
+    table.finalizeParse();
+    storage.setGlobalStr1D("LIST_NAME", 0, "CHOSEN");
+    const auto* entry = table.lineAt("list", 3);
+    bool good = entry && !entry->isError && entry->argument.typeOk
+        && entry->arguments.size() == 2 && entry->arguments[0].ast && entry->arguments[1].ast;
+    if (good) {
+        good = entry->arguments[0].ast->kind() == NodeKind::StrForm
+            && entry->arguments[1].ast->kind() == NodeKind::Variable
+            && entry->arguments[1].ast->valueType() == OperandType::Str
+            && stringText(evaluator.evaluate(*entry->arguments[0].ast, &storage)) == "CHOSEN"
+            && stringText(evaluator.evaluate(*entry->arguments[1].ast, &storage)) == "CHOSEN";
+    }
+    // A missing expression in an unreachable candidate must still fail loading.
+    VariableStorage invalidStorage;
+    ProcessState invalidState;
+    EraParseTable invalid(&invalidState);
+    invalid.setExpressionEvaluator(&evaluator);
+    invalid.setVariableStorage(&invalidStorage);
+    const QStringList badSource = {"@MAIN", "TRYCALLLIST", "FUNC NEVER_{1 +}",
+        "FUNC NEVER(1 +)", "ENDFUNC", "RETURN"};
+    QList<LogicalLine> badLines;
+    for (int i = 0; i < badSource.size(); ++i)
+        badLines.append(AstBuilder::build(badSource[i], ScriptPosition("bad.ERB", i, 0),
+            [&invalid](const QString& text) { return invalid.expressionAst(text, true); }));
+    invalid.loadScript("bad", badLines);
+    invalid.finalizeParse();
+    good &= invalid.lineAt("bad", 2)->isError && invalid.lineAt("bad", 3)->isError;
+    if (!good) { qCritical() << "TRY list load-time scope/invalid AST regression failed"; ++failures; }
+    else qInfo() << "PASS TRY list load-time scope/invalid AST regression";
 }
 static void htmlFlow() {
     VariableStorage storage;
@@ -110,6 +170,41 @@ static void htmlFlow() {
 int main(int argc, char** argv) {
     QCoreApplication app(argc, argv);
     htmlFlow();
+    tryListLoadTime();
+    run("TRYCALLLIST first match and return after ENDFUNC", {
+        "TRYCALLLIST", "FUNC MISSING(++CHECK:1)", "FUNC SUB(2, 3)", "FUNC OTHER",
+        "ENDFUNC", "CHECK += 1 + CHECK:1 * 100", "RETURN",
+        "@SUB(A, B)", "CHECK = A * 10 + B", "RETURN",
+        "@OTHER", "CHECK = 999", "RETURN"}, 24);
+    run("TRYCALLLIST scoped FORM target and typed arguments", {
+        "#DIMS DEST", "#DIMS TEXT", "#DIM VALUE", "DEST '= \"SUB\"", "TEXT '= \"a,b\"", "VALUE = 7",
+        "TRYCALLLIST", "FUNC NOPE_{VALUE}(++CHECK:1)", "FUNC %DEST%_{VALUE}(TEXT, VALUE + 2)",
+        "ENDFUNC", "CHECK += 1 + CHECK:1 * 100", "RETURN",
+        "@SUB_7(ARGS, ARG)", "CHECK = STRLENS(ARGS) * 10 + ARG", "RETURN"}, 40);
+    run("TRYCALLLIST FORM and literal arguments", {
+        "#DIM VALUE", "VALUE = 4", "TRYCALLLIST", "FUNC SUB(@\"value={VALUE}\", \"x,y\")",
+        "ENDFUNC", "RETURN", "@SUB(TEXT, SUFFIX)", "#DIMS TEXT", "#DIMS SUFFIX",
+        "CHECK = STRLENS(TEXT) * 10 + STRLENS(SUFFIX)", "RETURN"}, 73);
+    run("TRYCALLLIST target side effects evaluated once", {
+        "TRYCALLLIST", "FUNC %LIST_TARGET()%(++CHECK:2)", "ENDFUNC",
+        "CHECK += CHECK:1 * 10", "RETURN", "@SUB(ARG)", "CHECK = ARG", "RETURN",
+        "@LIST_TARGET", "#FUNCTIONS", "CHECK:1 += 1", "RETURNF \"SUB\""}, 11);
+    run("TRYJUMPLIST dynamic target inherits return address", {
+        "CALL DISPATCH", "CHECK += 1", "RETURN", "@DISPATCH", "#DIMS DEST", "DEST '= \"SUB\"",
+        "TRYJUMPLIST", "FUNC MISSING", "FUNC %DEST%(6)", "ENDFUNC", "CHECK = 999", "RETURN",
+        "@SUB(ARG)", "CHECK = ARG * 10", "RETURN"}, 61);
+    run("TRYGOTOLIST scoped dynamic label first match", {
+        "#DIMS DEST", "DEST '= \"FOUND\"", "TRYGOTOLIST", "FUNC $MISSING", "FUNC $%DEST%",
+        "FUNC $LATER", "ENDFUNC", "CHECK = 999", "RETURN", "$FOUND", "CHECK = 7", "RETURN",
+        "$LATER", "CHECK = 888", "RETURN"}, 7);
+    run("TRYGOTOLIST excludes labels in another function", {
+        "TRYGOTOLIST", "FUNC FOREIGN", "ENDFUNC", "CHECK = 5", "RETURN",
+        "@OTHER", "$FOREIGN", "CHECK = 999", "RETURN"}, 5);
+    for (const QString& instruction : {QString("TRYCALLLIST"), QString("TRYJUMPLIST"), QString("TRYGOTOLIST")}) {
+        run(instruction + " exhausted skips ENDFUNC", {
+            instruction, "FUNC MISSING(++CHECK:1)", "ENDFUNC", "CHECK = 2 + CHECK:1 * 100", "RETURN"}, 2);
+        run(instruction + " empty list", {instruction, "ENDFUNC", "CHECK = 3", "RETURN"}, 3);
+    }
     run("CALL spaced parentheses", {"CALL SUB (2,3)", "RETURN", "@SUB(A,B)", "CHECK = A * 10 + B", "RETURN"}, 23);
     run("ENCODETOUNI expands FORM into RESULT array", {"RESULTS '= \"あA\"", "ENCODETOUNI %RESULTS%",
         "CHECK = (RESULT:0 == 2) && (RESULT:1 == 12354) && (RESULT:2 == 65)"}, 1);

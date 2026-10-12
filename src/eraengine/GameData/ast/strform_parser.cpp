@@ -70,6 +70,18 @@ int StrFormParser::findPercentEnd(const QString& text, int from) {
     return findTopLevel(text, '%', from, -1);
 }
 
+namespace {
+
+// `%=` is commonly used in explanatory text.  It is not a FORM opening
+// delimiter unless a matching percent exists later in the same text.
+bool isUnclosedModuloText(const QString& text, int percent) {
+    return percent + 1 < text.size()
+        && text.at(percent + 1) == QLatin1Char('=')
+        && StrFormParser::findPercentEnd(text, percent + 1) < 0;
+}
+
+} // namespace
+
 int StrFormParser::findTopLevel(const QString& text, QChar c, int from, int end) {
     if (end < 0 || end > text.length()) end = text.length();
     int depth = 0;
@@ -253,10 +265,17 @@ QSharedPointer<StrFormNode> StrFormParser::parse(const QString& text, const Expr
         }
 
         if (ch == QLatin1Char('%')) {
-            const int j = findPercentEnd(text, i + 1);
-            if (j < 0) return nullptr;    // 无成对 % -> 普通文本
-            if (!addExpr(text.mid(i + 1, j - i - 1), ch == '{' ? OperandType::Int : OperandType::Str)) return nullptr;
-            i = j;
+            // `%=` without a matching delimiter is literal modulo-assignment
+            // text.  A paired `%...%` remains a normal string interpolation.
+            if (isUnclosedModuloText(text, i)) {
+                b.pending += ch;
+                continue;
+            }
+
+            const int end = findPercentEnd(text, i + 1);
+            if (end < 0) return nullptr;  // Other unclosed '%' remains an error.
+            if (!addExpr(text.mid(i + 1, end - i - 1), OperandType::Str)) return nullptr;
+            i = end;
             continue;
         }
 

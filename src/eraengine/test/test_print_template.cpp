@@ -108,9 +108,13 @@ int main(int argc, char** argv) {
     const auto quoted = AstBuilder::build(QStringLiteral("CALL F, \"literal {1} % text\""), {}, resolve);
     check(quoted.arguments.at(1).ast && quoted.arguments.at(1).ast->kind() == NodeKind::Literal,
           "plain quoted string has Literal AST and no FORM interpolation");
-    const auto invalidFormCall = AstBuilder::build(R"ERB(CALL F, @"A %= 2")ERB", {}, resolve);
+    const auto moduloTextForm = AstBuilder::build(R"ERB(CALL F, @"A %= 2")ERB", {}, resolve);
+    check(moduloTextForm.argument.typeOk && moduloTextForm.arguments.at(1).ast
+          && evaluator.evaluate(*moduloTextForm.arguments.at(1).ast, &storage).toString() == "A %= 2",
+          "FORM keeps an unpaired %= operator as load-time text");
+    const auto invalidFormCall = AstBuilder::build(R"ERB(CALL F, @"A % 2")ERB", {}, resolve);
     check(!invalidFormCall.argument.typeOk && !invalidFormCall.arguments.at(1).ast,
-          "invalid CALL FORM is diagnosed during loading");
+          "an unpaired percent remains a load-time FORM error");
     const auto escapedFormCall = AstBuilder::build(R"ERB(CALL F, @"A \%= 2")ERB", {}, resolve);
     check(escapedFormCall.argument.typeOk && escapedFormCall.arguments.at(1).ast
           && evaluator.evaluate(*escapedFormCall.arguments.at(1).ast, &storage).toString() == "A %= 2",

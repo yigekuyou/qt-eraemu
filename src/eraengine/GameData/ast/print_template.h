@@ -10,6 +10,16 @@ public:
     static QSharedPointer<CompiledPrintTemplate> compile(const QSharedPointer<ExpressionNode>& string);
     static PrintTemplate evaluateOccurrences(const CompiledPrintTemplate& source,
         const std::function<QVariant(const ExpressionNode&, int)>& evaluate);
+
+    // ---- 打印期标签解析（对齐 C# EmueraConsole.PrintHtml → HtmlManager.Html2DisplayLine）----
+    // C# 是在**打印时**从最终字符串解析 HTML 的；构建期编译只覆盖「静态可见」的标签。
+    // 运行期拼装出来的标签（`+=` 把 <img …> 拼成两段、字符串函数产出的标签）
+    // 只能在此刻解析，否则会原样打成文本。
+    //
+    // coversText：值的模板分词是否**已经解释**了文本里的标签。返回 false = 文本里
+    // 还有装载期没消化掉的标签材料（未被解释的 '<'）：调用方按文本输出 + 留痕，
+    // 不做运行期解析（标签一律在装载期构筑）。
+    [[nodiscard]] static bool coversText(const PrintTemplate& markup, const QString& text);
 };
 
 // Raw string APIs use text; only HTML output consumes the evaluated structure.

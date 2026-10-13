@@ -690,6 +690,9 @@ bool ErbLoader::loadDirectory(const QString& dirPath, int depth) {
     qDebug() << "[ErbLoader] files:" << files.size()
              << "scan:" << tScan << "ms  parse:" << tParse << "ms  merge:" << tMerge << "ms"
              << " threadCount:" << QThreadPool::globalInstance()->maxThreadCount();
+    // 全部脚本已合并：对 HTML 相关字符串做一次**反向追踪**，把 `HTML_PRINT X`
+    // 的实参换成装载期拼好的节点（跨片段的标签此刻闭合，运行期不再解析标签）。
+    if (ok && m_parseTable) m_parseTable->traceHtmlStringArguments();
     return ok;
 }
 
@@ -783,6 +786,8 @@ void ErbLoader::finishAsync(bool ok) {
                       << " 文件" << m_async.total
                       << " 总耗时" << totalMs << "ms"
                       << " 主线程合并" << m_async.mergeMs << "ms";
+    // 全部脚本已合并：HTML 字符串反向追踪（与同步路径同一入口，见 loadDirectory）。
+    if (ok && m_parseTable) m_parseTable->traceHtmlStringArguments();
     if (m_prepWatcher) disconnect(m_prepWatcher.get(), nullptr, this, nullptr);
     if (m_chunkWatcher) disconnect(m_chunkWatcher.get(), nullptr, this, nullptr);
     if (m_prepWatcher) m_prepWatcher->setFuture(QFuture<LoadPrep>());

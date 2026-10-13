@@ -29,7 +29,7 @@
 #include "ast/logical_line.h"      // LogicalLine / Operand
 #include "ast/system_variables.h"  // regVariable（扩展系统变量 -> 运行期扩展表）
 #include "constant_table.h"        // ConstantTable::coreCsvForVariable（名表 fail-fast）
-#include "eraengine_log.h"         // eraTrace（桩留痕）
+#include <QDebug>                 // 桩留痕（[未完成] 警告）
 #include "variable_storage.h"      // Services::storage（扩展实现写 RESULT/RESULTS）
 
 #include "ee_extension.h"        // EE 扩展（只在这里装入；ee_extension.h 前置声明本类）
@@ -332,9 +332,11 @@ public:
         if (m_stubs.contains(upperName)) {
             if (!m_traced.contains(upperName)) {
                 m_traced.insert(upperName);
-                qCDebug(eraTrace) << "[ee-ext]" << upperName
-                                  << "在运行期被跳过（扩展桩，待补全）。行:"
-                                  << line.position.toString();
+                // 「静默跳过」的桩一律按**未实现**留痕（与 ExecutionEngine 的
+                // [未完成] 同一口径、同名只报一次）：此前只走 eraTrace 调试级，
+                // 默认运行时等于静默丢失功能。
+                qWarning() << "[未完成] 扩展命令尚未实现（运行期跳过）:" << upperName
+                           << "行:" << line.position.toString();
             }
             return true;
         }

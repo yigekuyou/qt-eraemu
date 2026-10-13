@@ -1471,6 +1471,7 @@ void EraParseTable::finalizeBindings() {
     // eraTW 上从 ~10s 退化到 ~33s）。
     applyStringAssignments();
 
+
     // FUNC 重编译（仅构建期未定型的行）
     for (auto& script : m_scripts) {
     for (auto& line : script.lines) {
@@ -1786,6 +1787,131 @@ void EraParseTable::applyStringAssignments() {
             }
         }
     }
+}
+
+// ---------------------------------------------------------------------------
+// HTML 字符串的**反向追踪**（装载器在装载期调用一次）
+//
+// 消费者驱动：从 `HTML_PRINT X` 出发向前回溯 X 的写链 ——
+//
+//     X = f1                 ← 基（最近的整赋值）
+//     X += f2                ← 追加片段
+//     X += f3
+//     HTML_PRINT X           ← 消费者（本行）
+//
+// 把整条链在装载期拼成一棵 **PLUS 树**装回该行的实参。`PrintTemplateCompiler::
+// compile` 会把 PLUS 链与 FORM 一起压平成**一整条 markup**（见 print_template.cpp
+// 的 append：「FORM 可以补全加法两侧开始的标签」），于是跨片段的标签在装载期即闭合、
+// `prepare()` 把分词结果附着到节点上，运行期只按既有路径求值 —— 不做任何标签解析。
+// eraTW 的 INFO_CLOCK_IMAGE 正是把 `<img src='…' height='…'` 与 `ypos='…'>` 分两次
+// `+=`：单个片段里标签不闭合，此前只能原样打成文本。
+//
+// 可靠性优先（追踪不到**完整**的链就放弃，绝不半拼）：
+//   · 只在同一函数作用域内回溯（函数体外不会执行）；
+//   · 只穿过「空行/注释」与「对别的变量的赋值」；遇到控制流/标签/函数调用等无法
+//     判定的行即放弃 —— 否则可能漏掉条件分支里的写，拼出的值与运行期不符；
+//   · 必须回溯到一个整赋值作为基；基的右值是**简单字符串变量**时再递归一层
+//     （`save = markup` 这种中转）；
+//   · 片段数 < 2 不重建（单片段构建期已经编译好）。
+// ---------------------------------------------------------------------------
+void EraParseTable::traceHtmlStringArguments() {
+    // 简单变量名（不带下标/属性/函数调用）：追踪只认这种形态
+    const auto simpleName = [](const QString& raw) -> QString {
+        const QString t = raw.trimmed();
+        if (t.isEmpty()) return {};
+        for (const QChar c : t) {
+            if (!(c.isLetterOrNumber() || c == QLatin1Char('_') || c == QLatin1Char('$'))) return {};
+        }
+        return t;
+    };
+    // 一条「片段写」：`VAR = f` / `VAR += f`（左值简单名 + 右值是字符串 AST）
+    const auto fragmentWrite = [this, &simpleName](const LogicalLine& line, QString& name,
+                                                   bool& append,
+                                                   QSharedPointer<ExpressionNode>& value) -> bool {
+        append = false;
+        if (line.kind != LineKind::Instruction) return false;
+        if (line.arguments.size() != 2) return false;
+        const QString op = line.assignOperator;
+        if (op != QLatin1String("=") && op != QLatin1String("+=")) return false;
+        const QString lhs = simpleName(line.arguments[0].raw);
+        if (lhs.isEmpty()) return false;
+        if (!line.arguments[1].ast || !line.arguments[1].ast->isString()) return false;
+        const OperandType nodeType = line.arguments[0].ast ? line.arguments[0].ast->valueType()
+                                                           : OperandType::Unknown;
+        if (nodeType != OperandType::Str
+            && m_variables.typeOf(lhs, line.ownerFunction) != OperandType::Str) return false;
+        name = lhs;
+        append = op == QLatin1String("+=");
+        value = line.arguments[1].ast;
+        return true;
+    };
+    // 消费者：`HTML_PRINT <简单字符串变量>`
+    const auto htmlPrintTarget = [&](const LogicalLine& line, QString& var) -> bool {
+        if (line.kind != LineKind::Instruction) return false;
+        if (line.functionName != QLatin1String("HTML_PRINT")) return false;
+        if (line.arguments.size() != 1) return false;
+        var = simpleName(line.arguments[0].raw);
+        return !var.isEmpty();
+    };
+
+    // 反向回溯 var 在 scope 内、第 before 行之前的写链；成功时给出**程序顺序**的片段。
+    // depth：中转变量（`X = Y`）再追一层的余量。
+    std::function<bool(const QList<LogicalLine>&, const QString&, const QString&, int, int,
+                       QList<QSharedPointer<ExpressionNode>>&)> traceChain;
+    traceChain = [&](const QList<LogicalLine>& lines, const QString& scope, const QString& var,
+                     int before, int depth,
+                     QList<QSharedPointer<ExpressionNode>>& out) -> bool {
+        QList<QSharedPointer<ExpressionNode>> reversed;      // 逆序收集
+        for (int j = before - 1; j >= 0; --j) {
+            const LogicalLine& line = lines.at(j);
+            if (line.kind == LineKind::Null || line.kind == LineKind::Preprocessor) continue;
+            if (line.ownerFunction != scope) return false;    // 跨函数：链断，放弃
+            QString name; bool append = false; QSharedPointer<ExpressionNode> value;
+            if (!fragmentWrite(line, name, append, value)) return false;   // 控制流/调用/其它
+            if (name.compare(var, Qt::CaseInsensitive) != 0) continue;     // 别的变量：透过
+            if (append) { reversed.prepend(value); continue; }             // 追加片段
+            // 整赋值 = 链的基（`X = Y` 的中转可再追一层）
+            QList<QSharedPointer<ExpressionNode>> head;
+            const QString via = (depth == 0 && value->kind() == NodeKind::Variable)
+                ? simpleName(static_cast<const VariableNode&>(*value).name()) : QString();
+            if (!via.isEmpty()) {
+                if (!traceChain(lines, scope, via, j, depth + 1, head)) return false;
+            } else {
+                head.append(value);
+            }
+            head += reversed;
+            out = head;
+            return true;
+        }
+        return false;                                        // 找不到基：放弃
+    };
+
+    int traced = 0;
+    QStringList tracedAt;                    // 留痕（便于核对到底重建了哪些打印点）
+    for (auto it = m_scripts.begin(); it != m_scripts.end(); ++it) {
+        const QString& scriptName = it.key();
+        QList<LogicalLine>& lines = it.value().lines;
+        for (int i = 0; i < lines.size(); ++i) {
+            QString var;
+            if (!htmlPrintTarget(lines.at(i), var)) continue;
+            QList<QSharedPointer<ExpressionNode>> fragments;
+            if (!traceChain(lines, lines.at(i).ownerFunction, var, i, 0, fragments)) continue;
+            if (fragments.size() < 2) continue;              // 单片段：构建期已编译
+            QSharedPointer<ExpressionNode> joined = fragments.first();
+            for (int k = 1; k < fragments.size(); ++k)
+                joined = QSharedPointer<BinaryOpNode>::create(
+                    joined, ExpressionToken(TokenType::PLUS, QStringLiteral("+")), fragments.at(k));
+            lines[i].arguments[0].ast = joined;              // 实参换成装载期拼好的节点
+            ++traced;
+            if (tracedAt.size() < 8)
+                tracedAt.append(QStringLiteral("%1:%2 %3(%4段)")
+                                    .arg(scriptName).arg(lines.at(i).position.lineNumber)
+                                    .arg(var).arg(fragments.size()));
+        }
+    }
+    if (traced > 0)
+        qInfo().noquote() << "[parse] HTML_PRINT 字符串反向追踪：" << traced
+                          << "条实参在装载期重建 →" << tracedAt.join(QStringLiteral(", "));
 }
 
 // ---------------------------------------------------------------------------

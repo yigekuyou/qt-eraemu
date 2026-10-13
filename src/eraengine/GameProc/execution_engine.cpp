@@ -1019,7 +1019,19 @@ bool ExecutionEngine::executeInstruction(const LogicalLine& line) {
         if (line.arguments.isEmpty() || !line.arguments.first().ast) return false;
         const auto value = getEvaluator().evaluate(*line.arguments.first().ast, m_storage, m_gameBaseData);
         if (!value.isValid() || !isStringValue(value)) return false;
-        emit consolePrintTemplate(valueMarkup(value));
+        const QString text = stringText(value);
+        const PrintTemplate markup = valueMarkup(value);
+        // 标签一律在**装载期**构筑（静态模板编译 + 连续片段写链的拼接，
+        // 见 EraParseTable::stitchStringFragmentRuns）。这里只做校验：值的分词
+        // 若仍留有装载期没能消化的标签材料（字符串函数拼出的标签、条件分支里
+        // 动态拼装的标签），就按文本输出并以 [未完成] 留痕 —— 不做运行期解析。
+        if (!PrintTemplateCompiler::coversText(markup, text)
+            && !m_reportedUnfinished.contains(QStringLiteral("HTML_PRINT"))) {
+            m_reportedUnfinished.insert(QStringLiteral("HTML_PRINT"));
+            qWarning() << "[未完成] HTML_PRINT 的字符串含装载期未能构筑的标签（按文本输出）:"
+                       << text.left(60) << "行:" << line.position.toString();
+        }
+        emit consolePrintTemplate(markup);
         return true;
     }
 

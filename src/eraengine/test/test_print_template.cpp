@@ -272,7 +272,64 @@ int main(int argc, char** argv) {
     line = AstBuilder::build("HTML_PRINT LOCALS", {}, resolve);
     check(line.arguments.first().ast && line.printTemplate, "HTML string is compiled during load");
     engine.executeInstruction(line);
-    check(console.buffer().count() == 1 && console.buffer().at(0).plainText() == "<u>runtime</u><br>" && !console.buffer().at(0).flatSpans().first().style.underline, "variable HTML value remains raw text");
+    // 装入变量的裸文本在装载期无法构筑标签（值的来源与 AST 无关）：
+    // 按文本输出并以 [未完成] 留痕，**不做运行期解析**。
+    check(console.buffer().count() == 1
+          && console.buffer().at(0).plainText() == "<u>runtime</u><br>"
+          && !console.buffer().at(0).flatSpans().first().style.underline,
+          "opaque string value stays text (no runtime tag parsing)");
+    console.clearAll();
+    // eraTW INFO_CLOCK_IMAGE 的原样复刻：`=` 裸文本 + 三次 `+=`，其中 <img> 被
+    // 拆成两段（第一段以未闭合的 '<' 结尾）。装载期把整条写链拼成一棵 PLUS 树
+    //（EraParseTable::stitchStringFragmentRuns）后，标签在装载期即闭合、生成
+    // Image 片段；运行期只求值这条链，不再解析任何标签。
+    storage.setLocalStr(0, QString());
+    {
+        EraParseTable clockTable(&state);
+        clockTable.setExpressionEvaluator(&evaluator);
+        clockTable.setVariableStorage(&storage);
+        ExecutionEngine clockEngine(&storage);
+        clockEngine.setParseTable(&clockTable);
+        clockEngine.setExpressionEvaluator(&evaluator);
+        QObject::connect(&clockEngine, &ExecutionEngine::consolePrintTemplate,
+                         &console, &ConsoleBackend::printTemplate);
+        QList<LogicalLine> clockLines;
+        int clockLine = 0;
+        for (const QString& source : QStringList{
+                 QStringLiteral("LOCALS =  <p align='right'><nobr>"),
+                 QStringLiteral("LOCALS += @\"<img src='clock_07_00' height='500'\""),
+                 QStringLiteral("LOCALS += @\"ypos='201'>\""),
+                 QStringLiteral("LOCALS += @\"</p>\""),
+                 QStringLiteral("HTML_PRINT LOCALS")}) {
+            clockLines.append(AstBuilder::build(source,
+                ScriptPosition(QStringLiteral("clock.ERB"), ++clockLine, 1),
+                [&clockTable](const QString& text) { return clockTable.expressionAst(text); }));
+        }
+        clockTable.loadScript(QStringLiteral("CLOCK.ERB"), clockLines);
+        // 装载器在装载期做的同一步：HTML 字符串反向追踪（把写链拼成一棵 PLUS 树）
+        clockTable.traceHtmlStringArguments();
+        clockTable.markLoadComplete();
+        console.clearAll();
+        for (int i = 0; i < clockLines.size(); ++i)
+            clockEngine.executeInstruction(*clockTable.lineAt(QStringLiteral("CLOCK.ERB"), i));
+        if (console.buffer().count() == 1) {
+            bool image = false;
+            for (const auto& span : console.buffer().at(0).flatSpans()) {
+                if (span.kind == ConsoleSpanKind::Image && span.text == "clock_07_00"
+                    && span.imageSize.height() == 500 && span.yposRaw == 201) image = true;
+            }
+            check(image && console.buffer().at(0).plainText().isEmpty(),
+                  "split tag is closed during load by stitching the += chain (eraTW clock)");
+        } else {
+            check(false, "stitched clock line did not print a single line");
+        }
+        // provider 挂在**共享** evaluator 上并捕获本表（维数 provider / 常量 provider）：
+        // 离开作用域前必须摘掉并交还给外层表，否则留下悬空捕获。
+        evaluator.setConstProvider({});
+        evaluator.setConstArrayProvider({});
+        evaluator.setConstArrayChecker({});
+        table.setExpressionEvaluator(&evaluator);
+    }
     console.clearAll();
     storage.setLocalStr(0, "blue");
     line = AstBuilder::build("HTML_PRINT @\"<font color='%LOCALS%'><b>blue</b></font><br>\"", {}, resolve);
@@ -348,6 +405,7 @@ int main(int argc, char** argv) {
     line = AstBuilder::build(R"ERB(HTML_PRINT @"<b%LOCALS%>tail<br>")ERB", {}, resolve);
     storage.setLocalStr(0, "r");
     engine.executeInstruction(line);
+    // 不做运行期解析：插值拼出来的 `>` 不会把前面的 `<b` 收成标签（装载期单向编译）。
     check(console.buffer().count() == 1 && console.buffer().at(0).plainText() == "<br>tail",
           "dynamic tag name cannot discard an interpolation or generate structure");
     QList<LogicalLine> lines;

@@ -185,14 +185,8 @@ public:
     QByteArray writeByte(quint8 value);
     QByteArray writeUInt16(quint16 value);
     QByteArray writeUInt32(quint32 value);
-    
-    // Era binary format support
-    IoResult readEraData(const QString& filePath, QVariantMap& data);
-    IoResult writeEraData(const QString& filePath, const QVariantMap& data);
 
 private:
-    // Helper methods
-    bool isEraBinaryFormat(const QByteArray& data) const;
 };
 
 #endif // FILE_SYSTEM_IO_H

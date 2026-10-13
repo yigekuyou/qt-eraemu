@@ -38,6 +38,7 @@
 
 #include "ee_extension.h"
 #include "extension_registry.h"
+#include "eraengine_log.h"   // eraTrace（EE 留痕）
 #include "variable_storage.h"
 #include "audio_pipeline_pool.h"
 

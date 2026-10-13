@@ -146,6 +146,8 @@ static void htmlFlow() {
             good &= values == QStringList({"0", "1"}) && tips == QStringList({"tip0", "tip1"})
                 && spaces == 4 && text.contains("<button value='99'>opaque</button>");
         }
+        // 普通运行期写入（`html '= LOCALS`）的值只有文本：装载期无法为其构筑标签
+        //（值的来源与 AST 无关），按文本输出（留痕 [未完成]），不做运行期解析。
         good &= printed[2].parts.size() == 1 && printed[2].parts[0].kind == PrintTemplatePart::Kind::Text;
     }
     if (!good) { qCritical() << "HTML function/accumulation provenance failed" << int(result) << printed.size(); ++failures; }

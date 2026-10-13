@@ -44,6 +44,7 @@
 #include <QDir>
 #include <QFileInfo>
 #include <QDebug>
+#include <QSet>
 #include <climits>
 
 namespace {
@@ -81,6 +82,7 @@ int CsvLoader::loadCharaDirectory(const QString& charaDir,
         QDir::Files | QDir::Hidden, QDir::Name);
 
     int loadedChars = 0;
+    QSet<QString> reportedUnknownTypes;   // 未知类型只留痕一次（同名去重）
     for (const QFileInfo& fi : files) {
         bool ok = false;
         QString content = TextCodecUtil::readFile(fi.absoluteFilePath(),
@@ -133,7 +135,16 @@ int CsvLoader::loadCharaDirectory(const QString& charaDir,
             else if (type == QLatin1String("JUEL") || type == QStringLiteral("珠")) var = QStringLiteral("JUEL");
             else if (type == QLatin1String("CSTR")) { var = QStringLiteral("CSTR"); isStr = true; }
             else if (type == QLatin1String("RELATION") || type == QStringLiteral("相性")) var = QStringLiteral("RELATION");
-            else continue;                                 // 未知类型：静默跳过（对齐 C# 告警）
+            else {
+                // C# 对未知类型有告警（CharaData 解析失败可见）；此前静默 continue，
+                // 整个条目被丢掉却毫无痕迹 —— 至少留痕一次（同名去重）。
+                if (!reportedUnknownTypes.contains(type)) {
+                    reportedUnknownTypes.insert(type);
+                    qWarning() << "[未完成] 角色 CSV 的未知类型（条目被跳过）:" << type
+                               << "行:" << line;
+                }
+                continue;
+            }
 
             if (charaNo < 0 || tokens.size() < 2) continue;
             const QString nameCell = cleanCell(tokens.at(1));

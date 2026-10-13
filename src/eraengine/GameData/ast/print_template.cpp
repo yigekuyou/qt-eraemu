@@ -197,6 +197,30 @@ PrintTemplate PrintTemplateCompiler::evaluateOccurrences(const CompiledPrintTemp
     return out;
 }
 
+namespace {
+// 文本里是否存在「未闭合的 '<'」：被 `+=` 拼断的标签（`<img src='x' height='500'`
+// 接 `ypos='201'>`）、或字符串函数拼出来的半截标签。这类 '<' 是编译期没能解释掉的
+// 标签材料（compile 会把它当普通文本片段保留）。
+bool hasUnterminatedTag(const QString& text) {
+    for (int i = text.indexOf(QLatin1Char('<')); i >= 0; i = text.indexOf(QLatin1Char('<'), i + 1)) {
+        if (text.indexOf(QLatin1Char('>'), i) < 0) return true;
+    }
+    return false;
+}
+} // namespace
+
+bool PrintTemplateCompiler::coversText(const PrintTemplate& markup, const QString& text) {
+    if (!text.contains(QLatin1Char('<'))) return true;   // 字符串里没有标签，无需解析
+    bool structured = false;
+    for (const PrintTemplatePart& part : markup.parts) {
+        if (part.kind != PrintTemplatePart::Kind::Text) { structured = true; continue; }
+        if (hasUnterminatedTag(part.text)) return false;
+    }
+    // 一个结构化片段都没有 = 整个串从未被解析过（裸文本/字符串函数产物）：
+    // 里面若有完整标签也必须在打印时解析。
+    return structured;
+}
+
 void PrintTemplateCompiler::prepare(const QSharedPointer<ExpressionNode>& node) {
     if (!node) return;
     switch (node->kind()) {

@@ -189,6 +189,7 @@ bool VariableStorage::loadVariableSizes(const QString& csvPath)
 		resize1D(QStringLiteral("TIME"), m_time);
 		resize1D(QStringLiteral("ITEM"), m_item);
 		resize1D(QStringLiteral("ITEMSALES"), m_itemsales);
+		resize1D(QStringLiteral("ITEMPRICE"), m_itemprice);
 		resize1D(QStringLiteral("NOITEM"), m_noitem);
 		resize1D(QStringLiteral("BOUGHT"), m_bought);
 		resize1D(QStringLiteral("PBAND"), m_pband);
@@ -225,6 +226,7 @@ int VariableStorage::arraySizeRaw(const QString& key) const
 {
 
 		// 局部/实参槽不在 m_global* 容器里，单独报尺寸（VARSIZE("LOCAL")）
+		if (key == QLatin1String("ITEMPRICE")) return m_itemprice.size();   // 常量容器（不在 m_global* 里）
 		if (key == QLatin1String("LOCAL")) return m_localIntVars.size();
 		if (key == QLatin1String("LOCALS")) return m_localStrVars.size();
 		if (key == QLatin1String("ARG")) return m_argIntVars.size();
@@ -929,6 +931,15 @@ qint64 VariableStorage::getItem(int index) const { return (index >= 0 && index <
 void VariableStorage::setItemsales(int index, qint64 value) { if (index >= 0 && index < m_itemsales.size()) m_itemsales[index] = value; }
 qint64 VariableStorage::getItemsales(int index) const { return (index >= 0 && index < m_itemsales.size()) ? m_itemsales.at(index) : 0; }
 
+void VariableStorage::setItemprice(int index, qint64 value) { if (index >= 0 && index < m_itemprice.size()) m_itemprice[index] = value; }
+qint64 VariableStorage::getItemprice(int index) const { return (index >= 0 && index < m_itemprice.size()) ? m_itemprice.at(index) : 0; }
+
+void VariableStorage::resetItemprice()
+{
+		const int n = m_variableConfig.getSize1D(QStringLiteral("ITEMPRICE"));
+		m_itemprice.assign(n > 0 ? n : 0, 0);
+}
+
 void VariableStorage::setNoitem(int index, qint64 value) { if (index >= 0 && index < m_noitem.size()) m_noitem[index] = value; }
 qint64 VariableStorage::getNoitem(int index) const { return (index >= 0 && index < m_noitem.size()) ? m_noitem.at(index) : 0; }
 
@@ -1214,8 +1225,11 @@ bool VariableStorage::loadVariables(const QString &path)
 // ================= System Variable Access by Name =================
 bool VariableStorage::hasSystemVariable(const QString &name) const
 {
+		// 与解析期同源的「有存储通道的系统变量」名单。**新增系统变量必须两处都加**：
+		// 漏在这里会让运行期把它当成用户全局变量（退回 m_globalInt1D）——
+		// ITEMPRICE 就是这样变成恒 0 的（装载期写常量容器、读取走用户全局槽）。
 		static const QSet<QString> kNames = {
-QStringLiteral("DAY"),QStringLiteral("MONEY"),QStringLiteral("TIME"),QStringLiteral("ITEM"),QStringLiteral("ITEMSALES"),QStringLiteral("NOITEM"),QStringLiteral("BOUGHT"),QStringLiteral("PBAND"),QStringLiteral("FLAG"),QStringLiteral("TFLAG"),QStringLiteral("TARGET"),QStringLiteral("MASTER"),QStringLiteral("PLAYER"),QStringLiteral("ASSI"),QStringLiteral("ASSIPLAY"),QStringLiteral("UP"),QStringLiteral("DOWN"),QStringLiteral("LOSEBASE"),QStringLiteral("PALAMLV"),QStringLiteral("EXPLV"),QStringLiteral("EJAC"),QStringLiteral("PREVCOM"),QStringLiteral("SELECTCOM"),QStringLiteral("NEXTCOM"),QStringLiteral("RESULT"),QStringLiteral("COUNT"),QStringLiteral("A"),QStringLiteral("B"),QStringLiteral("C"),QStringLiteral("CHARANUM"),QStringLiteral("LASTLOAD_NO"),QStringLiteral("LASTLOAD_VERSION")
+QStringLiteral("DAY"),QStringLiteral("MONEY"),QStringLiteral("TIME"),QStringLiteral("ITEM"),QStringLiteral("ITEMSALES"),QStringLiteral("ITEMPRICE"),QStringLiteral("NOITEM"),QStringLiteral("BOUGHT"),QStringLiteral("PBAND"),QStringLiteral("FLAG"),QStringLiteral("TFLAG"),QStringLiteral("TARGET"),QStringLiteral("MASTER"),QStringLiteral("PLAYER"),QStringLiteral("ASSI"),QStringLiteral("ASSIPLAY"),QStringLiteral("UP"),QStringLiteral("DOWN"),QStringLiteral("LOSEBASE"),QStringLiteral("PALAMLV"),QStringLiteral("EXPLV"),QStringLiteral("EJAC"),QStringLiteral("PREVCOM"),QStringLiteral("SELECTCOM"),QStringLiteral("NEXTCOM"),QStringLiteral("RESULT"),QStringLiteral("COUNT"),QStringLiteral("A"),QStringLiteral("B"),QStringLiteral("C"),QStringLiteral("CHARANUM"),QStringLiteral("LASTLOAD_NO"),QStringLiteral("LASTLOAD_VERSION")
 		};
 		// 先经 REF 形参别名解析（`#DIM REF X` ← 系统变量实参），再判名。
 		return kNames.contains(systemVariableName(name));
@@ -1232,6 +1246,8 @@ qint64 VariableStorage::getSystemVariable(const QString &name, int index) const
 		if (key == "TIME") return getTime(index);
 		if (key == "ITEM") return getItem(index);
 		if (key == "ITEMSALES") return getItemsales(index);
+		// 常量：Item.csv 第 3 列（C# Item1DConstantToken）
+		if (key == "ITEMPRICE") return getItemprice(index);
 		if (key == "NOITEM") return getNoitem(index);
 		if (key == "BOUGHT") return getBought(index);
 		if (key == "PBAND") return getPband(index);
@@ -1275,6 +1291,9 @@ void VariableStorage::setSystemVariable(const QString &name, int index, qint64 v
 		if (key == "TIME") { setTime(index, value); return; }
 		if (key == "ITEM") { setItem(index, value); return; }
 		if (key == "ITEMSALES") { setItemsales(index, value); return; }
+		// 内部装载路径（ConstantData.loadDataTo）；ERB 侧 ITEMPRICE 是 readOnly 常量，
+		// 赋值在解析期就被 not-const 校验拦下。
+		if (key == "ITEMPRICE") { setItemprice(index, value); return; }
 		if (key == "NOITEM") { setNoitem(index, value); return; }
 		if (key == "BOUGHT") { setBought(index, value); return; }
 		if (key == "PBAND") { setPband(index, value); return; }

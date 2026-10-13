@@ -109,6 +109,22 @@ UPCHECK
 CALL ASSERT_EQ, PALAM:0:0, 25, @"UPCHECK 第二次累加"
 NONG += RESULT
 
+;---- ITEMPRICE：Item.csv 第 3 列 -> 常量数组（C# constant.ItemPrice）----
+;回归：9388aec 把价格写进 m_globalInt1D，而 ERB 的 ITEMPRICE:i 走
+;hasSystemVariable -> getSystemVariable（没有该分支，恒 0）—— 商店价格全为 $0。
+CALL ASSERT_EQ, ITEMPRICE:0, 100, @"ITEMPRICE:0 = Item.csv 第 3 列"
+NONG += RESULT
+CALL ASSERT_EQ, ITEMPRICE:1, 250, @"ITEMPRICE:1 = Item.csv 第 3 列"
+NONG += RESULT
+CALL ASSERT_EQ, ITEMPRICE:2, 0, @"第 3 列缺失 -> 保持 0（对齐 loadDataTo）"
+NONG += RESULT
+CALL ASSERT_EQ, ITEMPRICE:4, 999, @"跳号行按第 1 列落位，中间保持 0"
+NONG += RESULT
+CALL ASSERT_EQ, ITEMPRICE:3, 0, @"未定义下标 = 0"
+NONG += RESULT
+CALL ASSERT_EQ, VARSIZE("ITEMPRICE"), 1000, @"ITEMPRICE 尺寸 = VariableSize.csv 缺省 1000"
+NONG += RESULT
+
 ;---- 状态打印族（PRINT_ABL/PRINT_PALAM/PRINT_ITEM/PRINT_SHOPITEM 冒烟）----
 PRINT_ABL 0
 PRINT_PALAM 0

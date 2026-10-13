@@ -291,6 +291,18 @@ public:
 		Q_INVOKABLE qint64 getItem(int index) const;
 		Q_INVOKABLE void setItemsales(int index, qint64 value);
 		Q_INVOKABLE qint64 getItemsales(int index) const;
+
+		// ITEMPRICE：C# 是**常量** 1D（VariableCode.ITEMPRICE | __UNCHANGEABLE__，
+		// VariableData.cs:252 的 Int1DConstantToken(constant.ItemPrice)），
+		// 由 ConstantData.LoadData 的 `loadDataTo("ITEM.CSV", itemIndex, ItemPrice)`
+		// 从 Item.csv 第 3 列装载。此前 9388aec 把价格写进 m_globalInt1D，而 ERB 的
+		// `ITEMPRICE:i` 读取走 hasSystemVariable -> getSystemVariable（无该分支 -> 恒 0），
+		// 于是「商店价格全为 $0」回归（eraTW 隙間商店）。这里补上常量容器。
+		Q_INVOKABLE void setItemprice(int index, qint64 value);
+		Q_INVOKABLE qint64 getItemprice(int index) const;
+		// 装载期重建（C# `ItemPrice = new Int64[MaxDataList[itemIndex]]`）：按当前
+		// VariableSize.csv 的尺寸清零，随后逐行填第 3 列。
+		void resetItemprice();
 		Q_INVOKABLE void setNoitem(int index, qint64 value);
 		Q_INVOKABLE qint64 getNoitem(int index) const;
 		Q_INVOKABLE void setBought(int index, qint64 value);
@@ -428,6 +440,7 @@ private:
 		QList<qint64> m_time;
 		QList<qint64> m_item;
 		QList<qint64> m_itemsales;
+		QList<qint64> m_itemprice;   // 常量（C# constant.ItemPrice），不参与 RESETDATA
 		QList<qint64> m_noitem;
 		QList<qint64> m_bought;
 		QList<qint64> m_pband;

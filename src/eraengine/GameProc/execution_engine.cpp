@@ -2445,7 +2445,8 @@ bool ExecutionEngine::handleStatusCommand(const LogicalLine& line)
         for (int i = 0; i < count; ++i) {
             if (m_storage->getItemsales(i) == 0) continue;
             const QString n = m_storage->getGlobalStr1D("ITEMNAME", i);
-            const QString price = QString::number(m_storage->getGlobalInt1D("ITEMPRICE", i));
+            // ITEMPRICE 是常量容器（不在 m_globalInt1D 里）：走系统变量通道
+            const QString price = QString::number(m_storage->getSystemVariable(QStringLiteral("ITEMPRICE"), i));
             // 1.52a改変部分：MoneyFirst 对应金额单位前置 / 后置
             const QString printStr = moneyFirst
                 ? QStringLiteral("[%1] %2(%3%4)").arg(i).arg(n, label, price)

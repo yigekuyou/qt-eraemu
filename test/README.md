@@ -866,6 +866,33 @@ qdbus6 io.yigekuyou.emuera /debug io.yigekuyou.emuera.Debug.stopFrameCapture
 
 「点按钮后画面是否刷新」用帧序列直接对比：点击前后各一帧，按钮所在行像素应变化。
 
+## ITEMPRICE 回归：常量数组必须走系统变量通道（9388aec · 2026-10 修正）
+
+`9388aec`（「ITEMPRICE 未装载导致商店价格全为 $0」）把 Item.csv 第 3 列写进了
+**`m_globalInt1D`**，而 ERB 的 `ITEMPRICE:i` 读取路径是
+`VariableStorage::hasSystemVariable()` → `getSystemVariable()`；后来
+`getSystemVariable` 加了「有存储通道的系统变量」分发，ITEMPRICE 不在名单里，
+于是又退回用户全局槽读取 —— **写与读落在两个容器上，价格重新变成 $0**
+（eraTW 隙間商店回归）。
+
+C# 语义（`ConstantData.cs:597-604`、`VariableData.cs:252`、`VariableCode.cs:96`）：
+
+* `ITEMPRICE` 是常量 1D（`__UNCHANGEABLE__`），`Int1DConstantToken(constant.ItemPrice)`；
+* `LoadData` 先 `loadVariableSizeData`，**再** `loadDataTo("ITEM.CSV", itemIndex, ItemPrice)`：
+  第 1 列下标、第 2 列名字、**第 3 列价格**（不可解析/缺列 -> 该下标保持 0）。
+
+修正：
+
+| 位置 | 改动 |
+| --- | --- |
+| `variable_storage.{h,cpp}` | 新增常量容器 `m_itemprice`（`get/setItemprice`、`resetItemprice`）；`get/setSystemVariable` 增加 `ITEMPRICE` 分支；`hasSystemVariable` 名单补 `ITEMPRICE`（**新增系统变量必须两处同步**，否则运行期当作用户全局）；`loadVariableSizes` 按 VariableSize.csv 定长；`arraySize` 报该容器长度（VARSIZE/FINDELEMENT） |
+| `eraengine.cpp` | Item.csv 填充块移到 VariableSize.csv **之后**（对齐 C# 顺序：尺寸先定），`resetItemprice()` 重建清零后按行写 `setSystemVariable("ITEMPRICE", …)` |
+| `execution_engine.cpp` | `PRINT_SHOPITEM` 的价格改读 `getSystemVariable("ITEMPRICE", i)` |
+
+**回归**：`example/CSV/Item.csv`（新增夹具：有价格/缺价格列/跳号行）+ 组8 断言
+`ITEMPRICE:0=100 / :1=250 / :2=0 / :4=999 / :3=0 / VARSIZE=1000`；eraTW 装载
+`ITEMPRICE 填充: 221 项` 且读路径不再是用户全局槽。
+
 ## 关于「自动输入」
 
 `INPUT` / `INPUTS` / `ONEINPUT` / `TINPUT` / `WAITANYKEY` / `AWAIT` 在 GUI 下会

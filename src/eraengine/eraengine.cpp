@@ -911,9 +911,21 @@ void EraEngine::loadConstantData()
 			qDebug() << "[load] STR 变量填充:" << n << "槽";
 		}
 
-		// ITEMPRICE：Item.csv **第 3 列**是价格（对齐 C# ConstantData.loadDataTo
-		// 的 targetI 分支：tokens[2] 能解析成整数就写 ItemPrice[index]）。
-		// 此前从未填充 -> 隙間商店/通販等所有商品价格显示 $0。
+
+		// 变量尺寸表（对齐 C# VariableData 读取 VariableSize.CSV）
+		int sizesLoaded = 0;
+		const QStringList sizeCandidates = m_fileSystem.listFiles(m_csvDir,
+		                                                          QStringList{"VariableSize.csv"}, false);
+		for (const QString& path : sizeCandidates) {
+				if (m_variableStorage.loadVariableSizes(path)) ++sizesLoaded;
+		}
+		// ITEMPRICE：Item.csv **第 3 列**是价格（对齐 C# ConstantData.LoadData 的
+		// `loadDataTo(csvDir + "ITEM.CSV", itemIndex, ItemPrice, disp)`：tokens[0] 是
+		// 下标、tokens[2] 是价格，不可解析者保留 0）。C# 的顺序是**先**
+		// loadVariableSizeData、**再** 逐个 loadDataTo —— 尺寸定下来之前填会按默认
+		// 1000 截断，而且必须写进常量容器：ERB 的 `ITEMPRICE:i` 读的是
+		// hasSystemVariable -> getSystemVariable（此前无 ITEMPRICE 分支，恒 0），
+		// 写进 m_globalInt1D 等于没填 —— 这就是「隙間商店价格全为 $0」的回归。
 		{
 			const QStringList itemCandidates = m_fileSystem.listFiles(
 			    m_csvDir, QStringList{QStringLiteral("Item.csv")}, m_searchSubdirectory);
@@ -921,6 +933,8 @@ void EraEngine::loadConstantData()
 				CsvLoader itemLoader;
 				if (itemLoader.loadFile(itemCandidates.first())) {
 					const QString table = QFileInfo(itemCandidates.first()).baseName();
+					// C# `ItemPrice = new Int64[MaxDataList[itemIndex]]`：按当前尺寸重建
+					m_variableStorage.resetItemprice();
 					const int cap = m_variableStorage.variableConfig().getSize1D(
 					    QStringLiteral("ITEMPRICE"));
 					const int rows = qMin(itemLoader.getRowCount(table), cap);
@@ -932,7 +946,7 @@ void EraEngine::loadConstantData()
 						bool priceOk = false;
 						const qint64 price = itemLoader.getValue(table, r, 2).toLongLong(&priceOk);
 						if (!priceOk) continue;   // 无价格列/价格不可解析：保持 0
-						m_variableStorage.setGlobalInt1D(QStringLiteral("ITEMPRICE"), index, price);
+						m_variableStorage.setSystemVariable(QStringLiteral("ITEMPRICE"), index, price);
 						++filled;
 					}
 					qDebug() << "[load] ITEMPRICE 填充:" << filled << "项";
@@ -940,13 +954,6 @@ void EraEngine::loadConstantData()
 			}
 		}
 
-		// 变量尺寸表（对齐 C# VariableData 读取 VariableSize.CSV）
-		int sizesLoaded = 0;
-		const QStringList sizeCandidates = m_fileSystem.listFiles(m_csvDir,
-		                                                          QStringList{"VariableSize.csv"}, false);
-		for (const QString& path : sizeCandidates) {
-				if (m_variableStorage.loadVariableSizes(path)) ++sizesLoaded;
-		}
 		// 角色 CSV（对齐 C# ConstantData 读 <Csv>/Chara）：NAME/CALLNAME/BASE/ABL/…
 		const int charaLoaded = CsvLoader::loadCharaDirectory(
 		    GamePaths::join(m_csvDir, QStringLiteral("Chara")), &m_constantTable, &m_variableStorage);

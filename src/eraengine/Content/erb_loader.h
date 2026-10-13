@@ -52,16 +52,13 @@ struct ParsedErbFile {
 // ---------------------------------------------------------------------------
 // 装载期可见的「用户变量类型」快照（预扫描产出，解析线程只读）
 //
-// 为什么需要它：#DIM/#DIMS 的**完整登记**在主线程 mergeParsedFile ->
-// EraParseTable::loadScript，那时各文件的 AST 早已由后台线程构建完毕 ——
-// 于是归约表达式时所有用户变量都是「类型未知」，`%(" " * N + X)%`、
-// `%(EQUAL * 150)%` 这类插值的类型校验必然误判（FORM 归约失败 -> 整行
-// 原样打印源码）。这里把「类型」提前到解析之前：预扫描本来就逐文件读过
-// 一遍内容，顺带扫一遍 # 行几乎不增加成本（不读盘、不解码）。
+// 定位：**兜底的类型表**。#DIM/#DIMS 的权威登记是「先登记」阶段
+// （ErbLoader::preRegisterDeclarations → EraParseTable），解析线程查询时
+// 优先查已登记的变量表（resolveExpr / parseOneFile 的 declaredType），
+// 只有查不到（例如未预登记的调用路径）才退回本表。
 //
-// 只带**类型**：维数 / 初值 / const / CHARADATA 等仍由 loadScript 登记，
-// markLoadComplete 的 applyVariableTypes 会按变量表把节点重新定型（含维数与
-// readOnly），所以这里不需要（也不应该）复制那些信息。
+// 只带**类型**：维数 / 初值 / const / CHARADATA 等不在表内 —— 那些由
+// loadScript 登记进变量表，markLoadComplete 收尾时就地定型到 AST 节点上。
 // ---------------------------------------------------------------------------
 struct LoadTimeVarTypes {
     QHash<QString, OperandType> globalVars;                 // 变量名(大写) -> 类型
@@ -94,7 +91,7 @@ public:
 
     // ---- 异步装载（分块：后台解析 -> 主线程合并，不阻塞 UI）----
     // 完成/进度通过 loadProgress / loadCompleted 信号上报；最终仍需调用方
-    // 在 loadCompleted 槽里执行 EraParseTable::markLoadComplete()（全局定稿 + 重绑 + 诊断）。
+    // 在 loadCompleted 槽里执行 EraParseTable::markLoadComplete()（声明定稿 + 全体脚本就地定型/重绑 + 诊断）。
     void loadDirectoryAsync(const QString& dirPath, int depth = 0);
     [[nodiscard]] bool isLoading() const { return m_async.active; }
     void cancelLoad();

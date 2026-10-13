@@ -628,10 +628,7 @@ void EraEngine::setGameDirectory(const QString& directory)
 				// SAVETEXT / LOADTEXT / SAVECHARA / LOADCHARA / GSAVE / GLOAD 的落盘目录
 				m_expressionEvaluator.setSaveDirectory(GamePaths::join(m_storageRoot, QStringLiteral("sav")));
         m_expressionEvaluator.setCharacterDirectory(GamePaths::join(m_storageRoot, QStringLiteral("dat")));
-				qDebug() << "[DEBUG] About to call reload()";
 				reload();
-				qDebug() << "[DEBUG] reload() complete";
-				qDebug() << "[DEBUG] setGameDirectory complete";
 				emit gameDirectoryChanged();
 		}
 }
@@ -671,10 +668,8 @@ void EraEngine::reload()
 				// 先清掉上一局的解析数据：loadScript 是增量 append（同名事件
 				// 标签/告警会翻倍 —— 上一局 88 条告警第二局变 179 条，
 				// @EVENTFIRST 的 6 个声明变 12 个，事件组重复执行）
-				qDebug() << "[DEBUG] Loading scripts from:" << m_erbDir;
 				m_executionEngine.loadScripts(m_erbDir);
-				m_parseTable.markLoadComplete();   // 只读区定型
-				qDebug() << "[DEBUG] Scripts loaded";
+				m_parseTable.markLoadComplete();   // 声明定稿 → 全体脚本就地定型/重绑 → 诊断
 
 				collectEntryPoints();
 				loadFinishedHook();
@@ -1292,8 +1287,8 @@ void EraEngine::reloadAsync()
 						emit scriptsLoaded(false);
 						return;
 				}
-				// 收尾已在 loadScript → finalizeScript 中逐脚本完成，
-				// 此处只做入口点收集与完成通知。
+				// 收尾（声明定稿 → 全体脚本就地定型/重绑 → 诊断）由 markLoadComplete
+				// 在全部脚本就绪后单趟完成；此处只做入口点收集与完成通知。
 				m_parseTable.markLoadComplete();
 				collectEntryPoints();
 				loadFinishedHook();
@@ -1352,14 +1347,14 @@ void EraEngine::loadGameBaseData(){
 				gameBasePath = candidates.first();
 		}
 		if (gameBasePath.isEmpty()) {
-				qDebug() << "[DEBUG] GameBase.csv not found in" << m_csvDir;
+				qDebug() << "[EraEngine] 未找到 GameBase.csv（CSV 目录：" << m_csvDir << "）";
 				return;
 		}
 
 		// Load GameBase.csv using CsvLoader
 		CsvLoader csvLoader;
 		if (!csvLoader.loadFile(gameBasePath)) {
-				qDebug() << "[DEBUG] Failed to load GameBase.csv";
+				qDebug() << "[EraEngine] GameBase.csv 装载失败：" << gameBasePath;
 				return;
 		}
 		// **真正的载入**：把每一行 (键, 值) 写进 GameBaseData

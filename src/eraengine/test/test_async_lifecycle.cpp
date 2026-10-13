@@ -106,23 +106,23 @@ int main(int argc, char** argv) {
         int completions = 0;
         auto& loader = engine.getExecutionEngine()->getErbLoader();
         QObject::connect(&engine, &EraEngine::scriptsLoaded, &engine, [&](bool) { ++completions; });
-        // Engine's loadCompleted handler starts semantic future before this callback.
+        // 收尾（markLoadComplete）在 loadCompleted 回调内执行，随后才发 scriptsLoaded。
         QObject::connect(&engine, &EraEngine::scriptsLoadStarted, &engine, [&] {
             if (replaced) return;
             QObject::connect(&loader, &ErbLoader::loadCompleted, &engine, [&](bool ok) {
                 if (!ok || replaced) return;
-                check(engine.isLoadingScripts(), "loading includes semantic finalization");
+                check(engine.isLoadingScripts(), "loading includes the finalization window");
                 replaced = true;
                 engine.loadAsync(second);
             });
         });
         engine.loadAsync(first);
         check(waitLoaded(engine), "replacement during finalization succeeds");
-        check(replaced && completions == 1, "stale semantic callback does not publish");
-        check(engine.getParseTable()->scriptNames() == QStringList{"SECOND.ERB"}, "no old semantic data survives");
+        check(replaced && completions == 1, "stale completion callback does not publish");
+        check(engine.getParseTable()->scriptNames() == QStringList{"SECOND.ERB"}, "no old parse data survives");
         qint64 oldConstant = 0;
         check(!engine.getParseTable()->variableTable().constInt("OLD_LITERAL", oldConstant),
-              "semantic replacement clears old ERB constants");
+              "replacement clears old ERB constants");
     }
     {
         ErbLoader loader;

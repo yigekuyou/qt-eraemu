@@ -376,6 +376,11 @@ void EraParseTable::clear() {
     m_depth = 0;
     m_jumped = false;
     m_finalized = false;
+    // 每次装载都是独立会话：下一次必须由装载器重新预登记声明，
+    // 常量/维数求值器也必须随新的变量表重新装配（clearLoadedGame 已把
+    // 求值器上的提供者清空，标志不复位就会带着空提供者进入下一局）。
+    m_declarationsPreRegistered = false;
+    m_constProvidersReady = false;
     emit positionChanged(QString(), 0);
     emit callStackChanged(0);
 }
@@ -1316,7 +1321,7 @@ void EraParseTable::parseVariableDeclaration(const LogicalLine& line, const QStr
     parseVariableDeclarationText(line.raw, line.position, currentFunction, isHeaderFile);
 }
 
-void EraParseTable::applyVariableTypes(const QString& onlyScript) {
+void EraParseTable::applyVariableTypes() {
     // 2) 各行实际引用的 AST（并行装载时 worker 的 AST 不在主缓存中）。
     //    **按脚本并行**：函数名全局唯一（一个函数体只在一个脚本里），
     //    VariableTable::applyTypes 取的是 const 变量表（只读），
@@ -1330,20 +1335,24 @@ void EraParseTable::applyVariableTypes(const QString& onlyScript) {
     QList<ScriptData*> scripts;
     scripts.reserve(m_scripts.size());
     for (auto it = m_scripts.begin(); it != m_scripts.end(); ++it) {
-        if (!onlyScript.isEmpty() && it.key() != onlyScript) continue;
         scripts.append(&it.value());
     }
 
     const auto processScript = [this](ScriptData* sd) {
         // 同一节点可能被多行/多片段引用（模板分词、DEFAULT 列表…）：每个作用域
-        // 只定型一次（与旧「按 ownerFunction 建缓存」等价）。
+        // 只定型一次（与旧「按 ownerFunction 建缓存」等价）。行按所属函数连续存放，
+        // 因此只在作用域切换时查表，避免逐行 toUpper + 哈希。
         QHash<QString, QSet<const ExpressionNode*>> typed;
+        QSet<const ExpressionNode*>* seen = nullptr;
+        QString scope;
         for (LogicalLine& line : sd->lines) {
-            auto& seen = typed[line.ownerFunction.toUpper()];
-            const QString scope = line.ownerFunction;
-            const auto bind = [this, &seen, &scope](QSharedPointer<ExpressionNode>& ast) {
-                if (!ast || seen.contains(ast.data())) return;
-                seen.insert(ast.data());
+            if (!seen || line.ownerFunction != scope) {
+                scope = line.ownerFunction;
+                seen = &typed[scope.toUpper()];
+            }
+            const auto bind = [this, seen, &scope](QSharedPointer<ExpressionNode>& ast) {
+                if (!ast || seen->contains(ast.data())) return;
+                seen->insert(ast.data());
                 VariableTable::applyTypes(*ast, m_variables, scope);
                 PrintTemplateCompiler::prepare(ast);
             };
@@ -1364,14 +1373,12 @@ void EraParseTable::applyVariableTypes(const QString& onlyScript) {
 }
 
 void EraParseTable::markLoadComplete() {
-    // 装载收尾（唯一入口）：全局声明定稿 → 全体脚本重绑 → 统一出诊断。
+    // 装载收尾（唯一入口）：全局声明定稿 → 全体脚本就地定型/重绑 → 统一出诊断。
     // 必须在**全部**声明就绪后进行：跨文件前向引用（先装载的文件调用后装载文件的
     // 函数）此刻才可解析；诊断随后统一产生，不重复。
     QElapsedTimer completeTimer;
     completeTimer.start();
-    // 单趟（全体脚本）：全局定稿 → 重绑 → 出诊断。
-    // 重绑必须在**全部**声明就绪后进行，跨文件前向引用才可解析；诊断在其后统一产生。
-    resolveGlobalDeclarations();
+    resolveGlobalDeclarations();   // 声明预登记后 #FUNCTION 表才随 loadScript 补齐，此处再结算一次
     finalizeBindings();
     finalizeValidation();
     m_finalized = true;   // 只读区定型：装载完成后不再编译新源码
@@ -1457,12 +1464,11 @@ void EraParseTable::resolveGlobalDeclarations() {
     resolveUserFunctionTypes();
 }
 
-// 单脚本收尾：把该脚本的字符串赋值 / FUNC / 变量类型 / 赋值 AST / 函数调用解析到位。
+// 全体脚本绑定（一趟）：字符串赋值/FUNC → 变量类型就地定型 → 赋值 AST → 函数调用解析。
 // 要求 resolveGlobalDeclarations() 已就绪（变量维数与函数类型已定）。
 void EraParseTable::finalizeBindings() {
-    // 全体脚本的绑定：字符串赋值/FORM/CASE、FUNC、变量类型、赋值 AST、函数调用解析。
-    // 一趟完成；每步内部按脚本并行（见各方法），不再逐脚本调用（那样会有
-    // 2200+ 次调用开销，eraTW 上从 ~10s 退化到 ~33s）。
+    // 每步内部按脚本并行（见各方法）；不再逐脚本调用（那样有 2200+ 次调用开销，
+    // eraTW 上从 ~10s 退化到 ~33s）。
     applyStringAssignments();
 
     // FUNC 重编译（仅构建期未定型的行）
@@ -1496,9 +1502,8 @@ void EraParseTable::finalizeBindings() {
         if (line.assignOperator == "=" && m_variables.typeOf(name, line.ownerFunction) == OperandType::Str) continue;
         line.assignmentAsts.clear();
         for (const auto& text : AstBuilder::assignmentValues(line.arguments[1].raw)) {
-            auto ast = cloneExpression(expressionAstInScope(text, line.ownerFunction, true));
-            if (ast) VariableTable::applyTypes(*ast, m_variables, line.ownerFunction);
-            line.assignmentAsts.append(ast);
+            // expressionAstInScope 已按 ownerFunction 定型并 prepare —— 不再克隆/重定型。
+            line.assignmentAsts.append(expressionAstInScope(text, line.ownerFunction, true));
         }
     }
 
@@ -1508,8 +1513,10 @@ void EraParseTable::finalizeBindings() {
     resolveFunctionNodes();
 }
 
-// 单脚本校验：产出诊断（错误 + 告警）。必须在全部脚本**绑定**完成后统一执行，
+// 全体脚本校验：产出诊断（错误 + 告警）。必须在全部脚本**绑定**完成后统一执行，
 // 否则跨文件前向引用会被误报「未定义的函数」。只在 markLoadComplete 调用一次。
+// 参数/类型校验必须在「变量类型已就地定型」之后：否则 LFONTS 之类用户 #DIMS 变量
+// 在解析期还是默认的 Int，会误报「需要字符串表达式，实得 Int」。
 void EraParseTable::finalizeValidation() {
     const auto constantTree = [](const ExpressionNode& root) {
         bool constant = true;
@@ -1559,8 +1566,8 @@ void EraParseTable::finalizeValidation() {
             if ((line.functionName == "++" || line.functionName == "--")
                 && line.arguments.size() == 1) {
                 auto& operand = line.arguments[0];
-                operand.ast = cloneExpression(expressionAstInScope(operand.raw, line.ownerFunction, true));
-                if (operand.ast) VariableTable::applyTypes(*operand.ast, m_variables, line.ownerFunction);
+                // expressionAstInScope 已按 ownerFunction 定型 —— 不再克隆/重定型。
+                operand.ast = expressionAstInScope(operand.raw, line.ownerFunction, true);
                 if (!operand.ast || operand.ast->kind() != NodeKind::Variable
                     || static_cast<const VariableNode&>(*operand.ast).readOnly
                     || operand.ast->valueType() == OperandType::Str) {
@@ -1602,8 +1609,8 @@ void EraParseTable::finalizeValidation() {
                 const auto& dest = line.arguments[0].raw;
                 const QString name = dest.section(':', 0, 0).trimmed();
                 const auto* decl = m_variables.find(name, line.ownerFunction);
-                auto target = cloneExpression(expressionAstInScope(dest, line.ownerFunction, true));
-                if (target) VariableTable::applyTypes(*target, m_variables, line.ownerFunction);
+                // expressionAstInScope 已按 ownerFunction 定型 —— 不再克隆/重定型。
+                const auto target = expressionAstInScope(dest, line.ownerFunction, true);
                 line.arguments[0].ast = target;
                 // 诊断带上**具体原因**（未定义变量 / 维数不符 / AST 解析失败）：
                 // 只报「必须为有效变量项」时，eraTW 这种 10k 变量的工程无从下手。
@@ -1652,19 +1659,11 @@ void EraParseTable::finalizeValidation() {
                 }
             }
         }
-
-    // 参数/类型校验必须在「变量类型已回填」之后进行：
-    // 否则 LFONTS 之类用户 #DIMS 变量在解析期还是默认的 Int，
-    // 会误报「需要字符串表达式，实得 Int」。
-
     }
     // 参数校验（全体脚本）
     validateArguments();
 }
 
-// ---------------------------------------------------------------------------
-// 函数调用重绑 + 校验（对齐 C# IdentifierDictionary.GetFunctionMethod）
-// ---------------------------------------------------------------------------
 // ---------------------------------------------------------------------------
 // 字符串赋值：右值按 StrForm 解析（对齐 C# SP_SET_ArgumentBuilder）
 //
@@ -1726,11 +1725,10 @@ void EraParseTable::applyPrivateVariableDefaults(const QString& function) {
     applyVariableDefaults(m_variables.localsOf(function));
 }
 
-void EraParseTable::applyStringAssignments(const QString& onlyScript) {
+void EraParseTable::applyStringAssignments() {
     // FORM 里的插值表达式也要用**行的作用域**解析：否则 `%PNAME%`（函数内私有
     // 字符串变量）会按无作用域解析失败，整行报「字符串赋值FORM无效」。
     for (auto sit = m_scripts.begin(); sit != m_scripts.end(); ++sit) {
-        if (!onlyScript.isEmpty() && sit.key() != onlyScript) continue;
         for (LogicalLine& line : sit.value().lines) {
             // 只处理构建期未定型的行：构建期已按（预扫描）类型表定型的
             // 字符串/FORM/CASE 不再重解析（收尾只扫描未定型项）。
@@ -1864,7 +1862,14 @@ QString EraParseTable::checkUserCallArgs(const UserFunctionDecl& decl,
     return QString();
 }
 
-void EraParseTable::resolveFunctionNodes(const QString& onlyScript) {
+// ---------------------------------------------------------------------------
+// 函数调用重绑 + 校验（对齐 C# IdentifierDictionary.GetFunctionMethod）
+//
+// 把每个 FunctionNode 重新解析为 内置函数 / 用户自定义函数 / 未定义函数，
+// 并用最终（就地定型后）的实参 AST 复刻 C# FunctionMethod.CheckArgumentType()。
+// 必须在**全部**脚本的变量类型定稿之后进行（跨文件前向引用此刻才可解析）。
+// ---------------------------------------------------------------------------
+void EraParseTable::resolveFunctionNodes() {
     // 与解析期同一判据（era_parse_table.cpp:userCallReturnType）：
     // 用户函数优先，但无 #FUNCTION 时不覆盖同名内置函数。
     const auto userType = [this](const QString& name) -> OperandType {
@@ -1945,7 +1950,6 @@ void EraParseTable::resolveFunctionNodes(const QString& onlyScript) {
     // 自底向上解析：`STRLENS(RAND(100))` 里内层 RAND 的返回类型必须先定下来，
     // 外层 STRLENS 才能校验实参类型（否则内层还停留在解析期的内置类型）。
     // walkExpression 是先序（父→子）；把节点收集后逆序应用即得 子→父 的求值顺序。
-    const bool filterScript = !onlyScript.isEmpty();
     // 例：A(B(C,D),E) 先序为 A,B,C,D,E，逆序 E,D,C,B,A —— 任一子节点都在其父之前。
     const auto resolveAst = [&resolveNode](const QSharedPointer<ExpressionNode>& ast) {
         if (!ast) return;
@@ -1960,7 +1964,6 @@ void EraParseTable::resolveFunctionNodes(const QString& onlyScript) {
     QList<ScriptData*> scripts;
     scripts.reserve(m_scripts.size());
     for (auto it = m_scripts.begin(); it != m_scripts.end(); ++it) {
-        if (filterScript && it.key() != onlyScript) continue;
         scripts.append(&it.value());
     }
 
@@ -2022,18 +2025,16 @@ void EraParseTable::collectFunctionWarnings(const QSharedPointer<ExpressionNode>
     });
 }
 
-void EraParseTable::validateArguments(const QString& onlyScript) {
+void EraParseTable::validateArguments() {
     // **按脚本并行 + 有序合并**：
     //   · 每个脚本独立产出一份 (warnings, keys) —— 脚本内顺序与串行版逐字一致；
     //   · 合并阶段按 m_scripts 的遍历顺序拼接，并用全局 seen 去重。
     //   QHash 的遍历顺序与 keys() 一致，故并行版的「脚本顺序」= 串行版顺序，
     //   于是告警文本、顺序、去重结果与串行实现**完全相同**（可在同一份数据上
     //   逐字节比对）。eraTW 上这一步 ~2.8–3.6s，是 markLoadComplete 的第二热点。
-    const bool filterScript = !onlyScript.isEmpty();
     QList<ScriptData*> scripts;
     scripts.reserve(m_scripts.size());
     for (auto it = m_scripts.begin(); it != m_scripts.end(); ++it) {
-        if (filterScript && it.key() != onlyScript) continue;
         scripts.append(&it.value());
     }
 
@@ -2043,8 +2044,11 @@ void EraParseTable::validateArguments(const QString& onlyScript) {
             if (line.kind != LineKind::Instruction) continue;
             const qsizetype before = out.warnings.size();
             const QString semanticError = !line.argument.typeOk ? line.argument.typeError : QString();
+            // ArgumentParser::build 重算 kind/params/exprs（按最终变量类型）。赋值右值
+            // 的 AST 无需再 prepare —— applyVariableTypes（收尾第 3 步）已对全体
+            // assignmentAsts 调过一次，finalizeBindings 重建的那些也由
+            // expressionAstInScope 在解析时 prepare。
             ArgumentParser::build(line);
-            for (const auto& ast : line.assignmentAsts) PrintTemplateCompiler::prepare(ast);   // 幂等：重算 kind/params/exprs + 重新校验
             if (!semanticError.isEmpty()) {
                 line.argument.typeOk = false;
                 line.argument.typeError = semanticError;

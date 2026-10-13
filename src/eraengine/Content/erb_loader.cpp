@@ -235,13 +235,10 @@ QSharedPointer<ExpressionNode> ErbLoader::resolveExpr(
         const auto fit = types.constFind(name.toUpper());
         return fit == types.constEnd() ? OperandType::Unknown : fit.value();
     });
-    // 用户变量类型：装载期就按预扫描的类型表定型（见 LoadTimeVarTypes 的说明）。
-    // 作用域 = 当前函数（#DIM 的私有变量）；查不到再退到广域，最后交给系统变量表
-    // （parseVariable 里 systemVariableTypeDyn 兜底），未命中一律 Unknown。
-    // 用户变量类型：优先查**已登记**的变量表（「先登记 #DIM/#DIMS 再构造 AST」后
-    // 它是完整的，含私有作用域），退回预扫描类型表。未命中一律 Unknown。
-    // 用户变量类型：优先查**已登记**的变量表（先登记 #DIM/#DIMS 再构造 AST），
-    // 退回预扫描类型表。未命中一律 Unknown。
+    // 用户变量类型：优先查**已登记**的变量表（「先登记 #DIM/#DIMS 再构造 AST」
+    // 之后它是完整的，含函数私有作用域），查不到再退回预扫描类型表；
+    // 仍未命中一律 Unknown，交给系统变量表兜底（parseVariable 里的
+    // systemVariableTypeDyn）。
     parser.setVariableTypeProvider([this, varTypes, scope](const QString& name) -> OperandType {
         if (m_parseTable) {
             const OperandType t = m_parseTable->variableTable().typeOf(name, scope);

@@ -101,8 +101,8 @@ QString EraDBusDebug::loadState() {
     if (!m_engine) return QStringLiteral("no engine");
     const auto* table = m_engine->getParseTable();
     const bool loading = m_engine->isLoadingScripts();
-    // 语义阶段在后台线程跑，会并发往 m_parseWarnings 追加；装载中不读列表，
-    // 避免与后台写者竞争（只回一个哨兵值）。
+    // 装载期（含收尾窗口）脚本表/告警还在被写入；装载中不读列表，
+    // 避免读到半成品（只回一个哨兵值）。
     return QStringLiteral("loading=%1\ngameDir=%2\nscripts=%3\nwarnings=%4")
         .arg(loading)
         .arg(m_engine->getGameDirectory())

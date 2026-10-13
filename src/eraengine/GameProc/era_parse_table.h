@@ -238,8 +238,8 @@ public:
     // 变量表（#DIM/#DIMS/#GLOBAL/#PRIVATE + 函数形参）
     [[nodiscard]] const VariableTable& variableTable() const { return m_variables; }
 
-    // 装载收尾（唯一入口）：全局声明定稿 → 全体脚本重绑 → 统一出诊断，
-    // 并把只读区定型（之后不再编译新源码）。取代原 finalizeParse 阶段。
+    // 装载收尾（唯一入口）：全局声明定稿 → 全体脚本就地定型/重绑 → 统一出诊断，
+    // 并把只读区定型（之后不再编译新源码）。
     void markLoadComplete();
 
     // ---- 「先预处理 → 先登记 #DIM/#DIMS → 再构造 AST」 ---------------------
@@ -251,9 +251,6 @@ public:
                                 const QString& function, bool isHeaderFile);
     void finishDeclarationPreRegistration();   // 结算：维数/初值/用户函数类型
     [[nodiscard]] bool declarationsPreRegistered() const { return m_declarationsPreRegistered; }
-
-
-    // 并行装载 merge：把 worker 的本地表达式缓存并入主缓存（first-wins）
 
     // 用缓存 AST 求值条件；返回 false 表示求值失败。
     bool evaluateCondition(const QString& scriptName, int line, bool& out, int argIndex = -1);
@@ -310,9 +307,10 @@ private:
     // 文本版（预扫描「先登记 #DIM/#DIMS 再构造 AST」用）：直接按声明文本登记。
     void parseVariableDeclarationText(const QString& rawLine, const ScriptPosition& position,
                                       const QString& currentFunction, bool isHeaderFile);
-    void applyVariableTypes(const QString& onlyScript = QString());
+    // 全体脚本变量类型回填（**就地定型**，见 .cpp 说明）。
+    void applyVariableTypes();
     // 字符串赋值的右值改按 StrForm 解析（对齐 C# AnalyseFormattedString）
-    void applyStringAssignments(const QString& onlyScript = QString());
+    void applyStringAssignments();
     // #DIM/#DIMS 初值：全局装载时写入
     void applyVariableDefaults(const QList<VariableDecl>& decls);
     void applyGlobalVariableDefaults();
@@ -323,11 +321,11 @@ private:
     QString checkUserCallArgs(const UserFunctionDecl& decl,
                               const QList<OperandType>& argTypes) const;
     // 参数个数/类型校验（markLoadComplete 内、类型回填之后调用）
-    void validateArguments(const QString& onlyScript = QString());
+    void validateArguments();
     // 函数调用重绑 + 校验（markLoadComplete 内、类型回填之后调用）：
     // 把每个 FunctionNode 重新解析为 内置函数 / 用户自定义函数 / 未定义函数，
     // 并用最终（类型回填后）的实参 AST 复刻 C# FunctionMethod.CheckArgumentType()。
-    void resolveFunctionNodes(const QString& onlyScript = QString());
+    void resolveFunctionNodes();
     // 全体脚本绑定：字符串赋值/FUNC/变量类型/赋值 AST/函数调用解析（一趟）。
     void finalizeBindings();
     // 全体脚本校验：产出诊断，须在**全部绑定完成后**统一调用（跨文件前向引用）。

@@ -26,7 +26,7 @@ cmake --install build --prefix /your/install/prefix
 
 1. 从 ERH 汇集引擎预处理宏，按确定顺序先处理 ERH，再处理 ERB。
 2. 使用 `ErbPreprocessor`、`AstBuilder` 和 `EraParseTable::expressionAst()` 构造 AST。
-3. 调用 `EraParseTable::markLoadComplete()`，对已构造 AST 完成跨文件声明、表达式函数绑定、参数及类型检查（单脚本 `loadScript` 只登记，收尾在装载完成时一趟完成）。
+3. 调用 `EraParseTable::markLoadComplete()`，对已构造 AST 完成跨文件声明定稿、变量类型就地定型、表达式函数绑定、参数及类型检查（`loadScript` 只登记脚本/函数/标签，收尾在装载完成时一趟完成）。
 4. 输出来自引擎的结构化诊断与 AST 标签。每次分析建立新快照，避免删除文件后残留符号。
 
 引擎修改保留了诊断的文件、物理行、列和跨度，并让不同位置的同类错误分别报告。协议返回的位置统一为 **0 起始、UTF-16 代码单元**。

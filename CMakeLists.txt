@@ -31,11 +31,11 @@ find_package(Qt6 REQUIRED COMPONENTS Quick QuickControls2 Core Widgets Concurren
 find_package(Qt6 OPTIONAL_COMPONENTS DBus)
 # OpenMP 目前没有任何使用点（源码里没有 #pragma omp），设为可选：macOS
 # （AppleClang 默认不带 libomp）与 Android NDK 上找不到也不会配置失败。
-find_package(OpenMP)
+#find_package(OpenMP)
 # bison/flex 还没接上生成规则（没有 BISON_TARGET/FLEX_TARGET），
 # 所以不做 REQUIRED —— Windows/macOS 的 CI runner 不必额外安装。
-find_package(BISON)
-find_package(FLEX)
+#find_package(BISON)
+#find_package(FLEX)
 # REQUIRES 6.11 而不是 6.10：engine 里用了 QStringDecoder/QStringEncoder
 # ::finalize() 与 QStringConverter::FinalizeResultError（Qt 文档标注
 # "introduced in Qt 6.11"，见 Content/encoding/text_encoding.cpp）；写 6.10

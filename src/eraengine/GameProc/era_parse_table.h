@@ -242,6 +242,16 @@ public:
     // 并把只读区定型（之后不再编译新源码）。取代原 finalizeParse 阶段。
     void markLoadComplete();
 
+    // ---- 「先预处理 → 先登记 #DIM/#DIMS → 再构造 AST」 ---------------------
+    // 装载器按**预处理后**的行登记声明（与构建期所见逐字一致），随后结算
+    // 维数/初值/用户函数类型；于是构建期解析器即可拿到完整用户变量类型，
+    // 字符串赋值在构建期即按 StrForm 定型，收尾只需校验用户变量合法性。
+    void beginDeclarationPreRegistration();
+    void preRegisterDeclaration(const QString& rawLine, const ScriptPosition& position,
+                                const QString& function, bool isHeaderFile);
+    void finishDeclarationPreRegistration();   // 结算：维数/初值/用户函数类型
+    [[nodiscard]] bool declarationsPreRegistered() const { return m_declarationsPreRegistered; }
+
 
     // 并行装载 merge：把 worker 的本地表达式缓存并入主缓存（first-wins）
 
@@ -297,6 +307,9 @@ private:
     // 变量声明解析（#DIM/#DIMS/#GLOBAL/#GLOBALS/#PRIVATE）与类型回填
     void parseVariableDeclaration(const LogicalLine& line, const QString& currentFunction,
                                   bool isHeaderFile);
+    // 文本版（预扫描「先登记 #DIM/#DIMS 再构造 AST」用）：直接按声明文本登记。
+    void parseVariableDeclarationText(const QString& rawLine, const ScriptPosition& position,
+                                      const QString& currentFunction, bool isHeaderFile);
     void applyVariableTypes(const QString& onlyScript = QString());
     // 字符串赋值的右值改按 StrForm 解析（对齐 C# AnalyseFormattedString）
     void applyStringAssignments(const QString& onlyScript = QString());
@@ -343,6 +356,7 @@ private:
 
     bool m_finalized = false;
     bool m_constProvidersReady = false;   // 常量/维数求值器是否已设置
+    bool m_declarationsPreRegistered = false;   // 声明已由装载器预登记（loadScript 不再重复登记）
     QHash<QString, ScriptData> m_scripts;
     // perf：hasLabel 的结果按标签名记忆（此前每次 TRYCALL/TRYCALLFORM 都遍历
     // 全部脚本的 labelPositions；eraTW 地图逐字符 TRYCALLFORM 时是热点）。

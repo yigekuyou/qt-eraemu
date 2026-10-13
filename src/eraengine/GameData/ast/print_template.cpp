@@ -197,6 +197,16 @@ PrintTemplate PrintTemplateCompiler::evaluateOccurrences(const CompiledPrintTemp
     return out;
 }
 
+void PrintTemplateCompiler::rebind(CompiledPrintTemplate& tpl,
+                                   const std::function<void(QSharedPointer<ExpressionNode>&)>& bind) {
+    if (!bind) return;
+    for (CompiledPrintTemplatePart& part : tpl.parts) {
+        bind(part.expression);
+        for (auto it = part.attributes.begin(); it != part.attributes.end(); ++it) bind(it.value());
+    }
+    for (StrFormPart& part : tpl.rawParts) bind(part.expression);
+}
+
 void PrintTemplateCompiler::prepare(const QSharedPointer<ExpressionNode>& node) {
     if (!node) return;
     switch (node->kind()) {

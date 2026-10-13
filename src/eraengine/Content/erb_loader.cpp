@@ -240,7 +240,13 @@ QSharedPointer<ExpressionNode> ErbLoader::resolveExpr(
     // （parseVariable 里 systemVariableTypeDyn 兜底），未命中一律 Unknown。
     // 用户变量类型：优先查**已登记**的变量表（「先登记 #DIM/#DIMS 再构造 AST」后
     // 它是完整的，含私有作用域），退回预扫描类型表。未命中一律 Unknown。
+    // 用户变量类型：优先查**已登记**的变量表（先登记 #DIM/#DIMS 再构造 AST），
+    // 退回预扫描类型表。未命中一律 Unknown。
     parser.setVariableTypeProvider([this, varTypes, scope](const QString& name) -> OperandType {
+        if (m_parseTable) {
+            const OperandType t = m_parseTable->variableTable().typeOf(name, scope);
+            if (t != OperandType::Unknown) return t;
+        }
         return varTypes ? varTypes->typeOf(name, scope) : OperandType::Unknown;
     });
     // 格式化串：@"..." / \@...#...\@（内部表达式继续使用同一函数/变量类型表）
@@ -259,8 +265,6 @@ QSharedPointer<ExpressionNode> ErbLoader::resolveExpr(
         });
     }
     QSharedPointer<ExpressionNode> ast = parser.parse(tokens);
-    // 变量表已就绪：构建期即把语义类型（含维数/readOnly）落到节点上，
-    // 收尾只做校验，不再全量重定型。
     return ast;
 }
 
@@ -273,6 +277,51 @@ QSharedPointer<ExpressionNode> ErbLoader::resolveExpr(
 //     否则 loadScript 会告警并忽略 —— 这里也必须忽略，否则解析期会比最终
 //     登记多出一批类型，反而与运行期不一致；
 //   * `#DIM GLOBAL X` / `#GLOBAL X` / `#GLOBALS X` / `#PRIVATE X` 都是广域。
+void ErbLoader::preRegisterDeclarations(const QStringList& files,
+                                        const QHash<QString, QString>& decoded,
+                                        const QSet<QString>& headers) {
+    if (!m_parseTable) return;
+    m_parseTable->beginDeclarationPreRegistration();
+    for (const QString& f : files) {
+        const bool isHeader = headers.contains(f);
+        QStringList warnings;
+        // 关键：按**预处理后**的行登记（与 AstBuilder 所见逐字一致），
+        // 否则 [SKIPSTART]/#DEFINE/_Rename 会让声明与最终登记不一致。
+        const QList<ErbSourceLine> src = m_preprocessor.process(decoded.value(f), &warnings, f);
+        QString currentFunction;
+        bool afterLabel = false;
+        for (const ErbSourceLine& sl : src) {
+            const QString t = sl.text.trimmed();
+            if (t.isEmpty() || t.startsWith(QLatin1Char(';'))) continue;   // 空行/注释不结束声明区
+            if (t.startsWith(QLatin1Char('@'))) {
+                // 标签名 = 首个标识符（与 AstBuilder::build 同一判据），
+                // 作用域键必须逐字一致：空格 ( , [ : = 都截断。
+                const QString label = t.mid(1);
+                int cut = label.size();
+                for (int k = 0; k < label.size(); ++k) {
+                    const QChar c = label.at(k);
+                    if (c.isSpace() || c == QLatin1Char('(') || c == QLatin1Char(',')
+                        || c == QLatin1Char('[') || c == QLatin1Char(':') || c == QLatin1Char('=')) {
+                        cut = k; break;
+                    }
+                }
+                const QString name = label.left(cut).trimmed();
+                if (!name.isEmpty()) currentFunction = name;
+                afterLabel = true;
+                continue;
+            }
+            if (t.startsWith(QLatin1Char('#'))) {
+                if (!isHeader && !afterLabel) continue;   // 函数声明之外：loadScript 忽略
+                m_parseTable->preRegisterDeclaration(sl.text, ScriptPosition(f, sl.physicalLine, 1),
+                                                     currentFunction, isHeader);
+                continue;
+            }
+            afterLabel = false;   // 普通指令行：声明区结束
+        }
+    }
+    m_parseTable->finishDeclarationPreRegistration();
+}
+
 void ErbLoader::scanVariableTypes(const QString& content, bool isHeaderFile,
                                   LoadTimeVarTypes& out) const {
     const QStringList lines = content.split(QLatin1Char('\n'));
@@ -431,7 +480,11 @@ ParsedErbFile ErbLoader::parseOneFile(const QString& filePath, const FunctionTyp
             const ScriptPosition pos(filePath, source.at(i).physicalLine, 1);
             // 左值「已声明类型」：取自预扫描类型表（含本文件/跨文件/私有作用域）。
             // 命中 Str 的行在构建期即编译为 StrForm；未命中的标记待收尾。
-            const auto declaredType = [varTypes, &currentFunction](const QString& name) -> OperandType {
+            const auto declaredType = [this, varTypes, &currentFunction](const QString& name) -> OperandType {
+                if (m_parseTable) {
+                    const OperandType t = m_parseTable->variableTable().typeOf(name, currentFunction);
+                    if (t != OperandType::Unknown) return t;
+                }
                 return varTypes ? varTypes->typeOf(name, currentFunction) : OperandType::Unknown;
             };
             LogicalLine line = AstBuilder::build(source.at(i).text, pos, resolver, quietResolver,
@@ -612,6 +665,10 @@ bool ErbLoader::loadDirectory(const QString& dirPath, int depth) {
     // decoded 接管源文本；扫描结果不能继续持有已消费文件的共享字符串。
     scans.clear();
     tScan = timer.elapsed();
+
+    // 「先登记 #DIM/#DIMS，再构造 AST」：按预处理后的行登记声明 + 结算，之后
+    // 并行构建时解析器即可拿到完整用户变量类型。
+    preRegisterDeclarations(files, decoded, headerSet);
 
 
     // 2) 分块并行解析 + 主线程合并（限制内存峰值）
@@ -837,6 +894,13 @@ void ErbLoader::onPrepFinished() {
     m_async.files = prep.files;
     m_async.decoded = std::move(prep.decoded);   // 复用预扫描的解码文本
     m_async.total = prep.files.size();
+    {
+        // 先登记 #DIM/#DIMS（按预处理后的行），再让分块并行构建 AST。
+        QSet<QString> headerSet;
+        for (const QString& f : m_async.files)
+            if (f.endsWith(QLatin1String(".erh"), Qt::CaseInsensitive)) headerSet.insert(f);
+        preRegisterDeclarations(m_async.files, m_async.decoded, headerSet);
+    }
     m_async.parsed = 0;
     m_async.merged = 0;
 

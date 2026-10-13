@@ -243,6 +243,12 @@ private:
     void scanVariableTypes(const QString& content, bool isHeaderFile,
                            LoadTimeVarTypes& out) const;
 
+    // 「先预处理 → 先登记 #DIM/#DIMS → 再构造 AST」：在并行构建前把声明登记进
+    // 解析表并结算（按**预处理后**的行扫描，与构建期所见逐字一致）。
+    void preRegisterDeclarations(const QStringList& files,
+                                 const QHash<QString, QString>& decoded,
+                                 const QSet<QString>& headers);
+
     // 解析单个文件（线程安全：不接触任何共享可变状态）。
     // cachedContent != nullptr 时直接使用（预扫描已解码），免去重复读取+解码。
     // varTypes：预扫描得到的用户变量类型（只读；nullptr 时退回「类型未知」）。

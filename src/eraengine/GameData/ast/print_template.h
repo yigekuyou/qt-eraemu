@@ -8,6 +8,11 @@ class PrintTemplateCompiler {
 public:
     static void prepare(const QSharedPointer<ExpressionNode>& node);
     static QSharedPointer<CompiledPrintTemplate> compile(const QSharedPointer<ExpressionNode>& string);
+    // 递归重绑模板内的表达式节点：正文片段 + 每个属性节点（StrForm，内部再递归）
+    // + 原始片段。模板本体的编译在**构建期**完成（见 AstBuilder），收尾只把
+    // 节点换成定型后的副本，不再重新编译。
+    static void rebind(CompiledPrintTemplate& tpl,
+                       const std::function<void(QSharedPointer<ExpressionNode>&)>& bind);
     static PrintTemplate evaluateOccurrences(const CompiledPrintTemplate& source,
         const std::function<QVariant(const ExpressionNode&, int)>& evaluate);
 };

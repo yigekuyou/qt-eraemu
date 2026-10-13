@@ -451,7 +451,9 @@ bool EraParseTable::loadScript(const QString& scriptName, const QList<LogicalLin
             // .ERH（头文件）：文件级 #DIM = 全局（对齐 C# HeaderFileLoader）
             // .ERB（脚本）  ：# 行必须紧跟函数标签，否则告警并忽略（对齐 C# ErbLoader）
             if (isHeaderFile || afterLabel) {
-                parseVariableDeclaration(line, currentFunction, isHeaderFile);
+                // 已由装载器预登记（先预处理→先登记→再构造）：不再重复登记。
+                if (!m_declarationsPreRegistered)
+                    parseVariableDeclaration(line, currentFunction, isHeaderFile);
             } else {
                 m_diagnostics.add(DiagSeverity::Warning, DiagCode::kSharpLine,
                                   line.position.filename, line.position.lineNumber, line.position.column, 0,
@@ -1164,9 +1166,23 @@ QStringList constValueExpressions(const QString& declRest) {
 }
 } // namespace
 
-void EraParseTable::parseVariableDeclaration(const LogicalLine& line, const QString& currentFunction,
-                                            bool isHeaderFile) {
-    QString s = line.raw.trimmed();
+void EraParseTable::beginDeclarationPreRegistration() {
+    m_declarationsPreRegistered = true;
+}
+
+void EraParseTable::preRegisterDeclaration(const QString& rawLine, const ScriptPosition& position,
+                                           const QString& function, bool isHeaderFile) {
+    parseVariableDeclarationText(rawLine, position, function, isHeaderFile);
+}
+
+void EraParseTable::finishDeclarationPreRegistration() {
+    // 声明全部就绪：结算常量求值器 / 维数 / 全局初值 / 用户函数类型。
+    resolveGlobalDeclarations();
+}
+
+void EraParseTable::parseVariableDeclarationText(const QString& rawLine, const ScriptPosition& position,
+                                                const QString& currentFunction, bool isHeaderFile) {
+    QString s = rawLine.trimmed();
     if (!s.startsWith(QLatin1Char('#'))) return;
     s = s.mid(1);
 
@@ -1196,18 +1212,18 @@ void EraParseTable::parseVariableDeclaration(const LogicalLine& line, const QStr
 
     if (rest.isEmpty()) {
         m_diagnostics.add(DiagSeverity::Warning, DiagCode::kSharpLine,
-                          line.position.filename, line.position.lineNumber, line.position.column, 0,
+                          position.filename, position.lineNumber, position.column, 0,
                           QCoreApplication::translate("ParseDiagnostics", "#%1 缺少变量名").arg(directive));
         return;
     }
 
     const int priorDiagnostics = m_diagnostics.size();
-    diagnoseIntegerLiterals(rest, line.position.filename, line.position.lineNumber,
-                            line.position.column + qMax(0, int(line.raw.indexOf(rest))), m_diagnostics);
+    diagnoseIntegerLiterals(rest, position.filename, position.lineNumber,
+                            position.column + qMax(0, int(rawLine.indexOf(rest))), m_diagnostics);
     if (m_diagnostics.size() != priorDiagnostics) return; // 错误初值不得登记成 0。
     try {
         const UserDefinedVariableData d =
-            UserDefinedVariableData::create(rest, isStr, /*isPrivate=*/true, line.position);
+            UserDefinedVariableData::create(rest, isStr, /*isPrivate=*/true, position);
 
         // CONST 声明的初值即常数（供 #DIM 维数引用）
         if (d.isConst) {
@@ -1236,7 +1252,7 @@ void EraParseTable::parseVariableDeclaration(const LogicalLine& line, const QStr
                 // 本移植尚未支持该写法（常量数组的初值会丢），明确留痕。
                 if (d.dimension > 1)
                     qWarning() << "[未完成] #DIM CONST 的多行初值块（{ }）尚未实现:"
-                               << d.name << line.position.toString();
+                               << d.name << position.toString();
             } else if (!d.defaultInt.isEmpty()) {
                 // 常数**数组**（`#DIM CONST NAME, N = v0, v1, …`）也要存下来，
                 // 供 `NAME:i` 的下标访问使用；标量常数取第一个值
@@ -1284,17 +1300,21 @@ void EraParseTable::parseVariableDeclaration(const LogicalLine& line, const QStr
         const VariableTable::DeclStatus status = m_variables.addChecked(decl);
         if (status != VariableTable::DeclStatus::Added && decl.scope == VarScope::Global) {
             m_diagnostics.add(DiagSeverity::Warning, DiagCode::kDeclError,
-                              line.position.filename, line.position.lineNumber, line.position.column, 0,
+                              position.filename, position.lineNumber, position.column, 0,
                               QCoreApplication::translate("ParseDiagnostics", "全局变量 %1 重复定义").arg(decl.name));
         }
     } catch (const std::exception& e) {
         m_diagnostics.add(DiagSeverity::Error, DiagCode::kDeclError,
-                          line.position.filename, line.position.lineNumber, line.position.column, 0,
+                          position.filename, position.lineNumber, position.column, 0,
                           QCoreApplication::translate("ParseDiagnostics", "#%1 声明错误：%2 (%3)")
                               .arg(directive, QString::fromUtf8(e.what()), rest));
     }
 }
 
+void EraParseTable::parseVariableDeclaration(const LogicalLine& line, const QString& currentFunction,
+                                            bool isHeaderFile) {
+    parseVariableDeclarationText(line.raw, line.position, currentFunction, isHeaderFile);
+}
 
 void EraParseTable::applyVariableTypes(const QString& onlyScript) {
     // 2) 各行实际引用的 AST（并行装载时 worker 的 AST 不在主缓存中）。
@@ -1332,14 +1352,11 @@ void EraParseTable::applyVariableTypes(const QString& onlyScript) {
             for (auto& ast : line.columnDefaults) bind(ast);
             ArgumentParser::build(line);
             for (const auto& ast : line.assignmentAsts) PrintTemplateCompiler::prepare(ast);
-            if (line.functionName == "HTML_PRINT" && !line.arguments.isEmpty())
-                line.printTemplate = PrintTemplateCompiler::compile(line.arguments.first().ast);
-            else if (line.printTemplate) {
+            // 打印模板在**构建期**已编译好（AstBuilder / print modes）：收尾只需
+            // 递归把其中的表达式与属性节点换成定型后的副本，不再重新编译。
+            if (line.printTemplate) {
                 line.printTemplate = QSharedPointer<CompiledPrintTemplate>::create(*line.printTemplate);
-                for (auto& part : line.printTemplate->parts) {
-                    bind(part.expression);
-                    for (auto& ast : part.attributes) bind(ast);
-                }
+                PrintTemplateCompiler::rebind(*line.printTemplate, bind);
             }
         }
     };

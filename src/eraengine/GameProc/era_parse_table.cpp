@@ -1295,6 +1295,7 @@ void EraParseTable::parseVariableDeclaration(const LogicalLine& line, const QStr
     }
 }
 
+
 void EraParseTable::applyVariableTypes(const QString& onlyScript) {
     // 2) 各行实际引用的 AST（并行装载时 worker 的 AST 不在主缓存中）。
     //    **按脚本并行**：每个脚本的克隆缓存原本就是按 ownerFunction 分的，
@@ -1451,7 +1452,7 @@ void EraParseTable::finalizeBindings() {
     // 2200+ 次调用开销，eraTW 上从 ~10s 退化到 ~33s）。
     applyStringAssignments();
 
-    // FUNC 重编译（全体脚本）
+    // FUNC 重编译（仅构建期未定型的行）
     for (auto& script : m_scripts) {
     for (auto& line : script.lines) {
         if (line.functionName != QLatin1String("FUNC")) continue;
@@ -1474,7 +1475,7 @@ void EraParseTable::finalizeBindings() {
     // 变量类型回填（全体脚本）
     applyVariableTypes();
 
-    // 赋值 AST 重建（全体脚本）
+    // 赋值 AST 重建（仅构建期未定型的行）
     for (auto& script : m_scripts) {
     for (auto& line : script.lines) {
         if (line.assignOperator.isEmpty() || line.arguments.size() != 2) continue;
@@ -1718,6 +1719,9 @@ void EraParseTable::applyStringAssignments(const QString& onlyScript) {
     for (auto sit = m_scripts.begin(); sit != m_scripts.end(); ++sit) {
         if (!onlyScript.isEmpty() && sit.key() != onlyScript) continue;
         for (LogicalLine& line : sit.value().lines) {
+            // 只处理构建期未定型的行：构建期已按（预扫描）类型表定型的
+            // 字符串/FORM/CASE 不再重解析（收尾只扫描未定型项）。
+            if (!line.strAssignPending && !line.needsCompletion) continue;
             const QString owner = line.ownerFunction;
             const AstResolver resolve = [this, owner, &line](const QString& e) {
                 diagnoseIntegerLiterals(e, line.position.filename, line.position.lineNumber,

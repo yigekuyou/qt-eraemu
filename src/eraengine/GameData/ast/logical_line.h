@@ -274,6 +274,12 @@ struct LogicalLine {
     bool    isError = false;
     QString errMes;
 
+    // 构建期未能定型的标记（收尾只处理这些，避免全量重解析）：
+    //   strAssignPending —— `=` 字符串赋值，构建期左值类型未知（需按 StrForm 重解）
+    //   needsCompletion  —— 行内含类型未知/解析失败的表达式（收尾时再补）
+    bool    strAssignPending = false;
+    bool    needsCompletion = false;
+
     // CASE 臂解析缓存（见 CaseClause 注释；执行单线程，行内容装载后不可变）
     mutable bool caseCacheReady = false;
     mutable QList<CaseClause> caseCache;

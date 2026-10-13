@@ -51,11 +51,15 @@ public:
     // applyStringAssignments() 以 StrFormParser 重新解释。
     // diagnostics：结构化诊断出口（可选）。未登记指令等以 DiagSeverity 分级 + code
     //              记录，供调用方统一汇总/按类统计（见 parse_diagnostic.h）。
+    // declaredType：左值「已声明类型」查询（装载期类型表/变量表）。字符串赋值
+    //   （`X = 文本`）在构建期即按它判定 StrForm：返回 Str 立即编译；返回 Int
+    //   按表达式；返回 Unknown（未声明/未知）→ 标记 strAssignPending，收尾再定型。
     static LogicalLine build(const QString& rawLine,
                              const ScriptPosition& position,
                              const AstResolver& resolve,
                              const AstResolver& resolveQuiet = {},
-                             ParseDiagnostics* diagnostics = nullptr);
+                             ParseDiagnostics* diagnostics = nullptr,
+                             const std::function<OperandType(const QString&)>& declaredType = {});
 
     // CASE has its own IS / TO grammar, shared by loading and lazy cache restore.
     static void buildCaseClauses(const LogicalLine& line, const AstResolver& resolve);

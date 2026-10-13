@@ -242,6 +242,7 @@ public:
     // 并把只读区定型（之后不再编译新源码）。取代原 finalizeParse 阶段。
     void markLoadComplete();
 
+
     // 并行装载 merge：把 worker 的本地表达式缓存并入主缓存（first-wins）
 
     // 用缓存 AST 求值条件；返回 false 表示求值失败。

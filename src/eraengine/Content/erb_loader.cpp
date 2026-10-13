@@ -238,11 +238,11 @@ QSharedPointer<ExpressionNode> ErbLoader::resolveExpr(
     // 用户变量类型：装载期就按预扫描的类型表定型（见 LoadTimeVarTypes 的说明）。
     // 作用域 = 当前函数（#DIM 的私有变量）；查不到再退到广域，最后交给系统变量表
     // （parseVariable 里 systemVariableTypeDyn 兜底），未命中一律 Unknown。
-    if (varTypes) {
-        parser.setVariableTypeProvider([varTypes, scope](const QString& name) -> OperandType {
-            return varTypes->typeOf(name, scope);
-        });
-    }
+    // 用户变量类型：优先查**已登记**的变量表（「先登记 #DIM/#DIMS 再构造 AST」后
+    // 它是完整的，含私有作用域），退回预扫描类型表。未命中一律 Unknown。
+    parser.setVariableTypeProvider([this, varTypes, scope](const QString& name) -> OperandType {
+        return varTypes ? varTypes->typeOf(name, scope) : OperandType::Unknown;
+    });
     // 格式化串：@"..." / \@...#...\@（内部表达式继续使用同一函数/变量类型表）
     const AstResolver self = [this, &types, varTypes, &scope](const QString& e) {
         return resolveExpr(e, types, /*quiet=*/false, varTypes, scope);
@@ -259,6 +259,8 @@ QSharedPointer<ExpressionNode> ErbLoader::resolveExpr(
         });
     }
     QSharedPointer<ExpressionNode> ast = parser.parse(tokens);
+    // 变量表已就绪：构建期即把语义类型（含维数/readOnly）落到节点上，
+    // 收尾只做校验，不再全量重定型。
     return ast;
 }
 
@@ -427,8 +429,13 @@ ParsedErbFile ErbLoader::parseOneFile(const QString& filePath, const FunctionTyp
         for (int i = 0; i < source.size(); ++i) {
             currentPhysicalLine = source.at(i).physicalLine;
             const ScriptPosition pos(filePath, source.at(i).physicalLine, 1);
+            // 左值「已声明类型」：取自预扫描类型表（含本文件/跨文件/私有作用域）。
+            // 命中 Str 的行在构建期即编译为 StrForm；未命中的标记待收尾。
+            const auto declaredType = [varTypes, &currentFunction](const QString& name) -> OperandType {
+                return varTypes ? varTypes->typeOf(name, currentFunction) : OperandType::Unknown;
+            };
             LogicalLine line = AstBuilder::build(source.at(i).text, pos, resolver, quietResolver,
-                                                  &pf.diagnostics);
+                                                  &pf.diagnostics, declaredType);
             line.lineIndex = i;
             // 作用域切换在构建**之后**（与 loadScript 的顺序一致：先记 ownerFunction
             // 再在遇到标签行时切换 currentFunction）。
@@ -605,6 +612,7 @@ bool ErbLoader::loadDirectory(const QString& dirPath, int depth) {
     // decoded 接管源文本；扫描结果不能继续持有已消费文件的共享字符串。
     scans.clear();
     tScan = timer.elapsed();
+
 
     // 2) 分块并行解析 + 主线程合并（限制内存峰值）
     const int chunk = m_chunkSize > 0 ? m_chunkSize : kDefaultChunkSize;
@@ -955,7 +963,12 @@ QList<LogicalLine> ErbLoader::buildAst(const QString& content, const QString& fi
     logicalLines.reserve(source.size());
     for (int i = 0; i < source.size(); ++i) {
         const ScriptPosition pos(filePath, source.at(i).physicalLine, 1);
-        LogicalLine line = AstBuilder::build(source.at(i).text, pos, resolve, quietResolve, diagnostics);
+        const auto declaredType = [this](const QString& name) -> OperandType {
+            return m_parseTable ? m_parseTable->variableTable().typeOf(name, QString())
+                                : OperandType::Unknown;
+        };
+        LogicalLine line = AstBuilder::build(source.at(i).text, pos, resolve, quietResolve, diagnostics,
+                                             declaredType);
         line.lineIndex = i;
         logicalLines.append(line);
         emit parseLineReady(scriptName, source.at(i).physicalLine, source.at(i).text);

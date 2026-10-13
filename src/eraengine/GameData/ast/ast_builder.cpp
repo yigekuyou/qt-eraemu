@@ -67,6 +67,14 @@ LogicalLine finalized(LogicalLine line) {
             operand.ast = QSharedPointer<LiteralNode>::create(operand.raw);
     }
     ArgumentParser::build(line);
+    // 构建期未定型的表达式（解析失败或类型未知）：标记为待收尾补齐。
+    // 构建期已定型的行不再进入收尾重解析（"收尾只扫描未定义"）。
+    for (const Operand& operand : line.arguments) {
+        if (!operand.ast || (operand.ast && operand.ast->valueType() == OperandType::Unknown))
+            line.needsCompletion = true;
+    }
+    if (line.condition && line.condition->valueType() == OperandType::Unknown)
+        line.needsCompletion = true;
     return line;
 }
 
@@ -661,7 +669,8 @@ LogicalLine AstBuilder::build(const QString& rawLine,
                               const ScriptPosition& position,
                               const AstResolver& resolveInput,
                               const AstResolver& resolveQuiet,
-                              ParseDiagnostics* diagnostics) {
+                              ParseDiagnostics* diagnostics,
+                              const std::function<OperandType(const QString&)>& declaredType) {
     LogicalLine line;
     line.raw = rawLine;
     line.position = position;
@@ -789,8 +798,16 @@ LogicalLine AstBuilder::build(const QString& rawLine,
         const auto& lookup = resolveQuiet ? resolveQuiet : resolve;
         if (op == QLatin1String("=") && lookup) {
             const auto target = lookup(lhs);
-            if (target && target->valueType() == OperandType::Str)
-                value.ast = StrFormParser::parse(rhs, lookup);
+            const OperandType exprType = target ? target->valueType() : OperandType::Unknown;
+            const OperandType declType = declaredType ? declaredType(lhs) : OperandType::Unknown;
+            if (exprType == OperandType::Str)
+                value.ast = StrFormParser::parse(rhs, lookup);   // 构建期即按 FORM 定型
+            else if (declType == OperandType::Int)
+                ;                                                // 已声明整型：RHS 按表达式
+            else
+                // 左值「已声明类型」未知：构建期无法判定 RHS 是表达式还是 FORM 文本
+                // ——标记为待收尾按 StrForm 定型（收尾只处理这些未定型项）。
+                line.strAssignPending = true;
         }
         if (lookup && !(op == "=" && value.ast && value.ast->kind() == NodeKind::StrForm)) {
             for (const auto& text : assignmentValues(rhs)) line.assignmentAsts.append(lookup(text));

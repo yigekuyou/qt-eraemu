@@ -135,7 +135,7 @@ GSAVE	func	call	CVTMP = GSAVE(1, 1)
 GSETBRUSH	func	call	CVTMP = GCREATE(403, 64, 64)\nCVTMP = GSETBRUSH(403, 4278190335)		
 GSETCOLOR	func	call	CVTMP = GCREATE(404, 8, 8)\nCVTMP = GSETCOLOR(404, 4294901760, 0, 0)		
 GSETFONT	func	call	CVTMP = GCREATE(405, 64, 64)\nCVTMP = GSETFONT(405, "MS Gothic", 12)		
-GSETPEN	func	skip		C++ 当前未实现或签名校验不完整；留给对应的实现回归测试
+GSETPEN	func	call	CVTMP = GCREATE(406, 64, 64)\nCVTMP = GSETPEN(406, 4294901760, 2)
 GWIDTH	func	call	CVTMP = GCREATE(407, 300, 200)\nCVTMP = GWIDTH(407)		
 HOTKEY_STATE	func	skip		C++ 当前未实现或签名校验不完整；留给对应的实现回归测试
 HOTKEY_STATE_INIT	func	skip		C++ 当前未实现或签名校验不完整；留给对应的实现回归测试
@@ -213,7 +213,7 @@ SQRT	func	call	CVTMP = SQRT(16)
 STRCOUNT	func	call	CVTMP = STRCOUNT("banana", "a")		
 STRFIND	func	call	CVTMP = STRFIND("abcabc", "abc", 1)		
 STRFINDU	func	call	CVTMP = STRFINDU("あいう", "い")		
-STRFORM	func	skip
+STRFORM	func	call	CVTMP_S '= STRFORM("{1 + 2}")
 STRJOIN	func	call	LOCALS:0 '= "a"\nLOCALS:1 '= "b"\nLOCALS:2 '= "c"\nCVTMP_S '= STRJOIN(LOCALS, "-", 0, 3)
 STRLENS	func	call	CVTMP = STRLENS("AB漢字")		
 STRLENSU	func	call	CVTMP = STRLENSU("AB漢字")		
@@ -419,7 +419,7 @@ PRINTSINGLE	cmd	call	PRINTSINGLE 冒烟：PRINTSINGLE 单行输出，超出宽�
 PRINT_ABL	cmd	call	ADDCHARA 0\nPRINT_ABL 0		
 PRINT_EXP	cmd	call	ADDCHARA 0\nPRINT_EXP 0		
 PRINT_IMG	cmd	call	PRINT_IMG "offset_atlas.png"\nPRINTL		
-PRINT_ITEM	cmd	skip		C#签名无参数；当前 C++ 参数校验误报，保留手写组8覆盖
+PRINT_ITEM	cmd	call	PRINT_ITEM
 PRINT_MARK	cmd	call	ADDCHARA 0\nPRINT_MARK 0		
 PRINT_PALAM	cmd	call	ADDCHARA 0\nPRINT_PALAM 0		
 PRINT_RECT	cmd	skip		单参数 PRINT_RECT 当前触发异常 shape 几何检查；由专门 shape 回归验证

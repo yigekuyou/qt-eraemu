@@ -295,6 +295,8 @@ int main(int argc, char* argv[]) {
     check(str("MONEYSTR(100)") == QString::fromUtf8("100円"), "MONEYSTR(100) == 100円（单位在后）");
     check(str("BARSTR(5, 10, 10)") == QStringLiteral("[*****.....]"), "BARSTR(5,10,10)");
     check(str("STRFORM(\"HP={FLAG:0}\")") == QStringLiteral("HP=1"), "STRFORM 运行期展开");
+    check(str("STRFORM(\"{123,5,RIGHT}\")") == QStringLiteral("  123"),
+          "STRFORM numeric width and right alignment");
 
     // 运行期求值**不处理编码问题**：语言编码表示不了某个字符时，只是拿不到宽度，
     // 不是「编码故障」，不得往 stderr 刷告警（文本编码只在装载/读取期间转换，

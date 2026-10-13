@@ -231,7 +231,7 @@ def main() -> int:
                 body.append(f";   ↑ 需注入输入：{inp.strip()}")
                 fed.append((name, inp.strip()))
         else:
-            body.append(f"; SKIP {name} —— {note}")
+            body.append(f"; SKIP {name} —— {note}".rstrip())
 
     for name, _kind, mode, snip, note, inp in funcs:
         emit(name, mode, snip, note, inp)

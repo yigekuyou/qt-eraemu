@@ -259,7 +259,10 @@ QSharedPointer<StrFormNode> StrFormParser::parse(const QString& text, const Expr
         if (ch == QLatin1Char('{')) {
             const int j = findTopLevel(text, '}', i + 1, -1);
             if (j < 0 || j >= n) return nullptr;   // 未闭合 -> 普通文本
-            if (!addExpr(text.mid(i + 1, j - i - 1), ch == '{' ? OperandType::Int : OperandType::Str)) return nullptr;
+            // An interpolation must be an expression at its lexical position. Do
+            // not let the leading STRFORM(...) parentheses hide this brace from
+            // findTopLevel: `{123,5,RIGHT}` carries width/alignment metadata.
+            if (!addExpr(text.mid(i + 1, j - i - 1), OperandType::Int)) return nullptr;
             i = j;
             continue;
         }

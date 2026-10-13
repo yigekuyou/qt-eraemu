@@ -177,8 +177,10 @@ inline constexpr auto kInstructionSpecs = std::to_array<InstructionSpec>({
     {"PRINT_MARK",   ArgKind::PrintV,        1,  -1},
     {"PRINT_EXP",    ArgKind::PrintV,        1,  -1},
     {"PRINT_PALAM",  ArgKind::PrintV,        1,  -1},
-    {"PRINT_ITEM",   ArgKind::PrintV,        1,  -1},
-    {"PRINT_SHOPITEM", ArgKind::PrintV,      0,  -1},
+    // C# FunctionIdentifier registers PRINT_ITEM with FunctionArgType.VOID.
+    {"PRINT_ITEM",   ArgKind::Void,           0,   0},
+    // C# FunctionIdentifier registers PRINT_SHOPITEM with FunctionArgType.VOID.
+    {"PRINT_SHOPITEM", ArgKind::Void,         0,   0},
     {"CUSTOMDRAWLINE", ArgKind::Raw,        1,   1},
     {"TINPUTS",      ArgKind::Input,         1,  4},
     {"ONEINPUTS",    ArgKind::Input,         0,  2},

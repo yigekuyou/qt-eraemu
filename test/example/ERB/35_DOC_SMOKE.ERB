@@ -186,7 +186,8 @@ CVTMP = GCREATE(404, 8, 8)
 CVTMP = GSETCOLOR(404, 4294901760, 0, 0)
 CVTMP = GCREATE(405, 64, 64)
 CVTMP = GSETFONT(405, "MS Gothic", 12)
-; SKIP GSETPEN —— C++ 当前未实现或签名校验不完整；留给对应的实现回归测试
+CVTMP = GCREATE(406, 64, 64)
+CVTMP = GSETPEN(406, 4294901760, 2)
 CVTMP = GCREATE(407, 300, 200)
 CVTMP = GWIDTH(407)
 ; SKIP HOTKEY_STATE —— C++ 当前未实现或签名校验不完整；留给对应的实现回归测试
@@ -317,7 +318,7 @@ CVTMP = SQRT(16)
 CVTMP = STRCOUNT("banana", "a")
 CVTMP = STRFIND("abcabc", "abc", 1)
 CVTMP = STRFINDU("あいう", "い")
-; SKIP STRFORM ——
+CVTMP_S '= STRFORM("{1 + 2}")
 LOCALS:0 '= "a"
 LOCALS:1 '= "b"
 LOCALS:2 '= "c"
@@ -643,7 +644,7 @@ ADDCHARA 0
 PRINT_EXP 0
 PRINT_IMG "offset_atlas.png"
 PRINTL
-; SKIP PRINT_ITEM —— C#签名无参数；当前 C++ 参数校验误报，保留手写组8覆盖
+PRINT_ITEM
 ADDCHARA 0
 PRINT_MARK 0
 ADDCHARA 0

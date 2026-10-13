@@ -318,7 +318,7 @@ inline constexpr BuiltinFunctionSpec kBuiltinFunctions[] = {
     {"GDRAWGWITHMASK"      , OperandType::Int, 5, 5, "iiiii", false, BuiltinOp::GDrawGWithMask},
     {"GSETBRUSH"           , OperandType::Int, 2, 2, "ii", false, BuiltinOp::GSetBrush},
     {"GSETFONT"            , OperandType::Int, 3, 3, "isi", false, BuiltinOp::GSetFont},
-    {"GSETPEN"             , OperandType::Int, 2, 2, "ii", false, BuiltinOp::GSetPen},
+    {"GSETPEN"             , OperandType::Int, 3, 3, "iii", false, BuiltinOp::GSetPen},
     // SPRITECREATE(name, gID[, x, y, w, h])：把 G 图像登记成具名精灵
     {"SPRITECREATE"        , OperandType::Int, 2, 6, "siiiii", false, BuiltinOp::SpriteCreate},
     {"SPRITEDISPOSE"       , OperandType::Int, 1, 1, "s", false, BuiltinOp::SpriteDispose},

@@ -28,6 +28,7 @@
 #   ./test/run_example.sh 38       # EE 库 COLUMN_LIB（手写 CALL 用例；COLUMN* 是
 #                                  #   EmueraEE 附带的 ERB 库而非引擎命令，无注入输入）
 #   ./test/run_example.sh 39       # EM/Emuera.NET fork 族（MAP_/ENUM*/XML_/DT_ 手写断言）
+#   ./test/run_example.sh 16       # CLEARLINE 逻辑行计数与边界回归
 #
 # 依赖：build/src/eraengine/test_cli
 #       （cmake --build build --target test_cli）
@@ -72,6 +73,9 @@ elif [ "$SELECTION" = "35" ]; then
     # 文档语义冒烟组：按 data/doc_smoke.tsv 第 6 列的注入序列喂入
     # （数值 / `s 字符串` / `k` 鼠标；顺序=清单执行顺序，勿随意改动）
     SCRIPT="35,0,0,s A,0,7,7,k 1 10 10 1 0,s 冒烟名字,0,s A,7,s a,0,0,0,7,s abc,7,s q,0,0,0,0"
+elif [ "$SELECTION" = "16" ]; then
+    SCRIPT="16"
+    FRAMES=0
 elif [ "$SELECTION" = "22" ]; then
     # MAP 绘制复现组（eraTW DRAW_MAP 逐字符热路径）：无输入；
     # 帧预算放宽到 0（不限）保证 21 张图画完并出汇总。

@@ -103,7 +103,7 @@ DRAW_STAGE
   -> 下一轮重新 DRAW_STAGE
 ```
 
-C# 中 `CLEARLINE` 修改 `displayLineList`，随后通过 `RefreshStrings` 请求刷新。下一次 `OnPaint` 会重新计算可见行并绘制当前棋盘。
+C# 中 `CLEARLINE` 从 `displayLineList` 尾部删除指定数量的逻辑行，随后通过 `RefreshStrings` 请求刷新。自动折行的物理续行随所属逻辑行一起删除但不额外计数。参数小于等于 0 时不删除；如果请求数量超过现有逻辑行数，`deleteLine` 仍按请求数量修正 `logicalLineCount`，所以 `LINECOUNT` 可能暂时为负数。下一次 `OnPaint` 会重新计算可见行并绘制当前棋盘。
 
 它能保持可用性能的主要原因是：
 

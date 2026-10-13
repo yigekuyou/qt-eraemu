@@ -108,6 +108,10 @@ public:
         return deleted;
     }
 
+    // C# deleteLine：请求超过现存行数时，LINECOUNT 仍按请求数量修正，
+    // 因而可以暂时变成负数，后续追加逻辑行再逐步回到非负值。
+    void adjustLogicalCount(int delta) { m_logicalCount += delta; }
+
     // 预告：从尾部删 n 个逻辑行会动掉多少**物理**行（不删）。
     // 模型发 beginRemoveRows 前需要先知道区间。
     int physicalTailCount(int n) const {
@@ -116,6 +120,13 @@ public:
             if (m_lines.at(i).isLogicalLine) ++logical;
         }
         return physical;
+    }
+
+    int storedLogicalLineCount() const {
+        int count = 0;
+        for (const ConsoleDisplayLine& line : m_lines)
+            if (line.isLogicalLine) ++count;
+        return count;
     }
 
     void clear() {

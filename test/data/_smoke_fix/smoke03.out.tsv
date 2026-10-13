@@ -44,7 +44,7 @@ CASEELSE	cmd	skip		SELECTCASE 的兜底分支关键字：须嵌在 SELECTCASE～
 CATCH	cmd	skip		TRYC 系失败分支的配对入口：须嵌入 TRYC…CATCH…ENDCATCH 结构（解析期配对检查）；由组 4/5 覆盖
 CLEARBGIMAGE	cmd	call	CLEARBGIMAGE	
 CLEARBIT	cmd	call	CLEARBIT A, 0, 1	
-CLEARLINE	cmd	skip		破坏性：删除已显示行（会破坏本组输出）——单独在隔离组 16 跑
+CLEARLINE	cmd	skip		破坏性：删除显示缓冲区行——单独在隔离组 16 跑；C# 语义还覆盖负数与超量请求
 CLEARMEMORY	cmd	skip		文档备注明示它实为式中函数（用法是 `{CLEARMEMORY()}`），不能作为独立语句写，而本清单按 EE 命令表把它注册为命令（组 12c 也只按命令名留痕桩）—— 命令形态与文档形态不一致，语义未确证
 CLEARTEXTBOX	cmd	skip		破坏性：清空输入框（破坏待输入状态）——单独在隔离组 16 跑
 COLUMNBGCOLOR	cmd	skip		ERB 库函数（EmueraEE 附带 COLUMN_LIB，非引擎命令）：CALL 形态由手写组 38 覆盖；组35 的裸写只命中引擎名字容忍桩，无执行语义

@@ -155,6 +155,16 @@ int main(int argc, char* argv[]) {
         check(removed == 1 && first == 1 && last == 2, "CLEARLINE 2 -> 尾部区间 removeRows(1..2)");
         check(c.lineCount() == 1 && c.lineText(0) == "A", "只剩 A");
         check(c.logicalLineCount() == 1, "CLEARLINE 后 LINECOUNT == 1");
+
+        c.clearLines(0);
+        check(c.lineCount() == 1 && c.logicalLineCount() == 1,
+              "CLEARLINE 0 不删除且不改变 LINECOUNT");
+        c.clearLines(-1);
+        check(c.lineCount() == 1 && c.logicalLineCount() == 1,
+              "CLEARLINE 负数不删除且不改变 LINECOUNT");
+        c.clearLines(4);
+        check(c.lineCount() == 0 && c.logicalLineCount() == -3,
+              "CLEARLINE 超量请求按 C# 修正 LINECOUNT");
     }
     {
         ConsoleBackend c;

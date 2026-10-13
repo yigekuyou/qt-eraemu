@@ -569,6 +569,7 @@ void ConsoleBackend::clearLines(int n) {
         m_tailDirty = false;
     }
     const int oldCount = m_buffer.count();
+    const int logicalBefore = m_buffer.logicalLineCount();
     // CLEARLINE：从尾部删掉 n 个**逻辑行**（连同其折行续行）。
     // 先预告物理行数，才能把 beginRemoveRows 括在真正的删除外面。
     const int physical = m_buffer.physicalTailCount(n);
@@ -577,9 +578,17 @@ void ConsoleBackend::clearLines(int n) {
         m_buffer.removeLastLogicalLines(n);
         endRemoveRows();
         m_removedRows += physical;
-        emit lineCountChanged();
         pruneTailCache();
     }
+    // C# deleteLine adjusts logicalLineCount for the part of an oversized
+    // request that could not be backed by stored display lines.
+    const int logicalAfter = m_buffer.storedLogicalLineCount();
+    const int deletedLogical = qMax(0, logicalBefore - logicalAfter);
+    const int missing = qMax(0, n - deletedLogical);
+    if (missing > 0)
+        m_buffer.adjustLogicalCount(-missing);
+    if (physical > 0 || missing > 0)
+        emit lineCountChanged();
     if (m_tailRow) {
         beginRemoveRows(QModelIndex(), m_buffer.count(), m_buffer.count());
         m_tailRow = false;

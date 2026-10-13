@@ -1318,11 +1318,15 @@ void EraParseTable::parseVariableDeclaration(const LogicalLine& line, const QStr
 
 void EraParseTable::applyVariableTypes(const QString& onlyScript) {
     // 2) 各行实际引用的 AST（并行装载时 worker 的 AST 不在主缓存中）。
-    //    **按脚本并行**：每个脚本的克隆缓存原本就是按 ownerFunction 分的，
-    //    而函数名全局唯一（一个函数体只在一个脚本里），所以「按脚本」与
-    //    「全局按函数」的结果完全等价；VariableTable::applyTypes 取的是
-    //    const 变量表（只读），ArgumentParser::build 只改传入的行 —— 无共享写。
+    //    **按脚本并行**：函数名全局唯一（一个函数体只在一个脚本里），
+    //    VariableTable::applyTypes 取的是 const 变量表（只读），
+    //    ArgumentParser::build 只改传入的行 —— 无共享写。
     //    eraTW 实测这一步 ~5s（2.2M 行），是 markLoadComplete 的最大热点。
+    //
+    //    **就地定型**：不再克隆「定型副本」再换指针。打印模板的分词片段
+    //（CompiledPrintTemplatePart::expression / attributes / rawParts）与行实参
+    //    指向的是**同一批 AST 节点**，就地改类型即同时生效；因此收尾既不需要
+    //    克隆整棵树，也不需要再对模板递归重绑。
     QList<ScriptData*> scripts;
     scripts.reserve(m_scripts.size());
     for (auto it = m_scripts.begin(); it != m_scripts.end(); ++it) {
@@ -1331,33 +1335,25 @@ void EraParseTable::applyVariableTypes(const QString& onlyScript) {
     }
 
     const auto processScript = [this](ScriptData* sd) {
-        QHash<QString, QHash<const ExpressionNode*, QSharedPointer<ExpressionNode>>> bound;
-        QList<QSharedPointer<ExpressionNode>> originals; // keep identity keys alive while rebinding
+        // 同一节点可能被多行/多片段引用（模板分词、DEFAULT 列表…）：每个作用域
+        // 只定型一次（与旧「按 ownerFunction 建缓存」等价）。
+        QHash<QString, QSet<const ExpressionNode*>> typed;
         for (LogicalLine& line : sd->lines) {
-            auto& cache = bound[line.ownerFunction.toUpper()];
-            const auto bind = [&](QSharedPointer<ExpressionNode>& ast) {
-                if (!ast) return;
-                const auto* original = ast.data();
-                if (!cache.contains(original)) {
-                    originals.append(ast);
-                    auto copy = cloneExpression(ast);
-                    VariableTable::applyTypes(*copy, m_variables, line.ownerFunction);
-                    PrintTemplateCompiler::prepare(copy);
-                    cache.insert(original, copy);
-                }
-                ast = cache.value(original);
+            auto& seen = typed[line.ownerFunction.toUpper()];
+            const QString scope = line.ownerFunction;
+            const auto bind = [this, &seen, &scope](QSharedPointer<ExpressionNode>& ast) {
+                if (!ast || seen.contains(ast.data())) return;
+                seen.insert(ast.data());
+                VariableTable::applyTypes(*ast, m_variables, scope);
+                PrintTemplateCompiler::prepare(ast);
             };
             for (auto& op : line.arguments) bind(op.ast);
             bind(line.condition);
             for (auto& ast : line.columnDefaults) bind(ast);
             ArgumentParser::build(line);
             for (const auto& ast : line.assignmentAsts) PrintTemplateCompiler::prepare(ast);
-            // 打印模板在**构建期**已编译好（AstBuilder / print modes）：收尾只需
-            // 递归把其中的表达式与属性节点换成定型后的副本，不再重新编译。
-            if (line.printTemplate) {
-                line.printTemplate = QSharedPointer<CompiledPrintTemplate>::create(*line.printTemplate);
-                PrintTemplateCompiler::rebind(*line.printTemplate, bind);
-            }
+            // line.printTemplate（PRINT/PRINTFORM/PRINTS 的分词）无需单独处理：
+            // 其片段表达式就是上面这批已被就地定型的节点。
         }
     };
     if (canParallelize(scripts.size())) {

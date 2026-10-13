@@ -17,6 +17,8 @@
  * along with this program.  If not, see <https://www.gnu.org/licenses/>.
  */
 #include "erb_loader.h"
+
+#include "user_defined_variable_data.h"
 #include <QCoreApplication>
 #include "era_parse_table.h"
 #include "GameData/file_system_io.h"   // FileSystem::resolvePathCase（加载前还原真实大小写）
@@ -176,9 +178,41 @@ QStringList ErbLoader::collectFiles(const QString& dirPath, int depth) const {
 // ---------------------------------------------------------------------------
 // 线程内表达式归约（只读函数类型表）
 // ---------------------------------------------------------------------------
+namespace {
+
+// 把一个文件的扫描结果并入总表：顺序 = 文件顺序（头文件在前）= loadScript 的
+// 登记顺序；重复声明与 VariableTable::addChecked 一样 **first-wins**，
+// 否则解析期类型可能与最终登记的相反。
+void mergeVarTypes(LoadTimeVarTypes& dest, const LoadTimeVarTypes& src) {
+    for (auto it = src.globalVars.constBegin(); it != src.globalVars.constEnd(); ++it) {
+        if (!dest.globalVars.contains(it.key())) dest.globalVars.insert(it.key(), it.value());
+    }
+    for (auto it = src.localVars.constBegin(); it != src.localVars.constEnd(); ++it) {
+        QHash<QString, OperandType>& fn = dest.localVars[it.key()];
+        for (auto jt = it.value().constBegin(); jt != it.value().constEnd(); ++jt) {
+            if (!fn.contains(jt.key())) fn.insert(jt.key(), jt.value());
+        }
+    }
+}
+
+} // namespace
+
+OperandType LoadTimeVarTypes::typeOf(const QString& name, const QString& function) const {
+    const QString key = name.toUpper();
+    if (!function.isEmpty()) {
+        const auto fit = localVars.constFind(function.toUpper());
+        if (fit != localVars.constEnd()) {
+            const auto it = fit.value().constFind(key);
+            if (it != fit.value().constEnd()) return it.value();
+        }
+    }
+    const auto git = globalVars.constFind(key);
+    return git == globalVars.constEnd() ? OperandType::Unknown : git.value();
+}
+
 QSharedPointer<ExpressionNode> ErbLoader::resolveExpr(
     const QString& expr, const FunctionTypes& types,
-    bool quiet) const {
+    bool quiet, const LoadTimeVarTypes* varTypes, const QString& scope) const {
     const QString key = expr.trimmed();
     if (key.isEmpty()) return nullptr;
 
@@ -201,9 +235,17 @@ QSharedPointer<ExpressionNode> ErbLoader::resolveExpr(
         const auto fit = types.constFind(name.toUpper());
         return fit == types.constEnd() ? OperandType::Unknown : fit.value();
     });
-    // 格式化串：@"..." / \@...#...\@（内部表达式继续使用同一函数类型表）
-    const AstResolver self = [this, &types](const QString& e) {
-        return resolveExpr(e, types);
+    // 用户变量类型：装载期就按预扫描的类型表定型（见 LoadTimeVarTypes 的说明）。
+    // 作用域 = 当前函数（#DIM 的私有变量）；查不到再退到广域，最后交给系统变量表
+    // （parseVariable 里 systemVariableTypeDyn 兜底），未命中一律 Unknown。
+    if (varTypes) {
+        parser.setVariableTypeProvider([varTypes, scope](const QString& name) -> OperandType {
+            return varTypes->typeOf(name, scope);
+        });
+    }
+    // 格式化串：@"..." / \@...#...\@（内部表达式继续使用同一函数/变量类型表）
+    const AstResolver self = [this, &types, varTypes, &scope](const QString& e) {
+        return resolveExpr(e, types, /*quiet=*/false, varTypes, scope);
     };
     parser.setFormProvider([this, self](const QString& text, bool yenAt) -> QSharedPointer<ExpressionNode> {
         if (yenAt) return StrFormParser::parseYenAt(text, self, m_parseTable && m_parseTable->ignoreTripleSymbols());
@@ -218,6 +260,95 @@ QSharedPointer<ExpressionNode> ErbLoader::resolveExpr(
     }
     QSharedPointer<ExpressionNode> ast = parser.parse(tokens);
     return ast;
+}
+
+// ---------------------------------------------------------------------------
+// 预扫描：收集用户变量类型（#DIM/#DIMS/#GLOBAL/#GLOBALS/#PRIVATE）。
+// ---------------------------------------------------------------------------
+// 规则与 EraParseTable::loadScript + parseVariableDeclaration 保持一致：
+//   * .ERH：文件级 # 行一律是广域变量；
+//   * .ERB：只有**紧跟函数标签**（中间只允许空行/注释/# 行）的 # 行才是声明，
+//     否则 loadScript 会告警并忽略 —— 这里也必须忽略，否则解析期会比最终
+//     登记多出一批类型，反而与运行期不一致；
+//   * `#DIM GLOBAL X` / `#GLOBAL X` / `#GLOBALS X` / `#PRIVATE X` 都是广域。
+void ErbLoader::scanVariableTypes(const QString& content, bool isHeaderFile,
+                                  LoadTimeVarTypes& out) const {
+    const QStringList lines = content.split(QLatin1Char('\n'));
+    QString currentFunction;
+    bool afterLabel = false;
+    for (const QString& raw : lines) {
+        const QString t = raw.trimmed();
+        // 空行 / 注释（Null 行）：不影响 afterLabel
+        if (t.isEmpty() || t.startsWith(QLatin1Char(';'))) continue;
+
+        if (t.startsWith(QLatin1Char('@'))) {
+            // 标签名 = '@' 之后到 '(' 或空白为止（eraTW 里 `@FUNC ...` / `@FUNC(ARGS)`）
+            QString label = t.mid(1);
+            int cut = label.size();
+            for (int k = 0; k < label.size(); ++k) {
+                const QChar c = label.at(k);
+                if (c == QLatin1Char('(') || c.isSpace() || c == QLatin1Char(';')) { cut = k; break; }
+            }
+            label = label.left(cut).trimmed();
+            if (!label.isEmpty()) currentFunction = label.toUpper();
+            afterLabel = true;
+            continue;
+        }
+
+        if (t.startsWith(QLatin1Char('#'))) {
+            if (!isHeaderFile && !afterLabel) continue;   // 函数声明之外：loadScript 忽略
+            QString s = t.mid(1);
+            int i = 0;
+            while (i < s.size() && !s.at(i).isSpace()) ++i;
+            const QString directive = s.left(i).toUpper();
+
+            bool isStr = false;
+            bool isGlobal = false;
+            if (directive == QLatin1String("DIM")) {
+                // 函数内私有 / 文件级广域（由作用域决定）
+            } else if (directive == QLatin1String("DIMS")) {
+                isStr = true;
+            } else if (directive == QLatin1String("GLOBAL")) {
+                isGlobal = true;
+            } else if (directive == QLatin1String("GLOBALS")) {
+                isGlobal = true;
+                isStr = true;
+            } else if (directive == QLatin1String("PRIVATE")) {
+                isGlobal = true;
+            } else {
+                continue;   // #FUNCTION/#SINGLE/… 不是变量声明
+            }
+
+            QString rest = s.mid(i);
+            // 去掉行尾注释（`#DIM X = 5 ; 说明`）；引号内的 ';' 不算注释
+            bool inQuote = false;
+            for (int k = 0; k < rest.size(); ++k) {
+                const QChar c = rest.at(k);
+                if (c == QLatin1Char('\\') && k + 1 < rest.size()) { ++k; continue; }
+                if (c == QLatin1Char('"')) { inQuote = !inQuote; continue; }
+                if (c == QLatin1Char(';') && !inQuote) { rest = rest.left(k); break; }
+            }
+            rest = rest.trimmed();
+            if (rest.isEmpty()) continue;
+
+            // 名字与类型用与 loadScript 同一个解析器，避免两套规则漂移
+            UserDefinedVariableData d;
+            try {
+                d = UserDefinedVariableData::create(rest, isStr, /*isPrivate=*/true, ScriptPosition());
+            } catch (const std::exception&) {
+                continue;   // 非法声明：loadScript 那边会报错，这里只是不提供类型
+            }
+            if (d.name.isEmpty()) continue;
+
+            const OperandType type = d.typeIsStr ? OperandType::Str : OperandType::Int;
+            const bool global = isHeaderFile || isGlobal || d.global || currentFunction.isEmpty();
+            if (global) out.globalVars.insert(d.name.toUpper(), type);
+            else out.localVars[currentFunction].insert(d.name.toUpper(), type);
+            continue;
+        }
+
+        afterLabel = false;   // 普通指令行：声明区结束
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -256,7 +387,8 @@ ErbLoader::FunctionTypes ErbLoader::scanFunctionTypes(const QString& content) co
 // 单文件解析（线程安全）
 // ---------------------------------------------------------------------------
 ParsedErbFile ErbLoader::parseOneFile(const QString& filePath, const FunctionTypes& types,
-                                    const QString* cachedContent, const QString& root) const {
+                                    const QString* cachedContent, const QString& root,
+                                    const LoadTimeVarTypes* varTypes) const {
     ParsedErbFile pf;
     pf.path = filePath;
     pf.scriptName = scriptNameFor(root, filePath);
@@ -270,8 +402,13 @@ ParsedErbFile ErbLoader::parseOneFile(const QString& filePath, const FunctionTyp
         // 结构化诊断出口（本文件；随后经 ParsedErbFile 汇总回灌解析表）
         QSet<QString> exprFailed;   // 同一文件的同一表达式文本只记一次
         int currentPhysicalLine = 0;
-        const AstResolver resolver = [this, &types, &pf, &exprFailed, &currentPhysicalLine, &filePath](const QString& e) {
-            auto ast = resolveExpr(e, types);
+        // 当前函数作用域（#DIM/#DIMS 私有变量的类型查询要用）。与 loadScript
+        // 同一规则：遇到函数标签行就切换；本行自身的归约用**切换前**的作用域
+        //（标签行的实参列表不是表达式，无影响）。
+        QString currentFunction;
+        const AstResolver resolver = [this, &types, &pf, &exprFailed, &currentPhysicalLine,
+                                     &filePath, &currentFunction, varTypes](const QString& e) {
+            auto ast = resolveExpr(e, types, /*quiet=*/false, varTypes, currentFunction);
             if (!ast) {
                 const QString key = e.trimmed();
                 if (!key.isEmpty() && !exprFailed.contains(key)) {
@@ -284,8 +421,8 @@ ParsedErbFile ErbLoader::parseOneFile(const QString& filePath, const FunctionTyp
             return ast;
         };
         // 赋值右值的临时归约：静默（字符串赋值随后由 StrFormParser 重新解释）
-        const AstResolver quietResolver = [this, &types, &pf](const QString& e) {
-            return resolveExpr(e, types, /*quiet*/ true);
+        const AstResolver quietResolver = [this, &types, &pf, &currentFunction, varTypes](const QString& e) {
+            return resolveExpr(e, types, /*quiet*/ true, varTypes, currentFunction);
         };
         for (int i = 0; i < source.size(); ++i) {
             currentPhysicalLine = source.at(i).physicalLine;
@@ -293,6 +430,9 @@ ParsedErbFile ErbLoader::parseOneFile(const QString& filePath, const FunctionTyp
             LogicalLine line = AstBuilder::build(source.at(i).text, pos, resolver, quietResolver,
                                                   &pf.diagnostics);
             line.lineIndex = i;
+            // 作用域切换在构建**之后**（与 loadScript 的顺序一致：先记 ownerFunction
+            // 再在遇到标签行时切换 currentFunction）。
+            if (line.kind == LineKind::FunctionLabel) currentFunction = line.labelName;
             pf.lines.append(line);
         }
     }
@@ -427,11 +567,30 @@ bool ErbLoader::loadDirectory(const QString& dirPath, int depth) {
 
     // 1) 预扫描（并行）：**读+解码一次**，产出函数返回类型表 + 解码文本缓存；
     //    解析阶段复用该文本，避免第二次读盘/解码/编码嗅探。
-    QList<QPair<QString, FunctionTypes>> scans =
-        QtConcurrent::blockingMapped(files, [this](const QString& f) {
-            const QString content = readFileContent(f);
-            return qMakePair(content, scanFunctionTypes(content));
-        });
+    // 同一次读取里同时产出函数返回类型与**用户变量类型**（见 LoadTimeVarTypes）：
+    // 声明必须早于 AST 构建，否则装载期所有用户变量都是「类型未知」。
+    QSet<QString> headerSet;
+    for (const QString& f : files) {
+        if (f.endsWith(QLatin1String(".erh"), Qt::CaseInsensitive)) headerSet.insert(f);
+    }
+    QList<QPair<QString, FunctionTypes>> scans;
+    LoadTimeVarTypes varTypes;
+    {
+        struct SyncScan { QString content; FunctionTypes functionTypes; LoadTimeVarTypes varTypes; };
+        const QList<SyncScan> s2 =
+            QtConcurrent::blockingMapped(files, [this, &headerSet](const QString& f) {
+                SyncScan scan;
+                scan.content = readFileContent(f);
+                scan.functionTypes = scanFunctionTypes(scan.content);
+                scanVariableTypes(scan.content, headerSet.contains(f), scan.varTypes);
+                return scan;
+            });
+        scans.reserve(s2.size());
+        for (int i = 0; i < s2.size(); ++i) {
+            scans.append(qMakePair(s2.at(i).content, s2.at(i).functionTypes));
+            mergeVarTypes(varTypes, s2.at(i).varTypes);
+        }
+    }
     FunctionTypes functionTypes;
     QHash<QString, QString> decoded;
     decoded.reserve(files.size());
@@ -454,9 +613,9 @@ bool ErbLoader::loadDirectory(const QString& dirPath, int depth) {
         const QStringList slice = files.mid(base, chunk);
         QElapsedTimer pt; pt.start();
         QList<ParsedErbFile> parsed = QtConcurrent::blockingMapped(slice,
-            [this, &functionTypes, &decoded, dirPath](const QString& f) {
+            [this, &functionTypes, &varTypes, &decoded, dirPath](const QString& f) {
                 const QString content = decoded.value(f);   // 浅拷贝（隐式共享）
-                return parseOneFile(f, functionTypes, &content, dirPath);
+                return parseOneFile(f, functionTypes, &content, dirPath, &varTypes);
             });
         tParse += pt.elapsed();
         QElapsedTimer mt; mt.start();
@@ -476,6 +635,12 @@ bool ErbLoader::loadDirectory(const QString& dirPath, int depth) {
 // 异步装载：后台 prepare + 分块解析，主线程合并（不阻塞 UI）
 // ---------------------------------------------------------------------------
 ErbLoader::LoadPrep ErbLoader::prepareLoad(const QString& dirPath, int depth) const {
+    // 预扫描的单文件结果（函数返回类型 + 用户变量类型 + 已解码文本）
+    struct FileScan {
+        QString content;
+        FunctionTypes functionTypes;
+        LoadTimeVarTypes varTypes;
+    };
     LoadPrep prep;
     const QStringList allFiles = collectFiles(dirPath, depth);
     if (allFiles.isEmpty()) {
@@ -504,24 +669,37 @@ ErbLoader::LoadPrep ErbLoader::prepareLoad(const QString& dirPath, int depth) co
     // QThreadPool 默认允许多个线程，故线程数 >1 时不会自锁，==1 时退化为顺序。
     // 读+解码**一次**，同时产出：(a) 函数返回类型表，(b) 解码后的源文本缓存。
     // 解析阶段复用 (b)，免去 eraTW 约 93MB 的第二次读取 + 解码 + 编码嗅探。
-    const auto scanOne = [this](const QString& f) {
-        const QString content = readFileContent(f);
-        return qMakePair(content, scanFunctionTypes(content));
+    // 同一次读取里同时产出：函数返回类型 + 用户变量类型（解析阶段要用，
+    // 见 LoadTimeVarTypes 的说明）。头文件的 #DIM 是广域，所以按「是否头文件」
+    // 分别扫。eraTW 实测这一遍纯文本扫描 <100ms（不读盘、不解码）。
+    const QStringList& filesForScan = prep.files;
+    const QSet<QString> headerSet = [&headers] {
+        QSet<QString> set;
+        for (const QString& h : headers) set.insert(h);
+        return set;
+    }();
+    const auto scanOne = [this, &headerSet](const QString& f) {
+        FileScan scan;
+        scan.content = readFileContent(f);
+        scan.functionTypes = scanFunctionTypes(scan.content);
+        scanVariableTypes(scan.content, headerSet.contains(f), scan.varTypes);
+        return scan;
     };
-    QList<QPair<QString, FunctionTypes>> scans;
+    QList<FileScan> scans;
     if (QThreadPool::globalInstance()->maxThreadCount() > 1) {
-        scans = QtConcurrent::blockingMapped(prep.files, scanOne);
+        scans = QtConcurrent::blockingMapped(filesForScan, scanOne);
     } else {
         scans.reserve(prep.files.size());
-        for (const QString& f : prep.files) scans.append(scanOne(f));
+        for (const QString& f : filesForScan) scans.append(scanOne(f));
     }
     prep.decoded.reserve(prep.files.size());
     for (int i = 0; i < scans.size(); ++i) {
-        prep.decoded.insert(prep.files.at(i), scans.at(i).first);
-        const FunctionTypes& m = scans.at(i).second;
+        prep.decoded.insert(prep.files.at(i), scans.at(i).content);
+        const FunctionTypes& m = scans.at(i).functionTypes;
         for (auto it = m.constBegin(); it != m.constEnd(); ++it) {
             prep.functionTypes.insert(it.key(), it.value());
         }
+        mergeVarTypes(prep.varTypes, scans.at(i).varTypes);
     }
     prep.ok = true;
     return prep;
@@ -550,6 +728,8 @@ void ErbLoader::finishAsync(bool ok) {
     m_prepFuture = {};
     m_chunkFuture = {};
     m_asyncTypes.clear();
+    m_asyncVarTypes.globalVars.clear();
+    m_asyncVarTypes.localVars.clear();
     m_async = AsyncState{};
     emit loadCompleted(ok);
 }
@@ -617,6 +797,8 @@ void ErbLoader::cancelAndWait() {
     m_preprocessor = ErbPreprocessor{};
     m_async = AsyncState{};
     m_asyncTypes.clear();
+    m_asyncVarTypes.globalVars.clear();
+    m_asyncVarTypes.localVars.clear();
     m_logicalLines.clear();
     m_scriptPaths.clear();
     m_labels.clear();
@@ -643,6 +825,7 @@ void ErbLoader::onPrepFinished() {
     m_preprocessor.setMacros(prep.macros);
     m_preprocessor.setMacroTable(prep.macroTable);
     m_asyncTypes = prep.functionTypes;
+    m_asyncVarTypes = prep.varTypes;   // 解析期只读的用户变量类型快照
     m_async.files = prep.files;
     m_async.decoded = std::move(prep.decoded);   // 复用预扫描的解码文本
     m_async.total = prep.files.size();
@@ -651,7 +834,7 @@ void ErbLoader::onPrepFinished() {
 
     // 预扫描（列举 + 宏表 + 函数返回类型）已在后台完成：这里能看出它为 UI
     // 首帧前贡献了多少等待时间。
-    qInfo().noquote() << "[ErbLoader] 异步预扫描完成(读文件+函数类型)"
+    qInfo().noquote() << "[ErbLoader] 异步预扫描完成(读文件+函数/变量类型)"
                       << m_async.clock.elapsed() << "ms，" << m_async.total << "个文件";
     const auto generation = m_generation;
     emit loadProgress(0, m_async.total);
@@ -674,12 +857,15 @@ void ErbLoader::scheduleNextChunk() {
         return;
     }
     const FunctionTypes types = m_asyncTypes;
+    // 用户变量类型快照同样是「本次 mapped 运行期间只读」，按值捕获
+    //（QHash 隐式共享，拷贝很便宜）。
+    const LoadTimeVarTypes varTypes = m_asyncVarTypes;
     // 复用预扫描已解码的源文本（m_async.decoded 在本次 mapped 运行期间只读，
     // 直到 onChunkFinished 才回收 —— 无并发写）。
     m_chunkFuture = QtConcurrent::mapped(slice,
-        [this, types](const QString& f) {
+        [this, types, varTypes](const QString& f) {
             const QString content = m_async.decoded.value(f);   // 浅拷贝（隐式共享）
-            return parseOneFile(f, types, &content, m_async.dirPath);
+            return parseOneFile(f, types, &content, m_async.dirPath, &varTypes);
         });
     m_chunkWatcher->setFuture(m_chunkFuture);
 }

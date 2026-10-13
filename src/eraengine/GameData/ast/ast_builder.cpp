@@ -216,6 +216,7 @@ AstBuilder::PrintArgInfo AstBuilder::printInfo(const QString& upperName) {
     QString rest;
     if (upperName.startsWith(QLatin1String("PRINTSINGLE"))) {
         info.mode = PrintArgMode::Literal;      // PRINT_SINGLE + EXTENDED
+        info.single = true;
         rest = upperName.mid(11);
     } else if (upperName.startsWith(QLatin1String("PRINT"))) {
         rest = upperName.mid(5);
@@ -1007,8 +1008,17 @@ LogicalLine AstBuilder::build(const QString& rawLine,
             for (const QString& a : argList) {
                 const QString t = a.trimmed();
                 // CALLF 的逗号参数语法允许省略参数（例如 `F(, "x")`）。
-                // 空片段不是运行时参数，不能创建一个永远没有 AST 的 Operand。
-                if (t.isEmpty()) continue;
+                // 空片段是一个**省略实参位**，必须占位（见 Operand::omitted），
+                // 否则 `CALLF OBJNAME_TO_ID(, "RESET", CLASS_NAME)` 会被读成
+                // `OBJNAME_TO_ID("RESET", CLASS_NAME)`，实参整体左移。
+                // 对齐 C# ReduceArguments：空项作为 null 加入实参表。
+                if (t.isEmpty()) {
+                    Operand placeholder;
+                    placeholder.omitted = true;
+                    placeholder.ast = QSharedPointer<LiteralNode>::create(0);
+                    line.arguments.append(placeholder);
+                    continue;
+                }
                 Operand operand(t);
                 if (isFormArgument(t)) {
                     // FORM 在装载期分词并保存 StrForm AST；运行期只求值该 AST。

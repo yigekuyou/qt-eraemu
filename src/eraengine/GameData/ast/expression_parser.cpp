@@ -279,6 +279,8 @@ QSharedPointer<ExpressionNode> ExpressionParser::parseVariable() {
         const OperandType sys = sysvar::systemVariableTypeDyn(name.toStdString());
         if (isKnown(sys)) varType = sys;
         // 未登记的标识符按 Int 处理（对齐 C#：未知标识符在归约期报错）
+        // 注：函数形参与用户变量由**装载期类型表**提前提供（见 LoadTimeVarTypes），
+        //     所以正常工程里不会走到这条兜底。
     }
 
     if (m_variableTypeProvider) {

@@ -98,6 +98,11 @@ public:
         bool padLeft   = false;   // C（右对齐补左）；LC 时 false（左对齐补右）
         bool forms     = false;   // FORMS：装载期编译文本与独立表达式片段
         bool debug     = false;   // D 后缀
+        // PRINTSINGLE 系（C# FunctionIdentifier.PRINT_SINGLE）：C# 走
+        // EmueraConsole.PrintSingleLine —— 把缓冲区内容作为**一行**输出
+        //（含隐式换行；L/W 后缀的「换行 + 等键」不再单独生效，对齐
+        //  ExpressionMediator.OutputToConsole 的 if (func.IsPrintSingle()) 分支）。
+        bool single    = false;
     };
     static PrintArgInfo printInfo(const QString& upperName);
 

@@ -225,6 +225,8 @@ void ArgumentParser::build(LogicalLine& line) {
         for (int i = 0; i < ops.size(); ++i) {
             // Static target labels are identities, not evaluated operands.
             if (i == 0 && !upper.contains("FORM")) continue;
+            // 省略实参位（`F(, x)`）没有表达式，但它不是错误。
+            if (ops[i].omitted) continue;
             if (!ops[i].ast) {
                 arg.typeOk = false;
                 arg.typeError = QCoreApplication::translate("ParseDiagnostics", "%1 的参数缺少装载期 AST：%2")

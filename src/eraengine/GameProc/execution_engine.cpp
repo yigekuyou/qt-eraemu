@@ -1941,11 +1941,18 @@ bool ExecutionEngine::handlePrintInstruction(const LogicalLine& line) {
 
     if (info.clearPad) {
         emit consolePrint(padPrintC(text, info.padLeft), false);
+    } else if (info.single) {
+        // PRINTSINGLE 系：C# EmueraConsole.PrintSingleLine —— 作为**一行**输出，
+        // 隐式换行；且不吃 L/W 的等键语义（OutputToConsole 的 SINGLE 分支直接
+        // 早退）。此前按普通 PRINT 处理（不换行），eraTW 的
+        // `PRINTSINGLEFORMS "== %MAPNAME% " + …` 信息行会与下一行粘连，
+        // PANIMATION 的滚动文本也会挤在同一行。
+        emit consolePrint(text, true);
     } else {
         emit consolePrint(text, info.newline);
     }
     // W 后缀（PRINTW / PRINTFORMW / …）：换行后再等一次任意键（C# PRINT_WAITINPUT）
-    if (info.waitInput) {
+    if (info.waitInput && !info.single) {
         emit requestAnyKey();
         m_printWaitKey = true;   // runner 在指令执行后消费并挂起（C# ReadAnyKey 阻塞）
     }

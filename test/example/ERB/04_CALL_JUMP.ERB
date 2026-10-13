@@ -80,6 +80,34 @@ CALL SUB_TEST_CALLF
 CALL ASSERT_EQ, RESULT, 1, "CALLF/CALLFORMF 均不改写 RESULT"
 NONG += RESULT
 
+;---- 省略实参（空位）占位：后续实参不得左移（对齐 C# 的实参 null）----
+; eraTW 的 `CALLF OBJNAME_TO_ID(, "RESET", CLASS_NAME)` 依赖这里：空位被丢弃
+; 会让 "RESET" 顶到第 1 个形参，角色列表初始化链整体失效（CHECK_CHARA 抛 THROW）。
+; 式中调用（表达式路径）
+CALL ASSERT_EQ, OMIT4(, 2, 3, 4), 234, "式中调用 首位省略实参不左移"
+NONG += RESULT
+CALL ASSERT_EQ, OMIT4(1, , 3, 4), 1034, "式中调用 中间省略实参不左移"
+NONG += RESULT
+CALL ASSERT_EQ, OMIT4(1, 2, , 4), 1204, "式中调用 他位省略实参不左移"
+NONG += RESULT
+; 语句 CALL：逗号形式（eraTW `CALL PRINT_FACE, ARG, "顔" ,,, "差分"`）与括号形式
+CALL OMIT4_STMT, 1, , 3, 4
+CALL ASSERT_EQ, RESULT, 1034, "CALL 逗号形式省略实参不左移"
+NONG += RESULT
+CALL OMIT4_STMT(1, 2, 3, 4)
+CALL ASSERT_EQ, RESULT, 1234, "CALL 无省略时与原来一致"
+NONG += RESULT
+; 语句 CALLF：省略在**首位**（正是 OBJNAME_TO_ID 的形态；返回值丢弃，看副作用）
+CALLF OMIT4_CALLF(, 2, 3, 4)
+CALL ASSERT_SEQ, RESULTS:0, "0_2_3_4", "CALLF 首位省略实参不左移"
+NONG += RESULT
+; 省略位取声明的缺省值（C#：实参 null -> func.Def[i]）
+CALL ASSERT_EQ, OMIT4DEF(1, , 4), 1740, "式中调用 省略位取声明缺省值（B=7）"
+NONG += RESULT
+CALL OMITDEF_STMT, 1, , 4
+CALL ASSERT_EQ, RESULT, 1740, "CALL 省略位取声明缺省值（B=7）"
+NONG += RESULT
+
 ;---- 普通字符串返回与 #FUNCTIONS ----
 CALL MAKEMSG
 CALL ASSERT_SEQ, RESULTS:0, "RETURNFORM结果", "字符串返回写 RESULTS:0"
@@ -102,6 +130,27 @@ RETURN 17
 @GETTEN(X)
 #FUNCTION
 RETURNF X
+
+;---- 省略实参回归用例的被调函数（A/B/C/D -> 千百十个）----
+@OMIT4(A, B, C, D)
+#FUNCTION
+RETURNF A * 1000 + B * 100 + C * 10 + D
+
+@OMIT4DEF(A, B = 7, C, D)
+#FUNCTION
+RETURNF A * 1000 + B * 100 + C * 10 + D
+
+@OMIT4_STMT(A, B, C, D)
+RETURN A * 1000 + B * 100 + C * 10 + D
+
+@OMITDEF_STMT(A, B = 7, C, D)
+RETURN A * 1000 + B * 100 + C * 10 + D
+
+;CALLF 丢弃返回值，用 RESULTS:0 观察实参绑定
+@OMIT4_CALLF(A, B, C, D)
+#FUNCTION
+RESULTS:0 '= TOSTR(A) + "_" + TOSTR(B) + "_" + TOSTR(C) + "_" + TOSTR(D)
+RETURNF 0
 
 @MAKEMSG
 RESULTS:0 = RETURNFORM结果

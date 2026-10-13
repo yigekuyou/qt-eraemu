@@ -1016,9 +1016,20 @@ ExecState ScriptRunner::executeLine(const LogicalLine& line) {
             return ExecState::Continue;
         }
         QList<QSharedPointer<ExpressionNode>> arguments;
+        QList<int> omittedArgs;
         for (int i = 1; i < line.arguments.size(); ++i) {
             const Operand& operand = line.arguments.at(i);
             if (!operand.isString && operand.raw == QLatin1String(",")) continue;
+            // 省略实参位（`CALLF F(, "x", y)`）：占位但**不求值**，形参取声明缺省
+            // 值或零值/空串（对齐 C# 的实参 null）。此前这里直接丢弃空片段，
+            // 后续实参整体左移 —— eraTW 的 `CALLF OBJNAME_TO_ID(, "RESET",
+            // CLASS_NAME)` 把 "RESET" 传给了 ARG，RESET 初始化永不执行，
+            // 角色列表 ID 恒为 -1，CHECK_CHARA 收到列表名后 THROW。
+            if (operand.omitted) {
+                omittedArgs.append(arguments.size());
+                arguments.append(QSharedPointer<LiteralNode>::create(0));
+                continue;
+            }
             if (!operand.ast) {
                 emit errorOccurred(QStringLiteral("CALLF 参数缺少装载期 AST at %1 raw[%2]=<%3> line=<%4>")
                     .arg(line.position.toString()).arg(i).arg(operand.raw, line.raw));
@@ -1029,6 +1040,7 @@ ExecState ScriptRunner::executeLine(const LogicalLine& line) {
         // Function dispatch may depend on a FORM label, but its arguments are
         // already compiled nodes. Do not rebuild or tokenize a call string.
         FunctionNode call(funcName, arguments);
+        for (int oi : omittedArgs) call.markArgOmitted(oi);
         const auto resolution = resolveFunctionCall(funcName, [this](const QString& name) {
             return m_table ? m_table->userCallReturnType(name) : OperandType::Unknown;
         });
@@ -2051,6 +2063,14 @@ ExecState ScriptRunner::doCallLine(const LogicalLine& line, bool isForm, bool is
         const Operand source = line.arguments.at(i);
         const UserParamDecl* param = info && i - 1 < info->params.size()
                                          ? &info->params.at(i - 1) : nullptr;
+        // 省略实参位（`CALL F(a,,b)`）：不取值，只占位；形参取声明缺省值或零值。
+        // 位置必须保留 —— 丢弃会让后面的实参整体左移（与 C# 的 null 实参一致）。
+        if (source.omitted) {
+            Operand slot;
+            slot.omitted = true;
+            evaluated.append(slot);
+            continue;
+        }
         if (param && param->isReference) {
             if (!source.ast || source.ast->kind() != NodeKind::Variable)
                 throw std::runtime_error("Reference argument has no VariableNode");
@@ -2427,6 +2447,20 @@ void ScriptRunner::bindArguments(const UserFunctionDecl* info, const QList<Opera
         qint64 intValue = 0;
         const UserParamDecl* param = nullptr;
         if (info && position < info->params.size()) param = &info->params.at(position);
+        // 省略实参（`CALL F(a,,b)` 中间那位）：对齐 C# —— 声明了缺省值就取缺省值，
+        // 否则取零值/空串；**不能**把空文本当表达式求值（那会落成字面量 0 或报错）。
+        if (a.omitted) {
+            if (param && param->hasDefault) {
+                const bool stringDefault = param->type == OperandType::Str && !param->defaultStr.isEmpty();
+                bindOne(param, position, stringDefault, param->defaultStr, param->defaultInt);
+            } else if (param) {
+                const bool wantStr = param->type == OperandType::Str;
+                bindOne(param, position, wantStr, QString(), 0);
+            } else {
+                m_storage->setArgInt(position, 0);
+            }
+            continue;
+        }
         // REF arguments are lvalue names, not values.  In particular a string
         // array passed by REF must survive binding unchanged; evaluating its
         // bare name as an integer turns the reference into an invalid value.
@@ -2520,11 +2554,46 @@ bool ScriptRunner::invokeUserFunction(const QString& name, const QList<QVariant>
     m_storage->clearLocalAliases();
     for (auto it = refTargets.constBegin(); it != refTargets.constEnd(); ++it)
         m_storage->setReference(it.key(), it.value());
+    // 形参缺省值绑定（`@F(A, OP = "NORMAL")`）：实参没给到、或写成了空位
+    //（省略实参）时使用。对齐 C#：实参为 null 时取 func.Def[i]。
+    const auto bindDefault = [this](const UserParamDecl& param, int position) {
+        const bool stringDefault = param.type == OperandType::Str && !param.defaultStr.isEmpty();
+        const QString& text = param.defaultStr;
+        switch (param.target) {
+        case UserParamTarget::Arg:
+            m_storage->setArgInt(param.index, param.defaultInt);
+            m_storage->setLocalAlias(param.name, param.index);
+            break;
+        case UserParamTarget::Args:
+            m_storage->setArgStr(param.index, stringDefault ? text : QString());
+            m_storage->setLocalAlias(param.name, param.index);
+            break;
+        case UserParamTarget::LocalVar:
+            if (param.fixedIndex >= 0) {
+                m_storage->setGlobalInt1D(param.varName, param.fixedIndex, param.defaultInt);
+                break;
+            }
+            m_storage->setParameter(param.varName.isEmpty() ? param.name : param.varName,
+                stringDefault ? QVariant(text) : QVariant::fromValue<qint64>(param.defaultInt));
+            break;
+        case UserParamTarget::Unknown:
+        default:
+            m_storage->setArgInt(position, param.defaultInt);
+            if (stringDefault) m_storage->setArgStr(position, text);
+            break;
+        }
+    };
     for (int i = 0; i < args.size(); ++i) {
         const QVariant& v = args.at(i);
         const bool isStr = (isStringValue(v));
         const bool omitted = !v.isValid();   // 省略实参（evaluateFunction 记为无效 QVariant）
         const UserParamDecl* param = (i < info->params.size()) ? &info->params.at(i) : nullptr;
+        // 省略实参（`F(a, , c)` / `F(a,)`）：声明了缺省值就取缺省值，
+        // 否则零值/空串（下面的 switch 会把 omitted 记成 0 / 空串）。
+        if (omitted && param && param->hasDefault) {
+            bindDefault(*param, i);
+            continue;
+        }
         // `#DIM REF` 引用形参：实参必须是裸变量名（对齐语句 CALL 路径的
         // references 机制）—— 把形参名别名到调用方变量的存储键，函数体内
         // 对形参的读写直接落到调用方变量。eraTW 的 画像合成(グラフィックID
@@ -2575,31 +2644,7 @@ bool ScriptRunner::invokeUserFunction(const QString& name, const QList<QVariant>
     for (int position = args.size(); position < info->params.size(); ++position) {
         const UserParamDecl& param = info->params.at(position);
         if (param.hasDefault) {
-            const bool stringDefault = param.type == OperandType::Str && !param.defaultStr.isEmpty();
-            const QString& text = param.defaultStr;
-            switch (param.target) {
-            case UserParamTarget::Arg:
-                m_storage->setArgInt(param.index, param.defaultInt);
-                m_storage->setLocalAlias(param.name, param.index);
-                break;
-            case UserParamTarget::Args:
-                m_storage->setArgStr(param.index, stringDefault ? text : QString());
-                m_storage->setLocalAlias(param.name, param.index);
-                break;
-            case UserParamTarget::LocalVar:
-                if (param.fixedIndex >= 0) {
-                    m_storage->setGlobalInt1D(param.varName, param.fixedIndex, param.defaultInt);
-                    break;
-                }
-                m_storage->setParameter(param.varName.isEmpty() ? param.name : param.varName,
-                    stringDefault ? QVariant(text) : QVariant::fromValue<qint64>(param.defaultInt));
-                break;
-            case UserParamTarget::Unknown:
-            default:
-                m_storage->setArgInt(position, param.defaultInt);
-                if (stringDefault) m_storage->setArgStr(position, text);
-                break;
-            }
+            bindDefault(param, position);
             continue;
         }
         // 省略且无缺省值：按类型绑 0 / 空串（同 bindArguments 的省略语义）

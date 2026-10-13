@@ -85,6 +85,12 @@ struct Operand {
     QString                        raw;          // 原始文本
     bool                           isString = false;   // 字符串字面量
     bool                           isVariable = false; // %VAR% / $VAR 形式
+    // 写成空的实参位（`CALLF F(, "x", y)` / `CALL F, a,,b`）。
+    // 必须**占位**而不是丢弃：丢弃后后续实参会整体左移，形参全部错位
+    //（eraTW 的 `CALLF OBJNAME_TO_ID(, "RESET", CLASS_NAME)` 因此把 "RESET"
+    // 当成 ARG 传进去，RESET 分支永不执行）。语义 = C# 的实参 null
+    //（UserDefinedFunctionArgument.SetTransporter 对 null 直接 continue）。
+    bool                           omitted = false;
     QSharedPointer<ExpressionNode> ast;          // 归约后的表达式 AST（可空）
 
     // 命令 AST 专用实数常量；装载期校验/转换一次，不参与整数表达式。

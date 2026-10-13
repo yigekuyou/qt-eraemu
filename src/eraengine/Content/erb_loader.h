@@ -49,11 +49,34 @@ struct ParsedErbFile {
     ParseDiagnostics diagnostics;                               // 结构化诊断（分级+代码+位置）
 };
 
+// ---------------------------------------------------------------------------
+// 装载期可见的「用户变量类型」快照（预扫描产出，解析线程只读）
+//
+// 为什么需要它：#DIM/#DIMS 的**完整登记**在主线程 mergeParsedFile ->
+// EraParseTable::loadScript，那时各文件的 AST 早已由后台线程构建完毕 ——
+// 于是归约表达式时所有用户变量都是「类型未知」，`%(" " * N + X)%`、
+// `%(EQUAL * 150)%` 这类插值的类型校验必然误判（FORM 归约失败 -> 整行
+// 原样打印源码）。这里把「类型」提前到解析之前：预扫描本来就逐文件读过
+// 一遍内容，顺带扫一遍 # 行几乎不增加成本（不读盘、不解码）。
+//
+// 只带**类型**：维数 / 初值 / const / CHARADATA 等仍由 loadScript 登记，
+// finalizeParse 的 applyVariableTypes 会按变量表把节点重新定型（含维数与
+// readOnly），所以这里不需要（也不应该）复制那些信息。
+// ---------------------------------------------------------------------------
+struct LoadTimeVarTypes {
+    QHash<QString, OperandType> globalVars;                 // 变量名(大写) -> 类型
+    QHash<QString, QHash<QString, OperandType>> localVars;  // 函数名(大写) -> 变量名(大写) -> 类型
+
+    // 作用域查询：函数私有优先，其次广域（与 VariableTable::typeOf 同序）
+    [[nodiscard]] OperandType typeOf(const QString& name, const QString& function) const;
+};
+
 // ERB 脚本装载器
 //
 // 现在直接产出「完整 AST」：读文件 -> 逐行 AstBuilder::build -> QList<LogicalLine>。
 // 表达式归约复用 AST 缓存；**支持并行装载**：
-//   预扫描(函数返回类型) -> 分块并行解析(线程内私有缓存) -> 主线程按序合并 -> finalizeParse。
+//   预扫描(函数返回类型 + 用户变量类型) -> 分块并行解析(线程内私有缓存)
+//   -> 主线程按序合并 -> finalizeParse。
 class ConstantTable;
 
 class ErbLoader : public QObject {
@@ -150,6 +173,7 @@ private:
         QSet<QString> macros;
         ErbPreprocessor::MacroTable macroTable;
         FunctionTypes functionTypes;
+        LoadTimeVarTypes varTypes;   // 用户变量类型（解析阶段要用的「提前量」）
         // 预扫描时**一次读取并解码**的文件内容（path -> 文本）。
         // 解析阶段直接复用，避免「预扫描读一遍、解析再读一遍」的重复 解码 +
         // 每文件编码嗅探（eraTW 约 93MB × 2）。解析按块消费后即从 map 移除，
@@ -189,6 +213,7 @@ private:
     QFuture<LoadPrep> m_prepFuture;
     QFuture<ParsedErbFile> m_chunkFuture;
     FunctionTypes m_asyncTypes;
+    LoadTimeVarTypes m_asyncVarTypes;   // 预扫描产出；分块解析期间只读
     quint64 m_generation = 0;
 
 private slots:
@@ -201,19 +226,30 @@ private:
     // 递归收集 .erb/.erh 文件（确定性顺序）
     QStringList collectFiles(const QString& dirPath, int depth) const;
 
-    // 供线程内使用：只读函数类型表
+    // 供线程内使用：只读函数类型表 + 用户变量类型表（+ 当前函数作用域）
     // quiet=true：解析失败时不打印（用于赋值右值的临时归约，见 AstBuilder::build）
     QSharedPointer<ExpressionNode> resolveExpr(const QString& expr, const FunctionTypes& types,
-                                               bool quiet = false) const;
+                                               bool quiet = false,
+                                               const LoadTimeVarTypes* varTypes = nullptr,
+                                               const QString& scope = QString()) const;
 
     // 预扫描：收集函数返回类型（#FUNCTION → Int，#FUNCTIONS → Str）
     FunctionTypes scanFunctionTypes(const QString& content) const;
 
+    // 预扫描：收集用户变量类型（#DIM/#DIMS/#GLOBAL/#GLOBALS/#PRIVATE）。
+    // 作用域判定与 EraParseTable::loadScript 完全一致：.ERH 的文件级声明是
+    // 广域；.ERB 里只有**紧跟函数标签**的 # 行才算声明（否则 loadScript 会
+    // 告警并忽略 —— 这里也必须忽略，否则解析期类型会比最终登记的多出来）。
+    void scanVariableTypes(const QString& content, bool isHeaderFile,
+                           LoadTimeVarTypes& out) const;
+
     // 解析单个文件（线程安全：不接触任何共享可变状态）。
     // cachedContent != nullptr 时直接使用（预扫描已解码），免去重复读取+解码。
+    // varTypes：预扫描得到的用户变量类型（只读；nullptr 时退回「类型未知」）。
     ParsedErbFile parseOneFile(const QString& filePath, const FunctionTypes& types,
                                const QString* cachedContent = nullptr,
-                               const QString& root = QString()) const;
+                               const QString& root = QString(),
+                               const LoadTimeVarTypes* varTypes = nullptr) const;
 
     // 主线程合并（确定性顺序）
     bool mergeParsedFile(ParsedErbFile&& pf);

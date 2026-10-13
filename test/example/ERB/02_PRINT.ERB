@@ -1,10 +1,11 @@
-;=============================================================
+﻿;=============================================================
 ; [2] PRINT 全族 · 按钮 · 颜色 · 对齐 · PRINTDATA
 ;=============================================================
 @TEST_PRINT
 #DIM NONG
 #DIM I
 #DIMS S              ;STRDATA 的赋值目标必须是**字符串变量**（eraTW：STRDATA COMMENT:1 / LOCALS）
+#DIMS FORM_EQ        ;%…% 里含「字符串变量运算」的回归（见下方）
 
 PRINTL == 组2：PRINT 族 · 按钮 · 颜色 ==
 
@@ -164,5 +165,31 @@ PRINTL 与 PUTFORM 合并输出
 ;---- DEBUGPRINT 族（调试模式才可见，验证不报错）----
 DEBUGPRINTL DEBUGPRINTL（静默）
 DEBUGPRINTFORML DEBUG {1 + 1}（静默）
+
+;---- %…% 里含「用户字符串变量的运算」（eraTW 实机回归）----
+; eraTW 的 `PRINTSINGLEFORMS "== %ARGS% " + "%(EQUAL * 150)%"`、
+; `PRINTFORML %STAMP_STR * STAMP_NUM%`、`%RESULTS + 本体名称, 38, LEFT%` 都是
+; 「字符串变量参与运算」的插值。用户变量类型必须在**装载期**就确定
+;（ErbLoader 预扫描 #DIM/#DIMS -> LoadTimeVarTypes，早于 AstBuilder::build），
+; 否则 `EQUAL * 150`（Str×Int）会被当成整数式 -> %…% 类型校验拒绝 ->
+; 整个 FORM 归约失败 -> 整行**原样打印**（eraTW 的 DRAW_MAP 信息行把
+; `"== %ARGS% " + "%(EQUAL * 150)%"` 原封不动显示到屏幕上）。
+FORM_EQ = =
+; 字符串变量赋值的右侧是 FORM 文本（eraTW 的 `ARGS += NEST_SEPARATOR` 同型）
+S = [%FORM_EQ * 3%]        ;S 是 #DIMS 声明的字符串变量 -> 右侧按 FORM 文本处理
+CALL ASSERT_SEQ, S, "[===]", @"字符串赋值 FORM 里的字符串变量运算不原样打印"
+NONG += RESULT
+; 头文件（.ERH）里声明的广域字符串变量：装载期类型表必须**跨文件**覆盖到，
+; 否则 `DOC_WIDE_S27 + "!"` 会被当成整数式 -> %…% 类型校验拒绝 -> 原样打印。
+DOC_WIDE_S27 = HEADER
+S = [%DOC_WIDE_S27 + "!"%]
+CALL ASSERT_SEQ, S, "[HEADER!]", @"ERH 广域字符串变量参与运算的 FORM 插值"
+NONG += RESULT
+PRINTFORML [%FORM_EQ * 2, 5, RIGHT%]（宽度/对齐）
+; 与 eraTW 同形的 FORMS 语句：不再原样打印（看屏即可，无断言）。
+; PRINTSINGLE 系在 C# 走 EmueraConsole.PrintSingleLine —— 作为**一行**输出
+;（隐含换行），所以下面这一行会独占一行，不与后续输出粘连（否则 --check 会
+; 报「区块越出 root 宽度」）。
+PRINTSINGLEFORMS "== %GAMEBASE_TITLE% " + "%(FORM_EQ * 3)%"
 
 RETURN NONG

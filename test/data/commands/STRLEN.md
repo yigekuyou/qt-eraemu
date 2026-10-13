@@ -20,8 +20,8 @@
 - 副作用：`RESULT:0` = 字节长度。
 
 ```erb
-STRLEN abc       ;RESULT:0 = 3
-STRLEN あいう    ;RESULT:0 = 6（全角按 2 字节计）
+STRLEN "abc"       ;RESULT:0 = 3
+STRLEN "あいう"    ;RESULT:0 = 6（全角按 2 字节计）
 ```
 
 ## 源码实现（emuera.em/Emuera）

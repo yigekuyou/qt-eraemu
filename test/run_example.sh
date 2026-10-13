@@ -3,7 +3,7 @@
 # run_example.sh —— 运行 test/example（era 全函数覆盖示例）
 #
 # 用法：
-#   ./test/run_example.sh          # 全部自动运行（组1..11 + 汇总）
+#   ./test/run_example.sh          # 运行 MAIN.ERB 的 CASE 0 自动测试路径
 #   ./test/run_example.sh 5        # 只运行第 5 组
 #   ./test/run_example.sh 12       # 破坏性组（BEGIN TITLE，会回到标题画面）
 #   ./test/run_example.sh 13       # 破坏性组（THROW，预期「执行出错」）
@@ -28,16 +28,15 @@
 #   ./test/run_example.sh 38       # EE 库 COLUMN_LIB（手写 CALL 用例；COLUMN* 是
 #                                  #   EmueraEE 附带的 ERB 库而非引擎命令，无注入输入）
 #   ./test/run_example.sh 39       # EM/Emuera.NET fork 族（MAP_/ENUM*/XML_/DT_ 手写断言）
+#   ./test/run_example.sh 40       # LOADDATA 往返（清空调用栈，加载钩子中断言）
 #   ./test/run_example.sh 16       # CLEARLINE 逻辑行计数与边界回归
 #
 # 依赖：build/src/eraengine/test_cli
 #       （cmake --build build --target test_cli）
 # 退出码：0 = 全部断言通过且渲染自检无异常；非 0 = 有 FAIL / 渲染可疑项
 #
-# 关于「自动输入」：组 11（输入族）与组 0（全部）里的 INPUT / INPUTS /
-# ONEINPUT / TINPUT / WAITANYKEY 等会挂起等待输入 —— GUI 下必须手点，
-# 只有 test_cli 能用 --script 序列自动喂入。这里在后面补一串填充值
-# （菜单 0 + 12 个填充），够组 11 的每条等待指令各消耗一个。
+# 自动路径中的 PRINTDATAW 和组11等等待指令由 --script 注入输入。
+# 单独运行组11或组14时也必须提供相应输入，不能只传菜单编号。
 # ---------------------------------------------------------------------------
 set -u
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
@@ -54,6 +53,11 @@ SELECTION="${1:-0}"
 if [ "$SELECTION" = "0" ]; then
     # 全部自动：菜单选 0，随后 14 个填充值供「输入族」消费
     SCRIPT="0,0,0,0,0,0,0,0,0,0,0,0,0,0,0"
+elif [ "$SELECTION" = "11" ]; then
+    SCRIPT="11,7,s 输入文本,1,s A,7,s B,1,s C,0,0,0,0"
+elif [ "$SELECTION" = "14" ]; then
+    # PRINTDATAW 显示后等待一次按键。
+    SCRIPT="14,0"
 elif [ "$SELECTION" = "15" ]; then
     # 鼠标组：菜单选 15 + `k 1 10 10 1 0` 注入（type=1 左键）——
     # 组15 的 INPUTMOUSEKEY(0) 吃注入，INPUTMOUSEKEY(50) 靠超时自动继续；

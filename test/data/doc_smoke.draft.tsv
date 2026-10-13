@@ -475,10 +475,10 @@ STOPCALLTRAIN	cmd	skip		文档未给出可合成的调用
 STOPSOUND	cmd	skip		文档未给出可合成的调用
 STRDATA	cmd	call	STRDATA LOCALS
 STRJOIN1	cmd	skip		文档未给出可合成的调用
-STRLEN	cmd	call	STRLEN abc
+STRLEN	cmd	call	STRLEN "abc"
 STRLENFORM	cmd	call	STRLENFORM 名字是%CALLNAME:MASTER%
 STRLENFORMU	cmd	call	STRLENFORMU 名字是%CALLNAME:MASTER%
-STRLENU	cmd	call	STRLENU あいう
+STRLENU	cmd	call	STRLENU "あいう"
 SWAP	cmd	skip		文档未给出可合成的调用
 SWAPCHARA	cmd	skip		文档未给出可合成的调用
 THROW	cmd	skip		文档未给出可合成的调用

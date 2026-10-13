@@ -17,10 +17,10 @@ STOPCALLTRAIN	cmd	skip		流程控制族（GUIDE 明列，与 CALLTRAIN 成对）
 STOPSOUND	cmd	skip		依赖音频后端：停止 10 个音效声道 —— example 组17 已覆盖
 STRDATA	cmd	call	STRDATA LOCALS\nDATA 冒烟候选甲\nDATA 冒烟候选乙\nENDDATA	
 STRJOIN1	cmd	skip		伪名：清单提取时「STRJOINの第1引数」被误粘连（EM 系 readme 文本），文档与发行版 exe 中均无此命令；真实功能为式中函数 STRJOIN
-STRLEN	cmd	call	STRLEN abc	
+STRLEN	cmd	call	STRLEN "abc"
 STRLENFORM	cmd	call	STRLENFORM 名字是{1 + 2}字	
 STRLENFORMU	cmd	call	STRLENFORMU 名字是{1 + 2}字	
-STRLENU	cmd	call	STRLENU あいう	
+STRLENU	cmd	call	STRLENU "あいう"
 SWAP	cmd	call	CVTMP = 1\nLOCAL:1 = 2\nSWAP CVTMP, LOCAL:1	
 SWAPCHARA	cmd	call	ADDCHARA 0\nADDCHARA 0\nSWAPCHARA 0, 1	
 THROW	cmd	skip		会强制抛运行时错误（CodeEE，错误信息取参数文本）并中断当前执行流，冒烟组将提前终止 —— 由组 13 覆盖

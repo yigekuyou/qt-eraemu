@@ -18,8 +18,8 @@
 - 副作用：`RESULT:0` = Unicode 字符数。
 
 ```erb
-STRLENU あいう   ;RESULT:0 = 3（全角也算 1）
-STRLENU abc      ;RESULT:0 = 3
+STRLENU "あいう"   ;RESULT:0 = 3（全角也算 1）
+STRLENU "abc"      ;RESULT:0 = 3
 ```
 
 ## 源码实现（emuera.em/Emuera）

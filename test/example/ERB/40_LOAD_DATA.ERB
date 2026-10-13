@@ -1,0 +1,36 @@
+;=============================================================
+; [40] LOADDATA 往返（破坏性·单独运行）
+; C# LOADDATA 清空调用栈，进入 SYSTEM_LOADEND / EVENTLOAD 流程；
+; 恢复断言必须放在加载后钩子，不能写在 LOADDATA 下一行。
+;=============================================================
+@TEST_LOAD_DATA
+DELALLCHARA
+ADDCHARA 0
+DAY = 4012
+CFLAG:0:0 = 4321
+SAVEDATA 40, "LOADDATA 系统流程回归"
+CALL ASSERT_EQ, CHKDATA(40), 0, "LOADDATA 前置存档可读取"
+DAY = 0
+CFLAG:0:0 = 0
+LOADDATA 40
+PRINTL [FAIL] LOADDATA 成功后不应返回原调用位置
+QUIT
+
+@SYSTEM_LOADEND
+#DIM FAILS
+; 仅处理组40的专用状态，其他存档仍走通常的加载后流程。
+IF DAY != 4012
+	RETURN 0
+ENDIF
+PRINTL == 组40：LOADDATA 加载后系统钩子 ==
+CALL ASSERT_EQ, DAY, 4012, "LOADDATA 恢复 DAY"
+FAILS += RESULT
+CALL ASSERT_EQ, CHARANUM, 1, "LOADDATA 恢复角色数量"
+FAILS += RESULT
+CALL ASSERT_EQ, CFLAG:0:0, 4321, "LOADDATA 恢复 CFLAG"
+FAILS += RESULT
+DELDATA 40
+CALL ASSERT_EQ, CHKDATA(40), 1, "LOADDATA 回归存档已删除"
+FAILS += RESULT
+CALL TEST_SUMMARY, FAILS
+QUIT

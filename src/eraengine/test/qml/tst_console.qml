@@ -324,6 +324,34 @@ TestCase {
                "真实图片被解码并绘制（paintedWidth/Height > 0）");
     }
 
+    // QUIT -> closeGame() 会 setRoot("") 卸载资源根，而最后一屏的 <img> 区块
+    // 仍留在窗口上（QML 是异步按名取图）。区块生成时必须把像素钉住，否则就是
+    // 「QML Image: Failed to get image from provider」。
+    function test_imageSurvivesResourceTeardown() {
+        backend.clearAll();
+        backend.printImage("offset_atlas", 100, 100);
+        backend.newline(); backend.flush(); view.syncView();
+        const block = view.blockAt(0, 0);
+        verify(block !== null, "钉住用例：图片区块存在");
+        const image = findChild(block, "blockImage");
+        verify(image !== null);
+        tryCompare(image, "status", Image.Ready);
+
+        // 模拟 QUIT：资源根清空（图集/解码缓存随之释放）
+        consoleFixture.unloadResources();
+        view.syncView();
+        const image2 = findChild(view.blockAt(0, 0), "blockImage");
+        verify(image2 !== null);
+        tryCompare(image2, "status", Image.Ready);
+        verify(image2.paintedWidth > 0,
+               "资源根卸载后仍画出像素（区块生成时已钉住）");
+
+        // 清屏后钉住的副本释放，再取图应失败（不常驻）
+        backend.clearAll();
+        verify(!consoleFixture.hasImage("offset_atlas"),
+               "清屏后钉住的副本已释放");
+    }
+
     function test_stageKeepsOverflowingImageAcrossRefresh() {
         backend.stageMode = true;
         backend.printImage("offset_atlas", 400, 400);

@@ -35,6 +35,7 @@
 #include <QCache>
 #include <QFileInfo>
 #include <QLibrary>
+#include <QMutex>
 
 QString ResourceImageProvider::s_root;
 QHash<QString, ResourceImageProvider::Sprite> ResourceImageProvider::s_atlas;
@@ -60,6 +61,20 @@ QCache<QString, QImage>& decodedCache() {
 QCache<QString, QImage>& spriteCache() {
     static QCache<QString, QImage> cache(kSpriteCacheBytes);
     return cache;
+}
+
+// 钉住的图像（C# ConsoleImagePart 的 cImage）：区块生成时取的像素副本。
+// decodedCache/spriteCache 会在 setRoot()/reloadAtlas() 时清空（QUIT ->
+// closeGame() -> setRoot("")），钉住的副本必须活过这些卸载，最后一屏才画得出来。
+// requestImage 在**图像加载线程**上跑，pin/clear 在游戏线程上跑 —— 用互斥锁保护。
+constexpr int kPinnedCacheBytes = 128 * 1024 * 1024;
+QCache<QString, QImage>& pinnedCache() {
+    static QCache<QString, QImage> cache(kPinnedCacheBytes);
+    return cache;
+}
+QMutex& pinnedMutex() {
+    static QMutex mutex;
+    return mutex;
 }
 } // namespace
 
@@ -451,10 +466,40 @@ QImage ResourceImageProvider::loadResourceImage(const QString& id) {
     return image;
 }
 
+void ResourceImageProvider::pinImage(const QString& id) {
+    const QString name = normalizeId(id);
+    if (name.isEmpty()) return;
+    // 运行期精灵 → 静态资源图集/文件（与 requestImage 同一解析顺序）
+    QImage image = GraphicsStore::spriteImage(name);
+    if (image.isNull()) return;
+    QMutexLocker lock(&pinnedMutex());
+    // 同一像素（cacheKey 相同）不重复搬运；精灵被重建/同名文件换了内容时刷新。
+    const QImage* existing = pinnedCache().object(name);
+    if (existing && existing->cacheKey() == image.cacheKey()) return;
+    pinnedCache().insert(name, new QImage(std::move(image)));
+}
+
+void ResourceImageProvider::clearPinnedImages() {
+    QMutexLocker lock(&pinnedMutex());
+    pinnedCache().clear();
+}
+
 QImage ResourceImageProvider::requestImage(const QString& id, QSize* size, const QSize& requestedSize) {
     const QString normalizedId = normalizeId(id);
 
     QImage image;
+    // 区块生成时钉住的像素最优先：QUIT/RESETDATA 之后资源根与运行期精灵都没了，
+    // 但最后一屏仍要画出来（C# ConsoleImagePart 持有 cImage 的语义）。
+    {
+        QMutexLocker lock(&pinnedMutex());
+        if (const QImage* pinned = pinnedCache().object(normalizedId)) image = *pinned;
+    }
+    if (!image.isNull()) {
+        if (size) *size = image.size();
+        if (requestedSize.isValid() && !requestedSize.isEmpty())
+            image = image.scaled(requestedSize, Qt::KeepAspectRatio, Qt::SmoothTransformation);
+        return image;
+    }
     // 运行期精灵优先（SPRITECREATE 产物，同名覆盖静态资源）
     image = GraphicsStore::spriteImage(normalizedId);
     if (!image.isNull()) {

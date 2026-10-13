@@ -97,6 +97,13 @@ public:
     Q_INVOKABLE void redraw(QObject* object, int mode) {
         qobject_cast<ConsoleBackend*>(object)->setRedraw(mode);
     }
+    // QUIT -> EraEngine::closeGame() 的两步资源卸载（setRoot("") + 清运行期精灵）
+    // 与「清屏后钉住的副本释放」的探针 —— 用例用它复现「Failed to get image」。
+    Q_INVOKABLE void unloadResources() { ResourceImageProvider::setRoot(QString()); }
+    Q_INVOKABLE bool hasImage(const QString& id) {
+        ResourceImageProvider provider;
+        return !provider.requestImage(id, nullptr, QSize()).isNull();
+    }
     Q_INVOKABLE void finishInput(QObject* object) {
         static_cast<ConsoleBackend*>(object)->notifyInputDone();
     }

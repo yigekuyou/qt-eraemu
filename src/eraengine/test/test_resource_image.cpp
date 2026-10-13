@@ -35,6 +35,7 @@
 #include <QTemporaryDir>
 
 #include "resource_image_provider.h"
+#include "graphics_store.h"
 
 static int g_failures = 0;
 
@@ -271,6 +272,53 @@ int main(int argc, char* argv[]) {
         const QImage again = ResourceImageProvider::loadResourceImage(QStringLiteral("transparent"));
         check(!again.isNull() && again.size() == first.size(),
               "loadResourceImage 第二次命中裁切缓存（图集源文件已删仍可取出）");
+    }
+
+    qDebug() << "\n7) 区块取图钉住（C# ConsoleImagePart 的 cImage 语义：QUIT/RESETDATA 卸载资源后仍要画）";
+    {
+        // 场景：QUIT -> closeGame() 会 ResourceImageProvider::setRoot("")
+        // （清图集/解码缓存）+ GraphicsStore::clearAll()（清运行期精灵），而
+        // 最后一屏的 <img> 区块仍留在窗口上。QML 是**异步按名取图**，所以
+        // 区块生成时必须先把像素钉住，否则就是那 5 条
+        // 「QML Image: Failed to get image from provider」。
+        QTemporaryDir dir2;
+        const QString root2 = dir2.path();
+        writeImage(QDir(root2).filePath(QStringLiteral("resources/pinned.png")));
+        ResourceImageProvider::setRoot(root2);
+        ResourceImageProvider prov;
+        QSize size;
+        check(!prov.requestImage(QStringLiteral("pinned"), &size, QSize()).isNull(),
+              "钉住前：资源根在位时可取图");
+
+        ResourceImageProvider::pinImage(QStringLiteral("pinned"));
+        ResourceImageProvider::setRoot(QString());        // 模拟 QUIT/closeGame 卸载资源
+        const QImage afterQuit = prov.requestImage(QStringLiteral("pinned"), &size, QSize());
+        check(!afterQuit.isNull() && afterQuit.size() == QSize(4, 4),
+              "QUIT 后：钉住的静态资源仍可取图（不再 Failed to get image）");
+        check(!afterQuit.isNull() && afterQuit.pixel(0, 0) == qRgb(255, 0, 0),
+              "QUIT 后：钉住的像素内容正确（红 4x4）");
+
+        ResourceImageProvider::clearPinnedImages();       // 控制台清屏
+        check(prov.requestImage(QStringLiteral("pinned"), &size, QSize()).isNull(),
+              "清屏后：钉住的副本已释放（不常驻）");
+    }
+    {
+        // 运行期精灵（SPRITECREATE）：C# 的 ConsoleImagePart 同样持有像素，
+        // 于是 RESETDATA（本移植 GraphicsStore::clearAll）之后已显示的区块仍要能画。
+        ResourceImageProvider::setRoot(QString());
+        GraphicsStore::gCreate(9001, 4, 4);
+        GraphicsStore::gClear(9001, QColor(0, 128, 255));
+        GraphicsStore::spriteCreate(QStringLiteral("pinned_sprite"), 9001);
+        ResourceImageProvider::pinImage(QStringLiteral("pinned_sprite"));
+        GraphicsStore::clearAll();                        // 模拟 RESETDATA
+        ResourceImageProvider prov;
+        QSize size;
+        const QImage after = prov.requestImage(QStringLiteral("pinned_sprite"), &size, QSize());
+        check(!after.isNull() && after.size() == QSize(4, 4),
+              "RESETDATA 后：钉住的运行期精灵仍可取图");
+        check(!after.isNull() && after.pixel(0, 0) == qRgb(0, 128, 255),
+              "RESETDATA 后：钉住的精灵像素正确");
+        GraphicsStore::clearAll();
     }
 
     qDebug() << "\n==========================";

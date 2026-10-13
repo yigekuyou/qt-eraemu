@@ -757,6 +757,40 @@ Qt 日志体检（`qt-creator` 的 Application Output）修了两处：
   `QSoundEffect: Error decoding source file://0` —— 组 30 故意播不存在的音频。
 * `kf.iconthemes: Icon theme "…" not found` —— KDE 主题缺失，无害。
 
+## QUIT 后最后一屏的 `<img>`：区块取图钉住（对齐 C# ConsoleImagePart · 2026-10 修正）
+
+```bash
+# 复现（D-Bus 驱动 GUI，offscreen）：
+#   openDirectory test/example → sendInput 32（组32 的 HTML_PRINT <img> 展示）→ QUIT
+# 修正前 5 条：qrc:/…/ConsoleBlock.qml:235 QML Image: Failed to get image from provider:
+#   webp_stack2 / webp_atlas.webp / webp_atlas / anim_alpha_animated_lossy.webp / webp_base
+```
+
+**根因**：`QUIT` → `EraEngine::closeGame()` 会 `ResourceImageProvider::setRoot("")`
+（清图集、解码/裁切缓存）+ `GraphicsStore::clearAll()`（清运行期精灵），而
+「控制台不清屏」策略要求最后一屏**留在窗口上**。QML 的 `<img>` 是
+`Image { source: "image://emuera/<名>"; asynchronous: true }` —— **异步按名取图**，
+于是 QUIT 之后才被请求的那一屏图片全部落空。`RESETDATA`（本移植会
+`GraphicsStore::clearAll()`）同样会打掉屏上已有的运行期精灵。
+
+C# 不是这样：`ConsoleImagePart` 的构造里就 `cImage = AppContents.GetSprite(ResourceName)`，
+**解析期**把图像拿到手，`Console.Quit()` 只是 `state = ConsoleState.Quit`（什么都不销毁），
+已显示的区块因而永远画得出来。
+
+**修正**：区块生成时先把像素钉住，`requestImage` 优先取钉住的副本。
+
+| 位置 | 改动 |
+| --- | --- |
+| `resource_image_provider.{h,cpp}` | `pinImage()`（`GraphicsStore::spriteImage` → 图集/文件，取到即存入有界 `QCache`；`cacheKey` 相同不重复搬运）/ `clearPinnedImages()`；`requestImage` 先查钉住的副本。pin/clear 在游戏线程、request 在图像加载线程 → `QMutex` 保护 |
+| `console_backend.cpp` | `<img>`（含 `srcb`）与 `PRINT_IMG` 两条区块生成路径各调一次 `pinImage`；`clearAll()`（清屏/CLEAR/下一次装载）释放钉住的副本 |
+
+**回归**：`test_resource_image` 第 7 组（钉住 → `setRoot("")` → 仍取到原像素；
+运行期精灵 → `GraphicsStore::clearAll()` → 仍取到；清屏后释放）、
+`tst_console.qml::test_imageSurvivesResourceTeardown`（QML 层：卸载资源根后
+`blockImage.status == Image.Ready` 且 `paintedWidth > 0`）。
+端到端：app + `test/example` 组32「Failed to get image」5 → **0**；
+eraTW 标题画面（立絵合成 + `<img>`）0 未命中、0 失败。
+
 ## 滚动性能与「[未完成] 指令」（2026-10 · 第二批）
 
 ### 滚动卡顿：C++ 重排 → QML 整屏重建

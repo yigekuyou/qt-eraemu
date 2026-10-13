@@ -75,6 +75,18 @@ public:
     // 命中 resources/list.csv 的矩形取 w/h，否则按文件实际尺寸。找不到返回 false。
     static bool intrinsicSize(const QString& id, int& width, int& height);
 
+    // 控制台区块取图（对齐 C# ConsoleImagePart：`cImage = AppContents.GetSprite(名)`
+    // 在**解析期**就把图像拿在手里，之后 QUIT/RESETDATA 卸载资源、
+    // GraphicsStore::clearAll() 清运行期精灵都不影响已显示的最后一屏）。
+    // 移植侧 QML 的 `<img>` 是**异步按名取图**，closeGame() 又会
+    // ResourceImageProvider::setRoot("") + GraphicsStore::clearAll()，
+    // 于是 QUIT 之后才被请求的那一屏图片全部「Failed to get image from provider」。
+    // 所以区块生成时必须先把像素钉住（pin），requestImage 优先取钉住的副本。
+    // 解析不到时什么都不做（C# 同：退化成 AltText）。
+    static void pinImage(const QString& id);
+    // 控制台清屏（clearAll/CLEAR）后没有任何区块引用这些像素，全部释放。
+    static void clearPinnedImages();
+
     // 静态资源是否存在（图集条目或 resources 目录下的文件）。
     // C# 的 AppContents.LoadContents 会把 resources 下所有 csv 条目注册成精灵，
     // 因此 SPRITECREATED 系的查询也要把静态资源当作「已存在的精灵」。

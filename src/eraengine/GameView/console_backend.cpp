@@ -355,6 +355,11 @@ void ConsoleBackend::printTemplate(const PrintTemplate& output) {
             span.kind = ConsoleSpanKind::Image; span.imageSize = QSizeF(part.width, part.height);
             span.yposRaw = part.y;
             span.imageButton = part.imageAlt;   // <img srcb=...> 按钮选中态替换图
+            // C# ConsoleImagePart 在解析期就取到图像并持有；移植侧 QML 异步按名取图，
+            // 所以这里先把像素钉住：QUIT（closeGame -> setRoot("")+GraphicsStore 清空）
+            // 之后仍能画出最后一屏的 <img>（否则 "Failed to get image from provider"）。
+            ResourceImageProvider::pinImage(part.text);
+            if (!span.imageButton.isEmpty()) ResourceImageProvider::pinImage(span.imageButton);
             span.altText = QStringLiteral("<img src='%1'>").arg(part.text);
             // 资源固有像素尺寸（布局期算纵横比用）；取不到则为空。
             // 只在**宽度缺省**时才查（立絵常态是「只给 height」或「都不给」）：
@@ -514,6 +519,8 @@ void ConsoleBackend::printImage(const QString& resourceName, int width, int heig
     part.altText = QStringLiteral("<img src='%1'>").arg(resourceName);   // C# AltText 回退
     part.imageSize = QSizeF(width, height);
     part.yposRaw = ypos;               // 字号百分比的纵向偏移（measurePart 折算成像素）
+    // 同 <img> 路径：区块生成时钉住像素（C# ConsoleImagePart 的 cImage 语义）
+    ResourceImageProvider::pinImage(resourceName);
     // 与 `<img>` 路径同源：固有尺寸供布局期补宽度；两个宽高都缺省时按固有像素排版。
     int iw = 0, ih = 0;
     if (width <= 0 && ResourceImageProvider::intrinsicSize(resourceName, iw, ih))
@@ -611,6 +618,8 @@ void ConsoleBackend::clearAll() {
     m_lastLineTemporary = false;
     m_maxSpanReach = 1;
     m_publishedLineCount = 0;
+    // 屏上已无任何区块引用图片像素：把钉住的副本一起释放（下一次装载重新钉）。
+    ResourceImageProvider::clearPinnedImages();
     invalidateLineCache();        // 行全部消失 -> 按行缓存作废
     ++m_generation;
     endResetModel();

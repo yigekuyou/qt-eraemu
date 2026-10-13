@@ -38,7 +38,6 @@
 #include "extension_registry.h"
 #include "constant_table.h"
 #include "eraengine_log.h"
-#include "function_system.h"
 #include "GameView/graphics_store.h"
 
 namespace {
@@ -59,14 +58,13 @@ ExpressionEvaluator& ExecutionEngine::getEvaluator() {
 }
 
 ExecutionEngine::ExecutionEngine(VariableStorage* storage, GameBaseData* gameBaseData, QObject* parent)
-    : QObject(parent), m_functionSystem(nullptr), m_storage(storage), m_gameBaseData(gameBaseData), m_running(false), m_currentLine(0), m_executionPosition(0), m_totalInstructionsExecuted(0) {
+    : QObject(parent), m_storage(storage), m_gameBaseData(gameBaseData), m_running(false), m_currentLine(0), m_executionPosition(0), m_totalInstructionsExecuted(0) {
     connect(&m_erbLoader, &ErbLoader::objectNameChanged, this, &ExecutionEngine::objectNameChanged);
 
     // ParseTable reference (installed later via setParseTable)
     m_parseTable = nullptr;
 
     // Initialize function system
-    m_functionSystem = new FunctionSystem(this);
 
     // 扩展实现所需的服务（复杂度由注册类承担：引擎填入，扩展经 services() 取用）。
     // 存档目录用惰性 provider —— setGameDirectory 之后才可知。
@@ -94,10 +92,6 @@ ExecutionEngine::ExecutionEngine(VariableStorage* storage, GameBaseData* gameBas
 }
 
 ExecutionEngine::~ExecutionEngine() {
-    if (m_functionSystem) {
-        delete m_functionSystem;
-        m_functionSystem = nullptr;
-    }
 }
 
 void ExecutionEngine::setParseTable(EraParseTable* parseTable) {

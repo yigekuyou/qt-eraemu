@@ -250,7 +250,7 @@ int main(int argc, char* argv[]) {
                                                   stringResolve));
         }
         check(stringTable.loadScript("strings", stringLines), "load string assignment script");
-        stringTable.finalizeParse();
+        stringTable.markLoadComplete();
         const ScriptData* strings = stringTable.script("strings");
         check(strings != nullptr, "string assignment script available");
         if (strings) {
@@ -293,7 +293,7 @@ int main(int argc, char* argv[]) {
             lines.append(AstBuilder::build(source[i], ScriptPosition("boundary.ERB", i),
                 [&](const QString& e) { return boundary.expressionAst(e); }));
         boundary.loadScript("boundary", lines);
-        boundary.finalizeParse();
+        boundary.markLoadComplete();
         const auto* data = boundary.script("boundary");
         for (int i : {2, 3, 4, 5, 6, 7})
             check(data && !data->lines[i].argument.typeOk, QStringLiteral("load rejects boundary line %1").arg(i));
@@ -352,7 +352,7 @@ int main(int argc, char* argv[]) {
         for (int i = 0; i < vsrc.size(); ++i)
             vlines.append(AstBuilder::build(vsrc.at(i), ScriptPosition("v.ERB", i + 1, 0), r3));
         t3.loadScript("v", vlines);
-        t3.finalizeParse();
+        t3.markLoadComplete();
         for (const QString& w : t3.parseWarnings()) qDebug().noquote() << "      warn:" << w;
         check(t3.parseWarningCount() == 0,
               QString("变量槽实参不误报（实得 %1 条告警）").arg(t3.parseWarningCount()));

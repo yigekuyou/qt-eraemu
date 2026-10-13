@@ -206,7 +206,7 @@ struct CompiledPrintTemplate {
 //
 // 此前 caseMatches 每次执行都重新 splitCaseArgs + expressionAst —— eraTW
 // 地图这类「每字符一个 SELECTCASE × 25 个 CASE」的热路径上是最大热点。
-// CASE 结构在装载期构建，finalizeParse 按 ownerFunction 重绑；执行只消费节点。
+// CASE 结构在装载期构建，markLoadComplete 按 ownerFunction 重绑；执行只消费节点。
 // ---------------------------------------------------------------------------
 struct CaseClause {
     enum class Kind : quint8 { Equal, IsOp, Range };

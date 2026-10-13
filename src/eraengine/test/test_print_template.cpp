@@ -135,7 +135,7 @@ int main(int argc, char** argv) {
                                               "@SECOND", "#DIM SHARED", "RETURN"})
             localLines.append(AstBuilder::build(source, {}, localResolve));
         scoped.loadScript("private_form", localLines);
-        scoped.finalizeParse();
+        scoped.markLoadComplete();
         const auto* loaded = scoped.lineAt("private_form", 2);
         check(loaded && loaded->arguments.first().ast && !loaded->isError
               && loaded->argument.typeOk && validateExpression(*loaded->arguments.first().ast).isEmpty(),
@@ -352,7 +352,7 @@ int main(int argc, char** argv) {
           "dynamic tag name cannot discard an interpolation or generate structure");
     QList<LogicalLine> lines;
     for (const QString& text : QStringList{"@STR", "#DIMS SHARED", "PRINTS SHARED", "@INT", "#DIM SHARED", "PRINTV SHARED"}) lines.append(AstBuilder::build(text, {}, resolve));
-    table.loadScript("scope", lines); table.finalizeParse();
+    table.loadScript("scope", lines); table.markLoadComplete();
     const auto str = table.lineAt("scope", 2)->arguments.first().ast;
     const auto num = table.lineAt("scope", 5)->arguments.first().ast;
     check(str && num && str != num && str->valueType() == OperandType::Str && num->valueType() == OperandType::Int, "same text bound independently in distinct scopes");

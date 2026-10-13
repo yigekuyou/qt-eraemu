@@ -139,7 +139,7 @@ public:
                     bool isHeaderFile = false, const QString& path = QString());
 
     // 卸载全部脚本（QUIT 关闭游戏）：释放 AST/标签/函数表/告警等解析期内存。
-    // 调用后脚本表为空，需重新 loadScript + finalizeParse 才能执行。
+    // 调用后脚本表为空，需重新 loadScript + markLoadComplete 才能执行。
     void clear();
 
     [[nodiscard]] QString scriptPath(const QString& scriptName) const;
@@ -238,9 +238,9 @@ public:
     // 变量表（#DIM/#DIMS/#GLOBAL/#PRIVATE + 函数形参）
     [[nodiscard]] const VariableTable& variableTable() const { return m_variables; }
 
-    // 全部脚本装载完成后调用一次：重算维数 + 把变量类型回填到所有缓存 AST。
-    // （装载中只做增量，避免 O(脚本数 × AST 总数)）
-    void finalizeParse();
+    // 装载收尾（唯一入口）：全局声明定稿 → 全体脚本重绑 → 统一出诊断，
+    // 并把只读区定型（之后不再编译新源码）。取代原 finalizeParse 阶段。
+    void markLoadComplete();
 
     // 并行装载 merge：把 worker 的本地表达式缓存并入主缓存（first-wins）
 
@@ -296,24 +296,30 @@ private:
     // 变量声明解析（#DIM/#DIMS/#GLOBAL/#GLOBALS/#PRIVATE）与类型回填
     void parseVariableDeclaration(const LogicalLine& line, const QString& currentFunction,
                                   bool isHeaderFile);
-    void applyVariableTypes();
+    void applyVariableTypes(const QString& onlyScript = QString());
     // 字符串赋值的右值改按 StrForm 解析（对齐 C# AnalyseFormattedString）
-    void applyStringAssignments();
+    void applyStringAssignments(const QString& onlyScript = QString());
     // #DIM/#DIMS 初值：全局装载时写入
     void applyVariableDefaults(const QList<VariableDecl>& decls);
     void applyGlobalVariableDefaults();
     // 用户自定义函数的强类型化：形参类型由变量表回填（#DIM/#DIMS + ARG/ARGS），
-    // 返回类型由 #FUNCTION(S) 决定。必须在 finalizeParse 内、变量声明解析之后。
+    // 返回类型由 #FUNCTION(S) 决定。必须在 markLoadComplete 内、变量声明解析之后。
     void resolveUserFunctionTypes();
     // 调用点类型校验（CALL 语句 + 式中调用）
     QString checkUserCallArgs(const UserFunctionDecl& decl,
                               const QList<OperandType>& argTypes) const;
-    // 参数个数/类型校验（finalizeParse 内、类型回填之后调用）
-    void validateArguments();
-    // 函数调用重绑 + 校验（finalizeParse 内、类型回填之后调用）：
+    // 参数个数/类型校验（markLoadComplete 内、类型回填之后调用）
+    void validateArguments(const QString& onlyScript = QString());
+    // 函数调用重绑 + 校验（markLoadComplete 内、类型回填之后调用）：
     // 把每个 FunctionNode 重新解析为 内置函数 / 用户自定义函数 / 未定义函数，
     // 并用最终（类型回填后）的实参 AST 复刻 C# FunctionMethod.CheckArgumentType()。
-    void resolveFunctionNodes();
+    void resolveFunctionNodes(const QString& onlyScript = QString());
+    // 全体脚本绑定：字符串赋值/FUNC/变量类型/赋值 AST/函数调用解析（一趟）。
+    void finalizeBindings();
+    // 全体脚本校验：产出诊断，须在**全部绑定完成后**统一调用（跨文件前向引用）。
+    void finalizeValidation();
+    // 全局声明定稿：常量/维数求值器 + 维数 + 全局初值 + 用户函数类型（幂等）。
+    void resolveGlobalDeclarations();
     // 校验告警收集器：按脚本并行时每脚本各持一个，随后**按脚本顺序**合并。
     //   warnings : 告警文本，保持脚本内产生顺序；
     //   keys     : 与 warnings 一一对应；非空 = 该告警的「去重 key」
@@ -335,6 +341,7 @@ private:
     int lineCountFor(const QString& script) const;
 
     bool m_finalized = false;
+    bool m_constProvidersReady = false;   // 常量/维数求值器是否已设置
     QHash<QString, ScriptData> m_scripts;
     // perf：hasLabel 的结果按标签名记忆（此前每次 TRYCALL/TRYCALLFORM 都遍历
     // 全部脚本的 labelPositions；eraTW 地图逐字符 TRYCALLFORM 时是热点）。

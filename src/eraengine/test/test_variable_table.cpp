@@ -70,7 +70,7 @@ int main(int argc, char* argv[]) {
         script.append(AstBuilder::build(src.at(i), ScriptPosition("t.ERB", i, 1), resolve));
     }
     check(table.loadScript("vt", script), "loadScript(vt)");
-    table.finalizeParse();   // 装载完成后统一回填（引擎在 loadScripts 之后调用）
+    table.markLoadComplete();   // 装载完成后统一回填（引擎在 loadScripts 之后调用）
 
     const VariableTable& vt = table.variableTable();
 
@@ -134,7 +134,7 @@ int main(int argc, char* argv[]) {
             s2.append(AstBuilder::build(dimSrc.at(i), ScriptPosition("d.ERB", i, 1), r2));
         }
         table.loadScript("dims", s2);
-        table.finalizeParse();
+        table.markLoadComplete();
 
         qint64 w = 0;
         check(table.variableTable().constInt("W", w) && w == 12, "#DIM CONST W = 12 -> 常数表");
@@ -161,7 +161,7 @@ int main(int argc, char* argv[]) {
             s3.append(AstBuilder::build(constArrSrc.at(i), ScriptPosition("ca.ERB", i, 1), r3));
         }
         table.loadScript("carr", s3);
-        table.finalizeParse();
+        table.markLoadComplete();
         const VariableDecl* snow = table.variableTable().find("SNOW", "MAIN");
         check(snow != nullptr && snow->lengths == QList<int>({4}),
               QString("SNOW 长度 == [4]（得到 %1）")

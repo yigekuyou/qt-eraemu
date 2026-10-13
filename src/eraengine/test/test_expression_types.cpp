@@ -237,7 +237,7 @@ int main(int argc, char* argv[]) {
         for (int i = 0; i < source.size(); ++i)
             lines.append(AstBuilder::build(source[i], ScriptPosition("arrays.ERB", i, 0), resolve));
         check(table.loadScript("arrays", lines), "load array argument fixture");
-        table.finalizeParse();
+        table.markLoadComplete();
         const auto* main = table.lineAt("arrays", 6);
         if (main && main->isError == valid) qDebug() << main->errMes << table.parseWarnings();
         check(main && main->isError != valid, expression + (valid ? " accepts" : " rejects"));

@@ -149,7 +149,7 @@ int main(int argc, char* argv[]) {
           "loadScript(DIM.ERH)");
     check(table.loadScript("main", buildLines(table, main, "main.ERB")), "loadScript(main)");
     table.setEntryPoint("MAIN");
-    table.finalizeParse();
+    table.markLoadComplete();
 
     const ExecState st = runner.runToCompletion();
     check(st == ExecState::Halt, "run finished (Halt)");

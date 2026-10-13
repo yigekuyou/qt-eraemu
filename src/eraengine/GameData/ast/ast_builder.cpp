@@ -785,7 +785,7 @@ LogicalLine AstBuilder::build(const QString& rawLine,
         if (resolveQuiet) value.ast = resolveQuiet(rhs);
         else if (resolve) value.ast = resolve(rhs);
         // 已知字符串左值（系统变量/已登记声明）立即按原始 FORM 编译。
-        // 其余声明由 finalizeParse 的 applyStringAssignments 完成定型。
+        // 其余声明由 markLoadComplete 的 applyStringAssignments 完成定型。
         const auto& lookup = resolveQuiet ? resolveQuiet : resolve;
         if (op == QLatin1String("=") && lookup) {
             const auto target = lookup(lhs);
@@ -1319,7 +1319,7 @@ LogicalLine AstBuilder::build(const QString& rawLine,
     }
     if (argKind == ArgKind::Case) {
         buildCaseClauses(line, resolve);
-        // finalizeParse rebuilds these clauses in their owning function scope.
+        // markLoadComplete rebuilds these clauses in their owning function scope.
     }
 
     // 条件指令：用「原始整行文本」作为条件表达式归约（保留引号等字面量）

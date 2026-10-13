@@ -30,8 +30,6 @@
 #include "encoding_probe.h"
 #include "variable_storage.h"
 #include "expression_evaluator.h"
-#include "function_system.h"
-#include "rendering_system.h"
 #include "file_system_io.h"
 #include "execution_engine.h"
 #include "process_state.h"
@@ -45,7 +43,6 @@
 #include "variable_types.h"
 #include "game_base_data.h"
 #include "identifier_dictionary.h"
-#include "signal_hub.h"
 #include "era_parse_table.h"
 #include "script_runner.h"
 #include "console_backend.h"
@@ -67,7 +64,6 @@ public:
     // QML-exposable properties
 		Q_PROPERTY(QString gameDirectory READ getGameDirectory WRITE setGameDirectory NOTIFY gameDirectoryChanged)
 		Q_PROPERTY(GameBaseData* gameBaseData READ gameBaseData CONSTANT)
-		Q_PROPERTY(RenderingSystem* renderingSystem READ getRenderingSystem CONSTANT)
 		Q_PROPERTY(EraTetrisInputSystem* inputSystem READ getInputSystem CONSTANT)
 		Q_PROPERTY(InputHandler* inputHandler READ getInputHandler CONSTANT)
 		Q_PROPERTY(SystemStatusManager* statusManager READ getStatusManager CONSTANT)
@@ -110,8 +106,6 @@ public:
 		// 固定随机种子（调试/回归用）：之后整局的随机序列可复现
 		Q_INVOKABLE void setRandomSeed(quint32 seed);
 		Q_INVOKABLE void randomizeRandom();
-		FunctionSystem* getFunctionSystem() { return &m_functionSystem; }
-		RenderingSystem* getRenderingSystem() { return &m_renderingSystem; }
 		FileSystem* getFileSystem() { return &m_fileSystem; }
 		BinaryIo* getBinaryIo() { return &m_binaryIo; }
 		EraTetrisInputSystem* getInputSystem() { return &m_inputSystem; }
@@ -120,7 +114,6 @@ public:
 		SystemStateMachine* getSystemStateMachine() { return &m_systemStateMachine; }
 		InputHandler* getInputHandler() { return &m_inputHandler; }
     SystemStatusManager* getStatusManager() { return &m_statusManager; }
-    SignalManager* getSignalManager() { return &m_signalManager; }
     EraParseTable* getParseTable() { return &m_parseTable; }
     ScriptRunner* getScriptRunner() { return &m_scriptRunner; }
     ConsoleBackend* getConsole() { return &m_console; }
@@ -187,7 +180,7 @@ public:
 
     // ---- 异步装载（ERB -> AST 后台进行，不阻塞 UI）----
     // 配置/CSV/GameBase 同步装载（小文件），ERB 分块后台解析 + 主线程合并；
-    // 完成后 finalizeParse + 入口点收集，并发 scriptsLoaded。
+    // 完成后入口点收集，并发 scriptsLoaded。
     Q_INVOKABLE void reloadAsync();
     // 设定目录并**异步**装载（不阻塞；QML 首屏用）
     Q_INVOKABLE void loadAsync(const QString& directory);
@@ -302,8 +295,6 @@ private:
     GameBaseData m_gameBaseData;
     VariableStorage m_variableStorage;
     ExpressionEvaluator m_expressionEvaluator;
-    FunctionSystem m_functionSystem;
-    RenderingSystem m_renderingSystem;
     FileSystem m_fileSystem;
     BinaryIo m_binaryIo;
     EraTetrisInputSystem m_inputSystem;
@@ -311,7 +302,6 @@ private:
     ProcessState m_processState;
     SystemStateMachine m_systemStateMachine;
     SystemStatusManager m_statusManager;
-    SignalManager m_signalManager;
     EraParseTable m_parseTable;
     ScriptRunner m_scriptRunner;
     ConsoleBackend m_console;
@@ -334,16 +324,12 @@ private:
     EventManager m_eventManager;
     
     // Connection manager - manages signal-slot connections between components
-    ConnectionManager m_connectionManager;
-
     // D-Bus 调试/控制入口（/debug 对象；无会话总线时为空壳）
     std::unique_ptr<EraDBusDebug> m_dbusDebug;
 
     // 异步装载：连接句柄（避免重复连接）
     QMetaObject::Connection m_loadProgressConn;
     QMetaObject::Connection m_loadCompletedConn;
-    QFuture<void> m_semanticFuture;   // 后台语义阶段（finalizeParse）的 future
-    bool m_semanticRunning = false;   // 后台语义阶段（finalizeParse）进行中
     bool m_hasError = false;   // 最近一次执行出错（状态灯）
     bool m_defaultTitleVisible = false;   // 标准标题画面（QML）是否显示    // ---- 内部：目录解析与分批装载 ----
     bool resolveGameDirs();          // 解析 CSV/ERB 目录（绝对路径 + 实际大小写）
@@ -356,7 +342,8 @@ private:
     void clearLoadedGame();           // 重载边界：释放旧 AST/拍平/变量/常量
     void stopAsyncLoad();             // 取消并等待旧加载会话，随后才能清理解析表
 
-    quint64 m_loadGeneration = 0;     // 丢弃过期的 loader/语义完成回调
+    bool m_completingLoad = false;    // 收尾窗口（已弃用后台语义线程，仅保留取消语义）
+    quint64 m_loadGeneration = 0;     // 丢弃过期的 loader/完成回调
 };
 
 #endif // ERAENGINE_H

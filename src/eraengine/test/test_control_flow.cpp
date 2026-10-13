@@ -31,7 +31,7 @@ static void run(const QString& name, const QStringList& source, qint64 expected,
         lines.append(AstBuilder::build(script[i], ScriptPosition("flow.ERB", i, 0),
             [&table](const QString& text) { return table.expressionAst(text); }));
     table.loadScript("flow", lines);
-    table.finalizeParse();
+    table.markLoadComplete();
     for (int i = 0; i < lines.size(); ++i) {
         const auto* loaded = table.lineAt("flow", i);
         if (!loaded || loaded->functionName != "FUNC") continue;
@@ -74,7 +74,7 @@ static void tryListLoadTime() {
         lines.append(AstBuilder::build(source[i], ScriptPosition("list.ERB", i, 0),
             [&table](const QString& text) { return table.expressionAst(text, true); }));
     table.loadScript("list", lines);
-    table.finalizeParse();
+    table.markLoadComplete();
     storage.setGlobalStr1D("LIST_NAME", 0, "CHOSEN");
     const auto* entry = table.lineAt("list", 3);
     bool good = entry && !entry->isError && entry->argument.typeOk
@@ -99,7 +99,7 @@ static void tryListLoadTime() {
         badLines.append(AstBuilder::build(badSource[i], ScriptPosition("bad.ERB", i, 0),
             [&invalid](const QString& text) { return invalid.expressionAst(text, true); }));
     invalid.loadScript("bad", badLines);
-    invalid.finalizeParse();
+    invalid.markLoadComplete();
     good &= invalid.lineAt("bad", 2)->isError && invalid.lineAt("bad", 3)->isError;
     if (!good) { qCritical() << "TRY list load-time scope/invalid AST regression failed"; ++failures; }
     else qInfo() << "PASS TRY list load-time scope/invalid AST regression";
@@ -130,7 +130,7 @@ static void htmlFlow() {
         lines.append(AstBuilder::build(script[i], ScriptPosition("html.ERB", i, 0),
             [&table](const QString& text) { return table.expressionAst(text); }));
     const auto ast = table.expressionAst("\"<button value='7'>same</button>\"");
-    table.loadScript("html", lines); table.finalizeParse(); table.setEntryPoint("MAIN");
+    table.loadScript("html", lines); table.markLoadComplete(); table.setEntryPoint("MAIN");
     // Identical markup obtained through an ordinary runtime write stays opaque.
     storage.setLocalStr(0, "<button value='99'>opaque</button>");
     const auto result = runner.runToCompletion();

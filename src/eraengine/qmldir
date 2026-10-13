@@ -16,4 +16,3 @@
 module io.yigekuoyou.eraengine
 plugin eraengine
 typeinfo eraengine.qmltypes
-singleton ConsoleDisplay 1.0 ConsoleDisplay

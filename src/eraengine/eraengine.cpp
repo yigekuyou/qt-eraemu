@@ -23,10 +23,7 @@
 #include <QFileInfo>
 #include <QRegularExpression>
 
-// Include ConsoleDisplay for QML singleton registration
-#include "rendering_system.h"
 #include "system_status_manager.h"
-#include "signal_hub.h"
 #include "erb_loader.h"
 #include "i18n.h"
 #include "GameView/dbus_debug.h"
@@ -50,11 +47,7 @@ void EraEngine::stopAsyncLoad() {
         if (m_loadProgressConn) disconnect(m_loadProgressConn);
         if (m_loadCompletedConn) disconnect(m_loadCompletedConn);
         loader.cancelAndWait();
-        if (m_semanticFuture.isRunning()) {
-                m_semanticFuture.waitForFinished();
-        }
-        m_semanticFuture = {};
-        m_semanticRunning = false;
+        m_completingLoad = false;   // 取消收尾窗口（收尾已内联到 loadScript）
 }
 
 void EraEngine::clearLoadedGame() {
@@ -82,8 +75,6 @@ EraEngine::EraEngine(QObject *parent)
 		: QObject(parent),
 			m_variableStorage(),
 			m_expressionEvaluator(),
-			m_functionSystem(),
-			m_renderingSystem(),
 			m_fileSystem(),
 			m_binaryIo(),
 			m_inputSystem(),
@@ -91,7 +82,6 @@ EraEngine::EraEngine(QObject *parent)
 			m_processState(),
 			m_systemStateMachine(&m_processState),
 			m_statusManager(),
-			m_signalManager(this),
 			m_parseTable(&m_processState, &m_executionEngine),
 			m_scriptRunner(&m_parseTable, &m_executionEngine, &m_processState, &m_variableStorage),
 			m_console(),
@@ -100,8 +90,7 @@ EraEngine::EraEngine(QObject *parent)
 			m_configLoader(),
 			m_scriptProcessor(),
 			m_inputHandler(),
-			m_eventManager(),
-			m_connectionManager(this)
+			m_eventManager()
 {
 		// 告警/诊断文本的 i18n：装载期在**解析之前**把翻译器装好，之后所有
 		// eraengine::diagTr() 才会命中 .qm（未提供 .qm 时原样输出中文源文本）。
@@ -525,73 +514,6 @@ EraEngine::EraEngine(QObject *parent)
 		connect(&m_console, &ConsoleBackend::inputSubmittedString, this,
 				[this](const QString& value) { provideInputString(value); });
 		
-		// Initialize signal manager with default handlers
-		// Connect execution engine signals to signal manager
-		connect(&m_executionEngine, &ExecutionEngine::executionStarted,
-				&m_signalManager, &SignalManager::emitExecutionStarted);
-		
-		connect(&m_executionEngine, &ExecutionEngine::executionFinished,
-				&m_signalManager, &SignalManager::emitExecutionFinished);
-		
-		connect(&m_executionEngine, &ExecutionEngine::errorOccurred,
-				&m_signalManager, &SignalManager::emitExecutionError);
-		
-		// Connect ErbLoader signals to signal manager
-		connect(&m_executionEngine.getErbLoader(), &ErbLoader::parseStarted,
-				&m_signalManager, &SignalManager::emitParseStarted);
-		connect(&m_executionEngine.getErbLoader(), &ErbLoader::parseFinished,
-				&m_signalManager, &SignalManager::emitParseFinished);
-		connect(&m_executionEngine.getErbLoader(), &ErbLoader::parseError,
-				&m_signalManager, &SignalManager::emitParseError);
-		
-		// Connect signal manager to system status manager slots for all signal types
-		connect(&m_signalManager, &SignalManager::signalEmitted,
-				&m_statusManager, [this](SignalType type, const QVariant& data) {
-			switch (type) {
-				case SignalType::ExecutionStarted: {
-					QString scriptName = data.value<QString>();
-					m_statusManager.onScriptStarted(scriptName);
-					break;
-				}
-				case SignalType::ExecutionFinished: {
-					m_statusManager.onScriptFinished();
-					break;
-				}
-				case SignalType::ExecutionError: {
-					QString errorMessage = data.value<QString>();
-					m_statusManager.onError(errorMessage);
-					break;
-				}
-				case SignalType::ParseStarted: {
-					QString scriptName = data.value<QString>();
-					qDebug() << "[SystemStatus] Parse started:" << scriptName;
-					break;
-				}
-				case SignalType::ParseLineReady: {
-					ParseLineData lineData = data.value<ParseLineData>();
-					qDebug() << "[SystemStatus] Parse line ready:" << lineData.scriptName
-							 << "line" << lineData.lineNumber << ":" << lineData.lineContent;
-					break;
-				}
-				case SignalType::ParseFinished: {
-					QString scriptName = data.value<QString>();
-					qDebug() << "[SystemStatus] Parse finished:" << scriptName;
-					break;
-				}
-				case SignalType::ParseError: {
-					QString errorMessage = data.value<QString>();
-					qDebug() << "[SystemStatus] Parse error:" << errorMessage;
-					break;
-				}
-				default:
-					break;
-			}
-		});
-		
-		qDebug() << "[EraEngine] Connection manager initialized with" 
-				 << m_connectionManager.connectionCount() << "connections";
-		qDebug() << "[EraEngine] Signal manager ready";
-		
 		// Connect ErbLoader to ParseTable for parsing notifications
 		m_executionEngine.getErbLoader().setParseTable(&m_parseTable);
 
@@ -604,13 +526,23 @@ EraEngine::EraEngine(QObject *parent)
 
 		// Connect system state machine signals to signal manager / status manager
 		connect(&m_systemStateMachine, &SystemStateMachine::stateChanged,
-				&m_signalManager, [this](StateCode, StateCode newState) {
-			m_signalManager.emitStateChanged(newState);
-			m_statusManager.onStateChanged(newState);
-		});
-		connect(&m_systemStateMachine, &SystemStateMachine::inputRequested,
-				&m_signalManager, &SignalManager::emitInputRequested);
-		// 交给控制台的必须是**输入类型**（INPUT/TINPUT/ANYKEY…），不是系统状态名 ——
+				[this](StateCode, StateCode newState) {
+					m_statusManager.onStateChanged(newState);
+				});
+
+		// ---- 直接连接（原经 SignalManager 转发，现改为直连） ----
+		connect(&m_executionEngine, &ExecutionEngine::executionStarted,
+				&m_statusManager, &SystemStatusManager::onScriptStarted);
+		connect(&m_executionEngine, &ExecutionEngine::executionFinished,
+				&m_statusManager, &SystemStatusManager::onScriptFinished);
+		connect(&m_executionEngine, &ExecutionEngine::errorOccurred,
+				&m_statusManager, &SystemStatusManager::onError);
+		connect(&m_executionEngine.getErbLoader(), &ErbLoader::parseStarted,
+				this, [](const QString& name) { qDebug() << "[parse] started:" << name; });
+		connect(&m_executionEngine.getErbLoader(), &ErbLoader::parseFinished,
+				this, [](const QString& name) { qDebug() << "[parse] finished:" << name; });
+		connect(&m_executionEngine.getErbLoader(), &ErbLoader::parseError,
+				this, [](const QString& err) { qWarning().noquote() << "[parse] error:" << err; });		// 交给控制台的必须是**输入类型**（INPUT/TINPUT/ANYKEY…），不是系统状态名 ——
 		// 以前这里传 stateName(state)，QML 就显示「输入（Train_CallEventComEnd）」，
 		// 且 inputExpectsAnyKey/inputExpectsString 全判错。
 		connect(&m_systemStateMachine, &SystemStateMachine::inputKindRequested, this,
@@ -620,35 +552,6 @@ EraEngine::EraEngine(QObject *parent)
 		connect(&m_systemStateMachine, &SystemStateMachine::errorOccurred, this,
 				[](const QString& message) {
 			qWarning().noquote() << "[SystemStateMachine]" << message;
-		});
-		
-		// Connect signal manager to system status manager for parsing signals
-		connect(&m_signalManager, &SignalManager::signalEmitted,
-				&m_statusManager, [this](SignalType type, const QVariant& data) {
-			switch (type) {
-				case SignalType::ParsingPaused: {
-					int state = data.value<int>();
-					qDebug() << "[SystemStatus] Parsing paused for state:" << state;
-					break;
-				}
-				case SignalType::ParsingResumed: {
-					int state = data.value<int>();
-					qDebug() << "[SystemStatus] Parsing resumed from state:" << state;
-					break;
-				}
-				case SignalType::StateChanged: {
-					int state = data.value<int>();
-					qDebug() << "[SystemStatus] State changed to:" << state;
-					break;
-				}
-				case SignalType::InputRequested: {
-					int state = data.value<int>();
-					qDebug() << "[SystemStatus] Input requested for state:" << state;
-					break;
-				}
-				default:
-					break;
-			}
 		});
 }
 
@@ -770,7 +673,7 @@ void EraEngine::reload()
 				// @EVENTFIRST 的 6 个声明变 12 个，事件组重复执行）
 				qDebug() << "[DEBUG] Loading scripts from:" << m_erbDir;
 				m_executionEngine.loadScripts(m_erbDir);
-				m_parseTable.finalizeParse();   // 全量回填变量类型（一次性）
+				m_parseTable.markLoadComplete();   // 只读区定型
 				qDebug() << "[DEBUG] Scripts loaded";
 
 				collectEntryPoints();
@@ -1389,33 +1292,22 @@ void EraEngine::reloadAsync()
 						emit scriptsLoaded(false);
 						return;
 				}
-				// 语义阶段（类型回填 + 参数校验 + 入口点收集）是 eraTW 上**最大的一次
-				// 主线程开销**：实测 finalizeParse ≈ 10s（validateArguments 3.5s +
-				// applyVariableTypes 5.0s + resolveFunctionNodes 1.4s，2.2M 行 /
-				// 57846 个用户函数）。放在主线程 = 界面假死十秒。
-				// 装载期间 GUI 不读解析表（runSystem 要等 scriptsLoaded），因此把它
-				// 放到后台线程执行，完成后回主线程发 scriptsLoaded。
-				m_semanticRunning = true;
-				auto* watcher = new QFutureWatcher<void>(this);
-                const quint64 semanticGeneration = m_loadGeneration;
-				connect(watcher, &QFutureWatcher<void>::finished, this, [this, watcher, semanticGeneration]() {
-						watcher->deleteLater();
-                        if (semanticGeneration != m_loadGeneration) return;
-                        m_semanticFuture = {};
-						m_semanticRunning = false;
-                        m_processState.setExecState(ExecState::Continue);
-						loadFinishedHook();
+				// 收尾已在 loadScript → finalizeScript 中逐脚本完成，
+				// 此处只做入口点收集与完成通知。
+				m_parseTable.markLoadComplete();
+				collectEntryPoints();
+				loadFinishedHook();
+				// 推迟到下一事件循环再发 scriptsLoaded：期间若有新的 loadAsync
+				// （世代 +1），本次完成回调即被丢弃 —— 与原「语义阶段」相同的取消语义，
+				// 只是不再有后台线程/future。m_completingLoad 让 isLoadingScripts()
+				// 在收尾窗口内仍报「正在装载」。
+				m_completingLoad = true;
+				QTimer::singleShot(0, this, [this, generation]() {
+						m_completingLoad = false;
+						if (generation != m_loadGeneration) return;
+						m_processState.setExecState(ExecState::Continue);
 						emit scriptsLoaded(true);
 				});
-				m_semanticFuture = QtConcurrent::run([this]() {
-						QElapsedTimer fin;
-						fin.start();
-						m_parseTable.finalizeParse();
-						collectEntryPoints();
-						qInfo().noquote() << "[EraEngine] 后台语义阶段(finalizeParse+入口点)"
-						                  << fin.elapsed() << "ms";
-				});
-				watcher->setFuture(m_semanticFuture);
 		});
 
 		emit scriptsLoadStarted();
@@ -1424,7 +1316,7 @@ void EraEngine::reloadAsync()
 
 bool EraEngine::isLoadingScripts() const
 {
-		return m_semanticRunning || m_executionEngine.getErbLoader().isLoading();
+		return m_completingLoad || m_executionEngine.getErbLoader().isLoading();
 }
 
 QStringList EraEngine::parseWarnings() const

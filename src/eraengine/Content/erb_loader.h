@@ -60,7 +60,7 @@ struct ParsedErbFile {
 // 一遍内容，顺带扫一遍 # 行几乎不增加成本（不读盘、不解码）。
 //
 // 只带**类型**：维数 / 初值 / const / CHARADATA 等仍由 loadScript 登记，
-// finalizeParse 的 applyVariableTypes 会按变量表把节点重新定型（含维数与
+// markLoadComplete 的 applyVariableTypes 会按变量表把节点重新定型（含维数与
 // readOnly），所以这里不需要（也不应该）复制那些信息。
 // ---------------------------------------------------------------------------
 struct LoadTimeVarTypes {
@@ -76,7 +76,7 @@ struct LoadTimeVarTypes {
 // 现在直接产出「完整 AST」：读文件 -> 逐行 AstBuilder::build -> QList<LogicalLine>。
 // 表达式归约复用 AST 缓存；**支持并行装载**：
 //   预扫描(函数返回类型 + 用户变量类型) -> 分块并行解析(线程内私有缓存)
-//   -> 主线程按序合并 -> finalizeParse。
+//   -> 主线程按序合并 -> markLoadComplete。
 class ConstantTable;
 
 class ErbLoader : public QObject {
@@ -94,7 +94,7 @@ public:
 
     // ---- 异步装载（分块：后台解析 -> 主线程合并，不阻塞 UI）----
     // 完成/进度通过 loadProgress / loadCompleted 信号上报；最终仍需调用方
-    // 在 loadCompleted 槽里执行 EraParseTable::finalizeParse()（全量语义阶段）。
+    // 在 loadCompleted 槽里执行 EraParseTable::markLoadComplete()（全局定稿 + 重绑 + 诊断）。
     void loadDirectoryAsync(const QString& dirPath, int depth = 0);
     [[nodiscard]] bool isLoading() const { return m_async.active; }
     void cancelLoad();
@@ -282,7 +282,7 @@ private:
     // dump_lines 串行/并行各导出 2,075,985 行拍平行，diff 完全相同。
     // 并行合并本身即保序（blockingMapped 结果按输入序返回、主线程按序合并）；
     // 并行解析期的三类不确定性（「未定义」解析 / worker AST 缓存缺失 /
-    // 插入顺序）已由 finalizeParse 的重绑 + labels() 的 (脚本名,行号) 排序 +
+    // 插入顺序）已由 markLoadComplete 的重绑 + labels() 的 (脚本名,行号) 排序 +
     // 懒加载解析兜底。保持并行默认（性能收益），显式 setParallelLoad(false)
     // 可退回串行（dump_lines --parallel 可复核一致性）。
     bool m_parallel = true;

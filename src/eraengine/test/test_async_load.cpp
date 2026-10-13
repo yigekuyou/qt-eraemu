@@ -22,7 +22,7 @@
 //   1. 只从 ERB 目录装载（不遍历游戏根目录）
 //   2. CSV 只从 CSV 目录读取（常量名表 / VariableSize）
 //   3. 异步：loadAsync() 立即返回，事件循环中收到进度与完成信号
-//   4. 完成后 finalizeParse 已执行（告警/变量数可查）
+//   4. 完成后 收尾已执行（告警/变量数可查）
 //
 // 用法: test_async_load <gameDir>
 // ---------------------------------------------------------------------------
@@ -106,7 +106,7 @@ int main(int argc, char* argv[]) {
     check(lastTotal > 0 && lastProcessed == lastTotal,
           QString("进度到达终值 %1/%2").arg(lastProcessed).arg(lastTotal));
 
-    qDebug() << "\n4) 装载结果（finalizeParse 已执行）";
+    qDebug() << "\n4) 装载结果（收尾已执行）";
     const int scripts = engine.getParseTable()->scriptNames().size();
     const int vars = engine.getParseTable()->variableTable().count();
     const int warns = engine.getParseTable()->parseWarningCount();

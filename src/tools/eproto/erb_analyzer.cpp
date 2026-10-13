@@ -138,7 +138,8 @@ QMap<QString, ErbDocument> analyzeSources(const QMap<QString, QString>& sources,
         documents.insert(name, doc);
     }
     if (complete) {
-        table.finalizeParse();
+        // 装载完成：跨文件重绑 + 统一出诊断（单脚本绑定已在 loadScript 内完成）。
+        table.markLoadComplete();
         const auto appendSemantic = [&](const ParseDiagnostic& diagnostic) {
             auto doc = documents.find(diagnostic.file);
             if (doc == documents.end()) return;

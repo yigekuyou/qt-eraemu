@@ -437,7 +437,7 @@ QSharedPointer<ExpressionNode> ExpressionParser::parseFunctionCall() {
         else fn->setBuiltinIndex(res.builtinIndex);
         fn->setValueType(res.returnType);
         // 解析期先做一次校验（此时变量类型多为 Unknown，类型检查宽松；
-        // finalizeParse 会在类型回填后再校验一遍）
+        // markLoadComplete 会在类型回填后再校验一遍）
         if (const BuiltinFunctionSpec* s = fn->builtinSpec()) {
             fn->setArityError(validateBuiltinCall(*s, args));
         }

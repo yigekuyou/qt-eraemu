@@ -115,7 +115,7 @@ int main(int argc, char* argv[]) {
         "PRINTL eventload"   // 18
     };
     check(table.loadScript("t", buildLines(table, src)), "loadScript");
-    table.finalizeParse();
+    table.markLoadComplete();
     machine.initialize();
 
     qDebug() << "\n1) 从 Title_Begin 起步 → 调用 @SYSTEM_TITLE → 等待输入";
@@ -173,7 +173,7 @@ int main(int argc, char* argv[]) {
             [&missingErrors](const QString& error) { missingErrors.append(error); });
         missingTable.loadScript("missing", buildLines(missingTable,
             {"@SYSTEM_TITLE", "BEGIN FIRST"}));
-        missingTable.finalizeParse();
+        missingTable.markLoadComplete();
         missingState.setSystemState(SystemStateCode::Title_Begin);
         check(missingMachine.run() == ExecState::Error,
               "missing required EVENTFIRST stops system execution");

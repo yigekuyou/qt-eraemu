@@ -42,7 +42,7 @@
 
 namespace {
 // 并行化开关：任务数 >1 且线程池 >1 时启用（==1 时顺序执行，避免自锁 ——
-// finalizeParse 本身可能已在 QtConcurrent 的线程上，blockingMap 会再切子任务）。
+// 绑定/校验在调用方线程（装载收尾）执行，blockingMap 会再切子任务）。
 inline bool canParallelize(int n) {
     return n > 1 && QThreadPool::globalInstance()->maxThreadCount() > 1;
 }
@@ -114,7 +114,7 @@ QSharedPointer<ExpressionNode> EraParseTable::expressionAstInScope(const QString
     parser.setVariableTypeProvider([this, scope](const QString& name) { return m_variables.typeOf(name, scope); });   // 赋值右值的临时解析：不刷「表达式语法错误」
     // 强类型：仅用户自定义函数由 Provider 决定；内置函数（内部命令）由
     // ExpressionParser 内部的 kBuiltinFunctions 目录解析（对齐 C# methodDic）。
-    // 装载期间用户函数可能尚未 merge，finalizeParse 会再统一重绑一次。
+    // 装载期间用户函数可能尚未 merge，markLoadComplete 会再统一重绑一次。
     parser.setFunctionTypeProvider([this](const QString& name) -> OperandType {
         // #FUNCTIONS -> Str；#FUNCTION -> Int；无 # 行的 @label 按 Int（宽容语义）。
         // 与内置函数同名的、无 #FUNCTION 的 @label **不覆盖**内置函数（见 userCallReturnType）。
@@ -580,11 +580,12 @@ bool EraParseTable::loadScript(const QString& scriptName, const QList<LogicalLin
     m_scripts.insert(scriptName, data);
     m_hasLabelCache.clear();   // 新脚本可能带来新标签
 
-    // 维数求值与类型回填都推迟到 finalizeParse()：
-    // 二者都需要「全部声明/常数就绪」，且是全量操作（避免 O(脚本数 × 声明数)）。
-
     // 标记区：跳转标记 + 控制转移预绑定
     buildJumpMarkings(scriptName);
+
+    // 绑定/校验统一在 markLoadComplete 里单趟完成（全局定稿 → 重绑 → 诊断）：
+    // 跨文件前向引用需要「全部声明就绪」，且避免了每脚本一次全局扫描
+    // 在 eraTW（2200+ 脚本）上退化成 O(n²)。
 
     if (m_currentScript.isEmpty()) {
         m_currentScript = scriptName;
@@ -1294,16 +1295,19 @@ void EraParseTable::parseVariableDeclaration(const LogicalLine& line, const QStr
     }
 }
 
-void EraParseTable::applyVariableTypes() {
+void EraParseTable::applyVariableTypes(const QString& onlyScript) {
     // 2) 各行实际引用的 AST（并行装载时 worker 的 AST 不在主缓存中）。
     //    **按脚本并行**：每个脚本的克隆缓存原本就是按 ownerFunction 分的，
     //    而函数名全局唯一（一个函数体只在一个脚本里），所以「按脚本」与
     //    「全局按函数」的结果完全等价；VariableTable::applyTypes 取的是
     //    const 变量表（只读），ArgumentParser::build 只改传入的行 —— 无共享写。
-    //    eraTW 实测这一步 ~5s（2.2M 行），是 finalizeParse 的最大热点。
+    //    eraTW 实测这一步 ~5s（2.2M 行），是 markLoadComplete 的最大热点。
     QList<ScriptData*> scripts;
     scripts.reserve(m_scripts.size());
-    for (auto it = m_scripts.begin(); it != m_scripts.end(); ++it) scripts.append(&it.value());
+    for (auto it = m_scripts.begin(); it != m_scripts.end(); ++it) {
+        if (!onlyScript.isEmpty() && it.key() != onlyScript) continue;
+        scripts.append(&it.value());
+    }
 
     const auto processScript = [this](ScriptData* sd) {
         QHash<QString, QHash<const ExpressionNode*, QSharedPointer<ExpressionNode>>> bound;
@@ -1345,15 +1349,27 @@ void EraParseTable::applyVariableTypes() {
     }
 }
 
-void EraParseTable::finalizeParse() {
-    // 维数求值放在**常量表就绪之后**：`#DIM X, CLASS_NUM + 1` 这种维数表达式
-    // 需要先能查到常量（以前只能识别「数字」和「单个常量名」，
-    // 于是 eraTW 的 `#DIMS CLASS_NAME, CLASS_NUM + 1` 退化成 0 元素数组，
-    // FINDELEMENT 恒返回 -1 -> EXISTOBJ 抛 THROW）。
-    // #DIM CONST 常量：交给求值器在求值时查表（装载顺序无关）
-    if (m_evaluator) {
+void EraParseTable::markLoadComplete() {
+    // 装载收尾（唯一入口）：全局声明定稿 → 全体脚本重绑 → 统一出诊断。
+    // 必须在**全部**声明就绪后进行：跨文件前向引用（先装载的文件调用后装载文件的
+    // 函数）此刻才可解析；诊断随后统一产生，不重复。
+    QElapsedTimer completeTimer;
+    completeTimer.start();
+    // 单趟（全体脚本）：全局定稿 → 重绑 → 出诊断。
+    // 重绑必须在**全部**声明就绪后进行，跨文件前向引用才可解析；诊断在其后统一产生。
+    resolveGlobalDeclarations();
+    finalizeBindings();
+    finalizeValidation();
+    m_finalized = true;   // 只读区定型：装载完成后不再编译新源码
+    qInfo().noquote() << "[parse] markLoadComplete：" << m_scripts.size() << "脚本"
+                      << completeTimer.elapsed() << "ms";
+}
+
+void EraParseTable::resolveGlobalDeclarations() {
+    // ---- 常量/维数求值器（幂等，首次调用时设置） ----
+    if (m_evaluator && !m_constProvidersReady) {
+        m_constProvidersReady = true;
         const VariableTable* vt = &m_variables;
-        // Compile constant expressions while source compilation is still permitted.
         QHash<QString, QList<QSharedPointer<ExpressionNode>>> constantNodes;
         for (const auto& declaration : vt->declarations()) {
             const auto name = declaration.name.toUpper();
@@ -1408,85 +1424,79 @@ void EraParseTable::finalizeParse() {
         m_evaluator->setConstArrayProvider([vt, evalLazyConst](const QString& name, int index,
                                                                QVariant& out) -> bool {
             QString sv;
-            if (vt->constStrArrayAt(name, index, sv)) {
-                out = QVariant(sv);
-                return true;
-            }
+            if (vt->constStrArrayAt(name, index, sv)) { out = QVariant(sv); return true; }
             qint64 iv = 0;
-            if (vt->constArrayAt(name, index, iv)) {
-                out = QVariant::fromValue<qint64>(iv);
-                return true;
-            }
-            // 没有字面量值：可能是表达式型常量数组（`= (1<<N)-1, …`）
+            if (vt->constArrayAt(name, index, iv)) { out = QVariant::fromValue<qint64>(iv); return true; }
             return evalLazyConst(name, index, out);
         });
+        m_variables.setDimEvaluator([this](const QString& expr) -> qint64 {
+            if (!m_evaluator) return 0;
+            const auto ast = expressionAstInScope(expr, QString());
+            const QVariant v = ast ? m_evaluator->evaluate(*ast, m_variableStorage, m_gameBaseData) : QVariant();
+            return v.isValid() ? v.toLongLong() : 0;
+        });
     }
-    // 维数表达式求值（`#DIM X, A + 1` / `#DIM X, MAXBASE - 1`）：常数表已就绪，
-    // 用求值器把维数表达式折叠成整数
-    m_variables.setDimEvaluator([this](const QString& expr) -> qint64 {
-        if (!m_evaluator) return 0;
-        const auto ast = expressionAstInScope(expr, QString());
-        const QVariant v = ast ? m_evaluator->evaluate(*ast, m_variableStorage, m_gameBaseData) : QVariant();
-        return v.isValid() ? v.toLongLong() : 0;
-    });
-    QElapsedTimer sub;   // 语义阶段各步耗时：eraTW 上 finalizeParse ~10s，需定位热点
-    sub.start();
-    qint64 tDim = 0, tDefaults = 0, tFnTypes = 0, tStrAssign = 0, tVarTypes = 0,
-           tRebind = 0, tValidate = 0;
-    m_variables.resolveDimensions();
-    tDim = sub.restart();
 
-    applyGlobalVariableDefaults();   // #DIM X = 1 等初值（全局）
-    tDefaults = sub.restart();
-    // 用户自定义函数的强类型化（形参类型回填 + 返回类型确定）
+    // ---- 维数/默认值/函数类型（全局：需要全部声明/常量就绪） ----
+    m_variables.resolveDimensions();
+    applyGlobalVariableDefaults();
     resolveUserFunctionTypes();
-    tFnTypes = sub.restart();
-    // 字符串赋值的右值改按 StrForm 解析（对齐 C# AnalyseFormattedString）
+}
+
+// 单脚本收尾：把该脚本的字符串赋值 / FUNC / 变量类型 / 赋值 AST / 函数调用解析到位。
+// 要求 resolveGlobalDeclarations() 已就绪（变量维数与函数类型已定）。
+void EraParseTable::finalizeBindings() {
+    // 全体脚本的绑定：字符串赋值/FORM/CASE、FUNC、变量类型、赋值 AST、函数调用解析。
+    // 一趟完成；每步内部按脚本并行（见各方法），不再逐脚本调用（那样会有
+    // 2200+ 次调用开销，eraTW 上从 ~10s 退化到 ~33s）。
     applyStringAssignments();
-    tStrAssign = sub.restart();
-    // FUNC is SP_CALLFORM in C#. Recompile after declarations are merged, using
-    // the owning function rather than the loader/current execution scope. This
-    // also prevents private names from retaining an earlier global CONST fold.
+
+    // FUNC 重编译（全体脚本）
     for (auto& script : m_scripts) {
-        for (auto& line : script.lines) {
-            if (line.functionName != QLatin1String("FUNC")) continue;
-            const AstResolver resolve = [this, scope = line.ownerFunction](const QString& text) {
-                return expressionAstInScope(text, scope);
-            };
-            for (int i = 0; i < line.arguments.size(); ++i) {
-                auto& operand = line.arguments[i];
-                if (i == 0)
-                    operand.ast = StrFormParser::parse(operand.raw, resolve,
-                        m_evaluator && m_evaluator->ignoreTripleSymbols());
-                else if (operand.isString)
-                    operand.ast = QSharedPointer<LiteralNode>::create(operand.raw);
-                else
-                    operand.ast = resolve(operand.raw);
-            }
+    for (auto& line : script.lines) {
+        if (line.functionName != QLatin1String("FUNC")) continue;
+        const AstResolver resolve = [this, scope = line.ownerFunction](const QString& text) {
+            return expressionAstInScope(text, scope);
+        };
+        for (int i = 0; i < line.arguments.size(); ++i) {
+            auto& operand = line.arguments[i];
+            if (i == 0)
+                operand.ast = StrFormParser::parse(operand.raw, resolve,
+                    m_evaluator && m_evaluator->ignoreTripleSymbols());
+            else if (operand.isString)
+                operand.ast = QSharedPointer<LiteralNode>::create(operand.raw);
+            else
+                operand.ast = resolve(operand.raw);
         }
     }
+    }
+
+    // 变量类型回填（全体脚本）
     applyVariableTypes();
-    tVarTypes = sub.restart();
-    // 赋值列表的 AST 也必须先建立，再统一绑定函数形参上下文。
+
+    // 赋值 AST 重建（全体脚本）
     for (auto& script : m_scripts) {
-        for (auto& line : script.lines) {
-            if (line.assignOperator.isEmpty() || line.arguments.size() != 2) continue;
-            const QString name = line.arguments[0].raw.section(':', 0, 0).trimmed();
-            if (line.assignOperator == "=" && m_variables.typeOf(name, line.ownerFunction) == OperandType::Str) continue;
-            line.assignmentAsts.clear();
-            for (const auto& text : AstBuilder::assignmentValues(line.arguments[1].raw)) {
-                auto ast = cloneExpression(expressionAstInScope(text, line.ownerFunction, true));
-                if (ast) VariableTable::applyTypes(*ast, m_variables, line.ownerFunction);
-                line.assignmentAsts.append(ast);
-            }
+    for (auto& line : script.lines) {
+        if (line.assignOperator.isEmpty() || line.arguments.size() != 2) continue;
+        const QString name = line.arguments[0].raw.section(':', 0, 0).trimmed();
+        if (line.assignOperator == "=" && m_variables.typeOf(name, line.ownerFunction) == OperandType::Str) continue;
+        line.assignmentAsts.clear();
+        for (const auto& text : AstBuilder::assignmentValues(line.arguments[1].raw)) {
+            auto ast = cloneExpression(expressionAstInScope(text, line.ownerFunction, true));
+            if (ast) VariableTable::applyTypes(*ast, m_variables, line.ownerFunction);
+            line.assignmentAsts.append(ast);
         }
     }
-    // 函数调用重绑：装载顺序无关（并行分块时，某块的表达式可能先于
-    // 它调用的 #FUNCTION 被解析，此时只能当「未定义」；到此处全部脚本已 merge）
+
+    }
+
+    // 函数调用解析（全体脚本）
     resolveFunctionNodes();
-    tRebind = sub.restart();
-    // Validate every subtree before runtime short circuiting. Only operator/literal
-    // trees are evaluated here; user functions and variable values remain dynamic.
+}
+
+// 单脚本校验：产出诊断（错误 + 告警）。必须在全部脚本**绑定**完成后统一执行，
+// 否则跨文件前向引用会被误报「未定义的函数」。只在 markLoadComplete 调用一次。
+void EraParseTable::finalizeValidation() {
     const auto constantTree = [](const ExpressionNode& root) {
         bool constant = true;
         walkExpression(const_cast<ExpressionNode&>(root), [&](ExpressionNode& n) {
@@ -1499,7 +1509,7 @@ void EraParseTable::finalizeParse() {
         return constant;
     };
     for (auto& script : m_scripts) {
-        for (auto& line : script.lines) {
+    for (auto& line : script.lines) {
             // 指令的「变量槽」实参允许整数组出现（`VARSET 集合`、`CALL F(集合)`）：
             // 这些位置**不该**要求下标，否则 2 维以上数组会被误判「缺少参数或下标维数错误」
             // （eraTW 里 CALL 的 REF 实参 / VARSET 的整数组实参全是这种写法）。
@@ -1628,24 +1638,14 @@ void EraParseTable::finalizeParse() {
                 }
             }
         }
-    }
 
     // 参数/类型校验必须在「变量类型已回填」之后进行：
     // 否则 LFONTS 之类用户 #DIMS 变量在解析期还是默认的 Int，
     // 会误报「需要字符串表达式，实得 Int」。
-    validateArguments();
-    tValidate = sub.restart();
-    qDebug().noquote() << "[parse] finalizeParse 分步(ms): resolveDimensions" << tDim
-                       << " defaults" << tDefaults << " fnTypes" << tFnTypes
-                       << " strAssign" << tStrAssign << " varTypes" << tVarTypes
-                       << " resolveFunctionNodes" << tRebind << " validateArguments" << tValidate;
-    m_finalized = true;
-    qDebug() << "[parse] finalizeParse 完成：脚本" << m_scripts.size()
-             << "变量" << m_variables.count() << "用户函数" << m_functions.size()
-             << "告警" << m_diagnostics.size();
-    if (!m_diagnostics.isEmpty()) {
-        qDebug().noquote() << "[parse] 诊断汇总：" << m_diagnostics.summarize();
+
     }
+    // 参数校验（全体脚本）
+    validateArguments();
 }
 
 // ---------------------------------------------------------------------------
@@ -1712,10 +1712,11 @@ void EraParseTable::applyPrivateVariableDefaults(const QString& function) {
     applyVariableDefaults(m_variables.localsOf(function));
 }
 
-void EraParseTable::applyStringAssignments() {
+void EraParseTable::applyStringAssignments(const QString& onlyScript) {
     // FORM 里的插值表达式也要用**行的作用域**解析：否则 `%PNAME%`（函数内私有
     // 字符串变量）会按无作用域解析失败，整行报「字符串赋值FORM无效」。
     for (auto sit = m_scripts.begin(); sit != m_scripts.end(); ++sit) {
+        if (!onlyScript.isEmpty() && sit.key() != onlyScript) continue;
         for (LogicalLine& line : sit.value().lines) {
             const QString owner = line.ownerFunction;
             const AstResolver resolve = [this, owner, &line](const QString& e) {
@@ -1846,7 +1847,7 @@ QString EraParseTable::checkUserCallArgs(const UserFunctionDecl& decl,
     return QString();
 }
 
-void EraParseTable::resolveFunctionNodes() {
+void EraParseTable::resolveFunctionNodes(const QString& onlyScript) {
     // 与解析期同一判据（era_parse_table.cpp:userCallReturnType）：
     // 用户函数优先，但无 #FUNCTION 时不覆盖同名内置函数。
     const auto userType = [this](const QString& name) -> OperandType {
@@ -1927,6 +1928,7 @@ void EraParseTable::resolveFunctionNodes() {
     // 自底向上解析：`STRLENS(RAND(100))` 里内层 RAND 的返回类型必须先定下来，
     // 外层 STRLENS 才能校验实参类型（否则内层还停留在解析期的内置类型）。
     // walkExpression 是先序（父→子）；把节点收集后逆序应用即得 子→父 的求值顺序。
+    const bool filterScript = !onlyScript.isEmpty();
     // 例：A(B(C,D),E) 先序为 A,B,C,D,E，逆序 E,D,C,B,A —— 任一子节点都在其父之前。
     const auto resolveAst = [&resolveNode](const QSharedPointer<ExpressionNode>& ast) {
         if (!ast) return;
@@ -1940,7 +1942,10 @@ void EraParseTable::resolveFunctionNodes() {
     // m_functions / 静态表，写入的是本脚本节点的字段 —— 无共享写。
     QList<ScriptData*> scripts;
     scripts.reserve(m_scripts.size());
-    for (auto it = m_scripts.begin(); it != m_scripts.end(); ++it) scripts.append(&it.value());
+    for (auto it = m_scripts.begin(); it != m_scripts.end(); ++it) {
+        if (filterScript && it.key() != onlyScript) continue;
+        scripts.append(&it.value());
+    }
 
     const auto processScript = [&resolveAst](ScriptData* sd) {
         for (LogicalLine& line : sd->lines) {
@@ -2000,16 +2005,20 @@ void EraParseTable::collectFunctionWarnings(const QSharedPointer<ExpressionNode>
     });
 }
 
-void EraParseTable::validateArguments() {
+void EraParseTable::validateArguments(const QString& onlyScript) {
     // **按脚本并行 + 有序合并**：
     //   · 每个脚本独立产出一份 (warnings, keys) —— 脚本内顺序与串行版逐字一致；
     //   · 合并阶段按 m_scripts 的遍历顺序拼接，并用全局 seen 去重。
     //   QHash 的遍历顺序与 keys() 一致，故并行版的「脚本顺序」= 串行版顺序，
     //   于是告警文本、顺序、去重结果与串行实现**完全相同**（可在同一份数据上
-    //   逐字节比对）。eraTW 上这一步 ~2.8–3.6s，是 finalizeParse 的第二热点。
+    //   逐字节比对）。eraTW 上这一步 ~2.8–3.6s，是 markLoadComplete 的第二热点。
+    const bool filterScript = !onlyScript.isEmpty();
     QList<ScriptData*> scripts;
     scripts.reserve(m_scripts.size());
-    for (auto it = m_scripts.begin(); it != m_scripts.end(); ++it) scripts.append(&it.value());
+    for (auto it = m_scripts.begin(); it != m_scripts.end(); ++it) {
+        if (filterScript && it.key() != onlyScript) continue;
+        scripts.append(&it.value());
+    }
 
     const auto processScript = [](ScriptData* sd) -> WarningCollector {
         WarningCollector out;

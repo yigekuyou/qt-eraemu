@@ -117,7 +117,7 @@ int main(int argc, char* argv[]) {
     };
     check(table.loadScript("s", buildLines(table, src)), "loadScript");
     table.setEntryPoint("MAIN");
-    table.finalizeParse();
+    table.markLoadComplete();
 
     const ExecState st = runner.runToCompletion();
     check(st == ExecState::Halt, "脚本正常结束（无死循环）");
@@ -341,7 +341,7 @@ int main(int argc, char* argv[]) {
                                             "#DIMS VSSARR, 4",
                                             "#DIMS VSS2D, 6, 100"}),
                          true);
-        table.finalizeParse();
+        table.markLoadComplete();
         const auto execV = [&](const QString& src) {
             LogicalLine l = AstBuilder::build(src, ScriptPosition("v.ERB", 0, 0), resolveOne);
             engine.executeInstruction(l);
@@ -577,7 +577,7 @@ int main(int argc, char* argv[]) {
             QStringLiteral("RETURN")
         };
         check(pt.loadScript("strap", buildLines(pt, program)), "load string-assignment script");
-        pt.finalizeParse();
+        pt.markLoadComplete();
         pt.setEntryPoint("MAIN");
         check(run.runToCompletion() == ExecState::Halt, "string-assignment script completes");
         vs.setPrivateScope(QStringLiteral("MAIN"),
@@ -636,7 +636,7 @@ int main(int argc, char* argv[]) {
             QStringLiteral("RETURN")
         };
         check(pt.loadScript("qstr", buildLines(pt, program)), "load quoted string-assignment script");
-        pt.finalizeParse();
+        pt.markLoadComplete();
         pt.setEntryPoint("MAIN");
         check(run.runToCompletion() == ExecState::Halt, "quoted string-assignment script completes");
         vs.setPrivateScope(QStringLiteral("MAIN"),
@@ -763,7 +763,7 @@ int main(int argc, char* argv[]) {
         };
         check(pt.loadScript("warnA", buildLines(pt, scriptA)), "load SIF '@\"%…%\"' script");
         check(pt.loadScript("warnB", buildLines(pt, program)), "load DEBUGPRINT/VARSIZE/prefix script");
-        pt.finalizeParse();
+        pt.markLoadComplete();
         check(pt.parseWarningCount() == 0,
               QStringLiteral("解析告警为 0（实得 %1）").arg(pt.parseWarningCount()));
         for (const QString& w : pt.parseWarnings()) qDebug().noquote() << "      warn:" << w;
@@ -784,7 +784,7 @@ int main(int argc, char* argv[]) {
         pt.setVariableStorage(&vs); pt.setExpressionEvaluator(&ev);
         ex.setParseTable(&pt); ex.setExpressionEvaluator(&ev);
         const QStringList program{"@SIZE_TEST", "#DIMS REF ARG_COM, 0, 0", "#DIMS DECLARED_COM, 5, 7", "VARSIZE ARG_COM", "RETURN"};
-        pt.loadScript("varsize_ref", buildLines(pt, program)); pt.finalizeParse();
+        pt.loadScript("varsize_ref", buildLines(pt, program)); pt.markLoadComplete();
         check(pt.parseWarningCount() == 0, "VARSIZE multidimensional REF array needs no indices");
         vs.setGlobalStr2D("ACTUAL_COM", 2, 3, "x");
         vs.setReference("ARG_COM", "ACTUAL_COM");
@@ -907,7 +907,7 @@ int main(int argc, char* argv[]) {
               "prefix and postfix build LHS AST before finalize");
         // Simulate an already built flattened row whose old fast path omitted AST.
         lines[3].arguments[0].ast.clear();
-        pt.loadScript("increments", lines); pt.finalizeParse();
+        pt.loadScript("increments", lines); pt.markLoadComplete();
         const auto* script = pt.script("increments");
         check(script && script->lines[3].arguments.first().ast
               && script->lines[3].argument.params.first().ast,
@@ -978,7 +978,7 @@ int main(int argc, char* argv[]) {
         EraParseTable bad(&badState);
         bad.setExpressionEvaluator(&ev); bad.setVariableStorage(&vs);
         bad.loadScript("bad_increment", buildLines(bad, {"@BAD", "#DIMS INCREMENT_STRING", "#DIM CONST INCREMENT_CONST = 1", "++INCREMENT_STRING", "INCREMENT_CONST++"}));
-        bad.finalizeParse();
+        bad.markLoadComplete();
         check(bad.script("bad_increment")->lines[3].isError
               && bad.script("bad_increment")->lines[4].isError,
               "string and const increment targets fail at load time");

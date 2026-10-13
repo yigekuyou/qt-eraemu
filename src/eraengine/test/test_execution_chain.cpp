@@ -128,7 +128,7 @@ int main(int argc, char* argv[]) {
     check(table.loadScript("wait", buildLines(table, waitSrc)), "loadScript(wait)");
     check(table.loadScript("out", buildLines(table, outSrc)), "loadScript(out)");
 
-    table.finalizeParse();
+    table.markLoadComplete();
     table.setEntryPoint("MAIN");
     const ExecState st = runner.runToCompletion();
 
@@ -278,7 +278,7 @@ int main(int argc, char* argv[]) {
             "SMALL:1 = 17", "BIG:2 = 33", "ARRAYCOPY \"SMALL\", \"BIG\"",
             "ARRAYCOPY \"BIG\", \"SMALL\"", "RETURN"};
         copyTable.loadScript("copy", buildLines(copyTable, source));
-        copyTable.finalizeParse();
+        copyTable.markLoadComplete();
         copyTable.setEntryPoint("COPY");
         check(copyRunner.runToCompletion() == ExecState::Halt, "ARRAYCOPY program completes");
         values.setPrivateScope("COPY", {"SRC", "DST", "SS", "DS", "SMALL", "BIG", "COPY_NAME"});

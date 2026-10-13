@@ -72,7 +72,7 @@ public:
     // 用 eraemu 自己的前端解析一段 ERB 文本（ErbPreprocessor + AstBuilder）。
     [[nodiscard]] ErbDocument parse(const QString& text, const QString& fileName) const;
 
-    // Analyze an in-memory workspace through EraParseTable::finalizeParse().
+    // Analyze an in-memory workspace through EraParseTable (装载收尾走 markLoadComplete)。
     // Keys are document identities (paths or URIs); values are source text.
     // Headers are loaded first, then scripts, with deterministic ordering.
     // No files are read and no script code is executed. Includes cross-file

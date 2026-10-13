@@ -231,7 +231,7 @@ int main(int argc, char* argv[]) {
     script << AstBuilder::build("RETURN 1, 2", ScriptPosition("t.ERB", 2, 1), resolve);
     script << AstBuilder::build("ENDIF", ScriptPosition("t.ERB", 3, 1), resolve);
     table.loadScript("warn", script);
-    table.finalizeParse();   // 参数/类型校验在类型回填之后进行
+    table.markLoadComplete();   // 参数/类型校验在类型回填之后进行
     check(table.parseWarningCount() == 1, QString("告警数 == 1（得到 %1）").arg(table.parseWarningCount()));
     if (table.parseWarningCount() > 0) {
         check(table.parseWarnings().first().contains("t.ERB:1"), "首条告警含位置 t.ERB:1");

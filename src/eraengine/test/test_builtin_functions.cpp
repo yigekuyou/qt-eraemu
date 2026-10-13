@@ -23,7 +23,7 @@
 //   2. 解析期函数解析：内置 / 用户自定义 / 未定义 三分
 //   3. 参数个数 + 逐位类型校验（复刻 FunctionMethod.CheckArgumentType）
 //   4. 求值：数学 / 字符串 / 数组 / 位 / 编码相关 / 配置
-//   5. EraParseTable 集成：校验告警汇总（finalizeParse）
+//   5. EraParseTable 集成：校验告警汇总（markLoadComplete）
 // ---------------------------------------------------------------------------
 
 #include <QCoreApplication>
@@ -384,7 +384,7 @@ int main(int argc, char* argv[]) {
             script.append(AstBuilder::build(source.at(i), ScriptPosition(QStringLiteral("t.ERB"), i, 0), resolve));
         }
         table.loadScript(QStringLiteral("t"), script);
-        table.finalizeParse();
+        table.markLoadComplete();
 
         const QList<QString>& warns = table.parseWarnings();
         const QString joined = warns.join(QLatin1Char('\n'));

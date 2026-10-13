@@ -159,8 +159,8 @@ int main(int argc, char* argv[]) {
     };
 
     check(table.loadScript("main", buildLines(table, src)), "loadScript(main)");
-    // 形参/返回类型要在 finalizeParse（变量声明全部就绪）之后才定下来
-    table.finalizeParse();
+    // 形参/返回类型要在 markLoadComplete（变量声明全部就绪）之后才定下来
+    table.markLoadComplete();
 
     const UserFunctionDecl* strFn = table.userFunction("STR_FN");
     check(strFn != nullptr, "STR_FN 已注册");
@@ -215,7 +215,7 @@ int main(int argc, char* argv[]) {
             QStringLiteral("RETURN X")
         };
         t2.loadScript("bad", buildLines(t2, bad));
-        t2.finalizeParse();
+        t2.markLoadComplete();
         const QString joined = t2.parseWarnings().join(QLatin1Char('\n'));
         check(joined.contains(QStringLiteral("实参过多")), "式中调用实参过多 -> 解析告警");
         check(joined.contains(QStringLiteral("ONE")), "告警含函数名 ONE");
@@ -256,7 +256,7 @@ int main(int argc, char* argv[]) {
             QStringLiteral("@CONCAT"), QStringLiteral("RESULTS = AUTOCONV(1) + \"x\"")
         };
         t3.loadScript(QStringLiteral("typed"), buildLines(t3, typed));
-        t3.finalizeParse();
+        t3.markLoadComplete();
 
         const UserFunctionDecl* tdecl = t3.userFunction("TYPED");
         check(tdecl && tdecl->paramCount() == 2, "TYPED 形参 2 个");
@@ -324,7 +324,7 @@ int main(int argc, char* argv[]) {
             "SEEN = VALUE * 100 + SECOND", "LOCAL = 456"
         };
         check(pt.loadScript("regression", buildLines(pt, program)), "load nested rendering regression");
-        pt.finalizeParse();
+        pt.markLoadComplete();
         pt.setEntryPoint("MAIN");
         check(run.runToCompletion() == ExecState::Halt, "nested rendering terminates");
         check(vars.getGlobalInt1D("CELLS", 0) == 36, "12 columns x 3 cells despite callee LOCAL writes");
@@ -352,7 +352,7 @@ int main(int argc, char* argv[]) {
             "FOR LOCAL, 4, 4, -1", "BAD = BAD + 1", "NEXT",
             "FOR LOCAL, 0, 10, 0", "BAD = BAD + 1", "NEXT", "RETURN"
         };
-        pt.loadScript("bounds", buildLines(pt, program)); pt.finalizeParse(); pt.setEntryPoint("MAIN");
+        pt.loadScript("bounds", buildLines(pt, program)); pt.markLoadComplete(); pt.setEntryPoint("MAIN");
         check(run.runToCompletion() == ExecState::Halt, "FOR edge cases terminate");
         check(vars.getGlobalInt1D("ASCENDING_COUNT", 0) == 12, "FOR positive bound is exclusive");
         check(vars.getGlobalInt1D("DESCENDING_COUNT", 0) == 4, "FOR negative bound is exclusive");
@@ -378,7 +378,7 @@ int main(int argc, char* argv[]) {
             "@INNER(POS:0, POS:1)", "#DIM POS, 2", "#DIM TEMP, 2",
             "INNER_X = POS:0", "INNER_Y = POS:1", "TEMP:0 = 99", "RETURN"
         };
-        pt.loadScript("private_arrays", buildLines(pt, program)); pt.finalizeParse(); pt.setEntryPoint("MAIN");
+        pt.loadScript("private_arrays", buildLines(pt, program)); pt.markLoadComplete(); pt.setEntryPoint("MAIN");
         check(run.runToCompletion() == ExecState::Halt, "private array calls terminate");
         check(vars.getGlobalInt1D("SEEN_X", 0) == 8 && vars.getGlobalInt1D("SEEN_Y", 0) == 4,
               "nested collision helper preserves caller coordinate array");
@@ -410,7 +410,7 @@ int main(int argc, char* argv[]) {
             QString("ASCENDING_FINAL = %1").arg(counter), "RETURN"
         };
         check(pt.loadScript("modified_counter", buildLines(pt, program)), "load counter assignment regression");
-        pt.finalizeParse(); pt.setEntryPoint("MAIN");
+        pt.markLoadComplete(); pt.setEntryPoint("MAIN");
         check(run.runToCompletion() == ExecState::Halt, counter + " modified loops terminate");
         check(vars.getGlobalInt1D("DESCENDING_COUNT", 0) == 4,
               counter + " descending FOR rechecks counter incremented by first body");
@@ -446,7 +446,7 @@ int main(int argc, char* argv[]) {
             "STAGE:(LOCAL:0) = STAGE:(LOCAL:0 - 1)", "NEXT", "STAGE:0 = 0", "RETURN"
         };
         check(pt.loadScript("clear_lines", buildLines(pt, program)), "load shifted-row regression");
-        pt.finalizeParse(); pt.setEntryPoint("MAIN");
+        pt.markLoadComplete(); pt.setEntryPoint("MAIN");
         check(run.runToCompletion() == ExecState::Halt, "shifted-row clearing terminates");
         check(vars.getGlobalInt1D("CLEARED", 0) == 2, "both adjacent full rows are cleared");
         check(vars.getGlobalInt1D("VISITS", 0) == 5, "each cleared row is rechecked after shifting");
@@ -477,7 +477,7 @@ int main(int argc, char* argv[]) {
             "NEXT", "HTML_LEN = STRLENS(html)", "RETURN"
         };
         check(pt.loadScript("ref_menu", buildLines(pt, program)), "load REF menu regression");
-        pt.finalizeParse(); pt.setEntryPoint("MAIN");
+        pt.markLoadComplete(); pt.setEntryPoint("MAIN");
         check(run.runToCompletion() == ExecState::Halt, "REF menu loop terminates");
         qDebug() << "  measured OUTER_SIZE=" << vars.getGlobalInt1D("OUTER_SIZE", 0)
                  << "REF_SIZE=" << vars.getGlobalInt1D("REF_SIZE", 0)
@@ -516,7 +516,7 @@ int main(int argc, char* argv[]) {
             "OUT3D = GRID:1:2:3", "OUT3DINC = ++GRID:1:2:3", "OUT3DZERO = GRID:1:2:0", "RETURN"
         };
         pt.loadScript("scoped", buildLines(pt, source));
-        pt.finalizeParse();
+        pt.markLoadComplete();
         pt.setEntryPoint("MAIN");
         check(run.runToCompletion() == ExecState::Halt, "scoped arrays complete");
         check(vs.getGlobalInt1D("OUT2D", 0) == 29 && vs.getGlobalInt1D("OUT2DINC", 0) == 30
@@ -558,7 +558,7 @@ int main(int argc, char* argv[]) {
             QStringLiteral("RETURN")
         };
         check(pt.loadScript("case", buildLines(pt, program)), "load mixed-case function script");
-        pt.finalizeParse();
+        pt.markLoadComplete();
         pt.setEntryPoint("MAIN");
         check(run.runToCompletion() == ExecState::Halt, "mixed-case function script completes");
         check(vs.getGlobalInt1D("MIXED_LEN", 0) == 2,
@@ -602,7 +602,7 @@ int main(int argc, char* argv[]) {
             QStringLiteral("ターゲット:2 = 22")            // 经 REF 写回系统变量
         };
         check(pt.loadScript("case", buildLines(pt, program)), "load REF-to-system-variable script");
-        pt.finalizeParse();
+        pt.markLoadComplete();
         pt.setEntryPoint("MAIN");
         check(run.runToCompletion() == ExecState::Halt, "REF-to-system-variable script completes");
         check(vs.getGlobalInt1D("OUT_SCALAR", 0) == 7,

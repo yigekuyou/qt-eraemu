@@ -149,7 +149,7 @@ int main(int argc, char* argv[]) {
         };
         check(table.loadScript("main", buildLines(table, src)), "loadScript(INPUTS)");
         table.setEntryPoint("MAIN");
-        table.finalizeParse();
+        table.markLoadComplete();
 
         const ExecState st = runner.runToCompletion();
         check(st == ExecState::WaitInput, "INPUTS 挂起");
@@ -201,7 +201,7 @@ int main(int argc, char* argv[]) {
             "ONEINPUT"      // 4
         };
         check(table.loadScript("t", buildLines(table, src)), "loadScript(title)");
-        table.finalizeParse();
+        table.markLoadComplete();
         machine.initialize();
 
         ExecState st = machine.run();
@@ -291,7 +291,7 @@ int main(int argc, char* argv[]) {
             "B = RESULT"        // 7
         };
         check(table.loadScript("main", buildLines(table, src)), "loadScript(AWAIT)");
-        table.finalizeParse();
+        table.markLoadComplete();
         machine.initialize();
 
         QStringList prompts;
@@ -383,7 +383,7 @@ int main(int argc, char* argv[]) {
             "INPUT"
         };
         check(table.loadScript("main", buildLines(table, src)), "loadScript(TINPUT 缺省值)");
-        table.finalizeParse();
+        table.markLoadComplete();
         machine.initialize();
         machine.run();
         check(pending.size() == 1 && pending.first().ms == 300,
@@ -465,7 +465,7 @@ int main(int argc, char* argv[]) {
             "CNT = CNT + 10"    // 5
         };
         check(table.loadScript("main", buildLines(table, src)), "loadScript(WAIT)");
-        table.finalizeParse();
+        table.markLoadComplete();
         machine.initialize();
 
         QStringList prompts;
@@ -515,7 +515,7 @@ int main(int argc, char* argv[]) {
             "CNT = 7"           // 3
         };
         check(table.loadScript("main", buildLines(table, src)), "loadScript(PRINTW)");
-        table.finalizeParse();
+        table.markLoadComplete();
         machine.initialize();
 
         QStringList prompts;
@@ -560,7 +560,7 @@ int main(int argc, char* argv[]) {
             "CNT = 5"           // 2
         };
         check(table.loadScript("main", buildLines(table, src)), "loadScript(TWAIT skip=0)");
-        table.finalizeParse();
+        table.markLoadComplete();
         machine.initialize();
 
         QStringList prompts;

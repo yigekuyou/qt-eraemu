@@ -30,7 +30,6 @@
 #include "ast/logical_line.h"
 #include "erb_loader.h"
 #include "extension_registry.h"
-#include "function_system.h"
 #include "process_state.h"
 #include "game_base_data.h"
 
@@ -278,7 +277,6 @@ private:
     void setError(const QString& message);
     
     // Function system for execution
-    FunctionSystem* m_functionSystem;
     
     VariableStorage* m_storage;
     GameBaseData* m_gameBaseData;

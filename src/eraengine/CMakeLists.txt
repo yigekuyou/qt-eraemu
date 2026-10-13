@@ -99,8 +99,6 @@ GameData/ast/print_template.h
 GameData/ast/ast_builder.cpp
 GameData/ast/ast_builder.h
 
-GameData/Function/function_system.cpp
-GameData/Function/function_system.h
 
 GameData/Variable/variable_config.cpp
 GameData/Variable/variable_config.h
@@ -127,8 +125,6 @@ GameProc/process_state.cpp
 GameProc/process_state.h
 GameProc/script_processor.cpp
 GameProc/script_processor.h
-GameProc/signal_hub.cpp
-GameProc/signal_hub.h
 GameProc/system_state_machine.cpp
 GameProc/system_state_machine.h
 GameProc/system_status_manager.cpp
@@ -139,8 +135,6 @@ GameProc/user_defined_variable_data.h
 GameView/input_handler.cpp
 GameView/input_handler.h
 GameView/key_map.h
-GameView/rendering_system.cpp
-GameView/rendering_system.h
 GameView/console_types.h
 GameView/console_buffer.h
 GameView/console_layout.cpp

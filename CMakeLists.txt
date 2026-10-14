@@ -114,6 +114,11 @@ target_link_libraries(appemuera
 # QTP0002（Qt 6.6+）允许这里用生成器表达式。
 if(ANDROID)
     set_property(TARGET appemuera PROPERTY QT_ANDROID_PACKAGE_SOURCE_DIR "${CMAKE_CURRENT_SOURCE_DIR}/android")
+    # 包名：默认模板是 org.qtproject.example（Qt 自带占位）。设置成项目自己的
+    # io.yigekuyou.emuera（与桌面 D-Bus 单实例服务名一致）；Qt 文档
+    # 《QT_ANDROID_PACKAGE_NAME》：AGP 7.4 起 manifest 的 package 已废弃，
+    # 该属性作为 namespace 传给 build.gradle。
+    set_property(TARGET appemuera PROPERTY QT_ANDROID_PACKAGE_NAME "io.yigekuyou.emuera")
     # androiddeployqt does not reliably discover shared QML module libraries
     # through a CMake target dependency. Include both the module backend and
     # its plugin explicitly so import io.yigekuoyou.eraengine can initialize.

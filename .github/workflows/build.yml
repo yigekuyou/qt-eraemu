@@ -110,6 +110,17 @@ jobs:
           & "$env:RUNNER_TEMP\vcpkg\bootstrap-vcpkg.bat"
           & "$env:RUNNER_TEMP\vcpkg\vcpkg.exe" install zlib:x64-windows
 
+      - name: 初始化 MSVC 环境
+        # Ninja 生成器不用 cl.exe 就没法用 MSVC：windows runner 的 cl.exe 不在
+        # PATH 上，CMake 探测不到 MSVC 时会悄悄回退到 C:\mingw64 的 GCC，
+        # 于是用 MinGW 编出的修饰名去链 MSVC 版 Qt，链接期全线 undefined
+        # reference（run #41 的 audio_pipeline_pool.obj 报错就是它）。
+        # 这一步跑 vcvarsall x64，把 INCLUDE/LIB/PATH 导出到后续所有步骤，
+        # Configure 里的 Ninja 就会选中 cl.exe。
+        uses: ilammy/msvc-dev-cmd@v1
+        with:
+          arch: x64
+
       - name: Configure CMake
         shell: powershell
         run: |
@@ -136,8 +147,10 @@ jobs:
         run: |
           # Actions 的原始日志只有仓库管理员能下载，这里把编译错误转成
           # annotation，任何人（含 API）都能在 Checks / 注解里看到。
+          # MSVC 的错误形态是 "error C2001"/"error LNK2019"；MinGW 的是
+          # "undefined reference to `X'"（没有错误码），一并兜进来。
           if (-not (Test-Path build.log)) { Write-Host "::error::没有生成 build.log"; exit 0 }
-          $errs = Select-String -Path build.log -Pattern 'error [A-Z]+[0-9]+' |
+          $errs = Select-String -Path build.log -Pattern 'error [A-Z]+[0-9]+|undefined reference to' |
                   ForEach-Object { $_.Line.Trim() } | Select-Object -Unique
           if ($errs) {
             $errs | Select-Object -First 8 | ForEach-Object { Write-Host "::error::$_" }
@@ -170,6 +183,12 @@ jobs:
           }
           # 默认会带上 opengl32sw.dll（软渲染兜底）与所需 QML 插件
           & "$env:QT_ROOT_DIR\bin\windeployqt.exe" --release --no-translations "dist\appemuera.exe"
+          # eraengine 的存档读写用了 zlib（era_binary_data.cpp 的 inflate/deflate），
+          # 链的是 vcpkg 的动态 zlib：windeployqt 只收 Qt 自己的运行库，
+          # zlib1.dll 得自己拷进 dist，否则解压后加载 eraengine.dll 就会失败。
+          $zlibDll = "$env:RUNNER_TEMP\vcpkg\installed\x64-windows\bin\zlib1.dll"
+          if (Test-Path $zlibDll) { Copy-Item $zlibDll dist\ }
+          else { Write-Host "警告：没找到 zlib1.dll（若 zlib 改为静态链接可忽略）" }
           # eraTW 之类的游戏目录放进来即可直接双击运行
           New-Item -ItemType Directory -Force dist\game | Out-Null
           Copy-Item README.md dist\game\ -ErrorAction SilentlyContinue

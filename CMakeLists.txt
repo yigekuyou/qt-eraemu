@@ -66,6 +66,14 @@ set(EMUERA_QT_DISABLE_DEPRECATED_UP_TO "0x060B00"
     CACHE STRING "禁用（编译期报错）到该 Qt 版本为止的废弃 API（QT_DISABLE_DEPRECATED_UP_TO）")
 add_compile_definitions(QT_DISABLE_DEPRECATED_UP_TO=${EMUERA_QT_DISABLE_DEPRECATED_UP_TO})
 
+# MSVC 的源码字符集默认取本机代码页（CI 的英文 runner 上是 CP1252），仓库里的
+# 中文注释与字符串字面量会被按错误编码解释——轻则 C4819 告警、运行期乱码，
+# 重则 C2001/C1071 直接编不过。/utf-8 把源码与执行字符集都定为 UTF-8，与
+# GCC/Clang（默认按 UTF-8 处理源码）的行为对齐（MSVC 文档《/utf-8》）。
+if(MSVC)
+    add_compile_options(/utf-8)
+endif()
+
 qt_add_executable(appemuera
     src/main.cpp
     src/platform/window_controller.cpp

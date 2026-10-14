@@ -2206,7 +2206,7 @@ void ExecutionEngine::setError(const QString& message) {
 void ExecutionEngine::handleSaveData(const LogicalLine& line)
 {
     QList<Operand> parts;
-    for (const Operand& op : line.arguments) {
+    for (const Operand& op : saveCommandOperands(line)) {
         // 只跳过「标点逗号」——引号字面量 ","（分隔符实参）的 raw 也是 ","，
         // 但 isString 为真，必须保留（否则 SPLIT "a,b", ",", ARR 的分隔符丢失）。
         if (!op.isString && op.raw == QLatin1String(",")) continue;
@@ -2242,9 +2242,10 @@ void ExecutionEngine::handleSaveData(const LogicalLine& line)
 
 void ExecutionEngine::handleLoadData(const LogicalLine& line)
 {
-    if (line.arguments.isEmpty()) return;
+    const QList<Operand> operands = saveCommandOperands(line);
+    if (operands.isEmpty()) return;
     ExpressionEvaluator& ev = getEvaluator();
-    const Operand& op = line.arguments.first();
+    const Operand& op = operands.first();
     const qint64 idx = op.ast ? ev.evaluate(*op.ast, m_storage, m_gameBaseData).toLongLong()
                               : evaluateOperand(ev, op, m_storage, m_gameBaseData).toLongLong();
     if (idx < 0 || idx > INT_MAX || !loadSaveSnapshot(idx)) {
@@ -2255,9 +2256,10 @@ void ExecutionEngine::handleLoadData(const LogicalLine& line)
 
 void ExecutionEngine::handleDelData(const LogicalLine& line)
 {
-    if (line.arguments.isEmpty()) return;
+    const QList<Operand> operands = saveCommandOperands(line);
+    if (operands.isEmpty()) return;
     ExpressionEvaluator& ev = getEvaluator();
-    const Operand& op = line.arguments.first();
+    const Operand& op = operands.first();
     const qint64 idx = op.ast ? ev.evaluate(*op.ast, m_storage, m_gameBaseData).toLongLong()
                               : evaluateOperand(ev, op, m_storage, m_gameBaseData).toLongLong();
     if (idx < 0 || idx > INT_MAX) { setError(QStringLiteral("DELDATA 无效编号")); return; }
@@ -2266,10 +2268,37 @@ void ExecutionEngine::handleDelData(const LogicalLine& line)
     m_saveSnapshots.remove(idx);
 }
 
+// 存档系私有方法（SAVEDATA/LOADDATA/DELDATA/CHKDATA 的实现）
+// ---------------------------------------------------------------------------
+// `CHKDATA L_I` / `SAVEDATA L_IDX, "标题"` 有两种行形态：
+//   · 语句形态：line.arguments 就是实参（Operand 列表，含 raw / isString）；
+//   · 调用形态：整行被归约为 Function(NAME, 实参…)（「语句形式的内部函数」，
+//     见 executeFunctionCall），line.arguments 只有一个「整条调用」。
+// 这里把调用形态拆回 Operand 列表（AST 取自 FunctionNode::arguments）。
+// 此前各 handle* 直接读 line.arguments：调用形态下会把「整条调用」当实参求值 ——
+// CHKDATA 变成 CHKDATA(CHKDATA(L_I))，实参恒为「0/1 的存在判定」，eraH 的读档
+// 界面因此把每个槽位都报成「存在」（[N] ＯＫ），选中空档位去 LOADDATA 才失败。
+QList<Operand> ExecutionEngine::saveCommandOperands(const LogicalLine& line) const
+{
+    if (line.arguments.size() != 1) return line.arguments;
+    const Operand& first = line.arguments.first();
+    if (!first.ast || first.ast->kind() != NodeKind::Function) return line.arguments;
+    const auto& call = static_cast<const FunctionNode&>(*first.ast);
+    if (call.name().compare(line.functionName, Qt::CaseInsensitive) != 0) return line.arguments;
+    QList<Operand> out;
+    for (const QSharedPointer<ExpressionNode>& arg : call.arguments()) {
+        Operand op;
+        op.ast = arg;                    // raw 留空：求值一律走 AST
+        out.append(op);
+    }
+    return out;
+}
+
 void ExecutionEngine::handleChkData(const LogicalLine& line)
 {
     ExpressionEvaluator& ev = getEvaluator();
-    const Operand& op = line.arguments.isEmpty() ? Operand() : line.arguments.first();
+    const QList<Operand> operands = saveCommandOperands(line);
+    const Operand& op = operands.isEmpty() ? Operand() : operands.first();
     const qint64 idx = op.ast ? ev.evaluate(*op.ast, m_storage, m_gameBaseData).toLongLong()
                               : evaluateOperand(ev, op, m_storage, m_gameBaseData).toLongLong();
     const bool exists = checkSaveSnapshot(idx) == 0;

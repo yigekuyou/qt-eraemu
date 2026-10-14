@@ -1,4 +1,5 @@
 #include <QCoreApplication>
+#include <QTemporaryDir>
 #include <algorithm>
 #include <QDebug>
 #include "ast/ast_builder.h"
@@ -104,6 +105,57 @@ static void tryListLoadTime() {
     if (!good) { qCritical() << "TRY list load-time scope/invalid AST regression failed"; ++failures; }
     else qInfo() << "PASS TRY list load-time scope/invalid AST regression";
 }
+// ---------------------------------------------------------------------------
+// 存档系四种指令（SAVEDATA/LOADDATA/DELDATA/CHKDATA）的「调用形态」：
+//   `CHKDATA L_I` 整行会被归约为 Function(CHKDATA, Variable(L_I))（语句形式的
+//   内部函数，见 executeFunctionCall），line.arguments 只有一个「整条调用」。
+//   此前 handleChkData 直接把它当实参求值 → 变成 CHKDATA(CHKDATA(L_I))，
+//   实参恒为「0/1 的存在判定」：eraH 的读档界面把每个槽位都报成「存在」，
+//   空档位也显示 [N] ＯＫ，选中去 LOADDATA 才失败。
+// ---------------------------------------------------------------------------
+static void chkDataCallForm() {
+    VariableStorage storage;
+    ProcessState state;
+    EraParseTable table(&state);
+    ExecutionEngine engine(&storage, nullptr);
+    ExpressionEvaluator evaluator;
+    engine.setParseTable(&table);
+    engine.setExpressionEvaluator(&evaluator);
+    table.setExpressionEvaluator(&evaluator);
+    table.setVariableStorage(&storage);
+    ScriptRunner runner(&table, &engine, &state, &storage);
+    runner.setExpressionEvaluator(&evaluator);
+    runner.setStepLimit(1000);
+
+    // 只准备 7 号档：7 号应「存在」(RESULT=0)，0/1 号应「不存在」(RESULT=1)
+    QTemporaryDir gameDir;
+    engine.setGameDataDir(gameDir.path());
+    if (!engine.writeSaveSnapshot(7, QStringLiteral("chkdata 调用形态"))) {
+        qCritical() << "CHKDATA call form cannot prepare slot 7";
+        ++failures;
+        return;
+    }
+
+    const QStringList script = {
+        "@MAIN", "L_I = 7", "CHKDATA L_I", "CHECK += RESULT * 10",
+        "L_I = 0", "CHKDATA L_I", "CHECK += RESULT * 100",
+        "L_I = 1", "CHKDATA L_I", "CHECK += RESULT * 1000"};
+    QList<LogicalLine> lines;
+    for (int i = 0; i < script.size(); ++i)
+        lines.append(AstBuilder::build(script[i], ScriptPosition("chkdata.ERB", i, 0),
+            [&table](const QString& text) { return table.expressionAst(text); }));
+    table.loadScript("chkdata", lines);
+    table.markLoadComplete();
+    table.setEntryPoint("MAIN");
+    const auto result = runner.runToCompletion();
+    const qint64 actual = storage.getGlobalInt1D("CHECK", 0);
+    // 7 号存在 -> RESULT=0（+0）；0 号缺失 -> RESULT=1（+100）；1 号缺失 -> +1000
+    if (result != ExecState::Halt || actual != 1100) {
+        qCritical() << "CHKDATA call form failed" << int(result) << actual;
+        ++failures;
+    } else qInfo() << "PASS CHKDATA call form uses the slot value, not CHKDATA(CHKDATA())";
+}
+
 static void htmlFlow() {
     VariableStorage storage;
     ProcessState state;
@@ -171,6 +223,7 @@ static void htmlFlow() {
 }
 int main(int argc, char** argv) {
     QCoreApplication app(argc, argv);
+    chkDataCallForm();
     htmlFlow();
     tryListLoadTime();
     run("TRYCALLLIST first match and return after ENDFUNC", {

@@ -196,6 +196,8 @@ private:
     // 存档系（C# 原版全量）：SAVEDATA/LOADDATA/DELDATA/CHKDATA 的实现
     void handleSaveData(const LogicalLine& line);
     void handleLoadData(const LogicalLine& line);
+    // 存档系四种指令的实参（语句形态原样 / 调用形态拆 FunctionNode，见 .cpp 说明）
+    [[nodiscard]] QList<Operand> saveCommandOperands(const LogicalLine& line) const;
     void handleDelData(const LogicalLine& line);
     void handleChkData(const LogicalLine& line);
     // 状态打印 / 角色整理 / 变量存档族（此前未实现、运行期被忽略的指令集合）：

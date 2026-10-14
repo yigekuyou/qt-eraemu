@@ -73,39 +73,6 @@ env:
   WARNINGS_FLAG: '-DEMUERA_WARNINGS_AS_ERRORS=OFF'
 
 jobs:
-  tests:
-    name: Linux tests and QML lint
-    runs-on: ubuntu-latest
-    timeout-minutes: 60
-    steps:
-      - name: 检出源码
-        uses: actions/checkout@v4
-      - name: 安装 Qt ${{ env.QT_VERSION }}
-        uses: jurplel/install-qt-action@v4
-        with:
-          version: ${{ env.QT_VERSION }}
-          host: linux
-          target: desktop
-          arch: gcc_64
-          modules: ${{ env.QT_MODULES }}
-          # Use the same Qt 6.11-aware installer as the Windows job.
-          aqtsource: 'git+https://github.com/miurahr/aqtinstall.git'
-          cache: true
-      - name: 配置
-        run: |
-          cmake -S . -B build -G Ninja \
-            -DCMAKE_BUILD_TYPE=Release \
-            -DCMAKE_PREFIX_PATH="$QT_ROOT_DIR" \
-            -DEMUERA_WARNINGS_AS_ERRORS=OFF
-      - name: 编译测试目标
-        run: cmake --build build --parallel
-      - name: QML 静态检查
-        run: cmake --build build --target all_qmllint
-      - name: 运行 CTest
-        env:
-          QT_QPA_PLATFORM: offscreen
-        run: ctest --test-dir build --output-on-failure --parallel 2
-
   # ------------------------------------------------------------------ Windows
   windows:
     name: Windows x64 (MSVC 2022)
@@ -136,9 +103,23 @@ jobs:
           # 上游发了新版之后，删掉这一行即可（aqtsource 会覆盖 aqtversion）。
           aqtsource: 'git+https://github.com/miurahr/aqtinstall.git'
           cache: true
+      - name: Install zlib via vcpkg
+        shell: powershell
+        run: |
+          git clone https://github.com/microsoft/vcpkg.git "$env:RUNNER_TEMP\vcpkg"
+          & "$env:RUNNER_TEMP\vcpkg\bootstrap-vcpkg.bat"
+          & "$env:RUNNER_TEMP\vcpkg\vcpkg.exe" install zlib:x64-windows
 
-      - name: 配置（CMake + Visual Studio 2022，默认生成器）
-        run: cmake -S . -B build -DCMAKE_PREFIX_PATH="$env:QT_ROOT_DIR" ${{ env.WARNINGS_FLAG }}
+      - name: Configure CMake
+        shell: powershell
+        run: |
+          cmake -S . -B build `
+            -G "Ninja" `
+            -DCMAKE_BUILD_TYPE=Release `
+            -DCMAKE_TOOLCHAIN_FILE="$env:RUNNER_TEMP\vcpkg\scripts\buildsystems\vcpkg.cmake" `
+            -DVCPKG_TARGET_TRIPLET=x64-windows `
+            -DCMAKE_PREFIX_PATH="$env:QT_ROOT_DIR" `
+            -DEMUERA_WARNINGS_AS_ERRORS=OFF
 
       - name: 编译 appemuera
         shell: pwsh

@@ -555,6 +555,7 @@ ApplicationWindow {
     }
 
     // 工具栏占据 header 空间，舞台只缩放到剩余的 contentItem。
+    // 移动端顶栏：左侧标题 + 右侧 ☰ 按钮（打开侧滑栏 appDrawer）。
     header: ToolBar {
         id: mobileToolbar
         visible: window.isMobile
@@ -579,35 +580,66 @@ ApplicationWindow {
             text: qsTr("☰")
             font.pixelSize: 24
             Accessible.name: qsTr("菜单")
-            enabled: !statusStrip.loading
-            onClicked: mobileMenu.open()
+            enabled: !statusStrip.loading && appDrawer.enabled
+            onClicked: appDrawer.open()
         }
     }
-    Menu {
-        id: mobileMenu
-        parent: Overlay.overlay
-        popupType: Popup.Item
-        x: Math.max(8, parent.width - width - 8)
-        y: mobileToolbar.height
-        width: Math.max(0, Math.min(parent.width - 16, 320))
-        height: Math.min(implicitHeight, Math.max(0, parent.height - y - 8))
-        margins: 8
+    // ---- 移动端侧滑栏（导航抽屉）----
+    // 顶栏 ☰ 按钮从右缘整个滑出（取代从前的弹出 Menu）：触屏上条目高、可拖
+    // 边缘关闭、Overlay 遮罩防误触；「设置…」与桌面菜单同为 openSettings()
+    // （SettingsDialog.qml 内容），Android 上不再需要长按/精确定位小弹出菜单。
+    // Drawer 的尺寸/位置由 edge 决定，这里只约束宽度；关闭策略用默认
+    // （点遮罩 / Esc / 拖边缘），条目触发后统一 close()。
+    Drawer {
+        id: appDrawer
+        width: Math.max(0, Math.min(window.width * 0.84, 360))
+        height: window.height
+        edge: Qt.RightEdge
         modal: true
-        focus: true
-        component TouchMenuItem: MenuItem {
-            implicitHeight: Math.max(48, implicitContentHeight + topPadding + bottomPadding)
+        interactive: true
+        padding: 0
+
+        contentItem: ColumnLayout {
+            spacing: 0
+
+            // 抽屉头：窗口标题（与顶栏同源，装载中显示阶段文案）
+            Label {
+                Layout.fillWidth: true
+                Layout.leftMargin: 16
+                Layout.rightMargin: 16
+                Layout.topMargin: 14
+                Layout.bottomMargin: 14
+                text: eraEngine.gui.windowTitle || qsTr("Emuera 引擎")
+                color: eraEngine.gui.foreColor
+                font.bold: true
+                elide: Text.ElideRight
+                wrapMode: Text.WordWrap
+            }
+            MenuSeparator { Layout.fillWidth: true }
+            component TouchMenuItem: MenuItem {
+                Layout.fillWidth: true
+                implicitHeight: Math.max(48, implicitContentHeight + topPadding + bottomPadding)
+                onTriggered: appDrawer.close()
+            }
+
+            TouchMenuItem { action: window.menuActions.open }
+            TouchMenuItem { action: window.menuActions.reload; enabled: eraEngine.gameDirectory !== "" }
+            TouchMenuItem { action: window.menuActions.title; enabled: eraEngine.gameDirectory !== "" }
+            MenuSeparator { Layout.fillWidth: true }
+            // 设置入口：SettingsDialog（字体/颜色/帧率…），与桌面菜单同源
+            TouchMenuItem { action: window.menuActions.settings }
+            TouchMenuItem { action: window.menuActions.config }
+            TouchMenuItem { action: window.menuActions.debug; visible: !window.isAndroid }
+            TouchMenuItem { action: window.menuActions.about }
+            MenuSeparator { Layout.fillWidth: true }
+            TouchMenuItem { action: window.menuActions.history }
+            TouchMenuItem { action: window.menuActions.bottom }
+            TouchMenuItem { action: window.menuActions.saveLog; visible: !window.isAndroid }
+            TouchMenuItem { action: window.menuActions.quit }
         }
-        TouchMenuItem { action: window.menuActions.open }
-        TouchMenuItem { action: window.menuActions.reload; enabled: eraEngine.gameDirectory !== "" }
-        TouchMenuItem { action: window.menuActions.saveLog; visible: !window.isAndroid }
-        TouchMenuItem { action: window.menuActions.title; enabled: eraEngine.gameDirectory !== "" }
-        MenuSeparator {}
-        TouchMenuItem { action: window.menuActions.settings }
-        TouchMenuItem { action: window.menuActions.about }
-        MenuSeparator {}
-        TouchMenuItem { action: window.menuActions.history }
-        TouchMenuItem { action: window.menuActions.bottom }
-        TouchMenuItem { action: window.menuActions.quit }
+
+        // 侧滑栏在装载期间禁止拉开（与原弹出菜单一致：避免装载途中重载/换游戏）
+        enabled: !statusStrip.loading
     }
 
     // ---- 控制台（渲染层）：虚拟舞台 ----
@@ -809,7 +841,7 @@ ApplicationWindow {
     // “Only binding to one of multiple key bindings associated with 70”）。
     Shortcut {
         sequences: [StandardKey.Cancel]
-        enabled: !window.isMobile && !mobileMenu.visible && !window.activeDialog
+        enabled: !window.isMobile && !window.activeDialog
                  && windowController.windowMode !== "windowed"
         onActivated: windowController.windowMode = "windowed"
     }

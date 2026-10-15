@@ -123,21 +123,41 @@ bool ErbLoader::loadRenameFile(const QString& filePath) {
     return true;
 }
 
-void ErbLoader::tryAutoLoadRename(const QString& dirPath) {    if (!m_preprocessor.renameMap().isEmpty()) {
+void ErbLoader::tryAutoLoadRename(const QString& dirPath) {
+    if (!m_preprocessor.renameMap().isEmpty()) {
         return;
     }
+    if (dirPath.isEmpty()) return;
+
+    // content://（Android SAF）与本地路径**走同一套探测**：
+    //
+    //   旧实现对 content:// 直接 return —— 注释写「EraEngine loads sibling CSV
+    //   explicitly」，但引擎侧那条路径被配置项 `_Rename.csvを利用する`（默认 NO）
+    //   门控，而中文游戏（eraH 等）的 _fixed.config 用的是译成中文的键
+    //   `启用_Rename.csv:YES`，日语键精确匹配的 ConfigLoader 读不出来 →
+    //   设备上 Rename 表永远不装载 → `[[口上:主人Ａ射精]]` 保持字符串字面量 →
+    //   「函数 C_FIRSTTIME_KOJO 第 1 个实参需要Int，实得字符串」×936（桌面 0，
+    //   因为桌面版本函数走了这里的目录自动扫描）。真机实测见 docs/android-saf.md。
+    //
+    //   QDir/QFileInfo 对 content URI 只做字符串层面的路径切分；entryList 由
+    //   Android content 插件支持（collectFiles 同路），readFile 走 QFile on
+    //   content://（ERB 文本读取已验证）。
+    const QString parent = GamePaths::isContent(dirPath)
+                               // content URI 的路径段也是 '/' 分隔：去掉结尾的 /ERB
+                               ? (dirPath.contains(QLatin1Char('/'))
+                                      ? dirPath.section(QLatin1Char('/'), 0, -2)
+                                      : dirPath)
+                               : QFileInfo(dirPath).absolutePath();
     // ERB 目录的兄弟目录 CSV / Csv / csv
-    if (GamePaths::isContent(dirPath)) return; // EraEngine loads sibling CSV explicitly
-    const QDir erbDir(dirPath);
-    const QString parent = QFileInfo(dirPath).absolutePath();
     QStringList candidates;
     {
         QDir p(parent);
         const QStringList entries = p.entryList(QDir::Dirs | QDir::NoDotAndDotDot, QDir::Name);
         for (const QString& e : entries) {
-            if (e.compare(QLatin1String("CSV"), Qt::CaseInsensitive) == 0) {
-                candidates << p.absoluteFilePath(e);
-            }
+            if (e.compare(QLatin1String("CSV"), Qt::CaseInsensitive) != 0) continue;
+            // content:// 必须按百分号转义拼接（GamePaths::join），本地路径用 QDir 拼接
+            candidates << (GamePaths::isContent(parent) ? GamePaths::join(parent, e)
+                                                        : p.absoluteFilePath(e));
         }
     }
     candidates << parent;   // 退化：_Rename.csv 与 ERB 同目录
@@ -146,15 +166,22 @@ void ErbLoader::tryAutoLoadRename(const QString& dirPath) {    if (!m_preprocess
         const QStringList entries = d.entryList(QDir::Files, QDir::Name);
         for (const QString& e : entries) {
             if (e.compare(QLatin1String("_Rename.csv"), Qt::CaseInsensitive) != 0) continue;
+            const QString renamePath = GamePaths::isContent(dir)
+                                           ? GamePaths::join(dir, e)
+                                           : d.absoluteFilePath(e);
             bool ok = false;
-            const QString text = TextCodecUtil::readFile(d.absoluteFilePath(e), m_readEncoding,
-                                                         nullptr, &ok);
-            if (!ok) continue;
-            m_preprocessor.setRenameMap(ErbPreprocessor::parseRenameCsv(text));
+            const QString text = TextCodecUtil::readFile(renamePath, m_readEncoding, nullptr, &ok);
+            if (!ok) {
+                qWarning() << "[load] _Rename.csv 读取失败:" << renamePath;
+                continue;
+            }
+            const ErbPreprocessor::RenameMap map = ErbPreprocessor::parseRenameCsv(text);
+            qInfo().noquote() << "[load] _Rename.csv 自动装载:" << renamePath
+                              << "词条" << map.size() << "条";
+            m_preprocessor.setRenameMap(map);
             return;
         }
     }
-    Q_UNUSED(erbDir);
 }
 
 // ---------------------------------------------------------------------------

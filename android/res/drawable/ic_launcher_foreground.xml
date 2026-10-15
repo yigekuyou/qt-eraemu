@@ -1,0 +1,20 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- 自适应图标前景：控制台提示符 ">_" —— Emuera 是文档式控制台引擎。
+     内容必须落在中央 66dp 安全区内（x/y ∈ [21,87]），否则圆角/水滴蒙版会切到笔划。 -->
+<vector xmlns:android="http://schemas.android.com/apk/res/android"
+    android:width="108dp"
+    android:height="108dp"
+    android:viewportWidth="108"
+    android:viewportHeight="108">
+    <path
+        android:strokeColor="#6CE3A8"
+        android:strokeWidth="9"
+        android:strokeLineCap="round"
+        android:strokeLineJoin="round"
+        android:pathData="M37,39 L58,54 L37,69" />
+    <path
+        android:strokeColor="#6CE3A8"
+        android:strokeWidth="9"
+        android:strokeLineCap="round"
+        android:pathData="M66,69 L83,69" />
+</vector>

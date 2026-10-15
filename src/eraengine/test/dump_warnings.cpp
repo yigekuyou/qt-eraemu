@@ -55,9 +55,23 @@ int main(int argc, char* argv[]) {
         engine.setGameDirectory(dir);
     }
 
+    const bool detail = app.arguments().contains(QStringLiteral("--detail"));
     const int n = engine.getParseTable()->parseWarningCount();
     const QStringList warns = engine.getParseTable()->parseWarnings();
     const int vars = engine.getParseTable()->variableTable().count();
+    if (detail) {
+        // 明细视图：同一文本视图下可能有多条结构化诊断（severity/code 不同），
+        // 用于排查「同一行告警重复出现」到底是哪个生产者。
+        const auto& diags = engine.getParseTable()->parseDiagnostics();
+        QFile detailOut(outPath.isEmpty() ? QStringLiteral("/dev/stdout") : outPath + QStringLiteral(".detail"));
+        if (detailOut.open(QIODevice::WriteOnly | QIODevice::Text)) {
+            QTextStream ts(&detailOut);
+            for (const auto& d : diags.all()) {
+                ts << diagSeverityName(d.severity) << '\t' << d.code << '\t' << d.position << '\t'
+                   << d.message << '\t' << d.snippet << '\n';
+            }
+        }
+    }
     // ROM 编码探测（只读；用于展示「这个游戏是什么编码」）
     if (argc > 3 && QString::fromLocal8Bit(argv[3]) == QLatin1String("--probe")) {
         fputs((engine.probeGameEncoding() + QLatin1Char('\n')).toUtf8().constData(), stdout);

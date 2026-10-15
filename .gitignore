@@ -21,3 +21,7 @@ build
 .qmlls.ini
 build-android
 build-a[0-9]*
+
+# ---- 本地文档（不入库）----
+# prd.md：内部设计/需求稿，只留本地，不进版本库（历史里也已清除）
+prd.md

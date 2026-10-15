@@ -394,12 +394,30 @@ QList<ErbSourceLine> ErbPreprocessor::process(const QString& content, QStringLis
     QStringList raw = content.split(QLatin1Char('\n'));
     if (!raw.isEmpty() && raw.last().isEmpty()) raw.removeLast();
 
+    // Rename 替换：只按本行出现的 [[…]] 去 QHash 里查，不做全表扫描。
+    // 旧实现逐词条 s.contains(key) 是 O(行数 × 词条)：eraH 2030 词条、数万带
+    // [[ 的行，在设备单线程预处理阶段 ~10s（真机实测全链路 43.9s → 优化后回到
+    // 30s 量级）；语义差异：旧实现按 QHash 序多趟替换，本行替换结果中若再含
+    // 别的 [[…]] 键会级联；新实现从替换文本之后继续扫描（不级联）——实际游戏
+    // 的 Rename 值是编号/文本（不含 [[），C# 单趟语义与此一致。
     const auto applyRename = [this](const QString& line) {
         if (m_rename.isEmpty()) return line;
-        if (!line.contains(QLatin1String("[[")) || !line.contains(QLatin1String("]]"))) return line;
+        const int first = line.indexOf(QLatin1String("[["));
+        if (first < 0 || !line.contains(QLatin1String("]]"))) return line;
         QString s = line;
-        for (auto it = m_rename.constBegin(); it != m_rename.constEnd(); ++it) {
-            if (s.contains(it.key())) s.replace(it.key(), it.value());
+        int at = first;
+        while (at >= 0) {
+            const int end = s.indexOf(QLatin1String("]]"), at + 2);
+            if (end < 0) break;
+            const QString key = s.mid(at, end + 2 - at);   // 含 [[ ]] 的完整键
+            const auto it = m_rename.constFind(key);
+            if (it != m_rename.cend()) {
+                s.replace(at, key.length(), it.value());
+                at += it.value().length();   // 跳过替换文本，不级联
+            } else {
+                at = end + 2;
+            }
+            at = s.indexOf(QLatin1String("[["), at);
         }
         return s;
     };

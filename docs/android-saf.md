@@ -111,6 +111,16 @@ set explicitly in `android/AndroidManifest.xml`.
 
 `Main.qml` used a `Menu` popup for the mobile toolbar's hamburger button. On touch
 screens that menu is a small, dim, hard-to-hit surface; it is now a modal `Drawer`
-(`appDrawer`, right edge) with 48dp rows that closes after any entry triggers. The
-loading mask owns the screen while loading, so the drawer and its toolbar button are
-disabled during a load, matching the old menu.
+(`appDrawer`, right edge) with 48dp rows that closes after any entry triggers, and
+its content scrolls in a `Flickable` because in landscape the rows exceed the screen
+height. Once a game has presented, the toolbar itself is hidden - it is only chrome
+between the user and the stage - and a semi-transparent floating handle at the same
+top-right corner (plus a right-edge swipe) opens the drawer; the loading mask owns
+the screen while loading, so the drawer, its toolbar button and the handle are all
+disabled during a load.
+
+A pre-existing QtQuick-on-Android warning (`QObject: Cannot create children for a
+parent that is in a different thread`) appears for popup content (ToolBar, the game
+picker delegates, the drawer). It was always there - it only became visible once Qt
+messages got bridged into logcat. The dialogs render fine; treat it as noise until it
+is proven to break something.

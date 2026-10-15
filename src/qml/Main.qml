@@ -556,9 +556,11 @@ ApplicationWindow {
 
     // 工具栏占据 header 空间，舞台只缩放到剩余的 contentItem。
     // 移动端顶栏：左侧标题 + 右侧 ☰ 按钮（打开侧滑栏 appDrawer）。
+    // **只在「未呈现游戏」时显示**：游戏跑起来后顶栏只剩占地方（横屏尤甚），
+    // 此时改由右上角半透明 ☰ 浮钮（drawerHandle）+ 右缘滑动打开抽屉。
     header: ToolBar {
         id: mobileToolbar
-        visible: window.isMobile
+        visible: window.isMobile && !window.hasPresentedGame
         height: visible ? 56 : 0
 
         Label {
@@ -584,6 +586,32 @@ ApplicationWindow {
             onClicked: appDrawer.open()
         }
     }
+    // 游戏运行中：顶栏已隐藏，右上角留一个半透明 ☰ 浮钮开抽屉（位置与
+    // 顶栏 ☰ 同角，操作习惯连续）；抽屉打开/装载遮罩在屏时隐藏。
+    ToolButton {
+        id: drawerHandle
+        visible: window.isMobile && window.hasPresentedGame && !statusStrip.loading
+                 && !appDrawer.visible
+        anchors.top: parent.top
+        anchors.right: parent.right
+        anchors.margins: 8
+        z: 100
+        width: 48
+        height: 48
+        text: qsTr("☰")
+        font.pixelSize: 22
+        opacity: 0.75
+        Accessible.name: qsTr("菜单")
+        onClicked: appDrawer.open()
+
+        background: Rectangle {
+            color: Qt.rgba(0, 0, 0, 0.45)
+            radius: 24
+            border.width: 1
+            border.color: Qt.rgba(1, 1, 1, 0.2)
+        }
+    }
+
     // ---- 移动端侧滑栏（导航抽屉）----
     // 顶栏 ☰ 按钮从右缘整个滑出（取代从前的弹出 Menu）：触屏上条目高、可拖
     // 边缘关闭、Overlay 遮罩防误触；「设置…」与桌面菜单同为 openSettings()
@@ -599,8 +627,18 @@ ApplicationWindow {
         interactive: true
         padding: 0
 
-        contentItem: ColumnLayout {
-            spacing: 0
+        contentItem: Flickable {
+            // 横屏（抽屉高度 < 内容高度）时必须能滚动，否则底部条目被裁掉：
+            // uiautomator dump 里最后三项 bounds=[0,0] 就是裁切未布局的迹象。
+            clip: true
+            boundsBehavior: Flickable.StopAtBounds
+            contentWidth: width
+            contentHeight: drawerColumn.implicitHeight
+
+            ColumnLayout {
+                id: drawerColumn
+                width: parent.width
+                spacing: 0
 
             // 抽屉头：窗口标题（与顶栏同源，装载中显示阶段文案）
             Label {
@@ -636,6 +674,7 @@ ApplicationWindow {
             TouchMenuItem { action: window.menuActions.bottom }
             TouchMenuItem { action: window.menuActions.saveLog; visible: !window.isAndroid }
             TouchMenuItem { action: window.menuActions.quit }
+            }
         }
 
         // 侧滑栏在装载期间禁止拉开（与原弹出菜单一致：避免装载途中重载/换游戏）

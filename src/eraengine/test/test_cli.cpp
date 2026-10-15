@@ -888,6 +888,31 @@ int main(int argc, char* argv[]) {
             std::cout << "\n";
             return true;
         }
+        if (cmd == ":chars") {   // :chars —— dump 角色注册表（ADDCHARA 列表）
+            VariableStorage* vs = engine.getVariableStorage();
+            const int n = vs ? int(vs->charaNum()) : -1;
+            std::cout << "  CHARANUM=" << n << "  MASTER="
+                      << (vs ? vs->getSystemVariable(QStringLiteral("MASTER"), 0) : -1)
+                      << "  list=\"" << (vs ? vs->dumpCharaList().toStdString() : std::string("no storage")) << "\"\n";
+            return true;
+        }
+        if (cmd.startsWith(QLatin1String(":cv "))) {   // :cv NAME:CHARA:ELEM —— dump 角色变量
+            const QString spec = cmd.mid(4);
+            const QStringList parts = spec.split(QLatin1Char(':'));
+            VariableStorage* vs = engine.getVariableStorage();
+            if (!vs || parts.size() < 2) {
+                std::cout << "  用法: :cv NAME:CHARA[:ELEM]\n";
+                return true;
+            }
+            const QString nm = parts.at(0);
+            const int cid = parts.at(1).toInt();
+            const int elem = parts.size() > 2 ? parts.at(2).toInt() : 0;
+            std::cout << "  " << spec.toStdString() << " = "
+                      << vs->getCharaInt(nm, cid, elem)
+                      << (vs->isCharaDataString(nm) ? (" / \"" + vs->getCharaStr(nm, cid, elem).toStdString() + "\"") : "")
+                      << "\n";
+            return true;
+        }
         if (cmd == ":vars") {
             VariableStorage* vs = engine.getVariableStorage();
             std::cout << "  RESULT=" << (vs ? vs->getSystemVariable(QStringLiteral("RESULT"), 0) : 0)

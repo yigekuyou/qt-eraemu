@@ -37,11 +37,16 @@ public:
     // Load CSV file
     bool loadFile(const QString& filePath);
 
-    // 角色 CSV（<Csv>/Chara/*.csv -> NAME/CALLNAME/BASE/ABL/…）：
-    // 返回成功装载的角色数（对齐 C# ConstantData 的 CharacterTemplate 读取）
-    static int loadCharaDirectory(const QString& charaDir,
+    // 角色 CSV（<Csv> 下 Chara*.csv -> NAME/CALLNAME/BASE/ABL/…）：
+    // 返回成功装载的角色数（对齐 C# ConstantData.loadCharacterData 的
+    // `Config.GetFiles(csvDir, "CHARA*.CSV")` —— 即**扫描 CSV 目录下所有
+    // 名为 Chara*.csv 的文件**，recursive = Config.SearchSubdirectory；
+    // 不是只找名为 Chara 的子目录。eraTW 把角色 CSV 放在 CSV/Chara/ 下，
+    // eraH 则按种族分放在 CSV/人間/** 与 CSV/悪魔/** 下，两种布局都要能找到。）
+    static int loadCharaDirectory(const QString& csvDir,
                                   const ConstantTable* constants,
-                                  VariableStorage* storage);
+                                  VariableStorage* storage,
+                                  bool recursive = false);
 
     // Access data
     QVariant getValue(const QString& tableName, int row, int col);

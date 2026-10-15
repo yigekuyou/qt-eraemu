@@ -53,6 +53,65 @@ bool splitConfigLine(const QString& line, QString& key, QString& value) {
     return true;
 }
 
+// ---------------------------------------------------------------------------
+// 汉化版配置键名归一（中文 -> 引擎规范日文键）
+//
+// 汉化 era 游戏会把 CSV/_default.config、CSV/_fixed.config 的**键名一并译成中文**
+// （eraH 的 _fixed.config 就是：忽略大小写 / 启用_Rename.csv / 检索子目录 /
+//  内部使用东亚语言 …）。而 Emuera 与移植版的内置配置项名是日文，按日文键查找
+// 会**整表落空**，于是游戏声明的设置全部失效：
+//   · 检索子目录:YES 读不到 -> Config.SearchSubdirectory 恒 false
+//     -> 子目录里的角色 CSV 不装载 -> CHARANUM 停在 0 -> 战斗无队伍；
+//   · 启用_Rename.csv:YES 读不到 -> _Rename.csv 不装载（此前由自动探测兜住）。
+// 这里把已知的中文键名映射回引擎使用的日文键，查找时两者都试。
+// （键名对照取自 eraH 的 _default.config / _fixed.config。）
+// ---------------------------------------------------------------------------
+const QHash<QString, QString>& configKeyAliases() {
+    static const QHash<QString, QString> m = {
+        // _fixed.config
+        {QStringLiteral("忽略大小写"),        QStringLiteral("大文字小文字の違いを無視する")},
+        {QStringLiteral("启用_Rename.csv"),   QStringLiteral("_Rename.csvを利用する")},
+        {QStringLiteral("启用_Replace.csv"),  QStringLiteral("_Replace.csvを利用する")},
+        {QStringLiteral("不对按钮行折返换行"), QStringLiteral("ver1739以前の非ボタン折り返しを再現する")},
+        {QStringLiteral("检索子目录"),        QStringLiteral("サブディレクトリを検索する")},
+        {QStringLiteral("以UTF-8格式保存存档"), QStringLiteral("セーブデータをUTF-8で保存する")},
+        {QStringLiteral("内部使用东亚语言"),  QStringLiteral("内部で使用する東アジア言語")},
+        {QStringLiteral("以二进制形式保存存档"), QStringLiteral("セーブデータをバイナリ形式で保存する")},
+        // _default.config
+        {QStringLiteral("窗口宽度"),          QStringLiteral("ウィンドウ幅")},
+        {QStringLiteral("窗口高度"),          QStringLiteral("ウィンドウ高さ")},
+        {QStringLiteral("PRINTC并列数量"),    QStringLiteral("PRINTCを並べる数")},
+        {QStringLiteral("PRINTC文字数量"),    QStringLiteral("PRINTCの文字数")},
+        {QStringLiteral("字体名称"),          QStringLiteral("フォント名")},
+        {QStringLiteral("字体大小"),          QStringLiteral("フォントサイズ")},
+        {QStringLiteral("每行高度"),          QStringLiteral("一行の高さ")},
+        {QStringLiteral("文字色"),            QStringLiteral("文字色")},
+        {QStringLiteral("背景色"),            QStringLiteral("背景色")},
+        {QStringLiteral("選択中文字色"),      QStringLiteral("選択中文字色")},
+        {QStringLiteral("履歴文字色"),        QStringLiteral("履歴文字色")},
+        {QStringLiteral("绘图界面"),          QStringLiteral("描画インターフェース")},
+        {QStringLiteral("在sav文件夹中创建存档"), QStringLiteral("セーブデータをsavフォルダ内に作成する")},
+        {QStringLiteral("显示eramaker兼容性相关警告"), QStringLiteral("eramaker互換性に関する警告を表示する")},
+        {QStringLiteral("重复定义非事件函数时显示警告"), QStringLiteral("同名の非イベント関数が複数定義されたとき警告する")},
+        {QStringLiteral("最低显示警告等级"),  QStringLiteral("表示する最低警告レベル")},
+    };
+    return m;
+}
+
+// 查找顺序：先原键，再其中文别名（汉化文件里只有中文键）
+QStringList configLookupKeys(const QString& key) {
+    QStringList out{key};
+    const auto& aliases = configKeyAliases();
+    for (auto it = aliases.constBegin(); it != aliases.constEnd(); ++it)
+        if (it.value() == key && it.key() != key) out << it.key();
+    return out;
+}
+
+// 文件里的原始键 -> 引擎规范键（无别名时原样返回）
+QString canonicalConfigKey(const QString& rawKey) {
+    return configKeyAliases().value(rawKey, rawKey);
+}
+
 } // namespace
 
 ConfigLoader::ConfigLoader(QObject *parent)
@@ -131,22 +190,24 @@ void ConfigLoader::mergeConfig(const QString& filePath, int precedence)
 
 QString ConfigLoader::getConfig(const QString& key) const
 {
-    // Search from highest precedence to lowest
-    // Fixed config has highest priority, then regular configs by precedence
-    // Within same precedence, later loaded files have higher priority
+    for (const QString& k : configLookupKeys(key)) {
+        // Search from highest precedence to lowest
+        // Fixed config has highest priority, then regular configs by precedence
+        // Within same precedence, later loaded files have higher priority
 
-    // First, check fixed configs (highest priority)
-    for (int i = m_configFiles.size() - 1; i >= 0; i--) {
-        const ConfigFile& config = m_configFiles[i];
-        if (config.isFixed && config.config.contains(key)) {
-            return config.config[key];
+        // First, check fixed configs (highest priority)
+        for (int i = m_configFiles.size() - 1; i >= 0; i--) {
+            const ConfigFile& config = m_configFiles[i];
+            if (config.isFixed && config.config.contains(k)) {
+                return config.config[k];
+            }
         }
-    }
-    // Then non-fixed configs in reverse order
-    for (int i = m_configFiles.size() - 1; i >= 0; i--) {
-        const ConfigFile& config = m_configFiles[i];
-        if (!config.isFixed && config.config.contains(key)) {
-            return config.config[key];
+        // Then non-fixed configs in reverse order
+        for (int i = m_configFiles.size() - 1; i >= 0; i--) {
+            const ConfigFile& config = m_configFiles[i];
+            if (!config.isFixed && config.config.contains(k)) {
+                return config.config[k];
+            }
         }
     }
     return QString();
@@ -169,8 +230,10 @@ void ConfigLoader::setConfig(const QString& key, const QString& value)
 
 bool ConfigLoader::hasConfig(const QString& key) const
 {
-    for (const ConfigFile& config : m_configFiles) {
-        if (config.config.contains(key)) return true;
+    for (const QString& k : configLookupKeys(key)) {
+        for (const ConfigFile& config : m_configFiles) {
+            if (config.config.contains(k)) return true;
+        }
     }
     return false;
 }
@@ -312,14 +375,23 @@ void ConfigLoader::rebuildValues()
             const QString raw = getConfig(it.key()).trimmed();
             bool ok = false;
             const int value = raw.toInt(&ok);
-            if (ok) m_intValues.insert(it.key(), value);
+            // 汉化配置文件的键名是中文，引擎按日文键查找；这里同时按
+            // 「原始键」与「规范键」两个名字登记转换结果，getBool/getInt/
+            // getColor 用任一名字都能命中。
+            const QString canon = canonicalConfigKey(it.key());
+            const QStringList names = canon == it.key()
+                ? QStringList{it.key()} : QStringList{it.key(), canon};
+            const auto put = [&names](auto& map, const auto& v) {
+                for (const QString& n : names) map.insert(n, v);
+            };
+            if (ok) put(m_intValues, value);
             const auto rgb = raw.split(QLatin1Char(','));
-            if (rgb.size() >= 3) m_colors.insert(it.key(),
+            if (rgb.size() >= 3) put(m_colors,
                 qint64((rgb.at(0).toInt() << 16) | (rgb.at(1).toInt() << 8) | rgb.at(2).toInt()) & 0xFFFFFF);
             const QString upper = raw.toUpper();
             if (upper == "YES" || upper == "TRUE" || upper == "ON" || upper == "1"
                 || upper == "NO" || upper == "FALSE" || upper == "OFF" || upper == "0")
-                m_boolValues.insert(it.key(), parseBool(raw, false));
+                put(m_boolValues, parseBool(raw, false));
         }
     }
 }

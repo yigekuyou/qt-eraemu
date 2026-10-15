@@ -46,6 +46,7 @@
 #include <QDebug>
 #include <QSet>
 #include <climits>
+#include <functional>
 
 namespace {
 
@@ -70,16 +71,37 @@ bool asIndex(const QString& cell, int& out) {
 
 } // namespace
 
-int CsvLoader::loadCharaDirectory(const QString& charaDir,
+int CsvLoader::loadCharaDirectory(const QString& csvDir,
                                   const ConstantTable* constants,
-                                  VariableStorage* storage) {
+                                  VariableStorage* storage,
+                                  bool recursive) {
     if (!storage) return 0;
-    QDir dir(charaDir);
+    QDir dir(csvDir);
     if (!dir.exists()) return 0;
 
-    const QFileInfoList files = dir.entryInfoList(
-        QStringList{QStringLiteral("*.csv"), QStringLiteral("*.CSV")},
-        QDir::Files | QDir::Hidden, QDir::Name);
+    // 对齐 C# `Config.GetFiles(csvDir, "CHARA*.CSV")`：**文件名以 Chara 开头**
+    // 的 *.csv，而不是「名为 Chara 的子目录」。C# 的 getFiles 在
+    // SearchSubdirectory 时先递归子目录、再本目录文件（顺序决定同名模板的
+    // 覆盖关系）；这里照做。
+    //
+    // 目录枚举每个目录**只做一次** entryInfoList 再在内存里分「目录/文件」：
+    // content://（Android SAF）上一次列举就是一整趟 provider 往返，分两次调用
+    // 会让每个目录白跑一趟（同 ErbLoader::collectFiles 的教训）。
+    const auto isCharaCsv = [](const QString& name) {
+        return name.endsWith(QLatin1String(".csv"), Qt::CaseInsensitive)
+               && name.startsWith(QLatin1String("Chara"), Qt::CaseInsensitive);
+    };
+    QFileInfoList files;
+    const std::function<void(const QDir&)> collect = [&](const QDir& d) {
+        const QFileInfoList entries = d.entryInfoList(
+            QDir::AllEntries | QDir::Hidden | QDir::System | QDir::NoDotAndDotDot, QDir::Name);
+        if (recursive)
+            for (const QFileInfo& e : entries)
+                if (e.isDir()) collect(QDir(e.absoluteFilePath()));
+        for (const QFileInfo& e : entries)
+            if (e.isFile() && isCharaCsv(e.fileName())) files.append(e);
+    };
+    collect(dir);
 
     int loadedChars = 0;
     QSet<QString> reportedUnknownTypes;   // 未知类型只留痕一次（同名去重）
@@ -181,6 +203,7 @@ int CsvLoader::loadCharaDirectory(const QString& charaDir,
             if (charaNo >= 0) storage->markCsvExists(static_cast<int>(charaNo));
         }
     }
-    qDebug() << "[load] 角色 CSV" << charaDir << ":" << loadedChars << "个模板";
+    qDebug() << "[load] 角色 CSV" << csvDir << (recursive ? "(含子目录)" : "") << ":"
+             << loadedChars << "个模板 /" << files.size() << "文件";
     return loadedChars;
 }

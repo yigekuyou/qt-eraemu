@@ -892,9 +892,15 @@ void EraEngine::loadConstantData()
 			}
 		}
 
-		// 角色 CSV（对齐 C# ConstantData 读 <Csv>/Chara）：NAME/CALLNAME/BASE/ABL/…
+		// 角色 CSV（对齐 C# ConstantData.loadCharacterData）：
+		// `Config.GetFiles(csvDir, "CHARA*.CSV")` = 扫描 CSV 目录下所有
+		// Chara*.csv（SearchSubdirectory 时含子目录）—— eraTW 放在
+		// CSV/Chara/、eraH 按种族放在 CSV/人間/**・CSV/悪魔/**。
+		// 旧实现固定拼 `<Csv>/Chara` 且不递归：eraH 一个角色都读不到，
+		// 于是 EXISTCSV(0) 为假 -> C_ADD_CHARA(0) 直接 return 2 ->
+		// CHARANUM 停在 0 -> 战斗队伍为空 -> 委托 11 的战斗开场即「全灭」。
 		const int charaLoaded = CsvLoader::loadCharaDirectory(
-		    GamePaths::join(m_csvDir, QStringLiteral("Chara")), &m_constantTable, &m_variableStorage);
+		    m_csvDir, &m_constantTable, &m_variableStorage, m_searchSubdirectory);
 		// CSV* 系函数读「模板值」：装载完角色 CSV 后立刻快照一份
 		// （此后脚本对 VAR:角色:下标 的修改不再污染模板）
 		m_variableStorage.snapshotCharaTemplates();

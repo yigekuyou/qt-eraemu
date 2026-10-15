@@ -117,6 +117,84 @@ int main(int argc, char* argv[]) {
                   .arg(engine.getVariableStorage()->charaCsvNo(1)));
     }
 
+    // -----------------------------------------------------------------------
+    // 3) 角色 CSV 的「发现范围」（对齐 C# Config.GetFiles(csvDir, "CHARA*.CSV")）
+    //
+    // 回归点：旧实现固定拼 `<Csv>/Chara` 且不递归，eraH 这种把角色 CSV 按种族
+    // 放在 CSV/人間/**・CSV/悪魔/** 的游戏一个角色都读不到 -> EXISTCSV(0) 为假
+    // -> C_ADD_CHARA(0) 直接 return 2 -> CHARANUM 停在 0 -> 战斗队伍为空
+    //（委托 11 的战斗开场即「全灭」）。
+    // -----------------------------------------------------------------------
+    const auto charaCsv = [](const QString& name) {
+        return QString::fromUtf8("番号,0\n名前,") + name + QString::fromUtf8("\n呼び名,") + name
+               + QString::fromUtf8("\n");
+    };
+
+    qDebug() << "\n3) 角色 CSV 布局：顶层 CSV/Chara*.csv 与 CSV/Chara/*.csv（eraTW 式）";
+    {
+        // 顶层 Chara*.csv：无论是否检索子目录都应当装载
+        QTemporaryDir tmp;
+        const QString dir = tmp.filePath(QStringLiteral("game"));
+        check(makeGame(dir, QString()), "造出小游戏");
+        check(writeText(dir + QStringLiteral("/CSV/Chara0.csv"), charaCsv(QStringLiteral("あ"))),
+              "写入顶层 CSV/Chara0.csv");
+        EraEngine engine;
+        engine.setGameDirectory(dir);
+        check(!engine.searchSubdirectory(), "未配置 -> SearchSubdirectory 为假");
+        check(engine.getVariableStorage()->existCsv(0),
+              "顶层 CSV/Chara0.csv -> EXISTCSV(0) 为真（不依赖子目录检索）");
+    }
+    {
+        // eraTW 式：CSV/Chara/Chara*.csv + 检索子目录:YES
+        QTemporaryDir tmp;
+        const QString dir = tmp.filePath(QStringLiteral("game"));
+        check(makeGame(dir, QString()), "造出小游戏");
+        check(writeText(dir + QStringLiteral("/CSV/Chara/Chara0.csv"), charaCsv(QStringLiteral("あ"))),
+              "写入 CSV/Chara/Chara0.csv");
+        check(writeText(dir + QStringLiteral("/CSV/_fixed.config"),
+                        QString::fromUtf8("サブディレクトリを検索する:YES\n")),
+              "日文键 サブディレクトリを検索する:YES（eraTW 就是这样）");
+        EraEngine engine;
+        engine.setGameDirectory(dir);
+        check(engine.getVariableStorage()->existCsv(0), "CSV/Chara/ + 检索子目录 -> EXISTCSV(0) 为真");
+    }
+
+    qDebug() << "\n4) 角色 CSV 布局：CSV/<种族>/<分类>/Chara*.csv（eraH 式）+ 中文键「检索子目录」";
+    {
+        QTemporaryDir tmp;
+        const QString dir = tmp.filePath(QStringLiteral("game"));
+        check(makeGame(dir, QString()), "造出小游戏");
+        check(writeText(dir + QStringLiteral("/CSV/人間/00_人間/Chara0000_あなた.csv"),
+                        charaCsv(QStringLiteral("あなた"))),
+              "写入两层子目录里的角色 CSV");
+        check(writeText(dir + QStringLiteral("/CSV/_fixed.config"),
+                        QString::fromUtf8("检索子目录:YES\n")),
+              "配置用中文键 检索子目录:YES（汉化版 era 游戏就是这样）");
+        EraEngine engine;
+        engine.setGameDirectory(dir);
+        check(engine.searchSubdirectory(), "中文键被识别 -> SearchSubdirectory 为真");
+        check(engine.getVariableStorage()->existCsv(0),
+              "嵌套子目录 + 中文键 -> EXISTCSV(0) 为真");
+    }
+
+    qDebug() << "\n5) 关掉子目录检索时应当只扫顶层（不误报）";
+    {
+        QTemporaryDir tmp;
+        const QString dir = tmp.filePath(QStringLiteral("game"));
+        check(makeGame(dir, QString()), "造出小游戏");
+        check(writeText(dir + QStringLiteral("/CSV/人間/00_人間/Chara0000_あなた.csv"),
+                        charaCsv(QStringLiteral("あなた"))),
+              "写入两层子目录里的角色 CSV");
+        check(writeText(dir + QStringLiteral("/CSV/_fixed.config"),
+                        QString::fromUtf8("サブディレクトリを検索する:NO\n")),
+              "日文键 サブディレクトリを検索する:NO");
+        EraEngine engine;
+        engine.setGameDirectory(dir);
+        check(!engine.searchSubdirectory(), "SearchSubdirectory 为假");
+        check(!engine.getVariableStorage()->existCsv(0),
+              "不检索子目录 -> 嵌套角色 CSV 不装载（与 C# 的 toponly 一致）");
+    }
+
     qDebug() << "\n==============================";
     if (g_failures == 0) {
         qDebug() << "[SUCCESS] new game tests passed";

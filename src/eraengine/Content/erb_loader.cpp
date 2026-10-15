@@ -706,8 +706,13 @@ ErbLoader::LoadPrep ErbLoader::prepareLoad(const QString& dirPath, int depth) co
         FunctionTypes functionTypes;
         LoadTimeVarTypes varTypes;
     };
+    // 本函数跑在线程池线程上：这里的 qInfo/计时与 m_async.clock（GUI 侧）互不干扰
+    QElapsedTimer prepClock;
+    prepClock.start();
     LoadPrep prep;
     const QStringList allFiles = collectFiles(dirPath, depth);
+    qInfo().noquote() << "[ErbLoader] 预扫描:枚举到" << allFiles.size()
+                      << "个 ERB/ERH 文件，目录枚举耗时" << prepClock.elapsed() << "ms";
     if (allFiles.isEmpty()) {
         return prep;
     }
@@ -803,6 +808,12 @@ void ErbLoader::finishAsync(bool ok) {
 
 void ErbLoader::loadDirectoryAsync(const QString& dirPath, int depth) {
     if (m_async.active) {
+        // 静默 return 会让 UI 永远停在「正在装载脚本」（loadCompleted 不发，
+        // scriptsLoaded 永不到来）。正常调用链（loadAsync/reloadAsync）都会先
+        // stopAsyncLoad() 复位 active，能走到这里只可能是旁路调用 —— 大声报错
+        // 并按失败收尾，绝不悬挂界面。
+        qWarning() << "[load] 上一轮异步装载仍在进行，拒绝装载:" << dirPath;
+        emit loadCompleted(false);
         return;
     }
     if (dirPath.isEmpty() || !QFileInfo(dirPath).isDir()) {
@@ -810,6 +821,7 @@ void ErbLoader::loadDirectoryAsync(const QString& dirPath, int depth) {
         emit loadCompleted(false);
         return;
     }
+    qInfo().noquote() << "[ErbLoader] 异步装载开始:" << dirPath;
     m_async = AsyncState{};
     m_async.active = true;
     m_async.ok = true;

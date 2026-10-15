@@ -30,6 +30,20 @@ QString join(const QString& base, const QString& relative)
         // A provider document has no portable parent operation. Never escape
         // the authorized resource directory through a script path.
         if (part == QLatin1String("..")) return {};
+        // 快路径：先按「%编码子名」拼出候选，只做一次存在性查询。装载期每个
+        // 脚本/CSV 文件都会走这里（collectFiles / loadCsvDirectory 每文件一次），
+        // 旧实现无条件做整目录 entryInfoList —— 在 content:// 上每趟都是一次
+        // DocumentsContract 往返（列出全部子项再逐个 stat），2258 个 ERB 就是
+        // 两千多次全目录枚举，装载 prep 阶段因此数分钟无任何输出，看起来就是
+        // 「卡在正在装载脚本、日志没有加载痕迹」。
+        const QString appended =
+            current + u'/' + QString::fromLatin1(QUrl::toPercentEncoding(part));
+        if (QFileInfo::exists(appended)) {
+            current = appended;
+            continue;
+        }
+        // 慢路径：脚本里写的大小写与盘上不一致（`Foo.ERB` vs `foo.erb`），或
+        // appended 形态引擎不认 —— 退回整目录枚举找真实名（维持原语义）。
         QString child;
         const auto entries = QDir(current).entryInfoList(QDir::AllEntries | QDir::Hidden
                                   | QDir::System | QDir::NoDotAndDotDot);
@@ -40,7 +54,7 @@ QString join(const QString& base, const QString& relative)
         }
         // Qt 6.11's file engine accepts appended paths for creation. Encode
         // literal %, #, spaces and Unicode so document names remain intact.
-        current = child.isEmpty() ? current + u'/' + QString::fromLatin1(QUrl::toPercentEncoding(part)) : child;
+        current = child.isEmpty() ? appended : child;
     }
     return current;
 }

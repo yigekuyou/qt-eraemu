@@ -63,7 +63,12 @@ struct ScriptPosition {
         : filename(file), lineNumber(line), column(col) {}
 
     QString toString() const {
-        return QString("%1:%2:%3").arg(filename).arg(lineNumber).arg(column);
+        // **不能用链式 .arg()**：filename 在 Android 上是带 %2F/%3A 转义的 content://
+        // URI（脚本名=URI），.arg(lineNumber)/.arg(column) 会把 URI 里的 %2/%3 当
+        // 占位符吞掉（真机实测：%2F→"<行号>F"、%3A→"<列号>A"）；桌面路径里若有
+        // 字面 %2/%3 同样中招。见 parse_diagnostic.h 的 positionText() 同因。
+        return filename + QLatin1Char(':') + QString::number(lineNumber) + QLatin1Char(':')
+               + QString::number(column);
     }
 };
 Q_DECLARE_METATYPE(ScriptPosition)

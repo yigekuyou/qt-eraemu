@@ -44,6 +44,10 @@
 //（Windows 路径/目录层级的兼容上限），不能因为正常的深层数据目录漏载脚本。
 static constexpr int kMaxScanDepth = 255;
 
+// 读取失败的逐条告警上限：Android SAF 上权限被收回时可能整目录读不进来，
+// 逐文件告警会刷屏；超过上限只计数，收尾日志给出总数。
+static constexpr int kMaxReadFailureLogs = 20;
+
 // 脚本名 = **相对装载根目录的路径**（含扩展名）。
 // 对齐 C# Config.GetFiles 返回的 KeyValuePair<相対パス, 完全パス>：脚本名是
 // 相对路径而不是 basename，所以不同子目录下的同名 .ERB 是**不同脚本**，不会
@@ -63,7 +67,15 @@ static QString scriptNameFor(const QString& root, const QString& filePath) {
     return QFileInfo(abs).fileName();
 }
 
-ErbLoader::ErbLoader(QObject* parent) : QObject(parent), m_parseTable(nullptr) {}
+ErbLoader::ErbLoader(QObject* parent) : QObject(parent), m_parseTable(nullptr) {
+    // 装载心跳：异步装载期间由主线程定时读取后台阶段/进度原子量，
+    // 打印「装载心跳：阶段=… 进度=… 已耗时=…」，并把同一份快照转发给 UI
+    // （loadHeartbeat → EraEngine 的 loadStage/loadProcessed/… 属性）。
+    // 详见 LoadStage 的说明：eraTW 在 Android SAF 上是分钟级，中间窗口必须留痕。
+    m_heartbeat.setInterval(m_heartbeatMs > 0 ? m_heartbeatMs : 1000);
+    m_heartbeat.setTimerType(Qt::CoarseTimer);
+    connect(&m_heartbeat, &QTimer::timeout, this, &ErbLoader::onHeartbeat);
+}
 
 ErbLoader::~ErbLoader() {
     cancelAndWait();
@@ -80,6 +92,18 @@ QString ErbLoader::readFileContent(const QString& filePath) const {
     const QString realPath = FileSystem::resolvePathCase(filePath);
     TextEncoding detected = TextEncoding::Auto;
     return TextCodecUtil::readFile(realPath, m_readEncoding, &detected, nullptr);
+}
+
+QString ErbLoader::readFileContent(const QString& filePath, bool* ok) const {
+    // 与上个重载同一路径，只是把成功与否交回调用方：后台预扫描需要区分
+    // 「空文件」与「读不进来」。Android SAF 下权限被收回 / 文档失效会让
+    // QFile::open 失败，旧实现静默得到空文本 → 脚本无声消失（装载仍报 ok）。
+    const QString realPath = FileSystem::resolvePathCase(filePath);
+    TextEncoding detected = TextEncoding::Auto;
+    bool readOk = false;
+    const QString text = TextCodecUtil::readFile(realPath, m_readEncoding, &detected, &readOk);
+    if (ok) *ok = readOk;
+    return readOk ? text : QString();
 }
 
 // ---------------------------------------------------------------------------
@@ -141,7 +165,15 @@ QStringList ErbLoader::collectFiles(const QString& dirPath, int depth) const {
     if (dirPath.isEmpty() || depth > kMaxScanDepth) return out;
 
     QDir dir(dirPath);
-    if (!dir.exists()) return out;
+    if (!dir.exists()) {
+        qWarning() << "[load] ERB 子目录不可读，跳过:" << dirPath;
+        return out;
+    }
+
+    // 心跳：枚举阶段以「已访问目录数」为进度（总目录数未知，故 total 用 -1）。
+    // 目录枚举在 Android SAF 上是每次一趟 DocumentsContract 往返（列出全部
+    // 子项），eraTW 有 ~200 个 ERB 子目录；心跳让这一段不再静默。
+    bumpLoadStage(1);
 
     // 顺序与排序都对齐 C# Config.getFiles：
     //   · **先递归子目录，再本目录的文件**（C# 里 dirList 循环在 filepaths 之前）；
@@ -156,21 +188,55 @@ QStringList ErbLoader::collectFiles(const QString& dirPath, int depth) const {
         return QString::compare(a, b, Qt::CaseInsensitive) < 0;
     };
 
-    QStringList dirs = dir.entryList(QDir::Dirs | QDir::NoDotAndDotDot, QDir::NoSort);
-    std::sort(dirs.begin(), dirs.end(), ordinalIgnoreCaseLess);
-    for (const QString& d : dirs) {
-        out.append(collectFiles(GamePaths::join(dirPath, d), depth + 1));
+    // 一次 entryInfoList 取全（含隐藏/系统项），再在内存里分成「目录」与
+    // 「*.ERB/*.ERH 文件」。**不要**分两次调用（旧实现 entryList(Dirs) +
+    // entryInfoList(名字过滤)）：content:// 上每次调用都是一整趟全目录枚举，
+    // 每个目录白跑一趟——Android 上这正是「枚举慢」的一半来源。
+    const QFileInfoList entries = dir.entryInfoList(
+        QDir::AllEntries | QDir::Hidden | QDir::System | QDir::NoDotAndDotDot, QDir::NoSort);
+
+    // 子项路径**直接复用 provider 给回来的 URI**（QFileInfo::absoluteFilePath()），
+    // 不再逐项走 GamePaths::join（其快路径每次都要一次 QFileInfo::exists 探测）。
+    // 真机实测（OnePlus/Android 16，eraH 920 文件 / 114 目录）：枚举阶段约 1000 次
+    // provider 往返，占满 64s 装载总时长里的约 53s（≈51ms/次）—— 这是设备上最大
+    // 的单笔开销。条目名来自 provider 自己的列表，所以「父文档 + 子名」这一形态由
+    // provider 保证；若某个 provider 的文档 ID 不可拼接，后续**读取**会失败并逐条
+    // 告警（见 prepareLoad 的读取失败计数），不会像旧代码那样静默丢脚本。
+    // 本地路径仍走 GamePaths::join（= QDir::filePath），保持原有的相对/绝对形态。
+    const auto childPath = [&dirPath](const QFileInfo& entry) {
+        if (GamePaths::isContent(dirPath)) return entry.absoluteFilePath();
+        return GamePaths::join(dirPath, entry.fileName());
+    };
+
+    QFileInfoList dirEntries;
+    QFileInfoList files;
+    for (const QFileInfo& entry : entries) {
+        if (entry.isDir()) {
+            dirEntries.append(entry);
+            continue;
+        }
+        if (!entry.isFile()) continue;
+        const QString name = entry.fileName();
+        if (name.endsWith(QLatin1String(".erb"), Qt::CaseInsensitive)
+            || name.endsWith(QLatin1String(".erh"), Qt::CaseInsensitive)) {
+            files.append(entry);
+        }
     }
 
-    QFileInfoList files = dir.entryInfoList(
-        QStringList{"*.ERB", "*.erb", "*.ERH", "*.erh"},
-        QDir::Files | QDir::Hidden | QDir::NoDotAndDotDot, QDir::NoSort);
+    std::sort(dirEntries.begin(), dirEntries.end(),
+              [&ordinalIgnoreCaseLess](const QFileInfo& x, const QFileInfo& y) {
+                  return ordinalIgnoreCaseLess(x.fileName(), y.fileName());
+              });
+    for (const QFileInfo& d : dirEntries) {
+        out.append(collectFiles(childPath(d), depth + 1));
+    }
+
     std::sort(files.begin(), files.end(),
               [&ordinalIgnoreCaseLess](const QFileInfo& x, const QFileInfo& y) {
                   return ordinalIgnoreCaseLess(x.fileName(), y.fileName());
               });
     for (const QFileInfo& fi : files) {
-        out.append(GamePaths::join(dirPath, fi.fileName()));
+        out.append(childPath(fi));
     }
     return out;
 }
@@ -278,6 +344,13 @@ void ErbLoader::preRegisterDeclarations(const QStringList& files,
                                         const QHash<QString, QString>& decoded,
                                         const QSet<QString>& headers) {
     if (!m_parseTable) return;
+    // 本函数在 GUI 线程上跑：期间心跳定时器（也在 GUI 线程）无法触发，
+    // 所以进度直接在循环里打印 —— 逐行日志是同步写的，主线程就算被占住，
+    // 已经写出的行也已经进了 logcat，真机上就能看到「登记到第几个文件」。
+    QElapsedTimer progressClock;
+    progressClock.start();
+    int processed = 0;
+    const int reportEvery = 200;   // 文件数：eraTW 2260 → 约 11 行
     m_parseTable->beginDeclarationPreRegistration();
     for (const QString& f : files) {
         const bool isHeader = headers.contains(f);
@@ -314,6 +387,11 @@ void ErbLoader::preRegisterDeclarations(const QStringList& files,
                 continue;
             }
             afterLabel = false;   // 普通指令行：声明区结束
+        }
+        ++processed;
+        if (processed % reportEvery == 0) {
+            qInfo().noquote() << "[ErbLoader] 登记声明进行中:" << processed << "/" << files.size()
+                              << "个文件，" << progressClock.elapsed() << "ms";
         }
     }
     m_parseTable->finishDeclarationPreRegistration();
@@ -710,6 +788,7 @@ ErbLoader::LoadPrep ErbLoader::prepareLoad(const QString& dirPath, int depth) co
     QElapsedTimer prepClock;
     prepClock.start();
     LoadPrep prep;
+    setLoadStage(StageEnumerate);
     const QStringList allFiles = collectFiles(dirPath, depth);
     qInfo().noquote() << "[ErbLoader] 预扫描:枚举到" << allFiles.size()
                       << "个 ERB/ERH 文件，目录枚举耗时" << prepClock.elapsed() << "ms";
@@ -724,13 +803,25 @@ ErbLoader::LoadPrep ErbLoader::prepareLoad(const QString& dirPath, int depth) co
     }
     prep.files = headers + scripts;
 
+    // 强制性的顺序第一阶段：头文件的 #DEFINE 宏表（解析期要用）。此前这一段
+    // 既没有日志也没有进度 —— 头文件多、或 SAF 上单次读取慢时，紧随枚举之后
+    // 就是一段静默。用心跳的 Read 阶段上报「已读 N/总数」。
+    setLoadStage(StageRead, 0, prep.files.size());
+    QElapsedTimer macroClock;
+    macroClock.start();
     // 头文件：#DEFINE 宏名与宏表来自同一份内容 —— 只读一次（以前 collectDefines
     // 与 collectMacroTable 各读一遍，同一个 .ERH 被解码两次）。
     for (const QString& h : headers) {
-        const QString content = readFileContent(h);
+        bool readOk = false;
+        const QString content = readFileContent(h, &readOk);
+        if (!readOk) {
+            noteReadFailure();
+            qWarning() << "[load] 头文件读取失败（宏表/全局 #DIM 可能缺失）:" << h;
+        }
         prep.macros.unite(ErbPreprocessor::collectDefines(content));
         const ErbPreprocessor::MacroTable t = ErbPreprocessor::collectMacroTable(content);
         for (auto it = t.constBegin(); it != t.constEnd(); ++it) prep.macroTable.insert(it.key(), it.value());
+        bumpLoadStage(1);
     }
 
     // 函数返回类型预扫描（只读）。此前是**单线程**顺序读全部 2200+ 个文件，
@@ -748,17 +839,38 @@ ErbLoader::LoadPrep ErbLoader::prepareLoad(const QString& dirPath, int depth) co
         for (const QString& h : headers) set.insert(h);
         return set;
     }();
-    const auto scanOne = [this, &headerSet](const QString& f) {
+    const int threadCount = QThreadPool::globalInstance()->maxThreadCount();
+    qInfo().noquote() << "[ErbLoader] 预扫描:读+解码+类型扫描开始" << prep.files.size()
+                      << "个文件（头文件" << headers.size() << "个，并行线程"
+                      << threadCount << "），宏表耗时" << macroClock.elapsed() << "ms";
+    QElapsedTimer scanClock;
+    scanClock.start();
+    // 读取失败的文件（SAF 权限/文档失效）：计数 + 逐条告警（上限 20 条，避免刷屏），
+    // 否则脚本会静默缺失而装载仍报 ok=true。
+    std::atomic<int> failed{0};
+    const auto scanOne = [this, &headerSet, &failed](const QString& f) {
         FileScan scan;
-        scan.content = readFileContent(f);
+        bool readOk = false;
+        scan.content = readFileContent(f, &readOk);
+        if (!readOk) {
+            noteReadFailure();
+            if (failed.fetch_add(1, std::memory_order_relaxed) < kMaxReadFailureLogs)
+                qWarning() << "[load] ERB/ERH 读取失败，已跳过:" << f;
+        }
         scan.functionTypes = scanFunctionTypes(scan.content);
         scanVariableTypes(scan.content, headerSet.contains(f), scan.varTypes);
+        bumpLoadStage(1);
         return scan;
     };
     QList<FileScan> scans;
-    if (QThreadPool::globalInstance()->maxThreadCount() > 1) {
+    if (threadCount > 1) {
         scans = QtConcurrent::blockingMapped(filesForScan, scanOne);
     } else {
+        // 线程池只有 1 个线程（拿不到并行度时）：退化为顺序执行。
+        // 注意这会显著变慢（eraTW 82MB × 单线程），心跳日志里的进度会一直前进，
+        // 但不会「卡住」——真机上看到的就是这条线。
+        qWarning() << "[load] 线程池只有 1 个线程，读+解码退化为串行"
+                   << prep.files.size() << "个文件（Android 上会明显变慢）";
         scans.reserve(prep.files.size());
         for (const QString& f : filesForScan) scans.append(scanOne(f));
     }
@@ -771,6 +883,9 @@ ErbLoader::LoadPrep ErbLoader::prepareLoad(const QString& dirPath, int depth) co
         }
         mergeVarTypes(prep.varTypes, scans.at(i).varTypes);
     }
+    qInfo().noquote() << "[ErbLoader] 预扫描:读+解码+类型扫描完成" << prep.files.size()
+                      << "个文件，" << scanClock.elapsed() << "ms，读取失败"
+                      << m_readFailures.load(std::memory_order_relaxed);
     prep.ok = true;
     return prep;
 }
@@ -790,7 +905,14 @@ void ErbLoader::finishAsync(bool ok) {
     qInfo().noquote() << "[ErbLoader] 异步装载结束 ok=" << ok
                       << " 文件" << m_async.total
                       << " 总耗时" << totalMs << "ms"
-                      << " 主线程合并" << m_async.mergeMs << "ms";
+                      << " 主线程合并" << m_async.mergeMs << "ms"
+                      << " 阶段[枚举+读解码" << m_async.prepMs
+                      << " 登记声明" << m_async.registerMs
+                      << " 解析" << m_async.parseMs << "]" << "ms";
+    if (!ok) {
+        qWarning() << "[ErbLoader] 异步装载失败（ok=false），主线程将按失败收尾:" << m_async.dirPath;
+    }
+    stopHeartbeat();
     // 全部脚本已合并：HTML 字符串反向追踪（与同步路径同一入口，见 loadDirectory）。
     if (ok && m_parseTable) m_parseTable->traceHtmlStringArguments();
     if (m_prepWatcher) disconnect(m_prepWatcher.get(), nullptr, this, nullptr);
@@ -806,22 +928,134 @@ void ErbLoader::finishAsync(bool ok) {
     emit loadCompleted(ok);
 }
 
+// ---------------------------------------------------------------------------
+// 装载心跳：后台线程只写原子量，主线程统一读取 → 打印 + 上报
+// ---------------------------------------------------------------------------
+QString ErbLoader::loadStageName(int stage) {
+    switch (stage) {
+    case StageEnumerate: return QStringLiteral("枚举文件");
+    case StageRead:      return QStringLiteral("读取解码");
+    case StageRegister:  return QStringLiteral("登记声明");
+    case StageParse:     return QStringLiteral("分块解析");
+    case StageMerge:     return QStringLiteral("合并脚本");
+    case StageIdle:
+    default:             return QStringLiteral("空闲");
+    }
+}
+
+QString ErbLoader::loadStageGroupName(int stage) {
+    switch (stage) {
+    // 分块解析（后台）与合并（主线程）交错进行：对 UI 就是同一个阶段。
+    case StageParse:
+    case StageMerge:    return QStringLiteral("解析与合并脚本");
+    case StageEnumerate:return QStringLiteral("枚举脚本文件");
+    case StageRead:     return QStringLiteral("读取并解码脚本");
+    case StageRegister: return QStringLiteral("登记变量声明");
+    case StageIdle:
+    default:            return QStringLiteral("空闲");
+    }
+}
+
+void ErbLoader::setLoadStage(int stage, int done, int total) const {
+    m_stage.store(stage, std::memory_order_relaxed);
+    // done/total < 0 = 「保持不动」：合并步只切阶段，不回收进度（进度必须单调，
+    // 否则心跳里的「已处理/总数」会在「解析」与「合并」之间来回跳）。
+    if (done >= 0) m_stageDone.store(done, std::memory_order_relaxed);
+    if (total >= 0) m_stageTotal.store(total, std::memory_order_relaxed);
+}
+
+void ErbLoader::bumpLoadStage(int n) const {
+    m_stageDone.fetch_add(n, std::memory_order_relaxed);
+}
+
+void ErbLoader::startHeartbeat() {
+    m_hbStage = -1;
+    m_hbDone = -1;
+    m_hbLogMs = 0;
+    m_hbChangeMs = 0;
+    if (m_heartbeatMs <= 0) return;   // 显式关闭（单测）
+    m_heartbeat.start(m_heartbeatMs);
+}
+
+void ErbLoader::stopHeartbeat() {
+    if (m_heartbeat.isActive()) m_heartbeat.stop();
+    m_stage.store(StageIdle, std::memory_order_relaxed);
+    m_stageTotal.store(0, std::memory_order_relaxed);
+    m_stageDone.store(0, std::memory_order_relaxed);
+    m_stageMerged.store(0, std::memory_order_relaxed);
+}
+
+void ErbLoader::onHeartbeat() {
+    if (!m_async.active) {
+        // 装载已结束/被取消：不该再有心跳
+        stopHeartbeat();
+        return;
+    }
+    const int stage = m_stage.load(std::memory_order_relaxed);
+    const int done = m_stageDone.load(std::memory_order_relaxed);
+    const int total = m_stageTotal.load(std::memory_order_relaxed);
+    const qint64 elapsedMs = m_async.clock.isValid() ? m_async.clock.elapsed() : 0;
+    const bool stageChanged = (stage != m_hbStage);
+    const bool progressed = (done != m_hbDone);
+    if (stageChanged || progressed) m_hbChangeMs = elapsedMs;
+    // 停滞判定：阶段与进度都超过 kStallMs 没动。UI 用它把「慢」和「死」分开
+    // （SAF 上单步可能真的要几十毫秒，但十秒毫无动静就值得提醒）。
+    const bool stalled = (elapsedMs - m_hbChangeMs) >= kStallMs;
+    // 日志限频：阶段变化 / 进度前进 / 至少 5s 一次（**卡住时也照打**：这条
+    // 「进度没有变化」的日志正是判断「慢」还是「死」的依据）。
+    const bool logDue = stageChanged || progressed || (elapsedMs - m_hbLogMs >= 5000);
+    if (logDue) {
+        const QString progress = total > 0 ? QStringLiteral("%1/%2").arg(done).arg(total)
+                                           : QStringLiteral("%1（总数未知）").arg(done);
+        const int merged = m_stageMerged.load(std::memory_order_relaxed);
+        qInfo().noquote() << "[ErbLoader] 装载心跳: 阶段=" << loadStageName(stage)
+                          << "进度=" << progress << "已耗时" << elapsedMs << "ms"
+                          << (stalled ? QStringLiteral("（进度停滞，可能卡在文件访问）") : QString())
+                          << (stage == StageMerge ? QStringLiteral("已并入 %1 个").arg(merged)
+                                                  : QString())
+                          << (m_readFailures.load(std::memory_order_relaxed) > 0
+                                  ? QStringLiteral("读取失败 %1 个").arg(
+                                        m_readFailures.load(std::memory_order_relaxed))
+                                  : QString());
+        m_hbLogMs = elapsedMs;
+    }
+    if (stageChanged) m_hbStage = stage;
+    if (progressed || stageChanged) m_hbDone = done;
+    // ---- UI：一次心跳 = 一份完整快照 ----
+    // 阶段名用粗粒度（解析/合并交错时 1Hz 采样会来回跳，UI 文案不能跟着闪），
+    // 计数用同一口径的单调值；UI 侧（EraEngine 的 loadStage/loadProcessed/…）
+    // 只认这一条信号，因此进度条、阶段文案、已耗时、停滞提示天然一致。
+    emit loadHeartbeat(stage, loadStageGroupName(stage), done, total > 0 ? total : 0,
+                       elapsedMs, stalled);
+    // 兼容：没有总量可报的阶段（枚举）仍按旧口径发 loadProgress，让外部
+    // 「只看 loadProgress」的消费者也能看到动静。
+    if ((progressed || stageChanged) && total <= 0) emit loadProgress(done, 0);
+}
+
 void ErbLoader::loadDirectoryAsync(const QString& dirPath, int depth) {
+    // 先留痕再校验：这一步之前的任何一次「静默 return」都会让 UI 永远停在
+    // 「正在装载脚本」（loadCompleted 不发 → scriptsLoaded 永不到来）。
+    // Android 上 QFileInfo(content://…) 的 isDir() 本身就可能要一趟 provider
+    // 往返，先打印才能区分「卡在校验里」和「根本没进来」。
+    qInfo().noquote() << "[ErbLoader] 异步装载开始:"
+                      << (GamePaths::isContent(dirPath)
+                              ? QStringLiteral("[content URI] ") + dirPath
+                              : dirPath);
     if (m_async.active) {
-        // 静默 return 会让 UI 永远停在「正在装载脚本」（loadCompleted 不发，
-        // scriptsLoaded 永不到来）。正常调用链（loadAsync/reloadAsync）都会先
-        // stopAsyncLoad() 复位 active，能走到这里只可能是旁路调用 —— 大声报错
-        // 并按失败收尾，绝不悬挂界面。
+        // 正常调用链（loadAsync/reloadAsync）都会先 stopAsyncLoad() 复位 active，
+        // 能走到这里只可能是旁路调用 —— 大声报错并按失败收尾，绝不悬挂界面。
         qWarning() << "[load] 上一轮异步装载仍在进行，拒绝装载:" << dirPath;
         emit loadCompleted(false);
         return;
     }
     if (dirPath.isEmpty() || !QFileInfo(dirPath).isDir()) {
-        qWarning() << "[load] ERB 目录无效:" << dirPath;
+        qWarning() << "[load] ERB 目录无效:" << dirPath
+                   << (GamePaths::isContent(dirPath)
+                           ? QStringLiteral("（content URI 可能已失效/权限被收回：请重新选择游戏目录）")
+                           : QStringLiteral("（目录不存在或不可读）"));
         emit loadCompleted(false);
         return;
     }
-    qInfo().noquote() << "[ErbLoader] 异步装载开始:" << dirPath;
     m_async = AsyncState{};
     m_async.active = true;
     m_async.ok = true;
@@ -831,6 +1065,13 @@ void ErbLoader::loadDirectoryAsync(const QString& dirPath, int depth) {
     if (m_maxThreads > 0) {
         QThreadPool::globalInstance()->setMaxThreadCount(m_maxThreads);
     }
+    qInfo().noquote() << "[ErbLoader] 异步装载参数: 并行" << (m_parallel ? "是" : "否")
+                      << "块大小" << m_chunkSize << "线程池"
+                      << QThreadPool::globalInstance()->maxThreadCount();
+    // 先落到「枚举」阶段：后台任务还没被线程池调度起来的这几十毫秒里，
+    // 任何心跳/取消日志都不该显示「空闲」。
+    setLoadStage(StageEnumerate, 0, 0);
+    startHeartbeat();
 
     const auto generation = ++m_generation;
     m_prepWatcher = std::make_unique<QFutureWatcher<LoadPrep>>();
@@ -854,7 +1095,10 @@ void ErbLoader::loadDirectoryAsync(const QString& dirPath, int depth) {
 
 void ErbLoader::cancelLoad() {
     if (!m_async.active) return;
+    qInfo().noquote() << "[ErbLoader] 异步装载被取消:"
+                      << loadStageName(loadStage()) << m_stageDone.load() << "/" << m_stageTotal.load();
     m_async.cancelled = true;
+    stopHeartbeat();
     m_prepFuture.cancel();
     m_chunkFuture.cancel();
 }
@@ -883,6 +1127,8 @@ void ErbLoader::cancelAndWait() {
     m_labels.clear();
     m_labelPositions.clear();
     m_scriptLineCounts.clear();
+    stopHeartbeat();
+    m_readFailures.store(0, std::memory_order_relaxed);
 }
 
 void ErbLoader::onPrepFinished() {
@@ -893,7 +1139,10 @@ void ErbLoader::onPrepFinished() {
     LoadPrep prep = m_prepFuture.takeResult();
     m_prepWatcher->setFuture(QFuture<LoadPrep>());
     m_prepFuture = {};
+    m_async.prepMs = m_async.clock.isValid() ? m_async.clock.elapsed() : 0;
     if (!prep.ok) {
+        qWarning() << "[ErbLoader] 后台预扫描失败（文件列表为空或读取失败）:"
+                   << m_async.dirPath;
         finishAsync(false);
         return;
     }
@@ -910,10 +1159,21 @@ void ErbLoader::onPrepFinished() {
     m_async.total = prep.files.size();
     {
         // 先登记 #DIM/#DIMS（按预处理后的行），再让分块并行构建 AST。
+        // **这一段在 GUI 线程上**（要写解析表，之后并行解析只读它），且此前
+        // 完全没有日志：eraTW 桌面实测数秒，Android 上更久 —— 界面在这段时间
+        // 是真的冻住的（心跳定时器也发不出来，主线程被占），所以必须在进入前
+        // 打一行、并每隔一段再打一行进度，否则真机上就是「毫无反应」。
+        setLoadStage(StageRegister, 0, m_async.total);
         QSet<QString> headerSet;
         for (const QString& f : m_async.files)
             if (f.endsWith(QLatin1String(".erh"), Qt::CaseInsensitive)) headerSet.insert(f);
+        qInfo().noquote() << "[ErbLoader] 登记声明(#DIM/#DIMS/#GLOBAL…)开始（主线程）:"
+                          << m_async.total << "个文件（头文件" << headerSet.size() << "个）";
+        QElapsedTimer registerClock;
+        registerClock.start();
         preRegisterDeclarations(m_async.files, m_async.decoded, headerSet);
+        m_async.registerMs = registerClock.elapsed();
+        qInfo().noquote() << "[ErbLoader] 登记声明完成:" << m_async.registerMs << "ms";
     }
     m_async.parsed = 0;
     m_async.merged = 0;
@@ -921,7 +1181,8 @@ void ErbLoader::onPrepFinished() {
     // 预扫描（列举 + 宏表 + 函数返回类型）已在后台完成：这里能看出它为 UI
     // 首帧前贡献了多少等待时间。
     qInfo().noquote() << "[ErbLoader] 异步预扫描完成(读文件+函数/变量类型)"
-                      << m_async.clock.elapsed() << "ms，" << m_async.total << "个文件";
+                      << m_async.clock.elapsed() << "ms，" << m_async.total << "个文件，读取失败"
+                      << m_readFailures.load(std::memory_order_relaxed);
     const auto generation = m_generation;
     emit loadProgress(0, m_async.total);
     if (generation == m_generation && m_async.active) scheduleNextChunk();
@@ -942,6 +1203,14 @@ void ErbLoader::scheduleNextChunk() {
         finishAsync(m_async.ok);
         return;
     }
+    // 阶段=解析：心跳据此上报「解析 已调度/总数」。分块序号 + 文件区间一并打印，
+    // Android 上「解析到第几块」就是判断是慢还是死的唯一依据。
+    ++m_async.chunkIndex;
+    m_async.chunkStartedMs = m_async.clock.isValid() ? m_async.clock.elapsed() : 0;
+    setLoadStage(StageParse, m_async.parsed, m_async.total);
+    qInfo().noquote() << "[ErbLoader] 分块解析 #" << m_async.chunkIndex
+                      << "文件 [" << m_async.parsed << "," << (m_async.parsed + slice.size()) << ")"
+                      << "/" << m_async.total << "（已耗时" << m_async.chunkStartedMs << "ms）";
     const FunctionTypes types = m_asyncTypes;
     // 用户变量类型快照同样是「本次 mapped 运行期间只读」，按值捕获
     //（QHash 隐式共享，拷贝很便宜）。
@@ -972,10 +1241,20 @@ void ErbLoader::onChunkFinished() {
         m_async.decoded.remove(m_async.files.at(i));
     }
     m_async.parsed += n;
+    // 进度按「后台解析完成」的文件数单调推进（合并步不回收它）
+    setLoadStage(StageParse, m_async.parsed, m_async.total);
     if (n == 0) {
+        qWarning() << "[ErbLoader] 分块解析 #" << m_async.chunkIndex
+                   << "返回 0 个结果（future 结果丢失），提前结束装载";
         finishAsync(m_async.ok);
         return;
     }
+    // 本块后台解析耗时（wall time：调度 → 全部结果就绪）
+    const qint64 nowMs = m_async.clock.isValid() ? m_async.clock.elapsed() : 0;
+    const qint64 chunkParseMs = nowMs - m_async.chunkStartedMs;
+    m_async.parseMs += chunkParseMs;
+    qInfo().noquote() << "[ErbLoader] 分块解析 #" << m_async.chunkIndex << "完成:"
+                      << n << "个文件，" << chunkParseMs << "ms（累计解析" << m_async.parseMs << "ms）";
     // 结果入队，交给 mergeStep 分小批并入（每批后回事件循环，避免长时间阻塞 UI）
     for (ParsedErbFile& pf : parsed) {
         m_async.pending.append(std::move(pf));
@@ -992,6 +1271,9 @@ void ErbLoader::mergeStep() {
     }
     QElapsedTimer mergeClock;
     mergeClock.start();
+    // 只切阶段，不动进度（done 由 scheduleNextChunk/onChunkFinished 单调推进）；
+    // 「已并入」另用 m_stageMerged 单独上报。
+    setLoadStage(StageMerge);
     int n = 0;
     while (n < kMergeBatch && m_async.pendingPos < m_async.pending.size()) {
         ParsedErbFile& pf = m_async.pending[m_async.pendingPos];
@@ -1001,6 +1283,9 @@ void ErbLoader::mergeStep() {
     }
     m_async.mergeMs += mergeClock.elapsed();
     m_async.merged += n;
+    m_stageMerged.store(m_async.merged, std::memory_order_relaxed);
+    // 合并阶段的 UI 进度：口径是「已并入解析表的文件数」（与心跳的「已解析」
+    // 同属分块流水线，但这里才是这一阶段的真实进度；心跳不在本阶段上报）。
     const auto generation = m_generation;
     emit loadProgress(m_async.merged, m_async.total);
     if (generation != m_generation || !m_async.active) return;

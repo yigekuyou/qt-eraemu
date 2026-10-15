@@ -29,6 +29,11 @@
 #include <QQuickStyle>
 #include "GameView/resource_image_provider.h"
 #include "Config/i18n.h"
+#ifdef Q_OS_ANDROID
+#include <android/log.h>
+#include <cstdlib>
+#include <cstring>
+#endif
 
 // ---------------------------------------------------------------------------
 // 分平台 Quick Controls 样式（QQuickStyle::setStyle 必须在加载 QML 前调用）：
@@ -40,6 +45,42 @@
 //   * Windows：不设置 —— Qt 默认即 windows 风格；
 //   * Android：Material（Google 触屏规范，跟随系统深浅色，触控目标更大）。
 // ---------------------------------------------------------------------------
+#ifdef Q_OS_ANDROID
+// ---------------------------------------------------------------------------
+// 把 Qt 消息接进 logcat —— Android 上调试装载链路的第一块砖
+//
+// Qt 默认消息处理器写 **stderr**；Android 上由启动器拉起的应用，stderr 不进
+// logcat。真机实测（OnePlus/Android 16，debug APK）：干净启动后 `adb logcat -b all`
+// 里搜 EraEngine / ErbLoader / 异步装载 / GameBase 全是 0 命中 —— 也就是
+// 「设备上一条引擎日志都没有」，而不是「某个阶段忘了打日志」。
+// `setprop log.redirect-stdio true` 在 Android 16 已被禁止（Properties: 设置失败），
+// 所以这里直接换处理器：全部消息走 __android_log_print。
+//
+//   · 统一 tag = "Emuera"：`adb logcat -s Emuera` 一条命令看全（含 QML 的
+//     console.log，它走 Qt 的 "qml" 分类）；
+//   · 分类名（如 era.trace）打在消息行首，与 Qt 自带模式 "%{category}: %{message}"
+//     保持一致；频率仍受 QLoggingCategory 规则约束（era.trace 默认 QtWarningMsg），
+//     与桌面行为相同（Release 若定义 QT_NO_DEBUG_OUTPUT 依旧按编译期裁剪）。
+// ---------------------------------------------------------------------------
+static void emueraAndroidMessageHandler(QtMsgType type, const QMessageLogContext& context,
+                                        const QString& message)
+{
+	int prio = ANDROID_LOG_INFO;
+	switch (type) {
+	case QtDebugMsg:    prio = ANDROID_LOG_DEBUG; break;
+	case QtInfoMsg:     prio = ANDROID_LOG_INFO; break;
+	case QtWarningMsg:  prio = ANDROID_LOG_WARN; break;
+	case QtCriticalMsg: prio = ANDROID_LOG_ERROR; break;
+	case QtFatalMsg:    prio = ANDROID_LOG_FATAL; break;
+	}
+	const bool hasCategory = context.category && std::strcmp(context.category, "default") != 0;
+	const QByteArray body = message.toUtf8();
+	const QByteArray line = hasCategory ? (QByteArray(context.category) + ": " + body) : body;
+	__android_log_write(prio, "Emuera", line.constData());
+	if (type == QtFatalMsg) std::abort();   // 与 Qt 默认处理器一致：致命消息后终止
+}
+#endif
+
 static void applyPlatformStyle()
 {
 #if defined(Q_OS_ANDROID)
@@ -65,6 +106,10 @@ static void applyPlatformStyle()
 
 int main(int argc, char *argv[])
 {
+#ifdef Q_OS_ANDROID
+	// 尽早安装：连 QApplication 构造期的 Qt 告警也要进 logcat。
+	qInstallMessageHandler(emueraAndroidMessageHandler);
+#endif
 	applyPlatformStyle();
 	QApplication app(argc, argv);
 	// 尽早安装翻译器：QML 装载前装好，界面与装载期告警才会命中 .qm。

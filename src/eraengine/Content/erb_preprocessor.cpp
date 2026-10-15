@@ -20,6 +20,16 @@
 
 namespace {
 
+// 「文件:行: 」前缀 —— 预处理警告的位置串。
+// **必须用拼接，不能用链式 .arg()**：fileName 在 Android 上是 content:// URI，
+// 路径里带 %2F/%3A 百分号转义，QString::arg 会把它们当占位符吃掉
+//（真机实测：所有 %2F 被替换成 "<行号>F"、%3A 变 "<列号>A"）；桌面路径里
+// 若有字面 %2/%3 同样中招。见 ScriptPosition::toString() / ParseDiagnostic::positionText()
+// —— 三处同因，一起改。
+inline QString warnPrefix(const QString& fileName, int line) {
+    return fileName + QLatin1Char(':') + QString::number(line) + QStringLiteral(": ");
+}
+
 // 读取单个标识符（字母/数字/下划线/非 ASCII），与 C# LexicalAnalyzer.ReadSingleIdentifier 对齐
 QString readIdentifier(const QString& s, int& i) {
     const int start = i;
@@ -94,7 +104,7 @@ struct PPState {
                     const QString& fileName, int line, QStringList* warnings) {
         const auto warn = [&](const QString& text) {
             if (warnings) {
-                warnings->append(QStringLiteral("%1:%2: %3").arg(fileName).arg(line).arg(text));
+                warnings->append(warnPrefix(fileName, line) + text);
             }
         };
         const bool hasToken2 = !token2.isEmpty();
@@ -178,7 +188,7 @@ struct PPState {
         QString m = match.takeLast();
         if (m == QLatin1String("ELSEIF")) m = QStringLiteral("ENDIF");
         if (warnings) {
-            warnings->append(QStringLiteral("%1:%2: 缺少 [%3]").arg(fileName).arg(line).arg(m));
+            warnings->append(warnPrefix(fileName, line) + QStringLiteral("缺少 [") + m + QLatin1Char(']'));
         }
     }
 };
@@ -420,10 +430,12 @@ QList<ErbSourceLine> ErbPreprocessor::process(const QString& content, QStringLis
             if (warnings) {
                 warnings->append(
                     why == MacroAbort::Count
-                        ? QStringLiteral("%1:%2: 疑似自我引用/循环引用宏（单行展开次数超过 %3），本行按原文保留")
-                              .arg(fileName).arg(lineNo).arg(kMaxExpandMacro)
-                        : QStringLiteral("%1:%2: 宏展开超过 %3 字符上限（疑似自引用膨胀），本行按原文保留")
-                              .arg(fileName).arg(lineNo).arg(kMaxExpandedLineLength));
+                        ? warnPrefix(fileName, lineNo)
+                              + QStringLiteral("疑似自我引用/循环引用宏（单行展开次数超过 %1），本行按原文保留")
+                                    .arg(kMaxExpandMacro)
+                        : warnPrefix(fileName, lineNo)
+                              + QStringLiteral("宏展开超过 %1 字符上限（疑似自引用膨胀），本行按原文保留")
+                                    .arg(kMaxExpandedLineLength));
             }
         }
         if (line.isEmpty() || line.trimmed().isEmpty()) {
@@ -436,8 +448,7 @@ QList<ErbSourceLine> ErbPreprocessor::process(const QString& content, QStringLis
         // ---- 行连接 '}'（单个）当作意外，容错跳过 ----
         if (left == QLatin1String("}")) {
             if (warnings) {
-                warnings->append(QStringLiteral("%1:%2: 意外的行连接终止符 '}'")
-                                     .arg(fileName).arg(lineNo));
+                warnings->append(warnPrefix(fileName, lineNo) + QStringLiteral("意外的行连接终止符 '}'"));
             }
             out.append(outLine);
             continue;
@@ -459,8 +470,7 @@ QList<ErbSourceLine> ErbPreprocessor::process(const QString& content, QStringLis
                 ++j;
             }
             if (!closed && warnings) {
-                warnings->append(QStringLiteral("%1:%2: 行连接 '{' 缺少对应的 '}'")
-                                     .arg(fileName).arg(lineNo));
+                warnings->append(warnPrefix(fileName, lineNo) + QStringLiteral("行连接 '{' 缺少对应的 '}'"));
             }
             if (!pp.disabled) {
                 outLine.text = joined.trimmed();
@@ -487,12 +497,12 @@ QList<ErbSourceLine> ErbPreprocessor::process(const QString& content, QStringLis
                 const QString token2 = readIdentifier(inner, i);
                 pp.addKeyWord(token, token2, m_macros, m_debugMode, fileName, lineNo, warnings);
                 if (i < inner.size() && warnings) {
-                    warnings->append(QStringLiteral("%1:%2: [%3] 之后的内容被忽略")
-                                         .arg(fileName).arg(lineNo).arg(token));
+                    // token 来自用户脚本内容，同样可能有字面 %N —— 继续用拼接
+                    warnings->append(warnPrefix(fileName, lineNo) + QLatin1Char('[') + token
+                                    + QStringLiteral("] 之后的内容被忽略"));
                 }
             } else if (warnings) {
-                warnings->append(QStringLiteral("%1:%2: '[' 的用法不正确")
-                                     .arg(fileName).arg(lineNo));
+                warnings->append(warnPrefix(fileName, lineNo) + QStringLiteral("'[' 的用法不正确"));
             }
             out.append(outLine);
             continue;

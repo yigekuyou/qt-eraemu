@@ -686,8 +686,14 @@ ApplicationWindow {
             property bool loading: false      // 脚本装载中
             property bool errorState: eraEngine.hasError
             property int warningCount: 0      // 装载告警条数
-            property int loadDone: 0          // 装载进度（已处理文件数）
-            property int loadTotal: 0         // 装载进度（总文件数）
+            // 装载进度/阶段：**直接绑 C++ 的装载心跳快照**（EraEngine 的
+            // loadStage/loadProcessed/loadTotal/loadElapsedMs/loadStalled）。
+            // 心跳每秒一次、阶段名与计数同源，因此 UI 不会自相矛盾，也不会
+            // 在「解析/合并」交错时来回闪。真机上装载是分钟级（SAF 元数据往返
+            // 每次约 50ms），没有这份快照时整段只能显示一行不动的「正在装载脚本…」。
+            readonly property int loadDone: eraEngine.loadProcessed
+            readonly property int loadTotal: eraEngine.loadTotal
+            readonly property bool loadStalled: eraEngine.loadStalled
             readonly property bool waiting: eraEngine.console.waitingInput
             readonly property int audioChannels: audioPlayers.activeChannels
 
@@ -716,7 +722,11 @@ ApplicationWindow {
                     litColor: "#e0c040"
                     lit: statusStrip.loading
                     label: qsTr("载入")
-                    detail: lit ? qsTr("正在装载脚本") : qsTr("空闲")
+                    detail: lit
+                            ? (eraEngine.loadStage !== ""
+                               ? qsTr("装载：%1").arg(eraEngine.loadStage)
+                               : qsTr("正在装载脚本"))
+                            : qsTr("空闲")
                 }
                 // ③ 等待输入：脚本停在 INPUT 等玩家操作
                 StatusLight {
@@ -837,14 +847,11 @@ ApplicationWindow {
     // 装载完成后自动进入系统状态机（标题画面 → 等待输入）
     Connections {
         target: eraEngine
+        // 装载「阶段 / 进度 / 已耗时 / 停滞」全部由 C++ 心跳快照驱动
+        // （见 statusStrip 的只读属性与 EraEngine 的 loadStage/… 属性），
+        // 这里只维护 UI 的开关与装载完成后要发生的事。
         function onScriptsLoadStarted() {
             statusStrip.loading = true;
-            statusStrip.loadDone = 0;
-            statusStrip.loadTotal = 0;
-        }
-        function onScriptsLoadProgress(processed, total) {
-            statusStrip.loadDone = processed;
-            statusStrip.loadTotal = total;
         }
         function onScriptsLoaded(ok) {
             statusStrip.loading = false;
@@ -874,25 +881,45 @@ ApplicationWindow {
 
             Text {
                 anchors.horizontalCenter: parent.horizontalCenter
-                text: gameLibrary.busy ? qsTr("正在准备游戏…") : qsTr("正在装载脚本…")
+                text: gameLibrary.busy ? qsTr("正在准备游戏…")
+                      : (eraEngine.loadStage !== ""
+                         ? qsTr("正在装载脚本：%1").arg(eraEngine.loadStage)
+                         : qsTr("正在装载脚本…"))
                 color: "white"
                 font.pixelSize: 20
             }
             ProgressBar {
                 id: loadBar
                 width: parent.width
-                indeterminate: gameLibrary.busy || statusStrip.loadTotal <= 0
+                indeterminate: gameLibrary.busy || eraEngine.loadTotal <= 0
                 from: 0
-                to: Math.max(1, statusStrip.loadTotal)
-                value: statusStrip.loadDone
+                to: Math.max(1, eraEngine.loadTotal)
+                value: eraEngine.loadProcessed
             }
             Text {
                 anchors.horizontalCenter: parent.horizontalCenter
-                text: statusStrip.loadTotal > 0
-                      ? statusStrip.loadDone + " / " + statusStrip.loadTotal
+                text: eraEngine.loadTotal > 0
+                      ? eraEngine.loadProcessed + " / " + eraEngine.loadTotal
                       : qsTr("准备中…")
                 color: "#cccccc"
                 font.pixelSize: 14
+            }
+            // 已耗时 + 停滞提示：真机上「慢」与「死」的区别就靠这一行
+            //（进度长时间不变 → 可能卡在 SAF 文件访问，或被系统 freezer 冻结）。
+            Text {
+                anchors.horizontalCenter: parent.horizontalCenter
+                visible: eraEngine.loadElapsedMs > 0
+                horizontalAlignment: Text.AlignHCenter
+                width: parent.width
+                wrapMode: Text.WordWrap
+                text: {
+                    let s = qsTr("已耗时 %1 秒").arg(Math.floor(eraEngine.loadElapsedMs / 1000))
+                    if (statusStrip.loadStalled)
+                        s += "\n" + qsTr("进度长时间无变化：可能卡在文件访问，或被系统冻结（请保持屏幕点亮）")
+                    return s
+                }
+                color: statusStrip.loadStalled ? "#e0c040" : "#999999"
+                font.pixelSize: 13
             }
         }
     }

@@ -33,6 +33,7 @@
 #include <QFile>
 #include <QDir>
 #include <QElapsedTimer>
+#include <QDateTime>
 #include <QObject>
 #include <QtConcurrent/QtConcurrent>
 
@@ -45,9 +46,47 @@ void EraEngine::stopAsyncLoad() {
         ++m_loadGeneration;
         auto& loader = m_executionEngine.getErbLoader();
         if (m_loadProgressConn) disconnect(m_loadProgressConn);
+        if (m_loadHeartbeatConn) disconnect(m_loadHeartbeatConn);
         if (m_loadCompletedConn) disconnect(m_loadCompletedConn);
         loader.cancelAndWait();
         m_completingLoad = false;   // 取消收尾窗口（收尾已内联到 loadScript）
+        resetLoadHeartbeat();       // 装载快照复位：别把上一局的阶段名留在遮罩上
+}
+
+// ---------------------------------------------------------------------------
+// 装载心跳 → QML 属性（UI 的「正在装载」显示一律绑这几个属性）
+// ---------------------------------------------------------------------------
+void EraEngine::applyLoadHeartbeat(int stage, const QString& name, int done, int total,
+                                   qint64 elapsedMs, bool stalled)
+{
+        Q_UNUSED(stage);
+        m_loadStage = name;
+        m_loadProcessed = done;
+        m_loadTotal = total;
+        m_loadElapsedMs = elapsedMs;
+        m_loadStalled = stalled;
+        emit loadHeartbeatChanged();
+}
+
+void EraEngine::resetLoadHeartbeat()
+{
+        if (m_loadStage.isEmpty() && m_loadProcessed == 0 && m_loadTotal == 0
+                && m_loadElapsedMs == 0 && !m_loadStalled) {
+                return;   // 已经是初值：不打扰 QML
+        }
+        m_loadStage.clear();
+        m_loadProcessed = 0;
+        m_loadTotal = 0;
+        m_loadElapsedMs = 0;
+        m_loadStalled = false;
+        emit loadHeartbeatChanged();
+}
+
+void EraEngine::setLoadStageText(const QString& name)
+{
+        if (m_loadStage == name) return;
+        m_loadStage = name;
+        emit loadHeartbeatChanged();
 }
 
 void EraEngine::clearLoadedGame() {
@@ -652,6 +691,7 @@ void EraEngine::reload()
 				if (!resolveGameDirs()) {
 						m_parseTable.clear();
 						emit scriptsLoaded(false);
+						resetLoadHeartbeat();
 						return;
 				}
 
@@ -1246,6 +1286,7 @@ void EraEngine::reloadAsync()
         clearLoadedGame();
 		if (m_gameDirectory.isEmpty()) {
 				emit scriptsLoaded(false);
+				resetLoadHeartbeat();
 				return;
 		}
 		// ---- 与同步 reload() 完全对齐的「重新开始」复位 ----
@@ -1264,6 +1305,7 @@ void EraEngine::reloadAsync()
 		phase.start();
 		if (!resolveGameDirs()) {
 				emit scriptsLoaded(false);
+				resetLoadHeartbeat();
 				return;
 		}
 		loadConfigFiles();
@@ -1271,27 +1313,68 @@ void EraEngine::reloadAsync()
 		loadGameBaseData();
 		loadConstantData();
 		m_scriptProcessor.clear();
+		// 同步准备阶段（配置文件/CSV 常量表/角色模板/编码探测）在 Android SAF 上
+		// 本身就是上百次 provider 往返：先给出总耗时与解析出的目录，之后每一步
+		// 都由 ErbLoader 的阶段日志与心跳接管（见相关日志的注释）。
 		qInfo().noquote() << "[EraEngine] 异步装载·同步准备阶段(CSV/常量/探测)"
-		                  << phase.elapsed() << "ms";
+		                  << phase.elapsed() << "ms"
+		                  << (GamePaths::isContent(m_gameDirectory) ? "(content URI)" : "(本地目录)");
+		qInfo().noquote() << "[EraEngine] 异步装载·目录解析: 游戏" << m_gameDirectory
+		                  << "ERB" << m_erbDir << "CSV" << m_csvDir;
 
 		ErbLoader& loader = m_executionEngine.getErbLoader();
 		if (m_loadProgressConn) disconnect(m_loadProgressConn);
+		if (m_loadHeartbeatConn) disconnect(m_loadHeartbeatConn);
 		if (m_loadCompletedConn) disconnect(m_loadCompletedConn);
 		m_loadProgressConn = connect(&loader, &ErbLoader::loadProgress,
 		                             this, &EraEngine::scriptsLoadProgress);
+		// UI 的唯一数据源：心跳快照 → loadStage/loadProcessed/loadTotal/loadElapsedMs/
+		// loadStalled 五个属性（同步连接：心跳在主线程发）。
+		m_loadHeartbeatConn = connect(&loader, &ErbLoader::loadHeartbeat,
+		                              this, &EraEngine::applyLoadHeartbeat);
+		resetLoadHeartbeat();
+        // 全链路计时基准：完成回调在 reloadAsync 返回之后才执行，不能按引用
+        // 捕获上面的 phase（那是栈上的计时器），改用绝对时刻做基准。
+        const qint64 chainStartMs = QDateTime::currentMSecsSinceEpoch() - phase.elapsed();
+        const auto chainElapsed = [chainStartMs] {
+                return QDateTime::currentMSecsSinceEpoch() - chainStartMs;
+        };
+        // loader 是引擎的成员（生命周期 ≥ 本回调），按值捕获指针即可
+        ErbLoader* const loaderPtr = &loader;
         const quint64 generation = m_loadGeneration;
-		m_loadCompletedConn = connect(&loader, &ErbLoader::loadCompleted, this, [this, generation](bool ok) {
-                if (generation != m_loadGeneration) return;
+		m_loadCompletedConn = connect(&loader, &ErbLoader::loadCompleted, this,
+		                              [this, generation, chainElapsed, loaderPtr](bool ok) {
+                if (generation != m_loadGeneration) {
+                        // 更新的一代装载已经接管 UI（loadAsync 里的 stopAsyncLoad 会
+                        // 让世代前进）：本次结果必须丢弃，但**不能静默** —— 否则
+                        // 真机上只看到「装载没有下文」。
+                        qInfo() << "[EraEngine] 异步装载完成回调已过期（世代" << generation
+                                << "≠" << m_loadGeneration << "），结果丢弃";
+                        return;
+                }
 				if (!ok) {
+						qWarning() << "[EraEngine] 异步装载失败：脚本装载未完成（详见上面的 [ErbLoader]/[load] 日志）";
 						loadFinishedHook();
 						emit scriptsLoaded(false);
+						resetLoadHeartbeat();
 						return;
 				}
 				// 收尾（声明定稿 → 全体脚本就地定型/重绑 → 诊断）由 markLoadComplete
 				// 在全部脚本就绪后单趟完成；此处只做入口点收集与完成通知。
+				// **收尾在 GUI 线程上**，eraTW 桌面实测 13s+（Android 更久）：前后各
+				// 打一行，界面「卡住」的这几秒才有归属。心跳此时已经停了（loader 收尾），
+				// 但 UI 不该把上一阶段的文案留在遮罩上 —— 手动置成「收尾」。
+				const qint64 finalizeStart = chainElapsed();
+				setLoadStageText(QStringLiteral("收尾（声明定稿/定型/校验）"));
+				qInfo().noquote() << "[EraEngine] 异步装载·收尾阶段开始(声明定稿+定型+校验):"
+				                  << loaderPtr->loadedFileCount() << "个文件";
 				m_parseTable.markLoadComplete();
+				const qint64 finalizeMs = chainElapsed() - finalizeStart;
+				qInfo().noquote() << "[EraEngine] 异步装载·收尾阶段完成:" << finalizeMs << "ms";
 				collectEntryPoints();
 				loadFinishedHook();
+				qInfo().noquote() << "[EraEngine] 异步装载·全链路: 同步准备 + 后台装载 + 收尾"
+				                  << "共" << chainElapsed() << "ms";
 				// 推迟到下一事件循环再发 scriptsLoaded：期间若有新的 loadAsync
 				// （世代 +1），本次完成回调即被丢弃 —— 与原「语义阶段」相同的取消语义，
 				// 只是不再有后台线程/future。m_completingLoad 让 isLoadingScripts()
@@ -1302,11 +1385,24 @@ void EraEngine::reloadAsync()
 						if (generation != m_loadGeneration) return;
 						m_processState.setExecState(ExecState::Continue);
 						emit scriptsLoaded(true);
+						// QML 的 onScriptsLoaded 已把遮罩收起，这里复位快照不会闪
+						resetLoadHeartbeat();
 				});
 		});
 
 		emit scriptsLoadStarted();
-        if (generation == m_loadGeneration) loader.loadDirectoryAsync(m_erbDir);
+        if (generation == m_loadGeneration) {
+                // 异步装载（后台 prep → 分块解析 → 主线程合并）的入口。之后的一切
+                // 进展都由 ErbLoader 的阶段日志 + 心跳上报，这里只需保证入口可见。
+                qInfo().noquote() << "[EraEngine] 进入异步装载（ERB" << m_erbDir
+                                  << "），世代" << generation;
+                loader.loadDirectoryAsync(m_erbDir);
+        } else {
+                // 走到这里说明本次装载已被更新的一代接管（正常调用链不会发生）。
+                // 旧代码静默跳过 → UI 停在「正在装载脚本」且日志再无输出。
+                qWarning() << "[EraEngine] 装载世代已变化（" << generation << "≠"
+                           << m_loadGeneration << "），跳过本轮 ERB 目录装载";
+        }
 }
 
 bool EraEngine::isLoadingScripts() const

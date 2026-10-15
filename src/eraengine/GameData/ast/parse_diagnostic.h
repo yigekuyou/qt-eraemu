@@ -97,8 +97,13 @@ struct ParseDiagnostic {
     [[nodiscard]] QString positionText() const {
         if (!position.isEmpty()) return position;
         if (!hasPosition()) return {};
-        return column > 0 ? QStringLiteral("%1:%2:%3").arg(file).arg(line).arg(column)
-                          : QStringLiteral("%1:%2").arg(file).arg(line);
+        // **必须用拼接，不能用链式 .arg()**：file 在 Android 上是 content:// URI
+        //（脚本名=URI），路径里的 %2F/%3A 百分号转义会被 QString::arg 当占位符吃掉
+        //（真机实测：所有 %2F→"<行号>F"、%3A→"<列号>A"，整条位置串被改写成
+        //  "…primary1Aeraemu…1904FeraH…"）；桌面路径里若有字面 %2/%3 同样中招。
+        // 见 ScriptPosition::toString() 同因。结构化字段（file/line/column）不受影响。
+        const QString head = file + QLatin1Char(':') + QString::number(line);
+        return column > 0 ? head + QLatin1Char(':') + QString::number(column) : head;
     }
 
     // 兼容既有文本形态："position: message"（无位置时只有 message）

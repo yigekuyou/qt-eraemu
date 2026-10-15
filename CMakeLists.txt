@@ -121,6 +121,17 @@ target_link_libraries(appemuera
 #  来自构建树的库还必须有依赖关系 —— 上面 target_link_libraries 已提供）。
 # QTP0002（Qt 6.6+）允许这里用生成器表达式。
 if(ANDROID)
+    # 日志桥（main.cpp 的 __android_log_print）：liblog 由 NDK 提供，Qt 不代为链接。
+    target_link_libraries(appemuera PRIVATE log)
+    # compileSdk 必须钉死，不能让 Qt 取「已安装的最高平台」：
+    # Qt 6.11 的 androiddeployqt 默认用最高平台生成 androidCompileSdkVersion=android-<N>，
+    # 但新版 SDK 把 API 37 的平台目录/包名改成 `platforms;android-37.0`（还有 37.1/37.2），
+    # Qt 仍写成 `android-37` → AGP 直接失败：
+    #   "Failed to find target with hash string 'android-37' in: <sdk>"
+    # （已在 Windows/Linux 本机复现：只装 android-37.0 时必失败。）
+    # 钉成 36：与 qtTargetSdkVersion(36)、真机 API 36 一致；平台上没装时 AGP 会自行补装
+    # `platforms;android-36`（该包名存在，CI 也是靠 Gradle 自动补装，见 build.yml 注释）。
+    set_property(TARGET appemuera PROPERTY QT_ANDROID_COMPILE_SDK_VERSION 36)
     set_property(TARGET appemuera PROPERTY QT_ANDROID_PACKAGE_SOURCE_DIR "${CMAKE_CURRENT_SOURCE_DIR}/android")
     # 包名：默认模板是 org.qtproject.example（Qt 自带占位）。设置成项目自己的
     # io.yigekuyou.emuera（与桌面 D-Bus 单实例服务名一致）；Qt 文档

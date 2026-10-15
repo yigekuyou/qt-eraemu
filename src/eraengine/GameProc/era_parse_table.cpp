@@ -1378,9 +1378,21 @@ void EraParseTable::markLoadComplete() {
     // 函数）此刻才可解析；诊断随后统一产生，不重复。
     QElapsedTimer completeTimer;
     completeTimer.start();
+    // 收尾各步在 GUI 线程上串行执行（eraTW 桌面实测合计 13s+，Android 上更久），
+    // 期间心跳定时器也发不出来。逐步留痕：真机上「卡在收尾的哪一步」是能看出来的。
+    qint64 stepMs = completeTimer.elapsed();
+    qInfo().noquote() << "[parse] 收尾步骤 1/3 全局声明定稿(resolveGlobalDeclarations) 开始:"
+                      << m_scripts.size() << "脚本";
     resolveGlobalDeclarations();   // 声明预登记后 #FUNCTION 表才随 loadScript 补齐，此处再结算一次
+    qInfo().noquote() << "[parse] 收尾步骤 1/3 完成:" << (completeTimer.elapsed() - stepMs) << "ms";
+    stepMs = completeTimer.elapsed();
+    qInfo().noquote() << "[parse] 收尾步骤 2/3 就地定型(finalizeBindings) 开始";
     finalizeBindings();
+    qInfo().noquote() << "[parse] 收尾步骤 2/3 完成:" << (completeTimer.elapsed() - stepMs) << "ms";
+    stepMs = completeTimer.elapsed();
+    qInfo().noquote() << "[parse] 收尾步骤 3/3 参数校验(finalizeValidation) 开始";
     finalizeValidation();
+    qInfo().noquote() << "[parse] 收尾步骤 3/3 完成:" << (completeTimer.elapsed() - stepMs) << "ms";
     m_finalized = true;   // 只读区定型：装载完成后不再编译新源码
     qInfo().noquote() << "[parse] markLoadComplete：" << m_scripts.size() << "脚本"
                       << completeTimer.elapsed() << "ms";

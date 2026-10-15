@@ -28,6 +28,8 @@
 #include <QPair>
 #include <QElapsedTimer>
 #include <QFutureWatcher>
+#include <QTimer>
+#include <atomic>
 #include <memory>
 #include "text_encoding.h"
 #include "ast/logical_line.h"
@@ -98,6 +100,39 @@ public:
     // 停止后台任务并等待其退出；调用后释放 loader 持有的脚本/拍平结果。
     void cancelAndWait();
 
+    // ---- 装载阶段（诊断心跳 / UI 阶段文案）----
+    //
+    // 异步装载是一条「后台读+解析 → 主线程登记/合并」的长流水线：eraTW 在
+    // 桌面 12 线程上也要 ~15s，在 Android SAF（每个文件都是一次
+    // DocumentsContract 往返 + ContentResolver 读取）上是数分钟量级。此前
+    // 只有阶段边界的几条日志，中间窗口完全静默 —— 真机上表现为「卡在正在
+    // 装载脚本、logcat 再无输出」，无法判断是慢还是死。
+    //
+    // 这里把阶段 + 计数器做成**原子量**（后台线程只写，无锁无分配），由主线程
+    // 的心跳定时器统一读取、打印与上报：日志与进度因此天然单调、限频，且不会
+    // 出现多线程交叉写日志。
+    enum LoadStage {
+        StageIdle = 0,   // 未装载
+        StageEnumerate,  // 枚举 ERB/ERH 文件（含子目录递归）
+        StageRead,       // 读取 + 解码 + 函数/变量类型预扫描（后台并行）
+        StageRegister,   // 登记 #DIM/#DIMS 声明并结算（主线程）
+        StageParse,      // 后台分块解析（QtConcurrent）
+        StageMerge,      // 主线程把解析结果并入解析表
+    };
+    [[nodiscard]] static QString loadStageName(int stage);
+    // 上报给 UI 的「粗阶段名」：分块解析与合并是同一段流水线的两半（每块解析完
+    // 立刻合并，1Hz 采样会来回跳 —— UI 文案不能跟着闪），故归为同一个名字。
+    [[nodiscard]] static QString loadStageGroupName(int stage);
+    [[nodiscard]] int loadStage() const { return m_stage.load(std::memory_order_relaxed); }
+    [[nodiscard]] int loadStageDone() const { return m_stageDone.load(std::memory_order_relaxed); }
+    [[nodiscard]] int loadStageTotal() const { return m_stageTotal.load(std::memory_order_relaxed); }
+    [[nodiscard]] int readFailureCount() const { return m_readFailures.load(std::memory_order_relaxed); }
+    // 心跳周期（ms）。<=0 关闭心跳（单测用；正常路径默认 1000ms）。
+    void setHeartbeatInterval(int ms) { m_heartbeatMs = ms > 0 ? ms : 0; }
+    [[nodiscard]] int heartbeatInterval() const { return m_heartbeatMs; }
+    // 「阶段/进度多久没变化」判定为停滞的阈值（ms）：心跳日志与 UI 提示共用。
+    static constexpr qint64 kStallMs = 10000;
+
     // 并行装载开关与线程数（默认开启；线程数 <=0 表示用 QThreadPool 默认）
     void setParallelLoad(bool on) { m_parallel = on; }
     [[nodiscard]] bool parallelLoad() const { return m_parallel; }
@@ -158,6 +193,14 @@ signals:
 
     // 异步装载进度（processed / total 文件数）与完成
     void loadProgress(int processed, int total);
+    // 装载心跳快照（主线程每秒一次，驱动 UI 的「正在装载」显示）：
+    //   stage/name  = 当前阶段（LoadStage / 中文名，见 loadStageGroupName）
+    //   done/total  = 该阶段已处理/总数（total<=0 表示总数未知）
+    //   elapsedMs   = 本轮装载已耗时
+    //   stalled     = done/stage 超过 kStallMs 没变化（慢还是死，UI 上就能分辨）
+    // UI 不再自己拼「进度 + 阶段」，一律绑这个快照（EraEngine 的 loadStage/… 属性）。
+    void loadHeartbeat(int stage, const QString& name, int done, int total,
+                       qint64 elapsedMs, bool stalled);
     void loadCompleted(bool ok);
 
 private:
@@ -193,6 +236,7 @@ private:
         int total = 0;
         int parsed = 0;         // 已完成后台解析的文件数（切片游标）
         int merged = 0;         // 已并入解析表的文件数（进度用）
+        int chunkIndex = 0;     // 已调度的分块序号（诊断日志用）
         int depth = 0;
         QString dirPath;
         QStringList files;      // 已排序（头文件优先），供分块切片
@@ -202,6 +246,11 @@ private:
         int pendingPos = 0;
         QElapsedTimer clock;    // 异步装载总耗时（分析用）
         qint64 mergeMs = 0;     // 主线程合并累计（分析用）
+        // 阶段耗时（分析用）：后台 prep 完成时刻 / 声明登记耗时 / 分块解析累计
+        qint64 prepMs = 0;
+        qint64 registerMs = 0;
+        qint64 parseMs = 0;
+        qint64 chunkStartedMs = 0;   // 当前块开始解析的时刻（clock 口径）
     };
     AsyncState m_async;
     void finishAsync(bool ok);   // 统一收尾：记录耗时 -> 复位 -> 发 loadCompleted
@@ -219,6 +268,15 @@ private slots:
 
 private:
     void scheduleNextChunk();
+
+    // ---- 装载心跳（主线程定时器；后台线程只写下面这批原子量）----
+    void onHeartbeat();
+    // 阶段切换 / 进度推进（后台线程可调用：只写原子量，无锁无分配）。
+    void setLoadStage(int stage, int done = -1, int total = -1) const;
+    void bumpLoadStage(int n = 1) const;
+    void noteReadFailure() const { m_readFailures.fetch_add(1, std::memory_order_relaxed); }
+    void startHeartbeat();
+    void stopHeartbeat();
 
     // 递归收集 .erb/.erh 文件（确定性顺序）
     QStringList collectFiles(const QString& dirPath, int depth) const;
@@ -263,6 +321,10 @@ private:
                                 ParseDiagnostics* diagnostics = nullptr);
 
     QString readFileContent(const QString& filePath) const;
+    // 同上，但返回读取是否成功：后台预扫描用它把「读取失败」计数并告警。
+    // 读取失败（权限被收回 / SAF 文档失效）此前会静默变成空文本 → 脚本
+    // 静默消失；Android 上这是最需要留痕的一类失败。
+    QString readFileContent(const QString& filePath, bool* ok) const;
 
     // 预处理（_Rename 替换 + 行连接 + 预处理指令）-> 物理行一一对应
     QList<ErbSourceLine> prepareLines(const QString& content, const QString& fileName,
@@ -300,6 +362,20 @@ private:
     int  m_chunkSize = kDefaultChunkSize;
     bool m_emitParseSignals = false;   // 逐文件信号默认关闭（见 setEmitParseSignals）
     EraParseTable* m_parseTable;
+
+    // ---- 装载心跳状态（见 LoadStage 的说明）----
+    // 后台线程只碰这批 mutable 原子量；主线程的心跳定时器读它们并打印/上报。
+    mutable std::atomic<int> m_stage{StageIdle};
+    mutable std::atomic<int> m_stageDone{0};
+    mutable std::atomic<int> m_stageTotal{0};
+    mutable std::atomic<int> m_stageMerged{0};   // 分块流水线里「已并入解析表」的文件数
+    mutable std::atomic<int> m_readFailures{0};
+    QTimer m_heartbeat;            // 仅异步装载期间运行（主线程）
+    int m_heartbeatMs = 1000;      // 上报周期；<=0 关闭
+    int m_hbStage = -1;            // 上次上报的阶段（主线程，用于去重）
+    int m_hbDone = -1;             // 上次上报的进度
+    qint64 m_hbLogMs = 0;          // 上次打印心跳日志的时刻（clock 口径）
+    qint64 m_hbChangeMs = 0;       // 上次「阶段或进度发生变化」的时刻（判停滞用）
 };
 
 #endif // ERB_LOADER_H

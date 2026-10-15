@@ -25,6 +25,42 @@ locations. Android uninstallation may remove local saves.
 AST disk caching has been removed. SAF loads and local game loads use the in-memory
 parsed AST cache; no parsed AST is persisted to app storage or the game directory.
 
+## On-device logging
+
+Qt's default message handler writes to stderr. An app started from the launcher has no
+stderr attached to anything, so **no engine log reaches logcat**: on a clean start
+`adb logcat -b all` contains zero hits for `EraEngine`, `ErbLoader`, `异步装载` or
+`GameBase`. `setprop log.redirect-stdio true` is rejected on Android 16, so main.cpp
+installs its own handler under `Q_OS_ANDROID` and forwards every Qt message to
+`__android_log_print` (tag `Emuera`; the logging category, e.g. `era.trace`, is prefixed
+to the message body exactly like Qt's `%{category}: %{message}` pattern).
+
+```sh
+adb logcat -s Emuera          # engine lifecycle, load stages, heartbeat, warnings
+adb logcat -s Emuera | grep 装载心跳
+```
+
+Release builds that define `QT_NO_DEBUG_OUTPUT`/`QT_NO_INFO_OUTPUT` still lose qDebug/qInfo
+at compile time; the debug APK keeps everything.
+
+## Loading a large tree is latency-bound, not bandwidth-bound
+
+Measured on OnePlus/Android 16 with `eraH` (920 ERB/ERH, 114 subdirectories, ~7 MB of ERB
+text) behind a tree URI: a full reload takes ~64 s, of which ~53 s goes to the directory
+walk - one worker thread, ~0.4 core, no meaningful data transfer, flat RSS. The walk
+issues roughly one `DocumentsContract` round trip per directory listing plus one
+`QFileInfo::exists` per file (~1034 calls, ~51 ms each); Android documents this as
+"traversing a large number of files ... performance may decrease". The actual parallel
+work (read+decode+AST, 7 threads, up to 4.8 cores) takes only ~10 s and raises RSS from
+210 MB to 527 MB.
+
+`ErbLoader::collectFiles` therefore reuses the `QFileInfo` returned by `entryInfoList`
+(`absoluteFilePath()`) instead of re-joining and re-probing every child, which removes
+about 920 round trips per load. The UI shows stage/progress/elapsed/stall from the load
+heartbeat, so the walk is visible instead of looking like a hang. Do not let the screen
+turn off during a load: the OS freezes the process (observed `do_freezer_trap`), which
+pauses the load mid-way.
+
 Source references verified against the v6.11.2 tag:
 - qtbase/src/plugins/platforms/android/androidcontentfileengine.cpp:
   fileName(), DocumentFile::parseFromAnyUri(), iterator currentFilePath().

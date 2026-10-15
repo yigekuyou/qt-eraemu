@@ -77,6 +77,17 @@ public:
 		Q_PROPERTY(AudioPipelinePool* audio READ getAudio CONSTANT)
 		// 最近一次执行是否出错（底部状态灯用；装载/重新运行会复位）
 		Q_PROPERTY(bool hasError READ hasError NOTIFY hasErrorChanged)
+		// ---- 装载心跳快照（QML 的装载遮罩/状态灯直接绑这几个属性）----
+		// 数据源是 ErbLoader 的 loadHeartbeat（主线程 1s 一次的快照，见该信号注释）：
+		// 真机上装载是分钟级（OnePlus/Android 16 实测 eraH：920 文件 / 18MB ≈ 64s，
+		// 其中约 53s 花在 SAF 元数据往返上），UI 必须能看出「在哪个阶段、做到第几个、
+		// 已经多久、是不是停滞」，否则只能看到一行不动的「正在装载脚本…」。
+		// 阶段名用粗粒度（解析/合并交错时不会来回闪）；计数与耗时同源，天然一致。
+		Q_PROPERTY(QString loadStage READ loadStage NOTIFY loadHeartbeatChanged)
+		Q_PROPERTY(int loadProcessed READ loadProcessed NOTIFY loadHeartbeatChanged)
+		Q_PROPERTY(int loadTotal READ loadTotal NOTIFY loadHeartbeatChanged)
+		Q_PROPERTY(qint64 loadElapsedMs READ loadElapsedMs NOTIFY loadHeartbeatChanged)
+		Q_PROPERTY(bool loadStalled READ loadStalled NOTIFY loadHeartbeatChanged)
 		// ---- 标准标题画面（QML 渲染）----
 		// 无 @SYSTEM_TITLE 时，状态机翻开 defaultTitleVisible，由 QML 的
 		// TitleScreen 组件画标准标题（标题/版本/作者/年份/说明 + [0]/[1] 菜单）；
@@ -125,6 +136,13 @@ public:
         m_hasError = on;
         emit hasErrorChanged();
     }
+
+		// ---- 装载心跳快照（只读；由 ErbLoader::loadHeartbeat 刷新，见 Q_PROPERTY）----
+		[[nodiscard]] QString loadStage() const { return m_loadStage; }
+		[[nodiscard]] int loadProcessed() const { return m_loadProcessed; }
+		[[nodiscard]] int loadTotal() const { return m_loadTotal; }
+		[[nodiscard]] qint64 loadElapsedMs() const { return m_loadElapsedMs; }
+		[[nodiscard]] bool loadStalled() const { return m_loadStalled; }
 
     // ---- 标准标题画面（QML 渲染）----
     [[nodiscard]] bool defaultTitleVisible() const { return m_defaultTitleVisible; }
@@ -268,6 +286,9 @@ signals:
     void scriptsLoadProgress(int processed, int total);
     void scriptsLoaded(bool ok);
     void hasErrorChanged();
+    // 装载心跳快照变化（loadStage/loadProcessed/loadTotal/loadElapsedMs/loadStalled
+    // 五个属性共用一条通知：它们永远来自同一份心跳快照，分开通知只会让 QML 多刷新几次）
+    void loadHeartbeatChanged();
     // 标准标题画面（QML）的显示状态变化
     void defaultTitleVisibleChanged();
     // 脚本执行了 QUIT（C# 侧等价关闭游戏窗口）—— GUI 层应退出应用
@@ -329,6 +350,7 @@ private:
 
     // 异步装载：连接句柄（避免重复连接）
     QMetaObject::Connection m_loadProgressConn;
+    QMetaObject::Connection m_loadHeartbeatConn;
     QMetaObject::Connection m_loadCompletedConn;
     bool m_hasError = false;   // 最近一次执行出错（状态灯）
     bool m_defaultTitleVisible = false;   // 标准标题画面（QML）是否显示    // ---- 内部：目录解析与分批装载 ----
@@ -342,8 +364,19 @@ private:
     void clearLoadedGame();           // 重载边界：释放旧 AST/拍平/变量/常量
     void stopAsyncLoad();             // 取消并等待旧加载会话，随后才能清理解析表
 
+    // ---- 装载心跳（QML 装载遮罩/状态灯的数据源，见 Q_PROPERTY loadStage 等）----
+    void applyLoadHeartbeat(int stage, const QString& name, int done, int total,
+                            qint64 elapsedMs, bool stalled);
+    void resetLoadHeartbeat();        // 装载开始/结束复位快照（不留上一局文案）
+    void setLoadStageText(const QString& name);   // 收尾阶段手动置文案（心跳已停）
+
     bool m_completingLoad = false;    // 收尾窗口（已弃用后台语义线程，仅保留取消语义）
     quint64 m_loadGeneration = 0;     // 丢弃过期的 loader/完成回调
+    QString m_loadStage;              // 心跳快照：粗阶段名
+    int m_loadProcessed = 0;          // 心跳快照：已处理（口径随阶段单调）
+    int m_loadTotal = 0;              // 心跳快照：总数（0 = 未知）
+    qint64 m_loadElapsedMs = 0;       // 心跳快照：本轮装载已耗时
+    bool m_loadStalled = false;       // 心跳快照：阶段/进度停滞
 };
 
 #endif // ERAENGINE_H

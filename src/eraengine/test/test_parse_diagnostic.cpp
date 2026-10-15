@@ -36,6 +36,7 @@ private slots:
     void textWarningSplitsPosition();
     void summarizeGroupsBySeverityAndCode();
     void astBuilderEmitsUnknownInstruction();
+    void positionSurvivesPercentEscapes();
 };
 
 void TestParseDiagnostic::textWarningSplitsPosition() {
@@ -96,6 +97,35 @@ void TestParseDiagnostic::astBuilderEmitsUnknownInstruction() {
     ParseDiagnostics ok;
     AstBuilder::build(QStringLiteral("PRINTL hello"), pos, nullptr, {}, &ok);
     QCOMPARE(ok.size(), 0);
+}
+
+void TestParseDiagnostic::positionSurvivesPercentEscapes() {
+    // Android 上 file/scriptName 是 content:// URI，路径里必有 %2F/%3A 百分号转义。
+    // 文本位置串曾用链式 .arg() 拼接，%2/%3 被当占位符吃掉（真机 eraH 实测：
+    // 所有 %2F→"<行号>F"、%3A→"<列号>A"）—— 这里锁住三处同因的修复：
+    //   ① ParseDiagnostic::positionText() ② ScriptPosition::toString()
+    //   ③ ErbPreprocessor 的警告前缀（同文件名）
+    const QString uri = QStringLiteral(
+        "content://com.android.externalstorage.documents/tree/primary%3Aeraemu"
+        "/document/primary%3Aeraemu%2FeraH%2FERB%2FKOJO.ERB");
+
+    ParseDiagnostics d;
+    d.add(DiagSeverity::Warning, DiagCode::kArgCheck, uri, 1904, 1, 0,
+          QStringLiteral("函数 C_FIRSTTIME_KOJO 第 1 个实参需要Int，实得字符串"));
+    const ParseDiagnostic& x = d.all().first();
+    QCOMPARE(x.file, uri);                  // 结构化字段原样保留
+    QCOMPARE(x.line, 1904);
+    QCOMPARE(x.column, 1);
+    QCOMPARE(x.position, uri + QStringLiteral(":1904:1"));   // 文本视图不再被吃
+    QVERIFY2(!x.position.contains(QStringLiteral("1904F")), qPrintable(x.position));
+    QVERIFY2(!x.position.contains(QStringLiteral("1Aeraemu")), qPrintable(x.position));
+
+    ScriptPosition sp;
+    sp.filename = uri;
+    sp.lineNumber = 1904;
+    sp.column = 1;
+    QCOMPARE(sp.toString(), uri + QStringLiteral(":1904:1"));
+    QVERIFY2(!sp.toString().contains(QStringLiteral("1904F")), qPrintable(sp.toString()));
 }
 
 QTEST_APPLESS_MAIN(TestParseDiagnostic)

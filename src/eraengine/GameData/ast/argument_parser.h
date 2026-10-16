@@ -116,13 +116,17 @@ inline constexpr auto kInstructionSpecs = std::to_array<InstructionSpec>({
     {"REDRAW",       ArgKind::IntExpression, 0,  1},
     {"INPUT",        ArgKind::Expressions,   0,  2},   // SP_INPUT
     {"INPUTS",       ArgKind::Expressions,   0,  1},   // SP_INPUTS
+    // SP_TINPUT / SP_TINPUTS（ArgumentBuilder.cs:1559/1585）：`minArg = 2`、最多 6 参 ——
+    // 超时与缺省值必填，其后是「显示剩余时间 / 超时字符串 / 鼠标输入标志 / 可跳过
+    // 标志」（test/data/commands/TINPUT.md / TINPUTS.md 的扩展参数）。此前上限写死 4，
+    // FL3.8 的 `TINPUTS wait, "TIME_OVER", 0, "", 1` 被误报「参数过多」。
     {"ONEINPUT",     ArgKind::Expressions,   0,  2},   // SP_ONEINPUT
-    {"TONEINPUT",    ArgKind::Expressions,   1,  4},   // SP_TINPUT
-    {"TINPUT",       ArgKind::Input,         1,  4},
+    {"TONEINPUT",    ArgKind::Expressions,   2,  6},   // SP_TINPUT：2..6 参（超时+缺省必填）
+    {"TINPUT",       ArgKind::Expressions,    2,  6},   // SP_TINPUT（ArgumentBuilder.cs:1559）
     {"INPUTMOUSEKEY", ArgKind::IntExpression, 0,  1},  // 可选超时 ms（C# GetNormalArgumentBuilder("I",0)）
     {"ONEINPUTS",    ArgKind::Expressions,   0,  1},   // SP_INPUTS
-    {"TINPUTS",      ArgKind::Expressions,   0,  4},   // 超时[,缺省][,跳过]
-    {"TONEINPUTS",   ArgKind::Expressions,   0,  4},
+    {"TINPUTS",      ArgKind::Expressions,   2,  6},   // SP_TINPUTS：2..6 参（见 TINPUTS.md）
+    {"TONEINPUTS",   ArgKind::Expressions,   2,  6},   // SP_TINPUTS 的 ONE 版
     {"TWAIT",        ArgKind::Expressions,   0,  2},   // 超时[,跳过]
     {"WAIT",         ArgKind::Void,          0,  0},
     {"WAITANYKEY",   ArgKind::Void,          0,  0},
@@ -186,9 +190,6 @@ inline constexpr auto kInstructionSpecs = std::to_array<InstructionSpec>({
     // C# FunctionIdentifier registers PRINT_SHOPITEM with FunctionArgType.VOID.
     {"PRINT_SHOPITEM", ArgKind::Void,         0,   0},
     {"CUSTOMDRAWLINE", ArgKind::Raw,        1,   1},
-    {"TINPUTS",      ArgKind::Input,         1,  4},
-    {"ONEINPUTS",    ArgKind::Input,         0,  2},
-    {"TONEINPUTS",   ArgKind::Input,         1,  4},
 
     // ---- 原版指令补全（2026-10）：此前回落 Raw（无 ArgKind/个数/类型校验）----
     // 来源：C# FunctionIdentifier.cs 的 addFunction / Instraction.Child.cs 的

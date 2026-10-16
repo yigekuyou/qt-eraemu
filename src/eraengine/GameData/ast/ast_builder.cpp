@@ -780,8 +780,27 @@ LogicalLine AstBuilder::build(const QString& rawLine,
             // 前缀启发式的**假阳性**：`CALLNAME:MASTER = …`（CALL 前缀）、
             // `GOTJUEL:ARG:0 = 1`（GOTO 前缀）这类**变量**赋值。
             // 只有当这一行不是合法赋值形状时才当成指令。
-            QString l, o, r;
-            firstIsInstruction = !(splitAssignment(trimmed, l, o, r) && isBareVariableLhs(l));
+            //
+            // 后缀自增/自减**语句**同理也是赋值形状（C# 命令判定是**精确查表**
+            // `GetFunctionIdentifier`，查不到就走赋值；ReadAssignmentOperator 把
+            // `X ++` 归约为 Increment）：`PRINT_SKILL_NUM ++` / `PRINT_CNT ++`
+            // 这类「以指令前缀开头的变量名」必须按自增处理 —— FL3.8 的技能数
+            // 计数就是这么写的，被当成 PRINT 族指令后整行失效。
+            bool wholeLineIncrement = false;
+            for (const char* opText : {"++", "--"}) {
+                if (!trimmed.endsWith(QLatin1String(opText))) continue;
+                const QString body = trimmed.left(trimmed.size() - 2).trimmed();
+                // 保守形状：一个裸 token（无空白/逗号），如 `PRINT_CNT++`
+                wholeLineIncrement = !body.isEmpty() && !body.contains(QLatin1Char(' '))
+                                     && !body.contains(QLatin1Char(','));
+                break;
+            }
+            if (wholeLineIncrement) {
+                firstIsInstruction = false;
+            } else {
+                QString l, o, r;
+                firstIsInstruction = !(splitAssignment(trimmed, l, o, r) && isBareVariableLhs(l));
+            }
         }
     }
     QString lhs, op, rhs;
@@ -1109,12 +1128,29 @@ LogicalLine AstBuilder::build(const QString& rawLine,
         return finalized(std::move(line));
     }
     if (line.functionName == QLatin1String("HTML_PRINT")) {
+        // C# SP_HTML_PRINT（ArgumentBuilder.cs:355）：1~2 个实参 ——
+        //   第 1 实参 = HTML 字符串式（FORM 展开，必填、必须字符串型）；
+        //   第 2 实参 = 可选数值（EM 私家版_HTML_PRINT拡張）：非 0 时输出进
+        //     **打印缓冲**（EmueraConsole.PrintHtml(str, toPrintBuffer)），
+        //     见 test/data/commands/HTML_PRINT.md 的「本仓库扩展」。
+        // 切分必须是**词法级**顶层逗号：HTML 文本里 rect='620px,0,…' 的逗号在
+        // 引号内 —— splitTopLevelComma 经 expressionSpanEnd 认得 @"…"/"…"/'…'。
         const QString expr = trimmed.mid(first.text.length()).trimmed();
-        if (!expr.isEmpty()) {
-            Operand operand(expr);
-            if (resolve) operand.ast = resolve(expr);
+        const QStringList parts = splitTopLevelComma(expr);
+        if (parts.size() > 2) {
+            line.isError = true;
+            line.errMes = QCoreApplication::translate("ParseDiagnostics", "HTML_PRINT 参数过多（最多 2 个，实得 %1）")
+                              .arg(parts.size());
+        } else if (!parts.isEmpty()) {
+            Operand operand(parts.first());
+            if (resolve) operand.ast = resolve(parts.first());
             line.arguments.append(operand);
             line.printTemplate = PrintTemplateCompiler::compile(operand.ast);
+            if (parts.size() == 2) {
+                Operand flag(parts.at(1));
+                if (resolve) flag.ast = resolve(parts.at(1));
+                line.arguments.append(flag);
+            }
         }
         return finalized(std::move(line));
     }
@@ -1264,10 +1300,28 @@ LogicalLine AstBuilder::build(const QString& rawLine,
         return finalized(std::move(line));
     }
 
+    // 声明型扩展语句（VARI/VARS，regOpaque 注入）：C# 在 ParseLine 里对它们
+    // 走专用分支（`PopArgumentPrimitive().SubstringROS()` 直接取原文），实参
+    // **不做词法**。这里整行剩余当**一个不透明操作数**；真正的「目标变量 +
+    // 初值」由 EraParseTable::applyScopedVariableLine 按行文本重建
+    //（装载循环里、收尾之前）。
+    if (isOpaqueStatement(line.functionName)) {
+        const QString rest = trimmed.mid(first.text.length()).trimmed();
+        if (!rest.isEmpty()) line.arguments.append(Operand(rest));
+        return finalized(std::move(line));
+    }
+
     // 其余指令：按指令规范决定切分方式（对齐 C# ArgumentParser）
     const QString remainder = trimmed.mid(first.text.length());
     int mn = 0, mx = -1;
-    const ArgKind argKind = classifyInstructionKind(line.functionName.toStdString(), mn, mx);
+    ArgKind argKind = classifyInstructionKind(line.functionName.toStdString(), mn, mx);
+    // 扩展语句（注册类 reg/regExpr 登记的名字）按 C# METHOD_Instruction 的实参
+    // 形态：ReduceArguments = **逗号分隔的表达式项**。未登记进指令规范表的名字
+    // 此前回落 Raw（空白也切），`DT_CELL_SET "T", D, "C", V + 1, 1` 的第 4 实参
+    // `V + 1` 会被拆成 [V][+][1] 三个 token —— 既刷「表达式无法归约: +」，
+    // 运行期 runStatement 拿到的实参也整个错位。
+    if (argKind == ArgKind::Raw && s_extensionStatements.contains(line.functionName))
+        argKind = ArgKind::Expressions;
 
     if (line.functionName == "DT_COLUMN_OPTIONS") {
         const auto parts = splitTopLevelComma(remainder);

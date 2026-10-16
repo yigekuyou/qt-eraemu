@@ -365,6 +365,17 @@ static void emExtensionFunctions() {
         "CHECK:10 = REGEXPMATCH(\"2026-10-07\", \"([0-9]{4})-([0-9]{2})\", 1)", // 1 个匹配
         "CHECK:11 = RESULT:1",                  // 形式 1 的分组个数（0 组 + 2 组 = 3）
         "CHECK:12 = STRLENS(RESULTS:0)",        // RESULTS:0 = 整个匹配 "2026-10"（模式只吃到月）
+        // 扩展语句的实参必须是**逗号分隔的表达式项**（C# METHOD_Instruction ->
+        // ReduceArguments）：`V + 1` 这类带空白的实参此前被 Raw 按空白切碎，
+        // DT_CELL_SET 收到的实参整个错位（FL3.8 的 DT_CELL_SET 全是这种写法）。
+        "DT_CREATE \"T\"",
+        "DT_COLUMN_ADD \"T\", \"c\", \"int32\"",   // 列类型名须为 int8/16/32/64/string
+        "DT_ROW_ADD \"T\"",
+        "DT_CELL_SET \"T\", 0, \"c\", 7 + 1",   // 第 5 参是 asId（=1 会按 id 找行）
+        "CHECK:13 = DT_CELL_GET(\"T\", 0, \"c\")",
+        // REGEXPMATCH 的**语句形态**：返回值按 C# METHOD_Instruction 写 RESULT
+        "REGEXPMATCH \"a1 b2\", \"[a-z][0-9]\"",
+        "CHECK:14 = RESULT",
         "RETURN"};
     QList<LogicalLine> lines;
     for (int i = 0; i < source.size(); ++i)
@@ -375,7 +386,7 @@ static void emExtensionFunctions() {
     table.setEntryPoint("MAIN");
     runner.runToCompletion();
     // RESULTS:0 = 整个匹配 "2026-10"（7 字符：模式只覆盖到月）
-    const QList<qint64> expect = {5, 1, 2, 0, 3, 7, 2, 1, 9, 3, 1, 3, 7};
+    const QList<qint64> expect = {5, 1, 2, 0, 3, 7, 2, 1, 9, 3, 1, 3, 7, 8, 2};
     bool ok = true;
     for (int i = 0; i < expect.size(); ++i) {
         const qint64 actual = storage.getGlobalInt1D("CHECK", i);
@@ -541,6 +552,23 @@ int main(int argc, char** argv) {
              "CASEELSE", "CHECK = 2", "ENDSELECT"}, value >= 1101 && value <= 1106 ? 1 : 2);
     run("CASE mixed IS/range and comment", {"SELECTCASE 4512", "CASE IS < 0, 4510 TO 4512 ; comment",
         "CHECK = 7", "CASEELSE", "CHECK = 99", "ENDSELECT"}, 7);
+    // 「以指令前缀开头的变量名」自增：C# 命令判定是**精确查表**（GetFunctionIdentifier
+    // 查不到即赋值行，ReadAssignmentOperator 把 `X ++` 归约为 Increment）。
+    // 此前前缀启发式把 `PRINT_SKILL_NUM ++` 当成 PRINT 族指令，整行失效
+    //（FL3.8 的技能计数正是这么写的）。
+    run("PRINT 前缀变量名的自增语句", {"#DIM PRINT_SKILL_NUM", "PRINT_SKILL_NUM = 4",
+        "PRINT_SKILL_NUM ++", "PRINT_CNT = 1", "PRINT_CNT ++", "PRINT_CNT ++",
+        "CHECK = PRINT_SKILL_NUM * 10 + PRINT_CNT"}, 53);   // 5*10 + 3
+    // CALL 族（含 TRYCCALLFORM）传**整数组**给 REF 形参：2 维数组的裸名不该被
+    // requireIndices 误报「缺少参数或下标维数错误」（C# ConvertArg 对 REF 形参
+    // 收的就是整数组变量；FL3.8 _FUNCTION_WEAPON.ERB:106 正是这种写法）。
+    run("TRYCCALLFORM 把 2 维整数组传给 REF 形参", {
+        "#DIM DYNAMIC WPN_MATERIAL_NEEDS, 2, 3",
+        "WPN_MATERIAL_NEEDS:1:2 = 7",
+        "TRYCCALLFORM GET_WEAPON_MATERIAL_{1}(WPN_MATERIAL_NEEDS)",
+        "CATCH", "ENDCATCH", "RETURN",
+        "@GET_WEAPON_MATERIAL_1(NEEDS)", "#DIM REF NEEDS, 0, 0",
+        "CHECK = NEEDS:1:2", "RETURN"}, 7);
     run("CASE strings with TO text", {"SELECTCASE \"A TO B\"", "CASE \"A TO B\"", "CHECK = 3", "ENDSELECT"}, 3);
     run("64 bit IF/SIF/ELSEIF", {"IF 4294967296", "CHECK += 1", "ENDIF",
         "SIF -4294967296", "CHECK += 2", "IF 0", "CHECK = 999", "ELSEIF 4294967296", "CHECK += 4", "ENDIF"}, 7);

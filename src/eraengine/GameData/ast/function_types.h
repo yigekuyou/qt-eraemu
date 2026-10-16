@@ -325,7 +325,13 @@ inline constexpr BuiltinFunctionSpec kBuiltinFunctions[] = {
     {"GDRAWG"              , OperandType::Int, 10, 11, "iiiiiiiiiia", false, BuiltinOp::GDrawG},
     {"GDRAWGWITHMASK"      , OperandType::Int, 5, 5, "iiiii", false, BuiltinOp::GDrawGWithMask},
     {"GSETBRUSH"           , OperandType::Int, 2, 2, "ii", false, BuiltinOp::GSetBrush},
-    {"GSETFONT"            , OperandType::Int, 3, 3, "isi", false, BuiltinOp::GSetFont},
+    // GSETFONT(ID, 字体名{, 字号, 字体样式})：C# `argumentTypeArrayEx` 的
+    // `{ArgType.Int, ArgType.String, ArgType.Int, ArgType.Int}, OmitStart = 2`
+    //（Creator.Method.cs:5447）。第 4 参是 EE 扩展的**字体样式**位掩码
+    //（1=粗体 2=斜体 4=删除线 8=下划线，见 test/data/functions/GSETFONT.md）。
+    // 此前上限写死 3，FL3.8 的 `GSETFONT gid, "Arial", THICK, 0` 被误报「参数过多」。
+    // 求值侧（GraphicsStore::gSetFont）暂不应用样式（两处调用的样式都是 0）。
+    {"GSETFONT"            , OperandType::Int, 2, 4, "isii", false, BuiltinOp::GSetFont},
     {"GSETPEN"             , OperandType::Int, 3, 3, "iii", false, BuiltinOp::GSetPen},
     // SPRITECREATE(name, gID[, x, y, w, h])：把 G 图像登记成具名精灵
     {"SPRITECREATE"        , OperandType::Int, 2, 6, "siiiii", false, BuiltinOp::SpriteCreate},

@@ -252,6 +252,18 @@ public:
         AstBuilder::registerExtensionStatement(upper);
     }
 
+    // ②' 登记「声明型」语句（VARI/VARS）：名字算已知指令，但实参**不切分、
+    //     不归约**（整行剩余 = 一个不透明操作数）。对齐 C# LogicalLineParser
+    //     的 VARI/VARS 专用分支；真正的实参由 EraParseTable 按行文本重建
+    //     （applyScopedVariableLine）。与 reg() 不同：不在运行期留「桩」痕迹 ——
+    //     这类语句由 ExecutionEngine 的专用分支处理，轮不到桩。
+    void regOpaque(const QString& name) {
+        const QString upper = failFastChecked(name);
+        if (upper.isEmpty()) return;
+        m_stubs.remove(upper);   // 若此前按 reg() 登记过桩，改判「不透明」
+        AstBuilder::registerOpaqueStatement(upper);
+    }
+
     // ③ 声明「实参是 StrForm（文本 + {…}/%…%）」：注册类插入 AST ——
     //    AstBuilder 装载期按格式串解析实参、不做表达式归约
     //    （AstBuilder 零函数名，声明由本类注入）。

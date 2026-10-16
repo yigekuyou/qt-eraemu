@@ -632,7 +632,13 @@ QVariant ExpressionEvaluator::evaluateVariable(const VariableNode &node, Variabl
     }
     const bool chara = node.characterData
         || (node.dimension < 0 && storage->isCharaDataVariable(varName));
-    const int dimension = chara ? storage->charaDataDimension(varName) : variableDimension(varName);
+    // REF 形参绑定**整数组**（`#DIM REF NEEDS, 0, 0`）时 varName 已被换成目标存储键
+    //（调用方的数组），而「维数」要按**形参自己的声明**查 —— 否则 2 维数组会按
+    // 1 维读（存储键不是变量表里的名字，variableDimension 只得 1）。
+    // FL3.8 的 CALL GET_WEAPON_MATERIAL_NEEDS(…, WPN_MATERIAL_NEEDS)（2 维 REF）
+    // 正是这种写法：绑定正确、读数恒 0。
+    const int declaredDimension = qMax(variableDimension(varName), variableDimension(node.name()));
+    const int dimension = chara ? storage->charaDataDimension(varName) : declaredDimension;
     const int full = dimension + (chara ? 1 : 0);
     if (!aliased && (count > full || (dimension >= 2 && count != full)))
         throw std::runtime_error("Missing variable parameters or invalid index dimension");
@@ -821,8 +827,9 @@ QVariant ExpressionEvaluator::evaluateVariable(const VariableNode &node, Variabl
 
         // ---- 多维访问（用户 #DIM 的 2D/3D 数组）----
         // 对齐 C# Int2DVariableToken/Int3DVariableToken：直接用两个（三个）下标。
-        // 维度由变量声明决定；系统变量与 1D 变量只取第一个下标。
-        const int dim = variableDimension(varName);
+        // 维度由变量声明决定（REF 形参按声明查，见上方 declaredDimension）；
+        // 系统变量与 1D 变量只取第一个下标。
+        const int dim = declaredDimension;
         if (dim >= 2 && indices.size() >= 2 && !storage->hasSystemVariable(varName)) {
             const QList<int> ids = resolveIndices(node, storage, gameBaseData);
             if (dim >= 3 && ids.size() >= 3) {

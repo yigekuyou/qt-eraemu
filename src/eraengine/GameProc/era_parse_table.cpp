@@ -2518,7 +2518,16 @@ void EraParseTable::finalizeValidation() {
                 || argKind == ArgKind::Swap || argKind == ArgKind::Bit
                 || argKind == ArgKind::Power || argKind == ArgKind::GetInt
                 || argKind == ArgKind::VarStr || argKind == ArgKind::ArrayControl
-                || argKind == ArgKind::SortChara || argKind == ArgKind::ForNext;
+                || argKind == ArgKind::SortChara || argKind == ArgKind::ForNext
+                // CALL 族全名单（TRYCALL/TRYCCALLFORM/JUMP/GOTO…）：规范表只登记了
+                // 其中几个，其余按名字前缀回落 Raw —— 整数组实参（REF 形参的
+                // `CALL F(WPN_MATERIAL_NEEDS)`，2 维声明）会被 requireIndices 误报
+                // 「缺少参数或下标维数错误」。C# ConvertArg 对 REF 形参收的就是
+                // **整数组变量**（eraTW/FL3.8 都这么写）。
+                || AstBuilder::isCallFamilyInstruction(line.functionName.toUpper())
+                // VARI/VARS（声明型语句）：目标操作数是裸名字，维度由声明决定
+                //（applyScopedVariableLine 重建后的 [目标, 初值] 同样不该查下标）。
+                || isScopedVariableLine(line.raw);
             // 本行已经报过「跨函数引用私有变量」的名字（同一行会对共享 AST 走两遍）
             QSet<QString> reportedScopeNames;
             // 原始文本实参的语句（`ArgKind::Raw`：ALIGNMENT / SETCOLORBYNAME /

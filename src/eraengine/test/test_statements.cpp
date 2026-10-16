@@ -36,6 +36,7 @@
 
 #include "ast/ast_builder.h"
 #include "ast/expression_evaluator.h"
+#include "ast/function_types.h"
 #include "process_state.h"
 #include "era_parse_table.h"
 #include "execution_engine.h"
@@ -982,6 +983,89 @@ int main(int argc, char* argv[]) {
         check(bad.script("bad_increment")->lines[3].isError
               && bad.script("bad_increment")->lines[4].isError,
               "string and const increment targets fail at load time");
+    }
+
+    // ------------------------------------------------------------------
+    // 12) FL3.8 剩余告警的五个语义点（C# 权威见 test/data/commands/*.md）
+    // ------------------------------------------------------------------
+    qDebug() << "\n12) FL3.8 剩余告警的语义点（VARI 原文 / HTML_PRINT 第2参 / TINPUTS 6参 / GSETFONT 4参 / X++）";
+    {
+        const AstResolver resolveOne = [&table](const QString& e) { return compileFixture(table, e); };
+        const ScriptPosition pos(QStringLiteral("t.ERB"), 0, 0);
+
+        // ① VARI/VARS 是**声明型**语句：C# ParseLine 专用分支直接取原文、不做词法
+        //    （此前按 Raw 逐 token 归约，`VARI X = 0` 里的 `=` 刷「表达式无法归约」，
+        //    FL3.8 曾 70 条）。
+        {
+            // 执行链构造时经 ExtensionRegistry 登记过（ee_extension.cpp -> regOpaque），
+            // 静态表跨测试进程共享 —— 这里直接按装载路径 build。
+            LogicalLine v = AstBuilder::build(QStringLiteral("VARI SEX_MAIN_CHARA = 0"), pos, resolveOne);
+            check(v.functionName == QLatin1String("VARI") && v.arguments.size() == 1
+                  && !v.arguments.first().ast
+                  && v.arguments.first().raw == QStringLiteral("SEX_MAIN_CHARA = 0"),
+                  "VARI 行的实参是**一个不透明操作数**（不切分、不归约）");
+            check(!v.isError && !v.argument.hasError(),
+                  "VARI 行装载期零诊断（" + v.errMes + v.argument.typeError + "）");
+        }
+
+        // ② HTML_PRINT <字符串式>{, <数值式>}：C# SP_HTML_PRINT（ArgumentBuilder.cs:355）
+        //    1~2 参；第 2 参非 0 = 输出进打印缓冲（EM 私家版_HTML_PRINT拡張）。
+        //    切分必须是**词法级**逗号 —— HTML 文本 rect='620px,0,…' 的逗号在引号内。
+        {
+            LogicalLine h = AstBuilder::build(
+                QStringLiteral("HTML_PRINT @\"<div rect='620px,0,550px,400px'>%text%</div>\", 1"),
+                pos, resolveOne);
+            check(h.arguments.size() == 2 && h.arguments.at(0).ast
+                  && h.arguments.at(0).ast->kind() == NodeKind::StrForm
+                  && h.arguments.at(1).ast && h.arguments.at(1).ast->valueType() == OperandType::Int,
+                  "HTML_PRINT 的第 2 实参（缓冲标志）被解析（引号内的逗号不切分）");
+            check(!h.isError && !h.argument.hasError(),
+                  "HTML_PRINT 2 参形态通过校验（" + h.errMes + h.argument.typeError + "）");
+            LogicalLine one = AstBuilder::build(QStringLiteral("HTML_PRINT LOCALS"), pos, resolveOne);
+            check(one.arguments.size() == 1 && !one.isError,
+                  "HTML_PRINT 单参形态不受影响");
+        }
+
+        // ③ TINPUTS <超时>, <缺省字符串>{, <显示剩余时间>, <超时字符串>, <鼠标标志>, <可跳过>}
+        //    C# SP_TINPUTS：`[long,string,long,string,long,long]`、minArg=2（2~6 参）。
+        {
+            LogicalLine t = AstBuilder::build(
+                QStringLiteral("TINPUTS 1000, \"TIME_OVER\", 0, \"\", 1"), pos, resolveOne);
+            check(!t.argument.hasError(),
+                  "TINPUTS 5 参通过校验（" + t.argument.typeError + "）");
+            LogicalLine bad = AstBuilder::build(QStringLiteral("TINPUTS 1000"), pos, resolveOne);
+            check(bad.argument.hasError(),
+                  "TINPUTS 只给 1 参仍按 C# 报「参数过少」");
+        }
+
+        // ④ GSETFONT(ID, 字体名{, 字号, 字体样式})：C# `argumentTypeArrayEx` 的
+        //    `{Int, String, Int, Int}, OmitStart = 2`（第 4 参 = EE 字体样式位掩码，
+        //    见 test/data/functions/GSETFONT.md）。
+        {
+            const BuiltinFunctionSpec* font = findBuiltinFunction("GSETFONT");
+            check(font != nullptr, "GSETFONT 在核心表中");
+            const auto parse = [&resolveOne](const char* text) { return resolveOne(text); };
+            check(validateBuiltinCall(*font, {parse("10000"), parse("\"Arial\""), parse("14")}).isEmpty(),
+                  "GSETFONT 3 参通过");
+            check(validateBuiltinCall(*font,
+                                      {parse("10000"), parse("\"Arial\""), parse("14"), parse("0")}).isEmpty(),
+                  "GSETFONT 4 参（字体样式，EE 扩展）通过");
+            check(!validateBuiltinCall(*font, {parse("10000")}).isEmpty(),
+                  "GSETFONT 1 参按 C#（OmitStart=2）报「参数过少」");
+        }
+
+        // ⑤ `X ++`（X 是**以指令前缀开头**的变量名）：C# 命令判定是**精确查表**
+        //    （GetFunctionIdentifier），查不到即赋值行；ReadAssignmentOperator 把
+        //    `X ++` 归约为 Increment。此前前缀启发式把 `PRINT_CNT ++` 当成 PRINT 族
+        //    指令，整行失效（FL3.8 的技能计数全靠它）。
+        {
+            LogicalLine inc = AstBuilder::build(QStringLiteral("PRINT_SKILL_NUM ++"), pos, resolveOne);
+            check(inc.functionName == QLatin1String("++"),
+                  "PRINT_SKILL_NUM ++ 按自增语句解析（前缀启发式不吞赋值形状）");
+            LogicalLine realPrint = AstBuilder::build(QStringLiteral("PRINTL hello world"), pos, resolveOne);
+            check(realPrint.functionName == QLatin1String("PRINTL"),
+                  "真正的 PRINT 指令不受影响");
+        }
     }
 
     qDebug() << "\n======================================";

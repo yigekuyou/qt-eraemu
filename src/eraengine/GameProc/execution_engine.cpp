@@ -1012,6 +1012,21 @@ bool ExecutionEngine::executeInstruction(const LogicalLine& line) {
     }
 
     if (name == QLatin1String("HTML_PRINT")) {
+        // 第 2 实参（EM 私家版_HTML_PRINT拡張，test/data/commands/HTML_PRINT.md）：
+        // 非 0 -> 输出进**打印缓冲**（C# PrintHtml(str, toPrintBuffer)：按钮追加、
+        // 暂不落屏，下一次非缓冲输出统一刷出）。本移植的控制台还没有这层缓冲，
+        // 按普通 HTML_PRINT 输出并留痕一次 —— FL3.8 的用法全是 `rect=…` 绝对定位
+        // 的浮层 div，逐行输出与缓冲合成的视觉差别很小。
+        if (line.arguments.size() >= 2 && line.arguments.at(1).ast) {
+            const qint64 buffered = getEvaluator()
+                .evaluate(*line.arguments.at(1).ast, m_storage, m_gameBaseData).toLongLong();
+            if (buffered != 0
+                && !m_reportedUnfinished.contains(QStringLiteral("HTML_PRINT_BUFFER"))) {
+                m_reportedUnfinished.insert(QStringLiteral("HTML_PRINT_BUFFER"));
+                qWarning() << "[未完成] HTML_PRINT 的打印缓冲模式（第 2 实参非 0）"
+                              "尚未接线，按普通输出处理。行:" << line.position.toString();
+            }
+        }
         if (line.arguments.isEmpty() || !line.arguments.first().ast) return false;
         const auto value = getEvaluator().evaluate(*line.arguments.first().ast, m_storage, m_gameBaseData);
         if (!value.isValid() || !isStringValue(value)) return false;

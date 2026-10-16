@@ -71,6 +71,21 @@ public:
         s_extensionStatements.insert(upperName);
     }
 
+    // ExtensionRegistry::regOpaque() 登记的「不解析实参」语句（VARI/VARS 这类
+    // **声明型**语句）：整行剩余文本原样当一个**不透明操作数**（不切分、不归约）。
+    // 对齐 C# LogicalLineParser.ParseLine 的 VARI/VARS 专用分支 ——
+    // `line.PopArgumentPrimitive().SubstringROS()` 直接取原文，实参由
+    // EraParseTable::applyScopedVariableLine 按 line.raw 重建；此前这类行按
+    // Raw（空白+逗号都切）逐 token 归约，`VARI X = 0` 里的 `=` 会刷
+    // 「表达式无法归约: =」（FL3.8 曾 70 条噪音）。
+    static void registerOpaqueStatement(const QString& upperName) {
+        s_extensionStatements.insert(upperName);
+        s_opaqueStatements.insert(upperName);
+    }
+    [[nodiscard]] static bool isOpaqueStatement(const QString& upperName) {
+        return s_opaqueStatements.contains(upperName);
+    }
+
     // ExtensionRegistry::regExpr() 登记的扩展式中函数：注入运行期「扩展函数表」
     // （function_types.h），解析期即可拿到返回类型/参数个数；求值 opcode 统一
     // BuiltinOp::Extension，实际求值住扩展侧（注册类持有的回调）。
@@ -148,9 +163,17 @@ private:
     inline static QSet<QString> s_formArgFunctions;
     // 扩展语句名（ExtensionRegistry::reg 注入；解析期警告豁免用）
     inline static QSet<QString> s_extensionStatements;
+    // 「不解析实参」的声明型语句（ExtensionRegistry::regOpaque 注入：VARI/VARS）
+    inline static QSet<QString> s_opaqueStatements;
     // 精确登记（不含前缀启发式）/ 仅前缀命中 —— 用于甄别「同前缀的变量名赋值」。
     static bool isExactInstructionName(const QString& upperName);
     static bool hasInstructionPrefix(const QString& upperName);
+public:
+    // 首操作数是否为「标签名」（CALL/CALLFORM/CALLF/TRYCALL*/JUMP*/BEGIN）：
+    // 目标不做表达式归约（否则 NAME_%X%_K30(...) 会被误判为函数调用）。
+    // 公开：finalizeValidation 用它把 CALL 族的「整数组实参」也列入变量槽豁免。
+    [[nodiscard]] static bool isCallFamilyInstruction(const QString& upperName);
+private:
     // 赋值左值的形状检查：单个变量引用（无顶层空白）。
     static bool isBareVariableLhs(const QString& lhs);
 
@@ -168,10 +191,6 @@ private:
 
     // 指令的操作数是否为格式化串（StrForm）：整行按文本 + {expr}/%expr% 解析。
     static bool isStrFormInstruction(const QString& upperName);
-
-    // 首操作数是否为「标签名」（CALL/CALLFORM/CALLF/TRYCALL*/JUMP*/BEGIN）：
-    // 目标不做表达式归约（否则 NAME_%X%_K30(...) 会被误判为函数调用）。
-    static bool isCallFamilyInstruction(const QString& upperName);
 };
 
 #endif // AST_AST_BUILDER_H

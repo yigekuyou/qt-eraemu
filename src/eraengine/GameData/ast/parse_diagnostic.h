@@ -70,6 +70,7 @@ inline constexpr auto kLabelNotFound      = "label-not-found";     // 运行期�
 inline constexpr auto kStructure          = "structure";           // 结构/配对错误（IF-ENDIF、REPEAT-REND、SIF 次行…）
 inline constexpr auto kNotCalled          = "not-called";          // 定义了但从未被调用的函数（对齐 C# FunctionNotCalledWarning）
 inline constexpr auto kStaticValue        = "static-value";        // 可静态判定的运行期错误（除零、数组越界…）
+inline constexpr auto kIdentifierScope    = "identifier-scope";    // 只作别的函数私有声明的名字被跨函数引用（对齐 C# IdentifierNotFoundCodeEE）
 // 偏离声明编码（**装载期**产生；运行期不做编码转换）：
 // 实际按哪个编码读出 != 游戏声明的编码。读文件层不严格绑定声明（保证每个文件
 // 都读得进来），但偏离本身要报 —— 见 Content/encoding/text_encoding.h 的

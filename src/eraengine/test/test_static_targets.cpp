@@ -319,6 +319,36 @@ int main(int argc, char* argv[]) {
             [](EraParseTable& t) { t.setFunctionNotCalledWarning(true); });
         check(withCode(d, DiagCode::kNotCalled).isEmpty(), "有 CALLFORM -> 整体放弃该判定");
     }
+    {
+        // 作用域：只作**别的函数**私有声明的名字，在本函数里解析不到。
+        // 对齐 C# IdentifierDictionary.ThrowException（privateDimList ->
+        // IdentifierNotFoundCodeEE「変数"X"はこの関数中では定義されていません」）。
+        const ParseDiagnostics d = loadScripts({
+            {QStringLiteral("a.ERB"),
+             QStringLiteral("@HOLDER\n"          // 1
+                            "#DIM CONST SHADOW = 51\n"   // 2 HOLDER 的私有常量
+                            "RETURN\n"          // 3
+                            "@USER\n"           // 4
+                            "CHECK = SHADOW\n"  // 5 别的函数 -> 报
+                            "RETURN\n"          // 6
+                            "@OWNER\n"          // 7
+                            "#DIM CONST LOCAL_C = 7\n"   // 8
+                            "CHECK = LOCAL_C\n"  // 9 自己的 -> 不报
+                            "RETURN\n"          // 10
+                            "@SKIPPER\n"        // 11
+                            "GOTO DONE\n"       // 12 $标签不是变量 -> 不报
+                            "$DONE\n"           // 13
+                            "RETURN\n")},       // 14
+        });
+        const auto hits = withCode(d, DiagCode::kIdentifierScope);
+        check(hits.size() == 1,
+              QString("跨函数引用别的函数的私有常量 -> 报一条（得到 %1）").arg(hits.size()));
+        check(!hits.isEmpty() && hits.first().message.contains(QStringLiteral("SHADOW")),
+              "诊断指向变量 SHADOW");
+        check(!hits.isEmpty() && hits.first().line == 5,
+              QString("诊断落在使用行（得到 %1，期望 5）")
+                  .arg(hits.isEmpty() ? -1 : hits.first().line));
+    }
 
     qDebug() << "\n=============================";
     if (g_failures == 0) {

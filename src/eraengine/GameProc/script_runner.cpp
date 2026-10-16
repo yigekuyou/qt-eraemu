@@ -2394,7 +2394,7 @@ void ScriptRunner::writeLoopCounter(const Operand& counter, qint64 value) {
 
 void ScriptRunner::bindArguments(const UserFunctionDecl* info, const QList<Operand>& callArgs,
                                  const QHash<QString, QString>& references) {
-    const auto bindOne = [this, &references](const UserParamDecl* p, int position,
+    const auto bindOne = [this, &references, info](const UserParamDecl* p, int position,
                                 bool argIsString, const QString& strValue, qint64 intValue, const QVariant& snapshot = {}) {
         switch (p ? p->target : UserParamTarget::Unknown) {
         case UserParamTarget::Arg:
@@ -2412,10 +2412,13 @@ void ScriptRunner::bindArguments(const UserFunctionDecl* info, const QList<Opera
                 break;
             }
             if (p && p->fixedIndex >= 0) {
-                // 元素形参（`@F(A:0, A:1)`）：实参写进 A 的这个元素
+                // 元素形参（`@F(A:0, A:1)`）：实参写进 A 的这个元素。
+                // 声明查询按**被调用函数**的作用域（这是它的私有变量）。
                 const QString vn = p->varName;
-                const int dim = (m_table && m_table->variableTable().find(vn))
-                                    ? m_table->variableTable().find(vn)->dimension : 1;
+                const QString scope = info ? info->name : QString();
+                const VariableDecl* vdecl = m_table ? m_table->variableTable().find(vn, scope)
+                                                    : nullptr;
+                const int dim = vdecl ? vdecl->dimension : 1;
                 if (p->type == OperandType::Str) {
                     m_storage->setStringSlot(vn, p->fixedIndices.isEmpty() ? QList<int>{p->fixedIndex} : p->fixedIndices,
                         flatString(snapshot.isValid() ? snapshot : QVariant(argIsString ? strValue : QString::number(intValue))));

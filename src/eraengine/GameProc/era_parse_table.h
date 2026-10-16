@@ -279,6 +279,11 @@ public:
     [[nodiscard]] const QList<Frame>& callStack() const;
     [[nodiscard]] Frame currentFrame() const;
     [[nodiscard]] bool hasPosition() const;
+    // 当前执行行所属的函数名（空 = 不在任何函数内）。
+    // 运行期常数解析的作用域：私有 `#DIM CONST` 只在其声明函数内可见，
+    // 与 C# IdentifierDictionary.GetVariableToken 用 line.ParentLabelLine
+    // 查私有变量表等价（执行到哪个函数的行，就只看得见该函数的私有常量）。
+    [[nodiscard]] QString executionScope() const;
 
     // 上一次位置变化是不是「跳转」（相对顺序推进）。用于区分
     // 「顺序落入函数标签」（= 函数结束）与「跳转/调用到函数标签」（= 跳过标签）。
@@ -364,7 +369,8 @@ private:
     // FunctionNotCalledWarning）。C# 的**默认值是 IGNORE**，且只要有 CALLFORM 系
     // （名字运行期求值）就无法判定「没被调用」，此时全部不报 —— eraTW 两种条件都命中，
     // 因此默认关闭、真实游戏一般不开。开启后也用同一套判据，避免误报。
-    void checkNotCalledFunctions();    // 全局声明定稿：常量/维数求值器 + 维数 + 全局初值 + 用户函数类型（幂等）。
+    void checkNotCalledFunctions();
+    // 全局声明定稿：常量/维数求值器 + 维数 + 全局初值 + 用户函数类型（幂等）。
     void resolveGlobalDeclarations();
     // 校验告警收集器：按脚本并行时每脚本各持一个，随后**按脚本顺序**合并。
     //   warnings : 告警文本，保持脚本内产生顺序；

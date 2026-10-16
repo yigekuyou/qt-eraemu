@@ -105,6 +105,50 @@ static void tryListLoadTime() {
     if (!good) { qCritical() << "TRY list load-time scope/invalid AST regression failed"; ++failures; }
     else qInfo() << "PASS TRY list load-time scope/invalid AST regression";
 }
+// 广域常量（.ERH 文件级）与**同名私有变量**的遮蔽。
+// eraTW 就是这种组合：`CASINO_SLOT_HELP.ERB:17` 的 `#DIM CONST 色_RED7 = 0xFF00FF`
+// 与 `:832` 的 `#DIM 色_RED7`（可写）—— 后者必须遮蔽前者，否则 `SETCOLOR 色_RED7`
+// 恒读常量值，「暗転」变暗失效。常数表按归属作用域分离之前，运行期求值是按名字
+// 直接命中扁平常数表的，因此这里读到的会是 51。
+static void globalConstShadowedByPrivate() {
+    VariableStorage storage;
+    ProcessState state;
+    EraParseTable table(&state);
+    ExecutionEngine engine(&storage, nullptr);
+    ExpressionEvaluator evaluator;
+    engine.setParseTable(&table);
+    engine.setExpressionEvaluator(&evaluator);
+    table.setExpressionEvaluator(&evaluator);
+    table.setVariableStorage(&storage);
+    ScriptRunner runner(&table, &engine, &state, &storage);
+    runner.setExpressionEvaluator(&evaluator);
+    runner.setStepLimit(1000);
+
+    const AstResolver hdr = [&table](const QString& text) { return table.expressionAst(text); };
+    table.loadScript("consts.ERH",
+        {AstBuilder::build("#DIM CONST SHADOW = 51", ScriptPosition("consts.ERH", 0, 0), hdr)},
+        /*isHeaderFile=*/true);
+
+    const QStringList source = {"@MAIN", "#DIM SHADOW", "SHADOW = 7", "SHADOW ++",
+                                "CHECK = SHADOW", "RETURN"};
+    QList<LogicalLine> lines;
+    for (int i = 0; i < source.size(); ++i)
+        lines.append(AstBuilder::build(source.at(i), ScriptPosition("shadow.ERB", i, 0),
+            [&table](const QString& text) { return table.expressionAst(text); }));
+    table.loadScript("shadow", lines);
+    table.markLoadComplete();
+    table.setEntryPoint("MAIN");
+    const ExecState state_ = runner.runToCompletion();
+    const qint64 actual = storage.getGlobalInt1D("CHECK", 0);
+    if (state_ == ExecState::Halt && actual == 8) {
+        qInfo() << "PASS 广域 CONST 被同名私有变量遮蔽（运行期读到变量值）";
+    } else {
+        qCritical() << "global CONST shadowed by private variable: state" << int(state_)
+                    << "actual" << actual << "expected" << 8;
+        ++failures;
+    }
+}
+
 // ---------------------------------------------------------------------------
 // 存档系四种指令（SAVEDATA/LOADDATA/DELDATA/CHKDATA）的「调用形态」：
 //   `CHKDATA L_I` 整行会被归约为 Function(CHKDATA, Variable(L_I))（语句形式的
@@ -226,6 +270,13 @@ int main(int argc, char** argv) {
     chkDataCallForm();
     htmlFlow();
     tryListLoadTime();
+    globalConstShadowedByPrivate();
+    // 私有 `#DIM CONST` 只属于声明它的函数：别处的同名私有变量必须仍然读到自己的值。
+    // 此前常数表是扁平的 name→value 表、运行期求值按名字命中，`SHADOW` 会读成 51。
+    run("私有的 #DIM CONST 不泄漏到别的函数的同名私有变量", {
+        "CALL USERFN", "RETURN",
+        "@HOLDER", "#DIM CONST SHADOW = 51", "RETURN",
+        "@USERFN", "#DIM SHADOW", "SHADOW = 7", "SHADOW ++", "CHECK = SHADOW", "RETURN"}, 8);
     run("TRYCALLLIST first match and return after ENDFUNC", {
         "TRYCALLLIST", "FUNC MISSING(++CHECK:1)", "FUNC SUB(2, 3)", "FUNC OTHER",
         "ENDFUNC", "CHECK += 1 + CHECK:1 * 100", "RETURN",

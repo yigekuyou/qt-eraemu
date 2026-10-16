@@ -232,7 +232,13 @@ private:
     QSet<QString> m_reportedUnfinished;
     
     // Assignment handling
-    bool handleAssignment(const ExpressionNode* lhs, const QString& rhs, const QSharedPointer<ExpressionNode>& ast = {}, const QList<QSharedPointer<ExpressionNode>>& values = {});
+    // ownerFunction = 赋值所在行的所属函数：查声明**必须带作用域**，否则广域
+    // CONST 会盖住同名的函数私有变量，写入被误判为「给常量赋值」而丢弃
+    //（eraTW `#DIM CONST 色_RED7` 之下的 `#DIM 色_RED7 = …` 写入失效）。
+    bool handleAssignment(const ExpressionNode* lhs, const QString& rhs,
+                          const QSharedPointer<ExpressionNode>& ast = {},
+                          const QList<QSharedPointer<ExpressionNode>>& values = {},
+                          const QString& ownerFunction = QString());
     // 字符串赋值（目的变量是字符串变量时）：右侧按字符串求值后写入字符串容器
     bool handleStringAssignment(const ExpressionNode* lhs, const QString& rhs,
                                 const QSharedPointer<ExpressionNode>& ast = {},

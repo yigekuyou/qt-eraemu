@@ -1353,7 +1353,8 @@ bool ExecutionEngine::executeInstruction(const LogicalLine& line) {
                 return handleStringAssignment(args[0].ast.data(), args[1].raw, args[1].ast,
                                               line.ownerFunction);
             }
-            return handleAssignment(args[0].ast.data(), args[1].raw, args[1].ast, line.assignmentAsts);
+            return handleAssignment(args[0].ast.data(), args[1].raw, args[1].ast,
+                                    line.assignmentAsts, line.ownerFunction);
         }
         return true;
     }
@@ -1867,7 +1868,8 @@ bool ExecutionEngine::writeStringValue(const LhsRef& ref, const QString& value,
 }
 
 bool ExecutionEngine::handleAssignment(const ExpressionNode* lhs, const QString& rhs, const QSharedPointer<ExpressionNode>& ast,
-                                       const QList<QSharedPointer<ExpressionNode>>& nodes) {
+                                       const QList<QSharedPointer<ExpressionNode>>& nodes,
+                                       const QString& ownerFunction) {
     Q_UNUSED(rhs);
     ExpressionEvaluator& evaluator = getEvaluator();
     const auto expressions = nodes.isEmpty() ? QList<QSharedPointer<ExpressionNode>>{ast} : nodes;
@@ -1879,7 +1881,10 @@ bool ExecutionEngine::handleAssignment(const ExpressionNode* lhs, const QString&
     }
     LhsRef ref = resolveLhsRef(lhs);
     if (!ref.valid) return false;
-    const auto* decl = m_parseTable ? m_parseTable->variableTable().find(ref.name) : nullptr;
+    // 声明查询带作用域：函数内的同名私有变量优先于广域 CONST（否则 `#DIM SHADOW`
+    // 会被广域的 `#DIM CONST SHADOW` 判成常量，赋值被丢弃且变量永远读不到写入）。
+    const auto* decl = m_parseTable
+        ? m_parseTable->variableTable().find(ref.name, ownerFunction) : nullptr;
     const int start = ref.indices.isEmpty() ? 0 : ref.indices.last();
     int size = decl && !decl->lengths.isEmpty() ? decl->lengths.last() : m_storage->arraySize(ref.name);
     if (values.size() > 1 && size > 0 && (start < 0 || qint64(start)+values.size() > size)) {

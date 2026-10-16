@@ -72,7 +72,7 @@ int main(int argc, char** argv) {
         table.setConstExprs("OLD_CONST_EXPR", {"1 + 2"});
         auto dimOwner = QSharedPointer<int>::create(1);
         QWeakPointer<int> oldDimOwner = dimOwner;
-        table.setDimEvaluator([dimOwner](const QString&) { return *dimOwner; });
+        table.setDimEvaluator([dimOwner](const QString&, const QString&) { return *dimOwner; });
         dimOwner.clear();
         engine.gameBaseData()->set("タイトル", "old title");
         engine.gameBaseData()->set("コード", "777");

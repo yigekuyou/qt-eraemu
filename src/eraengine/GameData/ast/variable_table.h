@@ -72,6 +72,10 @@ public:
     [[nodiscard]] const VariableDecl* find(const QString& name,
                                            const QString& function = QString()) const;
     [[nodiscard]] bool contains(const QString& name) const;
+    // 该名字是否**只**作为某个函数的私有变量/常量存在（广域声明与系统变量都没有）。
+    // 对齐 C# IdentifierDictionary.privateDimList：在这种名字于当前函数解析不到时，
+    // C# 抛 IdentifierNotFoundCodeEE「変数"X"はこの関数中では定義されていません」。
+    [[nodiscard]] bool isPrivateOnlyName(const QString& name) const;
 
     // 类型解析：函数上下文优先；无上下文时仅全局 + 「全表唯一局部」
     [[nodiscard]] OperandType typeOf(const QString& name,
@@ -92,47 +96,79 @@ public:
     void clear();
 
     // ---- 常数（#DIM CONST name = value）与维数求值 ----
-    void setConstInt(const QString& name, qint64 value);
+    //
+    // CONST 是**有作用域**的，与广域/局部变量同源（对齐 C#：
+    //   * 函数内的 `#DIM CONST X` 走 LogicalLine.AddPrivateVariable()，登记在
+    //     **该函数标签**的私有变量表里 —— `ErbLoader`/`UserDefinedVariableData`
+    //     把 isPrivate 记进 data.Private；
+    //   * 查询走 IdentifierDictionary.GetVariableToken(key, …, allowPrivate)：
+    //     先用 `line.ParentLabelLine.GetPrivateVariable(key)` 查**当前函数**的私有
+    //     变量，找不到才回落到广域/系统变量）。
+    //
+    // 因此这里按「归属作用域 owner」分离存储：
+    //   * owner 为空串 = 广域常量（.ERH 文件级 / 函数外 / `#DIM GLOBAL CONST`），
+    //     处处可见；
+    //   * owner 非空   = 该函数的私有常量，**只在该函数作用域内可见**。
+    //
+    // 查询统一走 (name, scope)：先本作用域（私有常量），再广域；并且**本作用域
+    // 声明的同名可写变量（`#DIM X`）遮蔽同名常量**（C# 先查私有变量表）。
+    // 此前常数表只有一张扁平的 name→value 映射，运行期求值按名字直接命中 ——
+    // 于是任何一处 `#DIM CONST 削除行数` 都会盖住别处同名的私有变量
+    // （eraTW 的 `SETCOLOR 色_RED7` / `CLEARLINE 削除行数 + 1` 都读成了常量的值）。
+    void setConstInt(const QString& name, qint64 value, const QString& owner = QString());
     // `#DIM CONST NAME, N = v0, v1, …`：常数**数组**（下标访问用）
-    void setConstArray(const QString& name, const QList<qint64>& values);
-    [[nodiscard]] bool constArrayAt(const QString& name, int index, qint64& out) const;
-    [[nodiscard]] int constArraySize(const QString& name) const;
-    void setConstStr(const QString& name, const QString& value);
+    void setConstArray(const QString& name, const QList<qint64>& values, const QString& owner = QString());
+    [[nodiscard]] bool constArrayAt(const QString& name, int index, qint64& out,
+                                    const QString& scope = QString()) const;
+    [[nodiscard]] int constArraySize(const QString& name, const QString& scope = QString()) const;
+    void setConstStr(const QString& name, const QString& value, const QString& owner = QString());
     // `#DIMS CONST NAME, N = s0, s1, …`：字符串常数数组（eraTW 的 DISP_MEMO 等）
-    void setConstStrArray(const QString& name, const QStringList& values);
-    [[nodiscard]] bool constStrArrayAt(const QString& name, int index, QString& out) const;
-    [[nodiscard]] int constStrArraySize(const QString& name) const;
+    void setConstStrArray(const QString& name, const QStringList& values, const QString& owner = QString());
+    [[nodiscard]] bool constStrArrayAt(const QString& name, int index, QString& out,
+                                       const QString& scope = QString()) const;
+    [[nodiscard]] int constStrArraySize(const QString& name, const QString& scope = QString()) const;
     // `#DIM CONST NAME = <非常量字面量的表达式>`（如 `= 人物数量上限`）。
     // 声明顺序 / 跨文件顺序不可靠，所以**不在装载期**求值，而是把表达式留到
     // 求值期惰性计算（`#DIM CONST OBJ_ID_LAST = 人物数量上限` 曾因此恒为 0，
     // 进而 INRANGE(…, OBJ_ID_LAST) 为假 -> eraTW 的 EXISTOBJ 抛 THROW）。
-    void setConstExprs(const QString& name, const QStringList& exprs);
-    [[nodiscard]] QStringList constExprs(const QString& name) const;
-    [[nodiscard]] bool constInt(const QString& name, qint64& out) const;
-    [[nodiscard]] bool constStr(const QString& name, QString& out) const;
-    [[nodiscard]] int constCount() const { return m_constInt.size() + m_constStr.size(); }
+    void setConstExprs(const QString& name, const QStringList& exprs, const QString& owner = QString());
+    [[nodiscard]] QStringList constExprs(const QString& name, const QString& scope = QString()) const;
+    [[nodiscard]] bool constInt(const QString& name, qint64& out, const QString& scope = QString()) const;
+    [[nodiscard]] bool constStr(const QString& name, QString& out, const QString& scope = QString()) const;
+    [[nodiscard]] int constCount() const;
 
     // 用常数表重新求值所有声明的维数（后声明的常数也能修正先前的声明）
     void resolveDimensions();
     // 维数表达式的兜底求值器（`#DIM X, CLASS_NUM + 1` 这类算式/复合表达式）。
     // 由 EraParseTable 在常量表就绪后注入 —— 求值器内部会回查本表的常数。
-    void setDimEvaluator(std::function<qint64(const QString&)> fn) { m_dimEvaluator = std::move(fn); }
+    // 第二参数 = 声明所在函数（私有常量要与维数同作用域才可见）。
+    void setDimEvaluator(std::function<qint64(const QString&, const QString&)> fn) {
+        m_dimEvaluator = std::move(fn);
+    }
 
     // 把一个已构建的 AST 中的变量节点按表回填类型（强类型回填）
     static void applyTypes(ExpressionNode& node, const VariableTable& table,
                            const QString& function = QString());
 
 private:
-    // 求值单个数维表达式：数字字面量或常数名
-    [[nodiscard]] bool evalDim(const QString& expr, int& out) const;
+    // 求值单个数维表达式：数字字面量或常数名（scope = 声明所在函数）
+    [[nodiscard]] bool evalDim(const QString& expr, int& out, const QString& scope = QString()) const;
+    // 本作用域是否声明了同名**可写变量**（遮蔽同名常量）
+    [[nodiscard]] bool shadowedByVariable(const QString& name, const QString& scope) const;
+    // 常数表的统一查询：先 scope 归属的私有常量，再广域常量
+    template <typename T>
+    [[nodiscard]] const T* findScopedConst(const QHash<QString, QHash<QString, T>>& store,
+                                           const QString& name, const QString& scope) const;
 
     QHash<QString, VariableDecl> m_globals;
-    QHash<QString, qint64>  m_constInt;
-    QHash<QString, QList<qint64>> m_constArray;
-    QHash<QString, QStringList> m_constStrArray;   // 字符串常数数组
-    QHash<QString, QString> m_constStr;
-    QHash<QString, QStringList> m_constExpr;   // 未折叠的 CONST 初值表达式
-    std::function<qint64(const QString&)> m_dimEvaluator;   // 维数表达式兜底求值
+    // 常数表按「归属作用域 owner（空串 = 广域）-> 名字 -> 值」分离，
+    // 与变量声明的广域/局部划分一一对应（见头文件上方说明）。
+    QHash<QString, QHash<QString, qint64>>  m_constInt;
+    QHash<QString, QHash<QString, QList<qint64>>> m_constArray;
+    QHash<QString, QHash<QString, QStringList>> m_constStrArray;   // 字符串常数数组
+    QHash<QString, QHash<QString, QString>> m_constStr;
+    QHash<QString, QHash<QString, QStringList>> m_constExpr;   // 未折叠的 CONST 初值表达式
+    std::function<qint64(const QString&, const QString&)> m_dimEvaluator;   // 维数表达式兜底求值
     // 反向索引：局部变量名 -> 声明它的函数个数 / 唯一时的类型（空上下文 O(1) 查询）
     QHash<QString, int> m_localNameCount;
     QHash<QString, OperandType> m_uniqueLocalType;

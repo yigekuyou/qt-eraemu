@@ -154,6 +154,11 @@ bool VariableTable::contains(const QString& name) const {
     return m_globals.contains(nk(name)) || m_localNameCount.contains(nk(name));
 }
 
+bool VariableTable::isPrivateOnlyName(const QString& name) const {
+    const QString n = nk(name);
+    return !m_globals.contains(n) && m_localNameCount.contains(n);
+}
+
 OperandType VariableTable::typeOf(const QString& name, const QString& function) const {
     if (const VariableDecl* d = find(name, function)) {
         return d->type;
@@ -213,12 +218,6 @@ const QStringList& VariableTable::localNamesOfRef(const QString& function) const
     return *m_localNamesRefCache.insert(key, names);
 }
 
-bool VariableTable::constStr(const QString& name, QString& out) const {
-    const auto it = m_constStr.constFind(nk(name));
-    if (it != m_constStr.constEnd()) { out = it.value(); return true; }
-    return false;
-}
-
 void VariableTable::clear() {
     m_constInt.clear();
     m_constArray.clear();
@@ -241,38 +240,76 @@ void VariableTable::applyTypes(ExpressionNode& node, const VariableTable& table,
 
 // ---------------------------------------------------------------------------
 // 常数（#DIM CONST）与维数求值
+//
+// 常数与变量一样分广域/局部（见 variable_table.h 的说明）：函数内的
+// `#DIM CONST X` 是该函数的私有常量，只有在本函数内可见。
 // ---------------------------------------------------------------------------
-void VariableTable::setConstInt(const QString& name, qint64 value) {
-    if (!name.isEmpty()) m_constInt.insert(nk(name), value);
+bool VariableTable::shadowedByVariable(const QString& name, const QString& scope) const {
+    // 本作用域声明的同名**可写变量**遮蔽同名常量。
+    // C# IdentifierDictionary.GetVariableToken() 正是先查
+    // `line.ParentLabelLine.GetPrivateVariable(key)`（当前函数的私有变量表），
+    // 命中就直接返回——私有变量优先于任何同名常量。
+    const VariableDecl* d = find(name, scope);
+    return d && !d->isConst;
 }
 
-void VariableTable::setConstStr(const QString& name, const QString& value) {
-    if (!name.isEmpty()) m_constStr.insert(nk(name), value);
+template <typename T>
+const T* VariableTable::findScopedConst(const QHash<QString, QHash<QString, T>>& store,
+                                        const QString& name, const QString& scope) const {
+    if (shadowedByVariable(name, scope)) return nullptr;
+    const QString n = nk(name);
+    // 1) 当前作用域的私有常量
+    if (!scope.isEmpty()) {
+        const auto sit = store.constFind(nk(scope));
+        if (sit != store.constEnd()) {
+            const auto it = sit.value().constFind(n);
+            if (it != sit.value().constEnd()) return &it.value();
+        }
+    }
+    // 2) 广域常量（处处可见）
+    const auto git = store.constFind(QString());
+    if (git != store.constEnd()) {
+        const auto it = git.value().constFind(n);
+        if (it != git.value().constEnd()) return &it.value();
+    }
+    return nullptr;
 }
 
-bool VariableTable::constInt(const QString& name, qint64& out) const {
-    const auto it = m_constInt.constFind(nk(name));
-    if (it != m_constInt.constEnd()) { out = it.value(); return true; }
+void VariableTable::setConstInt(const QString& name, qint64 value, const QString& owner) {
+    if (!name.isEmpty()) m_constInt[nk(owner)][nk(name)] = value;
+}
+
+void VariableTable::setConstStr(const QString& name, const QString& value, const QString& owner) {
+    if (!name.isEmpty()) m_constStr[nk(owner)][nk(name)] = value;
+}
+
+bool VariableTable::constInt(const QString& name, qint64& out, const QString& scope) const {
+    if (const qint64* v = findScopedConst(m_constInt, name, scope)) { out = *v; return true; }
     return false;
 }
 
-bool VariableTable::evalDim(const QString& expr, int& out) const {
+bool VariableTable::constStr(const QString& name, QString& out, const QString& scope) const {
+    if (const QString* v = findScopedConst(m_constStr, name, scope)) { out = *v; return true; }
+    return false;
+}
+
+bool VariableTable::evalDim(const QString& expr, int& out, const QString& scope) const {
     bool ok = false;
     const int v = expr.toInt(&ok);
     if (ok) {
         out = v;
         return true;
     }
-    // 常数名（#DIM CONST name = value）
+    // 常数名（#DIM CONST name = value）—— 与维数声明同作用域才可见
     qint64 cv = 0;
-    if (constInt(expr, cv)) {
+    if (constInt(expr, cv, scope)) {
         out = static_cast<int>(cv);
         return true;
     }
     // 兜底：交给求值器做完整的常量折叠（`CLASS_NUM + 1` / `MAXBASE - 1` …）。
     // 由 EraParseTable 在常量表就绪后注入；未注入时保持旧行为（记 0）。
     if (m_dimEvaluator) {
-        const qint64 v64 = m_dimEvaluator(expr);
+        const qint64 v64 = m_dimEvaluator(expr, scope);
         if (v64 > 0 && v64 <= std::numeric_limits<int>::max()) {
             out = static_cast<int>(v64);
             return true;
@@ -282,80 +319,88 @@ bool VariableTable::evalDim(const QString& expr, int& out) const {
 }
 
 void VariableTable::resolveDimensions() {
-    const auto fix = [this](VariableDecl& d) {
+    const auto fix = [this](VariableDecl& d, const QString& scope) {
         if (d.lengthExprs.isEmpty()) return;
         QList<int> lengths;
         lengths.reserve(d.lengthExprs.size());
         for (const QString& e : d.lengthExprs) {
             int v = 0;
-            if (evalDim(e, v) && v > 0) lengths.append(v);
+            if (evalDim(e, v, scope) && v > 0) lengths.append(v);
             else lengths.append(0);   // 仍未知
         }
         d.lengths = lengths;
         d.dimension = lengths.isEmpty() ? 1 : lengths.size();
     };
 
-    for (auto& d : m_globals) fix(d);
-    for (auto& f : m_locals) {
-        for (auto& d : f) fix(d);
+    for (auto& d : m_globals) fix(d, QString());
+    for (auto it = m_locals.begin(); it != m_locals.end(); ++it) {
+        // 局部声明的维数在**本函数**作用域内求值（可引用本函数的私有常量）
+        for (auto& d : it.value()) fix(d, it.key());
     }
     m_localsRefCache.clear();   // 维数已重写，丢弃 localsOfRef 缓存
     m_localNamesRefCache.clear();
     qDebug() << "[parse] 变量维数求值：全局" << m_globals.size() << "局部作用域" << m_locals.size()
-             << "常量" << m_constInt.size() << "常量数组" << m_constArray.size();
+             << "常量" << constCount() << "常量数组" << m_constArray.size();
 }
 
-void VariableTable::setConstArray(const QString& name, const QList<qint64>& values)
+void VariableTable::setConstArray(const QString& name, const QList<qint64>& values, const QString& owner)
 {
-    m_constArray.insert(nk(name), values);
+    if (name.isEmpty()) return;
+    m_constArray[nk(owner)][nk(name)] = values;
     // 只有**单元素**常量才当作标量常数参与表达式折叠（`#DIM CONST W = 12`）。
     // 多元素常量数组（`#DIM CONST K17C_RTF = 0,1p0,…`）**不**折叠：把整数组名
     // 折成首个元素会让 `FINDELEMENT(K17C_RTF, v)` 之类「把数组本身当变量用」的
     // 调用变成「实得表达式」，也会掩盖真正的下标缺失。数组访问走 constArrayAt()。
-    if (values.size() == 1) m_constInt.insert(nk(name), values.first());
+    if (values.size() == 1) m_constInt[nk(owner)][nk(name)] = values.first();
 }
 
-void VariableTable::setConstExprs(const QString& name, const QStringList& exprs)
+void VariableTable::setConstExprs(const QString& name, const QStringList& exprs, const QString& owner)
 {
-    m_constExpr.insert(nk(name), exprs);
+    m_constExpr[nk(owner)][nk(name)] = exprs;
 }
 
-QStringList VariableTable::constExprs(const QString& name) const
+QStringList VariableTable::constExprs(const QString& name, const QString& scope) const
 {
-    return m_constExpr.value(nk(name));
+    if (const QStringList* v = findScopedConst(m_constExpr, name, scope)) return *v;
+    return {};
 }
 
-bool VariableTable::constArrayAt(const QString& name, int index, qint64& out) const
+bool VariableTable::constArrayAt(const QString& name, int index, qint64& out, const QString& scope) const
 {
-    const auto it = m_constArray.constFind(nk(name));
-    if (it == m_constArray.constEnd()) return false;
-    if (index < 0 || index >= it.value().size()) return false;
-    out = it.value().at(index);
+    const QList<qint64>* vals = findScopedConst(m_constArray, name, scope);
+    if (!vals || index < 0 || index >= vals->size()) return false;
+    out = vals->at(index);
     return true;
 }
 
-int VariableTable::constArraySize(const QString& name) const
+int VariableTable::constArraySize(const QString& name, const QString& scope) const
 {
-    const auto it = m_constArray.constFind(nk(name));
-    return (it == m_constArray.constEnd()) ? 0 : it.value().size();
+    const QList<qint64>* vals = findScopedConst(m_constArray, name, scope);
+    return vals ? vals->size() : 0;
 }
 
-void VariableTable::setConstStrArray(const QString& name, const QStringList& values)
+void VariableTable::setConstStrArray(const QString& name, const QStringList& values, const QString& owner)
 {
-    if (!name.isEmpty() && !values.isEmpty()) m_constStrArray.insert(nk(name), values);
+    if (!name.isEmpty() && !values.isEmpty()) m_constStrArray[nk(owner)][nk(name)] = values;
 }
 
-bool VariableTable::constStrArrayAt(const QString& name, int index, QString& out) const
+bool VariableTable::constStrArrayAt(const QString& name, int index, QString& out, const QString& scope) const
 {
-    const auto it = m_constStrArray.constFind(nk(name));
-    if (it == m_constStrArray.constEnd()) return false;
-    if (index < 0 || index >= it.value().size()) return false;
-    out = it.value().at(index);
+    const QStringList* vals = findScopedConst(m_constStrArray, name, scope);
+    if (!vals || index < 0 || index >= vals->size()) return false;
+    out = vals->at(index);
     return true;
 }
 
-int VariableTable::constStrArraySize(const QString& name) const
+int VariableTable::constStrArraySize(const QString& name, const QString& scope) const
 {
-    const auto it = m_constStrArray.constFind(nk(name));
-    return (it == m_constStrArray.constEnd()) ? 0 : it.value().size();
+    const QStringList* vals = findScopedConst(m_constStrArray, name, scope);
+    return vals ? vals->size() : 0;
+}
+
+int VariableTable::constCount() const {
+    int n = 0;
+    for (auto it = m_constInt.constBegin(); it != m_constInt.constEnd(); ++it) n += it.value().size();
+    for (auto it = m_constStr.constBegin(); it != m_constStr.constEnd(); ++it) n += it.value().size();
+    return n;
 }

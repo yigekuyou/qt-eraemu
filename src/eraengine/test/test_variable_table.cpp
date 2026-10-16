@@ -137,7 +137,14 @@ int main(int argc, char* argv[]) {
         table.markLoadComplete();
 
         qint64 w = 0;
-        check(table.variableTable().constInt("W", w) && w == 12, "#DIM CONST W = 12 -> 常数表");
+        // 这些 CONST 声明在 @MAIN **函数内** = 该函数的私有常量
+        //（C#：函数内的 #DIM 走 LogicalLine.AddPrivateVariable），必须带作用域查。
+        check(table.variableTable().constInt("W", w, "MAIN") && w == 12,
+              "#DIM CONST W = 12 -> 常数表（MAIN 作用域）");
+        check(!table.variableTable().constInt("W", w),
+              "私有常量 W 在无作用域上下文不可见");
+        check(!table.variableTable().constInt("W", w, "OTHERFN"),
+              "私有常量 W 在别的函数内不可见");
         const VariableDecl* grid = table.variableTable().find("GRID", "MAIN");
         check(grid != nullptr && grid->lengths == QList<int>({12, 24}),
               QString("GRID 维数 == [12,24]（得到 %1 个：%2）")
@@ -167,15 +174,68 @@ int main(int argc, char* argv[]) {
               QString("SNOW 长度 == [4]（得到 %1）")
                   .arg(snow && !snow->lengths.isEmpty() ? QString::number(snow->lengths.value(0)) : "?"));
         qint64 snow1 = 0;
-        check(table.variableTable().constArrayAt("SNOW", 1, snow1) && snow1 == 0x222222,
+        check(table.variableTable().constArrayAt("SNOW", 1, snow1, "MAIN") && snow1 == 0x222222,
               "SNOW:1 == 0x222222");
         // 单元素常量仍然参与「常量折叠」；多元素常量数组不折叠
         qint64 scalar = 0;
-        check(table.variableTable().constInt("SCALAR", scalar) && scalar == 7,
+        check(table.variableTable().constInt("SCALAR", scalar, "MAIN") && scalar == 7,
               "#DIM CONST SCALAR = 7 -> 标量常数");
         qint64 snowScalar = 0;
-        check(!table.variableTable().constInt("SNOW", snowScalar),
+        check(!table.variableTable().constInt("SNOW", snowScalar, "MAIN"),
               "常量数组 SNOW 不当作标量常数折叠");
+    }
+
+    qDebug() << "\n3.6) 常量作用域分离：广域 / 私有常量 / 同名私有变量遮蔽";
+    {
+        // 常量按**归属作用域**存储：函数内的 `#DIM CONST` 只在该函数内可见，
+        // 本函数的同名可写私有变量（`#DIM X`）遮蔽别处的同名常量。
+        // 此前只有一张扁平的 name→value 表，运行期求值按名字命中 —— 一个函数里的
+        // `#DIM CONST SHADOW = 51` 会盖住别处同名的私有变量（eraTW 的
+        // `SETCOLOR 色_RED7` / `CLEARLINE 削除行数 + 1` 都读成了常量的值）。
+        const QStringList constSrc = {
+            "#DIM CONST GSHADOW = 99",   // 函数外（文件级）-> 广域常量
+        };
+        EraParseTable gc(nullptr);
+        const AstResolver gr = [&gc](const QString& e) { return gc.expressionAst(e); };
+        QList<LogicalLine> gs;
+        for (int i = 0; i < constSrc.size(); ++i)
+            gs.append(AstBuilder::build(constSrc.at(i), ScriptPosition("g.ERB", i, 1), gr));
+        // .ERH 文件级声明 = 广域常量（.ERB 里函数外的 # 行会被忽略）
+        table.loadScript("gconst", gs, /*isHeaderFile=*/true);
+
+        const QStringList scopeSrc = {
+            "@HOLDER",
+            "#DIM CONST SHADOW = 51",   // HOLDER 的私有常量
+            "RETURN",
+            "@USER",
+            "#DIM SHADOW",              // USER 的私有**可写变量**（与上面同名）
+            "SHADOW = 7",
+            "RETURN",
+            "@READER",                  // 谁都没声明 SHADOW
+            "RETURN"
+        };
+        EraParseTable sc(nullptr);
+        const AstResolver sr = [&sc](const QString& e) { return sc.expressionAst(e); };
+        QList<LogicalLine> ss;
+        for (int i = 0; i < scopeSrc.size(); ++i)
+            ss.append(AstBuilder::build(scopeSrc.at(i), ScriptPosition("s.ERB", i, 1), sr));
+        table.loadScript("scope", ss);
+        table.markLoadComplete();
+
+        const VariableTable& vt = table.variableTable();
+        qint64 v = 0;
+        check(vt.constInt("SHADOW", v, "HOLDER") && v == 51,
+              "私有常量在声明它的函数内可见");
+        check(!vt.constInt("SHADOW", v, "READER"),
+              "私有常量在别的函数内不可见");
+        check(!vt.constInt("SHADOW", v),
+              "私有常量在无作用域上下文不可见");
+        check(!vt.constInt("SHADOW", v, "USER"),
+              "同名私有可写变量遮蔽别处的私有常量");
+        check(vt.constInt("GSHADOW", v, "HOLDER") && v == 99,
+              "广域常量在任意函数内可见");
+        check(vt.constInt("GSHADOW", v) && v == 99,
+              "广域常量在无作用域上下文可见");
     }
 
     qDebug() << "\n4) 类型回填（强类型）";

@@ -28,6 +28,7 @@
 #include <QVariant>
 #include <QDir>
 #include <QVector>
+#include <functional>
 
 // Basic I/O operation result
 struct IoResult {
@@ -95,9 +96,15 @@ public:
     // 枚举目录下的文件（大小写不敏感的后缀过滤），recursive = 搜索子目录（Config.SearchSubdirectory）
     QStringList listFiles(const QString& dirPath, const QStringList& suffixes, bool recursive) const;
 
+    // 扫描进度回调：done = 已完成 listing 的目录数，total = done + 已发现待扫描
+    // 的目录数（目录数逐层发现，total 会随扫描推进增长）。在**调用线程**触发。
+    using TreeScanProgress = std::function<void(int done, int total)>;
+
     // 预扫描目录树（递归收集所有子目录；目录不存在返回空树，path 已填充）。
-    // 每目录一次 AllEntries listing；返回的树供后续装载阶段共享，见 DirNode 注释。
-    [[nodiscard]] static DirNode collectTree(const QString& dirPath);
+    // 每目录一次 AllEntries listing；**按层并行**（同层目录互不依赖）；
+    // 返回的树供后续装载阶段共享，见 DirNode 注释。
+    [[nodiscard]] static DirNode collectTree(const QString& dirPath,
+                                            const TreeScanProgress& onProgress = {});
 
     // 与 listFiles(dirPath, suffixes, recursive) 语义一致的纯内存查树（零 provider 往返）：
     // 按显示名做大小写不敏感的后缀匹配，返回条目的完整路径（DirEntry::path）。

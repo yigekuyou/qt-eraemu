@@ -21,6 +21,7 @@
 #include <QHash>
 #include <QString>
 #include <QStringList>
+#include <functional>
 
 #include "GameData/file_system_io.h"   // DirNode（树版 loadCsvDirectory）
 
@@ -49,7 +50,10 @@ public:
     // SAF 多趟遍历是加载耗时大头 —— 见 file_system_io.h 的 DirNode 注释）。
     // 遍历顺序与路径版一致 —— 本目录文件（名序）在前、子目录递归在后，
     // 同名表只取先出现者。recursive=false 只查树根文件。
-    int loadCsvDirectory(const DirNode& tree, bool recursive);
+    // onProgress(done, total)：已处理 / 候选 CSV 文件数（在调用线程触发；
+    // 供装载遮罩显示读取进度）。
+    int loadCsvDirectory(const DirNode& tree, bool recursive,
+                         const std::function<void(int done, int total)>& onProgress = {});
 
     // CSV 文件名（大小写不敏感，可带/不带 .csv）内的名字 → 行号（0 起）
     [[nodiscard]] int indexOf(const QString& csvFileName, const QString& name) const;
@@ -78,6 +82,11 @@ public:
     void clear();
 
 private:
+    // 树版递归主体：done/total 跨层累计，每处理一个候选文件回调一次进度。
+    int loadCsvTreeInto(const DirNode& node, bool recursive,
+                        const std::function<void(int done, int total)>& onProgress,
+                        int& done, int total);
+
     // 解析单个 CSV 为名字表（取每行第 0 列；跳过空行与 ';' 注释）
     bool loadCsvFile(const QString& filePath, const QString& tableKey);
     // 解析单行（支持引号包裹与 \" 转义）

@@ -23,6 +23,8 @@
 #include <memory>
 #include <QVariantList>
 #include <QFuture>
+#include <QFutureWatcher>
+#include <QtConcurrent/QtConcurrentRun>
 #include <QQmlEngine>
 #include <QQmlContext>
 #include "csv_loader.h"
@@ -354,6 +356,11 @@ private:
     QMetaObject::Connection m_loadProgressConn;
     QMetaObject::Connection m_loadHeartbeatConn;
     QMetaObject::Connection m_loadCompletedConn;
+    // 后台 CSV 准备（路径树预扫描 + 常量表 + 角色模板）：SAF 上是 ~60s 的
+    // provider 往返，放后台线程执行，主线程不被占住（见 reloadAsync）。
+    QFutureWatcher<void> m_csvPrepWatcher;
+    QMetaObject::Connection m_csvPrepConn;
+    qint64 m_loadChainStartMs = 0;   // 本轮装载起点（进度「已耗时」的时间基准）
     bool m_hasError = false;   // 最近一次执行出错（状态灯）
     bool m_defaultTitleVisible = false;   // 标准标题画面（QML）是否显示    // ---- 内部：目录解析与分批装载 ----
     bool resolveGameDirs();          // 解析 CSV/ERB 目录（绝对路径 + 实际大小写）
@@ -366,6 +373,7 @@ private:
     void buildSystemHost();          // 系统状态机 -> 引擎子系统 适配层
     void clearLoadedGame();           // 重载边界：释放旧 AST/拍平/变量/常量
     void stopAsyncLoad();             // 取消并等待旧加载会话，随后才能清理解析表
+    void startErbLoadAsync(quint64 generation);   // CSV 准备（后台）完成后的 ERB 装载启动段
 
     // ---- 装载心跳（QML 装载遮罩/状态灯的数据源，见 Q_PROPERTY loadStage 等）----
     void applyLoadHeartbeat(int stage, const QString& name, int done, int total,

@@ -954,7 +954,7 @@ ApplicationWindow {
                 anchors.horizontalCenter: parent.horizontalCenter
                 text: gameLibrary.busy ? qsTr("正在准备游戏…")
                       : (eraEngine.loadStage !== ""
-                         ? qsTr("正在装载脚本：%1").arg(eraEngine.loadStage)
+                         ? qsTr("装载中：%1").arg(eraEngine.loadStage)
                          : qsTr("正在装载脚本…"))
                 color: "white"
                 font.pixelSize: 20

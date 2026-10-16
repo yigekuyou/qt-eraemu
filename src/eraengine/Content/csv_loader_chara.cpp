@@ -85,32 +85,59 @@ int CsvLoader::loadCharaDirectory(const QString& csvDir,
 int CsvLoader::loadCharaDirectory(const DirNode& tree,
                                   const ConstantTable* constants,
                                   VariableStorage* storage,
-                                  bool recursive) {
+                                  bool recursive,
+                                  const std::function<void(int done, int total)>& onProgress) {
     if (!storage) return 0;
 
     // 对齐 C# `Config.GetFiles(csvDir, "CHARA*.CSV")`：**文件名以 Chara 开头**
-    // 的 *.csv，而不是「名为 Chara 的子目录」。遍历顺序对齐 C# Config.getFiles：
-    // **先本目录文件（名序）、后子目录递归**（Directory.GetFiles →
-    // GetDirectories 排序后逐个递归）；后载覆盖先载 -> 同名模板时子目录覆盖
-    // 顶层。（此前路径版是「先子目录后本目录」，与 C# 相反；eraTW/eraH 无
-    // 跨层同名，实际行为不变，此处修正为以 C# 为准。）
+    // 的 *.csv，而不是「名为 Chara 的子目录」。
+    //
+    // 遍历顺序：**先子目录、后根目录，且根目录里与子目录同名的文件不再读取**。
+    // C# 是「根 + 子目录全读、后载覆盖先载」= 最终生效的是子目录那份；根那份
+    // 读了又被覆盖，纯属浪费（一次 provider 读取 + 一次解析）。先读子目录、
+    // 根目录同名直接跳过，最终生效值与 C# 相同，还省掉重复读取。
+    //   · recursive=false（SearchSubdirectory 关闭）：只读根目录文件，不递归；
+    //   · 根目录独有的文件名仍然读取（只有同名项才跳过）。
+    // era 系游戏的角色 CSV 全在子目录（eraTW `CSV/Chara/`、eraH
+    // `CSV/人間/**`・`CSV/悪魔/**`、eraMegaten `CSV/悪魔/**`），根目录一个都
+    // 没有，因此这里实际是「只读子目录」。
     const auto isCharaCsv = [](const QString& name) {
         return name.endsWith(QLatin1String(".csv"), Qt::CaseInsensitive)
                && name.startsWith(QLatin1String("Chara"), Qt::CaseInsensitive);
     };
-    QStringList files;   // 完整路径（entryInfoList 的 absoluteFilePath，直接可读）
-    const std::function<void(const DirNode&)> collect = [&](const DirNode& n) {
-        for (const DirEntry& f : n.files)
-            if (isCharaCsv(f.name)) files.append(f.path);
-        if (!recursive) return;
-        for (const DirNode& sub : n.subdirs)
-            collect(sub);
-    };
-    collect(tree);
+    QStringList files;    // 完整路径（entryInfoList 的 absoluteFilePath，直接可读）
+    QSet<QString> seen;   // 已收集的文件名（小写）：根目录同名项据此跳过
+    const std::function<void(const DirNode&, bool)> collect =
+        [&](const DirNode& n, bool isRoot) {
+            if (!isRoot || !recursive) {
+                for (const DirEntry& f : n.files)
+                    if (isCharaCsv(f.name)) {
+                        files.append(f.path);
+                        seen.insert(f.name.toLower());
+                    }
+            }
+            if (!recursive) return;
+            for (const DirNode& sub : n.subdirs)
+                collect(sub, false);   // 子目录先：其内容即最终生效值
+            if (isRoot) {
+                // 根目录最后：只补子目录里没有的文件名（同名者已被子目录覆盖）
+                for (const DirEntry& f : n.files)
+                    if (isCharaCsv(f.name) && !seen.contains(f.name.toLower())) {
+                        files.append(f.path);
+                        seen.insert(f.name.toLower());
+                    }
+            }
+        };
+    collect(tree, true);
 
     int loadedChars = 0;
     QSet<QString> reportedUnknownTypes;   // 未知类型只留痕一次（同名去重）
+    int fileIndex = 0;
+    const int fileTotal = files.size();
+    if (onProgress && fileTotal > 0) onProgress(0, fileTotal);
     for (const QString& charaPath : files) {
+        ++fileIndex;
+        if (onProgress) onProgress(fileIndex, fileTotal);
         bool ok = false;
         QString content = TextCodecUtil::readFile(charaPath,
                                                   TextEncoding::Auto, nullptr, &ok);

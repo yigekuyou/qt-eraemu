@@ -21,6 +21,9 @@
 #include <QDir>
 #include <QRegularExpression>
 #include <functional>
+#include <QMutex>
+#include <QMutexLocker>
+#include <QtConcurrent/QtConcurrentMap>
 
 FileSystem::FileSystem(QObject *parent)
     : QObject(parent)
@@ -117,27 +120,65 @@ QString FileSystem::getPathWithActualCase(const QString& basePath, const QString
 // 同 ErbLoader::collectFiles / loadCharaDirectory 的教训：一次列举就是
 // 一整趟 provider 往返（对 content://）或一次系统调用（本地），分
 // 「文件一次 + 目录一次」会让每个目录白跑一趟。
-DirNode FileSystem::collectTree(const QString& dirPath)
+namespace {
+
+// 列出单个目录：文件进 files，子目录进 subdirs（**一次性 resize 预留槽位**，
+// 之后不再追加 —— 元素地址因此稳定，上层才能把指针交给下一层并行任务填充；
+// QVector 追加会搬移元素）。顺序即 entryInfoList 的 QDir::Name 名字序。
+void listSingleDir(const QString& dirPath, DirNode& node, QVector<DirNode*>& kids)
 {
-    DirNode node;
-    node.path = dirPath;
-    // 不做 QDir::exists()：对 content:// 它是一次独立的 provider 查询，
-    // 而 entryInfoList 对不存在的目录本就返回空列表（同样得到空树）。
-    // 每目录省一趟 = 38 目录少 38 次往返（eraH 实测约一半扫描时间）。
-    QDir dir(dirPath);
-    const QFileInfoList entries = dir.entryInfoList(
+    const QFileInfoList entries = QDir(dirPath).entryInfoList(
         QDir::AllEntries | QDir::Hidden | QDir::System | QDir::NoDotAndDotDot, QDir::Name);
+    int dirCount = 0;
+    for (const QFileInfo& e : entries)
+        if (e.isDir()) ++dirCount;
+    node.subdirs.resize(dirCount);
+    int di = 0;
     for (const QFileInfo& e : entries) {
-        if (e.isDir())
-            node.subdirs.append(collectTree(e.absoluteFilePath()));
-        else if (e.isFile()) {
+        if (e.isDir()) {
+            DirNode& sub = node.subdirs[di++];
+            sub.path = e.absoluteFilePath();
+            kids.append(&sub);
+        } else if (e.isFile()) {
             DirEntry entry;
             entry.name = e.fileName();
             entry.path = e.absoluteFilePath();
             node.files.append(entry);
         }
     }
-    return node;
+}
+
+} // namespace
+
+DirNode FileSystem::collectTree(const QString& dirPath, const TreeScanProgress& onProgress)
+{
+    DirNode root;
+    root.path = dirPath;
+    // 不做 QDir::exists()：对 content:// 它是一次独立的 provider 查询，
+    // 而 entryInfoList 对不存在的目录本就返回空列表（同样得到空树）。
+    // 每目录省一趟 = 38 目录少 38 次往返（eraH 实测约一半扫描时间）。
+    //
+    // 按层 BFS + **层内并行**：同一层的目录互不依赖，一次 QtConcurrent::map
+    // 把它们全部列出。SAF 上每次 listing 都是一次 provider 往返（本地是系统
+    // 调用），eraH 的 38 个目录里同层最多 ~18 个 —— 并行把墙钟时间从
+    // 「Σ 每目录延迟」压到「最慢一层」。
+    QVector<DirNode*> level{&root};
+    int done = 0;
+    while (!level.isEmpty()) {
+        QVector<DirNode*> next;
+        QMutex mutex;
+        QFuture<void> f = QtConcurrent::map(level, [&](DirNode* n) {
+            QVector<DirNode*> kids;
+            listSingleDir(n->path, *n, kids);
+            QMutexLocker lock(&mutex);
+            next += kids;
+        });
+        f.waitForFinished();
+        done += level.size();
+        if (onProgress) onProgress(done, done + next.size());
+        level = next;
+    }
+    return root;
 }
 
 // 纯内存查树：与 FileSystem::listFiles 相同的后缀匹配器（允许 "*.csv"/".csv"

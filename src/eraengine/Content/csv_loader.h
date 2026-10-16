@@ -24,6 +24,7 @@
 #include <QList>
 #include <QFile>
 #include <QTextStream>
+#include <functional>
 
 #include "GameData/file_system_io.h"   // DirNode（树版 loadCharaDirectory）
 
@@ -57,10 +58,13 @@ public:
     // 覆盖顶层**。路径版历史实现是「先子目录后本目录」（顶层覆盖子目录），
     // 与 C# 相反；eraTW/eraH 的 Chara*.csv 均无跨层同名，实际行为不受影响，
     // 但树版起以 C# 为准（test_dir_tree 锁定该顺序）。
+    // onProgress(done, total)：已处理 / 待读取的角色 CSV 文件数（在调用线程
+    // 触发；供装载遮罩显示读取进度）。
     static int loadCharaDirectory(const DirNode& tree,
                                   const ConstantTable* constants,
                                   VariableStorage* storage,
-                                  bool recursive = false);
+                                  bool recursive = false,
+                                  const std::function<void(int done, int total)>& onProgress = {});
 
     // Access data
     QVariant getValue(const QString& tableName, int row, int col);

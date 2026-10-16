@@ -44,6 +44,13 @@ EraEngine::~EraEngine() {
 
 void EraEngine::stopAsyncLoad() {
         m_systemStateMachine.stopForReload();
+		// 后台 CSV 准备（路径树/常量表/角色模板）若在跑，必须等它结束再往下：
+		// 它仍在写 m_constantTable / m_variableStorage，不等就会与下一轮装载
+		// 争同一批容器。SAF 上这一等最长约一分钟，但只在切游戏/重载时发生。
+		if (m_csvPrepWatcher.isRunning()) {
+				qInfo() << "[EraEngine] 等待后台 CSV 准备结束（SAF 上最多约一分钟）";
+				m_csvPrepWatcher.waitForFinished();
+		}
         ++m_loadGeneration;
         auto& loader = m_executionEngine.getErbLoader();
         if (m_loadProgressConn) disconnect(m_loadProgressConn);
@@ -688,6 +695,7 @@ void EraEngine::reload()
 		m_processState.setExecState(ExecState::Continue);
 		// Reload scripts from current directory
 		if (!m_gameDirectory.isEmpty()) {
+				m_loadChainStartMs = QDateTime::currentMSecsSinceEpoch();
 				// 对齐 C#：先解析 ErbDir / CsvDir（只在这两个目录内检索）
 				if (!resolveGameDirs()) {
 						m_parseTable.clear();
@@ -793,7 +801,21 @@ const DirNode& EraEngine::csvTree()
 		if (!m_csvTreeValid) {
 				QElapsedTimer sw;
 				sw.start();
-				m_csvTree = m_fileSystem.collectTree(m_csvDir);
+				// 扫描进度 → QML 进度条：collectTree 在**后台线程**跑（CSV 准备阶段），
+				// 进度回调也在该线程触发，用队列连接投递到主线程写心跳属性
+				// （loadStage/loadProcessed/loadTotal → Main.qml 的确定性进度条）。
+				const QString stage = QStringLiteral("扫描 CSV 目录");
+				m_csvTree = m_fileSystem.collectTree(
+				    m_csvDir,
+				    [this, stage](int done, int total) {
+						const qint64 ms = QDateTime::currentMSecsSinceEpoch() - m_loadChainStartMs;
+						QMetaObject::invokeMethod(
+						    this,
+						    [this, stage, done, total, ms]() {
+							    applyLoadHeartbeat(0, stage, done, total, ms, false);
+						    },
+						    Qt::QueuedConnection);
+				    });
 				m_csvTreeValid = true;
 				int dirCount = 1, fileCount = 0;   // 树根也算一个目录
 				const std::function<void(const DirNode&)> count = [&](const DirNode& n) {
@@ -803,7 +825,7 @@ const DirNode& EraEngine::csvTree()
 				};
 				count(m_csvTree);
 				qDebug() << "[load] CSV 路径树" << m_csvDir << ":" << dirCount << "目录 /"
-						 << fileCount << "文件，耗时" << sw.elapsed() << "ms";
+				         << fileCount << "文件，耗时" << sw.elapsed() << "ms";
 		}
 		return m_csvTree;
 }
@@ -846,7 +868,27 @@ void EraEngine::loadConstantData()
 
 		// 常量名表（CSV 名 → 下标）：只从 CSV 目录读取，对齐 C# ConstantData。
 		// 查预扫描路径树（csvTree() 一次遍历后所有阶段共享，见其注释）。
-		const int tables = m_constantTable.loadCsvDirectory(csvTree(), m_searchSubdirectory);
+		// 后台线程 → 主线程的进度上报（节流：最快 100ms 一次 —— 1328 个 CSV
+		// 会把主线程事件队列刷爆；最后一个文件总是上报，进度条能走满）。
+		const qint64 progressBaseMs = m_loadChainStartMs;
+		const auto lastProgressMs = std::make_shared<qint64>(0);
+		const auto reportProgress = [this, progressBaseMs, lastProgressMs](
+		                                 const QString& stage, int done, int total) {
+				const qint64 now = QDateTime::currentMSecsSinceEpoch();
+				if (done < total && now - *lastProgressMs < 100) return;
+				*lastProgressMs = now;
+				QMetaObject::invokeMethod(
+				    this,
+				    [this, stage, done, total, now, progressBaseMs]() {
+						applyLoadHeartbeat(0, stage, done, total, now - progressBaseMs, false);
+				    },
+				    Qt::QueuedConnection);
+		};
+		const int tables = m_constantTable.loadCsvDirectory(
+		    csvTree(), m_searchSubdirectory,
+		    [&reportProgress](int done, int total) {
+				reportProgress(QStringLiteral("读取 CSV 常量表"), done, total);
+		    });
 
 		// CSV 名表 -> <VAR>NAME 字符串数组（对齐 C#：装载 CSV 时同步填充
 		// TALENTNAME/ABLNAME/EXPNAME/…——脚本会直接引用这些数组，
@@ -938,7 +980,10 @@ void EraEngine::loadConstantData()
 		// 于是 EXISTCSV(0) 为假 -> C_ADD_CHARA(0) 直接 return 2 ->
 		// CHARANUM 停在 0 -> 战斗队伍为空 -> 委托 11 的战斗开场即「全灭」。
 		const int charaLoaded = CsvLoader::loadCharaDirectory(
-		    csvTree(), &m_constantTable, &m_variableStorage, m_searchSubdirectory);
+		    csvTree(), &m_constantTable, &m_variableStorage, m_searchSubdirectory,
+		    [&reportProgress](int done, int total) {
+				reportProgress(QStringLiteral("读取角色 CSV"), done, total);
+		    });
 		// CSV* 系函数读「模板值」：装载完角色 CSV 后立刻快照一份
 		// （此后脚本对 VAR:角色:下标 的修改不再污染模板）
 		m_variableStorage.snapshotCharaTemplates();
@@ -947,10 +992,9 @@ void EraEngine::loadConstantData()
 		         << " VariableSize:" << sizesLoaded
 		         << " 角色:" << charaLoaded;
 
-		// 每次装载完常量数据后重取 TRAINNAME 名表：SystemStateMachine::initialize()
-		// 只在首次 run()/pump() 时读一次 host.trainNames，切换游戏目录后必须刷新。
-		m_systemStateMachine.reloadTrainNames();
-		qDebug() << "[EraEngine] TRAINNAME 名表:" << m_systemStateMachine.trainCount() << "项";
+		// TRAINNAME 名表不在这里刷新：本函数现在跑在**后台线程**（reloadAsync 的
+		// CSV 准备），而 SystemStateMachine 是主线程 QObject。刷新由调用方在
+		// 主线程完成（reloadAsync 的完成回调、startErbLoadAsync 之前那一步）。
 }
 
 // 从已加载配置里取「编码 / 子目录检索」等引擎级设置
@@ -1355,18 +1399,30 @@ void EraEngine::reloadAsync()
 		loadConfigFiles();
 		resolveTextConfig();
 		loadGameBaseData();
-		loadConstantData();
-		m_scriptProcessor.clear();
-		// 同步准备阶段（配置文件/CSV 常量表/角色模板/编码探测）在 Android SAF 上
-		// 本身就是上百次 provider 往返：先给出总耗时与解析出的目录，之后每一步
-		// 都由 ErbLoader 的阶段日志与心跳接管（见相关日志的注释）。
-		qInfo().noquote() << "[EraEngine] 异步装载·同步准备阶段(CSV/常量/探测)"
-		                  << phase.elapsed() << "ms"
-		                  << (GamePaths::isContent(m_gameDirectory) ? "(content URI)" : "(本地目录)");
-		qInfo().noquote() << "[EraEngine] 异步装载·目录解析: 游戏" << m_gameDirectory
-		                  << "ERB" << m_erbDir << "CSV" << m_csvDir;
-
+		// **CSV 常量/角色准备移到后台线程**（SAF 上是 ~60s 的 provider 往返：
+		// 路径树预扫描 + 1328 张常量 CSV + 1318 个角色 CSV）。此前整段在主线程
+		// 同步执行 —— 加载遮罩虽有进度文案，主线程却被占住、界面无法重绘。
+		// 完成后回到主线程（QFutureWatcher::finished 由事件循环投递）再启动
+		// ERB 异步装载，见 startErbLoadAsync()。
+		const quint64 prepGeneration = m_loadGeneration;
+		const qint64 prepStartMs = QDateTime::currentMSecsSinceEpoch() - phase.elapsed();
+		m_loadChainStartMs = prepStartMs;   // 进度「已耗时」的统一基准
+		// 装载遮罩（loadingOverlay）的 visible 是 statusStrip.loading，而它只在
+		// scriptsLoadStarted 时打开 —— CSV 准备现在跑在后台、紧接着才是 ERB，
+		// 这个信号必须**提前到准备开始时**发，否则这几十秒是全黑屏（此前同步版
+		// 主线程被占住同样看不到遮罩）。startErbLoadAsync 里不再重复发。
+		// ---- loader 信号连接：必须**先于** scriptsLoadStarted 建立 ----
+		// loadCompleted 的槽序有语义：EraEngine 的收尾槽要先跑（末尾置
+		// m_completingLoad，随后才发 scriptsLoaded），外部监听者（QML/测试）
+		// 后跑才能观察到「收尾窗口内 isLoadingScripts() == true」。
+		// 连接此前在 CSV 准备完成之后才建立，而 scriptsLoadStarted 已提前到
+		// 准备开始时发出，槽序颠倒 —— test_async_lifecycle 会立刻抓到。
 		ErbLoader& loader = m_executionEngine.getErbLoader();
+		const auto chainElapsed = [prepStartMs] {
+				return QDateTime::currentMSecsSinceEpoch() - prepStartMs;
+		};
+		// loader 是引擎的成员（生命周期 ≥ 本回调），按值捕获指针即可
+		ErbLoader* const loaderPtr = &loader;
 		if (m_loadProgressConn) disconnect(m_loadProgressConn);
 		if (m_loadHeartbeatConn) disconnect(m_loadHeartbeatConn);
 		if (m_loadCompletedConn) disconnect(m_loadCompletedConn);
@@ -1377,15 +1433,7 @@ void EraEngine::reloadAsync()
 		m_loadHeartbeatConn = connect(&loader, &ErbLoader::loadHeartbeat,
 		                              this, &EraEngine::applyLoadHeartbeat);
 		resetLoadHeartbeat();
-        // 全链路计时基准：完成回调在 reloadAsync 返回之后才执行，不能按引用
-        // 捕获上面的 phase（那是栈上的计时器），改用绝对时刻做基准。
-        const qint64 chainStartMs = QDateTime::currentMSecsSinceEpoch() - phase.elapsed();
-        const auto chainElapsed = [chainStartMs] {
-                return QDateTime::currentMSecsSinceEpoch() - chainStartMs;
-        };
-        // loader 是引擎的成员（生命周期 ≥ 本回调），按值捕获指针即可
-        ErbLoader* const loaderPtr = &loader;
-        const quint64 generation = m_loadGeneration;
+		const quint64 generation = prepGeneration;
 		m_loadCompletedConn = connect(&loader, &ErbLoader::loadCompleted, this,
 		                              [this, generation, chainElapsed, loaderPtr](bool ok) {
                 if (generation != m_loadGeneration) {
@@ -1435,6 +1483,39 @@ void EraEngine::reloadAsync()
 		});
 
 		emit scriptsLoadStarted();
+		if (m_csvPrepConn) disconnect(m_csvPrepConn);
+		m_csvPrepWatcher.setFuture(QtConcurrent::run([this]() { loadConstantData(); }));
+		m_csvPrepConn = connect(&m_csvPrepWatcher, &QFutureWatcher<void>::finished, this,
+		                        [this, prepGeneration, prepStartMs]() {
+				m_scriptProcessor.clear();
+				qInfo().noquote()
+				    << "[EraEngine] 异步装载·CSV 准备阶段(路径树/常量/角色,后台)"
+				    << (QDateTime::currentMSecsSinceEpoch() - prepStartMs) << "ms"
+				    << (GamePaths::isContent(m_gameDirectory) ? "(content URI)" : "(本地目录)");
+				if (prepGeneration != m_loadGeneration) {
+						qInfo() << "[EraEngine] CSV 准备完成回调已过期（世代" << prepGeneration
+						        << "≠" << m_loadGeneration << "），结果丢弃";
+						return;
+				}
+				// TRAINNAME 名表依赖 CSV 名表；SystemStateMachine 是主线程 QObject，
+				// 写入放回主线程（原来内联在 loadConstantData 尾部）。
+				m_systemStateMachine.reloadTrainNames();
+				startErbLoadAsync(prepGeneration);
+		});
+}
+
+
+// ---------------------------------------------------------------------------
+// ERB 异步装载的启动段：CSV 准备（后台线程）完成后由主线程调用。
+// 这段代码原来内联在 reloadAsync() 里、紧跟同步的 CSV 准备之后；CSV 准备改为
+// 后台执行后，它成为「后台 → 主线程」的接续点。世代与计时基准经参数传入，
+// 取消语义不变（世代变化时回调直接丢弃、不会走到这里）。
+void EraEngine::startErbLoadAsync(quint64 generation)
+{
+		ErbLoader& loader = m_executionEngine.getErbLoader();
+		qInfo().noquote() << "[EraEngine] 异步装载·目录解析: 游戏" << m_gameDirectory
+		                  << "ERB" << m_erbDir << "CSV" << m_csvDir;
+        // （scriptsLoadStarted 已在 reloadAsync 的 CSV 准备开始时发出）
         if (generation == m_loadGeneration) {
                 // 异步装载（后台 prep → 分块解析 → 主线程合并）的入口。之后的一切
                 // 进展都由 ErbLoader 的阶段日志 + 心跳上报，这里只需保证入口可见。
@@ -1833,8 +1914,36 @@ void EraEngine::randomizeRandom()
 
 void EraEngine::gotoTitle()
 {
+		// 「返回标题」：丢弃当前执行上下文，重跑系统状态机（Title_Begin）。
+		//
+		// 旧实现只设置 systemState 就直接返回 —— 但状态机此刻停在 WaitInput
+		// 挂起点上（run() 早已返回，等输入才 resume），没有任何东西把它唤醒：
+		// 真机上点「返回标题」完全没反应，上一画面（读档菜单等）原样留在屏上。
+		//
+		// 按 reloadAsync 的同款复位做全：
+		//   ① execState 可能停在 Halt（脚本 QUIT/closeGame 之后）→ 复位成
+		//      Continue，否则 pump 第一圈 isRunning()==false 直接退出，
+		//      标题永远不会出现、输入也会被拒；
+		//   ② 清屏：上一画面的文本否则会堆在新标题之上；
+		//   ③ 系统状态置回 Title_Begin 并**真正 run() 一次**
+		//      （beginTitle → @SYSTEM_TITLE / QML 标准标题），这才离开挂起点。
+		setHasError(false);
+		m_processState.clearQuitRequest();
+		m_processState.clearRestartRequest();
+		m_processState.setExecState(ExecState::Continue);
+		m_console.notifyInputDone();
+		m_console.clearAll();
+		m_audio.stopBgm();
+		m_audio.stopSounds();
+		GraphicsStore::clearAll();
 		m_processState.setSystemState(SystemStateCode::Title_Begin);
 		m_statusManager.transitionToTitle();
+		const ExecState st = m_systemStateMachine.run();
+		if (st == ExecState::WaitInput || st == ExecState::WaitSystemInput) {
+				qDebug() << "[EraEngine] 返回标题：等待输入";
+		} else {
+				qDebug() << "[EraEngine] 返回标题：状态机结束，state=" << static_cast<int>(st);
+		}
 }
 
 void EraEngine::executeEvent(const QString& eventName)

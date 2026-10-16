@@ -113,13 +113,45 @@ int ConstantTable::loadCsvDirectory(const QString& csvDir, bool recursive) {
     return loadCsvDirectory(FileSystem::collectTree(csvDir), recursive);
 }
 
-int ConstantTable::loadCsvDirectory(const DirNode& node, bool recursive) {
+namespace {
+
+// 候选 CSV 文件数（进度条分母；纯内存遍历，零 provider 往返）。
+void countCsvCandidates(const DirNode& n, bool recursive, int& total)
+{
+    for (const DirEntry& f : n.files) {
+        if (!f.name.endsWith(QLatin1String(".csv"), Qt::CaseInsensitive)) continue;
+        const QString key = QFileInfo(f.name).completeBaseName().toUpper();
+        if (key.startsWith(QLatin1Char('_'))) continue;   // _Rename 等不是常量表
+        ++total;
+    }
+    if (!recursive) return;
+    for (const DirNode& sub : n.subdirs) countCsvCandidates(sub, true, total);
+}
+
+} // namespace
+
+int ConstantTable::loadCsvDirectory(const DirNode& tree, bool recursive,
+                                    const std::function<void(int done, int total)>& onProgress)
+{
+    int total = 0;
+    countCsvCandidates(tree, recursive, total);
+    int done = 0;
+    const int loaded = loadCsvTreeInto(tree, recursive, onProgress, done, total);
+    if (onProgress && total > 0) onProgress(total, total);   // 收尾到 100%
+    return loaded;
+}
+
+int ConstantTable::loadCsvTreeInto(const DirNode& node, bool recursive,
+                                   const std::function<void(int done, int total)>& onProgress,
+                                   int& done, int total) {
     int loaded = 0;
     for (const DirEntry& f : node.files) {
         if (!f.name.endsWith(QLatin1String(".csv"), Qt::CaseInsensitive)) continue;
         // _Rename/_Replace/_default/_fixed 不是常量表（tableKeyOf = 去扩展名大写）
         const QString key = tableKeyOf(f.name);
         if (key.startsWith(QLatin1Char('_'))) continue;
+        ++done;
+        if (onProgress) onProgress(done, total);
         if (m_tables.contains(key)) continue;   // 同名（不同目录）只取先出现的
         // f.path 已是 entryInfoList 的 absoluteFilePath()，直接读取；
         // 不走 GamePaths::join（content:// 下每文件多一次 exists 探测）。
@@ -128,7 +160,7 @@ int ConstantTable::loadCsvDirectory(const DirNode& node, bool recursive) {
     qDebug() << "[load] 常量名表" << node.path << ":" << loaded << "张（累计" << m_tables.size() << "张/" << m_nameCount << "名）";
     if (recursive) {
         for (const DirNode& sub : node.subdirs)
-            loaded += loadCsvDirectory(sub, true);
+            loaded += loadCsvTreeInto(sub, true, onProgress, done, total);
     }
     return loaded;
 }

@@ -1008,9 +1008,15 @@ LogicalLine AstBuilder::build(const QString& rawLine,
                                        : rest.mid(argsBegin + 1);
         } else {
             // 逗号形式 `CALL 标签, 实参1, 实参2`（Emuera 与括号形式等价，eraTW 大量使用）。
+            // 标签与实参表之间**只有一个**分隔逗号：对齐 C# SP_CALL_ArgumentBuilder ——
+            // LexicalAnalyzer.ReadString 停在 ','，随后 wc.ShiftNext() 只跳掉这一个分隔符，
+            // 剩下的交给 ReduceArguments（空项记为 null 占位）。所以 `CALL F, , X` 是
+            // 「第 1 实参省略、第 2 实参 = X」，多跳逗号会让实参整体左移（eraMegaten /
+            // FL3.8 大量 `CALL MSG, , 地址, ...` 会因此串位）。
             int argStart = nameEnd;
-            while (argStart < rest.size() && (rest.at(argStart).isSpace()
-                   || rest.at(argStart) == QLatin1Char(','))) ++argStart;
+            while (argStart < rest.size() && rest.at(argStart).isSpace()) ++argStart;
+            if (argStart < rest.size() && rest.at(argStart) == QLatin1Char(',')) ++argStart;
+            while (argStart < rest.size() && rest.at(argStart).isSpace()) ++argStart;
             if (argStart < rest.size()) args = rest.mid(argStart);
         }
         if (funcName.startsWith('@')) funcName = funcName.mid(1);

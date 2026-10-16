@@ -1122,6 +1122,22 @@ QList<qint64> ExpressionEvaluator::readIntArray(const VariableNode &var, Variabl
         return out;
     }
 
+    // `#DIM CONST X, N = …` 常数数组：元素在**常数表**里（不在存储），
+    // 必须优先按常数表读 —— 否则整数组读成空，
+    // `FINDELEMENT(FLPEDIA_MAIN_CATEGORY, "種族")` 恒 -1（FL3.8 的 @FLP_REGISTER
+    // 因此把每个类别都判成「未定義のカテゴリ」）。checker 是纯判断（不求值下标），
+    // 所以放在这里不会让下标副作用算两遍。
+    if (m_constArrayChecker && m_constArrayChecker(name) && m_constArrayProvider) {
+        const int n = m_constArraySizeProvider ? m_constArraySizeProvider(name) : 0;
+        out.reserve(qMax(0, n));
+        for (int i = 0; i < n; ++i) {
+            QVariant cv;
+            if (!m_constArrayProvider(name, i, cv)) break;
+            out.append(cv.toLongLong());
+        }
+        return out;
+    }
+
     int size = storage->variableConfig().getSize1D(name);
     if (size <= 0) size = storage->variableConfig().getSize1D(upper);
     if (size <= 0) {
@@ -1166,6 +1182,19 @@ QList<QString> ExpressionEvaluator::readStrArray(const VariableNode &var, Variab
             : static_cast<int>(const_cast<ExpressionEvaluator*>(this)->resolveIndex(var, 0, storage, nullptr));
         out.reserve(charaNum);
         for (int i = 0; i < charaNum; ++i) out.append(storage->getCharaStr(name, i, column));
+        return out;
+    }
+
+    // `#DIMS CONST X = …` 常数数组：与 readIntArray 同理，元素在常数表里
+    // （FL3.8 的 FLPEDIA_MAIN_CATEGORY 就是这种）。
+    if (m_constArrayChecker && m_constArrayChecker(name) && m_constArrayProvider) {
+        const int n = m_constArraySizeProvider ? m_constArraySizeProvider(name) : 0;
+        out.reserve(qMax(0, n));
+        for (int i = 0; i < n; ++i) {
+            QVariant cv;
+            if (!m_constArrayProvider(name, i, cv)) break;
+            out.append(cv.toString());
+        }
         return out;
     }
 
@@ -1889,6 +1918,12 @@ bool ExpressionEvaluator::evaluateBuiltin(const FunctionNode &node, VariableStor
                 const QVector<int> s3 = cfg.getSize3D(name);
                 size = s3.isEmpty() ? 0 : s3.at(0);
             }
+        }
+        // `#DIM(S) CONST X, N = …`：长度只在常数表里（见 m_constArraySizeProvider
+        // 的说明）。缺了这一步 VARSIZE("FLPEDIA_MAIN_CATEGORY") 恒 0 —— FL3.8 的
+        // FLPEDIA 主菜单用它决定类别标签个数，于是整块标签渲染成空。
+        if (size <= 0 && dim == 0 && m_constArraySizeProvider) {
+            size = m_constArraySizeProvider(name);
         }
         out = QVariant::fromValue<qint64>(size);
         return true;

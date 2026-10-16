@@ -266,6 +266,22 @@ public:
     void finishDeclarationPreRegistration();   // 结算：维数/初值/用户函数类型
     [[nodiscard]] bool declarationsPreRegistered() const { return m_declarationsPreRegistered; }
 
+    // ---- VARI / VARS（emuera.em 的**作用域变量声明**，emuera.net 系）--------
+    // `VARI NAME` / `VARI NAME = 整式` / `VARI NAME, l1{, l2{, l3}}`：
+    // 在当前函数里声明一个**动态私有变量**（VARS 是字符串版）。语义与
+    // `#DIM(S) NAME{, l1…}` 相同，只是名字/类型在语句位置给出，且初值在
+    // 运行期写到元素 0（仅当长度恰为 1）。受 setting.json 的
+    // UseScopedVariableInstruction 门控（默认关闭；FL3.8 显式开启）。
+    // 与 #DIM 一样必须**先登记再构造 AST**，否则同函数内后续的
+    // `COLUMN:0 = "x"` 会按 Int 定型。
+    // isScopedVariableLine()：判定一行是否为 VARI/VARS（供装载器预扫描）。
+    // registerScopedVariableLine()：登记声明（幂等；同名取首个声明）。
+    [[nodiscard]] static bool isScopedVariableLine(const QString& rawLine);
+    void registerScopedVariableLine(const QString& rawLine, const ScriptPosition& position,
+                                    const QString& function);
+    // 构造完行之后：把「目标变量 + 初值」接成交互操作数（见 .cpp 说明）。
+    void applyScopedVariableLine(LogicalLine& line, const QString& function);
+
     // 用缓存 AST 求值条件；返回 false 表示求值失败。
     bool evaluateCondition(const QString& scriptName, int line, bool& out, int argIndex = -1);
     bool evaluateAst(const QSharedPointer<ExpressionNode>& ast, bool& out);

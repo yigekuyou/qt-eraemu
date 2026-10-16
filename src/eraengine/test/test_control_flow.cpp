@@ -105,6 +105,51 @@ static void tryListLoadTime() {
     if (!good) { qCritical() << "TRY list load-time scope/invalid AST regression failed"; ++failures; }
     else qInfo() << "PASS TRY list load-time scope/invalid AST regression";
 }
+// `#DIM(S) CONST X, N = …` 常数数组的**数组内省**：VARSIZE / FINDELEMENT 必须
+// 能读到。常量的元素存在常数表里（不在 VariableStorage），只按存储长度取会得到
+// 0 / 空数组 —— FL3.8 的 FLPEDIA 正是用
+//   `FINDELEMENT(FLPEDIA_MAIN_CATEGORY, MAIN_CATEGORY) == -1`
+// 判类别是否存在，读不到就把每个类别都判成「未定義のカテゴリ」。
+static void constArrayIntrospection() {
+    VariableStorage storage;
+    ProcessState state;
+    EraParseTable table(&state);
+    ExecutionEngine engine(&storage, nullptr);
+    ExpressionEvaluator evaluator;
+    engine.setParseTable(&table);
+    engine.setExpressionEvaluator(&evaluator);
+    table.setExpressionEvaluator(&evaluator);
+    table.setVariableStorage(&storage);
+    ScriptRunner runner(&table, &engine, &state, &storage);
+    runner.setExpressionEvaluator(&evaluator);
+    runner.setStepLimit(1000);
+    // 文件级（= 广域）常数数组：`CATS:0..2 = a,b,c`
+    {
+        QList<LogicalLine> globals;
+        globals.append(AstBuilder::build("#DIMS CONST CATS = \"a\", \"b\", \"c\"",
+            ScriptPosition("g.ERH", 0, 0),
+            [&table](const QString& text) { return table.expressionAst(text); }));
+        table.loadScript("g", globals, /*isHeaderFile=*/true);   // .ERH 文件级 = 广域
+    }
+    const QStringList source = {"@MAIN",
+        // VARSIZE=3、FINDELEMENT(CATS,\"b\")=1 -> 301；未修复时是 0*100 + (-1) = -1
+        "CHECK = VARSIZE(\"CATS\") * 100 + FINDELEMENT(CATS, \"b\")",
+        "RETURN"};
+    QList<LogicalLine> lines;
+    for (int i = 0; i < source.size(); ++i)
+        lines.append(AstBuilder::build(source[i], ScriptPosition("cf.ERB", i, 0),
+            [&table](const QString& text) { return table.expressionAst(text); }));
+    table.loadScript("cf", lines);
+    table.markLoadComplete();
+    table.setEntryPoint("MAIN");
+    runner.runToCompletion();
+    const qint64 actual = storage.getGlobalInt1D("CHECK", 0);
+    if (actual != 301) {
+        qCritical() << "常数数组的 VARSIZE/FINDELEMENT" << "actual" << actual << "expected" << 301;
+        ++failures;
+    } else qInfo() << "PASS 常数数组的 VARSIZE/FINDELEMENT（元素在常数表里）";
+}
+
 // 广域常量（.ERH 文件级）与**同名私有变量**的遮蔽。
 // eraTW 就是这种组合：`CASINO_SLOT_HELP.ERB:17` 的 `#DIM CONST 色_RED7 = 0xFF00FF`
 // 与 `:832` 的 `#DIM 色_RED7`（可写）—— 后者必须遮蔽前者，否则 `SETCOLOR 色_RED7`
@@ -270,6 +315,7 @@ int main(int argc, char** argv) {
     chkDataCallForm();
     htmlFlow();
     tryListLoadTime();
+    constArrayIntrospection();
     globalConstShadowedByPrivate();
     // 私有 `#DIM CONST` 只属于声明它的函数：别处的同名私有变量必须仍然读到自己的值。
     // 此前常数表是扁平的 name→value 表、运行期求值按名字命中，`SHADOW` 会读成 51。
@@ -450,6 +496,51 @@ int main(int argc, char** argv) {
         "#FUNCTIONS",
         "CHECK = STRLENS(ARGS)",
         "RETURNF ARGS"}, 7);
+    // 逗号形式 CALL 的前导省略实参：`CALL F, , 7` 是「第 1 实参省略、第 2 实参 = 7」，
+    // 不能把首个逗号之后的空位吃掉导致实参整体左移（对齐 C# ReduceArguments 的 null 占位）。
+    run("CALL 逗号形式 前导省略实参不左移", {
+        "CALL F, , 7",
+        "CHECK = RESULT",
+        "RETURN",
+        "@F(A, B)", "#DIM A", "#DIM B", "A = 100", "RETURN B"}, 7);
+    run("CALL 逗号形式 两个前导省略实参", {
+        "CALL F, , , 7",
+        "CHECK = RESULT",
+        "RETURN",
+        "@F(A, B, C)", "#DIM A", "#DIM B", "#DIM C", "A = 1", "B = 2", "RETURN C"}, 7);
+    // VARI / VARS：EM（emuera.net）的**语句位置私有变量声明**
+    //（FL3.8 的 setting.json 把 UseScopedVariableInstruction 设为 true）。
+    // 声明走 #DIM/#DIMS 同一条登记路径，初值在运行期写到元素 0。
+    run("VARS 声明并写初值（标量）", {
+        "VARS TITLE = \"hello\"",
+        "CHECK = STRLENS(TITLE)",
+        "RETURN"}, 5);
+    run("VARI 声明并写初值（标量）", {
+        "VARI COUNT = 7",
+        "CHECK = COUNT",
+        "RETURN"}, 7);
+    run("VARI 无初值 -> 0，声明本身生效", {
+        "VARI X",
+        "CHECK = X + 1",
+        "RETURN"}, 1);
+    run("VARI 数组形式（不赋初值）", {
+        "VARI BUF, 3",
+        "BUF:1 = 9",
+        "CHECK = BUF:1 * 10 + BUF:0 + BUF:2",
+        "RETURN"}, 90);
+    run("VARS 在别的函数内声明（CALL 进入后声明生效）", {
+        "CALL F",
+        "CHECK = RESULT",
+        "RETURN",
+        "@F", "VARS T = \"xyz\"", "RETURN STRLENS(T)"}, 3);
+    // `=` 的字符串赋值取**原始文本**（引号算在内），而 VARS 的初值取引号**之间**
+    // 的内容 —— 两者不同，正是 C# VARS_Instruction 的语义（不走 FORM 解析）。
+    run("VARS 初值去引号，而 = 保留原始文本", {
+        "VARS A = \"abc\"",
+        "VARS B",
+        "B = \"abc\"",
+        "CHECK = STRLENS(A) * 10 + STRLENS(B)",
+        "RETURN"}, 35);
     run("CASE mixed forms", {"SELECTCASE 5", "CASE 1, 4 TO 6, IS > 10", "CHECK = 1", "CASEELSE", "CHECK = 999", "ENDSELECT"}, 1);
     run("CASE reversed range", {"SELECTCASE 5", "CASE 6 TO 4", "CHECK = 999", "CASEELSE", "CHECK = 1", "ENDSELECT"}, 1);
     run("CASE string relation", {"SELECTCASE \"abc\"", "CASE IS > \"zzz\"", "CHECK = 999", "CASE IS < \"def\"", "CHECK = 1", "ENDSELECT"}, 1);

@@ -553,9 +553,13 @@ void registerEeExtensions(ExtensionRegistry& ext)
         // CALLSHARP / DT_COLUMN_OPTIONS：**已在 fork_extension.cpp 真实现**
         // （原生插件 ABI + `DEFAULT =` 解析），不再在此登记桩 —— 避免
         // first-wins 抢註（注册类后者会被拒绝）。
-        // 作用域变量声明（EM+EE：VARI/VARS 声明函数私有变量）。C# 里由配置
-        // 「VAR系命令を利用可能にする」门控，**默认关闭**（默认写 VARI 在解析期
-        // 就报错）。本移植暂无该配置项，按「不可用」处理成静默跳过桩。
+        // 作用域变量声明（EM/emuera.net：VARI/VARS 在当前函数里声明私有变量）。
+        // 语义见 test/data/commands/VARI.md / VARS.md；C# 由 setting.json 的
+        // UseScopedVariableInstruction 门控（默认关闭，FL3.8 显式开启）。
+        // **真正的实现在别处**：声明走 EraParseTable::registerScopedVariableLine
+        //（与 #DIM/#DIMS 同一条登记路径），初值走 ExecutionEngine 的 VARI/VARS
+        // 分支（在 runStatement 之前命中，故这里只用于「名字算已知指令」，
+        // 桩的「留痕一次」不会被触发）。
         QStringLiteral("VARI"),
         QStringLiteral("VARS"),
         // 图形族里尚未实现的部分（G 系画笔/字体/虚线与 G 绘图；见 test/data/commands/

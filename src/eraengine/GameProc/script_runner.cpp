@@ -2026,11 +2026,6 @@ ExecState ScriptRunner::doCallLine(const LogicalLine& line, bool isForm, bool is
              << "src" << line.position.toString()
              << "script" << m_table->currentScript();
 
-    if (label.isEmpty()) {
-        m_state->setErrorState();
-        emit errorOccurred(QStringLiteral("CALL label not found: (空)"));
-        return ExecState::Error;
-    }
     // TRY 系：目标不存在就静默跳过（对齐 C# isTry）。
     // 注意用 hasLabel（能命中任意 @/$ 标签）而不是 userFunction，
     // 因为 eraTW 里存在「无 #FUNCTION 的 @label」也照常 CALL。
@@ -2050,6 +2045,20 @@ ExecState ScriptRunner::doCallLine(const LogicalLine& line, bool isForm, bool is
         }
         return ExecState::Continue;
     };
+    if (label.isEmpty()) {
+        // 空目标名也要按 **TRY 语义**处理：C# CALL_Instruction.DoInstruction 走的是
+        //   `call = CalledFunction.CallFunction(…, labelName, …); if (call == null)
+        //    { if (!isTry) throw …; return; }`
+        // —— 空名字在 LabelDictionary 里同样查不到标签，`isTry` 就**静默跳过**。
+        // 此前这里不分 TRY/CALL 一律报「CALL label not found: (空)」并停机，
+        // 于是 FL3.8 开局时 `TRYCALLFORM %KOJO:I%`（KOJO:I 未填）直接中断整个
+        // 系统初始化（_FUNCTION_KOJO_DAILY.ERB:149，KOJO 是 ENUMFUNCBEGINSWITH
+        // + ARRAYCOPY 填出来的名单，尾部空位是正常现象）。
+        if (isTry) return tryFail();
+        m_state->setErrorState();
+        emit errorOccurred(QStringLiteral("CALL label not found: (空)"));
+        return ExecState::Error;
+    }
     if (isTry && !m_table->hasLabel(label)) {
         return tryFail();
     }

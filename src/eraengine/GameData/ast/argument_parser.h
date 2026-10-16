@@ -165,7 +165,11 @@ inline constexpr auto kInstructionSpecs = std::to_array<InstructionSpec>({
     {"DATA",         ArgKind::FormStr,       0,  1},   // STR_NULLABLE（按 FORM 语义）
     {"THROW",        ArgKind::FormStr,       0,  1},   // FORM_STR_NULLABLE（THROW <格式化串>）
     {"SETBGCOLOR",   ArgKind::Color,         1,  3},
-    {"SETCOLORBYNAME", ArgKind::Color,       1,  1},
+    // C# 是 argb[FunctionArgType.STR]（STR_ArgumentBuilder：整段是**字面色名**，
+    // 裸标识符不做变量解析）。引擎此前按 Color（表达式）分类，于是
+    // `SETCOLORBYNAME Red` 的 Red 被当作变量 —— eraMegaten 因此有 39 条
+    // 「Red/Blue 在本函数中未定义」的假阳性。运行期本就只读 args[0].raw。
+    {"SETCOLORBYNAME", ArgKind::Raw,         1,  1},
     {"GETINT",       ArgKind::GetInt,        1,  1},
     {"REF",          ArgKind::VarStr,        1,  1},
     {"REFBYNAME",    ArgKind::VarStr,        1,  1},
@@ -224,8 +228,9 @@ inline constexpr auto kInstructionSpecs = std::to_array<InstructionSpec>({
     {"FORCEWAIT",    ArgKind::Void,          0,  0},
     {"DRAWLINEFORM", ArgKind::FormStr,      1,  1},
     {"REUSELASTLINE", ArgKind::FormStr,     0,  1},    // FORM_STR_NULLABLE：可省略
-    // C# STR：eraTW 可能写裸名字，同 CALLEVENT 用 Expressions 只校验个数
-    {"SETBGCOLORBYNAME", ArgKind::Expressions, 1, 1},
+    // C# 同为 argb[FunctionArgType.STR]（STR_ArgumentBuilder）—— 字面色名，
+    // 见上面的 SETCOLORBYNAME。
+    {"SETBGCOLORBYNAME", ArgKind::Raw, 1, 1},
     {"SKIPDISP",     ArgKind::IntExpression, 1,  1},
     // 存档/训练辅助
     {"DELDATA",      ArgKind::IntExpression, 1,  1},

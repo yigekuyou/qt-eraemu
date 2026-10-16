@@ -338,7 +338,19 @@ int main(int argc, char* argv[]) {
                             "@SKIPPER\n"        // 11
                             "GOTO DONE\n"       // 12 $标签不是变量 -> 不报
                             "$DONE\n"           // 13
-                            "RETURN\n")},       // 14
+                            "RETURN\n"          // 14
+                            // 15-：原始文本实参的语句（ArgKind::Raw）里裸标识符是
+                            // **字面字符串**（C# STR_ArgumentBuilder），不做变量解析
+                            // —— 即使同名私有声明存在也不该报（eraMegaten 的
+                            // `ALIGNMENT LEFT`/`SETCOLORBYNAME Red` 共 362 处）。
+                            "@PIC\n"            // 15
+                            "#DIMS LEFT\n"      // 16 让 LEFT/Red 成为「别的函数的私有名」
+                            "#DIMS Red\n"       // 17
+                            "RETURN\n"          // 18
+                            "@DRAWER\n"         // 19
+                            "ALIGNMENT LEFT\n"  // 20 关键字，不是变量 -> 不报
+                            "SETCOLORBYNAME Red\n"  // 21 颜色名 -> 不报
+                            "RETURN\n")},       // 22
         });
         const auto hits = withCode(d, DiagCode::kIdentifierScope);
         check(hits.size() == 1,

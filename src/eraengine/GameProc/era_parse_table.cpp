@@ -462,6 +462,9 @@ bool EraParseTable::loadScript(const QString& scriptName, const QList<LogicalLin
                                   QCoreApplication::translate("ParseDiagnostics", "函数声明之外使用了 # 行 (%1)")
                                       .arg(line.raw.trimmed()));
             }
+        } else if (line.kind == LineKind::Instruction && isScopedVariableLine(line.raw)) {
+            // VARI / VARS：语句位置的私有变量声明（是否已登记由预扫描决定）。
+            applyScopedVariableLine(line, currentFunction);
         }
         if (line.kind == LineKind::FunctionLabel) {
             line.ownerFunction = currentFunction;   // 函数标签行自身
@@ -1331,6 +1334,147 @@ void EraParseTable::parseVariableDeclarationText(const QString& rawLine, const S
 void EraParseTable::parseVariableDeclaration(const LogicalLine& line, const QString& currentFunction,
                                             bool isHeaderFile) {
     parseVariableDeclarationText(line.raw, line.position, currentFunction, isHeaderFile);
+}
+
+// ---------------------------------------------------------------------------
+// VARI / VARS（emuera.em 的**作用域变量声明**）--------------------------------
+//
+//   `VARI NAME`                  → 整数标量私有变量（初值 0）
+//   `VARI NAME = <整数表达式>`     → 声明 + 初值
+//   `VARI NAME, l1{, l2{, l3}}`  → 1/2/3 维整数数组（**不写初值**）
+//   `VARS ...`                   → 同上的字符串版（初值须用双引号包围）
+//
+// 语义与「函数内就地写一条 #DIM/#DIMS」等价，区别只在：名字/类型写在语句
+// 位置、初值在**运行期**写到元素 0（且仅当长度恰为 1）。是 emuera.net 系
+// 的私有扩展，受 setting.json 的 UseScopedVariableInstruction 门控
+//（默认关闭；FL3.8 的 setting.json 显式开了）。依据见
+// test/data/commands/VARI.md / VARS.md（emuera.em 源码逐行推定）。
+//
+// 本移植此前把 VARI/VARS 登记为**静默跳过桩**：声明被丢掉 → 同函数的
+// `TEXT = "…"` 被当成「未声明变量」（全局槽），并且收尾的作用域检查会把
+// 每一处使用报成「变量 TEXT 在本函数中未定义」（FL3.8 有 2469 处噪声）。
+// 这里补上「登记私有变量」这一步；运行期初值见 ExecutionEngine。
+// ---------------------------------------------------------------------------
+namespace {
+struct ScopedVarSpec {
+    bool ok = false;
+    bool isStr = false;
+    QString name;
+    QStringList lengths;   // 维度字面量（空 = 标量 / 一维长度 1）
+    bool hasInit = false;
+    QString init;          // VARI: 整数表达式原文；VARS: 首尾引号之间的文本
+};
+
+// 变量名：与 #DIM 同一判据 —— 不以数字开头、除 '_' 外不含符号（CJK 亦可用）。
+bool isVariableName(const QString& name) {
+    if (name.isEmpty() || name.at(0).isDigit()) return false;
+    for (const QChar c : name) {
+        if (!(c.isLetterOrNumber() || c == QLatin1Char('_'))) return false;
+    }
+    return true;
+}
+
+ScopedVarSpec parseScopedVarSpec(const QString& rawLine) {
+    ScopedVarSpec spec;
+    const QString text = stripDirectiveComment(rawLine).trimmed();
+    int i = 0;
+    while (i < text.size() && !text.at(i).isSpace()) ++i;
+    const QString head = text.left(i).toUpper();
+    if (head == QLatin1String("VARI")) spec.isStr = false;
+    else if (head == QLatin1String("VARS")) spec.isStr = true;
+    else return spec;
+
+    const QString rest = text.mid(i).trimmed();
+    if (rest.isEmpty()) return spec;
+
+    // C# 用第一个 '=' 切成 左（名字+长度）/ 右（初值）；引号不参与切分
+    //（字符串初值里的 '=' 必然落在最后一个引号之前，故与 C# 同结果）。
+    QString left = rest;
+    QString right;
+    const int eq = rest.indexOf(QLatin1Char('='));
+    if (eq >= 0) { left = rest.left(eq); right = rest.mid(eq + 1); }
+
+    const QStringList parts = left.split(QLatin1Char(','));
+    if (parts.isEmpty()) return spec;
+    const QString name = parts.first().trimmed();
+    if (!isVariableName(name)) return spec;
+    spec.name = name;
+
+    for (int k = 1; k < parts.size(); ++k) {
+        const QString dim = parts.at(k).trimmed();
+        bool isNumber = false;
+        dim.toLongLong(&isNumber);   // 维度必须是整数字面量（C# int.Parse）
+        // 解析失败时 C# 抛未受控的 FormatException（装载中止）。这里不登记
+        // 该行（变量按未声明处理）—— 不静默造出一个维度错误的变量。
+        if (!isNumber) return ScopedVarSpec();
+        spec.lengths.append(dim);
+    }
+
+    // 只有「不带长度列表」时才解析初值（C#：leftSplit.Length > 1 走数组分支，
+    // 该分支里 `= …` 被忽略）。
+    if (parts.size() == 1 && !right.trimmed().isEmpty()) {
+        if (spec.isStr) {
+            const int a = right.indexOf(QLatin1Char('"'));
+            const int b = right.lastIndexOf(QLatin1Char('"'));
+            if (a >= 0 && b > a) { spec.init = right.mid(a + 1, b - a - 1); spec.hasInit = true; }
+        } else {
+            spec.init = right.trimmed();
+            spec.hasInit = true;
+        }
+    }
+    spec.ok = true;
+    return spec;
+}
+} // namespace
+
+bool EraParseTable::isScopedVariableLine(const QString& rawLine) {
+    return parseScopedVarSpec(rawLine).ok;
+}
+
+void EraParseTable::registerScopedVariableLine(const QString& rawLine, const ScriptPosition& position,
+                                               const QString& function) {
+    const ScopedVarSpec spec = parseScopedVarSpec(rawLine);
+    if (!spec.ok) return;
+    if (function.isEmpty()) {
+        // C# 把 VARI/VARS 绑到「当前函数标签」（ParentLabelLine）；函数外没有
+        // 可绑的标签。这里按「不登记」处理并留一条告警，避免造出一个假的广域变量。
+        m_diagnostics.add(DiagSeverity::Warning, DiagCode::kSharpLine, position.filename,
+                          position.lineNumber, position.column, 0,
+                          QCoreApplication::translate("ParseDiagnostics",
+                              "%1 只能用在函数内（函数声明之外的声明会被忽略）")
+                              .arg(spec.isStr ? QStringLiteral("VARS") : QStringLiteral("VARI")));
+        return;
+    }
+    // 复用 #DIM/#DIMS 的登记路径：类型/维度/作用域判定完全同源。
+    QString declText = (spec.isStr ? QStringLiteral("#DIMS ") : QStringLiteral("#DIM ")) + spec.name;
+    for (const QString& l : spec.lengths) declText += QStringLiteral(", ") + l;
+    parseVariableDeclarationText(declText, position, function, /*isHeaderFile=*/false);
+}
+
+void EraParseTable::applyScopedVariableLine(LogicalLine& line, const QString& function) {
+    const ScopedVarSpec spec = parseScopedVarSpec(line.raw);
+    if (!spec.ok) return;
+    if (!m_declarationsPreRegistered)
+        registerScopedVariableLine(line.raw, line.position, function);
+    if (function.isEmpty()) { line.arguments.clear(); return; }
+
+    // 运行期交接用两个操作数：
+    //   [0] 目标变量（AST = VariableNode，供既有赋值路径复用）
+    //   [1] 初值（若有；VARS 是字面量字符串 —— 按 C# 不走 FORM 解析）
+    // 无初值时只留 [0]，ExecutionEngine 什么都不写（对齐 C# 的「空 else」）。
+    Operand target(spec.name);
+    target.ast = expressionAstInScope(spec.name, function, /*quiet=*/true);
+    line.arguments = { target };
+    if (spec.hasInit) {
+        Operand init(spec.init);
+        if (spec.isStr) {
+            init.ast = QSharedPointer<LiteralNode>::create(spec.init);
+        } else {
+            init.ast = expressionAstInScope(spec.init, function, /*quiet=*/true);
+            if (!init.ast) return;   // 初值无法解析：声明仍在，只是这次不写初值
+        }
+        line.arguments.append(init);
+    }
 }
 
 void EraParseTable::applyVariableTypes() {
@@ -2213,6 +2357,11 @@ void EraParseTable::resolveGlobalDeclarations() {
             const QString scope = executionScope();
             return vt->constArraySize(name, scope) > 0 || vt->constStrArraySize(name, scope) > 0;
         });
+        m_evaluator->setConstArraySizeProvider([this, vt](const QString& name) -> int {
+            const QString scope = executionScope();
+            const int n = vt->constArraySize(name, scope);
+            return n > 0 ? n : vt->constStrArraySize(name, scope);
+        });
         m_evaluator->setConstArrayProvider([this, vt, evalLazyConst](const QString& name, int index,
                                                                      QVariant& out) -> bool {
             const QString scope = executionScope();
@@ -2316,6 +2465,19 @@ void EraParseTable::finalizeValidation() {
                 || argKind == ArgKind::SortChara || argKind == ArgKind::ForNext;
             // 本行已经报过「跨函数引用私有变量」的名字（同一行会对共享 AST 走两遍）
             QSet<QString> reportedScopeNames;
+            // 原始文本实参的语句（`ArgKind::Raw`：ALIGNMENT / SETCOLORBYNAME /
+            // PRINTL / GOTO 标签 / NEXT …）在 C# 走 `STR_ArgumentBuilder`：
+            // 实参整体是**字面字符串**（`st.Substring()` → `SingleTerm(rowStr)`），
+            // 裸标识符不会被解析成变量 —— `ALIGNMENT LEFT` 的 LEFT 是关键字，
+            // `SETCOLORBYNAME Red` 的 Red 是颜色名。构建期出于「未知裸标识符 =
+            // 字符串」的宽容语义仍会把它折成 VariableNode，但那是**装饰**：
+            // 运行期读的是 `operand.raw`（见 ExecutionEngine 的 ALIGNMENT 分支）。
+            // 因此这类语句不能作为「跨函数引用私有变量」的判据 ——
+            // 否则 eraMegaten 会多出 323 条假阳性（LEFT/RIGHT/Red/Blue 恰好在
+            // PICTURE.ERB 里各有一条私有的 #DIMS 同名声明）。
+            // 赋值语句（`=` 族）也登记成 Raw，但左右值是真表达式：那两条路径
+            // 单独调用 validate（左值 / assignmentAsts），不受此开关影响。
+            const bool rawTextArgs = argKind == ArgKind::Raw && line.assignOperator.isEmpty();
             const auto validate = [&](const QSharedPointer<ExpressionNode>& ast,
                                       bool requireIndices = true) {
                 if (!ast) return;
@@ -2334,7 +2496,7 @@ void EraParseTable::finalizeValidation() {
                 // `@スロット配列_一覧`（CASINO_SLOT_HELP.ERB:732）读别的函数的
                 // `#DIM CONST RD7` 就是这一类。
                 bool scopeError = false;
-                if (error.isEmpty()) {
+                if (error.isEmpty() && !rawTextArgs) {
                     walkExpression(*ast, [&](ExpressionNode& n) {
                         if (!error.isEmpty() || scopeError || n.kind() != NodeKind::Variable) return;
                         const auto& var = static_cast<const VariableNode&>(n);

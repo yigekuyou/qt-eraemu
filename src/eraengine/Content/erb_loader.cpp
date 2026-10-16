@@ -413,6 +413,15 @@ void ErbLoader::preRegisterDeclarations(const QStringList& files,
                                                      currentFunction, isHeader);
                 continue;
             }
+            // VARI / VARS（EM/emuera.net 的作用域变量声明）：**语句**位置的私有
+            // 变量声明，必须在 AST 构造前登记，否则同函数内随后的
+            // `COLUMN:0 = "x"` 会按 Int 定型（FL3.8 有 907 处）。
+            if (EraParseTable::isScopedVariableLine(t)) {
+                m_parseTable->registerScopedVariableLine(sl.text, ScriptPosition(f, sl.physicalLine, 1),
+                                                         currentFunction);
+                afterLabel = false;
+                continue;
+            }
             afterLabel = false;   // 普通指令行：声明区结束
         }
         ++processed;

@@ -185,8 +185,13 @@ public:
     //   * provider：命中后再按下标取值。
     using ConstArrayProvider = std::function<bool(const QString&, int, QVariant&)>;
     using ConstArrayChecker  = std::function<bool(const QString&)>;
+    // 常数数组的长度（`#DIM(S) CONST X, N = …` -> N）。VARSIZE / FINDELEMENT 等
+    // 「按数组名取长度/遍历」的内建函数必须走这里：常量的元素存在**常数表**里，
+    // 不在 VariableStorage，只按存储长度取会得到 0。
+    using ConstArraySizeProvider = std::function<int(const QString&)>;
     void setConstArrayProvider(ConstArrayProvider p) { m_constArrayProvider = std::move(p); }
     void setConstArrayChecker(ConstArrayChecker c) { m_constArrayChecker = std::move(c); }
+    void setConstArraySizeProvider(ConstArraySizeProvider p) { m_constArraySizeProvider = std::move(p); }
 
     // 变量声明维度（1/2/3）：由 EraParseTable 的 VariableTable 注入
     using VariableDimProvider = std::function<int(const QString&)>;
@@ -303,6 +308,7 @@ private:
     VariableDimProvider m_variableDimProvider;
     ConstArrayProvider  m_constArrayProvider;
     ConstArrayChecker   m_constArrayChecker;
+    ConstArraySizeProvider m_constArraySizeProvider;
     const ConstantTable* m_constantTable = nullptr;
     TextEncoding m_langEncoding = TextEncoding::ShiftJis;
     ConstProvider m_constProvider;   // #DIM CONST

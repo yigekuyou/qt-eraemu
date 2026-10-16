@@ -1542,6 +1542,24 @@ bool ExecutionEngine::executeInstruction(const LogicalLine& line) {
         return handleStatusCommand(line);
     }
 
+    // ---- VARI / VARS：作用域变量声明（EM/emuera.net 系）----
+    // 声明本身（类型 + 维度 + 归属函数）在装载期完成（EraParseTable::
+    // registerScopedVariableLine → 与 #DIM/#DIMS 同一条登记路径），所以
+    // 这里只剩「初值」这一件运行期动作：对齐 C# VARI_/VARS_Instruction ——
+    // ScopeIn 重建数组之后，**只有长度恰为 1 的变量**才把初值写进元素 0
+    //（数组声明不赋初值，与 VARSET 不同）。
+    // 操作数由 EraParseTable::applyScopedVariableLine 接好：
+    //   [0] = VariableNode（目标变量）；无 [1] 表示「无初值」。
+    if (name == QLatin1String("VARI") || name == QLatin1String("VARS")) {
+        if (args.size() < 2 || !args.at(1).ast) return true;
+        const ExpressionNode* target = args.at(0).ast.data();
+        if (!target || target->kind() != NodeKind::Variable) return true;
+        if (name == QLatin1String("VARS")) {
+            return handleStringAssignment(target, args.at(1).raw, args.at(1).ast, line.ownerFunction);
+        }
+        return handleAssignment(target, args.at(1).raw, args.at(1).ast, {}, line.ownerFunction);
+    }
+
     // ---- 扩展注册类（普通语句形态：扩展语句在这里分发）----
     // 语句形态的扩展函数（如 CHKVARDATA）不经过 executeFunctionCall ——
     // 在「其它指令」之前查注册类，命中即执行（桩 = 留痕一次 + 跳过，

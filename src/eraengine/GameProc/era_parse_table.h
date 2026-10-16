@@ -182,6 +182,22 @@ public:
     [[nodiscard]] QSharedPointer<ExpressionNode> expressionAstInScope(const QString& expr,
                                                                       const QString& scope,
                                                                       bool quiet = false);
+    // ---- 运行期「文本 -> 变量引用」（GETVAR / GETVARS / SETVAR 的实现基础）----
+    // 对齐 C# GetVarMethod 的 `LexicalAnalyzer.Analyse` + `ReduceExpressionTerm`：
+    // 变量名是运行期拼出来的字符串，只能在运行期解析。与上面装载期解析的差别：
+    //   ① **允许在收尾（markLoadComplete）之后调用** —— 变量表/常数表/名表都还在，
+    //      「不再编译新源码」这条装载期约束不该挡住运行期的一次性解析；
+    //   ② **不做 `#DIM CONST` 常量折叠** —— C# 拿到的 VariableTerm 对常量也成立，
+    //      GETVAR 必须能识别出「这是常量」并按常数表取值（否则 `GETVAR("衣装部位_頭")`
+    //      会拿到一个字面量、被当成「不是变量」）；
+    //   ③ 静默（运行期解析失败不该再产生装载期诊断）。
+    // 作用域 = 当前执行行所属的函数（私有变量可见，与 C# allowPrivate 同义）。
+    [[nodiscard]] QSharedPointer<ExpressionNode> runtimeVariableReference(const QString& text);
+    // EXISTVAR 的变量存在性/属性查询（对齐 C# ExistVarMethod ->
+    // IdentifierDictionary.GetVariableToken(name, null, allowPrivate=true)）：
+    // 位掩码 1=整型 2=字符串 4=常量 8=二维 16=三维；0 = 不存在。
+    [[nodiscard]] int variableFlags(const QString& name) const;
+
     [[nodiscard]] const LogicalLine* lineAt(const QString& scriptName, int line) const;
     [[nodiscard]] int jumpTarget(const QString& scriptName, int line) const;
 
@@ -335,6 +351,15 @@ public slots:
 
 private:
     void buildJumpMarkings(const QString& scriptName);
+
+    // expressionAstInScope / runtimeVariableReference 的共用实现。
+    //   foldConstants      = false -> 不把 `#DIM CONST NAME` 折叠成字面量
+    //   allowAfterFinalize = true  -> 收尾之后仍允许（运行期一次性解析）
+    [[nodiscard]] QSharedPointer<ExpressionNode> parseScopedExpression(const QString& expr,
+                                                                      const QString& scope,
+                                                                      bool quiet,
+                                                                      bool foldConstants,
+                                                                      bool allowAfterFinalize);
 
     // 变量声明解析（#DIM/#DIMS/#GLOBAL/#GLOBALS/#PRIVATE）与类型回填
     void parseVariableDeclaration(const LogicalLine& line, const QString& currentFunction,

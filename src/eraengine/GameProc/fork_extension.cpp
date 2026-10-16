@@ -45,6 +45,7 @@
 
 namespace forkxml { void registerXmlExtensions(ExtensionRegistry& ext); }
 namespace forkdt  { void registerDataTableExtensions(ExtensionRegistry& ext); }
+namespace forkem  { void registerEmExtensions(ExtensionRegistry& ext); }
 
 // ===========================================================================
 // 共享工具（fork_support.h 的实现）
@@ -442,6 +443,10 @@ void registerForkExtensions(ExtensionRegistry& ext)
     // ---------------- CALLSHARP：**保持桩**（原因见文件中部注释） ----------------
     // 只登记名字 -> 「留痕一次 + 跳过」（装载/运行期不报未知命令，运行期静默跳过）。
     ext.reg(QStringLiteral("CALLSHARP"));
+
+    // ---------------- EM 私family「追加関数」：EXISTFILE / ISDEFINED /
+    //                REGEXPMATCH / HTML_STRINGLEN / HTML_SUBSTRING / HTML_STRINGLINES
+    forkem::registerEmExtensions(ext);
 
     // ---------------- 转交：XML_* / DT_* ----------------
     forkxml::registerXmlExtensions(ext);

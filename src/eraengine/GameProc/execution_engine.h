@@ -188,6 +188,11 @@ public:
     // 分发时查表）。
     [[nodiscard]] ExtensionRegistry& extensions() { return m_extensions; }
 
+    // 运行期语义错误（扩展实现抛出的 CodeEE 等价物）：置错误状态 + 报错。
+    // 与 ASSERT 同一口径（C# 里这类错误中断脚本）。扩展经
+    // ExtensionRegistry::setRuntimeErrorReporter 间接调用（公开供引擎接线）。
+    void reportRuntimeError(const QString& message);
+
 private:
     // 扩展注册类实例（构造时由注册类装入 EE 扩展 + SPLIT 实现；分发时查表）
     ExtensionRegistry m_extensions;

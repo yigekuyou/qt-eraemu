@@ -150,6 +150,25 @@ public:
         std::function<QStringList()> enumVariableNames;  // 系统变量 + 广域用户变量名
         std::function<QStringList()> enumMacroNames;     // #DEFINE 宏名
         std::function<QString()>     exeDir;             // 相对路径基准（= 游戏目录）
+        // EM 私家版 HTML 系（HTML_STRINGLEN/HTML_SUBSTRING/HTML_STRINGLINES）：
+        // C# 的 HtmlManager 以**像素**度量（`HtmlLength` -> 「半角字符宽」换算
+        // 要乘 `Config.FontSize / 2`），本移植按同一个模型量字符宽，故需要字号。
+        std::function<int()>         fontSize;           // Config.FontSize（默认 14）
+
+        // ---- EM 私family「变量名字符串化」（GETVAR/GETVARS/SETVAR/EXISTVAR）----
+        // 变量名是**运行期**拼出来的字符串（`@"EX:CHARA_ID:%KEYS:1%"`），C# 在三行里
+        // 重新词法分析 + 归约成单个变量项（Creator.Method.cs:265/294/503/322）。
+        // 解析所需的变量表/常数表/名表与「当前执行函数作用域」都在解析层，
+        // 所以解析与存在性判定由**解析表**提供，写入由**求值器**提供：
+        //   parseVariableReference：名字文本 -> 变量 AST（收尾之后也可用、
+        //                           不折叠 `#DIM CONST`、静默）；不是变量时返回空。
+        //   variableFlags         ：EXISTVAR 的位掩码（1 整/2 字/4 常量/8 二维/16 三维）
+        //   assignVariable        ：SETVAR 的写回（整/字符串都走这条）
+        //   evaluateNode          ：GETVAR/GETVARS 的读取（已有服务）
+        std::function<QSharedPointer<ExpressionNode>(const QString&)> parseVariableReference;
+        std::function<int(const QString&)> variableFlags;
+        std::function<bool(const ExpressionNode&, const QVariant&)> assignVariable;
+        std::function<void(const QString&)> runtimeError;   // 运行期语义错误上报
     };
     void setServices(Services s) { m_services = std::move(s); }
     // 引擎在运行期补挂「式中函数」服务（构造期 storage 已知，但这些 provider
@@ -172,6 +191,29 @@ public:
         m_services.enumVariableNames = std::move(enumVariableNames);
         m_services.enumMacroNames = std::move(enumMacroNames);
         m_services.exeDir = std::move(exeDir);
+    }
+    // 字号（Config.FontSize）：HTML_STRINGLEN 的像素形态与 HtmlManager 的
+    // 「半角字符宽 -> 像素」换算用。
+    void setFontSizeProvider(std::function<int()> fontSize) {
+        m_services.fontSize = std::move(fontSize);
+    }
+
+    // EM 私family「变量名字符串化」（GETVAR/GETVARS/SETVAR/EXISTVAR）所需的三项
+    // 服务（见 Services 的说明）。引擎装配后注入。
+    void setVariableNameServices(
+        std::function<QSharedPointer<ExpressionNode>(const QString&)> parseVariableReference,
+        std::function<int(const QString&)> variableFlags,
+        std::function<bool(const ExpressionNode&, const QVariant&)> assignVariable) {
+        m_services.parseVariableReference = std::move(parseVariableReference);
+        m_services.variableFlags = std::move(variableFlags);
+        m_services.assignVariable = std::move(assignVariable);
+    }
+
+    // 运行期语义错误（扩展实现内部的 CodeEE 等价物）：由引擎接到
+    // 「置错误状态 + 报错」上（与 ASSERT 同口径）。扩展实现抛出的异常在
+    // **语句形态**下没有求值器的 try/catch 兜底，必须经这里落地。
+    void setRuntimeErrorReporter(std::function<void(const QString&)> reporter) {
+        m_services.runtimeError = std::move(reporter);
     }
 
     // 宿主侧（EraEngine）在装配完成后补挂「控制台 / 流程 / GameBase」服务：
@@ -360,8 +402,38 @@ public:
                     throw std::runtime_error("Extension operand has no load-time AST");
                 }
             }
-            QVariant ignored;
-            return it.value()(args, nodes, ignored);
+            QVariant value;
+            bool handled = false;
+            try {
+                handled = it.value()(args, nodes, value);
+            } catch (const std::exception& error) {
+                // 实参/语义错误（如正则非法、目标不是变量）：C# 抛 CodeEE 中断脚本。
+                // 语句形态不经过 ExpressionEvaluator::evaluate 的 try/catch，
+                // 这里必须自己接住 —— 否则异常会穿到 Qt 事件循环。
+                const QString message = QString::fromUtf8(error.what());
+                if (m_services.runtimeError) m_services.runtimeError(message);
+                else qWarning() << "[ext] 语句执行出错:" << upperName << message;
+                return true;
+            }
+            // 对齐 C# METHOD_Instruction.DoInstruction（Instraction.Child.cs:586）：
+            // `if (term.GetOperandType() == typeof(long)) RESULT = term.GetIntValue();
+            //  else RESULTS = term.GetStrValue();`
+            // —— 式中函数**裸写**成语句时，返回值写 RESULT / RESULTS（核心命令那条
+            // 路径 executeFunctionCall 早已这么做，扩展这条此前把返回值丢掉了：
+            // `REGEXPMATCH …` 语句形态的匹配数、`SETVAR …` 的 1 都读不到）。
+            if (handled && m_services.storage) {
+                const BuiltinFunctionSpec* spec = findExtensionFunction(upperName.toStdString());
+                const bool returnsStr = spec ? (spec->ret == OperandType::Str)
+                                             : isStringValue(value);
+                if (returnsStr) {
+                    m_services.storage->setGlobalStr1D(QStringLiteral("RESULTS"), 0,
+                                                       flatString(value).text);
+                } else if (value.isValid()) {
+                    m_services.storage->setSystemVariable(QStringLiteral("RESULT"), 0,
+                                                          value.toLongLong());
+                }
+            }
+            return handled;
         }
         return false;
     }

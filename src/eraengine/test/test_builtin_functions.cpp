@@ -201,6 +201,19 @@ int main(int argc, char* argv[]) {
               "SAVETEXT(\"s\",1700,0,0) -> 通过（4 参合法）");
         check(!validateBuiltinCall(spec("SAVETEXT"), {parse("\"s\"")}).isEmpty(),
               "SAVETEXT(\"s\") -> 参数过少");
+        // EM 私家版_LoadText＆SaveText機能拡張：第 1/第 2 实参是**字符串**时走
+        // **路径形态**（C# 的实参表是 `ArgType.Any` / `ArgType.Any`）——
+        // FL3.8 正是 `LOADTEXT "XML/SKILL_LIFE.xml"` / `SAVETEXT TEXT, @"sav/x.txt"`。
+        // 此前实参表写死 "iii"/"siii"，这 57 处合法调用全被判「需要整型表达式」。
+        check(validateBuiltinCall(spec("LOADTEXT"), {parse("\"XML/x.xml\"")}).isEmpty(),
+              "LOADTEXT(\"XML/x.xml\") -> 通过（路径形态）");
+        check(validateBuiltinCall(spec("LOADTEXT"), {parse("DOCS:0")}).isEmpty(),
+              "LOADTEXT(DOCS:0) -> 通过（字符串变量实参）");
+        check(validateBuiltinCall(spec("SAVETEXT"), {parse("\"s\""), parse("\"sav/a.txt\"")}).isEmpty(),
+              "SAVETEXT(\"s\",\"sav/a.txt\") -> 通过（路径形态）");
+        check(validateBuiltinCall(spec("SAVETEXT"),
+                                  {parse("\"s\""), parse("\"sav/a.txt\""), parse("0")}).isEmpty(),
+              "SAVETEXT(\"s\",\"sav/a.txt\",0) -> 通过（路径形态 + force_savdir）");
 
         // 解析内嵌调用时的校验（"1 + ABS()"）
         auto nested = parse("1 + ABS()");

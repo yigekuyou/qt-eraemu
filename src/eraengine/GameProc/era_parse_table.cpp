@@ -24,6 +24,7 @@
 #include "ast/expression_lexer.h"
 #include "ast/expression_parser.h"
 #include "ast/function_types.h"
+#include "ast/system_variables.h"
 #include "ast/strform_parser.h"
 #include "ast/print_template.h"
 #include "constant_table.h"
@@ -72,11 +73,50 @@ void EraParseTable::setVariableStorage(VariableStorage* storage) {
 
 void EraParseTable::setExpressionEvaluator(ExpressionEvaluator* evaluator) {
     m_evaluator = evaluator;
-    if (evaluator) evaluator->setVariableDimProvider([this](const QString& name) {
+    if (!evaluator) return;
+    evaluator->setVariableDimProvider([this](const QString& name) {
         const auto* line = lineAt(m_currentScript, m_currentLine);
         const auto* decl = m_variables.find(name, line ? line->ownerFunction : QString());
         return decl ? decl->dimension : 1;
     });
+}
+
+// EXISTVAR 的查询：对齐 C# ExistVarMethod ->
+// `IdentifierDictionary.GetVariableToken(name, null, allowPrivate=true)`。
+// 位掩码与 C# 的 5 个判定一一对应：
+//     1 = IsInteger   2 = IsString   4 = IsConst   8 = IsArray2D   16 = IsArray3D
+// 查询顺序也与 C# 相同：
+//   ① allowPrivate 的**当前函数私有变量/常量**（函数外的同名广域声明优先于它，
+//      与 VariableTable::find 的顺序一致：局部 -> 广域）；
+//   ② 系统变量（含 fork 专有扩展变量），类型/维数取自 systemVariables.h 的元数据
+//      （元数据的 dimension 是**元素维数**：CFLAG = 1、CDFLAG = 2）。
+// 名字**带下标**时 C# 查不到（字典键是裸名），这里同样返回 0。
+int EraParseTable::variableFlags(const QString& name) const {
+    if (name.isEmpty()) return 0;
+    // ① 用户变量 / 常量
+    if (const VariableDecl* decl = m_variables.find(name, executionScope())) {
+        int flags = (decl->type == OperandType::Str) ? 2 : 1;
+        if (decl->isConst) flags |= 4;
+        // C# 的 IsArray2D/IsArray3D 看的是 VariableCode 的**元素维数**标志：
+        // 角色变量并不因此升维（CFLAG = `__ARRAY_1D__ | __CHARACTER_DATA__`，
+        // IsArray2D 为 false；CDFLAG 才是 `__ARRAY_2D__`）。声明里的 dimension
+        // 正是元素维数（`#DIMS CHARADATA X, 3` -> 1）。
+        if (decl->dimension == 2) flags |= 8;
+        else if (decl->dimension >= 3) flags |= 16;
+        return flags;
+    }
+    // ② 系统变量（原生 + 扩展）
+    const sysvar::SystemVariableMetadata meta =
+        sysvar::systemVariableMetadata(name.toStdString());
+    if (meta.type == OperandType::Unknown) {
+        const auto* ext = sysvar::findExtensionSystemVariable(name.toStdString());
+        if (ext == nullptr) return 0;
+        return ext->type == OperandType::Str ? 2 : 1;
+    }
+    int flags = (meta.type == OperandType::Str) ? 2 : 1;
+    if (meta.dimension == 2) flags |= 8;
+    else if (meta.dimension >= 3) flags |= 16;
+    return flags;
 }
 
 // ---------------------------------------------------------------------------
@@ -97,7 +137,21 @@ QSharedPointer<ExpressionNode> EraParseTable::expressionAst(const QString& expr,
 QSharedPointer<ExpressionNode> EraParseTable::expressionAstInScope(const QString& expr,
                                                                   const QString& scope,
                                                                   bool quiet) {
-    if (m_finalized) return nullptr; // Source compilation is restricted to loading.
+    return parseScopedExpression(expr, scope, quiet, /*foldConstants=*/true,
+                                 /*allowAfterFinalize=*/false);
+}
+
+QSharedPointer<ExpressionNode> EraParseTable::runtimeVariableReference(const QString& text) {
+    // 见头文件说明：运行期、不折叠常量、静默。
+    return parseScopedExpression(text, executionScope(), /*quiet=*/true,
+                                 /*foldConstants=*/false, /*allowAfterFinalize=*/true);
+}
+
+QSharedPointer<ExpressionNode> EraParseTable::parseScopedExpression(const QString& expr,
+                                                                   const QString& scope,
+                                                                   bool quiet, bool foldConstants,
+                                                                   bool allowAfterFinalize) {
+    if (m_finalized && !allowAfterFinalize) return nullptr; // Source compilation is restricted to loading.
     const QString key = expr.trimmed();
     if (key.isEmpty()) {
         return nullptr;
@@ -123,7 +177,7 @@ QSharedPointer<ExpressionNode> EraParseTable::expressionAstInScope(const QString
 
     // 格式化串：@"..." / \@...#...\@
     parser.setFormProvider([this, scope](const QString& text, bool yenAt) -> QSharedPointer<ExpressionNode> {
-        const AstResolver resolve = [this, scope](const QString& e) { return expressionAstInScope(e, scope); };
+        const AstResolver resolve = [this, scope](const QString& e) { return parseScopedExpression(e, scope, false, true, false); };
         if (yenAt) return StrFormParser::parseYenAt(text, resolve, m_evaluator && m_evaluator->ignoreTripleSymbols());
         return QSharedPointer<ExpressionNode>(StrFormParser::parse(text, resolve, m_evaluator && m_evaluator->ignoreTripleSymbols()));
     });
@@ -141,7 +195,9 @@ QSharedPointer<ExpressionNode> EraParseTable::expressionAstInScope(const QString
     //   * 本作用域的可写私有变量（`#DIM 色_RED7`）遮蔽别处的同名常量 ——
     //     否则会把这个可写变量的**左值**折成字面量（eraTW 的 CASINO 色_* 26 行
     //     就是这么整行报「赋值左值必须为有效变量项」并失效的）。
-    {
+    // 运行期变量名解析（GETVAR 族）走 foldConstants=false：C# 的 ReduceExpressionTerm
+    // 对常量也返回 VariableTerm，GETVAR 要能**识别**常量（见 runtimeVariableReference）。
+    if (foldConstants) {
         const VariableTable* vt = &m_variables;
         parser.setConstantValueProvider([vt, scope](const QString& name) -> QVariant {
             qint64 iv = 0;

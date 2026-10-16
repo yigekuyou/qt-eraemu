@@ -21,6 +21,7 @@
 #include "system_variables.h"
 #include "constant_table.h"
 #include "expression_ast.h"
+#include "text_path.h"
 #include "operator_table.h"
 #include "variable_storage.h"
 #include "variable_config.h"
@@ -29,6 +30,7 @@
 #include "game_base_data.h"
 #include <QDir>
 #include <QDirIterator>
+#include <QFileInfo>
 #include <QSaveFile>
 #include <QThread>
 #include <QFile>
@@ -1357,6 +1359,15 @@ bool ExpressionEvaluator::evaluateBuiltin(const FunctionNode &node, VariableStor
             return stringText(evaluateNode(argument, storage, gameBaseData));
         return argStr(node, i, storage, gameBaseData);
     };
+    // 求值后的字符串实参：与 S() 的唯一差别是 **StrForm 也展开**
+    //（S() 对 StrForm 返回原文，那是 PRINTFORM 那类「格式化串消费者」要的形状）。
+    // 「把字符串当**路径**用」的实参必须用求值后的值：LOADTEXT / SAVETEXT 的
+    // 路径形态在脚本里大量写作 `@"XML/%name%.txt"`、`@"sav/datatable_%X%.txt"`，
+    // 用 S() 会把 `%…%`、`{…}` 原样当文件名（读不到、写到奇怪的路径）。
+    const auto EVALSTR = [&](int i) {
+        if (!hasArg(node, i)) return QString();
+        return stringText(evaluateNode(*node.arguments().at(i), storage, gameBaseData));
+    };
     const auto V = [&]() -> const BuiltinFunctionSpec* { return node.builtinSpec(); };
 
     switch (op) {
@@ -2364,24 +2375,63 @@ bool ExpressionEvaluator::evaluateBuiltin(const FunctionNode &node, VariableStor
 
     // ---------------- 存档 / 文本 ----------------
     case BuiltinOp::SaveText: {
-        // SAVETEXT <文字列式>, <ファイル番号>{, <force_savdir>, <force_UTF8>}
-        // 对齐 C# SaveTextMethod（Creator.Method.cs:4118）：
-        //   整段文本覆写 sav/txt{番号:02}.txt（getSaveDataPathText）
-        const QString path = saveFilePath(QStringLiteral("txt%1.txt")
-                                              .arg(int(I(1)), 2, 10, QLatin1Char('0')));
-        QFile file(path);
+        // SAVETEXT <文字列式>, {<ファイル番号> | <ファイルパス>}{, <force_savdir>, <force_UTF8>}
+        // 对齐 C# SaveTextMethod（Creator.Method.cs:6928）：
+        //   * 第 2 实参**静态类型**是整数 -> 文件号形态：整段文本覆写 sav/txt{番号:02}.txt；
+        //   * 是字符串 -> **路径形态**（EM 私家版_LoadText＆SaveText機能拡張）：
+        //     GetValidPath 解析（拒绝绝对路径）、扩展名不在 ValidExtension 内
+        //     则强制改成 .txt、父目录按需创建。
+        // force_savdir / force_UTF8 与 C# 现行为一致地不生效（C# 里 forceUTF8
+        // 变量算出来却没被使用；force_savdir 需要 Config.ForceSavDir 这一整套
+        // 配置，本移植尚未接线，脚本侧零使用）。
+        const bool pathForm = hasArg(node, 1) && node.arguments().at(1)
+                              && node.arguments().at(1)->valueType() == OperandType::Str;
+        if (!pathForm) {
+            const QString path = saveFilePath(QStringLiteral("txt%1.txt")
+                                                  .arg(int(I(1)), 2, 10, QLatin1Char('0')));
+            QFile file(path);
+            out = QVariant::fromValue<qint64>(
+                (file.open(QIODevice::WriteOnly | QIODevice::Text | QIODevice::Truncate)
+                     && file.write(S(0).toUtf8()) >= 0) ? 1 : 0);
+            return true;
+        }
+        QString filepath = resolveScriptPath(EVALSTR(1));
+        if (filepath.isEmpty()) { out = QVariant::fromValue<qint64>(0); return true; }
+        if (!erapath::extensionAllowed(validExtensions(), filepath))
+            filepath = QFileInfo(filepath).path() + QLatin1Char('/')
+                       + QFileInfo(filepath).completeBaseName() + QStringLiteral(".txt");
+        const QString parent = QFileInfo(filepath).path();
+        if (!parent.isEmpty()) QDir().mkpath(parent);   // C#：最后一个 '\\' 之前按需建目录
+        QFile file(filepath);
         out = QVariant::fromValue<qint64>(
             (file.open(QIODevice::WriteOnly | QIODevice::Text | QIODevice::Truncate)
                  && file.write(S(0).toUtf8()) >= 0) ? 1 : 0);
         return true;
     }
     case BuiltinOp::LoadText: {
-        // LOADTEXT <ファイル番号>{, <force_savdir>, <force_UTF8>} -> 整段文本
-        // 对齐 C# LoadTextMethod：**不是**行区间，而是读回整个文件内容。
-        QFile file(saveFilePath(QStringLiteral("txt%1.txt")
-                                    .arg(int(I(0)), 2, 10, QLatin1Char('0'))));
+        // LOADTEXT {<ファイル番号> | <ファイルパス>}{, <force_savdir>, <force_UTF8>}
+        // 对齐 C# LoadTextMethod（Creator.Method.cs:7037）：**不是**行区间，而是读回
+        // 整个文件内容；第 1 实参**静态类型**是字符串时走**路径形态**（EM 私家版
+        // _LoadText＆SaveText機能拡張）：GetValidPath 解析失败（绝对路径等）或
+        // 扩展名不在 ValidExtension 内 -> 空串；读入后删除全部 '\r'
+        //（C# 注释「一貫性の観点で\rには死んでもらう」）。
+        const bool pathForm = hasArg(node, 0) && node.arguments().at(0)
+                              && node.arguments().at(0)->valueType() == OperandType::Str;
+        QString filepath;
+        if (pathForm) {
+            filepath = resolveScriptPath(EVALSTR(0));
+            if (filepath.isEmpty()
+                || !erapath::extensionAllowed(validExtensions(), filepath)) {
+                out = QString();
+                return true;
+            }
+        } else {
+            filepath = saveFilePath(QStringLiteral("txt%1.txt")
+                                        .arg(int(I(0)), 2, 10, QLatin1Char('0')));
+        }
+        QFile file(filepath);
         if (!file.open(QIODevice::ReadOnly | QIODevice::Text)) { out = QString(); return true; }
-        out = QString::fromUtf8(file.readAll());
+        out = QString::fromUtf8(file.readAll()).remove(QLatin1Char('\r'));
         return true;
     }
     case BuiltinOp::PutForm: {
@@ -2661,6 +2711,55 @@ QString ExpressionEvaluator::saveFilePath(const QString& fileName) const {
     if (m_saveDirectory.isEmpty()) return fileName;
     QDir().mkpath(m_saveDirectory);   // 首次写盘时按需创建 sav/
     return m_saveDirectory + QLatin1Char('/') + fileName;
+}
+
+// LOADTEXT / SAVETEXT 的扩展名白名单（对齐 C# `Config.ValidExtension`）。
+// 配置缺省 = {"txt"}（ConfigData.cs:294 的 `new List<string> { "txt" }`）。
+QStringList ExpressionEvaluator::validExtensions() const {
+    if (m_validExtensionsProvider) {
+        const QStringList list = m_validExtensionsProvider();
+        if (!list.isEmpty()) return list;
+    }
+    return QStringList{QStringLiteral("txt")};
+}
+
+// 脚本相对路径 -> 游戏目录下的绝对路径（`Utils.GetValidPath`）。
+// **空串 = C# 的 null**：绝对路径 / 有根路径 / 解析失败一律拒绝。
+QString ExpressionEvaluator::resolveScriptPath(const QString& path) const {
+    return erapath::resolveUnderBase(m_baseDirectory, path);
+}
+
+// ---------------------------------------------------------------------------
+// fork 扩展（EM 私family 的 GETVAR/GETVARS/SETVAR）用的**写入原语**。
+//
+// 名字文本 -> 变量项的**解析**住在解析层（EraParseTable::runtimeVariableReference），
+// 因为那里才有变量表/常数表/名表与「当前执行函数作用域」；本类只提供最后一步
+// 「把已求值的值写进该变量」—— 与 `++`/`--` 的写回同一路径（整数走
+// assignVariable、字符串走 assignStringVariable），于是系统变量/用户 1D-3D/
+// 角色变量/形参别名的路由只有一处（不会出现「读得到写不到」）。
+// ---------------------------------------------------------------------------
+bool ExpressionEvaluator::assignNodeValue(const ExpressionNode& target, VariableStorage* storage,
+                                          GameBaseData* gameBaseData, const QVariant& value) {
+    if (!storage || target.kind() != NodeKind::Variable) return false;
+    const auto& var = static_cast<const VariableNode&>(target);
+    if (isStringValue(value)) {
+        return assignStringVariable(var, storage, gameBaseData, stringText(value));
+    }
+    return assignVariable(var, storage, gameBaseData, value.toLongLong());
+}
+
+// 字符串变量写入：与 evaluateVariable 的字符串读取路径逐条对称
+// （形参值绑定 / 角色字符串 / 局部与实参槽 / 用户 1D-3D 字符串数组）。
+bool ExpressionEvaluator::assignStringVariable(const VariableNode& node, VariableStorage* storage,
+                                               GameBaseData* gameBaseData, const QString& value) {
+    if (!storage) return false;
+    const QString name = node.name();
+    if (storage->hasParameter(name)) {
+        storage->setParameter(name, value);
+        return true;
+    }
+    const QList<int> ids = resolveIndices(node, storage, gameBaseData);
+    return storage->setStringSlot(name, ids, FlatStringValue(value));
 }
 
 bool ExpressionEvaluator::readColorMatrix(const FunctionNode &node, int argNo,

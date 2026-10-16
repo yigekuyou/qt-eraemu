@@ -98,6 +98,7 @@ GameData/ast/print_template.cpp
 GameData/ast/print_template.h
 GameData/ast/ast_builder.cpp
 GameData/ast/ast_builder.h
+GameData/ast/text_path.h
 
 
 GameData/Variable/variable_config.cpp
@@ -117,6 +118,7 @@ GameProc/ee_extension.cpp
 GameProc/fork_extension.h
 GameProc/fork_support.h
 GameProc/fork_extension.cpp
+GameProc/fork_em.cpp
 GameProc/fork_xml.cpp
 GameProc/fork_datatable.cpp
 GameProc/script_runner.cpp

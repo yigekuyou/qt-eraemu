@@ -171,9 +171,27 @@ public:
     [[nodiscard]] QString moneyLabel() const { return m_moneyLabel; }
     [[nodiscard]] bool moneyFirst() const { return m_moneyFirst; }
 
+    // fork 扩展（EM 的 SETVAR）用的写入原语：把**已求值**的值写进变量节点指代的
+    // 变量（整数/字符串都走这里）。解析「变量名文本 -> 变量节点」是扩展侧经
+    // 解析表服务做的（那边有变量表/常数表/作用域）；求值器只负责最后一步写回。
+    bool assignNodeValue(const ExpressionNode& target, VariableStorage* storage,
+                         GameBaseData* gameBaseData, const QVariant& value);
+
     // 存档/文本类函数（SAVETEXT/LOADTEXT/SAVECHARA/LOADCHARA/GSAVE/GLOAD/SAVENOS）
     // 的落盘目录 = 游戏目录下的 sav/（对齐 C# VEvaluator 的保存路径），由 EraEngine 注入。
     void setSaveDirectory(const QString& dir);
+    // 游戏目录（对齐 C# `Program.ExeDir`）：LOADTEXT / SAVETEXT 的**路径形态**
+    // 与 EXISTFILE 把脚本给的相对路径拼在它之下（`Utils.GetValidPath`）。
+    void setBaseDirectory(const QString& dir) { m_baseDirectory = dir; }
+    // LOADTEXT / SAVETEXT 允许的扩展名（对齐 C# `Config.ValidExtension`，
+    // 配置键「LOADTEXTとSAVETEXTで使える拡張子」，默认 {"txt"}）。
+    void setValidExtensionsProvider(std::function<QStringList()> provider) {
+        m_validExtensionsProvider = std::move(provider);
+    }
+    [[nodiscard]] QStringList validExtensions() const;   // 空 = {"txt"}（C# 默认值）
+    // 脚本给出的相对路径 -> 基准目录下的绝对路径；**空 = C# GetValidPath 的 null**
+    // （绝对路径 / 有根路径被拒绝）。EXISTFILE、LOADTEXT/SAVETEXT 路径形态共用。
+    [[nodiscard]] QString resolveScriptPath(const QString& path) const;
     void setSaveCompressionProvider(std::function<bool()> provider) { m_saveCompressionProvider=std::move(provider); }
     void reloadCharacterSnapshots();
     void setCharacterDirectory(const QString& directory) { m_characterDirectory=directory; reloadCharacterSnapshots(); }
@@ -254,6 +272,10 @@ private:
     [[nodiscard]] const VariableNode* argVar(const FunctionNode &node, int i) const;
     [[nodiscard]] static bool hasArg(const FunctionNode &node, int i);
 
+    // 字符串变量写入（系统槽/用户槽/角色变量/参数一律按已解析下标路由）。
+    bool assignStringVariable(const VariableNode& node, VariableStorage* storage,
+                              GameBaseData* gameBaseData, const QString& value);
+
     // 数组：读一维整型数组内容 / 取长度（对齐 C# VariableTerm 的数组访问）
     QList<qint64> readIntArray(const VariableNode &var, VariableStorage *storage,
                                GameBaseData *gameBaseData, bool charaRange) const;
@@ -309,6 +331,8 @@ private:
     ConstArrayProvider  m_constArrayProvider;
     ConstArrayChecker   m_constArrayChecker;
     ConstArraySizeProvider m_constArraySizeProvider;
+    QString m_baseDirectory;                             // 游戏目录（Program.ExeDir）
+    std::function<QStringList()> m_validExtensionsProvider;   // Config.ValidExtension
     const ConstantTable* m_constantTable = nullptr;
     TextEncoding m_langEncoding = TextEncoding::ShiftJis;
     ConstProvider m_constProvider;   // #DIM CONST

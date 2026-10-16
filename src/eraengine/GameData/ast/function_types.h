@@ -297,10 +297,18 @@ inline constexpr BuiltinFunctionSpec kBuiltinFunctions[] = {
     {"MOUSEX"              , OperandType::Int, 0, 0, """", false, BuiltinOp::MouseX},
     {"MOUSEY"              , OperandType::Int, 0, 0, """", false, BuiltinOp::MouseY},
     {"ISACTIVE"            , OperandType::Int, 0, 0, """", false, BuiltinOp::IsActive},
-    // SAVETEXT str text, int fileNo{, int force_savdir, int force_UTF8}（C# Creator.Method.cs:4116：2..4 参）
-    {"SAVETEXT"            , OperandType::Int, 2, 4, "siii", false, BuiltinOp::SaveText},
-    // LOADTEXT int fileNo{, int force_savdir, int force_UTF8}（C# Creator.Method.cs:4171：1..3 参）
-    {"LOADTEXT"            , OperandType::Str, 1, 3, "iii", false, BuiltinOp::LoadText},
+    // SAVETEXT str text, {int fileNo | str filepath}{, int force_savdir, int force_UTF8}
+    // （C# Creator.Method.cs:6898：`argumentTypeArrayEx = {String, Any, Int, Int}, OmitStart = 2`
+    //   —— 第 2 实参是 **Any**：静态类型是 long 走文件号形态，是 string 走**路径形态**
+    //   （EM 私家版_LoadText＆SaveText機能拡張））
+    {"SAVETEXT"            , OperandType::Int, 2, 4, "saii", false, BuiltinOp::SaveText},
+    // LOADTEXT {int fileNo | str filepath}{, int force_savdir, int force_UTF8}
+    // （C# Creator.Method.cs:7007：`{ArgType.Any, ArgType.Int, ArgType.Int}, OmitStart = 1`）
+    {"LOADTEXT"            , OperandType::Str, 1, 3, "aii", false, BuiltinOp::LoadText},
+    // 注：EM 私family 的 GETVAR / GETVARS / SETVAR / EXISTVAR（变量名字符串化）、
+    // EXISTFILE / ISDEFINED / REGEXPMATCH / HTML_STRINGLEN/SUBSTRING/LINES 都
+    // **不在本表** —— 它们是 fork 扩展，登记在扩展侧（ExtensionRegistry::regExpr，
+    // 见 GameProc/fork_em.cpp）。本表只放 C# 原版 `FunctionMethodCreator` 的方法。
     {"GCREATED"            , OperandType::Int, 1, 1, "i", false, BuiltinOp::GCreated},
     {"GWIDTH"              , OperandType::Int, 1, 1, "i", false, BuiltinOp::GWidth},
     {"GHEIGHT"             , OperandType::Int, 1, 1, "i", false, BuiltinOp::GHeight},

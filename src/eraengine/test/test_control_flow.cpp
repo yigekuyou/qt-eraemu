@@ -310,6 +310,175 @@ static void htmlFlow() {
         && !hasButton(storage.getStringSlot("HTML_GLOBAL", {0}));
     if (!good) { qCritical() << "HTML provenance invalidation failed"; ++failures; }
 }
+
+// ---------------------------------------------------------------------------
+// EM 私family「变量名字符串化」（GETVAR / GETVARS / SETVAR / EXISTVAR）与
+// REGEXPMATCH：**全部住扩展侧**（ExtensionRegistry::regExpr，见 GameProc/fork_em.cpp），
+// 因此端到端测试必须像引擎那样把三项服务接上：变量名解析 / 变量属性 / 变量写回
+// （见 extension_registry.h 的 Services 说明）。
+// 每个断言单独占一个 CHECK 槽（**不叠加**），失败时能一眼看出是哪一项。
+// ---------------------------------------------------------------------------
+static void emExtensionFunctions() {
+    VariableStorage storage;
+    ProcessState state;
+    EraParseTable table(&state);
+    ExecutionEngine engine(&storage, nullptr);
+    ExpressionEvaluator evaluator;
+    engine.setParseTable(&table);
+    engine.setExpressionEvaluator(&evaluator);
+    table.setExpressionEvaluator(&evaluator);
+    table.setVariableStorage(&storage);
+    // 扩展式中函数的求值回调（引擎在装配期接线）
+    evaluator.setExtensionFunctionInvoker(
+        [&engine](const QString& name, const QList<QVariant>& args,
+                  const QList<const ExpressionNode*>& nodes, QVariant& out) {
+            return engine.extensions().runExpression(name, args, nodes, out);
+        });
+    // GETVAR/GETVARS/SETVAR/EXISTVAR 的三项服务
+    engine.extensions().setVariableNameServices(
+        [&table](const QString& text) { return table.runtimeVariableReference(text); },
+        [&table](const QString& name) { return table.variableFlags(name); },
+        [&evaluator, &storage](const ExpressionNode& target, const QVariant& value) {
+            return evaluator.assignNodeValue(target, &storage, nullptr, value);
+        });
+    ScriptRunner runner(&table, &engine, &state, &storage);
+    runner.setExpressionEvaluator(&evaluator);
+    runner.setStepLimit(1000);
+
+    const QStringList source = {"@MAIN",
+        "#DIM CONST CONSTANT = 3",
+        "#DIM COUNT, 4",
+        "#DIMS TEXT",
+        "COUNT:1 = 7",
+        "TEXT '= \"ok\"",
+        "CHECK:0 = EXISTVAR(\"CONSTANT\")",     // 常量 -> 1|4 = 5
+        "CHECK:1 = EXISTVAR(\"COUNT\")",        // 可写变量 -> 1
+        "CHECK:2 = EXISTVAR(\"TEXT\")",         // 字符串变量 -> 2
+        "CHECK:3 = EXISTVAR(\"NOSUCHVAR\")",    // 不存在 -> 0
+        "CHECK:4 = GETVAR(\"CONSTANT\")",       // 常量按常数表取值 -> 3
+        "CHECK:5 = GETVAR(\"COUNT:1\")",        // 带下标的可写变量 -> 7
+        "CHECK:6 = STRLENS(GETVARS(\"TEXT\"))", // 字符串变量 -> 2
+        "COUNT:2 = 0",
+        "CHECK:7 = SETVAR(\"COUNT:2\", 9)",     // 成功返回 1
+        "CHECK:8 = COUNT:2",                    // 真的写进去了 -> 9
+        "CHECK:9 = REGEXPMATCH(\"a1 b2 c3\", \"[a-z][0-9]\")",                 // 3 个匹配
+        "CHECK:10 = REGEXPMATCH(\"2026-10-07\", \"([0-9]{4})-([0-9]{2})\", 1)", // 1 个匹配
+        "CHECK:11 = RESULT:1",                  // 形式 1 的分组个数（0 组 + 2 组 = 3）
+        "CHECK:12 = STRLENS(RESULTS:0)",        // RESULTS:0 = 整个匹配 "2026-10"（模式只吃到月）
+        "RETURN"};
+    QList<LogicalLine> lines;
+    for (int i = 0; i < source.size(); ++i)
+        lines.append(AstBuilder::build(source[i], ScriptPosition("em.ERB", i, 0),
+            [&table](const QString& text) { return table.expressionAst(text); }));
+    table.loadScript("em", lines);
+    table.markLoadComplete();
+    table.setEntryPoint("MAIN");
+    runner.runToCompletion();
+    // RESULTS:0 = 整个匹配 "2026-10"（7 字符：模式只覆盖到月）
+    const QList<qint64> expect = {5, 1, 2, 0, 3, 7, 2, 1, 9, 3, 1, 3, 7};
+    bool ok = true;
+    for (int i = 0; i < expect.size(); ++i) {
+        const qint64 actual = storage.getGlobalInt1D("CHECK", i);
+        if (actual != expect.at(i)) {
+            qCritical() << QString("EM 扩展式中函数 CHECK:%1").arg(i) << "actual" << actual
+                        << "expected" << expect.at(i);
+            ok = false;
+        }
+    }
+    if (ok) qInfo() << "PASS EM 的 GETVAR/GETVARS/SETVAR/EXISTVAR/REGEXPMATCH（扩展侧实现）";
+    else ++failures;
+}
+
+// LOADTEXT / SAVETEXT 的**路径形态**（EM 私家版拡張）与 EXISTFILE、HTML_STRING*：
+// 路径相对**游戏目录**解析（Utils.GetValidPath：'/'->'\\'、删 "..\\"、绝对路径拒绝），
+// 扩展名须在 Config.ValidExtension 内（默认 txt；LOADTEXT 超出 -> ""，
+// SAVETEXT 超出 -> 强制改 .txt）。
+static void scriptPathFunctions() {
+    QTemporaryDir tmp;
+    if (!tmp.isValid()) { qCritical() << "无法创建临时目录"; ++failures; return; }
+    QDir().mkpath(tmp.path() + "/xml");
+    {
+        QFile f(tmp.path() + "/xml/data.xml");
+        if (!f.open(QIODevice::WriteOnly)) { qCritical() << "无法写出测试文件"; ++failures; return; }
+        // BOM + "<root>a</root>" + CRLF：LOADTEXT 保留 BOM（不判编码），删掉 '\r'
+        f.write("\xEF\xBB\xBF<root>a</root>\r\n");
+    }
+    VariableStorage storage;
+    ProcessState state;
+    EraParseTable table(&state);
+    ExecutionEngine engine(&storage, nullptr);
+    ExpressionEvaluator evaluator;
+    engine.setParseTable(&table);
+    engine.setExpressionEvaluator(&evaluator);
+    table.setExpressionEvaluator(&evaluator);
+    table.setVariableStorage(&storage);
+    evaluator.setExtensionFunctionInvoker(
+        [&engine](const QString& name, const QList<QVariant>& args,
+                  const QList<const ExpressionNode*>& nodes, QVariant& out) {
+            return engine.extensions().runExpression(name, args, nodes, out);
+        });
+    // 引擎装配期注入：基准目录（= 游戏目录）+ 扩展名白名单（Config.ValidExtension）
+    evaluator.setBaseDirectory(tmp.path());
+    evaluator.setValidExtensionsProvider([] { return QStringList{QStringLiteral("txt"), QStringLiteral("xml")}; });
+    engine.extensions().setForkServices(
+        [] { return QStringList(); }, [] { return QStringList(); }, [] { return QStringList(); },
+        [&tmp] { return tmp.path(); });
+    engine.extensions().setFontSizeProvider([] { return 14; });
+    ScriptRunner runner(&table, &engine, &state, &storage);
+    runner.setExpressionEvaluator(&evaluator);
+    runner.setStepLimit(1000);
+
+    const QStringList source = {"@MAIN",
+        "#DIMS DOC",
+        "DOC '= LOADTEXT(\"xml/data.xml\")",
+        "CHECK:0 = STRLENS(DOC)",                                       // BOM + 14 字符（'\r' 已删）
+        "CHECK:1 = STRLENS(LOADTEXT(\"xml/data.bin\"))",                // 白名单外 -> ""
+        "CHECK:2 = STRLENS(LOADTEXT(\"/etc/hostname\"))",               // 绝对路径 -> ""
+        "CHECK:3 = STRLENS(LOADTEXT(\"../xml/data.xml\"))",             // "..\" 被删 -> 仍读得到
+        "CHECK:4 = EXISTFILE(\"xml/data.xml\")",                        // 文件 -> 1
+        "CHECK:5 = EXISTFILE(\"xml\")",                                 // **目录 -> 0**（File.Exists 语义）
+        "CHECK:6 = EXISTFILE(\"no_such.txt\")",                         // 不存在 -> 0
+        "CHECK:7 = SAVETEXT(\"hello\", \"xml/out.txt\")",               // 写盘成功 -> 1
+        "DOC '= LOADTEXT(\"xml/out.txt\")",
+        "CHECK:8 = STRLENS(DOC)",                                       // round-trip -> 5
+        "CHECK:9 = SAVETEXT(\"x\", \"xml/other.bin\")",                 // 扩展名不合法 -> 改 .txt 后仍成功
+        "CHECK:10 = HTML_STRINGLEN(\"AB<b>CD</b>\", 0)",                // 标签零宽 -> 4
+        "CHECK:11 = HTML_STRINGLEN(\"あい\", 0)",                        // 全角 2 个 -> 4
+        "CHECK:12 = HTML_STRINGLINES(\"ABCDE\", 2)",                    // 宽 2 -> 3 行
+        "CHECK:13 = HTML_STRINGLINES(\"A<br>B\", 50)",                  // <br> 也断行 -> 2
+        // **语句形态**：C# METHOD_Instruction 把返回值写 RESULTS（字符串）/ RESULT（整型）
+        // —— FL3.8 的 `LOADTEXT \"XML/SKILL_LIFE.xml\"` + `XML_DOCUMENT ID, RESULTS`
+        // 就是靠这一步把读到的 XML 交给 XML_DOCUMENT 的。
+        "LOADTEXT \"xml/data.xml\"",
+        "CHECK:14 = STRLENS(RESULTS)",
+        "SAVETEXT \"xyz\", \"xml/stmt.txt\"",
+        "CHECK:15 = RESULT",
+        "RETURN"};
+    QList<LogicalLine> lines;
+    for (int i = 0; i < source.size(); ++i)
+        lines.append(AstBuilder::build(source[i], ScriptPosition("path.ERB", i, 0),
+            [&table](const QString& text) { return table.expressionAst(text); }));
+    table.loadScript("path", lines);
+    table.markLoadComplete();
+    table.setEntryPoint("MAIN");
+    runner.runToCompletion();
+    const QList<qint64> expect = {15, 0, 0, 15, 1, 0, 0, 1, 5, 1, 4, 4, 3, 2, 15, 1};
+    bool ok = true;
+    for (int i = 0; i < expect.size(); ++i) {
+        const qint64 actual = storage.getGlobalInt1D("CHECK", i);
+        if (actual != expect.at(i)) {
+            qCritical() << QString("脚本路径/HTML 函数 CHECK:%1").arg(i) << "actual" << actual
+                        << "expected" << expect.at(i);
+            ok = false;
+        }
+    }
+    // SAVETEXT 的「扩展名不合法 -> 改 .txt」也要验证落在盘上
+    ok = ok && QFile::exists(tmp.path() + "/xml/other.txt")
+            && !QFile::exists(tmp.path() + "/xml/other.bin");
+    if (ok) qInfo() << "PASS LOADTEXT/SAVETEXT 路径形态 + EXISTFILE + HTML_STRING*";
+    else ++failures;
+}
+
 int main(int argc, char** argv) {
     QCoreApplication app(argc, argv);
     chkDataCallForm();
@@ -317,6 +486,8 @@ int main(int argc, char** argv) {
     tryListLoadTime();
     constArrayIntrospection();
     globalConstShadowedByPrivate();
+    emExtensionFunctions();
+    scriptPathFunctions();
     // 私有 `#DIM CONST` 只属于声明它的函数：别处的同名私有变量必须仍然读到自己的值。
     // 此前常数表是扁平的 name→value 表、运行期求值按名字命中，`SHADOW` 会读成 51。
     run("私有的 #DIM CONST 不泄漏到别的函数的同名私有变量", {

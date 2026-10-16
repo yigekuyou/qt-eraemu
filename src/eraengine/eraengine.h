@@ -223,6 +223,12 @@ public:
     // （此处原来的 registerTypes() 是 Qt 5 风格的命令式注册，且从未被调用 ——
     //  与声明式注册重复；已删除，见 prd.md 的历史设计。）
     
+    // LOADTEXT / SAVETEXT 的**路径形态**与 EXISTFILE 的服务注入：
+    // 基准目录（游戏目录 = C# Program.ExeDir）与扩展名白名单
+    // （Config.ValidExtension，配置键「LOADTEXTとSAVETEXTで使える拡張子」）。
+    // 在游戏目录确定/变更时调用（构造期 + 同步/异步装载前）。
+    void applyScriptPathServices();
+
     // Script loading helper (callable from QML)
     Q_INVOKABLE bool loadScript(const QString& scriptPath);
     Q_INVOKABLE void executeScript(const QString& scriptName);

@@ -67,28 +67,24 @@ ExecutionEngine::ExecutionEngine(VariableStorage* storage, GameBaseData* gameBas
     // Initialize function system
 
     // 扩展实现所需的服务（复杂度由注册类承担：引擎填入，扩展经 services() 取用）。
+    // 逐项赋值（不用聚合初始化）：Services 的字段会随扩展增加，按位置列举
+    // 极易漏项（-Wmissing-field-initializers 会报，但更该修的是这种脆弱写法）。
+    // 其余服务（functionExists / 宿主侧 / fork 名字表 / 字号 / 变量名服务 /
+    // 错误上报）由 EraEngine 装配后经各自的 set*Services 注入 —— 这里只放
+    // 「ExecutionEngine 自己就能提供」的两条。
+    ExtensionRegistry::Services services;
+    services.storage = m_storage;
     // 存档目录用惰性 provider —— setGameDirectory 之后才可知。
-    m_extensions.setServices(ExtensionRegistry::Services{
-        m_storage,
-        [this] {
-            return m_gameDirectory.isEmpty()
-                ? QString() : GamePaths::join(m_gameDirectory, QStringLiteral("sav"));
-        },
-        nullptr,   // functionExists（EraEngine 装配后经 setExpressionServices 注入）
-        nullptr,   // doingFunction
-        nullptr,   // displayLine
-        // 语句形实参（式中函数裸写）：AST 直接求值。
-        [this](const ExpressionNode* node) -> QVariant {
-            if (node == nullptr) return QVariant();
-            return getEvaluator().evaluate(*node, m_storage, m_gameBaseData);
-        },
-        // 宿主侧服务（文本框 / FLOWINPUT / UPDATECHECK）：由 EraEngine 装配后经
-        // setHostServices 注入（这里留空 —— ExecutionEngine 拿不到控制台/配置）。
-        nullptr, nullptr, nullptr, nullptr, nullptr, nullptr,
-        // EM/Emuera.NET fork 族服务（ENUM* 名字表 / ENUMFILES 基准目录）：
-        // 同样由 EraEngine 装配后经 setForkServices 注入。
-        nullptr, nullptr, nullptr, nullptr
-    });
+    services.savDirectory = [this] {
+        return m_gameDirectory.isEmpty()
+            ? QString() : GamePaths::join(m_gameDirectory, QStringLiteral("sav"));
+    };
+    // 语句形实参（式中函数裸写）：AST 直接求值。
+    services.evaluateNode = [this](const ExpressionNode* node) -> QVariant {
+        if (node == nullptr) return QVariant();
+        return getEvaluator().evaluate(*node, m_storage, m_gameBaseData);
+    };
+    m_extensions.setServices(std::move(services));
 }
 
 ExecutionEngine::~ExecutionEngine() {
@@ -1839,6 +1835,14 @@ void ExecutionEngine::assignPrintDataString(const Operand& lhs, const QString& v
 }
 
 // 未实现接口的运行期留痕（同名只报一次，避免刷屏）
+void ExecutionEngine::reportRuntimeError(const QString& message)
+{
+    // 扩展侧（fork_em 等）在语句形态下抛出的语义错误：没有求值器的 try/catch
+    // 兜底，必须在这里落地成「错误状态 + 报错」，与 ASSERT 的处理一致。
+    m_state.setErrorState();
+    emit errorOccurred(message);
+}
+
 void ExecutionEngine::reportUnfinished(const QString& what, const QString& name,
                                        const LogicalLine& line)
 {

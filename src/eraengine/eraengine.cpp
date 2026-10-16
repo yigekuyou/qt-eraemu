@@ -387,6 +387,22 @@ EraEngine::EraEngine(QObject *parent)
 				return m_executionEngine.getErbLoader().preprocessor().macroTable().keys();
 			},
 			[this]() -> QString { return m_gameDirectory; });
+		// HTML_STRINGLEN 的像素形态（`HtmlLength`）用字号：半角 = FontSize/2 像素。
+		// 取值口径与 CLIENTWIDTH/CLIENTHEIGHT 的排版参数一致（GUI 侧的字号）。
+		m_executionEngine.extensions().setFontSizeProvider(
+			[this]() -> int { return m_guiManager.fontSize(); });
+		// EM 私family「变量名字符串化」（GETVAR/GETVARS/SETVAR/EXISTVAR）：
+		// 解析与存在性判定由解析表提供（变量表/常数表/作用域都在那边），
+		// 写入由求值器提供（与 ++/-- 的写回同一路径）。
+		m_executionEngine.extensions().setVariableNameServices(
+			[this](const QString& text) { return m_parseTable.runtimeVariableReference(text); },
+			[this](const QString& name) { return m_parseTable.variableFlags(name); },
+			[this](const ExpressionNode& target, const QVariant& value) {
+				return m_expressionEvaluator.assignNodeValue(target, &m_variableStorage, &m_gameBaseData, value);
+			});
+		// 扩展实现抛出的语义错误 -> 置错误状态 + 报错（与 ASSERT 同口径）。
+		m_executionEngine.extensions().setRuntimeErrorReporter(
+			[this](const QString& message) { m_executionEngine.reportRuntimeError(message); });
 		// BuiltinOp::Extension 的节点按名字转回注册类的 runExpression。
 		m_expressionEvaluator.setExtensionFunctionInvoker(
 			[this](const QString& name, const QList<QVariant>& args,
@@ -438,6 +454,7 @@ EraEngine::EraEngine(QObject *parent)
 		// SAVETEXT / LOADTEXT / SAVECHARA / LOADCHARA / GSAVE / GLOAD 的落盘目录
 		m_expressionEvaluator.setSaveDirectory(GamePaths::join(m_storageRoot, QStringLiteral("sav")));
         m_expressionEvaluator.setCharacterDirectory(GamePaths::join(m_storageRoot, QStringLiteral("dat")));
+		applyScriptPathServices();   // LOADTEXT/SAVETEXT 路径形态与 EXISTFILE 的基准目录/扩展名
 		// 解析期也需要常量名表（CFLAG:ARG:現在位置 之类的常量名下标）
 		m_parseTable.setConstantTable(&m_constantTable);
 		m_parseTable.setGameBaseData(&m_gameBaseData);
@@ -645,6 +662,7 @@ void EraEngine::loadAsync(const QString& directory)
 		m_executionEngine.setGameDataDir(m_storageRoot);
 		m_expressionEvaluator.setSaveDirectory(GamePaths::join(m_storageRoot, QStringLiteral("sav")));
         m_expressionEvaluator.setCharacterDirectory(GamePaths::join(m_storageRoot, QStringLiteral("dat")));
+		applyScriptPathServices();
 		reloadAsync();
 }
 
@@ -675,9 +693,34 @@ void EraEngine::setGameDirectory(const QString& directory)
 				// SAVETEXT / LOADTEXT / SAVECHARA / LOADCHARA / GSAVE / GLOAD 的落盘目录
 				m_expressionEvaluator.setSaveDirectory(GamePaths::join(m_storageRoot, QStringLiteral("sav")));
         m_expressionEvaluator.setCharacterDirectory(GamePaths::join(m_storageRoot, QStringLiteral("dat")));
+				applyScriptPathServices();
 				reload();
 				emit gameDirectoryChanged();
 		}
+}
+
+// LOADTEXT / SAVETEXT 的**路径形态**与 EXISTFILE 用到的两件事：
+//   · 基准目录 = 游戏目录（对齐 C# `Program.ExeDir`，`Utils.GetValidPath` 拼在它下面）；
+//   · 扩展名白名单 = `Config.ValidExtension`（配置键
+//     「LOADTEXTとSAVETEXTで使える拡張子」，逗号分隔；ConfigData.cs:140/294 的
+//     默认值是 {"txt"}）。FL3.8 把它配成 `txt,xml`，脚本正是用 LOADTEXT 读 XML。
+// 配置读取用惰性 lambda：`emuera.config` 在游戏目录确定后才装载。
+void EraEngine::applyScriptPathServices()
+{
+    m_expressionEvaluator.setBaseDirectory(m_gameDirectory);
+    m_expressionEvaluator.setValidExtensionsProvider([this]() -> QStringList {
+        for (const QString& key : {QString::fromUtf8("LOADTEXTとSAVETEXTで使える拡張子"),
+                                   QStringLiteral("ValidExtension")}) {
+            if (!m_configLoader.hasConfig(key)) continue;
+            QStringList out;
+            for (const QString& token : m_configLoader.getConfig(key).split(QLatin1Char(','))) {
+                const QString t = token.trimmed();
+                if (!t.isEmpty()) out.append(t);
+            }
+            if (!out.isEmpty()) return out;
+        }
+        return QStringList{QStringLiteral("txt")};
+    });
 }
 
 void EraEngine::reload()

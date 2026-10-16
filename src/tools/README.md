@@ -43,9 +43,25 @@ cmake --install build --prefix /your/install/prefix
 引擎装载同一套文件 IO（`FileSystem::collectTree`/`listFilesFromTree`），LSP 与 MCP 不再各持
 一份读盘实现。
 
-eraTW（2260 文件）实测：单文档 43998 条诊断 → 整局上下文 372 条（99.2% 是单文档噪声）；
-eraH（899 文件）4102 → 258。残余集中在分析器**刻意不装**的游戏数据上：`[[角色名]]`
-（`CSV/_Rename.csv` 运行期替换）与 `CSV/VariableSize.csv` 声明的变量（如 `削除行数 ++`）。
+eraTW（2260 文件）实测：单文档 43998 条诊断 → 整局上下文 376 条 → **现在 6 条**（下面两节
+修掉的两类噪声）；eraH（899 文件）4102 → 258 → 同源收敛。整局上下文现在与 appemuera 全量
+装载的告警**逐条一致**（eraTW 双方都是那 6 条 `CALL GAMEOVER`）。
+
+导致残余噪声的三个真实缺陷（本次修复）：
+
+1. **分析器丢作用域**：构造 AST 时用 `EraParseTable::expressionAst()`（无作用域）而不是
+   `expressionAstInScope(expr, 当前函数)`。装载器走的是**带作用域**的解析，于是
+   「与别处同名常量重名的函数私有变量」在 LSP/MCP 侧被折成那个常量的字面量 ——
+   eraTW `COMF625/COMF448` 的 `削除行数 ++`（`CASINO_SLOT.ERB` 另有
+   `#DIM CONST 削除行数 = 51`）就被判成「第一个参数需要变量节点」。
+2. **陈旧错误状态**：`X ++` 的权威判定在收尾第 3 步重新解析，但那之前第 2 步
+   `ArgumentParser::build` 已按构建期的临时 AST 记下一条错误；重新解析通过后没有清掉，
+   语义正确的行仍带着旧错误进 `validateArguments`。现在通过时显式清 `typeOk/errMes`。
+3. **`[[…]]` 换字未装载**：`CSV/_Rename.csv` 的 `[[名前]] -> 番号` 换字表在装载器里由
+   `ErbLoader::tryAutoLoadRename` 装载，分析器没有这一步，于是 `[[鈴仙・優曇華院・イナバ]]`
+   被当成字符串字面量 —— `勝負内衣判定([[…]])` 报「第 1 个实参需要 Int，实得字符串」、
+   `1 + 2 * [[…]]` 报「二元运算类型错误」，占 eraTW 残余噪声的绝大多数。现在
+   `ErbAnalyzer::readRenameMap` 按同一批候选路径（`<游戏>/CSV/_Rename.csv` 优先）装载。
 
 ### 运行期目标的静态检查（label-not-found）
 
@@ -73,6 +89,30 @@ eraTW 全库都没有定义，走到该分支必然运行期失败。appemuera �
 `ShiftNext()` 掉符号，名字由 `LexicalAnalyzer` 读（它会跳空白）；此前名字被切成空串，标签
 根本没登记 —— eraTW 有 4 处这种写法（`NASIKUZUSI.ERB` 的 `$ GOOUT`、`COMF410 掃除.ERB`
 的 `$ CANCEL_LOOP` 等），既漏报又会让运行期 `GOTO` 报 label not found。
+
+### 还有哪些运行期错误被提前到装载期
+
+收尾一共 6 步（可选第 7 步），其中 3 步是本次新增的「运行期错误静态化」，判据全部与 C#
+装载器同源：
+
+| 步骤 | 方法 | 检查 | 对齐的 C# |
+| --- | --- | --- | --- |
+| 4 | `resolveStaticTargets` | 常量跳转/调用目标存在（见上节） | `setJumpTo` |
+| 4 | `checkCallStatementArgs` | `CALL` 的**实参个数/类型**：实参多于形参、字符串实参传给整型形参、REF 形参被省略或传非数组 | `CalledFunction.ConvertArg`（C# 也是在 `SetJumpTo` 里调的，即装载期） |
+| 5 | `checkStructures` | 结构配对：`IF/ELSEIF/ELSE/ENDIF`、`REPEAT/REND`、`FOR/NEXT`、`WHILE/WEND`、`DO/LOOP`、`SELECTCASE/CASE/ENDSELECT`、`TRYC/CATCH/ENDCATCH`、`TRY*LIST/FUNC/ENDFUNC`、`PRINTDATA/DATA/DATALIST/ENDLIST/ENDDATA/STRDATA`、`NOSKIP/ENDNOSKIP`、循环外 `BREAK/CONTINUE`、受限块内定义 `$标签`、`SIF` 的次行、`RETURNF` 的位置与返回类型 | `ErbLoader.nestCheck` |
+| 6 | `checkStaticValues` | 字面量除零（`X / 0`、`X % 0`） | 运行期 `CodeEE「0による除算が行なわれました」` |
+| 7（可选） | `checkNotCalledFunctions` | 定义了但从未被调用的函数 | `checkScript` 的 `FunctionNotCalledWarning` |
+
+两处**刻意不报**（宁缺勿错）：`CALL` 的实参少于形参（C# 对 `ARG`/`ARGS`/私有变量形参一律
+补默认值，实际等价于「永远有默认值」）；`CSV/VariableSize.csv` 才声明长度的系统变量越界
+（长度未知，`validateExpression` 已有的「变量 X 常量下标越界」只覆盖长度可证明的用户数组）。
+
+第 7 步默认**关闭**，因为 C# 的 `関数が呼び出されなかった警告の扱い` 默认就是 `IGNORE`，
+且只要脚本里出现过 `CALLFORM` 系（名字运行期求值）C# 就整体放弃该判定 —— 真实游戏几乎都
+命中这条。分析器按游戏配置（`readFunctionNotCalledWarning`）决定是否开启，与 C# 一致。
+
+eraTW 加装这三步后诊断数**仍是 6 条**（步骤 5/6 在 2.2M 行上分别只花 1.1s/1.2s）：eraTW 是
+能正常玩通的成品，结构/实参/字面量除零都干净 —— 这同时是这三项检查「不误报」的实测证据。
 
 ### 编码告警的判定
 

@@ -85,8 +85,21 @@ public:
     // Headers are loaded first, then scripts, with deterministic ordering.
     // No files are read and no script code is executed. Includes cross-file
     // declarations, function binding, argument/type and preprocessing diagnostics.
+    // renameMap 是 CSV/_Rename.csv 的 `[[''名前'']] -> 替换文本` 表（对齐装载器的
+    // ErbLoader::tryAutoLoadRename）。传空表示不做换字 —— 此时脚本里的 [[…]] 会被
+    // 当成字符串字面量，产生大量假诊断；整局上下文（analyzeGameWorkspace）会自动装载。
     [[nodiscard]] QMap<QString, ErbDocument> analyzeWorkspace(
-        const QMap<QString, QString>& sources) const;
+        const QMap<QString, QString>& sources,
+        const QHash<QString, QString>& renameMap = {},
+        bool notCalledWarning = false) const;
+
+    // 从游戏根目录装载 CSV/_Rename.csv（键是 `[[名前]]` 形态，值=替换文本）。
+    // 找不到文件返回空表（不报错 —— 很多游戏没有这个文件）。
+    [[nodiscard]] static QHash<QString, QString> readRenameMap(const QString& gameRoot);
+
+    // 游戏配置里的「関数が呼び出されなかった警告の扱い」（对齐 C# FunctionNotCalledWarning）：
+    // 只有显式设为 DISPLAY/ONCE 才算开启（C# 的默认值与 eraTW 都是 IGNORE）。
+    [[nodiscard]] static bool readFunctionNotCalledWarning(const QString& gameRoot);
 
     // 文件所在的「游戏 ERB 工作区」目录：向上找最近的名为 ERB 的祖先目录
     // （大小写不敏感 —— 与引擎装载范围 <游戏>/ERB 一致）；找不到返回空。

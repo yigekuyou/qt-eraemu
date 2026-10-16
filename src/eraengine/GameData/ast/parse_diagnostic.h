@@ -67,6 +67,9 @@ inline constexpr auto kArgCheck           = "arg-check";           // 参数个�
 inline constexpr auto kSharpLine          = "sharp-line";          // # 行非法位置/缺名
 inline constexpr auto kDeclError          = "decl-error";          // 变量声明错误/重复定义
 inline constexpr auto kLabelNotFound      = "label-not-found";     // 运行期跳转/调用目标静态可知但不存在
+inline constexpr auto kStructure          = "structure";           // 结构/配对错误（IF-ENDIF、REPEAT-REND、SIF 次行…）
+inline constexpr auto kNotCalled          = "not-called";          // 定义了但从未被调用的函数（对齐 C# FunctionNotCalledWarning）
+inline constexpr auto kStaticValue        = "static-value";        // 可静态判定的运行期错误（除零、数组越界…）
 // 偏离声明编码（**装载期**产生；运行期不做编码转换）：
 // 实际按哪个编码读出 != 游戏声明的编码。读文件层不严格绑定声明（保证每个文件
 // 都读得进来），但偏离本身要报 —— 见 Content/encoding/text_encoding.h 的

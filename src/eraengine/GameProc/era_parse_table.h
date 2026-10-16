@@ -166,6 +166,11 @@ public:
 
     [[nodiscard]] bool ignoreTripleSymbols() const;
 
+    // ---- 可选诊断开关（默认与 C# 的 config 默认值一致：都关/IGNORE）----
+    // 未被调用函数告警（对齐 C# FunctionNotCalledWarning；默认 IGNORE）。
+    [[nodiscard]] bool functionNotCalledWarning() const { return m_functionNotCalledWarning; }
+    void setFunctionNotCalledWarning(bool on) { m_functionNotCalledWarning = on; }
+
     // ---- 只读区查询 ----
     [[nodiscard]] const ScriptData* script(const QString& scriptName) const;
     [[nodiscard]] QStringList scriptNames() const { return m_scripts.keys(); }
@@ -340,7 +345,26 @@ private:
     // 全体脚本校验：产出诊断，须在**全部绑定完成后**统一调用（跨文件前向引用）。
     void finalizeValidation();
     void resolveStaticTargets();      // 收尾步骤 4：静态解析运行期跳转/调用目标（对齐 C# setJumpTo）
-    // 全局声明定稿：常量/维数求值器 + 维数 + 全局初值 + 用户函数类型（幂等）。
+    // CALL 语句的实参校验（对齐 C# ConvertArg 在 setJumpTo 里的装载期调用）：
+    // 只在「常量目标且目标存在」时下结论 —— 个数超限、字符串实参传整型形参、
+    // REF 实参不能省略/必须是同类型数组。
+    void checkCallStatementArgs(const LogicalLine& line, const QString& target);
+    // 收尾步骤 5：结构/配对检查（对齐 C# ErbLoader.nestCheck 的诊断部分）：
+    // IF/ELSEIF/ELSE/ENDIF、REPEAT/REND、FOR/NEXT、WHILE/WEND、DO/LOOP、
+    // SELECTCASE/CASE/ENDSELECT、TRYC/CATCH/ENDCATCH、TRY*LIST/FUNC/ENDFUNC、
+    // PRINTDATA/DATA/DATALIST/ENDLIST/ENDDATA/STRDATA、NOSKIP/ENDNOSKIP、
+    // BREAK/CONTINUE 的位置、$标签在受限块内、SIF 的次行、RETURNF 的位置与类型。
+    void checkStructures();
+    // 收尾步骤 6：可静态判定的运行期错误（字面量除零 / 常量下标越界）。
+    // 这类错误在 C# 里是运行期 CodeEE（"0による除算が行なわれました" /
+    // "配列型変数Xの第N引数(…)は配列の範囲外です"）；当操作数是**字面量**时，
+    // 「运行到那行才炸」是确定事件，因此提前到装载期报出来。
+    void checkStaticValues();
+    // 收尾步骤 7（可选）：定义了但从未被调用的函数（对齐 C# ErbLoader.checkScript 的
+    // FunctionNotCalledWarning）。C# 的**默认值是 IGNORE**，且只要有 CALLFORM 系
+    // （名字运行期求值）就无法判定「没被调用」，此时全部不报 —— eraTW 两种条件都命中，
+    // 因此默认关闭、真实游戏一般不开。开启后也用同一套判据，避免误报。
+    void checkNotCalledFunctions();    // 全局声明定稿：常量/维数求值器 + 维数 + 全局初值 + 用户函数类型（幂等）。
     void resolveGlobalDeclarations();
     // 校验告警收集器：按脚本并行时每脚本各持一个，随后**按脚本顺序**合并。
     //   warnings : 告警文本，保持脚本内产生顺序；
@@ -363,6 +387,8 @@ private:
     int lineCountFor(const QString& script) const;
 
     bool m_finalized = false;
+    // 未被调用的函数告警开关（对齐 C# Config.FunctionNotCalledWarning；默认 IGNORE）
+    bool m_functionNotCalledWarning = false;
     bool m_constProvidersReady = false;   // 常量/维数求值器是否已设置
     bool m_declarationsPreRegistered = false;   // 声明已由装载器预登记（loadScript 不再重复登记）
     QHash<QString, ScriptData> m_scripts;

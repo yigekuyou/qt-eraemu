@@ -1433,7 +1433,12 @@ void EraParseTable::resolveStaticTargets() {
             if (target.isEmpty()) continue;
             QString message;
             if (checkFunction) {
-                if (hasLabel(target)) continue;
+                if (hasLabel(target)) {
+                    // 目标存在 -> 装载期就把实参校验掉（对齐 C# CALL_Instruction.SetJumpTo
+                    // 里调用 ConvertArg；C# 只在「常量目标且能找到」时才做这一步）。
+                    checkCallStatementArgs(line, target);
+                    continue;
+                }
                 message = QCoreApplication::translate("ParseDiagnostics",
                     "指定的函数名\"@%1\"不存在（运行到该行会失败）").arg(target);
             } else {
@@ -1448,8 +1453,596 @@ void EraParseTable::resolveStaticTargets() {
     }
 }
 
-void EraParseTable::markLoadComplete() {
-    // 装载收尾（唯一入口）：全局声明定稿 → 全体脚本就地定型/重绑 → 统一出诊断。
+// ---------------------------------------------------------------------------
+// CALL 语句的实参校验（对齐 C# Process.CalledFunction.ConvertArg）
+//
+// C# 在**装载第 3 趟**（setJumpTo）里对「常量目标且能找到该函数」的 CALL 调一次
+// ConvertArg，把实参个数/类型不匹配从「运行到那行才抛 CodeEE」提前到装载期。
+// 这里复刻同一组判据（与 checkUserCallArgs 同源，只是实参来自语句的 Operand 表）：
+//
+//   * 实参个数 > 形参个数            -> 错误（C#「引数の数が…超えています」）
+//   * 字符串实参 -> 整型形参         -> 错误（任何配置下都不允许）
+//   * 整型实参 -> 字符串形参         -> 允许（CompatiFuncArgAutoConvert；见 checkUserCallArgs）
+//   * REF 形参：实参必须是同类型、同维数的非角色数组变量，且**不可省略**
+//
+// 刻意**不报**的两类（宁缺勿错）：
+//   * 实参少于形参：C# 会对 ARG/ARGS/私有变量形参补默认值（parseLabel 的 canDef），
+//     实际等价于「永远有默认值」，因此这里不下结论；
+//   * 目标带 %…%/{…}/[[…]]（运行期求值）、TRY* 系（语义就是找不到就跳过）。
+void EraParseTable::checkCallStatementArgs(const LogicalLine& line, const QString& target) {
+    const UserFunctionDecl* decl = userFunction(target.toUpper());
+    if (!decl) return;   // 目标存在但没登记成函数（BEGIN/CALLEVENT 之类）：不判定
+
+    // 实参表 = 目标名之后的全部操作数（剔除 "," 独立分隔符，与 ArgumentParser 同口径）
+    QList<const Operand*> actuals;
+    actuals.reserve(line.arguments.size());
+    for (int i = 1; i < line.arguments.size(); ++i) {
+        const Operand& o = line.arguments.at(i);
+        if (!o.isString && (o.raw == QLatin1String(",") || o.raw == QLatin1String(":"))) continue;
+        actuals.append(&o);
+    }
+    const int want = decl->paramCount();
+    if (actuals.size() > want) {
+        m_diagnostics.add(DiagSeverity::Error, DiagCode::kArgCheck,
+            line.position.filename, line.position.lineNumber, line.position.column, 0,
+            QCoreApplication::translate("ParseDiagnostics",
+                "函数 @%1 的实参过多（形参 %2 个，实得 %3 个；运行到该行会失败）")
+                .arg(decl->originalName.isEmpty() ? decl->name : decl->originalName)
+                .arg(want).arg(actuals.size()));
+        return;
+    }
+    for (int i = 0; i < want; ++i) {
+        const UserParamDecl& formal = decl->params.at(i);
+        const QString shown = decl->originalName.isEmpty() ? decl->name : decl->originalName;
+        // 形参多于实参时（i >= actuals.size()）等价于 C# 的 term == null（实参省略）。
+        const Operand* actualPtr = (i < actuals.size()) ? actuals.at(i) : nullptr;
+        const bool omitted = !actualPtr || actualPtr->omitted;
+        const QSharedPointer<ExpressionNode> ast = actualPtr ? actualPtr->ast : QSharedPointer<ExpressionNode>();
+        const auto* var = ast ? dynamic_cast<const VariableNode*>(ast.data()) : nullptr;
+        if (formal.isReference) {
+            // C# ConvertArg：REF 形参省略 = 错误；实参必须是同类型、同维数的非角色数组变量。
+            QString err;
+            if (omitted) {
+                err = QCoreApplication::translate("ParseDiagnostics",
+                    "函数 @%1 的第 %2 个参数是引用传递（REF），不能省略（运行到该行会失败）");
+            } else if (!var) {
+                err = QCoreApplication::translate("ParseDiagnostics",
+                    "函数 @%1 的第 %2 个参数是引用传递（REF），实参必须是数组变量（运行到该行会失败）");
+            } else if (var->characterData || var->readOnly
+                       || (isKnown(formal.type) && isKnown(var->valueType())
+                           && var->valueType() != formal.type)) {
+                err = QCoreApplication::translate("ParseDiagnostics",
+                    "函数 @%1 的第 %2 个 REF 实参需要同类型、同维数的非角色数组变量（运行到该行会失败）");
+            }
+            if (!err.isEmpty())
+                m_diagnostics.add(DiagSeverity::Error, DiagCode::kArgCheck,
+                    line.position.filename, line.position.lineNumber, line.position.column, 0,
+                    err.arg(shown).arg(i + 1));
+            continue;
+        }
+        if (omitted || !ast) continue;
+        if (!formal.typeKnown || !isKnown(formal.type)) continue;
+        const OperandType actualType = ast->valueType();
+        if (!isKnown(actualType)) continue;
+        if (actualType == OperandType::Str && formal.type == OperandType::Int) {
+            m_diagnostics.add(DiagSeverity::Error, DiagCode::kArgCheck,
+                line.position.filename, line.position.lineNumber, line.position.column, 0,
+                QCoreApplication::translate("ParseDiagnostics",
+                    "函数 @%1 的第 %2 个实参需要%3，实得字符串（不能从字符串转换为整数；运行到该行会失败）")
+                    .arg(shown).arg(i + 1)
+                    .arg(QString::fromUtf8(operandTypeName(formal.type))));
+        }
+    }
+}
+
+// ---------------------------------------------------------------------------
+// 收尾步骤 5：结构/配对检查（对齐 C# ErbLoader.nestCheck 的诊断部分）
+//
+// C# 在装载第 2 趟（nestCheck）里用一个 nestStack 走完每个函数体：配对不上的
+// 结构、越过块边界的指令、SIF 的次行、RETURNF 的位置/类型都在这里报到装载期。
+// 本实现只做**诊断**——配对的跳转标记早已由 buildJumpMarkings 建好（运行期消费），
+// 这里按同一判据（同一个 nestStack 语义）把「结构性错误」讲出来。
+//
+// 刻意不做的：C# 里那些 level 0/1 的提示（「SIF文の次の行が空行…」、
+// 「関数が定義されるより前に行があります」）——eraTW 这类真实工程里遍地都是，
+// 报出来只会淹没真正的问题。
+// ---------------------------------------------------------------------------
+namespace {
+
+// END 系列 -> 它要求的配对结构名（C# FunctionIdentifier.getMatchFunction）
+QString matchingOpener(const QString& ender) {
+    if (ender == QLatin1String("REND")) return QStringLiteral("REPEAT");
+    if (ender == QLatin1String("NEXT")) return QStringLiteral("FOR");
+    if (ender == QLatin1String("WEND")) return QStringLiteral("WHILE");
+    if (ender == QLatin1String("ENDIF")) return QStringLiteral("IF");
+    if (ender == QLatin1String("ENDSELECT")) return QStringLiteral("SELECTCASE");
+    if (ender == QLatin1String("ENDCATCH")) return QStringLiteral("CATCH");
+    if (ender == QLatin1String("ENDLIST")) return QStringLiteral("DATALIST");
+    if (ender == QLatin1String("ENDNOSKIP")) return QStringLiteral("NOSKIP");
+    if (ender == QLatin1String("ENDFUNC")) return QStringLiteral("TRYCALLLIST");
+    return QString();
+}
+
+bool isLoopOpener(const QString& name) {
+    return name == QLatin1String("REPEAT") || name == QLatin1String("FOR")
+        || name == QLatin1String("WHILE") || name == QLatin1String("DO");
+}
+
+bool isPrintDataFamily(const QString& name) {
+    return name.startsWith(QLatin1String("PRINTDATA")) || name == QLatin1String("STRDATA");
+}
+
+bool isTryListOpener(const QString& name) {
+    return name == QLatin1String("TRYCALLLIST") || name == QLatin1String("TRYJUMPLIST")
+        || name == QLatin1String("TRYGOTOLIST") || name == QLatin1String("GOTOLIST");
+}
+
+bool isTryCatchOpener(const QString& name) {
+    return name == QLatin1String("TRYCCALL") || name == QLatin1String("TRYCCALLFORM")
+        || name == QLatin1String("TRYCJUMP") || name == QLatin1String("TRYCJUMPFORM")
+        || name == QLatin1String("TRYCGOTO") || name == QLatin1String("TRYCGOTOFORM");
+}
+
+// 开块指令 -> 它需要的收尾指令名（用于「Xに対応するYが見つかりません」）
+QString matchingCloser(const QString& opener) {
+    if (opener == QLatin1String("IF")) return QStringLiteral("ENDIF");
+    if (opener == QLatin1String("REPEAT")) return QStringLiteral("REND");
+    if (opener == QLatin1String("FOR")) return QStringLiteral("NEXT");
+    if (opener == QLatin1String("WHILE")) return QStringLiteral("WEND");
+    if (opener == QLatin1String("DO")) return QStringLiteral("LOOP");
+    if (opener == QLatin1String("SELECTCASE")) return QStringLiteral("ENDSELECT");
+    if (opener == QLatin1String("CATCH")) return QStringLiteral("ENDCATCH");
+    if (opener == QLatin1String("DATALIST")) return QStringLiteral("ENDLIST");
+    if (opener == QLatin1String("NOSKIP")) return QStringLiteral("ENDNOSKIP");
+    if (isTryCatchOpener(opener)) return QStringLiteral("CATCH");
+    if (isPrintDataFamily(opener)) return QStringLiteral("ENDDATA");
+    if (isTryListOpener(opener)) return QStringLiteral("ENDFUNC");
+    return QString();
+}
+
+
+}  // namespace
+
+void EraParseTable::checkStructures() {
+    // nestStack 的表项 = (结构名, 行, 该结构是否已出现第一个分支)。
+    struct Nest { QString name; const LogicalLine* line; bool branchSeen = false; };
+    const auto add = [this](DiagSeverity sev, const LogicalLine& line, const QString& text) {
+        m_diagnostics.add(sev, DiagCode::kStructure,
+            line.position.filename, line.position.lineNumber, line.position.column, 0, text);
+    };
+
+    for (auto script = m_scripts.constBegin(); script != m_scripts.constEnd(); ++script) {
+        const ScriptData& data = script.value();
+        QList<Nest> stack;
+        const auto closeBody = [&]() {
+            // 函数末尾仍有未闭合的结构：逐条报「Xに対応するYが見つかりません」。
+            while (!stack.isEmpty()) {
+                const Nest n = stack.takeLast();
+                add(DiagSeverity::Error, *n.line,
+                    QCoreApplication::translate("ParseDiagnostics",
+                        "%1 に対応する %2 が見つかりません").arg(n.name, matchingCloser(n.name)));
+            }
+        };
+        for (const LogicalLine& line : data.lines) {
+            if (line.kind == LineKind::FunctionLabel) {
+                closeBody();
+                continue;
+            }
+            if (line.kind == LineKind::GotoLabel) {
+                // C#：PRINTDATA 系 / STRDATA / DATALIST / TRY*LIST 体内不允许 $标签
+                if (!stack.isEmpty()
+                    && (isPrintDataFamily(stack.last().name)
+                        || stack.last().name == QLatin1String("DATALIST")
+                        || isTryListOpener(stack.last().name))) {
+                    add(DiagSeverity::Error, line,
+                        QCoreApplication::translate("ParseDiagnostics",
+                            "%1 構文中に $ラベルを定義することはできません").arg(stack.last().name));
+                }
+                continue;
+            }
+            if (line.kind != LineKind::Instruction) continue;   // 空行/注释行/# 行不参与配对
+            const QString& name = line.functionName;
+
+            // ---- 块内允许的指令（对齐 C# nestCheck 的 baseFunc 检查）----
+            if (!stack.isEmpty()) {
+                const QString& base = stack.last().name;
+                if (isPrintDataFamily(base)) {
+                    const bool allowed = name == QLatin1String("DATA")
+                        || name == QLatin1String("DATAFORM")
+                        || name == QLatin1String("DATALIST")
+                        || name == QLatin1String("ENDLIST")
+                        || name == QLatin1String("ENDDATA");
+                    if (!allowed) {
+                        add(DiagSeverity::Error, line,
+                            QCoreApplication::translate("ParseDiagnostics",
+                                "%1 構文に使用できない命令'%2'が含まれています").arg(base, name));
+                        continue;
+                    }
+                } else if (base == QLatin1String("DATALIST")) {
+                    const bool allowed = name == QLatin1String("DATA")
+                        || name == QLatin1String("DATAFORM") || name == QLatin1String("ENDLIST");
+                    if (!allowed) {
+                        add(DiagSeverity::Error, line,
+                            QCoreApplication::translate("ParseDiagnostics",
+                                "DATALIST 構文に使用できない命令'%1'が含まれています").arg(name));
+                        continue;
+                    }
+                } else if (isTryListOpener(base)) {
+                    if (name != QLatin1String("FUNC") && name != QLatin1String("ENDFUNC")) {
+                        add(DiagSeverity::Error, line,
+                            QCoreApplication::translate("ParseDiagnostics",
+                                "%1 構文に使用できない命令'%2'が含まれています").arg(base, name));
+                        continue;
+                    }
+                } else if (base == QLatin1String("SELECTCASE")) {
+                    // SELECTCASE 直下、最初の CASE より前は命令を置けない
+                    const bool allowed = name == QLatin1String("CASE")
+                        || name == QLatin1String("CASEELSE") || name == QLatin1String("ENDSELECT");
+                    if (!stack.last().branchSeen && !allowed) {
+                        add(DiagSeverity::Error, line,
+                            QCoreApplication::translate("ParseDiagnostics",
+                                "SELECTCASE 構文の分岐の外に命令'%1'が含まれています").arg(name));
+                        continue;
+                    }
+                }
+            }
+
+            // ---- 入栈 ----
+            if (name == QLatin1String("IF") || name == QLatin1String("SELECTCASE")
+                || name == QLatin1String("REPEAT") || name == QLatin1String("FOR")
+                || name == QLatin1String("WHILE") || name == QLatin1String("DO")
+                || isTryCatchOpener(name) || isPrintDataFamily(name)
+                || isTryListOpener(name) || name == QLatin1String("NOSKIP")) {
+                stack.append({name, &line});
+                continue;
+            }
+
+            // ---- 分支指令 ----
+            if (name == QLatin1String("ELSEIF") || name == QLatin1String("ELSE")) {
+                if (stack.isEmpty() || stack.last().name != QLatin1String("IF")) {
+                    add(DiagSeverity::Error, line,
+                        QCoreApplication::translate("ParseDiagnostics",
+                            "IF～ENDIFの外で%1文が使われました").arg(name));
+                } else {
+                    stack.last().branchSeen = true;
+                }
+                continue;
+            }
+            if (name == QLatin1String("CASE") || name == QLatin1String("CASEELSE")) {
+                if (stack.isEmpty() || stack.last().name != QLatin1String("SELECTCASE"))
+                    add(DiagSeverity::Error, line,
+                        QCoreApplication::translate("ParseDiagnostics",
+                            "SELECTCASE～ENDSELECTの外で%1文が使われました").arg(name));
+                else
+                    stack.last().branchSeen = true;
+                continue;
+            }
+            if (name == QLatin1String("BREAK") || name == QLatin1String("CONTINUE")) {
+                bool inLoop = false;
+                for (const Nest& n : stack)
+                    if (isLoopOpener(n.name)) { inLoop = true; break; }
+                if (!inLoop)
+                    add(DiagSeverity::Error, line,
+                        QCoreApplication::translate("ParseDiagnostics",
+                            "REPEAT, FOR, WHILE, DOの中以外で%1文が使われました").arg(name));
+                continue;
+            }
+            if (name == QLatin1String("FUNC")) {
+                if (stack.isEmpty() || !isTryListOpener(stack.last().name))
+                    add(DiagSeverity::Error, line,
+                        QCoreApplication::translate("ParseDiagnostics",
+                            "対応するTRYCALLLIST系命令のない%1です").arg(name));
+                continue;
+            }
+            if (name == QLatin1String("DATA") || name == QLatin1String("DATAFORM")) {
+                if (stack.isEmpty() || !(isPrintDataFamily(stack.last().name)
+                                         || stack.last().name == QLatin1String("DATALIST")))
+                    add(DiagSeverity::Error, line,
+                        QCoreApplication::translate("ParseDiagnostics",
+                            "対応するPRINTDATA系命令のない%1です").arg(name));
+                continue;
+            }
+            if (name == QLatin1String("DATALIST")) {
+                // DATALIST 是 PRINTDATA 系 / STRDATA 体内的**可重复**子块：
+                // 一个 PRINTDATA 里可以连续放多个 DATALIST…ENDLIST（eraTW 的
+                // CASINO.ERB 就是这种写法），所以这里必须入栈，否则随后的 ENDLIST
+                // 找不到 DATALIST 而误报。
+                if (stack.isEmpty() || !isPrintDataFamily(stack.last().name)) {
+                    add(DiagSeverity::Error, line,
+                        QCoreApplication::translate("ParseDiagnostics",
+                            "対応するPRINTDATA系命令のない%1です").arg(name));
+                } else {
+                    stack.append({name, &line, false});
+                }
+                continue;
+            }
+            if (name == QLatin1String("LOOP")) {
+                // LOOP 对应 REPEAT 或 DO（按栈顶判定）
+                const bool ok = !stack.isEmpty()
+                    && (stack.last().name == QLatin1String("DO") || stack.last().name == QLatin1String("REPEAT"));
+                if (!ok) {
+                    add(DiagSeverity::Error, line,
+                        QCoreApplication::translate("ParseDiagnostics",
+                            "対応するREPEATの無い%1文です").arg(name));
+                } else {
+                    stack.removeLast();
+                }
+                continue;
+            }
+            if (name == QLatin1String("REND") || name == QLatin1String("NEXT")
+                || name == QLatin1String("WEND") || name == QLatin1String("ENDIF")
+                || name == QLatin1String("ENDSELECT") || name == QLatin1String("ENDCATCH")
+                || name == QLatin1String("ENDLIST") || name == QLatin1String("ENDDATA")
+                || name == QLatin1String("ENDNOSKIP") || name == QLatin1String("ENDFUNC")) {
+                const QString want = matchingOpener(name);
+                if (name == QLatin1String("ENDDATA")) {
+                    if (stack.isEmpty() || !(isPrintDataFamily(stack.last().name))) {
+                        add(DiagSeverity::Error, line,
+                            QCoreApplication::translate("ParseDiagnostics",
+                                "対応するPRINTDATA系命令もしくはSTRDATAのない%1です").arg(name));
+                    } else {
+                        stack.removeLast();
+                    }
+                    continue;
+                }
+                bool matched = false;
+                if (name == QLatin1String("ENDFUNC")) {
+                    matched = !stack.isEmpty() && isTryListOpener(stack.last().name);
+                } else {
+                    matched = !stack.isEmpty() && stack.last().name == want;
+                }
+                if (!matched) {
+                    add(DiagSeverity::Error, line,
+                        QCoreApplication::translate("ParseDiagnostics",
+                            "対応する%1の無い%2文です").arg(want, name));
+                } else {
+                    stack.removeLast();
+                }
+                continue;
+            }
+            if (name == QLatin1String("CATCH")) {
+                if (stack.isEmpty() || !isTryCatchOpener(stack.last().name))
+                    add(DiagSeverity::Error, line,
+                        QCoreApplication::translate("ParseDiagnostics",
+                            "対応するTRYC系命令がありません"));
+                else
+                    stack.last().name = QStringLiteral("CATCH");
+                continue;
+            }
+            // ---- SIF：次行必须是可跳过的有效指令 ----
+            if (name == QLatin1String("SIF")) {
+                const int i = line.lineIndex;
+                int next = i + 1;
+                const int size = int(data.lines.size());
+                while (next < size && data.lines.at(next).kind == LineKind::Null) ++next;
+                if (next >= size || data.lines.at(next).kind == LineKind::FunctionLabel
+                    || data.lines.at(next).kind == LineKind::GotoLabel) {
+                    add(DiagSeverity::Error, line,
+                        QCoreApplication::translate("ParseDiagnostics",
+                            "SIF文の次の行がありません"));
+                    continue;
+                }
+                const LogicalLine& nextLine = data.lines.at(next);
+                if (nextLine.kind == LineKind::Instruction) {
+                    // SIF/TRYC 系也吃下一行（C# PARTIAL）：再套一个就会错位
+                    const QString& nf = nextLine.functionName;
+                    if (nf == QLatin1String("SIF") || isTryCatchOpener(nf)
+                        || nf == QLatin1String("TRYCALLLIST") || nf == QLatin1String("TRYJUMPLIST")
+                        || nf == QLatin1String("TRYGOTOLIST"))
+                        add(DiagSeverity::Error, line,
+                            QCoreApplication::translate("ParseDiagnostics",
+                                "SIF文の次の行を%1文にすることはできません").arg(nf));
+                }
+                continue;
+            }
+            // ---- RETURNF：必须在 #FUNCTION(S) 内，且返回类型要一致 ----
+            if (name == QLatin1String("RETURNF")) {
+                const UserFunctionDecl* decl = userFunction(line.ownerFunction.toUpper());
+                if (!decl || !decl->isMethod) {
+                    add(DiagSeverity::Error, line,
+                        QCoreApplication::translate("ParseDiagnostics",
+                            "RETURNFは#FUNCTION以外では使用できません"));
+                    continue;
+                }
+                if (line.arguments.isEmpty()) continue;
+                const auto& operand = line.arguments.first();
+                if (!operand.ast) continue;
+                const OperandType actual = operand.ast->valueType();
+                if (!isKnown(actual) || !isKnown(decl->returnType)) continue;
+                if (actual != decl->returnType) {
+                    add(DiagSeverity::Error, line,
+                        decl->returnType == OperandType::Int
+                            ? QCoreApplication::translate("ParseDiagnostics",
+                                  "#FUNCTIONで始まる関数の戻り値に文字列型が指定されました")
+                            : QCoreApplication::translate("ParseDiagnostics",
+                                  "#FUNCTIONSで始まる関数の戻り値に数値型が指定されました"));
+                }
+                continue;
+            }
+        }
+        closeBody();
+    }
+}
+
+// ---------------------------------------------------------------------------
+// 收尾步骤 6：可静态判定的运行期错误（字面量除零）
+//
+// `X / 0`、`X % 0` 在 C# 里是运行期必抛的 CodeEE「0による除算が行なわれました」；
+// 除数为**字面量 0** 时「运行必炸」是确定事件，因此提前到装载期报出来。
+// 除数不是字面量（`X / Y`）时不判定 —— 那要运行期才知道。
+//
+// 数组越界**不在这里**：validateExpression 已有更精确的「变量 X 常量下标越界」
+//（它按维度/角色变量的下标语义算 dim，见 expression_ast.cpp），重复报只会变噪声。
+// ---------------------------------------------------------------------------
+void EraParseTable::checkStaticValues() {
+    for (auto script = m_scripts.constBegin(); script != m_scripts.constEnd(); ++script) {
+        const ScriptData& data = script.value();
+        for (const LogicalLine& line : data.lines) {
+            const auto visit = [&](ExpressionNode& node) {
+                if (node.kind() != NodeKind::BinaryOp) return;
+                auto& op = static_cast<BinaryOpNode&>(node);
+                const TokenType t = op.op().type();
+                if (t != TokenType::DIVIDE && t != TokenType::MODULO) return;
+                const auto& right = op.right();
+                if (!right || right->kind() != NodeKind::Literal) return;
+                const auto& lit = static_cast<const LiteralNode&>(*right);
+                if (lit.valueType() != OperandType::Int || lit.intValue() != 0) return;
+                m_diagnostics.add(DiagSeverity::Error, DiagCode::kStaticValue,
+                    line.position.filename, line.position.lineNumber,
+                    line.position.column, 0,
+                    QCoreApplication::translate("ParseDiagnostics",
+                        "0 による除算が行われました（运行到该行会失败）"));
+            };
+            for (const Operand& op : line.arguments) {
+                if (op.ast) walkExpression(*op.ast, visit);
+            }
+            if (line.condition) walkExpression(*line.condition, visit);
+            for (const auto& ast : line.assignmentAsts) {
+                if (ast) walkExpression(*ast, visit);
+            }
+            for (const auto& ast : line.columnDefaults) {
+                if (ast) walkExpression(*ast, visit);
+            }
+        }
+    }
+}
+
+// ---------------------------------------------------------------------------
+// 收尾步骤 7（可选）：定义了但从未被调用的函数（对齐 C# 的 FunctionNotCalledWarning）
+//
+// C# 的做法（ErbLoader.checkScript 后半段）：
+//   * 「根」= 事件/系统标签（@EVENT…/@SYSTEM_…，Depth=0）+ 带 #FUNCTION(S) 的标签；
+//   * setJumpTo 每解析出一个 CALL/JUMP 的**静态**目标，就把该标签的 Depth 记为
+//     根深度 +1，于是从根出发做广度遍历就能得到「可达 = 被调用」的集合；
+//   * 只要出现过 CALLFORM 系（名字运行期求值）或 TRYCALLLIST/TRYJUMPLIST，
+//     就**整体放弃**这个判定（useCallForm）——名字在运行期才知道，静态没有依据；
+//   * 剩下 Depth 仍为 -1 的标签就是「定义了但没被调用」。
+//
+// 本实现同判据（含 useCallForm 的整体放弃）。默认**关闭**：C#
+// `関数が呼び出されなかった警告の扱い` 的默认值就是 IGNORE，eraTW 也显式写了 IGNORE，
+// 而且它用了大量 CALLFORM —— 两条都命中，开着也不会有什么输出。
+// ---------------------------------------------------------------------------
+void EraParseTable::checkNotCalledFunctions() {
+    if (!m_functionNotCalledWarning) return;
+
+    // 1) 收集全部函数标签（含同名重复声明）与「是否是根」
+    struct LabelInfo { QList<const LogicalLine*> declLines; bool root = false; bool called = false; };
+    QHash<QString, LabelInfo> labels;
+    QList<QString> order;
+    for (auto script = m_scripts.constBegin(); script != m_scripts.constEnd(); ++script) {
+        for (const LogicalLine& line : script.value().lines) {
+            if (line.kind != LineKind::FunctionLabel) continue;
+            const QString key = line.labelName.toUpper();
+            auto it = labels.find(key);
+            if (it == labels.end()) {
+                it = labels.insert(key, LabelInfo{});
+                order.append(key);
+            }
+            it->declLines.append(&line);
+            if (const UserFunctionDecl* decl = userFunction(key)) {
+                if (decl->isEvent || decl->isSystem || decl->isMethod) it->root = true;
+            }
+        }
+    }
+
+    // 2) useCallForm：CALLFORM 系 / TRYCALLLIST 系一旦出现，名字就是运行期求值的，
+    //    静态无从判定「没被调用」—— 整体放弃（与 C# 一致）。
+    for (auto script = m_scripts.constBegin(); script != m_scripts.constEnd(); ++script) {
+        for (const LogicalLine& line : script.value().lines) {
+            switch (line.runnerInstruction) {
+            case RunnerInstruction::CALLFORM:
+            case RunnerInstruction::CALLFORMF:
+            case RunnerInstruction::JUMPFORM:
+            case RunnerInstruction::GOTOFORM:
+                return;
+            default:
+                break;
+            }
+            const QString& n = line.functionName;
+            if (n == QLatin1String("TRYCALLLIST") || n == QLatin1String("TRYJUMPLIST")
+                || n == QLatin1String("GOTOLIST"))
+                return;
+        }
+    }
+
+    // 3) 调用图：函数体 -> 静态目标（statement 的 CALL/JUMP 与表达式里的用户函数）
+    QHash<QString, QSet<QString>> edges;
+    QList<QString> pending;
+    for (auto script = m_scripts.constBegin(); script != m_scripts.constEnd(); ++script) {
+        QString current;
+        for (const LogicalLine& line : script.value().lines) {
+            if (line.kind == LineKind::FunctionLabel) {
+                current = line.labelName.toUpper();
+                continue;
+            }
+            if (current.isEmpty()) continue;
+            const auto mark = [&](const QString& target) {
+                if (target.isEmpty()) return;
+                edges[current].insert(target.toUpper());
+            };
+            switch (line.runnerInstruction) {
+            case RunnerInstruction::CALL:
+            case RunnerInstruction::CALLF:
+            case RunnerInstruction::JUMP:
+                if (!line.arguments.isEmpty()) {
+                    QString name = line.arguments.first().raw.trimmed();
+                    if (name.startsWith(QLatin1Char('@'))) name.remove(0, 1);
+                    if (!name.contains(QLatin1Char('%')) && !name.contains(QLatin1Char('{'))
+                        && !name.contains(QLatin1String("[[")))
+                        mark(name);
+                }
+                break;
+            default:
+                break;
+            }
+            // 表达式里的用户函数调用（`X = USERFUNC(…)`）同样算「被调用」
+            const auto scanAst = [&](const QSharedPointer<ExpressionNode>& ast) {
+                if (!ast) return;
+                walkExpression(*ast, [&](ExpressionNode& node) {
+                    if (node.kind() != NodeKind::Function) return;
+                    const auto& fn = static_cast<const FunctionNode&>(node);
+                    if (fn.isUserFunction()) mark(fn.name());
+                });
+            };
+            for (const Operand& op : line.arguments) scanAst(op.ast);
+            scanAst(line.condition);
+            for (const auto& ast : line.assignmentAsts) scanAst(ast);
+        }
+    }
+
+    // 4) 从根出发做广度遍历
+    QList<QString> queue;
+    for (auto it = labels.constBegin(); it != labels.constEnd(); ++it) {
+        if (it->root) queue.append(it.key());
+    }
+    for (int i = 0; i < queue.size(); ++i) {
+        const QString key = queue.at(i);
+        auto lit = labels.find(key);
+        if (lit != labels.end()) {
+            if (lit->called) continue;
+            lit->called = true;
+        }
+        for (const QString& next : edges.value(key)) {
+            const auto nit = labels.constFind(next);
+            if (nit == labels.constEnd() || nit->called) continue;
+            queue.append(next);
+        }
+    }
+
+    // 5) 报「定义了但没被调用」
+    for (const QString& key : order) {
+        const LabelInfo& info = labels.value(key);
+        if (info.called || info.root) continue;
+        for (const LogicalLine* line : info.declLines) {
+            m_diagnostics.add(DiagSeverity::Warning, DiagCode::kNotCalled,
+                line->position.filename, line->position.lineNumber, line->position.column, 0,
+                QCoreApplication::translate("ParseDiagnostics",
+                    "関数@%1は定義されていますが一度も呼び出されません").arg(line->labelName));
+        }
+    }
+}
+
+void EraParseTable::markLoadComplete() {    // 装载收尾（唯一入口）：全局声明定稿 → 全体脚本就地定型/重绑 → 统一出诊断。
     // 必须在**全部**声明就绪后进行：跨文件前向引用（先装载的文件调用后装载文件的
     // 函数）此刻才可解析；诊断随后统一产生，不重复。
     QElapsedTimer completeTimer;
@@ -1457,22 +2050,37 @@ void EraParseTable::markLoadComplete() {
     // 收尾各步在 GUI 线程上串行执行（eraTW 桌面实测合计 13s+，Android 上更久），
     // 期间心跳定时器也发不出来。逐步留痕：真机上「卡在收尾的哪一步」是能看出来的。
     qint64 stepMs = completeTimer.elapsed();
-    qInfo().noquote() << "[parse] 收尾步骤 1/4 全局声明定稿(resolveGlobalDeclarations) 开始:"
+    qInfo().noquote() << "[parse] 收尾步骤 1/6 全局声明定稿(resolveGlobalDeclarations) 开始:"
                       << m_scripts.size() << "脚本";
     resolveGlobalDeclarations();   // 声明预登记后 #FUNCTION 表才随 loadScript 补齐，此处再结算一次
-    qInfo().noquote() << "[parse] 收尾步骤 1/4 完成:" << (completeTimer.elapsed() - stepMs) << "ms";
+    qInfo().noquote() << "[parse] 收尾步骤 1/6 完成:" << (completeTimer.elapsed() - stepMs) << "ms";
     stepMs = completeTimer.elapsed();
-    qInfo().noquote() << "[parse] 收尾步骤 2/4 就地定型(finalizeBindings) 开始";
+    qInfo().noquote() << "[parse] 收尾步骤 2/6 就地定型(finalizeBindings) 开始";
     finalizeBindings();
-    qInfo().noquote() << "[parse] 收尾步骤 2/4 完成:" << (completeTimer.elapsed() - stepMs) << "ms";
+    qInfo().noquote() << "[parse] 收尾步骤 2/6 完成:" << (completeTimer.elapsed() - stepMs) << "ms";
     stepMs = completeTimer.elapsed();
-    qInfo().noquote() << "[parse] 收尾步骤 3/4 参数校验(finalizeValidation) 开始";
+    qInfo().noquote() << "[parse] 收尾步骤 3/6 参数校验(finalizeValidation) 开始";
     finalizeValidation();
-    qInfo().noquote() << "[parse] 收尾步骤 3/4 完成:" << (completeTimer.elapsed() - stepMs) << "ms";
+    qInfo().noquote() << "[parse] 收尾步骤 3/6 完成:" << (completeTimer.elapsed() - stepMs) << "ms";
     stepMs = completeTimer.elapsed();
-    qInfo().noquote() << "[parse] 收尾步骤 4/4 跳转目标解析(resolveStaticTargets) 开始";
+    qInfo().noquote() << "[parse] 收尾步骤 4/6 跳转目标解析(resolveStaticTargets) 开始";
     resolveStaticTargets();
-    qInfo().noquote() << "[parse] 收尾步骤 4/4 完成:" << (completeTimer.elapsed() - stepMs) << "ms";
+    qInfo().noquote() << "[parse] 收尾步骤 4/6 完成:" << (completeTimer.elapsed() - stepMs) << "ms";
+    stepMs = completeTimer.elapsed();
+    qInfo().noquote() << "[parse] 收尾步骤 5/6 结构配对检查(checkStructures) 开始";
+    checkStructures();
+    qInfo().noquote() << "[parse] 收尾步骤 5/6 完成:" << (completeTimer.elapsed() - stepMs) << "ms";
+    stepMs = completeTimer.elapsed();
+    qInfo().noquote() << "[parse] 收尾步骤 6/6 静态值检查(checkStaticValues) 开始";
+    checkStaticValues();
+    qInfo().noquote() << "[parse] 收尾步骤 6/6 完成:" << (completeTimer.elapsed() - stepMs) << "ms";
+    // 可选步骤：未被调用的函数告警（默认关闭，见 setFunctionNotCalledWarning）
+    if (m_functionNotCalledWarning) {
+        stepMs = completeTimer.elapsed();
+        qInfo().noquote() << "[parse] 收尾步骤 7(可选) 未被调用函数检查(checkNotCalledFunctions) 开始";
+        checkNotCalledFunctions();
+        qInfo().noquote() << "[parse] 收尾步骤 7(可选) 完成:" << (completeTimer.elapsed() - stepMs) << "ms";
+    }
     m_finalized = true;   // 只读区定型：装载完成后不再编译新源码
     qInfo().noquote() << "[parse] markLoadComplete：" << m_scripts.size() << "脚本"
                       << completeTimer.elapsed() << "ms";
@@ -1661,15 +2269,25 @@ void EraParseTable::finalizeValidation() {
                 auto& operand = line.arguments[0];
                 // expressionAstInScope 已按 ownerFunction 定型 —— 不再克隆/重定型。
                 operand.ast = expressionAstInScope(operand.raw, line.ownerFunction, true);
-                if (!operand.ast || operand.ast->kind() != NodeKind::Variable
-                    || static_cast<const VariableNode&>(*operand.ast).readOnly
-                    || operand.ast->valueType() == OperandType::Str) {
+                const bool ok = operand.ast && operand.ast->kind() == NodeKind::Variable
+                    && !static_cast<const VariableNode&>(*operand.ast).readOnly
+                    && operand.ast->valueType() != OperandType::Str;
+                // 这一步是 `X ++` 的**权威**判定：构建期的临时 AST 在「无作用域」
+                // 上下文里解析，可能把「与别处同名常量重名的函数私有变量」折成字面量
+                // （eraTW 的 `削除行数 ++`：CASINO_SLOT 里的 `#DIM CONST 削除行数`
+                // 会让 COMF625 的同名私有变量在构建期变成 `51`），于是收尾第 3 步
+                // 的 ArgumentParser 会拿那个陈旧的字面量报「第一个参数需要变量节点」。
+                // 因此这里通过时必须**清掉**那次残留的错误状态（typeOk/errMes），
+                // 否则语义已经判定正确的行仍会带着旧错误进入 validateArguments。
+                line.argument.typeOk = ok;
+                line.argument.typeError.clear();
+                line.isError = !ok;
+                line.errMes.clear();
+                if (!ok) {
                     const QString error = QCoreApplication::translate("ParseDiagnostics",
                         "%1 的变量参数无法装载：%2 (%3)")
                         .arg(line.functionName, operand.raw, line.position.toString());
-                    line.argument.typeOk = false;
                     line.argument.typeError = error;
-                    line.isError = true;
                     line.errMes = error;
                     m_diagnostics.add(DiagSeverity::Error, DiagCode::kArgCheck,
                         line.position.filename, line.position.lineNumber, line.position.column, 0, error);

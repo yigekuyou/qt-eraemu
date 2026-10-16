@@ -74,11 +74,18 @@ ErbDiagnostic exportDiagnostic(const ParseDiagnostic& pd) {
 }
 
 QMap<QString, ErbDocument> analyzeSources(const QMap<QString, QString>& sources,
-                                         bool complete) {
+                                         bool complete,
+                                         const ErbPreprocessor::RenameMap* rename,
+                                         bool notCalledWarning = false) {
     static const ExtensionRegistry extensions;
     EraParseTable table(nullptr);
     QMap<QString, ErbDocument> documents;
     ErbPreprocessor pre;
+    // [[名前]] -> 換字（CSV/_Rename.csv）：与装载器的 ErbLoader::tryAutoLoadRename 同源。
+    // 不做这一步，`[[鈴仙・優曇華院・イナバ]]`（实际是角色番号）会被当成字符串字面量，
+    // 于是 `勝負内衣判定([[…]])` 报「第 1 个实参需要Int，实得字符串」、
+    // `1 + 2 * [[…]]` 报「二元运算类型错误」——eraTW 上这类噪声占绝大多数。
+    if (rename) pre.setRenameMap(*rename);
     QStringList names = sources.keys();
     std::stable_sort(names.begin(), names.end(), [](const QString& a, const QString& b) {
         return a.endsWith(QLatin1String(".erh"), Qt::CaseInsensitive)
@@ -106,10 +113,17 @@ QMap<QString, ErbDocument> analyzeSources(const QMap<QString, QString>& sources,
         QList<LogicalLine> lines;
         ParseDiagnostics diagnostics;
         ScriptPosition current;
+        // 解析**必须带所属函数作用域**（对齐装载器 ErbLoader::resolveExpr 的 scope）：
+        //   1) 函数私有变量 / `#DIM CONST` 要能在本函数内解析 —— 否则 `X ++`
+        //      这种「与别处同名常量重名的私有变量」会被折成那个常量的字面量；
+        //   2) 作用域为空时，前面文件登记过的**别函数**私有常量会污染本文件的解析。
+        // 装载器的 AST 走的是同一套判据，这里不传作用域就会出现「app 装载 0 告警、
+        // LSP/MCP 却报一堆」的口径差。
+        QString scope;
         // Use the engine's expression frontend and cache, including its providers
         // for constants, variables, user functions and formatted strings.
         const AstResolver resolve = [&](const QString& expression) {
-            auto ast = table.expressionAst(expression);
+            auto ast = table.expressionAstInScope(expression, scope);
             if (!ast && !expression.trimmed().isEmpty())
                 diagnostics.add(DiagSeverity::Warning, DiagCode::kExprParse,
                                 name, current.lineNumber, current.column, 0,
@@ -117,7 +131,7 @@ QMap<QString, ErbDocument> analyzeSources(const QMap<QString, QString>& sources,
             return ast;
         };
         const AstResolver quiet = [&](const QString& expression) {
-            return table.expressionAst(expression, true);
+            return table.expressionAstInScope(expression, scope, true);
         };
         for (const auto& entry : source) {
             current = ScriptPosition(name, entry.physicalLine, 1);
@@ -126,6 +140,7 @@ QMap<QString, ErbDocument> analyzeSources(const QMap<QString, QString>& sources,
             if (line.kind == LineKind::FunctionLabel || line.kind == LineKind::GotoLabel)
                 doc.symbols.append({line.labelName, qMax(0, current.lineNumber - 1),
                                     line.kind == LineKind::GotoLabel});
+            if (line.kind == LineKind::FunctionLabel) scope = line.labelName;
             lines.append(line);
         }
         for (const auto& diagnostic : diagnostics.all())
@@ -140,6 +155,8 @@ QMap<QString, ErbDocument> analyzeSources(const QMap<QString, QString>& sources,
         documents.insert(name, doc);
     }
     if (complete) {
+        // 游戏配置要求「関数が呼び出されなかった警告」时才开启该步（C# 默认 IGNORE）。
+        table.setFunctionNotCalledWarning(notCalledWarning);
         // 全部文档装载完成：声明定稿 + 全体脚本就地定型/重绑 + 统一出诊断
         // （loadScript 只登记脚本与函数/标签，绑定一律在此处单趟完成）。
         table.markLoadComplete();
@@ -236,12 +253,53 @@ QString ErbAnalyzer::declaredEncodingName(const QString& dir) {
 
 ErbDocument ErbAnalyzer::parse(const QString& text, const QString& fileName) const {
     // Keep the original syntax-only contract for existing protocol consumers.
-    return analyzeSources({{fileName, text}}, false).value(fileName);
+    return analyzeSources({{fileName, text}}, false, nullptr, false).value(fileName);
 }
 
 QMap<QString, ErbDocument> ErbAnalyzer::analyzeWorkspace(
-    const QMap<QString, QString>& sources) const {
-    return analyzeSources(sources, true);
+    const QMap<QString, QString>& sources,
+    const QHash<QString, QString>& renameMap,
+    bool notCalledWarning) const {
+    return analyzeSources(sources, true, renameMap.isEmpty() ? nullptr : &renameMap,
+                          notCalledWarning);
+}
+
+QHash<QString, QString> ErbAnalyzer::readRenameMap(const QString& gameRoot) {
+    if (gameRoot.isEmpty()) return {};
+    // 与 ErbLoader::tryAutoLoadRename 同一批候选位置：<游戏>/CSV/_Rename.csv 优先，
+    // 其次 <游戏>/ERB/../_Rename.csv（旧布局把 CSV 直接放在 ERB 旁边）。
+    const QStringList candidates = {
+        gameRoot + QStringLiteral("/CSV/_Rename.csv"),
+        gameRoot + QStringLiteral("/_Rename.csv"),
+    };
+    for (const QString& path : candidates) {
+        if (!QFileInfo::exists(path)) continue;
+        bool ok = false;
+        const QString text = TextCodecUtil::readFile(path, TextEncoding::Auto, nullptr, &ok);
+        if (!ok) continue;
+        const auto map = ErbPreprocessor::parseRenameCsv(text);
+        return QHash<QString, QString>(map);
+    }
+    return {};
+}
+
+bool ErbAnalyzer::readFunctionNotCalledWarning(const QString& gameRoot) {
+    if (gameRoot.isEmpty()) return false;
+    ConfigLoader loader;
+    bool any = false;
+    for (const QString& rel : {QStringLiteral("emuera.config"), QStringLiteral("CSV/_fixed.config"),
+                               QStringLiteral("_fixed.config")}) {
+        const QString path = gameRoot + QLatin1Char('/') + rel;
+        if (!QFileInfo::exists(path)) continue;
+        loader.mergeConfig(path);
+        any = true;
+    }
+    if (!any) return false;
+    // C# 的键名就是 ConfigData 里那句日语（中文 fork 也沿用同一键名，见 eraTW）。
+    const QString key = QString::fromUtf8("関数が呼び出されなかった警告の扱い");
+    if (!loader.hasConfig(key)) return false;   // 未声明 -> 用 C# 默认值 IGNORE
+    const QString value = loader.getConfig(key).trimmed().toUpper();
+    return value == QLatin1String("DISPLAY") || value == QLatin1String("ONCE");
 }
 
 QStringList ErbAnalyzer::instructionNames() {
@@ -340,7 +398,13 @@ QMap<QString, ErbDocument> ErbAnalyzer::analyzeGameWorkspace(const QString& erbD
     // ---- 未命中：全量读盘 + 一次性跨文件分析（ERB 目录的父目录 = 游戏根）----
     const QString gameRoot = QFileInfo(erbDir).absolutePath();
     const WorkspaceSources raw = readWorkspace(erbDir, gameRoot);
-    QMap<QString, ErbDocument> documents = analyzeWorkspace(raw.sources);
+    // CSV/_Rename.csv 的換字表：与装载器同一数据源（`[[名前]]` -> 番号/文本）。
+    // 不装载它，eraTW 的 `勝負内衣判定([[鈴仙…]])` 会整类误报。
+    const QHash<QString, QString> rename = readRenameMap(gameRoot);
+    // 「関数が呼び出されなかった警告」按游戏配置决定（C# 默认 IGNORE -> 关）。
+    const bool notCalledWarning = readFunctionNotCalledWarning(gameRoot);
+    QMap<QString, ErbDocument> documents =
+        analyzeWorkspace(raw.sources, rename, notCalledWarning);
     for (auto it = raw.encodingNotes.constBegin(); it != raw.encodingNotes.constEnd(); ++it) {
         auto doc = documents.find(it.key());
         if (doc == documents.end()) continue;

@@ -18,6 +18,7 @@
 #include "erb_analyzer.h"
 
 #include <QFileInfo>
+#include <QDir>
 #include <QSet>
 #include <algorithm>
 
@@ -31,6 +32,7 @@
 #include "GameData/ast/logical_line.h"      // LogicalLine / LineKind / ScriptPosition
 #include "GameData/ast/operand_type.h"      // operandTypeName
 #include "GameData/ast/parse_diagnostic.h"  // ParseDiagnostics / DiagCode
+#include "GameData/file_system_io.h"        // FileSystem::collectTree / listFilesFromTree（复用引擎文件 IO）
 #include "GameProc/era_parse_table.h"
 #include "GameProc/extension_registry.h"    // 扩展语句/函数表（解析期的「已知指令集」）
 
@@ -273,6 +275,87 @@ QString ErbAnalyzer::functionSpec(const QString& name) {
     if (!s) return {};
     return QStringLiteral("式中函数 %1：返回 %2，参数 %3")
         .arg(fromSv(s->name), fromSv(operandTypeName(s->ret)), specRange(s->minArgs, s->maxArgs));
+}
+
+// ---------------------------------------------------------------------------
+// 整局游戏工作区（LSP/MCP 的「全量定义」上下文）
+// ---------------------------------------------------------------------------
+
+QString ErbAnalyzer::detectWorkspaceDir(const QString& filePath) {
+    if (filePath.isEmpty()) return {};
+    QDir dir = QFileInfo(filePath).absoluteDir();
+    for (;;) {
+        if (dir.dirName().compare(QLatin1String("erb"), Qt::CaseInsensitive) == 0)
+            return dir.absolutePath();
+        // cdUp() 到根后再向上返回 false；根目录 dirName 为空串，不会误判。
+        if (!dir.cdUp() || dir.isRoot()) return {};
+    }
+}
+
+WorkspaceSources ErbAnalyzer::readWorkspace(const QString& dir,
+                                                        const QString& declaredEncodingDir) {
+    WorkspaceSources out;
+    if (dir.isEmpty() || !QFileInfo(dir).isDir()) return out;
+    const TextEncoding declared = declaredEncodingDir.isEmpty()
+        ? TextEncoding::Auto
+        : TextCodecUtil::fromName(declaredEncodingName(declaredEncodingDir));
+    // 复用引擎装载的那套文件 IO：collectTree 一趟路径树 + 纯内存后缀过滤，
+    // 与常量表/角色 CSV 装载完全同源（Android SAF 下也只用一次 provider 往返/目录）。
+    const DirNode tree = FileSystem::collectTree(dir);
+    const QStringList files = FileSystem::listFilesFromTree(
+        tree, {QStringLiteral("*.erb"), QStringLiteral("*.erh")}, true);
+    for (const QString& file : files) {
+        TextEncoding detected = TextEncoding::Auto;
+        bool ok = false;
+        const QString text = TextCodecUtil::readFile(file, TextEncoding::Auto, &detected, &ok);
+        if (!ok) continue;   // 读不出的文件跳过，不静默当成空文件
+        const QString key = QFileInfo(file).absoluteFilePath();
+        out.sources.insert(key, text);
+        // 空文件没有可误读的内容，编码偏差对它是空话（eraTW 有两个 0 字节 ERB）。
+        if (text.isEmpty()) continue;
+        const QString note = TextCodecUtil::describeEncodingMismatch(detected, declared);
+        if (!note.isEmpty()) out.encodingNotes.insert(key, note);
+    }
+    return out;
+}
+
+QMap<QString, ErbDocument> ErbAnalyzer::analyzeGameWorkspace(const QString& erbDir) const {
+    if (erbDir.isEmpty() || !QFileInfo(erbDir).isDir()) return {};
+    // ---- 签名：文件集 + 大小 + mtime（本地 stat 很便宜；变化 = 立即重新分析）----
+    const DirNode tree = FileSystem::collectTree(erbDir);
+    const QStringList files = FileSystem::listFilesFromTree(
+        tree, {QStringLiteral("*.erb"), QStringLiteral("*.erh")}, true);
+    QStringList parts;
+    parts.reserve(files.size() * 3);
+    for (const QString& file : files) {
+        const QFileInfo info(file);
+        parts << file << QString::number(info.size())
+              << QString::number(info.lastModified().toMSecsSinceEpoch());
+    }
+    const QString signature = parts.join(QChar(u'\x1'));
+    const auto cached = m_gameCache.find(erbDir);
+    if (cached != m_gameCache.end() && cached->signature == signature)
+        return cached->documents;
+
+    // ---- 未命中：全量读盘 + 一次性跨文件分析（ERB 目录的父目录 = 游戏根）----
+    const QString gameRoot = QFileInfo(erbDir).absolutePath();
+    const WorkspaceSources raw = readWorkspace(erbDir, gameRoot);
+    QMap<QString, ErbDocument> documents = analyzeWorkspace(raw.sources);
+    for (auto it = raw.encodingNotes.constBegin(); it != raw.encodingNotes.constEnd(); ++it) {
+        auto doc = documents.find(it.key());
+        if (doc == documents.end()) continue;
+        ErbDiagnostic d;
+        d.line = 0;
+        d.startCol = 0;
+        d.endCol = 0;
+        d.severity = QStringLiteral("warning");
+        d.code = QString::fromLatin1(DiagCode::kEncoding);
+        d.message = it.value();
+        doc->attributed.append(d);
+    }
+    if (m_gameCache.size() >= 4) m_gameCache.clear();   // 简单容量上限：整局 AST 不小
+    m_gameCache.insert(erbDir, {signature, documents});
+    return documents;
 }
 
 }  // namespace eproto

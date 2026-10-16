@@ -1372,6 +1372,82 @@ void EraParseTable::applyVariableTypes() {
     }
 }
 
+// ---------------------------------------------------------------------------
+// 收尾步骤 4：静态解析「运行期跳转/调用目标」（对齐 C# ErbLoader.setJumpTo）
+//
+// C# 在装载第 3 趟 setJumpTo 里把**静态可知**的跳转目标解析一次：解析不到就把
+// 该行标成 IsError（运行到就抛）并计入「関数が見つからない警告」。这就是把
+// 「跑到那行才炸」的错误提前到装载期的标准做法：只对**常量目标**下结论，
+// 目标带格式串（%…% / {…} / [[Rename]]）时视为运行期求值，一律不下结论。
+// 本实现与运行期解析**同源**（CALL 走 hasLabel、GOTO 走本函数内 $标签），
+// 因此不会出现「装载期说没问题、运行期找不到」的口径差。
+//
+//   * CALL/CALLFORM/CALLF/CALLFORMF/JUMP/JUMPFORM：常量目标必须存在
+//   * GOTO/GOTOFORM：常量 $标签必须在**本函数内**（对齐 GetLabelDollar）
+//   * TRY* 系（TRYCALL/TRYJUMP/TRYCCALL/TRYCJUMP/TRYGOTO/TRYCALLEVENT…）：
+//     语义就是「找不到就跳过」，不报（对齐 C# func.Function.IsTry()）
+//   * CALLEVENT / BEGIN / FUNC：C# 不做目标检查（CALLEVENT 缺目标静默），跳过
+void EraParseTable::resolveStaticTargets() {
+    // 目标名：常量目标返回标签名（去掉 @/$ 前缀）；运行期求值返回空（不判定）。
+    const auto staticTarget = [](const LogicalLine& line) -> QString {
+        if (line.arguments.isEmpty()) return {};
+        QString name = line.arguments.first().raw.trimmed();
+        if (name.isEmpty()) return {};
+        if (name.startsWith(QLatin1Char('@')) || name.startsWith(QLatin1Char('$')))
+            name.remove(0, 1);
+        if (name.contains(QLatin1Char('%')) || name.contains(QLatin1Char('{'))
+            || name.contains(QLatin1String("[[")))
+            return {};   // FORM 名 / [[Rename]] 占位：运行期才知道
+        return name;
+    };
+
+    for (auto script = m_scripts.constBegin(); script != m_scripts.constEnd(); ++script) {
+        const ScriptData& data = script.value();
+        // 本脚本各函数的 $标签集合（大小写折叠：标签比较遵循 ICFunction 语义）。
+        QHash<QString, QSet<QString>> dollarLabels;
+        for (const LogicalLine& line : data.lines) {
+            if (line.kind != LineKind::GotoLabel) continue;
+            dollarLabels[line.ownerFunction.toUpper()].insert(line.labelName.toUpper());
+        }
+        for (const LogicalLine& line : data.lines) {
+            bool checkFunction = false;
+            bool checkLabel = false;
+            switch (line.runnerInstruction) {
+            case RunnerInstruction::CALL:
+            case RunnerInstruction::CALLFORM:
+            case RunnerInstruction::CALLF:
+            case RunnerInstruction::CALLFORMF:
+            case RunnerInstruction::JUMP:
+            case RunnerInstruction::JUMPFORM:
+                checkFunction = true;
+                break;
+            case RunnerInstruction::GOTO:
+            case RunnerInstruction::GOTOFORM:
+                checkLabel = true;
+                break;
+            default:
+                break;   // TRY* 系（运行期静默跳过）与 CALLEVENT/FUNC 不检查
+            }
+            if (!checkFunction && !checkLabel) continue;
+            const QString target = staticTarget(line);
+            if (target.isEmpty()) continue;
+            QString message;
+            if (checkFunction) {
+                if (hasLabel(target)) continue;
+                message = QCoreApplication::translate("ParseDiagnostics",
+                    "指定的函数名\"@%1\"不存在（运行到该行会失败）").arg(target);
+            } else {
+                if (dollarLabels.value(line.ownerFunction.toUpper()).contains(target.toUpper()))
+                    continue;
+                message = QCoreApplication::translate("ParseDiagnostics",
+                    "指定的标签名\"$%1\"在当前函数内不存在（运行到该行会失败）").arg(target);
+            }
+            m_diagnostics.add(DiagSeverity::Error, DiagCode::kLabelNotFound,
+                line.position.filename, line.position.lineNumber, line.position.column, 0, message);
+        }
+    }
+}
+
 void EraParseTable::markLoadComplete() {
     // 装载收尾（唯一入口）：全局声明定稿 → 全体脚本就地定型/重绑 → 统一出诊断。
     // 必须在**全部**声明就绪后进行：跨文件前向引用（先装载的文件调用后装载文件的
@@ -1381,18 +1457,22 @@ void EraParseTable::markLoadComplete() {
     // 收尾各步在 GUI 线程上串行执行（eraTW 桌面实测合计 13s+，Android 上更久），
     // 期间心跳定时器也发不出来。逐步留痕：真机上「卡在收尾的哪一步」是能看出来的。
     qint64 stepMs = completeTimer.elapsed();
-    qInfo().noquote() << "[parse] 收尾步骤 1/3 全局声明定稿(resolveGlobalDeclarations) 开始:"
+    qInfo().noquote() << "[parse] 收尾步骤 1/4 全局声明定稿(resolveGlobalDeclarations) 开始:"
                       << m_scripts.size() << "脚本";
     resolveGlobalDeclarations();   // 声明预登记后 #FUNCTION 表才随 loadScript 补齐，此处再结算一次
-    qInfo().noquote() << "[parse] 收尾步骤 1/3 完成:" << (completeTimer.elapsed() - stepMs) << "ms";
+    qInfo().noquote() << "[parse] 收尾步骤 1/4 完成:" << (completeTimer.elapsed() - stepMs) << "ms";
     stepMs = completeTimer.elapsed();
-    qInfo().noquote() << "[parse] 收尾步骤 2/3 就地定型(finalizeBindings) 开始";
+    qInfo().noquote() << "[parse] 收尾步骤 2/4 就地定型(finalizeBindings) 开始";
     finalizeBindings();
-    qInfo().noquote() << "[parse] 收尾步骤 2/3 完成:" << (completeTimer.elapsed() - stepMs) << "ms";
+    qInfo().noquote() << "[parse] 收尾步骤 2/4 完成:" << (completeTimer.elapsed() - stepMs) << "ms";
     stepMs = completeTimer.elapsed();
-    qInfo().noquote() << "[parse] 收尾步骤 3/3 参数校验(finalizeValidation) 开始";
+    qInfo().noquote() << "[parse] 收尾步骤 3/4 参数校验(finalizeValidation) 开始";
     finalizeValidation();
-    qInfo().noquote() << "[parse] 收尾步骤 3/3 完成:" << (completeTimer.elapsed() - stepMs) << "ms";
+    qInfo().noquote() << "[parse] 收尾步骤 3/4 完成:" << (completeTimer.elapsed() - stepMs) << "ms";
+    stepMs = completeTimer.elapsed();
+    qInfo().noquote() << "[parse] 收尾步骤 4/4 跳转目标解析(resolveStaticTargets) 开始";
+    resolveStaticTargets();
+    qInfo().noquote() << "[parse] 收尾步骤 4/4 完成:" << (completeTimer.elapsed() - stepMs) << "ms";
     m_finalized = true;   // 只读区定型：装载完成后不再编译新源码
     qInfo().noquote() << "[parse] markLoadComplete：" << m_scripts.size() << "脚本"
                       << completeTimer.elapsed() << "ms";

@@ -339,6 +339,7 @@ private:
     void finalizeBindings();
     // 全体脚本校验：产出诊断，须在**全部绑定完成后**统一调用（跨文件前向引用）。
     void finalizeValidation();
+    void resolveStaticTargets();      // 收尾步骤 4：静态解析运行期跳转/调用目标（对齐 C# setJumpTo）
     // 全局声明定稿：常量/维数求值器 + 维数 + 全局初值 + 用户函数类型（幂等）。
     void resolveGlobalDeclarations();
     // 校验告警收集器：按脚本并行时每脚本各持一个，随后**按脚本顺序**合并。

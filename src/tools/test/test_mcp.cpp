@@ -1,7 +1,11 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 // MCP protocol and read-only engine integration regressions.
+#include <QDir>
+#include <QFile>
+#include <QFileInfo>
 #include <QJsonArray>
 #include <QJsonDocument>
+#include <QTemporaryDir>
 #include <QTemporaryFile>
 #include <QtTest>
 
@@ -49,6 +53,7 @@ private slots:
     void protocolErrors();
     void completedAst();
     void workspaceDocuments();
+    void gameWorkspaceContext();
     void encodedFileAndEmptySource();
 };
 
@@ -220,6 +225,53 @@ void TestMcp::encodedFileAndEmptySource() {
     QCOMPARE(data(fromFile).value("symbols"), data(fromSource).value("symbols"));
     QVERIFY(!data(fromFile).value("symbols").toArray().isEmpty());
     QVERIFY(result(call(server, "era_validate", {{"path", "/does/not/exist.erb"}})).value("isError").toBool());
+}
+
+// 整局上下文：path 落在游戏 ERB 目录内 → 跨文件定义可见（缓存）；
+// 目录外同一内容 → 单文件分析（对照）；文件变化 → 缓存失效重新分析。
+void TestMcp::gameWorkspaceContext() {
+    QTemporaryDir tmp;
+    QVERIFY(tmp.isValid());
+    QDir root(tmp.path());
+    QVERIFY(root.mkdir(QStringLiteral("ERB")));
+    const QString helper = root.filePath(QStringLiteral("ERB/helper.ERB"));
+    const QString main = root.filePath(QStringLiteral("ERB/main.ERB"));
+    const auto write = [](const QString& path, const QByteArray& bytes) {
+        QFile file(path);
+        QVERIFY(file.open(QIODevice::WriteOnly));
+        QVERIFY(file.write(bytes) == bytes.size());
+    };
+    write(helper, "@HELPER\n#FUNCTION\nRETURNF 7\n");
+    write(main, "@MAIN\nPRINTV HELPER()\nRETURN\n");
+
+    McpServer server;
+    ready(server);
+    const auto countUndefined = [](const QJsonObject& summary) {
+        int n = 0;
+        for (const auto& value : summary.value("diagnostics").toArray())
+            if (value.toObject().value("message").toString().contains(QStringLiteral("未定义的函数")))
+                ++n;
+        return n;
+    };
+    const auto whole = data(call(server, "era_symbols", {{"path", main}}));
+    QCOMPARE(whole.value("fileName").toString(), QFileInfo(main).absoluteFilePath());
+    QCOMPARE(countUndefined(whole), 0);                       // HELPER 跨文件可见
+    QCOMPARE(whole.value("symbols").toArray().size(), 1);     // 只含自身 @MAIN
+
+    // 对照：同一内容不在 ERB 目录下 → 单文件分析 → 未定义告警必然出现
+    const QString loose = root.filePath(QStringLiteral("loose.ERB"));
+    write(loose, "@MAIN\nPRINTV HELPER()\nRETURN\n");
+    QVERIFY(countUndefined(data(call(server, "era_symbols", {{"path", loose}}))) > 0);
+
+    // 缓存失效：文件变化（长度不同）后必须重新分析
+    const int before = whole.value("logicalLineCount").toInt();
+    {
+        QFile file(main);
+        QVERIFY(file.open(QIODevice::WriteOnly | QIODevice::Append));
+        QVERIFY(file.write("\nPRINTV HELPER() + 1\n") > 0);
+    }
+    const auto refreshed = data(call(server, "era_symbols", {{"path", main}}));
+    QVERIFY(refreshed.value("logicalLineCount").toInt() > before);
 }
 
 QTEST_GUILESS_MAIN(TestMcp)

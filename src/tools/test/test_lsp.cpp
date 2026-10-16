@@ -99,6 +99,40 @@ int errorCode(const QJsonObject& reply) {
 class TestLsp : public QObject {
     Q_OBJECT
 private slots:
+
+    // rootUri 是游戏根目录（其下直接有 ERB 子目录）→ 只索引 ERB（引擎装载范围）。
+    // old/ 模拟 eraTW 的 パッチ 目录：其中的定义不参与分析。
+    void gameRootScopesIndexToErbDirectory() {
+        QTemporaryDir tmp;
+        QVERIFY(tmp.isValid());
+        QDir root(tmp.path());
+        QVERIFY(root.mkdir(QStringLiteral("ERB")));
+        QVERIFY(root.mkdir(QStringLiteral("old")));
+        const auto write = [&tmp](const QString& relative, const QByteArray& bytes) {
+            QFile file(tmp.path() + QLatin1Char('/') + relative);
+            QVERIFY(file.open(QIODevice::WriteOnly));
+            QVERIFY(file.write(bytes) == bytes.size());
+        };
+        // 表达式调用是装载期静态绑定（语句 CALL 是运行期绑定，静态不报）
+        write(QStringLiteral("ERB/main.ERB"), "@MAIN\nPRINTV FROM_PATCH()\nRETURN\n");
+        write(QStringLiteral("old/patch.ERB"), "@FROM_PATCH\nRETURN\n");
+
+        LspServer server;
+        request(server, QStringLiteral("initialize"), QJsonObject{
+            {"rootUri", QUrl::fromLocalFile(tmp.path()).toString()},
+            {"capabilities", QJsonObject{}}});
+        send(server, QStringLiteral("initialized"));
+        const QString documentUri =
+            QUrl::fromLocalFile(tmp.path() + QStringLiteral("/ERB/main.ERB")).toString();
+        const auto replies = open(server, "@MAIN\nPRINTV FROM_PATCH()\nRETURN\n", 1, documentUri);
+        bool undefined = false;
+        for (const auto& reply : replies)
+            for (const auto& value : reply.value("params").toObject().value("diagnostics").toArray())
+                undefined |= value.toObject().value("message").toString()
+                                 .contains(QStringLiteral("未定义的函数"));
+        QVERIFY(undefined);
+    }
+
     void numericConversionDiagnostics() {
         LspServer server;
         initialize(server);

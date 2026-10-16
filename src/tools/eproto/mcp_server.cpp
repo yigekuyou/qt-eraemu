@@ -78,9 +78,9 @@ QJsonArray toolDefinitions() {
     add("era_search", "Search engine instruction/function names by case-insensitive substring.",
         objectSchema({{"query", stringSchema("Search text", true)},
                       {"limit", QJsonObject{{"type", "integer"}, {"minimum", 1}, {"maximum", 1000}, {"default", 40}}}}, {"query"}));
-    add("era_validate", "Parse ERB using the engine; return diagnostics, warnings and AST symbols. Does not execute scripts.", sourceSchema());
+    add("era_validate", "Parse ERB using the engine; return diagnostics, warnings and AST symbols. Does not execute scripts. A path inside a game ERB directory is analyzed with the whole game as context (cross-file definitions, cached per directory).", sourceSchema());
     add("era_stats", "Return engine registry sizes.", objectSchema({}));
-    add("era_symbols", "Summarize completed engine AST labels, logical line count and diagnostics. Does not execute scripts.", sourceSchema());
+    add("era_symbols", "Summarize completed engine AST labels, logical line count and diagnostics. Does not execute scripts. A path inside a game ERB directory is analyzed with the whole game as context.", sourceSchema());
     add("era_validate_workspace", "Validate explicit source documents using the engine. Resolves cross-file declarations and expression functions over the completed engine AST; does not traverse the filesystem.",
         objectSchema({{"documents", QJsonObject{{"type", "array"}, {"minItems", 1}, {"maxItems", 256},
             {"items", objectSchema({{"fileName", stringSchema("Unique logical document name", true)},
@@ -233,6 +233,17 @@ QJsonObject McpServer::toolValidate(const QJsonObject& args) const {
     const QString path = args.value("path").toString();
     TextEncoding detected = TextEncoding::Auto;
     if (args.contains("path")) {
+        // 整局游戏上下文：path 位于某个游戏 ERB 目录之下时，用全工作区分析（按目录
+        // 缓存，首次调用做整局分析较慢，之后零读盘）。跨文件函数/声明/宏全部可见，
+        // 单文件模式必然出现的「未定义的函数」等跨文件噪音不再产生，诊断与引擎
+        // 完整装载口径一致。文件不在集合里（非 .erb/.erh）则落回单文件路径。
+        const QString workspace = ErbAnalyzer::detectWorkspaceDir(path);
+        if (!workspace.isEmpty()) {
+            const auto documents = m_analyzer.analyzeGameWorkspace(workspace);
+            const auto doc = documents.constFind(QFileInfo(path).absoluteFilePath());
+            if (doc != documents.constEnd())
+                return toolResult(documentSummary(doc.value()), !doc.value().parsed);
+        }
         bool ok = false;
         source = TextCodecUtil::readFile(path, TextEncoding::Auto, &detected, &ok);
         if (!ok) return toolError("Unable to read file: " + path);

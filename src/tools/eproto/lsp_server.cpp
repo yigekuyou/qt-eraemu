@@ -18,9 +18,8 @@
 #include "lsp_server.h"
 
 #include <QJsonArray>
-#include <QDirListing>
+#include <QDir>
 #include <QFileInfo>
-#include "Config/config_loader.h"
 #include "Content/encoding/text_encoding.h"
 #include "GameData/ast/parse_diagnostic.h"   // DiagCode::kEncoding
 #include <QUrl>
@@ -303,34 +302,32 @@ void LspServer::reparse(const QString& uri, const QString& text) {
     m_docs.insert(uri, doc);
 }
 
-namespace {
-
-// 工作区「声明的编码」：emuera.config / CSV/_fixed.config 里的
-// `TextEncoding`/`テキストエンコーディング`/`文字コード`，或 `内部で使用する東アジア言語`。
-// Auto = 没声明（此时不做「编码不符」判定）。
-TextEncoding declaredEncodingOf(const QString& root) {
-    return TextCodecUtil::fromName(ErbAnalyzer::declaredEncodingName(root));
-}
-
-} // namespace
-
 void LspServer::indexWorkspace() {
     m_diskSources.clear();
     m_encodingIssues.clear();
     if (m_rootPath.isEmpty() || !QFileInfo(m_rootPath).isDir()) return;
-    const TextEncoding declared = declaredEncodingOf(m_rootPath);
-    using F = QDirListing::IteratorFlag;
-    for (const auto& entry : QDirListing(m_rootPath, {QStringLiteral("*.erb"), QStringLiteral("*.erh")},
-                                         F::FilesOnly | F::Recursive)) {
-        const QString uri = QUrl::fromLocalFile(entry.fileInfo().absoluteFilePath()).toString();
-        TextEncoding detected = TextEncoding::Auto;
-        bool ok = false;
-        const QString text = TextCodecUtil::readFile(entry.filePath(), TextEncoding::Auto,
-                                                     &detected, &ok);
-        if (ok) m_diskSources.insert(uri, text);
-        // 唯一要报的编码类问题：**偏离声明的编码**。解码细节（回退到哪个编码、
-        // 会不会乱码）不构成需要上报的问题 —— 装载期间就已经转成 Qt 原生字符了。
-        const QString message = TextCodecUtil::describeEncodingMismatch(detected, declared);
+    // rootUri 是「游戏根目录」（其下直接有 ERB 子目录）时只索引 ERB —— 与引擎的
+    // 实际装载范围一致。eraTW 这类仓库根下还有 パッチ／資料 等目录，里面成百上千
+    // 个 .ERB 是补丁/素材副本，不参与装载；整树索引会把过时定义混进分析。
+    // root 本身就是 ERB 目录、或其下没有 ERB 子目录 → 维持整树索引。
+    QString indexRoot = m_rootPath;
+    if (QFileInfo(m_rootPath).fileName().compare(QLatin1String("erb"), Qt::CaseInsensitive) != 0) {
+        const QDir root(m_rootPath);
+        const QStringList dirs = root.entryList(QDir::Dirs | QDir::NoDotAndDotDot);
+        for (const QString& name : dirs) {
+            if (name.compare(QLatin1String("erb"), Qt::CaseInsensitive) == 0) {
+                indexRoot = root.absoluteFilePath(name);
+                break;
+            }
+        }
+    }
+    // 复用 ErbAnalyzer::readWorkspace：同一套引擎文件 IO（collectTree 路径树）+
+    // 编码偏差判定；LSP 与 MCP 两侧不再各持一份读盘实现。
+    const auto workspace = ErbAnalyzer::readWorkspace(indexRoot, m_rootPath);
+    for (auto it = workspace.sources.constBegin(); it != workspace.sources.constEnd(); ++it) {
+        const QString uri = QUrl::fromLocalFile(it.key()).toString();
+        m_diskSources.insert(uri, it.value());
+        const QString message = workspace.encodingNotes.value(it.key());
         if (!message.isEmpty()) m_encodingIssues.insert(uri, message);
     }
 }

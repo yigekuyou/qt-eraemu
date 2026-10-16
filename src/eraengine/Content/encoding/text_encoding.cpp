@@ -333,6 +333,21 @@ TextEncoding detect(const QByteArray& data) {
 QString describeEncodingMismatch(TextEncoding detected, TextEncoding declared) {
     if (declared == TextEncoding::Auto || detected == TextEncoding::Auto) return {};
     if (detected == declared) return {};
+    // BOM 自证的检测结果（UTF-8/16/32 带 BOM）：文件自带无歧义的编码声明，
+    // 按它读出**没有任何误读风险**，不构成需要上报的「偏离声明」。
+    // 只有无 BOM 的启发式探测结果与声明不一致时才报 —— 那才是会读错的风险面。
+    // （真实游戏普遍如此：eraTW/eraH 已整体转 UTF-8+BOM，而 emuera.config 的
+    // `内部で使用する東アジア言語` 仍是 JAPANESE —— 若不豁免 BOM，每个文件都会告警。）
+    switch (detected) {
+    case TextEncoding::Utf8Bom:
+    case TextEncoding::Utf16LE:
+    case TextEncoding::Utf16BE:
+    case TextEncoding::Utf32LE:
+    case TextEncoding::Utf32BE:
+        return {};
+    default:
+        break;
+    }
     return QStringLiteral("编码不符：实际按 %1 读出，游戏声明的是 %2")
         .arg(QString::fromLatin1(name(detected)), QString::fromLatin1(name(declared)));
 }

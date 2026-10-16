@@ -18,6 +18,7 @@
 #ifndef EPROTO_ERB_ANALYZER_H
 #define EPROTO_ERB_ANALYZER_H
 
+#include <QHash>
 #include <QList>
 #include <QMap>
 #include <QString>
@@ -65,6 +66,13 @@ struct EPROTO_API ErbDocument {
     bool                 parsed = false;
 };
 
+// 一个目录里全部 ERB/ERH 的读盘结果（纯派生数据；键是绝对路径）。
+// encodingNotes 是「实际读出的编码 != 声明的编码」的说明文本（见 describeEncodingMismatch）。
+struct EPROTO_API WorkspaceSources {
+    QMap<QString, QString> sources;
+    QMap<QString, QString> encodingNotes;
+};
+
 class EPROTO_API ErbAnalyzer {
 public:
     ErbAnalyzer() = default;
@@ -80,6 +88,25 @@ public:
     [[nodiscard]] QMap<QString, ErbDocument> analyzeWorkspace(
         const QMap<QString, QString>& sources) const;
 
+    // 文件所在的「游戏 ERB 工作区」目录：向上找最近的名为 ERB 的祖先目录
+    // （大小写不敏感 —— 与引擎装载范围 <游戏>/ERB 一致）；找不到返回空。
+    // eraTW/eraH/eraMegaten 等真实游戏都把脚本放在 <游戏>/ERB 下。
+    [[nodiscard]] static QString detectWorkspaceDir(const QString& filePath);
+
+    // 递归读取目录下全部 *.erb/*.erh（复用引擎 FileSystem::collectTree 的一次性
+    // 路径树 —— 与常量表/角色 CSV 装载同一套文件 IO）。declaredEncodingDir 用于
+    // 「声明的编码」查找（游戏根目录）；留空表示不判定编码偏差。
+    // 读不出的文件被跳过（与 LSP 现行为一致，不静默当成空文件）。
+    [[nodiscard]] static WorkspaceSources readWorkspace(const QString& dir,
+                                                        const QString& declaredEncodingDir = {});
+
+    // 以「整局游戏」为上下文分析：把 erbDir 下全部脚本一次性交给 analyzeWorkspace
+    // （跨文件声明、函数绑定、类型收尾全量生效），返回键为绝对路径的文档集；
+    // 编码偏差作为 DiagCode::kEncoding 诊断挂在对应文档上。
+    // 结果按目录缓存（签名 = 文件集 + 大小 + mtime），未变化时后续调用零读盘。
+    [[nodiscard]] QMap<QString, ErbDocument> analyzeGameWorkspace(const QString& erbDir) const;
+
+
     // 工作区/游戏目录「声明的编码」名（读 `emuera.config` / `CSV/_fixed.config` 的
     // `TextEncoding`/`テキストエンコーディング`/`文字コード`，或 `内部で使用する東アジア言語`）。
     // 返回空 = 没声明。刻意返回**编码名字符串**（派生数据），不把引擎的 TextEncoding
@@ -93,6 +120,14 @@ public:
     [[nodiscard]] static QStringList functionNames();      // kBuiltinFunctions
     [[nodiscard]] static QString instructionSpec(const QString& name);  // 参数形态
     [[nodiscard]] static QString functionSpec(const QString& name);     // 返回类型/参数
+
+private:
+    // analyzeGameWorkspace 的整局缓存（工具进程单线程使用，不加锁）。
+    struct GameCache {
+        QString                    signature;   // 文件集 + size + mtime 摘要
+        QMap<QString, ErbDocument> documents;
+    };
+    mutable QHash<QString, GameCache> m_gameCache;   // erbDir 绝对路径 -> 缓存
 };
 
 }  // namespace eproto

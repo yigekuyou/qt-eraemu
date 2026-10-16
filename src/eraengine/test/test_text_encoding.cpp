@@ -273,9 +273,15 @@ int main(int argc, char* argv[]) {
         check(ok && detected == TextEncoding::Utf8Bom,
               QString("detected = UTF-8-BOM（得到 %1）")
                   .arg(QString::fromLatin1(TextCodecUtil::name(detected))));
-        // 与声明的 SHIFT-JIS 不符 -> 报；一致 / 未声明 -> 不报
-        check(!TextCodecUtil::describeEncodingMismatch(detected, TextEncoding::ShiftJis).isEmpty(),
-              "实际 UTF-8-BOM != 声明 SHIFT-JIS -> 报「编码不符」");
+        // BOM 自证的检测结果不报「编码不符」：文件自带无歧义的编码声明，按 BOM
+        // 读出没有误读风险（eraTW/eraH 整体 UTF-8+BOM 而配置语言仍是 JAPANESE，
+        // 若不豁免，每个文件都会告警）。真正要报的是**无 BOM** 的探测偏差。
+        check(TextCodecUtil::describeEncodingMismatch(detected, TextEncoding::ShiftJis).isEmpty(),
+              "UTF-8+BOM 自证 != 声明 SHIFT-JIS -> 不报（读法无歧义）");
+        check(!TextCodecUtil::describeEncodingMismatch(TextEncoding::ShiftJis, TextEncoding::Utf8).isEmpty(),
+              "无 BOM 探测(SHIFT-JIS) != 声明 UTF-8 -> 报「编码不符」");
+        check(!TextCodecUtil::describeEncodingMismatch(TextEncoding::Utf8, TextEncoding::ShiftJis).isEmpty(),
+              "无 BOM 探测(UTF-8) != 声明 SHIFT-JIS -> 报「编码不符」");
         check(TextCodecUtil::describeEncodingMismatch(detected, detected).isEmpty(),
               "与声明一致 -> 不报");
         check(TextCodecUtil::describeEncodingMismatch(detected, TextEncoding::Auto).isEmpty(),

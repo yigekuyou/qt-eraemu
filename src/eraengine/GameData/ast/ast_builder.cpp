@@ -717,7 +717,12 @@ LogicalLine AstBuilder::build(const QString& rawLine,
     // 标签行
     if (trimmed.startsWith('@') || trimmed.startsWith('$')) {
         line.kind = trimmed.startsWith('@') ? LineKind::FunctionLabel : LineKind::GotoLabel;
-        const QString label = trimmed.mid(1);
+        // '@'/'$' 之后的**前导空白**必须跳过：C# ErbLoader 只 ShiftNext() 掉符号，
+        // 名字由 LexicalAnalyzer 读（它会 SkipWhiteSpace）—— 所以 `$ GOOUT` 的标签名
+        // 就是 GOOUT。eraTW 有 4 行这种写法（NASIKUZUSI.ERB 的 `$ GOOUT`、
+        // COMF410 掃除.ERB 的 `$ CANCEL_LOOP` 等）；此前名字被切成空串，标签根本没登记，
+        // 运行到 `GOTO GOOUT` 就报 "GOTO label not found"。
+        const QString label = trimmed.mid(1).trimmed();
         // 标签名 = 首个标识符 token（对齐 C# LexicalAnalyzer：名字不能含
         // 空格 / 全角空格 / 制表符 / ( , [ : = 等符号）
         int cut = label.size();

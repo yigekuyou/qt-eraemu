@@ -311,6 +311,8 @@ private:
     QString m_erbDir;     // 解析后的 ERB 目录（绝对路径，实际大小写）
     bool    m_searchSubdirectory = true;   // Config.SearchSubdirectory（子目录内检索）
     ConstantTable m_constantTable;         // CSV 常量名表
+    DirNode m_csvTree;                     // CSV 目录预扫描路径树（SAF 下多趟遍历是加载耗时大头）
+    bool m_csvTreeValid = false;           // m_csvTree 是否对应当前 m_csvDir
     TextEncoding  m_textEncoding = TextEncoding::Auto;   // 读编码（Auto = 逐文件嗅探）
     EncodingProbeResult m_probeResult;                  // ROM 编码探测结果
     GameBaseData m_gameBaseData;
@@ -355,6 +357,7 @@ private:
     bool m_hasError = false;   // 最近一次执行出错（状态灯）
     bool m_defaultTitleVisible = false;   // 标准标题画面（QML）是否显示    // ---- 内部：目录解析与分批装载 ----
     bool resolveGameDirs();          // 解析 CSV/ERB 目录（绝对路径 + 实际大小写）
+    [[nodiscard]] const DirNode& csvTree();   // 惰性预扫描 m_csvDir 的路径树（resolveGameDirs 时失效）
     void loadConfigFiles();          // _default.config / emuera.config / _fixed.config
     void loadConstantData();         // CSV 目录内的常量数据（VariableSize 等）
     void collectEntryPoints();       // 从已装载 AST 收集入口点（不再二次扫文件）

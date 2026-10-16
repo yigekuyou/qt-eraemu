@@ -103,29 +103,32 @@ bool ConstantTable::loadCsvFile(const QString& filePath, const QString& tableKey
 }
 
 int ConstantTable::loadCsvDirectory(const QString& csvDir, bool recursive) {
+    // 薄壳：一次预扫描后查树装载（每目录只一次 provider 往返，见 collectTree）。
+    // 保留原「目录不存在」告警语义。
     QDir dir(csvDir);
     if (!dir.exists()) {
         qWarning() << "[load] 常量名表目录不存在:" << csvDir;
         return 0;
     }
+    return loadCsvDirectory(FileSystem::collectTree(csvDir), recursive);
+}
+
+int ConstantTable::loadCsvDirectory(const DirNode& node, bool recursive) {
     int loaded = 0;
-    const QDir::Filters fileFilter = QDir::Files | QDir::Hidden | QDir::NoDotAndDotDot;
-    const QFileInfoList files = dir.entryInfoList(fileFilter, QDir::Name);
-    for (const QFileInfo& fi : files) {
-        if (!fi.fileName().endsWith(QLatin1String(".csv"), Qt::CaseInsensitive)) continue;
-        // _Rename/_Replace/_default/_fixed 不是常量表
-        const QString base = fi.completeBaseName().toUpper();
-        if (base.startsWith(QLatin1Char('_'))) continue;
-        const QString key = tableKeyOf(fi.fileName());
+    for (const DirEntry& f : node.files) {
+        if (!f.name.endsWith(QLatin1String(".csv"), Qt::CaseInsensitive)) continue;
+        // _Rename/_Replace/_default/_fixed 不是常量表（tableKeyOf = 去扩展名大写）
+        const QString key = tableKeyOf(f.name);
+        if (key.startsWith(QLatin1Char('_'))) continue;
         if (m_tables.contains(key)) continue;   // 同名（不同目录）只取先出现的
-        if (loadCsvFile(GamePaths::join(csvDir, fi.fileName()), key)) ++loaded;
+        // f.path 已是 entryInfoList 的 absoluteFilePath()，直接读取；
+        // 不走 GamePaths::join（content:// 下每文件多一次 exists 探测）。
+        if (loadCsvFile(f.path, key)) ++loaded;
     }
-    qDebug() << "[load] 常量名表" << csvDir << ":" << loaded << "张（累计" << m_tables.size() << "张/" << m_nameCount << "名）";
+    qDebug() << "[load] 常量名表" << node.path << ":" << loaded << "张（累计" << m_tables.size() << "张/" << m_nameCount << "名）";
     if (recursive) {
-        const QStringList dirs = dir.entryList(QDir::Dirs | QDir::NoDotAndDotDot, QDir::Name);
-        for (const QString& d : dirs) {
-            loaded += loadCsvDirectory(GamePaths::join(csvDir, d), true);
-        }
+        for (const DirNode& sub : node.subdirs)
+            loaded += loadCsvDirectory(sub, true);
     }
     return loaded;
 }

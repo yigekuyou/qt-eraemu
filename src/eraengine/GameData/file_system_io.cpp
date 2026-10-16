@@ -20,6 +20,7 @@
 #include <QFileInfo>
 #include <QDir>
 #include <QRegularExpression>
+#include <functional>
 
 FileSystem::FileSystem(QObject *parent)
     : QObject(parent)
@@ -109,6 +110,63 @@ QString FileSystem::getPathWithActualCase(const QString& basePath, const QString
 {
     return resolvePathCase(GamePaths::join(basePath, targetPath));
 }
+
+// ---------------------------------------------------------------------------
+// 路径树：预扫描一次的目录清单快照（见 file_system_io.h 的 DirNode 注释）。
+// 每个目录只做一次 AllEntries listing，文件/子目录在内存里分拣 ——
+// 同 ErbLoader::collectFiles / loadCharaDirectory 的教训：一次列举就是
+// 一整趟 provider 往返（对 content://）或一次系统调用（本地），分
+// 「文件一次 + 目录一次」会让每个目录白跑一趟。
+DirNode FileSystem::collectTree(const QString& dirPath)
+{
+    DirNode node;
+    node.path = dirPath;
+    // 不做 QDir::exists()：对 content:// 它是一次独立的 provider 查询，
+    // 而 entryInfoList 对不存在的目录本就返回空列表（同样得到空树）。
+    // 每目录省一趟 = 38 目录少 38 次往返（eraH 实测约一半扫描时间）。
+    QDir dir(dirPath);
+    const QFileInfoList entries = dir.entryInfoList(
+        QDir::AllEntries | QDir::Hidden | QDir::System | QDir::NoDotAndDotDot, QDir::Name);
+    for (const QFileInfo& e : entries) {
+        if (e.isDir())
+            node.subdirs.append(collectTree(e.absoluteFilePath()));
+        else if (e.isFile()) {
+            DirEntry entry;
+            entry.name = e.fileName();
+            entry.path = e.absoluteFilePath();
+            node.files.append(entry);
+        }
+    }
+    return node;
+}
+
+// 纯内存查树：与 FileSystem::listFiles 相同的后缀匹配器（允许 "*.csv"/".csv"
+// 两种写法、大小写不敏感），但匹配 DirEntry::name、返回 DirEntry::path，
+// 全程零 provider 往返。
+QStringList FileSystem::listFilesFromTree(const DirNode& root,
+                                         const QStringList& suffixes,
+                                         bool recursive)
+{
+    QStringList out;
+    const auto matches = [&suffixes](const QString& fileName) {
+        for (const QString& raw : suffixes) {
+            const QString s = raw.startsWith(QLatin1Char('*')) ? raw.mid(1) : raw;
+            if (s.isEmpty()) continue;
+            if (fileName.endsWith(s, Qt::CaseInsensitive)) return true;
+        }
+        return false;
+    };
+    const std::function<void(const DirNode&)> walk = [&](const DirNode& n) {
+        for (const DirEntry& f : n.files)
+            if (matches(f.name)) out.append(f.path);
+        if (!recursive) return;
+        for (const DirNode& sub : n.subdirs)
+            walk(sub);
+    };
+    walk(root);
+    return out;
+}
+
 
 QString FileSystem::resolvePathCase(const QString& path)
 {

@@ -22,6 +22,8 @@
 #include <QString>
 #include <QStringList>
 
+#include "GameData/file_system_io.h"   // DirNode（树版 loadCsvDirectory）
+
 // ---------------------------------------------------------------------------
 // ConstantTable —— CSV 常量名表（对齐 C# GameData/ConstantData.cs 的子集）
 //
@@ -42,6 +44,12 @@ public:
     // 装载 CSV 目录下的全部 *.csv（recursive = Config.SearchSubdirectory）。
     // 返回成功装载的表数量。m_loadedFiles 记录实际读到的文件。
     int loadCsvDirectory(const QString& csvDir, bool recursive);
+
+    // 树版：消费 FileSystem::collectTree 预扫描的路径树（零 provider 往返，
+    // SAF 多趟遍历是加载耗时大头 —— 见 file_system_io.h 的 DirNode 注释）。
+    // 遍历顺序与路径版一致 —— 本目录文件（名序）在前、子目录递归在后，
+    // 同名表只取先出现者。recursive=false 只查树根文件。
+    int loadCsvDirectory(const DirNode& tree, bool recursive);
 
     // CSV 文件名（大小写不敏感，可带/不带 .csv）内的名字 → 行号（0 起）
     [[nodiscard]] int indexOf(const QString& csvFileName, const QString& name) const;

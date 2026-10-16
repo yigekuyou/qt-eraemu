@@ -33,6 +33,7 @@
 #include <QFile>
 #include <QDir>
 #include <QElapsedTimer>
+#include <functional>
 #include <QDateTime>
 #include <QObject>
 #include <QtConcurrent/QtConcurrent>
@@ -775,7 +776,36 @@ bool EraEngine::resolveGameDirs()
 		}
 		// 存档目录注入（SAVEDATA/LOADDATA/DELDATA/CHKDATA 用）
 		m_executionEngine.setGameDirectory(m_storageRoot);
+		// 目录已变：CSV 预扫描路径树作废（csvTree() 会按新 m_csvDir 重建）
+		m_csvTreeValid = false;
 		return true;
+}
+
+// ---------------------------------------------------------------------------
+// CSV 路径树 —— 一次预扫描，供常量表 / Item.csv / 角色 CSV 等全部装载阶段共享。
+// SAF（content://）下每次目录列举都是 DocumentsProvider 跨进程往返
+// （~0.5-1s/目录，见 docs/android-saf.md）：此前 loadCsvDirectory、Item.csv
+// 查找、loadCharaDirectory 三趟独立遍历同一棵树（eraH 实测 ~190 次往返、
+// 约两分钟纯遍历开销）。首次调用时扫描一次并计时留痕；resolveGameDirs()
+// 换目录后失效重建。
+const DirNode& EraEngine::csvTree()
+{
+		if (!m_csvTreeValid) {
+				QElapsedTimer sw;
+				sw.start();
+				m_csvTree = m_fileSystem.collectTree(m_csvDir);
+				m_csvTreeValid = true;
+				int dirCount = 1, fileCount = 0;   // 树根也算一个目录
+				const std::function<void(const DirNode&)> count = [&](const DirNode& n) {
+						fileCount += n.files.size();
+						dirCount += n.subdirs.size();
+						for (const DirNode& sub : n.subdirs) count(sub);
+				};
+				count(m_csvTree);
+				qDebug() << "[load] CSV 路径树" << m_csvDir << ":" << dirCount << "目录 /"
+						 << fileCount << "文件，耗时" << sw.elapsed() << "ms";
+		}
+		return m_csvTree;
 }
 
 void EraEngine::loadConfigFiles()
@@ -814,8 +844,9 @@ void EraEngine::loadConstantData()
 {
 		if (m_csvDir.isEmpty()) return;
 
-		// 常量名表（CSV 名 → 下标）：只从 CSV 目录读取，对齐 C# ConstantData
-		const int tables = m_constantTable.loadCsvDirectory(m_csvDir, m_searchSubdirectory);
+		// 常量名表（CSV 名 → 下标）：只从 CSV 目录读取，对齐 C# ConstantData。
+		// 查预扫描路径树（csvTree() 一次遍历后所有阶段共享，见其注释）。
+		const int tables = m_constantTable.loadCsvDirectory(csvTree(), m_searchSubdirectory);
 
 		// CSV 名表 -> <VAR>NAME 字符串数组（对齐 C#：装载 CSV 时同步填充
 		// TALENTNAME/ABLNAME/EXPNAME/…——脚本会直接引用这些数组，
@@ -852,8 +883,9 @@ void EraEngine::loadConstantData()
 
 		// 变量尺寸表（对齐 C# VariableData 读取 VariableSize.CSV）
 		int sizesLoaded = 0;
-		const QStringList sizeCandidates = m_fileSystem.listFiles(m_csvDir,
-		                                                          QStringList{"VariableSize.csv"}, false);
+		// C# 是 csvDir + "VariableSize.CSV" 顶层直拼 —— 查树顶层即可
+		const QStringList sizeCandidates = FileSystem::listFilesFromTree(
+		    csvTree(), QStringList{"VariableSize.csv"}, false);
 		for (const QString& path : sizeCandidates) {
 				if (m_variableStorage.loadVariableSizes(path)) ++sizesLoaded;
 		}
@@ -865,8 +897,14 @@ void EraEngine::loadConstantData()
 		// hasSystemVariable -> getSystemVariable（此前无 ITEMPRICE 分支，恒 0），
 		// 写进 m_globalInt1D 等于没填 —— 这就是「隙間商店价格全为 $0」的回归。
 		{
-			const QStringList itemCandidates = m_fileSystem.listFiles(
-			    m_csvDir, QStringList{QStringLiteral("Item.csv")}, m_searchSubdirectory);
+			// C# 是 csvDir + "ITEM.CSV" 顶层直拼（不递归）；eraH 的 Item.csv 也在
+			// 顶层。先查树顶层（零往返），未命中再全树兜底 —— 此前的递归查找
+			// 为一个顶层文件把整棵树重新走了一遍（eraH 实测 69 秒）。
+			QStringList itemCandidates = FileSystem::listFilesFromTree(
+			    csvTree(), QStringList{QStringLiteral("Item.csv")}, false);
+			if (itemCandidates.isEmpty())
+					itemCandidates = FileSystem::listFilesFromTree(
+					    csvTree(), QStringList{QStringLiteral("Item.csv")}, m_searchSubdirectory);
 			if (!itemCandidates.isEmpty()) {
 				CsvLoader itemLoader;
 				if (itemLoader.loadFile(itemCandidates.first())) {
@@ -900,7 +938,7 @@ void EraEngine::loadConstantData()
 		// 于是 EXISTCSV(0) 为假 -> C_ADD_CHARA(0) 直接 return 2 ->
 		// CHARANUM 停在 0 -> 战斗队伍为空 -> 委托 11 的战斗开场即「全灭」。
 		const int charaLoaded = CsvLoader::loadCharaDirectory(
-		    m_csvDir, &m_constantTable, &m_variableStorage, m_searchSubdirectory);
+		    csvTree(), &m_constantTable, &m_variableStorage, m_searchSubdirectory);
 		// CSV* 系函数读「模板值」：装载完角色 CSV 后立刻快照一份
 		// （此后脚本对 VAR:角色:下标 的修改不再污染模板）
 		m_variableStorage.snapshotCharaTemplates();
@@ -1443,8 +1481,10 @@ void EraEngine::loadGameBaseData(){
 				return;
 		}
 		QString gameBasePath;
-		const QStringList candidates = m_fileSystem.listFiles(m_csvDir,
-		                                                      QStringList{"GameBase.csv"}, false);
+		// GameBase.csv 在 CSV 顶层（C# Program.CsvDir + "GAMEBASE.CSV" 直拼）——
+		// 查预扫描树，不再多一次目录列举往返。
+		const QStringList candidates = FileSystem::listFilesFromTree(
+		    csvTree(), QStringList{"GameBase.csv"}, false);
 		if (!candidates.isEmpty()) {
 				gameBasePath = candidates.first();
 		}

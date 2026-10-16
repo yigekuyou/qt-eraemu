@@ -43,6 +43,42 @@ adb logcat -s Emuera | grep 装载心跳
 Release builds that define `QT_NO_DEBUG_OUTPUT`/`QT_NO_INFO_OUTPUT` still lose qDebug/qInfo
 at compile time; the debug APK keeps everything.
 
+## CSV 装载：三趟遍历合并为一趟路径树
+
+`loadConstantData()` 曾对同一棵 CSV 树做**三趟独立遍历**：常量名表
+(`ConstantTable::loadCsvDirectory`)、Item.csv 查找
+(`FileSystem::listFiles(csvDir, {"Item.csv"}, recursive=true)`)、角色
+(`CsvLoader::loadCharaDirectory`)。eraH 的 CSV 树是 38 个目录 / 1340 个文件，
+实测每趟 50–70 s（迭代器的 `absoluteFilePath()` + 逐目录 listing，provider
+往返约 0.5–1 s/次），三趟合计 ~190 次往返、约两分钟纯粹开销 —— 而且第一趟
+已经拿到了全部文件清单。
+
+现在改为 `FileSystem::collectTree()` **一次预扫描**形成 `DirNode` 路径树
+（每目录**一次** `entryInfoList(AllEntries)`，文件/子目录在内存里分拣；
+条目同时缓存显示名与 `absoluteFilePath()`，后者可直接打开 —— 不走
+`GamePaths::join`，因为 join 对 content:// 每文件都要一次 `exists` 探测）：
+
+- `ConstantTable::loadCsvDirectory(tree, recursive)` 与
+  `CsvLoader::loadCharaDirectory(tree, …)` 增加树重载，旧路径签名保留为薄壳
+  （`collectTree` + 树重载，测试与其它调用者不动）。
+- `FileSystem::listFilesFromTree()` 是与 `listFiles()` 同语义的纯内存查树。
+- Item.csv / VariableSize.csv / GameBase.csv 对齐 C# 原版语义：C# 是
+  `Path.Combine(csvDir, "ITEM.CSV")` **顶层直拼**，所以先查树顶层（eraH 的
+  Item.csv 就在顶层，69 s → 25 ms），未命中再全树兜底。
+- 遍历顺序对齐 C# `Config.getFiles`：**本目录文件（名序）在前、子目录递归
+  在后**。角色图同名的覆盖关系由此决定 —— 后载覆盖先载，即**子目录覆盖
+  顶层**（此前角色加载写成了「先子目录后本目录」，与 C# 相反；eraTW/eraH
+  无跨层同名故实际未受影响，现在以 C# 为准，`test_dir_tree` 锁定）。
+- `collectTree` 不调 `QDir::exists()`：那是一次独立的 provider 查询，而
+  `entryInfoList` 对不存在的目录本就返回空（38 目录因此少 38 次往返，
+  eraH 实测 32.4 s → 24.0 s）。
+
+eraH 实测（OnePlus/Android 16）：同步准备阶段 ~215 s → 61.9 s（路径树 24.0 s
++ 常量表 19.4 s + 角色 17.6 s），端到端（含 ERB 30.3 s）~215 s → ~92 s，
+装载结果不变（常量表 1328 张 / 89397 项、VariableSize 1、角色 1310 模板、
+0 告警）。路径树扫描仍在**主线程同步准备阶段**内，是当前最大的单项开销
+（0.63 s/目录）；再往下要动的是异步/并行扫描。
+
 ## Loading a large tree is latency-bound, not bandwidth-bound
 
 Measured on OnePlus/Android 16 with `eraH` (920 ERB/ERH, 114 subdirectories, ~7 MB of ERB

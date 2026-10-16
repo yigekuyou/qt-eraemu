@@ -75,39 +75,44 @@ int CsvLoader::loadCharaDirectory(const QString& csvDir,
                                   const ConstantTable* constants,
                                   VariableStorage* storage,
                                   bool recursive) {
+    // 薄壳：一次预扫描后查树装载（每目录只一次 provider 往返，见 collectTree）。
     if (!storage) return 0;
     QDir dir(csvDir);
     if (!dir.exists()) return 0;
+    return loadCharaDirectory(FileSystem::collectTree(csvDir), constants, storage, recursive);
+}
+
+int CsvLoader::loadCharaDirectory(const DirNode& tree,
+                                  const ConstantTable* constants,
+                                  VariableStorage* storage,
+                                  bool recursive) {
+    if (!storage) return 0;
 
     // 对齐 C# `Config.GetFiles(csvDir, "CHARA*.CSV")`：**文件名以 Chara 开头**
-    // 的 *.csv，而不是「名为 Chara 的子目录」。C# 的 getFiles 在
-    // SearchSubdirectory 时先递归子目录、再本目录文件（顺序决定同名模板的
-    // 覆盖关系）；这里照做。
-    //
-    // 目录枚举每个目录**只做一次** entryInfoList 再在内存里分「目录/文件」：
-    // content://（Android SAF）上一次列举就是一整趟 provider 往返，分两次调用
-    // 会让每个目录白跑一趟（同 ErbLoader::collectFiles 的教训）。
+    // 的 *.csv，而不是「名为 Chara 的子目录」。遍历顺序对齐 C# Config.getFiles：
+    // **先本目录文件（名序）、后子目录递归**（Directory.GetFiles →
+    // GetDirectories 排序后逐个递归）；后载覆盖先载 -> 同名模板时子目录覆盖
+    // 顶层。（此前路径版是「先子目录后本目录」，与 C# 相反；eraTW/eraH 无
+    // 跨层同名，实际行为不变，此处修正为以 C# 为准。）
     const auto isCharaCsv = [](const QString& name) {
         return name.endsWith(QLatin1String(".csv"), Qt::CaseInsensitive)
                && name.startsWith(QLatin1String("Chara"), Qt::CaseInsensitive);
     };
-    QFileInfoList files;
-    const std::function<void(const QDir&)> collect = [&](const QDir& d) {
-        const QFileInfoList entries = d.entryInfoList(
-            QDir::AllEntries | QDir::Hidden | QDir::System | QDir::NoDotAndDotDot, QDir::Name);
-        if (recursive)
-            for (const QFileInfo& e : entries)
-                if (e.isDir()) collect(QDir(e.absoluteFilePath()));
-        for (const QFileInfo& e : entries)
-            if (e.isFile() && isCharaCsv(e.fileName())) files.append(e);
+    QStringList files;   // 完整路径（entryInfoList 的 absoluteFilePath，直接可读）
+    const std::function<void(const DirNode&)> collect = [&](const DirNode& n) {
+        for (const DirEntry& f : n.files)
+            if (isCharaCsv(f.name)) files.append(f.path);
+        if (!recursive) return;
+        for (const DirNode& sub : n.subdirs)
+            collect(sub);
     };
-    collect(dir);
+    collect(tree);
 
     int loadedChars = 0;
     QSet<QString> reportedUnknownTypes;   // 未知类型只留痕一次（同名去重）
-    for (const QFileInfo& fi : files) {
+    for (const QString& charaPath : files) {
         bool ok = false;
-        QString content = TextCodecUtil::readFile(fi.absoluteFilePath(),
+        QString content = TextCodecUtil::readFile(charaPath,
                                                   TextEncoding::Auto, nullptr, &ok);
         if (!ok || content.isEmpty()) continue;
         if (content.startsWith(QChar(0xFEFF))) content.remove(0, 1);   // UTF-8 BOM
@@ -203,7 +208,7 @@ int CsvLoader::loadCharaDirectory(const QString& csvDir,
             if (charaNo >= 0) storage->markCsvExists(static_cast<int>(charaNo));
         }
     }
-    qDebug() << "[load] 角色 CSV" << csvDir << (recursive ? "(含子目录)" : "") << ":"
+    qDebug() << "[load] 角色 CSV" << tree.path << (recursive ? "(含子目录)" : "") << ":"
              << loadedChars << "个模板 /" << files.size() << "文件";
     return loadedChars;
 }

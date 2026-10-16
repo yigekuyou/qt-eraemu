@@ -24,8 +24,10 @@
 #include <QTextStream>
 #include <QHash>
 #include <QList>
+#include <QStringList>
 #include <QVariant>
 #include <QDir>
+#include <QVector>
 
 // Basic I/O operation result
 struct IoResult {
@@ -43,6 +45,28 @@ enum class FileAccessMode {
     Write,
     ReadWrite,
     Append
+};
+
+// ---------------------------------------------------------------------------
+// 路径树 —— 一次预扫描形成的目录清单快照。
+// Android SAF（content://）下每次目录列举都是 DocumentsProvider 跨进程往返
+// （实测 ~0.5-1s/目录，见 docs/android-saf.md）；此前常量表、Item.csv 查找、
+// 角色 CSV 各自独立遍历同一棵树，三趟 ~190 次往返是加载耗时的大头。
+// collectTree() 走一遍形成树后，listFilesFromTree() / 常量表装载 / 角色 CSV
+// 装载都查这棵内存树，不再触碰 provider。
+// 每个目录只做**一次** AllEntries listing，文件/子目录在内存里分拣；
+// 条目同时缓存显示名与完整路径 —— 后者来自 iterator 的 absoluteFilePath()，
+// 可直接打开，不必再走 GamePaths::join（join 对 content:// 每文件都要一次
+// exists 探测，~51ms/次，1328 个文件就是一分钟）。
+struct DirEntry {
+    QString name;   // 显示名（entryInfoList 的 fileName()，纯字符串，零探测）
+    QString path;   // 完整路径/URI（absoluteFilePath()，可直接读取）
+};
+struct DirNode {
+    QString path;              // 目录完整路径/URI
+    QList<DirEntry> files;     // 本目录文件（QDir::Name 序）
+    QVector<DirNode> subdirs;  // 子目录（QDir::Name 序）
+    [[nodiscard]] bool isEmpty() const { return files.isEmpty() && subdirs.isEmpty(); }
 };
 
 // File system interface
@@ -70,6 +94,16 @@ public:
 
     // 枚举目录下的文件（大小写不敏感的后缀过滤），recursive = 搜索子目录（Config.SearchSubdirectory）
     QStringList listFiles(const QString& dirPath, const QStringList& suffixes, bool recursive) const;
+
+    // 预扫描目录树（递归收集所有子目录；目录不存在返回空树，path 已填充）。
+    // 每目录一次 AllEntries listing；返回的树供后续装载阶段共享，见 DirNode 注释。
+    [[nodiscard]] static DirNode collectTree(const QString& dirPath);
+
+    // 与 listFiles(dirPath, suffixes, recursive) 语义一致的纯内存查树（零 provider 往返）：
+    // 按显示名做大小写不敏感的后缀匹配，返回条目的完整路径（DirEntry::path）。
+    [[nodiscard]] static QStringList listFilesFromTree(const DirNode& root,
+                                                       const QStringList& suffixes,
+                                                       bool recursive);
     
     // File operations
     IoResult readFile(const QString& filePath, QString& content);

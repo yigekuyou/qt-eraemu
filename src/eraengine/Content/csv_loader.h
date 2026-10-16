@@ -25,6 +25,8 @@
 #include <QFile>
 #include <QTextStream>
 
+#include "GameData/file_system_io.h"   // DirNode（树版 loadCharaDirectory）
+
 // CSV data loader - loads CSV files for game data
 class ConstantTable;
 class VariableStorage;
@@ -44,6 +46,18 @@ public:
     // 不是只找名为 Chara 的子目录。eraTW 把角色 CSV 放在 CSV/Chara/ 下，
     // eraH 则按种族分放在 CSV/人間/** 与 CSV/悪魔/** 下，两种布局都要能找到。）
     static int loadCharaDirectory(const QString& csvDir,
+                                  const ConstantTable* constants,
+                                  VariableStorage* storage,
+                                  bool recursive = false);
+
+    // 树版：消费 FileSystem::collectTree 预扫描的路径树（零 provider 往返）。
+    // 遍历顺序对齐 C# Config.getFiles：**本目录文件（名序）在前、子目录递归
+    // 在后**（Config.cs getFiles 先 Directory.GetFiles 再 GetDirectories 递归）。
+    // loadCharacterData 按此顺序装载、后载覆盖先载 —— 同名模板时**子目录
+    // 覆盖顶层**。路径版历史实现是「先子目录后本目录」（顶层覆盖子目录），
+    // 与 C# 相反；eraTW/eraH 的 Chara*.csv 均无跨层同名，实际行为不受影响，
+    // 但树版起以 C# 为准（test_dir_tree 锁定该顺序）。
+    static int loadCharaDirectory(const DirNode& tree,
                                   const ConstantTable* constants,
                                   VariableStorage* storage,
                                   bool recursive = false);

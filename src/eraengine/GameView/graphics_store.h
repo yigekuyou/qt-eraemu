@@ -77,14 +77,49 @@ public:
     static bool applyColorMatrix(QImage& image, const float colorMatrix[5][5]);
 
     // ---- 画笔 / 刷子 / 字体（GSETBRUSH / GSETPEN / GSETFONT，每 G 独立）----
-    struct PenState   { QColor color; int width = 1; };
+    // valid = 是否被 GSET* 设置过：C# 的 fallback（font==null -> Config.FontName@100、
+    // brush/pen==null -> Config.ForeColor）只在**未设置**时生效。
+    struct PenState   { QColor color; int width = 1; int dashStyle = 0; int dashCap = 0;
+                        bool valid = false; };
     struct BrushState { QColor color; };
-    struct FontState  { QString name; int size = 18; };
+    // style = EE 字体样式位掩码（1=粗体 2=斜体 4=删除线 8=下划线；见 GSETFONT.md）
+    struct FontState  { QString name; int size = 18; int style = 0; bool valid = false; };
     static bool gSetBrush(int id, const QColor& color);
     // 当前画刷色（GFILLRECTANGLE 用；对齐 C# GraphicsImage.brush）。未设置时回退缺省色。
     [[nodiscard]] static QColor brushColor(int id);
     static bool gSetPen(int id, const QColor& color, int width);
-    static bool gSetFont(int id, const QString& name, int size);
+    static bool gSetFont(int id, const QString& name, int size, int style = 0);
+    // 状态回读（GGETFONT / GGETFONTSIZE / GGETFONTSTYLE / GGETPEN / GGETPENWIDTH /
+    // GGETBRUSH）。返回 false = G 未创建；fontState 的 valid=false 表示未 GSETFONT 过
+    //（C# GGETFONT 此时返回空串）。
+    [[nodiscard]] static bool fontState(int id, FontState& out);
+    [[nodiscard]] static bool penState(int id, PenState& out);
+    [[nodiscard]] static QColor brushState(int id);
+
+    // ---- GDRAWTEXT / GDRAWLINE / GDASHSTYLE / GDRAWGWITHROTATE / GGETTEXTSIZE ----
+    // （EE/EM 的 G 系补全；画布就是本类持有的 QImage —— QPainter 直接画，
+    //  显示走既有链路：SPRITECREATE -> ResourceImageProvider / CBG 层。）
+    //
+    // GDRAWTEXT(gid, text{, x, y})：用该 G 的字体+画刷色画文本（未设置用兜底，
+    // 对齐 C# GraphicsImage.GDrawString）；测得的文本宽/高写入出参
+    //（C# 写 RESULT:1=宽 / RESULT:2=高）。
+    static bool gDrawString(int id, const QString& text, int x, int y,
+                            const QFont& fallbackFont, const QColor& fallbackBrush,
+                            int* measuredW = nullptr, int* measuredH = nullptr);
+    // GDRAWLINE(gid, x1, y1, x2, y2)：用该 G 的画笔画线（未设置用兜底色、宽 1）。
+    static bool gDrawLine(int id, int x1, int y1, int x2, int y2, const QColor& fallbackColor);
+    // GDASHSTYLE(gid, style, cap)：System.Drawing.Drawing2D 的枚举
+    //（DashStyle 0=Solid 1=Dash 2=Dot 3=DashDot 4=DashDotDot；DashCap 0=Flat 2=Round 3=Triangle）。
+    static bool gDashStyle(int id, int dashStyle, int dashCap);
+    // GDRAWGWITHROTATE(dst, src, angle{, px, py})：绕 (px,py) 旋转 angle 度画 src
+    //（3 参时 C# 取 src 中心为轴）。C# 的变换序：T(-P)·R·T(P)（Append）= 绕 P 旋转。
+    static bool gDrawGWithRotate(int dstId, int srcId, double angle, int px, int py);
+    // GGETTEXTSIZE(text, fontname, fontsize{, style})：文本测量（RESULT:1 = 高，返回宽）。
+    [[nodiscard]] static QSize measureText(const QString& text, const QString& fontName,
+                                           int size, int style);
+    // QFont 工具：EE 样式位掩码 -> QFont（GDRAWTEXT / GGETTEXTSIZE 共用；
+    // C# `new Font(name, size, fs, GraphicsUnit.Pixel)` -> setPixelSize）。
+    [[nodiscard]] static QFont makeFont(const QString& name, int size, int style = 0);
 
     // ---- GSAVE / GLOAD（文件编号 <-> sav/g{no}.png）----
     static bool gSave(int id, const QString& path);

@@ -2602,13 +2602,105 @@ bool ExpressionEvaluator::evaluateBuiltin(const FunctionNode &node, VariableStor
         return true;
     }
     case BuiltinOp::GSetPen: {
-        out = QVariant::fromValue<qint64>(GraphicsStore::gSetPen(int(I(0)), QColor(int(I(1))), int(I(2))) ? 1 : 0);
+        // GSETPEN id, cARGB, 宽：颜色是 **ARGB**（C# ReadColor -> Color.FromArgb，
+        // 与 GSETBRUSH 同一入口 —— 此前 QColor(int) 把高位当红色丢掉 alpha）。
+        out = QVariant::fromValue<qint64>(
+            GraphicsStore::gSetPen(int(I(0)), QColor::fromRgba(static_cast<QRgb>(I(1))), int(I(2))) ? 1 : 0);
         return true;
     }
     case BuiltinOp::GSetFont: {
-        out = QVariant::fromValue<qint64>(GraphicsStore::gSetFont(int(I(0)), S(1), int(I(2))) ? 1 : 0);
+        // 第 4 参 = EE 字体样式位掩码（1=粗 2=斜 4=删除线 8=下划线；GSETFONT.md）
+        out = QVariant::fromValue<qint64>(
+            GraphicsStore::gSetFont(int(I(0)), S(1), int(I(2)),
+                                   hasArg(node, 3) ? int(I(3)) : 0) ? 1 : 0);
         return true;
     }
+    case BuiltinOp::GDrawText: {
+        // GDRAWTEXT(gid, text{, x, y})：C# GraphicsDrawStringMethod（2/4 参）——
+        // 用该 G 的字体+画刷色画文本（GDI+ FillPath），画完把文本尺寸写
+        // RESULT:1=宽 / RESULT:2=高。兜底：font==null -> Config.FontName@100 像素、
+        // brush==null -> Config.ForeColor（GraphicsImage.cs:131 的 GDrawString）。
+        const int x = hasArg(node, 2) ? int(I(2)) : 0;
+        const int y = hasArg(node, 3) ? int(I(3)) : 0;
+        const QFont fallbackFont = GraphicsStore::makeFont(
+            m_fontProvider ? m_fontProvider() : QStringLiteral("sans-serif"), 100);
+        const QColor fallbackBrush = m_defaultColorProvider
+            ? QColor::fromRgba(static_cast<QRgb>(m_defaultColorProvider())) : QColor(255, 255, 255);
+        int measuredW = 0, measuredH = 0;
+        const bool ok = GraphicsStore::gDrawString(int(I(0)), EVALSTR(1), x, y,
+                                                   fallbackFont, fallbackBrush,
+                                                   &measuredW, &measuredH);
+        if (ok && storage) {
+            storage->setSystemVariable(QStringLiteral("RESULT"), 1, measuredW);
+            storage->setSystemVariable(QStringLiteral("RESULT"), 2, measuredH);
+        }
+        out = QVariant::fromValue<qint64>(ok ? 1 : 0);
+        return true;
+    }
+    case BuiltinOp::GDrawLine: {
+        // GDRAWLINE(gid, x1, y1, x2, y2)：C# GraphicsDrawLineMethod（恰好 5 参）——
+        // 用该 G 的画笔画线；未 GSETPEN 时兜底 Config.ForeColor、宽 1。
+        const QColor fallback = m_defaultColorProvider
+            ? QColor::fromRgba(static_cast<QRgb>(m_defaultColorProvider())) : QColor(255, 255, 255);
+        out = QVariant::fromValue<qint64>(
+            GraphicsStore::gDrawLine(int(I(0)), int(I(1)), int(I(2)), int(I(3)), int(I(4)),
+                                     fallback) ? 1 : 0);
+        return true;
+    }
+    case BuiltinOp::GDashStyle: {
+        // GDASHSTYLE(gid, style, cap)：C# GraphicsSetDashStyleMethod（恰好 3 参）
+        out = QVariant::fromValue<qint64>(
+            GraphicsStore::gDashStyle(int(I(0)), int(I(1)), int(I(2))) ? 1 : 0);
+        return true;
+    }
+    case BuiltinOp::GDrawGWithRotate: {
+        // GDRAWGWITHROTATE(dst, src, angle{, px, py})：C# 省略坐标时轴心取 src 中心
+        const QImage src = GraphicsStore::gImage(int(I(1)));
+        const int px = hasArg(node, 3) ? int(I(3)) : src.width() / 2;
+        const int py = hasArg(node, 4) ? int(I(4)) : src.height() / 2;
+        out = QVariant::fromValue<qint64>(
+            GraphicsStore::gDrawGWithRotate(int(I(0)), int(I(1)), double(I(2)), px, py) ? 1 : 0);
+        return true;
+    }
+    case BuiltinOp::GGetFont:
+    case BuiltinOp::GGetFontSize:
+    case BuiltinOp::GGetFontStyle: {
+        // C# GraphicsStateStrMethod / GraphicsStateMethod（GGETFONT / GGETFONTSIZE /
+        // GGETFONTSTYLE）：回读 GSETFONT 设的字体状态；未设置时 C# 返回 Fontname 空串
+        //（尺寸/样式属性在 font==null 时是 NPE —— 实际脚本都先 GSETFONT，这里按 0 兜底）。
+        GraphicsStore::FontState fs;
+        const bool created = GraphicsStore::fontState(int(I(0)), fs);
+        if (!created) { out = op == BuiltinOp::GGetFont ? QVariant(QString())
+                                                        : QVariant::fromValue<qint64>(0); return true; }
+        if (op == BuiltinOp::GGetFont) out = QVariant(fs.valid ? fs.name : QString());
+        else if (op == BuiltinOp::GGetFontSize) out = QVariant::fromValue<qint64>(fs.valid ? fs.size : 0);
+        else out = QVariant::fromValue<qint64>(fs.valid ? fs.style : 0);
+        return true;
+    }
+    case BuiltinOp::GGetBrush: {
+        // C# GraphicsStateMethod：`b.Color.ToArgb() & 0xffffffff`（ARGB）
+        out = QVariant::fromValue<qint64>(qint64(GraphicsStore::brushState(int(I(0))).rgba()));
+        return true;
+    }
+    case BuiltinOp::GGetPen:
+    case BuiltinOp::GGetPenWidth: {
+        GraphicsStore::PenState ps;
+        const bool created = GraphicsStore::penState(int(I(0)), ps);
+        if (!created || !ps.valid) { out = QVariant::fromValue<qint64>(0); return true; }
+        out = QVariant::fromValue<qint64>(op == BuiltinOp::GGetPen
+            ? qint64(ps.color.rgba()) : qint64(qMax(1, ps.width)));
+        return true;
+    }
+    case BuiltinOp::GGetTextSize: {
+        // GGETTEXTSIZE(text, fontname, fontsize{, style})：C# EE_GGETTEXTSIZE ——
+        // RESULT:1 = 高，返回宽（MeasureString + GenericTypographic 的紧排测量）
+        const QSize size = GraphicsStore::measureText(EVALSTR(0), EVALSTR(1), int(I(2)),
+                                                     hasArg(node, 3) ? int(I(3)) : 0);
+        if (storage) storage->setSystemVariable(QStringLiteral("RESULT"), 1, size.height());
+        out = QVariant::fromValue<qint64>(size.width());
+        return true;
+    }
+
     case BuiltinOp::GSave: {
         // GSAVE <ID>, <文件编号>：G 图像存为 sav/g{no}.png
         out = QVariant::fromValue<qint64>(GraphicsStore::gSave(int(I(0)),

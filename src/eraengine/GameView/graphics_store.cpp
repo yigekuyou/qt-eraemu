@@ -20,6 +20,7 @@
 #include "resource_image_provider.h"
 
 #include <QDebug>
+#include <cmath>
 #include <QPainter>
 
 namespace {
@@ -229,13 +230,139 @@ QColor GraphicsStore::brushColor(int id) {
 
 bool GraphicsStore::gSetPen(int id, const QColor& color, int width) {
     if (!gImages().contains(id)) return false;
-    gExtra().pen[id] = PenState{ color, qMax(1, width) };
+    // 对齐 C# `pen = new Pen(color, width)`：整支换新（GDASHSTYLE 此前设置的虚线
+    // 样式随之重置 —— GDI+ 语义同样如此）。valid=true 才会被 GDRAWLINE/GGETPEN 采用。
+    PenState ps;
+    ps.color = color;
+    ps.width = qMax(1, width);
+    ps.valid = true;
+    gExtra().pen[id] = ps;
     return true;
 }
 
-bool GraphicsStore::gSetFont(int id, const QString& name, int size) {
+bool GraphicsStore::gSetFont(int id, const QString& name, int size, int style) {
     if (!gImages().contains(id)) return false;
-    gExtra().font[id] = FontState{ name, size };
+    gExtra().font[id] = FontState{ name, qMax(1, size), style, true };
+    return true;
+}
+
+bool GraphicsStore::fontState(int id, FontState& out) {
+    if (!gImages().contains(id)) return false;
+    const auto it = gExtra().font.constFind(id);
+    if (it == gExtra().font.constEnd()) { out = FontState{}; return true; }
+    out = it.value();
+    return true;
+}
+
+bool GraphicsStore::penState(int id, PenState& out) {
+    if (!gImages().contains(id)) return false;
+    const auto it = gExtra().pen.constFind(id);
+    if (it == gExtra().pen.constEnd()) { out = PenState{}; return true; }
+    out = it.value();
+    return true;
+}
+
+QColor GraphicsStore::brushState(int id) {
+    const auto it = gExtra().brush.constFind(id);
+    return it == gExtra().brush.constEnd() ? QColor(0, 0, 0, 0) : it.value().color;
+}
+
+// QFont 工具：EE 样式位掩码 -> QFont。C# 用 `GraphicsUnit.Pixel`（像素字号）。
+QFont GraphicsStore::makeFont(const QString& name, int size, int style) {
+    QFont font(name);
+    font.setPixelSize(qMax(1, size));
+    font.setBold((style & 1) != 0);
+    font.setItalic((style & 2) != 0);
+    font.setStrikeOut((style & 4) != 0);
+    font.setUnderline((style & 8) != 0);
+    return font;
+}
+
+QSize GraphicsStore::measureText(const QString& text, const QString& fontName,
+                                 int size, int style) {
+    const QFontMetrics metrics(makeFont(fontName, size, style));
+    // C# MeasureString + StringFormat.GenericTypographic = 紧排前进量（无内边距）
+    return { metrics.horizontalAdvance(text), metrics.height() };
+}
+
+// GDRAWTEXT：C# GraphicsImage.GDrawString(text, x, y)（GraphicsPath.AddString +
+// FillPath，原点是文本块**左上角**）。QPainter 用 QRect+AlignTop|AlignLeft 对齐该语义，
+// 文字颜色 = 画刷色（GDI+ 用 brush 填充文本；未设置时用调用方的兜底 = Config.ForeColor）。
+bool GraphicsStore::gDrawString(int id, const QString& text, int x, int y,
+                                const QFont& fallbackFont, const QColor& fallbackBrush,
+                                int* measuredW, int* measuredH) {
+    auto it = gImages().find(id);
+    if (it == gImages().end() || it->isNull()) return false;
+    const FontState fs = gExtra().font.value(id);
+    const QFont font = fs.valid ? makeFont(fs.name, fs.size, fs.style) : fallbackFont;
+    const QFontMetrics metrics(font);
+    if (measuredW) *measuredW = metrics.horizontalAdvance(text);
+    if (measuredH) *measuredH = metrics.height();
+    const QColor brush = fs.valid && gExtra().brush.contains(id) ? brushColor(id) : fallbackBrush;
+    QPainter painter(&*it);
+    painter.setFont(font);
+    painter.setPen(brush);
+    painter.drawText(QRect(x, y, metrics.horizontalAdvance(text) + 64, metrics.height() * 2),
+                     Qt::TextDontClip | Qt::AlignTop | Qt::AlignLeft, text);
+    return true;
+}
+
+// GDRAWLINE：C# GraphicsImage.GDrawLine —— 用该 G 的画笔（GSETPEN 的色+宽；
+// GDASHSTYLE 的虚线/端点），未设置时用兜底色、宽 1（C# Config.ForeColor）。
+bool GraphicsStore::gDrawLine(int id, int x1, int y1, int x2, int y2,
+                               const QColor& fallbackColor) {
+    auto it = gImages().find(id);
+    if (it == gImages().end() || it->isNull()) return false;
+    const PenState ps = gExtra().pen.value(id);
+    QPen pen(ps.valid ? ps.color : fallbackColor);
+    pen.setWidth(ps.valid ? qMax(1, ps.width) : 1);
+    // System.Drawing.Drawing2D.DashStyle：0=Solid 1=Dash 2=Dot 3=DashDot 4=DashDotDot
+    switch (ps.dashStyle) {
+    case 1: pen.setStyle(Qt::DashLine); break;
+    case 2: pen.setStyle(Qt::DotLine); break;
+    case 3: pen.setStyle(Qt::DashDotLine); break;
+    case 4: pen.setStyle(Qt::DashDotDotLine); break;
+    default: pen.setStyle(Qt::SolidLine); break;
+    }
+    // DashCap：0=Flat 2=Round 3=Triangle（GDI+ 枚举，1 未定义）
+    if (ps.dashCap == 2) pen.setCapStyle(Qt::RoundCap);
+    else if (ps.dashCap == 3) pen.setCapStyle(Qt::SquareCap);
+    else pen.setCapStyle(Qt::FlatCap);
+    QPainter painter(&*it);
+    painter.setPen(pen);
+    // Qt 的线段栅格化**不含末端端点像素**（实测 (0,16)-(31,16) 只画到 x=30）；
+    // GDI+ DrawLine 两端都画。把线段沿方向延长半像素补上末端端点
+    //（宽笔的端帽形状不受影响 —— 延长量远小于线宽）。
+    QLineF line(x1, y1, x2, y2);
+    const qreal length = std::hypot(line.dx(), line.dy());
+    if (length > 0) line.setLength(length + 0.5);
+    painter.drawLine(line);
+    return true;
+}
+
+// GDASHSTYLE：只改画笔的虚线样式/端点；未 GSETPEN 过时不创建具色画笔
+//（颜色留给 GDRAWLINE 的兜底 = Config.ForeColor），与 C# 的「pen==null 时先 new
+// Pen(Config.ForeColor)」在**最终画出的线**上等价。
+bool GraphicsStore::gDashStyle(int id, int dashStyle, int dashCap) {
+    if (!gImages().contains(id)) return false;
+    PenState& ps = gExtra().pen[id];
+    ps.dashStyle = dashStyle;
+    ps.dashCap = dashCap;
+    return true;
+}
+
+// GDRAWGWITHROTATE：C# `Translate(-px,-py, Append); Rotate(angle, Append);
+// Translate(px,py, Append); DrawImage(src, 0,0)` —— 组合起来就是**绕 (px,py)
+// 旋转**。QPainter 的坐标系操作同序可表达：translate(P) · rotate · translate(-P)。
+bool GraphicsStore::gDrawGWithRotate(int dstId, int srcId, double angle, int px, int py) {
+    auto it = gImages().find(dstId);
+    const QImage src = gImage(srcId);
+    if (it == gImages().end() || it->isNull() || src.isNull()) return false;
+    QPainter painter(&*it);
+    painter.translate(px, py);
+    painter.rotate(angle);
+    painter.translate(-px, -py);
+    painter.drawImage(QPoint(0, 0), src);
     return true;
 }
 

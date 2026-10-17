@@ -148,6 +148,10 @@ enum class BuiltinOp : quint16 {
     CbgSetG, CbgSetSprite, CbgClear, CbgClearButton, CbgRemoveRange,
     CbgRemoveBmap, CbgSetBmapG, CbgSetButtonSprite,
     SpriteAnimeCreate, SpriteAnimeAddFrame,
+    // ---- G 系补全（EE/EM：GDRAWTEXT / GDRAWLINE / GDASHSTYLE / GDRAWGWITHROTATE
+    //      与状态回读 GGET* / GGETTEXTSIZE；画布就是 GraphicsStore 的 QImage）----
+    GDrawText, GDrawLine, GDashStyle, GDrawGWithRotate,
+    GGetFont, GGetFontSize, GGetFontStyle, GGetBrush, GGetPen, GGetPenWidth, GGetTextSize,
 };
 
 struct BuiltinFunctionSpec {
@@ -336,6 +340,24 @@ inline constexpr BuiltinFunctionSpec kBuiltinFunctions[] = {
     // SPRITECREATE(name, gID[, x, y, w, h])：把 G 图像登记成具名精灵
     {"SPRITECREATE"        , OperandType::Int, 2, 6, "siiiii", false, BuiltinOp::SpriteCreate},
     {"SPRITEDISPOSE"       , OperandType::Int, 1, 1, "s", false, BuiltinOp::SpriteDispose},
+    // ---- G 系补全（EE/EM；语义见 commands/GDRAWTEXT.md / GDRAWLINE.md / GDASHSTYLE.md
+    //      与 C# Creator.Method.cs:5568(GraphicsDrawString)/5807(GraphicsDrawLine)/
+    //      5549(GraphicsSetDashStyle)/5759(GraphicsDrawGWithRotate)/5305(GraphicsState)）----
+    // GDRAWTEXT(gid, text{, x, y})：2 或 4 参（C# OmitStart=2）；画完写
+    // RESULT:1=文本宽 / RESULT:2=文本高，返回 1。
+    {"GDRAWTEXT"           , OperandType::Int, 2, 4, "isii", false, BuiltinOp::GDrawText},
+    {"GDRAWLINE"           , OperandType::Int, 5, 5, "iiiii", false, BuiltinOp::GDrawLine},
+    {"GDASHSTYLE"          , OperandType::Int, 3, 3, "iii", false, BuiltinOp::GDashStyle},
+    // GDRAWGWITHROTATE(dst, src, angle{, px, py})：3 或 5 参（3 参时轴心 = src 中心）
+    {"GDRAWGWITHROTATE"    , OperandType::Int, 3, 5, "iiiii", false, BuiltinOp::GDrawGWithRotate},
+    {"GGETFONT"            , OperandType::Str, 1, 1, "i", false, BuiltinOp::GGetFont},
+    {"GGETFONTSIZE"        , OperandType::Int, 1, 1, "i", false, BuiltinOp::GGetFontSize},
+    {"GGETFONTSTYLE"        , OperandType::Int, 1, 1, "i", false, BuiltinOp::GGetFontStyle},
+    {"GGETBRUSH"           , OperandType::Int, 1, 1, "i", false, BuiltinOp::GGetBrush},
+    {"GGETPEN"             , OperandType::Int, 1, 1, "i", false, BuiltinOp::GGetPen},
+    {"GGETPENWIDTH"        , OperandType::Int, 1, 1, "i", false, BuiltinOp::GGetPenWidth},
+    // GGETTEXTSIZE(text, fontname, fontsize{, style})：RESULT:1 = 高，返回宽
+    {"GGETTEXTSIZE"        , OperandType::Int, 3, 4, "ssii", false, BuiltinOp::GGetTextSize},
     {"CBGSETG"             , OperandType::Int, 4, 4, "iiii", false, BuiltinOp::CbgSetG},
     {"CBGSETSPRITE"        , OperandType::Int, 4, 4, "siii", false, BuiltinOp::CbgSetSprite},
     {"CBGCLEAR"            , OperandType::Int, 0, 0, """", false, BuiltinOp::CbgClear},

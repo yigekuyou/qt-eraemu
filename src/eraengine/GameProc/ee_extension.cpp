@@ -555,15 +555,11 @@ void registerEeExtensions(ExtensionRegistry& ext)
         // first-wins 抢註（注册类后者会被拒绝）。
         // 图形族里尚未实现的部分（G 系画笔/字体/虚线与 G 绘图；见 test/data/commands/
         // GDRAWLINE.md 等）。真实现需要 Graphics 画布后端 + QML 绘制。
-        QStringLiteral("GDASHSTYLE"),
-        QStringLiteral("GDRAWGWITHROTATE"),
-        QStringLiteral("GDRAWLINE"),
-        QStringLiteral("GDRAWTEXT"),
-        QStringLiteral("GGETFONT"),
-        QStringLiteral("GGETFONTSIZE"),
-        QStringLiteral("GGETPEN"),
-        QStringLiteral("GGETPENWIDTH"),
-        QStringLiteral("GGETTEXTSIZE"),
+        // —— 2026-10 更新：GDRAWTEXT / GDRAWLINE / GDASHSTYLE / GDRAWGWITHROTATE /
+        //    GGETFONT / GGETFONTSIZE / GGETFONTSTYLE / GGETBRUSH / GGETPEN /
+        //    GGETPENWIDTH / GGETTEXTSIZE 已在核心表真实现（GraphicsStore 的
+        //    QImage 上直接 QPainter；G 系全家族本就在核心表/GraphicsStore），
+        //    不再登记桩（fail-fast 会拒绝核心名重复注册）。
         QStringLiteral("SPRITEDISPOSEALL"),
         // 清单收录但**无据可考 / 疑似伪名**（文档已在 test/data/commands/ 记录）：
         QStringLiteral("GETTEXTSIZE"),          // EE readme 的笔误（实为 GETTEXTBOX）

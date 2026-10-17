@@ -152,6 +152,14 @@ signals:
     void consoleToolTipColors(const QColor& fore, const QColor& back);
     // BREAKBUTTON：作废屏上全部按钮（C# Console.forceUpdateGeneration）
     void consoleBreakButtons();
+    // ---- SETBGIMAGE 族（C# ConsoleBackground：贴在文字后面的背景图）----
+    // SETBGIMAGE name{, depth, alpha}：深度大在后（先画）；alpha 0..255。
+    void consoleSetBackgroundImage(const QString& name, int depth, int alpha);
+    void consoleClearBackgroundImages();
+    void consoleRemoveBackgroundImage(const QString& name);
+    // ---- HTML_PRINT_ISLAND（C# _htmlElementList：完全独立的 HTML 层）----
+    void consolePrintHtmlIsland(const PrintTemplate& markup);
+    void consoleClearHtmlIsland();
     void consolePrintImage(const QString& resourceName, int width, int height, int ypos);
     // PRINTW 的「换行后等任意键」（对齐 C# PRINT_WAITINPUT -> Console.ReadAnyKey）
     void requestAnyKey();

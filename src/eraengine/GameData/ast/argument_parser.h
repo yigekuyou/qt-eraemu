@@ -251,6 +251,16 @@ inline constexpr auto kInstructionSpecs = std::to_array<InstructionSpec>({
     {"TOOLTIP_IMG",         ArgKind::IntExpression, 1, 1},   // C# SetToolTipImg
     // BREAKBUTTON：C# FunctionArgType.EXPRESSION_NULLABLE（0~1 参，值被忽略）
     {"BREAKBUTTON",         ArgKind::Expression,    0, 1},
+    // HTML_PRINT_ISLAND（Emuera.NET 区扩展）：实参构造与 HTML_PRINT 共用
+    // SP_HTML_PRINT（1~2 参：字符串式 + 可选整数，本命令**不读**第 2 参）；
+    // CLEAR 无参。走片逻辑与 HTML_PRINT 同一分支（ast_builder）。
+    {"HTML_PRINT_ISLAND",   ArgKind::StrExpression, 1, 1},
+    {"HTML_PRINT_ISLAND_CLEAR", ArgKind::Void,      0, 0},
+    // SETBGIMAGE 族（C# FORM_STR_ANY：全部实参按 FORM 文本解析，
+    // 深度/不透明度由执行侧 long.Parse —— 移植按「AST 求值或原文」取值）
+    {"SETBGIMAGE",         ArgKind::Expressions,   1, 3},
+    {"REMOVEBGIMAGE",      ArgKind::Expressions,    1, 1},
+    {"CLEARBGIMAGE",        ArgKind::Void,          0, 0},
 });
 [[nodiscard]] constexpr const InstructionSpec* findInstructionSpec(std::string_view upperName) noexcept {
     for (const auto& s : kInstructionSpecs) {

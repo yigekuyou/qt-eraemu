@@ -17,9 +17,13 @@ public:
     // 只能在此刻解析，否则会原样打成文本。
     //
     // coversText：值的模板分词是否**已经解释**了文本里的标签。返回 false = 文本里
-    // 还有装载期没消化掉的标签材料（未被解释的 '<'）：调用方按文本输出 + 留痕，
-    // 不做运行期解析（标签一律在装载期构筑）。
+    // 还有装载期没消化掉的标签材料（未被解释的 '<'）。
     [[nodiscard]] static bool coversText(const PrintTemplate& markup, const QString& text);
+    // 打印期**补解析**：对齐 C# PrintHtml —— HtmlManager.Html2DisplayLine 在打印时
+    // 从**最终字符串**解析标签。装载期编译只覆盖「静态可见」的标签；字符串函数 /
+    // 运行期拼接产出的标签（`PORTRAIT` 变量里的 <img …>）只能在此刻解析。
+    // 文本已完全求值（无插值）—— 全部按字面量走 compileMarkup 的同一套词法。
+    [[nodiscard]] static PrintTemplate parseRuntimeMarkup(const QString& text);
 };
 
 // Raw string APIs use text; only HTML output consumes the evaluated structure.

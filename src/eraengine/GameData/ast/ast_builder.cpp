@@ -1127,7 +1127,8 @@ LogicalLine AstBuilder::build(const QString& rawLine,
         }
         return finalized(std::move(line));
     }
-    if (line.functionName == QLatin1String("HTML_PRINT")) {
+    if (line.functionName == QLatin1String("HTML_PRINT")
+        || line.functionName == QLatin1String("HTML_PRINT_ISLAND")) {
         // C# SP_HTML_PRINT（ArgumentBuilder.cs:355）：1~2 个实参 ——
         //   第 1 实参 = HTML 字符串式（FORM 展开，必填、必须字符串型）；
         //   第 2 实参 = 可选数值（EM 私家版_HTML_PRINT拡張）：非 0 时输出进
@@ -1139,8 +1140,8 @@ LogicalLine AstBuilder::build(const QString& rawLine,
         const QStringList parts = splitTopLevelComma(expr);
         if (parts.size() > 2) {
             line.isError = true;
-            line.errMes = QCoreApplication::translate("ParseDiagnostics", "HTML_PRINT 参数过多（最多 2 个，实得 %1）")
-                              .arg(parts.size());
+            line.errMes = QCoreApplication::translate("ParseDiagnostics", "%1 参数过多（最多 2 个，实得 %2）")
+                              .arg(line.functionName).arg(parts.size());
         } else if (!parts.isEmpty()) {
             Operand operand(parts.first());
             if (resolve) operand.ast = resolve(parts.first());

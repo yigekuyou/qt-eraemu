@@ -1107,6 +1107,43 @@ int main(int argc, char* argv[]) {
         check(run("SPRITEDISPOSEALL 0"), "SPRITEDISPOSEALL 0 可执行");
     }
 
+    // ------------------------------------------------------------------
+    // 14) SETBGIMAGE 族 / HTML_PRINT_ISLAND 分发
+    // ------------------------------------------------------------------
+    qDebug() << "\n14) SETBGIMAGE 族 / HTML_PRINT_ISLAND 分发";
+    {
+        const AstResolver resolveOne = [&table](const QString& e) { return compileFixture(table, e); };
+        const ScriptPosition pos(QStringLiteral("t.ERB"), 0, 0);
+        QString bgName; int bgDepth = -1, bgAlpha = -1, isClear = 0, islandPrinted = 0, islandCleared = 0;
+        QObject::connect(&engine, &ExecutionEngine::consoleSetBackgroundImage,
+                         [&](const QString& n, int d, int a) { bgName = n; bgDepth = d; bgAlpha = a; });
+        QObject::connect(&engine, &ExecutionEngine::consoleClearBackgroundImages, [&] { ++isClear; });
+        QObject::connect(&engine, &ExecutionEngine::consoleRemoveBackgroundImage,
+                         [&](const QString& n) { bgName = n; });
+        QObject::connect(&engine, &ExecutionEngine::consolePrintHtmlIsland,
+                         [&](const PrintTemplate&) { ++islandPrinted; });
+        QObject::connect(&engine, &ExecutionEngine::consoleClearHtmlIsland,
+                         [&] { ++islandCleared; });
+        const auto run = [&](const char* text) {
+            LogicalLine l = AstBuilder::build(QString::fromUtf8(text), pos, resolveOne);
+            return engine.executeInstruction(l);
+        };
+        // SETBGIMAGE（裸名/深度/不透明度；C# FORM_STR_ANY -> 移植按 AST 或原文取）
+        check(run("SETBGIMAGE bg_room.png, 10, 128"), "SETBGIMAGE 可执行");
+        check(bgName == "bg_room.png" && bgDepth == 10 && bgAlpha == 128,
+              "SETBGIMAGE 的裸名 + 深度 + 不透明度");
+        check(run("SETBGIMAGE \"bg2\""), "SETBGIMAGE 引号名可执行");
+        check(bgName == "bg2" && bgDepth == 0 && bgAlpha == 255,
+              "SETBGIMAGE 省略深度/不透明度 -> 缺省 0/255");
+        check(run("REMOVEBGIMAGE BG_ROOM"), "REMOVEBGIMAGE 可执行");
+        check(run("CLEARBGIMAGE") && isClear == 1, "CLEARBGIMAGE 可执行");
+        // HTML_PRINT_ISLAND / _CLEAR
+        check(run("HTML_PRINT_ISLAND \"<b>HUD</b>\""), "HTML_PRINT_ISLAND 可执行");
+        check(islandPrinted == 1, "HTML_PRINT_ISLAND -> consolePrintHtmlIsland");
+        check(run("HTML_PRINT_ISLAND_CLEAR") && islandCleared == 1,
+              "HTML_PRINT_ISLAND_CLEAR 可执行");
+    }
+
     qDebug() << "\n======================================";
     if (g_failures == 0) {
         qDebug() << "[SUCCESS] statement tests passed";

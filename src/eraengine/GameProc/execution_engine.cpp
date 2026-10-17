@@ -1103,18 +1103,72 @@ bool ExecutionEngine::executeInstruction(const LogicalLine& line) {
         const auto value = getEvaluator().evaluate(*line.arguments.first().ast, m_storage, m_gameBaseData);
         if (!value.isValid() || !isStringValue(value)) return false;
         const QString text = stringText(value);
-        const PrintTemplate markup = valueMarkup(value);
-        // 标签一律在**装载期**构筑（静态模板编译 + 连续片段写链的拼接，
-        // 见 EraParseTable::stitchStringFragmentRuns）。这里只做校验：值的分词
-        // 若仍留有装载期没能消化的标签材料（字符串函数拼出的标签、条件分支里
-        // 动态拼装的标签），就按文本输出并以 [未完成] 留痕 —— 不做运行期解析。
-        if (!PrintTemplateCompiler::coversText(markup, text)
-            && !m_reportedUnfinished.contains(QStringLiteral("HTML_PRINT"))) {
-            m_reportedUnfinished.insert(QStringLiteral("HTML_PRINT"));
-            qWarning() << "[未完成] HTML_PRINT 的字符串含装载期未能构筑的标签（按文本输出）:"
-                       << text.left(60) << "行:" << line.position.toString();
-        }
+        PrintTemplate markup = valueMarkup(value);
+        // 标签一律在**装载期**构筑（静态模板编译 + 连续片段写链的拼接，见
+        // EraParseTable::stitchStringFragmentRuns）。装载期没能消化的标签材料
+        //（字符串变量里带的 <img …>、字符串函数产出的标签）在此刻**补解析** ——
+        // 对齐 C# PrintHtml：HtmlManager.Html2DisplayLine 本来就是打印时解析。
+        // 此前这里按文本输出 + [未完成] 留痕（FL3.8 的立绘框 div 正是这种写法）。
+        if (!PrintTemplateCompiler::coversText(markup, text))
+            markup = PrintTemplateCompiler::parseRuntimeMarkup(text);
         emit toBuffer ? consolePrintTemplateBuffered(markup) : consolePrintTemplate(markup);
+        return true;
+    }
+    // ---- HTML_PRINT_ISLAND（C# EmueraConsole.PrintHTMLIsland：完全独立的 HTML 层，
+    //      不进正文缓冲、不随滚动；HTML_PRINT_ISLAND_CLEAR 清空该层）----
+    if (name == QLatin1String("HTML_PRINT_ISLAND")) {
+        if (m_skipDisp) return true;
+        if (line.arguments.isEmpty() || !line.arguments.first().ast) return false;
+        const auto value = getEvaluator().evaluate(*line.arguments.first().ast, m_storage, m_gameBaseData);
+        if (!value.isValid() || !isStringValue(value)) return false;
+        const QString text = stringText(value);
+        PrintTemplate markup = valueMarkup(value);
+        if (!PrintTemplateCompiler::coversText(markup, text))
+            markup = PrintTemplateCompiler::parseRuntimeMarkup(text);
+        emit consolePrintHtmlIsland(markup);
+        return true;
+    }
+    if (name == QLatin1String("HTML_PRINT_ISLAND_CLEAR")) {
+        emit consoleClearHtmlIsland();
+        return true;
+    }
+    // ---- SETBGIMAGE 族（C# SETBGIMAGE_Instruction -> AddBackgroundImage）----
+    if (name == QLatin1String("SETBGIMAGE") || name == QLatin1String("REMOVEBGIMAGE")
+        || name == QLatin1String("CLEARBGIMAGE")) {
+        ExpressionEvaluator& ev = getEvaluator();
+        // C# 是 FORM_STR_ANY：全部实参按 FORM 文本解析（深度/不透明度 long.Parse）。
+        // 移植侧：带引号/%…% 的实参走 AST 求值；**裸文本**（资源名惯用写法）
+        // AST 为空 -> 按原文取（FORM 字面量语义）。
+        // ArgKind::Expressions 会把顶层逗号也留成一个操作数，先剔除分隔符再按下标取，
+        // 否则 `SETBGIMAGE bg_room.png, 10, 128` 的深度会落到分隔符上。
+        QList<const Operand*> operands;
+        operands.reserve(line.arguments.size());
+        for (const Operand& a : line.arguments) {
+            if (!a.isString && (a.raw == QLatin1String(",") || a.raw == QLatin1String(":"))) continue;
+            operands.append(&a);
+        }
+        const auto argText = [&](int i) -> QString {
+            if (i < 0 || i >= operands.size()) return QString();
+            const Operand& a = *operands.at(i);
+            return a.ast ? stringText(ev.evaluate(*a.ast, m_storage, m_gameBaseData)) : a.raw;
+        };
+        const auto argInt = [&](int i, qint64 fallback) -> qint64 {
+            const QString t = argText(i).trimmed();
+            bool ok = false;
+            const qint64 v = t.toLongLong(&ok);
+            return ok ? v : fallback;   // C# long.Parse 失败抛 FormatException；这里按缺省
+        };
+        if (name == QLatin1String("SETBGIMAGE")) {
+            const QString res = argText(0).trimmed();
+            if (res.isEmpty()) return true;   // C#：找不到图片 -> 静默什么都不做
+            emit consoleSetBackgroundImage(res,
+                                           static_cast<int>(argInt(1, 0)),
+                                           static_cast<int>(argInt(2, 255)));
+        } else if (name == QLatin1String("REMOVEBGIMAGE")) {
+            emit consoleRemoveBackgroundImage(argText(0).trimmed().toUpper());
+        } else {
+            emit consoleClearBackgroundImages();
+        }
         return true;
     }
 

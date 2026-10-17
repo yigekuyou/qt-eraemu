@@ -263,6 +263,27 @@ FocusScope {
     onFontSizeChanged: syncLayout()
     onLineHeightChanged: syncLayout()
 
+    // ---- SETBGIMAGE：背景图层（C# ConsoleBackground）----
+    // 贴在正文**后面**：列表深度降序（后画的深度小、盖在上面），保持长宽比
+    // 完整放入视口（C# BakeBackground:726 取宽高缩放比较小者；本移植用
+    // PreserveAspectFit 的居中版本 —— 无测试游戏使用，视觉差可忽略）。
+    Item {
+        id: bgLayer
+        anchors.fill: parent
+        z: -1            // 一切正文之前
+        Repeater {
+            model: root.backend ? root.backend.backgroundImages : []
+            delegate: Image {
+                required property var modelData
+                anchors.fill: parent
+                source: "image://emuera/" + modelData.name
+                fillMode: Image.PreserveAspectFit
+                opacity: modelData.alpha / 255
+                asynchronous: true
+            }
+        }
+    }
+
     // ---- 可视区 ----
     Item {
         id: viewport
@@ -271,6 +292,47 @@ FocusScope {
         anchors.top: parent.top
         anchors.bottom: parent.bottom
         focus: root.primitiveInput || (root.isMobile && root.anyKeyInput)
+
+        // ---- HTML_PRINT_ISLAND：完全独立的 HTML 层（C# _htmlElementList）----
+        // 不随正文滚动：从渲染区顶端 y=0 起按行高排列；C# 在普通文本/CBG 之后
+        // 绘制（盖在文字上）、工具提示之前。岛层按钮已由 C++ 禁用（enabled=false），
+        // 点击只属于正文 —— 这里按「每岛行 = 一个行委托」复用 ConsoleBlock 渲染。
+        Item {
+            id: islandLayer
+            anchors.top: viewport.top
+            anchors.left: viewport.left
+            anchors.right: viewport.right
+            height: root.cellHeight * (root.backend ? root.backend.htmlIsland.length : 0)
+            z: 10                      // 正文（ListView）之上
+            visible: height > 0
+            Repeater {
+                model: root.backend ? root.backend.htmlIsland : []
+                delegate: Item {
+                    id: islandRow
+                    required property var modelData
+                    required property int index
+                    width: islandLayer.width
+                    height: root.cellHeight
+                    y: index * root.cellHeight
+                    Repeater {
+                        model: islandRow.modelData.blocks
+                        delegate: ConsoleBlock {
+                            required property var modelData
+                            blockData: modelData
+                            backend: root.backend
+                            cellWidth: root.cellWidth
+                            cellHeight: root.cellHeight
+                            fontName: root.fontName
+                            fontSize: root.fontSize
+                            foreColor: root.foreColor
+                            focusColor: root.focusColor
+                            logColor: root.logColor
+                            isBacklog: false
+                        }
+                    }
+                }
+            }
+        }
 
         // 独立的滚动条槽位。两个 ListView 都让出这段宽度，滚动条不会
         // 覆盖舞台最右列，也不会因为滚动条出现/消失而改变舞台网格宽度。

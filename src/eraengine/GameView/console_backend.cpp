@@ -437,6 +437,89 @@ void ConsoleBackend::setToolTipColors(const QColor& fore, const QColor& back) {
     emit toolTipStyleChanged();
 }
 
+// ---- SETBGIMAGE 族（C# EmueraConsole.AddBackgroundImage / 背景列表）----
+void ConsoleBackend::addBackgroundImage(const QString& name, int depth, int alpha) {
+    if (name.isEmpty()) return;
+    BgImage img;
+    img.name = name;
+    img.depth = depth;
+    img.alpha = qBound(0, alpha, 255);
+    // C# AddBackgroundImage：按深度**降序**插入（`(v1.Key >= v2.Key) ? -1 : 1`）；
+    // BakeBackground 从头往后画 -> 列表后面的（深度小）盖在前面（深度大）之上。
+    int at = 0;
+    while (at < m_bgImages.size() && m_bgImages.at(at).depth >= img.depth) ++at;
+    m_bgImages.insert(at, img);
+    emit backgroundImagesChanged();
+}
+
+void ConsoleBackend::clearBackgroundImages() {
+    if (m_bgImages.isEmpty()) return;
+    m_bgImages.clear();
+    emit backgroundImagesChanged();
+}
+
+void ConsoleBackend::removeBackgroundImage(const QString& upperName) {
+    bool removed = false;
+    for (int i = m_bgImages.size() - 1; i >= 0; --i) {
+        if (m_bgImages.at(i).name.compare(upperName, Qt::CaseInsensitive) == 0) {
+            m_bgImages.removeAt(i);
+            removed = true;
+        }
+    }
+    if (removed) emit backgroundImagesChanged();
+}
+
+QVariantList ConsoleBackend::backgroundImages() const {
+    QVariantList out;
+    for (const BgImage& img : m_bgImages) {
+        QVariantMap m;
+        m.insert(QStringLiteral("name"), img.name);
+        m.insert(QStringLiteral("depth"), img.depth);
+        m.insert(QStringLiteral("alpha"), img.alpha);
+        out.append(m);
+    }
+    return out;
+}
+
+// ---- HTML_PRINT_ISLAND（C# EmueraConsole.PrintHTMLIsland / _htmlElementList）----
+void ConsoleBackend::printHtmlIsland(const PrintTemplate& markup) {
+    // 岛层借用**同一走片循环**（风格/图片/按钮/<br> 全部同一套），但正文缓冲的
+    // 挂起状态必须原样保留：先存后清，走完还原（renderTemplate 会清空
+    // m_pendingParts/m_sealed 并在收尾调用 newline() —— 岛模式下提交进岛层）。
+    const QList<ConsoleSpan> savedParts = m_pendingParts;
+    const QList<ConsoleSegment> savedSealed = m_sealed;
+    const bool savedOpen = m_pendingOpen;
+    m_pendingParts.clear();
+    m_sealed.clear();
+    m_pendingOpen = false;
+    m_islandMode = true;
+    renderTemplate(markup, /*toBuffer=*/false);
+    m_islandMode = false;
+    m_pendingParts = savedParts;
+    m_sealed = savedSealed;
+    m_pendingOpen = savedOpen;
+    emit htmlIslandChanged();
+}
+
+void ConsoleBackend::clearHtmlIsland() {
+    if (m_islandLines.isEmpty()) return;
+    m_islandLines.clear();
+    emit htmlIslandChanged();
+}
+
+QVariantList ConsoleBackend::htmlIsland() const {
+    // 岛行 -> 已摊平区块（与正文行同一 ConsoleBlock 形状；QML 用同一委托渲染）。
+    // lineIndex 用行号占位即可 —— 岛层按钮已禁用（enabled=false），不会有点击回传。
+    QVariantList rows;
+    for (int i = 0; i < m_islandLines.size(); ++i) {
+        QVariantMap row;
+        row.insert(QStringLiteral("blocks"),
+                   flattenLine(m_islandLines.at(i), i));
+        rows.append(row);
+    }
+    return rows;
+}
+
 // BREAKBUTTON（C# Console.forceUpdateGeneration）：世代号自增 -> 屏上旧按钮的
 // generation 与当前值不符，点击/输入判定一律忽略（见 buttonAt/hasEnabledButton）。
 void ConsoleBackend::breakButtons() {
@@ -464,6 +547,27 @@ void ConsoleBackend::printPlain(const QString& text) {
 }
 
 void ConsoleBackend::newline() {
+    // HTML_PRINT_ISLAND 期间（printHtmlIsland 借用同一走片循环）：行提交进
+    // 岛层（C# _htmlElementList）—— 不进正文缓冲、不发模型信号；岛层按钮
+    // 不可点（C# 的点击命中走主窗口的正文行列表，岛层只参与绘制）。
+    if (m_islandMode) {
+        ConsoleDisplayLine line = buildLine();
+        m_sealed.clear();
+        m_pendingParts.clear();
+        m_pendingOpen = false;
+        if (m_wrapLines) {
+            QList<ConsoleDisplayLine> wrapped =
+                m_layout.wrapSegments(std::move(line.segments), line.align);
+            for (ConsoleDisplayLine& w : wrapped) {
+                for (ConsoleSegment& seg : w.segments) seg.enabled = false;
+                m_islandLines.append(std::move(w));
+            }
+        } else {
+            for (ConsoleSegment& seg : line.segments) seg.enabled = false;
+            m_islandLines.append(std::move(line));
+        }
+        return;
+    }
     // C# addDisplayLine：最后一行是「一時行」（REUSELASTLINE/PrintTemporaryLine）时，
     // 下一个显示行输出**替换**它（deleteLine(1)）。DQPRINT 逐字动画靠这个
     // 把整句动画在一行内完成；此前按普通输出追加，一句口上会产生几十行。
@@ -670,6 +774,11 @@ void ConsoleBackend::clearAll() {
     m_lastLineTemporary = false;
     m_maxSpanReach = 1;
     m_publishedLineCount = 0;
+    // HTML 岛层随清屏一起清空（C# ClearDisplay 清 _htmlElementList：初始化 /
+    // 报错 / 返回标题都会走）。背景图是**窗口**的底图（ConsoleBackground），
+    // C# 不随正文清屏，保留。
+    const bool hadIsland = !m_islandLines.isEmpty();
+    m_islandLines.clear();
     // 屏上已无任何区块引用图片像素：把钉住的副本一起释放（下一次装载重新钉）。
     ResourceImageProvider::clearPinnedImages();
     invalidateLineCache();        // 行全部消失 -> 按行缓存作废
@@ -678,6 +787,7 @@ void ConsoleBackend::clearAll() {
     emit generationChanged();
     emit cleared();
     emit lineCountChanged();
+    if (hadIsland) emit htmlIslandChanged();
     updateStageModels();
 }
 

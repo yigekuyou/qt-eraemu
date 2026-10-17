@@ -582,6 +582,55 @@ int main(int argc, char* argv[]) {
         check(presented == 2, "视图未回报时 50ms 兜底放行");
     }
 
+    // ---- 9. SETBGIMAGE 族与 HTML_PRINT_ISLAND ----
+    qDebug() << "\n9) SETBGIMAGE 族 / HTML_PRINT_ISLAND";
+    {
+        // SETBGIMAGE：深度排序（降序：深度大的在列表前 = 底层）+ 移除/清空
+        ConsoleBackend c;
+        c.addBackgroundImage("bg_a", 0, 255);
+        c.addBackgroundImage("bg_b", 10, 128);
+        c.addBackgroundImage("bg_c", 5, 255);
+        QVariantList bgs = c.backgroundImages();
+        check(bgs.size() == 3
+              && bgs.at(0).toMap().value("name").toString() == "bg_b"      // 深度 10 最底
+              && bgs.at(1).toMap().value("name").toString() == "bg_c"
+              && bgs.at(2).toMap().value("name").toString() == "bg_a"
+              && bgs.at(0).toMap().value("alpha").toInt() == 128,
+              "SETBGIMAGE 按深度降序列表（深度大 = 底层）、alpha 保留");
+        c.removeBackgroundImage("BG_A");   // 大小写不敏感（C# GetSprite 统一大写）
+        check(c.backgroundImages().size() == 2, "REMOVEBGIMAGE 按名移除（大小写不敏感）");
+        c.clearBackgroundImages();
+        check(c.backgroundImages().isEmpty(), "CLEARBGIMAGE 清空全部");
+
+        // HTML_PRINT_ISLAND：独立层 —— 不进正文缓冲、不影响挂起行；CLEAR 清空
+        ConsoleBackend b;
+        b.print("A");                    // 挂起的正文行
+        PrintTemplate island;
+        PrintTemplatePart t1; t1.kind = PrintTemplatePart::Kind::Text; t1.text = "HUD";
+        PrintTemplatePart brk; brk.kind = PrintTemplatePart::Kind::Break;
+        PrintTemplatePart t2; t2.kind = PrintTemplatePart::Kind::Text; t2.text = "line2";
+        island.parts = { t1, brk, t2 };
+        b.printHtmlIsland(island);
+        check(b.lineCount() == 0,
+              "HTML_PRINT_ISLAND 不动正文（已定型行数仍为 0）");
+        const QVariantList rows = b.htmlIsland();
+        check(rows.size() == 2
+              && rows.at(0).toMap().value("blocks").toList().at(0).toMap().value("text").toString() == "HUD"
+              && rows.at(1).toMap().value("blocks").toList().at(0).toMap().value("text").toString() == "line2",
+              "岛层两行（<br> 断行），blocks 与正文行同一形状");
+        b.print("B");
+        b.newline();
+        check(b.lineCount() == 1 && b.lineText(0) == "AB",
+              "岛层之后正文照常续行（AB 未被岛内容打断）");
+        b.clearHtmlIsland();
+        check(b.htmlIsland().isEmpty(), "HTML_PRINT_ISLAND_CLEAR 清空岛层");
+        b.clearAll();
+        b.printHtmlIsland(island);
+        check(!b.htmlIsland().isEmpty(), "岛层可再次使用");
+        b.clearAll();
+        check(b.htmlIsland().isEmpty(), "clearAll 清屏同时清岛层（C# ClearDisplay）");
+    }
+
     qDebug() << "\n===================";
     if (g_failures == 0) {
         qDebug() << "[SUCCESS] console backend tests passed";

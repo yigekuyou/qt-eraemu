@@ -183,6 +183,14 @@ class ConsoleBackend : public QAbstractListModel {
     Q_PROPERTY(bool toolTipImage     READ toolTipImage     NOTIFY toolTipStyleChanged)  // 内容是 G 图像 id
     Q_PROPERTY(QColor toolTipForeColor READ toolTipForeColor NOTIFY toolTipStyleChanged)
     Q_PROPERTY(QColor toolTipBackColor READ toolTipBackColor NOTIFY toolTipStyleChanged)
+    // ---- SETBGIMAGE 族（C# ConsoleBackground：贴在文字后面的背景图列表）----
+    // [{name, depth, alpha}]，深度降序（C# AddBackgroundImage 的排序 +
+    // BakeBackground 从头往后画 -> 深度大的在底下）；QML 按序叠放即得同一结果。
+    Q_PROPERTY(QVariantList backgroundImages READ backgroundImages NOTIFY backgroundImagesChanged)
+    // ---- HTML_PRINT_ISLAND（C# _htmlElementList：完全独立的 HTML 层）----
+    // [{blocks: [...]}]：每岛行一组已摊平区块（与正文行同一 ConsoleBlock 形状），
+    // QML 从渲染区顶端 y=0 起按行高排列，不随正文滚动。
+    Q_PROPERTY(QVariantList htmlIsland READ htmlIsland NOTIFY htmlIslandChanged)
 
 public:
     enum Roles {
@@ -225,6 +233,19 @@ public:
     // BREAKBUTTON：作废屏上全部按钮（C# forceUpdateGeneration — 世代号自增即可，
     // 旧按钮的 generation 不再等于当前值，点击被忽略）
     void breakButtons();
+
+    // ---- SETBGIMAGE 族（C# EmueraConsole.AddBackgroundImage / 背景列表）----
+    void addBackgroundImage(const QString& name, int depth, int alpha);
+    void clearBackgroundImages();
+    void removeBackgroundImage(const QString& upperName);
+    [[nodiscard]] QVariantList backgroundImages() const;
+
+    // ---- HTML_PRINT_ISLAND（C# PrintHTMLIsland / _htmlElementList）----
+    // 与正文完全独立的 HTML 层：借用同一走片循环（renderTemplate），但行提交
+    // 进 m_islandLines（不进正文缓冲、不发模型信号）；CLEAR 清空。
+    void printHtmlIsland(const PrintTemplate& markup);
+    void clearHtmlIsland();
+    [[nodiscard]] QVariantList htmlIsland() const;
 
     // ---- QAbstractListModel ----
     [[nodiscard]] int rowCount(const QModelIndex& parent = QModelIndex()) const override;
@@ -377,6 +398,8 @@ public slots:
 
 signals:
     void toolTipStyleChanged();
+    void backgroundImagesChanged();
+    void htmlIslandChanged();
     void gridChanged();
     void lineCountChanged();
     void cleared();
@@ -467,6 +490,13 @@ private:
     // QML 里会退化成不透明的黑，用透明的有效值当哨兵才不会把提示框刷黑）。
     QColor  m_toolTipForeColor = QColor(Qt::transparent);
     QColor  m_toolTipBackColor = QColor(Qt::transparent);
+
+    // ---- SETBGIMAGE 族（C# ConsoleBackground 的背景列表）----
+    struct BgImage { QString name; int depth = 0; int alpha = 255; };
+    QList<BgImage> m_bgImages;          // 深度降序（后叠的深度小、盖在上面）
+    // ---- HTML_PRINT_ISLAND（C# _htmlElementList）----
+    QList<ConsoleDisplayLine> m_islandLines;   // 岛层的行（借用正文走片，独立提交）
+    bool m_islandMode = false;                 // renderTemplate 期间：行提交走岛层
 
     QStringList m_htmlLines;      // HTML 原文（HTML_POPPRINTINGSTR 消费）
     QString m_inputKind;

@@ -272,12 +272,15 @@ int main(int argc, char** argv) {
     line = AstBuilder::build("HTML_PRINT LOCALS", {}, resolve);
     check(line.arguments.first().ast && line.printTemplate, "HTML string is compiled during load");
     engine.executeInstruction(line);
-    // 装入变量的裸文本在装载期无法构筑标签（值的来源与 AST 无关）：
-    // 按文本输出并以 [未完成] 留痕，**不做运行期解析**。
+    // 装入变量的裸文本在装载期无法构筑标签（值的来源与 AST 无关）—— 但 C#
+    // PrintHtml 本来就是**打印时**从最终字符串解析（Html2DisplayLine）。
+    // 现在与 C# 对齐：coversText 失败 -> parseRuntimeMarkup 补解析，
+    // 标签生效（此前按文本输出 + [未完成] 留痕；FL3.8 立绘框 div 正是这种写法）。
+    // 尾部 <br> 只冲刷其前的内容（不留空行）—— 与正文 PRINT 的换行语义一致。
     check(console.buffer().count() == 1
-          && console.buffer().at(0).plainText() == "<u>runtime</u><br>"
-          && !console.buffer().at(0).flatSpans().first().style.underline,
-          "opaque string value stays text (no runtime tag parsing)");
+          && console.buffer().at(0).plainText() == "runtime"
+          && console.buffer().at(0).flatSpans().first().style.underline,
+          "运行期拼出的标签在打印时补解析（<u> 生效、<br> 冲刷成行）");
     console.clearAll();
     // eraTW INFO_CLOCK_IMAGE 的原样复刻：`=` 裸文本 + 三次 `+=`，其中 <img> 被
     // 拆成两段（第一段以未闭合的 '<' 结尾）。装载期把整条写链拼成一棵 PLUS 树
@@ -406,8 +409,14 @@ int main(int argc, char** argv) {
     storage.setLocalStr(0, "r");
     engine.executeInstruction(line);
     // 不做运行期解析：插值拼出来的 `>` 不会把前面的 `<b` 收成标签（装载期单向编译）。
-    check(console.buffer().count() == 1 && console.buffer().at(0).plainText() == "<br>tail",
-          "dynamic tag name cannot discard an interpolation or generate structure");
+    // C# 对齐（此前是「装载期单向编译」的移植特有行为）：插值拼出来的 `<b%LOCALS%>`
+    // 在装载期无法收成标签（Text 部件留着未闭合的 '<'）→ coversText 失败 →
+    // 打印时从**最终字符串** `<br>tail<br>` 补解析（Html2DisplayLine 同款）。
+    // 插值仍然只求值一次（OccurrenceContext 先算文本，再走 parseRuntimeMarkup）。
+    check(console.buffer().count() == 2
+          && console.buffer().at(0).plainText().isEmpty()
+          && console.buffer().at(1).plainText() == "tail",
+          "动态拼出的标签名（<b%LOCALS%> -> <br>）按 C# 在打印时解析");
     QList<LogicalLine> lines;
     for (const QString& text : QStringList{"@STR", "#DIMS SHARED", "PRINTS SHARED", "@INT", "#DIM SHARED", "PRINTV SHARED"}) lines.append(AstBuilder::build(text, {}, resolve));
     table.loadScript("scope", lines); table.markLoadComplete();

@@ -209,6 +209,16 @@ bool hasUnterminatedTag(const QString& text) {
 }
 } // namespace
 
+PrintTemplate PrintTemplateCompiler::parseRuntimeMarkup(const QString& text) {
+    // 同一 compileMarkup 词法；表达式集为空 -> fragments() 把全文当字面量，
+    // 属性值（src/width/value/title…）也全部是纯文本（对齐 C# 打印期解析，
+    // 该路径没有可再求值的东西）。实体（& 等）在此按 decode() 还原 ——
+    // 字符串值保留实体拼写（print_template.h 的约定），正好对上。
+    const auto compiled = compileMarkup(text, {});
+    return evaluateOccurrences(*compiled,
+                               [](const ExpressionNode&, int) { return QVariant(); });
+}
+
 bool PrintTemplateCompiler::coversText(const PrintTemplate& markup, const QString& text) {
     if (!text.contains(QLatin1Char('<'))) return true;   // 字符串里没有标签，无需解析
     bool structured = false;

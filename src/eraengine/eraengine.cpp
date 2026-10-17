@@ -539,6 +539,18 @@ EraEngine::EraEngine(QObject *parent)
 		// BREAKBUTTON：作废屏上全部按钮（世代号自增，旧按钮点击失效）
 		connect(&m_executionEngine, &ExecutionEngine::consoleBreakButtons,
 				&m_console, &ConsoleBackend::breakButtons);
+		// SETBGIMAGE 族：背景图列表（贴在文字后面；QML 按序叠放）
+		connect(&m_executionEngine, &ExecutionEngine::consoleSetBackgroundImage,
+				&m_console, &ConsoleBackend::addBackgroundImage);
+		connect(&m_executionEngine, &ExecutionEngine::consoleClearBackgroundImages,
+				&m_console, &ConsoleBackend::clearBackgroundImages);
+		connect(&m_executionEngine, &ExecutionEngine::consoleRemoveBackgroundImage,
+				&m_console, &ConsoleBackend::removeBackgroundImage);
+		// HTML_PRINT_ISLAND：完全独立的 HTML 层（不随正文滚动）
+		connect(&m_executionEngine, &ExecutionEngine::consolePrintHtmlIsland,
+				&m_console, &ConsoleBackend::printHtmlIsland);
+		connect(&m_executionEngine, &ExecutionEngine::consoleClearHtmlIsland,
+				&m_console, &ConsoleBackend::clearHtmlIsland);
 		connect(&m_executionEngine, &ExecutionEngine::consoleOutputLog, this,
 				[this] { m_console.outputLog(m_gameDirectory + QStringLiteral("/emuera.log")); });
 		connect(&m_executionEngine, &ExecutionEngine::consoleClearLines,

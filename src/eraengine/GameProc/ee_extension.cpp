@@ -539,15 +539,11 @@ void registerEeExtensions(ExtensionRegistry& ext)
         // GUI 专属（本移植暂无对应后端：背景图 / 按钮世代 / 工具提示自绘 /
         // HTML 浮岛）。真实现需要 QML 侧能力，登记为桩以保持解析期容忍。
         // —— 2026-10 更新：BREAKBUTTON / TOOLTIP_SETFONT / TOOLTIP_SETFONTSIZE /
-        //    TOOLTIP_CUSTOM / TOOLTIP_FORMAT / TOOLTIP_IMG / SPRITEDISPOSEALL 已
-        //    真实现（指令表 + ConsoleBackend 的 toolTip* 属性 + GraphicsStore），
-        //    不再登记桩（fail-fast 会拒绝核心名重复注册）。
-        QStringLiteral("SETBGIMAGE"),          // 背景图（C# ConsoleBackground）
-        QStringLiteral("CLEARBGIMAGE"),
-        QStringLiteral("REMOVEBGIMAGE"),
+        //    TOOLTIP_CUSTOM / TOOLTIP_FORMAT / TOOLTIP_IMG / SPRITEDISPOSEALL /
+        //    SETBGIMAGE / CLEARBGIMAGE / REMOVEBGIMAGE / HTML_PRINT_ISLAND(_CLEAR)
+        //    已真实现（指令表 + ConsoleBackend 的 toolTip*/backgroundImages/
+        //    htmlIsland 属性 + GraphicsStore），不再登记桩。
         QStringLiteral("TOOLTIP_EXTENSION"),   // 无 C# 出处（仅清单收录）
-        QStringLiteral("HTML_PRINT_ISLAND"),   // HTML 浮岛（可滚动 HTML 层）
-        QStringLiteral("HTML_PRINT_ISLAND_CLEAR"),
         // CALLSHARP / DT_COLUMN_OPTIONS：**已在 fork_extension.cpp 真实现**
         // （原生插件 ABI + `DEFAULT =` 解析），不再在此登记桩 —— 避免
         // first-wins 抢註（注册类后者会被拒绝）。

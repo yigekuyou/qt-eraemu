@@ -287,9 +287,14 @@ static void htmlFlow() {
             good &= values == QStringList({"0", "1"}) && tips == QStringList({"tip0", "tip1"})
                 && spaces == 4 && text.contains("<button value='99'>opaque</button>");
         }
-        // 普通运行期写入（`html '= LOCALS`）的值只有文本：装载期无法为其构筑标签
-        //（值的来源与 AST 无关），按文本输出（留痕 [未完成]），不做运行期解析。
-        good &= printed[2].parts.size() == 1 && printed[2].parts[0].kind == PrintTemplatePart::Kind::Text;
+        // 普通运行期写入（`html '= LOCALS`）的值：装载期无法为其构筑标签，
+        // 但 C# PrintHtml 本就是**打印时**从最终字符串解析（Html2DisplayLine）——
+        // 现与 C# 对齐：coversText 失败 -> parseRuntimeMarkup 补解析，标签生效。
+        //（此前是移植特有的「按文本输出」行为。）
+        QStringList opaque; for (const auto& part : printed[2].parts)
+            if (part.kind == PrintTemplatePart::Kind::Button) opaque.append(part.buttonValue);
+            else if (part.kind == PrintTemplatePart::Kind::Text) opaque.append(part.text);
+        good &= opaque.size() == 2 && opaque.at(0) == "99" && opaque.at(1) == "opaque";
     }
     if (!good) { qCritical() << "HTML function/accumulation provenance failed" << int(result) << printed.size(); ++failures; }
     else qInfo() << "PASS HTML function/accumulation provenance";

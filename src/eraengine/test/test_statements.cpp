@@ -1068,6 +1068,45 @@ int main(int argc, char* argv[]) {
         }
     }
 
+    // ------------------------------------------------------------------
+    // 13) TOOLTIP_* / BREAKBUTTON 语句（C# Instraction.Child.cs 的指令族）
+    // ------------------------------------------------------------------
+    qDebug() << "\n13) TOOLTIP_* / BREAKBUTTON 分发";
+    {
+        const AstResolver resolveOne = [&table](const QString& e) { return compileFixture(table, e); };
+        const ScriptPosition pos(QStringLiteral("t.ERB"), 0, 0);
+        QString family; int size = -1, format = -1, delay = -1, duration = -1;
+        bool custom = false, image = false, brokeButtons = false;
+        QObject::connect(&engine, &ExecutionEngine::consoleToolTipStyle,
+                         [&](const QString& f, int ps, int fmt, bool c, bool im) {
+                             family = f; size = ps; format = fmt; custom = c; image = im;
+                         });
+        QObject::connect(&engine, &ExecutionEngine::consoleToolTipTiming,
+                         [&](int d, int du) { delay = d; duration = du; });
+        QObject::connect(&engine, &ExecutionEngine::consoleBreakButtons,
+                         [&] { brokeButtons = true; });
+        const auto run = [&](const char* text) {
+            // 源串是 UTF-8（源文件编码）——用 fromLatin1 会把 "ＭＳ" 变成 mojibake
+            LogicalLine l = AstBuilder::build(QString::fromUtf8(text), pos, resolveOne);
+            return engine.executeInstruction(l);
+        };
+        check(run("TOOLTIP_SETFONT \"ＭＳ ゴシック\""), "TOOLTIP_SETFONT 可执行");
+        check(family == QStringLiteral("ＭＳ ゴシック"), "TOOLTIP_SETFONT -> consoleToolTipStyle(字体)");
+        check(run("TOOLTIP_SETFONTSIZE 10"), "TOOLTIP_SETFONTSIZE 可执行");
+        check(size == 10, "TOOLTIP_SETFONTSIZE -> 磅字号 10");
+        check(run("TOOLTIP_CUSTOM 1"), "TOOLTIP_CUSTOM 可执行");
+        check(custom, "TOOLTIP_CUSTOM 1 -> OwnerDraw 打开");
+        check(run("TOOLTIP_FORMAT 0"), "TOOLTIP_FORMAT 可执行");
+        check(format == 0, "TOOLTIP_FORMAT 0 -> TextFormatFlags 0");
+        check(run("TOOLTIP_SETDELAY 120"), "TOOLTIP_SETDELAY 可执行");
+        check(delay == 120, "TOOLTIP_SETDELAY -> 120ms");
+        check(run("TOOLTIP_SETDURATION 300"), "TOOLTIP_SETDURATION 可执行");
+        check(duration == 300, "TOOLTIP_SETDURATION -> 300ms");
+        check(run("BREAKBUTTON"), "BREAKBUTTON 可执行");
+        check(brokeButtons, "BREAKBUTTON -> consoleBreakButtons");
+        check(run("SPRITEDISPOSEALL 0"), "SPRITEDISPOSEALL 0 可执行");
+    }
+
     qDebug() << "\n======================================";
     if (g_failures == 0) {
         qDebug() << "[SUCCESS] statement tests passed";

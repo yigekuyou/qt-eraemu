@@ -512,10 +512,33 @@ EraEngine::EraEngine(QObject *parent)
 				&m_console, &ConsoleBackend::notifyReuseLastLine);
         connect(&m_executionEngine, &ExecutionEngine::consolePrintTemplate,
                 &m_console, &ConsoleBackend::printTemplate);
+        // HTML_PRINT 缓冲模式：挂进当前行（C# printBuffer.AppendButton）
+        connect(&m_executionEngine, &ExecutionEngine::consolePrintTemplateBuffered,
+                &m_console, &ConsoleBackend::printTemplateBuffered);
 		connect(&m_executionEngine, &ExecutionEngine::consolePrintImage,
 				&m_console, &ConsoleBackend::printImage);
 		connect(&m_executionEngine, &ExecutionEngine::consolePrintShape,
 				&m_console, &ConsoleBackend::printShape);
+		// 工具提示样式（C# TOOLTIP_* 指令族 -> WinForms ToolTip 的属性）
+		connect(&m_executionEngine, &ExecutionEngine::consoleToolTipStyle,
+				&m_console, [this](const QString& family, int pointSize, int format,
+				                   bool custom, bool image) {
+					m_console.setToolTipFormat(format);
+					m_console.setToolTipCustom(custom);
+					m_console.setToolTipImage(image);
+					m_console.setToolTipFont(family, pointSize);
+				});
+		connect(&m_executionEngine, &ExecutionEngine::consoleToolTipTiming,
+				&m_console, [this](int delayMs, int durationMs) {
+					m_console.setToolTipTiming(delayMs, durationMs);
+				});
+		connect(&m_executionEngine, &ExecutionEngine::consoleToolTipColors,
+				&m_console, [this](const QColor& fore, const QColor& back) {
+					m_console.setToolTipColors(fore, back);
+				});
+		// BREAKBUTTON：作废屏上全部按钮（世代号自增，旧按钮点击失效）
+		connect(&m_executionEngine, &ExecutionEngine::consoleBreakButtons,
+				&m_console, &ConsoleBackend::breakButtons);
 		connect(&m_executionEngine, &ExecutionEngine::consoleOutputLog, this,
 				[this] { m_console.outputLog(m_gameDirectory + QStringLiteral("/emuera.log")); });
 		connect(&m_executionEngine, &ExecutionEngine::consoleClearLines,

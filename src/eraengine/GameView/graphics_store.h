@@ -59,6 +59,10 @@ public:
     [[nodiscard]] static QImage gImage(int id);
 
     // ---- 精灵 ----
+    // SPRITEDISPOSEALL(delCsvImage)：C# `AppContents.SpriteDisposeAll` ——
+    //   * 非 0：运行期精灵 + **静态（CSV 图集）精灵**全部丢弃，返回丢弃总数；
+    //   * 0   ：只丢运行期精灵（CSV/资源图仍可显示），返回运行期精灵数。
+    static int spriteDisposeAll(bool delCsvImage);
     static bool spriteCreate(const QString& name, int gId, const QRect& rect = QRect());
     static bool spriteDispose(const QString& name);
     static bool spriteSetPos(const QString& name, int x, int y);

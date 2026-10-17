@@ -851,10 +851,88 @@ bool ExecutionEngine::executeInstruction(const LogicalLine& line) {
         return true;
     }
 
-    // ---- TOOLTIP_SETCOLOR / TOOLTIP_SETDELAY / TOOLTIP_SETDURATION ----
-    // C# 设定 GUI 提示框样式；渲染层当前没有提示框实现，先求值并留痕。
-    if (name == "TOOLTIP_SETCOLOR" || name == "TOOLTIP_SETDELAY" || name == "TOOLTIP_SETDURATION") {
-        qCDebug(eraTrace) << "[display]" << name << "(tooltip 样式，渲染层暂未实现)";
+    // ---- TOOLTIP 族（C# Instraction.Child.cs:2858-3010 的 TOOLTIP_* 指令）----
+    // 都是「设定 WinForms ToolTip 的某个属性」：渲染在 QML 侧（共享 ToolTip 实例，
+    // Qt 文档 qml-qtquick-controls-tooltip 的 Attached Tool Tips），这里只把值
+    // 求出来交给 ConsoleBackend 的 toolTip* 属性。
+    if (name.startsWith(QLatin1String("TOOLTIP_"))) {
+        ExpressionEvaluator& ev = getEvaluator();
+        // 取第一个**非分隔符**操作数（`TOOLTIP_SETCOLOR a, b` 之外的单参指令；
+        // 逗号族切分产生的 "," 没有 AST，不能拿它求值）
+        Operand noOperand;
+        const Operand* firstPtr = &noOperand;
+        for (const Operand& a : args) {
+            if (!a.isString && (a.raw == QLatin1String(",") || a.raw == QLatin1String(":"))) continue;
+            firstPtr = &a;
+            break;
+        }
+        const Operand& first = *firstPtr;
+        const auto evalInt = [&]() -> qint64 {
+            return first.ast ? ev.evaluate(*first.ast, m_storage, m_gameBaseData).toLongLong()
+                             : evaluateOperand(ev, first, m_storage, m_gameBaseData).toLongLong();
+        };
+        const auto evalStr = [&]() -> QString {
+            return first.ast ? stringText(ev.evaluate(*first.ast, m_storage, m_gameBaseData))
+                             : first.raw;
+        };
+        if (name == "TOOLTIP_SETFONT") {
+            m_toolTipFontFamily = evalStr();
+            emit consoleToolTipStyle(m_toolTipFontFamily, m_toolTipPointSize,
+                                     m_toolTipFormat, m_toolTipCustom, m_toolTipImage);
+        } else if (name == "TOOLTIP_SETFONTSIZE") {
+            m_toolTipPointSize = static_cast<int>(evalInt());
+            emit consoleToolTipStyle(m_toolTipFontFamily, m_toolTipPointSize,
+                                     m_toolTipFormat, m_toolTipCustom, m_toolTipImage);
+        } else if (name == "TOOLTIP_FORMAT") {
+            m_toolTipFormat = static_cast<int>(evalInt());
+            emit consoleToolTipStyle(m_toolTipFontFamily, m_toolTipPointSize,
+                                     m_toolTipFormat, m_toolTipCustom, m_toolTipImage);
+        } else if (name == "TOOLTIP_CUSTOM") {
+            m_toolTipCustom = evalInt() != 0;
+            emit consoleToolTipStyle(m_toolTipFontFamily, m_toolTipPointSize,
+                                     m_toolTipFormat, m_toolTipCustom, m_toolTipImage);
+        } else if (name == "TOOLTIP_IMG") {
+            m_toolTipImage = evalInt() != 0;
+            emit consoleToolTipStyle(m_toolTipFontFamily, m_toolTipPointSize,
+                                     m_toolTipFormat, m_toolTipCustom, m_toolTipImage);
+        } else if (name == "TOOLTIP_SETDELAY") {
+            m_toolTipDelay = static_cast<int>(evalInt());
+            emit consoleToolTipTiming(m_toolTipDelay, m_toolTipDuration);
+        } else if (name == "TOOLTIP_SETDURATION") {
+            m_toolTipDuration = static_cast<int>(evalInt());
+            emit consoleToolTipTiming(m_toolTipDelay, m_toolTipDuration);
+        } else if (name == "TOOLTIP_SETCOLOR") {
+            // C# SetToolTipColor(fore, back)：两个**颜色整数**（ARGB，同 GSETBRUSH）。
+            // 逗号族切分会把「,」本身也作为操作数（无 AST）—— 必须跳过，
+            // 否则 evaluateOperand 会抛「Missing load-time operand AST」（FL3.8 崩溃点）。
+            QList<qint64> colors;
+            for (const Operand& a : args) {
+                if (!a.isString && (a.raw == QLatin1String(",") || a.raw == QLatin1String(":")))
+                    continue;
+                if (!a.ast && a.raw.trimmed().isEmpty()) continue;
+                colors.append(a.ast ? ev.evaluate(*a.ast, m_storage, m_gameBaseData).toLongLong()
+                                    : evaluateOperand(ev, a, m_storage, m_gameBaseData).toLongLong());
+            }
+            if (colors.size() >= 2) {
+                const QColor fore = QColor::fromRgba(static_cast<QRgb>(colors.at(0)));
+                const QColor back = QColor::fromRgba(static_cast<QRgb>(colors.at(1)));
+                emit consoleToolTipColors(fore, back);
+            }
+        } else {
+            // TOOLTIP_EXTENSION 等无 C# 出处 / 未明语义的：只留痕（同名一次）
+            if (!m_reportedUnfinished.contains(name)) {
+                m_reportedUnfinished.insert(name);
+                qWarning() << "[未完成] 未知的 TOOLTIP 指令（忽略）:" << name
+                           << "行:" << line.position.toString();
+            }
+        }
+        return true;
+    }
+
+    // ---- BREAKBUTTON（C# Console.forceUpdateGeneration）----
+    // 作废屏上全部按钮：世代号自增，旧按钮的点击/输入判定一律失效。
+    if (name == "BREAKBUTTON") {
+        emit consoleBreakButtons();
         return true;
     }
 
@@ -1013,20 +1091,14 @@ bool ExecutionEngine::executeInstruction(const LogicalLine& line) {
 
     if (name == QLatin1String("HTML_PRINT")) {
         // 第 2 实参（EM 私家版_HTML_PRINT拡張，test/data/commands/HTML_PRINT.md）：
-        // 非 0 -> 输出进**打印缓冲**（C# PrintHtml(str, toPrintBuffer)：按钮追加、
-        // 暂不落屏，下一次非缓冲输出统一刷出）。本移植的控制台还没有这层缓冲，
-        // 按普通 HTML_PRINT 输出并留痕一次 —— FL3.8 的用法全是 `rect=…` 绝对定位
-        // 的浮层 div，逐行输出与缓冲合成的视觉差别很小。
-        if (line.arguments.size() >= 2 && line.arguments.at(1).ast) {
-            const qint64 buffered = getEvaluator()
-                .evaluate(*line.arguments.at(1).ast, m_storage, m_gameBaseData).toLongLong();
-            if (buffered != 0
-                && !m_reportedUnfinished.contains(QStringLiteral("HTML_PRINT_BUFFER"))) {
-                m_reportedUnfinished.insert(QStringLiteral("HTML_PRINT_BUFFER"));
-                qWarning() << "[未完成] HTML_PRINT 的打印缓冲模式（第 2 实参非 0）"
-                              "尚未接线，按普通输出处理。行:" << line.position.toString();
-            }
-        }
+        // 非 0 -> 输出进**打印缓冲**（C# PrintHtml(str, toPrintBuffer) ->
+        // printBuffer.AppendButton：不冲刷当前行、不收尾，与后续 PRINT 合成同一行，
+        // 由下一次 newline()/非缓冲输出统一发布 —— 后端本就有 C# PrintStringBuffer
+        // 的等价物（m_pendingParts/m_sealed/m_pendingOpen），此前只是没接这条路径）。
+        const bool toBuffer = line.arguments.size() >= 2 && line.arguments.at(1).ast
+            && getEvaluator()
+                   .evaluate(*line.arguments.at(1).ast, m_storage, m_gameBaseData)
+                   .toLongLong() != 0;
         if (line.arguments.isEmpty() || !line.arguments.first().ast) return false;
         const auto value = getEvaluator().evaluate(*line.arguments.first().ast, m_storage, m_gameBaseData);
         if (!value.isValid() || !isStringValue(value)) return false;
@@ -1042,7 +1114,7 @@ bool ExecutionEngine::executeInstruction(const LogicalLine& line) {
             qWarning() << "[未完成] HTML_PRINT 的字符串含装载期未能构筑的标签（按文本输出）:"
                        << text.left(60) << "行:" << line.position.toString();
         }
-        emit consolePrintTemplate(markup);
+        emit toBuffer ? consolePrintTemplateBuffered(markup) : consolePrintTemplate(markup);
         return true;
     }
 

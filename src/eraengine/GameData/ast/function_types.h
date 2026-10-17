@@ -151,6 +151,8 @@ enum class BuiltinOp : quint16 {
     // ---- G 系补全（EE/EM：GDRAWTEXT / GDRAWLINE / GDASHSTYLE / GDRAWGWITHROTATE
     //      与状态回读 GGET* / GGETTEXTSIZE；画布就是 GraphicsStore 的 QImage）----
     GDrawText, GDrawLine, GDashStyle, GDrawGWithRotate,
+    // SPRITEDISPOSEALL(delCsvImage)：C# AppContents.SpriteDisposeAll
+    SpriteDisposeAll,
     GGetFont, GGetFontSize, GGetFontStyle, GGetBrush, GGetPen, GGetPenWidth, GGetTextSize,
 };
 
@@ -350,6 +352,9 @@ inline constexpr BuiltinFunctionSpec kBuiltinFunctions[] = {
     {"GDASHSTYLE"          , OperandType::Int, 3, 3, "iii", false, BuiltinOp::GDashStyle},
     // GDRAWGWITHROTATE(dst, src, angle{, px, py})：3 或 5 参（3 参时轴心 = src 中心）
     {"GDRAWGWITHROTATE"    , OperandType::Int, 3, 5, "iiiii", false, BuiltinOp::GDrawGWithRotate},
+    // SPRITEDISPOSEALL(delCsvImage)：丢弃运行期精灵（非 0 时连同 CSV 图集精灵），
+    // 返回丢弃数（C# SpriteDisposeAllMethod：`arguments[0] != 0` 传 delCsvImage）
+    {"SPRITEDISPOSEALL"    , OperandType::Int, 1, 1, "i", false, BuiltinOp::SpriteDisposeAll},
     {"GGETFONT"            , OperandType::Str, 1, 1, "i", false, BuiltinOp::GGetFont},
     {"GGETFONTSIZE"        , OperandType::Int, 1, 1, "i", false, BuiltinOp::GGetFontSize},
     {"GGETFONTSTYLE"        , OperandType::Int, 1, 1, "i", false, BuiltinOp::GGetFontStyle},

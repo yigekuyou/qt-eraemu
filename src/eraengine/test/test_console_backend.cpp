@@ -365,6 +365,102 @@ int main(int argc, char* argv[]) {
               "框与立絵**同一纵坐标**（图层叠加对齐 -> 边框落在立绘边缘）");
     }
 
+    // ---- 8. 工具提示样式（TOOLTIP_*）与 BREAKBUTTON ----
+    qDebug() << "\n8) 工具提示样式（TOOLTIP_*）/ BREAKBUTTON";
+    {
+        ConsoleBackend c;
+        // 默认值对齐 WinForms ToolTip：InitialDelay 500ms / AutoPopDelay 5000ms
+        check(c.toolTipDelay() == 500 && c.toolTipDuration() == 5000,
+              "工具提示默认延迟 500ms / 时长 5000ms（WinForms 缺省）");
+        check(!c.toolTipCustom() && c.toolTipPointSize() == 0,
+              "默认非 OwnerDraw、未指定字号");
+        int changed = 0;
+        QObject::connect(&c, &ConsoleBackend::toolTipStyleChanged, [&] { ++changed; });
+        // TOOLTIP_SETFONT / TOOLTIP_SETFONTSIZE（C# SetToolTipFontName / FontSize，磅）
+        c.setToolTipFont(QStringLiteral("ＭＳ ゴシック"), 10);
+        check(c.toolTipFontFamily().isEmpty() == false
+              && c.toolTipFontFamily() == QStringLiteral("ＭＳ ゴシック")
+              && c.toolTipPointSize() == 10, "SETFONT/SETFONTSIZE 生效");
+        check(changed == 1, "一次变更发一次 toolTipStyleChanged");
+        // TOOLTIP_CUSTOM / TOOLTIP_FORMAT（OwnerDraw 与 TextFormatFlags）
+        c.setToolTipCustom(true);
+        c.setToolTipFormat(0);
+        check(c.toolTipCustom() && changed == 2, "SETCUSTOM 生效（OwnerDraw）");
+        // TOOLTIP_SETDELAY / TOOLTIP_SETDURATION
+        c.setToolTipTiming(120, 300);
+        check(c.toolTipDelay() == 120 && c.toolTipDuration() == 300, "SETDELAY/SETDURATION 生效");
+        // TOOLTIP_SETCOLOR（ARGB 前景/背景）
+        c.setToolTipColors(QColor(0xFF, 0xFF, 0x00), QColor(0, 0, 0));
+        check(c.toolTipForeColor() == QColor(0xFF, 0xFF, 0x00)
+              && c.toolTipBackColor() == QColor(0, 0, 0), "SETCOLOR 生效");
+
+        // BREAKBUTTON：世代号自增 -> 屏上旧按钮点击失效
+        ConsoleBackend b;
+        b.printButton(QStringLiteral("btn"), 7);
+        b.flush();
+        const quint64 before = b.generation();
+        check(b.hasEnabledButton(), "BREAKBUTTON 前按钮可点");
+        b.breakButtons();
+        check(b.generation() == before + 1, "BREAKBUTTON 令世代号 +1");
+        check(!b.hasEnabledButton(), "BREAKBUTTON 后旧按钮不再可点");
+    }
+
+    // ---- 7. HTML_PRINT 的打印缓冲模式（C# PrintHtml(str, toPrintBuffer)）----
+    qDebug() << "\n7) HTML_PRINT 缓冲模式（printTemplateBuffered）";
+    {
+        ConsoleBackend c;
+        // 模板 = 「[」+ 文本 X + 「]」
+        PrintTemplate html;
+        PrintTemplatePart open;  open.kind = PrintTemplatePart::Kind::Text;  open.text = "[";
+        PrintTemplatePart body;  body.kind = PrintTemplatePart::Kind::Text;  body.text = "X";
+        PrintTemplatePart close; close.kind = PrintTemplatePart::Kind::Text; close.text = "]";
+        html.parts = { open, body, close };
+
+        // 非缓冲（默认）：先冲刷挂起的当前行，HTML 自成一行（HTML_PRINT 自动换行）
+        c.print(QStringLiteral("A"));
+        c.printTemplate(html);
+        check(c.lineCount() == 2 && c.lineText(0) == "A" && c.lineText(1) == "[X]",
+              QString("非缓冲 HTML_PRINT：A 与 [X] 各成一行（实得 %1 行：%2|%3）")
+                  .arg(c.lineCount()).arg(c.lineText(0)).arg(c.lineText(1)));
+
+        // 缓冲（第 2 实参非 0）：挂进当前行 —— 前后 print 接在同一行
+        ConsoleBackend b;
+        b.print(QStringLiteral("A"));
+        b.printTemplateBuffered(html);
+        // 观察口径：lineCount 只数**已定型**行；挂起行在模型里是**尾行**
+        //（print 打开后由 flush 发布 —— 生产环境由帧节拍驱动）
+        b.flush();
+        check(b.lineCount() == 0 && b.rowCount() == 1,
+              QString("缓冲 HTML_PRINT 不冲刷：未定型行仍只有 1 个（lineCount %1 / rowCount %2）")
+                  .arg(b.lineCount()).arg(b.rowCount()));
+        b.print(QStringLiteral("B"));
+        b.newline();
+        check(b.lineCount() == 1 && b.lineText(0) == "A[X]B",
+              QString("缓冲模式与后续 PRINT 合成同一行（实得 %1 行：%2）")
+                  .arg(b.lineCount()).arg(b.lineText(0)));
+        // 下一次**非缓冲** HTML_PRINT 把挂起的缓冲行先发布（C# 的 Flush 时机）：
+        //   挂起的 "C" 先成一行（不与 HTML 合并），[X] 再自成一行
+        b.print(QStringLiteral("C"));
+        b.printTemplate(html);
+        check(b.lineCount() == 3 && b.lineText(0) == "A[X]B"
+              && b.lineText(1) == "C" && b.lineText(2) == "[X]",
+              QString("非缓冲输出先冲刷挂起行，HTML 仍自成一行（实得 %1 行：%2|%3|%4）")
+                  .arg(b.lineCount()).arg(b.lineText(0)).arg(b.lineText(1)).arg(b.lineText(2)));
+        // 缓冲模板内的 <br>：中间仍然断行，只有尾部留在未定型行
+        ConsoleBackend d;
+        PrintTemplate br;
+        PrintTemplatePart t1; t1.kind = PrintTemplatePart::Kind::Text; t1.text = "1";
+        PrintTemplatePart brk; brk.kind = PrintTemplatePart::Kind::Break;
+        PrintTemplatePart t2; t2.kind = PrintTemplatePart::Kind::Text; t2.text = "2";
+        br.parts = { t1, brk, t2 };
+        d.printTemplateBuffered(br);
+        d.print(QStringLiteral("3"));
+        d.newline();
+        check(d.lineCount() == 2 && d.lineText(0) == "1" && d.lineText(1) == "23",
+              QString("缓冲模板内的 <br> 照常断行，尾段留在当前行（实得 %1|%2）")
+                  .arg(d.lineText(0)).arg(d.lineText(1)));
+    }
+
     // ---- 6. 空输入语义（对齐 C# doInputToEmueraProgram）----
     qDebug() << "\n空输入语义";
     {

@@ -94,6 +94,18 @@ void ResourceImageProvider::setRoot(const QString& dir) {
     reloadAtlas();
 }
 
+void ResourceImageProvider::clearAtlas() {
+    // 与 reloadAtlas 的清理部分同源：像素缓存 + 定义表一起丢（C# 的
+    // resourceImageDictionary.Clear() + 丢弃缓存的位图）。
+    decodedCache().clear();
+    spriteCache().clear();
+    s_atlas.clear();
+}
+
+int ResourceImageProvider::staticSpriteCount() {
+    return s_atlas.size();
+}
+
 void ResourceImageProvider::reloadAtlas() {
     const QString base = s_root;
     decodedCache().clear();

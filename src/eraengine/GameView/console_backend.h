@@ -170,6 +170,19 @@ class ConsoleBackend : public QAbstractListModel {
     Q_PROPERTY(QAbstractItemModel* stageModel READ stageModel CONSTANT)
     Q_PROPERTY(int stageStart READ stageStart NOTIFY stageChanged)
     Q_PROPERTY(bool stageMode READ stageMode WRITE setStageMode NOTIFY stageChanged)
+    // ---- 工具提示样式（C# TOOLTIP_* 族；WinForms ToolTip 的 InitialDelay /
+    //      AutoPopDelay / AutoPopDelay / Font / TextFormatFlags / OwnerDraw）----
+    // QML 侧把这些绑到**共享 ToolTip 实例**（Qt 文档 qml-qtquick-controls-tooltip
+    // 的「Attached Tool Tips」：附加 ToolTip 共用一个实例，delay/timeout 逐项存）。
+    Q_PROPERTY(QString toolTipFontFamily READ toolTipFontFamily NOTIFY toolTipStyleChanged)
+    Q_PROPERTY(int  toolTipPointSize READ toolTipPointSize NOTIFY toolTipStyleChanged)  // 0 = 用默认字号
+    Q_PROPERTY(int  toolTipDelay     READ toolTipDelay     NOTIFY toolTipStyleChanged)  // ms
+    Q_PROPERTY(int  toolTipDuration  READ toolTipDuration  NOTIFY toolTipStyleChanged)  // ms；<0 = 不自动隐藏
+    Q_PROPERTY(int  toolTipFormat    READ toolTipFormat    NOTIFY toolTipStyleChanged)  // WinForms TextFormatFlags
+    Q_PROPERTY(bool toolTipCustom    READ toolTipCustom    NOTIFY toolTipStyleChanged)  // OwnerDraw 开关
+    Q_PROPERTY(bool toolTipImage     READ toolTipImage     NOTIFY toolTipStyleChanged)  // 内容是 G 图像 id
+    Q_PROPERTY(QColor toolTipForeColor READ toolTipForeColor NOTIFY toolTipStyleChanged)
+    Q_PROPERTY(QColor toolTipBackColor READ toolTipBackColor NOTIFY toolTipStyleChanged)
 
 public:
     enum Roles {
@@ -187,6 +200,31 @@ public:
     void setRedraw(qint64 mode);
     [[nodiscard]] qint64 currentRedraw() const { return m_autoRedraw ? 1 : 0; }
     void setStageMode(bool on) { if (m_stageMode == on) return; m_stageMode = on; updateStageModels(true); emit stageChanged(); }
+
+    // ---- 工具提示样式（TOOLTIP_SET*：C# EmueraConsole.SetToolTip*）----
+    [[nodiscard]] QString toolTipFontFamily() const { return m_toolTipFontFamily; }
+    [[nodiscard]] int  toolTipPointSize() const { return m_toolTipPointSize; }
+    [[nodiscard]] int  toolTipDelay() const { return m_toolTipDelay; }
+    [[nodiscard]] int  toolTipDuration() const { return m_toolTipDuration; }
+    [[nodiscard]] int  toolTipFormat() const { return m_toolTipFormat; }
+    [[nodiscard]] bool toolTipCustom() const { return m_toolTipCustom; }
+    [[nodiscard]] bool toolTipImage() const { return m_toolTipImage; }
+    [[nodiscard]] QColor toolTipForeColor() const { return m_toolTipForeColor; }
+    [[nodiscard]] QColor toolTipBackColor() const { return m_toolTipBackColor; }
+    // 字体/字号（TOOLTIP_SETFONT / TOOLTIP_SETFONTSIZE；C# 用**磅**字号）
+    void setToolTipFont(const QString& family, int pointSize);
+    // 延迟/持续时间（TOOLTIP_SETDELAY / TOOLTIP_SETDURATION）
+    void setToolTipTiming(int delayMs, int durationMs);
+    // 对齐/换行（TOOLTIP_FORMAT；WinForms TextFormatFlags 位掩码）
+    void setToolTipFormat(int flags) { if (m_toolTipFormat == flags) return; m_toolTipFormat = flags; emit toolTipStyleChanged(); }
+    // OwnerDraw 总开关（TOOLTIP_CUSTOM）与「内容是 G 图像」（TOOLTIP_IMG）
+    void setToolTipCustom(bool on) { if (m_toolTipCustom == on) return; m_toolTipCustom = on; emit toolTipStyleChanged(); }
+    void setToolTipImage(bool on) { if (m_toolTipImage == on) return; m_toolTipImage = on; emit toolTipStyleChanged(); }
+    // 前景/背景色（TOOLTIP_SETCOLOR）
+    void setToolTipColors(const QColor& fore, const QColor& back);
+    // BREAKBUTTON：作废屏上全部按钮（C# forceUpdateGeneration — 世代号自增即可，
+    // 旧按钮的 generation 不再等于当前值，点击被忽略）
+    void breakButtons();
 
     // ---- QAbstractListModel ----
     [[nodiscard]] int rowCount(const QModelIndex& parent = QModelIndex()) const override;
@@ -257,6 +295,11 @@ public:
     Q_INVOKABLE void setFontStyle(bool bold, bool italic, bool underline, bool strike);
 
     void printTemplate(const PrintTemplate& output);
+    // HTML_PRINT 第 2 实参非 0（EM 私家版拡張，C# PrintHtml(str, toPrintBuffer)）：
+    // 把 HTML 的解析结果**追加进「当前行」的打印缓冲**（C# printBuffer.AppendButton），
+    // 不先冲刷也不收尾 —— 后续 print 继续接在同一行，下一次 newline()/普通
+    // HTML_PRINT 把合并内容作为一行（或多行，遇 <br>）发布。
+    void printTemplateBuffered(const PrintTemplate& output);
     Q_INVOKABLE void flush();                 // 发布脏状态（尾行 insert/dataChanged）
     Q_INVOKABLE void tick();                  // 帧节拍：脏则 flush
 
@@ -333,6 +376,7 @@ public slots:
     void setFrameMs(int ms);
 
 signals:
+    void toolTipStyleChanged();
     void gridChanged();
     void lineCountChanged();
     void cleared();
@@ -362,6 +406,12 @@ signals:
 private:
     int displayLineCount() const { return m_buffer.count() + (m_pendingOpen ? 1 : 0); }
     ConsoleDisplayLine displayLine(int index) const;
+    // printTemplate / printTemplateBuffered 的共用走片循环。
+    // toBuffer=false：进**前**冲刷未定型行、走完**收尾换行**（C# 非缓冲
+    // PrintHtml 的 `if (!printBuffer.IsEmpty) Flush; addRangeDisplayLine` ——
+    // HTML_PRINT 自动换行、类似 PRINTSL）；toBuffer=true：两端都不动，
+    // 内容挂在打开中的当前行上（C# AppendButton 进 printBuffer）。
+    void renderTemplate(const PrintTemplate& output, bool toBuffer);
     void ensureLineOpen();
     void appendPart(const ConsoleSpan& part);          // 追加到「未定型」串
     void sealSpan();                                   // 未定型 part → 段
@@ -404,6 +454,19 @@ private:
     int  m_maxSpanReach = 1;
     int  m_frameMs = 16;
     quint64 m_generation = 1;
+
+    // ---- 工具提示样式（TOOLTIP_*；默认值对齐 WinForms ToolTip 的缺省）----
+    QString m_toolTipFontFamily;         // 空 = 跟随应用默认字体
+    int     m_toolTipPointSize = 0;      // 0 = 跟随默认字号
+    int     m_toolTipDelay = 500;        // InitialDelay（WinForms 默认 500ms）
+    int     m_toolTipDuration = 5000;    // AutoPopDelay（WinForms 默认 5000ms）
+    int     m_toolTipFormat = 0;         // TextFormatFlags（0 = 左对齐、单行）
+    bool    m_toolTipCustom = false;     // OwnerDraw
+    bool    m_toolTipImage = false;      // 内容为 G 图像 id
+    // 透明（a == 0）= 未设置，QML 侧据此沿用样式默认色（QColor() 的无效值在
+    // QML 里会退化成不透明的黑，用透明的有效值当哨兵才不会把提示框刷黑）。
+    QColor  m_toolTipForeColor = QColor(Qt::transparent);
+    QColor  m_toolTipBackColor = QColor(Qt::transparent);
 
     QStringList m_htmlLines;      // HTML 原文（HTML_POPPRINTINGSTR 消费）
     QString m_inputKind;

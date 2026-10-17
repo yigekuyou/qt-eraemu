@@ -276,7 +276,23 @@ bool ConsoleBackend::currentLineEmpty() const {
 }
 
 void ConsoleBackend::printTemplate(const PrintTemplate& output) {
-    if (m_pendingOpen) newline();
+    renderTemplate(output, /*toBuffer=*/false);
+}
+
+void ConsoleBackend::printTemplateBuffered(const PrintTemplate& output) {
+    renderTemplate(output, /*toBuffer=*/true);
+}
+
+void ConsoleBackend::renderTemplate(const PrintTemplate& output, bool toBuffer) {
+    // C# PrintHtml(str, toPrintBuffer)（EmueraConsole.Print.cs:498）：
+    //   * 非缓冲：`if (!printBuffer.IsEmpty) { Flush; addRangeDisplayLine; }`
+    //     然后 addRangeDisplayLine(Html2DisplayLine(...)) —— 先冲刷挂起的当前行，
+    //     HTML 内容**自成一行**（HTML_PRINT 自动换行，类似 PRINTSL）；
+    //   * 缓冲：`printBuffer.AppendButton(...)` **不冲刷** —— 挂进当前行，
+    //     与后续 PRINT 合成同一行，等下一次 newline()/非缓冲输出统一发布。
+    // 本移植的 m_pendingParts/m_sealed/m_pendingOpen 就是 C# PrintStringBuffer，
+    // 此前缺的只是这条「不冲刷、不收尾」的路径。
+    if (!toBuffer && m_pendingOpen) newline();
     const ConsoleAlign savedAlign = m_align;
     const bool savedWrap = m_wrapLines;
     QList<ConsoleAlign> alignments;
@@ -388,9 +404,45 @@ void ConsoleBackend::printTemplate(const PrintTemplate& output) {
         markDirty();
     }
     sealButton();
-    if (m_pendingOpen) newline();
+    // 收尾：非缓冲把内容定格成完整行（HTML_PRINT 自动换行）；缓冲把尾部
+    // **留在未定型行**，后续 print 继续接在同一行上。
+    if (!toBuffer && m_pendingOpen) newline();
     m_align = savedAlign;
     m_wrapLines = savedWrap;
+}
+
+// ---- 工具提示样式（C# TOOLTIP_* 族 -> WinForms ToolTip 的属性）----
+// C# 的 tooltip_fontsize 是 `new Font(name, size)`（GraphicsUnit.Point），
+// 所以这里是**磅**字号；QML 侧写到 ToolTip 的 font.pointSize。
+void ConsoleBackend::setToolTipFont(const QString& family, int pointSize) {
+    const QString f = family.trimmed();
+    const int size = pointSize > 0 ? pointSize : 0;
+    if (m_toolTipFontFamily == f && m_toolTipPointSize == size) return;
+    m_toolTipFontFamily = f;
+    m_toolTipPointSize = size;
+    emit toolTipStyleChanged();
+}
+
+void ConsoleBackend::setToolTipTiming(int delayMs, int durationMs) {
+    if (m_toolTipDelay == delayMs && m_toolTipDuration == durationMs) return;
+    m_toolTipDelay = delayMs;
+    m_toolTipDuration = durationMs;
+    emit toolTipStyleChanged();
+}
+
+void ConsoleBackend::setToolTipColors(const QColor& fore, const QColor& back) {
+    if (m_toolTipForeColor == fore && m_toolTipBackColor == back) return;
+    m_toolTipForeColor = fore;
+    m_toolTipBackColor = back;
+    emit toolTipStyleChanged();
+}
+
+// BREAKBUTTON（C# Console.forceUpdateGeneration）：世代号自增 -> 屏上旧按钮的
+// generation 与当前值不符，点击/输入判定一律忽略（见 buttonAt/hasEnabledButton）。
+void ConsoleBackend::breakButtons() {
+    ++m_generation;
+    emit generationChanged();
+    markDirty();
 }
 
 void ConsoleBackend::printPlain(const QString& text) {

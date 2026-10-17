@@ -79,6 +79,7 @@ ScriptRunner::ScriptRunner(EraParseTable* table,
         connect(m_engine, &ExecutionEngine::consolePrint, this, [this] { m_printed = true; });
         connect(m_engine, &ExecutionEngine::consolePrintButton, this, [this] { m_printed = true; });
         connect(m_engine, &ExecutionEngine::consolePrintTemplate, this, [this] { m_printed = true; });
+        connect(m_engine, &ExecutionEngine::consolePrintTemplateBuffered, this, [this] { m_printed = true; });
     }
     if (m_table) connect(m_table, &EraParseTable::entryPointReached, this, [this](const QString&) {
         while (!m_callContexts.isEmpty())

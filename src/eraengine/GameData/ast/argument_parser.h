@@ -240,6 +240,17 @@ inline constexpr auto kInstructionSpecs = std::to_array<InstructionSpec>({
     {"TOOLTIP_SETCOLOR",    ArgKind::Expressions, 2, 2},
     {"TOOLTIP_SETDELAY",    ArgKind::IntExpression, 1, 1},
     {"TOOLTIP_SETDURATION", ArgKind::IntExpression, 1, 1},
+    // C# FunctionIdentifier.cpp:1960-1990 的 TOOLTIP_* 指令
+    // （Instraction.Child.cs:2933-3010）：单实参，参数族分别是
+    // STR_EXPRESSION / INT_EXPRESSION。此前只有 SETCOLOR/SETDELAY/SETDURATION
+    // 在表里，其余四个落到扩展桩上（运行期 [未完成] 跳过）。
+    {"TOOLTIP_SETFONT",     ArgKind::StrExpression, 1, 1},   // C# SetToolTipFontName
+    {"TOOLTIP_SETFONTSIZE", ArgKind::IntExpression, 1, 1},   // C# SetToolTipFontSize（磅）
+    {"TOOLTIP_CUSTOM",      ArgKind::IntExpression, 1, 1},   // C# CustomToolTip（OwnerDraw）
+    {"TOOLTIP_FORMAT",      ArgKind::IntExpression, 1, 1},   // C# SetToolTipFormat（TextFormatFlags）
+    {"TOOLTIP_IMG",         ArgKind::IntExpression, 1, 1},   // C# SetToolTipImg
+    // BREAKBUTTON：C# FunctionArgType.EXPRESSION_NULLABLE（0~1 参，值被忽略）
+    {"BREAKBUTTON",         ArgKind::Expression,    0, 1},
 });
 [[nodiscard]] constexpr const InstructionSpec* findInstructionSpec(std::string_view upperName) noexcept {
     for (const auto& s : kInstructionSpecs) {

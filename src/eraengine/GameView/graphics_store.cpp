@@ -107,6 +107,18 @@ QImage GraphicsStore::gImage(int id) {
     return gImages().value(id);
 }
 
+int GraphicsStore::spriteDisposeAll(bool delCsvImage) {
+    const int runtime = sprites().size();
+    // C#：delCsv -> imageDictionary.Clear()（运行期 + CSV）返回 **总条数**；
+    //     否则 imageDictionary = new(resourceImageDictionary)，返回 **运行期条数**
+    //     （= sprites - csprites）。
+    sprites().clear();
+    if (!delCsvImage) return runtime;
+    const int statics = ResourceImageProvider::staticSpriteCount();
+    ResourceImageProvider::clearAtlas();
+    return runtime + statics;
+}
+
 bool GraphicsStore::spriteCreate(const QString& name, int gId, const QRect& rect) {
     if (name.isEmpty()) return false;
     const QImage src = gImage(gId);

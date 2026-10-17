@@ -135,6 +135,19 @@ int main(int argc, char* argv[]) {
         check(GraphicsStore::brushState(10) == QColor(255, 255, 255), "GGETBRUSH 回读画刷色");
     }
 
+    // ---- SPRITEDISPOSEALL：清运行期精灵（C# AppContents.SpriteDisposeAll）----
+    {
+        GraphicsStore::gCreate(30, 4, 4);
+        GraphicsStore::gClear(30, QColor(255, 0, 0));
+        check(GraphicsStore::spriteCreate("s1", 30) && GraphicsStore::spriteCreate("s2", 30),
+              "建两个运行期精灵");
+        check(GraphicsStore::spriteDisposeAll(/*delCsvImage=*/false) == 2,
+              "SPRITEDISPOSEALL 0 返回运行期精灵数");
+        check(!GraphicsStore::spriteCreated("s1") && !GraphicsStore::spriteCreated("s2"),
+              "运行期精灵已全部丢弃");
+        check(GraphicsStore::spriteDisposeAll(false) == 0, "再次调用返回 0（幂等）");
+    }
+
     // ---- GGETTEXTSIZE：宽随字号单调增；RESULT:1 = 高 ----
     {
         const QSize small = GraphicsStore::measureText("Test", "sans-serif", 10, 0);

@@ -538,16 +538,14 @@ void registerEeExtensions(ExtensionRegistry& ext)
         QStringLiteral("COLUMNWAIT"),
         // GUI 专属（本移植暂无对应后端：背景图 / 按钮世代 / 工具提示自绘 /
         // HTML 浮岛）。真实现需要 QML 侧能力，登记为桩以保持解析期容忍。
-        QStringLiteral("BREAKBUTTON"),         // 作废当前画面全部按钮世代
+        // —— 2026-10 更新：BREAKBUTTON / TOOLTIP_SETFONT / TOOLTIP_SETFONTSIZE /
+        //    TOOLTIP_CUSTOM / TOOLTIP_FORMAT / TOOLTIP_IMG / SPRITEDISPOSEALL 已
+        //    真实现（指令表 + ConsoleBackend 的 toolTip* 属性 + GraphicsStore），
+        //    不再登记桩（fail-fast 会拒绝核心名重复注册）。
         QStringLiteral("SETBGIMAGE"),          // 背景图（C# ConsoleBackground）
         QStringLiteral("CLEARBGIMAGE"),
         QStringLiteral("REMOVEBGIMAGE"),
-        QStringLiteral("TOOLTIP_CUSTOM"),      // 工具提示 OwnerDraw 总开关
-        QStringLiteral("TOOLTIP_FORMAT"),
-        QStringLiteral("TOOLTIP_SETFONT"),
-        QStringLiteral("TOOLTIP_SETFONTSIZE"),
-        QStringLiteral("TOOLTIP_EXTENSION"),
-        QStringLiteral("TOOLTIP_IMG"),
+        QStringLiteral("TOOLTIP_EXTENSION"),   // 无 C# 出处（仅清单收录）
         QStringLiteral("HTML_PRINT_ISLAND"),   // HTML 浮岛（可滚动 HTML 层）
         QStringLiteral("HTML_PRINT_ISLAND_CLEAR"),
         // CALLSHARP / DT_COLUMN_OPTIONS：**已在 fork_extension.cpp 真实现**
@@ -560,7 +558,6 @@ void registerEeExtensions(ExtensionRegistry& ext)
         //    GGETPENWIDTH / GGETTEXTSIZE 已在核心表真实现（GraphicsStore 的
         //    QImage 上直接 QPainter；G 系全家族本就在核心表/GraphicsStore），
         //    不再登记桩（fail-fast 会拒绝核心名重复注册）。
-        QStringLiteral("SPRITEDISPOSEALL"),
         // 清单收录但**无据可考 / 疑似伪名**（文档已在 test/data/commands/ 记录）：
         QStringLiteral("GETTEXTSIZE"),          // EE readme 的笔误（实为 GETTEXTBOX）
         QStringLiteral("LCSVISASSI"),           // 任何文档/源码均无记载

@@ -85,6 +85,45 @@ FocusScope {
     }
 
     property ConsoleBackend backend: null   // ConsoleBackend（兼行模型）
+
+    // ---- 工具提示样式（C# TOOLTIP_* 指令族）----
+    // Qt 文档 qml-qtquick-controls-tooltip 的「Attached Tool Tips」：所有用
+    // 附加属性 ToolTip 的项**共用一个实例**（Qt 为此省资源），`ToolTip.toolTip`
+    // 拿到那个共享实例 —— 字体/延迟/颜色写到它上面即可对全部按钮生效。
+    // 延迟与显示时长按**每项**存储，所以按钮委托各自绑定 backend.toolTipDelay。
+    function applyToolTipStyle(): void {
+        if (!backend)
+            return;
+        const tip = ToolTip.toolTip;
+        if (!tip)
+            return;
+        // OwnerDraw（TOOLTIP_CUSTOM）打开时才用脚本设的字体（C# 的语义：
+        // 不打开 OwnerDraw 就是系统默认外观，SetToolTipFont* 只是记下值）。
+        if (backend.toolTipCustom) {
+            const f = Qt.font({});
+            if (backend.toolTipFontFamily !== "")
+                f.family = backend.toolTipFontFamily;
+            if (backend.toolTipPointSize > 0)
+                f.pointSize = backend.toolTipPointSize;
+            tip.font = f;
+        } else {
+            tip.font = Qt.font({});
+        }
+        tip.delay = backend.toolTipDelay;
+        tip.timeout = backend.toolTipDuration;
+        // 颜色（TOOLTIP_SETCOLOR）：palette 影响样式提供的标签文字/底色；
+        // 主题是否采纳取决于控件样式（Basic/Fusion 会采纳）。
+        if (backend.toolTipForeColor.a > 0 || backend.toolTipBackColor.a > 0) {
+            if (backend.toolTipForeColor.a > 0)
+                tip.palette.windowText = backend.toolTipForeColor;
+            if (backend.toolTipBackColor.a > 0)
+                tip.palette.window = backend.toolTipBackColor;
+        }
+    }
+    Connections {
+        target: root.backend
+        function onToolTipStyleChanged() { root.applyToolTipStyle() }
+    }
     property EraEngine engine: null
     readonly property var lineModel: backend ? backend.historyModel : null
     readonly property var stageModel: backend ? backend.stageModel : null
@@ -449,5 +488,6 @@ FocusScope {
     Component.onCompleted: {
         attachFramePacing();
         syncLayout();
+        applyToolTipStyle();   // TOOLTIP_SET* 可能在界面出现前就已下发
     }
 }

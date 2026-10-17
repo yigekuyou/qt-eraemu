@@ -20,6 +20,7 @@
 
 #include <QObject>
 #include <QSet>
+#include <QColor>
 #include <QString>
 #include <QList>
 #include <QQueue>
@@ -140,7 +141,17 @@ signals:
     void consolePrint(const QString& text, bool newline);
     // REUSELASTLINE（C# PrintTemporaryLine）：单行输出并标记「一時行」
     void consoleReuseLastLine(const QString& text);
-    void consolePrintTemplate(const PrintTemplate& output);    // PRINT_IMG：把资源名作为行内图片输出（C# Console.PrintImg）
+    void consolePrintTemplate(const PrintTemplate& output);    // PRINT_IMG / HTML_PRINT：模板输出（C# Console.PrintImg / 非缓冲 PrintHtml）
+    // HTML_PRINT 第 2 实参非 0（EM 私家版拡張）：C# `printBuffer.AppendButton` ——
+    // 挂进当前行的打印缓冲，不冲刷不收尾（见 ConsoleBackend::printTemplateBuffered）。
+    void consolePrintTemplateBuffered(const PrintTemplate& output);
+    // ---- 工具提示样式（C# TOOLTIP_* 指令族 -> WinForms ToolTip 的属性）----
+    void consoleToolTipStyle(const QString& fontFamily, int pointSize, int formatFlags,
+                             bool custom, bool image);
+    void consoleToolTipTiming(int delayMs, int durationMs);
+    void consoleToolTipColors(const QColor& fore, const QColor& back);
+    // BREAKBUTTON：作废屏上全部按钮（C# Console.forceUpdateGeneration）
+    void consoleBreakButtons();
     void consolePrintImage(const QString& resourceName, int width, int height, int ypos);
     // PRINTW 的「换行后等任意键」（对齐 C# PRINT_WAITINPUT -> Console.ReadAnyKey）
     void requestAnyKey();
@@ -194,6 +205,14 @@ public:
     void reportRuntimeError(const QString& message);
 
 private:
+    // ---- 工具提示样式（TOOLTIP_* 的值缓存；每次变化整体重发一个信号）----
+    QString m_toolTipFontFamily;
+    int     m_toolTipPointSize = 0;
+    int     m_toolTipFormat = 0;
+    bool    m_toolTipCustom = false;
+    bool    m_toolTipImage = false;
+    int     m_toolTipDelay = 500;        // WinForms ToolTip.InitialDelay
+    int     m_toolTipDuration = 5000;    // WinForms ToolTip.AutoPopDelay
     // 扩展注册类实例（构造时由注册类装入 EE 扩展 + SPLIT 实现；分发时查表）
     ExtensionRegistry m_extensions;
     // SPLIT：核心函数专用分支（对齐 C# FunctionCode.SPLIT / SpSplitArgument）

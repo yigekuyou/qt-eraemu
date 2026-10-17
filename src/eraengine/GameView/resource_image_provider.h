@@ -65,6 +65,13 @@ public:
     [[nodiscard]] static QString root();
     // Explicit loading boundary; lookup never parses CSV. Also invalidates pixels.
     static void reloadAtlas();
+    // SPRITEDISPOSEALL(delCsvImage != 0)：丢弃**静态（CSV 图集）精灵**定义。
+    // 对齐 C# `AppContents.SpriteDisposeAll(true)` 清 resourceImageDictionary；
+    // 下次装载/显式 reloadAtlas() 时重建（C# 同样要重新 LoadContents）。
+    static void clearAtlas();
+    // 当前静态精灵（CSV 图集条目）条数 —— SPRITEDISPOSEALL 的返回值口径
+    //（C# `imageDictionary.Count - resourceImageDictionary.Count` 的运行期部分）。
+    [[nodiscard]] static int staticSpriteCount();
 
     // 解析资源名到绝对文件路径（不存在返回空串）。root 为空时用已设置的根。
     [[nodiscard]] static QString resolvePath(const QString& id, const QString& root = QString());

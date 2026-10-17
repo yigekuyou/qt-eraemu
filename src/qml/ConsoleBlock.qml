@@ -317,7 +317,11 @@ Item {
         // 去掉按钮样式后改挂在命中区上，行为不变。
         ToolTip.visible: block.hovered && block.blockData
                          && (block.blockData.tooltip || "") !== ""
-        ToolTip.delay: 350
+        // 延迟/时长来自 TOOLTIP_SETDELAY / TOOLTIP_SETDURATION（C# WinForms
+        // ToolTip 的 InitialDelay / AutoPopDelay，默认 500 / 5000ms）；
+        // 附加属性的这两个值按**项**存储，所以每个按钮委托各绑一次。
+        ToolTip.delay: block.backend ? block.backend.toolTipDelay : 500
+        ToolTip.timeout: block.backend ? block.backend.toolTipDuration : 5000
         ToolTip.text: block.blockData ? (block.blockData.tooltip || "") : ""
     }
 }

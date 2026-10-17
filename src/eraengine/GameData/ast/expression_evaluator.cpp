@@ -2662,6 +2662,14 @@ bool ExpressionEvaluator::evaluateBuiltin(const FunctionNode &node, VariableStor
             GraphicsStore::gDrawGWithRotate(int(I(0)), int(I(1)), double(I(2)), px, py) ? 1 : 0);
         return true;
     }
+    case BuiltinOp::SpriteDisposeAll: {
+        // SPRITEDISPOSEALL(delCsvImage)：C# AppContents.SpriteDisposeAll ——
+        // 返回丢弃数（非 0 时把 CSV 图集精灵也一起丢）。FL3.8 的 NEWGAME/EVENT_AFTER
+        // 用 `SPRITEDISPOSEALL 0` 清掉上一周目的立绘合成精灵。
+        out = QVariant::fromValue<qint64>(
+            GraphicsStore::spriteDisposeAll(I(0) != 0));
+        return true;
+    }
     case BuiltinOp::GGetFont:
     case BuiltinOp::GGetFontSize:
     case BuiltinOp::GGetFontStyle: {

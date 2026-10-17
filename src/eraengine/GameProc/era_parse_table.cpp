@@ -319,19 +319,25 @@ OperandType EraParseTable::userCallReturnType(const QString& name) const {
 }
 
 int EraParseTable::functionExistsKind(const QString& name, bool caseInsensitive) const {
+    Q_UNUSED(caseInsensitive);
     const auto kindOf = [](const UserFunctionInfo& fn) -> int {
         if (!fn.isMethod) return 1;                       // 通常関数
         return fn.returnType == OperandType::Str ? 3 : 2; // #FUNCTIONS / #FUNCTION
     };
-    if (caseInsensitive) {
-        if (const UserFunctionInfo* fn = userFunction(name)) return kindOf(*fn);
-        return 0;
-    }
-    // 大小写敏感：按声明处原始名精确匹配（原版 EmueraEE 第二参为 0 时的默认行为）
-    for (auto it = m_functions.constBegin(); it != m_functions.constEnd(); ++it) {
-        if (it.value().originalName == name) return kindOf(it.value());
-    }
-    return 0;
+    // C# ExistFunctionMethod（Creator.Method.cs:7216）两条路：
+    //   第 2 引数省略或 = 0 -> GlobalStatic.LabelDictionary.GetNonEventLabel()，
+    //                         比较方式取 Config.StringComparison（默认 OrdinalIgnoreCase）
+    //   第 2 引数 != 0     -> 遍历 NoneventKeys，两边 ToUpper() 后比较
+    // 两条路的结果集合**相同**（都是大小写无关 + 只认非事件函数），C# 里第二条只是 O(n)。
+    //
+    // 本移植此前把「第 2 引数不写」当成大小写敏感，退化成逐个比对 originalName 的线性
+    // 扫描 —— FL3.8 的 @FL_INIT_LOADER 用 `FOR LOCAL, 0, 6000` 调 EXISTFUNCTION 扫
+    // 6000 次 × 11000 个函数 ≈ 6600 万次字符串比较，选「重新開始」后要几十秒才走到下一步，
+    // 看上去就是「状态机直接死」。函数表以大写为键（ICVariable 语义），直接散列查。
+    const auto it = m_functions.constFind(name.toUpper());
+    if (it == m_functions.constEnd()) return 0;
+    if (it.value().isEvent) return 0;   // GetNonEventLabel：事件函数不算（C# 同）
+    return kindOf(it.value());
 }
 
 QList<LabelRef> EraParseTable::labels(const QString& name) const {

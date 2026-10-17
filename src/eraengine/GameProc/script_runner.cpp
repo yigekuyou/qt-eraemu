@@ -704,7 +704,6 @@ ExecState ScriptRunner::executeLine(const LogicalLine& line) {
         return ExecState::Continue;
     }
     case RunnerInstruction::FOR: {
-        qDebug() << "[for-enter]" << line.raw << line.argument.params.size() << line.arguments.size();
         // FOR var, start, end[, step]
         // 优先使用 AST 已归约的类型化参数（TypedArgument::params / exprs）
         QList<const Operand*> ops;
@@ -732,7 +731,6 @@ ExecState ScriptRunner::executeLine(const LogicalLine& line) {
             if (ops.size() >= 4) evalInt(ops[3]->ast, ops[3]->raw, f.step);
 
             const bool enters = (f.step > 0 && f.value < f.end) || (f.step < 0 && f.value > f.end);
-            qDebug() << "[for]" << f.varName << f.value << f.end << f.step << ops.size();
             if (!enters) {
                 gotoLine(endLine >= 0 ? endLine + 1 : pc + 1);
             } else {

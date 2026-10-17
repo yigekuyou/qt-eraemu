@@ -170,6 +170,40 @@ int main(int argc, char* argv[]) {
     check(maxDepth == 2, QString("callStackChanged reached depth 2 (got %1)").arg(maxDepth));
     check(lastDepth == 0, QString("last callStackChanged depth == 0 (got %1)").arg(lastDepth));
 
+    qDebug() << "\n11) EXISTFUNCTION 语义（C# ExistFunctionMethod）";
+    // 两条路的结果集合相同：**大小写无关**，且只认非事件函数（GetNonEventLabel）。
+    // 旧实现把「第 2 引数不写」当成大小写敏感，退化成逐个比对 originalName 的
+    // 线性扫描 —— FL3.8 的 @FL_INIT_LOADER 扫 6000 次 × 11000 个函数 = 6600 万次
+    // 字符串比较，选「重新開始」后几十秒不动，看起来就是状态机死了。
+    {
+        const auto makePre = [](const QString& raw, int lineNo) {
+            LogicalLine ll;
+            ll.kind = LineKind::Preprocessor;
+            ll.raw = raw;
+            ll.position = ScriptPosition("test.ERB", lineNo, 0);
+            return ll;
+        };
+        QList<LogicalLine> funcs;
+        funcs << makeLabel("PLAIN_FUNC", 0)
+              << makeLabel("EXIST_METHOD", 1) << makePre("#FUNCTION", 2)
+              << makeLabel("EXIST_METHODS", 3) << makePre("#FUNCTIONS", 4)
+              << makeLabel("EVENTFIRST", 5);
+        EraParseTable fnTable(&state);
+        check(fnTable.loadScript("funcs", funcs), "loadScript(\"funcs\")");
+        check(fnTable.functionExistsKind(QStringLiteral("PLAIN_FUNC"), true) == 1,
+              "通常関数 -> 1");
+        check(fnTable.functionExistsKind(QStringLiteral("plain_func"), true) == 1,
+              "大小写无关（默认路径不再按 originalName 线性扫描）");
+        check(fnTable.functionExistsKind(QStringLiteral("EXIST_METHOD"), true) == 2,
+              "#FUNCTION -> 2");
+        check(fnTable.functionExistsKind(QStringLiteral("exist_methods"), true) == 3,
+              "#FUNCTIONS -> 3（大小写无关）");
+        check(fnTable.functionExistsKind(QStringLiteral("EVENTFIRST"), true) == 0,
+              "事件函数不算（GetNonEventLabel）");
+        check(fnTable.functionExistsKind(QStringLiteral("NOT_DEFINED"), true) == 0,
+              "未定义 -> 0");
+    }
+
     qDebug() << "\n=================================";
     if (g_failures == 0) {
         qDebug() << "[SUCCESS] position-region tests passed";

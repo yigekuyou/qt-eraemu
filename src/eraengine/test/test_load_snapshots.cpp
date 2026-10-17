@@ -108,6 +108,33 @@ int main(int argc,char** argv) {
     check(storage.getGlobalInt1D("RESET_DIM",0)==500,"RESETDATA restores #DIM initializer");
     check(storage.getGlobalStr1D("RESET_DIMS",0)=="ready","RESETDATA restores #DIMS initializer");
     check(storage.getGlobalInt1D("RESET_GLOBAL",0)==77,"RESETDATA preserves #GLOBAL value");
+    // 2/3 维的下标换算（最后一维连续）与「初值没覆盖到的尾部清 0」是
+    // resetForNewGame 重写后的关键行为：批量 memset + 直写下标，不再逐元素
+    // 调 setGlobal*D / coordinates()（FL3.8 有 400 万个元素，旧写法要 1 秒以上）。
+    VariableDecl reset2d; reset2d.name="RESET_2D"; reset2d.dimension=2; reset2d.lengths={2,3};
+    reset2d.defaultInt={1,2,3,4,5,6};
+    VariableDecl reset2dPartial; reset2dPartial.name="RESET_2D_PART"; reset2dPartial.dimension=2;
+    reset2dPartial.lengths={2,2}; reset2dPartial.defaultInt={7};
+    VariableDecl reset3d; reset3d.name="RESET_3D"; reset3d.dimension=3; reset3d.lengths={2,2,2};
+    reset3d.defaultInt={10,11,12,13,14,15,16,17};
+    VariableDecl reset2ds; reset2ds.name="RESET_2DS"; reset2ds.type=OperandType::Str;
+    reset2ds.dimension=2; reset2ds.lengths={2,2}; reset2ds.defaultStr={"a","b","c","d"};
+    for (const VariableDecl& d : {reset2d, reset2dPartial, reset3d, reset2ds})
+        const_cast<VariableTable&>(table.variableTable()).add(d);
+    storage.setGlobalInt2D("RESET_2D",1,2,99); storage.setGlobalInt3D("RESET_3D",1,1,1,99);
+    storage.setGlobalStr2D("RESET_2DS",1,1,"z"); storage.setGlobalInt2D("RESET_2D_PART",0,1,99);
+    storage.resetForNewGame();
+    check(storage.getGlobalInt2D("RESET_2D",0,0)==1 && storage.getGlobalInt2D("RESET_2D",0,2)==3
+          && storage.getGlobalInt2D("RESET_2D",1,0)==4 && storage.getGlobalInt2D("RESET_2D",1,2)==6,
+          "RESETDATA restores 2-D array along the last axis");
+    check(storage.getGlobalInt3D("RESET_3D",0,0,0)==10 && storage.getGlobalInt3D("RESET_3D",1,0,0)==14
+          && storage.getGlobalInt3D("RESET_3D",1,1,1)==17,
+          "RESETDATA restores 3-D array (x*ny*nz + y*nz + z)");
+    check(storage.getGlobalInt2D("RESET_2D_PART",0,0)==7 && storage.getGlobalInt2D("RESET_2D_PART",0,1)==0
+          && storage.getGlobalInt2D("RESET_2D_PART",1,0)==0,
+          "2-D tail beyond the initializer is cleared, not left over");
+    check(storage.getGlobalStr2D("RESET_2DS",0,0)=="a" && storage.getGlobalStr2D("RESET_2DS",1,1)=="d",
+          "RESETDATA restores 2-D string array");
     storage.setSystemVariable("DAY",0,7);
 
     engine.setSaveFormatProvider([]{return QPair<bool,bool>{true,true};});

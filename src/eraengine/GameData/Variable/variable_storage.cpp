@@ -17,6 +17,8 @@
  * along with this program.  If not, see <https://www.gnu.org/licenses/>.
  */
 #include "variable_storage.h"
+#include <cstring>
+#include <algorithm>
 #include <QSet>
 #include <QDebug>
 #include "eraengine_log.h"
@@ -688,35 +690,100 @@ void VariableStorage::resetForNewGame()
 		purgePrivate(m_globalStr3D);
 		m_privateScopeCache.clear();
 
-		// RESETDATA matches C# SetDefaultValue + SetDefaultLocalValue. Runtime
-		// declarations are cleared above, so restore their ERB/ERH initializers
-		// from the immutable parse table. GLOBAL/GLOBALS have a separate lifetime.
+		// RESETDATA = C# 的 SetDefaultValue + SetDefaultLocalValue：把每个声明过的变量
+		// 恢复成 ERB/ERH 里的初值。FL3.8 有 18515 个声明、合计约 400 万个元素，
+		// 因此这里是「选了重新开始后引擎像卡死」的主要开销来源，写法要克制：
+		//   · 存储键每个声明只解析一次（setGlobal*D 内部每次都走 storageName）
+		//   · 1 维走 memset 批量清零，只覆盖写了初值的前几项
+		//   · 2/3 维先按维数扩好表再按下标直写（coordinates() 每个元素都会分配一个
+		//     QList，400 万次分配在 -O0 下就要 0.7 秒）
 		if (m_saveVariableTable) {
 			for (const VariableDecl& d : m_saveVariableTable->declarations()) {
 				if (d.isConst || d.isReference || d.isCharaData || d.isGlobal || d.isArg) continue;
 				const QString key = d.scope == VarScope::Local
 					? d.function.toUpper() + QChar(0x1f) + d.name.toUpper()
 					: d.name.toUpper();
+				const QString storageKey = resolvedStorageName(key);
 				const QList<int> dims = d.lengths.isEmpty() ? QList<int>{1} : d.lengths;
-				for (int i = 0; i < shapeCount(dims); ++i) {
-					const auto p = coordinates(i, dims);
-					const int x = p.value(0), y = p.value(1), z = p.value(2);
+				const int count = shapeCount(dims);
+				const int defaultCount = d.type == OperandType::Str ? int(d.defaultStr.size())
+				                                                    : int(d.defaultInt.size());
+				if (d.dimension <= 1) {
+					// 1 维：x 就是 i
 					if (d.type == OperandType::Str) {
-						const QString value = d.defaultStr.value(i);
-						if (d.dimension <= 1) setGlobalStr1D(key, x, value);
-						else if (d.dimension == 2) setGlobalStr2D(key, x, y, value);
-						else {
-							auto& a = m_globalStr3D[key];
-							if (a.size() <= x) a.resize(x + 1);
-							if (a[x].size() <= y) a[x].resize(y + 1);
-							if (a[x][y].size() <= z) a[x][y].resize(z + 1);
-							a[x][y][z] = FlatStringValue(value);
+						auto& vec = m_globalStr1D[storageKey];
+						if (vec.size() < count) vec.resize(count);
+						std::fill_n(vec.begin(), count, FlatStringValue{});
+						const int n = qMin(count, defaultCount);
+						for (int i = 0; i < n; ++i) vec[i] = FlatStringValue(d.defaultStr.at(i));
+					} else {
+						auto& vec = m_globalInt1D[storageKey];
+						if (vec.size() < count) vec.resize(count, 0);
+						if (count > 0) std::memset(vec.data(), 0, size_t(count) * sizeof(qint64));
+						const int n = qMin(count, defaultCount);
+						for (int i = 0; i < n; ++i) vec[i] = d.defaultInt.at(i);
+					}
+					continue;
+				}
+				// 2/3 维：下标换算与 coordinates() 一致（最后一维连续）
+				const int nx = dims.value(0, 1);
+				const int ny = dims.size() > 1 ? dims.at(1) : 1;
+				const int nz = dims.size() > 2 ? dims.at(2) : 1;
+				if (d.dimension == 2) {
+					if (d.type == OperandType::Str) {
+						auto& table = m_globalStr2D[storageKey];
+						if (table.size() < nx) table.resize(nx);
+						for (int x = 0; x < nx; ++x) {
+							auto& row = table[x];
+							if (row.size() < ny) row.resize(ny);
+							std::fill_n(row.begin(), ny, FlatStringValue{});
+							const int base = x * ny;
+							const int n = qMin(ny, defaultCount - base);
+							for (int y = 0; y < n; ++y) row[y] = FlatStringValue(d.defaultStr.at(base + y));
 						}
 					} else {
-						const qint64 value = d.defaultInt.value(i);
-						if (d.dimension <= 1) setGlobalInt1D(key, x, value);
-						else if (d.dimension == 2) setGlobalInt2D(key, x, y, value);
-						else setGlobalInt3D(key, x, y, z, value);
+						auto& table = m_globalInt2D[storageKey];
+						if (table.size() < nx) table.resize(nx);
+						for (int x = 0; x < nx; ++x) {
+							auto& row = table[x];
+							if (row.size() < ny) row.resize(ny, 0);
+							if (ny > 0) std::memset(row.data(), 0, size_t(ny) * sizeof(qint64));
+							const int base = x * ny;
+							const int n = qMin(ny, defaultCount - base);
+							for (int y = 0; y < n; ++y) row[y] = d.defaultInt.at(base + y);
+						}
+					}
+					continue;
+				}
+				if (d.type == OperandType::Str) {
+					auto& cube = m_globalStr3D[storageKey];
+					if (cube.size() < nx) cube.resize(nx);
+					for (int x = 0; x < nx; ++x) {
+						auto& plane = cube[x];
+						if (plane.size() < ny) plane.resize(ny);
+						for (int y = 0; y < ny; ++y) {
+							auto& row = plane[y];
+							if (row.size() < nz) row.resize(nz);
+							std::fill_n(row.begin(), nz, FlatStringValue{});
+							const int base = (x * ny + y) * nz;
+							const int n = qMin(nz, defaultCount - base);
+							for (int z = 0; z < n; ++z) row[z] = FlatStringValue(d.defaultStr.at(base + z));
+						}
+					}
+				} else {
+					auto& cube = m_globalInt3D[storageKey];
+					if (cube.size() < nx) cube.resize(nx);
+					for (int x = 0; x < nx; ++x) {
+						auto& plane = cube[x];
+						if (plane.size() < ny) plane.resize(ny);
+						for (int y = 0; y < ny; ++y) {
+							auto& row = plane[y];
+							if (row.size() < nz) row.resize(nz, 0);
+							if (nz > 0) std::memset(row.data(), 0, size_t(nz) * sizeof(qint64));
+							const int base = (x * ny + y) * nz;
+							const int n = qMin(nz, defaultCount - base);
+							for (int z = 0; z < n; ++z) row[z] = d.defaultInt.at(base + z);
+						}
 					}
 				}
 			}

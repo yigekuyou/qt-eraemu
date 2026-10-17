@@ -1938,9 +1938,12 @@ bool ExecutionEngine::executeFunctionCall(const LogicalLine& line)
 // ---------------------------------------------------------------------------
 // 打印一条 DATAFORM/DATA 行：按 StrForm 求值后送入 console（不换行）。
 // 段内多行的换行、段后的换行（…L/…W）、以及 …W 的等键均由 ScriptRunner 驱动。
-void ExecutionEngine::printDataFormLine(const LogicalLine& line) {
+void ExecutionEngine::printDataFormLine(const LogicalLine& line, bool defaultColor) {
     if (m_skipDisp) return;
-    emit consolePrint(printDataFormText(line), false);
+    // PRINTDATAD 系（C# `UseSetColorStyle = !IsPrintDFunction()`）：忽略 SETCOLOR。
+    const QString text = printDataFormText(line);
+    if (defaultColor) emit consolePrintDefaultColor(text, false);
+    else emit consolePrint(text, false);
 }
 
 // 只求值不显示：STRDATA 用（C# STRDATA 把所选段的字符串写进变量）
@@ -2113,17 +2116,28 @@ bool ExecutionEngine::handlePrintInstruction(const LogicalLine& line) {
         break;
     }
 
+    // PRINTD 系（D 后缀）：**忽略 SETCOLOR** —— 颜色取 Config.ForeColor，
+    // 其余（字体样式/字体名/定宽布局）照旧。C# PRINT_Instruction.DoInstruction
+    // 里 `UseSetColorStyle = !func.Function.IsPrintDFunction()`。
+    // eraTW/eraMegaten 里 PRINTFORMDL/DW 用了两万多次，这条不接就会让那些行
+    // 吃上前面 SETCOLOR 设的颜色。
+    const auto printText = [&](const QString& body, bool newline) {
+        if (info.debug) emit consolePrintDefaultColor(body, newline);
+        else emit consolePrint(body, newline);
+    };
     if (info.clearPad) {
-        emit consolePrint(padPrintC(text, info.padLeft), false);
+        printText(padPrintC(text, info.padLeft), false);
     } else if (info.single) {
         // PRINTSINGLE 系：C# EmueraConsole.PrintSingleLine —— 作为**一行**输出，
         // 隐式换行；且不吃 L/W 的等键语义（OutputToConsole 的 SINGLE 分支直接
         // 早退）。此前按普通 PRINT 处理（不换行），eraTW 的
         // `PRINTSINGLEFORMS "== %MAPNAME% " + …` 信息行会与下一行粘连，
         // PANIMATION 的滚动文本也会挤在同一行。
-        emit consolePrint(text, true);
+        printText(text, true);
     } else {
-        emit consolePrint(text, info.newline);
+        // N 后缀（PRINTN 系）：不换行 + 等键 —— 保持在未定型行，由后续输出接着写
+        //（C# IsLineEnd=false 的 displayLine 合并），与 W 的「先换行再等键」不同。
+        printText(text, info.newline);
     }
     // W 后缀（PRINTW / PRINTFORMW / …）：换行后再等一次任意键（C# PRINT_WAITINPUT）
     if (info.waitInput && !info.single) {

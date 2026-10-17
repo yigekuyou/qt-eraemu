@@ -1144,6 +1144,57 @@ int main(int argc, char* argv[]) {
               "HTML_PRINT_ISLAND_CLEAR 可执行");
     }
 
+    // ------------------------------------------------------------------
+    // 15) PRINTD 系（忽略 SETCOLOR）与 N 后缀（PRINTN 系）
+    // ------------------------------------------------------------------
+    qDebug() << "\n15) PRINTD 系 / N 后缀";
+    {
+        const AstResolver resolveOne = [&table](const QString& e) { return compileFixture(table, e); };
+        const ScriptPosition pos(QStringLiteral("t.ERB"), 0, 0);
+        QString plainText, defaultText;
+        bool plainNewline = false, defaultNewline = false;
+        int plainCount = 0, defaultCount = 0, anyKeyCount = 0;
+        QObject::connect(&engine, &ExecutionEngine::consolePrint,
+                         [&](const QString& t, bool nl) {
+                             plainText = t; plainNewline = nl; ++plainCount;
+                         });
+        QObject::connect(&engine, &ExecutionEngine::consolePrintDefaultColor,
+                         [&](const QString& t, bool nl) {
+                             defaultText = t; defaultNewline = nl; ++defaultCount;
+                         });
+        QObject::connect(&engine, &ExecutionEngine::requestAnyKey, [&] { ++anyKeyCount; });
+        const auto run = [&](const char* text) {
+            LogicalLine l = AstBuilder::build(QString::fromUtf8(text), pos, resolveOne);
+            return engine.executeInstruction(l);
+        };
+        // D 后缀（C# IsPrintDFunction）：走 consolePrintDefaultColor（后端据此忽略 SETCOLOR）
+        check(run("PRINTFORMDL 体力"), "PRINTFORMDL 可执行");
+        check(defaultCount == 1 && plainCount == 0 && defaultText == QStringLiteral("体力")
+                  && defaultNewline,
+              "PRINTFORMDL -> consolePrintDefaultColor（忽略 SETCOLOR）+ 换行");
+        check(run("PRINTD 素質"), "PRINTD 可执行");
+        check(defaultCount == 2 && !defaultNewline, "PRINTD 不换行");
+        check(run("PRINTL 通常"), "PRINTL 可执行");
+        check(plainCount == 1 && plainNewline, "无 D 后缀的 PRINTL 仍走 consolePrint");
+        // N 后缀：不换行 + 等键（C# isLineEnd=false + PRINT_WAITINPUT）
+        check(run("PRINTN 続き"), "PRINTN 可执行");
+        check(plainText == QStringLiteral("続き") && !plainNewline,
+              "PRINTN 不换行（保持在未定型行，后续输出接着写）");
+        check(anyKeyCount == 1, "PRINTN 打印后等一次按键");
+        check(run("PRINTFORMN {1 + 2}"), "PRINTFORMN 可执行");
+        check(plainText == QStringLiteral("3") && !plainNewline, "PRINTFORMN 展开格式化串且不换行");
+        check(anyKeyCount == 2, "PRINTFORMN 也等键");
+        // PRINTDATA 后缀解析（K/D/L/W）
+        const auto df = AstBuilder::printDataFlags(QStringLiteral("PRINTDATADW"));
+        check(df.debug && df.newline && df.waitInput && !df.kana,
+              "PRINTDATADW -> D + 换行 + 等键");
+        const auto dfk = AstBuilder::printDataFlags(QStringLiteral("PRINTDATAK"));
+        check(dfk.kana && !dfk.debug && !dfk.newline, "PRINTDATAK -> 只置 K");
+        check(AstBuilder::printDataFlags(QStringLiteral("PRINTDATADQ")).newline == false
+                  && AstBuilder::printDataFlags(QStringLiteral("PRINTDATADQ")).debug == false,
+              "PRINTDATADQ（非法后缀）-> 全部缺省");
+    }
+
     qDebug() << "\n======================================";
     if (g_failures == 0) {
         qDebug() << "[SUCCESS] statement tests passed";

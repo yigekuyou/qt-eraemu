@@ -508,6 +508,12 @@ EraEngine::EraEngine(QObject *parent)
 					m_console.print(text);
 					if (newline) m_console.newline();
 				});
+		// PRINTD 系：忽略 SETCOLOR（C# IsPrintDFunction）
+		connect(&m_executionEngine, &ExecutionEngine::consolePrintDefaultColor, this,
+				[this](const QString& text, bool newline) {
+					m_console.printIgnoringSetColor(text);
+					if (newline) m_console.newline();
+				});
 		connect(&m_executionEngine, &ExecutionEngine::consoleReuseLastLine,
 				&m_console, &ConsoleBackend::notifyReuseLastLine);
         connect(&m_executionEngine, &ExecutionEngine::consolePrintTemplate,

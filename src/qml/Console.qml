@@ -277,9 +277,13 @@ FocusScope {
                 required property var modelData
                 anchors.fill: parent
                 source: "image://emuera/" + modelData.name
-                fillMode: Image.PreserveAspectFit
+                // C# BakeBackground：按「填满窗口」缩放（`cropHorizontally =
+                // bh*scaleW < H` -> 按宽或高取大者），即 cover 而不是 fit；
+                // 横向居中（paddingX = (W - newWidth) / 2）、纵向从 y=0 起画。
+                fillMode: Image.PreserveAspectCrop
                 opacity: modelData.alpha / 255
                 asynchronous: true
+                verticalAlignment: Image.AlignTop
             }
         }
     }

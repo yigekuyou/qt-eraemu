@@ -602,6 +602,31 @@ int main(int argc, char* argv[]) {
         c.clearBackgroundImages();
         check(c.backgroundImages().isEmpty(), "CLEARBGIMAGE 清空全部");
 
+        // PRINTD 系：printIgnoringSetColor 让这一段不带 color（QML 落到 foreColor），
+        // 且不改动已设定的 SETCOLOR 状态。
+        {
+            ConsoleBackend d;
+            d.setColor(QColor(0xff, 0x00, 0x00));
+            d.print("red");
+            d.printIgnoringSetColor("plain");
+            d.print("red2");
+            d.newline();
+            check(d.lineCount() == 1 && d.lineText(0) == QStringLiteral("redplainred2"),
+                  "printIgnoringSetColor 与前后文接在同一行");
+            const QVariantList blocks =
+                d.data(d.index(0), ConsoleBackend::BlocksRole).toList();
+            bool sawColor = false, plainHasColor = true, tailHasColor = false;
+            for (const QVariant& v : blocks) {
+                const QVariantMap m = v.toMap();
+                const QString text = m.value("text").toString();
+                if (text == QLatin1String("red")) sawColor = m.contains("color");
+                else if (text == QLatin1String("plain")) plainHasColor = m.contains("color");
+                else if (text == QLatin1String("red2")) tailHasColor = m.contains("color");
+            }
+            check(sawColor && !plainHasColor && tailHasColor,
+                  "PRINTD 只让本段不带 SETCOLOR 颜色（前后段仍带）");
+        }
+
         // HTML_PRINT_ISLAND：独立层 —— 不进正文缓冲、不影响挂起行；CLEAR 清空
         ConsoleBackend b;
         b.print("A");                    // 挂起的正文行

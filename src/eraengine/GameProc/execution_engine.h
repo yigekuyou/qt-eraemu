@@ -139,6 +139,10 @@ signals:
 
     // ---- 显示输出（由 EraEngine 接到 ConsoleBackend）----
     void consolePrint(const QString& text, bool newline);
+    // PRINTD 系（C# PRINT_Instruction 的 ISPRINTDFUNC）：**忽略 SETCOLOR**，
+    // 用 Config.ForeColor 打印（字体样式/字体名照旧）。C# 见 EmueraConsole.Style
+    // 的 `//PRINTD系(SETCOLORを無視する)` 分支。
+    void consolePrintDefaultColor(const QString& text, bool newline);
     // REUSELASTLINE（C# PrintTemporaryLine）：单行输出并标记「一時行」
     void consoleReuseLastLine(const QString& text);
     void consolePrintTemplate(const PrintTemplate& output);    // PRINT_IMG / HTML_PRINT：模板输出（C# Console.PrintImg / 非缓冲 PrintHtml）
@@ -328,7 +332,7 @@ public:
     // ---- PRINTDATA 段（C# PRINT_DATA_Instruction / ErbLoader 的 dataList）----
     // 打印一条 DATAFORM/DATA 行（求值 StrForm，**不换行**）；段内换行 / 段后换行 /
     // 等键由 ScriptRunner 按指令后缀（…L / …W）驱动。
-    void printDataFormLine(const LogicalLine& line);
+    void printDataFormLine(const LogicalLine& line, bool defaultColor = false);
     // 同上的「只求值不显示」版本：STRDATA 需要段文本本身（C# STRDATA 取所选段的字符串）
     [[nodiscard]] QString printDataFormText(const LogicalLine& line);
     void printDataNewline();

@@ -284,6 +284,10 @@ public:
     // ---- 显示写入接口（对齐 C# EmueraConsole.Print）----
     Q_INVOKABLE void print(const QString& text);                  // 追加文本（不换行）
     Q_INVOKABLE void printPlain(const QString& text);             // 整段不可点击（PRINTPLAIN）
+    // PRINTD 系（C# IsPrintDFunction / EmueraConsole.Style 的「SETCOLOR を無視」）：
+    // 这一行用 Config.ForeColor（QML 的 root.foreColor），字体样式/字体名照旧；
+    // 已设定的 SETCOLOR 状态**不改**（后续普通 PRINT 仍用它）。
+    Q_INVOKABLE void printIgnoringSetColor(const QString& text);
     Q_INVOKABLE void newline();                                   // 结束当前行（flush）
     Q_INVOKABLE void printButton(const QString& text, qint64 value, const QString& tooltip = QString());
     Q_INVOKABLE void printButtonStr(const QString& text, const QString& value, const QString& tooltip = QString());

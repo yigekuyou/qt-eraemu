@@ -77,6 +77,7 @@ ScriptRunner::ScriptRunner(EraParseTable* table,
             m_eventChain.active=false; m_lastPrivateScope.clear();
         });
         connect(m_engine, &ExecutionEngine::consolePrint, this, [this] { m_printed = true; });
+        connect(m_engine, &ExecutionEngine::consolePrintDefaultColor, this, [this] { m_printed = true; });
         connect(m_engine, &ExecutionEngine::consolePrintButton, this, [this] { m_printed = true; });
         connect(m_engine, &ExecutionEngine::consolePrintTemplate, this, [this] { m_printed = true; });
         connect(m_engine, &ExecutionEngine::consolePrintTemplateBuffered, this, [this] { m_printed = true; });
@@ -1783,20 +1784,19 @@ ExecState ScriptRunner::executeLine(const LogicalLine& line) {
         if (sd && !line.printDataGroups.isEmpty()) {
             const int count = line.printDataGroups.size();
             const int choice = static_cast<int>(getEvaluator().random().nextInt(count));
+            // 后缀（C# PRINT_DATA_Instruction 的构造：PRINTDATA(|K)(|D)(|L)(|W)）。
+            const AstBuilder::PrintDataFlags flags = AstBuilder::printDataFlags(name);
             // 可选整型变量实参（如 `PRINTDATAW LOCAL:0`）：写入被选中的段下标
             if (!line.arguments.isEmpty() && m_engine) {
                 m_engine->assignPrintDataIndex(line.arguments.first(), choice);
             }
             const QList<int>& grp = line.printDataGroups.at(choice);
             for (int k = 0; k < grp.size(); ++k) {
-                if (m_engine) m_engine->printDataFormLine(sd->lines.at(grp.at(k)));
+                if (m_engine) m_engine->printDataFormLine(sd->lines.at(grp.at(k)), flags.debug);
                 if (k + 1 < grp.size() && m_engine) m_engine->printDataNewline();
             }
-            const bool newline =
-                name.endsWith(QLatin1Char('L')) || name.endsWith(QLatin1Char('W'));
-            if (newline && m_engine) m_engine->printDataNewline();
-            const bool waitKey = name.endsWith(QLatin1Char('W'));
-            if (waitKey && m_engine) m_engine->requestPrintDataWaitKey();
+            if (flags.newline && m_engine) m_engine->printDataNewline();
+            if (flags.waitInput && m_engine) m_engine->requestPrintDataWaitKey();
         }
         m_table->setPosition(script, next, false);   // 跳过整段（endLine 可能是 lines.size()）
         // PRINTDATAW：打印后等任意键（C# PRINT_DATA_Instruction 的 W 后缀 ->

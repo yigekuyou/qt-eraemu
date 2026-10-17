@@ -214,6 +214,20 @@ void ConsoleBackend::print(const QString& text) {
     markDirty();
 }
 
+// PRINTD 系：临时把「SETCOLOR 生效的颜色」摘掉再打印（span 不带 color ->
+// QML 落到 root.foreColor，即 Config.ForeColor），字体样式/字体名/背景色照旧。
+// SETCOLOR 的状态本身保留：C# 只在 Style 取值时分叉，userStyle.Color 不变。
+void ConsoleBackend::printIgnoringSetColor(const QString& text) {
+    if (text.isEmpty()) return;
+    const QColor savedColor = m_style.color;
+    const bool savedColorChanged = m_style.colorChanged;
+    m_style.color = QColor();
+    m_style.colorChanged = false;
+    print(text);
+    m_style.color = savedColor;
+    m_style.colorChanged = savedColorChanged;
+}
+
 QString ConsoleBackend::lineText(int lineNo) const {
     if (lineNo < 0 || lineNo >= m_buffer.count()) return QString();
     QString text;

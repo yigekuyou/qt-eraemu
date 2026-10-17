@@ -244,7 +244,7 @@ AstBuilder::PrintArgInfo AstBuilder::printInfo(const QString& upperName) {
     // 排除 PRINTBUTTON / PRINTDATA / PRINTCPERLINE 等同前缀指令
     // （C# 是「补后缀后必须恰好到 EOS」，非 PRINT 族后缀会抛 PRINT異常）
     for (const QChar c : rest) {
-        if (!QLatin1String("VSLWCKDFORM").contains(c)) return PrintArgInfo{};
+        if (!QLatin1String("VSLWCKDFORMN").contains(c)) return PrintArgInfo{};
     }
 
     // ---- 参数形态（顺序同 C#：V / S / FORMS / FORM / 其余）----
@@ -280,6 +280,16 @@ AstBuilder::PrintArgInfo AstBuilder::printInfo(const QString& upperName) {
         info.debug = true;
         rest = rest.mid(1);
     }
+    // N 后缀（C# PRINT_Instruction：`if (st.CurrentEqualTo("N")) { isLineEnd = false;
+    // flag |= PRINT_WAITINPUT; }`）：**不收尾**地打印（后续输出继续接在这一行上）
+    // 并等待一次按键。C# 的 IsLineEnd=false 让下一行在 addDisplayLine 里
+    // `deleteLine(1) + ChangeStr` 合并进本行；本移植的「未定型行」
+    //（m_pendingParts/m_pendingOpen）就是同一语义，因此 N = 不换行 + 等待。
+    // 名字：PRINTN / PRINTVN / PRINTSN / PRINTFORMN / PRINTFORMSN。
+    if (rest.startsWith(QLatin1Char('N'))) {
+        info.waitInput = true;
+        rest = rest.mid(1);
+    }
     if (rest.startsWith(QLatin1Char('L'))) {
         info.newline = true;
         rest = rest.mid(1);
@@ -296,6 +306,31 @@ AstBuilder::PrintArgMode AstBuilder::classifyPrintArg(const QString& upperName) 
     return printInfo(upperName).mode;
 }
 
+// PRINTDATA 族后缀（C# PRINT_DATA_Instruction 的构造：st.Jump(9/*PRINTDATA*/)
+// 之后依次识别 K / D / L|W；没吃干净就是非法名）。
+AstBuilder::PrintDataFlags AstBuilder::printDataFlags(const QString& upperName) {
+    PrintDataFlags info;
+    if (!upperName.startsWith(QLatin1String("PRINTDATA"))) return PrintDataFlags{};
+    QString rest = upperName.mid(9);
+    if (rest.startsWith(QLatin1Char('K'))) {
+        info.kana = true;
+        rest = rest.mid(1);
+    }
+    if (rest.startsWith(QLatin1Char('D'))) {
+        info.debug = true;
+        rest = rest.mid(1);
+    }
+    if (rest.startsWith(QLatin1Char('L'))) {
+        info.newline = true;
+        rest = rest.mid(1);
+    } else if (rest.startsWith(QLatin1Char('W'))) {
+        info.newline = true;
+        info.waitInput = true;
+        rest = rest.mid(1);
+    }
+    if (!rest.isEmpty()) return PrintDataFlags{};
+    return info;
+}
 // 是否是「**精确**登记的指令名」（规范表 + PRINT 族 + CALL 族 + 少数控制流）
 //
 // 与 isKnownInstructionName 的区别：这里**不含前缀启发式**。

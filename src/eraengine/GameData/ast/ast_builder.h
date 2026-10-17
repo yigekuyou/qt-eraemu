@@ -116,7 +116,10 @@ public:
         bool clearPad  = false;   // C / LC：按 PRINTC 的定宽列布局打印
         bool padLeft   = false;   // C（右对齐补左）；LC 时 false（左对齐补右）
         bool forms     = false;   // FORMS：装载期编译文本与独立表达式片段
-        bool debug     = false;   // D 后缀
+        // D 后缀（C# FunctionIdentifier.IsPrintDFunction）：**忽略 SETCOLOR** ——
+        // 颜色取 Config.ForeColor，字体样式/字体名照旧。C# 见
+        // EmueraConsole.Style 的 `//PRINTD系(SETCOLORを無視する)` 分支。
+        bool debug     = false;
         // PRINTSINGLE 系（C# FunctionIdentifier.PRINT_SINGLE）：C# 走
         // EmueraConsole.PrintSingleLine —— 把缓冲区内容作为**一行**输出
         //（含隐式换行；L/W 后缀的「换行 + 等键」不再单独生效，对齐
@@ -124,6 +127,17 @@ public:
         bool single    = false;
     };
     static PrintArgInfo printInfo(const QString& upperName);
+
+    // ---- PRINTDATA 族后缀（C# PRINT_DATA_Instruction：PRINTDATA(|K)(|D)(|L|W)）----
+    // 段结构与 PRINTDATA 共用；后缀只决定「怎么打印」：K = 强制假名，
+    // D = 忽略 SETCOLOR，L/W = 换行（W 再等键）。
+    struct PrintDataFlags {
+        bool kana      = false;   // K
+        bool debug     = false;   // D
+        bool newline   = false;   // L / W
+        bool waitInput = false;   // W
+    };
+    static PrintDataFlags printDataFlags(const QString& upperName);
 
     // 指令名是否属于 PRINT 族（含 PRINTPLAIN*）——**不含 DEBUGPRINT 族**。
     //

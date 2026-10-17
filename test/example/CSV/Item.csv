@@ -1,0 +1,16 @@
+;Item.csv —— ITEMPRICE 常量装载回归（C# constant.ItemPrice）
+;
+; C# ConstantData.LoadData:
+;   ItemPrice = new Int64[MaxDataList[itemIndex]];
+;   loadDataTo(csvDir + "ITEM.CSV", itemIndex, ItemPrice, disp);
+; loadDataTo（ConstantData.cs:1282）:
+;   第 1 列 = 下标（整数，越界/不可解析 -> 跳过）
+;   第 2 列 = 名字（ITEM/ITEMSALES/ITEMPRICE 共用的名表）
+;   第 3 列 = 价格，Int64.TryParse 失败或缺失 -> 该下标保持 0
+;
+; 组8 断言 ITEMPRICE:i 能读到这里的值（此前价格被写进 m_globalInt1D，
+; 而读取走 getSystemVariable -> 恒 0，商店价格全为 $0）。
+0,测试道具甲,100
+1,测试道具乙,250
+2,无价格道具,
+4,跳号道具,999

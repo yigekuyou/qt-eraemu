@@ -1115,15 +1115,18 @@ int main(int argc, char* argv[]) {
         const AstResolver resolveOne = [&table](const QString& e) { return compileFixture(table, e); };
         const ScriptPosition pos(QStringLiteral("t.ERB"), 0, 0);
         QString bgName; int bgDepth = -1, bgAlpha = -1, isClear = 0, islandPrinted = 0, islandCleared = 0;
-        QObject::connect(&engine, &ExecutionEngine::consoleSetBackgroundImage,
-                         [&](const QString& n, int d, int a) { bgName = n; bgDepth = d; bgAlpha = a; });
-        QObject::connect(&engine, &ExecutionEngine::consoleClearBackgroundImages, [&] { ++isClear; });
-        QObject::connect(&engine, &ExecutionEngine::consoleRemoveBackgroundImage,
-                         [&](const QString& n) { bgName = n; });
-        QObject::connect(&engine, &ExecutionEngine::consolePrintHtmlIsland,
-                         [&](const PrintTemplate&) { ++islandPrinted; });
-        QObject::connect(&engine, &ExecutionEngine::consoleClearHtmlIsland,
-                         [&] { ++islandCleared; });
+        // 连接必须显式断开：lambda 按引用捕获块内局部，块结束后仍连着 = 悬垂引用
+        //（后续段落再发同名信号就会踩到已析构的 QString）。
+        QList<QMetaObject::Connection> conns;
+        conns << QObject::connect(&engine, &ExecutionEngine::consoleSetBackgroundImage,
+                                  [&](const QString& n, int d, int a) { bgName = n; bgDepth = d; bgAlpha = a; });
+        conns << QObject::connect(&engine, &ExecutionEngine::consoleClearBackgroundImages, [&] { ++isClear; });
+        conns << QObject::connect(&engine, &ExecutionEngine::consoleRemoveBackgroundImage,
+                                  [&](const QString& n) { bgName = n; });
+        conns << QObject::connect(&engine, &ExecutionEngine::consolePrintHtmlIsland,
+                                  [&](const PrintTemplate&) { ++islandPrinted; });
+        conns << QObject::connect(&engine, &ExecutionEngine::consoleClearHtmlIsland,
+                                  [&] { ++islandCleared; });
         const auto run = [&](const char* text) {
             LogicalLine l = AstBuilder::build(QString::fromUtf8(text), pos, resolveOne);
             return engine.executeInstruction(l);
@@ -1142,6 +1145,7 @@ int main(int argc, char* argv[]) {
         check(islandPrinted == 1, "HTML_PRINT_ISLAND -> consolePrintHtmlIsland");
         check(run("HTML_PRINT_ISLAND_CLEAR") && islandCleared == 1,
               "HTML_PRINT_ISLAND_CLEAR 可执行");
+        for (const auto& c : conns) QObject::disconnect(c);
     }
 
     // ------------------------------------------------------------------
@@ -1154,15 +1158,17 @@ int main(int argc, char* argv[]) {
         QString plainText, defaultText;
         bool plainNewline = false, defaultNewline = false;
         int plainCount = 0, defaultCount = 0, anyKeyCount = 0;
-        QObject::connect(&engine, &ExecutionEngine::consolePrint,
-                         [&](const QString& t, bool nl) {
-                             plainText = t; plainNewline = nl; ++plainCount;
-                         });
-        QObject::connect(&engine, &ExecutionEngine::consolePrintDefaultColor,
-                         [&](const QString& t, bool nl) {
-                             defaultText = t; defaultNewline = nl; ++defaultCount;
-                         });
-        QObject::connect(&engine, &ExecutionEngine::requestAnyKey, [&] { ++anyKeyCount; });
+        QList<QMetaObject::Connection> conns;
+        conns << QObject::connect(&engine, &ExecutionEngine::consolePrint,
+                                  [&](const QString& t, bool nl) {
+                                      plainText = t; plainNewline = nl; ++plainCount;
+                                  });
+        conns << QObject::connect(&engine, &ExecutionEngine::consolePrintDefaultColor,
+                                  [&](const QString& t, bool nl) {
+                                      defaultText = t; defaultNewline = nl; ++defaultCount;
+                                  });
+        conns << QObject::connect(&engine, &ExecutionEngine::requestAnyKey,
+                                  [&] { ++anyKeyCount; });
         const auto run = [&](const char* text) {
             LogicalLine l = AstBuilder::build(QString::fromUtf8(text), pos, resolveOne);
             return engine.executeInstruction(l);
@@ -1193,6 +1199,40 @@ int main(int argc, char* argv[]) {
         check(AstBuilder::printDataFlags(QStringLiteral("PRINTDATADQ")).newline == false
                   && AstBuilder::printDataFlags(QStringLiteral("PRINTDATADQ")).debug == false,
               "PRINTDATADQ（非法后缀）-> 全部缺省");
+        for (const auto& c : conns) QObject::disconnect(c);
+    }
+
+    // ------------------------------------------------------------------
+    // 16) NOSKIP / ENDNOSKIP（跳过中仍要显示的一段）
+    // ------------------------------------------------------------------
+    qDebug() << "\n16) NOSKIP / ENDNOSKIP";
+    {
+        const AstResolver resolveOne = [&table](const QString& e) { return compileFixture(table, e); };
+        const ScriptPosition pos(QStringLiteral("t.ERB"), 0, 0);
+        QStringList printed;
+        const auto printedConn = QObject::connect(&engine, &ExecutionEngine::consolePrint,
+                                                  [&](const QString& t, bool) { printed << t; });
+        const auto run = [&](const char* text) {
+            LogicalLine l = AstBuilder::build(QString::fromUtf8(text), pos, resolveOne);
+            return engine.executeInstruction(l);
+        };
+        printed.clear();
+        check(run("SKIPDISP 1") && engine.skipDisp(), "SKIPDISP 1 -> 跳过打印");
+        check(run("PRINT 跳过"), "跳过中 PRINT 可执行");
+        check(printed.isEmpty(), "跳过中 PRINT 不输出");
+        // C# NOSKIP：saveSkip = skipPrint; skipPrint = false
+        check(run("NOSKIP") && !engine.skipDisp(), "NOSKIP 期间临时关闭跳过");
+        check(run("PRINT 显示"), "NOSKIP 中 PRINT 可执行");
+        check(printed == QStringList{QStringLiteral("显示")}, "NOSKIP 中的 PRINT 真的输出");
+        // C# ENDNOSKIP：if (saveSkip) skipPrint = true
+        check(run("ENDNOSKIP") && engine.skipDisp(), "ENDNOSKIP 还原跳过状态");
+        check(run("PRINT 再跳过"), "还原后 PRINT 可执行");
+        check(printed.size() == 1, "ENDNOSKIP 之后的 PRINT 又被跳过");
+        // 不处于跳过时 NOSKIP/ENDNOSKIP 是幂等的
+        check(run("SKIPDISP 0"), "SKIPDISP 0 关闭跳过");
+        check(run("NOSKIP") && !engine.skipDisp(), "非跳过状态下 NOSKIP 不改变状态");
+        check(run("ENDNOSKIP") && !engine.skipDisp(), "ENDNOSKIP 也不会误开跳过");
+        QObject::disconnect(printedConn);
     }
 
     qDebug() << "\n======================================";

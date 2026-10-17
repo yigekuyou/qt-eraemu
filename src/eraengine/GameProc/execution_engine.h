@@ -373,6 +373,10 @@ public:
     int m_printCLength = 25;      // PRINTC 一列的文字宽度（C# Config.PrintCLength）
     // SKIPDISP <n>：置位后所有 PRINT 输出被跳过（C# Process.SkipPrint）
     bool m_skipDisp = false;
+    // NOSKIP 保存的跳过状态（C# Process.saveSkip）：ENDNOSKIP 时还原
+    bool m_savedSkip = false;
+    // FORCEKANA 的状态（C# ExpressionMediator 的 forceHiragana/forceKatakana/halftoFull）
+    int m_forceKana = 0;
     // SKIPLOG <n>：消息跳过状态（C# Console.MesSkip；见 mesSkip()）
     bool m_mesSkip = false;
     // 默认文字色（C# Config.ForeColor，RESETCOLOR 还原到此；由 EraEngine 依配置注入）

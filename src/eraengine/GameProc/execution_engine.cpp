@@ -814,13 +814,39 @@ bool ExecutionEngine::executeInstruction(const LogicalLine& line) {
         return true;
     }
 
-    // ---- FORCEKANA <n> / NOSKIP / ENDNOSKIP（显示状态，移植版暂无对应渲染开关）----
-    if (name == "FORCEKANA" || name == "NOSKIP" || name == "ENDNOSKIP") {
-        if (name == "FORCEKANA" && !args.isEmpty()) {
+    // ---- FORCEKANA <n> / NOSKIP / ENDNOSKIP ----
+    // NOSKIP / ENDNOSKIP（C# Process.ScriptProc.cs:581-594）：
+    //   NOSKIP     saveSkip = skipPrint; if (skipPrint) skipPrint = false;
+    //   ENDNOSKIP  if (saveSkip) skipPrint = true;
+    // 也就是「这段内容即使在跳过中也必须显示」（SKIPDISP 1 之后的 MODE 设定画面等）。
+    // 此前这两条被当成纯显示状态忽略 —— eraMegaten 的 STRIP_THEATER.ERB 就靠
+    // NOSKIP…ENDNOSKIP 在跳过中显示内容。
+    if (name == QLatin1String("NOSKIP")) {
+        m_savedSkip = m_skipDisp;
+        m_skipDisp = false;
+        return true;
+    }
+    if (name == QLatin1String("ENDNOSKIP")) {
+        if (m_savedSkip) m_skipDisp = true;
+        m_savedSkip = false;
+        return true;
+    }
+    // FORCEKANA <n>（C# ExpressionMediator.ForceKana）：0 关闭 / 1 片假名 /
+    // 2 平假名 / 3 平假名 + 半角转全角；PRINT…K 后缀对它生效。
+    // 本移植的字体/字符转换层还没有假名转换表（无对应 C# Strings.StrConv），
+    // 只做参数校验与状态记录（避免 `FORCEKANA 5` 之类越界静默通过）。
+    if (name == QLatin1String("FORCEKANA")) {
+        qint64 flag = 0;
+        if (!args.isEmpty()) {
             ExpressionEvaluator& ev = getEvaluator();
-            evaluateOperand(ev, args.first(), m_storage, m_gameBaseData).toLongLong();
+            flag = evaluateOperand(ev, args.first(), m_storage, m_gameBaseData).toLongLong();
         }
-        qCDebug(eraTrace) << "[display]" << name << "(状态命令，当前渲染层忽略)";
+        if (flag < 0 || flag > 3) {
+            emit errorOccurred(QStringLiteral("FORCEKANA 的第 1 引数超出范围(0..3)：%1").arg(flag));
+            return true;
+        }
+        m_forceKana = static_cast<int>(flag);
+        qCDebug(eraTrace) << "[display] FORCEKANA" << m_forceKana << "(假名转换表尚未实现)";
         return true;
     }
 

@@ -83,6 +83,10 @@ public:
 
     [[nodiscard]] int count() const;
     [[nodiscard]] QList<VariableDecl> declarations() const;
+    // perf：declarations() 的缓存版（装载完成后不再变化；clear/维数定稿时失效）。
+    // saveShapes / resetForNewGame / applyBinarySave 每次存读档要调 2~4 次，
+    // 旧写法每次都重建 18515 项的 QList（每项多个 QString/QList 浅拷贝）。
+    [[nodiscard]] const QList<VariableDecl>& declarationsRef() const;
     // 某函数的局部（私有）变量声明
     [[nodiscard]] QList<VariableDecl> localsOf(const QString& function) const;
     // perf：执行热路径（每条指令都要解析私有作用域）用 —— 装载完成后 m_locals
@@ -177,6 +181,8 @@ private:
     mutable QHash<QString, QList<VariableDecl>> m_localsRefCache;
     // localNamesOfRef 的按函数缓存（同上）
     mutable QHash<QString, QStringList> m_localNamesRefCache;
+    // declarationsRef 的缓存（失效点与上面两个相同：clear / 维数定稿）
+    mutable QList<VariableDecl> m_declarationsCache;
 };
 
 #endif // AST_VARIABLE_TABLE_H

@@ -218,6 +218,9 @@ private:
                                    const QVariant& valueVar, bool valueIsStr);
     void writeIntVar(const QString& name, int index, qint64 value);
     // 从实参取「变量名 + 下标」（SWAP 用；下标可为表达式）
+    // 非 const：要复用 getEvaluator() 的注入求值器 —— 旧实现在这里构造临时
+    // ExpressionEvaluator（QObject），FOR/NEXT 每次循环迭代 2 次（NEXT +
+    // writeLoopCounter）= 6000 次循环 1.2 万个 QObject，纯浪费。
     bool extractVarRef(const Operand& op, QString& name, int& index);
     bool extractVarRef(const Operand& op, QString& name, QList<int>& indices);
 

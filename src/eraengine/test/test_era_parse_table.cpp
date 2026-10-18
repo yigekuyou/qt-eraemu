@@ -204,6 +204,78 @@ int main(int argc, char* argv[]) {
               "未定义 -> 0");
     }
 
+    qDebug() << "\n12) 跨文件 CALL / JUMP 的标签解析（m_labelLists 全局索引）";
+    // 旧实现：当前脚本没命中就 for(m_scripts) 扫全部脚本 + 每脚本一次
+    // label.toUpper()。eraTW/FL3.8 有 1500+ 个脚本，跨文件 CALL / 式中调用
+    // 每次都要付这个 O(n)（eraTW 地图逐格 TRYCALLFORM 一次上万次）。
+    // resolveCallableLabel 改查 m_labelLists（装载期就建好的全局索引），
+    // 此处锁行为：跨文件命中、当前脚本优先、$ 标签不可调用。
+    {
+        const auto makeGoto = [](const QString& label, int lineNo) {
+            LogicalLine ll;
+            ll.kind = LineKind::GotoLabel;
+            ll.labelName = label;
+            ll.position = ScriptPosition("other2.ERB", lineNo, 0);
+            ll.raw = "$" + label;
+            return ll;
+        };
+        QList<LogicalLine> other2;
+        other2 << makeLabel("REMOTE_FUNC", 0)
+               << makeInstr("RETURN", {}, 1)
+               << makeGoto("REMOTE_GOTO", 2);       // 同脚本里同名 $ 标签
+        // 第三个脚本：与 other2 同名（同名多份取排序后第一份，确定可复现）
+        QList<LogicalLine> other3;
+        other3 << makeLabel("REMOTE_FUNC", 0)
+               << makeInstr("RETURN", {}, 1);
+
+        EraParseTable ct(&state);
+        check(ct.loadScript("main.ERB", main), "loadScript(main.ERB)");
+        check(ct.loadScript("other2.ERB", other2), "loadScript(other2.ERB)");
+        check(ct.loadScript("other3.ERB", other3), "loadScript(other3.ERB)");
+        ct.markLoadComplete();
+        ct.setEntryPoint("MAIN");
+        check(ct.currentScript() == "main.ERB", "entry in main.ERB");
+
+        // 跨文件 CALL：目标在 other2/other3（$REMOTE_GOTO 不可调用）
+        check(ct.callLabel("REMOTE_FUNC"), "跨文件 callLabel 命中 @REMOTE_FUNC");
+        check(ct.currentScript() != "main.ERB"
+                  && ct.currentLine() == 0
+                  && ct.currentFrame().callLabel == "REMOTE_FUNC",
+              "callLabel 落在目标函数标签行（非 $ 标签）");
+        check(ct.returnFromCall(), "returnFromCall 回到 main.ERB");
+
+        // 式中调用（callLabelWithReturn）：显式返回地址
+        check(ct.callLabelWithReturn("REMOTE_FUNC", 1),
+              "跨文件 callLabelWithReturn 命中");
+        check(ct.currentLine() == 0, "callLabelWithReturn 落在目标首行");
+        check(ct.returnFromCall(), "callLabelWithReturn 返回");
+
+        // JUMP（有帧时继承返回地址）
+        ct.advance();
+        ct.callLabel("SUB", true);
+        check(ct.jumpLabel("REMOTE_FUNC"), "跨文件 jumpLabel 命中");
+        check(ct.currentFrame().isJump, "JUMP 帧标记 isJump");
+        while (ct.returnFromCall()) {}
+        ct.setPosition("main.ERB", 0, false);
+
+        // 当前脚本优先：main.ERB 里也有 @SUB —— callLabel("SUB") 必须留在 main.ERB
+        check(ct.callLabel("SUB"), "同名时当前脚本优先命中（@SUB in main.ERB）");
+        check(ct.currentScript() == "main.ERB", "callLabel(SUB) 未跨脚本");
+        ct.returnFromCall();
+
+        // $ 标签不可 CALL：other2 只有 $REMOTE_GOTO（无同名 @）
+        check(!ct.callLabel("REMOTE_GOTO"), "$ 标签不可被 CALL 命中");
+        // 未定义名字
+        check(!ct.callLabel("NO_SUCH_LABEL"), "未定义标签 -> false");
+
+        // labels() 装载收尾后已排序固化：同名多份按 (脚本名, 行号)
+        const QList<LabelRef> refs = ct.labels("REMOTE_FUNC");
+        check(refs.size() == 2, "同名 @REMOTE_FUNC 两份都在索引里");
+        check(refs.size() == 2
+                  && refs.at(0).script == "other2.ERB" && refs.at(1).script == "other3.ERB",
+              "同名多份按 (脚本名, 行号) 排序固化（不再每次调用重排）");
+    }
+
     qDebug() << "\n=================================";
     if (g_failures == 0) {
         qDebug() << "[SUCCESS] position-region tests passed";

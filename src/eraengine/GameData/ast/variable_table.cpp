@@ -107,6 +107,12 @@ bool sameDeclaration(const VariableDecl& a, const VariableDecl& b) {
 
 VariableTable::DeclStatus VariableTable::addChecked(const VariableDecl& decl) {
     if (decl.name.isEmpty()) return DeclStatus::Conflict;
+    // 插入即失效 declarationsRef 缓存（缓存是整表快照，add 在装载期/单测里
+    // 都可能发生在缓存建立之后）。
+    const struct CacheInvalidator {
+        VariableTable& t;
+        ~CacheInvalidator() { t.m_declarationsCache.clear(); }
+    } invalidator{*this};
     const QString nameKey = nk(decl.name);
     if (decl.scope == VarScope::Local && !decl.function.isEmpty()) {
         auto& fmap = m_locals[nk(decl.function)];
@@ -188,6 +194,15 @@ QList<VariableDecl> VariableTable::declarations() const {
     return out;
 }
 
+// declarations() 的缓存版：重建一次是 18515 项（每项带 QString/QList 成员），
+// saveShapes() 在一次存/读档里要调 2~4 次、resetForNewGame/applyBinarySave
+// 各一次 —— 全部按引用共享。缓存失效点与 m_localsRefCache 相同
+// （clear / 维数定稿），只允许装载完成后使用。
+const QList<VariableDecl>& VariableTable::declarationsRef() const {
+    if (m_declarationsCache.isEmpty()) m_declarationsCache = declarations();
+    return m_declarationsCache;
+}
+
 QList<VariableDecl> VariableTable::localsOf(const QString& function) const {
     QList<VariableDecl> out;
     const auto it = m_locals.constFind(nk(function));
@@ -231,6 +246,7 @@ void VariableTable::clear() {
     m_uniqueLocalType.clear();
     m_localsRefCache.clear();
     m_localNamesRefCache.clear();
+    m_declarationsCache.clear();
 }
 
 void VariableTable::applyTypes(ExpressionNode& node, const VariableTable& table,
@@ -339,6 +355,7 @@ void VariableTable::resolveDimensions() {
     }
     m_localsRefCache.clear();   // 维数已重写，丢弃 localsOfRef 缓存
     m_localNamesRefCache.clear();
+    m_declarationsCache.clear();
     qDebug() << "[parse] 变量维数求值：全局" << m_globals.size() << "局部作用域" << m_locals.size()
              << "常量" << constCount() << "常量数组" << m_constArray.size();
 }

@@ -194,13 +194,23 @@ void ScriptRunner::onHaltRequested() {
 
 void ScriptRunner::enterCall(const QString& function) {
     m_callContexts.append({m_table->depth(), int(m_loops.size()), function, m_storage->localContext()});
-    auto locals = m_functionLocals.value(function);
-    locals.parameters.clear();
-    locals.aliases.clear();
-    m_storage->setLocalContext(locals);
+    // QHash::value() 会先默认构造再拷贝（LocalContext 带 4 个容器成员）——
+    // 每个 CALL 都白付一次分配，改 constFind。
+    const auto lit = m_functionLocals.constFind(function);
+    if (lit == m_functionLocals.constEnd()) {
+        m_storage->setLocalContext(VariableStorage::LocalContext{});
+    } else {
+        VariableStorage::LocalContext locals = lit.value();
+        locals.parameters.clear();
+        locals.aliases.clear();
+        m_storage->setLocalContext(locals);
+    }
     // #LOCALSIZE：本函数声明的 LOCAL/LOCALS 尺寸（只扩不缩，静态值保留）
-    const UserFunctionDecl& decl = m_table->userFunctions().value(function.toUpper());
-    if (decl.localSize > 0) m_storage->ensureLocalSize(decl.localSize);
+    //（userFunctions().value() 同样是「默认构造 + 拷贝」，UserFunctionInfo
+    //  带 QString/QList 成员；此处只要 localSize 一个字段）
+    const auto fit = m_table->userFunctions().constFind(function.toUpper());
+    if (fit != m_table->userFunctions().constEnd() && fit.value().localSize > 0)
+        m_storage->ensureLocalSize(fit.value().localSize);
     // perf：私有名字表按函数缓存（localNamesOfRef），免去每次调用重建 QStringList
     m_storage->setPrivateScope(function,
                                m_table->variableTable().localNamesOfRef(function));
@@ -2376,8 +2386,9 @@ bool ScriptRunner::extractVarRef(const Operand& op, QString& name, QList<int>& i
         throw std::runtime_error("Variable reference has no load-time VariableNode");
     const auto& variable = static_cast<const VariableNode&>(*op.ast);
     name = variable.name();
-    ExpressionEvaluator fallback;
-    indices = (m_evaluator ? *m_evaluator : fallback).resolveIndices(variable, m_storage, baseData());
+    // 复用注入的求值器（getEvaluator 惰性建 fallback）—— 旧实现每次调用都
+    // 构造一个临时 ExpressionEvaluator（QObject），FOR/NEXT 每循环迭代 2 次。
+    indices = getEvaluator().resolveIndices(variable, m_storage, baseData());
     return true;
 }
 

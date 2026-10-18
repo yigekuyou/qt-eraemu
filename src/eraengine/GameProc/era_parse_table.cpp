@@ -311,10 +311,11 @@ OperandType EraParseTable::userCallReturnType(const QString& name) const {
     if (!fn) return OperandType::Unknown;
     if (fn->isMethod) return isKnown(fn->returnType) ? fn->returnType : OperandType::Int;
     // 无 #FUNCTION：#FUNCTION が無い関数は組み込み関数を上書きしない
-    const std::string upper = name.toUpper().toStdString();
-    if (builtinFunctionIndex(upper) >= 0 || findExtensionFunction(upper) != nullptr) {
-        return OperandType::Unknown;
-    }
+    // 内置表走 O(1) 索引；toStdString() 的堆分配只在「既非内置、又可能是扩展」
+    // 时付（findExtensionFunction 的键类型是 std::string）。
+    const QString upper = name.toUpper();
+    if (builtinFunctionIndex(upper) >= 0) return OperandType::Unknown;
+    if (findExtensionFunction(upper.toStdString()) != nullptr) return OperandType::Unknown;
     return OperandType::Int;
 }
 
@@ -341,12 +342,17 @@ int EraParseTable::functionExistsKind(const QString& name, bool caseInsensitive)
 }
 
 QList<LabelRef> EraParseTable::labels(const QString& name) const {
+    // 排序在装载收尾固化一次（finalizeLabelIndex）；此处 COW 共享返回。
+    // 此前**每次调用**都复制 + std::sort —— callFunction（每个 @EVENTTRAIN/
+    // @SHOW_STATUS/@USERCOM…）和 CALLEVENT 每条事件链都走这里，eraTW 的
+    // @SHOW_STATUS 同名口上一大把，每输入周期重排一次（QString 比较）。
     QList<LabelRef> out = m_labelLists.value(name.toUpper());
-    // 并行装载时插入顺序不确定；固定按 (脚本名, 行号) 排序，保证事件导航可复现
-    std::sort(out.begin(), out.end(), [](const LabelRef& a, const LabelRef& b) {
-        if (a.script != b.script) return a.script < b.script;
-        return a.line < b.line;
-    });
+    if (!m_finalized && out.size() > 1) {
+        std::sort(out.begin(), out.end(), [](const LabelRef& a, const LabelRef& b) {
+            if (a.script != b.script) return a.script < b.script;
+            return a.line < b.line;
+        });
+    }
     return out;
 }
 
@@ -857,32 +863,46 @@ bool EraParseTable::jumpToLabel(const QString& label) {
     return true;
 }
 
-bool EraParseTable::callLabel(const QString& label, bool advanceWasCalled) {
-    // [qdbug] 修复（eraMegaten 实测差距）：CALL 只能调用 **@函数标签**
-    //   （对齐 C# FunctionIdentifierDictionary：函数字典只收 @label，
-    //   $GOTO 标签不可调用）。eraMegaten 的 SYSTEM_TITLE.erb:127
-    //   `$PRINT_TITLE`（GOTO 标签）与 TITLE_STOCK.ERB:17 `@PRINT_TITLE`
-    //   同名共存，此前 CALL 优先命中当前脚本的 $ 标签 -> 自跳死循环。
-    //   此处命中行必须是 FunctionLabel，否则继续向后找（跨脚本）。
-    const auto callable = [this](const QString& sn, int pos) -> bool {
-        const ScriptData* d = script(sn);
-        return d && pos >= 0 && pos < d->lines.size()
-               && d->lines.at(pos).kind == LineKind::FunctionLabel;
-    };
-    QString targetScript = m_currentScript;
-    int target = getLabelPosition(m_currentScript, label);
-    if (target < 0 || !callable(targetScript, target)) {
-        target = -1;
-        for (auto it = m_scripts.constBegin(); it != m_scripts.constEnd(); ++it) {
-            const int pos = it.value().labelPositions.value(label.toUpper(), -1);
-            if (pos >= 0 && callable(it.key(), pos)) {
-                targetScript = it.key();
-                target = pos;
-                break;
-            }
-        }
+// ---------------------------------------------------------------------------
+// @函数标签解析（CALL / CALLF 式中调用 / JUMP 共用）
+//
+// 旧实现：先查当前脚本（O(1)），没命中就 for(m_scripts) 扫**全部**脚本，
+// 且 label.toUpper() 写在循环体内 —— 每个脚本一次分配 + 一次 QHash 查找。
+// eraTW/FL3.8 有 1500+ 个脚本，跨文件 CALL / 式中调用每次都付这个 O(n)
+//（实测 CALC_COS 这类小函数的式中调用 ~0.7ms/次，正是这 1541 次迭代的价钱；
+// eraTW 地图逐格 TRYCALLFORM 一次上万次）。m_labelLists 是装载期建好的全局
+// 标签→LabelRef 索引（**只收 @函数标签**，loadScript 的 FunctionLabel 分支），
+// 直接 O(1)。排序在 markLoadComplete 固化一次（finalizeLabelIndex）。
+//
+// 语义保持：
+//   1) 当前脚本优先（同名时），且必须是 @函数标签 —— $GOTO 标签不可调用
+//     （C# FunctionIdentifierDictionary 只收 @label；eraMegaten 的
+//      SYSTEM_TITLE.erb:127 `$PRINT_TITLE` 与 TITLE_STOCK.ERB:17 `@PRINT_TITLE`
+//      同名共存，命中 $ 标签会自跳死循环）；
+//   2) 跨脚本取排序后的第一份。旧代码的 QHash 迭代顺序本来就任意，
+//      这里只是把「任意」换成「确定」。
+bool EraParseTable::resolveCallableLabel(const QString& label, QString& targetScript,
+                                         int& targetLine) const {
+    const QString upper = label.toUpper();
+    const ScriptData* current = script(m_currentScript);
+    const int pos = current ? current->labelPositions.value(upper, -1) : -1;
+    if (pos >= 0 && pos < current->lines.size()
+        && current->lines.at(pos).kind == LineKind::FunctionLabel) {
+        targetScript = m_currentScript;
+        targetLine = pos;
+        return true;
     }
-    if (target < 0) {
+    const auto it = m_labelLists.constFind(upper);
+    if (it == m_labelLists.constEnd() || it.value().isEmpty()) return false;
+    targetScript = it.value().first().script;
+    targetLine = it.value().first().line;
+    return true;
+}
+
+bool EraParseTable::callLabel(const QString& label, bool advanceWasCalled) {
+    QString targetScript;
+    int target = -1;
+    if (!resolveCallableLabel(label, targetScript, target)) {
         return false;
     }
 
@@ -898,19 +918,9 @@ bool EraParseTable::callLabel(const QString& label, bool advanceWasCalled) {
 }
 
 bool EraParseTable::callLabelWithReturn(const QString& label, int returnLine) {
-    QString targetScript = m_currentScript;
-    int target = getLabelPosition(m_currentScript, label);
-    if (target < 0) {
-        for (auto it = m_scripts.constBegin(); it != m_scripts.constEnd(); ++it) {
-            const int pos = it.value().labelPositions.value(label.toUpper(), -1);
-            if (pos >= 0) {
-                targetScript = it.key();
-                target = pos;
-                break;
-            }
-        }
-    }
-    if (target < 0) {
+    QString targetScript;
+    int target = -1;
+    if (!resolveCallableLabel(label, targetScript, target)) {
         return false;
     }
 
@@ -928,19 +938,9 @@ bool EraParseTable::jumpLabel(const QString& label) {
         // 顶层（系统入口）JUMP：没有可继承的返回帧，退化为普通跳转
         return jumpToLabel(label);
     }
-    QString targetScript = m_currentScript;
-    int target = getLabelPosition(m_currentScript, label);
-    if (target < 0) {
-        for (auto it = m_scripts.constBegin(); it != m_scripts.constEnd(); ++it) {
-            const int pos = it.value().labelPositions.value(label.toUpper(), -1);
-            if (pos >= 0) {
-                targetScript = it.key();
-                target = pos;
-                break;
-            }
-        }
-    }
-    if (target < 0) {
+    QString targetScript;
+    int target = -1;
+    if (!resolveCallableLabel(label, targetScript, target)) {
         return false;
     }
 
@@ -2297,6 +2297,21 @@ void EraParseTable::checkNotCalledFunctions() {
     }
 }
 
+void EraParseTable::finalizeLabelIndex() {
+    // 把 m_labelLists 每个同名列表按 (脚本名, 行号) 排序固化：
+    //   · labels()（callFunction / CALLEVENT 的事件导航）不再每次调用重排；
+    //   · resolveCallableLabel（跨文件 CALL/式中调用/JUMP）取「第一份」有了
+    //     确定含义 —— 并行装载的插入顺序是不确定的。
+    // 全部 @函数标签合计 ~1.1 万个（eraTW/FL3.8），一次排序是毫秒级。
+    for (auto it = m_labelLists.begin(); it != m_labelLists.end(); ++it) {
+        QList<LabelRef>& list = it.value();
+        std::sort(list.begin(), list.end(), [](const LabelRef& a, const LabelRef& b) {
+            if (a.script != b.script) return a.script < b.script;
+            return a.line < b.line;
+        });
+    }
+}
+
 void EraParseTable::markLoadComplete() {
     // 装载收尾（唯一入口）：全局声明定稿 → 全体脚本就地定型/重绑 → 统一出诊断。
     // 必须在**全部**声明就绪后进行：跨文件前向引用（先装载的文件调用后装载文件的
@@ -2309,6 +2324,7 @@ void EraParseTable::markLoadComplete() {
     qInfo().noquote() << "[parse] 收尾步骤 1/6 全局声明定稿(resolveGlobalDeclarations) 开始:"
                       << m_scripts.size() << "脚本";
     resolveGlobalDeclarations();   // 声明预登记后 #FUNCTION 表才随 loadScript 补齐，此处再结算一次
+    finalizeLabelIndex();          // 全局标签索引排序固化（labels()/resolveCallableLabel 依赖）
     qInfo().noquote() << "[parse] 收尾步骤 1/6 完成:" << (completeTimer.elapsed() - stepMs) << "ms";
     stepMs = completeTimer.elapsed();
     qInfo().noquote() << "[parse] 收尾步骤 2/6 就地定型(finalizeBindings) 开始";
@@ -2779,7 +2795,9 @@ void EraParseTable::applyGlobalVariableDefaults() {
 
 void EraParseTable::applyPrivateVariableDefaults(const QString& function) {
     if (function.isEmpty()) return;
-    applyVariableDefaults(m_variables.localsOf(function));
+    // localsOfRef（按函数缓存的 const 引用）：enterCall/invokeUserSystem 每次调用
+    // 都走这里，localsOf() 每次都把该函数的全部私有声明整份拷贝成新 QList。
+    applyVariableDefaults(m_variables.localsOfRef(function));
 }
 
 void EraParseTable::applyStringAssignments() {

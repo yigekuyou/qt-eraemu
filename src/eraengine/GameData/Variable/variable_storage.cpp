@@ -27,7 +27,6 @@
 
 namespace {
 int shapeCount(const QList<int>& dims);
-QList<int> coordinates(int index, const QList<int>& dims);
 }
 
 // PALAMLV/EXPLV 阈值默认表来自 C# ConfigData 的 _Replace.csv 默认值：
@@ -631,17 +630,119 @@ void VariableStorage::resetGlobals()
 }
 
 // ================= RESETDATA / 新开游戏 =================
-// 对齐 C# VariableEvaluator.ResetData：SetDefaultValue(全部变量) + CharacterList.Clear()。
-// 保留：NAME 表、STR 等 CSV 装载期「默认值」数据、CSV 模板快照（ADDCHARA 重新
-// 填充角色时仍要用）；清除：全部运行时数值（内建整型数组、用户广域、角色运行时
-// 数据、本地槽）。
+// 把 ERB/ERH 里声明过的变量恢复成初值（C# SetDefaultValue + SetDefaultLocalValue）。
+// RESETDATA 与读档（applyBinarySave 的 normal 分支）共用：FL3.8 有 18515 个声明、
+// 合计约 400 万个元素，写法要克制：
+//   · 存储键每个声明只解析一次（setGlobal*D 内部每次都走 storageName）
+//   · 1 维走 memset 批量清零，只覆盖写了初值的前几项
+//   · 2/3 维先按维数扩好表再按下标直写（coordinates() 每个元素都会分配一个
+//     QList，400 万次分配在 -O0 下就要 0.7 秒）
+//   · 声明列表走 declarationsRef()（每次重建是 18515 项的整表拷贝）
+void VariableStorage::restoreDeclaredDefaults()
+{
+	if (!m_saveVariableTable) return;
+	for (const VariableDecl& d : m_saveVariableTable->declarationsRef()) {
+		if (d.isConst || d.isReference || d.isCharaData || d.isGlobal || d.isArg) continue;
+		const QString key = d.scope == VarScope::Local
+			? d.function.toUpper() + QChar(0x1f) + d.name.toUpper()
+			: d.name.toUpper();
+		const QString storageKey = resolvedStorageName(key);
+		const QList<int> dims = d.lengths.isEmpty() ? QList<int>{1} : d.lengths;
+		const int count = shapeCount(dims);
+		const int defaultCount = d.type == OperandType::Str ? int(d.defaultStr.size())
+		                                                    : int(d.defaultInt.size());
+		if (d.dimension <= 1) {
+			// 1 维：x 就是 i
+			if (d.type == OperandType::Str) {
+				auto& vec = m_globalStr1D[storageKey];
+				if (vec.size() < count) vec.resize(count);
+				std::fill_n(vec.begin(), count, FlatStringValue{});
+				const int n = qMin(count, defaultCount);
+				for (int i = 0; i < n; ++i) vec[i] = FlatStringValue(d.defaultStr.at(i));
+			} else {
+				auto& vec = m_globalInt1D[storageKey];
+				if (vec.size() < count) vec.resize(count, 0);
+				if (count > 0) std::memset(vec.data(), 0, size_t(count) * sizeof(qint64));
+				const int n = qMin(count, defaultCount);
+				for (int i = 0; i < n; ++i) vec[i] = d.defaultInt.at(i);
+			}
+			continue;
+		}
+		// 2/3 维：下标换算与 coordinates() 一致（最后一维连续）
+		const int nx = dims.value(0, 1);
+		const int ny = dims.size() > 1 ? dims.at(1) : 1;
+		const int nz = dims.size() > 2 ? dims.at(2) : 1;
+		if (d.dimension == 2) {
+			if (d.type == OperandType::Str) {
+				auto& table = m_globalStr2D[storageKey];
+				if (table.size() < nx) table.resize(nx);
+				for (int x = 0; x < nx; ++x) {
+					auto& row = table[x];
+					if (row.size() < ny) row.resize(ny);
+					std::fill_n(row.begin(), ny, FlatStringValue{});
+					const int base = x * ny;
+					const int n = qMin(ny, defaultCount - base);
+					for (int y = 0; y < n; ++y) row[y] = FlatStringValue(d.defaultStr.at(base + y));
+				}
+			} else {
+				auto& table = m_globalInt2D[storageKey];
+				if (table.size() < nx) table.resize(nx);
+				for (int x = 0; x < nx; ++x) {
+					auto& row = table[x];
+					if (row.size() < ny) row.resize(ny, 0);
+					if (ny > 0) std::memset(row.data(), 0, size_t(ny) * sizeof(qint64));
+					const int base = x * ny;
+					const int n = qMin(ny, defaultCount - base);
+					for (int y = 0; y < n; ++y) row[y] = d.defaultInt.at(base + y);
+				}
+			}
+			continue;
+		}
+		if (d.type == OperandType::Str) {
+			auto& cube = m_globalStr3D[storageKey];
+			if (cube.size() < nx) cube.resize(nx);
+			for (int x = 0; x < nx; ++x) {
+				auto& plane = cube[x];
+				if (plane.size() < ny) plane.resize(ny);
+				for (int y = 0; y < ny; ++y) {
+					auto& row = plane[y];
+					if (row.size() < nz) row.resize(nz);
+					std::fill_n(row.begin(), nz, FlatStringValue{});
+					const int base = (x * ny + y) * nz;
+					const int n = qMin(nz, defaultCount - base);
+					for (int z = 0; z < n; ++z) row[z] = FlatStringValue(d.defaultStr.at(base + z));
+				}
+			}
+		} else {
+			auto& cube = m_globalInt3D[storageKey];
+			if (cube.size() < nx) cube.resize(nx);
+			for (int x = 0; x < nx; ++x) {
+				auto& plane = cube[x];
+				if (plane.size() < ny) plane.resize(ny);
+				for (int y = 0; y < ny; ++y) {
+					auto& row = plane[y];
+					if (row.size() < nz) row.resize(nz, 0);
+					if (nz > 0) std::memset(row.data(), 0, size_t(nz) * sizeof(qint64));
+					const int base = (x * ny + y) * nz;
+					const int n = qMin(nz, defaultCount - base);
+					for (int z = 0; z < n; ++z) row[z] = d.defaultInt.at(base + z);
+				}
+			}
+		}
+	}
+}
+
 void VariableStorage::resetForNewGame()
 {
+		// 对齐 C# VariableEvaluator.ResetData：SetDefaultValue(全部变量) + CharacterList.Clear()。
+		// 保留：NAME 表、STR 等 CSV 装载期「默认值」数据、CSV 模板快照（ADDCHARA 重新
+		// 填充角色时仍要用）；清除：全部运行时数值（内建整型数组、用户广域、角色运行时
+		// 数据、本地槽）。
 		// C# ResetData deliberately keeps GLOBAL/GLOBALS alive. Preserve both
 		// built-ins and declared #GLOBAL variables while clearing ordinary data.
 		const QSet<QString> globalNames = [&] {
 			QSet<QString> names{QStringLiteral("GLOBAL"), QStringLiteral("GLOBALS")};
-			if (m_saveVariableTable) for (const VariableDecl& d : m_saveVariableTable->declarations())
+			if (m_saveVariableTable) for (const VariableDecl& d : m_saveVariableTable->declarationsRef())
 				if (d.isGlobal) names.insert(d.name.toUpper());
 			return names;
 		}();
@@ -690,104 +791,7 @@ void VariableStorage::resetForNewGame()
 		purgePrivate(m_globalStr3D);
 		m_privateScopeCache.clear();
 
-		// RESETDATA = C# 的 SetDefaultValue + SetDefaultLocalValue：把每个声明过的变量
-		// 恢复成 ERB/ERH 里的初值。FL3.8 有 18515 个声明、合计约 400 万个元素，
-		// 因此这里是「选了重新开始后引擎像卡死」的主要开销来源，写法要克制：
-		//   · 存储键每个声明只解析一次（setGlobal*D 内部每次都走 storageName）
-		//   · 1 维走 memset 批量清零，只覆盖写了初值的前几项
-		//   · 2/3 维先按维数扩好表再按下标直写（coordinates() 每个元素都会分配一个
-		//     QList，400 万次分配在 -O0 下就要 0.7 秒）
-		if (m_saveVariableTable) {
-			for (const VariableDecl& d : m_saveVariableTable->declarations()) {
-				if (d.isConst || d.isReference || d.isCharaData || d.isGlobal || d.isArg) continue;
-				const QString key = d.scope == VarScope::Local
-					? d.function.toUpper() + QChar(0x1f) + d.name.toUpper()
-					: d.name.toUpper();
-				const QString storageKey = resolvedStorageName(key);
-				const QList<int> dims = d.lengths.isEmpty() ? QList<int>{1} : d.lengths;
-				const int count = shapeCount(dims);
-				const int defaultCount = d.type == OperandType::Str ? int(d.defaultStr.size())
-				                                                    : int(d.defaultInt.size());
-				if (d.dimension <= 1) {
-					// 1 维：x 就是 i
-					if (d.type == OperandType::Str) {
-						auto& vec = m_globalStr1D[storageKey];
-						if (vec.size() < count) vec.resize(count);
-						std::fill_n(vec.begin(), count, FlatStringValue{});
-						const int n = qMin(count, defaultCount);
-						for (int i = 0; i < n; ++i) vec[i] = FlatStringValue(d.defaultStr.at(i));
-					} else {
-						auto& vec = m_globalInt1D[storageKey];
-						if (vec.size() < count) vec.resize(count, 0);
-						if (count > 0) std::memset(vec.data(), 0, size_t(count) * sizeof(qint64));
-						const int n = qMin(count, defaultCount);
-						for (int i = 0; i < n; ++i) vec[i] = d.defaultInt.at(i);
-					}
-					continue;
-				}
-				// 2/3 维：下标换算与 coordinates() 一致（最后一维连续）
-				const int nx = dims.value(0, 1);
-				const int ny = dims.size() > 1 ? dims.at(1) : 1;
-				const int nz = dims.size() > 2 ? dims.at(2) : 1;
-				if (d.dimension == 2) {
-					if (d.type == OperandType::Str) {
-						auto& table = m_globalStr2D[storageKey];
-						if (table.size() < nx) table.resize(nx);
-						for (int x = 0; x < nx; ++x) {
-							auto& row = table[x];
-							if (row.size() < ny) row.resize(ny);
-							std::fill_n(row.begin(), ny, FlatStringValue{});
-							const int base = x * ny;
-							const int n = qMin(ny, defaultCount - base);
-							for (int y = 0; y < n; ++y) row[y] = FlatStringValue(d.defaultStr.at(base + y));
-						}
-					} else {
-						auto& table = m_globalInt2D[storageKey];
-						if (table.size() < nx) table.resize(nx);
-						for (int x = 0; x < nx; ++x) {
-							auto& row = table[x];
-							if (row.size() < ny) row.resize(ny, 0);
-							if (ny > 0) std::memset(row.data(), 0, size_t(ny) * sizeof(qint64));
-							const int base = x * ny;
-							const int n = qMin(ny, defaultCount - base);
-							for (int y = 0; y < n; ++y) row[y] = d.defaultInt.at(base + y);
-						}
-					}
-					continue;
-				}
-				if (d.type == OperandType::Str) {
-					auto& cube = m_globalStr3D[storageKey];
-					if (cube.size() < nx) cube.resize(nx);
-					for (int x = 0; x < nx; ++x) {
-						auto& plane = cube[x];
-						if (plane.size() < ny) plane.resize(ny);
-						for (int y = 0; y < ny; ++y) {
-							auto& row = plane[y];
-							if (row.size() < nz) row.resize(nz);
-							std::fill_n(row.begin(), nz, FlatStringValue{});
-							const int base = (x * ny + y) * nz;
-							const int n = qMin(nz, defaultCount - base);
-							for (int z = 0; z < n; ++z) row[z] = FlatStringValue(d.defaultStr.at(base + z));
-						}
-					}
-				} else {
-					auto& cube = m_globalInt3D[storageKey];
-					if (cube.size() < nx) cube.resize(nx);
-					for (int x = 0; x < nx; ++x) {
-						auto& plane = cube[x];
-						if (plane.size() < ny) plane.resize(ny);
-						for (int y = 0; y < ny; ++y) {
-							auto& row = plane[y];
-							if (row.size() < nz) row.resize(nz, 0);
-							if (nz > 0) std::memset(row.data(), 0, size_t(nz) * sizeof(qint64));
-							const int base = (x * ny + y) * nz;
-							const int n = qMin(nz, defaultCount - base);
-							for (int z = 0; z < n; ++z) row[z] = d.defaultInt.at(base + z);
-						}
-					}
-				}
-			}
-		}
+		restoreDeclaredDefaults();
 		// 角色数据回默认值。本移植把 CSV 模板默认值**直接写进角色存储**
 		// （m_charaIntVars/m_charaStrVars，按模板号存放），ADDCHARA/LOADCHARA 之后
 		// 都从这些容器取 NAME/ABL… 模板默认值 —— 因此这里必须从模板快照恢复，
@@ -1413,7 +1417,9 @@ QList<SaveShape> saveShapes(const VariableConfig& config, const VariableTable* t
         for (const auto& n : words("DITEMTYPE DA DB DC DD DE")) add(n,false,2);
         add("TA",false,3); add("TB",false,3);
     }
-    if (table) for (const auto& d : table->declarations()) {
+    // declarationsRef：一次存/读档要调 2~4 次 saveShapes，旧写法每次都重建
+    // 18515 项的整表拷贝（每项多个 QString/QList 浅拷贝）。
+    if (table) for (const auto& d : table->declarationsRef()) {
         if (!d.isSavedata || d.isConst || d.isReference || d.isArg
             || d.scope != VarScope::Global || d.isCharaData != character || d.isGlobal != global) continue;
         // The reference character loader has no 3D case.
@@ -1427,11 +1433,9 @@ int shapeCount(const QList<int>& dims) {
     for (int n : dims) { if (n < 0 || n > 16*1024*1024 || (n && count > 16*1024*1024/n)) return 0; count*=n; }
     return int(count);
 }
-QList<int> coordinates(int index, const QList<int>& dims) {
-    QList<int> result(dims.size());
-    for (int axis=dims.size()-1;axis>=0;--axis) { result[axis]=dims[axis] ? index%dims[axis] : 0; if(dims[axis]) index/=dims[axis]; }
-    return result;
-}
+// coordinates() 已删除：RESETDATA / 存读档的三个批量循环都改为内联换算
+//（最后一维连续：z = i%d2, y = (i/d2)%d1, x = i/(d1*d2)），不再为每个元素
+// 分配一个 QList。
 }
 
 EraBinaryData::Document VariableStorage::captureBinarySave(EraBinaryData::FileType type,
@@ -1441,17 +1445,47 @@ EraBinaryData::Document VariableStorage::captureBinarySave(EraBinaryData::FileTy
     EraBinaryData::Document document; document.type=type;
     const auto capture = [&](const SaveShape& s, int character) {
         EraBinaryData::Variable v; v.name=s.name; v.string=s.string; v.dimensions=s.dimensions;
-        const int n=shapeCount(s.dimensions);
+        // 下标换算与 coordinates() 一致（最后一维连续）但不再逐元素分配 QList；
+        // 存储键/角色槽只解析一次（旧 getCharaStr/getGlobalInt1D 每元素都走
+        // storageName 的 toUpper + 两次哈希）。此处 setLocalContext({}) 已清空
+        // 私有作用域，resolvedStorageName 对广域名是恒等映射。
+        const QList<int>& dims=s.dimensions;
+        const int axisCount=dims.size();
+        const int d0=qMax(1,dims.value(0)), d1=qMax(1,dims.value(1)), d2=qMax(1,dims.value(2));
+        const int n=shapeCount(dims);
+        const bool system=hasSystemVariable(s.name);
+        const QString key=system ? s.name : resolvedStorageName(s.name);
+        const int slot=character>=0 ? resolveCharaIndex(character) : -1;
+        const auto charaInt1=m_charaIntVars.constFind(key);
+        const auto charaStr1=m_charaStrVars.constFind(key);
+        const auto gInt1=m_globalInt1D.constFind(key);
+        const auto gInt2=m_globalInt2D.constFind(key);
+        const auto gStr2=m_globalStr2D.constFind(key);
+        const auto gInt3=m_globalInt3D.constFind(key);
+        const auto gStr3=m_globalStr3D.constFind(key);
         for(int i=0;i<n;++i) {
-            const auto p=coordinates(i,s.dimensions); const int x=p.value(0),y=p.value(1),z=p.value(2);
+            // 下标换算与 coordinates() 一致：z 连续，x = i/(d1*d2)，y = (i/d2)%d1
+            int x=0,y=0,z=0;
+            if(axisCount<=1) x=i%d0;   // rank-0 / 1 维共用（rank-0 只有 i=0）
+            else if(axisCount==2) { x=(i/d1)%d0; y=i%d1; }
+            else { z=i%d2; const int t=i/d2; y=t%d1; x=t/d1; }
             if(character>=0) {
-                if(s.string) v.strings.append(s.dimensions.size()<2 ? getCharaStr(s.name,character,x)
-                    : m_charaStr2D.value(s.name).value(resolveCharaIndex(character)).value(x).value(y).text);
-                else v.integers.append(s.dimensions.size()<2 ? getCharaInt(s.name,character,x) : getCharaInt3D(s.name,character,x,y));
+                if(s.string) v.strings.append(axisCount<2
+                    ? (charaStr1!=m_charaStrVars.constEnd() && slot>=0 && slot<charaStr1.value().size() && x<charaStr1.value().at(slot).size()
+                       ? charaStr1.value().at(slot).at(x).text : QString())
+                    : m_charaStr2D.value(key).value(slot).value(x).value(y).text);
+                else v.integers.append(axisCount<2
+                    ? (charaInt1!=m_charaIntVars.constEnd() && slot>=0 && slot<charaInt1.value().size() && x<charaInt1.value().at(slot).size()
+                       ? charaInt1.value().at(slot).at(x) : 0)
+                    : getCharaInt3D(s.name,character,x,y));
             } else if(s.string) {
-                v.strings.append(s.dimensions.size()<2 ? getGlobalStr1D(s.name,x) : s.dimensions.size()==2 ? getGlobalStr2D(s.name,x,y) : m_globalStr3D.value(s.name).value(x).value(y).value(z).text);
-            } else v.integers.append(s.dimensions.size()<2 ? (hasSystemVariable(s.name) ? getSystemVariable(s.name,x) : getGlobalInt1D(s.name,x))
-                                      : s.dimensions.size()==2 ? getGlobalInt2D(s.name,x,y) : getGlobalInt3D(s.name,x,y,z));
+                v.strings.append(axisCount<2 ? getGlobalStr1DRaw(key,x)
+                    : axisCount==2 ? (gStr2!=m_globalStr2D.constEnd() && x<gStr2.value().size() && y<gStr2.value().at(x).size() ? gStr2.value().at(x).at(y).text : QString())
+                    : (gStr3!=m_globalStr3D.constEnd() && x<gStr3.value().size() && y<gStr3.value().at(x).size() && z<gStr3.value().at(x).at(y).size() ? gStr3.value().at(x).at(y).at(z).text : QString()));
+            } else v.integers.append(axisCount<2 ? (system ? getSystemVariable(s.name,x)
+                    : (gInt1!=m_globalInt1D.constEnd() && x<gInt1.value().size() ? gInt1.value().at(x) : 0))
+                : axisCount==2 ? (gInt2!=m_globalInt2D.constEnd() && x<gInt2.value().size() && y<gInt2.value().at(x).size() ? gInt2.value().at(x).at(y) : 0)
+                : (gInt3!=m_globalInt3D.constEnd() && x<gInt3.value().size() && y<gInt3.value().at(x).size() && z<gInt3.value().at(x).at(y).size() ? gInt3.value().at(x).at(y).at(z) : 0));
         }
         return v;
     };
@@ -1478,7 +1512,7 @@ void VariableStorage::applyBinarySave(const EraBinaryData::Document& document) {
     const auto globals=normal ? captureBinarySave(EraBinaryData::FileType::Global) : EraBinaryData::Document{};
     // Keep every GLOBAL declaration, including tokens that are deliberately not SAVEDATA.
     QSet<QString> globalKeys{QStringLiteral("GLOBAL"), QStringLiteral("GLOBALS")};
-    if (m_saveVariableTable) for (const auto& d : m_saveVariableTable->declarations())
+    if (m_saveVariableTable) for (const auto& d : m_saveVariableTable->declarationsRef())
         if (d.isGlobal) globalKeys.insert(d.name.toUpper());
     const auto preserve = [&](const auto& map) {
         auto kept = map;
@@ -1490,24 +1524,10 @@ void VariableStorage::applyBinarySave(const EraBinaryData::Document& document) {
     const auto keptS1=preserve(m_globalStr1D); const auto keptS2=preserve(m_globalStr2D); const auto keptS3=preserve(m_globalStr3D);
     if(normal) {
         resetForNewGame(); setLocalContext({});
-        if(m_saveVariableTable) for(const auto& d:m_saveVariableTable->declarations()) {
-            if(d.isConst || d.isReference || d.isCharaData || d.isGlobal) continue;
-            const QString key=d.scope==VarScope::Local ? d.function.toUpper()+QChar(0x1f)+d.name.toUpper() : d.name;
-            for(int i=0;i<shapeCount(d.lengths.isEmpty() ? QList<int>{1} : d.lengths);++i) {
-                const auto p=coordinates(i,d.lengths); int x=p.value(0),y=p.value(1),z=p.value(2);
-                if(d.type==OperandType::Str) {
-                    const QString value=d.defaultStr.value(i);
-                    if(d.dimension<=1) setGlobalStr1D(key,x,value);
-                    else if(d.dimension==2) setGlobalStr2D(key,x,y,value);
-                    else { auto& a=m_globalStr3D[key]; if(a.size()<=x)a.resize(x+1); if(a[x].size()<=y)a[x].resize(y+1); if(a[x][y].size()<=z)a[x][y].resize(z+1); a[x][y][z]=FlatStringValue(value); }
-                } else {
-                    qint64 value=d.defaultInt.value(i);
-                    if(d.dimension<=1) setGlobalInt1D(key,x,value);
-                    else if(d.dimension==2) setGlobalInt2D(key,x,y,value);
-                    else setGlobalInt3D(key,x,y,z,value);
-                }
-            }
-        }
+        // 声明初值恢复 = resetForNewGame 的同一件事，走同一个批量实现
+        //（旧代码在这里还有一份逐元素 setGlobal*D + coordinates() 的手写副本，
+        // 400 万个元素读一次档付一次）。
+        restoreDeclaredDefaults();
         applyBinarySave(globals);
         const auto restore=[](auto& map,const auto& kept) { for(auto it=kept.begin();it!=kept.end();++it) map.insert(it.key(),it.value()); };
         restore(m_globalInt1D,keptI1); restore(m_globalInt2D,keptI2); restore(m_globalInt3D,keptI3);
@@ -1515,26 +1535,72 @@ void VariableStorage::applyBinarySave(const EraBinaryData::Document& document) {
     }
     const auto apply = [&](const EraBinaryData::Variable& v,const SaveShape& s,int character) {
         if(v.string!=s.string || v.dimensions.size()!=s.dimensions.size()) return;
-        for(int i=0;i<shapeCount(s.dimensions);++i) {
-            const auto p=coordinates(i,s.dimensions); int source=0; bool overlap=true;
-            for(int axis=0;axis<p.size();++axis) { if(p[axis]>=v.dimensions[axis]) overlap=false; source=source*v.dimensions[axis]+p[axis]; }
+        // 下标换算与 coordinates() 一致（最后一维连续），但不再为每个元素分配
+        // QList；source 的轴序混合（v.dimensions 可能小于 s.dimensions，读不到
+        // 的位置按 0/空串补）也一并内联。读档要写 400 万个元素，这里曾是
+        // 「每元素一次 QList 分配 + 按名字的 setGlobal*D（storageName 哈希）」。
+        const QList<int>& dims=s.dimensions;
+        const int axisCount=dims.size();
+        // rank-0 形状（NAME/CALLNAME/NICKNAME/MASTERNAME/ISASSI/NO 的 dims 为空）：
+        // 语义 = 单元素、下标全 0（shapeCount({}) 也返回 1）。
+        int vstride0=1,vstride1=1;   // v.dimensions 的后缀积（source 的轴序混合用）
+        for(int axis=axisCount-2;axis>=0;--axis) {
+            int vacc=1; for(int k=axis+1;k<axisCount;++k) vacc*=qMax(1,v.dimensions[k]);
+            if(axis==0) vstride0=vacc; else vstride1=vacc;
+        }
+        const int d0=qMax(1,dims.value(0)), d1=qMax(1,dims.value(1)), d2=qMax(1,dims.value(2));
+        const int count=axisCount==0 ? 1 : shapeCount(dims);
+        // 非系统变量：存储键/角色槽只解析一次，直接写容器
+        const bool system=hasSystemVariable(s.name);
+        const QString key=system ? QString() : resolvedStorageName(s.name);
+        const int slot=character>=0 ? resolveCharaIndex(character) : -1;
+        for(int i=0;i<count;++i) {
+            int x=0,y=0,z=0,source=0; bool overlap=true;
+            if(axisCount==0) {
+                // rank-0：x=y=z=source=0（overlap 恒真）
+            } else if(axisCount==1) {
+                x=i%d0;
+                if(x>=v.dimensions.value(0)) overlap=false;
+                source=x;
+            } else if(axisCount==2) {
+                x=(i/d1)%d0; y=i%d1;
+                if(x>=v.dimensions.value(0)) overlap=false;
+                if(y>=v.dimensions.value(1)) overlap=false;
+                source=x*vstride0+y;
+            } else {
+                z=i%d2; const int t=i/d2; y=t%d1; x=t/d1;
+                if(x>=v.dimensions.value(0)) overlap=false;
+                if(y>=v.dimensions.value(1)) overlap=false;
+                if(z>=v.dimensions.value(2)) overlap=false;
+                source=x*vstride0+y*vstride1+z;
+            }
             const qint64 number=overlap ? v.integers.value(source) : 0;
             const QString text=overlap ? v.strings.value(source) : QString();
-            const int x=p.value(0),y=p.value(1),z=p.value(2);
             if(character>=0) {
                 if(s.string) {
-                    if(p.size()<2) setCharaStr(s.name,character,x,text);
-                    else { auto& a=m_charaStr2D[s.name]; int slot=resolveCharaIndex(character); if(a.size()<=slot)a.resize(slot+1); if(a[slot].size()<=x)a[slot].resize(x+1); if(a[slot][x].size()<=y)a[slot][x].resize(y+1); a[slot][x][y]=FlatStringValue(text); }
-                } else if(p.size()<2) setCharaInt(s.name,character,x,number); else setCharaInt3D(s.name,character,x,y,number);
+                    if(axisCount<2) setCharaStrRaw(key,slot,x,text);
+                    else { auto& a=m_charaStr2D[key]; if(a.size()<=slot)a.resize(slot+1); if(a[slot].size()<=x)a[slot].resize(x+1); if(a[slot][x].size()<=y)a[slot][x].resize(y+1); a[slot][x][y]=FlatStringValue(text); }
+                } else if(axisCount<2) setCharaIntRaw(key,slot,x,number);
+                else setCharaInt3D(s.name,character,x,y,number);
             } else if(s.string) {
-                if(p.size()<2) setGlobalStr1D(s.name,x,text); else if(p.size()==2) setGlobalStr2D(s.name,x,y,text);
-                else { auto& a=m_globalStr3D[s.name]; if(a.size()<=x)a.resize(x+1); if(a[x].size()<=y)a[x].resize(y+1); if(a[x][y].size()<=z)a[x][y].resize(z+1); a[x][y][z]=FlatStringValue(text); }
-            } else if(p.size()<2) { if(hasSystemVariable(s.name)) setSystemVariable(s.name,x,number); else setGlobalInt1D(s.name,x,number); }
-            else if(p.size()==2) setGlobalInt2D(s.name,x,y,number); else setGlobalInt3D(s.name,x,y,z,number);
+                if(axisCount<2) { auto& vec=m_globalStr1D[key]; if(vec.size()<=x)vec.resize(x+1); vec[x]=FlatStringValue(text); }
+                else if(axisCount==2) { auto& a=m_globalStr2D[key]; if(a.size()<=x)a.resize(x+1); if(a[x].size()<=y)a[x].resize(y+1); a[x][y]=FlatStringValue(text); }
+                else { auto& a=m_globalStr3D[key]; if(a.size()<=x)a.resize(x+1); if(a[x].size()<=y)a[x].resize(y+1); if(a[x][y].size()<=z)a[x][y].resize(z+1); a[x][y][z]=FlatStringValue(text); }
+            } else if(axisCount<2) { if(system) setSystemVariable(s.name,x,number); else { auto& vec=m_globalInt1D[key]; if(vec.size()<=x)vec.resize(x+1,0); vec[x]=number; } }
+            else if(axisCount==2) { auto& a=m_globalInt2D[key]; if(a.size()<=x)a.resize(x+1); if(a[x].size()<=y)a[x].resize(y+1,0); a[x][y]=number; }
+            else { auto& a=m_globalInt3D[key]; if(a.size()<=x)a.resize(x+1); if(a[x].size()<=y)a[x].resize(y+1); if(a[x][y].size()<=z)a[x][y].resize(z+1,0); a[x][y][z]=number; }
         }
     };
+    // 名字 -> shape 哈希：旧写法是 O(变量×shape) 双循环线性匹配（两边各几百项）。
     const auto applyList = [&](const QList<EraBinaryData::Variable>& list,const QList<SaveShape>& shapes,int character) {
-        for(const auto& v:list) for(const auto& s:shapes) if(v.name==s.name) { apply(v,s,character); break; }
+        if(list.isEmpty() || shapes.isEmpty()) return;
+        QHash<QString,int> byName;
+        byName.reserve(shapes.size());
+        for(int i=0;i<shapes.size();++i) byName.insert(shapes.at(i).name,i);
+        for(const auto& v:list) {
+            const auto it=byName.constFind(v.name);
+            if(it!=byName.constEnd()) apply(v,shapes.at(it.value()),character);
+        }
     };
     if(document.type==EraBinaryData::FileType::Normal || document.type==EraBinaryData::FileType::Character) {
         const auto shapes=saveShapes(m_variableConfig,m_saveVariableTable,true,false);

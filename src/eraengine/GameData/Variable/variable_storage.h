@@ -170,6 +170,10 @@ public:
 
         // C#1808 typed snapshots used by all engine persistence entry points.
         void setSaveVariableTable(const VariableTable* table) { m_saveVariableTable = table; }
+        // 把 ERB/ERH 声明的变量恢复成初值（RESETDATA 与读档共用）。
+        // 批量直写（存储键每声明一次 / memset 清零 / 下标内联），不再逐元素
+        // 调 setGlobal*D + coordinates()（后者每个元素分配一个 QList）。
+        void restoreDeclaredDefaults();
         EraBinaryData::Document captureBinarySave(EraBinaryData::FileType type,
                                                   const QList<int>& characters = {}) const;
         void applyBinarySave(const EraBinaryData::Document& document);
@@ -232,18 +236,18 @@ public:
         void setPrivateScope(const QString& function, const QStringList& names) {
             // perf：作用域只随函数名变化（声明表装载后不变）——按函数缓存构建结果，
             // 免去每次 CALL/RETURN 都对每个名字做 toUpper + 拼接 + 哈希插入。
-            // 仍与 m_privateNames 比较（setLocalContext 恢复上下文后需重新落地）。
+            // 赋值不再做内容比较：QHash 赋值是 COW 的 O(1)（引用计数 +1），
+            // 而 `!=` 是逐元素内容比较（O(私有变量数)），旧写法把便宜事做贵了。
             const QString fkey = function.toUpper();
             const auto it = m_privateScopeCache.constFind(fkey);
             if (it == m_privateScopeCache.constEnd()) {
                 QHash<QString, QString> next;
                 for (const auto& name : names)
                     next.insert(name.toUpper(), fkey + QChar(0x1f) + name.toUpper());
-                const auto ins = m_privateScopeCache.insert(fkey, next);
-                if (ins.value() != m_privateNames) m_privateNames = ins.value();
+                m_privateNames = m_privateScopeCache.insert(fkey, next).value();
                 return;
             }
-            if (it.value() != m_privateNames) m_privateNames = it.value();
+            m_privateNames = it.value();
         }
         // Emuera 的 `大文字小文字の違いを無視する:YES`（ICVariable）语义：
         // 标识符大小写不敏感，所有存储键统一用大写，写 A 与读 a 落到同一槽位。

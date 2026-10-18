@@ -52,7 +52,9 @@ static_assert(findBuiltinFunction("GCREATE") != nullptr);
 static_assert(findBuiltinFunction("NOSUCHFUNCTION") == nullptr);
 static_assert(builtinFunctionReturnType("GETTIME") == OperandType::Int);
 static_assert(builtinFunctionReturnType("GETTIMES") == OperandType::Str);
-static_assert(builtinFunctionIndex("STRLENS") == builtinFunctionIndex("STRLENS"));
+// builtinFunctionIndex 已改为运行期 O(1) 哈希索引（不再是 constexpr 线性扫），
+// 编译期自检改走 findBuiltinFunction（解析期线性版本，装载期一次性开销）。
+static_assert(findBuiltinFunction("STRLENS") != findBuiltinFunction("MAXARRAY"));
 
 static int g_failures = 0;
 

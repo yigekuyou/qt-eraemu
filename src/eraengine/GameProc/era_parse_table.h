@@ -263,6 +263,10 @@ public:
     // 并把只读区定型（之后不再编译新源码）。
     void markLoadComplete();
 
+    // 收尾子步骤：把 m_labelLists 每个同名列表按 (脚本名, 行号) 排序固化一次。
+    // labels() 不再每次调用重排；resolveCallableLabel 的「第一份」有确定含义。
+    void finalizeLabelIndex();
+
     // ---- HTML 字符串的**反向追踪**（装载器在装载期调用一次）-----------------
     // 从 `HTML_PRINT X` 出发回溯 X 的写链（`X = f1` / `X += f2` / `X += f3` …），
     // 把整条链在装载期拼成一棵 **PLUS 树**装回该行的实参：`PrintTemplateCompiler::
@@ -344,6 +348,12 @@ public slots:
     // 「JUMP 帧弹出后立刻递归 Return」效果：JUMP 目标函数 RETURN 时直接回到
     // 当前函数的调用者）。
     bool jumpLabel(const QString& label);
+    // @函数标签解析（上面三者的共用实现）：当前脚本优先（且必须是 FunctionLabel），
+    // 否则查 m_labelLists 全局索引（markLoadComplete 已排序固化）。
+    // 旧实现是 for(m_scripts) 全量扫描 + 每脚本一次 label.toUpper() ——
+    // 1500+ 脚本的语料上每次跨文件 CALL/式中调用都要 ~0.7ms。
+    [[nodiscard]] bool resolveCallableLabel(const QString& label, QString& targetScript,
+                                             int& targetLine) const;
     // 函数私有变量初值（#DIM X = 7）——进入函数时由执行侧调用
     void applyPrivateVariableDefaults(const QString& function);
     bool returnFromCall();

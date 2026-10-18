@@ -308,8 +308,9 @@ FunctionResolution resolveFunctionCall(const QString& name,
             return out;
         }
     }
-    // 2) 原生内置函数（methodDic）
-    const int index = builtinFunctionIndex(upper.toStdString());
+    // 2) 原生内置函数（methodDic）—— O(1) 哈希查（189 项线性扫描已在
+    //    builtinFunctionIndex 内建索引）；upper 已是大写 QString，不再 toStdString。
+    const int index = builtinFunctionIndex(upper);
     if (index >= 0) {
         out.isBuiltin = true;
         out.builtinIndex = index;

@@ -25,6 +25,7 @@
 #include <optional>
 #include <unordered_map>
 #include <utility>
+#include <QHash>
 #include <QString>
 #include <QtGlobal>
 #include "operand_type.h"
@@ -455,11 +456,26 @@ inline void mergeCoreArgWiden(const std::string_view upperName, int& minArgs, in
     return nullptr;
 }
 
-[[nodiscard]] constexpr int builtinFunctionIndex(std::string_view upperName) noexcept {
-    for (std::size_t i = 0; i < kBuiltinFunctionCount; ++i) {
-        if (kBuiltinFunctions[i].name == upperName) return static_cast<int>(i);
-    }
-    return -1;
+// 运行期查表索引（CALLF/TRYCALLF 的 resolveFunctionCall **每次执行**都走、
+// userCallReturnType 也在式中调用路径上）：kBuiltinFunctions 是 constexpr 静态数据，
+// 建一次 QString→下标 哈希。旧实现是 189 项线性 strcmp + 调用方
+// upper.toStdString() 的堆分配 —— CALLFORM 密集的游戏（eraTW 地图逐格
+// TRYCALLFORM 一次上万次）每次全付。
+// 解析期常量折叠不需要 constexpr 查表（findBuiltinFunction 保留线性版即可，
+// 那是装载期一次性开销）。
+[[nodiscard]] inline const QHash<QString, int>& builtinFunctionIndexMap() {
+    static const QHash<QString, int> map = [] {
+        QHash<QString, int> m;
+        m.reserve(int(kBuiltinFunctionCount));
+        for (std::size_t i = 0; i < kBuiltinFunctionCount; ++i)
+            m.insert(QString::fromLatin1(kBuiltinFunctions[i].name), int(i));
+        return m;
+    }();
+    return map;
+}
+
+[[nodiscard]] inline int builtinFunctionIndex(const QString& upperName) noexcept {
+    return builtinFunctionIndexMap().value(upperName, -1);
 }
 
 // 由下标取回声明（FunctionNode 记下标，避免求值期做字符串查找）

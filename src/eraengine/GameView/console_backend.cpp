@@ -632,6 +632,22 @@ void ConsoleBackend::newline() {
         }
         endInsertRows();
         m_insertedRows += committed.size();
+        // 图锚索引：新提交的行若含 Image span，记下它的 serial
+        //（newline() 是行提交的唯一入口；updateStageModels 的舞台快照
+        //  不再每次 flush 扫全部历史行找锚）。
+        {
+            const int lastRow = m_buffer.count() - 1;
+            for (int i = 0; i < committed.size() && lastRow - i >= 0; ++i) {
+                const ConsoleDisplayLine& appended = m_buffer.at(lastRow - i);
+                for (const ConsoleSegment& seg : appended.segments) {
+                    bool hasImage = false;
+                    for (const ConsoleSpan& part : seg.spans) {
+                        if (part.kind == ConsoleSpanKind::Image) { hasImage = true; break; }
+                    }
+                    if (hasImage) { m_imageSerials.insert(appended.serial); break; }
+                }
+            }
+        }
     }
     emit lineCountChanged();
 }
@@ -793,6 +809,7 @@ void ConsoleBackend::clearAll() {
     // C# 不随正文清屏，保留。
     const bool hadIsland = !m_islandLines.isEmpty();
     m_islandLines.clear();
+    m_imageSerials.clear();       // 含图行索引随清屏整表作废
     // 屏上已无任何区块引用图片像素：把钉住的副本一起释放（下一次装载重新钉）。
     ResourceImageProvider::clearPinnedImages();
     invalidateLineCache();        // 行全部消失 -> 按行缓存作废
@@ -965,7 +982,22 @@ void ConsoleBackend::updateStageModels(bool force) {
     // Keep earlier anchors whose image still overlaps the current stage. The
     // extra rows scroll above the viewport; ListView clips the image itself.
     const int viewportStart = start;
-    for (int row = 0; row < viewportStart; ++row) {
+    // 图锚扫描只看「含图行」索引（newline() 提交时维护）。此前是每次 flush 都扫
+    // 0..viewportStart 的**全部**历史行 —— backlog 上限 5000 行（eraMegaten
+    // 配置到 50000），存/读档画面每行 flushOut 一次，一次画档 = 40+ 次全量扫描。
+    const quint64 firstSerial = m_buffer.firstSerial();
+    const quint64 lastSerial = m_buffer.lastSerial();
+    for (auto it = m_imageSerials.begin(); it != m_imageSerials.end();) {
+        const quint64 serial = *it;
+        // 惰性剪枝：头部裁剪/CLEARLINE/replaceLast 产生的死 serial（区间外，
+        // 或 serial 对应的行已不在该下标上）就地清除。
+        if (serial < firstSerial || serial > lastSerial) {
+            it = m_imageSerials.erase(it);
+            continue;
+        }
+        const int row = int(serial - firstSerial);
+        if (row >= viewportStart) { ++it; continue; }
+        if (m_buffer.at(row).serial != serial) { ++it; continue; }   // replaceLast 留下的洞
         const auto line = displayLine(row);
         for (const auto& segment : line.segments) {
             for (const auto& part : segment.spans) {
@@ -976,6 +1008,7 @@ void ConsoleBackend::updateStageModels(bool force) {
                     start = qMin(start, row);
             }
         }
+        ++it;
     }
     const bool visible = m_stageMode && start < total;
     QVector<QHash<int, QVariant>> rows;

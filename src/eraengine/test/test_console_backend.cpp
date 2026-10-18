@@ -365,6 +365,66 @@ int main(int argc, char* argv[]) {
               "框与立絵**同一纵坐标**（图层叠加对齐 -> 边框落在立绘边缘）");
     }
 
+    // ---- 5b. 舞台快照的图锚（updateStageModels 的含图行索引）----
+    // 此前每次 flush 都扫 0..viewportStart 的全部历史行找 Image span（backlog
+    // 上限 5000 行，eraMegaten 配置 50000）。改为 publishLine 维护「含图行」
+    // serial 集合 + updateStageModels 只看含图行。这里锁定**行为不变**：
+    // 锚定行被拉进快照、纯文本行不被误认、clearAll 后索引复位。
+    qDebug() << "\n5b) 舞台快照的图锚（含图行索引）";
+    {
+        // 纯文本基线：12 行 / 舞台 5 行 -> 快照从第 7 行起
+        {
+            ConsoleBackend c;
+            c.setFontSize(16);
+            c.setLineHeight(16);
+            c.setGridColumns(40);
+            c.setGridRows(5);
+            c.setStageMode(true);
+            for (int i = 0; i < 12; ++i) { c.print(QStringLiteral("A%1").arg(i)); c.newline(); }
+            c.flush();
+            check(c.stageStart() == 7, "纯文本：stageStart == 7（12 - 5）");
+            check(c.stageModel()->rowCount() == 5, "纯文本：快照只有视口 5 行");
+        }
+        // 视口上方（第 3 行）的 8 行高立絵：图像底部盖进视口 -> 锚定行拉进快照
+        {
+            ConsoleBackend c;
+            c.setFontSize(16);
+            c.setLineHeight(16);
+            c.setGridColumns(40);
+            c.setGridRows(5);
+            c.setStageMode(true);
+            for (int i = 0; i < 3; ++i) { c.print(QStringLiteral("B%1").arg(i)); c.newline(); }
+            c.printImage(QStringLiteral("tall_face"), 400, 800); c.newline();   // 行 3：8 行高
+            for (int i = 0; i < 8; ++i) { c.print(QStringLiteral("C%1").arg(i)); c.newline(); }
+            check(c.lineCount() == 12, "12 行（图占 1 个逻辑行）");
+            c.flush();
+            check(c.stageStart() == 3, "图锚：视口上方 8 行高的立絵把锚定行 3 拉进快照");
+            check(c.stageModel()->rowCount() == 9, "图锚：快照 9 行（3..11）");
+            // 更多文本行把视口推到锚定行之外（不再盖到）-> 锚定行不再被拉进
+            for (int i = 0; i < 6; ++i) { c.print(QStringLiteral("D%1").arg(i)); c.newline(); }
+            c.flush();
+            check(c.stageStart() == 13, "图锚出界：18 - 5 == 13（锚不再盖视口）");
+        }
+        // clearAll 后索引复位：之前的图行 serial 全部失效，不残留
+        {
+            ConsoleBackend c;
+            c.setFontSize(16);
+            c.setLineHeight(16);
+            c.setGridColumns(40);
+            c.setGridRows(5);
+            c.setStageMode(true);
+            for (int i = 0; i < 3; ++i) { c.print(QStringLiteral("E%1").arg(i)); c.newline(); }
+            c.printImage(QStringLiteral("gone_face"), 400, 800); c.newline();
+            for (int i = 0; i < 8; ++i) { c.print(QStringLiteral("F%1").arg(i)); c.newline(); }
+            c.flush();
+            check(c.stageStart() == 3, "清屏前：图锚生效");
+            c.clearAll();
+            for (int i = 0; i < 10; ++i) { c.print(QStringLiteral("G%1").arg(i)); c.newline(); }
+            c.flush();
+            check(c.stageStart() == 5, "clearAll 后：索引复位，stageStart == 5（10 - 5）");
+        }
+    }
+
     // ---- 8. 工具提示样式（TOOLTIP_*）与 BREAKBUTTON ----
     qDebug() << "\n8) 工具提示样式（TOOLTIP_*）/ BREAKBUTTON";
     {

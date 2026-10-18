@@ -2338,7 +2338,8 @@ qint64 ScriptRunner::readIntVar(const QString& name, const QList<int>& indices) 
             return m_storage->getCharaInt3D(name, charaId, elems.value(0), elems.value(1));
         return m_storage->getCharaInt(name, charaId, elems.value(0));
     }
-    const QString upper = name.toUpper();
+    // eraUpperKey：纯 CJK/已大写名字零分配（FOR/NEXT 计数器每迭代都走这里）
+    const QString upper = eraUpperKey(name);
     if (upper == QLatin1String("ARG")) return m_storage->getArgInt(indices.value(0));
     if (upper == QLatin1String("LOCAL")) return m_storage->getLocalInt(indices.value(0));
     if (m_storage->hasSystemVariable(name)) {
@@ -2365,7 +2366,7 @@ void ScriptRunner::writeIntVar(const QString& name, const QList<int>& indices, q
             m_storage->setCharaInt(name, charaId, elems.value(0), value);
         return;
     }
-    const QString upper = name.toUpper();
+    const QString upper = eraUpperKey(name);
     if (upper == QLatin1String("ARG")) {
         m_storage->setArgInt(indices.value(0), value);
         return;

@@ -25,7 +25,16 @@ namespace {
 
 // Emuera 的 `大文字小文字の違いを無視する:YES`（ICVariable）语义：
 // 标识符（变量名 / 函数名）大小写不敏感，内部统一用大写做键。
-QString nk(const QString& name) { return name.toUpper(); }
+// perf：find/localsOf/typeOf 每次查表都经过这里 —— 只有**确实含小写字母**时
+// 才真正 toUpper()（纯 CJK 名字 toUpper() 恒等，此前每次都要分配 + 逐字符转换；
+// 判定口径与 eraUpperKey 一致：ASCII 小写直判，非 ASCII 走 QChar::isLower）。
+QString nk(const QString& name) {
+    for (const QChar c : name) {
+        const ushort u = c.unicode();
+        if ((u >= 'a' && u <= 'z') || (u >= 0x80 && c.isLower())) return name.toUpper();
+    }
+    return name;
+}
 
 // 递归把类型回填到 AST 的变量节点（其余节点仅递归）
 void walkApply(ExpressionNode& node, const VariableTable& table, const QString& function) {

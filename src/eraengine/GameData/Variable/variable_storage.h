@@ -32,12 +32,16 @@
 #include "ast/print_template.h"
 
 // perf：变量名（eraTW/MUGEN 惯例）几乎都是大写，QString::toUpper() 即使无变化
-// 也会 detach + 逐字符大小写转换。这里先扫一遍：无 a-z 且无非 ASCII 字符时
-// toUpper() 等价于原串，直接复用零分配；否则才真正转换到 scratch。
+// 也会 detach + 逐字符大小写转换。这里先扫一遍：**确实含小写字母**时才真正
+// 转换到 scratch。判定按「ASCII 小写直判 + 非 ASCII 走 QChar::isLower()」：
+//   · 纯 CJK/假名名字（每个字符都 >= 0x80）此前**每次**都要 toUpper() 分配 +
+//     逐字符转换，而结果永远不变 —— eraTW 的日文变量名每次 storageName 都付。
+//   · 全角小写 ａ(U+FF41) 属 Ll（isLower()==true），仍会正确映射成 Ａ；
+//     全角大写/希腊/西里尔大写不触发，返回原串（toUpper 对它们本就是恒等）。
 [[nodiscard]] inline const QString& eraUpperKey(const QString& s, QString& scratch) {
     for (const QChar c : s) {
         const ushort u = c.unicode();
-        if ((u >= 'a' && u <= 'z') || u >= 0x80) {
+        if ((u >= 'a' && u <= 'z') || (u >= 0x80 && c.isLower())) {
             scratch = s.toUpper();
             return scratch;
         }
@@ -48,7 +52,7 @@
 [[nodiscard]] inline QString eraUpperKey(const QString& s) {
     for (const QChar c : s) {
         const ushort u = c.unicode();
-        if ((u >= 'a' && u <= 'z') || u >= 0x80) return s.toUpper();
+        if ((u >= 'a' && u <= 'z') || (u >= 0x80 && c.isLower())) return s.toUpper();
     }
     return s;
 }
@@ -258,10 +262,11 @@ public:
             return m_references.value(upper, m_privateNames.value(upper, upper));
         }
         void setReference(const QString& name, const QString& targetStorage) {
-            m_references.insert(name.toUpper(), targetStorage);
+            m_references.insert(eraUpperKey(name), targetStorage);
         }
         [[nodiscard]] bool hasReference(const QString& name) const {
-            return m_references.contains(name.toUpper());
+            // evaluateVariable 每次读变量都要判一次 REF：走零分配的 eraUpperKey
+            return m_references.contains(eraUpperKey(name));
         }
         // REF 形参别名解析：`#DIM REF ターゲット` ← 实参 TARGET 时，m_references 把
         // 形参名映射到实参的存储键（"TARGET"）。系统变量按**名字**分派到各自数组
@@ -280,9 +285,9 @@ public:
         [[nodiscard]] int arraySizeRaw(const QString& storageKey) const;
         [[nodiscard]] QList<int> arrayLengths(const QString& name) const;
         void ensureArraySize(const QString& name, int size, bool stringArray);
-        bool hasParameter(const QString& name) const { return m_parameters.contains(name.toUpper()); }
-        QVariant parameter(const QString& name) const { return m_parameters.value(name.toUpper()); }
-        void setParameter(const QString& name, const QVariant& value) { m_parameters.insert(name.toUpper(), value); }
+        bool hasParameter(const QString& name) const { return m_parameters.contains(eraUpperKey(name)); }
+        QVariant parameter(const QString& name) const { return m_parameters.value(eraUpperKey(name)); }
+        void setParameter(const QString& name, const QVariant& value) { m_parameters.insert(eraUpperKey(name), value); }
 
 		// ================= System variables (1D) =================
 		Q_INVOKABLE void setDay(int index, qint64 value);

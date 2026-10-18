@@ -637,7 +637,14 @@ QVariant ExpressionEvaluator::evaluateVariable(const VariableNode &node, Variabl
     // 1 维读（存储键不是变量表里的名字，variableDimension 只得 1）。
     // FL3.8 的 CALL GET_WEAPON_MATERIAL_NEEDS(…, WPN_MATERIAL_NEEDS)（2 维 REF）
     // 正是这种写法：绑定正确、读数恒 0。
-    const int declaredDimension = qMax(variableDimension(varName), variableDimension(node.name()));
+    // perf：装载期 walkApply 写进 node.dimension 的就是同一个
+    // VariableTable::find(名字, 行的 ownerFunction) 的维数 —— 名字没被 REF 重映射
+    // 时两次运行期查表（lineAt + find + nk）的结果恒等于 node.dimension，直接用；
+    // 重映射过的仍按旧路算 qMax。
+    const int declaredDimension =
+        (varName == node.name() && node.dimension >= 0)
+            ? node.dimension
+            : qMax(variableDimension(varName), variableDimension(node.name()));
     const int dimension = chara ? storage->charaDataDimension(varName) : declaredDimension;
     const int full = dimension + (chara ? 1 : 0);
     if (!aliased && (count > full || (dimension >= 2 && count != full)))
@@ -803,7 +810,11 @@ QVariant ExpressionEvaluator::evaluateVariable(const VariableNode &node, Variabl
         }
         int idx = 0;
         if (node.isArray() && !node.indices().isEmpty()) {
-            if (variableDimension(varName) >= 2 && node.indices().size() >= 2) {
+            // 维数快路径（同上 declaredDimension 的理由）：未重映射时 node.dimension
+            // 与运行期查表恒等，免去一次 lineAt + find。
+            const int strDim = (varName == node.name() && node.dimension >= 0)
+                                   ? node.dimension : variableDimension(varName);
+            if (strDim >= 2 && node.indices().size() >= 2) {
                 const QList<int> ids = resolveIndices(node, storage, gameBaseData);
                 if (ids.size() >= 2) {
                     return toVariant(storage->getStringSlot(varName, ids));

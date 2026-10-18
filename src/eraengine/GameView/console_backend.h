@@ -27,6 +27,7 @@
 #include <QSortFilterProxyModel>
 #include <QVector>
 #include <QHash>
+#include <QSet>
 #include <QtQml/qqmlregistration.h>
 #include "console_types.h"
 #include "GameData/ast/logical_line.h"
@@ -531,6 +532,10 @@ private:
     // 失效：clearAll 全清；字号/行高/网格变化（区块尺寸被烘焙进缓存值）全清。
     // 头部裁剪/CLEARLINE 只按 [firstSerial, lastSerial] 区间清理孤儿条目。
     mutable QHash<quint64, QVariantList> m_lineCache;
+    // 「含图行」的 serial 集合（newline() 提交行时维护，clearAll 清空，
+    // updateStageModels 惰性剪枝）。此前每次 flush 都要扫 0..viewportStart 的**全部**历史行找立絵锚
+    //（backlog 上限 5000 行，eraMegaten 配置到 50000）——O(backlog)/flush。
+    QSet<quint64> m_imageSerials;
     mutable quint64 m_cacheFirstSerial = 0;   // 上次剪枝时现存行的最小 serial
 
     // 性能计数器（perfReport 读取；D-Bus /debug 转发）

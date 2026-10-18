@@ -745,8 +745,18 @@ ExecState SystemStateMachine::pump() {
             if (!m_runner) {
                 m_atFloor = true;
             } else {
-                if (m_pacingEnabled) m_runner->runSlice(4096, 3);
-                else m_runner->runToCompletion();
+                if (m_pacingEnabled) {
+                    // 切片预算：上一片**有输出** -> 4096 条/3ms（渐进显示节奏不变）；
+                    // 上一片**没有任何输出**（纯计算：6000 次循环、读档解包、
+                    // CHEAK_NAME_ERROR 这类大扫描）-> 16384 条/10ms。频繁让路只
+                    // 白付事件循环 + QML 渲染的固定成本（offscreen 软渲染实测每
+                    // 让一次 ~100ms），纯计算期间没有任何显示进度可推进；
+                    // 10ms 的时间帽保证输入/取消仍然即时响应。
+                    const bool printed = m_runner->printedInSlice();
+                    m_runner->runSlice(printed ? 4096 : 16384, printed ? 3 : 10);
+                } else {
+                    m_runner->runToCompletion();
+                }
                 if (m_pacingEnabled && m_state->isRunning()) {
                     schedulePump();
                     break;

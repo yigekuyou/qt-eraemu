@@ -155,6 +155,24 @@ int main(int argc,char** argv) {
     EraBinaryData::Document globalSchema;globalSchema.type=EraBinaryData::FileType::Global;
     check(EraBinaryData::decodeText(textGlobal,globalSchema,document),"native GLOBAL text decodes");
     engine.reloadSaveSnapshots();run("LOADGLOBAL");check(storage.getSystemVariable("RESULT",0)==1,"native GLOBAL reload succeeds");
+    // ---- eraUpperKey 的大小写折叠语义（零分配快路径不改结果）----
+    //   · 纯 CJK 名字 toUpper() 恒等 —— 读写必须仍落同一槽位；
+    //   · 全角小写 ａ(U+FF41) 属 Ll（isLower==true），仍要正确映射到 Ａ 键
+    //    （此前「任何 >= 0x80 字符都 toUpper」改成「真含小写字母才 toUpper」，
+    //     这两条是回归面）。
+    {
+        storage.setGlobalInt1D(QStringLiteral("触手"),0,5);
+        storage.setGlobalInt1D(QStringLiteral("全角ＡＢ"),1,7);
+        check(storage.getGlobalInt1D(QStringLiteral("触手"),0)==5,
+              "eraUpperKey：纯 CJK 名字读写落同一槽位（toUpper 恒等）");
+        check(storage.getGlobalInt1D(QStringLiteral("全角ａｂ"),1)==7,
+              "eraUpperKey：全角小写 ａｂ 仍映射到 ＡＢ 键");
+        storage.setPrivateScope(QStringLiteral("函"),{QStringLiteral("私変数")});
+        check(storage.resolvedStorageName(QStringLiteral("私変数"))
+                  == QStringLiteral("函\x1f私変数"),
+              "eraUpperKey：私有作用域映射对 CJK 名字不受影响");
+        storage.setLocalContext({});
+    }
     if(argc>1) { QDir().mkpath(QString::fromLocal8Bit(argv[1]));
         QFile::copy(second.filePath("sav/save03.sav"),QString::fromLocal8Bit(argv[1])+"/engine-normal-text.sav");
         QFile::copy(second.filePath("sav/global.sav"),QString::fromLocal8Bit(argv[1])+"/engine-global-text.sav"); }

@@ -145,6 +145,10 @@ public:
     [[nodiscard]] QString scriptPath(const QString& scriptName) const;
     // 是否存在某标签（跨全部脚本）
     [[nodiscard]] bool hasLabel(const QString& label) const;
+    // 「可作为 CALL/JUMP 目标」的存在性（@函数标签）：与 resolveCallableLabel 同源，
+    // O(1)。TRY 系探针（动态 FORM 名逐个试）用它 —— 旧 hasLabel 缓存 miss 后
+    // 是 for(m_scripts) 全量扫描（eraTW @SETLIST_EXIST 一轮 2435 次探针 830ms）。
+    [[nodiscard]] bool hasCallableLabel(const QString& label) const;
 
     void setEntryPoint(const QString& label);
     QString getEntryPoint() const;
@@ -360,6 +364,18 @@ public slots:
     void switchToMemorySpace(const QString& scriptName);
 
 private:
+    // 「怎么写私有初值」是装载期静态：存储键 = FUNC\x1fNAME、声明尺寸、初值表。
+    // 每函数构建一次（首调时），applyPrivateVariableDefaults 只按计划直写 ——
+    // 旧路径每次 CALL 都按裸名走 storageName（toUpper 扫描 + 两次哈希）
+    // + ensureArraySize（又一次解析），CALL 密集的游戏每个函数调用都付。
+    struct PrivateDefaultEntry {
+        QString     storageKey;   // 复合键；复合键不在作用域映射表里，解析恒等
+        bool        isString = false;
+        int         ensureSize = 0;      // 声明尺寸（只扩不缩）
+        QList<qint64> defaultInt;
+        QStringList   defaultStr;
+    };
+    [[nodiscard]] const QList<PrivateDefaultEntry>& privateDefaultPlan(const QString& fkey);
     void buildJumpMarkings(const QString& scriptName);
 
     // expressionAstInScope / runtimeVariableReference 的共用实现。
@@ -454,6 +470,8 @@ private:
     // 装载期每插入一个脚本即失效重建。
     mutable QHash<QString, bool> m_hasLabelCache;
     QHash<QString, UserFunctionInfo> m_functions;
+    // 每函数的私有初值调用计划（loadScript/clear 时失效：新脚本可能带来新私有声明）
+    QHash<QString, QList<PrivateDefaultEntry>> m_privateDefaultPlans;
     // 名称 -> 全部声明（同名函数可重复声明；事件函数靠它做 4 组导航）
     QHash<QString, QList<LabelRef>> m_labelLists;
     ParseDiagnostics m_diagnostics;

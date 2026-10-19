@@ -274,6 +274,15 @@ int main(int argc, char* argv[]) {
         check(refs.size() == 2
                   && refs.at(0).script == "other2.ERB" && refs.at(1).script == "other3.ERB",
               "同名多份按 (脚本名, 行号) 排序固化（不再每次调用重排）");
+
+        // TRY 系探针（hasCallableLabel）：与 callLabel 同源判定，O(1)。
+        // 旧 hasLabel 是「@/$ 通吃 + 按名字缓存」，动态 FORM 名（TRYCALLFORM
+        // 逐个试）每次都缓存 miss -> for(m_scripts) 全量扫描（eraTW 的
+        // @SETLIST_EXIST 一轮 2435 次失败探针实测 830ms）。
+        check(ct.hasCallableLabel("REMOTE_FUNC"), "hasCallableLabel：@标签 -> true");
+        check(ct.hasCallableLabel("remote_func"), "hasCallableLabel：大小写无关");
+        check(!ct.hasCallableLabel("REMOTE_GOTO"), "$ 标签不可 CALL（旧路径走到 callLabel 才失败）");
+        check(!ct.hasCallableLabel("NO_SUCH_LABEL"), "未定义 -> false");
     }
 
     qDebug() << "\n=================================";

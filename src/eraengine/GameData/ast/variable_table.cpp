@@ -116,11 +116,16 @@ bool sameDeclaration(const VariableDecl& a, const VariableDecl& b) {
 
 VariableTable::DeclStatus VariableTable::addChecked(const VariableDecl& decl) {
     if (decl.name.isEmpty()) return DeclStatus::Conflict;
-    // 插入即失效 declarationsRef 缓存（缓存是整表快照，add 在装载期/单测里
-    // 都可能发生在缓存建立之后）。
+    // 插入即失效缓存（缓存是整表/每函数快照，add 在装载期/单测里都可能发生在
+    // 缓存建立之后）：declarationsRef / localsOfRef / localNamesOfRef 一并清。
+    // 装载期没有运行期调用方，缓存为空，清空是零成本的。
     const struct CacheInvalidator {
         VariableTable& t;
-        ~CacheInvalidator() { t.m_declarationsCache.clear(); }
+        ~CacheInvalidator() {
+            t.m_declarationsCache.clear();
+            t.m_localsRefCache.clear();
+            t.m_localNamesRefCache.clear();
+        }
     } invalidator{*this};
     const QString nameKey = nk(decl.name);
     if (decl.scope == VarScope::Local && !decl.function.isEmpty()) {

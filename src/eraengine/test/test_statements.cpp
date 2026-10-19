@@ -111,10 +111,22 @@ int main(int argc, char* argv[]) {
         "	TOTAL = TOTAL + 1",           // 18
         "NEXT",                           // 19
         "",                               // 20
-        "@F",                             // 21
-        "#DIM N = 7",                     // 22 函数私有初值
-        "NVAL = N",                       // 23
-        "RETURN"                          // 24
+        "CALL G",                         // 20 私有初值（第一次）
+        "CALL G",                         // 21 私有初值（第二次：应重新取初值）
+        "@F",                             // 22
+        "#DIM N = 7",                     // 23 函数私有初值
+        "NVAL = N",                       // 24
+        "RETURN",                         // 25
+        "@G",                             // 26
+        "#DIM M = 7",                     // 27 私有初值 + 调用计划回归
+        "IF CALLG == 0",                  // 28
+        "	GV_FIRST = M",               // 29 第一次进来：M 应为初值 7
+        "ELSE",                           // 30
+        "	GV_SECOND = M",              // 31 第二次进来：M 应被**重新**置回 7
+        "ENDIF",                          // 32（上一轮退出前把 M 改成了 99）
+        "CALLG = CALLG + 1",              // 33
+        "M = 99",                         // 34 弄脏 M，检验下次进函数是否重置
+        "RETURN"                          // 35
     };
     check(table.loadScript("s", buildLines(table, src)), "loadScript");
     table.setEntryPoint("MAIN");
@@ -141,6 +153,12 @@ int main(int argc, char* argv[]) {
 
     qDebug() << "\n4) 函数私有初值（每次进入函数）";
     check(storage.getGlobalInt1D("NVAL", 0) == 7, "NVAL == 7（N 初值生效）");
+    // 调用计划（装载期静态的存储键/尺寸/初值表）替代了旧的「每次 CALL 都按
+    // 裸名走 storageName + ensureArraySize」路径 —— 这里锁定逐次应用语义：
+    // 第二次进入 @G 时 M 必须重新取初值 7（上一轮把 M 改脏成 99）。
+    check(storage.getGlobalInt1D("GV_FIRST", 0) == 7, "G 首调：M 初值 7 生效");
+    check(storage.getGlobalInt1D("GV_SECOND", 0) == 7,
+          "G 二调：M 重新取初值 7（调用计划逐次应用，脏值 99 被覆盖）");
 
     qDebug() << "\n5) FOR + CONTINUE 能终止";
     check(storage.getGlobalInt1D("TOTAL", 0) == 2,

@@ -2068,7 +2068,14 @@ ExecState ScriptRunner::doCallLine(const LogicalLine& line, bool isForm, bool is
         emit errorOccurred(QStringLiteral("CALL label not found: (空)"));
         return ExecState::Error;
     }
-    if (isTry && !m_table->hasLabel(label)) {
+    // TRY 系探针：hasCallableLabel（O(1) 全局 @标签索引，与下方 callLabel 的
+    // 判定完全同源）。此前的 hasLabel 是「@/$ 通吃 + 按名字缓存」—— 动态
+    // FORM 名（TRYCALLFORM 逐个试）每次都缓存 miss，退回 for(m_scripts) 全量
+    // 扫描：eraTW 的 @SETLIST_EXIST 一轮 2435 次失败探针实测 830ms。
+    // 行为差异：只命中 $ 标签的名字，旧路径走到 callLabel 才失败（还在
+    // m_privateScopeCache 里留下每个失败名字的空作用域条目），现在直接
+    // 静默跳过 —— 净结果相同（TRY 的 CATCH/跳过语义不变）。
+    if (isTry && !m_table->hasCallableLabel(label)) {
         return tryFail();
     }
 
@@ -2205,7 +2212,9 @@ ExecState ScriptRunner::doTryListLine(const LogicalLine& line) {
             return ExecState::Continue;
         }
         // CALL/JUMP 候选：目标不存在就静默试下一个（对齐 C# callto == null -> continue）
-        if (!m_table->hasLabel(target)) continue;
+        //（hasCallableLabel 与 doCallLine 的 callLabel 同源判定；FUNC 条目按 C#
+        //  语义只能指向 @函数标签）
+        if (!m_table->hasCallableLabel(target)) continue;
         LogicalLine call = *entry;
         call.arguments[0].raw = target;
         return doCallLine(call, false, /*isTry=*/true, isJumpList, afterEnd);

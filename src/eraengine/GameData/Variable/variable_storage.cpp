@@ -279,6 +279,29 @@ void VariableStorage::ensureArraySize(const QString& name, int size, bool string
 		}
 }
 
+// 私有初值直写（调用计划）：键已解析（FUNC\x1fNAME 复合键），
+// 不再走 storageName 的作用域映射（复合键不在 m_references/m_privateNames 里，
+// 解析恒为恒等 —— 与「作用域内裸名」两种写法结果一致）。
+void VariableStorage::applyPrivateDefault(const QString& storageKey, bool isString, int ensureSize,
+                                          const QList<qint64>& defaultInt, const QStringList& defaultStr)
+{
+		if (isString) {
+			auto& values = m_globalStr1D[storageKey];
+			if (ensureSize > 0 && values.size() < ensureSize) values.resize(ensureSize);
+			for (int i = 0; i < defaultStr.size(); ++i) {
+				if (values.size() <= i) values.resize(i + 1);
+				values[i] = FlatStringValue(defaultStr.at(i));
+			}
+		} else {
+			auto& values = m_globalInt1D[storageKey];
+			if (ensureSize > 0 && values.size() < ensureSize) values.resize(ensureSize);
+			for (int i = 0; i < defaultInt.size(); ++i) {
+				if (values.size() <= i) values.resize(i + 1);
+				values[i] = defaultInt.at(i);
+			}
+		}
+}
+
 void VariableStorage::initialize(int maxCharacters, int localSize)
 {
 		Q_UNUSED(maxCharacters)

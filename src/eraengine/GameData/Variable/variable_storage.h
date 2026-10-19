@@ -74,6 +74,12 @@ public:
 		// ================= 全局整型 (支持 1D/2D/3D) =================
 		Q_INVOKABLE void setGlobalInt1D(const QString &name, int x, qint64 val);
 		Q_INVOKABLE qint64 getGlobalInt1D(const QString &name, int x) const;
+        // 私有初值直写（EraParseTable 的「调用计划」用）：storageKey 是装载期
+        // 算好的 FUNC\x1fNAME 复合键，绕开每次调用的 storageName 作用域解析。
+        // 语义与「作用域内裸名走 setGlobal{Int,Str}1D + ensureArraySize」等价：
+        // 尺寸只扩不缩、初值逐项写（必要时顺带扩容）。
+        void applyPrivateDefault(const QString& storageKey, bool isString, int ensureSize,
+                                 const QList<qint64>& defaultInt, const QStringList& defaultStr);
 		Q_INVOKABLE void setGlobalInt2D(const QString &name, int x, int y, qint64 val);
 		Q_INVOKABLE qint64 getGlobalInt2D(const QString &name, int x, int y) const;
 		Q_INVOKABLE void setGlobalInt3D(const QString &name, int x, int y, int z, qint64 val);

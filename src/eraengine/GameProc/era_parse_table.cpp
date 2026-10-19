@@ -239,6 +239,25 @@ bool EraParseTable::hasLabel(const QString& label) const {
     return found;
 }
 
+// 「可作为 CALL/JUMP 目标」的存在性判定：与 resolveCallableLabel 完全同源
+//（当前脚本必须是 @函数标签，否则查全局 @标签索引）——O(1)。
+//
+// 为什么要它：TRY 系（TRYCALL/TRYCCALLFORM/TRYJUMPLIST…）的探针用动态
+// FORM 名逐个试，eraTW 的 @SETLIST_EXIST 对每个对象类逐 ID 探测
+// `EXIST_%CLASS%{O_ID}`（实测一轮 2435 次探针、830ms —— 每次都是
+// hasLabel 缓存 miss 后的 for(m_scripts) 全量扫描）。标签表装载后不变，
+// 存在性本来就是静态的 —— 直接查全局索引。
+//
+// 与旧 hasLabel（@/$ 通吃 + 缓存）的行为差异：名字只命中 $GOTO 标签时
+// 旧路径是「通过探针 -> enterCall -> callLabel 失败 -> TRY 静默跳过」，
+// 现在直接静默跳过 —— 结果相同，还省掉了 enterCall 副作用（setPrivateScope
+// 会为每个失败名字在 m_privateScopeCache 里留一个空作用域条目）。
+bool EraParseTable::hasCallableLabel(const QString& label) const {
+    QString targetScript;
+    int targetLine = -1;
+    return resolveCallableLabel(label, targetScript, targetLine);
+}
+
 const LogicalLine* EraParseTable::lineAt(const QString& scriptName, int line) const {
     const ScriptData* data = script(scriptName);
     if (!data || line < 0 || line >= data->lines.size()) {
@@ -431,6 +450,7 @@ void EraParseTable::clear() {
     m_hasLabelCache.clear();
     m_functions.clear();
     m_labelLists.clear();
+    m_privateDefaultPlans.clear();   // 私有初值调用计划随函数表一起作废
     m_diagnostics.clear();
     m_variables.clear();
     m_entryPoint.clear();
@@ -654,6 +674,7 @@ bool EraParseTable::loadScript(const QString& scriptName, const QList<LogicalLin
 
     m_scripts.insert(scriptName, data);
     m_hasLabelCache.clear();   // 新脚本可能带来新标签
+    m_privateDefaultPlans.clear();   // 新脚本可能带来新的私有声明 -> 计划重建
 
     // 标记区：跳转标记 + 控制转移预绑定
     buildJumpMarkings(scriptName);
@@ -2795,9 +2816,34 @@ void EraParseTable::applyGlobalVariableDefaults() {
 
 void EraParseTable::applyPrivateVariableDefaults(const QString& function) {
     if (function.isEmpty()) return;
-    // localsOfRef（按函数缓存的 const 引用）：enterCall/invokeUserSystem 每次调用
-    // 都走这里，localsOf() 每次都把该函数的全部私有声明整份拷贝成新 QList。
-    applyVariableDefaults(m_variables.localsOfRef(function));
+    // 「怎么写私有初值」是装载期静态（存储键 FUNC\x1fNAME、声明尺寸、初值表），
+    // 每函数首调时构建一次计划，此后每次 CALL 只按计划直写存储 ——
+    // 旧路径每次 CALL 都按裸名走 storageName（eraUpperKey 扫描 + 两次哈希）
+    // + ensureArraySize（再解析一次）+ 逐项 setGlobal*D（每项再解析一次）。
+    // applyPrivateVariableDefaults 恒在 enterCall 之后（被调函数作用域已就位），
+    // 复合键解析与作用域无关（恒等），计划与旧路径结果一致。
+    if (!m_variableStorage) return;
+    for (const PrivateDefaultEntry& e : privateDefaultPlan(function.toUpper()))
+        m_variableStorage->applyPrivateDefault(e.storageKey, e.isString, e.ensureSize,
+                                               e.defaultInt, e.defaultStr);
+}
+
+const QList<EraParseTable::PrivateDefaultEntry>&
+EraParseTable::privateDefaultPlan(const QString& fkey) {
+    const auto cached = m_privateDefaultPlans.constFind(fkey);
+    if (cached != m_privateDefaultPlans.constEnd()) return cached.value();
+    QList<PrivateDefaultEntry> plan;
+    for (const VariableDecl& d : m_variables.localsOfRef(fkey)) {
+        if (d.isConst || !d.isPrivate || d.isReference || d.isCharaData) continue;
+        PrivateDefaultEntry e;
+        e.storageKey = fkey + QChar(0x1f) + d.name.toUpper();
+        e.isString = (d.type == OperandType::Str);
+        e.ensureSize = d.lengths.isEmpty() ? 0 : d.lengths.first();
+        e.defaultInt = d.defaultInt;
+        e.defaultStr = d.defaultStr;
+        plan.append(std::move(e));
+    }
+    return *m_privateDefaultPlans.insert(fkey, std::move(plan));
 }
 
 void EraParseTable::applyStringAssignments() {

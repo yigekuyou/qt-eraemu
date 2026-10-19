@@ -360,6 +360,13 @@ public slots:
                                              int& targetLine) const;
     // 函数私有变量初值（#DIM X = 7）——进入函数时由执行侧调用
     void applyPrivateVariableDefaults(const QString& function);
+    // 每函数的形参名集合（大写，按需构建/缓存）。「变量分词」的形参判定用：
+    // 形参的值绑定（Parameter）/ ARG 别名 / REF 引用绑定都是运行期语义，
+    // 命中形参名的变量引用无法静态定键 -> AccessKind::Dynamic。
+    // 装载期解析（parseScopedExpression）与收尾定型（applyVariableTypes）
+    // **共用同一张表** —— 收尾的赋值 AST 重建在定型趟之后跑，重建出的节点
+    // 不再回定型；若装载期不带形参表，重建节点会带上「私有数组」的错描述符。
+    const QSet<QString>* paramNamesOf(const QString& upperScope) const;
     bool returnFromCall();
     void switchToMemorySpace(const QString& scriptName);
 
@@ -470,6 +477,7 @@ private:
     // 装载期每插入一个脚本即失效重建。
     mutable QHash<QString, bool> m_hasLabelCache;
     QHash<QString, UserFunctionInfo> m_functions;
+    mutable QHash<QString, QSet<QString>> m_paramNamesByFunction;   // 形参名集合缓存（loadScript/clear 时失效）
     // 每函数的私有初值调用计划（loadScript/clear 时失效：新脚本可能带来新私有声明）
     QHash<QString, QList<PrivateDefaultEntry>> m_privateDefaultPlans;
     // 名称 -> 全部声明（同名函数可重复声明；事件函数靠它做 4 组导航）

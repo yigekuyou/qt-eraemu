@@ -228,10 +228,17 @@ public:
             QHash<QString, QVariant> parameters;
             QHash<QString, QString> privateNames;
             QHash<QString, QString> references;
+            // 当前私有作用域的**函数名**（大写）。「变量分词」的运行期守卫用：
+            // AST 节点的静态键只在「执行所在行 → stepOnce 按 ownerFunction 设
+            // 作用域」的上下文里成立；直接求值（测试装载期校验 / 调试）等
+            // 脱离行执行的场合 live 作用域可能是空的 —— 作用域名对不上就回退
+            // 完整解析（旧语义）。
+            QString privateScopeName;
         };
         LocalContext localContext() const {
             return {m_localIntVars, m_localStrVars, m_argIntVars, m_argStrVars,
-                    m_localAliases, m_parameters, m_privateNames, m_references};
+                    m_localAliases, m_parameters, m_privateNames, m_references,
+                    m_privateScopeName};
         }
         void setLocalContext(const LocalContext& context) {
             m_localIntVars = context.integers;
@@ -242,13 +249,17 @@ public:
             m_parameters = context.parameters;
             m_privateNames = context.privateNames;
             m_references = context.references;
+            m_privateScopeName = context.privateScopeName;
         }
+        // 「变量分词」守卫：当前生效的私有作用域函数名（大写；空 = 顶层）
+        [[nodiscard]] const QString& privateScopeName() const { return m_privateScopeName; }
         void setPrivateScope(const QString& function, const QStringList& names) {
             // perf：作用域只随函数名变化（声明表装载后不变）——按函数缓存构建结果，
             // 免去每次 CALL/RETURN 都对每个名字做 toUpper + 拼接 + 哈希插入。
             // 赋值不再做内容比较：QHash 赋值是 COW 的 O(1)（引用计数 +1），
             // 而 `!=` 是逐元素内容比较（O(私有变量数)），旧写法把便宜事做贵了。
             const QString fkey = function.toUpper();
+            m_privateScopeName = fkey;
             const auto it = m_privateScopeCache.constFind(fkey);
             if (it == m_privateScopeCache.constEnd()) {
                 QHash<QString, QString> next;
@@ -385,6 +396,20 @@ public:
 		Q_INVOKABLE QString getGlobalStr1D(const QString &name, int x) const;
         // 传入已经解析过作用域/REF 的内部存储键；不再次套用当前作用域。
         [[nodiscard]] QString getGlobalStr1DRaw(const QString& storageKey, int x) const;
+        // 键已解析的 getStringSlot：返回值**带 markup 分片**（HTML 累积/打印模板靠它）
+        [[nodiscard]] FlatStringValue getStringSlotRaw(const QString& storageKey, const QList<int>& indices) const;
+        // Raw 访问族（装载期「变量分词」的运行期直取路径用）：键是收尾期算好的
+        // 静态存储键（私有名 = FUNC\x1fNAME 复合键）。越界/缺槽返回 0/空串，
+        // 写入侧按需扩容 —— 与按名访问的 get/setGlobal*D 语义一致，只是省掉
+        // 每次访问的 storageName 解析（eraUpperKey 扫描 + 两次哈希）。
+        [[nodiscard]] qint64 getGlobalInt1DRaw(const QString& storageKey, int x) const;
+        [[nodiscard]] qint64 getGlobalInt2DRaw(const QString& storageKey, int x, int y) const;
+        [[nodiscard]] qint64 getGlobalInt3DRaw(const QString& storageKey, int x, int y, int z) const;
+        [[nodiscard]] QString getGlobalStr2DRaw(const QString& storageKey, int x, int y) const;
+        [[nodiscard]] QString getGlobalStr3DRaw(const QString& storageKey, int x, int y, int z) const;
+        void setGlobalInt1DRaw(const QString& storageKey, int x, qint64 value);
+        void setGlobalInt2DRaw(const QString& storageKey, int x, int y, qint64 value);
+        void setGlobalInt3DRaw(const QString& storageKey, int x, int y, int z, qint64 value);
 		Q_INVOKABLE void setGlobalStr2D(const QString &name, int x, int y, const QString &value);
 		Q_INVOKABLE QString getGlobalStr2D(const QString &name, int x, int y) const;
 
@@ -443,6 +468,7 @@ private:
         QHash<QString, QString> m_references;
         // setPrivateScope 的按函数缓存（function(upper) -> name(upper) -> storage key）
         QHash<QString, QHash<QString, QString>> m_privateScopeCache;
+        QString m_privateScopeName;   // 当前生效的私有作用域函数名（大写）
 		QList<qint64> m_localIntVars;
 		QList<qint64> m_argIntVars;   // ARG（与 LOCAL 分离）
 		QList<FlatStringValue> m_localStrVars;

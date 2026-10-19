@@ -849,6 +849,60 @@ int main(int argc, char* argv[]) {
         check(render("PRINTV '{A}%A%") == "{A}%A%", "PRINTV apostrophe text does not expand FORM");
     }
 
+    // 12) 变量分词的访问描述符（装载期静态解析 -> 运行期直取）
+    //     这是「运行期名字解析搬到装载期」的行为锁：kind/键错了会直接造成
+    //     读写槽位错位（头文件全局曾被误判成复合键、系统名 COUNT 曾被私有声明
+    //     遮蔽、字符串曾丢 markup —— 全部是本节要锁住的回归面）。
+    qDebug() << "\n12) 变量分词的访问描述符";
+    {
+        table.loadScript("va.ERH",
+                         buildLines(table, {"#DIM VA_HDR2, 3, 4", "#DIMS VA_HDRS, 3"}), true);
+        table.loadScript("va.ERB", buildLines(table, {
+            "; 顶层注释（函数外：ownerFunction 为空）",   // 0
+            "@VAFN(VAP1)",                             // 1
+            "#DIM VAP1",                               // 2
+            "#DIM VAPRIV, 5",                          // 3
+            "#DIMS VASPRIV, 2",                        // 4
+            "RETURN",                                   // 5
+        }));
+        table.markLoadComplete();
+        // 定型后的 expressionAst 按「当前 PC 行的 ownerFunction」取作用域 ——
+        // 把 PC 指到目标函数体内/函数外来模拟行归属。
+        // runtimeVariableReference：收尾后允许解析的入口（GETVAR/SETVAR 同款），
+        // 作用域 = 当前 PC 行的 ownerFunction —— 把 PC 指到目标函数内/外来模拟行归属。
+        const auto accessOf = [&table](const QString& expr, int pcLine) -> const VariableNode* {
+            table.setPosition(QStringLiteral("va.ERB"), pcLine, false);
+            const auto ast = table.runtimeVariableReference(expr);
+            return ast && ast->kind() == NodeKind::Variable
+                ? static_cast<const VariableNode*>(ast.data()) : nullptr;
+        };
+        const auto* priv = accessOf("VAPRIV:1", 3);
+        check(priv && priv->accessKind == VariableNode::AccessKind::GlobalInt1
+                  && priv->accessKey == QStringLiteral("VAFN\x1FVAPRIV"),
+              "函数私有 int 数组 -> GlobalInt1 + 复合键");
+        const auto* privs = accessOf("VASPRIV:0", 3);
+        check(privs && privs->accessKind == VariableNode::AccessKind::GlobalStr1
+                  && privs->accessKey == QStringLiteral("VAFN\x1FVASPRIV"),
+              "函数私有 str 数组 -> GlobalStr1 + 复合键");
+        const auto* hdr2 = accessOf("VA_HDR2:1:2", 0);
+        check(hdr2 && hdr2->accessKind == VariableNode::AccessKind::GlobalInt2
+                  && hdr2->accessKey == QStringLiteral("VA_HDR2"),
+              "头文件级 #DIM 2 维 -> GlobalInt2 + 裸键（不进作用域映射）");
+        const auto* param = accessOf("VAP1", 3);
+        check(param && param->accessKind == VariableNode::AccessKind::Dynamic,
+              "形参名 -> Dynamic（值绑定/别名/REF 都是运行期语义）");
+        const auto* sys = accessOf("COUNT", 0);
+        check(sys && sys->accessKind == VariableNode::AccessKind::Dynamic,
+              "系统槽名 COUNT -> Dynamic（旧路 hasSystemVariable 优先，私有声明遮蔽不了）");
+        const auto* local = accessOf("LOCAL:3", 0);
+        check(local && local->accessKind == VariableNode::AccessKind::LocalSlot,
+              "LOCAL -> LocalSlot（槽位直取）");
+        const auto* undecl = accessOf("VA_UNDEF:0", 0);
+        check(undecl && undecl->accessKind == VariableNode::AccessKind::GlobalInt1
+                  && undecl->accessKey == QStringLiteral("VA_UNDEF"),
+              "未声明名 -> GlobalInt1 + 裸键（与运行期裸槽一致）");
+    }
+
     // 11) DEBUGPRINT 族：**实参形态**与 PRINT 族同规则（按后缀走 Literal/FormStr/
     //     StrExpression），但**执行路径不同** —— 它写调试日志、不进游戏画面。
     //     若 isPrintFamily 把它也算进去，执行链会先命中 handlePrintInstruction，

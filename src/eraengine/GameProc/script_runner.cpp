@@ -757,11 +757,23 @@ ExecState ScriptRunner::executeLine(const LogicalLine& line) {
         if (f) {
             // The body may change the counter (e.g. recheck a shifted Tetris row).
             const Operand& counter = f->counter;
-            QString counterName;
-            QList<int> counterIndices;
-            extractVarRef(counter, counterName, counterIndices);
-            f->value = std::bit_cast<qint64>(quint64(readIntVar(counterName, counterIndices)) + quint64(f->step));
-            writeLoopCounter(f->counter, f->value);
+            if (counter.ast && counter.ast->kind() == NodeKind::Variable) {
+                // 装载期分词的快路径：FOR 计数器（LOCAL / 用户私有/全局数组）的
+                // 访问方式在收尾期已解析成 kind + 静态键，NEXT 每次迭代直取，
+                // 不再按名字走 eraUpperKey + hasParameter + 角色/系统变量表。
+                const auto& variable = static_cast<const VariableNode&>(*counter.ast);
+                const QList<int> counterIndices =
+                    getEvaluator().resolveIndices(variable, m_storage, baseData());
+                f->value = std::bit_cast<qint64>(
+                    quint64(readIntVarAccess(variable, counterIndices)) + quint64(f->step));
+                writeIntVarAccess(variable, counterIndices, f->value);
+            } else {
+                QString counterName;
+                QList<int> counterIndices;
+                extractVarRef(counter, counterName, counterIndices);
+                f->value = std::bit_cast<qint64>(quint64(readIntVar(counterName, counterIndices)) + quint64(f->step));
+                writeLoopCounter(f->counter, f->value);
+            }
             const bool more = (f->step > 0 && f->value < f->end) || (f->step < 0 && f->value > f->end);
             if (more) {
                 gotoLine(f->startLine + 1);
@@ -779,12 +791,21 @@ ExecState ScriptRunner::executeLine(const LogicalLine& line) {
             && m_loops.last().script == script) {
             const LoopFrame f = m_loops.takeLast();
             if (f.kind == LoopFrame::Kind::Repeat || f.kind == LoopFrame::Kind::For) {
-                Operand counter = f.counter;
-                QString counterName;
-                QList<int> indices;
-                extractVarRef(counter, counterName, indices);
-                writeIntVar(counterName, indices, std::bit_cast<qint64>(
-                    quint64(readIntVar(counterName, indices)) + quint64(f.step)));
+                const Operand& counter = f.counter;
+                if (counter.ast && counter.ast->kind() == NodeKind::Variable) {
+                    // 分词快路径（与 NEXT 同款）
+                    const auto& variable = static_cast<const VariableNode&>(*counter.ast);
+                    const QList<int> indices =
+                        getEvaluator().resolveIndices(variable, m_storage, baseData());
+                    writeIntVarAccess(variable, indices, std::bit_cast<qint64>(
+                        quint64(readIntVarAccess(variable, indices)) + quint64(f.step)));
+                } else {
+                    QString counterName;
+                    QList<int> indices;
+                    extractVarRef(counter, counterName, indices);
+                    writeIntVar(counterName, indices, std::bit_cast<qint64>(
+                        quint64(readIntVar(counterName, indices)) + quint64(f.step)));
+                }
             }
             gotoLine(f.endLine >= 0 ? f.endLine + 1 : pc + 1);
         } else {
@@ -2361,6 +2382,72 @@ void ScriptRunner::writeIntVar(const QString& name, int index, qint64 value) {
     writeIntVar(name, QList<int>{index}, value);
 }
 
+// 按装载期分词的访问描述符读写整型变量（FOR/NEXT 计数器路径）。
+// kind == Dynamic 时回退按名解析（readIntVar/writeIntVar 的旧路）。
+qint64 ScriptRunner::readIntVarAccess(const VariableNode& node, const QList<int>& indices) const
+{
+    switch (node.accessKind) {
+    case VariableNode::AccessKind::GlobalInt1:
+        return m_storage->getGlobalInt1DRaw(node.accessKey, indices.value(0));
+    case VariableNode::AccessKind::GlobalInt2:
+    case VariableNode::AccessKind::GlobalInt3:
+        if (indices.size() >= 2) {
+            if (node.accessKind == VariableNode::AccessKind::GlobalInt3 && indices.size() >= 3)
+                return m_storage->getGlobalInt3DRaw(node.accessKey, indices.at(0), indices.at(1), indices.at(2));
+            return m_storage->getGlobalInt2DRaw(node.accessKey, indices.at(0), indices.at(1));
+        }
+        return m_storage->getGlobalInt1DRaw(node.accessKey, indices.value(0));
+    case VariableNode::AccessKind::LocalSlot:
+        return m_storage->getLocalInt(indices.value(0));
+    case VariableNode::AccessKind::ArgSlot:
+        return m_storage->getArgInt(indices.value(0));
+    case VariableNode::AccessKind::Dynamic:
+    case VariableNode::AccessKind::GlobalStr1:
+    case VariableNode::AccessKind::GlobalStr2:
+    case VariableNode::AccessKind::GlobalStr3:
+    case VariableNode::AccessKind::LocalStr:
+    case VariableNode::AccessKind::ArgStr:
+    default:
+        return readIntVar(node.name(), indices);
+    }
+}
+
+void ScriptRunner::writeIntVarAccess(const VariableNode& node, const QList<int>& indices, qint64 value)
+{
+    switch (node.accessKind) {
+    case VariableNode::AccessKind::GlobalInt1:
+        m_storage->setGlobalInt1DRaw(node.accessKey, indices.value(0), value);
+        return;
+    case VariableNode::AccessKind::GlobalInt2:
+    case VariableNode::AccessKind::GlobalInt3:
+        if (indices.size() >= 2) {
+            if (node.accessKind == VariableNode::AccessKind::GlobalInt3 && indices.size() >= 3) {
+                m_storage->setGlobalInt3DRaw(node.accessKey, indices.at(0), indices.at(1), indices.at(2), value);
+                return;
+            }
+            m_storage->setGlobalInt2DRaw(node.accessKey, indices.at(0), indices.at(1), value);
+            return;
+        }
+        m_storage->setGlobalInt1DRaw(node.accessKey, indices.value(0), value);
+        return;
+    case VariableNode::AccessKind::LocalSlot:
+        m_storage->setLocalInt(indices.value(0), value);
+        return;
+    case VariableNode::AccessKind::ArgSlot:
+        m_storage->setArgInt(indices.value(0), value);
+        return;
+    case VariableNode::AccessKind::Dynamic:
+    case VariableNode::AccessKind::GlobalStr1:
+    case VariableNode::AccessKind::GlobalStr2:
+    case VariableNode::AccessKind::GlobalStr3:
+    case VariableNode::AccessKind::LocalStr:
+    case VariableNode::AccessKind::ArgStr:
+    default:
+        writeIntVar(node.name(), indices, value);
+        return;
+    }
+}
+
 void ScriptRunner::writeIntVar(const QString& name, const QList<int>& indices, qint64 value) {
     if (m_storage->hasParameter(name)) { m_storage->setParameter(name, value); return; }
     // 角色数据变量：按 (角色号, 元素下标) 写入（否则同一角色的元素互相覆盖）
@@ -2416,9 +2503,10 @@ void ScriptRunner::writeLoopCounter(const QString& rawName, qint64 value) {
 }
 
 void ScriptRunner::writeLoopCounter(const Operand& counter, qint64 value) {
-    QString name;
-    QList<int> indices;
-    if (extractVarRef(counter, name, indices)) writeIntVar(name, indices, value);
+    if (!counter.ast || counter.ast->kind() != NodeKind::Variable) return;
+    const auto& variable = static_cast<const VariableNode&>(*counter.ast);
+    const QList<int> indices = getEvaluator().resolveIndices(variable, m_storage, baseData());
+    writeIntVarAccess(variable, indices, value);
 }
 
 void ScriptRunner::bindArguments(const UserFunctionDecl* info, const QList<Operand>& callArgs,

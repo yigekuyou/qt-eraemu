@@ -209,8 +209,12 @@ QSharedPointer<ExpressionNode> EraParseTable::parseScopedExpression(const QStrin
     }
     QSharedPointer<ExpressionNode> ast = parser.parse(tokens);
     if (ast) {
-        // 立即按变量表定型（新解析的 AST 也保持强类型）
-        VariableTable::applyTypes(*ast, m_variables, scope);
+        // 立即按变量表定型（新解析的 AST 也保持强类型）。**带形参表**：
+        // 「变量分词」的描述符在这里就算 —— 收尾定型（applyVariableTypes）之后
+        // 还有赋值 AST 重建等再解析路径，那些节点不会再回定型趟，
+        // 形参名必须在此处就判成 Dynamic（否则形参读会被标成私有数组）。
+        VariableTable::applyTypes(*ast, m_variables, scope,
+                                  paramNamesOf(scope.toUpper()));
     }
     PrintTemplateCompiler::prepare(ast);
     return ast;
@@ -256,6 +260,21 @@ bool EraParseTable::hasCallableLabel(const QString& label) const {
     QString targetScript;
     int targetLine = -1;
     return resolveCallableLabel(label, targetScript, targetLine);
+}
+
+// 每函数的形参名集合（大写）。按需构建并缓存；失效点 = clear()/loadScript
+//（新脚本可能带来新的 @label 形参）。「变量分词」的装载期解析与收尾定型共用。
+// 收尾定型（applyVariableTypes）的并行趟开始前会先建全 —— 定型期间只读不插。
+const QSet<QString>* EraParseTable::paramNamesOf(const QString& upperScope) const
+{
+    // **只查不插**：并行装载的 worker（逐行解析表达式）与收尾定型趟
+    //（按脚本并行）都会走到这里 —— 任何按需插入都是共享 QHash 上的竞态
+    //（eraMegaten 2260 脚本并行装载实测崩溃）。集合在两处构建：
+    //   · loadScript 注册函数时（与 m_functions.insert 同点、同线程纪律）；
+    //   · applyVariableTypes 并行趟开始前（收尾前的兜底，覆盖一切）。
+    // miss（函数未知/顶层空作用域）返回 nullptr —— 与「该函数没有形参」等价。
+    const auto it = m_paramNamesByFunction.constFind(upperScope);
+    return it != m_paramNamesByFunction.constEnd() ? &it.value() : nullptr;
 }
 
 const LogicalLine* EraParseTable::lineAt(const QString& scriptName, int line) const {
@@ -451,6 +470,7 @@ void EraParseTable::clear() {
     m_functions.clear();
     m_labelLists.clear();
     m_privateDefaultPlans.clear();   // 私有初值调用计划随函数表一起作废
+    m_paramNamesByFunction.clear();  // 形参名集合随函数表一起作废
     m_diagnostics.clear();
     m_variables.clear();
     m_entryPoint.clear();
@@ -656,6 +676,13 @@ bool EraParseTable::loadScript(const QString& scriptName, const QList<LogicalLin
                 // C# 也是 first-wins，故静默忽略后者（不产生告警）。
                 if (!m_functions.contains(decl.name)) {
                     m_functions.insert(decl.name, decl);
+                    // 「变量分词」的形参名集合与函数表同点构建（append-only；
+                    // 查找端 paramNamesOf 只读不插 —— 并行装载/收尾趟安全）。
+                    QSet<QString> paramNames;
+                    paramNames.reserve(decl.params.size());
+                    for (const UserParamDecl& p : decl.params)
+                        paramNames.insert(p.name.toUpper());
+                    m_paramNamesByFunction.insert(decl.name, std::move(paramNames));
                 }
 
                 // 保留全部声明（事件函数的 4 组导航需要；同名多份）
@@ -675,6 +702,9 @@ bool EraParseTable::loadScript(const QString& scriptName, const QList<LogicalLin
     m_scripts.insert(scriptName, data);
     m_hasLabelCache.clear();   // 新脚本可能带来新标签
     m_privateDefaultPlans.clear();   // 新脚本可能带来新的私有声明 -> 计划重建
+    // 注意：m_paramNamesByFunction **不在**这里清 —— 它是 append-only（注册点
+    // 插入、first-wins 同 m_functions），在此清会把本次装载刚注册的函数集合
+    // 一并抹掉（多脚本装载只剩最后一个脚本有集合）。整表清空在 clear() 里做。
 
     // 标记区：跳转标记 + 控制转移预绑定
     buildJumpMarkings(scriptName);
@@ -1577,22 +1607,29 @@ void EraParseTable::applyVariableTypes() {
         scripts.append(&it.value());
     }
 
+    // 形参名集合在 loadScript 注册函数时已同点建好（append-only）；这里只对
+    // **顶层空作用域**补一个空集合（函数外没有形参），并行定型趟从此只读。
+    m_paramNamesByFunction.insert(QString(), {});
+
     const auto processScript = [this](ScriptData* sd) {
         // 同一节点可能被多行/多片段引用（模板分词、DEFAULT 列表…）：每个作用域
         // 只定型一次（与旧「按 ownerFunction 建缓存」等价）。行按所属函数连续存放，
         // 因此只在作用域切换时查表，避免逐行 toUpper + 哈希。
         QHash<QString, QSet<const ExpressionNode*>> typed;
         QSet<const ExpressionNode*>* seen = nullptr;
+        const QSet<QString>* paramNames = nullptr;
         QString scope;
         for (LogicalLine& line : sd->lines) {
             if (!seen || line.ownerFunction != scope) {
                 scope = line.ownerFunction;
-                seen = &typed[scope.toUpper()];
+                const QString scopeKey = scope.toUpper();
+                seen = &typed[scopeKey];
+                paramNames = paramNamesOf(scopeKey);
             }
-            const auto bind = [this, seen, &scope](QSharedPointer<ExpressionNode>& ast) {
+            const auto bind = [this, seen, &scope, paramNames](QSharedPointer<ExpressionNode>& ast) {
                 if (!ast || seen->contains(ast.data())) return;
                 seen->insert(ast.data());
-                VariableTable::applyTypes(*ast, m_variables, scope);
+                VariableTable::applyTypes(*ast, m_variables, scope, paramNames);
                 PrintTemplateCompiler::prepare(ast);
             };
             for (auto& op : line.arguments) bind(op.ast);

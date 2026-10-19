@@ -143,6 +143,26 @@ public:
     bool characterData = false;
     bool readOnly = false;
     QList<int> lengths;
+    // ---- 装载期「分词」出的访问描述符 ----
+    // 名字 -> 存储键/槽位 的解析（eraUpperKey 扫描、m_references/m_privateNames、
+    // 系统变量名链、形参表）此前每次运行期读写都要重来一遍；而执行到本节点时的
+    // 私有作用域由 stepOnce 按 line.ownerFunction 决定 —— 对节点而言是**静态的**。
+    // 收尾定型（walkApply）时一次算成 kind + accessKey，运行期直接分派。
+    // kind == Dynamic（形参/REF/角色变量/常数/系统变量/伪变量）回退旧路，语义不变。
+    // accessKey：私有名 = FUNC\x1fNAME 复合键；其余 = 大写裸名（与运行期
+    // storageName 在该行作用域下的解析结果恒等）。
+    enum class AccessKind : quint8 {
+        Dynamic = 0,
+        GlobalInt1, GlobalInt2, GlobalInt3,   // 用户全局/私有数组（含未声明名）
+        GlobalStr1, GlobalStr2, GlobalStr3,
+        LocalSlot, ArgSlot,                   // LOCAL / ARG 整型槽位
+        LocalStr, ArgStr,                     // LOCALS / ARGS 字符串槽位
+    };
+    AccessKind accessKind = AccessKind::Dynamic;
+    QString accessKey;
+    // 描述符生效的私有作用域（大写函数名）。运行期守卫：live 作用域与此不符
+    //（脱离行执行的直接求值）时回退完整解析。
+    QString accessScopeKey;
     [[nodiscard]] bool isArray() const { return !m_indices.isEmpty(); }
 
     void addIndex(QSharedPointer<ExpressionNode> index);

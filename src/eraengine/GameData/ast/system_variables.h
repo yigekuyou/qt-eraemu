@@ -23,6 +23,8 @@
 #include <string_view>
 #include <unordered_map>
 #include <algorithm>
+#include <QSet>
+#include <QString>
 #include "operand_type.h"
 
 // ---------------------------------------------------------------------------
@@ -253,6 +255,33 @@ findExtensionSystemVariable(std::string_view name) {
 [[nodiscard]] inline int extensionDefault1DSizeOf(std::string_view name) {
     const ExtensionVariableDef* d = findExtensionSystemVariable(name);
     return d ? d->size1D : 0;
+}
+
+// 「有存储通道」的系统变量名单（大写）。VariableStorage::hasSystemVariable 与
+// 装载期「变量分词」（computeVariableAccess）**共用同一份**：
+//   · 运行期读写对这些名字一律先走系统槽（readLhs/writeLhs/evaluateVariable 的
+//     旧路径都是 hasSystemVariable 优先）——即便脚本里又有 #DIM/VARI 的同名
+//     私有声明，也遮蔽不了系统槽；
+//   · 分词期对命中名单的名字判 AccessKind::Dynamic（回退完整解析），
+//     静态声明表命中与否都不下结论，否则读写两侧的槽位会对不上。
+// **新增系统变量必须同步这里**（此前注释在 variable_storage.cpp，两处不同源）。
+inline const QSet<QString>& systemStorageNames()
+{
+    static const QSet<QString> kNames = {
+        QStringLiteral("DAY"),QStringLiteral("MONEY"),QStringLiteral("TIME"),
+        QStringLiteral("ITEM"),QStringLiteral("ITEMSALES"),QStringLiteral("ITEMPRICE"),
+        QStringLiteral("NOITEM"),QStringLiteral("BOUGHT"),QStringLiteral("PBAND"),
+        QStringLiteral("FLAG"),QStringLiteral("TFLAG"),QStringLiteral("TARGET"),
+        QStringLiteral("MASTER"),QStringLiteral("PLAYER"),QStringLiteral("ASSI"),
+        QStringLiteral("ASSIPLAY"),QStringLiteral("UP"),QStringLiteral("DOWN"),
+        QStringLiteral("LOSEBASE"),QStringLiteral("PALAMLV"),QStringLiteral("EXPLV"),
+        QStringLiteral("EJAC"),QStringLiteral("PREVCOM"),QStringLiteral("SELECTCOM"),
+        QStringLiteral("NEXTCOM"),QStringLiteral("RESULT"),QStringLiteral("COUNT"),
+        QStringLiteral("A"),QStringLiteral("B"),QStringLiteral("C"),
+        QStringLiteral("CHARANUM"),QStringLiteral("LASTLOAD_NO"),
+        QStringLiteral("LASTLOAD_VERSION")
+    };
+    return kNames;
 }
 
 } // namespace sysvar

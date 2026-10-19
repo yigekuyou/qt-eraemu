@@ -1717,10 +1717,9 @@ bool ExecutionEngine::executeInstruction(const LogicalLine& line) {
         if (args.size() < 2 || !args.at(1).ast) return true;
         const ExpressionNode* target = args.at(0).ast.data();
         if (!target || target->kind() != NodeKind::Variable) return true;
-        if (name == QLatin1String("VARS")) {
-            return handleStringAssignment(target, args.at(1).raw, args.at(1).ast, line.ownerFunction);
-        }
-        return handleAssignment(target, args.at(1).raw, args.at(1).ast, {}, line.ownerFunction);
+        return name == QLatin1String("VARS")
+            ? handleStringAssignment(target, args.at(1).raw, args.at(1).ast, line.ownerFunction)
+            : handleAssignment(target, args.at(1).raw, args.at(1).ast, {}, line.ownerFunction);
     }
 
     // ---- 扩展注册类（普通语句形态：扩展语句在这里分发）----

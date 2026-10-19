@@ -213,6 +213,9 @@ private:
     [[nodiscard]] qint64 readIntVar(const QString& name, int index) const;
     [[nodiscard]] qint64 readIntVar(const QString& name, const QList<int>& indices) const;
     void writeIntVar(const QString& name, const QList<int>& indices, qint64 value);
+    // 装载期分词的访问描述符版本（FOR/NEXT 计数器路径；Dynamic 回退按名解析）
+    [[nodiscard]] qint64 readIntVarAccess(const VariableNode& node, const QList<int>& indices) const;
+    void writeIntVarAccess(const VariableNode& node, const QList<int>& indices, qint64 value);
     // SELECTCASE 的 CASE 匹配：支持 `v1, v2` / `IS >= n` / `a TO b`
     [[nodiscard]] bool caseMatches(const LogicalLine& caseLine,
                                    const QVariant& valueVar, bool valueIsStr);

@@ -1244,6 +1244,95 @@ qint64 VariableStorage::getGlobalInt1D(const QString &name, int x) const
 		return 0;
 }
 
+// ================= Raw 访问族（键已解析；见 variable_storage.h 说明） =================
+qint64 VariableStorage::getGlobalInt1DRaw(const QString& storageKey, int x) const
+{
+		if (x < 0) return 0;
+		const auto it = m_globalInt1D.constFind(storageKey);
+		if (it != m_globalInt1D.constEnd() && x < it.value().size()) return it.value().at(x);
+		return 0;
+}
+
+qint64 VariableStorage::getGlobalInt2DRaw(const QString& storageKey, int x, int y) const
+{
+		if (x < 0 || y < 0) return 0;
+		const auto it = m_globalInt2D.constFind(storageKey);
+		if (it != m_globalInt2D.constEnd() && x < it.value().size()) {
+				const auto& vec = it.value().at(x);
+				if (y < vec.size()) return vec.at(y);
+		}
+		return 0;
+}
+
+qint64 VariableStorage::getGlobalInt3DRaw(const QString& storageKey, int x, int y, int z) const
+{
+		if (x < 0 || y < 0 || z < 0) return 0;
+		const auto it = m_globalInt3D.constFind(storageKey);
+		if (it != m_globalInt3D.constEnd() && x < it.value().size()) {
+				const auto& plane = it.value().at(x);
+				if (y < plane.size()) {
+						const auto& vec = plane.at(y);
+						if (z < vec.size()) return vec.at(z);
+				}
+		}
+		return 0;
+}
+
+QString VariableStorage::getGlobalStr2DRaw(const QString& storageKey, int x, int y) const
+{
+		if (x < 0 || y < 0) return QString();
+		const auto it = m_globalStr2D.constFind(storageKey);
+		if (it != m_globalStr2D.constEnd() && x < it.value().size()) {
+				const auto& vec = it.value().at(x);
+				if (y < vec.size()) return vec.at(y).text;
+		}
+		return QString();
+}
+
+QString VariableStorage::getGlobalStr3DRaw(const QString& storageKey, int x, int y, int z) const
+{
+		if (x < 0 || y < 0 || z < 0) return QString();
+		const auto it = m_globalStr3D.constFind(storageKey);
+		if (it != m_globalStr3D.constEnd() && x < it.value().size()) {
+				const auto& plane = it.value().at(x);
+				if (y < plane.size()) {
+						const auto& vec = plane.at(y);
+						if (z < vec.size()) return vec.at(z).text;
+				}
+		}
+		return QString();
+}
+
+void VariableStorage::setGlobalInt1DRaw(const QString& storageKey, int x, qint64 value)
+{
+		if (x < 0) return;
+		auto& vec = m_globalInt1D[storageKey];
+		if (vec.size() <= x) vec.resize(x + 1, 0);
+		vec[x] = value;
+}
+
+void VariableStorage::setGlobalInt2DRaw(const QString& storageKey, int x, int y, qint64 value)
+{
+		if (x < 0 || y < 0) return;
+		auto& grid2D = m_globalInt2D[storageKey];
+		if (grid2D.size() <= x) grid2D.resize(x + 1);
+		auto& vec = grid2D[x];
+		if (vec.size() <= y) vec.resize(y + 1, 0);
+		vec[y] = value;
+}
+
+void VariableStorage::setGlobalInt3DRaw(const QString& storageKey, int x, int y, int z, qint64 value)
+{
+		if (x < 0 || y < 0 || z < 0) return;
+		auto& cube = m_globalInt3D[storageKey];
+		if (cube.size() <= x) cube.resize(x + 1);
+		auto& plane = cube[x];
+		if (plane.size() <= y) plane.resize(y + 1);
+		auto& vec = plane[y];
+		if (vec.size() <= z) vec.resize(z + 1, 0);
+		vec[z] = value;
+}
+
 void VariableStorage::setGlobalInt2D(const QString &name, int x, int y, qint64 val)
 {
 		if (x < 0 || y < 0) return;
@@ -1319,14 +1408,12 @@ bool VariableStorage::loadVariables(const QString &path)
 // ================= System Variable Access by Name =================
 bool VariableStorage::hasSystemVariable(const QString &name) const
 {
-		// 与解析期同源的「有存储通道的系统变量」名单。**新增系统变量必须两处都加**：
+		// 「有存储通道的系统变量」名单与装载期变量分词共用同一份
+		//（sysvar::systemStorageNames —— **新增系统变量必须同步那里**）：
 		// 漏在这里会让运行期把它当成用户全局变量（退回 m_globalInt1D）——
 		// ITEMPRICE 就是这样变成恒 0 的（装载期写常量容器、读取走用户全局槽）。
-		static const QSet<QString> kNames = {
-QStringLiteral("DAY"),QStringLiteral("MONEY"),QStringLiteral("TIME"),QStringLiteral("ITEM"),QStringLiteral("ITEMSALES"),QStringLiteral("ITEMPRICE"),QStringLiteral("NOITEM"),QStringLiteral("BOUGHT"),QStringLiteral("PBAND"),QStringLiteral("FLAG"),QStringLiteral("TFLAG"),QStringLiteral("TARGET"),QStringLiteral("MASTER"),QStringLiteral("PLAYER"),QStringLiteral("ASSI"),QStringLiteral("ASSIPLAY"),QStringLiteral("UP"),QStringLiteral("DOWN"),QStringLiteral("LOSEBASE"),QStringLiteral("PALAMLV"),QStringLiteral("EXPLV"),QStringLiteral("EJAC"),QStringLiteral("PREVCOM"),QStringLiteral("SELECTCOM"),QStringLiteral("NEXTCOM"),QStringLiteral("RESULT"),QStringLiteral("COUNT"),QStringLiteral("A"),QStringLiteral("B"),QStringLiteral("C"),QStringLiteral("CHARANUM"),QStringLiteral("LASTLOAD_NO"),QStringLiteral("LASTLOAD_VERSION")
-		};
 		// 先经 REF 形参别名解析（`#DIM REF X` ← 系统变量实参），再判名。
-		return kNames.contains(systemVariableName(name));
+		return sysvar::systemStorageNames().contains(systemVariableName(name));
 }
 
 qint64 VariableStorage::getSystemVariable(const QString &name, int index) const
@@ -1662,6 +1749,22 @@ FlatStringValue VariableStorage::getStringSlot(const QString& name, const QList<
     if (indices.size() >= 2) return m_globalStr2D.value(key).value(x).value(y);
     return m_globalStr1D.value(key).value(x);
 }
+
+// 键已解析的 getStringSlot（「变量分词」快路径用）：跳过 storageName，其余分派
+// 与 getStringSlot 一致。**必须返回 FlatStringValue（带 markup 分片）** —— HTML
+// 累积（html += HTML_BUTTON(...)）与打印模板都靠 markup，不能只回裸文本。
+// 角色/系统字符串名（CSTR/SAVEDATA_TEXT…）在分词期已判 Dynamic，不进这里。
+FlatStringValue VariableStorage::getStringSlotRaw(const QString& storageKey, const QList<int>& indices) const {
+    const int x = indices.value(0), y = indices.value(1), z = indices.value(2);
+    if (x < 0 || y < 0 || z < 0) return {};
+    if (storageKey == QLatin1String("LOCALS")) return m_localStrVars.value(x);
+    if (storageKey == QLatin1String("ARGS")) return m_argStrVars.value(x);
+    if (storageKey == QLatin1String("SAVEDATA_TEXT")) return m_systemStrVars.value(storageKey);
+    if (indices.size() >= 3) return m_globalStr3D.value(storageKey).value(x).value(y).value(z);
+    if (indices.size() >= 2) return m_globalStr2D.value(storageKey).value(x).value(y);
+    return m_globalStr1D.value(storageKey).value(x);
+}
+
 bool VariableStorage::setStringSlot(const QString& name, const QList<int>& indices, const FlatStringValue& value) {
     const QString key = storageName(name);
     const int x = indices.value(0), y = indices.value(1), z = indices.value(2);

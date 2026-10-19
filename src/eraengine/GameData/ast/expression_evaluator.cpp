@@ -553,6 +553,59 @@ bool ExpressionEvaluator::assignVariable(const VariableNode& node, VariableStora
     if (!storage) {
         return false;
     }
+    // 装载期分词的快路径（语义镜像旧路：见 evaluateVariable 的同款注释）。
+    // 守卫同 evaluateVariable：live 作用域不符 -> 回退完整解析。
+    const VariableNode::AccessKind access =
+        (storage->privateScopeName() == node.accessScopeKey)
+            ? node.accessKind : VariableNode::AccessKind::Dynamic;
+    switch (access) {
+    case VariableNode::AccessKind::Dynamic:
+        break;
+    case VariableNode::AccessKind::GlobalInt1:
+    case VariableNode::AccessKind::GlobalInt2:
+    case VariableNode::AccessKind::GlobalInt3:
+    case VariableNode::AccessKind::GlobalStr1:
+    case VariableNode::AccessKind::GlobalStr2:
+    case VariableNode::AccessKind::GlobalStr3: {
+        // ++/-- 的写回按维数分派；多维名只给一个下标/裸名时与旧路一致落 1 维
+        //（字符串变量的 ++ 同旧路：写整型槽，无实义但保持行为一致）。
+        if ((node.accessKind == VariableNode::AccessKind::GlobalInt2
+             || node.accessKind == VariableNode::AccessKind::GlobalStr2
+             || node.accessKind == VariableNode::AccessKind::GlobalInt3
+             || node.accessKind == VariableNode::AccessKind::GlobalStr3)
+            && node.indices().size() >= 2) {
+            const int x = int(resolveIndex(node, 0, storage, gameBaseData));
+            const int y = int(resolveIndex(node, 1, storage, gameBaseData));
+            const bool is3 = (access == VariableNode::AccessKind::GlobalInt3
+                              || access == VariableNode::AccessKind::GlobalStr3)
+                             && node.indices().size() >= 3;
+            if (is3) {
+                const int z = int(resolveIndex(node, 2, storage, gameBaseData));
+                storage->setGlobalInt3DRaw(node.accessKey, x, y, z, value);
+            } else {
+                storage->setGlobalInt2DRaw(node.accessKey, x, y, value);
+            }
+            return true;
+        }
+        const int x = node.indices().isEmpty() ? 0
+            : int(resolveIndex(node, 0, storage, gameBaseData));
+        storage->setGlobalInt1DRaw(node.accessKey, x, value);
+        return true;
+    }
+    case VariableNode::AccessKind::LocalSlot:
+    case VariableNode::AccessKind::ArgSlot: {
+        const int idx = node.indices().isEmpty() ? 0
+            : int(resolveIndex(node, 0, storage, gameBaseData));
+        if (access == VariableNode::AccessKind::LocalSlot)
+            storage->setLocalInt(idx, value);
+        else
+            storage->setArgInt(idx, value);
+        return true;
+    }
+    case VariableNode::AccessKind::LocalStr:
+    case VariableNode::AccessKind::ArgStr:
+        return false;   // 字符串槽位不能自增（同旧路的 ARGS/LOCALS 分支）
+    }
     const QString name = node.name();
     QString upperScratch;
     const QString& upper = eraUpperKey(name, upperScratch);
@@ -607,7 +660,78 @@ QVariant ExpressionEvaluator::evaluateVariable(const VariableNode &node, Variabl
     if (!storage) {
         return QVariant();
     }
-    
+
+    // ---- 装载期「变量分词」的快路径 ----
+    // 收尾定型时（walkApply -> computeVariableAccess）已把名字解析成
+    // kind + 静态存储键；静态不能证明的（形参/REF/角色/常数/系统变量/伪变量）
+    // kind == Dynamic，落回下面的完整解析。语义等价的依据见
+    // variable_table.cpp 的 computeVariableAccess 注释（stepOnce 的作用域与
+    // 静态判定恒同；m_references 只可能是本函数 REF 形参名，已过滤）。
+    // 下标仍逐次求值 —— 可能有副作用（BAG:(I++)）。
+    // 守卫：描述符的静态键只在「本行执行（stepOnce 按 ownerFunction 设作用域）」
+    // 的上下文里成立。脱离行执行的直接求值（测试装载期校验 / 调试求值）里
+    // live 作用域可能为空 —— 作用域名对不上就整体回退完整解析（旧语义）。
+    const VariableNode::AccessKind access =
+        (storage->privateScopeName() == node.accessScopeKey)
+            ? node.accessKind : VariableNode::AccessKind::Dynamic;
+    switch (access) {
+    case VariableNode::AccessKind::Dynamic:
+        break;   // 旧路
+    case VariableNode::AccessKind::GlobalInt1:
+    case VariableNode::AccessKind::GlobalInt2:
+    case VariableNode::AccessKind::GlobalInt3: {
+        if (access == VariableNode::AccessKind::GlobalInt1 || node.indices().size() < 2) {
+            // 1 维读（含 2/3 维声明名只给一个下标/裸名的情况 —— 与旧路的
+            // 「dim>=2 且 indices>=2 才走多维」判定一致）
+            const int x = node.indices().isEmpty() ? 0
+                : int(resolveIndex(node, 0, storage, gameBaseData));
+            return QVariant::fromValue<qint64>(storage->getGlobalInt1DRaw(node.accessKey, x));
+        }
+        const int x = int(resolveIndex(node, 0, storage, gameBaseData));
+        const int y = int(resolveIndex(node, 1, storage, gameBaseData));
+        if (access == VariableNode::AccessKind::GlobalInt3 && node.indices().size() >= 3) {
+            const int z = int(resolveIndex(node, 2, storage, gameBaseData));
+            return QVariant::fromValue<qint64>(storage->getGlobalInt3DRaw(node.accessKey, x, y, z));
+        }
+        return QVariant::fromValue<qint64>(storage->getGlobalInt2DRaw(node.accessKey, x, y));
+    }
+    case VariableNode::AccessKind::GlobalStr1:
+    case VariableNode::AccessKind::GlobalStr2:
+    case VariableNode::AccessKind::GlobalStr3: {
+        // 与旧路一致地走 getStringSlot（**带 markup 分片**）：HTML 累积
+        //（html += HTML_BUTTON(...)）与打印模板都依赖 markup —— 只回裸文本
+        // 会让标签链断掉。键是装载期算好的静态键（私有名=复合键）。
+        if (access == VariableNode::AccessKind::GlobalStr1 || node.indices().size() < 2) {
+            const int x = node.indices().isEmpty() ? 0
+                : int(resolveIndex(node, 0, storage, gameBaseData));
+            return toVariant(storage->getStringSlotRaw(node.accessKey, {x}));
+        }
+        const int x = int(resolveIndex(node, 0, storage, gameBaseData));
+        const int y = int(resolveIndex(node, 1, storage, gameBaseData));
+        if (access == VariableNode::AccessKind::GlobalStr3 && node.indices().size() >= 3) {
+            const int z = int(resolveIndex(node, 2, storage, gameBaseData));
+            return toVariant(storage->getStringSlotRaw(node.accessKey, {x, y, z}));
+        }
+        return toVariant(storage->getStringSlotRaw(node.accessKey, {x, y}));
+    }
+    case VariableNode::AccessKind::LocalSlot:
+    case VariableNode::AccessKind::ArgSlot: {
+        const int idx = node.indices().isEmpty() ? 0
+            : int(resolveIndex(node, 0, storage, gameBaseData));
+        return QVariant::fromValue<qint64>(
+            access == VariableNode::AccessKind::LocalSlot
+                ? storage->getLocalInt(idx) : storage->getArgInt(idx));
+    }
+    case VariableNode::AccessKind::LocalStr:
+    case VariableNode::AccessKind::ArgStr: {
+        const int idx = node.indices().isEmpty() ? 0
+            : int(resolveIndex(node, 0, storage, gameBaseData));
+        return toVariant(storage->getStringSlotRaw(
+            access == VariableNode::AccessKind::LocalStr
+                ? QStringLiteral("LOCALS") : QStringLiteral("ARGS"), {idx}));
+    }
+    }
+
     QString varName = node.name();
     const int count = node.indices().size();
     const bool aliased = storage->resolvedStorageName(varName) != varName;

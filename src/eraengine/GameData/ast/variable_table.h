@@ -19,6 +19,7 @@
 #define AST_VARIABLE_TABLE_H
 
 #include <QHash>
+#include <QSet>
 #include <functional>
 #include <QString>
 #include <QList>
@@ -150,9 +151,13 @@ public:
         m_dimEvaluator = std::move(fn);
     }
 
-    // 把一个已构建的 AST 中的变量节点按表回填类型（强类型回填）
+    // 把一个已构建的 AST 中的变量节点按表回填类型（强类型回填），并在同一趟里
+    // 计算装载期「变量分词」访问描述符（VariableNode::accessKind/accessKey）。
+    // paramNames：该函数全部形参名（大写；可为 null）—— 命中形参名的变量引用
+    // 无论取值/别名/REF 绑定都是运行期的，标记为 Dynamic 回退旧路。
     static void applyTypes(ExpressionNode& node, const VariableTable& table,
-                           const QString& function = QString());
+                           const QString& function = QString(),
+                           const QSet<QString>* paramNames = nullptr);
 
 private:
     // 求值单个数维表达式：数字字面量或常数名（scope = 声明所在函数）

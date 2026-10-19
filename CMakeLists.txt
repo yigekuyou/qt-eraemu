@@ -137,7 +137,7 @@ if(ANDROID)
     # io.yigekuyou.emuera（与桌面 D-Bus 单实例服务名一致）；Qt 文档
     # 《QT_ANDROID_PACKAGE_NAME》：AGP 7.4 起 manifest 的 package 已废弃，
     # 该属性作为 namespace 传给 build.gradle。
-    set_property(TARGET appemuera PROPERTY QT_ANDROID_PACKAGE_NAME "io.yigekuyou.emuera")
+    set_property(TARGET appemuera PROPERTY QT_ANDROID_PACKAGE_NAME "io.github.yigekuyou.emuera")
     # androiddeployqt does not reliably discover shared QML module libraries
     # through a CMake target dependency. Include both the module backend and
     # its plugin explicitly so import io.yigekuoyou.eraengine can initialize.

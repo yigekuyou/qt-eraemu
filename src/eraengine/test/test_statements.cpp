@@ -225,7 +225,8 @@ int main(int argc, char* argv[]) {
         check(!p.argument.hasError(),
               "POWER 语句 3 参通过校验（" + p.argument.typeError + "）");
         storage.setPrivateScope("MAIN", {"BAG"});
-        engine.executeInstruction(p);
+        // 显式作用域：POWER 的左值 BAG 是 MAIN 的私有变量，写入位置由 scope 决定。
+        engine.executeInstruction(p, eravar::internName(QStringLiteral("MAIN")));
         check(storage.getGlobalInt1D("BAG", 2) == 1024,
               "POWER BAG:2, 2, 10 -> BAG:2 == 1024（变量被赋值）");
     }
@@ -246,7 +247,7 @@ int main(int argc, char* argv[]) {
               "SAVENOS 语句按指令解析（不再被归约为函数调用）");
         check(!s.argument.hasError(), "SAVENOS 语句通过校验（" + s.argument.typeError + "）");
         storage.setPrivateScope("MAIN", {"BAG"});
-        engine.executeInstruction(s);
+        engine.executeInstruction(s, eravar::internName(QStringLiteral("MAIN")));
         check(storage.getGlobalInt1D("BAG", 3) == 20,
               QString("SAVENOS BAG:3 -> 20（Config.SaveDataNos 默认值；得到 %1）")
                   .arg(storage.getGlobalInt1D("BAG", 3)));
@@ -254,7 +255,7 @@ int main(int argc, char* argv[]) {
         LogicalLine p = AstBuilder::build(QStringLiteral("PRINTCPERLINE BAG:3"), pos, resolveOne);
         check(p.functionName == QLatin1String("PRINTCPERLINE") && !p.isFunctionCall,
               "PRINTCPERLINE 语句按指令解析");
-        engine.executeInstruction(p);
+        engine.executeInstruction(p, eravar::internName(QStringLiteral("MAIN")));
         check(storage.getGlobalInt1D("BAG", 3) == 3,
               QString("PRINTCPERLINE BAG:3 -> 3（Config.PrintCPerLine 默认值；得到 %1）")
                   .arg(storage.getGlobalInt1D("BAG", 3)));
@@ -871,40 +872,46 @@ int main(int argc, char* argv[]) {
         // 把 PC 指到目标函数体内/函数外来模拟行归属。
         // runtimeVariableReference：收尾后允许解析的入口（GETVAR/SETVAR 同款），
         // 作用域 = 当前 PC 行的 ownerFunction —— 把 PC 指到目标函数内/外来模拟行归属。
-        const auto accessOf = [&table](const QString& expr, int pcLine) -> const VariableNode* {
+        // runtimeVariableReference 每次**新解析**一棵 AST（返回 QSharedPointer）。
+        // 指针必须由调用方续命 —— 不能返回指向局部 QSharedPointer 的裸指针
+        //（旧写法是悬垂读，靠分配器运气通过）。
+        QList<QSharedPointer<ExpressionNode>> keptAsts;
+        const auto accessOf = [&table, &keptAsts](const QString& expr,
+                                                 int pcLine) -> const VariableNode* {
             table.setPosition(QStringLiteral("va.ERB"), pcLine, false);
             const auto ast = table.runtimeVariableReference(expr);
-            return ast && ast->kind() == NodeKind::Variable
-                ? static_cast<const VariableNode*>(ast.data()) : nullptr;
+            if (!ast || ast->kind() != NodeKind::Variable) return nullptr;
+            keptAsts.append(ast);
+            return static_cast<const VariableNode*>(ast.data());
         };
         const auto* priv = accessOf("VAPRIV:1", 3);
         check(priv && priv->accessKind == VariableNode::AccessKind::GlobalInt1
-                  && priv->accessKey == QStringLiteral("VAFN\x1FVAPRIV"),
+                  && priv->accessKey.debugKeyText() == QStringLiteral("VAFN\x1FVAPRIV"),
               "函数私有 int 数组 -> GlobalInt1 + 复合键");
         const auto* privs = accessOf("VASPRIV:0", 3);
         check(privs && privs->accessKind == VariableNode::AccessKind::GlobalStr1
-                  && privs->accessKey == QStringLiteral("VAFN\x1FVASPRIV"),
+                  && privs->accessKey.debugKeyText() == QStringLiteral("VAFN\x1FVASPRIV"),
               "函数私有 str 数组 -> GlobalStr1 + 复合键");
         const auto* hdr2 = accessOf("VA_HDR2:1:2", 0);
         check(hdr2 && hdr2->accessKind == VariableNode::AccessKind::GlobalInt2
-                  && hdr2->accessKey == QStringLiteral("VA_HDR2"),
+                  && hdr2->accessKey.debugKeyText() == QStringLiteral("VA_HDR2"),
               "头文件级 #DIM 2 维 -> GlobalInt2 + 裸键（不进作用域映射）");
         const auto* param = accessOf("VAP1", 3);
-        check(param && param->accessKind == VariableNode::AccessKind::Dynamic,
-              "形参名 -> Dynamic（值绑定/别名/REF 都是运行期语义）");
+        check(param && param->accessKind == VariableNode::AccessKind::Param,
+              "形参名 -> Param（值绑定/别名/REF 仍是运行期语义，但类别已定型）");
         const auto* sys = accessOf("COUNT", 0);
-        check(sys && sys->accessKind == VariableNode::AccessKind::Dynamic,
-              "系统槽名 COUNT -> Dynamic（旧路 hasSystemVariable 优先，私有声明遮蔽不了）");
+        check(sys && sys->accessKind == VariableNode::AccessKind::System,
+              "系统槽名 COUNT -> System（旧路 hasSystemVariable 优先，私有声明遮蔽不了）");
         const auto* local = accessOf("LOCAL:3", 0);
         check(local && local->accessKind == VariableNode::AccessKind::LocalSlot,
               "LOCAL -> LocalSlot（槽位直取）");
         const auto* undecl = accessOf("VA_UNDEF:0", 0);
         check(undecl && undecl->accessKind == VariableNode::AccessKind::GlobalInt1
-                  && undecl->accessKey == QStringLiteral("VA_UNDEF"),
+                  && undecl->accessKey.debugKeyText() == QStringLiteral("VA_UNDEF"),
               "未声明名 -> GlobalInt1 + 裸键（与运行期裸槽一致）");
         const auto* priv2 = accessOf("VAPRIV2:1:0", 5);
         check(priv2 && priv2->accessKind == VariableNode::AccessKind::GlobalInt2
-                  && priv2->accessKey == QStringLiteral("VAFN\x1FVAPRIV2"),
+                  && priv2->accessKey.debugKeyText() == QStringLiteral("VAFN\x1FVAPRIV2"),
               "函数私有 2 维数组 -> GlobalInt2 + 复合键");
 
         // 维数守卫（第七轮，镜像旧路）：旧路只对**非重映射名**（裸键 = 全局声明/

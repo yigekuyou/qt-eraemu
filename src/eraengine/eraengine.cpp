@@ -398,7 +398,8 @@ EraEngine::EraEngine(QObject *parent)
 			[this](const QString& text) { return m_parseTable.runtimeVariableReference(text); },
 			[this](const QString& name) { return m_parseTable.variableFlags(name); },
 			[this](const ExpressionNode& target, const QVariant& value) {
-				return m_expressionEvaluator.assignNodeValue(target, &m_variableStorage, &m_gameBaseData, value);
+				return m_expressionEvaluator.assignNodeValue(target, &m_variableStorage, &m_gameBaseData,
+				                                             value, m_parseTable.executionScopeId());
 			});
 		// 扩展实现抛出的语义错误 -> 置错误状态 + 报错（与 ASSERT 同口径）。
 		m_executionEngine.extensions().setRuntimeErrorReporter(

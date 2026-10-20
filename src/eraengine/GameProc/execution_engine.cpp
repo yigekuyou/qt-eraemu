@@ -31,6 +31,7 @@
 #include <cmath>
 #include "expression_evaluator.h"
 #include "ast/expression_ast.h"
+#include "ast/name_interner.h"
 #include "ast/ast_builder.h"
 #include "ast/function_types.h"   // 函数语句（isBuiltinFunction / builtinFunctionReturnType）
 #include "ast/print_template.h"
@@ -42,9 +43,10 @@
 
 namespace {
 QVariant evaluateOperand(ExpressionEvaluator& evaluator, const Operand& operand,
-                         VariableStorage* storage, GameBaseData* gameBaseData) {
+                         VariableStorage* storage, GameBaseData* gameBaseData,
+                         eravar::ScopeId scope) {
     if (!operand.ast) throw std::runtime_error("Missing load-time operand AST");
-    const auto value = evaluator.evaluate(*operand.ast, storage, gameBaseData);
+    const auto value = evaluator.evaluate(*operand.ast, storage, gameBaseData, scope);
     if (!value.isValid()) throw std::runtime_error("Invalid operand expression");
     return value;
 }
@@ -84,7 +86,7 @@ ExecutionEngine::ExecutionEngine(VariableStorage* storage, GameBaseData* gameBas
     // 语句形实参（式中函数裸写）：AST 直接求值。
     services.evaluateNode = [this](const ExpressionNode* node) -> QVariant {
         if (node == nullptr) return QVariant();
-        return getEvaluator().evaluate(*node, m_storage, m_gameBaseData);
+        return getEvaluator().evaluate(*node, m_storage, m_gameBaseData, m_activeScope);
     };
     m_extensions.setServices(std::move(services));
 }
@@ -147,7 +149,7 @@ void ExecutionEngine::executeLogicalLine(const LogicalLine& line) {
     }
 
     qCDebug(eraTrace) << "[executeLogicalLine]   Executing Instruction:" << line.functionName;
-    if (!executeInstruction(line)) {
+    if (!executeInstruction(line, eravar::internName(line.ownerFunction))) {
         qCDebug(eraTrace) << "[executeLogicalLine]   executeInstruction returned false";
     }
 }
@@ -180,7 +182,7 @@ ExecutionEngine::LhsRef ExecutionEngine::resolveLhsRef(const ExpressionNode* ast
     const auto& variable = static_cast<const VariableNode&>(*ast);
     ref.name = variable.name();
     try {
-        ref.indices = getEvaluator().resolveIndices(variable, m_storage, m_gameBaseData);
+        ref.indices = getEvaluator().resolveIndices(variable, m_storage, m_gameBaseData, m_activeScope);
         ref.valid = true;
     } catch (const std::exception& error) {
         emit errorOccurred(QString::fromUtf8(error.what()));
@@ -195,14 +197,16 @@ qint64 ExecutionEngine::readLhs(const LhsRef& ref) {
     if (!m_storage) return 0;
     if (m_storage->hasParameter(ref.name)) return m_storage->parameter(ref.name).toLongLong();
     // 角色数据变量：按 (角色号, 元素下标) 读取（与求值器一致）
+    // 名字 -> 存储键按**本行作用域**解析（显式参数，不读存储的当前帧）。
+    const QString key = m_storage->resolvedStorageName(ref.name, m_activeScope);
     if (m_storage->isCharaDataVariable(ref.name)) {
         if (m_storage->isCharaDataString(ref.name)) return 0;   // 字符串：走 handleStringAssignment
         int charaId = 0;
         QList<int> elems;
         m_storage->reduceCharaArgs(ref.name, ref.indices, charaId, elems);
         if (m_storage->charaDataDimension(ref.name) >= 2)
-            return m_storage->getCharaInt3D(ref.name, charaId, elems.value(0), elems.value(1));
-        return m_storage->getCharaInt(ref.name, charaId, elems.value(0));
+            return m_storage->getCharaInt3D(key, charaId, elems.value(0), elems.value(1));
+        return m_storage->getCharaInt(key, charaId, elems.value(0));
     }
     const QString upper = ref.name.toUpper();
     // ARG / LOCAL 是两套数组（见 variable_storage.h）
@@ -220,12 +224,12 @@ qint64 ExecutionEngine::readLhs(const LhsRef& ref) {
     const int dim = lhsDimension(ref.name);
     if (ref.indices.size() >= 2 && dim >= 2) {
         if (ref.indices.size() >= 3 && dim >= 3) {
-            return m_storage->getGlobalInt3D(ref.name, ref.indices.at(0), ref.indices.at(1),
-                                             ref.indices.at(2));
+            return m_storage->getGlobalInt3DRaw(key, ref.indices.at(0), ref.indices.at(1),
+                                                ref.indices.at(2));
         }
-        return m_storage->getGlobalInt2D(ref.name, ref.indices.at(0), ref.indices.at(1));
+        return m_storage->getGlobalInt2DRaw(key, ref.indices.at(0), ref.indices.at(1));
     }
-    return m_storage->getGlobalInt1D(ref.name, ref.first());
+    return m_storage->getGlobalInt1DRaw(key, ref.first());
 }
 
 void ExecutionEngine::writeLhs(const LhsRef& ref, qint64 value) {
@@ -235,13 +239,13 @@ void ExecutionEngine::writeLhs(const LhsRef& ref, qint64 value) {
     // 唯一实现：VariableStorage::writeIntByName。顺序照旧：
     // hasParameter -> 角色数据 -> ARG/LOCAL -> ARGS/LOCALS/RESULTS(忽略)
     // -> 系统变量 -> 声明维数 >= 2 的 2D/3D -> 全局 1D。
-    m_storage->writeIntByName(ref.name, ref.indices, value);
+    m_storage->writeIntByName(ref.name, ref.indices, value, m_activeScope);
 }
 
 bool ExecutionEngine::handleCompoundAssignment(const ExpressionNode* lhs, const QString& op, const QString& rhs, const QSharedPointer<ExpressionNode>& ast) {
     Q_UNUSED(rhs);
     ExpressionEvaluator& evaluator = getEvaluator();
-    const QVariant rhsVar = ast ? evaluator.evaluate(*ast, m_storage, m_gameBaseData)
+    const QVariant rhsVar = ast ? evaluator.evaluate(*ast, m_storage, m_gameBaseData, m_activeScope)
         : throw std::runtime_error("Missing compound RHS AST");
     if (!rhsVar.isValid() || isStringValue(rhsVar)) return false;
     const LhsRef ref = resolveLhsRef(lhs);
@@ -259,7 +263,7 @@ bool ExecutionEngine::handleCompoundAssignment(const ExpressionNode* lhs, const 
     const auto token = operators.constFind(op);
     if (token == operators.constEnd()) return false;
     BinaryOpNode operation(left, ExpressionToken(token.value(), op), right);
-    const QVariant result = evaluator.evaluate(operation, m_storage, m_gameBaseData);
+    const QVariant result = evaluator.evaluate(operation, m_storage, m_gameBaseData, m_activeScope);
     if (!result.isValid()) return false;
     writeLhs(ref, result.toLongLong());
     return true;
@@ -359,12 +363,12 @@ bool ExecutionEngine::handleVarSet(const LogicalLine& line, bool eachChara) {
     ExpressionEvaluator& ev = getEvaluator();
     const auto evalInt = [&](const Operand& o) -> qint64 {
         if (o.isString) return o.raw.toLongLong();
-        if (o.ast) return ev.evaluate(*o.ast, m_storage, m_gameBaseData).toLongLong();
-        return evaluateOperand(ev, o, m_storage, m_gameBaseData).toLongLong();
+        if (o.ast) return ev.evaluate(*o.ast, m_storage, m_gameBaseData, m_activeScope).toLongLong();
+        return evaluateOperand(ev, o, m_storage, m_gameBaseData, m_activeScope).toLongLong();
     };
     const auto evalStr = [&](const Operand& o) -> QString {
         if (o.isString) return o.raw;
-        if (o.ast) return stringText(ev.evaluate(*o.ast, m_storage, m_gameBaseData));
+        if (o.ast) return stringText(ev.evaluate(*o.ast, m_storage, m_gameBaseData, m_activeScope));
         throw std::runtime_error("String operand has no load-time AST");
     };
 
@@ -570,8 +574,9 @@ QHash<QString, QList<LogicalLine>> ExecutionEngine::getLoadedScripts() const {
 
 
 
-bool ExecutionEngine::executeInstruction(const LogicalLine& line) {
+bool ExecutionEngine::executeInstruction(const LogicalLine& line, eravar::ScopeId scope) {
     QScopedValueRollback<const LogicalLine*> context(m_activeInstruction, &line);
+    QScopedValueRollback<eravar::ScopeId> scopeContext(m_activeScope, scope);
     const QString& name = line.functionName;
     const QList<Operand>& args = line.arguments;
     m_totalInstructionsExecuted++;
@@ -597,7 +602,7 @@ bool ExecutionEngine::executeInstruction(const LogicalLine& line) {
         qint64 value = 0;
         if (!args.isEmpty() && !args.first().raw.trimmed().isEmpty()) {
             ExpressionEvaluator& ev = getEvaluator();
-            value = evaluateOperand(ev, args.first(), m_storage, m_gameBaseData).toLongLong();
+            value = evaluateOperand(ev, args.first(), m_storage, m_gameBaseData, m_activeScope).toLongLong();
         }
         if (name == "ADDCHARA") {
             if (value < 0) {
@@ -629,7 +634,7 @@ bool ExecutionEngine::executeInstruction(const LogicalLine& line) {
         } else {   // ADDSPCHARA <番号>
             ExpressionEvaluator& ev = getEvaluator();
             const qint64 value = args.isEmpty() ? 0
-                : evaluateOperand(ev, args.first(), m_storage, m_gameBaseData).toLongLong();
+                : evaluateOperand(ev, args.first(), m_storage, m_gameBaseData, m_activeScope).toLongLong();
             if (value < 0) {
                 emit errorOccurred(QStringLiteral("ADDSPCHARA 的角色番号无效: %1").arg(value));
             } else {
@@ -678,11 +683,11 @@ bool ExecutionEngine::executeInstruction(const LogicalLine& line) {
             if (ref.valid) {
                 ExpressionEvaluator& ev = getEvaluator();
                 const qint64 x = ops.at(1)->ast
-                    ? ev.evaluate(*ops.at(1)->ast, m_storage, m_gameBaseData).toLongLong()
-                    : evaluateOperand(ev, *ops.at(1), m_storage, m_gameBaseData).toLongLong();
+                    ? ev.evaluate(*ops.at(1)->ast, m_storage, m_gameBaseData, m_activeScope).toLongLong()
+                    : evaluateOperand(ev, *ops.at(1), m_storage, m_gameBaseData, m_activeScope).toLongLong();
                 const qint64 y = ops.at(2)->ast
-                    ? ev.evaluate(*ops.at(2)->ast, m_storage, m_gameBaseData).toLongLong()
-                    : evaluateOperand(ev, *ops.at(2), m_storage, m_gameBaseData).toLongLong();
+                    ? ev.evaluate(*ops.at(2)->ast, m_storage, m_gameBaseData, m_activeScope).toLongLong()
+                    : evaluateOperand(ev, *ops.at(2), m_storage, m_gameBaseData, m_activeScope).toLongLong();
                 // 对齐 C# PowerMethod.GetIntValue：double 幂，非数值/无穷/超 64 位范围报错
                 const double pow = std::pow(static_cast<double>(x), static_cast<double>(y));
                 if (std::isnan(pow)) {
@@ -736,7 +741,7 @@ bool ExecutionEngine::executeInstruction(const LogicalLine& line) {
         if (!m_storage) return true;
         ExpressionEvaluator& ev = getEvaluator();
         const qint64 target = args.isEmpty() ? -1
-            : evaluateOperand(ev, args.first(), m_storage, m_gameBaseData).toLongLong();
+            : evaluateOperand(ev, args.first(), m_storage, m_gameBaseData, m_activeScope).toLongLong();
         if (target < 0 || target >= m_storage->charaNum()) return true;
         // 角色变量的元素数来自 VariableSize.csv（arraySize 只查全局数组，对
         // 角色变量恒为 0 —— 此前 CUPCHECK 因此从未真正应用过 CUP/CDOWN）
@@ -769,7 +774,7 @@ bool ExecutionEngine::executeInstruction(const LogicalLine& line) {
     if (name == "SKIPDISP") {
         ExpressionEvaluator& ev = getEvaluator();
         const qint64 value = args.isEmpty() ? 0
-            : evaluateOperand(ev, args.first(), m_storage, m_gameBaseData).toLongLong();
+            : evaluateOperand(ev, args.first(), m_storage, m_gameBaseData, m_activeScope).toLongLong();
         m_skipDisp = (value != 0);
         const qint64 result = m_skipDisp ? 1 : 0;
         if (m_storage) {
@@ -804,7 +809,7 @@ bool ExecutionEngine::executeInstruction(const LogicalLine& line) {
         qint64 flag = 0;
         if (!args.isEmpty()) {
             ExpressionEvaluator& ev = getEvaluator();
-            flag = evaluateOperand(ev, args.first(), m_storage, m_gameBaseData).toLongLong();
+            flag = evaluateOperand(ev, args.first(), m_storage, m_gameBaseData, m_activeScope).toLongLong();
         }
         if (flag < 0 || flag > 3) {
             emit errorOccurred(QStringLiteral("FORCEKANA 的第 1 引数超出范围(0..3)：%1").arg(flag));
@@ -830,8 +835,8 @@ bool ExecutionEngine::executeInstruction(const LogicalLine& line) {
             if (!a.isString && a.raw == QLatin1String(",")) continue;
             ExpressionEvaluator& ev = getEvaluator();
             param.append(static_cast<int>(a.ast
-                ? ev.evaluate(*a.ast, m_storage, m_gameBaseData).toLongLong()
-                : evaluateOperand(ev, a, m_storage, m_gameBaseData).toLongLong()));
+                ? ev.evaluate(*a.ast, m_storage, m_gameBaseData, m_activeScope).toLongLong()
+                : evaluateOperand(ev, a, m_storage, m_gameBaseData, m_activeScope).toLongLong()));
             if (param.size() == 4) break;
         }
         if (name == "PRINT_SPACE") {
@@ -859,11 +864,11 @@ bool ExecutionEngine::executeInstruction(const LogicalLine& line) {
         }
         const Operand& first = *firstPtr;
         const auto evalInt = [&]() -> qint64 {
-            return first.ast ? ev.evaluate(*first.ast, m_storage, m_gameBaseData).toLongLong()
-                             : evaluateOperand(ev, first, m_storage, m_gameBaseData).toLongLong();
+            return first.ast ? ev.evaluate(*first.ast, m_storage, m_gameBaseData, m_activeScope).toLongLong()
+                             : evaluateOperand(ev, first, m_storage, m_gameBaseData, m_activeScope).toLongLong();
         };
         const auto evalStr = [&]() -> QString {
-            return first.ast ? stringText(ev.evaluate(*first.ast, m_storage, m_gameBaseData))
+            return first.ast ? stringText(ev.evaluate(*first.ast, m_storage, m_gameBaseData, m_activeScope))
                              : first.raw;
         };
         if (name == "TOOLTIP_SETFONT") {
@@ -901,8 +906,8 @@ bool ExecutionEngine::executeInstruction(const LogicalLine& line) {
                 if (!a.isString && (a.raw == QLatin1String(",") || a.raw == QLatin1String(":")))
                     continue;
                 if (!a.ast && a.raw.trimmed().isEmpty()) continue;
-                colors.append(a.ast ? ev.evaluate(*a.ast, m_storage, m_gameBaseData).toLongLong()
-                                    : evaluateOperand(ev, a, m_storage, m_gameBaseData).toLongLong());
+                colors.append(a.ast ? ev.evaluate(*a.ast, m_storage, m_gameBaseData, m_activeScope).toLongLong()
+                                    : evaluateOperand(ev, a, m_storage, m_gameBaseData, m_activeScope).toLongLong());
             }
             if (colors.size() >= 2) {
                 const QColor fore = QColor::fromRgba(static_cast<QRgb>(colors.at(0)));
@@ -934,7 +939,7 @@ bool ExecutionEngine::executeInstruction(const LogicalLine& line) {
         QString text;
         if (!args.isEmpty()) {
             const Operand& a = args.first();
-            text = a.ast ? stringText(getEvaluator().evaluate(*a.ast, m_storage, m_gameBaseData))
+            text = a.ast ? stringText(getEvaluator().evaluate(*a.ast, m_storage, m_gameBaseData, m_activeScope))
                          : a.raw;
         }
         const int capacity = variableLength1D(QStringLiteral("RESULT"), QString());
@@ -976,7 +981,7 @@ bool ExecutionEngine::executeInstruction(const LogicalLine& line) {
         if (!args.isEmpty()) {
             const Operand& a = args.first();
             if (a.ast) {
-                text = stringText(ev.evaluate(*a.ast, m_storage, m_gameBaseData));
+                text = stringText(ev.evaluate(*a.ast, m_storage, m_gameBaseData, m_activeScope));
             } else {
                 emit errorOccurred(QStringLiteral("REUSELASTLINE 缺少装载期字符串 AST"));
                 return true;
@@ -1012,7 +1017,7 @@ bool ExecutionEngine::executeInstruction(const LogicalLine& line) {
         qint64 bits = readLhs(ref);
         for (int i = 1; i < ops.size(); ++i) {
             const qint64 x = ops.at(i)->ast
-                ? ev.evaluate(*ops.at(i)->ast, m_storage, m_gameBaseData).toLongLong()
+                ? ev.evaluate(*ops.at(i)->ast, m_storage, m_gameBaseData, m_activeScope).toLongLong()
                 : ops.at(i)->raw.toLongLong();
             if (x < 0 || x > 63) {
                 emit errorOccurred(QStringLiteral("SETBIT 的第 %1 引数超出位范围(0..63)：%2")
@@ -1046,7 +1051,7 @@ bool ExecutionEngine::executeInstruction(const LogicalLine& line) {
             return true;
         }
         const QVariant value = getEvaluator().evaluate(*line.arguments.first().ast,
-                                                        m_storage, m_gameBaseData);
+                                                        m_storage, m_gameBaseData, m_activeScope);
         if (name == QLatin1String("STRLENS") || name == QLatin1String("STRLENSU")) {
             if (m_storage) m_storage->setSystemVariable(QStringLiteral("RESULT"), 0,
                                                           value.toLongLong());
@@ -1067,10 +1072,10 @@ bool ExecutionEngine::executeInstruction(const LogicalLine& line) {
         auto lengths = m_storage->arrayLengths(variable.name());
         if (!variable.lengths.isEmpty()) lengths = variable.lengths;
         if (m_parseTable) {
-            const QString key = m_storage->resolvedStorageName(variable.name());
-            const int separator = key.indexOf(QChar(0x1f));
-            const QString scope = separator >= 0 ? key.left(separator) : QString();
-            const QString target = separator >= 0 ? key.mid(separator + 1) : key;
+            const QString key = m_storage->resolvedStorageName(variable.name(), m_activeScope);
+            QString scope;
+            QString target;
+            eravar::splitPrivateStorageKey(key, scope, target);
             const auto* declaration = m_parseTable->variableTable().find(target, scope);
             if (declaration && !declaration->isReference && !declaration->lengths.isEmpty())
                 lengths = declaration->lengths;
@@ -1088,10 +1093,10 @@ bool ExecutionEngine::executeInstruction(const LogicalLine& line) {
         // 的等价物（m_pendingParts/m_sealed/m_pendingOpen），此前只是没接这条路径）。
         const bool toBuffer = line.arguments.size() >= 2 && line.arguments.at(1).ast
             && getEvaluator()
-                   .evaluate(*line.arguments.at(1).ast, m_storage, m_gameBaseData)
+                   .evaluate(*line.arguments.at(1).ast, m_storage, m_gameBaseData, m_activeScope)
                    .toLongLong() != 0;
         if (line.arguments.isEmpty() || !line.arguments.first().ast) return false;
-        const auto value = getEvaluator().evaluate(*line.arguments.first().ast, m_storage, m_gameBaseData);
+        const auto value = getEvaluator().evaluate(*line.arguments.first().ast, m_storage, m_gameBaseData, m_activeScope);
         if (!value.isValid() || !isStringValue(value)) return false;
         const QString text = stringText(value);
         PrintTemplate markup = valueMarkup(value);
@@ -1110,7 +1115,7 @@ bool ExecutionEngine::executeInstruction(const LogicalLine& line) {
     if (name == QLatin1String("HTML_PRINT_ISLAND")) {
         if (m_skipDisp) return true;
         if (line.arguments.isEmpty() || !line.arguments.first().ast) return false;
-        const auto value = getEvaluator().evaluate(*line.arguments.first().ast, m_storage, m_gameBaseData);
+        const auto value = getEvaluator().evaluate(*line.arguments.first().ast, m_storage, m_gameBaseData, m_activeScope);
         if (!value.isValid() || !isStringValue(value)) return false;
         const QString text = stringText(value);
         PrintTemplate markup = valueMarkup(value);
@@ -1141,7 +1146,7 @@ bool ExecutionEngine::executeInstruction(const LogicalLine& line) {
         const auto argText = [&](int i) -> QString {
             if (i < 0 || i >= operands.size()) return QString();
             const Operand& a = *operands.at(i);
-            return a.ast ? stringText(ev.evaluate(*a.ast, m_storage, m_gameBaseData)) : a.raw;
+            return a.ast ? stringText(ev.evaluate(*a.ast, m_storage, m_gameBaseData, m_activeScope)) : a.raw;
         };
         const auto argInt = [&](int i, qint64 fallback) -> qint64 {
             const QString t = argText(i).trimmed();
@@ -1188,7 +1193,7 @@ bool ExecutionEngine::executeInstruction(const LogicalLine& line) {
         if (operand.isString) {
             resName = operand.raw;
         } else if (operand.ast) {
-            if (!ev.evaluateStr(*operand.ast, m_storage, resName)) resName = operand.raw;
+            if (!ev.evaluateStr(*operand.ast, m_storage, resName, m_activeScope)) resName = operand.raw;
         } else {
             emit errorOccurred(QStringLiteral("PRINT_IMG 的字符串参数缺少装载期 AST"));
             return true;
@@ -1216,7 +1221,7 @@ bool ExecutionEngine::executeInstruction(const LogicalLine& line) {
             // 再按 raw 解析会把 "123" 错当整数、把 "A" 错当变量。
             const auto evaluateOperand = [&](const Operand& operand) -> QVariant {
                 if (operand.isString) return toVariant(flatString(QVariant(operand.raw)));
-                if (operand.ast) return ev.evaluate(*operand.ast, m_storage, m_gameBaseData);
+                if (operand.ast) return ev.evaluate(*operand.ast, m_storage, m_gameBaseData, m_activeScope);
                 throw std::runtime_error("Button operand has no load-time AST");
             };
             const QVariant textValue = evaluateOperand(*ops[0]);
@@ -1239,7 +1244,7 @@ bool ExecutionEngine::executeInstruction(const LogicalLine& line) {
         int n = 1;
         if (!args.isEmpty() && !args.first().raw.trimmed().isEmpty()) {
             ExpressionEvaluator& ev = getEvaluator();
-            n = static_cast<int>(evaluateOperand(ev, args.first(), m_storage, m_gameBaseData).toLongLong());
+            n = static_cast<int>(evaluateOperand(ev, args.first(), m_storage, m_gameBaseData, m_activeScope).toLongLong());
         }
         if (n > 0) {
             emit consoleClearLines(n);
@@ -1247,7 +1252,7 @@ bool ExecutionEngine::executeInstruction(const LogicalLine& line) {
         return true;
     }
     if (name == "REDRAW") {
-        emit consoleRedraw(args.isEmpty() ? 1 : evaluateOperand(getEvaluator(), args.first(), m_storage, m_gameBaseData).toLongLong());
+        emit consoleRedraw(args.isEmpty() ? 1 : evaluateOperand(getEvaluator(), args.first(), m_storage, m_gameBaseData, m_activeScope).toLongLong());
         return true;
     }
     // 后缀自增/自减语句：`I++` / `BAG:COUNT--`
@@ -1264,7 +1269,7 @@ bool ExecutionEngine::executeInstruction(const LogicalLine& line) {
         // 对齐 C# RANDOMIZE_Instruction：Randomize(seed) —— 之后随机序列可复现
         qint64 seed = 0;
         if (!args.isEmpty() && m_expressionEvaluator) {
-            seed = evaluateOperand(*m_expressionEvaluator, args.first(), m_storage, m_gameBaseData).toLongLong();
+            seed = evaluateOperand(*m_expressionEvaluator, args.first(), m_storage, m_gameBaseData, m_activeScope).toLongLong();
         }
         if (m_expressionEvaluator) m_expressionEvaluator->setRandomSeed(static_cast<quint32>(seed));
         qDebug() << "[var] RANDOMIZE 固定种子" << seed;
@@ -1306,7 +1311,7 @@ bool ExecutionEngine::executeInstruction(const LogicalLine& line) {
         qint64 v[3] = {0, 0, 0};
         ExpressionEvaluator& ev = getEvaluator();
         for (int i = 0; i < 3 && i < ops.size(); ++i) {
-            v[i] = evaluateOperand(ev, ops.at(i), m_storage, m_gameBaseData).toLongLong();
+            v[i] = evaluateOperand(ev, ops.at(i), m_storage, m_gameBaseData, m_activeScope).toLongLong();
         }
         emit consolePrint(ev.createBar(v[0], v[1], v[2]), name == QLatin1String("BARL"));
         return true;
@@ -1319,7 +1324,7 @@ bool ExecutionEngine::executeInstruction(const LogicalLine& line) {
         if (!args.isEmpty() && !args.first().raw.trimmed().isEmpty()) {
             const QString raw = args.first().raw.trimmed();
             ExpressionEvaluator& ev = getEvaluator();
-            const QVariant value = evaluateOperand(ev, args.first(), m_storage, m_gameBaseData);
+            const QVariant value = evaluateOperand(ev, args.first(), m_storage, m_gameBaseData, m_activeScope);
             if (isStringValue(value)) {
                 // 颜色名（含 C_* 等常量与 @"..." 形式）
                 const QString name = stringText(value).trimmed();
@@ -1343,10 +1348,10 @@ bool ExecutionEngine::executeInstruction(const LogicalLine& line) {
     if (name == QLatin1String("SETBGCOLOR") || name == QLatin1String("SETBGCOLORBYNAME")) {
         ExpressionEvaluator& ev = getEvaluator();
         const auto evalOperand = [&](const Operand& a) -> QVariant {
-            if (a.ast) return ev.evaluate(*a.ast, m_storage, m_gameBaseData);
+            if (a.ast) return ev.evaluate(*a.ast, m_storage, m_gameBaseData, m_activeScope);
             const QString raw = a.raw.trimmed();
             if (raw.isEmpty()) return QVariant();
-            return evaluateOperand(ev, a, m_storage, m_gameBaseData);
+            return evaluateOperand(ev, a, m_storage, m_gameBaseData, m_activeScope);
         };
         QList<Operand> parts;
         for (const Operand& a : args) {
@@ -1384,7 +1389,7 @@ bool ExecutionEngine::executeInstruction(const LogicalLine& line) {
             // FONTSTYLE <位掩码>：整体替换
             if (!args.isEmpty() && !args.first().raw.trimmed().isEmpty()) {
                 ExpressionEvaluator& ev = getEvaluator();
-                m_styleBits = evaluateOperand(ev, args.first(), m_storage, m_gameBaseData).toLongLong();
+                m_styleBits = evaluateOperand(ev, args.first(), m_storage, m_gameBaseData, m_activeScope).toLongLong();
             }
         } else {
             const qint64 bit = (name == QLatin1String("FONTBOLD")) ? 1
@@ -1396,7 +1401,7 @@ bool ExecutionEngine::executeInstruction(const LogicalLine& line) {
             bool on = true;
             if (!args.isEmpty() && !args.first().raw.trimmed().isEmpty()) {
                 ExpressionEvaluator& ev = getEvaluator();
-                on = evaluateOperand(ev, args.first(), m_storage, m_gameBaseData).toLongLong() != 0;
+                on = evaluateOperand(ev, args.first(), m_storage, m_gameBaseData, m_activeScope).toLongLong() != 0;
             }
             m_styleBits = on ? (m_styleBits | bit) : (m_styleBits & ~bit);
         }
@@ -1444,7 +1449,7 @@ bool ExecutionEngine::executeInstruction(const LogicalLine& line) {
                     emit errorOccurred(QStringLiteral("DRAWLINEFORM 缺少装载期字符串 AST"));
                     return true;
                 }
-                barStr = stringText(getEvaluator().evaluate(*ast, m_storage, m_gameBaseData));
+                barStr = stringText(getEvaluator().evaluate(*ast, m_storage, m_gameBaseData, m_activeScope));
             }
             if (barStr.isEmpty()) {
                 emit errorOccurred(QStringLiteral("空文字列によるDRAWLINEが行われました"));
@@ -1530,7 +1535,7 @@ bool ExecutionEngine::executeInstruction(const LogicalLine& line) {
             const auto nodes = line.assignmentAsts.isEmpty()
                 ? QList<QSharedPointer<ExpressionNode>>{args[1].ast} : line.assignmentAsts;
             for (const auto& node : nodes) {
-                const auto value = node ? getEvaluator().evaluate(*node, m_storage, m_gameBaseData) : QVariant();
+                const auto value = node ? getEvaluator().evaluate(*node, m_storage, m_gameBaseData, m_activeScope) : QVariant();
                 if (!value.isValid() || !isStringValue(value)) return false;
                 values.append(value);
             }
@@ -1568,7 +1573,7 @@ bool ExecutionEngine::executeInstruction(const LogicalLine& line) {
                 auto lhs = QSharedPointer<VariableNode>::create(ref.name, OperandType::Str);
                 for (int index : ref.indices) lhs->addIndex(QSharedPointer<LiteralNode>::create(qint64(index)));
                 BinaryOpNode operation(lhs, ExpressionToken(TokenType::PLUS, "+"), args[1].ast);
-                const QVariant value = getEvaluator().evaluate(operation, m_storage, m_gameBaseData);
+                const QVariant value = getEvaluator().evaluate(operation, m_storage, m_gameBaseData, m_activeScope);
                 if (!value.isValid()) return false;
                 return writeStructuredValue(ref, value, line.ownerFunction);
             }
@@ -1581,7 +1586,7 @@ bool ExecutionEngine::executeInstruction(const LogicalLine& line) {
         auto lhs = QSharedPointer<VariableNode>::create(ref.name, OperandType::Str);
         for (int index : ref.indices) lhs->addIndex(QSharedPointer<LiteralNode>::create(qint64(index)));
         BinaryOpNode operation(lhs, ExpressionToken(TokenType::MULTIPLY, "*"), args[1].ast);
-        const QVariant value = getEvaluator().evaluate(operation, m_storage, m_gameBaseData);
+        const QVariant value = getEvaluator().evaluate(operation, m_storage, m_gameBaseData, m_activeScope);
         if (!value.isValid() || !isStringValue(value)) return false;
         return writeStructuredValue(ref, value, line.ownerFunction);
     }
@@ -1623,7 +1628,7 @@ bool ExecutionEngine::executeInstruction(const LogicalLine& line) {
         ExpressionEvaluator& ev = getEvaluator();
         QString text;
         for (const Operand& operand : args) {
-            if (operand.ast) text += stringText(ev.evaluate(*operand.ast, m_storage, m_gameBaseData));
+            if (operand.ast) text += stringText(ev.evaluate(*operand.ast, m_storage, m_gameBaseData, m_activeScope));
             else if (operand.isString) text += operand.raw;
         }
         if (!name.endsWith(QLatin1Char('L')) && !name.endsWith(QLatin1Char('W')))
@@ -1727,7 +1732,7 @@ bool ExecutionEngine::handleSplit(const LogicalLine& line)
     ExpressionEvaluator& ev = getEvaluator();
     const auto evalStr = [&](const Operand& op) -> QString {
         if (op.isString) return op.raw;
-        return op.ast ? stringText(ev.evaluate(*op.ast, m_storage, m_gameBaseData))
+        return op.ast ? stringText(ev.evaluate(*op.ast, m_storage, m_gameBaseData, m_activeScope))
                       : throw std::runtime_error("String operand has no load-time AST");
     };
     // 顶层逗号切分（逗号可能是独立 Operand，也可能是表达式的一部分）
@@ -1795,8 +1800,8 @@ bool ExecutionEngine::executeFunctionCall(const LogicalLine& line)
         qint64 v = 0;
         if (!line.arguments.isEmpty()) {
             const Operand& op = line.arguments.first();
-            v = op.ast ? ev.evaluate(*op.ast, m_storage, m_gameBaseData).toLongLong()
-                       : evaluateOperand(ev, op, m_storage, m_gameBaseData).toLongLong();
+            v = op.ast ? ev.evaluate(*op.ast, m_storage, m_gameBaseData, m_activeScope).toLongLong()
+                       : evaluateOperand(ev, op, m_storage, m_gameBaseData, m_activeScope).toLongLong();
         }
         if (!v) {
             m_state.setErrorState();
@@ -1820,7 +1825,7 @@ bool ExecutionEngine::executeFunctionCall(const LogicalLine& line)
         QString text;
         if (!line.arguments.isEmpty() && line.arguments.first().ast) {
             ExpressionEvaluator& ev = getEvaluator();
-            text = stringText(ev.evaluate(*line.arguments.first().ast, m_storage, m_gameBaseData));
+            text = stringText(ev.evaluate(*line.arguments.first().ast, m_storage, m_gameBaseData, m_activeScope));
         } else if (!line.arguments.isEmpty()) {
             text = line.arguments.first().raw;
         }
@@ -1887,7 +1892,7 @@ bool ExecutionEngine::executeFunctionCall(const LogicalLine& line)
         QString text;
         if (!line.arguments.isEmpty()) {
             const Operand& a = line.arguments.first();
-            if (a.ast) text = stringText(ev.evaluate(*a.ast, m_storage, m_gameBaseData));
+            if (a.ast) text = stringText(ev.evaluate(*a.ast, m_storage, m_gameBaseData, m_activeScope));
             else text = a.raw;
         }
         const qint64 len = (upper == QLatin1String("STRLENFORMU"))
@@ -1906,7 +1911,7 @@ bool ExecutionEngine::executeFunctionCall(const LogicalLine& line)
         return true;
     }
     ExpressionEvaluator& ev = getEvaluator();
-    value = ev.evaluate(*line.arguments.first().ast, m_storage, m_gameBaseData);
+    value = ev.evaluate(*line.arguments.first().ast, m_storage, m_gameBaseData, m_activeScope);
 
     // 返回类型决定写哪个寄存器（对齐 C#：Int64 -> RESULT，string -> RESULTS）
     const OperandType ret = builtinFunctionReturnType(upper.toStdString());
@@ -1940,7 +1945,7 @@ void ExecutionEngine::printDataFormLine(const LogicalLine& line, bool defaultCol
 QString ExecutionEngine::printDataFormText(const LogicalLine& line) {
     if (line.arguments.isEmpty()) return QString();
     const Operand& a = line.arguments.first();
-    if (a.ast) return stringText(getEvaluator().evaluate(*a.ast, m_storage, m_gameBaseData));
+    if (a.ast) return stringText(getEvaluator().evaluate(*a.ast, m_storage, m_gameBaseData, m_activeScope));
     return a.raw;
 }
 
@@ -1997,7 +2002,7 @@ bool ExecutionEngine::handleStringAssignment(const ExpressionNode* lhs, const QS
     ExpressionEvaluator& evaluator = getEvaluator();
     Q_UNUSED(rhs);
     if (!ast) { emit errorOccurred(QStringLiteral("字符串赋值缺少装载期 AST")); return false; }
-    const QVariant result = evaluator.evaluate(*ast, m_storage, m_gameBaseData);
+    const QVariant result = evaluator.evaluate(*ast, m_storage, m_gameBaseData, m_activeScope);
     if (!result.isValid() || !isStringValue(result)) return false;
     const QString value = stringText(result);
     return writeStructuredValue(ref, result, ownerFunction);
@@ -2010,7 +2015,7 @@ bool ExecutionEngine::writeStructuredValue(const LhsRef& ref, const QVariant& va
     Q_UNUSED(ownerFunction);
     if (ref.name.isEmpty() || !ref.valid) return false;
     if (m_storage->hasParameter(ref.name)) { m_storage->setParameter(ref.name, value); return true; }
-    return m_storage->setStringSlot(ref.name, ref.indices, flatString(value));
+    return m_storage->setStringSlot(ref.name, ref.indices, flatString(value), m_activeScope);
 }
 
 bool ExecutionEngine::writeStringValue(const ExpressionNode* lhs, const QString& value,
@@ -2031,7 +2036,7 @@ bool ExecutionEngine::handleAssignment(const ExpressionNode* lhs, const QString&
     const auto expressions = nodes.isEmpty() ? QList<QSharedPointer<ExpressionNode>>{ast} : nodes;
     QList<qint64> values;
     for (const auto& node : expressions) {
-        const QVariant value = node ? evaluator.evaluate(*node, m_storage, m_gameBaseData) : QVariant();
+        const QVariant value = node ? evaluator.evaluate(*node, m_storage, m_gameBaseData, m_activeScope) : QVariant();
         if (!value.isValid() || isStringValue(value)) return false;
         values.append(value.toLongLong());
     }
@@ -2081,7 +2086,7 @@ bool ExecutionEngine::handlePrintInstruction(const LogicalLine& line) {
 
     const auto valueOf = [&](const Operand& a) -> QString {
         if (a.ast) {
-            return stringText(evaluator.evaluate(*a.ast, m_storage, m_gameBaseData));
+            return stringText(evaluator.evaluate(*a.ast, m_storage, m_gameBaseData, m_activeScope));
         }
         return a.raw;
     };
@@ -2092,7 +2097,7 @@ bool ExecutionEngine::handlePrintInstruction(const LogicalLine& line) {
         for (const CompiledPrintTemplatePart& part : line.printTemplate->parts) {
             if (part.kind == PrintTemplatePart::Kind::Text) text += part.text;
             else if (part.kind == PrintTemplatePart::Kind::Expression && part.expression)
-                text += stringText(evaluator.evaluate(*part.expression, m_storage, m_gameBaseData));
+                text += stringText(evaluator.evaluate(*part.expression, m_storage, m_gameBaseData, m_activeScope));
         }
     } else switch (info.mode) {
     case AstBuilder::PrintArgMode::PrintV:
@@ -2390,7 +2395,7 @@ void ExecutionEngine::handleSaveData(const LogicalLine& line)
         // 整段引号字面量（如 SAVEDATA 40, "标题"）：raw 已是去引号后的文本，
         // 且无 AST；若再当表达式求值会把中文标题当未定义标识符 -> 0。
         if (op.isString) return QVariant(op.raw);
-        return op.ast ? ev.evaluate(*op.ast, m_storage, m_gameBaseData)
+        return op.ast ? ev.evaluate(*op.ast, m_storage, m_gameBaseData, m_activeScope)
                       : throw std::runtime_error("Operand has no load-time AST");
     };
     const qint64 idx = evalOp(parts[0]).toLongLong();
@@ -2418,8 +2423,8 @@ void ExecutionEngine::handleLoadData(const LogicalLine& line)
     if (operands.isEmpty()) return;
     ExpressionEvaluator& ev = getEvaluator();
     const Operand& op = operands.first();
-    const qint64 idx = op.ast ? ev.evaluate(*op.ast, m_storage, m_gameBaseData).toLongLong()
-                              : evaluateOperand(ev, op, m_storage, m_gameBaseData).toLongLong();
+    const qint64 idx = op.ast ? ev.evaluate(*op.ast, m_storage, m_gameBaseData, m_activeScope).toLongLong()
+                              : evaluateOperand(ev, op, m_storage, m_gameBaseData, m_activeScope).toLongLong();
     if (idx < 0 || idx > INT_MAX || !loadSaveSnapshot(idx)) {
         m_state.setErrorState();
         setError(QStringLiteral("LOADDATA 无效或无法加载的存档 %1").arg(idx));
@@ -2432,8 +2437,8 @@ void ExecutionEngine::handleDelData(const LogicalLine& line)
     if (operands.isEmpty()) return;
     ExpressionEvaluator& ev = getEvaluator();
     const Operand& op = operands.first();
-    const qint64 idx = op.ast ? ev.evaluate(*op.ast, m_storage, m_gameBaseData).toLongLong()
-                              : evaluateOperand(ev, op, m_storage, m_gameBaseData).toLongLong();
+    const qint64 idx = op.ast ? ev.evaluate(*op.ast, m_storage, m_gameBaseData, m_activeScope).toLongLong()
+                              : evaluateOperand(ev, op, m_storage, m_gameBaseData, m_activeScope).toLongLong();
     if (idx < 0 || idx > INT_MAX) { setError(QStringLiteral("DELDATA 无效编号")); return; }
     const QString path = GamePaths::join(m_gameDataDir, QStringLiteral("sav/save%1.sav").arg(idx, 2, 10, QLatin1Char('0')));
     if (QFile::exists(path) && !QFile::remove(path)) { setError(QStringLiteral("DELDATA 删除失败")); return; }
@@ -2471,8 +2476,8 @@ void ExecutionEngine::handleChkData(const LogicalLine& line)
     ExpressionEvaluator& ev = getEvaluator();
     const QList<Operand> operands = saveCommandOperands(line);
     const Operand& op = operands.isEmpty() ? Operand() : operands.first();
-    const qint64 idx = op.ast ? ev.evaluate(*op.ast, m_storage, m_gameBaseData).toLongLong()
-                              : evaluateOperand(ev, op, m_storage, m_gameBaseData).toLongLong();
+    const qint64 idx = op.ast ? ev.evaluate(*op.ast, m_storage, m_gameBaseData, m_activeScope).toLongLong()
+                              : evaluateOperand(ev, op, m_storage, m_gameBaseData, m_activeScope).toLongLong();
     const bool exists = checkSaveSnapshot(idx) == 0;
     // 对齐 C# CheckdataMethod：RESULT = EraDataState（0=OK / 1=FILENOTFOUND），
     // RESULTS = 状态说明文本。
@@ -2519,7 +2524,7 @@ bool ExecutionEngine::handleStatusCommand(const LogicalLine& line)
     const auto evalOp = [&](const Operand* op) -> QVariant {
         if (!op) return {};
         if (op->isString) return QVariant(op->raw);
-        return op->ast ? ev.evaluate(*op->ast, m_storage, m_gameBaseData)
+        return op->ast ? ev.evaluate(*op->ast, m_storage, m_gameBaseData, m_activeScope)
                        : throw std::runtime_error("Operand has no load-time AST");
     };
     // C# PRINT_PALAM / PRINT_SHOPITEM 的每行列数（Config.PrintCPerLine）
@@ -2684,7 +2689,7 @@ bool ExecutionEngine::handleStatusCommand(const LogicalLine& line)
         // 表达式 —— 求值失败时按原文取用（对齐 ecd/docs 的示例写法）
         QString str;
         if (first->isString) str = first->raw;
-        else if (first->ast) str = stringText(ev.evaluate(*first->ast, m_storage, m_gameBaseData));
+        else if (first->ast) str = stringText(ev.evaluate(*first->ast, m_storage, m_gameBaseData, m_activeScope));
         else {
             emit errorOccurred(QStringLiteral("HTML_TAGSPLIT 的字符串参数缺少装载期 AST"));
             return true;
@@ -2858,7 +2863,7 @@ bool ExecutionEngine::handleSaveVarCommand(const LogicalLine& line)
     const auto evalString = [&](const Operand* op) -> QString {
         if (!op) return QString();
         if (op->isString) return op->raw;
-        if (op->ast) return stringText(ev.evaluate(*op->ast, m_storage, m_gameBaseData));
+        if (op->ast) return stringText(ev.evaluate(*op->ast, m_storage, m_gameBaseData, m_activeScope));
         throw std::runtime_error("String operand has no load-time AST");
     };
 

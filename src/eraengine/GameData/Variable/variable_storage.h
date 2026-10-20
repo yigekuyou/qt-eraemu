@@ -23,6 +23,7 @@
 #include <QString>
 #include <QList>
 #include <QHash>
+#include <deque>
 #include <functional>
 #include <QtQml/qqmlregistration.h>
 
@@ -94,8 +95,12 @@ public:
 		//   -> 声明维数 >= 2 的 2D/3D -> 全局 1D。
 		// 大小写规范化统一走 eraUpperKey（不再混用 toUpper）。
 		// 读路径 const：内部访问函数本身是 const，无需 const_cast。
-		[[nodiscard]] qint64 readIntByName(const QString& name, const QList<int>& indices) const;
-		void writeIntByName(const QString& name, const QList<int>& indices, qint64 value);
+		// scope = 解析私有名的位置（0 = 顶层）。键自足的调用方（readIntNode）
+		// 只在本原语的 Dynamic 分支才用到它。
+		[[nodiscard]] qint64 readIntByName(const QString& name, const QList<int>& indices,
+		                                   eravar::ScopeId scope) const;
+		void writeIntByName(const QString& name, const QList<int>& indices, qint64 value,
+		                    eravar::ScopeId scope);
 
 		// 用户数组声明维数（1/2/3）：由 ExpressionEvaluator（与旧 lhsDimension
 		// 同源：VariableTable::find(name, ownerFunction)）注入。
@@ -235,7 +240,12 @@ public:
 		void clearLocalAliases() { m_localAliases.clear(); }
 
         [[nodiscard]] FlatStringValue getStringSlot(const QString& name, const QList<int>& indices = {}) const;
+        // 显式作用域版本：Dynamic 解析用（名字 -> 该函数的私有槽）。
+        [[nodiscard]] FlatStringValue getStringSlot(const QString& name, const QList<int>& indices,
+                                                    eravar::ScopeId scope) const;
         bool setStringSlot(const QString& name, const QList<int>& indices, const FlatStringValue& value);
+        bool setStringSlot(const QString& name, const QList<int>& indices,
+                           const FlatStringValue& value, eravar::ScopeId scope);
 
         struct LocalContext {
             QList<qint64> integers;
@@ -244,18 +254,15 @@ public:
             QList<FlatStringValue> argStrings;
             QHash<QString, int> aliases;
             QHash<QString, QVariant> parameters;
-            QHash<QString, QString> privateNames;
             QHash<QString, QString> references;
-            // 当前私有作用域的**函数名**（大写）。「变量分词」的运行期守卫用：
-            // AST 节点的静态键只在「执行所在行 → stepOnce 按 ownerFunction 设
-            // 作用域」的上下文里成立；直接求值（测试装载期校验 / 调试）等
-            // 脱离行执行的场合 live 作用域可能是空的 —— 作用域名对不上就回退
-            // 完整解析（旧语义）。
+            // 当前调用帧的私有作用域**函数名**（大写）。仅供存储层内部按
+            // storageName(name) 解析时当作「当前帧快捷记录」使用 —— 求值器
+            // 不再读它，而是把 scope 作为参数传入（见 ExpressionEvaluator）。
             QString privateScopeName;
         };
         LocalContext localContext() const {
             return {m_localIntVars, m_localStrVars, m_argIntVars, m_argStrVars,
-                    m_localAliases, m_parameters, m_privateNames, m_references,
+                    m_localAliases, m_parameters, m_references,
                     m_privateScopeName};
         }
         void setLocalContext(const LocalContext& context) {
@@ -265,36 +272,54 @@ public:
             m_argStrVars = context.argStrings;
             m_localAliases = context.aliases;
             m_parameters = context.parameters;
-            m_privateNames = context.privateNames;
             m_references = context.references;
             m_privateScopeName = context.privateScopeName;
+            m_privateScopeId = eravar::internName(m_privateScopeName);
         }
-        // 「变量分词」守卫：当前生效的私有作用域函数名（大写；空 = 顶层）
+        // 当前帧的私有作用域函数名（大写；空 = 顶层）。存储层内部快捷记录；
+        // 求值器的解析一律使用显式传入的 eravar::ScopeId。
         [[nodiscard]] const QString& privateScopeName() const { return m_privateScopeName; }
+        // 当前帧作用名的 intern id（0 = 无私有作用域）。
+        [[nodiscard]] eravar::ScopeId privateScopeId() const { return m_privateScopeId; }
+        // 填充某个函数的作用域名表（名字 -> 存储键），并把「当前帧」指向它。
+        // 名字表按 scopeId 常驻：不同函数的私有名互不覆盖，换函数只改指针。
         void setPrivateScope(const QString& function, const QStringList& names) {
-            // perf：作用域只随函数名变化（声明表装载后不变）——按函数缓存构建结果，
-            // 免去每次 CALL/RETURN 都对每个名字做 toUpper + 拼接 + 哈希插入。
-            // 赋值不再做内容比较：QHash 赋值是 COW 的 O(1)（引用计数 +1），
-            // 而 `!=` 是逐元素内容比较（O(私有变量数)），旧写法把便宜事做贵了。
             const QString fkey = function.toUpper();
+            const eravar::ScopeId scope = eravar::internName(fkey);
             m_privateScopeName = fkey;
-            const auto it = m_privateScopeCache.constFind(fkey);
-            if (it == m_privateScopeCache.constEnd()) {
-                QHash<QString, QString> next;
-                for (const auto& name : names)
-                    next.insert(name.toUpper(), fkey + QChar(0x1f) + name.toUpper());
-                m_privateNames = m_privateScopeCache.insert(fkey, next).value();
-                return;
-            }
-            m_privateNames = it.value();
+            m_privateScopeId = scope;
+            // 已登记过的作用域直接复用（声明表装载后不变）。
+            if (m_privateNames.contains(scope)) return;
+            QHash<QString, QString> next;
+            next.reserve(names.size());
+            for (const auto& name : names)
+                next.insert(name.toUpper(),
+                            eravar::makePrivateStorageKey(fkey, name));
+            m_privateNames.insert(scope, next);
         }
         // Emuera 的 `大文字小文字の違いを無視する:YES`（ICVariable）语义：
         // 标识符大小写不敏感，所有存储键统一用大写，写 A 与读 a 落到同一槽位。
         // 否则 `Mark`/`MARK` 会被当成两个变量，表现为「变量似乎不可变」。
-        QString storageName(const QString& name) const {
+        //
+        // scope 是**显式参数**：键本身自带作用域（私有名 -> FUNC\x1fNAME），
+        // 这里只是在「按名解析」（Dynamic）时按 scope 选择该函数的名表。
+        // scope == 0 = 顶层：只有 REF 别名与裸名。
+        QString storageName(const QString& name, eravar::ScopeId scope) const {
             QString scratch;
             const QString& upper = eraUpperKey(name, scratch);
-            return m_references.value(upper, m_privateNames.value(upper, upper));
+            if (scope != eravar::kGlobalScope) {
+                const auto scopeIt = m_privateNames.constFind(scope);
+                if (scopeIt != m_privateNames.constEnd()) {
+                    const auto nameIt = scopeIt.value().constFind(upper);
+                    if (nameIt != scopeIt.value().constEnd())
+                        return m_references.value(upper, nameIt.value());
+                }
+            }
+            return m_references.value(upper, upper);
+        }
+        // 当前帧快捷重载（仅存储层内部 / 未接线调用方使用）。
+        QString storageName(const QString& name) const {
+            return storageName(name, m_privateScopeId);
         }
         void setReference(const QString& name, const QString& targetStorage) {
             m_references.insert(eraUpperKey(name), targetStorage);
@@ -316,6 +341,10 @@ public:
             return m_references.value(upper, upper);
         }
         [[nodiscard]] QString resolvedStorageName(const QString& name) const { return storageName(name); }
+        // 显式作用域版本：求值器的 Dynamic 解析链只认参数，不读当前帧。
+        [[nodiscard]] QString resolvedStorageName(const QString& name, eravar::ScopeId scope) const {
+            return storageName(name, scope);
+        }
         [[nodiscard]] int arraySize(const QString& name) const;
         [[nodiscard]] int arraySizeRaw(const QString& storageKey) const;
         [[nodiscard]] QList<int> arrayLengths(const QString& name) const;
@@ -428,6 +457,27 @@ public:
         void setGlobalInt1DRaw(const QString& storageKey, int x, qint64 value);
         void setGlobalInt2DRaw(const QString& storageKey, int x, int y, qint64 value);
         void setGlobalInt3DRaw(const QString& storageKey, int x, int y, int z, qint64 value);
+
+        // ---- VariableKey 入口（运行期「变量分词」直取路径）----
+        // id -> 存储层字符串键的解析**只有 storageKeyFor 一处**：内部按
+        // (scope<<32)|name 记忆化，热路径摊到一次 quint64 哈希，绝不重新拼串。
+        // 返回的引用指向 std::deque 里的 QString（元素地址在 push_back 之后不变）。
+        [[nodiscard]] const QString& storageKeyFor(const eravar::VariableKey& key) const;
+        [[nodiscard]] qint64 getGlobalInt1DRaw(const eravar::VariableKey& k, int x) const
+        { return getGlobalInt1DRaw(storageKeyFor(k), x); }
+        [[nodiscard]] qint64 getGlobalInt2DRaw(const eravar::VariableKey& k, int x, int y) const
+        { return getGlobalInt2DRaw(storageKeyFor(k), x, y); }
+        [[nodiscard]] qint64 getGlobalInt3DRaw(const eravar::VariableKey& k, int x, int y, int z) const
+        { return getGlobalInt3DRaw(storageKeyFor(k), x, y, z); }
+        [[nodiscard]] FlatStringValue getStringSlotRaw(const eravar::VariableKey& k,
+                                                      const QList<int>& indices) const
+        { return getStringSlotRaw(storageKeyFor(k), indices); }
+        void setGlobalInt1DRaw(const eravar::VariableKey& k, int x, qint64 value)
+        { setGlobalInt1DRaw(storageKeyFor(k), x, value); }
+        void setGlobalInt2DRaw(const eravar::VariableKey& k, int x, int y, qint64 value)
+        { setGlobalInt2DRaw(storageKeyFor(k), x, y, value); }
+        void setGlobalInt3DRaw(const eravar::VariableKey& k, int x, int y, int z, qint64 value)
+        { setGlobalInt3DRaw(storageKeyFor(k), x, y, z, value); }
 		Q_INVOKABLE void setGlobalStr2D(const QString &name, int x, int y, const QString &value);
 		Q_INVOKABLE QString getGlobalStr2D(const QString &name, int x, int y) const;
 
@@ -483,11 +533,18 @@ private:
 		const VariableTable* m_saveVariableTable = nullptr;
 		IntDimProvider m_intDimProvider;
 		QHash<QString, QVariant> m_parameters;
-        QHash<QString, QString> m_privateNames;
+        // 私有作用域名表：scopeId（函数名 intern id） -> name(upper) -> storage key。
+        // 每个函数一张，互不覆盖；scope == 0 不在表中（顶层只有裸名）。
+        QHash<eravar::ScopeId, QHash<QString, QString>> m_privateNames;
         QHash<QString, QString> m_references;
-        // setPrivateScope 的按函数缓存（function(upper) -> name(upper) -> storage key）
-        QHash<QString, QHash<QString, QString>> m_privateScopeCache;
-        QString m_privateScopeName;   // 当前生效的私有作用域函数名（大写）
+        QString m_privateScopeName;   // 当前帧的私有作用域函数名（大写）
+        eravar::ScopeId m_privateScopeId = eravar::kGlobalScope; // 同上 intern id
+        // VariableKey -> 存储键串 的记忆化：(scope<<32)|name -> 串在 m_storageKeyStrings 的下标。
+        // 串放 std::deque（push_back 不搬迁既有元素）—— storageKeyFor 返回的
+        // const QString& 在任何后续登记之后仍然有效，不依赖 QHash 节点实现细节。
+        // mutable：只读访问也要登记（运行期单线程求值，与其余存储容器同口径）。
+        mutable QHash<quint64, quint32> m_storageKeyCache;
+        mutable std::deque<QString> m_storageKeyStrings;
 		QList<qint64> m_localIntVars;
 		QList<qint64> m_argIntVars;   // ARG（与 LOCAL 分离）
 		QList<FlatStringValue> m_localStrVars;

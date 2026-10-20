@@ -29,6 +29,7 @@
 #include <memory>
 #include "variable_storage.h"
 #include "ast/logical_line.h"
+#include "ast/name_interner.h"
 #include "erb_loader.h"
 #include "extension_registry.h"
 #include "process_state.h"
@@ -187,7 +188,10 @@ signals:
 
 public:
     // Execute a single instruction (public for testing)
-    bool executeInstruction(const LogicalLine& line);
+    // scope = 该行所属函数的作用域（ScriptRunner 传入；0 = 顶层）。
+    // 该行内所有表达式求值都用它作为私有名解析的位置。
+    bool executeInstruction(const LogicalLine& line,
+                            eravar::ScopeId scope = eravar::kGlobalScope);
 
     // RESETDATA（对齐 C# VariableEvaluator.ResetData）：变量回默认 + 角色清空。
     // 供 RESETDATA 指令与系统层 resetData（新开游戏）、QUIT 卸载共用。
@@ -309,6 +313,7 @@ public:
 
 private:
     const LogicalLine* m_activeInstruction = nullptr; // scoped execution diagnostic context
+    eravar::ScopeId m_activeScope = eravar::kGlobalScope; // 同上：当前行的显式作用域
     [[nodiscard]] LhsRef resolveLhsRef(const ExpressionNode* ast);
     bool writeStructuredValue(const LhsRef& ref, const QVariant& value, const QString& ownerFunction = {});
     bool writeStringValue(const LhsRef& ref, const QString& value, const QString& ownerFunction = {});

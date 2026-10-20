@@ -37,6 +37,10 @@ class VariableStorage;
 class GameBaseData;
 class ExpressionEvaluator;
 
+// 只读收尾步骤（4/5/6 号 pass）的输入视图，实现见 parse_checks.h。
+// 这里只前置声明：makeIrView() 的定义在 .cpp（那边才需要完整类型）。
+namespace parsecheck { struct ParseIrView; }
+
 // ---------------------------------------------------------------------------
 // 调用帧 (Call frame)
 //
@@ -162,6 +166,8 @@ public:
 
     void setGameBaseData(GameBaseData* data) { m_gameBaseData = data; }
     void setVariableStorage(VariableStorage* storage);
+    // 已接上的变量存储（只读；checkStaticValues 的尺寸来源）。未接上 = nullptr。
+    [[nodiscard]] const VariableStorage* variableStorage() const { return m_variableStorage; }
     void setExpressionEvaluator(ExpressionEvaluator* evaluator);
 
     // CSV 常量名表（解析期识别「常量名下标」）
@@ -178,6 +184,8 @@ public:
     // ---- 只读区查询 ----
     [[nodiscard]] const ScriptData* script(const QString& scriptName) const;
     [[nodiscard]] QStringList scriptNames() const { return m_scripts.keys(); }
+    // 全部脚本的只读视图（收尾的只读检查步骤 / 外部取证用；不提供可变版本）
+    [[nodiscard]] const QHash<QString, ScriptData>& scripts() const { return m_scripts; }
     // Load-time compilation only; finalized tables reject source text.
     [[nodiscard]] QSharedPointer<ExpressionNode> expressionAst(const QString& expr, bool quiet = false);
     // 同上，但**显式指定作用域**（ownerFunction）。finalize 阶段 m_currentScript/
@@ -247,6 +255,9 @@ public:
     // 解析期诊断（分级 + 代码 + 位置；对齐 C# ParserMediator 的结构化告警）。
     // texts() 为兼容既有「文本告警」消费者（dbus loadState 的计数）而保留。
     [[nodiscard]] const ParseDiagnostics& parseDiagnostics() const { return m_diagnostics; }
+    // 清空解析期诊断：只读检查步骤（4/5/6）可脱离收尾单独重跑，调用方先清空
+    // 即可拿到「这一次跑出来的」诊断集合（不改装载状态、不动 AST）。
+    void clearDiagnostics() { m_diagnostics.clear(); }
     [[nodiscard]] const QStringList& parseWarnings() const { return m_diagnostics.texts(); }
     [[nodiscard]] int parseWarningCount() const { return m_diagnostics.size(); }
     // 装载期（预处理/词法/结构）告警：由 ErbLoader 汇总后回灌（Warning，code=preprocess）
@@ -324,6 +335,9 @@ public:
     // 与 C# IdentifierDictionary.GetVariableToken 用 line.ParentLabelLine
     // 查私有变量表等价（执行到哪个函数的行，就只看得见该函数的私有常量）。
     [[nodiscard]] QString executionScope() const;
+    // 同上，intern id（0 = 顶层）。按最后一次位置变化缓存 —— 求值入口把它
+    // 作为显式作用域参数，不依赖存储层的「当前帧」。
+    [[nodiscard]] eravar::ScopeId executionScopeId() const;
 
     // 上一次位置变化是不是「跳转」（相对顺序推进）。用于区分
     // 「顺序落入函数标签」（= 函数结束）与「跳转/调用到函数标签」（= 跳过标签）。
@@ -482,6 +496,10 @@ private:
     static void collectFunctionWarnings(const QSharedPointer<ExpressionNode>& ast,
                                         const ScriptPosition& position, WarningCollector& out);
 
+    // 只读收尾步骤（4/5/6 号 pass）的视图构造：只做指针打包，不读取内容。
+    // 三个步骤的实现是 parse_checks.cpp 里的自由函数，public 方法只做转发。
+    [[nodiscard]] parsecheck::ParseIrView makeIrView() const;
+
     void setCurrentLineInternal(int line, bool forceEmit = false);
     void pushFrame(const Frame& frame);
     Frame popFrame();
@@ -516,6 +534,10 @@ private:
 
     QString       m_currentScript;
     int           m_currentLine = 0;
+    // executionScopeId() 的缓存（名字 -> id；位置变化后第一次调用时更新）
+    mutable QString           m_scopeIdName;
+    mutable eravar::ScopeId   m_scopeId = eravar::kGlobalScope;
+    mutable bool              m_scopeIdValid = false;
     QList<Frame>  m_callStack;
     int           m_depth = 0;
     bool          m_jumped = false;

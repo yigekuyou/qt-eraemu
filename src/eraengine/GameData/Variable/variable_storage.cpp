@@ -124,7 +124,6 @@ void VariableStorage::clearForReload()
     std::swap(m_parameters, defaults.m_parameters);
     std::swap(m_privateNames, defaults.m_privateNames);
     std::swap(m_references, defaults.m_references);
-    std::swap(m_privateScopeCache, defaults.m_privateScopeCache);
     std::swap(m_localIntVars, defaults.m_localIntVars);
     std::swap(m_argIntVars, defaults.m_argIntVars);
     std::swap(m_localStrVars, defaults.m_localStrVars);
@@ -306,7 +305,10 @@ void VariableStorage::initialize(int maxCharacters, int localSize)
 {
 		Q_UNUSED(maxCharacters)
 		qDebug() << "[var] initialize localSize =" << localSize;
-		m_privateScopeCache.clear();   // 脚本（重）装载后私有作用域可能变化
+		// 脚本（重）装载后私有作用域的名字表可能变化 —— 整张作用域表作废。
+		m_privateNames.clear();
+		m_privateScopeName.clear();
+		m_privateScopeId = eravar::kGlobalScope;
 		if (localSize > 0) {
 				m_localIntVars.fill(0, localSize);
 				m_localStrVars.fill(FlatStringValue{}, localSize);
@@ -361,10 +363,13 @@ int VariableStorage::intDimension(const QString &name) const
 		return 1;
 }
 
-qint64 VariableStorage::readIntByName(const QString &name, const QList<int> &indices) const
+qint64 VariableStorage::readIntByName(const QString &name, const QList<int> &indices,
+                                     eravar::ScopeId scope) const
 {
 		const int first = indices.value(0);
 		if (hasParameter(name)) return parameter(name).toLongLong();
+		// 名字 -> 存储键只解析一次（scope 是显式参数：私有名按该函数的名表解析）。
+		const QString key = storageName(name, scope);
 		// 角色数据变量：按 (角色号, 元素下标) 读取；字符串槽整型读恒 0
 		if (isCharaDataVariable(name)) {
 				if (isCharaDataString(name)) return 0;
@@ -372,8 +377,8 @@ qint64 VariableStorage::readIntByName(const QString &name, const QList<int> &ind
 				QList<int> elems;
 				reduceCharaArgs(name, indices, charaId, elems);
 				if (charaDataDimension(name) >= 2)
-						return getCharaInt3D(name, charaId, elems.value(0), elems.value(1));
-				return getCharaInt(name, charaId, elems.value(0));
+						return getCharaInt3D(key, charaId, elems.value(0), elems.value(1));
+				return getCharaInt(key, charaId, elems.value(0));
 		}
 		const QString upper = eraUpperKey(name);
 		if (upper == QLatin1String("ARG")) return getArgInt(first);
@@ -383,16 +388,18 @@ qint64 VariableStorage::readIntByName(const QString &name, const QList<int> &ind
 		const int dim = intDimension(name);
 		if (indices.size() >= 2 && dim >= 2) {
 				if (indices.size() >= 3 && dim >= 3)
-						return getGlobalInt3D(name, indices.at(0), indices.at(1), indices.at(2));
-				return getGlobalInt2D(name, indices.at(0), indices.at(1));
+						return getGlobalInt3DRaw(key, indices.at(0), indices.at(1), indices.at(2));
+				return getGlobalInt2DRaw(key, indices.at(0), indices.at(1));
 		}
-		return getGlobalInt1D(name, first);
+		return getGlobalInt1DRaw(key, first);
 }
 
-void VariableStorage::writeIntByName(const QString &name, const QList<int> &indices, qint64 value)
+void VariableStorage::writeIntByName(const QString &name, const QList<int> &indices, qint64 value,
+                                     eravar::ScopeId scope)
 {
 		const int first = indices.value(0);
 		if (hasParameter(name)) { setParameter(name, value); return; }
+		const QString key = storageName(name, scope);
 		// 角色数据变量：按 (角色号, 元素下标) 写入（否则同一角色的元素互相覆盖）
 		if (isCharaDataVariable(name)) {
 				if (isCharaDataString(name)) return;   // 字符串：走 assignStringVariable
@@ -400,9 +407,9 @@ void VariableStorage::writeIntByName(const QString &name, const QList<int> &indi
 				QList<int> elems;
 				reduceCharaArgs(name, indices, charaId, elems);
 				if (charaDataDimension(name) >= 2)
-						setCharaInt3D(name, charaId, elems.value(0), elems.value(1), value);
+						setCharaInt3D(key, charaId, elems.value(0), elems.value(1), value);
 				else
-						setCharaInt(name, charaId, elems.value(0), value);
+						setCharaInt(key, charaId, elems.value(0), value);
 				return;
 		}
 		const QString upper = eraUpperKey(name);
@@ -416,13 +423,13 @@ void VariableStorage::writeIntByName(const QString &name, const QList<int> &indi
 		const int dim = intDimension(name);
 		if (indices.size() >= 2 && dim >= 2) {
 				if (indices.size() >= 3 && dim >= 3) {
-						setGlobalInt3D(name, indices.at(0), indices.at(1), indices.at(2), value);
+						setGlobalInt3DRaw(key, indices.at(0), indices.at(1), indices.at(2), value);
 						return;
 				}
-				setGlobalInt2D(name, indices.at(0), indices.at(1), value);
+				setGlobalInt2DRaw(key, indices.at(0), indices.at(1), value);
 				return;
 		}
-		setGlobalInt1D(name, first, value);
+		setGlobalInt1DRaw(key, first, value);
 }
 
 // ================= 角色整型变量 =================
@@ -697,7 +704,7 @@ void VariableStorage::resetGlobals()
 		// （见 setPrivateScope）—— 必须保留，否则 RESETGLOBAL 会把各函数的
 		// 私有计数器一并清零（表现为「跨函数累积的统计量丢失」）。
 		const auto isPrivateKey = [](const QString& k) {
-			return k.contains(QChar(0x1f));
+			return eravar::isPrivateStorageKey(k);
 		};
 		// C# SetDefaultGlobalValue 只重置 GLOBAL/GLOBALS（内建数组）+ 用户 #GLOBAL/#GLOBALS；
 		// **内建系统/字符串变量（DAY/FLAG/UP/…/STR/RESULTS…）不在重置之列**。
@@ -744,8 +751,9 @@ void VariableStorage::restoreDeclaredDefaults()
 	if (!m_saveVariableTable) return;
 	for (const VariableDecl& d : m_saveVariableTable->declarationsRef()) {
 		if (d.isConst || d.isReference || d.isCharaData || d.isGlobal || d.isArg) continue;
+		// 与 setPrivateScope / computeVariableAccess 同一个构造点（分隔符只在那里出现）。
 		const QString key = d.scope == VarScope::Local
-			? d.function.toUpper() + QChar(0x1f) + d.name.toUpper()
+			? eravar::makePrivateStorageKey(d.function, d.name)
 			: d.name.toUpper();
 		const QString storageKey = resolvedStorageName(key);
 		const QList<int> dims = d.lengths.isEmpty() ? QList<int>{1} : d.lengths;
@@ -880,7 +888,7 @@ void VariableStorage::resetForNewGame()
 		// 此前不清 -> eraTW 之类重开游戏后静态计数器继承上一周目。
 		const auto purgePrivate = [&](auto& map) {
 			for (auto it = map.begin(); it != map.end(); ) {
-				if (it.key().contains(QChar(0x1f))) it = map.erase(it);
+				if (eravar::isPrivateStorageKey(it.key())) it = map.erase(it);
 				else ++it;
 			}
 		};
@@ -890,7 +898,9 @@ void VariableStorage::resetForNewGame()
 		purgePrivate(m_globalStr1D);
 		purgePrivate(m_globalStr2D);
 		purgePrivate(m_globalStr3D);
-		m_privateScopeCache.clear();
+		m_privateNames.clear();
+		m_privateScopeName.clear();
+		m_privateScopeId = eravar::kGlobalScope;
 
 		restoreDeclaredDefaults();
 		// 角色数据回默认值。本移植把 CSV 模板默认值**直接写进角色存储**
@@ -1272,6 +1282,19 @@ void VariableStorage::setGlobalStr1D(const QString &name, int x, const QString &
 QString VariableStorage::getGlobalStr1D(const QString &name, int x) const
 {
         return getGlobalStr1DRaw(storageName(name), x);
+}
+
+// VariableKey -> 存储键串：**唯一**的 id 解析入口。
+// 热路径：一次 quint64 哈希（(scope<<32)|name）；未命中才做一次拼接并记忆化。
+// 存储层仍是 QHash<QString,...>（存档格式逐字节不变），冷路径字符串只在这里产生。
+const QString& VariableStorage::storageKeyFor(const eravar::VariableKey& key) const
+{
+        const quint64 packed = key.packed();
+        const auto it = m_storageKeyCache.constFind(packed);
+        if (it != m_storageKeyCache.constEnd()) return m_storageKeyStrings[it.value()];
+        m_storageKeyStrings.push_back(eravar::storageKeyOf(key));
+        m_storageKeyCache.insert(packed, quint32(m_storageKeyStrings.size()) - 1);
+        return m_storageKeyStrings.back();
 }
 
 QString VariableStorage::getGlobalStr1DRaw(const QString& storageKey, int x) const
@@ -1810,7 +1833,12 @@ void VariableStorage::applyBinarySave(const EraBinaryData::Document& document) {
 }
 
 FlatStringValue VariableStorage::getStringSlot(const QString& name, const QList<int>& indices) const {
-    const QString key = storageName(name);
+    return getStringSlot(name, indices, m_privateScopeId);
+}
+
+FlatStringValue VariableStorage::getStringSlot(const QString& name, const QList<int>& indices,
+                                               eravar::ScopeId scope) const {
+    const QString key = storageName(name, scope);
     const int x = indices.value(0), y = indices.value(1), z = indices.value(2);
     if (x < 0 || y < 0 || z < 0) return {};
     if (key == "LOCALS") return m_localStrVars.value(x);
@@ -1844,7 +1872,12 @@ FlatStringValue VariableStorage::getStringSlotRaw(const QString& storageKey, con
 }
 
 bool VariableStorage::setStringSlot(const QString& name, const QList<int>& indices, const FlatStringValue& value) {
-    const QString key = storageName(name);
+    return setStringSlot(name, indices, value, m_privateScopeId);
+}
+
+bool VariableStorage::setStringSlot(const QString& name, const QList<int>& indices,
+                                    const FlatStringValue& value, eravar::ScopeId scope) {
+    const QString key = storageName(name, scope);
     const int x = indices.value(0), y = indices.value(1), z = indices.value(2);
     if (x < 0 || y < 0 || z < 0) return false;
     const auto put1 = [&](auto& list, int i) { if (list.size() <= i) list.resize(i+1); list[i] = value; };

@@ -32,11 +32,12 @@
 
 namespace {
 QVariant evaluateLoadedOperand(ExpressionEvaluator& evaluator, const Operand& operand,
-                               VariableStorage* storage, GameBaseData* baseData) {
+                               VariableStorage* storage, GameBaseData* baseData,
+                               eravar::ScopeId scope) {
     if (operand.snapshot.isValid()) return operand.snapshot;
     if (operand.isString) return QVariant(operand.raw);
     if (!operand.ast) throw std::runtime_error("Missing load-time operand AST");
-    const auto value = evaluator.evaluate(*operand.ast, storage, baseData);
+    const auto value = evaluator.evaluate(*operand.ast, storage, baseData, scope);
     if (!value.isValid()) throw std::runtime_error("Invalid operand expression");
     return value;
 }
@@ -74,7 +75,7 @@ ScriptRunner::ScriptRunner(EraParseTable* table,
     if (m_engine) {
         connect(m_engine, &ExecutionEngine::gameStateLoaded, this, [this] {
             m_loops.clear(); m_callContexts.clear(); m_functionLocals.clear();
-            m_eventChain.active=false; m_lastPrivateScope.clear();
+            m_eventChain.active=false; m_lastPrivateScope.clear(); m_currentScopeId = eravar::kGlobalScope;
         });
         connect(m_engine, &ExecutionEngine::consolePrint, this, [this] { m_printed = true; });
         connect(m_engine, &ExecutionEngine::consolePrintDefaultColor, this, [this] { m_printed = true; });
@@ -86,7 +87,7 @@ ScriptRunner::ScriptRunner(EraParseTable* table,
         while (!m_callContexts.isEmpty())
             m_storage->setLocalContext(m_callContexts.takeLast().locals);
         m_loops.clear();
-        m_lastPrivateScope.clear();   // 上下文被恢复 -> 强制下一步重算私有作用域
+        m_lastPrivateScope.clear(); m_currentScopeId = eravar::kGlobalScope;   // 上下文被恢复 -> 强制下一步重算私有作用域
         m_lastReturnValue = QVariant::fromValue<qint64>(0);
     });
 }
@@ -179,7 +180,7 @@ void ScriptRunner::clearForReload() {
     m_loops.clear();
     m_functionLocals.clear();
     m_callContexts.clear();
-    m_lastPrivateScope.clear();
+    m_lastPrivateScope.clear(); m_currentScopeId = eravar::kGlobalScope;
     m_waitKind.clear();
     m_waitDefault = {};
     m_lastReturnValue = {};
@@ -220,6 +221,7 @@ void ScriptRunner::enterCall(const QString& function) {
     m_storage->setPrivateScope(function,
                                m_table->variableTable().localNamesOfRef(function));
     m_lastPrivateScope = function;   // 与 stepOnce 的缓存 guard 同步
+    m_currentScopeId = eravar::internName(function);   // 求值入口的显式作用域
 }
 
 bool ScriptRunner::returnFromCall() {
@@ -232,7 +234,7 @@ bool ScriptRunner::returnFromCall() {
             const auto context = m_callContexts.takeLast();
             m_functionLocals.insert(context.function, m_storage->localContext());
             m_storage->setLocalContext(context.locals);
-            m_lastPrivateScope.clear();   // 上下文被恢复 -> 强制重算私有作用域
+            m_lastPrivateScope.clear(); m_currentScopeId = eravar::kGlobalScope;   // 上下文被恢复 -> 强制重算私有作用域
             m_loops.resize(context.loops);
         }
         m_table->returnFromCall();
@@ -242,7 +244,7 @@ bool ScriptRunner::returnFromCall() {
         const auto context = m_callContexts.takeLast();
         m_functionLocals.insert(context.function, m_storage->localContext());
         m_storage->setLocalContext(context.locals);
-        m_lastPrivateScope.clear();   // 上下文被恢复 -> 强制重算私有作用域
+        m_lastPrivateScope.clear(); m_currentScopeId = eravar::kGlobalScope;   // 上下文被恢复 -> 强制重算私有作用域
         m_loops.resize(context.loops);
     }
     return true;
@@ -336,6 +338,7 @@ bool ScriptRunner::stepOnce() {
             line.ownerFunction,
             m_table->variableTable().localNamesOfRef(line.ownerFunction));
         m_lastPrivateScope = line.ownerFunction;
+        m_currentScopeId = eravar::internName(line.ownerFunction);
     }
     ExecState r = executeLine(line);
     if (m_state->getExecState() == ExecState::Error) r = ExecState::Error;
@@ -395,7 +398,7 @@ bool ScriptRunner::evalInt(const QSharedPointer<ExpressionNode>& ast, const QStr
     ExpressionEvaluator* ev = &getEvaluator();
     QVariant value;
     if (ast) {
-        value = ev->evaluate(*ast, m_storage, baseData());
+        value = ev->evaluate(*ast, m_storage, baseData(), m_currentScopeId);
     } else if (raw.trimmed().isEmpty()) {
         out = 0;
         return true;
@@ -520,7 +523,7 @@ ExecState ScriptRunner::executeLine(const LogicalLine& line) {
         const auto ast = line.condition ? line.condition
             : (!line.arguments.isEmpty() ? line.arguments.first().ast : QSharedPointer<ExpressionNode>());
         if (!ast) throw std::runtime_error("SELECTCASE operand has no load-time AST");
-        value = evaluator.evaluate(*ast, m_storage, baseData());
+        value = evaluator.evaluate(*ast, m_storage, baseData(), m_currentScopeId);
         const bool stringValue = isStringValue(value);
         for (const int caseLine : m_table->ifBranches(script, pc)) {
             const auto* candidate = m_table->lineAt(script, caseLine);
@@ -582,7 +585,7 @@ ExecState ScriptRunner::executeLine(const LogicalLine& line) {
         if (!line.arguments.isEmpty()) {
             ExpressionEvaluator& ev = getEvaluator();
             const Operand& op = line.arguments.first();
-            message = op.ast ? stringText(ev.evaluate(*op.ast, m_storage, baseData())) : op.raw;
+            message = op.ast ? stringText(ev.evaluate(*op.ast, m_storage, baseData(), m_currentScopeId)) : op.raw;
         }
         m_state->setErrorState();
         emit errorOccurred(QStringLiteral("THROW: %1（%2）").arg(message, line.position.toString()));
@@ -768,7 +771,7 @@ ExecState ScriptRunner::executeLine(const LogicalLine& line) {
                 // 不再按名字走 eraUpperKey + hasParameter + 角色/系统变量表。
                 const auto& variable = static_cast<const VariableNode&>(*counter.ast);
                 const QList<int> counterIndices =
-                    getEvaluator().resolveIndices(variable, m_storage, baseData());
+                    getEvaluator().resolveIndices(variable, m_storage, baseData(), m_currentScopeId);
                 f->value = std::bit_cast<qint64>(
                     quint64(readIntVarAccess(variable, counterIndices)) + quint64(f->step));
                 writeIntVarAccess(variable, counterIndices, f->value);
@@ -801,7 +804,7 @@ ExecState ScriptRunner::executeLine(const LogicalLine& line) {
                     // 分词快路径（与 NEXT 同款）
                     const auto& variable = static_cast<const VariableNode&>(*counter.ast);
                     const QList<int> indices =
-                        getEvaluator().resolveIndices(variable, m_storage, baseData());
+                        getEvaluator().resolveIndices(variable, m_storage, baseData(), m_currentScopeId);
                     writeIntVarAccess(variable, indices, std::bit_cast<qint64>(
                         quint64(readIntVarAccess(variable, indices)) + quint64(f.step)));
                 } else {
@@ -943,7 +946,7 @@ ExecState ScriptRunner::executeLine(const LogicalLine& line) {
     case RunnerInstruction::TRYGOTOFORM: {
         QString label = line.arguments.isEmpty() ? QString() : line.arguments.first().raw;
         if (name != QLatin1String("TRYGOTO") && !line.arguments.isEmpty() && line.arguments.first().ast)
-            label = stringText(getEvaluator().evaluate(*line.arguments.first().ast, m_storage, baseData()));
+            label = stringText(getEvaluator().evaluate(*line.arguments.first().ast, m_storage, baseData(), m_currentScopeId));
         else if (name != QLatin1String("TRYGOTO")) throw std::runtime_error("FORM label has no load-time AST");
         label = label.trimmed();
         if (label.startsWith(QLatin1Char('$'))) label.remove(0, 1);
@@ -979,7 +982,7 @@ ExecState ScriptRunner::executeLine(const LogicalLine& line) {
         // findGotoLabelInFunction 失败分支里处理）。
         QString label = line.arguments.isEmpty() ? QString() : line.arguments.first().raw;
         if (name == QLatin1String("TRYCGOTOFORM") && !line.arguments.isEmpty() && line.arguments.first().ast)
-            label = stringText(getEvaluator().evaluate(*line.arguments.first().ast, m_storage, baseData()));
+            label = stringText(getEvaluator().evaluate(*line.arguments.first().ast, m_storage, baseData(), m_currentScopeId));
         else if (name == QLatin1String("TRYCGOTOFORM")) throw std::runtime_error("FORM label has no load-time AST");
         label = label.trimmed();
         if (label.startsWith(QLatin1Char('$'))) label.remove(0, 1);
@@ -1039,7 +1042,7 @@ ExecState ScriptRunner::executeLine(const LogicalLine& line) {
         const bool isForm = name.endsWith(QLatin1String("FORMF"));
         QString funcName = line.arguments.isEmpty() ? QString() : line.arguments.first().raw;
         if (isForm && !line.arguments.isEmpty() && line.arguments.first().ast) {
-            funcName = stringText(getEvaluator().evaluate(*line.arguments.first().ast, m_storage, baseData()));
+            funcName = stringText(getEvaluator().evaluate(*line.arguments.first().ast, m_storage, baseData(), m_currentScopeId));
         } else if (isForm) {
             throw std::runtime_error("FORM function name has no load-time AST");
         }
@@ -1086,7 +1089,7 @@ ExecState ScriptRunner::executeLine(const LogicalLine& line) {
             if (resolution.extensionSpec) call.setExtensionSpec(resolution.extensionSpec);
             else call.setBuiltinIndex(resolution.builtinIndex);
         }
-        const QVariant value = getEvaluator().evaluate(call, m_storage, baseData());
+        const QVariant value = getEvaluator().evaluate(call, m_storage, baseData(), m_currentScopeId);
         Q_UNUSED(value);
         advance();
         return ExecState::Continue;
@@ -1104,7 +1107,7 @@ ExecState ScriptRunner::executeLine(const LogicalLine& line) {
             QString text;
             if (op.isString) text = op.raw;
             else if (op.ast) {
-                text = stringText(ev->evaluate(*op.ast, m_storage, baseData()));
+                text = stringText(ev->evaluate(*op.ast, m_storage, baseData(), m_currentScopeId));
             } else {
                 text = op.raw;
             }
@@ -1125,8 +1128,8 @@ ExecState ScriptRunner::executeLine(const LogicalLine& line) {
             if (!line.arguments.isEmpty()) {
                 const Operand& op = line.arguments.first();
                 m_lastReturnValue = op.isString ? QVariant(op.raw)
-                    : op.ast ? ev->evaluate(*op.ast, m_storage, baseData())
-                             : evaluateLoadedOperand(*ev, op, m_storage, baseData());
+                    : op.ast ? ev->evaluate(*op.ast, m_storage, baseData(), m_currentScopeId)
+                             : evaluateLoadedOperand(*ev, op, m_storage, baseData(), m_currentScopeId);
             } else {
                 // 裸 RETURNF：对齐 C# ReturnF(null) —— MethodReturnValue=null，
                 // 调用方按函数类型读缺省值。#FUNCTIONS 必须取**空串**而非把整数
@@ -1332,7 +1335,7 @@ ExecState ScriptRunner::executeLine(const LogicalLine& line) {
         for (const Operand& operand : ops) {
             if (!operand.ast || operand.ast->valueType() != OperandType::Str)
                 return failCopy(QStringLiteral("数组名需要装载期字符串表达式 AST"));
-            names.append(stringText(getEvaluator().evaluate(*operand.ast, m_storage, baseData())).toUpper());
+            names.append(stringText(getEvaluator().evaluate(*operand.ast, m_storage, baseData(), m_currentScopeId)).toUpper());
         }
         struct CopyArrayInfo {
             QString name;
@@ -1450,11 +1453,11 @@ ExecState ScriptRunner::executeLine(const LogicalLine& line) {
             }
             if (isStr) {
                 m_waitDefault = a0.ast
-                    ? stringText(ev.evaluate(*a0.ast, m_storage, baseData()))
+                    ? stringText(ev.evaluate(*a0.ast, m_storage, baseData(), m_currentScopeId))
                     : a0.raw;
             } else {
                 qint64 v = 0;
-                if (a0.ast) v = ev.evaluate(*a0.ast, m_storage, baseData()).toLongLong();
+                if (a0.ast) v = ev.evaluate(*a0.ast, m_storage, baseData(), m_currentScopeId).toLongLong();
                 else if (a0.isString) v = a0.raw.toLongLong();
                 m_waitDefault = v;
             }
@@ -1509,15 +1512,15 @@ ExecState ScriptRunner::executeLine(const LogicalLine& line) {
         const Operand& def = line.arguments.first();
         if (isStr) {
             const QString v = def.ast
-                ? stringText(getEvaluator().evaluate(*def.ast, m_storage, baseData()))
+                ? stringText(getEvaluator().evaluate(*def.ast, m_storage, baseData(), m_currentScopeId))
                 : (def.isString ? def.raw
-                                : stringText(evaluateLoadedOperand(getEvaluator(), def, m_storage, baseData())));
+                                : stringText(evaluateLoadedOperand(getEvaluator(), def, m_storage, baseData(), m_currentScopeId)));
             if (m_storage) m_storage->setGlobalStr1D(QStringLiteral("RESULTS"), 0, v);
         } else {
             qint64 v = 0;
-            if (def.ast) v = getEvaluator().evaluate(*def.ast, m_storage, baseData()).toLongLong();
+            if (def.ast) v = getEvaluator().evaluate(*def.ast, m_storage, baseData(), m_currentScopeId).toLongLong();
             else if (def.isString) v = def.raw.toLongLong();
-            else v = evaluateLoadedOperand(getEvaluator(), def, m_storage, baseData()).toLongLong();
+            else v = evaluateLoadedOperand(getEvaluator(), def, m_storage, baseData(), m_currentScopeId).toLongLong();
             if (m_storage) m_storage->setSystemVariable(QStringLiteral("RESULT"), 0, v);
         }
         advance();
@@ -1560,8 +1563,8 @@ ExecState ScriptRunner::executeLine(const LogicalLine& line) {
             // 再拿去当表达式求值（那样 `abc` 会被当成变量名 -> 0）。整数同理优先 ast。
             const auto readStr = [&](const Operand& o) -> QString {
                 if (o.isString) return o.raw;
-                if (o.ast) return stringText(getEvaluator().evaluate(*o.ast, m_storage, baseData()));
-                return stringText(evaluateLoadedOperand(getEvaluator(), o, m_storage, baseData()));
+                if (o.ast) return stringText(getEvaluator().evaluate(*o.ast, m_storage, baseData(), m_currentScopeId));
+                return stringText(evaluateLoadedOperand(getEvaluator(), o, m_storage, baseData(), m_currentScopeId));
             };
             if (fnForm) {
                 // 兼容 `NAME(args)` 形式（整行被归约成一个调用节点）
@@ -1570,7 +1573,7 @@ ExecState ScriptRunner::executeLine(const LogicalLine& line) {
                 if (fn.arguments().size() >= 2) {
                     if (name == QLatin1String("TINPUTS")) {
                         ExpressionEvaluator* ev = &getEvaluator();
-                        defStr = stringText(ev->evaluate(*fn.arguments().at(1), m_storage, baseData()));
+                        defStr = stringText(ev->evaluate(*fn.arguments().at(1), m_storage, baseData(), m_currentScopeId));
                     } else {
                         evalInt(fn.arguments().at(1), QString(), def);
                     }
@@ -1626,9 +1629,9 @@ ExecState ScriptRunner::executeLine(const LogicalLine& line) {
             if (def.isString) {
                 defStr = def.raw;
             } else if (def.ast) {
-                defStr = stringText(getEvaluator().evaluate(*def.ast, m_storage, baseData()));
+                defStr = stringText(getEvaluator().evaluate(*def.ast, m_storage, baseData(), m_currentScopeId));
             } else {
-                defStr = stringText(evaluateLoadedOperand(getEvaluator(), def, m_storage, baseData()));
+                defStr = stringText(evaluateLoadedOperand(getEvaluator(), def, m_storage, baseData(), m_currentScopeId));
             }
         }
         // TONEINPUT 的第 2 参是整数缺省值（C# TINPUT_Instruction：DefIntValue = Def）；
@@ -1637,7 +1640,7 @@ ExecState ScriptRunner::executeLine(const LogicalLine& line) {
         if (name != QLatin1String("TONEINPUTS") && args.size() >= 2) {
             const Operand& def = args.at(1);
             if (def.ast) {
-                defInt = getEvaluator().evaluate(*def.ast, m_storage, baseData()).toLongLong();
+                defInt = getEvaluator().evaluate(*def.ast, m_storage, baseData(), m_currentScopeId).toLongLong();
             } else if (def.isString) {
                 defInt = def.raw.toLongLong();
             }
@@ -1761,7 +1764,7 @@ ExecState ScriptRunner::executeLine(const LogicalLine& line) {
         m_callContexts.clear();
         m_functionLocals.clear();
         m_eventChain.active = false;
-        m_lastPrivateScope.clear();
+        m_lastPrivateScope.clear(); m_currentScopeId = eravar::kGlobalScope;
         m_table->resetPosition();
         m_state->clearFunctionList();
         if (m_machine) m_machine->dataLoaded();
@@ -1913,7 +1916,7 @@ ExecState ScriptRunner::executeLine(const LogicalLine& line) {
     if (m_engine) {
         m_engine->setCurrentScript(script);
         m_engine->setExecutionPosition(pc);
-        m_engine->executeInstruction(line);
+        m_engine->executeInstruction(line, m_currentScopeId);
         // PRINTW / PRINTFORMW / PRINTFORMLW…（W 后缀）：打印后等任意键。
         // C# PRINT_WAITINPUT -> Console.ReadAnyKey（阻塞）—— 此前 requestAnyKey
         // 信号无人接线，等待被完全忽略（eraTW 教学的段落不会停顿）。
@@ -2046,7 +2049,7 @@ ExecState ScriptRunner::doCallLine(const LogicalLine& line, bool isForm, bool is
 {
     QString label = line.arguments.isEmpty() ? QString() : line.arguments.first().raw;
     if (isForm && !line.arguments.isEmpty() && line.arguments.first().ast)
-        label = stringText(getEvaluator().evaluate(*line.arguments.first().ast, m_storage, baseData()));
+        label = stringText(getEvaluator().evaluate(*line.arguments.first().ast, m_storage, baseData(), m_currentScopeId));
     else if (isForm) throw std::runtime_error("FORM label has no load-time AST");
     // [qdbug]（保留的调试桩）：CALL 增加脚本名与源码位置。currentLine() 是
     // 0 基内部行号（比 ERB 源码行号小 1），line.position 才是源码位置；
@@ -2127,15 +2130,16 @@ ExecState ScriptRunner::doCallLine(const LogicalLine& line, bool isForm, bool is
                 throw std::runtime_error("Reference argument has no VariableNode");
             const QString actualName = static_cast<const VariableNode&>(*source.ast).name();
             if (!actualName.isEmpty()) {
-                references.insert(param->name.toUpper(), m_storage->resolvedStorageName(actualName));
+                references.insert(param->name.toUpper(),
+                                  m_storage->resolvedStorageName(actualName, m_currentScopeId));
             }
             evaluated.append(source);
             continue;
         }
         const QVariant value = source.isString ? QVariant(source.raw)
             : source.ast
-                ? getEvaluator().evaluate(*source.ast, m_storage, baseData())
-                : evaluateLoadedOperand(getEvaluator(), source, m_storage, baseData());
+                ? getEvaluator().evaluate(*source.ast, m_storage, baseData(), m_currentScopeId)
+                : evaluateLoadedOperand(getEvaluator(), source, m_storage, baseData(), m_currentScopeId);
         Operand arg(stringText(value));
         arg.isString = isStringValue(value);
         arg.snapshot = value;
@@ -2152,7 +2156,7 @@ ExecState ScriptRunner::doCallLine(const LogicalLine& line, bool isForm, bool is
             expandable = expandable && p.fixedIndex >= 0 && p.varName.compare(actualName, Qt::CaseInsensitive) == 0;
         if (expandable) {
             QList<Operand> expanded;
-            const QString storageName = m_storage->resolvedStorageName(actualName);
+            const QString storageName = m_storage->resolvedStorageName(actualName, m_currentScopeId);
             expanded.append(evaluated.first());
             for (const UserParamDecl& p : info->params) {
                 Operand item;
@@ -2225,7 +2229,7 @@ ExecState ScriptRunner::doTryListLine(const LogicalLine& line) {
         if (!entry->arguments.first().ast)
             throw std::runtime_error("FORM list entry has no load-time AST");
         else
-            target = stringText(getEvaluator().evaluate(*entry->arguments.first().ast, m_storage, baseData()));
+            target = stringText(getEvaluator().evaluate(*entry->arguments.first().ast, m_storage, baseData(), m_currentScopeId));
         target = target.trimmed();
         if (target.startsWith(QLatin1Char('@')) || target.startsWith(QLatin1Char('$')))
             target.remove(0, 1);
@@ -2305,7 +2309,7 @@ bool ScriptRunner::caseMatches(const LogicalLine& caseLine,
     const auto evalClause = [&](const CaseClause& clause, bool right) -> QVariant {
         const auto& ast = right ? clause.astB : clause.astA;
         if (!ast) throw std::runtime_error("CASE clause has no load-time AST");
-        const auto value = ev.evaluate(*ast, m_storage, baseData());
+        const auto value = ev.evaluate(*ast, m_storage, baseData(), m_currentScopeId);
         if (!value.isValid()) throw std::runtime_error("Invalid CASE expression");
         return value;
     };
@@ -2364,7 +2368,7 @@ qint64 ScriptRunner::readIntVar(const QString& name, int index) const {
 qint64 ScriptRunner::readIntVar(const QString& name, const QList<int>& indices) const {
     // 唯一实现：VariableStorage::readIntByName（参数/角色/ARG/LOCAL/系统/1D；
     // 维数 >= 2 且给了 >= 2 个下标时走 2D/3D）。
-    return m_storage->readIntByName(name, indices);
+    return m_storage->readIntByName(name, indices, m_currentScopeId);
 }
 
 void ScriptRunner::writeIntVar(const QString& name, int index, qint64 value) {
@@ -2379,18 +2383,18 @@ qint64 ScriptRunner::readIntVarAccess(const VariableNode& node, const QList<int>
     // fallback 求值器惰性创建：const 方法仅做一次构造，不改变可观察状态。
     ExpressionEvaluator* ev = m_evaluator ? m_evaluator
         : &const_cast<ScriptRunner*>(this)->getEvaluator();
-    return ev->readIntNode(node, indices);
+    return ev->readIntNode(node, indices, m_currentScopeId);
 }
 
 void ScriptRunner::writeIntVarAccess(const VariableNode& node, const QList<int>& indices, qint64 value)
 {
     // 唯一分派在 ExpressionEvaluator::writeIntNode（含作用域守卫）。
     // writeLoopCounter 语义不变：在计数器自身的固定下标上写循环值，无越界检查。
-    getEvaluator().writeIntNode(node, indices, value);
+    getEvaluator().writeIntNode(node, indices, value, m_currentScopeId);
 }
 
 void ScriptRunner::writeIntVar(const QString& name, const QList<int>& indices, qint64 value) {
-    m_storage->writeIntByName(name, indices, value);
+    m_storage->writeIntByName(name, indices, value, m_currentScopeId);
 }
 
 bool ScriptRunner::extractVarRef(const Operand& op, QString& name, QList<int>& indices) {
@@ -2400,7 +2404,7 @@ bool ScriptRunner::extractVarRef(const Operand& op, QString& name, QList<int>& i
     name = variable.name();
     // 复用注入的求值器（getEvaluator 惰性建 fallback）—— 旧实现每次调用都
     // 构造一个临时 ExpressionEvaluator（QObject），FOR/NEXT 每循环迭代 2 次。
-    indices = getEvaluator().resolveIndices(variable, m_storage, baseData());
+    indices = getEvaluator().resolveIndices(variable, m_storage, baseData(), m_currentScopeId);
     return true;
 }
 
@@ -2420,7 +2424,7 @@ void ScriptRunner::writeLoopCounter(const QString& rawName, qint64 value) {
 void ScriptRunner::writeLoopCounter(const Operand& counter, qint64 value) {
     if (!counter.ast || counter.ast->kind() != NodeKind::Variable) return;
     const auto& variable = static_cast<const VariableNode&>(*counter.ast);
-    const QList<int> indices = getEvaluator().resolveIndices(variable, m_storage, baseData());
+    const QList<int> indices = getEvaluator().resolveIndices(variable, m_storage, baseData(), m_currentScopeId);
     writeIntVarAccess(variable, indices, value);
 }
 
@@ -2581,7 +2585,8 @@ bool ScriptRunner::invokeUserFunction(const QString& name, const QList<QVariant>
         if (!p.isReference || p.target != UserParamTarget::LocalVar || !argNodes.value(i)) continue;
         const auto* v = dynamic_cast<const VariableNode*>(argNodes.at(i));
         if (v && v->indices().isEmpty())
-            refTargets.insert(p.varName.toUpper(), m_storage->resolvedStorageName(v->name()));
+            refTargets.insert(p.varName.toUpper(),
+                              m_storage->resolvedStorageName(v->name(), m_currentScopeId));
     }
     // 绑定实参（按声明的形参表：ARG/ARGS/私有变量）
     enterCall(name);
@@ -2640,7 +2645,7 @@ bool ScriptRunner::invokeUserFunction(const QString& name, const QList<QVariant>
                 const QString actualName = argVarNode->name();
                 if (!actualName.isEmpty()) {
                     m_storage->setReference(param->varName,
-                                            m_storage->resolvedStorageName(actualName));
+                                            m_storage->resolvedStorageName(actualName, m_currentScopeId));
                     continue;
                 }
             }

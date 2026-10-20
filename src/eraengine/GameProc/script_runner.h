@@ -235,6 +235,9 @@ private:
     std::unique_ptr<ExpressionEvaluator> m_fallbackEvaluator;
     // perf：stepOnce 只在 owner 函数变化时重算私有作用域（见 stepOnce）
     QString m_lastPrivateScope;
+    // 与 m_lastPrivateScope 同步的 intern id（求值入口的显式作用域参数）。
+    // 只在换函数时更新 —— 绝不每步 intern。
+    eravar::ScopeId m_currentScopeId = eravar::kGlobalScope;
     qint64 m_steps = 0;
     qint64 m_stepLimit = 0;   // 0 = 不限
     SystemStateMachine*  m_machine = nullptr;

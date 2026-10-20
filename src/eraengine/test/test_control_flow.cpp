@@ -76,6 +76,10 @@ static void tryListLoadTime() {
             [&table](const QString& text) { return table.expressionAst(text, true); }));
     table.loadScript("list", lines);
     table.markLoadComplete();
+    // LIST_NAME 声明在 @MAIN 内（#DIMS），写入与求值都必须用同一个显式作用域，
+    // 否则数据落到顶层槽、读取按 MAIN 私有键 → 空串。
+    const eravar::ScopeId mainScope = eravar::internName(QStringLiteral("MAIN"));
+    storage.setPrivateScope("MAIN", {"LIST_NAME"});
     storage.setGlobalStr1D("LIST_NAME", 0, "CHOSEN");
     const auto* entry = table.lineAt("list", 3);
     bool good = entry && !entry->isError && entry->argument.typeOk
@@ -84,8 +88,8 @@ static void tryListLoadTime() {
         good = entry->arguments[0].ast->kind() == NodeKind::StrForm
             && entry->arguments[1].ast->kind() == NodeKind::Variable
             && entry->arguments[1].ast->valueType() == OperandType::Str
-            && stringText(evaluator.evaluate(*entry->arguments[0].ast, &storage)) == "CHOSEN"
-            && stringText(evaluator.evaluate(*entry->arguments[1].ast, &storage)) == "CHOSEN";
+            && stringText(evaluator.evaluate(*entry->arguments[0].ast, &storage, nullptr, mainScope)) == "CHOSEN"
+            && stringText(evaluator.evaluate(*entry->arguments[1].ast, &storage, nullptr, mainScope)) == "CHOSEN";
     }
     // A missing expression in an unreachable candidate must still fail loading.
     VariableStorage invalidStorage;

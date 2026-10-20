@@ -77,6 +77,8 @@ GameData/ast/expression_evaluator.cpp
 GameData/ast/expression_evaluator.h
 GameData/ast/expression_lexer.cpp
 GameData/ast/expression_lexer.h
+GameData/ast/name_interner.cpp
+GameData/ast/name_interner.h
 GameData/ast/expression_parser.cpp
 GameData/ast/expression_parser.h
 GameData/ast/operand_type.h
@@ -110,6 +112,8 @@ GameData/Variable/variable_types.h
 
 GameProc/era_parse_table.cpp
 GameProc/era_parse_table.h
+GameProc/parse_checks.cpp
+GameProc/parse_checks.h
 GameProc/execution_engine.cpp
 GameProc/execution_engine.h
 GameProc/ee_extension.h
@@ -334,6 +338,7 @@ endif()
 # 纯单元测试（自包含、无需外部目录）
 eraengine_add_test(test_era_parse_table)
 eraengine_add_test(test_parse_table_ast)
+eraengine_add_test(test_parse_checks)
 eraengine_add_test(test_execution_chain)
 eraengine_add_test(test_control_flow)
 add_test(NAME test_control_flow COMMAND test_control_flow)
@@ -422,6 +427,7 @@ endif()
 # Register all tests with CTest
 add_test(NAME test_era_parse_table COMMAND test_era_parse_table)
 add_test(NAME test_parse_table_ast COMMAND test_parse_table_ast)
+add_test(NAME test_parse_checks COMMAND test_parse_checks)
 add_test(NAME test_execution_chain COMMAND test_execution_chain)
 add_test(NAME test_console_backend COMMAND test_console_backend)
 add_test(NAME test_console_plane COMMAND test_console_plane)

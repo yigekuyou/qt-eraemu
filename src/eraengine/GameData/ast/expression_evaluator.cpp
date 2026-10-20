@@ -266,7 +266,8 @@ ExpressionEvaluator::ExpressionEvaluator(QObject *parent)
 }
 
 // NEW: Direct AST evaluation entry points (for cached AST)
-QVariant ExpressionEvaluator::evaluate(const ExpressionNode &node, VariableStorage *storage, GameBaseData *gameBaseData)
+QVariant ExpressionEvaluator::evaluate(const ExpressionNode &node, VariableStorage *storage,
+                                       GameBaseData *gameBaseData, eravar::ScopeId scope)
 {
     if (!storage) {
         return QVariant();
@@ -275,20 +276,21 @@ QVariant ExpressionEvaluator::evaluate(const ExpressionNode &node, VariableStora
     try {
         const QString error = validateExpression(node);
         if (!error.isEmpty()) throw std::runtime_error(error.toStdString());
-        return evaluateNode(node, storage, gameBaseData);
+        return evaluateNode(node, storage, gameBaseData, scope);
     } catch (const std::exception& error) {
         emit evaluationError(node.toString(), QString::fromUtf8(error.what()));
         return QVariant();
     }
 }
 
-bool ExpressionEvaluator::evaluateInt(const ExpressionNode &node, VariableStorage *storage, qint64 &result)
+bool ExpressionEvaluator::evaluateInt(const ExpressionNode &node, VariableStorage *storage,
+                                      qint64 &result, eravar::ScopeId scope)
 {
     if (!storage) {
         return false;
     }
 
-    QVariant value = evaluate(node, storage);
+    QVariant value = evaluate(node, storage, nullptr, scope);
     
     if (value.isValid() && value.canConvert<qint64>()) {
         result = value.value<qint64>();
@@ -298,13 +300,14 @@ bool ExpressionEvaluator::evaluateInt(const ExpressionNode &node, VariableStorag
     return false;
 }
 
-bool ExpressionEvaluator::evaluateStr(const ExpressionNode &node, VariableStorage *storage, QString &result)
+bool ExpressionEvaluator::evaluateStr(const ExpressionNode &node, VariableStorage *storage,
+                                      QString &result, eravar::ScopeId scope)
 {
     if (!storage) {
         return false;
     }
 
-    QVariant value = evaluate(node, storage);
+    QVariant value = evaluate(node, storage, nullptr, scope);
     
     if (value.isValid() && isStringValue(value)) {
         result = stringText(value);
@@ -314,16 +317,17 @@ bool ExpressionEvaluator::evaluateStr(const ExpressionNode &node, VariableStorag
     return false;
 }
 
-QString ExpressionEvaluator::evaluateText(const ExpressionNode& node, VariableStorage* storage, GameBaseData* data) {
-    return stringText(evaluate(node, storage, data));
+QString ExpressionEvaluator::evaluateText(const ExpressionNode& node, VariableStorage* storage, GameBaseData* data, eravar::ScopeId scope) {
+    return stringText(evaluate(node, storage, data, scope));
 }
-FlatStringValue ExpressionEvaluator::evaluateFlat(const ExpressionNode& node, VariableStorage* storage, GameBaseData* data) {
-    return flatString(evaluate(node, storage, data));
+FlatStringValue ExpressionEvaluator::evaluateFlat(const ExpressionNode& node, VariableStorage* storage, GameBaseData* data, eravar::ScopeId scope) {
+    return flatString(evaluate(node, storage, data, scope));
 }
 
-QVariant ExpressionEvaluator::evaluateNode(const ExpressionNode &node, VariableStorage *storage, GameBaseData *gameBaseData)
+QVariant ExpressionEvaluator::evaluateNode(const ExpressionNode &node, VariableStorage *storage,
+                                           GameBaseData *gameBaseData, eravar::ScopeId scope)
 {
-    if (!node.markupTemplate) return evaluateUnstructuredNode(node, storage, gameBaseData);
+    if (!node.markupTemplate) return evaluateUnstructuredNode(node, storage, gameBaseData, scope);
     class OccurrenceContext {
     public:
         OccurrenceContext(const CompiledPrintTemplate& source, const std::function<QVariant(const ExpressionNode&)>& eval) {
@@ -344,7 +348,7 @@ QVariant ExpressionEvaluator::evaluateNode(const ExpressionNode &node, VariableS
     private:
         QList<QVariant> values;
     } context(*node.markupTemplate, [&](const ExpressionNode& expression) {
-        return evaluateNode(expression, storage, gameBaseData);
+        return evaluateNode(expression, storage, gameBaseData, scope);
     });
     auto markup = PrintTemplateCompiler::evaluateOccurrences(*node.markupTemplate,
         [&](const ExpressionNode&, int occurrence) { return context.value(occurrence); });
@@ -352,34 +356,35 @@ QVariant ExpressionEvaluator::evaluateNode(const ExpressionNode &node, VariableS
     return toVariant(result);
 }
 
-QVariant ExpressionEvaluator::evaluateUnstructuredNode(const ExpressionNode &node, VariableStorage *storage, GameBaseData *gameBaseData)
+QVariant ExpressionEvaluator::evaluateUnstructuredNode(const ExpressionNode &node, VariableStorage *storage,
+                                                       GameBaseData *gameBaseData, eravar::ScopeId scope)
 {
     // tag 分派：switch 生成跳转表，分支可预测；避免 dynamic_cast(RTTI) 热路径开销。
     switch (node.kind()) {
     case NodeKind::Literal:
         return evaluateLiteral(static_cast<const LiteralNode&>(node));
     case NodeKind::Variable:
-        return evaluateVariable(static_cast<const VariableNode&>(node), storage, gameBaseData);
+        return evaluateVariable(static_cast<const VariableNode&>(node), storage, gameBaseData, scope);
     case NodeKind::BinaryOp:
-        return evaluateBinaryOp(static_cast<const BinaryOpNode&>(node), storage, gameBaseData);
+        return evaluateBinaryOp(static_cast<const BinaryOpNode&>(node), storage, gameBaseData, scope);
     case NodeKind::UnaryOp:
-        return evaluateUnaryOp(static_cast<const UnaryOpNode&>(node), storage, gameBaseData);
+        return evaluateUnaryOp(static_cast<const UnaryOpNode&>(node), storage, gameBaseData, scope);
     case NodeKind::Function:
-        return evaluateFunction(static_cast<const FunctionNode&>(node), storage, gameBaseData);
+        return evaluateFunction(static_cast<const FunctionNode&>(node), storage, gameBaseData, scope);
     case NodeKind::StrForm:
-        return evaluateStrForm(static_cast<const StrFormNode&>(node), storage, gameBaseData);
+        return evaluateStrForm(static_cast<const StrFormNode&>(node), storage, gameBaseData, scope);
     case NodeKind::If: {
         const auto& ifNode = static_cast<const IfNode&>(node);
         if (ifNode.condition()->valueType() != OperandType::Int
             || ifNode.thenExpr()->valueType() != ifNode.elseExpr()->valueType())
             throw std::runtime_error("Invalid ternary operand types");
-        const QVariant cond = evaluateNode(*ifNode.condition(), storage, gameBaseData);
+        const QVariant cond = evaluateNode(*ifNode.condition(), storage, gameBaseData, scope);
         if (!cond.isValid()) throw std::runtime_error("Invalid ternary condition");
         if (cond.toLongLong() != 0) [[likely]] {
-            return evaluateNode(*ifNode.thenExpr(), storage, gameBaseData);
+            return evaluateNode(*ifNode.thenExpr(), storage, gameBaseData, scope);
         }
         if (ifNode.elseExpr()) [[likely]] {
-            return evaluateNode(*ifNode.elseExpr(), storage, gameBaseData);
+            return evaluateNode(*ifNode.elseExpr(), storage, gameBaseData, scope);
         }
         return QVariant::fromValue<qint64>(0);
     }
@@ -467,7 +472,8 @@ QVariant ExpressionEvaluator::evaluateStrBinary(TokenType op, const QString& ls,
     return QVariant();
 }
 
-QVariant ExpressionEvaluator::evaluateStrForm(const StrFormNode &node, VariableStorage *storage, GameBaseData *gameBaseData)
+QVariant ExpressionEvaluator::evaluateStrForm(const StrFormNode &node, VariableStorage *storage,
+                                              GameBaseData *gameBaseData, eravar::ScopeId scope)
 {
     QString out;
     for (const StrFormPart &part : node.parts()) {
@@ -478,11 +484,11 @@ QVariant ExpressionEvaluator::evaluateStrForm(const StrFormNode &node, VariableS
         if (!part.expression) continue;
         if (isKnown(part.expectedType) && part.expression->valueType() != part.expectedType)
             throw std::runtime_error("FORM interpolation type mismatch");
-        const QVariant v = evaluateNode(*part.expression, storage, gameBaseData);
+        const QVariant v = evaluateNode(*part.expression, storage, gameBaseData, scope);
         if (!v.isValid()) throw std::runtime_error("Invalid FORM value");
         QString value = stringText(v);
         if (part.width) {
-            const auto widthValue = evaluateNode(*part.width, storage, gameBaseData);
+            const auto widthValue = evaluateNode(*part.width, storage, gameBaseData, scope);
             if (!widthValue.isValid()) throw std::runtime_error("Invalid FORM width");
             const qint64 width = std::bit_cast<qint32>(quint32(widthValue.toLongLong()));
             if (width < 0 && part.expression->valueType() == OperandType::Int)
@@ -502,11 +508,12 @@ QVariant ExpressionEvaluator::evaluateStrForm(const StrFormNode &node, VariableS
 // 变量下标的求值：整数直接使用；字符串（如 CSV 常量名 / @"..." 格式化串）
 // 经 ConstantTable 映射为整数下标（对齐 C# VariableStrArgTerm.GetIntValue）。
 qint64 ExpressionEvaluator::resolveIndex(const VariableNode& node, int index,
-                                         VariableStorage* storage, GameBaseData* gameBaseData)
+                                         VariableStorage* storage, GameBaseData* gameBaseData,
+                                         eravar::ScopeId scope)
 {
     if (index < 0 || index >= node.indices().size()) return 0;
     const ExpressionNode& idx = *node.indices().at(index);
-    QVariant value = evaluateNode(idx, storage, gameBaseData);
+    QVariant value = evaluateNode(idx, storage, gameBaseData, scope);
     if (!value.isValid()) throw std::runtime_error("Invalid variable index");
     // 字符串下标判定：解析期已定型（强类型）或运行期确实是字符串
     const bool isStr = (idx.valueType() == OperandType::Str)
@@ -535,13 +542,13 @@ int ExpressionEvaluator::variableDimension(const QString& name) const
 
 // 解析全部下标（数组变量的 2D/3D 访问）
 QList<int> ExpressionEvaluator::resolveIndices(const VariableNode& node, VariableStorage* storage,
-                                              GameBaseData* gameBaseData)
+                                              GameBaseData* gameBaseData, eravar::ScopeId scope)
 {
     QList<int> out;
     const auto& indices = node.indices();
     out.reserve(indices.size());
     for (int i = 0; i < indices.size(); ++i) {
-        out.append(static_cast<int>(resolveIndex(node, i, storage, gameBaseData)));
+        out.append(static_cast<int>(resolveIndex(node, i, storage, gameBaseData, scope)));
     }
     return out;
 }
@@ -561,25 +568,26 @@ ExpressionEvaluator::~ExpressionEvaluator()
     if (m_storage) m_storage->setIntDimProvider(nullptr);
 }
 
-// 节点级整数读：唯一分派（作用域守卫 + 名字级原语）。
-qint64 ExpressionEvaluator::readIntNode(const VariableNode& node, const QList<int>& indices) const
+// 节点级整数读：唯一分派。
+// 键自足的 kind（usesKey）直接按 accessKey 读 —— 作用域已经是键的一部分，
+// 不再与「当前帧」对账（旧守卫 1 已删除）。scope 只喂给按名解析的原语。
+qint64 ExpressionEvaluator::readIntNode(const VariableNode& node, const QList<int>& indices,
+                                        eravar::ScopeId scope) const
 {
     if (!m_storage) return 0;
-    // 守卫：描述符的静态键只在「本行执行」的作用域里成立（同 evaluateVariable）。
-    const VariableNode::AccessKind access =
-        (m_storage->privateScopeName() == node.accessScopeKey)
-            ? node.accessKind : VariableNode::AccessKind::Dynamic;
+    const eravar::VariableKey& nodeKey = node.accessKey;
+    const VariableNode::AccessKind access = node.accessKind;
     switch (access) {
     case VariableNode::AccessKind::GlobalInt1:
-        return m_storage->getGlobalInt1DRaw(node.accessKey, indices.value(0));
+        return m_storage->getGlobalInt1DRaw(nodeKey, indices.value(0));
     case VariableNode::AccessKind::GlobalInt2:
     case VariableNode::AccessKind::GlobalInt3:
         if (indices.size() >= 2) {
             if (access == VariableNode::AccessKind::GlobalInt3 && indices.size() >= 3)
-                return m_storage->getGlobalInt3DRaw(node.accessKey, indices.at(0), indices.at(1), indices.at(2));
-            return m_storage->getGlobalInt2DRaw(node.accessKey, indices.at(0), indices.at(1));
+                return m_storage->getGlobalInt3DRaw(nodeKey, indices.at(0), indices.at(1), indices.at(2));
+            return m_storage->getGlobalInt2DRaw(nodeKey, indices.at(0), indices.at(1));
         }
-        return m_storage->getGlobalInt1DRaw(node.accessKey, indices.value(0));
+        return m_storage->getGlobalInt1DRaw(nodeKey, indices.value(0));
     case VariableNode::AccessKind::LocalSlot:
         return m_storage->getLocalInt(indices.value(0));
     case VariableNode::AccessKind::ArgSlot:
@@ -590,34 +598,40 @@ qint64 ExpressionEvaluator::readIntNode(const VariableNode& node, const QList<in
     case VariableNode::AccessKind::GlobalStr3:
     case VariableNode::AccessKind::LocalStr:
     case VariableNode::AccessKind::ArgStr:
+    // 已定型但不使用静态键的 5 类：整型读写仍走按名原语（旧路逐字相同）
+    case VariableNode::AccessKind::Param:
+    case VariableNode::AccessKind::Pseudo:
+    case VariableNode::AccessKind::System:
+    case VariableNode::AccessKind::Chara:
+    case VariableNode::AccessKind::Const:
     default:
-        return m_storage->readIntByName(node.name(), indices);
+        return m_storage->readIntByName(node.name(), indices, scope);
     }
 }
 
-// 节点级整数写：唯一分派（同一守卫）。字符串槽位（Str kind / ARGS/LOCALS/
+// 节点级整数写：唯一分派（键自足者只看键）。字符串槽位（Str kind / ARGS/LOCALS/
 // RESULTS）在名字级原语里被忽略，与旧 writeIntVarAccess 的回退一致。
-void ExpressionEvaluator::writeIntNode(const VariableNode& node, const QList<int>& indices, qint64 value)
+void ExpressionEvaluator::writeIntNode(const VariableNode& node, const QList<int>& indices,
+                                       qint64 value, eravar::ScopeId scope)
 {
     if (!m_storage) return;
-    const VariableNode::AccessKind access =
-        (m_storage->privateScopeName() == node.accessScopeKey)
-            ? node.accessKind : VariableNode::AccessKind::Dynamic;
+    const eravar::VariableKey& nodeKey = node.accessKey;
+    const VariableNode::AccessKind access = node.accessKind;
     switch (access) {
     case VariableNode::AccessKind::GlobalInt1:
-        m_storage->setGlobalInt1DRaw(node.accessKey, indices.value(0), value);
+        m_storage->setGlobalInt1DRaw(nodeKey, indices.value(0), value);
         return;
     case VariableNode::AccessKind::GlobalInt2:
     case VariableNode::AccessKind::GlobalInt3:
         if (indices.size() >= 2) {
             if (access == VariableNode::AccessKind::GlobalInt3 && indices.size() >= 3) {
-                m_storage->setGlobalInt3DRaw(node.accessKey, indices.at(0), indices.at(1), indices.at(2), value);
+                m_storage->setGlobalInt3DRaw(nodeKey, indices.at(0), indices.at(1), indices.at(2), value);
                 return;
             }
-            m_storage->setGlobalInt2DRaw(node.accessKey, indices.at(0), indices.at(1), value);
+            m_storage->setGlobalInt2DRaw(nodeKey, indices.at(0), indices.at(1), value);
             return;
         }
-        m_storage->setGlobalInt1DRaw(node.accessKey, indices.value(0), value);
+        m_storage->setGlobalInt1DRaw(nodeKey, indices.value(0), value);
         return;
     case VariableNode::AccessKind::LocalSlot:
         m_storage->setLocalInt(indices.value(0), value);
@@ -631,26 +645,38 @@ void ExpressionEvaluator::writeIntNode(const VariableNode& node, const QList<int
     case VariableNode::AccessKind::GlobalStr3:
     case VariableNode::AccessKind::LocalStr:
     case VariableNode::AccessKind::ArgStr:
+    // 同上：5 类不使用静态键 -> 按名写入（旧路逐字相同）
+    case VariableNode::AccessKind::Param:
+    case VariableNode::AccessKind::Pseudo:
+    case VariableNode::AccessKind::System:
+    case VariableNode::AccessKind::Chara:
+    case VariableNode::AccessKind::Const:
     default:
-        m_storage->writeIntByName(node.name(), indices, value);
+        m_storage->writeIntByName(node.name(), indices, value, scope);
         return;
     }
 }
 
 // 变量写入（整型）：与 evaluateVariable 的读取路径对称，供 ++/-- 的副作用使用
 bool ExpressionEvaluator::assignVariable(const VariableNode& node, VariableStorage* storage,
-                                         GameBaseData* gameBaseData, qint64 value)
+                                         GameBaseData* gameBaseData, qint64 value,
+                                         eravar::ScopeId scope)
 {
     if (!storage) {
         return false;
     }
     // 装载期分词的快路径（语义镜像旧路：见 evaluateVariable 的同款注释）。
-    // 守卫同 evaluateVariable：live 作用域不符 -> 回退完整解析。
-    const VariableNode::AccessKind access =
-        (storage->privateScopeName() == node.accessScopeKey)
-            ? node.accessKind : VariableNode::AccessKind::Dynamic;
+    // 键自足的 kind 直接按 accessKey 写（键已带作用域，无需与当前帧对账）。
+    const eravar::VariableKey& nodeKey = node.accessKey;
+    const VariableNode::AccessKind access = node.accessKind;
     switch (access) {
     case VariableNode::AccessKind::Dynamic:
+    // 已定型但不使用静态键的 5 类：没有 per-kind 写块 -> 走下面的写链尾部
+    case VariableNode::AccessKind::Param:
+    case VariableNode::AccessKind::Pseudo:
+    case VariableNode::AccessKind::System:
+    case VariableNode::AccessKind::Chara:
+    case VariableNode::AccessKind::Const:
         break;
     case VariableNode::AccessKind::GlobalInt1:
     case VariableNode::AccessKind::GlobalInt2:
@@ -665,28 +691,28 @@ bool ExpressionEvaluator::assignVariable(const VariableNode& node, VariableStora
              || node.accessKind == VariableNode::AccessKind::GlobalInt3
              || node.accessKind == VariableNode::AccessKind::GlobalStr3)
             && node.indices().size() >= 2) {
-            const int x = int(resolveIndex(node, 0, storage, gameBaseData));
-            const int y = int(resolveIndex(node, 1, storage, gameBaseData));
+            const int x = int(resolveIndex(node, 0, storage, gameBaseData, scope));
+            const int y = int(resolveIndex(node, 1, storage, gameBaseData, scope));
             const bool is3 = (access == VariableNode::AccessKind::GlobalInt3
                               || access == VariableNode::AccessKind::GlobalStr3)
                              && node.indices().size() >= 3;
             if (is3) {
-                const int z = int(resolveIndex(node, 2, storage, gameBaseData));
-                storage->setGlobalInt3DRaw(node.accessKey, x, y, z, value);
+                const int z = int(resolveIndex(node, 2, storage, gameBaseData, scope));
+                storage->setGlobalInt3DRaw(nodeKey, x, y, z, value);
             } else {
-                storage->setGlobalInt2DRaw(node.accessKey, x, y, value);
+                storage->setGlobalInt2DRaw(nodeKey, x, y, value);
             }
             return true;
         }
         const int x = node.indices().isEmpty() ? 0
-            : int(resolveIndex(node, 0, storage, gameBaseData));
-        storage->setGlobalInt1DRaw(node.accessKey, x, value);
+            : int(resolveIndex(node, 0, storage, gameBaseData, scope));
+        storage->setGlobalInt1DRaw(nodeKey, x, value);
         return true;
     }
     case VariableNode::AccessKind::LocalSlot:
     case VariableNode::AccessKind::ArgSlot: {
         const int idx = node.indices().isEmpty() ? 0
-            : int(resolveIndex(node, 0, storage, gameBaseData));
+            : int(resolveIndex(node, 0, storage, gameBaseData, scope));
         if (access == VariableNode::AccessKind::LocalSlot)
             storage->setLocalInt(idx, value);
         else
@@ -697,126 +723,154 @@ bool ExpressionEvaluator::assignVariable(const VariableNode& node, VariableStora
     case VariableNode::AccessKind::ArgStr:
         return false;   // 字符串槽位不能自增（同旧路的 ARGS/LOCALS 分支）
     }
-    const QString name = node.name();
-    // 前置判断（字符串变量不能自增）保留；参数/角色/ARG/LOCAL/系统/2D/3D/1D 的
-    // 写回顺序全部交给唯一原语 VariableStorage::writeIntByName。
-    if (storage->hasParameter(name)) {
-        storage->writeIntByName(name, {}, value);
-        return true;
+    // ---- 写路径的解析链：与读同一张表（顺序 = 旧 assignVariable 尾部的顺序）----
+    // 旧链只有 3 块有写对应物（hasParameter 写 / 角色字符串拒绝 / 槽名字符串拒绝），
+    // 其余行 write == nullptr；最后的 writeIntByName 是表后的无条件终局。
+    DynamicContext ctx = makeDynamicContext(node, storage, gameBaseData, access,
+                                           /*rewriteAlias=*/false, scope);
+    for (const Resolver& r : resolverTable()) {
+        if (!(r.kinds & VariableNode::bit(access)) || !r.write) continue;
+        switch ((this->*r.write)(ctx, value)) {
+        case WriteResult::Written:  return true;
+        case WriteResult::Rejected: return false;
+        case WriteResult::Unhandled: break;
+        }
     }
-    // 角色数据变量（++/-- 的写回）与读取路径对称
-    if (storage->isCharaDataVariable(name) && storage->isCharaDataString(name))
-        return false;   // 字符串不能自增
-    QString upperScratch;
-    const QString& upper = eraUpperKey(name, upperScratch);
-    if (upper == QLatin1String("ARGS") || upper == QLatin1String("LOCALS")
-        || upper == QLatin1String("RESULTS")) {
-        return false;   // 字符串变量不能自增
-    }
-    storage->writeIntByName(name, resolveIndices(node, storage, gameBaseData), value);
+    // 参数/角色/ARG/LOCAL/系统/2D/3D/1D 的写回顺序全部交给唯一原语。
+    storage->writeIntByName(ctx.varName, resolveIndices(node, storage, gameBaseData, scope),
+                            value, scope);
     return true;
 }
 
-QVariant ExpressionEvaluator::evaluateVariable(const VariableNode &node, VariableStorage *storage, GameBaseData *gameBaseData)
+// ===========================================================================
+// Dynamic 解析链（表驱动）
+//
+// 旧 evaluateVariable 尾部的 if 链（~300 行，顺序即语义）现在被逐块剪成下面的
+// 独立方法 —— 函数体与旧代码逐字相同，只改了签名、return 的包装与缩进。
+// resolverTable() 是那张有序表：一行 = 旧链的一块，**顺序就是语义**。
+//   kind 掩码：该行对哪些 kind 生效。kAllNames 的行按**运行期名字**判定
+//              （别名/参数/槽名/常数/终局），旧链对每个名字都跑它们，所以不能过滤。
+//   needsKey ：该行是否消费 accessKey（= VariableNode::usesKey(kind)）。
+//   write    ：旧 assignVariable 尾部只有 3 块有写对应物，其余为 nullptr。
+// 真正的 Dynamic 节点：所有行的掩码都含它 -> 全表按序跑 = 旧链原样（兜底）。
+// ===========================================================================
+namespace {
+using AK = VariableNode::AccessKind;
+// 所有 kind（含 Dynamic）：按运行期名字判定的通用块
+constexpr quint16 kAllNames = 0xFFFF;
+// 名字级伪变量块（RAND/GAMEBASE_/LINECOUNT/…）：Pseudo 静态定型；Param 的名字
+// 也可能恰是伪变量名（`@F(RAND)`），保守包含；Dynamic 是兜底。
+constexpr quint16 kPseudo = VariableNode::bit(AK::Pseudo) | VariableNode::bit(AK::Param)
+                            | VariableNode::bit(AK::Dynamic);
+} // namespace
+
+// 旧 820-822：链的公共前缀。
+ExpressionEvaluator::DynamicContext
+ExpressionEvaluator::makeDynamicContext(const VariableNode& node, VariableStorage* storage,
+                                        GameBaseData* gameBaseData, VariableNode::AccessKind kind,
+                                        bool withAlias, eravar::ScopeId scope) const
 {
-    if (!storage) {
-        return QVariant();
-    }
+    DynamicContext ctx;
+    ctx.kind = kind;
+    ctx.node = &node;
+    ctx.storage = storage;
+    ctx.gameBaseData = gameBaseData;
+    ctx.scope = scope;
+    ctx.varName = node.name();
+    ctx.count = node.indices().size();
+    ctx.aliased = withAlias && storage->resolvedStorageName(ctx.varName, scope) != ctx.varName;
+    return ctx;
+}
 
-    // ---- 装载期「变量分词」的快路径 ----
-    // 收尾定型时（walkApply -> computeVariableAccess）已把名字解析成
-    // kind + 静态存储键；静态不能证明的（形参/REF/角色/常数/系统变量/伪变量）
-    // kind == Dynamic，落回下面的完整解析。语义等价的依据见
-    // variable_table.cpp 的 computeVariableAccess 注释（stepOnce 的作用域与
-    // 静态判定恒同；m_references 只可能是本函数 REF 形参名，已过滤）。
-    // 下标仍逐次求值 —— 可能有副作用（BAG:(I++)）。
-    // 守卫：描述符的静态键只在「本行执行（stepOnce 按 ownerFunction 设作用域）」
-    // 的上下文里成立。脱离行执行的直接求值（测试装载期校验 / 调试求值）里
-    // live 作用域可能为空 —— 作用域名对不上就整体回退完整解析（旧语义）。
-    const VariableNode::AccessKind access =
-        (storage->privateScopeName() == node.accessScopeKey)
-            ? node.accessKind : VariableNode::AccessKind::Dynamic;
-    // 守卫 2（镜像旧路的维数检查）：旧路只对**非重映射名**（裸键 = 全局声明/
-    // 未声明/槽位名）在「下标个数 != 声明维数」时 throw「Missing variable
-    // parameters or invalid index dimension」；私有名经 resolvedStorageName
-    // 重映射（aliased）恒跳过该检查、按 1 维宽松读。快路径据此分键处理：
-    // 复合键（私有名）保持宽松分派；裸键维数不符 -> 整体回退完整解析（旧路
-    // 行为，含其 throw）。装载期校验已把这类行标 Error 不执行，这里兜住的是
-    // 逃过行校验的直接求值（调试求值 / 装载期常量折叠重入）。
-    VariableNode::AccessKind effectiveAccess = access;
-    if (access != VariableNode::AccessKind::Dynamic
-        && !node.accessKey.contains(QChar(0x1f))) {
-        const int n = node.indices().size();
-        const bool mismatch =
-            (access == VariableNode::AccessKind::GlobalInt2
-             || access == VariableNode::AccessKind::GlobalStr2) ? n != 2
-          : (access == VariableNode::AccessKind::GlobalInt3
-             || access == VariableNode::AccessKind::GlobalStr3) ? n != 3
-          : n > 1;   // 1 维 kind（Int1/Str1/LOCAL/ARG 槽位）只允 0/1 个下标
-        if (mismatch) effectiveAccess = VariableNode::AccessKind::Dynamic;
+// ---- 旧 switch 的 4 块：已定型 kind 的键直取（needsKey = true）----
+bool ExpressionEvaluator::readKeyedInt(DynamicContext& ctx, QVariant& out)
+{
+    const VariableNode& node = *ctx.node;
+    const VariableNode::AccessKind access = ctx.kind;
+    const eravar::VariableKey& nodeKey = node.accessKey;
+    VariableStorage* storage = ctx.storage;
+    GameBaseData* gameBaseData = ctx.gameBaseData;
+    if (access == VariableNode::AccessKind::GlobalInt1 || node.indices().size() < 2) {
+        // 1 维读（含 2/3 维声明名只给一个下标/裸名的情况 —— 与旧路的
+        // 「dim>=2 且 indices>=2 才走多维」判定一致）
+        const int x = node.indices().isEmpty() ? 0
+            : int(resolveIndex(node, 0, storage, gameBaseData, ctx.scope));
+        out = QVariant::fromValue<qint64>(storage->getGlobalInt1DRaw(nodeKey, x));
+        return true;
     }
-    switch (effectiveAccess) {
-    case VariableNode::AccessKind::Dynamic:
-        break;   // 旧路
-    case VariableNode::AccessKind::GlobalInt1:
-    case VariableNode::AccessKind::GlobalInt2:
-    case VariableNode::AccessKind::GlobalInt3: {
-        if (access == VariableNode::AccessKind::GlobalInt1 || node.indices().size() < 2) {
-            // 1 维读（含 2/3 维声明名只给一个下标/裸名的情况 —— 与旧路的
-            // 「dim>=2 且 indices>=2 才走多维」判定一致）
-            const int x = node.indices().isEmpty() ? 0
-                : int(resolveIndex(node, 0, storage, gameBaseData));
-            return QVariant::fromValue<qint64>(storage->getGlobalInt1DRaw(node.accessKey, x));
-        }
-        const int x = int(resolveIndex(node, 0, storage, gameBaseData));
-        const int y = int(resolveIndex(node, 1, storage, gameBaseData));
-        if (access == VariableNode::AccessKind::GlobalInt3 && node.indices().size() >= 3) {
-            const int z = int(resolveIndex(node, 2, storage, gameBaseData));
-            return QVariant::fromValue<qint64>(storage->getGlobalInt3DRaw(node.accessKey, x, y, z));
-        }
-        return QVariant::fromValue<qint64>(storage->getGlobalInt2DRaw(node.accessKey, x, y));
+    const int x = int(resolveIndex(node, 0, storage, gameBaseData, ctx.scope));
+    const int y = int(resolveIndex(node, 1, storage, gameBaseData, ctx.scope));
+    if (access == VariableNode::AccessKind::GlobalInt3 && node.indices().size() >= 3) {
+        const int z = int(resolveIndex(node, 2, storage, gameBaseData, ctx.scope));
+        out = QVariant::fromValue<qint64>(storage->getGlobalInt3DRaw(nodeKey, x, y, z));
+        return true;
     }
-    case VariableNode::AccessKind::GlobalStr1:
-    case VariableNode::AccessKind::GlobalStr2:
-    case VariableNode::AccessKind::GlobalStr3: {
-        // 与旧路一致地走 getStringSlot（**带 markup 分片**）：HTML 累积
-        //（html += HTML_BUTTON(...)）与打印模板都依赖 markup —— 只回裸文本
-        // 会让标签链断掉。键是装载期算好的静态键（私有名=复合键）。
-        if (access == VariableNode::AccessKind::GlobalStr1 || node.indices().size() < 2) {
-            const int x = node.indices().isEmpty() ? 0
-                : int(resolveIndex(node, 0, storage, gameBaseData));
-            return toVariant(storage->getStringSlotRaw(node.accessKey, {x}));
-        }
-        const int x = int(resolveIndex(node, 0, storage, gameBaseData));
-        const int y = int(resolveIndex(node, 1, storage, gameBaseData));
-        if (access == VariableNode::AccessKind::GlobalStr3 && node.indices().size() >= 3) {
-            const int z = int(resolveIndex(node, 2, storage, gameBaseData));
-            return toVariant(storage->getStringSlotRaw(node.accessKey, {x, y, z}));
-        }
-        return toVariant(storage->getStringSlotRaw(node.accessKey, {x, y}));
-    }
-    case VariableNode::AccessKind::LocalSlot:
-    case VariableNode::AccessKind::ArgSlot: {
-        const int idx = node.indices().isEmpty() ? 0
-            : int(resolveIndex(node, 0, storage, gameBaseData));
-        return QVariant::fromValue<qint64>(
-            access == VariableNode::AccessKind::LocalSlot
-                ? storage->getLocalInt(idx) : storage->getArgInt(idx));
-    }
-    case VariableNode::AccessKind::LocalStr:
-    case VariableNode::AccessKind::ArgStr: {
-        const int idx = node.indices().isEmpty() ? 0
-            : int(resolveIndex(node, 0, storage, gameBaseData));
-        return toVariant(storage->getStringSlotRaw(
-            access == VariableNode::AccessKind::LocalStr
-                ? QStringLiteral("LOCALS") : QStringLiteral("ARGS"), {idx}));
-    }
-    }
+    out = QVariant::fromValue<qint64>(storage->getGlobalInt2DRaw(nodeKey, x, y));
+    return true;
+}
 
-    QString varName = node.name();
-    const int count = node.indices().size();
-    const bool aliased = storage->resolvedStorageName(varName) != varName;
-    if (aliased && node.valueType() == OperandType::Str) {
+bool ExpressionEvaluator::readKeyedStr(DynamicContext& ctx, QVariant& out)
+{
+    const VariableNode& node = *ctx.node;
+    const VariableNode::AccessKind access = ctx.kind;
+    const eravar::VariableKey& nodeKey = node.accessKey;
+    VariableStorage* storage = ctx.storage;
+    GameBaseData* gameBaseData = ctx.gameBaseData;
+    // 与旧路一致地走 getStringSlot（**带 markup 分片**）：HTML 累积
+    //（html += HTML_BUTTON(...)）与打印模板都依赖 markup —— 只回裸文本
+    // 会让标签链断掉。键是装载期算好的静态键（私有名=复合键）。
+    if (access == VariableNode::AccessKind::GlobalStr1 || node.indices().size() < 2) {
+        const int x = node.indices().isEmpty() ? 0
+            : int(resolveIndex(node, 0, storage, gameBaseData, ctx.scope));
+        out = toVariant(storage->getStringSlotRaw(nodeKey, {x}));
+        return true;
+    }
+    const int x = int(resolveIndex(node, 0, storage, gameBaseData, ctx.scope));
+    const int y = int(resolveIndex(node, 1, storage, gameBaseData, ctx.scope));
+    if (access == VariableNode::AccessKind::GlobalStr3 && node.indices().size() >= 3) {
+        const int z = int(resolveIndex(node, 2, storage, gameBaseData, ctx.scope));
+        out = toVariant(storage->getStringSlotRaw(nodeKey, {x, y, z}));
+        return true;
+    }
+    out = toVariant(storage->getStringSlotRaw(nodeKey, {x, y}));
+    return true;
+}
+
+bool ExpressionEvaluator::readKeyedLocalArgInt(DynamicContext& ctx, QVariant& out)
+{
+    const VariableNode& node = *ctx.node;
+    const VariableNode::AccessKind access = ctx.kind;
+    VariableStorage* storage = ctx.storage;
+    GameBaseData* gameBaseData = ctx.gameBaseData;
+    const int idx = node.indices().isEmpty() ? 0
+        : int(resolveIndex(node, 0, storage, gameBaseData, ctx.scope));
+    out = QVariant::fromValue<qint64>(
+        access == VariableNode::AccessKind::LocalSlot
+            ? storage->getLocalInt(idx) : storage->getArgInt(idx));
+    return true;
+}
+
+bool ExpressionEvaluator::readKeyedLocalArgStr(DynamicContext& ctx, QVariant& out)
+{
+    const VariableNode& node = *ctx.node;
+    const VariableNode::AccessKind access = ctx.kind;
+    VariableStorage* storage = ctx.storage;
+    GameBaseData* gameBaseData = ctx.gameBaseData;
+    const int idx = node.indices().isEmpty() ? 0
+        : int(resolveIndex(node, 0, storage, gameBaseData, ctx.scope));
+    out = toVariant(storage->getStringSlotRaw(
+        access == VariableNode::AccessKind::LocalStr
+            ? QStringLiteral("LOCALS") : QStringLiteral("ARGS"), {idx}));
+    return true;
+}
+
+// ---- 旧 if 链逐块（顺序 = 表顺序）----
+bool ExpressionEvaluator::readStringParameterAlias(DynamicContext& ctx, QVariant& out)
+{
+    const VariableNode& node = *ctx.node;
+    VariableStorage* storage = ctx.storage;
+    GameBaseData* gameBaseData = ctx.gameBaseData;
+    if (ctx.aliased && node.valueType() == OperandType::Str) {
         // 形参（`@F(A)` + `#DIMS A`）的值绑定在 m_parameters（script_runner 的
         // setParameter），而私有槽 m_globalStr1D 只存**声明默认值**。这里必须
         // 先查 m_parameters，否则读到的是默认值：eraTW 的
@@ -824,19 +878,39 @@ QVariant ExpressionEvaluator::evaluateVariable(const VariableNode &node, Variabl
         // 里 CLASS_NAME/COMMAND 恒为空串，OBJ_EXIST 的 SELECTCASE 落 CASEELSE
         // -> THROW 未設定命令（装载期 5 处 execution error）。
         // 整数形参走的是下面的 hasParameter 检查，所以只有字符串形参有这个缺口。
-        if (count == 0 && storage->hasParameter(varName)) return storage->parameter(varName);
-        const QString target = storage->resolvedStorageName(varName);
+        if (ctx.count == 0 && storage->hasParameter(ctx.varName)) {
+            out = storage->parameter(ctx.varName);
+            return true;
+        }
+        const QString target = storage->resolvedStorageName(ctx.varName, ctx.scope);
         const int idx = node.indices().isEmpty() ? 0
-            : static_cast<int>(resolveIndex(node, 0, storage, gameBaseData));
-        return toVariant(storage->getStringSlot(target, {idx}));
+            : static_cast<int>(resolveIndex(node, 0, storage, gameBaseData, ctx.scope));
+        out = toVariant(storage->getStringSlot(target, {idx}, ctx.scope));
+        return true;
     }
-    if (aliased && storage->hasReference(node.name())) {
+    return false;
+}
+
+// 只改 ctx（REF 形参的名字重映射），从不命中。
+bool ExpressionEvaluator::applyReferenceAlias(DynamicContext& ctx, QVariant& out)
+{
+    (void)out;
+    if (ctx.aliased && ctx.storage->hasReference(ctx.node->name())) {
         // 只有已登记为 REF 的整数形参才切换到目标系统变量路由；
-        // 普通私有作用域名称解析为 COLLECT\x1fCHOICES 仍应保留原变量语义。
-        varName = storage->resolvedStorageName(varName);
+        // 普通私有作用域名称解析为 COLLECT 前缀键仍应保留原变量语义。
+        ctx.varName = ctx.storage->resolvedStorageName(ctx.varName, ctx.scope);
     }
-    const bool chara = node.characterData
-        || (node.dimension < 0 && storage->isCharaDataVariable(varName));
+    return false;
+}
+
+// 只改 ctx（chara / 维数 / 下标数上限），从不命中；维数不符时 throw 旧文案。
+bool ExpressionEvaluator::bindDimension(DynamicContext& ctx, QVariant& out)
+{
+    (void)out;
+    const VariableNode& node = *ctx.node;
+    VariableStorage* storage = ctx.storage;
+    ctx.chara = node.characterData
+        || (node.dimension < 0 && storage->isCharaDataVariable(ctx.varName));
     // REF 形参绑定**整数组**（`#DIM REF NEEDS, 0, 0`）时 varName 已被换成目标存储键
     //（调用方的数组），而「维数」要按**形参自己的声明**查 —— 否则 2 维数组会按
     // 1 维读（存储键不是变量表里的名字，variableDimension 只得 1）。
@@ -846,75 +920,110 @@ QVariant ExpressionEvaluator::evaluateVariable(const VariableNode &node, Variabl
     // VariableTable::find(名字, 行的 ownerFunction) 的维数 —— 名字没被 REF 重映射
     // 时两次运行期查表（lineAt + find + nk）的结果恒等于 node.dimension，直接用；
     // 重映射过的仍按旧路算 qMax。
-    const int declaredDimension =
-        (varName == node.name() && node.dimension >= 0)
+    ctx.declaredDimension =
+        (ctx.varName == node.name() && node.dimension >= 0)
             ? node.dimension
-            : qMax(variableDimension(varName), variableDimension(node.name()));
-    const int dimension = chara ? storage->charaDataDimension(varName) : declaredDimension;
-    const int full = dimension + (chara ? 1 : 0);
-    if (!aliased && (count > full || (dimension >= 2 && count != full)))
+            : qMax(variableDimension(ctx.varName), variableDimension(node.name()));
+    ctx.dimension = ctx.chara ? storage->charaDataDimension(ctx.varName) : ctx.declaredDimension;
+    ctx.full = ctx.dimension + (ctx.chara ? 1 : 0);
+    if (!ctx.aliased && (ctx.count > ctx.full || (ctx.dimension >= 2 && ctx.count != ctx.full)))
         throw std::runtime_error("Missing variable parameters or invalid index dimension");
-    if (storage->hasParameter(varName)) return storage->parameter(varName);
+    return false;
+}
 
+bool ExpressionEvaluator::readParameter(DynamicContext& ctx, QVariant& out)
+{
+    if (ctx.storage->hasParameter(ctx.varName)) {
+        out = ctx.storage->parameter(ctx.varName);
+        return true;
+    }
+    return false;
+}
+
+bool ExpressionEvaluator::readCharaData(DynamicContext& ctx, QVariant& out)
+{
+    const VariableNode& node = *ctx.node;
+    VariableStorage* storage = ctx.storage;
+    GameBaseData* gameBaseData = ctx.gameBaseData;
     // ---- 角色数据变量（CFLAG/TALENT/… 内建 + 用户 #DIM(S) CHARADATA）----
     // 必须按 (角色号, 元素下标) 存取。此前走通用 1D 全局路径，把角色号之后的
     // 元素下标整个丢掉，导致同一角色的所有元素挤在一个槽位互相覆盖。
-    if (chara) {
-        const QList<int> ids = resolveIndices(node, storage, gameBaseData);
+    if (ctx.chara) {
+        const QList<int> ids = resolveIndices(node, storage, gameBaseData, ctx.scope);
         int charaId = 0;
         QList<int> elems;
-        storage->reduceCharaArgs(varName, ids, charaId, elems);
-        if (storage->isCharaDataString(varName)) {
-            return toVariant(storage->getStringSlot(varName, ids));
+        storage->reduceCharaArgs(ctx.varName, ids, charaId, elems);
+        if (storage->isCharaDataString(ctx.varName)) {
+            out = toVariant(storage->getStringSlot(ctx.varName, ids, ctx.scope));
+            return true;
         }
-        if (storage->charaDataDimension(varName) >= 2) {
-            return QVariant::fromValue<qint64>(
-                storage->getCharaInt3D(varName, charaId, elems.value(0), elems.value(1)));
+        if (storage->charaDataDimension(ctx.varName) >= 2) {
+            out = QVariant::fromValue<qint64>(
+                storage->getCharaInt3D(storage->resolvedStorageName(ctx.varName, ctx.scope), charaId, elems.value(0), elems.value(1)));
+            return true;
         }
-        return QVariant::fromValue<qint64>(storage->getCharaInt(varName, charaId, elems.value(0)));
+        out = QVariant::fromValue<qint64>(storage->getCharaInt(storage->resolvedStorageName(ctx.varName, ctx.scope), charaId, elems.value(0)));
+        return true;
     }
-    
+    return false;
+}
+
+bool ExpressionEvaluator::readGameBase(DynamicContext& ctx, QVariant& out)
+{
+    GameBaseData* gameBaseData = ctx.gameBaseData;
     // Check if this is a GameBase variable
-    if (varName.startsWith("GAMEBASE_") && gameBaseData) {
-        QString key = varName.mid(9);  // Remove "GAMEBASE_" prefix
+    if (ctx.varName.startsWith("GAMEBASE_") && gameBaseData) {
+        QString key = ctx.varName.mid(9);  // Remove "GAMEBASE_" prefix
         QString value = gameBaseData->get(key);
         if (!value.isEmpty()) {
-            return QVariant(value);
+            out = QVariant(value);
+            return true;
         }
     }
-    
+    return false;
+}
+
+bool ExpressionEvaluator::readSlotNames(DynamicContext& ctx, QVariant& out)
+{
+    const VariableNode& node = *ctx.node;
+    VariableStorage* storage = ctx.storage;
+    GameBaseData* gameBaseData = ctx.gameBaseData;
     // 用户函数参数 / 局部变量：ARG / LOCAL（两套独立数组）
     {
         QString upperScratch;
-        const QString& upper = eraUpperKey(varName, upperScratch);
+        const QString& upper = eraUpperKey(ctx.varName, upperScratch);
         if (upper == QLatin1String("ARG")) {
             int idx = 0;
             if (node.isArray() && !node.indices().isEmpty()) {
-                idx = static_cast<int>(resolveIndex(node, 0, storage, gameBaseData));
+                idx = static_cast<int>(resolveIndex(node, 0, storage, gameBaseData, ctx.scope));
             }
-            return QVariant(storage->getArgInt(idx));
+            out = QVariant(storage->getArgInt(idx));
+            return true;
         }
         if (upper == QLatin1String("LOCAL")) {
             int idx = 0;
             if (node.isArray() && !node.indices().isEmpty()) {
-                idx = static_cast<int>(resolveIndex(node, 0, storage, gameBaseData));
+                idx = static_cast<int>(resolveIndex(node, 0, storage, gameBaseData, ctx.scope));
             }
-            return QVariant(storage->getLocalInt(idx));
+            out = QVariant(storage->getLocalInt(idx));
+            return true;
         }
         if (upper == QLatin1String("ARGS")) {
             int idx = 0;
             if (node.isArray() && !node.indices().isEmpty()) {
-                idx = static_cast<int>(resolveIndex(node, 0, storage, gameBaseData));
+                idx = static_cast<int>(resolveIndex(node, 0, storage, gameBaseData, ctx.scope));
             }
-            return toVariant(storage->getStringSlot(QStringLiteral("ARGS"), {idx}));
+            out = toVariant(storage->getStringSlot(QStringLiteral("ARGS"), {idx}));
+            return true;
         }
         if (upper == QLatin1String("LOCALS")) {
             // LOCALS = 字符串局部槽
             int idx = 0;
             if (node.isArray() && !node.indices().isEmpty()) {
-                idx = static_cast<int>(resolveIndex(node, 0, storage, gameBaseData));
+                idx = static_cast<int>(resolveIndex(node, 0, storage, gameBaseData, ctx.scope));
             }
-            return toVariant(storage->getStringSlot(QStringLiteral("LOCALS"), {idx}));
+            out = toVariant(storage->getStringSlot(QStringLiteral("LOCALS"), {idx}));
+            return true;
         }
         if (upper == QLatin1String("RESULTS")) {
             // [qdbug] 修复：RESULTS 是**全局**字符串数组（C# VariableData.cs:202
@@ -925,163 +1034,383 @@ QVariant ExpressionEvaluator::evaluateVariable(const VariableNode &node, Variabl
             // RESULTS:0（名）/RESULTS:1（值）全落同一槽，菜单左右两列显示同一个值
             int idx = 0;
             if (node.isArray() && !node.indices().isEmpty()) {
-                idx = static_cast<int>(resolveIndex(node, 0, storage, gameBaseData));
+                idx = static_cast<int>(resolveIndex(node, 0, storage, gameBaseData, ctx.scope));
             }
-            return toVariant(storage->getStringSlot(QStringLiteral("RESULTS"), {idx}));
+            out = toVariant(storage->getStringSlot(QStringLiteral("RESULTS"), {idx}));
+            return true;
         }
         // 用户函数形参别名（@F(A,B) 内的 A/B -> LOCAL 槽位）
-        const int aliasIdx = storage->localAliasIndex(varName);
+        const int aliasIdx = storage->localAliasIndex(ctx.varName);
         if (aliasIdx >= 0) {
-            return QVariant(storage->getLocalInt(aliasIdx));
+            out = QVariant(storage->getLocalInt(aliasIdx));
+            return true;
         }
     }
+    return false;
+}
 
+bool ExpressionEvaluator::readLineCount(DynamicContext& ctx, QVariant& out)
+{
     // ---- LINECOUNT：控制台当前行数（C# console.LineCount）----
-    if (m_lineCountProvider && varName.compare(QLatin1String("LINECOUNT"), Qt::CaseInsensitive) == 0) {
-        return QVariant::fromValue<qint64>(m_lineCountProvider());
+    if (m_lineCountProvider && ctx.varName.compare(QLatin1String("LINECOUNT"), Qt::CaseInsensitive) == 0) {
+        out = QVariant::fromValue<qint64>(m_lineCountProvider());
+        return true;
     }
+    return false;
+}
 
+bool ExpressionEvaluator::readRandom(DynamicContext& ctx, QVariant& out)
+{
+    const VariableNode& node = *ctx.node;
+    VariableStorage* storage = ctx.storage;
+    GameBaseData* gameBaseData = ctx.gameBaseData;
     // ---- RAND：伪随机变量（C# RandToken）----
     //   `RAND:n` -> [0, n) 的随机数；n<=0 视为 0（C# 会报错，这里容错）
-    if (varName.compare(QLatin1String("RAND"), Qt::CaseInsensitive) == 0) {
+    if (ctx.varName.compare(QLatin1String("RAND"), Qt::CaseInsensitive) == 0) {
         qint64 n = 0;
         if (node.isArray() && !node.indices().isEmpty()) {
-            n = resolveIndex(node, 0, storage, gameBaseData);
+            n = resolveIndex(node, 0, storage, gameBaseData, ctx.scope);
         }
-        if (n <= 0) return QVariant::fromValue<qint64>(0);
-        return QVariant::fromValue<qint64>(m_rand.nextInt(n));
+        if (n <= 0) {
+            out = QVariant::fromValue<qint64>(0);
+            return true;
+        }
+        out = QVariant::fromValue<qint64>(m_rand.nextInt(n));
+        return true;
     }
+    return false;
+}
 
+bool ExpressionEvaluator::readIntLimits(DynamicContext& ctx, QVariant& out)
+{
     // ---- 系统伪变量（C# VariableToken.PseudoVariableToken 族）----
-    if (varName.compare(QLatin1String("__INT_MAX__"), Qt::CaseInsensitive) == 0) {
-        return QVariant::fromValue<qint64>(std::numeric_limits<qint64>::max());
+    if (ctx.varName.compare(QLatin1String("__INT_MAX__"), Qt::CaseInsensitive) == 0) {
+        out = QVariant::fromValue<qint64>(std::numeric_limits<qint64>::max());
+        return true;
     }
-    if (varName.compare(QLatin1String("__INT_MIN__"), Qt::CaseInsensitive) == 0) {
-        return QVariant::fromValue<qint64>(std::numeric_limits<qint64>::min());
+    if (ctx.varName.compare(QLatin1String("__INT_MIN__"), Qt::CaseInsensitive) == 0) {
+        out = QVariant::fromValue<qint64>(std::numeric_limits<qint64>::min());
+        return true;
     }
-    if (varName.compare(QLatin1String("EMUERA_VERSION"), Qt::CaseInsensitive) == 0) {
+    if (ctx.varName.compare(QLatin1String("EMUERA_VERSION"), Qt::CaseInsensitive) == 0) {
         // C# EMUERA_VERSIONToken -> MainWindow.InternalEmueraVer（非空字符串）
-        return QVariant(QStringLiteral("1.824"));
+        out = QVariant(QStringLiteral("1.824"));
+        return true;
     }
+    return false;
+}
 
+bool ExpressionEvaluator::readRandData(DynamicContext& ctx, QVariant& out)
+{
+    const VariableNode& node = *ctx.node;
+    VariableStorage* storage = ctx.storage;
+    GameBaseData* gameBaseData = ctx.gameBaseData;
     // ---- RANDDATA：随机数状态（C# RANDDATA 系统变量，长度 625）----
-    if (varName.compare(QLatin1String("RANDDATA"), Qt::CaseInsensitive) == 0) {
+    if (ctx.varName.compare(QLatin1String("RANDDATA"), Qt::CaseInsensitive) == 0) {
         const QList<qint64> st = m_rand.state();
         int idx = 0;
         if (node.isArray() && !node.indices().isEmpty()) {
-            idx = static_cast<int>(resolveIndex(node, 0, storage, gameBaseData));
+            idx = static_cast<int>(resolveIndex(node, 0, storage, gameBaseData, ctx.scope));
         }
-        if (idx < 0 || idx >= st.size()) return QVariant::fromValue<qint64>(0);
-        return QVariant::fromValue<qint64>(st.at(idx));
+        if (idx < 0 || idx >= st.size()) {
+            out = QVariant::fromValue<qint64>(0);
+            return true;
+        }
+        out = QVariant::fromValue<qint64>(st.at(idx));
+        return true;
     }
+    return false;
+}
 
+bool ExpressionEvaluator::readConst(DynamicContext& ctx, QVariant& out)
+{
+    const VariableNode& node = *ctx.node;
+    VariableStorage* storage = ctx.storage;
+    GameBaseData* gameBaseData = ctx.gameBaseData;
     // ---- #DIM CONST 常量（求值期查表；对齐 C# 常数）----
     //   标量常数：`#DIM CONST X = 5` -> X
     //   常数数组：`#DIM CONST X, 3 = 1, 2, 3` -> X:i（必须按下标取，不能一律返回首元素）
     if (node.isArray() && !node.indices().isEmpty() && m_constArrayProvider
-        && (!m_constArrayChecker || m_constArrayChecker(varName))) {
+        && (!m_constArrayChecker || m_constArrayChecker(ctx.varName))) {
         // 注意：只有确认是常数数组才求值下标 —— 否则下标表达式里的
         // 副作用（如 `BAG:(I++)`）会被算两遍
-        const int idx = static_cast<int>(resolveIndex(node, 0, storage, gameBaseData));
+        const int idx = static_cast<int>(resolveIndex(node, 0, storage, gameBaseData, ctx.scope));
         QVariant cv;
-        if (m_constArrayProvider(varName, idx, cv) && cv.isValid()) {
-            return cv;
+        if (m_constArrayProvider(ctx.varName, idx, cv) && cv.isValid()) {
+            out = cv;
+            return true;
         }
     }
     if (!node.isArray() && m_constProvider) {
         QVariant cv;
-        if (m_constProvider(varName, cv) && cv.isValid()) {
-            return cv;
+        if (m_constProvider(ctx.varName, cv) && cv.isValid()) {
+            out = cv;
+            return true;
         }
     }
+    return false;
+}
 
+bool ExpressionEvaluator::readStringVariable(DynamicContext& ctx, QVariant& out)
+{
+    const VariableNode& node = *ctx.node;
+    VariableStorage* storage = ctx.storage;
+    GameBaseData* gameBaseData = ctx.gameBaseData;
     // ---- 字符串变量（用户全局字符串 / 系统字符串）----
     // 对齐 Emuera：#DIMS/#GLOBALS 声明的字符串变量；此前只会按整数读取。
     if (node.valueType() == OperandType::Str) {
         QString upperScratch;
-        const QString& upper = eraUpperKey(varName, upperScratch);
+        const QString& upper = eraUpperKey(ctx.varName, upperScratch);
         if (upper == QLatin1String("RESULTS")) {
             // [qdbug] 修复：RESULTS 全局（同上，C# VariableData.cs:202）
             // 下标：同上 —— RESULTS:1 恒读槽 0 -> OPTION 菜单左右两列同值
             int idx = 0;
             if (node.isArray() && !node.indices().isEmpty()) {
-                idx = static_cast<int>(resolveIndex(node, 0, storage, gameBaseData));
+                idx = static_cast<int>(resolveIndex(node, 0, storage, gameBaseData, ctx.scope));
             }
-            return toVariant(storage->getStringSlot(QStringLiteral("RESULTS"), {idx}));
+            out = toVariant(storage->getStringSlot(QStringLiteral("RESULTS"), {idx}));
+            return true;
         }
-        if (upper == QLatin1String("LASTLOAD_TEXT")) return QVariant(storage->getGlobalStr1D(upper,0));
+        if (upper == QLatin1String("LASTLOAD_TEXT")) {
+            out = QVariant(storage->getGlobalStr1D(upper, 0));
+            return true;
+        }
         if (upper == QLatin1String("SAVEDATA_TEXT")) {
-            return toVariant(storage->getStringSlot(upper));
+            out = toVariant(storage->getStringSlot(upper));
+            return true;
         }
         int idx = 0;
         if (node.isArray() && !node.indices().isEmpty()) {
             // 维数快路径（同上 declaredDimension 的理由）：未重映射时 node.dimension
             // 与运行期查表恒等，免去一次 lineAt + find。
-            const int strDim = (varName == node.name() && node.dimension >= 0)
-                                   ? node.dimension : variableDimension(varName);
+            const int strDim = (ctx.varName == node.name() && node.dimension >= 0)
+                                   ? node.dimension : variableDimension(ctx.varName);
             if (strDim >= 2 && node.indices().size() >= 2) {
-                const QList<int> ids = resolveIndices(node, storage, gameBaseData);
+                const QList<int> ids = resolveIndices(node, storage, gameBaseData, ctx.scope);
                 if (ids.size() >= 2) {
-                    return toVariant(storage->getStringSlot(varName, ids));
+                    out = toVariant(storage->getStringSlot(ctx.varName, ids, ctx.scope));
+                    return true;
                 }
             }
-            idx = static_cast<int>(resolveIndex(node, 0, storage, gameBaseData));
+            idx = static_cast<int>(resolveIndex(node, 0, storage, gameBaseData, ctx.scope));
         }
-        return toVariant(storage->getStringSlot(storage->resolvedStorageName(varName), {idx}));
+        out = toVariant(storage->getStringSlot(storage->resolvedStorageName(ctx.varName, ctx.scope), {idx}));
+        return true;
     }
+    return false;
+}
 
-    if(varName.compare(QLatin1String("LASTLOAD_NO"),Qt::CaseInsensitive)==0 || varName.compare(QLatin1String("LASTLOAD_VERSION"),Qt::CaseInsensitive)==0)
-        return QVariant::fromValue<qint64>(storage->getSystemVariable(varName,0));
+bool ExpressionEvaluator::readLastLoad(DynamicContext& ctx, QVariant& out)
+{
+    if(ctx.varName.compare(QLatin1String("LASTLOAD_NO"),Qt::CaseInsensitive)==0 || ctx.varName.compare(QLatin1String("LASTLOAD_VERSION"),Qt::CaseInsensitive)==0) {
+        out = QVariant::fromValue<qint64>(ctx.storage->getSystemVariable(ctx.varName, 0));
+        return true;
+    }
+    return false;
+}
 
+// 旧链的终局 1：带下标访问（多维 -> 系统变量 -> 用户 1D）
+bool ExpressionEvaluator::readIndexedArray(DynamicContext& ctx, QVariant& out)
+{
+    const VariableNode& node = *ctx.node;
+    VariableStorage* storage = ctx.storage;
+    GameBaseData* gameBaseData = ctx.gameBaseData;
     // Check if this is an array access
     if (node.isArray()) {
         // Evaluate the index expression
         const auto& indices = node.indices();
         if (indices.isEmpty()) {
-            return QVariant();
+            out = QVariant();
+            return true;
         }
 
         // ---- 多维访问（用户 #DIM 的 2D/3D 数组）----
         // 对齐 C# Int2DVariableToken/Int3DVariableToken：直接用两个（三个）下标。
         // 维度由变量声明决定（REF 形参按声明查，见上方 declaredDimension）；
         // 系统变量与 1D 变量只取第一个下标。
-        const int dim = declaredDimension;
-        if (dim >= 2 && indices.size() >= 2 && !storage->hasSystemVariable(varName)) {
-            const QList<int> ids = resolveIndices(node, storage, gameBaseData);
+        const int dim = ctx.declaredDimension;
+        if (dim >= 2 && indices.size() >= 2 && !storage->hasSystemVariable(ctx.varName)) {
+            const QList<int> ids = resolveIndices(node, storage, gameBaseData, ctx.scope);
             if (dim >= 3 && ids.size() >= 3) {
-                return QVariant::fromValue<qint64>(
-                    storage->getGlobalInt3D(varName, ids.at(0), ids.at(1), ids.at(2)));
+                out = QVariant::fromValue<qint64>(
+                    storage->getGlobalInt3D(ctx.varName, ids.at(0), ids.at(1), ids.at(2)));
+                return true;
             }
             if (ids.size() >= 2) {
-                return QVariant::fromValue<qint64>(
-                    storage->getGlobalInt2D(varName, ids.at(0), ids.at(1)));
+                out = QVariant::fromValue<qint64>(
+                    storage->getGlobalInt2D(ctx.varName, ids.at(0), ids.at(1)));
+                return true;
             }
         }
 
         // 1D 访问：下标可以是整数或字符串（CSV 常量名 / 格式化串）
-        const int index = static_cast<int>(resolveIndex(node, 0, storage, gameBaseData));
+        const int index = static_cast<int>(resolveIndex(node, 0, storage, gameBaseData, ctx.scope));
 
         // Try to get system variable first
         // 判定必须与写入路径（ExecutionEngine::writeLhs）一致，且大小写不敏感：
         // 之前用「硬编码名单 + isVariableGlobal」且漏了 TIME，导致 TIME:0/2/5 写入
         // 落到用户全局槽、读取却走系统通道恒为 0 —— 表现为「变量似乎不可变」。
-        if (storage->hasSystemVariable(varName)) {
-            return QVariant(storage->getSystemVariable(varName, index));
+        if (storage->hasSystemVariable(ctx.varName)) {
+            out = QVariant(storage->getSystemVariable(ctx.varName, index));
+            return true;
         }
 
         // Fall back to global variable
-        return QVariant(storage->getGlobalInt1D(varName, index));
+        out = QVariant(storage->getGlobalInt1D(ctx.varName, index));
+        return true;
     }
-    
+    return false;
+}
+
+// 旧链的终局 2：无下标的简单访问（系统变量 -> 用户全局 1D）。恒命中。
+bool ExpressionEvaluator::readSimpleVariable(DynamicContext& ctx, QVariant& out)
+{
+    VariableStorage* storage = ctx.storage;
     // Simple variable access (no array index)
     // 系统变量（RESULT / DAY / MONEY / FLAG / A / B / C / …）-> 取下标 0 的值
     // 只有**真正有存储槽**的系统变量才走系统变量通道（A–Z/DA–DE 等无槽 → 用户全局）
-    if (storage->hasSystemVariable(varName)) {
-        return QVariant(storage->getSystemVariable(varName, 0));
+    if (storage->hasSystemVariable(ctx.varName)) {
+        out = QVariant(storage->getSystemVariable(ctx.varName, 0));
+        return true;
     }
 
     // Regular global variable
-    return QVariant(storage->getGlobalInt1D(varName, 0));
+    out = QVariant(storage->getGlobalInt1D(ctx.varName, 0));
+    return true;
+}
+
+// ---- 写路径的 3 块（旧 assignVariable 尾部的顺序：参数 -> 角色串 -> 槽名串）----
+ExpressionEvaluator::WriteResult ExpressionEvaluator::writeParameter(DynamicContext& ctx, qint64 value)
+{
+    // 前置判断（字符串变量不能自增）保留；参数/角色/ARG/LOCAL/系统/2D/3D/1D 的
+    // 写回顺序全部交给唯一原语 VariableStorage::writeIntByName。
+    if (ctx.storage->hasParameter(ctx.varName)) {
+        ctx.storage->writeIntByName(ctx.varName, {}, value, ctx.scope);
+        return WriteResult::Written;
+    }
+    return WriteResult::Unhandled;
+}
+
+ExpressionEvaluator::WriteResult ExpressionEvaluator::writeCharaStringReject(DynamicContext& ctx, qint64 value)
+{
+    (void)value;
+    // 角色数据变量（++/-- 的写回）与读取路径对称
+    if (ctx.storage->isCharaDataVariable(ctx.varName) && ctx.storage->isCharaDataString(ctx.varName))
+        return WriteResult::Rejected;   // 字符串不能自增
+    return WriteResult::Unhandled;
+}
+
+ExpressionEvaluator::WriteResult ExpressionEvaluator::writeSlotStringReject(DynamicContext& ctx, qint64 value)
+{
+    (void)value;
+    QString upperScratch;
+    const QString& upper = eraUpperKey(ctx.varName, upperScratch);
+    if (upper == QLatin1String("ARGS") || upper == QLatin1String("LOCALS")
+        || upper == QLatin1String("RESULTS")) {
+        return WriteResult::Rejected;   // 字符串变量不能自增
+    }
+    return WriteResult::Unhandled;
+}
+
+// 表：一行一块，**顺序 = 旧链顺序 = 语义**（禁止重排、禁止合并相邻块）。
+const QList<ExpressionEvaluator::Resolver>& ExpressionEvaluator::resolverTable()
+{
+    static const QList<Resolver> table = {
+        // 旧 switch：已定型 kind 的键直取（消费 accessKey）
+        { VariableNode::bit(AK::GlobalInt1) | VariableNode::bit(AK::GlobalInt2)
+              | VariableNode::bit(AK::GlobalInt3),
+          true, &ExpressionEvaluator::readKeyedInt, nullptr },
+        { VariableNode::bit(AK::GlobalStr1) | VariableNode::bit(AK::GlobalStr2)
+              | VariableNode::bit(AK::GlobalStr3),
+          true, &ExpressionEvaluator::readKeyedStr, nullptr },
+        { VariableNode::bit(AK::LocalSlot) | VariableNode::bit(AK::ArgSlot),
+          true, &ExpressionEvaluator::readKeyedLocalArgInt, nullptr },
+        { VariableNode::bit(AK::LocalStr) | VariableNode::bit(AK::ArgStr),
+          true, &ExpressionEvaluator::readKeyedLocalArgStr, nullptr },
+        // 旧 823-836：字符串形参别名（aliased && Str）
+        { kAllNames, false, &ExpressionEvaluator::readStringParameterAlias, nullptr },
+        // 旧 837-841：REF 形参名字重映射（只改 ctx）
+        { kAllNames, false, &ExpressionEvaluator::applyReferenceAlias, nullptr },
+        // 旧 842-860：chara / 维数绑定 + 维数不符 throw（只改 ctx）
+        { kAllNames, false, &ExpressionEvaluator::bindDimension, nullptr },
+        // 旧 861：int 形参值绑定（写：原样写参数槽）
+        { kAllNames, false, &ExpressionEvaluator::readParameter, &ExpressionEvaluator::writeParameter },
+        // 旧 866-879：角色数据变量（写：角色字符串拒绝自增）
+        { VariableNode::bit(AK::Chara) | VariableNode::bit(AK::Param) | VariableNode::bit(AK::Dynamic),
+          false, &ExpressionEvaluator::readCharaData, &ExpressionEvaluator::writeCharaStringReject },
+        // 旧 882-888：GAMEBASE_
+        { kPseudo, false, &ExpressionEvaluator::readGameBase, nullptr },
+        // 旧 891-941：ARG/LOCAL/ARGS/LOCALS/RESULTS + 形参别名槽（写：串槽拒绝自增）
+        { kAllNames, false, &ExpressionEvaluator::readSlotNames, &ExpressionEvaluator::writeSlotStringReject },
+        // 旧 944-946：LINECOUNT
+        { kPseudo, false, &ExpressionEvaluator::readLineCount, nullptr },
+        // 旧 950-957：RAND
+        { kPseudo, false, &ExpressionEvaluator::readRandom, nullptr },
+        // 旧 960-969：__INT_MAX__ / __INT_MIN__ / EMUERA_VERSION
+        { kPseudo, false, &ExpressionEvaluator::readIntLimits, nullptr },
+        // 旧 972-980：RANDDATA
+        { kPseudo, false, &ExpressionEvaluator::readRandData, nullptr },
+        // 旧 985-1000：#DIM CONST（标量 / 常数数组）
+        { kAllNames, false, &ExpressionEvaluator::readConst, nullptr },
+        // 旧 1004-1035：字符串变量（RESULTS / LASTLOAD_TEXT / SAVEDATA_TEXT / 其余）
+        { kAllNames, false, &ExpressionEvaluator::readStringVariable, nullptr },
+        // 旧 1037-1038：LASTLOAD_NO / LASTLOAD_VERSION
+        { kPseudo, false, &ExpressionEvaluator::readLastLoad, nullptr },
+        // 旧 1041-1078：终局 1（带下标）
+        { kAllNames, false, &ExpressionEvaluator::readIndexedArray, nullptr },
+        // 旧 1080-1088：终局 2（无下标）
+        { kAllNames, false, &ExpressionEvaluator::readSimpleVariable, nullptr },
+    };
+    return table;
+}
+
+QVariant ExpressionEvaluator::evaluateVariable(const VariableNode &node, VariableStorage *storage,
+                                               GameBaseData *gameBaseData, eravar::ScopeId scope)
+{
+    if (!storage) {
+        return QVariant();
+    }
+
+    // ---- 装载期「变量分词」的描述符 + 守卫 2 ----
+    // 收尾定型时（walkApply -> computeVariableAccess）已把名字的**类别**解析成
+    // kind（+ 可静态证明时的存储键）。类别判不出的才留 Dynamic，落回下面这张
+    // 按旧链顺序排列的 resolver 表（全表按序跑 = 旧语义）。
+    // 下标仍逐次求值 —— 可能有副作用（BAG:(I++)）。
+    // 作用域是**参数**：本节点的键在装载期就按所属函数算好（key 自足），
+    // 调用方传进来的 scope 只用于 Dynamic 的按名解析 —— 不再有「live 作用域
+    // 与 key.scope 对账」的守卫 1。
+    const eravar::VariableKey& nodeKey = node.accessKey;
+    VariableNode::AccessKind access = node.accessKind;
+    // 守卫 2（镜像旧路的维数检查）：旧路只对**非重映射名**（裸键 = 全局声明/
+    // 未声明/槽位名）在「下标个数 != 声明维数」时 throw「Missing variable
+    // parameters or invalid index dimension」；私有名经 resolvedStorageName
+    // 重映射（aliased）恒跳过该检查、按 1 维宽松读。快路径据此分键处理：
+    // 复合键（私有名）保持宽松分派；裸键维数不符 -> 整体回退完整解析（旧路
+    // 行为，含其 throw）。装载期校验已把这类行标 Error 不执行，这里兜住的是
+    // 逃过行校验的直接求值（调试求值 / 装载期常量折叠重入）。
+    if (VariableNode::usesKey(access) && !nodeKey.isPrivate()) {
+        const int n = node.indices().size();
+        const bool mismatch =
+            (access == VariableNode::AccessKind::GlobalInt2
+             || access == VariableNode::AccessKind::GlobalStr2) ? n != 2
+          : (access == VariableNode::AccessKind::GlobalInt3
+             || access == VariableNode::AccessKind::GlobalStr3) ? n != 3
+          : n > 1;   // 1 维 kind（Int1/Str1/LOCAL/ARG 槽位）只允 0/1 个下标
+        if (mismatch) access = VariableNode::AccessKind::Dynamic;
+    }
+
+    // ---- 有序 resolver 表：一行一块，命中即返回 ----
+    // 键直取的行（Global*/槽位）不读 aliased —— 不为它们白算一次 resolvedStorageName
+    //（热路径：每个变量引用一次）。Dynamic 的 usesKey 为 false，仍会算。
+    DynamicContext ctx = makeDynamicContext(node, storage, gameBaseData, access,
+                                            /*withAlias=*/!VariableNode::usesKey(access), scope);
+    QVariant out;
+    for (const Resolver& r : resolverTable()) {
+        if (!(r.kinds & VariableNode::bit(access))) continue;
+        if (r.read && (this->*r.read)(ctx, out)) return out;
+    }
+    // 不可达：表尾两行是旧链的无条件终局。
+    return QVariant();
 }
 
 QVariant ExpressionEvaluator::evaluateIndexedVariable(const QString &varName, int index, VariableStorage *storage)
@@ -1102,16 +1431,17 @@ QVariant ExpressionEvaluator::evaluateIndexedVariable(const QString &varName, in
     return QVariant(storage->getGlobalInt1D(varName, index));
 }
 
-QVariant ExpressionEvaluator::evaluateBinaryOp(const BinaryOpNode &node, VariableStorage *storage, GameBaseData *gameBaseData)
+QVariant ExpressionEvaluator::evaluateBinaryOp(const BinaryOpNode &node, VariableStorage *storage,
+                                               GameBaseData *gameBaseData, eravar::ScopeId scope)
 {
     const bool rightFirst = node.op().type() == TokenType::DIVIDE || node.op().type() == TokenType::MODULO;
     QVariant right;
     if (rightFirst) {
-        right = evaluateNode(*node.right(), storage, gameBaseData);
+        right = evaluateNode(*node.right(), storage, gameBaseData, scope);
         if (!right.isValid()) return QVariant();
         if (right.toLongLong() == 0) throw std::runtime_error("Division or remainder by zero");
     }
-    QVariant left = evaluateNode(*node.left(), storage, gameBaseData);
+    QVariant left = evaluateNode(*node.left(), storage, gameBaseData, scope);
     if (!left.isValid()) return QVariant();
     // Match OperatorMethod.cs: logical operators short-circuit before evaluating
     // the RHS, including its function calls and increment/decrement side effects.
@@ -1126,7 +1456,7 @@ QVariant ExpressionEvaluator::evaluateBinaryOp(const BinaryOpNode &node, Variabl
             || (!truth && logicalOp == TokenType::LOGICAL_NAND))
             return QVariant::fromValue<qint64>(1);
     }
-    if (!rightFirst) right = evaluateNode(*node.right(), storage, gameBaseData);
+    if (!rightFirst) right = evaluateNode(*node.right(), storage, gameBaseData, scope);
     if (!left.isValid() || !right.isValid()) [[unlikely]] {
         return QVariant();
     }
@@ -1156,7 +1486,8 @@ QVariant ExpressionEvaluator::evaluateBinaryOp(const BinaryOpNode &node, Variabl
     return evaluateStrBinary(op, stringText(left), stringText(right), left, right);
 }
 
-QVariant ExpressionEvaluator::evaluateUnaryOp(const UnaryOpNode &node, VariableStorage *storage, GameBaseData *gameBaseData)
+QVariant ExpressionEvaluator::evaluateUnaryOp(const UnaryOpNode &node, VariableStorage *storage,
+                                              GameBaseData *gameBaseData, eravar::ScopeId scope)
 {
     if (node.operand()->valueType() != OperandType::Int) throw std::runtime_error("Unary operand must be integer");
     QSharedPointer<VariableNode> fixedTarget;
@@ -1165,9 +1496,11 @@ QVariant ExpressionEvaluator::evaluateUnaryOp(const UnaryOpNode &node, VariableS
         const auto& original = static_cast<const VariableNode&>(*node.operand());
         fixedTarget = QSharedPointer<VariableNode>::create(original.name(), original.valueType());
         for (int i = 0; i < original.indices().size(); ++i)
-            fixedTarget->addIndex(QSharedPointer<LiteralNode>::create(resolveIndex(original, i, storage, gameBaseData)));
+            fixedTarget->addIndex(QSharedPointer<LiteralNode>::create(
+                resolveIndex(original, i, storage, gameBaseData, scope)));
     }
-    QVariant operand = evaluateNode(fixedTarget ? *fixedTarget : *node.operand(), storage, gameBaseData);
+    QVariant operand = evaluateNode(fixedTarget ? *fixedTarget : *node.operand(),
+                                    storage, gameBaseData, scope);
     if (!operand.isValid()) {
         return QVariant();
     }
@@ -1190,7 +1523,8 @@ QVariant ExpressionEvaluator::evaluateUnaryOp(const UnaryOpNode &node, VariableS
                 || (m_constArrayChecker && m_constArrayChecker(var.name())))
                 throw std::runtime_error("Cannot increment a constant");
             const qint64 updated = std::bit_cast<qint64>(quint64(v)+quint64(delta));
-            if (!assignVariable(var, storage, gameBaseData, updated)) throw std::runtime_error("Invalid increment target");
+            if (!assignVariable(var, storage, gameBaseData, updated, scope))
+                throw std::runtime_error("Invalid increment target");
             return QVariant::fromValue<qint64>(node.isPostfix() ? v : updated);
         }
         throw std::runtime_error("Increment requires an integer variable");
@@ -1300,12 +1634,14 @@ bool ExpressionEvaluator::hasArg(const FunctionNode &node, int i) {
     return i >= 0 && i < node.arguments().size() && node.arguments().at(i);
 }
 
-qint64 ExpressionEvaluator::argInt(const FunctionNode &node, int i, VariableStorage *storage, GameBaseData *g) {
+qint64 ExpressionEvaluator::argInt(const FunctionNode &node, int i, VariableStorage *storage,
+                                   GameBaseData *g, eravar::ScopeId scope) {
     if (!hasArg(node, i)) return 0;
-    return evaluateNode(*node.arguments().at(i), storage, g).toLongLong();
+    return evaluateNode(*node.arguments().at(i), storage, g, scope).toLongLong();
 }
 
-QString ExpressionEvaluator::argStr(const FunctionNode &node, int i, VariableStorage *storage, GameBaseData *g) {
+QString ExpressionEvaluator::argStr(const FunctionNode &node, int i, VariableStorage *storage,
+                                    GameBaseData *g, eravar::ScopeId scope) {
     if (!hasArg(node, i)) return QString();
     const ExpressionNode& argument = *node.arguments().at(i);
     // StrForm 同时携带原始文本和装载期节点。普通字符串参数读取的是
@@ -1314,7 +1650,7 @@ QString ExpressionEvaluator::argStr(const FunctionNode &node, int i, VariableSto
         const auto& form = static_cast<const StrFormNode&>(argument);
         if (!form.rawText().isNull()) return form.rawText();
     }
-    return stringText(evaluateNode(argument, storage, g));
+    return stringText(evaluateNode(argument, storage, g, scope));
 }
 
 const VariableNode* ExpressionEvaluator::argVar(const FunctionNode &node, int i) const {
@@ -1325,7 +1661,8 @@ const VariableNode* ExpressionEvaluator::argVar(const FunctionNode &node, int i)
 
 // ---- 数组读取 ----
 QList<qint64> ExpressionEvaluator::readIntArray(const VariableNode &var, VariableStorage *storage,
-                                                GameBaseData *gameBaseData, bool charaRange) const {
+                                                GameBaseData *gameBaseData, bool charaRange,
+                                                eravar::ScopeId scope) const {
     QList<qint64> out;
     if (!storage) return out;
     const QString name = var.name();
@@ -1340,10 +1677,11 @@ QList<qint64> ExpressionEvaluator::readIntArray(const VariableNode &var, Variabl
         // 角色数组：SUMCARRAY(CFLAG:列) 的列号即变量第一个下标，沿角色维求和
         const int column = var.indices().isEmpty()
             ? 0
-            : static_cast<int>(const_cast<ExpressionEvaluator*>(this)->resolveIndex(var, 0, storage, gameBaseData));
+            : static_cast<int>(const_cast<ExpressionEvaluator*>(this)->resolveIndex(var, 0, storage, gameBaseData, scope));
         const int charaNum = const_cast<ExpressionEvaluator*>(this)->charaCount(storage);
         out.reserve(charaNum);
-        for (int i = 0; i < charaNum; ++i) out.append(storage->getCharaInt(name, i, column));
+        const QString key = storage->resolvedStorageName(name, scope);
+        for (int i = 0; i < charaNum; ++i) out.append(storage->getCharaInt(key, i, column));
         return out;
     }
 
@@ -1375,12 +1713,13 @@ QList<qint64> ExpressionEvaluator::readIntArray(const VariableNode &var, Variabl
     }
     // 用户 #DIM 声明的数组（ARR 等）不在 variableConfig 里：按实际存储长度取
     // （此前 size 恒 0 -> MAXARRAY/SUMARRAY/FINDELEMENT 对用户数组全返回 0/-1）
-    if (size <= 0) size = storage->arraySize(name);
-    if (size <= 0) size = storage->arraySize(upper);
+    if (size <= 0) size = storage->arraySizeRaw(storage->resolvedStorageName(name, scope));
+    if (size <= 0) size = storage->arraySizeRaw(storage->resolvedStorageName(upper, scope));
+    const QString key = storage->resolvedStorageName(name, scope);
     out.reserve(size);
     for (int i = 0; i < size; ++i) {
         out.append(storage->hasSystemVariable(upper) ? storage->getSystemVariable(upper, i)
-                                                     : storage->getGlobalInt1D(name, i));
+                                                     : storage->getGlobalInt1DRaw(key, i));
     }
     return out;
 }
@@ -1391,7 +1730,8 @@ QList<qint64> ExpressionEvaluator::readIntArray(const VariableNode &var, Variabl
 // (BASENAME, ABLNAME …) 以前被 readIntArray 当整数读 -> 全 0，
 // 于是 `FINDELEMENT(BASENAME,"気力")` 恒为 0：eraTW 的 BASE_BAR 里
 // 体力/気力 都用 BASE_ID=0 的同一个槽，两根条才会「一起变」。
-QList<QString> ExpressionEvaluator::readStrArray(const VariableNode &var, VariableStorage *storage) const {
+QList<QString> ExpressionEvaluator::readStrArray(const VariableNode &var, VariableStorage *storage,
+                                                eravar::ScopeId scope) const {
     QList<QString> out;
     if (!storage) return out;
     const QString name = var.name();
@@ -1404,9 +1744,10 @@ QList<QString> ExpressionEvaluator::readStrArray(const VariableNode &var, Variab
         const int charaNum = charaCount(storage);
         const int column = var.indices().isEmpty()
             ? 0
-            : static_cast<int>(const_cast<ExpressionEvaluator*>(this)->resolveIndex(var, 0, storage, nullptr));
+            : static_cast<int>(const_cast<ExpressionEvaluator*>(this)->resolveIndex(var, 0, storage, nullptr, scope));
         out.reserve(charaNum);
-        for (int i = 0; i < charaNum; ++i) out.append(storage->getCharaStr(name, i, column));
+        const QString key = storage->resolvedStorageName(name, scope);
+        for (int i = 0; i < charaNum; ++i) out.append(storage->getCharaStr(key, i, column));
         return out;
     }
 
@@ -1425,10 +1766,11 @@ QList<QString> ExpressionEvaluator::readStrArray(const VariableNode &var, Variab
 
     int size = storage->variableConfig().getSize1D(name);
     if (size <= 0) size = storage->variableConfig().getSize1D(upper);
-    if (size <= 0) size = storage->arraySize(name);
+    if (size <= 0) size = storage->arraySizeRaw(storage->resolvedStorageName(name, scope));
     if (size <= 0) size = storage->variableConfig().getSize2D(name).second;
+    const QString key = storage->resolvedStorageName(name, scope);
     out.reserve(size);
-    for (int i = 0; i < size; ++i) out.append(storage->getGlobalStr1D(name, i));
+    for (int i = 0; i < size; ++i) out.append(storage->getGlobalStr1DRaw(key, i));
     return out;
 }
 
@@ -1532,12 +1874,13 @@ int ExpressionEvaluator::langIndexOf(const QString &target, const QString &word,
 // ---------------------------------------------------------------------------
 // 主入口：内置函数 / 用户函数分派
 // ---------------------------------------------------------------------------
-QVariant ExpressionEvaluator::evaluateFunction(const FunctionNode &node, VariableStorage *storage, GameBaseData *gameBaseData)
+QVariant ExpressionEvaluator::evaluateFunction(const FunctionNode &node, VariableStorage *storage,
+                                               GameBaseData *gameBaseData, eravar::ScopeId scope)
 {
     // 1) 内置函数（内部命令）
     if (node.isBuiltin()) {
         QVariant out;
-        if (evaluateBuiltin(node, storage, gameBaseData, out)) return out;
+        if (evaluateBuiltin(node, storage, gameBaseData, out, scope)) return out;
     }
 
     // 2) 用户自定义函数：交给执行链回调（ScriptRunner::invokeUserFunction）
@@ -1557,7 +1900,7 @@ QVariant ExpressionEvaluator::evaluateFunction(const FunctionNode &node, Variabl
                 args.append(QVariant());
                 continue;
             }
-            args.append(evaluateNode(*argNode, storage, gameBaseData));
+            args.append(evaluateNode(*argNode, storage, gameBaseData, scope));
         }
         QVariant out;
         if (m_userInvoker(funcName, args, argNodes, out)) {
@@ -1568,19 +1911,20 @@ QVariant ExpressionEvaluator::evaluateFunction(const FunctionNode &node, Variabl
 }
 
 bool ExpressionEvaluator::evaluateBuiltin(const FunctionNode &node, VariableStorage *storage,
-                                          GameBaseData *gameBaseData, QVariant &out)
+                                          GameBaseData *gameBaseData, QVariant &out,
+                                          eravar::ScopeId scope)
 {
     const BuiltinOp op = node.builtinOp();
-    const auto I = [&](int i) { return argInt(node, i, storage, gameBaseData); };
-    const auto S = [&](int i) { return argStr(node, i, storage, gameBaseData); };
+    const auto I = [&](int i) { return argInt(node, i, storage, gameBaseData, scope); };
+    const auto S = [&](int i) { return argStr(node, i, storage, gameBaseData, scope); };
     // FORM consumers use the load-time StrForm AST. Other string consumers use
     // argStr(), which intentionally reads StrFormNode::rawText().
     const auto FORM = [&](int i) {
         if (!hasArg(node, i)) return QString();
         const auto& argument = *node.arguments().at(i);
         if (argument.kind() == NodeKind::StrForm)
-            return stringText(evaluateNode(argument, storage, gameBaseData));
-        return argStr(node, i, storage, gameBaseData);
+            return stringText(evaluateNode(argument, storage, gameBaseData, scope));
+        return argStr(node, i, storage, gameBaseData, scope);
     };
     // 求值后的字符串实参：与 S() 的唯一差别是 **StrForm 也展开**
     //（S() 对 StrForm 返回原文，那是 PRINTFORM 那类「格式化串消费者」要的形状）。
@@ -1589,7 +1933,7 @@ bool ExpressionEvaluator::evaluateBuiltin(const FunctionNode &node, VariableStor
     // 用 S() 会把 `%…%`、`{…}` 原样当文件名（读不到、写到奇怪的路径）。
     const auto EVALSTR = [&](int i) {
         if (!hasArg(node, i)) return QString();
-        return stringText(evaluateNode(*node.arguments().at(i), storage, gameBaseData));
+        return stringText(evaluateNode(*node.arguments().at(i), storage, gameBaseData, scope));
     };
     const auto V = [&]() -> const BuiltinFunctionSpec* { return node.builtinSpec(); };
 
@@ -1794,7 +2138,7 @@ bool ExpressionEvaluator::evaluateBuiltin(const FunctionNode &node, VariableStor
         // this path deliberately evaluates the node. A variable/function
         // argument remains an independent read and therefore supplies raw text.
         if (hasArg(node, 0) && node.arguments().at(0)->kind() == NodeKind::StrForm)
-            out = evaluateNode(*node.arguments().at(0), storage, gameBaseData);
+            out = evaluateNode(*node.arguments().at(0), storage, gameBaseData, scope);
         else
             out = S(0);
         return true;
@@ -1816,14 +2160,14 @@ bool ExpressionEvaluator::evaluateBuiltin(const FunctionNode &node, VariableStor
                               ? static_cast<int>(I(2)) : 0;
         QStringList parts;
         if (strArray) {
-            const QList<QString> values = readStrArray(*var, storage);
+            const QList<QString> values = readStrArray(*var, storage, scope);
             const int count = (node.arguments().size() >= 4 && !node.isArgOmitted(3))
                                   ? static_cast<int>(I(3)) : values.size() - start;
             const int end = start + count;
             for (int i = qMax(0, start); i < qMin(end, values.size()); ++i)
                 parts << values.at(i);
         } else {
-            const QList<qint64> values = readIntArray(*var, storage, gameBaseData, false);
+            const QList<qint64> values = readIntArray(*var, storage, gameBaseData, false, scope);
             const int count = (node.arguments().size() >= 4 && !node.isArgOmitted(3))
                                   ? static_cast<int>(I(3)) : values.size() - start;
             const int end = start + count;
@@ -1873,7 +2217,7 @@ bool ExpressionEvaluator::evaluateBuiltin(const FunctionNode &node, VariableStor
         const VariableNode* var = argVar(node, 0);
         if (!var) { out = QVariant::fromValue<qint64>(0); return true; }
         const bool chara = (op == BuiltinOp::SumCharaArray);
-        const QList<qint64> values = readIntArray(*var, storage, gameBaseData, chara);
+        const QList<qint64> values = readIntArray(*var, storage, gameBaseData, chara, scope);
         const int start = node.arguments().size() >= 2 ? static_cast<int>(I(1)) : 0;
         const int end = node.arguments().size() >= 3 ? static_cast<int>(I(2)) : values.size();
         qint64 sum = 0;
@@ -1889,7 +2233,7 @@ bool ExpressionEvaluator::evaluateBuiltin(const FunctionNode &node, VariableStor
         if (!var) { out = QVariant::fromValue<qint64>(0); return true; }
         const bool chara = (op == BuiltinOp::MaxCharaArray || op == BuiltinOp::MinCharaArray);
         const bool wantMax = (op == BuiltinOp::MaxArray || op == BuiltinOp::MaxCharaArray);
-        const QList<qint64> values = readIntArray(*var, storage, gameBaseData, chara);
+        const QList<qint64> values = readIntArray(*var, storage, gameBaseData, chara, scope);
         const int start = node.arguments().size() >= 2 ? static_cast<int>(I(1)) : 0;
         const int end = node.arguments().size() >= 3 ? static_cast<int>(I(2)) : values.size();
         if (values.isEmpty()) { out = QVariant::fromValue<qint64>(0); return true; }
@@ -1907,7 +2251,7 @@ bool ExpressionEvaluator::evaluateBuiltin(const FunctionNode &node, VariableStor
         if (!var) { out = QVariant::fromValue<qint64>(0); return true; }
         const bool chara = (op == BuiltinOp::InRangeCharaArray);
         const qint64 lo = I(1), hi = I(2);
-        const QList<qint64> values = readIntArray(*var, storage, gameBaseData, chara);
+        const QList<qint64> values = readIntArray(*var, storage, gameBaseData, chara, scope);
         const int start = node.arguments().size() >= 4 ? static_cast<int>(I(3)) : 0;
         const int end = node.arguments().size() >= 5 ? static_cast<int>(I(4)) : values.size();
         qint64 count = 0;
@@ -1924,7 +2268,7 @@ bool ExpressionEvaluator::evaluateBuiltin(const FunctionNode &node, VariableStor
         if (!var) { out = QVariant::fromValue<qint64>(0); return true; }
         const bool chara = (op == BuiltinOp::CharaMatch);
         const bool argIsStr = hasArg(node, 1) && node.arguments().at(1)->valueType() == OperandType::Str;
-        const QList<qint64> values = readIntArray(*var, storage, gameBaseData, chara);
+        const QList<qint64> values = readIntArray(*var, storage, gameBaseData, chara, scope);
         const int start = node.arguments().size() > 2 ? static_cast<int>(I(2)) : 0;
         const int end = node.arguments().size() > 3 ? static_cast<int>(I(3)) : values.size();
         qint64 count = 0;
@@ -1972,14 +2316,14 @@ bool ExpressionEvaluator::evaluateBuiltin(const FunctionNode &node, VariableStor
         const bool strArray = (var->valueType() == OperandType::Str)
                               || (storage && storage->isCharaDataString(var->name()));
         if (strArray) {
-            const QList<QString> values = readStrArray(*var, storage);
+            const QList<QString> values = readStrArray(*var, storage, scope);
             // 第 3/4 实参可为空（`FINDELEMENT(A, X, 1, , 1)`）：省略时分别取
             // 「0」与「数组末尾」（对齐 C# arguments[i] == null 的默认值）
             const int start = (node.arguments().size() > 2 && !node.isArgOmitted(2))
                                   ? static_cast<int>(I(2)) : 0;
             const int end = (node.arguments().size() > 3 && !node.isArgOmitted(3))
                                 ? static_cast<int>(I(3)) : values.size();
-            const QString target = argStr(node, 1, storage, gameBaseData);
+            const QString target = argStr(node, 1, storage, gameBaseData, scope);
             // 第 5 实参 isExact：正则必须**整串匹配**（对齐 C# FindElementMethod）
             const bool isExact = (node.arguments().size() > 4 && !node.isArgOmitted(4))
                                      ? (I(4) != 0) : false;
@@ -2007,7 +2351,7 @@ bool ExpressionEvaluator::evaluateBuiltin(const FunctionNode &node, VariableStor
             out = QVariant::fromValue<qint64>(found);
             return true;
         }
-        const QList<qint64> values = readIntArray(*var, storage, gameBaseData, false);
+        const QList<qint64> values = readIntArray(*var, storage, gameBaseData, false, scope);
         const int start = (node.arguments().size() > 2 && !node.isArgOmitted(2))
                               ? static_cast<int>(I(2)) : 0;
         const int end = (node.arguments().size() > 3 && !node.isArgOmitted(3))
@@ -2140,7 +2484,7 @@ bool ExpressionEvaluator::evaluateBuiltin(const FunctionNode &node, VariableStor
         const int dim = node.arguments().size() >= 2 ? static_cast<int>(I(1)) : 0;
         qint64 size = 0;
         if (storage) {
-            size = storage->arraySizeRaw(storage->resolvedStorageName(name));
+            size = storage->arraySizeRaw(storage->resolvedStorageName(name, scope));
             const VariableConfig& cfg = storage->variableConfig();
             if (size <= 0 && dim == 0) {
                 size = cfg.getSize1D(name);
@@ -2274,7 +2618,7 @@ bool ExpressionEvaluator::evaluateBuiltin(const FunctionNode &node, VariableStor
         QRect srcRect;
         if (count >= 10) srcRect = QRect(int(I(6)), int(I(7)), int(I(8)), int(I(9)));
         float cm[5][5];
-        const bool hasCm = count >= 11 && readColorMatrix(node, 10, storage, gameBaseData, cm);
+        const bool hasCm = count >= 11 && readColorMatrix(node, 10, storage, gameBaseData, cm, scope);
         out = QVariant::fromValue<qint64>(GraphicsStore::gDrawG(
             I(0), I(1), dest, srcRect, hasCm ? cm : nullptr) ? 1 : 0);
         return true;
@@ -2299,7 +2643,7 @@ bool ExpressionEvaluator::evaluateBuiltin(const FunctionNode &node, VariableStor
             dest.moveTop(dest.y() + by * dest.height() / qMax(1, sprite.height()));
         }
         float cm[5][5];
-        const bool hasCm = count >= 7 && readColorMatrix(node, 6, storage, gameBaseData, cm);
+        const bool hasCm = count >= 7 && readColorMatrix(node, 6, storage, gameBaseData, cm, scope);
         out = QVariant::fromValue<qint64>(GraphicsStore::gDrawImage(
             I(0), sprite, dest, hasCm ? cm : nullptr) ? 1 : 0);
         return true;
@@ -2432,7 +2776,7 @@ bool ExpressionEvaluator::evaluateBuiltin(const FunctionNode &node, VariableStor
             const auto& arg = node.arguments().at(i);
             argNodes.append(arg.get());
             args.append(node.isArgOmitted(i) ? QVariant()
-                                             : evaluateNode(*arg, storage, gameBaseData));
+                                             : evaluateNode(*arg, storage, gameBaseData, scope));
         }
         return m_extensionFnInvoker(node.name(), args, argNodes, out);
     }
@@ -2502,10 +2846,11 @@ bool ExpressionEvaluator::evaluateBuiltin(const FunctionNode &node, VariableStor
         const VariableNode* var = argVar(node, 0);
         if (!var || !storage) { out = QVariant::fromValue<qint64>(-1); return true; }
         const QString varName = var->name();
+        const QString varKey = storage->resolvedStorageName(varName, scope);
         const bool isStr = storage->isCharaDataString(varName);
         qint64 element = 0;
         if (!var->indices().isEmpty())
-            element = evaluateNode(*var->indices().first(), storage, gameBaseData).toLongLong();
+            element = evaluateNode(*var->indices().first(), storage, gameBaseData, scope).toLongLong();
         const bool last = (op == BuiltinOp::FindCharaLast || op == BuiltinOp::FindCharaDataLast);
         const int count = charaCount(storage);
         // C#：開始缺省 0、終了缺省 CHARANUM（FINDCHARA(V, X) 是合法的省略形式）
@@ -2517,12 +2862,12 @@ bool ExpressionEvaluator::evaluateBuiltin(const FunctionNode &node, VariableStor
             const int i = last ? (end - 1 - step) : (start + step);
             if (i < start || i >= end) break;
             if (isStr) {
-                if (storage->getCharaStr(varName, i, int(element)) == S(1)) {
+                if (storage->getCharaStr(varKey, i, int(element)) == S(1)) {
                     out = QVariant::fromValue<qint64>(i);
                     return true;
                 }
             } else {
-                if (storage->getCharaInt(varName, i, int(element)) == I(1)) {
+                if (storage->getCharaInt(varKey, i, int(element)) == I(1)) {
                     out = QVariant::fromValue<qint64>(i);
                     return true;
                 }
@@ -2694,18 +3039,19 @@ bool ExpressionEvaluator::evaluateBuiltin(const FunctionNode &node, VariableStor
         order.reserve(count);
         for (int i = 0; i < count; ++i) order.append(i);
         const QString varName = var->name();
+        const QString varKey = storage->resolvedStorageName(varName, scope);
         qint64 element = 0;
         if (!var->indices().isEmpty())
-            element = evaluateNode(*var->indices().first(), storage, gameBaseData).toLongLong();
+            element = evaluateNode(*var->indices().first(), storage, gameBaseData, scope).toLongLong();
         const bool isStr = storage->isCharaDataString(varName);
         std::stable_sort(order.begin(), order.end(), [&](int a, int b) {
             if (isStr) {
-                const QString va = storage->getCharaStr(varName, a, int(element));
-                const QString vb = storage->getCharaStr(varName, b, int(element));
+                const QString va = storage->getCharaStr(varKey, a, int(element));
+                const QString vb = storage->getCharaStr(varKey, b, int(element));
                 return forward ? va < vb : va > vb;
             }
-            const qint64 va = storage->getCharaInt(varName, a, int(element));
-            const qint64 vb = storage->getCharaInt(varName, b, int(element));
+            const qint64 va = storage->getCharaInt(varKey, a, int(element));
+            const qint64 vb = storage->getCharaInt(varKey, b, int(element));
             return forward ? va < vb : va > vb;
         });
         storage->pickupChara(order);
@@ -3062,32 +3408,34 @@ QString ExpressionEvaluator::resolveScriptPath(const QString& path) const {
 // 角色变量/形参别名的路由只有一处（不会出现「读得到写不到」）。
 // ---------------------------------------------------------------------------
 bool ExpressionEvaluator::assignNodeValue(const ExpressionNode& target, VariableStorage* storage,
-                                          GameBaseData* gameBaseData, const QVariant& value) {
+                                          GameBaseData* gameBaseData, const QVariant& value,
+                                          eravar::ScopeId scope) {
     if (!storage || target.kind() != NodeKind::Variable) return false;
     const auto& var = static_cast<const VariableNode&>(target);
     if (isStringValue(value)) {
-        return assignStringVariable(var, storage, gameBaseData, stringText(value));
+        return assignStringVariable(var, storage, gameBaseData, stringText(value), scope);
     }
-    return assignVariable(var, storage, gameBaseData, value.toLongLong());
+    return assignVariable(var, storage, gameBaseData, value.toLongLong(), scope);
 }
 
 // 字符串变量写入：与 evaluateVariable 的字符串读取路径逐条对称
 // （形参值绑定 / 角色字符串 / 局部与实参槽 / 用户 1D-3D 字符串数组）。
 bool ExpressionEvaluator::assignStringVariable(const VariableNode& node, VariableStorage* storage,
-                                               GameBaseData* gameBaseData, const QString& value) {
+                                               GameBaseData* gameBaseData, const QString& value,
+                                               eravar::ScopeId scope) {
     if (!storage) return false;
     const QString name = node.name();
     if (storage->hasParameter(name)) {
         storage->setParameter(name, value);
         return true;
     }
-    const QList<int> ids = resolveIndices(node, storage, gameBaseData);
-    return storage->setStringSlot(name, ids, FlatStringValue(value));
+    const QList<int> ids = resolveIndices(node, storage, gameBaseData, scope);
+    return storage->setStringSlot(name, ids, FlatStringValue(value), scope);
 }
 
 bool ExpressionEvaluator::readColorMatrix(const FunctionNode &node, int argNo,
                                           VariableStorage *storage, GameBaseData *gameBaseData,
-                                          float out[5][5]) {
+                                          float out[5][5], eravar::ScopeId scope) {
     // 对齐 C# ReadColormatrix：第 argNo 个实参是 2D/3D 数组变量的一个元素引用
     // （如 `カラーマトリクス:0:0`），以它为左上角读 5x5 个整数并除以 256。
     const VariableNode* var = argVar(node, argNo);
@@ -3096,10 +3444,10 @@ bool ExpressionEvaluator::readColorMatrix(const FunctionNode &node, int argNo,
         QList<int> ids;
         ids.reserve(var->indices().size());
         for (int i = 0; i < var->indices().size(); ++i)
-            ids.append(static_cast<int>(resolveIndex(*var, i, storage, gameBaseData)));
+            ids.append(static_cast<int>(resolveIndex(*var, i, storage, gameBaseData, scope)));
         return ids;
     }();
-    const QString name = storage->resolvedStorageName(var->name());
+    const QString name = storage->resolvedStorageName(var->name(), scope);
     if (var->indices().size() >= 3) {
         const int e1 = ids.value(0), e2 = ids.value(1), e3 = ids.value(2);
         if (e2 < 0 || e3 < 0) return false;

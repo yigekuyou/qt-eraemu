@@ -17,6 +17,7 @@
  */
 #include "variable_table.h"
 #include <limits>
+#include <atomic>
 #include "system_variables.h"
 #include <QDebug>
 #include <QStringList>
@@ -51,30 +52,76 @@ bool isDynamicallyResolvedName(const QString& upper) {
     return upper.startsWith(QLatin1String("GAMEBASE_")) || kNames.contains(upper);
 }
 
+// ---- 调试统计（默认关闭）----
+// EMUERA_KIND_STATS=1 时按 kind 数「变量分词」的判定结果；dump_warnings
+// --kind-stats 打印后清零。只用于核对 Dynamic 占比，不在默认路径上。
+namespace {
+std::atomic<qint64> g_accessKindCount[16];
+bool kindStatsEnabled() {
+    static const bool on = qEnvironmentVariableIsSet("EMUERA_KIND_STATS");
+    return on;
+}
+const char* accessKindName(VariableNode::AccessKind k) {
+    switch (k) {
+    case VariableNode::AccessKind::Dynamic:    return "Dynamic";
+    case VariableNode::AccessKind::GlobalInt1: return "GlobalInt1";
+    case VariableNode::AccessKind::GlobalInt2: return "GlobalInt2";
+    case VariableNode::AccessKind::GlobalInt3: return "GlobalInt3";
+    case VariableNode::AccessKind::GlobalStr1: return "GlobalStr1";
+    case VariableNode::AccessKind::GlobalStr2: return "GlobalStr2";
+    case VariableNode::AccessKind::GlobalStr3: return "GlobalStr3";
+    case VariableNode::AccessKind::LocalSlot:  return "LocalSlot";
+    case VariableNode::AccessKind::ArgSlot:    return "ArgSlot";
+    case VariableNode::AccessKind::LocalStr:   return "LocalStr";
+    case VariableNode::AccessKind::ArgStr:     return "ArgStr";
+    case VariableNode::AccessKind::Param:      return "Param";
+    case VariableNode::AccessKind::Pseudo:     return "Pseudo";
+    case VariableNode::AccessKind::System:     return "System";
+    case VariableNode::AccessKind::Chara:      return "Chara";
+    case VariableNode::AccessKind::Const:      return "Const";
+    }
+    return "?";
+}
+// 析构即计数：computeVariableAccess 有多处提前 return，用作用域守卫统一收口。
+struct KindCounter {
+    const VariableNode& var;
+    ~KindCounter() {
+        if (kindStatsEnabled())
+            g_accessKindCount[int(var.accessKind)].fetch_add(1, std::memory_order_relaxed);
+    }
+};
+} // namespace
+
 // 装载期「变量分词」：一次算出运行期的访问方式（kind + 静态存储键）。
-// 只对**可静态证明**的形态下结论；其余一律 Dynamic（运行期回退旧路）：
-//   · 命中形参名（值绑定 / ARG 别名 / REF 引用绑定都是运行期的）
-//   · 角色数据变量（chara 槽位翻译按运行时角色表）
-//   · 常数（#DIM CONST 有折叠分支）
-//   · 系统变量/伪变量（系统名链 / 专门分支）
-//   · 未声明且带系统元数据的名字（TA/TB 等 —— 旧路对它们有 1 维特判）
+// **类别**在装载期定型（只有「取哪个槽/哪个绑定/哪个角色号」留给运行期）；
+// 真正判不出类别的才留 Dynamic。判定顺序 = 运行期旧路的早退顺序（优先级）：
+//   形参 > 伪变量 > 系统槽 > LOCAL/ARG 槽位 > 角色/常数 > 表项
 // 等价性依据：执行到本节点时，stepOnce 按 line.ownerFunction 设私有作用域，
 // 与本函数静态判定的作用域恒同；m_references 只可能是**本函数** REF 形参名
-//（已被形参过滤）。私有名 -> FUNC\x1fNAME 复合键与 setPrivateScope 的映射一致。
+//（已被形参过滤）。私有名 -> FUNC\x1fNAME 复合键与 setPrivateScope 的映射一致
+//（两边都走 eravar::makePrivateStorageKey / internName，唯一构造点）。
 void computeVariableAccess(VariableNode& var, const VariableTable& table,
                            const QString& function, const QSet<QString>* paramNames) {
     var.accessKind = VariableNode::AccessKind::Dynamic;
-    var.accessKey.clear();
-    var.accessScopeKey = nk(function);
+    var.accessKey = {};
+    const KindCounter counter{var};
     const QString upper = nk(var.name());
-    if (paramNames && paramNames->contains(upper)) return;       // 形参：运行期语义
-    if (isDynamicallyResolvedName(upper)) return;
-    // 「有存储通道」的系统变量名：运行期读写一律先走系统槽（readLhs/writeLhs/
+    // 1) 形参：值绑定 / ARG 别名 / REF 引用绑定都是运行期的 —— 但**类别**已定。
+    if (paramNames && paramNames->contains(upper)) {
+        var.accessKind = VariableNode::AccessKind::Param; return;
+    }
+    // 2) 伪变量（求值器有专门分支：RAND/RANDDATA/LINECOUNT/GAMEBASE_*/RESULTS/…）
+    if (isDynamicallyResolvedName(upper)) {
+        var.accessKind = VariableNode::AccessKind::Pseudo; return;
+    }
+    // 3) 「有存储通道」的系统变量名：运行期读写一律先走系统槽（readLhs/writeLhs/
     // evaluateVariable 旧路径都是 hasSystemVariable 优先），脚本里的 #DIM/VARI
-    // 同名私有声明遮蔽不了系统槽 —— 分词期对这些名字不下静态结论
+    // 同名私有声明遮蔽不了系统槽 —— 类别定 System，槽位选择仍是运行期的事
     //（sysvar::systemStorageNames 与运行期 hasSystemVariable 共用同一份名单）。
-    if (sysvar::systemStorageNames().contains(upper)) return;
-    // LOCAL / ARG / LOCALS / ARGS 槽位（形参已过滤；这些名字不在系统/角色表里）
+    if (sysvar::systemStorageNames().contains(upper)) {
+        var.accessKind = VariableNode::AccessKind::System; return;
+    }
+    // 4) LOCAL / ARG / LOCALS / ARGS 槽位（形参已过滤；这些名字不在系统/角色表里）
     if (upper == QLatin1String("LOCAL")) {
         var.accessKind = VariableNode::AccessKind::LocalSlot; return;
     }
@@ -87,25 +134,44 @@ void computeVariableAccess(VariableNode& var, const VariableTable& table,
     if (upper == QLatin1String("ARGS")) {
         var.accessKind = VariableNode::AccessKind::ArgStr; return;
     }
-    if (var.characterData || var.readOnly) return;              // 角色 / 常数：旧路
+    // 5) 角色数据变量 / 常数：类别已定（chara 槽位翻译、常数折叠仍走运行期链）
+    if (var.characterData) {
+        var.accessKind = VariableNode::AccessKind::Chara; return;
+    }
+    if (var.readOnly) {
+        var.accessKind = VariableNode::AccessKind::Const; return;
+    }
     const auto* d = table.find(var.name(), function);
     if (!d) {
         // 未声明名：无表项时才可能是「裸用户槽」。若带系统元数据（TA/TB/CDFLAG
-        // 之类），旧路有系统特判 -> Dynamic。维数视作 1（与运行期 provider 一致）。
+        // 之类），旧路有系统特判 —— 类别/槽位都判不出来，留 Dynamic（唯一剩下的
+        // 一类：它既不是系统槽也不是角色声明，只是有元数据的裸名）。维数视作 1。
         if (sysvar::systemVariableMetadataDyn(var.name().toStdString()).type != OperandType::Unknown)
             return;
         var.accessKind = VariableNode::AccessKind::GlobalInt1;   // 类型未知的裸名按整型 1 维
-        var.accessKey = upper;
+        var.accessKey.name = eravar::internName(upper);
         return;
     }
-    if (d->isConst || d->isCharaData || d->isReference) return; // 旧路
+    // 6) 表项：常数 / 角色数据 / REF 形参 —— 各自的类别（REF 归 Param，不另立）
+    if (d->isConst) {
+        var.accessKind = VariableNode::AccessKind::Const; return;
+    }
+    if (d->isCharaData) {
+        var.accessKind = VariableNode::AccessKind::Chara; return;
+    }
+    if (d->isReference) {
+        var.accessKind = VariableNode::AccessKind::Param; return;
+    }
     const bool isStr = d->type == OperandType::Str;
     // 复合键的判定必须与运行期作用域映射一致：**只有函数体内声明的局部**
     //（scope == Local）会被 setPrivateScope 重映射成 FUNC\x1fNAME；头文件级
     // #DIM 虽带 isPrivate 标志，但登记在 m_globals、不进任何函数的映射表，
     // 运行期按裸名解析（与 restoreDeclaredDefaults 的键构造同口径）。
     const bool functionLocal = d->scope == VarScope::Local && !d->function.isEmpty();
-    var.accessKey = functionLocal ? (nk(d->function) + QChar(0x1f) + upper) : upper;
+    // 身份 = intern id（scope 0 = 裸键）：setPrivateScope 用同一张表登记
+    // 作用域名/私有名，两边整数相等 <=> 字符串逐字节相等。
+    var.accessKey.name = eravar::internName(upper);
+    var.accessKey.scope = functionLocal ? eravar::internName(d->function) : 0;
     const int dim = qMax(1, d->dimension);
     var.accessKind = isStr
         ? (dim >= 3 ? VariableNode::AccessKind::GlobalStr3
@@ -183,6 +249,20 @@ void walkApply(ExpressionNode& node, const VariableTable& table, const QString& 
 }
 
 } // namespace
+
+// ---- 调试：访问描述符判定分布（默认关闭，见上方 KindCounter）----
+QMap<QString, qint64> VariableTable::accessKindHistogram() {
+    QMap<QString, qint64> out;
+    for (int i = 0; i < 16; ++i) {
+        const qint64 n = g_accessKindCount[i].load(std::memory_order_relaxed);
+        if (n > 0) out.insert(QString::fromLatin1(accessKindName(VariableNode::AccessKind(i))), n);
+    }
+    return out;
+}
+
+void VariableTable::resetAccessKindHistogram() {
+    for (int i = 0; i < 16; ++i) g_accessKindCount[i].store(0, std::memory_order_relaxed);
+}
 
 namespace {
 

@@ -89,6 +89,20 @@ int main(int argc, char* argv[]) {
         }
     }
 
+    // 可选（调试，默认不走）：--kind-stats 打印「变量分词」的 kind 判定分布。
+    // 需要环境变量 EMUERA_KIND_STATS=1 才会计数（否则恒空）。
+    if (app.arguments().contains(QStringLiteral("--kind-stats"))) {
+        const auto hist = engine.getParseTable()->variableTable().accessKindHistogram();
+        qint64 total = 0;
+        for (auto it = hist.constBegin(); it != hist.constEnd(); ++it) total += it.value();
+        for (auto it = hist.constBegin(); it != hist.constEnd(); ++it) {
+            fprintf(stderr, "KIND\t%s\t%lld\t%.2f%%\n", it.key().toUtf8().constData(),
+                    static_cast<long long>(it.value()),
+                    total ? 100.0 * double(it.value()) / double(total) : 0.0);
+        }
+        fprintf(stderr, "KIND\tTOTAL\t%lld\t100.00%%\n", static_cast<long long>(total));
+        VariableTable::resetAccessKindHistogram();
+    }
     // 可选：--var NAME 打印变量表里的声明
     for (int i = 2; i + 1 < argc; ++i) {
         if (QString::fromLocal8Bit(argv[i]) != QLatin1String("--var")) continue;

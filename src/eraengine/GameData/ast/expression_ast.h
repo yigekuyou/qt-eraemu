@@ -27,6 +27,7 @@
 #include <QJsonObject>
 #include <QJsonDocument>
 #include "expression_lexer.h"
+#include "name_interner.h"
 #include "operand_type.h"
 #include "operator_table.h"
 #include "function_types.h"
@@ -149,20 +150,62 @@ public:
     // 私有作用域由 stepOnce 按 line.ownerFunction 决定 —— 对节点而言是**静态的**。
     // 收尾定型（walkApply）时一次算成 kind + accessKey，运行期直接分派。
     // kind == Dynamic（形参/REF/角色变量/常数/系统变量/伪变量）回退旧路，语义不变。
-    // accessKey：私有名 = FUNC\x1fNAME 复合键；其余 = 大写裸名（与运行期
-    // storageName 在该行作用域下的解析结果恒等）。
+    // accessKey：**名字 intern 表的整数 id**（scope == 0 = 无私有作用域）。
+    //   旧形态是 "FUNC\x1fNAME" 字符串复合键，由 computeVariableAccess 与
+    //   setPrivateScope 各拼一次、必须逐字节一致；现在身份是 id 相等，
+    //   存储层字符串键只由 eravar::makePrivateStorageKey 一处产生。
     enum class AccessKind : quint8 {
-        Dynamic = 0,
+        Dynamic = 0,                          // 真正未知（未声明但带系统元数据的名字等）
         GlobalInt1, GlobalInt2, GlobalInt3,   // 用户全局/私有数组（含未声明名）
         GlobalStr1, GlobalStr2, GlobalStr3,
         LocalSlot, ArgSlot,                   // LOCAL / ARG 整型槽位
         LocalStr, ArgStr,                     // LOCALS / ARGS 字符串槽位
+        // ---- 以下 5 类「封闭集合」：装载期就能判定**类别**，只是「取哪个槽/
+        //      哪个角色号/哪个绑定」是运行期的事。它们**不使用 accessKey**
+        //      （accessKey 恒为空），访问方式由名字类别决定，与私有作用域无关。----
+        Param,    // 形参（值绑定 / ARG 别名 / REF 引用绑定，含表项 isReference）
+        Pseudo,   // 伪变量（RAND/RANDDATA/LINECOUNT/EMUERA_VERSION/GAMEBASE_*/RESULTS/…）
+        System,   // 有存储槽的系统变量（sysvar::systemStorageNames）
+        Chara,    // 角色数据变量（内建 CFLAG/… 与 #DIM CHARADATA）
+        Const,    // 常数（#DIM CONST，含常数数组）
     };
     AccessKind accessKind = AccessKind::Dynamic;
-    QString accessKey;
-    // 描述符生效的私有作用域（大写函数名）。运行期守卫：live 作用域与此不符
-    //（脱离行执行的直接求值）时回退完整解析。
-    QString accessScopeKey;
+    eravar::VariableKey accessKey;
+
+    // 该 kind 是否**消费** accessKey（静态存储键）。
+    // Global*/槽位 的 kind 直接按 accessKey 存取（键在装载期按声明所属函数
+    // 算好、自身即带作用域，运行期不再与「当前作用域」对账）；
+    // Param/Pseudo/System/Chara/Const/Dynamic 没有静态键，运行期按名字解析。
+    [[nodiscard]] static constexpr bool usesKey(AccessKind k) noexcept {
+        switch (k) {
+        case AccessKind::GlobalInt1:
+        case AccessKind::GlobalInt2:
+        case AccessKind::GlobalInt3:
+        case AccessKind::GlobalStr1:
+        case AccessKind::GlobalStr2:
+        case AccessKind::GlobalStr3:
+        case AccessKind::LocalSlot:
+        case AccessKind::ArgSlot:
+        case AccessKind::LocalStr:
+        case AccessKind::ArgStr:
+            return true;
+        case AccessKind::Dynamic:
+        case AccessKind::Param:
+        case AccessKind::Pseudo:
+        case AccessKind::System:
+        case AccessKind::Chara:
+        case AccessKind::Const:
+            return false;
+        }
+        return false;
+    }
+    // kind -> 位掩码的一位（运行期 resolver 表的 kinds 列用）。
+    [[nodiscard]] static constexpr quint16 bit(AccessKind k) noexcept {
+        return static_cast<quint16>(1u << static_cast<unsigned>(k));
+    }
+    // 运行期 readIntNode/writeIntNode/evaluateVariable/assignVariable：
+    // usesKey(kind) 的节点直接用 accessKey（键自足，无作用域守卫）；
+    // 其余节点走按名解析，位置由**显式传入的** eravar::ScopeId 决定。
     [[nodiscard]] bool isArray() const { return !m_indices.isEmpty(); }
 
     void addIndex(QSharedPointer<ExpressionNode> index);

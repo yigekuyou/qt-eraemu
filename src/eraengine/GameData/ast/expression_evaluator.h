@@ -49,18 +49,26 @@ public:
 
 
     // NEW: Direct AST evaluation entry points (for cached AST)
-    QVariant evaluate(const ExpressionNode &node, VariableStorage *storage, GameBaseData *gameBaseData = nullptr);
-    bool evaluateInt(const ExpressionNode &node, VariableStorage *storage, qint64 &result);
-    bool evaluateStr(const ExpressionNode &node, VariableStorage *storage, QString &result);
+    // scope = 求值所在的作用域（函数名 intern id；0 = 顶层）。
+    // 私有变量按名解析（Dynamic）时用它选名表；键已自足的节点不看它。
+    QVariant evaluate(const ExpressionNode &node, VariableStorage *storage,
+                      GameBaseData *gameBaseData = nullptr,
+                      eravar::ScopeId scope = eravar::kGlobalScope);
+    bool evaluateInt(const ExpressionNode &node, VariableStorage *storage, qint64 &result,
+                     eravar::ScopeId scope = eravar::kGlobalScope);
+    bool evaluateStr(const ExpressionNode &node, VariableStorage *storage, QString &result,
+                     eravar::ScopeId scope = eravar::kGlobalScope);
 
     // Explicit string views. evaluateText discards structural meaning;
     // evaluateFlat performs one evaluation and returns an already-flattened value.
     [[nodiscard]] QString evaluateText(const ExpressionNode& node,
                                        VariableStorage* storage,
-                                       GameBaseData* gameBaseData = nullptr);
+                                       GameBaseData* gameBaseData = nullptr,
+                                       eravar::ScopeId scope = eravar::kGlobalScope);
     [[nodiscard]] FlatStringValue evaluateFlat(const ExpressionNode& node,
                                                VariableStorage* storage,
-                                               GameBaseData* gameBaseData = nullptr);
+                                               GameBaseData* gameBaseData = nullptr,
+                                               eravar::ScopeId scope = eravar::kGlobalScope);
 
     // 用户自定义函数回调：表达式 `NAME(args)` 命中用户函数时调用（由执行链提供）。
     // 返回 true 表示已处理，out 为返回值。
@@ -176,7 +184,8 @@ public:
     // 变量（整数/字符串都走这里）。解析「变量名文本 -> 变量节点」是扩展侧经
     // 解析表服务做的（那边有变量表/常数表/作用域）；求值器只负责最后一步写回。
     bool assignNodeValue(const ExpressionNode& target, VariableStorage* storage,
-                         GameBaseData* gameBaseData, const QVariant& value);
+                         GameBaseData* gameBaseData, const QVariant& value,
+                         eravar::ScopeId scope = eravar::kGlobalScope);
 
     // 存档/文本类函数（SAVETEXT/LOADTEXT/SAVECHARA/LOADCHARA/GSAVE/GLOAD/SAVENOS）
     // 的落盘目录 = 游戏目录下的 sav/（对齐 C# VEvaluator 的保存路径），由 EraEngine 注入。
@@ -217,14 +226,18 @@ public:
     void setVariableDimProvider(VariableDimProvider p) { m_variableDimProvider = std::move(p); }
     [[nodiscard]] int variableDimension(const QString& name) const;
     [[nodiscard]] QList<int> resolveIndices(const VariableNode& node, VariableStorage* storage,
-                                            GameBaseData* gameBaseData);
+                                            GameBaseData* gameBaseData,
+                                            eravar::ScopeId scope = eravar::kGlobalScope);
 
     // ================= 节点级整数访问的唯一分派 =================
-    // 先套作用域守卫（live privateScopeName() != accessScopeKey -> 当 Dynamic），
-    // 再落到 VariableStorage::readIntByName / writeIntByName。旧
-    // ScriptRunner::readIntVarAccess / writeIntVarAccess 的 switch 已并入这里。
-    [[nodiscard]] qint64 readIntNode(const VariableNode& node, const QList<int>& indices) const;
-    void writeIntNode(const VariableNode& node, const QList<int>& indices, qint64 value);
+    // 直接按节点已定型的 kind 分派（键自足：不再与「当前作用域」对账），
+    // 未定型/按键不自足的 kind 落到 VariableStorage::readIntByName /
+    // writeIntByName（scope 显式传入，供按名解析选私有名表）。
+    // 旧 ScriptRunner::readIntVarAccess / writeIntVarAccess 的 switch 已并入这里。
+    [[nodiscard]] qint64 readIntNode(const VariableNode& node, const QList<int>& indices,
+                                     eravar::ScopeId scope = eravar::kGlobalScope) const;
+    void writeIntNode(const VariableNode& node, const QList<int>& indices, qint64 value,
+                      eravar::ScopeId scope = eravar::kGlobalScope);
     // 分派所需的存储（作用域守卫 + 名字级原语）。接线时注入，并顺带给存储
     // 注册维数 provider（与 variableDimension 同源）。
     void setVariableStorage(VariableStorage* storage);
@@ -246,52 +259,134 @@ public slots:
 private:
     // 变量下标求值：字符串下标经 ConstantTable 映射为整数（如 CFLAG:ARG:現在位置）
     qint64 resolveIndex(const VariableNode& node, int index,
-                        VariableStorage* storage, GameBaseData* gameBaseData);
+                        VariableStorage* storage, GameBaseData* gameBaseData,
+                        eravar::ScopeId scope);
 
     // AST evaluation methods
-    QVariant evaluateUnstructuredNode(const ExpressionNode &node, VariableStorage *storage, GameBaseData *gameBaseData);
-    QVariant evaluateNode(const ExpressionNode &node, VariableStorage *storage, GameBaseData *gameBaseData = nullptr);
+    QVariant evaluateUnstructuredNode(const ExpressionNode &node, VariableStorage *storage,
+                                      GameBaseData *gameBaseData, eravar::ScopeId scope);
+    QVariant evaluateNode(const ExpressionNode &node, VariableStorage *storage,
+                          GameBaseData *gameBaseData, eravar::ScopeId scope);
     QVariant evaluateLiteral(const LiteralNode &node);
     // 二元求值的两条路径（整数快路径 / 字符串慢路径）
     QVariant evaluateIntBinary(TokenType op, qint64 l, qint64 r);
     QVariant evaluateStrBinary(TokenType op, const QString& ls, const QString& rs,
                                const QVariant& left, const QVariant& right);
-    QVariant evaluateStrForm(const StrFormNode &node, VariableStorage *storage, GameBaseData *gameBaseData = nullptr);
-    QVariant evaluateVariable(const VariableNode &node, VariableStorage *storage, GameBaseData *gameBaseData = nullptr);
+    QVariant evaluateStrForm(const StrFormNode &node, VariableStorage *storage,
+                             GameBaseData *gameBaseData, eravar::ScopeId scope);
+    QVariant evaluateVariable(const VariableNode &node, VariableStorage *storage,
+                              GameBaseData *gameBaseData, eravar::ScopeId scope);
+
+    // ================= 变量读写的解析链（表驱动）=================
+    // 旧 evaluateVariable 尾部那条 ~300 行 if 链（顺序即语义）被**逐块**剪成
+    // 下面这些独立方法（函数体逐字相同，只改了签名与 return 的包装），再由
+    // resolverTable() 这张有序表描述流程：一行 = 旧链的一块。
+    //   · kinds     ：该行对哪些 kind 生效（位掩码）；kAllNames 的行是「按运行期
+    //                 名字判定的通用谓词」（别名/参数/槽名/常数/终局），必须对所有
+    //                 kind 运行 —— 旧链本来对每个名字都跑它们。
+    //   · needsKey  ：该行是否消费 accessKey（= VariableNode::usesKey(kind)，
+    //                 守卫的适用范围就是这列）。
+    //   · read/write：命中即返回；write == nullptr 表示旧写路径没有对应块。
+    // 真正的 Dynamic 节点：所有行的 kinds 都含它 -> 全表按序跑 = 旧链原样。
+    struct DynamicContext {
+        VariableNode::AccessKind kind = VariableNode::AccessKind::Dynamic;  // 定型后的 kind
+        const VariableNode* node = nullptr;
+        VariableStorage* storage = nullptr;
+        GameBaseData* gameBaseData = nullptr;
+        eravar::ScopeId scope = eravar::kGlobalScope;   // 按名解析使用的显式作用域
+        // 旧链的局部量（逐字沿用）：varName 可被 REF 别名重映射。
+        QString varName;
+        int count = 0;
+        bool aliased = false;
+        bool chara = false;
+        int declaredDimension = 0;
+        int dimension = 0;
+        int full = 0;
+    };
+    enum class WriteResult : quint8 { Unhandled, Written, Rejected };
+    struct Resolver {
+        quint16 kinds = 0;       // 生效的 kind 位掩码
+        bool needsKey = false;   // 该行消费 accessKey（守卫只对这类 kind 生效）
+        bool (ExpressionEvaluator::*read)(DynamicContext&, QVariant&) = nullptr;
+        WriteResult (ExpressionEvaluator::*write)(DynamicContext&, qint64) = nullptr;
+    };
+    [[nodiscard]] static const QList<Resolver>& resolverTable();
+    // 旧链的公共前缀（旧 820-822：varName / 下标数 / 是否被重映射）。
+    // withAlias=false 时不算 aliased（写路径旧代码没有这个量）。
+    [[nodiscard]] DynamicContext makeDynamicContext(const VariableNode& node,
+                                                    VariableStorage* storage,
+                                                    GameBaseData* gameBaseData,
+                                                    VariableNode::AccessKind kind,
+                                                    bool withAlias,
+                                                    eravar::ScopeId scope) const;
+    // 已定型 kind 的快路径（旧 switch 的 4 块：键直取）
+    bool readKeyedInt(DynamicContext& ctx, QVariant& out);
+    bool readKeyedStr(DynamicContext& ctx, QVariant& out);
+    bool readKeyedLocalArgInt(DynamicContext& ctx, QVariant& out);
+    bool readKeyedLocalArgStr(DynamicContext& ctx, QVariant& out);
+    // 旧 Dynamic if 链逐块（顺序 = 表顺序 = 旧链顺序）
+    bool readStringParameterAlias(DynamicContext& ctx, QVariant& out);   // 旧 823-836
+    bool applyReferenceAlias(DynamicContext& ctx, QVariant& out);        // 旧 837-841（只改 ctx）
+    bool bindDimension(DynamicContext& ctx, QVariant& out);              // 旧 842-860（只改 ctx / throw）
+    bool readParameter(DynamicContext& ctx, QVariant& out);              // 旧 861
+    bool readCharaData(DynamicContext& ctx, QVariant& out);              // 旧 866-879
+    bool readGameBase(DynamicContext& ctx, QVariant& out);               // 旧 882-888
+    bool readSlotNames(DynamicContext& ctx, QVariant& out);              // 旧 891-941
+    bool readLineCount(DynamicContext& ctx, QVariant& out);              // 旧 944-946
+    bool readRandom(DynamicContext& ctx, QVariant& out);                 // 旧 950-957
+    bool readIntLimits(DynamicContext& ctx, QVariant& out);              // 旧 960-969
+    bool readRandData(DynamicContext& ctx, QVariant& out);               // 旧 972-980
+    bool readConst(DynamicContext& ctx, QVariant& out);                  // 旧 985-1000
+    bool readStringVariable(DynamicContext& ctx, QVariant& out);         // 旧 1004-1035
+    bool readLastLoad(DynamicContext& ctx, QVariant& out);               // 旧 1037-1038
+    bool readIndexedArray(DynamicContext& ctx, QVariant& out);           // 旧 1041-1078（终局）
+    bool readSimpleVariable(DynamicContext& ctx, QVariant& out);         // 旧 1080-1088（终局）
+    // 写路径里**确实存在**的 3 块（旧 assignVariable 尾部的顺序）
+    WriteResult writeParameter(DynamicContext& ctx, qint64 value);       // 旧 hasParameter 写
+    WriteResult writeCharaStringReject(DynamicContext& ctx, qint64 value);
+    WriteResult writeSlotStringReject(DynamicContext& ctx, qint64 value);
     QVariant evaluateIndexedVariable(const QString &varName, int index, VariableStorage *storage);
-    QVariant evaluateBinaryOp(const BinaryOpNode &node, VariableStorage *storage, GameBaseData *gameBaseData = nullptr);
+    QVariant evaluateBinaryOp(const BinaryOpNode &node, VariableStorage *storage,
+                              GameBaseData *gameBaseData, eravar::ScopeId scope);
     // 变量写入（整型）：++/-- 的副作用
     bool assignVariable(const VariableNode& node, VariableStorage* storage,
-                        GameBaseData* gameBaseData, qint64 value);
+                        GameBaseData* gameBaseData, qint64 value, eravar::ScopeId scope);
 
-    QVariant evaluateUnaryOp(const UnaryOpNode &node, VariableStorage *storage, GameBaseData *gameBaseData = nullptr);
-    QVariant evaluateFunction(const FunctionNode &node, VariableStorage *storage, GameBaseData *gameBaseData = nullptr);
+    QVariant evaluateUnaryOp(const UnaryOpNode &node, VariableStorage *storage,
+                             GameBaseData *gameBaseData, eravar::ScopeId scope);
+    QVariant evaluateFunction(const FunctionNode &node, VariableStorage *storage,
+                              GameBaseData *gameBaseData, eravar::ScopeId scope);
 
     // ---- 内置函数（内部命令）求值 ----
     // 返回 false 表示该 opcode 尚未实现求值（交给用户函数回调 / 默认 0）。
     bool evaluateBuiltin(const FunctionNode &node, VariableStorage *storage,
-                         GameBaseData *gameBaseData, QVariant &out);
+                         GameBaseData *gameBaseData, QVariant &out, eravar::ScopeId scope);
 
     // GDRAWG / GDRAWSPRITE 的颜色矩阵实参：从 2D/3D 数组变量的给定下标起
     // 读 5x5 个整数（/256，对齐 C# ReadColormatrix），失败返回 false。
     bool readColorMatrix(const FunctionNode &node, int argNo, VariableStorage *storage,
-                         GameBaseData *gameBaseData, float out[5][5]);
+                         GameBaseData *gameBaseData, float out[5][5], eravar::ScopeId scope);
 
     // 实参取值辅助
-    qint64  argInt(const FunctionNode &node, int i, VariableStorage *storage, GameBaseData *g);
-    QString argStr(const FunctionNode &node, int i, VariableStorage *storage, GameBaseData *g);
+    qint64  argInt(const FunctionNode &node, int i, VariableStorage *storage, GameBaseData *g,
+                   eravar::ScopeId scope);
+    QString argStr(const FunctionNode &node, int i, VariableStorage *storage, GameBaseData *g,
+                   eravar::ScopeId scope);
     [[nodiscard]] const VariableNode* argVar(const FunctionNode &node, int i) const;
     [[nodiscard]] static bool hasArg(const FunctionNode &node, int i);
 
     // 字符串变量写入（系统槽/用户槽/角色变量/参数一律按已解析下标路由）。
     bool assignStringVariable(const VariableNode& node, VariableStorage* storage,
-                              GameBaseData* gameBaseData, const QString& value);
+                              GameBaseData* gameBaseData, const QString& value,
+                              eravar::ScopeId scope);
 
     // 数组：读一维整型数组内容 / 取长度（对齐 C# VariableTerm 的数组访问）
     QList<qint64> readIntArray(const VariableNode &var, VariableStorage *storage,
-                               GameBaseData *gameBaseData, bool charaRange) const;
+                               GameBaseData *gameBaseData, bool charaRange,
+                               eravar::ScopeId scope) const;
     // 字符串一维数组内容（FINDELEMENT 等需要按字符串比较，如 BASENAME/ABLNAME）
-    QList<QString> readStrArray(const VariableNode &var, VariableStorage *storage) const;
+    QList<QString> readStrArray(const VariableNode &var, VariableStorage *storage,
+                                eravar::ScopeId scope) const;
     [[nodiscard]] int charaCount(VariableStorage *storage) const;
 
     // TOINT / ISNUMERIC 的 Emuera 语义（对齐 C# ToIntMethod / IsNumericMethod）

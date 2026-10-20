@@ -23,6 +23,7 @@
 #include <functional>
 #include <QString>
 #include <QList>
+#include <QMap>
 #include "operand_type.h"
 #include "expression_ast.h"
 
@@ -158,6 +159,12 @@ public:
     static void applyTypes(ExpressionNode& node, const VariableTable& table,
                            const QString& function = QString(),
                            const QSet<QString>* paramNames = nullptr);
+
+    // ---- 调试：访问描述符判定分布（默认关闭；EMUERA_KIND_STATS=1 才计数）----
+    // 只给 dump_warnings --kind-stats 用：一次装载后按 kind 数变量引用节点。
+    // 不在默认路径上（未设环境变量时 computeVariableAccess 只多一次静态 bool 判断）。
+    [[nodiscard]] static QMap<QString, qint64> accessKindHistogram();
+    static void resetAccessKindHistogram();
 
 private:
     // 求值单个数维表达式：数字字面量或常数名（scope = 声明所在函数）

@@ -2288,6 +2288,9 @@ void EraParseTable::checkStaticValues() {
                 }
                 // ---- 常量下标边界（步骤 3 看不到尺寸的名字才判）----
                 if (node.kind() != NodeKind::Variable || line.isError) return;
+                // VARSIZE 只消费数组身份（语言规定其下标被忽略，见 finalizeValidation
+                // 的同款豁免）—— 下标形态（含字符串）不参与运行期求值，不判。
+                if (line.functionName == QLatin1String("VARSIZE")) return;
                 const auto& var = static_cast<const VariableNode&>(node);
                 const int n = var.indices().size();
                 if (n <= 0 || n > 3) return;
@@ -2303,6 +2306,27 @@ void EraParseTable::checkStaticValues() {
                     constVal[constCount] = *v;
                     constNeg[constCount] = negated;
                     ++constCount;
+                }
+                // 字面字符串下标：运行期 resolveIndex 对字符串下标必须经
+                // ConstantTable 映射到列号（CFLAG:0:"攻撃" → 0），映射不到必抛
+                // 「Unknown variable index keyword」—— 与除零同级的「运行必炸」，
+                // 提前到装载期报（C# 侧对应 CSV 名表的 IdentifierNotFound）。
+                // 只认字面量形态：FORM（@"…"）下标的值运行期才知道，不判。
+                if (m_constantTable) {
+                    for (int i = 0; i < n; ++i) {
+                        const auto& idx = var.indices().at(i);
+                        if (!idx || idx->kind() != NodeKind::Literal) continue;
+                        const auto* l = static_cast<const LiteralNode*>(idx.data());
+                        if (!l->isString()) continue;
+                        if (m_constantTable->indexForVariable(var.name(), l->strValue()) >= 0)
+                            continue;
+                        m_diagnostics.add(DiagSeverity::Error, DiagCode::kStaticValue,
+                            line.position.filename, line.position.lineNumber,
+                            line.position.column, 0,
+                            QCoreApplication::translate("ParseDiagnostics",
+                                "变量 %1 的字符串下标 \"%2\" 未在常数名表中定义（运行到该行会失败）")
+                                .arg(var.name(), l->strValue()));
+                    }
                 }
                 if (!constCount) return;
 

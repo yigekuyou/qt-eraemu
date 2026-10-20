@@ -28,13 +28,16 @@
 // ---------------------------------------------------------------------------
 #include <QCoreApplication>
 #include <QDebug>
+#include <QFile>
 #include <QList>
 #include <QPair>
 #include <QString>
 #include <QStringList>
+#include <QTemporaryDir>
 
 #include "ast/ast_builder.h"
 #include "ast/parse_diagnostic.h"
+#include "constant_table.h"
 #include "era_parse_table.h"
 #include "process_state.h"
 #include "variable_storage.h"
@@ -471,6 +474,71 @@ int main(int argc, char* argv[]) {
         check(hits.size() == 1,
               QString("仅计数器自身固定下标越界报 1 条（得到 %1）").arg(hits.size()));
         check(hits.size() == 1 && hits.first().line == 9, "定位到第 9 行");
+    }
+
+    qDebug() << "\n15) 字面字符串下标：必须在常数名表中可解析（resolveIndex 否则必抛）";
+    {
+        QTemporaryDir csvDir;
+        {
+            QFile f(csvDir.filePath(QStringLiteral("TALENT.CSV")));
+            if (f.open(QIODevice::WriteOnly | QIODevice::Text))
+                f.write("ATTACK\nDEFENCE\n");   // ASCII 名字：绕开 CSV 编码猜测
+        }
+        ConstantTable ct;
+        ct.loadCsvDirectory(csvDir.path(), false);
+        check(ct.count(QStringLiteral("TALENT")) == 2,
+              QString("常数名表装载（得到 %1 行）").arg(ct.count(QStringLiteral("TALENT"))));
+
+        const auto loadWithNames = [&ct](const QString& source) {
+            ProcessState state;
+            EraParseTable table(&state);
+            VariableStorage storage;
+            table.setVariableStorage(&storage);
+            table.setConstantTable(&ct);
+            const AstResolver resolve = [&table](const QString& e) { return table.expressionAst(e); };
+            const QStringList src = source.split(QLatin1Char('\n'));
+            QList<LogicalLine> lines;
+            for (int i = 0; i < src.size(); ++i)
+                lines.append(AstBuilder::build(src.at(i), ScriptPosition(QStringLiteral("a.ERB"), i + 1, 1), resolve));
+            table.loadScript(QStringLiteral("a.ERB"), lines);
+            table.markLoadComplete();
+            return table.parseDiagnostics();
+        };
+
+        const ParseDiagnostics ok = loadWithNames(QStringLiteral("@MAIN\n"
+                           "PRINTV TALENT:0:\"ATTACK\"\n"));   // 攻撃 ✓ 表内
+        check(withCode(ok, DiagCode::kStaticValue).isEmpty(),
+              "表内名字下标 -> 不报（运行期映射到 0）");
+
+        const ParseDiagnostics bad = loadWithNames(QStringLiteral("@MAIN\n"
+                           "PRINTV TALENT:0:\"NOPE\"\n"));  // 未定義
+        const auto badHits = withCode(bad, DiagCode::kStaticValue);
+        check(badHits.size() == 1,
+              QString("表外名字下标 -> 1 条（得到 %1）").arg(badHits.size()));
+        check(!badHits.isEmpty() && badHits.first().severity == DiagSeverity::Error,
+              "严重度为 error（运行到该行必抛，与除零同级）");
+        check(!badHits.isEmpty() && badHits.first().message.contains(QStringLiteral("常数名表")),
+              "消息说明原因（未在常数名表中定义）");
+
+        // FORM 插值形态：%VAR:…% 的表达式里字符串下标同样要判（walkExpression
+        // 会递归 StrForm parts）。用字符串变量（CSTR）—— %..% 是字符串插值，
+        // 整型表达式会先命中既有的「FORM插值类型错误」，那是另一条检查。
+        const ParseDiagnostics form = loadWithNames(QStringLiteral("@MAIN\n"
+                           "PRINTFORM %CSTR:0:\"NOPE\"%\n"));
+        check(withCode(form, DiagCode::kStaticValue).size() == 1,
+              "FORM 插值内的表外名字下标 -> 1 条");
+
+        const ParseDiagnostics plain = loadWithNames(QStringLiteral("@MAIN\n"
+                           "#DIM ARR, 3\n"
+                           "PRINTV ARR:\"x\"\n"));
+        check(withCode(plain, DiagCode::kStaticValue).size() == 1,
+              "无名字表的用户数组 + 字符串下标 -> 1 条（运行期同样必抛）");
+
+        const ParseDiagnostics varsize = loadWithNames(QStringLiteral("@MAIN\n"
+                           "#DIM ARR, 3\n"
+                           "VARSIZE ARR:\"x\"\n"));
+        check(withCode(varsize, DiagCode::kStaticValue).isEmpty(),
+              "VARSIZE 只消费数组身份（下标被忽略）-> 不报");
     }
 
     qDebug() << "\n=============================";

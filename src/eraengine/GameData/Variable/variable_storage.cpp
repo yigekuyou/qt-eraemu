@@ -347,6 +347,84 @@ qint64 VariableStorage::getGlobalInt3D(const QString &name, int x, int y, int z)
 		return 0;
 }
 
+// ================= 名字级整数访问（唯一实现） =================
+// 维数来源：优先注入的 provider（ExpressionEvaluator::variableDimension，与旧
+// ExecutionEngine::lhsDimension 同源）；未接线时退回本类的声明表。
+int VariableStorage::intDimension(const QString &name) const
+{
+		if (m_intDimProvider) {
+				const int d = m_intDimProvider(name);
+				if (d >= 1 && d <= 3) return d;
+		}
+		if (isVariable3D(name)) return 3;
+		if (isVariable2D(name)) return 2;
+		return 1;
+}
+
+qint64 VariableStorage::readIntByName(const QString &name, const QList<int> &indices) const
+{
+		const int first = indices.value(0);
+		if (hasParameter(name)) return parameter(name).toLongLong();
+		// 角色数据变量：按 (角色号, 元素下标) 读取；字符串槽整型读恒 0
+		if (isCharaDataVariable(name)) {
+				if (isCharaDataString(name)) return 0;
+				int charaId = 0;
+				QList<int> elems;
+				reduceCharaArgs(name, indices, charaId, elems);
+				if (charaDataDimension(name) >= 2)
+						return getCharaInt3D(name, charaId, elems.value(0), elems.value(1));
+				return getCharaInt(name, charaId, elems.value(0));
+		}
+		const QString upper = eraUpperKey(name);
+		if (upper == QLatin1String("ARG")) return getArgInt(first);
+		if (upper == QLatin1String("LOCAL")) return getLocalInt(first);
+		if (hasSystemVariable(name)) return getSystemVariable(name, first);
+		// 多维访问：声明维数 >= 2 且给了 >= 2 个下标（旧 writeLhs 的同款判定）
+		const int dim = intDimension(name);
+		if (indices.size() >= 2 && dim >= 2) {
+				if (indices.size() >= 3 && dim >= 3)
+						return getGlobalInt3D(name, indices.at(0), indices.at(1), indices.at(2));
+				return getGlobalInt2D(name, indices.at(0), indices.at(1));
+		}
+		return getGlobalInt1D(name, first);
+}
+
+void VariableStorage::writeIntByName(const QString &name, const QList<int> &indices, qint64 value)
+{
+		const int first = indices.value(0);
+		if (hasParameter(name)) { setParameter(name, value); return; }
+		// 角色数据变量：按 (角色号, 元素下标) 写入（否则同一角色的元素互相覆盖）
+		if (isCharaDataVariable(name)) {
+				if (isCharaDataString(name)) return;   // 字符串：走 assignStringVariable
+				int charaId = 0;
+				QList<int> elems;
+				reduceCharaArgs(name, indices, charaId, elems);
+				if (charaDataDimension(name) >= 2)
+						setCharaInt3D(name, charaId, elems.value(0), elems.value(1), value);
+				else
+						setCharaInt(name, charaId, elems.value(0), value);
+				return;
+		}
+		const QString upper = eraUpperKey(name);
+		if (upper == QLatin1String("ARG")) { setArgInt(first, value); return; }
+		if (upper == QLatin1String("LOCAL")) { setLocalInt(first, value); return; }
+		if (upper == QLatin1String("ARGS") || upper == QLatin1String("LOCALS")
+		    || upper == QLatin1String("RESULTS")) {
+				return;   // 字符串变量：走 assignStringVariable
+		}
+		if (hasSystemVariable(name)) { setSystemVariable(name, first, value); return; }
+		const int dim = intDimension(name);
+		if (indices.size() >= 2 && dim >= 2) {
+				if (indices.size() >= 3 && dim >= 3) {
+						setGlobalInt3D(name, indices.at(0), indices.at(1), indices.at(2), value);
+						return;
+				}
+				setGlobalInt2D(name, indices.at(0), indices.at(1), value);
+				return;
+		}
+		setGlobalInt1D(name, first, value);
+}
+
 // ================= 角色整型变量 =================
 // Raw：按**运行时下标**直接存取（不做 运行时->模板 翻译），供角色列表自身使用。
 void VariableStorage::setCharaIntRaw(const QString &name, int charaId, int index, qint64 value)

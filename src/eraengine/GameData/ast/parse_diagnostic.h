@@ -23,6 +23,9 @@
 #include <QString>
 #include <QStringList>
 
+#include <algorithm>
+#include <tuple>
+
 // ---------------------------------------------------------------------------
 // 装载期/解析期诊断（结构化）。
 //
@@ -30,8 +33,10 @@
 // **分级**并**可定位**，而不是只往 stderr 丢一行字符串。
 //
 // 设计（对齐 resilient parsing 的做法：诊断是解析过程的产物，可被调用方统一处理）：
-//   * severity —— Info / Warning / Error（Error = 该行不可用；Warning = 已按宽容
-//     语义继续，例如未登记的指令按 no-op 跳过）；
+//   * severity —— Info / Warning / Error（Warning = 已按宽容语义继续，例如未登记
+//     的指令按 no-op 跳过）；
+//   * effect   —— 该诊断的后果（RejectLine = 该行失效 / ReportOnly = 只报告），
+//     与 severity 正交：Error 也可能只报告（见 DiagEffect 说明）；
 //   * code     —— 稳定标识，供「按类统计 / 测试固定化 / 抑制」使用；
 //   * position —— "文件:行[:列]"（可空）；
 //   * message  —— 人类可读；
@@ -55,6 +60,26 @@ enum class DiagSeverity : quint8 {
     case DiagSeverity::Error:   return "error";
     }
     return "warning";
+}
+
+// 诊断的「后果」—— 与 severity 正交。
+//   DiagSeverity::Error 同时被用于两种完全不同的处理，消费方无法区分：
+//     * RejectLine —— 使该行失效（line.isError = true，运行期不执行该行）；
+//     * ReportOnly —— 只报告，该行仍按宽容语义参与运行（例如 checkStaticValues
+//                    的可静态判定运行期错误：运行期对这些形态一律宽容）。
+// 新增字段放在结构体最后并带默认值，既有逐字段初始化（本文件内的 add 系列）
+// 无需改动即可编译；需要表达「使该行失效」的调用点显式写 RejectLine。
+enum class DiagEffect : quint8 {
+    ReportOnly,
+    RejectLine,
+};
+
+[[nodiscard]] inline const char* diagEffectName(DiagEffect e) noexcept {
+    switch (e) {
+    case DiagEffect::ReportOnly: return "report-only";
+    case DiagEffect::RejectLine: return "reject-line";
+    }
+    return "report-only";
 }
 
 // 诊断代码（稳定标识；新增时在此登记，测试据此固定化）
@@ -95,6 +120,9 @@ struct ParseDiagnostic {
     int line = -1;
     int column = -1;
     int length = 0;     // 0 = 点到点（无跨度）
+
+    // 该诊断的后果（见 DiagEffect）：默认「只报告」，向后兼容既有调用点。
+    DiagEffect effect = DiagEffect::ReportOnly;
 
     [[nodiscard]] bool hasPosition() const { return line > 0; }
 
@@ -141,7 +169,8 @@ public:
     // 结构化定位版本（**LSP/MCP 走这条**）：file/line/column 为引擎口径（从 1 起），
     // length = 高亮跨度（0 = 点到点）。position 字符串自动派生，文本消费者不受影响。
     void add(DiagSeverity sev, const QString& code, const QString& file, int line, int column,
-             int length, const QString& message, const QString& snippet = {}) {
+             int length, const QString& message, const QString& snippet = {},
+             DiagEffect effect = DiagEffect::ReportOnly) {
         ParseDiagnostic d;
         d.severity = sev;
         d.code = code;
@@ -151,10 +180,27 @@ public:
         d.length = length;
         d.message = message;
         d.snippet = snippet;
+        d.effect = effect;
         // 同时派生文本位置：既有消费者直接读 .position（如 test_parse_diagnostic、
         // dbus 告警计数），不能让它们因为新增结构化字段而拿到空串。
         d.position = d.positionText();
         add(d);
+    }
+
+    // 便捷入口：「该诊断使这一行失效」（line.isError = true，运行期不执行）。
+    // 与 add() 同形，只是把 effect 固定为 RejectLine —— 调用点读起来即契约。
+    void addRejectLine(DiagSeverity sev, const QString& code, const QString& file, int line,
+                       int column, int length, const QString& message,
+                       const QString& snippet = {}) {
+        add(sev, code, file, line, column, length, message, snippet, DiagEffect::RejectLine);
+    }
+
+    // 便捷入口：明确「只报告，不使该行失效」（即便默认值就是它，也把契约写在
+    // 调用点上）。checkStaticValues 这类「运行期对这些形态一律宽容」的诊断用这条。
+    void addReportOnly(DiagSeverity sev, const QString& code, const QString& file, int line,
+                       int column, int length, const QString& message,
+                       const QString& snippet = {}) {
+        add(sev, code, file, line, column, length, message, snippet, DiagEffect::ReportOnly);
     }
 
     // 收下一条既有文本告警；若形如 "文件:行: 文本" 则把前缀拆进 position。
@@ -163,6 +209,28 @@ public:
     void clear() {
         m_items.clear();
         m_texts.clear();
+    }
+
+    // 输出稳定化：收尾各步遍历 m_scripts（QHash，Qt 随机化哈希种子）、且装载
+    // 走并行 worker —— 诊断的**产生顺序**在不同进程间不确定（内容与条数不变）。
+    // 这里按 (文件, 行, 列, code, message) 稳定排序并重建文本视图，让
+    // dump_warnings / LSP / dbus 的输出可复现（基线比对才立得住）。
+    // 幂等；只在装载收尾后调用一次，运行期不排序（避免每条诊断都付代价）。
+    void sortForOutput() {
+        std::stable_sort(m_items.begin(), m_items.end(),
+                         [](const ParseDiagnostic& a, const ParseDiagnostic& b) {
+                             return std::tie(a.file, a.line, a.column, a.code, a.message)
+                                  < std::tie(b.file, b.line, b.column, b.code, b.message);
+                         });
+        if (m_texts.size() == m_items.size()) {
+            // 常规情况：文本视图与结构化条目一一对应，重建以保持两视图一致。
+            m_texts.clear();
+            m_texts.reserve(m_items.size());
+            for (const ParseDiagnostic& d : m_items) m_texts.append(d.toString());
+        } else {
+            // 兜底（理论上不会发生）：两个视图条数不一致时各自定序。
+            m_texts.sort();
+        }
     }
 
     [[nodiscard]] const QList<ParseDiagnostic>& all() const { return m_items; }

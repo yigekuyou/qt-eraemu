@@ -23,6 +23,7 @@
 #include <QString>
 #include <QList>
 #include <QHash>
+#include <functional>
 #include <QtQml/qqmlregistration.h>
 
 #include "variable_types.h"
@@ -84,6 +85,23 @@ public:
 		Q_INVOKABLE qint64 getGlobalInt2D(const QString &name, int x, int y) const;
 		Q_INVOKABLE void setGlobalInt3D(const QString &name, int x, int y, int z, qint64 val);
 		Q_INVOKABLE qint64 getGlobalInt3D(const QString &name, int x, int y, int z) const;
+
+		// ================= 名字级整数访问的唯一原语 =================
+		// 「名字 + 下标 -> 整数存储」只有这一份实现。语义顺序照抄旧
+		// ExecutionEngine::writeLhs：
+		//   hasParameter -> 角色数据变量 -> ARG/LOCAL -> ARGS/LOCALS/RESULTS
+		//   （字符串槽，整型写忽略/读为 0）-> 系统变量
+		//   -> 声明维数 >= 2 的 2D/3D -> 全局 1D。
+		// 大小写规范化统一走 eraUpperKey（不再混用 toUpper）。
+		// 读路径 const：内部访问函数本身是 const，无需 const_cast。
+		[[nodiscard]] qint64 readIntByName(const QString& name, const QList<int>& indices) const;
+		void writeIntByName(const QString& name, const QList<int>& indices, qint64 value);
+
+		// 用户数组声明维数（1/2/3）：由 ExpressionEvaluator（与旧 lhsDimension
+		// 同源：VariableTable::find(name, ownerFunction)）注入。
+		using IntDimProvider = std::function<int(const QString&)>;
+		void setIntDimProvider(IntDimProvider p) { m_intDimProvider = std::move(p); }
+		[[nodiscard]] int intDimension(const QString& name) const;
 
 		// ================= 角色整型 (支持 2D/3D) =================
 		Q_INVOKABLE void setCharaInt(const QString &name, int charaId, int index, qint64 value);
@@ -463,6 +481,7 @@ private:
 
 		// 本地变量
 		const VariableTable* m_saveVariableTable = nullptr;
+		IntDimProvider m_intDimProvider;
 		QHash<QString, QVariant> m_parameters;
         QHash<QString, QString> m_privateNames;
         QHash<QString, QString> m_references;

@@ -1,7 +1,7 @@
 @startuml 04-load-pipeline
 ' 无 graphviz(dot) 环境下用 PlantUML 内置 smetana 布局引擎
 !pragma layout smetana
-' emuera —— 装载流水线（CSV → ERB 解析 → markLoadComplete 1..6(+7) → 诊断）
+' emuera —— 装载流水线（CSV → ERB 解析 → pass 表驱动收尾 → 诊断）
 ' 渲染：plantuml docs/uml/04-load-pipeline.puml
 title 装载流水线（当前实现）
 
@@ -14,6 +14,7 @@ participant "EraParseTable" as T
 participant "VariableTable /\nparamNames" as VT
 participant "VariableStorage" as S
 participant "ParseDiagnostics" as D
+participant "LSP / 测试 / CLI" as LSP
 
 User -> E : setGameDirectory(dir) / loadAsync(dir)
 E -> CSV : loadConfigFiles()
@@ -32,50 +33,59 @@ loop 每个 ERB 文件（并行 worker）
 end
 
 E -> T : markLoadComplete()
+note right of T
+  一个静态表驱动，表即流程：
+  kLoadPasses[7] = { label, fn, optional, readOnly }
+  · 顺序 = 执行顺序；日志文案也取自表（新增步骤只改表）
+  · optional：受开关门控（当前只有 7）
+  · readOnly：4/5/6(+7)，不改运行行为，可脱离本函数单独调用
+end note
 
-group 收尾 1/6 全局声明定稿
-  T -> T : resolveGlobalDeclarations()
-  T -> T : finalizeLabelIndex()（标签 O(1) 索引固化）
+group 1/6 全局声明定稿【改状态】
+  T -> T : resolveGlobalDeclarationsStep()
+  note right : = resolveGlobalDeclarations() + finalizeLabelIndex()
 end
 
-group 收尾 2/6 就地定型 finalizeBindings
-  T -> T : 作用域绑定 / 赋值 AST 重建
-  T -> T : applyVariableTypes()
+group 2/6 就地定型【改状态】
+  T -> T : finalizeBindings()
+  T -> T : applyVariableTypes() / 赋值 AST 重建
   T -> AB : parseScopedExpression（带 paramNames）
   AB -> AB : VariableTable::applyTypes / walkApply
   AB --> T : 类型 / 维数 / lengths + AccessKind 描述符
 end
 
-group 收尾 3/6 参数校验 finalizeValidation
+group 3/6 参数校验【改状态：置 line.isError；出诊断】
   T -> D : validateExpression（维数 / 常量下标 vs lengths / 类型）
-  T -> D : columnDefaults（DT_COLUMN_OPTIONS DEFAULT）也校验
+  T -> D : columnDefaults（DT_COLUMN_OPTIONS DEFAULT）
   T -> D : kArgCheck / kExprParse / kIdentifierScope / kSharpLine
 end
 
-group 收尾 4/6 跳转目标解析 resolveStaticTargets
-  T -> D : kLabelNotFound（CALL / GOTO 常量目标；TRY* 静默）
+T -> T : m_diagnostics.sortForOutput()（输出定序，一次）
+T -> T : m_finalized = true（不再编译新源码）
+T --> E : scriptsLoaded
+
+group 只读检查步骤（不改变运行行为）
+  T -> D : 4/6 resolveStaticTargets（CALL / GOTO / TRY*）
+  T -> D : 5/6 checkStructures（IF/FOR/REPEAT… 配对）
+  T -> D : 6/6 checkStaticValues（除零 / 负下标 / 尺寸 / 名字表）
+  opt 7（可选，默认关闭）
+    T -> D : checkNotCalledFunctions（未被调用的函数）
+  end
 end
 
-group 收尾 5/6 结构配对 checkStructures
-  T -> D : kStructure（IF/ENDIF、FOR/NEXT、REPEAT/REND…）
-end
-
-group 收尾 6/6 静态值检查 checkStaticValues
-  T -> D : kStaticValue（Error）字面量除零
-  T -> D : kStaticValue（Warning）负常量下标
-  T -> D : kStaticValue（Warning）系统变量尺寸（VariableConfig 1D/2D/3D）
-  T -> CSV : indexForVariable（字面字符串下标名表校验，kStaticValue Error）
-end
-
-opt 收尾 7（可选，默认关闭）
-  T -> D : kNotCalled（未被调用的函数）
-end
-
-T --> E : scriptsLoaded（m_finalized = true，源码不再编译）
+LSP -> T : resolveStaticTargets() / checkStructures() / checkStaticValues()
+T --> LSP : 诊断（追加到同一 ParseDiagnostics）
+note right of LSP
+  只读步骤是 public 的，可单独调用
+  （LSP / 测试 / CLI 按需重跑）。
+  重复调用会重复产生诊断 ——
+  调用方负责去重或先 clearDiagnostics。
+end note
 
 note over T,D
   诊断统一在收尾阶段产生：跨文件前向引用此刻已可解析，不重复报。
-  严重度语义：Error = 运行到该行必失败（除零 / 表外名字下标 /
-  维数与下标不符）；Warning = 运行期宽容静默（负下标 / 系统尺寸越界）。
+  严重度语义（与 DiagEffect 正交）：
+  · RejectLine  = 该行失效，运行期不执行（当前仅 3/6 的 6 处）
+  · ReportOnly  = 只报告，运行期对这些形态一律宽容（6/6 全部）
 end note
 @enduml

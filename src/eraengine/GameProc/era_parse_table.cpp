@@ -2279,7 +2279,7 @@ void EraParseTable::checkStaticValues() {
                     if (!right || right->kind() != NodeKind::Literal) return;
                     const auto& lit = static_cast<const LiteralNode&>(*right);
                     if (lit.valueType() != OperandType::Int || lit.intValue() != 0) return;
-                    m_diagnostics.add(DiagSeverity::Error, DiagCode::kStaticValue,
+                    m_diagnostics.addReportOnly(DiagSeverity::Error, DiagCode::kStaticValue,
                         line.position.filename, line.position.lineNumber,
                         line.position.column, 0,
                         QCoreApplication::translate("ParseDiagnostics",
@@ -2320,7 +2320,7 @@ void EraParseTable::checkStaticValues() {
                         if (!l->isString()) continue;
                         if (m_constantTable->indexForVariable(var.name(), l->strValue()) >= 0)
                             continue;
-                        m_diagnostics.add(DiagSeverity::Error, DiagCode::kStaticValue,
+                        m_diagnostics.addReportOnly(DiagSeverity::Error, DiagCode::kStaticValue,
                             line.position.filename, line.position.lineNumber,
                             line.position.column, 0,
                             QCoreApplication::translate("ParseDiagnostics",
@@ -2382,14 +2382,14 @@ void EraParseTable::checkStaticValues() {
                     if (charaIdPos[p]) continue;
                     if (veCovered[p] && !constNeg[c]) continue;
                     if (v < 0) {
-                        m_diagnostics.add(DiagSeverity::Warning, DiagCode::kStaticValue,
+                        m_diagnostics.addReportOnly(DiagSeverity::Warning, DiagCode::kStaticValue,
                             line.position.filename, line.position.lineNumber,
                             line.position.column, 0,
                             QCoreApplication::translate("ParseDiagnostics",
                                 "变量 %1 的常量下标 %2 为负（下标下界恒为 0；运行期该访问静默失败）")
                                 .arg(var.name()).arg(v));
                     } else if (bounds[p] >= 0 && v >= bounds[p]) {
-                        m_diagnostics.add(DiagSeverity::Warning, DiagCode::kStaticValue,
+                        m_diagnostics.addReportOnly(DiagSeverity::Warning, DiagCode::kStaticValue,
                             line.position.filename, line.position.lineNumber,
                             line.position.column, 0,
                             QCoreApplication::translate("ParseDiagnostics",
@@ -2562,47 +2562,44 @@ void EraParseTable::finalizeLabelIndex() {
     }
 }
 
+void EraParseTable::resolveGlobalDeclarationsStep() {
+    // 收尾步骤 1：全局声明定稿 + 全局标签索引排序固化（顺序不可交换）。
+    resolveGlobalDeclarations();   // 声明预登记后 #FUNCTION 表才随 loadScript 补齐，此处再结算一次
+    finalizeLabelIndex();          // 全局标签索引排序固化（labels()/resolveCallableLabel 依赖）
+}
+
+// 收尾 pass 表：顺序 = 执行顺序（markLoadComplete 只负责按表驱动）。
+//   optional —— 受 m_functionNotCalledWarning 门控；
+//   readOnly —— 只读步骤（不改运行行为、只产出诊断），供后续独立调用/并行参考，
+//               当前仍串行执行。
+const EraParseTable::LoadPass EraParseTable::kLoadPasses[7] = {
+    {"1/6 全局声明定稿(resolveGlobalDeclarations)", &EraParseTable::resolveGlobalDeclarationsStep, false, false},
+    {"2/6 就地定型(finalizeBindings)",              &EraParseTable::finalizeBindings,               false, false},
+    {"3/6 参数校验(finalizeValidation)",            &EraParseTable::finalizeValidation,             false, false},
+    {"4/6 跳转目标解析(resolveStaticTargets)",      &EraParseTable::resolveStaticTargets,           false, true},
+    {"5/6 结构配对检查(checkStructures)",           &EraParseTable::checkStructures,                false, true},
+    {"6/6 静态值检查(checkStaticValues)",           &EraParseTable::checkStaticValues,              false, true},
+    {"7(可选) 未被调用函数检查(checkNotCalledFunctions)", &EraParseTable::checkNotCalledFunctions,   true,  true},
+};
+
 void EraParseTable::markLoadComplete() {
     // 装载收尾（唯一入口）：全局声明定稿 → 全体脚本就地定型/重绑 → 统一出诊断。
     // 必须在**全部**声明就绪后进行：跨文件前向引用（先装载的文件调用后装载文件的
-    // 函数）此刻才可解析；诊断随后统一产生，不重复。
+    // 函数）此刻才可解析；诊断随后统一产生，不重复。各步串行（eraTW 桌面 13s+，
+    // Android 更久），逐步留痕以便真机上定位「卡在收尾的哪一步」。
     QElapsedTimer completeTimer;
     completeTimer.start();
-    // 收尾各步在 GUI 线程上串行执行（eraTW 桌面实测合计 13s+，Android 上更久），
-    // 期间心跳定时器也发不出来。逐步留痕：真机上「卡在收尾的哪一步」是能看出来的。
-    qint64 stepMs = completeTimer.elapsed();
-    qInfo().noquote() << "[parse] 收尾步骤 1/6 全局声明定稿(resolveGlobalDeclarations) 开始:"
-                      << m_scripts.size() << "脚本";
-    resolveGlobalDeclarations();   // 声明预登记后 #FUNCTION 表才随 loadScript 补齐，此处再结算一次
-    finalizeLabelIndex();          // 全局标签索引排序固化（labels()/resolveCallableLabel 依赖）
-    qInfo().noquote() << "[parse] 收尾步骤 1/6 完成:" << (completeTimer.elapsed() - stepMs) << "ms";
-    stepMs = completeTimer.elapsed();
-    qInfo().noquote() << "[parse] 收尾步骤 2/6 就地定型(finalizeBindings) 开始";
-    finalizeBindings();
-    qInfo().noquote() << "[parse] 收尾步骤 2/6 完成:" << (completeTimer.elapsed() - stepMs) << "ms";
-    stepMs = completeTimer.elapsed();
-    qInfo().noquote() << "[parse] 收尾步骤 3/6 参数校验(finalizeValidation) 开始";
-    finalizeValidation();
-    qInfo().noquote() << "[parse] 收尾步骤 3/6 完成:" << (completeTimer.elapsed() - stepMs) << "ms";
-    stepMs = completeTimer.elapsed();
-    qInfo().noquote() << "[parse] 收尾步骤 4/6 跳转目标解析(resolveStaticTargets) 开始";
-    resolveStaticTargets();
-    qInfo().noquote() << "[parse] 收尾步骤 4/6 完成:" << (completeTimer.elapsed() - stepMs) << "ms";
-    stepMs = completeTimer.elapsed();
-    qInfo().noquote() << "[parse] 收尾步骤 5/6 结构配对检查(checkStructures) 开始";
-    checkStructures();
-    qInfo().noquote() << "[parse] 收尾步骤 5/6 完成:" << (completeTimer.elapsed() - stepMs) << "ms";
-    stepMs = completeTimer.elapsed();
-    qInfo().noquote() << "[parse] 收尾步骤 6/6 静态值检查(checkStaticValues) 开始";
-    checkStaticValues();
-    qInfo().noquote() << "[parse] 收尾步骤 6/6 完成:" << (completeTimer.elapsed() - stepMs) << "ms";
-    // 可选步骤：未被调用的函数告警（默认关闭，见 setFunctionNotCalledWarning）
-    if (m_functionNotCalledWarning) {
-        stepMs = completeTimer.elapsed();
-        qInfo().noquote() << "[parse] 收尾步骤 7(可选) 未被调用函数检查(checkNotCalledFunctions) 开始";
-        checkNotCalledFunctions();
-        qInfo().noquote() << "[parse] 收尾步骤 7(可选) 完成:" << (completeTimer.elapsed() - stepMs) << "ms";
+    for (const LoadPass& pass : kLoadPasses) {
+        if (pass.optional && !m_functionNotCalledWarning) continue;
+        const qint64 stepMs = completeTimer.elapsed();   // 每步重置 = 单步耗时口径
+        qInfo().noquote() << "[parse] 收尾步骤" << pass.label << "开始";
+        (this->*(pass.fn))();
+        qInfo().noquote() << "[parse] 收尾步骤" << pass.label << "完成:"
+                          << (completeTimer.elapsed() - stepMs) << "ms";
     }
+    // 诊断定序：装载并行 + QHash 随机化哈希种子会让产生顺序在进程间漂移。
+    // 排序只在收尾做一次（运行期不排序），让 dump_warnings/UI/MCP 输出可复现。
+    m_diagnostics.sortForOutput();
     m_finalized = true;   // 只读区定型：装载完成后不再编译新源码
     qInfo().noquote() << "[parse] markLoadComplete：" << m_scripts.size() << "脚本"
                       << completeTimer.elapsed() << "ms";
@@ -2865,7 +2862,7 @@ void EraParseTable::finalizeValidation() {
                     line.argument.typeError = error;
                     line.isError = true;
                     line.errMes = error;
-                    m_diagnostics.add(DiagSeverity::Error,
+                    m_diagnostics.addRejectLine(DiagSeverity::Error,
                         scopeError ? DiagCode::kIdentifierScope : DiagCode::kArgCheck,
                         line.position.filename, line.position.lineNumber, line.position.column, 0, error);
                 }
@@ -2897,7 +2894,7 @@ void EraParseTable::finalizeValidation() {
                         .arg(line.functionName, operand.raw, line.position.toString());
                     line.argument.typeError = error;
                     line.errMes = error;
-                    m_diagnostics.add(DiagSeverity::Error, DiagCode::kArgCheck,
+                    m_diagnostics.addRejectLine(DiagSeverity::Error, DiagCode::kArgCheck,
                         line.position.filename, line.position.lineNumber, line.position.column, 0, error);
                 }
             }
@@ -2912,7 +2909,7 @@ void EraParseTable::finalizeValidation() {
                     line.argument.typeError = error;
                     line.isError = true;
                     line.errMes = error;
-                    m_diagnostics.add(DiagSeverity::Error, DiagCode::kArgCheck,
+                    m_diagnostics.addRejectLine(DiagSeverity::Error, DiagCode::kArgCheck,
                         line.position.filename, line.position.lineNumber, line.position.column, 0, error);
                 }
             }
@@ -2949,8 +2946,9 @@ void EraParseTable::finalizeValidation() {
                                                   .arg(dest.left(60), lvalueError);
                     line.isError = true;
                     line.errMes = line.argument.typeError;
-                    m_diagnostics.add(DiagSeverity::Error, DiagCode::kArgCheck, line.position.filename,
-                        line.position.lineNumber, line.position.column, 0, line.argument.typeError);
+                    m_diagnostics.addRejectLine(DiagSeverity::Error, DiagCode::kArgCheck,
+                        line.position.filename, line.position.lineNumber, line.position.column, 0,
+                        line.argument.typeError);
                 }
                 const bool rawForm = line.assignOperator == "=" && m_variables.typeOf(name, line.ownerFunction) == OperandType::Str;
                 if (!rawForm) {
@@ -2966,8 +2964,9 @@ void EraParseTable::finalizeValidation() {
                             line.argument.typeError = QCoreApplication::translate("ParseDiagnostics", "赋值右值无法解析或包含空项");
                             line.isError = true;
                             line.errMes = line.argument.typeError;
-                            m_diagnostics.add(DiagSeverity::Error, DiagCode::kArgCheck, line.position.filename,
-                                line.position.lineNumber, line.position.column, 0, line.argument.typeError);
+                            m_diagnostics.addRejectLine(DiagSeverity::Error, DiagCode::kArgCheck,
+                                line.position.filename, line.position.lineNumber, line.position.column, 0,
+                                line.argument.typeError);
                         }
                     }
                     if (values.size() > 1 && line.assignOperator != "=" && line.assignOperator != "'=") {
@@ -3134,7 +3133,7 @@ void EraParseTable::applyStringAssignments() {
                 line.argument.typeError = error;
                 line.isError = true;
                 line.errMes = error;
-                m_diagnostics.add(DiagSeverity::Error, DiagCode::kArgCheck,
+                m_diagnostics.addRejectLine(DiagSeverity::Error, DiagCode::kArgCheck,
                     line.position.filename, line.position.lineNumber, line.position.column, 0, error);
             }
         }

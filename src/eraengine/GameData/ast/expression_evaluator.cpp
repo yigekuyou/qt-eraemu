@@ -546,6 +546,97 @@ QList<int> ExpressionEvaluator::resolveIndices(const VariableNode& node, Variabl
     return out;
 }
 
+void ExpressionEvaluator::setVariableStorage(VariableStorage* storage)
+{
+    m_storage = storage;
+    if (storage) {
+        storage->setIntDimProvider([this](const QString& name) {
+            return variableDimension(name);
+        });
+    }
+}
+
+ExpressionEvaluator::~ExpressionEvaluator()
+{
+    if (m_storage) m_storage->setIntDimProvider(nullptr);
+}
+
+// 节点级整数读：唯一分派（作用域守卫 + 名字级原语）。
+qint64 ExpressionEvaluator::readIntNode(const VariableNode& node, const QList<int>& indices) const
+{
+    if (!m_storage) return 0;
+    // 守卫：描述符的静态键只在「本行执行」的作用域里成立（同 evaluateVariable）。
+    const VariableNode::AccessKind access =
+        (m_storage->privateScopeName() == node.accessScopeKey)
+            ? node.accessKind : VariableNode::AccessKind::Dynamic;
+    switch (access) {
+    case VariableNode::AccessKind::GlobalInt1:
+        return m_storage->getGlobalInt1DRaw(node.accessKey, indices.value(0));
+    case VariableNode::AccessKind::GlobalInt2:
+    case VariableNode::AccessKind::GlobalInt3:
+        if (indices.size() >= 2) {
+            if (access == VariableNode::AccessKind::GlobalInt3 && indices.size() >= 3)
+                return m_storage->getGlobalInt3DRaw(node.accessKey, indices.at(0), indices.at(1), indices.at(2));
+            return m_storage->getGlobalInt2DRaw(node.accessKey, indices.at(0), indices.at(1));
+        }
+        return m_storage->getGlobalInt1DRaw(node.accessKey, indices.value(0));
+    case VariableNode::AccessKind::LocalSlot:
+        return m_storage->getLocalInt(indices.value(0));
+    case VariableNode::AccessKind::ArgSlot:
+        return m_storage->getArgInt(indices.value(0));
+    case VariableNode::AccessKind::Dynamic:
+    case VariableNode::AccessKind::GlobalStr1:
+    case VariableNode::AccessKind::GlobalStr2:
+    case VariableNode::AccessKind::GlobalStr3:
+    case VariableNode::AccessKind::LocalStr:
+    case VariableNode::AccessKind::ArgStr:
+    default:
+        return m_storage->readIntByName(node.name(), indices);
+    }
+}
+
+// 节点级整数写：唯一分派（同一守卫）。字符串槽位（Str kind / ARGS/LOCALS/
+// RESULTS）在名字级原语里被忽略，与旧 writeIntVarAccess 的回退一致。
+void ExpressionEvaluator::writeIntNode(const VariableNode& node, const QList<int>& indices, qint64 value)
+{
+    if (!m_storage) return;
+    const VariableNode::AccessKind access =
+        (m_storage->privateScopeName() == node.accessScopeKey)
+            ? node.accessKind : VariableNode::AccessKind::Dynamic;
+    switch (access) {
+    case VariableNode::AccessKind::GlobalInt1:
+        m_storage->setGlobalInt1DRaw(node.accessKey, indices.value(0), value);
+        return;
+    case VariableNode::AccessKind::GlobalInt2:
+    case VariableNode::AccessKind::GlobalInt3:
+        if (indices.size() >= 2) {
+            if (access == VariableNode::AccessKind::GlobalInt3 && indices.size() >= 3) {
+                m_storage->setGlobalInt3DRaw(node.accessKey, indices.at(0), indices.at(1), indices.at(2), value);
+                return;
+            }
+            m_storage->setGlobalInt2DRaw(node.accessKey, indices.at(0), indices.at(1), value);
+            return;
+        }
+        m_storage->setGlobalInt1DRaw(node.accessKey, indices.value(0), value);
+        return;
+    case VariableNode::AccessKind::LocalSlot:
+        m_storage->setLocalInt(indices.value(0), value);
+        return;
+    case VariableNode::AccessKind::ArgSlot:
+        m_storage->setArgInt(indices.value(0), value);
+        return;
+    case VariableNode::AccessKind::Dynamic:
+    case VariableNode::AccessKind::GlobalStr1:
+    case VariableNode::AccessKind::GlobalStr2:
+    case VariableNode::AccessKind::GlobalStr3:
+    case VariableNode::AccessKind::LocalStr:
+    case VariableNode::AccessKind::ArgStr:
+    default:
+        m_storage->writeIntByName(node.name(), indices, value);
+        return;
+    }
+}
+
 // 变量写入（整型）：与 evaluateVariable 的读取路径对称，供 ++/-- 的副作用使用
 bool ExpressionEvaluator::assignVariable(const VariableNode& node, VariableStorage* storage,
                                          GameBaseData* gameBaseData, qint64 value)
@@ -607,51 +698,22 @@ bool ExpressionEvaluator::assignVariable(const VariableNode& node, VariableStora
         return false;   // 字符串槽位不能自增（同旧路的 ARGS/LOCALS 分支）
     }
     const QString name = node.name();
-    QString upperScratch;
-    const QString& upper = eraUpperKey(name, upperScratch);
+    // 前置判断（字符串变量不能自增）保留；参数/角色/ARG/LOCAL/系统/2D/3D/1D 的
+    // 写回顺序全部交给唯一原语 VariableStorage::writeIntByName。
     if (storage->hasParameter(name)) {
-        storage->setParameter(name, value);
+        storage->writeIntByName(name, {}, value);
         return true;
     }
     // 角色数据变量（++/-- 的写回）与读取路径对称
-    if (storage->isCharaDataVariable(name)) {
-        if (storage->isCharaDataString(name)) return false;   // 字符串不能自增
-        const QList<int> cids = resolveIndices(node, storage, gameBaseData);
-        int charaId = 0;
-        QList<int> elems;
-        storage->reduceCharaArgs(name, cids, charaId, elems);
-        if (storage->charaDataDimension(name) >= 2)
-            storage->setCharaInt3D(name, charaId, elems.value(0), elems.value(1), value);
-        else
-            storage->setCharaInt(name, charaId, elems.value(0), value);
-        return true;
-    }
-    const QList<int> ids = resolveIndices(node, storage, gameBaseData);
-    const int idx = ids.isEmpty() ? 0 : ids.first();
-    const int dim = variableDimension(name);
-    // `NAME:i:j` / `NAME:i:j:k`（用户 2D/3D 数组）
-    if (dim >= 2 && ids.size() >= 2 && !storage->hasSystemVariable(name)) {
-        if (dim >= 3 && ids.size() >= 3) {
-            storage->setGlobalInt3D(name, ids.at(0), ids.at(1), ids.at(2), value);
-        } else {
-            storage->setGlobalInt2D(name, ids.at(0), ids.at(1), value);
-        }
-        return true;
-    }
-    if (upper == QLatin1String("ARG")) { storage->setArgInt(idx, value); return true; }
-    if (upper == QLatin1String("LOCAL")) {
-        storage->setLocalInt(idx, value);
-        return true;
-    }
+    if (storage->isCharaDataVariable(name) && storage->isCharaDataString(name))
+        return false;   // 字符串不能自增
+    QString upperScratch;
+    const QString& upper = eraUpperKey(name, upperScratch);
     if (upper == QLatin1String("ARGS") || upper == QLatin1String("LOCALS")
         || upper == QLatin1String("RESULTS")) {
         return false;   // 字符串变量不能自增
     }
-    if (storage->hasSystemVariable(name)) {
-        storage->setSystemVariable(name, idx, value);
-        return true;
-    }
-    storage->setGlobalInt1D(name, idx, value);
+    storage->writeIntByName(name, resolveIndices(node, storage, gameBaseData), value);
     return true;
 }
 

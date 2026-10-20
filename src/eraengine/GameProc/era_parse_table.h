@@ -423,6 +423,12 @@ private:
     void finalizeBindings();
     // 全体脚本校验：产出诊断，须在**全部绑定完成后**统一调用（跨文件前向引用）。
     void finalizeValidation();
+
+public:
+    // ---- 只读检查步骤（可单独调用）---------------------------------------
+    // 下列三步只读：不改变运行行为、不改 AST 语义，只读取已定型的数据并产出
+    // 诊断。可以脱离 markLoadComplete 单独调用（例如 LSP/测试按需重跑），
+    // 但**重复调用会重复产生诊断** —— 调用方负责去重或先 clearDiagnostics。
     void resolveStaticTargets();      // 收尾步骤 4：静态解析运行期跳转/调用目标（对齐 C# setJumpTo）
     // CALL 语句的实参校验（对齐 C# ConvertArg 在 setJumpTo 里的装载期调用）：
     // 只在「常量目标且目标存在」时下结论 —— 个数超限、字符串实参传整型形参、
@@ -439,6 +445,8 @@ private:
     // "配列型変数Xの第N引数(…)は配列の範囲外です"）；当操作数是**字面量**时，
     // 「运行到那行才炸」是确定事件，因此提前到装载期报出来。
     void checkStaticValues();
+
+private:
     // 收尾步骤 7（可选）：定义了但从未被调用的函数（对齐 C# ErbLoader.checkScript 的
     // FunctionNotCalledWarning）。C# 的**默认值是 IGNORE**，且只要有 CALLFORM 系
     // （名字运行期求值）就无法判定「没被调用」，此时全部不报 —— eraTW 两种条件都命中，
@@ -446,6 +454,19 @@ private:
     void checkNotCalledFunctions();
     // 全局声明定稿：常量/维数求值器 + 维数 + 全局初值 + 用户函数类型（幂等）。
     void resolveGlobalDeclarations();
+    // 收尾步骤 1 的组合入口（顺序不变）：resolveGlobalDeclarations()
+    // 之后紧接 finalizeLabelIndex()。仅为收尾 pass 表提供一个单函数指针。
+    void resolveGlobalDeclarationsStep();
+
+    // 收尾 pass 表条目（定义见 .cpp 的 EraParseTable::kLoadPasses）。
+    // 表的顺序就是执行顺序；日志文案也来自这里，新增步骤只改表。
+    struct LoadPass {
+        const char* label;             // 日志步骤名（含 "N/6" 编号）
+        void (EraParseTable::*fn)();   // 步骤入口
+        bool optional;                 // 受开关门控（未开启则整步跳过）
+        bool readOnly;                 // 只读（可独立调用/并行参考；当前仍串行）
+    };
+    static const LoadPass kLoadPasses[7];
     // 校验告警收集器：按脚本并行时每脚本各持一个，随后**按脚本顺序**合并。
     //   warnings : 告警文本，保持脚本内产生顺序；
     //   keys     : 与 warnings 一一对应；非空 = 该告警的「去重 key」

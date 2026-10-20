@@ -13,8 +13,14 @@ package "GameData/ast" {
     Error
   }
 
+  enum DiagEffect {
+    ReportOnly
+    RejectLine
+  }
+
   struct ParseDiagnostic {
     severity : DiagSeverity
+    effect : DiagEffect = ReportOnly
     code : QString
     position : QString
     message : QString
@@ -26,10 +32,13 @@ package "GameData/ast" {
   }
 
   class ParseDiagnostics {
-    + add(severity, code, position, message)
+    + add(severity, code, position, message, effect = ReportOnly)
+    + addRejectLine(...)   ' effect 固定 RejectLine，调用点即契约
+    + addReportOnly(...)   ' effect 固定 ReportOnly
     + addText(...)
     + all() : QList
     + texts() : QStringList
+    + sortForOutput()   ' 收尾定序（一次）
     + count()
   }
 
@@ -52,7 +61,25 @@ package "GameData/ast" {
 
 ParseDiagnostics o-- ParseDiagnostic
 ParseDiagnostic --> DiagSeverity
-ParseDiagnostic --> DiagCode
+ParseDiagnostic --> DiagEffect
+
+note right of ParseDiagnostics
+  收尾末尾调用一次 sortForOutput()：
+  装载并行 + QHash 随机化哈希种子会让
+  诊断**产生顺序**在进程间漂移（条数与内容不变），
+  按 (文件, 行, 列, code, message) 稳定排序并重建文本视图，
+  dump_warnings / LSP / dbus 输出因此可复现。
+end note
+
+note bottom of DiagEffect
+  effect 与 severity **正交**：
+  · Error 也可能只报告（6/6 的 kStaticValue）
+  · 当前 RejectLine 只有 6 处，全部在 3/6 finalizeValidation
+    （kArgCheck / kIdentifierScope：变量未定义、++/-- 操作数、
+      FUNC 参数缺 AST、赋值左值、赋值右值、字符串赋值 FORM 无效）
+  · 其余诊断一律 ReportOnly —— 静态检查不允许改变运行行为
+    这条不变式现在由字段表达，不再只靠注释
+end note
 
 note bottom of DiagCode
   产生位置（收尾步骤）：
@@ -62,12 +89,5 @@ note bottom of DiagCode
   * kStructure —— 收尾 5/6 checkStructures
   * kStaticValue —— 收尾 6/6 checkStaticValues
   * kNotCalled —— 收尾 7（可选）
-end note
-
-note right of ParseDiagnostics
-  Error 与「行失效」的区分：
-  * validateExpression 类错误会置 line.isError（该行不执行）
-  * checkStaticValues 只出诊断、不改行为
-    （运行期对这些形态一律宽容）
 end note
 @enduml

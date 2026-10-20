@@ -94,6 +94,9 @@ ScriptRunner::ScriptRunner(EraParseTable* table,
 void ScriptRunner::setExpressionEvaluator(ExpressionEvaluator* evaluator) {
     m_evaluator = evaluator;
     if (m_evaluator) {
+        // 节点级整数分派（readIntNode/writeIntNode）需要存储：作用域守卫与
+        // 名字级原语都在 VariableStorage 上（顺带注册维数 provider）。
+        m_evaluator->setVariableStorage(m_storage);
         // 表达式中的用户自定义函数经本执行链回调
         m_evaluator->setUserFunctionInvoker(
             [this](const QString& name, const QList<QVariant>& args,
@@ -125,7 +128,9 @@ void ScriptRunner::onContinueExecution() {
 ExpressionEvaluator& ScriptRunner::getEvaluator() {
     if (!m_evaluator && !m_fallbackEvaluator)
         m_fallbackEvaluator = std::make_unique<ExpressionEvaluator>();
-    return m_evaluator ? *m_evaluator : *m_fallbackEvaluator;
+    ExpressionEvaluator& ev = m_evaluator ? *m_evaluator : *m_fallbackEvaluator;
+    ev.setVariableStorage(m_storage);   // 幂等：供节点级整数分派使用
+    return ev;
 }
 
 ExecState ScriptRunner::runSlice(int instructionBudget, int timeBudgetMs) {
@@ -2357,25 +2362,9 @@ qint64 ScriptRunner::readIntVar(const QString& name, int index) const {
 }
 
 qint64 ScriptRunner::readIntVar(const QString& name, const QList<int>& indices) const {
-    if (m_storage->hasParameter(name)) return m_storage->parameter(name).toLongLong();
-    // 角色数据变量：按 (角色号, 元素下标) 读取（与求值器一致）
-    if (m_storage->isCharaDataVariable(name)) {
-        if (m_storage->isCharaDataString(name)) return 0;
-        int charaId = 0;
-        QList<int> elems;
-        m_storage->reduceCharaArgs(name, indices, charaId, elems);
-        if (m_storage->charaDataDimension(name) >= 2)
-            return m_storage->getCharaInt3D(name, charaId, elems.value(0), elems.value(1));
-        return m_storage->getCharaInt(name, charaId, elems.value(0));
-    }
-    // eraUpperKey：纯 CJK/已大写名字零分配（FOR/NEXT 计数器每迭代都走这里）
-    const QString upper = eraUpperKey(name);
-    if (upper == QLatin1String("ARG")) return m_storage->getArgInt(indices.value(0));
-    if (upper == QLatin1String("LOCAL")) return m_storage->getLocalInt(indices.value(0));
-    if (m_storage->hasSystemVariable(name)) {
-        return m_storage->getSystemVariable(name, indices.value(0));
-    }
-    return m_storage->getGlobalInt1D(name, indices.value(0));
+    // 唯一实现：VariableStorage::readIntByName（参数/角色/ARG/LOCAL/系统/1D；
+    // 维数 >= 2 且给了 >= 2 个下标时走 2D/3D）。
+    return m_storage->readIntByName(name, indices);
 }
 
 void ScriptRunner::writeIntVar(const QString& name, int index, qint64 value) {
@@ -2386,96 +2375,22 @@ void ScriptRunner::writeIntVar(const QString& name, int index, qint64 value) {
 // kind == Dynamic 时回退按名解析（readIntVar/writeIntVar 的旧路）。
 qint64 ScriptRunner::readIntVarAccess(const VariableNode& node, const QList<int>& indices) const
 {
-    switch (node.accessKind) {
-    case VariableNode::AccessKind::GlobalInt1:
-        return m_storage->getGlobalInt1DRaw(node.accessKey, indices.value(0));
-    case VariableNode::AccessKind::GlobalInt2:
-    case VariableNode::AccessKind::GlobalInt3:
-        if (indices.size() >= 2) {
-            if (node.accessKind == VariableNode::AccessKind::GlobalInt3 && indices.size() >= 3)
-                return m_storage->getGlobalInt3DRaw(node.accessKey, indices.at(0), indices.at(1), indices.at(2));
-            return m_storage->getGlobalInt2DRaw(node.accessKey, indices.at(0), indices.at(1));
-        }
-        return m_storage->getGlobalInt1DRaw(node.accessKey, indices.value(0));
-    case VariableNode::AccessKind::LocalSlot:
-        return m_storage->getLocalInt(indices.value(0));
-    case VariableNode::AccessKind::ArgSlot:
-        return m_storage->getArgInt(indices.value(0));
-    case VariableNode::AccessKind::Dynamic:
-    case VariableNode::AccessKind::GlobalStr1:
-    case VariableNode::AccessKind::GlobalStr2:
-    case VariableNode::AccessKind::GlobalStr3:
-    case VariableNode::AccessKind::LocalStr:
-    case VariableNode::AccessKind::ArgStr:
-    default:
-        return readIntVar(node.name(), indices);
-    }
+    // 唯一分派在 ExpressionEvaluator::readIntNode（含作用域守卫）。
+    // fallback 求值器惰性创建：const 方法仅做一次构造，不改变可观察状态。
+    ExpressionEvaluator* ev = m_evaluator ? m_evaluator
+        : &const_cast<ScriptRunner*>(this)->getEvaluator();
+    return ev->readIntNode(node, indices);
 }
 
 void ScriptRunner::writeIntVarAccess(const VariableNode& node, const QList<int>& indices, qint64 value)
 {
-    switch (node.accessKind) {
-    case VariableNode::AccessKind::GlobalInt1:
-        m_storage->setGlobalInt1DRaw(node.accessKey, indices.value(0), value);
-        return;
-    case VariableNode::AccessKind::GlobalInt2:
-    case VariableNode::AccessKind::GlobalInt3:
-        if (indices.size() >= 2) {
-            if (node.accessKind == VariableNode::AccessKind::GlobalInt3 && indices.size() >= 3) {
-                m_storage->setGlobalInt3DRaw(node.accessKey, indices.at(0), indices.at(1), indices.at(2), value);
-                return;
-            }
-            m_storage->setGlobalInt2DRaw(node.accessKey, indices.at(0), indices.at(1), value);
-            return;
-        }
-        m_storage->setGlobalInt1DRaw(node.accessKey, indices.value(0), value);
-        return;
-    case VariableNode::AccessKind::LocalSlot:
-        m_storage->setLocalInt(indices.value(0), value);
-        return;
-    case VariableNode::AccessKind::ArgSlot:
-        m_storage->setArgInt(indices.value(0), value);
-        return;
-    case VariableNode::AccessKind::Dynamic:
-    case VariableNode::AccessKind::GlobalStr1:
-    case VariableNode::AccessKind::GlobalStr2:
-    case VariableNode::AccessKind::GlobalStr3:
-    case VariableNode::AccessKind::LocalStr:
-    case VariableNode::AccessKind::ArgStr:
-    default:
-        writeIntVar(node.name(), indices, value);
-        return;
-    }
+    // 唯一分派在 ExpressionEvaluator::writeIntNode（含作用域守卫）。
+    // writeLoopCounter 语义不变：在计数器自身的固定下标上写循环值，无越界检查。
+    getEvaluator().writeIntNode(node, indices, value);
 }
 
 void ScriptRunner::writeIntVar(const QString& name, const QList<int>& indices, qint64 value) {
-    if (m_storage->hasParameter(name)) { m_storage->setParameter(name, value); return; }
-    // 角色数据变量：按 (角色号, 元素下标) 写入（否则同一角色的元素互相覆盖）
-    if (m_storage->isCharaDataVariable(name)) {
-        if (m_storage->isCharaDataString(name)) return;
-        int charaId = 0;
-        QList<int> elems;
-        m_storage->reduceCharaArgs(name, indices, charaId, elems);
-        if (m_storage->charaDataDimension(name) >= 2)
-            m_storage->setCharaInt3D(name, charaId, elems.value(0), elems.value(1), value);
-        else
-            m_storage->setCharaInt(name, charaId, elems.value(0), value);
-        return;
-    }
-    const QString upper = eraUpperKey(name);
-    if (upper == QLatin1String("ARG")) {
-        m_storage->setArgInt(indices.value(0), value);
-        return;
-    }
-    if (upper == QLatin1String("LOCAL")) {
-        m_storage->setLocalInt(indices.value(0), value);
-        return;
-    }
-    if (m_storage->hasSystemVariable(name)) {
-        m_storage->setSystemVariable(name, indices.value(0), value);
-        return;
-    }
-    m_storage->setGlobalInt1D(name, indices.value(0), value);
+    m_storage->writeIntByName(name, indices, value);
 }
 
 bool ScriptRunner::extractVarRef(const Operand& op, QString& name, QList<int>& indices) {

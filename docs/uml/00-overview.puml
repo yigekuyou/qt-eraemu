@@ -10,7 +10,7 @@ package "装载期 GameProc（一次性）" {
   [ErbLoader] as Loader
   [AstBuilder 表达式解析] as Builder
   [EraParseTable\n脚本表 + 变量表 + 诊断] as Table
-  [收尾流水线\nmarkLoadComplete 1..6(+7)] as Finish
+  [收尾流水线\npass 表 kLoadPasses 7 条] as Finish
 }
 
 package "内容与配置（Content）" {
@@ -26,28 +26,32 @@ package "运行期 GameProc" {
 
 package "数据与求值 GameData" {
   [AST（装载期分词的 LogicalLine）] as AST
-  [VariableStorage 全部运行时容器] as Storage
-  [ExpressionEvaluator\n读/写/下标求值] as Eval
+  [VariableStorage 全部运行时容器\n唯一按名原语 read/writeIntByName] as Storage
+  [ExpressionEvaluator\n读/写/下标求值\n唯一分派 read/writeIntNode] as Eval
 }
 
 Loader ..> Builder : 逐行 build
 Loader --> Table : loadScript(name, lines)
 Builder --> AST
-Finish ..> Table : 六步收尾，产出诊断
+Finish ..> Table : 七条 pass，产出诊断
 Table --> Finish
 Consts --> Table : 名表下标 / 字面名字校验
 Config --> Table : 尺寸 / 维数 / 类型
 Exec --> Runner
 Runner --> AST : 取行（已分词）
-Runner --> Storage : 快路径 / 旧路
+Runner --> Storage : 按名原语（Dynamic 时）
 Runner --> Eval : 表达式求值
 Eval --> Storage
 Table --> AST : 定型
 
 note right of Finish
-  装载期一次定型（运行期不再做名字解析）：
+  装载期一次定型（尽量把名字解析前移）：
   * 类型 / 维数 / 长度
   * 访问描述符 AccessKind + accessKey + accessScopeKey
   * 标签索引 / 函数表 / 形参名集合
+
+  运行期只剩两条通路，且各只有一份实现：
+  * 描述符直达槽位（readIntNode / writeIntNode）
+  * Dynamic → 按名原语（readIntByName / writeIntByName）
 end note
 @enduml

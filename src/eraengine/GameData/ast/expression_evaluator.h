@@ -41,6 +41,7 @@ class ExpressionEvaluator : public QObject
 
 public:
     explicit ExpressionEvaluator(QObject *parent = nullptr);
+    ~ExpressionEvaluator() override;
 
     using FormIgnoreProvider = std::function<bool()>;
     void setFormIgnoreProvider(FormIgnoreProvider provider) { m_formIgnoreProvider = std::move(provider); }
@@ -218,6 +219,16 @@ public:
     [[nodiscard]] QList<int> resolveIndices(const VariableNode& node, VariableStorage* storage,
                                             GameBaseData* gameBaseData);
 
+    // ================= 节点级整数访问的唯一分派 =================
+    // 先套作用域守卫（live privateScopeName() != accessScopeKey -> 当 Dynamic），
+    // 再落到 VariableStorage::readIntByName / writeIntByName。旧
+    // ScriptRunner::readIntVarAccess / writeIntVarAccess 的 switch 已并入这里。
+    [[nodiscard]] qint64 readIntNode(const VariableNode& node, const QList<int>& indices) const;
+    void writeIntNode(const VariableNode& node, const QList<int>& indices, qint64 value);
+    // 分派所需的存储（作用域守卫 + 名字级原语）。接线时注入，并顺带给存储
+    // 注册维数 provider（与 variableDimension 同源）。
+    void setVariableStorage(VariableStorage* storage);
+
     // ---- 随机数（对齐 C# VariableEvaluator + MTRandom/MT19937）----
     //   启动时用系统随机源产生种子；RANDOMIZE / setRandomSeed 可复现。
     [[nodiscard]] Mt19937& random() { return m_rand; }
@@ -328,6 +339,7 @@ private:
     std::function<qint64()> m_saveDataNosProvider;           // SAVENOS()
     Mt19937 m_rand;                       // MT19937（启动时随机种子）
     VariableDimProvider m_variableDimProvider;
+    VariableStorage* m_storage = nullptr;   // readIntNode/writeIntNode 的分派目标
     ConstArrayProvider  m_constArrayProvider;
     ConstArrayChecker   m_constArrayChecker;
     ConstArraySizeProvider m_constArraySizeProvider;

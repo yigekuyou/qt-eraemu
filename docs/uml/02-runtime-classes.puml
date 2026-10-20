@@ -18,7 +18,7 @@ package "GameProc" {
     - m_parseTable : EraParseTable
     + loadScripts(dir) : bool
     + executeLogicalLine(line)
-    + writeLhs(ref, value)
+    + writeLhs(ref, value)        ' 转调 VariableStorage::writeIntByName
     + getErbLoader() : ErbLoader
   }
 
@@ -28,8 +28,10 @@ package "GameProc" {
     - m_loops : QList~LoopFrame~
     + runToCompletion() : ExecState
     - stepOnce() : bool
-    - readIntVarAccess(node, indices) : qint64
-    - writeIntVarAccess(node, indices, value)
+    - readIntVar(name, indices) : qint64        ' 转调 readIntByName
+    - writeIntVar(name, indices, value)         ' 转调 writeIntByName
+    - readIntVarAccess(node, indices) : qint64  ' 转调 readIntNode（唯一分派）
+    - writeIntVarAccess(node, indices, value)   ' 转调 writeIntNode（唯一分派）
     - writeLoopCounter(counter, value)
   }
 
@@ -60,6 +62,12 @@ ScriptRunner --> EraParseTable : 取已分词的行
 ScriptRunner --> VariableStorage
 
 note right of ScriptRunner
+  存取只有一条通路（本轮去重后）：
+  · 带节点的读写 → ExpressionEvaluator::readIntNode / writeIntNode
+    （作用域守卫 + AccessKind 分派，FOR·NEXT 与表达式共用）
+  · 按名的读写 → VariableStorage::readIntByName / writeIntByName
+  ScriptRunner 的同名成员只剩转调，不再各自实现一份 if 链。
+
   循环变量写入语义：
   writeLoopCounter = 在计数器自身的固定下标上
   写入「循环值」——值不是下标。

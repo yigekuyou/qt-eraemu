@@ -54,7 +54,9 @@ QVariant evaluateOperand(ExpressionEvaluator& evaluator, const Operand& operand,
 ExpressionEvaluator& ExecutionEngine::getEvaluator() {
     if (!m_expressionEvaluator && !m_fallbackEvaluator)
         m_fallbackEvaluator = std::make_unique<ExpressionEvaluator>();
-    return m_expressionEvaluator ? *m_expressionEvaluator : *m_fallbackEvaluator;
+    ExpressionEvaluator& ev = m_expressionEvaluator ? *m_expressionEvaluator : *m_fallbackEvaluator;
+    ev.setVariableStorage(m_storage);   // 幂等：维数 provider + 节点级整数分派
+    return ev;
 }
 
 ExecutionEngine::ExecutionEngine(VariableStorage* storage, GameBaseData* gameBaseData, QObject* parent)
@@ -230,47 +232,10 @@ void ExecutionEngine::writeLhs(const LhsRef& ref, qint64 value) {
     if (!ref.valid) throw std::runtime_error("Invalid variable reference");
     if (!m_storage) return;
     qCDebug(eraTrace) << "[var] write" << ref.name << ref.indices << "=" << value;
-    if (m_storage->hasParameter(ref.name)) { m_storage->setParameter(ref.name, value); return; }
-    // 角色数据变量：按 (角色号, 元素下标) 写入（否则同一角色的元素互相覆盖）
-    if (m_storage->isCharaDataVariable(ref.name)) {
-        if (m_storage->isCharaDataString(ref.name)) return;   // 字符串：走 handleStringAssignment
-        int charaId = 0;
-        QList<int> elems;
-        m_storage->reduceCharaArgs(ref.name, ref.indices, charaId, elems);
-        if (m_storage->charaDataDimension(ref.name) >= 2)
-            m_storage->setCharaInt3D(ref.name, charaId, elems.value(0), elems.value(1), value);
-        else
-            m_storage->setCharaInt(ref.name, charaId, elems.value(0), value);
-        return;
-    }
-    const QString upper = ref.name.toUpper();
-    if (upper == QLatin1String("ARG")) {
-        m_storage->setArgInt(ref.first(), value);
-        return;
-    }
-    if (upper == QLatin1String("LOCAL")) {
-        m_storage->setLocalInt(ref.first(), value);   // 函数局部槽（C# LOCAL）
-        return;
-    }
-    if (upper == QLatin1String("ARGS") || upper == QLatin1String("LOCALS")
-        || upper == QLatin1String("RESULTS")) {
-        return;                                       // 字符串变量走 handleStringAssignment
-    }
-    if (m_storage->hasSystemVariable(ref.name)) {
-        m_storage->setSystemVariable(ref.name, ref.first(), value);
-        return;
-    }
-    const int dim = lhsDimension(ref.name);
-    if (ref.indices.size() >= 2 && dim >= 2) {
-        if (ref.indices.size() >= 3 && dim >= 3) {
-            m_storage->setGlobalInt3D(ref.name, ref.indices.at(0), ref.indices.at(1),
-                                      ref.indices.at(2), value);
-            return;
-        }
-        m_storage->setGlobalInt2D(ref.name, ref.indices.at(0), ref.indices.at(1), value);
-        return;
-    }
-    m_storage->setGlobalInt1D(ref.name, ref.first(), value);
+    // 唯一实现：VariableStorage::writeIntByName。顺序照旧：
+    // hasParameter -> 角色数据 -> ARG/LOCAL -> ARGS/LOCALS/RESULTS(忽略)
+    // -> 系统变量 -> 声明维数 >= 2 的 2D/3D -> 全局 1D。
+    m_storage->writeIntByName(ref.name, ref.indices, value);
 }
 
 bool ExecutionEngine::handleCompoundAssignment(const ExpressionNode* lhs, const QString& op, const QString& rhs, const QSharedPointer<ExpressionNode>& ast) {

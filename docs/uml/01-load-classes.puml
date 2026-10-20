@@ -24,14 +24,24 @@ package "GameProc" {
     + expressionAst(expr)
     + runtimeVariableReference(expr)
     + markLoadComplete()
+    + resolveStaticTargets()      ' 只读：可单独调用
+    + checkStructures()           ' 只读：可单独调用
+    + checkStaticValues()         ' 只读：可单独调用
     - resolveGlobalDeclarations()
+    - resolveGlobalDeclarationsStep()   ' 组合入口：上者 + finalizeLabelIndex
     - finalizeLabelIndex()
     - finalizeBindings()
     - applyVariableTypes()
     - finalizeValidation()
-    - resolveStaticTargets()
-    - checkStructures()
-    - checkStaticValues()
+    - checkNotCalledFunctions()
+    {static} - kLoadPasses : LoadPass[7]  ' 表即流程
+  }
+
+  struct LoadPass {
+    label : const char*
+    fn : void (EraParseTable::*)()
+    optional : bool   ' 受开关门控（当前仅 7）
+    readOnly : bool   ' 4/5/6(+7)：不改运行行为
   }
 }
 
@@ -85,19 +95,21 @@ EraEngine --> ConstantTable : 装载名表
 ErbLoader ..> AstBuilder : 逐行 build
 ErbLoader --> EraParseTable : loadScript
 EraParseTable *-- VariableTable
+EraParseTable *-- LoadPass : kLoadPasses（表即流程）
 EraParseTable --> ParseDiagnostics : 诊断累积
 EraParseTable ..> ConstantTable : 名表下标
 VariableTable *-- VariableDecl
 EraParseTable --> VariableConfig : 尺寸 / 维数
 
 note bottom of EraParseTable
-  收尾 6 步（markLoadComplete）：
-  1/6 resolveGlobalDeclarations + finalizeLabelIndex
+  收尾由 kLoadPasses[7] 驱动（表即流程，顺序即执行顺序）：
+  1/6 resolveGlobalDeclarationsStep（声明定稿 + 标签索引）
   2/6 finalizeBindings（含 applyVariableTypes）
   3/6 finalizeValidation（表达式 / 常量下标 / 实参）
-  4/6 resolveStaticTargets（CALL / GOTO / TRY*）
-  5/6 checkStructures（IF / FOR / REPEAT 配对）
-  6/6 checkStaticValues（除零 / 负下标 / 尺寸 / 名字表）
-  7（可选）checkNotCalledFunctions
+  4/6 resolveStaticTargets（CALL / GOTO / TRY*）      只读
+  5/6 checkStructures（IF / FOR / REPEAT 配对）        只读
+  6/6 checkStaticValues（除零 / 负下标 / 尺寸 / 名字表）只读
+  7 checkNotCalledFunctions（可选，默认关闭）          只读
+  markLoadComplete 只是「遍历表 + 计时日志 + m_finalized」。
 end note
 @enduml

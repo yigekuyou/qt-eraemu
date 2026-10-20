@@ -25,3 +25,15 @@ build-a[0-9]*
 # ---- 本地文档（不入库）----
 # prd.md：内部设计/需求稿，只留本地，不进版本库（历史里也已清除）
 prd.md
+
+# ---- 本地工具/IDE 状态目录 ----
+# 注意：不要写成 `.*`，那会把 .github/（CI 配置）一起忽略掉
+.goose/
+.qtcreator/
+.claude/
+
+# ---- PlantUML 渲染产物（由 .puml 生成，不入库）----
+# 源文件是 .puml；PNG/SVG 是构建输出：改一次 diagram 就多一份二进制，
+# 体积随历史线性膨胀，且与源码必然不同步。渲染见 docs/uml/README.md
+docs/uml/*.png
+docs/uml/*.svg

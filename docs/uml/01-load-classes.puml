@@ -1,0 +1,103 @@
+@startuml 01-load-classes
+' 无 graphviz(dot) 时用 PlantUML 内置 smetana 布局引擎
+!pragma layout smetana
+' emuera —— 装载期核心类型：CSV → ERB 逐行解析 → EraParseTable → 收尾定型
+' 渲染：plantuml -tpng docs/uml/01-load-classes.puml
+title 装载期核心类图
+
+package "GameProc" {
+  class EraEngine {
+    - m_constantTable : ConstantTable
+    - m_variableStorage : VariableStorage
+    - m_parseTable : EraParseTable
+    + setGameDirectory(dir)
+    + loadAsync(dir)
+    + reload()
+  }
+
+  class EraParseTable {
+    - m_scripts : QHash
+    - m_variables : VariableTable
+    - m_diagnostics : ParseDiagnostics
+    - m_finalized : bool
+    + loadScript(name, lines, isHeaderFile)
+    + expressionAst(expr)
+    + runtimeVariableReference(expr)
+    + markLoadComplete()
+    - resolveGlobalDeclarations()
+    - finalizeLabelIndex()
+    - finalizeBindings()
+    - applyVariableTypes()
+    - finalizeValidation()
+    - resolveStaticTargets()
+    - checkStructures()
+    - checkStaticValues()
+  }
+}
+
+package "Content" {
+  class ErbLoader {
+    + loadFile(path, root) : bool
+    + loadDirectory(dir, depth) : bool
+    + loadDirectoryAsync(dir, depth)
+  }
+
+  class ConstantTable {
+    - m_tables : QHash
+    + loadCsvDirectory(tree, recursive)
+    + indexForVariable(variable, name) : int
+    + count(csvName) : int
+  }
+}
+
+package "GameData" {
+  class VariableTable {
+    + addChecked(decl) : DeclStatus
+    + find(name, function) : VariableDecl*
+    + typeOf(name, function) : OperandType
+    {static} + applyTypes(ast, table, function, paramNames)
+  }
+
+  struct VariableDecl {
+    name / type / scope / function
+    dimension : int
+    lengths : QList
+    isPrivate / isConst / isArg
+  }
+
+  class VariableConfig {
+    + getSize1D(name) : int
+    + getSize2D(name) : QPair
+    + getSize3D(name) : QVector
+    + loadFromCSV(path) : bool
+  }
+
+  class AstBuilder {
+    {static} + build(raw, pos, resolver) : LogicalLine
+    {static} + registerExtensionStatement(name)
+  }
+
+  class ParseDiagnostics
+}
+
+EraEngine *-- EraParseTable
+EraEngine --> ConstantTable : 装载名表
+ErbLoader ..> AstBuilder : 逐行 build
+ErbLoader --> EraParseTable : loadScript
+EraParseTable *-- VariableTable
+EraParseTable --> ParseDiagnostics : 诊断累积
+EraParseTable ..> ConstantTable : 名表下标
+VariableTable *-- VariableDecl
+EraParseTable --> VariableConfig : 尺寸 / 维数
+
+note bottom of EraParseTable
+  收尾 6 步（markLoadComplete）：
+  1/6 resolveGlobalDeclarations + finalizeLabelIndex
+  2/6 finalizeBindings（含 applyVariableTypes）
+  3/6 finalizeValidation（表达式 / 常量下标 / 实参）
+  4/6 resolveStaticTargets（CALL / GOTO / TRY*）
+  5/6 checkStructures（IF / FOR / REPEAT 配对）
+  6/6 checkStaticValues（除零 / 负下标 / 尺寸 / 名字表）
+  7（可选）checkNotCalledFunctions
+end note
+@enduml

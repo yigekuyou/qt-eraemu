@@ -1,0 +1,124 @@
+@startuml 03-expression-classes
+' 无 graphviz(dot) 时用 PlantUML 内置 smetana 布局引擎
+!pragma layout smetana
+' emuera —— 表达式 AST / 变量访问描述符 / 求值器
+' 渲染：plantuml -tpng docs/uml/03-expression-classes.puml
+title 表达式 AST 与变量访问描述符
+
+  class LogicalLine {
+    kind : LineKind
+    functionName : QString
+    runnerInstruction : RunnerInstruction
+    arguments : QList~Operand~
+    condition : ExpressionNode*
+    assignmentAsts : QList
+    columnDefaults : QList
+    ownerFunction : QString
+    isError : bool
+  }
+
+  struct Operand {
+    raw : QString
+    ast : ExpressionNode*
+    isVariable : bool
+  }
+
+  struct TypedArgument {
+    kind : ArgKind
+    params : QList
+    exprs : QList
+    typeOk : bool
+  }
+
+  abstract class ExpressionNode {
+    + kind() : NodeKind
+    + valueType() : OperandType
+  }
+
+  class LiteralNode
+  class BinaryOpNode
+  class UnaryOpNode
+  class FunctionNode
+  class IfNode
+  class StrFormNode
+
+  class VariableNode {
+    name : QString
+    dimension : int
+    lengths : QList
+    accessKind : AccessKind
+    accessKey : QString
+    accessScopeKey : QString
+  }
+
+  enum AccessKind {
+    Dynamic
+    GlobalInt1 / 2 / 3
+    GlobalStr1 / 2 / 3
+    LocalSlot / ArgSlot
+    LocalStr / ArgStr
+  }
+
+  class ExpressionEvaluator {
+    + evaluate(node, storage, gameBase) : QVariant
+    + evaluateInt(node, storage, out) : bool
+    + resolveIndices(node, storage, gameBase) : QList
+    - evaluateVariable(...) : QVariant
+    - assignVariable(...) : bool
+    - resolveIndex(node, index, storage, gameBase) : qint64
+  }
+
+  class VariableStorage {
+    - m_globalInt1D / 2D / 3D : QHash
+    - m_localIntVars / m_argIntVars : QList
+    - m_systemIntVars / m_systemStrVars : QHash
+    - m_privateName / m_aliases / m_references
+    - m_privateScopeName : QString
+    + setPrivateScope(function, names)
+    + privateScopeName() : QString
+    + getGlobalInt1DRaw(key, x) / setGlobalInt1DRaw(key, x, v)
+    + getStringSlotRaw(key, indices) : FlatStringValue
+    + getLocalInt / getArgInt / setLocalInt / setArgInt
+  }
+
+class GameBaseData
+
+LogicalLine *-- Operand
+LogicalLine *-- TypedArgument
+LogicalLine --> ExpressionNode : condition / assignmentAsts
+Operand --> ExpressionNode
+TypedArgument --> Operand
+
+ExpressionNode <|-- LiteralNode
+ExpressionNode <|-- VariableNode
+ExpressionNode <|-- BinaryOpNode
+ExpressionNode <|-- UnaryOpNode
+ExpressionNode <|-- FunctionNode
+ExpressionNode <|-- IfNode
+ExpressionNode <|-- StrFormNode
+
+VariableNode ..> AccessKind : 装载期定型
+ExpressionEvaluator ..> VariableNode : 读 accessKind 分派
+ExpressionEvaluator --> VariableStorage
+ExpressionEvaluator --> GameBaseData
+ExpressionEvaluator ..> LogicalLine : 执行时求值
+
+legend bottom
+  位置：LogicalLine / Operand / TypedArgument / 各 Node —— GameData/ast/
+  ExpressionEvaluator —— GameData/ast/expression_evaluator
+  VariableStorage / GameBaseData —— GameData/Variable/
+endlegend
+
+note right of VariableNode
+  accessKey：复合键 = 函数名 + 0x1F + 名字
+  （函数私有声明）；其余为裸键
+  accessScopeKey：描述符生效的私有作用域
+end note
+
+note bottom of ExpressionEvaluator
+  两道守卫（快路径前）
+  * 作用域不符→Dynamic
+  * 下标数不符→旧路
+  * 私有键宽松 1 维读
+end note
+@enduml

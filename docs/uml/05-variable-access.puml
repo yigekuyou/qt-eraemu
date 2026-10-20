@@ -1,0 +1,58 @@
+@startuml 05-variable-access
+' 无 graphviz(dot) 时用 PlantUML 内置 smetana 布局引擎
+!pragma layout smetana
+' 竖直排列 if/elseif，避免横向漂移（旧版本忽略此行也能渲染）
+!pragma useVerticalIf on
+' emuera —— 运行期变量访问（装载期分词 + 两道守卫 + 旧路回退）
+' 渲染：plantuml -tpng docs/uml/05-variable-access.puml
+title 运行期变量访问流程（当前实现）
+
+start
+:stepOnce() 取当前行;
+:setPrivateScope(行.ownerFunction)
+私有名在存储层重映射为 函数名 + 0x1F + 名字;
+:求值 VariableNode;
+if (privateScopeName() != accessScopeKey ?) then (是)
+  :Dynamic
+  纯名字查找：
+  GETVAR / 装载期校验 / 调试;
+elseif (kind == AccessKind::Dynamic ?) then (是)
+  :旧路：按名完整解析
+  形参 / 系统槽 / 常量 / 角色 / 伪变量;
+elseif (裸键（无 0x1F）且 下标数 != kind 维数 ?) then (是)
+  :回退旧路（分词前行为）
+  旧路对全局名 throw:
+  Missing variable parameters ...;
+else (否)
+  partition "快路径：装载期分词，零名字解析" {
+    if (kind == GlobalInt1 / 2 / 3 ?) then (是)
+      :getGlobalInt*DRaw(accessKey, 索引...)
+      下标逐次求值（BAG:(-1) 副作用保持）;
+    elseif (kind == GlobalStr1 / 2 / 3 ?) then (是)
+      :getStringSlotRaw(accessKey, 索引...)
+      FlatStringValue 保留 markup 分片;
+    elseif (kind == LocalSlot 或 ArgSlot ?) then (是)
+      :getLocalInt / getArgInt
+      setLocalInt / setArgInt（槽位）;
+    else (否)
+      :getStringSlotRaw(LOCALS / ARGS, 索引)
+      LocalStr / ArgStr;
+    endif
+  }
+endif
+:返回 QVariant（读）
+assignVariable 写回：旧路本宽容，无维数守卫;
+stop
+
+legend right
+  私有复合键（函数局部声明）在旧路中经
+  resolvedStorageName 重映射（aliased），
+  维数检查恒被跳过、按 1 维宽松读 ——
+  快路径对复合键保持同样的宽松语义。
+
+  FOR / NEXT / BREAK 计数器同款分派
+  （readIntVarAccess / writeIntVarAccess）；
+  writeLoopCounter 语义 = 固定下标上写「循环值」，
+  值不是下标。
+endlegend
+@enduml

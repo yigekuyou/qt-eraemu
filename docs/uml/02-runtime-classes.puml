@@ -1,0 +1,73 @@
+@startuml 02-runtime-classes
+' 无 graphviz(dot) 时用 PlantUML 内置 smetana 布局引擎
+!pragma layout smetana
+' emuera —— 运行期执行核心：ExecutionEngine 装配，ScriptRunner 单步状态机
+' 渲染：plantuml -tpng docs/uml/02-runtime-classes.puml
+title 运行期执行核心类图
+
+package "GameProc" {
+  class EraEngine {
+    - m_executionEngine : ExecutionEngine
+    - m_parseTable : EraParseTable
+    + loadAsync(dir)
+    + reload()
+  }
+
+  class ExecutionEngine {
+    - m_erbLoader : ErbLoader
+    - m_parseTable : EraParseTable
+    + loadScripts(dir) : bool
+    + executeLogicalLine(line)
+    + writeLhs(ref, value)
+    + getErbLoader() : ErbLoader
+  }
+
+  class ScriptRunner {
+    - m_table : EraParseTable
+    - m_storage : VariableStorage
+    - m_loops : QList~LoopFrame~
+    + runToCompletion() : ExecState
+    - stepOnce() : bool
+    - readIntVarAccess(node, indices) : qint64
+    - writeIntVarAccess(node, indices, value)
+    - writeLoopCounter(counter, value)
+  }
+
+  class ProcessState {
+    + SystemStateCode 状态机
+    + 当前函数 / 返回值
+    + 运行上下文
+  }
+
+  struct LoopFrame {
+    kind : Kind
+    startLine / endLine / depth : int
+    script : QString
+    counter : Operand
+    value / end / step : qint64
+  }
+
+  class ExtensionRegistry
+}
+
+EraEngine *-- ExecutionEngine
+EraEngine --> EraParseTable
+ExecutionEngine --> ScriptRunner
+ExecutionEngine --> ExtensionRegistry : 扩展语句
+ScriptRunner *-- LoopFrame
+ScriptRunner --> ProcessState : 状态迁移
+ScriptRunner --> EraParseTable : 取已分词的行
+ScriptRunner --> VariableStorage
+
+note right of ScriptRunner
+  循环变量写入语义：
+  writeLoopCounter = 在计数器自身的固定下标上
+  写入「循环值」——值不是下标。
+  （曾有「循环值越界」检查，因此误报，已删除）
+end note
+
+note bottom of ProcessState
+  ExecState / SystemStateCode 由 ProcessState 持有，
+  ScriptRunner::stepOnce 每步读取并推进。
+end note
+@enduml

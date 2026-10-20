@@ -1,0 +1,81 @@
+@startuml 04-load-pipeline
+' 无 graphviz(dot) 环境下用 PlantUML 内置 smetana 布局引擎
+!pragma layout smetana
+' emuera —— 装载流水线（CSV → ERB 解析 → markLoadComplete 1..6(+7) → 诊断）
+' 渲染：plantuml docs/uml/04-load-pipeline.puml
+title 装载流水线（当前实现）
+
+actor User
+participant "EraEngine" as E
+participant "ConfigLoader /\nConstantTable /\nVariableConfig" as CSV
+participant "ErbLoader" as L
+participant "AstBuilder /\n解析器" as AB
+participant "EraParseTable" as T
+participant "VariableTable /\nparamNames" as VT
+participant "VariableStorage" as S
+participant "ParseDiagnostics" as D
+
+User -> E : setGameDirectory(dir) / loadAsync(dir)
+E -> CSV : loadConfigFiles()
+E -> CSV : loadConstantData()（常量名表 / VariableSize.csv / 角色模板）
+E -> T : setConstantTable(&m_constantTable)
+E -> T : setVariableStorage(&m_variableStorage)
+
+loop 每个 ERB 文件（并行 worker）
+  E -> L : loadFile(path, root)
+  L -> AB : build(rawLine, position, resolve)
+  AB -> AB : 识别指令 / 切分实参 / 解析表达式 AST
+  AB --> L : LogicalLine
+  L -> T : loadScript(name, lines, isHeaderFile)
+  T -> VT : 声明预登记（#DIM/#DIMS/#FUNCTION…）
+  T -> VT : 形参名集合（append-only，并行安全：只查不插）
+end
+
+E -> T : markLoadComplete()
+
+group 收尾 1/6 全局声明定稿
+  T -> T : resolveGlobalDeclarations()
+  T -> T : finalizeLabelIndex()（标签 O(1) 索引固化）
+end
+
+group 收尾 2/6 就地定型 finalizeBindings
+  T -> T : 作用域绑定 / 赋值 AST 重建
+  T -> T : applyVariableTypes()
+  T -> AB : parseScopedExpression（带 paramNames）
+  AB -> AB : VariableTable::applyTypes / walkApply
+  AB --> T : 类型 / 维数 / lengths + AccessKind 描述符
+end
+
+group 收尾 3/6 参数校验 finalizeValidation
+  T -> D : validateExpression（维数 / 常量下标 vs lengths / 类型）
+  T -> D : columnDefaults（DT_COLUMN_OPTIONS DEFAULT）也校验
+  T -> D : kArgCheck / kExprParse / kIdentifierScope / kSharpLine
+end
+
+group 收尾 4/6 跳转目标解析 resolveStaticTargets
+  T -> D : kLabelNotFound（CALL / GOTO 常量目标；TRY* 静默）
+end
+
+group 收尾 5/6 结构配对 checkStructures
+  T -> D : kStructure（IF/ENDIF、FOR/NEXT、REPEAT/REND…）
+end
+
+group 收尾 6/6 静态值检查 checkStaticValues
+  T -> D : kStaticValue（Error）字面量除零
+  T -> D : kStaticValue（Warning）负常量下标
+  T -> D : kStaticValue（Warning）系统变量尺寸（VariableConfig 1D/2D/3D）
+  T -> CSV : indexForVariable（字面字符串下标名表校验，kStaticValue Error）
+end
+
+opt 收尾 7（可选，默认关闭）
+  T -> D : kNotCalled（未被调用的函数）
+end
+
+T --> E : scriptsLoaded（m_finalized = true，源码不再编译）
+
+note over T,D
+  诊断统一在收尾阶段产生：跨文件前向引用此刻已可解析，不重复报。
+  严重度语义：Error = 运行到该行必失败（除零 / 表外名字下标 /
+  维数与下标不符）；Warning = 运行期宽容静默（负下标 / 系统尺寸越界）。
+end note
+@enduml

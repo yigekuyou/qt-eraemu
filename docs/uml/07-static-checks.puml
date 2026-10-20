@@ -1,0 +1,20 @@
+@startuml 07-static-checks
+' 无 graphviz(dot) 时用 PlantUML 内置 smetana 布局引擎
+!pragma layout smetana
+' emuera —— checkStaticValues 检查目录（收尾 6/6）：不需要运行游戏即可判定的边界条件
+' 渲染：plantuml -tpng docs/uml/07-static-checks.puml
+title 装载期静态检查目录（checkStaticValues，收尾 6/6）
+
+rectangle "checkStaticValues 检查目录" as Checks {
+  card "C1 字面量除零\nX / 0、X % 0\nError：C# CodeEE「0 による除算」" as C1
+  card "C2 负常量下标\nX:(-1)（UnaryOp(MINUS,Literal)）\nWarning：读 0 / 写忽略（静默）\n只补 validateExpression 看不到的位置" as C2
+  card "C3 系统变量尺寸\nITEM:5000 / CFLAG:0:20000\nWarning：系统槽硬上限，越界写静默丢弃\n角色号位不判；*NAME 只查负数" as C3
+  card "C4 字面字符串下标名表\nCFLAG:0:\"名字\" 查不到 → 必抛\nError：Unknown variable index keyword\n只认字面量；VARSIZE 豁免" as C4
+}
+
+legend bottom
+  已验证口径（真实语料）：
+  * FOR / REPEAT 计数器不做「循环值越界」检查 —— 计数器写的是固定下标上的循环值（值不是下标）
+  * 五语料 dump_warnings 基线 0 / 2 / 6 / 0 / 3 保持不变（零新增误报）
+endlegend
+@enduml

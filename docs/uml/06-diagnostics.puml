@@ -1,0 +1,73 @@
+@startuml 06-diagnostics
+' 无 graphviz(dot) 环境下用 PlantUML 内置 smetana 布局引擎
+!pragma layout smetana
+' emuera —— 装载期诊断模型与「边界条件前移」检查目录
+' 渲染：plantuml docs/uml/06-diagnostics.puml
+title 装载期诊断模型（ParseDiagnostics，GameData/ast/parse_diagnostic.h）
+
+package "GameData/ast" {
+
+  enum DiagSeverity {
+    Info
+    Warning
+    Error
+  }
+
+  struct ParseDiagnostic {
+    severity : DiagSeverity
+    code : QString
+    position : QString
+    message : QString
+    snippet : QString
+    filename : QString
+    line : int
+    column : int
+    length : int
+  }
+
+  class ParseDiagnostics {
+    + add(severity, code, position, message)
+    + addText(...)
+    + all() : QList
+    + texts() : QStringList
+    + count()
+  }
+
+  class "DiagCode（稳定字符串码）" as DiagCode {
+    kPreprocess : 预处理 / 编码
+    kUnknownInstruction : 未识别指令
+    kNumericConversion : 数字转换
+    kExprParse : 表达式语法
+    kArgCheck : 实参类型 / 数量 / 维数 / 常量下标
+    kSharpLine : # 行位置
+    kDeclError : 声明错误
+    kLabelNotFound : 跳转/调用目标缺失
+    kStructure : 结构配对
+    kNotCalled : 未被调用函数
+    kStaticValue : 可静态判定的运行期错误
+    kIdentifierScope : 跨函数私有名引用
+    kEncoding : 编码诊断
+  }
+}
+
+ParseDiagnostics o-- ParseDiagnostic
+ParseDiagnostic --> DiagSeverity
+ParseDiagnostic --> DiagCode
+
+note bottom of DiagCode
+  产生位置（收尾步骤）：
+  * kSharpLine / kDeclError / kUnknownInstruction —— 装载期逐行（loadScript/AstBuilder）
+  * kArgCheck / kExprParse / kIdentifierScope —— 收尾 3/6 finalizeValidation
+  * kLabelNotFound —— 收尾 4/6 resolveStaticTargets
+  * kStructure —— 收尾 5/6 checkStructures
+  * kStaticValue —— 收尾 6/6 checkStaticValues
+  * kNotCalled —— 收尾 7（可选）
+end note
+
+note right of ParseDiagnostics
+  Error 与「行失效」的区分：
+  * validateExpression 类错误会置 line.isError（该行不执行）
+  * checkStaticValues 只出诊断、不改行为
+    （运行期对这些形态一律宽容）
+end note
+@enduml

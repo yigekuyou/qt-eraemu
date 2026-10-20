@@ -30,6 +30,8 @@
 #include "constant_table.h"
 #include "user_defined_variable_data.h"
 #include <exception>
+#include <limits>
+#include <optional>
 #include "ast/expression_ast.h"
 #include "ast/argument_parser.h"
 #include "ast/expression_evaluator.h"
@@ -2178,33 +2180,199 @@ void EraParseTable::checkStructures() {
 }
 
 // ---------------------------------------------------------------------------
-// 收尾步骤 6：可静态判定的运行期错误（字面量除零）
+// 收尾步骤 6：可静态判定的运行期错误（字面量除零 + 数组边界条件）
 //
-// `X / 0`、`X % 0` 在 C# 里是运行期必抛的 CodeEE「0による除算が行なわれました」；
+// 【除零】`X / 0`、`X % 0` 在 C# 里是运行期必抛的 CodeEE「0による除算が行なわれました」；
 // 除数为**字面量 0** 时「运行必炸」是确定事件，因此提前到装载期报出来。
 // 除数不是字面量（`X / Y`）时不判定 —— 那要运行期才知道。
 //
-// 数组越界**不在这里**：validateExpression 已有更精确的「变量 X 常量下标越界」
-//（它按维度/角色变量的下标语义算 dim，见 expression_ast.cpp），重复报只会变噪声。
+// 【数组边界】「变量 X 常量下标越界」的主战场在 validateExpression（步骤 3，按
+// 声明 lengths 判，见 expression_ast.cpp）；这里只补它**看不到尺寸**的盲区：
+//   · 系统变量/角色系统变量（CFLAG/ITEM/DA/TA…）：walkApply 把 lengths 清空，
+//     步骤 3 无从判 —— 尺寸来自 VariableConfig（VariableSize.csv + 默认表）。
+//     运行期系统槽是**硬上限**（越界写被静默丢弃，读为 0）—— 今天不跑游戏
+//     根本发现不了，正是「希望不需要运行期间才能被检测」的一类。
+//   · 负常量下标：任何数组的下标下界恒为 0（运行期读 0/写忽略），lengths
+//     未知的位置（未声明名/REF/无尺寸声明）也一律可判。
+//     注意 `-1` 不是折叠字面量而是 UnaryOp(MINUS,Literal)（解析器只折叠
+//     #DIM CONST 名）—— 连 validateExpression 都看不见这个形态，负下标必须
+//     在这里单独收集。
+//   （FOR/REPEAT 计数器**不做**循环值检查：计数器写的是「固定下标上的循环值」
+//     —— value 是值不是下标（writeLoopCounter：resolveIndices(计数器自身下标) +
+//     写 value）。固定下标越界已由上面的常量下标检查覆盖（计数器操作数也在
+//     line.arguments 里，会被 walk 到）。第一版按「循环值当下标」实现，
+//     FL3.8 的标量计数器 `FOR L_CNT, 0, N` 全是误报 —— 按运行期真实模型删掉。）
+// 与 C# 口径一致（ConstantData.cs 对常量下标就是 ParserMediator.Warn + 运行期
+// OoRArray/OoRVarArg CodeEE）。本引擎运行期对这些一律宽容（自动扩容/静默忽略），
+// 故只报 **Warning**、不禁行 —— 诊断归诊断，行为零变化。
+// 去重口径：声明数组 lengths 已知的位置步骤 3 已按 Error 处置（行已失效），
+// 这里不再重复报；*NAME 名表变量（ABLNAME…）的真实尺寸 = CSV 行数，与
+// VariableSize 同名条目无关，只查负数。
 // ---------------------------------------------------------------------------
 void EraParseTable::checkStaticValues() {
+    // 尺寸来源：VariableConfig（VariableSize.csv 覆盖 + 构造即就绪的默认表）。
+    const VariableConfig* config =
+        m_variableStorage ? &m_variableStorage->variableConfig() : nullptr;
+
+    // *NAME 名表变量（含 CDFLAGNAME1/2）：尺寸 = 对应 CSV 的行数，不是 VariableSize。
+    const auto isNameTable = [](const QString& upper) {
+        return upper.endsWith(QLatin1String("NAME"))
+            || upper == QLatin1String("CDFLAGNAME1") || upper == QLatin1String("CDFLAGNAME2");
+    };
+
+    // 系统/角色变量的**元素**每维尺寸；空 = 未知（不判上界）。角色号位不在内。
+    const auto systemElementSizes = [&](const QString& upper, int elementDim,
+                                        bool characterData) {
+        QVector<int> sizes;
+        if (!config || isNameTable(upper) || elementDim <= 0) return sizes;
+        if (characterData || elementDim == 1) {
+            // 角色变量的 VariableSize 条目就是每角色的元素数（对齐运行期
+            // execution_engine 的 arraySize 口径）
+            sizes.append(config->getSize1D(upper));
+        } else if (elementDim == 2) {
+            const QPair<int, int> s2 = config->getSize2D(upper);
+            sizes.append(s2.first);
+            sizes.append(s2.second);
+        } else {
+            sizes = config->getSize3D(upper);
+        }
+        return sizes;
+    };
+
+    // 常量值识别：字面量，或「负字面量」—— `-1` **不是**折叠字面量而是
+    // UnaryOp(MINUS, Literal)（解析器只折叠 #DIM CONST 名，负号不走折叠），
+    // 连 validateExpression 的既有检查也只认纯字面量 —— 负形态正是它的盲区。
+    // negated = 负形态：该位置的「步骤 3 已报过」结论不成立（它根本看不见）。
+    const auto constValueOf = [](const QSharedPointer<ExpressionNode>& ast,
+                                 bool* negated = nullptr) -> std::optional<qint64> {
+        if (negated) *negated = false;
+        if (!ast) return std::nullopt;
+        if (ast->kind() == NodeKind::Literal) {
+            const auto* l = static_cast<const LiteralNode*>(ast.data());
+            if (l->isString()) return std::nullopt;
+            return l->intValue();
+        }
+        if (ast->kind() == NodeKind::UnaryOp) {
+            const auto& u = static_cast<const UnaryOpNode&>(*ast);
+            if (u.op().type() != TokenType::MINUS || u.isPostfix() || !u.operand()
+                || u.operand()->kind() != NodeKind::Literal)
+                return std::nullopt;
+            const auto* l = static_cast<const LiteralNode*>(u.operand().data());
+            if (l->isString()) return std::nullopt;
+            // -INT64_MIN 的取反是 UB：这种字面量本身就已被数字诊断拦过，不再判
+            if (l->intValue() == std::numeric_limits<qint64>::min()) return std::nullopt;
+            if (negated) *negated = true;
+            return -l->intValue();
+        }
+        return std::nullopt;
+    };
+
     for (auto script = m_scripts.constBegin(); script != m_scripts.constEnd(); ++script) {
         const ScriptData& data = script.value();
         for (const LogicalLine& line : data.lines) {
             const auto visit = [&](ExpressionNode& node) {
-                if (node.kind() != NodeKind::BinaryOp) return;
-                auto& op = static_cast<BinaryOpNode&>(node);
-                const TokenType t = op.op().type();
-                if (t != TokenType::DIVIDE && t != TokenType::MODULO) return;
-                const auto& right = op.right();
-                if (!right || right->kind() != NodeKind::Literal) return;
-                const auto& lit = static_cast<const LiteralNode&>(*right);
-                if (lit.valueType() != OperandType::Int || lit.intValue() != 0) return;
-                m_diagnostics.add(DiagSeverity::Error, DiagCode::kStaticValue,
-                    line.position.filename, line.position.lineNumber,
-                    line.position.column, 0,
-                    QCoreApplication::translate("ParseDiagnostics",
-                        "0 による除算が行われました（运行到该行会失败）"));
+                if (node.kind() == NodeKind::BinaryOp) {
+                    auto& op = static_cast<BinaryOpNode&>(node);
+                    const TokenType t = op.op().type();
+                    if (t != TokenType::DIVIDE && t != TokenType::MODULO) return;
+                    const auto& right = op.right();
+                    if (!right || right->kind() != NodeKind::Literal) return;
+                    const auto& lit = static_cast<const LiteralNode&>(*right);
+                    if (lit.valueType() != OperandType::Int || lit.intValue() != 0) return;
+                    m_diagnostics.add(DiagSeverity::Error, DiagCode::kStaticValue,
+                        line.position.filename, line.position.lineNumber,
+                        line.position.column, 0,
+                        QCoreApplication::translate("ParseDiagnostics",
+                            "0 による除算が行われました（运行到该行会失败）"));
+                    return;
+                }
+                // ---- 常量下标边界（步骤 3 看不到尺寸的名字才判）----
+                if (node.kind() != NodeKind::Variable || line.isError) return;
+                const auto& var = static_cast<const VariableNode&>(node);
+                const int n = var.indices().size();
+                if (n <= 0 || n > 3) return;
+                int constPos[3] = {0, 0, 0};
+                qint64 constVal[3] = {0, 0, 0};
+                bool constNeg[3] = {false, false, false};
+                int constCount = 0;
+                for (int i = 0; i < n; ++i) {
+                    bool negated = false;
+                    const auto v = constValueOf(var.indices().at(i), &negated);
+                    if (!v) continue;
+                    constPos[constCount] = i;
+                    constVal[constCount] = *v;
+                    constNeg[constCount] = negated;
+                    ++constCount;
+                }
+                if (!constCount) return;
+
+                const QString upper = var.name().toUpper();
+                const sysvar::SystemVariableMetadata meta =
+                    sysvar::systemVariableMetadataDyn(var.name().toStdString());
+                // bounds[p]：位置 p 的静态上界（-1 = 未知）。
+                // veCovered[p]：纯字面量在该位置时步骤 3 已按 lengths 报过（不重复）。
+                // charaIdPos[p]：角色号位（运行期角色表决定，装载期不判）。
+                qint64 bounds[3] = {-1, -1, -1};
+                bool veCovered[3] = {false, false, false};
+                bool charaIdPos[3] = {false, false, false};
+
+                // 系统变量（含 CFLAG/TALENT/…、DA/TA/…、LOCAL/ARG 槽位）：走系统/
+                // 槽位通道，#DIM 同名声明遮蔽不了（与 computeVariableAccess 同口径）；
+                // lengths 在 walkApply 被清空，正是步骤 3 的盲区。
+                if (sysvar::systemStorageNames().contains(upper)
+                    || meta.type != OperandType::Unknown) {
+                    const int full = meta.dimension + (meta.characterData ? 1 : 0);
+                    if (n != full) return;   // 维数不符：步骤 3 已按 Error 处置
+                    const QVector<int> sizes =
+                        systemElementSizes(upper, meta.dimension, meta.characterData);
+                    for (int p = 0; p < n; ++p) {
+                        if (meta.characterData && p == 0) {
+                            charaIdPos[p] = true;   // 角色号位：运行期角色表决定
+                            continue;
+                        }
+                        const int dim = meta.characterData ? p - 1 : p;
+                        if (dim >= 0 && dim < sizes.size() && sizes.at(dim) > 0)
+                            bounds[p] = sizes.at(dim);
+                    }
+                } else if (const VariableDecl* d =
+                               m_variables.find(var.name(), line.ownerFunction)) {
+                    // 声明数组：纯字面量 + lengths 已知的位置步骤 3 已报（不重复）；
+                    // lengths 缺失（标量 #DIM X / REF）时只剩这里补查。角色号位不判。
+                    const int full = d->dimension + (d->isCharaData ? 1 : 0);
+                    if (n != full) return;
+                    for (int p = 0; p < n; ++p) {
+                        if (d->isCharaData && p == 0) {
+                            charaIdPos[p] = true;
+                            continue;
+                        }
+                        const int dim = d->isCharaData ? p - 1 : p;
+                        if (dim >= 0 && dim < d->lengths.size() && d->lengths.at(dim) > 0)
+                            veCovered[p] = true;   // 步骤 3 已按 lengths 报过
+                    }
+                }
+                // 其余（未声明裸名）：自动扩容无上界 —— 只剩负数可判。
+
+                for (int c = 0; c < constCount; ++c) {
+                    const int p = constPos[c];
+                    const qint64 v = constVal[c];
+                    if (charaIdPos[p]) continue;
+                    if (veCovered[p] && !constNeg[c]) continue;
+                    if (v < 0) {
+                        m_diagnostics.add(DiagSeverity::Warning, DiagCode::kStaticValue,
+                            line.position.filename, line.position.lineNumber,
+                            line.position.column, 0,
+                            QCoreApplication::translate("ParseDiagnostics",
+                                "变量 %1 的常量下标 %2 为负（下标下界恒为 0；运行期该访问静默失败）")
+                                .arg(var.name()).arg(v));
+                    } else if (bounds[p] >= 0 && v >= bounds[p]) {
+                        m_diagnostics.add(DiagSeverity::Warning, DiagCode::kStaticValue,
+                            line.position.filename, line.position.lineNumber,
+                            line.position.column, 0,
+                            QCoreApplication::translate("ParseDiagnostics",
+                                "变量 %1 的常量下标 %2 越过其尺寸 %3（运行期读取为 0、写入被忽略）")
+                                .arg(var.name()).arg(v).arg(bounds[p]));
+                    }
+                }
             };
             for (const Operand& op : line.arguments) {
                 if (op.ast) walkExpression(*op.ast, visit);
@@ -2725,6 +2893,9 @@ void EraParseTable::finalizeValidation() {
                 }
             }
             validate(line.condition);
+            // DT_COLUMN_OPTIONS 的 DEFAULT 表达式（columnDefaults）是运行期求值的
+            // 普通表达式，此前从不校验 —— 类型/边界问题同样应当装载期就报出来。
+            for (const auto& ast : line.columnDefaults) validate(ast);
             const bool skipTargetOperand = firstArgumentIsTargetName(line.runnerInstruction);
             for (int operandIndex = 0; operandIndex < line.arguments.size(); ++operandIndex) {
                 const auto& operand = line.arguments.at(operandIndex);

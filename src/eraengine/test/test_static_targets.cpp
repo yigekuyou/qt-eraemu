@@ -37,6 +37,7 @@
 #include "ast/parse_diagnostic.h"
 #include "era_parse_table.h"
 #include "process_state.h"
+#include "variable_storage.h"
 
 static int g_failures = 0;
 
@@ -49,6 +50,25 @@ static void check(bool cond, const QString& what) {
 static ParseDiagnostics loadScripts(const QList<QPair<QString, QString>>& scripts) {
     ProcessState state;
     EraParseTable table(&state);
+    for (const auto& script : scripts) {
+        const AstResolver resolve = [&table](const QString& e) { return table.expressionAst(e); };
+        const QStringList source = script.second.split(QLatin1Char('\n'));
+        QList<LogicalLine> lines;
+        for (int i = 0; i < source.size(); ++i)
+            lines.append(AstBuilder::build(source.at(i), ScriptPosition(script.first, i + 1, 1), resolve));
+        table.loadScript(script.first, lines);
+    }
+    table.markLoadComplete();
+    return table.parseDiagnostics();
+}
+
+// 同 loadScripts，但接上 VariableStorage —— 数组边界检查要查 VariableSize
+// 配置（默认表随 storage 构造就绪）。
+static ParseDiagnostics loadScriptsWithStorage(
+        const QList<QPair<QString, QString>>& scripts, VariableStorage* storage) {
+    ProcessState state;
+    EraParseTable table(&state);
+    table.setVariableStorage(storage);
     for (const auto& script : scripts) {
         const AstResolver resolve = [&table](const QString& e) { return table.expressionAst(e); };
         const QStringList source = script.second.split(QLatin1Char('\n'));
@@ -360,6 +380,97 @@ int main(int argc, char* argv[]) {
         check(!hits.isEmpty() && hits.first().line == 5,
               QString("诊断落在使用行（得到 %1，期望 5）")
                   .arg(hits.isEmpty() ? -1 : hits.first().line));
+    }
+
+    // ----------------------------------------------------------------------
+    // 数组边界条件静态检查（第七轮：把「运行到才知道」的静默失败前移到装载期）。
+    // 运行期对这些形态一律宽容（读 0 / 写忽略），不跑游戏完全发现不了；
+    // C# 侧 ConstantData.cs 对常量下标是 ParserMediator.Warn + 运行期 CodeEE。
+    // ----------------------------------------------------------------------
+    qDebug() << "\n11) 数组边界：负常量下标（-1 是 UnaryOp(MINUS,Literal)，非折叠字面量）";
+    {
+        VariableStorage storage;
+        const ParseDiagnostics d = loadScriptsWithStorage({
+            {QStringLiteral("a.ERB"), QStringLiteral(
+                "@MAIN\n"                     // 1
+                "PRINTV UNDECL_BARE:(-1)\n"   // 2 -> 警告（未声明名；X:-1 整体解析失败另报）
+                "PRINTV ITEM:(-1)\n"          // 3 -> 警告（系统 1D）
+                "PRINTV CFLAG:0:(-1)\n"       // 4 -> 警告（角色系统变量元素位）
+                "PRINTV UNDECL_OK:0\n"        // 5 界内不报
+                "PRINTV ITEM:100\n")}},        // 6 界内不报
+            &storage);
+        const auto hits = withCode(d, DiagCode::kStaticValue);
+        check(hits.size() == 3, QString("负下标 -> 3 条警告（得到 %1）").arg(hits.size()));
+        check(hits.size() == 3 && hits.at(0).line == 2 && hits.at(1).line == 3
+                  && hits.at(2).line == 4,
+              "定位到使用行（2/3/4）");
+        bool allWarn = true;
+        for (const auto& h : hits) allWarn = allWarn && h.severity == DiagSeverity::Warning;
+        check(allWarn, "严重度全为 warning（只诊断，不禁行）");
+    }
+
+    qDebug() << "\n12) 数组边界：系统变量尺寸（VariableSize 默认表；*NAME 名表除外）";
+    {
+        VariableStorage storage;
+        const ParseDiagnostics d = loadScriptsWithStorage({
+            {QStringLiteral("a.ERB"), QStringLiteral(
+                "@MAIN\n"                    // 1
+                "PRINTV ITEM:5000\n"         // 2 -> 警告（ITEM 尺寸 1000）
+                "PRINTV FLAG:20000\n"        // 3 -> 警告（FLAG 尺寸 10000）
+                "PRINTV CFLAG:0:20000\n"     // 4 -> 警告（CFLAG 元素 10000）
+                "PRINTFORM %STR:30000%\n"    // 5 -> 警告（STR 尺寸 20000）
+                "PRINTFORM %ABLNAME:500%\n"  // 6 名表变量：真实尺寸=CSV 行数，不判上界
+                "PRINTV ITEM:999\n"          // 7 界内不报
+                "PRINTV A:0\n")}},           // 8 界内不报
+            &storage);
+        const auto hits = withCode(d, DiagCode::kStaticValue);
+        check(hits.size() == 4, QString("系统尺寸越界 -> 4 条警告（得到 %1）").arg(hits.size()));
+        check(hits.size() == 4 && hits.at(0).line == 2 && hits.at(1).line == 3
+                  && hits.at(2).line == 4 && hits.at(3).line == 5,
+              "定位到使用行（2/3/4/5）");
+    }
+
+    qDebug() << "\n13) DT_COLUMN_OPTIONS 的 DEFAULT 表达式纳入装载期校验";
+    {
+        AstBuilder::registerExtensionStatement(QStringLiteral("DT_COLUMN_OPTIONS"));
+        const ParseDiagnostics d = loadScripts({
+            {QStringLiteral("a.ERB"), QStringLiteral(
+                "@MAIN\n"                                            // 1
+                "#DIM A2, 3, 3\n"                                    // 2
+                "DT_COLUMN_OPTIONS \"T\", \"C\", DEFAULT A2:1\n")},  // 3
+        });
+        // DEFAULT 表达式是运行期逐行求值的普通表达式：维数错误此前完全无诊断
+        const auto hits = withCode(d, DiagCode::kArgCheck);
+        check(hits.size() == 1,
+              QString("DEFAULT 表达式维数错误 -> 1 条（得到 %1）").arg(hits.size()));
+        check(!hits.isEmpty() && hits.first().line == 3, "定位到 DT_COLUMN_OPTIONS 行");
+    }
+
+    qDebug() << "\n14) FOR/REPEAT 计数器：循环值是「值」不是「下标」（FL3.8 标量计数器回归）";
+    {
+        // writeLoopCounter 语义：resolveIndices(计数器自身的固定下标) + 写循环值 ——
+        // `FOR L_CNT, 0, 10` 写的是 L_CNT:0 = 0..9，不存在「越过尺寸 1」。
+        // 第一版把循环值当成了下标，FL3.8 六处标量计数器全部误报 —— 此节锁死。
+        // 计数器**自身的**常量下标越界仍要报（走上面的常量下标检查，计数器
+        // 操作数也在 line.arguments 里）。
+        VariableStorage storage;
+        const ParseDiagnostics d = loadScriptsWithStorage({
+            {QStringLiteral("a.ERB"), QStringLiteral(
+                "@MAIN\n"                // 1
+                "#DIM L_CNT\n"           // 2 标量计数器（第一版误报形态）
+                "FOR L_CNT, 0, 10\n"      // 3 -> 不报
+                "NEXT\n"                  // 4
+                "FOR A, 0, 1500\n"        // 5 系统计数器大循环值 -> 不报
+                "NEXT\n"                  // 6
+                "REPEAT 1500\n"           // 7 COUNT 写的是 COUNT:0 -> 不报
+                "REND\n"                  // 8
+                "FOR A:1500, 0, 10\n"     // 9 -> 报：固定下标 1500 越过 A 的尺寸 1000
+                "NEXT\n")}},              // 10
+            &storage);
+        const auto hits = withCode(d, DiagCode::kStaticValue);
+        check(hits.size() == 1,
+              QString("仅计数器自身固定下标越界报 1 条（得到 %1）").arg(hits.size()));
+        check(hits.size() == 1 && hits.first().line == 9, "定位到第 9 行");
     }
 
     qDebug() << "\n=============================";

@@ -674,7 +674,26 @@ QVariant ExpressionEvaluator::evaluateVariable(const VariableNode &node, Variabl
     const VariableNode::AccessKind access =
         (storage->privateScopeName() == node.accessScopeKey)
             ? node.accessKind : VariableNode::AccessKind::Dynamic;
-    switch (access) {
+    // 守卫 2（镜像旧路的维数检查）：旧路只对**非重映射名**（裸键 = 全局声明/
+    // 未声明/槽位名）在「下标个数 != 声明维数」时 throw「Missing variable
+    // parameters or invalid index dimension」；私有名经 resolvedStorageName
+    // 重映射（aliased）恒跳过该检查、按 1 维宽松读。快路径据此分键处理：
+    // 复合键（私有名）保持宽松分派；裸键维数不符 -> 整体回退完整解析（旧路
+    // 行为，含其 throw）。装载期校验已把这类行标 Error 不执行，这里兜住的是
+    // 逃过行校验的直接求值（调试求值 / 装载期常量折叠重入）。
+    VariableNode::AccessKind effectiveAccess = access;
+    if (access != VariableNode::AccessKind::Dynamic
+        && !node.accessKey.contains(QChar(0x1f))) {
+        const int n = node.indices().size();
+        const bool mismatch =
+            (access == VariableNode::AccessKind::GlobalInt2
+             || access == VariableNode::AccessKind::GlobalStr2) ? n != 2
+          : (access == VariableNode::AccessKind::GlobalInt3
+             || access == VariableNode::AccessKind::GlobalStr3) ? n != 3
+          : n > 1;   // 1 维 kind（Int1/Str1/LOCAL/ARG 槽位）只允 0/1 个下标
+        if (mismatch) effectiveAccess = VariableNode::AccessKind::Dynamic;
+    }
+    switch (effectiveAccess) {
     case VariableNode::AccessKind::Dynamic:
         break;   // 旧路
     case VariableNode::AccessKind::GlobalInt1:

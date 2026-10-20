@@ -863,7 +863,8 @@ int main(int argc, char* argv[]) {
             "#DIM VAP1",                               // 2
             "#DIM VAPRIV, 5",                          // 3
             "#DIMS VASPRIV, 2",                        // 4
-            "RETURN",                                   // 5
+            "#DIM VAPRIV2, 2, 2",                      // 5 函数私有 2 维（维数守卫用）
+            "RETURN",                                   // 6
         }));
         table.markLoadComplete();
         // 定型后的 expressionAst 按「当前 PC 行的 ownerFunction」取作用域 ——
@@ -901,6 +902,61 @@ int main(int argc, char* argv[]) {
         check(undecl && undecl->accessKind == VariableNode::AccessKind::GlobalInt1
                   && undecl->accessKey == QStringLiteral("VA_UNDEF"),
               "未声明名 -> GlobalInt1 + 裸键（与运行期裸槽一致）");
+        const auto* priv2 = accessOf("VAPRIV2:1:0", 5);
+        check(priv2 && priv2->accessKind == VariableNode::AccessKind::GlobalInt2
+                  && priv2->accessKey == QStringLiteral("VAFN\x1FVAPRIV2"),
+              "函数私有 2 维数组 -> GlobalInt2 + 复合键");
+
+        // 维数守卫（第七轮，镜像旧路）：旧路只对**非重映射名**（裸键 = 全局声明/
+        // 未声明/槽位）在「下标个数 != 声明维数」时 throw；私有名经重映射
+        // （aliased）恒跳过该检查、按 1 维宽松读。快路径据此分键：
+        //   · 裸键维数不符 -> 回退完整解析（旧路行为，含其 throw）
+        //   · 复合键（私有名）保持宽松（旧路本就宽松）
+        // evaluate() 入口先跑 validateExpression 会把整棵树拦下，测不到守卫；
+        // 真正可达的旁路是 resolveIndices -> resolveIndex -> evaluateNode
+        //（不带预检；FOR/NEXT 计数器、GETVAR 的下标求值都走它）。
+        // 守卫前：`X:(2D_NAME:1)` 的内层名被快路径按 1 维静默读成 0；
+        // 守卫后：回退旧路 -> throw「下标维数错误」与分词前一致。
+        ExpressionEvaluator evaluator;   // 局部求值器：只测 evaluateVariable 语义
+        const auto indexThrows = [&table, &storage, &evaluator](const QString& expr,
+                                                                int pcLine) {
+            table.setPosition(QStringLiteral("va.ERB"), pcLine, false);
+            const auto ast = table.runtimeVariableReference(expr);
+            try {
+                const QList<int> ignored =
+                    evaluator.resolveIndices(*static_cast<const VariableNode*>(ast.data()),
+                                             &storage, nullptr);
+                Q_UNUSED(ignored);
+                return false;
+            } catch (const std::exception&) {
+                return true;
+            }
+        };
+        check(indexThrows(QStringLiteral("ZZZ:(VA_HDR2:1)"), 0),
+              "裸键 2 维名只给 1 个下标（下标表达式内）-> 回退旧路 throw（分词前行为）");
+        check(indexThrows(QStringLiteral("ZZZ:(LOCAL:0:1)"), 0),
+              "槽位名给 2 个下标（下标表达式内）-> 回退旧路 throw（分词前行为）");
+        check(indexThrows(QStringLiteral("ZZZ:(VA_UNDEF:0:1)"), 0),
+              "未声明 1 维名给 2 个下标（下标表达式内）-> 回退旧路 throw（分词前行为）");
+        storage.setPrivateScope(QStringLiteral("VAFN"),
+                                {"VAPRIV", "VASPRIV", "VAPRIV2"});
+        {
+            table.setPosition(QStringLiteral("va.ERB"), 5, false);
+            const auto ast = table.runtimeVariableReference(
+                QStringLiteral("ZZZ:(VAPRIV2:1)"));
+            bool threw = false;
+            QList<int> resolved;
+            try {
+                resolved = evaluator.resolveIndices(*static_cast<const VariableNode*>(ast.data()),
+                                                    &storage, nullptr);
+            } catch (const std::exception&) {
+                threw = true;
+            }
+            check(!threw && resolved == QList<int>{0},
+                  "私有 2 维名只给 1 个下标 -> 宽松 1 维读（旧路 aliased 跳过 throw，快路径保持）");
+        }
+        // 还原共享存储的作用域状态，不影响后续小节
+        storage.setPrivateScope(QStringLiteral("MAIN"), {"BAG"});
     }
 
     // 11) DEBUGPRINT 族：**实参形态**与 PRINT 族同规则（按后缀走 Literal/FormStr/

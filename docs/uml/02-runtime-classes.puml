@@ -16,8 +16,10 @@ package "GameProc" {
   class ExecutionEngine {
     - m_erbLoader : ErbLoader
     - m_parseTable : EraParseTable
+    - m_activeScope : eravar::ScopeId   ' 本节指令的作用域（RAII 设置）
     + loadScripts(dir) : bool
     + executeLogicalLine(line)
+    + executeInstruction(line, scope)
     + writeLhs(ref, value)        ' 转调 VariableStorage::writeIntByName
     + getErbLoader() : ErbLoader
   }
@@ -25,13 +27,14 @@ package "GameProc" {
   class ScriptRunner {
     - m_table : EraParseTable
     - m_storage : VariableStorage
-    - m_loops : QList~LoopFrame~
+    - m_currentScopeId : eravar::ScopeId  ' 只在换函数时更新
+    - m_loops : QList<LoopFrame>
     + runToCompletion() : ExecState
     - stepOnce() : bool
-    - readIntVar(name, indices) : qint64        ' 转调 readIntByName
-    - writeIntVar(name, indices, value)         ' 转调 writeIntByName
-    - readIntVarAccess(node, indices) : qint64  ' 转调 readIntNode（唯一分派）
-    - writeIntVarAccess(node, indices, value)   ' 转调 writeIntNode（唯一分派）
+    - readIntVar(name, indices) : qint64        ' 转调 readIntByName(scope)
+    - writeIntVar(name, indices, value)         ' 转调 writeIntByName(scope)
+    - readIntVarAccess(node, indices) : qint64  ' 转调 readIntNode(scope)
+    - writeIntVarAccess(node, indices, value)   ' 转调 writeIntNode(scope)
     - writeLoopCounter(counter, value)
   }
 
@@ -64,9 +67,15 @@ ScriptRunner --> VariableStorage
 note right of ScriptRunner
   存取只有一条通路（本轮去重后）：
   · 带节点的读写 → ExpressionEvaluator::readIntNode / writeIntNode
-    （作用域守卫 + AccessKind 分派，FOR·NEXT 与表达式共用）
+    （AccessKind 查表分派，FOR·NEXT 与表达式共用）
   · 按名的读写 → VariableStorage::readIntByName / writeIntByName
   ScriptRunner 的同名成员只剩转调，不再各自实现一份 if 链。
+
+  作用域是**参数**：m_currentScopeId 在换函数时
+  （enterCall / ownerFunction 变化）intern 一次，
+  之后每个求值入口显式传下去。
+  求值器不再读 storage 里的「当前作用域」，
+  所以也再没有「作用域守卫」那一层。
 
   循环变量写入语义：
   writeLoopCounter = 在计数器自身的固定下标上

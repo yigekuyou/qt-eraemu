@@ -13,6 +13,7 @@ participant "AstBuilder /\n解析器" as AB
 participant "EraParseTable" as T
 participant "VariableTable /\nparamNames" as VT
 participant "VariableStorage" as S
+participant "parsecheck\n(const ParseIrView)" as PC
 participant "ParseDiagnostics" as D
 participant "LSP / 测试 / CLI" as LSP
 
@@ -39,6 +40,7 @@ note right of T
   · 顺序 = 执行顺序；日志文案也取自表（新增步骤只改表）
   · optional：受开关门控（当前只有 7）
   · readOnly：4/5/6(+7)，不改运行行为，可脱离本函数单独调用
+  · 4/5/6 的 fn 只是 forwarder，算法在 parsecheck 里
 end note
 
 group 1/6 全局声明定稿【改状态】
@@ -51,7 +53,7 @@ group 2/6 就地定型【改状态】
   T -> T : applyVariableTypes() / 赋值 AST 重建
   T -> AB : parseScopedExpression（带 paramNames）
   AB -> AB : VariableTable::applyTypes / walkApply
-  AB --> T : 类型 / 维数 / lengths + AccessKind 描述符
+  AB --> T : 类型 / 维数 / lengths + AccessKind + VariableKey
 end
 
 group 3/6 参数校验【改状态：置 line.isError；出诊断】
@@ -60,24 +62,28 @@ group 3/6 参数校验【改状态：置 line.isError；出诊断】
   T -> D : kArgCheck / kExprParse / kIdentifierScope / kSharpLine
 end
 
-T -> T : m_diagnostics.sortForOutput()（输出定序，一次）
-T -> T : m_finalized = true（不再编译新源码）
-T --> E : scriptsLoaded
-
 group 只读检查步骤（不改变运行行为）
-  T -> D : 4/6 resolveStaticTargets（CALL / GOTO / TRY*）
-  T -> D : 5/6 checkStructures（IF/FOR/REPEAT… 配对）
-  T -> D : 6/6 checkStaticValues（除零 / 负下标 / 尺寸 / 名字表）
+  T -> PC : 4/6 resolveStaticTargets（CALL / GOTO / TRY*）
+  T -> PC : 5/6 checkStructures（IF/FOR/REPEAT… 配对）
+  T -> PC : 6/6 checkStaticValues（除零 / 负下标 / 尺寸 / 名字表）
+  PC -> D : 追加诊断（ParseIrView 只读，诊断是唯一输出）
   opt 7（可选，默认关闭）
     T -> D : checkNotCalledFunctions（未被调用的函数）
   end
 end
 
+T -> T : m_diagnostics.sortForOutput()（输出定序，一次）
+T -> T : m_finalized = true（不再编译新源码）
+T --> E : scriptsLoaded
+
 LSP -> T : resolveStaticTargets() / checkStructures() / checkStaticValues()
 T --> LSP : 诊断（追加到同一 ParseDiagnostics）
+LSP -> PC : 也可绕过 EraParseTable，直接传 ParseIrView
+PC --> LSP : 诊断（test_parse_checks 走的就是这条路）
 note right of LSP
-  只读步骤是 public 的，可单独调用
-  （LSP / 测试 / CLI 按需重跑）。
+  只读步骤可单独调用（LSP / 测试 / CLI 按需重跑）。
+  两条路都通：经 EraParseTable 的 forwarder，
+  或直接用 getter 拼 ParseIrView 调自由函数。
   重复调用会重复产生诊断 ——
   调用方负责去重或先 clearDiagnostics。
 end note

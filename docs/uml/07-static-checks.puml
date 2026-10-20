@@ -3,7 +3,7 @@
 !pragma layout smetana
 ' emuera —— checkStaticValues 检查目录（收尾 6/6）：不需要运行游戏即可判定的边界条件
 ' 渲染：plantuml -tpng docs/uml/07-static-checks.puml
-title 装载期静态检查目录（checkStaticValues，收尾 6/6）
+title 装载期静态检查目录（parsecheck::checkStaticValues，收尾 6/6）
 
 rectangle "checkStaticValues 检查目录" as Checks {
   card "C1 字面量除零\nX / 0、X % 0\nError：C# CodeEE「0 による除算」" as C1
@@ -15,12 +15,15 @@ rectangle "checkStaticValues 检查目录" as Checks {
 legend bottom
   已验证口径（真实语料）：
   * FOR / REPEAT 计数器不做「循环值越界」检查 —— 计数器写的是固定下标上的循环值（值不是下标）
-  * 五语料 dump_warnings 基线 0 / 2 / 6 / 0 / 3 保持不变（零新增误报）
+  * 五语料 dump_warnings 基线 6 / 0 / 0 / 0 / 0（eraTW / eraMegaten / eraTetris / FL3.8 / ecd），
+    本轮四个重构之后逐行不变
 
   契约（本轮显式化）：
   * 本图四类检查全部 ReportOnly（DiagEffect）——运行时一律宽容，
     绝不置 line.isError；C1/C4 虽是 Error，也只是报告
-  * checkStaticValues() 是 public 只读步骤，可脱离 markLoadComplete 单独调用；
-    重复调用会重复产生诊断（调用方去重或先 clearDiagnostics）
+  * 实现已搬出 EraParseTable：parsecheck::checkStaticValues(ParseIrView, ParseDiagnostics)
+    —— 输入全 const，输出只有诊断；可脱离 markLoadComplete 单独调用
+    （test_parse_checks 直接调它，不经过 EraParseTable）
+  * 重复调用会重复产生诊断（调用方去重或先 clearDiagnostics）
 endlegend
 @enduml

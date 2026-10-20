@@ -3,56 +3,52 @@
 !pragma layout smetana
 ' 竖直排列 if/elseif，避免横向漂移（旧版本忽略此行也能渲染）
 !pragma useVerticalIf on
-' emuera —— 运行期变量访问：两条入口 → 唯一分派 → 唯一按名原语
+' emuera —— 运行期变量访问：两条入口 → 一张表 → 唯一按名原语
 ' 渲染：plantuml -tpng docs/uml/05-variable-access.puml
-title 运行期变量访问流程（单一分派）
+title 运行期变量访问流程（一张表，两条入口）
 
 start
-:stepOnce() 取当前行;
-:setPrivateScope(行.ownerFunction)
-私有名在存储层重映射为 函数名 + 0x1F + 名字;
+:stepOnce() 取当前行
+作用域 = intern(line.ownerFunction) → ScopeId（换函数时才更新）;
 :入口二选一：
 · 表达式求值 evaluateVariable / assignVariable
 · FOR·NEXT 计数器 readIntNode / writeIntNode;
 
-partition "唯一分派 ExpressionEvaluator::readIntNode / writeIntNode" {
-  :作用域守卫
-  privateScopeName() != accessScopeKey
-  → 本节点按 Dynamic 处理;
-  if (kind == Dynamic ?) then (是)
-    :唯一按名原语
-    VariableStorage::readIntByName / writeIntByName
-    （形参 → 角色 → ARG/LOCAL → ARGS/LOCALS/RESULTS
-     → 系统变量 → 2D/3D → 1D）;
-  else (否)
-    if (kind == GlobalInt1 / 2 / 3 ?) then (是)
-      :getGlobalInt*DRaw(accessKey, 索引...)
-      下标逐次求值（BAG:(-1) 副作用保持）;
-    elseif (kind == GlobalStr1 / 2 / 3 ?) then (是)
-      :getStringSlotRaw(accessKey, 索引...)
-      FlatStringValue 保留 markup 分片;
-    elseif (kind == LocalSlot 或 ArgSlot ?) then (是)
-      :getLocalInt / getArgInt
-      setLocalInt / setArgInt（槽位）;
+partition "装载期定型，运行期只查表" {
+  :node.accessKind（16 值）
+  node.accessKey { scopeId, nameId };
+  if (usesKey(kind) ?) then (是：键自足)
+    if (裸键 且 下标数 != 声明维数 ?) then (是)
+      :按名原语
+      readIntByName / writeIntByName(名字, 下标, scope)
+      —— 其行为即旧路 throw;
     else (否)
-      :getStringSlotRaw(LOCALS / ARGS, 索引)
-      LocalStr / ArgStr;
+      :槽位直取（不读作用域）
+      GlobalInt*DRaw / getStringSlotRaw
+      getLocalInt / getArgInt;
     endif
+  else (否：Param / Pseudo / System / Chara / Const / Dynamic)
+    :resolver 表逐行匹配
+    20 行，顺序即语义
+    前 4 行是键直取，其余按旧链顺序;
+    :表尾两行是无条件终局
+    （1D 带下标 / 裸名）——
+    最终都落到 readIntByName / writeIntByName;
   endif
 }
 :返回 QVariant（读）／写回完成（写）;
 stop
 
 legend right
-  · 分派只有一份：readIntNode / writeIntNode。
-    FOR·NEXT 与表达式求值共用它，不再各写一份 switch；
-    作用域守卫也只在这一处。
-  · 按名解析只有一份：readIntByName / writeIntByName。
-    ExecutionEngine::writeLhs、ScriptRunner::readIntVar/writeIntVar、
-    求值器旧路尾部全部转调，顺序与大小写规范化（nk）统一。
-  · 表达式求值另有第二道守卫（图内省略）：
-    裸键下标数与 kind 维数不符 → 按名原语（其行为即旧路 throw）。
-  · 私有复合键（0x1F）在按名原语中保持宽松 1 维读。
+  · 一张表：resolverTable 是唯一的分派顺序。
+    键直取（前 4 行）与按名回退都在表里，没有第二套 switch。
+  · 两条入口共用同一个 kind —— 不会再有「FOR 走快路径、
+    表达式走旧路」的行为分叉。
+  · 作用域是**参数**（eravar::ScopeId），只有按名解析读它；
+    键自带作用域，所以没有「作用域守卫」这一层。
+  · 两条例外是 Era 语义，不是实现分叉：
+    - 私有键（scopeId != 0）保持宽松 1 维读
+    - 裸键维数不符 → 按名原语（旧路在那一处的 throw）
   · writeLoopCounter 写「计数器固定下标上的循环值」——值不是下标，
     因此没有「循环值越界」检查。
 endlegend

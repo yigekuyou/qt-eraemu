@@ -9,8 +9,9 @@ package "装载期 GameProc（一次性）" {
   [EraEngine 顶层编排] as Engine
   [ErbLoader] as Loader
   [AstBuilder 表达式解析] as Builder
-  [EraParseTable\n脚本表 + 变量表 + 诊断] as Table
+  [EraParseTable\n脚本表 + 变量表 + 诊断\n位置 / 跳转 / 调用栈] as Table
   [收尾流水线\npass 表 kLoadPasses 7 条] as Finish
+  [parsecheck\n4/5/6 只读检查（自由函数）\n输入 ParseIrView] as Checks
 }
 
 package "内容与配置（Content）" {
@@ -27,7 +28,7 @@ package "运行期 GameProc" {
 package "数据与求值 GameData" {
   [AST（装载期分词的 LogicalLine）] as AST
   [VariableStorage 全部运行时容器\n唯一按名原语 read/writeIntByName] as Storage
-  [ExpressionEvaluator\n读/写/下标求值\n唯一分派 read/writeIntNode] as Eval
+  [ExpressionEvaluator\nresolver 表 20 行 + 唯一分派 read/writeIntNode] as Eval
 }
 
 Loader ..> Builder : 逐行 build
@@ -35,23 +36,33 @@ Loader --> Table : loadScript(name, lines)
 Builder --> AST
 Finish ..> Table : 七条 pass，产出诊断
 Table --> Finish
+Finish ..> Checks : 4/5/6 转调
 Consts --> Table : 名表下标 / 字面名字校验
 Config --> Table : 尺寸 / 维数 / 类型
 Exec --> Runner
 Runner --> AST : 取行（已分词）
 Runner --> Storage : 按名原语（Dynamic 时）
-Runner --> Eval : 表达式求值
+Runner --> Eval : 表达式求值（显式 ScopeId）
 Eval --> Storage
 Table --> AST : 定型
 
 note right of Finish
   装载期一次定型（尽量把名字解析前移）：
   * 类型 / 维数 / 长度
-  * 访问描述符 AccessKind + accessKey + accessScopeKey
+  * 访问描述符 AccessKind（16 值）+ VariableKey{scopeId, nameId}
+    —— 身份是两个 intern id，不是「函数名 + 0x1F + 名字」串
+  * 类别定型：形参 / 伪变量 / 系统槽 / 角色 / 常数 各有 kind
   * 标签索引 / 函数表 / 形参名集合
 
   运行期只剩两条通路，且各只有一份实现：
-  * 描述符直达槽位（readIntNode / writeIntNode）
-  * Dynamic → 按名原语（readIntByName / writeIntByName）
+  * 描述符直达槽位（readIntNode / writeIntNode 查表）
+  * 按名原语（readIntByName / writeIntByName，作用域显式传入）
+
+  Dynamic 只留给「有系统元数据但无系统存储槽」
+  的裸名：真实语料 eraTW 0.5% / FL3.8 0.3%。
+
+  4/5/6 只读检查已搬出 EraParseTable：
+  输入 ParseIrView（全 const），输出只有诊断；
+  1/2/3 会改装载状态，仍在 EraParseTable 里。
 end note
 @enduml

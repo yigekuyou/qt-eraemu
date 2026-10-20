@@ -9,7 +9,7 @@ title 表达式 AST 与变量访问描述符
     kind : LineKind
     functionName : QString
     runnerInstruction : RunnerInstruction
-    arguments : QList~Operand~
+    arguments : QList<Operand>
     condition : ExpressionNode*
     assignmentAsts : QList
     columnDefaults : QList
@@ -47,8 +47,22 @@ title 表达式 AST 与变量访问描述符
     dimension : int
     lengths : QList
     accessKind : AccessKind
-    accessKey : QString
-    accessScopeKey : QString
+    accessKey : VariableKey
+    {static} + usesKey(kind) : bool   ' 哪些 kind 消费 accessKey
+  }
+
+  struct VariableKey {
+    scopeId : quint32   ' 0 = 顶层（无私有作用域）
+    nameId : quint32    ' 名字 intern 表的 id
+    {static} + isPrivate() : bool
+  }
+
+  class NameInterner <<namespace eravar>> {
+    + internName(upper) : quint32   ' 单调、不复用、线程安全
+    + nameOf(id) : const QString&
+    + makePrivateStorageKey(scope, name)
+    ' 全仓库唯一知道 0x1F 的地方：
+    ' 「作用域串 + 0x1F + 名字串」只在这里拼
   }
 
   enum AccessKind {
@@ -57,29 +71,38 @@ title 表达式 AST 与变量访问描述符
     GlobalStr1 / 2 / 3
     LocalSlot / ArgSlot
     LocalStr / ArgStr
+    Param
+    Pseudo
+    System
+    Chara
+    Const
   }
 
   class ExpressionEvaluator {
-    + evaluate(node, storage, gameBase) : QVariant
-    + evaluateInt(node, storage, out) : bool
-    + resolveIndices(node, storage, gameBase) : QList
-    + readIntNode(node, indices) : qint64      ' 唯一整数读分派（含作用域守卫）
-    + writeIntNode(node, indices, value)       ' 唯一整数写分派（含作用域守卫）
-    - evaluateVariable(...) : QVariant
-    - assignVariable(...) : bool
-    - resolveIndex(node, index, storage, gameBase) : qint64
+    + evaluate(node, storage, gameBase, scope) : QVariant
+    + evaluateInt(node, storage, out, scope) : bool
+    + resolveIndices(node, storage, gameBase, scope) : QList
+    + readIntNode(node, indices, scope) : qint64   ' 唯一整数读分派
+    + writeIntNode(node, indices, value, scope)    ' 唯一整数写分派
+    - evaluateVariable(node, storage, gameBase, scope) : QVariant
+    - assignVariable(node, storage, gameBase, value, scope) : bool
+    - resolverTable() : const QList<Resolver>  ' 20 行，顺序即语义
+    - readKeyedInt / readKeyedStr / readKeyedLocalArgInt / readKeyedLocalArgStr
+    - readParameter / readCharaData / readSlotNames / readConst
+    - readGameBase / readLineCount / readRandom / readIntLimits / readRandData
+    - readStringVariable / readLastLoad / readIndexedArray / readSimpleVariable
   }
 
   class VariableStorage {
-    - m_globalInt1D / 2D / 3D : QHash
+    - m_globalInt1D / 2D / 3D : QHash<QString>
     - m_localIntVars / m_argIntVars : QList
     - m_systemIntVars / m_systemStrVars : QHash
-    - m_privateName / m_aliases / m_references
-    - m_privateScopeName : QString
-    + setPrivateScope(function, names)
-    + privateScopeName() : QString
-    + readIntByName(name, indices) : qint64    ' 唯一按名读原语
-    + writeIntByName(name, indices, value)     ' 唯一按名写原语
+    - m_privateNames : QHash   ' scopeId → (名字 → 存储键)
+    - m_references / m_localAliases
+    + setPrivateScope(function, names)          ' 只填充该 scope 的名表
+    + readIntByName(name, indices, scope) : qint64   ' 唯一按名读原语
+    + writeIntByName(name, indices, value, scope)    ' 唯一按名写原语
+    + storageKeyFor(key) : const QString&       ' 唯一 id→存储串入口（记忆化）
     + getGlobalInt1DRaw(key, x) / setGlobalInt1DRaw(key, x, v)
     + getStringSlotRaw(key, indices) : FlatStringValue
     + getLocalInt / getArgInt / setLocalInt / setArgInt
@@ -101,7 +124,9 @@ ExpressionNode <|-- FunctionNode
 ExpressionNode <|-- IfNode
 ExpressionNode <|-- StrFormNode
 
+VariableNode *-- VariableKey
 VariableNode ..> AccessKind : 装载期定型
+VariableKey ..> NameInterner : id ↔ 名字
 ExpressionEvaluator ..> VariableNode : 读 accessKind 分派
 ExpressionEvaluator --> VariableStorage
 ExpressionEvaluator --> GameBaseData
@@ -110,22 +135,36 @@ ExpressionEvaluator ..> LogicalLine : 执行时求值
 legend bottom
   位置：LogicalLine / Operand / TypedArgument / 各 Node —— GameData/ast/
   ExpressionEvaluator —— GameData/ast/expression_evaluator
+  VariableKey / NameInterner —— GameData/ast/name_interner
   VariableStorage / GameBaseData —— GameData/Variable/
 endlegend
 
-note right of VariableNode
-  accessKey：复合键 = 函数名 + 0x1F + 名字
-  （函数私有声明）；其余为裸键
-  accessScopeKey：描述符生效的私有作用域
+note right of VariableKey
+  变量身份是**两个整数**，不是字符串：
+  · 私有名 = { 函数 id, 名字 id }；裸名 = { 0, 名字 id }
+  · 比较是 quint32 相等，不再是 QString 逐字符
+  · 存储层仍用字符串键（存档格式不变），
+    但 id → 串只在 storageKeyFor 一处发生
+end note
+
+note bottom of NameInterner
+  internName 只在装载期写入（并行装载下加锁）；
+  nameOf 运行期只读。名字存 deque，
+  引用在后续登记后仍然有效；id 单调、不复用。
+  上一版把「函数名 + 0x1F + 名字」在两个地方各拼一次
+  （computeVariableAccess 与 setPrivateScope），
+  两处必须逐字节一致 —— 现在是同一个函数。
 end note
 
 note bottom of ExpressionEvaluator
-  单一分派（读写各一条）：
-  * readIntNode / writeIntNode = 作用域守卫 + AccessKind 分派
-    （FOR·NEXT 与表达式求值共用，不再各写一份 switch）
-  * Dynamic 落到 VariableStorage::readIntByName / writeIntByName
-    —— 按名解析的唯一实现
-  * 表达式求值另有第二道守卫：裸键下标数与 kind 维数不符 → 按名原语
-  * 私有键宽松 1 维读
+  分派是**数据**，不是控制流：
+  * resolverTable 一行一块，顺序与旧 if 链逐块对应；
+    kinds 是位掩码，needsKey 标明该行是否消费 accessKey
+  * 定型 kind（Global*/槽位）走前 4 行键直取；
+    Param/Pseudo/System/Chara/Const 各自成行；
+    Dynamic 命中全表（= 旧链原样），表尾两行是终局
+  * 作用域是参数，不是 storage 里的环境状态：
+    只有按名回退读它，键自足的节点不看它
+  * 保留的第二道守卫：裸键下标数与维数不符 → 按名原语
 end note
 @enduml

@@ -89,5 +89,11 @@ note bottom of DiagCode
   * kStructure —— 收尾 5/6 checkStructures
   * kStaticValue —— 收尾 6/6 checkStaticValues
   * kNotCalled —— 收尾 7（可选）
+
+  4/5/6 的实现已搬到 parsecheck 自由函数
+  （输入 ParseIrView，全 const；输出就是本类）。
+  EraParseTable 的对应方法只剩 forwarder ——
+  诊断的 code / severity / effect / 产生顺序都不变，
+  变的只是产出它的人在哪。
 end note
 @enduml

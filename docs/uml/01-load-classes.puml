@@ -24,9 +24,12 @@ package "GameProc" {
     + expressionAst(expr)
     + runtimeVariableReference(expr)
     + markLoadComplete()
-    + resolveStaticTargets()      ' 只读：可单独调用
-    + checkStructures()           ' 只读：可单独调用
-    + checkStaticValues()         ' 只读：可单独调用
+    + resolveStaticTargets()      ' 转调 parsecheck
+    + checkStructures()           ' 转调 parsecheck
+    + checkStaticValues()         ' 转调 parsecheck
+    + scripts() / variableTable() / variableStorage()   ' 只读 getter
+    + clearDiagnostics()
+    - makeIrView() : ParseIrView ' 只做指针打包
     - resolveGlobalDeclarations()
     - resolveGlobalDeclarationsStep()   ' 组合入口：上者 + finalizeLabelIndex
     - finalizeLabelIndex()
@@ -34,6 +37,7 @@ package "GameProc" {
     - applyVariableTypes()
     - finalizeValidation()
     - checkNotCalledFunctions()
+    - 位置区 / 跳转标记区 / 调用栈（: 见下）
     {static} - kLoadPasses : LoadPass[7]  ' 表即流程
   }
 
@@ -42,6 +46,22 @@ package "GameProc" {
     fn : void (EraParseTable::*)()
     optional : bool   ' 受开关门控（当前仅 7）
     readOnly : bool   ' 4/5/6(+7)：不改运行行为
+  }
+
+  package "parsecheck（只读收尾，自由函数）" {
+    struct ParseIrView {
+      scripts : const QHash<QString,ScriptData>*
+      variables : const VariableTable*
+      constantTable : const ConstantTable*
+      storage : const VariableStorage*
+      functions : const QHash<QString,UserFunctionInfo>*
+    }
+    class "自由函数" as FreeFns {
+      resolveStaticTargets(view, diags)
+      checkCallStatementArgs(view, line, target, diags)
+      checkStructures(view, diags)
+      checkStaticValues(view, diags)
+    }
   }
 }
 
@@ -98,18 +118,35 @@ EraParseTable *-- VariableTable
 EraParseTable *-- LoadPass : kLoadPasses（表即流程）
 EraParseTable --> ParseDiagnostics : 诊断累积
 EraParseTable ..> ConstantTable : 名表下标
+EraParseTable ..> ParseIrView : makeIrView()
+ParseIrView <.. FreeFns : const 输入
+EraParseTable ..> FreeFns : 4/5/6 forwarder
 VariableTable *-- VariableDecl
 EraParseTable --> VariableConfig : 尺寸 / 维数
 
 note bottom of EraParseTable
   收尾由 kLoadPasses[7] 驱动（表即流程，顺序即执行顺序）：
-  1/6 resolveGlobalDeclarationsStep（声明定稿 + 标签索引）
-  2/6 finalizeBindings（含 applyVariableTypes）
-  3/6 finalizeValidation（表达式 / 常量下标 / 实参）
-  4/6 resolveStaticTargets（CALL / GOTO / TRY*）      只读
-  5/6 checkStructures（IF / FOR / REPEAT 配对）        只读
-  6/6 checkStaticValues（除零 / 负下标 / 尺寸 / 名字表）只读
-  7 checkNotCalledFunctions（可选，默认关闭）          只读
+  1/6 resolveGlobalDeclarationsStep（声明定稿 + 标签索引）  改状态
+  2/6 finalizeBindings（含 applyVariableTypes）             改状态
+  3/6 finalizeValidation（表达式 / 常量下标 / 实参）        改状态
+  4/6 resolveStaticTargets（CALL / GOTO / TRY*）           只读
+  5/6 checkStructures（IF / FOR / REPEAT 配对）             只读
+  6/6 checkStaticValues（除零 / 负下标 / 尺寸 / 名字表）    只读
+  7 checkNotCalledFunctions（可选，默认关闭）               只读
   markLoadComplete 只是「遍历表 + 计时日志 + m_finalized」。
+
+  4/5/6 的实现已搬出本类：本类只剩一行 forwarder，
+  真正的算法在 parsecheck 的自由函数里（输入是 ParseIrView）。
+  1/2/3 会改装载状态，仍留在本类 —— 这是当前的分界线。
+end note
+
+note right of ParseIrView
+  视图全部 const：编译期就禁止写。
+  · 4/5/6 只需 scripts / variables / constantTable
+    （另加 functions：RETURNF 与 CALL 实参校验要用户函数表）
+  · storage 是 const*，收尾对变量存储确实纯只读
+  · 原来的 hasLabel() 带 mutable 缓存，
+    自由函数版改用无状态 hasLabelInScripts()
+    （同一判据，收尾只跑一趟，不需要缓存）
 end note
 @enduml

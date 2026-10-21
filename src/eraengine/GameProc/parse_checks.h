@@ -60,6 +60,22 @@ struct ParseIrView {
     const QHash<QString, UserFunctionInfo>* functions = nullptr;
 };
 
+// ---- 逐脚本版本 ------------------------------------------------------------
+//
+// 一个脚本一趟：只读 view + **一个** 脚本的数据，诊断写进调用方给的 diags。
+// 因此 diags 必须是**本线程独占**的 sink（驱动端每个任务自己一个实例）。
+//
+// 这三个函数之间的独立性来自数据：脚本之间没有共享可变状态（pass 4 只读全库
+// 的 labelPositions，pass 5/6 只读本脚本 lines + 全局只读表），所以可以被
+// 驱动端并行调用；下面三个「遍历全部脚本」的 public 函数现在就是它们的并行
+// 驱动（脚本名排序 -> 并行映射 -> 按名字序归并）。
+void resolveStaticTargetsInScript(const ParseIrView& view, const ScriptData& script,
+                                  ParseDiagnostics& diags);
+void checkStructuresInScript(const ParseIrView& view, const ScriptData& script,
+                             ParseDiagnostics& diags);
+void checkStaticValuesInScript(const ParseIrView& view, const ScriptData& script,
+                               ParseDiagnostics& diags);
+
 // 收尾步骤 4：静态解析运行期跳转/调用目标（对齐 C# setJumpTo）。
 void resolveStaticTargets(const ParseIrView& view, ParseDiagnostics& diags);
 

@@ -37,6 +37,11 @@
 #include <QHash>
 #include <QSet>
 #include <QString>
+#include <QStringList>
+#include <QThreadPool>
+#include <QVector>
+#include <QtConcurrent>
+#include <algorithm>
 #include <limits>
 #include <optional>
 
@@ -70,6 +75,64 @@ bool hasLabelInScripts(const ParseIrView& view, const QString& label) {
     return false;
 }
 
+// ---------------------------------------------------------------------------
+// 三个收尾步骤共用的驱动：「遍历全部脚本」= 逐脚本函数 + 按名字序并行归并
+//
+//   1. 取 view.scripts 的键并**按名字排序**（QString::compare 序，即 std::sort
+//      的默认序 —— 与 QString::operator< 同源，不加 locale）；
+//   2. 每个脚本一趟，诊断写进**该任务独占**的 ParseDiagnostics（不许跨任务共享
+//      同一个 sink）；
+//   3. 按 names 的顺序把每个 sink 的诊断 append 回 diags。
+//
+// 排序不是为了好看：这三个步骤原来遍历 QHash（Qt 随机化哈希种子，迭代序在
+// 不同进程间不同），诊断的**产生顺序**本来就不确定，收尾末尾靠 sortForOutput
+// 兜底。并行之后若按完成顺序归并，顺序还会随线程调度抖动 —— 排一次名字就让
+// 归并顺序只由输入决定，与调度无关；sortForOutput 仍是「同排序键的重复诊断」
+// 的最后兜底（这里不动它）。
+//
+// 并行粒度刻意停在「一个 pass 内」：三个 pass **之间**仍是顺序执行（pass 表
+// 顺序、gate、phaseAfter 一个都不动）。把 4/5/6 同时扔进线程池是
+// 3×maxThreadCount 的过度订阅 —— pass 5/6 的脚本数相同但单脚本工作量小得多，
+// 它们要么排在长任务后面白等，要么互相抢核，整体收益很小、风险（栈/内存/调度
+// 抖动）却更大。
+// ---------------------------------------------------------------------------
+
+// 并行阈值：脚本数少于它（测试里通常只有 1~2 个）时，线程池调度 + 结果归并的
+// 开销比检查本身还大，而且调试器还能一路跟进去。真实工程远在这条线之上
+// （eraTW 2260 个脚本）。线程池只有 1 个线程时并行也没有意义，直接串行。
+constexpr int kMinScriptsForParallel = 4;
+
+template <class Fn>
+void runPerScript(const ParseIrView& view, ParseDiagnostics& diags, Fn&& fn) {
+    if (!view.scripts) return;   // 旧行为：没有脚本时外层循环体不执行
+    QStringList names = view.scripts->keys();
+    std::sort(names.begin(), names.end());
+
+    // 先把 ScriptData 指针解析出来：任务里就只剩**纯只读**访问，不必让多个线程
+    // 各自去 constFind 同一个 QHash（也顺带省掉每个任务一次哈希查找）。
+    QVector<const ScriptData*> scripts;
+    scripts.reserve(names.size());
+    for (const QString& n : names) {
+        const auto it = view.scripts->constFind(n);
+        if (it != view.scripts->constEnd()) scripts.append(&it.value());
+    }
+
+    if (scripts.size() < kMinScriptsForParallel
+        || QThreadPool::globalInstance()->maxThreadCount() <= 1) {
+        for (const ScriptData* script : scripts) fn(*script, diags);
+        return;
+    }
+
+    // blockingMapped 保持输入顺序返回；每个任务一个 local sink。
+    const auto locals = QtConcurrent::blockingMapped(scripts, [&fn](const ScriptData* script) {
+        ParseDiagnostics local;   // **本任务独占**，不与任何线程共享
+        fn(*script, local);
+        return local;
+    });
+    for (const ParseDiagnostics& local : locals)
+        for (const ParseDiagnostic& d : local.all()) diags.add(d);
+}
+
 }  // namespace
 
 // ---------------------------------------------------------------------------
@@ -88,6 +151,15 @@ bool hasLabelInScripts(const ParseIrView& view, const QString& label) {
 //     语义就是「找不到就跳过」，不报（对齐 C# func.Function.IsTry()）
 //   * CALLEVENT / BEGIN / FUNC：C# 不做目标检查（CALLEVENT 缺目标静默），跳过
 void resolveStaticTargets(const ParseIrView& view, ParseDiagnostics& diags) {
+    runPerScript(view, diags, [&view](const ScriptData& script, ParseDiagnostics& local) {
+        resolveStaticTargetsInScript(view, script, local);
+    });
+}
+
+// 逐脚本实现：结论只依赖 (view, data)，diags 是调用方给的**本线程独占** sink，
+// 因而可以被驱动端（runPerScript）并行调用。
+void resolveStaticTargetsInScript(const ParseIrView& view, const ScriptData& data,
+                                  ParseDiagnostics& diags) {
     // 目标名：常量目标返回标签名（去掉 @/$ 前缀）；运行期求值返回空（不判定）。
     const auto staticTarget = [](const LogicalLine& line) -> QString {
         if (line.arguments.isEmpty()) return {};
@@ -101,55 +173,52 @@ void resolveStaticTargets(const ParseIrView& view, ParseDiagnostics& diags) {
         return name;
     };
 
-    for (auto script = view.scripts->constBegin(); script != view.scripts->constEnd(); ++script) {
-        const ScriptData& data = script.value();
-        // 本脚本各函数的 $标签集合（大小写折叠：标签比较遵循 ICFunction 语义）。
-        QHash<QString, QSet<QString>> dollarLabels;
-        for (const LogicalLine& line : data.lines) {
-            if (line.kind != LineKind::GotoLabel) continue;
-            dollarLabels[line.ownerFunction.toUpper()].insert(line.labelName.toUpper());
+    // 本脚本各函数的 $标签集合（大小写折叠：标签比较遵循 ICFunction 语义）。
+    QHash<QString, QSet<QString>> dollarLabels;
+    for (const LogicalLine& line : data.lines) {
+        if (line.kind != LineKind::GotoLabel) continue;
+        dollarLabels[line.ownerFunction.toUpper()].insert(line.labelName.toUpper());
+    }
+    for (const LogicalLine& line : data.lines) {
+        bool checkFunction = false;
+        bool checkLabel = false;
+        switch (line.runnerInstruction) {
+        case RunnerInstruction::CALL:
+        case RunnerInstruction::CALLFORM:
+        case RunnerInstruction::CALLF:
+        case RunnerInstruction::CALLFORMF:
+        case RunnerInstruction::JUMP:
+        case RunnerInstruction::JUMPFORM:
+            checkFunction = true;
+            break;
+        case RunnerInstruction::GOTO:
+        case RunnerInstruction::GOTOFORM:
+            checkLabel = true;
+            break;
+        default:
+            break;   // TRY* 系（运行期静默跳过）与 CALLEVENT/FUNC 不检查
         }
-        for (const LogicalLine& line : data.lines) {
-            bool checkFunction = false;
-            bool checkLabel = false;
-            switch (line.runnerInstruction) {
-            case RunnerInstruction::CALL:
-            case RunnerInstruction::CALLFORM:
-            case RunnerInstruction::CALLF:
-            case RunnerInstruction::CALLFORMF:
-            case RunnerInstruction::JUMP:
-            case RunnerInstruction::JUMPFORM:
-                checkFunction = true;
-                break;
-            case RunnerInstruction::GOTO:
-            case RunnerInstruction::GOTOFORM:
-                checkLabel = true;
-                break;
-            default:
-                break;   // TRY* 系（运行期静默跳过）与 CALLEVENT/FUNC 不检查
+        if (!checkFunction && !checkLabel) continue;
+        const QString target = staticTarget(line);
+        if (target.isEmpty()) continue;
+        QString message;
+        if (checkFunction) {
+            if (hasLabelInScripts(view, target)) {
+                // 目标存在 -> 装载期就把实参校验掉（对齐 C# CALL_Instruction.SetJumpTo
+                // 里调用 ConvertArg；C# 只在「常量目标且能找到」时才做这一步）。
+                checkCallStatementArgs(view, line, target, diags);
+                continue;
             }
-            if (!checkFunction && !checkLabel) continue;
-            const QString target = staticTarget(line);
-            if (target.isEmpty()) continue;
-            QString message;
-            if (checkFunction) {
-                if (hasLabelInScripts(view, target)) {
-                    // 目标存在 -> 装载期就把实参校验掉（对齐 C# CALL_Instruction.SetJumpTo
-                    // 里调用 ConvertArg；C# 只在「常量目标且能找到」时才做这一步）。
-                    checkCallStatementArgs(view, line, target, diags);
-                    continue;
-                }
-                message = QCoreApplication::translate("ParseDiagnostics",
-                    "指定的函数名\"@%1\"不存在（运行到该行会失败）").arg(target);
-            } else {
-                if (dollarLabels.value(line.ownerFunction.toUpper()).contains(target.toUpper()))
-                    continue;
-                message = QCoreApplication::translate("ParseDiagnostics",
-                    "指定的标签名\"$%1\"在当前函数内不存在（运行到该行会失败）").arg(target);
-            }
-            diags.add(DiagSeverity::Error, DiagCode::kLabelNotFound,
-                line.position.filename, line.position.lineNumber, line.position.column, 0, message);
+            message = QCoreApplication::translate("ParseDiagnostics",
+                "指定的函数名\"@%1\"不存在（运行到该行会失败）").arg(target);
+        } else {
+            if (dollarLabels.value(line.ownerFunction.toUpper()).contains(target.toUpper()))
+                continue;
+            message = QCoreApplication::translate("ParseDiagnostics",
+                "指定的标签名\"$%1\"在当前函数内不存在（运行到该行会失败）").arg(target);
         }
+        diags.add(DiagSeverity::Error, DiagCode::kLabelNotFound,
+            line.position.filename, line.position.lineNumber, line.position.column, 0, message);
     }
 }
 
@@ -305,6 +374,15 @@ QString matchingCloser(const QString& opener) {
 }  // namespace
 
 void checkStructures(const ParseIrView& view, ParseDiagnostics& diags) {
+    runPerScript(view, diags, [&view](const ScriptData& script, ParseDiagnostics& local) {
+        checkStructuresInScript(view, script, local);
+    });
+}
+
+// 逐脚本实现：结论只依赖 (view, data)，diags 是调用方给的**本线程独占** sink，
+// 因而可以被驱动端（runPerScript）并行调用。
+void checkStructuresInScript(const ParseIrView& view, const ScriptData& data,
+                             ParseDiagnostics& diags) {
     // nestStack 的表项 = (结构名, 行, 该结构是否已出现第一个分支)。
     struct Nest { QString name; const LogicalLine* line; bool branchSeen = false; };
     const auto add = [&diags](DiagSeverity sev, const LogicalLine& line, const QString& text) {
@@ -312,257 +390,254 @@ void checkStructures(const ParseIrView& view, ParseDiagnostics& diags) {
             line.position.filename, line.position.lineNumber, line.position.column, 0, text);
     };
 
-    for (auto script = view.scripts->constBegin(); script != view.scripts->constEnd(); ++script) {
-        const ScriptData& data = script.value();
-        QList<Nest> stack;
-        const auto closeBody = [&]() {
-            // 函数末尾仍有未闭合的结构：逐条报「Xに対応するYが見つかりません」。
-            while (!stack.isEmpty()) {
-                const Nest n = stack.takeLast();
-                add(DiagSeverity::Error, *n.line,
+    QList<Nest> stack;
+    const auto closeBody = [&]() {
+        // 函数末尾仍有未闭合的结构：逐条报「Xに対応するYが見つかりません」。
+        while (!stack.isEmpty()) {
+            const Nest n = stack.takeLast();
+            add(DiagSeverity::Error, *n.line,
+                QCoreApplication::translate("ParseDiagnostics",
+                    "%1 に対応する %2 が見つかりません").arg(n.name, matchingCloser(n.name)));
+        }
+    };
+    for (const LogicalLine& line : data.lines) {
+        if (line.kind == LineKind::FunctionLabel) {
+            closeBody();
+            continue;
+        }
+        if (line.kind == LineKind::GotoLabel) {
+            // C#：PRINTDATA 系 / STRDATA / DATALIST / TRY*LIST 体内不允许 $标签
+            if (!stack.isEmpty()
+                && (isPrintDataFamily(stack.last().name)
+                    || stack.last().name == QLatin1String("DATALIST")
+                    || isTryListOpener(stack.last().name))) {
+                add(DiagSeverity::Error, line,
                     QCoreApplication::translate("ParseDiagnostics",
-                        "%1 に対応する %2 が見つかりません").arg(n.name, matchingCloser(n.name)));
+                        "%1 構文中に $ラベルを定義することはできません").arg(stack.last().name));
             }
-        };
-        for (const LogicalLine& line : data.lines) {
-            if (line.kind == LineKind::FunctionLabel) {
-                closeBody();
-                continue;
-            }
-            if (line.kind == LineKind::GotoLabel) {
-                // C#：PRINTDATA 系 / STRDATA / DATALIST / TRY*LIST 体内不允许 $标签
-                if (!stack.isEmpty()
-                    && (isPrintDataFamily(stack.last().name)
-                        || stack.last().name == QLatin1String("DATALIST")
-                        || isTryListOpener(stack.last().name))) {
-                    add(DiagSeverity::Error, line,
-                        QCoreApplication::translate("ParseDiagnostics",
-                            "%1 構文中に $ラベルを定義することはできません").arg(stack.last().name));
-                }
-                continue;
-            }
-            if (line.kind != LineKind::Instruction) continue;   // 空行/注释行/# 行不参与配对
-            const QString& name = line.functionName;
+            continue;
+        }
+        if (line.kind != LineKind::Instruction) continue;   // 空行/注释行/# 行不参与配对
+        const QString& name = line.functionName;
 
-            // ---- 块内允许的指令（对齐 C# nestCheck 的 baseFunc 检查）----
-            if (!stack.isEmpty()) {
-                const QString& base = stack.last().name;
-                if (isPrintDataFamily(base)) {
-                    const bool allowed = name == QLatin1String("DATA")
-                        || name == QLatin1String("DATAFORM")
-                        || name == QLatin1String("DATALIST")
-                        || name == QLatin1String("ENDLIST")
-                        || name == QLatin1String("ENDDATA");
-                    if (!allowed) {
-                        add(DiagSeverity::Error, line,
-                            QCoreApplication::translate("ParseDiagnostics",
-                                "%1 構文に使用できない命令'%2'が含まれています").arg(base, name));
-                        continue;
-                    }
-                } else if (base == QLatin1String("DATALIST")) {
-                    const bool allowed = name == QLatin1String("DATA")
-                        || name == QLatin1String("DATAFORM") || name == QLatin1String("ENDLIST");
-                    if (!allowed) {
-                        add(DiagSeverity::Error, line,
-                            QCoreApplication::translate("ParseDiagnostics",
-                                "DATALIST 構文に使用できない命令'%1'が含まれています").arg(name));
-                        continue;
-                    }
-                } else if (isTryListOpener(base)) {
-                    if (name != QLatin1String("FUNC") && name != QLatin1String("ENDFUNC")) {
-                        add(DiagSeverity::Error, line,
-                            QCoreApplication::translate("ParseDiagnostics",
-                                "%1 構文に使用できない命令'%2'が含まれています").arg(base, name));
-                        continue;
-                    }
-                } else if (base == QLatin1String("SELECTCASE")) {
-                    // SELECTCASE 直下、最初の CASE より前は命令を置けない
-                    const bool allowed = name == QLatin1String("CASE")
-                        || name == QLatin1String("CASEELSE") || name == QLatin1String("ENDSELECT");
-                    if (!stack.last().branchSeen && !allowed) {
-                        add(DiagSeverity::Error, line,
-                            QCoreApplication::translate("ParseDiagnostics",
-                                "SELECTCASE 構文の分岐の外に命令'%1'が含まれています").arg(name));
-                        continue;
-                    }
-                }
-            }
-
-            // ---- 入栈 ----
-            if (name == QLatin1String("IF") || name == QLatin1String("SELECTCASE")
-                || name == QLatin1String("REPEAT") || name == QLatin1String("FOR")
-                || name == QLatin1String("WHILE") || name == QLatin1String("DO")
-                || isTryCatchOpener(name) || isPrintDataFamily(name)
-                || isTryListOpener(name) || name == QLatin1String("NOSKIP")) {
-                stack.append({name, &line});
-                continue;
-            }
-
-            // ---- 分支指令 ----
-            if (name == QLatin1String("ELSEIF") || name == QLatin1String("ELSE")) {
-                if (stack.isEmpty() || stack.last().name != QLatin1String("IF")) {
+        // ---- 块内允许的指令（对齐 C# nestCheck 的 baseFunc 检查）----
+        if (!stack.isEmpty()) {
+            const QString& base = stack.last().name;
+            if (isPrintDataFamily(base)) {
+                const bool allowed = name == QLatin1String("DATA")
+                    || name == QLatin1String("DATAFORM")
+                    || name == QLatin1String("DATALIST")
+                    || name == QLatin1String("ENDLIST")
+                    || name == QLatin1String("ENDDATA");
+                if (!allowed) {
                     add(DiagSeverity::Error, line,
                         QCoreApplication::translate("ParseDiagnostics",
-                            "IF～ENDIFの外で%1文が使われました").arg(name));
-                } else {
-                    stack.last().branchSeen = true;
-                }
-                continue;
-            }
-            if (name == QLatin1String("CASE") || name == QLatin1String("CASEELSE")) {
-                if (stack.isEmpty() || stack.last().name != QLatin1String("SELECTCASE"))
-                    add(DiagSeverity::Error, line,
-                        QCoreApplication::translate("ParseDiagnostics",
-                            "SELECTCASE～ENDSELECTの外で%1文が使われました").arg(name));
-                else
-                    stack.last().branchSeen = true;
-                continue;
-            }
-            if (name == QLatin1String("BREAK") || name == QLatin1String("CONTINUE")) {
-                bool inLoop = false;
-                for (const Nest& n : stack)
-                    if (isLoopOpener(n.name)) { inLoop = true; break; }
-                if (!inLoop)
-                    add(DiagSeverity::Error, line,
-                        QCoreApplication::translate("ParseDiagnostics",
-                            "REPEAT, FOR, WHILE, DOの中以外で%1文が使われました").arg(name));
-                continue;
-            }
-            if (name == QLatin1String("FUNC")) {
-                if (stack.isEmpty() || !isTryListOpener(stack.last().name))
-                    add(DiagSeverity::Error, line,
-                        QCoreApplication::translate("ParseDiagnostics",
-                            "対応するTRYCALLLIST系命令のない%1です").arg(name));
-                continue;
-            }
-            if (name == QLatin1String("DATA") || name == QLatin1String("DATAFORM")) {
-                if (stack.isEmpty() || !(isPrintDataFamily(stack.last().name)
-                                         || stack.last().name == QLatin1String("DATALIST")))
-                    add(DiagSeverity::Error, line,
-                        QCoreApplication::translate("ParseDiagnostics",
-                            "対応するPRINTDATA系命令のない%1です").arg(name));
-                continue;
-            }
-            if (name == QLatin1String("DATALIST")) {
-                // DATALIST 是 PRINTDATA 系 / STRDATA 体内的**可重复**子块：
-                // 一个 PRINTDATA 里可以连续放多个 DATALIST…ENDLIST（eraTW 的
-                // CASINO.ERB 就是这种写法），所以这里必须入栈，否则随后的 ENDLIST
-                // 找不到 DATALIST 而误报。
-                if (stack.isEmpty() || !isPrintDataFamily(stack.last().name)) {
-                    add(DiagSeverity::Error, line,
-                        QCoreApplication::translate("ParseDiagnostics",
-                            "対応するPRINTDATA系命令のない%1です").arg(name));
-                } else {
-                    stack.append({name, &line, false});
-                }
-                continue;
-            }
-            if (name == QLatin1String("LOOP")) {
-                // LOOP 对应 REPEAT 或 DO（按栈顶判定）
-                const bool ok = !stack.isEmpty()
-                    && (stack.last().name == QLatin1String("DO") || stack.last().name == QLatin1String("REPEAT"));
-                if (!ok) {
-                    add(DiagSeverity::Error, line,
-                        QCoreApplication::translate("ParseDiagnostics",
-                            "対応するREPEATの無い%1文です").arg(name));
-                } else {
-                    stack.removeLast();
-                }
-                continue;
-            }
-            if (name == QLatin1String("REND") || name == QLatin1String("NEXT")
-                || name == QLatin1String("WEND") || name == QLatin1String("ENDIF")
-                || name == QLatin1String("ENDSELECT") || name == QLatin1String("ENDCATCH")
-                || name == QLatin1String("ENDLIST") || name == QLatin1String("ENDDATA")
-                || name == QLatin1String("ENDNOSKIP") || name == QLatin1String("ENDFUNC")) {
-                const QString want = matchingOpener(name);
-                if (name == QLatin1String("ENDDATA")) {
-                    if (stack.isEmpty() || !(isPrintDataFamily(stack.last().name))) {
-                        add(DiagSeverity::Error, line,
-                            QCoreApplication::translate("ParseDiagnostics",
-                                "対応するPRINTDATA系命令もしくはSTRDATAのない%1です").arg(name));
-                    } else {
-                        stack.removeLast();
-                    }
+                            "%1 構文に使用できない命令'%2'が含まれています").arg(base, name));
                     continue;
                 }
-                bool matched = false;
-                if (name == QLatin1String("ENDFUNC")) {
-                    matched = !stack.isEmpty() && isTryListOpener(stack.last().name);
-                } else {
-                    matched = !stack.isEmpty() && stack.last().name == want;
-                }
-                if (!matched) {
+            } else if (base == QLatin1String("DATALIST")) {
+                const bool allowed = name == QLatin1String("DATA")
+                    || name == QLatin1String("DATAFORM") || name == QLatin1String("ENDLIST");
+                if (!allowed) {
                     add(DiagSeverity::Error, line,
                         QCoreApplication::translate("ParseDiagnostics",
-                            "対応する%1の無い%2文です").arg(want, name));
-                } else {
-                    stack.removeLast();
-                }
-                continue;
-            }
-            if (name == QLatin1String("CATCH")) {
-                if (stack.isEmpty() || !isTryCatchOpener(stack.last().name))
-                    add(DiagSeverity::Error, line,
-                        QCoreApplication::translate("ParseDiagnostics",
-                            "対応するTRYC系命令がありません"));
-                else
-                    stack.last().name = QStringLiteral("CATCH");
-                continue;
-            }
-            // ---- SIF：次行必须是可跳过的有效指令 ----
-            if (name == QLatin1String("SIF")) {
-                const int i = line.lineIndex;
-                int next = i + 1;
-                const int size = int(data.lines.size());
-                while (next < size && data.lines.at(next).kind == LineKind::Null) ++next;
-                if (next >= size || data.lines.at(next).kind == LineKind::FunctionLabel
-                    || data.lines.at(next).kind == LineKind::GotoLabel) {
-                    add(DiagSeverity::Error, line,
-                        QCoreApplication::translate("ParseDiagnostics",
-                            "SIF文の次の行がありません"));
+                            "DATALIST 構文に使用できない命令'%1'が含まれています").arg(name));
                     continue;
                 }
-                const LogicalLine& nextLine = data.lines.at(next);
-                if (nextLine.kind == LineKind::Instruction) {
-                    // SIF/TRYC 系也吃下一行（C# PARTIAL）：再套一个就会错位
-                    const QString& nf = nextLine.functionName;
-                    if (nf == QLatin1String("SIF") || isTryCatchOpener(nf)
-                        || nf == QLatin1String("TRYCALLLIST") || nf == QLatin1String("TRYJUMPLIST")
-                        || nf == QLatin1String("TRYGOTOLIST"))
-                        add(DiagSeverity::Error, line,
-                            QCoreApplication::translate("ParseDiagnostics",
-                                "SIF文の次の行を%1文にすることはできません").arg(nf));
-                }
-                continue;
-            }
-            // ---- RETURNF：必须在 #FUNCTION(S) 内，且返回类型要一致 ----
-            if (name == QLatin1String("RETURNF")) {
-                const UserFunctionDecl* decl = userFunctionIn(view, line.ownerFunction.toUpper());
-                if (!decl || !decl->isMethod) {
+            } else if (isTryListOpener(base)) {
+                if (name != QLatin1String("FUNC") && name != QLatin1String("ENDFUNC")) {
                     add(DiagSeverity::Error, line,
                         QCoreApplication::translate("ParseDiagnostics",
-                            "RETURNFは#FUNCTION以外では使用できません"));
+                            "%1 構文に使用できない命令'%2'が含まれています").arg(base, name));
                     continue;
                 }
-                if (line.arguments.isEmpty()) continue;
-                const auto& operand = line.arguments.first();
-                if (!operand.ast) continue;
-                const OperandType actual = operand.ast->valueType();
-                if (!isKnown(actual) || !isKnown(decl->returnType)) continue;
-                if (actual != decl->returnType) {
+            } else if (base == QLatin1String("SELECTCASE")) {
+                // SELECTCASE 直下、最初の CASE より前は命令を置けない
+                const bool allowed = name == QLatin1String("CASE")
+                    || name == QLatin1String("CASEELSE") || name == QLatin1String("ENDSELECT");
+                if (!stack.last().branchSeen && !allowed) {
                     add(DiagSeverity::Error, line,
-                        decl->returnType == OperandType::Int
-                            ? QCoreApplication::translate("ParseDiagnostics",
-                                  "#FUNCTIONで始まる関数の戻り値に文字列型が指定されました")
-                            : QCoreApplication::translate("ParseDiagnostics",
-                                  "#FUNCTIONSで始まる関数の戻り値に数値型が指定されました"));
+                        QCoreApplication::translate("ParseDiagnostics",
+                            "SELECTCASE 構文の分岐の外に命令'%1'が含まれています").arg(name));
+                    continue;
                 }
-                continue;
             }
         }
-        closeBody();
+
+        // ---- 入栈 ----
+        if (name == QLatin1String("IF") || name == QLatin1String("SELECTCASE")
+            || name == QLatin1String("REPEAT") || name == QLatin1String("FOR")
+            || name == QLatin1String("WHILE") || name == QLatin1String("DO")
+            || isTryCatchOpener(name) || isPrintDataFamily(name)
+            || isTryListOpener(name) || name == QLatin1String("NOSKIP")) {
+            stack.append({name, &line});
+            continue;
+        }
+
+        // ---- 分支指令 ----
+        if (name == QLatin1String("ELSEIF") || name == QLatin1String("ELSE")) {
+            if (stack.isEmpty() || stack.last().name != QLatin1String("IF")) {
+                add(DiagSeverity::Error, line,
+                    QCoreApplication::translate("ParseDiagnostics",
+                        "IF～ENDIFの外で%1文が使われました").arg(name));
+            } else {
+                stack.last().branchSeen = true;
+            }
+            continue;
+        }
+        if (name == QLatin1String("CASE") || name == QLatin1String("CASEELSE")) {
+            if (stack.isEmpty() || stack.last().name != QLatin1String("SELECTCASE"))
+                add(DiagSeverity::Error, line,
+                    QCoreApplication::translate("ParseDiagnostics",
+                        "SELECTCASE～ENDSELECTの外で%1文が使われました").arg(name));
+            else
+                stack.last().branchSeen = true;
+            continue;
+        }
+        if (name == QLatin1String("BREAK") || name == QLatin1String("CONTINUE")) {
+            bool inLoop = false;
+            for (const Nest& n : stack)
+                if (isLoopOpener(n.name)) { inLoop = true; break; }
+            if (!inLoop)
+                add(DiagSeverity::Error, line,
+                    QCoreApplication::translate("ParseDiagnostics",
+                        "REPEAT, FOR, WHILE, DOの中以外で%1文が使われました").arg(name));
+            continue;
+        }
+        if (name == QLatin1String("FUNC")) {
+            if (stack.isEmpty() || !isTryListOpener(stack.last().name))
+                add(DiagSeverity::Error, line,
+                    QCoreApplication::translate("ParseDiagnostics",
+                        "対応するTRYCALLLIST系命令のない%1です").arg(name));
+            continue;
+        }
+        if (name == QLatin1String("DATA") || name == QLatin1String("DATAFORM")) {
+            if (stack.isEmpty() || !(isPrintDataFamily(stack.last().name)
+                                     || stack.last().name == QLatin1String("DATALIST")))
+                add(DiagSeverity::Error, line,
+                    QCoreApplication::translate("ParseDiagnostics",
+                        "対応するPRINTDATA系命令のない%1です").arg(name));
+            continue;
+        }
+        if (name == QLatin1String("DATALIST")) {
+            // DATALIST 是 PRINTDATA 系 / STRDATA 体内的**可重复**子块：
+            // 一个 PRINTDATA 里可以连续放多个 DATALIST…ENDLIST（eraTW 的
+            // CASINO.ERB 就是这种写法），所以这里必须入栈，否则随后的 ENDLIST
+            // 找不到 DATALIST 而误报。
+            if (stack.isEmpty() || !isPrintDataFamily(stack.last().name)) {
+                add(DiagSeverity::Error, line,
+                    QCoreApplication::translate("ParseDiagnostics",
+                        "対応するPRINTDATA系命令のない%1です").arg(name));
+            } else {
+                stack.append({name, &line, false});
+            }
+            continue;
+        }
+        if (name == QLatin1String("LOOP")) {
+            // LOOP 对应 REPEAT 或 DO（按栈顶判定）
+            const bool ok = !stack.isEmpty()
+                && (stack.last().name == QLatin1String("DO") || stack.last().name == QLatin1String("REPEAT"));
+            if (!ok) {
+                add(DiagSeverity::Error, line,
+                    QCoreApplication::translate("ParseDiagnostics",
+                        "対応するREPEATの無い%1文です").arg(name));
+            } else {
+                stack.removeLast();
+            }
+            continue;
+        }
+        if (name == QLatin1String("REND") || name == QLatin1String("NEXT")
+            || name == QLatin1String("WEND") || name == QLatin1String("ENDIF")
+            || name == QLatin1String("ENDSELECT") || name == QLatin1String("ENDCATCH")
+            || name == QLatin1String("ENDLIST") || name == QLatin1String("ENDDATA")
+            || name == QLatin1String("ENDNOSKIP") || name == QLatin1String("ENDFUNC")) {
+            const QString want = matchingOpener(name);
+            if (name == QLatin1String("ENDDATA")) {
+                if (stack.isEmpty() || !(isPrintDataFamily(stack.last().name))) {
+                    add(DiagSeverity::Error, line,
+                        QCoreApplication::translate("ParseDiagnostics",
+                            "対応するPRINTDATA系命令もしくはSTRDATAのない%1です").arg(name));
+                } else {
+                    stack.removeLast();
+                }
+                continue;
+            }
+            bool matched = false;
+            if (name == QLatin1String("ENDFUNC")) {
+                matched = !stack.isEmpty() && isTryListOpener(stack.last().name);
+            } else {
+                matched = !stack.isEmpty() && stack.last().name == want;
+            }
+            if (!matched) {
+                add(DiagSeverity::Error, line,
+                    QCoreApplication::translate("ParseDiagnostics",
+                        "対応する%1の無い%2文です").arg(want, name));
+            } else {
+                stack.removeLast();
+            }
+            continue;
+        }
+        if (name == QLatin1String("CATCH")) {
+            if (stack.isEmpty() || !isTryCatchOpener(stack.last().name))
+                add(DiagSeverity::Error, line,
+                    QCoreApplication::translate("ParseDiagnostics",
+                        "対応するTRYC系命令がありません"));
+            else
+                stack.last().name = QStringLiteral("CATCH");
+            continue;
+        }
+        // ---- SIF：次行必须是可跳过的有效指令 ----
+        if (name == QLatin1String("SIF")) {
+            const int i = line.lineIndex;
+            int next = i + 1;
+            const int size = int(data.lines.size());
+            while (next < size && data.lines.at(next).kind == LineKind::Null) ++next;
+            if (next >= size || data.lines.at(next).kind == LineKind::FunctionLabel
+                || data.lines.at(next).kind == LineKind::GotoLabel) {
+                add(DiagSeverity::Error, line,
+                    QCoreApplication::translate("ParseDiagnostics",
+                        "SIF文の次の行がありません"));
+                continue;
+            }
+            const LogicalLine& nextLine = data.lines.at(next);
+            if (nextLine.kind == LineKind::Instruction) {
+                // SIF/TRYC 系也吃下一行（C# PARTIAL）：再套一个就会错位
+                const QString& nf = nextLine.functionName;
+                if (nf == QLatin1String("SIF") || isTryCatchOpener(nf)
+                    || nf == QLatin1String("TRYCALLLIST") || nf == QLatin1String("TRYJUMPLIST")
+                    || nf == QLatin1String("TRYGOTOLIST"))
+                    add(DiagSeverity::Error, line,
+                        QCoreApplication::translate("ParseDiagnostics",
+                            "SIF文の次の行を%1文にすることはできません").arg(nf));
+            }
+            continue;
+        }
+        // ---- RETURNF：必须在 #FUNCTION(S) 内，且返回类型要一致 ----
+        if (name == QLatin1String("RETURNF")) {
+            const UserFunctionDecl* decl = userFunctionIn(view, line.ownerFunction.toUpper());
+            if (!decl || !decl->isMethod) {
+                add(DiagSeverity::Error, line,
+                    QCoreApplication::translate("ParseDiagnostics",
+                        "RETURNFは#FUNCTION以外では使用できません"));
+                continue;
+            }
+            if (line.arguments.isEmpty()) continue;
+            const auto& operand = line.arguments.first();
+            if (!operand.ast) continue;
+            const OperandType actual = operand.ast->valueType();
+            if (!isKnown(actual) || !isKnown(decl->returnType)) continue;
+            if (actual != decl->returnType) {
+                add(DiagSeverity::Error, line,
+                    decl->returnType == OperandType::Int
+                        ? QCoreApplication::translate("ParseDiagnostics",
+                              "#FUNCTIONで始まる関数の戻り値に文字列型が指定されました")
+                        : QCoreApplication::translate("ParseDiagnostics",
+                              "#FUNCTIONSで始まる関数の戻り値に数値型が指定されました"));
+            }
+            continue;
+        }
     }
+    closeBody();
 }
 
 // ---------------------------------------------------------------------------
@@ -596,6 +671,15 @@ void checkStructures(const ParseIrView& view, ParseDiagnostics& diags) {
 // VariableSize 同名条目无关，只查负数。
 // ---------------------------------------------------------------------------
 void checkStaticValues(const ParseIrView& view, ParseDiagnostics& diags) {
+    runPerScript(view, diags, [&view](const ScriptData& script, ParseDiagnostics& local) {
+        checkStaticValuesInScript(view, script, local);
+    });
+}
+
+// 逐脚本实现：结论只依赖 (view, data)，diags 是调用方给的**本线程独占** sink，
+// 因而可以被驱动端（runPerScript）并行调用。
+void checkStaticValuesInScript(const ParseIrView& view, const ScriptData& data,
+                               ParseDiagnostics& diags) {
     // 尺寸来源：VariableConfig（VariableSize.csv 覆盖 + 构造即就绪的默认表）。
     const VariableConfig* config =
         view.storage ? &view.storage->variableConfig() : nullptr;
@@ -653,147 +737,144 @@ void checkStaticValues(const ParseIrView& view, ParseDiagnostics& diags) {
         return std::nullopt;
     };
 
-    for (auto script = view.scripts->constBegin(); script != view.scripts->constEnd(); ++script) {
-        const ScriptData& data = script.value();
-        for (const LogicalLine& line : data.lines) {
-            const auto visit = [&](ExpressionNode& node) {
-                if (node.kind() == NodeKind::BinaryOp) {
-                    auto& op = static_cast<BinaryOpNode&>(node);
-                    const TokenType t = op.op().type();
-                    if (t != TokenType::DIVIDE && t != TokenType::MODULO) return;
-                    const auto& right = op.right();
-                    if (!right || right->kind() != NodeKind::Literal) return;
-                    const auto& lit = static_cast<const LiteralNode&>(*right);
-                    if (lit.valueType() != OperandType::Int || lit.intValue() != 0) return;
+    for (const LogicalLine& line : data.lines) {
+        const auto visit = [&](ExpressionNode& node) {
+            if (node.kind() == NodeKind::BinaryOp) {
+                auto& op = static_cast<BinaryOpNode&>(node);
+                const TokenType t = op.op().type();
+                if (t != TokenType::DIVIDE && t != TokenType::MODULO) return;
+                const auto& right = op.right();
+                if (!right || right->kind() != NodeKind::Literal) return;
+                const auto& lit = static_cast<const LiteralNode&>(*right);
+                if (lit.valueType() != OperandType::Int || lit.intValue() != 0) return;
+                diags.addReportOnly(DiagSeverity::Error, DiagCode::kStaticValue,
+                    line.position.filename, line.position.lineNumber,
+                    line.position.column, 0,
+                    QCoreApplication::translate("ParseDiagnostics",
+                        "0 による除算が行われました（运行到该行会失败）"));
+                return;
+            }
+            // ---- 常量下标边界（步骤 3 看不到尺寸的名字才判）----
+            if (node.kind() != NodeKind::Variable || line.isError) return;
+            // VARSIZE 只消费数组身份（语言规定其下标被忽略，见 finalizeValidation
+            // 的同款豁免）—— 下标形态（含字符串）不参与运行期求值，不判。
+            if (line.functionName == QLatin1String("VARSIZE")) return;
+            const auto& var = static_cast<const VariableNode&>(node);
+            const int n = var.indices().size();
+            if (n <= 0 || n > 3) return;
+            int constPos[3] = {0, 0, 0};
+            qint64 constVal[3] = {0, 0, 0};
+            bool constNeg[3] = {false, false, false};
+            int constCount = 0;
+            for (int i = 0; i < n; ++i) {
+                bool negated = false;
+                const auto v = constValueOf(var.indices().at(i), &negated);
+                if (!v) continue;
+                constPos[constCount] = i;
+                constVal[constCount] = *v;
+                constNeg[constCount] = negated;
+                ++constCount;
+            }
+            // 字面字符串下标：运行期 resolveIndex 对字符串下标必须经
+            // ConstantTable 映射到列号（CFLAG:0:"攻撃" → 0），映射不到必抛
+            // 「Unknown variable index keyword」—— 与除零同级的「运行必炸」，
+            // 提前到装载期报（C# 侧对应 CSV 名表的 IdentifierNotFound）。
+            // 只认字面量形态：FORM（@"…"）下标的值运行期才知道，不判。
+            if (view.constantTable) {
+                for (int i = 0; i < n; ++i) {
+                    const auto& idx = var.indices().at(i);
+                    if (!idx || idx->kind() != NodeKind::Literal) continue;
+                    const auto* l = static_cast<const LiteralNode*>(idx.data());
+                    if (!l->isString()) continue;
+                    if (view.constantTable->indexForVariable(var.name(), l->strValue()) >= 0)
+                        continue;
                     diags.addReportOnly(DiagSeverity::Error, DiagCode::kStaticValue,
                         line.position.filename, line.position.lineNumber,
                         line.position.column, 0,
                         QCoreApplication::translate("ParseDiagnostics",
-                            "0 による除算が行われました（运行到该行会失败）"));
-                    return;
+                            "变量 %1 的字符串下标 \"%2\" 未在常数名表中定义（运行到该行会失败）")
+                            .arg(var.name(), l->strValue()));
                 }
-                // ---- 常量下标边界（步骤 3 看不到尺寸的名字才判）----
-                if (node.kind() != NodeKind::Variable || line.isError) return;
-                // VARSIZE 只消费数组身份（语言规定其下标被忽略，见 finalizeValidation
-                // 的同款豁免）—— 下标形态（含字符串）不参与运行期求值，不判。
-                if (line.functionName == QLatin1String("VARSIZE")) return;
-                const auto& var = static_cast<const VariableNode&>(node);
-                const int n = var.indices().size();
-                if (n <= 0 || n > 3) return;
-                int constPos[3] = {0, 0, 0};
-                qint64 constVal[3] = {0, 0, 0};
-                bool constNeg[3] = {false, false, false};
-                int constCount = 0;
-                for (int i = 0; i < n; ++i) {
-                    bool negated = false;
-                    const auto v = constValueOf(var.indices().at(i), &negated);
-                    if (!v) continue;
-                    constPos[constCount] = i;
-                    constVal[constCount] = *v;
-                    constNeg[constCount] = negated;
-                    ++constCount;
-                }
-                // 字面字符串下标：运行期 resolveIndex 对字符串下标必须经
-                // ConstantTable 映射到列号（CFLAG:0:"攻撃" → 0），映射不到必抛
-                // 「Unknown variable index keyword」—— 与除零同级的「运行必炸」，
-                // 提前到装载期报（C# 侧对应 CSV 名表的 IdentifierNotFound）。
-                // 只认字面量形态：FORM（@"…"）下标的值运行期才知道，不判。
-                if (view.constantTable) {
-                    for (int i = 0; i < n; ++i) {
-                        const auto& idx = var.indices().at(i);
-                        if (!idx || idx->kind() != NodeKind::Literal) continue;
-                        const auto* l = static_cast<const LiteralNode*>(idx.data());
-                        if (!l->isString()) continue;
-                        if (view.constantTable->indexForVariable(var.name(), l->strValue()) >= 0)
-                            continue;
-                        diags.addReportOnly(DiagSeverity::Error, DiagCode::kStaticValue,
-                            line.position.filename, line.position.lineNumber,
-                            line.position.column, 0,
-                            QCoreApplication::translate("ParseDiagnostics",
-                                "变量 %1 的字符串下标 \"%2\" 未在常数名表中定义（运行到该行会失败）")
-                                .arg(var.name(), l->strValue()));
-                    }
-                }
-                if (!constCount) return;
-
-                const QString upper = var.name().toUpper();
-                const sysvar::SystemVariableMetadata meta =
-                    sysvar::systemVariableMetadataDyn(var.name().toStdString());
-                // bounds[p]：位置 p 的静态上界（-1 = 未知）。
-                // veCovered[p]：纯字面量在该位置时步骤 3 已按 lengths 报过（不重复）。
-                // charaIdPos[p]：角色号位（运行期角色表决定，装载期不判）。
-                qint64 bounds[3] = {-1, -1, -1};
-                bool veCovered[3] = {false, false, false};
-                bool charaIdPos[3] = {false, false, false};
-
-                // 系统变量（含 CFLAG/TALENT/…、DA/TA/…、LOCAL/ARG 槽位）：走系统/
-                // 槽位通道，#DIM 同名声明遮蔽不了（与 computeVariableAccess 同口径）；
-                // lengths 在 walkApply 被清空，正是步骤 3 的盲区。
-                if (sysvar::systemStorageNames().contains(upper)
-                    || meta.type != OperandType::Unknown) {
-                    const int full = meta.dimension + (meta.characterData ? 1 : 0);
-                    if (n != full) return;   // 维数不符：步骤 3 已按 Error 处置
-                    const QVector<int> sizes =
-                        systemElementSizes(upper, meta.dimension, meta.characterData);
-                    for (int p = 0; p < n; ++p) {
-                        if (meta.characterData && p == 0) {
-                            charaIdPos[p] = true;   // 角色号位：运行期角色表决定
-                            continue;
-                        }
-                        const int dim = meta.characterData ? p - 1 : p;
-                        if (dim >= 0 && dim < sizes.size() && sizes.at(dim) > 0)
-                            bounds[p] = sizes.at(dim);
-                    }
-                } else if (const VariableDecl* d =
-                               view.variables->find(var.name(), line.ownerFunction)) {
-                    // 声明数组：纯字面量 + lengths 已知的位置步骤 3 已报（不重复）；
-                    // lengths 缺失（标量 #DIM X / REF）时只剩这里补查。角色号位不判。
-                    const int full = d->dimension + (d->isCharaData ? 1 : 0);
-                    if (n != full) return;
-                    for (int p = 0; p < n; ++p) {
-                        if (d->isCharaData && p == 0) {
-                            charaIdPos[p] = true;
-                            continue;
-                        }
-                        const int dim = d->isCharaData ? p - 1 : p;
-                        if (dim >= 0 && dim < d->lengths.size() && d->lengths.at(dim) > 0)
-                            veCovered[p] = true;   // 步骤 3 已按 lengths 报过
-                    }
-                }
-                // 其余（未声明裸名）：自动扩容无上界 —— 只剩负数可判。
-
-                for (int c = 0; c < constCount; ++c) {
-                    const int p = constPos[c];
-                    const qint64 v = constVal[c];
-                    if (charaIdPos[p]) continue;
-                    if (veCovered[p] && !constNeg[c]) continue;
-                    if (v < 0) {
-                        diags.addReportOnly(DiagSeverity::Warning, DiagCode::kStaticValue,
-                            line.position.filename, line.position.lineNumber,
-                            line.position.column, 0,
-                            QCoreApplication::translate("ParseDiagnostics",
-                                "变量 %1 的常量下标 %2 为负（下标下界恒为 0；运行期该访问静默失败）")
-                                .arg(var.name()).arg(v));
-                    } else if (bounds[p] >= 0 && v >= bounds[p]) {
-                        diags.addReportOnly(DiagSeverity::Warning, DiagCode::kStaticValue,
-                            line.position.filename, line.position.lineNumber,
-                            line.position.column, 0,
-                            QCoreApplication::translate("ParseDiagnostics",
-                                "变量 %1 的常量下标 %2 越过其尺寸 %3（运行期读取为 0、写入被忽略）")
-                                .arg(var.name()).arg(v).arg(bounds[p]));
-                    }
-                }
-            };
-            for (const Operand& op : line.arguments) {
-                if (op.ast) walkExpression(*op.ast, visit);
             }
-            if (line.condition) walkExpression(*line.condition, visit);
-            for (const auto& ast : line.assignmentAsts) {
-                if (ast) walkExpression(*ast, visit);
+            if (!constCount) return;
+
+            const QString upper = var.name().toUpper();
+            const sysvar::SystemVariableMetadata meta =
+                sysvar::systemVariableMetadataDyn(var.name().toStdString());
+            // bounds[p]：位置 p 的静态上界（-1 = 未知）。
+            // veCovered[p]：纯字面量在该位置时步骤 3 已按 lengths 报过（不重复）。
+            // charaIdPos[p]：角色号位（运行期角色表决定，装载期不判）。
+            qint64 bounds[3] = {-1, -1, -1};
+            bool veCovered[3] = {false, false, false};
+            bool charaIdPos[3] = {false, false, false};
+
+            // 系统变量（含 CFLAG/TALENT/…、DA/TA/…、LOCAL/ARG 槽位）：走系统/
+            // 槽位通道，#DIM 同名声明遮蔽不了（与 computeVariableAccess 同口径）；
+            // lengths 在 walkApply 被清空，正是步骤 3 的盲区。
+            if (sysvar::systemStorageNames().contains(upper)
+                || meta.type != OperandType::Unknown) {
+                const int full = meta.dimension + (meta.characterData ? 1 : 0);
+                if (n != full) return;   // 维数不符：步骤 3 已按 Error 处置
+                const QVector<int> sizes =
+                    systemElementSizes(upper, meta.dimension, meta.characterData);
+                for (int p = 0; p < n; ++p) {
+                    if (meta.characterData && p == 0) {
+                        charaIdPos[p] = true;   // 角色号位：运行期角色表决定
+                        continue;
+                    }
+                    const int dim = meta.characterData ? p - 1 : p;
+                    if (dim >= 0 && dim < sizes.size() && sizes.at(dim) > 0)
+                        bounds[p] = sizes.at(dim);
+                }
+            } else if (const VariableDecl* d =
+                           view.variables->find(var.name(), line.ownerFunction)) {
+                // 声明数组：纯字面量 + lengths 已知的位置步骤 3 已报（不重复）；
+                // lengths 缺失（标量 #DIM X / REF）时只剩这里补查。角色号位不判。
+                const int full = d->dimension + (d->isCharaData ? 1 : 0);
+                if (n != full) return;
+                for (int p = 0; p < n; ++p) {
+                    if (d->isCharaData && p == 0) {
+                        charaIdPos[p] = true;
+                        continue;
+                    }
+                    const int dim = d->isCharaData ? p - 1 : p;
+                    if (dim >= 0 && dim < d->lengths.size() && d->lengths.at(dim) > 0)
+                        veCovered[p] = true;   // 步骤 3 已按 lengths 报过
+                }
             }
-            for (const auto& ast : line.columnDefaults) {
-                if (ast) walkExpression(*ast, visit);
+            // 其余（未声明裸名）：自动扩容无上界 —— 只剩负数可判。
+
+            for (int c = 0; c < constCount; ++c) {
+                const int p = constPos[c];
+                const qint64 v = constVal[c];
+                if (charaIdPos[p]) continue;
+                if (veCovered[p] && !constNeg[c]) continue;
+                if (v < 0) {
+                    diags.addReportOnly(DiagSeverity::Warning, DiagCode::kStaticValue,
+                        line.position.filename, line.position.lineNumber,
+                        line.position.column, 0,
+                        QCoreApplication::translate("ParseDiagnostics",
+                            "变量 %1 的常量下标 %2 为负（下标下界恒为 0；运行期该访问静默失败）")
+                            .arg(var.name()).arg(v));
+                } else if (bounds[p] >= 0 && v >= bounds[p]) {
+                    diags.addReportOnly(DiagSeverity::Warning, DiagCode::kStaticValue,
+                        line.position.filename, line.position.lineNumber,
+                        line.position.column, 0,
+                        QCoreApplication::translate("ParseDiagnostics",
+                            "变量 %1 的常量下标 %2 越过其尺寸 %3（运行期读取为 0、写入被忽略）")
+                            .arg(var.name()).arg(v).arg(bounds[p]));
+                }
             }
+        };
+        for (const Operand& op : line.arguments) {
+            if (op.ast) walkExpression(*op.ast, visit);
+        }
+        if (line.condition) walkExpression(*line.condition, visit);
+        for (const auto& ast : line.assignmentAsts) {
+            if (ast) walkExpression(*ast, visit);
+        }
+        for (const auto& ast : line.columnDefaults) {
+            if (ast) walkExpression(*ast, visit);
         }
     }
 }

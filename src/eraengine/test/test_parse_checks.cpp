@@ -62,6 +62,16 @@ static void loadInto(EraParseTable& table, const QString& name, const QString& s
     table.markLoadComplete();
 }
 
+// 只登记脚本、不做收尾（用于「装载顺序 != 名字序」的多脚本夹具）。
+static void loadOnly(EraParseTable& table, const QString& name, const QString& source) {
+    const AstResolver resolve = [&table](const QString& e) { return table.expressionAst(e); };
+    const QStringList lines = source.split(QLatin1Char('\n'));
+    QList<LogicalLine> built;
+    for (int i = 0; i < lines.size(); ++i)
+        built.append(AstBuilder::build(lines.at(i), ScriptPosition(name, i + 1, 1), resolve));
+    table.loadScript(name, built);
+}
+
 static QList<ParseDiagnostic> withCode(const ParseDiagnostics& d, const QString& code) {
     QList<ParseDiagnostic> out;
     for (const ParseDiagnostic& x : d.all())
@@ -186,6 +196,101 @@ int main(int argc, char* argv[]) {
     check(all.size() == baselineTotal,
           QString("4+5+6 三步合计 %1 条 == 收尾诊断总数 %2 条")
               .arg(all.size()).arg(baselineTotal));
+
+    // ---- 7) 并行化之后的三条契约：确定性 / 归并顺序 = 脚本名序 / 逐脚本入口 ----
+    //
+    // 上面 1~6 测的是「拆函数没改内容」；这里测「拆成并行驱动后仍然可复现」：
+    //   * 同一份只读输入连跑两次，诊断**逐字段且逐位置**相同（并行化之前这条
+    //     恒成立只是因为单线程；现在它钉住「归并顺序不依赖线程调度」）；
+    //   * 归并顺序 = 脚本名序（QString::compare 序），不是装载序、也不是哈希序；
+    //   * 逐脚本入口只处理自己那个脚本（新 public API 的契约）。
+    //
+    // 4 个脚本 + 装载序 D,C,B,A（倒序）：
+    //   脚本数 >= kMinScriptsForParallel(4)，会真的走并行驱动（本机线程池 > 1）；
+    //   万一只有 1 个核，走的是串行直跑分支 —— 此时归并顺序断言仍然有意义
+    //   （串行分支也按排好序的 names 走）。
+    {
+        ProcessState state2;
+        EraParseTable table2(&state2);
+        VariableStorage storage2;
+        table2.setVariableStorage(&storage2);
+
+        // 每个脚本各造一条：结构（ELSE 在 IF 外）、静态目标（CALL 缺失）、
+        // 可静态判定的运行期错误（10 / 0）。
+        const QString multi = QStringLiteral(
+            "@MAIN\n"          // 1
+            "ELSE\n"           // 2 -> checkStructures
+            "CALL MISSING_FN\n"// 3 -> resolveStaticTargets
+            "PRINTV 10 / 0\n");// 4 -> checkStaticValues
+        // **装载顺序与名字序相反**：D 先、A 最后。
+        for (const QString& n : {QStringLiteral("D.ERB"), QStringLiteral("C.ERB"),
+                                 QStringLiteral("B.ERB"), QStringLiteral("A.ERB")})
+            loadOnly(table2, n, multi);
+        table2.markLoadComplete();   // 全部脚本登记完只收尾一次
+
+        parsecheck::ParseIrView view2;
+        view2.scripts = &table2.scripts();
+        view2.variables = &table2.variableTable();
+        view2.constantTable = table2.constantTable();
+        view2.storage = table2.variableStorage();
+        view2.functions = &table2.userFunctions();
+        check(table2.scripts().size() == 4, "多脚本夹具装载了 4 个脚本");
+
+        // 7a) 确定性：每个 pass 连跑两次，逐字段 + 逐位置相同。
+        struct PassCase {
+            const char* name;
+            QString code;
+            void (*run)(const parsecheck::ParseIrView&, ParseDiagnostics&);
+        };
+        const PassCase cases[] = {
+            {"resolveStaticTargets", DiagCode::kLabelNotFound, &parsecheck::resolveStaticTargets},
+            {"checkStructures", DiagCode::kStructure, &parsecheck::checkStructures},
+            {"checkStaticValues", DiagCode::kStaticValue, &parsecheck::checkStaticValues},
+        };
+        for (const PassCase& c : cases) {
+            ParseDiagnostics d1;
+            ParseDiagnostics d2;
+            c.run(view2, d1);
+            c.run(view2, d2);
+            const auto hits = withCode(d1, c.code);
+            check(hits.size() == 4,
+                  QString("%1 在 4 个脚本上各产生 1 条（得到 %2）")
+                      .arg(QLatin1String(c.name)).arg(hits.size()));
+            check(sameDiagnostics(d1, d2),
+                  QString("%1 连跑两次 -> 逐字段（file/line/column/code/severity/effect/"
+                          "message/snippet）且逐位置相同")
+                      .arg(QLatin1String(c.name)));
+            // 归并顺序 = 脚本名序 A,B,C,D（而不是装载序 D,C,B,A / 哈希序）。
+            const bool ordered = hits.size() == 4
+                && hits.at(0).file == QStringLiteral("A.ERB")
+                && hits.at(1).file == QStringLiteral("B.ERB")
+                && hits.at(2).file == QStringLiteral("C.ERB")
+                && hits.at(3).file == QStringLiteral("D.ERB");
+            check(ordered,
+                  QString("%1 的归并顺序 = 脚本名序（A.ERB 在 B.ERB 之前；装载序是 D,C,B,A）")
+                      .arg(QLatin1String(c.name)));
+        }
+
+        // 7b) 逐脚本入口：只产出自己那个脚本的诊断（新 public API 的契约），
+        //     且与「全库驱动里该脚本那一段」逐字段相同。
+        const auto aIt = table2.scripts().constFind(QStringLiteral("A.ERB"));
+        check(aIt != table2.scripts().constEnd(), "能按名字取到 A.ERB 的 ScriptData");
+        if (aIt != table2.scripts().constEnd()) {
+            ParseDiagnostics oneScript;
+            parsecheck::checkStructuresInScript(view2, aIt.value(), oneScript);
+            check(oneScript.size() == 1 && oneScript.all().first().file == QStringLiteral("A.ERB")
+                      && oneScript.all().first().code == DiagCode::kStructure,
+                  "checkStructuresInScript(A.ERB) -> 只有 A.ERB 自己那条结构诊断");
+
+            ParseDiagnostics whole;
+            parsecheck::checkStructures(view2, whole);
+            ParseDiagnostics justA;
+            for (const ParseDiagnostic& d : whole.all())
+                if (d.file == QStringLiteral("A.ERB")) justA.add(d);
+            check(sameDiagnostics(oneScript, justA),
+                  "逐脚本结果 == 全库驱动结果中属于 A.ERB 的那一段");
+        }
+    }
 
     if (g_failures == 0) qDebug() << "\nALL PASSED";
     else qDebug() << "\nFAILURES:" << g_failures;

@@ -439,7 +439,7 @@ ExecState ScriptRunner::executeLine(const LogicalLine& line) {
     if (line.isError || !line.argument.typeOk) {
         m_state->setErrorState();
         emit errorOccurred(QStringLiteral("%1：%2").arg(line.position.toString(),
-            line.errMes.isEmpty() ? line.argument.typeError : line.errMes));
+            line.errMes().isEmpty() ? line.argument.typeError : line.errMes()));
         return ExecState::Error;
     }
     // 每行重置：只有 AWAIT / TWAIT skip!=0（纯计时，C# InputType.Void）会覆盖为 false
@@ -1799,11 +1799,11 @@ ExecState ScriptRunner::executeLine(const LogicalLine& line) {
     // `STRDATA <字符串变量>` 的变量里。之前没有这个分支，整段被逐行当普通
     // 指令执行，于是 `DATA`/`ENDDATA` 报 [未完成]（02_PRINT 的回归）。
     case RunnerInstruction::StrData: {
-        const int next = line.printDataEndLine >= 0 ? line.printDataEndLine + 1 : pc + 1;
-        if (sd && !line.printDataGroups.isEmpty() && !line.arguments.isEmpty() && m_engine) {
-            const int count = line.printDataGroups.size();
+        const int next = line.printDataEndLine() >= 0 ? line.printDataEndLine() + 1 : pc + 1;
+        if (sd && !line.printDataGroups().isEmpty() && !line.arguments.isEmpty() && m_engine) {
+            const int count = line.printDataGroups().size();
             const int choice = static_cast<int>(getEvaluator().random().nextInt(count));
-            const QList<int>& grp = line.printDataGroups.at(choice);
+            const QList<int>& grp = line.printDataGroups().at(choice);
             QString value;
             for (int k = 0; k < grp.size(); ++k) {
                 if (k > 0) value += QLatin1Char('\n');
@@ -1817,9 +1817,9 @@ ExecState ScriptRunner::executeLine(const LogicalLine& line) {
 
     // ---- PRINTDATA 系（C# PRINT_DATA_Instruction）----
     case RunnerInstruction::PrintData: {
-        const int next = line.printDataEndLine >= 0 ? line.printDataEndLine + 1 : pc + 1;
-        if (sd && !line.printDataGroups.isEmpty()) {
-            const int count = line.printDataGroups.size();
+        const int next = line.printDataEndLine() >= 0 ? line.printDataEndLine() + 1 : pc + 1;
+        if (sd && !line.printDataGroups().isEmpty()) {
+            const int count = line.printDataGroups().size();
             const int choice = static_cast<int>(getEvaluator().random().nextInt(count));
             // 后缀（C# PRINT_DATA_Instruction 的构造：PRINTDATA(|K)(|D)(|L)(|W)）。
             const AstBuilder::PrintDataFlags flags = AstBuilder::printDataFlags(name);
@@ -1827,7 +1827,7 @@ ExecState ScriptRunner::executeLine(const LogicalLine& line) {
             if (!line.arguments.isEmpty() && m_engine) {
                 m_engine->assignPrintDataIndex(line.arguments.first(), choice);
             }
-            const QList<int>& grp = line.printDataGroups.at(choice);
+            const QList<int>& grp = line.printDataGroups().at(choice);
             for (int k = 0; k < grp.size(); ++k) {
                 if (m_engine) m_engine->printDataFormLine(sd->lines.at(grp.at(k)), flags.debug);
                 if (k + 1 < grp.size() && m_engine) m_engine->printDataNewline();

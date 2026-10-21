@@ -39,7 +39,7 @@ static void run(const QString& name, const QStringList& source, qint64 expected,
         bool compiled = !loaded->isError && loaded->argument.typeOk;
         for (const auto& operand : loaded->arguments) compiled &= bool(operand.ast);
         if (!compiled) {
-            qCritical() << name << "FUNC not compiled at load time" << i << loaded->errMes;
+            qCritical() << name << "FUNC not compiled at load time" << i << loaded->errMes();
             ++failures;
             return;
         }

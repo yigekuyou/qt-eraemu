@@ -258,47 +258,60 @@ struct LineExtras {
     QList<QSharedPointer<ExpressionNode>> columnDefaults; // ordered DEFAULT expressions
     QStringList labelArgs;        // 形参名 @NAME(a, b)（用户自定义函数）
     QStringList labelDefaults;    // 同位置的默认值；无默认值为空串
+    // 装载期错误文本：总使用行数约 0（eraTW 实测 0 行），内联在每行上要付 24 B
+    //（≈48 MiB @2.11M 行）。写侧只在**错误/告警分支**里发生，不会懒建成灾。
+    QString errMes;
+    // PRINTDATA/STRDATA 段的装载期索引（EraParseTable 一次构建，运行期只读）：
+    // 各「段」的行号列表 + 对应 ENDDATA 行号。eraTW 只有 2,510 行用得上，
+    // 但内联要付 24 B/行。写侧按「先收集到局部容器，最后只对有段的行写入」。
+    QList<QList<int>> printDataGroups;
+    int printDataEndLine = -1;
 };
 
 struct LogicalLine {
-    LineKind       kind = LineKind::Null;
-    ScriptPosition position;
+    // ---------------------------------------------------------------------
+    // 字段排列 = 「按 sizeof 从大到小聚簇」，只为消 padding（无聚合初始化，
+    // 无顺序依赖）。改前 520 B，其中 46 B 是纯对齐空洞；本排列落到 440 B。
+    // 新增字段请按同样的聚簇插入（24 B 容器 → 16 B 指针 → int → bool）。
+    // ---------------------------------------------------------------------
+    ScriptPosition position;                    // 32
 
     // 标签（FunctionLabel / GotoLabel）
-    QString        labelName;
+    QString        labelName;                   // 24
     // 形参名 / 默认值：冷字段，见 LineExtras（labelArgs() / labelDefaults()）
 
     // 指令（Instruction）
     QString        functionName;     // 大写指令名
-    RunnerInstruction runnerInstruction = RunnerInstruction::Other; // 装载期指令分派
     QString        assignOperator;   // "=" / "+=" …（C# InstructionLine.AssignOperator）
-    // 「函数语句」标记（对齐 C# LogicalLineType.Function）：
-    // 一行以**内置函数名**开头、又不是已知指令/赋值时，整行是一次函数调用，
-    // 返回值写 RESULT（整型）/ RESULTS:0（字符串）。eraTW 里大量存在：
-    //   GETMILLISECOND / CURRENTREDRAW / GETTIME / REPLACE LOCALS, "a", "b" …
-    bool           isFunctionCall = false;
+    // 原始 token 与文本（C# argprimitive / WordCollection）
+    QString        raw;
+    QString        ownerFunction;    // 所属函数标签（变量作用域判定，装载期填充）
+
     QList<Operand> arguments;
     // DT_COLUMN_OPTIONS 的 DEFAULT 表达式表：冷字段，见 LineExtras（columnDefaults()）
     QList<QSharedPointer<ExpressionNode>> assignmentAsts; // load-time RHS list
+    // CASE 臂解析缓存（见 CaseClause 注释；执行单线程，行内容装载后不可变）
+    mutable QList<CaseClause> caseCache;
+
     TypedArgument  argument;                    // 类型化参数（C# InstructionLine.Argument）
     QSharedPointer<ExpressionNode> condition;   // IF/SIF/ELSEIF/WHILE/REPEAT 条件
-
-    // 原始 token 与文本（C# argprimitive / WordCollection）
-    QString        raw;
     QSharedPointer<CompiledPrintTemplate> printTemplate;
 
     // 扁平控制流（行号索引，替代 C# 的 NextLine / JumpTo 指针）
     int  lineIndex      = -1;
     int  nextLine       = -1;
     int  jumpTo         = -1;
-    // printDataEndLine 放在这里只为填满 jumpTo 后的 4 B 对齐空洞（见下方
-    // printDataGroups 的说明）；语义与位置无关。
-    int  printDataEndLine = -1;
-    QString ownerFunction;      // 所属函数标签（变量作用域判定，装载期填充）
 
-    // 诊断
+    LineKind       kind = LineKind::Null;
+    RunnerInstruction runnerInstruction = RunnerInstruction::Other; // 装载期指令分派
+    // 「函数语句」标记（对齐 C# LogicalLineType.Function）：
+    // 一行以**内置函数名**开头、又不是已知指令/赋值时，整行是一次函数调用，
+    // 返回值写 RESULT（整型）/ RESULTS:0（字符串）。eraTW 里大量存在：
+    //   GETMILLISECOND / CURRENTREDRAW / GETTIME / REPLACE LOCALS, "a", "b" …
+    bool           isFunctionCall = false;
+
+    // 诊断（errMes 是冷字段，见 LineExtras；isError 常与热路径判定同行，留内联）
     bool    isError = false;
-    QString errMes;
 
     // 构建期未能定型的标记（收尾只处理这些，避免全量重解析）：
     //   strAssignPending —— `=` 字符串赋值，构建期左值类型未知（需按 StrForm 重解）
@@ -306,16 +319,8 @@ struct LogicalLine {
     bool    strAssignPending = false;
     bool    needsCompletion = false;
 
-    // CASE 臂解析缓存（见 CaseClause 注释；执行单线程，行内容装载后不可变）
+    // CASE 臂解析缓存就绪标记（见 caseCache 注释）
     mutable bool caseCacheReady = false;
-    mutable QList<CaseClause> caseCache;
-
-
-
-    // PRINTDATA/STRDATA 段的装载期索引（由 EraParseTable 构建，运行时只读）：
-    // printDataGroups = 各「段」的行号列表；printDataEndLine（见上，为对齐挪位）
-    // = 对应 ENDDATA 行号。
-    QList<QList<int>> printDataGroups;
 
     // ---- 冷字段（见 LineExtras）：空 extras 与旧的空容器完全等价 ----
     // 读访问器返回引用；无 extras 时返回进程级静态空容器（只读，勿写入）。
@@ -331,6 +336,15 @@ struct LogicalLine {
         static const QStringList kEmpty;
         return m_extras ? m_extras->labelDefaults : kEmpty;
     }
+    const QString& errMes() const {
+        static const QString kEmpty;
+        return m_extras ? m_extras->errMes : kEmpty;
+    }
+    const QList<QList<int>>& printDataGroups() const {
+        static const QList<QList<int>> kEmpty;
+        return m_extras ? m_extras->printDataGroups : kEmpty;
+    }
+    int printDataEndLine() const { return m_extras ? m_extras->printDataEndLine : -1; }
 
     // 写访问器：懒建 extras；若 extras 被其它副本共享（拷贝后），先分离再写，
     // 保持与旧结构（QString/QList 的 COW）一致的值语义。
@@ -347,6 +361,20 @@ struct LogicalLine {
     }
     QStringList& mutableLabelArgs() { return ensureExtras().labelArgs; }
     QStringList& mutableLabelDefaults() { return ensureExtras().labelDefaults; }
+    QString& mutableErrMes() { return ensureExtras().errMes; }
+    QList<QList<int>>& mutablePrintDataGroups() { return ensureExtras().printDataGroups; }
+    int& mutablePrintDataEndLine() { return ensureExtras().printDataEndLine; }
+
+    // 「清空」不能懒建：无 extras 时本来就没有值，直接 no-op。
+    void clearErrMes() {
+        if (m_extras) m_extras->errMes.clear();
+    }
+    void clearPrintDataIndex() {
+        if (m_extras) {
+            m_extras->printDataGroups.clear();
+            m_extras->printDataEndLine = -1;
+        }
+    }
 
     bool isNull() const { return kind == LineKind::Null; }
     bool isInstruction() const { return kind == LineKind::Instruction; }
@@ -365,9 +393,11 @@ struct LogicalLine {
 
 private:
     // 冷字段的按需存储；空指针 = 该行完全不用 columnDefaults / labelArgs /
-    // labelDefaults。拷贝 LogicalLine 时共享（写时分离，见 ensureExtras）。
+    // labelDefaults / errMes / printDataGroups。拷贝 LogicalLine 时共享
+    //（写时分离，见 ensureExtras）。
     std::shared_ptr<LineExtras> m_extras;
 };
+
 Q_DECLARE_METATYPE(LogicalLine)
 
 #endif // AST_LOGICAL_LINE_H

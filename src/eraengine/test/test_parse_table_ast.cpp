@@ -120,13 +120,13 @@ int main(int argc, char* argv[]) {
             block.append(AstBuilder::build(blockSource.at(i), ScriptPosition("data.ERB", i, 0), resolve));
         check(table.loadScript("data", block), consumer + " loadScript");
         const LogicalLine& indexed = table.script("data")->lines.at(1);
-        check(indexed.printDataGroups == QList<QList<int>>{{2}, {4, 5}, {}},
+        check(indexed.printDataGroups() == QList<QList<int>>{{2}, {4, 5}, {}},
               consumer + " groups built before execution");
-        check(indexed.printDataEndLine == 9, consumer + " ENDDATA indexed before execution");
+        check(indexed.printDataEndLine() == 9, consumer + " ENDDATA indexed before execution");
         // 传入已有索引的 LogicalLine 也必须重建，避免重复追加。
         const QList<LogicalLine> indexedLines = table.script("data")->lines;
         table.loadScript("data", indexedLines);
-        check(table.script("data")->lines.at(1).printDataGroups == QList<QList<int>>{{2}, {4, 5}, {}},
+        check(table.script("data")->lines.at(1).printDataGroups() == QList<QList<int>>{{2}, {4, 5}, {}},
               consumer + " reload rebuilds groups");
     }
 

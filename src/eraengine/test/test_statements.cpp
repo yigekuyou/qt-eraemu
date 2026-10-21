@@ -1140,7 +1140,7 @@ int main(int argc, char* argv[]) {
                   && v.arguments.first().raw == QStringLiteral("SEX_MAIN_CHARA = 0"),
                   "VARI 行的实参是**一个不透明操作数**（不切分、不归约）");
             check(!v.isError && !v.argument.hasError(),
-                  "VARI 行装载期零诊断（" + v.errMes + v.argument.typeError + "）");
+                  "VARI 行装载期零诊断（" + v.errMes() + v.argument.typeError + "）");
         }
 
         // ② HTML_PRINT <字符串式>{, <数值式>}：C# SP_HTML_PRINT（ArgumentBuilder.cs:355）
@@ -1155,7 +1155,7 @@ int main(int argc, char* argv[]) {
                   && h.arguments.at(1).ast && h.arguments.at(1).ast->valueType() == OperandType::Int,
                   "HTML_PRINT 的第 2 实参（缓冲标志）被解析（引号内的逗号不切分）");
             check(!h.isError && !h.argument.hasError(),
-                  "HTML_PRINT 2 参形态通过校验（" + h.errMes + h.argument.typeError + "）");
+                  "HTML_PRINT 2 参形态通过校验（" + h.errMes() + h.argument.typeError + "）");
             LogicalLine one = AstBuilder::build(QStringLiteral("HTML_PRINT LOCALS"), pos, resolveOne);
             check(one.arguments.size() == 1 && !one.isError,
                   "HTML_PRINT 单参形态不受影响");

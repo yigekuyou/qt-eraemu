@@ -239,7 +239,7 @@ int main(int argc, char* argv[]) {
         check(table.loadScript("arrays", lines), "load array argument fixture");
         table.markLoadComplete();
         const auto* main = table.lineAt("arrays", 6);
-        if (main && main->isError == valid) qDebug() << main->errMes << table.parseWarnings();
+        if (main && main->isError == valid) qDebug() << main->errMes() << table.parseWarnings();
         check(main && main->isError != valid, expression + (valid ? " accepts" : " rejects"));
         const auto* forward = table.lineAt("arrays", source.size() - 1);
         check(forward && !forward->isError, "REF-to-REF forwarding accepts");

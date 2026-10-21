@@ -469,7 +469,7 @@ void applyStringAssignments(LoadContext& ctx) {
                 line.argument.typeOk = false;
                 line.argument.typeError = error;
                 line.isError = true;
-                line.errMes = error;
+                line.mutableErrMes() = error;
                 ctx.diagnostics.addRejectLine(DiagSeverity::Error, DiagCode::kArgCheck,
                     line.position.filename, line.position.lineNumber, line.position.column, 0, error);
             }
@@ -916,7 +916,7 @@ void validateArguments(const LoadContext& /*ctx*/, ScriptData& script, ParseDiag
             line.argument.typeOk = false;
             line.argument.typeError = semanticError;
             line.isError = true;
-            line.errMes = semanticError;
+            line.mutableErrMes() = semanticError;
         }
         if (line.argument.hasError()) {
             // 结构告警：不参与去重（与串行版一致，key 留空）
@@ -1143,7 +1143,7 @@ void validateScriptLines(const LoadContext& ctx, ScriptData& script, ParseDiagno
                 line.argument.typeOk = false;
                 line.argument.typeError = error;
                 line.isError = true;
-                line.errMes = error;
+                line.mutableErrMes() = error;
                 sink.addRejectLine(DiagSeverity::Error,
                     scopeError ? DiagCode::kIdentifierScope : DiagCode::kArgCheck,
                     line.position.filename, line.position.lineNumber, line.position.column, 0, error);
@@ -1169,13 +1169,13 @@ void validateScriptLines(const LoadContext& ctx, ScriptData& script, ParseDiagno
             line.argument.typeOk = ok;
             line.argument.typeError.clear();
             line.isError = !ok;
-            line.errMes.clear();
+            line.clearErrMes();
             if (!ok) {
                 const QString error = QCoreApplication::translate("ParseDiagnostics",
                     "%1 的变量参数无法装载：%2 (%3)")
                     .arg(line.functionName, operand.raw, line.position.toString());
                 line.argument.typeError = error;
-                line.errMes = error;
+                line.mutableErrMes() = error;
                 sink.addRejectLine(DiagSeverity::Error, DiagCode::kArgCheck,
                     line.position.filename, line.position.lineNumber, line.position.column, 0, error);
             }
@@ -1190,7 +1190,7 @@ void validateScriptLines(const LoadContext& ctx, ScriptData& script, ParseDiagno
                 line.argument.typeOk = false;
                 line.argument.typeError = error;
                 line.isError = true;
-                line.errMes = error;
+                line.mutableErrMes() = error;
                 sink.addRejectLine(DiagSeverity::Error, DiagCode::kArgCheck,
                     line.position.filename, line.position.lineNumber, line.position.column, 0, error);
             }
@@ -1227,7 +1227,7 @@ void validateScriptLines(const LoadContext& ctx, ScriptData& script, ParseDiagno
                 line.argument.typeError = QCoreApplication::translate("ParseDiagnostics", "赋值左值必须为有效变量项（%1：%2）")
                                               .arg(dest.left(60), lvalueError);
                 line.isError = true;
-                line.errMes = line.argument.typeError;
+                line.mutableErrMes() = line.argument.typeError;
                 sink.addRejectLine(DiagSeverity::Error, DiagCode::kArgCheck,
                     line.position.filename, line.position.lineNumber, line.position.column, 0,
                     line.argument.typeError);
@@ -1245,7 +1245,7 @@ void validateScriptLines(const LoadContext& ctx, ScriptData& script, ParseDiagno
                         line.argument.typeOk = false;
                         line.argument.typeError = QCoreApplication::translate("ParseDiagnostics", "赋值右值无法解析或包含空项");
                         line.isError = true;
-                        line.errMes = line.argument.typeError;
+                        line.mutableErrMes() = line.argument.typeError;
                         sink.addRejectLine(DiagSeverity::Error, DiagCode::kArgCheck,
                             line.position.filename, line.position.lineNumber, line.position.column, 0,
                             line.argument.typeError);
@@ -1255,14 +1255,14 @@ void validateScriptLines(const LoadContext& ctx, ScriptData& script, ParseDiagno
                     line.argument.typeOk = false;
                     line.argument.typeError = QCoreApplication::translate("ParseDiagnostics", "复合赋值不允许列表");
                     line.isError = true;
-                    line.errMes = line.argument.typeError;
+                    line.mutableErrMes() = line.argument.typeError;
                 }
             }
             if (decl && decl->isConst) {
                 line.argument.typeOk = false;
                 line.argument.typeError = QCoreApplication::translate("ParseDiagnostics", "不能赋值const变量");
                 line.isError = true;
-                line.errMes = line.argument.typeError;
+                line.mutableErrMes() = line.argument.typeError;
             }
         }
     }

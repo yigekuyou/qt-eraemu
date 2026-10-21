@@ -91,7 +91,7 @@ void TestParseDiagnostic::astBuilderEmitsUnknownInstruction() {
     QVERIFY2(x.message.contains(QStringLiteral("NOTACOMMAND")), qPrintable(x.message));
     QVERIFY2(x.snippet.contains(QStringLiteral("NOTACOMMAND")), qPrintable(x.snippet));
     // 显式错误标记（行自带，供缓存/诊断复查）
-    QCOMPARE(line.errMes, QStringLiteral("未识别的指令: NOTACOMMAND"));
+    QCOMPARE(line.errMes(), QStringLiteral("未识别的指令: NOTACOMMAND"));
 
     // 已知指令不产生诊断
     ParseDiagnostics ok;

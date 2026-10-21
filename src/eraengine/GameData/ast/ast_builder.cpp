@@ -1175,7 +1175,7 @@ LogicalLine AstBuilder::build(const QString& rawLine,
         const QStringList parts = splitTopLevelComma(expr);
         if (parts.size() > 2) {
             line.isError = true;
-            line.errMes = QCoreApplication::translate("ParseDiagnostics", "%1 参数过多（最多 2 个，实得 %2）")
+            line.mutableErrMes() = QCoreApplication::translate("ParseDiagnostics", "%1 参数过多（最多 2 个，实得 %2）")
                               .arg(line.functionName).arg(parts.size());
         } else if (!parts.isEmpty()) {
             Operand operand(parts.first());
@@ -1361,7 +1361,7 @@ LogicalLine AstBuilder::build(const QString& rawLine,
 
     if (line.functionName == "DT_COLUMN_OPTIONS") {
         const auto parts = splitTopLevelComma(remainder);
-        const auto fail = [&] { line.isError = true; line.errMes = "Invalid DT_COLUMN_OPTIONS arguments"; };
+        const auto fail = [&] { line.isError = true; line.mutableErrMes() = "Invalid DT_COLUMN_OPTIONS arguments"; };
         if (parts.size() < 3) fail();
         for (int i = 0; i < parts.size(); ++i) {
             QString text = parts[i].trimmed();
@@ -1455,7 +1455,7 @@ LogicalLine AstBuilder::build(const QString& rawLine,
                    << "原文:" << trimmed.left(80);
         // 结构化诊断：Warning 级（按宽容语义继续执行 = no-op），带位置与原文，
         // 供装载期按类汇总（见 parse_diagnostic.h / 调试与错误.md 的警告等级）。
-        line.errMes = QCoreApplication::translate("ParseDiagnostics", "未识别的指令: %1").arg(line.functionName);
+        line.mutableErrMes() = QCoreApplication::translate("ParseDiagnostics", "未识别的指令: %1").arg(line.functionName);
         if (diagnostics) {
             // 结构化定位（LSP/MCP 直接可用）：LSP 要 0 基 (行, 列) + 长度，MCP 要数字。
             // AstBuilder 没有 token 列号（Word 只带类别+文本），但指令名就是本行的

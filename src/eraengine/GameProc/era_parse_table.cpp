@@ -400,30 +400,40 @@ bool EraParseTable::loadScript(const QString& scriptName, const QList<LogicalLin
         // Also bind callers that supply LogicalLine directly rather than AstBuilder.
         line.runnerInstruction = classifyRunnerInstruction(line.functionName);
         if (!isDataConsumer(line.functionName)) continue;
-        line.printDataGroups.clear();
-        line.printDataEndLine = -1;
+        // 先收集到**局部**容器，最后只对真正有段的行写进 LineExtras：
+        // 直接 `line.mutablePrintDataGroups().clear()` 会给每一个数据消费行
+        // 都懒建 extras（那是白占，见 logical_line.h 的冷字段说明）。
+        QList<QList<int>> groups;
+        int endLine = -1;
         bool inList = false;
         for (int j = i + 1; j < data.lines.size(); ++j) {
             const QString& name = data.lines.at(j).functionName;
             if (name == QLatin1String("ENDDATA")) {
-                line.printDataEndLine = j;
+                endLine = j;
                 break;
             }
             if (name == QLatin1String("DATALIST")) {
                 inList = true;
-                line.printDataGroups.append(QList<int>());
+                groups.append(QList<int>());
             } else if (name == QLatin1String("ENDLIST")) {
                 inList = false;
             } else if (name == QLatin1String("DATA") || name == QLatin1String("DATAFORM")) {
                 if (inList) {
-                    if (line.printDataGroups.isEmpty()) line.printDataGroups.append(QList<int>());
-                    line.printDataGroups.last().append(j);
+                    if (groups.isEmpty()) groups.append(QList<int>());
+                    groups.last().append(j);
                 } else {
-                    line.printDataGroups.append(QList<int>{j});
+                    groups.append(QList<int>{j});
                 }
             } else {
                 break;
             }
+        }
+        if (!groups.isEmpty() || endLine >= 0) {
+            line.mutablePrintDataGroups() = groups;
+            line.mutablePrintDataEndLine() = endLine;
+        } else {
+            // 重复装载同一脚本时清掉旧索引；没有 extras 时本来就是空的。
+            line.clearPrintDataIndex();
         }
     }
 

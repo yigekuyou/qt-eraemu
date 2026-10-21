@@ -13,6 +13,7 @@ participant "AstBuilder /\n解析器" as AB
 participant "EraParseTable" as T
 participant "VariableTable /\nparamNames" as VT
 participant "VariableStorage" as S
+participant "loadpass\n(LoadContext)" as LP
 participant "parsecheck\n(const ParseIrView)" as PC
 participant "ParseDiagnostics" as D
 participant "LSP / 测试 / CLI" as LSP
@@ -42,13 +43,25 @@ end
 E -> T : markLoadComplete()
 note right of T
   一个静态表驱动，表即流程：
-  kLoadPasses[7] = { label, fn, gate, phaseAfter }
+  kLoadPasses[7] = { label, fn, memberFn, gate, phaseAfter }
   · 顺序 = 执行顺序；日志文案也取自表（新增步骤只改表）
   · gate：受哪个开关门控（Always / NotCalledWarning），
     驱动逻辑里只有 isGateOpen() 一处按它求值
   · phaseAfter：该步完成后允许进入的阶段（数据，不是分支）
-  · 4/5/6(+7) 只读：不改运行行为，可脱离本函数单独调用
-  · 4/5/6 的 fn 只是 forwarder，算法在 parsecheck 里
+  · 1/2/3 的 fn = loadpass 自由函数（吃可写 LoadContext，
+    ctx 在循环外只构造一次）；4/5/6/7 走 memberFn
+  · fn / memberFn 恰有一个非空，驱动处只有一处 if 分派
+  · 4/5/6 的 memberFn 只是 forwarder，算法在 parsecheck 里
+end note
+
+note right of LP
+  LoadContext = 可写装载 IR 的**视图**（纯数据，无回调）：
+  scripts / variables / functions / storage / evaluator /
+  gameBaseData / diagnostics / labelLists / paramNames /
+  declarationsResolved / constProvidersReady /
+  constantTable / positionScript / positionLine
+  · 纯数据 → 1/2/3 可脱离解析表驱动（文件里无 EraParseTable）
+  · 视图不是拥有者：被引用的表仍由 EraParseTable 持有
 end note
 
 note right of T
@@ -62,25 +75,26 @@ note right of T
 end note
 
 group 1/6 全局声明定稿【改状态】
-  T -> T : resolveGlobalDeclarationsStep()
-  note right : = resolveGlobalDeclarations() + finalizeLabelIndex()
+  T -> LP : resolveGlobalDeclarationsStep(ctx)
+  note right : = resolveGlobalDeclarations() + finalizeLabelIndex()（都在 loadpass）
 end
 
 group 2/6 就地定型【改状态】
-  T -> T : finalizeBindings()
-  T -> T : applyVariableTypes() / 赋值 AST 重建
-  T -> AB : parseScopedExpression（带 paramNames）
+  T -> LP : finalizeBindings(ctx)
+  LP -> LP : applyVariableTypes() / 赋值 AST 重建
+  LP -> AB : parseScopedExpression（带 paramNames）
   AB -> AB : VariableTable::applyTypes / walkApply
-  AB --> T : 类型 / 维数 / lengths + AccessKind + VariableKey
-  T -> VT : buildPrivateNameTable()（声明 → scopeId → 名字 → 键）
-  T -> S : installPrivateScopeTable(table)
+  AB --> LP : 类型 / 维数 / lengths + AccessKind + VariableKey
+  LP -> VT : buildPrivateNameTable()（声明 → scopeId → 名字 → 键）
+  LP -> S : installPrivateScopeTable(table)
   note right : 此后再进函数只记当前帧，不再建表（前置条件用 Q_ASSERT_X 断言声明已定稿）
 end
 
 group 3/6 参数校验【改状态：置 line.isError；出诊断】
-  T -> D : validateExpression（维数 / 常量下标 vs lengths / 类型）
-  T -> D : columnDefaults（DT_COLUMN_OPTIONS DEFAULT）
-  T -> D : kArgCheck / kExprParse / kIdentifierScope / kSharpLine
+  T -> LP : finalizeValidation(ctx)
+  LP -> D : validateExpression（维数 / 常量下标 vs lengths / 类型）
+  LP -> D : columnDefaults（DT_COLUMN_OPTIONS DEFAULT）
+  LP -> D : kArgCheck / kExprParse / kIdentifierScope / kSharpLine
 end
 
 group 只读检查步骤（不改变运行行为）

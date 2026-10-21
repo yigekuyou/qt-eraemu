@@ -116,6 +116,8 @@ GameProc/era_parse_table.cpp
 GameProc/era_parse_table.h
 GameProc/parse_checks.cpp
 GameProc/parse_checks.h
+GameProc/load_passes.cpp
+GameProc/load_passes.h
 GameProc/execution_engine.cpp
 GameProc/execution_engine.h
 GameProc/ee_extension.h

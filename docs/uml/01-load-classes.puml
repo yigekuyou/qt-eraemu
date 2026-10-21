@@ -30,18 +30,12 @@ package "GameProc" {
     + scripts() / variableTable() / variableStorage()   ' 只读 getter
     + clearDiagnostics()
     - makeIrView() : ParseIrView ' 只做指针打包
-    - resolveGlobalDeclarations()
-    - resolveGlobalDeclarationsStep()   ' 组合入口：上者 + finalizeLabelIndex
-    - finalizeLabelIndex()
-    - finalizeBindings()
-    - applyVariableTypes()
-    - finalizeValidation()
+    - resolveGlobalDeclarations()   ' 仅预登记结算用（实现在 loadpass）
     - checkNotCalledFunctions()
     - 位置区 / 跳转标记区 / 调用栈（: 见下）
     + loadPhase() : LoadPhase   ' Empty / Loading / Bound / Finalized
     + isFinalized() / isBoundOrLater()
     + readOnlyPassRunCount(pass) : int
-    - installPrivateScopes()
     - enterReadOnlyPass(pass, entryName) : bool
     - isGateOpen(gate) : bool
     {static} - kLoadPasses : LoadPass[7]  ' 表即流程
@@ -49,9 +43,11 @@ package "GameProc" {
 
   struct LoadPass {
     label : const char*
-    fn : void (EraParseTable::*)()
+    fn : void (*)(LoadContext&)   ' 1/2/3：loadpass 自由函数
+    memberFn : void (EraParseTable::*)()  ' 4/5/6/7：尚未搬出
     gate : LoadPassGate   ' Always / NotCalledWarning
     phaseAfter : LoadPhase
+    ' fn 与 memberFn 恰有一个非空（markLoadComplete 一处 if 分派）
   }
 
   enum LoadPassGate {
@@ -70,6 +66,26 @@ package "GameProc" {
     StaticTargets
     Structures
     StaticValues
+  }
+
+  package "loadpass（可写收尾，自由函数）" {
+    struct LoadContext {
+      scripts / variables / functions      ' 可写：就地定型
+      storage / evaluator / gameBaseData   ' 可写：装名表 / 装 provider / 求值
+      diagnostics                          ' 只写：诊断跨步骤累积
+      labelLists / paramNames              ' 可写：排序固化 / 补顶层空集
+      declarationsResolved                 ' pass 1 置位（类里仍读）
+      constProvidersReady                  ' pass 1 幂等 guard
+      positionScript / positionLine        ' 只读引用：运行期位置
+    }
+    class "写步骤自由函数" as WriteFns {
+      resolveGlobalDeclarationsStep(ctx)
+      finalizeBindings(ctx)
+      finalizeValidation(ctx)
+      resolveGlobalDeclarations(ctx)   ' 预登记结算也用
+      finalizeLabelIndex(ctx)
+      parseScopedExpression(ctx, …) / expressionAstInScope(ctx, …)
+    }
   }
 
   package "parsecheck（只读收尾，自由函数）" {
@@ -154,14 +170,16 @@ EraParseTable ..> ConstantTable : 名表下标
 EraParseTable ..> ParseIrView : makeIrView()
 ParseIrView <.. FreeFns : const 输入
 EraParseTable ..> FreeFns : 4/5/6 forwarder
+EraParseTable ..> LoadContext : makeLoadContext()
+EraParseTable ..> WriteFns : kLoadPasses 1/2/3 直连（无 forwarder）
 VariableTable *-- VariableDecl
 EraParseTable --> VariableConfig : 尺寸 / 维数
 
 note bottom of EraParseTable
   收尾由 kLoadPasses[7] 驱动（表即流程，顺序即执行顺序）：
-  1/6 resolveGlobalDeclarationsStep（声明定稿 + 标签索引）  改状态
-  2/6 finalizeBindings（含 applyVariableTypes）             改状态
-  3/6 finalizeValidation（表达式 / 常量下标 / 实参）        改状态
+  1/6 resolveGlobalDeclarationsStep（声明定稿 + 标签索引）  loadpass · 改状态
+  2/6 finalizeBindings（含 applyVariableTypes）             loadpass · 改状态
+  3/6 finalizeValidation（表达式 / 常量下标 / 实参）        loadpass · 改状态
   4/6 resolveStaticTargets（CALL / GOTO / TRY*）           只读
   5/6 checkStructures（IF / FOR / REPEAT 配对）             只读
   6/6 checkStaticValues（除零 / 负下标 / 尺寸 / 名字表）    只读
@@ -171,7 +189,10 @@ note bottom of EraParseTable
 
   4/5/6 的实现已搬出本类：本类只剩一行 forwarder，
   真正的算法在 parsecheck 的自由函数里（输入是 ParseIrView）。
-  1/2/3 会改装载状态，仍留在本类 —— 这是当前的分界线。
+  1/2/3 的实现也已搬出：表项直接指向 loadpass 的自由函数，
+  输入是可写的 LoadContext，类内不再有它们的成员入口 ——
+  本类只剩「解析入口 + 表 + 阶段机 + getter」。
+  7 仍在本类：它的 gate 开关是解析表的装载选项。
 end note
 
 note right of ParseIrView

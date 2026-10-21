@@ -64,9 +64,11 @@ note right of Finish
   Dynamic 只留给「有系统元数据但无系统存储槽」
   的裸名：真实语料 eraTW 0.5% / FL3.8 0.3%。
 
-  4/5/6 只读检查已搬出 EraParseTable：
-  输入 ParseIrView（全 const），输出只有诊断；
-  1/2/3 会改装载状态，仍在 EraParseTable 里。
+  收尾三层，各自只有一份实现、输入类型不同：
+  4/5/6 只读检查 → parsecheck，输入 ParseIrView（全 const）；
+  1/2/3 写步骤 → loadpass，输入 LoadContext（纯数据、可写视图）；
+  7 仍在本类（gate 开关是装载选项）。
+  EraParseTable 只剩「解析入口 + pass 表 + 阶段机 + getter」。
 
   阶段机显式：Empty → Loading → Bound → Finalized。
   pass 表的 gate / phaseAfter 是数据；

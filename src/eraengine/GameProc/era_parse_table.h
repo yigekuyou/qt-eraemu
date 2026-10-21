@@ -40,6 +40,7 @@ class ExpressionEvaluator;
 // 只读收尾步骤（4/5/6 号 pass）的输入视图，实现见 parse_checks.h。
 // 这里只前置声明：makeIrView() 的定义在 .cpp（那边才需要完整类型）。
 namespace parsecheck { struct ParseIrView; }
+namespace loadpass { struct LoadContext; }
 
 // ---------------------------------------------------------------------------
 // 调用帧 (Call frame)
@@ -309,10 +310,6 @@ public:
     // 与“先 clear 再装”是等价的显式契约。
     void markLoadComplete();
 
-    // 收尾子步骤：把 m_labelLists 每个同名列表按 (脚本名, 行号) 排序固化一次。
-    // labels() 不再每次调用重排；resolveCallableLabel 的「第一份」有确定含义。
-    void finalizeLabelIndex();
-
     // ---- HTML 字符串的**反向追踪**（装载器在装载期调用一次）-----------------
     // 从 `HTML_PRINT X` 出发回溯 X 的写链（`X = f1` / `X += f2` / `X += f3` …），
     // 把整条链在装载期拼成一棵 **PLUS 树**装回该行的实参：`PrintTemplateCompiler::
@@ -445,34 +442,13 @@ private:
     // 文本版（预扫描「先登记 #DIM/#DIMS 再构造 AST」用）：直接按声明文本登记。
     void parseVariableDeclarationText(const QString& rawLine, const ScriptPosition& position,
                                       const QString& currentFunction, bool isHeaderFile);
-    // 全体脚本变量类型回填（**就地定型**，见 .cpp 说明）。
-    void applyVariableTypes();
-    // 字符串赋值的右值改按 StrForm 解析（对齐 C# AnalyseFormattedString）
-    void applyStringAssignments();
-    // #DIM/#DIMS 初值：全局装载时写入
-    void applyVariableDefaults(const QList<VariableDecl>& decls);
-    void applyGlobalVariableDefaults();
-    // 用户自定义函数的强类型化：形参类型由变量表回填（#DIM/#DIMS + ARG/ARGS），
-    // 返回类型由 #FUNCTION(S) 决定。必须在 markLoadComplete 内、变量声明解析之后。
-    void resolveUserFunctionTypes();
-    // 调用点类型校验（CALL 语句 + 式中调用）
-    QString checkUserCallArgs(const UserFunctionDecl& decl,
-                              const QList<OperandType>& argTypes) const;
-    // 参数个数/类型校验（markLoadComplete 内、类型回填之后调用）
-    void validateArguments();
-    // 函数调用重绑 + 校验（markLoadComplete 内、类型回填之后调用）：
-    // 把每个 FunctionNode 重新解析为 内置函数 / 用户自定义函数 / 未定义函数，
-    // 并用最终（类型回填后）的实参 AST 复刻 C# FunctionMethod.CheckArgumentType()。
-    void resolveFunctionNodes();
-    // 全体脚本绑定：字符串赋值/FUNC/变量类型/赋值 AST/函数调用解析（一趟）。
-    void finalizeBindings();
-    // 私有作用域名表安装：由声明一次性建好（VariableTable::buildPrivateNameTable）
-    // 并装进 VariableStorage。**前置条件**：声明已定稿 —— 只允许在
-    // resolveGlobalDeclarations()（维数/函数类型）之后调用；finalizeBindings()
-    // 末尾是唯一调用点。安装后运行期 setPrivateScope 只记录当前帧，不再建表。
-    void installPrivateScopes();
-    // 全体脚本校验：产出诊断，须在**全部绑定完成后**统一调用（跨文件前向引用）。
-    void finalizeValidation();
+
+    // ---- 收尾写步骤（1/2/3 号 pass）只有自由函数实现 ----------------------
+    // 实现已整体搬到 load_passes.cpp（自由函数，输入是可写的 LoadContext）；
+    // kLoadPasses 直接指向自由函数，类内不再有 1/2/3 的成员入口。
+    // 唯一保留的成员入口是 resolveGlobalDeclarations —— 装载期预登记结算
+    // （finishDeclarationPreRegistration）在收尾开始前就要用它。
+    void resolveGlobalDeclarations();
 
 public:
     // ---- 只读检查步骤（可单独调用）---------------------------------------
@@ -504,11 +480,6 @@ private:
     // （名字运行期求值）就无法判定「没被调用」，此时全部不报 —— eraTW 两种条件都命中，
     // 因此默认关闭、真实游戏一般不开。开启后也用同一套判据，避免误报。
     void checkNotCalledFunctions();
-    // 全局声明定稿：常量/维数求值器 + 维数 + 全局初值 + 用户函数类型（幂等）。
-    void resolveGlobalDeclarations();
-    // 收尾步骤 1 的组合入口（顺序不变）：resolveGlobalDeclarations()
-    // 之后紧接 finalizeLabelIndex()。仅为收尾 pass 表提供一个单函数指针。
-    void resolveGlobalDeclarationsStep();
 
     // 收尾 pass 表条目（定义见 .cpp 的 EraParseTable::kLoadPasses）。
     // 表的顺序就是执行顺序；日志文案也来自这里，新增步骤只改表。
@@ -516,34 +487,27 @@ private:
     // 只有一处按 Gate 求值，增删开关不必再改驱动逻辑。
     enum class LoadPassGate : quint8 { Always, NotCalledWarning };
     struct LoadPass {
-        const char* label;             // 日志步骤名（含 "N/6" 编号）
-        void (EraParseTable::*fn)();   // 步骤入口
-        LoadPassGate gate;             // 受哪个开关门控（数据）
-        LoadPhase phaseAfter;          // 本步完成后允许进入的阶段（数据）
+        const char* label;                        // 日志步骤名（含 "N/6" 编号）
+        // 1/2/3 号步骤：吃 LoadContext 的自由函数（实现已搬到 load_passes.cpp）。
+        void (*fn)(loadpass::LoadContext&);
+        // 尚未搬出的步骤（4/5/6/7）的成员入口。fn 与 memberFn 恰有一个非空，
+        // 由 markLoadComplete 的那一处 if 分派 —— 顺序/门控/阶段逻辑都不变。
+        void (EraParseTable::*memberFn)();
+        LoadPassGate gate;                        // 受哪个开关门控（数据）
+        LoadPhase phaseAfter;                     // 本步完成后允许进入的阶段（数据）
     };
     static const LoadPass kLoadPasses[7];
     [[nodiscard]] bool isGateOpen(LoadPassGate gate) const;
     // 只读步骤的统一守卫：阶段不符 -> qWarning + false（调用方 no-op）；
     // 阶段符合 -> 计数 + true。
     [[nodiscard]] bool enterReadOnlyPass(ReadOnlyPass pass, const char* entryName);
-    // 校验告警收集器：按脚本并行时每脚本各持一个，随后**按脚本顺序**合并。
-    //   warnings : 告警文本，保持脚本内产生顺序；
-    //   keys     : 与 warnings 一一对应；非空 = 该告警的「去重 key」
-    //              （同一函数表达式跨行共享时只报一次），空串 = 不去重（结构告警）；
-    //   seen     : 本脚本内去重（跨脚本去重在有序合并阶段再统一做）。
-    struct WarningCollector {
-        QList<QString> warnings;
-        QList<QString> keys;
-        QList<ScriptPosition> positions;
-        QSet<QString> seen;
-    };
-    // 纯函数（不触碰成员）：只读 AST + 写入 out —— 线程安全，供并行校验使用。
-    static void collectFunctionWarnings(const QSharedPointer<ExpressionNode>& ast,
-                                        const ScriptPosition& position, WarningCollector& out);
-
     // 只读收尾步骤（4/5/6 号 pass）的视图构造：只做指针打包，不读取内容。
     // 三个步骤的实现是 parse_checks.cpp 里的自由函数，public 方法只做转发。
     [[nodiscard]] parsecheck::ParseIrView makeIrView() const;
+
+    // 收尾写步骤（1/2/3 号 pass）的视图构造：只打包引用/指针，不读取内容。
+    // 三个步骤的实现是 load_passes.cpp 里的自由函数，成员入口只做转发。
+    [[nodiscard]] loadpass::LoadContext makeLoadContext();
 
     void setCurrentLineInternal(int line, bool forceEmit = false);
     void pushFrame(const Frame& frame);

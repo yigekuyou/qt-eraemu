@@ -18,6 +18,7 @@
 #include "era_parse_table.h"
 #include <QCoreApplication>
 #include "parse_checks.h"   // 收尾步骤 4/5/6 的自由函数实现（只读 IR 视图）
+#include "load_passes.h"    // 收尾步骤 1/2/3 的自由函数实现（可写 IR 视图 = LoadContext）
 #include "process_state.h"
 #include "eraengine_log.h"   // eraTrace（逐文件高频日志）
 #include "variable_storage.h"
@@ -45,13 +46,6 @@
 #include <QtConcurrent/QtConcurrent>
 #include <QThreadPool>
 
-namespace {
-// 并行化开关：任务数 >1 且线程池 >1 时启用（==1 时顺序执行，避免自锁 ——
-// 绑定/校验在调用方线程（装载收尾）执行，blockingMap 会再切子任务）。
-inline bool canParallelize(int n) {
-    return n > 1 && QThreadPool::globalInstance()->maxThreadCount() > 1;
-}
-}  // namespace
 
 EraParseTable::EraParseTable(ProcessState* state, ExecutionEngine* execEngine, QObject* parent)
     : QObject(parent)
@@ -155,73 +149,10 @@ QSharedPointer<ExpressionNode> EraParseTable::parseScopedExpression(const QStrin
                                                                    const QString& scope,
                                                                    bool quiet, bool foldConstants,
                                                                    bool allowAfterFinalize) {
+    // 阶段机留在 EraParseTable（阶段是它的状态）；解析本身是 load_passes.cpp 的
+    // 自由函数，数据由一次性的 LoadContext 视图给出。
     if (isFinalized() && !allowAfterFinalize) return nullptr; // Source compilation is restricted to loading.
-    const QString key = expr.trimmed();
-    if (key.isEmpty()) {
-        return nullptr;
-    }
-
-    ExpressionLexer lexer;
-    const QList<ExpressionToken> tokens = lexer.tokenize(key, 1);
-    if (tokens.isEmpty()) {
-        return nullptr;
-    }
-
-    ExpressionParser parser;
-    parser.setQuiet(quiet);
-    parser.setVariableTypeProvider([this, scope](const QString& name) { return m_variables.typeOf(name, scope); });   // 赋值右值的临时解析：不刷「表达式语法错误」
-    // 强类型：仅用户自定义函数由 Provider 决定；内置函数（内部命令）由
-    // ExpressionParser 内部的 kBuiltinFunctions 目录解析（对齐 C# methodDic）。
-    // 装载期间用户函数可能尚未 merge，markLoadComplete 会再统一重绑一次。
-    parser.setFunctionTypeProvider([this](const QString& name) -> OperandType {
-        // #FUNCTIONS -> Str；#FUNCTION -> Int；无 # 行的 @label 按 Int（宽容语义）。
-        // 与内置函数同名的、无 #FUNCTION 的 @label **不覆盖**内置函数（见 userCallReturnType）。
-        return userCallReturnType(name);
-    });
-
-    // 格式化串：@"..." / \@...#...\@
-    parser.setFormProvider([this, scope](const QString& text, bool yenAt) -> QSharedPointer<ExpressionNode> {
-        const AstResolver resolve = [this, scope](const QString& e) { return parseScopedExpression(e, scope, false, true, false); };
-        if (yenAt) return StrFormParser::parseYenAt(text, resolve, m_evaluator && m_evaluator->ignoreTripleSymbols());
-        return QSharedPointer<ExpressionNode>(StrFormParser::parse(text, resolve, m_evaluator && m_evaluator->ignoreTripleSymbols()));
-    });
-    if (m_constantTable) {
-        const ConstantTable* ct = m_constantTable;
-        parser.setConstantNameProvider([ct](const QString& var, const QString& name) {
-            return ct->indexForVariable(var, name) >= 0;
-        });
-    }
-    // `#DIM CONST NAME = value`：解析期折叠为字面量（与 CSV 常数名区分：这里返回**值**）。
-    // 按 (名字, 作用域) 查常数表 —— 常数表本身按「归属作用域」分离（见
-    // VariableTable），因此：
-    //   * 函数内的私有常量只在本函数内折叠（C#：函数内 `#DIM CONST` 是该函数的
-    //     私有常量，UserDefinedVariableData.Private）；
-    //   * 本作用域的可写私有变量（`#DIM 色_RED7`）遮蔽别处的同名常量 ——
-    //     否则会把这个可写变量的**左值**折成字面量（eraTW 的 CASINO 色_* 26 行
-    //     就是这么整行报「赋值左值必须为有效变量项」并失效的）。
-    // 运行期变量名解析（GETVAR 族）走 foldConstants=false：C# 的 ReduceExpressionTerm
-    // 对常量也返回 VariableTerm，GETVAR 要能**识别**常量（见 runtimeVariableReference）。
-    if (foldConstants) {
-        const VariableTable* vt = &m_variables;
-        parser.setConstantValueProvider([vt, scope](const QString& name) -> QVariant {
-            qint64 iv = 0;
-            if (vt->constInt(name, iv, scope)) return QVariant::fromValue<qint64>(iv);
-            QString sv;
-            if (vt->constStr(name, sv, scope)) return QVariant(sv);
-            return QVariant();
-        });
-    }
-    QSharedPointer<ExpressionNode> ast = parser.parse(tokens);
-    if (ast) {
-        // 立即按变量表定型（新解析的 AST 也保持强类型）。**带形参表**：
-        // 「变量分词」的描述符在这里就算 —— 收尾定型（applyVariableTypes）之后
-        // 还有赋值 AST 重建等再解析路径，那些节点不会再回定型趟，
-        // 形参名必须在此处就判成 Dynamic（否则形参读会被标成私有数组）。
-        VariableTable::applyTypes(*ast, m_variables, scope,
-                                  paramNamesOf(scope.toUpper()));
-    }
-    PrintTemplateCompiler::prepare(ast);
-    return ast;
+    return loadpass::parseScopedExpression(makeLoadContext(), expr, scope, quiet, foldConstants);
 }
 
 const ScriptData* EraParseTable::script(const QString& scriptName) const {
@@ -271,14 +202,7 @@ bool EraParseTable::hasCallableLabel(const QString& label) const {
 // 收尾定型（applyVariableTypes）的并行趟开始前会先建全 —— 定型期间只读不插。
 const QSet<QString>* EraParseTable::paramNamesOf(const QString& upperScope) const
 {
-    // **只查不插**：并行装载的 worker（逐行解析表达式）与收尾定型趟
-    //（按脚本并行）都会走到这里 —— 任何按需插入都是共享 QHash 上的竞态
-    //（eraMegaten 2260 脚本并行装载实测崩溃）。集合在两处构建：
-    //   · loadScript 注册函数时（与 m_functions.insert 同点、同线程纪律）；
-    //   · applyVariableTypes 并行趟开始前（收尾前的兜底，覆盖一切）。
-    // miss（函数未知/顶层空作用域）返回 nullptr —— 与「该函数没有形参」等价。
-    const auto it = m_paramNamesByFunction.constFind(upperScope);
-    return it != m_paramNamesByFunction.constEnd() ? &it.value() : nullptr;
+    return loadpass::paramNamesOf(m_paramNamesByFunction, upperScope);
 }
 
 const LogicalLine* EraParseTable::lineAt(const QString& scriptName, int line) const {
@@ -349,16 +273,7 @@ const UserFunctionInfo* EraParseTable::userFunction(const QString& name) const {
 // ——同一个调用在「解析期」被当成内置函数、到 finalize 又被重绑成用户函数，
 // 两步结论不一致。现在两处都走本函数。
 OperandType EraParseTable::userCallReturnType(const QString& name) const {
-    const UserFunctionDecl* fn = userFunction(name);
-    if (!fn) return OperandType::Unknown;
-    if (fn->isMethod) return isKnown(fn->returnType) ? fn->returnType : OperandType::Int;
-    // 无 #FUNCTION：#FUNCTION が無い関数は組み込み関数を上書きしない
-    // 内置表走 O(1) 索引；toStdString() 的堆分配只在「既非内置、又可能是扩展」
-    // 时付（findExtensionFunction 的键类型是 std::string）。
-    const QString upper = name.toUpper();
-    if (builtinFunctionIndex(upper) >= 0) return OperandType::Unknown;
-    if (findExtensionFunction(upper.toStdString()) != nullptr) return OperandType::Unknown;
-    return OperandType::Int;
+    return loadpass::userCallReturnType(m_functions, name);
 }
 
 int EraParseTable::functionExistsKind(const QString& name, bool caseInsensitive) const {
@@ -1264,21 +1179,6 @@ void EraParseTable::buildJumpMarkings(const QString& scriptName) {
 // 变量表：解析 #DIM/#DIMS/#GLOBAL/#GLOBALS/#PRIVATE，并把类型回填到 AST
 // ---------------------------------------------------------------------------
 namespace {
-// 去掉指令行的 ';' 注释（尊重引号）；#DIM CONST X = 0 ;说明 需要它
-QString stripDirectiveComment(const QString& text) {
-    QChar quote;
-    for (int i = 0; i < text.size(); ++i) {
-        const QChar c = text.at(i);
-        if (!quote.isNull()) {
-            if (c == quote) quote = QChar();
-            continue;
-        }
-        if (c == QLatin1Char('"') || c == QLatin1Char('\'')) { quote = c; continue; }
-        if (c == QLatin1Char(';')) return text.left(i);
-    }
-    return text;
-}
-
 // `#DIM CONST NAME = <初值>` 的「初值」部分（按顶层逗号切分）。
 // 空初值返回空表 —— eraTW 用它表示「初值写在其后的 { … } 块里」。
 QStringList constValueExpressions(const QString& declRest) {
@@ -1339,7 +1239,7 @@ void EraParseTable::parseVariableDeclarationText(const QString& rawLine, const S
     int i = 0;
     while (i < s.size() && !s.at(i).isSpace()) ++i;
     const QString directive = s.left(i).toUpper();
-    const QString rest = stripDirectiveComment(s.mid(i)).trimmed();
+    const QString rest = loadpass::stripDirectiveComment(s.mid(i)).trimmed();
 
     bool isStr = false;
     bool isGlobal = false;
@@ -1492,85 +1392,14 @@ void EraParseTable::parseVariableDeclaration(const LogicalLine& line, const QStr
 // 每一处使用报成「变量 TEXT 在本函数中未定义」（FL3.8 有 2469 处噪声）。
 // 这里补上「登记私有变量」这一步；运行期初值见 ExecutionEngine。
 // ---------------------------------------------------------------------------
-namespace {
-struct ScopedVarSpec {
-    bool ok = false;
-    bool isStr = false;
-    QString name;
-    QStringList lengths;   // 维度字面量（空 = 标量 / 一维长度 1）
-    bool hasInit = false;
-    QString init;          // VARI: 整数表达式原文；VARS: 首尾引号之间的文本
-};
-
-// 变量名：与 #DIM 同一判据 —— 不以数字开头、除 '_' 外不含符号（CJK 亦可用）。
-bool isVariableName(const QString& name) {
-    if (name.isEmpty() || name.at(0).isDigit()) return false;
-    for (const QChar c : name) {
-        if (!(c.isLetterOrNumber() || c == QLatin1Char('_'))) return false;
-    }
-    return true;
-}
-
-ScopedVarSpec parseScopedVarSpec(const QString& rawLine) {
-    ScopedVarSpec spec;
-    const QString text = stripDirectiveComment(rawLine).trimmed();
-    int i = 0;
-    while (i < text.size() && !text.at(i).isSpace()) ++i;
-    const QString head = text.left(i).toUpper();
-    if (head == QLatin1String("VARI")) spec.isStr = false;
-    else if (head == QLatin1String("VARS")) spec.isStr = true;
-    else return spec;
-
-    const QString rest = text.mid(i).trimmed();
-    if (rest.isEmpty()) return spec;
-
-    // C# 用第一个 '=' 切成 左（名字+长度）/ 右（初值）；引号不参与切分
-    //（字符串初值里的 '=' 必然落在最后一个引号之前，故与 C# 同结果）。
-    QString left = rest;
-    QString right;
-    const int eq = rest.indexOf(QLatin1Char('='));
-    if (eq >= 0) { left = rest.left(eq); right = rest.mid(eq + 1); }
-
-    const QStringList parts = left.split(QLatin1Char(','));
-    if (parts.isEmpty()) return spec;
-    const QString name = parts.first().trimmed();
-    if (!isVariableName(name)) return spec;
-    spec.name = name;
-
-    for (int k = 1; k < parts.size(); ++k) {
-        const QString dim = parts.at(k).trimmed();
-        bool isNumber = false;
-        dim.toLongLong(&isNumber);   // 维度必须是整数字面量（C# int.Parse）
-        // 解析失败时 C# 抛未受控的 FormatException（装载中止）。这里不登记
-        // 该行（变量按未声明处理）—— 不静默造出一个维度错误的变量。
-        if (!isNumber) return ScopedVarSpec();
-        spec.lengths.append(dim);
-    }
-
-    // 只有「不带长度列表」时才解析初值（C#：leftSplit.Length > 1 走数组分支，
-    // 该分支里 `= …` 被忽略）。
-    if (parts.size() == 1 && !right.trimmed().isEmpty()) {
-        if (spec.isStr) {
-            const int a = right.indexOf(QLatin1Char('"'));
-            const int b = right.lastIndexOf(QLatin1Char('"'));
-            if (a >= 0 && b > a) { spec.init = right.mid(a + 1, b - a - 1); spec.hasInit = true; }
-        } else {
-            spec.init = right.trimmed();
-            spec.hasInit = true;
-        }
-    }
-    spec.ok = true;
-    return spec;
-}
-} // namespace
 
 bool EraParseTable::isScopedVariableLine(const QString& rawLine) {
-    return parseScopedVarSpec(rawLine).ok;
+    return loadpass::isScopedVariableLine(rawLine);
 }
 
 void EraParseTable::registerScopedVariableLine(const QString& rawLine, const ScriptPosition& position,
                                                const QString& function) {
-    const ScopedVarSpec spec = parseScopedVarSpec(rawLine);
+    const loadpass::ScopedVarSpec spec = loadpass::parseScopedVarSpec(rawLine);
     if (!spec.ok) return;
     if (function.isEmpty()) {
         // C# 把 VARI/VARS 绑到「当前函数标签」（ParentLabelLine）；函数外没有
@@ -1589,7 +1418,7 @@ void EraParseTable::registerScopedVariableLine(const QString& rawLine, const Scr
 }
 
 void EraParseTable::applyScopedVariableLine(LogicalLine& line, const QString& function) {
-    const ScopedVarSpec spec = parseScopedVarSpec(line.raw);
+    const loadpass::ScopedVarSpec spec = loadpass::parseScopedVarSpec(line.raw);
     if (!spec.ok) return;
     if (!m_declarationsPreRegistered)
         registerScopedVariableLine(line.raw, line.position, function);
@@ -1614,63 +1443,6 @@ void EraParseTable::applyScopedVariableLine(LogicalLine& line, const QString& fu
     }
 }
 
-void EraParseTable::applyVariableTypes() {
-    // 2) 各行实际引用的 AST（并行装载时 worker 的 AST 不在主缓存中）。
-    //    **按脚本并行**：函数名全局唯一（一个函数体只在一个脚本里），
-    //    VariableTable::applyTypes 取的是 const 变量表（只读），
-    //    ArgumentParser::build 只改传入的行 —— 无共享写。
-    //    eraTW 实测这一步 ~5s（2.2M 行），是 markLoadComplete 的最大热点。
-    //
-    //    **就地定型**：不再克隆「定型副本」再换指针。打印模板的分词片段
-    //（CompiledPrintTemplatePart::expression / attributes / rawParts）与行实参
-    //    指向的是**同一批 AST 节点**，就地改类型即同时生效；因此收尾既不需要
-    //    克隆整棵树，也不需要再对模板递归重绑。
-    QList<ScriptData*> scripts;
-    scripts.reserve(m_scripts.size());
-    for (auto it = m_scripts.begin(); it != m_scripts.end(); ++it) {
-        scripts.append(&it.value());
-    }
-
-    // 形参名集合在 loadScript 注册函数时已同点建好（append-only）；这里只对
-    // **顶层空作用域**补一个空集合（函数外没有形参），并行定型趟从此只读。
-    m_paramNamesByFunction.insert(QString(), {});
-
-    const auto processScript = [this](ScriptData* sd) {
-        // 同一节点可能被多行/多片段引用（模板分词、DEFAULT 列表…）：每个作用域
-        // 只定型一次（与旧「按 ownerFunction 建缓存」等价）。行按所属函数连续存放，
-        // 因此只在作用域切换时查表，避免逐行 toUpper + 哈希。
-        QHash<QString, QSet<const ExpressionNode*>> typed;
-        QSet<const ExpressionNode*>* seen = nullptr;
-        const QSet<QString>* paramNames = nullptr;
-        QString scope;
-        for (LogicalLine& line : sd->lines) {
-            if (!seen || line.ownerFunction != scope) {
-                scope = line.ownerFunction;
-                const QString scopeKey = scope.toUpper();
-                seen = &typed[scopeKey];
-                paramNames = paramNamesOf(scopeKey);
-            }
-            const auto bind = [this, seen, &scope, paramNames](QSharedPointer<ExpressionNode>& ast) {
-                if (!ast || seen->contains(ast.data())) return;
-                seen->insert(ast.data());
-                VariableTable::applyTypes(*ast, m_variables, scope, paramNames);
-                PrintTemplateCompiler::prepare(ast);
-            };
-            for (auto& op : line.arguments) bind(op.ast);
-            bind(line.condition);
-            for (auto& ast : line.columnDefaults) bind(ast);
-            ArgumentParser::build(line);
-            for (const auto& ast : line.assignmentAsts) PrintTemplateCompiler::prepare(ast);
-            // line.printTemplate（PRINT/PRINTFORM/PRINTS 的分词）无需单独处理：
-            // 其片段表达式就是上面这批已被就地定型的节点。
-        }
-    };
-    if (canParallelize(scripts.size())) {
-        QtConcurrent::blockingMap(scripts, processScript);
-    } else {
-        for (ScriptData* sd : scripts) processScript(sd);
-    }
-}
 
 // ---------------------------------------------------------------------------
 // 收尾步骤 4/5/6 + CALL 实参校验：实现已搬到 parse_checks.cpp（自由函数，输入是
@@ -1681,6 +1453,14 @@ void EraParseTable::applyVariableTypes() {
 // EraParseTable 单独调用（见 test_parse_checks.cpp）；重复调用会重复产生诊断，
 // 调用方负责先 clearDiagnostics。
 // ---------------------------------------------------------------------------
+loadpass::LoadContext EraParseTable::makeLoadContext() {
+    // 只打包引用/指针，不读取内容；表本身仍由 EraParseTable 持有。
+    return loadpass::LoadContext{
+        m_scripts, m_variables, m_functions, m_constantTable, m_variableStorage,
+        m_evaluator, m_gameBaseData, m_diagnostics, m_labelLists, m_paramNamesByFunction,
+        m_declarationsResolved, m_constProvidersReady, m_currentScript, m_currentLine};
+}
+
 parsecheck::ParseIrView EraParseTable::makeIrView() const {
     parsecheck::ParseIrView view;
     view.scripts = &m_scripts;
@@ -1717,44 +1497,6 @@ void EraParseTable::checkStaticValues() {
     parsecheck::checkStaticValues(makeIrView(), m_diagnostics);
 }
 
-namespace {
-// 这些指令的**第一个操作数**是「目标名」（@函数名 / $标签名），不是表达式：
-// C# 走标签解析路径（ReduceLabelName 之类），不经 GetVariableToken，因此不参与
-// 「变量作用域」判定。`GOTO SKIP` 里的 SKIP 是 `$SKIP` 标签 —— 若按变量判定，
-// eraTW 会把 67 处 `GOTO <标签>` 全报成「变量未定义」（SKIP/END/FINISH/… 恰好
-// 也是别处的私有变量名）。
-bool firstArgumentIsTargetName(RunnerInstruction instruction) {
-    switch (instruction) {
-    case RunnerInstruction::GOTO:
-    case RunnerInstruction::GOTOFORM:
-    case RunnerInstruction::CALLEVENT:
-    case RunnerInstruction::TRYCALLEVENT:
-    case RunnerInstruction::CALL:
-    case RunnerInstruction::TRYCALL:
-    case RunnerInstruction::CALLFORM:
-    case RunnerInstruction::TRYCALLFORM:
-    case RunnerInstruction::TRYCCALL:
-    case RunnerInstruction::TRYCCALLFORM:
-    case RunnerInstruction::CALLF:
-    case RunnerInstruction::TRYCALLF:
-    case RunnerInstruction::CALLFORMF:
-    case RunnerInstruction::TRYCALLFORMF:
-    case RunnerInstruction::JUMP:
-    case RunnerInstruction::TRYJUMP:
-    case RunnerInstruction::JUMPFORM:
-    case RunnerInstruction::TRYJUMPFORM:
-    case RunnerInstruction::TRYGOTO:
-    case RunnerInstruction::TRYGOTOFORM:
-    case RunnerInstruction::TRYCJUMP:
-    case RunnerInstruction::TRYCJUMPFORM:
-    case RunnerInstruction::TRYCGOTO:
-    case RunnerInstruction::TRYCGOTOFORM:
-        return true;
-    default:
-        return false;
-    }
-}
-}  // namespace
 
 // ---------------------------------------------------------------------------
 // 收尾步骤 7（可选）：定义了但从未被调用的函数（对齐 C# 的 FunctionNotCalledWarning）
@@ -1891,38 +1633,23 @@ void EraParseTable::checkNotCalledFunctions() {
     }
 }
 
-void EraParseTable::finalizeLabelIndex() {
-    // 把 m_labelLists 每个同名列表按 (脚本名, 行号) 排序固化：
-    //   · labels()（callFunction / CALLEVENT 的事件导航）不再每次调用重排；
-    //   · resolveCallableLabel（跨文件 CALL/式中调用/JUMP）取「第一份」有了
-    //     确定含义 —— 并行装载的插入顺序是不确定的。
-    // 全部 @函数标签合计 ~1.1 万个（eraTW/FL3.8），一次排序是毫秒级。
-    for (auto it = m_labelLists.begin(); it != m_labelLists.end(); ++it) {
-        QList<LabelRef>& list = it.value();
-        std::sort(list.begin(), list.end(), [](const LabelRef& a, const LabelRef& b) {
-            if (a.script != b.script) return a.script < b.script;
-            return a.line < b.line;
-        });
-    }
-}
-
-void EraParseTable::resolveGlobalDeclarationsStep() {
-    // 收尾步骤 1：全局声明定稿 + 全局标签索引排序固化（顺序不可交换）。
-    resolveGlobalDeclarations();   // 声明预登记后 #FUNCTION 表才随 loadScript 补齐，此处再结算一次
-    finalizeLabelIndex();          // 全局标签索引排序固化（labels()/resolveCallableLabel 依赖）
+void EraParseTable::resolveGlobalDeclarations() {
+    // 实现已搬到 load_passes.cpp（自由函数，输入是可写的 LoadContext）。
+    loadpass::LoadContext ctx = makeLoadContext();
+    loadpass::resolveGlobalDeclarations(ctx);
 }
 
 // 收尾 pass 表：顺序 = 执行顺序（markLoadComplete 只负责按表驱动）。
 //   gate       —— 该步受哪个开关门控（数据；驱动逻辑只有一处求值）；
 //   phaseAfter —— 该步完成后允许进入的阶段（数据；只读步骤 4-7 要求 Bound）。
 const EraParseTable::LoadPass EraParseTable::kLoadPasses[7] = {
-    {"1/6 全局声明定稿(resolveGlobalDeclarations)", &EraParseTable::resolveGlobalDeclarationsStep, LoadPassGate::Always, LoadPhase::Loading},
-    {"2/6 就地定型(finalizeBindings)",              &EraParseTable::finalizeBindings,               LoadPassGate::Always, LoadPhase::Loading},
-    {"3/6 参数校验(finalizeValidation)",            &EraParseTable::finalizeValidation,             LoadPassGate::Always, LoadPhase::Bound},
-    {"4/6 跳转目标解析(resolveStaticTargets)",      &EraParseTable::resolveStaticTargets,           LoadPassGate::Always, LoadPhase::Bound},
-    {"5/6 结构配对检查(checkStructures)",           &EraParseTable::checkStructures,                LoadPassGate::Always, LoadPhase::Bound},
-    {"6/6 静态值检查(checkStaticValues)",           &EraParseTable::checkStaticValues,              LoadPassGate::Always, LoadPhase::Bound},
-    {"7(可选) 未被调用函数检查(checkNotCalledFunctions)", &EraParseTable::checkNotCalledFunctions,  LoadPassGate::NotCalledWarning, LoadPhase::Finalized},
+    {"1/6 全局声明定稿(resolveGlobalDeclarations)", &loadpass::resolveGlobalDeclarationsStep, nullptr, LoadPassGate::Always, LoadPhase::Loading},
+    {"2/6 就地定型(finalizeBindings)",              &loadpass::finalizeBindings,               nullptr, LoadPassGate::Always, LoadPhase::Loading},
+    {"3/6 参数校验(finalizeValidation)",            &loadpass::finalizeValidation,             nullptr, LoadPassGate::Always, LoadPhase::Bound},
+    {"4/6 跳转目标解析(resolveStaticTargets)",      nullptr, &EraParseTable::resolveStaticTargets, LoadPassGate::Always, LoadPhase::Bound},
+    {"5/6 结构配对检查(checkStructures)",           nullptr, &EraParseTable::checkStructures,      LoadPassGate::Always, LoadPhase::Bound},
+    {"6/6 静态值检查(checkStaticValues)",           nullptr, &EraParseTable::checkStaticValues,    LoadPassGate::Always, LoadPhase::Bound},
+    {"7(可选) 未被调用函数检查(checkNotCalledFunctions)", nullptr, &EraParseTable::checkNotCalledFunctions, LoadPassGate::NotCalledWarning, LoadPhase::Finalized},
 };
 
 const char* EraParseTable::loadPhaseName(LoadPhase phase) {
@@ -1970,12 +1697,15 @@ void EraParseTable::markLoadComplete() {
     }
     QElapsedTimer completeTimer;
     completeTimer.start();
+    // 视图只打包一次：1/2/3 号步骤吃它（自由函数），4-7 号步骤仍走成员 forwarder。
+    loadpass::LoadContext ctx = makeLoadContext();
     for (const LoadPass& pass : kLoadPasses) {
         // 唯一一处按 Gate 求值。
         if (!isGateOpen(pass.gate)) continue;
         const qint64 stepMs = completeTimer.elapsed();   // 每步重置 = 单步耗时口径
         qInfo().noquote() << "[parse] 收尾步骤" << pass.label << "开始";
-        (this->*(pass.fn))();
+        if (pass.fn) pass.fn(ctx);
+        else (this->*(pass.memberFn))();
         m_phase = pass.phaseAfter;
         qInfo().noquote() << "[parse] 收尾步骤" << pass.label << "完成:"
                           << (completeTimer.elapsed() - stepMs) << "ms";
@@ -1989,466 +1719,10 @@ void EraParseTable::markLoadComplete() {
                       << completeTimer.elapsed() << "ms";
 }
 
-void EraParseTable::resolveGlobalDeclarations() {
-    // ---- 常量/维数求值器（幂等，首次调用时设置） ----
-    if (m_evaluator && !m_constProvidersReady) {
-        m_constProvidersReady = true;
-        const VariableTable* vt = &m_variables;
-        // 表达式型常量的键 = 「归属作用域 ✕ 名字」：广域常量（owner 空）与同名的
-        // 私有常量必须分开存放，否则一个函数里的 `#DIM CONST X = 1` 会盖住另一个
-        // 函数里的 `#DIM CONST X = 2`。
-        // 唯一复合键构造点（空 owner -> "\x1fNAME"，与旧形态逐字节相同）
-        const auto constKey = [](const QString& owner, const QString& name) {
-            return eravar::makePrivateStorageKey(owner, name);
-        };
-        const auto constOwnerOf = [vt](const VariableDecl& d) -> QString {
-            return (d.scope == VarScope::Global) ? QString() : d.function;
-        };
-        QHash<QString, QList<QSharedPointer<ExpressionNode>>> constantNodes;
-        for (const auto& declaration : vt->declarations()) {
-            if (!declaration.isConst) continue;
-            const QString owner = constOwnerOf(declaration);
-            const QString key = constKey(owner, declaration.name);
-            if (constantNodes.contains(key)) continue;
-            // 表达式按**声明它的函数**作用域解析（私有常量只在该函数内可见）
-            for (const auto& source : vt->constExprs(declaration.name, owner))
-                constantNodes[key].append(expressionAstInScope(source, owner));
-        }
-        // 惰性常量表达式缓存（`#DIM CONST OBJ_ID_LAST = 人物数量上限`）
-        //   LazyConst = 逐元素的求值结果（标量常量就是单元素）
-        using LazyConst = QList<QVariant>;
-        auto lazyConst = QSharedPointer<QHash<QString, LazyConst>>::create();
-        auto lazyDepth = QSharedPointer<int>::create(0);
-        // 求值并缓存某个常量声明的全部元素；返回 nullptr 表示「不是表达式型常量」。
-        // 定位顺序与 VariableTable 的常数查询一致：先 scope 归属，再广域。
-        const auto lazyConstValues = [this, constantNodes, constKey, lazyConst, lazyDepth](
-                                         const QString& name, const QString& scope)
-            -> QSharedPointer<LazyConst> {
-            QString key = constKey(scope, name);
-            if (!constantNodes.contains(key)) key = constKey(QString(), name);
-            if (!constantNodes.contains(key)) return QSharedPointer<LazyConst>();
-            const auto cached = lazyConst->constFind(key);
-            if (cached != lazyConst->constEnd())
-                return QSharedPointer<LazyConst>::create(cached.value());
-            const auto exprs = constantNodes.value(key);
-            if (exprs.isEmpty() || !m_evaluator) return QSharedPointer<LazyConst>();
-            if (*lazyDepth >= 16) return QSharedPointer<LazyConst>();   // 循环定义保护
-            ++*lazyDepth;
-            LazyConst values;
-            values.reserve(exprs.size());
-            const eravar::ScopeId exprScope = eravar::internName(scope);
-            for (const auto& ast : exprs) {
-                values.append(ast ? m_evaluator->evaluate(*ast, m_variableStorage, m_gameBaseData, exprScope)
-                                  : QVariant());
-            }
-            --*lazyDepth;
-            lazyConst->insert(key, values);
-            return QSharedPointer<LazyConst>::create(values);
-        };
-        // 运行期常数求值的作用域 = **当前执行行所属的函数**。
-        // C# 在 GetVariableToken 里用 line.ParentLabelLine 找私有变量，与此等价：
-        // 执行到哪个函数的行，就只看得见那个函数的私有常量。
-        const auto evalLazyConst = [lazyConstValues](const QString& name, const QString& scope,
-                                                     int index, QVariant& out) -> bool {
-            const QSharedPointer<LazyConst> values = lazyConstValues(name, scope);
-            if (!values || values->isEmpty()) return false;
-            const int i = (index < 0) ? 0 : index;
-            out = values->value(i < values->size() ? i : 0);
-            return true;
-        };
-        m_evaluator->setConstProvider([this, vt, evalLazyConst](const QString& name, QVariant& out) -> bool {
-            const QString scope = executionScope();
-            qint64 iv = 0;
-            if (vt->constInt(name, iv, scope)) { out = QVariant::fromValue<qint64>(iv); return true; }
-            QString sv;
-            if (vt->constStr(name, sv, scope)) { out = QVariant(sv); return true; }
-            return evalLazyConst(name, scope, 0, out);
-        });
-        // 常数数组（`#DIM CONST X, N = …`）：先判名（避免下标副作用被求两遍）
-        m_evaluator->setConstArrayChecker([this, vt](const QString& name) -> bool {
-            const QString scope = executionScope();
-            return vt->constArraySize(name, scope) > 0 || vt->constStrArraySize(name, scope) > 0;
-        });
-        m_evaluator->setConstArraySizeProvider([this, vt](const QString& name) -> int {
-            const QString scope = executionScope();
-            const int n = vt->constArraySize(name, scope);
-            return n > 0 ? n : vt->constStrArraySize(name, scope);
-        });
-        m_evaluator->setConstArrayProvider([this, vt, evalLazyConst](const QString& name, int index,
-                                                                     QVariant& out) -> bool {
-            const QString scope = executionScope();
-            QString sv;
-            if (vt->constStrArrayAt(name, index, sv, scope)) { out = QVariant(sv); return true; }
-            qint64 iv = 0;
-            if (vt->constArrayAt(name, index, iv, scope)) { out = QVariant::fromValue<qint64>(iv); return true; }
-            return evalLazyConst(name, scope, index, out);
-        });
-        m_variables.setDimEvaluator([this](const QString& expr, const QString& scope) -> qint64 {
-            if (!m_evaluator) return 0;
-            const auto ast = expressionAstInScope(expr, scope);
-            const QVariant v = ast ? m_evaluator->evaluate(*ast, m_variableStorage, m_gameBaseData,
-                                                          eravar::internName(scope))
-                                   : QVariant();
-            return v.isValid() ? v.toLongLong() : 0;
-        });
-    }
-
-    // ---- 维数/默认值/函数类型（全局：需要全部声明/常量就绪） ----
-    m_variables.resolveDimensions();
-    applyGlobalVariableDefaults();
-    resolveUserFunctionTypes();
-    m_declarationsResolved = true;   // 声明定稿：installPrivateScopes 的前置条件
-}
-
-// 全体脚本绑定（一趟）：字符串赋值/FUNC → 变量类型就地定型 → 赋值 AST → 函数调用解析。
-// 要求 resolveGlobalDeclarations() 已就绪（变量维数与函数类型已定）。
-void EraParseTable::finalizeBindings() {
-    // 每步内部按脚本并行（见各方法）；不再逐脚本调用（那样有 2200+ 次调用开销，
-    // eraTW 上从 ~10s 退化到 ~33s）。
-    applyStringAssignments();
-
-
-    // FUNC 重编译（仅构建期未定型的行）
-    for (auto& script : m_scripts) {
-    for (auto& line : script.lines) {
-        if (line.functionName != QLatin1String("FUNC")) continue;
-        const AstResolver resolve = [this, scope = line.ownerFunction](const QString& text) {
-            return expressionAstInScope(text, scope);
-        };
-        for (int i = 0; i < line.arguments.size(); ++i) {
-            auto& operand = line.arguments[i];
-            if (i == 0)
-                operand.ast = StrFormParser::parse(operand.raw, resolve,
-                    m_evaluator && m_evaluator->ignoreTripleSymbols());
-            else if (operand.isString)
-                operand.ast = QSharedPointer<LiteralNode>::create(operand.raw);
-            else
-                operand.ast = resolve(operand.raw);
-        }
-    }
-    }
-
-    // 变量类型回填（全体脚本）
-    applyVariableTypes();
-
-    // 赋值 AST 重建（仅构建期未定型的行）
-    for (auto& script : m_scripts) {
-    for (auto& line : script.lines) {
-        if (line.assignOperator.isEmpty() || line.arguments.size() != 2) continue;
-        const QString name = line.arguments[0].raw.section(':', 0, 0).trimmed();
-        if (line.assignOperator == "=" && m_variables.typeOf(name, line.ownerFunction) == OperandType::Str) continue;
-        line.assignmentAsts.clear();
-        for (const auto& text : AstBuilder::assignmentValues(line.arguments[1].raw)) {
-            // expressionAstInScope 已按 ownerFunction 定型并 prepare —— 不再克隆/重定型。
-            line.assignmentAsts.append(expressionAstInScope(text, line.ownerFunction, true));
-        }
-    }
-
-    }
-
-    // 函数调用解析（全体脚本）
-    resolveFunctionNodes();
-
-    // 收尾的最后一步：私有名表（「每个函数有哪些私有变量、存储键是什么」）
-    // 由声明一次性建好并装进存储层 —— 此刻声明（resolveGlobalDeclarations）
-    // 与类型回填都已完成，名表是静态事实。
-    installPrivateScopes();
-}
-
-void EraParseTable::installPrivateScopes() {
-    if (!m_variableStorage) return;
-    // 前置条件（可观察，不只是注释）：声明定稿（resolveGlobalDeclarations 里的
-    // resolveDimensions）之后才能安装 —— 未定稿就安装会把错的维数/名字表固化。
-    Q_ASSERT_X(m_declarationsResolved, "installPrivateScopes",
-               "private name table installed before declarations were finalized");
-    m_variableStorage->installPrivateScopeTable(m_variables.buildPrivateNameTable());
-}
-
-// 全体脚本校验：产出诊断（错误 + 告警）。必须在全部脚本**绑定**完成后统一执行，
-// 否则跨文件前向引用会被误报「未定义的函数」。只在 markLoadComplete 调用一次。
-// 参数/类型校验必须在「变量类型已就地定型」之后：否则 LFONTS 之类用户 #DIMS 变量
-// 在解析期还是默认的 Int，会误报「需要字符串表达式，实得 Int」。
-void EraParseTable::finalizeValidation() {
-    const auto constantTree = [](const ExpressionNode& root) {
-        bool constant = true;
-        walkExpression(const_cast<ExpressionNode&>(root), [&](ExpressionNode& n) {
-            if (n.kind() == NodeKind::Variable || n.kind() == NodeKind::Function) constant = false;
-            if (n.kind() == NodeKind::UnaryOp) {
-                const auto op = static_cast<const UnaryOpNode&>(n).op().type();
-                if (op == TokenType::INCREMENT || op == TokenType::DECREMENT) constant = false;
-            }
-        });
-        return constant;
-    };
-    for (auto& script : m_scripts) {
-    for (auto& line : script.lines) {
-            // 指令的「变量槽」实参允许整数组出现（`VARSET 集合`、`CALL F(集合)`）：
-            // 这些位置**不该**要求下标，否则 2 维以上数组会被误判「缺少参数或下标维数错误」
-            // （eraTW 里 CALL 的 REF 实参 / VARSET 的整数组实参全是这种写法）。
-            const ArgKind argKind = line.argument.kind;
-            const bool varSlotArgs = argKind == ArgKind::Call || argKind == ArgKind::CallF
-                || argKind == ArgKind::Var || argKind == ArgKind::VarSet
-                || argKind == ArgKind::Swap || argKind == ArgKind::Bit
-                || argKind == ArgKind::Power || argKind == ArgKind::GetInt
-                || argKind == ArgKind::VarStr || argKind == ArgKind::ArrayControl
-                || argKind == ArgKind::SortChara || argKind == ArgKind::ForNext
-                // CALL 族全名单（TRYCALL/TRYCCALLFORM/JUMP/GOTO…）：规范表只登记了
-                // 其中几个，其余按名字前缀回落 Raw —— 整数组实参（REF 形参的
-                // `CALL F(WPN_MATERIAL_NEEDS)`，2 维声明）会被 requireIndices 误报
-                // 「缺少参数或下标维数错误」。C# ConvertArg 对 REF 形参收的就是
-                // **整数组变量**（eraTW/FL3.8 都这么写）。
-                || AstBuilder::isCallFamilyInstruction(line.functionName.toUpper())
-                // VARI/VARS（声明型语句）：目标操作数是裸名字，维度由声明决定
-                //（applyScopedVariableLine 重建后的 [目标, 初值] 同样不该查下标）。
-                || isScopedVariableLine(line.raw);
-            // 本行已经报过「跨函数引用私有变量」的名字（同一行会对共享 AST 走两遍）
-            QSet<QString> reportedScopeNames;
-            // 原始文本实参的语句（`ArgKind::Raw`：ALIGNMENT / SETCOLORBYNAME /
-            // PRINTL / GOTO 标签 / NEXT …）在 C# 走 `STR_ArgumentBuilder`：
-            // 实参整体是**字面字符串**（`st.Substring()` → `SingleTerm(rowStr)`），
-            // 裸标识符不会被解析成变量 —— `ALIGNMENT LEFT` 的 LEFT 是关键字，
-            // `SETCOLORBYNAME Red` 的 Red 是颜色名。构建期出于「未知裸标识符 =
-            // 字符串」的宽容语义仍会把它折成 VariableNode，但那是**装饰**：
-            // 运行期读的是 `operand.raw`（见 ExecutionEngine 的 ALIGNMENT 分支）。
-            // 因此这类语句不能作为「跨函数引用私有变量」的判据 ——
-            // 否则 eraMegaten 会多出 323 条假阳性（LEFT/RIGHT/Red/Blue 恰好在
-            // PICTURE.ERB 里各有一条私有的 #DIMS 同名声明）。
-            // 赋值语句（`=` 族）也登记成 Raw，但左右值是真表达式：那两条路径
-            // 单独调用 validate（左值 / assignmentAsts），不受此开关影响。
-            const bool rawTextArgs = argKind == ArgKind::Raw && line.assignOperator.isEmpty();
-            const auto validate = [&](const QSharedPointer<ExpressionNode>& ast,
-                                      bool requireIndices = true) {
-                if (!ast) return;
-                QString error = validateExpression(*ast, requireIndices);
-                if (error.isEmpty() && m_evaluator && m_variableStorage) {
-                    walkExpression(*ast, [&](ExpressionNode& n) {
-                        if (error.isEmpty() && n.kind() != NodeKind::Literal && constantTree(n)
-                            && !m_evaluator->evaluate(n, m_variableStorage, m_gameBaseData,
-                                                      eravar::internName(line.ownerFunction)).isValid())
-                            error = QCoreApplication::translate("ParseDiagnostics", "装载期常量表达式求值失败");
-                    });
-                }
-                // 作用域：名字只是**别的函数的私有变量/常量**时，在本函数里解析不到。
-                // 对齐 C# IdentifierDictionary.ThrowException（privateDimList ->
-                // IdentifierNotFoundCodeEE「変数"X"はこの関数中では定義されていません」）。
-                // 此前这种引用会被「扁平常量表/私有变量泄漏」悄悄取值 —— eraTW 的
-                // `@スロット配列_一覧`（CASINO_SLOT_HELP.ERB:732）读别的函数的
-                // `#DIM CONST RD7` 就是这一类。
-                bool scopeError = false;
-                if (error.isEmpty() && !rawTextArgs) {
-                    walkExpression(*ast, [&](ExpressionNode& n) {
-                        if (!error.isEmpty() || scopeError || n.kind() != NodeKind::Variable) return;
-                        const auto& var = static_cast<const VariableNode&>(n);
-                        if (isKnown(m_variables.typeOf(var.name(), line.ownerFunction))) return;
-                        if (!m_variables.isPrivateOnlyName(var.name())) return;
-                        // 形参名（`@ASSERT_EQ(GOT, WANT, SNAME)` 的 GOT/WANT 是 ARG
-                        // 的**别名**，不在变量表里）在本函数内是合法的。
-                        if (const UserFunctionDecl* decl = userFunction(line.ownerFunction.toUpper())) {
-                            for (const UserParamDecl& p : decl->params) {
-                                if (p.name.compare(var.name(), Qt::CaseInsensitive) == 0
-                                    || (!p.varName.isEmpty()
-                                        && p.varName.compare(var.name(), Qt::CaseInsensitive) == 0))
-                                    return;
-                            }
-                        }
-                        // 一行可能对同一棵 AST 走两遍（行实参 + 赋值右值 assignmentAsts
-                        // 共享节点）—— 同一个名字只报一次，避免 LSP 出现重复标记。
-                        const QString scopeKey = var.name().toUpper();
-                        if (reportedScopeNames.contains(scopeKey)) return;
-                        reportedScopeNames.insert(scopeKey);
-                        error = QCoreApplication::translate("ParseDiagnostics",
-                            "变量 %1 在本函数中未定义（它只是别的函数的私有变量；运行到该行会失败）")
-                            .arg(var.name());
-                        scopeError = true;
-                    });
-                }
-                if (!error.isEmpty()) {
-                    line.argument.typeOk = false;
-                    line.argument.typeError = error;
-                    line.isError = true;
-                    line.errMes = error;
-                    m_diagnostics.addRejectLine(DiagSeverity::Error,
-                        scopeError ? DiagCode::kIdentifierScope : DiagCode::kArgCheck,
-                        line.position.filename, line.position.lineNumber, line.position.column, 0, error);
-                }
-            };
-            // Increment/decrement statements have one LHS, unlike assignments.
-            // Rebind it after declarations are known, in the owning function scope.
-            if ((line.functionName == "++" || line.functionName == "--")
-                && line.arguments.size() == 1) {
-                auto& operand = line.arguments[0];
-                // expressionAstInScope 已按 ownerFunction 定型 —— 不再克隆/重定型。
-                operand.ast = expressionAstInScope(operand.raw, line.ownerFunction, true);
-                const bool ok = operand.ast && operand.ast->kind() == NodeKind::Variable
-                    && !static_cast<const VariableNode&>(*operand.ast).readOnly
-                    && operand.ast->valueType() != OperandType::Str;
-                // 这一步是 `X ++` 的**权威**判定：构建期的临时 AST 在「无作用域」
-                // 上下文里解析，可能把「与别处同名常量重名的函数私有变量」折成字面量
-                // （eraTW 的 `削除行数 ++`：CASINO_SLOT 里的 `#DIM CONST 削除行数`
-                // 会让 COMF625 的同名私有变量在构建期变成 `51`），于是收尾第 3 步
-                // 的 ArgumentParser 会拿那个陈旧的字面量报「第一个参数需要变量节点」。
-                // 因此这里通过时必须**清掉**那次残留的错误状态（typeOk/errMes），
-                // 否则语义已经判定正确的行仍会带着旧错误进入 validateArguments。
-                line.argument.typeOk = ok;
-                line.argument.typeError.clear();
-                line.isError = !ok;
-                line.errMes.clear();
-                if (!ok) {
-                    const QString error = QCoreApplication::translate("ParseDiagnostics",
-                        "%1 的变量参数无法装载：%2 (%3)")
-                        .arg(line.functionName, operand.raw, line.position.toString());
-                    line.argument.typeError = error;
-                    line.errMes = error;
-                    m_diagnostics.addRejectLine(DiagSeverity::Error, DiagCode::kArgCheck,
-                        line.position.filename, line.position.lineNumber, line.position.column, 0, error);
-                }
-            }
-            // ArgumentParser treats a FUNC name as a raw CALL identity; list
-            // execution requires an AST for it just as for every actual argument.
-            if (line.functionName == QLatin1String("FUNC")) {
-                for (const auto& operand : line.arguments) {
-                    if (operand.ast) continue;
-                    const QString error = QCoreApplication::translate("ParseDiagnostics",
-                        "%1 的参数缺少装载期 AST：%2").arg(line.functionName, operand.raw);
-                    line.argument.typeOk = false;
-                    line.argument.typeError = error;
-                    line.isError = true;
-                    line.errMes = error;
-                    m_diagnostics.addRejectLine(DiagSeverity::Error, DiagCode::kArgCheck,
-                        line.position.filename, line.position.lineNumber, line.position.column, 0, error);
-                }
-            }
-            validate(line.condition);
-            // DT_COLUMN_OPTIONS 的 DEFAULT 表达式（columnDefaults）是运行期求值的
-            // 普通表达式，此前从不校验 —— 类型/边界问题同样应当装载期就报出来。
-            for (const auto& ast : line.columnDefaults) validate(ast);
-            const bool skipTargetOperand = firstArgumentIsTargetName(line.runnerInstruction);
-            for (int operandIndex = 0; operandIndex < line.arguments.size(); ++operandIndex) {
-                const auto& operand = line.arguments.at(operandIndex);
-                // 第一个操作数是跳转/调用目标名（函数名 / $标签）：不是表达式
-                if (skipTargetOperand && operandIndex == 0) continue;
-                // VARSIZE consumes only array identity; its indices (including
-                // out-of-range constants) are ignored by the language command.
-                if (line.functionName == QLatin1String("VARSIZE") && operand.ast
-                    && operand.ast->kind() == NodeKind::Variable) continue;
-                validate(operand.ast, !varSlotArgs);
-            }
-            if (!line.assignOperator.isEmpty() && line.arguments.size() == 2) {
-                const auto& dest = line.arguments[0].raw;
-                const QString name = dest.section(':', 0, 0).trimmed();
-                const auto* decl = m_variables.find(name, line.ownerFunction);
-                // expressionAstInScope 已按 ownerFunction 定型 —— 不再克隆/重定型。
-                const auto target = expressionAstInScope(dest, line.ownerFunction, true);
-                line.arguments[0].ast = target;
-                // 诊断带上**具体原因**（未定义变量 / 维数不符 / AST 解析失败）：
-                // 只报「必须为有效变量项」时，eraTW 这种 10k 变量的工程无从下手。
-                const QString lvalueError = !target ? QCoreApplication::translate("ParseDiagnostics", "左值表达式解析失败")
-                          : target->kind() != NodeKind::Variable ? QCoreApplication::translate("ParseDiagnostics", "左值不是变量项")
-                          : validateExpression(*target);
-                if (!lvalueError.isEmpty()) {
-                    line.argument.typeOk = false;
-                    line.argument.typeError = QCoreApplication::translate("ParseDiagnostics", "赋值左值必须为有效变量项（%1：%2）")
-                                                  .arg(dest.left(60), lvalueError);
-                    line.isError = true;
-                    line.errMes = line.argument.typeError;
-                    m_diagnostics.addRejectLine(DiagSeverity::Error, DiagCode::kArgCheck,
-                        line.position.filename, line.position.lineNumber, line.position.column, 0,
-                        line.argument.typeError);
-                }
-                const bool rawForm = line.assignOperator == "=" && m_variables.typeOf(name, line.ownerFunction) == OperandType::Str;
-                if (!rawForm) {
-                    const auto values = AstBuilder::assignmentValues(line.arguments[1].raw);
-                    for (int valueIndex = 0; valueIndex < values.size(); ++valueIndex) {
-                        const auto& text = values[valueIndex];
-                        diagnoseIntegerLiterals(text, line.position.filename, line.position.lineNumber,
-                            line.position.column + qMax(0, int(line.raw.indexOf(text))), m_diagnostics);
-                        const auto& ast = line.assignmentAsts[valueIndex];
-                        if (ast) validate(ast);
-                        else {
-                            line.argument.typeOk = false;
-                            line.argument.typeError = QCoreApplication::translate("ParseDiagnostics", "赋值右值无法解析或包含空项");
-                            line.isError = true;
-                            line.errMes = line.argument.typeError;
-                            m_diagnostics.addRejectLine(DiagSeverity::Error, DiagCode::kArgCheck,
-                                line.position.filename, line.position.lineNumber, line.position.column, 0,
-                                line.argument.typeError);
-                        }
-                    }
-                    if (values.size() > 1 && line.assignOperator != "=" && line.assignOperator != "'=") {
-                        line.argument.typeOk = false;
-                        line.argument.typeError = QCoreApplication::translate("ParseDiagnostics", "复合赋值不允许列表");
-                        line.isError = true;
-                        line.errMes = line.argument.typeError;
-                    }
-                }
-                if (decl && decl->isConst) {
-                    line.argument.typeOk = false;
-                    line.argument.typeError = QCoreApplication::translate("ParseDiagnostics", "不能赋值const变量");
-                    line.isError = true;
-                    line.errMes = line.argument.typeError;
-                }
-            }
-        }
-    }
-    // 参数校验（全体脚本）
-    validateArguments();
-}
 
 // ---------------------------------------------------------------------------
-// 字符串赋值：右值按 StrForm 解析（对齐 C# SP_SET_ArgumentBuilder）
-//
-//   C# 里 `STRVAR = <剩余全部文本>` 走 LexicalAnalyzer.AnalyseFormattedString，
-//   即「文本 + {expr}/%expr%」——所以 eraTW 的
-//       PNAME = 妖怪之山 (山麓)
-//       PNAME = %GET_MAPNAME(MAPID)%への道中
-//   都是合法的（前者整体是字面文本）。若当表达式解析，前者会变成
-//   「未定义的函数 妖怪之山」，后者直接解析失败。
-//
-//   变量类型要到所有 #DIM/#DIMS 都解析完之后才确定，故放在 finalize。
+// 字符串赋值 / #DIM 初值 / 用户函数类型：实现已搬到 load_passes.cpp（收尾步骤 2）。
 // ---------------------------------------------------------------------------
-namespace {
-
-// 取赋值左值的首标识符（跳过 A:1 / GLOBAL:5 这类下标）
-QString leadingIdentifier(const QString& raw) {
-    int i = 0;
-    while (i < raw.size()) {
-        const QChar c = raw.at(i);
-        if (c.isSpace() || c == QLatin1Char(':') || c == QLatin1Char('[')
-            || c == QLatin1Char('(') || c == QLatin1Char('=')) break;
-        ++i;
-    }
-    return raw.left(i).trimmed();
-}
-
-} // namespace
-
-// 把 #DIM/#DIMS 的初值写入存储（对齐 C#：全局变量装载时取初值；
-// 函数私有变量每次进入函数时取初值）。ScriptRunner 在进入函数时选择
-// 私有名字空间，因此同名数组的初值不会覆盖调用者。
-void EraParseTable::applyVariableDefaults(const QList<VariableDecl>& decls) {
-    if (!m_variableStorage) return;
-    for (const VariableDecl& d : decls) {
-        if (d.isConst || !d.isPrivate || d.isReference || d.isCharaData) continue;
-        if (!d.lengths.isEmpty())
-            m_variableStorage->ensureArraySize(d.name, d.lengths.first(), d.type == OperandType::Str);
-        if (d.type == OperandType::Str) {
-            for (int i = 0; i < d.defaultStr.size(); ++i) {
-                m_variableStorage->setGlobalStr1D(d.name, i, d.defaultStr.at(i));
-            }
-        } else {
-            for (int i = 0; i < d.defaultInt.size(); ++i) {
-                m_variableStorage->setGlobalInt1D(d.name, i, d.defaultInt.at(i));
-            }
-        }
-    }
-}
-
-void EraParseTable::applyGlobalVariableDefaults() {
-    for (const VariableDecl& d : m_variables.declarations()) {
-        if (d.scope != VarScope::Global || d.isConst) continue;
-        applyVariableDefaults({d});
-    }
-}
 
 void EraParseTable::applyPrivateVariableDefaults(const QString& function) {
     if (function.isEmpty()) return;
@@ -2480,69 +1754,6 @@ EraParseTable::privateDefaultPlan(const QString& fkey) {
         plan.append(std::move(e));
     }
     return *m_privateDefaultPlans.insert(fkey, std::move(plan));
-}
-
-void EraParseTable::applyStringAssignments() {
-    // FORM 里的插值表达式也要用**行的作用域**解析：否则 `%PNAME%`（函数内私有
-    // 字符串变量）会按无作用域解析失败，整行报「字符串赋值FORM无效」。
-    for (auto sit = m_scripts.begin(); sit != m_scripts.end(); ++sit) {
-        for (LogicalLine& line : sit.value().lines) {
-            // 只处理构建期未定型的行：构建期已按（预扫描）类型表定型的
-            // 字符串/FORM/CASE 不再重解析（收尾只扫描未定型项）。
-            if (!line.strAssignPending && !line.needsCompletion) continue;
-            const QString owner = line.ownerFunction;
-            const AstResolver resolve = [this, owner, &line](const QString& e) {
-                diagnoseIntegerLiterals(e, line.position.filename, line.position.lineNumber,
-                    line.position.column + qMax(0, int(line.raw.indexOf(e))), m_diagnostics);
-                return expressionAstInScope(e, owner);
-            };
-            if (line.kind != LineKind::Instruction) continue;
-            // FORM construction may need private string types unavailable in a worker.
-            // Recompile the source in its owner scope while compilation is permitted.
-            if (line.assignOperator.isEmpty() && (line.raw.contains("@\"")
-                || AstBuilder::printInfo(line.functionName).mode == AstBuilder::PrintArgMode::FormStr
-                || line.argument.kind == ArgKind::FormStr)) {
-                const auto compiled = AstBuilder::build(line.raw, line.position, resolve, resolve);
-                line.arguments = compiled.arguments;
-                line.condition = compiled.condition;
-                line.printTemplate = compiled.printTemplate;
-                ArgumentParser::build(line);
-            }
-            if (line.argument.kind == ArgKind::Case) {
-                line.caseCache.clear();
-                AstBuilder::buildCaseClauses(line, resolve);
-            }
-            // C# uses two assignment operators with different RHS semantics:
-            //   =  : string variables consume the remaining source as a StrForm
-            //        (plain text plus {expr}/%expr% interpolation).
-            //   '= : expression string assignment; keep the normal expression AST.
-            // The initial AST is intentionally built before variable declarations
-            // are finalized, so it may look like a call for text such as
-            // `白狼天狗服(色固定)`.  Do not use that provisional node to decide
-            // whether the RHS is raw text.
-            if (line.assignOperator != QLatin1String("=")) continue;
-            if (line.arguments.size() != 2) continue;
-
-            Operand& dest = line.arguments[0];
-            Operand& value = line.arguments[1];
-
-            const QString varName = leadingIdentifier(dest.raw);
-            if (varName.isEmpty()) continue;
-            if (m_variables.typeOf(varName, line.ownerFunction) != OperandType::Str) continue;
-
-            value.ast = StrFormParser::parse(value.raw.trimmed(), resolve, m_evaluator && m_evaluator->ignoreTripleSymbols());
-            PrintTemplateCompiler::prepare(value.ast);
-            if (!value.ast) {
-                const QString error = QCoreApplication::translate("ParseDiagnostics", "字符串赋值FORM无效");
-                line.argument.typeOk = false;
-                line.argument.typeError = error;
-                line.isError = true;
-                line.errMes = error;
-                m_diagnostics.addRejectLine(DiagSeverity::Error, DiagCode::kArgCheck,
-                    line.position.filename, line.position.lineNumber, line.position.column, 0, error);
-            }
-        }
-    }
 }
 
 // ---------------------------------------------------------------------------
@@ -2670,49 +1881,6 @@ void EraParseTable::traceHtmlStringArguments() {
                           << "条实参在装载期重建 →" << tracedAt.join(QStringLiteral(", "));
 }
 
-// ---------------------------------------------------------------------------
-// 用户自定义函数的强类型化
-//
-//   * 形参类型：ARG -> Int、ARGS -> Str、私有变量 -> 变量表里的 #DIM/#DIMS 类型
-//   * 返回类型：#FUNCTION -> Int、#FUNCTIONS -> Str；
-//     没有 # 行的 @label 也按 Int（式中调用在实测游戏里普遍存在）
-// ---------------------------------------------------------------------------
-void EraParseTable::resolveUserFunctionTypes() {
-    for (auto it = m_functions.begin(); it != m_functions.end(); ++it) {
-        UserFunctionDecl& decl = it.value();
-        if (!decl.isMethod || !isKnown(decl.returnType)) {
-            decl.returnType = OperandType::Int;
-        }
-        for (UserParamDecl& p : decl.params) {
-            switch (p.target) {
-            case UserParamTarget::Arg:
-                p.type = OperandType::Int;
-                break;
-            case UserParamTarget::Args:
-                p.type = OperandType::Str;
-                break;
-            case UserParamTarget::LocalVar: {
-                const VariableDecl* variable = m_variables.find(p.varName, decl.name);
-                const OperandType t = variable ? variable->type
-                                               : m_variables.typeOf(p.varName, decl.name);
-                if (isKnown(t)) {
-                    p.type = t;
-                    p.typeKnown = true;   // 私有变量由 #DIM/#DIMS 定类型
-                    p.isReference = variable && variable->isReference;
-                } else {
-                    p.type = OperandType::Int;   // 绑定按整数槽处理，但不参与类型校验
-                    p.typeKnown = false;
-                }
-                break;
-            }
-            case UserParamTarget::Unknown:
-            default:
-                if (!isKnown(p.type)) p.type = OperandType::Int;
-                break;
-            }
-        }
-    }
-}
 
 // 式中调用的强类型校验（复刻 C# Process.CalledFunction.ConvertArg）：
 //
@@ -2724,25 +1892,6 @@ void EraParseTable::resolveUserFunctionTypes() {
 //                                  eraTW 等实际游戏普遍设为 YES）
 //
 //   仅当形参类型来自真实声明（typeKnown：ARG/ARGS，或私有变量有 #DIM/#DIMS）才判定。
-QString EraParseTable::checkUserCallArgs(const UserFunctionDecl& decl,
-                                         const QList<OperandType>& argTypes) const {
-    const int want = decl.paramCount();
-    if (argTypes.size() > want) {
-        return QCoreApplication::translate("ParseDiagnostics", "函数 %1 的实参过多（形参 %2 个，实得 %3 个）")
-            .arg(decl.name).arg(want).arg(argTypes.size());
-    }
-    for (int i = 0; i < argTypes.size(); ++i) {
-        const UserParamDecl& p = decl.params.at(i);
-        const OperandType actual = argTypes.at(i);
-        if (!p.typeKnown || !isKnown(actual) || !isKnown(p.type)) continue;
-        if (actual == OperandType::Str && p.type == OperandType::Int) {
-            return QCoreApplication::translate("ParseDiagnostics", "函数 %1 第 %2 个实参需要%3，实得字符串（不能从字符串转换为整数）")
-                .arg(decl.name).arg(i + 1)
-                .arg(QString::fromUtf8(operandTypeName(p.type)));
-        }
-    }
-    return QString();
-}
 
 // ---------------------------------------------------------------------------
 // 函数调用重绑 + 校验（对齐 C# IdentifierDictionary.GetFunctionMethod）
@@ -2751,243 +1900,7 @@ QString EraParseTable::checkUserCallArgs(const UserFunctionDecl& decl,
 // 并用最终（就地定型后）的实参 AST 复刻 C# FunctionMethod.CheckArgumentType()。
 // 必须在**全部**脚本的变量类型定稿之后进行（跨文件前向引用此刻才可解析）。
 // ---------------------------------------------------------------------------
-void EraParseTable::resolveFunctionNodes() {
-    // 与解析期同一判据（era_parse_table.cpp:userCallReturnType）：
-    // 用户函数优先，但无 #FUNCTION 时不覆盖同名内置函数。
-    const auto userType = [this](const QString& name) -> OperandType {
-        return userCallReturnType(name);
-    };
-
-    const auto resolveNode = [this, &userType](ExpressionNode& node) {
-        if (node.kind() != NodeKind::Function) return;
-        auto& fn = static_cast<FunctionNode&>(node);
-        fn.setReferenceArguments({});
-        fn.setUserFunction(false);
-        fn.setBuiltinIndex(-1);
-        fn.setExtensionSpec(nullptr);
-
-        const FunctionResolution res = resolveFunctionCall(fn.name(), userType);
-        if (res.isUserFunction) {
-            fn.setUserFunction(true);
-            fn.setValueType(res.returnType);
-            // 强类型：按声明的形参类型逐个校验实参（复刻 C# UserDefinedMethodTerm.Create）
-            const UserFunctionDecl* decl = userFunction(fn.name().toUpper());
-            if (decl) {
-                QList<OperandType> argTypes;
-                argTypes.reserve(fn.arguments().size());
-                for (const auto& a : fn.arguments()) {
-                    argTypes.append(a ? a->valueType() : OperandType::Unknown);
-                }
-                fn.setArityError(checkUserCallArgs(*decl, argTypes));
-            } else {
-                fn.setArityError(QString());
-            }
-        } else if (res.isBuiltin) {
-            if (res.extensionSpec) fn.setExtensionSpec(res.extensionSpec);
-            else fn.setBuiltinIndex(res.builtinIndex);
-            fn.setValueType(res.returnType);
-            if (const BuiltinFunctionSpec* spec = fn.builtinSpec()) {
-                fn.setArityError(validateBuiltinCall(*spec, fn.arguments()));
-            }
-        } else if (const UserFunctionDecl* decl = userFunction(fn.name().toUpper())) {
-            // 有同名 @label 但既非内置也无 #FUNCTION：按宽容语义当作返回 Int 的用户函数
-            // （eraTW 大量如此使用，实际可运行），但仍按声明的形参类型做校验。
-            fn.setUserFunction(true);
-            fn.setValueType(isKnown(decl->returnType) ? decl->returnType : OperandType::Int);
-            QList<OperandType> argTypes;
-            argTypes.reserve(fn.arguments().size());
-            for (const auto& a : fn.arguments()) {
-                argTypes.append(a ? a->valueType() : OperandType::Unknown);
-            }
-            fn.setArityError(checkUserCallArgs(*decl, argTypes));
-        } else {
-            fn.setValueType(OperandType::Unknown);
-            fn.setArityError(QCoreApplication::translate("ParseDiagnostics", "未定义的函数 %1").arg(fn.name()));
-        }
-        if (fn.isUserFunction()) {
-            const auto* decl = userFunction(fn.name().toUpper());
-            if (!decl) return;
-            QList<bool> refs;
-            for (int i = 0; i < decl->params.size(); ++i) {
-                const auto& param = decl->params[i];
-                refs.append(param.isReference);
-                if (!param.isReference || !fn.arityError().isEmpty()) continue;
-                const auto* formal = m_variables.find(param.varName, decl->name);
-                const auto* actual = i < fn.arguments().size() && fn.arguments()[i]
-                    ? dynamic_cast<const VariableNode*>(fn.arguments()[i].data()) : nullptr;
-                // C# CalledFunction.ConvertArg / ReferenceToken.MatchType：REF 必须
-                // 接收同类型、同维数的非角色数组，不能使用标量自动转换。
-                if (!actual || fn.isArgOmitted(i) || !formal || actual->characterData || actual->readOnly
-                    || actual->valueType() != formal->type
-                    || actual->dimension != formal->dimension || actual->dimension <= 0) {
-                    fn.setArityError(QCoreApplication::translate("ParseDiagnostics",
-                        "函数 %1 第 %2 个 REF 实参需要同类型、同维数的非角色数组变量")
-                        .arg(decl->name).arg(i + 1));
-                }
-            }
-            fn.setReferenceArguments(refs);
-        }
-    };
-
-    // 自底向上解析：`STRLENS(RAND(100))` 里内层 RAND 的返回类型必须先定下来，
-    // 外层 STRLENS 才能校验实参类型（否则内层还停留在解析期的内置类型）。
-    // walkExpression 是先序（父→子）；把节点收集后逆序应用即得 子→父 的求值顺序。
-    // 例：A(B(C,D),E) 先序为 A,B,C,D,E，逆序 E,D,C,B,A —— 任一子节点都在其父之前。
-    const auto resolveAst = [&resolveNode](const QSharedPointer<ExpressionNode>& ast) {
-        if (!ast) return;
-        QList<ExpressionNode*> nodes;
-        walkExpression(*ast, [&nodes](ExpressionNode& n) { nodes.append(&n); });
-        for (auto it = nodes.crbegin(); it != nodes.crend(); ++it) resolveNode(**it);
-    };
-
-    // 并行装载时 worker 的 AST 不在主缓存里，需按行再走一遍。
-    // **按脚本并行**：每个脚本的行走的是自己的 AST，互不相干；resolveNode 只读
-    // m_functions / 静态表，写入的是本脚本节点的字段 —— 无共享写。
-    QList<ScriptData*> scripts;
-    scripts.reserve(m_scripts.size());
-    for (auto it = m_scripts.begin(); it != m_scripts.end(); ++it) {
-        scripts.append(&it.value());
-    }
-
-    const auto processScript = [&resolveAst](ScriptData* sd) {
-        for (LogicalLine& line : sd->lines) {
-            for (const Operand& op : line.arguments) resolveAst(op.ast);
-            for (const auto& ast : line.assignmentAsts) resolveAst(ast);
-            for (const auto& e : line.argument.exprs) resolveAst(e);
-            for (const Operand& c : line.argument.cases) resolveAst(c.ast);
-            resolveAst(line.condition);
-        }
-    };
-    if (canParallelize(scripts.size())) {
-        QtConcurrent::blockingMap(scripts, processScript);
-    } else {
-        for (ScriptData* sd : scripts) processScript(sd);
-    }
-}
 
 // 收集一个 AST 里的函数调用告警（内置函数参数不符 / 未定义的函数）。
 // 同一位置的重复 AST 引用去重；其它行/文件保留各自的诊断。
 // 纯函数：只读 AST，结果写入 out —— 可在线程池上按脚本并行调用。
-void EraParseTable::collectFunctionWarnings(const QSharedPointer<ExpressionNode>& ast,
-                                            const ScriptPosition& position, WarningCollector& out) {
-    if (!ast) return;
-    walkExpression(*ast, [&out, &position](ExpressionNode& node) {
-        // 三元分支类型：对齐 C# OperatorMethodManager.ReduceTernaryTerm —— 只允许
-        // (long,long,long) 与 (long,string,string)，其余抛 CodeEE
-        //「三項演算子の使用法が不正です」（解析期 CodeEE 由 ParserMediator 收成告警）。
-        if (node.kind() == NodeKind::If) {
-            const auto& ifn = static_cast<const IfNode&>(node);
-            const OperandType ct = ifn.condition() ? ifn.condition()->valueType() : OperandType::Unknown;
-            const OperandType tt = ifn.thenExpr() ? ifn.thenExpr()->valueType() : OperandType::Unknown;
-            const OperandType et = ifn.elseExpr() ? ifn.elseExpr()->valueType() : OperandType::Unknown;
-            const bool condBad = isKnown(ct) && ct != OperandType::Int;
-            const bool branchBad = isKnown(tt) && isKnown(et)
-                                   && (tt != et || (tt != OperandType::Int && tt != OperandType::Str));
-            if (condBad || branchBad) {
-                const QString err = QCoreApplication::translate("ParseDiagnostics", 
-                    "三項演算子の使用法が不正です"
-                    "（条件须为整数；真/假分支须同为整数或同为字符串）");
-                const QString key = position.toString() + QStringLiteral("\x1fternary\x1f") + err;
-                if (!out.seen.contains(key)) {
-                    out.seen.insert(key);
-                    out.warnings.append(QStringLiteral("%1 [%2]").arg(err, node.toString()));
-                    out.keys.append(key);
-                }
-            }
-        }
-        if (node.kind() != NodeKind::Function) return;
-        const auto& fn = static_cast<const FunctionNode&>(node);
-        const QString& err = fn.arityError();
-        if (err.isEmpty()) return;
-        const QString key = position.toString() + QLatin1Char('\x1f') + fn.name().toUpper() + QLatin1Char('\x1f') + err;
-        if (out.seen.contains(key)) return;
-        out.seen.insert(key);
-        out.warnings.append(QStringLiteral("%1 [%2]").arg(err, fn.toString()));
-        out.keys.append(key);
-    });
-}
-
-void EraParseTable::validateArguments() {
-    // **按脚本并行 + 有序合并**：
-    //   · 每个脚本独立产出一份 (warnings, keys) —— 脚本内顺序与串行版逐字一致；
-    //   · 合并阶段按 m_scripts 的遍历顺序拼接，并用全局 seen 去重。
-    //   QHash 的遍历顺序与 keys() 一致，故并行版的「脚本顺序」= 串行版顺序，
-    //   于是告警文本、顺序、去重结果与串行实现**完全相同**（可在同一份数据上
-    //   逐字节比对）。eraTW 上这一步 ~2.8–3.6s，是 markLoadComplete 的第二热点。
-    QList<ScriptData*> scripts;
-    scripts.reserve(m_scripts.size());
-    for (auto it = m_scripts.begin(); it != m_scripts.end(); ++it) {
-        scripts.append(&it.value());
-    }
-
-    const auto processScript = [](ScriptData* sd) -> WarningCollector {
-        WarningCollector out;
-        for (LogicalLine& line : sd->lines) {
-            if (line.kind != LineKind::Instruction) continue;
-            const qsizetype before = out.warnings.size();
-            const QString semanticError = !line.argument.typeOk ? line.argument.typeError : QString();
-            // ArgumentParser::build 重算 kind/params/exprs（按最终变量类型）。赋值右值
-            // 的 AST 无需再 prepare —— applyVariableTypes（收尾第 3 步）已对全体
-            // assignmentAsts 调过一次，finalizeBindings 重建的那些也由
-            // expressionAstInScope 在解析时 prepare。
-            ArgumentParser::build(line);
-            if (!semanticError.isEmpty()) {
-                line.argument.typeOk = false;
-                line.argument.typeError = semanticError;
-                line.isError = true;
-                line.errMes = semanticError;
-            }
-            if (line.argument.hasError()) {
-                // 结构告警：不参与去重（与串行版一致，key 留空）
-                out.warnings.append(QStringLiteral("%1 (%2)")
-                                        .arg(line.argument.typeError, line.raw.trimmed()));
-                out.keys.append(QString());
-            }
-            const ScriptPosition& pos = line.position;
-
-            // 注：CALL 语句**不做**实参类型校验 —— 对齐 C#（SP_CALL_ArgumentBuilder 不调用
-            // ConvertArg，实参按「实际类型」装进 Transporter 后由被调函数自行解释）。
-            // 强类型校验只发生在「式中调用」NAME(args) 处（见 resolveFunctionNodes）。
-
-            // 函数调用（内部命令/内置函数）参数校验告警
-            collectFunctionWarnings(line.condition, pos, out);
-            for (const Operand& op : line.arguments) {
-                collectFunctionWarnings(op.ast, pos, out);
-            }
-            for (const auto& e : line.argument.exprs) {
-                collectFunctionWarnings(e, pos, out);
-            }
-            for (const Operand& c : line.argument.cases) {
-                collectFunctionWarnings(c.ast, pos, out);
-            }
-            for (qsizetype i = before; i < out.warnings.size(); ++i)
-                out.positions.append(line.position);
-        }
-        return out;
-    };
-
-    QList<WarningCollector> perScript;
-    if (canParallelize(scripts.size())) {
-        perScript = QtConcurrent::blockingMapped(scripts, processScript);
-    } else {
-        perScript.reserve(scripts.size());
-        for (ScriptData* sd : scripts) perScript.append(processScript(sd));
-    }
-
-    // 有序合并 + 跨脚本去重：只有第一次出现的 key 会被保留，等价于串行版
-    // 「脚本顺序 × 脚本内顺序」下的首次出现。
-    QSet<QString> seen;
-    for (const WarningCollector& c : perScript) {
-        for (int i = 0; i < c.warnings.size(); ++i) {
-            const QString& key = c.keys.at(i);
-            if (!key.isEmpty()) {
-                if (seen.contains(key)) continue;
-                seen.insert(key);
-            }
-            const auto& pos = c.positions.at(i);
-            m_diagnostics.add(DiagSeverity::Warning, DiagCode::kArgCheck,
-                              pos.filename, pos.lineNumber, pos.column, 0,
-                              c.warnings.at(i));
-        }
-    }
-}

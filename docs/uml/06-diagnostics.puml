@@ -18,6 +18,11 @@ package "GameData/ast" {
     RejectLine
   }
 
+  enum DiagOrigin {
+    Load        ' 装载期逐行事实（kSharpLine / kDeclError / kUnknownInstruction）
+    Pass1 .. Pass7   ' 收尾每一步拥有的诊断切片
+  }
+
   struct ParseDiagnostic {
     severity : DiagSeverity
     effect : DiagEffect = ReportOnly
@@ -25,6 +30,7 @@ package "GameData/ast" {
     position : QString
     message : QString
     snippet : QString
+    origin : DiagOrigin = Load   ' 由哪个 pass 产生（盖章只在 replaceOrigin 一处）
     filename : QString
     line : int
     column : int
@@ -39,6 +45,8 @@ package "GameData/ast" {
     + all() : QList
     + texts() : QStringList
     + sortForOutput()   ' 收尾定序（一次）
+    + replaceOrigin(origin, items)   ' 重跑：本 pass 的切片原位整体替换
+    + removeOriginFiles(origin, files) ' 同名脚本被替换：删掉旧 AST 的行级事实
     + count()
   }
 
@@ -62,8 +70,17 @@ package "GameData/ast" {
 ParseDiagnostics o-- ParseDiagnostic
 ParseDiagnostic --> DiagSeverity
 ParseDiagnostic --> DiagEffect
+ParseDiagnostic --> DiagOrigin
 
 note right of ParseDiagnostics
+  切片身份是 pass，不是「谁先跑」：
+  · 每个 pass 建独立 sink，驱动运行与否都 replaceOrigin(pass.origin, sink)；
+    gate 跳过 = 切片置空（Pass7 不再残留上一次的 kNotCalled）。
+  · 因此「重收尾」与「一次性装载」逐字段相同，LSP 重跑只读步骤也幂等
+    —— 不再需要 readOnlyPassRunCount 计数、也不需要调用方先 clearDiagnostics。
+  · 同名脚本被替换时用 removeOriginFiles 精确删掉旧 AST 的行级事实
+    （否则同一行会同时挂着新旧两版 kSharpLine）。
+
   收尾末尾调用一次 sortForOutput()：
   装载并行 + QHash 随机化哈希种子会让
   诊断**产生顺序**在进程间漂移（条数与内容不变），
@@ -92,7 +109,7 @@ note bottom of DiagCode
 
   4/5/6 的实现已搬到 parsecheck 自由函数
   （输入 ParseIrView，全 const；输出就是本类）。
-  EraParseTable 的对应方法只剩 forwarder ——
+  EraParseTable 的对应入口只剩转调（内部自建 sink + replaceOrigin）——
   诊断的 code / severity / effect / 产生顺序都不变，
   变的只是产出它的人在哪。
 end note

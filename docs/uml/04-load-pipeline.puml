@@ -43,23 +43,27 @@ end
 E -> T : markLoadComplete()
 note right of T
   一个静态表驱动，表即流程：
-  kLoadPasses[7] = { label, fn, memberFn, gate, phaseAfter }
+  kLoadPasses[7] = { label, fn, memberFn, origin, gate, phaseAfter }
   · 顺序 = 执行顺序；日志文案也取自表（新增步骤只改表）
+  · origin：该步拥有的诊断切片（Pass1..Pass7）。每步建独立 sink，
+    运行与否都 replaceOrigin(origin, sink) —— 重收尾 == 一次性装载，
+    gate 跳过 = 切片置空（不残留上一次的结果）
   · gate：受哪个开关门控（Always / NotCalledWarning），
     驱动逻辑里只有 isGateOpen() 一处按它求值
   · phaseAfter：该步完成后允许进入的阶段（数据，不是分支）
-  · 1/2/3 的 fn = loadpass 自由函数（吃可写 LoadContext，
-    ctx 在循环外只构造一次）；4/5/6/7 走 memberFn
-  · fn / memberFn 恰有一个非空，驱动处只有一处 if 分派
-  · 4/5/6 的 memberFn 只是 forwarder，算法在 parsecheck 里
+  · 全部七步的 fn 都是 (LoadContext&, ParseDiagnostics&)：
+    1/2/3 = loadpass 自由函数，4/5/6/7 = 成员 run*（转调 parsecheck）
+  · 4/5/6/7 的成员入口也保留为单步公有 API，内部同一条 sink 路径
 end note
 
 note right of LP
-  LoadContext = 可写装载 IR 的**视图**（纯数据，无回调）：
-  scripts / variables / functions / storage / evaluator /
-  gameBaseData / diagnostics / labelLists / paramNames /
-  declarationsResolved / constProvidersReady /
-  constantTable / positionScript / positionLine
+  LoadContext = 可写装载 IR 的**视图**（纯数据，无回调），11 个字段：
+  scripts / variables / functions / constantTable / storage /
+  evaluator / gameBaseData / labelIndex / paramNames /
+  declarationsResolved / constProvidersReady
+  · 没有 diagnostics：诊断是每步一个 sink，由驱动按 origin 合并
+  · 没有运行期位置：作用域是 evaluate() 的参数，装载视图不读
+    「解释器在哪一行」（曾靠它反推私有常数作用域，装载期会取错函数）
   · 纯数据 → 1/2/3 可脱离解析表驱动（文件里无 EraParseTable）
   · 视图不是拥有者：被引用的表仍由 EraParseTable 持有
 end note
@@ -67,20 +71,22 @@ end note
 note right of T
   阶段机（显式，不靠调用顺序）：
   Empty → Loading → Bound → Finalized
-  · loadScript 要求 Empty/Loading（收尾后再 loadScript
-    会**重新打开** Loading：增量 append，随后必须再收尾）
+  · loadScript 要求 Empty/Loading；Finalized 后直接 loadScript
+    = qWarning + return false
+  · 增量追加是显式协议：beginIncrementalLoad()（Finalized → Loading）
+    → loadScript … → markLoadComplete()
   · 4/5/6 要求 Bound；未到 Bound = qWarning + no-op
   · markLoadComplete 重复调用 = qWarning + no-op
   · 不接受 assert：release 下也必须安全，且诊断容器不变
 end note
 
 group 1/6 全局声明定稿【改状态】
-  T -> LP : resolveGlobalDeclarationsStep(ctx)
-  note right : = resolveGlobalDeclarations() + finalizeLabelIndex()（都在 loadpass）
+  T -> LP : resolveGlobalDeclarationsStep(ctx, sink[Pass1])
+  note right : = resolveGlobalDeclarations() + finalizeLabelIndex()（都在 loadpass）\n切片身份：Pass1（该步目前不产诊断，路径已就位）
 end
 
 group 2/6 就地定型【改状态】
-  T -> LP : finalizeBindings(ctx)
+  T -> LP : finalizeBindings(ctx, sink[Pass2])
   LP -> LP : 五个阶段（每段逐脚本并行，段间 barrier）
   LP -> LP : 字符串赋值 → FUNC 重编译 → applyVariableTypes → 赋值 AST 重建 → 函数解析
   LP -> AB : parseScopedExpression（带 paramNames）
@@ -92,7 +98,7 @@ group 2/6 就地定型【改状态】
 end
 
 group 3/6 参数校验【改状态：置 line.isError；出诊断】
-  T -> LP : finalizeValidation(ctx)
+  T -> LP : finalizeValidation(ctx, sink[Pass3])
   LP -> LP : 逐脚本任务（每任务独占 ParseDiagnostics）
   LP -> D : validateExpression（维数 / 常量下标 vs lengths / 类型）
   LP -> D : columnDefaults（DT_COLUMN_OPTIONS DEFAULT）
@@ -104,10 +110,12 @@ group 只读检查步骤（不改变运行行为）
   T -> PC : 4/6 resolveStaticTargets（CALL / GOTO / TRY*）
   T -> PC : 5/6 checkStructures（IF/FOR/REPEAT… 配对）
   T -> PC : 6/6 checkStaticValues（除零 / 负下标 / 尺寸 / 名字表）
-  PC -> D : 追加诊断（ParseIrView 只读，诊断是唯一输出）
+  PC -> D : 写入本步 sink（ParseIrView 只读，诊断是唯一输出）
+  T -> D : replaceOrigin(Pass4/5/6, sink)  ' 运行与否都替换
   note right of PC : 三个步骤都是逐脚本任务（runPerScript）：\n脚本名排序 → 每任务独占 sink → 按名字序归并；\neraTW 实测 10.5s → 1.9s（12 线程）。
   opt 7（可选，默认关闭）
-    T -> D : checkNotCalledFunctions（未被调用的函数）
+    T -> D : runCheckNotCalledFunctions → sink[Pass7]
+    note right : gate 关闭时仍 replaceOrigin(Pass7, {}) —— 不残留上一次结果
   end
 end
 
@@ -116,17 +124,17 @@ T -> T : m_phase = Finalized（不再编译新源码）
 T --> E : scriptsLoaded
 
 LSP -> T : resolveStaticTargets() / checkStructures() / checkStaticValues()
-T --> LSP : 诊断（追加到同一 ParseDiagnostics）
+T --> LSP : 诊断（本次运行的切片原位替换）
 LSP -> PC : 也可绕过 EraParseTable，直接传 ParseIrView
 PC --> LSP : 诊断（test_parse_checks 走的就是这条路）
 note right of LSP
   只读步骤可单独调用（LSP / 测试 / CLI 按需重跑）。
-  两条路都通：经 EraParseTable 的 forwarder，
+  两条路都通：经 EraParseTable 的成员入口，
   或直接用 getter 拼 ParseIrView 调自由函数。
-  重复调用会重复产生诊断 —— 这是**可观察**的契约：
-  readOnlyPassRunCount(pass) 记录运行次数，
-  调用方可据此去重或先 clearDiagnostics。
-  未到 Bound 阶段调用 = qWarning + no-op（计数不变）。
+  **重跑幂等**：每次运行写进本步自己的 sink，再按 origin 原位替换 ——
+  跑一次与跑三次的 all() 逐字段相同，调用方不需要 clearDiagnostics
+  （那个方法与 readOnlyPassRunCount 一起删掉了）。
+  未到 Bound 阶段调用 = qWarning + no-op（诊断容器不变）。
 end note
 
 note over T,D

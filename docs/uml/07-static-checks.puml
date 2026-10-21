@@ -24,6 +24,7 @@ legend bottom
   * 实现已搬出 EraParseTable：parsecheck::checkStaticValues(ParseIrView, ParseDiagnostics)
     —— 输入全 const，输出只有诊断；可脱离 markLoadComplete 单独调用
     （test_parse_checks 直接调它，不经过 EraParseTable）
-  * 重复调用会重复产生诊断（调用方去重或先 clearDiagnostics）
+  * 重跑幂等：每次运行写进本步 sink，再按 origin（Pass6）原位替换 ——
+    跑一次与跑三次逐字段相同，调用方不需要去重
 endlegend
 @enduml

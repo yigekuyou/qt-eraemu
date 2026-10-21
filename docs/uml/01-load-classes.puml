@@ -20,7 +20,8 @@ package "GameProc" {
     - m_variables : VariableTable
     - m_diagnostics : ParseDiagnostics
     - m_position : PositionState   ' 位置区：状态是数据，算法在 position
-    + loadScript(name, lines, isHeaderFile)
+    + loadScript(name, lines, isHeaderFile)   ' Finalized 后拒绝（须先 beginIncrementalLoad）
+    + beginIncrementalLoad() : bool  ' Finalized → Loading（唯一的增量入口）
     + expressionAst(expr)
     + runtimeVariableReference(expr)
     + markLoadComplete()
@@ -28,7 +29,8 @@ package "GameProc" {
     + checkStructures()           ' 转调 parsecheck
     + checkStaticValues()         ' 转调 parsecheck
     + scripts() / variableTable() / variableStorage()   ' 只读 getter
-    + clearDiagnostics()
+    + labels(name) / hasLabel(name)  ' 都查同一张 m_labelIndex
+    + getLabelPosition(script, label) ' = firstLabel(…, onlyScript)->line
     + setPosition / advance / jumpToLabel / callLabel / returnFromCall
                                   ' 位置区壳子：打包视图 → position → emitEffects
     - makeIrView() : ParseIrView ' 只做指针打包
@@ -38,10 +40,9 @@ package "GameProc" {
     - checkNotCalledFunctions()
     + loadPhase() : LoadPhase   ' Empty / Loading / Bound / Finalized
     + isFinalized() / isBoundOrLater()
-    + readOnlyPassRunCount(pass) : int
-    - enterReadOnlyPass(pass, entryName) : bool
+    - readOnlyPassAllowed(entryName) : bool  ' 只查阶段，不计数
     - isGateOpen(gate) : bool
-    {static} - kLoadPasses : LoadPass[7]  ' 表即流程
+    {static} - kLoadPasses : LoadPass[7]  ' 表即流程（含切片身份 origin）
   }
 
   struct LoadPass {
@@ -50,7 +51,9 @@ package "GameProc" {
     memberFn : void (EraParseTable::*)()  ' 4/5/6/7：尚未搬出
     gate : LoadPassGate   ' Always / NotCalledWarning
     phaseAfter : LoadPhase
+    origin : DiagOrigin   ' 该步拥有的诊断切片（Pass1..Pass7）
     ' fn 与 memberFn 恰有一个非空（markLoadComplete 一处 if 分派）
+    ' 运行与否都 replaceOrigin(origin, sink)：跳过 = 切片置空
   }
 
   enum LoadPassGate {
@@ -75,18 +78,19 @@ package "GameProc" {
     struct LoadContext {
       scripts / variables / functions      ' 可写：就地定型
       storage / evaluator / gameBaseData   ' 可写：装名表 / 装 provider / 求值
-      diagnostics                          ' 只写：诊断跨步骤累积
-      labelLists / paramNames              ' 可写：排序固化 / 补顶层空集
+      constantTable                        ' 只读：名表下标
+      labelIndex / paramNames              ' 可写：排序固化 / 补顶层空集
       declarationsResolved                 ' pass 1 置位（类里仍读）
       constProvidersReady                  ' pass 1 幂等 guard
-      positionScript / positionLine        ' 只读引用：运行期位置
+      ' 11 个字段。没有 diagnostics（每 pass 一个独立 sink，
+      ' 由驱动 replaceOrigin 合并），也没有运行期位置 —— 作用域是
+      ' evaluate() 的参数，装载视图不读解释器在哪一行。
     }
     class "写步骤自由函数" as WriteFns {
-      resolveGlobalDeclarationsStep(ctx)
-      finalizeBindings(ctx)
-      finalizeValidation(ctx)
-      resolveGlobalDeclarations(ctx)   ' 预登记结算也用
-      finalizeLabelIndex(ctx)
+      resolveGlobalDeclarationsStep(ctx, sink)   ' 内部调 resolveGlobalDeclarations(ctx)（预登记结算也用）
+      finalizeBindings(ctx, sink)
+      finalizeValidation(ctx, sink)   ' 第二参是该 pass 独占的诊断切片
+      finalizeLabelIndex(ctx)         ' 唯一排序固化点（只 sort，不去重）
       parseScopedExpression(ctx, …) / expressionAstInScope(ctx, …)
     }
   }
@@ -98,6 +102,7 @@ package "GameProc" {
       constantTable : const ConstantTable*
       storage : const VariableStorage*
       functions : const QHash<QString,UserFunctionInfo>*
+      labelIndex : const QHash<QString,QList<LabelRef>>*  ' 标签名并集（4/6 的 hasLabel 判定）
     }
     class "自由函数" as FreeFns {
       resolveStaticTargets(view, diags)
@@ -127,13 +132,16 @@ package "GameProc" {
     }
     struct ScriptView {
       scripts : const QHash<QString,ScriptData>*
-      labelLists : const QHash<QString,QList<LabelRef>>*
+      labelIndex : const QHash<QString,QList<LabelRef>>*
+      ' 裸标签名（大写折叠）→ 全部声明的全序列表
+      ' 全序 = 脚本名 compare 升序 → 同脚本行号升序
     }
     class "位置区" as PosFns {
       setPosition / advance / jumpToLine / jumpToLabel
       callLabel / callLabelWithReturn / callLabelAt / jumpLabel
       returnFromCall / switchToMemorySpace / reset
       resolveCallableLabel / resolveJumpTarget / resolveJumpToScript
+      firstLabel(state, view, name, callableOnly, onlyScript)  ' 唯一择一规则：全序第一条
       executionScope / executionScopeId
       setLineInternal / pushFrame / popFrame / lineCount   ' 基元
     }
@@ -229,6 +237,10 @@ note bottom of EraParseTable
   markLoadComplete 只是「遍历表 + isGateOpen + 计时日志 + m_phase」。
   阶段随 phaseAfter 推进：Empty → Loading → Bound → Finalized。
 
+  诊断也由表决定归属：每个 pass 建独立 sink，运行与否都
+  replaceOrigin(pass.origin, sink) —— 切片身份是 pass 编号，不是
+  「谁先跑」。重收尾 == 一次性装载；gate 跳过 = 切片置空（不残留）。
+
   4/5/6 的实现已搬出本类：本类只剩一行 forwarder，
   真正的算法在 parsecheck 的自由函数里（输入是 ParseIrView）。
   1/2/3 的实现也已搬出：表项直接指向 loadpass 的自由函数，
@@ -246,8 +258,11 @@ note right of PosFns
   位置区的复杂度落在三样**数据**上：
   · PositionState —— 执行位置 + 调用栈（depth 是 callStack.size() 的缓存）；
   · PositionEffects —— 一次转移要广播哪四个信号（不含顺序）；
-  · ScriptView —— 它只读的两张表（scripts / labelLists），
+  · ScriptView —— 它只读的两张表（scripts / labelIndex），
     不复用 ParseIrView（那 5 个字段位置区一个都不读）。
+  「裸标签属于哪个脚本」只有一张索引、一个全序（脚本名 → 行号）、
+  一个择一规则（firstLabel 取全序第一条）。CALL / GOTO / getLabelPosition /
+  hasLabel 全都查它，所以同一个名字只有一个行号。
   顺序由壳子的 emitEffects 写死（规范序 callStack → space → position → jump），
   clear() 是唯一的反序例外（position 先、callStack 后），
   两条都由 test_position_state 录信号钉住。
@@ -258,8 +273,8 @@ note right of ParseIrView
   · 4/5/6 只需 scripts / variables / constantTable
     （另加 functions：RETURNF 与 CALL 实参校验要用户函数表）
   · storage 是 const*，收尾对变量存储确实纯只读
-  · 原来的 hasLabel() 带 mutable 缓存，
-    自由函数版改用无状态 hasLabelInScripts()
-    （同一判据，收尾只跑一趟，不需要缓存）
+  · 标签名并集（4/6 的 hasLabel 判定）直接读 labelIndex 的键，
+    不再逐脚本二次求并集 —— 索引本来就是「全库标签名」的并集
+  · 原来的 hasLabel() 带 mutable 缓存；缓存随标签索引一起消失
 end note
 @enduml

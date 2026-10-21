@@ -85,6 +85,15 @@ note right of Finish
   驱动一律「脚本名排序 → 每任务独占 ParseDiagnostics → 按名字序归并」。
   实测 eraTW：4/5/6 10.5s → 1.9s，3/6 9.1s → 1.7s（12 线程）。
 
+  协议也是数据：kLoadPasses 每项带 origin（该步拥有的诊断切片）。
+  每步建独立 sink，运行与否都 replaceOrigin —— 重收尾 == 一次性装载；
+  gate 跳过 = 切片置空。增量追加是显式的 beginIncrementalLoad()，
+  Finalized 后直接 loadScript = 拒绝（不再偷偷把阶段改回 Loading）。
+
+  「裸标签属于哪个脚本」只有一张索引：名字（大写折叠）→ 全部声明的全序
+  （脚本名 compare → 行号）。CALL / GOTO / getLabelPosition / hasLabel
+  同一个答案（firstLabel 取全序第一条）。
+
   阶段机显式：Empty → Loading → Bound → Finalized。
   pass 表的 gate / phaseAfter 是数据；
   越界调用 = qWarning + no-op（不 assert、不写诊断）。

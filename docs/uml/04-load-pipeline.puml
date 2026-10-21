@@ -24,6 +24,12 @@ E -> T : setConstantTable(&m_constantTable)
 E -> T : setVariableStorage(&m_variableStorage)
 
 loop 每个 ERB 文件（并行 worker）
+  note right of L
+    线程契约（写在类型上）：并行段 = 每文件局部返回
+    ParsedErbFile，共享结构只在主线程 mergeParsedFile() 写。
+    入口断言 declarationsPreRegistered() 且 phase == Loading ——
+    并行线程只查 VariableTable，绝不插入新声明。
+  end note
   E -> L : loadFile(path, root)
   L -> AB : build(rawLine, position, resolve)
   AB -> AB : 识别指令 / 切分实参 / 解析表达式 AST
@@ -36,11 +42,23 @@ end
 E -> T : markLoadComplete()
 note right of T
   一个静态表驱动，表即流程：
-  kLoadPasses[7] = { label, fn, optional, readOnly }
+  kLoadPasses[7] = { label, fn, gate, phaseAfter }
   · 顺序 = 执行顺序；日志文案也取自表（新增步骤只改表）
-  · optional：受开关门控（当前只有 7）
-  · readOnly：4/5/6(+7)，不改运行行为，可脱离本函数单独调用
+  · gate：受哪个开关门控（Always / NotCalledWarning），
+    驱动逻辑里只有 isGateOpen() 一处按它求值
+  · phaseAfter：该步完成后允许进入的阶段（数据，不是分支）
+  · 4/5/6(+7) 只读：不改运行行为，可脱离本函数单独调用
   · 4/5/6 的 fn 只是 forwarder，算法在 parsecheck 里
+end note
+
+note right of T
+  阶段机（显式，不靠调用顺序）：
+  Empty → Loading → Bound → Finalized
+  · loadScript 要求 Empty/Loading（收尾后再 loadScript
+    会**重新打开** Loading：增量 append，随后必须再收尾）
+  · 4/5/6 要求 Bound；未到 Bound = qWarning + no-op
+  · markLoadComplete 重复调用 = qWarning + no-op
+  · 不接受 assert：release 下也必须安全，且诊断容器不变
 end note
 
 group 1/6 全局声明定稿【改状态】
@@ -54,6 +72,9 @@ group 2/6 就地定型【改状态】
   T -> AB : parseScopedExpression（带 paramNames）
   AB -> AB : VariableTable::applyTypes / walkApply
   AB --> T : 类型 / 维数 / lengths + AccessKind + VariableKey
+  T -> VT : buildPrivateNameTable()（声明 → scopeId → 名字 → 键）
+  T -> S : installPrivateScopeTable(table)
+  note right : 此后再进函数只记当前帧，不再建表（前置条件用 Q_ASSERT_X 断言声明已定稿）
 end
 
 group 3/6 参数校验【改状态：置 line.isError；出诊断】
@@ -73,7 +94,7 @@ group 只读检查步骤（不改变运行行为）
 end
 
 T -> T : m_diagnostics.sortForOutput()（输出定序，一次）
-T -> T : m_finalized = true（不再编译新源码）
+T -> T : m_phase = Finalized（不再编译新源码）
 T --> E : scriptsLoaded
 
 LSP -> T : resolveStaticTargets() / checkStructures() / checkStaticValues()
@@ -84,8 +105,10 @@ note right of LSP
   只读步骤可单独调用（LSP / 测试 / CLI 按需重跑）。
   两条路都通：经 EraParseTable 的 forwarder，
   或直接用 getter 拼 ParseIrView 调自由函数。
-  重复调用会重复产生诊断 ——
-  调用方负责去重或先 clearDiagnostics。
+  重复调用会重复产生诊断 —— 这是**可观察**的契约：
+  readOnlyPassRunCount(pass) 记录运行次数，
+  调用方可据此去重或先 clearDiagnostics。
+  未到 Bound 阶段调用 = qWarning + no-op（计数不变）。
 end note
 
 note over T,D

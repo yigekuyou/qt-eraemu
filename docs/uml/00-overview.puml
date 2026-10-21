@@ -29,6 +29,7 @@ package "数据与求值 GameData" {
   [AST（装载期分词的 LogicalLine）] as AST
   [VariableStorage 全部运行时容器\n唯一按名原语 read/writeIntByName] as Storage
   [ExpressionEvaluator\nresolver 表 20 行 + 唯一分派 read/writeIntNode] as Eval
+  [erasave::Map\n存档条目表（声明 → Entry）\n文件里只写裸名] as Save
 }
 
 Loader ..> Builder : 逐行 build
@@ -44,6 +45,8 @@ Runner --> AST : 取行（已分词）
 Runner --> Storage : 按名原语（Dynamic 时）
 Runner --> Eval : 表达式求值（显式 ScopeId）
 Eval --> Storage
+Storage --> Save : capture/apply
+Exec ..> Save : 存档入口检查 SaveReadiness
 Table --> AST : 定型
 
 note right of Finish
@@ -64,5 +67,11 @@ note right of Finish
   4/5/6 只读检查已搬出 EraParseTable：
   输入 ParseIrView（全 const），输出只有诊断；
   1/2/3 会改装载状态，仍在 EraParseTable 里。
+
+  阶段机显式：Empty → Loading → Bound → Finalized。
+  pass 表的 gate / phaseAfter 是数据；
+  越界调用 = qWarning + no-op（不 assert、不写诊断）。
+  私有名表在装载期由声明建好并安装，
+  运行期换函数只记当前帧，不再建表。
 end note
 @enduml

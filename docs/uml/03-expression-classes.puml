@@ -97,9 +97,13 @@ title 表达式 AST 与变量访问描述符
     - m_globalInt1D / 2D / 3D : QHash<QString>
     - m_localIntVars / m_argIntVars : QList
     - m_systemIntVars / m_systemStrVars : QHash
-    - m_privateNames : QHash   ' scopeId → (名字 → 存储键)
+    - m_privateNames : QHash   ' scopeId → (名字 → 存储键)，装载期安装
+    - m_privateTableInstalled : bool
     - m_references / m_localAliases
-    + setPrivateScope(function, names)          ' 只填充该 scope 的名表
+    + setPrivateScope(function, names)          ' 只记当前帧（安装后无分配）
+    + installPrivateScopeTable(table)           ' 装载期一次
+    + privateScopeTableInstalled() : bool
+    + saveReadiness() : SaveReadiness           ' 存档前置条件（显式）
     + readIntByName(name, indices, scope) : qint64   ' 唯一按名读原语
     + writeIntByName(name, indices, value, scope)    ' 唯一按名写原语
     + storageKeyFor(key) : const QString&       ' 唯一 id→存储串入口（记忆化）
@@ -145,6 +149,15 @@ note right of VariableKey
   · 比较是 quint32 相等，不再是 QString 逐字符
   · 存储层仍用字符串键（存档格式不变），
     但 id → 串只在 storageKeyFor 一处发生
+end note
+
+note right of VariableStorage
+  私有名表是**装载期的静态事实**：
+  * 由声明（scope == Local）建一次，随装载收尾安装进来
+  * 安装后 setPrivateScope 只写 m_privateScopeName / m_privateScopeId，
+    没有 insert / reserve / 循环 —— 换函数零分配
+  * 正确性不再依赖调用方把 names 传全（漏一个名字会让
+    那个变量静默退化成裸名，这是旧实现的静默失效模式）
 end note
 
 note bottom of NameInterner

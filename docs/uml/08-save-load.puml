@@ -1,0 +1,93 @@
+@startuml 08-save-load
+' 无 graphviz(dot) 环境下用 PlantUML 内置 smetana 布局引擎
+!pragma layout smetana
+' emuera —— 存档 / 读档：独立映射层 erasave::Map（存档期不认识存储键形态）
+' 渲染：plantuml -tpng docs/uml/08-save-load.puml
+title 存档 / 读档流程（erasave::Map 是唯一一张「条目 ↔ 身份」表）
+
+actor User
+participant "ExecutionEngine" as E
+participant "VariableStorage" as S
+participant "erasave::Map" as M
+participant "EraBinaryData\nDocument" as D
+participant "存档文件" as F
+
+== 存 ==
+
+User -> E : SAVE / SAVEGLOBAL / SAVEVAR / SAVECHARA
+E -> S : checkSaveReadiness(操作名)
+note right of S
+  前置条件**显式**，不靠调用顺序：
+  · Ready
+  · NoDeclarationTable      （声明表没接上 → 用户 SAVEDATA 会静默丢）
+  · DeclarationsNotResolved （维数未定稿 → 形状按文本猜，静默错）
+  未 Ready：qWarning 到 stderr + 按旧路径继续。
+  不写进 ParseDiagnostics —— 诊断容器只装装载期的事实。
+end note
+
+E -> S : captureBinarySave(type, characters)
+S -> M : Map::build(config, variableTable, type)
+note right of M
+  Entry = { name, key, slot, dimensions, user, persisted }
+
+  · name  —— 文件里的标识，**裸名**（PRIV / CDFLAG / GLOBAL）
+  · key   —— eravar::VariableKey（私有变量自带 scopeId）
+  · slot  —— 落在哪类容器（数据，不是 if 链）
+  · persisted=false —— 只登记身份，不写文件
+
+  身份不进文件：文件里没有 0x1F，私有变量也只能靠裸名。
+end note
+
+loop 每个 Entry（顺序 = 旧 saveShapes 顺序，存档字节不变）
+  S -> S : readSaveEntry(entry, charaSlot)
+  S -> S : storageKeyFor(entry.key)
+  note right of S
+    唯一 id → 存储串入口（记忆化）。
+    "FUNC\x1fNAME" 只在这里被拼出来，
+    存档层从此不认识键形态。
+  end note
+  S -> D : Variable{name, dimensions, values}
+end
+
+S --> E : Document
+E -> D : encode() / encodeText()
+D -> F : 写入
+
+== 读 ==
+
+User -> E : LOAD / LOADGLOBAL / LOADVAR / LOADCHARA
+E -> D : decode() / decodeText()
+D --> E : Document
+E -> S : applyBinarySave(document)
+S -> S : resetForNewGame()
+note right of S
+  重置不清已安装的私有名表 ——
+  否则读档后每个私有名都会静默退化成裸名。
+end note
+
+loop 每个 Variable
+  S -> M : findByName(v.name)
+  note right of M
+    同名撞车：广域/内建行优先，
+    私有行只在名字唯一时命中
+    （与 C# Emuera 的裸名写盘一致）。
+  end note
+  M --> S : const Entry*
+  S -> S : writeSaveEntry(entry, charaSlot, …)
+  S -> S : storageKeyFor(entry.key) → 槽位
+end
+
+S --> E : 完成
+
+legend bottom
+  · 存档层不再有「键形态」知识：`rg isPrivateStorageKey\|splitPrivateStorageKey`
+    在存档路径内 0 命中（它们的调用点只剩运行期/装载期）。
+  · 顺带修掉的既有缺陷：函数私有 SAVEDATA 以前**既没写也没读**
+    （旧过滤条件 `d.scope != VarScope::Global -> continue`）。现在按 C# 语义落盘；
+    五语料无此类声明，字节不变；有此类声明的游戏，新存档会多条目（旧档仍可读）。
+  · 已知未修：用户 SAVEDATA 条目的**顺序**来自 QHash 遍历（Qt 每进程随机播种），
+    所以「与某一次旧存档逐字节相同」只有在固定播种下才可判定。
+    测试用 QT_HASH_SEED=0 的旧实现输出作 golden；要真正确定顺序需另开一轮
+    （排序 + 兼容读），会让旧字节变化。
+endlegend
+@enduml

@@ -61,6 +61,21 @@ void ParseDiagnostics::replaceOrigin(DiagOrigin origin, QList<ParseDiagnostic> i
     for (const ParseDiagnostic& d : m_items) m_texts.append(d.toString());
 }
 
+void ParseDiagnostics::removeOriginFiles(DiagOrigin origin, const QSet<QString>& files) {
+    if (files.isEmpty()) return;
+    QList<ParseDiagnostic> kept;
+    kept.reserve(m_items.size());
+    for (const ParseDiagnostic& d : m_items) {
+        if (d.origin == origin && files.contains(d.file)) continue;
+        kept.append(d);
+    }
+    if (kept.size() == m_items.size()) return;   // 没有命中：不重建文本视图
+    m_items = std::move(kept);
+    m_texts.clear();
+    m_texts.reserve(m_items.size());
+    for (const ParseDiagnostic& d : m_items) m_texts.append(d.toString());
+}
+
 void ParseDiagnostics::addText(DiagSeverity sev, const QString& code, const QString& text) {
     // 既有形态："文件:行: 文本" / "文件:行:列: 文本"；拆出位置便于按位置检索。
     static const QRegularExpression prefix(
@@ -135,7 +150,8 @@ QString ParseDiagnostics::summarize() const {
 #include "expression_lexer.h"
 
 void diagnoseIntegerLiterals(const QString& expression, const QString& file, int line,
-                             int column, ParseDiagnostics& diagnostics) {
+                             int column, ParseDiagnostics& diagnostics,
+                             QSet<QString>& reported) {
     ExpressionLexer lexer;
     for (const auto& token : lexer.tokenize(expression)) {
         if (token.type() == TokenType::STRFORM_AT || token.type() == TokenType::YEN_AT) {
@@ -144,12 +160,12 @@ void diagnoseIntegerLiterals(const QString& expression, const QString& file, int
         }
         if (token.type() != TokenType::NUMBER || token.integerValid()) continue;
         const int tokenColumn = column + token.column() - token.value().size();
-        bool alreadyReported = false;
-        for (const auto& d : diagnostics.all()) {
-            if (d.code == QLatin1String(DiagCode::kNumericConversion) && d.file == file
-                && d.line == line && d.column == tokenColumn) { alreadyReported = true; break; }
-        }
-        if (alreadyReported) continue;
+        // 键含文件名：不同脚本的同一行号/列号不互相吞掉。
+        // （本函数只产 kNumericConversion，键里不必再带 code。）
+        const QString key = file + QChar(0x1f) + QString::number(line) + QChar(0x1f)
+                          + QString::number(tokenColumn);
+        if (reported.contains(key)) continue;
+        reported.insert(key);
         diagnostics.add(DiagSeverity::Error, DiagCode::kNumericConversion, file, line,
             tokenColumn, token.value().size(),
             QCoreApplication::translate("ParseDiagnostics", "整数转换失败（格式错误或超出 64 位整数表示范围）：%1")

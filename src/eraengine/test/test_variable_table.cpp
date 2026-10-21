@@ -72,6 +72,12 @@ int main(int argc, char* argv[]) {
     check(table.loadScript("vt", script), "loadScript(vt)");
     table.markLoadComplete();   // 装载完成后统一回填（引擎在 loadScripts 之后调用）
 
+    // 增量装载协议：定型之后再加脚本必须先显式重新打开 Loading。
+    const auto resumeIncremental = [&table]() {
+        if (table.loadPhase() == EraParseTable::LoadPhase::Finalized)
+            check(table.beginIncrementalLoad(), "beginIncrementalLoad（增量装载）");
+    };
+
     const VariableTable& vt = table.variableTable();
 
     qDebug() << "\n1) 声明解析";
@@ -109,6 +115,7 @@ int main(int argc, char* argv[]) {
         for (int i = 0; i < gsrc.size(); ++i) {
             gs.append(AstBuilder::build(gsrc.at(i), ScriptPosition("g.ERB", i, 1), gr));
         }
+        resumeIncremental();
         table.loadScript("gdup", gs);
         bool globalDupWarn = false;
         for (const QString& w : table.parseWarnings()) {
@@ -133,6 +140,7 @@ int main(int argc, char* argv[]) {
         for (int i = 0; i < dimSrc.size(); ++i) {
             s2.append(AstBuilder::build(dimSrc.at(i), ScriptPosition("d.ERB", i, 1), r2));
         }
+        resumeIncremental();
         table.loadScript("dims", s2);
         table.markLoadComplete();
 
@@ -167,6 +175,7 @@ int main(int argc, char* argv[]) {
         for (int i = 0; i < constArrSrc.size(); ++i) {
             s3.append(AstBuilder::build(constArrSrc.at(i), ScriptPosition("ca.ERB", i, 1), r3));
         }
+        resumeIncremental();
         table.loadScript("carr", s3);
         table.markLoadComplete();
         const VariableDecl* snow = table.variableTable().find("SNOW", "MAIN");
@@ -201,6 +210,7 @@ int main(int argc, char* argv[]) {
         for (int i = 0; i < constSrc.size(); ++i)
             gs.append(AstBuilder::build(constSrc.at(i), ScriptPosition("g.ERB", i, 1), gr));
         // .ERH 文件级声明 = 广域常量（.ERB 里函数外的 # 行会被忽略）
+        resumeIncremental();
         table.loadScript("gconst", gs, /*isHeaderFile=*/true);
 
         const QStringList scopeSrc = {
@@ -219,6 +229,7 @@ int main(int argc, char* argv[]) {
         QList<LogicalLine> ss;
         for (int i = 0; i < scopeSrc.size(); ++i)
             ss.append(AstBuilder::build(scopeSrc.at(i), ScriptPosition("s.ERB", i, 1), sr));
+        resumeIncremental();
         table.loadScript("scope", ss);
         table.markLoadComplete();
 

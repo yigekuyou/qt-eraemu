@@ -66,6 +66,32 @@ static QList<LogicalLine> buildLines(EraParseTable& table, const QStringList& so
     return out;
 }
 
+// 同上，但显式给出「文件身份」（ScriptPosition::filename）：
+// 同名脚本替换时，Load 切片按文件身份精确移除旧行级诊断 —— 测试要能钉住它。
+static QList<LogicalLine> buildLinesAs(EraParseTable& table, const QString& file,
+                                       const QStringList& source) {
+    QList<LogicalLine> out;
+    for (int i = 0; i < source.size(); ++i) {
+        out.append(AstBuilder::build(source.at(i), ScriptPosition(file, i + 1, 1),
+            [&table](const QString& text) { return table.expressionAst(text); }));
+    }
+    return out;
+}
+
+static int countCode(const ParseDiagnostics& d, const char* code) {
+    int n = 0;
+    for (const ParseDiagnostic& x : d.all())
+        if (x.code == QLatin1String(code)) ++n;
+    return n;
+}
+
+static int countCodeInFile(const ParseDiagnostics& d, const char* code, const QString& file) {
+    int n = 0;
+    for (const ParseDiagnostic& x : d.all())
+        if (x.code == QLatin1String(code) && x.file == file) ++n;
+    return n;
+}
+
 static int diagnosticCount(const EraParseTable& table) {
     return table.parseDiagnostics().size();
 }
@@ -137,7 +163,7 @@ struct ValidationFixture {
         return loadpass::LoadContext{scripts, variables, functions,
                                      /*constantTable=*/nullptr, /*storage=*/nullptr,
                                      /*evaluator=*/nullptr, /*gameBaseData=*/nullptr,
-                                     diags, labelIndex, paramNames,
+                                     labelIndex, paramNames,
                                      declarationsResolved, constProvidersReady};
     }
 
@@ -167,7 +193,8 @@ QStringList validationSource(int index) {
 
 QList<ParseDiagnostic> runFinalizeValidation(ValidationFixture& fixture) {
     loadpass::LoadContext ctx = fixture.context();
-    loadpass::finalizeValidation(ctx);
+    // 诊断 sink 是每次运行的显式参数（3/6 的切片由驱动端 replaceOrigin 负责）。
+    loadpass::finalizeValidation(ctx, fixture.diags);
     return fixture.diags.all();
 }
 
@@ -272,7 +299,7 @@ int main(int argc, char* argv[]) {
     //     只替换自己的切片，互不覆盖；3/6 的 RejectLine 不受影响。
     //
     // 夹具同时造出四类：
-    //   `A$ ++`          -> 3/6 finalizeValidation 的 RejectLine（origin=Load）
+    //   `A$ ++`          -> 3/6 finalizeValidation 的 RejectLine（origin=Pass3）
     //   `ELSE` / `IF 1`  -> 5/6 checkStructures 的 kStructure（origin=Pass5）
     //   `CALL MISSING_FN`-> 4/6 resolveStaticTargets 的 kLabelNotFound（Pass4）
     //   `PRINTV 10 / 0`  -> 6/6 checkStaticValues 的 kStaticValue（Pass6）
@@ -331,9 +358,11 @@ int main(int argc, char* argv[]) {
         check(!rejectsBefore.isEmpty()
                   && std::all_of(rejectsBefore.cbegin(), rejectsBefore.cend(),
                                  [](const ParseDiagnostic& x) {
-                                     return x.origin == DiagOrigin::Load;
+                                     return x.origin == DiagOrigin::Pass3;
                                  }),
-              "3/6 的 RejectLine 归 origin=Load（写步骤不切片，见边界说明）");
+              "3/6 的 RejectLine 归 origin=Pass3（写步骤也切片，不再是 Load）");
+        check(!withOrigin(diags, DiagOrigin::Pass3).isEmpty(),
+              "3/6 的切片存在（Pass3 可被独立替换）");
         check(!pass4.isEmpty() && !pass5.isEmpty() && !pass6.isEmpty(),
               QString("首次运行的切片都非空（Pass4=%1 / Pass5=%2 / Pass6=%3）")
                   .arg(pass4.size()).arg(pass5.size()).arg(pass6.size()));
@@ -389,20 +418,200 @@ int main(int argc, char* argv[]) {
     }
 
     // ------------------------------------------------------------------
-    // 4) 收尾之后 loadScript：增量 append —— 阶段重新打开为 Loading，
-    //    必须再 markLoadComplete 才能回到 Finalized（旧的隐性契约）。
+    // 4) 收尾之后 loadScript：显式增量协议（Finalized 不接受隐式重开）。
     // ------------------------------------------------------------------
-    qDebug() << "\n4) 收尾之后 loadScript（增量 append）";
+    qDebug() << "\n4) 收尾之后 loadScript：显式增量协议";
     const int scriptsBefore = table.scriptNames().size();
+    check(!table.loadScript(QStringLiteral("late"), buildLines(table, source)),
+          "loadScript after Finalized（未 beginIncrementalLoad）: rejected");
+    check(table.loadPhase() == EraParseTable::LoadPhase::Finalized,
+          "rejected loadScript leaves phase == Finalized");
+    check(table.scriptNames().size() == scriptsBefore,
+          "rejected loadScript does not touch the script table");
+    check(table.beginIncrementalLoad(), "beginIncrementalLoad: Finalized -> Loading");
+    check(!table.beginIncrementalLoad(), "beginIncrementalLoad twice: rejected（当前不是 Finalized）");
     check(table.loadScript(QStringLiteral("late"), buildLines(table, source)),
-          "loadScript after Finalized: accepted (incremental append)");
+          "loadScript after beginIncrementalLoad: accepted");
     check(table.scriptNames().size() == scriptsBefore + 1,
-          "loadScript after Finalized: script table gained the new script");
+          "incremental load: script table gained the new script");
     check(table.loadPhase() == EraParseTable::LoadPhase::Loading,
-          "loadScript after Finalized reopens phase == Loading");
+          "incremental load keeps phase == Loading until markLoadComplete");
     table.markLoadComplete();
     check(table.loadPhase() == EraParseTable::LoadPhase::Finalized,
           "re-finalizing after incremental append: phase == Finalized again");
+
+    // ------------------------------------------------------------------
+    // 4b) 增量重收尾 == 同样输入一次性装载（逐字段/逐顺序）。
+    //     旧脚本的诊断条数不翻倍（1/2/3 的切片必须替换，不是追加）。
+    // ------------------------------------------------------------------
+    qDebug() << "\n4b) 增量重收尾：诊断集合 == 一次性装载";
+    {
+        const QStringList firstSrc = {QStringLiteral("@MAIN"),
+                                      QStringLiteral("IF 1"),
+                                      QStringLiteral("PRINT 1")};      // 未闭合 -> Pass5
+        const QStringList secondSrc = {QStringLiteral("@SUB"),
+                                       QStringLiteral("ELSE"),
+                                       QStringLiteral("PRINT 2")};     // ELSE 无 IF -> Pass5
+
+        ProcessState oneState;
+        VariableStorage oneStorage;
+        EraParseTable oneShot(&oneState);
+        oneShot.setVariableStorage(&oneStorage);
+        check(oneShot.loadScript(QStringLiteral("inc-a.ERB"),
+                                 buildLinesAs(oneShot, QStringLiteral("inc-a.ERB"), firstSrc),
+                                 false, QStringLiteral("inc-a.ERB")),
+              "一次性装载：inc-a.ERB");
+        check(oneShot.loadScript(QStringLiteral("inc-b.ERB"),
+                                 buildLinesAs(oneShot, QStringLiteral("inc-b.ERB"), secondSrc),
+                                 false, QStringLiteral("inc-b.ERB")),
+              "一次性装载：inc-b.ERB");
+        oneShot.markLoadComplete();
+        const QString expected = serializeDiagnostics(oneShot.parseDiagnostics());
+
+        ProcessState incState;
+        VariableStorage incStorage;
+        EraParseTable incremental(&incState);
+        incremental.setVariableStorage(&incStorage);
+        check(incremental.loadScript(QStringLiteral("inc-a.ERB"),
+                                     buildLinesAs(incremental, QStringLiteral("inc-a.ERB"), firstSrc),
+                                     false, QStringLiteral("inc-a.ERB")),
+              "增量装载：先装 inc-a.ERB");
+        incremental.markLoadComplete();
+        const int firstPass5 = countCodeInFile(incremental.parseDiagnostics(),
+                                               DiagCode::kStructure, QStringLiteral("inc-a.ERB"));
+        check(firstPass5 > 0, "首次收尾：inc-a.ERB 有结构诊断");
+
+        check(incremental.beginIncrementalLoad(), "增量装载：beginIncrementalLoad");
+        check(incremental.loadScript(QStringLiteral("inc-b.ERB"),
+                                     buildLinesAs(incremental, QStringLiteral("inc-b.ERB"), secondSrc),
+                                     false, QStringLiteral("inc-b.ERB")),
+              "增量装载：追加 inc-b.ERB");
+        incremental.markLoadComplete();
+        check(serializeDiagnostics(incremental.parseDiagnostics()) == expected,
+              "增量重收尾后的整份诊断 == 一次性装载（逐字段/逐顺序）");
+        check(countCodeInFile(incremental.parseDiagnostics(), DiagCode::kStructure,
+                              QStringLiteral("inc-a.ERB")) == firstPass5,
+              QStringLiteral("旧脚本的 Pass5 诊断条数不翻倍（%1）").arg(firstPass5));
+        check(withOrigin(incremental.parseDiagnostics(), DiagOrigin::Pass5).size() >= 2,
+              "Pass5 切片含两个脚本的诊断（切片身份是 pass 编号，互不覆盖）");
+    }
+
+    // ------------------------------------------------------------------
+    // 4c) 同名脚本替换：旧 AST 的行级装载期诊断（Load）随之消失。
+    //     这是「替换语义」的第二个 bug —— 只替换 ScriptData 而留下旧行级诊断，
+    //     同一行会同时挂新旧两版事实。
+    // ------------------------------------------------------------------
+    qDebug() << "\n4c) 同名脚本替换：旧行级诊断不残留";
+    {
+        const QStringList oldSrc = {QStringLiteral("#DIM GLOBAL_X"),   // 函数声明之外 -> kSharpLine
+                                    QStringLiteral("@MAIN"),
+                                    QStringLiteral("ELSE"),            // Pass5
+                                    QStringLiteral("RETURN")};
+        const QStringList fixedSrc = {QStringLiteral("@MAIN"),
+                                      QStringLiteral("RETURN")};
+
+        ProcessState oneState;
+        EraParseTable oneShot(&oneState);
+        check(oneShot.loadScript(QStringLiteral("replace.ERB"),
+                                 buildLinesAs(oneShot, QStringLiteral("replace.ERB"), fixedSrc),
+                                 false, QStringLiteral("replace.ERB")),
+              "一次性装载：替换后的版本");
+        oneShot.markLoadComplete();
+        const QString expected = serializeDiagnostics(oneShot.parseDiagnostics());
+
+        ProcessState replaceState;
+        EraParseTable replaceTable(&replaceState);
+        check(replaceTable.loadScript(QStringLiteral("replace.ERB"),
+                                      buildLinesAs(replaceTable, QStringLiteral("replace.ERB"), oldSrc),
+                                      false, QStringLiteral("replace.ERB")),
+              "先装载旧版本");
+        replaceTable.markLoadComplete();
+        check(countCodeInFile(replaceTable.parseDiagnostics(), DiagCode::kSharpLine,
+                              QStringLiteral("replace.ERB")) == 1,
+              "旧版本的 kSharpLine 是 Load 切片的一部分");
+        check(countCodeInFile(replaceTable.parseDiagnostics(), DiagCode::kStructure,
+                              QStringLiteral("replace.ERB")) > 0,
+              "旧版本有结构诊断");
+
+        check(replaceTable.beginIncrementalLoad(), "替换装载：beginIncrementalLoad");
+        check(replaceTable.loadScript(QStringLiteral("replace.ERB"),
+                                      buildLinesAs(replaceTable, QStringLiteral("replace.ERB"), fixedSrc),
+                                      false, QStringLiteral("replace.ERB")),
+              "替换装载同名脚本");
+        replaceTable.markLoadComplete();
+        check(countCodeInFile(replaceTable.parseDiagnostics(), DiagCode::kSharpLine,
+                              QStringLiteral("replace.ERB")) == 0,
+              "旧版本的行级 Load 诊断随旧 AST 消失");
+        check(countCodeInFile(replaceTable.parseDiagnostics(), DiagCode::kStructure,
+                              QStringLiteral("replace.ERB")) == 0,
+              "旧版本的结构诊断被 Pass5 新切片替换掉");
+        check(serializeDiagnostics(replaceTable.parseDiagnostics()) == expected,
+              "替换装载后的诊断 == 直接装载当前版本（逐字段/逐顺序）");
+    }
+
+    // ------------------------------------------------------------------
+    // 4d) Pass7（可选 gate）：开启收尾 -> 关闭 gate 再增量收尾，kNotCalled 不残留。
+    // ------------------------------------------------------------------
+    qDebug() << "\n4d) Pass7 gate 关闭：旧切片置空";
+    {
+        ProcessState ncState;
+        EraParseTable nc(&ncState);
+        nc.setFunctionNotCalledWarning(true);
+        check(nc.loadScript(QStringLiteral("nc.ERB"),
+                            buildLinesAs(nc, QStringLiteral("nc.ERB"),
+                                         {QStringLiteral("@MAIN"), QStringLiteral("RETURN"),
+                                          QStringLiteral("@UNUSED"), QStringLiteral("RETURN")}),
+                            false, QStringLiteral("nc.ERB")),
+              "装载未调用函数夹具");
+        nc.markLoadComplete();
+        check(countCode(nc.parseDiagnostics(), DiagCode::kNotCalled) > 0,
+              "gate 开启：产生 kNotCalled");
+        check(withOrigin(nc.parseDiagnostics(), DiagOrigin::Pass7).size()
+                  == countCode(nc.parseDiagnostics(), DiagCode::kNotCalled),
+              "kNotCalled 全部归 origin=Pass7");
+
+        nc.setFunctionNotCalledWarning(false);
+        check(nc.beginIncrementalLoad(), "关闭 gate 后 beginIncrementalLoad");
+        check(nc.loadScript(QStringLiteral("nc2.ERB"),
+                            buildLinesAs(nc, QStringLiteral("nc2.ERB"),
+                                         {QStringLiteral("@EXTRA"), QStringLiteral("RETURN")}),
+                            false, QStringLiteral("nc2.ERB")),
+              "增量装载第二个脚本");
+        nc.markLoadComplete();
+        check(withOrigin(nc.parseDiagnostics(), DiagOrigin::Pass7).isEmpty(),
+              "gate 关闭的增量收尾把 Pass7 切片替换为空（不残留）");
+        check(countCode(nc.parseDiagnostics(), DiagCode::kNotCalled) == 0,
+              "整份诊断里没有 kNotCalled");
+    }
+
+    // ------------------------------------------------------------------
+    // 4e) 数字字面量去重 = 本次运行的局部键集合：首跑 1 条，重跑仍 1 条。
+    //     （fixture 版断言见 7c；这里钉住「重跑 pass 3」不会因共享容器/累加而变 0/2。）
+    // ------------------------------------------------------------------
+    qDebug() << "\n4e) 数字字面量去重：重跑仍 1 条";
+    {
+        ProcessState numState;
+        EraParseTable num(&numState);
+        check(num.loadScript(QStringLiteral("num.ERB"),
+                             buildLinesAs(num, QStringLiteral("num.ERB"),
+                                          {QStringLiteral("@MAIN"),
+                                           QStringLiteral("X = 9999999999999999999999, 9999999999999999999999")}),
+                             false, QStringLiteral("num.ERB")),
+              "装载同一行两处非法字面量");
+        num.markLoadComplete();
+        check(countCode(num.parseDiagnostics(), DiagCode::kNumericConversion) == 1,
+              "首跑：同一行同一位置只报 1 条（局部键集合去重）");
+
+        check(num.beginIncrementalLoad(), "重跑前 beginIncrementalLoad");
+        check(num.loadScript(QStringLiteral("num2.ERB"),
+                             buildLinesAs(num, QStringLiteral("num2.ERB"),
+                                          {QStringLiteral("@OTHER"), QStringLiteral("RETURN")}),
+                             false, QStringLiteral("num2.ERB")),
+              "增量装载一个无关脚本");
+        num.markLoadComplete();
+        check(countCode(num.parseDiagnostics(), DiagCode::kNumericConversion) == 1,
+              "重跑 pass 3 后仍为 1 条（切片替换 + 本次运行独立的去重键集合）");
+    }
 
     // ------------------------------------------------------------------
     // 5) 私有名表：安装前后各调一次 setPrivateScope。

@@ -72,7 +72,7 @@ constexpr int kMinScriptsForParallel = 4;
 //   任务（线程池）：每个任务**一个**脚本 + 一个**本任务独占**的
 //     ParseDiagnostics（不许跨任务共享同一个 sink）；
 //   归并（本线程）：blockingMapped 保持输入顺序返回，按**脚本名序**逐条 add 回
-//     ctx.diagnostics；sortForOutput 仍是「同排序键的重复诊断」的最后兜底。
+//     调用方给的 pass sink；sortForOutput 仍是「同排序键的重复诊断」的最后兜底。
 //
 // fn 的形参是 const LoadContext& —— 任务里的 ctx 一律收窄成只读视图，写操作
 // 只能落到**自己的脚本**与**自己的 sink**；共享只读表（variables / functions /
@@ -82,7 +82,7 @@ constexpr int kMinScriptsForParallel = 4;
 // 可见顺序还会随线程调度抖动 —— 排一次名字让归并顺序只由输入决定。
 // ---------------------------------------------------------------------------
 template <class Fn>
-void runPerScript(LoadContext& ctx, Fn&& fn) {
+void runPerScript(LoadContext& ctx, ParseDiagnostics& diagnostics, Fn&& fn) {
     QStringList names = ctx.scripts.keys();
     std::sort(names.begin(), names.end());
 
@@ -93,11 +93,11 @@ void runPerScript(LoadContext& ctx, Fn&& fn) {
         if (it != ctx.scripts.end()) scripts.append(&it.value());
     }
 
-    // 串行分支也用同一个签名：只读视图 + 本线程的 sink（就是 ctx.diagnostics）。
+    // 串行分支也用同一个签名：只读视图 + 本线程的 sink（就是调用方给的 sink）。
     const LoadContext& view = ctx;
     if (scripts.size() < kMinScriptsForParallel
         || QThreadPool::globalInstance()->maxThreadCount() <= 1) {
-        for (ScriptData* sd : scripts) fn(view, *sd, ctx.diagnostics);
+        for (ScriptData* sd : scripts) fn(view, *sd, diagnostics);
         return;
     }
 
@@ -107,7 +107,7 @@ void runPerScript(LoadContext& ctx, Fn&& fn) {
         return local;
     });
     for (const ParseDiagnostics& local : locals)
-        for (const ParseDiagnostic& d : local.all()) ctx.diagnostics.add(d);
+        for (const ParseDiagnostic& d : local.all()) diagnostics.add(d);
 }
 
 // ---------------------------------------------------------------------------
@@ -467,15 +467,18 @@ void applyStringAssignmentsInScript(const LoadContext& ctx, ScriptData& script,
                                     ParseDiagnostics& sink) {
     // FORM 里的插值表达式也要用**行的作用域**解析：否则 `%PNAME%`（函数内私有
     // 字符串变量）会按无作用域解析失败，整行报「字符串赋值FORM无效」。
+    // 数字字面量去重键属于**本次运行**（这个脚本任务）：跨行重复的位置只报一次，
+    // 不读共享容器（见 diagnoseIntegerLiterals）。
+    QSet<QString> reportedNumbers;
     for (LogicalLine& line : script.lines) {
         // 只处理构建期未定型的行：构建期已按（预扫描）类型表定型的
         // 字符串/FORM/CASE 不再重解析（收尾只扫描未定型项）。
         if (!line.strAssignPending && !line.needsCompletion) continue;
         const QString owner = line.ownerFunction;
         // &line 是每行局部量、&sink 是本任务独占的 sink —— 两者都不会跨任务。
-        const AstResolver resolve = [ctx, owner, &line, &sink](const QString& e) {
+        const AstResolver resolve = [ctx, owner, &line, &sink, &reportedNumbers](const QString& e) {
             diagnoseIntegerLiterals(e, line.position.filename, line.position.lineNumber,
-                line.position.column + qMax(0, int(line.raw.indexOf(e))), sink);
+                line.position.column + qMax(0, int(line.raw.indexOf(e))), sink, reportedNumbers);
             return expressionAstInScope(ctx, e, owner);
         };
         if (line.kind != LineKind::Instruction) continue;
@@ -1034,7 +1037,10 @@ void finalizeLabelIndex(LoadContext& ctx) {
 
 
 
-void resolveGlobalDeclarationsStep(LoadContext& ctx) {
+void resolveGlobalDeclarationsStep(LoadContext& ctx, ParseDiagnostics& diagnostics) {
+    // 本步目前不产诊断（只写变量表/求值器/标签索引）。参数是 pass 契约的一部分：
+    // 将来要报错时直接写这里（驱动端负责盖章与切片替换，本函数不碰 origin）。
+    (void)diagnostics;
     // 收尾步骤 1：全局声明定稿 + 全局标签索引排序固化（顺序不可交换）。
     resolveGlobalDeclarations(ctx);   // 声明预登记后 #FUNCTION 表才随 loadScript 补齐，此处再结算一次
     finalizeLabelIndex(ctx);          // 全局标签索引排序固化（labels()/resolveCallableLabel 依赖）
@@ -1089,14 +1095,14 @@ void rebuildAssignmentAstsInScript(const LoadContext& ctx, ScriptData& script, P
 // （runPerScript：排序序幕 + 每脚本一个任务 + 按脚本名序归并）。
 // 刻意不把多段折进同一个任务：那会让「类型回填」与「赋值重建」的先后关系
 // 隐式化（那是另一刀）。
-void finalizeBindings(LoadContext& ctx) {
+void finalizeBindings(LoadContext& ctx, ParseDiagnostics& diagnostics) {
     QElapsedTimer step;
     step.start();
-    runPerScript(ctx, applyStringAssignmentsInScript);
+    runPerScript(ctx, diagnostics, applyStringAssignmentsInScript);
     qCDebug(eraTrace).noquote() << "[parse] 2/6 子步 1/5 字符串赋值:" << step.elapsed() << "ms";
 
     step.restart();
-    runPerScript(ctx, recompileFuncLinesInScript);
+    runPerScript(ctx, diagnostics, recompileFuncLinesInScript);
     qCDebug(eraTrace).noquote() << "[parse] 2/6 子步 2/5 FUNC 重编译:" << step.elapsed() << "ms";
 
     step.restart();
@@ -1104,7 +1110,7 @@ void finalizeBindings(LoadContext& ctx) {
     qCDebug(eraTrace).noquote() << "[parse] 2/6 子步 3/5 变量类型回填:" << step.elapsed() << "ms";
 
     step.restart();
-    runPerScript(ctx, rebuildAssignmentAstsInScript);
+    runPerScript(ctx, diagnostics, rebuildAssignmentAstsInScript);
     qCDebug(eraTrace).noquote() << "[parse] 2/6 子步 4/5 赋值 AST 重建:" << step.elapsed() << "ms";
 
     step.restart();
@@ -1126,6 +1132,8 @@ void finalizeBindings(LoadContext& ctx) {
 namespace {
 
 void validateScriptLines(const LoadContext& ctx, ScriptData& script, ParseDiagnostics& sink) {
+    // 数字字面量去重键属于**本次运行**（这个脚本任务）：见 diagnoseIntegerLiterals。
+    QSet<QString> reportedNumbers;
     const auto constantTree = [](const ExpressionNode& root) {
         bool constant = true;
         walkExpression(const_cast<ExpressionNode&>(root), [&](ExpressionNode& n) {
@@ -1324,7 +1332,8 @@ void validateScriptLines(const LoadContext& ctx, ScriptData& script, ParseDiagno
                 for (int valueIndex = 0; valueIndex < values.size(); ++valueIndex) {
                     const auto& text = values[valueIndex];
                     diagnoseIntegerLiterals(text, line.position.filename, line.position.lineNumber,
-                        line.position.column + qMax(0, int(line.raw.indexOf(text))), sink);
+                        line.position.column + qMax(0, int(line.raw.indexOf(text))), sink,
+                        reportedNumbers);
                     const auto& ast = line.assignmentAsts[valueIndex];
                     if (ast) validate(ast);
                     else {
@@ -1372,7 +1381,8 @@ void validateScriptLines(const LoadContext& ctx, ScriptData& script, ParseDiagno
 //     line.argument.typeOk 与 line.arguments[0].ast），因此必须待在同一个任务里。
 //     诊断写进本任务独占的 ParseDiagnostics（不与任何线程共享）。
 //   归并（本线程）：blockingMapped 保持输入顺序返回，按**脚本名序**逐条 add 回
-//     ctx.diagnostics。sortForOutput 仍是「同排序键的重复诊断」的最后兜底。
+//     调用方给的 pass sink（本次运行独占）。sortForOutput 仍是「同排序键的
+//     重复诊断」的最后兜底。
 //
 // 跨脚本依赖：**没有** —— 两步只读 ctx.variables / ctx.functions /
 // ctx.constantTable / ctx.evaluator / ctx.storage（pass 1/2 已定型的只读表），
@@ -1387,8 +1397,8 @@ void validateScriptLines(const LoadContext& ctx, ScriptData& script, ParseDiagno
 // 一个任务跑完**同一个**脚本的两步 —— 两步之间有脚本内顺序依赖
 //（validateArguments 读刚写的 line.argument.typeOk 与 line.arguments[0].ast），
 // 因此不能拆成两个任务。
-void finalizeValidation(LoadContext& ctx) {
-    runPerScript(ctx, [](const LoadContext& view, ScriptData& sd, ParseDiagnostics& sink) {
+void finalizeValidation(LoadContext& ctx, ParseDiagnostics& diagnostics) {
+    runPerScript(ctx, diagnostics, [](const LoadContext& view, ScriptData& sd, ParseDiagnostics& sink) {
         validateScriptLines(view, sd, sink);
         validateArguments(view, sd, sink);
     });

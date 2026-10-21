@@ -356,6 +356,7 @@ int main(int argc, char* argv[]) {
     {
         const AstResolver resolveOne = [&table](const QString& e) { return compileFixture(table, e); };
         // 全局声明（头文件级 -> 全局作用域）：1D 整型 / 2D 整型 / 1D 字符串
+        check(table.beginIncrementalLoad(), "增量装载 v.ERH 前 beginIncrementalLoad");
         table.loadScript("v.ERH",
                          buildLines(table, {"#DIM VSCNT, 6",
                                             "#DIM VSNO, 6, 100",
@@ -857,6 +858,7 @@ int main(int argc, char* argv[]) {
     //     遮蔽、字符串曾丢 markup —— 全部是本节要锁住的回归面）。
     qDebug() << "\n12) 变量分词的访问描述符";
     {
+        check(table.beginIncrementalLoad(), "增量装载 va.ERH/va.ERB 前 beginIncrementalLoad");
         table.loadScript("va.ERH",
                          buildLines(table, {"#DIM VA_HDR2, 3, 4", "#DIMS VA_HDRS, 3"}), true);
         table.loadScript("va.ERB", buildLines(table, {

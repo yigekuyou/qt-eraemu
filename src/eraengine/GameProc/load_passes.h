@@ -69,9 +69,7 @@ struct LoadContext {
     ExpressionEvaluator* evaluator;
     // 7) GAMEBASE_* 的来源：常量表达式求值参数；evaluate() 收非 const，可为空。
     GameBaseData* gameBaseData;
-    // 8) 诊断容器：pass 1/2/3 都往里写（错误 + 告警），跨步骤累积。
-    ParseDiagnostics& diagnostics;
-    // 9) 唯一标签索引（裸标签名（大写）-> 全部 @/$ 声明）：pass 1 末尾按
+    // 8) 唯一标签索引（裸标签名（大写）-> 全部 @/$ 声明）：pass 1 末尾按
     //    labelRefLess（脚本名 QString::compare -> 行号）排序固化；必须可变。
     QHash<QString, QList<LabelRef>>& labelIndex;
     // 10) 形参名集合缓存：装载期解析与 pass 2 就地定型共用；pass 2 先补顶层
@@ -82,10 +80,15 @@ struct LoadContext {
     bool& declarationsResolved;
     // 12) 「常量 provider 已安装」幂等 guard：pass 1 置位，必须可变。
     bool& constProvidersReady;
-    // 注意：这里**没有**「当前执行位置」。常数/维数求值的作用域是求值调用方
-    // 显式给出的参数（ExpressionEvaluator::evaluate 的 scope）—— 装载期求值
-    // 用「这行所属函数」，运行期用「当前活动函数」。解析表停在哪个脚本/行
-    // 是运行期状态，与「这行属于哪个函数」无关，不能夹带进装载视图。
+    // 注意：这里**没有**诊断容器，也没有「当前执行位置」。
+    //   * 诊断是**每次 pass 运行**的产物：由调用方（驱动端）持有独立 sink，作为
+    //     该 pass 函数的显式参数传入。若把它塞进视图，视图会被 installPrivateScopes
+    //     之类逃逸的 lambda 按值捕获 —— sink 的生命周期就只有一次循环迭代，
+    //     捕获到的引用会悬空。
+    //   * 常数/维数求值的作用域是求值调用方**显式给出的参数**
+    //     （ExpressionEvaluator::evaluate 的 scope）—— 装载期求值用「这行所属
+    //     函数」，运行期用「当前活动函数」。解析表停在哪个脚本/行是运行期状态，
+    //     与「这行属于哪个函数」无关，不能夹带进装载视图。
 };
 
 // ---- 表达式解析 -----------------------------------------------------------
@@ -109,16 +112,18 @@ const QSet<QString>* paramNamesOf(const QHash<QString, QSet<QString>>& paramName
                                   const QString& upperScope);
 
 // ---- 收尾写步骤（kLoadPasses 的 1/2/3） -----------------------------------
+// 诊断收进调用方给的 sink（本次 pass 运行独占），不写入 LoadContext：
+// pass 驱动随后用 ParseDiagnostics::replaceOrigin 整体替换该 pass 的切片。
 // 全局声明定稿（常量/维数求值器 + 维数 + 全局初值 + 用户函数类型，幂等）。
 // 装载器在「先登记 #DIM/#DIMS 再构造 AST」的结算处（装载器预登记结算）就要跑它 —— 那时收尾步骤还没开始，所以
 // 它是一个独立的自由函数，由解析表的 forwarder 也在装载期调用。
 void resolveGlobalDeclarations(LoadContext& ctx);
 // 步骤 1：全局声明定稿 + 全局标签索引排序（顺序不可交换）。
-void resolveGlobalDeclarationsStep(LoadContext& ctx);
+void resolveGlobalDeclarationsStep(LoadContext& ctx, ParseDiagnostics& diagnostics);
 // 步骤 2：全体脚本就地定型/重绑（字符串赋值 → 类型 → 赋值 AST → 函数调用）。
-void finalizeBindings(LoadContext& ctx);
+void finalizeBindings(LoadContext& ctx, ParseDiagnostics& diagnostics);
 // 步骤 3：全体脚本参数/类型校验（只产诊断，不写 IR）。
-void finalizeValidation(LoadContext& ctx);
+void finalizeValidation(LoadContext& ctx, ParseDiagnostics& diagnostics);
 
 // 标签索引排序固化（解析表同名 forwarder 的目标）。
 void finalizeLabelIndex(LoadContext& ctx);

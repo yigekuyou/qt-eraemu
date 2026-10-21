@@ -222,10 +222,20 @@ public:
     // 跑两次/三次与跑一次逐字节相同，调用方不需要数次数、也不需要先清空。
 
     // 装载一个脚本的完整 AST（只读区填充 + 标记区构建）。
-    // 要求阶段：Empty / Loading。Bound / Finalized 调用 = **重新打开** Loading
-    // （增量 append：测试/LSP 路径；调用方随后必须再 markLoadComplete）。
+    // 要求阶段：Empty / Loading。**Finalized 时拒绝**（qWarning + return false）：
+    // 定型之后再装脚本会让「已定型的只读区」与「新源码」共存，必须由调用方
+    // 显式声明意图 —— 先 beginIncrementalLoad()（Finalized -> Loading），
+    // 装载完再 markLoadComplete() 让新脚本被定型/重绑。
+    // 协议是显式的：不存在「loadScript 顺手重置状态机」的隐式行为。
     bool loadScript(const QString& scriptName, const QList<LogicalLine>& lines,
                     bool isHeaderFile = false, const QString& path = QString());
+
+    // 增量装载的显式入口：Finalized -> Loading（其余阶段 = qWarning + false）。
+    // 仅在「已定型 + 要追加/替换脚本」时使用；调用方随后必须
+    // loadScript(...) 至少一次并 markLoadComplete()。
+    // 替换同名脚本时，旧 AST 的装载期逐行诊断（Load）会随之移除，
+    // 因此「重载同一个脚本」与「加载它的当前版本」诊断逐条相同。
+    bool beginIncrementalLoad();
 
     // 卸载全部脚本（QUIT 关闭游戏）：释放 AST/标签/函数表/告警等解析期内存。
     // 调用后脚本表为空，需重新 loadScript + markLoadComplete 才能执行。
@@ -351,8 +361,9 @@ public:
     // 装载收尾（唯一入口）：全局声明定稿 → 全体脚本就地定型/重绑 → 统一出诊断，
     // 并把只读区定型（之后不再编译新源码）。
     // 要求阶段：Empty / Loading（Empty = 空装载，仍算一次有效收尾）。
-    // 已 Finalized 时 qWarning + no-op —— 重复收尾会重复产出诊断，这里的 no-op
-    // 与“先 clear 再装”是等价的显式契约。
+    // 已 Finalized 时 qWarning + no-op —— 要再收尾必须先 beginIncrementalLoad()
+    // + loadScript。增量重收尾是**幂等**的：每个 pass 的诊断切片原位替换，
+    // 反复「装载 → 收尾」后的诊断集合等于「同样输入一次性装载」。
     void markLoadComplete();
 
     // ---- HTML 字符串的**反向追踪**（装载器在装载期调用一次）-----------------
@@ -525,20 +536,26 @@ private:
     // FunctionNotCalledWarning）。C# 的**默认值是 IGNORE**，且只要有 CALLFORM 系
     // （名字运行期求值）就无法判定「没被调用」，此时全部不报 —— eraTW 两种条件都命中，
     // 因此默认关闭、真实游戏一般不开。开启后也用同一套判据，避免误报。
-    void checkNotCalledFunctions();
+    // 实现 = runCheckNotCalledFunctions（pass 表条目，origin=Pass7）。
 
     // 收尾 pass 表条目（定义见 .cpp 的 EraParseTable::kLoadPasses）。
     // 表的顺序就是执行顺序；日志文案也来自这里，新增步骤只改表。
     // 门控是**数据**（Gate），不是「读某个 bool 的 if」：markLoadComplete 里
     // 只有一处按 Gate 求值，增删开关不必再改驱动逻辑。
+    // origin 也是**数据**：切片身份 = pass 编号（1..7），驱动把每一步的产出
+    // 整体替换到自己的 origin 切片里 —— 门控关闭时替换为空，旧切片不残留。
     enum class LoadPassGate : quint8 { Always, NotCalledWarning };
     struct LoadPass {
         const char* label;                        // 日志步骤名（含 "N/6" 编号）
         // 1/2/3 号步骤：吃 LoadContext 的自由函数（实现已搬到 load_passes.cpp）。
-        void (*fn)(loadpass::LoadContext&);
-        // 尚未搬出的步骤（4/5/6/7）的成员入口。fn 与 memberFn 恰有一个非空，
-        // 由 markLoadComplete 的那一处 if 分派 —— 顺序/门控/阶段逻辑都不变。
-        void (EraParseTable::*memberFn)();
+        // 第二个参数是**本次运行的独立 sink**（不放进 LoadContext：视图会被
+        // installPrivateScopes 之类逃逸的 lambda 按值捕获，窄生命周期引用会悬空）。
+        void (*fn)(loadpass::LoadContext&, ParseDiagnostics&);
+        // 4/5/6/7 号步骤的成员入口（私有 run* 形态：只写调用方给的 sink，
+        // 不自己做 replaceOrigin —— 盖章与切片替换只在驱动里发生一次）。
+        // fn 与 memberFn 恰有一个非空，由 markLoadComplete 的那一处 if 分派。
+        void (EraParseTable::*memberFn)(ParseDiagnostics&) const;
+        DiagOrigin origin;                        // 该步的诊断切片身份
         LoadPassGate gate;                        // 受哪个开关门控（数据）
         LoadPhase phaseAfter;                     // 本步完成后允许进入的阶段（数据）
     };
@@ -548,6 +565,11 @@ private:
     // 阶段符合 -> true。不记录运行次数：每个 pass 的诊断按 origin 切片替换，
     // 重跑幂等由 ParseDiagnostics 的数据结构保证，不靠调用方纪律。
     [[nodiscard]] bool readOnlyPassAllowed(const char* entryName) const;
+    // pass 表的 4/5/6/7 成员实现（只写 sink；origin 由驱动统一盖）。
+    void runResolveStaticTargets(ParseDiagnostics& sink) const;
+    void runCheckStructures(ParseDiagnostics& sink) const;
+    void runCheckStaticValues(ParseDiagnostics& sink) const;
+    void runCheckNotCalledFunctions(ParseDiagnostics& sink) const;
     // 只读收尾步骤（4/5/6 号 pass）的视图构造：只做指针打包，不读取内容。
     // 三个步骤的实现是 parse_checks.cpp 里的自由函数，public 方法只做转发。
     [[nodiscard]] parsecheck::ParseIrView makeIrView() const;

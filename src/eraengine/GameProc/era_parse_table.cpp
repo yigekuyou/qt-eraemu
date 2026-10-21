@@ -369,10 +369,15 @@ void EraParseTable::clear() {
 
 bool EraParseTable::loadScript(const QString& scriptName, const QList<LogicalLine>& lines,
                               bool isHeaderFile, const QString& path) {
-    // 增量装载（测试/LSP 的 append 路径）：收尾之后再加脚本 = 重新打开装载
-    // 阶段，调用方必须再调一次 markLoadComplete 让新脚本被定型/重绑。
-    // 旧实现把 m_finalized 留在 true（新脚本不会被重绑，只是“碰巧”在测试里
-    // 因为 AST 已在装载前构建而能跑）—— 现在阶段本身回答“还需不需要收尾”。
+    // 增量装载协议（显式）：Finalized 之后必须先 beginIncrementalLoad()。
+    // loadScript 不再兼职「重置状态机」—— 隐含的重开会让调用方以为装载一行
+    // 就能继续用，实际是「只读区已经定型、新脚本还没被重绑」的半成品状态。
+    if (m_phase == LoadPhase::Finalized) {
+        qWarning().noquote()
+            << "[parse] loadScript 在定型（Finalized）之后调用：先 beginIncrementalLoad()，忽略"
+            << scriptName;
+        return false;
+    }
     if (scriptName.isEmpty() || lines.isEmpty()) {
         return false;
     }
@@ -383,6 +388,17 @@ bool EraParseTable::loadScript(const QString& scriptName, const QList<LogicalLin
     // 可能答出一个在当前 ScriptData 里根本不存在的行。初次装载时 m_scripts
     // 不含该名字，这一趟不发生（不引入每脚本一次的全索引扫描）。
     if (m_scripts.contains(scriptName)) {
+        // 旧 AST 的行级装载期诊断（Load）随旧行一起作废：它们不是「重跑的产物」，
+        // 但引用的行已不存在。身份 = 旧脚本的 path + 旧行里出现过的文件名
+        //（测试/工具可以直接构造 LogicalLine，此时 path 为空而位置带文件名）。
+        // 不按 scriptName 猜：装载期诊断的 file 恒为「路径/位置里的文件名」。
+        QSet<QString> staleFiles;
+        const auto oldIt = m_scripts.constFind(scriptName);
+        const ScriptData& old = *oldIt;
+        for (const LogicalLine& line : old.lines) staleFiles.insert(line.position.filename);
+        if (!old.path.isEmpty()) staleFiles.insert(old.path);
+        m_diagnostics.removeOriginFiles(DiagOrigin::Load, staleFiles);
+
         for (auto it = m_labelIndex.begin(); it != m_labelIndex.end();) {
             QList<LabelRef>& list = it.value();
             list.erase(std::remove_if(list.begin(), list.end(),
@@ -642,6 +658,16 @@ bool EraParseTable::loadScript(const QString& scriptName, const QList<LogicalLin
     qCDebug(eraTrace) << "[parse] 脚本" << scriptName << (isHeaderFile ? "(头文件)" : "")
              << "逻辑行" << data.lines.size() << "标签" << labelNames.size();
     emit parseCompleted(scriptName);
+    return true;
+}
+
+bool EraParseTable::beginIncrementalLoad() {
+    if (m_phase != LoadPhase::Finalized) {
+        qWarning().noquote() << "[parse] beginIncrementalLoad 要求已定型（当前阶段"
+                             << loadPhaseName(m_phase) << "），忽略";
+        return false;
+    }
+    m_phase = LoadPhase::Loading;
     return true;
 }
 
@@ -964,8 +990,11 @@ void EraParseTable::parseVariableDeclarationText(const QString& rawLine, const S
     }
 
     const int priorDiagnostics = m_diagnostics.size();
+    // 去重键是本次调用的局部集合（同一位置只报一次；不读共享容器）。
+    QSet<QString> reportedNumbers;
     diagnoseIntegerLiterals(rest, position.filename, position.lineNumber,
-                            position.column + qMax(0, int(rawLine.indexOf(rest))), m_diagnostics);
+                            position.column + qMax(0, int(rawLine.indexOf(rest))), m_diagnostics,
+                            reportedNumbers);
     if (m_diagnostics.size() != priorDiagnostics) return; // 错误初值不得登记成 0。
     try {
         const UserDefinedVariableData d =
@@ -1148,16 +1177,19 @@ void EraParseTable::applyScopedVariableLine(LogicalLine& line, const QString& fu
 // 三个步骤**只读**：不写 m_scripts / 不改 AST / 不改装载状态。因此它们可以脱离
 // EraParseTable 单独调用（见 test_parse_checks.cpp）。
 //
-// 重跑幂等由**数据**表达，不靠调用方纪律：每次运行先把诊断收进一个全新 sink，
-// 再按 origin 整体替换上一切片（ParseDiagnostics::replaceOrigin）。于是
-// 「跑 N 次」与「跑 1 次」逐字节相同；调用方不需要数次数，也没有「整表清空」
+// 重跑幂等由**数据**表达，不靠调用方纪律：每个 pass 每次运行先把诊断收进一个
+// 全新 sink，再按 origin 整体替换自己的切片（ParseDiagnostics::replaceOrigin）。
+// 于是「跑 N 次」与「跑 1 次」逐字节相同；调用方不需要数次数，也没有「整表清空」
 // 这一步可以忘（clearDiagnostics 已随该纪律一起删除）。
+// 切片身份是 **pass 编号**（Pass1..Pass7），不是「谁先跑」：markLoadComplete 的
+// 驱动对 1..7 一视同仁（独立 sink -> 跑或跳过 -> replaceOrigin）。
 // ---------------------------------------------------------------------------
 loadpass::LoadContext EraParseTable::makeLoadContext() {
     // 只打包引用/指针，不读取内容；表本身仍由 EraParseTable 持有。
+    // 诊断**不在视图里**：每次 pass 运行的 sink 是显式参数（见 load_passes.h）。
     return loadpass::LoadContext{
         m_scripts, m_variables, m_functions, m_constantTable, m_variableStorage,
-        m_evaluator, m_gameBaseData, m_diagnostics, m_labelIndex, m_paramNamesByFunction,
+        m_evaluator, m_gameBaseData, m_labelIndex, m_paramNamesByFunction,
         m_declarationsResolved, m_constProvidersReady};
 }
 
@@ -1172,17 +1204,22 @@ parsecheck::ParseIrView EraParseTable::makeIrView() const {
     return view;
 }
 
+void EraParseTable::runResolveStaticTargets(ParseDiagnostics& sink) const {
+    parsecheck::resolveStaticTargets(makeIrView(), sink);
+}
+
 void EraParseTable::resolveStaticTargets() {
     if (!readOnlyPassAllowed("resolveStaticTargets")) return;
     // 本次运行独占一个 sink：不读旧诊断、不受旧切片影响。
     ParseDiagnostics sink;
-    parsecheck::resolveStaticTargets(makeIrView(), sink);
+    runResolveStaticTargets(sink);
     m_diagnostics.replaceOrigin(DiagOrigin::Pass4, sink.all());
 }
 
 void EraParseTable::checkCallStatementArgs(const LogicalLine& line, const QString& target) {
     // 不是 pass 表的独立步骤（由 resolveStaticTargets 内部同款逻辑调用）：
-    // 只要求同一个阶段，不单独计数。
+    // 只要求同一个阶段，不单独计数。诊断直接进容器、origin 保持 Load ——
+    // 这是公开的单条校验入口，不属于任何可重跑切片（见报告「未改的隐患」）。
     if (!isBoundOrLater()) {
         qWarning().noquote() << "[parse] checkCallStatementArgs 在装载完成绑定之前调用，忽略（当前阶段"
                              << loadPhaseName(m_phase) << "）";
@@ -1191,17 +1228,25 @@ void EraParseTable::checkCallStatementArgs(const LogicalLine& line, const QStrin
     parsecheck::checkCallStatementArgs(makeIrView(), line, target, m_diagnostics);
 }
 
+void EraParseTable::runCheckStructures(ParseDiagnostics& sink) const {
+    parsecheck::checkStructures(makeIrView(), sink);
+}
+
 void EraParseTable::checkStructures() {
     if (!readOnlyPassAllowed("checkStructures")) return;
     ParseDiagnostics sink;
-    parsecheck::checkStructures(makeIrView(), sink);
+    runCheckStructures(sink);
     m_diagnostics.replaceOrigin(DiagOrigin::Pass5, sink.all());
+}
+
+void EraParseTable::runCheckStaticValues(ParseDiagnostics& sink) const {
+    parsecheck::checkStaticValues(makeIrView(), sink);
 }
 
 void EraParseTable::checkStaticValues() {
     if (!readOnlyPassAllowed("checkStaticValues")) return;
     ParseDiagnostics sink;
-    parsecheck::checkStaticValues(makeIrView(), sink);
+    runCheckStaticValues(sink);
     m_diagnostics.replaceOrigin(DiagOrigin::Pass6, sink.all());
 }
 
@@ -1221,14 +1266,10 @@ void EraParseTable::checkStaticValues() {
 // `関数が呼び出されなかった警告の扱い` 的默认值就是 IGNORE，eraTW 也显式写了 IGNORE，
 // 而且它用了大量 CALLFORM —— 两条都命中，开着也不会有什么输出。
 // ---------------------------------------------------------------------------
-void EraParseTable::checkNotCalledFunctions() {
+void EraParseTable::runCheckNotCalledFunctions(ParseDiagnostics& sink) const {
+    // 是否运行由驱动端的 gate 决定（数据）；这里再守一道，防止直接调用绕过
+    // gate —— 不产诊断时调用方会把 Pass7 切片替换为空，正是期望语义。
     if (!m_functionNotCalledWarning) return;
-    // 本 pass 的诊断也按 origin 切片替换：增量 append 后重新收尾时，
-    // 旧切片不能残留（否则同一批「未被调用」会重复出现）。
-    ParseDiagnostics sink;
-    const auto commit = [this, &sink] {
-        m_diagnostics.replaceOrigin(DiagOrigin::Pass7, sink.all());
-    };
 
     // 1) 收集全部函数标签（含同名重复声明）与「是否是根」
     struct LabelInfo { QList<const LogicalLine*> declLines; bool root = false; bool called = false; };
@@ -1259,7 +1300,6 @@ void EraParseTable::checkNotCalledFunctions() {
             case RunnerInstruction::CALLFORMF:
             case RunnerInstruction::JUMPFORM:
             case RunnerInstruction::GOTOFORM:
-                commit();
                 return;
             default:
                 break;
@@ -1267,7 +1307,6 @@ void EraParseTable::checkNotCalledFunctions() {
             const QString& n = line.functionName;
             if (n == QLatin1String("TRYCALLLIST") || n == QLatin1String("TRYJUMPLIST")
                 || n == QLatin1String("GOTOLIST")) {
-                commit();
                 return;
             }
         }
@@ -1348,7 +1387,6 @@ void EraParseTable::checkNotCalledFunctions() {
                     "関数@%1は定義されていますが一度も呼び出されません").arg(line->labelName));
         }
     }
-    commit();
 }
 
 void EraParseTable::resolveGlobalDeclarations() {
@@ -1358,16 +1396,18 @@ void EraParseTable::resolveGlobalDeclarations() {
 }
 
 // 收尾 pass 表：顺序 = 执行顺序（markLoadComplete 只负责按表驱动）。
+//   origin     —— 该步诊断切片的身份（数据；驱动端用 replaceOrigin 整体替换，
+//                 gate 关闭时替换为空）；
 //   gate       —— 该步受哪个开关门控（数据；驱动逻辑只有一处求值）；
 //   phaseAfter —— 该步完成后允许进入的阶段（数据；只读步骤 4-7 要求 Bound）。
 const EraParseTable::LoadPass EraParseTable::kLoadPasses[7] = {
-    {"1/6 全局声明定稿(resolveGlobalDeclarations)", &loadpass::resolveGlobalDeclarationsStep, nullptr, LoadPassGate::Always, LoadPhase::Loading},
-    {"2/6 就地定型(finalizeBindings)",              &loadpass::finalizeBindings,               nullptr, LoadPassGate::Always, LoadPhase::Loading},
-    {"3/6 参数校验(finalizeValidation)",            &loadpass::finalizeValidation,             nullptr, LoadPassGate::Always, LoadPhase::Bound},
-    {"4/6 跳转目标解析(resolveStaticTargets)",      nullptr, &EraParseTable::resolveStaticTargets, LoadPassGate::Always, LoadPhase::Bound},
-    {"5/6 结构配对检查(checkStructures)",           nullptr, &EraParseTable::checkStructures,      LoadPassGate::Always, LoadPhase::Bound},
-    {"6/6 静态值检查(checkStaticValues)",           nullptr, &EraParseTable::checkStaticValues,    LoadPassGate::Always, LoadPhase::Bound},
-    {"7(可选) 未被调用函数检查(checkNotCalledFunctions)", nullptr, &EraParseTable::checkNotCalledFunctions, LoadPassGate::NotCalledWarning, LoadPhase::Finalized},
+    {"1/6 全局声明定稿(resolveGlobalDeclarations)", &loadpass::resolveGlobalDeclarationsStep, nullptr, DiagOrigin::Pass1, LoadPassGate::Always, LoadPhase::Loading},
+    {"2/6 就地定型(finalizeBindings)",              &loadpass::finalizeBindings,               nullptr, DiagOrigin::Pass2, LoadPassGate::Always, LoadPhase::Loading},
+    {"3/6 参数校验(finalizeValidation)",            &loadpass::finalizeValidation,             nullptr, DiagOrigin::Pass3, LoadPassGate::Always, LoadPhase::Bound},
+    {"4/6 跳转目标解析(resolveStaticTargets)",      nullptr, &EraParseTable::runResolveStaticTargets, DiagOrigin::Pass4, LoadPassGate::Always, LoadPhase::Bound},
+    {"5/6 结构配对检查(checkStructures)",           nullptr, &EraParseTable::runCheckStructures,      DiagOrigin::Pass5, LoadPassGate::Always, LoadPhase::Bound},
+    {"6/6 静态值检查(checkStaticValues)",           nullptr, &EraParseTable::runCheckStaticValues,    DiagOrigin::Pass6, LoadPassGate::Always, LoadPhase::Bound},
+    {"7(可选) 未被调用函数检查(checkNotCalledFunctions)", nullptr, &EraParseTable::runCheckNotCalledFunctions, DiagOrigin::Pass7, LoadPassGate::NotCalledWarning, LoadPhase::Finalized},
 };
 
 const char* EraParseTable::loadPhaseName(LoadPhase phase) {
@@ -1410,18 +1450,31 @@ void EraParseTable::markLoadComplete() {
     }
     QElapsedTimer completeTimer;
     completeTimer.start();
-    // 视图只打包一次：1/2/3 号步骤吃它（自由函数），4-7 号步骤仍走成员 forwarder。
-    loadpass::LoadContext ctx = makeLoadContext();
     for (const LoadPass& pass : kLoadPasses) {
-        // 唯一一处按 Gate 求值。
-        if (!isGateOpen(pass.gate)) continue;
-        const qint64 stepMs = completeTimer.elapsed();   // 每步重置 = 单步耗时口径
-        qInfo().noquote() << "[parse] 收尾步骤" << pass.label << "开始";
-        if (pass.fn) pass.fn(ctx);
-        else (this->*(pass.memberFn))();
-        m_phase = pass.phaseAfter;
-        qInfo().noquote() << "[parse] 收尾步骤" << pass.label << "完成:"
-                          << (completeTimer.elapsed() - stepMs) << "ms";
+        // 本次运行的诊断切片：独立 sink（不读旧诊断、不受旧切片影响）。
+        ParseDiagnostics sink;
+        // 先拿到「本次是否运行」的事实 —— gate 关闭的步骤也要走到下面的
+        // replaceOrigin，把上一次开启时留下的切片替换成**空**（否则残留）。
+        const bool run = isGateOpen(pass.gate);
+        if (run) {
+            const qint64 stepMs = completeTimer.elapsed();   // 每步重置 = 单步耗时口径
+            qInfo().noquote() << "[parse] 收尾步骤" << pass.label << "开始";
+            if (pass.fn) {
+                // 视图只打包引用/指针；诊断 sink 是显式参数（不进视图，见 load_passes.h）。
+                loadpass::LoadContext ctx = makeLoadContext();
+                pass.fn(ctx, sink);
+            } else {
+                (this->*(pass.memberFn))(sink);
+            }
+            m_phase = pass.phaseAfter;
+            qInfo().noquote() << "[parse] 收尾步骤" << pass.label << "完成:"
+                              << (completeTimer.elapsed() - stepMs) << "ms";
+        } else {
+            qInfo().noquote() << "[parse] 收尾步骤" << pass.label << "被门控跳过（切片置空）";
+        }
+        // 盖章点唯一（ParseDiagnostics::replaceOrigin 内）：切片身份 = pass 编号，
+        // 本次产出整体替换上一次的；跳过时 sink 为空 -> 清空该切片。
+        m_diagnostics.replaceOrigin(pass.origin, sink.all());
     }
     // 诊断定序：装载并行 + QHash 随机化哈希种子会让产生顺序在进程间漂移。
     // 排序只在收尾做一次（运行期不排序），让 dump_warnings/UI/MCP 输出可复现。

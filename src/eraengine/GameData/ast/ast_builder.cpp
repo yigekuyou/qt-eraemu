@@ -723,9 +723,13 @@ LogicalLine AstBuilder::build(const QString& rawLine,
     LogicalLine line;
     line.raw = rawLine;
     line.position = position;
+    // 数字字面量去重键 = 本次 build 运行（同一行同一位置只报一次）；
+    // 键里带 file/line/column，跨行/跨文件本来就不会撞上。
+    QSet<QString> reportedNumbers;
     const AstResolver resolve = resolveInput ? AstResolver([&](const QString& expression) -> QSharedPointer<ExpressionNode> {
         if (diagnostics) diagnoseIntegerLiterals(expression, position.filename,
-            position.lineNumber, position.column + qMax(0, int(rawLine.indexOf(expression))), *diagnostics);
+            position.lineNumber, position.column + qMax(0, int(rawLine.indexOf(expression))),
+            *diagnostics, reportedNumbers);
         return resolveInput(expression);
     }) : AstResolver{};
 

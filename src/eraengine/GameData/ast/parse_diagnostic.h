@@ -20,6 +20,7 @@
 
 #include <QList>
 #include <QMap>
+#include <QSet>
 #include <QString>
 #include <QStringList>
 
@@ -77,12 +78,23 @@ enum class DiagEffect : quint8 {
 // 诊断的**生产者切片**：重跑某个收尾步骤时按 origin 整体替换它的切片，
 // 于是「跑了 N 次」与「跑了一次」在数据上不可区分（幂等由数据表达，
 // 不靠调用方数次数/自己去重）。
-//   Load        —— 装载期（预处理/词法/结构/编码）与写步骤 1/2/3。它们只随一次
-//                  装载产生，不作为可重跑切片管理（边界见 era_parse_table.cpp）。
-//   Pass4..Pass7 —— kLoadPasses 里的只读收尾步骤：每次运行拥有**一个完整切片**，
-//                  驱动端用 ParseDiagnostics::replaceOrigin 整体换掉上一次的。
+//
+// 切片身份 = **pass 编号**，不是「谁先跑」：
+//   Load          —— 装载期逐行产生的事实（预处理/词法/结构/编码，以及
+//                    loadScript 里的 kSharpLine/kDeclError）。这些行在装载时
+//                    已经解析完，不会被重跑；切片只增不替换。
+//                    例外：**同名脚本被替换装载**时，旧 AST 的那些行级事实
+//                    不再成立，用 removeOriginFiles() 精确移除该脚本的条目
+//                    （这不是重跑，见该函数说明）。
+//   Pass1..Pass7  —— kLoadPasses 的每一步：每次运行拥有**一个完整切片**，
+//                    驱动端先把本次产出收进独立 sink，再用
+//                    ParseDiagnostics::replaceOrigin 整体换掉上一次的切片
+//                    （被 gate 跳过的步骤替换为空，旧切片不残留）。
 enum class DiagOrigin : quint8 {
     Load,
+    Pass1,
+    Pass2,
+    Pass3,
     Pass4,
     Pass5,
     Pass6,
@@ -92,6 +104,9 @@ enum class DiagOrigin : quint8 {
 [[nodiscard]] inline const char* diagOriginName(DiagOrigin o) noexcept {
     switch (o) {
     case DiagOrigin::Load:  return "load";
+    case DiagOrigin::Pass1: return "pass1";
+    case DiagOrigin::Pass2: return "pass2";
+    case DiagOrigin::Pass3: return "pass3";
     case DiagOrigin::Pass4: return "pass4";
     case DiagOrigin::Pass5: return "pass5";
     case DiagOrigin::Pass6: return "pass6";
@@ -252,6 +267,13 @@ public:
     // 排序仍只由收尾末尾的 sortForOutput() 做一次。
     void replaceOrigin(DiagOrigin origin, QList<ParseDiagnostic> items);
 
+    // 从 origin 切片里移除 file ∈ files 的条目。唯一用途：**同名脚本被替换装载**
+    // 时，旧 AST 的装载期逐行诊断（Load）必须随旧行一起消失 —— 否则同一行会
+    // 同时挂着新旧两版的事实。这不是「重跑」（Load 切片永不重跑），只删被替换
+    // 脚本自己的条目；其它脚本的 Load 诊断原位保留。
+    // 顺序：其余条目的相对顺序不变（与 replaceOrigin 的「原位」口径一致）。
+    void removeOriginFiles(DiagOrigin origin, const QSet<QString>& files);
+
     // 输出稳定化：收尾各步遍历 m_scripts（QHash，Qt 随机化哈希种子）、且装载
     // 走并行 worker —— 诊断的**产生顺序**在不同进程间不确定（内容与条数不变）。
     // 这里按 (文件, 行, 列, code, message) 稳定排序并重建文本视图，让
@@ -291,7 +313,14 @@ private:
 };
 
 // 仅供表达式上下文使用；普通 PRINT/字符串原文不得送入数字诊断。
+//
+// 去重键 = (file, line, column)。reported 是**本次运行**的局部键集合，由调用方
+// 持有（一次 pass 运行 / 一个脚本任务）：同一位置只报一次，重跑一次 pass 时
+// 集合是新的，于是「本次运行的产出」只由输入决定 —— 不再读共享容器
+// （旧实现扫 diagnostics.all()，使 1/2/3 无法改成独立 sink + replaceOrigin，
+// 首跑也会因容器里已有条目而少报）。
 void diagnoseIntegerLiterals(const QString& expression, const QString& file, int line,
-                             int column, ParseDiagnostics& diagnostics);
+                             int column, ParseDiagnostics& diagnostics,
+                             QSet<QString>& reported);
 
 #endif  // ERAENGINE_AST_PARSE_DIAGNOSTIC_H

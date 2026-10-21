@@ -631,6 +631,7 @@ int main(int argc, char** argv) {
         // (c) 大小写不敏感：索引键是大写折叠的。旧 ErbLoader::m_labelPositions
         //     用 "script:label" 原样拼接、大小写敏感；那张表已删，这条钉住回归。
         const QString mixed = QStringLiteral("CASE.ERB");
+        check(table.beginIncrementalLoad(), "增量装载 CASE.ERB 前 beginIncrementalLoad");
         table.loadScript(mixed,
                          {funcLabel(QStringLiteral("Foo")),
                           instr(QStringLiteral("RETURN"), QStringLiteral("Foo"))});

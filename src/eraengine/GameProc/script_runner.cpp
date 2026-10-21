@@ -35,7 +35,6 @@ namespace {
 QVariant evaluateLoadedOperand(ExpressionEvaluator& evaluator, const Operand& operand,
                                VariableStorage* storage, GameBaseData* baseData,
                                eravar::ScopeId scope) {
-    if (operand.snapshot.isValid()) return operand.snapshot;
     if (operand.isString) return QVariant(operand.raw);
     if (!operand.ast) throw std::runtime_error("Missing load-time operand AST");
     const auto value = evaluator.evaluate(*operand.ast, storage, baseData, scope);
@@ -2111,9 +2110,13 @@ ExecState ScriptRunner::doCallLine(const LogicalLine& line, bool isForm, bool is
 
     const UserFunctionDecl* info = m_table->userFunction(label);
     QList<Operand> evaluated;
+    // 与 evaluated 对齐的 transport 值（下标 0 = 调用目标名，恒无效）。
+    QList<QVariant> evaluatedValues;
     QHash<QString, QString> references;
     evaluated.reserve(line.arguments.size());
+    evaluatedValues.reserve(line.arguments.size());
     evaluated.append(line.arguments.value(0));
+    evaluatedValues.append(QVariant());
     for (int i = 1; i < line.arguments.size(); ++i) {
         const Operand source = line.arguments.at(i);
         const UserParamDecl* param = info && i - 1 < info->params.size()
@@ -2124,6 +2127,7 @@ ExecState ScriptRunner::doCallLine(const LogicalLine& line, bool isForm, bool is
             Operand slot;
             slot.omitted = true;
             evaluated.append(slot);
+            evaluatedValues.append(QVariant());
             continue;
         }
         if (param && param->isReference) {
@@ -2135,6 +2139,7 @@ ExecState ScriptRunner::doCallLine(const LogicalLine& line, bool isForm, bool is
                                   m_storage->resolvedStorageName(actualName, m_currentScopeId));
             }
             evaluated.append(source);
+            evaluatedValues.append(QVariant());
             continue;
         }
         const QVariant value = source.isString ? QVariant(source.raw)
@@ -2143,8 +2148,8 @@ ExecState ScriptRunner::doCallLine(const LogicalLine& line, bool isForm, bool is
                 : evaluateLoadedOperand(getEvaluator(), source, m_storage, baseData(), m_currentScopeId);
         Operand arg(stringText(value));
         arg.isString = isStringValue(value);
-        arg.snapshot = value;
         evaluated.append(arg);
+        evaluatedValues.append(value);
     }
     // Emuera 允许 CALL F(array) 对应 F(array:0, array:1, ...)。
     // 在绑定前按固定下标形参展开，避免数组被错误求值为单个标量。
@@ -2168,12 +2173,13 @@ ExecState ScriptRunner::doCallLine(const LogicalLine& line, bool isForm, bool is
                 expanded.append(item);
             }
             evaluated = expanded;
+            evaluatedValues = QList<QVariant>(expanded.size());
         }
     }
     enterCall(label);
     // 顺序对齐 C#：先初始化函数私有变量的初值（#DIM X = 7），再写实参
     m_table->applyPrivateVariableDefaults(label);
-    bindArguments(info, evaluated, references);
+    bindArguments(info, evaluated, references, &evaluatedValues);
     bool entered = false;
     if (isJump) {
         entered = m_table->jumpLabel(label);            // JUMP 系：继承当前帧返回地址
@@ -2431,7 +2437,8 @@ void ScriptRunner::writeLoopCounter(const Operand& counter, qint64 value) {
 }
 
 void ScriptRunner::bindArguments(const UserFunctionDecl* info, const QList<Operand>& callArgs,
-                                 const QHash<QString, QString>& references) {
+                                 const QHash<QString, QString>& references,
+                                 const QList<QVariant>* snapshots) {
     const auto bindOne = [this, &references, info](const UserParamDecl* p, int position,
                                 bool argIsString, const QString& strValue, qint64 intValue, const QVariant& snapshot = {}) {
         switch (p ? p->target : UserParamTarget::Unknown) {
@@ -2485,6 +2492,9 @@ void ScriptRunner::bindArguments(const UserFunctionDecl* info, const QList<Opera
     const int supplied = qMax(0, callArgs.size() - 1);
     for (int position = 0; position < supplied; ++position) {
         const Operand& a = callArgs.at(position + 1);
+        // 运输值：调用者上下文已求出的值（仅 doCallLine 的临时实参列表带）。
+        const QVariant snap = (snapshots && position + 1 < snapshots->size())
+                                  ? snapshots->at(position + 1) : QVariant();
         qint64 intValue = 0;
         const UserParamDecl* param = nullptr;
         if (info && position < info->params.size()) param = &info->params.at(position);
@@ -2510,12 +2520,12 @@ void ScriptRunner::bindArguments(const UserFunctionDecl* info, const QList<Opera
                 // doCallLine 已在调用者上下文求值；没有 AST 的 transport 数值
                 // 是值而非原始表达式，包含 long.MinValue 时不能再按字面量解析。
                 bool transported = false;
-                if (a.snapshot.isValid()) { intValue = a.snapshot.toLongLong(); transported = true; }
+                if (snap.isValid()) { intValue = snap.toLongLong(); transported = true; }
                 else if (!a.ast) intValue = a.raw.toLongLong(&transported);
                 if (!transported) evalInt(a.ast, a.raw, intValue);
             }
         }
-        bindOne(param, position, a.isString, a.raw, intValue, a.snapshot);
+        bindOne(param, position, a.isString, a.raw, intValue, snap);
     }
     if (!info) return;
     for (int position = supplied; position < info->params.size(); ++position) {

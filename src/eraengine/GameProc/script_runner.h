@@ -201,9 +201,12 @@ private:
     int  labelLine(const QString& label) const;
     // GAMEBASE_* 等需要 GameBase 数据（经 ExecutionEngine 取得）
     [[nodiscard]] GameBaseData* baseData() const;
-    // 绑定实参到 LOCAL，并把形参名注册为局部别名（供表达式解析）
+    // 绑定实参到 LOCAL，并把形参名注册为局部别名（供表达式解析）。
+    // snapshots：与 callArgs 对齐的「调用者上下文已求值」运输值（可空）。
+    // 只由 doCallLine 传入；装载后的 AST 操作数不带值（见 Operand 的说明）。
     void bindArguments(const UserFunctionDecl* info, const QList<Operand>& callArgs,
-                       const QHash<QString, QString>& references = {});
+                       const QHash<QString, QString>& references = {},
+                       const QList<QVariant>* snapshots = nullptr);
     // FOR/NEXT 的循环变量写入：LOCAL/ARG 写局部槽（脚本读法一致），其余写系统/全局
     void writeLoopCounter(const QString& name, qint64 value);
     void writeLoopCounter(const Operand& counter, qint64 value);

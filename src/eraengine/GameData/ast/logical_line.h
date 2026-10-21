@@ -100,8 +100,10 @@ struct Operand {
 
     // 命令 AST 专用实数常量；装载期校验/转换一次，不参与整数表达式。
     std::optional<double> realValue;
-    // Eager caller-context value for CALL transport; never parsed or evaluated again.
-    QVariant snapshot;
+    // 注意：CALL 的「调用者上下文已求值」运输值**不在 Operand 里**。
+    // 它只属于 doCallLine 的一次性传输（见 ScriptRunner::bindArguments 的
+    // snapshots 参数）：装载后的 AST 操作数永远不会有值，把 QVariant 内联在
+    // 每个 Operand（eraTW 约 377 万个槽位）上会白占 32 B/槽 ≈ 120 MB。
 
     Operand() = default;
     explicit Operand(const QString& text) : raw(text) {}

@@ -48,6 +48,20 @@ static constexpr int kMaxScanDepth = 255;
 // 逐文件告警会刷屏；超过上限只计数，收尾日志给出总数。
 static constexpr int kMaxReadFailureLogs = 20;
 
+// 诊断开关：EMUERA_THREADS=N 限制装载/收尾的并行度（未设或 <=0 = 用 QThreadPool
+// 默认）。环境变量只在下面这一个静态里读一次，写进**全局**线程池；后续所有
+// 并行段（预扫描 / 分块解析 / markLoadComplete 的逐脚本 pass）都以
+// QThreadPool::globalInstance()->maxThreadCount() 判并行，故一处生效。
+// 用途：mem-vs-speed 对照（EMUERA_THREADS=1 即完全串行），不影响默认行为。
+static void applyThreadLimit() {
+    static const int limit = [] {
+        bool ok = false;
+        const int n = qEnvironmentVariableIntValue("EMUERA_THREADS", &ok);
+        return ok && n > 0 ? n : 0;
+    }();
+    if (limit > 0) QThreadPool::globalInstance()->setMaxThreadCount(limit);
+}
+
 // 脚本名 = **相对装载根目录的路径**（含扩展名）。
 // 对齐 C# Config.GetFiles 返回的 KeyValuePair<相対パス, 完全パス>：脚本名是
 // 相对路径而不是 basename，所以不同子目录下的同名 .ERB 是**不同脚本**，不会
@@ -734,9 +748,11 @@ bool ErbLoader::loadDirectory(const QString& dirPath, int depth) {
         return ok;
     }
 
-    // 限制并行度（仅当显式指定时调整全局线程池）
+    // 限制并行度（显式 m_maxThreads 优先；否则 EMUERA_THREADS 诊断开关）
     if (m_maxThreads > 0) {
         QThreadPool::globalInstance()->setMaxThreadCount(m_maxThreads);
+    } else {
+        applyThreadLimit();
     }
 
     QElapsedTimer timer;
@@ -1108,6 +1124,8 @@ void ErbLoader::loadDirectoryAsync(const QString& dirPath, int depth) {
     m_async.clock.start();
     if (m_maxThreads > 0) {
         QThreadPool::globalInstance()->setMaxThreadCount(m_maxThreads);
+    } else {
+        applyThreadLimit();
     }
     qInfo().noquote() << "[ErbLoader] 异步装载参数: 并行" << (m_parallel ? "是" : "否")
                       << "块大小" << m_chunkSize << "线程池"

@@ -20,6 +20,7 @@
 #include "parse_checks.h"   // 收尾步骤 4/5/6 的自由函数实现（只读 IR 视图）
 #include "load_passes.h"    // 收尾步骤 1/2/3 的自由函数实现（可写 IR 视图 = LoadContext）
 #include "jump_markings.h"  // 标记区：跳转表的构建（输入只有 ScriptData）
+#include "position_state.h" // 位置区：执行位置 + 调用栈的状态转移（自由函数）
 #include "process_state.h"
 #include "eraengine_log.h"   // eraTrace（逐文件高频日志）
 #include "variable_storage.h"
@@ -74,7 +75,7 @@ void EraParseTable::setExpressionEvaluator(ExpressionEvaluator* evaluator) {
     m_evaluator = evaluator;
     if (!evaluator) return;
     evaluator->setVariableDimProvider([this](const QString& name) {
-        const auto* line = lineAt(m_currentScript, m_currentLine);
+        const auto* line = lineAt(m_position.script, m_position.line);
         const auto* decl = m_variables.find(name, line ? line->ownerFunction : QString());
         return decl ? decl->dimension : 1;
     });
@@ -128,7 +129,7 @@ QSharedPointer<ExpressionNode> EraParseTable::expressionAst(const QString& expr,
     // 传 ownerFunction，否则会按「无作用域」解析。
     QString scope;
     if (isFinalized()) {
-        if (const auto* line = lineAt(m_currentScript, m_currentLine)) scope = line->ownerFunction;
+        if (const auto* line = lineAt(m_position.script, m_position.line)) scope = line->ownerFunction;
     }
     return expressionAstInScope(expr, scope, quiet);
 }
@@ -286,22 +287,18 @@ QString EraParseTable::labelNameAt(const QString& scriptName, int line) const {
 }
 
 bool EraParseTable::callLabelAt(const QString& scriptName, int line, int returnLine) {
-    return callLabelAt(scriptName, line, m_currentScript, returnLine);
+    return callLabelAt(scriptName, line, m_position.script, returnLine);
 }
 
 bool EraParseTable::callLabelAt(const QString& scriptName, int line,
                                 const QString& returnScript, int returnLine) {
-    const ScriptData* data = script(scriptName);
-    if (!data || line < 0 || line >= data->lines.size()) {
-        return false;
-    }
-    pushFrame(Frame(returnScript, returnLine, data->lines.at(line).labelName, line));
-    if (scriptName != m_currentScript) {
-        switchToMemorySpace(scriptName);
-    }
-    m_jumped = true;
-    setCurrentLineInternal(line, true);
-    return true;
+    // 压帧（callLabel/entryLine 取自目标行）+ 跨脚本切空间 + 强制定位，
+    // 三处直接写状态全部在 position::callLabelAt 里（越界 -> false 且不动状态）。
+    PositionEffects fx;
+    const bool ok = position::callLabelAt(m_position, makeScriptView(), scriptName, line,
+                                          returnScript, returnLine, fx);
+    emitEffects(fx);
+    return ok;
 }
 
 // ---------------------------------------------------------------------------
@@ -354,12 +351,11 @@ void EraParseTable::clear() {
     m_diagnostics.clear();
     m_variables.clear();
     m_entryPoint.clear();
-    // 执行位置一并复位：脚本已不存在，任何残留帧/位置都悬空
-    m_currentScript.clear();
-    m_currentLine = 0;
-    m_callStack.clear();
-    m_depth = 0;
-    m_jumped = false;
+    // 执行位置一并复位：脚本已不存在，任何残留帧/位置都悬空。
+    // 转移本身交给 position::reset（清栈 + PC=0）；它**不清 script** ——
+    // 「装到空表」这个语义只属于装载期，所以单独把 script 清掉。
+    (void)position::reset(m_position);
+    m_position.script.clear();
     m_phase = LoadPhase::Empty;
     for (int& runs : m_readOnlyPassRuns) runs = 0;
     // 每次装载都是独立会话：下一次必须由装载器重新预登记声明，
@@ -368,6 +364,9 @@ void EraParseTable::clear() {
     m_declarationsPreRegistered = false;
     m_constProvidersReady = false;
     m_declarationsResolved = false;
+    // 信号位置与旧实现相同（在全部字段复位之后）：装载期 clear 不按 Effects
+    // 发信号 —— 旧顺序是 positionChanged 先、callStackChanged 后（与
+    // resetPosition 相反）。这一处逐字保留，不许改成规范顺序。
     emit positionChanged(QString(), 0);
     emit callStackChanged(0);
 }
@@ -604,8 +603,8 @@ bool EraParseTable::loadScript(const QString& scriptName, const QList<LogicalLin
     // 跨文件前向引用需要「全部声明就绪」，且避免了每脚本一次全局扫描
     // 在 eraTW（2200+ 脚本）上退化成 O(n²)。
 
-    if (m_currentScript.isEmpty()) {
-        m_currentScript = scriptName;
+    if (m_position.script.isEmpty()) {
+        m_position.script = scriptName;   // 装载期的「默认脚本」，不是位置转移
     }
 
     qCDebug(eraTrace) << "[parse] 脚本" << scriptName << (isHeaderFile ? "(头文件)" : "")
@@ -617,32 +616,40 @@ bool EraParseTable::loadScript(const QString& scriptName, const QList<LogicalLin
 void EraParseTable::setEntryPoint(const QString& label) {
     m_entryPoint = label;
 
+    // 入口脚本的选择属于**装载期**（在一堆脚本里挑一个），不是位置转移：
+    // 按旧实现逐字写字段，不发 memorySpaceChanged。
     for (auto it = m_scripts.constBegin(); it != m_scripts.constEnd(); ++it) {
         if (it.value().labelPositions.contains(label.toUpper())) {
-            m_currentScript = it.key();
+            m_position.script = it.key();
             break;
         }
     }
 
-    if (m_currentScript.isEmpty()) {
+    if (m_position.script.isEmpty()) {
         const QStringList commonLabels = {"MAIN_LOOP", "SYSTEM_TITLE", "MAIN", "TITLE"};
         for (const QString& labelToTry : commonLabels) {
             for (auto it = m_scripts.constBegin(); it != m_scripts.constEnd(); ++it) {
                 if (it.value().labelPositions.contains(labelToTry.toUpper())) {
-                    m_currentScript = it.key();
+                    m_position.script = it.key();
                     m_entryPoint = labelToTry;
                     break;
                 }
             }
-            if (!m_currentScript.isEmpty()) break;
+            if (!m_position.script.isEmpty()) break;
         }
     }
 
-    if (!m_currentScript.isEmpty()) {
-        const int entryLine = getLabelPosition(m_currentScript, m_entryPoint);
+    if (!m_position.script.isEmpty()) {
+        const int entryLine = getLabelPosition(m_position.script, m_entryPoint);
+        // 信号仍是 3 条，顺序仍是旧顺序：
+        //   resetPosition()   -> callStackChanged(0)、positionChanged(script, 0)
+        //   setPosition(...)  -> positionChanged(script, entryLine)
         resetPosition();
-        m_jumped = true;   // 入口是「跳转」落点：标签行应被跳过
-        setCurrentLineInternal(entryLine >= 0 ? entryLine : 0, true);
+        // 入口是「跳转」落点：标签行应被跳过。
+        PositionEffects fx;
+        position::setPosition(m_position, makeScriptView(), m_position.script,
+                              entryLine >= 0 ? entryLine : 0, /*jumped=*/true, fx);
+        emitEffects(fx);
     }
 
     emit entryPointReached(label);
@@ -661,272 +668,166 @@ int EraParseTable::getLabelPosition(const QString& scriptName, const QString& la
 }
 
 bool EraParseTable::resolveJumpTarget(const QString& label, int& position) {
-    position = getLabelPosition(m_currentScript, label);
-    if (position >= 0) {
-        return true;
-    }
-
-    for (auto it = m_scripts.constBegin(); it != m_scripts.constEnd(); ++it) {
-        const int pos = it.value().labelPositions.value(label.toUpper(), -1);
-        if (pos >= 0) {
-            position = pos;
-            switchToMemorySpace(it.key());
-            return true;
-        }
-    }
-    return false;
+    PositionEffects fx;
+    const bool ok = position::resolveJumpTarget(m_position, makeScriptView(), label, position, fx);
+    emitEffects(fx);   // 跨脚本命中时会亮 memorySpaceChanged（旧实现同样发）
+    return ok;
 }
 
 bool EraParseTable::resolveJumpToScript(const QString& scriptName, const QString& label, int& position) {
-    position = getLabelPosition(scriptName, label);
-    if (position >= 0) {
-        switchToMemorySpace(scriptName);
-        return true;
-    }
-    return false;
+    PositionEffects fx;
+    const bool ok =
+        position::resolveJumpToScript(m_position, makeScriptView(), scriptName, label, position, fx);
+    emitEffects(fx);
+    return ok;
 }
 
 QString EraParseTable::getCurrentScript() const {
-    return m_currentScript;
+    return m_position.script;
 }
 
 // ===========================================================================
 // 位置区 (Position region)
+//
+// 全部算法在 position_state.cpp（namespace position：PositionState + ScriptView
+// -> PositionEffects 的纯函数）。这里每个方法只做三件事：
+//   ① 打包视图（两个指针）  ② 调自由函数  ③ 按 Effects 发信号
+// —— 类里不再有任何一行位置算术。信号顺序写死在 emitEffects（见
+// position_state.h 的契约；唯一例外是 clear()，它按旧顺序自己发两条）。
 // ===========================================================================
 
+ScriptView EraParseTable::makeScriptView() const {
+    // 只打包指针，不读取内容（与 makeIrView 同形）。
+    ScriptView view;
+    view.scripts = &m_scripts;
+    view.labelLists = &m_labelLists;
+    return view;
+}
+
+void EraParseTable::emitEffects(const PositionEffects& fx, const QString& jumpLabel) {
+    // 规范顺序（逐方法与旧实现核对过）：
+    //   callStackChanged -> memorySpaceChanged -> positionChanged -> jumpRequested
+    // 载荷取自转移**之后**的状态：旧实现 emit 时读的正是同一批值
+    //（jumpRequested 的 targetPosition 就是刚设好的 PC）。
+    if (fx.callStackChanged)   emit callStackChanged(m_position.depth);
+    if (fx.memorySpaceChanged) emit memorySpaceChanged(m_position.script);
+    if (fx.positionChanged)    emit positionChanged(m_position.script, m_position.line);
+    if (fx.jumpRequested)      emit jumpRequested(m_position.script, jumpLabel, m_position.line);
+}
+
 const QString& EraParseTable::currentScript() const {
-    return m_currentScript;
+    return m_position.script;
 }
 
 int EraParseTable::currentLine() const {
-    return m_currentLine;
+    return m_position.line;
 }
 
 int EraParseTable::depth() const {
-    return m_depth;
+    return m_position.depth;
 }
 
 const QList<Frame>& EraParseTable::callStack() const {
-    return m_callStack;
+    return m_position.callStack;
 }
 
 Frame EraParseTable::currentFrame() const {
-    if (m_callStack.isEmpty()) {
+    if (m_position.callStack.isEmpty()) {
         return Frame();
     }
-    return m_callStack.last();
+    return m_position.callStack.last();
 }
 
 bool EraParseTable::hasPosition() const {
-    return !m_currentScript.isEmpty();
+    return !m_position.script.isEmpty();
 }
 
 QString EraParseTable::executionScope() const {
-    // 常数/私有变量的作用域由「正在执行的那一行属于哪个函数」决定。
-    // 装载期若尚未开始执行（m_currentScript 为空 / 位置越界）返回空串 ——
-    // 此时只有广域常量可见，正是 #DIM 维数之类装载期查询想要的语义。
-    const auto* line = lineAt(m_currentScript, m_currentLine);
-    return line ? line->ownerFunction : QString();
+    // 作用域 = 正在执行的那一行所属的函数；装载期（无位置/越界）返回空串，
+    // 完整说明见 position_state.h 的 executionScope 契约。
+    return position::executionScope(m_position, makeScriptView());
 }
 
 eravar::ScopeId EraParseTable::executionScopeId() const {
-    const QString scope = executionScope();
-    if (m_scopeIdValid && scope == m_scopeIdName) return m_scopeId;
-    m_scopeIdName = scope;
-    m_scopeId = eravar::internName(scope);
-    m_scopeIdValid = true;
-    return m_scopeId;
-}
-
-int EraParseTable::lineCountFor(const QString& script) const {
-    const ScriptData* data = this->script(script);
-    return data ? data->lines.size() : 0;
-}
-
-void EraParseTable::setCurrentLineInternal(int line, bool forceEmit) {
-    m_scopeIdValid = false;
-    if (line < 0) {
-        line = 0;
-    }
-    if (line == m_currentLine && !forceEmit) {
-        return;
-    }
-    m_currentLine = line;
-    emit positionChanged(m_currentScript, m_currentLine);
-}
-
-void EraParseTable::pushFrame(const Frame& frame) {
-    m_callStack.append(frame);
-    m_depth = m_callStack.size();
-    emit callStackChanged(m_depth);
-}
-
-Frame EraParseTable::popFrame() {
-    if (m_callStack.isEmpty()) {
-        return Frame();
-    }
-    const Frame frame = m_callStack.takeLast();
-    m_depth = m_callStack.size();
-    emit callStackChanged(m_depth);
-    return frame;
+    return position::executionScopeId(m_position, makeScriptView());
 }
 
 void EraParseTable::resetPosition() {
-    m_callStack.clear();
-    m_depth = 0;
-    m_currentLine = 0;
-    emit callStackChanged(0);
-    emit positionChanged(m_currentScript, 0);
+    // 亮 callStackChanged -> positionChanged（规范顺序）。
+    emitEffects(position::reset(m_position));
 }
 
 void EraParseTable::setPosition(const QString& script, int line, bool jumped) {
-    if (!script.isEmpty() && script != m_currentScript) {
-        switchToMemorySpace(script);
-    }
-    m_jumped = jumped;
-    setCurrentLineInternal(line, true);
+    PositionEffects fx;
+    position::setPosition(m_position, makeScriptView(), script, line, jumped, fx);
+    emitEffects(fx);
 }
 
 void EraParseTable::advance() {
-    m_jumped = false;
-    setCurrentLineInternal(m_currentLine + 1);
+    PositionEffects fx;
+    position::advance(m_position, fx);
+    emitEffects(fx);
 }
 
 bool EraParseTable::jumpToLine(int line) {
-    const int count = lineCountFor(m_currentScript);
-    if (line < 0 || (count > 0 && line >= count)) {
-        return false;
-    }
-    m_jumped = true;
-    setCurrentLineInternal(line, true);
-    return true;
+    PositionEffects fx;
+    const bool ok = position::jumpToLine(m_position, makeScriptView(), line, fx);
+    emitEffects(fx);
+    return ok;
 }
 
 bool EraParseTable::jumpToLabel(const QString& label) {
-    int target = -1;
-    if (!resolveJumpTarget(label, target)) {
-        return false;
-    }
-
-    m_jumped = true;
-    setCurrentLineInternal(target, true);
-
-    emit jumpRequested(m_currentScript, label, target);
-    return true;
+    PositionEffects fx;
+    const bool ok = position::jumpToLabel(m_position, makeScriptView(), label, fx);
+    emitEffects(fx, label);   // jumpRequested 的载荷：label + 刚设好的 PC
+    return ok;
 }
 
-// ---------------------------------------------------------------------------
-// @函数标签解析（CALL / CALLF 式中调用 / JUMP 共用）
-//
-// 旧实现：先查当前脚本（O(1)），没命中就 for(m_scripts) 扫**全部**脚本，
-// 且 label.toUpper() 写在循环体内 —— 每个脚本一次分配 + 一次 QHash 查找。
-// eraTW/FL3.8 有 1500+ 个脚本，跨文件 CALL / 式中调用每次都付这个 O(n)
-//（实测 CALC_COS 这类小函数的式中调用 ~0.7ms/次，正是这 1541 次迭代的价钱；
-// eraTW 地图逐格 TRYCALLFORM 一次上万次）。m_labelLists 是装载期建好的全局
-// 标签→LabelRef 索引（**只收 @函数标签**，loadScript 的 FunctionLabel 分支），
-// 直接 O(1)。排序在 markLoadComplete 固化一次（finalizeLabelIndex）。
-//
-// 语义保持：
-//   1) 当前脚本优先（同名时），且必须是 @函数标签 —— $GOTO 标签不可调用
-//     （C# FunctionIdentifierDictionary 只收 @label；eraMegaten 的
-//      SYSTEM_TITLE.erb:127 `$PRINT_TITLE` 与 TITLE_STOCK.ERB:17 `@PRINT_TITLE`
-//      同名共存，命中 $ 标签会自跳死循环）；
-//   2) 跨脚本取排序后的第一份。旧代码的 QHash 迭代顺序本来就任意，
-//      这里只是把「任意」换成「确定」。
+// @函数标签解析的具体判据（当前脚本优先且必须是 @函数标签 / $ 标签不可调用 /
+// 全局索引 O(1) 而非 1500 脚本扫描 / eraMegaten 的同名 $PRINT_TITLE）见
+// position_state.h 的 resolveCallableLabel 契约；这里只做转发。
 bool EraParseTable::resolveCallableLabel(const QString& label, QString& targetScript,
                                          int& targetLine) const {
-    const QString upper = label.toUpper();
-    const ScriptData* current = script(m_currentScript);
-    const int pos = current ? current->labelPositions.value(upper, -1) : -1;
-    if (pos >= 0 && pos < current->lines.size()
-        && current->lines.at(pos).kind == LineKind::FunctionLabel) {
-        targetScript = m_currentScript;
-        targetLine = pos;
-        return true;
-    }
-    const auto it = m_labelLists.constFind(upper);
-    if (it == m_labelLists.constEnd() || it.value().isEmpty()) return false;
-    targetScript = it.value().first().script;
-    targetLine = it.value().first().line;
-    return true;
+    return position::resolveCallableLabel(m_position, makeScriptView(), label,
+                                          targetScript, targetLine);
 }
 
 bool EraParseTable::callLabel(const QString& label, bool advanceWasCalled) {
-    QString targetScript;
-    int target = -1;
-    if (!resolveCallableLabel(label, targetScript, target)) {
-        return false;
-    }
-
-    const int returnLine = advanceWasCalled ? m_currentLine : m_currentLine + 1;
-    pushFrame(Frame(m_currentScript, returnLine, label, target));
-
-    if (targetScript != m_currentScript) {
-        switchToMemorySpace(targetScript);
-    }
-    m_jumped = true;
-    setCurrentLineInternal(target, true);
-    return true;
+    PositionEffects fx;
+    const bool ok =
+        position::callLabel(m_position, makeScriptView(), label, advanceWasCalled, fx);
+    emitEffects(fx);
+    return ok;
 }
 
 bool EraParseTable::callLabelWithReturn(const QString& label, int returnLine) {
-    QString targetScript;
-    int target = -1;
-    if (!resolveCallableLabel(label, targetScript, target)) {
-        return false;
-    }
-
-    pushFrame(Frame(m_currentScript, returnLine, label, target));
-    if (targetScript != m_currentScript) {
-        switchToMemorySpace(targetScript);
-    }
-    m_jumped = true;
-    setCurrentLineInternal(target, true);
-    return true;
+    PositionEffects fx;
+    const bool ok =
+        position::callLabelWithReturn(m_position, makeScriptView(), label, returnLine, fx);
+    emitEffects(fx);
+    return ok;
 }
 
 bool EraParseTable::jumpLabel(const QString& label) {
-    if (m_callStack.isEmpty()) {
-        // 顶层（系统入口）JUMP：没有可继承的返回帧，退化为普通跳转
-        return jumpToLabel(label);
-    }
-    QString targetScript;
-    int target = -1;
-    if (!resolveCallableLabel(label, targetScript, target)) {
-        return false;
-    }
-
-    // 新帧继承当前帧的返回地址（对齐 C# IsJump + Return 的递归语义）
-    const Frame current = m_callStack.last();
-    pushFrame(Frame(current.script, current.returnLine, label, target, /*jump=*/true));
-    if (targetScript != m_currentScript) {
-        switchToMemorySpace(targetScript);
-    }
-    m_jumped = true;
-    setCurrentLineInternal(target, true);
-    return true;
+    // 空栈退化 / 非空栈压 isJump 帧（继承当前帧返回地址）的完整契约见
+    // position_state.h 的 jumpLabel 注释（C# IsJump + Return 的递归语义）。
+    PositionEffects fx;
+    const bool ok = position::jumpLabel(m_position, makeScriptView(), label, fx);
+    emitEffects(fx);
+    return ok;
 }
 
 bool EraParseTable::returnFromCall() {
-    if (m_callStack.isEmpty()) {
-        return false;
-    }
-
-    const Frame frame = popFrame();
-    if (!frame.script.isEmpty() && frame.script != m_currentScript) {
-        switchToMemorySpace(frame.script);
-    }
-    m_jumped = false;
-    setCurrentLineInternal(frame.returnLine, true);
-    return true;
+    PositionEffects fx;
+    const bool ok = position::returnFromCall(m_position, makeScriptView(), fx);
+    emitEffects(fx);
+    return ok;
 }
 
 void EraParseTable::switchToMemorySpace(const QString& scriptName) {
-    if (m_currentScript == scriptName || scriptName.isEmpty()) {
-        return;
-    }
-    m_currentScript = scriptName;
-    emit memorySpaceChanged(scriptName);
+    PositionEffects fx;
+    position::switchToMemorySpace(m_position, scriptName, fx);
+    emitEffects(fx);
 }
 
 // ---------------------------------------------------------------------------
@@ -1212,7 +1113,7 @@ loadpass::LoadContext EraParseTable::makeLoadContext() {
     return loadpass::LoadContext{
         m_scripts, m_variables, m_functions, m_constantTable, m_variableStorage,
         m_evaluator, m_gameBaseData, m_diagnostics, m_labelLists, m_paramNamesByFunction,
-        m_declarationsResolved, m_constProvidersReady, m_currentScript, m_currentLine};
+        m_declarationsResolved, m_constProvidersReady, m_position.script, m_position.line};
 }
 
 parsecheck::ParseIrView EraParseTable::makeIrView() const {

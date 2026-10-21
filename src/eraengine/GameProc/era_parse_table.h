@@ -69,6 +69,34 @@ struct Frame {
 Q_DECLARE_METATYPE(Frame)
 
 // ---------------------------------------------------------------------------
+// 位置区状态：执行位置 + 调用栈。纯数据，没有任何行为 ——
+// 转移函数在 position_state.h（namespace position），本类只负责
+// 「调转移 + 按 Effects 发信号」。
+// ---------------------------------------------------------------------------
+struct PositionState {
+    QString       script;              // 当前内存空间（空 = 还没有位置）
+    int           line = 0;            // PC
+    QList<Frame>  callStack;
+    int           depth = 0;           // == callStack.size()，缓存给人读
+    bool          jumped = false;      // 上一次位置变化是不是跳转
+    // executionScopeId() 的缓存：按「当前行所属函数名」记忆
+    QString           scopeIdName;
+    eravar::ScopeId   scopeId = eravar::kGlobalScope;
+    bool              scopeIdValid = false;
+};
+
+// 一次位置转移**对外要广播什么**（纯数据，不带顺序语义）。
+// 壳子按 position_state.h 里写死的顺序 emit；Effects 只回答「发哪个」。
+// 载荷（脚本名/行号/深度/标签）不在这里 —— 转移完成后从 PositionState 与
+// 调用参数里取，与旧实现 emit 时读的正是同一批值。
+struct PositionEffects {
+    bool callStackChanged = false;
+    bool memorySpaceChanged = false;
+    bool positionChanged = false;
+    bool jumpRequested = false;
+};
+
+// ---------------------------------------------------------------------------
 // ScriptData - 只读区：一个脚本的完整 AST + 跳转标记（扁平，无树）
 //
 // lines 已经是「完整 AST」：每行是 ast::LogicalLine（含归约后的实参 AST、
@@ -125,11 +153,21 @@ struct LabelRef {
 Q_DECLARE_METATYPE(LabelRef)
 
 // ---------------------------------------------------------------------------
+// 位置区唯一需要的两张表（跳转目标解析 + 行数）。
+// 不复用 parsecheck::ParseIrView —— 那 5 个字段里位置区一个都不读，
+// 视图只装真正被读的数据。
+// ---------------------------------------------------------------------------
+struct ScriptView {
+    const QHash<QString, ScriptData>* scripts = nullptr;
+    const QHash<QString, QList<LabelRef>>* labelLists = nullptr;
+};
+
+// ---------------------------------------------------------------------------
 // EraParseTable —— 内存运行时容器（只读区 / 标记区 / 位置区）
 //
 //   只读区 : m_scripts（ScriptData，包含装载期绑定的 AST）
 //   标记区 : ScriptData 内的 endifLines / elseLines / loopEndLines / jumpTo
-//   位置区 : m_currentScript / m_currentLine(PC) / m_callStack / m_depth
+//   位置区 : m_position（script / line(PC) / callStack / depth）
 // ---------------------------------------------------------------------------
 class EraParseTable : public QObject {
     Q_OBJECT
@@ -217,8 +255,8 @@ public:
     [[nodiscard]] const QHash<QString, ScriptData>& scripts() const { return m_scripts; }
     // Load-time compilation only; finalized tables reject source text.
     [[nodiscard]] QSharedPointer<ExpressionNode> expressionAst(const QString& expr, bool quiet = false);
-    // 同上，但**显式指定作用域**（ownerFunction）。finalize 阶段 m_currentScript/
-    // m_currentLine 是陈旧值，直接调 expressionAst 会按「无作用域」解析 ——
+    // 同上，但**显式指定作用域**（ownerFunction）。finalize 阶段当前位置是
+    // 陈旧值，直接调 expressionAst 会按「无作用域」解析 ——
     // 私有变量遮蔽同名 #DIM CONST、FORM 插值里的局部变量都会解析错。
     [[nodiscard]] QSharedPointer<ExpressionNode> expressionAstInScope(const QString& expr,
                                                                       const QString& scope,
@@ -358,7 +396,7 @@ public:
     // 上一次位置变化是不是「跳转」（相对顺序推进）。用于区分
     // 「顺序落入函数标签」（= 函数结束）与「跳转/调用到函数标签」（= 跳过标签）。
     // 对齐 C# runScriptProc 每轮先 ShiftNextLine 再判断的语义。
-    [[nodiscard]] bool jumpedToCurrent() const { return m_jumped; }
+    [[nodiscard]] bool jumpedToCurrent() const { return m_position.jumped; }
 
 signals:
     void entryPointReached(const QString& label);
@@ -496,10 +534,17 @@ private:
     // 三个步骤的实现是 load_passes.cpp 里的自由函数，成员入口只做转发。
     [[nodiscard]] loadpass::LoadContext makeLoadContext();
 
-    void setCurrentLineInternal(int line, bool forceEmit = false);
-    void pushFrame(const Frame& frame);
-    Frame popFrame();
-    int lineCountFor(const QString& script) const;
+    // 位置区转移（实现全部在 position_state.cpp 的自由函数里）。
+    // 位置区的唯一成员状态是 m_position；本类不再有 setCurrentLineInternal /
+    // pushFrame / popFrame / lineCountFor —— 它们已经是 position:: 的基元。
+
+    // 位置区视图构造：只打包两个指针，不读取内容（与 makeIrView 同形）。
+    [[nodiscard]] ScriptView makeScriptView() const;
+
+    // Effects -> 信号。顺序在本函数里**写死**（见 position_state.h 的契约）：
+    // callStackChanged -> memorySpaceChanged -> positionChanged -> jumpRequested。
+    // 载荷全部取自转移**之后**的状态（旧实现 emit 时读的也是同一批值）。
+    void emitEffects(const PositionEffects& fx, const QString& jumpLabel = QString());
 
     // 装载阶段（唯一真相；之前的 m_finalized 只是它的一个派生问题）。
     LoadPhase m_phase = LoadPhase::Empty;
@@ -534,15 +579,11 @@ private:
     GameBaseData* m_gameBaseData = nullptr;   // GAMEBASE_* 求值（条件表达式）
     ExpressionEvaluator* m_evaluator = nullptr;
 
-    QString       m_currentScript;
-    int           m_currentLine = 0;
-    // executionScopeId() 的缓存（名字 -> id；位置变化后第一次调用时更新）
-    mutable QString           m_scopeIdName;
-    mutable eravar::ScopeId   m_scopeId = eravar::kGlobalScope;
-    mutable bool              m_scopeIdValid = false;
-    QList<Frame>  m_callStack;
-    int           m_depth = 0;
-    bool          m_jumped = false;
+    // 位置区：执行位置 + 调用栈。纯数据；算法全在 position_state.h。
+    // mutable 的唯一原因：executionScopeId() 是 const，但要更新其中的纯缓存
+    //（scopeIdName / scopeId / scopeIdValid，与搬到 PositionState 之前一样是缓存，
+    // 不改变任何可观察的执行位置语义）。
+    mutable PositionState m_position;
 };
 
 #endif // ERA_PARSE_TABLE_H

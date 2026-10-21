@@ -18,11 +18,14 @@
 #include "load_passes.h"
 
 #include <QCoreApplication>
+#include <QElapsedTimer>
 #include <QThreadPool>
 #include <QtConcurrent/QtConcurrent>
 
 #include <algorithm>
 #include <utility>
+
+#include "eraengine_log.h"   // eraTrace（2/6 各子步耗时）
 
 #include "ast/argument_parser.h"
 #include "ast/ast_builder.h"
@@ -52,7 +55,60 @@ namespace {
 inline bool canParallelize(int n) {
     return n > 1 && QThreadPool::globalInstance()->maxThreadCount() > 1;
 }
+
+// 「逐脚本并行」的阈值：与 parse_checks.cpp 的 kMinScriptsForParallel
+// **同名同值**（那边有完整理由：脚本少时调度 + 归并开销大于检查本身，
+// 调试器还要能一路跟进去）。真实工程远在这条线之上（eraTW 2260 个脚本）；
+// 线程池只有 1 个线程时并行也没有意义，同样直跑串行。
+constexpr int kMinScriptsForParallel = 4;
 }  // namespace
+
+// ---------------------------------------------------------------------------
+// 收尾各段的「逐脚本并行」驱动 —— 本文件唯一一份（2/6 的四段与 3/6 共用）
+//
+// 与 parse_checks.cpp 的 runPerScript 同形（那边驱动 4/5/6 号 pass）：
+//   序幕（本线程）：脚本名 -> std::sort（QString::compare 序）-> 预解析
+//     ScriptData* —— 任务里只剩纯指针访问，不必各自去查同一个 QHash；
+//   任务（线程池）：每个任务**一个**脚本 + 一个**本任务独占**的
+//     ParseDiagnostics（不许跨任务共享同一个 sink）；
+//   归并（本线程）：blockingMapped 保持输入顺序返回，按**脚本名序**逐条 add 回
+//     ctx.diagnostics；sortForOutput 仍是「同排序键的重复诊断」的最后兜底。
+//
+// fn 的形参是 const LoadContext& —— 任务里的 ctx 一律收窄成只读视图，写操作
+// 只能落到**自己的脚本**与**自己的 sink**；共享只读表（variables / functions /
+// constantTable / evaluator / storage）结构上就写不进去。
+//
+// 排序的用途与那边相同：QHash 迭代序随进程变化，若按完成顺序归并，诊断的
+// 可见顺序还会随线程调度抖动 —— 排一次名字让归并顺序只由输入决定。
+// ---------------------------------------------------------------------------
+template <class Fn>
+void runPerScript(LoadContext& ctx, Fn&& fn) {
+    QStringList names = ctx.scripts.keys();
+    std::sort(names.begin(), names.end());
+
+    QList<ScriptData*> scripts;
+    scripts.reserve(names.size());
+    for (const QString& name : names) {
+        const auto it = ctx.scripts.find(name);
+        if (it != ctx.scripts.end()) scripts.append(&it.value());
+    }
+
+    // 串行分支也用同一个签名：只读视图 + 本线程的 sink（就是 ctx.diagnostics）。
+    const LoadContext& view = ctx;
+    if (scripts.size() < kMinScriptsForParallel
+        || QThreadPool::globalInstance()->maxThreadCount() <= 1) {
+        for (ScriptData* sd : scripts) fn(view, *sd, ctx.diagnostics);
+        return;
+    }
+
+    const auto locals = QtConcurrent::blockingMapped(scripts, [&fn, &view](ScriptData* sd) {
+        ParseDiagnostics local;   // **本任务独占**，不与任何线程共享
+        fn(view, *sd, local);
+        return local;
+    });
+    for (const ParseDiagnostics& local : locals)
+        for (const ParseDiagnostic& d : local.all()) ctx.diagnostics.add(d);
+}
 
 // ---------------------------------------------------------------------------
 // 表达式解析（装载期唯一流水线）
@@ -414,65 +470,68 @@ QString checkUserCallArgs(const UserFunctionDecl& decl,
 
 
 
-void applyStringAssignments(LoadContext& ctx) {
+// 收尾 2/6 第 1 段：字符串赋值 / FORM / CASE 的收尾重解析。
+// **逐脚本**：只写本脚本的行（含 mutable 的 caseCache / extras）与本任务独占的
+// sink；ctx 是只读视图（variables 查类型 / evaluator 读配置 / constantTable 折叠）。
+void applyStringAssignmentsInScript(const LoadContext& ctx, ScriptData& script,
+                                    ParseDiagnostics& sink) {
     // FORM 里的插值表达式也要用**行的作用域**解析：否则 `%PNAME%`（函数内私有
     // 字符串变量）会按无作用域解析失败，整行报「字符串赋值FORM无效」。
-    for (auto sit = ctx.scripts.begin(); sit != ctx.scripts.end(); ++sit) {
-        for (LogicalLine& line : sit.value().lines) {
-            // 只处理构建期未定型的行：构建期已按（预扫描）类型表定型的
-            // 字符串/FORM/CASE 不再重解析（收尾只扫描未定型项）。
-            if (!line.strAssignPending && !line.needsCompletion) continue;
-            const QString owner = line.ownerFunction;
-            const AstResolver resolve = [ctx, owner, &line](const QString& e) {
-                diagnoseIntegerLiterals(e, line.position.filename, line.position.lineNumber,
-                    line.position.column + qMax(0, int(line.raw.indexOf(e))), ctx.diagnostics);
-                return expressionAstInScope(ctx, e, owner);
-            };
-            if (line.kind != LineKind::Instruction) continue;
-            // FORM construction may need private string types unavailable in a worker.
-            // Recompile the source in its owner scope while compilation is permitted.
-            if (line.assignOperator.isEmpty() && (line.raw.contains("@\"")
-                || AstBuilder::printInfo(line.functionName).mode == AstBuilder::PrintArgMode::FormStr
-                || line.argument.kind == ArgKind::FormStr)) {
-                const auto compiled = AstBuilder::build(line.raw, line.position, resolve, resolve);
-                line.arguments = compiled.arguments;
-                line.condition = compiled.condition;
-                line.printTemplate = compiled.printTemplate;
-                ArgumentParser::build(line);
-            }
-            if (line.argument.kind == ArgKind::Case) {
-                line.caseCache.clear();
-                AstBuilder::buildCaseClauses(line, resolve);
-            }
-            // C# uses two assignment operators with different RHS semantics:
-            //   =  : string variables consume the remaining source as a StrForm
-            //        (plain text plus {expr}/%expr% interpolation).
-            //   '= : expression string assignment; keep the normal expression AST.
-            // The initial AST is intentionally built before variable declarations
-            // are finalized, so it may look like a call for text such as
-            // `白狼天狗服(色固定)`.  Do not use that provisional node to decide
-            // whether the RHS is raw text.
-            if (line.assignOperator != QLatin1String("=")) continue;
-            if (line.arguments.size() != 2) continue;
+    for (LogicalLine& line : script.lines) {
+        // 只处理构建期未定型的行：构建期已按（预扫描）类型表定型的
+        // 字符串/FORM/CASE 不再重解析（收尾只扫描未定型项）。
+        if (!line.strAssignPending && !line.needsCompletion) continue;
+        const QString owner = line.ownerFunction;
+        // &line 是每行局部量、&sink 是本任务独占的 sink —— 两者都不会跨任务。
+        const AstResolver resolve = [ctx, owner, &line, &sink](const QString& e) {
+            diagnoseIntegerLiterals(e, line.position.filename, line.position.lineNumber,
+                line.position.column + qMax(0, int(line.raw.indexOf(e))), sink);
+            return expressionAstInScope(ctx, e, owner);
+        };
+        if (line.kind != LineKind::Instruction) continue;
+        // FORM construction may need private string types unavailable in a worker.
+        // Recompile the source in its owner scope while compilation is permitted.
+        if (line.assignOperator.isEmpty() && (line.raw.contains("@\"")
+            || AstBuilder::printInfo(line.functionName).mode == AstBuilder::PrintArgMode::FormStr
+            || line.argument.kind == ArgKind::FormStr)) {
+            const auto compiled = AstBuilder::build(line.raw, line.position, resolve, resolve);
+            line.arguments = compiled.arguments;
+            line.condition = compiled.condition;
+            line.printTemplate = compiled.printTemplate;
+            ArgumentParser::build(line);
+        }
+        if (line.argument.kind == ArgKind::Case) {
+            line.caseCache.clear();
+            AstBuilder::buildCaseClauses(line, resolve);
+        }
+        // C# uses two assignment operators with different RHS semantics:
+        //   =  : string variables consume the remaining source as a StrForm
+        //        (plain text plus {expr}/%expr% interpolation).
+        //   '= : expression string assignment; keep the normal expression AST.
+        // The initial AST is intentionally built before variable declarations
+        // are finalized, so it may look like a call for text such as
+        // `白狼天狗服(色固定)`.  Do not use that provisional node to decide
+        // whether the RHS is raw text.
+        if (line.assignOperator != QLatin1String("=")) continue;
+        if (line.arguments.size() != 2) continue;
 
-            Operand& dest = line.arguments[0];
-            Operand& value = line.arguments[1];
+        Operand& dest = line.arguments[0];
+        Operand& value = line.arguments[1];
 
-            const QString varName = leadingIdentifier(dest.raw);
-            if (varName.isEmpty()) continue;
-            if (ctx.variables.typeOf(varName, line.ownerFunction) != OperandType::Str) continue;
+        const QString varName = leadingIdentifier(dest.raw);
+        if (varName.isEmpty()) continue;
+        if (ctx.variables.typeOf(varName, line.ownerFunction) != OperandType::Str) continue;
 
-            value.ast = StrFormParser::parse(value.raw.trimmed(), resolve, ctx.evaluator && ctx.evaluator->ignoreTripleSymbols());
-            PrintTemplateCompiler::prepare(value.ast);
-            if (!value.ast) {
-                const QString error = QCoreApplication::translate("ParseDiagnostics", "字符串赋值FORM无效");
-                line.argument.typeOk = false;
-                line.argument.typeError = error;
-                line.isError = true;
-                line.mutableErrMes() = error;
-                ctx.diagnostics.addRejectLine(DiagSeverity::Error, DiagCode::kArgCheck,
-                    line.position.filename, line.position.lineNumber, line.position.column, 0, error);
-            }
+        value.ast = StrFormParser::parse(value.raw.trimmed(), resolve, ctx.evaluator && ctx.evaluator->ignoreTripleSymbols());
+        PrintTemplateCompiler::prepare(value.ast);
+        if (!value.ast) {
+            const QString error = QCoreApplication::translate("ParseDiagnostics", "字符串赋值FORM无效");
+            line.argument.typeOk = false;
+            line.argument.typeError = error;
+            line.isError = true;
+            line.mutableErrMes() = error;
+            sink.addRejectLine(DiagSeverity::Error, DiagCode::kArgCheck,
+                line.position.filename, line.position.lineNumber, line.position.column, 0, error);
         }
     }
 }
@@ -985,17 +1044,11 @@ void resolveGlobalDeclarationsStep(LoadContext& ctx) {
 
 
 
-// 全体脚本绑定（一趟）：字符串赋值/FUNC → 变量类型就地定型 → 赋值 AST → 函数调用解析。
-// 要求 resolveGlobalDeclarations() 已就绪（变量维数与函数类型已定）。
-void finalizeBindings(LoadContext& ctx) {
-    // 每步内部按脚本并行（见各方法）；不再逐脚本调用（那样有 2200+ 次调用开销，
-    // eraTW 上从 ~10s 退化到 ~33s）。
-    applyStringAssignments(ctx);
-
-
-    // FUNC 重编译（仅构建期未定型的行）
-    for (auto& script : ctx.scripts) {
-    for (auto& line : script.lines) {
+// 收尾 2/6 第 2 段：FUNC 重编译（仅构建期未定型的行）。
+// **逐脚本**：只写本脚本的行；解析只读 variables / constantTable / evaluator。
+// 本段不产诊断 —— sink 形参只为与其余各段共用同一个驱动（runPerScript）。
+void recompileFuncLinesInScript(const LoadContext& ctx, ScriptData& script, ParseDiagnostics&) {
+    for (LogicalLine& line : script.lines) {
         if (line.functionName != QLatin1String("FUNC")) continue;
         const AstResolver resolve = [ctx, scope = line.ownerFunction](const QString& text) {
             return expressionAstInScope(ctx, text, scope);
@@ -1011,14 +1064,13 @@ void finalizeBindings(LoadContext& ctx) {
                 operand.ast = resolve(operand.raw);
         }
     }
-    }
+}
 
-    // 变量类型回填（全体脚本）
-    applyVariableTypes(ctx);
-
-    // 赋值 AST 重建（仅构建期未定型的行）
-    for (auto& script : ctx.scripts) {
-    for (auto& line : script.lines) {
+// 收尾 2/6 第 4 段：赋值 AST 重建（仅构建期未定型的行）。
+// **逐脚本**：只写本脚本的行；类型判断只读变量表。必须在 applyVariableTypes
+// **之后**（私有变量/维数此刻才定稿），所以它是独立的一段，不与第 3 段合并。
+void rebuildAssignmentAstsInScript(const LoadContext& ctx, ScriptData& script, ParseDiagnostics&) {
+    for (LogicalLine& line : script.lines) {
         if (line.assignOperator.isEmpty() || line.arguments.size() != 2) continue;
         const QString name = line.arguments[0].raw.section(':', 0, 0).trimmed();
         if (line.assignOperator == "=" && ctx.variables.typeOf(name, line.ownerFunction) == OperandType::Str) continue;
@@ -1028,16 +1080,45 @@ void finalizeBindings(LoadContext& ctx) {
             line.assignmentAsts.append(expressionAstInScope(ctx, text, line.ownerFunction, true));
         }
     }
+}
 
-    }
 
-    // 函数调用解析（全体脚本）
+
+// 全体脚本绑定（一趟）：字符串赋值/FUNC → 变量类型就地定型 → 赋值 AST → 函数调用解析。
+// 要求 resolveGlobalDeclarations() 已就绪（变量维数与函数类型已定）。
+//
+// 五段之间各有一条 barrier，顺序不可交换（1→2→3→4→5），段内**逐脚本并行**
+// （runPerScript：排序序幕 + 每脚本一个任务 + 按脚本名序归并）。
+// 刻意不把多段折进同一个任务：那会让「类型回填」与「赋值重建」的先后关系
+// 隐式化（那是另一刀）。
+void finalizeBindings(LoadContext& ctx) {
+    QElapsedTimer step;
+    step.start();
+    runPerScript(ctx, applyStringAssignmentsInScript);
+    qCDebug(eraTrace).noquote() << "[parse] 2/6 子步 1/5 字符串赋值:" << step.elapsed() << "ms";
+
+    step.restart();
+    runPerScript(ctx, recompileFuncLinesInScript);
+    qCDebug(eraTrace).noquote() << "[parse] 2/6 子步 2/5 FUNC 重编译:" << step.elapsed() << "ms";
+
+    step.restart();
+    applyVariableTypes(ctx);
+    qCDebug(eraTrace).noquote() << "[parse] 2/6 子步 3/5 变量类型回填:" << step.elapsed() << "ms";
+
+    step.restart();
+    runPerScript(ctx, rebuildAssignmentAstsInScript);
+    qCDebug(eraTrace).noquote() << "[parse] 2/6 子步 4/5 赋值 AST 重建:" << step.elapsed() << "ms";
+
+    step.restart();
     resolveFunctionNodes(ctx);
+    qCDebug(eraTrace).noquote() << "[parse] 2/6 子步 5/5 函数调用解析:" << step.elapsed() << "ms";
 
     // 收尾的最后一步：私有名表（「每个函数有哪些私有变量、存储键是什么」）
     // 由声明一次性建好并装进存储层 —— 此刻声明（resolveGlobalDeclarations）
-    // 与类型回填都已完成，名表是静态事实。
+    // 与类型回填都已完成，名表是静态事实。依赖前四段的结果，故**串行**收尾。
+    step.restart();
     installPrivateScopes(ctx);
+    qCDebug(eraTrace).noquote() << "[parse] 2/6 末尾 私有名表安装:" << step.elapsed() << "ms";
 }
 
 
@@ -1297,44 +1378,15 @@ void validateScriptLines(const LoadContext& ctx, ScriptData& script, ParseDiagno
 // phaseAfter 一个都不动）。
 // ---------------------------------------------------------------------------
 
-// 并行阈值：与 parse_checks.cpp 的 kMinScriptsForParallel **同名同值**（那边有
-// 完整理由：脚本少时调度/归并开销大于检查本身，调试器还要能一路跟进去）。
-// 两个文件各持一份 constexpr，改阈值时两处一起改。
-constexpr int kMinScriptsForParallel = 4;
-
+// 驱动 = 本文件顶部的 runPerScript（阈值 kMinScriptsForParallel 也共用那一份）：
+// 一个任务跑完**同一个**脚本的两步 —— 两步之间有脚本内顺序依赖
+//（validateArguments 读刚写的 line.argument.typeOk 与 line.arguments[0].ast），
+// 因此不能拆成两个任务。
 void finalizeValidation(LoadContext& ctx) {
-    QStringList names = ctx.scripts.keys();
-    std::sort(names.begin(), names.end());
-
-    QList<ScriptData*> scripts;
-    scripts.reserve(names.size());
-    for (const QString& name : names) {
-        const auto it = ctx.scripts.find(name);
-        if (it != ctx.scripts.end()) scripts.append(&it.value());
-    }
-
-    // 任务里只读 ctx：取 const 视图，写操作只能落到 script 与任务独占的 sink。
-    const LoadContext& view = ctx;
-    const auto processScript = [&view](ScriptData* sd) {
-        ParseDiagnostics local;   // **本任务独占**，不与任何线程共享
-        validateScriptLines(view, *sd, local);
-        validateArguments(view, *sd, local);
-        return local;
-    };
-
-    if (scripts.size() < kMinScriptsForParallel
-        || QThreadPool::globalInstance()->maxThreadCount() <= 1) {
-        for (ScriptData* sd : scripts) {
-            validateScriptLines(ctx, *sd, ctx.diagnostics);
-            validateArguments(ctx, *sd, ctx.diagnostics);
-        }
-        return;
-    }
-
-    const QList<ParseDiagnostics> locals = QtConcurrent::blockingMapped(scripts, processScript);
-    for (const ParseDiagnostics& local : locals)
-        for (const ParseDiagnostic& d : local.all()) ctx.diagnostics.add(d);
+    runPerScript(ctx, [](const LoadContext& view, ScriptData& sd, ParseDiagnostics& sink) {
+        validateScriptLines(view, sd, sink);
+        validateArguments(view, sd, sink);
+    });
 }
-
 
 }  // namespace loadpass

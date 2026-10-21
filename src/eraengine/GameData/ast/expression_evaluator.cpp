@@ -1786,8 +1786,17 @@ int ExpressionEvaluator::langByteCountOfChar(QChar c) const {
     if (m_langEncoding == TextEncoding::Utf8 || m_langEncoding == TextEncoding::Auto) {
         return QString(c).toUtf8().size();
     }
-    static QHash<quint32, int> cache;
-    const quint32 key = static_cast<quint32>(c.unicode());
+    // 缓存**按线程私有**：收尾第 3 步（finalizeValidation，逐脚本并行）会在任务里
+    // 调 evaluate -> evaluateStrForm -> langByteCount，而并行任务共用**同一个**
+    // ExpressionEvaluator。共享 static QHash 上的并发 insert 会破坏表内部结构：
+    // 实测在 qhash.h rehash() 的 Q_ASSERT(it.isUnused()) 处 abort（eraMegaten）。
+    // thread_local 无锁，语义与原缓存完全一致（纯函数记忆化）。
+    thread_local QHash<quint32, int> cache;
+    // 键必须带上编码：同一字符在 SHIFT-JIS / GBK / BIG5 下的字节宽度不同，
+    // 而本进程内可能同时存在不同编码的求值器。只按字符作键会跨编码互相污染
+    // （原始缓存键里没有 m_langEncoding，这是独立的正确性 bug）。
+    const quint32 key = (static_cast<quint32>(m_langEncoding) << 16)
+                        | static_cast<quint32>(c.unicode());
     const auto it = cache.constFind(key);
     if (it != cache.constEnd()) return it.value();
 

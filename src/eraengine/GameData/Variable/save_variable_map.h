@@ -39,8 +39,11 @@ class VariableTable;
 //   Entry::slot        —— 该条目落在存储层的哪一类容器（数据，不是 if 链）
 //   Entry::dimensions  —— 文件里的形状（不含角色维；空 = 标量）
 //
-// 存：按 entries() 顺序写出（顺序即旧的 saveShapes 顺序，保证字节相同）；
-// 读：按文件里的名字 findByName() 找到行，再按 key 落回存储层。
+// 存：按 entries() 顺序写出。顺序是**只由数据决定的全序**（Map::build 末尾
+//     排序，键见 .cpp）—— 与任何 QHash 遍历序无关，同一变量状态在任何进程、
+//     任何 QT_HASH_SEED 下 encode 出的存档字节逐字节相同；
+// 读：按文件里的名字 findByName() 找到行，再按 key 落回存储层（按名还原，
+//     与写出顺序无关 —— 旧实现写的档照常可读）。
 // 新增一类变量 = 表里加一行；只有「新的容器形态」才需要新增 Slot 值
 // （容器类型不同，取值/写值的实现必然要分开，那一处 switch 在
 //  variable_storage.cpp 的 readSaveEntry/writeSaveCell）。
@@ -82,6 +85,9 @@ public:
 
 private:
     void append(Entry entry);
+
+    // 建表收尾：把 m_entries 排成数据决定的全序，并按新顺序重建索引。
+    void finalize();
 
     QList<Entry> m_entries;
     QHash<QString, int> m_byName;

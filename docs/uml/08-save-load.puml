@@ -38,7 +38,7 @@ note right of M
   身份不进文件：文件里没有 0x1F，私有变量也只能靠裸名。
 end note
 
-loop 每个 Entry（顺序 = 旧 saveShapes 顺序，存档字节不变）
+loop 每个 Entry（Map::build 末尾已排序：顺序 = 数据决定的全序，\n主键 slot → 次键大写名 → 内建先于用户 → 私有作用域名，\n与 QHash 遍历序 / QT_HASH_SEED 无关）
   S -> S : readSaveEntry(entry, charaSlot)
   S -> S : storageKeyFor(entry.key)
   note right of S
@@ -85,9 +85,10 @@ legend bottom
   · 顺带修掉的既有缺陷：函数私有 SAVEDATA 以前**既没写也没读**
     （旧过滤条件 `d.scope != VarScope::Global -> continue`）。现在按 C# 语义落盘；
     五语料无此类声明，字节不变；有此类声明的游戏，新存档会多条目（旧档仍可读）。
-  · 已知未修：用户 SAVEDATA 条目的**顺序**来自 QHash 遍历（Qt 每进程随机播种），
-    所以「与某一次旧存档逐字节相同」只有在固定播种下才可判定。
-    测试用 QT_HASH_SEED=0 的旧实现输出作 golden；要真正确定顺序需另开一轮
-    （排序 + 兼容读），会让旧字节变化。
+  · 顺序确定性（本轮已修）：用户 SAVEDATA 条目的顺序曾来自 QHash 遍历（Qt 每进程
+    随机播种）。Map::build 末尾把 entries() 排成数据决定的全序（主键 slot →
+    次键大写名 → 内建先于用户 → 私有作用域名），存档字节从此与 QT_HASH_SEED
+    无关；测试不再固定播种，旧 golden 降级为解码/回放 fixture（按名读，天然
+    顺序无关），新 golden 从排序后实现生成。
 endlegend
 @enduml

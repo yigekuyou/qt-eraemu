@@ -91,10 +91,13 @@ plantuml -txmi docs/uml/01-load-classes.puml
 
 `dump_warnings` 五语料（`eraTW` / `eraMegaten` / `eraTetris` / `FL3.8` / `ecd`）：
 **6 / 0 / 0 / 0 / 0** 行，逐行可比（`sort` 后 `diff`）。
-累计六个重构（身份整数化 / 全定型 / 作用域显式化 / 只读收尾外移 / 存档独立映射 /
-私有名表前移）前后完全一致；`ctest` 48 → 52（新增 `test_parse_checks` /
-`test_save_variable_map` / `test_private_scope_table` / `test_load_contracts`）。
+累计七个重构（身份整数化 / 全定型 / 作用域显式化 / 只读收尾外移 / 存档独立映射 /
+私有名表前移 / 存档顺序确定性）前后完全一致；`ctest` 48 → 53（新增 `test_parse_checks` /
+`test_save_variable_map` / `test_private_scope_table` / `test_load_contracts` /
+`test_save_variable_map_hashseed`）。
 
-存档字节：`test_save_variable_map` 的 golden 来自**固定 `QT_HASH_SEED=0`** 的旧实现输出 ——
-用户 SAVEDATA 条目顺序取自 `QHash` 遍历，Qt 每进程随机播种，所以不固定播种时「逐字节相同」
-本身不可判定（重构前连跑三次就是三个 md5）。
+存档字节：`erasave::Map` 在 `Map::build` 末尾把条目排成**只由数据决定的全序**（主键 `slot`
+→ 次键大写名 → 内建先于用户 → 私有作用域名），存档字节与 `QT_HASH_SEED` 无关 ——
+测试不再固定播种（另有 `test_save_variable_map_hashseed` 用 `QT_HASH_SEED=42` 直接证明），
+旧 golden 降级为「解码 + 回放」fixture（按名读，天然与写出顺序无关），新 golden 从
+排序后实现生成（`normal-new.bin` md5 `995642c9…`，再生成开关见测试头注释）。

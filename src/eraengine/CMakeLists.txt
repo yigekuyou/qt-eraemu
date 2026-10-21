@@ -381,6 +381,10 @@ add_test(NAME test_load_snapshots COMMAND test_load_snapshots)
 eraengine_add_test(test_save_variable_map)
 target_compile_definitions(test_save_variable_map PRIVATE ERA_TEST_SOURCE_DIR="${CMAKE_CURRENT_SOURCE_DIR}/test")
 add_test(NAME test_save_variable_map COMMAND test_save_variable_map)
+# 种子无关性的直接证据：同一个测试在固定的非默认 QHash 种子下再跑一遍
+#（默认条目 = 每进程随机种子；另有手工 QT_HASH_SEED=1/42 双跑，见任务报告）。
+add_test(NAME test_save_variable_map_hashseed COMMAND test_save_variable_map)
+set_tests_properties(test_save_variable_map_hashseed PROPERTIES ENVIRONMENT "QT_HASH_SEED=42")
 eraengine_add_test(test_load_contracts)
 add_test(NAME test_load_contracts COMMAND test_load_contracts)
 eraengine_add_test(test_era_binary_data)

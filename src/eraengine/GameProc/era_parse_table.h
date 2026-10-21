@@ -104,7 +104,6 @@ struct PositionEffects {
 // ---------------------------------------------------------------------------
 struct ScriptData {
     QList<LogicalLine>  lines;          // 完整 AST 逻辑行（对齐 C# LogicalLine 数组）
-    QHash<QString, int> labelPositions; // @label（**大写折叠**）-> 行号（故查表须 label.toUpper()）
     QHash<int, int>     endifLines;     // 标记区：IF/SIF 行 -> ENDIF+1
     QHash<int, int>     elseLines;      // 标记区：IF/SIF 行 -> ELSEIF/ELSE/ENDIF
     QHash<int, int>     loopEndLines;   // 标记区：REPEAT/WHILE/FOR 行 -> 配对行
@@ -168,10 +167,13 @@ inline bool labelRefLess(const LabelRef& a, const LabelRef& b) {
 // 不复用 parsecheck::ParseIrView —— 那 5 个字段里位置区一个都不读，
 // 视图只装真正被读的数据。
 //
-// labelIndex：裸标签名（**大写折叠**，与 ScriptData::labelPositions 同键） ->
-// 该名字的**全部**声明，按 labelRefLess 排成一个全序。装载收尾 1/6
-// （loadpass::finalizeLabelIndex）里排序固化一次，运行期只读、不重建。
-// 「裸标签属于哪个脚本」只有这一份数据可查（见 position::firstLabel）。
+// labelIndex：裸标签名（**大写折叠**） -> 该名字的**全部**声明，按
+// labelRefLess 排成一个全序。同脚本内的声明在 loadScript 追加时即按行号升序
+// （单次装载循环），全序里的跨脚本部分由装载收尾 1/6（loadpass::
+// finalizeLabelIndex）排序固化。因此「只查某脚本」（onlyScript 非空）在装载
+// 期就已确定，与收尾时机无关；跨脚本挑选才依赖收尾的那一次排序。
+// 「裸标签属于哪个脚本」「某脚本内某名字在哪一行」都只有这一份数据可查
+// （见 position::firstLabel）。
 // ---------------------------------------------------------------------------
 struct ScriptView {
     const QHash<QString, ScriptData>* scripts = nullptr;
@@ -311,6 +313,10 @@ public:
     // 同名标签的全部声明（按 脚本名 + 行号 排序；供事件四分组导航）
     // 对齐 C# LabelDictionary.GetEventLabels / SortLabels
     [[nodiscard]] QList<LabelRef> labels(const QString& name) const;
+    // 唯一标签索引本身（只读）：供只读收尾 pass 建「全库标签名并集」与测试取证。
+    [[nodiscard]] const QHash<QString, QList<LabelRef>>& labelIndex() const {
+        return m_labelIndex;
+    }
 
     // 某脚本的行数（用于计算「脚本结束」的返回地址）
     [[nodiscard]] int scriptLineCount(const QString& scriptName) const;

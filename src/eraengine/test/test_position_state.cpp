@@ -21,7 +21,7 @@
 // 验收物：位置区（执行位置 + 调用栈）可以**脱离 ExecutionEngine / 解析器**验证。
 //
 // 1) 前半部分直接驱动 position:: 的自由函数：手搓两个 ScriptData（含
-//    labelPositions 与 LogicalLine.ownerFunction）+ 一张标签索引，拼 ScriptView。
+//    LogicalLine.ownerFunction）+ 一张标签索引，拼 ScriptView。
 //    不经过 QObject、不经过装载流水线 —— 调用栈/返回地址语义因此可以逐条钉死。
 // 2) 后半部分用真的 EraParseTable 验**信号顺序**（Effects 只回答「发哪个」，
 //    顺序在 emitEffects 里写死）：callLabel / returnFromCall / jumpToLabel 按
@@ -123,7 +123,6 @@ static ScriptData makeScriptA() {
     d.lines = {funcLabel("MAIN"), instr("PRINT", "MAIN"), instr("CALL", "MAIN"),
                gotoLabel("PRINT_TITLE", "MAIN"), instr("RETURN", "MAIN"),
                funcLabel("SUB"), instr("PRINT", "SUB"), instr("RETURN", "SUB")};
-    d.labelPositions = {{"MAIN", 0}, {"PRINT_TITLE", 3}, {"SUB", 5}};
     return d;
 }
 
@@ -133,7 +132,6 @@ static ScriptData makeScriptB() {
                funcLabel("PRINT_TITLE"), instr("PRINT", "PRINT_TITLE"),
                funcLabel("MAIN"), instr("RETURN", "MAIN"),
                funcLabel("REMOTE_2"), instr("RETURN", "REMOTE_2")};
-    d.labelPositions = {{"REMOTE", 0}, {"PRINT_TITLE", 3}, {"MAIN", 5}, {"REMOTE_2", 7}};
     return d;
 }
 
@@ -144,8 +142,9 @@ struct Fixture {
     Fixture() {
         scripts.insert(QStringLiteral("A.ERB"), makeScriptA());
         scripts.insert(QStringLiteral("B.ERB"), makeScriptB());
-        // 全局索引只收 @函数标签（loadScript 的 FunctionLabel 分支）；按
-        // (脚本名, 行号) 排序固化 —— 与 markLoadComplete 之后的形状一致。
+        // 手工夹具的索引只放 @条目（A 的 $PRINT_TITLE 故意不入索引，
+        // 用来验证 CALL 不会落到 $ 标签）；按 (脚本名, 行号) 排序固化 ——
+        // 与 markLoadComplete 之后的形状一致。
         labels[QStringLiteral("MAIN")] =
             {LabelRef{QStringLiteral("A.ERB"), 0}, LabelRef{QStringLiteral("B.ERB"), 5}};
         labels[QStringLiteral("SUB")] = {LabelRef{QStringLiteral("A.ERB"), 5}};
@@ -296,9 +295,7 @@ int main(int argc, char** argv) {
     // -----------------------------------------------------------------------
     qDebug() << "\n5) 当前脚本优先 + $ 标签不可调用";
     {
-        // A.ERB:3 是 $PRINT_TITLE（labelPositions 里有它，但 kind != FunctionLabel）。
-        check(f.scripts["A.ERB"].labelPositions.value("PRINT_TITLE", -1) == 3,
-              "夹具：A.ERB 的 labelPositions 收录了 $PRINT_TITLE");
+        // A.ERB:3 是 $PRINT_TITLE（kind != FunctionLabel，所以 CALL 不能落到它）。
         check(f.scripts["A.ERB"].lines.at(3).kind == LineKind::GotoLabel,
               "夹具：A.ERB:3 是 GotoLabel");
 
@@ -589,6 +586,77 @@ int main(int argc, char** argv) {
         std::reverse(reversed.begin(), reversed.end());
         const QString backward = run(reversed);
         checkStr(backward, forward, "相反装载序 -> CALL/GOTO/入口点/索引全序逐字相同");
+    }
+
+    // -----------------------------------------------------------------------
+    // 12) 一个名字只有一个行号：getLabelPosition 与 CALL / 索引同解
+    //
+    // 同一脚本里 @DUP 声明两次（行 0 / 行 3）。旧 ScriptData::labelPositions
+    // 是 last-wins（答 3），索引是 first-wins（答 0），CALL 上一刀已改成
+    // first-wins —— 本刀删掉前两张表后，三者只能是同一个答案 0。
+    // -----------------------------------------------------------------------
+    qDebug() << "\n12) 同脚本重复声明：CALL / getLabelPosition / 索引第一条逐值相等";
+    {
+        const QString script = QStringLiteral("DUP.ERB");
+        EraParseTable table(nullptr);
+        table.loadScript(script,
+                         {funcLabel(QStringLiteral("DUP")),
+                          instr(QStringLiteral("PRINT"), QStringLiteral("DUP")),
+                          funcLabel(QStringLiteral("DUP")),
+                          instr(QStringLiteral("PRINT"), QStringLiteral("DUP")),
+                          instr(QStringLiteral("RETURN"), QStringLiteral("DUP"))});
+
+        // (b) 装载完成**之前**：索引尚未跨脚本排序固化，但同脚本内按行号
+        //     追加，因此 onlyScript 查询的答案已是确定的 0。
+        const int before = table.getLabelPosition(script, QStringLiteral("DUP"));
+        checkInt(before, 0, "markLoadComplete 之前：第一条 = 行 0");
+
+        table.markLoadComplete();
+        const int after = table.getLabelPosition(script, QStringLiteral("DUP"));
+        checkInt(after, 0, "markLoadComplete 之后：同一个答案（行 0）");
+        checkInt(before, after, "装载完成前后答案相同");
+
+        const QList<LabelRef> decls = table.labelIndex().value(QStringLiteral("DUP"));
+        checkInt(int(decls.size()), 2, "索引保留两条声明（事件导航需要全部）");
+        if (!decls.isEmpty()) checkInt(decls.first().line, 0, "索引第一条 = 行 0（first-wins）");
+
+        table.setPosition(script, 0, /*jumped=*/false);
+        QString targetScript;
+        int targetLine = -1;
+        check(table.resolveCallableLabel(QStringLiteral("DUP"), targetScript, targetLine),
+              "resolveCallableLabel(DUP) 成功");
+        checkStr(targetScript, script, "CALL 落在同脚本");
+        checkInt(targetLine, after, "CALL 目标行 == getLabelPosition == 索引第一条（0）");
+
+        // (c) 大小写不敏感：索引键是大写折叠的。旧 ErbLoader::m_labelPositions
+        //     用 "script:label" 原样拼接、大小写敏感；那张表已删，这条钉住回归。
+        const QString mixed = QStringLiteral("CASE.ERB");
+        table.loadScript(mixed,
+                         {funcLabel(QStringLiteral("Foo")),
+                          instr(QStringLiteral("RETURN"), QStringLiteral("Foo"))});
+        const int foo = table.getLabelPosition(mixed, QStringLiteral("foo"));
+        const int FOO = table.getLabelPosition(mixed, QStringLiteral("FOO"));
+        const int Foo = table.getLabelPosition(mixed, QStringLiteral("Foo"));
+        checkInt(foo, 0, "查询 \"foo\" -> 行 0");
+        checkInt(FOO, 0, "查询 \"FOO\" -> 行 0");
+        checkInt(Foo, foo, "三种大小写同解");
+        checkInt(FOO, Foo, "三种大小写同解（全等）");
+        checkInt(table.getLabelPosition(QStringLiteral("NO_SUCH.ERB"), QStringLiteral("Foo")), -1,
+                 "不存在的脚本 -> -1（空 onlyScript 不会退化成跨脚本查询）");
+
+        // 重复装载同名脚本（LSP 编辑/测试 reload）：索引随 ScriptData 一起替换。
+        // 若旧声明留在索引里，firstLabel 会答出一个新版本里不存在的行。
+        const QString reloaded = QStringLiteral("RELOAD.ERB");
+        EraParseTable r(nullptr);
+        r.loadScript(reloaded, {funcLabel(QStringLiteral("OLD")),
+                                instr(QStringLiteral("RETURN"), QStringLiteral("OLD")),
+                                funcLabel(QStringLiteral("DUP"))});
+        r.loadScript(reloaded, {instr(QStringLiteral("PRINT"), QString()),
+                                funcLabel(QStringLiteral("DUP"))});
+        checkInt(r.getLabelPosition(reloaded, QStringLiteral("OLD")), -1,
+                 "reload 后旧标签从索引消失");
+        checkInt(r.getLabelPosition(reloaded, QStringLiteral("DUP")), 1,
+                 "reload 后新标签行号生效（不是旧版的 2）");
     }
 
     if (g_failures == 0) qDebug() << "\nALL PASSED";

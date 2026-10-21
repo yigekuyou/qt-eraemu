@@ -52,6 +52,9 @@ namespace parsecheck {
 // 只读收尾步骤的输入：装载完成的 IR 视图。全部 const —— 编译期就禁止写。
 struct ParseIrView {
     const QHash<QString, ScriptData>* scripts = nullptr;
+    // 唯一标签索引（裸名大写折叠 -> 全部声明）。resolveStaticTargets 建「全库
+    // 标签名并集」只读它的键 —— ScriptData 里不再有第二张 name->line 表。
+    const QHash<QString, QList<LabelRef>>* labelIndex = nullptr;
     const VariableTable* variables = nullptr;
     const ConstantTable* constantTable = nullptr;
     const VariableStorage* storage = nullptr;   // 只用于尺寸/名字查询
@@ -67,7 +70,7 @@ struct ParseIrView {
 // 因此 diags 必须是**本线程独占**的 sink（驱动端每个任务自己一个实例）。
 //
 // 这三个函数之间的独立性来自数据：脚本之间没有共享可变状态（pass 4 只读全库
-// 的 labelPositions，pass 5/6 只读本脚本 lines + 全局只读表），所以可以被
+// 的标签索引键，pass 5/6 只读本脚本 lines + 全局只读表），所以可以被
 // 驱动端并行调用；下面三个「遍历全部脚本」的 public 函数现在就是它们的并行
 // 驱动（脚本名排序 -> 并行映射 -> 按名字序归并）。
 //

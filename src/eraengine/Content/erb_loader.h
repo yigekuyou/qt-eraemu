@@ -179,7 +179,6 @@ public:
     QList<LogicalLine> getLogicalLines(const QString& scriptName);
     QList<LogicalLine> getLogicalLinesCI(const QString& scriptName);
 
-    int getLabelPosition(const QString& scriptName, const QString& labelName);
     int getScriptLineCount(const QString& scriptName);
     QString getScriptPath(const QString& scriptName) const;
     // Number of non-empty ERB/ERH files merged into the parse table.
@@ -352,7 +351,6 @@ private:
     QHash<QString, QString> m_scriptPaths;
     QHash<QString, QList<LogicalLine>> m_logicalLines;
     QHash<QString, QPair<QString, int>> m_labels;   // label -> (script, lineIndex)
-    QHash<QString, int> m_labelPositions;           // "script:label" -> lineIndex
     QHash<QString, int> m_scriptLineCounts;
 
     // [qdbug] 验证（eraTW 实测）：并行拍平与顺序拍平结果**完全一致** ——

@@ -38,6 +38,7 @@
 #include <QDebug>
 #include <QElapsedTimer>
 #include <QFile>
+#include <QSet>
 #include <QTextStream>
 #include "eraengine.h"
 
@@ -87,8 +88,14 @@ int main(int argc, char* argv[]) {
         if (!onlyScript.isEmpty() && name.compare(onlyScript, Qt::CaseInsensitive) != 0) continue;
         const ScriptData* sd = table->script(name);
         if (!sd) continue;
+        // 标签数 = 本脚本内**不同**标签名的个数（大小写折叠，与旧 labelPositions
+        // 的键集合逐字一致）。从 lines 数出来，不另存表。
+        QSet<QString> labelNames;
+        for (const LogicalLine& l : sd->lines) {
+            if (l.isLabel()) labelNames.insert(l.labelName.toUpper());
+        }
         ts << QStringLiteral("== 脚本 %1  (%2)  行 %3  标签 %4\n")
-              .arg(name, sd->path).arg(sd->lines.size()).arg(sd->labelPositions.size());
+              .arg(name, sd->path).arg(sd->lines.size()).arg(labelNames.size());
         for (int i = 0; i < sd->lines.size(); ++i) {
             const LogicalLine& l = sd->lines.at(i);
             ts << QStringLiteral("%1\t%2\t%3\t%4\t%5\n")

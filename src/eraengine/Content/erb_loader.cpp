@@ -652,7 +652,6 @@ bool ErbLoader::mergeParsedFile(ParsedErbFile&& pf) {
         const LogicalLine& line = pf.lines.at(i);
         if (line.isLabel()) {
             m_labels.insert(line.labelName, {pf.scriptName, i});
-            m_labelPositions.insert(pf.scriptName + ":" + line.labelName, i);
         }
     }
 
@@ -1187,7 +1186,6 @@ void ErbLoader::cancelAndWait() {
     m_logicalLines.clear();
     m_scriptPaths.clear();
     m_labels.clear();
-    m_labelPositions.clear();
     m_scriptLineCounts.clear();
     stopHeartbeat();
     m_readFailures.store(0, std::memory_order_relaxed);
@@ -1488,10 +1486,6 @@ QList<LogicalLine> ErbLoader::getLogicalLinesCI(const QString& scriptName) {
         if (it.key().toLower() == lowerName) return it.value();
     }
     return QList<LogicalLine>();
-}
-
-int ErbLoader::getLabelPosition(const QString& scriptName, const QString& labelName) {
-    return m_labelPositions.value(scriptName + ":" + labelName, -1);
 }
 
 int ErbLoader::getScriptLineCount(const QString& scriptName) {

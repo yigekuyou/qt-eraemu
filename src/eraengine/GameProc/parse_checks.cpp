@@ -63,23 +63,21 @@ const UserFunctionInfo* userFunctionIn(const ParseIrView& view, const QString& n
     return it == view.functions->constEnd() ? nullptr : &it.value();
 }
 
-// 全库标签名并集（大小写折叠后的键）：labelPositions 的键就是
+// 全库标签名并集（大小写折叠后的键）：唯一标签索引的键就是
 // `line.labelName.toUpper()`（era_parse_table.cpp 的装载循环），因此这里直接并
 // 键即可，与「逐个脚本 contains(folded)」是同一个成员判定 —— 重复标签只覆盖同键。
 // **只活在一次 pass 调用内**（驱动层建、任务里查）：LSP 会增删脚本，跨调用缓存会过期。
 QSet<QString> collectLabelNames(const ParseIrView& view) {
     QSet<QString> all;
-    if (!view.scripts) return all;
-    for (auto it = view.scripts->constBegin(); it != view.scripts->constEnd(); ++it) {
-        const QHash<QString, int>& positions = it.value().labelPositions;
-        for (auto p = positions.constBegin(); p != positions.constEnd(); ++p)
-            all.insert(p.key());
-    }
+    if (!view.labelIndex) return all;
+    all.reserve(view.labelIndex->size());
+    for (auto it = view.labelIndex->constBegin(); it != view.labelIndex->constEnd(); ++it)
+        all.insert(it.key());
     return all;
 }
 
-// EraParseTable::hasLabel 的同源判据（全库 @标签存在性）：
-// labelPositions 是「大写折叠」的，故查表前先 toUpper。
+// EraParseTable::hasLabel 的同源判据（全库标签存在性）：
+// 索引键是「大写折叠」的，故查表前先 toUpper。
 // 旧实现是「每条 CALL 扫全部脚本 × contains」（eraTW ≈ 9.4 万 CALL × 2258 脚本
 // ≈ 2×10⁸ 次哈希探测）；现在只查驱动层建好的并集，一次哈希。
 bool hasLabelInScripts(const QSet<QString>& allLabels, const QString& label) {

@@ -246,7 +246,7 @@ bool returnFromCall(PositionState& state, const ScriptView&, PositionEffects& fx
 const LabelRef* firstLabel(const ScriptView& view, const QString& name, bool callableOnly,
                            const QString& onlyScript) {
     if (!view.labelIndex) return nullptr;
-    // 键 = 大写折叠（与 ScriptData::labelPositions 同一套键）。
+    // 键 = 大写折叠（索引的唯一键形式）。
     const auto it = view.labelIndex->constFind(name.toUpper());
     if (it == view.labelIndex->constEnd()) return nullptr;
     for (const LabelRef& ref : it.value()) {

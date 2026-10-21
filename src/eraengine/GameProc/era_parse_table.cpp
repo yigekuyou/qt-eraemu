@@ -379,6 +379,23 @@ bool EraParseTable::loadScript(const QString& scriptName, const QList<LogicalLin
     }
     m_phase = LoadPhase::Loading;
 
+    // 重复装载同名脚本 = 用新 AST **替换** m_scripts 里的旧条目。索引是「名字 ->
+    // 行号」的唯一来源，必须同步替换：否则旧版本的声明会留在全序里，firstLabel
+    // 可能答出一个在当前 ScriptData 里根本不存在的行。初次装载时 m_scripts
+    // 不含该名字，这一趟不发生（不引入每脚本一次的全索引扫描）。
+    if (m_scripts.contains(scriptName)) {
+        for (auto it = m_labelIndex.begin(); it != m_labelIndex.end();) {
+            QList<LabelRef>& list = it.value();
+            list.erase(std::remove_if(list.begin(), list.end(),
+                                      [&scriptName](const LabelRef& ref) {
+                                          return ref.script == scriptName;
+                                      }),
+                       list.end());
+            if (list.isEmpty()) it = m_labelIndex.erase(it);
+            else ++it;
+        }
+    }
+
     ScriptData data;
     data.lines = lines;
     data.path = path;
@@ -436,6 +453,7 @@ bool EraParseTable::loadScript(const QString& scriptName, const QList<LogicalLin
 
     QString currentFunction;   // 用于 #DIM 的作用域判定
     bool afterLabel = false;   // .ERB 中 # 行必须紧跟函数标签（对齐 C# ErbLoader）
+    QSet<QString> labelNames;  // 仅用于装载日志的「本脚本标签名个数」，不保留
 
     for (int i = 0; i < data.lines.size(); ++i) {
         LogicalLine& line = data.lines[i];
@@ -478,11 +496,14 @@ bool EraParseTable::loadScript(const QString& scriptName, const QList<LogicalLin
             // 表达式调用把名字 toUpper 成 FORAGEPLACENAME 后查不到标签」的错配
             // —— eraTW @SHOW_GATHERING_LIST 的 %ForagePlaceName(...)% 恒返回 0
             // （「採集場所一覧」选项显示成数字 0、输入 99 无法返回）正是此例。
-            data.labelPositions[line.labelName.toUpper()] = i;
+            labelNames.insert(line.labelName.toUpper());
 
             // 唯一标签索引的**唯一追加点**：@函数标签与 $GOTO 标签都收
-            //（键 = 大写折叠，与 labelPositions 同键；全序在 finalizeLabelIndex
-            //  里按 (脚本名, 行号) 固化）。isFunction 区分 CALL 能不能用它。
+            //（键 = 大写折叠；同脚本内按行号升序追加，跨脚本的全序在
+            //  finalizeLabelIndex 里按 (脚本名, 行号) 固化）。isFunction 区分
+            //  CALL 能不能用它。这是「名字 -> 行号」**唯一**的一张表：
+            //  ScriptData 不再另存 labelPositions（旧表是 last-wins，与本索引的
+            //  first-wins 会是两个答案）。
             LabelRef ref;
             ref.script = scriptName;
             ref.line = i;
@@ -620,7 +641,7 @@ bool EraParseTable::loadScript(const QString& scriptName, const QList<LogicalLin
     }
 
     qCDebug(eraTrace) << "[parse] 脚本" << scriptName << (isHeaderFile ? "(头文件)" : "")
-             << "逻辑行" << data.lines.size() << "标签" << data.labelPositions.size();
+             << "逻辑行" << data.lines.size() << "标签" << labelNames.size();
     emit parseCompleted(scriptName);
     return true;
 }
@@ -676,11 +697,16 @@ QString EraParseTable::getEntryPoint() const {
 }
 
 int EraParseTable::getLabelPosition(const QString& scriptName, const QString& labelName) const {
-    const ScriptData* data = script(scriptName);
-    if (!data) {
-        return -1;
-    }
-    return data->labelPositions.value(labelName.toUpper(), -1);
+    // 「某脚本内某名字在哪一行」与 CALL 目标 / 函数体起点是**同一个**答案：
+    // 唯一索引 + 唯一择一规则（该脚本内全序第一条 = 行号最小的一条）。
+    // @ 与 $ 都收（callableOnly=false）：本函数既用于函数体起点（ownerFunction，
+    // 必然是 @），也用于 findGotoLabelInFunction 找 $ 标签的扫描起点。
+    // 脚本必须真实存在 —— 空 onlyScript 在 firstLabel 里表示「不筛选」，
+    // 不先挡掉就会退化成跨脚本查询。
+    if (!script(scriptName)) return -1;
+    const LabelRef* ref = position::firstLabel(makeScriptView(), labelName,
+                                               /*callableOnly=*/false, scriptName);
+    return ref ? ref->line : -1;
 }
 
 bool EraParseTable::resolveJumpTarget(const QString& label, int& position) {
@@ -1135,6 +1161,7 @@ loadpass::LoadContext EraParseTable::makeLoadContext() {
 parsecheck::ParseIrView EraParseTable::makeIrView() const {
     parsecheck::ParseIrView view;
     view.scripts = &m_scripts;
+    view.labelIndex = &m_labelIndex;
     view.variables = &m_variables;
     view.constantTable = m_constantTable;
     view.storage = m_variableStorage;

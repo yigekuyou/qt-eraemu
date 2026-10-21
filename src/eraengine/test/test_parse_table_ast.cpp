@@ -135,7 +135,7 @@ int main(int argc, char* argv[]) {
     check(data->lines.size() == source.size(), "lines.size() == source lines");
     check(data->lines[0].kind == LineKind::FunctionLabel, "line0 is FunctionLabel");
     check(data->lines[0].labelName == "MAIN", "line0 labelName == MAIN");
-    check(data->labelPositions.value("MAIN", -1) == 0, "labelPositions[MAIN] == 0");
+    check(table.getLabelPosition("test", "MAIN") == 0, "getLabelPosition(test, MAIN) == 0（唯一索引）");
     check(data->lines[3].kind == LineKind::Instruction, "line3 is Instruction");
     check(data->lines[3].functionName == "PRINT", "line3 functionName == PRINT");
     check(data->lines[3].arguments.size() == 1 && data->lines[3].arguments[0].isString,

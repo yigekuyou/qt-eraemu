@@ -123,6 +123,7 @@ int main(int argc, char* argv[]) {
     // ---- 手工构造只读视图：只用 public getter，不碰任何私有状态 ----
     parsecheck::ParseIrView view;
     view.scripts = &table.scripts();
+    view.labelIndex = &table.labelIndex();
     view.variables = &table.variableTable();
     view.constantTable = table.constantTable();
     view.storage = table.variableStorage();
@@ -230,6 +231,7 @@ int main(int argc, char* argv[]) {
 
         parsecheck::ParseIrView view2;
         view2.scripts = &table2.scripts();
+        view2.labelIndex = &table2.labelIndex();
         view2.variables = &table2.variableTable();
         view2.constantTable = table2.constantTable();
         view2.storage = table2.variableStorage();

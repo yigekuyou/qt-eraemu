@@ -19,6 +19,7 @@
 #define ERAENGINE_GAMEPROC_PARSE_CHECKS_H
 
 #include <QHash>
+#include <QSet>
 #include <QString>
 
 #include "era_parse_table.h"   // ScriptData
@@ -69,8 +70,11 @@ struct ParseIrView {
 // 的 labelPositions，pass 5/6 只读本脚本 lines + 全局只读表），所以可以被
 // 驱动端并行调用；下面三个「遍历全部脚本」的 public 函数现在就是它们的并行
 // 驱动（脚本名排序 -> 并行映射 -> 按名字序归并）。
+//
+// allLabels = 全库标签名并集（大写折叠键），由**驱动层**在一次 pass 内建一次、
+// 以 const 引用传给各任务 —— 任务里退化成 O(1) 成员判定。
 void resolveStaticTargetsInScript(const ParseIrView& view, const ScriptData& script,
-                                  ParseDiagnostics& diags);
+                                  ParseDiagnostics& diags, const QSet<QString>& allLabels);
 void checkStructuresInScript(const ParseIrView& view, const ScriptData& script,
                              ParseDiagnostics& diags);
 void checkStaticValuesInScript(const ParseIrView& view, const ScriptData& script,

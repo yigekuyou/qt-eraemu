@@ -177,7 +177,14 @@ bool AstBuilder::isConditionInstruction(const QString& upperName) {
 }
 
 // 首操作数是标签名的指令族（CALL/CALLFORM/CALLF/TRYCALL*/JUMP*/BEGIN）
-bool AstBuilder::isCallFamilyInstruction(const QString& upperName) {
+//
+// name 在**所有生产调用点**都已是大小写折叠的名字：构建期写入点只有
+// `line.functionName = first.text.toUpper()`（见 build()），赋值运算符与 ++/-- 都不是
+// CALL 族。因此这里不再逐行 `toUpper()`（eraTW 收尾 3/6 约 186 万指令行，
+// 每行一次 QString 堆分配）。
+// 为保住「大小写不敏感」的对外语义，比较用 QString::compare(..., CaseInsensitive)：
+// 逐字符折叠、**不分配**，代价与一次普通 QString 比较同量级。
+bool AstBuilder::isCallFamilyInstruction(const QString& name) {
     static const char* kNames[] = {
         "CALL", "CALLFORM", "CALLF", "CALLFORMF",
         "TRYCALL", "TRYCALLFORM", "TRYCALLF", "TRYCALLFORMF",
@@ -193,8 +200,15 @@ bool AstBuilder::isCallFamilyInstruction(const QString& upperName) {
         // （ErbLoader 只允许 FUNC 出现在 TRY*LIST 体内）。
         "FUNC",
     };
+    if (name.isEmpty()) return false;
+    // 快速排除：全部名字都以这 6 个字母开头（C/T/J/G/B/F）。名字是热路径输入，
+    // 绝大多数行首字符不在其中 —— 一次比较就能挡掉。
+    const QChar head = name.at(0).toUpper();   // QChar 折叠，无分配
+    if (head != QLatin1Char('C') && head != QLatin1Char('T') && head != QLatin1Char('J')
+        && head != QLatin1Char('G') && head != QLatin1Char('B') && head != QLatin1Char('F'))
+        return false;
     for (const char* n : kNames) {
-        if (upperName == QLatin1String(n)) return true;
+        if (name.compare(QLatin1String(n), Qt::CaseInsensitive) == 0) return true;
     }
     return false;
 }

@@ -1140,6 +1140,13 @@ void validateScriptLines(const LoadContext& ctx, ScriptData& script, ParseDiagno
         return constant;
     };
     for (auto& line : script.lines) {
+        // 非指令行（空行/注释/# 预处理/@ 函数标签/$ 跳转标签/无法解析的行）在下面
+        // **没有任何会命中的分支**：condition / columnDefaults 只在指令行有值，
+        // functionName / assignOperator 只在指令行被赋值，标签行唯一的操作数是
+        // Operand(labelName)（不带 AST），而 validate 拿到空 AST 立刻返回。
+        // 直接跳过：省掉每行的 isScopedVariableLine（重新扫一遍 `VARI/VARS` 形态）
+        // 与 isCallFamilyInstruction —— eraTW 实测 686,665/2.55M 行属于此类。
+        if (line.kind != LineKind::Instruction) continue;
         // 指令的「变量槽」实参允许整数组出现（`VARSET 集合`、`CALL F(集合)`）：
         // 这些位置**不该**要求下标，否则 2 维以上数组会被误判「缺少参数或下标维数错误」
         // （eraTW 里 CALL 的 REF 实参 / VARSET 的整数组实参全是这种写法）。
@@ -1155,7 +1162,7 @@ void validateScriptLines(const LoadContext& ctx, ScriptData& script, ParseDiagno
             // `CALL F(WPN_MATERIAL_NEEDS)`，2 维声明）会被 requireIndices 误报
             // 「缺少参数或下标维数错误」。C# ConvertArg 对 REF 形参收的就是
             // **整数组变量**（eraTW/FL3.8 都这么写）。
-            || AstBuilder::isCallFamilyInstruction(line.functionName.toUpper())
+            || AstBuilder::isCallFamilyInstruction(line.functionName)
             // VARI/VARS（声明型语句）：目标操作数是裸名字，维度由声明决定
             //（applyScopedVariableLine 重建后的 [目标, 初值] 同样不该查下标）。
             || isScopedVariableLine(line.raw);

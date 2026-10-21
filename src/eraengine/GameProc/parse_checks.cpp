@@ -63,16 +63,27 @@ const UserFunctionInfo* userFunctionIn(const ParseIrView& view, const QString& n
     return it == view.functions->constEnd() ? nullptr : &it.value();
 }
 
+// 全库标签名并集（大小写折叠后的键）：labelPositions 的键就是
+// `line.labelName.toUpper()`（era_parse_table.cpp 的装载循环），因此这里直接并
+// 键即可，与「逐个脚本 contains(folded)」是同一个成员判定 —— 重复标签只覆盖同键。
+// **只活在一次 pass 调用内**（驱动层建、任务里查）：LSP 会增删脚本，跨调用缓存会过期。
+QSet<QString> collectLabelNames(const ParseIrView& view) {
+    QSet<QString> all;
+    if (!view.scripts) return all;
+    for (auto it = view.scripts->constBegin(); it != view.scripts->constEnd(); ++it) {
+        const QHash<QString, int>& positions = it.value().labelPositions;
+        for (auto p = positions.constBegin(); p != positions.constEnd(); ++p)
+            all.insert(p.key());
+    }
+    return all;
+}
+
 // EraParseTable::hasLabel 的同源判据（全库 @标签存在性）：
 // labelPositions 是「大写折叠」的，故查表前先 toUpper。
-// 成员版另有 m_hasLabelCache；这里不缓存 —— 结果相同，收尾只跑一趟。
-bool hasLabelInScripts(const ParseIrView& view, const QString& label) {
-    if (!view.scripts) return false;
-    const QString folded = label.toUpper();
-    for (auto it = view.scripts->constBegin(); it != view.scripts->constEnd(); ++it) {
-        if (it.value().labelPositions.contains(folded)) return true;
-    }
-    return false;
+// 旧实现是「每条 CALL 扫全部脚本 × contains」（eraTW ≈ 9.4 万 CALL × 2258 脚本
+// ≈ 2×10⁸ 次哈希探测）；现在只查驱动层建好的并集，一次哈希。
+bool hasLabelInScripts(const QSet<QString>& allLabels, const QString& label) {
+    return allLabels.contains(label.toUpper());
 }
 
 // ---------------------------------------------------------------------------
@@ -151,28 +162,30 @@ void runPerScript(const ParseIrView& view, ParseDiagnostics& diags, Fn&& fn) {
 //     语义就是「找不到就跳过」，不报（对齐 C# func.Function.IsTry()）
 //   * CALLEVENT / BEGIN / FUNC：C# 不做目标检查（CALLEVENT 缺目标静默），跳过
 void resolveStaticTargets(const ParseIrView& view, ParseDiagnostics& diags) {
-    runPerScript(view, diags, [&view](const ScriptData& script, ParseDiagnostics& local) {
-        resolveStaticTargetsInScript(view, script, local);
+    // 全库标签索引**每个 pass 建一次**（串行、在驱动层）：任务里只做 O(1) 成员判定。
+    const QSet<QString> allLabels = collectLabelNames(view);
+    runPerScript(view, diags, [&view, &allLabels](const ScriptData& script, ParseDiagnostics& local) {
+        resolveStaticTargetsInScript(view, script, local, allLabels);
     });
+}
+
+// 目标名：常量目标返回标签名（去掉 @/$ 前缀）；运行期求值返回空（不判定）。
+static QString staticCallTarget(const LogicalLine& line) {
+    if (line.arguments.isEmpty()) return {};
+    QString name = line.arguments.first().raw.trimmed();
+    if (name.isEmpty()) return {};
+    if (name.startsWith(QLatin1Char('@')) || name.startsWith(QLatin1Char('$')))
+        name.remove(0, 1);
+    if (name.contains(QLatin1Char('%')) || name.contains(QLatin1Char('{'))
+        || name.contains(QLatin1String("[[")))
+        return {};   // FORM 名 / [[Rename]] 占位：运行期才知道
+    return name;
 }
 
 // 逐脚本实现：结论只依赖 (view, data)，diags 是调用方给的**本线程独占** sink，
 // 因而可以被驱动端（runPerScript）并行调用。
 void resolveStaticTargetsInScript(const ParseIrView& view, const ScriptData& data,
-                                  ParseDiagnostics& diags) {
-    // 目标名：常量目标返回标签名（去掉 @/$ 前缀）；运行期求值返回空（不判定）。
-    const auto staticTarget = [](const LogicalLine& line) -> QString {
-        if (line.arguments.isEmpty()) return {};
-        QString name = line.arguments.first().raw.trimmed();
-        if (name.isEmpty()) return {};
-        if (name.startsWith(QLatin1Char('@')) || name.startsWith(QLatin1Char('$')))
-            name.remove(0, 1);
-        if (name.contains(QLatin1Char('%')) || name.contains(QLatin1Char('{'))
-            || name.contains(QLatin1String("[[")))
-            return {};   // FORM 名 / [[Rename]] 占位：运行期才知道
-        return name;
-    };
-
+                                  ParseDiagnostics& diags, const QSet<QString>& allLabels) {
     // 本脚本各函数的 $标签集合（大小写折叠：标签比较遵循 ICFunction 语义）。
     QHash<QString, QSet<QString>> dollarLabels;
     for (const LogicalLine& line : data.lines) {
@@ -199,11 +212,11 @@ void resolveStaticTargetsInScript(const ParseIrView& view, const ScriptData& dat
             break;   // TRY* 系（运行期静默跳过）与 CALLEVENT/FUNC 不检查
         }
         if (!checkFunction && !checkLabel) continue;
-        const QString target = staticTarget(line);
+        const QString target = staticCallTarget(line);
         if (target.isEmpty()) continue;
         QString message;
         if (checkFunction) {
-            if (hasLabelInScripts(view, target)) {
+            if (hasLabelInScripts(allLabels, target)) {
                 // 目标存在 -> 装载期就把实参校验掉（对齐 C# CALL_Instruction.SetJumpTo
                 // 里调用 ConvertArg；C# 只在「常量目标且能找到」时才做这一步）。
                 checkCallStatementArgs(view, line, target, diags);

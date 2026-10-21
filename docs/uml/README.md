@@ -91,6 +91,14 @@ plantuml -txmi docs/uml/01-load-classes.puml
     `emitEffects`（规范序 `callStack → space → position → jump`），`clear()` 是唯一
     反序例外（`positionChanged` 先、`callStackChanged` 后），两者都由
     `test_position_state` 录信号断言。文件里 `rg EraParseTable|m_[a-z]` = 0。
+- **收尾并行由数据形状决定**：`3/6 finalizeValidation` 与 `4/5/6` 三个只读检查都是
+  「逐脚本独立、只写本脚本的行或本任务的诊断」，驱动统一为：脚本名排序 → 每任务独占
+  `ParseDiagnostics` → `QtConcurrent::blockingMapped` → 按名字序归并（脚本 < 4 或单线程
+  时串行直跑）。归并序只由输入决定，与装载序 / 哈希种子 / 线程完成序无关；
+  `sortForOutput()` 仍是同排序键重复项的最后兜底。3/6 的两半（逐行校验 +
+  `validateArguments`）有脚本内顺序依赖，故合进同一个任务。实测 eraTW（2258 脚本，
+  12 线程）：`4/5/6` 10.5s → 1.9s、`3/6` 9.1s → 1.7s、`markLoadComplete` 23.3s → 8.3s；
+  未排序输出与基线逐字节相同。
 - **存档有独立的键映射层**：`erasave::Map`（`save_variable_map.{h,cpp}`）是「存档条目 ↔ 变量身份」的
   唯一一张表，`Entry = { name, key, slot, dimensions, user, persisted }`。文件里写的是**裸名**，
   身份不进文件；存档层不再认识 `FUNC\x1fNAME` 这种键形态，也不必改那 31 个字符串键容器。

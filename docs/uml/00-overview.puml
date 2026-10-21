@@ -81,6 +81,10 @@ note right of Finish
   PositionEffects 的位，类里只剩「打包视图 + 按 Effects emit」的壳子。
   EraParseTable 只剩「解析入口 + pass 表 + 阶段机 + 位置区壳子 + getter」。
 
+  并行也是数据形状决定的：3/6 与 4/5/6 都是「逐脚本独立 + 只写自己的诊断」，
+  驱动一律「脚本名排序 → 每任务独占 ParseDiagnostics → 按名字序归并」。
+  实测 eraTW：4/5/6 10.5s → 1.9s，3/6 9.1s → 1.7s（12 线程）。
+
   阶段机显式：Empty → Loading → Bound → Finalized。
   pass 表的 gate / phaseAfter 是数据；
   越界调用 = qWarning + no-op（不 assert、不写诊断）。

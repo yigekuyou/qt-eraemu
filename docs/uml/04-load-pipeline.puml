@@ -92,9 +92,11 @@ end
 
 group 3/6 参数校验【改状态：置 line.isError；出诊断】
   T -> LP : finalizeValidation(ctx)
+  LP -> LP : 逐脚本任务（每任务独占 ParseDiagnostics）
   LP -> D : validateExpression（维数 / 常量下标 vs lengths / 类型）
   LP -> D : columnDefaults（DT_COLUMN_OPTIONS DEFAULT）
   LP -> D : kArgCheck / kExprParse / kIdentifierScope / kSharpLine
+  note right : 两半（逐行校验 + validateArguments）同在一个脚本任务里：\n后半读前半刚写的 line.argument.typeOk（脚本内顺序依赖）；\n归并按脚本名序 —— 只由输入决定，与调度无关。
 end
 
 group 只读检查步骤（不改变运行行为）
@@ -102,6 +104,7 @@ group 只读检查步骤（不改变运行行为）
   T -> PC : 5/6 checkStructures（IF/FOR/REPEAT… 配对）
   T -> PC : 6/6 checkStaticValues（除零 / 负下标 / 尺寸 / 名字表）
   PC -> D : 追加诊断（ParseIrView 只读，诊断是唯一输出）
+  note right of PC : 三个步骤都是逐脚本任务（runPerScript）：\n脚本名排序 → 每任务独占 sink → 按名字序归并；\neraTW 实测 10.5s → 1.9s（12 线程）。
   opt 7（可选，默认关闭）
     T -> D : checkNotCalledFunctions（未被调用的函数）
   end

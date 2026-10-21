@@ -25,11 +25,13 @@
 #include <QHash>
 #include <deque>
 #include <functional>
+#include <utility>
 #include <QtQml/qqmlregistration.h>
 
 #include "variable_types.h"
 #include "variable_config.h"
 #include "era_binary_data.h"
+#include "save_variable_map.h"
 #include "ast/variable_table.h"
 #include "ast/print_template.h"
 
@@ -202,7 +204,17 @@ public:
 		[[nodiscard]] QString csvCharaStr(const QString& name, int charaId, int index) const;
 
         // C#1808 typed snapshots used by all engine persistence entry points.
+        // 只登记指针；**可用性**由 saveReadiness() 回答（见下）。
         void setSaveVariableTable(const VariableTable* table) { m_saveVariableTable = table; }
+        // ---- 存档前置条件（显式，不再靠调用顺序）----
+        // captureBinarySave 按 erasave::Map（由 VariableTable 声明构建）取条目：
+        //   * 声明表没接上 -> 只写内建条目，用户 SAVEDATA 变量静默丢失；
+        //   * 声明表未定稿（resolveDimensions 未跑）-> 形状按声明文本猜，静默错。
+        // 两种都不崩，所以必须可观察。返回值是数据；checkSaveReadiness() 负责
+        // qWarning 到 stderr（不进 ParseDiagnostics），并返回是否 Ready。
+        enum class SaveReadiness : quint8 { Ready, NoDeclarationTable, DeclarationsNotResolved };
+        [[nodiscard]] SaveReadiness saveReadiness() const;
+        [[nodiscard]] bool checkSaveReadiness(const char* operation) const;
         // 把 ERB/ERH 声明的变量恢复成初值（RESETDATA 与读档共用）。
         // 批量直写（存储键每声明一次 / memset 清零 / 下标内联），不再逐元素
         // 调 setGlobal*D + coordinates()（后者每个元素分配一个 QList）。
@@ -283,11 +295,18 @@ public:
         [[nodiscard]] eravar::ScopeId privateScopeId() const { return m_privateScopeId; }
         // 填充某个函数的作用域名表（名字 -> 存储键），并把「当前帧」指向它。
         // 名字表按 scopeId 常驻：不同函数的私有名互不覆盖，换函数只改指针。
+        //
+        // 装载期名表已安装（installPrivateScopeTable）后，本函数**只记录当前帧**，
+        // names 参数不再参与任何构建 —— 「函数里有哪些私有变量」的唯一真相是
+        // 声明（VariableTable::buildPrivateNameTable），装载期就定好了。
+        // 签名保留：安装前的测试路径（先手工 setPrivateScope 再求值）仍用它建表。
         void setPrivateScope(const QString& function, const QStringList& names) {
             const QString fkey = function.toUpper();
             const eravar::ScopeId scope = eravar::internName(fkey);
             m_privateScopeName = fkey;
             m_privateScopeId = scope;
+            if (m_privateTableInstalled) return;   // 单一真相：装载期名表
+            // 未安装（装载前 / 纯测试的存储对象）：按调用方给的名字临时建表。
             // 已登记过的作用域直接复用（声明表装载后不变）。
             if (m_privateNames.contains(scope)) return;
             QHash<QString, QString> next;
@@ -297,6 +316,17 @@ public:
                             eravar::makePrivateStorageKey(fkey, name));
             m_privateNames.insert(scope, next);
         }
+        // 安装装载期建立的私有名表（EraParseTable 在声明定稿后调用一次）。
+        // **前置条件**：声明（VariableTable 的 Local 声明）已定稿 —— 由调用方
+        // 保证，并且这里用 m_privateTableInstalled 把「已安装」变成可观察状态：
+        // 安装后 setPrivateScope 的建表分支彻底关闭（换函数零分配）。
+        // 重复安装允许（整表替换，不做增量合并）—— 重载会先 clearForReload。
+        void installPrivateScopeTable(QHash<eravar::ScopeId, QHash<QString, QString>> table) {
+            m_privateNames = std::move(table);
+            m_privateTableInstalled = true;
+        }
+        // 名表是否已由装载期安装（false = setPrivateScope 仍按调用方名字建表）。
+        [[nodiscard]] bool privateScopeTableInstalled() const { return m_privateTableInstalled; }
         // Emuera 的 `大文字小文字の違いを無視する:YES`（ICVariable）语义：
         // 标识符大小写不敏感，所有存储键统一用大写，写 A 与读 a 落到同一槽位。
         // 否则 `Mark`/`MARK` 会被当成两个变量，表现为「变量似乎不可变」。
@@ -505,6 +535,12 @@ public:
 		// ================= Expression Evaluation =================
 
 private:
+		// ---- 存档映射层的存储侧：条目（erasave::Entry）-> 容器取值/写值 ----
+		// 只做「容器类型不同」的分派；条目属于哪个容器由 save_variable_map 决定。
+		[[nodiscard]] EraBinaryData::Variable readSaveEntry(const erasave::Entry& entry, int charaSlot) const;
+		void writeSaveEntry(const erasave::Entry& entry, int charaSlot, int x, int y, int z,
+		                    qint64 number, const QString& text);
+
 		// 扩展 3D 字符串及更多维度的全局容器
 		QHash<QString, QList<QList<QList<FlatStringValue>>>> m_globalStr3D;
 
@@ -535,7 +571,13 @@ private:
 		QHash<QString, QVariant> m_parameters;
         // 私有作用域名表：scopeId（函数名 intern id） -> name(upper) -> storage key。
         // 每个函数一张，互不覆盖；scope == 0 不在表中（顶层只有裸名）。
+        // 装载期由声明一次建好（VariableTable::buildPrivateNameTable ->
+        // installPrivateScopeTable），运行期只查不建。
         QHash<eravar::ScopeId, QHash<QString, QString>> m_privateNames;
+        // 名表是否已由装载期安装：true = setPrivateScope 不再建表（零分配换帧）。
+        // clearForReload / initialize（脚本换了一批）把它复位成 false，
+        // 下一次装载收尾再装。
+        bool m_privateTableInstalled = false;
         QHash<QString, QString> m_references;
         QString m_privateScopeName;   // 当前帧的私有作用域函数名（大写）
         eravar::ScopeId m_privateScopeId = eravar::kGlobalScope; // 同上 intern id

@@ -2327,6 +2327,9 @@ bool ExecutionEngine::loadSaveSnapshot(qint64 index) {
 
 bool ExecutionEngine::writeSaveSnapshot(qint64 index,const QString& description) {
     if(!m_storage || m_gameDataDir.isEmpty() || index<0 || index>INT_MAX || description.contains('\n') || description.contains('\r')) return false;
+    // 前置条件显式化：装载已完成 + 声明可建表。不 Ready 时按旧行为继续
+    // （安全回落；存档字节不变），但 qWarning 到 stderr —— 不再静默丢用户变量。
+    (void)m_storage->checkSaveReadiness("SAVE");
     auto snapshot=m_storage->captureBinarySave(EraBinaryData::FileType::Normal);
     snapshot.description=description; snapshot.uniqueCode=globalUniqueCode();
     snapshot.scriptVersion=m_gameBaseData ? m_gameBaseData->scriptVersion() : 0;
@@ -2349,6 +2352,7 @@ bool ExecutionEngine::handleLoadGlobal() {
 
 bool ExecutionEngine::handleSaveGlobal() {
     if(!m_storage || m_gameDataDir.isEmpty()) return true;
+    (void)m_storage->checkSaveReadiness("SAVEGLOBAL");
     auto captured=m_storage->captureBinarySave(EraBinaryData::FileType::Global);
     captured.uniqueCode=globalUniqueCode(); captured.scriptVersion=m_gameBaseData ? m_gameBaseData->scriptVersion() : 0;
     QByteArray bytes;
@@ -2905,6 +2909,7 @@ bool ExecutionEngine::handleSaveVarCommand(const LogicalLine& line)
         }
     }
 
+    (void)m_storage->checkSaveReadiness("SAVEVAR");
     VariableSnapshot snapshot=m_storage->captureBinarySave(EraBinaryData::FileType::Var);
     // SAVEVAR permits explicitly selected GLOBAL entries as an EE extension.
     const auto global=m_storage->captureBinarySave(EraBinaryData::FileType::Global);

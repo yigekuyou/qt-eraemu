@@ -25,10 +25,6 @@
 #include "expression_evaluator.h"
 #include "ast/system_variables.h"
 
-namespace {
-int shapeCount(const QList<int>& dims);
-}
-
 // PALAMLV/EXPLV 阈值默认表来自 C# ConfigData 的 _Replace.csv 默认值：
 //   PALAMLV {0,100,500,3000,10000,30000,60000,100000,150000,250000}
 //   EXPLV   {0,1,4,20,50,200}
@@ -168,6 +164,8 @@ void VariableStorage::clearForReload()
     std::swap(m_variableTypes, defaults.m_variableTypes);
     std::swap(m_variableIdentifiers, defaults.m_variableIdentifiers);
     std::swap(m_variableConfig, defaults.m_variableConfig);
+    // 名表随 m_privateNames 一起作废（重载后由装载收尾重新安装）。
+    m_privateTableInstalled = false;
 }
 
 // 从 VariableSize.csv 读取系统数组尺寸并应用
@@ -306,7 +304,11 @@ void VariableStorage::initialize(int maxCharacters, int localSize)
 		Q_UNUSED(maxCharacters)
 		qDebug() << "[var] initialize localSize =" << localSize;
 		// 脚本（重）装载后私有作用域的名字表可能变化 —— 整张作用域表作废。
+		// 复位「已安装」标记：下一次装载收尾（EraParseTable::finalizeBindings ->
+		// installPrivateScopeTable）会重新装；在那之前 setPrivateScope 退回按
+		// 调用方名字建表（旧行为），不会出现「已安装但空表」的静默退化。
 		m_privateNames.clear();
+		m_privateTableInstalled = false;
 		m_privateScopeName.clear();
 		m_privateScopeId = eravar::kGlobalScope;
 		if (localSize > 0) {
@@ -757,7 +759,7 @@ void VariableStorage::restoreDeclaredDefaults()
 			: d.name.toUpper();
 		const QString storageKey = resolvedStorageName(key);
 		const QList<int> dims = d.lengths.isEmpty() ? QList<int>{1} : d.lengths;
-		const int count = shapeCount(dims);
+		const int count = erasave::shapeCount(dims);
 		const int defaultCount = d.type == OperandType::Str ? int(d.defaultStr.size())
 		                                                    : int(d.defaultInt.size());
 		if (d.dimension <= 1) {
@@ -898,7 +900,11 @@ void VariableStorage::resetForNewGame()
 		purgePrivate(m_globalStr1D);
 		purgePrivate(m_globalStr2D);
 		purgePrivate(m_globalStr3D);
-		m_privateNames.clear();
+		// 私有名表是**装载期元数据**（脚本声明的一部分），不是每局数据：
+		// RESETDATA 不能清掉它 —— 安装后 setPrivateScope 已不再建表，清掉就会让
+		// 所有私有名静默退化成裸名（又是另一个变量）。未安装（测试手工路径）时
+		// 保持旧行为清空。
+		if (!m_privateTableInstalled) m_privateNames.clear();
 		m_privateScopeName.clear();
 		m_privateScopeId = eravar::kGlobalScope;
 
@@ -1603,50 +1609,185 @@ void VariableStorage::setSystemVariable(const QString &name, int index, qint64 v
 }
 
 namespace {
-struct SaveShape { QString name; bool string = false; QList<int> dimensions; bool user = false; };
-QList<SaveShape> saveShapes(const VariableConfig& config, const VariableTable* table,
-                           bool character, bool global) {
-    QList<SaveShape> shapes;
-    const auto add = [&](const QString& name, bool string, int rank) {
-        QList<int> dims;
-        if (rank == 1) dims = {qMax(0, config.getSize1D(name))};
-        if (rank == 2) { auto d = config.getSize2D(name); dims = {qMax(0,d.first),qMax(0,d.second)}; }
-        if (rank == 3) { auto d = config.getSize3D(name); dims = {qMax(0,d.value(0)),qMax(0,d.value(1)),qMax(0,d.value(2))}; }
-        shapes.append({name,string,dims,false});
+// 存档单元的逐元素形状换算（最后一维连续，与旧的 coordinates() 一致）。
+// 这两个模板只负责「按下标取一格」的循环；格子从哪来由各 Slot 分支绑定。
+template <typename Cell>
+void appendInts(EraBinaryData::Variable& v, Cell&& cell)
+{
+    const QList<int>& dims = v.dimensions;
+    const int axes = dims.size();
+    const int d0 = qMax(1, dims.value(0)), d1 = qMax(1, dims.value(1)), d2 = qMax(1, dims.value(2));
+    const int n = erasave::shapeCount(dims);
+    for (int i = 0; i < n; ++i) {
+        int x = 0, y = 0, z = 0;
+        if (axes <= 1) x = i % d0;               // 标量（rank 0）只有 i = 0
+        else if (axes == 2) { x = (i / d1) % d0; y = i % d1; }
+        else { z = i % d2; const int t = i / d2; y = t % d1; x = t / d1; }
+        v.integers.append(cell(x, y, z));
+    }
+}
+template <typename Cell>
+void appendStrings(EraBinaryData::Variable& v, Cell&& cell)
+{
+    const QList<int>& dims = v.dimensions;
+    const int axes = dims.size();
+    const int d0 = qMax(1, dims.value(0)), d1 = qMax(1, dims.value(1)), d2 = qMax(1, dims.value(2));
+    const int n = erasave::shapeCount(dims);
+    for (int i = 0; i < n; ++i) {
+        int x = 0, y = 0, z = 0;
+        if (axes <= 1) x = i % d0;
+        else if (axes == 2) { x = (i / d1) % d0; y = i % d1; }
+        else { z = i % d2; const int t = i / d2; y = t % d1; x = t / d1; }
+        v.strings.append(cell(x, y, z));
+    }
+}
+} // namespace
+
+// 存档映射层的存储侧：一个条目 -> 一个存档变量。
+// 键一律走 storageKeyFor(VariableKey)（id -> 存储键的唯一入口），不再由
+// 档案代码按名字重新解析作用域/大小写/REF。
+EraBinaryData::Variable VariableStorage::readSaveEntry(const erasave::Entry& entry, int charaSlot) const
+{
+    EraBinaryData::Variable v;
+    v.name = entry.name;
+    v.string = entry.string;
+    v.dimensions = entry.dimensions;
+    const QString& key = storageKeyFor(entry.key);
+    switch (entry.slot) {
+    case erasave::Slot::SystemInt1D:
+        appendInts(v, [&](int x, int, int) { return getSystemVariable(entry.name, x); });
+        break;
+    case erasave::Slot::GlobalInt1D: {
+        const auto it = m_globalInt1D.constFind(key);
+        appendInts(v, [&](int x, int, int) -> qint64 {
+            return it != m_globalInt1D.constEnd() && x < it.value().size() ? it.value().at(x) : 0; });
+        break; }
+    case erasave::Slot::GlobalInt2D: {
+        const auto it = m_globalInt2D.constFind(key);
+        appendInts(v, [&](int x, int y, int) -> qint64 {
+            return it != m_globalInt2D.constEnd() && x < it.value().size() && y < it.value().at(x).size()
+                ? it.value().at(x).at(y) : 0; });
+        break; }
+    case erasave::Slot::GlobalInt3D: {
+        const auto it = m_globalInt3D.constFind(key);
+        appendInts(v, [&](int x, int y, int z) -> qint64 {
+            return it != m_globalInt3D.constEnd() && x < it.value().size() && y < it.value().at(x).size()
+                    && z < it.value().at(x).at(y).size() ? it.value().at(x).at(y).at(z) : 0; });
+        break; }
+    case erasave::Slot::GlobalStr1D:
+        appendStrings(v, [&](int x, int, int) { return getGlobalStr1DRaw(key, x); });
+        break;
+    case erasave::Slot::GlobalStr2D: {
+        const auto it = m_globalStr2D.constFind(key);
+        appendStrings(v, [&](int x, int y, int) -> QString {
+            return it != m_globalStr2D.constEnd() && x < it.value().size() && y < it.value().at(x).size()
+                ? it.value().at(x).at(y).text : QString(); });
+        break; }
+    case erasave::Slot::GlobalStr3D: {
+        const auto it = m_globalStr3D.constFind(key);
+        appendStrings(v, [&](int x, int y, int z) -> QString {
+            return it != m_globalStr3D.constEnd() && x < it.value().size() && y < it.value().at(x).size()
+                    && z < it.value().at(x).at(y).size() ? it.value().at(x).at(y).at(z).text : QString(); });
+        break; }
+    case erasave::Slot::CharaInt1D: {
+        const auto it = m_charaIntVars.constFind(key);
+        appendInts(v, [&](int x, int, int) -> qint64 {
+            return it != m_charaIntVars.constEnd() && charaSlot >= 0 && charaSlot < it.value().size()
+                    && x < it.value().at(charaSlot).size() ? it.value().at(charaSlot).at(x) : 0; });
+        break; }
+    case erasave::Slot::CharaInt2D: {
+        const auto it = m_charaIntVars3D.constFind(key);
+        appendInts(v, [&](int x, int y, int) -> qint64 {
+            return it != m_charaIntVars3D.constEnd() && charaSlot >= 0 && charaSlot < it.value().size()
+                    && x < it.value().at(charaSlot).size() && y < it.value().at(charaSlot).at(x).size()
+                ? it.value().at(charaSlot).at(x).at(y) : 0; });
+        break; }
+    case erasave::Slot::CharaStr1D: {
+        const auto it = m_charaStrVars.constFind(key);
+        appendStrings(v, [&](int x, int, int) -> QString {
+            return it != m_charaStrVars.constEnd() && charaSlot >= 0 && charaSlot < it.value().size()
+                    && x < it.value().at(charaSlot).size() ? it.value().at(charaSlot).at(x).text : QString(); });
+        break; }
+    case erasave::Slot::CharaStr2D: {
+        const auto it = m_charaStr2D.constFind(key);
+        appendStrings(v, [&](int x, int y, int) -> QString {
+            return it != m_charaStr2D.constEnd() && charaSlot >= 0 && charaSlot < it.value().size()
+                    && x < it.value().at(charaSlot).size() && y < it.value().at(charaSlot).at(x).size()
+                ? it.value().at(charaSlot).at(x).at(y).text : QString(); });
+        break; }
+    }
+    return v;
+}
+
+void VariableStorage::writeSaveEntry(const erasave::Entry& entry, int charaSlot, int x, int y, int z,
+                                     qint64 number, const QString& text)
+{
+    const QString& key = storageKeyFor(entry.key);
+    const auto put1 = [](auto& list, int i, const auto& value) {
+        if (list.size() <= i) list.resize(i + 1);
+        list[i] = value;
     };
-    const auto words = [](const char* text) { return QString::fromLatin1(text).split(' ', Qt::SkipEmptyParts); };
-    if (global) { add("GLOBAL",false,1); add("GLOBALS",true,1); }
-    else if (character) {
-        for (const auto& n : words("ISASSI NO")) add(n,false,0);
-        for (const auto& n : words("NAME CALLNAME NICKNAME MASTERNAME")) add(n,true,0);
-        for (const auto& n : words("BASE MAXBASE ABL TALENT EXP MARK PALAM SOURCE EX CFLAG JUEL RELATION EQUIP TEQUIP STAIN GOTJUEL NOWEX DOWNBASE CUP CDOWN TCVAR")) add(n,false,1);
-        add("CSTR",true,1); add("CDFLAG",false,2);
-    } else {
-        for (const auto& n : words("DAY MONEY ITEM FLAG TFLAG UP PALAMLV EXPLV EJAC DOWN RESULT COUNT TARGET ASSI MASTER NOITEM LOSEBASE SELECTCOM ASSIPLAY PREVCOM TIME ITEMSALES PLAYER NEXTCOM PBAND BOUGHT RANDDATA")) add(n,false,1);
-        for (char c='A'; c<='Z'; ++c) add(QString(QChar(c)),false,1);
-        add("SAVESTR",true,1); add("TSTR",true,1);
-        for (const auto& n : words("DITEMTYPE DA DB DC DD DE")) add(n,false,2);
-        add("TA",false,3); add("TB",false,3);
+    switch (entry.slot) {
+    case erasave::Slot::SystemInt1D: setSystemVariable(entry.name, x, number); break;
+    case erasave::Slot::GlobalInt1D: put1(m_globalInt1D[key], x, number); break;
+    case erasave::Slot::GlobalStr1D: put1(m_globalStr1D[key], x, FlatStringValue(text)); break;
+    case erasave::Slot::GlobalInt2D: {
+        auto& a = m_globalInt2D[key]; if (a.size() <= x) a.resize(x + 1);
+        put1(a[x], y, number); break; }
+    case erasave::Slot::GlobalStr2D: {
+        auto& a = m_globalStr2D[key]; if (a.size() <= x) a.resize(x + 1);
+        put1(a[x], y, FlatStringValue(text)); break; }
+    case erasave::Slot::GlobalInt3D: {
+        auto& a = m_globalInt3D[key];
+        if (a.size() <= x) a.resize(x + 1);
+        if (a[x].size() <= y) a[x].resize(y + 1);
+        put1(a[x][y], z, number); break; }
+    case erasave::Slot::GlobalStr3D: {
+        auto& a = m_globalStr3D[key];
+        if (a.size() <= x) a.resize(x + 1);
+        if (a[x].size() <= y) a[x].resize(y + 1);
+        put1(a[x][y], z, FlatStringValue(text)); break; }
+    case erasave::Slot::CharaInt1D:
+        if (charaSlot >= 0) { auto& a = m_charaIntVars[key]; if (a.size() <= charaSlot) a.resize(charaSlot + 1);
+                              put1(a[charaSlot], x, number); }
+        break;
+    case erasave::Slot::CharaStr1D:
+        if (charaSlot >= 0) { auto& a = m_charaStrVars[key]; if (a.size() <= charaSlot) a.resize(charaSlot + 1);
+                              put1(a[charaSlot], x, FlatStringValue(text)); }
+        break;
+    case erasave::Slot::CharaInt2D:
+        if (charaSlot >= 0) { auto& a = m_charaIntVars3D[key]; if (a.size() <= charaSlot) a.resize(charaSlot + 1);
+                              if (a[charaSlot].size() <= x) a[charaSlot].resize(x + 1);
+                              put1(a[charaSlot][x], y, number); }
+        break;
+    case erasave::Slot::CharaStr2D:
+        if (charaSlot >= 0) { auto& a = m_charaStr2D[key]; if (a.size() <= charaSlot) a.resize(charaSlot + 1);
+                              if (a[charaSlot].size() <= x) a[charaSlot].resize(x + 1);
+                              put1(a[charaSlot][x], y, FlatStringValue(text)); }
+        break;
     }
-    // declarationsRef：一次存/读档要调 2~4 次 saveShapes，旧写法每次都重建
-    // 18515 项的整表拷贝（每项多个 QString/QList 浅拷贝）。
-    if (table) for (const auto& d : table->declarationsRef()) {
-        if (!d.isSavedata || d.isConst || d.isReference || d.isArg
-            || d.scope != VarScope::Global || d.isCharaData != character || d.isGlobal != global) continue;
-        // The reference character loader has no 3D case.
-        if (character && d.dimension > 2) continue;
-        shapes.append({d.name,d.type == OperandType::Str,d.lengths.isEmpty() ? QList<int>{1} : d.lengths,true});
+}
+
+VariableStorage::SaveReadiness VariableStorage::saveReadiness() const {
+    if (m_saveVariableTable == nullptr) return SaveReadiness::NoDeclarationTable;
+    if (!m_saveVariableTable->dimensionsResolved()) return SaveReadiness::DeclarationsNotResolved;
+    return SaveReadiness::Ready;
+}
+
+bool VariableStorage::checkSaveReadiness(const char* operation) const {
+    switch (saveReadiness()) {
+    case SaveReadiness::Ready:
+        return true;
+    case SaveReadiness::NoDeclarationTable:
+        qWarning().noquote() << "[save]" << operation
+                             << "：没有接上声明表 —— 存档只含内建条目（用户 SAVEDATA 变量不会写入）";
+        return false;
+    case SaveReadiness::DeclarationsNotResolved:
+        qWarning().noquote() << "[save]" << operation
+                             << "：声明尚未定稿（resolveDimensions 未跑）—— 存档形状可能按声明文本猜";
+        return false;
     }
-    return shapes;
-}
-int shapeCount(const QList<int>& dims) {
-    qint64 count=1;
-    for (int n : dims) { if (n < 0 || n > 16*1024*1024 || (n && count > 16*1024*1024/n)) return 0; count*=n; }
-    return int(count);
-}
-// coordinates() 已删除：RESETDATA / 存读档的三个批量循环都改为内联换算
-//（最后一维连续：z = i%d2, y = (i/d2)%d1, x = i/(d1*d2)），不再为每个元素
-// 分配一个 QList。
+    return false;
 }
 
 EraBinaryData::Document VariableStorage::captureBinarySave(EraBinaryData::FileType type,
@@ -1654,65 +1795,23 @@ EraBinaryData::Document VariableStorage::captureBinarySave(EraBinaryData::FileTy
     auto* self=const_cast<VariableStorage*>(this);
     const auto context=localContext(); self->setLocalContext({});
     EraBinaryData::Document document; document.type=type;
-    const auto capture = [&](const SaveShape& s, int character) {
-        EraBinaryData::Variable v; v.name=s.name; v.string=s.string; v.dimensions=s.dimensions;
-        // 下标换算与 coordinates() 一致（最后一维连续）但不再逐元素分配 QList；
-        // 存储键/角色槽只解析一次（旧 getCharaStr/getGlobalInt1D 每元素都走
-        // storageName 的 toUpper + 两次哈希）。此处 setLocalContext({}) 已清空
-        // 私有作用域，resolvedStorageName 对广域名是恒等映射。
-        const QList<int>& dims=s.dimensions;
-        const int axisCount=dims.size();
-        const int d0=qMax(1,dims.value(0)), d1=qMax(1,dims.value(1)), d2=qMax(1,dims.value(2));
-        const int n=shapeCount(dims);
-        const bool system=hasSystemVariable(s.name);
-        const QString key=system ? s.name : resolvedStorageName(s.name);
-        const int slot=character>=0 ? resolveCharaIndex(character) : -1;
-        const auto charaInt1=m_charaIntVars.constFind(key);
-        const auto charaStr1=m_charaStrVars.constFind(key);
-        const auto gInt1=m_globalInt1D.constFind(key);
-        const auto gInt2=m_globalInt2D.constFind(key);
-        const auto gStr2=m_globalStr2D.constFind(key);
-        const auto gInt3=m_globalInt3D.constFind(key);
-        const auto gStr3=m_globalStr3D.constFind(key);
-        for(int i=0;i<n;++i) {
-            // 下标换算与 coordinates() 一致：z 连续，x = i/(d1*d2)，y = (i/d2)%d1
-            int x=0,y=0,z=0;
-            if(axisCount<=1) x=i%d0;   // rank-0 / 1 维共用（rank-0 只有 i=0）
-            else if(axisCount==2) { x=(i/d1)%d0; y=i%d1; }
-            else { z=i%d2; const int t=i/d2; y=t%d1; x=t/d1; }
-            if(character>=0) {
-                if(s.string) v.strings.append(axisCount<2
-                    ? (charaStr1!=m_charaStrVars.constEnd() && slot>=0 && slot<charaStr1.value().size() && x<charaStr1.value().at(slot).size()
-                       ? charaStr1.value().at(slot).at(x).text : QString())
-                    : m_charaStr2D.value(key).value(slot).value(x).value(y).text);
-                else v.integers.append(axisCount<2
-                    ? (charaInt1!=m_charaIntVars.constEnd() && slot>=0 && slot<charaInt1.value().size() && x<charaInt1.value().at(slot).size()
-                       ? charaInt1.value().at(slot).at(x) : 0)
-                    : getCharaInt3D(s.name,character,x,y));
-            } else if(s.string) {
-                v.strings.append(axisCount<2 ? getGlobalStr1DRaw(key,x)
-                    : axisCount==2 ? (gStr2!=m_globalStr2D.constEnd() && x<gStr2.value().size() && y<gStr2.value().at(x).size() ? gStr2.value().at(x).at(y).text : QString())
-                    : (gStr3!=m_globalStr3D.constEnd() && x<gStr3.value().size() && y<gStr3.value().at(x).size() && z<gStr3.value().at(x).at(y).size() ? gStr3.value().at(x).at(y).at(z).text : QString()));
-            } else v.integers.append(axisCount<2 ? (system ? getSystemVariable(s.name,x)
-                    : (gInt1!=m_globalInt1D.constEnd() && x<gInt1.value().size() ? gInt1.value().at(x) : 0))
-                : axisCount==2 ? (gInt2!=m_globalInt2D.constEnd() && x<gInt2.value().size() && y<gInt2.value().at(x).size() ? gInt2.value().at(x).at(y) : 0)
-                : (gInt3!=m_globalInt3D.constEnd() && x<gInt3.value().size() && y<gInt3.value().at(x).size() && z<gInt3.value().at(x).at(y).size() ? gInt3.value().at(x).at(y).at(z) : 0));
-        }
-        return v;
-    };
+    // 存档条目表（名字 / 身份 / 容器 / 形状）由声明构建；这里不再认识键的形态。
+    const erasave::Map map=erasave::Map::build(m_variableConfig,m_saveVariableTable,type);
+    const erasave::Map charaMap=(type==EraBinaryData::FileType::Normal || type==EraBinaryData::FileType::Character)
+        ? erasave::Map::build(m_variableConfig,m_saveVariableTable,EraBinaryData::FileType::Character)
+        : erasave::Map{};
     if(type==EraBinaryData::FileType::Normal || type==EraBinaryData::FileType::Character) {
         QList<int> indexes=selected;
         if(indexes.isEmpty()) for(int i=0;i<charaNum();++i) indexes.append(i);
-        const auto shapes=saveShapes(m_variableConfig,m_saveVariableTable,true,false);
         for(int index : indexes) {
             if(index<0 || index>=charaNum()) continue;
             EraBinaryData::Character c;
-            for(const auto& s:shapes) (s.user ? c.userDefined : c.builtins).append(capture(s,index));
+            for(const auto& e:charaMap.entries()) (e.user ? c.userDefined : c.builtins).append(readSaveEntry(e,resolveCharaIndex(index)));
             document.characters.append(c);
         }
     }
     if(type!=EraBinaryData::FileType::Character)
-        for(const auto& s:saveShapes(m_variableConfig,m_saveVariableTable,false,type==EraBinaryData::FileType::Global)) document.variables.append(capture(s,-1));
+        for(const auto& e:map.entries()) document.variables.append(readSaveEntry(e,-1));
     self->setLocalContext(context);
     return document;
 }
@@ -1744,26 +1843,27 @@ void VariableStorage::applyBinarySave(const EraBinaryData::Document& document) {
         restore(m_globalInt1D,keptI1); restore(m_globalInt2D,keptI2); restore(m_globalInt3D,keptI3);
         restore(m_globalStr1D,keptS1); restore(m_globalStr2D,keptS2); restore(m_globalStr3D,keptS3);
     }
-    const auto apply = [&](const EraBinaryData::Variable& v,const SaveShape& s,int character) {
-        if(v.string!=s.string || v.dimensions.size()!=s.dimensions.size()) return;
+    const erasave::Map charaMap=erasave::Map::build(m_variableConfig,m_saveVariableTable,EraBinaryData::FileType::Character);
+    const erasave::Map variableMap=erasave::Map::build(m_variableConfig,m_saveVariableTable,
+        document.type==EraBinaryData::FileType::Global ? EraBinaryData::FileType::Global
+        : document.type==EraBinaryData::FileType::Var ? EraBinaryData::FileType::Var
+                                                      : EraBinaryData::FileType::Normal);
+    const auto apply = [&](const EraBinaryData::Variable& v,const erasave::Entry& e,int character) {
+        if(v.string!=e.string || v.dimensions.size()!=e.dimensions.size()) return;
         // 下标换算与 coordinates() 一致（最后一维连续），但不再为每个元素分配
-        // QList；source 的轴序混合（v.dimensions 可能小于 s.dimensions，读不到
-        // 的位置按 0/空串补）也一并内联。读档要写 400 万个元素，这里曾是
-        // 「每元素一次 QList 分配 + 按名字的 setGlobal*D（storageName 哈希）」。
-        const QList<int>& dims=s.dimensions;
+        // QList；source 的轴序混合（v.dimensions 可能小于目标 dims，读不到的
+        // 位置按 0/空串补）也一并内联。
+        const QList<int>& dims=e.dimensions;
         const int axisCount=dims.size();
         // rank-0 形状（NAME/CALLNAME/NICKNAME/MASTERNAME/ISASSI/NO 的 dims 为空）：
         // 语义 = 单元素、下标全 0（shapeCount({}) 也返回 1）。
-        int vstride0=1,vstride1=1;   // v.dimensions 的后缀积（source 的轴序混合用）
+        int vstride0=1,vstride1=1;
         for(int axis=axisCount-2;axis>=0;--axis) {
             int vacc=1; for(int k=axis+1;k<axisCount;++k) vacc*=qMax(1,v.dimensions[k]);
             if(axis==0) vstride0=vacc; else vstride1=vacc;
         }
         const int d0=qMax(1,dims.value(0)), d1=qMax(1,dims.value(1)), d2=qMax(1,dims.value(2));
-        const int count=axisCount==0 ? 1 : shapeCount(dims);
-        // 非系统变量：存储键/角色槽只解析一次，直接写容器
-        const bool system=hasSystemVariable(s.name);
-        const QString key=system ? QString() : resolvedStorageName(s.name);
+        const int count=axisCount==0 ? 1 : erasave::shapeCount(dims);
         const int slot=character>=0 ? resolveCharaIndex(character) : -1;
         for(int i=0;i<count;++i) {
             int x=0,y=0,z=0,source=0; bool overlap=true;
@@ -1787,49 +1887,27 @@ void VariableStorage::applyBinarySave(const EraBinaryData::Document& document) {
             }
             const qint64 number=overlap ? v.integers.value(source) : 0;
             const QString text=overlap ? v.strings.value(source) : QString();
-            if(character>=0) {
-                if(s.string) {
-                    if(axisCount<2) setCharaStrRaw(key,slot,x,text);
-                    else { auto& a=m_charaStr2D[key]; if(a.size()<=slot)a.resize(slot+1); if(a[slot].size()<=x)a[slot].resize(x+1); if(a[slot][x].size()<=y)a[slot][x].resize(y+1); a[slot][x][y]=FlatStringValue(text); }
-                } else if(axisCount<2) setCharaIntRaw(key,slot,x,number);
-                else setCharaInt3D(s.name,character,x,y,number);
-            } else if(s.string) {
-                if(axisCount<2) { auto& vec=m_globalStr1D[key]; if(vec.size()<=x)vec.resize(x+1); vec[x]=FlatStringValue(text); }
-                else if(axisCount==2) { auto& a=m_globalStr2D[key]; if(a.size()<=x)a.resize(x+1); if(a[x].size()<=y)a[x].resize(y+1); a[x][y]=FlatStringValue(text); }
-                else { auto& a=m_globalStr3D[key]; if(a.size()<=x)a.resize(x+1); if(a[x].size()<=y)a[x].resize(y+1); if(a[x][y].size()<=z)a[x][y].resize(z+1); a[x][y][z]=FlatStringValue(text); }
-            } else if(axisCount<2) { if(system) setSystemVariable(s.name,x,number); else { auto& vec=m_globalInt1D[key]; if(vec.size()<=x)vec.resize(x+1,0); vec[x]=number; } }
-            else if(axisCount==2) { auto& a=m_globalInt2D[key]; if(a.size()<=x)a.resize(x+1); if(a[x].size()<=y)a[x].resize(y+1,0); a[x][y]=number; }
-            else { auto& a=m_globalInt3D[key]; if(a.size()<=x)a.resize(x+1); if(a[x].size()<=y)a[x].resize(y+1); if(a[x][y].size()<=z)a[x][y].resize(z+1,0); a[x][y][z]=number; }
+            writeSaveEntry(e,slot,x,y,z,number,text);
         }
     };
-    // 名字 -> shape 哈希：旧写法是 O(变量×shape) 双循环线性匹配（两边各几百项）。
-    const auto applyList = [&](const QList<EraBinaryData::Variable>& list,const QList<SaveShape>& shapes,int character) {
-        if(list.isEmpty() || shapes.isEmpty()) return;
-        QHash<QString,int> byName;
-        byName.reserve(shapes.size());
-        for(int i=0;i<shapes.size();++i) byName.insert(shapes.at(i).name,i);
-        for(const auto& v:list) {
-            const auto it=byName.constFind(v.name);
-            if(it!=byName.constEnd()) apply(v,shapes.at(it.value()),character);
-        }
+    const auto applyList = [&](const QList<EraBinaryData::Variable>& list,const erasave::Map& map,int character) {
+        for(const auto& v:list) if(const erasave::Entry* e=map.findByName(v.name)) apply(v,*e,character);
     };
     if(document.type==EraBinaryData::FileType::Normal || document.type==EraBinaryData::FileType::Character) {
-        const auto shapes=saveShapes(m_variableConfig,m_saveVariableTable,true,false);
         for(const auto& c:document.characters) {
             // Runtime slots must be distinct even when NO is repeated or the original list was reordered.
             int slot=0; for(int n:m_charaList) slot=qMax(slot,n+1);
             const int index=m_charaList.size(); m_charaList.append(slot);
-            for(const auto& s:shapes) {
-                EraBinaryData::Variable zero; zero.name=s.name; zero.string=s.string; zero.dimensions=s.dimensions;
-                if(s.string) zero.strings.resize(shapeCount(s.dimensions)); else zero.integers.resize(shapeCount(s.dimensions));
-                apply(zero,s,index);
+            for(const auto& e:charaMap.entries()) {
+                EraBinaryData::Variable zero; zero.name=e.name; zero.string=e.string; zero.dimensions=e.dimensions;
+                if(e.string) zero.strings.resize(erasave::shapeCount(e.dimensions));
+                else zero.integers.resize(erasave::shapeCount(e.dimensions));
+                apply(zero,e,index);
             }
-            applyList(c.builtins,shapes,index); applyList(c.userDefined,shapes,index);
+            applyList(c.builtins,charaMap,index); applyList(c.userDefined,charaMap,index);
         }
     }
-    auto shapes=saveShapes(m_variableConfig,m_saveVariableTable,false,document.type==EraBinaryData::FileType::Global);
-    if(document.type==EraBinaryData::FileType::Var) shapes.append(saveShapes(m_variableConfig,m_saveVariableTable,false,true));
-    applyList(document.variables,shapes,-1);
+    applyList(document.variables,variableMap,-1);
 }
 
 FlatStringValue VariableStorage::getStringSlot(const QString& name, const QList<int>& indices) const {

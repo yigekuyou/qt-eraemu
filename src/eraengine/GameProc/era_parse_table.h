@@ -138,7 +138,35 @@ public:
     explicit EraParseTable(ProcessState* state, ExecutionEngine* execEngine, QObject* parent = nullptr);
     ~EraParseTable();
 
-    // 装载一个脚本的完整 AST（只读区填充 + 标记区构建）
+    // -----------------------------------------------------------------
+    // 装载阶段（显式状态机）—— 每个公开入口声明它要求的阶段
+    //
+    //   Empty      : 没有脚本（构造后 / clear() 之后）。loadScript 从这里开始。
+    //   Loading    : 脚本/声明正在增长。loadScript、预登记、并行解析只允许在这里。
+    //   Bound      : markLoadComplete 的前三步（声明定稿 / 就地定型 / 参数校验）
+    //                已完成；只读检查步骤（4/5/6/7）允许运行，也可重复运行。
+    //   Finalized  : markLoadComplete 返回；只读区定型，不再编译新源码。
+    //
+    // 越界调用的定义：qWarning 到 stderr + no-op（返回 false / 不做任何事）。
+    // 不用 Q_ASSERT —— 这些入口在 release 里也必须安全，且“忽略”不会产生
+    // 与阶段相关的错误数据（诊断容器不变）。
+    // -----------------------------------------------------------------
+    enum class LoadPhase : quint8 { Empty, Loading, Bound, Finalized };
+    [[nodiscard]] LoadPhase loadPhase() const { return m_phase; }
+    [[nodiscard]] bool isFinalized() const { return m_phase == LoadPhase::Finalized; }
+    [[nodiscard]] bool isBoundOrLater() const {
+        return m_phase == LoadPhase::Bound || m_phase == LoadPhase::Finalized;
+    }
+    [[nodiscard]] static const char* loadPhaseName(LoadPhase phase);
+
+    // 只读收尾步骤的身份。运行次数是**状态**，不是注释：重复调用会重复产出
+    // 诊断，调用方可以据此决定是否先去重/先 clearDiagnostics。
+    enum class ReadOnlyPass : quint8 { StaticTargets, Structures, StaticValues };
+    [[nodiscard]] int readOnlyPassRunCount(ReadOnlyPass pass) const;
+
+    // 装载一个脚本的完整 AST（只读区填充 + 标记区构建）。
+    // 要求阶段：Empty / Loading。Bound / Finalized 调用 = **重新打开** Loading
+    // （增量 append：测试/LSP 路径；调用方随后必须再 markLoadComplete）。
     bool loadScript(const QString& scriptName, const QList<LogicalLine>& lines,
                     bool isHeaderFile = false, const QString& path = QString());
 
@@ -276,6 +304,9 @@ public:
 
     // 装载收尾（唯一入口）：全局声明定稿 → 全体脚本就地定型/重绑 → 统一出诊断，
     // 并把只读区定型（之后不再编译新源码）。
+    // 要求阶段：Empty / Loading（Empty = 空装载，仍算一次有效收尾）。
+    // 已 Finalized 时 qWarning + no-op —— 重复收尾会重复产出诊断，这里的 no-op
+    // 与“先 clear 再装”是等价的显式契约。
     void markLoadComplete();
 
     // 收尾子步骤：把 m_labelLists 每个同名列表按 (脚本名, 行号) 排序固化一次。
@@ -435,14 +466,21 @@ private:
     void resolveFunctionNodes();
     // 全体脚本绑定：字符串赋值/FUNC/变量类型/赋值 AST/函数调用解析（一趟）。
     void finalizeBindings();
+    // 私有作用域名表安装：由声明一次性建好（VariableTable::buildPrivateNameTable）
+    // 并装进 VariableStorage。**前置条件**：声明已定稿 —— 只允许在
+    // resolveGlobalDeclarations()（维数/函数类型）之后调用；finalizeBindings()
+    // 末尾是唯一调用点。安装后运行期 setPrivateScope 只记录当前帧，不再建表。
+    void installPrivateScopes();
     // 全体脚本校验：产出诊断，须在**全部绑定完成后**统一调用（跨文件前向引用）。
     void finalizeValidation();
 
 public:
     // ---- 只读检查步骤（可单独调用）---------------------------------------
     // 下列三步只读：不改变运行行为、不改 AST 语义，只读取已定型的数据并产出
-    // 诊断。可以脱离 markLoadComplete 单独调用（例如 LSP/测试按需重跑），
-    // 但**重复调用会重复产生诊断** —— 调用方负责去重或先 clearDiagnostics。
+    // 诊断。要求阶段：Bound / Finalized（即声明定稿 + 绑定完成之后）。
+    // **重复调用会重复产生诊断** —— 这是契约，且现在是可观察的：
+    // readOnlyPassRunCount() 记录每一步实际跑过几次，调用方据此去重或先
+    // clearDiagnostics。阶段不满足时 qWarning + no-op（不产出诊断）。
     void resolveStaticTargets();      // 收尾步骤 4：静态解析运行期跳转/调用目标（对齐 C# setJumpTo）
     // CALL 语句的实参校验（对齐 C# ConvertArg 在 setJumpTo 里的装载期调用）：
     // 只在「常量目标且目标存在」时下结论 —— 个数超限、字符串实参传整型形参、
@@ -474,13 +512,20 @@ private:
 
     // 收尾 pass 表条目（定义见 .cpp 的 EraParseTable::kLoadPasses）。
     // 表的顺序就是执行顺序；日志文案也来自这里，新增步骤只改表。
+    // 门控是**数据**（Gate），不是「读某个 bool 的 if」：markLoadComplete 里
+    // 只有一处按 Gate 求值，增删开关不必再改驱动逻辑。
+    enum class LoadPassGate : quint8 { Always, NotCalledWarning };
     struct LoadPass {
         const char* label;             // 日志步骤名（含 "N/6" 编号）
         void (EraParseTable::*fn)();   // 步骤入口
-        bool optional;                 // 受开关门控（未开启则整步跳过）
-        bool readOnly;                 // 只读（可独立调用/并行参考；当前仍串行）
+        LoadPassGate gate;             // 受哪个开关门控（数据）
+        LoadPhase phaseAfter;          // 本步完成后允许进入的阶段（数据）
     };
     static const LoadPass kLoadPasses[7];
+    [[nodiscard]] bool isGateOpen(LoadPassGate gate) const;
+    // 只读步骤的统一守卫：阶段不符 -> qWarning + false（调用方 no-op）；
+    // 阶段符合 -> 计数 + true。
+    [[nodiscard]] bool enterReadOnlyPass(ReadOnlyPass pass, const char* entryName);
     // 校验告警收集器：按脚本并行时每脚本各持一个，随后**按脚本顺序**合并。
     //   warnings : 告警文本，保持脚本内产生顺序；
     //   keys     : 与 warnings 一一对应；非空 = 该告警的「去重 key」
@@ -505,11 +550,17 @@ private:
     Frame popFrame();
     int lineCountFor(const QString& script) const;
 
-    bool m_finalized = false;
+    // 装载阶段（唯一真相；之前的 m_finalized 只是它的一个派生问题）。
+    LoadPhase m_phase = LoadPhase::Empty;
+    // 每个只读收尾步骤已运行的次数（重复调用契约的可观察状态）。
+    int m_readOnlyPassRuns[3] = {0, 0, 0};
     // 未被调用的函数告警开关（对齐 C# Config.FunctionNotCalledWarning；默认 IGNORE）
     bool m_functionNotCalledWarning = false;
     bool m_constProvidersReady = false;   // 常量/维数求值器是否已设置
     bool m_declarationsPreRegistered = false;   // 声明已由装载器预登记（loadScript 不再重复登记）
+    // 声明已定稿（resolveGlobalDeclarations 的 resolveDimensions 跑过）：
+    // 私有名表安装（installPrivateScopes）的前置条件。
+    bool m_declarationsResolved = false;
     QHash<QString, ScriptData> m_scripts;
     // perf：hasLabel 的结果按标签名记忆（此前每次 TRYCALL/TRYCALLFORM 都遍历
     // 全部脚本的 labelPositions；eraTW 地图逐字符 TRYCALLFORM 时是热点）。

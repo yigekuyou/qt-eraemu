@@ -304,13 +304,25 @@ private:
                                  const QHash<QString, QString>& decoded,
                                  const QSet<QString>& headers);
 
-    // 解析单个文件（线程安全：不接触任何共享可变状态）。
-    // cachedContent != nullptr 时直接使用（预扫描已解码），免去重复读取+解码。
-    // varTypes：预扫描得到的用户变量类型（只读；nullptr 时退回「类型未知」）。
-    ParsedErbFile parseOneFile(const QString& filePath, const FunctionTypes& types,
-                               const QString* cachedContent = nullptr,
-                               const QString& root = QString(),
-                               const LoadTimeVarTypes* varTypes = nullptr) const;
+    // ---- 并行装载的线程契约（写在类型上，不只是注释）----------------------
+    //
+    // 并行段 = 「每文件局部收集 + 主线程串行合并」：
+    //   * 输入全部是只读快照（下面这个结构里没有可变引用）；
+    //   * 输出是 ParsedErbFile 值（每文件独立，线程之间不共享）；
+    //   * 共享结构（EraParseTable / m_scripts / 诊断）只在主线程的
+    //     mergeParsedFile() 里写。
+    //
+    // 前置条件（parseOneFileReadOnly 入口断言）：
+    //   声明预登记已完成（beginDeclarationPreRegistration 之后）——
+    //   并行线程**只查** EraParseTable::variableTable()，绝不插入新声明。
+    struct ParallelParseInputs {
+        const FunctionTypes* types = nullptr;          // 函数名 -> 返回类型
+        const LoadTimeVarTypes* varTypes = nullptr;    // 用户变量类型（可空）
+        const QString* content = nullptr;              // 预扫描已解码文本（可空=读盘）
+    };
+    [[nodiscard]] ParsedErbFile parseOneFileReadOnly(const QString& filePath,
+                                                     const ParallelParseInputs& inputs,
+                                                     const QString& root) const;
 
     // 主线程合并（确定性顺序）
     bool mergeParsedFile(ParsedErbFile&& pf);

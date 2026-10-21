@@ -305,6 +305,7 @@ VariableTable::DeclStatus VariableTable::addChecked(const VariableDecl& decl) {
         m_localNameCount.insert(nameKey, c);
         if (c == 1) m_uniqueLocalType.insert(nameKey, decl.type);
         else m_uniqueLocalType.remove(nameKey);
+        m_dimensionsResolved = false;   // 新声明还没求值过维数
         return DeclStatus::Added;
     }
     const auto existing = m_globals.constFind(nameKey);
@@ -313,6 +314,7 @@ VariableTable::DeclStatus VariableTable::addChecked(const VariableDecl& decl) {
                                                        : DeclStatus::Conflict;
     }
     m_globals.insert(nameKey, decl);
+    m_dimensionsResolved = false;   // 新声明还没求值过维数
     return DeclStatus::Added;
 }
 
@@ -409,6 +411,29 @@ const QStringList& VariableTable::localNamesOfRef(const QString& function) const
     return *m_localNamesRefCache.insert(key, names);
 }
 
+// 装载期一次性建表：m_locals（声明）是唯一事实来源。
+// 键/值的规范化与旧路径**逐字节一致**：旧 setPrivateScope 用 toUpper() 做名字键、
+// 用 makePrivateStorageKey(fkey, name) 做值，这里同样走 toUpper()/唯一构造点。
+// 与 localNamesOfRef 同一过滤口径（跳过 CONST）：常量由常数表取值，不是存储槽。
+VariableTable::PrivateNameTable VariableTable::buildPrivateNameTable() const {
+    PrivateNameTable table;
+    table.reserve(m_locals.size());
+    for (auto it = m_locals.constBegin(); it != m_locals.constEnd(); ++it) {
+        const QString& function = it.key();   // m_locals 的键已是规范化（大写）形式
+        QHash<QString, QString> names;
+        names.reserve(it.value().size());
+        for (const VariableDecl& decl : it.value()) {
+            if (decl.isConst) continue;
+            names.insert(decl.name.toUpper(),
+                         eravar::makePrivateStorageKey(function, decl.name));
+        }
+        // 全是 CONST 的函数没有存储槽：不建空表（查询侧 miss 与空表结果相同）。
+        if (names.isEmpty()) continue;
+        table.insert(eravar::internName(function), names);
+    }
+    return table;
+}
+
 void VariableTable::clear() {
     m_constInt.clear();
     m_constArray.clear();
@@ -416,6 +441,7 @@ void VariableTable::clear() {
     m_constStr.clear();
     m_constExpr.clear();
     m_dimEvaluator = {};
+    m_dimensionsResolved = false;
     m_globals.clear();
     m_locals.clear();
     m_localNameCount.clear();
@@ -532,6 +558,7 @@ void VariableTable::resolveDimensions() {
     m_localsRefCache.clear();   // 维数已重写，丢弃 localsOfRef 缓存
     m_localNamesRefCache.clear();
     m_declarationsCache.clear();
+    m_dimensionsResolved = true;
     qDebug() << "[parse] 变量维数求值：全局" << m_globals.size() << "局部作用域" << m_locals.size()
              << "常量" << constCount() << "常量数组" << m_constArray.size();
 }

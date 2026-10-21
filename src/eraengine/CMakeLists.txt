@@ -103,7 +103,9 @@ GameData/ast/ast_builder.h
 GameData/ast/text_path.h
 
 
-GameData/Variable/variable_config.cpp
+GameData/Variable/save_variable_map.cpp
+GameData/Variable/save_variable_map.h
+    GameData/Variable/variable_config.cpp
 GameData/Variable/variable_config.h
 GameData/Variable/variable_storage.cpp
 GameData/Variable/variable_storage.h
@@ -361,6 +363,8 @@ eraengine_add_test(test_builtin_functions)
 eraengine_add_test(test_user_functions)
 eraengine_add_test(test_argument_types)
 eraengine_add_test(test_variable_table)
+eraengine_add_test(test_private_scope_table)
+add_test(NAME test_private_scope_table COMMAND test_private_scope_table)
 eraengine_add_test(test_erb_preprocessor)
 eraengine_add_test(test_async_load)
 eraengine_add_test(test_async_lifecycle)
@@ -374,6 +378,11 @@ eraengine_add_test(test_game_base_data)
 eraengine_add_test(test_variable_storage)
 eraengine_add_test(test_load_snapshots)
 add_test(NAME test_load_snapshots COMMAND test_load_snapshots)
+eraengine_add_test(test_save_variable_map)
+target_compile_definitions(test_save_variable_map PRIVATE ERA_TEST_SOURCE_DIR="${CMAKE_CURRENT_SOURCE_DIR}/test")
+add_test(NAME test_save_variable_map COMMAND test_save_variable_map)
+eraengine_add_test(test_load_contracts)
+add_test(NAME test_load_contracts COMMAND test_load_contracts)
 eraengine_add_test(test_era_binary_data)
 target_compile_definitions(test_era_binary_data PRIVATE ERA_TEST_SOURCE_DIR="${CMAKE_CURRENT_SOURCE_DIR}/test")
 add_test(NAME test_era_binary_data COMMAND test_era_binary_data)

@@ -2910,6 +2910,7 @@ bool ExpressionEvaluator::evaluateBuiltin(const FunctionNode &node, VariableStor
         const QString path = characterFilePath(S(0));
         QList<int> indexes;
         for (int i = 2; i < node.arguments().size(); ++i) indexes.append(int(I(i)));
+        (void)storage->checkSaveReadiness("SAVECHARA");
         auto captured = storage->captureBinarySave(EraBinaryData::FileType::Character,indexes);
         captured.description=S(1);
         captured.uniqueCode=gameBaseData ? gameBaseData->scriptUniqueCode() : 0;

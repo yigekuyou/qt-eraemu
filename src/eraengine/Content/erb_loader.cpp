@@ -548,15 +548,22 @@ ErbLoader::FunctionTypes ErbLoader::scanFunctionTypes(const QString& content) co
 // ---------------------------------------------------------------------------
 // 单文件解析（线程安全）
 // ---------------------------------------------------------------------------
-ParsedErbFile ErbLoader::parseOneFile(const QString& filePath, const FunctionTypes& types,
-                                    const QString* cachedContent, const QString& root,
-                                    const LoadTimeVarTypes* varTypes) const {
+ParsedErbFile ErbLoader::parseOneFileReadOnly(const QString& filePath,
+                                              const ParallelParseInputs& inputs,
+                                              const QString& root) const {
+    // 线程契约（可观察）：并行解析时声明必须已预登记 —— 之后的查询只读不插。
+    Q_ASSERT(inputs.types != nullptr);
+    Q_ASSERT(!m_parseTable || m_parseTable->declarationsPreRegistered());
+    Q_ASSERT(!m_parseTable || m_parseTable->loadPhase() == EraParseTable::LoadPhase::Loading);
+
+    const FunctionTypes& types = *inputs.types;
+    const LoadTimeVarTypes* varTypes = inputs.varTypes;
     ParsedErbFile pf;
     pf.path = filePath;
     pf.scriptName = scriptNameFor(root, filePath);
 
     // 预扫描阶段已读取并解码过：直接复用，省掉第二次读盘 + 解码 + 编码嗅探。
-    const QString content = cachedContent ? *cachedContent : readFileContent(filePath);
+    const QString content = inputs.content ? *inputs.content : readFileContent(filePath);
     if (!content.isEmpty()) {
         const QList<ErbSourceLine> source = prepareLines(content, filePath, &pf.warnings);
         pf.lines.reserve(source.size());
@@ -791,7 +798,8 @@ bool ErbLoader::loadDirectory(const QString& dirPath, int depth) {
         QList<ParsedErbFile> parsed = QtConcurrent::blockingMapped(slice,
             [this, &functionTypes, &varTypes, &decoded, dirPath](const QString& f) {
                 const QString content = decoded.value(f);   // 浅拷贝（隐式共享）
-                return parseOneFile(f, functionTypes, &content, dirPath, &varTypes);
+                const ParallelParseInputs inputs{&functionTypes, &varTypes, &content};
+                return parseOneFileReadOnly(f, inputs, dirPath);
             });
         tParse += pt.elapsed();
         QElapsedTimer mt; mt.start();
@@ -1256,7 +1264,8 @@ void ErbLoader::scheduleNextChunk() {
     m_chunkFuture = QtConcurrent::mapped(slice,
         [this, types, varTypes](const QString& f) {
             const QString content = m_async.decoded.value(f);   // 浅拷贝（隐式共享）
-            return parseOneFile(f, types, &content, m_async.dirPath, &varTypes);
+            const ParallelParseInputs inputs{&types, &varTypes, &content};
+            return parseOneFileReadOnly(f, inputs, m_async.dirPath);
         });
     m_chunkWatcher->setFuture(m_chunkFuture);
 }

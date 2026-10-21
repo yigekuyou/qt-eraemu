@@ -132,7 +132,7 @@ QSharedPointer<ExpressionNode> EraParseTable::expressionAst(const QString& expr,
     // 位置停在别处），所以 finalize 内部的调用必须走 expressionAstInScope 显式
     // 传 ownerFunction，否则会按「无作用域」解析。
     QString scope;
-    if (m_finalized) {
+    if (isFinalized()) {
         if (const auto* line = lineAt(m_currentScript, m_currentLine)) scope = line->ownerFunction;
     }
     return expressionAstInScope(expr, scope, quiet);
@@ -155,7 +155,7 @@ QSharedPointer<ExpressionNode> EraParseTable::parseScopedExpression(const QStrin
                                                                    const QString& scope,
                                                                    bool quiet, bool foldConstants,
                                                                    bool allowAfterFinalize) {
-    if (m_finalized && !allowAfterFinalize) return nullptr; // Source compilation is restricted to loading.
+    if (isFinalized() && !allowAfterFinalize) return nullptr; // Source compilation is restricted to loading.
     const QString key = expr.trimmed();
     if (key.isEmpty()) {
         return nullptr;
@@ -389,7 +389,7 @@ QList<LabelRef> EraParseTable::labels(const QString& name) const {
     // @SHOW_STATUS/@USERCOM…）和 CALLEVENT 每条事件链都走这里，eraTW 的
     // @SHOW_STATUS 同名口上一大把，每输入周期重排一次（QString 比较）。
     QList<LabelRef> out = m_labelLists.value(name.toUpper());
-    if (!m_finalized && out.size() > 1) {
+    if (!isFinalized() && out.size() > 1) {
         std::sort(out.begin(), out.end(), [](const LabelRef& a, const LabelRef& b) {
             if (a.script != b.script) return a.script < b.script;
             return a.line < b.line;
@@ -484,21 +484,28 @@ void EraParseTable::clear() {
     m_callStack.clear();
     m_depth = 0;
     m_jumped = false;
-    m_finalized = false;
+    m_phase = LoadPhase::Empty;
+    for (int& runs : m_readOnlyPassRuns) runs = 0;
     // 每次装载都是独立会话：下一次必须由装载器重新预登记声明，
     // 常量/维数求值器也必须随新的变量表重新装配（clearLoadedGame 已把
     // 求值器上的提供者清空，标志不复位就会带着空提供者进入下一局）。
     m_declarationsPreRegistered = false;
     m_constProvidersReady = false;
+    m_declarationsResolved = false;
     emit positionChanged(QString(), 0);
     emit callStackChanged(0);
 }
 
 bool EraParseTable::loadScript(const QString& scriptName, const QList<LogicalLine>& lines,
                               bool isHeaderFile, const QString& path) {
+    // 增量装载（测试/LSP 的 append 路径）：收尾之后再加脚本 = 重新打开装载
+    // 阶段，调用方必须再调一次 markLoadComplete 让新脚本被定型/重绑。
+    // 旧实现把 m_finalized 留在 true（新脚本不会被重绑，只是“碰巧”在测试里
+    // 因为 AST 已在装载前构建而能跑）—— 现在阶段本身回答“还需不需要收尾”。
     if (scriptName.isEmpty() || lines.isEmpty()) {
         return false;
     }
+    m_phase = LoadPhase::Loading;
 
     ScriptData data;
     data.lines = lines;
@@ -1308,6 +1315,9 @@ QStringList constValueExpressions(const QString& declRest) {
 
 void EraParseTable::beginDeclarationPreRegistration() {
     m_declarationsPreRegistered = true;
+    // 预登记 = 一次装载的开始：并行解析线程从这里起只允许查声明（见
+    // ErbLoader::parseOneFileReadOnly 的前置断言），不允许再插入新声明。
+    if (m_phase == LoadPhase::Empty) m_phase = LoadPhase::Loading;
 }
 
 void EraParseTable::preRegisterDeclaration(const QString& rawLine, const ScriptPosition& position,
@@ -1682,18 +1692,28 @@ parsecheck::ParseIrView EraParseTable::makeIrView() const {
 }
 
 void EraParseTable::resolveStaticTargets() {
+    if (!enterReadOnlyPass(ReadOnlyPass::StaticTargets, "resolveStaticTargets")) return;
     parsecheck::resolveStaticTargets(makeIrView(), m_diagnostics);
 }
 
 void EraParseTable::checkCallStatementArgs(const LogicalLine& line, const QString& target) {
+    // 不是 pass 表的独立步骤（由 resolveStaticTargets 内部同款逻辑调用）：
+    // 只要求同一个阶段，不单独计数。
+    if (!isBoundOrLater()) {
+        qWarning().noquote() << "[parse] checkCallStatementArgs 在装载完成绑定之前调用，忽略（当前阶段"
+                             << loadPhaseName(m_phase) << "）";
+        return;
+    }
     parsecheck::checkCallStatementArgs(makeIrView(), line, target, m_diagnostics);
 }
 
 void EraParseTable::checkStructures() {
+    if (!enterReadOnlyPass(ReadOnlyPass::Structures, "checkStructures")) return;
     parsecheck::checkStructures(makeIrView(), m_diagnostics);
 }
 
 void EraParseTable::checkStaticValues() {
+    if (!enterReadOnlyPass(ReadOnlyPass::StaticValues, "checkStaticValues")) return;
     parsecheck::checkStaticValues(makeIrView(), m_diagnostics);
 }
 
@@ -1893,38 +1913,78 @@ void EraParseTable::resolveGlobalDeclarationsStep() {
 }
 
 // 收尾 pass 表：顺序 = 执行顺序（markLoadComplete 只负责按表驱动）。
-//   optional —— 受 m_functionNotCalledWarning 门控；
-//   readOnly —— 只读步骤（不改运行行为、只产出诊断），供后续独立调用/并行参考，
-//               当前仍串行执行。
+//   gate       —— 该步受哪个开关门控（数据；驱动逻辑只有一处求值）；
+//   phaseAfter —— 该步完成后允许进入的阶段（数据；只读步骤 4-7 要求 Bound）。
 const EraParseTable::LoadPass EraParseTable::kLoadPasses[7] = {
-    {"1/6 全局声明定稿(resolveGlobalDeclarations)", &EraParseTable::resolveGlobalDeclarationsStep, false, false},
-    {"2/6 就地定型(finalizeBindings)",              &EraParseTable::finalizeBindings,               false, false},
-    {"3/6 参数校验(finalizeValidation)",            &EraParseTable::finalizeValidation,             false, false},
-    {"4/6 跳转目标解析(resolveStaticTargets)",      &EraParseTable::resolveStaticTargets,           false, true},
-    {"5/6 结构配对检查(checkStructures)",           &EraParseTable::checkStructures,                false, true},
-    {"6/6 静态值检查(checkStaticValues)",           &EraParseTable::checkStaticValues,              false, true},
-    {"7(可选) 未被调用函数检查(checkNotCalledFunctions)", &EraParseTable::checkNotCalledFunctions,   true,  true},
+    {"1/6 全局声明定稿(resolveGlobalDeclarations)", &EraParseTable::resolveGlobalDeclarationsStep, LoadPassGate::Always, LoadPhase::Loading},
+    {"2/6 就地定型(finalizeBindings)",              &EraParseTable::finalizeBindings,               LoadPassGate::Always, LoadPhase::Loading},
+    {"3/6 参数校验(finalizeValidation)",            &EraParseTable::finalizeValidation,             LoadPassGate::Always, LoadPhase::Bound},
+    {"4/6 跳转目标解析(resolveStaticTargets)",      &EraParseTable::resolveStaticTargets,           LoadPassGate::Always, LoadPhase::Bound},
+    {"5/6 结构配对检查(checkStructures)",           &EraParseTable::checkStructures,                LoadPassGate::Always, LoadPhase::Bound},
+    {"6/6 静态值检查(checkStaticValues)",           &EraParseTable::checkStaticValues,              LoadPassGate::Always, LoadPhase::Bound},
+    {"7(可选) 未被调用函数检查(checkNotCalledFunctions)", &EraParseTable::checkNotCalledFunctions,  LoadPassGate::NotCalledWarning, LoadPhase::Finalized},
 };
+
+const char* EraParseTable::loadPhaseName(LoadPhase phase) {
+    switch (phase) {
+    case LoadPhase::Empty:     return "Empty";
+    case LoadPhase::Loading:   return "Loading";
+    case LoadPhase::Bound:     return "Bound";
+    case LoadPhase::Finalized: return "Finalized";
+    }
+    return "?";
+}
+
+bool EraParseTable::isGateOpen(LoadPassGate gate) const {
+    switch (gate) {
+    case LoadPassGate::Always:            return true;
+    case LoadPassGate::NotCalledWarning:  return m_functionNotCalledWarning;
+    }
+    return true;
+}
+
+int EraParseTable::readOnlyPassRunCount(ReadOnlyPass pass) const {
+    return m_readOnlyPassRuns[int(pass)];
+}
+
+bool EraParseTable::enterReadOnlyPass(ReadOnlyPass pass, const char* entryName) {
+    if (!isBoundOrLater()) {
+        qWarning().noquote() << "[parse]" << entryName
+                             << "在装载完成绑定之前调用，忽略（当前阶段"
+                             << loadPhaseName(m_phase) << "）";
+        return false;
+    }
+    ++m_readOnlyPassRuns[int(pass)];
+    return true;
+}
 
 void EraParseTable::markLoadComplete() {
     // 装载收尾（唯一入口）：全局声明定稿 → 全体脚本就地定型/重绑 → 统一出诊断。
     // 必须在**全部**声明就绪后进行：跨文件前向引用（先装载的文件调用后装载文件的
     // 函数）此刻才可解析；诊断随后统一产生，不重复。各步串行（eraTW 桌面 13s+，
     // Android 更久），逐步留痕以便真机上定位「卡在收尾的哪一步」。
+    if (m_phase == LoadPhase::Finalized) {
+        // 定义好的越界行为：no-op（不重复产出诊断）。
+        qWarning().noquote() << "[parse] markLoadComplete 重复调用：已定型，忽略";
+        return;
+    }
     QElapsedTimer completeTimer;
     completeTimer.start();
     for (const LoadPass& pass : kLoadPasses) {
-        if (pass.optional && !m_functionNotCalledWarning) continue;
+        // 唯一一处按 Gate 求值。
+        if (!isGateOpen(pass.gate)) continue;
         const qint64 stepMs = completeTimer.elapsed();   // 每步重置 = 单步耗时口径
         qInfo().noquote() << "[parse] 收尾步骤" << pass.label << "开始";
         (this->*(pass.fn))();
+        m_phase = pass.phaseAfter;
         qInfo().noquote() << "[parse] 收尾步骤" << pass.label << "完成:"
                           << (completeTimer.elapsed() - stepMs) << "ms";
     }
     // 诊断定序：装载并行 + QHash 随机化哈希种子会让产生顺序在进程间漂移。
     // 排序只在收尾做一次（运行期不排序），让 dump_warnings/UI/MCP 输出可复现。
     m_diagnostics.sortForOutput();
-    m_finalized = true;   // 只读区定型：装载完成后不再编译新源码
+    // 可选步骤被门控跳过时，循环里不会走到它的 phaseAfter。
+    if (m_phase != LoadPhase::Finalized) m_phase = LoadPhase::Finalized;
     qInfo().noquote() << "[parse] markLoadComplete：" << m_scripts.size() << "脚本"
                       << completeTimer.elapsed() << "ms";
 }
@@ -2037,6 +2097,7 @@ void EraParseTable::resolveGlobalDeclarations() {
     m_variables.resolveDimensions();
     applyGlobalVariableDefaults();
     resolveUserFunctionTypes();
+    m_declarationsResolved = true;   // 声明定稿：installPrivateScopes 的前置条件
 }
 
 // 全体脚本绑定（一趟）：字符串赋值/FUNC → 变量类型就地定型 → 赋值 AST → 函数调用解析。
@@ -2087,6 +2148,20 @@ void EraParseTable::finalizeBindings() {
 
     // 函数调用解析（全体脚本）
     resolveFunctionNodes();
+
+    // 收尾的最后一步：私有名表（「每个函数有哪些私有变量、存储键是什么」）
+    // 由声明一次性建好并装进存储层 —— 此刻声明（resolveGlobalDeclarations）
+    // 与类型回填都已完成，名表是静态事实。
+    installPrivateScopes();
+}
+
+void EraParseTable::installPrivateScopes() {
+    if (!m_variableStorage) return;
+    // 前置条件（可观察，不只是注释）：声明定稿（resolveGlobalDeclarations 里的
+    // resolveDimensions）之后才能安装 —— 未定稿就安装会把错的维数/名字表固化。
+    Q_ASSERT_X(m_declarationsResolved, "installPrivateScopes",
+               "private name table installed before declarations were finalized");
+    m_variableStorage->installPrivateScopeTable(m_variables.buildPrivateNameTable());
 }
 
 // 全体脚本校验：产出诊断（错误 + 告警）。必须在全部脚本**绑定**完成后统一执行，

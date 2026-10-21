@@ -99,6 +99,18 @@ public:
     // 一次绘制上万次），这里装载后不变，返回引用即可。
     [[nodiscard]] const QStringList& localNamesOfRef(const QString& function) const;
 
+    // ---- 私有作用域名表（装载期建立，运行期只读）----
+    // 「某函数里有哪些私有变量、各自的存储键是什么」在声明定稿之后就是**静态
+    // 事实**。此前的实现把它放在 VariableStorage::setPrivateScope 里、每次换函数
+    // 按调用方传进来的名字表重建（QHash 分配 + 每个名字一次 makePrivateStorageKey），
+    // 且正确性依赖调用方把名字传全 —— 漏一个名字那个变量就静默退化成裸名。
+    // 现在由声明（scope == Local 且非 const，与 localNamesOfRef 同一过滤口径）
+    // 一次建好，经 VariableStorage::installPrivateScopeTable 装进存储层。
+    // 形状：scopeId（函数名 intern id） -> 名字(大写) -> 存储键 "FUNC\x1fNAME"。
+    using PrivateNameTable = QHash<eravar::ScopeId, QHash<QString, QString>>;
+    // 前置条件：声明已定稿（resolveGlobalDeclarations 之后）。装载期调用一次即可。
+    [[nodiscard]] PrivateNameTable buildPrivateNameTable() const;
+
     void clear();
 
     // ---- 常数（#DIM CONST name = value）与维数求值 ----
@@ -145,6 +157,11 @@ public:
 
     // 用常数表重新求值所有声明的维数（后声明的常数也能修正先前的声明）
     void resolveDimensions();
+    // 维数是否已定稿（resolveDimensions 跑过且之后没有新增声明）。
+    // 存档映射（erasave::Map）按 `VariableDecl::lengths` 构表：未定稿时
+    // lengths 还可能是“声明文本的形状”而不是求值后的形状 —— 存档入口用它
+    // 把「声明可建表」变成可检查的前置条件。
+    [[nodiscard]] bool dimensionsResolved() const { return m_dimensionsResolved; }
     // 维数表达式的兜底求值器（`#DIM X, CLASS_NUM + 1` 这类算式/复合表达式）。
     // 由 EraParseTable 在常量表就绪后注入 —— 求值器内部会回查本表的常数。
     // 第二参数 = 声明所在函数（私有常量要与维数同作用域才可见）。
@@ -195,6 +212,8 @@ private:
     mutable QHash<QString, QStringList> m_localNamesRefCache;
     // declarationsRef 的缓存（失效点与上面两个相同：clear / 维数定稿）
     mutable QList<VariableDecl> m_declarationsCache;
+    // 维数定稿标志：新增声明会把它复位（新增的声明还没求值过维数）。
+    bool m_dimensionsResolved = false;
 };
 
 #endif // AST_VARIABLE_TABLE_H

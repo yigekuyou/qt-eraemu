@@ -81,6 +81,11 @@ note right of ScriptRunner
   writeLoopCounter = 在计数器自身的固定下标上
   写入「循环值」——值不是下标。
   （曾有「循环值越界」检查，因此误报，已删除）
+
+  位置推进（advance / setPosition / CALL / RETURN / JUMP）
+  本类只按 EraParseTable 的 public 方法调用：
+  状态是 PositionState（纯数据），转移是 position 的自由函数，
+  类里只剩「打包视图 + 按 Effects emit」（见 01）。
 end note
 
 note bottom of ProcessState

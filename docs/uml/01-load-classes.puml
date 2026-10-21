@@ -19,7 +19,7 @@ package "GameProc" {
     - m_scripts : QHash
     - m_variables : VariableTable
     - m_diagnostics : ParseDiagnostics
-    - m_finalized : bool
+    - m_position : PositionState   ' 位置区：状态是数据，算法在 position
     + loadScript(name, lines, isHeaderFile)
     + expressionAst(expr)
     + runtimeVariableReference(expr)
@@ -29,10 +29,13 @@ package "GameProc" {
     + checkStaticValues()         ' 转调 parsecheck
     + scripts() / variableTable() / variableStorage()   ' 只读 getter
     + clearDiagnostics()
+    + setPosition / advance / jumpToLabel / callLabel / returnFromCall
+                                  ' 位置区壳子：打包视图 → position → emitEffects
     - makeIrView() : ParseIrView ' 只做指针打包
+    - makeScriptView() : ScriptView  ' 只做指针打包
+    - emitEffects(fx, jumpLabel)  ' Effects → 信号，顺序在此写死
     - resolveGlobalDeclarations()   ' 仅预登记结算用（实现在 loadpass）
     - checkNotCalledFunctions()
-    - 位置区 / 跳转标记区 / 调用栈（: 见下）
     + loadPhase() : LoadPhase   ' Empty / Loading / Bound / Finalized
     + isFinalized() / isBoundOrLater()
     + readOnlyPassRunCount(pass) : int
@@ -101,6 +104,38 @@ package "GameProc" {
       checkCallStatementArgs(view, line, target, diags)
       checkStructures(view, diags)
       checkStaticValues(view, diags)
+    }
+  }
+
+  package "jumpmark（标记区，自由函数）" {
+    class "标记区" as JumpFns {
+      buildJumpMarkings(ScriptData&)   ' 清 10 张表后按行配对
+      jumpTarget / ifBranches          ' inline 查表（nullptr 安全）
+      catchTarget / endCatchTarget
+      funcEntryLines / endFuncTarget
+    }
+  }
+
+  package "position（位置区，自由函数）" {
+    struct PositionState {
+      script / line / callStack / depth / jumped
+      scopeIdName / scopeId / scopeIdValid   ' executionScopeId 的缓存
+    }
+    struct PositionEffects {
+      callStackChanged / memorySpaceChanged
+      positionChanged / jumpRequested   ' 只回答「发哪个」，无顺序语义
+    }
+    struct ScriptView {
+      scripts : const QHash<QString,ScriptData>*
+      labelLists : const QHash<QString,QList<LabelRef>>*
+    }
+    class "位置区" as PosFns {
+      setPosition / advance / jumpToLine / jumpToLabel
+      callLabel / callLabelWithReturn / callLabelAt / jumpLabel
+      returnFromCall / switchToMemorySpace / reset
+      resolveCallableLabel / resolveJumpTarget / resolveJumpToScript
+      executionScope / executionScopeId
+      setLineInternal / pushFrame / popFrame / lineCount   ' 基元
     }
   }
 }
@@ -172,6 +207,13 @@ ParseIrView <.. FreeFns : const 输入
 EraParseTable ..> FreeFns : 4/5/6 forwarder
 EraParseTable ..> LoadContext : makeLoadContext()
 EraParseTable ..> WriteFns : kLoadPasses 1/2/3 直连（无 forwarder）
+EraParseTable ..> JumpFns : loadScript 末尾建表（类内无成员入口）
+EraParseTable *-- PositionState : m_position（纯数据）
+EraParseTable ..> PosFns : 位置推进的 11 个壳子
+EraParseTable --> PositionEffects : emitEffects 按它发信号
+PosFns ..> PositionState : 读写（唯一的转移实现）
+PosFns ..> ScriptView : 只读两张表
+PosFns ..> PositionEffects : 置「发哪个」
 VariableTable *-- VariableDecl
 EraParseTable --> VariableConfig : 尺寸 / 维数
 
@@ -190,9 +232,25 @@ note bottom of EraParseTable
   4/5/6 的实现已搬出本类：本类只剩一行 forwarder，
   真正的算法在 parsecheck 的自由函数里（输入是 ParseIrView）。
   1/2/3 的实现也已搬出：表项直接指向 loadpass 的自由函数，
-  输入是可写的 LoadContext，类内不再有它们的成员入口 ——
-  本类只剩「解析入口 + 表 + 阶段机 + getter」。
+  输入是可写的 LoadContext，类内不再有它们的成员入口。
+
+  装载之外的两块也搬走了：
+  · 标记区 → jumpmark（构建吃 ScriptData&，读侧是 inline 查表）；
+  · 位置区 → position（状态是 PositionState，转移只置 Effects 的位，
+    本类只剩「打包视图 + emitEffects」）。
+  本类只剩「解析入口 + pass 表 + 阶段机 + 位置区壳子 + getter」。
   7 仍在本类：它的 gate 开关是解析表的装载选项。
+end note
+
+note right of PosFns
+  位置区的复杂度落在三样**数据**上：
+  · PositionState —— 执行位置 + 调用栈（depth 是 callStack.size() 的缓存）；
+  · PositionEffects —— 一次转移要广播哪四个信号（不含顺序）；
+  · ScriptView —— 它只读的两张表（scripts / labelLists），
+    不复用 ParseIrView（那 5 个字段位置区一个都不读）。
+  顺序由壳子的 emitEffects 写死（规范序 callStack → space → position → jump），
+  clear() 是唯一的反序例外（position 先、callStack 后），
+  两条都由 test_position_state 录信号钉住。
 end note
 
 note right of ParseIrView

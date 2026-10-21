@@ -9,9 +9,12 @@ package "装载期 GameProc（一次性）" {
   [EraEngine 顶层编排] as Engine
   [ErbLoader] as Loader
   [AstBuilder 表达式解析] as Builder
-  [EraParseTable\n脚本表 + 变量表 + 诊断\n位置 / 跳转 / 调用栈] as Table
+  [EraParseTable\n脚本表 + 变量表 + 诊断\n解析入口 + pass 表 + 阶段机] as Table
   [收尾流水线\npass 表 kLoadPasses 7 条] as Finish
   [parsecheck\n4/5/6 只读检查（自由函数）\n输入 ParseIrView] as Checks
+  [loadpass\n1/2/3 写步骤（自由函数）\n输入 LoadContext] as Writes
+  [jumpmark\n标记区（自由函数）\nScriptData 上 10 张行号索引表] as Mark
+  [position\n位置区（自由函数）\n状态 PositionState + 效果 Effects] as Pos
 }
 
 package "内容与配置（Content）" {
@@ -38,6 +41,9 @@ Builder --> AST
 Finish ..> Table : 七条 pass，产出诊断
 Table --> Finish
 Finish ..> Checks : 4/5/6 转调
+Finish ..> Writes : 1/2/3 转调（表项直连，无 forwarder）
+Table ..> Mark : loadScript 末尾建表
+Table ..> Pos : 位置推进的 11 个壳子（打包视图 → 调用 → 按 Effects emit）
 Consts --> Table : 名表下标 / 字面名字校验
 Config --> Table : 尺寸 / 维数 / 类型
 Exec --> Runner
@@ -68,7 +74,12 @@ note right of Finish
   4/5/6 只读检查 → parsecheck，输入 ParseIrView（全 const）；
   1/2/3 写步骤 → loadpass，输入 LoadContext（纯数据、可写视图）；
   7 仍在本类（gate 开关是装载选项）。
-  EraParseTable 只剩「解析入口 + pass 表 + 阶段机 + getter」。
+
+  运行期两块同样各自只有一份实现：
+  标记区 → jumpmark，输入 ScriptData&（构建）/ const ScriptData*（查表）；
+  位置区 → position，状态是 PositionState（纯数据），转移只置
+  PositionEffects 的位，类里只剩「打包视图 + 按 Effects emit」的壳子。
+  EraParseTable 只剩「解析入口 + pass 表 + 阶段机 + 位置区壳子 + getter」。
 
   阶段机显式：Empty → Loading → Bound → Finalized。
   pass 表的 gate / phaseAfter 是数据；

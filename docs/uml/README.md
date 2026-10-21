@@ -5,9 +5,9 @@ PlantUML 源码。所有图都是**当前代码**的静态结构，不包含计�
 
 | 文件 | 类型 | 内容 |
 | --- | --- | --- |
-| `00-overview.puml` | 组件图 | 分层总览：装载期一次定型 → 运行期只做存取；收尾三层（`parsecheck` 只读 / `loadpass` 可写 / 类只剩编排） |
-| `01-load-classes.puml` | 类图 | 装载期：`EraEngine` / `ErbLoader` / `AstBuilder` / `EraParseTable` / `ParseIrView` 与 4/5/6 自由函数 / `LoadContext` 与 1/2/3 自由函数 / `LoadPhase` 阶段机 / 收尾 pass 表 |
-| `02-runtime-classes.puml` | 类图 | 运行期：`ExecutionEngine` / `ScriptRunner` 单步状态机 / `ProcessState` / `LoopFrame`（作用是显式 `ScopeId`） |
+| `00-overview.puml` | 组件图 | 分层总览：装载期一次定型 → 运行期只做存取；收尾三层（`parsecheck` 只读 / `loadpass` 可写 / 类只剩编排）；标记区 `jumpmark` 与位置区 `position` 各只有一份实现 |
+| `01-load-classes.puml` | 类图 | 装载期：`EraEngine` / `ErbLoader` / `AstBuilder` / `EraParseTable` / `ParseIrView` 与 4/5/6 自由函数 / `LoadContext` 与 1/2/3 自由函数 / 标记区 `jumpmark` / 位置区 `PositionState`+`PositionEffects`+`position` 自由函数 / `LoadPhase` 阶段机 / 收尾 pass 表 |
+| `02-runtime-classes.puml` | 类图 | 运行期：`ExecutionEngine` / `ScriptRunner` 单步状态机 / `ProcessState` / `LoopFrame`（作用是显式 `ScopeId`；位置推进经 `position` 自由函数） |
 | `03-expression-classes.puml` | 类图 | 表达式 AST、`AccessKind` 16 值、`VariableKey{scopeId,nameId}`、名字 intern 表、`resolverTable` |
 | `04-load-pipeline.puml` | 时序图 | 装载流水线：CSV → 逐文件解析 → `kLoadPasses[7]` 表驱动收尾 → 诊断 |
 | `05-variable-access.puml` | 活动图 | 运行期变量访问：两条入口 → 一张 resolver 表 → 唯一按名原语 |
@@ -76,8 +76,21 @@ plantuml -txmi docs/uml/01-load-classes.puml
 - **收尾分三层，输入类型不同**：`parsecheck` 收全 `const` 的 `ParseIrView`（4/5/6，输出只有诊断）；
   `loadpass` 收可写的 `LoadContext`（1/2/3，纯数据视图：scripts / variables / functions / storage /
   evaluator / gameBaseData / diagnostics / labelLists / paramNames / 两个 bool 引用 / 运行期位置）；
-  `EraParseTable` 只剩「解析入口 + pass 表 + 阶段机 + getter」，1/2/3 在类内已无成员入口。
+  `EraParseTable` 只剩「解析入口 + pass 表 + 阶段机 + 位置区壳子 + getter」，1/2/3 在类内已无成员入口。
   `LoadContext` 不是拥有者：被引用的表仍由解析表持有；文件里 `rg EraParseTable` = 0。
+- **装载之外的两块也各自只有一份实现**：
+  * **标记区**（`jump_markings.{h,cpp}`，`namespace jumpmark`）：`buildJumpMarkings(ScriptData&)`
+    是唯一的构建点（10 张行号索引表 + `lines[i].lineIndex/nextLine`），读侧 6 个
+    `inline` 自由函数只吃 `const ScriptData*`（nullptr 安全）。`EraParseTable` 里
+    这 7 个方法已删除、不留 forwarder。
+  * **位置区**（`position_state.{h,cpp}`，`namespace position`）：状态是纯数据
+    `PositionState`（`script` / `line` / `callStack` / `depth` / `jumped` / 作用域 id 缓存），
+    20 个自由函数做转移，只置 `PositionEffects` 的位（`callStackChanged` /
+    `memorySpaceChanged` / `positionChanged` / `jumpRequested`）；`EraParseTable` 的 11 个
+    方法是「打包 `ScriptView` → 调自由函数 → `emitEffects`」。信号顺序写死在
+    `emitEffects`（规范序 `callStack → space → position → jump`），`clear()` 是唯一
+    反序例外（`positionChanged` 先、`callStackChanged` 后），两者都由
+    `test_position_state` 录信号断言。文件里 `rg EraParseTable|m_[a-z]` = 0。
 - **存档有独立的键映射层**：`erasave::Map`（`save_variable_map.{h,cpp}`）是「存档条目 ↔ 变量身份」的
   唯一一张表，`Entry = { name, key, slot, dimensions, user, persisted }`。文件里写的是**裸名**，
   身份不进文件；存档层不再认识 `FUNC\x1fNAME` 这种键形态，也不必改那 31 个字符串键容器。
@@ -93,10 +106,11 @@ plantuml -txmi docs/uml/01-load-classes.puml
 
 `dump_warnings` 五语料（`eraTW` / `eraMegaten` / `eraTetris` / `FL3.8` / `ecd`）：
 **6 / 0 / 0 / 0 / 0** 行，逐行可比（`sort` 后 `diff`）。
-累计八个重构（身份整数化 / 全定型 / 作用域显式化 / 只读收尾外移 / 存档独立映射 /
-私有名表前移 / 存档顺序确定性 / 写收尾外移）前后完全一致；`ctest` 48 → 53（新增 `test_parse_checks` /
-`test_save_variable_map` / `test_private_scope_table` / `test_load_contracts` /
-`test_save_variable_map_hashseed`）。
+累计十个重构（身份整数化 / 全定型 / 作用域显式化 / 只读收尾外移 / 存档独立映射 /
+私有名表前移 / 存档顺序确定性 / 写收尾外移 / 标记区外移 / 位置区外移）前后完全一致；
+`ctest` 48 → 55（新增 `test_parse_checks` / `test_save_variable_map` / `test_private_scope_table` /
+`test_load_contracts` / `test_save_variable_map_hashseed` / `test_jump_markings` /
+`test_position_state`）。
 
 存档字节：`erasave::Map` 在 `Map::build` 末尾把条目排成**只由数据决定的全序**（主键 `slot`
 → 次键大写名 → 内建先于用户 → 私有作用域名），存档字节与 `QT_HASH_SEED` 无关 ——

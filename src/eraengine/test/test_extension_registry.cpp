@@ -333,7 +333,7 @@ int main(int argc, char* argv[]) {
         check(execute("DT_COLUMN_ADD \"ast-table\", \"value\", \"string\""), "DT string column");
         storage.setLocalStr(0, "ast-table"); storage.setArgStr(0, "value");
         auto options = load("DT_COLUMN_OPTIONS LOCALS, ARGS, DEFAULT = \"first,=value\", default = \"last,=value\"");
-        check(!options.argument.hasError() && options.columnDefaults.size() == 2, "ordered repeated DEFAULT ASTs");
+        check(!options.argument.hasError() && options.columnDefaults().size() == 2, "ordered repeated DEFAULT ASTs");
         options.raw = "DT_COLUMN_OPTIONS raw-is-never-read";
         for (auto& operand : options.arguments) operand.raw = "invalid raw";
         check(engine.executeInstruction(options) && execute("DT_ROW_ADD \"ast-table\""), "DT options consume AST despite poisoned raw");
@@ -364,7 +364,7 @@ int main(int argc, char* argv[]) {
         }
         bool rejected = false;
         auto missing = load("DT_COLUMN_OPTIONS \"ast-table\", \"value\", DEFAULT = 1");
-        missing.columnDefaults[0].clear();
+        missing.mutableColumnDefaults()[0].clear();
         try { engine.executeInstruction(missing); } catch (const std::exception&) { rejected = true; }
         check(rejected, "missing DEFAULT AST is an error");
 

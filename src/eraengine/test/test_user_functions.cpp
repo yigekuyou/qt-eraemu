@@ -94,7 +94,7 @@ int main(int argc, char* argv[]) {
             QStringLiteral("@F(A, B)"), ScriptPosition(QStringLiteral("t.ERB"), 0, 0), resolve);
         check(paren.kind == LineKind::FunctionLabel && paren.labelName == QStringLiteral("F"),
               "@F(A, B) -> labelName == F");
-        check(paren.labelArgs == QStringList({QStringLiteral("A"), QStringLiteral("B")}),
+        check(paren.labelArgs() == QStringList({QStringLiteral("A"), QStringLiteral("B")}),
               "@F(A, B) -> labelArgs == [A, B]");
 
         const LogicalLine comma = AstBuilder::build(
@@ -102,7 +102,7 @@ int main(int argc, char* argv[]) {
             ScriptPosition(QStringLiteral("t.ERB"), 0, 0), resolve);
         check(comma.labelName == QStringLiteral("IN_ROOM_MEMBER"),
               "@IN_ROOM_MEMBER, ARGS, ... -> labelName == IN_ROOM_MEMBER");
-        check(comma.labelArgs
+        check(comma.labelArgs()
                   == QStringList({QStringLiteral("ARGS"), QStringLiteral("ARG"),
                                   QStringLiteral("ARGS:1"), QStringLiteral("ARG:1")}),
               "逗号式形参表解析正确");
@@ -111,14 +111,14 @@ int main(int argc, char* argv[]) {
             QStringLiteral("@K17_RS, ARGS, ARGS:1 = \"/\", ARG = 1"),
             ScriptPosition(QStringLiteral("t.ERB"), 0, 0), resolve);
         check(defv.labelName == QStringLiteral("K17_RS"), "带默认值的形参表 -> labelName == K17_RS");
-        check(defv.labelArgs
+        check(defv.labelArgs()
                   == QStringList({QStringLiteral("ARGS"), QStringLiteral("ARGS:1"),
                                   QStringLiteral("ARG")}),
               "默认值 '=' 被剥离（ARGS / ARGS:1 / ARG）");
 
         const LogicalLine noArg = AstBuilder::build(
             QStringLiteral("@PLAIN"), ScriptPosition(QStringLiteral("t.ERB"), 0, 0), resolve);
-        check(noArg.labelName == QStringLiteral("PLAIN") && noArg.labelArgs.isEmpty(),
+        check(noArg.labelName == QStringLiteral("PLAIN") && noArg.labelArgs().isEmpty(),
               "@PLAIN -> 无形参");
     }
 

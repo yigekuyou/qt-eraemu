@@ -524,7 +524,12 @@ void applyVariableTypes(LoadContext& ctx) {
             };
             for (auto& op : line.arguments) bind(op.ast);
             bind(line.condition);
-            for (auto& ast : line.columnDefaults) bind(ast);
+            // 先查空再取可写引用：mutableColumnDefaults() 会懒建 extras，
+            // 若无条件调用，每行都会分配一份 LineExtras（2.11M 行 ≈ 236 MB），
+            // 把这次瘦身全部抵消掉。columnDefaults 在 eraTW 上是 0 行。
+            if (!line.columnDefaults().isEmpty()) {
+                for (auto& ast : line.mutableColumnDefaults()) bind(ast);
+            }
             ArgumentParser::build(line);
             for (const auto& ast : line.assignmentAsts) PrintTemplateCompiler::prepare(ast);
             // line.printTemplate（PRINT/PRINTFORM/PRINTS 的分词）无需单独处理：
@@ -1193,7 +1198,7 @@ void validateScriptLines(const LoadContext& ctx, ScriptData& script, ParseDiagno
         validate(line.condition);
         // DT_COLUMN_OPTIONS 的 DEFAULT 表达式（columnDefaults）是运行期求值的
         // 普通表达式，此前从不校验 —— 类型/边界问题同样应当装载期就报出来。
-        for (const auto& ast : line.columnDefaults) validate(ast);
+        for (const auto& ast : line.columnDefaults()) validate(ast);
         const bool skipTargetOperand = firstArgumentIsTargetName(line.runnerInstruction);
         for (int operandIndex = 0; operandIndex < line.arguments.size(); ++operandIndex) {
             const auto& operand = line.arguments.at(operandIndex);

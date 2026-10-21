@@ -792,8 +792,8 @@ LogicalLine AstBuilder::build(const QString& rawLine,
                     const QString defaultValue = eq >= 0 ? item.mid(eq + 1).trimmed() : QString();
                     if (eq >= 0) item = item.left(eq).trimmed();
                     if (!item.isEmpty()) {
-                        line.labelArgs.append(item);
-                        line.labelDefaults.append(defaultValue);
+                        line.mutableLabelArgs().append(item);
+                        line.mutableLabelDefaults().append(defaultValue);
                     }
                 }
             }
@@ -1374,7 +1374,7 @@ LogicalLine AstBuilder::build(const QString& rawLine,
             if (resolve) operand.ast = resolve(text);
             if (!operand.ast) fail();
             if (i < 2 && operand.ast && operand.ast->valueType() != OperandType::Str) fail();
-            if (i >= 2) line.columnDefaults.append(operand.ast);
+            if (i >= 2) line.mutableColumnDefaults().append(operand.ast);
             line.arguments.append(operand);
         }
         return finalized(std::move(line));

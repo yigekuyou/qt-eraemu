@@ -957,7 +957,7 @@ void registerDataTableExtensions(ExtensionRegistry& ext)
                 if (!value.isValid()) throw std::runtime_error("Invalid DT_COLUMN_OPTIONS value");
                 return value;
             };
-            if (line.isError || line.arguments.size() < 3 || line.columnDefaults.isEmpty())
+            if (line.isError || line.arguments.size() < 3 || line.columnDefaults().isEmpty())
                 throw std::runtime_error("Invalid DT_COLUMN_OPTIONS arguments");
             const auto tableName = evaluate(line.arguments[0].ast);
             const auto columnName = evaluate(line.arguments[1].ast);
@@ -969,7 +969,7 @@ void registerDataTableExtensions(ExtensionRegistry& ext)
             const int col = table.columnIndex(stringText(columnName));
             if (col < 0) throw std::runtime_error("Unknown data table column");
             DColumn& column = table.columns[col];
-            for (const auto& ast : line.columnDefaults) {
+            for (const auto& ast : line.columnDefaults()) {
                 const auto value = evaluate(ast);
                 if ((column.type == DType::Str) != isStringValue(value))
                     throw std::runtime_error("Data table default type mismatch");

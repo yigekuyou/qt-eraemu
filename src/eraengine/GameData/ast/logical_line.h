@@ -25,6 +25,7 @@
 #include <QSharedPointer>
 #include <QColor>
 #include <QHash>
+#include <memory>
 #include <optional>
 
 #include "expression_ast.h"
@@ -243,14 +244,29 @@ struct TypedArgument {
     [[nodiscard]] bool hasError() const { return !typeOk; }
 };
 
+// 冷字段（按需分配）
+//
+// 这三个字段在 eraTW（2,111,136 行）上的实测使用行数：
+//   columnDefaults  0 行；labelArgs / labelDefaults 各 10,166 行（仅带形参的 @label）
+// 而它们内联在每一行上要付 3 × 24 B = 72 B（约 152 MB @2.11M 行）。
+// 搬进 LineExtras 后，不用这些字段的行只付一个空 shared_ptr（16 B）。
+//
+// 副本语义：extras 是 shared_ptr + **写时复制**（见 ensureExtras）——
+// 拷贝 LogicalLine 时共享同一份 extras，任一副本一旦「写」就各自分离。
+// 这与原本 QString/QList 的 COW 语义一致：拷贝后互不影响。
+struct LineExtras {
+    QList<QSharedPointer<ExpressionNode>> columnDefaults; // ordered DEFAULT expressions
+    QStringList labelArgs;        // 形参名 @NAME(a, b)（用户自定义函数）
+    QStringList labelDefaults;    // 同位置的默认值；无默认值为空串
+};
+
 struct LogicalLine {
     LineKind       kind = LineKind::Null;
     ScriptPosition position;
 
     // 标签（FunctionLabel / GotoLabel）
     QString        labelName;
-    QStringList    labelArgs;        // 形参名 @NAME(a, b)（用户自定义函数）
-    QStringList    labelDefaults;    // 同位置的默认值；无默认值为空串
+    // 形参名 / 默认值：冷字段，见 LineExtras（labelArgs() / labelDefaults()）
 
     // 指令（Instruction）
     QString        functionName;     // 大写指令名
@@ -262,7 +278,7 @@ struct LogicalLine {
     //   GETMILLISECOND / CURRENTREDRAW / GETTIME / REPLACE LOCALS, "a", "b" …
     bool           isFunctionCall = false;
     QList<Operand> arguments;
-    QList<QSharedPointer<ExpressionNode>> columnDefaults; // ordered DEFAULT expressions
+    // DT_COLUMN_OPTIONS 的 DEFAULT 表达式表：冷字段，见 LineExtras（columnDefaults()）
     QList<QSharedPointer<ExpressionNode>> assignmentAsts; // load-time RHS list
     TypedArgument  argument;                    // 类型化参数（C# InstructionLine.Argument）
     QSharedPointer<ExpressionNode> condition;   // IF/SIF/ELSEIF/WHILE/REPEAT 条件
@@ -275,6 +291,9 @@ struct LogicalLine {
     int  lineIndex      = -1;
     int  nextLine       = -1;
     int  jumpTo         = -1;
+    // printDataEndLine 放在这里只为填满 jumpTo 后的 4 B 对齐空洞（见下方
+    // printDataGroups 的说明）；语义与位置无关。
+    int  printDataEndLine = -1;
     QString ownerFunction;      // 所属函数标签（变量作用域判定，装载期填充）
 
     // 诊断
@@ -294,9 +313,40 @@ struct LogicalLine {
 
 
     // PRINTDATA/STRDATA 段的装载期索引（由 EraParseTable 构建，运行时只读）：
-    // printDataGroups = 各「段」的行号列表；printDataEndLine = 对应 ENDDATA 行号。
+    // printDataGroups = 各「段」的行号列表；printDataEndLine（见上，为对齐挪位）
+    // = 对应 ENDDATA 行号。
     QList<QList<int>> printDataGroups;
-    int printDataEndLine = -1;
+
+    // ---- 冷字段（见 LineExtras）：空 extras 与旧的空容器完全等价 ----
+    // 读访问器返回引用；无 extras 时返回进程级静态空容器（只读，勿写入）。
+    const QList<QSharedPointer<ExpressionNode>>& columnDefaults() const {
+        static const QList<QSharedPointer<ExpressionNode>> kEmpty;
+        return m_extras ? m_extras->columnDefaults : kEmpty;
+    }
+    const QStringList& labelArgs() const {
+        static const QStringList kEmpty;
+        return m_extras ? m_extras->labelArgs : kEmpty;
+    }
+    const QStringList& labelDefaults() const {
+        static const QStringList kEmpty;
+        return m_extras ? m_extras->labelDefaults : kEmpty;
+    }
+
+    // 写访问器：懒建 extras；若 extras 被其它副本共享（拷贝后），先分离再写，
+    // 保持与旧结构（QString/QList 的 COW）一致的值语义。
+    LineExtras& ensureExtras() {
+        if (!m_extras) {
+            m_extras = std::make_shared<LineExtras>();
+        } else if (m_extras.use_count() > 1) {
+            m_extras = std::make_shared<LineExtras>(*m_extras);
+        }
+        return *m_extras;
+    }
+    QList<QSharedPointer<ExpressionNode>>& mutableColumnDefaults() {
+        return ensureExtras().columnDefaults;
+    }
+    QStringList& mutableLabelArgs() { return ensureExtras().labelArgs; }
+    QStringList& mutableLabelDefaults() { return ensureExtras().labelDefaults; }
 
     bool isNull() const { return kind == LineKind::Null; }
     bool isInstruction() const { return kind == LineKind::Instruction; }
@@ -312,6 +362,11 @@ struct LogicalLine {
     QString describe() const {
         return QString("LogicalLine(%1 @ %2)").arg(raw).arg(position.toString());
     }
+
+private:
+    // 冷字段的按需存储；空指针 = 该行完全不用 columnDefaults / labelArgs /
+    // labelDefaults。拷贝 LogicalLine 时共享（写时分离，见 ensureExtras）。
+    std::shared_ptr<LineExtras> m_extras;
 };
 Q_DECLARE_METATYPE(LogicalLine)
 

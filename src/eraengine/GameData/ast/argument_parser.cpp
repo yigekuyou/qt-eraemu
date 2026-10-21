@@ -215,7 +215,7 @@ void ArgumentParser::build(LogicalLine& line) {
                 arg.typeError = QCoreApplication::translate("ParseDiagnostics", "%1 的参数缺少 AST 或类型错误").arg(upper);
             }
         }
-        if (upper == "DT_COLUMN_OPTIONS" && (line.isError || line.columnDefaults.isEmpty())) {
+        if (upper == "DT_COLUMN_OPTIONS" && (line.isError || line.columnDefaults().isEmpty())) {
             arg.typeOk = false;
             arg.typeError = QCoreApplication::translate("ParseDiagnostics", "DT_COLUMN_OPTIONS 需要合法 DEFAULT 选项");
         }

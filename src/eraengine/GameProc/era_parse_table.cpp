@@ -482,9 +482,9 @@ bool EraParseTable::loadScript(const QString& scriptName, const QList<LogicalLin
                 decl.labelLine = i;
 
                 // 形参表：把标签里写的名字归类为 ARG / ARGS / 私有变量
-                for (const QString& argName : line.labelArgs) {
+                for (const QString& argName : line.labelArgs()) {
                     UserParamDecl p = classifyUserParam(argName);
-                    const QString defaultValue = line.labelDefaults.value(decl.params.size());
+                    const QString defaultValue = line.labelDefaults().value(decl.params.size());
                     p.hasDefault = !defaultValue.isEmpty();
                     if (p.hasDefault) {
                         bool ok = false;

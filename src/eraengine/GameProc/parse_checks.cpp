@@ -873,7 +873,7 @@ void checkStaticValuesInScript(const ParseIrView& view, const ScriptData& data,
         for (const auto& ast : line.assignmentAsts) {
             if (ast) walkExpression(*ast, visit);
         }
-        for (const auto& ast : line.columnDefaults) {
+        for (const auto& ast : line.columnDefaults()) {
             if (ast) walkExpression(*ast, visit);
         }
     }

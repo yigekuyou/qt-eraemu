@@ -1020,17 +1020,14 @@ void validateArguments(const LoadContext& /*ctx*/, ScriptData& script, ParseDiag
 
 
 void finalizeLabelIndex(LoadContext& ctx) {
-    // 把 ctx.labelLists 每个同名列表按 (脚本名, 行号) 排序固化：
-    //   · labels()（callFunction / CALLEVENT 的事件导航）不再每次调用重排；
-    //   · resolveCallableLabel（跨文件 CALL/式中调用/JUMP）取「第一份」有了
-    //     确定含义 —— 并行装载的插入顺序是不确定的。
-    // 全部 @函数标签合计 ~1.1 万个（eraTW/FL3.8），一次排序是毫秒级。
-    for (auto it = ctx.labelLists.begin(); it != ctx.labelLists.end(); ++it) {
+    // 全序在这一处、这一刻（装载收尾 1/6）固化，此后运行期只读、不重建：
+    //   脚本名 QString::compare 升序 -> 同脚本内行号升序（labelRefLess）。
+    // 三个消费者（CALL/JUMP 解析、GOTO 解析、入口点挑选）都取「第一条」，
+    // 所以排序完成后重名的答案就唯一了 —— 与装载顺序（并行、不确定）无关。
+    // 全部标签（@ + $）一次排序是毫秒级。
+    for (auto it = ctx.labelIndex.begin(); it != ctx.labelIndex.end(); ++it) {
         QList<LabelRef>& list = it.value();
-        std::sort(list.begin(), list.end(), [](const LabelRef& a, const LabelRef& b) {
-            if (a.script != b.script) return a.script < b.script;
-            return a.line < b.line;
-        });
+        std::sort(list.begin(), list.end(), labelRefLess);
     }
 }
 

@@ -170,14 +170,9 @@ QString EraParseTable::scriptPath(const QString& scriptName) const {
 }
 
 bool EraParseTable::hasLabel(const QString& label) const {
-    const auto cached = m_hasLabelCache.constFind(label);
-    if (cached != m_hasLabelCache.constEnd()) return cached.value();
-    bool found = false;
-    for (auto it = m_scripts.constBegin(); it != m_scripts.constEnd(); ++it) {
-        if (it.value().labelPositions.contains(label.toUpper())) { found = true; break; }
-    }
-    m_hasLabelCache.insert(label, found);
-    return found;
+    // @ 与 $ 通吃 = 「索引里有没有这个键」。唯一索引建成后不再需要
+    // m_hasLabelCache（旧实现是 for(m_scripts) 全量扫描 + 逐名缓存）。
+    return m_labelIndex.contains(label.toUpper());
 }
 
 // 「可作为 CALL/JUMP 目标」的存在性判定：与 resolveCallableLabel 完全同源
@@ -261,16 +256,19 @@ int EraParseTable::functionExistsKind(const QString& name, bool caseInsensitive)
 }
 
 QList<LabelRef> EraParseTable::labels(const QString& name) const {
-    // 排序在装载收尾固化一次（finalizeLabelIndex）；此处 COW 共享返回。
-    // 此前**每次调用**都复制 + std::sort —— callFunction（每个 @EVENTTRAIN/
-    // @SHOW_STATUS/@USERCOM…）和 CALLEVENT 每条事件链都走这里，eraTW 的
-    // @SHOW_STATUS 同名口上一大把，每输入周期重排一次（QString 比较）。
-    QList<LabelRef> out = m_labelLists.value(name.toUpper());
+    // 事件导航（callFunction / CALLEVENT）要的是**某个名字的全部 @声明**
+    //（#SINGLE/#PRI/#LATER/#ONLY 分组）—— 同一张索引的一个投影：滤掉 $ 标签。
+    // 顺序在 finalizeLabelIndex 固化；装载期（LSP 增删脚本）尚未定型，
+    // 这时按同一个全序（labelRefLess）惰性排一次。
+    const auto it = m_labelIndex.constFind(name.toUpper());
+    if (it == m_labelIndex.constEnd()) return {};
+    QList<LabelRef> out;
+    out.reserve(it.value().size());
+    for (const LabelRef& ref : it.value()) {
+        if (ref.isFunction) out.append(ref);
+    }
     if (!isFinalized() && out.size() > 1) {
-        std::sort(out.begin(), out.end(), [](const LabelRef& a, const LabelRef& b) {
-            if (a.script != b.script) return a.script < b.script;
-            return a.line < b.line;
-        });
+        std::sort(out.begin(), out.end(), labelRefLess);
     }
     return out;
 }
@@ -343,9 +341,8 @@ bool EraParseTable::evaluateCondition(const QString& scriptName, int line, bool&
 void EraParseTable::clear() {
     // QUIT 关闭游戏：释放全部解析期数据（AST/标记区/函数表/标签/告警/变量声明）
     m_scripts.clear();
-    m_hasLabelCache.clear();
     m_functions.clear();
-    m_labelLists.clear();
+    m_labelIndex.clear();
     m_privateDefaultPlans.clear();   // 私有初值调用计划随函数表一起作废
     m_paramNamesByFunction.clear();  // 形参名集合随函数表一起作废
     m_diagnostics.clear();
@@ -483,6 +480,14 @@ bool EraParseTable::loadScript(const QString& scriptName, const QList<LogicalLin
             // （「採集場所一覧」选项显示成数字 0、输入 99 无法返回）正是此例。
             data.labelPositions[line.labelName.toUpper()] = i;
 
+            // 唯一标签索引的**唯一追加点**：@函数标签与 $GOTO 标签都收
+            //（键 = 大写折叠，与 labelPositions 同键；全序在 finalizeLabelIndex
+            //  里按 (脚本名, 行号) 固化）。isFunction 区分 CALL 能不能用它。
+            LabelRef ref;
+            ref.script = scriptName;
+            ref.line = i;
+            ref.isFunction = line.kind == LineKind::FunctionLabel;
+
             // 注册用户自定义函数（@label 即函数入口）—— 构建完整的声明节点
             if (line.kind == LineKind::FunctionLabel) {
                 UserFunctionDecl decl;
@@ -582,21 +587,18 @@ bool EraParseTable::loadScript(const QString& scriptName, const QList<LogicalLin
                 }
 
                 // 保留全部声明（事件函数的 4 组导航需要；同名多份）
-                LabelRef ref;
-                ref.script = scriptName;
-                ref.line = i;
                 ref.isEvent = decl.isEvent;
                 ref.isSingle = decl.isSingle;
                 ref.isPri = decl.isPri;
                 ref.isLater = decl.isLater;
                 ref.isOnly = decl.isOnly;
-                m_labelLists[decl.name].append(ref);
             }
+            // 追加点只有一个：到这里 ref 已经带全了 isFunction / 事件分组位。
+            m_labelIndex[line.labelName.toUpper()].append(ref);
         }
     }
 
     m_scripts.insert(scriptName, data);
-    m_hasLabelCache.clear();   // 新脚本可能带来新标签
     m_privateDefaultPlans.clear();   // 新脚本可能带来新的私有声明 -> 计划重建
     // 注意：m_paramNamesByFunction **不在**这里清 —— 它是 append-only（注册点
     // 插入、first-wins 同 m_functions），在此清会把本次装载刚注册的函数集合
@@ -628,29 +630,33 @@ void EraParseTable::setEntryPoint(const QString& label) {
 
     // 入口脚本的选择属于**装载期**（在一堆脚本里挑一个），不是位置转移：
     // 按旧实现逐字写字段，不发 memorySpaceChanged。
-    for (auto it = m_scripts.constBegin(); it != m_scripts.constEnd(); ++it) {
-        if (it.value().labelPositions.contains(label.toUpper())) {
-            m_position.script = it.key();
-            break;
-        }
+    //
+    // 候选与 CALL/GOTO 同源：唯一标签索引 + 唯一的择一规则 position::firstLabel
+    //（全序第一条 = 脚本名 QString::compare 最小，同脚本取行号最小）。
+    // 此前这里是 for(m_scripts)（QHash 遍历序）——同一台机器不同进程会挑到
+    // 不同的入口脚本（Qt 每进程随机播种 QHash）。
+    const ScriptView view = makeScriptView();
+    const LabelRef* entry = position::firstLabel(view, label, /*callableOnly=*/false);
+    if (entry) {
+        m_position.script = entry->script;
     }
 
     if (m_position.script.isEmpty()) {
         const QStringList commonLabels = {"MAIN_LOOP", "SYSTEM_TITLE", "MAIN", "TITLE"};
         for (const QString& labelToTry : commonLabels) {
-            for (auto it = m_scripts.constBegin(); it != m_scripts.constEnd(); ++it) {
-                if (it.value().labelPositions.contains(labelToTry.toUpper())) {
-                    m_position.script = it.key();
-                    m_entryPoint = labelToTry;
-                    break;
-                }
+            entry = position::firstLabel(view, labelToTry, /*callableOnly=*/false);
+            if (entry) {
+                m_position.script = entry->script;
+                m_entryPoint = labelToTry;
+                break;
             }
-            if (!m_position.script.isEmpty()) break;
         }
     }
 
     if (!m_position.script.isEmpty()) {
-        const int entryLine = getLabelPosition(m_position.script, m_entryPoint);
+        // 入口行同样取自索引（同一条目），不再回头查 labelPositions
+        //（那张表对同名多份记的是最后一条，和这里的「第一条」会是两个答案）。
+        const int entryLine = entry ? entry->line : -1;
         // 信号仍是 3 条，顺序仍是旧顺序：
         //   resetPosition()   -> callStackChanged(0)、positionChanged(script, 0)
         //   setPosition(...)  -> positionChanged(script, entryLine)
@@ -710,7 +716,7 @@ ScriptView EraParseTable::makeScriptView() const {
     // 只打包指针，不读取内容（与 makeIrView 同形）。
     ScriptView view;
     view.scripts = &m_scripts;
-    view.labelLists = &m_labelLists;
+    view.labelIndex = &m_labelIndex;
     return view;
 }
 
@@ -1122,7 +1128,7 @@ loadpass::LoadContext EraParseTable::makeLoadContext() {
     // 只打包引用/指针，不读取内容；表本身仍由 EraParseTable 持有。
     return loadpass::LoadContext{
         m_scripts, m_variables, m_functions, m_constantTable, m_variableStorage,
-        m_evaluator, m_gameBaseData, m_diagnostics, m_labelLists, m_paramNamesByFunction,
+        m_evaluator, m_gameBaseData, m_diagnostics, m_labelIndex, m_paramNamesByFunction,
         m_declarationsResolved, m_constProvidersReady, m_position.script, m_position.line};
 }
 

@@ -38,12 +38,6 @@ const ScriptData* findScript(const ScriptView& view, const QString& script) {
     return it == view.scripts->constEnd() ? nullptr : &it.value();
 }
 
-// 旧 getLabelPosition 的语义：脚本不存在 = -1；标签按大写折叠查表。
-int labelPosition(const ScriptData* data, const QString& label) {
-    if (!data) return -1;
-    return data->labelPositions.value(label.toUpper(), -1);
-}
-
 // 旧 lineAt 的语义：越界/不存在 = nullptr。
 const LogicalLine* lineAt(const ScriptView& view, const QString& script, int line) {
     const ScriptData* data = findScript(view, script);
@@ -249,54 +243,51 @@ bool returnFromCall(PositionState& state, const ScriptView&, PositionEffects& fx
 // 只读查询 / 解析
 // ---------------------------------------------------------------------------
 
+const LabelRef* firstLabel(const ScriptView& view, const QString& name, bool callableOnly,
+                           const QString& onlyScript) {
+    if (!view.labelIndex) return nullptr;
+    // 键 = 大写折叠（与 ScriptData::labelPositions 同一套键）。
+    const auto it = view.labelIndex->constFind(name.toUpper());
+    if (it == view.labelIndex->constEnd()) return nullptr;
+    for (const LabelRef& ref : it.value()) {
+        if (callableOnly && !ref.isFunction) continue;
+        if (!onlyScript.isEmpty() && ref.script != onlyScript) continue;
+        return &ref;   // 索引已按全序固化 —— 第一条就是答案（唯一择一规则）
+    }
+    return nullptr;
+}
+
 bool resolveCallableLabel(const PositionState& state, const ScriptView& view, const QString& label,
                          QString& targetScript, int& targetLine) {
-    const QString upper = label.toUpper();
-    const ScriptData* current = findScript(view, state.script);
-    const int pos = current ? current->labelPositions.value(upper, -1) : -1;
-    if (pos >= 0 && pos < current->lines.size()
-        && current->lines.at(pos).kind == LineKind::FunctionLabel) {
-        targetScript = state.script;
-        targetLine = pos;
-        return true;
-    }
-    if (!view.labelLists) return false;
-    const auto it = view.labelLists->constFind(upper);
-    if (it == view.labelLists->constEnd() || it.value().isEmpty()) return false;
-    targetScript = it.value().first().script;
-    targetLine = it.value().first().line;
+    // 当前脚本优先（@函数标签），未命中则跨脚本取全序第一条。
+    const LabelRef* ref = firstLabel(view, label, /*callableOnly=*/true, state.script);
+    if (!ref) ref = firstLabel(view, label, /*callableOnly=*/true);
+    if (!ref) return false;
+    targetScript = ref->script;
+    targetLine = ref->line;
     return true;
 }
 
 bool resolveJumpTarget(PositionState& state, const ScriptView& view, const QString& label,
                        int& position, PositionEffects& fx) {
-    position = labelPosition(findScript(view, state.script), label);
-    if (position >= 0) {
-        return true;
-    }
-
-    if (!view.scripts) return false;
-    // 迭代顺序沿用旧实现（同一张 QHash 的迭代序）：同名标签跨脚本时「命中哪个」
-    // 与搬出前一致，不做额外排序。
-    for (auto it = view.scripts->constBegin(); it != view.scripts->constEnd(); ++it) {
-        const int pos = it.value().labelPositions.value(label.toUpper(), -1);
-        if (pos >= 0) {
-            position = pos;
-            switchToMemorySpace(state, it.key(), fx);
-            return true;
-        }
-    }
-    return false;
+    // 先本脚本（GOTO 的「当前脚本优先」），未命中则跨脚本 —— 两跳同一份索引。
+    const LabelRef* ref = firstLabel(view, label, /*callableOnly=*/false, state.script);
+    if (!ref) ref = firstLabel(view, label, /*callableOnly=*/false);
+    if (!ref) return false;
+    position = ref->line;
+    switchToMemorySpace(state, ref->script, fx);   // 同脚本 = no-op，不亮位
+    return true;
 }
 
 bool resolveJumpToScript(PositionState& state, const ScriptView& view, const QString& script,
                          const QString& label, int& position, PositionEffects& fx) {
-    position = labelPosition(findScript(view, script), label);
-    if (position >= 0) {
-        switchToMemorySpace(state, script, fx);
-        return true;
-    }
-    return false;
+    // 指定脚本内的解析：同一个 firstLabel + onlyScript 过滤 —— 与
+    // resolveJumpTarget 的「本脚本优先」那一跳是同一条规则。
+    const LabelRef* ref = firstLabel(view, label, /*callableOnly=*/false, script);
+    if (!ref) return false;
+    position = ref->line;
+    switchToMemorySpace(state, script, fx);
+    return true;
 }
 
 QString executionScope(const PositionState& state, const ScriptView& view) {

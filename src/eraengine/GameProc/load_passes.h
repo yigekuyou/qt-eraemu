@@ -71,8 +71,9 @@ struct LoadContext {
     GameBaseData* gameBaseData;
     // 8) 诊断容器：pass 1/2/3 都往里写（错误 + 告警），跨步骤累积。
     ParseDiagnostics& diagnostics;
-    // 9) 全局标签索引：pass 1 末尾按 (脚本名, 行号) 排序固化；必须可变。
-    QHash<QString, QList<LabelRef>>& labelLists;
+    // 9) 唯一标签索引（裸标签名（大写）-> 全部 @/$ 声明）：pass 1 末尾按
+    //    labelRefLess（脚本名 QString::compare -> 行号）排序固化；必须可变。
+    QHash<QString, QList<LabelRef>>& labelIndex;
     // 10) 形参名集合缓存：装载期解析与 pass 2 就地定型共用；pass 2 先补顶层
     //     空集（并行趟只读），必须可变。
     QHash<QString, QSet<QString>>& paramNames;

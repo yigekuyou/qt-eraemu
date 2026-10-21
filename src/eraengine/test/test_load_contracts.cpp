@@ -86,7 +86,7 @@ struct ValidationFixture {
     VariableTable variables;
     QHash<QString, UserFunctionInfo> functions;
     ParseDiagnostics diags;
-    QHash<QString, QList<LabelRef>> labelLists;
+    QHash<QString, QList<LabelRef>> labelIndex;
     QHash<QString, QSet<QString>> paramNames;
     bool declarationsResolved = true;
     bool constProvidersReady = true;
@@ -103,7 +103,7 @@ struct ValidationFixture {
         return loadpass::LoadContext{scripts, variables, functions,
                                      /*constantTable=*/nullptr, /*storage=*/nullptr,
                                      /*evaluator=*/nullptr, /*gameBaseData=*/nullptr,
-                                     diags, labelLists, paramNames,
+                                     diags, labelIndex, paramNames,
                                      declarationsResolved, constProvidersReady,
                                      positionScript, positionLine};
     }

@@ -142,26 +142,37 @@ bool returnFromCall(PositionState& state, const ScriptView& view, PositionEffect
 
 // ---- 只读查询 / 解析 ----
 
-// 解析 CALL/JUMP 的目标：当前脚本优先（且必须是 @函数标签），否则查全局索引
-//（markLoadComplete 已排序固化，取排序后的第一份）。
+// 「裸标签属于哪个脚本」的**唯一**入口，也是**唯一**的择一规则：
+// 在唯一那张索引（ScriptView::labelIndex）里取全序第一条满足条件的声明。
+//   callableOnly = true  只收 @函数标签（CALL / JUMP / 式中调用 / 存在性探针）
+//   callableOnly = false @ 与 $ 都收（GOTO 解析、入口点挑选）
+//   onlyScript 非空      只在该脚本内找（CALL 的「当前脚本优先」）
+// 全序 = 脚本名 QString::compare 升序 -> 同脚本内行号升序（labelRefLess，
+// 装载收尾 1/6 的 finalizeLabelIndex 固化）。重名时**一律取第一条** ——
+// 与 C# LabelDictionary.SortLabels 的 list[0] 同义。跨脚本那一跳与旧
+// labelLists 的「排序后第一份」逐字一致；同一脚本内的重复声明则从旧实现
+// labelPositions 的「最后一条」改成「第一条」（C# 也是第一条）。
+// 返回的指针指向索引内部（view 必须活得比它久）。
+const LabelRef* firstLabel(const ScriptView& view, const QString& name, bool callableOnly,
+                           const QString& onlyScript = QString());
+
+// 解析 CALL/JUMP 的目标：当前脚本优先（且必须是 @函数标签），否则查同一张
+// 索引的全序第一条。两次查询走的是同一个 firstLabel，规则不在这里。
 // 「必须是 @函数标签」这一条不是性能优化，而是语义：
 //   * 旧实现是 for(m_scripts) 全量扫描 + 每脚本一次 label.toUpper() ——
 //     1500+ 脚本的语料上每次跨文件 CALL/式中调用都要 ~0.7ms（eraTW 地图逐格
 //     TRYCALLFORM 一次上万次；CALC_COS 这类小函数的式中调用正是这 1541 次迭代
-//     的价钱）。m_labelLists 是装载期建好的全局标签→LabelRef 索引（**只收
-//     @函数标签**，loadScript 的 FunctionLabel 分支），直接 O(1)。
-//   * 当前脚本优先时命中 $GOTO 标签会导致自跳死循环：C# 的
-//     FunctionIdentifierDictionary 只收 @label；eraMegaten 的
-//     SYSTEM_TITLE.erb:127 `$PRINT_TITLE` 与 TITLE_STOCK.ERB:17 `@PRINT_TITLE`
-//     同名共存，命中 $ 标签就死循环。
-//   * 跨脚本取排序后的第一份：旧代码的 QHash 迭代顺序本来就任意，这里只是把
-//     「任意」换成「确定」。
+//     的价钱）。
+//   * 命中 $GOTO 标签会导致自跳死循环：C# 的 FunctionIdentifierDictionary 只收
+//     @label；eraMegaten 的 SYSTEM_TITLE.erb:127 `$PRINT_TITLE` 与
+//     TITLE_STOCK.ERB:17 `@PRINT_TITLE` 同名共存，CALL 命中 $ 就死循环。
+//     callableOnly 把这一条变成了索引查询的结构性事实。
 // 不改任何状态（当前脚本的优先判定只看 state.script）。
 bool resolveCallableLabel(const PositionState& state, const ScriptView& view, const QString& label,
                          QString& targetScript, int& targetLine);
 
-// GOTO 目标解析：先本脚本，未命中则扫描全部脚本；命中时**切到那个脚本**
-//（亮 memorySpaceChanged）。position 只在成功时写入。
+// GOTO 目标解析：先本脚本，未命中则查同一张索引的全序第一条；
+// 命中时**切到那个脚本**（亮 memorySpaceChanged）。position 只在成功时写入。
 bool resolveJumpTarget(PositionState& state, const ScriptView& view, const QString& label,
                        int& position, PositionEffects& fx);
 

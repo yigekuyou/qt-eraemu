@@ -21,7 +21,7 @@
 // 验收物：位置区（执行位置 + 调用栈）可以**脱离 ExecutionEngine / 解析器**验证。
 //
 // 1) 前半部分直接驱动 position:: 的自由函数：手搓两个 ScriptData（含
-//    labelPositions 与 LogicalLine.ownerFunction）+ 一张 labelLists，拼 ScriptView。
+//    labelPositions 与 LogicalLine.ownerFunction）+ 一张标签索引，拼 ScriptView。
 //    不经过 QObject、不经过装载流水线 —— 调用栈/返回地址语义因此可以逐条钉死。
 // 2) 后半部分用真的 EraParseTable 验**信号顺序**（Effects 只回答「发哪个」，
 //    顺序在 emitEffects 里写死）：callLabel / returnFromCall / jumpToLabel 按
@@ -33,6 +33,8 @@
 #include <QList>
 #include <QString>
 #include <QStringList>
+
+#include <algorithm>
 
 #include "ast/logical_line.h"
 #include "era_parse_table.h"
@@ -155,7 +157,7 @@ struct Fixture {
     ScriptView view() const {
         ScriptView v;
         v.scripts = &scripts;
-        v.labelLists = &labels;
+        v.labelIndex = &labels;
         return v;
     }
 };
@@ -495,6 +497,98 @@ int main(int argc, char** argv) {
         table.clear();
         checkStr(log.join(QLatin1Char(' ')), "position(,0) callStack(0)",
                  "clear() 例外：positionChanged 先、callStackChanged 后（旧顺序）");
+    }
+
+    // -----------------------------------------------------------------------
+    // 11) 裸标签只属于一个脚本：唯一索引 + 唯一全序 + 唯一择一规则
+    //
+    // 6 个脚本都声明 @SHARED（重名），只有 S01 的那份不在 1 行（在 5 行）。
+    // 全序 = 脚本名 QString::compare 升序 -> 行号升序，所以答案只有一个：
+    // S01.ERB:5。装载顺序反过来（QHash 的插入序、旧实现的遍历序都跟着变）
+    // 也必须给出同一个答案。
+    // -----------------------------------------------------------------------
+    qDebug() << "\n11) 重名裸标签：装载序无关的唯一定序";
+    {
+        // SHARED 落在第 padCount + 1 行（0 行是 @PAD，中间是 PRINT）。
+        auto sharedScript = [](int padCount) {
+            QList<LogicalLine> lines;
+            lines << funcLabel(QStringLiteral("PAD"));
+            for (int i = 0; i < padCount; ++i) lines << instr(QStringLiteral("PRINT"), QStringLiteral("PAD"));
+            lines << funcLabel(QStringLiteral("SHARED"));
+            lines << instr(QStringLiteral("RETURN"), QStringLiteral("SHARED"));
+            return lines;
+        };
+        const QStringList names = {QStringLiteral("S01.ERB"), QStringLiteral("S02.ERB"),
+                                   QStringLiteral("S03.ERB"), QStringLiteral("S04.ERB"),
+                                   QStringLiteral("S05.ERB"), QStringLiteral("S06.ERB")};
+
+        // 返回这一轮的可观察结果；两轮（正序 / 逆序装载）必须逐字相同。
+        auto run = [&](const QStringList& order) {
+            EraParseTable table(nullptr);
+            for (const QString& name : order) {
+                table.loadScript(name, sharedScript(name == QLatin1String("S01.ERB") ? 4 : 0));
+            }
+            table.loadScript(QStringLiteral("N.ERB"),
+                             {funcLabel(QStringLiteral("NEUTRAL")),
+                              instr(QStringLiteral("RETURN"), QStringLiteral("NEUTRAL"))});
+            table.markLoadComplete();
+
+            // 中性脚本里没有 SHARED -> 只能跨脚本解析。
+            table.setPosition(QStringLiteral("N.ERB"), 0, /*jumped=*/false);
+            QString callScript;
+            int callLine = -1;
+            const bool callOk = table.resolveCallableLabel(QStringLiteral("SHARED"), callScript, callLine);
+            int gotoLine = -1;
+            const bool gotoOk = table.resolveJumpTarget(QStringLiteral("SHARED"), gotoLine);
+            const QString gotoScript = table.getCurrentScript();
+
+            check(callOk && gotoOk, "两轮：SHARED 同时可 CALL 与可 GOTO");
+            checkStr(callScript, "S01.ERB", "CALL：全序第一 = 脚本名 compare 最小的脚本");
+            checkInt(callLine, 5, "CALL：该脚本内的行号 5");
+            checkStr(gotoScript, "S01.ERB", "GOTO：落到同一个脚本");
+            checkInt(gotoLine, 5, "GOTO：落到同一行");
+            check(callScript == gotoScript && callLine == gotoLine,
+                  "CALL 与 GOTO 解析到**同一个** (script, line)（旧实现两条路各答各的）");
+
+            // 索引本身的全序（数据，不是消费者）：S01 -> S06，S01 的行号 5 在 S06 的 1 之前。
+            const QList<LabelRef> all = table.labels(QStringLiteral("SHARED"));
+            checkInt(int(all.size()), 6, "索引收了全部 6 份声明");
+            if (all.size() == 6) {
+                checkStr(all.first().script, "S01.ERB", "索引第一条 = S01.ERB");
+                checkInt(all.first().line, 5, "索引第一条 = S01.ERB:5（脚本名先于行号）");
+                checkStr(all.last().script, "S06.ERB", "索引最后一条 = S06.ERB");
+                bool sorted = true;
+                for (int i = 1; i < all.size(); ++i) sorted = sorted && labelRefLess(all.at(i - 1), all.at(i));
+                check(sorted, "索引按 labelRefLess 全序排列");
+            }
+
+            // 当前脚本优先：S04 里也有 SHARED -> 两条路都落到 S04，不跑到全序第一。
+            table.setPosition(QStringLiteral("S04.ERB"), 0, /*jumped=*/false);
+            QString curScript;
+            int curLine = -1;
+            check(table.resolveCallableLabel(QStringLiteral("SHARED"), curScript, curLine)
+                      && curScript == QLatin1String("S04.ERB") && curLine == 1,
+                  "本脚本优先：CALL 走 S04.ERB:1");
+            int curGoto = -1;
+            check(table.resolveJumpTarget(QStringLiteral("SHARED"), curGoto)
+                      && table.getCurrentScript() == QLatin1String("S04.ERB") && curGoto == 1,
+                  "本脚本优先：GOTO 也走 S04.ERB:1");
+
+            // 入口点：同一个 firstLabel，答案与装载序无关。
+            table.setEntryPoint(QStringLiteral("SHARED"));
+            checkStr(table.getCurrentScript(), "S01.ERB", "入口脚本 = 全序第一的脚本");
+            checkInt(table.currentLine(), 5, "入口行 = 同一条目的行号");
+
+            return QStringLiteral("call=%1:%2 goto=%3:%4 entry=%5:%6 labels=%7")
+                .arg(callScript).arg(callLine).arg(gotoScript).arg(gotoLine)
+                .arg(table.getCurrentScript()).arg(table.currentLine()).arg(all.size());
+        };
+
+        const QString forward = run(names);
+        QStringList reversed = names;
+        std::reverse(reversed.begin(), reversed.end());
+        const QString backward = run(reversed);
+        checkStr(backward, forward, "相反装载序 -> CALL/GOTO/入口点/索引全序逐字相同");
     }
 
     if (g_failures == 0) qDebug() << "\nALL PASSED";

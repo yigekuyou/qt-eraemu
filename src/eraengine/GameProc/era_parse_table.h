@@ -129,17 +129,19 @@ struct ScriptData {
 using UserFunctionInfo = UserFunctionDecl;
 
 // ---------------------------------------------------------------------------
-// LabelRef —— 一个函数标签的声明位置（同名标签可以有多条）
+// LabelRef —— 一个标签（@函数标签 / $GOTO 标签）的声明位置
 //
 // 对齐 C# LabelDictionary.labelAtDic（名称 -> List<FunctionLabelLine>）：
 // 事件函数（@EVENTTRAIN 等）在真实游戏里会被大量「口上」重复声明，
-// 系统状态机需要按 #SINGLE/#PRI/#LATER/#ONLY 分成 4 组依次调用。
-// 因此除 labelPositions（名称 -> 最后一条，用于普通 GOTO/CALL）之外，
-// 还要保留全部声明。
+// 系统状态机需要按 #SINGLE/#PRI/#LATER/#ONLY 分成 4 组依次调用，
+// 所以**全部声明**都要留下来（labels() 的 4 组导航就是这张表的投影）。
 // ---------------------------------------------------------------------------
 struct LabelRef {
     QString script;
     int     line = -1;
+    // @函数标签 = true（CALL / JUMP / 式中调用的合法目标）；
+    // $GOTO 标签 = false（只有 GOTO 认它；C# FunctionIdentifierDictionary 只收 @）。
+    bool    isFunction = true;
     bool    isEvent = false;
     bool    isSingle = false;
     bool    isPri = false;
@@ -152,14 +154,28 @@ struct LabelRef {
 };
 Q_DECLARE_METATYPE(LabelRef)
 
+// 标签索引的**唯一全序**：脚本名 QString::compare 升序，同脚本内行号升序。
+// 与 C# FunctionLabelLine.CompareTo（FileIndex -> 行号）同形，但这里用脚本名
+// 而不是装载序号 —— 装载是并行的，装载序本身就不确定。
+// 声明一次、两处使用：finalizeLabelIndex（固化）与 labels()（装载期惰性排）。
+inline bool labelRefLess(const LabelRef& a, const LabelRef& b) {
+    if (a.script != b.script) return QString::compare(a.script, b.script) < 0;
+    return a.line < b.line;
+}
+
 // ---------------------------------------------------------------------------
-// 位置区唯一需要的两张表（跳转目标解析 + 行数）。
+// 位置区唯一需要的两张表（唯一标签索引 + 行数）。
 // 不复用 parsecheck::ParseIrView —— 那 5 个字段里位置区一个都不读，
 // 视图只装真正被读的数据。
+//
+// labelIndex：裸标签名（**大写折叠**，与 ScriptData::labelPositions 同键） ->
+// 该名字的**全部**声明，按 labelRefLess 排成一个全序。装载收尾 1/6
+// （loadpass::finalizeLabelIndex）里排序固化一次，运行期只读、不重建。
+// 「裸标签属于哪个脚本」只有这一份数据可查（见 position::firstLabel）。
 // ---------------------------------------------------------------------------
 struct ScriptView {
     const QHash<QString, ScriptData>* scripts = nullptr;
-    const QHash<QString, QList<LabelRef>>* labelLists = nullptr;
+    const QHash<QString, QList<LabelRef>>* labelIndex = nullptr;
 };
 
 // ---------------------------------------------------------------------------
@@ -420,8 +436,10 @@ public slots:
     // 「JUMP 帧弹出后立刻递归 Return」效果：JUMP 目标函数 RETURN 时直接回到
     // 当前函数的调用者）。
     bool jumpLabel(const QString& label);
-    // @函数标签解析（上面三者的共用实现）：当前脚本优先（且必须是 FunctionLabel），
-    // 否则查 m_labelLists 全局索引（markLoadComplete 已排序固化）。
+    // @函数标签解析（callLabel / jumpLabel / hasCallableLabel 的共用实现）：
+    // 当前脚本优先（且必须是 FunctionLabel），否则查唯一标签索引（m_labelIndex）
+    // 里该名字的**全序第一条** —— 跨脚本重名的择一规则只在 position::firstLabel
+    // 一处（脚本名 QString::compare 最小，同脚本取行号最小）。
     // 旧实现是 for(m_scripts) 全量扫描 + 每脚本一次 label.toUpper() ——
     // 1500+ 脚本的语料上每次跨文件 CALL/式中调用都要 ~0.7ms。
     [[nodiscard]] bool resolveCallableLabel(const QString& label, QString& targetScript,
@@ -558,16 +576,15 @@ private:
     // 私有名表安装（installPrivateScopes）的前置条件。
     bool m_declarationsResolved = false;
     QHash<QString, ScriptData> m_scripts;
-    // perf：hasLabel 的结果按标签名记忆（此前每次 TRYCALL/TRYCALLFORM 都遍历
-    // 全部脚本的 labelPositions；eraTW 地图逐字符 TRYCALLFORM 时是热点）。
-    // 装载期每插入一个脚本即失效重建。
-    mutable QHash<QString, bool> m_hasLabelCache;
     QHash<QString, UserFunctionInfo> m_functions;
     mutable QHash<QString, QSet<QString>> m_paramNamesByFunction;   // 形参名集合缓存（loadScript/clear 时失效）
     // 每函数的私有初值调用计划（loadScript/clear 时失效：新脚本可能带来新私有声明）
     QHash<QString, QList<PrivateDefaultEntry>> m_privateDefaultPlans;
-    // 名称 -> 全部声明（同名函数可重复声明；事件函数靠它做 4 组导航）
-    QHash<QString, QList<LabelRef>> m_labelLists;
+    // **唯一**的标签索引：裸标签名（大写）-> 全部声明（@ 与 $ 都收），
+    // 全序由 labelRefLess 定（脚本名 QString::compare -> 行号）。
+    // 条目只在 loadScript 的标签登记处追加；顺序只在 finalizeLabelIndex 固化。
+    // CALL/JUMP 解析、GOTO 解析、入口点挑选、hasLabel 全查这一张表。
+    QHash<QString, QList<LabelRef>> m_labelIndex;
     ParseDiagnostics m_diagnostics;
     const ConstantTable* m_constantTable = nullptr;
     VariableTable m_variables;

@@ -204,11 +204,11 @@ int main(int argc, char* argv[]) {
               "未定义 -> 0");
     }
 
-    qDebug() << "\n12) 跨文件 CALL / JUMP 的标签解析（m_labelLists 全局索引）";
+    qDebug() << "\n12) 跨文件 CALL / JUMP 的标签解析（m_labelIndex 全局索引）";
     // 旧实现：当前脚本没命中就 for(m_scripts) 扫全部脚本 + 每脚本一次
     // label.toUpper()。eraTW/FL3.8 有 1500+ 个脚本，跨文件 CALL / 式中调用
     // 每次都要付这个 O(n)（eraTW 地图逐格 TRYCALLFORM 一次上万次）。
-    // resolveCallableLabel 改查 m_labelLists（装载期就建好的全局索引），
+    // resolveCallableLabel 改查 m_labelIndex（装载期就建好的全局索引），
     // 此处锁行为：跨文件命中、当前脚本优先、$ 标签不可调用。
     {
         const auto makeGoto = [](const QString& label, int lineNo) {

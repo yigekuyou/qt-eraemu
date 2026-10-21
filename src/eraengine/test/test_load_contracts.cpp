@@ -22,10 +22,11 @@
 // 本测试锁定**越界调用是定义好的行为**：
 //
 //   1. 阶段机：Empty -> Loading -> Bound -> Finalized；越界入口 qWarning + no-op。
-//   2. 未装载就调只读收尾步骤：不产出诊断、不计数（而不是拿空表乱报）。
-//   3. 只读步骤重复调用：runCount 递增，且诊断**确实**重复产出（契约本身）。
-//   4. markLoadComplete 调两次：第二次 no-op（诊断、阶段、计数都不变）。
-//   5. 收尾后 loadScript：返回 false，脚本表不变。
+//   2. 未装载就调只读收尾步骤：不产出诊断（而不是拿空表乱报）。
+//   3. 只读步骤重复调用：诊断按 origin 切片**原地替换**，跑 N 次与跑 1 次
+//      逐字节相同（幂等由数据表达，不靠调用方数次数/去重）。
+//   4. markLoadComplete 调两次：第二次 no-op（诊断、阶段都不变）。
+//   5. 收尾后 loadScript：返回 false / 增量 append 的显式契约。
 //   6. 私有名表安装前后各调一次 setPrivateScope：安装后 names 参数被忽略。
 //   7. 存档前置条件 SaveReadiness 的三态可查询；新增声明会把
 //     「已定稿」退回「未定稿」。
@@ -36,6 +37,8 @@
 #include <QHash>
 #include <QStringList>
 #include <QThreadPool>
+
+#include <algorithm>
 
 #include "ast/ast_builder.h"
 #include "ast/expression_ast.h"
@@ -64,6 +67,38 @@ static QList<LogicalLine> buildLines(EraParseTable& table, const QStringList& so
 
 static int diagnosticCount(const EraParseTable& table) {
     return table.parseDiagnostics().size();
+}
+
+static QList<ParseDiagnostic> withOrigin(const ParseDiagnostics& d, DiagOrigin origin) {
+    QList<ParseDiagnostic> out;
+    for (const ParseDiagnostic& x : d.all())
+        if (x.origin == origin) out.append(x);
+    return out;
+}
+
+// 把整份诊断序列化成字符串：**所有字段**（含 origin）与产生顺序都在里面。
+// 幂等断言用它做逐字节比对。
+static QString serializeDiagnostics(const ParseDiagnostics& d) {
+    QString out;
+    for (const ParseDiagnostic& x : d.all()) {
+        const QStringList fields = {
+            QString::fromLatin1(diagOriginName(x.origin)),
+            QString::fromLatin1(diagSeverityName(x.severity)),
+            QString::fromLatin1(diagEffectName(x.effect)),
+            x.code, x.file, QString::number(x.line), QString::number(x.column),
+            QString::number(x.length), x.position, x.message, x.snippet,
+        };
+        out += fields.join(QLatin1Char('\t')) + QLatin1Char('\n');
+    }
+    return out;
+}
+
+// texts() 是派生视图：条数一一对应，且每条 == 结构化条目的 toString()。
+static bool textsConsistent(const ParseDiagnostics& d) {
+    if (d.texts().size() != d.size()) return false;
+    for (int i = 0; i < d.size(); ++i)
+        if (d.texts().at(i) != d.all().at(i).toString()) return false;
+    return true;
 }
 
 // ---------------------------------------------------------------------------
@@ -170,7 +205,7 @@ int main(int argc, char* argv[]) {
     table.setVariableStorage(&storage);
 
     // ------------------------------------------------------------------
-    // 1) 未装载（Empty）：只读步骤 qWarning + no-op，不产出诊断、不计数。
+    // 1) 未装载（Empty）：只读步骤 qWarning + no-op，不产出诊断。
     // ------------------------------------------------------------------
     qDebug() << "\n1) Empty 阶段调用只读收尾步骤";
     check(table.loadPhase() == EraParseTable::LoadPhase::Empty, "fresh table: phase == Empty");
@@ -179,10 +214,6 @@ int main(int argc, char* argv[]) {
     table.checkStructures();
     table.checkStaticValues();
     check(diagnosticCount(table) == 0, "read-only passes before load: no diagnostics (no-op)");
-    check(table.readOnlyPassRunCount(EraParseTable::ReadOnlyPass::StaticTargets) == 0
-              && table.readOnlyPassRunCount(EraParseTable::ReadOnlyPass::Structures) == 0
-              && table.readOnlyPassRunCount(EraParseTable::ReadOnlyPass::StaticValues) == 0,
-          "read-only passes before load: run counts stay 0");
 
     // ------------------------------------------------------------------
     // 2) Empty -> Loading -> Finalized（脚本故意缺 ENDIF，让结构检查有诊断）。
@@ -201,42 +232,163 @@ int main(int argc, char* argv[]) {
     // 绑定完成前只读步骤仍应 no-op（Loading 不是 Bound）。
     const int beforeBind = diagnosticCount(table);
     table.checkStructures();
-    check(diagnosticCount(table) == beforeBind
-              && table.readOnlyPassRunCount(EraParseTable::ReadOnlyPass::Structures) == 0,
+    check(diagnosticCount(table) == beforeBind,
           "Loading (bindings not complete): checkStructures is a no-op");
 
     table.markLoadComplete();
     check(table.loadPhase() == EraParseTable::LoadPhase::Finalized,
           "after markLoadComplete: phase == Finalized");
-    check(table.readOnlyPassRunCount(EraParseTable::ReadOnlyPass::StaticTargets) == 1
-              && table.readOnlyPassRunCount(EraParseTable::ReadOnlyPass::Structures) == 1
-              && table.readOnlyPassRunCount(EraParseTable::ReadOnlyPass::StaticValues) == 1,
-          "markLoadComplete ran each read-only pass exactly once");
 
-    // 重复调用契约：诊断真的会重复产出（这是旧行为，现在可观察）。
+    // 重跑同一个 pass：诊断条数不增，整份诊断（含 origin/顺序）逐字节相同。
     const int afterLoad = diagnosticCount(table);
     check(afterLoad > 0, "missing ENDIF produced at least one diagnostic");
-    table.checkStructures();
-    check(table.readOnlyPassRunCount(EraParseTable::ReadOnlyPass::Structures) == 2,
-          "re-running checkStructures increments run count to 2");
-    check(diagnosticCount(table) > afterLoad,
-          "re-running checkStructures duplicates diagnostics (documented contract)");
+    {
+        const QString once = serializeDiagnostics(table.parseDiagnostics());
+        table.checkStructures();
+        check(diagnosticCount(table) == afterLoad,
+              "re-running checkStructures: diagnostic count unchanged");
+        check(serializeDiagnostics(table.parseDiagnostics()) == once,
+              "re-running checkStructures: 与跑一次逐字段/逐顺序相同");
+        table.checkStructures();
+        check(diagnosticCount(table) == afterLoad
+                  && serializeDiagnostics(table.parseDiagnostics()) == once,
+              "re-running checkStructures a third time: still byte-identical to one run");
+    }
 
     // ------------------------------------------------------------------
     // 3) markLoadComplete 调两次：第二次 qWarning + no-op。
     // ------------------------------------------------------------------
     qDebug() << "\n3) markLoadComplete 重复调用";
     const int diagnosticsBeforeSecond = diagnosticCount(table);
-    const int structuresBeforeSecond =
-        table.readOnlyPassRunCount(EraParseTable::ReadOnlyPass::Structures);
+    const QString serializedBeforeSecond = serializeDiagnostics(table.parseDiagnostics());
     table.markLoadComplete();
     check(table.loadPhase() == EraParseTable::LoadPhase::Finalized,
           "second markLoadComplete: phase stays Finalized");
     check(diagnosticCount(table) == diagnosticsBeforeSecond,
           "second markLoadComplete: diagnostics unchanged (no-op)");
-    check(table.readOnlyPassRunCount(EraParseTable::ReadOnlyPass::Structures)
-              == structuresBeforeSecond,
-          "second markLoadComplete: pass run counts unchanged (no-op)");
+    check(serializeDiagnostics(table.parseDiagnostics()) == serializedBeforeSecond,
+          "second markLoadComplete: 诊断逐字段/逐顺序不变（no-op）");
+
+    // ------------------------------------------------------------------
+    // 3b) origin 切片：每个只读 pass 的诊断归自己的 origin；重跑/交替重跑
+    //     只替换自己的切片，互不覆盖；3/6 的 RejectLine 不受影响。
+    //
+    // 夹具同时造出四类：
+    //   `A$ ++`          -> 3/6 finalizeValidation 的 RejectLine（origin=Load）
+    //   `ELSE` / `IF 1`  -> 5/6 checkStructures 的 kStructure（origin=Pass5）
+    //   `CALL MISSING_FN`-> 4/6 resolveStaticTargets 的 kLabelNotFound（Pass4）
+    //   `PRINTV 10 / 0`  -> 6/6 checkStaticValues 的 kStaticValue（Pass6）
+    // ------------------------------------------------------------------
+    qDebug() << "\n3b) origin 切片：重跑幂等 / 交替重跑 / 跨步骤不覆盖";
+    {
+        ProcessState originState;
+        VariableStorage originStorage;
+        EraParseTable originTable(&originState);
+        originTable.setVariableStorage(&originStorage);
+        const QStringList originSource = {
+            QStringLiteral("@MAIN"),          // 1
+            QStringLiteral("A$ ++"),          // 2 -> 3/6 RejectLine
+            QStringLiteral("ELSE"),           // 3 -> 5/6 kStructure
+            QStringLiteral("CALL MISSING_FN"),// 4 -> 4/6 kLabelNotFound
+            QStringLiteral("PRINTV 10 / 0"),  // 5 -> 6/6 kStaticValue
+            QStringLiteral("IF 1"),           // 6 -> 5/6 kStructure（未闭合）
+            QStringLiteral("PRINTV 2"),       // 7
+        };
+        check(originTable.loadScript(QStringLiteral("origin.ERB"),
+                                     buildLines(originTable, originSource)),
+              "origin 夹具装载成功");
+        originTable.markLoadComplete();
+
+        const ParseDiagnostics& diags = originTable.parseDiagnostics();
+        const QList<ParseDiagnostic> pass4 = withOrigin(diags, DiagOrigin::Pass4);
+        const QList<ParseDiagnostic> pass5 = withOrigin(diags, DiagOrigin::Pass5);
+        const QList<ParseDiagnostic> pass6 = withOrigin(diags, DiagOrigin::Pass6);
+        const auto rejectLines = [](const ParseDiagnostics& d) {
+            QList<ParseDiagnostic> out;
+            for (const ParseDiagnostic& x : d.all())
+                if (x.effect == DiagEffect::RejectLine) out.append(x);
+            return out;
+        };
+        const QList<ParseDiagnostic> rejectsBefore = rejectLines(diags);
+
+        // d) 首次运行（markLoadComplete）的 origin 分布：code -> origin。
+        auto allWithCodeHaveOrigin = [&diags](const char* code, DiagOrigin origin) {
+            bool any = false;
+            for (const ParseDiagnostic& x : diags.all()) {
+                if (x.code != QLatin1String(code)) continue;
+                any = true;
+                if (x.origin != origin) return false;
+            }
+            return any;
+        };
+        check(pass4.size() == 1
+                  && allWithCodeHaveOrigin(DiagCode::kLabelNotFound, DiagOrigin::Pass4),
+              "4/6 首次运行：1 条 kLabelNotFound，全部归 origin=Pass4");
+        check(pass5.size() == 2
+                  && allWithCodeHaveOrigin(DiagCode::kStructure, DiagOrigin::Pass5),
+              "5/6 首次运行：2 条 kStructure，全部归 origin=Pass5");
+        check(pass6.size() == 1
+                  && allWithCodeHaveOrigin(DiagCode::kStaticValue, DiagOrigin::Pass6),
+              "6/6 首次运行：1 条 kStaticValue，全部归 origin=Pass6");
+        check(!rejectsBefore.isEmpty()
+                  && std::all_of(rejectsBefore.cbegin(), rejectsBefore.cend(),
+                                 [](const ParseDiagnostic& x) {
+                                     return x.origin == DiagOrigin::Load;
+                                 }),
+              "3/6 的 RejectLine 归 origin=Load（写步骤不切片，见边界说明）");
+        check(!pass4.isEmpty() && !pass5.isEmpty() && !pass6.isEmpty(),
+              QString("首次运行的切片都非空（Pass4=%1 / Pass5=%2 / Pass6=%3）")
+                  .arg(pass4.size()).arg(pass5.size()).arg(pass6.size()));
+
+        // a) 同一只读 pass 连跑两次/三次：整份诊断逐字段逐顺序不变。
+        const QString once = serializeDiagnostics(diags);
+        for (int i = 0; i < 2; ++i) originTable.resolveStaticTargets();
+        check(serializeDiagnostics(originTable.parseDiagnostics()) == once,
+              "resolveStaticTargets 连跑两次 -> 整份诊断与跑一次逐字节相同");
+        for (int i = 0; i < 2; ++i) originTable.checkStructures();
+        check(serializeDiagnostics(originTable.parseDiagnostics()) == once,
+              "checkStructures 连跑两次 -> 整份诊断与跑一次逐字节相同");
+        for (int i = 0; i < 2; ++i) originTable.checkStaticValues();
+        check(serializeDiagnostics(originTable.parseDiagnostics()) == once,
+              "checkStaticValues 连跑两次 -> 整份诊断与跑一次逐字节相同");
+
+        // b) 交替重跑 4→5→4→6→5：每个 origin 切片仍等于各自跑一次，
+        //    且互不覆盖（切片按 origin 过滤后逐字段相同）。
+        originTable.resolveStaticTargets();
+        originTable.checkStructures();
+        originTable.resolveStaticTargets();
+        originTable.checkStaticValues();
+        originTable.checkStructures();
+        check(!withOrigin(originTable.parseDiagnostics(), DiagOrigin::Pass4).isEmpty(),
+              "交替重跑后 Pass4 切片仍在（未被其它 pass 覆盖）");
+        auto sameSlice = [](const QList<ParseDiagnostic>& a, const QList<ParseDiagnostic>& b) {
+            if (a.size() != b.size()) return false;
+            for (int i = 0; i < a.size(); ++i) {
+                if (!sameFields(a.at(i), b.at(i)) || a.at(i).origin != b.at(i).origin)
+                    return false;
+            }
+            return true;
+        };
+        check(sameSlice(pass4, withOrigin(originTable.parseDiagnostics(),
+                                          DiagOrigin::Pass4)),
+              "4→5→4→6→5 后 Pass4 切片 == 首次运行切片");
+        check(sameSlice(pass5, withOrigin(originTable.parseDiagnostics(),
+                                          DiagOrigin::Pass5)),
+              "4→5→4→6→5 后 Pass5 切片 == 首次运行切片");
+        check(sameSlice(pass6, withOrigin(originTable.parseDiagnostics(),
+                                          DiagOrigin::Pass6)),
+              "4→5→4→6→5 后 Pass6 切片 == 首次运行切片");
+
+        // c) 3/6 的 RejectLine 在重跑 4/5/6 后仍在（替换按 origin 切片，不是整体清空）。
+        check(sameList(rejectsBefore, rejectLines(originTable.parseDiagnostics())),
+              "重跑 4/5/6 后 3/6 的 RejectLine 仍逐字段存在");
+
+        // 整份诊断也应与「首次运行」逐字节相同（replaceOrigin 原位替换）。
+        check(serializeDiagnostics(originTable.parseDiagnostics()) == once,
+              "交替重跑 4→5→4→6→5 后整份诊断与首次运行逐字节相同");
+        check(textsConsistent(originTable.parseDiagnostics()),
+              "replaceOrigin 重建后 texts()/all()/count() 一一对应");
+    }
 
     // ------------------------------------------------------------------
     // 4) 收尾之后 loadScript：增量 append —— 阶段重新打开为 Loading，

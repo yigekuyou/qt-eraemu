@@ -23,12 +23,10 @@
 //
 // 做法：
 //   1. 正常装载一小段脚本并收尾（拿定型的 IR）；
-//   2. clearDiagnostics()；
-//   3. 只用 EraParseTable 的**只读 getter** 手工拼一个 parsecheck::ParseIrView
-//      （scripts / variables / constantTable / storage / functions，全部 const）；
-//   4. 直接调 parsecheck::checkXxx(view, diags)，断言条数 / code / 行号；
-//   5. 再走 EraParseTable 的同名 forwarder，逐字段比对两条路径的诊断
-//      —— 证明「搬出去」是逐字搬运，没有改逻辑。
+//   2. 手工拼只读视图（或直接用 EraParseTable 的 public getter）；
+//   3. 直接调 parsecheck::checkXxx(view, diags)，断言条数 / code / 行号；
+//   4. 再走 EraParseTable 的同名 forwarder，按 origin 切片比对两条路径的诊断
+//      —— 证明「搬出去」是逐字搬运，没有改逻辑；重跑只替换自己的切片。
 // ---------------------------------------------------------------------------
 #include <QCoreApplication>
 #include <QDebug>
@@ -76,6 +74,13 @@ static QList<ParseDiagnostic> withCode(const ParseDiagnostics& d, const QString&
     QList<ParseDiagnostic> out;
     for (const ParseDiagnostic& x : d.all())
         if (x.code == code) out.append(x);
+    return out;
+}
+
+static ParseDiagnostics withOrigin(const ParseDiagnostics& d, DiagOrigin origin) {
+    ParseDiagnostics out;
+    for (const ParseDiagnostic& x : d.all())
+        if (x.origin == origin) out.add(x);
     return out;
 }
 
@@ -130,7 +135,6 @@ int main(int argc, char* argv[]) {
     view.functions = &table.userFunctions();
 
     // ---- 1) 结构检查：直接调自由函数 ----
-    table.clearDiagnostics();
     ParseDiagnostics structures;
     parsecheck::checkStructures(view, structures);
     const auto structureHits = withCode(structures, DiagCode::kStructure);
@@ -146,7 +150,6 @@ int main(int argc, char* argv[]) {
           "消息与改造前同源（IF～ENDIFの外 / 対応する ENDIF…）");
 
     // ---- 2) 静态目标：直接调自由函数 ----
-    table.clearDiagnostics();
     ParseDiagnostics targets;
     parsecheck::resolveStaticTargets(view, targets);
     const auto labelHits = withCode(targets, DiagCode::kLabelNotFound);
@@ -157,7 +160,6 @@ int main(int argc, char* argv[]) {
           "定位到第 4 行、消息含目标名");
 
     // ---- 3) 可静态判定的运行期错误：直接调自由函数 ----
-    table.clearDiagnostics();
     ParseDiagnostics values;
     parsecheck::checkStaticValues(view, values);
     const auto valueHits = withCode(values, DiagCode::kStaticValue);
@@ -173,21 +175,21 @@ int main(int argc, char* argv[]) {
     parsecheck::checkStructures(view, again);
     check(sameDiagnostics(structures, again), "同一只读视图重复调用 -> 诊断完全相同");
 
-    // ---- 5) forwarder 逐字段等价（证明搬出去是逐字搬运）----
-    table.clearDiagnostics();
+    // ---- 5) forwarder 按 origin 切片等价（证明搬出去是逐字搬运，且重跑只换自己的切片）----
     table.checkStructures();
-    check(sameDiagnostics(structures, table.parseDiagnostics()),
-          "EraParseTable::checkStructures() 与自由函数逐字段（含顺序）相同");
+    check(sameDiagnostics(structures,
+                          withOrigin(table.parseDiagnostics(), DiagOrigin::Pass5)),
+          "EraParseTable::checkStructures() 的 Pass5 切片与自由函数逐字段（含顺序）相同");
 
-    table.clearDiagnostics();
     table.resolveStaticTargets();
-    check(sameDiagnostics(targets, table.parseDiagnostics()),
-          "EraParseTable::resolveStaticTargets() 与自由函数逐字段相同");
+    check(sameDiagnostics(targets,
+                          withOrigin(table.parseDiagnostics(), DiagOrigin::Pass4)),
+          "EraParseTable::resolveStaticTargets() 的 Pass4 切片与自由函数逐字段相同");
 
-    table.clearDiagnostics();
     table.checkStaticValues();
-    check(sameDiagnostics(values, table.parseDiagnostics()),
-          "EraParseTable::checkStaticValues() 与自由函数逐字段相同");
+    check(sameDiagnostics(values,
+                          withOrigin(table.parseDiagnostics(), DiagOrigin::Pass6)),
+          "EraParseTable::checkStaticValues() 的 Pass6 切片与自由函数逐字段相同");
 
     // ---- 6) 三步合起来的条数 == 收尾时的条数（这三步就是收尾里的那三步）----
     ParseDiagnostics all;

@@ -74,6 +74,32 @@ enum class DiagEffect : quint8 {
     RejectLine,
 };
 
+// 诊断的**生产者切片**：重跑某个收尾步骤时按 origin 整体替换它的切片，
+// 于是「跑了 N 次」与「跑了一次」在数据上不可区分（幂等由数据表达，
+// 不靠调用方数次数/自己去重）。
+//   Load        —— 装载期（预处理/词法/结构/编码）与写步骤 1/2/3。它们只随一次
+//                  装载产生，不作为可重跑切片管理（边界见 era_parse_table.cpp）。
+//   Pass4..Pass7 —— kLoadPasses 里的只读收尾步骤：每次运行拥有**一个完整切片**，
+//                  驱动端用 ParseDiagnostics::replaceOrigin 整体换掉上一次的。
+enum class DiagOrigin : quint8 {
+    Load,
+    Pass4,
+    Pass5,
+    Pass6,
+    Pass7,
+};
+
+[[nodiscard]] inline const char* diagOriginName(DiagOrigin o) noexcept {
+    switch (o) {
+    case DiagOrigin::Load:  return "load";
+    case DiagOrigin::Pass4: return "pass4";
+    case DiagOrigin::Pass5: return "pass5";
+    case DiagOrigin::Pass6: return "pass6";
+    case DiagOrigin::Pass7: return "pass7";
+    }
+    return "load";
+}
+
 [[nodiscard]] inline const char* diagEffectName(DiagEffect e) noexcept {
     switch (e) {
     case DiagEffect::ReportOnly: return "report-only";
@@ -123,6 +149,11 @@ struct ParseDiagnostic {
 
     // 该诊断的后果（见 DiagEffect）：默认「只报告」，向后兼容既有调用点。
     DiagEffect effect = DiagEffect::ReportOnly;
+
+    // 该诊断由哪个生产者产生（见 DiagOrigin）。默认装载期：既有调用点
+    // （预处理/词法/写步骤 1/2/3）不改一行就落在 Load 切片里。
+    // 只有 ParseDiagnostics::replaceOrigin 会写它 —— 盖章点唯一。
+    DiagOrigin origin = DiagOrigin::Load;
 
     [[nodiscard]] bool hasPosition() const { return line > 0; }
 
@@ -210,6 +241,16 @@ public:
         m_items.clear();
         m_texts.clear();
     }
+
+    // 用 items 整体替换 origin 切片：给每条盖上 origin（**唯一盖章点**），
+    // 删掉容器里原有的同 origin 条目，再把新条目放回这些条目原来**占据的位置**
+    //（没有同 origin 条目时追加到末尾）。逐位替换而不是挪到末尾，是因为
+    // sortForOutput 之后同一 pass 的条目可能夹在其它 origin 之间（按 file/line
+    // 排序）；只有原位替换才能让「重跑 4→5→4」与「只跑 4→5」产生**相同顺序**
+    // 的 all()：首次运行的条数/顺序/文本一字不差，重跑只是换掉自己的切片。
+    // texts() 由 m_items 重新派生，all()/texts()/size() 的一一对应关系不变；
+    // 排序仍只由收尾末尾的 sortForOutput() 做一次。
+    void replaceOrigin(DiagOrigin origin, QList<ParseDiagnostic> items);
 
     // 输出稳定化：收尾各步遍历 m_scripts（QHash，Qt 随机化哈希种子）、且装载
     // 走并行 worker —— 诊断的**产生顺序**在不同进程间不确定（内容与条数不变）。

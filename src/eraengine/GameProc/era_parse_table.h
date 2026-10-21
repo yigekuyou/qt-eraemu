@@ -216,10 +216,10 @@ public:
     }
     [[nodiscard]] static const char* loadPhaseName(LoadPhase phase);
 
-    // 只读收尾步骤的身份。运行次数是**状态**，不是注释：重复调用会重复产出
-    // 诊断，调用方可以据此决定是否先去重/先 clearDiagnostics。
-    enum class ReadOnlyPass : quint8 { StaticTargets, Structures, StaticValues };
-    [[nodiscard]] int readOnlyPassRunCount(ReadOnlyPass pass) const;
+    // 只读收尾步骤（4/5/6/7）的诊断各有**一个 origin 切片**：步骤驱动把本次
+    // 运行的全部诊断合并进 ParseDiagnostics 时统一盖 origin，再整体替换旧切片
+    //（ParseDiagnostics::replaceOrigin）。因此重复调用是**数据幂等**的：
+    // 跑两次/三次与跑一次逐字节相同，调用方不需要数次数、也不需要先清空。
 
     // 装载一个脚本的完整 AST（只读区填充 + 标记区构建）。
     // 要求阶段：Empty / Loading。Bound / Finalized 调用 = **重新打开** Loading
@@ -332,9 +332,6 @@ public:
     // 解析期诊断（分级 + 代码 + 位置；对齐 C# ParserMediator 的结构化告警）。
     // texts() 为兼容既有「文本告警」消费者（dbus loadState 的计数）而保留。
     [[nodiscard]] const ParseDiagnostics& parseDiagnostics() const { return m_diagnostics; }
-    // 清空解析期诊断：只读检查步骤（4/5/6）可脱离收尾单独重跑，调用方先清空
-    // 即可拿到「这一次跑出来的」诊断集合（不改装载状态、不动 AST）。
-    void clearDiagnostics() { m_diagnostics.clear(); }
     [[nodiscard]] const QStringList& parseWarnings() const { return m_diagnostics.texts(); }
     [[nodiscard]] int parseWarningCount() const { return m_diagnostics.size(); }
     // 装载期（预处理/词法/结构）告警：由 ErbLoader 汇总后回灌（Warning，code=preprocess）
@@ -503,9 +500,9 @@ public:
     // ---- 只读检查步骤（可单独调用）---------------------------------------
     // 下列三步只读：不改变运行行为、不改 AST 语义，只读取已定型的数据并产出
     // 诊断。要求阶段：Bound / Finalized（即声明定稿 + 绑定完成之后）。
-    // **重复调用会重复产生诊断** —— 这是契约，且现在是可观察的：
-    // readOnlyPassRunCount() 记录每一步实际跑过几次，调用方据此去重或先
-    // clearDiagnostics。阶段不满足时 qWarning + no-op（不产出诊断）。
+    // **每次运行拥有自己的 origin 切片**：驱动端先把本次诊断收进一个全新
+    // sink，再 replaceOrigin 整体换掉上一切片 —— 重复调用不重复产出，
+    // 调用方不必数次数/去重。阶段不满足时 qWarning + no-op（不产出诊断）。
     void resolveStaticTargets();      // 收尾步骤 4：静态解析运行期跳转/调用目标（对齐 C# setJumpTo）
     // CALL 语句的实参校验（对齐 C# ConvertArg 在 setJumpTo 里的装载期调用）：
     // 只在「常量目标且目标存在」时下结论 —— 个数超限、字符串实参传整型形参、
@@ -548,8 +545,9 @@ private:
     static const LoadPass kLoadPasses[7];
     [[nodiscard]] bool isGateOpen(LoadPassGate gate) const;
     // 只读步骤的统一守卫：阶段不符 -> qWarning + false（调用方 no-op）；
-    // 阶段符合 -> 计数 + true。
-    [[nodiscard]] bool enterReadOnlyPass(ReadOnlyPass pass, const char* entryName);
+    // 阶段符合 -> true。不记录运行次数：每个 pass 的诊断按 origin 切片替换，
+    // 重跑幂等由 ParseDiagnostics 的数据结构保证，不靠调用方纪律。
+    [[nodiscard]] bool readOnlyPassAllowed(const char* entryName) const;
     // 只读收尾步骤（4/5/6 号 pass）的视图构造：只做指针打包，不读取内容。
     // 三个步骤的实现是 parse_checks.cpp 里的自由函数，public 方法只做转发。
     [[nodiscard]] parsecheck::ParseIrView makeIrView() const;
@@ -572,8 +570,6 @@ private:
 
     // 装载阶段（唯一真相；之前的 m_finalized 只是它的一个派生问题）。
     LoadPhase m_phase = LoadPhase::Empty;
-    // 每个只读收尾步骤已运行的次数（重复调用契约的可观察状态）。
-    int m_readOnlyPassRuns[3] = {0, 0, 0};
     // 未被调用的函数告警开关（对齐 C# Config.FunctionNotCalledWarning；默认 IGNORE）
     bool m_functionNotCalledWarning = false;
     bool m_constProvidersReady = false;   // 常量/维数求值器是否已设置

@@ -21,6 +21,45 @@
 #include <QRegularExpression>
 #include <QStringList>
 #include <algorithm>
+#include <utility>
+
+void ParseDiagnostics::replaceOrigin(DiagOrigin origin, QList<ParseDiagnostic> items) {
+    // 盖章点唯一：调用方只给 origin，不逐条改字段。
+    for (ParseDiagnostic& d : items) d.origin = origin;
+
+    // 旧切片的**位置**数组（all() 里可能已被 sortForOutput 按位置排开，
+    // 例如 pass5 的两条会夹在 pass4/pass6 之间）。新切片逐位覆盖这些位置：
+    // 条数相同（重跑幂等的主路径）时序列逐字节不变；多余的新条目接在最后
+    // 一个旧位置之后，多余的旧位置删除。首跑（无旧切片）仍是追加到末尾。
+    QList<int> positions;
+    for (int i = 0; i < m_items.size(); ++i)
+        if (m_items.at(i).origin == origin) positions.append(i);
+
+    QList<ParseDiagnostic> merged;
+    merged.reserve(m_items.size() + items.size());
+    if (positions.isEmpty()) {
+        merged = m_items;
+        merged.append(items);
+    } else {
+        int next = 0;
+        const int lastOld = positions.last();
+        for (int i = 0; i < m_items.size(); ++i) {
+            if (m_items.at(i).origin != origin) {
+                merged.append(m_items.at(i));
+                continue;
+            }
+            if (next < items.size()) merged.append(items.at(next++));
+            if (i == lastOld)
+                while (next < items.size()) merged.append(items.at(next++));
+        }
+    }
+
+    m_items = std::move(merged);
+    // 文本视图是派生数据：与 m_items 保持一一对应（texts()/size() 语义不变）。
+    m_texts.clear();
+    m_texts.reserve(m_items.size());
+    for (const ParseDiagnostic& d : m_items) m_texts.append(d.toString());
+}
 
 void ParseDiagnostics::addText(DiagSeverity sev, const QString& code, const QString& text) {
     // 既有形态："文件:行: 文本" / "文件:行:列: 文本"；拆出位置便于按位置检索。

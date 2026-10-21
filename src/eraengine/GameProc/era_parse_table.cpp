@@ -354,7 +354,6 @@ void EraParseTable::clear() {
     (void)position::reset(m_position);
     m_position.script.clear();
     m_phase = LoadPhase::Empty;
-    for (int& runs : m_readOnlyPassRuns) runs = 0;
     // 每次装载都是独立会话：下一次必须由装载器重新预登记声明，
     // 常量/维数求值器也必须随新的变量表重新装配（clearLoadedGame 已把
     // 求值器上的提供者清空，标志不复位就会带着空提供者进入下一局）。
@@ -1147,8 +1146,12 @@ void EraParseTable::applyScopedVariableLine(LogicalLine& line, const QString& fu
 // CLI 在用）与 kLoadPasses 表里的成员函数指针，行为与诊断逐条不变。
 //
 // 三个步骤**只读**：不写 m_scripts / 不改 AST / 不改装载状态。因此它们可以脱离
-// EraParseTable 单独调用（见 test_parse_checks.cpp）；重复调用会重复产生诊断，
-// 调用方负责先 clearDiagnostics。
+// EraParseTable 单独调用（见 test_parse_checks.cpp）。
+//
+// 重跑幂等由**数据**表达，不靠调用方纪律：每次运行先把诊断收进一个全新 sink，
+// 再按 origin 整体替换上一切片（ParseDiagnostics::replaceOrigin）。于是
+// 「跑 N 次」与「跑 1 次」逐字节相同；调用方不需要数次数，也没有「整表清空」
+// 这一步可以忘（clearDiagnostics 已随该纪律一起删除）。
 // ---------------------------------------------------------------------------
 loadpass::LoadContext EraParseTable::makeLoadContext() {
     // 只打包引用/指针，不读取内容；表本身仍由 EraParseTable 持有。
@@ -1170,8 +1173,11 @@ parsecheck::ParseIrView EraParseTable::makeIrView() const {
 }
 
 void EraParseTable::resolveStaticTargets() {
-    if (!enterReadOnlyPass(ReadOnlyPass::StaticTargets, "resolveStaticTargets")) return;
-    parsecheck::resolveStaticTargets(makeIrView(), m_diagnostics);
+    if (!readOnlyPassAllowed("resolveStaticTargets")) return;
+    // 本次运行独占一个 sink：不读旧诊断、不受旧切片影响。
+    ParseDiagnostics sink;
+    parsecheck::resolveStaticTargets(makeIrView(), sink);
+    m_diagnostics.replaceOrigin(DiagOrigin::Pass4, sink.all());
 }
 
 void EraParseTable::checkCallStatementArgs(const LogicalLine& line, const QString& target) {
@@ -1186,13 +1192,17 @@ void EraParseTable::checkCallStatementArgs(const LogicalLine& line, const QStrin
 }
 
 void EraParseTable::checkStructures() {
-    if (!enterReadOnlyPass(ReadOnlyPass::Structures, "checkStructures")) return;
-    parsecheck::checkStructures(makeIrView(), m_diagnostics);
+    if (!readOnlyPassAllowed("checkStructures")) return;
+    ParseDiagnostics sink;
+    parsecheck::checkStructures(makeIrView(), sink);
+    m_diagnostics.replaceOrigin(DiagOrigin::Pass5, sink.all());
 }
 
 void EraParseTable::checkStaticValues() {
-    if (!enterReadOnlyPass(ReadOnlyPass::StaticValues, "checkStaticValues")) return;
-    parsecheck::checkStaticValues(makeIrView(), m_diagnostics);
+    if (!readOnlyPassAllowed("checkStaticValues")) return;
+    ParseDiagnostics sink;
+    parsecheck::checkStaticValues(makeIrView(), sink);
+    m_diagnostics.replaceOrigin(DiagOrigin::Pass6, sink.all());
 }
 
 
@@ -1213,6 +1223,12 @@ void EraParseTable::checkStaticValues() {
 // ---------------------------------------------------------------------------
 void EraParseTable::checkNotCalledFunctions() {
     if (!m_functionNotCalledWarning) return;
+    // 本 pass 的诊断也按 origin 切片替换：增量 append 后重新收尾时，
+    // 旧切片不能残留（否则同一批「未被调用」会重复出现）。
+    ParseDiagnostics sink;
+    const auto commit = [this, &sink] {
+        m_diagnostics.replaceOrigin(DiagOrigin::Pass7, sink.all());
+    };
 
     // 1) 收集全部函数标签（含同名重复声明）与「是否是根」
     struct LabelInfo { QList<const LogicalLine*> declLines; bool root = false; bool called = false; };
@@ -1243,14 +1259,17 @@ void EraParseTable::checkNotCalledFunctions() {
             case RunnerInstruction::CALLFORMF:
             case RunnerInstruction::JUMPFORM:
             case RunnerInstruction::GOTOFORM:
+                commit();
                 return;
             default:
                 break;
             }
             const QString& n = line.functionName;
             if (n == QLatin1String("TRYCALLLIST") || n == QLatin1String("TRYJUMPLIST")
-                || n == QLatin1String("GOTOLIST"))
+                || n == QLatin1String("GOTOLIST")) {
+                commit();
                 return;
+            }
         }
     }
 
@@ -1323,12 +1342,13 @@ void EraParseTable::checkNotCalledFunctions() {
         const LabelInfo& info = labels.value(key);
         if (info.called || info.root) continue;
         for (const LogicalLine* line : info.declLines) {
-            m_diagnostics.add(DiagSeverity::Warning, DiagCode::kNotCalled,
+            sink.add(DiagSeverity::Warning, DiagCode::kNotCalled,
                 line->position.filename, line->position.lineNumber, line->position.column, 0,
                 QCoreApplication::translate("ParseDiagnostics",
                     "関数@%1は定義されていますが一度も呼び出されません").arg(line->labelName));
         }
     }
+    commit();
 }
 
 void EraParseTable::resolveGlobalDeclarations() {
@@ -1368,18 +1388,13 @@ bool EraParseTable::isGateOpen(LoadPassGate gate) const {
     return true;
 }
 
-int EraParseTable::readOnlyPassRunCount(ReadOnlyPass pass) const {
-    return m_readOnlyPassRuns[int(pass)];
-}
-
-bool EraParseTable::enterReadOnlyPass(ReadOnlyPass pass, const char* entryName) {
+bool EraParseTable::readOnlyPassAllowed(const char* entryName) const {
     if (!isBoundOrLater()) {
         qWarning().noquote() << "[parse]" << entryName
                              << "在装载完成绑定之前调用，忽略（当前阶段"
                              << loadPhaseName(m_phase) << "）";
         return false;
     }
-    ++m_readOnlyPassRuns[int(pass)];
     return true;
 }
 

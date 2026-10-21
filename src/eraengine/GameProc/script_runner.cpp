@@ -20,6 +20,7 @@
 #include "eraengine_log.h"
 #include <algorithm>
 #include "era_parse_table.h"
+#include "jump_markings.h"   // 标记区读侧（跳转表查表，输入只有 ScriptData*）
 #include "execution_engine.h"
 #include "variable_storage.h"
 #include "system_state_machine.h"
@@ -485,7 +486,7 @@ ExecState ScriptRunner::executeLine(const LogicalLine& line) {
     // 指令名在装载期已经分类；执行期只消费 enum，避免重复字符串比较。
     switch (line.runnerInstruction) {
     case RunnerInstruction::If: {
-        const QList<int> branches = m_table->ifBranches(script, pc);
+        const QList<int> branches = jumpmark::ifBranches(sd, pc);
         bool taken = false, condition = false;
         if (evalCondition(line, condition) && condition) {
             taken = true;
@@ -506,13 +507,13 @@ ExecState ScriptRunner::executeLine(const LogicalLine& line) {
                     break;
                 }
             }
-            if (!taken) gotoLine(m_table->jumpTarget(script, pc));
+            if (!taken) gotoLine(jumpmark::jumpTarget(sd, pc));
         }
         return ExecState::Continue;
     }
     case RunnerInstruction::ElseIf:
     case RunnerInstruction::Else:
-        gotoLine(m_table->jumpTarget(script, pc));
+        gotoLine(jumpmark::jumpTarget(sd, pc));
         return ExecState::Continue;
     case RunnerInstruction::EndIf:
         advance();
@@ -525,7 +526,7 @@ ExecState ScriptRunner::executeLine(const LogicalLine& line) {
         if (!ast) throw std::runtime_error("SELECTCASE operand has no load-time AST");
         value = evaluator.evaluate(*ast, m_storage, baseData(), m_currentScopeId);
         const bool stringValue = isStringValue(value);
-        for (const int caseLine : m_table->ifBranches(script, pc)) {
+        for (const int caseLine : jumpmark::ifBranches(sd, pc)) {
             const auto* candidate = m_table->lineAt(script, caseLine);
             if (!candidate) continue;
             if (candidate->runnerInstruction == RunnerInstruction::CaseElse
@@ -534,18 +535,18 @@ ExecState ScriptRunner::executeLine(const LogicalLine& line) {
                 return ExecState::Continue;
             }
         }
-        gotoLine(m_table->jumpTarget(script, pc));
+        gotoLine(jumpmark::jumpTarget(sd, pc));
         return ExecState::Continue;
     }
     case RunnerInstruction::Case:
     case RunnerInstruction::CaseElse:
-        gotoLine(m_table->jumpTarget(script, pc));
+        gotoLine(jumpmark::jumpTarget(sd, pc));
         return ExecState::Continue;
     case RunnerInstruction::EndSelect:
         advance();
         return ExecState::Continue;
     case RunnerInstruction::Catch: {
-        const int endCatch = m_table->endCatchTarget(script, pc);
+        const int endCatch = jumpmark::endCatchTarget(sd, pc);
         if (endCatch >= 0) gotoLine(endCatch + 1); else advance();
         return ExecState::Continue;
     }
@@ -612,7 +613,7 @@ ExecState ScriptRunner::executeLine(const LogicalLine& line) {
         bool cond = false;
         evalCondition(line, cond);
         if (cond) advance();
-        else gotoLine(m_table->jumpTarget(script, pc));       // 伪 -> 跳过下一行
+        else gotoLine(jumpmark::jumpTarget(sd, pc));          // 伪 -> 跳过下一行
         return ExecState::Continue;
     }
 
@@ -955,7 +956,7 @@ ExecState ScriptRunner::executeLine(const LogicalLine& line) {
             m_table->setPosition(script, pos, true);
             return ExecState::Continue;
         }
-        const int catchLine = m_table->catchTarget(script, pc);
+        const int catchLine = jumpmark::catchTarget(sd, pc);
         if (catchLine >= 0) {
             m_table->setPosition(script, catchLine + 1, false);
         } else if (name == QLatin1String("GOTOFORM")) {
@@ -991,7 +992,7 @@ ExecState ScriptRunner::executeLine(const LogicalLine& line) {
             m_table->setPosition(script, pos, true);
             return ExecState::Continue;
         }
-        const int catchLine = m_table->catchTarget(script, pc);
+        const int catchLine = jumpmark::catchTarget(sd, pc);
         if (catchLine >= 0) {
             m_table->setPosition(script, catchLine + 1, false);
         } else {
@@ -2073,7 +2074,7 @@ ExecState ScriptRunner::doCallLine(const LogicalLine& line, bool isForm, bool is
     // JumpTo(CATCH) 真正的落点是 CATCH 的下一行。
     const auto tryFail = [&]() -> ExecState {
         const QString sc = m_table->currentScript();
-        const int catchLine = m_table->catchTarget(sc, m_table->currentLine());
+        const int catchLine = jumpmark::catchTarget(m_table->script(sc), m_table->currentLine());
         if (catchLine >= 0) {
             qCDebug(eraTrace) << "[call] TRYC 目标不存在 -> 进入 CATCH" << catchLine + 1 << label;
             m_table->setPosition(sc, catchLine + 1, false);
@@ -2218,8 +2219,9 @@ ExecState ScriptRunner::doTryListLine(const LogicalLine& line) {
 
     const QString script = m_table->currentScript();
     const int listLine = m_table->currentLine();
-    const QList<int> entries = m_table->funcEntryLines(script, listLine);
-    const int endLine = m_table->endFuncTarget(script, listLine);
+    const ScriptData* sd = m_table->script(script);
+    const QList<int> entries = jumpmark::funcEntryLines(sd, listLine);
+    const int endLine = jumpmark::endFuncTarget(sd, listLine);
     const int afterEnd = (endLine >= 0) ? endLine + 1 : listLine + 1;
 
     for (int entryLine : entries) {

@@ -240,20 +240,8 @@ public:
     [[nodiscard]] int variableFlags(const QString& name) const;
 
     [[nodiscard]] const LogicalLine* lineAt(const QString& scriptName, int line) const;
-    [[nodiscard]] int jumpTarget(const QString& scriptName, int line) const;
-
-    // IF 行 -> 其 ELSEIF/ELSE 分支行列表（C# IfCaseList）；空表示无分支
-    [[nodiscard]] QList<int> ifBranches(const QString& scriptName, int ifLine) const;
-
-    // TRYC 系异常块：TRYC 行 -> 配对 CATCH 行 / CATCH 行 -> 配对 ENDCATCH 行
-    // （-1 = 没有配对；对齐 C# InstructionLine.JumpToEndCatch）
-    [[nodiscard]] int catchTarget(const QString& scriptName, int trycLine) const;
-    [[nodiscard]] int endCatchTarget(const QString& scriptName, int catchLine) const;
-
-    // TRYCALLLIST/TRYJUMPLIST/TRYGOTOLIST：行 -> 体内 FUNC 条目行 / 配对 ENDFUNC 行
-    // （-1 = 没有配对；对齐 C# InstructionLine.callList / JumpTo）
-    [[nodiscard]] QList<int> funcEntryLines(const QString& scriptName, int listLine) const;
-    [[nodiscard]] int endFuncTarget(const QString& scriptName, int listLine) const;
+    // 标记区的读侧（跳转/分支/CATCH/FUNC 列表查表）见 jump_markings.h ——
+    // 输入只有 ScriptData*，不需要经由本类的成员函数。
 
     // 用户自定义函数注册表（对齐 C# FunctionLabelLine）
     [[nodiscard]] const UserFunctionInfo* userFunction(const QString& name) const;
@@ -425,7 +413,6 @@ private:
         QStringList   defaultStr;
     };
     [[nodiscard]] const QList<PrivateDefaultEntry>& privateDefaultPlan(const QString& fkey);
-    void buildJumpMarkings(const QString& scriptName);
 
     // expressionAstInScope / runtimeVariableReference 的共用实现。
     //   foldConstants      = false -> 不把 `#DIM CONST NAME` 折叠成字面量

@@ -19,6 +19,7 @@
 #include <QCoreApplication>
 #include "parse_checks.h"   // 收尾步骤 4/5/6 的自由函数实现（只读 IR 视图）
 #include "load_passes.h"    // 收尾步骤 1/2/3 的自由函数实现（可写 IR 视图 = LoadContext）
+#include "jump_markings.h"  // 标记区：跳转表的构建（输入只有 ScriptData）
 #include "process_state.h"
 #include "eraengine_log.h"   // eraTrace（逐文件高频日志）
 #include "variable_storage.h"
@@ -211,46 +212,6 @@ const LogicalLine* EraParseTable::lineAt(const QString& scriptName, int line) co
         return nullptr;
     }
     return &data->lines.at(line);
-}
-
-int EraParseTable::jumpTarget(const QString& scriptName, int line) const {
-    const ScriptData* data = script(scriptName);
-    if (!data) {
-        return -1;
-    }
-    return data->jumpTo.value(line, -1);
-}
-
-QList<int> EraParseTable::ifBranches(const QString& scriptName, int ifLine) const {
-    const ScriptData* data = script(scriptName);
-    if (!data) {
-        return QList<int>();
-    }
-    return data->ifBranches.value(ifLine, QList<int>());
-}
-
-int EraParseTable::catchTarget(const QString& scriptName, int trycLine) const {
-    const ScriptData* data = script(scriptName);
-    if (!data) return -1;
-    return data->catchLines.value(trycLine, -1);
-}
-
-int EraParseTable::endCatchTarget(const QString& scriptName, int catchLine) const {
-    const ScriptData* data = script(scriptName);
-    if (!data) return -1;
-    return data->endCatchLines.value(catchLine, -1);
-}
-
-QList<int> EraParseTable::funcEntryLines(const QString& scriptName, int listLine) const {
-    const ScriptData* data = script(scriptName);
-    if (!data) return {};
-    return data->funcEntries.value(listLine);
-}
-
-int EraParseTable::endFuncTarget(const QString& scriptName, int listLine) const {
-    const ScriptData* data = script(scriptName);
-    if (!data) return -1;
-    return data->endFuncLines.value(listLine, -1);
 }
 
 const UserFunctionInfo* EraParseTable::userFunction(const QString& name) const {
@@ -632,8 +593,12 @@ bool EraParseTable::loadScript(const QString& scriptName, const QList<LogicalLin
     // 插入、first-wins 同 m_functions），在此清会把本次装载刚注册的函数集合
     // 一并抹掉（多脚本装载只剩最后一个脚本有集合）。整表清空在 clear() 里做。
 
-    // 标记区：跳转标记 + 控制转移预绑定
-    buildJumpMarkings(scriptName);
+    // 标记区：跳转标记 + 控制转移预绑定。
+    // 注意构建的是 **m_scripts 里的那一份**（进表的是上面 insert 的拷贝，局部
+    // `data` 已经不是运行期读的那份）—— 顺序与语义和搬出去之前逐字一致。
+    if (auto markingIt = m_scripts.find(scriptName); markingIt != m_scripts.end()) {
+        jumpmark::buildJumpMarkings(markingIt.value());
+    }
 
     // 绑定/校验统一在 markLoadComplete 里单趟完成（全局定稿 → 重绑 → 诊断）：
     // 跨文件前向引用需要「全部声明就绪」，且避免了每脚本一次全局扫描
@@ -962,217 +927,6 @@ void EraParseTable::switchToMemorySpace(const QString& scriptName) {
     }
     m_currentScript = scriptName;
     emit memorySpaceChanged(scriptName);
-}
-
-// ---------------------------------------------------------------------------
-// 标记区：跳转标记 + 控制转移预绑定（行号索引，等价 C# JumpTo / NextLine）
-// ---------------------------------------------------------------------------
-
-void EraParseTable::buildJumpMarkings(const QString& scriptName) {
-    auto scriptIt = m_scripts.find(scriptName);
-    if (scriptIt == m_scripts.end()) {
-        return;
-    }
-
-    ScriptData& data = scriptIt.value();
-    data.endifLines.clear();
-    data.elseLines.clear();
-    data.loopEndLines.clear();
-    data.jumpTo.clear();
-    data.jumpToEnd.clear();
-    data.ifBranches.clear();
-    data.catchLines.clear();
-    data.endCatchLines.clear();
-    data.endFuncLines.clear();
-    data.funcEntries.clear();
-
-    struct IfInfo {
-        int ifLine = -1;
-        int lastBranch = -1;
-        QList<int> branches;   // ELSEIF/ELSE 行（C# IfCaseList）
-    };
-    struct LoopInfo {
-        int startLine = -1;
-        QString type;
-    };
-    // SELECTCASE 组（对齐 C# SELECTCASE_Instruction.IfCaseList + CASE.JumpTo）
-    struct SelectInfo {
-        int selectLine = -1;
-        QList<int> caseLines;      // CASE / CASEELSE 行（按出现顺序）
-        int lastCase = -1;
-    };
-
-    // TRYC / CATCH / ENDCATCH 的配对栈（对齐 C# ErbLoader.ParseFunction 的 nestStack）
-    //   进入 TRYC*  -> 压入 (TRY，行号)
-    //   遇到 CATCH  -> 若栈顶是 TRY：记录 tryc->catch，弹栈后压入 (CATCH，行号)
-    //   遇到 ENDCATCH -> 若栈顶是 CATCH：记录 catch->endcatch，弹栈
-    // 注意：eraTW 里绝大多数 TRYC* 是**没有** CATCH 的（972 : 73），
-    // 所以这里只认「栈顶就是 TRY」的 CATCH；否则该 CATCH 属于别的结构，忽略。
-    struct CatchInfo {
-        bool isCatch = false;
-        int  line = -1;
-    };
-    // TRYCALLLIST/TRYJUMPLIST/TRYGOTOLIST 的配对栈（对齐 C# ErbLoader nestStack）
-    //   进入 TRY*LIST -> 压栈；体内 FUNC 条目 -> 归入栈顶列表；
-    //   ENDFUNC -> 弹栈并记录列表行 -> ENDFUNC（C# pf.JumpTo = func）。
-    struct ListInfo {
-        int line = -1;
-        QList<int> funcLines;
-    };
-
-    QList<IfInfo> ifStack;
-    QList<LoopInfo> loopStack;
-    QList<SelectInfo> selectStack;
-    QList<CatchInfo> catchStack;
-    QList<ListInfo> listStack;
-
-    for (int i = 0; i < data.lines.size(); ++i) {
-        LogicalLine& ll = data.lines[i];
-        ll.lineIndex = i;
-        if (i + 1 < data.lines.size()) {
-            ll.nextLine = i + 1;
-        }
-        if (ll.kind == LineKind::FunctionLabel) {
-            ifStack.clear();
-            loopStack.clear();
-            selectStack.clear();
-            catchStack.clear();
-            listStack.clear();
-        }
-        if (!ll.isInstruction()) {
-            continue;
-        }
-
-        const QString& name = ll.functionName;
-
-        if (name == QLatin1String("IF")) {
-            ifStack.append({i, -1, {}});
-        }
-        else if (name == QLatin1String("SIF")) {
-            // SIF：条件为假则跳过下一行
-            int next = i + 1;
-            while (next < data.lines.size() && data.lines[next].kind == LineKind::Null) ++next;
-            const int after = qMin(next + 1, int(data.lines.size()));
-            data.jumpTo[i] = after;
-            data.elseLines[i] = after;
-            ll.jumpTo = after;
-        }
-        else if (name == QLatin1String("ELSEIF") || name == QLatin1String("ELSE")) {
-            if (!ifStack.isEmpty()) {
-                IfInfo& cur = ifStack.last();
-                const int prev = (cur.lastBranch >= 0) ? cur.lastBranch : cur.ifLine;
-                data.elseLines[prev] = i;
-                cur.branches.append(i);
-                cur.lastBranch = i;
-                // ELSEIF/ELSE 由“顺序落入”执行时，直接跳到 ENDIF 之后（C# state.JumpTo(ENDIF)）
-            }
-        }
-        else if (name == QLatin1String("ENDIF")) {
-            if (!ifStack.isEmpty()) {
-                const IfInfo cur = ifStack.takeLast();
-                const int after = i + 1;
-                data.endifLines[cur.ifLine] = after;
-                data.jumpTo[cur.ifLine] = after;
-                data.lines[cur.ifLine].jumpTo = after;
-                data.ifBranches[cur.ifLine] = cur.branches;
-                for (int b : cur.branches) {
-                    data.endifLines[b] = after;
-                    data.jumpTo[b] = after;             // 顺序落入分支 -> 跳过到 ENDIF 之后
-                    data.lines[b].jumpTo = after;
-                }
-            }
-        }
-        else if (name == QLatin1String("SELECTCASE")) {
-            selectStack.append({i, {}, -1});
-        }
-        else if (name == QLatin1String("CASE") || name == QLatin1String("CASEELSE")) {
-            if (!selectStack.isEmpty()) {
-                SelectInfo& cur = selectStack.last();
-                // 上一个 CASE 体结束 -> 直接跳到 ENDSELECT 之后（C# 是逐级跳到下一个 CASE）
-                if (cur.lastCase >= 0) {
-                    data.jumpTo[cur.lastCase] = -1;      // 占位，ENDSELECT 时统一填
-                    data.lines[cur.lastCase].jumpTo = -2; // 标记「待填」
-                }
-                cur.caseLines.append(i);
-                cur.lastCase = i;
-            }
-        }
-        else if (name == QLatin1String("ENDSELECT")) {
-            if (!selectStack.isEmpty()) {
-                const SelectInfo cur = selectStack.takeLast();
-                const int after = i + 1;
-                // 每个 CASE / CASEELSE 顺序落入 -> 跳到 ENDSELECT 之后
-                for (int c : cur.caseLines) {
-                    data.jumpTo[c] = after;
-                    data.lines[c].jumpTo = after;
-                }
-                // SELECTCASE 的默认目标（无 CASE 命中）
-                data.jumpTo[cur.selectLine] = after;
-                data.jumpToEnd[cur.selectLine] = i;      // ENDSELECT 行
-                data.lines[cur.selectLine].jumpTo = after;
-                data.ifBranches[cur.selectLine] = cur.caseLines;
-            }
-        }
-        else if (name == QLatin1String("REPEAT") || name == QLatin1String("WHILE")
-                 || name == QLatin1String("FOR") || name == QLatin1String("DO")) {
-            loopStack.append({i, name});
-        }
-        else if (name == QLatin1String("LOOP") || name == QLatin1String("REND") || name == QLatin1String("WEND")
-                 || name == QLatin1String("NEXT")) {
-            const QString expected = (name == QLatin1String("REND")) ? QStringLiteral("REPEAT")
-                                   : (name == QLatin1String("LOOP"))
-                                       ? ((!loopStack.isEmpty() && loopStack.last().type == QLatin1String("DO"))
-                                           ? QStringLiteral("DO") : QStringLiteral("REPEAT"))
-                                   : (name == QLatin1String("WEND")) ? QStringLiteral("WHILE")
-                                                                     : QStringLiteral("FOR");
-            if (!loopStack.isEmpty() && loopStack.last().type == expected) {
-                const LoopInfo info = loopStack.takeLast();
-                data.loopEndLines[info.startLine] = i;
-                data.jumpToEnd[info.startLine] = i;
-                data.jumpTo[i] = info.startLine;
-                data.lines[i].jumpTo = info.startLine;
-            }
-        }
-        // ---- TRYC 异常块：TRYCCALL(FORM) / TRYCJUMP(FORM) / TRYCGOTO(FORM) ----
-        else if (name == QLatin1String("TRYCCALL") || name == QLatin1String("TRYCCALLFORM")
-                 || name == QLatin1String("TRYCJUMP") || name == QLatin1String("TRYCJUMPFORM")
-                 || name == QLatin1String("TRYCGOTO") || name == QLatin1String("TRYCGOTOFORM")) {
-            catchStack.append({false, i});
-        }
-        else if (name == QLatin1String("CATCH")) {
-            if (!catchStack.isEmpty() && !catchStack.last().isCatch) {
-                const CatchInfo tryInfo = catchStack.takeLast();
-                data.catchLines[tryInfo.line] = i;          // TRYC -> CATCH
-                catchStack.append({true, i});
-            }
-        }
-        else if (name == QLatin1String("ENDCATCH")) {
-            if (!catchStack.isEmpty() && catchStack.last().isCatch) {
-                const CatchInfo catchInfo = catchStack.takeLast();
-                data.endCatchLines[catchInfo.line] = i;     // CATCH -> ENDCATCH
-            }
-        }
-        // ---- TRYCALLLIST/TRYJUMPLIST/TRYGOTOLIST（+GOTOLIST 宽松别名）----
-        // 体内只有 FUNC 单行条目，ENDFUNC 收尾（对齐 C# ErbLoader nestStack）。
-        else if (name == QLatin1String("TRYCALLLIST") || name == QLatin1String("TRYJUMPLIST")
-                 || name == QLatin1String("TRYGOTOLIST") || name == QLatin1String("GOTOLIST")) {
-            ListInfo info;
-            info.line = i;
-            listStack.append(info);
-        }
-        else if (name == QLatin1String("FUNC")) {
-            if (!listStack.isEmpty()) {
-                listStack.last().funcLines.append(i);
-            }
-        }
-        else if (name == QLatin1String("ENDFUNC")) {
-            if (!listStack.isEmpty()) {
-                const ListInfo listInfo = listStack.takeLast();
-                data.endFuncLines[listInfo.line] = i;       // TRY*LIST -> ENDFUNC
-                data.funcEntries[listInfo.line] = listInfo.funcLines;
-            }
-        }
-    }
 }
 
 // ---------------------------------------------------------------------------

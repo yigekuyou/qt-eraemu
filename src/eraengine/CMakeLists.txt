@@ -118,6 +118,8 @@ GameProc/parse_checks.cpp
 GameProc/parse_checks.h
 GameProc/load_passes.cpp
 GameProc/load_passes.h
+GameProc/jump_markings.cpp
+GameProc/jump_markings.h
 GameProc/execution_engine.cpp
 GameProc/execution_engine.h
 GameProc/ee_extension.h
@@ -343,6 +345,8 @@ endif()
 eraengine_add_test(test_era_parse_table)
 eraengine_add_test(test_parse_table_ast)
 eraengine_add_test(test_parse_checks)
+eraengine_add_test(test_jump_markings)
+add_test(NAME test_jump_markings COMMAND test_jump_markings)
 eraengine_add_test(test_execution_chain)
 eraengine_add_test(test_control_flow)
 add_test(NAME test_control_flow COMMAND test_control_flow)

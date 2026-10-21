@@ -82,11 +82,10 @@ struct LoadContext {
     bool& declarationsResolved;
     // 12) 「常量 provider 已安装」幂等 guard：pass 1 置位，必须可变。
     bool& constProvidersReady;
-    // 13) 当前执行位置（脚本名）：求值器里的常量/维数回调在**运行期**按执行
-    //     位置取作用域，所以必须是实时值 -> 引用（只读）。
-    const QString& positionScript;
-    // 14) 当前执行位置（行号）：同上，只读引用。
-    const int& positionLine;
+    // 注意：这里**没有**「当前执行位置」。常数/维数求值的作用域是求值调用方
+    // 显式给出的参数（ExpressionEvaluator::evaluate 的 scope）—— 装载期求值
+    // 用「这行所属函数」，运行期用「当前活动函数」。解析表停在哪个脚本/行
+    // 是运行期状态，与「这行属于哪个函数」无关，不能夹带进装载视图。
 };
 
 // ---- 表达式解析 -----------------------------------------------------------
@@ -108,10 +107,6 @@ OperandType userCallReturnType(const QHash<QString, UserFunctionInfo>& functions
 // 每函数的形参名集合（大写键）；miss 返回 nullptr。
 const QSet<QString>* paramNamesOf(const QHash<QString, QSet<QString>>& paramNames,
                                   const QString& upperScope);
-
-// 「正在执行的那一行属于哪个函数」（运行期回调用；无位置 = 空串）。
-QString executionScope(const QHash<QString, ScriptData>& scripts, const QString& scriptName,
-                       int line);
 
 // ---- 收尾写步骤（kLoadPasses 的 1/2/3） -----------------------------------
 // 全局声明定稿（常量/维数求值器 + 维数 + 全局初值 + 用户函数类型，幂等）。

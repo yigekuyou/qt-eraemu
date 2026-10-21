@@ -210,16 +210,6 @@ const QSet<QString>* paramNamesOf(const QHash<QString, QSet<QString>>& paramName
 }
 
 
-// 「正在执行的那一行属于哪个函数」。装载期若尚未开始执行（脚本名为空 /
-// 位置越界）返回空串 —— 此时只有广域常量可见（与旧成员实现同）。
-QString executionScope(const QHash<QString, ScriptData>& scripts, const QString& scriptName,
-                       int line) {
-    const auto it = scripts.constFind(scriptName);
-    if (it == scripts.constEnd() || line < 0 || line >= it.value().lines.size()) return QString();
-    return it.value().lines.at(line).ownerFunction;
-}
-
-
 namespace {
 // 用户函数表查询（与原成员实现的同一判据：大写键）。
 const UserFunctionInfo* userFunction(const QHash<QString, UserFunctionInfo>& functions,
@@ -796,9 +786,12 @@ void resolveGlobalDeclarations(LoadContext& ctx) {
             lazyConst->insert(key, values);
             return QSharedPointer<LazyConst>::create(values);
         };
-        // 运行期常数求值的作用域 = **当前执行行所属的函数**。
-        // C# 在 GetVariableToken 里用 line.ParentLabelLine 找私有变量，与此等价：
-        // 执行到哪个函数的行，就只看得见那个函数的私有常量。
+        // 常数求值的作用域 = **求值调用方给出的 scope**（evaluate() 的第四参数）。
+        // 回调不再自行推导作用域：装载期求值（#DIM 维数、惰性常量）必须用
+        // 「这行所属函数」，运行期必须用「当前活动函数」—— 两者都只由调用方知道，
+        // 与解析表此刻停在哪个脚本/行无关（那在装载期是入口点或上一轮运行
+        // 留下的位置，会静默取到别的函数的同名私有常量）。
+        // 惰性常量的 key 仍按作用域区分（广域 / 各函数私有各自一份）。
         const auto evalLazyConst = [lazyConstValues](const QString& name, const QString& scope,
                                                      int index, QVariant& out) -> bool {
             const QSharedPointer<LazyConst> values = lazyConstValues(name, scope);
@@ -807,32 +800,40 @@ void resolveGlobalDeclarations(LoadContext& ctx) {
             out = values->value(i < values->size() ? i : 0);
             return true;
         };
-        ctx.evaluator->setConstProvider([ctx, vt, evalLazyConst](const QString& name, QVariant& out) -> bool {
-            const QString scope = executionScope(ctx.scripts, ctx.positionScript, ctx.positionLine);
+        // ScopeId -> 作用域名（VariableTable 的常数查询键 = 大写函数名；0 = 广域）。
+        // nameOf 在大写登记表里查一次，与本改动前「每次回调查脚本表 + 取行的
+        // ownerFunction」相比，热路径上少一次 QString 哈希 + 行访问。
+        ctx.evaluator->setConstProvider([vt, evalLazyConst](
+                                            const QString& name, eravar::ScopeId scope,
+                                            QVariant& out) -> bool {
+            const QString& owner = eravar::nameOf(scope);
             qint64 iv = 0;
-            if (vt->constInt(name, iv, scope)) { out = QVariant::fromValue<qint64>(iv); return true; }
+            if (vt->constInt(name, iv, owner)) { out = QVariant::fromValue<qint64>(iv); return true; }
             QString sv;
-            if (vt->constStr(name, sv, scope)) { out = QVariant(sv); return true; }
-            return evalLazyConst(name, scope, 0, out);
+            if (vt->constStr(name, sv, owner)) { out = QVariant(sv); return true; }
+            return evalLazyConst(name, owner, 0, out);
         });
         // 常数数组（`#DIM CONST X, N = …`）：先判名（避免下标副作用被求两遍）
-        ctx.evaluator->setConstArrayChecker([ctx, vt](const QString& name) -> bool {
-            const QString scope = executionScope(ctx.scripts, ctx.positionScript, ctx.positionLine);
-            return vt->constArraySize(name, scope) > 0 || vt->constStrArraySize(name, scope) > 0;
+        ctx.evaluator->setConstArrayChecker([vt](const QString& name,
+                                                 eravar::ScopeId scope) -> bool {
+            const QString& owner = eravar::nameOf(scope);
+            return vt->constArraySize(name, owner) > 0 || vt->constStrArraySize(name, owner) > 0;
         });
-        ctx.evaluator->setConstArraySizeProvider([ctx, vt](const QString& name) -> int {
-            const QString scope = executionScope(ctx.scripts, ctx.positionScript, ctx.positionLine);
-            const int n = vt->constArraySize(name, scope);
-            return n > 0 ? n : vt->constStrArraySize(name, scope);
+        ctx.evaluator->setConstArraySizeProvider([vt](const QString& name,
+                                                      eravar::ScopeId scope) -> int {
+            const QString& owner = eravar::nameOf(scope);
+            const int n = vt->constArraySize(name, owner);
+            return n > 0 ? n : vt->constStrArraySize(name, owner);
         });
-        ctx.evaluator->setConstArrayProvider([ctx, vt, evalLazyConst](const QString& name, int index,
-                                                                     QVariant& out) -> bool {
-            const QString scope = executionScope(ctx.scripts, ctx.positionScript, ctx.positionLine);
+        ctx.evaluator->setConstArrayProvider([vt, evalLazyConst](
+                                                 const QString& name, int index,
+                                                 eravar::ScopeId scope, QVariant& out) -> bool {
+            const QString& owner = eravar::nameOf(scope);
             QString sv;
-            if (vt->constStrArrayAt(name, index, sv, scope)) { out = QVariant(sv); return true; }
+            if (vt->constStrArrayAt(name, index, sv, owner)) { out = QVariant(sv); return true; }
             qint64 iv = 0;
-            if (vt->constArrayAt(name, index, iv, scope)) { out = QVariant::fromValue<qint64>(iv); return true; }
-            return evalLazyConst(name, scope, index, out);
+            if (vt->constArrayAt(name, index, iv, owner)) { out = QVariant::fromValue<qint64>(iv); return true; }
+            return evalLazyConst(name, owner, index, out);
         });
         ctx.variables.setDimEvaluator([ctx](const QString& expr, const QString& scope) -> qint64 {
             if (!ctx.evaluator) return 0;

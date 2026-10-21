@@ -42,6 +42,7 @@
 
 #include "ast/ast_builder.h"
 #include "ast/expression_ast.h"
+#include "ast/expression_evaluator.h"
 #include "ast/name_interner.h"
 #include "ast/variable_table.h"
 #include "era_parse_table.h"
@@ -125,8 +126,6 @@ struct ValidationFixture {
     QHash<QString, QSet<QString>> paramNames;
     bool declarationsResolved = true;
     bool constProvidersReady = true;
-    QString positionScript;
-    int positionLine = 0;
 
     ValidationFixture() {
         // 一个全局常量：`K ++` 在逐行校验里被折成字面量 -> 报「变量参数无法装载」，
@@ -139,8 +138,7 @@ struct ValidationFixture {
                                      /*constantTable=*/nullptr, /*storage=*/nullptr,
                                      /*evaluator=*/nullptr, /*gameBaseData=*/nullptr,
                                      diags, labelIndex, paramNames,
-                                     declarationsResolved, constProvidersReady,
-                                     positionScript, positionLine};
+                                     declarationsResolved, constProvidersReady};
     }
 
     // 按给定顺序登记脚本。QHash 的遍历序与装载序无关 —— 归并键是**脚本名**。
@@ -588,6 +586,59 @@ int main(int argc, char* argv[]) {
         check(dupCrossHits.size() == 4,
               QStringLiteral("4 个脚本各有一处同一位置的字面量 -> 4 条（键含文件名，不跨脚本去重；得到 %1）")
                   .arg(dupCrossHits.size()));
+    }
+
+    // ------------------------------------------------------------------
+    // 8) 装载期常数求值的作用域 = **行所属函数**（求值参数），不是
+    //    「解析表当前停在哪一行」。
+    //
+    // 旧实现里四个常数回调都用「解析表当前的脚本 + 行号」现算作用域。装载期
+    // 那个位置只是「第一个装载的脚本、行 0」（从未执行过），与「这一行属于
+    // 哪个函数」无关：这里 line 0 是 @A，于是 @B 的维数表达式会被按 @A 的
+    // 私有常量求值。
+    //
+    // 常数写成表达式（`11 + 0`）而不是整数字面量：字面量在**解析期**就按
+    // 显式 scope 折成 Literal（那条路径本来就带作用域参数），不会经过回调；
+    // 表达式常量是惰性求值，1/6 解析维数时才会经 provider 查表 —— 正是
+    // 旧实现用错作用域的那条路径。
+    // ------------------------------------------------------------------
+    qDebug() << "\n8) 装载期常数求值的作用域 = 行所属函数（不是当前位置）";
+    {
+        ProcessState scopeState;
+        VariableStorage scopeStorage;
+        EraParseTable scopeTable(&scopeState);
+        ExpressionEvaluator scopeEvaluator;
+        scopeTable.setExpressionEvaluator(&scopeEvaluator);
+        scopeTable.setVariableStorage(&scopeStorage);
+
+        const QStringList scopeSource = {
+            QStringLiteral("@A"),                       // 0：旧实现装载期看到的「位置」
+            QStringLiteral("#DIM CONST N = 11 + 0"),    // 1：@A 的表达式常量
+            QStringLiteral("#DIM ARR_A, N + 1"),        // 2：维数 = 12
+            QStringLiteral("RETURN"),                   // 3
+            QStringLiteral("@B"),                       // 4
+            QStringLiteral("#DIM CONST N = 22 + 0"),    // 5：@B 同名、不同值
+            QStringLiteral("#DIM ARR_B, N + 1"),        // 6：维数必须是 23
+            QStringLiteral("RETURN"),                   // 7
+        };
+        check(scopeTable.loadScript(QStringLiteral("scope.ERB"),
+                                    buildLines(scopeTable, scopeSource)),
+              "作用域夹具装载成功");
+        // loadScript 只把 m_position.script 指向本脚本；line 仍是 0（@A 行）。
+        scopeTable.markLoadComplete();
+
+        const auto* declA =
+            scopeTable.variableTable().find(QStringLiteral("ARR_A"), QStringLiteral("A"));
+        const auto* declB =
+            scopeTable.variableTable().find(QStringLiteral("ARR_B"), QStringLiteral("B"));
+        check(declA && declA->lengths == QList<int>{12},
+              QStringLiteral("@A 的 ARR_A 维数 = 12（N=11；得到 %1）")
+                  .arg(declA ? declA->lengths.value(0) : -1));
+        check(declB && declB->lengths == QList<int>{23},
+              QStringLiteral("@B 的 ARR_B 维数 = 23（@B 的 N=22，不是 @A 的 11；得到 %1）")
+                  .arg(declB ? declB->lengths.value(0) : -1));
+        // 广域常量（scope 0）不受影响：文件级声明 + 维数引用。
+        // （同一夹具里没有广域常量；用 provider 的直接断言见 test_statements 17。）
     }
 
     qDebug() << "\n================================";

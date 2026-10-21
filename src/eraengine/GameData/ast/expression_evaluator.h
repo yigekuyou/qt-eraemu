@@ -88,8 +88,14 @@ public:
     // 语言编码（对齐 C# LangManager.setEncode(Config.Encode)）：
     // STRLENS/SUBSTRING/STRFIND 的「位置/长度」按该编码的字节数计
     // （日文 Shift-JIS 下 ASCII=1 字节、假名/汉字=2 字节）。
-    // `#DIM CONST NAME = value` 常量（求值期查表，装载顺序无关）
-    using ConstProvider = std::function<bool(const QString& name, QVariant& out)>;
+    // `#DIM CONST NAME = value` 常量（求值期查表，装载顺序无关）。
+    //
+    // scope 是**本次求值的作用域**（evaluate() 的第四参数，原样转发）：
+    // 私有常量的可见性只由它决定。回调**不得**再去推导作用域（例如读
+    // 「解释器当前执行到哪一行」）—— 装载期求值时那是一个与「这行属于
+    // 哪个函数」无关的值，会静默取到别的函数的同名私有常量。
+    using ConstProvider = std::function<bool(const QString& name, eravar::ScopeId scope,
+                                             QVariant& out)>;
     void setConstProvider(ConstProvider provider) { m_constProvider = std::move(provider); }
 
     void setLanguageEncoding(TextEncoding enc) { m_langEncoding = enc; }
@@ -211,12 +217,15 @@ public:
     //   * checker：只判断名字是不是常数数组（**必须能不求值下标**，
     //     否则 `BAG:(I++)` 的下标会被求值两次、副作用算两遍）；
     //   * provider：命中后再按下标取值。
-    using ConstArrayProvider = std::function<bool(const QString&, int, QVariant&)>;
-    using ConstArrayChecker  = std::function<bool(const QString&)>;
+    // 三者都收**本次求值的作用域**（同 ConstProvider），语义按 (name, scope) 查表：
+    // 先本函数的私有常量，再广域常量。
+    using ConstArrayProvider = std::function<bool(const QString& name, int index,
+                                                  eravar::ScopeId scope, QVariant& out)>;
+    using ConstArrayChecker  = std::function<bool(const QString& name, eravar::ScopeId scope)>;
     // 常数数组的长度（`#DIM(S) CONST X, N = …` -> N）。VARSIZE / FINDELEMENT 等
     // 「按数组名取长度/遍历」的内建函数必须走这里：常量的元素存在**常数表**里，
     // 不在 VariableStorage，只按存储长度取会得到 0。
-    using ConstArraySizeProvider = std::function<int(const QString&)>;
+    using ConstArraySizeProvider = std::function<int(const QString& name, eravar::ScopeId scope)>;
     void setConstArrayProvider(ConstArrayProvider p) { m_constArrayProvider = std::move(p); }
     void setConstArrayChecker(ConstArrayChecker c) { m_constArrayChecker = std::move(c); }
     void setConstArraySizeProvider(ConstArraySizeProvider p) { m_constArraySizeProvider = std::move(p); }

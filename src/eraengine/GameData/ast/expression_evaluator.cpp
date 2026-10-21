@@ -1131,19 +1131,19 @@ bool ExpressionEvaluator::readConst(DynamicContext& ctx, QVariant& out)
     //   标量常数：`#DIM CONST X = 5` -> X
     //   常数数组：`#DIM CONST X, 3 = 1, 2, 3` -> X:i（必须按下标取，不能一律返回首元素）
     if (node.isArray() && !node.indices().isEmpty() && m_constArrayProvider
-        && (!m_constArrayChecker || m_constArrayChecker(ctx.varName))) {
+        && (!m_constArrayChecker || m_constArrayChecker(ctx.varName, ctx.scope))) {
         // 注意：只有确认是常数数组才求值下标 —— 否则下标表达式里的
         // 副作用（如 `BAG:(I++)`）会被算两遍
         const int idx = static_cast<int>(resolveIndex(node, 0, storage, gameBaseData, ctx.scope));
         QVariant cv;
-        if (m_constArrayProvider(ctx.varName, idx, cv) && cv.isValid()) {
+        if (m_constArrayProvider(ctx.varName, idx, ctx.scope, cv) && cv.isValid()) {
             out = cv;
             return true;
         }
     }
     if (!node.isArray() && m_constProvider) {
         QVariant cv;
-        if (m_constProvider(ctx.varName, cv) && cv.isValid()) {
+        if (m_constProvider(ctx.varName, ctx.scope, cv) && cv.isValid()) {
             out = cv;
             return true;
         }
@@ -1519,8 +1519,8 @@ QVariant ExpressionEvaluator::evaluateUnaryOp(const UnaryOpNode &node, VariableS
         if (target && target->kind() == NodeKind::Variable) {
             const VariableNode& var = fixedTarget ? *fixedTarget : static_cast<const VariableNode&>(*target);
             QVariant constant;
-            if ((m_constProvider && m_constProvider(var.name(), constant))
-                || (m_constArrayChecker && m_constArrayChecker(var.name())))
+            if ((m_constProvider && m_constProvider(var.name(), scope, constant))
+                || (m_constArrayChecker && m_constArrayChecker(var.name(), scope)))
                 throw std::runtime_error("Cannot increment a constant");
             const qint64 updated = std::bit_cast<qint64>(quint64(v)+quint64(delta));
             if (!assignVariable(var, storage, gameBaseData, updated, scope))
@@ -1690,12 +1690,12 @@ QList<qint64> ExpressionEvaluator::readIntArray(const VariableNode &var, Variabl
     // `FINDELEMENT(FLPEDIA_MAIN_CATEGORY, "種族")` 恒 -1（FL3.8 的 @FLP_REGISTER
     // 因此把每个类别都判成「未定義のカテゴリ」）。checker 是纯判断（不求值下标），
     // 所以放在这里不会让下标副作用算两遍。
-    if (m_constArrayChecker && m_constArrayChecker(name) && m_constArrayProvider) {
-        const int n = m_constArraySizeProvider ? m_constArraySizeProvider(name) : 0;
+    if (m_constArrayChecker && m_constArrayChecker(name, scope) && m_constArrayProvider) {
+        const int n = m_constArraySizeProvider ? m_constArraySizeProvider(name, scope) : 0;
         out.reserve(qMax(0, n));
         for (int i = 0; i < n; ++i) {
             QVariant cv;
-            if (!m_constArrayProvider(name, i, cv)) break;
+            if (!m_constArrayProvider(name, i, scope, cv)) break;
             out.append(cv.toLongLong());
         }
         return out;
@@ -1753,12 +1753,12 @@ QList<QString> ExpressionEvaluator::readStrArray(const VariableNode &var, Variab
 
     // `#DIMS CONST X = …` 常数数组：与 readIntArray 同理，元素在常数表里
     // （FL3.8 的 FLPEDIA_MAIN_CATEGORY 就是这种）。
-    if (m_constArrayChecker && m_constArrayChecker(name) && m_constArrayProvider) {
-        const int n = m_constArraySizeProvider ? m_constArraySizeProvider(name) : 0;
+    if (m_constArrayChecker && m_constArrayChecker(name, scope) && m_constArrayProvider) {
+        const int n = m_constArraySizeProvider ? m_constArraySizeProvider(name, scope) : 0;
         out.reserve(qMax(0, n));
         for (int i = 0; i < n; ++i) {
             QVariant cv;
-            if (!m_constArrayProvider(name, i, cv)) break;
+            if (!m_constArrayProvider(name, i, scope, cv)) break;
             out.append(cv.toString());
         }
         return out;
@@ -2510,7 +2510,7 @@ bool ExpressionEvaluator::evaluateBuiltin(const FunctionNode &node, VariableStor
         // 的说明）。缺了这一步 VARSIZE("FLPEDIA_MAIN_CATEGORY") 恒 0 —— FL3.8 的
         // FLPEDIA 主菜单用它决定类别标签个数，于是整块标签渲染成空。
         if (size <= 0 && dim == 0 && m_constArraySizeProvider) {
-            size = m_constArraySizeProvider(name);
+            size = m_constArraySizeProvider(name, scope);
         }
         out = QVariant::fromValue<qint64>(size);
         return true;

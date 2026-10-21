@@ -1158,7 +1158,7 @@ loadpass::LoadContext EraParseTable::makeLoadContext() {
     return loadpass::LoadContext{
         m_scripts, m_variables, m_functions, m_constantTable, m_variableStorage,
         m_evaluator, m_gameBaseData, m_diagnostics, m_labelIndex, m_paramNamesByFunction,
-        m_declarationsResolved, m_constProvidersReady, m_position.script, m_position.line};
+        m_declarationsResolved, m_constProvidersReady};
 }
 
 parsecheck::ParseIrView EraParseTable::makeIrView() const {

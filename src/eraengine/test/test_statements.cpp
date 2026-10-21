@@ -37,6 +37,7 @@
 #include "ast/ast_builder.h"
 #include "ast/expression_evaluator.h"
 #include "ast/function_types.h"
+#include "ast/name_interner.h"
 #include "process_state.h"
 #include "era_parse_table.h"
 #include "execution_engine.h"
@@ -1368,6 +1369,87 @@ int main(int argc, char* argv[]) {
         check(run("NOSKIP") && !engine.skipDisp(), "非跳过状态下 NOSKIP 不改变状态");
         check(run("ENDNOSKIP") && !engine.skipDisp(), "ENDNOSKIP 也不会误开跳过");
         QObject::disconnect(printedConn);
+    }
+
+    // ------------------------------------------------------------------
+    // 17) 私有常量的作用域 = **求值参数**（eravar::ScopeId），不是
+    //     「解释器此刻执行到哪一行」。旧实现的四个常数回调自己按运行期
+    //     位置推导作用域：运行期看起来「碰巧对」，装载期则整段错位。
+    //     这里钉住两件事：
+    //       a) 同名不同值的私有常量在各自函数里取到自己的值；
+    //       c) 广域常量（scope 0）仍然命中；
+    //       d) 同一棵 AST 用两个 scope 各求值一次 -> 两个不同结果
+    //          （作用域是参数，不是被回调缓存在内部的状态）。
+    // ------------------------------------------------------------------
+    qDebug() << "\n17) 私有常量的作用域是求值参数";
+    {
+        VariableStorage cs;
+        ProcessState cps;
+        EraParseTable ct(&cps);
+        ExpressionEvaluator cev;
+        ExecutionEngine cex(&cs, nullptr);
+        cex.setParseTable(&ct);
+        cex.setExpressionEvaluator(&cev);
+        ct.setExpressionEvaluator(&cev);
+        ct.setVariableStorage(&cs);
+        ScriptRunner crun(&ct, &cex, &cps, &cs);
+        crun.setExpressionEvaluator(&cev);
+        crun.setStepLimit(10000);
+
+        // IF 条件**不会**在 2/6 被重新折叠（只重新定型）：它是运行期真正
+        // 经常数回调取值的路径（赋值右值会被 rebuildAssignmentAsts 折成字面量）。
+        const QStringList constSrc = {
+            QStringLiteral("@MAIN"),
+            // `#DIM GLOBAL`：广域常量（.ERB 里 # 行必须跟在函数标签后）。
+            QStringLiteral("#DIM GLOBAL CONST GLOBAL_C = 99"),
+            QStringLiteral("CALL A"),
+            QStringLiteral("CALL B"),
+            QStringLiteral("GC = GLOBAL_C"),             // 广域常量处处可见
+            QStringLiteral("RETURN"),
+            QStringLiteral("@A"),
+            QStringLiteral("#DIM CONST SHARED = 11"),
+            QStringLiteral("GA = 0"),
+            QStringLiteral("IF SHARED == 11"),
+            QStringLiteral("GA = SHARED"),
+            QStringLiteral("ENDIF"),
+            QStringLiteral("RETURN"),
+            QStringLiteral("@B"),
+            QStringLiteral("#DIM CONST SHARED = 22"),
+            QStringLiteral("GB = 0"),
+            QStringLiteral("IF SHARED == 22"),
+            QStringLiteral("GB = SHARED"),
+            QStringLiteral("ENDIF"),
+            QStringLiteral("RETURN"),
+        };
+        check(ct.loadScript("const_scope", buildLines(ct, constSrc)), "loadScript(const_scope)");
+        ct.setEntryPoint("MAIN");
+        ct.markLoadComplete();
+        check(crun.runToCompletion() == ExecState::Halt, "const_scope 程序正常结束");
+        check(cs.getGlobalInt1D("GA", 0) == 11, "@A 的 IF/GA 取到 @A 的 SHARED=11");
+        check(cs.getGlobalInt1D("GB", 0) == 22, "@B 的 IF/GB 取到 @B 的 SHARED=22");
+        check(cs.getGlobalInt1D("GC", 0) == 99, "广域常量 GLOBAL_C 在两个函数里都命中");
+
+        // 同一棵 AST、不同 scope：A/B 各一次。
+        // 先按 A 定型，让节点成为 Const 类别（不经存储槽）；求值时按传入的
+        // scope 查常数表 —— 私有常量同名不同值，结果必须随 scope 变。
+        EraParseTable astCompiler(nullptr);
+        const QSharedPointer<ExpressionNode> sharedAst = astCompiler.expressionAst("SHARED");
+        VariableTable::applyTypes(*sharedAst, ct.variableTable(), QStringLiteral("A"));
+        const eravar::ScopeId idA = eravar::internName("A");
+        const eravar::ScopeId idB = eravar::internName("B");
+        const qint64 vA = cev.evaluate(*sharedAst, &cs, nullptr, idA).toLongLong();
+        const qint64 vB = cev.evaluate(*sharedAst, &cs, nullptr, idB).toLongLong();
+        check(vA == 11 && vB == 22,
+              QString("同一 AST 两次求值：scope=A -> %1, scope=B -> %2（作用域是参数）")
+                  .arg(vA).arg(vB));
+
+        // (c) 广域常量：scope=0 与任意函数 scope 都命中（先查私有、再回落广域）。
+        const QSharedPointer<ExpressionNode> globalAst = astCompiler.expressionAst("GLOBAL_C");
+        VariableTable::applyTypes(*globalAst, ct.variableTable(), QStringLiteral("A"));
+        const qint64 g0 = cev.evaluate(*globalAst, &cs, nullptr, eravar::kGlobalScope).toLongLong();
+        const qint64 ga = cev.evaluate(*globalAst, &cs, nullptr, idA).toLongLong();
+        check(g0 == 99 && ga == 99,
+              QString("广域常量：scope=0 -> %1, scope=A -> %2（回落广域）").arg(g0).arg(ga));
     }
 
     qDebug() << "\n======================================";

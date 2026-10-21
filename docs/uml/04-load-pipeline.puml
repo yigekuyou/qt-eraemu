@@ -81,13 +81,14 @@ end
 
 group 2/6 就地定型【改状态】
   T -> LP : finalizeBindings(ctx)
-  LP -> LP : applyVariableTypes() / 赋值 AST 重建
+  LP -> LP : 五个阶段（每段逐脚本并行，段间 barrier）
+  LP -> LP : 字符串赋值 → FUNC 重编译 → applyVariableTypes → 赋值 AST 重建 → 函数解析
   LP -> AB : parseScopedExpression（带 paramNames）
   AB -> AB : VariableTable::applyTypes / walkApply
   AB --> LP : 类型 / 维数 / lengths + AccessKind + VariableKey
   LP -> VT : buildPrivateNameTable()（声明 → scopeId → 名字 → 键）
   LP -> S : installPrivateScopeTable(table)
-  note right : 此后再进函数只记当前帧，不再建表（前置条件用 Q_ASSERT_X 断言声明已定稿）
+  note right : 每段都是 runPerScript：脚本名排序 → 每任务独占 sink → 按名字序归并；\n段与段之间保持原顺序（类型回填必须早于赋值重建）。\neraTW 实测 2/6 4.3s → 2.0s。
 end
 
 group 3/6 参数校验【改状态：置 line.isError；出诊断】

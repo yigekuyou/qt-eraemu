@@ -86,18 +86,14 @@ static ScriptData makeData(const QStringList& names) {
 }
 
 // 第 3 项护栏（每个夹具都跑）：遍历**全部行**，凡 lines[i].jumpTo >= 0，
-// 目标行必须存在（<= lines.size()）且属于同一脚本；并核对 jumpTo 表与行字段
-// 仍是同一份事实 —— 删副本时若把钳位/越界那一侧一起改了，这里先红。
+// 目标行必须存在（<= lines.size()）且属于同一脚本 —— 删副本时若把钳位/越界
+// 那一侧一起改了，这里先红。行字段现在就是唯一一份跳转事实。
 static void checkWellFormed(const ScriptData& d, const QString& tag) {
     QStringList bad;
     const int nBad = rebuild::countBadJumpTargets(d, &bad);
     check(nBad == 0, QString("%1：jumpTo >= 0 的行，目标行存在且属于同一脚本（遍历 %2 行）")
                          .arg(tag).arg(d.lines.size()));
     for (const QString& s : bad) qDebug().noquote() << "       " << s;
-    QStringList drift;
-    const int nDrift = rebuild::countJumpTableDrift(d, &drift);
-    check(nDrift == 0, tag + "：jumpTo 表与 lines[i].jumpTo 逐项相同");
-    for (const QString& s : drift) qDebug().noquote() << "       " << s;
 }
 
 static ParseDiagnostics structureDiags(const ScriptData& d) {
@@ -187,7 +183,7 @@ int main(int argc, char* argv[]) {
         // 缺 ENDIF：标记区什么都不产出；P 在函数末尾报在 IF 行。
         ParseDiagnostics p;
         ScriptData d = build({"IF", "NOP"}, &p);
-        check(d.ifBranches.isEmpty() && d.jumpTo.isEmpty() && rebuild::endifLines(d).isEmpty(),
+        check(d.ifBranches.isEmpty() && rebuild::jumpFields(d).isEmpty() && rebuild::endifLines(d).isEmpty(),
               "IF 缺 ENDIF：ifBranches/jumpTo/endifLines 全空（静默丢弃）");
         checkInt(jumpmark::jumpTarget(&d, 0), -1, "IF 缺 ENDIF：jumpTarget(IF) = -1");
         expectDiags(p, {{1, "IF に対応する ENDIF が見つかりません"}}, "IF 缺 ENDIF");
@@ -200,7 +196,7 @@ int main(int argc, char* argv[]) {
 
         // ELSEIF 在 IF 之外：标记区不认；P 报「IF～ENDIFの外」。
         d = build({"ELSEIF", "NOP"}, &p);
-        check(d.jumpTo.isEmpty() && d.ifBranches.isEmpty(),
+        check(rebuild::jumpFields(d).isEmpty() && d.ifBranches.isEmpty(),
               "ELSEIF 在 IF 之外：jumpTo/ifBranches 为空");
         expectDiags(p, {{1, "IF～ENDIFの外でELSEIF文が使われました"}}, "ELSEIF 在 IF 之外");
 
@@ -229,7 +225,7 @@ int main(int argc, char* argv[]) {
         // 收敛后占位哨兵已消除：未定型的分支**不进表**（既没有显式 -1 占位行，
         // 也没有 lines[].jumpTo = -2），「没配上」由 structureIssues 记录表达。
         ScriptData d = build({"SELECTCASE", "CASE", "NOP", "CASEELSE", "NOP"}, &p);
-        checkInt(d.jumpTo.value(1, 12345), 12345, "缺 ENDSELECT：jumpTo 表里没有 CASE1 的条目");
+        checkInt(rebuild::jumpFields(d).value(1, 12345), 12345, "缺 ENDSELECT：jumpTo 表里没有 CASE1 的条目");
         checkInt(d.lines[1].jumpTo, -1, "缺 ENDSELECT：lines[CASE1].jumpTo 保持默认 -1（无 -2 哨兵）");
         check(d.structureIssues.size() == 1
                   && d.structureIssues.first().kind == StructureIssueKind::UnresolvedOpener,
@@ -242,7 +238,7 @@ int main(int argc, char* argv[]) {
 
         // CASE 在 SELECTCASE 之外：标记区不认；P 报「SELECTCASE～ENDSELECTの外」。
         d = build({"CASE", "NOP"}, &p);
-        check(d.jumpTo.isEmpty(), "CASE 在 SELECTCASE 之外：jumpTo 为空");
+        check(rebuild::jumpFields(d).isEmpty(), "CASE 在 SELECTCASE 之外：jumpTo 为空");
         expectDiags(p, {{1, "SELECTCASE～ENDSELECTの外でCASE文が使われました"}},
                     "CASE 在 SELECTCASE 之外");
 
@@ -279,7 +275,7 @@ int main(int argc, char* argv[]) {
             ParseDiagnostics p;
             ScriptData d = build(c.lines, &p);
             check(d.loopEndLines.isEmpty() && rebuild::jumpToEnd(d).isEmpty()
-                      && d.jumpTo.isEmpty(),
+                      && rebuild::jumpFields(d).isEmpty(),
                   QString::fromUtf8(c.tag) + QStringLiteral("：标记区全空（静默丢弃）"));
             expectDiags(p, {{c.atOpener ? 1 : 2, c.message}}, QString::fromUtf8(c.tag));
         }
@@ -291,7 +287,7 @@ int main(int argc, char* argv[]) {
         // 中间那个未配对的 LOOP 不阻止随后的 WEND 与 WHILE 配对。
         checkInt(d.loopEndLines.value(0, -1), 2, "WHILE/LOOP/WEND：loopEndLines[WHILE] = WEND");
         checkInt(jumpmark::jumpTarget(&d, 2), 0, "WHILE/LOOP/WEND：WEND 回边到 WHILE");
-        checkInt(d.jumpTo.value(1, 12345), 12345, "WHILE/LOOP/WEND：LOOP 行无 jumpTo 条目");
+        checkInt(rebuild::jumpFields(d).value(1, 12345), 12345, "WHILE/LOOP/WEND：LOOP 行无 jumpTo 条目");
         expectDiags(p, {{2, "対応するREPEATの無いLOOP文です"}}, "WHILE/LOOP 混配");
     }
 
@@ -381,7 +377,7 @@ int main(int argc, char* argv[]) {
         ParseDiagnostics p;
         // 跨 @label：标记区清栈、P 在标签处收尾报未闭合。
         ScriptData d = build({"IF", "@F", "ENDIF"}, &p);
-        check(rebuild::endifLines(d).isEmpty() && d.jumpTo.isEmpty()
+        check(rebuild::endifLines(d).isEmpty() && rebuild::jumpFields(d).isEmpty()
                   && d.ifBranches.isEmpty(),
               "IF 跨 @label：不配对");
         expectDiags(p, {{1, "IF に対応する ENDIF が見つかりません"},

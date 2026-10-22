@@ -21,6 +21,7 @@
 #include <QHash>
 #include <QList>
 #include <QString>
+#include <QStringList>
 
 #include "era_parse_table.h"      // ScriptData
 #include "structure_issue.h"      // StructureIssue（本文件的另一半产物）
@@ -30,16 +31,16 @@
 //
 // 本文件不认识 EraParseTable，只认识 ScriptData —— 输入就是那一份数据本身：
 //   * 构建 buildJumpMarkings(ScriptData&)  —— 可写：清表、逐行配对、回填
-//     lines[i].lineIndex / nextLine / jumpTo；
+//     lines[i].lineIndex / nextLine / jumpTo（跳转事实只有行字段这一份）；
 //   * 读侧 6 个自由函数(const ScriptData*) —— 只读，nullptr 安全。
 //
-// 于是「怎么配对」是**数据**问题（ScriptData 里的 7 张行号索引表 +
-// structureIssues），「怎么查」就是 QHash::value；两者都不需要 EraParseTable
+// 于是「怎么配对」是**数据**问题（ScriptData 里的行号索引表 +
+// structureIssues），「怎么查」就是按行号读行字段；两者都不需要 EraParseTable
 // 的任何成员状态。所有行号都是**逻辑行下标**（0 起），与 C# 的指针式
 // JumpTo/NextLine 等价。
 //
 // **配对语法的唯一实现**：本文件那一趟 for 循环。它同时产出两个投影——
-//   ① 跳转表 + lines[i].lineIndex / nextLine / jumpTo（运行期消费）；
+//   ① 跳转表（各行上的 lineIndex / nextLine / jumpTo，运行期消费）；
 //   ② ScriptData::structureIssues（装载期诊断消费）。
 // 收尾第 5 步（parse_checks 的结构检查）不再自己扫行配对，只读 ②。
 // ---------------------------------------------------------------------------
@@ -74,9 +75,42 @@ inline constexpr int kNoJumpTarget = -1;
 // ---- 读侧：全部是对 ScriptData 内一张表的查表；nullptr = 没有脚本 ----
 
 // 行 -> 控制转移目标行（C# JumpTo）；-1 = 无。
+// **唯一事实**是行字段 lines[i].jumpTo：buildJumpMarkings 只往行上写一次，
+// 这里直接按下标取，不再维护第二份 QHash 副本。越界行号 = 没有这一行 -> -1；
+// 存下来的值可以是 lines.size()（「脚本结束」这个合法位置）。
 inline int jumpTarget(const ScriptData* data, int line) {
-    if (!data) return -1;
-    return data->jumpTo.value(line, -1);
+    if (!data || line < 0 || line >= data->lines.size()) return kNoJumpTarget;
+    return data->lines.at(line).jumpTo;
+}
+
+// 行字段自洽性检查（探针/测试用，运行期不调）：遍历**全部行**，凡
+// lines[i].jumpTo >= 0，要求
+//   0 <= target <= lines.size()            （== size 是「脚本结束」这个合法位置）
+// 且 target < size 时目标行属于同一脚本：
+//   * 目标行的位置文件名 == 源行的位置文件名（跳转不跨文件）；
+//   * 给了 ScriptData::path 时再要求目标行文件名 == path。
+// 返回违例条数；details 里给「源行 -> 目标行」文本。0 违例 = 行字段就是一份
+// 合法且已解析的跳转事实（没有未解析哨兵，也没有越界/跨脚本目标）。
+inline int countBadJumpTargets(const ScriptData& data, QStringList* details = nullptr) {
+    int bad = 0;
+    for (int i = 0; i < data.lines.size(); ++i) {
+        const int t = data.lines.at(i).jumpTo;
+        if (t < 0) continue;
+        bool ok = t <= data.lines.size();
+        if (ok && t < data.lines.size()) {
+            const LogicalLine& target = data.lines.at(t);
+            ok = target.position.filename == data.lines.at(i).position.filename;
+            if (ok && !data.path.isEmpty()) ok = target.position.filename == data.path;
+        }
+        if (!ok) {
+            ++bad;
+            if (details) {
+                details->append(QStringLiteral("lines[%1].jumpTo = %2（lines.size() = %3）")
+                                    .arg(i).arg(t).arg(data.lines.size()));
+            }
+        }
+    }
+    return bad;
 }
 
 // IF 行 -> 其 ELSEIF/ELSE 分支行列表（C# IfCaseList）；空 = 无分支。

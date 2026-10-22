@@ -18,7 +18,7 @@
 // ---------------------------------------------------------------------------
 // jump_markings_rebuild.h —— **旧整表副本的恢复口径**（只在测试里用）
 //
-// ScriptData 曾经除 jumpTo 之外还存着三份「同一配对事实的第二份副本」：
+// ScriptData 曾经除 jumpTo 表之外还存着三份「同一配对事实的第二份副本」：
 //   endifLines : IF/SIF 行 -> ENDIF+1
 //   elseLines  : IF/SIF 行 -> ELSEIF/ELSE/ENDIF（下一分支）
 //   jumpToEnd  : 循环开始行 -> 结束行（外加 SELECTCASE -> ENDSELECT）
@@ -33,8 +33,9 @@
 //
 // 三条口径都只用「运行期读者实际会读的字段」：
 //   * jumpTarget / ifBranches 是 jump_markings.h 的读侧自由函数（生产在用）；
-//   * lines[i].jumpTo 是行上的扁平字段（与 jumpTo 表同一次写入）。
-// 换句话说：删掉的表没有携带任何「jumpTo 里没有」的信息。
+//   * lines[i].jumpTo 是行上的扁平字段，也是跳转事实的**唯一**存放在处
+//     （ScriptData 的 jumpTo QHash 副本已删除）。
+// 换句话说：删掉的表没有携带任何「行字段里没有」的信息。
 //
 // 本文件只被 test/*.cpp 包含，不进生产代码。
 // ---------------------------------------------------------------------------
@@ -131,58 +132,22 @@ inline QHash<int, int> jumpToEnd(const ScriptData& d) {
 //   0 <= target <= lines.size()（== size 是「脚本结束」这个合法位置，SIF 在
 //   末行时就是它），且 target < size 时那一行属于同一脚本：
 //     * 目标行的位置文件名 == 源行的位置文件名（跳转不跨文件）；
-//     * 给了 ScriptData::path 时再要求目标行文件名 == path（夹具可能只给
-//       ScriptPosition 不给 path，那时只靠上一条）。
-// 返回不合规的条数，details 里给出「源行 -> 目标行」文本。
+//     * 给了 ScriptData::path 时再要求目标行文件名 == path。
+// 判定本身与生产侧探针共用 jumpmark::countBadJumpTargets（口径只有一份），
+// 这里只做转发，返回不合规的条数。
 inline int countBadJumpTargets(const ScriptData& d, QStringList* details = nullptr) {
-    int bad = 0;
-    for (int i = 0; i < d.lines.size(); ++i) {
-        const int t = d.lines.at(i).jumpTo;
-        if (t < 0) continue;
-        bool ok = t <= d.lines.size();
-        if (ok && t < d.lines.size()) {
-            const LogicalLine& target = d.lines.at(t);
-            ok = target.position.filename == d.lines.at(i).position.filename;
-            if (ok && !d.path.isEmpty()) ok = target.position.filename == d.path;
-        }
-        if (!ok) {
-            ++bad;
-            if (details) {
-                details->append(QStringLiteral("lines[%1].jumpTo = %2（lines.size() = %3）")
-                                    .arg(i).arg(t).arg(d.lines.size()));
-            }
-        }
-    }
-    return bad;
+    return jumpmark::countBadJumpTargets(d, details);
 }
 
-// 「jumpTo 表与行字段是同一份事实」：跑完 buildJumpMarkings 之后两者必须逐项
-// 相同（表里多一条 / 少一条 / 值不同都算漂移）。返回漂移条数。
-inline int countJumpTableDrift(const ScriptData& d, QStringList* details = nullptr) {
-    int drift = 0;
-    for (auto it = d.jumpTo.constBegin(); it != d.jumpTo.constEnd(); ++it) {
-        const int line = it.key();
-        const int onLine = (line >= 0 && line < d.lines.size()) ? d.lines.at(line).jumpTo : -1;
-        if (onLine != it.value()) {
-            ++drift;
-            if (details) {
-                details->append(QStringLiteral("jumpTo[%1] = %2 但 lines[%1].jumpTo = %3")
-                                    .arg(line).arg(it.value()).arg(onLine));
-            }
-        }
-    }
+// 行字段的只读投影（**测试专用**）：行 -> lines[i].jumpTo（只收 >= 0 的行）。
+// jumpTo 的唯一事实是行字段；旧断言里的「两次构建结果相同」「表为空」用它
+// 表达同一件事，不引入第二份可变写入。
+inline QHash<int, int> jumpFields(const ScriptData& d) {
+    QHash<int, int> out;
     for (int i = 0; i < d.lines.size(); ++i) {
-        const int onLine = d.lines.at(i).jumpTo;
-        if (onLine < 0) continue;
-        if (!d.jumpTo.contains(i)) {
-            ++drift;
-            if (details) {
-                details->append(QStringLiteral("lines[%1].jumpTo = %2 但 jumpTo 表无此条")
-                                    .arg(i).arg(onLine));
-            }
-        }
+        if (d.lines.at(i).jumpTo >= 0) out.insert(i, d.lines.at(i).jumpTo);
     }
-    return drift;
+    return out;
 }
 
 // 表 -> 排序后的「k:v」文本（逐项比对与摘要都用它）。

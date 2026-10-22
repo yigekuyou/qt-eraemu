@@ -79,18 +79,14 @@ static QString listText(const QList<int>& v) {
 }
 
 // 第 3 项护栏：遍历**全部行**。凡 lines[i].jumpTo >= 0，目标行必须存在
-// （0 <= t <= lines.size()，「= size」是脚本结束这个合法位置）且属于同一脚本；
-// 顺带核对 jumpTo 表与行字段仍是同一份事实。
+// （0 <= t <= lines.size()，「= size」是脚本结束这个合法位置）且属于同一脚本。
+// 行字段就是跳转事实的唯一一份，没有第二张表可漂移。
 static void checkWellFormed(const ScriptData& d, const QString& tag) {
     QStringList bad;
     const int nBad = rebuild::countBadJumpTargets(d, &bad);
     check(nBad == 0, QString("%1：jumpTo >= 0 的行，目标行存在且属于同一脚本（遍历 %2 行）")
                          .arg(tag).arg(d.lines.size()));
     for (const QString& s : bad) qDebug().noquote() << "       " << s;
-    QStringList drift;
-    const int nDrift = rebuild::countJumpTableDrift(d, &drift);
-    check(nDrift == 0, tag + "：jumpTo 表与 lines[i].jumpTo 逐项相同");
-    for (const QString& s : drift) qDebug().noquote() << "       " << s;
 }
 
 // 期望值比对，失败时把实际值打进消息（行号错了要能一眼看出差多少）。
@@ -222,7 +218,7 @@ int main(int argc, char* argv[]) {
         qDebug() << "\n[7] FunctionLabel 清空配对栈";
         ScriptData ifCase = makeData({"IF", "@F", "ENDIF"});
         jumpmark::buildJumpMarkings(ifCase);
-        check(rebuild::endifLines(ifCase).isEmpty() && ifCase.jumpTo.isEmpty()
+        check(rebuild::endifLines(ifCase).isEmpty() && rebuild::jumpFields(ifCase).isEmpty()
                   && ifCase.ifBranches.isEmpty(),
               "IF 跨过 @label 不再与 ENDIF 配对");
         checkWellFormed(ifCase, "IF 跨 @label");
@@ -264,7 +260,7 @@ int main(int argc, char* argv[]) {
         check(rebuild::endifLines(d) == rebuild::endifLines(once), "endifLines 两次构建相同（重建）");
         check(rebuild::elseLines(d) == rebuild::elseLines(once), "elseLines 两次构建相同（重建）");
         check(d.loopEndLines == once.loopEndLines, "loopEndLines 两次构建相同");
-        check(d.jumpTo == once.jumpTo, "jumpTo 两次构建相同");
+        check(rebuild::jumpFields(d) == rebuild::jumpFields(once), "jumpTo 两次构建相同");
         check(rebuild::jumpToEnd(d) == rebuild::jumpToEnd(once), "jumpToEnd 两次构建相同（重建）");
         check(d.ifBranches == once.ifBranches, "ifBranches 两次构建相同");
         check(d.catchLines == once.catchLines, "catchLines 两次构建相同");

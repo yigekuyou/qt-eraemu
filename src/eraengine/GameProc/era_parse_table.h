@@ -104,18 +104,17 @@ struct PositionEffects {
 // 条件 AST、以及扁平行号控制流字段）。标记区在此之上补充 O(1) 跳转表。
 //
 // 曾被删掉的三张「整表副本」（endifLines / elseLines / jumpToEnd）运行期无人
-// 读，且可以从 jumpTo / ifBranches 精确重建（口径见 test/jump_markings_rebuild.h）：
+// 读，且可以从 lines[i].jumpTo / ifBranches 精确重建（口径见 test/jump_markings_rebuild.h）：
 //   endifLines  <- 该行（IF 或它的分支）的 jumpTo（= ENDIF+1）
 //   elseLines   <- SIF 的 jumpTo；IF 族的分支链来自 ifBranches
 //   jumpToEnd   <- 收尾行的回边（lines[closer].jumpTo = opener）+ SELECTCASE 的 jumpTo-1
 // 保留副本只会给「同一配对」多出一个可能漂移的写点。
+// 同一条理由也适用于 jumpTo 本身：它曾经是「行号 -> 目标」的 QHash，与
+// lines[i].jumpTo 双写；现在**只有行字段**，读侧走 jumpmark::jumpTarget。
 // ---------------------------------------------------------------------------
 struct ScriptData {
     QList<LogicalLine>  lines;          // 完整 AST 逻辑行（对齐 C# LogicalLine 数组）
     QHash<int, int>     loopEndLines;   // 标记区：REPEAT/WHILE/FOR 行 -> 配对行
-    // 行 -> 控制转移目标行（C# JumpTo）。运行期唯一的跳转事实；与
-    // lines[i].jumpTo 同一次写入（测试里有逐项一致性断言）。
-    QHash<int, int>     jumpTo;
     QHash<int, QList<int>> ifBranches;  // IF 行 -> 其 ELSEIF/ELSE 行列表（C# IfCaseList）
     // TRYC 系异常块的配对（对齐 C# ErbLoader 的 nestStack + JumpToEndCatch）
     //   catchLines    : TRYC 行     -> 配对的 CATCH 行（失败时跳到它**之后**）
@@ -219,7 +218,7 @@ struct ScriptView {
 // EraParseTable —— 内存运行时容器（只读区 / 标记区 / 位置区）
 //
 //   只读区 : m_scripts（ScriptData，包含装载期绑定的 AST）
-//   标记区 : ScriptData 内的 loopEndLines / jumpTo / ifBranches / …
+//   标记区 : ScriptData 内的 loopEndLines / ifBranches / … + 各行 jumpTo
 //   位置区 : m_position（script / line(PC) / callStack / depth）
 // ---------------------------------------------------------------------------
 class EraParseTable : public QObject {

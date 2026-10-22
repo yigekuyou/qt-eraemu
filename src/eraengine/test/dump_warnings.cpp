@@ -27,6 +27,7 @@
 #include <QElapsedTimer>
 #include <QEventLoop>
 #include "eraengine.h"
+#include "jump_markings.h"   // jumpmark::countBadJumpTargets（--jumpcheck 探针）
 
 int main(int argc, char* argv[]) {
     QCoreApplication app(argc, argv);
@@ -71,6 +72,35 @@ int main(int argc, char* argv[]) {
                    << d.message << '\t' << d.snippet << '\n';
             }
         }
+    }
+    // 可选探针：--jumpcheck 遍历**全部脚本的全部行**，核对行字段 lines[i].jumpTo
+    // 的合法性（0 <= t <= lines.size()；t < size 时目标行同脚本）。读侧唯一事实
+    // 就是行字段，所以这里 0 违例即「跳转事实自洽」。不影响告警输出。
+    if (app.arguments().contains(QStringLiteral("--jumpcheck"))) {
+        int scripts = 0, rows = 0, links = 0, bad = 0;
+        const auto& allScripts = engine.getParseTable()->scripts();
+        for (auto it = allScripts.constBegin(); it != allScripts.constEnd(); ++it) {
+            const ScriptData& sd = it.value();
+            ++scripts;
+            rows += int(sd.lines.size());
+            for (const LogicalLine& ll : sd.lines) {
+                if (ll.jumpTo >= 0) ++links;
+            }
+            QStringList details;
+            bad += jumpmark::countBadJumpTargets(sd, &details);
+            for (const QString& s : details) {
+                fprintf(stderr, "JUMPBAD\t%s\t%s\n", it.key().toUtf8().constData(),
+                        s.toUtf8().constData());
+            }
+        }
+        fprintf(stderr, "JUMPCHECK\tscripts=%d\trows=%d\tlinks=%d\tbad=%d\n",
+                scripts, rows, links, bad);
+        if (bad != 0) return 3;
+    }
+    // 可选探针：--sizeof 打印关键结构大小（只读，不影响告警输出）。
+    if (app.arguments().contains(QStringLiteral("--sizeof"))) {
+        fprintf(stderr, "SIZEOF\tScriptData=%zu\tLogicalLine=%zu\n",
+                sizeof(ScriptData), sizeof(LogicalLine));
     }
     // ROM 编码探测（只读；用于展示「这个游戏是什么编码」）
     if (argc > 3 && QString::fromLocal8Bit(argv[3]) == QLatin1String("--probe")) {

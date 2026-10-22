@@ -115,7 +115,7 @@ struct Open {
 
 // ---------------------------------------------------------------------------
 // 配对语法的**唯一**实现：一趟扫行，产出
-//   ① 7 张跳转表 + lines[i].lineIndex / nextLine / jumpTo（运行期）；
+//   ① 各行上的 lineIndex / nextLine / jumpTo（运行期唯一一份跳转事实）；
 //   ② ScriptData::structureIssues（装载期诊断）。
 //
 // 两个投影的判定差异（逐条见结构体 Open 的注释）：
@@ -127,7 +127,6 @@ struct Open {
 // ---------------------------------------------------------------------------
 void buildJumpMarkings(ScriptData& data) {
     data.loopEndLines.clear();
-    data.jumpTo.clear();
     data.ifBranches.clear();
     data.catchLines.clear();
     data.endCatchLines.clear();
@@ -367,7 +366,6 @@ void buildJumpMarkings(ScriptData& data) {
             // 开块：见下
         } else if (name == QLatin1String("SIF")) {
             const int after = sifAfter;
-            data.jumpTo[i] = after;
             ll.jumpTo = after;
         } else if (name == QLatin1String("ELSEIF") || name == QLatin1String("ELSE")) {
             const int j = familyTop(Family::If);
@@ -380,12 +378,10 @@ void buildJumpMarkings(ScriptData& data) {
             if (j >= 0) {
                 Open& cur = stack[j];
                 const int after = i + 1;
-                data.jumpTo[cur.line] = after;
                 data.lines[cur.line].jumpTo = after;
                 data.ifBranches[cur.line] = cur.branches;
                 for (int b : cur.branches) {
-                    data.jumpTo[b] = after;   // 顺序落入分支 -> 跳过到 ENDIF 之后
-                    data.lines[b].jumpTo = after;
+                    data.lines[b].jumpTo = after;   // 顺序落入分支 -> 跳过到 ENDIF 之后
                 }
                 jIdx = j;
             }
@@ -401,10 +397,8 @@ void buildJumpMarkings(ScriptData& data) {
                 Open& cur = stack[j];
                 const int after = i + 1;
                 for (int c : cur.branches) {
-                    data.jumpTo[c] = after;
                     data.lines[c].jumpTo = after;
                 }
-                data.jumpTo[cur.line] = after;
                 data.lines[cur.line].jumpTo = after;
                 data.ifBranches[cur.line] = cur.branches;
                 jIdx = j;
@@ -423,7 +417,6 @@ void buildJumpMarkings(ScriptData& data) {
                                                           : QStringLiteral("FOR");
                 if (top == expected) {
                     data.loopEndLines[stack.at(j).line] = i;
-                    data.jumpTo[i] = stack.at(j).line;
                     ll.jumpTo = stack.at(j).line;
                     jIdx = j;
                 }

@@ -166,17 +166,17 @@ int main(int argc, char* argv[]) {
     // 从 jumpTo / ifBranches 重建同一事实（断言强度不变：值必须相同）。
     check(rebuild::elseLines(*data).value(2, -1) == 4, "elseLines[IF] == ELSE line（重建）");
     check(data->ifBranches.value(2, QList<int>()) == QList<int>{4}, "ifBranches[IF] == [ELSE]");
-    check(data->jumpTo.value(2, -1) == 7, "jumpTo[IF] == ENDIF+1 (no branch taken)");
+    check(rebuild::jumpFields(*data).value(2, -1) == 7, "jumpTo[IF] == ENDIF+1 (no branch taken)");
     check(rebuild::endifLines(*data).value(2, -1) == 7, "endifLines[IF] == ENDIF+1（重建）");
-    check(data->jumpTo.value(4, -1) == 7, "jumpTo[ELSE] == ENDIF+1");
+    check(rebuild::jumpFields(*data).value(4, -1) == 7, "jumpTo[ELSE] == ENDIF+1");
     check(data->loopEndLines.value(7, -1) == 9, "loopEndLines[REPEAT] == LOOP");
     check(rebuild::jumpToEnd(*data).value(7, -1) == 9, "jumpToEnd[REPEAT] == LOOP（重建）");
-    check(data->jumpTo.value(9, -1) == 7, "jumpTo[LOOP] back-edge == REPEAT");
+    check(rebuild::jumpFields(*data).value(9, -1) == 7, "jumpTo[LOOP] back-edge == REPEAT");
     check(data->loopEndLines.value(10, -1) == 12, "loopEndLines[WHILE] == WEND");
-    check(data->jumpTo.value(12, -1) == 10, "jumpTo[WEND] back-edge == WHILE");
+    check(rebuild::jumpFields(*data).value(12, -1) == 10, "jumpTo[WEND] back-edge == WHILE");
     check(data->loopEndLines.value(13, -1) == 15, "loopEndLines[FOR] == NEXT");
-    check(data->jumpTo.value(15, -1) == 13, "jumpTo[NEXT] back-edge == FOR");
-    check(data->jumpTo.value(16, -1) == 18, "jumpTo[SIF] == skip next line");
+    check(rebuild::jumpFields(*data).value(15, -1) == 13, "jumpTo[NEXT] back-edge == FOR");
+    check(rebuild::jumpFields(*data).value(16, -1) == 18, "jumpTo[SIF] == skip next line");
     {
         // 第 3 项护栏：遍历这个脚本的**全部行**，jumpTo 落点必须存在且同脚本。
         QStringList bad;
@@ -184,10 +184,6 @@ int main(int argc, char* argv[]) {
               QString("jumpTo >= 0 的行，目标行存在且属于同一脚本（遍历 %1 行）")
                   .arg(data->lines.size()));
         for (const QString& s : bad) qDebug().noquote() << "   " << s;
-        QStringList drift;
-        check(rebuild::countJumpTableDrift(*data, &drift) == 0,
-              "jumpTo 表与 lines[i].jumpTo 逐项相同");
-        for (const QString& s : drift) qDebug().noquote() << "   " << s;
     }
     // 扁平控制流字段（等价 C# NextLine / JumpTo）
     check(data->lines[2].jumpTo == 7, "line[IF].jumpTo == 7 (ENDIF+1)");

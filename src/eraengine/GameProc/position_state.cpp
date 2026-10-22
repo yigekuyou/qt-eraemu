@@ -257,6 +257,20 @@ const LabelRef* firstLabel(const ScriptView& view, const QString& name, bool cal
     return nullptr;
 }
 
+const LabelRef* firstGotoLabel(const ScriptView& view, const QString& name,
+                               const QString& script, int functionSegmentLine) {
+    if (!view.labelIndex) return nullptr;
+    const auto it = view.labelIndex->constFind(name.toUpper());
+    if (it == view.labelIndex->constEnd()) return nullptr;
+    for (const LabelRef& ref : it.value()) {
+        if (ref.isFunction) continue;                       // GOTO 只认 $标签
+        if (ref.script != script) continue;                  // 段身份是脚本内行号
+        if (ref.functionLine != functionSegmentLine) continue;   // 本函数段之外不算
+        return &ref;   // 全序第一条 = 同脚本内行号最小的一条
+    }
+    return nullptr;
+}
+
 bool resolveCallableLabel(const PositionState& state, const ScriptView& view, const QString& label,
                          QString& targetScript, int& targetLine) {
     // 当前脚本优先（@函数标签），未命中则跨脚本取全序第一条。

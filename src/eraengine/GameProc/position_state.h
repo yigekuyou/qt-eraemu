@@ -156,6 +156,16 @@ bool returnFromCall(PositionState& state, const ScriptView& view, PositionEffect
 const LabelRef* firstLabel(const ScriptView& view, const QString& name, bool callableOnly,
                            const QString& onlyScript = QString());
 
+// GOTO 的 $ 标签解析（C# LabelDictionary.GetLabelDollar(func.ParentLabelLine)）：
+//   * 只认 $标签（ref.isFunction == false）—— GOTO 到 @ 是另一条路径；
+//   * 只认**同一函数段**：ref.functionLine == functionSegmentLine（段身份在装载期
+//     写进 LabelRef，见那里注释）-1 = 第一个 @标签之前的文件头段；
+//   * 只认本脚本（段身份是脚本内的行号，跨脚本没有可比性）。
+// 顺序取索引里该名字的第一条命中 = 同脚本内行号最小的一条（全序固化后成立），
+// 与旧的「从函数入口行往下扫、第一个匹配」逐字一致，但不再扫行。
+const LabelRef* firstGotoLabel(const ScriptView& view, const QString& name,
+                               const QString& script, int functionSegmentLine);
+
 // 解析 CALL/JUMP 的目标：当前脚本优先（且必须是 @函数标签），否则查同一张
 // 索引的全序第一条。两次查询走的是同一个 firstLabel，规则不在这里。
 // 「必须是 @函数标签」这一条不是性能优化，而是语义：

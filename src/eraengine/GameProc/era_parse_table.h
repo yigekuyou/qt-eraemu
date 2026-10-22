@@ -138,6 +138,13 @@ using UserFunctionInfo = UserFunctionDecl;
 struct LabelRef {
     QString script;
     int     line = -1;
+    // 所属函数段的起点（= 该段那个 @函数标签的行号；首个 @ 之前的文件头段 = -1）。
+    // 对齐 C# FunctionLabelLine.ParentLabelLine：GOTO 的 $ 标签只在**自己那一段**
+    // 内有效，这里把这个「段身份」放在声明旁边，运行期一次查表就能过滤，
+    // 不必为了判定归属去扫行（旧 findGotoLabelInFunction 每次 GOTO 从函数入口
+    // 逐行扫到下一个 @）。与 isFunction 同源：装载期在**唯一登记点**写死，
+    // 同一段里的所有行共享这个值；同名函数重复声明时两份声明是两个不同的段。
+    int     functionLine = -1;
     // @函数标签 = true（CALL / JUMP / 式中调用的合法目标）；
     // $GOTO 标签 = false（只有 GOTO 认它；C# FunctionIdentifierDictionary 只收 @）。
     bool    isFunction = true;
@@ -253,6 +260,20 @@ public:
     QString getEntryPoint() const;
 
     int getLabelPosition(const QString& scriptName, const QString& labelName) const;
+
+    // GOTO 的 $ 标签解析：本脚本内、**同一函数段**（段起点行 == functionSegmentLine）
+    // 的 $ 标签里取行号最小的一条；找不到返回 -1。
+    // 运行期只做一次索引查询 + 声明数（通常 1~3）次字段比较 —— 不扫行、不解析、
+    // 不做逐行大小写比较（名字折叠与段归属都在装载期做完了）。
+    // functionSegmentLine = -1 表示「第一个 @ 之前的文件头段」。
+    [[nodiscard]] int firstGotoLabelPosition(const QString& scriptName, int functionSegmentLine,
+                                             const QString& labelName) const;
+
+    // 当前执行位置所在的函数段起点行（= 当前行的 @标签行；文件头 = -1）。
+    // 有调用帧时帧里的 entryLine 就是段起点（事件导航用 callLabelAt 可以显式指定
+    // 同名函数的**非首份**声明，所以不能用名字回查索引）；没有帧（depth==0 的
+    // 系统入口）时退回「行上的 ownerFunction -> 索引第一条」，与旧实现同解。
+    [[nodiscard]] int currentFunctionSegment() const;
 
     bool resolveJumpTarget(const QString& label, int& position);
     bool resolveJumpToScript(const QString& scriptName, const QString& label, int& position);

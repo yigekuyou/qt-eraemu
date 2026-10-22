@@ -189,14 +189,13 @@ private:
     // TRYCALLLIST/TRYJUMPLIST/TRYGOTOLIST：依次尝试体内 FUNC 条目（对齐 C#
     // doFlowControlFunction）；全部失败 -> 跳到配对 ENDFUNC 之后。
     ExecState doTryListLine(const LogicalLine& line);
-    // 在当前函数体内找 $ 标签（对齐 C# state.CurrentCalled.CallLabel：$ 标签
-    // 只在本函数作用域内有效），返回行号；找不到返回 -1。
-    // $ 标签只在**当前函数**内解析（C# LabelDictionary.GetLabelDollar）：
-    // 同一脚本里不同函数的同名 $ 标签（eraTW COMMON.ERB 有 4 个 $INPUT_LOOP）
-    // 互不干扰。ownerFunction：GOTO 处没有调用帧（depth==0 的系统入口）时
-    // 用它定位函数入口；有帧时用帧的 entryLine。
-    [[nodiscard]] int findGotoLabelInFunction(const QString& label,
-                                              const QString& ownerFunction = QString()) const;
+    // 在当前函数段内找 $ 标签（对齐 C# LabelDictionary.GetLabelDollar：
+    // $ 标签只在本函数作用域内有效），返回行号；找不到返回 -1。
+    // 一次索引查表（EraParseTable::firstGotoLabelPosition）：段身份由当前位置
+    // 决定（有帧 = 帧的 entryLine，没帧 = 行上 ownerFunction 的第一条声明），
+    // 运行期不扫行、不解析、不逐行比较。同一脚本里不同函数的同名 $ 标签
+    // （eraTW COMMON.ERB 有 4 个 $INPUT_LOOP）互不干扰。
+    [[nodiscard]] int findGotoLabelInFunction(const QString& label) const;
     // 标签/函数
     int  labelLine(const QString& label) const;
     // GAMEBASE_* 等需要 GameBase 数据（经 ExecutionEngine 取得）

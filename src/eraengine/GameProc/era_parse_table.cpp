@@ -467,6 +467,7 @@ bool EraParseTable::loadScript(const QString& scriptName, const QList<LogicalLin
     }
 
     QString currentFunction;   // 用于 #DIM 的作用域判定
+    int currentFunctionLine = -1;   // 本函数段的起点（= 那个 @标签的行号；文件头 = -1）
     bool afterLabel = false;   // .ERB 中 # 行必须紧跟函数标签（对齐 C# ErbLoader）
     QSet<QString> labelNames;  // 仅用于装载日志的「本脚本标签名个数」，不保留
 
@@ -483,6 +484,7 @@ bool EraParseTable::loadScript(const QString& scriptName, const QList<LogicalLin
         //     因此这里只跟踪当前函数名用于作用域判定，不把形参登记为新变量。
         if (line.kind == LineKind::FunctionLabel) {
             currentFunction = line.labelName;
+            currentFunctionLine = i;   // 段起点（LabelRef::functionLine 的来源）
         } else if (line.kind == LineKind::Preprocessor) {
             // .ERH（头文件）：文件级 #DIM = 全局（对齐 C# HeaderFileLoader）
             // .ERB（脚本）  ：# 行必须紧跟函数标签，否则告警并忽略（对齐 C# ErbLoader）
@@ -519,9 +521,12 @@ bool EraParseTable::loadScript(const QString& scriptName, const QList<LogicalLin
             //  CALL 能不能用它。这是「名字 -> 行号」**唯一**的一张表：
             //  ScriptData 不再另存 labelPositions（旧表是 last-wins，与本索引的
             //  first-wins 会是两个答案）。
+            // 同一次登记顺手记下段起点（functionLine）—— GOTO 的「$ 只在
+            //  本函数内」这条规则于是变成索引上的一个字段比较，运行期不再扫行。
             LabelRef ref;
             ref.script = scriptName;
             ref.line = i;
+            ref.functionLine = currentFunctionLine;   // 段身份（同段所有标签共享）
             ref.isFunction = line.kind == LineKind::FunctionLabel;
 
             // 注册用户自定义函数（@label 即函数入口）—— 构建完整的声明节点
@@ -732,6 +737,27 @@ int EraParseTable::getLabelPosition(const QString& scriptName, const QString& la
     const LabelRef* ref = position::firstLabel(makeScriptView(), labelName,
                                                /*callableOnly=*/false, scriptName);
     return ref ? ref->line : -1;
+}
+
+int EraParseTable::firstGotoLabelPosition(const QString& scriptName, int functionSegmentLine,
+                                          const QString& labelName) const {
+    // 一次索引查询 + 声明数次字段比较：名字折叠与「属于哪一段」都在装载期写进
+    // 索引（LabelRef::functionLine），运行期不再碰 ScriptData::lines。
+    if (!script(scriptName)) return -1;   // 脚本不存在 -> 段行号没有意义
+    const LabelRef* ref = position::firstGotoLabel(makeScriptView(), labelName, scriptName,
+                                                  functionSegmentLine);
+    return ref ? ref->line : -1;
+}
+
+int EraParseTable::currentFunctionSegment() const {
+    // 有帧：帧里记的就是「进入的是哪个 @声明」（callLabelAt 可以指定同名函数的
+    // 非首份声明），这正是段的身份。
+    if (m_position.depth > 0) return m_position.callStack.last().entryLine;
+    // 没有帧（系统入口的直接执行）：行上的 ownerFunction 只是名字，按索引第一条
+    // 回查段起点 —— 与旧 findGotoLabelInFunction 的 start 计算逐字一致。
+    const QString scope = executionScope();
+    if (scope.isEmpty()) return -1;   // 第一个 @ 之前的文件头段
+    return getLabelPosition(m_position.script, scope);
 }
 
 bool EraParseTable::resolveJumpTarget(const QString& label, int& position) {

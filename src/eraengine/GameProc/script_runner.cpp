@@ -877,7 +877,7 @@ ExecState ScriptRunner::executeLine(const LogicalLine& line) {
         // 都有同名 $ 标签时（eraTW COMMON.ERB 有 4 个 $INPUT_LOOP），后注册的
         // 覆盖先注册的 —— GOTO 跳进**别的函数**继续执行（「进入了错误的内存」，
         // 强くてニューゲーム.ERB 的 @CHOICE 非法输入路径实测触发）。
-        const int pos = label.isEmpty() ? -1 : findGotoLabelInFunction(label, line.ownerFunction);
+        const int pos = label.isEmpty() ? -1 : findGotoLabelInFunction(label);
         if (pos < 0) {
             m_state->setErrorState();
             emit errorOccurred(QStringLiteral("GOTO label not found: %1").arg(label));
@@ -2263,25 +2263,16 @@ ExecState ScriptRunner::doTryListLine(const LogicalLine& line) {
 }
 
 // $ 标签只在本函数体内有效（对齐 C# state.CurrentCalled.CallLabel 的查找范围）。
-// ownerFunction：没有调用帧（depth==0 的系统入口）时用它定位函数入口行。
-int ScriptRunner::findGotoLabelInFunction(const QString& label, const QString& ownerFunction) const {
+// 一次查表：本脚本 + 本函数段（LabelRef::functionLine）+ 名字（装载期已大写折叠），
+// 取全序第一条。旧实现是「从函数入口行逐行往下扫，遇到下一个 @ 停」—— 每次
+// GOTO 都在运行期扫行、逐行做大小写折叠比较，与本仓「装载期定型、运行期查表」
+// 的边界相反。段身份由调用方给出（有帧 = 帧的 entryLine），因此同名函数重复
+// 声明时也只会命中**正在执行的那一份**。
+int ScriptRunner::findGotoLabelInFunction(const QString& label) const {
     const QString script = m_table->currentScript();
-    const ScriptData* sd = m_table->script(script);
-    if (!sd) return -1;
-    int start = -1;
-    if (m_table->depth() > 0) start = m_table->currentFrame().entryLine;
-    if (start < 0 && !ownerFunction.isEmpty())
-        start = m_table->getLabelPosition(script, ownerFunction);
-    if (start < 0 || start >= sd->lines.size()) start = 0;
-    for (int i = start; i < sd->lines.size(); ++i) {
-        const LogicalLine& l = sd->lines.at(i);
-        if (i > start && l.kind == LineKind::FunctionLabel) break;   // 离开本函数体
-        if (l.kind == LineKind::GotoLabel
-            && l.labelName.compare(label, Qt::CaseInsensitive) == 0) {
-            return i;
-        }
-    }
-    return -1;
+    if (!m_table->script(script)) return -1;
+    const int segment = m_table->currentFunctionSegment();
+    return m_table->firstGotoLabelPosition(script, segment, label);
 }
 
 // ---------------------------------------------------------------------------

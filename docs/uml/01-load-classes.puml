@@ -44,18 +44,23 @@ package "GameProc" {
     + isFinalized() / isBoundOrLater()
     - readOnlyPassAllowed(entryName) : bool  ' 只查阶段，不计数
     - isGateOpen(gate) : bool
-    {static} - kLoadPasses : LoadPass[7]  ' 表即流程（含切片身份 origin）
+    - m_loadPasses : LoadPass[7]  ' 表即流程（含切片身份 origin）；实例成员（成员步骤要绑 this）
+    {static} - makeLoadPasses(self) : LoadPass[7]  ' 构造时建表：自由函数 + 只捕获 this 的 lambda
   }
 
   struct LoadPass {
     label : const char*
-    fn : void (*)(LoadContext&)   ' 1/2/3：loadpass 自由函数
-    memberFn : void (EraParseTable::*)()  ' 4/5/6/7：尚未搬出
+    run : PassAction      ' 唯一的可调用体（1/2/3 自由函数；4/5/6/7 lambda）
     gate : LoadPassGate   ' Always / NotCalledWarning
     phaseAfter : LoadPhase
     origin : DiagOrigin   ' 该步拥有的诊断切片（Pass1..Pass7）
-    ' fn 与 memberFn 恰有一个非空（markLoadComplete 一处 if 分派）
     ' 运行与否都 replaceOrigin(origin, sink)：跳过 = 切片置空
+  }
+
+  class PassAction {
+    ' 无默认构造 + 拒绝 nullptr_t = 空状态不可表达
+    operator()(LoadContext&, ParseDiagnostics&) : 7 条表项形态相同
+    ' 4/5/6/7 的 lambda 第一参数**无名** -> 拿不到可写 LoadContext
   }
 
   enum LoadPassGate {
@@ -218,7 +223,7 @@ EraEngine --> ConstantTable : 装载名表
 ErbLoader ..> AstBuilder : 逐行 build
 ErbLoader --> EraParseTable : loadScript
 EraParseTable *-- VariableTable
-EraParseTable *-- LoadPass : kLoadPasses（表即流程）
+EraParseTable *-- LoadPass : m_loadPasses（表即流程）
 EraParseTable --> LoadPhase : m_phase
 VariableTable ..> PrivateNameTable : buildPrivateNameTable()
 EraParseTable --> ParseDiagnostics : 诊断累积
@@ -227,7 +232,7 @@ EraParseTable ..> ParseIrView : makeIrView()
 ParseIrView <.. FreeFns : const 输入
 EraParseTable ..> FreeFns : 4/5/6 forwarder
 EraParseTable ..> LoadContext : makeLoadContext()
-EraParseTable ..> WriteFns : kLoadPasses 1/2/3 直连（无 forwarder）
+EraParseTable ..> WriteFns : 表项 1/2/3 直连（无 forwarder）
 EraParseTable ..> JumpFns : loadScript 末尾建表（类内无成员入口）
 EraParseTable *-- PositionState : m_position（纯数据）
 EraParseTable ..> PosFns : 位置推进的 11 个壳子
@@ -239,7 +244,7 @@ VariableTable *-- VariableDecl
 EraParseTable --> VariableConfig : 尺寸 / 维数
 
 note bottom of EraParseTable
-  收尾由 kLoadPasses[7] 驱动（表即流程，顺序即执行顺序）：
+  收尾由 m_loadPasses[7] 驱动（表即流程，顺序即执行顺序）：
   1/6 resolveGlobalDeclarationsStep（声明定稿 + 标签索引）  loadpass · 改状态
   2/6 finalizeBindings（含 applyVariableTypes）             loadpass · 改状态
   3/6 finalizeValidation（表达式 / 常量下标 / 实参）        loadpass · 改状态
@@ -247,7 +252,8 @@ note bottom of EraParseTable
   5/6 checkStructures（IF / FOR / REPEAT 配对）             只读
   6/6 checkStaticValues（除零 / 负下标 / 尺寸 / 名字表）    只读
   7 checkNotCalledFunctions（gate = NotCalledWarning）      只读
-  markLoadComplete 只是「遍历表 + isGateOpen + 计时日志 + m_phase」。
+  markLoadComplete 只是「遍历表 + isGateOpen + 计时日志 + m_phase」；
+  每步只有一种调用写法 run(ctx, sink) —— 没有「哪一种形态」的分派。
   阶段随 phaseAfter 推进：Empty → Loading → Bound → Finalized。
 
   诊断也由表决定归属：每个 pass 建独立 sink，运行与否都

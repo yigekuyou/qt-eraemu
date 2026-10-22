@@ -9,7 +9,7 @@ PlantUML 源码。所有图都是**当前代码**的静态结构，不包含计�
 | `01-load-classes.puml` | 类图 | 装载期：`EraEngine` / `ErbLoader` / `AstBuilder` / `EraParseTable` / `ParseIrView` 与 4/5/6 自由函数 / `LoadContext` 与 1/2/3 自由函数 / 标记区 `jumpmark` / 标签索引 `m_labelIndex` / 位置区 `PositionState`+`PositionEffects`+`position` 自由函数 / `LoadPhase` 阶段机 / 带 `origin` 切片的 pass 表 |
 | `02-runtime-classes.puml` | 类图 | 运行期：`ExecutionEngine` / `ScriptRunner` 单步状态机 / `ProcessState` / `LoopFrame`（作用是显式 `ScopeId`；位置推进经 `position` 自由函数） |
 | `03-expression-classes.puml` | 类图 | 表达式 AST、`AccessKind` 16 值、`VariableKey{scopeId,nameId}`、名字 intern 表、`resolverTable` |
-| `04-load-pipeline.puml` | 时序图 | 装载流水线：CSV → 逐文件解析 → `kLoadPasses[7]` 表驱动收尾（每步独立 sink + `replaceOrigin`）→ 诊断 |
+| `04-load-pipeline.puml` | 时序图 | 装载流水线：CSV → 逐文件解析 → `m_loadPasses[7]` 表驱动收尾（每步独立 sink + `replaceOrigin`）→ 诊断 |
 | `05-variable-access.puml` | 活动图 | 运行期变量访问：两条入口 → 一张 resolver 表 → 唯一按名原语；作用域 = 段身份（装载期写进 `line.scopeKey`） |
 | `06-diagnostics.puml` | 类图 | 诊断模型：`ParseDiagnostics` / `ParseDiagnostic` / `DiagEffect` / `DiagOrigin`（pass 切片）/ `DiagCode` 全码与产生步骤 |
 | `07-static-checks.puml` | 卡片图 | `checkStaticValues` 检查目录（C1..C4）与已验证口径 |
@@ -68,10 +68,15 @@ plantuml -txmi docs/uml/01-load-classes.puml
   「名字 + 下标 → 存储」的唯一实现（顺序：形参 → 角色 → ARG/LOCAL → ARGS/LOCALS/RESULTS →
   系统变量 → 2D/3D → 1D）。存储容器仍是字符串键（存档格式不变），id → 串只在 `storageKeyFor` 一处。
 - `writeLoopCounter` 写的是「计数器固定下标上的循环值」——值是值，不是下标，因此没有「循环值越界」检查。
-- **收尾 pass 表**：`kLoadPasses[7] = { label, fn, memberFn, origin, gate, phaseAfter }`，表即流程
-  （顺序 = 执行顺序，日志文案也取自表）。七步的 `fn` 签名统一为 `(LoadContext&, ParseDiagnostics&)`
-  ——1/2/3 是 loadpass 的自由函数，4/5/6/7 是成员 `run*`（转调 parsecheck）；`memberFn` 为空的表项
-  由驱动直接调 `fn`。`origin` 是「这一步拥有哪个诊断切片」，`gate` 是「受哪个开关门控」
+- **收尾 pass 表**：`m_loadPasses[7] = { label, run, origin, gate, phaseAfter }`，表即流程
+  （顺序 = 执行顺序，日志文案也取自表）。`run` 的类型是 `PassAction`
+  （内部一个 `std::function<void(LoadContext&, ParseDiagnostics&)>`，**无默认构造 + 拒绝 `nullptr_t`**）
+  —— 所以「两个都空 / 两个都非空 / 谁是哪一个」在类型上不存在，驱动只有 `run(ctx, sink)` 一种写法；
+  旧实现是两个字段（自由函数指针 + 成员函数指针）+ 一句「恰有一个非空」的注释 + 一处 `if` 分派。
+  1/2/3 装 loadpass 自由函数，4/5/6/7 装只捕获 `this` 的 lambda（转调 const `run*`）；表因此是
+  **实例成员**（成员步骤要绑 `this`；`EraParseTable` 是 `QObject`，不可拷贝，无悬空风险）。
+  只读保证仍是编译期：lambda 第一参数无名 → 拿不到可写 `LoadContext`，`run*` 是 const，
+  `makeIrView()` 只给 const 指针。`origin` 是「这一步拥有哪个诊断切片」，`gate` 是「受哪个开关门控」
   （`Always` / `NotCalledWarning`），`phaseAfter` 让阶段推进也是数据而不是分支。
   4/5/6(+7) 是只读步骤，可脱离 `markLoadComplete` 单独调用。
 - **一次失败只留一条消息**：具体错误经 `ScriptRunner::reportError()` 发出并推进错误纪元；
@@ -189,12 +194,12 @@ plantuml -txmi docs/uml/01-load-classes.puml
 `dump_warnings` 五语料（`eraTW` / `eraMegaten` / `eraTetris` / `FL3.8` / `ecd`）：
 **6 / 2 / 0 / 0 / 0** 行（`eraMegaten` 的目录参数必须是 `eraMegaten/data`；用错路径会得到
 0 字节的假基线），与 `/tmp/uml-baseline/*.raw.txt` **未排序**逐字节相同。
-累计三十一个重构（身份整数化 / 全定型 / 作用域显式化 / 只读收尾外移 / 存档独立映射 /
+累计三十二个重构（身份整数化 / 全定型 / 作用域显式化 / 只读收尾外移 / 存档独立映射 /
 私有名表前移 / 存档顺序确定性 / 写收尾外移 / 标记区外移 / 位置区外移 /
 标签归属单一索引 / 诊断切片幂等 / 常数作用域参数化 / 增量装载协议显式化 /
 GOTO 段身份入索引 / 静态检查用段身份 / 删第三张裸名表 / 错误去重 / 配对语法只判一次 /
 越界判定只判一次 / 常量下标装载期求值 / 多维独立形态 / 私有作用域按段身份 / 存档版本常数化 / LSP 侧段身份 / 函数表按脚本换贡献 / 删装载器第二份脚本清单 / CALL 入口吃段身份原文 / 删标记区三张整表副本 / 删 ScriptData::jumpTo /
- 数组形状单一入口）前后完全一致；
+ 数组形状单一入口 / 收尾 pass 表单一形态）前后完全一致；
 `ctest` 48 → 60（新增 `test_parse_checks` / `test_save_variable_map` / `test_private_scope_table` /
 `test_load_contracts` / `test_save_variable_map_hashseed` / `test_jump_markings` /
 `test_position_state` / `test_goto_label_lookup` / `test_structure_pairing` / `test_index_bounds` /

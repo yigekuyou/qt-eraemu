@@ -43,7 +43,7 @@ end
 E -> T : markLoadComplete()
 note right of T
   一个静态表驱动，表即流程：
-  kLoadPasses[7] = { label, fn, memberFn, origin, gate, phaseAfter }
+  m_loadPasses[7] = { label, run, origin, gate, phaseAfter }
   · 顺序 = 执行顺序；日志文案也取自表（新增步骤只改表）
   · origin：该步拥有的诊断切片（Pass1..Pass7）。每步建独立 sink，
     运行与否都 replaceOrigin(origin, sink) —— 重收尾 == 一次性装载，
@@ -51,8 +51,11 @@ note right of T
   · gate：受哪个开关门控（Always / NotCalledWarning），
     驱动逻辑里只有 isGateOpen() 一处按它求值
   · phaseAfter：该步完成后允许进入的阶段（数据，不是分支）
-  · 全部七步的 fn 都是 (LoadContext&, ParseDiagnostics&)：
-    1/2/3 = loadpass 自由函数，4/5/6/7 = 成员 run*（转调 parsecheck）
+  · 七步的可调用体只有一种形态 run(LoadContext&, ParseDiagnostics&)
+    （PassAction：无默认构造、拒绝 nullptr -> 空状态不可表达）：
+    1/2/3 = loadpass 自由函数，4/5/6/7 = 只捕获 this 的 lambda（转调 const run*）
+  · 4/5/6/7 的 lambda 第一参数无名 + run* 是 const + makeIrView 只给 const 指针
+    -> 只读步骤写不了 IR，仍是编译期保证
   · 4/5/6/7 的成员入口也保留为单步公有 API，内部同一条 sink 路径
 end note
 

@@ -51,6 +51,7 @@
 #include "ast/function_types.h"     // OperandType / isKnown / operandTypeName
 #include "ast/system_variables.h"   // sysvar::systemVariableMetadataDyn / systemStorageNames
 #include "constant_table.h"
+#include "jump_markings.h"   // 配对记录（structureIssues）与词汇表
 #include "position_state.h"   // firstGotoLabel：GOTO 目标的**唯一**择一规则（与运行期同一函数）
 #include "user_defined_variable_data.h"   // VariableConfig
 #include "variable_storage.h"
@@ -348,71 +349,18 @@ void checkCallStatementArgs(const ParseIrView& view, const LogicalLine& line,
 // ---------------------------------------------------------------------------
 // 收尾步骤 5：结构/配对检查（对齐 C# ErbLoader.nestCheck 的诊断部分）
 //
-// C# 在装载第 2 趟（nestCheck）里用一个 nestStack 走完每个函数体：配对不上的
-// 结构、越过块边界的指令、SIF 的次行、RETURNF 的位置/类型都在这里报到装载期。
-// 本实现只做**诊断**——配对的跳转标记早已由 buildJumpMarkings 建好（运行期消费），
-// 这里按同一判据（同一个 nestStack 语义）把「结构性错误」讲出来。
+// C# 在装载第 2 趟（nestCheck）里用一个 nestStack 走完每个函数体，把配对不上
+// 的结构、越过块边界的指令、SIF 的次行、RETURNF 的位置/类型报到装载期。
+//
+// 本实现**不再有第二个 nestStack**：同一批判定（含「未解析」）由
+// jumpmark::buildJumpMarkings 在装载期那一趟里写进 ScriptData::structureIssues，
+// 这里只把记录翻译成诊断文本。于是「配对上了没有」只有一份判定 —— 运行期的
+// 跳转表是它的运行期投影，诊断是它的静态投影。
 //
 // 刻意不做的：C# 里那些 level 0/1 的提示（「SIF文の次の行が空行…」、
 // 「関数が定義されるより前に行があります」）——eraTW 这类真实工程里遍地都是，
 // 报出来只会淹没真正的问题。
 // ---------------------------------------------------------------------------
-namespace {
-
-// END 系列 -> 它要求的配对结构名（C# FunctionIdentifier.getMatchFunction）
-QString matchingOpener(const QString& ender) {
-    if (ender == QLatin1String("REND")) return QStringLiteral("REPEAT");
-    if (ender == QLatin1String("NEXT")) return QStringLiteral("FOR");
-    if (ender == QLatin1String("WEND")) return QStringLiteral("WHILE");
-    if (ender == QLatin1String("ENDIF")) return QStringLiteral("IF");
-    if (ender == QLatin1String("ENDSELECT")) return QStringLiteral("SELECTCASE");
-    if (ender == QLatin1String("ENDCATCH")) return QStringLiteral("CATCH");
-    if (ender == QLatin1String("ENDLIST")) return QStringLiteral("DATALIST");
-    if (ender == QLatin1String("ENDNOSKIP")) return QStringLiteral("NOSKIP");
-    if (ender == QLatin1String("ENDFUNC")) return QStringLiteral("TRYCALLLIST");
-    return QString();
-}
-
-bool isLoopOpener(const QString& name) {
-    return name == QLatin1String("REPEAT") || name == QLatin1String("FOR")
-        || name == QLatin1String("WHILE") || name == QLatin1String("DO");
-}
-
-bool isPrintDataFamily(const QString& name) {
-    return name.startsWith(QLatin1String("PRINTDATA")) || name == QLatin1String("STRDATA");
-}
-
-bool isTryListOpener(const QString& name) {
-    return name == QLatin1String("TRYCALLLIST") || name == QLatin1String("TRYJUMPLIST")
-        || name == QLatin1String("TRYGOTOLIST") || name == QLatin1String("GOTOLIST");
-}
-
-bool isTryCatchOpener(const QString& name) {
-    return name == QLatin1String("TRYCCALL") || name == QLatin1String("TRYCCALLFORM")
-        || name == QLatin1String("TRYCJUMP") || name == QLatin1String("TRYCJUMPFORM")
-        || name == QLatin1String("TRYCGOTO") || name == QLatin1String("TRYCGOTOFORM");
-}
-
-// 开块指令 -> 它需要的收尾指令名（用于「Xに対応するYが見つかりません」）
-QString matchingCloser(const QString& opener) {
-    if (opener == QLatin1String("IF")) return QStringLiteral("ENDIF");
-    if (opener == QLatin1String("REPEAT")) return QStringLiteral("REND");
-    if (opener == QLatin1String("FOR")) return QStringLiteral("NEXT");
-    if (opener == QLatin1String("WHILE")) return QStringLiteral("WEND");
-    if (opener == QLatin1String("DO")) return QStringLiteral("LOOP");
-    if (opener == QLatin1String("SELECTCASE")) return QStringLiteral("ENDSELECT");
-    if (opener == QLatin1String("CATCH")) return QStringLiteral("ENDCATCH");
-    if (opener == QLatin1String("DATALIST")) return QStringLiteral("ENDLIST");
-    if (opener == QLatin1String("NOSKIP")) return QStringLiteral("ENDNOSKIP");
-    if (isTryCatchOpener(opener)) return QStringLiteral("CATCH");
-    if (isPrintDataFamily(opener)) return QStringLiteral("ENDDATA");
-    if (isTryListOpener(opener)) return QStringLiteral("ENDFUNC");
-    return QString();
-}
-
-
-}  // namespace
-
 void checkStructures(const ParseIrView& view, ParseDiagnostics& diags) {
     // 名字用不上（结构检查只看本脚本的行）：段身份只对 GOTO 目标有意义。
     runPerScript(view, diags, [&view](const QString& /*scriptName*/, const ScriptData& script,
@@ -421,265 +369,120 @@ void checkStructures(const ParseIrView& view, ParseDiagnostics& diags) {
     });
 }
 
-// 逐脚本实现：结论只依赖 (view, data)，diags 是调用方给的**本线程独占** sink，
-// 因而可以被驱动端（runPerScript）并行调用。
+// 逐脚本实现：结论只依赖 records + 本脚本的行（RETURNF 还要函数表）。
+//
+// **这里不再扫行配对**：配对判定（含所有未解析形态）已经由
+// jumpmark::buildJumpMarkings 在装载期写进 data.structureIssues。本函数只是
+// 「记录 -> 诊断」的翻译：一个 kind 一个消息模板，名字从记录与行上取。
+// 唯一还需要视图数据的是 RETURNF（返回类型要查函数登记表），但它没有栈。
 void checkStructuresInScript(const ParseIrView& view, const ScriptData& data,
                              ParseDiagnostics& diags) {
-    // nestStack 的表项 = (结构名, 行, 该结构是否已出现第一个分支)。
-    struct Nest { QString name; const LogicalLine* line; bool branchSeen = false; };
-    const auto add = [&diags](DiagSeverity sev, const LogicalLine& line, const QString& text) {
-        diags.add(sev, DiagCode::kStructure,
+    const auto add = [&diags](const LogicalLine& line, const QString& text) {
+        diags.add(DiagSeverity::Error, DiagCode::kStructure,
             line.position.filename, line.position.lineNumber, line.position.column, 0, text);
     };
-
-    QList<Nest> stack;
-    const auto closeBody = [&]() {
-        // 函数末尾仍有未闭合的结构：逐条报「Xに対応するYが見つかりません」。
-        while (!stack.isEmpty()) {
-            const Nest n = stack.takeLast();
-            add(DiagSeverity::Error, *n.line,
-                QCoreApplication::translate("ParseDiagnostics",
-                    "%1 に対応する %2 が見つかりません").arg(n.name, matchingCloser(n.name)));
-        }
+    const auto lineAt = [&data](int index) -> const LogicalLine* {
+        if (index < 0 || index >= data.lines.size()) return nullptr;
+        return &data.lines.at(index);
     };
-    for (const LogicalLine& line : data.lines) {
-        if (line.kind == LineKind::FunctionLabel) {
-            closeBody();
-            continue;
-        }
-        if (line.kind == LineKind::GotoLabel) {
-            // C#：PRINTDATA 系 / STRDATA / DATALIST / TRY*LIST 体内不允许 $标签
-            if (!stack.isEmpty()
-                && (isPrintDataFamily(stack.last().name)
-                    || stack.last().name == QLatin1String("DATALIST")
-                    || isTryListOpener(stack.last().name))) {
-                add(DiagSeverity::Error, line,
-                    QCoreApplication::translate("ParseDiagnostics",
-                        "%1 構文中に $ラベルを定義することはできません").arg(stack.last().name));
-            }
-            continue;
-        }
-        if (line.kind != LineKind::Instruction) continue;   // 空行/注释行/# 行不参与配对
-        const QString& name = line.functionName;
 
-        // ---- 块内允许的指令（对齐 C# nestCheck 的 baseFunc 检查）----
-        if (!stack.isEmpty()) {
-            const QString& base = stack.last().name;
-            if (isPrintDataFamily(base)) {
-                const bool allowed = name == QLatin1String("DATA")
-                    || name == QLatin1String("DATAFORM")
-                    || name == QLatin1String("DATALIST")
-                    || name == QLatin1String("ENDLIST")
-                    || name == QLatin1String("ENDDATA");
-                if (!allowed) {
-                    add(DiagSeverity::Error, line,
-                        QCoreApplication::translate("ParseDiagnostics",
-                            "%1 構文に使用できない命令'%2'が含まれています").arg(base, name));
-                    continue;
-                }
-            } else if (base == QLatin1String("DATALIST")) {
-                const bool allowed = name == QLatin1String("DATA")
-                    || name == QLatin1String("DATAFORM") || name == QLatin1String("ENDLIST");
-                if (!allowed) {
-                    add(DiagSeverity::Error, line,
-                        QCoreApplication::translate("ParseDiagnostics",
-                            "DATALIST 構文に使用できない命令'%1'が含まれています").arg(name));
-                    continue;
-                }
-            } else if (isTryListOpener(base)) {
-                if (name != QLatin1String("FUNC") && name != QLatin1String("ENDFUNC")) {
-                    add(DiagSeverity::Error, line,
-                        QCoreApplication::translate("ParseDiagnostics",
-                            "%1 構文に使用できない命令'%2'が含まれています").arg(base, name));
-                    continue;
-                }
-            } else if (base == QLatin1String("SELECTCASE")) {
-                // SELECTCASE 直下、最初の CASE より前は命令を置けない
-                const bool allowed = name == QLatin1String("CASE")
-                    || name == QLatin1String("CASEELSE") || name == QLatin1String("ENDSELECT");
-                if (!stack.last().branchSeen && !allowed) {
-                    add(DiagSeverity::Error, line,
-                        QCoreApplication::translate("ParseDiagnostics",
-                            "SELECTCASE 構文の分岐の外に命令'%1'が含まれています").arg(name));
-                    continue;
-                }
-            }
-        }
-
-        // ---- 入栈 ----
-        if (name == QLatin1String("IF") || name == QLatin1String("SELECTCASE")
-            || name == QLatin1String("REPEAT") || name == QLatin1String("FOR")
-            || name == QLatin1String("WHILE") || name == QLatin1String("DO")
-            || isTryCatchOpener(name) || isPrintDataFamily(name)
-            || isTryListOpener(name) || name == QLatin1String("NOSKIP")) {
-            stack.append({name, &line});
-            continue;
-        }
-
-        // ---- 分支指令 ----
-        if (name == QLatin1String("ELSEIF") || name == QLatin1String("ELSE")) {
-            if (stack.isEmpty() || stack.last().name != QLatin1String("IF")) {
-                add(DiagSeverity::Error, line,
-                    QCoreApplication::translate("ParseDiagnostics",
-                        "IF～ENDIFの外で%1文が使われました").arg(name));
-            } else {
-                stack.last().branchSeen = true;
-            }
-            continue;
-        }
-        if (name == QLatin1String("CASE") || name == QLatin1String("CASEELSE")) {
-            if (stack.isEmpty() || stack.last().name != QLatin1String("SELECTCASE"))
-                add(DiagSeverity::Error, line,
-                    QCoreApplication::translate("ParseDiagnostics",
-                        "SELECTCASE～ENDSELECTの外で%1文が使われました").arg(name));
-            else
-                stack.last().branchSeen = true;
-            continue;
-        }
-        if (name == QLatin1String("BREAK") || name == QLatin1String("CONTINUE")) {
-            bool inLoop = false;
-            for (const Nest& n : stack)
-                if (isLoopOpener(n.name)) { inLoop = true; break; }
-            if (!inLoop)
-                add(DiagSeverity::Error, line,
-                    QCoreApplication::translate("ParseDiagnostics",
-                        "REPEAT, FOR, WHILE, DOの中以外で%1文が使われました").arg(name));
-            continue;
-        }
-        if (name == QLatin1String("FUNC")) {
-            if (stack.isEmpty() || !isTryListOpener(stack.last().name))
-                add(DiagSeverity::Error, line,
-                    QCoreApplication::translate("ParseDiagnostics",
-                        "対応するTRYCALLLIST系命令のない%1です").arg(name));
-            continue;
-        }
-        if (name == QLatin1String("DATA") || name == QLatin1String("DATAFORM")) {
-            if (stack.isEmpty() || !(isPrintDataFamily(stack.last().name)
-                                     || stack.last().name == QLatin1String("DATALIST")))
-                add(DiagSeverity::Error, line,
-                    QCoreApplication::translate("ParseDiagnostics",
-                        "対応するPRINTDATA系命令のない%1です").arg(name));
-            continue;
-        }
-        if (name == QLatin1String("DATALIST")) {
-            // DATALIST 是 PRINTDATA 系 / STRDATA 体内的**可重复**子块：
-            // 一个 PRINTDATA 里可以连续放多个 DATALIST…ENDLIST（eraTW 的
-            // CASINO.ERB 就是这种写法），所以这里必须入栈，否则随后的 ENDLIST
-            // 找不到 DATALIST 而误报。
-            if (stack.isEmpty() || !isPrintDataFamily(stack.last().name)) {
-                add(DiagSeverity::Error, line,
-                    QCoreApplication::translate("ParseDiagnostics",
-                        "対応するPRINTDATA系命令のない%1です").arg(name));
-            } else {
-                stack.append({name, &line, false});
-            }
-            continue;
-        }
-        if (name == QLatin1String("LOOP")) {
-            // LOOP 对应 REPEAT 或 DO（按栈顶判定）
-            const bool ok = !stack.isEmpty()
-                && (stack.last().name == QLatin1String("DO") || stack.last().name == QLatin1String("REPEAT"));
-            if (!ok) {
-                add(DiagSeverity::Error, line,
-                    QCoreApplication::translate("ParseDiagnostics",
-                        "対応するREPEATの無い%1文です").arg(name));
-            } else {
-                stack.removeLast();
-            }
-            continue;
-        }
-        if (name == QLatin1String("REND") || name == QLatin1String("NEXT")
-            || name == QLatin1String("WEND") || name == QLatin1String("ENDIF")
-            || name == QLatin1String("ENDSELECT") || name == QLatin1String("ENDCATCH")
-            || name == QLatin1String("ENDLIST") || name == QLatin1String("ENDDATA")
-            || name == QLatin1String("ENDNOSKIP") || name == QLatin1String("ENDFUNC")) {
-            const QString want = matchingOpener(name);
-            if (name == QLatin1String("ENDDATA")) {
-                if (stack.isEmpty() || !(isPrintDataFamily(stack.last().name))) {
-                    add(DiagSeverity::Error, line,
-                        QCoreApplication::translate("ParseDiagnostics",
-                            "対応するPRINTDATA系命令もしくはSTRDATAのない%1です").arg(name));
-                } else {
-                    stack.removeLast();
-                }
-                continue;
-            }
-            bool matched = false;
-            if (name == QLatin1String("ENDFUNC")) {
-                matched = !stack.isEmpty() && isTryListOpener(stack.last().name);
-            } else {
-                matched = !stack.isEmpty() && stack.last().name == want;
-            }
-            if (!matched) {
-                add(DiagSeverity::Error, line,
-                    QCoreApplication::translate("ParseDiagnostics",
-                        "対応する%1の無い%2文です").arg(want, name));
-            } else {
-                stack.removeLast();
-            }
-            continue;
-        }
-        if (name == QLatin1String("CATCH")) {
-            if (stack.isEmpty() || !isTryCatchOpener(stack.last().name))
-                add(DiagSeverity::Error, line,
-                    QCoreApplication::translate("ParseDiagnostics",
-                        "対応するTRYC系命令がありません"));
-            else
-                stack.last().name = QStringLiteral("CATCH");
-            continue;
-        }
-        // ---- SIF：次行必须是可跳过的有效指令 ----
-        if (name == QLatin1String("SIF")) {
-            const int i = line.lineIndex;
-            int next = i + 1;
-            const int size = int(data.lines.size());
-            while (next < size && data.lines.at(next).kind == LineKind::Null) ++next;
-            if (next >= size || data.lines.at(next).kind == LineKind::FunctionLabel
-                || data.lines.at(next).kind == LineKind::GotoLabel) {
-                add(DiagSeverity::Error, line,
-                    QCoreApplication::translate("ParseDiagnostics",
-                        "SIF文の次の行がありません"));
-                continue;
-            }
-            const LogicalLine& nextLine = data.lines.at(next);
-            if (nextLine.kind == LineKind::Instruction) {
-                // SIF/TRYC 系也吃下一行（C# PARTIAL）：再套一个就会错位
-                const QString& nf = nextLine.functionName;
-                if (nf == QLatin1String("SIF") || isTryCatchOpener(nf)
-                    || nf == QLatin1String("TRYCALLLIST") || nf == QLatin1String("TRYJUMPLIST")
-                    || nf == QLatin1String("TRYGOTOLIST"))
-                    add(DiagSeverity::Error, line,
-                        QCoreApplication::translate("ParseDiagnostics",
-                            "SIF文の次の行を%1文にすることはできません").arg(nf));
-            }
-            continue;
-        }
-        // ---- RETURNF：必须在 #FUNCTION(S) 内，且返回类型要一致 ----
-        if (name == QLatin1String("RETURNF")) {
-            const UserFunctionDecl* decl = userFunctionIn(view, line.ownerFunction.toUpper());
+    for (const StructureIssue& issue : data.structureIssues) {
+        const LogicalLine* line = lineAt(issue.line);
+        if (!line) continue;   // 记录只由本脚本的装载产生；越界 = 数据损坏，跳过
+        switch (issue.kind) {
+        case StructureIssueKind::UnresolvedOpener:
+            add(*line, QCoreApplication::translate("ParseDiagnostics",
+                "%1 に対応する %2 が見つかりません")
+                .arg(issue.name, jumpmark::requiredCloser(issue.name)));
+            break;
+        case StructureIssueKind::OrphanIfBranch:
+            add(*line, QCoreApplication::translate("ParseDiagnostics",
+                "IF～ENDIFの外で%1文が使われました").arg(issue.name));
+            break;
+        case StructureIssueKind::OrphanCaseBranch:
+            add(*line, QCoreApplication::translate("ParseDiagnostics",
+                "SELECTCASE～ENDSELECTの外で%1文が使われました").arg(issue.name));
+            break;
+        case StructureIssueKind::OrphanCloser:
+            add(*line, QCoreApplication::translate("ParseDiagnostics",
+                "対応する%1の無い%2文です").arg(issue.name, line->functionName));
+            break;
+        case StructureIssueKind::OrphanLoop:
+            add(*line, QCoreApplication::translate("ParseDiagnostics",
+                "対応するREPEATの無い%1文です").arg(issue.name));
+            break;
+        case StructureIssueKind::OrphanEndData:
+            add(*line, QCoreApplication::translate("ParseDiagnostics",
+                "対応するPRINTDATA系命令もしくはSTRDATAのない%1です").arg(issue.name));
+            break;
+        case StructureIssueKind::OrphanFunc:
+            add(*line, QCoreApplication::translate("ParseDiagnostics",
+                "対応するTRYCALLLIST系命令のない%1です").arg(issue.name));
+            break;
+        case StructureIssueKind::OrphanData:
+            add(*line, QCoreApplication::translate("ParseDiagnostics",
+                "対応するPRINTDATA系命令のない%1です").arg(issue.name));
+            break;
+        case StructureIssueKind::OrphanCatch:
+            add(*line, QCoreApplication::translate("ParseDiagnostics",
+                "対応するTRYC系命令がありません"));
+            break;
+        case StructureIssueKind::IllegalInBody:
+            add(*line, QCoreApplication::translate("ParseDiagnostics",
+                "%1 構文に使用できない命令'%2'が含まれています")
+                .arg(issue.name, line->functionName));
+            break;
+        case StructureIssueKind::IllegalInDataList:
+            add(*line, QCoreApplication::translate("ParseDiagnostics",
+                "DATALIST 構文に使用できない命令'%1'が含まれています")
+                .arg(line->functionName));
+            break;
+        case StructureIssueKind::IllegalBeforeCase:
+            add(*line, QCoreApplication::translate("ParseDiagnostics",
+                "SELECTCASE 構文の分岐の外に命令'%1'が含まれています")
+                .arg(line->functionName));
+            break;
+        case StructureIssueKind::LabelInBody:
+            add(*line, QCoreApplication::translate("ParseDiagnostics",
+                "%1 構文中に $ラベルを定義することはできません").arg(issue.name));
+            break;
+        case StructureIssueKind::BreakOutsideLoop:
+            add(*line, QCoreApplication::translate("ParseDiagnostics",
+                "REPEAT, FOR, WHILE, DOの中以外で%1文が使われました").arg(issue.name));
+            break;
+        case StructureIssueKind::SifNoNextLine:
+            add(*line, QCoreApplication::translate("ParseDiagnostics",
+                "SIF文の次の行がありません"));
+            break;
+        case StructureIssueKind::SifNextForbidden:
+            add(*line, QCoreApplication::translate("ParseDiagnostics",
+                "SIF文の次の行を%1文にすることはできません").arg(issue.name));
+            break;
+        case StructureIssueKind::Returnf: {
+            // RETURNF：必须在 #FUNCTION(S) 内，且返回类型要一致（判据未动）。
+            const UserFunctionDecl* decl = userFunctionIn(view, line->ownerFunction.toUpper());
             if (!decl || !decl->isMethod) {
-                add(DiagSeverity::Error, line,
-                    QCoreApplication::translate("ParseDiagnostics",
-                        "RETURNFは#FUNCTION以外では使用できません"));
-                continue;
+                add(*line, QCoreApplication::translate("ParseDiagnostics",
+                    "RETURNFは#FUNCTION以外では使用できません"));
+                break;
             }
-            if (line.arguments.isEmpty()) continue;
-            const auto& operand = line.arguments.first();
-            if (!operand.ast) continue;
+            if (line->arguments.isEmpty()) break;
+            const auto& operand = line->arguments.first();
+            if (!operand.ast) break;
             const OperandType actual = operand.ast->valueType();
-            if (!isKnown(actual) || !isKnown(decl->returnType)) continue;
+            if (!isKnown(actual) || !isKnown(decl->returnType)) break;
             if (actual != decl->returnType) {
-                add(DiagSeverity::Error, line,
+                add(*line,
                     decl->returnType == OperandType::Int
                         ? QCoreApplication::translate("ParseDiagnostics",
                               "#FUNCTIONで始まる関数の戻り値に文字列型が指定されました")
                         : QCoreApplication::translate("ParseDiagnostics",
                               "#FUNCTIONSで始まる関数の戻り値に数値型が指定されました"));
             }
-            continue;
+            break;
+        }
         }
     }
-    closeBody();
 }
 
 // ---------------------------------------------------------------------------

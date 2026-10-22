@@ -28,6 +28,7 @@
 #include "ast/variable_table.h"
 #include "ast/user_function.h"
 #include "ast/parse_diagnostic.h"
+#include "structure_issue.h"
 
 // Forward declarations
 class ConstantTable;
@@ -120,6 +121,10 @@ struct ScriptData {
     //   endFuncLines : TRY*LIST 行 -> 配对的 ENDFUNC 行（全部候选失败时跳到它**之后**）
     QHash<int, int>        endFuncLines;
     QHash<int, QList<int>> funcEntries;
+    // 配对语法的未解析记录：装载期由 jumpmark::buildJumpMarkings 一次写入，
+    // 收尾第 5 步（parsecheck::checkStructuresInScript）只读它出诊断。
+    // **唯一**一份「哪些结构没配上」的判定 —— 跳转表是它的运行期投影。
+    QList<StructureIssue> structureIssues;
     QString             path;           // 源文件路径（供入口点/诊断显示）
 };
 

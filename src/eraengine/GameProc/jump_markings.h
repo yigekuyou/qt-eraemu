@@ -22,7 +22,8 @@
 #include <QList>
 #include <QString>
 
-#include "era_parse_table.h"   // ScriptData
+#include "era_parse_table.h"      // ScriptData
+#include "structure_issue.h"      // StructureIssue（本文件的另一半产物）
 
 // ---------------------------------------------------------------------------
 // 标记区：在**已定型的 AST** 之上补 O(1) 跳转表
@@ -32,16 +33,43 @@
 //     lines[i].lineIndex / nextLine / jumpTo；
 //   * 读侧 6 个自由函数(const ScriptData*) —— 只读，nullptr 安全。
 //
-// 于是「怎么配对」是**数据**问题（ScriptData 里的 10 张行号索引表），
-// 「怎么查」就是 QHash::value；两者都不需要 EraParseTable 的任何成员状态。
-// 所有行号都是**逻辑行下标**（0 起），与 C# 的指针式 JumpTo/NextLine 等价。
+// 于是「怎么配对」是**数据**问题（ScriptData 里的 10 张行号索引表 +
+// structureIssues），「怎么查」就是 QHash::value；两者都不需要 EraParseTable
+// 的任何成员状态。所有行号都是**逻辑行下标**（0 起），与 C# 的指针式
+// JumpTo/NextLine 等价。
+//
+// **配对语法的唯一实现**：本文件那一趟 for 循环。它同时产出两个投影——
+//   ① 跳转表 + lines[i].lineIndex / nextLine / jumpTo（运行期消费）；
+//   ② ScriptData::structureIssues（装载期诊断消费）。
+// 收尾第 5 步（parse_checks 的结构检查）不再自己扫行配对，只读 ②。
 // ---------------------------------------------------------------------------
 namespace jumpmark {
 
-// 构建：清空 10 张表后按行重建跳转标记（含 lines[i].lineIndex / nextLine 的
-// 显式赋值）。幂等：重复调用结果相同（先全部 clear）。可能抛出的语义问题
-// 一律不改 —— 这里只建表，不做诊断（结构检查见 parse_checks.h）。
+// 构建：清空 10 张表与 structureIssues 后按行重建（含 lines[i].lineIndex /
+// nextLine 的显式赋值）。幂等：重复调用结果相同（先全部 clear）。
 void buildJumpMarkings(ScriptData& data);
+
+// ---------------------------------------------------------------------------
+// 配对词汇（唯一一份）：开块 <-> 收尾。
+//
+// 判据（哪些名字算开块/收尾/循环体）只在这里写一次；装载期配对、诊断文案、
+// 体内允许清单全部调这里 —— 这正是收敛前「两份判定各写一遍」的地方。
+// ---------------------------------------------------------------------------
+bool isLoopOpener(const QString& name);       // REPEAT / FOR / WHILE / DO
+bool isPrintDataFamily(const QString& name);  // PRINTDATA* / STRDATA
+bool isTryListOpener(const QString& name);    // TRYCALLLIST / TRYJUMPLIST / TRYGOTOLIST / GOTOLIST
+bool isTryCatchOpener(const QString& name);   // TRYCCALL(FORM) / TRYCJUMP(FORM) / TRYCGOTO(FORM)
+
+// 收尾指令 -> 它要求的开块名（"" = 不是收尾指令）。LOOP 的特例（DO 或 REPEAT）
+// 见 buildJumpMarkings 的判定；这里返回固定的 "REPEAT"（与诊断文案一致）。
+QString requiredOpener(const QString& closer);
+// 开块指令 -> 它要求的收尾名（"" = 不是开块）。诊断「X に対応する Y」用它。
+QString requiredCloser(const QString& opener);
+
+// 「没有跳转目标」：该行不是可跳转指令，或其配对在装载期未解析（此时
+// ScriptData::structureIssues 里必有一条 UnresolvedOpener / OrphanCloser）。
+// 运行期照旧把它交给 gotoLine(-1)，由位置区把负数钳到行 0 —— 既有语义。
+inline constexpr int kNoJumpTarget = -1;
 
 // ---- 读侧：全部是对 ScriptData 内一张表的查表；nullptr = 没有脚本 ----
 

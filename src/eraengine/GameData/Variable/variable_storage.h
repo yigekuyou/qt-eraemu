@@ -25,6 +25,7 @@
 #include <QHash>
 #include <deque>
 #include <functional>
+#include <optional>
 #include <utility>
 #include <QtQml/qqmlregistration.h>
 
@@ -379,6 +380,35 @@ public:
         [[nodiscard]] int arraySizeRaw(const QString& storageKey) const;
         [[nodiscard]] QList<int> arrayLengths(const QString& name) const;
         void ensureArraySize(const QString& name, int size, bool stringArray);
+
+        // ---- 多维数组（dimension >= 2）：独立容器，装载期按 lengths 乘积分配 ----
+        // 单维变量仍走 m_globalInt1D / m_globalStr1D 的轻量 QList；多维不走那套
+        // 「首维 + 懒扩容」，而是这里的一张扁平表 + 装载期算好的 strides。
+        // 运行期寻址 = base + Σ idx*stride（strides 来自声明，不重新推导）。
+        //
+        // 上限依据（2026-10 五语料实测）：纯数字多维声明的乘积中位数 600/995/21，
+        // p90 20000/11688/8000，最大值 32000/1000000/30000（eraTW/eraMegaten/
+        // FL3.8）。1,000,000 是 eraMegaten 的三个 100x100x100 迷宫；没有任何
+        // 声明 > 1e6。4,000,000（int64 约 32 MB/变量）留 4 倍余量，仍能挡住
+        // 「乘积写错一个零」的声明。超过上限：不分配、qWarning 一条装载期诊断，
+        // 运行期读写按越界处理（读 0 / 写忽略）。
+        static constexpr qint64 kMaxMultiDimElements = 4'000'000;
+        // 安装一个多维变量的形状并按需分配。重复安装（同键同形状）是 no-op；
+        // 形状冲突时保留首次（与声明表 first-wins 同口径）。
+        // allocate=false：只登记形状（CHARADATA 等多维变量由角色存储各自持有元素，
+        // 这里登记是为了让 VARSIZE/尺寸口径与声明一致）。
+        void installMultiDimArray(const QString& storageKey, const QList<int>& lengths,
+                                  const QList<int>& strides, bool stringArray,
+                                  bool allocate = true);
+        // 声明各维长度的**唯一运行时视图**（装载期从 VariableDecl 拷入）。未登记返回空。
+        [[nodiscard]] QList<int> multiDimLengths(const QString& storageKey) const;
+        // 多维扁平容器实际占用的元素数 / 字节数（装载期诊断用：确认「真实分配」
+        // 的量级与 VmHWM 的增量对得上）。
+        [[nodiscard]] qint64 multiDimAllocatedElements() const;
+        [[nodiscard]] qint64 multiDimAllocatedBytes() const;
+        [[nodiscard]] bool isMultiDimArray(const QString& storageKey) const {
+            return m_multiDimShapes.contains(storageKey);
+        }
         bool hasParameter(const QString& name) const { return m_parameters.contains(eraUpperKey(name)); }
         QVariant parameter(const QString& name) const { return m_parameters.value(eraUpperKey(name)); }
         void setParameter(const QString& name, const QVariant& value) { m_parameters.insert(eraUpperKey(name), value); }
@@ -543,6 +573,36 @@ private:
 
 		// 扩展 3D 字符串及更多维度的全局容器
 		QHash<QString, QList<QList<QList<FlatStringValue>>>> m_globalStr3D;
+
+        // ---- 多维数组（用户 #DIM/#DIMS 声明，dimension >= 2）----
+        // 形状只此一份：装载期从 VariableDecl（lengths/strides/elementCount）拷入，
+        // 之后运行期只读。QList 是 COW，拷贝不深拷元素。
+        struct MultiDimShape {
+            QList<int> lengths;
+            QList<int> strides;
+            qint64     elementCount = 0;   // 声明乘积（可能 > 上限）
+            bool       allocated = false;  // false = 未分配（超限/维数未定稿）
+        };
+        QHash<QString, MultiDimShape> m_multiDimShapes;
+        QHash<QString, QList<qint64>> m_globalIntN;
+        QHash<QString, QList<FlatStringValue>> m_globalStrN;
+        // 把一组下标换算成扁平偏移；形状不存在返回 nullopt（调用方回落到旧容器）。
+        [[nodiscard]] std::optional<qint64> flattenMultiDim(const QString& storageKey,
+                                                            const QList<int>& indices,
+                                                            bool warnOnBound,
+                                                            const char* operation) const;
+        [[nodiscard]] qint64 readMultiDimInt(const QString& storageKey,
+                                             const QList<int>& indices) const;
+        void writeMultiDimInt(const QString& storageKey, const QList<int>& indices, qint64 value);
+        [[nodiscard]] FlatStringValue readMultiDimStr(const QString& storageKey,
+                                                      const QList<int>& indices) const;
+        void writeMultiDimStr(const QString& storageKey, const QList<int>& indices,
+                              const FlatStringValue& value);
+        void clearMultiDimArrays() {
+            m_multiDimShapes.clear();
+            m_globalIntN.clear();
+            m_globalStrN.clear();
+        }
 
 		// 角色 2D/3D 变量容器
 		QHash<QString, QList<QList<QList<qint64>>>> m_charaInt2D;

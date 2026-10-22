@@ -230,16 +230,6 @@ public:
     void setConstArrayChecker(ConstArrayChecker c) { m_constArrayChecker = std::move(c); }
     void setConstArraySizeProvider(ConstArraySizeProvider p) { m_constArraySizeProvider = std::move(p); }
 
-    // 变量声明各维长度（`#DIM X, 2, 50, 5` -> {2,50,5}，0 起、按元素维计）。
-    // VARSIZE(name, dim) 的显式维必须走这里：存储容器不保留多维形状
-    // （多维全局变量按 first() 扁平分配），只有声明知道第 dim 维多长。
-    // 未声明/动态/REF 返回空 -> 回落到存储/配置口径。
-    using DeclaredLengthsProvider =
-        std::function<QList<int>(const QString& name, eravar::ScopeId scope)>;
-    void setDeclaredLengthsProvider(DeclaredLengthsProvider p) {
-        m_declaredLengthsProvider = std::move(p);
-    }
-
     // 变量声明维度（1/2/3）：由 EraParseTable 的 VariableTable 注入
     using VariableDimProvider = std::function<int(const QString&)>;
     void setVariableDimProvider(VariableDimProvider p) { m_variableDimProvider = std::move(p); }
@@ -457,7 +447,6 @@ private:
     ConstArrayProvider  m_constArrayProvider;
     ConstArrayChecker   m_constArrayChecker;
     ConstArraySizeProvider m_constArraySizeProvider;
-    DeclaredLengthsProvider m_declaredLengthsProvider;
     QString m_baseDirectory;                             // 游戏目录（Program.ExeDir）
     std::function<QStringList()> m_validExtensionsProvider;   // Config.ValidExtension
     const ConstantTable* m_constantTable = nullptr;

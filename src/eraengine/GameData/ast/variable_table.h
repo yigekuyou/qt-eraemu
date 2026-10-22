@@ -47,6 +47,12 @@ struct VariableDecl {
     QString     function;                    // Local 时所属函数（标签名）
     int         dimension = 1;
     QList<int>  lengths;
+    // 「维数 -> 扁平偏移」的装载期几何：strides[i] = lengths[i+1..] 的乘积。
+    // 只在 dimension >= 2 时写（单维保持轻量形态，strides 为空）；
+    // elementCount = 各维乘积（dimension <= 1 时等于 lengths[0]，空 lengths 视作 1）。
+    // 运行期只读这两个字段，绝不再按维度重新推导。
+    QList<int>  strides;
+    qint64      elementCount = 0;
     QStringList lengthExprs;   // 原始维数表达式（可含常数名）
     bool        isPrivate = false;
     bool        isConst = false;

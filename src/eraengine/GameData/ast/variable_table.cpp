@@ -613,17 +613,42 @@ bool VariableTable::evalDim(const QString& expr, int& out, const QString& scope)
 }
 
 void VariableTable::resolveDimensions() {
-    const auto fix = [this](VariableDecl& d, const QString& scope) {
-        if (d.lengthExprs.isEmpty()) return;
-        QList<int> lengths;
-        lengths.reserve(d.lengthExprs.size());
-        for (const QString& e : d.lengthExprs) {
-            int v = 0;
-            if (evalDim(e, v, scope) && v > 0) lengths.append(v);
-            else lengths.append(0);   // 仍未知
+    // 装载期几何：维数 -> strides 只在这里算一次。运行期（VariableStorage 的
+    // 多维容器、越界判定、VARSIZE）只读，不重新推导。
+    const auto geometry = [](VariableDecl& d) {
+        d.strides.clear();
+        d.elementCount = 0;
+        if (d.isReference) return;          // REF 没有自己的数组（别名目标才算）
+        if (d.lengths.isEmpty()) { d.elementCount = 1; return; }
+        qint64 total = 1;
+        for (int n : d.lengths) {
+            if (n <= 0) return;             // 维数未定稿：不分配、不注册形状
+            total *= n;
+            if (total > qint64(std::numeric_limits<int>::max())) return;
         }
-        d.lengths = lengths;
-        d.dimension = lengths.isEmpty() ? 1 : lengths.size();
+        d.elementCount = total;
+        if (d.lengths.size() >= 2) {
+            d.strides.resize(d.lengths.size());
+            int acc = 1;                    // 最后一维连续
+            for (int i = d.lengths.size() - 1; i >= 0; --i) {
+                d.strides[i] = acc;
+                acc *= d.lengths.at(i);
+            }
+        }
+    };
+    const auto fix = [this, &geometry](VariableDecl& d, const QString& scope) {
+        if (!d.lengthExprs.isEmpty()) {
+            QList<int> lengths;
+            lengths.reserve(d.lengthExprs.size());
+            for (const QString& e : d.lengthExprs) {
+                int v = 0;
+                if (evalDim(e, v, scope) && v > 0) lengths.append(v);
+                else lengths.append(0);   // 仍未知
+            }
+            d.lengths = lengths;
+            d.dimension = lengths.isEmpty() ? 1 : lengths.size();
+        }
+        geometry(d);
     };
 
     for (auto& d : m_globals) fix(d, QString());

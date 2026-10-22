@@ -403,6 +403,33 @@ void applyVariableDefaults(LoadContext& ctx, const QList<VariableDecl>& decls) {
 
 
 
+// 多维数组（dimension >= 2）在装载期按声明乘积真实分配。
+// 单维不经过这里（仍是 m_globalInt1D/m_globalStr1D 的轻量容器）。
+// 形状/strides 由 VariableTable::resolveDimensions 一次算好；这里只把声明
+// 视图装进存储层并分配。重复调用幂等（同一 storageKey 同形状）。
+void installDeclaredMultiDimArrays(LoadContext& ctx) {
+    if (!ctx.storage) return;
+    const QList<VariableDecl>& decls = ctx.variables.declarationsRef();
+    int installed = 0;
+    for (const VariableDecl& d : decls) {
+        if (d.isConst || d.isReference) continue;
+        if (d.dimension < 2 || d.lengths.size() < 2 || d.elementCount <= 0) continue;
+        // 与 restoreDeclaredDefaults / computeVariableAccess 同一个键构造点。
+        const QString key = d.scope == VarScope::Local
+            ? eravar::makePrivateStorageKey(d.function, d.name)
+            : d.name.toUpper();
+        // CHARADATA 的元素在角色存储里（每个角色一份），这里只登记形状：
+        // VARSIZE / 尺寸口径读的是**同一份**形状，而不是第二个声明视图。
+        ctx.storage->installMultiDimArray(ctx.storage->resolvedStorageName(key),
+                                         d.lengths, d.strides, d.type == OperandType::Str,
+                                         /*allocate=*/!d.isCharaData);
+        ++installed;
+    }
+    qInfo().noquote() << "[parse] 多维数组安装:" << installed << "个声明，扁平分配"
+                      << ctx.storage->multiDimAllocatedElements() << "个元素 /"
+                      << (ctx.storage->multiDimAllocatedBytes() / 1024) << "KiB";
+}
+
 void applyGlobalVariableDefaults(LoadContext& ctx) {
     for (const VariableDecl& d : ctx.variables.declarations()) {
         if (d.scope != VarScope::Global || d.isConst) continue;
@@ -864,14 +891,6 @@ void resolveGlobalDeclarations(LoadContext& ctx) {
             if (vt->constArrayAt(name, index, iv, owner)) { out = QVariant::fromValue<qint64>(iv); return true; }
             return evalLazyConst(name, owner, index, out);
         });
-        // VARSIZE(name, dim) 的显式维：唯一事实是**声明**里的 lengths。
-        // （存储容器只有扁平形状；多重维全局变量按 lengths.first() 分配。）
-        // 未声明 / REF / 表达式暂未定稿 -> 空表，求值器回落旧口径。
-        ctx.evaluator->setDeclaredLengthsProvider(
-            [vt](const QString& name, eravar::ScopeId scope) -> QList<int> {
-                const VariableDecl* d = vt->find(name, eravar::nameOf(scope));
-                return d ? d->lengths : QList<int>();
-            });
         ctx.variables.setDimEvaluator([ctx](const QString& expr, const QString& scope) -> qint64 {
             if (!ctx.evaluator) return 0;
             const auto ast = expressionAstInScope(ctx, expr, scope);
@@ -884,6 +903,7 @@ void resolveGlobalDeclarations(LoadContext& ctx) {
 
     // ---- 维数/默认值/函数类型（全局：需要全部声明/常量就绪） ----
     ctx.variables.resolveDimensions();
+    installDeclaredMultiDimArrays(ctx);
     applyGlobalVariableDefaults(ctx);
     resolveUserFunctionTypes(ctx);
     ctx.declarationsResolved = true;   // 声明定稿：installPrivateScopes 的前置条件

@@ -19,6 +19,7 @@
 #include "variable_storage.h"
 #include <cstring>
 #include <algorithm>
+#include <limits>
 #include <QSet>
 #include <QDebug>
 #include "eraengine_log.h"
@@ -101,10 +102,200 @@ VariableStorage::VariableStorage(QObject *parent)
 		registerCharaDataVariable(QStringLiteral("CSTR"), true, 1);
 }
 
+// ---------------------------------------------------------------------------
+// 多维数组（dimension >= 2）
+//
+// 存储形态与单维**不同**：单维是 m_globalInt1D / m_globalStr1D 的轻量 QList，
+// 多维是这里的一张扁平表（m_globalIntN / m_globalStrN）+ 装载期算好的 strides。
+// 形状（lengths/strides/elementCount）来自 VariableDecl；本类只持有一份装载期
+// 拷入的视图（QList 是 COW），运行期只读。
+// ---------------------------------------------------------------------------
+std::optional<qint64> VariableStorage::flattenMultiDim(const QString& storageKey,
+                                                       const QList<int>& indices,
+                                                       bool warnOnBound,
+                                                       const char* operation) const
+{
+    const auto it = m_multiDimShapes.constFind(storageKey);
+    if (it == m_multiDimShapes.constEnd()) return std::nullopt;
+    const MultiDimShape& shape = it.value();
+    const auto reject = [&](const QString& why) -> std::optional<qint64> {
+        if (warnOnBound)
+            qWarning().noquote() << "[var] 多维变量" << storageKey << operation
+                                 << "越界（忽略）:" << why << "indices=" << indices;
+        return std::nullopt;
+    };
+    if (shape.lengths.isEmpty() || shape.elementCount <= 0)
+        return reject(QStringLiteral("形状未定稿"));
+    if (indices.isEmpty()) return qint64(0);   // 裸名 = 元素 0（与 1D 口径一致）
+
+    qint64 flat = 0;
+    if (indices.size() == 1) {
+        // 扁平写法：X[flat] —— 直接按元素序号寻址（与 X:i:j:k 共用同一个容器）。
+        flat = indices.at(0);
+    } else {
+        const int rank = int(shape.lengths.size());
+        for (int i = 0; i < indices.size(); ++i) {
+            if (i >= rank || i >= shape.strides.size())
+                return reject(QStringLiteral("下标个数超过维数"));
+            const int index = indices.at(i);
+            if (index < 0 || index >= shape.lengths.at(i))
+                return reject(QStringLiteral("第 %1 维下标 %2 不在 [0,%3)")
+                                  .arg(i).arg(index).arg(shape.lengths.at(i)));
+            flat += qint64(index) * shape.strides.at(i);
+        }
+        // 缺省的后导维按 0（例如 3D 变量只给 2 个下标）。
+    }
+    if (flat < 0 || flat >= shape.elementCount)
+        return reject(QStringLiteral("扁平偏移 %1 不在 [0,%2)").arg(flat).arg(shape.elementCount));
+    return flat;
+}
+
+qint64 VariableStorage::readMultiDimInt(const QString& storageKey, const QList<int>& indices) const
+{
+    const auto shapeIt = m_multiDimShapes.constFind(storageKey);
+    if (shapeIt == m_multiDimShapes.constEnd()) return 0;
+    if (!shapeIt.value().allocated) return 0;
+    const auto flat = flattenMultiDim(storageKey, indices, /*warnOnBound=*/false, "读");
+    if (!flat) return 0;
+    const auto it = m_globalIntN.constFind(storageKey);
+    if (it == m_globalIntN.constEnd() || *flat >= it.value().size()) return 0;
+    return it.value().at(*flat);
+}
+
+void VariableStorage::writeMultiDimInt(const QString& storageKey, const QList<int>& indices,
+                                       qint64 value)
+{
+    const auto shapeIt = m_multiDimShapes.constFind(storageKey);
+    if (shapeIt == m_multiDimShapes.constEnd()) return;
+    if (!shapeIt.value().allocated) {
+        qWarning().noquote() << "[var] 多维变量" << storageKey
+                             << "未分配（元素数" << shapeIt.value().elementCount
+                             << "超过上限" << kMaxMultiDimElements << "或维数未定稿），写忽略";
+        return;
+    }
+    const auto flat = flattenMultiDim(storageKey, indices, /*warnOnBound=*/true, "写");
+    if (!flat) return;
+    auto it = m_globalIntN.find(storageKey);
+    if (it == m_globalIntN.end() || *flat >= it.value().size()) {
+        qWarning().noquote() << "[var] 多维变量" << storageKey << "存储缺失，写忽略";
+        return;
+    }
+    it.value()[*flat] = value;
+}
+
+FlatStringValue VariableStorage::readMultiDimStr(const QString& storageKey,
+                                                 const QList<int>& indices) const
+{
+    const auto shapeIt = m_multiDimShapes.constFind(storageKey);
+    if (shapeIt == m_multiDimShapes.constEnd() || !shapeIt.value().allocated) return {};
+    const auto flat = flattenMultiDim(storageKey, indices, /*warnOnBound=*/false, "读");
+    if (!flat) return {};
+    const auto it = m_globalStrN.constFind(storageKey);
+    if (it == m_globalStrN.constEnd() || *flat >= it.value().size()) return {};
+    return it.value().at(*flat);
+}
+
+void VariableStorage::writeMultiDimStr(const QString& storageKey, const QList<int>& indices,
+                                       const FlatStringValue& value)
+{
+    const auto shapeIt = m_multiDimShapes.constFind(storageKey);
+    if (shapeIt == m_multiDimShapes.constEnd()) return;
+    if (!shapeIt.value().allocated) {
+        qWarning().noquote() << "[var] 多维变量" << storageKey
+                             << "未分配（元素数" << shapeIt.value().elementCount
+                             << "超过上限" << kMaxMultiDimElements << "或维数未定稿），写忽略";
+        return;
+    }
+    const auto flat = flattenMultiDim(storageKey, indices, /*warnOnBound=*/true, "写");
+    if (!flat) return;
+    auto it = m_globalStrN.find(storageKey);
+    if (it == m_globalStrN.end() || *flat >= it.value().size()) {
+        qWarning().noquote() << "[var] 多维变量" << storageKey << "存储缺失，写忽略";
+        return;
+    }
+    it.value()[*flat] = value;
+}
+
+qint64 VariableStorage::multiDimAllocatedElements() const
+{
+    qint64 n = 0;
+    for (auto it = m_globalIntN.constBegin(); it != m_globalIntN.constEnd(); ++it) n += it.value().size();
+    for (auto it = m_globalStrN.constBegin(); it != m_globalStrN.constEnd(); ++it) n += it.value().size();
+    return n;
+}
+
+qint64 VariableStorage::multiDimAllocatedBytes() const
+{
+    qint64 bytes = 0;
+    for (auto it = m_globalIntN.constBegin(); it != m_globalIntN.constEnd(); ++it)
+        bytes += qint64(it.value().size()) * qint64(sizeof(qint64));
+    for (auto it = m_globalStrN.constBegin(); it != m_globalStrN.constEnd(); ++it)
+        bytes += qint64(it.value().size()) * qint64(sizeof(FlatStringValue));
+    return bytes;
+}
+
+QList<int> VariableStorage::multiDimLengths(const QString& storageKey) const
+{
+    const auto it = m_multiDimShapes.constFind(storageKey);
+    return it == m_multiDimShapes.constEnd() ? QList<int>() : it.value().lengths;
+}
+
+void VariableStorage::installMultiDimArray(const QString& storageKey, const QList<int>& lengths,
+                                           const QList<int>& strides, bool stringArray,
+                                           bool allocate)
+{
+    if (storageKey.isEmpty() || lengths.size() < 2) return;
+    qint64 count = 1;
+    for (int n : lengths) {
+        if (n <= 0) return;                  // 维数未定稿：不注册（运行期仍走旧路径）
+        if (count > std::numeric_limits<qint64>::max() / n) { count = -1; break; }
+        count *= n;
+    }
+    if (count <= 0) return;
+    const auto existing = m_multiDimShapes.constFind(storageKey);
+    if (existing != m_multiDimShapes.constEnd()) {
+        // 同键同形状：幂等（装载 pass 与按需分配都可能调用）。
+        if (existing.value().lengths == lengths) return;
+        qWarning().noquote() << "[var] 多维变量" << storageKey << "形状冲突，保留首次声明";
+        return;
+    }
+    MultiDimShape shape;
+    shape.lengths = lengths;
+    shape.elementCount = count;
+    if (strides.size() == lengths.size()) {
+        shape.strides = strides;
+    } else {
+        // 兜底：调用方没给 strides（测试/旧构造）时按「最后一维连续」补一次。
+        shape.strides.resize(lengths.size());
+        int acc = 1;
+        for (int i = lengths.size() - 1; i >= 0; --i) {
+            shape.strides[i] = acc;
+            acc *= lengths.at(i);
+        }
+    }
+    if (count > kMaxMultiDimElements) {
+        // 不分配，但保留声明形状：越界判定/VARSIZE 仍与声明一致。
+        qWarning().noquote() << "[var] 多维变量" << storageKey << "元素数" << count
+                             << "超过上限" << kMaxMultiDimElements << "，拒绝分配";
+        m_multiDimShapes.insert(storageKey, shape);
+        return;
+    }
+    shape.allocated = allocate;
+    m_multiDimShapes.insert(storageKey, shape);
+    if (!allocate) return;   // 只登记形状（CHARADATA：元素在角色存储里）
+    if (stringArray)
+        m_globalStrN.insert(storageKey, QList<FlatStringValue>(qsizetype(count), FlatStringValue{}));
+    else
+        m_globalIntN.insert(storageKey, QList<qint64>(qsizetype(count), 0));
+}
+
 void VariableStorage::clearForReload()
 {
     VariableStorage defaults;
     std::swap(m_globalStr3D, defaults.m_globalStr3D);
+    std::swap(m_globalIntN, defaults.m_globalIntN);
+    std::swap(m_globalStrN, defaults.m_globalStrN);
+    std::swap(m_multiDimShapes, defaults.m_multiDimShapes);
     std::swap(m_charaInt2D, defaults.m_charaInt2D);
     std::swap(m_charaStr2D, defaults.m_charaStr2D);
     std::swap(m_systemIntVars, defaults.m_systemIntVars);
@@ -222,6 +413,10 @@ int VariableStorage::arraySize(const QString& name) const
 
 int VariableStorage::arraySizeRaw(const QString& key) const
 {
+        // 多维：尺寸口径 = **声明首维**（C# VARSIZE(var) 的 GetLength() 语义；
+        // VARSIZE 语句另按声明逐维写 RESULT）。不再读 1D 槽的「首维占位」。
+        if (const auto shape = m_multiDimShapes.constFind(key); shape != m_multiDimShapes.constEnd())
+            return shape.value().lengths.value(0);
 
 		// 局部/实参槽不在 m_global* 容器里，单独报尺寸（VARSIZE("LOCAL")）
 		if (key == QLatin1String("ITEMPRICE")) return m_itemprice.size();   // 常量容器（不在 m_global* 里）
@@ -239,6 +434,9 @@ int VariableStorage::arraySizeRaw(const QString& key) const
 QList<int> VariableStorage::arrayLengths(const QString& name) const
 {
     const QString key = resolvedStorageName(name);
+    // 多维：形状的唯一运行时视图（装载期从声明拷入）。
+    if (const auto shape = m_multiDimShapes.constFind(key); shape != m_multiDimShapes.constEnd())
+        return shape.value().lengths;
     const auto shape2 = [](const auto& values) -> QList<int> {
         int columns = 0;
         for (const auto& row : values) columns = qMax(columns, int(row.size()));
@@ -267,6 +465,8 @@ QList<int> VariableStorage::arrayLengths(const QString& name) const
 void VariableStorage::ensureArraySize(const QString& name, int size, bool stringArray)
 {
 		if (size <= 0) return;
+		// 多维变量的容量由声明决定，不允许「第一次写时偷偷扩容」。
+		if (isMultiDimArray(storageName(name))) return;
 		if (stringArray) {
 			auto& values = m_globalStr1D[storageName(name)];
 			if (values.size() < size) values.resize(size);
@@ -282,6 +482,18 @@ void VariableStorage::ensureArraySize(const QString& name, int size, bool string
 void VariableStorage::applyPrivateDefault(const QString& storageKey, bool isString, int ensureSize,
                                           const QList<qint64>& defaultInt, const QStringList& defaultStr)
 {
+		// 多维：容量已在装载期按声明分配；初值按**扁平序号**写（行主序，最后一维
+		// 连续），与 #DIM X, 2,3 = a,b,c,d 的 C# 口径一致。
+		if (isMultiDimArray(storageKey)) {
+			if (isString) {
+				for (int i = 0; i < defaultStr.size(); ++i)
+					writeMultiDimStr(storageKey, {i}, FlatStringValue(defaultStr.at(i)));
+			} else {
+				for (int i = 0; i < defaultInt.size(); ++i)
+					writeMultiDimInt(storageKey, {i}, defaultInt.at(i));
+			}
+			return;
+		}
 		if (isString) {
 			auto& values = m_globalStr1D[storageKey];
 			if (ensureSize > 0 && values.size() < ensureSize) values.resize(ensureSize);
@@ -320,35 +532,12 @@ void VariableStorage::initialize(int maxCharacters, int localSize)
 // ================= 全局整型 3D 实现示例 =================
 void VariableStorage::setGlobalInt3D(const QString &name, int x, int y, int z, qint64 val)
 {
-		if (x < 0 || y < 0 || z < 0) return;
-
-		auto &grid3D = m_globalInt3D[storageName(name)];
-		if (grid3D.size() <= x) grid3D.resize(x + 1);
-
-		auto &grid2D = grid3D[x];
-		if (grid2D.size() <= y) grid2D.resize(y + 1);
-
-		auto &vec = grid2D[y];
-		if (vec.size() <= z) vec.resize(z + 1, 0);
-
-		vec[z] = val;
+		setGlobalInt3DRaw(storageName(name), x, y, z, val);
 }
 
 qint64 VariableStorage::getGlobalInt3D(const QString &name, int x, int y, int z) const
 {
-		if (x < 0 || y < 0 || z < 0) return 0;
-
-		auto it = m_globalInt3D.constFind(storageName(name));
-		if (it != m_globalInt3D.constEnd() && x < it.value().size()) {
-				const auto &grid2D = it.value().at(x);
-				if (y < grid2D.size()) {
-						const auto &vec = grid2D.at(y);
-						if (z < vec.size()) {
-								return vec.at(z);
-						}
-				}
-		}
-		return 0;
+		return getGlobalInt3DRaw(storageName(name), x, y, z);
 }
 
 // ================= 名字级整数访问（唯一实现） =================
@@ -736,6 +925,8 @@ void VariableStorage::resetGlobals()
 		purge(m_globalStr1D);
 		purge(m_globalStr2D);
 		purge(m_globalStr3D);
+		purge(m_globalIntN);
+		purge(m_globalStrN);
 		qDebug() << "[global] RESETGLOBAL（保留函数私有变量）";
 }
 
@@ -779,66 +970,25 @@ void VariableStorage::restoreDeclaredDefaults()
 			}
 			continue;
 		}
-		// 2/3 维：下标换算与 coordinates() 一致（最后一维连续）
-		const int nx = dims.value(0, 1);
-		const int ny = dims.size() > 1 ? dims.at(1) : 1;
-		const int nz = dims.size() > 2 ? dims.at(2) : 1;
-		if (d.dimension == 2) {
-			if (d.type == OperandType::Str) {
-				auto& table = m_globalStr2D[storageKey];
-				if (table.size() < nx) table.resize(nx);
-				for (int x = 0; x < nx; ++x) {
-					auto& row = table[x];
-					if (row.size() < ny) row.resize(ny);
-					std::fill_n(row.begin(), ny, FlatStringValue{});
-					const int base = x * ny;
-					const int n = qMin(ny, defaultCount - base);
-					for (int y = 0; y < n; ++y) row[y] = FlatStringValue(d.defaultStr.at(base + y));
-				}
-			} else {
-				auto& table = m_globalInt2D[storageKey];
-				if (table.size() < nx) table.resize(nx);
-				for (int x = 0; x < nx; ++x) {
-					auto& row = table[x];
-					if (row.size() < ny) row.resize(ny, 0);
-					if (ny > 0) std::memset(row.data(), 0, size_t(ny) * sizeof(qint64));
-					const int base = x * ny;
-					const int n = qMin(ny, defaultCount - base);
-					for (int y = 0; y < n; ++y) row[y] = d.defaultInt.at(base + y);
-				}
-			}
-			continue;
-		}
+		// 2/3 维：走独立的多维扁平容器（装载期按 lengths 乘积分配）。
+		// 形状来自声明；这里不再按嵌套 QList 扩容。未安装（测试/无装载 pass）
+		// 时就地安装一次，保持「恢复初值」在任何入口都成立。
+		if (!isMultiDimArray(storageKey))
+			installMultiDimArray(storageKey, dims, d.strides, d.type == OperandType::Str);
+		const auto shapeIt = m_multiDimShapes.constFind(storageKey);
+		if (shapeIt == m_multiDimShapes.constEnd() || !shapeIt.value().allocated) continue;
 		if (d.type == OperandType::Str) {
-			auto& cube = m_globalStr3D[storageKey];
-			if (cube.size() < nx) cube.resize(nx);
-			for (int x = 0; x < nx; ++x) {
-				auto& plane = cube[x];
-				if (plane.size() < ny) plane.resize(ny);
-				for (int y = 0; y < ny; ++y) {
-					auto& row = plane[y];
-					if (row.size() < nz) row.resize(nz);
-					std::fill_n(row.begin(), nz, FlatStringValue{});
-					const int base = (x * ny + y) * nz;
-					const int n = qMin(nz, defaultCount - base);
-					for (int z = 0; z < n; ++z) row[z] = FlatStringValue(d.defaultStr.at(base + z));
-				}
-			}
+			auto& vec = m_globalStrN[storageKey];
+			if (vec.size() < count) vec.resize(count);
+			std::fill_n(vec.begin(), count, FlatStringValue{});
+			const int n = qMin(count, defaultCount);
+			for (int i = 0; i < n; ++i) vec[i] = FlatStringValue(d.defaultStr.at(i));
 		} else {
-			auto& cube = m_globalInt3D[storageKey];
-			if (cube.size() < nx) cube.resize(nx);
-			for (int x = 0; x < nx; ++x) {
-				auto& plane = cube[x];
-				if (plane.size() < ny) plane.resize(ny);
-				for (int y = 0; y < ny; ++y) {
-					auto& row = plane[y];
-					if (row.size() < nz) row.resize(nz, 0);
-					if (nz > 0) std::memset(row.data(), 0, size_t(nz) * sizeof(qint64));
-					const int base = (x * ny + y) * nz;
-					const int n = qMin(nz, defaultCount - base);
-					for (int z = 0; z < n; ++z) row[z] = d.defaultInt.at(base + z);
-				}
-			}
+			auto& vec = m_globalIntN[storageKey];
+			if (vec.size() < count) vec.resize(count, 0);
+			if (count > 0) std::memset(vec.data(), 0, size_t(count) * sizeof(qint64));
+			const int n = qMin(count, defaultCount);
+			for (int i = 0; i < n; ++i) vec[i] = d.defaultInt.at(i);
 		}
 	}
 }
@@ -869,6 +1019,8 @@ void VariableStorage::resetForNewGame()
 		const auto keptS1 = keep(m_globalStr1D);
 		const auto keptS2 = keep(m_globalStr2D);
 		const auto keptS3 = keep(m_globalStr3D);
+		const auto keptIN = keep(m_globalIntN);
+		const auto keptSN = keep(m_globalStrN);
 		clearCharaList();
 		resetGlobals();   // 用户普通广域变量回默认；GLOBAL/GLOBALS 稍后恢复
 		const auto zero = [](QList<qint64>& list) { list.fill(0); };
@@ -900,6 +1052,8 @@ void VariableStorage::resetForNewGame()
 		purgePrivate(m_globalStr1D);
 		purgePrivate(m_globalStr2D);
 		purgePrivate(m_globalStr3D);
+		purgePrivate(m_globalIntN);
+		purgePrivate(m_globalStrN);
 		// 私有名表是**装载期元数据**（脚本声明的一部分），不是每局数据：
 		// RESETDATA 不能清掉它 —— 安装后 setPrivateScope 已不再建表，清掉就会让
 		// 所有私有名静默退化成裸名（又是另一个变量）。未安装（测试手工路径）时
@@ -930,6 +1084,7 @@ void VariableStorage::resetForNewGame()
 		};
 		restore(m_globalInt1D, keptI1); restore(m_globalInt2D, keptI2); restore(m_globalInt3D, keptI3);
 		restore(m_globalStr1D, keptS1); restore(m_globalStr2D, keptS2); restore(m_globalStr3D, keptS3);
+		restore(m_globalIntN, keptIN); restore(m_globalStrN, keptSN);
 		qDebug() << "[var] RESETDATA 变量回默认值，角色列表已清空";
 }
 
@@ -1272,15 +1427,21 @@ bool VariableStorage::isCharaVariable1D(const QString &name) const
 void VariableStorage::setGlobalInt1D(const QString &name, int x, qint64 val)
 {
 		if (x < 0) return;
-		auto &vec = m_globalInt1D[storageName(name)];
-		if (vec.size() <= x) vec.resize(x + 1, 0);
-		vec[x] = val;
+		setGlobalInt1DRaw(storageName(name), x, val);
 }
 
 void VariableStorage::setGlobalStr1D(const QString &name, int x, const QString &value)
 {
 		if (x < 0) return;
-		auto &vec = m_globalStr1D[storageName(name)];
+		const QString key = storageName(name);
+		auto it = m_globalStr1D.find(key);
+		if (it != m_globalStr1D.end()) {
+				if (it.value().size() <= x) it.value().resize(x + 1);
+				it.value()[x] = FlatStringValue(value);
+				return;
+		}
+		if (isMultiDimArray(key)) { writeMultiDimStr(key, {x}, FlatStringValue(value)); return; }
+		auto &vec = m_globalStr1D[key];
 		if (vec.size() <= x) vec.resize(x + 1);
 		vec[x] = FlatStringValue(value);
 }
@@ -1308,13 +1469,16 @@ QString VariableStorage::getGlobalStr1DRaw(const QString& storageKey, int x) con
         if (x < 0) return QString();
         auto it = m_globalStr1D.constFind(storageKey);
         if (it != m_globalStr1D.constEnd() && x < it.value().size()) return it.value().at(x).text;
+        if (isMultiDimArray(storageKey)) return readMultiDimStr(storageKey, {x}).text;
         return QString();
 }
 
 void VariableStorage::setGlobalStr2D(const QString &name, int x, int y, const QString &value)
 {
 		if (x < 0 || y < 0) return;
-		auto &table = m_globalStr2D[storageName(name)];
+		const QString key = storageName(name);
+		if (isMultiDimArray(key)) { writeMultiDimStr(key, {x, y}, FlatStringValue(value)); return; }
+		auto &table = m_globalStr2D[key];
 		if (table.size() <= x) table.resize(x + 1);
 		if (table[x].size() <= y) table[x].resize(y + 1);
 		table[x][y] = FlatStringValue(value);
@@ -1323,6 +1487,7 @@ void VariableStorage::setGlobalStr2D(const QString &name, int x, int y, const QS
 QString VariableStorage::getGlobalStr2D(const QString &name, int x, int y) const
 {
 		if (x < 0 || y < 0) return QString();
+		if (isMultiDimArray(storageName(name))) return getGlobalStr2DRaw(storageName(name), x, y);
 		auto it = m_globalStr2D.constFind(storageName(name));
 		if (it == m_globalStr2D.constEnd()) return QString();
 		if (x >= it.value().size() || y >= it.value().at(x).size()) return QString();
@@ -1343,12 +1508,7 @@ QString VariableStorage::getSystemStr(const QString &name, int index) const
 
 qint64 VariableStorage::getGlobalInt1D(const QString &name, int x) const
 {
-		if (x < 0) return 0;
-		auto it = m_globalInt1D.constFind(storageName(name));
-		if (it != m_globalInt1D.constEnd() && x < it.value().size()) {
-				return it.value().at(x);
-		}
-		return 0;
+		return getGlobalInt1DRaw(storageName(name), x);
 }
 
 // ================= Raw 访问族（键已解析；见 variable_storage.h 说明） =================
@@ -1357,12 +1517,16 @@ qint64 VariableStorage::getGlobalInt1DRaw(const QString& storageKey, int x) cons
 		if (x < 0) return 0;
 		const auto it = m_globalInt1D.constFind(storageKey);
 		if (it != m_globalInt1D.constEnd() && x < it.value().size()) return it.value().at(x);
+		// 多维变量的「扁平写法」：与 X:i:j:k 共用同一个扁平容器（脚本层由
+		// 静态检查要求给足下标；这里是内部/旧路径的统一口径）。
+		if (isMultiDimArray(storageKey)) return readMultiDimInt(storageKey, {x});
 		return 0;
 }
 
 qint64 VariableStorage::getGlobalInt2DRaw(const QString& storageKey, int x, int y) const
 {
 		if (x < 0 || y < 0) return 0;
+		if (isMultiDimArray(storageKey)) return readMultiDimInt(storageKey, {x, y});
 		const auto it = m_globalInt2D.constFind(storageKey);
 		if (it != m_globalInt2D.constEnd() && x < it.value().size()) {
 				const auto& vec = it.value().at(x);
@@ -1374,6 +1538,7 @@ qint64 VariableStorage::getGlobalInt2DRaw(const QString& storageKey, int x, int 
 qint64 VariableStorage::getGlobalInt3DRaw(const QString& storageKey, int x, int y, int z) const
 {
 		if (x < 0 || y < 0 || z < 0) return 0;
+		if (isMultiDimArray(storageKey)) return readMultiDimInt(storageKey, {x, y, z});
 		const auto it = m_globalInt3D.constFind(storageKey);
 		if (it != m_globalInt3D.constEnd() && x < it.value().size()) {
 				const auto& plane = it.value().at(x);
@@ -1388,6 +1553,7 @@ qint64 VariableStorage::getGlobalInt3DRaw(const QString& storageKey, int x, int 
 QString VariableStorage::getGlobalStr2DRaw(const QString& storageKey, int x, int y) const
 {
 		if (x < 0 || y < 0) return QString();
+		if (isMultiDimArray(storageKey)) return readMultiDimStr(storageKey, {x, y}).text;
 		const auto it = m_globalStr2D.constFind(storageKey);
 		if (it != m_globalStr2D.constEnd() && x < it.value().size()) {
 				const auto& vec = it.value().at(x);
@@ -1399,6 +1565,7 @@ QString VariableStorage::getGlobalStr2DRaw(const QString& storageKey, int x, int
 QString VariableStorage::getGlobalStr3DRaw(const QString& storageKey, int x, int y, int z) const
 {
 		if (x < 0 || y < 0 || z < 0) return QString();
+		if (isMultiDimArray(storageKey)) return readMultiDimStr(storageKey, {x, y, z}).text;
 		const auto it = m_globalStr3D.constFind(storageKey);
 		if (it != m_globalStr3D.constEnd() && x < it.value().size()) {
 				const auto& plane = it.value().at(x);
@@ -1413,6 +1580,13 @@ QString VariableStorage::getGlobalStr3DRaw(const QString& storageKey, int x, int
 void VariableStorage::setGlobalInt1DRaw(const QString& storageKey, int x, qint64 value)
 {
 		if (x < 0) return;
+		auto it = m_globalInt1D.find(storageKey);
+		if (it != m_globalInt1D.end()) {
+				if (it.value().size() <= x) it.value().resize(x + 1, 0);
+				it.value()[x] = value;
+				return;
+		}
+		if (isMultiDimArray(storageKey)) { writeMultiDimInt(storageKey, {x}, value); return; }
 		auto& vec = m_globalInt1D[storageKey];
 		if (vec.size() <= x) vec.resize(x + 1, 0);
 		vec[x] = value;
@@ -1421,6 +1595,7 @@ void VariableStorage::setGlobalInt1DRaw(const QString& storageKey, int x, qint64
 void VariableStorage::setGlobalInt2DRaw(const QString& storageKey, int x, int y, qint64 value)
 {
 		if (x < 0 || y < 0) return;
+		if (isMultiDimArray(storageKey)) { writeMultiDimInt(storageKey, {x, y}, value); return; }
 		auto& grid2D = m_globalInt2D[storageKey];
 		if (grid2D.size() <= x) grid2D.resize(x + 1);
 		auto& vec = grid2D[x];
@@ -1431,6 +1606,7 @@ void VariableStorage::setGlobalInt2DRaw(const QString& storageKey, int x, int y,
 void VariableStorage::setGlobalInt3DRaw(const QString& storageKey, int x, int y, int z, qint64 value)
 {
 		if (x < 0 || y < 0 || z < 0) return;
+		if (isMultiDimArray(storageKey)) { writeMultiDimInt(storageKey, {x, y, z}, value); return; }
 		auto& cube = m_globalInt3D[storageKey];
 		if (cube.size() <= x) cube.resize(x + 1);
 		auto& plane = cube[x];
@@ -1442,17 +1618,13 @@ void VariableStorage::setGlobalInt3DRaw(const QString& storageKey, int x, int y,
 
 void VariableStorage::setGlobalInt2D(const QString &name, int x, int y, qint64 val)
 {
-		if (x < 0 || y < 0) return;
-		auto &grid2D = m_globalInt2D[storageName(name)];
-		if (grid2D.size() <= x) grid2D.resize(x + 1);
-		auto &vec = grid2D[x];
-		if (vec.size() <= y) vec.resize(y + 1, 0);
-		vec[y] = val;
+		setGlobalInt2DRaw(storageName(name), x, y, val);
 }
 
 qint64 VariableStorage::getGlobalInt2D(const QString &name, int x, int y) const
 {
 		if (x < 0 || y < 0) return 0;
+		if (isMultiDimArray(storageName(name))) return getGlobalInt2DRaw(storageName(name), x, y);
 		auto it = m_globalInt2D.constFind(storageName(name));
 		if (it != m_globalInt2D.constEnd() && x < it.value().size()) {
 				const auto &vec = it.value().at(x);
@@ -1662,33 +1834,21 @@ EraBinaryData::Variable VariableStorage::readSaveEntry(const erasave::Entry& ent
         appendInts(v, [&](int x, int, int) -> qint64 {
             return it != m_globalInt1D.constEnd() && x < it.value().size() ? it.value().at(x) : 0; });
         break; }
-    case erasave::Slot::GlobalInt2D: {
-        const auto it = m_globalInt2D.constFind(key);
-        appendInts(v, [&](int x, int y, int) -> qint64 {
-            return it != m_globalInt2D.constEnd() && x < it.value().size() && y < it.value().at(x).size()
-                ? it.value().at(x).at(y) : 0; });
-        break; }
-    case erasave::Slot::GlobalInt3D: {
-        const auto it = m_globalInt3D.constFind(key);
-        appendInts(v, [&](int x, int y, int z) -> qint64 {
-            return it != m_globalInt3D.constEnd() && x < it.value().size() && y < it.value().at(x).size()
-                    && z < it.value().at(x).at(y).size() ? it.value().at(x).at(y).at(z) : 0; });
-        break; }
+    case erasave::Slot::GlobalInt2D:
+        appendInts(v, [&](int x, int y, int) { return getGlobalInt2DRaw(key, x, y); });
+        break;
+    case erasave::Slot::GlobalInt3D:
+        appendInts(v, [&](int x, int y, int z) { return getGlobalInt3DRaw(key, x, y, z); });
+        break;
     case erasave::Slot::GlobalStr1D:
         appendStrings(v, [&](int x, int, int) { return getGlobalStr1DRaw(key, x); });
         break;
-    case erasave::Slot::GlobalStr2D: {
-        const auto it = m_globalStr2D.constFind(key);
-        appendStrings(v, [&](int x, int y, int) -> QString {
-            return it != m_globalStr2D.constEnd() && x < it.value().size() && y < it.value().at(x).size()
-                ? it.value().at(x).at(y).text : QString(); });
-        break; }
-    case erasave::Slot::GlobalStr3D: {
-        const auto it = m_globalStr3D.constFind(key);
-        appendStrings(v, [&](int x, int y, int z) -> QString {
-            return it != m_globalStr3D.constEnd() && x < it.value().size() && y < it.value().at(x).size()
-                    && z < it.value().at(x).at(y).size() ? it.value().at(x).at(y).at(z).text : QString(); });
-        break; }
+    case erasave::Slot::GlobalStr2D:
+        appendStrings(v, [&](int x, int y, int) { return getGlobalStr2DRaw(key, x, y); });
+        break;
+    case erasave::Slot::GlobalStr3D:
+        appendStrings(v, [&](int x, int y, int z) { return getGlobalStr3DRaw(key, x, y, z); });
+        break;
     case erasave::Slot::CharaInt1D: {
         const auto it = m_charaIntVars.constFind(key);
         appendInts(v, [&](int x, int, int) -> qint64 {
@@ -1731,22 +1891,30 @@ void VariableStorage::writeSaveEntry(const erasave::Entry& entry, int charaSlot,
     case erasave::Slot::SystemInt1D: setSystemVariable(entry.name, x, number); break;
     case erasave::Slot::GlobalInt1D: put1(m_globalInt1D[key], x, number); break;
     case erasave::Slot::GlobalStr1D: put1(m_globalStr1D[key], x, FlatStringValue(text)); break;
-    case erasave::Slot::GlobalInt2D: {
-        auto& a = m_globalInt2D[key]; if (a.size() <= x) a.resize(x + 1);
-        put1(a[x], y, number); break; }
-    case erasave::Slot::GlobalStr2D: {
-        auto& a = m_globalStr2D[key]; if (a.size() <= x) a.resize(x + 1);
-        put1(a[x], y, FlatStringValue(text)); break; }
-    case erasave::Slot::GlobalInt3D: {
-        auto& a = m_globalInt3D[key];
-        if (a.size() <= x) a.resize(x + 1);
-        if (a[x].size() <= y) a[x].resize(y + 1);
-        put1(a[x][y], z, number); break; }
-    case erasave::Slot::GlobalStr3D: {
-        auto& a = m_globalStr3D[key];
-        if (a.size() <= x) a.resize(x + 1);
-        if (a[x].size() <= y) a[x].resize(y + 1);
-        put1(a[x][y], z, FlatStringValue(text)); break; }
+    case erasave::Slot::GlobalInt2D:
+        if (isMultiDimArray(key)) writeMultiDimInt(key, {x, y}, number);
+        else { auto& a = m_globalInt2D[key]; if (a.size() <= x) a.resize(x + 1);
+               put1(a[x], y, number); }
+        break;
+    case erasave::Slot::GlobalStr2D:
+        if (isMultiDimArray(key)) writeMultiDimStr(key, {x, y}, FlatStringValue(text));
+        else { auto& a = m_globalStr2D[key]; if (a.size() <= x) a.resize(x + 1);
+               put1(a[x], y, FlatStringValue(text)); }
+        break;
+    case erasave::Slot::GlobalInt3D:
+        if (isMultiDimArray(key)) writeMultiDimInt(key, {x, y, z}, number);
+        else { auto& a = m_globalInt3D[key];
+               if (a.size() <= x) a.resize(x + 1);
+               if (a[x].size() <= y) a[x].resize(y + 1);
+               put1(a[x][y], z, number); }
+        break;
+    case erasave::Slot::GlobalStr3D:
+        if (isMultiDimArray(key)) writeMultiDimStr(key, {x, y, z}, FlatStringValue(text));
+        else { auto& a = m_globalStr3D[key];
+               if (a.size() <= x) a.resize(x + 1);
+               if (a[x].size() <= y) a[x].resize(y + 1);
+               put1(a[x][y], z, FlatStringValue(text)); }
+        break;
     case erasave::Slot::CharaInt1D:
         if (charaSlot >= 0) { auto& a = m_charaIntVars[key]; if (a.size() <= charaSlot) a.resize(charaSlot + 1);
                               put1(a[charaSlot], x, number); }
@@ -1832,6 +2000,7 @@ void VariableStorage::applyBinarySave(const EraBinaryData::Document& document) {
     };
     const auto keptI1=preserve(m_globalInt1D); const auto keptI2=preserve(m_globalInt2D); const auto keptI3=preserve(m_globalInt3D);
     const auto keptS1=preserve(m_globalStr1D); const auto keptS2=preserve(m_globalStr2D); const auto keptS3=preserve(m_globalStr3D);
+    const auto keptIN=preserve(m_globalIntN); const auto keptSN=preserve(m_globalStrN);
     if(normal) {
         resetForNewGame(); setLocalContext({});
         // 声明初值恢复 = resetForNewGame 的同一件事，走同一个批量实现
@@ -1842,6 +2011,7 @@ void VariableStorage::applyBinarySave(const EraBinaryData::Document& document) {
         const auto restore=[](auto& map,const auto& kept) { for(auto it=kept.begin();it!=kept.end();++it) map.insert(it.key(),it.value()); };
         restore(m_globalInt1D,keptI1); restore(m_globalInt2D,keptI2); restore(m_globalInt3D,keptI3);
         restore(m_globalStr1D,keptS1); restore(m_globalStr2D,keptS2); restore(m_globalStr3D,keptS3);
+        restore(m_globalIntN,keptIN); restore(m_globalStrN,keptSN);
     }
     const erasave::Map charaMap=erasave::Map::build(m_variableConfig,m_saveVariableTable,EraBinaryData::FileType::Character);
     const erasave::Map variableMap=erasave::Map::build(m_variableConfig,m_saveVariableTable,
@@ -1929,6 +2099,7 @@ FlatStringValue VariableStorage::getStringSlot(const QString& name, const QList<
             return m_charaStr2D.value(key).value(slot).value(elements.value(0)).value(elements.value(1));
         return m_charaStrVars.value(key).value(slot).value(elements.value(0));
     }
+    if (isMultiDimArray(key)) return readMultiDimStr(key, indices);
     if (indices.size() >= 3) return m_globalStr3D.value(key).value(x).value(y).value(z);
     if (indices.size() >= 2) return m_globalStr2D.value(key).value(x).value(y);
     return m_globalStr1D.value(key).value(x);
@@ -1944,6 +2115,7 @@ FlatStringValue VariableStorage::getStringSlotRaw(const QString& storageKey, con
     if (storageKey == QLatin1String("LOCALS")) return m_localStrVars.value(x);
     if (storageKey == QLatin1String("ARGS")) return m_argStrVars.value(x);
     if (storageKey == QLatin1String("SAVEDATA_TEXT")) return m_systemStrVars.value(storageKey);
+    if (isMultiDimArray(storageKey)) return readMultiDimStr(storageKey, indices);
     if (indices.size() >= 3) return m_globalStr3D.value(storageKey).value(x).value(y).value(z);
     if (indices.size() >= 2) return m_globalStr2D.value(storageKey).value(x).value(y);
     return m_globalStr1D.value(storageKey).value(x);
@@ -1971,6 +2143,7 @@ bool VariableStorage::setStringSlot(const QString& name, const QList<int>& indic
         if (charaDataDimension(name) >= 2) put3(m_charaStr2D[key], slot, elements.value(0), elements.value(1));
         else put2(m_charaStrVars[key], slot, elements.value(0));
     }
+    else if (isMultiDimArray(key)) writeMultiDimStr(key, indices, value);
     else if (indices.size() >= 3) put3(m_globalStr3D[key], x, y, z);
     else if (indices.size() >= 2) put2(m_globalStr2D[key], x, y);
     else put1(m_globalStr1D[key], x);

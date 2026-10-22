@@ -28,11 +28,17 @@
 #include <QCoreApplication>
 #include <QDebug>
 #include <QStringList>
+#include <QCryptographicHash>
 
 #include "ast/ast_builder.h"
 #include "ast/variable_table.h"
 #include "process_state.h"
 #include "era_parse_table.h"
+#include "variable_storage.h"
+#include "expression_evaluator.h"
+#include "execution_engine.h"
+#include "script_runner.h"
+#include "era_binary_data.h"
 
 static int g_failures = 0;
 
@@ -261,6 +267,97 @@ int main(int argc, char* argv[]) {
     auto sOnly = table.lineAt("vt", 8)->arguments[0].ast;
     check(sOnly && sOnly->valueType() == OperandType::Str, "S -> Str（变量表回填）");
     check(vt.typeOf("G") == OperandType::Int, "typeOf(G) == Int");
+
+    qDebug() << "\n5) 多维变量护栏（记录当前行为）";
+    {
+        // 夹具只记录**现状**：多维存储尚未真实分配（声明 2,3,4 的 GARR 只有
+        // 扁平 1D 槽；VARSIZE 无维读的是那个槽的实际长度，不是声明形状）。
+        ProcessState ms;
+        EraParseTable mt(&ms);
+        VariableStorage vs;
+        ExpressionEvaluator ev;
+        mt.setVariableStorage(&vs);
+        mt.setExpressionEvaluator(&ev);
+        ExecutionEngine eng(&vs, nullptr);
+        eng.setParseTable(&mt);
+        eng.setExpressionEvaluator(&ev);
+        ScriptRunner runner(&mt, &eng, &ms, &vs);
+        runner.setExpressionEvaluator(&ev);
+        runner.setStepLimit(100000);
+
+        const QStringList src = {
+            "@MAIN",
+            "#DIM GLOBAL GARR, 2, 3, 4",      // 3D，乘积 24
+            "#DIM GLOBAL ONED, 4",            // 单维（轻量容器）
+            "#DIM GLOBAL R_DIM2",
+            "#DIM GLOBAL R_NODIM",
+            "#DIM GLOBAL R_SZ0",
+            "#DIM GLOBAL R_SZ1",
+            "#DIM GLOBAL R_SZ2",
+            "#DIM SAVEDATA SMD, 2, 3",        // 存档形状 2x3
+            "#DIM MAT, 2, 3",                 // 函数私有 2D
+            "GARR:1:2:3 = 42",
+            "ONED:2 = 9",
+            "MAT:1:2 = 5",
+            "SMD:1:2 = 99",
+            "R_DIM2 = VARSIZE(\"GARR\", 2)",
+            "R_NODIM = VARSIZE(\"GARR\")",
+            "VARSIZE GARR",
+            "R_SZ0 = RESULT:0",
+            "R_SZ1 = RESULT:1",
+            "R_SZ2 = RESULT:2",
+            "RETURN"
+        };
+        const AstResolver r = [&mt](const QString& e) { return mt.expressionAst(e); };
+        QList<LogicalLine> lines;
+        for (int i = 0; i < src.size(); ++i)
+            lines.append(AstBuilder::build(src.at(i), ScriptPosition("md.ERB", i, 1), r));
+        check(mt.loadScript("md", lines), "loadScript(多维夹具)");
+        vs.setSaveVariableTable(&mt.variableTable());
+        mt.setEntryPoint("MAIN");
+        mt.markLoadComplete();
+        const ExecState st = runner.runToCompletion();
+        qDebug() << "      runner state =" << int(st) << "warnings:" << mt.parseWarnings();
+        check(st == ExecState::Halt, "多维夹具运行到 HALT");
+
+        check(vs.getGlobalInt3D("GARR", 1, 2, 3) == 42, "GARR:1:2:3 落到 3D 元素 42");
+        // 脚本层 `GARR:23` 被静态检查拒绝（多维必须给足下标）。扁平写法只能在
+        // 存储层出现：它现在是**同一个**多维扁平容器里的元素 23（=1*12+2*4+3）。
+        vs.setGlobalInt1D("GARR", 23, 7);
+        check(vs.getGlobalInt1D("GARR", 23) == 7, "GARR[23]（存储层扁平写）== 7");
+        check(vs.getGlobalInt3D("GARR", 1, 2, 3) == vs.getGlobalInt1D("GARR", 23),
+              "X:1:2:3 与 X[扁平] 落到同一槽位");
+        // strides 正确性的直接护栏：不同下标元组必须落到不同槽位。dim0 的 stride
+        // 若写错（例如用 1 而不是 lengths[1]*lengths[2]），GARR:1:0:0 与 GARR:0:0:1
+        // 会别名到同一个扁平槽，下面两条断言就会红。
+        vs.setGlobalInt3D("GARR", 1, 0, 0, 43);
+        check(vs.getGlobalInt1D("GARR", 12) == 43, "GARR:1:0:0 落在扁平 12（=1*12+0*4+0）");
+        check(vs.getGlobalInt3D("GARR", 0, 0, 1) == 0,
+              "GARR:1:0:0 与 GARR:0:0:1 不别名（stride 正确）");
+        check(vs.arraySize("GARR") == 2, "arraySize(GARR) == 声明首维 2（不再读 1D 占位槽）");
+        check(vs.getGlobalInt1D("R_DIM2", 0) == 4, "VARSIZE(GARR,2) == 4（声明维）");
+        qDebug() << "      R_NODIM=" << vs.getGlobalInt1D("R_NODIM",0); check(vs.getGlobalInt1D("R_NODIM", 0) == 2, "当前 VARSIZE(GARR) == 2（1D 槽按首维分配）");
+        check(vs.getGlobalInt1D("R_SZ0", 0) == 2 && vs.getGlobalInt1D("R_SZ1", 0) == 3
+                  && vs.getGlobalInt1D("R_SZ2", 0) == 4,
+              "VARSIZE 语句一次写出 2/3/4（声明各维）");
+        check(vs.getGlobalInt2D("MAT", 1, 2) == 5, "私有 2D MAT:1:2 == 5");
+        check(vs.arraySize("MAT") == 2, "当前私有 MAT 的 1D 槽按首维分配 == 2");
+        check(vs.getGlobalInt1D("ONED", 2) == 9 && vs.arraySize("ONED") == 4,
+              "单维 ONED 装载期按声明分配 4（行为保持不变）");
+        check(vs.getGlobalInt3D("GARR", 100, 0, 0) == 0, "越界读 == 0");
+        vs.setGlobalInt3D("GARR", 100, 0, 0, 5);
+        check(vs.getGlobalInt3D("GARR", 100, 0, 0) == 0, "多维越界写被忽略（不再懒扩容）");
+
+        // 存档字节：SMD 声明 2x3，只有 [1][2]=99；golden md5 钉在这里。
+        auto doc = vs.captureBinarySave(EraBinaryData::FileType::Normal);
+        doc.description = "multidim-guard"; doc.uniqueCode = 7; doc.scriptVersion = 1808;
+        QByteArray bytes;
+        check(EraBinaryData::encode(doc, bytes), "encode(多维存档)");
+        const QByteArray md5 = QCryptographicHash::hash(bytes, QCryptographicHash::Md5).toHex();
+        qDebug() << "      multidim save md5 =" << md5 << "bytes =" << bytes.size();
+        check(md5 == QByteArrayLiteral("7c71c4f2b6ef2ac0042ddbeabac4e228"),
+              QString("多维存档字节 md5（实得 %1）").arg(QString::fromLatin1(md5)));
+    }
 
     qDebug() << "\n===================";
     if (g_failures == 0) {

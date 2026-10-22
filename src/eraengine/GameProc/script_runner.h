@@ -142,6 +142,9 @@ private:
 
     // 执行一步（取 PC 处的一行）；返回 false 表示已挂起/结束/出错
     bool stepOnce();
+    // 报一条**具体**错误：推进 m_errorEpoch，让 stepOnce 不再补发泛化的
+    // "execution error"（一次失败只留一条有用消息）。
+    void reportError(const QString& message);
     bool returnFromCall();
     void enterCall(const QString& function);
 
@@ -242,6 +245,10 @@ private:
     eravar::ScopeId m_currentScopeId = eravar::kGlobalScope;
     qint64 m_steps = 0;
     qint64 m_stepLimit = 0;   // 0 = 不限
+    // 已发具体错误消息的累计计数（stepOnce 的泛化兜底据此去重）。
+    // 用单调计数而不是「每步清零的 bool」：式中调用会递归进 stepOnce，
+    // 清零会把外层的「已报过」抹掉。执行前取快照，执行后未变才发兜底。
+    quint64 m_errorEpoch = 0;
     SystemStateMachine*  m_machine = nullptr;
     std::function<bool()> m_buttonAvailable;   // BINPUT/BINPUTS 按钮判定
 

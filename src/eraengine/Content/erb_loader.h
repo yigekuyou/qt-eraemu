@@ -170,7 +170,6 @@ public:
 
     // Access loaded AST lines
     QHash<QString, QList<LogicalLine>> getLoadedScripts() const;
-    const LogicalLine* findLabel(const QString& labelName) const;
 
     bool scriptExists(const QString& scriptName) const;
     QString resolveScriptName(const QString& scriptName) const;
@@ -350,7 +349,6 @@ private:
 
     QHash<QString, QString> m_scriptPaths;
     QHash<QString, QList<LogicalLine>> m_logicalLines;
-    QHash<QString, QPair<QString, int>> m_labels;   // label -> (script, lineIndex)
     QHash<QString, int> m_scriptLineCounts;
 
     // [qdbug] 验证（eraTW 实测）：并行拍平与顺序拍平结果**完全一致** ——

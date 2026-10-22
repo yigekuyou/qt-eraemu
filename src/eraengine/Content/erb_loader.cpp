@@ -648,12 +648,9 @@ bool ErbLoader::mergeParsedFile(ParsedErbFile&& pf) {
     // 主线程合并阶段产生 ~4500 次发射；诊断需要时用 setEmitParseSignals(true) 打开。
     if (m_emitParseSignals) emit parseStarted(pf.scriptName);
 
-    for (int i = 0; i < pf.lines.size(); ++i) {
-        const LogicalLine& line = pf.lines.at(i);
-        if (line.isLabel()) {
-            m_labels.insert(line.labelName, {pf.scriptName, i});
-        }
-    }
+    // 标签登记只有一处：EraParseTable::loadScript 的 m_labelIndex
+    //（裸名/大小写敏感/last-wins 的第三张表已删 —— 那是同一事实的第三份副本，
+    // 口径与索引相反却因答案偶合而长期未被发现）。
 
     m_scriptPaths.insert(pf.scriptName, pf.path);
     m_scriptLineCounts.insert(pf.scriptName, pf.lines.size());
@@ -742,8 +739,10 @@ bool ErbLoader::loadDirectory(const QString& dirPath, int depth) {
         for (const QString& f : files) {
             if (!loadFile(f, dirPath)) ok = false;
         }
+        // 标签数不再单独记账：唯一那份数据在 EraParseTable::m_labelIndex
+        //（裸名第三张表已删，见 mergeParsedFile 的注释）。
         qDebug() << "[load] ERB（串行）" << dirPath << ":" << files.size() << "个文件,"
-                 << "脚本" << m_scriptPaths.size() << "个,标签" << m_labels.size() << "个";
+                 << "脚本" << m_scriptPaths.size() << "个";
         return ok;
     }
 
@@ -1185,7 +1184,6 @@ void ErbLoader::cancelAndWait() {
     m_asyncVarTypes.localVars.clear();
     m_logicalLines.clear();
     m_scriptPaths.clear();
-    m_labels.clear();
     m_scriptLineCounts.clear();
     stopHeartbeat();
     m_readFailures.store(0, std::memory_order_relaxed);
@@ -1414,21 +1412,6 @@ QHash<QString, QList<LogicalLine>> ErbLoader::getLoadedScripts() const {
         return out;
     }
     return m_logicalLines;
-}
-
-const LogicalLine* ErbLoader::findLabel(const QString& labelName) const {
-    const auto it = m_labels.constFind(labelName);
-    if (it == m_labels.constEnd()) return nullptr;
-    const int index = it.value().second;
-    if (m_parseTable) {
-        const ScriptData* sd = m_parseTable->script(it.value().first);
-        if (!sd || index < 0 || index >= sd->lines.size()) return nullptr;
-        return &sd->lines.at(index);
-    }
-    const auto scriptIt = m_logicalLines.constFind(it.value().first);
-    if (scriptIt == m_logicalLines.constEnd()) return nullptr;
-    if (index < 0 || index >= scriptIt.value().size()) return nullptr;
-    return &scriptIt.value().at(index);
 }
 
 bool ErbLoader::scriptExists(const QString& scriptName) const {

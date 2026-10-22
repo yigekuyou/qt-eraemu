@@ -250,6 +250,11 @@ bool ScriptRunner::returnFromCall() {
     return true;
 }
 
+void ScriptRunner::reportError(const QString& message) {
+    ++m_errorEpoch;
+    emit errorOccurred(message);
+}
+
 bool ScriptRunner::stepOnce() {
     // ---- CALLEVENT 事件链推进：前一个事件函数返回到续点（对齐 C# Return 后的
     //      事件函数序列）。链未空 -> 调下一个事件函数；链跑完 -> 续点行照常执行。
@@ -263,7 +268,7 @@ bool ScriptRunner::stepOnce() {
     }
 
     if (m_stepLimit > 0 && ++m_steps > m_stepLimit) {
-        emit errorOccurred(QStringLiteral("脚本可能陷入死循环：连续执行超过 %1 步（第 %2 行）")
+        reportError(QStringLiteral("脚本可能陷入死循环：连续执行超过 %1 步（第 %2 行）")
                                .arg(m_stepLimit).arg(m_table->currentLine()));
         m_state->setErrorState();
         return false;
@@ -272,7 +277,7 @@ bool ScriptRunner::stepOnce() {
     const ScriptData* sd = m_table->script(script);
     if (!sd) {
         m_state->setErrorState();
-        emit errorOccurred(QStringLiteral("script not found: %1").arg(script));
+        reportError(QStringLiteral("script not found: %1").arg(script));
         return false;
     }
 
@@ -340,6 +345,7 @@ bool ScriptRunner::stepOnce() {
         m_lastPrivateScope = line.ownerFunction;
         m_currentScopeId = eravar::internName(line.ownerFunction);
     }
+    const quint64 errorEpochBefore = m_errorEpoch;
     ExecState r = executeLine(line);
     if (m_state->getExecState() == ExecState::Error) r = ExecState::Error;
 
@@ -358,7 +364,11 @@ bool ScriptRunner::stepOnce() {
     } else if (r == ExecState::Halt) {
         emit finished();
     } else if (r == ExecState::Error) {
-        emit errorOccurred(QStringLiteral("execution error"));
+        // 兜底：只有「状态变成 Error 却没人报过具体消息」才发这条泛化文本。
+        // 具体失败点（GOTO/ASSERT/THROW/参数检查/...）已经发过 message，重复发
+        // 只会让宿主 UI 的最后一条变成没有信息量的 "execution error"。
+        if (m_errorEpoch == errorEpochBefore)
+            emit errorOccurred(QStringLiteral("execution error"));
     }
     emit suspended(r);
     return false;
@@ -404,12 +414,12 @@ bool ScriptRunner::evalInt(const QSharedPointer<ExpressionNode>& ast, const QStr
         return true;
     } else {
         m_state->setErrorState();
-        emit errorOccurred(QStringLiteral("表达式缺少装载期 AST：%1").arg(raw.trimmed()));
+        reportError(QStringLiteral("表达式缺少装载期 AST：%1").arg(raw.trimmed()));
         return false;
     }
     if (!value.isValid() || isStringValue(value) || !value.canConvert<qint64>()) {
         m_state->setErrorState();
-        emit errorOccurred(QStringLiteral("表达式求值失败：%1").arg(raw.trimmed()));
+        reportError(QStringLiteral("表达式求值失败：%1").arg(raw.trimmed()));
         return false;
     }
     out = value.toLongLong();
@@ -438,7 +448,7 @@ ExecState ScriptRunner::executeLine(const LogicalLine& line) {
     const int pc = m_table->currentLine();
     if (line.isError || !line.argument.typeOk) {
         m_state->setErrorState();
-        emit errorOccurred(QStringLiteral("%1：%2").arg(line.position.toString(),
+        reportError(QStringLiteral("%1：%2").arg(line.position.toString(),
             line.errMes().isEmpty() ? line.argument.typeError : line.errMes()));
         return ExecState::Error;
     }
@@ -557,7 +567,7 @@ ExecState ScriptRunner::executeLine(const LogicalLine& line) {
         if (!line.arguments.isEmpty()) evalInt(line.arguments.first().ast, line.arguments.first().raw, value);
         if (value == 0) {
             m_state->setErrorState();
-            emit errorOccurred(QStringLiteral("ASSERT 的条件不成立：%1（%2）")
+            reportError(QStringLiteral("ASSERT 的条件不成立：%1（%2）")
                                    .arg(line.raw.trimmed(), line.position.toString()));
             return ExecState::Error;
         }
@@ -588,7 +598,7 @@ ExecState ScriptRunner::executeLine(const LogicalLine& line) {
             message = op.ast ? stringText(ev.evaluate(*op.ast, m_storage, baseData(), m_currentScopeId)) : op.raw;
         }
         m_state->setErrorState();
-        emit errorOccurred(QStringLiteral("THROW: %1（%2）").arg(message, line.position.toString()));
+        reportError(QStringLiteral("THROW: %1（%2）").arg(message, line.position.toString()));
         return ExecState::Error;
     }
 
@@ -600,7 +610,7 @@ ExecState ScriptRunner::executeLine(const LogicalLine& line) {
         const int labelLine = fn.isEmpty() ? -1 : m_table->getLabelPosition(script, fn);
         if (labelLine < 0) {
             m_state->setErrorState();
-            emit errorOccurred(QStringLiteral("RESTART 找不到当前函数的入口标签（%1）").arg(fn));
+            reportError(QStringLiteral("RESTART 找不到当前函数的入口标签（%1）").arg(fn));
             return ExecState::Error;
         }
         qCDebug(eraTrace) << "[exec] RESTART" << fn << "->" << labelLine + 1;
@@ -880,7 +890,7 @@ ExecState ScriptRunner::executeLine(const LogicalLine& line) {
         const int pos = label.isEmpty() ? -1 : findGotoLabelInFunction(label);
         if (pos < 0) {
             m_state->setErrorState();
-            emit errorOccurred(QStringLiteral("GOTO label not found: %1").arg(label));
+            reportError(QStringLiteral("GOTO label not found: %1").arg(label));
             return ExecState::Error;
         }
         m_table->setPosition(script, pos, true);
@@ -960,7 +970,7 @@ ExecState ScriptRunner::executeLine(const LogicalLine& line) {
             m_table->setPosition(script, catchLine + 1, false);
         } else if (name == QLatin1String("GOTOFORM")) {
             m_state->setErrorState();
-            emit errorOccurred(QStringLiteral("GOTO label not found: %1").arg(label));
+            reportError(QStringLiteral("GOTO label not found: %1").arg(label));
             return ExecState::Error;
         } else {
             advance();
@@ -1070,7 +1080,7 @@ ExecState ScriptRunner::executeLine(const LogicalLine& line) {
                 continue;
             }
             if (!operand.ast) {
-                emit errorOccurred(QStringLiteral("CALLF 参数缺少装载期 AST at %1 raw[%2]=<%3> line=<%4>")
+                reportError(QStringLiteral("CALLF 参数缺少装载期 AST at %1 raw[%2]=<%3> line=<%4>")
                     .arg(line.position.toString()).arg(i).arg(operand.raw, line.raw));
                 return ExecState::Error;
             }
@@ -1327,7 +1337,7 @@ ExecState ScriptRunner::executeLine(const LogicalLine& line) {
         // over the per-axis intersection without resizing either declaration.
         const auto failCopy = [&](const QString& reason) {
             m_state->setErrorState();
-            emit errorOccurred(QStringLiteral("ARRAYCOPY (%1): %2").arg(line.position.toString(), reason));
+            reportError(QStringLiteral("ARRAYCOPY (%1): %2").arg(line.position.toString(), reason));
             return ExecState::Error;
         };
         if (ops.size() != 2) return failCopy(QStringLiteral("需要两个字符串参数"));
@@ -1448,7 +1458,7 @@ ExecState ScriptRunner::executeLine(const LogicalLine& line) {
             ExpressionEvaluator& ev = getEvaluator();
             if (!a0.ast && !a0.isString) {
                 m_state->setErrorState();
-                emit errorOccurred(QStringLiteral("%1 参数缺少装载期 AST：%2").arg(name, a0.raw));
+                reportError(QStringLiteral("%1 参数缺少装载期 AST：%2").arg(name, a0.raw));
                 return ExecState::Error;
             }
             if (isStr) {
@@ -1740,7 +1750,7 @@ ExecState ScriptRunner::executeLine(const LogicalLine& line) {
                                   : m_state->setBeginKeyword(keyword, &error, QString(), force);
         if (!ok) {
             m_state->setErrorState();
-            emit errorOccurred(error);
+            reportError(error);
             return ExecState::Error;
         }
         // 对齐 C# BEGIN_Instruction：state.SetBegin() 会清空函数列表（忘记 CALL
@@ -1776,7 +1786,7 @@ ExecState ScriptRunner::executeLine(const LogicalLine& line) {
     case RunnerInstruction::LOADGAME: {
         if (!m_state->canSave()) {
             m_state->setErrorState();
-            emit errorOccurred(QStringLiteral("@%1 中不能执行 SAVEGAME/LOADGAME 命令")
+            reportError(QStringLiteral("@%1 中不能执行 SAVEGAME/LOADGAME 命令")
                                    .arg(m_table->currentFrame().callLabel));
             return ExecState::Error;
         }
@@ -1888,7 +1898,7 @@ ExecState ScriptRunner::executeLine(const LogicalLine& line) {
                                  || sst == SystemStateCode::Train_CallEventComEnd;
         if (!inTrainFlow) {
             m_state->setErrorState();
-            emit errorOccurred(QStringLiteral("DOTRAIN 命令不能在此位置执行"));
+            reportError(QStringLiteral("DOTRAIN 命令不能在此位置执行"));
             return ExecState::Error;
         }
         qint64 train = 0;
@@ -1897,7 +1907,7 @@ ExecState ScriptRunner::executeLine(const LogicalLine& line) {
                 line.arguments.isEmpty() ? QString() : line.arguments.first().raw, train);
         if (train < 0 || train >= m_machine->trainCount()) {
             m_state->setErrorState();
-            emit errorOccurred(QStringLiteral("DOTRAIN 的值超出 TRAINNAME 范围"));
+            reportError(QStringLiteral("DOTRAIN 的值超出 TRAINNAME 范围"));
             return ExecState::Error;
         }
         // CALLTRAIN 处理途中执行 DOTRAIN -> CALLTRAIN 剩余部分作废（文档/C# 明确）
@@ -1959,7 +1969,7 @@ bool ScriptRunner::startEventCallChain(const QString& label)
         if (anyNonEvent) {
             // C#：对普通函数做 EVENT 调用是错误（CompatiCallEvent 兼容项）
             m_state->setErrorState();
-            emit errorOccurred(QStringLiteral("イベント関数でない関数@%1に対しEVENT呼び出しが行われました").arg(label));
+            reportError(QStringLiteral("イベント関数でない関数@%1に対しEVENT呼び出しが行われました").arg(label));
         }
         return false;
     }
@@ -2094,7 +2104,7 @@ ExecState ScriptRunner::doCallLine(const LogicalLine& line, bool isForm, bool is
         // + ARRAYCOPY 填出来的名单，尾部空位是正常现象）。
         if (isTry) return tryFail();
         m_state->setErrorState();
-        emit errorOccurred(QStringLiteral("CALL label not found: (空)"));
+        reportError(QStringLiteral("CALL label not found: (空)"));
         return ExecState::Error;
     }
     // TRY 系探针：hasCallableLabel（O(1) 全局 @标签索引，与下方 callLabel 的
@@ -2200,7 +2210,7 @@ ExecState ScriptRunner::doCallLine(const LogicalLine& line, bool isForm, bool is
             return tryFail();
         }
         m_state->setErrorState();
-        emit errorOccurred(QStringLiteral("CALL label not found: %1").arg(label));
+        reportError(QStringLiteral("CALL label not found: %1").arg(label));
         return ExecState::Error;
     }
     return ExecState::Continue;

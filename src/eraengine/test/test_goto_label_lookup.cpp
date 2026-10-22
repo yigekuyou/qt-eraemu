@@ -490,6 +490,40 @@ static void testB() {
     check(h.errors.isEmpty(), "b 场景没有 errorOccurred");
 }
 
+// ---- A) 同名标签分处两个脚本：答案只能来自唯一索引的全序第一条 ------------
+// 被删掉的 ErbLoader 裸名表是「名字 -> (script, line)」的最后一笔写入：
+// 键大小写敏感、重复声明 last-wins、没有脚本维度。a.ERB 先装、z.ERB 后装时
+// 它会答 z.ERB —— 与唯一索引的口径（脚本名 QString::compare 最小的 a.ERB）
+// 相反。这里用真 EraParseTable 装载，钉住索引口径。
+static void testSameNameAcrossScripts() {
+    qDebug() << "\n2b) 同名标签分处两个脚本：唯一索引口径（脚本名 -> 行号 全序第一条）";
+    const auto probe = [](const QStringList& order, const QString& name) -> QString {
+        Harness h;
+        for (const QString& script : order) {
+            if (script == QLatin1String("a.ERB")) {
+                h.load(script, {QStringLiteral("@A"), QStringLiteral("$SHARED"),
+                                QStringLiteral("RETURN")});
+            } else {
+                h.load(script, {QStringLiteral("@Z"), QStringLiteral("$SHARED"),
+                                QStringLiteral("RETURN")});
+            }
+        }
+        h.table.markLoadComplete();
+        ScriptView view;
+        view.labelIndex = &h.table.labelIndex();
+        const LabelRef* ref = position::firstLabel(view, name, /*callableOnly=*/false);
+        return ref ? QStringLiteral("%1:%2").arg(ref->script).arg(ref->line)
+                   : QStringLiteral("<none>");
+    };
+    checkStr(probe({QStringLiteral("a.ERB"), QStringLiteral("z.ERB")}, QStringLiteral("SHARED")),
+             QStringLiteral("a.ERB:1"),
+             "a 先装 / z 后装 -> a.ERB:1（不是最后写入的 z.ERB）");
+    checkStr(probe({QStringLiteral("z.ERB"), QStringLiteral("a.ERB")}, QStringLiteral("SHARED")),
+             QStringLiteral("a.ERB:1"), "装载序反过来 -> 仍是 a.ERB:1（全序与装载序无关）");
+    checkStr(probe({QStringLiteral("a.ERB"), QStringLiteral("z.ERB")}, QStringLiteral("shArEd")),
+             QStringLiteral("a.ERB:1"), "混合大小写查询同解（索引键大写折叠）");
+}
+
 // ---- c) 找不到标签 ---------------------------------------------------------
 static void testC() {
     qDebug() << "\n5) c) 找不到 $ 标签：进入错误状态且位置不变";
@@ -505,10 +539,15 @@ static void testC() {
 
     check(st == ExecState::Error, "GOTO NOPE -> ExecState::Error");
     check(h.state.getExecState() == ExecState::Error, "ProcessState 进入错误状态");
-    check(!h.errors.isEmpty(), "发过 errorOccurred");
+    // 一次失败只留一条有用的消息：GOTO 的具体消息之后，stepOnce 不再补发
+    // 泛化的 "execution error"（旧实现会发两条，宿主显示最后一条时玩家只看到
+    // "execution error"）。
+    checkInt(int(h.errors.size()), 1, "恰好一条 errorOccurred（不补发泛化 execution error）");
     if (!h.errors.isEmpty()) {
         check(h.errors.first().contains(QStringLiteral("GOTO label not found: NOPE")),
               "错误消息含 \"GOTO label not found: NOPE\"");
+        check(!h.errors.contains(QStringLiteral("execution error")),
+              "没有泛化的 \"execution error\"");
     }
     // 位置不变 = 一条 positionChanged 都没发（位置只能经由 setPosition/advance 改变）。
     check(h.positions.isEmpty(), "错误路径不发 positionChanged（位置不变）");
@@ -546,6 +585,7 @@ static void testE() {
     h2.errors.clear();
     check(h2.runner.runToCompletion() == ExecState::Error,
           "@HEADERFN 里 GOTO HEADER -> 错误（文件头段的 $ 不属于本段）");
+    checkInt(int(h2.errors.size()), 1, "恰好一条 errorOccurred（不补发泛化 execution error）");
     check(!h2.errors.isEmpty()
               && h2.errors.first().contains(QStringLiteral("GOTO label not found: HEADER")),
           "错误消息含 \"GOTO label not found: HEADER\"");
@@ -682,6 +722,7 @@ int main(int argc, char** argv) {
 
     testFirstGotoLabelUnit();
     testTableAndExecution();
+    testSameNameAcrossScripts();
     testA();
     testB();
     testC();

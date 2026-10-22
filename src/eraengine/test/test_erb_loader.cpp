@@ -21,6 +21,8 @@
 #include <QFile>
 #include <QStringList>
 #include "erb_loader.h"
+#include "era_parse_table.h"
+#include "process_state.h"
 
 inline void printStep(int num, const QString& desc) {
 		qDebug().nospace() << "\n" << num << ". " << desc;
@@ -36,7 +38,12 @@ int main(int argc, char *argv[]) {
 		printStep(1, QString("Testing directory: %1").arg(testDir));
 
 		printStep(2, "Creating ErbLoader");
+		// 标签查询只有一份数据：EraParseTable 的唯一索引（裸名/大小写敏感/
+		// last-wins 的裸名表已删）。
+		ProcessState state;
+		EraParseTable parseTable(&state);
 		ErbLoader loader;
+		loader.setParseTable(&parseTable);
 		qDebug() << "   ErbLoader created successfully";
 
 		printStep(3, "Loading ERB files from directory");
@@ -68,13 +75,18 @@ int main(int argc, char *argv[]) {
 				qDebug().nospace() << "   Script \"" << it.key() << "\" is at path: " << loader.getScriptPath(it.key());
 		}
 
-		printStep(6, "Testing label lookup");
+		printStep(6, "Testing label lookup (EraParseTable::labelIndex)");
+		// 全部装载结束再定型：索引的全序（脚本名 -> 行号）在收尾时固化。
+		parseTable.markLoadComplete();
 		const QStringList sampleLabels = {"START", "END", "MAIN"};
 		for (const QString& label : sampleLabels) {
-				if (const LogicalLine* labelLine = loader.findLabel(label)) {
-						qDebug().nospace() << "   Found label @" << label << " at line " << labelLine->position.lineNumber;
+				const QList<LabelRef> refs = parseTable.labelIndex().value(label.toUpper());
+				if (!refs.isEmpty()) {
+						qDebug().nospace() << "   Found label " << label << " at "
+										   << refs.first().script << ":" << refs.first().line
+										   << " (" << refs.size() << " declaration(s))";
 				} else {
-						qDebug().nospace() << "   Label @" << label << " not found";
+						qDebug().nospace() << "   Label " << label << " not found";
 				}
 		}
 

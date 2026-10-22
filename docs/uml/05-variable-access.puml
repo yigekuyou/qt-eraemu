@@ -64,6 +64,16 @@ note right
   多维 = 装载期按 lengths 乘积真实分配（上限 4e6），
   strides 写进声明，运行期只做 Σidx*stride + 一次边界判断。
   越界读 0、写 qWarning 后忽略 —— 多维不再偷偷扩容。
-  VARSIZE(name) / VARSIZE(name,dim) / 数组长度三者读同一份形状。
+
+  形状（维数 / 每维长度 / 元素总数）只有一份、只有一个入口：
+  VariableStorage::shapeOf(name, scope) → { lengths, elementCount, lengthOf(d) }
+  回落顺序只在那里，且只看装载期事实：
+    1) 声明（VariableDecl::lengths / elementCount；含 CHARADATA 与 REF 目标）
+    2) 无声明 → VariableConfig（VariableSize.csv，装载期尺寸表）
+    3) 未声明的运行期多维容器 → 外接几何（1D 槽位数不是形状）
+  读者全部走它、不再各自回落：VARSIZE 函数、VARSIZE 语句（逐维写 RESULT）、
+  arraySize / arrayLengths、多维下标翻译与越界判定。
+  容器当前分配量叫 allocatedSlots —— 容器事实，不是形状
+  （旧名 arraySizeRaw 会被误当成形状读者）。
 end note
 @enduml

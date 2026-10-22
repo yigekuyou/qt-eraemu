@@ -107,6 +107,8 @@ title 表达式 AST 与变量访问描述符
     + readIntByName(name, indices, scope) : qint64   ' 唯一按名读原语
     + writeIntByName(name, indices, value, scope)    ' 唯一按名写原语
     + storageKeyFor(key) : const QString&       ' 唯一 id→存储串入口（记忆化）
+    + shapeOf(name, scope) : ArrayShape         ' 形状唯一入口（声明 → 装载期尺寸表 → 多维几何）
+    + allocatedSlots(key) : int                 ' 容器分配量（不是形状）
     + getGlobalInt1DRaw(key, x) / setGlobalInt1DRaw(key, x, v)
     + getStringSlotRaw(key, indices) : FlatStringValue
     + getLocalInt / getArgInt / setLocalInt / setArgInt
@@ -152,6 +154,9 @@ note right of VariableKey
 end note
 
 note right of VariableStorage
+  形状也是装载期事实，只有一个入口 `shapeOf`：
+  `VARSIZE` 函数 / `VARSIZE` 语句 / `arraySize` / `arrayLengths` /
+  多维下标翻译都读它；容器当前分配量（`allocatedSlots`）不是形状。
   私有名表是**装载期的静态事实**：
   * 由声明（scope == Local）建一次，随装载收尾安装进来
   * 安装后 setPrivateScope 只写 m_privateScopeName / m_privateScopeId，

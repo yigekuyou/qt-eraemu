@@ -100,8 +100,16 @@ plantuml -txmi docs/uml/01-load-classes.puml
 - **单维与多维是两种形态**：单维沿用扁平容器 + 懒扩容；多维在装载期按 `lengths`
   乘积真实分配（上限 `4'000'000`，语料实测最大 1e6），`strides` 写进声明，
   运行期只做 `Σ idx*stride` 加一次边界判断；越界读 0、写 `qWarning` 后忽略
-  （不再有「首次写时偷偷扩容」）。`VARSIZE(name)`、`VARSIZE(name,dim)` 与数组长度
-  读同一份形状 —— 此前三者各说各的（`#DIM X,2,50,5` 的 `VARSIZE` 曾得 2）。
+  （不再有「首次写时偷偷扩容」）。
+- **形状只有一份、一个入口**：`VariableStorage::shapeOf(name, scope)` 返回
+  `{ lengths, elementCount, lengthOf(d) }`，回落顺序**只在那里**：声明（`VariableDecl::lengths`
+  / `elementCount`，含 CHARADATA 与 REF 目标）→ 无声明时 `VariableConfig`（`VariableSize.csv`，
+  装载期尺寸表）→ 未声明的运行期多维容器（外接几何；1D 槽位数**不是**形状）。
+  `VARSIZE` 函数、`VARSIZE` 语句（逐维写 `RESULT`）、`arraySize` / `arrayLengths`、
+  多维下标翻译与越界判定全部读它，不再各自回落。容器当前分配量叫 `allocatedSlots`
+  —— 它是容器事实，旧名 `arraySizeRaw` 会被误当成形状读者（那条回落链曾让
+  `VARSIZE(TA)`（3D）恒 0、`VARSIZE(U1,3)` 回落成首维、CHARADATA 多维恒 0，
+  `arraySize` 还按「当前帧」解析而与 `VARSIZE` 不一致）。
 - **装载阶段是显式状态机**：`LoadPhase { Empty, Loading, Bound, Finalized }`。每个公开入口声明它要求的
   阶段；越界调用 = `qWarning` + no-op（不 assert —— release 下也必须安全，且诊断容器不变）。
 - **诊断按 pass 切片，重跑幂等**：`DiagOrigin { Load, Pass1..Pass7 }`。每一步建独立 sink，
@@ -117,7 +125,7 @@ plantuml -txmi docs/uml/01-load-classes.puml
   `finalizeBindings()` 末尾 `installPrivateScopeTable()` 装进存储层。安装后 `setPrivateScope` 只写
   当前帧（无 insert / reserve / 循环），正确性不再依赖调用方把 `names` 传全。
 - **收尾分三层，输入类型不同**：`parsecheck` 收全 `const` 的 `ParseIrView`（4/5/6，输出只有诊断）；
-  `loadpass` 收可写的 `LoadContext`（1/2/3，纯数据视图，12 个字段：scripts / variables / functions /
+  `loadpass` 收可写的 `LoadContext`（1/2/3，纯数据视图，11 个字段：scripts / variables / functions /
   constantTable / storage / evaluator / gameBaseData / labelIndex / paramNames / 两个 bool 引用）；
   它**没有** `diagnostics` 字段（诊断是每步一个 sink），也**没有**运行期位置（作用域是 `evaluate()`
   的参数——曾经靠「解释器在哪一行」反推私有常数作用域，装载期会解析到错误的函数）；
@@ -181,15 +189,16 @@ plantuml -txmi docs/uml/01-load-classes.puml
 `dump_warnings` 五语料（`eraTW` / `eraMegaten` / `eraTetris` / `FL3.8` / `ecd`）：
 **6 / 2 / 0 / 0 / 0** 行（`eraMegaten` 的目录参数必须是 `eraMegaten/data`；用错路径会得到
 0 字节的假基线），与 `/tmp/uml-baseline/*.raw.txt` **未排序**逐字节相同。
-累计三十个重构（身份整数化 / 全定型 / 作用域显式化 / 只读收尾外移 / 存档独立映射 /
+累计三十一个重构（身份整数化 / 全定型 / 作用域显式化 / 只读收尾外移 / 存档独立映射 /
 私有名表前移 / 存档顺序确定性 / 写收尾外移 / 标记区外移 / 位置区外移 /
 标签归属单一索引 / 诊断切片幂等 / 常数作用域参数化 / 增量装载协议显式化 /
 GOTO 段身份入索引 / 静态检查用段身份 / 删第三张裸名表 / 错误去重 / 配对语法只判一次 /
-越界判定只判一次 / 常量下标装载期求值 / 多维独立形态 / 私有作用域按段身份 / 存档版本常数化 / LSP 侧段身份 / 函数表按脚本换贡献 / 删装载器第二份脚本清单 / CALL 入口吃段身份原文 / 删标记区三张整表副本 / 删 ScriptData::jumpTo）前后完全一致；
-`ctest` 48 → 59（新增 `test_parse_checks` / `test_save_variable_map` / `test_private_scope_table` /
+越界判定只判一次 / 常量下标装载期求值 / 多维独立形态 / 私有作用域按段身份 / 存档版本常数化 / LSP 侧段身份 / 函数表按脚本换贡献 / 删装载器第二份脚本清单 / CALL 入口吃段身份原文 / 删标记区三张整表副本 / 删 ScriptData::jumpTo /
+ 数组形状单一入口）前后完全一致；
+`ctest` 48 → 60（新增 `test_parse_checks` / `test_save_variable_map` / `test_private_scope_table` /
 `test_load_contracts` / `test_save_variable_map_hashseed` / `test_jump_markings` /
 `test_position_state` / `test_goto_label_lookup` / `test_structure_pairing` / `test_index_bounds` /
-`test_segment_scope`）。
+`test_segment_scope` / `test_array_shape`）。
 
 装载耗时（eraTW，2260 文件 / 2.11M 逻辑行，12 线程）：`load` 41 s → **22.8 s**
 （scan 129 ms / parse 8.4 s / merge 4.9 s），收尾 `markLoadComplete` 23.3 s → 6.5 s，

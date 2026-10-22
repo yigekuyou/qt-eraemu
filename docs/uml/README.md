@@ -80,6 +80,13 @@ plantuml -txmi docs/uml/01-load-classes.puml
   体内非法指令运行期照旧配对、静态跳过该行。哨兵值也一并消失：`jumpTo` 只含已解析目标，
   `-1` 有名字（`kNoJumpTarget`），`SIF` 跳 `lines.size()` 写明是合法位置；
   `test_structure_pairing` 用 31 个夹具 / 24 组逐字诊断把每个异常形态钉住。
+- **越界判定只有一份，谁报什么是一张表**：`GameData/ast/index_bounds.{h,cpp}` 提供
+  唯一判定（维数/越界/常量下标/常量除零）与唯一文案；`issuePolicy(Kind)` 决定
+  `severity / effect / producer`。八类事实各有唯一生产者：`TooManyIndices`、
+  `DimensionMismatch`、`DeclaredLiteralOutOfRange`、`ConstantDivisionByZero` → 3/6 且
+  `RejectLine`；`NegativeConstantIndex`、`SystemSizeExceeded`、`UnknownStringIndex`、
+  `DynamicDivisionByZero` → 6/6 且 `ReportOnly`。6/6 对 `line.isError` 的行整体让位
+  （它是 3/6 的残余）。此前两侧已矛盾：`PRINTV 10 / 0` 同一行既 RejectLine 又 ReportOnly。
 - **装载阶段是显式状态机**：`LoadPhase { Empty, Loading, Bound, Finalized }`。每个公开入口声明它要求的
   阶段；越界调用 = `qWarning` + no-op（不 assert —— release 下也必须安全，且诊断容器不变）。
 - **诊断按 pass 切片，重跑幂等**：`DiagOrigin { Load, Pass1..Pass7 }`。每一步建独立 sink，
@@ -158,13 +165,13 @@ plantuml -txmi docs/uml/01-load-classes.puml
 `dump_warnings` 五语料（`eraTW` / `eraMegaten` / `eraTetris` / `FL3.8` / `ecd`）：
 **6 / 2 / 0 / 0 / 0** 行（`eraMegaten` 的目录参数必须是 `eraMegaten/data`；用错路径会得到
 0 字节的假基线），与 `/tmp/uml-baseline/*.raw.txt` **未排序**逐字节相同。
-累计十九个重构（身份整数化 / 全定型 / 作用域显式化 / 只读收尾外移 / 存档独立映射 /
+累计二十个重构（身份整数化 / 全定型 / 作用域显式化 / 只读收尾外移 / 存档独立映射 /
 私有名表前移 / 存档顺序确定性 / 写收尾外移 / 标记区外移 / 位置区外移 /
 标签归属单一索引 / 诊断切片幂等 / 常数作用域参数化 / 增量装载协议显式化 /
-GOTO 段身份入索引 / 静态检查用段身份 / 删第三张裸名表 / 错误去重 / 配对语法只判一次）前后完全一致；
-`ctest` 48 → 57（新增 `test_parse_checks` / `test_save_variable_map` / `test_private_scope_table` /
+GOTO 段身份入索引 / 静态检查用段身份 / 删第三张裸名表 / 错误去重 / 配对语法只判一次 / 越界判定只判一次）前后完全一致；
+`ctest` 48 → 58（新增 `test_parse_checks` / `test_save_variable_map` / `test_private_scope_table` /
 `test_load_contracts` / `test_save_variable_map_hashseed` / `test_jump_markings` /
-`test_position_state` / `test_goto_label_lookup` / `test_structure_pairing`）。
+`test_position_state` / `test_goto_label_lookup` / `test_structure_pairing` / `test_index_bounds`）。
 
 装载耗时（eraTW，2260 文件 / 2.11M 逻辑行，12 线程）：`load` 41 s → **22.8 s**
 （scan 129 ms / parse 8.4 s / merge 4.9 s），收尾 `markLoadComplete` 23.3 s → 6.5 s，

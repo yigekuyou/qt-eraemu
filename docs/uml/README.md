@@ -96,6 +96,12 @@ plantuml -txmi docs/uml/01-load-classes.puml
   只是过滤）。CALL / GOTO / `getLabelPosition` / `hasLabel` 因此是同一个答案。
   曾有三张表（索引、`ScriptData::labelPositions` last-wins、`ErbLoader::m_labelPositions`
   的 `"script:label"` 拼接串且大小写敏感）能对同一个名字给出三个行号——后两张已删除。
+  每条 `LabelRef` 还带 `functionLine`（所属函数段的起点行，文件头段为 `-1`）：
+  GOTO 的「`$` 只在本函数内」因此是一次**字段比较**（`firstGotoLabel`），
+  不是运行期从函数头扫行。段身份由调用方给：有帧 = 帧的 `entryLine`（所以
+  `callLabelAt` 进入同名函数的第二份声明时也只命中正在执行的那一份），
+  无帧 = `executionScope()` 回查。eraTW 实测：`ownerFunction` 与「最近前置 `@`」
+  2,111,136 行 0 处不一致，833 个 `$` 标签的 `functionLine` 0 处不一致。
 - **常数解析的作用域是参数**：`setConstProvider` / `setConstArrayChecker` / `setConstArraySizeProvider` /
   `setConstArrayProvider` 四个回调都收 `eravar::ScopeId`（`evaluate()` 的第四参数原样转发），
   回调不得自己推导作用域。装载期因此按「这行所属函数」解析私有常数，而不是按「解释器停在哪一行」。
@@ -137,12 +143,13 @@ plantuml -txmi docs/uml/01-load-classes.puml
 `dump_warnings` 五语料（`eraTW` / `eraMegaten` / `eraTetris` / `FL3.8` / `ecd`）：
 **6 / 2 / 0 / 0 / 0** 行（`eraMegaten` 的目录参数必须是 `eraMegaten/data`；用错路径会得到
 0 字节的假基线），与 `/tmp/uml-baseline/*.raw.txt` **未排序**逐字节相同。
-累计十四个重构（身份整数化 / 全定型 / 作用域显式化 / 只读收尾外移 / 存档独立映射 /
+累计十五个重构（身份整数化 / 全定型 / 作用域显式化 / 只读收尾外移 / 存档独立映射 /
 私有名表前移 / 存档顺序确定性 / 写收尾外移 / 标记区外移 / 位置区外移 /
-标签归属单一索引 / 诊断切片幂等 / 常数作用域参数化 / 增量装载协议显式化）前后完全一致；
-`ctest` 48 → 55（新增 `test_parse_checks` / `test_save_variable_map` / `test_private_scope_table` /
+标签归属单一索引 / 诊断切片幂等 / 常数作用域参数化 / 增量装载协议显式化 /
+GOTO 段身份入索引）前后完全一致；
+`ctest` 48 → 56（新增 `test_parse_checks` / `test_save_variable_map` / `test_private_scope_table` /
 `test_load_contracts` / `test_save_variable_map_hashseed` / `test_jump_markings` /
-`test_position_state`）。
+`test_position_state` / `test_goto_label_lookup`）。
 
 装载耗时（eraTW，2260 文件 / 2.11M 逻辑行，12 线程）：`load` 41 s → **22.8 s**
 （scan 129 ms / parse 8.4 s / merge 4.9 s），收尾 `markLoadComplete` 23.3 s → 6.5 s，

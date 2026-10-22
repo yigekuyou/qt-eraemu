@@ -31,6 +31,8 @@ package "GameProc" {
     + scripts() / variableTable() / variableStorage()   ' 只读 getter
     + labels(name) / hasLabel(name)  ' 都查同一张 m_labelIndex
     + getLabelPosition(script, label) ' = firstLabel(…, onlyScript)->line
+    + firstGotoLabelPosition(script, segment, label)  ' GOTO 一次查表
+    + currentFunctionSegment() : int  ' 有帧=帧的 entryLine；无帧=ownerFunction 回查
     + setPosition / advance / jumpToLabel / callLabel / returnFromCall
                                   ' 位置区壳子：打包视图 → position → emitEffects
     - makeIrView() : ParseIrView ' 只做指针打包
@@ -135,6 +137,8 @@ package "GameProc" {
       labelIndex : const QHash<QString,QList<LabelRef>>*
       ' 裸标签名（大写折叠）→ 全部声明的全序列表
       ' 全序 = 脚本名 compare 升序 → 同脚本行号升序
+      ' 每条 LabelRef 带 functionLine（所属段起点）—— GOTO 的
+      ' 「$ 只在本函数内」于是是一次字段比较，不是运行期扫行
     }
     class "位置区" as PosFns {
       setPosition / advance / jumpToLine / jumpToLabel
@@ -142,6 +146,7 @@ package "GameProc" {
       returnFromCall / switchToMemorySpace / reset
       resolveCallableLabel / resolveJumpTarget / resolveJumpToScript
       firstLabel(state, view, name, callableOnly, onlyScript)  ' 唯一择一规则：全序第一条
+      firstGotoLabel(view, name, script, segment)  ' GOTO：非 @ + 同脚本 + 同段
       executionScope / executionScopeId
       setLineInternal / pushFrame / popFrame / lineCount   ' 基元
     }
@@ -263,6 +268,7 @@ note right of PosFns
   「裸标签属于哪个脚本」只有一张索引、一个全序（脚本名 → 行号）、
   一个择一规则（firstLabel 取全序第一条）。CALL / GOTO / getLabelPosition /
   hasLabel 全都查它，所以同一个名字只有一个行号。
+  GOTO 的段身份也在这张表上（LabelRef::functionLine）：装载期写、运行期只比字段。
   顺序由壳子的 emitEffects 写死（规范序 callStack → space → position → jump），
   clear() 是唯一的反序例外（position 先、callStack 后），
   两条都由 test_position_state 录信号钉住。

@@ -37,7 +37,7 @@ class VariableStorage;
 class VariableTable;
 
 // ---------------------------------------------------------------------------
-// 装载收尾的**写**步骤：kLoadPasses 里的 1/2/3 号 pass
+// 装载收尾的**写**步骤：收尾 pass 表（EraParseTable::m_loadPasses）的 1/2/3 号
 //
 // 与 parse_checks.h 的只读步骤相反，这三步就地改写 IR（变量类型、赋值 AST、
 // 函数调用节点）并安装常量求值器/私有名表，因此需要一份**可写的**数据视图：
@@ -111,7 +111,7 @@ OperandType userCallReturnType(const QHash<QString, UserFunctionInfo>& functions
 const QSet<QString>* paramNamesOf(const QHash<QString, QSet<QString>>& paramNames,
                                   const QString& scopeKey);
 
-// ---- 收尾写步骤（kLoadPasses 的 1/2/3） -----------------------------------
+// ---- 收尾写步骤（收尾 pass 表的 1/2/3） -----------------------------------
 // 诊断收进调用方给的 sink（本次 pass 运行独占），不写入 LoadContext：
 // pass 驱动随后用 ParseDiagnostics::replaceOrigin 整体替换该 pass 的切片。
 // 全局声明定稿（常量/维数求值器 + 维数 + 全局初值 + 用户函数类型，幂等）。

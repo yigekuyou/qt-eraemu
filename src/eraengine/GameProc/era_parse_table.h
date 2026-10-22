@@ -24,6 +24,10 @@
 #include <QList>
 #include <QMetaType>
 #include <QSharedPointer>
+#include <array>
+#include <functional>
+#include <type_traits>
+#include <utility>
 #include "ast/logical_line.h"
 #include "ast/variable_table.h"
 #include "ast/user_function.h"
@@ -569,7 +573,7 @@ private:
 
     // ---- 收尾写步骤（1/2/3 号 pass）只有自由函数实现 ----------------------
     // 实现已整体搬到 load_passes.cpp（自由函数，输入是可写的 LoadContext）；
-    // kLoadPasses 直接指向自由函数，类内不再有 1/2/3 的成员入口。
+    // pass 表的 1/2/3 直接指向自由函数，类内不再有 1/2/3 的成员入口。
     // 唯一保留的成员入口是 resolveGlobalDeclarations —— 装载期预登记结算
     // （finishDeclarationPreRegistration）在收尾开始前就要用它。
     void resolveGlobalDeclarations();
@@ -605,28 +609,52 @@ private:
     // 因此默认关闭、真实游戏一般不开。开启后也用同一套判据，避免误报。
     // 实现 = runCheckNotCalledFunctions（pass 表条目，origin=Pass7）。
 
-    // 收尾 pass 表条目（定义见 .cpp 的 EraParseTable::kLoadPasses）。
+    // 收尾 pass 表条目（定义见 .cpp 的 EraParseTable::makeLoadPasses）。
     // 表的顺序就是执行顺序；日志文案也来自这里，新增步骤只改表。
     // 门控是**数据**（Gate），不是「读某个 bool 的 if」：markLoadComplete 里
     // 只有一处按 Gate 求值，增删开关不必再改驱动逻辑。
     // origin 也是**数据**：切片身份 = pass 编号（1..7），驱动把每一步的产出
     // 整体替换到自己的 origin 切片里 —— 门控关闭时替换为空，旧切片不残留。
     enum class LoadPassGate : quint8 { Always, NotCalledWarning };
-    struct LoadPass {
-        const char* label;                        // 日志步骤名（含 "N/6" 编号）
-        // 1/2/3 号步骤：吃 LoadContext 的自由函数（实现已搬到 load_passes.cpp）。
+
+    // 一步收尾的**唯一**可调用形态：不可默认构造（= 不可为空）。
+    // 1/2/3 号步骤装 `&loadpass::xxx`（签名已匹配：可写 LoadContext + sink），
+    // 4/5/6/7 号步骤装只捕获 this 的 lambda（转调私有 run*，只写 sink）。
+    // 旧实现是「自由函数指针 + 成员函数指针」两个字段 + 一句「恰有一个非空」
+    // 的注释 + 驱动里一处 if 分派；现在这三种「形态组合」（都空 / 都非空 /
+    // 谁是哪一个）在类型上**不存在**，驱动只有一种调用写法。
+    // 捕获物只有一个指针（或本身就是函数指针），落在 std::function 的 SBO
+    // 缓冲里，建表与调用都不分配堆内存。
+    class PassAction {
+    public:
+        template <typename F>
+        PassAction(F&& f) : m_fn(std::forward<F>(f)) {
+            // 连「装一个 nullptr」这个唯一的空入口也堵上（std::function 有
+            // nullptr_t 构造 -> 空函数）。表项只能装真正可调用的东西。
+            static_assert(!std::is_same_v<std::decay_t<F>, std::nullptr_t>,
+                          "收尾 pass 的可调用体不可为空");
+        }
+        void operator()(loadpass::LoadContext& ctx, ParseDiagnostics& sink) const {
+            m_fn(ctx, sink);
+        }
+    private:
         // 第二个参数是**本次运行的独立 sink**（不放进 LoadContext：视图会被
         // installPrivateScopes 之类逃逸的 lambda 按值捕获，窄生命周期引用会悬空）。
-        void (*fn)(loadpass::LoadContext&, ParseDiagnostics&);
-        // 4/5/6/7 号步骤的成员入口（私有 run* 形态：只写调用方给的 sink，
-        // 不自己做 replaceOrigin —— 盖章与切片替换只在驱动里发生一次）。
-        // fn 与 memberFn 恰有一个非空，由 markLoadComplete 的那一处 if 分派。
-        void (EraParseTable::*memberFn)(ParseDiagnostics&) const;
+        std::function<void(loadpass::LoadContext&, ParseDiagnostics&)> m_fn;
+    };
+
+    struct LoadPass {
+        const char* label;                        // 日志步骤名（含 "N/6" 编号）
+        PassAction run;                           // 本步唯一的可调用体（不可为空）
         DiagOrigin origin;                        // 该步的诊断切片身份
         LoadPassGate gate;                        // 受哪个开关门控（数据）
         LoadPhase phaseAfter;                     // 本步完成后允许进入的阶段（数据）
     };
-    static const LoadPass kLoadPasses[7];
+    // 表是**实例成员**（不是 static）：4/5/6/7 的可调用体要绑 this。
+    // 构造函数里一次性建好（makeLoadPasses），此后只读，运行期不改表。
+    std::array<LoadPass, 7> m_loadPasses;
+    // 建表：1/2/3 直接存自由函数指针；4/5/6/7 存只捕获 self 的 lambda。
+    static std::array<LoadPass, 7> makeLoadPasses(EraParseTable& self);
     [[nodiscard]] bool isGateOpen(LoadPassGate gate) const;
     // 只读步骤的统一守卫：阶段不符 -> qWarning + false（调用方 no-op）；
     // 阶段符合 -> true。不记录运行次数：每个 pass 的诊断按 origin 切片替换，

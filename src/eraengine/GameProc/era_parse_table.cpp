@@ -51,6 +51,10 @@
 
 EraParseTable::EraParseTable(ProcessState* state, ExecutionEngine* execEngine, QObject* parent)
     : QObject(parent)
+    // 表的初始化顺序必须跟声明顺序一致（-Werror=reorder）：m_loadPasses 在
+    // 私有段里声明在 m_state / m_executionEngine 之前。建表只捕获 this，
+    // 不读任何成员，因此此时构造未完成也安全。
+    , m_loadPasses(makeLoadPasses(*this))
     , m_state(state)
     , m_executionEngine(execEngine)
 {
@@ -1352,7 +1356,7 @@ void EraParseTable::applyScopedVariableLine(LogicalLine& line, const QString& fu
 // ---------------------------------------------------------------------------
 // 收尾步骤 4/5/6 + CALL 实参校验：实现已搬到 parse_checks.cpp（自由函数，输入是
 // 只读的 ParseIrView）。这里只留同名 forwarder —— 保住 public API（LSP / 测试 /
-// CLI 在用）与 kLoadPasses 表里的成员函数指针，行为与诊断逐条不变。
+// CLI 在用）与收尾 pass 表里的 lambda（转调这些 run*），行为与诊断逐条不变。
 //
 // 三个步骤**只读**：不写 m_scripts / 不改 AST / 不改装载状态。因此它们可以脱离
 // EraParseTable 单独调用（见 test_parse_checks.cpp）。
@@ -1578,19 +1582,46 @@ void EraParseTable::resolveGlobalDeclarations() {
 }
 
 // 收尾 pass 表：顺序 = 执行顺序（markLoadComplete 只负责按表驱动）。
+//   run        —— 本步唯一的可调用体（1/2/3 = loadpass 自由函数指针；
+//                 4/5/6/7 = 只捕获 self 的 lambda，转调私有 run*）；
 //   origin     —— 该步诊断切片的身份（数据；驱动端用 replaceOrigin 整体替换，
 //                 gate 关闭时替换为空）；
 //   gate       —— 该步受哪个开关门控（数据；驱动逻辑只有一处求值）；
 //   phaseAfter —— 该步完成后允许进入的阶段（数据；只读步骤 4-7 要求 Bound）。
-const EraParseTable::LoadPass EraParseTable::kLoadPasses[7] = {
-    {"1/6 全局声明定稿(resolveGlobalDeclarations)", &loadpass::resolveGlobalDeclarationsStep, nullptr, DiagOrigin::Pass1, LoadPassGate::Always, LoadPhase::Loading},
-    {"2/6 就地定型(finalizeBindings)",              &loadpass::finalizeBindings,               nullptr, DiagOrigin::Pass2, LoadPassGate::Always, LoadPhase::Loading},
-    {"3/6 参数校验(finalizeValidation)",            &loadpass::finalizeValidation,             nullptr, DiagOrigin::Pass3, LoadPassGate::Always, LoadPhase::Bound},
-    {"4/6 跳转目标解析(resolveStaticTargets)",      nullptr, &EraParseTable::runResolveStaticTargets, DiagOrigin::Pass4, LoadPassGate::Always, LoadPhase::Bound},
-    {"5/6 结构配对检查(checkStructures)",           nullptr, &EraParseTable::runCheckStructures,      DiagOrigin::Pass5, LoadPassGate::Always, LoadPhase::Bound},
-    {"6/6 静态值检查(checkStaticValues)",           nullptr, &EraParseTable::runCheckStaticValues,    DiagOrigin::Pass6, LoadPassGate::Always, LoadPhase::Bound},
-    {"7(可选) 未被调用函数检查(checkNotCalledFunctions)", nullptr, &EraParseTable::runCheckNotCalledFunctions, DiagOrigin::Pass7, LoadPassGate::NotCalledWarning, LoadPhase::Finalized},
-};
+std::array<EraParseTable::LoadPass, 7> EraParseTable::makeLoadPasses(EraParseTable& self) {
+    // 4/5/6/7 的 lambda 第一个参数**无名**：lambda 体内根本提不到可写的
+    // LoadContext，只能 self.runXxx(sink)；那些成员是 const，内部 makeIrView()
+    // 也只给出 const 指针 —— 「只读步骤不能写 IR」在编译期仍然成立，
+    // 且不依赖「驱动记得别传 ctx」这种纪律。
+    return {{
+        {"1/6 全局声明定稿(resolveGlobalDeclarations)", &loadpass::resolveGlobalDeclarationsStep,
+         DiagOrigin::Pass1, LoadPassGate::Always, LoadPhase::Loading},
+        {"2/6 就地定型(finalizeBindings)", &loadpass::finalizeBindings,
+         DiagOrigin::Pass2, LoadPassGate::Always, LoadPhase::Loading},
+        {"3/6 参数校验(finalizeValidation)", &loadpass::finalizeValidation,
+         DiagOrigin::Pass3, LoadPassGate::Always, LoadPhase::Bound},
+        {"4/6 跳转目标解析(resolveStaticTargets)",
+         [&self](loadpass::LoadContext&, ParseDiagnostics& sink) {
+             self.runResolveStaticTargets(sink);
+         },
+         DiagOrigin::Pass4, LoadPassGate::Always, LoadPhase::Bound},
+        {"5/6 结构配对检查(checkStructures)",
+         [&self](loadpass::LoadContext&, ParseDiagnostics& sink) {
+             self.runCheckStructures(sink);
+         },
+         DiagOrigin::Pass5, LoadPassGate::Always, LoadPhase::Bound},
+        {"6/6 静态值检查(checkStaticValues)",
+         [&self](loadpass::LoadContext&, ParseDiagnostics& sink) {
+             self.runCheckStaticValues(sink);
+         },
+         DiagOrigin::Pass6, LoadPassGate::Always, LoadPhase::Bound},
+        {"7(可选) 未被调用函数检查(checkNotCalledFunctions)",
+         [&self](loadpass::LoadContext&, ParseDiagnostics& sink) {
+             self.runCheckNotCalledFunctions(sink);
+         },
+         DiagOrigin::Pass7, LoadPassGate::NotCalledWarning, LoadPhase::Finalized},
+    }};
+}
 
 const char* EraParseTable::loadPhaseName(LoadPhase phase) {
     switch (phase) {
@@ -1632,7 +1663,7 @@ void EraParseTable::markLoadComplete() {
     }
     QElapsedTimer completeTimer;
     completeTimer.start();
-    for (const LoadPass& pass : kLoadPasses) {
+    for (const LoadPass& pass : m_loadPasses) {
         // 本次运行的诊断切片：独立 sink（不读旧诊断、不受旧切片影响）。
         ParseDiagnostics sink;
         // 先拿到「本次是否运行」的事实 —— gate 关闭的步骤也要走到下面的
@@ -1641,13 +1672,11 @@ void EraParseTable::markLoadComplete() {
         if (run) {
             const qint64 stepMs = completeTimer.elapsed();   // 每步重置 = 单步耗时口径
             qInfo().noquote() << "[parse] 收尾步骤" << pass.label << "开始";
-            if (pass.fn) {
-                // 视图只打包引用/指针；诊断 sink 是显式参数（不进视图，见 load_passes.h）。
-                loadpass::LoadContext ctx = makeLoadContext();
-                pass.fn(ctx, sink);
-            } else {
-                (this->*(pass.memberFn))(sink);
-            }
+            // 唯一的调用写法：7 条表项形态相同。LoadContext 只是引用/指针打包
+            // （无 I/O、无分配），4/5/6/7 的 lambda 参数无名、用不到它；
+            // 为「用不到」再分一次派就又把形态差异放回驱动了。
+            loadpass::LoadContext ctx = makeLoadContext();
+            pass.run(ctx, sink);
             m_phase = pass.phaseAfter;
             qInfo().noquote() << "[parse] 收尾步骤" << pass.label << "完成:"
                               << (completeTimer.elapsed() - stepMs) << "ms";

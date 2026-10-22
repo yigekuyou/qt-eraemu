@@ -86,7 +86,8 @@ enum class DiagEffect : quint8 {
 //                    例外：**同名脚本被替换装载**时，旧 AST 的那些行级事实
 //                    不再成立，用 removeOriginFiles() 精确移除该脚本的条目
 //                    （这不是重跑，见该函数说明）。
-//   Pass1..Pass7  —— kLoadPasses 的每一步：每次运行拥有**一个完整切片**，
+//   Pass1..Pass7  —— 收尾 pass 表（EraParseTable::m_loadPasses）的每一步：
+//                    每次运行拥有**一个完整切片**，
 //                    驱动端先把本次产出收进独立 sink，再用
 //                    ParseDiagnostics::replaceOrigin 整体换掉上一次的切片
 //                    （被 gate 跳过的步骤替换为空，旧切片不残留）。

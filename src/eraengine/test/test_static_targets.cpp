@@ -185,6 +185,93 @@ int main(int argc, char* argv[]) {
               "两个函数各自的同名 $标签各自解析");
     }
 
+    qDebug() << "\n4b) GOTO 的归属是**段身份**（LabelRef::functionLine），不是函数名";
+    {
+        // 同名函数的**两份声明是两个段**：第二份里的 $X 不属于第一份。
+        // 按函数名分组时这里会「找到 $X」而漏报，运行期却因段不同而失败。
+        const ParseDiagnostics d = loadScripts({
+            {QStringLiteral("a.ERB"),
+             QStringLiteral("@F\n"      // 1 段 A（functionLine = 0）
+                            "GOTO X\n"  // 2 段 A 内没有 $X -> 必须报
+                            "RETURN\n"  // 3
+                            "@F\n"      // 4 段 B（functionLine = 3，同名第二份声明）
+                            "$X\n"      // 5 属于段 B
+                            "GOTO X\n"  // 6 段 B 内 -> 不报
+                            "RETURN\n")}});  // 7
+        const auto hits = withCode(d, DiagCode::kLabelNotFound);
+        check(hits.size() == 1,
+              QString("同名 @F 第二份声明里的 $X 不能让第一份的 GOTO 静默（得到 %1 条）")
+                  .arg(hits.size()));
+        if (hits.size() == 1) {
+            check(hits.first().line == 2, QString("诊断落在第 2 行（得到 %1）")
+                                              .arg(hits.first().line));
+            check(hits.first().message.contains(QStringLiteral("$X")), "消息含 $X");
+            check(hits.first().severity == DiagSeverity::Error, "严重度为 error");
+            check(hits.first().effect == DiagEffect::ReportOnly,
+                  "effect = report-only（不置 line.isError，运行行为不变）");
+        }
+    }
+    {
+        // 不能过度收紧：同名函数的两份声明**各自**声明自己的 $X、各自 GOTO 它。
+        const ParseDiagnostics d = loadScripts({
+            {QStringLiteral("a.ERB"),
+             QStringLiteral("@G\n"       // 1 段 A
+                            "GOTO X\n"   // 2 段 A 有自己的 $X
+                            "$X\n"       // 3
+                            "RETURN\n"   // 4
+                            "@G\n"       // 5 段 B
+                            "GOTO X\n"   // 6 段 B 有自己的 $X
+                            "$X\n"       // 7
+                            "RETURN\n")}});  // 8
+        check(withCode(d, DiagCode::kLabelNotFound).isEmpty(),
+              "同名 @G 的两份声明各用各的 $X -> 一条诊断都不产生");
+    }
+    {
+        // 文件头段（第一个 @ 之前，functionLine = -1）与函数体的段不同。
+        const ParseDiagnostics d = loadScripts({
+            {QStringLiteral("a.ERB"),
+             QStringLiteral("$X\n"      // 1 文件头段（functionLine = -1）
+                            "@H\n"      // 2
+                            "GOTO X\n"  // 3 段不同 -> 必须报
+                            "RETURN\n")}});  // 4
+        const auto hits = withCode(d, DiagCode::kLabelNotFound);
+        check(hits.size() == 1 && hits.first().line == 3,
+              QString("文件头段的 $X 对函数体内的 GOTO 无效（得到 %1 条，行 %2）")
+                  .arg(hits.size())
+                  .arg(hits.isEmpty() ? -1 : hits.first().line));
+    }
+    {
+        // 同一段内重复声明同一 $：first-wins 是既有口径，不算错。
+        const ParseDiagnostics d = loadScripts({
+            {QStringLiteral("a.ERB"),
+             QStringLiteral("@I\n"       // 1
+                            "GOTO X\n"   // 2 段内存在
+                            "$X\n"       // 3
+                            "RETURN\n"   // 4
+                            "$X\n"       // 5 同段重复声明
+                            "RETURN\n")}});  // 6
+        check(withCode(d, DiagCode::kLabelNotFound).isEmpty(),
+              "同一段内重复声明 $X -> 不报（first-wins）");
+    }
+
+    {
+        // 段身份是**脚本内**的行号：另一个脚本里同名函数的同名段不算数。
+        const ParseDiagnostics d = loadScripts({
+            {QStringLiteral("a.ERB"),
+             QStringLiteral("@F\n"        // 1 段 0（a.ERB 内没有 $X）
+                            "GOTO X\n"    // 2 -> 必须报
+                            "RETURN\n")}, // 3
+            {QStringLiteral("b.ERB"),
+             QStringLiteral("@F\n"        // 1 另一个脚本里的同名函数、同名段
+                            "$X\n"        // 2
+                            "RETURN\n")}});  // 3
+        const auto hits = withCode(d, DiagCode::kLabelNotFound);
+        check(hits.size() == 1 && hits.first().line == 2,
+              QString("别脚本里同名函数同段的 $X 不算数（得到 %1 条，行 %2）")
+                  .arg(hits.size())
+                  .arg(hits.isEmpty() ? -1 : hits.first().line));
+    }
+
     qDebug() << "\n5) CALLEVENT / BEGIN：C# 不做目标检查（缺失静默）";
     {
         const ParseDiagnostics d = loadScripts({

@@ -25,7 +25,8 @@
 //     m_constantTable    ->  view.constantTable
 //     m_variableStorage  ->  view.storage
 //     m_diagnostics.add  ->  diags.add
-//     hasLabel(x)        ->  hasLabelInScripts(view, x)        （同一判据：全库 @标签）
+//     hasLabel(x)        ->  hasLabelInScripts(allLabels, x)   （同一判据：全库标签名）
+//     GetLabelDollar(x)  ->  position::firstGotoLabel(...)     （同一份标签索引 + 段身份）
 //     userFunction(x)    ->  userFunctionIn(view, x)           （同一张函数登记表）
 //
 // 不依赖 EraParseTable：EraParseTable 只留同名 forwarder。诊断的 code/severity/
@@ -35,6 +36,7 @@
 
 #include <QCoreApplication>
 #include <QHash>
+#include <QPair>
 #include <QSet>
 #include <QString>
 #include <QStringList>
@@ -49,6 +51,7 @@
 #include "ast/function_types.h"     // OperandType / isKnown / operandTypeName
 #include "ast/system_variables.h"   // sysvar::systemVariableMetadataDyn / systemStorageNames
 #include "constant_table.h"
+#include "position_state.h"   // firstGotoLabel：GOTO 目标的**唯一**择一规则（与运行期同一函数）
 #include "user_defined_variable_data.h"   // VariableConfig
 #include "variable_storage.h"
 #include "ast/variable_table.h"
@@ -80,6 +83,14 @@ QSet<QString> collectLabelNames(const ParseIrView& view) {
 // 索引键是「大写折叠」的，故查表前先 toUpper。
 // 旧实现是「每条 CALL 扫全部脚本 × contains」（eraTW ≈ 9.4 万 CALL × 2258 脚本
 // ≈ 2×10⁸ 次哈希探测）；现在只查驱动层建好的并集，一次哈希。
+//
+// **分工（与 GOTO 的段身份互不替代）**：
+//   * 本函数回答「**全库**有没有这个名字」—— 与所在行、所在函数段都无关；
+//     只有 CALL/JUMP（目标是 @函数名，跨脚本合法）用它。@ 与 $ 同名共存时
+//     它也会命中（eg. eraMegaten 的 $PRINT_TITLE / @PRINT_TITLE）—— 与
+//     EraParseTable::hasLabel 的旧判据一致，这里不改。
+//   * GOTO 的 $标签归属要看**段身份**（(script, LabelRef::functionLine)），
+//     由 position::firstGotoLabel 回答（见 resolveStaticTargetsInScript）。
 bool hasLabelInScripts(const QSet<QString>& allLabels, const QString& label) {
     return allLabels.contains(label.toUpper());
 }
@@ -119,25 +130,28 @@ void runPerScript(const ParseIrView& view, ParseDiagnostics& diags, Fn&& fn) {
 
     // 先把 ScriptData 指针解析出来：任务里就只剩**纯只读**访问，不必让多个线程
     // 各自去 constFind 同一个 QHash（也顺带省掉每个任务一次哈希查找）。
-    QVector<const ScriptData*> scripts;
+    // 名字与数据一起带着走：GOTO 的段身份要 (script, functionLine) 两元组，
+    // 而 ScriptData 里没有自己的名字（position.filename 不是脚本表的键）。
+    QVector<QPair<QString, const ScriptData*>> scripts;
     scripts.reserve(names.size());
     for (const QString& n : names) {
         const auto it = view.scripts->constFind(n);
-        if (it != view.scripts->constEnd()) scripts.append(&it.value());
+        if (it != view.scripts->constEnd()) scripts.append({n, &it.value()});
     }
 
     if (scripts.size() < kMinScriptsForParallel
         || QThreadPool::globalInstance()->maxThreadCount() <= 1) {
-        for (const ScriptData* script : scripts) fn(*script, diags);
+        for (const auto& script : scripts) fn(script.first, *script.second, diags);
         return;
     }
 
     // blockingMapped 保持输入顺序返回；每个任务一个 local sink。
-    const auto locals = QtConcurrent::blockingMapped(scripts, [&fn](const ScriptData* script) {
-        ParseDiagnostics local;   // **本任务独占**，不与任何线程共享
-        fn(*script, local);
-        return local;
-    });
+    const auto locals = QtConcurrent::blockingMapped(
+        scripts, [&fn](const QPair<QString, const ScriptData*>& script) {
+            ParseDiagnostics local;   // **本任务独占**，不与任何线程共享
+            fn(script.first, *script.second, local);
+            return local;
+        });
     for (const ParseDiagnostics& local : locals)
         for (const ParseDiagnostic& d : local.all()) diags.add(d);
 }
@@ -151,19 +165,27 @@ void runPerScript(const ParseIrView& view, ParseDiagnostics& diags, Fn&& fn) {
 // 该行标成 IsError（运行到就抛）并计入「関数が見つからない警告」。这就是把
 // 「跑到那行才炸」的错误提前到装载期的标准做法：只对**常量目标**下结论，
 // 目标带格式串（%…% / {…} / [[Rename]]）时视为运行期求值，一律不下结论。
-// 本实现与运行期解析**同源**（CALL 走 hasLabel、GOTO 走本函数内 $标签），
+// 本实现与运行期解析**同源**（CALL 走全库标签名并集、GOTO 走**同一段**的 $标签），
 // 因此不会出现「装载期说没问题、运行期找不到」的口径差。
 //
+// GOTO 的「同一个函数」= **段身份**（LabelRef::functionLine），不是函数名：
+// 同名函数（eraTW 的「口上」、eraMegaten 的事件）可以声明两次，两份声明是
+// 两个不同的段，第一份里的 GOTO 看不到第二份里的 $标签。这里查标签一侧用的是
+// position::firstGotoLabel —— 运行期 resolveJumpTarget / findGotoLabelInFunction
+// 用的**同一个函数**（索引 + isFunction + script + functionLine 四个条件），
+// 不再按 ownerFunction 名字分组（那是一份会与运行期各自演化的第二口径）。
+//
 //   * CALL/CALLFORM/CALLF/CALLFORMF/JUMP/JUMPFORM：常量目标必须存在
-//   * GOTO/GOTOFORM：常量 $标签必须在**本函数内**（对齐 GetLabelDollar）
+//   * GOTO/GOTOFORM：常量 $标签必须在**本函数段内**（对齐 GetLabelDollar）
 //   * TRY* 系（TRYCALL/TRYJUMP/TRYCCALL/TRYCJUMP/TRYGOTO/TRYCALLEVENT…）：
 //     语义就是「找不到就跳过」，不报（对齐 C# func.Function.IsTry()）
 //   * CALLEVENT / BEGIN / FUNC：C# 不做目标检查（CALLEVENT 缺目标静默），跳过
 void resolveStaticTargets(const ParseIrView& view, ParseDiagnostics& diags) {
     // 全库标签索引**每个 pass 建一次**（串行、在驱动层）：任务里只做 O(1) 成员判定。
     const QSet<QString> allLabels = collectLabelNames(view);
-    runPerScript(view, diags, [&view, &allLabels](const ScriptData& script, ParseDiagnostics& local) {
-        resolveStaticTargetsInScript(view, script, local, allLabels);
+    runPerScript(view, diags, [&view, &allLabels](const QString& name, const ScriptData& script,
+                                                 ParseDiagnostics& local) {
+        resolveStaticTargetsInScript(view, name, script, local, allLabels);
     });
 }
 
@@ -180,17 +202,22 @@ static QString staticCallTarget(const LogicalLine& line) {
     return name;
 }
 
-// 逐脚本实现：结论只依赖 (view, data)，diags 是调用方给的**本线程独占** sink，
-// 因而可以被驱动端（runPerScript）并行调用。
-void resolveStaticTargetsInScript(const ParseIrView& view, const ScriptData& data,
-                                  ParseDiagnostics& diags, const QSet<QString>& allLabels) {
-    // 本脚本各函数的 $标签集合（大小写折叠：标签比较遵循 ICFunction 语义）。
-    QHash<QString, QSet<QString>> dollarLabels;
-    for (const LogicalLine& line : data.lines) {
-        if (line.kind != LineKind::GotoLabel) continue;
-        dollarLabels[line.ownerFunction.toUpper()].insert(line.labelName.toUpper());
-    }
-    for (const LogicalLine& line : data.lines) {
+// 逐脚本实现：结论只依赖 (view, scriptName, data)，diags 是调用方给的**本线程独占**
+// sink，因而可以被驱动端（runPerScript）并行调用。
+void resolveStaticTargetsInScript(const ParseIrView& view, const QString& scriptName,
+                                  const ScriptData& data, ParseDiagnostics& diags,
+                                  const QSet<QString>& allLabels) {
+    // 段身份（「这一行属于哪个 @函数段」）的**定义**：最近的前置 @函数标签行
+    //（含该行自身）；第一个 @ 之前 = -1。装载期在唯一登记点把同一个值写进
+    // LabelRef::functionLine（era_parse_table.cpp 的 currentFunctionLine）。
+    // 这里不复用名字（ownerFunction）—— 同名函数的第二份声明是另一个段。
+    // 一次前序遍历 + 一个循环变量，与装载期那条状态机同形，不另建表。
+    const ScriptView scriptView{view.scripts, view.labelIndex};
+    int segment = -1;   // 当前行的段起点（见上）
+
+    for (int i = 0; i < data.lines.size(); ++i) {
+        const LogicalLine& line = data.lines.at(i);
+        if (line.kind == LineKind::FunctionLabel) segment = i;   // 段从这里开始
         bool checkFunction = false;
         bool checkLabel = false;
         switch (line.runnerInstruction) {
@@ -214,6 +241,7 @@ void resolveStaticTargetsInScript(const ParseIrView& view, const ScriptData& dat
         if (target.isEmpty()) continue;
         QString message;
         if (checkFunction) {
+            // 函数一侧与段无关：CALL/JUMP 的目标是**全库**的 @标签名。
             if (hasLabelInScripts(allLabels, target)) {
                 // 目标存在 -> 装载期就把实参校验掉（对齐 C# CALL_Instruction.SetJumpTo
                 // 里调用 ConvertArg；C# 只在「常量目标且能找到」时才做这一步）。
@@ -223,7 +251,8 @@ void resolveStaticTargetsInScript(const ParseIrView& view, const ScriptData& dat
             message = QCoreApplication::translate("ParseDiagnostics",
                 "指定的函数名\"@%1\"不存在（运行到该行会失败）").arg(target);
         } else {
-            if (dollarLabels.value(line.ownerFunction.toUpper()).contains(target.toUpper()))
+            // 标签一侧与运行期**同一个函数**：本脚本 + 本段 + 只认 $标签。
+            if (position::firstGotoLabel(scriptView, target, scriptName, segment))
                 continue;
             message = QCoreApplication::translate("ParseDiagnostics",
                 "指定的标签名\"$%1\"在当前函数内不存在（运行到该行会失败）").arg(target);
@@ -385,7 +414,9 @@ QString matchingCloser(const QString& opener) {
 }  // namespace
 
 void checkStructures(const ParseIrView& view, ParseDiagnostics& diags) {
-    runPerScript(view, diags, [&view](const ScriptData& script, ParseDiagnostics& local) {
+    // 名字用不上（结构检查只看本脚本的行）：段身份只对 GOTO 目标有意义。
+    runPerScript(view, diags, [&view](const QString& /*scriptName*/, const ScriptData& script,
+                                      ParseDiagnostics& local) {
         checkStructuresInScript(view, script, local);
     });
 }
@@ -682,7 +713,9 @@ void checkStructuresInScript(const ParseIrView& view, const ScriptData& data,
 // VariableSize 同名条目无关，只查负数。
 // ---------------------------------------------------------------------------
 void checkStaticValues(const ParseIrView& view, ParseDiagnostics& diags) {
-    runPerScript(view, diags, [&view](const ScriptData& script, ParseDiagnostics& local) {
+    // 名字用不上（同上）：静态值检查只读本脚本的表达式 AST。
+    runPerScript(view, diags, [&view](const QString& /*scriptName*/, const ScriptData& script,
+                                      ParseDiagnostics& local) {
         checkStaticValuesInScript(view, script, local);
     });
 }

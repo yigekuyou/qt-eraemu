@@ -76,8 +76,13 @@ struct ParseIrView {
 //
 // allLabels = 全库标签名并集（大写折叠键），由**驱动层**在一次 pass 内建一次、
 // 以 const 引用传给各任务 —— 任务里退化成 O(1) 成员判定。
-void resolveStaticTargetsInScript(const ParseIrView& view, const ScriptData& script,
-                                  ParseDiagnostics& diags, const QSet<QString>& allLabels);
+//
+// scriptName 是**脚本表的键**（不是 position.filename）—— GOTO 的「$ 标签只在
+// 本脚本内」要拿它去查唯一标签索引（LabelRef::script 记的正是这个键）。
+// 驱动层本来就按名字遍历，顺手传进来，避免让任务自己反推脚本名。
+void resolveStaticTargetsInScript(const ParseIrView& view, const QString& scriptName,
+                                  const ScriptData& script, ParseDiagnostics& diags,
+                                  const QSet<QString>& allLabels);
 void checkStructuresInScript(const ParseIrView& view, const ScriptData& script,
                              ParseDiagnostics& diags);
 void checkStaticValuesInScript(const ParseIrView& view, const ScriptData& script,

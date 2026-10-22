@@ -272,22 +272,22 @@ private:
     QSet<QString> m_reportedUnfinished;
     
     // Assignment handling
-    // ownerFunction = 赋值所在行的所属函数：查声明**必须带作用域**，否则广域
+    // scopeKey = 赋值所在行的所属函数：查声明**必须带作用域**，否则广域
     // CONST 会盖住同名的函数私有变量，写入被误判为「给常量赋值」而丢弃
     //（eraTW `#DIM CONST 色_RED7` 之下的 `#DIM 色_RED7 = …` 写入失效）。
     bool handleAssignment(const ExpressionNode* lhs, const QString& rhs,
                           const QSharedPointer<ExpressionNode>& ast = {},
                           const QList<QSharedPointer<ExpressionNode>>& values = {},
-                          const QString& ownerFunction = QString());
+                          const QString& scopeKey = QString());
     // 字符串赋值（目的变量是字符串变量时）：右侧按字符串求值后写入字符串容器
     bool handleStringAssignment(const ExpressionNode* lhs, const QString& rhs,
                                 const QSharedPointer<ExpressionNode>& ast = {},
-                                const QString& ownerFunction = QString());
+                                const QString& scopeKey = QString());
     // 已求值字符串写入左值（SPLIT 等复用；不做表达式求值）
-    // ownerFunction：左值所属函数（解析**本函数私有**的 #DIMS 声明维数要用；
+    // scopeKey：左值所属函数（解析**本函数私有**的 #DIMS 声明维数要用；
     //   广域/全局声明可省）。
     bool writeStringValue(const ExpressionNode* lhs, const QString& value,
-                          const QString& ownerFunction = QString());
+                          const QString& scopeKey = QString());
     bool handleCompoundAssignment(const ExpressionNode* lhs, const QString& op, const QString& rhs, const QSharedPointer<ExpressionNode>& ast = {});
 
     // VARSET 族（对齐 C# VARSET_Instruction / CVARSET_Instruction）
@@ -315,8 +315,8 @@ private:
     const LogicalLine* m_activeInstruction = nullptr; // scoped execution diagnostic context
     eravar::ScopeId m_activeScope = eravar::kGlobalScope; // 同上：当前行的显式作用域
     [[nodiscard]] LhsRef resolveLhsRef(const ExpressionNode* ast);
-    bool writeStructuredValue(const LhsRef& ref, const QVariant& value, const QString& ownerFunction = {});
-    bool writeStringValue(const LhsRef& ref, const QString& value, const QString& ownerFunction = {});
+    bool writeStructuredValue(const LhsRef& ref, const QVariant& value, const QString& scopeKey = {});
+    bool writeStringValue(const LhsRef& ref, const QString& value, const QString& scopeKey = {});
     // 依据声明维度写入（1D/2D/3D）
     void writeLhs(const LhsRef& ref, qint64 value);
     [[nodiscard]] qint64 readLhs(const LhsRef& ref);

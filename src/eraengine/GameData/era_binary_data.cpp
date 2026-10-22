@@ -14,6 +14,12 @@ constexpr quint8 Zero = 0xf0, ZeroRow = 0xf1, ZeroPlane = 0xf2;
 // Bounds cover ordinary games while preventing hostile lengths/zero runs from allocating unbounded memory.
 constexpr qsizetype MaxCells = 16 * 1024 * 1024;
 [[noreturn]] void fail(const char* message) { throw std::runtime_error(message); }
+// 旧档判废的统一出口：文案是**契约**（要求用户删除旧档并给出双方版本号）。
+// 判废是原子的：这里只会抛出，decode()/decodeText() 的 document 在成功前不写。
+[[noreturn]] void failOldVersion(quint32 actual) {
+    throw std::runtime_error(QStringLiteral("存档格式版本不兼容：本版本 %1，旧存档（版本 %2）请删除")
+                                 .arg(Version).arg(actual).toStdString());
+}
 qsizetype count(const Variable& v) {
     if (v.dimensions.size() > 3) fail("Invalid rank");
     qsizetype n = 1;
@@ -77,7 +83,7 @@ struct Writer {
             return;
         }
         for (int d : v.dimensions) fixed<qint32>(d);
-        // Explicit rows are valid 1808 streams; compress zero cells and omit trailing zeros.
+        // Explicit rows are valid streams; compress zero cells and omit trailing zeros.
         // No dependence on the in-memory representation or QDataStream's string encoding.
         const int width = v.dimensions.last();
         const qsizetype rows = width ? n / width : 0;
@@ -182,7 +188,7 @@ bool encode(const Document& d, QByteArray& bytes, QString* error, bool gzip) {
     try {
         if (quint8(d.type) > 3 || ((d.type == FileType::Global || d.type == FileType::Var) && !d.characters.isEmpty())
             || (d.type == FileType::Character && !d.variables.isEmpty())) fail("Invalid document shape");
-        Writer w; w.fixed<quint64>(Magic); w.fixed<quint32>(1808); w.fixed<quint32>(0);
+        Writer w; w.fixed<quint64>(Magic); w.fixed<quint32>(Version); w.fixed<quint32>(0);
         w.byte(quint8(d.type)); w.fixed<qint64>(d.uniqueCode); w.fixed<qint64>(d.scriptVersion); w.string(d.description);
         if (d.type == FileType::Normal || d.type == FileType::Character) {
             w.fixed<qint64>(d.characters.size());
@@ -208,10 +214,11 @@ bool decode(const QByteArray& bytes, Document& document, QString* error) {
         QByteArray decodedBytes = bytes;
         Reader r{decodedBytes};
         const quint64 magic = r.fixed<quint64>();
-        if ((magic != Magic && magic != ZipMagic) || r.fixed<quint32>() != 1808) fail("Unsupported save format");
-        quint32 extensions = r.fixed<quint32>();
-        if (extensions > quint32((bytes.size() - r.pos) / 4)) fail("Truncated header");
-        for (quint32 i = 0; i < extensions; ++i) r.fixed<quint32>();
+        if (magic != Magic && magic != ZipMagic) fail("Unsupported save format");
+        if (const quint32 version = r.fixed<quint32>(); version != Version) failOldVersion(version);
+        // 头部保留的扩展计数字段：本格式没有扩展段（写侧恒 0）。非 0 = 不是本程序
+        // 写出的档；不实现「跳过 N 个 u32」——旧档一律判废，复杂度回数据。
+        if (r.fixed<quint32>() != 0) fail("Unsupported save format");
         if (magic == ZipMagic) decodedBytes = decodedBytes.left(r.pos) + gzipPayload(decodedBytes.mid(r.pos), false);
         Document d; quint8 type = r.byte(); if (type > 3) fail("Invalid file type");
         d.type = FileType(type); d.uniqueCode = r.fixed<qint64>(); d.scriptVersion = r.fixed<qint64>(); d.description = r.string();
@@ -244,7 +251,9 @@ bool decode(const QByteArray& bytes, Document& document, QString* error) {
     } catch (const std::exception& e) { if (error) *error = QString::fromUtf8(e.what()); return false; }
 }
 namespace {
-const QString Fin = QStringLiteral("__FINISHED"), Sep = QStringLiteral("__EMU_SEPARATOR__"), Start = QStringLiteral("__EMUERA_1808_STRAT__");
+// 文本起始标记由版本常量派生（**唯一副本**）：不再出现第二处 "1808"。
+const QString Fin = QStringLiteral("__FINISHED"), Sep = QStringLiteral("__EMU_SEPARATOR__"),
+              Start = QStringLiteral("__EMUERA_") + QString::number(Version) + QStringLiteral("_STRAT__");
 QStringList names(const char* s) { return QString::fromLatin1(s).split(' ',Qt::SkipEmptyParts); }
 QStringList baseInts(bool chara) {
     if (chara) return names("BASE MAXBASE ABL TALENT EXP MARK PALAM SOURCE EX CFLAG JUEL RELATION EQUIP TEQUIP STAIN GOTJUEL NOWEX");
@@ -405,7 +414,17 @@ bool decodeText(const QByteArray& bytes,const Document& schema,Document& documen
             for(qint64 i=0;i<n;++i) { Character c;r.baseRead(c.builtins,true);d.characters.append(c); }
             r.baseRead(d.variables,false);
         }
-        if(r.take()!=Start)fail("Unsupported text save version");
+        const QString marker = r.take();
+        if (marker != Start) {
+            // 旧文本档的标记里带着它自己的版本号（__EMUERA_1808_STRAT__）：取得到
+            // 就按「版本不兼容」报（要求删除旧档），取不到才退回原有的容器错误。
+            bool versionOk = false;
+            quint32 actual = 0;
+            if (marker.startsWith(QLatin1String("__EMUERA_")) && marker.endsWith(QLatin1String("_STRAT__")))
+                actual = marker.mid(9, marker.size() - 17).toUInt(&versionOk);
+            if (versionOk) failOldVersion(actual);
+            fail("Unsupported text save version");
+        }
         if(d.type==FileType::Global)r.sectionsRead(d.variables,false,true);
         else { for(auto& c:d.characters)r.sectionsRead(c.builtins,true);r.sectionsRead(d.variables,false); }
         if(r.pos!=r.lines.size())fail("Trailing text save lines");

@@ -80,8 +80,8 @@ struct PositionState {
     QList<Frame>  callStack;
     int           depth = 0;           // == callStack.size()，缓存给人读
     bool          jumped = false;      // 上一次位置变化是不是跳转
-    // executionScopeId() 的缓存：按「当前行所属函数名」记忆
-    QString           scopeIdName;
+    // executionScopeId() 的缓存：按「当前行所属段」记忆。段身份由
+    // LogicalLine::scopeKey 直接给出（装载期唯一写入），运行期没有名字回查。
     eravar::ScopeId   scopeId = eravar::kGlobalScope;
     bool              scopeIdValid = false;
 };
@@ -265,6 +265,11 @@ public:
     QString getEntryPoint() const;
 
     int getLabelPosition(const QString& scriptName, const QString& labelName) const;
+    // 诊断/测试用：某脚本内**第一份**同名 @函数的段身份文本（名字 -> 段身份）。
+    // 同名 @F 的第二份会歧义，因此**运行期路径绝不使用**本函数（变量作用域
+    // 一律读行上的 scopeKey）。
+    [[nodiscard]] QString segmentKeyOfLabel(const QString& scriptName,
+                                            const QString& labelName) const;
 
     // GOTO 的 $ 标签解析：本脚本内、**同一函数段**（段起点行 == functionSegmentLine）
     // 的 $ 标签里取行号最小的一条；找不到返回 -1。
@@ -277,7 +282,7 @@ public:
     // 当前执行位置所在的函数段起点行（= 当前行的 @标签行；文件头 = -1）。
     // 有调用帧时帧里的 entryLine 就是段起点（事件导航用 callLabelAt 可以显式指定
     // 同名函数的**非首份**声明，所以不能用名字回查索引）；没有帧（depth==0 的
-    // 系统入口）时退回「行上的 ownerFunction -> 索引第一条」，与旧实现同解。
+    // 系统入口）时直接读行上的 segmentStart（装载期写入的段起点下标）。
     [[nodiscard]] int currentFunctionSegment() const;
 
     bool resolveJumpTarget(const QString& label, int& position);
@@ -309,7 +314,7 @@ public:
     [[nodiscard]] const QHash<QString, ScriptData>& scripts() const { return m_scripts; }
     // Load-time compilation only; finalized tables reject source text.
     [[nodiscard]] QSharedPointer<ExpressionNode> expressionAst(const QString& expr, bool quiet = false);
-    // 同上，但**显式指定作用域**（ownerFunction）。finalize 阶段当前位置是
+    // 同上，但**显式指定段身份文本**。finalize 阶段当前位置是
     // 陈旧值，直接调 expressionAst 会按「无作用域」解析 ——
     // 私有变量遮蔽同名 #DIM CONST、FORM 插值里的局部变量都会解析错。
     [[nodiscard]] QSharedPointer<ExpressionNode> expressionAstInScope(const QString& expr,
@@ -406,8 +411,12 @@ public:
     // 维数/初值/用户函数类型；于是构建期解析器即可拿到完整用户变量类型，
     // 字符串赋值在构建期即按 StrForm 定型，收尾只需校验用户变量合法性。
     void beginDeclarationPreRegistration();
+    // scriptName / segmentStart = 段身份的两半（**预处理后行序**里的 @ 标签下标，
+    // 文件头段 = -1）。函数名只用于展示（VariableDecl::function），不再充当
+    // 私有作用域键 —— 同名 @F 的两段因此得到两个不同身份。
     void preRegisterDeclaration(const QString& rawLine, const ScriptPosition& position,
-                                const QString& function, bool isHeaderFile);
+                                const QString& function, bool isHeaderFile,
+                                const QString& scriptName, int segmentStart);
     void finishDeclarationPreRegistration();   // 结算：维数/初值/用户函数类型
     [[nodiscard]] bool declarationsPreRegistered() const { return m_declarationsPreRegistered; }
 
@@ -423,9 +432,11 @@ public:
     // registerScopedVariableLine()：登记声明（幂等；同名取首个声明）。
     [[nodiscard]] static bool isScopedVariableLine(const QString& rawLine);
     void registerScopedVariableLine(const QString& rawLine, const ScriptPosition& position,
-                                    const QString& function);
+                                    const QString& function, const QString& scriptName,
+                                    int segmentStart);
     // 构造完行之后：把「目标变量 + 初值」接成交互操作数（见 .cpp 说明）。
-    void applyScopedVariableLine(LogicalLine& line, const QString& function);
+    void applyScopedVariableLine(LogicalLine& line, const QString& function,
+                                 const QString& scopeKey);
 
     // 用缓存 AST 求值条件；返回 false 表示求值失败。
     bool evaluateCondition(const QString& scriptName, int line, bool& out, int argIndex = -1);
@@ -440,14 +451,18 @@ public:
     [[nodiscard]] const QList<Frame>& callStack() const;
     [[nodiscard]] Frame currentFrame() const;
     [[nodiscard]] bool hasPosition() const;
-    // 当前执行行所属的函数名（空 = 不在任何函数内）。
-    // 运行期常数解析的作用域：私有 `#DIM CONST` 只在其声明函数内可见，
-    // 与 C# IdentifierDictionary.GetVariableToken 用 line.ParentLabelLine
-    // 查私有变量表等价（执行到哪个函数的行，就只看得见该函数的私有常量）。
-    [[nodiscard]] QString executionScope() const;
+    // 当前执行行的**段身份文本**（空 = 尚未装载/手工行）。运行期常数解析
+    // 的作用域：私有 `#DIM CONST` 只在其声明段内可见。这是 identity 文本，
+    // **不是函数名** —— 同名 @F 的两段互不可见。
+    [[nodiscard]] QString executionScopeKey() const;
     // 同上，intern id（0 = 顶层）。按最后一次位置变化缓存 —— 求值入口把它
     // 作为显式作用域参数，不依赖存储层的「当前帧」。
     [[nodiscard]] eravar::ScopeId executionScopeId() const;
+
+    // 段身份自检：解析线程（parseOneFileReadOnly）写进 logical line 的 scopeKey
+    // 与 loadScript 按 (脚本名, 段起点) 重算的值不一致的累计条数。必须是 0；
+    // 新测试 test_segment_scope 直接断言它，作为「两侧同值」的可执行证据。
+    [[nodiscard]] quint64 segmentIdentityMismatches() const { return m_segmentIdentityMismatches; }
 
     // 上一次位置变化是不是「跳转」（相对顺序推进）。用于区分
     // 「顺序落入函数标签」（= 函数结束）与「跳转/调用到函数标签」（= 跳过标签）。
@@ -485,14 +500,14 @@ public slots:
     [[nodiscard]] bool resolveCallableLabel(const QString& label, QString& targetScript,
                                              int& targetLine) const;
     // 函数私有变量初值（#DIM X = 7）——进入函数时由执行侧调用
-    void applyPrivateVariableDefaults(const QString& function);
+    void applyPrivateVariableDefaults(const QString& scopeKey);
     // 每函数的形参名集合（大写，按需构建/缓存）。「变量分词」的形参判定用：
     // 形参的值绑定（Parameter）/ ARG 别名 / REF 引用绑定都是运行期语义，
     // 命中形参名的变量引用无法静态定键 -> AccessKind::Dynamic。
     // 装载期解析（parseScopedExpression）与收尾定型（applyVariableTypes）
     // **共用同一张表** —— 收尾的赋值 AST 重建在定型趟之后跑，重建出的节点
     // 不再回定型；若装载期不带形参表，重建节点会带上「私有数组」的错描述符。
-    const QSet<QString>* paramNamesOf(const QString& upperScope) const;
+    const QSet<QString>* paramNamesOf(const QString& scopeKey) const;
     bool returnFromCall();
     void switchToMemorySpace(const QString& scriptName);
 
@@ -508,7 +523,7 @@ private:
         QList<qint64> defaultInt;
         QStringList   defaultStr;
     };
-    [[nodiscard]] const QList<PrivateDefaultEntry>& privateDefaultPlan(const QString& fkey);
+    [[nodiscard]] const QList<PrivateDefaultEntry>& privateDefaultPlan(const QString& scopeKey);
 
     // expressionAstInScope / runtimeVariableReference 的共用实现。
     //   foldConstants      = false -> 不把 `#DIM CONST NAME` 折叠成字面量
@@ -521,10 +536,12 @@ private:
 
     // 变量声明解析（#DIM/#DIMS/#GLOBAL/#GLOBALS/#PRIVATE）与类型回填
     void parseVariableDeclaration(const LogicalLine& line, const QString& currentFunction,
-                                  bool isHeaderFile);
+                                  const QString& scopeKey, bool isHeaderFile);
     // 文本版（预扫描「先登记 #DIM/#DIMS 再构造 AST」用）：直接按声明文本登记。
+    // scopeKey 为空 = 广域声明；非空 = 该段身份的私有域（唯一键）。
     void parseVariableDeclarationText(const QString& rawLine, const ScriptPosition& position,
-                                      const QString& currentFunction, bool isHeaderFile);
+                                      const QString& currentFunction, const QString& scopeKey,
+                                      bool isHeaderFile);
 
     // ---- 收尾写步骤（1/2/3 号 pass）只有自由函数实现 ----------------------
     // 实现已整体搬到 load_passes.cpp（自由函数，输入是可写的 LoadContext）；
@@ -627,7 +644,7 @@ private:
     bool m_declarationsResolved = false;
     QHash<QString, ScriptData> m_scripts;
     QHash<QString, UserFunctionInfo> m_functions;
-    mutable QHash<QString, QSet<QString>> m_paramNamesByFunction;   // 形参名集合缓存（loadScript/clear 时失效）
+    mutable QHash<QString, QSet<QString>> m_paramNamesBySegment;   // 段身份文本 -> 形参名集合（clear 时失效）
     // 每函数的私有初值调用计划（loadScript/clear 时失效：新脚本可能带来新私有声明）
     QHash<QString, QList<PrivateDefaultEntry>> m_privateDefaultPlans;
     // **唯一**的标签索引：裸标签名（大写）-> 全部声明（@ 与 $ 都收），
@@ -651,6 +668,7 @@ private:
     //（scopeIdName / scopeId / scopeIdValid，与搬到 PositionState 之前一样是缓存，
     // 不改变任何可观察的执行位置语义）。
     mutable PositionState m_position;
+    quint64 m_segmentIdentityMismatches = 0;
 };
 
 #endif // ERA_PARSE_TABLE_H

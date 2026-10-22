@@ -34,7 +34,8 @@ class VariableTable;
 // 存/读档以前是「遍历字符串键容器 + 自己拼/拆 FUNC\x1fNAME」，于是「键长什么
 // 样」这件事同时被运行期和存档期知道。这里把存档期需要的事实收进一张表：
 //
-//   Entry::name        —— 写进文件/从文件读到的标识（逐字节与旧实现相同）
+//   Entry::name        —— 写进文件/从文件读到的标识（广域/内建 = 裸名；
+//                         私有 = 段身份文本 + 0x1F + 名字，可还原回 (脚本, 段起点行)）
 //   Entry::key         —— 变量身份（eravar::VariableKey，私有变量自带作用域 id）
 //   Entry::slot        —— 该条目落在存储层的哪一类容器（数据，不是 if 链）
 //   Entry::dimensions  —— 文件里的形状（不含角色维；空 = 标量）
@@ -43,7 +44,8 @@ class VariableTable;
 //     排序，键见 .cpp）—— 与任何 QHash 遍历序无关，同一变量状态在任何进程、
 //     任何 QT_HASH_SEED 下 encode 出的存档字节逐字节相同；
 // 读：按文件里的名字 findByName() 找到行，再按 key 落回存储层（按名还原，
-//     与写出顺序无关 —— 旧实现写的档照常可读）。
+//     与写出顺序无关）。旧容器版本（1808，私有名还是「函数名\x1f名字」）在
+//     era_binary_data 的解码处整体判废，不进入这里。
 // 新增一类变量 = 表里加一行；只有「新的容器形态」才需要新增 Slot 值
 // （容器类型不同，取值/写值的实现必然要分开，那一处 switch 在
 //  variable_storage.cpp 的 readSaveEntry/writeSaveCell）。

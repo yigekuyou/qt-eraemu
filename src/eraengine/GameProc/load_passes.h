@@ -72,8 +72,8 @@ struct LoadContext {
     // 8) 唯一标签索引（裸标签名（大写）-> 全部 @/$ 声明）：pass 1 末尾按
     //    labelRefLess（脚本名 QString::compare -> 行号）排序固化；必须可变。
     QHash<QString, QList<LabelRef>>& labelIndex;
-    // 10) 形参名集合缓存：装载期解析与 pass 2 就地定型共用；pass 2 先补顶层
-    //     空集（并行趟只读），必须可变。
+    // 10) 形参名集合缓存（键 = 段身份文本，不是函数名）：装载期解析与 pass 2
+    //     就地定型共用同一个身份；pass 2 先补顶层空集（并行趟只读），必须可变。
     QHash<QString, QSet<QString>>& paramNames;
     // 11) 「声明已定稿」标志：pass 1 置位，pass 2 断言其前置条件。
     //     用引用而不是搬走 —— 解析表仍要读它（阶段/契约的一部分）。
@@ -107,9 +107,9 @@ QSharedPointer<ExpressionNode> expressionAstInScope(const LoadContext& ctx, cons
 OperandType userCallReturnType(const QHash<QString, UserFunctionInfo>& functions,
                                const QString& name);
 
-// 每函数的形参名集合（大写键）；miss 返回 nullptr。
+// 每段的形参名集合（键 = 段身份文本）；miss 返回 nullptr。
 const QSet<QString>* paramNamesOf(const QHash<QString, QSet<QString>>& paramNames,
-                                  const QString& upperScope);
+                                  const QString& scopeKey);
 
 // ---- 收尾写步骤（kLoadPasses 的 1/2/3） -----------------------------------
 // 诊断收进调用方给的 sink（本次 pass 运行独占），不写入 LoadContext：

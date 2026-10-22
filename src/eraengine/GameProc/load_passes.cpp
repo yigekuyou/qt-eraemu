@@ -201,7 +201,7 @@ QSharedPointer<ExpressionNode> parseScopedExpression(const LoadContext& ctx, con
         // 还有赋值 AST 重建等再解析路径，那些节点不会再回定型趟，
         // 形参名必须在此处就判成 Dynamic（否则形参读会被标成私有数组）。
         VariableTable::applyTypes(*ast, ctx.variables, scope,
-                                  paramNamesOf(ctx.paramNames, scope.toUpper()),
+                                  paramNamesOf(ctx.paramNames, scope),
                                   constantIndexEvaluator(ctx, scope));
     }
     PrintTemplateCompiler::prepare(ast);
@@ -220,15 +220,15 @@ QSharedPointer<ExpressionNode> expressionAstInScope(const LoadContext& ctx, cons
 //（新脚本可能带来新的 @label 形参）。「变量分词」的装载期解析与收尾定型共用。
 // 收尾定型（applyVariableTypes）的并行趟开始前会先建全 —— 定型期间只读不插。
 const QSet<QString>* paramNamesOf(const QHash<QString, QSet<QString>>& paramNames,
-                                  const QString& upperScope)
+                                  const QString& scopeKey)
 {
     // **只查不插**：并行装载的 worker（逐行解析表达式）与收尾定型趟
     //（按脚本并行）都会走到这里 —— 任何按需插入都是共享 QHash 上的竞态
     //（eraMegaten 2260 脚本并行装载实测崩溃）。集合在两处构建：
     //   · loadScript 注册函数时（与 ctx.functions.insert 同点、同线程纪律）；
     //   · applyVariableTypes 并行趟开始前（收尾前的兜底，覆盖一切）。
-    // miss（函数未知/顶层空作用域）返回 nullptr —— 与「该函数没有形参」等价。
-    const auto it = paramNames.constFind(upperScope);
+    // miss（段未知/顶层空作用域）返回 nullptr —— 与「该段没有形参」等价。
+    const auto it = paramNames.constFind(scopeKey);
     return it != paramNames.constEnd() ? &it.value() : nullptr;
 }
 
@@ -416,7 +416,7 @@ void installDeclaredMultiDimArrays(LoadContext& ctx) {
         if (d.dimension < 2 || d.lengths.size() < 2 || d.elementCount <= 0) continue;
         // 与 restoreDeclaredDefaults / computeVariableAccess 同一个键构造点。
         const QString key = d.scope == VarScope::Local
-            ? eravar::makePrivateStorageKey(d.function, d.name)
+            ? eravar::makePrivateStorageKey(d.scopeKey, d.name)
             : d.name.toUpper();
         // CHARADATA 的元素在角色存储里（每个角色一份），这里只登记形状：
         // VARSIZE / 尺寸口径读的是**同一份**形状，而不是第二个声明视图。
@@ -454,9 +454,12 @@ void resolveUserFunctionTypes(LoadContext& ctx) {
                 p.type = OperandType::Str;
                 break;
             case UserParamTarget::LocalVar: {
-                const VariableDecl* variable = ctx.variables.find(p.varName, decl.name);
+                // 形参所属私有变量的声明按**段身份**查（与运行期 bindArguments
+                // 同一个键；函数名只是展示/事件事实）。
+                const QString scopeKey = eravar::segmentKeyText(decl.script, decl.labelLine);
+                const VariableDecl* variable = ctx.variables.find(p.varName, scopeKey);
                 const OperandType t = variable ? variable->type
-                                               : ctx.variables.typeOf(p.varName, decl.name);
+                                               : ctx.variables.typeOf(p.varName, scopeKey);
                 if (isKnown(t)) {
                     p.type = t;
                     p.typeKnown = true;   // 私有变量由 #DIM/#DIMS 定类型
@@ -524,7 +527,7 @@ void applyStringAssignmentsInScript(const LoadContext& ctx, ScriptData& script,
         // 只处理构建期未定型的行：构建期已按（预扫描）类型表定型的
         // 字符串/FORM/CASE 不再重解析（收尾只扫描未定型项）。
         if (!line.strAssignPending && !line.needsCompletion) continue;
-        const QString owner = line.ownerFunction;
+        const QString owner = line.scopeKey;
         // &line 是每行局部量、&sink 是本任务独占的 sink —— 两者都不会跨任务。
         const AstResolver resolve = [ctx, owner, &line, &sink, &reportedNumbers](const QString& e) {
             diagnoseIntegerLiterals(e, line.position.filename, line.position.lineNumber,
@@ -563,7 +566,7 @@ void applyStringAssignmentsInScript(const LoadContext& ctx, ScriptData& script,
 
         const QString varName = leadingIdentifier(dest.raw);
         if (varName.isEmpty()) continue;
-        if (ctx.variables.typeOf(varName, line.ownerFunction) != OperandType::Str) continue;
+        if (ctx.variables.typeOf(varName, line.scopeKey) != OperandType::Str) continue;
 
         value.ast = StrFormParser::parse(value.raw.trimmed(), resolve, ctx.evaluator && ctx.evaluator->ignoreTripleSymbols());
         PrintTemplateCompiler::prepare(value.ast);
@@ -612,11 +615,11 @@ void applyVariableTypes(LoadContext& ctx) {
         const QSet<QString>* paramNames = nullptr;
         QString scope;
         for (LogicalLine& line : sd->lines) {
-            if (!seen || line.ownerFunction != scope) {
-                scope = line.ownerFunction;
-                const QString scopeKey = scope.toUpper();
-                seen = &typed[scopeKey];
-                paramNames = paramNamesOf(ctx.paramNames, scopeKey);
+            if (!seen || line.scopeKey != scope) {
+                scope = line.scopeKey;
+                seen = &typed[scope];
+                // 形参名表按**段身份**（与私有域、AST 定型同一个键）。
+                paramNames = paramNamesOf(ctx.paramNames, line.scopeKey);
             }
             const auto bind = [ctx, seen, &scope, paramNames](QSharedPointer<ExpressionNode>& ast) {
                 if (!ast || seen->contains(ast.data())) return;
@@ -718,7 +721,9 @@ void resolveFunctionNodes(LoadContext& ctx) {
                 const auto& param = decl->params[i];
                 refs.append(param.isReference);
                 if (!param.isReference || !fn.arityError().isEmpty()) continue;
-                const auto* formal = ctx.variables.find(param.varName, decl->name);
+                // REF 形参的声明同样按段身份查（decl.name 是函数名，不是作用域键）。
+                const auto* formal = ctx.variables.find(
+                    param.varName, eravar::segmentKeyText(decl->script, decl->labelLine));
                 const auto* actual = i < fn.arguments().size() && fn.arguments()[i]
                     ? dynamic_cast<const VariableNode*>(fn.arguments()[i].data()) : nullptr;
                 // C# CalledFunction.ConvertArg / ReferenceToken.MatchType：REF 必须
@@ -799,7 +804,7 @@ void resolveGlobalDeclarations(LoadContext& ctx) {
             return eravar::makePrivateStorageKey(owner, name);
         };
         const auto constOwnerOf = [vt](const VariableDecl& d) -> QString {
-            return (d.scope == VarScope::Global) ? QString() : d.function;
+            return (d.scope == VarScope::Global) ? QString() : d.scopeKey;
         };
         QHash<QString, QList<QSharedPointer<ExpressionNode>>> constantNodes;
         for (const auto& declaration : vt->declarations()) {
@@ -1108,7 +1113,7 @@ void resolveGlobalDeclarationsStep(LoadContext& ctx, ParseDiagnostics& diagnosti
 void recompileFuncLinesInScript(const LoadContext& ctx, ScriptData& script, ParseDiagnostics&) {
     for (LogicalLine& line : script.lines) {
         if (line.functionName != QLatin1String("FUNC")) continue;
-        const AstResolver resolve = [ctx, scope = line.ownerFunction](const QString& text) {
+        const AstResolver resolve = [ctx, scope = line.scopeKey](const QString& text) {
             return expressionAstInScope(ctx, text, scope);
         };
         for (int i = 0; i < line.arguments.size(); ++i) {
@@ -1131,11 +1136,11 @@ void rebuildAssignmentAstsInScript(const LoadContext& ctx, ScriptData& script, P
     for (LogicalLine& line : script.lines) {
         if (line.assignOperator.isEmpty() || line.arguments.size() != 2) continue;
         const QString name = line.arguments[0].raw.section(':', 0, 0).trimmed();
-        if (line.assignOperator == "=" && ctx.variables.typeOf(name, line.ownerFunction) == OperandType::Str) continue;
+        if (line.assignOperator == "=" && ctx.variables.typeOf(name, line.scopeKey) == OperandType::Str) continue;
         line.assignmentAsts.clear();
         for (const auto& text : AstBuilder::assignmentValues(line.arguments[1].raw)) {
             // expressionAstInScope 已按 ownerFunction 定型并 prepare —— 不再克隆/重定型。
-            line.assignmentAsts.append(expressionAstInScope(ctx, text, line.ownerFunction, true));
+            line.assignmentAsts.append(expressionAstInScope(ctx, text, line.scopeKey, true));
         }
     }
 }
@@ -1241,7 +1246,7 @@ void validateScriptLines(const LoadContext& ctx, ScriptData& script, ParseDiagno
                     if (error.isEmpty() && n.kind() != NodeKind::Literal
                         && indexbounds::isConstantSubtree(n)
                         && !ctx.evaluator->evaluate(n, ctx.storage, ctx.gameBaseData,
-                                                  eravar::internName(line.ownerFunction)).isValid()) {
+                                                  eravar::internName(line.scopeKey)).isValid()) {
                         // 常量求值失败的**原因**与 6/6 共用一份判定：
                         // 除/模 0 是可命名的运行期事实（index_bounds 的处置表
                         // 把它归 3/6、RejectLine）；其余原因保持原泛化文案。
@@ -1266,7 +1271,7 @@ void validateScriptLines(const LoadContext& ctx, ScriptData& script, ParseDiagno
                 walkExpression(*ast, [&](ExpressionNode& n) {
                     if (!error.isEmpty() || scopeError || n.kind() != NodeKind::Variable) return;
                     const auto& var = static_cast<const VariableNode&>(n);
-                    if (isKnown(ctx.variables.typeOf(var.name(), line.ownerFunction))) return;
+                    if (isKnown(ctx.variables.typeOf(var.name(), line.scopeKey))) return;
                     if (!ctx.variables.isPrivateOnlyName(var.name())) return;
                     // 形参名（`@ASSERT_EQ(GOT, WANT, SNAME)` 的 GOT/WANT 是 ARG
                     // 的**别名**，不在变量表里）在本函数内是合法的。
@@ -1319,7 +1324,7 @@ void validateScriptLines(const LoadContext& ctx, ScriptData& script, ParseDiagno
             && line.arguments.size() == 1) {
             auto& operand = line.arguments[0];
             // expressionAstInScope 已按 ownerFunction 定型 —— 不再克隆/重定型。
-            operand.ast = expressionAstInScope(ctx, operand.raw, line.ownerFunction, true);
+            operand.ast = expressionAstInScope(ctx, operand.raw, line.scopeKey, true);
             const bool ok = operand.ast && operand.ast->kind() == NodeKind::Variable
                 && !static_cast<const VariableNode&>(*operand.ast).readOnly
                 && operand.ast->valueType() != OperandType::Str;
@@ -1377,9 +1382,9 @@ void validateScriptLines(const LoadContext& ctx, ScriptData& script, ParseDiagno
         if (!line.assignOperator.isEmpty() && line.arguments.size() == 2) {
             const auto& dest = line.arguments[0].raw;
             const QString name = dest.section(':', 0, 0).trimmed();
-            const auto* decl = ctx.variables.find(name, line.ownerFunction);
+            const auto* decl = ctx.variables.find(name, line.scopeKey);
             // expressionAstInScope 已按 ownerFunction 定型 —— 不再克隆/重定型。
-            const auto target = expressionAstInScope(ctx, dest, line.ownerFunction, true);
+            const auto target = expressionAstInScope(ctx, dest, line.scopeKey, true);
             line.arguments[0].ast = target;
             // 诊断带上**具体原因**（未定义变量 / 维数不符 / AST 解析失败）：
             // 只报「必须为有效变量项」时，eraTW 这种 10k 变量的工程无从下手。
@@ -1414,7 +1419,7 @@ void validateScriptLines(const LoadContext& ctx, ScriptData& script, ParseDiagno
                     line.position.filename, line.position.lineNumber, line.position.column, 0,
                     message, QString(), effect);
             }
-            const bool rawForm = line.assignOperator == "=" && ctx.variables.typeOf(name, line.ownerFunction) == OperandType::Str;
+            const bool rawForm = line.assignOperator == "=" && ctx.variables.typeOf(name, line.scopeKey) == OperandType::Str;
             if (!rawForm) {
                 const auto values = AstBuilder::assignmentValues(line.arguments[1].raw);
                 for (int valueIndex = 0; valueIndex < values.size(); ++valueIndex) {

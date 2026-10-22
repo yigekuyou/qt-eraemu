@@ -304,10 +304,11 @@ void mergeVarTypes(LoadTimeVarTypes& dest, const LoadTimeVarTypes& src) {
 
 } // namespace
 
-OperandType LoadTimeVarTypes::typeOf(const QString& name, const QString& function) const {
+OperandType LoadTimeVarTypes::typeOf(const QString& name, const QString& scopeKey) const {
     const QString key = name.toUpper();
-    if (!function.isEmpty()) {
-        const auto fit = localVars.constFind(function.toUpper());
+    if (!scopeKey.isEmpty()) {
+        // 段身份文本大小写敏感（脚本名）：**不**做 toUpper。
+        const auto fit = localVars.constFind(scopeKey);
         if (fit != localVars.constEnd()) {
             const auto it = fit.value().constFind(key);
             if (it != fit.value().constEnd()) return it.value();
@@ -383,7 +384,8 @@ QSharedPointer<ExpressionNode> ErbLoader::resolveExpr(
 //   * `#DIM GLOBAL X` / `#GLOBAL X` / `#GLOBALS X` / `#PRIVATE X` 都是广域。
 void ErbLoader::preRegisterDeclarations(const QStringList& files,
                                         const QHash<QString, QString>& decoded,
-                                        const QSet<QString>& headers) {
+                                        const QSet<QString>& headers,
+                                        const QString& root) {
     if (!m_parseTable) return;
     // 本函数在 GUI 线程上跑：期间心跳定时器（也在 GUI 线程）无法触发，
     // 所以进度直接在循环里打印 —— 逐行日志是同步写的，主线程就算被占住，
@@ -395,13 +397,21 @@ void ErbLoader::preRegisterDeclarations(const QStringList& files,
     m_parseTable->beginDeclarationPreRegistration();
     for (const QString& f : files) {
         const bool isHeader = headers.contains(f);
+        // 段身份 = (脚本名, 段起点行)。脚本名必须与 loadScript / parseOneFile
+        // 用同一个 scriptNameFor（相对 root 的路径），否则三处会算出不同身份。
+        const QString scriptName = scriptNameFor(root, f);
         QStringList warnings;
         // 关键：按**预处理后**的行登记（与 AstBuilder 所见逐字一致），
         // 否则 [SKIPSTART]/#DEFINE/_Rename 会让声明与最终登记不一致。
         const QList<ErbSourceLine> src = m_preprocessor.process(decoded.value(f), &warnings, f);
         QString currentFunction;
+        // **预处理后行序**里的段起点（@ 标签所在的下标；文件头段 = -1）。
+        // 与 loadScript 的 currentFunctionLine / parseOneFileReadOnly 的
+        // segmentStart 是同一个数 —— 段身份的唯一锚点。
+        int segmentStart = -1;
         bool afterLabel = false;
-        for (const ErbSourceLine& sl : src) {
+        for (int i = 0; i < src.size(); ++i) {
+            const ErbSourceLine& sl = src.at(i);
             const QString t = sl.text.trimmed();
             if (t.isEmpty() || t.startsWith(QLatin1Char(';'))) continue;   // 空行/注释不结束声明区
             if (t.startsWith(QLatin1Char('@'))) {
@@ -418,13 +428,14 @@ void ErbLoader::preRegisterDeclarations(const QStringList& files,
                 }
                 const QString name = label.left(cut).trimmed();
                 if (!name.isEmpty()) currentFunction = name;
+                segmentStart = i;
                 afterLabel = true;
                 continue;
             }
             if (t.startsWith(QLatin1Char('#'))) {
                 if (!isHeader && !afterLabel) continue;   // 函数声明之外：loadScript 忽略
                 m_parseTable->preRegisterDeclaration(sl.text, ScriptPosition(f, sl.physicalLine, 1),
-                                                     currentFunction, isHeader);
+                                                     currentFunction, isHeader, scriptName, segmentStart);
                 continue;
             }
             // VARI / VARS（EM/emuera.net 的作用域变量声明）：**语句**位置的私有
@@ -432,7 +443,7 @@ void ErbLoader::preRegisterDeclarations(const QStringList& files,
             // `COLUMN:0 = "x"` 会按 Int 定型（FL3.8 有 907 处）。
             if (EraParseTable::isScopedVariableLine(t)) {
                 m_parseTable->registerScopedVariableLine(sl.text, ScriptPosition(f, sl.physicalLine, 1),
-                                                         currentFunction);
+                                                         currentFunction, scriptName, segmentStart);
                 afterLabel = false;
                 continue;
             }
@@ -448,11 +459,17 @@ void ErbLoader::preRegisterDeclarations(const QStringList& files,
 }
 
 void ErbLoader::scanVariableTypes(const QString& content, bool isHeaderFile,
+                                  const QString& scriptName, const ErbPreprocessor& pp,
                                   LoadTimeVarTypes& out) const {
-    const QStringList lines = content.split(QLatin1Char('\n'));
+    // 与 loadScript 完全同一条预处理（行连接 / SKIP / 宏展开），否则段起点
+    // 下标会与最终行数组错位 —— 私有类型就查不到（同一病根的第二处）。
+    QStringList warnings;
+    const QList<ErbSourceLine> lines = pp.process(content, &warnings, scriptName);
     QString currentFunction;
+    int segmentStart = -1;
     bool afterLabel = false;
-    for (const QString& raw : lines) {
+    for (int lineIndex = 0; lineIndex < lines.size(); ++lineIndex) {
+        const QString raw = lines.at(lineIndex).text;
         const QString t = raw.trimmed();
         // 空行 / 注释（Null 行）：不影响 afterLabel
         if (t.isEmpty() || t.startsWith(QLatin1Char(';'))) continue;
@@ -467,6 +484,7 @@ void ErbLoader::scanVariableTypes(const QString& content, bool isHeaderFile,
             }
             label = label.left(cut).trimmed();
             if (!label.isEmpty()) currentFunction = label.toUpper();
+            segmentStart = lineIndex;
             afterLabel = true;
             continue;
         }
@@ -517,9 +535,15 @@ void ErbLoader::scanVariableTypes(const QString& content, bool isHeaderFile,
             if (d.name.isEmpty()) continue;
 
             const OperandType type = d.typeIsStr ? OperandType::Str : OperandType::Int;
-            const bool global = isHeaderFile || isGlobal || d.global || currentFunction.isEmpty();
-            if (global) out.globalVars.insert(d.name.toUpper(), type);
-            else out.localVars[currentFunction].insert(d.name.toUpper(), type);
+            const bool global = isHeaderFile || isGlobal || d.global
+                                || currentFunction.isEmpty() || segmentStart < 0;
+            if (global) {
+                out.globalVars.insert(d.name.toUpper(), type);
+            } else {
+                // 段身份（不是函数名）：同名 @F 的两段各自一份类型。
+                out.localVars[eravar::segmentKeyText(scriptName, segmentStart)]
+                    .insert(d.name.toUpper(), type);
+            }
             continue;
         }
 
@@ -588,10 +612,14 @@ ParsedErbFile ErbLoader::parseOneFileReadOnly(const QString& filePath,
         // 当前函数作用域（#DIM/#DIMS 私有变量的类型查询要用）。与 loadScript
         // 同一规则：遇到函数标签行就切换；本行自身的归约用**切换前**的作用域
         //（标签行的实参列表不是表达式，无影响）。
-        QString currentFunction;
+        QString currentFunction;   // 函数名事实（展示/形参），**不是**作用域键
+        // 段身份 = (脚本名, 段起点行)：与 preRegisterDeclarations / loadScript
+        // 用同一个 eravar::segmentKeyText。文件头段 = -1，也是独立身份。
+        int segmentStart = -1;
+        QString currentScope = eravar::segmentKeyText(pf.scriptName, segmentStart);
         const AstResolver resolver = [this, &types, &pf, &exprFailed, &currentPhysicalLine,
-                                     &filePath, &currentFunction, varTypes](const QString& e) {
-            auto ast = resolveExpr(e, types, /*quiet=*/false, varTypes, currentFunction);
+                                     &filePath, &currentScope, varTypes](const QString& e) {
+            auto ast = resolveExpr(e, types, /*quiet=*/false, varTypes, currentScope);
             if (!ast) {
                 const QString key = e.trimmed();
                 if (!key.isEmpty() && !exprFailed.contains(key)) {
@@ -604,27 +632,33 @@ ParsedErbFile ErbLoader::parseOneFileReadOnly(const QString& filePath,
             return ast;
         };
         // 赋值右值的临时归约：静默（字符串赋值随后由 StrFormParser 重新解释）
-        const AstResolver quietResolver = [this, &types, &pf, &currentFunction, varTypes](const QString& e) {
-            return resolveExpr(e, types, /*quiet*/ true, varTypes, currentFunction);
+        const AstResolver quietResolver = [this, &types, &pf, &currentScope, varTypes](const QString& e) {
+            return resolveExpr(e, types, /*quiet*/ true, varTypes, currentScope);
         };
         for (int i = 0; i < source.size(); ++i) {
             currentPhysicalLine = source.at(i).physicalLine;
             const ScriptPosition pos(filePath, source.at(i).physicalLine, 1);
             // 左值「已声明类型」：取自预扫描类型表（含本文件/跨文件/私有作用域）。
             // 命中 Str 的行在构建期即编译为 StrForm；未命中的标记待收尾。
-            const auto declaredType = [this, varTypes, &currentFunction](const QString& name) -> OperandType {
+            const auto declaredType = [this, varTypes, &currentScope](const QString& name) -> OperandType {
                 if (m_parseTable) {
-                    const OperandType t = m_parseTable->variableTable().typeOf(name, currentFunction);
+                    const OperandType t = m_parseTable->variableTable().typeOf(name, currentScope);
                     if (t != OperandType::Unknown) return t;
                 }
-                return varTypes ? varTypes->typeOf(name, currentFunction) : OperandType::Unknown;
+                return varTypes ? varTypes->typeOf(name, currentScope) : OperandType::Unknown;
             };
             LogicalLine line = AstBuilder::build(source.at(i).text, pos, resolver, quietResolver,
                                                   &pf.diagnostics, declaredType);
             line.lineIndex = i;
-            // 作用域切换在构建**之后**（与 loadScript 的顺序一致：先记 ownerFunction
-            // 再在遇到标签行时切换 currentFunction）。
-            if (line.kind == LineKind::FunctionLabel) currentFunction = line.labelName;
+            // 作用域切换在构建**之后**（与 loadScript 的顺序一致：行自身先按
+            // 旧作用域归约，遇到标签行才切到新段）。@ 行属于它自己开启的新段。
+            if (line.kind == LineKind::FunctionLabel) {
+                currentFunction = line.labelName;
+                segmentStart = i;
+                currentScope = eravar::segmentKeyText(pf.scriptName, segmentStart);
+            }
+            line.segmentStart = segmentStart;
+            line.scopeKey = currentScope;
             pf.lines.append(line);
         }
     }
@@ -770,11 +804,12 @@ bool ErbLoader::loadDirectory(const QString& dirPath, int depth) {
     {
         struct SyncScan { QString content; FunctionTypes functionTypes; LoadTimeVarTypes varTypes; };
         const QList<SyncScan> s2 =
-            QtConcurrent::blockingMapped(files, [this, &headerSet](const QString& f) {
+            QtConcurrent::blockingMapped(files, [this, &headerSet, &dirPath](const QString& f) {
                 SyncScan scan;
                 scan.content = readFileContent(f);
                 scan.functionTypes = scanFunctionTypes(scan.content);
-                scanVariableTypes(scan.content, headerSet.contains(f), scan.varTypes);
+                scanVariableTypes(scan.content, headerSet.contains(f),
+                                  scriptNameFor(dirPath, f), m_preprocessor, scan.varTypes);
                 return scan;
             });
         scans.reserve(s2.size());
@@ -800,7 +835,7 @@ bool ErbLoader::loadDirectory(const QString& dirPath, int depth) {
 
     // 「先登记 #DIM/#DIMS，再构造 AST」：按预处理后的行登记声明 + 结算，之后
     // 并行构建时解析器即可拿到完整用户变量类型。
-    preRegisterDeclarations(files, decoded, headerSet);
+    preRegisterDeclarations(files, decoded, headerSet, dirPath);
 
 
     // 2) 分块并行解析 + 主线程合并（限制内存峰值）
@@ -897,6 +932,14 @@ ErbLoader::LoadPrep ErbLoader::prepareLoad(const QString& dirPath, int depth) co
         for (const QString& h : headers) set.insert(h);
         return set;
     }();
+    // 预扫描用的预处理器快照：本函数是 const，不能改 m_preprocessor；而扫描
+    // 必须与后续装载用**同一套**宏/Rename（段起点下标完全一致），所以在本地
+    // 复制一份只读实例交给各 worker 线程并发 process()（process 是 const）。
+    ErbPreprocessor scanPP;
+    scanPP.setRenameMap(m_preprocessor.renameMap());
+    scanPP.setMacros(prep.macros);
+    scanPP.setMacroTable(prep.macroTable);
+    scanPP.setDebugMode(m_preprocessor.debugMode());
     const int threadCount = QThreadPool::globalInstance()->maxThreadCount();
     qInfo().noquote() << "[ErbLoader] 预扫描:读+解码+类型扫描开始" << prep.files.size()
                       << "个文件（头文件" << headers.size() << "个，并行线程"
@@ -906,7 +949,7 @@ ErbLoader::LoadPrep ErbLoader::prepareLoad(const QString& dirPath, int depth) co
     // 读取失败的文件（SAF 权限/文档失效）：计数 + 逐条告警（上限 20 条，避免刷屏），
     // 否则脚本会静默缺失而装载仍报 ok=true。
     std::atomic<int> failed{0};
-    const auto scanOne = [this, &headerSet, &failed](const QString& f) {
+    const auto scanOne = [this, &headerSet, &failed, scanPP, &dirPath](const QString& f) {
         FileScan scan;
         bool readOk = false;
         scan.content = readFileContent(f, &readOk);
@@ -916,7 +959,8 @@ ErbLoader::LoadPrep ErbLoader::prepareLoad(const QString& dirPath, int depth) co
                 qWarning() << "[load] ERB/ERH 读取失败，已跳过:" << f;
         }
         scan.functionTypes = scanFunctionTypes(scan.content);
-        scanVariableTypes(scan.content, headerSet.contains(f), scan.varTypes);
+        scanVariableTypes(scan.content, headerSet.contains(f),
+                          scriptNameFor(dirPath, f), scanPP, scan.varTypes);
         bumpLoadStage(1);
         return scan;
     };
@@ -1229,7 +1273,7 @@ void ErbLoader::onPrepFinished() {
                           << m_async.total << "个文件（头文件" << headerSet.size() << "个）";
         QElapsedTimer registerClock;
         registerClock.start();
-        preRegisterDeclarations(m_async.files, m_async.decoded, headerSet);
+        preRegisterDeclarations(m_async.files, m_async.decoded, headerSet, m_async.dirPath);
         m_async.registerMs = registerClock.elapsed();
         qInfo().noquote() << "[ErbLoader] 登记声明完成:" << m_async.registerMs << "ms";
     }

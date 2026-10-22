@@ -30,12 +30,14 @@ S -> M : Map::build(config, variableTable, type)
 note right of M
   Entry = { name, key, slot, dimensions, user, persisted }
 
-  · name  —— 文件里的标识，**裸名**（PRIV / CDFLAG / GLOBAL）
-  · key   —— eravar::VariableKey（私有变量自带 scopeId）
+  · name  —— 文件里的标识：广域/内建行是**裸名**；
+             私有行是 makePrivateStorageKey(段身份, 名字) = 段身份文本 + 0x1F + 名字
+             （唯一构造点，可经 parseSegmentKey 还原 (脚本, 段起点行)）
+  · key   —— eravar::VariableKey{scopeId, nameId}，scopeId = 段身份 intern
   · slot  —— 落在哪类容器（数据，不是 if 链）
   · persisted=false —— 只登记身份，不写文件
 
-  身份不进文件：文件里没有 0x1F，私有变量也只能靠裸名。
+  Local 声明但 scopeKey 为空 → 不入表（不退回函数名：返回值是另一个变量）。
 end note
 
 loop 每个 Entry（Map::build 末尾已排序：顺序 = 数据决定的全序，\n主键 slot → 次键大写名 → 内建先于用户 → 私有作用域名，\n与 QHash 遍历序 / QT_HASH_SEED 无关）
@@ -57,6 +59,14 @@ D -> F : 写入
 
 User -> E : LOAD / LOADGLOBAL / LOADVAR / LOADCHARA
 E -> D : decode() / decodeText()
+note right of D
+  版本是**一个**常量 EraBinaryData::Version：
+  二进制头的版本字段、decode 的校验、文本起始标记
+  __EMUERA_<Version>_STRAT__ 都由它派生。
+  旧档（版本不同）在这里**原子判废**：
+  「存档格式版本不兼容：本版本 N，旧存档（版本 M）请删除」，
+  失败不触碰目标 Document。没有 extension 计数/标记字/多版本分支。
+end note
 D --> E : Document
 E -> S : applyBinarySave(document)
 S -> S : resetForNewGame()
@@ -84,7 +94,8 @@ legend bottom
     在存档路径内 0 命中（它们的调用点只剩运行期/装载期）。
   · 顺带修掉的既有缺陷：函数私有 SAVEDATA 以前**既没写也没读**
     （旧过滤条件 `d.scope != VarScope::Global -> continue`）。现在按 C# 语义落盘；
-    五语料无此类声明，字节不变；有此类声明的游戏，新存档会多条目（旧档仍可读）。
+    五语料无此类声明，存档字节的这一类条目为空 —— 私有条目写盘名带段身份后
+    **旧档一律判废**（版本常量 1808→1809），不做兼容映射。
   · 顺序确定性（本轮已修）：用户 SAVEDATA 条目的顺序曾来自 QHash 遍历（Qt 每进程
     随机播种）。Map::build 末尾把 entries() 排成数据决定的全序（主键 slot →
     次键大写名 → 内建先于用户 → 私有作用域名），存档字节从此与 QT_HASH_SEED

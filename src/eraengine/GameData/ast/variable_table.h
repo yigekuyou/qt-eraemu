@@ -44,7 +44,8 @@ struct VariableDecl {
     QString     name;
     OperandType type = OperandType::Int;     // Int / Str
     VarScope    scope = VarScope::Global;
-    QString     function;                    // Local 时所属函数（标签名）
+    QString     function;                    // Local 时所属函数（标签名，仅展示/形参语义）
+    QString     scopeKey;                    // Local 时的段身份文本（私有域的唯一键）
     int         dimension = 1;
     QList<int>  lengths;
     // 「维数 -> 扁平偏移」的装载期几何：strides[i] = lengths[i+1..] 的乘积。
@@ -76,18 +77,19 @@ public:
     // 区分「完全相同的重复声明」与「真正冲突的重复声明」
     DeclStatus addChecked(const VariableDecl& decl);
 
-    // 查声明：先按函数局部，再按全局
+    // 查声明：先按段私有，再按全局。scopeKey = 段身份文本（eravar::segmentKeyText）
+    // —— **不是函数名**；空串 = 无私有上下文。
     [[nodiscard]] const VariableDecl* find(const QString& name,
-                                           const QString& function = QString()) const;
+                                           const QString& scopeKey = QString()) const;
     [[nodiscard]] bool contains(const QString& name) const;
     // 该名字是否**只**作为某个函数的私有变量/常量存在（广域声明与系统变量都没有）。
     // 对齐 C# IdentifierDictionary.privateDimList：在这种名字于当前函数解析不到时，
     // C# 抛 IdentifierNotFoundCodeEE「変数"X"はこの関数中では定義されていません」。
     [[nodiscard]] bool isPrivateOnlyName(const QString& name) const;
 
-    // 类型解析：函数上下文优先；无上下文时仅全局 + 「全表唯一局部」
+    // 类型解析：段上下文优先；无上下文时仅全局 + 「全表唯一局部」
     [[nodiscard]] OperandType typeOf(const QString& name,
-                                     const QString& function = QString()) const;
+                                     const QString& scopeKey = QString()) const;
 
     [[nodiscard]] int count() const;
     [[nodiscard]] QList<VariableDecl> declarations() const;
@@ -95,15 +97,15 @@ public:
     // saveShapes / resetForNewGame / applyBinarySave 每次存读档要调 2~4 次，
     // 旧写法每次都重建 18515 项的 QList（每项多个 QString/QList 浅拷贝）。
     [[nodiscard]] const QList<VariableDecl>& declarationsRef() const;
-    // 某函数的局部（私有）变量声明
-    [[nodiscard]] QList<VariableDecl> localsOf(const QString& function) const;
+    // 某段（段身份文本）的私有变量声明
+    [[nodiscard]] QList<VariableDecl> localsOf(const QString& scopeKey) const;
     // perf：执行热路径（每条指令都要解析私有作用域）用 —— 装载完成后 m_locals
     // 不再变化，按函数缓存声明列表，返回引用免去每次调用逐个拷贝 VariableDecl。
-    [[nodiscard]] const QList<VariableDecl>& localsOfRef(const QString& function) const;
+    [[nodiscard]] const QList<VariableDecl>& localsOfRef(const QString& scopeKey) const;
     // perf：私有作用域的**非 const 名字表**（setPrivateScope 的入参）也按函数缓存。
     // 此前每次 CALL/RETURN 都重建 QStringList（eraTW 地图逐字符 TRYCALLFORM 时
     // 一次绘制上万次），这里装载后不变，返回引用即可。
-    [[nodiscard]] const QStringList& localNamesOfRef(const QString& function) const;
+    [[nodiscard]] const QStringList& localNamesOfRef(const QString& scopeKey) const;
 
     // ---- 私有作用域名表（装载期建立，运行期只读）----
     // 「某函数里有哪些私有变量、各自的存储键是什么」在声明定稿之后就是**静态
@@ -112,7 +114,7 @@ public:
     // 且正确性依赖调用方把名字传全 —— 漏一个名字那个变量就静默退化成裸名。
     // 现在由声明（scope == Local 且非 const，与 localNamesOfRef 同一过滤口径）
     // 一次建好，经 VariableStorage::installPrivateScopeTable 装进存储层。
-    // 形状：scopeId（函数名 intern id） -> 名字(大写) -> 存储键 "FUNC\x1fNAME"。
+    // 形状：ScopeId（段身份 intern id） -> 名字(大写) -> 存储键 "段身份\x1fNAME"。
     using PrivateNameTable = QHash<eravar::ScopeId, QHash<QString, QString>>;
     // 前置条件：声明已定稿（resolveGlobalDeclarations 之后）。装载期调用一次即可。
     [[nodiscard]] PrivateNameTable buildPrivateNameTable() const;

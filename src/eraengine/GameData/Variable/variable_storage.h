@@ -268,15 +268,14 @@ public:
             QHash<QString, int> aliases;
             QHash<QString, QVariant> parameters;
             QHash<QString, QString> references;
-            // 当前调用帧的私有作用域**函数名**（大写）。仅供存储层内部按
-            // storageName(name) 解析时当作「当前帧快捷记录」使用 —— 求值器
-            // 不再读它，而是把 scope 作为参数传入（见 ExpressionEvaluator）。
-            QString privateScopeName;
+            // 当前调用帧的私有作用域身份 = **段身份的 intern id**（0 = 顶层）。
+            // 求值器把 scope 作为显式参数传入；这里只是帧快照的一部分。
+            eravar::ScopeId privateScopeId = eravar::kGlobalScope;
         };
         LocalContext localContext() const {
             return {m_localIntVars, m_localStrVars, m_argIntVars, m_argStrVars,
                     m_localAliases, m_parameters, m_references,
-                    m_privateScopeName};
+                    m_privateScopeId};
         }
         void setLocalContext(const LocalContext& context) {
             m_localIntVars = context.integers;
@@ -286,35 +285,31 @@ public:
             m_localAliases = context.aliases;
             m_parameters = context.parameters;
             m_references = context.references;
-            m_privateScopeName = context.privateScopeName;
-            m_privateScopeId = eravar::internName(m_privateScopeName);
+            m_privateScopeId = context.privateScopeId;
         }
-        // 当前帧的私有作用域函数名（大写；空 = 顶层）。存储层内部快捷记录；
-        // 求值器的解析一律使用显式传入的 eravar::ScopeId。
-        [[nodiscard]] const QString& privateScopeName() const { return m_privateScopeName; }
         // 当前帧作用名的 intern id（0 = 无私有作用域）。
         [[nodiscard]] eravar::ScopeId privateScopeId() const { return m_privateScopeId; }
-        // 填充某个函数的作用域名表（名字 -> 存储键），并把「当前帧」指向它。
-        // 名字表按 scopeId 常驻：不同函数的私有名互不覆盖，换函数只改指针。
+        // 填充某段的作用域名表（名字 -> 存储键），并把「当前帧」指向它。
+        // scope = **段身份 intern id**（不是函数名）。名字表按 scopeId 常驻：
+        // 不同段（含同名 @F 的两段）的私有名互不覆盖，换段只改指针。
         //
         // 装载期名表已安装（installPrivateScopeTable）后，本函数**只记录当前帧**，
         // names 参数不再参与任何构建 —— 「函数里有哪些私有变量」的唯一真相是
         // 声明（VariableTable::buildPrivateNameTable），装载期就定好了。
         // 签名保留：安装前的测试路径（先手工 setPrivateScope 再求值）仍用它建表。
-        void setPrivateScope(const QString& function, const QStringList& names) {
-            const QString fkey = function.toUpper();
-            const eravar::ScopeId scope = eravar::internName(fkey);
-            m_privateScopeName = fkey;
+        void setPrivateScope(eravar::ScopeId scope, const QStringList& names) {
             m_privateScopeId = scope;
+            if (scope == eravar::kGlobalScope) return;
             if (m_privateTableInstalled) return;   // 单一真相：装载期名表
             // 未安装（装载前 / 纯测试的存储对象）：按调用方给的名字临时建表。
             // 已登记过的作用域直接复用（声明表装载后不变）。
             if (m_privateNames.contains(scope)) return;
             QHash<QString, QString> next;
             next.reserve(names.size());
+            const QString& scopeText = eravar::nameOf(scope);
             for (const auto& name : names)
                 next.insert(name.toUpper(),
-                            eravar::makePrivateStorageKey(fkey, name));
+                            eravar::makePrivateStorageKey(scopeText, name));
             m_privateNames.insert(scope, next);
         }
         // 安装装载期建立的私有名表（EraParseTable 在声明定稿后调用一次）。
@@ -629,8 +624,8 @@ private:
 		const VariableTable* m_saveVariableTable = nullptr;
 		IntDimProvider m_intDimProvider;
 		QHash<QString, QVariant> m_parameters;
-        // 私有作用域名表：scopeId（函数名 intern id） -> name(upper) -> storage key。
-        // 每个函数一张，互不覆盖；scope == 0 不在表中（顶层只有裸名）。
+        // 私有作用域名表：ScopeId（**段身份** intern id） -> name(upper) -> storage key。
+        // 每段一张，互不覆盖；scope == 0 不在表中（顶层只有裸名）。
         // 装载期由声明一次建好（VariableTable::buildPrivateNameTable ->
         // installPrivateScopeTable），运行期只查不建。
         QHash<eravar::ScopeId, QHash<QString, QString>> m_privateNames;
@@ -639,8 +634,7 @@ private:
         // 下一次装载收尾再装。
         bool m_privateTableInstalled = false;
         QHash<QString, QString> m_references;
-        QString m_privateScopeName;   // 当前帧的私有作用域函数名（大写）
-        eravar::ScopeId m_privateScopeId = eravar::kGlobalScope; // 同上 intern id
+        eravar::ScopeId m_privateScopeId = eravar::kGlobalScope; // 当前帧的段身份
         // VariableKey -> 存储键串 的记忆化：(scope<<32)|name -> 串在 m_storageKeyStrings 的下标。
         // 串放 std::deque（push_back 不搬迁既有元素）—— storageKeyFor 返回的
         // const QString& 在任何后续登记之后仍然有效，不依赖 QHash 节点实现细节。

@@ -76,7 +76,7 @@ void EraParseTable::setExpressionEvaluator(ExpressionEvaluator* evaluator) {
     if (!evaluator) return;
     evaluator->setVariableDimProvider([this](const QString& name) {
         const auto* line = lineAt(m_position.script, m_position.line);
-        const auto* decl = m_variables.find(name, line ? line->ownerFunction : QString());
+        const auto* decl = m_variables.find(name, line ? line->scopeKey : QString());
         return decl ? decl->dimension : 1;
     });
 }
@@ -94,7 +94,7 @@ void EraParseTable::setExpressionEvaluator(ExpressionEvaluator* evaluator) {
 int EraParseTable::variableFlags(const QString& name) const {
     if (name.isEmpty()) return 0;
     // ① 用户变量 / 常量
-    if (const VariableDecl* decl = m_variables.find(name, executionScope())) {
+    if (const VariableDecl* decl = m_variables.find(name, executionScopeKey())) {
         int flags = (decl->type == OperandType::Str) ? 2 : 1;
         if (decl->isConst) flags |= 4;
         // C# 的 IsArray2D/IsArray3D 看的是 VariableCode 的**元素维数**标志：
@@ -129,7 +129,7 @@ QSharedPointer<ExpressionNode> EraParseTable::expressionAst(const QString& expr,
     // 传 ownerFunction，否则会按「无作用域」解析。
     QString scope;
     if (isFinalized()) {
-        if (const auto* line = lineAt(m_position.script, m_position.line)) scope = line->ownerFunction;
+        if (const auto* line = lineAt(m_position.script, m_position.line)) scope = line->scopeKey;
     }
     return expressionAstInScope(expr, scope, quiet);
 }
@@ -143,7 +143,7 @@ QSharedPointer<ExpressionNode> EraParseTable::expressionAstInScope(const QString
 
 QSharedPointer<ExpressionNode> EraParseTable::runtimeVariableReference(const QString& text) {
     // 见头文件说明：运行期、不折叠常量、静默。
-    return parseScopedExpression(text, executionScope(), /*quiet=*/true,
+    return parseScopedExpression(text, executionScopeKey(), /*quiet=*/true,
                                  /*foldConstants=*/false, /*allowAfterFinalize=*/true);
 }
 
@@ -197,9 +197,9 @@ bool EraParseTable::hasCallableLabel(const QString& label) const {
 // 每函数的形参名集合（大写）。按需构建并缓存；失效点 = clear()/loadScript
 //（新脚本可能带来新的 @label 形参）。「变量分词」的装载期解析与收尾定型共用。
 // 收尾定型（applyVariableTypes）的并行趟开始前会先建全 —— 定型期间只读不插。
-const QSet<QString>* EraParseTable::paramNamesOf(const QString& upperScope) const
+const QSet<QString>* EraParseTable::paramNamesOf(const QString& scopeKey) const
 {
-    return loadpass::paramNamesOf(m_paramNamesByFunction, upperScope);
+    return loadpass::paramNamesOf(m_paramNamesBySegment, scopeKey);
 }
 
 const LogicalLine* EraParseTable::lineAt(const QString& scriptName, int line) const {
@@ -344,7 +344,7 @@ void EraParseTable::clear() {
     m_functions.clear();
     m_labelIndex.clear();
     m_privateDefaultPlans.clear();   // 私有初值调用计划随函数表一起作废
-    m_paramNamesByFunction.clear();  // 形参名集合随函数表一起作废
+    m_paramNamesBySegment.clear();  // 形参名集合随函数表一起作废
     m_diagnostics.clear();
     m_variables.clear();
     m_entryPoint.clear();
@@ -466,8 +466,8 @@ bool EraParseTable::loadScript(const QString& scriptName, const QList<LogicalLin
         }
     }
 
-    QString currentFunction;   // 用于 #DIM 的作用域判定
-    int currentFunctionLine = -1;   // 本函数段的起点（= 那个 @标签的行号；文件头 = -1）
+    QString currentFunction;   // **函数名**事实（形参/事件/RETURNF/展示）
+    int currentFunctionLine = -1;   // 段起点（预处理后行序里的 @ 标签下标；文件头 = -1）
     bool afterLabel = false;   // .ERB 中 # 行必须紧跟函数标签（对齐 C# ErbLoader）
     QSet<QString> labelNames;  // 仅用于装载日志的「本脚本标签名个数」，不保留
 
@@ -477,7 +477,25 @@ bool EraParseTable::loadScript(const QString& scriptName, const QList<LogicalLin
             && line.kind != LineKind::FunctionLabel) {
             afterLabel = false;
         }
-        line.ownerFunction = currentFunction;   // 记录所属函数（供变量类型解析）
+        // ---- 段身份（私有作用域的唯一键）----
+        // 预处理后行序里的 @ 下标；本行自身就是 @ 时，它就是本段的起点（与
+        // LabelRef::functionLine 同一事实）。写入是**唯一**的：这里的值来自
+        // currentFunctionLine，不来自任何名字回查。
+        const int segmentForLine = (line.kind == LineKind::FunctionLabel) ? i : currentFunctionLine;
+        const QString expectedScope = eravar::segmentKeyText(scriptName, segmentForLine);
+        // 自检：解析线程（parseOneFileReadOnly）已写过同一字段 —— 两路必须同值。
+        // 只在非空时比较（单测手工构造的 LogicalLine 不带这个字段）。
+        if (!line.scopeKey.isEmpty() && line.scopeKey != expectedScope) {
+            ++m_segmentIdentityMismatches;
+            if (m_segmentIdentityMismatches <= 5) {
+                qWarning().noquote() << "[parse] 段身份两侧不一致:" << scriptName
+                                     << "line" << i << "parse=" << line.scopeKey
+                                     << "load=" << expectedScope;
+            }
+        }
+        line.scopeKey = expectedScope;
+        line.segmentStart = segmentForLine;
+        line.ownerFunction = currentFunction;   // 函数名事实（不是作用域键）
 
         // 变量声明（#DIM/#DIMS/#GLOBAL/#GLOBALS/#PRIVATE）
         // 注：Emuera 的函数形参是「引用私有变量」（@F(VAR:0)），类型来自 #DIM，
@@ -489,9 +507,10 @@ bool EraParseTable::loadScript(const QString& scriptName, const QList<LogicalLin
             // .ERH（头文件）：文件级 #DIM = 全局（对齐 C# HeaderFileLoader）
             // .ERB（脚本）  ：# 行必须紧跟函数标签，否则告警并忽略（对齐 C# ErbLoader）
             if (isHeaderFile || afterLabel) {
+                // 声明的作用域 = 当前段身份（头文件一律广域，见 parseVariableDeclaration）。
                 // 已由装载器预登记（先预处理→先登记→再构造）：不再重复登记。
                 if (!m_declarationsPreRegistered)
-                    parseVariableDeclaration(line, currentFunction, isHeaderFile);
+                    parseVariableDeclaration(line, currentFunction, line.scopeKey, isHeaderFile);
             } else {
                 m_diagnostics.add(DiagSeverity::Warning, DiagCode::kSharpLine,
                                   line.position.filename, line.position.lineNumber, line.position.column, 0,
@@ -500,10 +519,10 @@ bool EraParseTable::loadScript(const QString& scriptName, const QList<LogicalLin
             }
         } else if (line.kind == LineKind::Instruction && isScopedVariableLine(line.raw)) {
             // VARI / VARS：语句位置的私有变量声明（是否已登记由预扫描决定）。
-            applyScopedVariableLine(line, currentFunction);
+            applyScopedVariableLine(line, currentFunction, line.scopeKey);
         }
         if (line.kind == LineKind::FunctionLabel) {
-            line.ownerFunction = currentFunction;   // 函数标签行自身
+            line.ownerFunction = currentFunction;   // 函数标签行自身（函数名事实）
             afterLabel = true;
         }
 
@@ -614,17 +633,21 @@ bool EraParseTable::loadScript(const QString& scriptName, const QList<LogicalLin
                     if (lines.at(j).kind == LineKind::FunctionLabel) { decl.endLine = j - 1; break; }
                 }
 
+                // 「变量分词」的形参名集合与段身份同点构建（append-only；
+                // 查找端 paramNamesOf 只读不插 —— 并行装载/收尾趟安全）。
+                // 键 = 段身份文本：与私有域、AST 定型用的是**同一个**身份；
+                // 每个 @ 段登记自己的一份（同名函数的第二段也拿得到形参表，
+                // 与旧「按函数名查一份」的结果一致）。
+                QSet<QString> paramNames;
+                paramNames.reserve(decl.params.size());
+                for (const UserParamDecl& p : decl.params)
+                    paramNames.insert(p.name.toUpper());
+                m_paramNamesBySegment.insert(
+                    eravar::segmentKeyText(decl.script, decl.labelLine), std::move(paramNames));
                 // 同名函数重复定义：真实游戏（eraTW 的各个「口上」）普遍存在，
                 // C# 也是 first-wins，故静默忽略后者（不产生告警）。
                 if (!m_functions.contains(decl.name)) {
                     m_functions.insert(decl.name, decl);
-                    // 「变量分词」的形参名集合与函数表同点构建（append-only；
-                    // 查找端 paramNamesOf 只读不插 —— 并行装载/收尾趟安全）。
-                    QSet<QString> paramNames;
-                    paramNames.reserve(decl.params.size());
-                    for (const UserParamDecl& p : decl.params)
-                        paramNames.insert(p.name.toUpper());
-                    m_paramNamesByFunction.insert(decl.name, std::move(paramNames));
                 }
 
                 // 保留全部声明（事件函数的 4 组导航需要；同名多份）
@@ -739,6 +762,14 @@ int EraParseTable::getLabelPosition(const QString& scriptName, const QString& la
     return ref ? ref->line : -1;
 }
 
+QString EraParseTable::segmentKeyOfLabel(const QString& scriptName,
+                                        const QString& labelName) const {
+    const int line = getLabelPosition(scriptName, labelName);
+    if (line < 0) return QString();
+    const LogicalLine* l = lineAt(scriptName, line);
+    return l ? l->scopeKey : QString();
+}
+
 int EraParseTable::firstGotoLabelPosition(const QString& scriptName, int functionSegmentLine,
                                           const QString& labelName) const {
     // 一次索引查询 + 声明数次字段比较：名字折叠与「属于哪一段」都在装载期写进
@@ -753,11 +784,10 @@ int EraParseTable::currentFunctionSegment() const {
     // 有帧：帧里记的就是「进入的是哪个 @声明」（callLabelAt 可以指定同名函数的
     // 非首份声明），这正是段的身份。
     if (m_position.depth > 0) return m_position.callStack.last().entryLine;
-    // 没有帧（系统入口的直接执行）：行上的 ownerFunction 只是名字，按索引第一条
-    // 回查段起点 —— 与旧 findGotoLabelInFunction 的 start 计算逐字一致。
-    const QString scope = executionScope();
-    if (scope.isEmpty()) return -1;   // 第一个 @ 之前的文件头段
-    return getLabelPosition(m_position.script, scope);
+    // 没有帧（系统入口的直接执行）：直接读行的 segmentStart —— 装载期写入的
+    // 段起点下标；**不再按函数名回查**（同名 @F 的两段会回查到错误的那一份）。
+    const LogicalLine* line = lineAt(m_position.script, m_position.line);
+    return line ? line->segmentStart : -1;
 }
 
 bool EraParseTable::resolveJumpTarget(const QString& label, int& position) {
@@ -835,10 +865,10 @@ bool EraParseTable::hasPosition() const {
     return !m_position.script.isEmpty();
 }
 
-QString EraParseTable::executionScope() const {
-    // 作用域 = 正在执行的那一行所属的函数；装载期（无位置/越界）返回空串，
-    // 完整说明见 position_state.h 的 executionScope 契约。
-    return position::executionScope(m_position, makeScriptView());
+QString EraParseTable::executionScopeKey() const {
+    // 段身份文本 = 装载期写进行里的 scopeKey（不是函数名）。空 = 尚未装载/手工行。
+    const LogicalLine* line = lineAt(m_position.script, m_position.line);
+    return line ? line->scopeKey : QString();
 }
 
 eravar::ScopeId EraParseTable::executionScopeId() const {
@@ -969,8 +999,14 @@ void EraParseTable::beginDeclarationPreRegistration() {
 }
 
 void EraParseTable::preRegisterDeclaration(const QString& rawLine, const ScriptPosition& position,
-                                           const QString& function, bool isHeaderFile) {
-    parseVariableDeclarationText(rawLine, position, function, isHeaderFile);
+                                           const QString& function, bool isHeaderFile,
+                                           const QString& scriptName, int segmentStart) {
+    // 段身份 = (脚本名, 段起点行)。声明只在**函数段内**才是私有的：
+    // 头文件 / 文件头段 / 函数外的 # 行一律广域（与 loadScript 同一判据）。
+    const bool global = isHeaderFile || function.isEmpty() || segmentStart < 0;
+    const QString scopeKey = global ? QString()
+                                    : eravar::segmentKeyText(scriptName, segmentStart);
+    parseVariableDeclarationText(rawLine, position, function, scopeKey, isHeaderFile);
 }
 
 void EraParseTable::finishDeclarationPreRegistration() {
@@ -979,7 +1015,8 @@ void EraParseTable::finishDeclarationPreRegistration() {
 }
 
 void EraParseTable::parseVariableDeclarationText(const QString& rawLine, const ScriptPosition& position,
-                                                const QString& currentFunction, bool isHeaderFile) {
+                                                const QString& currentFunction, const QString& scopeKey,
+                                                bool isHeaderFile) {
     QString s = rawLine.trimmed();
     if (!s.startsWith(QLatin1Char('#'))) return;
     s = s.mid(1);
@@ -1031,9 +1068,8 @@ void EraParseTable::parseVariableDeclarationText(const QString& rawLine, const S
         // 不在任何函数内 = 广域；否则是该函数的**私有常量**）。
         // 私有常量只在声明它的函数内可见（对齐 C#：函数内 #DIM 走
         // LogicalLine.AddPrivateVariable，查询经 GetVariableToken 只查当前函数）。
-        const QString constOwner = (isGlobal || d.global || isHeaderFile
-                                    || currentFunction.isEmpty())
-                                       ? QString() : currentFunction;
+        const QString constOwner = (isGlobal || d.global || isHeaderFile || scopeKey.isEmpty())
+                                       ? QString() : scopeKey;
         if (d.isConst) {
             // 非常量字面量的初值（`#DIM CONST OBJ_ID_LAST = 人物数量上限`）：
             // 按字面量解析只会得到 0（曾因此 INRANGE(…, OBJ_ID_LAST) 恒假，
@@ -1072,9 +1108,12 @@ void EraParseTable::parseVariableDeclarationText(const QString& rawLine, const S
         decl.name = d.name;
         decl.type = d.typeIsStr ? OperandType::Str : OperandType::Int;
         // 全局判定：GLOBAL 关键字 / 头文件文件级 / 不在任何函数内
-        decl.scope = (isGlobal || d.global || isHeaderFile || currentFunction.isEmpty())
+        decl.scope = (isGlobal || d.global || isHeaderFile || scopeKey.isEmpty())
                          ? VarScope::Global : VarScope::Local;
+        // function 只保留「函数名」这个事实（形参/事件/RETURNF/展示）；
+        // 私有域的唯一键是 scopeKey（段身份文本）。
         decl.function = (decl.scope == VarScope::Local) ? currentFunction : QString();
+        decl.scopeKey = (decl.scope == VarScope::Local) ? scopeKey : QString();
         decl.dimension = d.dimension;
         decl.lengths = d.lengths;
         decl.lengthExprs = d.lengthExprs;
@@ -1120,8 +1159,8 @@ void EraParseTable::parseVariableDeclarationText(const QString& rawLine, const S
 }
 
 void EraParseTable::parseVariableDeclaration(const LogicalLine& line, const QString& currentFunction,
-                                            bool isHeaderFile) {
-    parseVariableDeclarationText(line.raw, line.position, currentFunction, isHeaderFile);
+                                            const QString& scopeKey, bool isHeaderFile) {
+    parseVariableDeclarationText(line.raw, line.position, currentFunction, scopeKey, isHeaderFile);
 }
 
 // ---------------------------------------------------------------------------
@@ -1149,7 +1188,8 @@ bool EraParseTable::isScopedVariableLine(const QString& rawLine) {
 }
 
 void EraParseTable::registerScopedVariableLine(const QString& rawLine, const ScriptPosition& position,
-                                               const QString& function) {
+                                               const QString& function, const QString& scriptName,
+                                               int segmentStart) {
     const loadpass::ScopedVarSpec spec = loadpass::parseScopedVarSpec(rawLine);
     if (!spec.ok) return;
     if (function.isEmpty()) {
@@ -1165,29 +1205,38 @@ void EraParseTable::registerScopedVariableLine(const QString& rawLine, const Scr
     // 复用 #DIM/#DIMS 的登记路径：类型/维度/作用域判定完全同源。
     QString declText = (spec.isStr ? QStringLiteral("#DIMS ") : QStringLiteral("#DIM ")) + spec.name;
     for (const QString& l : spec.lengths) declText += QStringLiteral(", ") + l;
-    parseVariableDeclarationText(declText, position, function, /*isHeaderFile=*/false);
+    const QString scopeKey = segmentStart < 0 ? QString()
+                                              : eravar::segmentKeyText(scriptName, segmentStart);
+    parseVariableDeclarationText(declText, position, function, scopeKey, /*isHeaderFile=*/false);
 }
 
-void EraParseTable::applyScopedVariableLine(LogicalLine& line, const QString& function) {
+void EraParseTable::applyScopedVariableLine(LogicalLine& line, const QString& function,
+                                            const QString& scopeKey) {
     const loadpass::ScopedVarSpec spec = loadpass::parseScopedVarSpec(line.raw);
     if (!spec.ok) return;
-    if (!m_declarationsPreRegistered)
-        registerScopedVariableLine(line.raw, line.position, function);
+    if (!m_declarationsPreRegistered) {
+        // 未预登记路径（单测/单文件）：行上已有段身份，直接用它登记。
+        QString declText = (spec.isStr ? QStringLiteral("#DIMS ") : QStringLiteral("#DIM ")) + spec.name;
+        for (const QString& l : spec.lengths) declText += QStringLiteral(", ") + l;
+        parseVariableDeclarationText(declText, line.position, function, scopeKey,
+                                     /*isHeaderFile=*/false);
+    }
     if (function.isEmpty()) { line.arguments.clear(); return; }
 
     // 运行期交接用两个操作数：
     //   [0] 目标变量（AST = VariableNode，供既有赋值路径复用）
     //   [1] 初值（若有；VARS 是字面量字符串 —— 按 C# 不走 FORM 解析）
     // 无初值时只留 [0]，ExecutionEngine 什么都不写（对齐 C# 的「空 else」）。
+    // 表达式按**段身份**解析（与私有域/形参名表同一个键；function 只是函数名事实）。
     Operand target(spec.name);
-    target.ast = expressionAstInScope(spec.name, function, /*quiet=*/true);
+    target.ast = expressionAstInScope(spec.name, scopeKey, /*quiet=*/true);
     line.arguments = { target };
     if (spec.hasInit) {
         Operand init(spec.init);
         if (spec.isStr) {
             init.ast = QSharedPointer<LiteralNode>::create(spec.init);
         } else {
-            init.ast = expressionAstInScope(spec.init, function, /*quiet=*/true);
+            init.ast = expressionAstInScope(spec.init, scopeKey, /*quiet=*/true);
             if (!init.ast) return;   // 初值无法解析：声明仍在，只是这次不写初值
         }
         line.arguments.append(init);
@@ -1215,7 +1264,7 @@ loadpass::LoadContext EraParseTable::makeLoadContext() {
     // 诊断**不在视图里**：每次 pass 运行的 sink 是显式参数（见 load_passes.h）。
     return loadpass::LoadContext{
         m_scripts, m_variables, m_functions, m_constantTable, m_variableStorage,
-        m_evaluator, m_gameBaseData, m_labelIndex, m_paramNamesByFunction,
+        m_evaluator, m_gameBaseData, m_labelIndex, m_paramNamesBySegment,
         m_declarationsResolved, m_constProvidersReady};
 }
 
@@ -1516,8 +1565,8 @@ void EraParseTable::markLoadComplete() {
 // 字符串赋值 / #DIM 初值 / 用户函数类型：实现已搬到 load_passes.cpp（收尾步骤 2）。
 // ---------------------------------------------------------------------------
 
-void EraParseTable::applyPrivateVariableDefaults(const QString& function) {
-    if (function.isEmpty()) return;
+void EraParseTable::applyPrivateVariableDefaults(const QString& scopeKey) {
+    if (scopeKey.isEmpty()) return;
     // 「怎么写私有初值」是装载期静态（存储键 FUNC\x1fNAME、声明尺寸、初值表），
     // 每函数首调时构建一次计划，此后每次 CALL 只按计划直写存储 ——
     // 旧路径每次 CALL 都按裸名走 storageName（eraUpperKey 扫描 + 两次哈希）
@@ -1525,27 +1574,27 @@ void EraParseTable::applyPrivateVariableDefaults(const QString& function) {
     // applyPrivateVariableDefaults 恒在 enterCall 之后（被调函数作用域已就位），
     // 复合键解析与作用域无关（恒等），计划与旧路径结果一致。
     if (!m_variableStorage) return;
-    for (const PrivateDefaultEntry& e : privateDefaultPlan(function.toUpper()))
+    for (const PrivateDefaultEntry& e : privateDefaultPlan(scopeKey))
         m_variableStorage->applyPrivateDefault(e.storageKey, e.isString, e.ensureSize,
                                                e.defaultInt, e.defaultStr);
 }
 
 const QList<EraParseTable::PrivateDefaultEntry>&
-EraParseTable::privateDefaultPlan(const QString& fkey) {
-    const auto cached = m_privateDefaultPlans.constFind(fkey);
+EraParseTable::privateDefaultPlan(const QString& scopeKey) {
+    const auto cached = m_privateDefaultPlans.constFind(scopeKey);
     if (cached != m_privateDefaultPlans.constEnd()) return cached.value();
     QList<PrivateDefaultEntry> plan;
-    for (const VariableDecl& d : m_variables.localsOfRef(fkey)) {
+    for (const VariableDecl& d : m_variables.localsOfRef(scopeKey)) {
         if (d.isConst || !d.isPrivate || d.isReference || d.isCharaData) continue;
         PrivateDefaultEntry e;
-        e.storageKey = eravar::makePrivateStorageKey(fkey, d.name);
+        e.storageKey = eravar::makePrivateStorageKey(scopeKey, d.name);
         e.isString = (d.type == OperandType::Str);
         e.ensureSize = d.lengths.isEmpty() ? 0 : d.lengths.first();
         e.defaultInt = d.defaultInt;
         e.defaultStr = d.defaultStr;
         plan.append(std::move(e));
     }
-    return *m_privateDefaultPlans.insert(fkey, std::move(plan));
+    return *m_privateDefaultPlans.insert(scopeKey, std::move(plan));
 }
 
 // ---------------------------------------------------------------------------
@@ -1598,7 +1647,7 @@ void EraParseTable::traceHtmlStringArguments() {
         const OperandType nodeType = line.arguments[0].ast ? line.arguments[0].ast->valueType()
                                                            : OperandType::Unknown;
         if (nodeType != OperandType::Str
-            && m_variables.typeOf(lhs, line.ownerFunction) != OperandType::Str) return false;
+            && m_variables.typeOf(lhs, line.scopeKey) != OperandType::Str) return false;
         name = lhs;
         append = op == QLatin1String("+=");
         value = line.arguments[1].ast;
@@ -1624,7 +1673,7 @@ void EraParseTable::traceHtmlStringArguments() {
         for (int j = before - 1; j >= 0; --j) {
             const LogicalLine& line = lines.at(j);
             if (line.kind == LineKind::Null || line.kind == LineKind::Preprocessor) continue;
-            if (line.ownerFunction != scope) return false;    // 跨函数：链断，放弃
+            if (line.scopeKey != scope) return false;    // 跨段：链断，放弃
             QString name; bool append = false; QSharedPointer<ExpressionNode> value;
             if (!fragmentWrite(line, name, append, value)) return false;   // 控制流/调用/其它
             if (name.compare(var, Qt::CaseInsensitive) != 0) continue;     // 别的变量：透过
@@ -1654,7 +1703,7 @@ void EraParseTable::traceHtmlStringArguments() {
             QString var;
             if (!htmlPrintTarget(lines.at(i), var)) continue;
             QList<QSharedPointer<ExpressionNode>> fragments;
-            if (!traceChain(lines, lines.at(i).ownerFunction, var, i, 0, fragments)) continue;
+            if (!traceChain(lines, lines.at(i).scopeKey, var, i, 0, fragments)) continue;
             if (fragments.size() < 2) continue;              // 单片段：构建期已编译
             QSharedPointer<ExpressionNode> joined = fragments.first();
             for (int k = 1; k < fragments.size(); ++k)

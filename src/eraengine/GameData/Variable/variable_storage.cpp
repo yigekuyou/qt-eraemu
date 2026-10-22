@@ -521,7 +521,6 @@ void VariableStorage::initialize(int maxCharacters, int localSize)
 		// 调用方名字建表（旧行为），不会出现「已安装但空表」的静默退化。
 		m_privateNames.clear();
 		m_privateTableInstalled = false;
-		m_privateScopeName.clear();
 		m_privateScopeId = eravar::kGlobalScope;
 		if (localSize > 0) {
 				m_localIntVars.fill(0, localSize);
@@ -946,7 +945,7 @@ void VariableStorage::restoreDeclaredDefaults()
 		if (d.isConst || d.isReference || d.isCharaData || d.isGlobal || d.isArg) continue;
 		// 与 setPrivateScope / computeVariableAccess 同一个构造点（分隔符只在那里出现）。
 		const QString key = d.scope == VarScope::Local
-			? eravar::makePrivateStorageKey(d.function, d.name)
+			? eravar::makePrivateStorageKey(d.scopeKey, d.name)
 			: d.name.toUpper();
 		const QString storageKey = resolvedStorageName(key);
 		const QList<int> dims = d.lengths.isEmpty() ? QList<int>{1} : d.lengths;
@@ -1059,7 +1058,6 @@ void VariableStorage::resetForNewGame()
 		// 所有私有名静默退化成裸名（又是另一个变量）。未安装（测试手工路径）时
 		// 保持旧行为清空。
 		if (!m_privateTableInstalled) m_privateNames.clear();
-		m_privateScopeName.clear();
 		m_privateScopeId = eravar::kGlobalScope;
 
 		restoreDeclaredDefaults();

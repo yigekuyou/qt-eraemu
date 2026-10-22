@@ -456,8 +456,10 @@ bool SystemStateMachine::callLabelRef(const LabelRef& ref) {
     if (!m_table || ref.line < 0 || ref.script.isEmpty()) {
         return false;
     }
-    // 函数私有变量初值（#DIM X = 7）
-    m_table->applyPrivateVariableDefaults(m_table->labelNameAt(ref.script, ref.line));
+    // 函数私有变量初值（#DIM X = 7）。
+    // 参数是**段身份**（脚本, 段起点行）——不是函数名：同名 @F 的两份各有
+    // 自己的私有域；函数名文本在这里查不到任何声明（会静默丢掉全部初值）。
+    m_table->applyPrivateVariableDefaults(eravar::segmentKeyText(ref.script, ref.line));
     const int retLine = m_table->scriptLineCount(ref.script);
     return m_table->callLabelAt(ref.script, ref.line, ref.script, retLine);
 }

@@ -281,7 +281,11 @@ int main(int argc, char* argv[]) {
         copyTable.markLoadComplete();
         copyTable.setEntryPoint("COPY");
         check(copyRunner.runToCompletion() == ExecState::Halt, "ARRAYCOPY program completes");
-        values.setPrivateScope("COPY", {"SRC", "DST", "SS", "DS", "SMALL", "BIG", "COPY_NAME"});
+        // 运行期身份 = 段身份 (脚本名, 段起点)：与装载期名表同一个键
+        //（names 参数在安装后已被忽略，这里只是把「当前帧」指向该段）。
+        values.setPrivateScope(
+            eravar::internName(copyTable.segmentKeyOfLabel(QStringLiteral("copy"),
+                                                            QStringLiteral("COPY"))), {});
         check(values.getGlobalInt2D("DST", 1, 1) == 71
               && values.getGlobalInt2D("DST", 2, 1) == 88,
               "ARRAYCOPY 2D per-axis overlap preserves destination tail");

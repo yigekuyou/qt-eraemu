@@ -33,11 +33,15 @@
 //   · id 只能经 nameOf() 还原成文本（调试/测试渲染、存储层字符串键的解析）。
 namespace eravar {
 
-// 作用域身份 = 函数名的 intern id（0 = 顶层：无私有作用域）。
-// 与 VariableKey::scope 是同一张表 —— 运行期「当前作用域」是可以显式传参的
-// 普通值，不再是存储层里需要求值器去对账的环境状态。
+// 作用域身份 = **段身份** (脚本, 段起点行) 的 intern id（0 = 顶层：无私有作用域）。
+// 段起点行 = 该段那个 @函数标签的行号（文件头段 = -1），与 LabelRef::functionLine
+// 是同一个事实。同名 @F 的两份声明因此是**两个不同的段 id**（两份私有域）。
+// 运行期「当前作用域」是可以显式传参的普通值，不再是存储层里需要求值器
+// 去对账的环境状态。**函数名不再是作用域键** —— 名字只在需要「函数名」这一
+// 事实的地方使用（形参、事件分组、RETURNF 类型检查）。
 using ScopeId = quint32;
 inline constexpr ScopeId kGlobalScope = 0;
+inline constexpr ScopeId kInvalidScope = 0xFFFFFFFFu;
 
 // 变量身份键：两个 intern id。
 //   scope == 0  -> 无私有作用域（广域声明 / 未声明裸名 / LOCAL·ARG 等槽位名）
@@ -62,6 +66,19 @@ struct VariableKey {
 // nameOf：id -> 名字（id 0 / 越界 -> 空串）。返回的引用永不悬垂（见 .cpp 的 deque 说明）。
 [[nodiscard]] quint32 internName(const QString& name);
 [[nodiscard]] const QString& nameOf(quint32 id);
+
+// ---- 段身份（私有作用域的唯一键）----
+// 私有作用域 = 段身份 (脚本名, 段起点行)。段起点行 = 该段 @函数标签的行号
+// （文件头段 = -1），与 LabelRef::functionLine 是同一份事实，装载期唯一写入。
+// 返回的文本**总是含 ':'**（ERB 标识符不能含 ':'），因此它不可能与变量名
+// 撞车：同一张 intern 表里，变量名 id 与作用域 id 不会互相冒充。
+// 这是段身份文本的**唯一构造点**；其它代码只读装载期算好的字段。
+[[nodiscard]] QString segmentKeyText(const QString& script, int functionLine);
+// segmentKeyText 的逆：把段身份文本还原成 (脚本, 段起点行)。
+// 存档条目的私有写盘名 = 段身份文本 + 0x1F + 名字，因此这是「私有变量属于
+// 哪个段」从字节还原的唯一入口。格式不认识（缺长度/分隔/行号）返回 false。
+// 注意：存储键构造点会做大写规范化，脚本名大小写不敏感（与 internName 同口径）。
+[[nodiscard]] bool parseSegmentKey(const QString& text, QString& script, int& functionLine);
 
 // ---- 复合键的唯一构造点 ----
 // scopeUpper == 空串时也会得到 "\x1fNAME"（常数表键的历史形态，调用方语义自担）；

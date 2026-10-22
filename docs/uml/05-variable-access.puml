@@ -9,7 +9,8 @@ title 运行期变量访问流程（一张表，两条入口）
 
 start
 :stepOnce() 取当前行
-作用域 = intern(line.ownerFunction) → ScopeId（换函数时才更新）;
+作用域 = intern(line.scopeKey) → ScopeId（换函数时才更新）
+line.scopeKey = 段身份文本 "(脚本名, 段起点行)"，装载期唯一写入;
 :入口二选一：
 · 表达式求值 evaluateVariable / assignVariable
 · FOR·NEXT 计数器 readIntNode / writeIntNode;
@@ -47,6 +48,10 @@ legend right
   · 作用域是**参数**（eravar::ScopeId），只有按名解析读它；
     私有名表已由装载期安装，换函数只改一个 id、不建表；
     键自带作用域，所以没有「作用域守卫」这一层。
+  · 作用域身份 = **段身份 (脚本名, 段起点行)**，不是函数名：
+    同名 @F 的两份声明是两个段、两套私有域。身份文本由
+    eravar::segmentKeyText 唯一构造（总含 ':'，与变量名 id 不可能撞车），
+    装载期写进 line.scopeKey，运行期只 intern 一次、不按名字回查。
   · 两条例外是 Era 语义，不是实现分叉：
     - 私有键（scopeId != 0）保持宽松 1 维读
     - 裸键维数不符 → 按名原语（旧路在那一处的 throw）

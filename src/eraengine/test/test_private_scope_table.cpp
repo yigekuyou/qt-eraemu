@@ -44,7 +44,18 @@
 #include "script_runner.h"
 #include "variable_storage.h"
 
+[[maybe_unused]] static QString scopeKeyOfFunction(const VariableTable& vt, const QString& function) {
+    for (const VariableDecl& d : vt.declarations()) {
+        if (!d.scopeKey.isEmpty() && d.function.compare(function, Qt::CaseInsensitive) == 0)
+            return d.scopeKey;
+    }
+    return QString();
+}
+
 static int g_failures = 0;
+
+// 测试侧：函数名 -> 段身份文本（声明表是唯一事实来源；同名第二份取第一份）。
+// 生产代码不做这种映射：运行期一律读行上的 scopeKey。
 
 static void check(bool cond, const QString& what) {
     if (cond) qDebug().noquote() << "  [ok ]" << what;
@@ -77,18 +88,22 @@ int main(int argc, char* argv[]) {
     runner.setExpressionEvaluator(&evaluator);
     runner.setStepLimit(100000);
 
-    const eravar::ScopeId firstScope = eravar::internName(QStringLiteral("FIRST"));
-    const eravar::ScopeId secondScope = eravar::internName(QStringLiteral("SECOND"));
+    // 装载前用名字 id 走旧路径；装载后用**段身份** id（下面 markLoadComplete 后重绑）。
+    eravar::ScopeId firstScope = eravar::internName(QStringLiteral("FIRST"));
+    eravar::ScopeId secondScope = eravar::internName(QStringLiteral("SECOND"));
 
     // ---- 1) 安装前：旧路径仍可用（测试手工 setPrivateScope 的入口） ----
     qDebug() << "\n1) 安装前的旧路径";
     check(!storage.privateScopeTableInstalled(), "fresh storage: load-time table not installed");
     check(storage.storageName(QStringLiteral("ALPHA"), firstScope) == QStringLiteral("ALPHA"),
           "no table yet: private name resolves to the bare key");
-    storage.setPrivateScope(QStringLiteral("FIRST"),
+    storage.setPrivateScope(eravar::internName(QStringLiteral("FIRST")),
                             {QStringLiteral("ALPHA"), QStringLiteral("GHOST")});
     check(!storage.privateScopeTableInstalled(), "manual setPrivateScope does not mark the table installed");
-    check(storage.storageName(QStringLiteral("ALPHA"), firstScope) == QStringLiteral("FIRST\x1f" "ALPHA"),
+    // 这是一个**合成的**作用域 id（文本 "FIRST"，不是任何函数段）：只为验证
+    // 「安装前的 setPrivateScope 仍按调用方名字表建表」。键文本仍经唯一构造点。
+    check(storage.storageName(QStringLiteral("ALPHA"), firstScope) ==
+              eravar::makePrivateStorageKey(QStringLiteral("FIRST"), QStringLiteral("ALPHA")),
           "pre-install manual setPrivateScope builds the legacy table");
 
     // ---- 2) 装载 + 收尾（安装点 = finalizeBindings 末尾） ----
@@ -120,13 +135,18 @@ int main(int argc, char* argv[]) {
     check(table.loadScript(QStringLiteral("private"), buildLines(table, source)), "loadScript");
     table.setEntryPoint(QStringLiteral("MAIN"));
     table.markLoadComplete();
+    // 运行期身份 = 段身份 (脚本名, 段起点)：id 由同一个文本 intern 得到。
+    const QString firstKey = scopeKeyOfFunction(table.variableTable(), QStringLiteral("FIRST"));
+    firstScope = eravar::internName(firstKey);
+    secondScope = eravar::internName(scopeKeyOfFunction(table.variableTable(), QStringLiteral("SECOND")));
     check(storage.privateScopeTableInstalled(), "markLoadComplete installs the load-time table");
     check(runner.runToCompletion() == ExecState::Halt, "script completes");
 
     // ---- 3) 安装后 names 参数被忽略（单一真相 = 声明） ----
     qDebug() << "\n3) 安装后 setPrivateScope 只记录当前帧";
-    storage.setPrivateScope(QStringLiteral("FIRST"), {});   // 空名字表
-    check(storage.storageName(QStringLiteral("ALPHA"), firstScope) == QStringLiteral("FIRST\x1f" "ALPHA"),
+    storage.setPrivateScope(firstScope, {});   // 空名字表
+    check(storage.storageName(QStringLiteral("ALPHA"), firstScope) ==
+              eravar::makePrivateStorageKey(firstKey, QStringLiteral("ALPHA")),
           "installed table: empty names list still resolves FIRST/ALPHA");
     check(storage.getGlobalInt1D(QStringLiteral("ALPHA"), 0) == 11,
           "FIRST/ALPHA == 11 (written by the frame that ran with the load-time table)");
@@ -135,7 +155,7 @@ int main(int argc, char* argv[]) {
     // 安装前手工塞进去的 GHOST 不在声明里 -> 安装整表替换后不再有映射。
     check(storage.storageName(QStringLiteral("GHOST"), firstScope) == QStringLiteral("GHOST"),
           "pre-install manual-only name GHOST is dropped by the installed table");
-    storage.setPrivateScope(QStringLiteral("SECOND"), {});
+    storage.setPrivateScope(secondScope, {});
     check(storage.getGlobalInt1D(QStringLiteral("ALPHA"), 0) == 22,
           "SECOND/ALPHA == 22 (same name, own private slot)");
     check(storage.storageName(QStringLiteral("ALPHA"), firstScope) !=
@@ -154,10 +174,11 @@ int main(int argc, char* argv[]) {
     for (const QString& function : functions) {
         // 旧路径：一个干净的存储对象，按调用方（ScriptRunner 同款）名字表建表。
         VariableStorage legacy;
-        legacy.setPrivateScope(function, vt.localNamesOfRef(function));
-        const eravar::ScopeId scope = eravar::internName(function);
+        const QString scopeKey = scopeKeyOfFunction(vt, function);
+        legacy.setPrivateScope(eravar::internName(scopeKey), vt.localNamesOfRef(scopeKey));
+        const eravar::ScopeId scope = eravar::internName(scopeKey);
         int declared = 0;
-        for (const VariableDecl& decl : vt.localsOf(function)) {
+        for (const VariableDecl& decl : vt.localsOf(scopeKey)) {
             if (decl.isConst) continue;
             ++declared;
             const QString keyOld = legacy.storageName(decl.name, scope);
@@ -177,15 +198,16 @@ int main(int argc, char* argv[]) {
 
     // 负向：一个函数里没声明的名字在另一函数作用域内仍是裸名（两边一致）。
     VariableStorage legacyFirst;
-    legacyFirst.setPrivateScope(QStringLiteral("SECOND"), vt.localNamesOfRef(QStringLiteral("SECOND")));
+    const QString secondKey = scopeKeyOfFunction(vt, QStringLiteral("SECOND"));
+    legacyFirst.setPrivateScope(eravar::internName(secondKey), vt.localNamesOfRef(secondKey));
     check(legacyFirst.storageName(QStringLiteral("BETA"), secondScope) ==
               storage.storageName(QStringLiteral("BETA"), secondScope),
           "name declared only in FIRST stays bare in SECOND (both paths agree)");
 
     // 值也对齐：旧路径算出的键在安装后的存储上读得到运行期写入的值。
     VariableStorage legacyValues;
-    legacyValues.setPrivateScope(QStringLiteral("FIRST"),
-                                 vt.localNamesOfRef(QStringLiteral("FIRST")));
+    // 旧路径与装载期表用**同一个段身份**（id 不是函数名）：只有名字来源不同。
+    legacyValues.setPrivateScope(firstScope, vt.localNamesOfRef(firstKey));
     const QString legacyAlphaKey = legacyValues.storageName(QStringLiteral("ALPHA"), firstScope);
     check(storage.getGlobalInt1D(legacyAlphaKey, 0) == 11,
           "value written at runtime is readable under the legacy-computed key");
@@ -196,8 +218,9 @@ int main(int argc, char* argv[]) {
     qDebug() << "\n5) RESETDATA 之后名表仍在";
     storage.resetForNewGame();
     check(storage.privateScopeTableInstalled(), "resetForNewGame keeps the table installed");
-    storage.setPrivateScope(QStringLiteral("FIRST"), {});
-    check(storage.storageName(QStringLiteral("ALPHA"), firstScope) == QStringLiteral("FIRST\x1f" "ALPHA"),
+    storage.setPrivateScope(firstScope, {});
+    check(storage.storageName(QStringLiteral("ALPHA"), firstScope) ==
+              eravar::makePrivateStorageKey(firstKey, QStringLiteral("ALPHA")),
           "private name still resolves after resetForNewGame");
     check(storage.getGlobalInt1D(QStringLiteral("ALPHA"), 0) == 0,
           "private value is back to its declared default after resetForNewGame");

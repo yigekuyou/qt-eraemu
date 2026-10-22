@@ -86,6 +86,38 @@ const QString& nameOf(quint32 id)
     return t.names[id - 1];
 }
 
+QString segmentKeyText(const QString& script, int functionLine)
+{
+    // 长度前缀让「脚本名里有什么字符」不影响可还原性（长度 + 原文 + 行号）。
+    // 结果含 ':' —— 变量标识符不可能与之相同，见头文件说明。
+    QString key = QString::number(script.size());
+    key += QLatin1Char(':');
+    key += script;
+    key += QLatin1Char(':');
+    key += QString::number(functionLine);
+    return key;
+}
+
+bool parseSegmentKey(const QString& text, QString& script, int& functionLine)
+{
+    // 与 segmentKeyText 同一份格式：<脚本长度>:<脚本>:<段起点行>
+    const qsizetype first = text.indexOf(QLatin1Char(':'));
+    if (first <= 0) return false;
+    bool lengthOk = false;
+    const qsizetype length = text.left(first).toLongLong(&lengthOk);
+    if (!lengthOk || length < 0) return false;
+    const qsizetype scriptStart = first + 1;
+    if (scriptStart + length >= text.size()) return false;
+    if (text.at(scriptStart + length) != QLatin1Char(':')) return false;
+    const QString lineText = text.mid(scriptStart + length + 1);
+    bool lineOk = false;
+    const int line = lineText.toInt(&lineOk);
+    if (!lineOk) return false;
+    script = text.mid(scriptStart, length);
+    functionLine = line;
+    return true;
+}
+
 QString makePrivateStorageKey(const QString& scopeUpper, const QString& nameUpper)
 {
     // 两个参数**两种来源**（VariableTable 的声明 / VariableStorage 的作用域名表）

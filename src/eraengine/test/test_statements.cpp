@@ -44,7 +44,18 @@
 #include "script_runner.h"
 #include "variable_storage.h"
 
+[[maybe_unused]] static QString scopeKeyOfFunction(const VariableTable& vt, const QString& function) {
+    for (const VariableDecl& d : vt.declarations()) {
+        if (!d.scopeKey.isEmpty() && d.function.compare(function, Qt::CaseInsensitive) == 0)
+            return d.scopeKey;
+    }
+    return QString();
+}
+
 static int g_failures = 0;
+
+// 测试侧：函数名 -> 段身份文本（声明表是唯一事实来源；同名第二份取第一份）。
+// 生产代码不做这种映射：运行期一律读行上的 scopeKey。
 
 static void check(bool cond, const QString& what) {
     if (cond) qDebug().noquote() << "  [ok ]" << what;
@@ -58,7 +69,7 @@ static QSharedPointer<ExpressionNode> compileFixture(EraParseTable& runtime, con
     auto ast = compiler.expressionAst(text);
     const auto* current = runtime.lineAt(runtime.currentScript(), runtime.currentLine());
     if (ast) VariableTable::applyTypes(*ast, runtime.variableTable(),
-                                     current ? current->ownerFunction : QString());
+                                     current ? current->scopeKey : QString());
     return ast;
 }
 
@@ -143,7 +154,7 @@ int main(int argc, char* argv[]) {
 
     qDebug() << "\n2) SWAP / 变量下标赋值";
     // BAG is private to MAIN; inspect it in its owning scope after execution.
-    storage.setPrivateScope("MAIN", {"BAG"});
+    storage.setPrivateScope(eravar::internName(scopeKeyOfFunction(table.variableTable(), "MAIN")), {"BAG"});
     check(storage.getGlobalInt1D("BAG", 1) == 99 || storage.getGlobalInt1D("BAG", 1) == 10,
           "BAG:J = 99（变量下标 J=1）");
     check(storage.getGlobalInt1D("BAG", 1) == 99, "BAG:1 == 99");
@@ -225,9 +236,12 @@ int main(int argc, char* argv[]) {
               "POWER 语句按指令解析（不再被归约为函数调用）");
         check(!p.argument.hasError(),
               "POWER 语句 3 参通过校验（" + p.argument.typeError + "）");
-        storage.setPrivateScope("MAIN", {"BAG"});
-        // 显式作用域：POWER 的左值 BAG 是 MAIN 的私有变量，写入位置由 scope 决定。
-        engine.executeInstruction(p, eravar::internName(QStringLiteral("MAIN")));
+        // 显式作用域 = **段身份**（脚本名, 段起点），与私有名表同一个键；
+        // BAG 是 MAIN 的私有变量，写入位置由这个 scope 决定。
+        const eravar::ScopeId mainScope =
+            eravar::internName(scopeKeyOfFunction(table.variableTable(), QStringLiteral("MAIN")));
+        storage.setPrivateScope(mainScope, {});
+        engine.executeInstruction(p, mainScope);
         check(storage.getGlobalInt1D("BAG", 2) == 1024,
               "POWER BAG:2, 2, 10 -> BAG:2 == 1024（变量被赋值）");
     }
@@ -247,8 +261,10 @@ int main(int argc, char* argv[]) {
         check(s.functionName == QLatin1String("SAVENOS") && !s.isFunctionCall,
               "SAVENOS 语句按指令解析（不再被归约为函数调用）");
         check(!s.argument.hasError(), "SAVENOS 语句通过校验（" + s.argument.typeError + "）");
-        storage.setPrivateScope("MAIN", {"BAG"});
-        engine.executeInstruction(s, eravar::internName(QStringLiteral("MAIN")));
+        const eravar::ScopeId mainScope =
+            eravar::internName(scopeKeyOfFunction(table.variableTable(), QStringLiteral("MAIN")));
+        storage.setPrivateScope(mainScope, {});
+        engine.executeInstruction(s, mainScope);
         check(storage.getGlobalInt1D("BAG", 3) == 20,
               QString("SAVENOS BAG:3 -> 20（Config.SaveDataNos 默认值；得到 %1）")
                   .arg(storage.getGlobalInt1D("BAG", 3)));
@@ -256,7 +272,7 @@ int main(int argc, char* argv[]) {
         LogicalLine p = AstBuilder::build(QStringLiteral("PRINTCPERLINE BAG:3"), pos, resolveOne);
         check(p.functionName == QLatin1String("PRINTCPERLINE") && !p.isFunctionCall,
               "PRINTCPERLINE 语句按指令解析");
-        engine.executeInstruction(p, eravar::internName(QStringLiteral("MAIN")));
+        engine.executeInstruction(p, mainScope);
         check(storage.getGlobalInt1D("BAG", 3) == 3,
               QString("PRINTCPERLINE BAG:3 -> 3（Config.PrintCPerLine 默认值；得到 %1）")
                   .arg(storage.getGlobalInt1D("BAG", 3)));
@@ -602,7 +618,7 @@ int main(int argc, char* argv[]) {
         pt.markLoadComplete();
         pt.setEntryPoint("MAIN");
         check(run.runToCompletion() == ExecState::Halt, "string-assignment script completes");
-        vs.setPrivateScope(QStringLiteral("MAIN"),
+        vs.setPrivateScope(eravar::internName(scopeKeyOfFunction(pt.variableTable(), QStringLiteral("MAIN"))),
                            {QStringLiteral("OUT_LIT"), QStringLiteral("OUT_SYS"),
                             QStringLiteral("OUT_REF"), QStringLiteral("SRC_STR"),
                             QStringLiteral("OUT_EXPR"), QStringLiteral("OUT_FORM"),
@@ -661,7 +677,7 @@ int main(int argc, char* argv[]) {
         pt.markLoadComplete();
         pt.setEntryPoint("MAIN");
         check(run.runToCompletion() == ExecState::Halt, "quoted string-assignment script completes");
-        vs.setPrivateScope(QStringLiteral("MAIN"),
+        vs.setPrivateScope(eravar::internName(scopeKeyOfFunction(pt.variableTable(), QStringLiteral("MAIN"))),
                            {QStringLiteral("Q"), QStringLiteral("F"), QStringLiteral("B"),
                             QStringLiteral("E"), QStringLiteral("QE"), QStringLiteral("FE")});
         check(vs.getGlobalStr1D(QStringLiteral("Q"), 0) == QStringLiteral("\"quote\""),
@@ -887,13 +903,19 @@ int main(int argc, char* argv[]) {
             keptAsts.append(ast);
             return static_cast<const VariableNode*>(ast.data());
         };
+        // 私有键 = makePrivateStorageKey(段身份文本, 名字)：唯一构造点，
+        // 期望值不再手写 "VAFN\x1f..." 这份第二副本。
+        const QString vafnScope = table.segmentKeyOfLabel(QStringLiteral("va.ERB"),
+                                                        QStringLiteral("VAFN"));
         const auto* priv = accessOf("VAPRIV:1", 3);
         check(priv && priv->accessKind == VariableNode::AccessKind::GlobalInt1
-                  && priv->accessKey.debugKeyText() == QStringLiteral("VAFN\x1FVAPRIV"),
+                  && priv->accessKey.debugKeyText()
+                         == eravar::makePrivateStorageKey(vafnScope, QStringLiteral("VAPRIV")),
               "函数私有 int 数组 -> GlobalInt1 + 复合键");
         const auto* privs = accessOf("VASPRIV:0", 3);
         check(privs && privs->accessKind == VariableNode::AccessKind::GlobalStr1
-                  && privs->accessKey.debugKeyText() == QStringLiteral("VAFN\x1FVASPRIV"),
+                  && privs->accessKey.debugKeyText()
+                         == eravar::makePrivateStorageKey(vafnScope, QStringLiteral("VASPRIV")),
               "函数私有 str 数组 -> GlobalStr1 + 复合键");
         const auto* hdr2 = accessOf("VA_HDR2:1:2", 0);
         check(hdr2 && hdr2->accessKind == VariableNode::AccessKind::GlobalInt2
@@ -914,7 +936,8 @@ int main(int argc, char* argv[]) {
               "未声明名 -> GlobalInt1 + 裸键（与运行期裸槽一致）");
         const auto* priv2 = accessOf("VAPRIV2:1:0", 5);
         check(priv2 && priv2->accessKind == VariableNode::AccessKind::GlobalInt2
-                  && priv2->accessKey.debugKeyText() == QStringLiteral("VAFN\x1FVAPRIV2"),
+                  && priv2->accessKey.debugKeyText()
+                         == eravar::makePrivateStorageKey(vafnScope, QStringLiteral("VAPRIV2")),
               "函数私有 2 维数组 -> GlobalInt2 + 复合键");
 
         // 维数守卫（第七轮，镜像旧路）：旧路只对**非重映射名**（裸键 = 全局声明/
@@ -948,7 +971,7 @@ int main(int argc, char* argv[]) {
               "槽位名给 2 个下标（下标表达式内）-> 回退旧路 throw（分词前行为）");
         check(indexThrows(QStringLiteral("ZZZ:(VA_UNDEF:0:1)"), 0),
               "未声明 1 维名给 2 个下标（下标表达式内）-> 回退旧路 throw（分词前行为）");
-        storage.setPrivateScope(QStringLiteral("VAFN"),
+        storage.setPrivateScope(eravar::internName(scopeKeyOfFunction(table.variableTable(), QStringLiteral("VAFN"))),
                                 {"VAPRIV", "VASPRIV", "VAPRIV2"});
         {
             table.setPosition(QStringLiteral("va.ERB"), 5, false);
@@ -966,7 +989,7 @@ int main(int argc, char* argv[]) {
                   "私有 2 维名只给 1 个下标 -> 宽松 1 维读（旧路 aliased 跳过 throw，快路径保持）");
         }
         // 还原共享存储的作用域状态，不影响后续小节
-        storage.setPrivateScope(QStringLiteral("MAIN"), {"BAG"});
+        storage.setPrivateScope(eravar::internName(scopeKeyOfFunction(table.variableTable(), QStringLiteral("MAIN"))), {"BAG"});
     }
 
     // 11) DEBUGPRINT 族：**实参形态**与 PRINT 族同规则（按后缀走 Literal/FormStr/
@@ -1055,7 +1078,7 @@ int main(int argc, char* argv[]) {
         vs.setGlobalInt1D("SIDE_EFFECT", 0, 0);
         pt.setEntryPoint("INCREMENT");
         check(run.runToCompletion() == ExecState::Halt, "increment program completes");
-        vs.setPrivateScope("INCREMENT", {"COUNTERS"});
+        vs.setPrivateScope(eravar::internName(scopeKeyOfFunction(pt.variableTable(), "INCREMENT")), {"COUNTERS"});
         check(vs.getGlobalInt1D("COUNTERS", 0) == 5 && vs.getGlobalInt1D("SIDE_EFFECT", 0) == 1,
               "four increment forms write private array and evaluate index once");
         // C# HTML_TAGSPLIT uses source, string-array destination, count LHS;
@@ -1436,9 +1459,12 @@ int main(int argc, char* argv[]) {
         // scope 查常数表 —— 私有常量同名不同值，结果必须随 scope 变。
         EraParseTable astCompiler(nullptr);
         const QSharedPointer<ExpressionNode> sharedAst = astCompiler.expressionAst("SHARED");
-        VariableTable::applyTypes(*sharedAst, ct.variableTable(), QStringLiteral("A"));
-        const eravar::ScopeId idA = eravar::internName("A");
-        const eravar::ScopeId idB = eravar::internName("B");
+        // 私有常量的 owner = **段身份文本**（与声明同一个键），不是函数名。
+        const QString scopeA = ct.segmentKeyOfLabel(QStringLiteral("const_scope"), QStringLiteral("A"));
+        const QString scopeB = ct.segmentKeyOfLabel(QStringLiteral("const_scope"), QStringLiteral("B"));
+        VariableTable::applyTypes(*sharedAst, ct.variableTable(), scopeA);
+        const eravar::ScopeId idA = eravar::internName(scopeA);
+        const eravar::ScopeId idB = eravar::internName(scopeB);
         const qint64 vA = cev.evaluate(*sharedAst, &cs, nullptr, idA).toLongLong();
         const qint64 vB = cev.evaluate(*sharedAst, &cs, nullptr, idB).toLongLong();
         check(vA == 11 && vB == 22,
@@ -1447,7 +1473,7 @@ int main(int argc, char* argv[]) {
 
         // (c) 广域常量：scope=0 与任意函数 scope 都命中（先查私有、再回落广域）。
         const QSharedPointer<ExpressionNode> globalAst = astCompiler.expressionAst("GLOBAL_C");
-        VariableTable::applyTypes(*globalAst, ct.variableTable(), QStringLiteral("A"));
+        VariableTable::applyTypes(*globalAst, ct.variableTable(), scopeA);
         const qint64 g0 = cev.evaluate(*globalAst, &cs, nullptr, eravar::kGlobalScope).toLongLong();
         const qint64 ga = cev.evaluate(*globalAst, &cs, nullptr, idA).toLongLong();
         check(g0 == 99 && ga == 99,

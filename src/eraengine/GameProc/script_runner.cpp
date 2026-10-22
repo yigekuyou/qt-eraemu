@@ -75,7 +75,7 @@ ScriptRunner::ScriptRunner(EraParseTable* table,
     if (m_engine) {
         connect(m_engine, &ExecutionEngine::gameStateLoaded, this, [this] {
             m_loops.clear(); m_callContexts.clear(); m_functionLocals.clear();
-            m_eventChain.active=false; m_lastPrivateScope.clear(); m_currentScopeId = eravar::kGlobalScope;
+            m_eventChain.active=false; m_lastScopeKey.clear(); m_currentScopeId = eravar::kGlobalScope;
         });
         connect(m_engine, &ExecutionEngine::consolePrint, this, [this] { m_printed = true; });
         connect(m_engine, &ExecutionEngine::consolePrintDefaultColor, this, [this] { m_printed = true; });
@@ -87,7 +87,7 @@ ScriptRunner::ScriptRunner(EraParseTable* table,
         while (!m_callContexts.isEmpty())
             m_storage->setLocalContext(m_callContexts.takeLast().locals);
         m_loops.clear();
-        m_lastPrivateScope.clear(); m_currentScopeId = eravar::kGlobalScope;   // 上下文被恢复 -> 强制下一步重算私有作用域
+        m_lastScopeKey.clear(); m_currentScopeId = eravar::kGlobalScope;   // 上下文被恢复 -> 强制下一步重算私有作用域
         m_lastReturnValue = QVariant::fromValue<qint64>(0);
     });
 }
@@ -180,7 +180,7 @@ void ScriptRunner::clearForReload() {
     m_loops.clear();
     m_functionLocals.clear();
     m_callContexts.clear();
-    m_lastPrivateScope.clear(); m_currentScopeId = eravar::kGlobalScope;
+    m_lastScopeKey.clear(); m_currentScopeId = eravar::kGlobalScope;
     m_waitKind.clear();
     m_waitDefault = {};
     m_lastReturnValue = {};
@@ -198,11 +198,11 @@ void ScriptRunner::onHaltRequested() {
 // 主步进
 // ---------------------------------------------------------------------------
 
-void ScriptRunner::enterCall(const QString& function) {
-    m_callContexts.append({m_table->depth(), int(m_loops.size()), function, m_storage->localContext()});
+void ScriptRunner::enterCall(const QString& function, eravar::ScopeId scope) {
+    m_callContexts.append({m_table->depth(), int(m_loops.size()), scope, m_storage->localContext()});
     // QHash::value() 会先默认构造再拷贝（LocalContext 带 4 个容器成员）——
     // 每个 CALL 都白付一次分配，改 constFind。
-    const auto lit = m_functionLocals.constFind(function);
+    const auto lit = m_functionLocals.constFind(scope);
     if (lit == m_functionLocals.constEnd()) {
         m_storage->setLocalContext(VariableStorage::LocalContext{});
     } else {
@@ -217,11 +217,13 @@ void ScriptRunner::enterCall(const QString& function) {
     const auto fit = m_table->userFunctions().constFind(function.toUpper());
     if (fit != m_table->userFunctions().constEnd() && fit.value().localSize > 0)
         m_storage->ensureLocalSize(fit.value().localSize);
-    // perf：私有名字表按函数缓存（localNamesOfRef），免去每次调用重建 QStringList
-    m_storage->setPrivateScope(function,
-                               m_table->variableTable().localNamesOfRef(function));
-    m_lastPrivateScope = function;   // 与 stepOnce 的缓存 guard 同步
-    m_currentScopeId = eravar::internName(function);   // 求值入口的显式作用域
+    // perf：私有名字表按段缓存（localNamesOfRef），免去每次调用重建 QStringList。
+    // 名字表用段身份文本查（ScopeId 的 intern 原文）；存储层只认 ScopeId。
+    const QString& scopeKey = eravar::nameOf(scope);
+    m_storage->setPrivateScope(scope,
+                               m_table->variableTable().localNamesOfRef(scopeKey));
+    m_lastScopeKey = scopeKey;   // 与 stepOnce 的缓存 guard 同步
+    m_currentScopeId = scope;    // 求值入口的显式作用域
 }
 
 bool ScriptRunner::returnFromCall() {
@@ -232,9 +234,9 @@ bool ScriptRunner::returnFromCall() {
         if (!m_callContexts.isEmpty()
             && m_callContexts.last().depth == m_table->depth() - 1) {
             const auto context = m_callContexts.takeLast();
-            m_functionLocals.insert(context.function, m_storage->localContext());
+            m_functionLocals.insert(context.scope, m_storage->localContext());
             m_storage->setLocalContext(context.locals);
-            m_lastPrivateScope.clear(); m_currentScopeId = eravar::kGlobalScope;   // 上下文被恢复 -> 强制重算私有作用域
+            m_lastScopeKey.clear(); m_currentScopeId = eravar::kGlobalScope;   // 上下文被恢复 -> 强制重算私有作用域
             m_loops.resize(context.loops);
         }
         m_table->returnFromCall();
@@ -242,9 +244,9 @@ bool ScriptRunner::returnFromCall() {
     if (!m_table->returnFromCall()) return false;
     if (!m_callContexts.isEmpty() && m_callContexts.last().depth == m_table->depth()) {
         const auto context = m_callContexts.takeLast();
-        m_functionLocals.insert(context.function, m_storage->localContext());
+        m_functionLocals.insert(context.scope, m_storage->localContext());
         m_storage->setLocalContext(context.locals);
-        m_lastPrivateScope.clear(); m_currentScopeId = eravar::kGlobalScope;   // 上下文被恢复 -> 强制重算私有作用域
+        m_lastScopeKey.clear(); m_currentScopeId = eravar::kGlobalScope;   // 上下文被恢复 -> 强制重算私有作用域
         m_loops.resize(context.loops);
     }
     return true;
@@ -338,12 +340,14 @@ bool ScriptRunner::stepOnce() {
     // from the executing owner as well, including resumed SHOW_SHOP frames.
     // perf：本函数每条指令都会进来 —— 私有作用域只在**换函数**时才需要重算
     // （声明表装载后不可变；enterCall/returnFromCall 换上下文时 owner 必然变化）。
-    if (line.ownerFunction != m_lastPrivateScope) {
+    // 段身份直接来自行（装载期写入），不按函数名回查。
+    if (line.scopeKey != m_lastScopeKey) {
+        const eravar::ScopeId scope = eravar::internName(line.scopeKey);
         m_storage->setPrivateScope(
-            line.ownerFunction,
-            m_table->variableTable().localNamesOfRef(line.ownerFunction));
-        m_lastPrivateScope = line.ownerFunction;
-        m_currentScopeId = eravar::internName(line.ownerFunction);
+            scope,
+            m_table->variableTable().localNamesOfRef(line.scopeKey));
+        m_lastScopeKey = line.scopeKey;
+        m_currentScopeId = scope;
     }
     const quint64 errorEpochBefore = m_errorEpoch;
     ExecState r = executeLine(line);
@@ -607,7 +611,11 @@ ExecState ScriptRunner::executeLine(const LogicalLine& line) {
     // 此前未实现，导致「改完一项后菜单不再刷新」。
     case RunnerInstruction::RESTART: {
         const QString fn = line.ownerFunction;
-        const int labelLine = fn.isEmpty() ? -1 : m_table->getLabelPosition(script, fn);
+        // RESTART 回到**本段**的 @ 行：段起点是装载期写入的事实，同名 @F 的
+        // 第二段不会被误跳回第一段。
+        const int labelLine = line.segmentStart >= 0 ? line.segmentStart
+                                                     : (fn.isEmpty() ? -1
+                                                                     : m_table->getLabelPosition(script, fn));
         if (labelLine < 0) {
             m_state->setErrorState();
             reportError(QStringLiteral("RESTART 找不到当前函数的入口标签（%1）").arg(fn));
@@ -1228,7 +1236,7 @@ ExecState ScriptRunner::executeLine(const LogicalLine& line) {
         auto length1D = [&](const QString& var) -> int {
             if (m_table) {
                 const VariableDecl* decl =
-                    m_table->variableTable().find(var, line.ownerFunction);
+                    m_table->variableTable().find(var, line.scopeKey);
                 if (decl && decl->dimension == 1 && !decl->lengths.isEmpty()
                     && decl->lengths.first() > 0)
                     return decl->lengths.first();
@@ -1239,7 +1247,7 @@ ExecState ScriptRunner::executeLine(const LogicalLine& line) {
         auto isStrArray = [&](const QString& var) -> bool {
             if (m_table) {
                 const VariableDecl* decl =
-                    m_table->variableTable().find(var, line.ownerFunction);
+                    m_table->variableTable().find(var, line.scopeKey);
                 if (decl) return decl->type == OperandType::Str;
             }
             return false;
@@ -1356,7 +1364,7 @@ ExecState ScriptRunner::executeLine(const LogicalLine& line) {
         QList<CopyArrayInfo> arrays;
         for (int i = 0; i < 2; ++i) {
             const QString& var = names[i];
-            const auto* decl = m_table->variableTable().find(var, line.ownerFunction);
+            const auto* decl = m_table->variableTable().find(var, line.scopeKey);
             const auto meta = sysvar::systemVariableMetadataDyn(var.toStdString());
             const int rank = decl ? decl->dimension : meta.dimension;
             const auto type = decl ? decl->type : meta.type;
@@ -1774,7 +1782,7 @@ ExecState ScriptRunner::executeLine(const LogicalLine& line) {
         m_callContexts.clear();
         m_functionLocals.clear();
         m_eventChain.active = false;
-        m_lastPrivateScope.clear(); m_currentScopeId = eravar::kGlobalScope;
+        m_lastScopeKey.clear(); m_currentScopeId = eravar::kGlobalScope;
         m_table->resetPosition();
         m_state->clearFunctionList();
         if (m_machine) m_machine->dataLoaded();
@@ -2025,8 +2033,10 @@ bool ScriptRunner::advanceEventChain()
     qCDebug(eraTrace) << "[exec] CALLEVENT @" << m_eventChain.label
                       << "组" << m_eventChain.group << "条目" << m_eventChain.counter
                       << ref.script << ref.line;
-    enterCall(m_eventChain.label);
-    m_table->applyPrivateVariableDefaults(m_table->labelNameAt(ref.script, ref.line));
+    // 段身份只构造一次（enterCall 与私有初值计划同一个事实）。
+    const QString scopeKey = eravar::segmentKeyText(ref.script, ref.functionLine);
+    enterCall(m_eventChain.label, eravar::internName(scopeKey));
+    m_table->applyPrivateVariableDefaults(scopeKey);
     // 每个事件函数的返回地址都是续点：返回后 maybeContinueEventChain 在续点接手
     if (!m_table->callLabelAt(ref.script, ref.line,
                               m_eventChain.returnScript, m_eventChain.returnLine)) {
@@ -2186,10 +2196,13 @@ ExecState ScriptRunner::doCallLine(const LogicalLine& line, bool isForm, bool is
             evaluatedValues = QList<QVariant>(expanded.size());
         }
     }
-    enterCall(label);
+    // 段身份只构造一次：enterCall / 私有初值 / 实参绑定是**同一个**事实。
+    const QString scopeKey = info ? eravar::segmentKeyText(info->script, info->labelLine)
+                                  : QString();
+    enterCall(label, info ? eravar::internName(scopeKey) : eravar::kGlobalScope);
     // 顺序对齐 C#：先初始化函数私有变量的初值（#DIM X = 7），再写实参
-    m_table->applyPrivateVariableDefaults(label);
-    bindArguments(info, evaluated, references, &evaluatedValues);
+    m_table->applyPrivateVariableDefaults(scopeKey);
+    bindArguments(info, scopeKey, evaluated, references, &evaluatedValues);
     bool entered = false;
     if (isJump) {
         entered = m_table->jumpLabel(label);            // JUMP 系：继承当前帧返回地址
@@ -2437,10 +2450,11 @@ void ScriptRunner::writeLoopCounter(const Operand& counter, qint64 value) {
     writeIntVarAccess(variable, indices, value);
 }
 
-void ScriptRunner::bindArguments(const UserFunctionDecl* info, const QList<Operand>& callArgs,
+void ScriptRunner::bindArguments(const UserFunctionDecl* info, const QString& scopeKey,
+                                 const QList<Operand>& callArgs,
                                  const QHash<QString, QString>& references,
                                  const QList<QVariant>* snapshots) {
-    const auto bindOne = [this, &references, info](const UserParamDecl* p, int position,
+    const auto bindOne = [this, &references, info, &scopeKey](const UserParamDecl* p, int position,
                                 bool argIsString, const QString& strValue, qint64 intValue, const QVariant& snapshot = {}) {
         switch (p ? p->target : UserParamTarget::Unknown) {
         case UserParamTarget::Arg:
@@ -2461,8 +2475,9 @@ void ScriptRunner::bindArguments(const UserFunctionDecl* info, const QList<Opera
                 // 元素形参（`@F(A:0, A:1)`）：实参写进 A 的这个元素。
                 // 声明查询按**被调用函数**的作用域（这是它的私有变量）。
                 const QString vn = p->varName;
-                const QString scope = info ? info->name : QString();
-                const VariableDecl* vdecl = m_table ? m_table->variableTable().find(vn, scope)
+                // 只查被调**段**的私有声明：scopeKey 由调用方算一次传入，
+                // 与 enterCall/applyPrivateVariableDefaults 用的是同一份身份。
+                const VariableDecl* vdecl = m_table ? m_table->variableTable().find(vn, scopeKey)
                                                     : nullptr;
                 const int dim = vdecl ? vdecl->dimension : 1;
                 if (p->type == OperandType::Str) {
@@ -2602,8 +2617,10 @@ bool ScriptRunner::invokeUserFunction(const QString& name, const QList<QVariant>
                               m_storage->resolvedStorageName(v->name(), m_currentScopeId));
     }
     // 绑定实参（按声明的形参表：ARG/ARGS/私有变量）
-    enterCall(name);
-    m_table->applyPrivateVariableDefaults(name);
+    // 段身份只构造一次（enterCall 与私有初值计划同一个事实）。
+    const QString scopeKey = eravar::segmentKeyText(info->script, info->labelLine);
+    enterCall(name, eravar::internName(scopeKey));
+    m_table->applyPrivateVariableDefaults(scopeKey);
     m_storage->clearLocalAliases();
     for (auto it = refTargets.constBegin(); it != refTargets.constEnd(); ++it)
         m_storage->setReference(it.key(), it.value());

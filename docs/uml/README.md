@@ -10,10 +10,10 @@ PlantUML 源码。所有图都是**当前代码**的静态结构，不包含计�
 | `02-runtime-classes.puml` | 类图 | 运行期：`ExecutionEngine` / `ScriptRunner` 单步状态机 / `ProcessState` / `LoopFrame`（作用是显式 `ScopeId`；位置推进经 `position` 自由函数） |
 | `03-expression-classes.puml` | 类图 | 表达式 AST、`AccessKind` 16 值、`VariableKey{scopeId,nameId}`、名字 intern 表、`resolverTable` |
 | `04-load-pipeline.puml` | 时序图 | 装载流水线：CSV → 逐文件解析 → `kLoadPasses[7]` 表驱动收尾（每步独立 sink + `replaceOrigin`）→ 诊断 |
-| `05-variable-access.puml` | 活动图 | 运行期变量访问：两条入口 → 一张 resolver 表 → 唯一按名原语 |
+| `05-variable-access.puml` | 活动图 | 运行期变量访问：两条入口 → 一张 resolver 表 → 唯一按名原语；作用域 = 段身份（装载期写进 `line.scopeKey`） |
 | `06-diagnostics.puml` | 类图 | 诊断模型：`ParseDiagnostics` / `ParseDiagnostic` / `DiagEffect` / `DiagOrigin`（pass 切片）/ `DiagCode` 全码与产生步骤 |
 | `07-static-checks.puml` | 卡片图 | `checkStaticValues` 检查目录（C1..C4）与已验证口径 |
-| `08-save-load.puml` | 时序图 | 存档 / 读档：`erasave::Map`（条目 ↔ 身份的唯一一张表）、`SaveReadiness` 前置条件 |
+| `08-save-load.puml` | 时序图 | 存档 / 读档：`erasave::Map`（条目 ↔ 身份的唯一一张表）、`SaveReadiness` 前置条件、版本常量与旧档判废、私有条目写盘名可还原段身份 |
 
 同目录的 `.png` / `.svg` 是渲染结果（本地生成，不入库），按下面命令随时重渲染。
 
@@ -45,9 +45,15 @@ plantuml -txmi docs/uml/01-load-classes.puml
 ## 口径提醒（图中标注）
 
 - **变量身份是整数，不是字符串**：`VariableKey { scopeId, nameId }`（名字用 intern 表换成 `quint32`）。
-  上一版把私有名编成 `函数名 + 0x1F + 名字`，而 `computeVariableAccess` 与 `setPrivateScope`
-  各拼一次、必须逐字节一致 —— 任何拼写/分隔符疏漏都表现为「某个变量悄悄变成另一个变量」。
-  现在这个拼接只在 `makePrivateStorageKey` 一处，比较是 `quint32` 相等。
+  私有存储键 `段身份文本 + 0x1F + 名字` 只在 `makePrivateStorageKey` 一处拼出来（存档写盘名、
+  存储层字符串键都从这里取），比较是 `quint32` 相等。上一版两侧各拼一次、必须逐字节一致 ——
+  任何拼写/分隔符疏漏都表现为「某个变量悄悄变成另一个变量」。
+- **作用域身份是段身份，不是函数名**：`(脚本名, 段起点行)`，段起点行 = 该段那个 `@函数标签`
+  的行号（文件头段 = -1），与 `LabelRef::functionLine` 是同一份事实。同名 `@F` 的两份声明因此是
+  两个段、两套私有域（C# 把它挂在各自的 FunctionLabelLine 上）。身份文本由
+  `eravar::segmentKeyText` 唯一构造、**总含 ':'**（ERB 标识符不含 ':'，所以作用域 id 与变量名 id
+  不可能互相冒充）；装载期写进 `line.scopeKey`，运行期只 `intern` 一次、不按名字回查。
+  `eravar::kGlobalScope = 0` 仍是「无私有域」，`kInvalidScope` 显式表示无效。
 - **装载期全定型**：`AccessKind` 16 值。封闭 5 类（形参 / 伪变量 / 系统槽 / 角色 / 常数）
   各有 kind；`usesKey(kind)` 标明哪些 kind 消费 `accessKey`（守卫的适用范围本身是数据）。
   真实语料里 `Dynamic` 只剩「有系统元数据但无系统存储槽」的裸名：eraTW 0.5% / FL3.8 0.3%。
@@ -111,7 +117,7 @@ plantuml -txmi docs/uml/01-load-classes.puml
   `finalizeBindings()` 末尾 `installPrivateScopeTable()` 装进存储层。安装后 `setPrivateScope` 只写
   当前帧（无 insert / reserve / 循环），正确性不再依赖调用方把 `names` 传全。
 - **收尾分三层，输入类型不同**：`parsecheck` 收全 `const` 的 `ParseIrView`（4/5/6，输出只有诊断）；
-  `loadpass` 收可写的 `LoadContext`（1/2/3，纯数据视图，11 个字段：scripts / variables / functions /
+  `loadpass` 收可写的 `LoadContext`（1/2/3，纯数据视图，12 个字段：scripts / variables / functions /
   constantTable / storage / evaluator / gameBaseData / labelIndex / paramNames / 两个 bool 引用）；
   它**没有** `diagnostics` 字段（诊断是每步一个 sink），也**没有**运行期位置（作用域是 `evaluate()`
   的参数——曾经靠「解释器在哪一行」反推私有常数作用域，装载期会解析到错误的函数）；
@@ -174,13 +180,15 @@ plantuml -txmi docs/uml/01-load-classes.puml
 `dump_warnings` 五语料（`eraTW` / `eraMegaten` / `eraTetris` / `FL3.8` / `ecd`）：
 **6 / 2 / 0 / 0 / 0** 行（`eraMegaten` 的目录参数必须是 `eraMegaten/data`；用错路径会得到
 0 字节的假基线），与 `/tmp/uml-baseline/*.raw.txt` **未排序**逐字节相同。
-累计二十二个重构（身份整数化 / 全定型 / 作用域显式化 / 只读收尾外移 / 存档独立映射 /
+累计二十四个重构（身份整数化 / 全定型 / 作用域显式化 / 只读收尾外移 / 存档独立映射 /
 私有名表前移 / 存档顺序确定性 / 写收尾外移 / 标记区外移 / 位置区外移 /
 标签归属单一索引 / 诊断切片幂等 / 常数作用域参数化 / 增量装载协议显式化 /
-GOTO 段身份入索引 / 静态检查用段身份 / 删第三张裸名表 / 错误去重 / 配对语法只判一次 / 越界判定只判一次 / 常量下标装载期求值 / 多维独立形态）前后完全一致；
-`ctest` 48 → 58（新增 `test_parse_checks` / `test_save_variable_map` / `test_private_scope_table` /
+GOTO 段身份入索引 / 静态检查用段身份 / 删第三张裸名表 / 错误去重 / 配对语法只判一次 /
+越界判定只判一次 / 常量下标装载期求值 / 多维独立形态 / 私有作用域按段身份 / 存档版本常数化）前后完全一致；
+`ctest` 48 → 59（新增 `test_parse_checks` / `test_save_variable_map` / `test_private_scope_table` /
 `test_load_contracts` / `test_save_variable_map_hashseed` / `test_jump_markings` /
-`test_position_state` / `test_goto_label_lookup` / `test_structure_pairing` / `test_index_bounds`）。
+`test_position_state` / `test_goto_label_lookup` / `test_structure_pairing` / `test_index_bounds` /
+`test_segment_scope`）。
 
 装载耗时（eraTW，2260 文件 / 2.11M 逻辑行，12 线程）：`load` 41 s → **22.8 s**
 （scan 129 ms / parse 8.4 s / merge 4.9 s），收尾 `markLoadComplete` 23.3 s → 6.5 s，
@@ -190,4 +198,9 @@ GOTO 段身份入索引 / 静态检查用段身份 / 删第三张裸名表 / 错
 → 次键大写名 → 内建先于用户 → 私有作用域名），存档字节与 `QT_HASH_SEED` 无关 ——
 测试不再固定播种（另有 `test_save_variable_map_hashseed` 用 `QT_HASH_SEED=42` 直接证明），
 旧 golden 降级为「解码 + 回放」fixture（按名读，天然与写出顺序无关），新 golden 从
-排序后实现生成（`normal-new.bin` md5 `995642c9…`，再生成开关见测试头注释）。
+排序后实现生成（`normal-new.bin` md5 `d3b24b45…`，再生成开关 `EMUERA_SAVE_MAP_REGEN_GOLDEN=1`，
+改动理由写在测试头注释）。容器版本是**一个**常量 `EraBinaryData::Version`（1809）：
+二进制头的版本字段、`decode()` 的校验、文本起始标记 `__EMUERA_<Version>_STRAT__` 都由它派生
+—— 改它就是主动判废所有既有存档，解码侧因此**没有**多版本分支、也没有 extension 计数/标记字。
+旧档在读入处**原子判废**（「存档格式版本不兼容：本版本 N，旧存档（版本 M）请删除」，失败不触碰目标）。
+本轮 golden 的字节差异只有两类原因：版本字段、私有条目写盘名（`裸名` → `段身份文本 + 0x1F + 名字`）。

@@ -99,6 +99,7 @@ static LogicalLine instr(const QString& name, const QString& owner) {
     ll.kind = LineKind::Instruction;
     ll.functionName = name;
     ll.ownerFunction = owner;
+    ll.scopeKey = owner;   // 本测试只关心「位置 -> 身份」的映射，用 owner 当身份文本
     return ll;
 }
 
@@ -107,6 +108,7 @@ static LogicalLine funcLabel(const QString& label) {
     ll.kind = LineKind::FunctionLabel;
     ll.labelName = label;
     ll.ownerFunction = label;
+    ll.scopeKey = label;   // 段身份（本测试的简化：一段一个名字）
     return ll;
 }
 
@@ -115,6 +117,7 @@ static LogicalLine gotoLabel(const QString& label, const QString& owner) {
     ll.kind = LineKind::GotoLabel;
     ll.labelName = label;
     ll.ownerFunction = owner;
+    ll.scopeKey = owner;
     return ll;
 }
 
@@ -414,33 +417,31 @@ int main(int argc, char** argv) {
     }
 
     // -----------------------------------------------------------------------
-    qDebug() << "\n9) executionScope / executionScopeId";
+    qDebug() << "\n9) executionScopeId（段身份，无函数名回查）";
     {
         PositionState s;
         PositionEffects fx;
-        checkStr(position::executionScope(s, view), QString(), "无位置 -> 空作用域");
         checkInt(int(position::executionScopeId(s, view)), int(eravar::kGlobalScope),
                  "无位置 -> kGlobalScope");
 
         position::setPosition(s, view, "A.ERB", 1, true, fx);
-        checkStr(position::executionScope(s, view), "MAIN", "A.ERB:1 属于 MAIN");
         const auto idMain = position::executionScopeId(s, view);
+        check(idMain == eravar::internName("MAIN"), "A.ERB:1 的段身份 = MAIN（行上的 scopeKey）");
         check(idMain != eravar::kGlobalScope, "MAIN 的 id 不是顶层");
 
         fx = {};
-        position::setPosition(s, view, "A.ERB", 2, false, fx);   // 同一函数内换行
+        position::setPosition(s, view, "A.ERB", 2, false, fx);   // 同一段内换行
         checkInt(int(position::executionScopeId(s, view)), int(idMain),
-                 "同函数内换行 id 不变（缓存命中）");
+                 "同段内换行 id 不变");
 
         fx = {};
         position::setPosition(s, view, "A.ERB", 6, false, fx);   // 换到 @SUB
-        checkStr(position::executionScope(s, view), "SUB", "A.ERB:6 属于 SUB");
         const auto idSub = position::executionScopeId(s, view);
-        check(idSub != idMain, "换函数后 id 变（缓存失效）");
+        check(idSub == eravar::internName("SUB"), "A.ERB:6 的段身份 = SUB");
+        check(idSub != idMain, "换段后 id 变");
 
         fx = {};
-        position::setPosition(s, view, "A.ERB", 3, false, fx);   // 空行? 不，仍是 MAIN
-        checkStr(position::executionScope(s, view), "MAIN", "A.ERB:3 属于 MAIN");
+        position::setPosition(s, view, "A.ERB", 3, false, fx);   // 回到 MAIN 段
         checkInt(int(position::executionScopeId(s, view)), int(idMain), "回到 MAIN id 复原");
     }
 

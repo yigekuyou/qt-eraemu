@@ -11,6 +11,14 @@
 #include "variable_storage.h"
 #include "ast/print_template.h"
 
+[[maybe_unused]] static QString scopeKeyOfFunction(const VariableTable& vt, const QString& function) {
+    for (const VariableDecl& d : vt.declarations()) {
+        if (!d.scopeKey.isEmpty() && d.function.compare(function, Qt::CaseInsensitive) == 0)
+            return d.scopeKey;
+    }
+    return QString();
+}
+
 static int failures = 0;
 static void run(const QString& name, const QStringList& source, qint64 expected, ExecState expectedState = ExecState::Halt, bool restart = false) {
     VariableStorage storage;
@@ -79,7 +87,7 @@ static void tryListLoadTime() {
     // LIST_NAME 声明在 @MAIN 内（#DIMS），写入与求值都必须用同一个显式作用域，
     // 否则数据落到顶层槽、读取按 MAIN 私有键 → 空串。
     const eravar::ScopeId mainScope = eravar::internName(QStringLiteral("MAIN"));
-    storage.setPrivateScope("MAIN", {"LIST_NAME"});
+    storage.setPrivateScope(eravar::internName(scopeKeyOfFunction(table.variableTable(), "MAIN")), {"LIST_NAME"});
     storage.setGlobalStr1D("LIST_NAME", 0, "CHOSEN");
     const auto* entry = table.lineAt("list", 3);
     bool good = entry && !entry->isError && entry->argument.typeOk
@@ -499,6 +507,9 @@ static void scriptPathFunctions() {
     else ++failures;
 }
 
+
+
+
 int main(int argc, char** argv) {
     QCoreApplication app(argc, argv);
     chkDataCallForm();
@@ -602,6 +613,16 @@ int main(int argc, char** argv) {
         "@SUB_7(NUM)",
         "CHECK = NUM * 10",
         "RETURN"}, 70);
+    // 形参名必须按**段身份**的形参名表判定（paramNames 的唯一键是段身份文本）：
+    // 与同名私有声明共存时，定型仍须把形参判成 Param（运行期读 m_parameters），
+    // 不能被收尾重解析按「函数名 -> 段键」查空后退化成私有数组的全局读。
+    run("CALL 形参遮蔽同名私有变量", {
+        "CALL SUB(5)",
+        "RETURN",
+        "@SUB(NUM)",
+        "#DIM NUM, 3",
+        "CHECK = NUM",
+        "RETURN"}, 5);
     run("TRYCALL 存在则调用", {
         "TRYCALL SUB_9",
         "CHECK += 1",

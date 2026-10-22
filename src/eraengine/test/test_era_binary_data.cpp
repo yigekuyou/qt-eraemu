@@ -3,16 +3,31 @@
 #include <QDebug>
 #include <QFile>
 #include <QDir>
+#include <QtEndian>
 #include <limits>
 using namespace EraBinaryData;
+// 真实 C# writer 产物的**主体字节**仍然逐字节可比；只有容器版本字段是旧的
+// （C# 写 1808，本移植的当前版本是 Version）。下面两个 helper 只改这一个
+// 字段/标记，用来验证「主体编码」而不是版本号本身 —— 版本号的契约由文件
+// 开头的独立 golden 与 test_save_variable_map 的旧档判废断言覆盖。
+static QByteArray withCurrentVersion(QByteArray bytes) {
+    if (bytes.size() < 12) return bytes;
+    qToLittleEndian<quint32>(EraBinaryData::Version, bytes.data() + 8);
+    return bytes;
+}
+static QByteArray withCurrentTextVersion(QByteArray bytes) {
+    return bytes.replace("__EMUERA_1808_STRAT__",
+                         "__EMUERA_" + QByteArray::number(EraBinaryData::Version) + "_STRAT__");
+}
 int main(int argc, char** argv) {
     QCoreApplication app(argc, argv);
     int failures = 0;
     auto check = [&](bool ok, const char* what) { if (!ok) { ++failures; qCritical() << what; } };
     // Protocol golden, hand-derived from BinaryWriter(Encoding.Unicode), NOT this encoder:
     // global header; code=42; version=7; description="中\n"; int64 scalar X=min; string S="😀".
+    // 头里的版本字段是**本移植的容器版本**（Version）；主体字节与 C# writer 相同。
     const QByteArray golden = QByteArray::fromHex(
-        "894552410d0a1a0a1007000000000000012a000000000000000700000000000000"
+        "894552410d0a1a0a1107000000000000012a000000000000000700000000000000"
         "042d4e0a0000025800d2000000000000008010025300043dd800deff");
     Document d;
     check(decode(golden, d), "independent global golden decode");
@@ -36,7 +51,7 @@ int main(int argc, char** argv) {
         check(a.variables[1].strings == QList<QString>{"", "A\n", "", ""}, "string array marker");
     } else check(false, "array fixture records");
     const QByteArray character = QByteArray::fromHex(
-        "894552410d0a1a0a10070000000000000300000000000000000000000000000000"
+        "894552410d0a1a0a11070000000000000300000000000000000000000000000000"
         "00010000000000000000044e004f0005fd010255000100000001fffeff");
     Document c;
     check(decode(character, c) && c.characters.size() == 1 && c.characters.first().builtins.size() == 1
@@ -56,7 +71,7 @@ int main(int argc, char** argv) {
     for(const auto& name:QStringList{"normal-plain.bin","global-plain.bin","charvar-plain.bin","normal-gzip.bin","global-gzip.bin","charvar-gzip.bin"}) {
         QFile file(fixtures+"/"+name); check(file.open(QIODevice::ReadOnly),"C# fixture opens");
         Document reference; QString error;
-        check(decode(file.readAll(),reference,&error),"real C# writer bytes decode");
+        check(decode(withCurrentVersion(file.readAll()),reference,&error),"real C# writer body bytes decode (version field rewritten)");
         check(reference.uniqueCode==Q_INT64_C(0x0102030405060708) && reference.scriptVersion==1808,"C# fixture metadata");
         const auto variables=reference.type==FileType::Global ? reference.variables : reference.characters.value(0).userDefined;
         for(const auto& v:variables) {
@@ -72,7 +87,7 @@ int main(int argc, char** argv) {
     for(const auto& name:QStringList{"normal-text.sav","global-text.sav"}) {
         QFile file(fixtures+"/"+name);check(file.open(QIODevice::ReadOnly),"real C# text fixture opens");
         Document schema;schema.type=name.startsWith("global") ? FileType::Global : FileType::Normal;
-        Document native;check(decodeText(file.readAll(),schema,native),"original C# EraDataWriter text decoded");
+        Document native;check(decodeText(withCurrentTextVersion(file.readAll()),schema,native),"original C# EraDataWriter text decoded (version marker rewritten)");
         check(native.uniqueCode==42 && native.scriptVersion==1808,"text metadata");
         bool found=false;
         for(const auto& v:native.variables) {

@@ -64,10 +64,12 @@ struct ParsedErbFile {
 // ---------------------------------------------------------------------------
 struct LoadTimeVarTypes {
     QHash<QString, OperandType> globalVars;                 // 变量名(大写) -> 类型
-    QHash<QString, QHash<QString, OperandType>> localVars;  // 函数名(大写) -> 变量名(大写) -> 类型
+    // 段身份文本（eravar::segmentKeyText）-> 变量名(大写) -> 类型。
+    // **不是函数名**：同名 @F 出现在两份脚本/两个段里时，私有类型互不覆盖。
+    QHash<QString, QHash<QString, OperandType>> localVars;
 
-    // 作用域查询：函数私有优先，其次广域（与 VariableTable::typeOf 同序）
-    [[nodiscard]] OperandType typeOf(const QString& name, const QString& function) const;
+    // 作用域查询：段私有优先，其次广域（与 VariableTable::typeOf 同序）
+    [[nodiscard]] OperandType typeOf(const QString& name, const QString& scopeKey) const;
 };
 
 // ERB 脚本装载器
@@ -293,14 +295,18 @@ private:
     // 作用域判定与 EraParseTable::loadScript 完全一致：.ERH 的文件级声明是
     // 广域；.ERB 里只有**紧跟函数标签**的 # 行才算声明（否则 loadScript 会
     // 告警并忽略 —— 这里也必须忽略，否则解析期类型会比最终登记的多出来）。
+    // scriptName = 脚本名（段身份的一半）；pp = 与后续装载**同一套宏表**的
+    // 预处理器（段起点行必须按预处理后的行序计，否则与 loadScript 不一致）。
     void scanVariableTypes(const QString& content, bool isHeaderFile,
+                           const QString& scriptName, const ErbPreprocessor& pp,
                            LoadTimeVarTypes& out) const;
 
     // 「先预处理 → 先登记 #DIM/#DIMS → 再构造 AST」：在并行构建前把声明登记进
     // 解析表并结算（按**预处理后**的行扫描，与构建期所见逐字一致）。
     void preRegisterDeclarations(const QStringList& files,
                                  const QHash<QString, QString>& decoded,
-                                 const QSet<QString>& headers);
+                                 const QSet<QString>& headers,
+                                 const QString& root);
 
     // ---- 并行装载的线程契约（写在类型上，不只是注释）----------------------
     //

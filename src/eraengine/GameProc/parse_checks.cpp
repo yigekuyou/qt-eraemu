@@ -666,7 +666,7 @@ void checkStaticValuesInScript(const ParseIrView& view, const ScriptData& data,
                         bounds[p] = sizes.at(dim);
                 }
             } else if (const VariableDecl* d =
-                           view.variables->find(var.name(), line.ownerFunction)) {
+                           view.variables->find(var.name(), line.scopeKey)) {
                 // 声明数组：纯字面量 + lengths 已知的位置步骤 3 已报（不重复）；
                 // lengths 缺失（标量 #DIM X / REF）时只剩这里补查。角色号位不判。
                 const int full = d->dimension + (d->isCharaData ? 1 : 0);

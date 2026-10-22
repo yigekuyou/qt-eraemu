@@ -23,6 +23,10 @@
 //   2. 函数作用域：同名变量在不同函数互不冲突
 //   3. 重复声明 -> 结构化告警
 //   4. 类型回填：表达式中的变量获得声明类型，父节点类型随之更新（按需计算）
+//
+// 2026-10-22 存档 golden 重算：私有作用域身份由函数名改为段身份 (脚本, 段起点行)，
+// SMD 的写盘名随之变化；存档容器版本 1808 -> 1809。旧 md5 生成于「条目顺序确定性」
+// 之前（QHash 遍历序，本测试未固定种子），不可复现 —— 分类见下方 md5 断言处。
 // ---------------------------------------------------------------------------
 
 #include <QCoreApplication>
@@ -32,6 +36,7 @@
 
 #include "ast/ast_builder.h"
 #include "ast/variable_table.h"
+#include "ast/name_interner.h"
 #include "process_state.h"
 #include "era_parse_table.h"
 #include "variable_storage.h"
@@ -85,24 +90,28 @@ int main(int argc, char* argv[]) {
     };
 
     const VariableTable& vt = table.variableTable();
+    // 私有作用域 = **段身份**（脚本名, 段起点行）。测试按装载后的行取身份文本，
+    // 不再用函数名当键 —— 这正是本刀要固定的语义。
+    const QString kMain = table.lineAt("vt", 0)->scopeKey;
+    const QString kOther = table.lineAt("vt", 9)->scopeKey;
 
     qDebug() << "\n1) 声明解析";
     check(vt.count() == 5, QString("变量数 == 5（得到 %1）").arg(vt.count()));
-    const VariableDecl* a = vt.find("A", "MAIN");
+    const VariableDecl* a = vt.find("A", kMain);
     check(a != nullptr && a->type == OperandType::Int, "A(MAIN) -> Int");
     check(a != nullptr && a->dimension == 1 && a->lengths.value(0) == 3, "A(MAIN) 维度 [3]");
-    const VariableDecl* s = vt.find("S", "MAIN");
+    const VariableDecl* s = vt.find("S", kMain);
     check(s != nullptr && s->type == OperandType::Str, "S(MAIN) -> Str");
     const VariableDecl* g = vt.find("G");
     check(g != nullptr && g->scope == VarScope::Global, "G -> Global");
     check(g != nullptr && g->lengths.value(0) == 2, "G 维度 [2]");
-    const VariableDecl* cjk = vt.find("開始行", "MAIN");
+    const VariableDecl* cjk = vt.find("開始行", kMain);
     check(cjk != nullptr && cjk->type == OperandType::Int, "開始行(MAIN) -> Int（非 ASCII 名）");
 
     qDebug() << "\n2) 函数作用域";
-    const VariableDecl* aOther = vt.find("A", "OTHER");
+    const VariableDecl* aOther = vt.find("A", kOther);
     check(aOther != nullptr && aOther->function == "OTHER", "A(OTHER) 是 OTHER 的局部");
-    check(vt.find("A", "MAIN") != vt.find("A", "OTHER"), "同名变量在不用函数中区分");
+    check(vt.find("A", kMain) != vt.find("A", kOther), "同名变量在不用函数中区分");
 
     qDebug() << "\n3) 重复声明：局部静默 / 全局告警";
     {
@@ -150,21 +159,22 @@ int main(int argc, char* argv[]) {
         table.loadScript("dims", s2);
         table.markLoadComplete();
 
+        const QString kDimsMain = table.lineAt("dims", 0)->scopeKey;
         qint64 w = 0;
         // 这些 CONST 声明在 @MAIN **函数内** = 该函数的私有常量
         //（C#：函数内的 #DIM 走 LogicalLine.AddPrivateVariable），必须带作用域查。
-        check(table.variableTable().constInt("W", w, "MAIN") && w == 12,
+        check(table.variableTable().constInt("W", w, kDimsMain) && w == 12,
               "#DIM CONST W = 12 -> 常数表（MAIN 作用域）");
         check(!table.variableTable().constInt("W", w),
               "私有常量 W 在无作用域上下文不可见");
-        check(!table.variableTable().constInt("W", w, "OTHERFN"),
+        check(!table.variableTable().constInt("W", w, kOther),
               "私有常量 W 在别的函数内不可见");
-        const VariableDecl* grid = table.variableTable().find("GRID", "MAIN");
+        const VariableDecl* grid = table.variableTable().find("GRID", kDimsMain);
         check(grid != nullptr && grid->lengths == QList<int>({12, 24}),
               QString("GRID 维数 == [12,24]（得到 %1 个：%2）")
                   .arg(grid ? grid->lengths.size() : -1)
                   .arg(grid && !grid->lengths.isEmpty() ? QString::number(grid->lengths.value(0)) : "?"));
-        const VariableDecl* nums = table.variableTable().find("NUMS", "MAIN");
+        const VariableDecl* nums = table.variableTable().find("NUMS", kDimsMain);
         check(nums != nullptr && nums->lengths == QList<int>({3, 4}), "NUMS 维数 == [3,4]（字面量）");
 
         // 未显式给尺寸时，长度 = 初值个数（C# sizeNum.Add(terms.Count)）。
@@ -184,19 +194,20 @@ int main(int argc, char* argv[]) {
         resumeIncremental();
         table.loadScript("carr", s3);
         table.markLoadComplete();
-        const VariableDecl* snow = table.variableTable().find("SNOW", "MAIN");
+        const QString kCarrMain = table.lineAt("carr", 0)->scopeKey;
+        const VariableDecl* snow = table.variableTable().find("SNOW", kCarrMain);
         check(snow != nullptr && snow->lengths == QList<int>({4}),
               QString("SNOW 长度 == [4]（得到 %1）")
                   .arg(snow && !snow->lengths.isEmpty() ? QString::number(snow->lengths.value(0)) : "?"));
         qint64 snow1 = 0;
-        check(table.variableTable().constArrayAt("SNOW", 1, snow1, "MAIN") && snow1 == 0x222222,
+        check(table.variableTable().constArrayAt("SNOW", 1, snow1, kCarrMain) && snow1 == 0x222222,
               "SNOW:1 == 0x222222");
         // 单元素常量仍然参与「常量折叠」；多元素常量数组不折叠
         qint64 scalar = 0;
-        check(table.variableTable().constInt("SCALAR", scalar, "MAIN") && scalar == 7,
+        check(table.variableTable().constInt("SCALAR", scalar, kCarrMain) && scalar == 7,
               "#DIM CONST SCALAR = 7 -> 标量常数");
         qint64 snowScalar = 0;
-        check(!table.variableTable().constInt("SNOW", snowScalar, "MAIN"),
+        check(!table.variableTable().constInt("SNOW", snowScalar, kCarrMain),
               "常量数组 SNOW 不当作标量常数折叠");
     }
 
@@ -240,16 +251,19 @@ int main(int argc, char* argv[]) {
         table.markLoadComplete();
 
         const VariableTable& vt = table.variableTable();
+        const QString kHolder = table.lineAt("scope", 0)->scopeKey;
+        const QString kUser = table.lineAt("scope", 3)->scopeKey;
+        const QString kReader = table.lineAt("scope", 6)->scopeKey;
         qint64 v = 0;
-        check(vt.constInt("SHADOW", v, "HOLDER") && v == 51,
+        check(vt.constInt("SHADOW", v, kHolder) && v == 51,
               "私有常量在声明它的函数内可见");
-        check(!vt.constInt("SHADOW", v, "READER"),
+        check(!vt.constInt("SHADOW", v, kReader),
               "私有常量在别的函数内不可见");
         check(!vt.constInt("SHADOW", v),
               "私有常量在无作用域上下文不可见");
-        check(!vt.constInt("SHADOW", v, "USER"),
+        check(!vt.constInt("SHADOW", v, kUser),
               "同名私有可写变量遮蔽别处的私有常量");
-        check(vt.constInt("GSHADOW", v, "HOLDER") && v == 99,
+        check(vt.constInt("GSHADOW", v, kHolder) && v == 99,
               "广域常量在任意函数内可见");
         check(vt.constInt("GSHADOW", v) && v == 99,
               "广域常量在无作用域上下文可见");
@@ -349,13 +363,39 @@ int main(int argc, char* argv[]) {
         check(vs.getGlobalInt3D("GARR", 100, 0, 0) == 0, "多维越界写被忽略（不再懒扩容）");
 
         // 存档字节：SMD 声明 2x3，只有 [1][2]=99；golden md5 钉在这里。
+        //
+        // golden 变更理由（2026-10-22 重算）：
+        //   1) 私有作用域身份由函数名改为段身份 (脚本, 段起点行)：SMD 的写盘名
+        //      从 "MAIN\x1fSMD" 变成 eravar::makePrivateStorageKey(段身份, "SMD")
+        //      （= "2:MD:0\x1fSMD"）；
+        //   2) 存档容器版本 1808 -> 1809（版本字段 4 字节）。
+        // 另外，旧 golden（7c71c4f2…）生成于 36fee1c「条目顺序确定性」之前，当时
+        // 顺序来自 QHash 遍历（本测试没有固定种子），字节不可复现；现行顺序是
+        // (slot, 大写名) 的数据全序，下方结构断言即该契约。
         auto doc = vs.captureBinarySave(EraBinaryData::FileType::Normal);
         doc.description = "multidim-guard"; doc.uniqueCode = 7; doc.scriptVersion = 1808;
         QByteArray bytes;
         check(EraBinaryData::encode(doc, bytes), "encode(多维存档)");
         const QByteArray md5 = QCryptographicHash::hash(bytes, QCryptographicHash::Md5).toHex();
         qDebug() << "      multidim save md5 =" << md5 << "bytes =" << bytes.size();
-        check(md5 == QByteArrayLiteral("7c71c4f2b6ef2ac0042ddbeabac4e228"),
+        // 内容护栏（不只比 md5）：SMD 是唯一用户条目，形状 2x3，只有 [1][2]=99；
+        // 非 SAVEDATA 的私有 MAT 不入档。
+        {
+            EraBinaryData::Document reread;
+            check(EraBinaryData::decode(bytes, reread) && reread.variables.size() == doc.variables.size(),
+                  "多维存档可解码（golden 变更前的结构护栏）");
+            int smd = 0, mat = 0;
+            for (const auto& v : reread.variables) {
+                if (v.name == eravar::makePrivateStorageKey(eravar::segmentKeyText("md", 0), "SMD")) {
+                    ++smd;
+                    check(v.dimensions == QList<int>({2, 3}) && v.integers == QList<qint64>({0,0,0,0,0,99}),
+                          "多维存档：SMD 形状/内容");
+                }
+                if (v.name.contains(QLatin1Char('\x1f')) && v.name.endsWith(QLatin1String("MAT"))) ++mat;
+            }
+            check(smd == 1 && mat == 0, "多维存档：只有 SAVEDATA 的私有条目入档");
+        }
+        check(md5 == QByteArrayLiteral("b84c72e55b6586fe045a9238f0a9c9b0"),
               QString("多维存档字节 md5（实得 %1）").arg(QString::fromLatin1(md5)));
     }
 

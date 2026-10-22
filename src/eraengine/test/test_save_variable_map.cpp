@@ -4,18 +4,21 @@
 //      global-new.txt，md5 见下）。本测试**不**固定 QHash 种子：种子的直接
 //      证据是 ctest 里的 test_save_variable_map_hashseed（QT_HASH_SEED=42）
 //      与手工的 QT_HASH_SEED=1/42 双跑；
-//   2) **兼容读**：旧 golden（normal-old.bin / global-old.bin / global-old.txt，
-//      旧实现 + 固定播种写出）降级为解码/回放 fixture —— 必须仍能解码 +
-//      applyBinarySave 且值正确（读按名还原，天然与写出顺序无关）；
-//   3) 私有变量（函数内 #DIM SAVEDATA）经 save -> load 往返值不变；
+//   2) **旧档判废**：旧 golden（normal-old.bin / global-old.bin / global-old.txt，
+//      容器版本 1808）不再是兼容读 fixture —— 版本字段对不上，decode()/
+//      decodeText() 必须原子失败，诊断明确要求删除旧档；
+//   3) 私有变量（函数内 #DIM SAVEDATA）经 save -> load 往返值不变，写盘名
+//      = 段身份文本 + 0x1F + 名字、可还原回 (脚本, 段起点行)，且 save -> load
+//      -> save 字节逐字节相同；同名 @F 的两段不互相覆盖（3b）；
 //   4) 映射表本身的内容（名字 / 身份 / 容器 / 形状）与 (slot, 大写名) 结构序。
 //
-// 新 golden（排序后实现生成，2026-10-21）的 md5：
-//   normal-new.bin  995642c9f1ca57ab21e0c358e434ea89（23886 字节，条目与
-//                    normal-old.bin 相同、顺序为排序后的全序）
-//   global-new.bin  ff92a82c95cbaeab9a7da50babaac9b7（98 字节）
-//   global-new.txt  dfdf86e45e3d5c44a76250f92c9a2f23（205 字节；GLOBAL 档只有
-//                    一个用户条目 UG，旧顺序恰好与排序一致，字节未变）
+// 新 golden（2026-10-22 重算）的 md5：
+//   normal-new.bin  d3b24b4570a8bf4893b60b1e3ec1eb91（23886 字节）：
+//                   与上版 golden 只差版本字段（1808 -> 1809）—— 本夹具没有
+//                   函数私有 savedata 声明，条目名一个都没变（cmp 逐字节核对）；
+//   global-new.bin  07bb540a2ab8c2e415a49dd5f4f1c9f3（98 字节）：同样只差版本字段；
+//   global-new.txt  62ea7926b2aaa13ed0701db49ec5921d（205 字节）：只差起始标记
+//                   里的版本号（"__EMUERA_1808_STRAT__" -> "…1809…"）。
 //
 // 新 golden 的再生成（维护用隐藏开关）：
 //   EMUERA_SAVE_MAP_REGEN_GOLDEN=1 ctest --test-dir build -R test_save_variable_map
@@ -30,6 +33,7 @@
 #include "variable_storage.h"
 #include "save_variable_map.h"
 #include "ast/variable_table.h"
+#include "ast/name_interner.h"
 #include "era_binary_data.h"
 
 namespace {
@@ -119,6 +123,16 @@ bool orderNonDecreasing(const QList<EraBinaryData::Variable>& vars, const erasav
 
 } // namespace
 
+
+
+[[maybe_unused]] static QString scopeKeyOfFunction(const VariableTable& vt, const QString& function) {
+    for (const VariableDecl& d : vt.declarations()) {
+        if (!d.scopeKey.isEmpty() && d.function.compare(function, Qt::CaseInsensitive) == 0)
+            return d.scopeKey;
+    }
+    return QString();
+}
+
 int main(int argc, char** argv)
 {
     // 注意：**不再** QHashSeed::setDeterministicGlobalSeed()。条目顺序由
@@ -132,70 +146,38 @@ int main(int argc, char** argv)
     };
     const QString fixtures = QStringLiteral(ERA_TEST_SOURCE_DIR) + QStringLiteral("/fixtures/save-map");
 
-    // ---- 1) 旧字节的兼容读（旧 golden 降级：解码 + applyBinarySave + 值核对）----
+    // ---- 1) 旧档判废（容器版本 1808 -> 1809：不是兼容读，而是原子拒绝）----
+    //
+    // 私有作用域身份由「函数名」改成「段身份 (脚本, 段起点行)」后，旧档里的私有
+    // 条目名（"FUNC\x1fNAME"）无法再还原到正确的变量；当前程序尚未稳定，旧档
+    // 整体判废（不做迁移、不加扩展计数）。下面的旧 golden 正是判废 fixture：
+    // 版本字段对不上 -> decode()/decodeText() 原子失败，目标 document 不变，
+    // 诊断必须明确要求删除旧档并给出双方版本号。
     {
-        VariableStorage restored; restored.initialize(10, 10);
-        VariableTable table;
-        addGoldenDeclarations(table);
-        restored.setSaveVariableTable(&table);
-        restored.registerCharaDataVariable("UC", false, 1);
         EraBinaryData::Document doc;
+        doc.uniqueCode = 99; doc.description = QStringLiteral("untouched");
+        QString error;
         const QByteArray oldBytes = readFile(fixtures + QStringLiteral("/normal-old.bin"));
         check(!oldBytes.isEmpty(), "旧 NORMAL golden 文件在");
-        check(EraBinaryData::decode(oldBytes, doc), "旧 NORMAL 存档（旧顺序字节）可解码");
-        restored.applyBinarySave(doc);
-        check(restored.getSystemVariable("DAY", 0) == 7, "旧 NORMAL 存档：系统 DAY 恢复");
-        check(restored.getGlobalInt1D("S1", 0) == 11 && restored.getGlobalInt1D("S1", 3) == 14,
-              "旧 NORMAL 存档：1D 用户 SAVEDATA 恢复");
-        check(restored.getGlobalInt2D("S2", 1, 2) == 1234567890123LL,
-              "旧 NORMAL 存档：2D 用户 SAVEDATA 恢复");
-        check(restored.getGlobalInt3D("S3", 1, 1, 1) == -42,
-              "旧 NORMAL 存档：3D 用户 SAVEDATA 恢复");
-        check(restored.getGlobalStr1D("SNAME", 0) == QString::fromUtf8("héllo界😀\t")
-              && restored.getGlobalStr1D("SNAME", 2) == "x",
-              "旧 NORMAL 存档：1D 字符串数组恢复（含 UTF-16 增补面与制表符）");
-        check(restored.getGlobalStr2D("S2NAME", 1, 1) == "two",
-              "旧 NORMAL 存档：2D 字符串数组恢复");
-        check(restored.getGlobalInt1D("TEMP", 0) == 0,
-              "旧 NORMAL 存档：非 SAVEDATA 变量不随档恢复");
-        check(restored.charaNum() == 2, "旧 NORMAL 存档：两个角色");
-        // 旧实现按 m_charaList=[1,0] 从模板槽取数写档：file 角色 0 = "one"/202/55，
-        // 角色 1 = "zero"/101；apply 后运行时序复原成同样的映射。
-        check(restored.getCharaStr("NAME", 0, 0) == "one" && restored.getCharaStr("NAME", 1, 0) == "zero",
-              "旧 NORMAL 存档：角色 NAME 恢复");
-        check(restored.getCharaInt("ABL", 0, 0) == 202 && restored.getCharaInt("ABL", 1, 0) == 101,
-              "旧 NORMAL 存档：角色 ABL 恢复");
-        check(restored.getCharaInt("UC", 0, 1) == 55 && restored.getCharaInt("UC", 1, 1) == 0,
-              "旧 NORMAL 存档：用户 CHARADATA 恢复");
+        check(!EraBinaryData::decode(oldBytes, doc, &error), "旧 NORMAL 存档（版本 1808）被拒绝");
+        check(doc.uniqueCode == 99 && doc.description == QStringLiteral("untouched"),
+              "旧 NORMAL 判废是原子的（目标 document 不变）");
+        check(error.contains(QStringLiteral("版本不兼容")) && error.contains(QStringLiteral("请删除"))
+              && error.contains(QString::number(EraBinaryData::Version)) && error.contains(QStringLiteral("1808")),
+              "旧 NORMAL 判废文案：版本不兼容 + 双方版本号 + 请删除");
 
-        VariableStorage globalRestored; globalRestored.initialize(10, 10);
-        VariableTable globalTable;
-        addGoldenDeclarations(globalTable);
-        globalRestored.setSaveVariableTable(&globalTable);
-        EraBinaryData::Document globalDoc;
         const QByteArray oldGlobalBytes = readFile(fixtures + QStringLiteral("/global-old.bin"));
-        check(!oldGlobalBytes.isEmpty() && EraBinaryData::decode(oldGlobalBytes, globalDoc),
-              "旧 GLOBAL 存档可解码");
-        globalRestored.setGlobalInt1D("UG", 0, 0); globalRestored.setGlobalStr1D("GLOBALS", 0, "bye");
-        globalRestored.applyBinarySave(globalDoc);
-        check(globalRestored.getGlobalInt1D("GLOBAL", 0) == 999, "旧 GLOBAL 存档：GLOBAL 恢复");
-        check(globalRestored.getGlobalStr1D("GLOBALS", 0) == "gl", "旧 GLOBAL 存档：GLOBALS 恢复");
-        check(globalRestored.getGlobalInt1D("UG", 1) == 5, "旧 GLOBAL 存档：用户 SAVEDATA 恢复");
+        check(!oldGlobalBytes.isEmpty() && !EraBinaryData::decode(oldGlobalBytes, doc),
+              "旧 GLOBAL 存档被拒绝");
 
-        // 旧 GLOBAL 文本档（C# EraDataWriter 兼容行）：
         EraBinaryData::Document textSchema; textSchema.type = EraBinaryData::FileType::Global;
-        EraBinaryData::Document textDoc;
         const QByteArray oldTextBytes = readFile(fixtures + QStringLiteral("/global-old.txt"));
-        check(!oldTextBytes.isEmpty() && EraBinaryData::decodeText(oldTextBytes, textSchema, textDoc),
-              "旧 GLOBAL 文本档可解码");
-        VariableStorage textRestored; textRestored.initialize(10, 10);
-        VariableTable textTable;
-        addGoldenDeclarations(textTable);
-        textRestored.setSaveVariableTable(&textTable);
-        textRestored.applyBinarySave(textDoc);
-        check(textRestored.getGlobalInt1D("GLOBAL", 0) == 999, "旧 GLOBAL 文本档：GLOBAL 恢复");
-        check(textRestored.getGlobalStr1D("GLOBALS", 0) == "gl", "旧 GLOBAL 文本档：GLOBALS 恢复");
-        check(textRestored.getGlobalInt1D("UG", 1) == 5, "旧 GLOBAL 文本档：用户 SAVEDATA 恢复");
+        error.clear();
+        check(!oldTextBytes.isEmpty() && !EraBinaryData::decodeText(oldTextBytes, textSchema, doc, &error),
+              "旧 GLOBAL 文本档被拒绝");
+        check(error.contains(QStringLiteral("版本不兼容")) && error.contains(QStringLiteral("1808"))
+              && error.contains(QStringLiteral("请删除")),
+              "旧文本档判废文案与二进制同源");
     }
 
     // ---- 2) 顺序确定：encode 与种子无关，== 新 golden ----
@@ -206,22 +188,21 @@ int main(int argc, char** argv)
         const QByteArray bytes = encodeNormal(storage);
         check(!bytes.isEmpty(), "NORMAL 存档编码成功");
         check(encodeNormal(storage) == bytes, "同一状态连存两次逐字节相同");
-        // 新 golden（排序后实现生成；旧 normal-old.bin 是「固定播种 + 旧 QHash
-        // 顺序」的产物，不再逐字节可比 —— 见上方兼容读）。
-        //   normal-new.bin md5 995642c9f1ca57ab21e0c358e434ea89
+        // 新 golden（2026-10-22 重算；变更理由见文件头）：
+        //   normal-new.bin md5 d3b24b4570a8bf4893b60b1e3ec1eb91
         check(bytes == readFile(fixtures + QStringLiteral("/normal-new.bin")),
               "NORMAL 存档 == 新 golden");
         auto global = storage.captureBinarySave(EraBinaryData::FileType::Global);
         global.uniqueCode = 42; global.scriptVersion = 1808;
         QByteArray globalBytes;
         check(EraBinaryData::encode(global, globalBytes), "GLOBAL 编码成功");
-        //   global-new.bin md5 ff92a82c95cbaeab9a7da50babaac9b7
+        //   global-new.bin md5 07bb540a2ab8c2e415a49dd5f4f1c9f3
         check(globalBytes == readFile(fixtures + QStringLiteral("/global-new.bin")),
               "GLOBAL 存档 == 新 golden");
         QByteArray globalText;
         check(EraBinaryData::encodeText(global, globalText), "GLOBAL 文本编码成功");
-        //   global-new.txt md5 dfdf86e45e3d5c44a76250f92c9a2f23（与旧 golden 相同：
-        //   GLOBAL 档仅一个用户条目 UG，旧顺序恰好等于排序后的全序）
+        //   global-new.txt md5 62ea7926b2aaa13ed0701db49ec5921d（只差起始标记里的
+        //   版本号：GLOBAL 档仅一个用户条目 UG，顺序不变）
         check(globalText == readFile(fixtures + QStringLiteral("/global-new.txt")),
               "GLOBAL 文本档 == 新 golden");
 
@@ -252,37 +233,55 @@ int main(int argc, char** argv)
             writeFile(fixtures + QStringLiteral("/global-new.bin"), globalBytes);
             writeFile(fixtures + QStringLiteral("/global-new.txt"), globalText);
             qWarning().noquote() << "GOLDEN normal-new.bin" << md5(bytes).constData()
+                                 << bytes.size();
+            qWarning().noquote() << "GOLDEN global-new.bin" << md5(globalBytes).constData()
                                  << globalBytes.size();
             qWarning().noquote() << "GOLDEN global-new.bin" << md5(globalBytes).constData();
-            qWarning().noquote() << "GOLDEN global-new.txt" << md5(globalText).constData();
+            qWarning().noquote() << "GOLDEN global-new.txt" << md5(globalText).constData()
+                                 << globalText.size();
         }
     }
 
-    // ---- 3) 私有变量 save -> load 往返 ----
+    // ---- 3) 私有变量：身份 = 段身份，写盘名可还原，save -> load 值不变 ----
     {
         VariableStorage storage; storage.initialize(10, 10);
         VariableTable table;
+        // 私有域的唯一键 = 段身份 (脚本, 段起点行) 的文本。
+        const QString funcScope = eravar::segmentKeyText(QStringLiteral("FUNC.ERB"), 0);
         VariableDecl priv;
         priv.name = "PRIV"; priv.scope = VarScope::Local; priv.function = "FUNC";
+        priv.scopeKey = funcScope;
         priv.isPrivate = true; priv.isSavedata = true; priv.lengths = {3};
         priv.defaultInt = {1, 2, 3};
         table.add(priv);
         VariableDecl transient;
         transient.name = "STATIC"; transient.scope = VarScope::Local; transient.function = "FUNC";
+        transient.scopeKey = funcScope;
         transient.isPrivate = true; transient.isSavedata = false; transient.lengths = {2};
         table.add(transient);
         storage.setSaveVariableTable(&table);
-        storage.setPrivateScope("FUNC", {QStringLiteral("PRIV"), QStringLiteral("STATIC")});
+        storage.setPrivateScope(eravar::internName(funcScope), {QStringLiteral("PRIV"), QStringLiteral("STATIC")});
         storage.setGlobalInt1D("PRIV", 1, 4242);
         storage.setGlobalInt1D("STATIC", 0, 99);
         storage.setLocalContext({});
 
+        // 期望值不抄字面量：与写侧同一个构造点算出。
+        const QString writeName = eravar::makePrivateStorageKey(funcScope, QStringLiteral("PRIV"));
         const erasave::Map map = erasave::Map::build(
             storage.variableConfig(), &table, EraBinaryData::FileType::Normal);
         const auto* entry = map.findByKey(
-            eravar::VariableKey{eravar::internName("FUNC"), eravar::internName("PRIV")});
-        check(entry != nullptr && entry->name == "PRIV", "映射表：私有 savedata 行带作用域身份");
-        check(map.findByKey(eravar::VariableKey{eravar::internName("STATIC"),
+            eravar::VariableKey{eravar::internName(funcScope), eravar::internName("PRIV")});
+        check(entry != nullptr && entry->name == writeName, "映射表：私有 savedata 行带段身份");
+        // 写盘名 = 段身份文本 + 0x1F + 名字；拆开后能还原回 (脚本, 段起点行)。
+        {
+            QString scopeText, nameText, script;
+            int line = -2;
+            eravar::splitPrivateStorageKey(writeName, scopeText, nameText);
+            check(nameText == QStringLiteral("PRIV") && eravar::parseSegmentKey(scopeText, script, line)
+                  && script == QStringLiteral("FUNC.ERB") && line == 0,
+                  "私有写盘名可还原回 (脚本, 段起点行)");
+        }
+        check(map.findByKey(eravar::VariableKey{eravar::internName(funcScope),
                                                 eravar::internName("STATIC")}) == nullptr,
               "映射表：非 savedata 私有变量不入表");
 
@@ -291,19 +290,98 @@ int main(int argc, char** argv)
         check(EraBinaryData::encode(doc, bytes), "含私有条目的存档编码成功");
         EraBinaryData::Document decoded;
         check(EraBinaryData::decode(bytes, decoded), "含私有条目的存档解码成功");
-        bool wrotePrivate = false;
-        for (const auto& v : decoded.variables) wrotePrivate |= v.name == "PRIV";
+        bool wrotePrivate = false, wroteBareName = false;
+        for (const auto& v : decoded.variables) {
+            wrotePrivate |= v.name == writeName;
+            wroteBareName |= v.name == QStringLiteral("PRIV");
+        }
         check(wrotePrivate, "私有 savedata 变量写进了存档");
+        check(!wroteBareName, "私有变量不再以裸名写盘（不会与别的段撞名）");
 
         VariableStorage restored; restored.initialize(10, 10);
         VariableTable restoredTable;
         restoredTable.add(priv);
         restored.setSaveVariableTable(&restoredTable);
         restored.applyBinarySave(decoded);
-        restored.setPrivateScope("FUNC", {QStringLiteral("PRIV")});
+        restored.setPrivateScope(eravar::internName(funcScope), {QStringLiteral("PRIV")});
         check(restored.getGlobalInt1D("PRIV", 1) == 4242, "私有变量经 save -> load 值不变");
         check(restored.getGlobalInt1D("PRIV", 0) == 0 && restored.getGlobalInt1D("PRIV", 2) == 0,
               "私有变量的其余元素按存档值恢复");
+        restored.setLocalContext({});
+        // save -> load -> save：同一进程内字节逐字节相同（顺序 / 条目名 / 值都不漂移）。
+        auto againDoc = restored.captureBinarySave(EraBinaryData::FileType::Normal);
+        QByteArray again;
+        check(EraBinaryData::encode(againDoc, again), "回读后再存成功");
+        check(again == bytes, "私有条目：save -> load -> save 字节逐字节相同");
+    }
+
+    // ---- 3b) 同名 @F 的两段：同名私有变量互不覆盖（本次改造的核心收益）----
+    {
+        // 同一脚本里有两个同名 @F（段起点行不同），各声明 `#DIM SAVEDATA DUP, 2`。
+        // 旧身份（函数名）下二者是同一个变量；段身份下是两行、两个存储槽、
+        // 两个不同的写盘名。
+        const QString scopeA = eravar::segmentKeyText(QStringLiteral("DUP.ERB"), 0);
+        const QString scopeB = eravar::segmentKeyText(QStringLiteral("DUP.ERB"), 9);
+        VariableTable table;
+        VariableDecl dup;
+        dup.name = "DUP"; dup.scope = VarScope::Local; dup.function = "F";
+        dup.scopeKey = scopeA; dup.isPrivate = true; dup.isSavedata = true; dup.lengths = {2};
+        table.add(dup);
+        dup.scopeKey = scopeB;
+        table.add(dup);
+
+        VariableStorage storage; storage.initialize(10, 10);
+        storage.setSaveVariableTable(&table);
+        storage.setPrivateScope(eravar::internName(scopeA), {QStringLiteral("DUP")});
+        storage.setGlobalInt1D("DUP", 0, 111);
+        storage.setPrivateScope(eravar::internName(scopeB), {QStringLiteral("DUP")});
+        storage.setGlobalInt1D("DUP", 0, 222);
+        storage.setLocalContext({});
+
+        const QString nameA = eravar::makePrivateStorageKey(scopeA, QStringLiteral("DUP"));
+        const QString nameB = eravar::makePrivateStorageKey(scopeB, QStringLiteral("DUP"));
+        check(nameA != nameB, "同名 @F 两段：同名私有变量的写盘名不同");
+        const erasave::Map map = erasave::Map::build(
+            storage.variableConfig(), &table, EraBinaryData::FileType::Normal);
+        const auto* entryA = map.findByKey(
+            eravar::VariableKey{eravar::internName(scopeA), eravar::internName("DUP")});
+        const auto* entryB = map.findByKey(
+            eravar::VariableKey{eravar::internName(scopeB), eravar::internName("DUP")});
+        check(entryA && entryB && entryA->name == nameA && entryB->name == nameB,
+              "同名 @F 两段：映射表两行各持自己的段身份");
+
+        const QByteArray bytes = [&] {
+            QByteArray out;
+            check(EraBinaryData::encode(storage.captureBinarySave(EraBinaryData::FileType::Normal), out),
+                  "同名 @F 两段：存档编码成功");
+            return out;
+        }();
+        EraBinaryData::Document decoded;
+        check(EraBinaryData::decode(bytes, decoded), "同名 @F 两段：存档可解码");
+        int foundA = 0, foundB = 0;
+        for (const auto& v : decoded.variables) {
+            if (v.name == nameA) { ++foundA; check(v.integers.value(0) == 111, "同名 @F 两段：段 A 值 111"); }
+            if (v.name == nameB) { ++foundB; check(v.integers.value(0) == 222, "同名 @F 两段：段 B 值 222"); }
+        }
+        check(foundA == 1 && foundB == 1, "同名 @F 两段：存档里两条互不覆盖");
+
+        VariableStorage restored; restored.initialize(10, 10);
+        VariableTable restoredTable;
+        dup.scopeKey = scopeA; restoredTable.add(dup);
+        dup.scopeKey = scopeB; restoredTable.add(dup);
+        restored.setSaveVariableTable(&restoredTable);
+        restored.applyBinarySave(decoded);
+        restored.setPrivateScope(eravar::internName(scopeA), {QStringLiteral("DUP")});
+        const qint64 valueA = restored.getGlobalInt1D("DUP", 0);
+        restored.setPrivateScope(eravar::internName(scopeB), {QStringLiteral("DUP")});
+        const qint64 valueB = restored.getGlobalInt1D("DUP", 0);
+        restored.setLocalContext({});
+        check(valueA == 111 && valueB == 222, "同名 @F 两段：读档后各段值互不覆盖");
+
+        QByteArray again;
+        check(EraBinaryData::encode(restored.captureBinarySave(EraBinaryData::FileType::Normal), again),
+              "同名 @F 两段：回读后再存成功");
+        check(again == bytes, "同名 @F 两段：save -> load -> save 字节逐字节相同");
     }
 
     // ---- 4) 映射表本身：名字 -> 容器/形状是数据；条目结构序 ----

@@ -211,8 +211,14 @@ Map Map::build(const VariableConfig& config, const VariableTable* table, EraBina
             e.user = true;
             if (d.scope == VarScope::Local) {
                 // 函数私有静态（C# userDefinedStaticVarList + IsSavedata）：身份
-                // 自带作用域 id，存档期不再拼 FUNC\x1fNAME。
-                e.key = eravar::VariableKey{eravar::internName(d.function), eravar::internName(d.name)};
+                // 自带作用域 id（段身份），存档期不再拼 FUNC\x1fNAME。
+                // 段身份缺失说明声明不属于任何段（装载期按 Global 处理，不会出现；
+                // 合成夹具曾用函数名顶替）。这里不退回函数名 —— 那等于把身份改回
+                // 旧形态 —— 直接不入表。
+                if (d.scopeKey.isEmpty()) continue;
+                e.key = eravar::VariableKey{eravar::internName(d.scopeKey), eravar::internName(d.name)};
+                // 文件标识 = 段身份文本 + 0x1F + 名字：私有条目从此可唯一还原。
+                e.name = eravar::makePrivateStorageKey(d.scopeKey, d.name);
             } else {
                 e.key = globalKey(d.name);
             }

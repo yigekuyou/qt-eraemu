@@ -149,7 +149,7 @@ void ExecutionEngine::executeLogicalLine(const LogicalLine& line) {
     }
 
     qCDebug(eraTrace) << "[executeLogicalLine]   Executing Instruction:" << line.functionName;
-    if (!executeInstruction(line, eravar::internName(line.ownerFunction))) {
+    if (!executeInstruction(line, eravar::internName(line.scopeKey))) {
         qCDebug(eraTrace) << "[executeLogicalLine]   executeInstruction returned false";
     }
 }
@@ -379,7 +379,7 @@ bool ExecutionEngine::handleVarSet(const LogicalLine& line, bool eachChara) {
     }
     const QString name = ref.name;
     const QString upper = name.toUpper();
-    const QString fn = line.ownerFunction;
+    const QString fn = line.scopeKey;
     const bool isString = isStringVariable(name, fn);
     const bool isChara = m_storage->isCharaDataVariable(name);
 
@@ -1484,10 +1484,10 @@ bool ExecutionEngine::executeInstruction(const LogicalLine& line, eravar::ScopeI
                 args[0].ast ? args[0].ast->valueType() : OperandType::Unknown;
             if (destType == OperandType::Str) {
                 return handleStringAssignment(args[0].ast.data(), args[1].raw, args[1].ast,
-                                              line.ownerFunction);
+                                              line.scopeKey);
             }
             return handleAssignment(args[0].ast.data(), args[1].raw, args[1].ast,
-                                    line.assignmentAsts, line.ownerFunction);
+                                    line.assignmentAsts, line.scopeKey);
         }
         return true;
     }
@@ -1541,7 +1541,7 @@ bool ExecutionEngine::executeInstruction(const LogicalLine& line, eravar::ScopeI
             }
             const auto ref = resolveLhsRef(args[0].ast.data());
             if (!ref.valid) return false;
-            const auto* decl = m_parseTable ? m_parseTable->variableTable().find(ref.name, line.ownerFunction) : nullptr;
+            const auto* decl = m_parseTable ? m_parseTable->variableTable().find(ref.name, line.scopeKey) : nullptr;
             const int start = ref.indices.isEmpty() ? 0 : ref.indices.last();
             const int size = decl && !decl->lengths.isEmpty() ? decl->lengths.last() : m_storage->arraySize(ref.name);
             if ((decl && decl->isConst) || (values.size() > 1 && size > 0
@@ -1554,7 +1554,7 @@ bool ExecutionEngine::executeInstruction(const LogicalLine& line, eravar::ScopeI
                 indices.last() += i;
                 LhsRef target = ref;
                 target.indices = indices;
-                if (!writeStructuredValue(target, values[i], line.ownerFunction)) return false;
+                if (!writeStructuredValue(target, values[i], line.scopeKey)) return false;
             }
             return true;
         }
@@ -1575,11 +1575,11 @@ bool ExecutionEngine::executeInstruction(const LogicalLine& line, eravar::ScopeI
                 BinaryOpNode operation(lhs, ExpressionToken(TokenType::PLUS, "+"), args[1].ast);
                 const QVariant value = getEvaluator().evaluate(operation, m_storage, m_gameBaseData, m_activeScope);
                 if (!value.isValid()) return false;
-                return writeStructuredValue(ref, value, line.ownerFunction);
+                return writeStructuredValue(ref, value, line.scopeKey);
             }
         }
     }
-    if (name == "*=" && args.size() >= 2 && isStringVariable(args[0].ast && args[0].ast->kind() == NodeKind::Variable ? static_cast<const VariableNode&>(*args[0].ast).name() : QString(), line.ownerFunction)) {
+    if (name == "*=" && args.size() >= 2 && isStringVariable(args[0].ast && args[0].ast->kind() == NodeKind::Variable ? static_cast<const VariableNode&>(*args[0].ast).name() : QString(), line.scopeKey)) {
         if (!args[1].ast) return false;
         const auto ref = resolveLhsRef(args[0].ast.data());
         if (!ref.valid) return false;
@@ -1588,7 +1588,7 @@ bool ExecutionEngine::executeInstruction(const LogicalLine& line, eravar::ScopeI
         BinaryOpNode operation(lhs, ExpressionToken(TokenType::MULTIPLY, "*"), args[1].ast);
         const QVariant value = getEvaluator().evaluate(operation, m_storage, m_gameBaseData, m_activeScope);
         if (!value.isValid() || !isStringValue(value)) return false;
-        return writeStructuredValue(ref, value, line.ownerFunction);
+        return writeStructuredValue(ref, value, line.scopeKey);
     }
     if (name == "+=" || name == "-=" || name == "*=" || name == "/=" || name == "%="
         || name == "&=" || name == "|=" || name == "^=" || name == "<<=" || name == ">>=") {
@@ -1688,8 +1688,8 @@ bool ExecutionEngine::executeInstruction(const LogicalLine& line, eravar::ScopeI
         const ExpressionNode* target = args.at(0).ast.data();
         if (!target || target->kind() != NodeKind::Variable) return true;
         return name == QLatin1String("VARS")
-            ? handleStringAssignment(target, args.at(1).raw, args.at(1).ast, line.ownerFunction)
-            : handleAssignment(target, args.at(1).raw, args.at(1).ast, {}, line.ownerFunction);
+            ? handleStringAssignment(target, args.at(1).raw, args.at(1).ast, line.scopeKey)
+            : handleAssignment(target, args.at(1).raw, args.at(1).ast, {}, line.scopeKey);
     }
 
     // ---- 扩展注册类（普通语句形态：扩展语句在这里分发）----
@@ -1994,7 +1994,7 @@ void ExecutionEngine::reportUnfinished(const QString& what, const QString& name,
 
 bool ExecutionEngine::handleStringAssignment(const ExpressionNode* lhs, const QString& rhs,
                                              const QSharedPointer<ExpressionNode>& ast,
-                                             const QString& ownerFunction) {
+                                             const QString& scopeKey) {
     const LhsRef ref = resolveLhsRef(lhs);
     if (ref.name.isEmpty()) {
         return false;
@@ -2005,32 +2005,32 @@ bool ExecutionEngine::handleStringAssignment(const ExpressionNode* lhs, const QS
     const QVariant result = evaluator.evaluate(*ast, m_storage, m_gameBaseData, m_activeScope);
     if (!result.isValid() || !isStringValue(result)) return false;
     const QString value = stringText(result);
-    return writeStructuredValue(ref, result, ownerFunction);
+    return writeStructuredValue(ref, result, scopeKey);
 }
 
 // 把**已求值**的字符串写入左值（从 handleStringAssignment 抽出，供 SPLIT 等
 // 「值不是表达式文本」的调用方复用 —— SPLIT 的分割结果若再当表达式求值，
 // 裸文本 "x" 会被解析成变量 x -> 0）。
-bool ExecutionEngine::writeStructuredValue(const LhsRef& ref, const QVariant& value, const QString& ownerFunction) {
-    Q_UNUSED(ownerFunction);
+bool ExecutionEngine::writeStructuredValue(const LhsRef& ref, const QVariant& value, const QString& scopeKey) {
+    Q_UNUSED(scopeKey);
     if (ref.name.isEmpty() || !ref.valid) return false;
     if (m_storage->hasParameter(ref.name)) { m_storage->setParameter(ref.name, value); return true; }
     return m_storage->setStringSlot(ref.name, ref.indices, flatString(value), m_activeScope);
 }
 
 bool ExecutionEngine::writeStringValue(const ExpressionNode* lhs, const QString& value,
-                                      const QString& ownerFunction) {
-    return writeStringValue(resolveLhsRef(lhs), value, ownerFunction);
+                                      const QString& scopeKey) {
+    return writeStringValue(resolveLhsRef(lhs), value, scopeKey);
 }
 
 bool ExecutionEngine::writeStringValue(const LhsRef& ref, const QString& value,
-                                      const QString& ownerFunction) {
-    return writeStructuredValue(ref, QVariant(value), ownerFunction);
+                                      const QString& scopeKey) {
+    return writeStructuredValue(ref, QVariant(value), scopeKey);
 }
 
 bool ExecutionEngine::handleAssignment(const ExpressionNode* lhs, const QString& rhs, const QSharedPointer<ExpressionNode>& ast,
                                        const QList<QSharedPointer<ExpressionNode>>& nodes,
-                                       const QString& ownerFunction) {
+                                       const QString& scopeKey) {
     Q_UNUSED(rhs);
     ExpressionEvaluator& evaluator = getEvaluator();
     const auto expressions = nodes.isEmpty() ? QList<QSharedPointer<ExpressionNode>>{ast} : nodes;
@@ -2045,7 +2045,7 @@ bool ExecutionEngine::handleAssignment(const ExpressionNode* lhs, const QString&
     // 声明查询带作用域：函数内的同名私有变量优先于广域 CONST（否则 `#DIM SHADOW`
     // 会被广域的 `#DIM CONST SHADOW` 判成常量，赋值被丢弃且变量永远读不到写入）。
     const auto* decl = m_parseTable
-        ? m_parseTable->variableTable().find(ref.name, ownerFunction) : nullptr;
+        ? m_parseTable->variableTable().find(ref.name, scopeKey) : nullptr;
     const int start = ref.indices.isEmpty() ? 0 : ref.indices.last();
     int size = decl && !decl->lengths.isEmpty() ? decl->lengths.last() : m_storage->arraySize(ref.name);
     if (values.size() > 1 && size > 0 && (start < 0 || qint64(start)+values.size() > size)) {
@@ -2739,7 +2739,7 @@ bool ExecutionEngine::handleStatusCommand(const LogicalLine& line)
         // C# Array.Copy starts at zero, regardless of the destination's
         // supplied subscript, and leaves unused destination elements intact.
         const auto* destinationDecl = m_parseTable
-            ? m_parseTable->variableTable().find(target.name, line.ownerFunction) : nullptr;
+            ? m_parseTable->variableTable().find(target.name, line.scopeKey) : nullptr;
         const int configured = m_storage->variableConfig().getSize1D(target.name.toUpper());
         const int capacity = destinationDecl && !destinationDecl->lengths.isEmpty()
             ? destinationDecl->lengths.first()

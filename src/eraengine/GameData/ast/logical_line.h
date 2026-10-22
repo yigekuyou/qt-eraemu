@@ -285,7 +285,12 @@ struct LogicalLine {
     QString        assignOperator;   // "=" / "+=" …（C# InstructionLine.AssignOperator）
     // 原始 token 与文本（C# argprimitive / WordCollection）
     QString        raw;
-    QString        ownerFunction;    // 所属函数标签（变量作用域判定，装载期填充）
+    QString        ownerFunction;    // 所属函数标签名（形参/事件分组/RETURNF；**不是**作用域键）
+    // 私有作用域身份 = 段身份 (脚本, 段起点行) 的规范化文本（装载期唯一写入，
+    // 见 eravar::segmentKeyText）。空串 = 顶层（无私有域）。
+    QString        scopeKey;
+    // 段起点行（@ 标签行；文件头段 = -1）。运行期 GOTO/段判定只读这个字段。
+    int            segmentStart = -1;
 
     QList<Operand> arguments;
     // DT_COLUMN_OPTIONS 的 DEFAULT 表达式表：冷字段，见 LineExtras（columnDefaults()）

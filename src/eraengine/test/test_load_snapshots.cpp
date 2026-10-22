@@ -1,14 +1,32 @@
+// test_load_snapshots.cpp
+//
+// 2026-10-22 golden 口径变更（本文件不再保存版本字面量）：
+//   私有作用域身份由函数名改为段身份 (脚本, 段起点行) —— 夹具里的 #DIM SAVEDATA
+//   条目改按 eravar::segmentKeyText 建作用域；存档容器版本 1808 -> 1809，旧
+//   golden 不可比。头里的版本字段与文本起始标记里的版本号一律从
+//   EraBinaryData::Version 派生，避免第三份副本。
 #include <QCoreApplication>
 #include <QTemporaryDir>
 #include <QFile>
 #include <QDir>
 #include <QDebug>
+#include <QtEndian>
 #include <limits>
 #include "execution_engine.h"
 #include "expression_evaluator.h"
 #include "era_parse_table.h"
 #include "ast_builder.h"
 #include "game_base_data.h"
+
+
+
+[[maybe_unused]] static QString scopeKeyOfFunction(const VariableTable& vt, const QString& function) {
+    for (const VariableDecl& d : vt.declarations()) {
+        if (!d.scopeKey.isEmpty() && d.function.compare(function, Qt::CaseInsensitive) == 0)
+            return d.scopeKey;
+    }
+    return QString();
+}
 
 int main(int argc,char** argv) {
     QCoreApplication app(argc,argv); int failures=0;
@@ -26,7 +44,7 @@ int main(int argc,char** argv) {
     auto global=saved; global.name="USER_GLOBAL"; global.isGlobal=true; global.isGlobalSave=true; const_cast<VariableTable&>(table.variableTable()).add(global);
     auto unsavedGlobal=global; unsavedGlobal.name="UNSAVED_GLOBAL"; unsavedGlobal.isSavedata=false;
     const_cast<VariableTable&>(table.variableTable()).add(unsavedGlobal);
-    VariableDecl local; local.name="STATIC"; local.scope=VarScope::Local; local.function="FUNC"; local.lengths={2}; local.defaultInt={19,23}; const_cast<VariableTable&>(table.variableTable()).add(local);
+    VariableDecl local; local.name="STATIC"; local.scope=VarScope::Local; local.function="FUNC"; local.scopeKey=eravar::segmentKeyText("snapshot.ERB",0); local.lengths={2}; local.defaultInt={19,23}; const_cast<VariableTable&>(table.variableTable()).add(local);
     VariableDecl chars; chars.name="USER_C"; chars.isCharaData=true; chars.isSavedata=true; chars.lengths={2}; const_cast<VariableTable&>(table.variableTable()).add(chars);
     storage.registerCharaDataVariable("USER_C",false,1);
     const AstResolver resolve=[&](const QString& s){return table.expressionAst(s);};
@@ -44,13 +62,19 @@ int main(int argc,char** argv) {
     storage.setCharaInt("USER_C",0,1,55);
     check(engine.writeSaveSnapshot(0,"C# snapshot"),"binary save succeeds");
     const QByteArray original=read(first.filePath("sav/save00.sav"));
-    check(original.startsWith(QByteArray::fromHex("894552410d0a1a0a10070000")),"C#1808 header on engine output");
+    check(original.startsWith(QByteArray::fromHex("894552410d0a1a0a")),"binary magic on engine output");
+    {
+        // 版本字段由 EraBinaryData::Version 派生（测试不再抄 1808/1809 字面量）。
+        QByteArray version(4, '\0');
+        qToLittleEndian<quint32>(EraBinaryData::Version, version.data());
+        check(original.mid(8,4)==version,"engine writes the current container version");
+    }
     EraBinaryData::Document document; check(EraBinaryData::decode(original,document),"engine document decodes");
     check(document.uniqueCode==42 && document.scriptVersion==1808,"real game code/version");
     bool hasSaved=false,hasTemp=false,hasGlobal=false;
     for(const auto& v:document.variables){ if(v.name=="SAVED"){hasSaved=true;check(v.dimensions==QList<int>({2,3}),"declared matrix dimensions");} hasTemp|=v.name=="TEMP";hasGlobal|=v.name=="GLOBAL"||v.name=="USER_GLOBAL"; }
     check(hasSaved && !hasTemp && !hasGlobal,"normal save declaration scope filtering");
-    storage.setPrivateScope("FUNC",{"STATIC","SAVED"}); storage.setGlobalInt1D("STATIC",0,88);
+    storage.setPrivateScope(eravar::internName(local.scopeKey),{"STATIC","SAVED"}); storage.setGlobalInt1D("STATIC",0,88);
     storage.setLocalInt(0,99);storage.setArgInt(0,98);storage.setReference("SAVED","TEMP");
     storage.setSystemVariable("DAY",0,90);
     check(engine.loadSaveSnapshot(0),"cached binary load");
@@ -61,7 +85,7 @@ int main(int argc,char** argv) {
     check(storage.getGlobalInt2D("UNSAVED_GLOBAL",1,2)==314,"unsaved GLOBAL survives normal load");
     check(storage.getSystemVariable("LASTLOAD_NO",0)==0 && storage.getSystemVariable("LASTLOAD_VERSION",0)==1808 && storage.getGlobalStr1D("LASTLOAD_TEXT",0)=="C# snapshot","last load metadata restored");
     check(storage.getLocalInt(0)==0 && storage.getArgInt(0)==0 && !storage.hasReference("SAVED"),"locals arguments and refs reset");
-    storage.setPrivateScope("FUNC",{"STATIC"});check(storage.getGlobalInt1D("STATIC",0)==19,"private STATIC declaration initializer restored");storage.setLocalContext({});
+    storage.setPrivateScope(eravar::internName(local.scopeKey),{"STATIC"});check(storage.getGlobalInt1D("STATIC",0)==19,"private STATIC declaration initializer restored");storage.setLocalContext({});
     check(storage.getCharaStr("NAME",0,0)=="one" && storage.getCharaStr("NAME",1,0)=="zero","character block order maps runtime slots");
     check(storage.getCharaInt("ABL",0,0)==202 && storage.getCharaInt("ABL",1,0)==101 && storage.getCharaInt("USER_C",0,1)==55,"character values and savedata restored");
     check(storage.getGlobalStr1D("SAVESTR",0)=="界😀\t\n\r","binary string newlines and unicode survive");
@@ -146,7 +170,8 @@ int main(int argc,char** argv) {
     storage.setGlobalStr1D("SAVESTR",0,"text界😀");
     check(engine.writeSaveSnapshot(3,"text"),"native text mode saves");
     const auto textBytes=read(second.filePath("sav/save03.sav"));
-    check(textBytes.startsWith(QByteArray::fromHex("efbbbf")) && textBytes.contains("__EMUERA_1808_STRAT__"),"text mode honors binary false even if zip true");
+    const QByteArray textMarker = QByteArrayLiteral("__EMUERA_")+QByteArray::number(EraBinaryData::Version)+QByteArrayLiteral("_STRAT__");
+    check(textBytes.startsWith(QByteArray::fromHex("efbbbf")) && textBytes.contains(textMarker),"text mode honors binary false even if zip true");
     engine.reloadSaveSnapshots();storage.setSystemVariable("DAY",0,123);
     const bool nativeTextLoaded = engine.loadSaveSnapshot(3);
     check(nativeTextLoaded,"native text reload succeeds");
@@ -167,7 +192,7 @@ int main(int argc,char** argv) {
               "eraUpperKey：纯 CJK 名字读写落同一槽位（toUpper 恒等）");
         check(storage.getGlobalInt1D(QStringLiteral("全角ａｂ"),1)==7,
               "eraUpperKey：全角小写 ａｂ 仍映射到 ＡＢ 键");
-        storage.setPrivateScope(QStringLiteral("函"),{QStringLiteral("私変数")});
+        storage.setPrivateScope(eravar::internName(QStringLiteral("函")),{QStringLiteral("私変数")});
         check(storage.resolvedStorageName(QStringLiteral("私変数"))
                   == QStringLiteral("函\x1f私変数"),
               "eraUpperKey：私有作用域映射对 CJK 名字不受影响");

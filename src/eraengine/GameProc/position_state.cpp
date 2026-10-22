@@ -304,18 +304,15 @@ bool resolveJumpToScript(PositionState& state, const ScriptView& view, const QSt
     return true;
 }
 
-QString executionScope(const PositionState& state, const ScriptView& view) {
-    const auto* line = lineAt(view, state.script, state.line);
-    return line ? line->ownerFunction : QString();
-}
-
 eravar::ScopeId executionScopeId(PositionState& state, const ScriptView& view) {
-    const QString scope = executionScope(state, view);
-    if (state.scopeIdValid && scope == state.scopeIdName) return state.scopeId;
-    state.scopeIdName = scope;
-    state.scopeId = eravar::internName(scope);
+    // 段身份只在装载期写入 line->scopeKey；这里只做一次 intern（无名字回查）。
+    // 空 scopeKey（手工构造的行 / 尚未装载）= 顶层。
+    const auto* line = lineAt(view, state.script, state.line);
+    const eravar::ScopeId id = line ? eravar::internName(line->scopeKey)
+                                    : eravar::kGlobalScope;
+    state.scopeId = id;
     state.scopeIdValid = true;
-    return state.scopeId;
+    return id;
 }
 
 }  // namespace position

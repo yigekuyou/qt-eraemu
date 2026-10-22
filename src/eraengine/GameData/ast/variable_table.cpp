@@ -167,11 +167,11 @@ void computeVariableAccess(VariableNode& var, const VariableTable& table,
     //（scope == Local）会被 setPrivateScope 重映射成 FUNC\x1fNAME；头文件级
     // #DIM 虽带 isPrivate 标志，但登记在 m_globals、不进任何函数的映射表，
     // 运行期按裸名解析（与 restoreDeclaredDefaults 的键构造同口径）。
-    const bool functionLocal = d->scope == VarScope::Local && !d->function.isEmpty();
+    const bool functionLocal = d->scope == VarScope::Local && !d->scopeKey.isEmpty();
     // 身份 = intern id（scope 0 = 裸键）：setPrivateScope 用同一张表登记
     // 作用域名/私有名，两边整数相等 <=> 字符串逐字节相等。
     var.accessKey.name = eravar::internName(upper);
-    var.accessKey.scope = functionLocal ? eravar::internName(d->function) : 0;
+    var.accessKey.scope = functionLocal ? eravar::internName(d->scopeKey) : 0;
     const int dim = qMax(1, d->dimension);
     var.accessKind = isStr
         ? (dim >= 3 ? VariableNode::AccessKind::GlobalStr3
@@ -352,8 +352,9 @@ VariableTable::DeclStatus VariableTable::addChecked(const VariableDecl& decl) {
         }
     } invalidator{*this};
     const QString nameKey = nk(decl.name);
-    if (decl.scope == VarScope::Local && !decl.function.isEmpty()) {
-        auto& fmap = m_locals[nk(decl.function)];
+    if (decl.scope == VarScope::Local && !decl.scopeKey.isEmpty()) {
+        // 段身份文本**大小写敏感**（含脚本名）：绝不 toUpper。
+        auto& fmap = m_locals[decl.scopeKey];
         const auto existing = fmap.constFind(nameKey);
         if (existing != fmap.constEnd()) {
             // first-wins：保留首次声明（含其维数/初值），后续重复声明不再覆盖，
@@ -384,9 +385,9 @@ bool VariableTable::add(const VariableDecl& decl) {
     return addChecked(decl) == DeclStatus::Added;
 }
 
-const VariableDecl* VariableTable::find(const QString& name, const QString& function) const {
-    if (!function.isEmpty()) {
-        const auto fit = m_locals.constFind(nk(function));
+const VariableDecl* VariableTable::find(const QString& name, const QString& scopeKey) const {
+    if (!scopeKey.isEmpty()) {
+        const auto fit = m_locals.constFind(scopeKey);
         if (fit != m_locals.constEnd()) {
             const auto it = fit.value().constFind(nk(name));
             if (it != fit.value().constEnd()) return &it.value();
@@ -405,11 +406,11 @@ bool VariableTable::isPrivateOnlyName(const QString& name) const {
     return !m_globals.contains(n) && m_localNameCount.contains(n);
 }
 
-OperandType VariableTable::typeOf(const QString& name, const QString& function) const {
-    if (const VariableDecl* d = find(name, function)) {
+OperandType VariableTable::typeOf(const QString& name, const QString& scopeKey) const {
+    if (const VariableDecl* d = find(name, scopeKey)) {
         return d->type;
     }
-    if (function.isEmpty()) {
+    if (scopeKey.isEmpty()) {
         // 无上下文：仅当该名字在全表局部中唯一出现时才采用（O(1) 反向索引）
         const OperandType local = m_uniqueLocalType.value(nk(name), OperandType::Unknown);
         if (isKnown(local)) return local;
@@ -443,32 +444,32 @@ const QList<VariableDecl>& VariableTable::declarationsRef() const {
     return m_declarationsCache;
 }
 
-QList<VariableDecl> VariableTable::localsOf(const QString& function) const {
+QList<VariableDecl> VariableTable::localsOf(const QString& scopeKey) const {
     QList<VariableDecl> out;
-    const auto it = m_locals.constFind(nk(function));
+    const auto it = m_locals.constFind(scopeKey);
     if (it != m_locals.constEnd()) {
         for (const VariableDecl& d : it.value()) out.append(d);
     }
     return out;
 }
 
-const QList<VariableDecl>& VariableTable::localsOfRef(const QString& function) const {
+const QList<VariableDecl>& VariableTable::localsOfRef(const QString& scopeKey) const {
     static const QList<VariableDecl> kEmpty;
-    const QString key = nk(function);
+    const QString& key = scopeKey;
     const auto it = m_localsRefCache.constFind(key);
     if (it != m_localsRefCache.constEnd()) return it.value();
-    const QList<VariableDecl> decls = localsOf(function);
+    const QList<VariableDecl> decls = localsOf(scopeKey);
     if (decls.isEmpty()) return kEmpty;
     return *m_localsRefCache.insert(key, decls);
 }
 
-const QStringList& VariableTable::localNamesOfRef(const QString& function) const {
+const QStringList& VariableTable::localNamesOfRef(const QString& scopeKey) const {
     static const QStringList kEmpty;
-    const QString key = nk(function);
+    const QString& key = scopeKey;
     const auto it = m_localNamesRefCache.constFind(key);
     if (it != m_localNamesRefCache.constEnd()) return it.value();
     QStringList names;
-    for (const VariableDecl& decl : localsOfRef(function))
+    for (const VariableDecl& decl : localsOfRef(scopeKey))
         if (!decl.isConst) names.append(decl.name);
     return *m_localNamesRefCache.insert(key, names);
 }
@@ -487,7 +488,7 @@ VariableTable::PrivateNameTable VariableTable::buildPrivateNameTable() const {
         for (const VariableDecl& decl : it.value()) {
             if (decl.isConst) continue;
             names.insert(decl.name.toUpper(),
-                         eravar::makePrivateStorageKey(function, decl.name));
+                         eravar::makePrivateStorageKey(function, decl.name));   // function 已是段身份文本
         }
         // 全是 CONST 的函数没有存储槽：不建空表（查询侧 miss 与空表结果相同）。
         if (names.isEmpty()) continue;

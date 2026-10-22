@@ -146,7 +146,9 @@ private:
     // "execution error"（一次失败只留一条有用消息）。
     void reportError(const QString& message);
     bool returnFromCall();
-    void enterCall(const QString& function);
+    // scope = 被调**段身份**（eravar::segmentKeyText(script, labelLine) 的 intern
+    // id）。function 只用于函数名事实（#LOCALSIZE / userFunctions 查询 / 错误文案）。
+    void enterCall(const QString& function, eravar::ScopeId scope);
 
     // CALLEVENT 事件链（对齐 C# CALLEVENT_Instruction + CalledFunction.CallEventFunction
     // + Process.Return 的事件函数分组推进）：
@@ -204,9 +206,12 @@ private:
     // GAMEBASE_* 等需要 GameBase 数据（经 ExecutionEngine 取得）
     [[nodiscard]] GameBaseData* baseData() const;
     // 绑定实参到 LOCAL，并把形参名注册为局部别名（供表达式解析）。
+    // scopeKey = 被调**段身份文本**（与 enterCall/applyPrivateVariableDefaults 同一个
+    // 事实，由调用方算一次传进来）：元素形参写私有数组时要按它查声明。
     // snapshots：与 callArgs 对齐的「调用者上下文已求值」运输值（可空）。
     // 只由 doCallLine 传入；装载后的 AST 操作数不带值（见 Operand 的说明）。
-    void bindArguments(const UserFunctionDecl* info, const QList<Operand>& callArgs,
+    void bindArguments(const UserFunctionDecl* info, const QString& scopeKey,
+                       const QList<Operand>& callArgs,
                        const QHash<QString, QString>& references = {},
                        const QList<QVariant>* snapshots = nullptr);
     // FOR/NEXT 的循环变量写入：LOCAL/ARG 写局部槽（脚本读法一致），其余写系统/全局
@@ -238,8 +243,9 @@ private:
     VariableStorage* m_storage;
     ExpressionEvaluator* m_evaluator = nullptr;
     std::unique_ptr<ExpressionEvaluator> m_fallbackEvaluator;
-    // perf：stepOnce 只在 owner 函数变化时重算私有作用域（见 stepOnce）
-    QString m_lastPrivateScope;
+    // perf：stepOnce 只在**段身份**变化时重算私有作用域（见 stepOnce）。
+    // 存文本而非 id：换段时要按名字表取 localNamesOfRef(scopeKey)。
+    QString m_lastScopeKey;
     // 与 m_lastPrivateScope 同步的 intern id（求值入口的显式作用域参数）。
     // 只在换函数时更新 —— 绝不每步 intern。
     eravar::ScopeId m_currentScopeId = eravar::kGlobalScope;
@@ -253,7 +259,8 @@ private:
     std::function<bool()> m_buttonAvailable;   // BINPUT/BINPUTS 按钮判定
 
     QList<LoopFrame> m_loops;
-    struct CallContext { int depth; int loops; QString function; VariableStorage::LocalContext locals; };
+    // function 字段 → 被调段身份：同名 @F 的两段各自保存自己的 ARG/LOCAL 快照。
+    struct CallContext { int depth; int loops; eravar::ScopeId scope; VariableStorage::LocalContext locals; };
     // 本轮挂起是否为「需要用户输入」的等待（AWAIT / TWAIT skip!=0 的纯计时不算，
     // 不发 inputRequested：C# InputType.Void 不是用户输入请求，UI 不显示）
     bool m_waitNotifiesUser = true;
@@ -261,7 +268,7 @@ private:
     // 统一报 ANYKEY，UI 侧按「点击任意处/回车」裁决（C# IsWaitingEnterKey）
     QString m_waitKind;
     QVariant m_waitDefault;   // 本次等待的缺省值（无缺省 = 无效 QVariant）
-    QHash<QString, VariableStorage::LocalContext> m_functionLocals;
+    QHash<eravar::ScopeId, VariableStorage::LocalContext> m_functionLocals;
     QList<CallContext> m_callContexts;   // Caller locals and loop depth, restored on every return
     bool m_running = false;
     // [qdbug] 逐行跟踪的脚本名过滤器（EMUERA_QDBUG_TRACE_FILE，空=不过滤）

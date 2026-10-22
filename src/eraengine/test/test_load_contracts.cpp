@@ -50,7 +50,18 @@
 #include "process_state.h"
 #include "variable_storage.h"
 
+[[maybe_unused]] static QString scopeKeyOfFunction(const VariableTable& vt, const QString& function) {
+    for (const VariableDecl& d : vt.declarations()) {
+        if (!d.scopeKey.isEmpty() && d.function.compare(function, Qt::CaseInsensitive) == 0)
+            return d.scopeKey;
+    }
+    return QString();
+}
+
 static int g_failures = 0;
+
+// 测试侧：函数名 -> 段身份文本（声明表是唯一事实来源；同名第二份取第一份）。
+// 生产代码不做这种映射：运行期一律读行上的 scopeKey。
 
 static void check(bool cond, const QString& what) {
     if (cond) qDebug().noquote() << "  [ok ]" << what;
@@ -624,10 +635,11 @@ int main(int argc, char* argv[]) {
         privateTable.setVariableStorage(&privateStorage);
         check(!privateStorage.privateScopeTableInstalled(),
               "before load: private table not installed");
-        privateStorage.setPrivateScope(QStringLiteral("F"), {QStringLiteral("A")});
+        // 合成作用域 id（文本 "F"，不是任何段）：只验证安装前的旧建表路径。
+        privateStorage.setPrivateScope(eravar::internName(QStringLiteral("F")), {QStringLiteral("A")});
         check(privateStorage.storageName(QStringLiteral("A"),
                                          eravar::internName(QStringLiteral("F")))
-                  == QStringLiteral("F\x1f" "A"),
+                  == eravar::makePrivateStorageKey(QStringLiteral("F"), QStringLiteral("A")),
               "before install: setPrivateScope builds the legacy table");
 
         const QStringList privateSource = {
@@ -643,10 +655,12 @@ int main(int argc, char* argv[]) {
         privateTable.markLoadComplete();
         check(privateStorage.privateScopeTableInstalled(),
               "markLoadComplete installs the load-time private table");
-        privateStorage.setPrivateScope(QStringLiteral("F"), {});   // names 被忽略
-        check(privateStorage.storageName(QStringLiteral("A"),
-                                         eravar::internName(QStringLiteral("F")))
-                  == QStringLiteral("F\x1f" "A"),
+        // 安装后名表按**段身份**常驻：查询也用同一个身份（不是函数名 "F"）。
+        const QString scopeKey = privateTable.segmentKeyOfLabel(QStringLiteral("private"),
+                                                               QStringLiteral("F"));
+        privateStorage.setPrivateScope(eravar::internName(scopeKey), {});   // names 被忽略
+        check(privateStorage.storageName(QStringLiteral("A"), eravar::internName(scopeKey))
+                  == eravar::makePrivateStorageKey(scopeKey, QStringLiteral("A")),
               "after install: empty names list still resolves the declared private");
     }
 
@@ -837,9 +851,11 @@ int main(int argc, char* argv[]) {
         scopeTable.markLoadComplete();
 
         const auto* declA =
-            scopeTable.variableTable().find(QStringLiteral("ARR_A"), QStringLiteral("A"));
+            scopeTable.variableTable().find(QStringLiteral("ARR_A"),
+                scopeTable.segmentKeyOfLabel(QStringLiteral("scope.ERB"), QStringLiteral("A")));
         const auto* declB =
-            scopeTable.variableTable().find(QStringLiteral("ARR_B"), QStringLiteral("B"));
+            scopeTable.variableTable().find(QStringLiteral("ARR_B"),
+                scopeTable.segmentKeyOfLabel(QStringLiteral("scope.ERB"), QStringLiteral("B")));
         check(declA && declA->lengths == QList<int>{12},
               QStringLiteral("@A 的 ARR_A 维数 = 12（N=11；得到 %1）")
                   .arg(declA ? declA->lengths.value(0) : -1));

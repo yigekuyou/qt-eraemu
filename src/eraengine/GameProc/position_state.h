@@ -190,14 +190,10 @@ bool resolveJumpTarget(PositionState& state, const ScriptView& view, const QStri
 bool resolveJumpToScript(PositionState& state, const ScriptView& view, const QString& script,
                          const QString& label, int& position, PositionEffects& fx);
 
-// 当前执行行所属的函数名（空 = 不在任何函数内）。
-// 常数/私有变量的作用域由「正在执行的那一行属于哪个函数」决定：装载期若尚未
-// 开始执行（state.script 为空 / 位置越界）返回空串 —— 此时只有广域常量可见，
-// 正是 #DIM 维数之类装载期查询想要的语义。
-QString executionScope(const PositionState& state, const ScriptView& view);
-
-// 同上，intern id（kGlobalScope = 顶层）。按「最后一次位置变化后的函数名」缓存 ——
-// 求值入口把它作为显式作用域参数，不依赖存储层的「当前帧」。
+// 当前执行行所属的**段身份**（eravar::ScopeId；kGlobalScope = 顶层）。
+// 直接读 LogicalLine::scopeKey（装载期写入的 (脚本名, 段起点) 文本）再 intern；
+// **没有任何按函数名的回查**。装载期尚未开始执行（无位置/越界）时返回
+// kGlobalScope —— 此时只有广域常量可见，正是 #DIM 维数之类查询想要的语义。
 // **会更新 state 里的缓存**（故收非 const 引用）。
 eravar::ScopeId executionScopeId(PositionState& state, const ScriptView& view);
 

@@ -499,9 +499,9 @@ void checkStructuresInScript(const ParseIrView& view, const ScriptData& data,
 //     根本发现不了，正是「希望不需要运行期间才能被检测」的一类。
 //   · 负常量下标：任何数组的下标下界恒为 0（运行期读 0/写忽略），lengths
 //     未知的位置（未声明名/REF/无尺寸声明）也一律可判。
-//     注意 `-1` 不是折叠字面量而是 UnaryOp(MINUS,Literal)（解析器只折叠
-//     #DIM CONST 名）—— 连 validateExpression 都看不见这个形态，负下标必须
-//     在这里单独收集。
+//     常量值来自装载期字段 ExpressionNode::constantIndex（`-1`、`(0-1)`、
+//     `#DIM CONST` 名、`(2*5)` 都是同一个 Value）—— 3/6 只判上界，负值明确
+//     让给本趟；两边读的是同一个值，不会各算一遍。
 //   （FOR/REPEAT 计数器**不做**循环值检查：计数器写的是「固定下标上的循环值」
 //     —— value 是值不是下标（writeLoopCounter：resolveIndices(计数器自身下标) +
 //     写 value）。固定下标越界已由上面的常量下标检查覆盖（计数器操作数也在
@@ -600,17 +600,21 @@ void checkStaticValuesInScript(const ParseIrView& view, const ScriptData& data,
             const auto& var = static_cast<const VariableNode&>(node);
             const int n = var.indices().size();
             if (n <= 0 || n > 3) return;
+            // 常量下标值：**只读**装载期写好的字段（ExpressionNode::constantIndex）。
+            // 不再在这里辨认 LiteralNode / UnaryOp(MINUS,Literal) / 常量名 ——
+            // 形态判定与求值都在收尾定型那一趟完成（index_bounds::
+            // isConstantIndexExpression + 装载期 ExpressionEvaluator），本趟只读值。
+            //   Unknown（含变量/函数/++）-> 跳过；
+            //   Invalid（是常量但求值失败）-> 归 3/6（issuePolicy 的 producer 是
+            //     Pass3，该行已被 RejectLine，本趟在对 line.isError 的守卫处让位）。
             int constPos[3] = {0, 0, 0};
             qint64 constVal[3] = {0, 0, 0};
-            bool constNeg[3] = {false, false, false};
             int constCount = 0;
             for (int i = 0; i < n; ++i) {
-                bool negated = false;
-                const auto v = indexbounds::constantIndexValue(*var.indices().at(i), &negated);
-                if (!v) continue;
+                const auto& idx = var.indices().at(i);
+                if (!idx || !idx->constantIndex.isValid()) continue;
                 constPos[constCount] = i;
-                constVal[constCount] = *v;
-                constNeg[constCount] = negated;
+                constVal[constCount] = idx->constantIndex.value;
                 ++constCount;
             }
             // 字面字符串下标：运行期 resolveIndex 对字符串下标必须经
@@ -685,7 +689,9 @@ void checkStaticValuesInScript(const ParseIrView& view, const ScriptData& data,
                 const int p = constPos[c];
                 const qint64 v = constVal[c];
                 if (charaIdPos[p]) continue;
-                if (veCovered[p] && !constNeg[c]) continue;
+                // 3/6 已按 lengths 报过「已声明数组 + 非负常量」；负值即使
+                // lengths 已知也归本趟（3/6 只看上界，下界由这里唯一判定）。
+                if (veCovered[p] && v >= 0) continue;
                 if (v < 0) {
                     emitStaticIssue(indexbounds::Kind::NegativeConstantIndex, line,
                         indexbounds::negativeIndexMessage(var.name(), v));

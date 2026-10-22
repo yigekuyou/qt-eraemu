@@ -628,14 +628,23 @@ ExpressionIssue validateExpressionIssue(const ExpressionNode& node, bool require
         for (int i = 0; i < n; ++i) {
             ExpressionIssue e = check(v.indices()[i]);
             if (!e.ok()) return e;
-            if (const auto* l = dynamic_cast<const LiteralNode*>(v.indices()[i].data()); l && !l->isString()) {
-                const int dim = indexbounds::elementDimension(i, v.dimension, v.characterData, n);
-                if (dim >= 0 && dim < v.lengths.size()
-                    && indexbounds::pass3CoversLiteralBounds(v.lengths[dim])
-                    && indexbounds::isOutOfRange(l->intValue(), v.lengths[dim]))
-                    return {indexbounds::declaredLiteralOutOfRangeMessage(v.name()),
-                            indexbounds::Kind::DeclaredLiteralOutOfRange};
+            const indexbounds::ConstantIndex& ci = v.indices()[i]->constantIndex;
+            if (ci.isInvalid()) {
+                // 是常量但装载期求值失败（除零/溢出…）：与运行期同一事实。
+                if (indexbounds::hasConstantDivisionByZero(*v.indices()[i]))
+                    return {indexbounds::divisionByZeroMessage(),
+                            indexbounds::Kind::ConstantDivisionByZero};
+                return {indexbounds::constantEvalFailedMessage(),
+                        indexbounds::Kind::ConstantIndexInvalid};
             }
+            // 负常量由 6/6 统一报（它对「尺寸未知」的名字也能判下界）；3/6 只判上界。
+            if (!ci.isValid() || ci.value < 0) continue;
+            const int dim = indexbounds::elementDimension(i, v.dimension, v.characterData, n);
+            if (dim >= 0 && dim < v.lengths.size()
+                && indexbounds::pass3CoversLiteralBounds(v.lengths[dim])
+                && indexbounds::isOutOfRange(ci.value, v.lengths[dim]))
+                return {indexbounds::declaredLiteralOutOfRangeMessage(v.name()),
+                        indexbounds::Kind::DeclaredLiteralOutOfRange};
         }
         return {};
     }

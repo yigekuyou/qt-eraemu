@@ -116,6 +116,26 @@ void runPerScript(LoadContext& ctx, ParseDiagnostics& diagnostics, Fn&& fn) {
 // 表达式解析（装载期唯一流水线）
 // ---------------------------------------------------------------------------
 
+// 下标常量求值器：交付给 VariableTable::applyTypes 的那一个回调。
+//   * 求值用**运行期同一个** ExpressionEvaluator（装载期只算一次，运行期不再算）；
+//   * 作用域是调用方显式给的「这一行所属函数」，不回查装载线程当前位置；
+//   * 常量 provider 未安装（scripts 还没登记完 #DIM CONST）时不注入 ——
+//     字段保持 Unknown，由收尾定型那趟（constProvidersReady 之后）再写。
+// 返回 nullopt = 求值失败（除零/溢出/未定义常量…），由调用方记为 Invalid。
+VariableTable::ConstantIndexEvaluator constantIndexEvaluator(const LoadContext& ctx,
+                                                             const QString& scope) {
+    if (!ctx.constProvidersReady || !ctx.evaluator || !ctx.storage) return {};
+    return [ctx, scope](const ExpressionNode& node) -> std::optional<qint64> {
+        const QVariant v = ctx.evaluator->evaluate(node, ctx.storage, ctx.gameBaseData,
+                                                   eravar::internName(scope));
+        if (!v.isValid()) return std::nullopt;
+        bool ok = false;
+        const qint64 iv = v.toLongLong(&ok);
+        if (!ok) return std::nullopt;
+        return iv;
+    };
+}
+
 QSharedPointer<ExpressionNode> parseScopedExpression(const LoadContext& ctx, const QString& expr,
                                                      const QString& scope, bool quiet,
                                                      bool foldConstants) {
@@ -181,7 +201,8 @@ QSharedPointer<ExpressionNode> parseScopedExpression(const LoadContext& ctx, con
         // 还有赋值 AST 重建等再解析路径，那些节点不会再回定型趟，
         // 形参名必须在此处就判成 Dynamic（否则形参读会被标成私有数组）。
         VariableTable::applyTypes(*ast, ctx.variables, scope,
-                                  paramNamesOf(ctx.paramNames, scope.toUpper()));
+                                  paramNamesOf(ctx.paramNames, scope.toUpper()),
+                                  constantIndexEvaluator(ctx, scope));
     }
     PrintTemplateCompiler::prepare(ast);
     return ast;
@@ -573,7 +594,10 @@ void applyVariableTypes(LoadContext& ctx) {
             const auto bind = [ctx, seen, &scope, paramNames](QSharedPointer<ExpressionNode>& ast) {
                 if (!ast || seen->contains(ast.data())) return;
                 seen->insert(ast.data());
-                VariableTable::applyTypes(*ast, ctx.variables, scope, paramNames);
+                // 定型与「下标常量值」同趟写完（唯一写入点）：常量下标在这里
+                // 算一次，3/6 与 6/6 之后只读 ExpressionNode::constantIndex。
+                VariableTable::applyTypes(*ast, ctx.variables, scope, paramNames,
+                                          constantIndexEvaluator(ctx, scope));
                 PrintTemplateCompiler::prepare(ast);
             };
             for (auto& op : line.arguments) bind(op.ast);
@@ -840,6 +864,14 @@ void resolveGlobalDeclarations(LoadContext& ctx) {
             if (vt->constArrayAt(name, index, iv, owner)) { out = QVariant::fromValue<qint64>(iv); return true; }
             return evalLazyConst(name, owner, index, out);
         });
+        // VARSIZE(name, dim) 的显式维：唯一事实是**声明**里的 lengths。
+        // （存储容器只有扁平形状；多重维全局变量按 lengths.first() 分配。）
+        // 未声明 / REF / 表达式暂未定稿 -> 空表，求值器回落旧口径。
+        ctx.evaluator->setDeclaredLengthsProvider(
+            [vt](const QString& name, eravar::ScopeId scope) -> QList<int> {
+                const VariableDecl* d = vt->find(name, eravar::nameOf(scope));
+                return d ? d->lengths : QList<int>();
+            });
         ctx.variables.setDimEvaluator([ctx](const QString& expr, const QString& scope) -> qint64 {
             if (!ctx.evaluator) return 0;
             const auto ast = expressionAstInScope(ctx, expr, scope);

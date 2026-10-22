@@ -97,6 +97,12 @@ public:
     [[nodiscard]] SourceSpan span() const noexcept { return m_span; }
     void setSpan(const SourceSpan& s) noexcept { m_span = s; }
 
+    // ---- 装载期常量求值结果（下标判定只读这个字段）----
+    // 收尾定型时由 walkApply 用**该行所属函数的作用域**一次性写入；运行期只读，
+    // 不再按 AST 形态做第二次模式匹配（旧路：LiteralNode / UnaryOp(MINUS,Literal)
+    // 两处各自辨认）。
+    indexbounds::ConstantIndex constantIndex;
+
 private:
     SourceSpan m_span;
 };

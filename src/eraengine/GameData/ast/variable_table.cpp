@@ -182,9 +182,66 @@ void computeVariableAccess(VariableNode& var, const VariableTable& table,
                                 : VariableNode::AccessKind::GlobalInt1));
 }
 
+// 下标节点的装载期常量值（唯一写入点）。
+// 前置条件：*idx 已在本趟定型完毕（accessKind 等就绪）—— 因此只在
+// VariableNode 的子下标递归**之后**调用。形态判定走 index_bounds 的唯一一份
+// isConstantIndexExpression；求值走装载层注入的 evalConst（与运行期同一
+// ExpressionEvaluator），保证算出来的值与运行期逐位一致。
+void fillConstantIndex(ExpressionNode& idx,
+                       const indexbounds::ConstNameResolver& resolveConst,
+                       const VariableTable::ConstantIndexEvaluator& evalConst) {
+    // 快速路径 1：字面量直接就是值（语料里绝大多数下标）。这一步**不需要**
+    // 装载期求值器 —— 直接用测试/局部路径（只 applyTypes、不注入求值器）也得
+    // 到同一个字段，两趟判定因此永远只读字段，不再看 AST 形态。
+    if (idx.kind() == NodeKind::Literal) {
+        const auto& lit = static_cast<const LiteralNode&>(idx);
+        if (lit.isString()) {
+            idx.constantIndex = {};
+            return;
+        }
+        idx.constantIndex.value = lit.intValue();
+        idx.constantIndex.state = indexbounds::ConstantIndexState::Value;
+        return;
+    }
+    // 快速路径 2：`-字面量`（旧路第二处模式匹配的形态）直接取负，同样不求值。
+    if (idx.kind() == NodeKind::UnaryOp) {
+        const auto& un = static_cast<const UnaryOpNode&>(idx);
+        if (!un.isPostfix() && un.op().type() == TokenType::MINUS && un.operand()
+            && un.operand()->kind() == NodeKind::Literal) {
+            const auto& lit = static_cast<const LiteralNode&>(*un.operand());
+            if (lit.isString()) {
+                idx.constantIndex = {};
+                return;
+            }
+            const qint64 v = lit.intValue();
+            if (v != std::numeric_limits<qint64>::min()) {
+                idx.constantIndex.value = -v;
+                idx.constantIndex.state = indexbounds::ConstantIndexState::Value;
+                return;
+            }
+        }
+    }
+    // 其余形态（常量名 / 算术组合）需要装载期求值：没有求值器时保持 Unknown
+    // （清空是必要的：同一节点可能先按一个作用域定型、再按另一个作用域定型）。
+    if (!evalConst) {
+        idx.constantIndex = {};
+        return;
+    }
+    if (!indexbounds::isConstantIndexExpression(idx, resolveConst)) {
+        idx.constantIndex = {};
+        return;
+    }
+    const std::optional<qint64> v = evalConst(idx);
+    idx.constantIndex.value = v.value_or(0);
+    idx.constantIndex.state = v.has_value() ? indexbounds::ConstantIndexState::Value
+                                            : indexbounds::ConstantIndexState::Invalid;
+}
+
 // 递归把类型回填到 AST 的变量节点（其余节点仅递归）
 void walkApply(ExpressionNode& node, const VariableTable& table, const QString& function,
-               const QSet<QString>* paramNames) {
+               const QSet<QString>* paramNames,
+               const VariableTable::ConstantIndexEvaluator& evalConst,
+               const indexbounds::ConstNameResolver& resolveConst) {
     switch (node.kind()) {
     case NodeKind::Variable: {
         auto& var = static_cast<VariableNode&>(node);
@@ -203,42 +260,47 @@ void walkApply(ExpressionNode& node, const VariableTable& table, const QString& 
             }
         }
         computeVariableAccess(var, table, function, paramNames);
+        // 先递归（子下标定型）再回填常量值：isConstantIndexExpression 读的是
+        // 子节点**定型后**的 accessKind，值是求值器按同一棵（已定型）树算的。
         for (auto& idx : var.indices()) {
-            if (idx) walkApply(*idx, table, function, paramNames);
+            if (idx) walkApply(*idx, table, function, paramNames, evalConst, resolveConst);
+        }
+        for (auto& idx : var.indices()) {
+            if (idx) fillConstantIndex(*idx, resolveConst, evalConst);
         }
         break;
     }
     case NodeKind::BinaryOp: {
         auto& op = static_cast<BinaryOpNode&>(node);
-        if (op.left())  walkApply(*op.left(), table, function, paramNames);
-        if (op.right()) walkApply(*op.right(), table, function, paramNames);
+        if (op.left())  walkApply(*op.left(), table, function, paramNames, evalConst, resolveConst);
+        if (op.right()) walkApply(*op.right(), table, function, paramNames, evalConst, resolveConst);
         break;
     }
     case NodeKind::UnaryOp: {
         auto& op = static_cast<UnaryOpNode&>(node);
-        if (op.operand()) walkApply(*op.operand(), table, function, paramNames);
+        if (op.operand()) walkApply(*op.operand(), table, function, paramNames, evalConst, resolveConst);
         break;
     }
     case NodeKind::Function: {
         auto& fn = static_cast<FunctionNode&>(node);
         for (auto& a : fn.arguments()) {
-            if (a) walkApply(*a, table, function, paramNames);
+            if (a) walkApply(*a, table, function, paramNames, evalConst, resolveConst);
         }
         break;
     }
     case NodeKind::If: {
         auto& n = static_cast<IfNode&>(node);
-        if (n.condition()) walkApply(*n.condition(), table, function, paramNames);
-        if (n.thenExpr())  walkApply(*n.thenExpr(), table, function, paramNames);
-        if (n.elseExpr())  walkApply(*n.elseExpr(), table, function, paramNames);
+        if (n.condition()) walkApply(*n.condition(), table, function, paramNames, evalConst, resolveConst);
+        if (n.thenExpr())  walkApply(*n.thenExpr(), table, function, paramNames, evalConst, resolveConst);
+        if (n.elseExpr())  walkApply(*n.elseExpr(), table, function, paramNames, evalConst, resolveConst);
         break;
     }
     case NodeKind::StrForm: {
         auto& n = static_cast<StrFormNode&>(node);
         for (auto& p : n.parts()) {
             if (p.type == StrFormPartType::Expression && p.expression) {
-                walkApply(*p.expression, table, function, paramNames);
-                if (p.width) walkApply(*p.width, table, function, paramNames);
+                walkApply(*p.expression, table, function, paramNames, evalConst, resolveConst);
+                if (p.width) walkApply(*p.width, table, function, paramNames, evalConst, resolveConst);
             }
         }
         break;
@@ -452,8 +514,22 @@ void VariableTable::clear() {
 }
 
 void VariableTable::applyTypes(ExpressionNode& node, const VariableTable& table,
-                               const QString& function, const QSet<QString>* paramNames) {
-    walkApply(node, table, function, paramNames);
+                               const QString& function, const QSet<QString>* paramNames,
+                               const ConstantIndexEvaluator& evalConst) {
+    // 常量名查询器在**一趟定型**里只建一次（captures 是引用，寿命覆盖整趟）。
+    // 没有求值器时完全不建（不产生每节点的 std::function 分配）。
+    static const indexbounds::ConstNameResolver kNoConstNames;
+    if (!evalConst) {
+        walkApply(node, table, function, paramNames, evalConst, kNoConstNames);
+        return;
+    }
+    const indexbounds::ConstNameResolver resolveConst =
+        [&table, &function](const QString& name) -> std::optional<qint64> {
+        qint64 v = 0;
+        if (table.constInt(name, v, function)) return v;
+        return std::nullopt;
+    };
+    walkApply(node, table, function, paramNames, evalConst, resolveConst);
 }
 
 // ---------------------------------------------------------------------------

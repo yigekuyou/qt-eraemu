@@ -36,13 +36,16 @@
 //   11 二维数组缺下标                  Pass3 RejectLine
 //   12 二维数组多下标                  Pass3 RejectLine
 //   13 下标项数 > 3                    表达式解析先拒（3/6 的 n>3 分支用直接构造的 AST 锁）
-//   14/15 常量表达式下标（10+0 / -1+0）两趟都不判 —— 只认「纯字面量 / -字面量」
+//   14/15 常量表达式下标（10+0 / -1+0）与 18-25：装载期算出**一个字段**
+//        （ExpressionNode::constantIndex），两趟只读它 —— 非负归 3/6、
+//        负值归 6/6、求值失败归 3/6（见 indexbounds::issuePolicy）
 //   16 VARSIZE 的下标被语言忽略        两趟都不判
 // ---------------------------------------------------------------------------
 #include <QCoreApplication>
 #include <QDebug>
 #include <QString>
 #include <QStringList>
+#include <QVariant>
 
 #include <optional>
 
@@ -152,11 +155,27 @@ int main(int argc, char* argv[]) {
         QStringLiteral("PRINTV ARR:(-1+0)"),        // 15
         QStringLiteral("VARSIZE ARR:500"),          // 16
         QStringLiteral("ARR:10 = 1"),               // 17 左值越界（另一条 3/6 路径）
+        // ---- 常量表达式下标（本刀把「是不是常量、值是多少」收成装载期字段）----
+        QStringLiteral("PRINTV ARR:LIDX"),          // 18 常量名（consts.ERH 的 LIDX=10）
+        QStringLiteral("PRINTV ARR:(2*5)"),         // 19 常量算术（无空格）
+        QStringLiteral("PRINTV ARR:(10-10)"),       // 20 常量算术（界内，负对照）
+        QStringLiteral("PRINTV ARR:(10+0)"),        // 21 常量算术（越界）
+        QStringLiteral("PRINTV ARR:(-1+0)"),        // 22 常量算术（负）
+        QStringLiteral("PRINTV ARR:(1/0)"),         // 23 常量表达式求值失败
+        QStringLiteral("PRINTV ITEM:(5000+0)"),     // 24 系统变量 + 常量算术越界
+        QStringLiteral("PRINTV ITEM:(LIDX+1)"),     // 25 系统变量 + 常量名（界内，负对照）
     };
     const AstResolver resolve = [&table](const QString& e) { return table.expressionAst(e); };
     QList<LogicalLine> lines;
     for (int i = 0; i < source.size(); ++i)
         lines.append(AstBuilder::build(source.at(i), ScriptPosition(kFile, i + 1, 1), resolve));
+    // 常量放在头文件（文件级 #DIM 才是广域常量；.ERB 的 # 行必须紧跟 @label）。
+    const QList<LogicalLine> constLines = {
+        AstBuilder::build(QStringLiteral("#DIM CONST LIDX = 10"),
+                          ScriptPosition(QStringLiteral("consts.ERH"), 1, 1), resolve),
+    };
+    check(table.loadScript(QStringLiteral("consts.ERH"), constLines, /*isHeaderFile=*/true),
+          "常量头文件装载成功");
     check(table.loadScript(kFile, lines), "夹具装载成功");
     table.markLoadComplete();
 
@@ -247,10 +266,55 @@ int main(int argc, char* argv[]) {
     check(onLine(diags, 13).isEmpty(),
           "13 四项下标被表达式解析先拒 -> 两趟都没有诊断（记录现状）");
 
-    // 14/15：只认「纯字面量 / -字面量」，常量表达式不在边界内（记录现状）。
-    check(onLine(diags, 14).isEmpty(), "14 ARR:(10+0) -> 两趟都不判（只认纯字面量）");
-    check(onLine(diags, 15).isEmpty(), "15 ARR:(-1+0) -> 两趟都不判（只认 -字面量）");
+    // 14/15 + 18-25：常量表达式的唯一定值在装载期字段里；两趟只读它。
+    // 非负常量（含常量名/算术）在 lengths 已知时由 3/6 判上界、RejectLine；
+    // 负值（3/6 不看下界）由 6/6 报；求值失败由 3/6 按 ConstantDivisionByZero /
+    // ConstantIndexInvalid 处置。
+    const auto row3 = [&](int line, const QString& msg) {
+        return expectRow(DiagOrigin::Pass3, DiagSeverity::Error, DiagEffect::RejectLine,
+                         DiagCode::kArgCheck, line, msg);
+    };
+    const auto warn3 = [&](int line, const QString& msg) {
+        return expectRow(DiagOrigin::Pass3, DiagSeverity::Warning, DiagEffect::ReportOnly,
+                         DiagCode::kArgCheck, line, msg);
+    };
+    const auto row6 = [&](int line, const QString& msg) {
+        return expectRow(DiagOrigin::Pass6, DiagSeverity::Warning, DiagEffect::ReportOnly,
+                         DiagCode::kStaticValue, line, msg);
+    };
+    const auto text3 = [](int /*line*/, const QString& arg) {
+        return QStringLiteral(" (") + arg + QStringLiteral(")");
+    };
+    check(lineEquals(diags, 14, {
+              row3(14, kArrOob), warn3(14, kArrOob + text3(14, "PRINTV ARR:(10+0)")),
+          }), "14 ARR:(10+0) -> 常量值 10 越界：Pass3 RejectLine + 同趟告警");
+    check(lineEquals(diags, 15, {row6(15, kNegArr)}),
+          "15 ARR:(-1+0) -> 常量值 -1：仅 Pass6 Warning/ReportOnly（下界归 6/6）");
     check(onLine(diags, 16).isEmpty(), "16 VARSIZE ARR:500 -> 两趟都不判（语言忽略其下标）");
+    check(lineEquals(diags, 18, {
+              row3(18, kArrOob), warn3(18, kArrOob + text3(18, "PRINTV ARR:LIDX")),
+          }), "18 ARR:LIDX（#DIM CONST 名 = 10）-> Pass3 RejectLine + 同趟告警");
+    check(lineEquals(diags, 19, {
+              row3(19, kArrOob), warn3(19, kArrOob + text3(19, "PRINTV ARR:(2*5)")),
+          }), "19 ARR:(2*5) -> 常量值 10 越界：Pass3 RejectLine + 同趟告警");
+    check(onLine(diags, 20).isEmpty(), "20 ARR:(10-10) -> 常量值 0 界内：0 条");
+    check(lineEquals(diags, 21, {
+              row3(21, kArrOob), warn3(21, kArrOob + text3(21, "PRINTV ARR:(10+0)")),
+          }), "21 ARR:(10+0) -> 常量值 10 越界：Pass3 RejectLine + 同趟告警");
+    check(lineEquals(diags, 22, {row6(22, kNegArr)}),
+          "22 ARR:(-1+0) -> 常量值 -1：仅 Pass6 Warning/ReportOnly");
+    check(lineEquals(diags, 23, {
+              expectRow(DiagOrigin::Pass3, DiagSeverity::Error, DiagEffect::RejectLine,
+                        DiagCode::kArgCheck, 23, kDivZero),
+              expectRow(DiagOrigin::Pass3, DiagSeverity::Warning, DiagEffect::ReportOnly,
+                        DiagCode::kArgCheck, 23, kDivZero + QStringLiteral(" (PRINTV ARR:(1/0))")),
+          }), "23 ARR:(1/0) -> 装载期求值失败（除零），Pass3 RejectLine；文案不变");
+    check(withOriginOnLine(diags, 23, DiagOrigin::Pass6).isEmpty(),
+          "23 常量除零行上 Pass6 让位");
+    check(lineEquals(diags, 24, {row6(24, kItemSize)}),
+          "24 ITEM:(5000+0) -> 常量值 5000 越过系统尺寸：仅 Pass6");
+    check(onLine(diags, 25).isEmpty(),
+          "25 ITEM:(LIDX+1) -> 常量值 11 界内：0 条");
     check(lineEquals(diags, 17, {
               // 同一条事实在 3/6 内部有两个入口（实参循环 + 赋值左值专用诊断）——
               // 这是既有的同趟重复，记录为现状（见报告「未改的同类隐患」）。
@@ -281,10 +345,18 @@ int main(int argc, char* argv[]) {
         expectLineState(11, true, false, "11 缺下标 -> isError=true / typeOk=false");
         expectLineState(12, true, false, "12 多下标 -> isError=true / typeOk=false");
         expectLineState(13, false, true, "13 四项下标（解析期先拒）-> 不置错");
-        expectLineState(14, false, true, "14 常量表达式下标 -> 不置错");
-        expectLineState(15, false, true, "15 常量表达式负下标 -> 不置错");
+        expectLineState(14, true, false, "14 常量表达式越界 -> isError=true / typeOk=false");
+        expectLineState(15, false, true, "15 常量表达式负下标（仅 6/6）-> 不置错");
         expectLineState(16, false, true, "16 VARSIZE -> 不置错");
         expectLineState(17, true, false, "17 左值越界 -> isError=true / typeOk=false");
+        expectLineState(18, true, false, "18 常量名越界 -> isError=true / typeOk=false");
+        expectLineState(19, true, false, "19 常量算术越界 -> isError=true / typeOk=false");
+        expectLineState(20, false, true, "20 常量算术（界内）-> 不置错");
+        expectLineState(21, true, false, "21 常量算术（越界）-> isError=true / typeOk=false");
+        expectLineState(22, false, true, "22 常量算术（负，仅 6/6）-> 不置错");
+        expectLineState(23, true, false, "23 常量除零 -> isError=true / typeOk=false");
+        expectLineState(24, false, true, "24 系统变量常量算术越界（仅 6/6）-> 不置错");
+        expectLineState(25, false, true, "25 系统变量常量名（界内）-> 不置错");
     }
 
     // ------------------------------------------------------------------
@@ -293,40 +365,39 @@ int main(int argc, char* argv[]) {
     qDebug() << "\n3) 合并后的最终诊断列表";
     const QStringList all = serializeAll(diags);
     const QStringList expectedAll = {
-        expectRow(DiagOrigin::Pass3, DiagSeverity::Error, DiagEffect::RejectLine,
-                  DiagCode::kArgCheck, 4, kArrOob).join(QLatin1Char('\t')),
-        expectRow(DiagOrigin::Pass3, DiagSeverity::Warning, DiagEffect::ReportOnly,
-                  DiagCode::kArgCheck, 4, kArrOob + QStringLiteral(" (PRINTV ARR:10)")).join(QLatin1Char('\t')),
-        expectRow(DiagOrigin::Pass6, DiagSeverity::Warning, DiagEffect::ReportOnly,
-                  DiagCode::kStaticValue, 5, kNegArr).join(QLatin1Char('\t')),
+        row3(4, kArrOob).join(QLatin1Char('\t')),
+        warn3(4, kArrOob + QStringLiteral(" (PRINTV ARR:10)")).join(QLatin1Char('\t')),
+        row6(5, kNegArr).join(QLatin1Char('\t')),
         expectRow(DiagOrigin::Pass6, DiagSeverity::Error, DiagEffect::ReportOnly,
                   DiagCode::kStaticValue, 6, kArrStr).join(QLatin1Char('\t')),
-        expectRow(DiagOrigin::Pass6, DiagSeverity::Warning, DiagEffect::ReportOnly,
-                  DiagCode::kStaticValue, 7, kItemSize).join(QLatin1Char('\t')),
-        expectRow(DiagOrigin::Pass6, DiagSeverity::Warning, DiagEffect::ReportOnly,
-                  DiagCode::kStaticValue, 8, kNegItem).join(QLatin1Char('\t')),
-        expectRow(DiagOrigin::Pass3, DiagSeverity::Error, DiagEffect::RejectLine,
-                  DiagCode::kArgCheck, 9, kDivZero).join(QLatin1Char('\t')),
-        expectRow(DiagOrigin::Pass3, DiagSeverity::Warning, DiagEffect::ReportOnly,
-                  DiagCode::kArgCheck, 9, kDivZero + QStringLiteral(" (PRINTV 10 / 0)")).join(QLatin1Char('\t')),
+        row6(7, kItemSize).join(QLatin1Char('\t')),
+        row6(8, kNegItem).join(QLatin1Char('\t')),
+        row3(9, kDivZero).join(QLatin1Char('\t')),
+        warn3(9, kDivZero + QStringLiteral(" (PRINTV 10 / 0)")).join(QLatin1Char('\t')),
         expectRow(DiagOrigin::Pass6, DiagSeverity::Error, DiagEffect::ReportOnly,
                   DiagCode::kStaticValue, 10, kDivZero).join(QLatin1Char('\t')),
-        expectRow(DiagOrigin::Pass3, DiagSeverity::Error, DiagEffect::RejectLine,
-                  DiagCode::kArgCheck, 11, kDim).join(QLatin1Char('\t')),
-        expectRow(DiagOrigin::Pass3, DiagSeverity::Warning, DiagEffect::ReportOnly,
-                  DiagCode::kArgCheck, 11, kDim + QStringLiteral(" (PRINTV A2:1)")).join(QLatin1Char('\t')),
-        expectRow(DiagOrigin::Pass3, DiagSeverity::Error, DiagEffect::RejectLine,
-                  DiagCode::kArgCheck, 12, kDim).join(QLatin1Char('\t')),
-        expectRow(DiagOrigin::Pass3, DiagSeverity::Warning, DiagEffect::ReportOnly,
-                  DiagCode::kArgCheck, 12, kDim + QStringLiteral(" (PRINTV A2:1:1:1)")).join(QLatin1Char('\t')),
-        expectRow(DiagOrigin::Pass3, DiagSeverity::Error, DiagEffect::RejectLine,
-                  DiagCode::kArgCheck, 17, kArrOob).join(QLatin1Char('\t')),
-        expectRow(DiagOrigin::Pass3, DiagSeverity::Error, DiagEffect::RejectLine,
-                  DiagCode::kArgCheck, 17, kLvalueOob).join(QLatin1Char('\t')),
-        expectRow(DiagOrigin::Pass3, DiagSeverity::Warning, DiagEffect::ReportOnly,
-                  DiagCode::kArgCheck, 17, kLvalueOob + QStringLiteral(" (ARR:10 = 1)")).join(QLatin1Char('\t')),
+        row3(11, kDim).join(QLatin1Char('\t')),
+        warn3(11, kDim + QStringLiteral(" (PRINTV A2:1)")).join(QLatin1Char('\t')),
+        row3(12, kDim).join(QLatin1Char('\t')),
+        warn3(12, kDim + QStringLiteral(" (PRINTV A2:1:1:1)")).join(QLatin1Char('\t')),
+        row3(14, kArrOob).join(QLatin1Char('\t')),
+        warn3(14, kArrOob + text3(14, "PRINTV ARR:(10+0)")).join(QLatin1Char('\t')),
+        row6(15, kNegArr).join(QLatin1Char('\t')),
+        row3(17, kArrOob).join(QLatin1Char('\t')),
+        row3(17, kLvalueOob).join(QLatin1Char('\t')),
+        warn3(17, kLvalueOob + QStringLiteral(" (ARR:10 = 1)")).join(QLatin1Char('\t')),
+        row3(18, kArrOob).join(QLatin1Char('\t')),
+        warn3(18, kArrOob + text3(18, "PRINTV ARR:LIDX")).join(QLatin1Char('\t')),
+        row3(19, kArrOob).join(QLatin1Char('\t')),
+        warn3(19, kArrOob + text3(19, "PRINTV ARR:(2*5)")).join(QLatin1Char('\t')),
+        row3(21, kArrOob).join(QLatin1Char('\t')),
+        warn3(21, kArrOob + text3(21, "PRINTV ARR:(10+0)")).join(QLatin1Char('\t')),
+        row6(22, kNegArr).join(QLatin1Char('\t')),
+        row3(23, kDivZero).join(QLatin1Char('\t')),
+        warn3(23, kDivZero + QStringLiteral(" (PRINTV ARR:(1/0))")).join(QLatin1Char('\t')),
+        row6(24, kItemSize).join(QLatin1Char('\t')),
     };
-    check(all.size() == 16, QString("最终列表 16 条（得到 %1）").arg(all.size()));
+    check(all.size() == 29, QString("最终列表 29 条（得到 %1）").arg(all.size()));
     check(all == expectedAll, "最终列表逐条（origin/severity/effect/code/line/message）且顺序一致");
     if (all != expectedAll) {
         qDebug().noquote() << "    expected:" << expectedAll.join(QStringLiteral(" | "));
@@ -391,11 +462,55 @@ int main(int argc, char* argv[]) {
         ? arrOobNode->indices().first() : QSharedPointer<ExpressionNode>();
     const auto negIndex = arrNegNode && !arrNegNode->indices().isEmpty()
         ? arrNegNode->indices().first() : QSharedPointer<ExpressionNode>();
-    check(litIndex && indexbounds::constantIndexValue(*litIndex).value_or(1) == 10,
-          "常量下标识别：字面量");
-    bool negated = false;
-    const auto neg = negIndex ? indexbounds::constantIndexValue(*negIndex, &negated) : std::nullopt;
-    check(neg.has_value() && *neg == -1 && negated, "常量下标识别：负字面量 negated=true");
+    check(litIndex && litIndex->constantIndex.isValid() && litIndex->constantIndex.value == 10,
+          "constantIndex 字段：字面量 10（Value）");
+    check(negIndex && negIndex->constantIndex.isValid() && negIndex->constantIndex.value == -1,
+          "constantIndex 字段：负字面量 -1（Value，含符号）");
+
+    const auto constIndexField = [&lines](int lineNo) -> indexbounds::ConstantIndex {
+        const auto* v = dynamic_cast<const VariableNode*>(
+            lines.at(lineNo - 1).arguments.first().ast.data());
+        if (!v || v->indices().isEmpty() || !v->indices().first()) return {};
+        return v->indices().first()->constantIndex;
+    };
+    check(constIndexField(18).isValid() && constIndexField(18).value == 10,
+          "constantIndex 字段：18 常量名 LIDX -> Value 10");
+    check(constIndexField(19).isValid() && constIndexField(19).value == 10,
+          "constantIndex 字段：19 (2*5) -> Value 10");
+    check(constIndexField(20).isValid() && constIndexField(20).value == 0,
+          "constantIndex 字段：20 (10-10) -> Value 0");
+    check(constIndexField(21).isValid() && constIndexField(21).value == 10,
+          "constantIndex 字段：21 (10+0) -> Value 10");
+    check(constIndexField(22).isValid() && constIndexField(22).value == -1,
+          "constantIndex 字段：22 (-1+0) -> Value -1");
+    check(constIndexField(23).isInvalid(),
+          "constantIndex 字段：23 (1/0) -> Invalid（是常量但求值失败）");
+    check(constIndexField(24).isValid() && constIndexField(24).value == 5000,
+          "constantIndex 字段：24 (5000+0) -> Value 5000");
+    check(constIndexField(25).isValid() && constIndexField(25).value == 11,
+          "constantIndex 字段：25 (LIDX+1) -> Value 11");
+
+    // 运行期行为不受影响：常量表达式下标本来就求值正确；本刀只新增装载期字段，
+    // evaluate() 的路径一字不改。这里直接求值下标节点，锁住结果。
+    const auto indexNodeOf = [&lines](int lineNo) -> QSharedPointer<ExpressionNode> {
+        const auto* v = dynamic_cast<const VariableNode*>(lines.at(lineNo - 1).arguments.first().ast.data());
+        return v && !v->indices().isEmpty() ? v->indices().first() : QSharedPointer<ExpressionNode>();
+    };
+    const auto evalIndex = [&](int lineNo) -> std::optional<qint64> {
+        const auto node = indexNodeOf(lineNo);
+        if (!node) return std::nullopt;
+        const QVariant v = evaluator.evaluate(*node, &storage, nullptr,
+                                              eravar::internName(QStringLiteral("MAIN")));
+        return v.isValid() && v.canConvert<qint64>()
+            ? std::optional<qint64>(v.value<qint64>()) : std::nullopt;
+    };
+    check(evalIndex(18) == 10, "运行期 18 ARR:LIDX 的下标求值 = 10（#DIM CONST 名）");
+    check(evalIndex(19) == 10, "运行期 19 ARR:(2*5) 的下标求值 = 10");
+    check(evalIndex(20) == 0,  "运行期 20 ARR:(10-10) 的下标求值 = 0");
+    check(evalIndex(21) == 10, "运行期 21 ARR:(10+0) 的下标求值 = 10");
+    check(evalIndex(22) == -1, "运行期 22 ARR:(-1+0) 的下标求值 = -1");
+    check(evalIndex(24) == 5000, "运行期 24 ITEM:(5000+0) 的下标求值 = 5000");
+    check(evalIndex(25) == 11, "运行期 25 ITEM:(LIDX+1) 的下标求值 = 11");
 
     // n>3 的判定本身（正常源码路径上表达式解析会先拒，见第 1 节 13 行）：
     VariableNode fourIndices(QStringLiteral("A2"));

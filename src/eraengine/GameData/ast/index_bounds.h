@@ -20,6 +20,7 @@
 
 #include <QString>
 
+#include <functional>
 #include <optional>
 
 #include "parse_diagnostic.h"
@@ -35,7 +36,7 @@ class ExpressionNode;
 // 映射，任何一边改动都可能让同一个 `X:…` 得到两个结论。
 //
 // 现在：
-//   * 判定函数（elementDimension / isOutOfRange / constantIndexValue /
+//   * 判定函数（elementDimension / isOutOfRange / isConstantIndexExpression /
 //     hasConstantDivisionByZero）只有这里一份，两趟都调用；
 //   * 每类事实的 severity / effect / **唯一生产者**（DiagOrigin）是
 //     issuePolicy() 的表，不再是对面的第二份 if；
@@ -60,6 +61,22 @@ enum class Kind : quint8 {
     UnknownStringIndex,        // 字面字符串下标不在常数名表
     ConstantDivisionByZero,    // 常量表达式除以/模 0（装载期求值必失败）
     DynamicDivisionByZero,     // 除数字面 0、被除数含变量（运行期才知道）
+    ConstantIndexInvalid,      // 下标是常量表达式但装载期求值失败（非除零）
+};
+
+// 下标表达式在装载期算出的**唯一**一个值。
+//   Unknown —— 不是常量表达式（含变量/函数/副作用），两趟都不判；
+//   Value   —— 装载期能算出确定值；两趟只读这个字段；
+//   Invalid —— 是常量表达式但求值失败（除零/溢出…），由 issuePolicy 决定谁报。
+enum class ConstantIndexState : quint8 { Unknown, Value, Invalid };
+
+struct ConstantIndex {
+    qint64 value = 0;
+    ConstantIndexState state = ConstantIndexState::Unknown;
+
+    [[nodiscard]] bool known() const noexcept { return state != ConstantIndexState::Unknown; }
+    [[nodiscard]] bool isValid() const noexcept { return state == ConstantIndexState::Value; }
+    [[nodiscard]] bool isInvalid() const noexcept { return state == ConstantIndexState::Invalid; }
 };
 
 struct Policy {
@@ -85,9 +102,13 @@ struct Policy {
 // 3/6 能看见该位置的纯字面量上界（lengths > 0）；6/6 据此让位，不重复报。
 [[nodiscard]] bool pass3CoversLiteralBounds(int length) noexcept;
 
-// 常量下标：字面量，或 -字面量（*negated = true）。其它形态返回 nullopt。
-[[nodiscard]] std::optional<qint64> constantIndexValue(const ExpressionNode& node,
-                                                       bool* negated = nullptr);
+// 常量下标：字面量、-字面量、常量名与它们的算术组合。resolveConst 由装载层
+// 注入（按该行所属作用域查 #DIM CONST）；返回 nullopt = 该名字不是标量常量。
+// 只做「形态上能不能在装载期求值」的判定，不求值 —— 求值由装载层用**同一个**
+// ExpressionEvaluator 完成，保证与运行期结果逐位一致。
+using ConstNameResolver = std::function<std::optional<qint64>(const QString& name)>;
+[[nodiscard]] bool isConstantIndexExpression(const ExpressionNode& node,
+                                             const ConstNameResolver& resolveConst);
 
 // 子树里是否有「常量除/模零」节点。调用方负责确认子树本身是常量
 // （含变量/函数调用的子树不在此列）。
@@ -105,6 +126,7 @@ struct Policy {
 [[nodiscard]] QString beyondSizeMessage(const QString& name, qint64 value, int size);
 [[nodiscard]] QString unknownStringIndexMessage(const QString& name, const QString& text);
 [[nodiscard]] QString divisionByZeroMessage();
+[[nodiscard]] QString constantEvalFailedMessage();
 
 }  // namespace indexbounds
 

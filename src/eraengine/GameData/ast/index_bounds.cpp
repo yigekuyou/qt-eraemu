@@ -19,8 +19,6 @@
 
 #include <QCoreApplication>
 
-#include <limits>
-
 #include "expression_ast.h"
 
 namespace indexbounds {
@@ -45,8 +43,10 @@ const Policy& issuePolicy(Kind kind) noexcept {
         {DiagSeverity::Error, DiagEffect::RejectLine, DiagOrigin::Pass3},
         // DynamicDivisionByZero：除数 0 但被除数含变量，3/6 不求值
         {DiagSeverity::Error, DiagEffect::ReportOnly, DiagOrigin::Pass6},
+        // ConstantIndexInvalid：3/6 用装载期求值判定，失败即运行期事实
+        {DiagSeverity::Error, DiagEffect::RejectLine, DiagOrigin::Pass3},
     };
-    static_assert(sizeof(table) / sizeof(table[0]) == static_cast<int>(Kind::DynamicDivisionByZero) + 1,
+    static_assert(sizeof(table) / sizeof(table[0]) == static_cast<int>(Kind::ConstantIndexInvalid) + 1,
                   "indexbounds::Kind 新增了类别，issuePolicy 表必须同步");
     return table[static_cast<int>(kind)];
 }
@@ -61,6 +61,7 @@ const char* kindName(Kind kind) noexcept {
     case Kind::UnknownStringIndex:        return "unknown-string-index";
     case Kind::ConstantDivisionByZero:    return "constant-division-by-zero";
     case Kind::DynamicDivisionByZero:     return "dynamic-division-by-zero";
+    case Kind::ConstantIndexInvalid:      return "constant-index-invalid";
     }
     return "unknown";
 }
@@ -79,26 +80,39 @@ bool pass3CoversLiteralBounds(int length) noexcept {
     return length > 0;
 }
 
-std::optional<qint64> constantIndexValue(const ExpressionNode& node, bool* negated) {
-    if (negated) *negated = false;
-    if (node.kind() == NodeKind::Literal) {
-        const auto& l = static_cast<const LiteralNode&>(node);
-        if (l.isString()) return std::nullopt;
-        return l.intValue();
+bool isConstantIndexExpression(const ExpressionNode& node, const ConstNameResolver& resolveConst) {
+    switch (node.kind()) {
+    case NodeKind::Literal:
+        return !static_cast<const LiteralNode&>(node).isString();
+    case NodeKind::Variable: {
+        const auto& v = static_cast<const VariableNode&>(node);
+        // 单个常量名（标量）才算；常量数组整体/普通变量/形参都不是常量下标。
+        // accessKind 是收尾定型（walkApply）刚按**本作用域**算好的分类，
+        // 用它把「绝大多数普通变量」在这里 O(1) 排除，不再查常数表。
+        return !v.isArray()
+            && v.accessKind == VariableNode::AccessKind::Const
+            && resolveConst && resolveConst(v.name()).has_value();
     }
-    if (node.kind() == NodeKind::UnaryOp) {
+    case NodeKind::UnaryOp: {
         const auto& u = static_cast<const UnaryOpNode&>(node);
-        if (u.op().type() != TokenType::MINUS || u.isPostfix() || !u.operand()
-            || u.operand()->kind() != NodeKind::Literal)
-            return std::nullopt;
-        const auto& l = static_cast<const LiteralNode&>(*u.operand());
-        if (l.isString()) return std::nullopt;
-        // -INT64_MIN 的取反是 UB：这种字面量本身已被数字诊断拦过，不再判
-        if (l.intValue() == std::numeric_limits<qint64>::min()) return std::nullopt;
-        if (negated) *negated = true;
-        return -l.intValue();
+        const TokenType op = u.op().type();
+        if (u.isPostfix() || op == TokenType::INCREMENT || op == TokenType::DECREMENT)
+            return false;
+        return u.operand() && isConstantIndexExpression(*u.operand(), resolveConst);
     }
-    return std::nullopt;
+    case NodeKind::BinaryOp: {
+        const auto& b = static_cast<const BinaryOpNode&>(node);
+        return b.left() && b.right()
+            && isConstantIndexExpression(*b.left(), resolveConst)
+            && isConstantIndexExpression(*b.right(), resolveConst);
+    }
+    case NodeKind::Function:
+    case NodeKind::If:
+    case NodeKind::StrForm:
+        // 函数/三目/FORM 不在装载期折叠：它们可能读运行期状态，算「未知」。
+        return false;
+    }
+    return false;
 }
 
 namespace {
@@ -199,6 +213,10 @@ QString unknownStringIndexMessage(const QString& name, const QString& text) {
 QString divisionByZeroMessage() {
     return QCoreApplication::translate("ParseDiagnostics",
         "0 による除算が行われました（运行到该行会失败）");
+}
+
+QString constantEvalFailedMessage() {
+    return QCoreApplication::translate("ParseDiagnostics", "装载期常量表达式求值失败");
 }
 
 }  // namespace indexbounds

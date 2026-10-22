@@ -2492,7 +2492,18 @@ bool ExpressionEvaluator::evaluateBuiltin(const FunctionNode &node, VariableStor
         const QString& upper = eraUpperKey(name, upperScratch);
         const int dim = node.arguments().size() >= 2 ? static_cast<int>(I(1)) : 0;
         qint64 size = 0;
-        if (storage) {
+        // 显式维优先查**声明长度**（对齐 C# UserDefinedVariableToken::GetLength(dim)：
+        // 0 起、按元素维计、不含角色号位）。装载期唯一知道「第 dim 维多长」的
+        // 地方就是 VariableTable 的声明 —— 存储容器对多维全局变量只按
+        // `d.lengths.first()` 分配（见 load_passes 的 applyVariableDefaults），
+        // 照存储算会把 `VARSIZE("X", 2)` 算成第 0 维：eraMegaten 的
+        // `#DIM STATE_DATA_V, VARSIZE("SUMMONER_STATE", 2)`（声明 2,50,5）
+        // 因此得到 2 而不是 5。动态/REF（无声明长度）仍落到下面的存储/配置路径。
+        if (storage && node.arguments().size() >= 2 && dim >= 0 && m_declaredLengthsProvider) {
+            const QList<int> declared = m_declaredLengthsProvider(name, scope);
+            if (dim < declared.size() && declared.at(dim) > 0) size = declared.at(dim);
+        }
+        if (storage && size <= 0) {
             size = storage->arraySizeRaw(storage->resolvedStorageName(name, scope));
             const VariableConfig& cfg = storage->variableConfig();
             if (size <= 0 && dim == 0) {

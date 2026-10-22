@@ -173,9 +173,21 @@ public:
     // 计算装载期「变量分词」访问描述符（VariableNode::accessKind/accessKey）。
     // paramNames：该函数全部形参名（大写；可为 null）—— 命中形参名的变量引用
     // 无论取值/别名/REF 绑定都是运行期的，标记为 Dynamic 回退旧路。
+    //
+    // evalConst：装载期常量求值器（可选）。装着它时，同一趟定型顺手把每个
+    // 下标节点的 `ExpressionNode::constantIndex` 写成**算好的值**：
+    //   · 形态不恒定（含变量/函数/++）        -> Unknown；
+    //   · 形态恒定且求值成功                  -> Value；
+    //   · 形态恒定但求值失败（除零/溢出/未定义）-> Invalid。
+    // 这是该字段的**唯一**写入点：之后 3/6 与 6/6 只读字段，不再各自辨认
+    // LiteralNode / UnaryOp(MINUS,Literal)。求值器由装载层注入（它知道
+    // ExpressionEvaluator / storage / 作用域），本表不依赖求值器类型。
+    // 返回 nullopt = 求值失败；返回值必须是「运行期同一表达式的结果」。
+    using ConstantIndexEvaluator = std::function<std::optional<qint64>(const ExpressionNode&)>;
     static void applyTypes(ExpressionNode& node, const VariableTable& table,
                            const QString& function = QString(),
-                           const QSet<QString>* paramNames = nullptr);
+                           const QSet<QString>* paramNames = nullptr,
+                           const ConstantIndexEvaluator& evalConst = {});
 
     // ---- 调试：访问描述符判定分布（默认关闭；EMUERA_KIND_STATS=1 才计数）----
     // 只给 dump_warnings --kind-stats 用：一次装载后按 kind 数变量引用节点。

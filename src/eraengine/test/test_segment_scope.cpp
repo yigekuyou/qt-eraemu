@@ -623,6 +623,60 @@ int main(int argc, char* argv[]) {
                   .arg(sys.captured(QStringLiteral("SYS_SEEN"))));
     }
 
+    // ---------------------------------------------------------------------
+    qDebug() << "\n10) 小写脚本名：CALL 后私有名表按段身份原文查（不经 nameOf 大写往返）";
+    {
+        // 缺陷护栏：enterCall 曾用 eravar::nameOf(scope)（intern 表里已被大写）去查
+        // localNamesOfRef —— 那张表按段身份**原文**做键（大小写敏感）。脚本名含小写
+        // 字母时必然 miss，存储层收到一张空名表，私有变量退化成广域裸名。
+        // 装载收尾安装的名表会掩盖它（安装后 setPrivateScope 不再按名建表），
+        // 这里用 initialize() 回到「重载后、装载收尾之前」的合法阶段让 miss 可见。
+        Session lc;
+        check(lc.load(QStringLiteral("Test.erb"), {
+                  QStringLiteral("@MAIN"),           // 0
+                  QStringLiteral("CALL F"),          // 1  -> Test.erb@F（段起点 5）
+                  QStringLiteral("CALL G"),          // 2  -> Test.erb@G（段起点 10）
+                  QStringLiteral("CALL F"),          // 3  再进一次：CNT 应仍是 F 自己的
+                  QStringLiteral("RETURN"),          // 4
+                  QStringLiteral("@F"),              // 5
+                  QStringLiteral("#DIM CNT"),        // 6
+                  QStringLiteral("CNT = CNT + 1"),   // 7
+                  QStringLiteral("LOWER_F = CNT"),   // 8
+                  QStringLiteral("RETURN"),          // 9
+                  QStringLiteral("@G"),              // 10
+                  QStringLiteral("#DIM CNT"),        // 11
+                  QStringLiteral("CNT = CNT + 10"),  // 12
+                  QStringLiteral("LOWER_G = CNT"),   // 13
+                  QStringLiteral("RETURN")           // 14
+              }), "10 loadScript Test.erb（脚本名含小写字母）");
+        lc.table.setEntryPoint(QStringLiteral("MAIN"));
+        lc.table.markLoadComplete();
+        lc.storage.initialize(0, 0);     // 名表作废 = 「重载后、收尾前」的阶段
+        lc.runner.clearForReload();
+        check(!lc.storage.privateScopeTableInstalled(),
+              "10 已回到未安装名表的阶段（大小写 miss 在这里才会露出来）");
+        check(lc.runSegment(QStringLiteral("Test.erb"), 0) == ExecState::Halt,
+              "10 @MAIN 执行到 RETURN");
+        check(lc.captured(QStringLiteral("LOWER_F")) == 2,
+              QStringLiteral("10 @F 的私有 CNT 只算自己的（2；名字表 miss 时 12）——读到 %1")
+                  .arg(lc.captured(QStringLiteral("LOWER_F"))));
+        check(lc.captured(QStringLiteral("LOWER_G")) == 10,
+              QStringLiteral("10 @G 的私有 CNT 与 @F 互不串值（10；miss 时 11）——读到 %1")
+                  .arg(lc.captured(QStringLiteral("LOWER_G"))));
+        check(lc.storage.getGlobalInt1DRaw(QStringLiteral("CNT"), 0) == 0,
+              "10 没有被写坏的广域裸名 CNT（miss 时私有 CNT 会落到这里）");
+        const eravar::ScopeId fScope =
+            eravar::internName(eravar::segmentKeyText(QStringLiteral("Test.erb"), 5));
+        const eravar::ScopeId gScope =
+            eravar::internName(eravar::segmentKeyText(QStringLiteral("Test.erb"), 10));
+        const QString keyF = lc.storage.storageName(QStringLiteral("CNT"), fScope);
+        const QString keyG = lc.storage.storageName(QStringLiteral("CNT"), gScope);
+        check(keyF != QStringLiteral("CNT"),
+              QStringLiteral("10 Test.erb@F 的 CNT 解析成私有键（得到 %1）").arg(keyF));
+        check(!keyF.isEmpty() && keyF != keyG,
+              QStringLiteral("10 两段同名私有 CNT 的存储键不同（%1 vs %2）").arg(keyF, keyG));
+    }
+
     qDebug() << "\n================================";
     if (g_failures == 0) qDebug() << "ALL PASS";
     else qDebug() << g_failures << "FAILURE(S)";

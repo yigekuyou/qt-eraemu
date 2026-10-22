@@ -198,7 +198,14 @@ void ScriptRunner::onHaltRequested() {
 // 主步进
 // ---------------------------------------------------------------------------
 
-void ScriptRunner::enterCall(const QString& function, eravar::ScopeId scope) {
+void ScriptRunner::enterCall(const QString& function, const QString& scopeKey) {
+    // scopeKey = 段身份**原文**（装载期写进行上的 line.scopeKey /
+    // eravar::segmentKeyText 的产物，大小写照写）。存储层的 ScopeId 由它 intern
+    // 得到（internName 按 ICVariable 语义转大写）；但私有名字表的键是**原文**，
+    // 大小写敏感 —— 曾经这里用 nameOf(scope)（已大写）去查 localNamesOfRef，
+    // 脚本名含小写字母时必然 miss，装进存储的是一张空名表（安装期名表会把这次
+    // 错误掩盖，卸载后就是私有变量退化成广域裸名）。
+    const eravar::ScopeId scope = eravar::internName(scopeKey);
     m_callContexts.append({m_table->depth(), int(m_loops.size()), scope, m_storage->localContext()});
     // QHash::value() 会先默认构造再拷贝（LocalContext 带 4 个容器成员）——
     // 每个 CALL 都白付一次分配，改 constFind。
@@ -218,8 +225,7 @@ void ScriptRunner::enterCall(const QString& function, eravar::ScopeId scope) {
     if (fit != m_table->userFunctions().constEnd() && fit.value().localSize > 0)
         m_storage->ensureLocalSize(fit.value().localSize);
     // perf：私有名字表按段缓存（localNamesOfRef），免去每次调用重建 QStringList。
-    // 名字表用段身份文本查（ScopeId 的 intern 原文）；存储层只认 ScopeId。
-    const QString& scopeKey = eravar::nameOf(scope);
+    // 名字表直接用段身份原文查（不再 intern -> nameOf -> 查表绕一圈）；存储层只认 ScopeId。
     m_storage->setPrivateScope(scope,
                                m_table->variableTable().localNamesOfRef(scopeKey));
     m_lastScopeKey = scopeKey;   // 与 stepOnce 的缓存 guard 同步
@@ -2035,7 +2041,7 @@ bool ScriptRunner::advanceEventChain()
                       << ref.script << ref.line;
     // 段身份只构造一次（enterCall 与私有初值计划同一个事实）。
     const QString scopeKey = eravar::segmentKeyText(ref.script, ref.functionLine);
-    enterCall(m_eventChain.label, eravar::internName(scopeKey));
+    enterCall(m_eventChain.label, scopeKey);
     m_table->applyPrivateVariableDefaults(scopeKey);
     // 每个事件函数的返回地址都是续点：返回后 maybeContinueEventChain 在续点接手
     if (!m_table->callLabelAt(ref.script, ref.line,
@@ -2199,7 +2205,7 @@ ExecState ScriptRunner::doCallLine(const LogicalLine& line, bool isForm, bool is
     // 段身份只构造一次：enterCall / 私有初值 / 实参绑定是**同一个**事实。
     const QString scopeKey = info ? eravar::segmentKeyText(info->script, info->labelLine)
                                   : QString();
-    enterCall(label, info ? eravar::internName(scopeKey) : eravar::kGlobalScope);
+    enterCall(label, scopeKey);   // 无声明信息时 scopeKey 为空 = 广域
     // 顺序对齐 C#：先初始化函数私有变量的初值（#DIM X = 7），再写实参
     m_table->applyPrivateVariableDefaults(scopeKey);
     bindArguments(info, scopeKey, evaluated, references, &evaluatedValues);
@@ -2619,7 +2625,7 @@ bool ScriptRunner::invokeUserFunction(const QString& name, const QList<QVariant>
     // 绑定实参（按声明的形参表：ARG/ARGS/私有变量）
     // 段身份只构造一次（enterCall 与私有初值计划同一个事实）。
     const QString scopeKey = eravar::segmentKeyText(info->script, info->labelLine);
-    enterCall(name, eravar::internName(scopeKey));
+    enterCall(name, scopeKey);
     m_table->applyPrivateVariableDefaults(scopeKey);
     m_storage->clearLocalAliases();
     for (auto it = refTargets.constBegin(); it != refTargets.constEnd(); ++it)

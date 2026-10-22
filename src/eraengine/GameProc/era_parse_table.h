@@ -271,6 +271,8 @@ public:
     void clear();
 
     [[nodiscard]] QString scriptPath(const QString& scriptName) const;
+    // 脚本表条目数 = 已装载的非空脚本文件数（ScriptData 是脚本清单的唯一来源）。
+    [[nodiscard]] int scriptCount() const { return m_scripts.size(); }
     // 是否存在某标签（跨全部脚本）
     [[nodiscard]] bool hasLabel(const QString& label) const;
     // 「可作为 CALL/JUMP 目标」的存在性（@函数标签）：与 resolveCallableLabel 同源，

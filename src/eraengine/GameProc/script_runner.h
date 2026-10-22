@@ -146,9 +146,11 @@ private:
     // "execution error"（一次失败只留一条有用消息）。
     void reportError(const QString& message);
     bool returnFromCall();
-    // scope = 被调**段身份**（eravar::segmentKeyText(script, labelLine) 的 intern
-    // id）。function 只用于函数名事实（#LOCALSIZE / userFunctions 查询 / 错误文案）。
-    void enterCall(const QString& function, eravar::ScopeId scope);
+    // scopeKey = 被调**段身份原文**（eravar::segmentKeyText(script, labelLine)，
+    // 空串 = 广域）。私有名字表按这份原文查（大小写敏感）；存储用的 ScopeId 在
+    // enterCall 内部 intern（internName 会转大写）。function 只用于函数名事实
+    //（#LOCALSIZE / userFunctions 查询 / 错误文案）。
+    void enterCall(const QString& function, const QString& scopeKey);
 
     // CALLEVENT 事件链（对齐 C# CALLEVENT_Instruction + CalledFunction.CallEventFunction
     // + Process.Return 的事件函数分组推进）：

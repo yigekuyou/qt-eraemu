@@ -685,10 +685,11 @@ bool ErbLoader::mergeParsedFile(ParsedErbFile&& pf) {
     // 标签登记只有一处：EraParseTable::loadScript 的 m_labelIndex
     //（裸名/大小写敏感/last-wins 的第三张表已删 —— 那是同一事实的第三份副本，
     // 口径与索引相反却因答案偶合而长期未被发现）。
-
-    m_scriptPaths.insert(pf.scriptName, pf.path);
-    m_scriptLineCounts.insert(pf.scriptName, pf.lines.size());
-
+    //
+    // 脚本清单也只有一处：ScriptData（path + lines）。曾经在这里同步写
+    // m_scriptPaths / m_scriptLineCounts 两份副本，且写入**早于** loadScript：
+    // loadScript 拒收（定型后 / 空脚本）时副本仍宣称「脚本已装」，日志的文件数
+    // 与解析表的脚本数从此对不上。现在清单只从 ScriptData 派生。
     if (m_parseTable) {
         // 行数据只存一份：交给解析表（省内存）
         const bool loaded = m_parseTable->loadScript(
@@ -776,7 +777,7 @@ bool ErbLoader::loadDirectory(const QString& dirPath, int depth) {
         // 标签数不再单独记账：唯一那份数据在 EraParseTable::m_labelIndex
         //（裸名第三张表已删，见 mergeParsedFile 的注释）。
         qDebug() << "[load] ERB（串行）" << dirPath << ":" << files.size() << "个文件,"
-                 << "脚本" << m_scriptPaths.size() << "个";
+                 << "脚本" << loadedFileCount() << "个";
         return ok;
     }
 
@@ -1227,8 +1228,6 @@ void ErbLoader::cancelAndWait() {
     m_asyncVarTypes.globalVars.clear();
     m_asyncVarTypes.localVars.clear();
     m_logicalLines.clear();
-    m_scriptPaths.clear();
-    m_scriptLineCounts.clear();
     stopHeartbeat();
     m_readFailures.store(0, std::memory_order_relaxed);
 }
@@ -1515,10 +1514,22 @@ QList<LogicalLine> ErbLoader::getLogicalLinesCI(const QString& scriptName) {
     return QList<LogicalLine>();
 }
 
-int ErbLoader::getScriptLineCount(const QString& scriptName) {
-    return m_scriptLineCounts.value(scriptName, 0);
+int ErbLoader::getScriptLineCount(const QString& scriptName) const {
+    // 行数只有一个来源：ScriptData::lines.size()（无解析表时 = 行存储条目数）。
+    if (m_parseTable) return m_parseTable->scriptLineCount(scriptName);
+    return m_logicalLines.value(scriptName).size();
 }
 
 QString ErbLoader::getScriptPath(const QString& scriptName) const {
-    return m_scriptPaths.value(scriptName, QString());
+    if (m_parseTable) return m_parseTable->scriptPath(scriptName);
+    // 独立装载器没有 ScriptData：路径取自行上的文件身份（buildAst 把 filePath
+    // 逐行写进 position.filename），不另存一份「脚本名 -> 路径」。
+    const auto it = m_logicalLines.constFind(scriptName);
+    if (it == m_logicalLines.constEnd() || it.value().isEmpty()) return QString();
+    return it.value().first().position.filename;
+}
+
+int ErbLoader::loadedFileCount() const {
+    if (m_parseTable) return m_parseTable->scriptCount();
+    return m_logicalLines.size();
 }

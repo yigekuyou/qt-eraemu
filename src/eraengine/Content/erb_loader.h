@@ -180,10 +180,13 @@ public:
     QList<LogicalLine> getLogicalLines(const QString& scriptName);
     QList<LogicalLine> getLogicalLinesCI(const QString& scriptName);
 
-    int getScriptLineCount(const QString& scriptName);
+    int getScriptLineCount(const QString& scriptName) const;
     QString getScriptPath(const QString& scriptName) const;
-    // Number of non-empty ERB/ERH files merged into the parse table.
-    [[nodiscard]] int loadedFileCount() const { return m_scriptPaths.size(); }
+    // 已合并进解析表的非空 ERB/ERH 文件数（= ScriptData 条目数）。
+    // 没有第二份「脚本清单」：装载表里有多少条 ScriptData，这里就是多少，
+    // 日志/入口检查/DBus 统计都读它。独立装载器（未接解析表）退回行存储
+    // m_logicalLines 的条目数 —— 那种模式下没有 ScriptData，它是唯一存储。
+    [[nodiscard]] int loadedFileCount() const;
 
 signals:
     void parseStarted(const QString& scriptName);
@@ -353,9 +356,9 @@ private:
     const ConstantTable* m_constantTable = nullptr;
     TextEncoding m_readEncoding = TextEncoding::Auto;
 
-    QHash<QString, QString> m_scriptPaths;
+    // 独立装载器（未接解析表）的行存储。接了解析表时行只存 ScriptData::lines，
+    // 这里为空 —— 两者不是同一事实的两份副本。
     QHash<QString, QList<LogicalLine>> m_logicalLines;
-    QHash<QString, int> m_scriptLineCounts;
 
     // [qdbug] 验证（eraTW 实测）：并行拍平与顺序拍平结果**完全一致** ——
     // dump_lines 串行/并行各导出 2,075,985 行拍平行，diff 完全相同。

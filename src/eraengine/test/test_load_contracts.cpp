@@ -30,12 +30,20 @@
 //   6. 私有名表安装前后各调一次 setPrivateScope：安装后 names 参数被忽略。
 //   7. 存档前置条件 SaveReadiness 的三态可查询；新增声明会把
 //     「已定稿」退回「未定稿」。
+//   8. 装载入口的「脚本清单」（文件数 / 路径 / 行数）只从 ScriptData 派生：
+//     同名脚本替换、同一脚本装两次、装载中途查询、cancelAndWait 之后，
+//     清单与 ScriptData 逐项一致（此前是 m_scriptPaths/m_scriptLineCounts
+//     两份副本，写入早于 loadScript，拒收时就会不同步）。
 // ---------------------------------------------------------------------------
 
 #include <QCoreApplication>
 #include <QDebug>
+#include <QDir>
+#include <QFile>
 #include <QHash>
+#include <QRegularExpression>
 #include <QStringList>
+#include <QTemporaryDir>
 #include <QThreadPool>
 
 #include <algorithm>
@@ -45,6 +53,7 @@
 #include "ast/expression_evaluator.h"
 #include "ast/name_interner.h"
 #include "ast/variable_table.h"
+#include "erb_loader.h"
 #include "era_parse_table.h"
 #include "load_passes.h"
 #include "process_state.h"
@@ -87,6 +96,31 @@ static QList<LogicalLine> buildLinesAs(EraParseTable& table, const QString& file
             [&table](const QString& text) { return table.expressionAst(text); }));
     }
     return out;
+}
+
+static QStringList g_capturedMessages;
+
+static void captureMessage(QtMsgType, const QMessageLogContext&, const QString& msg) {
+    g_capturedMessages.append(msg);
+}
+
+static bool writeUtf8(const QString& path, const QString& text) {
+    QFile f(path);
+    if (!f.open(QIODevice::WriteOnly)) return false;
+    f.write(text.toUtf8());
+    return true;
+}
+
+// 「脚本清单」的每一条都来自 ScriptData：逐项比对（不只看总数）。
+static bool manifestMatchesScriptData(const ErbLoader& loader, const EraParseTable& table) {
+    if (loader.loadedFileCount() != table.scriptCount()) return false;
+    for (const QString& name : table.scriptNames()) {
+        const ScriptData* sd = table.script(name);
+        if (!sd) return false;
+        if (loader.getScriptPath(name) != sd->path) return false;
+        if (loader.getScriptLineCount(name) != sd->lines.size()) return false;
+    }
+    return true;
 }
 
 static int countCode(const ParseDiagnostics& d, const char* code) {
@@ -1063,6 +1097,128 @@ int main(int argc, char* argv[]) {
         check(goneTable.userFunction(QStringLiteral("OTHER")) != nullptr
                   && goneTable.userFunction(QStringLiteral("OTHER"))->labelLine == 1,
               "(c) 新版本的 @OTHER 正常登记（行 1）");
+    }
+
+    // ------------------------------------------------------------------
+    // 10) 装载入口的「脚本清单」= ScriptData 的投影（不是第二份副本）
+    //
+    // ErbLoader 曾经自己维护 m_scriptPaths / m_scriptLineCounts，并在调用
+    // loadScript **之前**写入：loadScript 拒收（定型后 / 空脚本）时副本仍宣称
+    // 「已装」，日志的文件数与解析表的脚本数从此不同步；同名脚本替换时行数也
+    // 各自演化。现在只有 ScriptData（path + lines）这一份，四个时点逐项对比：
+    //   ① 装载中途（两文件之间）  ② 同名脚本替换后  ③ 同一脚本再装一次
+    //   ④ cancelAndWait 之后（loader 释放自己的行存储，但清单仍等于表）
+    // 另核对「日志里的文件计数」用的就是同一个加载计数（不是另算一遍）。
+    // ------------------------------------------------------------------
+    qDebug() << "\n10) 装载入口脚本清单（文件数/路径/行数/诊断行号）以 ScriptData 为准";
+    {
+        QTemporaryDir tmp;
+        const QString erbDir = tmp.filePath(QStringLiteral("ERB"));
+        const QString fileA = erbDir + QStringLiteral("/A.ERB");
+        const QString fileB = erbDir + QStringLiteral("/B.ERB");
+        check(tmp.isValid() && QDir().mkpath(erbDir), "建临时 ERB 目录");
+        // A 第 6 行是未识别指令 -> 一条带行号的装载期诊断。
+        check(writeUtf8(fileA, QStringLiteral("@A\nPRINT 1\nPRINT 2\nPRINT 3\nPRINT 4\n"
+                                             "NOSUCHCOMMAND_V1\n")),
+              "写 A.ERB v1（6 行，第 6 行是未识别指令）");
+        check(writeUtf8(fileB, QStringLiteral("@B\nPRINT 9\n")), "写 B.ERB（2 行）");
+
+        ProcessState manifestState;
+        EraParseTable mTable(&manifestState);
+        ErbLoader loader;
+        loader.setParseTable(&mTable);
+
+        // ① 装载中途：只装了 A，清单就必须只答 A（不是等全部装完才对）。
+        check(loader.loadFile(fileA), "装载 A.ERB v1");
+        check(mTable.scriptCount() == 1 && loader.loadedFileCount() == 1,
+              QStringLiteral("① 中途查询：文件数 1（表 %1 / loader %2）")
+                  .arg(mTable.scriptCount()).arg(loader.loadedFileCount()));
+        check(manifestMatchesScriptData(loader, mTable),
+              "① 中途查询：路径/行数逐项等于 ScriptData");
+        check(loader.loadFile(fileB), "装载 B.ERB");
+        check(loader.loadedFileCount() == mTable.scriptCount() && mTable.scriptCount() == 2,
+              "① 两个文件：文件数 = ScriptData 条目数 = 2");
+        check(manifestMatchesScriptData(loader, mTable),
+              "① 两个文件：路径/行数逐项等于 ScriptData");
+
+        // 诊断行号必须落在**当前** ScriptData 的行范围内。
+        const QString diagFile = fileA;
+        const auto diagsLine6 = [&mTable, &diagFile](int line) {
+            int n = 0;
+            for (const ParseDiagnostic& d : mTable.parseDiagnostics().all())
+                if (d.file == diagFile && d.line == line) ++n;
+            return n;
+        };
+        check(diagsLine6(6) == 1, "① 诊断行号 6 与 A v1 的第 6 行对应");
+        check(loader.getScriptLineCount(QStringLiteral("A.ERB")) >= 6,
+              "① A 的行数覆盖诊断行号（6 行）");
+
+        // ② 同名脚本替换：v2 只有 3 行，第 3 行仍是未识别指令。
+        check(writeUtf8(fileA, QStringLiteral("@A\nPRINT 1\nNOSUCHCOMMAND_V2\n")),
+              "改写 A.ERB v2（3 行，第 3 行是未识别指令）");
+        check(loader.loadFile(fileA), "装载 A.ERB v2（同名替换）");
+        const ScriptData* aData = mTable.script(QStringLiteral("A.ERB"));
+        check(aData && aData->lines.size() == 3, "② ScriptData(A) 只有 3 行");
+        check(loader.getScriptLineCount(QStringLiteral("A.ERB")) == (aData ? aData->lines.size() : -1),
+              QStringLiteral("② 行数 = ScriptData::lines.size()（loader %1 / 表 %2）")
+                  .arg(loader.getScriptLineCount(QStringLiteral("A.ERB")))
+                  .arg(aData ? aData->lines.size() : -1));
+        check(loader.getScriptPath(QStringLiteral("A.ERB")) == (aData ? aData->path : QString()),
+              "② 路径 = ScriptData::path");
+        check(loader.loadedFileCount() == mTable.scriptCount() && mTable.scriptCount() == 2,
+              "② 替换不增加文件数（仍为 2）");
+        check(manifestMatchesScriptData(loader, mTable), "② 清单与 ScriptData 逐项一致");
+        check(diagsLine6(6) == 0, "② 旧版本第 6 行的诊断已随替换作废（清单/行号同源）");
+        check(diagsLine6(3) == 1, "② 新版本第 3 行的诊断在（行号落在 3 行范围内）");
+        {
+            bool inRange = true;
+            for (const ParseDiagnostic& d : mTable.parseDiagnostics().all()) {
+                if (d.file != diagFile || d.line < 1) continue;
+                if (aData && d.line > aData->lines.size()) inRange = false;
+            }
+            check(inRange, "② 该文件的全部诊断行号都在现行 ScriptData 行范围内");
+        }
+
+        // ③ 同一脚本再装一次（同内容）：条目数不重复、行数不叠、诊断不重。
+        const int diagCountV2 = countCodeInFile(mTable.parseDiagnostics(), DiagCode::kUnknownInstruction, diagFile);
+        check(loader.loadFile(fileA), "③ 同一脚本装第二次（同内容）");
+        check(mTable.scriptCount() == 2 && loader.loadedFileCount() == 2,
+              "③ 装两次不产生第二个条目");
+        check(loader.getScriptLineCount(QStringLiteral("A.ERB")) == 3,
+              "③ 装两次行数仍是 3（不是追加/叠加）");
+        check(countCodeInFile(mTable.parseDiagnostics(), DiagCode::kUnknownInstruction, diagFile) == diagCountV2,
+              "③ 装两次诊断条数不变（旧的那一份被替换，不是并存）");
+        check(manifestMatchesScriptData(loader, mTable), "③ 清单与 ScriptData 逐项一致");
+
+        // ④ 串行 loadDirectory 的日志计数：日志里的「脚本 N 个」= loadedFileCount()。
+        loader.setParallelLoad(false);
+        g_capturedMessages.clear();
+        QtMessageHandler prevHandler = qInstallMessageHandler(captureMessage);
+        const bool dirOk = loader.loadDirectory(erbDir);
+        qInstallMessageHandler(prevHandler);
+        check(dirOk, "④ 串行重新装载整个目录");
+        QString countLog;
+        for (const QString& m : g_capturedMessages) {
+            // 必须用 QStringLiteral：QLatin1String 按字节解释，会把其中的 UTF-8 中文弄错。
+            if (m.contains(QStringLiteral("[load] ERB（串行）"))) { countLog = m; break; }
+        }
+        const QRegularExpression re(QStringLiteral("脚本 (\\d+) 个"));
+        const QRegularExpressionMatch match = re.match(countLog);
+        check(match.hasMatch(), QStringLiteral("④ 日志含「脚本 N 个」（捕获 %1 条消息）：%2")
+                  .arg(g_capturedMessages.size()).arg(countLog));
+        check(match.hasMatch() && match.captured(1).toInt() == mTable.scriptCount()
+                  && mTable.scriptCount() == 2,
+              QStringLiteral("④ 日志计数 %1 = ScriptData 条目数 %2")
+                  .arg(match.hasMatch() ? match.captured(1) : QStringLiteral("<无>"))
+                  .arg(mTable.scriptCount()));
+        check(manifestMatchesScriptData(loader, mTable), "④ 目录装载后清单与 ScriptData 逐项一致");
+
+        // ⑤ cancelAndWait 只释放 loader 自己的行存储，不留下第二份会归零的计数。
+        loader.cancelAndWait();
+        check(loader.loadedFileCount() == mTable.scriptCount() && mTable.scriptCount() == 2,
+              QStringLiteral("⑤ cancelAndWait 之后文件数仍等于 ScriptData 条目数（%1/%2）")
+                  .arg(loader.loadedFileCount()).arg(mTable.scriptCount()));
+        check(manifestMatchesScriptData(loader, mTable), "⑤ 取消后清单与 ScriptData 逐项一致");
     }
 
     qDebug() << "\n================================";

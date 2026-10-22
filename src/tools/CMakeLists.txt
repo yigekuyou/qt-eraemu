@@ -54,6 +54,19 @@ if(BUILD_TESTING)
         if(test STREQUAL "test_transport")
             add_dependencies(${test} eralsp eramcp)
         endif()
+        # test_eproto 直接对照引擎侧（EraParseTable / VariableTable）：同一份夹具
+        # 既要走分析器，也要走引擎装载，两侧结论必须一致。
+        if(test STREQUAL "test_eproto")
+            target_include_directories(${test} PRIVATE
+                ${CMAKE_SOURCE_DIR}/src/eraengine/Content
+                ${CMAKE_SOURCE_DIR}/src/eraengine/Content/encoding
+                ${CMAKE_SOURCE_DIR}/src/eraengine/GameData
+                ${CMAKE_SOURCE_DIR}/src/eraengine/GameData/ast
+                ${CMAKE_SOURCE_DIR}/src/eraengine/GameData/Variable
+                ${CMAKE_SOURCE_DIR}/src/eraengine/GameProc
+            )
+            target_link_libraries(${test} PRIVATE eraengine Qt6::Gui)
+        endif()
         list(APPEND era_tool_targets ${test})
     endforeach()
 endif()

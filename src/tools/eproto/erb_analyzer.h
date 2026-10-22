@@ -53,6 +53,10 @@ struct EPROTO_API ErbSymbol {
     QString name;
     int     line = 0;                 // 0 起
     bool    isGotoLabel = false;      // $label（GotoLabel）而非 @label
+    // 段身份文本（eravar::segmentKeyText(文档标识, 段起点行)）：解析这个标签的
+    // 表达式时用的私有作用域键。@标签 = 它开启的段；$标签 = 所属段。
+    // 与 name（函数名事实）是**两个**事实：同名 @F 的两段 name 相同、本字段不同。
+    QString segmentKey;
 };
 
 // 一份 ERB 文档的解析结果（全部为派生数据，不含引擎类型）。

@@ -30,6 +30,7 @@
 #include "GameData/ast/ast_builder.h"       // AstBuilder::build
 #include "GameData/ast/function_types.h"    // kBuiltinFunctions / builtinFunction*()
 #include "GameData/ast/logical_line.h"      // LogicalLine / LineKind / ScriptPosition
+#include "GameData/ast/name_interner.h"     // eravar::segmentKeyText（段身份唯一构造点）
 #include "GameData/ast/operand_type.h"      // operandTypeName
 #include "GameData/ast/parse_diagnostic.h"  // ParseDiagnostics / DiagCode
 #include "GameData/file_system_io.h"        // FileSystem::collectTree / listFilesFromTree（复用引擎文件 IO）
@@ -113,13 +114,18 @@ QMap<QString, ErbDocument> analyzeSources(const QMap<QString, QString>& sources,
         QList<LogicalLine> lines;
         ParseDiagnostics diagnostics;
         ScriptPosition current;
-        // 解析**必须带所属函数作用域**（对齐装载器 ErbLoader::resolveExpr 的 scope）：
-        //   1) 函数私有变量 / `#DIM CONST` 要能在本函数内解析 —— 否则 `X ++`
+        // 解析**必须带所属段身份**（对齐装载器 parseOneFileReadOnly 的 currentScope）：
+        //   1) 函数私有变量 / `#DIM CONST` 要能在本段内解析 —— 否则 `X ++`
         //      这种「与别处同名常量重名的私有变量」会被折成那个常量的字面量；
-        //   2) 作用域为空时，前面文件登记过的**别函数**私有常量会污染本文件的解析。
-        // 装载器的 AST 走的是同一套判据，这里不传作用域就会出现「app 装载 0 告警、
-        // LSP/MCP 却报一堆」的口径差。
-        QString scope;
+        //   2) 作用域为空时，前面文件登记过的**别段**私有常量会污染本文件的解析。
+        // 段身份 = (脚本名, 段起点行)，**唯一构造点**是 eravar::segmentKeyText
+        //（这里不拼字符串）。脚本名 = 本文档标识（= analyzeWorkspace 的键，也正是
+        // 后面 loadScript 收到的 scriptName）；段起点行 = 该 @ 标签在**预处理后行序
+        // 里的下标**（文件头段 = -1），与 EraParseTable::loadScript 写进
+        // line.segmentStart 的是同一份事实。绝不使用函数名：同名 @F 的两份声明是
+        // 两个段，用函数名会让两份私有声明互相冒充（引擎侧早已按段区分）。
+        int segmentStart = -1;
+        QString scope = eravar::segmentKeyText(name, segmentStart);
         // Use the engine's expression frontend and cache, including its providers
         // for constants, variables, user functions and formatted strings.
         const AstResolver resolve = [&](const QString& expression) {
@@ -137,10 +143,19 @@ QMap<QString, ErbDocument> analyzeSources(const QMap<QString, QString>& sources,
             current = ScriptPosition(name, entry.physicalLine, 1);
             auto line = AstBuilder::build(entry.text, current, resolve, quiet, &diagnostics);
             line.lineIndex = lines.size();
+            // 段起点行 = 本行在预处理后行序里的下标（lineIndex 已由上一行算好）。
+            // 作用域切换发生在构建**之后**：@ 行自身属于它开启的新段（与装载器同序）。
+            if (line.kind == LineKind::FunctionLabel) {
+                segmentStart = line.lineIndex;
+                scope = eravar::segmentKeyText(name, segmentStart);
+            }
+            line.segmentStart = segmentStart;
+            line.scopeKey = scope;
+            // 符号表：name 是**函数名事实**（标签名），segmentKey 是**段身份**
+            //（@ 标签 = 它开启的段，$ 标签 = 所属段）。两者各记各的，不互相冒充。
             if (line.kind == LineKind::FunctionLabel || line.kind == LineKind::GotoLabel)
                 doc.symbols.append({line.labelName, qMax(0, current.lineNumber - 1),
-                                    line.kind == LineKind::GotoLabel});
-            if (line.kind == LineKind::FunctionLabel) scope = line.labelName;
+                                    line.kind == LineKind::GotoLabel, scope});
             lines.append(line);
         }
         for (const auto& diagnostic : diagnostics.all())

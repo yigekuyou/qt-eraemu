@@ -28,6 +28,15 @@
 #include "lsp_server.h"
 #include "mcp_server.h"
 
+// 引擎侧（同一份夹具的对照物）：段身份的唯一构造点 + 解析表/变量表。
+#include "ast/ast_builder.h"
+#include "ast/logical_line.h"
+#include "ast/name_interner.h"
+#include "ast/operand_type.h"
+#include "ast/variable_table.h"
+#include "era_parse_table.h"
+#include "process_state.h"
+
 using namespace eproto;
 
 namespace {
@@ -114,6 +123,7 @@ private slots:
     void analyzerReportsIndentedInstructionColumn();
     void analyzerNoFalsePositiveOnCommonCode();
     void analyzerExtractsLabels();
+    void analyzerPrivateScopeUsesSegmentIdentity();
     void lspInitializeCapabilities();
     void lspDidOpenPublishesDiagnostics();
     void lspCompletionAndHover();
@@ -220,6 +230,132 @@ void TestEproto::analyzerExtractsLabels() {
     QVERIFY(!syms.at(0).isGotoLabel);
     QCOMPARE(syms.at(1).name, QStringLiteral("MYGOTO"));
     QVERIFY(syms.at(1).isGotoLabel);
+}
+
+// ---------------------------------------------------------------------------
+// 私有变量作用域 = **段身份 (脚本, 段起点行)**，不是函数名。
+// 分析器（LSP/MCP 的语义来源）与 EraParseTable（引擎）是同一事实的两侧副本：
+// 同名 @F 的两段各自一份 #DIM，任何一侧退回「函数名当作用域」都会让两份声明
+// 互相冒充。本夹具同时锁住：
+//   1) 分析器给 @标签 的 segmentKey = eravar::segmentKeyText(文档标识, 段起点行)
+//      —— 同名两段不同、可还原成 (脚本, 段起点行)；
+//   2) 引擎侧逐行 scopeKey / segmentStart 与之一致，且类型/维度按段各一份；
+//   3) 分析器的越界诊断落在正确的段（段 A 的 ARR 尺寸 3 越界、段 B 的 10 不越界）；
+//   4) 文件头段（段起点行 = -1，.ERH 级别）的声明是广域，不进任何函数段。
+// ---------------------------------------------------------------------------
+void TestEproto::analyzerPrivateScopeUsesSegmentIdentity() {
+    const QString script = QStringLiteral("ERB/scope.erb");
+    const QString header = QStringLiteral("ERB/scope.erh");
+    const QStringList source = {
+        QStringLiteral("@F"),            // 0 <- 段 A 起点
+        QStringLiteral("#DIM ARR, 3"),   // 1
+        QStringLiteral("#DIM X"),        // 2  段 A：Int
+        QStringLiteral("PRINTV ARR:5"),  // 3  越界（段 A 的 ARR 尺寸 3）
+        QStringLiteral("@F"),            // 4 <- 段 B 起点（同名函数）
+        QStringLiteral("#DIMS X"),       // 5  段 B：Str（同名、不同段、不同类型）
+        QStringLiteral("#DIM ARR, 10"),  // 6
+        QStringLiteral("PRINTV ARR:5"),  // 7  不越界（段 B 的 ARR 尺寸 10）
+    };
+    const QString body = source.join(QLatin1Char('\n')) + QLatin1Char('\n');
+    const QString headerBody = QStringLiteral("#DIM HDRV, 3\n");   // 头文件声明 = 广域
+
+    // ---- 分析器侧 ----
+    ErbAnalyzer analyzer;
+    const QMap<QString, ErbDocument> docs =
+        analyzer.analyzeWorkspace({{script, body}, {header, headerBody}});
+    const ErbDocument doc = docs.value(script);
+    QVERIFY(doc.parsed);
+    QCOMPARE(int(doc.symbols.size()), 2);
+    const ErbSymbol segA = doc.symbols.at(0);
+    const ErbSymbol segB = doc.symbols.at(1);
+    QCOMPARE(segA.name, QStringLiteral("F"));
+    QCOMPARE(segB.name, QStringLiteral("F"));   // 函数名事实：同名（保持不变）
+    QCOMPARE(segA.line, 0);
+    QCOMPARE(segB.line, 4);
+    // 段身份：两段必须不同（旧实现两个都是 "F"）；且 = 唯一构造点算出来的文本。
+    QVERIFY(segA.segmentKey != segB.segmentKey);
+    QCOMPARE(segA.segmentKey, eravar::segmentKeyText(script, 0));
+    QCOMPARE(segB.segmentKey, eravar::segmentKeyText(script, 4));
+    QString keyScript;
+    int keyLine = -1;
+    QVERIFY(eravar::parseSegmentKey(segA.segmentKey, keyScript, keyLine));
+    QCOMPARE(keyScript, script);
+    QCOMPARE(keyLine, 0);
+    QVERIFY(eravar::parseSegmentKey(segB.segmentKey, keyScript, keyLine));
+    QCOMPARE(keyScript, script);
+    QCOMPARE(keyLine, 4);
+    // 段身份不可能与变量名撞车（恒含 ':'）—— 旧实现的 "F" 可被当成变量名。
+    QVERIFY(segA.segmentKey.contains(QLatin1Char(':')));
+    // 分析器诊断：只有段 A 的 ARR 越界（段 B 的 ARR 尺寸 10 不该报）。
+    int oob = 0;
+    for (const ErbDiagnostic& d : doc.attributed) {
+        if (!d.message.contains(QStringLiteral("越界"))) continue;
+        QCOMPARE(d.line, 3);
+        ++oob;
+    }
+    QCOMPARE(oob, 1);
+
+    // ---- 引擎侧（同一份文本、同一个脚本标识）----
+    ProcessState state;
+    EraParseTable table(&state);
+    const AstResolver resolve = [&table](const QString& e) { return table.expressionAst(e); };
+    const auto buildLines = [&resolve](const QString& file, const QStringList& lines) {
+        QList<LogicalLine> out;
+        for (int i = 0; i < lines.size(); ++i)
+            out.append(AstBuilder::build(lines.at(i), ScriptPosition(file, i + 1, 1), resolve));
+        return out;
+    };
+    QVERIFY(table.loadScript(header, buildLines(header, {QStringLiteral("#DIM HDRV, 3")}),
+                             /*isHeaderFile=*/true));
+    QVERIFY(table.loadScript(script, buildLines(script, source)));
+    table.markLoadComplete();
+
+    const ScriptData* engine = table.script(script);
+    QVERIFY(engine != nullptr);
+    QVERIFY(engine->lines.size() == source.size());
+    // 引擎逐行作用域 = 分析器给符号的段身份（同一构造点、同一份事实）。
+    QCOMPARE(engine->lines.at(0).scopeKey, segA.segmentKey);
+    QCOMPARE(engine->lines.at(0).segmentStart, 0);
+    QCOMPARE(engine->lines.at(4).scopeKey, segB.segmentKey);
+    QCOMPARE(engine->lines.at(4).segmentStart, 4);
+    QCOMPARE(engine->lines.at(7).scopeKey, segB.segmentKey);
+    // 同名 @F 的 #DIM 互不冒充：类型/维度按段各一份，正好解释上面的越界诊断。
+    const VariableTable& vt = table.variableTable();
+    QVERIFY(vt.typeOf(QStringLiteral("X"), segA.segmentKey) == OperandType::Int);
+    QVERIFY(vt.typeOf(QStringLiteral("X"), segB.segmentKey) == OperandType::Str);
+    const QList<VariableDecl> localsA = vt.localsOf(segA.segmentKey);
+    const QList<VariableDecl> localsB = vt.localsOf(segB.segmentKey);
+    const auto arrLengths = [](const QList<VariableDecl>& ds) {
+        for (const VariableDecl& d : ds)
+            if (d.name.compare(QStringLiteral("ARR"), Qt::CaseInsensitive) == 0)
+                return d.lengths;
+        return QList<int>{};
+    };
+    QCOMPARE(arrLengths(localsA), QList<int>{3});
+    QCOMPARE(arrLengths(localsB), QList<int>{10});
+
+    // ---- 文件头段（段起点行 = -1，.ERH 级别）----
+    const QString headerKey = eravar::segmentKeyText(header, -1);
+    // 头文件身份独立存在（不是空串 = 广域上下文），但声明是广域、不归属任何段。
+    QVERIFY(!headerKey.isEmpty());
+    QVERIFY(vt.localsOf(headerKey).isEmpty());
+    const auto ownsHeaderVar = [&vt](const QString& key) {
+        for (const VariableDecl& d : vt.localsOf(key))
+            if (d.name.compare(QStringLiteral("HDRV"), Qt::CaseInsensitive) == 0) return true;
+        return false;
+    };
+    QVERIFY(!ownsHeaderVar(headerKey));
+    QVERIFY(!ownsHeaderVar(segA.segmentKey));   // 文件头段声明不进任何函数段
+    QVERIFY(!ownsHeaderVar(segB.segmentKey));
+    // 但作为广域声明，任何段都能查到（回退到全局，不是私有）。
+    QVERIFY(vt.typeOf(QStringLiteral("HDRV"), segA.segmentKey) == OperandType::Int);
+    QVERIFY(vt.typeOf(QStringLiteral("HDRV"), segB.segmentKey) == OperandType::Int);
+    // 分析器侧：.ERH 文档没有函数符号，因此没有任何段认领头文件声明。
+    const ErbDocument hdrDoc = docs.value(header);
+    QVERIFY(hdrDoc.parsed);
+    QCOMPARE(int(hdrDoc.symbols.size()), 0);
+    for (const ErbSymbol& s : doc.symbols)
+        QVERIFY(s.segmentKey != headerKey);
 }
 
 void TestEproto::lspInitializeCapabilities() {

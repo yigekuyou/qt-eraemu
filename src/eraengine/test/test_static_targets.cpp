@@ -391,9 +391,11 @@ int main(int argc, char* argv[]) {
 
     qDebug() << "\n8) 可静态判定的运行期错误（字面量除零）";
     {
+        // 常量被除数（10 / 0）由 3/6 的装载期求值判 RejectLine；6/6 只负责
+        // 3/6 看不见的「除数字面 0、被除数含变量」形态。
         const ParseDiagnostics d = loadScripts({
             {QStringLiteral("a.ERB"),
-             QStringLiteral("@MAIN\nPRINTV 10 / 0\nPRINTV 10 % 0\nRETURN\n")}});
+             QStringLiteral("@MAIN\n#DIM Y\nPRINTV Y / 0\nPRINTV Y % 0\nRETURN\n")}});
         check(withCode(d, DiagCode::kStaticValue).size() == 2, "字面量除零 / 取模零 -> 各报一条");
     }
     {

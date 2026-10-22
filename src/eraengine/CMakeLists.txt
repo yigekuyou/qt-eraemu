@@ -73,6 +73,8 @@ GameData/identifier_dictionary.h
 
 GameData/ast/expression_ast.cpp
 GameData/ast/expression_ast.h
+GameData/ast/index_bounds.cpp
+GameData/ast/index_bounds.h
 GameData/ast/expression_evaluator.cpp
 GameData/ast/expression_evaluator.h
 GameData/ast/expression_lexer.cpp
@@ -347,6 +349,8 @@ endif()
 eraengine_add_test(test_era_parse_table)
 eraengine_add_test(test_parse_table_ast)
 eraengine_add_test(test_parse_checks)
+eraengine_add_test(test_index_bounds)
+add_test(NAME test_index_bounds COMMAND test_index_bounds)
 eraengine_add_test(test_jump_markings)
 add_test(NAME test_jump_markings COMMAND test_jump_markings)
 eraengine_add_test(test_structure_pairing)

@@ -44,11 +44,10 @@
 #include <QVector>
 #include <QtConcurrent>
 #include <algorithm>
-#include <limits>
-#include <optional>
 
 #include "ast/expression_ast.h"     // walkExpression / LiteralNode / BinaryOpNode / VariableNode
 #include "ast/function_types.h"     // OperandType / isKnown / operandTypeName
+#include "ast/index_bounds.h"       // 下标/尺寸判定与处置表（3/6 共用的唯一一份）
 #include "ast/system_variables.h"   // sysvar::systemVariableMetadataDyn / systemStorageNames
 #include "constant_table.h"
 #include "jump_markings.h"   // 配对记录（structureIssues）与词汇表
@@ -556,35 +555,26 @@ void checkStaticValuesInScript(const ParseIrView& view, const ScriptData& data,
         return sizes;
     };
 
-    // 常量值识别：字面量，或「负字面量」—— `-1` **不是**折叠字面量而是
-    // UnaryOp(MINUS, Literal)（解析器只折叠 #DIM CONST 名，负号不走折叠），
-    // 连 validateExpression 的既有检查也只认纯字面量 —— 负形态正是它的盲区。
-    // negated = 负形态：该位置的「步骤 3 已报过」结论不成立（它根本看不见）。
-    const auto constValueOf = [](const QSharedPointer<ExpressionNode>& ast,
-                                 bool* negated = nullptr) -> std::optional<qint64> {
-        if (negated) *negated = false;
-        if (!ast) return std::nullopt;
-        if (ast->kind() == NodeKind::Literal) {
-            const auto* l = static_cast<const LiteralNode*>(ast.data());
-            if (l->isString()) return std::nullopt;
-            return l->intValue();
-        }
-        if (ast->kind() == NodeKind::UnaryOp) {
-            const auto& u = static_cast<const UnaryOpNode&>(*ast);
-            if (u.op().type() != TokenType::MINUS || u.isPostfix() || !u.operand()
-                || u.operand()->kind() != NodeKind::Literal)
-                return std::nullopt;
-            const auto* l = static_cast<const LiteralNode*>(u.operand().data());
-            if (l->isString()) return std::nullopt;
-            // -INT64_MIN 的取反是 UB：这种字面量本身就已被数字诊断拦过，不再判
-            if (l->intValue() == std::numeric_limits<qint64>::min()) return std::nullopt;
-            if (negated) *negated = true;
-            return -l->intValue();
-        }
-        return std::nullopt;
+    // 6/6 的**唯一**写出点：severity / effect / 生产者全部来自 index_bounds
+    // 的处置表。返回 false = 该事实归 3/6（本趟让位，不产生第二条诊断）。
+    const auto emitStaticIssue = [&](indexbounds::Kind kind, const LogicalLine& line,
+                                     const QString& message) {
+        const indexbounds::Policy& policy = indexbounds::issuePolicy(kind);
+        if (policy.producer != DiagOrigin::Pass6) return false;
+        diags.add(policy.severity, DiagCode::kStaticValue, line.position.filename,
+                  line.position.lineNumber, line.position.column, 0, message, {},
+                  policy.effect);
+        return true;
     };
+    // 常量值识别（字面量 / 负字面量）与「3/6 是否已覆盖纯字面量上界」都走
+    // index_bounds 的唯一一份判定：`-1` 是 UnaryOp(MINUS, Literal)，3/6 的
+    // 纯字面量检查看不见 —— 分工由此成为数据（issuePolicy 的 producer）。
 
     for (const LogicalLine& line : data.lines) {
+        // 6/6 是 3/6 的**残余**：3/6 已判该行失效（RejectLine）时，本趟不再对
+        // 同一行补任何事实 —— 同一行不允许 RejectLine 与 ReportOnly 并存。
+        // 3/6 判不了的形态在 line.isError == false 时照常进入下面的分支。
+        if (line.isError) continue;
         const auto visit = [&](ExpressionNode& node) {
             if (node.kind() == NodeKind::BinaryOp) {
                 auto& op = static_cast<BinaryOpNode&>(node);
@@ -594,15 +584,16 @@ void checkStaticValuesInScript(const ParseIrView& view, const ScriptData& data,
                 if (!right || right->kind() != NodeKind::Literal) return;
                 const auto& lit = static_cast<const LiteralNode&>(*right);
                 if (lit.valueType() != OperandType::Int || lit.intValue() != 0) return;
-                diags.addReportOnly(DiagSeverity::Error, DiagCode::kStaticValue,
-                    line.position.filename, line.position.lineNumber,
-                    line.position.column, 0,
-                    QCoreApplication::translate("ParseDiagnostics",
-                        "0 による除算が行われました（运行到该行会失败）"));
+                // 常量被除数 -> 3/6 的装载期求值已经产事实（RejectLine）；
+                // 含变量的被除数 -> 只有本趟能看见（ReportOnly）。
+                const indexbounds::Kind kind = indexbounds::isConstantSubtree(node)
+                    ? indexbounds::Kind::ConstantDivisionByZero
+                    : indexbounds::Kind::DynamicDivisionByZero;
+                emitStaticIssue(kind, line, indexbounds::divisionByZeroMessage());
                 return;
             }
             // ---- 常量下标边界（步骤 3 看不到尺寸的名字才判）----
-            if (node.kind() != NodeKind::Variable || line.isError) return;
+            if (node.kind() != NodeKind::Variable) return;
             // VARSIZE 只消费数组身份（语言规定其下标被忽略，见 finalizeValidation
             // 的同款豁免）—— 下标形态（含字符串）不参与运行期求值，不判。
             if (line.functionName == QLatin1String("VARSIZE")) return;
@@ -615,7 +606,7 @@ void checkStaticValuesInScript(const ParseIrView& view, const ScriptData& data,
             int constCount = 0;
             for (int i = 0; i < n; ++i) {
                 bool negated = false;
-                const auto v = constValueOf(var.indices().at(i), &negated);
+                const auto v = indexbounds::constantIndexValue(*var.indices().at(i), &negated);
                 if (!v) continue;
                 constPos[constCount] = i;
                 constVal[constCount] = *v;
@@ -635,12 +626,8 @@ void checkStaticValuesInScript(const ParseIrView& view, const ScriptData& data,
                     if (!l->isString()) continue;
                     if (view.constantTable->indexForVariable(var.name(), l->strValue()) >= 0)
                         continue;
-                    diags.addReportOnly(DiagSeverity::Error, DiagCode::kStaticValue,
-                        line.position.filename, line.position.lineNumber,
-                        line.position.column, 0,
-                        QCoreApplication::translate("ParseDiagnostics",
-                            "变量 %1 的字符串下标 \"%2\" 未在常数名表中定义（运行到该行会失败）")
-                            .arg(var.name(), l->strValue()));
+                    emitStaticIssue(indexbounds::Kind::UnknownStringIndex, line,
+                        indexbounds::unknownStringIndexMessage(var.name(), l->strValue()));
                 }
             }
             if (!constCount) return;
@@ -669,7 +656,8 @@ void checkStaticValuesInScript(const ParseIrView& view, const ScriptData& data,
                         charaIdPos[p] = true;   // 角色号位：运行期角色表决定
                         continue;
                     }
-                    const int dim = meta.characterData ? p - 1 : p;
+                    const int dim = indexbounds::elementDimension(p, meta.dimension,
+                                                                 meta.characterData, n);
                     if (dim >= 0 && dim < sizes.size() && sizes.at(dim) > 0)
                         bounds[p] = sizes.at(dim);
                 }
@@ -684,8 +672,10 @@ void checkStaticValuesInScript(const ParseIrView& view, const ScriptData& data,
                         charaIdPos[p] = true;
                         continue;
                     }
-                    const int dim = d->isCharaData ? p - 1 : p;
-                    if (dim >= 0 && dim < d->lengths.size() && d->lengths.at(dim) > 0)
+                    const int dim = indexbounds::elementDimension(p, d->dimension,
+                                                                 d->isCharaData, n);
+                    if (dim >= 0 && dim < d->lengths.size()
+                        && indexbounds::pass3CoversLiteralBounds(d->lengths.at(dim)))
                         veCovered[p] = true;   // 步骤 3 已按 lengths 报过
                 }
             }
@@ -697,19 +687,11 @@ void checkStaticValuesInScript(const ParseIrView& view, const ScriptData& data,
                 if (charaIdPos[p]) continue;
                 if (veCovered[p] && !constNeg[c]) continue;
                 if (v < 0) {
-                    diags.addReportOnly(DiagSeverity::Warning, DiagCode::kStaticValue,
-                        line.position.filename, line.position.lineNumber,
-                        line.position.column, 0,
-                        QCoreApplication::translate("ParseDiagnostics",
-                            "变量 %1 的常量下标 %2 为负（下标下界恒为 0；运行期该访问静默失败）")
-                            .arg(var.name()).arg(v));
+                    emitStaticIssue(indexbounds::Kind::NegativeConstantIndex, line,
+                        indexbounds::negativeIndexMessage(var.name(), v));
                 } else if (bounds[p] >= 0 && v >= bounds[p]) {
-                    diags.addReportOnly(DiagSeverity::Warning, DiagCode::kStaticValue,
-                        line.position.filename, line.position.lineNumber,
-                        line.position.column, 0,
-                        QCoreApplication::translate("ParseDiagnostics",
-                            "变量 %1 的常量下标 %2 越过其尺寸 %3（运行期读取为 0、写入被忽略）")
-                            .arg(var.name()).arg(v).arg(bounds[p]));
+                    emitStaticIssue(indexbounds::Kind::SystemSizeExceeded, line,
+                        indexbounds::beyondSizeMessage(var.name(), v, int(bounds[p])));
                 }
             }
         };

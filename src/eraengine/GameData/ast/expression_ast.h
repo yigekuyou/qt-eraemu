@@ -23,6 +23,7 @@
 #include <QSharedPointer>
 #include <functional>
 #include <variant>
+#include <optional>
 #include <bit>
 #include <QJsonObject>
 #include <QJsonDocument>
@@ -31,6 +32,7 @@
 #include "operand_type.h"
 #include "operator_table.h"
 #include "function_types.h"
+#include "index_bounds.h"   // ExpressionIssue::indexKind（下标事实的唯一分类）
 
 // ---------------------------------------------------------------------------
 // 强类型表达式 AST（对齐 C# GameData/Expression）
@@ -463,6 +465,17 @@ private:
     QString m_rawText;
 };
 
+// 校验结果：message 为空 = 通过；indexKind 非空 = 该失败是 index_bounds 的
+// 一类事实（调用方按 issuePolicy 取 severity/effect/唯一生产者）。
+struct ExpressionIssue {
+    QString message;
+    std::optional<indexbounds::Kind> indexKind;
+    [[nodiscard]] bool ok() const { return message.isEmpty(); }
+};
+
+[[nodiscard]] ExpressionIssue validateExpressionIssue(const ExpressionNode& node,
+                                                      bool requireIndices = true);
+// 兼容入口（运行期 evaluate() 与既有调用点）：只要文本。
 [[nodiscard]] QString validateExpression(const ExpressionNode& node, bool requireIndices = true);
 
 QSharedPointer<ExpressionNode> cloneExpression(const QSharedPointer<ExpressionNode>& node);

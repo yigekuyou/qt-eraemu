@@ -18,6 +18,7 @@
 #include "expression_ast.h"
 #include <QCoreApplication>
 #include "operator_table.h"
+#include "index_bounds.h"
 #include <cmath>
 #include <bit>
 #include <limits>
@@ -595,49 +596,61 @@ QSharedPointer<ExpressionNode> cloneExpression(const QSharedPointer<ExpressionNo
     return {};
 }
 
-QString validateExpression(const ExpressionNode& node, bool requireIndices) {
+ExpressionIssue validateExpressionIssue(const ExpressionNode& node, bool requireIndices) {
     const auto check = [](const QSharedPointer<ExpressionNode>& child, bool indices = true) {
-        return child ? validateExpression(*child, indices) : QCoreApplication::translate("ParseDiagnostics", "缺少表达式");
+        return child ? validateExpressionIssue(*child, indices) : ExpressionIssue{
+            QCoreApplication::translate("ParseDiagnostics", "缺少表达式"), std::nullopt};
     };
-    const auto first = [](QString a, QString b) { return a.isEmpty() ? b : a; };
+    const auto fail = [](const QString& message) {
+        return ExpressionIssue{message, std::nullopt};
+    };
+    const auto first = [](const ExpressionIssue& a, const ExpressionIssue& b) {
+        return a.ok() ? b : a;
+    };
     switch (node.kind()) {
     case NodeKind::Literal: return {};
     case NodeKind::Variable: {
         const auto& v = static_cast<const VariableNode&>(node);
         const int n = v.indices().size();
-        if (n > 3) return QCoreApplication::translate("ParseDiagnostics", "变量下标超过三项");
+        // 下标/维数判定与诊断文本只有 index_bounds 一份（3/6 与 6/6 共用）；
+        // indexKind 让调用方按 issuePolicy 取 severity/effect（不再是两份 if）。
+        if (n > 3)
+            return {indexbounds::tooManyIndicesMessage(), indexbounds::Kind::TooManyIndices};
         if (v.dimension >= 0) {
             const QString upper = v.name().toUpper();
             const bool argSlot = upper == QLatin1String("ARG") || upper == QLatin1String("ARGS");
             const int full = v.dimension + (v.characterData ? 1 : 0);
             if (n > full || (!argSlot && n > 0 && v.dimension >= 2 && n != full)
                 || (!argSlot && requireIndices && n == 0 && v.dimension >= 2))
-                return QCoreApplication::translate("ParseDiagnostics", "变量 %1 缺少参数或下标维数错误").arg(v.name());
+                return {indexbounds::dimensionMismatchMessage(v.name()),
+                        indexbounds::Kind::DimensionMismatch};
         }
         for (int i = 0; i < n; ++i) {
-            const QString e = check(v.indices()[i]);
-            if (!e.isEmpty()) return e;
+            ExpressionIssue e = check(v.indices()[i]);
+            if (!e.ok()) return e;
             if (const auto* l = dynamic_cast<const LiteralNode*>(v.indices()[i].data()); l && !l->isString()) {
-                const int dim = i - (v.characterData && n > v.dimension ? 1 : 0);
-                if (dim >= 0 && dim < v.lengths.size() && v.lengths[dim] > 0
-                    && (l->intValue() < 0 || l->intValue() >= v.lengths[dim]))
-                    return QCoreApplication::translate("ParseDiagnostics", "变量 %1 常量下标越界").arg(v.name());
+                const int dim = indexbounds::elementDimension(i, v.dimension, v.characterData, n);
+                if (dim >= 0 && dim < v.lengths.size()
+                    && indexbounds::pass3CoversLiteralBounds(v.lengths[dim])
+                    && indexbounds::isOutOfRange(l->intValue(), v.lengths[dim]))
+                    return {indexbounds::declaredLiteralOutOfRangeMessage(v.name()),
+                            indexbounds::Kind::DeclaredLiteralOutOfRange};
             }
         }
         return {};
     }
     case NodeKind::BinaryOp: {
         const auto& b = static_cast<const BinaryOpNode&>(node);
-        if (!b.typesValid()) return QCoreApplication::translate("ParseDiagnostics", "二元运算类型错误");
+        if (!b.typesValid()) return fail(QCoreApplication::translate("ParseDiagnostics", "二元运算类型错误"));
         return first(check(b.left()), check(b.right()));
     }
     case NodeKind::UnaryOp: {
         const auto& u = static_cast<const UnaryOpNode&>(node);
-        if (!u.typesValid()) return QCoreApplication::translate("ParseDiagnostics", "单目运算类型错误");
+        if (!u.typesValid()) return fail(QCoreApplication::translate("ParseDiagnostics", "单目运算类型错误"));
         if (u.op().type() == TokenType::INCREMENT || u.op().type() == TokenType::DECREMENT) {
             const auto* v = dynamic_cast<const VariableNode*>(u.operand().data());
             if (!v || v->readOnly || v->valueType() != OperandType::Int)
-                return QCoreApplication::translate("ParseDiagnostics", "自增需要非const整数变量");
+                return fail(QCoreApplication::translate("ParseDiagnostics", "自增需要非const整数变量"));
         }
         return check(u.operand());
     }
@@ -646,12 +659,12 @@ QString validateExpression(const ExpressionNode& node, bool requireIndices) {
         if (!i.condition() || !i.thenExpr() || !i.elseExpr()
             || i.condition()->valueType() != OperandType::Int
             || i.thenExpr()->valueType() != i.elseExpr()->valueType())
-            return QCoreApplication::translate("ParseDiagnostics", "三元条件或分支类型错误");
+            return fail(QCoreApplication::translate("ParseDiagnostics", "三元条件或分支类型错误"));
         return first(check(i.condition()), first(check(i.thenExpr()), check(i.elseExpr())));
     }
     case NodeKind::Function: {
         const auto& f = static_cast<const FunctionNode&>(node);
-        if (!f.arityError().isEmpty()) return f.arityError();
+        if (!f.arityError().isEmpty()) return fail(f.arityError());
         const auto* spec = f.builtinSpec();
         for (int i = 0; i < f.arguments().size(); ++i) {
             if (f.isArgOmitted(i)) continue;
@@ -659,8 +672,8 @@ QString validateExpression(const ExpressionNode& node, bool requireIndices) {
                 || (spec && spec->op == BuiltinOp::ArrayMSort)
                 || (spec && i < int(spec->argPattern.size())
                     && (spec->argPattern[i] == 'v' || spec->argPattern[i] == 'A' || spec->argPattern[i] == '1' || spec->argPattern[i] == 'c'));
-            const QString e = check(f.arguments()[i], !array);
-            if (!e.isEmpty()) return e;
+            ExpressionIssue e = check(f.arguments()[i], !array);
+            if (!e.ok()) return e;
         }
         return {};
     }
@@ -669,17 +682,22 @@ QString validateExpression(const ExpressionNode& node, bool requireIndices) {
         for (const auto& p : f.parts()) {
             if (p.type == StrFormPartType::Text) continue;
             if (isKnown(p.expectedType) && p.expression && p.expression->valueType() != p.expectedType)
-                return QCoreApplication::translate("ParseDiagnostics", "FORM插值类型错误");
-            const QString e = check(p.expression);
-            if (!e.isEmpty()) return e;
+                return fail(QCoreApplication::translate("ParseDiagnostics", "FORM插值类型错误"));
+            ExpressionIssue e = check(p.expression);
+            if (!e.ok()) return e;
             if (p.width) {
-                if (p.width->valueType() != OperandType::Int) return QCoreApplication::translate("ParseDiagnostics", "FORM宽度必须为整数");
-                const QString w = check(p.width);
-                if (!w.isEmpty()) return w;
+                if (p.width->valueType() != OperandType::Int)
+                    return fail(QCoreApplication::translate("ParseDiagnostics", "FORM宽度必须为整数"));
+                ExpressionIssue w = check(p.width);
+                if (!w.ok()) return w;
             }
         }
         return {};
     }
     }
     return {};
+}
+
+QString validateExpression(const ExpressionNode& node, bool requireIndices) {
+    return validateExpressionIssue(node, requireIndices).message;
 }

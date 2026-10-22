@@ -110,13 +110,13 @@ int main(int argc, char* argv[]) {
 
     // 故意造出三类问题：
     //   2 ELSE       -> 结构（IF～ENDIF 之外）
-    //   3 10 / 0     -> 可静态判定的运行期错误
+    //   3 A / 0      -> 可静态判定的运行期错误（被除数含变量 -> 6/6 的残余）
     //   4 CALL 缺失  -> 静态目标不存在
     //   5 IF 1       -> 结构（函数末尾未闭合）
     const QString source = QStringLiteral(
         "@MAIN\n"        // 1
         "ELSE\n"         // 2
-        "PRINTV 10 / 0\n"// 3
+        "PRINTV A / 0\n" // 3
         "CALL MISSING_FN\n" // 4
         "IF 1\n"         // 5
         "PRINTV 2\n");   // 6
@@ -219,12 +219,12 @@ int main(int argc, char* argv[]) {
         table2.setVariableStorage(&storage2);
 
         // 每个脚本各造一条：结构（ELSE 在 IF 外）、静态目标（CALL 缺失）、
-        // 可静态判定的运行期错误（10 / 0）。
+        // 可静态判定的运行期错误（A / 0；常量 10/0 归 3/6）。
         const QString multi = QStringLiteral(
             "@MAIN\n"          // 1
             "ELSE\n"           // 2 -> checkStructures
             "CALL MISSING_FN\n"// 3 -> resolveStaticTargets
-            "PRINTV 10 / 0\n");// 4 -> checkStaticValues
+            "PRINTV A / 0\n"); // 4 -> checkStaticValues
         // **装载顺序与名字序相反**：D 先、A 最后。
         for (const QString& n : {QStringLiteral("D.ERB"), QStringLiteral("C.ERB"),
                                  QStringLiteral("B.ERB"), QStringLiteral("A.ERB")})

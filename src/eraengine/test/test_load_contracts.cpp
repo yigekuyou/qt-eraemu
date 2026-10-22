@@ -302,7 +302,7 @@ int main(int argc, char* argv[]) {
     //   `A$ ++`          -> 3/6 finalizeValidation 的 RejectLine（origin=Pass3）
     //   `ELSE` / `IF 1`  -> 5/6 checkStructures 的 kStructure（origin=Pass5）
     //   `CALL MISSING_FN`-> 4/6 resolveStaticTargets 的 kLabelNotFound（Pass4）
-    //   `PRINTV 10 / 0`  -> 6/6 checkStaticValues 的 kStaticValue（Pass6）
+    //   `PRINTV A / 0`   -> 6/6 checkStaticValues 的 kStaticValue（Pass6；被除数含变量）
     // ------------------------------------------------------------------
     qDebug() << "\n3b) origin 切片：重跑幂等 / 交替重跑 / 跨步骤不覆盖";
     {
@@ -315,7 +315,7 @@ int main(int argc, char* argv[]) {
             QStringLiteral("A$ ++"),          // 2 -> 3/6 RejectLine
             QStringLiteral("ELSE"),           // 3 -> 5/6 kStructure
             QStringLiteral("CALL MISSING_FN"),// 4 -> 4/6 kLabelNotFound
-            QStringLiteral("PRINTV 10 / 0"),  // 5 -> 6/6 kStaticValue
+            QStringLiteral("PRINTV A / 0"),   // 5 -> 6/6 kStaticValue（常量 10/0 归 3/6）
             QStringLiteral("IF 1"),           // 6 -> 5/6 kStructure（未闭合）
             QStringLiteral("PRINTV 2"),       // 7
         };

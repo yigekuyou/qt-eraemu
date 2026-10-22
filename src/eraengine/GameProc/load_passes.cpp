@@ -23,6 +23,7 @@
 #include <QtConcurrent/QtConcurrent>
 
 #include <algorithm>
+#include <optional>
 #include <utility>
 
 #include "eraengine_log.h"   // eraTrace（2/6 各子步耗时）
@@ -34,6 +35,7 @@
 #include "ast/expression_lexer.h"
 #include "ast/expression_parser.h"
 #include "ast/function_types.h"
+#include "ast/index_bounds.h"
 #include "ast/name_interner.h"
 #include "ast/print_template.h"
 #include "ast/strform_parser.h"
@@ -1134,17 +1136,6 @@ namespace {
 void validateScriptLines(const LoadContext& ctx, ScriptData& script, ParseDiagnostics& sink) {
     // 数字字面量去重键属于**本次运行**（这个脚本任务）：见 diagnoseIntegerLiterals。
     QSet<QString> reportedNumbers;
-    const auto constantTree = [](const ExpressionNode& root) {
-        bool constant = true;
-        walkExpression(const_cast<ExpressionNode&>(root), [&](ExpressionNode& n) {
-            if (n.kind() == NodeKind::Variable || n.kind() == NodeKind::Function) constant = false;
-            if (n.kind() == NodeKind::UnaryOp) {
-                const auto op = static_cast<const UnaryOpNode&>(n).op().type();
-                if (op == TokenType::INCREMENT || op == TokenType::DECREMENT) constant = false;
-            }
-        });
-        return constant;
-    };
     for (auto& line : script.lines) {
         // 非指令行（空行/注释/# 预处理/@ 函数标签/$ 跳转标签/无法解析的行）在下面
         // **没有任何会命中的分支**：condition / columnDefaults 只在指令行有值，
@@ -1190,13 +1181,26 @@ void validateScriptLines(const LoadContext& ctx, ScriptData& script, ParseDiagno
         const auto validate = [&](const QSharedPointer<ExpressionNode>& ast,
                                   bool requireIndices = true) {
             if (!ast) return;
-            QString error = validateExpression(*ast, requireIndices);
+            ExpressionIssue issue = validateExpressionIssue(*ast, requireIndices);
+            QString error = issue.message;
+            std::optional<indexbounds::Kind> issueKind = issue.indexKind;
             if (error.isEmpty() && ctx.evaluator && ctx.storage) {
                 walkExpression(*ast, [&](ExpressionNode& n) {
-                    if (error.isEmpty() && n.kind() != NodeKind::Literal && constantTree(n)
+                    if (error.isEmpty() && n.kind() != NodeKind::Literal
+                        && indexbounds::isConstantSubtree(n)
                         && !ctx.evaluator->evaluate(n, ctx.storage, ctx.gameBaseData,
-                                                  eravar::internName(line.ownerFunction)).isValid())
-                        error = QCoreApplication::translate("ParseDiagnostics", "装载期常量表达式求值失败");
+                                                  eravar::internName(line.ownerFunction)).isValid()) {
+                        // 常量求值失败的**原因**与 6/6 共用一份判定：
+                        // 除/模 0 是可命名的运行期事实（index_bounds 的处置表
+                        // 把它归 3/6、RejectLine）；其余原因保持原泛化文案。
+                        if (indexbounds::hasConstantDivisionByZero(n)) {
+                            error = indexbounds::divisionByZeroMessage();
+                            issueKind = indexbounds::Kind::ConstantDivisionByZero;
+                        } else {
+                            error = QCoreApplication::translate("ParseDiagnostics", "装载期常量表达式求值失败");
+                            issueKind.reset();
+                        }
+                    }
                 });
             }
             // 作用域：名字只是**别的函数的私有变量/常量**时，在本函数里解析不到。
@@ -1231,16 +1235,30 @@ void validateScriptLines(const LoadContext& ctx, ScriptData& script, ParseDiagno
                         "变量 %1 在本函数中未定义（它只是别的函数的私有变量；运行到该行会失败）")
                         .arg(var.name());
                     scopeError = true;
+                    issueKind.reset();   // 作用域事实不属于下标处置表
                 });
             }
             if (!error.isEmpty()) {
-                line.argument.typeOk = false;
-                line.argument.typeError = error;
-                line.isError = true;
-                line.mutableErrMes() = error;
-                sink.addRejectLine(DiagSeverity::Error,
+                // severity / effect 由 index_bounds 的处置表决定（数据）；非下标
+                // 事实（类型/作用域/解析）沿用 Error + RejectLine。effect 在
+                // 这里真正控制运行期事实：只有 RejectLine 才置 line.isError。
+                DiagSeverity severity = DiagSeverity::Error;
+                DiagEffect effect = DiagEffect::RejectLine;
+                if (issueKind) {
+                    const indexbounds::Policy& policy = indexbounds::issuePolicy(*issueKind);
+                    severity = policy.severity;
+                    effect = policy.effect;
+                }
+                if (effect == DiagEffect::RejectLine) {
+                    line.argument.typeOk = false;
+                    line.argument.typeError = error;
+                    line.isError = true;
+                    line.mutableErrMes() = error;
+                }
+                sink.add(severity,
                     scopeError ? DiagCode::kIdentifierScope : DiagCode::kArgCheck,
-                    line.position.filename, line.position.lineNumber, line.position.column, 0, error);
+                    line.position.filename, line.position.lineNumber, line.position.column, 0, error,
+                    QString(), effect);
             }
         };
         // Increment/decrement statements have one LHS, unlike assignments.
@@ -1313,18 +1331,36 @@ void validateScriptLines(const LoadContext& ctx, ScriptData& script, ParseDiagno
             line.arguments[0].ast = target;
             // 诊断带上**具体原因**（未定义变量 / 维数不符 / AST 解析失败）：
             // 只报「必须为有效变量项」时，eraTW 这种 10k 变量的工程无从下手。
-            const QString lvalueError = !target ? QCoreApplication::translate("ParseDiagnostics", "左值表达式解析失败")
-                      : target->kind() != NodeKind::Variable ? QCoreApplication::translate("ParseDiagnostics", "左值不是变量项")
-                      : validateExpression(*target);
+            QString lvalueError;
+            std::optional<indexbounds::Kind> lvalueKind;
+            if (!target) {
+                lvalueError = QCoreApplication::translate("ParseDiagnostics", "左值表达式解析失败");
+            } else if (target->kind() != NodeKind::Variable) {
+                lvalueError = QCoreApplication::translate("ParseDiagnostics", "左值不是变量项");
+            } else {
+                const ExpressionIssue issue = validateExpressionIssue(*target);
+                lvalueError = issue.message;
+                lvalueKind = issue.indexKind;
+            }
             if (!lvalueError.isEmpty()) {
-                line.argument.typeOk = false;
-                line.argument.typeError = QCoreApplication::translate("ParseDiagnostics", "赋值左值必须为有效变量项（%1：%2）")
-                                              .arg(dest.left(60), lvalueError);
-                line.isError = true;
-                line.mutableErrMes() = line.argument.typeError;
-                sink.addRejectLine(DiagSeverity::Error, DiagCode::kArgCheck,
+                const QString message = QCoreApplication::translate("ParseDiagnostics",
+                    "赋值左值必须为有效变量项（%1：%2）").arg(dest.left(60), lvalueError);
+                DiagSeverity severity = DiagSeverity::Error;
+                DiagEffect effect = DiagEffect::RejectLine;
+                if (lvalueKind) {
+                    const indexbounds::Policy& policy = indexbounds::issuePolicy(*lvalueKind);
+                    severity = policy.severity;
+                    effect = policy.effect;
+                }
+                if (effect == DiagEffect::RejectLine) {
+                    line.argument.typeOk = false;
+                    line.argument.typeError = message;
+                    line.isError = true;
+                    line.mutableErrMes() = message;
+                }
+                sink.add(severity, DiagCode::kArgCheck,
                     line.position.filename, line.position.lineNumber, line.position.column, 0,
-                    line.argument.typeError);
+                    message, QString(), effect);
             }
             const bool rawForm = line.assignOperator == "=" && ctx.variables.typeOf(name, line.ownerFunction) == OperandType::Str;
             if (!rawForm) {

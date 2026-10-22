@@ -91,6 +91,11 @@ plantuml -txmi docs/uml/01-load-classes.puml
   `ExpressionNode::constantIndex`（Unknown / Value / Invalid），在
   `VariableTable::applyTypes` 一趟定型时写入（scope 是行所属函数，显式传入），
   判定只读它。五语料约 2.7 万处常量表达式下标（`ARR:(10+0)`、`ARR:PL`）因此进入判定。此前两侧已矛盾：`PRINTV 10 / 0` 同一行既 RejectLine 又 ReportOnly。
+- **单维与多维是两种形态**：单维沿用扁平容器 + 懒扩容；多维在装载期按 `lengths`
+  乘积真实分配（上限 `4'000'000`，语料实测最大 1e6），`strides` 写进声明，
+  运行期只做 `Σ idx*stride` 加一次边界判断；越界读 0、写 `qWarning` 后忽略
+  （不再有「首次写时偷偷扩容」）。`VARSIZE(name)`、`VARSIZE(name,dim)` 与数组长度
+  读同一份形状 —— 此前三者各说各的（`#DIM X,2,50,5` 的 `VARSIZE` 曾得 2）。
 - **装载阶段是显式状态机**：`LoadPhase { Empty, Loading, Bound, Finalized }`。每个公开入口声明它要求的
   阶段；越界调用 = `qWarning` + no-op（不 assert —— release 下也必须安全，且诊断容器不变）。
 - **诊断按 pass 切片，重跑幂等**：`DiagOrigin { Load, Pass1..Pass7 }`。每一步建独立 sink，
@@ -169,10 +174,10 @@ plantuml -txmi docs/uml/01-load-classes.puml
 `dump_warnings` 五语料（`eraTW` / `eraMegaten` / `eraTetris` / `FL3.8` / `ecd`）：
 **6 / 2 / 0 / 0 / 0** 行（`eraMegaten` 的目录参数必须是 `eraMegaten/data`；用错路径会得到
 0 字节的假基线），与 `/tmp/uml-baseline/*.raw.txt` **未排序**逐字节相同。
-累计二十一个重构（身份整数化 / 全定型 / 作用域显式化 / 只读收尾外移 / 存档独立映射 /
+累计二十二个重构（身份整数化 / 全定型 / 作用域显式化 / 只读收尾外移 / 存档独立映射 /
 私有名表前移 / 存档顺序确定性 / 写收尾外移 / 标记区外移 / 位置区外移 /
 标签归属单一索引 / 诊断切片幂等 / 常数作用域参数化 / 增量装载协议显式化 /
-GOTO 段身份入索引 / 静态检查用段身份 / 删第三张裸名表 / 错误去重 / 配对语法只判一次 / 越界判定只判一次 / 常量下标装载期求值）前后完全一致；
+GOTO 段身份入索引 / 静态检查用段身份 / 删第三张裸名表 / 错误去重 / 配对语法只判一次 / 越界判定只判一次 / 常量下标装载期求值 / 多维独立形态）前后完全一致；
 `ctest` 48 → 58（新增 `test_parse_checks` / `test_save_variable_map` / `test_private_scope_table` /
 `test_load_contracts` / `test_save_variable_map_hashseed` / `test_jump_markings` /
 `test_position_state` / `test_goto_label_lookup` / `test_structure_pairing` / `test_index_bounds`）。

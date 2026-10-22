@@ -53,4 +53,12 @@ legend right
   · writeLoopCounter 写「计数器固定下标上的循环值」——值不是下标，
     因此没有「循环值越界」检查。
 endlegend
+note right
+  单维与多维是两种形态：
+  单维 = 扁平容器 + 懒扩容（strides 为空）；
+  多维 = 装载期按 lengths 乘积真实分配（上限 4e6），
+  strides 写进声明，运行期只做 Σidx*stride + 一次边界判断。
+  越界读 0、写 qWarning 后忽略 —— 多维不再偷偷扩容。
+  VARSIZE(name) / VARSIZE(name,dim) / 数组长度三者读同一份形状。
+end note
 @enduml

@@ -116,11 +116,19 @@ package "GameProc" {
 
   package "jumpmark（标记区，自由函数）" {
     class "标记区" as JumpFns {
-      buildJumpMarkings(ScriptData&)   ' 清 10 张表后按行配对
+      buildJumpMarkings(ScriptData&)   ' 一趟扫行：配对 + 未解析记录
       jumpTarget / ifBranches          ' inline 查表（nullptr 安全）
       catchTarget / endCatchTarget
       funcEntryLines / endFuncTarget
+      ' 配对结果写 ScriptData::structureIssues（唯一写点）：
+      ' 运行期表 + 静态诊断是**同一次配对**的两个投影
+      ' 差异显式成字段（staticVisible / jumpPaired），不是两份实现
     }
+  }
+
+  struct StructureIssue {
+    kind : StructureIssueKind   ' 17 个值，一个 kind 对应一个消息模板
+    line / related / name       ' 0 基逻辑行；related = 关联行（无则 -1）
   }
 
   package "position（位置区，自由函数）" {
@@ -253,6 +261,7 @@ note bottom of EraParseTable
 
   装载之外的两块也搬走了：
   · 标记区 → jumpmark（构建吃 ScriptData&，读侧是 inline 查表）；
+    配对语法只判一次（buildJumpMarkings），5/6 只把 StructureIssue 翻成诊断；
   · 位置区 → position（状态是 PositionState，转移只置 Effects 的位，
     本类只剩「打包视图 + emitEffects」）。
   本类只剩「解析入口 + pass 表 + 阶段机 + 位置区壳子 + getter」。

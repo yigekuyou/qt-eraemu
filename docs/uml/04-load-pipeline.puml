@@ -108,8 +108,9 @@ end
 
 group 只读检查步骤（不改变运行行为）
   T -> PC : 4/6 resolveStaticTargets（CALL / GOTO / TRY*）
-  T -> PC : 5/6 checkStructures（IF/FOR/REPEAT… 配对）
+  T -> PC : 5/6 checkStructures（读 StructureIssue，不重新配对）
   T -> PC : 6/6 checkStaticValues（除零 / 负下标 / 尺寸 / 名字表）
+  T -> PC : 5/6 只做「StructureIssue → 诊断」的翻译（配对在标记区已做过）
   PC -> PS : 4/6 的 GOTO 目标判定：position::firstGotoLabel(script, segment)
   PC -> D : 写入本步 sink（ParseIrView 只读，诊断是唯一输出）
   note right : $ 标签归属与运行期是**同一个函数**（同索引、同 functionLine），\n不再按 ownerFunction 名字分组 —— 两侧不可能各自演化。

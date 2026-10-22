@@ -38,6 +38,9 @@
 #include "ast/logical_line.h"
 #include "era_parse_table.h"   // ScriptData
 #include "jump_markings.h"
+// 删掉的三张整表副本（endifLines / elseLines / jumpToEnd）的恢复口径：
+// 全部从运行期真正在用的 jumpTo / ifBranches 派生（见该头文件顶部的推导）。
+#include "jump_markings_rebuild.h"
 
 static int g_failures = 0;
 
@@ -75,6 +78,21 @@ static QString listText(const QList<int>& v) {
     return QStringLiteral("[") + parts.join(QLatin1Char(',')) + QStringLiteral("]");
 }
 
+// 第 3 项护栏：遍历**全部行**。凡 lines[i].jumpTo >= 0，目标行必须存在
+// （0 <= t <= lines.size()，「= size」是脚本结束这个合法位置）且属于同一脚本；
+// 顺带核对 jumpTo 表与行字段仍是同一份事实。
+static void checkWellFormed(const ScriptData& d, const QString& tag) {
+    QStringList bad;
+    const int nBad = rebuild::countBadJumpTargets(d, &bad);
+    check(nBad == 0, QString("%1：jumpTo >= 0 的行，目标行存在且属于同一脚本（遍历 %2 行）")
+                         .arg(tag).arg(d.lines.size()));
+    for (const QString& s : bad) qDebug().noquote() << "       " << s;
+    QStringList drift;
+    const int nDrift = rebuild::countJumpTableDrift(d, &drift);
+    check(nDrift == 0, tag + "：jumpTo 表与 lines[i].jumpTo 逐项相同");
+    for (const QString& s : drift) qDebug().noquote() << "       " << s;
+}
+
 // 期望值比对，失败时把实际值打进消息（行号错了要能一眼看出差多少）。
 static void checkInt(int actual, int expected, const QString& what) {
     check(actual == expected,
@@ -96,17 +114,20 @@ int main(int argc, char* argv[]) {
         qDebug() << "\n[1] IF / ELSEIF / ELSE / ENDIF";
         ScriptData d = makeData({"IF", "NOP", "ELSEIF", "NOP", "ELSE", "NOP", "ENDIF", "NOP"});
         jumpmark::buildJumpMarkings(d);
-        checkInt(d.endifLines.value(0, -1), 7, "lines.endifLines[IF]");
-        checkInt(d.endifLines.value(2, -1), 7, "lines.endifLines[ELSEIF]");
-        checkInt(d.endifLines.value(4, -1), 7, "lines.endifLines[ELSE]");
-        checkInt(d.elseLines.value(0, -1), 2, "lines.elseLines[IF]（下一分支）");
-        checkInt(d.elseLines.value(2, -1), 4, "lines.elseLines[ELSEIF]（下一分支）");
+        // 「IF/SIF 行 -> ENDIF+1」现在从 jumpTo 因果地重建（不再有第二份副本）
+        checkInt(rebuild::endifLines(d).value(0, -1), 7, "endifLines(IF) <- jumpTo");
+        checkInt(rebuild::endifLines(d).value(2, -1), 7, "endifLines(ELSEIF) <- jumpTo");
+        checkInt(rebuild::endifLines(d).value(4, -1), 7, "endifLines(ELSE) <- jumpTo");
+        checkInt(d.lines[0].jumpTo, 7, "lines[IF].jumpTo 指向 ENDIF 之后那一行");
+        checkInt(rebuild::elseLines(d).value(0, -1), 2, "elseLines(IF) <- ifBranches 链");
+        checkInt(rebuild::elseLines(d).value(2, -1), 4, "elseLines(ELSEIF) <- ifBranches 链");
         checkList(d.ifBranches.value(0), {2, 4}, "lines.ifBranches[IF]");
         checkInt(jumpmark::jumpTarget(&d, 0), 7, "jumpTarget(IF)");
         checkInt(jumpmark::jumpTarget(&d, 2), 7, "jumpTarget(ELSEIF)");
         checkInt(jumpmark::jumpTarget(&d, 4), 7, "jumpTarget(ELSE)");
         check(d.lines[0].jumpTo == 7 && d.lines[2].jumpTo == 7 && d.lines[4].jumpTo == 7,
               "lines[i].jumpTo 与 jumpTo 表同步（IF/ELSEIF/ELSE = 7）");
+        checkWellFormed(d, "IF/ELSEIF/ELSE");
     }
 
     // ---- 2) SIF：跳过下一行（Null 行要继续往后找）----
@@ -115,7 +136,7 @@ int main(int argc, char* argv[]) {
         ScriptData d = makeData({"SIF", "<null>", "<null>", "NOP", "NOP"});
         jumpmark::buildJumpMarkings(d);
         checkInt(jumpmark::jumpTarget(&d, 0), 4, "jumpTarget(SIF)（跨过 2 个 Null 行）");
-        checkInt(d.elseLines.value(0, -1), 4, "lines.elseLines[SIF] == jumpTo");
+        checkInt(rebuild::elseLines(d).value(0, -1), 4, "elseLines(SIF) == jumpTo（跳过下一行）");
         checkInt(d.lines[0].jumpTo, 4, "lines[SIF].jumpTo");
         checkInt(d.lines[1].lineIndex, 1, "lines[1].lineIndex 显式赋值");
         checkInt(d.lines[1].nextLine, 2, "lines[1].nextLine 显式赋值");
@@ -124,6 +145,7 @@ int main(int argc, char* argv[]) {
         ScriptData tail = makeData({"SIF", "<null>", "NOP"});
         jumpmark::buildJumpMarkings(tail);
         checkInt(jumpmark::jumpTarget(&tail, 0), 3, "jumpTarget(SIF 在末尾)= lines.size()");
+        checkWellFormed(tail, "SIF 在末尾");
     }
 
     // ---- 3) SELECTCASE / CASE / CASEELSE / ENDSELECT ----
@@ -135,12 +157,17 @@ int main(int argc, char* argv[]) {
         checkInt(jumpmark::jumpTarget(&d, 1), 6, "jumpTarget(CASE) = ENDSELECT+1");
         checkInt(jumpmark::jumpTarget(&d, 3), 6, "jumpTarget(CASEELSE) = ENDSELECT+1");
         checkInt(jumpmark::jumpTarget(&d, 0), 6, "jumpTarget(SELECTCASE) = ENDSELECT+1");
-        checkInt(d.jumpToEnd.value(0, -1), 5, "lines.jumpToEnd[SELECTCASE] = ENDSELECT 行");
+        // 旧 jumpToEnd[SELECTCASE] = ENDSELECT 行：现在由 jumpTo-1 反推出同一行，
+        // 并核对那一行确实是 ENDSELECT（副本去掉后必须挡住「差一行」的错误）
+        checkInt(rebuild::jumpToEnd(d).value(0, -1), 5, "jumpToEnd(SELECTCASE) <- jumpTo-1");
+        check(d.lines[5].isInstruction() && d.lines[5].functionName == "ENDSELECT",
+              "jumpTo-1 落点就是 ENDSELECT 行");
         check(d.lines[1].jumpTo == 6 && d.lines[3].jumpTo == 6 && d.lines[0].jumpTo == 6,
               "lines[i].jumpTo 与 jumpTo 表同步（CASE/CASEELSE/SELECTCASE = 6）");
+        checkWellFormed(d, "SELECTCASE");
     }
 
-    // ---- 4) 四种循环：loopEndLines / jumpToEnd / 回边 ----
+    // ---- 4) 四种循环：loopEndLines（运行期读）/ jumpToEnd（重建）/ 回边 ----
     {
         qDebug() << "\n[4] REPEAT/REND、WHILE/WEND、FOR/NEXT、DO/LOOP";
         struct LoopCase { const char* start; const char* end; };
@@ -155,9 +182,12 @@ int main(int argc, char* argv[]) {
                                     .arg(QString::fromLatin1(c.start),
                                          QString::fromLatin1(c.end));
             checkInt(d.loopEndLines.value(0, -1), 2, tag + " loopEndLines[起点]");
-            checkInt(d.jumpToEnd.value(0, -1), 2, tag + " jumpToEnd[起点]");
+            checkInt(rebuild::jumpToEnd(d).value(0, -1), 2, tag + " jumpToEnd[起点] <- 回边");
             checkInt(jumpmark::jumpTarget(&d, 2), 0, tag + " 回边 jumpTarget(终点)");
             checkInt(d.lines[2].jumpTo, 0, tag + " lines[终点].jumpTo");
+            check(d.lines[2].isInstruction() && rebuild::isLoopCloserName(d.lines[2].functionName),
+                  tag + " jumpTo 目标行就是那个收尾指令");
+            checkWellFormed(d, tag);
         }
     }
 
@@ -192,14 +222,16 @@ int main(int argc, char* argv[]) {
         qDebug() << "\n[7] FunctionLabel 清空配对栈";
         ScriptData ifCase = makeData({"IF", "@F", "ENDIF"});
         jumpmark::buildJumpMarkings(ifCase);
-        check(ifCase.endifLines.isEmpty() && ifCase.jumpTo.isEmpty()
+        check(rebuild::endifLines(ifCase).isEmpty() && ifCase.jumpTo.isEmpty()
                   && ifCase.ifBranches.isEmpty(),
               "IF 跨过 @label 不再与 ENDIF 配对");
+        checkWellFormed(ifCase, "IF 跨 @label");
 
         ScriptData loopCase = makeData({"REPEAT", "@F", "REND"});
         jumpmark::buildJumpMarkings(loopCase);
-        check(loopCase.loopEndLines.isEmpty() && loopCase.jumpToEnd.isEmpty(),
+        check(loopCase.loopEndLines.isEmpty() && rebuild::jumpToEnd(loopCase).isEmpty(),
               "REPEAT 跨过 @label 不再与 REND 配对");
+        checkWellFormed(loopCase, "REPEAT 跨 @label");
 
         ScriptData selCase = makeData({"SELECTCASE", "@F", "ENDSELECT"});
         jumpmark::buildJumpMarkings(selCase);
@@ -216,7 +248,7 @@ int main(int argc, char* argv[]) {
               "TRYCALLLIST 跨过 @label 不再与 ENDFUNC 配对");
     }
 
-    // ---- 8) 幂等：连续 build 两次，10 张表逐表相等 ----
+    // ---- 8) 幂等：连续 build 两次，7 张表逐表相等（外加 3 张重建表） ----
     {
         qDebug() << "\n[8] 幂等（重复构建不叠加）";
         ScriptData d = makeData({"IF", "<null>", "ELSE", "SIF", "NOP", "ENDIF",
@@ -229,16 +261,17 @@ int main(int argc, char* argv[]) {
         jumpmark::buildJumpMarkings(d);
         const ScriptData once = d;
         jumpmark::buildJumpMarkings(d);
-        check(d.endifLines == once.endifLines, "endifLines 两次构建相同");
-        check(d.elseLines == once.elseLines, "elseLines 两次构建相同");
+        check(rebuild::endifLines(d) == rebuild::endifLines(once), "endifLines 两次构建相同（重建）");
+        check(rebuild::elseLines(d) == rebuild::elseLines(once), "elseLines 两次构建相同（重建）");
         check(d.loopEndLines == once.loopEndLines, "loopEndLines 两次构建相同");
         check(d.jumpTo == once.jumpTo, "jumpTo 两次构建相同");
-        check(d.jumpToEnd == once.jumpToEnd, "jumpToEnd 两次构建相同");
+        check(rebuild::jumpToEnd(d) == rebuild::jumpToEnd(once), "jumpToEnd 两次构建相同（重建）");
         check(d.ifBranches == once.ifBranches, "ifBranches 两次构建相同");
         check(d.catchLines == once.catchLines, "catchLines 两次构建相同");
         check(d.endCatchLines == once.endCatchLines, "endCatchLines 两次构建相同");
         check(d.endFuncLines == once.endFuncLines, "endFuncLines 两次构建相同");
         check(d.funcEntries == once.funcEntries, "funcEntries 两次构建相同");
+        checkWellFormed(d, "幂等语料");
     }
 
     // ---- 9) nullptr：读侧全部 nullptr 安全 ----

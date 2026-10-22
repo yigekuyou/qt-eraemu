@@ -33,7 +33,7 @@
 //     lines[i].lineIndex / nextLine / jumpTo；
 //   * 读侧 6 个自由函数(const ScriptData*) —— 只读，nullptr 安全。
 //
-// 于是「怎么配对」是**数据**问题（ScriptData 里的 10 张行号索引表 +
+// 于是「怎么配对」是**数据**问题（ScriptData 里的 7 张行号索引表 +
 // structureIssues），「怎么查」就是 QHash::value；两者都不需要 EraParseTable
 // 的任何成员状态。所有行号都是**逻辑行下标**（0 起），与 C# 的指针式
 // JumpTo/NextLine 等价。
@@ -45,7 +45,7 @@
 // ---------------------------------------------------------------------------
 namespace jumpmark {
 
-// 构建：清空 10 张表与 structureIssues 后按行重建（含 lines[i].lineIndex /
+// 构建：清空 7 张表与 structureIssues 后按行重建（含 lines[i].lineIndex /
 // nextLine 的显式赋值）。幂等：重复调用结果相同（先全部 clear）。
 void buildJumpMarkings(ScriptData& data);
 

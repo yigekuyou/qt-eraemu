@@ -41,6 +41,9 @@
 #include "ast/parse_diagnostic.h"
 #include "era_parse_table.h"   // ScriptData / ScriptView
 #include "jump_markings.h"
+// 删掉的三张整表副本（endifLines / elseLines / jumpToEnd）的恢复口径：
+// 全部从运行期真正在用的 jumpTo / ifBranches 派生。
+#include "jump_markings_rebuild.h"
 #include "parse_checks.h"
 #include "position_state.h"
 
@@ -82,6 +85,21 @@ static ScriptData makeData(const QStringList& names) {
     return d;
 }
 
+// 第 3 项护栏（每个夹具都跑）：遍历**全部行**，凡 lines[i].jumpTo >= 0，
+// 目标行必须存在（<= lines.size()）且属于同一脚本；并核对 jumpTo 表与行字段
+// 仍是同一份事实 —— 删副本时若把钳位/越界那一侧一起改了，这里先红。
+static void checkWellFormed(const ScriptData& d, const QString& tag) {
+    QStringList bad;
+    const int nBad = rebuild::countBadJumpTargets(d, &bad);
+    check(nBad == 0, QString("%1：jumpTo >= 0 的行，目标行存在且属于同一脚本（遍历 %2 行）")
+                         .arg(tag).arg(d.lines.size()));
+    for (const QString& s : bad) qDebug().noquote() << "       " << s;
+    QStringList drift;
+    const int nDrift = rebuild::countJumpTableDrift(d, &drift);
+    check(nDrift == 0, tag + "：jumpTo 表与 lines[i].jumpTo 逐项相同");
+    for (const QString& s : drift) qDebug().noquote() << "       " << s;
+}
+
 static ParseDiagnostics structureDiags(const ScriptData& d) {
     parsecheck::ParseIrView view;   // 这些夹具不含 RETURNF，不需要函数表
     ParseDiagnostics diags;
@@ -93,6 +111,7 @@ static ParseDiagnostics structureDiags(const ScriptData& d) {
 static ScriptData build(const QStringList& names, ParseDiagnostics* out = nullptr) {
     ScriptData d = makeData(names);
     jumpmark::buildJumpMarkings(d);
+    checkWellFormed(d, names.join(QLatin1Char(' ')));
     if (!out) return d;
     *out = structureDiags(d);
     return d;
@@ -168,7 +187,7 @@ int main(int argc, char* argv[]) {
         // 缺 ENDIF：标记区什么都不产出；P 在函数末尾报在 IF 行。
         ParseDiagnostics p;
         ScriptData d = build({"IF", "NOP"}, &p);
-        check(d.ifBranches.isEmpty() && d.jumpTo.isEmpty() && d.endifLines.isEmpty(),
+        check(d.ifBranches.isEmpty() && d.jumpTo.isEmpty() && rebuild::endifLines(d).isEmpty(),
               "IF 缺 ENDIF：ifBranches/jumpTo/endifLines 全空（静默丢弃）");
         checkInt(jumpmark::jumpTarget(&d, 0), -1, "IF 缺 ENDIF：jumpTarget(IF) = -1");
         expectDiags(p, {{1, "IF に対応する ENDIF が見つかりません"}}, "IF 缺 ENDIF");
@@ -189,7 +208,7 @@ int main(int argc, char* argv[]) {
         // 成为第一个 ELSE 的下一分支。
         d = build({"IF", "NOP", "ELSE", "NOP", "ELSE", "NOP", "ENDIF"}, &p);
         checkList(d.ifBranches.value(0), {2, 4}, "ELSE 重复：ifBranches[IF] = [ELSE1, ELSE2]");
-        checkInt(d.elseLines.value(2, -1), 4, "ELSE 重复：elseLines[ELSE1] = ELSE2");
+        checkInt(rebuild::elseLines(d).value(2, -1), 4, "ELSE 重复：elseLines[ELSE1] = ELSE2（ifBranches 链）");
         checkInt(jumpmark::jumpTarget(&d, 2), 7, "ELSE 重复：jumpTarget(ELSE1) = ENDIF+1");
         checkInt(jumpmark::jumpTarget(&d, 4), 7, "ELSE 重复：jumpTarget(ELSE2) = ENDIF+1");
         expectDiags(p, {}, "ELSE 重复（两实现都不报）");
@@ -259,7 +278,8 @@ int main(int argc, char* argv[]) {
         for (const One& c : cases) {
             ParseDiagnostics p;
             ScriptData d = build(c.lines, &p);
-            check(d.loopEndLines.isEmpty() && d.jumpToEnd.isEmpty() && d.jumpTo.isEmpty(),
+            check(d.loopEndLines.isEmpty() && rebuild::jumpToEnd(d).isEmpty()
+                      && d.jumpTo.isEmpty(),
                   QString::fromUtf8(c.tag) + QStringLiteral("：标记区全空（静默丢弃）"));
             expectDiags(p, {{c.atOpener ? 1 : 2, c.message}}, QString::fromUtf8(c.tag));
         }
@@ -361,7 +381,8 @@ int main(int argc, char* argv[]) {
         ParseDiagnostics p;
         // 跨 @label：标记区清栈、P 在标签处收尾报未闭合。
         ScriptData d = build({"IF", "@F", "ENDIF"}, &p);
-        check(d.endifLines.isEmpty() && d.jumpTo.isEmpty() && d.ifBranches.isEmpty(),
+        check(rebuild::endifLines(d).isEmpty() && d.jumpTo.isEmpty()
+                  && d.ifBranches.isEmpty(),
               "IF 跨 @label：不配对");
         expectDiags(p, {{1, "IF に対応する ENDIF が見つかりません"},
                         {3, "対応するIFの無いENDIF文です"}}, "IF 跨 @label");

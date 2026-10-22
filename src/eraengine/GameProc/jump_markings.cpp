@@ -107,7 +107,6 @@ struct Open {
     bool    isCatch = false;      // TryCatch 族：条目当前角色（false = TRYC*，true = CATCH）
     bool    tryLinked = false;    // TRYC* 已配到 CATCH（运行期已消费）
     bool    endLinked = false;    // CATCH 已配到 ENDCATCH（运行期已消费）
-    int     lastBranch = -1;      // IF：上一个 ELSEIF/ELSE 行
     QList<int> branches;          // IF：ELSEIF/ELSE 行；SELECTCASE：CASE/CASEELSE 行
     QList<int> funcLines;         // TRY*LIST：体内 FUNC 条目行
 };
@@ -116,7 +115,7 @@ struct Open {
 
 // ---------------------------------------------------------------------------
 // 配对语法的**唯一**实现：一趟扫行，产出
-//   ① 10 张跳转表 + lines[i].lineIndex / nextLine / jumpTo（运行期）；
+//   ① 7 张跳转表 + lines[i].lineIndex / nextLine / jumpTo（运行期）；
 //   ② ScriptData::structureIssues（装载期诊断）。
 //
 // 两个投影的判定差异（逐条见结构体 Open 的注释）：
@@ -127,11 +126,8 @@ struct Open {
 //   * 静态检查只在栈顶命中时弹出，运行期按族顶消费。
 // ---------------------------------------------------------------------------
 void buildJumpMarkings(ScriptData& data) {
-    data.endifLines.clear();
-    data.elseLines.clear();
     data.loopEndLines.clear();
     data.jumpTo.clear();
-    data.jumpToEnd.clear();
     data.ifBranches.clear();
     data.catchLines.clear();
     data.endCatchLines.clear();
@@ -372,28 +368,22 @@ void buildJumpMarkings(ScriptData& data) {
         } else if (name == QLatin1String("SIF")) {
             const int after = sifAfter;
             data.jumpTo[i] = after;
-            data.elseLines[i] = after;
             ll.jumpTo = after;
         } else if (name == QLatin1String("ELSEIF") || name == QLatin1String("ELSE")) {
             const int j = familyTop(Family::If);
             if (j >= 0) {
                 Open& cur = stack[j];
-                const int prev = (cur.lastBranch >= 0) ? cur.lastBranch : cur.line;
-                data.elseLines[prev] = i;
                 cur.branches.append(i);
-                cur.lastBranch = i;
             }
         } else if (name == QLatin1String("ENDIF")) {
             const int j = familyTop(Family::If);
             if (j >= 0) {
                 Open& cur = stack[j];
                 const int after = i + 1;
-                data.endifLines[cur.line] = after;
                 data.jumpTo[cur.line] = after;
                 data.lines[cur.line].jumpTo = after;
                 data.ifBranches[cur.line] = cur.branches;
                 for (int b : cur.branches) {
-                    data.endifLines[b] = after;
                     data.jumpTo[b] = after;   // 顺序落入分支 -> 跳过到 ENDIF 之后
                     data.lines[b].jumpTo = after;
                 }
@@ -415,7 +405,6 @@ void buildJumpMarkings(ScriptData& data) {
                     data.lines[c].jumpTo = after;
                 }
                 data.jumpTo[cur.line] = after;
-                data.jumpToEnd[cur.line] = i;
                 data.lines[cur.line].jumpTo = after;
                 data.ifBranches[cur.line] = cur.branches;
                 jIdx = j;
@@ -434,7 +423,6 @@ void buildJumpMarkings(ScriptData& data) {
                                                           : QStringLiteral("FOR");
                 if (top == expected) {
                     data.loopEndLines[stack.at(j).line] = i;
-                    data.jumpToEnd[stack.at(j).line] = i;
                     data.jumpTo[i] = stack.at(j).line;
                     ll.jumpTo = stack.at(j).line;
                     jIdx = j;

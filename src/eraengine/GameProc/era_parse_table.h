@@ -165,13 +165,30 @@ struct LabelRef {
 };
 Q_DECLARE_METATYPE(LabelRef)
 
-// 标签索引的**唯一全序**：脚本名 QString::compare 升序，同脚本内行号升序。
-// 与 C# FunctionLabelLine.CompareTo（FileIndex -> 行号）同形，但这里用脚本名
-// 而不是装载序号 —— 装载是并行的，装载序本身就不确定。
-// 声明一次、两处使用：finalizeLabelIndex（固化）与 labels()（装载期惰性排）。
+// 「(脚本名, 行号)」的全序 —— **唯一**的裁决点。
+// 脚本名 QString::compare 升序，同脚本内行号升序。
+// C# 的原序是 FunctionLabelLine.CompareTo = (FileIndex, LineNo)，即「装载得早的
+// 那份赢」（first-wins）。本移植的装载是并行的，装载序本身不确定，所以用
+// 脚本名代替 FileIndex —— 这是同一语义的唯一确定化：排序规则只有本函数一处。
+// 三个投影共用它：
+//   * labelRefLess         —— 标签索引（finalizeLabelIndex / labels）
+//   * functionDeclLess     —— 用户函数表（EraParseTable::refreshUserFunction）
+//   * position::firstLabel —— 取排序后的第一条（索引已固化）
+inline bool scriptLineLess(const QString& aScript, int aLine,
+                           const QString& bScript, int bLine) {
+    if (aScript != bScript) return QString::compare(aScript, bScript) < 0;
+    return aLine < bLine;
+}
+
 inline bool labelRefLess(const LabelRef& a, const LabelRef& b) {
-    if (a.script != b.script) return QString::compare(a.script, b.script) < 0;
-    return a.line < b.line;
+    return scriptLineLess(a.script, a.line, b.script, b.line);
+}
+
+// 用户函数声明与标签同序：同一份 (脚本名, @label 行号)。
+// 表里每个 (脚本, 函数名) 只保留行号最小的那一份，跨脚本重名时脚本名最小者赢
+// —— 与 m_labelIndex 的 @ 标签第一条、position::firstLabel 完全同源。
+inline bool functionDeclLess(const UserFunctionInfo& a, const UserFunctionInfo& b) {
+    return scriptLineLess(a.script, a.labelLine, b.script, b.labelLine);
 }
 
 // ---------------------------------------------------------------------------
@@ -633,6 +650,16 @@ private:
     // 载荷全部取自转移**之后**的状态（旧实现 emit 时读的也是同一批值）。
     void emitEffects(const PositionEffects& fx, const QString& jumpLabel = QString());
 
+    // ---- 用户函数表（m_functions）的装载期维护 --------------------------
+    // 唯一写入口是 loadScript：先按脚本名精确删掉旧贡献（返回被删掉的函数名），
+    // 扫描新行时重建本脚本的贡献，再对「旧 ∪ 新」的每个名字重算获胜者。
+    // 查询端（userFunction / userFunctions / functionExistsKind / 收尾 pass）
+    // 只读 m_functions，不在这里做任何按行号/按名字的再解析。
+    QSet<QString> dropScriptFunctionContribution(const QString& scriptName);
+    void refreshUserFunction(const QString& upperName);
+    // 收尾步骤 1 回填类型后，把获胜声明同步回按脚本的贡献副本（见 .cpp）。
+    void syncFunctionContributionsFromWinners();
+
     // 装载阶段（唯一真相；之前的 m_finalized 只是它的一个派生问题）。
     LoadPhase m_phase = LoadPhase::Empty;
     // 未被调用的函数告警开关（对齐 C# Config.FunctionNotCalledWarning；默认 IGNORE）
@@ -643,7 +670,16 @@ private:
     // 私有名表安装（installPrivateScopes）的前置条件。
     bool m_declarationsResolved = false;
     QHash<QString, ScriptData> m_scripts;
+    // 用户函数的**当前投影**（大写函数名 -> 获胜声明）：查询端唯一读的口径。
+    // 内容完全由 m_functionDeclsByScript 派生，见 refreshUserFunction()。
     QHash<QString, UserFunctionInfo> m_functions;
+    // 用户函数的**装载期贡献**：脚本 -> (大写函数名 -> 该脚本内第一份声明)。
+    // 同名脚本被替换时整份贡献按脚本名精确删除（不是 append-only）；同一脚本内
+    // 同名多段只留行号最小的一份（与标签索引 first-wins 同）。
+    QHash<QString, QHash<QString, UserFunctionInfo>> m_functionDeclsByScript;
+    // 反查：大写函数名 -> 贡献它的脚本集合。跨脚本重名时用它 O(重名脚本数)
+    // 选出获胜者，不必为了一个名字扫描全部脚本。
+    QHash<QString, QSet<QString>> m_functionScriptsByName;
     mutable QHash<QString, QSet<QString>> m_paramNamesBySegment;   // 段身份文本 -> 形参名集合（clear 时失效）
     // 每函数的私有初值调用计划（loadScript/clear 时失效：新脚本可能带来新私有声明）
     QHash<QString, QList<PrivateDefaultEntry>> m_privateDefaultPlans;

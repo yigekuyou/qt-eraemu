@@ -140,6 +140,53 @@ static bool textsConsistent(const ParseDiagnostics& d) {
 }
 
 // ---------------------------------------------------------------------------
+// 函数表取证（护栏测试用）
+//
+// 「函数名 -> 定义/形参」在运行期只有一份可查的事实：EraParseTable 的
+// m_functions（userFunction / functionExistsKind / userFunctions 同一个口径）。
+// 这里把一条声明的**全部字段**序列化，既用于断言具体值，也用于「重跑收尾
+// 逐字段相同」的幂等比对。形参名表按段身份查（paramNamesOf 的键）。
+// ---------------------------------------------------------------------------
+static QSet<QString> paramNamesAt(const EraParseTable& table, const QString& script, int labelLine) {
+    const QSet<QString>* names = table.paramNamesOf(eravar::segmentKeyText(script, labelLine));
+    return names ? *names : QSet<QString>();
+}
+
+static QString serializeFunction(const EraParseTable& table, const QString& name) {
+    const UserFunctionInfo* fn = table.userFunction(name);
+    if (!fn) return QStringLiteral("<null>");
+    QStringList fields;
+    fields << QStringLiteral("name=%1").arg(fn->name)
+           << QStringLiteral("original=%1").arg(fn->originalName)
+           << QStringLiteral("script=%1").arg(fn->script)
+           << QStringLiteral("labelLine=%1").arg(fn->labelLine)
+           << QStringLiteral("endLine=%1").arg(fn->endLine)
+           << QStringLiteral("maxArgIndex=%1").arg(fn->maxArgIndex)
+           << QStringLiteral("maxArgsIndex=%1").arg(fn->maxArgsIndex)
+           << QStringLiteral("isMethod=%1").arg(int(fn->isMethod))
+           << QStringLiteral("returnType=%1").arg(int(fn->returnType))
+           << QStringLiteral("isEvent=%1").arg(int(fn->isEvent))
+           << QStringLiteral("isSystem=%1").arg(int(fn->isSystem))
+           << QStringLiteral("isSingle=%1").arg(int(fn->isSingle))
+           << QStringLiteral("isPri=%1").arg(int(fn->isPri))
+           << QStringLiteral("isLater=%1").arg(int(fn->isLater))
+           << QStringLiteral("isOnly=%1").arg(int(fn->isOnly))
+           << QStringLiteral("localSize=%1").arg(fn->localSize)
+           << QStringLiteral("localsSize=%1").arg(fn->localsSize)
+           << QStringLiteral("paramCount=%1").arg(fn->params.size());
+    for (int i = 0; i < fn->params.size(); ++i) {
+        const UserParamDecl& p = fn->params.at(i);
+        fields << QStringLiteral("p%1[name=%2,target=%3,index=%4,var=%5,fixed=%6,type=%7,"
+                                 "typeKnown=%8,ref=%9,hasDefault=%10,defInt=%11,defStr=%12]")
+                      .arg(i).arg(p.name).arg(int(p.target)).arg(p.index).arg(p.varName)
+                      .arg(p.fixedIndex).arg(int(p.type)).arg(int(p.typeKnown))
+                      .arg(int(p.isReference)).arg(int(p.hasDefault)).arg(p.defaultInt)
+                      .arg(p.defaultStr);
+    }
+    return fields.join(QLatin1Char('|'));
+}
+
+// ---------------------------------------------------------------------------
 // 收尾步骤 3（finalizeValidation）的夹具
 //
 // finalizeValidation 收一个 loadpass::LoadContext —— 那是一个**视图**（引用/
@@ -864,6 +911,158 @@ int main(int argc, char* argv[]) {
                   .arg(declB ? declB->lengths.value(0) : -1));
         // 广域常量（scope 0）不受影响：文件级声明 + 维数引用。
         // （同一夹具里没有广域常量；用 provider 的直接断言见 test_statements 17。）
+    }
+
+    // ------------------------------------------------------------------
+    // 9) 同名脚本替换后的「函数表」等价性
+    //
+    // 行事实的唯一权威是 ScriptData::lines。函数名 -> 定义/形参 曾经是
+    // **first-wins append-only** 的另一份副本：同名脚本被替换、同名函数跨脚本
+    // 重定义、函数随脚本消失这三条路径上它会继续答旧版本（旧签名/旧形参/
+    // 旧的存在性）。现在 m_functions 只是「按脚本贡献」的投影，贡献在
+    // loadScript 时按脚本名精确替换；并列裁决与 m_labelIndex / firstLabel
+    // 共用 scriptLineLess（脚本名升序 -> 行号升序）。
+    //
+    // 三条路径的「旧值 -> 目标值」（探针实测）：
+    //   a) 替换前 @F(ARG)  + #FUNCTION  -> 替换后 @F(ARG, ARGS) + #FUNCTIONS
+    //      userFunction(F).params      1 -> 2
+    //      functionExistsKind(F)       2 -> 3
+    //      paramNamesOf(A.ERB@0)     {ARG} -> {ARG, ARGS}
+    //   b) B.ERB 先装 @G(ARG)，A.ERB 后装 @G(ARG, ARGS)
+    //      userFunction(G).script   B.ERB（装载序先到先得）-> A.ERB（与索引首条同序）
+    //   c) A.ERB 替换成不再定义 @H 的版本
+    //      userFunction(H)          <旧声明> -> nullptr
+    //      functionExistsKind(H)    1 -> 0
+    //      paramNamesOf(A.ERB@0)  {ARG} -> nullptr（旧段身份键删除，不是空集残留）
+    // ------------------------------------------------------------------
+    qDebug() << "\n9) 同名脚本替换 / 跨脚本同名 / 函数随脚本消失（函数表等价性）";
+    {
+        // ---- a) 同名脚本替换 ----
+        ProcessState fnState;
+        VariableStorage fnStorage;
+        EraParseTable aTable(&fnState);
+        aTable.setVariableStorage(&fnStorage);
+        const QStringList fOld = {QStringLiteral("@F(ARG)"), QStringLiteral("#FUNCTION"),
+                                  QStringLiteral("RETURN 1")};
+        const QStringList fNew = {QStringLiteral("@F(ARG, ARGS)"), QStringLiteral("#FUNCTIONS"),
+                                  QStringLiteral("RETURN \"\"")};
+        check(aTable.loadScript(QStringLiteral("A.ERB"),
+                                buildLinesAs(aTable, QStringLiteral("A.ERB"), fOld)),
+              "(a) 旧版 A.ERB 装载成功");
+        aTable.markLoadComplete();
+        check(aTable.userFunction(QStringLiteral("F"))
+                  && aTable.userFunction(QStringLiteral("F"))->params.size() == 1
+                  && aTable.functionExistsKind(QStringLiteral("F"), true) == 2
+                  && paramNamesAt(aTable, QStringLiteral("A.ERB"), 0)
+                         == QSet<QString>{QStringLiteral("ARG")},
+              "(a) 替换前：@F(ARG) + #FUNCTION（1 形参 / kind=2）");
+        check(aTable.beginIncrementalLoad(), "(a) 替换前先 beginIncrementalLoad");
+        check(aTable.loadScript(QStringLiteral("A.ERB"),
+                                buildLinesAs(aTable, QStringLiteral("A.ERB"), fNew)),
+              "(a) 新版 A.ERB 装载成功（同名脚本替换）");
+        // 替换后、收尾前：函数表已经只反映新版本（不是等 markLoadComplete 才修）。
+        check(aTable.userFunction(QStringLiteral("F"))
+                  && aTable.userFunction(QStringLiteral("F"))->params.size() == 2,
+              "(a) 替换后立即：userFunction(F) 是 2 个形参（旧声明已消失）");
+        check(paramNamesAt(aTable, QStringLiteral("A.ERB"), 0)
+                  == QSet<QString>{QStringLiteral("ARG"), QStringLiteral("ARGS")},
+              "(a) 替换后立即：paramNamesOf(A.ERB@0) == {ARG, ARGS}");
+        aTable.markLoadComplete();
+        check(aTable.userFunction(QStringLiteral("F"))
+                  && aTable.userFunction(QStringLiteral("F"))->isMethod
+                  && aTable.userFunction(QStringLiteral("F"))->returnType == OperandType::Str,
+              "(a) 替换后收尾：签名换成 #FUNCTIONS / Str");
+        check(aTable.functionExistsKind(QStringLiteral("F"), true) == 3,
+              "(a) 替换后收尾：functionExistsKind(F) == 3（#FUNCTIONS）");
+        check(aTable.userFunctions().size() == 1 && aTable.userFunctions().contains(QStringLiteral("F")),
+              "(a) userFunctions() 里同名只有一份");
+
+        // 幂等：替换后重跑装载收尾（第二次是定义好的 no-op），逐字段相同。
+        const QString fOnce = serializeFunction(aTable, QStringLiteral("F"));
+        aTable.markLoadComplete();
+        check(serializeFunction(aTable, QStringLiteral("F")) == fOnce,
+              "(a) 收尾再跑一次：userFunction(F) 逐字段相同（幂等）");
+        check(paramNamesAt(aTable, QStringLiteral("A.ERB"), 0)
+                  == QSet<QString>{QStringLiteral("ARG"), QStringLiteral("ARGS")},
+              "(a) 收尾再跑一次：paramNamesOf(A.ERB@0) 相同（幂等）");
+
+        // ---- b) 两个不同脚本定义同名 @G ----
+        // 装载顺序故意「B 先、A 后」：若还按装载序 append，答案会是 B.ERB。
+        ProcessState crossState;
+        VariableStorage crossStorage;
+        EraParseTable crossTable(&crossState);
+        crossTable.setVariableStorage(&crossStorage);
+        check(crossTable.loadScript(QStringLiteral("B.ERB"),
+                                    buildLinesAs(crossTable, QStringLiteral("B.ERB"),
+                                                 {QStringLiteral("@G(ARG)"),
+                                                  QStringLiteral("#FUNCTION"),
+                                                  QStringLiteral("RETURN 1")})),
+              "(b) B.ERB 先装载（@G 1 形参）");
+        check(crossTable.loadScript(QStringLiteral("A.ERB"),
+                                    buildLinesAs(crossTable, QStringLiteral("A.ERB"),
+                                                 {QStringLiteral("@G(ARG, ARGS)"),
+                                                  QStringLiteral("#FUNCTION"),
+                                                  QStringLiteral("RETURN 1")})),
+              "(b) A.ERB 后装载（@G 2 形参）");
+        crossTable.markLoadComplete();
+        const UserFunctionInfo* g = crossTable.userFunction(QStringLiteral("G"));
+        check(g && g->script == QStringLiteral("A.ERB") && g->params.size() == 2,
+              QString("(b) userFunction(G) -> A.ERB/2 形参（实际 %1/%2）")
+                  .arg(g ? g->script : QStringLiteral("<null>"))
+                  .arg(g ? g->params.size() : -1));
+        const auto gIndex = crossTable.labelIndex().value(QStringLiteral("G"));
+        check(!gIndex.isEmpty() && g && gIndex.first().script == QStringLiteral("A.ERB")
+                  && gIndex.first().line == g->labelLine,
+              "(b) 与 labelIndex(G) 首条同一口径（脚本名升序 -> 行号升序）");
+        check(crossTable.functionExistsKind(QStringLiteral("G"), true) == 2,
+              "(b) functionExistsKind(G) == 2（来自获胜的那一份声明）");
+        // 再把 A.ERB 换成不再定义 @G 的版本：B.ERB 的那一份接任（唯一且确定）。
+        check(crossTable.beginIncrementalLoad(), "(b) 替换 A.ERB 前 beginIncrementalLoad");
+        check(crossTable.loadScript(QStringLiteral("A.ERB"),
+                                    buildLinesAs(crossTable, QStringLiteral("A.ERB"),
+                                                 {QStringLiteral("PRINT 1"),
+                                                  QStringLiteral("@OTHER"),
+                                                  QStringLiteral("RETURN")})),
+              "(b) A.ERB 换成不再定义 @G 的版本");
+        const UserFunctionInfo* gFallback = crossTable.userFunction(QStringLiteral("G"));
+        check(gFallback && gFallback->script == QStringLiteral("B.ERB")
+                  && gFallback->params.size() == 1,
+              QString("(b) B.ERB 的 @G 接任（实际 %1/%2 形参）")
+                  .arg(gFallback ? gFallback->script : QStringLiteral("<null>"))
+                  .arg(gFallback ? gFallback->params.size() : -1));
+
+        // ---- c) @H 随脚本替换消失 ----
+        ProcessState goneState;
+        VariableStorage goneStorage;
+        EraParseTable goneTable(&goneState);
+        goneTable.setVariableStorage(&goneStorage);
+        check(goneTable.loadScript(QStringLiteral("A.ERB"),
+                                   buildLinesAs(goneTable, QStringLiteral("A.ERB"),
+                                                {QStringLiteral("@H(ARG)"),
+                                                 QStringLiteral("RETURN")})),
+              "(c) 旧版 A.ERB 定义 @H");
+        goneTable.markLoadComplete();
+        check(goneTable.userFunction(QStringLiteral("H")) != nullptr
+                  && goneTable.functionExistsKind(QStringLiteral("H"), true) == 1,
+              "(c) 替换前：userFunction(H) 存在 / kind=1");
+        check(goneTable.beginIncrementalLoad(), "(c) 替换前先 beginIncrementalLoad");
+        // 新版本在**别的行**定义 @OTHER：旧的段身份键（A.ERB, 0）没有任何
+        // 新条目来覆盖它 —— 只有按脚本精确删除才能让它彻底消失。
+        check(goneTable.loadScript(QStringLiteral("A.ERB"),
+                                   buildLinesAs(goneTable, QStringLiteral("A.ERB"),
+                                                {QStringLiteral("PRINT 1"),
+                                                 QStringLiteral("@OTHER"),
+                                                 QStringLiteral("RETURN")})),
+              "(c) 新版 A.ERB 不再定义 @H");
+        check(goneTable.userFunction(QStringLiteral("H")) == nullptr,
+              "(c) 替换后：userFunction(H) == nullptr");
+        check(goneTable.functionExistsKind(QStringLiteral("H"), true) == 0,
+              "(c) 替换后：functionExistsKind(H) == 0");
+        check(goneTable.paramNamesOf(eravar::segmentKeyText(QStringLiteral("A.ERB"), 0)) == nullptr,
+              "(c) 替换后：paramNamesOf(A.ERB@0) == nullptr（旧段身份键已删除）");
+        check(goneTable.userFunction(QStringLiteral("OTHER")) != nullptr
+                  && goneTable.userFunction(QStringLiteral("OTHER"))->labelLine == 1,
+              "(c) 新版本的 @OTHER 正常登记（行 1）");
     }
 
     qDebug() << "\n================================";

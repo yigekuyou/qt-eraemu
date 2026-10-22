@@ -342,6 +342,8 @@ void EraParseTable::clear() {
     // QUIT 关闭游戏：释放全部解析期数据（AST/标记区/函数表/标签/告警/变量声明）
     m_scripts.clear();
     m_functions.clear();
+    m_functionDeclsByScript.clear();
+    m_functionScriptsByName.clear();
     m_labelIndex.clear();
     m_privateDefaultPlans.clear();   // 私有初值调用计划随函数表一起作废
     m_paramNamesBySegment.clear();  // 形参名集合随函数表一起作废
@@ -367,6 +369,77 @@ void EraParseTable::clear() {
     emit callStackChanged(0);
 }
 
+// ---------------------------------------------------------------------------
+// 用户函数表：装载期的唯一维护点（查询端只读 m_functions）
+//
+// m_functionDeclsByScript = 每个脚本「当前 AST」贡献的函数声明；
+// m_functions            = 它的投影，每个名字取全序第一条。
+// 全序 = scriptLineLess（与 m_labelIndex / position::firstLabel 同一裁决）：
+//   脚本名 QString::compare 升序 -> 同脚本内行号升序。
+// C# 的原始规则是 (FileIndex, LineNo) —— FileIndex 是装载序号，first-wins。
+// 本移植并行装载、装载序不确定，所以用脚本名把同一语义确定化；这是全表唯一的
+// 并列裁决，不存在「另一处按装载顺序先到先得」。
+// ---------------------------------------------------------------------------
+
+// 删掉某个脚本的全部函数声明贡献，返回被删的函数名（大写）。
+// 只由 loadScript 的同名替换分支调用 —— 旧版本的行事实已经不在了，
+// 这份贡献也必须一起消失（函数签名 / 形参 / functionExistsKind 同源）。
+QSet<QString> EraParseTable::dropScriptFunctionContribution(const QString& scriptName)
+{
+    QSet<QString> names;
+    auto scriptIt = m_functionDeclsByScript.find(scriptName);
+    if (scriptIt == m_functionDeclsByScript.end()) return names;
+    for (auto it = scriptIt->cbegin(); it != scriptIt->cend(); ++it)
+        names.insert(it.key());
+    m_functionDeclsByScript.erase(scriptIt);
+    for (const QString& name : names) {
+        auto revIt = m_functionScriptsByName.find(name);
+        if (revIt == m_functionScriptsByName.end()) continue;
+        revIt->remove(scriptName);
+        if (revIt->isEmpty()) m_functionScriptsByName.erase(revIt);
+    }
+    return names;
+}
+
+// 重算一个函数名的获胜声明（只在装载期调用，不在查询路径上）。
+void EraParseTable::refreshUserFunction(const QString& upperName)
+{
+    const auto revIt = m_functionScriptsByName.constFind(upperName);
+    if (revIt == m_functionScriptsByName.constEnd() || revIt->isEmpty()) {
+        m_functionScriptsByName.remove(upperName);
+        m_functions.remove(upperName);
+        return;
+    }
+    const UserFunctionInfo* best = nullptr;
+    for (const QString& script : *revIt) {
+        const auto byScript = m_functionDeclsByScript.constFind(script);
+        if (byScript == m_functionDeclsByScript.constEnd()) continue;
+        const auto declIt = byScript->constFind(upperName);
+        if (declIt == byScript->constEnd()) continue;
+        if (!best || functionDeclLess(*declIt, *best)) best = &declIt.value();
+    }
+    if (!best) {
+        m_functions.remove(upperName);
+        return;
+    }
+    m_functions.insert(upperName, *best);
+}
+
+// 收尾步骤 1 的 resolveUserFunctionTypes 回填的是 m_functions（唯一查询口径）。
+// 把回填结果同步回「按脚本贡献」的副本 —— 否则同名脚本替换/删除后，另一脚本
+// 的副本重新成为获胜者时会带着未回填的形参类型（要等下一次收尾才修）。
+void EraParseTable::syncFunctionContributionsFromWinners()
+{
+    for (auto it = m_functions.cbegin(); it != m_functions.cend(); ++it) {
+        auto scriptIt = m_functionDeclsByScript.find(it.value().script);
+        if (scriptIt == m_functionDeclsByScript.end()) continue;
+        auto declIt = scriptIt->find(it.key());
+        if (declIt == scriptIt->end()) continue;
+        if (declIt->labelLine != it.value().labelLine) continue;   // 不同声明，不覆盖
+        *declIt = it.value();
+    }
+}
+
 bool EraParseTable::loadScript(const QString& scriptName, const QList<LogicalLine>& lines,
                               bool isHeaderFile, const QString& path) {
     // 增量装载协议（显式）：Finalized 之后必须先 beginIncrementalLoad()。
@@ -387,6 +460,9 @@ bool EraParseTable::loadScript(const QString& scriptName, const QList<LogicalLin
     // 行号」的唯一来源，必须同步替换：否则旧版本的声明会留在全序里，firstLabel
     // 可能答出一个在当前 ScriptData 里根本不存在的行。初次装载时 m_scripts
     // 不含该名字，这一趟不发生（不引入每脚本一次的全索引扫描）。
+    // 被替换掉的旧版本贡献的函数名（大写）；装载收尾时与本次新贡献的并集
+    // 一起重算 m_functions。
+    QSet<QString> replacedFunctionNames;
     if (m_scripts.contains(scriptName)) {
         // 旧 AST 的行级装载期诊断（Load）随旧行一起作废：它们不是「重跑的产物」，
         // 但引用的行已不存在。身份 = 旧脚本的 path + 旧行里出现过的文件名
@@ -398,6 +474,17 @@ bool EraParseTable::loadScript(const QString& scriptName, const QList<LogicalLin
         for (const LogicalLine& line : old.lines) staleFiles.insert(line.position.filename);
         if (!old.path.isEmpty()) staleFiles.insert(old.path);
         m_diagnostics.removeOriginFiles(DiagOrigin::Load, staleFiles);
+
+        // 形参名表与函数表也必须**只剩新版本的那一份**。行是权威来源，换了就是
+        // 换了：旧段身份键（脚本 + 旧行号）逐个删除 —— 如果新版本把标签挪了行，
+        // 只覆盖同键的 insert 会留下一份永远不该再被查到的旧集合。
+        for (int i = 0; i < old.lines.size(); ++i) {
+            if (old.lines.at(i).kind != LineKind::FunctionLabel) continue;
+            m_paramNamesBySegment.remove(eravar::segmentKeyText(scriptName, i));
+            replacedFunctionNames.insert(old.lines.at(i).labelName.toUpper());
+        }
+        // 函数声明贡献按脚本名整份删除（与上面的标签索引删除同点、同语义）。
+        replacedFunctionNames.unite(dropScriptFunctionContribution(scriptName));
 
         for (auto it = m_labelIndex.begin(); it != m_labelIndex.end();) {
             QList<LabelRef>& list = it.value();
@@ -470,6 +557,9 @@ bool EraParseTable::loadScript(const QString& scriptName, const QList<LogicalLin
     int currentFunctionLine = -1;   // 段起点（预处理后行序里的 @ 标签下标；文件头 = -1）
     bool afterLabel = false;   // .ERB 中 # 行必须紧跟函数标签（对齐 C# ErbLoader）
     QSet<QString> labelNames;  // 仅用于装载日志的「本脚本标签名个数」，不保留
+    // 本脚本的函数声明贡献（大写名 -> 第一份声明）。装载收尾把整份表按脚本名
+    // 换进 m_functionDeclsByScript —— 替换脚本时旧表随之整份消失。
+    QHash<QString, UserFunctionInfo> scriptFunctions;
 
     for (int i = 0; i < data.lines.size(); ++i) {
         LogicalLine& line = data.lines[i];
@@ -633,21 +723,23 @@ bool EraParseTable::loadScript(const QString& scriptName, const QList<LogicalLin
                     if (lines.at(j).kind == LineKind::FunctionLabel) { decl.endLine = j - 1; break; }
                 }
 
-                // 「变量分词」的形参名集合与段身份同点构建（append-only；
-                // 查找端 paramNamesOf 只读不插 —— 并行装载/收尾趟安全）。
-                // 键 = 段身份文本：与私有域、AST 定型用的是**同一个**身份；
-                // 每个 @ 段登记自己的一份（同名函数的第二段也拿得到形参表，
-                // 与旧「按函数名查一份」的结果一致）。
+                // 「变量分词」的形参名集合与段身份同点构建；查找端 paramNamesOf
+                // 只读不插 —— 并行装载/收尾趟安全。键 = 段身份文本：与私有域、
+                // AST 定型用的是**同一个**身份；每个 @ 段登记自己的一份（同名函数
+                // 的第二段也拿得到形参表）。
                 QSet<QString> paramNames;
                 paramNames.reserve(decl.params.size());
                 for (const UserParamDecl& p : decl.params)
                     paramNames.insert(p.name.toUpper());
                 m_paramNamesBySegment.insert(
                     eravar::segmentKeyText(decl.script, decl.labelLine), std::move(paramNames));
-                // 同名函数重复定义：真实游戏（eraTW 的各个「口上」）普遍存在，
-                // C# 也是 first-wins，故静默忽略后者（不产生告警）。
-                if (!m_functions.contains(decl.name)) {
-                    m_functions.insert(decl.name, decl);
+                // 同一个脚本内重复定义同名函数：真实游戏（eraTW 的各个「口上」）普遍
+                // 存在，C# 也是 first-wins（按 (FileIndex, LineNo) 排序后取第一条），
+                // 所以这里的局部表也留行号最小的一份、静默忽略后者。跨脚本的并列
+                // 在装载点统一重算，裁决谓词与标签索引同为 scriptLineLess —— 见
+                // refreshUserFunction()。
+                if (!scriptFunctions.contains(decl.name)) {
+                    scriptFunctions.insert(decl.name, decl);
                 }
 
                 // 保留全部声明（事件函数的 4 组导航需要；同名多份）
@@ -662,11 +754,24 @@ bool EraParseTable::loadScript(const QString& scriptName, const QList<LogicalLin
         }
     }
 
+    // 用户函数表：本脚本的整份贡献按脚本名换入（替换分支已经把旧贡献删掉），
+    // 再对「旧 ∪ 新」的函数名重算获胜者。m_functions 只是 m_functionDeclsByScript
+    // 的投影，查询端（userFunction / functionExistsKind / 收尾 pass）只读它。
+    QSet<QString> touchedFunctions = replacedFunctionNames;
+    for (auto it = scriptFunctions.cbegin(); it != scriptFunctions.cend(); ++it) {
+        m_functionScriptsByName[it.key()].insert(scriptName);
+        touchedFunctions.insert(it.key());
+    }
+    if (!scriptFunctions.isEmpty())
+        m_functionDeclsByScript.insert(scriptName, scriptFunctions);
+    for (const QString& name : touchedFunctions) refreshUserFunction(name);
+
     m_scripts.insert(scriptName, data);
     m_privateDefaultPlans.clear();   // 新脚本可能带来新的私有声明 -> 计划重建
-    // 注意：m_paramNamesByFunction **不在**这里清 —— 它是 append-only（注册点
-    // 插入、first-wins 同 m_functions），在此清会把本次装载刚注册的函数集合
-    // 一并抹掉（多脚本装载只剩最后一个脚本有集合）。整表清空在 clear() 里做。
+    // 注意：m_paramNamesBySegment 是「段身份 -> 形参名」的装载期表，不是按函数名
+    // 的 append-only 表：本脚本的条目已在扫描时写入，替换脚本时旧段身份键已逐个
+    // 删除（见上方替换分支）。这里不能整表清空 —— 多脚本装载会抹掉别的脚本。
+    // 整表清空只发生在 clear()。
 
     // 标记区：跳转标记 + 控制转移预绑定。
     // 注意构建的是 **m_scripts 里的那一份**（进表的是上面 insert 的拷贝，局部
@@ -1468,6 +1573,8 @@ void EraParseTable::resolveGlobalDeclarations() {
     // 实现已搬到 load_passes.cpp（自由函数，输入是可写的 LoadContext）。
     loadpass::LoadContext ctx = makeLoadContext();
     loadpass::resolveGlobalDeclarations(ctx);
+    // 预登记结算也会跑 resolveUserFunctionTypes：把回填结果同步回贡献副本。
+    syncFunctionContributionsFromWinners();
 }
 
 // 收尾 pass 表：顺序 = 执行顺序（markLoadComplete 只负责按表驱动）。
@@ -1551,6 +1658,9 @@ void EraParseTable::markLoadComplete() {
         // 本次产出整体替换上一次的；跳过时 sink 为空 -> 清空该切片。
         m_diagnostics.replaceOrigin(pass.origin, sink.all());
     }
+    // 步骤 1 回填的用户函数类型（脚本/形参）同步回按脚本的贡献副本：
+    // 下一次同名脚本替换后，另一脚本的声明重新成为获胜者时不会丢掉类型信息。
+    syncFunctionContributionsFromWinners();
     // 诊断定序：装载并行 + QHash 随机化哈希种子会让产生顺序在进程间漂移。
     // 排序只在收尾做一次（运行期不排序），让 dump_warnings/UI/MCP 输出可复现。
     m_diagnostics.sortForOutput();

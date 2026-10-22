@@ -110,7 +110,9 @@ group 只读检查步骤（不改变运行行为）
   T -> PC : 4/6 resolveStaticTargets（CALL / GOTO / TRY*）
   T -> PC : 5/6 checkStructures（IF/FOR/REPEAT… 配对）
   T -> PC : 6/6 checkStaticValues（除零 / 负下标 / 尺寸 / 名字表）
+  PC -> PS : 4/6 的 GOTO 目标判定：position::firstGotoLabel(script, segment)
   PC -> D : 写入本步 sink（ParseIrView 只读，诊断是唯一输出）
+  note right : $ 标签归属与运行期是**同一个函数**（同索引、同 functionLine），\n不再按 ownerFunction 名字分组 —— 两侧不可能各自演化。
   T -> D : replaceOrigin(Pass4/5/6, sink)  ' 运行与否都替换
   note right of PC : 三个步骤都是逐脚本任务（runPerScript）：\n脚本名排序 → 每任务独占 sink → 按名字序归并；\neraTW 实测 10.5s → 1.9s（12 线程）。
   opt 7（可选，默认关闭）

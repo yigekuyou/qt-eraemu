@@ -102,6 +102,8 @@ plantuml -txmi docs/uml/01-load-classes.puml
   `callLabelAt` 进入同名函数的第二份声明时也只命中正在执行的那一份），
   无帧 = `executionScope()` 回查。eraTW 实测：`ownerFunction` 与「最近前置 `@`」
   2,111,136 行 0 处不一致，833 个 `$` 标签的 `functionLine` 0 处不一致。
+  静态检查（4/6）也调**同一个** `position::firstGotoLabel`：曾按 `ownerFunction` 名字
+  分组，同名 `@F` 声明两次时第二份的 `$X` 会让第一份的 `GOTO X` 静默，运行期却报错。
 - **常数解析的作用域是参数**：`setConstProvider` / `setConstArrayChecker` / `setConstArraySizeProvider` /
   `setConstArrayProvider` 四个回调都收 `eravar::ScopeId`（`evaluate()` 的第四参数原样转发），
   回调不得自己推导作用域。装载期因此按「这行所属函数」解析私有常数，而不是按「解释器停在哪一行」。
@@ -143,10 +145,10 @@ plantuml -txmi docs/uml/01-load-classes.puml
 `dump_warnings` 五语料（`eraTW` / `eraMegaten` / `eraTetris` / `FL3.8` / `ecd`）：
 **6 / 2 / 0 / 0 / 0** 行（`eraMegaten` 的目录参数必须是 `eraMegaten/data`；用错路径会得到
 0 字节的假基线），与 `/tmp/uml-baseline/*.raw.txt` **未排序**逐字节相同。
-累计十五个重构（身份整数化 / 全定型 / 作用域显式化 / 只读收尾外移 / 存档独立映射 /
+累计十六个重构（身份整数化 / 全定型 / 作用域显式化 / 只读收尾外移 / 存档独立映射 /
 私有名表前移 / 存档顺序确定性 / 写收尾外移 / 标记区外移 / 位置区外移 /
 标签归属单一索引 / 诊断切片幂等 / 常数作用域参数化 / 增量装载协议显式化 /
-GOTO 段身份入索引）前后完全一致；
+GOTO 段身份入索引 / 静态检查用段身份）前后完全一致；
 `ctest` 48 → 56（新增 `test_parse_checks` / `test_save_variable_map` / `test_private_scope_table` /
 `test_load_contracts` / `test_save_variable_map_hashseed` / `test_jump_markings` /
 `test_position_state` / `test_goto_label_lookup`）。

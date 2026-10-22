@@ -1069,17 +1069,15 @@ bool ExecutionEngine::executeInstruction(const LogicalLine& line, eravar::ScopeI
         }
         const auto& variable = static_cast<const VariableNode&>(*args.first().ast);
         // Array identity, not element value: do not evaluate any supplied indices.
-        auto lengths = m_storage->arrayLengths(variable.name());
-        if (!variable.lengths.isEmpty()) lengths = variable.lengths;
-        if (m_parseTable) {
-            const QString key = m_storage->resolvedStorageName(variable.name(), m_activeScope);
-            QString scope;
-            QString target;
-            eravar::splitPrivateStorageKey(key, scope, target);
-            const auto* declaration = m_parseTable->variableTable().find(target, scope);
-            if (declaration && !declaration->isReference && !declaration->lengths.isEmpty())
-                lengths = declaration->lengths;
-        }
+        // 形状的唯一入口（声明 -> 装载期尺寸表 -> 多维容器几何）。REF 形参的键
+        // 已在 storageName 里解析成目标数组，所以 VARSIZE 拿到的是目标的形状。
+        // 语义不变：各维长度逐项写进 RESULT 槽（RESULT:0..d-1）。
+        // 作用域 = 本行作用域；直接构造的指令（单测 / 内建路径）没有行作用域，
+        // 按**当前执行位置**的段身份解析（否则私有名会落到广域查不到）。
+        eravar::ScopeId sizeScope = m_activeScope;
+        if (sizeScope == eravar::kGlobalScope && m_parseTable)
+            sizeScope = m_parseTable->executionScopeId();
+        const QList<int> lengths = m_storage->shapeOf(variable.name(), sizeScope).lengths;
         for (int dim = 0; dim < lengths.size(); ++dim)
             m_storage->setSystemVariable(QStringLiteral("RESULT"), dim, lengths[dim]);
         return true;

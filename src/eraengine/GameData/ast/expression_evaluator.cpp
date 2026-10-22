@@ -1701,20 +1701,9 @@ QList<qint64> ExpressionEvaluator::readIntArray(const VariableNode &var, Variabl
         return out;
     }
 
-    int size = storage->variableConfig().getSize1D(name);
-    if (size <= 0) size = storage->variableConfig().getSize1D(upper);
-    if (size <= 0) {
-        const QPair<int, int> p2 = storage->variableConfig().getSize2D(name);
-        size = p2.second;
-    }
-    if (size <= 0) {
-        const QPair<int, int> p2 = storage->variableConfig().getSize2D(upper);
-        size = p2.second;
-    }
-    // 用户 #DIM 声明的数组（ARR 等）不在 variableConfig 里：按实际存储长度取
-    // （此前 size 恒 0 -> MAXARRAY/SUMARRAY/FINDELEMENT 对用户数组全返回 0/-1）
-    if (size <= 0) size = storage->arraySizeRaw(storage->resolvedStorageName(name, scope));
-    if (size <= 0) size = storage->arraySizeRaw(storage->resolvedStorageName(upper, scope));
+    // 迭代长度 = 形状的第一维（唯一形状入口：声明 -> 装载期尺寸表；
+    // 不再各自重跑 VariableConfig / 回落容器分配量）。
+    const int size = storage->shapeOf(name, scope).lengthOf(0);
     const QString key = storage->resolvedStorageName(name, scope);
     out.reserve(size);
     for (int i = 0; i < size; ++i) {
@@ -1735,8 +1724,6 @@ QList<QString> ExpressionEvaluator::readStrArray(const VariableNode &var, Variab
     QList<QString> out;
     if (!storage) return out;
     const QString name = var.name();
-    QString upperScratch;
-    const QString& upper = eraUpperKey(name, upperScratch);
 
     // 角色字符串数组（CSTR 之类）：沿角色维取同一列
     if (storage->isCharaDataVariable(name)) {
@@ -1764,10 +1751,8 @@ QList<QString> ExpressionEvaluator::readStrArray(const VariableNode &var, Variab
         return out;
     }
 
-    int size = storage->variableConfig().getSize1D(name);
-    if (size <= 0) size = storage->variableConfig().getSize1D(upper);
-    if (size <= 0) size = storage->arraySizeRaw(storage->resolvedStorageName(name, scope));
-    if (size <= 0) size = storage->variableConfig().getSize2D(name).second;
+    // 与 readIntArray 同一条形状入口（唯一回落顺序见 VariableStorage::shapeOf）。
+    const int size = storage->shapeOf(name, scope).lengthOf(0);
     const QString key = storage->resolvedStorageName(name, scope);
     out.reserve(size);
     for (int i = 0; i < size; ++i) out.append(storage->getGlobalStr1DRaw(key, i));
@@ -2488,33 +2473,11 @@ bool ExpressionEvaluator::evaluateBuiltin(const FunctionNode &node, VariableStor
         } else {
             name = S(0);
         }
-        QString upperScratch;
-        const QString& upper = eraUpperKey(name, upperScratch);
         const int dim = node.arguments().size() >= 2 ? static_cast<int>(I(1)) : 0;
-        qint64 size = 0;
-        // 显式维查**声明各维长度**（对齐 C# UserDefinedVariableToken::GetLength(dim)：
-        // 0 起、按元素维计、不含角色号位）。唯一运行时视图是
-        // VariableStorage::multiDimLengths —— 它在装载期由 VariableDecl 一次拷贝，
-        // 与扁平寻址读的是同一份形状（不再有第二个「声明长度」提供者）。
-        // 单维 / 动态 / REF 不登记形状 -> 落到下面的存储/配置/常量路径。
-        if (storage && node.arguments().size() >= 2 && dim >= 0) {
-            const QList<int> declared = storage->multiDimLengths(storage->resolvedStorageName(name, scope));
-            if (dim < declared.size() && declared.at(dim) > 0) size = declared.at(dim);
-        }
-        if (storage && size <= 0) {
-            size = storage->arraySizeRaw(storage->resolvedStorageName(name, scope));
-            const VariableConfig& cfg = storage->variableConfig();
-            if (size <= 0 && dim == 0) {
-                size = cfg.getSize1D(name);
-                if (size <= 0) size = cfg.getSize1D(upper);
-                if (size <= 0) size = cfg.getSize2D(name).second;
-            } else if (size <= 0 && dim == 1) {
-                size = cfg.getSize2D(name).first;
-            } else if (size <= 0 && dim == 2) {
-                const QVector<int> s3 = cfg.getSize3D(name);
-                size = s3.isEmpty() ? 0 : s3.at(0);
-            }
-        }
+        // 各维长度 = 形状（**唯一**入口：声明 lengths -> 装载期尺寸表），按 C# 的
+        // GetLength(dim) 口径取第 dim 维（0 起、不含角色号位）。维号越界 = 0
+        // （C# 抛 CodeEE；本移植对脚本错误一律宽容，见报告「分歧裁决」）。
+        qint64 size = storage ? storage->shapeOf(name, scope).lengthOf(dim) : 0;
         // `#DIM(S) CONST X, N = …`：长度只在常数表里（见 m_constArraySizeProvider
         // 的说明）。缺了这一步 VARSIZE("FLPEDIA_MAIN_CATEGORY") 恒 0 —— FL3.8 的
         // FLPEDIA 主菜单用它决定类别标签个数，于是整块标签渲染成空。

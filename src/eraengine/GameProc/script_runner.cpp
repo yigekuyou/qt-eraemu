@@ -1379,7 +1379,9 @@ ExecState ScriptRunner::executeLine(const LogicalLine& line) {
             if ((decl ? decl->isCharaData : meta.characterData)
                 || (i == 1 && (decl ? decl->isConst : meta.readOnly)))
                 return failCopy(QStringLiteral("不支持角色数组或只读目标：%1").arg(var));
-            const auto shape = decl && !decl->lengths.isEmpty() ? decl->lengths : m_storage->arrayLengths(var);
+            // 形状的唯一入口（声明 -> 装载期尺寸表 -> 多维容器几何）；REF 的键
+            // 已在 storageName 里解析成目标数组，所以拿到的是目标的形状。
+            const auto shape = m_storage->shapeOf(var, eravar::internName(line.scopeKey)).lengths;
             if (shape.size() != rank) return failCopy(QStringLiteral("数组尺寸不可用：%1").arg(var));
             arrays.append({var, type, shape, !decl && m_storage->hasSystemVariable(var)});
         }

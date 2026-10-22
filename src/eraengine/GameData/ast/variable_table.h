@@ -79,8 +79,21 @@ public:
 
     // 查声明：先按段私有，再按全局。scopeKey = 段身份文本（eravar::segmentKeyText）
     // —— **不是函数名**；空串 = 无私有上下文。
+    //
+    // 段身份文本在这里是**大小写敏感**的（含脚本名，与 m_locals 的键同形）。
+    // 但存储键的段身份部分经 eravar::makePrivateStorageKey **统一大写化**（唯一
+    // 构造点），于是「按存储键回查声明」（VARSIZE / shapeOf）拿到的是大写形态。
+    // 因此精确命中失败时再按「大写 -> 原文」索引命中一次 —— 只是把同一条段身份
+    // 换个大小写写法，不引入任何新语义。
     [[nodiscard]] const VariableDecl* find(const QString& name,
                                            const QString& scopeKey = QString()) const;
+    // 按**名字**查 CHARADATA 声明（忽略作用域）。
+    // 角色数据在本移植里是名字级身份：识别与存储都以名字为键
+    // （VariableStorage::m_charaDataVars），同一个名字不可能按段分成两份形状。
+    // 因此形状查询（VARSIZE）必须能按名字找到那条声明 —— 否则
+    // `#DIM CHARADATA X, 3, 4` 在全局上下文（VARSIZE("X")）报 0。
+    // 同名多份声明 first-wins（与 addChecked 一致）。
+    [[nodiscard]] const VariableDecl* findCharaData(const QString& name) const;
     [[nodiscard]] bool contains(const QString& name) const;
     // 该名字是否**只**作为某个函数的私有变量/常量存在（广域声明与系统变量都没有）。
     // 对齐 C# IdentifierDictionary.privateDimList：在这种名字于当前函数解析不到时，
@@ -226,6 +239,11 @@ private:
     QHash<QString, int> m_localNameCount;
     QHash<QString, OperandType> m_uniqueLocalType;
     QHash<QString, QHash<QString, VariableDecl>> m_locals;  // function -> name -> decl
+    // m_locals 的段身份键的**大写形态 -> 原文**索引：只为「按存储键回查声明」
+    // 服务（存储键的段身份部分统一大写化，见 find 的说明）。精确键优先。
+    QHash<QString, QString> m_localScopeByUpper;
+    // CHARADATA 声明按名字索引（见 findCharaData）：名字级身份，与段无关。
+    QHash<QString, VariableDecl> m_charaData;
     // localsOfRef 的按函数缓存（装载后 m_locals 不变；执行单线程）
     mutable QHash<QString, QList<VariableDecl>> m_localsRefCache;
     // localNamesOfRef 的按函数缓存（同上）

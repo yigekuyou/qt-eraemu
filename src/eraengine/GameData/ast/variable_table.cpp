@@ -352,6 +352,9 @@ VariableTable::DeclStatus VariableTable::addChecked(const VariableDecl& decl) {
         }
     } invalidator{*this};
     const QString nameKey = nk(decl.name);
+    // CHARADATA 声明按名字索引（与存储层的名字级角色数据同一口径，first-wins）。
+    if (decl.isCharaData && !m_charaData.contains(nameKey))
+        m_charaData.insert(nameKey, decl);
     if (decl.scope == VarScope::Local && !decl.scopeKey.isEmpty()) {
         // 段身份文本**大小写敏感**（含脚本名）：绝不 toUpper。
         auto& fmap = m_locals[decl.scopeKey];
@@ -363,6 +366,8 @@ VariableTable::DeclStatus VariableTable::addChecked(const VariableDecl& decl) {
                                                            : DeclStatus::Conflict;
         }
         fmap.insert(nameKey, decl);
+        // 段身份键的大写索引（first-wins：同一段的多条声明共用同一个原文键）
+        m_localScopeByUpper.insert(decl.scopeKey.toUpper(), decl.scopeKey);
         // 维护反向索引（唯一性用于无函数上下文时的类型解析）
         const int c = m_localNameCount.value(nameKey, 0) + 1;
         m_localNameCount.insert(nameKey, c);
@@ -387,14 +392,29 @@ bool VariableTable::add(const VariableDecl& decl) {
 
 const VariableDecl* VariableTable::find(const QString& name, const QString& scopeKey) const {
     if (!scopeKey.isEmpty()) {
-        const auto fit = m_locals.constFind(scopeKey);
-        if (fit != m_locals.constEnd()) {
-            const auto it = fit.value().constFind(nk(name));
-            if (it != fit.value().constEnd()) return &it.value();
+        const auto scopeOf = [this](const QString& key) -> const QHash<QString, VariableDecl>* {
+            const auto fit = m_locals.constFind(key);
+            return fit == m_locals.constEnd() ? nullptr : &fit.value();
+        };
+        if (const auto* fmap = scopeOf(scopeKey)) {
+            const auto it = fmap->constFind(nk(name));
+            if (it != fmap->constEnd()) return &it.value();
+        } else if (const auto upper = m_localScopeByUpper.constFind(scopeKey);
+                   upper != m_localScopeByUpper.constEnd()) {
+            // 存储键的段身份部分是大写形态（makePrivateStorageKey）：按原文再查一次
+            if (const auto* fmap = scopeOf(upper.value())) {
+                const auto it = fmap->constFind(nk(name));
+                if (it != fmap->constEnd()) return &it.value();
+            }
         }
     }
     const auto it = m_globals.constFind(nk(name));
     return it == m_globals.constEnd() ? nullptr : &it.value();
+}
+
+const VariableDecl* VariableTable::findCharaData(const QString& name) const {
+    const auto it = m_charaData.constFind(nk(name));
+    return it == m_charaData.constEnd() ? nullptr : &it.value();
 }
 
 bool VariableTable::contains(const QString& name) const {
@@ -507,6 +527,8 @@ void VariableTable::clear() {
     m_dimensionsResolved = false;
     m_globals.clear();
     m_locals.clear();
+    m_localScopeByUpper.clear();
+    m_charaData.clear();
     m_localNameCount.clear();
     m_uniqueLocalType.clear();
     m_localsRefCache.clear();

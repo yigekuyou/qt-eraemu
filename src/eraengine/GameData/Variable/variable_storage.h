@@ -371,9 +371,39 @@ public:
         [[nodiscard]] QString resolvedStorageName(const QString& name, eravar::ScopeId scope) const {
             return storageName(name, scope);
         }
+        // ---- 数组「形状」的唯一查询：维数 / 每维长度 / 元素总数 ----
+        // 回落顺序**只在这里**知道，且只看装载期事实：
+        //   1) 脚本声明（VariableDecl::lengths / elementCount，装载期 resolveDimensions 定稿）
+        //      —— 声明表是形状的所有者；键先经 storageName（REF 别名/私有键）解析，
+        //      复合键再拆回 (名字, 段身份文本) 查声明；
+        //   2) 无声明 -> VariableConfig（VariableSize.csv + 默认表）：**装载期**尺寸来源；
+        //   3) 都没有 -> 多维容器（2D/3D）的**外接几何**（运行期才长出来的数组，
+        //      如 REF 指向的未声明数组）；1D 容器槽位数不是形状（见 allocatedSlots）。
+        //   4) 都没有 -> 空形状（未声明的 1D 名字没有形状）。
+        // 容器当前分配量**不是**形状（见 allocatedSlots）。
+        struct ArrayShape {
+            QList<int> lengths;      // 每维长度（空 = 无形状）
+            qint64 elementCount = 0; // 各维乘积
+            [[nodiscard]] int dimension() const { return int(lengths.size()); }
+            [[nodiscard]] int lengthOf(int dim) const {
+                return (dim >= 0 && dim < lengths.size()) ? lengths.at(dim) : 0;
+            }
+            [[nodiscard]] bool isEmpty() const { return lengths.isEmpty(); }
+        };
+        [[nodiscard]] ArrayShape shapeOf(const QString& name, eravar::ScopeId scope) const;
+        // 已解析存储键版本（调用方已经做过 storageName 解析时用）。
+        [[nodiscard]] ArrayShape shapeOfKey(const QString& storageKey) const;
+
+        // 「数组长度」：有形状 = 第 0 维长度（唯一形状入口）；没有形状的名字
+        // （未声明的运行时 1D / 未定稿 DYNAMIC）才报**已分配槽位数**（容器事实，非形状）。
+        // 单参重载 = **当前帧**（旧语义，等价于 explicit 的 privateScopeId）；要按
+        // 某个段问私有变量就传 scope。
         [[nodiscard]] int arraySize(const QString& name) const;
-        [[nodiscard]] int arraySizeRaw(const QString& storageKey) const;
+        [[nodiscard]] int arraySize(const QString& name, eravar::ScopeId scope) const;
+        // 容器当前已分配的槽位数（**不是形状**：形状是装载期事实，见 shapeOf）。
+        [[nodiscard]] int allocatedSlots(const QString& storageKey) const;
         [[nodiscard]] QList<int> arrayLengths(const QString& name) const;
+        [[nodiscard]] QList<int> arrayLengths(const QString& name, eravar::ScopeId scope) const;
         void ensureArraySize(const QString& name, int size, bool stringArray);
 
         // ---- 多维数组（dimension >= 2）：独立容器，装载期按 lengths 乘积分配 ----

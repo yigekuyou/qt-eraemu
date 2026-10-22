@@ -25,6 +25,7 @@
 #include "eraengine_log.h"
 #include "expression_evaluator.h"
 #include "ast/system_variables.h"
+#include "ast/name_interner.h"
 
 // PALAMLV/EXPLV 阈值默认表来自 C# ConfigData 的 _Replace.csv 默认值：
 //   PALAMLV {0,100,500,3000,10000,30000,60000,100000,150000,250000}
@@ -406,19 +407,143 @@ bool VariableStorage::loadVariableSizes(const QString& csvPath)
 		return true;
 }
 
-int VariableStorage::arraySize(const QString& name) const
+VariableStorage::ArrayShape VariableStorage::shapeOf(const QString& name,
+                                                    eravar::ScopeId scope) const
 {
-        return arraySizeRaw(storageName(name));
+        return shapeOfKey(storageName(name, scope));
 }
 
-int VariableStorage::arraySizeRaw(const QString& key) const
+VariableStorage::ArrayShape VariableStorage::shapeOfKey(const QString& storageKey) const
 {
-        // 多维：尺寸口径 = **声明首维**（C# VARSIZE(var) 的 GetLength() 语义；
-        // VARSIZE 语句另按声明逐维写 RESULT）。不再读 1D 槽的「首维占位」。
+        // 1) 声明（形状的所有者）。复合键 "段身份\x1fNAME" 拆回 (名字, 段身份文本)；
+        //    裸键 = 广域声明。键已在 storageName 里做过 REF 别名解析，所以
+        //    `#DIM REF` 形参问到的是**目标**数组的声明形状（对齐 C# ReferenceToken）。
+        //    声明查不到时再按名字试 CHARADATA（角色数据是名字级身份，见
+        //    VariableTable::findCharaData）。
+        if (m_saveVariableTable) {
+                // 「可用形状」= lengths 非空且至少一维 > 0。全 0 的是占位/未定稿
+                //（`#DIMS REF X, 0, 0`、DYNAMIC），不算形状 —— 继续往下回落。
+                const auto usable = [](const VariableDecl* d) {
+                        if (d == nullptr || d->lengths.isEmpty()) return false;
+                        for (int n : d->lengths)
+                                if (n > 0) return true;
+                        return false;
+                };
+                QString declScope;
+                QString declName;
+                eravar::splitPrivateStorageKey(storageKey, declScope, declName);
+                const VariableDecl* d = m_saveVariableTable->find(declName, declScope);
+                if (!usable(d)) d = m_saveVariableTable->findCharaData(declName);
+                if (usable(d)) {
+                        ArrayShape shape;
+                        shape.lengths = d->lengths;
+                        shape.elementCount = d->elementCount;
+                        if (shape.elementCount <= 0) {
+                                qint64 count = 1;
+                                for (int n : shape.lengths) count *= n;
+                                shape.elementCount = count;
+                        }
+                        return shape;
+                }
+        }
+        // 2) 装载期尺寸表（系统变量 / CSV 名表 / 扩展变量）。这是**装载期**来源，
+        //    不是「容器现在多大」。
+        QString scratch;
+        const QString& upper = eraUpperKey(storageKey, scratch);
+        const auto product = [](const QList<int>& lengths) {
+                qint64 count = 1;
+                for (int n : lengths) count *= n;
+                return count;
+        };
+        const QVector<int> sizes3 = m_variableConfig.getSize3D(upper);
+        if (!sizes3.isEmpty()) {
+                ArrayShape shape;
+                for (int n : sizes3) shape.lengths.append(n);
+                shape.elementCount = product(shape.lengths);
+                return shape;
+        }
+        const QPair<int, int> sizes2 = m_variableConfig.getSize2D(upper);
+        if (sizes2.first > 0 || sizes2.second > 0) {
+                ArrayShape shape;
+                shape.lengths = QList<int>{sizes2.first, sizes2.second};
+                shape.elementCount = product(shape.lengths);
+                return shape;
+        }
+        const int size1 = m_variableConfig.getSize1D(upper);
+        if (size1 > 0) {
+                ArrayShape shape;
+                shape.lengths = QList<int>{size1};
+                shape.elementCount = size1;
+                return shape;
+        }
+        // 3) 没有声明也没有装载期尺寸表 = 运行期才长出来的多维容器（REF 指向的
+        //    未声明数组）。多维容器的**外接几何**就是它的形状（元素只到 extents
+        //    为止）；1D 容器的槽位数没有这个性质（任意前缀都有意义），所以 1D
+        //    不进形状 —— 那是 allocatedSlots 的容器事实。
+        if (auto it = m_globalInt3D.constFind(storageKey); it != m_globalInt3D.constEnd()) {
+                int rows = 0, columns = 0;
+                for (const auto& plane : *it) {
+                        rows = qMax(rows, int(plane.size()));
+                        for (const auto& row : plane) columns = qMax(columns, int(row.size()));
+                }
+                ArrayShape shape;
+                shape.lengths = QList<int>{int(it->size()), rows, columns};
+                shape.elementCount = product(shape.lengths);
+                return shape;
+        }
+        if (auto it = m_globalStr3D.constFind(storageKey); it != m_globalStr3D.constEnd()) {
+                int rows = 0, columns = 0;
+                for (const auto& plane : *it) {
+                        rows = qMax(rows, int(plane.size()));
+                        for (const auto& row : plane) columns = qMax(columns, int(row.size()));
+                }
+                ArrayShape shape;
+                shape.lengths = QList<int>{int(it->size()), rows, columns};
+                shape.elementCount = product(shape.lengths);
+                return shape;
+        }
+        if (auto it = m_globalInt2D.constFind(storageKey); it != m_globalInt2D.constEnd()) {
+                int columns = 0;
+                for (const auto& row : *it) columns = qMax(columns, int(row.size()));
+                ArrayShape shape;
+                shape.lengths = QList<int>{int(it->size()), columns};
+                shape.elementCount = product(shape.lengths);
+                return shape;
+        }
+        if (auto it = m_globalStr2D.constFind(storageKey); it != m_globalStr2D.constEnd()) {
+                int columns = 0;
+                for (const auto& row : *it) columns = qMax(columns, int(row.size()));
+                ArrayShape shape;
+                shape.lengths = QList<int>{int(it->size()), columns};
+                shape.elementCount = product(shape.lengths);
+                return shape;
+        }
+        return {};
+}
+
+int VariableStorage::arraySize(const QString& name) const
+{
+        return arraySize(name, m_privateScopeId);   // 当前帧（旧语义）
+}
+
+int VariableStorage::arraySize(const QString& name, eravar::ScopeId scope) const
+{
+        const ArrayShape shape = shapeOf(name, scope);   // 形状的唯一入口
+        if (!shape.isEmpty()) return shape.lengthOf(0);
+        // 没有形状的名字（未声明的运行时 1D / 未定稿 DYNAMIC）：容器已分配槽位数。
+        // 这是**容器事实**，不是形状 —— 形状唯一的答案在 shapeOf。
+        return allocatedSlots(storageName(name, scope));
+}
+
+int VariableStorage::allocatedSlots(const QString& key) const
+{
+        // 容器当前已分配的槽位数（**不是形状**：装载期形状见 shapeOf）。
+        // 旧名 arraySizeRaw 会被误当成形状读者（VARSIZE 曾回落到这里），故改名。
+        // 多维：仍按声明首维报（形状已由 shapeOf 回答；这里只服务无形状的名字）。
         if (const auto shape = m_multiDimShapes.constFind(key); shape != m_multiDimShapes.constEnd())
             return shape.value().lengths.value(0);
 
-		// 局部/实参槽不在 m_global* 容器里，单独报尺寸（VARSIZE("LOCAL")）
+		// 局部/实参槽不在 m_global* 容器里，单独报尺寸
 		if (key == QLatin1String("ITEMPRICE")) return m_itemprice.size();   // 常量容器（不在 m_global* 里）
 		if (key == QLatin1String("LOCAL")) return m_localIntVars.size();
 		if (key == QLatin1String("LOCALS")) return m_localStrVars.size();
@@ -433,33 +558,16 @@ int VariableStorage::arraySizeRaw(const QString& key) const
 
 QList<int> VariableStorage::arrayLengths(const QString& name) const
 {
-    const QString key = resolvedStorageName(name);
-    // 多维：形状的唯一运行时视图（装载期从声明拷入）。
-    if (const auto shape = m_multiDimShapes.constFind(key); shape != m_multiDimShapes.constEnd())
-        return shape.value().lengths;
-    const auto shape2 = [](const auto& values) -> QList<int> {
-        int columns = 0;
-        for (const auto& row : values) columns = qMax(columns, int(row.size()));
-        return {int(values.size()), columns};
-    };
-    const auto shape3 = [](const auto& values) -> QList<int> {
-        int rows = 0, columns = 0;
-        for (const auto& plane : values) {
-            rows = qMax(rows, int(plane.size()));
-            for (const auto& row : plane) columns = qMax(columns, int(row.size()));
-        }
-        return {int(values.size()), rows, columns};
-    };
-    if (auto it = m_globalInt3D.constFind(key); it != m_globalInt3D.constEnd()) return shape3(*it);
-    if (auto it = m_globalStr3D.constFind(key); it != m_globalStr3D.constEnd()) return shape3(*it);
-    if (auto it = m_globalInt2D.constFind(key); it != m_globalInt2D.constEnd()) return shape2(*it);
-    if (auto it = m_globalStr2D.constFind(key); it != m_globalStr2D.constEnd()) return shape2(*it);
-    const auto sizes3 = m_variableConfig.getSize3D(key);
-    if (!sizes3.isEmpty()) return sizes3;
-    const auto sizes2 = m_variableConfig.getSize2D(key);
-    if (sizes2.first > 0 || sizes2.second > 0) return {sizes2.first, sizes2.second};
-    const int stored = arraySizeRaw(key);
-    return {stored > 0 ? stored : m_variableConfig.getSize1D(key)};
+    return arrayLengths(name, m_privateScopeId);   // 当前帧（旧语义）
+}
+
+QList<int> VariableStorage::arrayLengths(const QString& name, eravar::ScopeId scope) const
+{
+    const ArrayShape shape = shapeOf(name, scope);   // 形状的唯一入口
+    if (!shape.isEmpty()) return shape.lengths;
+    // 无形状的名字退化为「已分配槽位数」这一个数（容器事实）。
+    const int slotCount = allocatedSlots(storageName(name, scope));
+    return slotCount > 0 ? QList<int>{slotCount} : QList<int>();
 }
 
 void VariableStorage::ensureArraySize(const QString& name, int size, bool stringArray)

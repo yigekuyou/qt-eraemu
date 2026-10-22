@@ -13,7 +13,7 @@ package "装载期 GameProc（一次性）" {
   [收尾流水线\npass 表 kLoadPasses 7 条] as Finish
   [parsecheck\n4/5/6 只读检查（自由函数）\n输入 ParseIrView] as Checks
   [loadpass\n1/2/3 写步骤（自由函数）\n输入 LoadContext] as Writes
-  [jumpmark\n标记区（自由函数）\nScriptData 上 10 张行号索引表] as Mark
+  [jumpmark\n标记区（自由函数）\n行字段 jumpTo + 配对索引（无第二份副本）] as Mark
   [position\n位置区（自由函数）\n状态 PositionState + 效果 Effects] as Pos
 }
 

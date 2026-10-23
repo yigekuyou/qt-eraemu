@@ -91,11 +91,8 @@ public:
 		Q_INVOKABLE qint64 getGlobalInt3D(const QString &name, int x, int y, int z) const;
 
 		// ================= 名字级整数访问的唯一原语 =================
-		// 「名字 + 下标 -> 整数存储」只有这一份实现。语义顺序照抄旧
-		// ExecutionEngine::writeLhs：
-		//   hasParameter -> 角色数据变量 -> ARG/LOCAL -> ARGS/LOCALS/RESULTS
-		//   （字符串槽，整型写忽略/读为 0）-> 系统变量
-		//   -> 声明维数 >= 2 的 2D/3D -> 全局 1D。
+		// 「名字 + 下标 -> 整数存储」只有这一份实现；判定顺序（行序即语义）
+		// 只在私有 resolveIntLocus 里定义一次，本组函数只按 IntLocusKind 施加。
 		// 大小写规范化统一走 eraUpperKey（不再混用 toUpper）。
 		// 读路径 const：内部访问函数本身是 const，无需 const_cast。
 		// scope = 解析私有名的位置（0 = 顶层）。键自足的调用方（readIntNode）
@@ -590,6 +587,29 @@ public:
 		// ================= Expression Evaluation =================
 
 private:
+		// ---- 「名字 + 下标 -> 整数存储」的解析结果 ----
+		// 判定顺序**只在 resolveIntLocus 的 if 链里定义一次**（行序即语义）；
+		// readIntByName / writeIntByName 只负责按 kind 施加，不再各自复述顺序。
+		enum class IntLocusKind : quint8 {
+			Parameter,      // m_parameters 值绑定（按名，不看 scope）
+			CharaInt1D,     // 角色数据，元素维 <= 1
+			CharaInt2D,     // 角色数据，元素维 >= 2
+			CharaStrAsInt,  // 角色数据但是字符串变量：读 0 / 写忽略
+			Arg,            // ARG:n
+			Local,          // LOCAL:n
+			StringSlot,     // ARGS / LOCALS / RESULTS（整型读落到 1D 槽 / 写忽略）
+			System,         // 系统变量（FLAG/DA/TA/...）
+			Global3D, Global2D, Global1D
+		};
+		struct IntLocus {
+			IntLocusKind kind = IntLocusKind::Global1D;
+			QString key;   // storageName(name, scope) 的结果；只在需要的 kind 上填写
+			int charaId = 0;
+			int e0 = 0, e1 = 0, e2 = 0;
+		};
+		[[nodiscard]] IntLocus resolveIntLocus(const QString& name, const QList<int>& indices,
+		                                       eravar::ScopeId scope) const;
+
 		// ---- 存档映射层的存储侧：条目（erasave::Entry）-> 容器取值/写值 ----
 		// 只做「容器类型不同」的分派；条目属于哪个容器由 save_variable_map 决定。
 		[[nodiscard]] EraBinaryData::Variable readSaveEntry(const erasave::Entry& entry, int charaSlot) const;

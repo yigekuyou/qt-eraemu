@@ -826,73 +826,117 @@ int VariableStorage::intDimension(const QString &name) const
 		return 1;
 }
 
+VariableStorage::IntLocus VariableStorage::resolveIntLocus(const QString &name,
+                                                           const QList<int> &indices,
+                                                           eravar::ScopeId scope) const
+{
+		// 行序即语义：这是「名字 + 下标 -> 整数存储」判定的**唯一定义点**。
+		// readIntByName / writeIntByName 只按 IntLocusKind 施加；新增/调整优先级
+		// 必须改这里，并由 test_name_locus 的护栏钉住。
+		IntLocus l;
+		l.e0 = indices.value(0);
+		// 1) 参数值绑定：按名命中，不看 scope，也不构造存储键。
+		if (hasParameter(name)) {
+				l.kind = IntLocusKind::Parameter;
+				return l;
+		}
+		// 名字 -> 存储键只解析一次（scope 是显式参数：私有名按该函数的名表解析）。
+		l.key = storageName(name, scope);
+		// 2) 角色数据变量：按 (角色号, 元素下标) 定位；字符串槽整型读恒 0 / 写忽略。
+		if (isCharaDataVariable(name)) {
+				if (isCharaDataString(name)) {
+						l.kind = IntLocusKind::CharaStrAsInt;
+						return l;
+				}
+				QList<int> elems;
+				reduceCharaArgs(name, indices, l.charaId, elems);
+				l.e0 = elems.value(0);
+				l.e1 = elems.value(1);
+				l.kind = charaDataDimension(name) >= 2 ? IntLocusKind::CharaInt2D
+				                                       : IntLocusKind::CharaInt1D;
+				return l;
+		}
+		const QString upper = eraUpperKey(name);
+		// 3) / 4) ARG / LOCAL。
+		if (upper == QLatin1String("ARG")) {
+				l.kind = IntLocusKind::Arg;
+				return l;
+		}
+		if (upper == QLatin1String("LOCAL")) {
+				l.kind = IntLocusKind::Local;
+				return l;
+		}
+		// 5) ARGS / LOCALS / RESULTS：字符串槽。整型写忽略；整型读落到 1D 槽
+		//    （今天的不对称，readIntByName 的 StringSlot 分支就是 getGlobalInt1DRaw）。
+		if (upper == QLatin1String("ARGS") || upper == QLatin1String("LOCALS")
+		    || upper == QLatin1String("RESULTS")) {
+				l.kind = IntLocusKind::StringSlot;
+				return l;
+		}
+		// 6) 系统变量（FLAG/DA/TA/...）。
+		if (hasSystemVariable(name)) {
+				l.kind = IntLocusKind::System;
+				return l;
+		}
+		// 7) / 8) 声明维数 >= 2 且给了 >= 2 个下标 -> 2D/3D；否则全局 1D
+		//         （旧 writeLhs 的同款判定：1D 声明给多下标时只取第 0 个）。
+		const int dim = intDimension(name);
+		if (indices.size() >= 2 && dim >= 2) {
+				if (indices.size() >= 3 && dim >= 3) {
+						l.e0 = indices.at(0);
+						l.e1 = indices.at(1);
+						l.e2 = indices.at(2);
+						l.kind = IntLocusKind::Global3D;
+				} else {
+						l.e0 = indices.at(0);
+						l.e1 = indices.at(1);
+						l.kind = IntLocusKind::Global2D;
+				}
+				return l;
+		}
+		l.kind = IntLocusKind::Global1D;
+		return l;
+}
+
 qint64 VariableStorage::readIntByName(const QString &name, const QList<int> &indices,
                                      eravar::ScopeId scope) const
 {
-		const int first = indices.value(0);
-		if (hasParameter(name)) return parameter(name).toLongLong();
-		// 名字 -> 存储键只解析一次（scope 是显式参数：私有名按该函数的名表解析）。
-		const QString key = storageName(name, scope);
-		// 角色数据变量：按 (角色号, 元素下标) 读取；字符串槽整型读恒 0
-		if (isCharaDataVariable(name)) {
-				if (isCharaDataString(name)) return 0;
-				int charaId = 0;
-				QList<int> elems;
-				reduceCharaArgs(name, indices, charaId, elems);
-				if (charaDataDimension(name) >= 2)
-						return getCharaInt3D(key, charaId, elems.value(0), elems.value(1));
-				return getCharaInt(key, charaId, elems.value(0));
+		const IntLocus l = resolveIntLocus(name, indices, scope);
+		// 穷尽所有 kind（无 default）：漏一个 case 在 -Wswitch + -Werror 下编译失败。
+		switch (l.kind) {
+		case IntLocusKind::Parameter:   return parameter(name).toLongLong();
+		case IntLocusKind::CharaInt1D:  return getCharaInt(l.key, l.charaId, l.e0);
+		case IntLocusKind::CharaInt2D:  return getCharaInt3D(l.key, l.charaId, l.e0, l.e1);
+		case IntLocusKind::CharaStrAsInt: return 0;
+		case IntLocusKind::Arg:         return getArgInt(l.e0);
+		case IntLocusKind::Local:       return getLocalInt(l.e0);
+		case IntLocusKind::StringSlot:  return getGlobalInt1DRaw(l.key, l.e0);
+		case IntLocusKind::System:      return getSystemVariable(name, l.e0);
+		case IntLocusKind::Global3D:    return getGlobalInt3DRaw(l.key, l.e0, l.e1, l.e2);
+		case IntLocusKind::Global2D:    return getGlobalInt2DRaw(l.key, l.e0, l.e1);
+		case IntLocusKind::Global1D:    return getGlobalInt1DRaw(l.key, l.e0);
 		}
-		const QString upper = eraUpperKey(name);
-		if (upper == QLatin1String("ARG")) return getArgInt(first);
-		if (upper == QLatin1String("LOCAL")) return getLocalInt(first);
-		if (hasSystemVariable(name)) return getSystemVariable(name, first);
-		// 多维访问：声明维数 >= 2 且给了 >= 2 个下标（旧 writeLhs 的同款判定）
-		const int dim = intDimension(name);
-		if (indices.size() >= 2 && dim >= 2) {
-				if (indices.size() >= 3 && dim >= 3)
-						return getGlobalInt3DRaw(key, indices.at(0), indices.at(1), indices.at(2));
-				return getGlobalInt2DRaw(key, indices.at(0), indices.at(1));
-		}
-		return getGlobalInt1DRaw(key, first);
+		return 0;   // 编译器兜底：switch 已穷尽所有枚举值
 }
 
 void VariableStorage::writeIntByName(const QString &name, const QList<int> &indices, qint64 value,
                                      eravar::ScopeId scope)
 {
-		const int first = indices.value(0);
-		if (hasParameter(name)) { setParameter(name, value); return; }
-		const QString key = storageName(name, scope);
-		// 角色数据变量：按 (角色号, 元素下标) 写入（否则同一角色的元素互相覆盖）
-		if (isCharaDataVariable(name)) {
-				if (isCharaDataString(name)) return;   // 字符串：走 assignStringVariable
-				int charaId = 0;
-				QList<int> elems;
-				reduceCharaArgs(name, indices, charaId, elems);
-				if (charaDataDimension(name) >= 2)
-						setCharaInt3D(key, charaId, elems.value(0), elems.value(1), value);
-				else
-						setCharaInt(key, charaId, elems.value(0), value);
-				return;
+		const IntLocus l = resolveIntLocus(name, indices, scope);
+		// 穷尽所有 kind（无 default）：漏一个 case 在 -Wswitch + -Werror 下编译失败。
+		switch (l.kind) {
+		case IntLocusKind::Parameter:   setParameter(name, value); return;
+		case IntLocusKind::CharaInt1D:  setCharaInt(l.key, l.charaId, l.e0, value); return;
+		case IntLocusKind::CharaInt2D:  setCharaInt3D(l.key, l.charaId, l.e0, l.e1, value); return;
+		case IntLocusKind::CharaStrAsInt: return;   // 字符串：走 assignStringVariable
+		case IntLocusKind::Arg:         setArgInt(l.e0, value); return;
+		case IntLocusKind::Local:       setLocalInt(l.e0, value); return;
+		case IntLocusKind::StringSlot:  return;   // 字符串槽：整型写忽略（不对称）
+		case IntLocusKind::System:      setSystemVariable(name, l.e0, value); return;
+		case IntLocusKind::Global3D:    setGlobalInt3DRaw(l.key, l.e0, l.e1, l.e2, value); return;
+		case IntLocusKind::Global2D:    setGlobalInt2DRaw(l.key, l.e0, l.e1, value); return;
+		case IntLocusKind::Global1D:    setGlobalInt1DRaw(l.key, l.e0, value); return;
 		}
-		const QString upper = eraUpperKey(name);
-		if (upper == QLatin1String("ARG")) { setArgInt(first, value); return; }
-		if (upper == QLatin1String("LOCAL")) { setLocalInt(first, value); return; }
-		if (upper == QLatin1String("ARGS") || upper == QLatin1String("LOCALS")
-		    || upper == QLatin1String("RESULTS")) {
-				return;   // 字符串变量：走 assignStringVariable
-		}
-		if (hasSystemVariable(name)) { setSystemVariable(name, first, value); return; }
-		const int dim = intDimension(name);
-		if (indices.size() >= 2 && dim >= 2) {
-				if (indices.size() >= 3 && dim >= 3) {
-						setGlobalInt3DRaw(key, indices.at(0), indices.at(1), indices.at(2), value);
-						return;
-				}
-				setGlobalInt2DRaw(key, indices.at(0), indices.at(1), value);
-				return;
-		}
-		setGlobalInt1DRaw(key, first, value);
 }
 
 // ================= 角色整型变量 =================

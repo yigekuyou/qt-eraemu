@@ -163,8 +163,8 @@ int main(int argc, char* argv[]) {
 
     qDebug() << "\n7) StrForm 求值";
     VariableStorage storage;
-    storage.setGlobalInt1D("VA", 0, 30);
-    storage.setGlobalInt1D("VB", 0, 7);
+    storage.setGlobalInt1DInCurrentFrame("VA", 0, 30);
+    storage.setGlobalInt1DInCurrentFrame("VB", 0, 7);
     ExpressionEvaluator evaluator;
     ExpressionParser evalParser;
     const auto resolve = [&evalParser](const QString& e) { return parse(evalParser, e); };
@@ -180,17 +180,17 @@ int main(int argc, char* argv[]) {
     // Observe RHS side effects, not only the logical truth table.
     for (const QString& expr : {QStringLiteral("0 && VB++"), QStringLiteral("1 || VB++"),
                                 QStringLiteral("0 !& VB++"), QStringLiteral("1 !| VB++")}) {
-        storage.setGlobalInt1D("VB", 0, 7);
+        storage.setGlobalInt1DInCurrentFrame("VB", 0, 7);
         auto root = parse(evalParser, expr);
         evaluator.evaluate(*root, &storage);
-        check(storage.getGlobalInt1D("VB", 0) == 7, expr + " skips RHS");
+        check(storage.getGlobalInt1DInCurrentFrame("VB", 0) == 7, expr + " skips RHS");
     }
     for (const QString& expr : {QStringLiteral("1 !& VB++"), QStringLiteral("0 !| VB++"),
                                 QStringLiteral("0 ^^ VB++")}) {
-        storage.setGlobalInt1D("VB", 0, 7);
+        storage.setGlobalInt1DInCurrentFrame("VB", 0, 7);
         auto root = parse(evalParser, expr);
         evaluator.evaluate(*root, &storage);
-        check(storage.getGlobalInt1D("VB", 0) == 8, expr + " evaluates RHS once");
+        check(storage.getGlobalInt1DInCurrentFrame("VB", 0) == 8, expr + " evaluates RHS once");
     }
 
     qDebug() << "\n8) 系统变量类型表（system_variables.h）";
@@ -377,9 +377,9 @@ int main(int argc, char* argv[]) {
     for (const char* text : {"1 / 0", "1 % 0", "1 ? 1 # \"x\"", "\"x\" ? 1 # 2", "{VA}"}) {
         check(!evalSource(text).isValid(), QString(text) + " invalid result");
     }
-    storage.setGlobalInt1D("VA", 0, 2);
+    storage.setGlobalInt1DInCurrentFrame("VA", 0, 2);
     check(evalSource("VA++ / VA++").toLongLong() == 1
-          && storage.getGlobalInt1D("VA", 0) == 4, "division evaluates right before left");
+          && storage.getGlobalInt1DInCurrentFrame("VA", 0) == 4, "division evaluates right before left");
     auto mask = parse(parser, "1p63");
     check(mask && static_cast<const LiteralNode&>(*mask).integerRepresentation() == LiteralNode::IntegerRepresentation::Bits64
           && static_cast<const LiteralNode&>(*mask).integerBits() == (quint64(1) << 63), "highest bit has Bits64 AST representation");

@@ -20,7 +20,7 @@
 //
 // 「名字 + 下标 -> 存储」的解析已经收敛成单份（resolveIntLocus / resolveStrLocus），
 // 但解析需要**一个作用域**。存储层为兼容旧调用方保留了「隐式当前帧」的单参
-// 重载（storageName(name) = storageName(name, m_privateScopeId)）。运行期有一批
+// 重载（storageNameInCurrentFrame(name) = storageName(name, m_privateScopeId)）。运行期有一批
 // 调用点在**已经知道正确作用域**、或**参数已经是解析后的键**的情况下用了它：
 //
 //   · 隐式当前帧 ≠ 被调段的帧      -> 私有名在调用者名表里查不到 -> 落到裸名
@@ -129,7 +129,7 @@ struct Fixture {
 
     ExecState run() { return runner.runToCompletion(); }
     qint64 globalInt(const QString& name, int x = 0) const {
-        return storage.getGlobalInt1D(name, x);
+        return storage.getGlobalInt1DInCurrentFrame(name, x);
     }
     eravar::ScopeId scopeOf(const QStringList& src, const QString& label,
                             const QString& file) {
@@ -532,12 +532,130 @@ int main(int argc, char* argv[]) {
         check(f.run() == ExecState::Halt, "7) 脚本结束");
         // 角色字符串的「角色号 + 元素」定位不在扁平字符串容器里 —— 任何把它
         // 当普通扁平槽（GlobalStr）的读法在这里都会得到空串。
-        check(f.storage.getGlobalStr1D(QStringLiteral("DIRECT"), 0) == QStringLiteral("chara-text"),
+        check(f.storage.getGlobalStr1DInCurrentFrame(QStringLiteral("DIRECT"), 0) == QStringLiteral("chara-text"),
               QString("7) 直接经求值器读 CSTR:0:0（得到 \"%1\"）")
-                  .arg(f.storage.getGlobalStr1D(QStringLiteral("DIRECT"), 0)));
-        check(f.storage.getGlobalStr1D(QStringLiteral("VIA_REF"), 0) == QStringLiteral("chara-text"),
+                  .arg(f.storage.getGlobalStr1DInCurrentFrame(QStringLiteral("DIRECT"), 0)));
+        check(f.storage.getGlobalStr1DInCurrentFrame(QStringLiteral("VIA_REF"), 0) == QStringLiteral("chara-text"),
               QString("7) 经 REF 别名读同一角色字符串（得到 \"%1\"）")
-                  .arg(f.storage.getGlobalStr1D(QStringLiteral("VIA_REF"), 0)));
+                  .arg(f.storage.getGlobalStr1DInCurrentFrame(QStringLiteral("VIA_REF"), 0)));
+    }
+
+    // =====================================================================
+    qDebug() << "\n8) 顺序无关：bindArguments 先于 enterCall，元素形参仍写进被调段";
+    {
+        // 「谁是当前帧」不再是形参绑定的前提。这里用测试开关把
+        // enterCall 挪到 bindArguments 之后，两次运行（正常 / 颠倒）必须
+        // 得到**完全相同**的观察值。只观察元素形参 / 默认值 / 省略实参
+        //（标量形参走帧内 LocalContext，本来就随帧切换，不属本命题）。
+        const QString file = QStringLiteral("scope8.ERB");
+        const QStringList src = {
+            QStringLiteral("@MAIN"),
+            QStringLiteral("#DIM S, 3"),
+            QStringLiteral("#DIMS SS, 3"),
+            QStringLiteral("#DIM V, 3"),
+            QStringLiteral("#DIM W, 2, 3"),
+            QStringLiteral("S:0 = 1"),
+            QStringLiteral("SS:0 '= \"main\""),
+            QStringLiteral("V:0 = 2"),
+            QStringLiteral("W:0:1 = 3"),
+            QStringLiteral("CALL MID, 7, \"seven\", 8, 9"),
+            QStringLiteral("CALL DEFS"),
+            QStringLiteral("O_AFTER_S = S:0"),
+            QStringLiteral("IF SS:0 == \"main\""),
+            QStringLiteral("  O_AFTER_SS = 1"),
+            QStringLiteral("ENDIF"),
+            QStringLiteral("O_AFTER_V = V:0"),
+            QStringLiteral("O_AFTER_W = W:0:1"),
+            QStringLiteral("RETURN"),
+            QStringLiteral("@MID(S:0, SS:0, V:0, W:0:1)"),
+            QStringLiteral("#DIM S, 3"),
+            QStringLiteral("#DIMS SS, 3"),
+            QStringLiteral("#DIM V, 3"),
+            QStringLiteral("#DIM W, 2, 3"),
+            QStringLiteral("O_MID_S = S:0"),
+            QStringLiteral("IF SS:0 == \"seven\""),
+            QStringLiteral("  O_MID_SS = 1"),
+            QStringLiteral("ENDIF"),
+            QStringLiteral("O_MID_V = V:0"),
+            QStringLiteral("O_MID_W = W:0:1"),
+            QStringLiteral("CALL LEAF, 11, \"eleven\""),
+            QStringLiteral("RETURN"),
+            QStringLiteral("@LEAF(S:0, SS:0)"),
+            QStringLiteral("#DIM S, 3"),
+            QStringLiteral("#DIMS SS, 3"),
+            QStringLiteral("O_LEAF_S = S:0"),
+            QStringLiteral("IF SS:0 == \"eleven\""),
+            QStringLiteral("  O_LEAF_SS = 1"),
+            QStringLiteral("ENDIF"),
+            QStringLiteral("RETURN"),
+            QStringLiteral("@DEFS(V:0 = 42, W:0:1 = 43)"),
+            QStringLiteral("#DIM V, 3"),
+            QStringLiteral("#DIM W, 2, 3"),
+            QStringLiteral("O_DEF_V = V:0"),
+            QStringLiteral("O_DEF_W = W:0:1"),
+            QStringLiteral("RETURN")
+        };
+        struct Observed {
+            qint64 midS = -1, midSS = -1, midV = -1, midW = -1;
+            qint64 leafS = -1, leafSS = -1;
+            qint64 defV = -1, defW = -1;
+            qint64 afterS = -1, afterSS = -1, afterV = -1, afterW = -1;
+        };
+        auto observe = [&](bool reorder, bool& loaded) {
+            Fixture f;
+            f.runner.setTestBindBeforeEnter(reorder);
+            loaded = f.load(file, src, QStringLiteral("MAIN"));
+            Observed o;
+            if (!loaded) return o;
+            f.run();
+            o.midS = f.globalInt(QStringLiteral("O_MID_S"));
+            o.midSS = f.globalInt(QStringLiteral("O_MID_SS"));
+            o.midV = f.globalInt(QStringLiteral("O_MID_V"));
+            o.midW = f.globalInt(QStringLiteral("O_MID_W"));
+            o.leafS = f.globalInt(QStringLiteral("O_LEAF_S"));
+            o.leafSS = f.globalInt(QStringLiteral("O_LEAF_SS"));
+            o.defV = f.globalInt(QStringLiteral("O_DEF_V"));
+            o.defW = f.globalInt(QStringLiteral("O_DEF_W"));
+            o.afterS = f.globalInt(QStringLiteral("O_AFTER_S"));
+            o.afterSS = f.globalInt(QStringLiteral("O_AFTER_SS"));
+            o.afterV = f.globalInt(QStringLiteral("O_AFTER_V"));
+            o.afterW = f.globalInt(QStringLiteral("O_AFTER_W"));
+            return o;
+        };
+        bool loaded = false;
+        const Observed normal = observe(false, loaded);
+        check(loaded, "8) 正常顺序装载");
+        check(normal.midS == 7 && normal.midSS == 1 && normal.midV == 8 && normal.midW == 9,
+              QString("8) 正常顺序：MID 的元素形参 S=%1 SS=%2 V=%3 W=%4")
+                  .arg(normal.midS).arg(normal.midSS).arg(normal.midV).arg(normal.midW));
+        check(normal.leafS == 11 && normal.leafSS == 1,
+              "8) 正常顺序：嵌套 LEAF 的元素形参");
+        check(normal.defV == 42 && normal.defW == 43,
+              QString("8) 正常顺序：省略实参 + 元素形参默认值 V=%1 W=%2")
+                  .arg(normal.defV).arg(normal.defW));
+
+        const Observed reordered = observe(true, loaded);
+        check(loaded, "8) 颠倒顺序装载");
+        check(reordered.midS == 7 && reordered.midSS == 1 && reordered.midV == 8
+                  && reordered.midW == 9,
+              QString("8) 颠倒顺序：MID 的元素形参仍写进被调段 S=%1 SS=%2 V=%3 W=%4")
+                  .arg(reordered.midS).arg(reordered.midSS).arg(reordered.midV).arg(reordered.midW));
+        check(reordered.leafS == 11 && reordered.leafSS == 1,
+              QString("8) 颠倒顺序：嵌套两层仍各自到位 LEAF S=%1 SS=%2")
+                  .arg(reordered.leafS).arg(reordered.leafSS));
+        check(reordered.defV == 42 && reordered.defW == 43,
+              QString("8) 颠倒顺序：省略实参 + 默认值仍写进被调段 V=%1 W=%2")
+                  .arg(reordered.defV).arg(reordered.defW));
+        check(reordered.afterS == 1 && reordered.afterSS == 1 && reordered.afterV == 2
+                  && reordered.afterW == 3,
+              QString("8) 颠倒顺序：调用者同名私有变量未被改写 S=%1 SS=%2 V=%3 W=%4")
+                  .arg(reordered.afterS).arg(reordered.afterSS).arg(reordered.afterV)
+                  .arg(reordered.afterW));
+        check(reordered.midS == normal.midS && reordered.midSS == normal.midSS
+                  && reordered.midV == normal.midV && reordered.midW == normal.midW
+                  && reordered.leafS == normal.leafS && reordered.leafSS == normal.leafSS
+                  && reordered.defV == normal.defV && reordered.defW == normal.defW,
+              "8) 两种顺序的观察值逐项相同（顺序无关）");
     }
 
     // =====================================================================

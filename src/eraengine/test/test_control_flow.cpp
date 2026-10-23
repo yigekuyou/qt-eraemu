@@ -58,7 +58,7 @@ static void run(const QString& name, const QStringList& source, qint64 expected,
         table.setEntryPoint("MAIN");
         result = runner.runToCompletion();
     }
-    const qint64 actual = storage.getGlobalInt1D("CHECK", 0);
+    const qint64 actual = storage.getGlobalInt1DInCurrentFrame("CHECK", 0);
     if (result != expectedState || actual != expected) {
         qCritical() << name << "state" << int(result) << "actual" << actual << "expected" << expected;
         ++failures;
@@ -88,7 +88,7 @@ static void tryListLoadTime() {
     // 否则数据落到顶层槽、读取按 MAIN 私有键 → 空串。
     const eravar::ScopeId mainScope = eravar::internName(QStringLiteral("MAIN"));
     storage.setPrivateScope(eravar::internName(scopeKeyOfFunction(table.variableTable(), "MAIN")), {"LIST_NAME"});
-    storage.setGlobalStr1D("LIST_NAME", 0, "CHOSEN");
+    storage.setGlobalStr1DInCurrentFrame("LIST_NAME", 0, "CHOSEN");
     const auto* entry = table.lineAt("list", 3);
     bool good = entry && !entry->isError && entry->argument.typeOk
         && entry->arguments.size() == 2 && entry->arguments[0].ast && entry->arguments[1].ast;
@@ -155,7 +155,7 @@ static void constArrayIntrospection() {
     table.markLoadComplete();
     table.setEntryPoint("MAIN");
     runner.runToCompletion();
-    const qint64 actual = storage.getGlobalInt1D("CHECK", 0);
+    const qint64 actual = storage.getGlobalInt1DInCurrentFrame("CHECK", 0);
     if (actual != 301) {
         qCritical() << "常数数组的 VARSIZE/FINDELEMENT" << "actual" << actual << "expected" << 301;
         ++failures;
@@ -196,7 +196,7 @@ static void globalConstShadowedByPrivate() {
     table.markLoadComplete();
     table.setEntryPoint("MAIN");
     const ExecState state_ = runner.runToCompletion();
-    const qint64 actual = storage.getGlobalInt1D("CHECK", 0);
+    const qint64 actual = storage.getGlobalInt1DInCurrentFrame("CHECK", 0);
     if (state_ == ExecState::Halt && actual == 8) {
         qInfo() << "PASS 广域 CONST 被同名私有变量遮蔽（运行期读到变量值）";
     } else {
@@ -249,7 +249,7 @@ static void chkDataCallForm() {
     table.markLoadComplete();
     table.setEntryPoint("MAIN");
     const auto result = runner.runToCompletion();
-    const qint64 actual = storage.getGlobalInt1D("CHECK", 0);
+    const qint64 actual = storage.getGlobalInt1DInCurrentFrame("CHECK", 0);
     // 7 号存在 -> RESULT=0（+0）；0 号缺失 -> RESULT=1（+100）；1 号缺失 -> +1000
     if (result != ExecState::Halt || actual != 1100) {
         qCritical() << "CHKDATA call form failed" << int(result) << actual;
@@ -315,16 +315,16 @@ static void htmlFlow() {
         return std::any_of(value.markup.parts.cbegin(), value.markup.parts.cend(),
             [](const PrintTemplatePart& part) { return part.kind == PrintTemplatePart::Kind::Button; });
     };
-    storage.setStringSlot("RESULTS", {0}, flatString(tracked));
-    good = hasButton(storage.getStringSlot("RESULTS", {0}));
-    storage.setGlobalStr1D("RESULTS", 0, stringText(tracked));
-    good &= !hasButton(storage.getStringSlot("RESULTS", {0}))
-        && storage.getStringSlot("RESULTS", {0}).text == stringText(tracked);
+    storage.setStringSlotInCurrentFrame("RESULTS", {0}, flatString(tracked));
+    good = hasButton(storage.getStringSlotInCurrentFrame("RESULTS", {0}));
+    storage.setGlobalStr1DInCurrentFrame("RESULTS", 0, stringText(tracked));
+    good &= !hasButton(storage.getStringSlotInCurrentFrame("RESULTS", {0}))
+        && storage.getStringSlotInCurrentFrame("RESULTS", {0}).text == stringText(tracked);
     // RESETGLOBAL clears user globals; built-in RESULTS is preserved.
-    storage.setStringSlot("HTML_GLOBAL", {0}, flatString(tracked));
+    storage.setStringSlotInCurrentFrame("HTML_GLOBAL", {0}, flatString(tracked));
     storage.resetGlobals();
-    good &= storage.getStringSlot("HTML_GLOBAL", {0}).text.isEmpty()
-        && !hasButton(storage.getStringSlot("HTML_GLOBAL", {0}));
+    good &= storage.getStringSlotInCurrentFrame("HTML_GLOBAL", {0}).text.isEmpty()
+        && !hasButton(storage.getStringSlotInCurrentFrame("HTML_GLOBAL", {0}));
     if (!good) { qCritical() << "HTML provenance invalidation failed"; ++failures; }
 }
 
@@ -406,7 +406,7 @@ static void emExtensionFunctions() {
     const QList<qint64> expect = {5, 1, 2, 0, 3, 7, 2, 1, 9, 3, 1, 3, 7, 8, 2};
     bool ok = true;
     for (int i = 0; i < expect.size(); ++i) {
-        const qint64 actual = storage.getGlobalInt1D("CHECK", i);
+        const qint64 actual = storage.getGlobalInt1DInCurrentFrame("CHECK", i);
         if (actual != expect.at(i)) {
             qCritical() << QString("EM 扩展式中函数 CHECK:%1").arg(i) << "actual" << actual
                         << "expected" << expect.at(i);
@@ -493,7 +493,7 @@ static void scriptPathFunctions() {
     const QList<qint64> expect = {15, 0, 0, 15, 1, 0, 0, 1, 5, 1, 4, 4, 3, 2, 15, 1};
     bool ok = true;
     for (int i = 0; i < expect.size(); ++i) {
-        const qint64 actual = storage.getGlobalInt1D("CHECK", i);
+        const qint64 actual = storage.getGlobalInt1DInCurrentFrame("CHECK", i);
         if (actual != expect.at(i)) {
             qCritical() << QString("脚本路径/HTML 函数 CHECK:%1").arg(i) << "actual" << actual
                         << "expected" << expect.at(i);

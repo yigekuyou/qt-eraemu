@@ -51,6 +51,13 @@ namespace forkem  { void registerEmExtensions(ExtensionRegistry& ext); }
 // 共享工具（fork_support.h 的实现）
 // ===========================================================================
 namespace forksupport {
+// 扩展层**没有段身份**：它拿到的是脚本传进来的变量名，而调用点永远是「求值器/
+// 执行引擎当前正在跑的那一帧」。所以这里唯一正确的作用域就是存储此刻的当前帧
+// —— 但这是**扩展层自己声明**的（显式读 + 显式传参），不是存储层替它猜。
+// 若将来把扩展改成异步/延迟执行，这一行就是必须重新设计的唯一位置。
+eravar::ScopeId currentFrameScope(VariableStorage* storage) {
+    return storage ? storage->privateScopeId() : eravar::kGlobalScope;
+}
 
 QString refTargetName(const ExpressionNode* node) {
     if (node == nullptr || node->kind() != NodeKind::Variable) return QString();
@@ -61,7 +68,7 @@ int arrayCapacity(VariableStorage* storage, const QString& name) {
     if (storage == nullptr || name.isEmpty()) return 0;
     const int cfg = storage->variableConfig().getSize1D(name);
     if (cfg > 0) return cfg;
-    const int live = storage->arraySize(name);
+    const int live = storage->arraySize(name, currentFrameScope(storage));
     return live > 0 ? live : 0;
 }
 
@@ -71,7 +78,7 @@ void writeInt(VariableStorage* storage, const QString& name, int index, qint64 v
         storage->setSystemVariable(name, index, value);
         return;
     }
-    storage->setGlobalInt1D(name, index, value);
+    storage->setGlobalInt1D(name, index, value, currentFrameScope(storage));
 }
 
 void writeStr(VariableStorage* storage, const QString& name, int index, const QString& value) {
@@ -80,7 +87,7 @@ void writeStr(VariableStorage* storage, const QString& name, int index, const QS
         storage->setSystemStr(name, index, value);
         return;
     }
-    storage->setGlobalStr1D(name, index, value);
+    storage->setGlobalStr1D(name, index, value, currentFrameScope(storage));
 }
 
 bool matchesPrefix(const QString& name, const QString& pattern) {

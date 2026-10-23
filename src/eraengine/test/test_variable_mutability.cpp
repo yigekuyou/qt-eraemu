@@ -154,22 +154,22 @@ int main(int argc, char* argv[]) {
     const ExecState st = runner.runToCompletion();
     check(st == ExecState::Halt, "run finished (Halt)");
 
-    const auto g = [&](const QString& n) { return storage.getGlobalInt1D(n, 0); };
+    const auto g = [&](const QString& n) { return storage.getGlobalInt1DInCurrentFrame(n, 0); };
 
     check(g("LIST_SUM") == 6, "integer list and trailing comma");
     check(g("LIST_STR_LEN") == 2, "string expression list");
-    check(storage.getGlobalStr1D("G_SNAME", 2) == QStringLiteral("\"a6b\""), "string equals preserves quotes and expands FORM");
+    check(storage.getGlobalStr1DInCurrentFrame("G_SNAME", 2) == QStringLiteral("\"a6b\""), "string equals preserves quotes and expands FORM");
 
     qDebug() << "\n1) 用户全局变量（1D/2D/3D，大小写不敏感）";
-    check(storage.getGlobalInt1D("G_ONE", 0) == 10, "G_ONE:0 == 10");
-    check(storage.getGlobalInt1D("G_ONE", 1) == 20, "g_one:1 == 20");
+    check(storage.getGlobalInt1DInCurrentFrame("G_ONE", 0) == 10, "G_ONE:0 == 10");
+    check(storage.getGlobalInt1DInCurrentFrame("G_ONE", 1) == 20, "g_one:1 == 20");
     check(g("R_ONE_A") == 10, "R_ONE_A = G_ONE:0 == 10");
     check(g("R_ONE_B") == 20, "R_ONE_B = g_one:1 == 20（小写读）");
-    check(storage.getGlobalStr1D("G_SNAME", 0) == QStringLiteral("hello"),
+    check(storage.getGlobalStr1DInCurrentFrame("G_SNAME", 0) == QStringLiteral("hello"),
           "G_SNAME:0 == \"hello\"");
-    check(storage.getGlobalInt2D("G_TWO", 1, 2) == 77, "G_TWO:1:2 == 77");
+    check(storage.getGlobalInt2DInCurrentFrame("G_TWO", 1, 2) == 77, "G_TWO:1:2 == 77");
     check(g("R_TWO") == 77, "R_TWO = G_TWO:1:2 == 77");
-    check(storage.getGlobalInt3D("G_THREE", 1, 1, 1) == 5, "g_three:1:1:1 == 5");
+    check(storage.getGlobalInt3DInCurrentFrame("G_THREE", 1, 1, 1) == 5, "g_three:1:1:1 == 5");
     check(g("R_THREE") == 5, "R_THREE == 5");
 
     qDebug() << "\n2) 系统变量 TIME（此前写入后读回恒为 0）";

@@ -80,7 +80,7 @@ static_assert(VariableNode::needsExecutionScope(VariableNode::AccessKind::Const)
 static_assert(VariableNode::needsExecutionScope(VariableNode::AccessKind::Dynamic),
               "Dynamic 回退需要执行位置");
 // 新契约：字符串形参的私有槽解析（readStringParameterAlias 的
-// resolvedStorageName / getStringSlot(…, scope)）要 scope，所以 Param 属于
+// resolvedStorageName / getStringSlotInCurrentFrame(…, scope)）要 scope，所以 Param 属于
 // true 分支 —— 这条 static_assert 就是「Param 不许再退回 false」的编译期证据。
 static_assert(VariableNode::needsExecutionScope(VariableNode::AccessKind::Param),
               "形参（字符串私有槽解析）需要执行位置");
@@ -326,12 +326,12 @@ int main(int argc, char* argv[]) {
                   "字符串形参 S:1 的条件 -> conditionNeedsScope=true（Param 消费 scope）");
 
         check(prun.runToCompletion() == ExecState::Halt, "param_scope 程序正常结束");
-        const qint64 gp = ps.getGlobalInt1D("GP", 0);
+        const qint64 gp = ps.getGlobalInt1DInCurrentFrame("GP", 0);
         check(gp == 1,
               QStringLiteral("条件里的 S:1 取到形参私有槽 \"私槽\"（GP=%1；"
                              "2 = 读成了 m_parameters 值绑定，"
                              "3 = 读成了全局裸名槽）").arg(gp));
-        check(ps.getGlobalInt1D("GQ", 0) == 1, "裸名槽 S:1 未被形参的读写碰过");
+        check(ps.getGlobalInt1DInCurrentFrame("GQ", 0) == 1, "裸名槽 S:1 未被形参的读写碰过");
         check(ps.getStringSlot(QStringLiteral("S"), {1}, eravar::kGlobalScope).text
                   == QStringLiteral("裸名槽"),
               "全局裸名槽 S:1 仍是 \"裸名槽\"");
@@ -341,33 +341,33 @@ int main(int argc, char* argv[]) {
     qDebug() << "\n2) 语义靶子：同名私有量在 @A/@B 各取各的";
     // ------------------------------------------------------------------
     check(runner.runToCompletion() == ExecState::Halt, "cond_scope 程序正常结束");
-    check(storage.getGlobalInt1D("GA", 0) == 1,
+    check(storage.getGlobalInt1DInCurrentFrame("GA", 0) == 1,
           "@A 的 IF SHAREDV 取到本段私有值 11（key 自带作用域）");
-    check(storage.getGlobalInt1D("GB", 0) == 1,
+    check(storage.getGlobalInt1DInCurrentFrame("GB", 0) == 1,
           "@B 的 IF SHAREDV 取到本段私有值 22（key 自带作用域）");
-    check(storage.getGlobalInt1D("GA2", 0) == 1,
+    check(storage.getGlobalInt1DInCurrentFrame("GA2", 0) == 1,
           "@A 的 IF PRIVC 取到本段私有常数 11（scope 参数）");
-    check(storage.getGlobalInt1D("GB2", 0) == 1,
+    check(storage.getGlobalInt1DInCurrentFrame("GB2", 0) == 1,
           "@B 的 IF PRIVC 取到本段私有常数 22（scope 参数）");
-    check(storage.getGlobalInt1D("GA3", 0) == 1,
+    check(storage.getGlobalInt1DInCurrentFrame("GA3", 0) == 1,
           "@A 的 IF ARR:0 取到本段私有常数数组 11（scope 参数）");
-    check(storage.getGlobalInt1D("GB3", 0) == 1,
+    check(storage.getGlobalInt1DInCurrentFrame("GB3", 0) == 1,
           "@B 的 IF ARR:0 取到本段私有常数数组 21（scope 参数）");
 
     // ------------------------------------------------------------------
     qDebug() << "\n3) 语义靶子：CHARADATA 条件在两个角色上各取各的";
     // ------------------------------------------------------------------
-    check(storage.getGlobalInt1D("GA4", 0) == 1,
+    check(storage.getGlobalInt1DInCurrentFrame("GA4", 0) == 1,
           "TARGET=0 时 IF CD:0 读到角色 0 的 111");
-    check(storage.getGlobalInt1D("GA5", 0) == 1,
+    check(storage.getGlobalInt1DInCurrentFrame("GA5", 0) == 1,
           "TARGET=1 时 IF CD:0 读到角色 1 的 222（角色隔离）");
 
     // ------------------------------------------------------------------
     qDebug() << "\n4) 语义靶子：忽略位置的 kind 条件仍然为真";
     // ------------------------------------------------------------------
-    check(storage.getGlobalInt1D("GA6", 0) == 1, "IF FLAG:0 == 0（System）为真");
-    check(storage.getGlobalInt1D("GA7", 0) == 1, "IF CFLAG:0 == 0（Chara）为真");
-    check(storage.getGlobalInt1D("GA8", 0) == 1, "IF TA:0:0:0 == 0（Dynamic 回退）为真");
+    check(storage.getGlobalInt1DInCurrentFrame("GA6", 0) == 1, "IF FLAG:0 == 0（System）为真");
+    check(storage.getGlobalInt1DInCurrentFrame("GA7", 0) == 1, "IF CFLAG:0 == 0（Chara）为真");
+    check(storage.getGlobalInt1DInCurrentFrame("GA8", 0) == 1, "IF TA:0:0:0 == 0（Dynamic 回退）为真");
 
     // ------------------------------------------------------------------
     qDebug() << "\n5) evaluateAst 显式作用域：同一条件 AST 两个 scope 各取各的";

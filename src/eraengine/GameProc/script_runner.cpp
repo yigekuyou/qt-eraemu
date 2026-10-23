@@ -164,7 +164,7 @@ void ScriptRunner::onInputProvided(qint64 value) {
     if (m_state->getExecState() == ExecState::WaitInput
         || m_state->getExecState() == ExecState::WaitSystemInput) {
         m_storage->setSystemVariable(QStringLiteral("RESULT"), 0, value);
-        m_storage->setGlobalInt1D(QStringLiteral("RESULT"), 0, value);
+        m_storage->setGlobalInt1D(QStringLiteral("RESULT"), 0, value, eravar::kGlobalScope);
         m_state->requestResume();   // 发 continueExecution -> onContinueExecution
     }
 }
@@ -1136,7 +1136,7 @@ ExecState ScriptRunner::executeLine(const LogicalLine& line) {
                 text = op.raw;
             }
             // RESULTS 全局（C# VariableData.cs:202，跨函数共享）
-            m_storage->setGlobalStr1D(QStringLiteral("RESULTS"), 0, text);
+            m_storage->setGlobalStr1D(QStringLiteral("RESULTS"), 0, text, eravar::kGlobalScope);
             m_storage->setLocalStr(0, text);
             // 返回值：字符串型函数的调用方读的是 m_lastReturnValue（与 RETURNF 同路径）
             m_lastReturnValue = QVariant(text);
@@ -1177,7 +1177,7 @@ ExecState ScriptRunner::executeLine(const LogicalLine& line) {
             if (values.isEmpty()) values.append(0);
             for (int i = 0; i < values.size(); ++i) {
                 m_storage->setSystemVariable("RESULT", i, values[i]);
-                m_storage->setGlobalInt1D("RESULT", i, values[i]);
+                m_storage->setGlobalInt1D("RESULT", i, values[i], eravar::kGlobalScope);
             }
             m_lastReturnValue = QVariant::fromValue<qint64>(values.first());
         }
@@ -1232,6 +1232,9 @@ ExecState ScriptRunner::executeLine(const LogicalLine& line) {
         for (const Operand& a : line.arguments) {
             if (a.raw != QLatin1String(",")) ops.append(a);
         }
+        // 本行的段身份：数组名 -> 存储键的解析位置（与 find(var, line.scopeKey)
+        // 和 shapeOf(...) 用的是同一个作用域）。只 intern 一次。
+        const eravar::ScopeId arrayScope = eravar::internName(line.scopeKey);
         auto evalOp = [&](int i, qint64 def) -> qint64 {
             if (i >= ops.size()) return def;
             qint64 v = def;
@@ -1247,7 +1250,7 @@ ExecState ScriptRunner::executeLine(const LogicalLine& line) {
                     && decl->lengths.first() > 0)
                     return decl->lengths.first();
             }
-            return qMax(0, m_storage->arraySize(var));
+            return qMax(0, m_storage->arraySize(var, arrayScope));
         };
         // 是否字符串数组（按声明类型）
         auto isStrArray = [&](const QString& var) -> bool {
@@ -1271,14 +1274,14 @@ ExecState ScriptRunner::executeLine(const LogicalLine& line) {
             const int num = (numN <= 0) ? (len - start) : static_cast<int>(qMin<qint64>(numN, len - start));
             if (isStrArray(var)) {
                 QStringList vals;
-                for (int i = 0; i < len; ++i) vals << m_storage->getGlobalStr1D(var, i);
+                for (int i = 0; i < len; ++i) vals << m_storage->getGlobalStr1D(var, i, arrayScope);
                 for (int i = start; i < len; ++i)
-                    m_storage->setGlobalStr1D(var, i, (i + num < len) ? vals.at(i + num) : QString());
+                    m_storage->setGlobalStr1D(var, i, (i + num < len) ? vals.at(i + num) : QString(), arrayScope);
             } else {
                 QList<qint64> vals;
-                for (int i = 0; i < len; ++i) vals << m_storage->getGlobalInt1D(var, i);
+                for (int i = 0; i < len; ++i) vals << m_storage->getGlobalInt1D(var, i, arrayScope);
                 for (int i = start; i < len; ++i)
-                    m_storage->setGlobalInt1D(var, i, (i + num < len) ? vals.at(i + num) : 0);
+                    m_storage->setGlobalInt1D(var, i, (i + num < len) ? vals.at(i + num) : 0, arrayScope);
             }
             return ExecState::Continue;
         }
@@ -1300,19 +1303,19 @@ ExecState ScriptRunner::executeLine(const LogicalLine& line) {
             const qint64 defI = evalOp(2, 0);
             if (strArr) {
                 QStringList vals;
-                for (int i = 0; i < len; ++i) vals << m_storage->getGlobalStr1D(var, i);
+                for (int i = 0; i < len; ++i) vals << m_storage->getGlobalStr1D(var, i, arrayScope);
                 for (int i = start; i < start + num; ++i) {
                     const int src = i - shift;
                     m_storage->setGlobalStr1D(var, i,
-                        (src >= start && src < start + num) ? vals.at(src) : defS);
+                        (src >= start && src < start + num) ? vals.at(src) : defS, arrayScope);
                 }
             } else {
                 QList<qint64> vals;
-                for (int i = 0; i < len; ++i) vals << m_storage->getGlobalInt1D(var, i);
+                for (int i = 0; i < len; ++i) vals << m_storage->getGlobalInt1D(var, i, arrayScope);
                 for (int i = start; i < start + num; ++i) {
                     const int src = i - shift;
                     m_storage->setGlobalInt1D(var, i,
-                        (src >= start && src < start + num) ? vals.at(src) : defI);
+                        (src >= start && src < start + num) ? vals.at(src) : defI, arrayScope);
                 }
             }
             return ExecState::Continue;
@@ -1332,18 +1335,18 @@ ExecState ScriptRunner::executeLine(const LogicalLine& line) {
             if (num <= 1) return ExecState::Continue;
             if (isStrArray(var)) {
                 QStringList vals;
-                for (int i = 0; i < len; ++i) vals << m_storage->getGlobalStr1D(var, i);
+                for (int i = 0; i < len; ++i) vals << m_storage->getGlobalStr1D(var, i, arrayScope);
                 std::sort(vals.begin() + start, vals.begin() + start + num,
                           [&](const QString& a, const QString& b) {
                               return back ? (a > b) : (a < b);
                           });
-                for (int i = 0; i < len; ++i) m_storage->setGlobalStr1D(var, i, vals.at(i));
+                for (int i = 0; i < len; ++i) m_storage->setGlobalStr1D(var, i, vals.at(i), arrayScope);
             } else {
                 QList<qint64> vals;
-                for (int i = 0; i < len; ++i) vals << m_storage->getGlobalInt1D(var, i);
+                for (int i = 0; i < len; ++i) vals << m_storage->getGlobalInt1D(var, i, arrayScope);
                 std::sort(vals.begin() + start, vals.begin() + start + num,
                           [&](qint64 a, qint64 b) { return back ? (a > b) : (a < b); });
-                for (int i = 0; i < len; ++i) m_storage->setGlobalInt1D(var, i, vals.at(i));
+                for (int i = 0; i < len; ++i) m_storage->setGlobalInt1D(var, i, vals.at(i), arrayScope);
             }
             return ExecState::Continue;
         }
@@ -1381,7 +1384,7 @@ ExecState ScriptRunner::executeLine(const LogicalLine& line) {
                 return failCopy(QStringLiteral("不支持角色数组或只读目标：%1").arg(var));
             // 形状的唯一入口（声明 -> 装载期尺寸表 -> 多维容器几何）；REF 的键
             // 已在 storageName 里解析成目标数组，所以拿到的是目标的形状。
-            const auto shape = m_storage->shapeOf(var, eravar::internName(line.scopeKey)).lengths;
+            const auto shape = m_storage->shapeOf(var, arrayScope).lengths;
             if (shape.size() != rank) return failCopy(QStringLiteral("数组尺寸不可用：%1").arg(var));
             arrays.append({var, type, shape, !decl && m_storage->hasSystemVariable(var)});
         }
@@ -1393,14 +1396,14 @@ ExecState ScriptRunner::executeLine(const LogicalLine& line) {
         QList<int> extent;
         for (int axis = 0; axis < rank; ++axis) extent.append(qMin(src.shape[axis], dest.shape[axis]));
         const auto readInt = [&](const CopyArrayInfo& array, int x, int y, int z) {
-            if (rank == 3) return m_storage->getGlobalInt3D(array.name, x, y, z);
-            if (rank == 2) return m_storage->getGlobalInt2D(array.name, x, y);
+            if (rank == 3) return m_storage->getGlobalInt3D(array.name, x, y, z, arrayScope);
+            if (rank == 2) return m_storage->getGlobalInt2D(array.name, x, y, arrayScope);
             if (array.system) {
                 if (array.name == QLatin1String("LOCAL")) return m_storage->getLocalInt(x);
                 if (array.name == QLatin1String("ARG")) return m_storage->getArgInt(x);
                 return m_storage->getSystemVariable(array.name, x);
             }
-            return m_storage->getGlobalInt1D(array.name, x);
+            return m_storage->getGlobalInt1D(array.name, x, arrayScope);
         };
         for (int x = 0; x < extent[0]; ++x)
             for (int y = 0; y < (rank >= 2 ? extent[1] : 1); ++y)
@@ -1409,12 +1412,14 @@ ExecState ScriptRunner::executeLine(const LogicalLine& line) {
                     if (rank >= 2) indices.append(y);
                     if (rank == 3) indices.append(z);
                     if (src.type == OperandType::Str) {
-                        m_storage->setStringSlot(dest.name, indices, m_storage->getStringSlot(src.name, indices));
+                        m_storage->setStringSlot(dest.name, indices,
+                                                 m_storage->getStringSlot(src.name, indices, arrayScope),
+                                                 arrayScope);
                     } else {
                         const qint64 value = readInt(src, x, y, z);
-                        if (rank == 3) m_storage->setGlobalInt3D(dest.name, x, y, z, value);
-                        else if (rank == 2) m_storage->setGlobalInt2D(dest.name, x, y, value);
-                        else if (!dest.system) m_storage->setGlobalInt1D(dest.name, x, value);
+                        if (rank == 3) m_storage->setGlobalInt3D(dest.name, x, y, z, value, arrayScope);
+                        else if (rank == 2) m_storage->setGlobalInt2D(dest.name, x, y, value, arrayScope);
+                        else if (!dest.system) m_storage->setGlobalInt1D(dest.name, x, value, arrayScope);
                         else if (dest.name == QLatin1String("LOCAL")) m_storage->setLocalInt(x, value);
                         else if (dest.name == QLatin1String("ARG")) m_storage->setArgInt(x, value);
                         else m_storage->setSystemVariable(dest.name, x, value);
@@ -1541,7 +1546,7 @@ ExecState ScriptRunner::executeLine(const LogicalLine& line) {
                 ? stringText(getEvaluator().evaluate(*def.ast, m_storage, baseData(), m_currentScopeId))
                 : (def.isString ? def.raw
                                 : stringText(evaluateLoadedOperand(getEvaluator(), def, m_storage, baseData(), m_currentScopeId)));
-            if (m_storage) m_storage->setGlobalStr1D(QStringLiteral("RESULTS"), 0, v);
+            if (m_storage) m_storage->setGlobalStr1D(QStringLiteral("RESULTS"), 0, v, eravar::kGlobalScope);
         } else {
             qint64 v = 0;
             if (def.ast) v = getEvaluator().evaluate(*def.ast, m_storage, baseData(), m_currentScopeId).toLongLong();
@@ -2209,10 +2214,19 @@ ExecState ScriptRunner::doCallLine(const LogicalLine& line, bool isForm, bool is
     // 段身份只构造一次：enterCall / 私有初值 / 实参绑定是**同一个**事实。
     const QString scopeKey = info ? eravar::segmentKeyText(info->script, info->labelLine)
                                   : QString();
-    enterCall(label, scopeKey);   // 无声明信息时 scopeKey 为空 = 广域
-    // 顺序对齐 C#：先初始化函数私有变量的初值（#DIM X = 7），再写实参
-    m_table->applyPrivateVariableDefaults(scopeKey);
-    bindArguments(info, scopeKey, evaluated, references, &evaluatedValues);
+    if (m_testBindBeforeEnter) {
+        // 测试专用（默认关）：私有初值 + 实参绑定都在**进入被调帧之前**完成。
+        // applyPrivateDefault 与绑定都吃显式段身份，不读「谁是当前帧」；若这条
+        // 路径红，说明某处又退回了隐式作用域。
+        m_table->applyPrivateVariableDefaults(scopeKey);
+        bindArguments(info, scopeKey, evaluated, references, &evaluatedValues);
+        enterCall(label, scopeKey);
+    } else {
+        enterCall(label, scopeKey);   // 无声明信息时 scopeKey 为空 = 广域
+        // 顺序对齐 C#：先初始化函数私有变量的初值（#DIM X = 7），再写实参
+        m_table->applyPrivateVariableDefaults(scopeKey);
+        bindArguments(info, scopeKey, evaluated, references, &evaluatedValues);
+    }
     bool entered = false;
     if (isJump) {
         entered = m_table->jumpLabel(label);            // JUMP 系：继承当前帧返回地址
@@ -2464,13 +2478,13 @@ void ScriptRunner::bindArguments(const UserFunctionDecl* info, const QString& sc
                                  const QList<Operand>& callArgs,
                                  const QHash<QString, QString>& references,
                                  const QList<QVariant>* snapshots) {
-    // 顺序即正确性前提（(a) 类「形参绑定 / 数组操作」今天靠它偶然正确）：
-    // doCallLine 先 enterCall(scopeKey) 再调这里，下面所有**隐式当前帧**的写入
-    // （setStringSlot / setGlobalInt1D / setGlobalInt2D …）因此落到被调段而不是
-    // 调用者帧。这条断言把「顺序」从注释变成可观察前提 —— 若有人把 bindArguments
-    // 提到 enterCall 之前（或中间再切帧），元素形参就会静默写进调用者帧。
-    Q_ASSERT(m_storage->privateScopeId() == eravar::internName(scopeKey));
-    const auto bindOne = [this, &references, info, &scopeKey](const UserParamDecl* p, int position,
+    // **顺序无关**：绑定用的作用域是形参 scopeKey（被调段身份），每个写入都在
+    // 调用点上写着它，不读「谁是当前帧」。因此 doCallLine 先 enterCall 还是先
+    // bindArguments 不影响结果（test_scope_plumbing 的第 8 组用测试开关钉住）。
+    // 以前的 Q_ASSERT(privateScopeId() == intern(scopeKey)) 是「顺序即正确性」
+    // 的前提断言；显式化之后它只会禁止颠倒顺序（而颠倒已无害），故删除。
+    const eravar::ScopeId bindScope = eravar::internName(scopeKey);
+    const auto bindOne = [this, &references, info, &scopeKey, bindScope](const UserParamDecl* p, int position,
                                 bool argIsString, const QString& strValue, qint64 intValue, const QVariant& snapshot = {}) {
         switch (p ? p->target : UserParamTarget::Unknown) {
         case UserParamTarget::Arg:
@@ -2479,7 +2493,7 @@ void ScriptRunner::bindArguments(const UserFunctionDecl* info, const QString& sc
             m_storage->setLocalAlias(p->name, p->index);
             break;
         case UserParamTarget::Args:
-            m_storage->setStringSlot("ARGS", {p->index}, flatString(snapshot.isValid() ? snapshot : QVariant(argIsString ? strValue : QString::number(intValue))));
+            m_storage->setStringSlot("ARGS", {p->index}, flatString(snapshot.isValid() ? snapshot : QVariant(argIsString ? strValue : QString::number(intValue))), eravar::kGlobalScope);
             m_storage->setLocalAlias(p->name, p->index);
             break;
         case UserParamTarget::LocalVar:
@@ -2498,12 +2512,13 @@ void ScriptRunner::bindArguments(const UserFunctionDecl* info, const QString& sc
                 const int dim = vdecl ? vdecl->dimension : 1;
                 if (p->type == OperandType::Str) {
                     m_storage->setStringSlot(vn, p->fixedIndices.isEmpty() ? QList<int>{p->fixedIndex} : p->fixedIndices,
-                        flatString(snapshot.isValid() ? snapshot : QVariant(argIsString ? strValue : QString::number(intValue))));
+                        flatString(snapshot.isValid() ? snapshot : QVariant(argIsString ? strValue : QString::number(intValue))),
+                        bindScope);
                 } else if (dim >= 2 && p->fixedIndices.size() >= 2) {
                     m_storage->setGlobalInt2D(vn, p->fixedIndices.at(0), p->fixedIndices.at(1),
-                                              intValue);
+                                              intValue, bindScope);
                 } else {
-                    m_storage->setGlobalInt1D(vn, p->fixedIndex, intValue);
+                    m_storage->setGlobalInt1D(vn, p->fixedIndex, intValue, bindScope);
                 }
                 break;
             }
@@ -2514,7 +2529,7 @@ void ScriptRunner::bindArguments(const UserFunctionDecl* info, const QString& sc
         case UserParamTarget::Unknown:
         default:
             // 未归类（或无声明）：退化为按位置绑定到 ARG/ARGS
-            if (argIsString) m_storage->setStringSlot("ARGS", {position}, flatString(snapshot.isValid() ? snapshot : QVariant(strValue)));
+            if (argIsString) m_storage->setStringSlot("ARGS", {position}, flatString(snapshot.isValid() ? snapshot : QVariant(strValue)), eravar::kGlobalScope);
             else             m_storage->setArgInt(position, intValue);
             break;
         }
@@ -2583,9 +2598,9 @@ void ScriptRunner::bindArguments(const UserFunctionDecl* info, const QString& sc
         case UserParamTarget::LocalVar:
             if (param.fixedIndex >= 0) {
                 if (param.type == OperandType::Str)
-                    m_storage->setGlobalStr1D(param.varName, param.fixedIndex, QString());
+                    m_storage->setGlobalStr1D(param.varName, param.fixedIndex, QString(), bindScope);
                 else
-                    m_storage->setGlobalInt1D(param.varName, param.fixedIndex, 0);
+                    m_storage->setGlobalInt1D(param.varName, param.fixedIndex, 0, bindScope);
                 break;
             }
             m_storage->setParameter(param.varName.isEmpty() ? param.name : param.varName,
@@ -2635,6 +2650,8 @@ bool ScriptRunner::invokeUserFunction(const QString& name, const QList<QVariant>
     // 绑定实参（按声明的形参表：ARG/ARGS/私有变量）
     // 段身份只构造一次（enterCall 与私有初值计划同一个事实）。
     const QString scopeKey = eravar::segmentKeyText(info->script, info->labelLine);
+    // 被调段的段身份：下面所有形参写入都显式带它（不读「谁是当前帧」）。
+    const eravar::ScopeId callScope = eravar::internName(scopeKey);
     enterCall(name, scopeKey);
     m_table->applyPrivateVariableDefaults(scopeKey);
     m_storage->clearLocalAliases();
@@ -2642,7 +2659,7 @@ bool ScriptRunner::invokeUserFunction(const QString& name, const QList<QVariant>
         m_storage->setReference(it.key(), it.value());
     // 形参缺省值绑定（`@F(A, OP = "NORMAL")`）：实参没给到、或写成了空位
     //（省略实参）时使用。对齐 C#：实参为 null 时取 func.Def[i]。
-    const auto bindDefault = [this](const UserParamDecl& param, int position) {
+    const auto bindDefault = [this, callScope](const UserParamDecl& param, int position) {
         const bool stringDefault = param.type == OperandType::Str && !param.defaultStr.isEmpty();
         const QString& text = param.defaultStr;
         switch (param.target) {
@@ -2656,7 +2673,7 @@ bool ScriptRunner::invokeUserFunction(const QString& name, const QList<QVariant>
             break;
         case UserParamTarget::LocalVar:
             if (param.fixedIndex >= 0) {
-                m_storage->setGlobalInt1D(param.varName, param.fixedIndex, param.defaultInt);
+                m_storage->setGlobalInt1D(param.varName, param.fixedIndex, param.defaultInt, callScope);
                 break;
             }
             m_storage->setParameter(param.varName.isEmpty() ? param.name : param.varName,
@@ -2703,13 +2720,13 @@ bool ScriptRunner::invokeUserFunction(const QString& name, const QList<QVariant>
             break;
         case UserParamTarget::Args:
             // 省略 -> 空串（对齐 C# 缺省值）；此前整数化成 "0" 污染字符串形参
-            m_storage->setStringSlot("ARGS", {param->index}, flatString(omitted ? QVariant(QString()) : v));
+            m_storage->setStringSlot("ARGS", {param->index}, flatString(omitted ? QVariant(QString()) : v), eravar::kGlobalScope);
             m_storage->setLocalAlias(param->name, param->index);
             break;
         case UserParamTarget::LocalVar:
             if (param->fixedIndex >= 0) {
                 m_storage->setGlobalInt1D(param->varName, param->fixedIndex,
-                                          omitted ? 0 : v.toLongLong());
+                                          omitted ? 0 : v.toLongLong(), callScope);
                 break;
             }
             m_storage->setParameter(param->varName.isEmpty() ? param->name : param->varName,
@@ -2719,7 +2736,7 @@ bool ScriptRunner::invokeUserFunction(const QString& name, const QList<QVariant>
         case UserParamTarget::Unknown:
         default:
             m_storage->setArgInt(i, omitted ? 0 : v.toLongLong());
-            if (omitted || isStr) m_storage->setStringSlot("ARGS", {i}, flatString(omitted ? QVariant(QString()) : v));
+            if (omitted || isStr) m_storage->setStringSlot("ARGS", {i}, flatString(omitted ? QVariant(QString()) : v), eravar::kGlobalScope);
             break;
         }
     }
@@ -2746,9 +2763,9 @@ bool ScriptRunner::invokeUserFunction(const QString& name, const QList<QVariant>
         case UserParamTarget::LocalVar:
             if (param.fixedIndex >= 0) {
                 if (param.type == OperandType::Str)
-                    m_storage->setGlobalStr1D(param.varName, param.fixedIndex, QString());
+                    m_storage->setGlobalStr1D(param.varName, param.fixedIndex, QString(), callScope);
                 else
-                    m_storage->setGlobalInt1D(param.varName, param.fixedIndex, 0);
+                    m_storage->setGlobalInt1D(param.varName, param.fixedIndex, 0, callScope);
                 break;
             }
             m_storage->setParameter(param.varName.isEmpty() ? param.name : param.varName,

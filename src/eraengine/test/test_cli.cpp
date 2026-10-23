@@ -874,16 +874,16 @@ int main(int argc, char* argv[]) {
             const QString nm = parts.at(0);
             std::cout << "  " << spec.toStdString() << " = ";
             if (parts.size() == 1) {
-                const qint64 iv = vs->getGlobalInt1D(nm, 0);
-                const QString sv = vs->getGlobalStr1D(nm, 0);
+                const qint64 iv = vs->getGlobalInt1DInCurrentFrame(nm, 0);
+                const QString sv = vs->getGlobalStr1DInCurrentFrame(nm, 0);
                 std::cout << iv << (sv.isEmpty() ? "" : (" / \"" + sv.toStdString() + "\""));
             } else if (parts.size() == 2) {
                 const int i = parts.at(1).toInt();
-                const qint64 iv = vs->getGlobalInt1D(nm, i);
-                const QString sv = vs->getGlobalStr1D(nm, i);
+                const qint64 iv = vs->getGlobalInt1DInCurrentFrame(nm, i);
+                const QString sv = vs->getGlobalStr1DInCurrentFrame(nm, i);
                 std::cout << iv << (sv.isEmpty() ? "" : (" / \"" + sv.toStdString() + "\""));
             } else {
-                std::cout << vs->getGlobalInt2D(nm, parts.at(1).toInt(), parts.at(2).toInt());
+                std::cout << vs->getGlobalInt2DInCurrentFrame(nm, parts.at(1).toInt(), parts.at(2).toInt());
             }
             std::cout << "\n";
             return true;

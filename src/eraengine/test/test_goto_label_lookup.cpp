@@ -439,9 +439,9 @@ static void testA() {
     h.table.setEntryPoint(QStringLiteral("ALPHA"));
     h.positions.clear();
     check(h.runner.runToCompletion() == ExecState::Halt, "ALPHA 正常结束（无跳转错误）");
-    checkInt(h.storage.getGlobalInt1D(QStringLiteral("A_OUT"), 0), 10,
+    checkInt(h.storage.getGlobalInt1DInCurrentFrame(QStringLiteral("A_OUT"), 0), 10,
              "ALPHA 的 GOTO LOOP 落在自己的 $LOOP（行 3）");
-    checkInt(h.storage.getGlobalInt1D(QStringLiteral("A_AFTER"), 0), 0,
+    checkInt(h.storage.getGlobalInt1DInCurrentFrame(QStringLiteral("A_AFTER"), 0), 0,
              "GOTO 之后的兜底行没有执行");
     check(h.positions.contains(QStringLiteral("a.ERB:3")), "跳转落点行 = 3");
     check(!h.positions.contains(QStringLiteral("a.ERB:9")),
@@ -450,9 +450,9 @@ static void testA() {
     h.table.setEntryPoint(QStringLiteral("BETA"));
     h.positions.clear();
     check(h.runner.runToCompletion() == ExecState::Halt, "BETA 正常结束");
-    checkInt(h.storage.getGlobalInt1D(QStringLiteral("B_OUT"), 0), 20,
+    checkInt(h.storage.getGlobalInt1DInCurrentFrame(QStringLiteral("B_OUT"), 0), 20,
              "BETA 的 GOTO LOOP 落在自己的 $LOOP（行 9）");
-    checkInt(h.storage.getGlobalInt1D(QStringLiteral("B_AFTER"), 0), 0,
+    checkInt(h.storage.getGlobalInt1DInCurrentFrame(QStringLiteral("B_AFTER"), 0), 0,
              "GOTO 之后的兜底行没有执行");
     check(h.positions.contains(QStringLiteral("a.ERB:9")), "跳转落点行 = 9");
     check(!h.positions.contains(QStringLiteral("a.ERB:3")),
@@ -480,9 +480,9 @@ static void testB() {
     h.table.setEntryPoint(QStringLiteral("DUPFN"));
     h.positions.clear();
     check(h.runner.runToCompletion() == ExecState::Halt, "DUPFN 正常结束");
-    checkInt(h.storage.getGlobalInt1D(QStringLiteral("D_OUT"), 0), 1,
+    checkInt(h.storage.getGlobalInt1DInCurrentFrame(QStringLiteral("D_OUT"), 0), 1,
              "GOTO DUP 执行的是行 3 那一段（D_OUT = 1）");
-    checkInt(h.storage.getGlobalInt1D(QStringLiteral("D_AFTER"), 0), 0,
+    checkInt(h.storage.getGlobalInt1DInCurrentFrame(QStringLiteral("D_AFTER"), 0), 0,
              "GOTO 之后的兜底行没有执行");
     check(h.positions.contains(QStringLiteral("b.ERB:3")), "落点 = 行 3");
     check(!h.positions.contains(QStringLiteral("b.ERB:6")),
@@ -554,7 +554,7 @@ static void testC() {
     checkInt(h.table.currentLine(), 11, "PC 仍停在 GOTO 那一行");
     checkStr(h.table.currentScript(), "b.ERB", "脚本不变");
     checkInt(h.table.depth(), 0, "没有压帧（GOTO 不产生返回地址）");
-    checkInt(h.storage.getGlobalInt1D(QStringLiteral("M_AFTER"), 0), 0,
+    checkInt(h.storage.getGlobalInt1DInCurrentFrame(QStringLiteral("M_AFTER"), 0), 0,
              "GOTO 的下一行没有执行");
 }
 
@@ -570,7 +570,7 @@ static void testE() {
     checkInt(h.table.currentFunctionSegment(), -1, "文件头段的段身份 = -1");
     h.positions.clear();
     check(h.runner.runToCompletion() == ExecState::Halt, "文件头段脚本正常结束");
-    checkInt(h.storage.getGlobalInt1D(QStringLiteral("H_OUT"), 0), 7,
+    checkInt(h.storage.getGlobalInt1DInCurrentFrame(QStringLiteral("H_OUT"), 0), 7,
              "文件头段的 GOTO HEADER 命中了 $HEADER（行 1）");
     check(h.positions.contains(QStringLiteral("h.ERB:1")), "落点 = 行 1");
     check(h.errors.isEmpty(), "文件头段 GOTO 没有报错");
@@ -593,7 +593,7 @@ static void testE() {
     checkStr(h2.positions.join(QLatin1Char(',')), QStringLiteral("h.ERB:5"),
              "错误路径的位置轨迹只有「入口标签 -> GOTO 行」这一跳");
     checkInt(h2.table.currentLine(), 5, "PC 停在 GOTO 那一行（h.ERB:5）");
-    checkInt(h2.storage.getGlobalInt1D(QStringLiteral("H_OUT"), 0), 0,
+    checkInt(h2.storage.getGlobalInt1DInCurrentFrame(QStringLiteral("H_OUT"), 0), 0,
              "$HEADER 之后的 H_OUT 没有执行（没有跨段跳进文件头段）");
 }
 
@@ -629,10 +629,10 @@ static QString roundSummary(const QStringList& order) {
         const ExecState s2 = h.runner.runToCompletion();
         const QString posB = h.positions.join(QLatin1Char(','));
         out << QStringLiteral("a[%1|%2|%3|%4|%5|%6|%7|%8]")
-                   .arg(h.storage.getGlobalInt1D(QStringLiteral("A_OUT"), 0))
-                   .arg(h.storage.getGlobalInt1D(QStringLiteral("A_AFTER"), 0))
-                   .arg(h.storage.getGlobalInt1D(QStringLiteral("B_OUT"), 0))
-                   .arg(h.storage.getGlobalInt1D(QStringLiteral("B_AFTER"), 0))
+                   .arg(h.storage.getGlobalInt1DInCurrentFrame(QStringLiteral("A_OUT"), 0))
+                   .arg(h.storage.getGlobalInt1DInCurrentFrame(QStringLiteral("A_AFTER"), 0))
+                   .arg(h.storage.getGlobalInt1DInCurrentFrame(QStringLiteral("B_OUT"), 0))
+                   .arg(h.storage.getGlobalInt1DInCurrentFrame(QStringLiteral("B_AFTER"), 0))
                    .arg(stateName(s1), stateName(s2), posA, posB);
         out << QStringLiteral("aApi[%1|%2]")
                    .arg(h.table.firstGotoLabelPosition(QStringLiteral("a.ERB"), 0,
@@ -650,8 +650,8 @@ static QString roundSummary(const QStringList& order) {
         h.positions.clear();
         const ExecState s = h.runner.runToCompletion();
         out << QStringLiteral("b[%1|%2|%3|%4|%5|%6]")
-                   .arg(h.storage.getGlobalInt1D(QStringLiteral("D_OUT"), 0))
-                   .arg(h.storage.getGlobalInt1D(QStringLiteral("D_AFTER"), 0))
+                   .arg(h.storage.getGlobalInt1DInCurrentFrame(QStringLiteral("D_OUT"), 0))
+                   .arg(h.storage.getGlobalInt1DInCurrentFrame(QStringLiteral("D_AFTER"), 0))
                    .arg(stateName(s))
                    .arg(h.table.firstGotoLabelPosition(QStringLiteral("b.ERB"), 0,
                                                        QStringLiteral("DUP")))
@@ -668,7 +668,7 @@ static QString roundSummary(const QStringList& order) {
         h.positions.clear();
         const ExecState s = h.runner.runToCompletion();
         out << QStringLiteral("eHit[%1|%2|%3|%4|%5]")
-                   .arg(h.storage.getGlobalInt1D(QStringLiteral("H_OUT"), 0))
+                   .arg(h.storage.getGlobalInt1DInCurrentFrame(QStringLiteral("H_OUT"), 0))
                    .arg(stateName(s))
                    .arg(h.positions.join(QLatin1Char(',')))
                    .arg(h.table.firstGotoLabelPosition(QStringLiteral("h.ERB"), -1,

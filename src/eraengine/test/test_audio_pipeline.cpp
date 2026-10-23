@@ -185,7 +185,7 @@ int main(int argc, char* argv[]) {
         AudioPipelinePool pool;
         ExtensionRegistry ext;
         VariableStorage storage;
-        storage.setGlobalStr1D("F", 0, "bgm");
+        storage.setGlobalStr1DInCurrentFrame("F", 0, "bgm");
         ExpressionEvaluator evaluator;
         ExtensionRegistry::Services services;
         services.evaluateNode = [&](const ExpressionNode* ast) { return evaluator.evaluate(*ast, &storage); };

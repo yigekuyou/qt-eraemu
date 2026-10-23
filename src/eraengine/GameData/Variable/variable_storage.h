@@ -77,18 +77,28 @@ public:
 		[[nodiscard]] const VariableConfig& variableConfig() const { return m_variableConfig; }
 
 		// ================= 全局整型 (支持 1D/2D/3D) =================
-		Q_INVOKABLE void setGlobalInt1D(const QString &name, int x, qint64 val);
-		Q_INVOKABLE qint64 getGlobalInt1D(const QString &name, int x) const;
+		// 无 scope 的形态**只**叫 *InCurrentFrame：名字里就写着「用当前帧」。
+		// 生产代码一律走下面的显式 scope 重载（scope 必须给，没有默认参数）。
+		Q_INVOKABLE void setGlobalInt1DInCurrentFrame(const QString &name, int x, qint64 val);
+		Q_INVOKABLE qint64 getGlobalInt1DInCurrentFrame(const QString &name, int x) const;
+		Q_INVOKABLE void setGlobalInt1D(const QString& name, int x, qint64 val, eravar::ScopeId scope);
+		Q_INVOKABLE qint64 getGlobalInt1D(const QString& name, int x, eravar::ScopeId scope) const;
         // 私有初值直写（EraParseTable 的「调用计划」用）：storageKey 是装载期
         // 算好的 FUNC\x1fNAME 复合键，绕开每次调用的 storageName 作用域解析。
         // 语义与「作用域内裸名走 setGlobal{Int,Str}1D + ensureArraySize」等价：
         // 尺寸只扩不缩、初值逐项写（必要时顺带扩容）。
         void applyPrivateDefault(const QString& storageKey, bool isString, int ensureSize,
                                  const QList<qint64>& defaultInt, const QStringList& defaultStr);
-		Q_INVOKABLE void setGlobalInt2D(const QString &name, int x, int y, qint64 val);
-		Q_INVOKABLE qint64 getGlobalInt2D(const QString &name, int x, int y) const;
-		Q_INVOKABLE void setGlobalInt3D(const QString &name, int x, int y, int z, qint64 val);
-		Q_INVOKABLE qint64 getGlobalInt3D(const QString &name, int x, int y, int z) const;
+		Q_INVOKABLE void setGlobalInt2DInCurrentFrame(const QString &name, int x, int y, qint64 val);
+		Q_INVOKABLE qint64 getGlobalInt2DInCurrentFrame(const QString &name, int x, int y) const;
+		Q_INVOKABLE void setGlobalInt3DInCurrentFrame(const QString &name, int x, int y, int z, qint64 val);
+		Q_INVOKABLE qint64 getGlobalInt3DInCurrentFrame(const QString &name, int x, int y, int z) const;
+		Q_INVOKABLE void setGlobalInt2D(const QString& name, int x, int y, qint64 val, eravar::ScopeId scope);
+		Q_INVOKABLE qint64 getGlobalInt2D(const QString& name, int x, int y, eravar::ScopeId scope) const;
+		Q_INVOKABLE void setGlobalInt3D(const QString& name, int x, int y, int z, qint64 val,
+		                                eravar::ScopeId scope);
+		Q_INVOKABLE qint64 getGlobalInt3D(const QString& name, int x, int y, int z,
+		                                  eravar::ScopeId scope) const;
 
 		// ================= 名字级整数访问的唯一原语 =================
 		// 「名字 + 下标 -> 整数存储」只有这一份实现；判定顺序（行序即语义）
@@ -249,11 +259,11 @@ public:
 		void setLocalAliases(const QHash<QString, int> &aliases) { m_localAliases = aliases; }
 		void clearLocalAliases() { m_localAliases.clear(); }
 
-        [[nodiscard]] FlatStringValue getStringSlot(const QString& name, const QList<int>& indices = {}) const;
+        [[nodiscard]] FlatStringValue getStringSlotInCurrentFrame(const QString& name, const QList<int>& indices = {}) const;
         // 显式作用域版本：Dynamic 解析用（名字 -> 该函数的私有槽）。
         [[nodiscard]] FlatStringValue getStringSlot(const QString& name, const QList<int>& indices,
                                                     eravar::ScopeId scope) const;
-        bool setStringSlot(const QString& name, const QList<int>& indices, const FlatStringValue& value);
+        bool setStringSlotInCurrentFrame(const QString& name, const QList<int>& indices, const FlatStringValue& value);
         bool setStringSlot(const QString& name, const QList<int>& indices,
                            const FlatStringValue& value, eravar::ScopeId scope);
 
@@ -341,7 +351,7 @@ public:
             return m_references.value(upper, upper);
         }
         // 当前帧快捷重载（仅存储层内部 / 未接线调用方使用）。
-        QString storageName(const QString& name) const {
+        QString storageNameInCurrentFrame(const QString& name) const {
             return storageName(name, m_privateScopeId);
         }
         void setReference(const QString& name, const QString& targetStorage) {
@@ -363,7 +373,7 @@ public:
             const QString& upper = eraUpperKey(name, scratch);
             return m_references.value(upper, upper);
         }
-        [[nodiscard]] QString resolvedStorageName(const QString& name) const { return storageName(name); }
+        [[nodiscard]] QString resolvedStorageNameInCurrentFrame(const QString& name) const { return storageNameInCurrentFrame(name); }
         // 显式作用域版本：求值器的 Dynamic 解析链只认参数，不读当前帧。
         [[nodiscard]] QString resolvedStorageName(const QString& name, eravar::ScopeId scope) const {
             return storageName(name, scope);
@@ -395,13 +405,15 @@ public:
         // （未声明的运行时 1D / 未定稿 DYNAMIC）才报**已分配槽位数**（容器事实，非形状）。
         // 单参重载 = **当前帧**（旧语义，等价于 explicit 的 privateScopeId）；要按
         // 某个段问私有变量就传 scope。
-        [[nodiscard]] int arraySize(const QString& name) const;
+        [[nodiscard]] int arraySizeInCurrentFrame(const QString& name) const;
         [[nodiscard]] int arraySize(const QString& name, eravar::ScopeId scope) const;
         // 容器当前已分配的槽位数（**不是形状**：形状是装载期事实，见 shapeOf）。
         [[nodiscard]] int allocatedSlots(const QString& storageKey) const;
-        [[nodiscard]] QList<int> arrayLengths(const QString& name) const;
+        [[nodiscard]] QList<int> arrayLengthsInCurrentFrame(const QString& name) const;
         [[nodiscard]] QList<int> arrayLengths(const QString& name, eravar::ScopeId scope) const;
-        void ensureArraySize(const QString& name, int size, bool stringArray);
+        void ensureArraySizeInCurrentFrame(const QString& name, int size, bool stringArray);
+        // 显式作用域版本（装载期按声明自己的段身份扩容私有数组）。
+        void ensureArraySize(const QString& name, int size, bool stringArray, eravar::ScopeId scope);
 
         // ---- 多维数组（dimension >= 2）：与 1D **同一个**扁平容器，按几何分配 ----
         // 每个存储键只有一条扁平槽位序列（m_intSlots / m_strSlots）；维数不决定
@@ -521,8 +533,11 @@ public:
 
 		// ================= 全局字符串变量 (1D/2D) =================
 		// Emuera 的用户字符串变量（#DIMS/#GLOBALS 声明）；此前完全缺失。
-		Q_INVOKABLE void setGlobalStr1D(const QString &name, int x, const QString &value);
-		Q_INVOKABLE QString getGlobalStr1D(const QString &name, int x) const;
+		Q_INVOKABLE void setGlobalStr1DInCurrentFrame(const QString &name, int x, const QString &value);
+		Q_INVOKABLE QString getGlobalStr1DInCurrentFrame(const QString &name, int x) const;
+		Q_INVOKABLE void setGlobalStr1D(const QString& name, int x, const QString& value,
+		                                eravar::ScopeId scope);
+		Q_INVOKABLE QString getGlobalStr1D(const QString& name, int x, eravar::ScopeId scope) const;
         // 传入已经解析过作用域/REF 的内部存储键；不再次套用当前作用域。
         [[nodiscard]] QString getGlobalStr1DRaw(const QString& storageKey, int x) const;
         // 键已解析的 getStringSlot：返回值**带 markup 分片**（HTML 累积/打印模板靠它）
@@ -560,8 +575,12 @@ public:
         { setGlobalInt2DRaw(storageKeyFor(k), x, y, value); }
         void setGlobalInt3DRaw(const eravar::VariableKey& k, int x, int y, int z, qint64 value)
         { setGlobalInt3DRaw(storageKeyFor(k), x, y, z, value); }
-		Q_INVOKABLE void setGlobalStr2D(const QString &name, int x, int y, const QString &value);
-		Q_INVOKABLE QString getGlobalStr2D(const QString &name, int x, int y) const;
+		Q_INVOKABLE void setGlobalStr2DInCurrentFrame(const QString &name, int x, int y, const QString &value);
+		Q_INVOKABLE QString getGlobalStr2DInCurrentFrame(const QString &name, int x, int y) const;
+		Q_INVOKABLE void setGlobalStr2D(const QString& name, int x, int y, const QString& value,
+		                                eravar::ScopeId scope);
+		Q_INVOKABLE QString getGlobalStr2D(const QString& name, int x, int y,
+		                                   eravar::ScopeId scope) const;
 
 		// ================= 系统字符串变量 =================
 		// 如 RESULTS / SAVEDATA_TEXT；按 (名称, 下标) 存取

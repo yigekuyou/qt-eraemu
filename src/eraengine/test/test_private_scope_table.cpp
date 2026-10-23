@@ -148,20 +148,20 @@ int main(int argc, char* argv[]) {
     check(storage.storageName(QStringLiteral("ALPHA"), firstScope) ==
               eravar::makePrivateStorageKey(firstKey, QStringLiteral("ALPHA")),
           "installed table: empty names list still resolves FIRST/ALPHA");
-    check(storage.getGlobalInt1D(QStringLiteral("ALPHA"), 0) == 11,
+    check(storage.getGlobalInt1DInCurrentFrame(QStringLiteral("ALPHA"), 0) == 11,
           "FIRST/ALPHA == 11 (written by the frame that ran with the load-time table)");
-    check(storage.getStringSlot(QStringLiteral("BETA"), {}).text == QStringLiteral("aaa"),
+    check(storage.getStringSlotInCurrentFrame(QStringLiteral("BETA"), {}).text == QStringLiteral("aaa"),
           "FIRST/BETA == \"aaa\"");
     // 安装前手工塞进去的 GHOST 不在声明里 -> 安装整表替换后不再有映射。
     check(storage.storageName(QStringLiteral("GHOST"), firstScope) == QStringLiteral("GHOST"),
           "pre-install manual-only name GHOST is dropped by the installed table");
     storage.setPrivateScope(secondScope, {});
-    check(storage.getGlobalInt1D(QStringLiteral("ALPHA"), 0) == 22,
+    check(storage.getGlobalInt1DInCurrentFrame(QStringLiteral("ALPHA"), 0) == 22,
           "SECOND/ALPHA == 22 (same name, own private slot)");
     check(storage.storageName(QStringLiteral("ALPHA"), firstScope) !=
               storage.storageName(QStringLiteral("ALPHA"), secondScope),
           "cross-function same-name privates get distinct storage keys");
-    check(storage.getGlobalInt1D(QStringLiteral("CHECK"), 0) == 7,
+    check(storage.getGlobalInt1DInCurrentFrame(QStringLiteral("CHECK"), 0) == 7,
           "REF formal still aliases the caller array (#DIM REF A, 3 -> ARR:1 == 7)");
 
     // ---- 4) 装载期表 == 旧路径重建的表（逐项） ----
@@ -209,7 +209,7 @@ int main(int argc, char* argv[]) {
     // 旧路径与装载期表用**同一个段身份**（id 不是函数名）：只有名字来源不同。
     legacyValues.setPrivateScope(firstScope, vt.localNamesOfRef(firstKey));
     const QString legacyAlphaKey = legacyValues.storageName(QStringLiteral("ALPHA"), firstScope);
-    check(storage.getGlobalInt1D(legacyAlphaKey, 0) == 11,
+    check(storage.getGlobalInt1DInCurrentFrame(legacyAlphaKey, 0) == 11,
           "value written at runtime is readable under the legacy-computed key");
 
     // ---- 5) RESETDATA 不能把装载期名表一起清掉 ----
@@ -222,7 +222,7 @@ int main(int argc, char* argv[]) {
     check(storage.storageName(QStringLiteral("ALPHA"), firstScope) ==
               eravar::makePrivateStorageKey(firstKey, QStringLiteral("ALPHA")),
           "private name still resolves after resetForNewGame");
-    check(storage.getGlobalInt1D(QStringLiteral("ALPHA"), 0) == 0,
+    check(storage.getGlobalInt1DInCurrentFrame(QStringLiteral("ALPHA"), 0) == 0,
           "private value is back to its declared default after resetForNewGame");
 
     qDebug() << "\n================================";

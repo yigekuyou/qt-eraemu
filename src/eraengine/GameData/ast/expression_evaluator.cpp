@@ -1017,7 +1017,7 @@ bool ExpressionEvaluator::readSlotNames(DynamicContext& ctx, QVariant& out)
             if (node.isArray() && !node.indices().isEmpty()) {
                 idx = static_cast<int>(resolveIndex(node, 0, storage, gameBaseData, ctx.scope));
             }
-            out = toVariant(storage->getStringSlot(QStringLiteral("ARGS"), {idx}));
+            out = toVariant(storage->getStringSlot(QStringLiteral("ARGS"), {idx}, eravar::kGlobalScope));
             return true;
         }
         if (upper == QLatin1String("LOCALS")) {
@@ -1026,7 +1026,7 @@ bool ExpressionEvaluator::readSlotNames(DynamicContext& ctx, QVariant& out)
             if (node.isArray() && !node.indices().isEmpty()) {
                 idx = static_cast<int>(resolveIndex(node, 0, storage, gameBaseData, ctx.scope));
             }
-            out = toVariant(storage->getStringSlot(QStringLiteral("LOCALS"), {idx}));
+            out = toVariant(storage->getStringSlot(QStringLiteral("LOCALS"), {idx}, eravar::kGlobalScope));
             return true;
         }
         if (upper == QLatin1String("RESULTS")) {
@@ -1040,7 +1040,7 @@ bool ExpressionEvaluator::readSlotNames(DynamicContext& ctx, QVariant& out)
             if (node.isArray() && !node.indices().isEmpty()) {
                 idx = static_cast<int>(resolveIndex(node, 0, storage, gameBaseData, ctx.scope));
             }
-            out = toVariant(storage->getStringSlot(QStringLiteral("RESULTS"), {idx}));
+            out = toVariant(storage->getStringSlot(QStringLiteral("RESULTS"), {idx}, eravar::kGlobalScope));
             return true;
         }
         // 用户函数形参别名（@F(A,B) 内的 A/B -> LOCAL 槽位）
@@ -1172,15 +1172,15 @@ bool ExpressionEvaluator::readStringVariable(DynamicContext& ctx, QVariant& out)
             if (node.isArray() && !node.indices().isEmpty()) {
                 idx = static_cast<int>(resolveIndex(node, 0, storage, gameBaseData, ctx.scope));
             }
-            out = toVariant(storage->getStringSlot(QStringLiteral("RESULTS"), {idx}));
+            out = toVariant(storage->getStringSlot(QStringLiteral("RESULTS"), {idx}, eravar::kGlobalScope));
             return true;
         }
         if (upper == QLatin1String("LASTLOAD_TEXT")) {
-            out = QVariant(storage->getGlobalStr1D(upper, 0));
+            out = QVariant(storage->getGlobalStr1D(upper, 0, eravar::kGlobalScope));   // 内建名
             return true;
         }
         if (upper == QLatin1String("SAVEDATA_TEXT")) {
-            out = toVariant(storage->getStringSlot(upper));
+            out = toVariant(storage->getStringSlot(upper, {}, eravar::kGlobalScope));   // 内建名
             return true;
         }
         int idx = 0;
@@ -1242,13 +1242,13 @@ bool ExpressionEvaluator::readIndexedArray(DynamicContext& ctx, QVariant& out)
             if (dim >= 3 && ids.size() >= 3) {
                 out = QVariant::fromValue<qint64>(ctx.varNameIsKey
                     ? storage->getGlobalInt3DRaw(ctx.varName, ids.at(0), ids.at(1), ids.at(2))
-                    : storage->getGlobalInt3D(ctx.varName, ids.at(0), ids.at(1), ids.at(2)));
+                    : storage->getGlobalInt3D(ctx.varName, ids.at(0), ids.at(1), ids.at(2), ctx.scope));
                 return true;
             }
             if (ids.size() >= 2) {
                 out = QVariant::fromValue<qint64>(ctx.varNameIsKey
                     ? storage->getGlobalInt2DRaw(ctx.varName, ids.at(0), ids.at(1))
-                    : storage->getGlobalInt2D(ctx.varName, ids.at(0), ids.at(1)));
+                    : storage->getGlobalInt2D(ctx.varName, ids.at(0), ids.at(1), ctx.scope));
                 return true;
             }
         }
@@ -1267,7 +1267,7 @@ bool ExpressionEvaluator::readIndexedArray(DynamicContext& ctx, QVariant& out)
 
         // Fall back to global variable
         out = QVariant(ctx.varNameIsKey ? storage->getGlobalInt1DRaw(ctx.varName, index)
-                                        : storage->getGlobalInt1D(ctx.varName, index));
+                                        : storage->getGlobalInt1D(ctx.varName, index, ctx.scope));
         return true;
     }
     return false;
@@ -1287,7 +1287,7 @@ bool ExpressionEvaluator::readSimpleVariable(DynamicContext& ctx, QVariant& out)
 
     // Regular global variable
     out = QVariant(ctx.varNameIsKey ? storage->getGlobalInt1DRaw(ctx.varName, 0)
-                                    : storage->getGlobalInt1D(ctx.varName, 0));
+                                    : storage->getGlobalInt1D(ctx.varName, 0, ctx.scope));
     return true;
 }
 
@@ -1423,24 +1423,6 @@ QVariant ExpressionEvaluator::evaluateVariable(const VariableNode &node, Variabl
     }
     // 不可达：表尾两行是旧链的无条件终局。
     return QVariant();
-}
-
-QVariant ExpressionEvaluator::evaluateIndexedVariable(const QString &varName, int index, VariableStorage *storage)
-{
-    if (!storage) {
-        return QVariant(0);
-    }
-    
-    // Try to get the variable value
-    // Check if it's a system variable first
-    if (varName == "DAY" || varName == "MONEY" || varName == "FLAG" ||
-        varName == "ITEM" || varName == "COUNT" || varName == "A" ||
-        varName == "B" || varName == "C") {
-        return QVariant(storage->getSystemVariable(varName, index));
-    }
-    
-    // Fall back to global variable
-    return QVariant(storage->getGlobalInt1D(varName, index));
 }
 
 QVariant ExpressionEvaluator::evaluateBinaryOp(const BinaryOpNode &node, VariableStorage *storage,
@@ -2795,7 +2777,7 @@ bool ExpressionEvaluator::evaluateBuiltin(const FunctionNode &node, VariableStor
         // DUMPRAND：MT 状态写入 RANDDATA 数组（C# rand.GetRand(RANDDATA)）
         const QList<qint64> state = m_rand.state();
         for (int i = 0; i < state.size(); ++i)
-            storage->setGlobalInt1D(QStringLiteral("RANDDATA"), i, state.at(i));
+            storage->setGlobalInt1D(QStringLiteral("RANDDATA"), i, state.at(i), eravar::kGlobalScope);
         out = QVariant::fromValue<qint64>(0);
         return true;
     }
@@ -2804,7 +2786,7 @@ bool ExpressionEvaluator::evaluateBuiltin(const FunctionNode &node, VariableStor
         QList<qint64> state;
         state.reserve(Mt19937::StateLength);
         for (int i = 0; i < Mt19937::StateLength; ++i)
-            state.append(storage->getGlobalInt1D(QStringLiteral("RANDDATA"), i));
+            state.append(storage->getGlobalInt1D(QStringLiteral("RANDDATA"), i, eravar::kGlobalScope));
         m_rand.setState(state);
         out = QVariant::fromValue<qint64>(0);
         return true;
@@ -3067,7 +3049,7 @@ bool ExpressionEvaluator::evaluateBuiltin(const FunctionNode &node, VariableStor
         for (qint64 i = 0; i < maxlv; ++i) {
             const qint64 threshold = isSys
                 ? storage->getSystemVariable(table, int(i + 1))
-                : storage->getGlobalInt1D(table, int(i + 1));
+                : storage->getGlobalInt1D(table, int(i + 1), eravar::kGlobalScope);   // 内建名
             if (pl < threshold) {
                 out = QVariant::fromValue<qint64>(i);
                 return true;
@@ -3447,7 +3429,7 @@ bool ExpressionEvaluator::readColorMatrix(const FunctionNode &node, int argNo,
         if (e2 < 0 || e3 < 0) return false;
         for (int x = 0; x < 5; ++x)
             for (int y = 0; y < 5; ++y)
-                out[x][y] = static_cast<float>(storage->getGlobalInt3D(name, e1, e2 + x, e3 + y)) / 256.0f;
+                out[x][y] = static_cast<float>(storage->getGlobalInt3DRaw(name, e1, e2 + x, e3 + y)) / 256.0f;
         return true;
     }
     if (var->indices().size() == 2) {
@@ -3455,7 +3437,7 @@ bool ExpressionEvaluator::readColorMatrix(const FunctionNode &node, int argNo,
         if (e1 < 0 || e2 < 0) return false;
         for (int x = 0; x < 5; ++x)
             for (int y = 0; y < 5; ++y)
-                out[x][y] = static_cast<float>(storage->getGlobalInt2D(name, e1 + x, e2 + y)) / 256.0f;
+                out[x][y] = static_cast<float>(storage->getGlobalInt2DRaw(name, e1 + x, e2 + y)) / 256.0f;
         return true;
     }
     return false;

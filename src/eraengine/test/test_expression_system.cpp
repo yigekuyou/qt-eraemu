@@ -81,20 +81,20 @@ int main(int argc, char *argv[]) {
     
     // Set up some test variables using storage
     qDebug() << "\n   Setting up test variables:";
-    storage.setGlobalInt1D("DAY", 0, 5);
-    qDebug() << "   storage.setGlobalInt1D(\"DAY\", 0, 5)";
+    storage.setGlobalInt1DInCurrentFrame("DAY", 0, 5);
+    qDebug() << "   storage.setGlobalInt1DInCurrentFrame(\"DAY\", 0, 5)";
     
-    storage.setGlobalInt1D("MONEY", 0, 100);
-    qDebug() << "   storage.setGlobalInt1D(\"MONEY\", 0, 100)";
+    storage.setGlobalInt1DInCurrentFrame("MONEY", 0, 100);
+    qDebug() << "   storage.setGlobalInt1DInCurrentFrame(\"MONEY\", 0, 100)";
     
-    storage.setGlobalInt1D("A", 0, 10);
-    qDebug() << "   storage.setGlobalInt1D(\"A\", 0, 10)";
+    storage.setGlobalInt1DInCurrentFrame("A", 0, 10);
+    qDebug() << "   storage.setGlobalInt1DInCurrentFrame(\"A\", 0, 10)";
     
-    storage.setGlobalInt1D("B", 0, 20);
-    qDebug() << "   storage.setGlobalInt1D(\"B\", 0, 20)";
+    storage.setGlobalInt1DInCurrentFrame("B", 0, 20);
+    qDebug() << "   storage.setGlobalInt1DInCurrentFrame(\"B\", 0, 20)";
     
-    storage.setGlobalInt1D("C", 0, 30);
-    qDebug() << "   storage.setGlobalInt1D(\"C\", 0, 30)";
+    storage.setGlobalInt1DInCurrentFrame("C", 0, 30);
+    qDebug() << "   storage.setGlobalInt1DInCurrentFrame(\"C\", 0, 30)";
     
     // Test simple arithmetic
     QString evalTestExpr = "A + B";

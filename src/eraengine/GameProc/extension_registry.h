@@ -439,7 +439,7 @@ public:
                                              : isStringValue(value);
                 if (returnsStr) {
                     m_services.storage->setGlobalStr1D(QStringLiteral("RESULTS"), 0,
-                                                       flatString(value).text);
+                                                       flatString(value).text, eravar::kGlobalScope);
                 } else if (value.isValid()) {
                     m_services.storage->setSystemVariable(QStringLiteral("RESULT"), 0,
                                                           value.toLongLong());

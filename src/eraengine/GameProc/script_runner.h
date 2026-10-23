@@ -91,6 +91,12 @@ public:
         m_buttonAvailable = std::move(provider);
     }
 
+    // **测试专用**（默认关）：把 doCallLine 里 enterCall 与 bindArguments 的顺序
+    // 颠倒成「先绑定实参（此时当前帧仍是调用者）→ 再 enterCall」。形参绑定一旦
+    // 依赖「谁是当前帧」，这个开关就会让元素形参写进调用者帧；顺序无关时结果
+    // 不变。生产路径永远走默认顺序（本开关只由 test_scope_plumbing 打开）。
+    void setTestBindBeforeEnter(bool on) { m_testBindBeforeEnter = on; }
+
 signals:
     void suspended(ExecState state);          // 挂起（等待输入等）
     void finished();                          // 脚本结束
@@ -279,6 +285,7 @@ private:
     // qEnvironmentVariableIsSet -> getenv，perf 显示占热路径 ~6%（见组22剖析）。
     bool m_qdbugTrace = qEnvironmentVariableIsSet("EMUERA_QDBUG_TRACE");
     bool m_printed = false;
+    bool m_testBindBeforeEnter = false;   // 测试专用（见 setTestBindBeforeEnter）
     bool m_continuingSlice = false;
     QVariant m_lastReturnValue;
 };

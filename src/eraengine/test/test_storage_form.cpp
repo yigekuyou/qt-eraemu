@@ -161,72 +161,72 @@ int main(int argc, char* argv[]) {
     qDebug() << "\n1) 广域 1D / 2D / 3D：末元素往返 + 越界两侧";
     {
         // 1D：最后一维的最后一个元素
-        vs.setGlobalInt1D(QStringLiteral("G1"), g1 - 1, 11);
-        check(vs.getGlobalInt1D(QStringLiteral("G1"), g1 - 1) == 11,
+        vs.setGlobalInt1DInCurrentFrame(QStringLiteral("G1"), g1 - 1, 11);
+        check(vs.getGlobalInt1DInCurrentFrame(QStringLiteral("G1"), g1 - 1) == 11,
               QStringLiteral("G1:%1 往返（末元素）").arg(g1 - 1));
-        vs.setGlobalInt1D(QStringLiteral("G1"), 0, 1);
-        check(vs.getGlobalInt1D(QStringLiteral("G1"), 0) == 1, QStringLiteral("G1:0 往返"));
-        check(vs.getGlobalInt1D(QStringLiteral("G1"), g1) == 0,
+        vs.setGlobalInt1DInCurrentFrame(QStringLiteral("G1"), 0, 1);
+        check(vs.getGlobalInt1DInCurrentFrame(QStringLiteral("G1"), 0) == 1, QStringLiteral("G1:0 往返"));
+        check(vs.getGlobalInt1DInCurrentFrame(QStringLiteral("G1"), g1) == 0,
               QStringLiteral("G1:%1 未写入 -> 0（右越界只读）").arg(g1));
-        vs.setGlobalInt1D(QStringLiteral("G1"), -1, 5);
-        check(vs.getGlobalInt1D(QStringLiteral("G1"), -1) == 0,
+        vs.setGlobalInt1DInCurrentFrame(QStringLiteral("G1"), -1, 5);
+        check(vs.getGlobalInt1DInCurrentFrame(QStringLiteral("G1"), -1) == 0,
               QStringLiteral("G1:-1 写忽略 / 读 0（左越界）"));
 
         // 2D
-        vs.setGlobalInt2D(QStringLiteral("G2"), g2a - 1, g2b - 1, 2121);
-        check(vs.getGlobalInt2D(QStringLiteral("G2"), g2a - 1, g2b - 1) == 2121,
+        vs.setGlobalInt2DInCurrentFrame(QStringLiteral("G2"), g2a - 1, g2b - 1, 2121);
+        check(vs.getGlobalInt2DInCurrentFrame(QStringLiteral("G2"), g2a - 1, g2b - 1) == 2121,
               QStringLiteral("G2:[%1,%2] 往返（末元素）").arg(g2a - 1).arg(g2b - 1));
-        vs.setGlobalInt2D(QStringLiteral("G2"), 0, 1, 21);
-        check(vs.getGlobalInt2D(QStringLiteral("G2"), 0, 1) == 21, QStringLiteral("G2:[0,1] 往返"));
-        check(vs.getGlobalInt2D(QStringLiteral("G2"), g2a, 0) == 0,
+        vs.setGlobalInt2DInCurrentFrame(QStringLiteral("G2"), 0, 1, 21);
+        check(vs.getGlobalInt2DInCurrentFrame(QStringLiteral("G2"), 0, 1) == 21, QStringLiteral("G2:[0,1] 往返"));
+        check(vs.getGlobalInt2DInCurrentFrame(QStringLiteral("G2"), g2a, 0) == 0,
               QStringLiteral("G2:[%1,0] 读 0（右越界）").arg(g2a));
-        check(vs.getGlobalInt2D(QStringLiteral("G2"), 0, g2b) == 0,
+        check(vs.getGlobalInt2DInCurrentFrame(QStringLiteral("G2"), 0, g2b) == 0,
               QStringLiteral("G2:[0,%1] 读 0（最后一维右越界）").arg(g2b));
-        vs.setGlobalInt2D(QStringLiteral("G2"), g2a, 0, 99);
-        check(vs.getGlobalInt2D(QStringLiteral("G2"), g2a, 0) == 0,
+        vs.setGlobalInt2DInCurrentFrame(QStringLiteral("G2"), g2a, 0, 99);
+        check(vs.getGlobalInt2DInCurrentFrame(QStringLiteral("G2"), g2a, 0) == 0,
               QStringLiteral("G2:[%1,0] 写忽略（形状之外不生长）").arg(g2a));
-        vs.setGlobalInt2D(QStringLiteral("G2"), -1, 0, 99);
-        check(vs.getGlobalInt2D(QStringLiteral("G2"), -1, 0) == 0,
+        vs.setGlobalInt2DInCurrentFrame(QStringLiteral("G2"), -1, 0, 99);
+        check(vs.getGlobalInt2DInCurrentFrame(QStringLiteral("G2"), -1, 0) == 0,
               QStringLiteral("G2:[-1,0] 写忽略 / 读 0（左越界）"));
 
         // 3D
-        vs.setGlobalInt3D(QStringLiteral("G3"), g3a - 1, g3b - 1, g3c - 1, 3232);
-        check(vs.getGlobalInt3D(QStringLiteral("G3"), g3a - 1, g3b - 1, g3c - 1) == 3232,
+        vs.setGlobalInt3DInCurrentFrame(QStringLiteral("G3"), g3a - 1, g3b - 1, g3c - 1, 3232);
+        check(vs.getGlobalInt3DInCurrentFrame(QStringLiteral("G3"), g3a - 1, g3b - 1, g3c - 1) == 3232,
               QStringLiteral("G3:[%1,%2,%3] 往返（末元素）")
                   .arg(g3a - 1).arg(g3b - 1).arg(g3c - 1));
-        vs.setGlobalInt3D(QStringLiteral("G3"), 1, 0, 2, 302);
-        check(vs.getGlobalInt3D(QStringLiteral("G3"), 1, 0, 2) == 302, QStringLiteral("G3:[1,0,2] 往返"));
-        check(vs.getGlobalInt3D(QStringLiteral("G3"), g3a, 0, 0) == 0,
+        vs.setGlobalInt3DInCurrentFrame(QStringLiteral("G3"), 1, 0, 2, 302);
+        check(vs.getGlobalInt3DInCurrentFrame(QStringLiteral("G3"), 1, 0, 2) == 302, QStringLiteral("G3:[1,0,2] 往返"));
+        check(vs.getGlobalInt3DInCurrentFrame(QStringLiteral("G3"), g3a, 0, 0) == 0,
               QStringLiteral("G3:[%1,0,0] 读 0（第 0 维右越界）").arg(g3a));
-        check(vs.getGlobalInt3D(QStringLiteral("G3"), 0, g3b, 0) == 0,
+        check(vs.getGlobalInt3DInCurrentFrame(QStringLiteral("G3"), 0, g3b, 0) == 0,
               QStringLiteral("G3:[0,%1,0] 读 0（第 1 维右越界）").arg(g3b));
-        check(vs.getGlobalInt3D(QStringLiteral("G3"), 0, 0, g3c) == 0,
+        check(vs.getGlobalInt3DInCurrentFrame(QStringLiteral("G3"), 0, 0, g3c) == 0,
               QStringLiteral("G3:[0,0,%1] 读 0（最后一维右越界）").arg(g3c));
-        vs.setGlobalInt3D(QStringLiteral("G3"), 0, 0, g3c, 99);
-        check(vs.getGlobalInt3D(QStringLiteral("G3"), 0, 0, g3c) == 0,
+        vs.setGlobalInt3DInCurrentFrame(QStringLiteral("G3"), 0, 0, g3c, 99);
+        check(vs.getGlobalInt3DInCurrentFrame(QStringLiteral("G3"), 0, 0, g3c) == 0,
               QStringLiteral("G3:[0,0,%1] 写忽略（形状之外不生长）").arg(g3c));
     }
 
     // =====================================================================
     qDebug() << "\n2) 广域字符串 1D / 2D / 3D";
     {
-        vs.setGlobalStr1D(QStringLiteral("T1"), t1 - 1, QStringLiteral("t1-last"));
-        check(vs.getGlobalStr1D(QStringLiteral("T1"), t1 - 1) == QStringLiteral("t1-last"),
+        vs.setGlobalStr1DInCurrentFrame(QStringLiteral("T1"), t1 - 1, QStringLiteral("t1-last"));
+        check(vs.getGlobalStr1DInCurrentFrame(QStringLiteral("T1"), t1 - 1) == QStringLiteral("t1-last"),
               QStringLiteral("T1:%1 往返（末元素）").arg(t1 - 1));
-        check(vs.getGlobalStr1D(QStringLiteral("T1"), t1).isEmpty(),
+        check(vs.getGlobalStr1DInCurrentFrame(QStringLiteral("T1"), t1).isEmpty(),
               QStringLiteral("T1:%1 未写入 -> 空串").arg(t1));
 
-        vs.setGlobalStr2D(QStringLiteral("T2"), t2a - 1, t2b - 1, QStringLiteral("t2-last"));
-        check(vs.getGlobalStr2D(QStringLiteral("T2"), t2a - 1, t2b - 1) == QStringLiteral("t2-last"),
+        vs.setGlobalStr2DInCurrentFrame(QStringLiteral("T2"), t2a - 1, t2b - 1, QStringLiteral("t2-last"));
+        check(vs.getGlobalStr2DInCurrentFrame(QStringLiteral("T2"), t2a - 1, t2b - 1) == QStringLiteral("t2-last"),
               QStringLiteral("T2:[%1,%2] 往返（末元素）").arg(t2a - 1).arg(t2b - 1));
-        check(vs.getStringSlot(QStringLiteral("T2"), {1, 1}).text.isEmpty(),
+        check(vs.getStringSlotInCurrentFrame(QStringLiteral("T2"), {1, 1}).text.isEmpty(),
               QStringLiteral("T2:[1,1] 未写入 -> 空串"));
-        vs.setGlobalStr2D(QStringLiteral("T2"), 1, 2, QStringLiteral("t2-12"));
-        check(vs.getStringSlot(QStringLiteral("T2"), {1, 2}).text == QStringLiteral("t2-12"),
+        vs.setGlobalStr2DInCurrentFrame(QStringLiteral("T2"), 1, 2, QStringLiteral("t2-12"));
+        check(vs.getStringSlotInCurrentFrame(QStringLiteral("T2"), {1, 2}).text == QStringLiteral("t2-12"),
               QStringLiteral("T2 经 getStringSlot 读到同一格"));
 
-        vs.setStringSlot(QStringLiteral("T3"), {t3a - 1, t3b - 1, t3c - 1}, flatStr(QStringLiteral("t3-last")));
-        check(vs.getStringSlot(QStringLiteral("T3"), {t3a - 1, t3b - 1, t3c - 1}).text
+        vs.setStringSlotInCurrentFrame(QStringLiteral("T3"), {t3a - 1, t3b - 1, t3c - 1}, flatStr(QStringLiteral("t3-last")));
+        check(vs.getStringSlotInCurrentFrame(QStringLiteral("T3"), {t3a - 1, t3b - 1, t3c - 1}).text
                   == QStringLiteral("t3-last"),
               QStringLiteral("T3 末元素经 set/getStringSlot 往返"));
         check(vs.getGlobalStr3DRaw(QStringLiteral("T3"), 0, 1, 1).isEmpty(),
@@ -237,19 +237,19 @@ int main(int argc, char* argv[]) {
     qDebug() << "\n3) 私有 1D / 2D / 3D（显式段身份）";
     {
         vs.setPrivateScope(sid, {});
-        vs.setGlobalInt1D(QStringLiteral("P1"), p1 - 1, 31);
-        check(vs.getGlobalInt1D(QStringLiteral("P1"), p1 - 1) == 31,
+        vs.setGlobalInt1DInCurrentFrame(QStringLiteral("P1"), p1 - 1, 31);
+        check(vs.getGlobalInt1DInCurrentFrame(QStringLiteral("P1"), p1 - 1) == 31,
               QStringLiteral("P1:%1 往返（私有末元素）").arg(p1 - 1));
-        vs.setGlobalInt2D(QStringLiteral("P2"), p2a - 1, p2b - 1, 32);
-        check(vs.getGlobalInt2D(QStringLiteral("P2"), p2a - 1, p2b - 1) == 32,
+        vs.setGlobalInt2DInCurrentFrame(QStringLiteral("P2"), p2a - 1, p2b - 1, 32);
+        check(vs.getGlobalInt2DInCurrentFrame(QStringLiteral("P2"), p2a - 1, p2b - 1) == 32,
               QStringLiteral("P2:[%1,%2] 往返（私有末元素）").arg(p2a - 1).arg(p2b - 1));
-        vs.setGlobalInt3D(QStringLiteral("P3"), p3a - 1, p3b - 1, p3c - 1, 33);
-        check(vs.getGlobalInt3D(QStringLiteral("P3"), p3a - 1, p3b - 1, p3c - 1) == 33,
+        vs.setGlobalInt3DInCurrentFrame(QStringLiteral("P3"), p3a - 1, p3b - 1, p3c - 1, 33);
+        check(vs.getGlobalInt3DInCurrentFrame(QStringLiteral("P3"), p3a - 1, p3b - 1, p3c - 1) == 33,
               QStringLiteral("P3 末元素往返（私有 3D）"));
-        check(vs.getGlobalInt2D(QStringLiteral("P2"), p2a, 0) == 0,
+        check(vs.getGlobalInt2DInCurrentFrame(QStringLiteral("P2"), p2a, 0) == 0,
               QStringLiteral("P2:[%1,0] 私有 2D 越界读 0").arg(p2a));
-        vs.setGlobalStr2D(QStringLiteral("Q2"), p2a - 1, p2b - 1, QStringLiteral("q-last"));
-        check(vs.getStringSlot(QStringLiteral("Q2"), {p2a - 1, p2b - 1}).text == QStringLiteral("q-last"),
+        vs.setGlobalStr2DInCurrentFrame(QStringLiteral("Q2"), p2a - 1, p2b - 1, QStringLiteral("q-last"));
+        check(vs.getStringSlotInCurrentFrame(QStringLiteral("Q2"), {p2a - 1, p2b - 1}).text == QStringLiteral("q-last"),
               QStringLiteral("Q2 私有 2D 字符串末元素往返"));
         // 私有名的形状只在它自己的段里存在；广域上下文不冒充。
         check(vs.shapeOf(QStringLiteral("P2"), sid).lengths == QList<int>({p2a, p2b}),
@@ -264,7 +264,7 @@ int main(int argc, char* argv[]) {
     {
         const VariableStorage::ArrayShape before = vs.shapeOf(QStringLiteral("G1"), eravar::kGlobalScope);
         const int slotsBefore = vs.allocatedSlots(QStringLiteral("G1"));
-        vs.setGlobalInt1D(QStringLiteral("G1"), g1 + 5, 555);
+        vs.setGlobalInt1DInCurrentFrame(QStringLiteral("G1"), g1 + 5, 555);
         const int slotsAfter = vs.allocatedSlots(QStringLiteral("G1"));
         const VariableStorage::ArrayShape after = vs.shapeOf(QStringLiteral("G1"), eravar::kGlobalScope);
         check(slotsAfter > slotsBefore,
@@ -278,7 +278,7 @@ int main(int argc, char* argv[]) {
 
         const VariableStorage::ArrayShape sBefore = vs.shapeOf(QStringLiteral("T1"), eravar::kGlobalScope);
         const int sSlotsBefore = vs.allocatedSlots(QStringLiteral("T1"));
-        vs.setGlobalStr1D(QStringLiteral("T1"), t1 + 4, QStringLiteral("grow"));
+        vs.setGlobalStr1DInCurrentFrame(QStringLiteral("T1"), t1 + 4, QStringLiteral("grow"));
         check(vs.allocatedSlots(QStringLiteral("T1")) > sSlotsBefore,
               QStringLiteral("字符串 1D 越界写后 allocatedSlots 增长（%1 -> %2）")
                   .arg(sSlotsBefore).arg(vs.allocatedSlots(QStringLiteral("T1"))));
@@ -328,10 +328,10 @@ int main(int argc, char* argv[]) {
         check(vs.getCharaStr(QStringLiteral("S1"), 0, s1 - 1) == QStringLiteral("s1-0")
                   && vs.getCharaStr(QStringLiteral("S1"), 1, s1 - 1) == QStringLiteral("s1-1"),
               QStringLiteral("S1 两个角色的字符串互不覆盖"));
-        vs.setStringSlot(QStringLiteral("S2"), {0, s2a - 1, s2b - 1}, flatStr(QStringLiteral("s2-0")));
-        check(vs.getStringSlot(QStringLiteral("S2"), {0, s2a - 1, s2b - 1}).text == QStringLiteral("s2-0"),
+        vs.setStringSlotInCurrentFrame(QStringLiteral("S2"), {0, s2a - 1, s2b - 1}, flatStr(QStringLiteral("s2-0")));
+        check(vs.getStringSlotInCurrentFrame(QStringLiteral("S2"), {0, s2a - 1, s2b - 1}).text == QStringLiteral("s2-0"),
               QStringLiteral("S2 角色 0 的 2D 字符串末元素往返"));
-        check(vs.getStringSlot(QStringLiteral("S2"), {1, s2a - 1, s2b - 1}).text.isEmpty(),
+        check(vs.getStringSlotInCurrentFrame(QStringLiteral("S2"), {1, s2a - 1, s2b - 1}).text.isEmpty(),
               QStringLiteral("S2 角色 1 未被角色 0 覆盖"));
         // 角色号 + 元素维的实参规约：C2 是 2D，缺角色号时取 TARGET。
         check(vs.charaDataDimension(QStringLiteral("C2")) == 2,
@@ -404,34 +404,34 @@ int main(int argc, char* argv[]) {
     // =====================================================================
     qDebug() << "\n8) VARSIZE 语句 / VARSIZE 函数 / shapeOf+arraySize 三者一致";
     {
-        check(vs.getGlobalInt1D(QStringLiteral("OBS"), 0) == g2a,
+        check(vs.getGlobalInt1DInCurrentFrame(QStringLiteral("OBS"), 0) == g2a,
               QStringLiteral("VARSIZE 语句 RESULT:0 == %1（实得 %2）")
-                  .arg(g2a).arg(vs.getGlobalInt1D(QStringLiteral("OBS"), 0)));
-        check(vs.getGlobalInt1D(QStringLiteral("OBS"), 1) == g2b,
+                  .arg(g2a).arg(vs.getGlobalInt1DInCurrentFrame(QStringLiteral("OBS"), 0)));
+        check(vs.getGlobalInt1DInCurrentFrame(QStringLiteral("OBS"), 1) == g2b,
               QStringLiteral("VARSIZE 语句 RESULT:1 == %1（实得 %2）")
-                  .arg(g2b).arg(vs.getGlobalInt1D(QStringLiteral("OBS"), 1)));
-        check(vs.getGlobalInt1D(QStringLiteral("OBS"), 2) == g2a,
+                  .arg(g2b).arg(vs.getGlobalInt1DInCurrentFrame(QStringLiteral("OBS"), 1)));
+        check(vs.getGlobalInt1DInCurrentFrame(QStringLiteral("OBS"), 2) == g2a,
               QStringLiteral("VARSIZE(\"G2\") == %1").arg(g2a));
-        check(vs.getGlobalInt1D(QStringLiteral("OBS"), 3) == g2b,
+        check(vs.getGlobalInt1DInCurrentFrame(QStringLiteral("OBS"), 3) == g2b,
               QStringLiteral("VARSIZE(\"G2\",1) == %1").arg(g2b));
-        check(vs.getGlobalInt1D(QStringLiteral("OBS"), 4) == g3b,
+        check(vs.getGlobalInt1DInCurrentFrame(QStringLiteral("OBS"), 4) == g3b,
               QStringLiteral("VARSIZE(\"G3\",1) == %1").arg(g3b));
-        check(vs.getGlobalInt1D(QStringLiteral("OBS"), 5) == g1,
+        check(vs.getGlobalInt1DInCurrentFrame(QStringLiteral("OBS"), 5) == g1,
               QStringLiteral("VARSIZE(\"G1\") == %1").arg(g1));
-        check(vs.getGlobalInt1D(QStringLiteral("OBS"), 6) == c2a,
+        check(vs.getGlobalInt1DInCurrentFrame(QStringLiteral("OBS"), 6) == c2a,
               QStringLiteral("VARSIZE(\"C2\") == %1（CHARADATA 元素维）").arg(c2a));
-        check(vs.getGlobalInt1D(QStringLiteral("OBS"), 7) == c2b,
+        check(vs.getGlobalInt1DInCurrentFrame(QStringLiteral("OBS"), 7) == c2b,
               QStringLiteral("VARSIZE(\"C2\",1) == %1").arg(c2b));
-        check(vs.getGlobalInt1D(QStringLiteral("OBS"), 8) == t2b,
+        check(vs.getGlobalInt1DInCurrentFrame(QStringLiteral("OBS"), 8) == t2b,
               QStringLiteral("VARSIZE(\"T2\",1) == %1").arg(t2b));
-        check(vs.arraySize(QStringLiteral("G2")) == g2a,
-              QStringLiteral("arraySize(G2) == %1").arg(g2a));
-        check(vs.arrayLengths(QStringLiteral("G2")) == QList<int>({g2a, g2b}),
-              QStringLiteral("arrayLengths(G2) == [%1,%2]").arg(g2a).arg(g2b));
-        check(vs.arraySize(QStringLiteral("G3")) == g3a,
-              QStringLiteral("arraySize(G3) == %1").arg(g3a));
-        check(vs.arrayLengths(QStringLiteral("T3")) == QList<int>({t3a, t3b, t3c}),
-              QStringLiteral("arrayLengths(T3) == [%1,%2,%3]").arg(t3a).arg(t3b).arg(t3c));
+        check(vs.arraySizeInCurrentFrame(QStringLiteral("G2")) == g2a,
+              QStringLiteral("arraySizeInCurrentFrame(G2) == %1").arg(g2a));
+        check(vs.arrayLengthsInCurrentFrame(QStringLiteral("G2")) == QList<int>({g2a, g2b}),
+              QStringLiteral("arrayLengthsInCurrentFrame(G2) == [%1,%2]").arg(g2a).arg(g2b));
+        check(vs.arraySizeInCurrentFrame(QStringLiteral("G3")) == g3a,
+              QStringLiteral("arraySizeInCurrentFrame(G3) == %1").arg(g3a));
+        check(vs.arrayLengthsInCurrentFrame(QStringLiteral("T3")) == QList<int>({t3a, t3b, t3c}),
+              QStringLiteral("arrayLengthsInCurrentFrame(T3) == [%1,%2,%3]").arg(t3a).arg(t3b).arg(t3c));
         check(warnings == 0, QStringLiteral("夹具装载告警为 0（实得 %1）").arg(warnings));
     }
 
@@ -440,25 +440,25 @@ int main(int argc, char* argv[]) {
     {
         const QList<int> g3l{g3a, g3b, g3c};
         const QList<int> g3s = stridesOf(g3l);
-        vs.setGlobalInt3D(QStringLiteral("G3"), 1, 0, 1, 901);
+        vs.setGlobalInt3DInCurrentFrame(QStringLiteral("G3"), 1, 0, 1, 901);
         const qint64 off = flatOf({1, 0, 1}, g3s);
-        check(vs.getGlobalInt1D(QStringLiteral("G3"), int(off)) == 901,
+        check(vs.getGlobalInt1DInCurrentFrame(QStringLiteral("G3"), int(off)) == 901,
               QStringLiteral("G3:[1,0,1] == 扁平槽 %1（stride %2）")
                   .arg(off).arg(g3s.at(0)));
-        vs.setGlobalInt3D(QStringLiteral("G3"), 1, 1, 2, 902);
-        check(vs.getGlobalInt1D(QStringLiteral("G3"), int(flatOf({1, 1, 2}, g3s))) == 902,
+        vs.setGlobalInt3DInCurrentFrame(QStringLiteral("G3"), 1, 1, 2, 902);
+        check(vs.getGlobalInt1DInCurrentFrame(QStringLiteral("G3"), int(flatOf({1, 1, 2}, g3s))) == 902,
               QStringLiteral("G3:[1,1,2] == 扁平槽 %1").arg(flatOf({1, 1, 2}, g3s)));
-        check(vs.getGlobalInt1D(QStringLiteral("G3"), int(flatOf({0, 1, 2}, g3s))) == 0,
+        check(vs.getGlobalInt1DInCurrentFrame(QStringLiteral("G3"), int(flatOf({0, 1, 2}, g3s))) == 0,
               QStringLiteral("不同坐标不落到同一槽（[0,1,2] 仍为 0）"));
         // 2D：末元素 = (d0-1)*d1 + (d1-1)
         const QList<int> g2s = stridesOf({g2a, g2b});
-        check(vs.getGlobalInt1D(QStringLiteral("G2"), int(flatOf({g2a - 1, g2b - 1}, g2s))) == 2121,
+        check(vs.getGlobalInt1DInCurrentFrame(QStringLiteral("G2"), int(flatOf({g2a - 1, g2b - 1}, g2s))) == 2121,
               QStringLiteral("G2 末元素 == 扁平槽 %1").arg(flatOf({g2a - 1, g2b - 1}, g2s)));
         // 私有 3D 同一公式
         vs.setPrivateScope(sid, {});
         const QList<int> p3s = stridesOf({p3a, p3b, p3c});
-        vs.setGlobalInt3D(QStringLiteral("P3"), 1, 1, 0, 903);
-        check(vs.getGlobalInt1D(QStringLiteral("P3"), int(flatOf({1, 1, 0}, p3s))) == 903,
+        vs.setGlobalInt3DInCurrentFrame(QStringLiteral("P3"), 1, 1, 0, 903);
+        check(vs.getGlobalInt1DInCurrentFrame(QStringLiteral("P3"), int(flatOf({1, 1, 0}, p3s))) == 903,
               QStringLiteral("P3:[1,1,0] == 扁平槽 %1（私有）").arg(flatOf({1, 1, 0}, p3s)));
         vs.setPrivateScope(eravar::kGlobalScope, {});
         check(vs.isMultiDimArray(QStringLiteral("G3")),

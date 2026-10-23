@@ -143,7 +143,7 @@ bool chkVarData(const LogicalLine& line, const QList<Operand>& args,
         sv.storage->setSystemVariable(QStringLiteral("RESULT"), 0,
                                       exists ? kDataOk : kDataFileNotFound);
         sv.storage->setGlobalStr1D(QStringLiteral("RESULTS"), 0,
-            exists ? QStringLiteral("ＯＫ") : QStringLiteral("ファイルが存在しません"));
+            exists ? QStringLiteral("ＯＫ") : QStringLiteral("ファイルが存在しません"), eravar::kGlobalScope);
     }
     qDebug() << "[ee-ext] CHKVARDATA" << path << (exists ? "存在" : "不存在")
              << "行" << line.position.toString();
@@ -163,7 +163,7 @@ bool chkGlobalData(const LogicalLine& line, const QList<Operand>& args,
         sv.storage->setSystemVariable(QStringLiteral("RESULT"), 0,
                                       exists ? kDataOk : kDataFileNotFound);
         sv.storage->setGlobalStr1D(QStringLiteral("RESULTS"), 0,
-            exists ? QStringLiteral("ＯＫ") : QStringLiteral("ファイルが存在しません"));
+            exists ? QStringLiteral("ＯＫ") : QStringLiteral("ファイルが存在しません"), eravar::kGlobalScope);
     }
     qDebug() << "[ee-ext] CHKGLOBALDATA" << (exists ? "存在" : "不存在");
     return true;
@@ -184,7 +184,7 @@ bool findVarData(const LogicalLine& line, const QList<Operand>& args,
         QStringList{ pattern }, QDir::Files, QDir::Name);
     if (sv.storage) {
         for (int i = 0; i < files.size(); ++i)
-            sv.storage->setGlobalStr1D(QStringLiteral("RESULTS"), i, files.at(i).fileName());
+            sv.storage->setGlobalStr1D(QStringLiteral("RESULTS"), i, files.at(i).fileName(), eravar::kGlobalScope);
         sv.storage->setSystemVariable(QStringLiteral("RESULT"), 0, files.size());
     }
     qDebug() << "[ee-ext] FIND_VARDATA" << pattern << "->" << files.size() << "个文件";

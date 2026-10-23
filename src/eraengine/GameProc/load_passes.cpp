@@ -387,15 +387,20 @@ void applyVariableDefaults(LoadContext& ctx, const QList<VariableDecl>& decls) {
     if (!ctx.storage) return;
     for (const VariableDecl& d : decls) {
         if (d.isConst || !d.isPrivate || d.isReference || d.isCharaData) continue;
+        // 初值写进**声明自己的段**（私有名 = 该段的 FUNC\x1fNAME 槽），不再落到
+        // 装载期「当前帧」这个不存在的概念上（旧写法在装载期 scope 恒为广域，
+        // 于是私有声明在裸名下留下一份永远没人读的副本）。
+        const eravar::ScopeId scope = d.scope == VarScope::Local ? eravar::internName(d.scopeKey)
+                                                                : eravar::kGlobalScope;
         if (!d.lengths.isEmpty())
-            ctx.storage->ensureArraySize(d.name, d.lengths.first(), d.type == OperandType::Str);
+            ctx.storage->ensureArraySize(d.name, d.lengths.first(), d.type == OperandType::Str, scope);
         if (d.type == OperandType::Str) {
             for (int i = 0; i < d.defaultStr.size(); ++i) {
-                ctx.storage->setGlobalStr1D(d.name, i, d.defaultStr.at(i));
+                ctx.storage->setGlobalStr1D(d.name, i, d.defaultStr.at(i), scope);
             }
         } else {
             for (int i = 0; i < d.defaultInt.size(); ++i) {
-                ctx.storage->setGlobalInt1D(d.name, i, d.defaultInt.at(i));
+                ctx.storage->setGlobalInt1D(d.name, i, d.defaultInt.at(i), scope);
             }
         }
     }
@@ -420,7 +425,8 @@ void installDeclaredMultiDimArrays(LoadContext& ctx) {
             : d.name.toUpper();
         // CHARADATA 的元素在角色存储里（每个角色一份），这里只登记形状：
         // VARSIZE / 尺寸口径读的是**同一份**形状，而不是第二个声明视图。
-        ctx.storage->installMultiDimArray(ctx.storage->resolvedStorageName(key),
+        // key 是存储键（私有名 = 复合键）：键自足，不经作用域解析。
+        ctx.storage->installMultiDimArray(ctx.storage->resolvedStorageName(key, eravar::kGlobalScope),
                                          d.lengths, d.strides, d.type == OperandType::Str,
                                          /*allocate=*/!d.isCharaData);
         ++installed;

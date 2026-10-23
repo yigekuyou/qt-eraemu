@@ -80,7 +80,7 @@ int main(int argc, char* argv[]) {
     st.setPrevcom(0, 7);
     st.setNextcom(0, 0);            // 容器初值即 0（这正是 bug 的来源）
     st.setTflag(5, 1);
-    st.setGlobalStr1D(QStringLiteral("TSTR"), 3, QStringLiteral("dirty"));
+    st.setGlobalStr1DInCurrentFrame(QStringLiteral("TSTR"), 3, QStringLiteral("dirty"));
     st.setCharaInt(QStringLiteral("GOTJUEL"), 1, 0, 5);
     st.setCharaInt(QStringLiteral("TEQUIP"), 1, 0, 6);
     st.setCharaInt(QStringLiteral("EX"), 1, 0, 7);
@@ -93,7 +93,7 @@ int main(int argc, char* argv[]) {
     check(st.getPrevcom(0) == -1, "PREVCOM 复位为 -1");
     check(st.getAssiplay(0) == 0, "ASSIPLAY 复位为 0");
     check(st.getTflag(5) == 0, "TFLAG 归零（全部下标）");
-    check(st.getGlobalStr1D(QStringLiteral("TSTR"), 3).isEmpty(), "TSTR 清空");
+    check(st.getGlobalStr1DInCurrentFrame(QStringLiteral("TSTR"), 3).isEmpty(), "TSTR 清空");
     check(st.getCharaInt(QStringLiteral("GOTJUEL"), 1, 0) == 0, "角色 GOTJUEL 归零");
     check(st.getCharaInt(QStringLiteral("TEQUIP"), 1, 0) == 0, "角色 TEQUIP 归零");
     check(st.getCharaInt(QStringLiteral("EX"), 1, 0) == 0, "角色 EX 归零");

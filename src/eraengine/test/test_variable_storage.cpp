@@ -42,26 +42,26 @@ int main(int argc, char *argv[]) {
     // Test 3: Test global integer variables (1D)
     qDebug() << "\n3. Testing Global Integer 1D Variables:";
     QString globalInt1DName = "TEST_GLOBAL_INT_1D";
-    storage.setGlobalInt1D(globalInt1DName, 0, 42);
-    qDebug() << "   storage.setGlobalInt1D(\"" << globalInt1DName << "\", 0, 42)";
-    qint64 value1D = storage.getGlobalInt1D(globalInt1DName, 0);
-    qDebug() << "   storage.getGlobalInt1D(\"" << globalInt1DName << "\", 0) = " << value1D;
+    storage.setGlobalInt1DInCurrentFrame(globalInt1DName, 0, 42);
+    qDebug() << "   storage.setGlobalInt1DInCurrentFrame(\"" << globalInt1DName << "\", 0, 42)";
+    qint64 value1D = storage.getGlobalInt1DInCurrentFrame(globalInt1DName, 0);
+    qDebug() << "   storage.getGlobalInt1DInCurrentFrame(\"" << globalInt1DName << "\", 0) = " << value1D;
     
     // Test 4: Test global integer variables (2D)
     qDebug() << "\n4. Testing Global Integer 2D Variables:";
     QString globalInt2DName = "TEST_GLOBAL_INT_2D";
-    storage.setGlobalInt2D(globalInt2DName, 0, 0, 100);
-    qDebug() << "   storage.setGlobalInt2D(\"" << globalInt2DName << "\", 0, 0, 100)";
-    qint64 value2D = storage.getGlobalInt2D(globalInt2DName, 0, 0);
-    qDebug() << "   storage.getGlobalInt2D(\"" << globalInt2DName << "\", 0, 0) = " << value2D;
+    storage.setGlobalInt2DInCurrentFrame(globalInt2DName, 0, 0, 100);
+    qDebug() << "   storage.setGlobalInt2DInCurrentFrame(\"" << globalInt2DName << "\", 0, 0, 100)";
+    qint64 value2D = storage.getGlobalInt2DInCurrentFrame(globalInt2DName, 0, 0);
+    qDebug() << "   storage.getGlobalInt2DInCurrentFrame(\"" << globalInt2DName << "\", 0, 0) = " << value2D;
     
     // Test 5: Test global integer variables (3D)
     qDebug() << "\n5. Testing Global Integer 3D Variables:";
     QString globalInt3DName = "TEST_GLOBAL_INT_3D";
-    storage.setGlobalInt3D(globalInt3DName, 0, 0, 0, 200);
-    qDebug() << "   storage.setGlobalInt3D(\"" << globalInt3DName << "\", 0, 0, 0, 200)";
-    qint64 value3D = storage.getGlobalInt3D(globalInt3DName, 0, 0, 0);
-    qDebug() << "   storage.getGlobalInt3D(\"" << globalInt3DName << "\", 0, 0, 0) = " << value3D;
+    storage.setGlobalInt3DInCurrentFrame(globalInt3DName, 0, 0, 0, 200);
+    qDebug() << "   storage.setGlobalInt3DInCurrentFrame(\"" << globalInt3DName << "\", 0, 0, 0, 200)";
+    qint64 value3D = storage.getGlobalInt3DInCurrentFrame(globalInt3DName, 0, 0, 0);
+    qDebug() << "   storage.getGlobalInt3DInCurrentFrame(\"" << globalInt3DName << "\", 0, 0, 0) = " << value3D;
     
     // Test 6: Test character integer variables (2D)
     qDebug() << "\n6. Testing Character Integer Variables (2D):";
@@ -115,8 +115,8 @@ int main(int argc, char *argv[]) {
     // Test 11: Test variable type checking
     qDebug() << "\n13. Testing Variable Type Checking:";
     QString checkName = "TEST_CHECK";
-    storage.setGlobalInt1D(checkName, 0, 123);
-    qDebug() << "   storage.setGlobalInt1D(\"" << checkName << "\", 0, 123)";
+    storage.setGlobalInt1DInCurrentFrame(checkName, 0, 123);
+    qDebug() << "   storage.setGlobalInt1DInCurrentFrame(\"" << checkName << "\", 0, 123)";
     bool isInt = storage.isVariableInteger(checkName);
     qDebug() << "   storage.isVariableInteger(\"" << checkName << "\") = " << (isInt ? "true" : "false");
     bool isStr = storage.isVariableString(checkName);

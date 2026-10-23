@@ -109,17 +109,17 @@ int main(int argc, char* argv[]) {
         runner.onInputProvided(3);
         check(state.getExecState() == ExecState::WaitInput, "第 2 次 ONEINPUT 挂起");
         check(storage.getSystemVariable("A", 0) == 3, "A = RESULT == 3");
-        check(storage.getGlobalInt1D("CNT", 0) == 1, "CNT == 1");
+        check(storage.getGlobalInt1DInCurrentFrame("CNT", 0) == 1, "CNT == 1");
 
         runner.onInputProvided(5);
         check(state.getExecState() == ExecState::WaitInput, "INPUT 挂起");
         check(storage.getSystemVariable("B", 0) == 5, "B = RESULT == 5");
-        check(storage.getGlobalInt1D("CNT", 0) == 2, "CNT == 2");
+        check(storage.getGlobalInt1DInCurrentFrame("CNT", 0) == 2, "CNT == 2");
 
         runner.onInputProvided(7);
         check(state.getExecState() == ExecState::Halt, "第 3 次输入后结束（Halt）");
         check(storage.getSystemVariable("C", 0) == 7, "C = RESULT == 7");
-        check(storage.getGlobalInt1D("CNT", 0) == 3, "CNT == 3（三次输入都生效）");
+        check(storage.getGlobalInt1DInCurrentFrame("CNT", 0) == 3, "CNT == 3（三次输入都生效）");
     }
 
     // =====================================================================
@@ -157,12 +157,12 @@ int main(int argc, char* argv[]) {
 
         // 字符串输入路径：RESULTS 是**全局**字符串数组（C# VariableData.cs:202），
         // 与引擎（求值器 / 赋值）一致地经全局槽设置。
-        storage.setGlobalStr1D(QStringLiteral("RESULTS"), 0, QStringLiteral("あいう"));
+        storage.setGlobalStr1DInCurrentFrame(QStringLiteral("RESULTS"), 0, QStringLiteral("あいう"));
         runner.onInputProvided(0);
         check(state.getExecState() == ExecState::Halt, "字符串输入后结束");
-        check(storage.getGlobalStr1D(QStringLiteral("RESULTS"), 0) == QStringLiteral("あいう"),
+        check(storage.getGlobalStr1DInCurrentFrame(QStringLiteral("RESULTS"), 0) == QStringLiteral("あいう"),
               "RESULTS 承载字符串输入");
-        check(storage.getGlobalInt1D("LEN", 0) == 6, "STRLENS(\"あいう\") == 6（Shift-JIS 字节）");
+        check(storage.getGlobalInt1DInCurrentFrame("LEN", 0) == 6, "STRLENS(\"あいう\") == 6（Shift-JIS 字节）");
     }
 
     // =====================================================================
@@ -305,7 +305,7 @@ int main(int argc, char* argv[]) {
         auto fire = [&pending]() { if (!pending.isEmpty()) { auto p = pending.takeFirst(); p.cb(); } };
         fire();
         check(state.getExecState() == ExecState::WaitInput, "AWAIT 之后继续，INPUTMOUSEKEY 挂起");
-        check(storage.getGlobalInt1D("CNT", 0) == 1, "AWAIT 之后继续执行了下一行");
+        check(storage.getGlobalInt1DInCurrentFrame("CNT", 0) == 1, "AWAIT 之后继续执行了下一行");
         check(pending.size() == 1 && pending.first().ms == 100, "INPUTMOUSEKEY(100) 登记了超时计时器");
 
         // 超时 -> C# 语义 [4,0,0,0,0]
@@ -394,11 +394,11 @@ int main(int argc, char* argv[]) {
               "TINPUT 超时交付**第 2 参缺省值 1234**（不是 0）");
         check(pending.size() == 1 && pending.first().ms == 300, "TINPUTS 登记计时器");
         fire();
-        check(storage.getGlobalStr1D("S", 0) == QLatin1String("abc"),
+        check(storage.getGlobalStr1DInCurrentFrame("S", 0) == QLatin1String("abc"),
               "TINPUTS 超时交付字符串缺省值 \"abc\"（字面量不可当表达式求值）");
         check(pending.size() == 1 && pending.first().ms == 300, "TONEINPUTS 登记计时器");
         fire();
-        check(storage.getGlobalStr1D("T2", 0) == QLatin1String("p"),
+        check(storage.getGlobalStr1DInCurrentFrame("T2", 0) == QLatin1String("p"),
               "TONEINPUTS 超时交付缺省值 \"p\"");
     }
 
@@ -481,11 +481,11 @@ int main(int argc, char* argv[]) {
         check(state.getExecState() == ExecState::WaitInput, "TWAIT 到点继续，WAIT 挂起");
         check(prompts.size() == 1 && prompts.first() == QLatin1String("WAIT"),
               "WAIT 请求输入 kind=WAIT");
-        check(storage.getGlobalInt1D("CNT", 0) == 1, "TWAIT 之后继续执行了下一行");
+        check(storage.getGlobalInt1DInCurrentFrame("CNT", 0) == 1, "TWAIT 之后继续执行了下一行");
 
         // 模拟「点击/回车」交付：submitAnyKey -> inputSubmitted(0) -> provideInput -> resume
         machine.resume(0);
-        check(storage.getGlobalInt1D("CNT", 0) == 11, "WAIT 被任意键交付后继续（CNT = 11）");
+        check(storage.getGlobalInt1DInCurrentFrame("CNT", 0) == 11, "WAIT 被任意键交付后继续（CNT = 11）");
     }
 
     {
@@ -526,7 +526,7 @@ int main(int argc, char* argv[]) {
         check(prompts.size() == 1 && prompts.first() == QLatin1String("ANYKEY"),
               "PRINTW 请求输入 kind=ANYKEY");
         machine.resume(0);
-        check(storage.getGlobalInt1D("CNT", 0) == 7, "PRINTW 被任意键交付后继续（CNT = 7）");
+        check(storage.getGlobalInt1DInCurrentFrame("CNT", 0) == 7, "PRINTW 被任意键交付后继续（CNT = 7）");
     }
 
     {
@@ -572,7 +572,7 @@ int main(int argc, char* argv[]) {
               "TWAIT skip=0 请求输入 kind=TWAIT");
         check(pending.size() == 1 && pending.first().ms == 100, "TWAIT skip=0 登记了计时器");
         if (!pending.isEmpty()) pending.takeFirst().cb();
-        check(storage.getGlobalInt1D("CNT", 0) == 5, "TWAIT skip=0 到点自动继续（CNT = 5）");
+        check(storage.getGlobalInt1DInCurrentFrame("CNT", 0) == 5, "TWAIT skip=0 到点自动继续（CNT = 5）");
     }
 
     // =====================================================================

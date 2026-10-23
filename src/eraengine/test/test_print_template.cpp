@@ -42,24 +42,24 @@ int main(int argc, char** argv) {
         storage.setLocalInt(0, 10);
         check(!evaluator.evaluate(*aborting, &storage).isValid() && storage.getLocalInt(0) == 11,
               "failed occurrence aborts flattening before later side effects");
-        storage.setStringSlot("LOCALS", {0}, value);
-        storage.setStringSlot("ARGS", {0}, value);
+        storage.setStringSlotInCurrentFrame("LOCALS", {0}, value);
+        storage.setStringSlotInCurrentFrame("ARGS", {0}, value);
         auto frame = storage.localContext();
         storage.setLocalStr(0, "replacement"); storage.setArgStr(0, "replacement");
         storage.setLocalContext(frame);
-        check(storage.getStringSlot("LOCALS", {0}).markup.parts.at(0).buttonValue == "7"
-              && storage.getStringSlot("ARGS", {0}).text == value.text,
+        check(storage.getStringSlotInCurrentFrame("LOCALS", {0}).markup.parts.at(0).buttonValue == "7"
+              && storage.getStringSlotInCurrentFrame("ARGS", {0}).text == value.text,
               "local and argument frames preserve eager values after evaluation");
-        storage.setStringSlot("FLAT3D", {1, 2, 3}, value);
+        storage.setStringSlotInCurrentFrame("FLAT3D", {1, 2, 3}, value);
         storage.registerCharaDataVariable("FLATCHARA", true, 2);
         storage.addChara(20); storage.addChara(30);
-        storage.setStringSlot("FLATCHARA", {0, 1, 2}, value);
+        storage.setStringSlotInCurrentFrame("FLATCHARA", {0, 1, 2}, value);
         storage.swapChara(0, 1);
-        check(storage.getStringSlot("FLAT3D", {1, 2, 3}).markup.parts.at(0).buttonValue == "7"
-              && storage.getStringSlot("FLATCHARA", {1, 1, 2}).text == value.text,
+        check(storage.getStringSlotInCurrentFrame("FLAT3D", {1, 2, 3}).markup.parts.at(0).buttonValue == "7"
+              && storage.getStringSlotInCurrentFrame("FLATCHARA", {1, 1, 2}).text == value.text,
               "multidimensional and reordered character slots preserve flattened structure");
-        storage.setStringSlot("FLAT3D", {1, 2, 3}, FlatStringValue(value.text));
-        check(storage.getStringSlot("FLAT3D", {1, 2, 3}).markup.parts.size() == 1,
+        storage.setStringSlotInCurrentFrame("FLAT3D", {1, 2, 3}, FlatStringValue(value.text));
+        check(storage.getStringSlotInCurrentFrame("FLAT3D", {1, 2, 3}).markup.parts.size() == 1,
               "plain multidimensional writes replace structure with opaque text");
     }
     {
@@ -70,11 +70,11 @@ int main(int argc, char** argv) {
             sourceLifetime = source;
             PrintTemplateCompiler::prepare(source);
             detached = evaluator.evaluateFlat(*source, &storage);
-            storage.setStringSlot("ARGS", {1}, detached);
+            storage.setStringSlotInCurrentFrame("ARGS", {1}, detached);
         }
         check(sourceLifetime.isNull() && detached.text == "<b>retained</b>"
               && detached.markup.parts.first().kind == PrintTemplatePart::Kind::Style
-              && storage.getStringSlot("ARGS", {1}).text == detached.text,
+              && storage.getStringSlotInCurrentFrame("ARGS", {1}).text == detached.text,
               "flat result and argument slot release all source AST references on return");
         check(!toVariant(detached).canConvert<QString>() && toVariant(detached).toString().isEmpty(),
               "flat values require explicit text conversion");

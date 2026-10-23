@@ -150,30 +150,30 @@ int main(int argc, char* argv[]) {
     qDebug() << "\n1) 自增副作用与后置语义";
     check(storage.getSystemVariable("A", 0) == 10, "A = BAG:(I++) -> 10（旧值）");
     check(storage.getSystemVariable("B", 0) == 20, "B = BAG:(I++) -> 20（旧值）");
-    check(storage.getGlobalInt1D("I", 0) == 2, "I 自增两次 -> 2（副作用生效）");
+    check(storage.getGlobalInt1DInCurrentFrame("I", 0) == 2, "I 自增两次 -> 2（副作用生效）");
 
     qDebug() << "\n2) SWAP / 变量下标赋值";
     // BAG is private to MAIN; inspect it in its owning scope after execution.
     storage.setPrivateScope(eravar::internName(scopeKeyOfFunction(table.variableTable(), "MAIN")), {"BAG"});
-    check(storage.getGlobalInt1D("BAG", 1) == 99 || storage.getGlobalInt1D("BAG", 1) == 10,
+    check(storage.getGlobalInt1DInCurrentFrame("BAG", 1) == 99 || storage.getGlobalInt1DInCurrentFrame("BAG", 1) == 10,
           "BAG:J = 99（变量下标 J=1）");
-    check(storage.getGlobalInt1D("BAG", 1) == 99, "BAG:1 == 99");
-    check(storage.getGlobalInt1D("BAG", 0) == 20, "SWAP 后 BAG:0 == 20");
+    check(storage.getGlobalInt1DInCurrentFrame("BAG", 1) == 99, "BAG:1 == 99");
+    check(storage.getGlobalInt1DInCurrentFrame("BAG", 0) == 20, "SWAP 后 BAG:0 == 20");
 
     qDebug() << "\n3) #DIM CONST 常量";
-    check(storage.getGlobalInt1D("CONST_SUM", 0) == 7, "BLK_O + BLK_S == 7");
+    check(storage.getGlobalInt1DInCurrentFrame("CONST_SUM", 0) == 7, "BLK_O + BLK_S == 7");
 
     qDebug() << "\n4) 函数私有初值（每次进入函数）";
-    check(storage.getGlobalInt1D("NVAL", 0) == 7, "NVAL == 7（N 初值生效）");
+    check(storage.getGlobalInt1DInCurrentFrame("NVAL", 0) == 7, "NVAL == 7（N 初值生效）");
     // 调用计划（装载期静态的存储键/尺寸/初值表）替代了旧的「每次 CALL 都按
     // 裸名走 storageName + ensureArraySize」路径 —— 这里锁定逐次应用语义：
     // 第二次进入 @G 时 M 必须重新取初值 7（上一轮把 M 改脏成 99）。
-    check(storage.getGlobalInt1D("GV_FIRST", 0) == 7, "G 首调：M 初值 7 生效");
-    check(storage.getGlobalInt1D("GV_SECOND", 0) == 7,
+    check(storage.getGlobalInt1DInCurrentFrame("GV_FIRST", 0) == 7, "G 首调：M 初值 7 生效");
+    check(storage.getGlobalInt1DInCurrentFrame("GV_SECOND", 0) == 7,
           "G 二调：M 重新取初值 7（调用计划逐次应用，脏值 99 被覆盖）");
 
     qDebug() << "\n5) FOR + CONTINUE 能终止";
-    check(storage.getGlobalInt1D("TOTAL", 0) == 2,
+    check(storage.getGlobalInt1DInCurrentFrame("TOTAL", 0) == 2,
           "K=0,1,2 CONTINUE；K=3,4 计数 -> TOTAL == 2");
 
     qDebug() << "\n6) '=（単一代入）与「同指令前缀的变量名」";
@@ -198,7 +198,7 @@ int main(int argc, char* argv[]) {
 
         // RESULTS 是**全局**字符串数组（C# VariableData.cs:202），不是 LOCALS:0；
         // 这里经全局槽设置，与引擎（求值器 / 赋值 / 函数返回）保持一致。
-        storage.setGlobalStr1D(QStringLiteral("RESULTS"), 0, QStringLiteral("新名字"));
+        storage.setGlobalStr1DInCurrentFrame(QStringLiteral("RESULTS"), 0, QStringLiteral("新名字"));
         execOne(QStringLiteral("NAME:3 '= RESULTS"));
         check(storage.getCharaStr(QStringLiteral("NAME"), 3, 0) == QStringLiteral("新名字"),
               "NAME:3 '= RESULTS 写入生效");
@@ -242,7 +242,7 @@ int main(int argc, char* argv[]) {
             eravar::internName(scopeKeyOfFunction(table.variableTable(), QStringLiteral("MAIN")));
         storage.setPrivateScope(mainScope, {});
         engine.executeInstruction(p, mainScope);
-        check(storage.getGlobalInt1D("BAG", 2) == 1024,
+        check(storage.getGlobalInt1DInCurrentFrame("BAG", 2) == 1024,
               "POWER BAG:2, 2, 10 -> BAG:2 == 1024（变量被赋值）");
     }
 
@@ -265,17 +265,17 @@ int main(int argc, char* argv[]) {
             eravar::internName(scopeKeyOfFunction(table.variableTable(), QStringLiteral("MAIN")));
         storage.setPrivateScope(mainScope, {});
         engine.executeInstruction(s, mainScope);
-        check(storage.getGlobalInt1D("BAG", 3) == 20,
+        check(storage.getGlobalInt1DInCurrentFrame("BAG", 3) == 20,
               QString("SAVENOS BAG:3 -> 20（Config.SaveDataNos 默认值；得到 %1）")
-                  .arg(storage.getGlobalInt1D("BAG", 3)));
+                  .arg(storage.getGlobalInt1DInCurrentFrame("BAG", 3)));
 
         LogicalLine p = AstBuilder::build(QStringLiteral("PRINTCPERLINE BAG:3"), pos, resolveOne);
         check(p.functionName == QLatin1String("PRINTCPERLINE") && !p.isFunctionCall,
               "PRINTCPERLINE 语句按指令解析");
         engine.executeInstruction(p, mainScope);
-        check(storage.getGlobalInt1D("BAG", 3) == 3,
+        check(storage.getGlobalInt1DInCurrentFrame("BAG", 3) == 3,
               QString("PRINTCPERLINE BAG:3 -> 3（Config.PrintCPerLine 默认值；得到 %1）")
-                  .arg(storage.getGlobalInt1D("BAG", 3)));
+                  .arg(storage.getGlobalInt1DInCurrentFrame("BAG", 3)));
     }
 
     // ecd/docs/translation/Command.html: PRINTBUTTON accepts integer or string values.
@@ -325,7 +325,7 @@ int main(int argc, char* argv[]) {
         // -> QML 去找 image://emuera/0（provider 失败日志刷屏）。
         // 现在按 C# 的 Term.GetStrValue 走字符串求值。
         //（RESULTS = 引擎里现成的全局字符串变量）
-        storage.setGlobalStr1D(QStringLiteral("RESULTS"), 0, QStringLiteral("face_02"));
+        storage.setGlobalStr1DInCurrentFrame(QStringLiteral("RESULTS"), 0, QStringLiteral("face_02"));
         engine.executeInstruction(buildLines(table, {"PRINT_IMG RESULTS"}).first());
         check(imageName == "face_02",
               "PRINT_IMG <字符串变量> 取变量内容（不是 0）");
@@ -387,32 +387,32 @@ int main(int argc, char* argv[]) {
         };
 
         // --- 无范围：end 取 #DIM 长度 ---
-        storage.setGlobalInt1D("VSCNT", 0, 9);
-        storage.setGlobalInt1D("VSCNT", 5, 9);
+        storage.setGlobalInt1DInCurrentFrame("VSCNT", 0, 9);
+        storage.setGlobalInt1DInCurrentFrame("VSCNT", 5, 9);
         execV(QStringLiteral("VARSET VSCNT"));
-        check(storage.getGlobalInt1D("VSCNT", 0) == 0 && storage.getGlobalInt1D("VSCNT", 5) == 0,
+        check(storage.getGlobalInt1DInCurrentFrame("VSCNT", 0) == 0 && storage.getGlobalInt1DInCurrentFrame("VSCNT", 5) == 0,
               "VARSET VSCNT（无范围）按 #DIM 长度 6 清空整条 1D 数组");
 
         // --- 2D：忽略范围，整体清空（对齐 C# Int2DVariableToken.SetValueAll）---
-        storage.setGlobalInt2D("VSNO", 3, 7, 9);
+        storage.setGlobalInt2DInCurrentFrame("VSNO", 3, 7, 9);
         execV(QStringLiteral("VARSET VSNO"));
-        check(storage.getGlobalInt2D("VSNO", 3, 7) == 0,
+        check(storage.getGlobalInt2DInCurrentFrame("VSNO", 3, 7) == 0,
               "VARSET VSNO（2D 无范围）整体清空");
 
         // --- 字符串变量 ---
-        storage.setGlobalStr1D("VSSARR", 2, QStringLiteral("q"));
+        storage.setGlobalStr1DInCurrentFrame("VSSARR", 2, QStringLiteral("q"));
         execV(QStringLiteral("VARSET VSSARR, \"x\""));
-        check(storage.getGlobalStr1D("VSSARR", 2) == QStringLiteral("x"),
+        check(storage.getGlobalStr1DInCurrentFrame("VSSARR", 2) == QStringLiteral("x"),
               "VARSET 字符串数组赋 \"x\"");
 
-        // --- 2D 字符串数组：元素赋值必须写进**2 维**表（读侧按 getGlobalStr2D 取）---
+        // --- 2D 字符串数组：元素赋值必须写进**2 维**表（读侧按 getGlobalStr2DInCurrentFrame 取）---
         // 此前 writeStringValue 无论几个下标都只取第一个写 1 维表，于是
         // `#DIMS X, a, b` 的 `X:i:j = …` 读回恒为空串（COLUMN_LIB 这类
         // 「每列一条字符串缓冲」的 ERB 库整个失效）。
         execV(QStringLiteral("VSS2D:3:7 '= \"hi\""));
-        check(storage.getGlobalStr2D("VSS2D", 3, 7) == QStringLiteral("hi"),
+        check(storage.getGlobalStr2DInCurrentFrame("VSS2D", 3, 7) == QStringLiteral("hi"),
               "2D 字符串数组元素赋值写进 2 维表（VSS2D:3:7 '= \"hi\"）");
-        check(storage.getGlobalStr1D("VSS2D", 3).isEmpty(),
+        check(storage.getGlobalStr1DInCurrentFrame("VSS2D", 3).isEmpty(),
               "2D 字符串数组元素赋值不落进 1 维表（不与单下标读混槽）");
         const auto evalStr2D = [&](const QString& e) {
             const auto ast = compileFixture(table, e);
@@ -422,11 +422,11 @@ int main(int argc, char* argv[]) {
               "表达式求值 VSS2D:3:7 读回同一槽（写/读两路径一致）");
 
         // --- 显式范围 + start>end 自动交换 ---
-        for (int i = 1; i <= 4; ++i) storage.setGlobalInt1D("VSCNT", i, 7);
+        for (int i = 1; i <= 4; ++i) storage.setGlobalInt1DInCurrentFrame("VSCNT", i, 7);
         execV(QStringLiteral("VARSET VSCNT, 5, 3, 1"));   // start=3,end=1 -> 交换 -> [1,3)
-        check(storage.getGlobalInt1D("VSCNT", 1) == 5 && storage.getGlobalInt1D("VSCNT", 2) == 5,
+        check(storage.getGlobalInt1DInCurrentFrame("VSCNT", 1) == 5 && storage.getGlobalInt1DInCurrentFrame("VSCNT", 2) == 5,
               "VARSET 显式范围 [1,3) 赋值，且 start>end 自动交换");
-        check(storage.getGlobalInt1D("VSCNT", 3) == 7 && storage.getGlobalInt1D("VSCNT", 4) == 7,
+        check(storage.getGlobalInt1DInCurrentFrame("VSCNT", 3) == 7 && storage.getGlobalInt1DInCurrentFrame("VSCNT", 4) == 7,
               "范围外元素不受影响");
 
         // --- 角色变量：VARSET TEQUIP:1:0, 7, 10, 13 ---
@@ -457,8 +457,8 @@ int main(int argc, char* argv[]) {
         // eraTW 的 BASE_BAR 用 `FINDELEMENT(BASENAME, "体力")` 取元素下标；
         // 以前被 readIntArray 当整数读 -> 恒 0，于是体力/気力 都指向同一槽，
         // 两根条「一起变」。这里用 #DIMS 字符串数组复现。
-        storage.setGlobalStr1D("VSSARR", 0, QStringLiteral("体力"));
-        storage.setGlobalStr1D("VSSARR", 1, QStringLiteral("気力"));
+        storage.setGlobalStr1DInCurrentFrame("VSSARR", 0, QStringLiteral("体力"));
+        storage.setGlobalStr1DInCurrentFrame("VSSARR", 1, QStringLiteral("気力"));
         {
             const QSharedPointer<ExpressionNode> ast =
                 compileFixture(table, QStringLiteral("FINDELEMENT(VSSARR, \"気力\")"));
@@ -469,7 +469,7 @@ int main(int argc, char* argv[]) {
             //   FINDELEMENT(CLASS_NAME, ESCAPE(ARGS:0), 1, , 1)
             // 第 4 实参省略时取**数组末尾**；若被当 0 则区间 [1,0) 恒空 -> -1
             // -> eraTW 的 EXISTOBJ 抛「未設定の変数です」并卡住新开局。
-            storage.setGlobalStr1D("VSSARR", 2, QStringLiteral("Ｃ感"));
+            storage.setGlobalStr1DInCurrentFrame("VSSARR", 2, QStringLiteral("Ｃ感"));
             const QSharedPointer<ExpressionNode> ast2 =
                 compileFixture(table, QStringLiteral("FINDELEMENT(VSSARR, ESCAPE(\"気力\"), 1, , 1)"));
             const qint64 idx2 = ast2 ? evaluator.evaluate(*ast2, &storage, nullptr).toLongLong() : -999;
@@ -530,25 +530,25 @@ int main(int argc, char* argv[]) {
         // REPLACE 的第 2 引数是**正则**（C# ReplaceMethod 用 new Regex()）；
         // eraTW 用它去首尾空格：REPLACE LOCALS, "(^ +| +$)", ""
         // RESULTS 全局槽（见上）；REPLACE/SUBSTRING 语句形式读写同一槽。
-        storage.setGlobalStr1D(QStringLiteral("RESULTS"), 0, QStringLiteral("  x  "));
+        storage.setGlobalStr1DInCurrentFrame(QStringLiteral("RESULTS"), 0, QStringLiteral("  x  "));
         execOne(QStringLiteral("REPLACE RESULTS, \"(^ +| +$)\", \"\""));
-        check(storage.getGlobalStr1D(QStringLiteral("RESULTS"), 0) == QStringLiteral("x"),
+        check(storage.getGlobalStr1DInCurrentFrame(QStringLiteral("RESULTS"), 0) == QStringLiteral("x"),
               "REPLACE RESULTS, 正则去首尾空格 -> RESULTS:0");
-        storage.setGlobalStr1D(QStringLiteral("RESULTS"), 0, QStringLiteral("a//b"));
+        storage.setGlobalStr1DInCurrentFrame(QStringLiteral("RESULTS"), 0, QStringLiteral("a//b"));
         execOne(QStringLiteral("REPLACE RESULTS, \"/+\", \"/\""));
-        check(storage.getGlobalStr1D(QStringLiteral("RESULTS"), 0) == QStringLiteral("a/b"),
+        check(storage.getGlobalStr1DInCurrentFrame(QStringLiteral("RESULTS"), 0) == QStringLiteral("a/b"),
               "REPLACE 正则 /+ -> /（斜杠压缩）");
 
-        storage.setGlobalStr1D(QStringLiteral("RESULTS"), 0, QStringLiteral("  x  "));
+        storage.setGlobalStr1DInCurrentFrame(QStringLiteral("RESULTS"), 0, QStringLiteral("  x  "));
         execOne(QStringLiteral("SUBSTRING RESULTS, 2, 2"));
-        check(storage.getGlobalStr1D(QStringLiteral("RESULTS"), 0) == QStringLiteral("x "),
+        check(storage.getGlobalStr1DInCurrentFrame(QStringLiteral("RESULTS"), 0) == QStringLiteral("x "),
               "SUBSTRING RESULTS, 2, 2 -> RESULTS:0");
 
         // --- STRLENFORM：实参是 FORM_STR（C# STRLEN_Instruction(argisform=true) ->
         //     FunctionArgType.FORM_STR_NULLABLE）。**无 %…%/{…} 标记时整个实参是
         //     字面量**（IsConst/ConstStr），不是变量引用；要取值须写 %…%
         //     （eraTW：`STRLENFORM %ForagePlaceName(SpotID)%`）。
-        storage.setGlobalStr1D(QStringLiteral("RESULTS"), 0, QStringLiteral("abcd"));
+        storage.setGlobalStr1DInCurrentFrame(QStringLiteral("RESULTS"), 0, QStringLiteral("abcd"));
         execOne(QStringLiteral("STRLENFORMU RESULTS"));
         check(storage.getSystemVariable("RESULT", 0) == 7,
               "STRLENFORMU RESULTS -> 字面量 \"RESULTS\" 的长度 == 7");
@@ -560,15 +560,15 @@ int main(int argc, char* argv[]) {
               "STRLENFORM %RESULTS% -> 语言编码字节数 == 4");
 
         // --- SETBIT / CLEARBIT / INVERTBIT ---
-        storage.setGlobalInt1D("BITS", 0, 0);
+        storage.setGlobalInt1DInCurrentFrame("BITS", 0, 0);
         execOne(QStringLiteral("SETBIT BITS, 3"));
-        check(storage.getGlobalInt1D("BITS", 0) == 8, "SETBIT BITS, 3 -> 8");
+        check(storage.getGlobalInt1DInCurrentFrame("BITS", 0) == 8, "SETBIT BITS, 3 -> 8");
         execOne(QStringLiteral("SETBIT BITS, 0, 1"));
-        check(storage.getGlobalInt1D("BITS", 0) == 11, "SETBIT BITS, 0, 1 -> 11");
+        check(storage.getGlobalInt1DInCurrentFrame("BITS", 0) == 11, "SETBIT BITS, 0, 1 -> 11");
         execOne(QStringLiteral("CLEARBIT BITS, 0"));
-        check(storage.getGlobalInt1D("BITS", 0) == 10, "CLEARBIT BITS, 0 -> 10");
+        check(storage.getGlobalInt1DInCurrentFrame("BITS", 0) == 10, "CLEARBIT BITS, 0 -> 10");
         execOne(QStringLiteral("INVERTBIT BITS, 1"));
-        check(storage.getGlobalInt1D("BITS", 0) == 8, "INVERTBIT BITS, 1 -> 8");
+        check(storage.getGlobalInt1DInCurrentFrame("BITS", 0) == 8, "INVERTBIT BITS, 1 -> 8");
 
         // --- 角色变量 + 下标表达式（eraTW：SETBIT CFLAG:C_ID:口上実装状況, N）---
         // 上面的 CVARSET 用例已把 CFLAG:0:5 写成 9（位 0 与位 3 已置位），
@@ -623,19 +623,19 @@ int main(int argc, char* argv[]) {
                             QStringLiteral("OUT_REF"), QStringLiteral("SRC_STR"),
                             QStringLiteral("OUT_EXPR"), QStringLiteral("OUT_FORM"),
                             QStringLiteral("OUT_INDEX"), QStringLiteral("OUT_CALL")});
-        check(vs.getGlobalStr1D(QStringLiteral("OUT_LIT"), 0) == QStringLiteral("斜角的竹林"),
+        check(vs.getGlobalStr1DInCurrentFrame(QStringLiteral("OUT_LIT"), 0) == QStringLiteral("斜角的竹林"),
               "OUT_LIT = 斜角的竹林（整数常量名）-> 字面量，而非常量值 430");
-        check(vs.getGlobalStr1D(QStringLiteral("OUT_SYS"), 0) == QStringLiteral("FLAG"),
+        check(vs.getGlobalStr1DInCurrentFrame(QStringLiteral("OUT_SYS"), 0) == QStringLiteral("FLAG"),
               "OUT_SYS = FLAG（整数系统变量名）-> 字面量 \"FLAG\"");
-        check(vs.getGlobalStr1D(QStringLiteral("OUT_REF"), 0) == QStringLiteral("SRC_STR"),
+        check(vs.getGlobalStr1DInCurrentFrame(QStringLiteral("OUT_REF"), 0) == QStringLiteral("SRC_STR"),
               "OUT_REF = SRC_STR -> 字面量变量名");
-        check(vs.getGlobalStr1D(QStringLiteral("OUT_EXPR"), 0) == QStringLiteral("值"),
+        check(vs.getGlobalStr1DInCurrentFrame(QStringLiteral("OUT_EXPR"), 0) == QStringLiteral("值"),
               "OUT_EXPR '= SRC_STR -> 字符串变量的值");
-        check(vs.getGlobalStr1D(QStringLiteral("OUT_FORM"), 0) == QStringLiteral("值"),
+        check(vs.getGlobalStr1DInCurrentFrame(QStringLiteral("OUT_FORM"), 0) == QStringLiteral("值"),
               "OUT_FORM = %SRC_STR% -> FORM 字符串插值");
-        check(vs.getGlobalStr1D(QStringLiteral("OUT_INDEX"), 0) == QStringLiteral("SRC_STR:0"),
+        check(vs.getGlobalStr1DInCurrentFrame(QStringLiteral("OUT_INDEX"), 0) == QStringLiteral("SRC_STR:0"),
               "= 不求值裸字符串下标引用");
-        check(vs.getGlobalStr1D(QStringLiteral("OUT_CALL"), 0) == QStringLiteral("GETDOINGFUNCTION()"),
+        check(vs.getGlobalStr1DInCurrentFrame(QStringLiteral("OUT_CALL"), 0) == QStringLiteral("GETDOINGFUNCTION()"),
               "= 不求值裸函数调用");
     }
 
@@ -680,17 +680,17 @@ int main(int argc, char* argv[]) {
         vs.setPrivateScope(eravar::internName(scopeKeyOfFunction(pt.variableTable(), QStringLiteral("MAIN"))),
                            {QStringLiteral("Q"), QStringLiteral("F"), QStringLiteral("B"),
                             QStringLiteral("E"), QStringLiteral("QE"), QStringLiteral("FE")});
-        check(vs.getGlobalStr1D(QStringLiteral("Q"), 0) == QStringLiteral("\"quote\""),
+        check(vs.getGlobalStr1DInCurrentFrame(QStringLiteral("Q"), 0) == QStringLiteral("\"quote\""),
               "Q = \"quote\" -> 保留双引号");
-        check(vs.getGlobalStr1D(QStringLiteral("F"), 0) == QStringLiteral("@\"lit_7\""),
+        check(vs.getGlobalStr1DInCurrentFrame(QStringLiteral("F"), 0) == QStringLiteral("@\"lit_7\""),
               "F = @\"lit_{N}\" -> 保留 @ 与双引号，并插值");
-        check(vs.getGlobalStr1D(QStringLiteral("B"), 0) == QStringLiteral("bare_7"),
+        check(vs.getGlobalStr1DInCurrentFrame(QStringLiteral("B"), 0) == QStringLiteral("bare_7"),
               "B = bare_{N} -> 整数插值");
-        check(vs.getGlobalStr1D(QStringLiteral("E"), 0) == QStringLiteral("@\"[PN:7]\""),
+        check(vs.getGlobalStr1DInCurrentFrame(QStringLiteral("E"), 0) == QStringLiteral("@\"[PN:7]\""),
               "E = @\"[PN:{N}]\" -> 保留原始 FORM 定界文本");
-        check(vs.getGlobalStr1D(QStringLiteral("QE"), 0) == QStringLiteral("quote"),
+        check(vs.getGlobalStr1DInCurrentFrame(QStringLiteral("QE"), 0) == QStringLiteral("quote"),
               "QE '= \"quote\" -> 字符串表达式去引号");
-        check(vs.getGlobalStr1D(QStringLiteral("FE"), 0) == QStringLiteral("lit_7"),
+        check(vs.getGlobalStr1DInCurrentFrame(QStringLiteral("FE"), 0) == QStringLiteral("lit_7"),
               "FE '= @\"lit_{N}\" -> 格式化字符串表达式");
 
         const AstResolver resolve = [&pt](const QString& text) { return compileFixture(pt, text); };
@@ -698,19 +698,19 @@ int main(int argc, char* argv[]) {
             "B = %N%", "B = {QE}", "B = %QE", "B = {N", "B = % %", "B = {}"
         };
         for (const auto& source : invalidForms) {
-            vs.setGlobalStr1D("B", 0, "unchanged");
+            vs.setGlobalStr1DInCurrentFrame("B", 0, "unchanged");
             auto line = AstBuilder::build(source, {}, resolve);
             line.ownerFunction = "MAIN";
             check(!ex.executeInstruction(line), "非法 FORM 拒绝：" + source);
-            check(vs.getGlobalStr1D("B", 0) == "unchanged", "非法 FORM 不写入：" + source);
+            check(vs.getGlobalStr1DInCurrentFrame("B", 0) == "unchanged", "非法 FORM 不写入：" + source);
         }
         auto blocked = AstBuilder::build("B = valid_{N}", {}, resolve);
         blocked.ownerFunction = "MAIN";
         blocked.argument.typeOk = false;
         blocked.argument.typeError = "assignment validation failed";
-        vs.setGlobalStr1D("B", 0, "unchanged");
+        vs.setGlobalStr1DInCurrentFrame("B", 0, "unchanged");
         check(!ex.executeInstruction(blocked), "typeOk=false 的字符串 = 必须拒绝");
-        check(vs.getGlobalStr1D("B", 0) == "unchanged", "参数 gate 拒绝时不写入");
+        check(vs.getGlobalStr1DInCurrentFrame("B", 0) == "unchanged", "参数 gate 拒绝时不写入");
     }
 
     // 8) eraMegaten 解析回归（本次修复；原报 705 条「Expected #」+ 19 条「未识别的指令」）
@@ -824,7 +824,7 @@ int main(int argc, char* argv[]) {
         const QStringList program{"@SIZE_TEST", "#DIMS REF ARG_COM, 0, 0", "#DIMS DECLARED_COM, 5, 7", "VARSIZE ARG_COM", "RETURN"};
         pt.loadScript("varsize_ref", buildLines(pt, program)); pt.markLoadComplete();
         check(pt.parseWarningCount() == 0, "VARSIZE multidimensional REF array needs no indices");
-        vs.setGlobalStr2D("ACTUAL_COM", 2, 3, "x");
+        vs.setGlobalStr2DInCurrentFrame("ACTUAL_COM", 2, 3, "x");
         vs.setReference("ARG_COM", "ACTUAL_COM");
         const AstResolver resolve = [&](const QString& text) { return compileFixture(pt, text); };
         ex.executeInstruction(AstBuilder::build("VARSIZE ARG_COM", {}, resolve));
@@ -855,7 +855,7 @@ int main(int argc, char* argv[]) {
                 result += arg.isString ? arg.raw : (arg.ast ? stringText(ev.evaluate(*arg.ast, &storage)) : "<missing>");
             return result;
         };
-        storage.setGlobalInt1D("PRINTV_A", 0, 2);
+        storage.setGlobalInt1DInCurrentFrame("PRINTV_A", 0, 2);
         const auto printvLine = AstBuilder::build("PRINTV 'LV,PRINTV_A,'(,PRINTV_A * 4,')",
                                                    ScriptPosition("printv.ERB", 1, 1), resolve);
         check(printvLine.arguments.size() == 5, "PRINTV splits legacy label into five arguments");
@@ -1053,9 +1053,9 @@ int main(int argc, char* argv[]) {
             // Named CSV index is checked structurally here; numeric/system and
             // user variables run the same instruction directly without reparsing.
             if (fixture.second == 318) {
-                vs.setGlobalInt1D("EFFECT_SEED", 0, 7);
+                vs.setGlobalInt1DInCurrentFrame("EFFECT_SEED", 0, 7);
                 ex.executeInstruction(line);
-                check(vs.getGlobalInt1D("EFFECT_SEED", 0) == 8, "eraTW EFFECT_SEED++ executes");
+                check(vs.getGlobalInt1DInCurrentFrame("EFFECT_SEED", 0) == 8, "eraTW EFFECT_SEED++ executes");
             } else if (fixture.second == 1925) {
                 vs.setLocalInt(1, 9);
                 ex.executeInstruction(line);
@@ -1075,11 +1075,11 @@ int main(int argc, char* argv[]) {
               && script->lines[3].argument.params.first().ast,
               "finalize repairs missing increment LHS and typed params in owner scope");
         ScriptRunner run(&pt, &ex, &ps, &vs); run.setExpressionEvaluator(&ev);
-        vs.setGlobalInt1D("SIDE_EFFECT", 0, 0);
+        vs.setGlobalInt1DInCurrentFrame("SIDE_EFFECT", 0, 0);
         pt.setEntryPoint("INCREMENT");
         check(run.runToCompletion() == ExecState::Halt, "increment program completes");
         vs.setPrivateScope(eravar::internName(scopeKeyOfFunction(pt.variableTable(), "INCREMENT")), {"COUNTERS"});
-        check(vs.getGlobalInt1D("COUNTERS", 0) == 5 && vs.getGlobalInt1D("SIDE_EFFECT", 0) == 1,
+        check(vs.getGlobalInt1DInCurrentFrame("COUNTERS", 0) == 5 && vs.getGlobalInt1DInCurrentFrame("SIDE_EFFECT", 0) == 1,
               "four increment forms write private array and evaluate index once");
         // C# HTML_TAGSPLIT uses source, string-array destination, count LHS;
         // omitted destinations default to RESULTS and RESULT respectively.
@@ -1087,37 +1087,37 @@ int main(int argc, char* argv[]) {
             "HTML_TAGSPLIT \"<b>x</b>\"", {}, resolve));
         check(vs.getSystemVariable("RESULT", 0) == 3,
               "HTML_TAGSPLIT default count writes RESULT");
-        check(vs.getGlobalStr1D("RESULTS", 0) == "<b>"
-              && vs.getGlobalStr1D("RESULTS", 1) == "x"
-              && vs.getGlobalStr1D("RESULTS", 2) == "</b>",
+        check(vs.getGlobalStr1DInCurrentFrame("RESULTS", 0) == "<b>"
+              && vs.getGlobalStr1DInCurrentFrame("RESULTS", 1) == "x"
+              && vs.getGlobalStr1DInCurrentFrame("RESULTS", 2) == "</b>",
               "HTML_TAGSPLIT default parts write RESULTS:0..2");
 
-        vs.setGlobalStr1D("HTML_PARTS", 0, "old0");
-        vs.setGlobalStr1D("HTML_PARTS", 1, "old1");
-        vs.setGlobalStr1D("HTML_PARTS", 2, "old2");
-        vs.setGlobalStr1D("HTML_PARTS", 3, "old3");
-        vs.setGlobalStr1D("HTML_PARTS", 4, "old4");
+        vs.setGlobalStr1DInCurrentFrame("HTML_PARTS", 0, "old0");
+        vs.setGlobalStr1DInCurrentFrame("HTML_PARTS", 1, "old1");
+        vs.setGlobalStr1DInCurrentFrame("HTML_PARTS", 2, "old2");
+        vs.setGlobalStr1DInCurrentFrame("HTML_PARTS", 3, "old3");
+        vs.setGlobalStr1DInCurrentFrame("HTML_PARTS", 4, "old4");
         ex.executeInstruction(AstBuilder::build(
             "HTML_TAGSPLIT \"a<i>b</i>c\", HTML_PARTS:2, LOCAL:4", {}, resolve));
         check(vs.getLocalInt(4) == 5,
               "HTML_TAGSPLIT explicit count writes full part count");
-        check(vs.getGlobalStr1D("HTML_PARTS", 0) == "a"
-              && vs.getGlobalStr1D("HTML_PARTS", 1) == "<i>"
-              && vs.getGlobalStr1D("HTML_PARTS", 2) == "b"
-              && vs.getGlobalStr1D("HTML_PARTS", 3) == "</i>"
-              && vs.getGlobalStr1D("HTML_PARTS", 4) == "c",
+        check(vs.getGlobalStr1DInCurrentFrame("HTML_PARTS", 0) == "a"
+              && vs.getGlobalStr1DInCurrentFrame("HTML_PARTS", 1) == "<i>"
+              && vs.getGlobalStr1DInCurrentFrame("HTML_PARTS", 2) == "b"
+              && vs.getGlobalStr1DInCurrentFrame("HTML_PARTS", 3) == "</i>"
+              && vs.getGlobalStr1DInCurrentFrame("HTML_PARTS", 4) == "c",
               "HTML_TAGSPLIT ignores destination start index like C# Array.Copy");
 
         ex.executeInstruction(AstBuilder::build(
             "HTML_TAGSPLIT \"a<i>b</i>c<u>d\", HTML_PARTS, LOCAL:4", {}, resolve));
-        check(vs.getLocalInt(4) == 7 && vs.arraySize("HTML_PARTS") == 5,
+        check(vs.getLocalInt(4) == 7 && vs.arraySizeInCurrentFrame("HTML_PARTS") == 5,
               "HTML_TAGSPLIT truncates parts but reports the full count");
         ex.executeInstruction(AstBuilder::build(
             "HTML_TAGSPLIT \"broken<i\", HTML_PARTS, LOCAL:4", {}, resolve));
         check(vs.getLocalInt(4) == -1,
               "HTML_TAGSPLIT malformed input writes -1 to count");
-        check(vs.getGlobalStr1D("HTML_PARTS", 0) == "a"
-              && vs.getGlobalStr1D("HTML_PARTS", 4) == "c",
+        check(vs.getGlobalStr1DInCurrentFrame("HTML_PARTS", 0) == "a"
+              && vs.getGlobalStr1DInCurrentFrame("HTML_PARTS", 4) == "c",
               "HTML_TAGSPLIT malformed input leaves destination unchanged");
         ex.executeInstruction(AstBuilder::build("HTML_TAGSPLIT \"broken<i\"", {}, resolve));
         check(vs.getSystemVariable("RESULT", 0) == -1,
@@ -1450,9 +1450,9 @@ int main(int argc, char* argv[]) {
         ct.setEntryPoint("MAIN");
         ct.markLoadComplete();
         check(crun.runToCompletion() == ExecState::Halt, "const_scope 程序正常结束");
-        check(cs.getGlobalInt1D("GA", 0) == 11, "@A 的 IF/GA 取到 @A 的 SHARED=11");
-        check(cs.getGlobalInt1D("GB", 0) == 22, "@B 的 IF/GB 取到 @B 的 SHARED=22");
-        check(cs.getGlobalInt1D("GC", 0) == 99, "广域常量 GLOBAL_C 在两个函数里都命中");
+        check(cs.getGlobalInt1DInCurrentFrame("GA", 0) == 11, "@A 的 IF/GA 取到 @A 的 SHARED=11");
+        check(cs.getGlobalInt1DInCurrentFrame("GB", 0) == 22, "@B 的 IF/GB 取到 @B 的 SHARED=22");
+        check(cs.getGlobalInt1DInCurrentFrame("GC", 0) == 99, "广域常量 GLOBAL_C 在两个函数里都命中");
 
         // 同一棵 AST、不同 scope：A/B 各一次。
         // 先按 A 定型，让节点成为 Const 类别（不经存储槽）；求值时按传入的

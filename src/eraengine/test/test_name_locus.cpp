@@ -76,17 +76,17 @@ int main(int argc, char* argv[]) {
     qDebug() << "\n1) 参数值绑定优先";
     {
         vs.setParameter(QStringLiteral("P"), 7);
-        vs.setGlobalInt1D(QStringLiteral("P"), 0, 9);
+        vs.setGlobalInt1DInCurrentFrame(QStringLiteral("P"), 0, 9);
         check(vs.readIntByName(QStringLiteral("P"), {0}, global) == 7,
               QStringLiteral("P: readIntByName 读到值绑定 7（不看 1D 槽的 9）"));
-        check(vs.getGlobalInt1D(QStringLiteral("P"), 0) == 9,
+        check(vs.getGlobalInt1DInCurrentFrame(QStringLiteral("P"), 0) == 9,
               QStringLiteral("P: 同名 1D 槽仍是 9（读参数不碰槽）"));
         vs.writeIntByName(QStringLiteral("P"), {0}, 5, global);
         check(vs.readIntByName(QStringLiteral("P"), {0}, global) == 5,
               QStringLiteral("P: writeIntByName 写进值绑定（读回 5）"));
         check(vs.parameter(QStringLiteral("P")).toLongLong() == 5,
               QStringLiteral("P: parameter() 就是被写的值绑定"));
-        check(vs.getGlobalInt1D(QStringLiteral("P"), 0) == 9,
+        check(vs.getGlobalInt1DInCurrentFrame(QStringLiteral("P"), 0) == 9,
               QStringLiteral("P: 写参数不改 1D 槽（仍是 9）"));
     }
 
@@ -99,12 +99,12 @@ int main(int argc, char* argv[]) {
               QStringLiteral("X: 角色 0 元素 0 == 11"));
         check(vs.readIntByName(QStringLiteral("X"), {1, 0}, global) == 22,
               QStringLiteral("X: 角色 1 元素 0 == 22（两角色互不干扰）"));
-        vs.setGlobalInt1D(QStringLiteral("X"), 0, 33);
+        vs.setGlobalInt1DInCurrentFrame(QStringLiteral("X"), 0, 33);
         check(vs.readIntByName(QStringLiteral("X"), {0, 0}, global) == 11,
               QStringLiteral("X: 同名 1D 槽写 33 后角色 0 仍为 11"));
         check(vs.readIntByName(QStringLiteral("X"), {1, 0}, global) == 22,
               QStringLiteral("X: 同名 1D 槽写 33 后角色 1 仍为 22"));
-        check(vs.getGlobalInt1D(QStringLiteral("X"), 0) == 33,
+        check(vs.getGlobalInt1DInCurrentFrame(QStringLiteral("X"), 0) == 33,
               QStringLiteral("X: 角色写入不落到同名 1D 槽（槽仍是 33）"));
         check(vs.getCharaInt(QStringLiteral("X"), 0, 0) == 11,
               QStringLiteral("X: 公开 getCharaInt 与按名读同源（11）"));
@@ -116,11 +116,11 @@ int main(int argc, char* argv[]) {
         vs.writeIntByName(QStringLiteral("XS"), {0, 0}, 77, global);
         check(vs.readIntByName(QStringLiteral("XS"), {0, 0}, global) == 0,
               QStringLiteral("XS: 字符串角色变量整型读恒 0"));
-        check(vs.getStringSlot(QStringLiteral("XS"), {0}).text.isEmpty(),
+        check(vs.getStringSlotInCurrentFrame(QStringLiteral("XS"), {0}).text.isEmpty(),
               QStringLiteral("XS: 整型写没有产生全局字符串副作用"));
         check(vs.getCharaStr(QStringLiteral("XS"), 0, 0).isEmpty(),
               QStringLiteral("XS: 整型写没有碰角色字符串槽"));
-        check(vs.getGlobalInt1D(QStringLiteral("XS"), 0) == 0,
+        check(vs.getGlobalInt1DInCurrentFrame(QStringLiteral("XS"), 0) == 0,
               QStringLiteral("XS: 整型写没有落到同名 1D 槽"));
     }
 
@@ -129,19 +129,19 @@ int main(int argc, char* argv[]) {
     {
         vs.writeIntByName(QStringLiteral("ARG"), {3}, 5, global);
         check(vs.getArgInt(3) == 5, QStringLiteral("ARG:3 写进实参槽（5）"));
-        check(vs.getGlobalInt1D(QStringLiteral("ARG"), 3) == 0,
+        check(vs.getGlobalInt1DInCurrentFrame(QStringLiteral("ARG"), 3) == 0,
               QStringLiteral("ARG: 同名 1D 槽仍是 0"));
-        vs.setGlobalInt1D(QStringLiteral("ARG"), 3, 41);
+        vs.setGlobalInt1DInCurrentFrame(QStringLiteral("ARG"), 3, 41);
         check(vs.readIntByName(QStringLiteral("ARG"), {3}, global) == 5,
               QStringLiteral("ARG: 读先走实参槽（5，不是 1D 槽的 41）"));
-        check(vs.getGlobalInt1D(QStringLiteral("ARG"), 3) == 41,
+        check(vs.getGlobalInt1DInCurrentFrame(QStringLiteral("ARG"), 3) == 41,
               QStringLiteral("ARG: 1D 槽本身保留 41"));
 
         vs.writeIntByName(QStringLiteral("LOCAL"), {2}, 6, global);
         check(vs.getLocalInt(2) == 6, QStringLiteral("LOCAL:2 写进局部槽（6）"));
-        check(vs.getGlobalInt1D(QStringLiteral("LOCAL"), 2) == 0,
+        check(vs.getGlobalInt1DInCurrentFrame(QStringLiteral("LOCAL"), 2) == 0,
               QStringLiteral("LOCAL: 同名 1D 槽仍是 0"));
-        vs.setGlobalInt1D(QStringLiteral("LOCAL"), 2, 42);
+        vs.setGlobalInt1DInCurrentFrame(QStringLiteral("LOCAL"), 2, 42);
         check(vs.readIntByName(QStringLiteral("LOCAL"), {2}, global) == 6,
               QStringLiteral("LOCAL: 读先走局部槽（6，不是 1D 槽的 42）"));
     }
@@ -156,21 +156,21 @@ int main(int argc, char* argv[]) {
               QStringLiteral("ARGS: 整型写是 no-op（读仍 0）"));
         check(vs.getArgStr(2).isEmpty(),
               QStringLiteral("ARGS: 整型写没有碰字符串槽"));
-        vs.setGlobalInt1D(QStringLiteral("ARGS"), 2, 7);
+        vs.setGlobalInt1DInCurrentFrame(QStringLiteral("ARGS"), 2, 7);
         check(vs.readIntByName(QStringLiteral("ARGS"), {2}, global) == 7,
               QStringLiteral("ARGS: 读确实落到 1D 槽（读到 7）"));
 
         vs.writeIntByName(QStringLiteral("LOCALS"), {1}, 5, global);
         check(vs.readIntByName(QStringLiteral("LOCALS"), {1}, global) == 0,
               QStringLiteral("LOCALS: 整型写是 no-op（读仍 0）"));
-        vs.setGlobalInt1D(QStringLiteral("LOCALS"), 1, 8);
+        vs.setGlobalInt1DInCurrentFrame(QStringLiteral("LOCALS"), 1, 8);
         check(vs.readIntByName(QStringLiteral("LOCALS"), {1}, global) == 8,
               QStringLiteral("LOCALS: 读确实落到 1D 槽（读到 8）"));
 
         vs.writeIntByName(QStringLiteral("RESULTS"), {1}, 5, global);
         check(vs.readIntByName(QStringLiteral("RESULTS"), {1}, global) == 0,
               QStringLiteral("RESULTS: 整型写是 no-op（读仍 0）"));
-        vs.setGlobalInt1D(QStringLiteral("RESULTS"), 1, 9);
+        vs.setGlobalInt1DInCurrentFrame(QStringLiteral("RESULTS"), 1, 9);
         check(vs.readIntByName(QStringLiteral("RESULTS"), {1}, global) == 9,
               QStringLiteral("RESULTS: 读确实落到 1D 槽（读到 9）"));
     }
@@ -180,12 +180,12 @@ int main(int argc, char* argv[]) {
     {
         vs.writeIntByName(QStringLiteral("FLAG"), {1}, 5, global);
         check(vs.getFlag(1) == 5, QStringLiteral("FLAG:1 写进系统槽（5）"));
-        check(vs.getGlobalInt1D(QStringLiteral("FLAG"), 1) == 0,
+        check(vs.getGlobalInt1DInCurrentFrame(QStringLiteral("FLAG"), 1) == 0,
               QStringLiteral("FLAG: 同名 1D 槽仍是 0"));
-        vs.setGlobalInt1D(QStringLiteral("FLAG"), 1, 99);
+        vs.setGlobalInt1DInCurrentFrame(QStringLiteral("FLAG"), 1, 99);
         check(vs.readIntByName(QStringLiteral("FLAG"), {1}, global) == 5,
               QStringLiteral("FLAG: 读先走系统槽（5，不是 1D 槽的 99）"));
-        check(vs.getGlobalInt1D(QStringLiteral("FLAG"), 1) == 99,
+        check(vs.getGlobalInt1DInCurrentFrame(QStringLiteral("FLAG"), 1) == 99,
               QStringLiteral("FLAG: 1D 槽本身保留 99"));
     }
 
@@ -195,26 +195,26 @@ int main(int argc, char* argv[]) {
         vs.writeIntByName(QStringLiteral("Z"), {1, 2}, 501, global);
         check(vs.readIntByName(QStringLiteral("Z"), {1, 2}, global) == 501,
               QStringLiteral("Z:[1,2] 走 2D 槽并读回 501"));
-        check(vs.getGlobalInt2D(QStringLiteral("Z"), 1, 2) == 501,
-              QStringLiteral("Z: getGlobalInt2D 落到同一格"));
-        check(vs.getGlobalInt1D(QStringLiteral("Z"), 1) == 0,
+        check(vs.getGlobalInt2DInCurrentFrame(QStringLiteral("Z"), 1, 2) == 501,
+              QStringLiteral("Z: getGlobalInt2DInCurrentFrame 落到同一格"));
+        check(vs.getGlobalInt1DInCurrentFrame(QStringLiteral("Z"), 1) == 0,
               QStringLiteral("Z: 2D 写入不污染扁平槽 1"));
 
         vs.writeIntByName(QStringLiteral("Z3"), {1, 1, 1}, 601, global);
         check(vs.readIntByName(QStringLiteral("Z3"), {1, 1, 1}, global) == 601,
               QStringLiteral("Z3:[1,1,1] 走 3D 槽并读回 601"));
-        check(vs.getGlobalInt3D(QStringLiteral("Z3"), 1, 1, 1) == 601,
-              QStringLiteral("Z3: getGlobalInt3D 落到同一格"));
+        check(vs.getGlobalInt3DInCurrentFrame(QStringLiteral("Z3"), 1, 1, 1) == 601,
+              QStringLiteral("Z3: getGlobalInt3DInCurrentFrame 落到同一格"));
 
         // 1D 声明 + 两个下标：只取第 0 个，第二个被忽略（旧 writeLhs 的判定）。
         vs.writeIntByName(QStringLiteral("W"), {1, 5}, 701, global);
-        check(vs.getGlobalInt1D(QStringLiteral("W"), 1) == 701,
+        check(vs.getGlobalInt1DInCurrentFrame(QStringLiteral("W"), 1) == 701,
               QStringLiteral("W: 两个下标只取第 0 个（1D 槽 1 == 701）"));
         check(vs.readIntByName(QStringLiteral("W"), {1, 5}, global) == 701,
               QStringLiteral("W: 同形读回 701"));
         check(vs.readIntByName(QStringLiteral("W"), {1}, global) == 701,
               QStringLiteral("W: 单下标读到同一格（701）"));
-        check(vs.getGlobalInt1D(QStringLiteral("W"), 5) == 0,
+        check(vs.getGlobalInt1DInCurrentFrame(QStringLiteral("W"), 5) == 0,
               QStringLiteral("W: 第二下标 5 没有参与取址（槽 5 仍 0）"));
     }
 
@@ -227,12 +227,12 @@ int main(int argc, char* argv[]) {
         check(vs.readIntByName(QStringLiteral("W"), {0}, sid) == 801,
               QStringLiteral("W@私有: 显式 scope 写入并读回 801"));
         vs.setPrivateScope(global, {});
-        vs.setGlobalInt1D(QStringLiteral("W"), 0, 802);
+        vs.setGlobalInt1DInCurrentFrame(QStringLiteral("W"), 0, 802);
         check(vs.readIntByName(QStringLiteral("W"), {0}, global) == 802,
               QStringLiteral("W@广域: 同名量读到 802"));
         check(vs.readIntByName(QStringLiteral("W"), {0}, sid) == 801,
               QStringLiteral("W@私有: 广域写入不干扰私有量（仍 801）"));
-        check(vs.getGlobalInt1D(QStringLiteral("W"), 0) == 802,
+        check(vs.getGlobalInt1DInCurrentFrame(QStringLiteral("W"), 0) == 802,
               QStringLiteral("W@广域: 1D 槽本身是 802"));
     }
 

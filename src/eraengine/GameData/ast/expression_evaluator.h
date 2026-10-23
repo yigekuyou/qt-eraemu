@@ -359,7 +359,6 @@ private:
     WriteResult writeParameter(DynamicContext& ctx, qint64 value);       // 旧 hasParameter 写
     WriteResult writeCharaStringReject(DynamicContext& ctx, qint64 value);
     WriteResult writeSlotStringReject(DynamicContext& ctx, qint64 value);
-    QVariant evaluateIndexedVariable(const QString &varName, int index, VariableStorage *storage);
     QVariant evaluateBinaryOp(const BinaryOpNode &node, VariableStorage *storage,
                               GameBaseData *gameBaseData, eravar::ScopeId scope);
     // 变量写入（整型）：++/-- 的副作用

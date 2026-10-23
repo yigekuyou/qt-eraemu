@@ -697,7 +697,7 @@ VariableStorage::ArrayShape VariableStorage::shapeOfKey(const QString& storageKe
         return {};
 }
 
-int VariableStorage::arraySize(const QString& name) const
+int VariableStorage::arraySizeInCurrentFrame(const QString& name) const
 {
         return arraySize(name, m_privateScopeId);   // 当前帧（旧语义）
 }
@@ -730,7 +730,7 @@ int VariableStorage::allocatedSlots(const QString& key) const
 		return 0;
 }
 
-QList<int> VariableStorage::arrayLengths(const QString& name) const
+QList<int> VariableStorage::arrayLengthsInCurrentFrame(const QString& name) const
 {
     return arrayLengths(name, m_privateScopeId);   // 当前帧（旧语义）
 }
@@ -744,17 +744,24 @@ QList<int> VariableStorage::arrayLengths(const QString& name, eravar::ScopeId sc
     return slotCount > 0 ? QList<int>{slotCount} : QList<int>();
 }
 
-void VariableStorage::ensureArraySize(const QString& name, int size, bool stringArray)
+void VariableStorage::ensureArraySizeInCurrentFrame(const QString& name, int size, bool stringArray)
+{
+		ensureArraySize(name, size, stringArray, m_privateScopeId);
+}
+
+void VariableStorage::ensureArraySize(const QString& name, int size, bool stringArray,
+                                      eravar::ScopeId scope)
 {
 		if (size <= 0) return;
 		// 多维变量的容量由声明决定，不允许「第一次写时偷偷扩容」。
-		if (isMultiDimArray(storageName(name))) return;
+		const QString key = storageName(name, scope);
+		if (isMultiDimArray(key)) return;
 		// 唯一的懒扩容：把扁平序列长到 size（只增不减）。
 		if (stringArray) {
-			auto& values = m_strSlots[storageName(name)];
+			auto& values = m_strSlots[key];
 			if (values.size() < size) values.resize(size);
 		} else {
-			auto& values = m_intSlots[storageName(name)];
+			auto& values = m_intSlots[key];
 			if (values.size() < size) values.resize(size);
 		}
 }
@@ -802,14 +809,14 @@ void VariableStorage::initialize(int maxCharacters, int localSize)
 }
 
 // ================= 全局整型 3D 实现示例 =================
-void VariableStorage::setGlobalInt3D(const QString &name, int x, int y, int z, qint64 val)
+void VariableStorage::setGlobalInt3DInCurrentFrame(const QString &name, int x, int y, int z, qint64 val)
 {
-		setGlobalInt3DRaw(storageName(name), x, y, z, val);
+		setGlobalInt3DRaw(storageNameInCurrentFrame(name), x, y, z, val);
 }
 
-qint64 VariableStorage::getGlobalInt3D(const QString &name, int x, int y, int z) const
+qint64 VariableStorage::getGlobalInt3DInCurrentFrame(const QString &name, int x, int y, int z) const
 {
-		return getGlobalInt3DRaw(storageName(name), x, y, z);
+		return getGlobalInt3DRaw(storageNameInCurrentFrame(name), x, y, z);
 }
 
 // ================= 名字级整数访问（唯一实现） =================
@@ -1018,7 +1025,7 @@ void VariableStorage::writeIntByName(const QString &name, const QList<int> &indi
 void VariableStorage::setCharaIntRaw(const QString &name, int charaId, int index, qint64 value)
 {
 		if (charaId < 0 || index < 0) return;
-		writeCharaIntSlot(storageName(name), charaId, {index}, value);
+		writeCharaIntSlot(storageName(name, eravar::kGlobalScope), charaId, {index}, value);
 }
 
 void VariableStorage::setCharaInt(const QString &name, int charaId, int index, qint64 value)
@@ -1050,13 +1057,13 @@ void VariableStorage::updateAfterShowUsercom()
 		// 各角色 DOWNBASE = 0, CUP = 0, CDOWN = 0
 		static const char* const kCharaKeys[] = {"DOWNBASE", "CUP", "CDOWN"};
 		for (const char* k : kCharaKeys)
-				zeroCharaSlots(m_charaIntSlots, storageName(QString::fromLatin1(k)));
+				zeroCharaSlots(m_charaIntSlots, storageName(QString::fromLatin1(k), eravar::kGlobalScope));
 }
 
 void VariableStorage::updateAfterInputCom()
 {
 		// 各角色 NOWEX = 0（对齐 C#：选择中以外的角色也全部重置）
-		zeroCharaSlots(m_charaIntSlots, storageName(QStringLiteral("NOWEX")));
+		zeroCharaSlots(m_charaIntSlots, storageName(QStringLiteral("NOWEX"), eravar::kGlobalScope));
 }
 
 void VariableStorage::updateInBeginTrain()
@@ -1079,7 +1086,7 @@ void VariableStorage::updateInBeginTrain()
 		m_tflag.fill(0);
 		const int tstrSize = m_variableConfig.getSize1D(QStringLiteral("TSTR"));
 		for (int i = 0; i < tstrSize; ++i) {
-				setGlobalStr1D(QStringLiteral("TSTR"), i, QString());
+				setGlobalStr1D(QStringLiteral("TSTR"), i, QString(), eravar::kGlobalScope);
 		}
 
 		// 全角色数值归零（C#：GOTJUEL/TEQUIP/EX/STAIN/PALAM/SOURCE/TCVAR）。
@@ -1087,7 +1094,7 @@ void VariableStorage::updateInBeginTrain()
 			"GOTJUEL", "TEQUIP", "EX", "PALAM", "SOURCE", "TCVAR", "STAIN",
 		};
 		for (const char* k : kCharaKeys)
-				zeroCharaSlots(m_charaIntSlots, storageName(QString::fromLatin1(k)));
+				zeroCharaSlots(m_charaIntSlots, storageName(QString::fromLatin1(k), eravar::kGlobalScope));
 		// STAIN 走 C# 的 setDefaultStain()：_REPLACE.CSV 初值未装载时按 0
 		// （与 RESET_STAIN 内建指令取同一语义）。
 }
@@ -1097,7 +1104,7 @@ qint64 VariableStorage::getCharaInt(const QString &name, int charaId, int index)
 		if (charaId < 0 || index < 0) return 0;
 		charaId = resolveCharaIndex(charaId);
 		if (charaId < 0) return 0;   // VOID 角色（ADDVOIDCHARA）：无模板数据
-		return readCharaIntSlot(storageName(name), charaId, {index});
+		return readCharaIntSlot(storageName(name, eravar::kGlobalScope), charaId, {index});
 }
 
 // ================= 角色字符串变量 =================
@@ -1110,7 +1117,7 @@ void VariableStorage::setCharaStr(const QString &name, int charaId, int index, c
 void VariableStorage::setCharaStrRaw(const QString &name, int charaId, int index, const QString &value)
 {
 		if (charaId < 0 || index < 0) return;
-		writeCharaStrSlot(storageName(name), charaId, {index}, FlatStringValue(value));
+		writeCharaStrSlot(storageName(name, eravar::kGlobalScope), charaId, {index}, FlatStringValue(value));
 }
 
 QString VariableStorage::getCharaStr(const QString &name, int charaId, int index) const
@@ -1118,7 +1125,7 @@ QString VariableStorage::getCharaStr(const QString &name, int charaId, int index
 		if (charaId < 0 || index < 0) return QString();
 		charaId = resolveCharaIndex(charaId);
 		if (charaId < 0) return QString();   // VOID 角色：无模板数据
-		return readCharaStrSlot(storageName(name), charaId, {index}).text;
+		return readCharaStrSlot(storageName(name, eravar::kGlobalScope), charaId, {index}).text;
 }
 
 // ================= 角色列表（ADDCHARA / DELCHARA / CHARANUM）=================
@@ -1309,7 +1316,8 @@ void VariableStorage::restoreDeclaredDefaults()
 		const QString key = d.scope == VarScope::Local
 			? eravar::makePrivateStorageKey(d.scopeKey, d.name)
 			: d.name.toUpper();
-		const QString storageKey = resolvedStorageName(key);
+		// key 已经是存储键（私有名 = FUNC\x1fNAME 复合键）：不再按当前帧解析。
+		const QString storageKey = resolvedStorageName(key, eravar::kGlobalScope);
 		const QList<int> dims = d.lengths.isEmpty() ? QList<int>{1} : d.lengths;
 		const int count = erasave::shapeCount(dims);
 		const int defaultCount = d.type == OperandType::Str ? int(d.defaultStr.size())
@@ -1434,7 +1442,7 @@ void VariableStorage::snapshotCharaTemplates()
 qint64 VariableStorage::csvCharaInt(const QString& name, int charaId, int index) const
 {
 		if (charaId < 0 || index < 0) return 0;
-		const QString storageKey = storageName(name);
+		const QString storageKey = storageName(name, eravar::kGlobalScope);
 		const SlotGeometry& geometry = charaGeometry(storageKey);
 		const qint64 stride = geometry.elementCount > 0 ? geometry.elementCount : 1;
 		const qint64 slot = qint64(charaId) * stride + index;
@@ -1446,7 +1454,7 @@ qint64 VariableStorage::csvCharaInt(const QString& name, int charaId, int index)
 QString VariableStorage::csvCharaStr(const QString& name, int charaId, int index) const
 {
 		if (charaId < 0 || index < 0) return QString();
-		const QString storageKey = storageName(name);
+		const QString storageKey = storageName(name, eravar::kGlobalScope);
 		const SlotGeometry& geometry = charaGeometry(storageKey);
 		const qint64 stride = geometry.elementCount > 0 ? geometry.elementCount : 1;
 		const qint64 slot = qint64(charaId) * stride + index;
@@ -1760,21 +1768,21 @@ bool VariableStorage::isCharaVariable1D(const QString &name) const
 // ================= 全局整型 / 字符串 1D/2D/3D =================
 // 三种维数、名字访问与 Raw 访问都是同一对原语（readIntSlot / writeIntSlot、
 // readStrSlot / writeStrSlot）的薄包装：维数只体现在 indices 的个数上。
-void VariableStorage::setGlobalInt1D(const QString &name, int x, qint64 val)
+void VariableStorage::setGlobalInt1DInCurrentFrame(const QString &name, int x, qint64 val)
 {
 		if (x < 0) return;
-		setGlobalInt1DRaw(storageName(name), x, val);
+		setGlobalInt1DRaw(storageNameInCurrentFrame(name), x, val);
 }
 
-void VariableStorage::setGlobalStr1D(const QString &name, int x, const QString &value)
+void VariableStorage::setGlobalStr1DInCurrentFrame(const QString &name, int x, const QString &value)
 {
 		if (x < 0) return;
-		writeStrSlot(storageName(name), {x}, FlatStringValue(value), "写");
+		writeStrSlot(storageNameInCurrentFrame(name), {x}, FlatStringValue(value), "写");
 }
 
-QString VariableStorage::getGlobalStr1D(const QString &name, int x) const
+QString VariableStorage::getGlobalStr1DInCurrentFrame(const QString &name, int x) const
 {
-        return getGlobalStr1DRaw(storageName(name), x);
+        return getGlobalStr1DRaw(storageNameInCurrentFrame(name), x);
 }
 
 // VariableKey -> 存储键串：**唯一**的 id 解析入口。
@@ -1796,16 +1804,16 @@ QString VariableStorage::getGlobalStr1DRaw(const QString& storageKey, int x) con
         return readStrSlot(storageKey, {x}).text;
 }
 
-void VariableStorage::setGlobalStr2D(const QString &name, int x, int y, const QString &value)
+void VariableStorage::setGlobalStr2DInCurrentFrame(const QString &name, int x, int y, const QString &value)
 {
 		if (x < 0 || y < 0) return;
-		writeStrSlot(storageName(name), {x, y}, FlatStringValue(value), "写");
+		writeStrSlot(storageNameInCurrentFrame(name), {x, y}, FlatStringValue(value), "写");
 }
 
-QString VariableStorage::getGlobalStr2D(const QString &name, int x, int y) const
+QString VariableStorage::getGlobalStr2DInCurrentFrame(const QString &name, int x, int y) const
 {
 		if (x < 0 || y < 0) return QString();
-		return readStrSlot(storageName(name), {x, y}).text;
+		return readStrSlot(storageNameInCurrentFrame(name), {x, y}).text;
 }
 
 void VariableStorage::setSystemStr(const QString &name, int index, const QString &value)
@@ -1820,9 +1828,9 @@ QString VariableStorage::getSystemStr(const QString &name, int index) const
 		return m_systemStrVars.value(eraUpperKey(name)).text;
 }
 
-qint64 VariableStorage::getGlobalInt1D(const QString &name, int x) const
+qint64 VariableStorage::getGlobalInt1DInCurrentFrame(const QString &name, int x) const
 {
-		return getGlobalInt1DRaw(storageName(name), x);
+		return getGlobalInt1DRaw(storageNameInCurrentFrame(name), x);
 }
 
 // ================= Raw 访问族（键已解析；见 variable_storage.h 说明） =================
@@ -1876,15 +1884,84 @@ void VariableStorage::setGlobalInt3DRaw(const QString& storageKey, int x, int y,
 		writeIntSlot(storageKey, {x, y, z}, value, "写");
 }
 
-void VariableStorage::setGlobalInt2D(const QString &name, int x, int y, qint64 val)
+// ================= 显式作用域的按名访问 =================
+// 生产代码只走这一组：scope 是**必填**参数（没有默认值），因此「用哪个段解析
+// 这个名字」在每一行调用上都可读。语义与 *InCurrentFrame 完全一致 —— 后者
+// 只是把 scope 写死成 m_privateScopeId 的旧形状，留给测试钉语义。
+void VariableStorage::setGlobalInt1D(const QString& name, int x, qint64 val, eravar::ScopeId scope)
 {
-		setGlobalInt2DRaw(storageName(name), x, y, val);
+		if (x < 0) return;
+		setGlobalInt1DRaw(storageName(name, scope), x, val);
 }
 
-qint64 VariableStorage::getGlobalInt2D(const QString &name, int x, int y) const
+qint64 VariableStorage::getGlobalInt1D(const QString& name, int x, eravar::ScopeId scope) const
+{
+		return getGlobalInt1DRaw(storageName(name, scope), x);
+}
+
+void VariableStorage::setGlobalInt2D(const QString& name, int x, int y, qint64 val,
+                                     eravar::ScopeId scope)
+{
+		if (x < 0 || y < 0) return;
+		setGlobalInt2DRaw(storageName(name, scope), x, y, val);
+}
+
+qint64 VariableStorage::getGlobalInt2D(const QString& name, int x, int y,
+                                       eravar::ScopeId scope) const
 {
 		if (x < 0 || y < 0) return 0;
-		return getGlobalInt2DRaw(storageName(name), x, y);
+		return getGlobalInt2DRaw(storageName(name, scope), x, y);
+}
+
+void VariableStorage::setGlobalInt3D(const QString& name, int x, int y, int z, qint64 val,
+                                     eravar::ScopeId scope)
+{
+		if (x < 0 || y < 0 || z < 0) return;
+		setGlobalInt3DRaw(storageName(name, scope), x, y, z, val);
+}
+
+qint64 VariableStorage::getGlobalInt3D(const QString& name, int x, int y, int z,
+                                       eravar::ScopeId scope) const
+{
+		if (x < 0 || y < 0 || z < 0) return 0;
+		return getGlobalInt3DRaw(storageName(name, scope), x, y, z);
+}
+
+void VariableStorage::setGlobalStr1D(const QString& name, int x, const QString& value,
+                                     eravar::ScopeId scope)
+{
+		if (x < 0) return;
+		writeStrSlot(storageName(name, scope), {x}, FlatStringValue(value), "写");
+}
+
+QString VariableStorage::getGlobalStr1D(const QString& name, int x, eravar::ScopeId scope) const
+{
+		return getGlobalStr1DRaw(storageName(name, scope), x);
+}
+
+void VariableStorage::setGlobalStr2D(const QString& name, int x, int y, const QString& value,
+                                     eravar::ScopeId scope)
+{
+		if (x < 0 || y < 0) return;
+		writeStrSlot(storageName(name, scope), {x, y}, FlatStringValue(value), "写");
+}
+
+QString VariableStorage::getGlobalStr2D(const QString& name, int x, int y,
+                                        eravar::ScopeId scope) const
+{
+		if (x < 0 || y < 0) return QString();
+		return readStrSlot(storageName(name, scope), {x, y}).text;
+}
+
+void VariableStorage::setGlobalInt2DInCurrentFrame(const QString &name, int x, int y, qint64 val)
+{
+		setGlobalInt2DRaw(storageNameInCurrentFrame(name), x, y, val);
+}
+
+qint64 VariableStorage::getGlobalInt2DInCurrentFrame(const QString &name, int x, int y) const
+{
+		if (x < 0 || y < 0) return 0;
+		return getGlobalInt2DRaw(storageNameInCurrentFrame(name), x, y);
 }
 
 // ================= 角色整型 3D 实现 =================
@@ -1893,7 +1970,7 @@ void VariableStorage::setCharaInt3D(const QString &name, int charaId, int x, int
 		if (charaId < 0 || x < 0 || y < 0) return;
 		charaId = resolveCharaIndex(charaId);
 		if (charaId < 0) return;   // VOID 角色：无模板数据
-		writeCharaIntSlot(storageName(name), charaId, {x, y}, value);
+		writeCharaIntSlot(storageName(name, eravar::kGlobalScope), charaId, {x, y}, value);
 }
 
 qint64 VariableStorage::getCharaInt3D(const QString &name, int charaId, int x, int y) const
@@ -1901,7 +1978,7 @@ qint64 VariableStorage::getCharaInt3D(const QString &name, int charaId, int x, i
 		if (charaId < 0 || x < 0 || y < 0) return 0;
 		charaId = resolveCharaIndex(charaId);
 		if (charaId < 0) return 0;   // VOID 角色：无模板数据
-		return readCharaIntSlot(storageName(name), charaId, {x, y});
+		return readCharaIntSlot(storageName(name, eravar::kGlobalScope), charaId, {x, y});
 }
 
 // ================= Save/Load Methods =================
@@ -2271,7 +2348,7 @@ void VariableStorage::applyBinarySave(const EraBinaryData::Document& document) {
     applyList(document.variables,variableMap,-1);
 }
 
-FlatStringValue VariableStorage::getStringSlot(const QString& name, const QList<int>& indices) const {
+FlatStringValue VariableStorage::getStringSlotInCurrentFrame(const QString& name, const QList<int>& indices) const {
     return getStringSlot(name, indices, m_privateScopeId);
 }
 
@@ -2293,7 +2370,7 @@ FlatStringValue VariableStorage::getStringSlotRaw(const QString& storageKey, con
     return readStrLocus(locus, indices);
 }
 
-bool VariableStorage::setStringSlot(const QString& name, const QList<int>& indices, const FlatStringValue& value) {
+bool VariableStorage::setStringSlotInCurrentFrame(const QString& name, const QList<int>& indices, const FlatStringValue& value) {
     return setStringSlot(name, indices, value, m_privateScopeId);
 }
 

@@ -121,9 +121,9 @@ int main(int argc, char *argv[]) {
     
     // Test 8: Check variable values after execution
     qDebug() << "\n9. Checking variable values after execution:";
-    qDebug() << "   storage.getGlobalInt1D(\"A\", 0):" << storage.getGlobalInt1D("A", 0);
-    qDebug() << "   storage.getGlobalInt1D(\"B\", 0):" << storage.getGlobalInt1D("B", 0);
-    qDebug() << "   storage.getGlobalInt1D(\"C\", 0):" << storage.getGlobalInt1D("C", 0);
+    qDebug() << "   storage.getGlobalInt1DInCurrentFrame(\"A\", 0):" << storage.getGlobalInt1DInCurrentFrame("A", 0);
+    qDebug() << "   storage.getGlobalInt1DInCurrentFrame(\"B\", 0):" << storage.getGlobalInt1DInCurrentFrame("B", 0);
+    qDebug() << "   storage.getGlobalInt1DInCurrentFrame(\"C\", 0):" << storage.getGlobalInt1DInCurrentFrame("C", 0);
     
     // Test 9: Test with multiple scripts
     qDebug() << "\n10. Testing with multiple scripts:";
@@ -155,8 +155,8 @@ int main(int argc, char *argv[]) {
     qDebug() << "   First: engine.executeScript(\"multi_script\")";
     engine.executeScript("multi_script");
     qDebug() << "   After multi_script execution:";
-    qDebug() << "       A:" << storage.getGlobalInt1D("A", 0);
-    qDebug() << "       B:" << storage.getGlobalInt1D("B", 0);
+    qDebug() << "       A:" << storage.getGlobalInt1DInCurrentFrame("A", 0);
+    qDebug() << "       B:" << storage.getGlobalInt1DInCurrentFrame("B", 0);
     
     // Test 11: Test with file that doesn't exist
     qDebug() << "\n12. Testing error handling (non-existent script):";

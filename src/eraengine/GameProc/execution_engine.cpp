@@ -334,12 +334,14 @@ int ExecutionEngine::variableLength1D(const QString& name, const QString& functi
     if (m_storage && m_storage->hasSystemVariable(name)) {
         const int cfg = m_storage->variableConfig().getSize1D(upper);
         if (cfg > 0) return cfg;
-        return m_storage->arraySize(name);
+        // 系统变量名是内建名字：不参与私有名解析。
+        return m_storage->arraySize(name, eravar::kGlobalScope);
     }
     // 用户变量：#DIM 声明的长度与当前存储长度取较大者
     const QList<int> lens = declaredLengths(name, function);
     const int declared = lens.isEmpty() ? 1 : lens.first();
-    const int stored = m_storage ? m_storage->arraySize(name) : 0;
+    // function 是本行的段身份原文（line.scopeKey）：按它解析私有名。
+    const int stored = m_storage ? m_storage->arraySize(name, eravar::internName(function)) : 0;
     return qMax(declared, stored);
 }
 
@@ -380,6 +382,8 @@ bool ExecutionEngine::handleVarSet(const LogicalLine& line, bool eachChara) {
     const QString name = ref.name;
     const QString upper = name.toUpper();
     const QString fn = line.scopeKey;
+    // 本行的段身份：下面按名写用户变量时显式带的解析位置。
+    const eravar::ScopeId varScope = eravar::internName(fn);
     const bool isString = isStringVariable(name, fn);
     const bool isChara = m_storage->isCharaDataVariable(name);
 
@@ -489,7 +493,7 @@ bool ExecutionEngine::handleVarSet(const LogicalLine& line, bool eachChara) {
     // ---- RESULTS：**全局**字符串数组（C# VariableData.cs:202 Str1DVariableToken，
     //      跨函数共享；LOCALS 才是函数局部）----
     if (upper == QLatin1String("RESULTS")) {
-        m_storage->setGlobalStr1D(QStringLiteral("RESULTS"), 0, svalue);
+        m_storage->setGlobalStr1D(QStringLiteral("RESULTS"), 0, svalue, eravar::kGlobalScope);
         return true;
     }
 
@@ -524,12 +528,12 @@ bool ExecutionEngine::handleVarSet(const LogicalLine& line, bool eachChara) {
             for (int x = 0; x < n0; ++x)
                 for (int y = 0; y < n1; ++y)
                     for (int z = 0; z < n2; ++z)
-                        m_storage->setGlobalInt3D(name, x, y, z, value);
+                        m_storage->setGlobalInt3D(name, x, y, z, value, varScope);
         } else {
             for (int x = 0; x < n0; ++x)
                 for (int y = 0; y < n1; ++y) {
-                    if (isString) m_storage->setGlobalStr2D(name, x, y, svalue);
-                    else m_storage->setGlobalInt2D(name, x, y, value);
+                    if (isString) m_storage->setGlobalStr2D(name, x, y, svalue, varScope);
+                    else m_storage->setGlobalInt2D(name, x, y, value, varScope);
                 }
         }
         return true;
@@ -542,8 +546,8 @@ bool ExecutionEngine::handleVarSet(const LogicalLine& line, bool eachChara) {
              << "区间[" << start << "," << end << ") 值"
              << (isString ? svalue : QString::number(value));
     for (int i = start; i < end; ++i) {
-        if (isString) m_storage->setGlobalStr1D(name, i, svalue);
-        else m_storage->setGlobalInt1D(name, i, value);
+        if (isString) m_storage->setGlobalStr1D(name, i, svalue, varScope);
+        else m_storage->setGlobalInt1D(name, i, value, varScope);
     }
     return true;
 }
@@ -752,7 +756,7 @@ bool ExecutionEngine::executeInstruction(const LogicalLine& line, eravar::ScopeI
             const qint64 down = m_storage->getCharaInt("CDOWN", static_cast<int>(target), i);
             if (up <= 0 && down <= 0) continue;
             qint64 param = m_storage->getCharaInt("PALAM", static_cast<int>(target), i);
-            const QString pname = m_storage->getGlobalStr1D("PALAMNAME", i);
+            const QString pname = m_storage->getGlobalStr1D("PALAMNAME", i, eravar::kGlobalScope);
             param += up - down;   // C#：负值同样参与（unchecked 加减）
             if (!m_skipDisp) {
                 QString text = pname + ' ' + QString::number(m_storage->getCharaInt("PALAM", static_cast<int>(target), i));
@@ -779,7 +783,7 @@ bool ExecutionEngine::executeInstruction(const LogicalLine& line, eravar::ScopeI
         const qint64 result = m_skipDisp ? 1 : 0;
         if (m_storage) {
             m_storage->setSystemVariable("RESULT", 0, result);
-            m_storage->setGlobalInt1D("RESULT", 0, result);
+            m_storage->setGlobalInt1D("RESULT", 0, result, eravar::kGlobalScope);
         }
         return true;
     }
@@ -1056,7 +1060,7 @@ bool ExecutionEngine::executeInstruction(const LogicalLine& line, eravar::ScopeI
             if (m_storage) m_storage->setSystemVariable(QStringLiteral("RESULT"), 0,
                                                           value.toLongLong());
         } else if (m_storage) {
-            m_storage->setGlobalStr1D(QStringLiteral("RESULTS"), 0, stringText(value));
+            m_storage->setGlobalStr1D(QStringLiteral("RESULTS"), 0, stringText(value), eravar::kGlobalScope);
         }
         return true;
     }
@@ -1541,7 +1545,8 @@ bool ExecutionEngine::executeInstruction(const LogicalLine& line, eravar::ScopeI
             if (!ref.valid) return false;
             const auto* decl = m_parseTable ? m_parseTable->variableTable().find(ref.name, line.scopeKey) : nullptr;
             const int start = ref.indices.isEmpty() ? 0 : ref.indices.last();
-            const int size = decl && !decl->lengths.isEmpty() ? decl->lengths.last() : m_storage->arraySize(ref.name);
+            const int size = decl && !decl->lengths.isEmpty() ? decl->lengths.last()
+                : m_storage->arraySize(ref.name, eravar::internName(line.scopeKey));
             if ((decl && decl->isConst) || (values.size() > 1 && size > 0
                 && (start < 0 || qint64(start)+values.size() > size))) {
                 emit errorOccurred(QStringLiteral("字符串数组赋值越界或const左值")); return false;
@@ -1917,7 +1922,7 @@ bool ExecutionEngine::executeFunctionCall(const LogicalLine& line)
                             || (ret == OperandType::Unknown && isStringValue(value));
     if (returnsStr) {
         // [qdbug] 修复：RESULTS 全局（C# VariableData.cs:202，跨函数共享）
-        m_storage->setGlobalStr1D(QStringLiteral("RESULTS"), 0, stringText(value));
+        m_storage->setGlobalStr1D(QStringLiteral("RESULTS"), 0, stringText(value), eravar::kGlobalScope);
     } else {
         m_storage->setSystemVariable(QStringLiteral("RESULT"), 0, value.toLongLong());
     }
@@ -2045,7 +2050,8 @@ bool ExecutionEngine::handleAssignment(const ExpressionNode* lhs, const QString&
     const auto* decl = m_parseTable
         ? m_parseTable->variableTable().find(ref.name, scopeKey) : nullptr;
     const int start = ref.indices.isEmpty() ? 0 : ref.indices.last();
-    int size = decl && !decl->lengths.isEmpty() ? decl->lengths.last() : m_storage->arraySize(ref.name);
+    int size = decl && !decl->lengths.isEmpty() ? decl->lengths.last()
+        : m_storage->arraySize(ref.name, eravar::internName(scopeKey));
     if (values.size() > 1 && size > 0 && (start < 0 || qint64(start)+values.size() > size)) {
         emit errorOccurred(QStringLiteral("连续数组赋值越界")); return false;
     }
@@ -2318,7 +2324,7 @@ bool ExecutionEngine::loadSaveSnapshot(qint64 index) {
     m_storage->applyBinarySave(snapshot);
     m_storage->setSystemVariable(QStringLiteral("LASTLOAD_NO"),0,index);
     m_storage->setSystemVariable(QStringLiteral("LASTLOAD_VERSION"),0,snapshot.scriptVersion);
-    m_storage->setGlobalStr1D(QStringLiteral("LASTLOAD_TEXT"),0,snapshot.description);
+    m_storage->setGlobalStr1D(QStringLiteral("LASTLOAD_TEXT"),0,snapshot.description, eravar::kGlobalScope);
     emit gameStateLoaded();
     return true;
 }
@@ -2486,7 +2492,7 @@ void ExecutionEngine::handleChkData(const LogicalLine& line)
     if (m_storage) {
         m_storage->setSystemVariable(QStringLiteral("RESULT"), 0, checkSaveSnapshot(idx));
         m_storage->setGlobalStr1D(QStringLiteral("RESULTS"), 0,
-            exists ? QStringLiteral("ＯＫ") : QStringLiteral("ファイルが存在しません"));
+            exists ? QStringLiteral("ＯＫ") : QStringLiteral("ファイルが存在しません"), eravar::kGlobalScope);
     }
     qDebug() << "[save] CHKDATA" << idx << (exists ? "存在" : "不存在")
              << "行" << line.position.toString();
@@ -2546,7 +2552,7 @@ bool ExecutionEngine::handleStatusCommand(const LogicalLine& line)
                 const qint64 param = m_storage->getCharaInt("PALAM", static_cast<int>(target), i);
                 QString text;
                 if (!m_skipDisp) {
-                    text = m_storage->getGlobalStr1D("PALAMNAME", i) + QLatin1Char(' ')
+                    text = m_storage->getGlobalStr1D("PALAMNAME", i, eravar::kGlobalScope) + QLatin1Char(' ')
                            + QString::number(param);
                     if (up > 0) text += QLatin1Char('+') + QString::number(up);
                     if (down > 0) text += QLatin1Char('-') + QString::number(down);
@@ -2582,11 +2588,11 @@ bool ExecutionEngine::handleStatusCommand(const LogicalLine& line)
         const QString varName = name.mid(6);              // ABL / TALENT / MARK / EXP
         const QString nameVar = varName + QLatin1String("NAME");
         const int count = std::min(variableLength1D(varName, QString()),
-                                   m_storage->arraySize(nameVar));
+                                   m_storage->arraySize(nameVar, eravar::kGlobalScope));
         QString text;
         for (int i = 0; i < count; ++i) {
             const qint64 v = m_storage->getCharaInt(varName, static_cast<int>(target), i);
-            const QString n = m_storage->getGlobalStr1D(nameVar, i);
+            const QString n = m_storage->getGlobalStr1D(nameVar, i, eravar::kGlobalScope);
             if (v == 0 || n.isEmpty()) continue;
             if (isTalent) text += QLatin1Char('[') + n + QLatin1Char(']');
             else text += n + (withLv ? QLatin1String("LV") : QString())
@@ -2607,11 +2613,11 @@ bool ExecutionEngine::handleStatusCommand(const LogicalLine& line)
             return true;
         }
         // 100 以降は否定の珠とかなので表示しない（C# 注释原样）
-        const int count = std::min(100, m_storage->arraySize("PALAMNAME"));
+        const int count = std::min(100, m_storage->arraySize("PALAMNAME", eravar::kGlobalScope));
         int printed = 0;
         for (int i = 0; i < count; ++i) {
             const qint64 param = m_storage->getCharaInt("PALAM", static_cast<int>(target), i);
-            const QString pname = m_storage->getGlobalStr1D("PALAMNAME", i);
+            const QString pname = m_storage->getGlobalStr1D("PALAMNAME", i, eravar::kGlobalScope);
             if (param == 0 && pname.isEmpty()) continue;
             qint64 border = m_storage->getPalamlv(1);
             QChar c = QLatin1Char('-');
@@ -2639,14 +2645,14 @@ bool ExecutionEngine::handleStatusCommand(const LogicalLine& line)
     // ---- PRINT_ITEM（C# GetHavingItemsString：ITEM × ITEMNAME）----
     if (name == QLatin1String("PRINT_ITEM")) {
         const int count = std::min(variableLength1D("ITEM", QString()),
-                                   m_storage->arraySize("ITEMNAME"));
+                                   m_storage->arraySize("ITEMNAME", eravar::kGlobalScope));
         QString text = QStringLiteral("所持アイテム：");
         int owned = 0;
         for (int i = 0; i < count; ++i) {
             const qint64 v = m_storage->getItem(i);
             if (v == 0) continue;
             ++owned;
-            const QString n = m_storage->getGlobalStr1D("ITEMNAME", i);
+            const QString n = m_storage->getGlobalStr1D("ITEMNAME", i, eravar::kGlobalScope);
             if (!n.isEmpty()) text += n;
             text += QLatin1Char('(') + QString::number(v) + QLatin1String(") ");
         }
@@ -2665,7 +2671,7 @@ bool ExecutionEngine::handleStatusCommand(const LogicalLine& line)
         int printed = 0;
         for (int i = 0; i < count; ++i) {
             if (m_storage->getItemsales(i) == 0) continue;
-            const QString n = m_storage->getGlobalStr1D("ITEMNAME", i);
+            const QString n = m_storage->getGlobalStr1D("ITEMNAME", i, eravar::kGlobalScope);
             // ITEMPRICE 是常量容器（不在 m_globalInt1D 里）：走系统变量通道
             const QString price = QString::number(m_storage->getSystemVariable(QStringLiteral("ITEMPRICE"), i));
             // 1.52a改変部分：MoneyFirst 对应金额单位前置 / 后置
@@ -2741,7 +2747,7 @@ bool ExecutionEngine::handleStatusCommand(const LogicalLine& line)
         const int configured = m_storage->variableConfig().getSize1D(target.name.toUpper());
         const int capacity = destinationDecl && !destinationDecl->lengths.isEmpty()
             ? destinationDecl->lengths.first()
-            : qMax(configured, m_storage->arraySize(target.name));
+            : qMax(configured, m_storage->arraySize(target.name, eravar::internName(line.scopeKey)));
         const bool localArray = target.name == QLatin1String("LOCALS") || target.name == QLatin1String("ARGS");
         const int writable = capacity > 0 && !localArray
             ? qMin(static_cast<int>(parts.size()), capacity)

@@ -985,7 +985,8 @@ void EraEngine::loadConstantData()
 			const int n = qMin(cap, m_constantTable.count(key + QStringLiteral(".CSV")));
 			for (int i = 0; i < n; ++i) {
 				const QString nm = m_constantTable.nameAt(key + QStringLiteral(".CSV"), i);
-				if (!nm.isEmpty()) m_variableStorage.setGlobalStr1D(key + QStringLiteral("NAME"), i, nm);
+				if (!nm.isEmpty()) m_variableStorage.setGlobalStr1D(key + QStringLiteral("NAME"), i, nm,
+				                                              eravar::kGlobalScope);
 			}
 			++nameArrays;
 		}
@@ -1002,7 +1003,7 @@ void EraEngine::loadConstantData()
 			const int n = qMin(cap, m_constantTable.count(QStringLiteral("STR.CSV")));
 			for (int i = 0; i < n; ++i) {
 				const QString v = m_constantTable.nameAt(QStringLiteral("STR.CSV"), i);
-				if (!v.isEmpty()) m_variableStorage.setGlobalStr1D(QStringLiteral("STR"), i, v);
+				if (!v.isEmpty()) m_variableStorage.setGlobalStr1D(QStringLiteral("STR"), i, v, eravar::kGlobalScope);
 			}
 			qDebug() << "[load] STR 变量填充:" << n << "槽";
 		}
@@ -1966,7 +1967,7 @@ void EraEngine::buildSystemHost()
 				names.reserve(n > 0 ? n : 0);
 				for (int i = 0; i < n; ++i) {
 						names.append(m_variableStorage.getGlobalStr1D(
-						    QStringLiteral("TRAINNAME"), i));
+						    QStringLiteral("TRAINNAME"), i, eravar::kGlobalScope));
 				}
 				return names;
 		};

@@ -78,19 +78,19 @@ void buildGoldenState(VariableStorage& storage, VariableTable& table)
     storage.setSaveVariableTable(&table);
     storage.registerCharaDataVariable("UC", false, 1);
     storage.setSystemVariable("DAY", 0, 7);
-    storage.setGlobalInt1D("S1", 0, 11); storage.setGlobalInt1D("S1", 3, 14);
-    storage.setGlobalInt2D("S2", 1, 2, 1234567890123LL);
-    storage.setGlobalInt3D("S3", 1, 1, 1, -42);
-    storage.setGlobalStr1D("SNAME", 0, QString::fromUtf8("héllo界😀\t"));
-    storage.setGlobalStr1D("SNAME", 2, "x");
-    storage.setGlobalStr2D("S2NAME", 1, 1, "two");
-    storage.setGlobalInt1D("UG", 0, 4); storage.setGlobalInt1D("UG", 1, 5);
-    storage.setGlobalInt1D("GLOBAL", 0, 999); storage.setGlobalStr1D("GLOBALS", 0, "gl");
+    storage.setGlobalInt1DInCurrentFrame("S1", 0, 11); storage.setGlobalInt1DInCurrentFrame("S1", 3, 14);
+    storage.setGlobalInt2DInCurrentFrame("S2", 1, 2, 1234567890123LL);
+    storage.setGlobalInt3DInCurrentFrame("S3", 1, 1, 1, -42);
+    storage.setGlobalStr1DInCurrentFrame("SNAME", 0, QString::fromUtf8("héllo界😀\t"));
+    storage.setGlobalStr1DInCurrentFrame("SNAME", 2, "x");
+    storage.setGlobalStr2DInCurrentFrame("S2NAME", 1, 1, "two");
+    storage.setGlobalInt1DInCurrentFrame("UG", 0, 4); storage.setGlobalInt1DInCurrentFrame("UG", 1, 5);
+    storage.setGlobalInt1DInCurrentFrame("GLOBAL", 0, 999); storage.setGlobalStr1DInCurrentFrame("GLOBALS", 0, "gl");
     storage.appendCharacterSnapshot({{1, false}, {0, false}});
     storage.setCharaStrRaw("NAME", 0, 0, "zero"); storage.setCharaStrRaw("NAME", 1, 0, "one");
     storage.setCharaIntRaw("ABL", 0, 0, 101); storage.setCharaIntRaw("ABL", 1, 0, 202);
     storage.setCharaInt("UC", 0, 1, 55);
-    storage.setGlobalInt1D("TEMP", 0, 77);
+    storage.setGlobalInt1DInCurrentFrame("TEMP", 0, 77);
 }
 
 QByteArray encodeNormal(VariableStorage& storage)
@@ -261,8 +261,8 @@ int main(int argc, char** argv)
         table.add(transient);
         storage.setSaveVariableTable(&table);
         storage.setPrivateScope(eravar::internName(funcScope), {QStringLiteral("PRIV"), QStringLiteral("STATIC")});
-        storage.setGlobalInt1D("PRIV", 1, 4242);
-        storage.setGlobalInt1D("STATIC", 0, 99);
+        storage.setGlobalInt1DInCurrentFrame("PRIV", 1, 4242);
+        storage.setGlobalInt1DInCurrentFrame("STATIC", 0, 99);
         storage.setLocalContext({});
 
         // 期望值不抄字面量：与写侧同一个构造点算出。
@@ -304,8 +304,8 @@ int main(int argc, char** argv)
         restored.setSaveVariableTable(&restoredTable);
         restored.applyBinarySave(decoded);
         restored.setPrivateScope(eravar::internName(funcScope), {QStringLiteral("PRIV")});
-        check(restored.getGlobalInt1D("PRIV", 1) == 4242, "私有变量经 save -> load 值不变");
-        check(restored.getGlobalInt1D("PRIV", 0) == 0 && restored.getGlobalInt1D("PRIV", 2) == 0,
+        check(restored.getGlobalInt1DInCurrentFrame("PRIV", 1) == 4242, "私有变量经 save -> load 值不变");
+        check(restored.getGlobalInt1DInCurrentFrame("PRIV", 0) == 0 && restored.getGlobalInt1DInCurrentFrame("PRIV", 2) == 0,
               "私有变量的其余元素按存档值恢复");
         restored.setLocalContext({});
         // save -> load -> save：同一进程内字节逐字节相同（顺序 / 条目名 / 值都不漂移）。
@@ -333,9 +333,9 @@ int main(int argc, char** argv)
         VariableStorage storage; storage.initialize(10, 10);
         storage.setSaveVariableTable(&table);
         storage.setPrivateScope(eravar::internName(scopeA), {QStringLiteral("DUP")});
-        storage.setGlobalInt1D("DUP", 0, 111);
+        storage.setGlobalInt1DInCurrentFrame("DUP", 0, 111);
         storage.setPrivateScope(eravar::internName(scopeB), {QStringLiteral("DUP")});
-        storage.setGlobalInt1D("DUP", 0, 222);
+        storage.setGlobalInt1DInCurrentFrame("DUP", 0, 222);
         storage.setLocalContext({});
 
         const QString nameA = eravar::makePrivateStorageKey(scopeA, QStringLiteral("DUP"));
@@ -372,9 +372,9 @@ int main(int argc, char** argv)
         restored.setSaveVariableTable(&restoredTable);
         restored.applyBinarySave(decoded);
         restored.setPrivateScope(eravar::internName(scopeA), {QStringLiteral("DUP")});
-        const qint64 valueA = restored.getGlobalInt1D("DUP", 0);
+        const qint64 valueA = restored.getGlobalInt1DInCurrentFrame("DUP", 0);
         restored.setPrivateScope(eravar::internName(scopeB), {QStringLiteral("DUP")});
-        const qint64 valueB = restored.getGlobalInt1D("DUP", 0);
+        const qint64 valueB = restored.getGlobalInt1DInCurrentFrame("DUP", 0);
         restored.setLocalContext({});
         check(valueA == 111 && valueB == 222, "同名 @F 两段：读档后各段值互不覆盖");
 

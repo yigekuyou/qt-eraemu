@@ -53,8 +53,8 @@ int main(int argc, char** argv) {
         }
         check(!oldNode.isNull(), "fixture holds a finalized AST node");
         auto* vars = engine.getVariableStorage();
-        vars->setGlobalInt1D("OLDVALUE", 0, 77);
-        vars->setGlobalStr1D("OLDTEXT", 0, "old");
+        vars->setGlobalInt1DInCurrentFrame("OLDVALUE", 0, 77);
+        vars->setGlobalStr1DInCurrentFrame("OLDTEXT", 0, "old");
         vars->setCharaStrRaw("NAME", 3, 0, "old character");
         vars->markCsvExists(3); vars->snapshotCharaTemplates(); vars->addChara(3);
         engine.getConsole()->print("old output");
@@ -92,8 +92,8 @@ int main(int argc, char** argv) {
         check(engine.getProcessState()->getExecState() == ExecState::Halt,
               "old timed input cannot resume execution during reload");
         check(oldNode.isNull(), "reload destroys old AST nodes");
-        check(vars->getGlobalInt1D("OLDVALUE", 0) == 0, "reload releases numeric variables");
-        check(vars->getGlobalStr1D("OLDTEXT", 0).isEmpty(), "reload releases flat strings");
+        check(vars->getGlobalInt1DInCurrentFrame("OLDVALUE", 0) == 0, "reload releases numeric variables");
+        check(vars->getGlobalStr1DInCurrentFrame("OLDTEXT", 0).isEmpty(), "reload releases flat strings");
         check(vars->charaNum() == 0 && !vars->existCsv(3), "reload releases characters and CSV templates");
         check(engine.getConsole()->rowCount() == 0, "reload releases console rows");
         check(engine.getParseTable()->scriptNames().isEmpty(), "reload releases old AST before preparation");

@@ -25,7 +25,7 @@
 //
 // 本文件钉住（改坏任意一处必然红）：
 //   1. 每个形态的 shapeOf：lengths / dimension / elementCount / lengthOf(d)；
-//   2. 读者一致性：VARSIZE(X)、VARSIZE(X,d)、arraySize(X)、arrayLengths(X)
+//   2. 读者一致性：VARSIZE(X)、VARSIZE(X,d)、arraySizeInCurrentFrame(X)、arrayLengthsInCurrentFrame(X)
 //      全部等于「从声明算出来的值」；
 //   3. 旧实现的分歧点（探针实测，见报告表）：
 //        · 系统 3D（TA）：VARSIZE(TA) 曾是 0，正确值是第 0 维长度；
@@ -179,7 +179,7 @@ int main(int argc, char* argv[]) {
                   .arg(d.name).arg(d.isPrivate ? QStringLiteral("私有段") : QStringLiteral("广域"))
                   .arg(d.lengths.first()));
         check(vs.arrayLengths(d.name, sid) == d.lengths,
-              QStringLiteral("arrayLengths(%1) == 声明（实得 [%2]）")
+              QStringLiteral("arrayLengthsInCurrentFrame(%1) == 声明（实得 [%2]）")
                   .arg(d.name, join(vs.arrayLengths(d.name, sid))));
     }
 
@@ -205,8 +205,8 @@ int main(int argc, char* argv[]) {
                       .arg(f.name, join(f.expected), join(shape.lengths)));
             check(shape.elementCount == product(f.expected),
                   QStringLiteral("shapeOf(%1).elementCount == %2").arg(f.name).arg(product(f.expected)));
-            check(vs.arraySize(f.name) == f.expected.first(),
-                  QStringLiteral("arraySize(%1) == 首维 %2").arg(f.name).arg(f.expected.first()));
+            check(vs.arraySizeInCurrentFrame(f.name) == f.expected.first(),
+                  QStringLiteral("arraySizeInCurrentFrame(%1) == 首维 %2").arg(f.name).arg(f.expected.first()));
         }
     }
 
@@ -216,7 +216,7 @@ int main(int argc, char* argv[]) {
         for (int dim = -1; dim <= 3; ++dim) {
             const int useDim = dim < 0 ? 0 : dim;
             const int expected = useDim < d.lengths.size() ? d.lengths.at(useDim) : 0;
-            const qint64 actual = vs.getGlobalInt1D(QStringLiteral("OBS"), k++);
+            const qint64 actual = vs.getGlobalInt1DInCurrentFrame(QStringLiteral("OBS"), k++);
             check(actual == expected,
                   QStringLiteral("VARSIZE(%1,%2) == %3（实得 %4）")
                       .arg(d.name).arg(dim).arg(expected).arg(actual));
@@ -246,7 +246,7 @@ int main(int argc, char* argv[]) {
               QStringLiteral("VARSIZE(U2,2) == 0（旧实现 %1）").arg(u2a));
         check(vs.shapeOf(QStringLiteral("U3"), eravar::kGlobalScope).lengthOf(3) == 0,
               QStringLiteral("VARSIZE(U3,3) == 0（旧实现 %1）").arg(u3a));
-        // CHARADATA 多维：旧实现 VARSIZE(C2) == 0、arraySize(C2) == 0。
+        // CHARADATA 多维：旧实现 VARSIZE(C2) == 0、arraySizeInCurrentFrame(C2) == 0。
         check(vs.shapeOf(QStringLiteral("C2"), eravar::kGlobalScope).lengthOf(0) == c2a,
               QStringLiteral("VARSIZE(C2) == %1（旧实现 0）").arg(c2a));
         check(vs.shapeOf(QStringLiteral("C2"), eravar::kGlobalScope).lengthOf(1) == c2b,
@@ -263,12 +263,12 @@ int main(int argc, char* argv[]) {
     {
         check(vs.shapeOf(QStringLiteral("RUNTIME_ONLY"), eravar::kGlobalScope).isEmpty(),
               QStringLiteral("未声明名字的 shapeOf 为空"));
-        for (int i = 0; i < 5; ++i) vs.setGlobalStr1D(QStringLiteral("RUNTIME_ONLY"), i, QStringLiteral("x"));
+        for (int i = 0; i < 5; ++i) vs.setGlobalStr1DInCurrentFrame(QStringLiteral("RUNTIME_ONLY"), i, QStringLiteral("x"));
         check(vs.shapeOf(QStringLiteral("RUNTIME_ONLY"), eravar::kGlobalScope).isEmpty(),
               QStringLiteral("写入容器后 shapeOf 仍为空（分配量不进形状）"));
-        check(vs.arraySize(QStringLiteral("RUNTIME_ONLY")) == vs.allocatedSlots(QStringLiteral("RUNTIME_ONLY")),
+        check(vs.arraySizeInCurrentFrame(QStringLiteral("RUNTIME_ONLY")) == vs.allocatedSlots(QStringLiteral("RUNTIME_ONLY")),
               QStringLiteral("无形状名字的 arraySize == allocatedSlots（容器事实）"));
-        check(vs.arraySize(QStringLiteral("RUNTIME_ONLY")) == 5,
+        check(vs.arraySizeInCurrentFrame(QStringLiteral("RUNTIME_ONLY")) == 5,
               QStringLiteral("无形状名字的 arraySize == 写入的槽位数 5"));
     }
 

@@ -687,8 +687,8 @@ void registerDataTableExtensions(ExtensionRegistry& ext)
                 VariableStorage* st = ext.services().storage;
                 const int n = qMin(count, qMin(arrayCapacity(st, namesVar), arrayCapacity(st, valsVar)));
                 for (int i = 0; i < n; ++i) {
-                    const int col = t.columnIndex(st->getGlobalStr1D(namesVar, i));
-                    applyCell(t, row, col, QVariant(st->getGlobalStr1D(valsVar, i)), r);
+                    const int col = t.columnIndex(st->getGlobalStr1D(namesVar, i, forksupport::currentFrameScope(st)));
+                    applyCell(t, row, col, QVariant(st->getGlobalStr1D(valsVar, i, forksupport::currentFrameScope(st))), r);
                 }
             } else {
                 for (int i = 1; i + 1 < a.size(); i += 2) {
@@ -727,8 +727,8 @@ void registerDataTableExtensions(ExtensionRegistry& ext)
                 VariableStorage* st = ext.services().storage;
                 const int n = qMin(count, qMin(arrayCapacity(st, namesVar), arrayCapacity(st, valsVar)));
                 for (int i = 0; i < n; ++i)
-                    applyCell(t, t.rows[rowIndex], t.columnIndex(st->getGlobalStr1D(namesVar, i)),
-                              QVariant(st->getGlobalStr1D(valsVar, i)), r);
+                    applyCell(t, t.rows[rowIndex], t.columnIndex(st->getGlobalStr1D(namesVar, i, forksupport::currentFrameScope(st))),
+                              QVariant(st->getGlobalStr1D(valsVar, i, forksupport::currentFrameScope(st))), r);
             } else {
                 for (int i = 2; i + 1 < a.size(); i += 2)
                     applyCell(t, t.rows[rowIndex], t.columnIndex(stringText(a.value(i))), a.at(i + 1), r);
@@ -750,7 +750,7 @@ void registerDataTableExtensions(ExtensionRegistry& ext)
                 VariableStorage* st = ext.services().storage;
                 const int count = static_cast<int>(a.value(2).toLongLong());
                 const int n = qMin(count, arrayCapacity(st, idsVar));
-                for (int i = 0; i < n; ++i) ids.append(st->getGlobalInt1D(idsVar, i));
+                for (int i = 0; i < n; ++i) ids.append(st->getGlobalInt1D(idsVar, i, forksupport::currentFrameScope(st)));
             } else {
                 ids.append(a.value(1).toLongLong());
             }

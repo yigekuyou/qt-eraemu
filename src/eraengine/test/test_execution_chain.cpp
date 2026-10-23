@@ -134,17 +134,17 @@ int main(int argc, char* argv[]) {
 
     qDebug() << "\n1) 连续执行 + 控制流";
     check(st == ExecState::Halt, "run finished (Halt)");
-    check(storage.getGlobalInt1D("AA", 0) == 7, "AA == 1 + 2 * 3 == 7");
-    check(storage.getGlobalInt1D("BB", 0) == 10, "IF branch taken -> BB == 10");
-    check(storage.getGlobalInt1D("CC", 0) == 3, "REPEAT 3 -> CC == 3");
-    check(storage.getGlobalInt1D("LOOP_DD", 0) == 2, "FOR II,0,2 -> LOOP_DD == 2");
-    check(storage.getGlobalInt1D("EE", 0) == 2, "WHILE EE<2 -> EE == 2");
-    check(storage.getGlobalInt1D("HH", 0) == 1, "GOTO DONE -> HH == 1");
-    check(storage.getGlobalInt1D("BB", 0) != 999, "line after GOTO skipped");
+    check(storage.getGlobalInt1DInCurrentFrame("AA", 0) == 7, "AA == 1 + 2 * 3 == 7");
+    check(storage.getGlobalInt1DInCurrentFrame("BB", 0) == 10, "IF branch taken -> BB == 10");
+    check(storage.getGlobalInt1DInCurrentFrame("CC", 0) == 3, "REPEAT 3 -> CC == 3");
+    check(storage.getGlobalInt1DInCurrentFrame("LOOP_DD", 0) == 2, "FOR II,0,2 -> LOOP_DD == 2");
+    check(storage.getGlobalInt1DInCurrentFrame("EE", 0) == 2, "WHILE EE<2 -> EE == 2");
+    check(storage.getGlobalInt1DInCurrentFrame("HH", 0) == 1, "GOTO DONE -> HH == 1");
+    check(storage.getGlobalInt1DInCurrentFrame("BB", 0) != 999, "line after GOTO skipped");
 
     qDebug() << "\n2) 用户自定义函数";
-    check(storage.getGlobalInt1D("FF", 0) == 6, "CALL SUB(5) -> RETURN 5+1 -> FF == 6");
-    check(storage.getGlobalInt1D("KK", 0) == 42, "expression func DOUBLE(21) -> KK == 42");
+    check(storage.getGlobalInt1DInCurrentFrame("FF", 0) == 6, "CALL SUB(5) -> RETURN 5+1 -> FF == 6");
+    check(storage.getGlobalInt1DInCurrentFrame("KK", 0) == 42, "expression func DOUBLE(21) -> KK == 42");
 
     // ---- IO 挂起（只有等待输入才中断）---------------------------------
     table.setEntryPoint("WAIT");
@@ -158,7 +158,7 @@ int main(int argc, char* argv[]) {
     qDebug() << "\n4) 用户输入恢复";
     runner.onInputProvided(42);   // requestResume -> continueExecution -> onContinueExecution
     check(state.getExecState() == ExecState::Halt, "resumed and finished (Halt)");
-    check(storage.getGlobalInt1D("JJ", 0) == 42, "JJ = RESULT == 42");
+    check(storage.getGlobalInt1DInCurrentFrame("JJ", 0) == 42, "JJ = RESULT == 42");
 
     // ---- 输出 -> 显示层（consolePrint 信号）----
     QList<QPair<QString, bool>> printed;
@@ -286,14 +286,14 @@ int main(int argc, char* argv[]) {
         values.setPrivateScope(
             eravar::internName(copyTable.segmentKeyOfLabel(QStringLiteral("copy"),
                                                             QStringLiteral("COPY"))), {});
-        check(values.getGlobalInt2D("DST", 1, 1) == 71
-              && values.getGlobalInt2D("DST", 2, 1) == 88,
+        check(values.getGlobalInt2DInCurrentFrame("DST", 1, 1) == 71
+              && values.getGlobalInt2DInCurrentFrame("DST", 2, 1) == 88,
               "ARRAYCOPY 2D per-axis overlap preserves destination tail");
-        check(values.getStringSlot("DS", {0, 1, 0}).text == "payload%{opaque}"
-              && values.getStringSlot("DS", {1, 1, 0}).text == "tail",
+        check(values.getStringSlotInCurrentFrame("DS", {0, 1, 0}).text == "payload%{opaque}"
+              && values.getStringSlotInCurrentFrame("DS", {1, 1, 0}).text == "tail",
               "ARRAYCOPY 3D strings preserve opaque text and destination tail");
-        check(values.getGlobalInt1D("BIG", 1) == 17 && values.getGlobalInt1D("BIG", 2) == 33
-              && values.arraySize("SMALL") == 2,
+        check(values.getGlobalInt1DInCurrentFrame("BIG", 1) == 17 && values.getGlobalInt1DInCurrentFrame("BIG", 2) == 33
+              && values.arraySizeInCurrentFrame("SMALL") == 2,
               "ARRAYCOPY 1D clips both directions without growing destination");
         const auto invalid = AstBuilder::build("ARRAYCOPY 1, 2", {},
             [&copyTable](const QString& text) { return copyTable.expressionAst(text); });

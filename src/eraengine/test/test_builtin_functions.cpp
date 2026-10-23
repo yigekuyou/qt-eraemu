@@ -252,13 +252,13 @@ int main(int argc, char* argv[]) {
         return n ? ev.evaluate(*n, &storage).toString() : QStringLiteral("<null>");
     };
 
-    storage.setGlobalInt1D("SIDE", 0, 0);
+    storage.setGlobalInt1DInCurrentFrame("SIDE", 0, 0);
     check(num("0 && SIDE++") == 0 && num("1 || SIDE++") == 1
               && num("0 !& SIDE++") == 1 && num("1 !| SIDE++") == 0
-              && storage.getGlobalInt1D("SIDE", 0) == 0,
+              && storage.getGlobalInt1DInCurrentFrame("SIDE", 0) == 0,
           "短路逻辑不执行右侧自增");
     check(num("1 && SIDE++") == 0 && num("0 || SIDE++") == 1
-              && storage.getGlobalInt1D("SIDE", 0) == 2,
+              && storage.getGlobalInt1DInCurrentFrame("SIDE", 0) == 2,
           "需要右值时仅执行一次自增");
 
     check(num("ABS(-5)") == 5, "ABS(-5) == 5");

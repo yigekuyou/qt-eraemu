@@ -52,10 +52,10 @@ int main(int argc,char** argv) {
     const auto evaluate=[&](const QString& source){auto ast=table.expressionAst(source);return ast ? evaluator.evaluate(*ast,&storage,&base).toLongLong() : -99;};
     const auto read=[&](const QString& path){QFile f(path);check(f.open(QIODevice::ReadOnly),"open file");return f.readAll();};
     const auto write=[&](const QString& path,const QByteArray& bytes){QFile f(path);check(f.open(QIODevice::WriteOnly),"open edit");check(f.write(bytes)==bytes.size(),"write edit");};
-    storage.setSystemVariable("DAY",0,7); storage.setGlobalInt2D("SAVED",1,2,std::numeric_limits<qint64>::min());
-    storage.setGlobalInt2D("TEMP",1,2,91); storage.setGlobalInt2D("USER_GLOBAL",1,2,77);
-    storage.setGlobalInt2D("UNSAVED_GLOBAL",1,2,314);
-    storage.setGlobalInt1D("GLOBAL",0,999); storage.setGlobalStr1D("SAVESTR",0,"界😀\t\n\r");
+    storage.setSystemVariable("DAY",0,7); storage.setGlobalInt2DInCurrentFrame("SAVED",1,2,std::numeric_limits<qint64>::min());
+    storage.setGlobalInt2DInCurrentFrame("TEMP",1,2,91); storage.setGlobalInt2DInCurrentFrame("USER_GLOBAL",1,2,77);
+    storage.setGlobalInt2DInCurrentFrame("UNSAVED_GLOBAL",1,2,314);
+    storage.setGlobalInt1DInCurrentFrame("GLOBAL",0,999); storage.setGlobalStr1DInCurrentFrame("SAVESTR",0,"界😀\t\n\r");
     storage.setCharaStrRaw("NAME",0,0,"zero"); storage.setCharaStrRaw("NAME",1,0,"one");
     storage.setCharaIntRaw("ABL",0,0,101); storage.setCharaIntRaw("ABL",1,0,202);
     storage.appendCharacterSnapshot({{1,false},{0,false}});
@@ -74,21 +74,21 @@ int main(int argc,char** argv) {
     bool hasSaved=false,hasTemp=false,hasGlobal=false;
     for(const auto& v:document.variables){ if(v.name=="SAVED"){hasSaved=true;check(v.dimensions==QList<int>({2,3}),"declared matrix dimensions");} hasTemp|=v.name=="TEMP";hasGlobal|=v.name=="GLOBAL"||v.name=="USER_GLOBAL"; }
     check(hasSaved && !hasTemp && !hasGlobal,"normal save declaration scope filtering");
-    storage.setPrivateScope(eravar::internName(local.scopeKey),{"STATIC","SAVED"}); storage.setGlobalInt1D("STATIC",0,88);
+    storage.setPrivateScope(eravar::internName(local.scopeKey),{"STATIC","SAVED"}); storage.setGlobalInt1DInCurrentFrame("STATIC",0,88);
     storage.setLocalInt(0,99);storage.setArgInt(0,98);storage.setReference("SAVED","TEMP");
     storage.setSystemVariable("DAY",0,90);
     check(engine.loadSaveSnapshot(0),"cached binary load");
     check(storage.getSystemVariable("DAY",0)==7,"ordinary game state restored");
-    check(storage.getGlobalInt2D("SAVED",1,2)==std::numeric_limits<qint64>::min(),"int64 matrix restored");
-    check(storage.getGlobalInt2D("TEMP",1,2)==0,"non savedata declaration reset");
-    check(storage.getGlobalInt1D("GLOBAL",0)==999 && storage.getGlobalInt2D("USER_GLOBAL",1,2)==77,"normal load preserves GLOBAL lifetime");
-    check(storage.getGlobalInt2D("UNSAVED_GLOBAL",1,2)==314,"unsaved GLOBAL survives normal load");
-    check(storage.getSystemVariable("LASTLOAD_NO",0)==0 && storage.getSystemVariable("LASTLOAD_VERSION",0)==1808 && storage.getGlobalStr1D("LASTLOAD_TEXT",0)=="C# snapshot","last load metadata restored");
+    check(storage.getGlobalInt2DInCurrentFrame("SAVED",1,2)==std::numeric_limits<qint64>::min(),"int64 matrix restored");
+    check(storage.getGlobalInt2DInCurrentFrame("TEMP",1,2)==0,"non savedata declaration reset");
+    check(storage.getGlobalInt1DInCurrentFrame("GLOBAL",0)==999 && storage.getGlobalInt2DInCurrentFrame("USER_GLOBAL",1,2)==77,"normal load preserves GLOBAL lifetime");
+    check(storage.getGlobalInt2DInCurrentFrame("UNSAVED_GLOBAL",1,2)==314,"unsaved GLOBAL survives normal load");
+    check(storage.getSystemVariable("LASTLOAD_NO",0)==0 && storage.getSystemVariable("LASTLOAD_VERSION",0)==1808 && storage.getGlobalStr1DInCurrentFrame("LASTLOAD_TEXT",0)=="C# snapshot","last load metadata restored");
     check(storage.getLocalInt(0)==0 && storage.getArgInt(0)==0 && !storage.hasReference("SAVED"),"locals arguments and refs reset");
-    storage.setPrivateScope(eravar::internName(local.scopeKey),{"STATIC"});check(storage.getGlobalInt1D("STATIC",0)==19,"private STATIC declaration initializer restored");storage.setLocalContext({});
+    storage.setPrivateScope(eravar::internName(local.scopeKey),{"STATIC"});check(storage.getGlobalInt1DInCurrentFrame("STATIC",0)==19,"private STATIC declaration initializer restored");storage.setLocalContext({});
     check(storage.getCharaStr("NAME",0,0)=="one" && storage.getCharaStr("NAME",1,0)=="zero","character block order maps runtime slots");
     check(storage.getCharaInt("ABL",0,0)==202 && storage.getCharaInt("ABL",1,0)==101 && storage.getCharaInt("USER_C",0,1)==55,"character values and savedata restored");
-    check(storage.getGlobalStr1D("SAVESTR",0)=="界😀\t\n\r","binary string newlines and unicode survive");
+    check(storage.getGlobalStr1DInCurrentFrame("SAVESTR",0)=="界😀\t\n\r","binary string newlines and unicode survive");
     write(first.filePath("sav/save00.sav"),"eraemu-save-v1\nCHARALIST\t");
     check(engine.loadSaveSnapshot(0),"runtime cache ignores external edits"); engine.reloadSaveSnapshots();
     check(engine.checkSaveSnapshot(0)==1 && !engine.loadSaveSnapshot(0),"old Qt format treated as no data");
@@ -101,8 +101,8 @@ int main(int argc,char** argv) {
     check(base.acceptsSave(0,1808) && !base.acceptsSave(43,1808),"zero file code wildcard");
     run("SAVEGLOBAL"); const QByteArray globalBytes=read(first.filePath("sav/global.sav"));
     check(EraBinaryData::decode(globalBytes,document) && document.type==EraBinaryData::FileType::Global,"GLOBAL actual binary path");
-    storage.setGlobalInt1D("GLOBAL",0,0);storage.setGlobalInt2D("USER_GLOBAL",1,2,0);run("LOADGLOBAL");
-    check(storage.getGlobalInt1D("GLOBAL",0)==999 && storage.getGlobalInt2D("USER_GLOBAL",1,2)==77,"global multidimensional cached load");
+    storage.setGlobalInt1DInCurrentFrame("GLOBAL",0,0);storage.setGlobalInt2DInCurrentFrame("USER_GLOBAL",1,2,0);run("LOADGLOBAL");
+    check(storage.getGlobalInt1DInCurrentFrame("GLOBAL",0)==999 && storage.getGlobalInt2DInCurrentFrame("USER_GLOBAL",1,2)==77,"global multidimensional cached load");
     write(first.filePath("sav/global.sav"),"{}");run("LOADGLOBAL");check(storage.getSystemVariable("RESULT",0)==1,"global cache immutable");
     engine.reloadSaveSnapshots();run("LOADGLOBAL");check(storage.getSystemVariable("RESULT",0)==0,"global corrupt reload rejected");
     check(evaluate("SAVECHARA(\"characters\",\"summary\",1)")==1,"character binary save");
@@ -117,7 +117,7 @@ int main(int argc,char** argv) {
     // Per-axis resizing must preserve the overlap rectangle, including cleared tail cells.
     VariableStorage resized;VariableTable resizedTable;auto resizeDecl=saved;resizeDecl.lengths={3,2};resizedTable.add(resizeDecl);resized.setSaveVariableTable(&resizedTable);
     document={};document.type=EraBinaryData::FileType::Normal;EraBinaryData::Variable matrix;matrix.name="SAVED";matrix.dimensions={2,3};matrix.integers={1,2,3,4,5,6};document.variables={matrix};resized.applyBinarySave(document);
-    check(resized.getGlobalInt2D("SAVED",1,0)==4 && resized.getGlobalInt2D("SAVED",1,1)==5 && resized.getGlobalInt2D("SAVED",2,0)==0,"resize copies per axis instead of flattened prefix");
+    check(resized.getGlobalInt2DInCurrentFrame("SAVED",1,0)==4 && resized.getGlobalInt2DInCurrentFrame("SAVED",1,1)==5 && resized.getGlobalInt2DInCurrentFrame("SAVED",2,0)==0,"resize copies per axis instead of flattened prefix");
     // RESETDATA restores ERB/ERH declaration initializers but leaves GLOBAL lifetime intact.
     VariableDecl resetDim; resetDim.name="RESET_DIM"; resetDim.defaultInt={500};
     const_cast<VariableTable&>(table.variableTable()).add(resetDim);
@@ -125,13 +125,13 @@ int main(int argc,char** argv) {
     const_cast<VariableTable&>(table.variableTable()).add(resetDims);
     VariableDecl resetGlobal=resetDim; resetGlobal.name="RESET_GLOBAL"; resetGlobal.isGlobal=true;
     const_cast<VariableTable&>(table.variableTable()).add(resetGlobal);
-    storage.setGlobalInt1D("RESET_DIM",0,1);
-    storage.setGlobalStr1D("RESET_DIMS",0,"changed");
-    storage.setGlobalInt1D("RESET_GLOBAL",0,77);
+    storage.setGlobalInt1DInCurrentFrame("RESET_DIM",0,1);
+    storage.setGlobalStr1DInCurrentFrame("RESET_DIMS",0,"changed");
+    storage.setGlobalInt1DInCurrentFrame("RESET_GLOBAL",0,77);
     storage.resetForNewGame();
-    check(storage.getGlobalInt1D("RESET_DIM",0)==500,"RESETDATA restores #DIM initializer");
-    check(storage.getGlobalStr1D("RESET_DIMS",0)=="ready","RESETDATA restores #DIMS initializer");
-    check(storage.getGlobalInt1D("RESET_GLOBAL",0)==77,"RESETDATA preserves #GLOBAL value");
+    check(storage.getGlobalInt1DInCurrentFrame("RESET_DIM",0)==500,"RESETDATA restores #DIM initializer");
+    check(storage.getGlobalStr1DInCurrentFrame("RESET_DIMS",0)=="ready","RESETDATA restores #DIMS initializer");
+    check(storage.getGlobalInt1DInCurrentFrame("RESET_GLOBAL",0)==77,"RESETDATA preserves #GLOBAL value");
     // 2/3 维的下标换算（最后一维连续）与「初值没覆盖到的尾部清 0」是
     // resetForNewGame 重写后的关键行为：批量 memset + 直写下标，不再逐元素
     // 调 setGlobal*D / coordinates()（FL3.8 有 400 万个元素，旧写法要 1 秒以上）。
@@ -145,19 +145,19 @@ int main(int argc,char** argv) {
     reset2ds.dimension=2; reset2ds.lengths={2,2}; reset2ds.defaultStr={"a","b","c","d"};
     for (const VariableDecl& d : {reset2d, reset2dPartial, reset3d, reset2ds})
         const_cast<VariableTable&>(table.variableTable()).add(d);
-    storage.setGlobalInt2D("RESET_2D",1,2,99); storage.setGlobalInt3D("RESET_3D",1,1,1,99);
-    storage.setGlobalStr2D("RESET_2DS",1,1,"z"); storage.setGlobalInt2D("RESET_2D_PART",0,1,99);
+    storage.setGlobalInt2DInCurrentFrame("RESET_2D",1,2,99); storage.setGlobalInt3DInCurrentFrame("RESET_3D",1,1,1,99);
+    storage.setGlobalStr2DInCurrentFrame("RESET_2DS",1,1,"z"); storage.setGlobalInt2DInCurrentFrame("RESET_2D_PART",0,1,99);
     storage.resetForNewGame();
-    check(storage.getGlobalInt2D("RESET_2D",0,0)==1 && storage.getGlobalInt2D("RESET_2D",0,2)==3
-          && storage.getGlobalInt2D("RESET_2D",1,0)==4 && storage.getGlobalInt2D("RESET_2D",1,2)==6,
+    check(storage.getGlobalInt2DInCurrentFrame("RESET_2D",0,0)==1 && storage.getGlobalInt2DInCurrentFrame("RESET_2D",0,2)==3
+          && storage.getGlobalInt2DInCurrentFrame("RESET_2D",1,0)==4 && storage.getGlobalInt2DInCurrentFrame("RESET_2D",1,2)==6,
           "RESETDATA restores 2-D array along the last axis");
-    check(storage.getGlobalInt3D("RESET_3D",0,0,0)==10 && storage.getGlobalInt3D("RESET_3D",1,0,0)==14
-          && storage.getGlobalInt3D("RESET_3D",1,1,1)==17,
+    check(storage.getGlobalInt3DInCurrentFrame("RESET_3D",0,0,0)==10 && storage.getGlobalInt3DInCurrentFrame("RESET_3D",1,0,0)==14
+          && storage.getGlobalInt3DInCurrentFrame("RESET_3D",1,1,1)==17,
           "RESETDATA restores 3-D array (x*ny*nz + y*nz + z)");
-    check(storage.getGlobalInt2D("RESET_2D_PART",0,0)==7 && storage.getGlobalInt2D("RESET_2D_PART",0,1)==0
-          && storage.getGlobalInt2D("RESET_2D_PART",1,0)==0,
+    check(storage.getGlobalInt2DInCurrentFrame("RESET_2D_PART",0,0)==7 && storage.getGlobalInt2DInCurrentFrame("RESET_2D_PART",0,1)==0
+          && storage.getGlobalInt2DInCurrentFrame("RESET_2D_PART",1,0)==0,
           "2-D tail beyond the initializer is cleared, not left over");
-    check(storage.getGlobalStr2D("RESET_2DS",0,0)=="a" && storage.getGlobalStr2D("RESET_2DS",1,1)=="d",
+    check(storage.getGlobalStr2DInCurrentFrame("RESET_2DS",0,0)=="a" && storage.getGlobalStr2DInCurrentFrame("RESET_2DS",1,1)=="d",
           "RESETDATA restores 2-D string array");
     storage.setSystemVariable("DAY",0,7);
 
@@ -167,7 +167,7 @@ int main(int argc,char** argv) {
     check(compressed.startsWith(QByteArray::fromHex("894552415a49500a")) && EraBinaryData::decode(compressed,document),"engine honors gzip setting");
     engine.setSaveFormatProvider([]{return QPair<bool,bool>{false,true};});
     storage.delAllChara();
-    storage.setGlobalStr1D("SAVESTR",0,"text界😀");
+    storage.setGlobalStr1DInCurrentFrame("SAVESTR",0,"text界😀");
     check(engine.writeSaveSnapshot(3,"text"),"native text mode saves");
     const auto textBytes=read(second.filePath("sav/save03.sav"));
     const QByteArray textMarker = QByteArrayLiteral("__EMUERA_")+QByteArray::number(EraBinaryData::Version)+QByteArrayLiteral("_STRAT__");
@@ -186,14 +186,14 @@ int main(int argc,char** argv) {
     //    （此前「任何 >= 0x80 字符都 toUpper」改成「真含小写字母才 toUpper」，
     //     这两条是回归面）。
     {
-        storage.setGlobalInt1D(QStringLiteral("触手"),0,5);
-        storage.setGlobalInt1D(QStringLiteral("全角ＡＢ"),1,7);
-        check(storage.getGlobalInt1D(QStringLiteral("触手"),0)==5,
+        storage.setGlobalInt1DInCurrentFrame(QStringLiteral("触手"),0,5);
+        storage.setGlobalInt1DInCurrentFrame(QStringLiteral("全角ＡＢ"),1,7);
+        check(storage.getGlobalInt1DInCurrentFrame(QStringLiteral("触手"),0)==5,
               "eraUpperKey：纯 CJK 名字读写落同一槽位（toUpper 恒等）");
-        check(storage.getGlobalInt1D(QStringLiteral("全角ａｂ"),1)==7,
+        check(storage.getGlobalInt1DInCurrentFrame(QStringLiteral("全角ａｂ"),1)==7,
               "eraUpperKey：全角小写 ａｂ 仍映射到 ＡＢ 键");
         storage.setPrivateScope(eravar::internName(QStringLiteral("函")),{QStringLiteral("私変数")});
-        check(storage.resolvedStorageName(QStringLiteral("私変数"))
+        check(storage.resolvedStorageNameInCurrentFrame(QStringLiteral("私変数"))
                   == QStringLiteral("函\x1f私変数"),
               "eraUpperKey：私有作用域映射对 CJK 名字不受影响");
         storage.setLocalContext({});

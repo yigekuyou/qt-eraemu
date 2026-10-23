@@ -191,13 +191,13 @@ int main(int argc, char* argv[]) {
     table.setEntryPoint("MAIN");
     const ExecState st = runner.runToCompletion();
     check(st == ExecState::Halt, "执行到 Halt");
-    check(storage.getGlobalInt1D("OUT1", 0) == 3, "ARG 收到第 1 个实参 3（ARG 目标）");
-    check(storage.getGlobalInt1D("OUT2", 0) == 2,
+    check(storage.getGlobalInt1DInCurrentFrame("OUT1", 0) == 3, "ARG 收到第 1 个实参 3（ARG 目标）");
+    check(storage.getGlobalInt1DInCurrentFrame("OUT2", 0) == 2,
           "ARGS 收到第 2 个实参 \"hi\"（STRLENS == 2）");
     check(storage.getLocalInt(0) == 40, "式中调用 INT_FN(4) -> 40（LOCAL 是用户函数局部槽）");
 
-    check(storage.getGlobalInt1D("AFTER_ARG", 0) == 0, "CALL restores caller integer locals");
-    check(storage.getGlobalInt1D("AFTER_ARGS", 0) == 0, "CALL restores caller string locals");
+    check(storage.getGlobalInt1DInCurrentFrame("AFTER_ARG", 0) == 0, "CALL restores caller integer locals");
+    check(storage.getGlobalInt1DInCurrentFrame("AFTER_ARGS", 0) == 0, "CALL restores caller string locals");
 
     // =====================================================================
     qDebug() << "\n5) 实参个数校验（解析期）";
@@ -327,12 +327,12 @@ int main(int argc, char* argv[]) {
         pt.markLoadComplete();
         pt.setEntryPoint("MAIN");
         check(run.runToCompletion() == ExecState::Halt, "nested rendering terminates");
-        check(vars.getGlobalInt1D("CELLS", 0) == 36, "12 columns x 3 cells despite callee LOCAL writes");
-        check(vars.getGlobalInt1D("SEEN", 0) == 809, "all call arguments evaluated in caller context");
-        check(vars.getGlobalInt1D("AFTER_COLOR", 0) == 8, "EOF return restores named parameter");
-        check(vars.getGlobalInt1D("AFTER_ROW", 0) == 7, "function-label return restores named parameter");
-        check(vars.getGlobalInt1D("PRESERVED", 0) == 99, "explicit return restores caller LOCAL");
-        check(vars.getGlobalInt1D("PERSISTED_LOCAL", 0) == 2, "function LOCAL persists between calls");
+        check(vars.getGlobalInt1DInCurrentFrame("CELLS", 0) == 36, "12 columns x 3 cells despite callee LOCAL writes");
+        check(vars.getGlobalInt1DInCurrentFrame("SEEN", 0) == 809, "all call arguments evaluated in caller context");
+        check(vars.getGlobalInt1DInCurrentFrame("AFTER_COLOR", 0) == 8, "EOF return restores named parameter");
+        check(vars.getGlobalInt1DInCurrentFrame("AFTER_ROW", 0) == 7, "function-label return restores named parameter");
+        check(vars.getGlobalInt1DInCurrentFrame("PRESERVED", 0) == 99, "explicit return restores caller LOCAL");
+        check(vars.getGlobalInt1DInCurrentFrame("PERSISTED_LOCAL", 0) == 2, "function LOCAL persists between calls");
         check(!vars.hasParameter("ROWNUM") && !vars.hasParameter("VALUE"), "parameters do not leak after return");
     }
     {
@@ -354,9 +354,9 @@ int main(int argc, char* argv[]) {
         };
         pt.loadScript("bounds", buildLines(pt, program)); pt.markLoadComplete(); pt.setEntryPoint("MAIN");
         check(run.runToCompletion() == ExecState::Halt, "FOR edge cases terminate");
-        check(vars.getGlobalInt1D("ASCENDING_COUNT", 0) == 12, "FOR positive bound is exclusive");
-        check(vars.getGlobalInt1D("DESCENDING_COUNT", 0) == 4, "FOR negative bound is exclusive");
-        check(vars.getGlobalInt1D("BAD", 0) == 0, "equal bounds and zero step skip loop body");
+        check(vars.getGlobalInt1DInCurrentFrame("ASCENDING_COUNT", 0) == 12, "FOR positive bound is exclusive");
+        check(vars.getGlobalInt1DInCurrentFrame("DESCENDING_COUNT", 0) == 4, "FOR negative bound is exclusive");
+        check(vars.getGlobalInt1DInCurrentFrame("BAD", 0) == 0, "equal bounds and zero step skip loop body");
     }
 
     {
@@ -380,10 +380,10 @@ int main(int argc, char* argv[]) {
         };
         pt.loadScript("private_arrays", buildLines(pt, program)); pt.markLoadComplete(); pt.setEntryPoint("MAIN");
         check(run.runToCompletion() == ExecState::Halt, "private array calls terminate");
-        check(vars.getGlobalInt1D("SEEN_X", 0) == 8 && vars.getGlobalInt1D("SEEN_Y", 0) == 4,
+        check(vars.getGlobalInt1DInCurrentFrame("SEEN_X", 0) == 8 && vars.getGlobalInt1DInCurrentFrame("SEEN_Y", 0) == 4,
               "nested collision helper preserves caller coordinate array");
-        check(vars.getGlobalInt1D("SEEN_TEMP", 0) == 9, "same-name private scratch arrays isolated");
-        check(vars.getGlobalInt1D("INNER_X", 0) == 9 && vars.getGlobalInt1D("INNER_Y", 0) == 6,
+        check(vars.getGlobalInt1DInCurrentFrame("SEEN_TEMP", 0) == 9, "same-name private scratch arrays isolated");
+        check(vars.getGlobalInt1DInCurrentFrame("INNER_X", 0) == 9 && vars.getGlobalInt1DInCurrentFrame("INNER_Y", 0) == 6,
               "repeated CALL evaluates original argument AST on each invocation");
     }
 
@@ -412,12 +412,12 @@ int main(int argc, char* argv[]) {
         check(pt.loadScript("modified_counter", buildLines(pt, program)), "load counter assignment regression");
         pt.markLoadComplete(); pt.setEntryPoint("MAIN");
         check(run.runToCompletion() == ExecState::Halt, counter + " modified loops terminate");
-        check(vars.getGlobalInt1D("DESCENDING_COUNT", 0) == 4,
+        check(vars.getGlobalInt1DInCurrentFrame("DESCENDING_COUNT", 0) == 4,
               counter + " descending FOR rechecks counter incremented by first body");
-        check(vars.getGlobalInt1D("ASCENDING_COUNT", 0) == 4,
+        check(vars.getGlobalInt1DInCurrentFrame("ASCENDING_COUNT", 0) == 4,
               counter + " ascending FOR rechecks counter decremented by first body");
-        check(vars.getGlobalInt1D("DESCENDING_FINAL", 0) == 0
-                  && vars.getGlobalInt1D("ASCENDING_FINAL", 0) == 3,
+        check(vars.getGlobalInt1DInCurrentFrame("DESCENDING_FINAL", 0) == 0
+                  && vars.getGlobalInt1DInCurrentFrame("ASCENDING_FINAL", 0) == 3,
               counter + " modified loops retain exclusive bounds");
     }
 
@@ -448,10 +448,10 @@ int main(int argc, char* argv[]) {
         check(pt.loadScript("clear_lines", buildLines(pt, program)), "load shifted-row regression");
         pt.markLoadComplete(); pt.setEntryPoint("MAIN");
         check(run.runToCompletion() == ExecState::Halt, "shifted-row clearing terminates");
-        check(vars.getGlobalInt1D("CLEARED", 0) == 2, "both adjacent full rows are cleared");
-        check(vars.getGlobalInt1D("VISITS", 0) == 5, "each cleared row is rechecked after shifting");
-        check(vars.getGlobalInt1D("STAGE", 0) == 0 && vars.getGlobalInt1D("STAGE", 1) == 0
-                  && vars.getGlobalInt1D("STAGE", 2) == 4,
+        check(vars.getGlobalInt1DInCurrentFrame("CLEARED", 0) == 2, "both adjacent full rows are cleared");
+        check(vars.getGlobalInt1DInCurrentFrame("VISITS", 0) == 5, "each cleared row is rechecked after shifting");
+        check(vars.getGlobalInt1DInCurrentFrame("STAGE", 0) == 0 && vars.getGlobalInt1DInCurrentFrame("STAGE", 1) == 0
+                  && vars.getGlobalInt1DInCurrentFrame("STAGE", 2) == 4,
               "partial row shifts to bottom and vacated rows are empty");
     }
 
@@ -479,12 +479,12 @@ int main(int argc, char* argv[]) {
         check(pt.loadScript("ref_menu", buildLines(pt, program)), "load REF menu regression");
         pt.markLoadComplete(); pt.setEntryPoint("MAIN");
         check(run.runToCompletion() == ExecState::Halt, "REF menu loop terminates");
-        qDebug() << "  measured OUTER_SIZE=" << vars.getGlobalInt1D("OUTER_SIZE", 0)
-                 << "REF_SIZE=" << vars.getGlobalInt1D("REF_SIZE", 0)
-                 << "NONEMPTY=" << vars.getGlobalInt1D("NONEMPTY", 0);
-        check(vars.getGlobalInt1D("REF_SIZE", 0) == 10, "VARSIZE follows REF private array");
-        qDebug() << "  measured HTML_LEN=" << vars.getGlobalInt1D("HTML_LEN", 0);
-        check(vars.getGlobalInt1D("NONEMPTY", 0) == 2, "REF reads indexed string parameters");
+        qDebug() << "  measured OUTER_SIZE=" << vars.getGlobalInt1DInCurrentFrame("OUTER_SIZE", 0)
+                 << "REF_SIZE=" << vars.getGlobalInt1DInCurrentFrame("REF_SIZE", 0)
+                 << "NONEMPTY=" << vars.getGlobalInt1DInCurrentFrame("NONEMPTY", 0);
+        check(vars.getGlobalInt1DInCurrentFrame("REF_SIZE", 0) == 10, "VARSIZE follows REF private array");
+        qDebug() << "  measured HTML_LEN=" << vars.getGlobalInt1DInCurrentFrame("HTML_LEN", 0);
+        check(vars.getGlobalInt1DInCurrentFrame("NONEMPTY", 0) == 2, "REF reads indexed string parameters");
         const UserFunctionDecl* inspect = pt.userFunction("INSPECT");
         check(inspect && inspect->params.value(0).isReference, "#DIMS REF annotates matching parameter");
         check(inspect && inspect->params.value(1).hasDefault
@@ -519,10 +519,10 @@ int main(int argc, char* argv[]) {
         pt.markLoadComplete();
         pt.setEntryPoint("MAIN");
         check(run.runToCompletion() == ExecState::Halt, "scoped arrays complete");
-        check(vs.getGlobalInt1D("OUT2D", 0) == 29 && vs.getGlobalInt1D("OUT2DINC", 0) == 30
-                  && vs.getGlobalInt1D("OUT2DZERO", 0) == 17, "private 2D read and increment preserve second index");
-        check(vs.getGlobalInt1D("OUT3D", 0) == 53 && vs.getGlobalInt1D("OUT3DINC", 0) == 54
-                  && vs.getGlobalInt1D("OUT3DZERO", 0) == 41, "same name in another scope uses 3D indices");
+        check(vs.getGlobalInt1DInCurrentFrame("OUT2D", 0) == 29 && vs.getGlobalInt1DInCurrentFrame("OUT2DINC", 0) == 30
+                  && vs.getGlobalInt1DInCurrentFrame("OUT2DZERO", 0) == 17, "private 2D read and increment preserve second index");
+        check(vs.getGlobalInt1DInCurrentFrame("OUT3D", 0) == 53 && vs.getGlobalInt1DInCurrentFrame("OUT3DINC", 0) == 54
+                  && vs.getGlobalInt1DInCurrentFrame("OUT3DZERO", 0) == 41, "same name in another scope uses 3D indices");
     }
 
     // =====================================================================
@@ -561,11 +561,11 @@ int main(int argc, char* argv[]) {
         pt.markLoadComplete();
         pt.setEntryPoint("MAIN");
         check(run.runToCompletion() == ExecState::Halt, "mixed-case function script completes");
-        check(vs.getGlobalInt1D("MIXED_LEN", 0) == 2,
+        check(vs.getGlobalInt1DInCurrentFrame("MIXED_LEN", 0) == 2,
               "式子 %MixStr()% -> \"ok\"（STRLENS == 2，混大小写标签能查到）");
-        check(vs.getGlobalInt1D("LOWER_LEN", 0) == 2,
+        check(vs.getGlobalInt1DInCurrentFrame("LOWER_LEN", 0) == 2,
               "式子 %mixstr()% 大小写不敏感 -> 2");
-        check(vs.getGlobalInt1D("PLAIN_OUT", 0) == 7, "CALL PlainFn 语句调用正常");
+        check(vs.getGlobalInt1DInCurrentFrame("PLAIN_OUT", 0) == 7, "CALL PlainFn 语句调用正常");
     }
 
     // =====================================================================
@@ -605,9 +605,9 @@ int main(int argc, char* argv[]) {
         pt.markLoadComplete();
         pt.setEntryPoint("MAIN");
         check(run.runToCompletion() == ExecState::Halt, "REF-to-system-variable script completes");
-        check(vs.getGlobalInt1D("OUT_SCALAR", 0) == 7,
+        check(vs.getGlobalInt1DInCurrentFrame("OUT_SCALAR", 0) == 7,
               "REF 形参读到系统变量 TARGET=7（此前恒 0 → 图片没有）");
-        check(vs.getGlobalInt1D("OUT_ELEM", 0) == 55,
+        check(vs.getGlobalInt1DInCurrentFrame("OUT_ELEM", 0) == 55,
               "REF 形参数组元素 ターゲット:5 -> 55（经系统变量 TARGET 解析）");
         check(vs.getSystemVariable(QStringLiteral("TARGET"), 2) == 22,
               "经 REF 写回系统变量 TARGET:2 = 22");

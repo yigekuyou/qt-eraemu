@@ -80,28 +80,28 @@ int main(int argc, char* argv[]) {
     {
         VariableStorage vs;
         const int localBefore = vs.localStrSize();
-        vs.setStringSlot(QStringLiteral("LOCALS"), {localBefore + 3}, sv(QStringLiteral("L")));
+        vs.setStringSlotInCurrentFrame(QStringLiteral("LOCALS"), {localBefore + 3}, sv(QStringLiteral("L")));
         check(vs.localStrSize() == localBefore + 4,
               QStringLiteral("LOCALS: 写 size 之外的下标后容器长到下标 +1"));
-        check(vs.getStringSlot(QStringLiteral("LOCALS"), {localBefore + 3}).text == QStringLiteral("L"),
+        check(vs.getStringSlotInCurrentFrame(QStringLiteral("LOCALS"), {localBefore + 3}).text == QStringLiteral("L"),
               QStringLiteral("LOCALS: 读该格命中刚写的值"));
-        check(vs.getStringSlot(QStringLiteral("LOCALS"), {localBefore + 2}).text.isEmpty(),
+        check(vs.getStringSlotInCurrentFrame(QStringLiteral("LOCALS"), {localBefore + 2}).text.isEmpty(),
               QStringLiteral("LOCALS: 扩容出来的中间格子是空串"));
         check(vs.getLocalStr(localBefore + 3) == QStringLiteral("L"),
               QStringLiteral("LOCALS: 公开 getLocalStr 读到同一格"));
 
-        const int argBefore = vs.arraySize(QStringLiteral("ARGS"));
-        vs.setStringSlot(QStringLiteral("ARGS"), {argBefore + 2}, sv(QStringLiteral("A")));
-        check(vs.arraySize(QStringLiteral("ARGS")) == argBefore + 3,
+        const int argBefore = vs.arraySizeInCurrentFrame(QStringLiteral("ARGS"));
+        vs.setStringSlotInCurrentFrame(QStringLiteral("ARGS"), {argBefore + 2}, sv(QStringLiteral("A")));
+        check(vs.arraySizeInCurrentFrame(QStringLiteral("ARGS")) == argBefore + 3,
               QStringLiteral("ARGS: 写 size 之外的下标后容器长到下标 +1"));
-        check(vs.getStringSlot(QStringLiteral("ARGS"), {argBefore + 2}).text == QStringLiteral("A"),
+        check(vs.getStringSlotInCurrentFrame(QStringLiteral("ARGS"), {argBefore + 2}).text == QStringLiteral("A"),
               QStringLiteral("ARGS: 读该格命中刚写的值"));
         check(vs.getArgStr(argBefore + 2) == QStringLiteral("A"),
               QStringLiteral("ARGS: 公开 getArgStr 读到同一格"));
 
         // 两套槽位互不干扰（eraTW 的 PRINT_COLORBAR 踩过混用）。
-        check(vs.getStringSlot(QStringLiteral("ARGS"), {localBefore + 3}).text.isEmpty()
-                  && vs.getStringSlot(QStringLiteral("LOCALS"), {argBefore + 2}).text.isEmpty(),
+        check(vs.getStringSlotInCurrentFrame(QStringLiteral("ARGS"), {localBefore + 3}).text.isEmpty()
+                  && vs.getStringSlotInCurrentFrame(QStringLiteral("LOCALS"), {argBefore + 2}).text.isEmpty(),
               QStringLiteral("LOCALS 与 ARGS 是两套独立容器"));
     }
 
@@ -109,13 +109,13 @@ int main(int argc, char* argv[]) {
     qDebug() << "\n2) SAVEDATA_TEXT：单槽 + 行序先于 CHARADATA";
     {
         VariableStorage vs;
-        vs.setStringSlot(QStringLiteral("SAVEDATA_TEXT"), {0}, sv(QStringLiteral("first")));
-        vs.setStringSlot(QStringLiteral("SAVEDATA_TEXT"), {7}, sv(QStringLiteral("second")));
-        check(vs.getStringSlot(QStringLiteral("SAVEDATA_TEXT"), {0}).text == QStringLiteral("second"),
+        vs.setStringSlotInCurrentFrame(QStringLiteral("SAVEDATA_TEXT"), {0}, sv(QStringLiteral("first")));
+        vs.setStringSlotInCurrentFrame(QStringLiteral("SAVEDATA_TEXT"), {7}, sv(QStringLiteral("second")));
+        check(vs.getStringSlotInCurrentFrame(QStringLiteral("SAVEDATA_TEXT"), {0}).text == QStringLiteral("second"),
               QStringLiteral("SAVEDATA_TEXT: 写下标 7 覆盖了下标 0（单槽）"));
-        check(vs.getStringSlot(QStringLiteral("SAVEDATA_TEXT"), {7}).text == QStringLiteral("second"),
+        check(vs.getStringSlotInCurrentFrame(QStringLiteral("SAVEDATA_TEXT"), {7}).text == QStringLiteral("second"),
               QStringLiteral("SAVEDATA_TEXT: 任意下标都读到同一格"));
-        check(vs.getStringSlot(QStringLiteral("SAVEDATA_TEXT"), {}).text == QStringLiteral("second"),
+        check(vs.getStringSlotInCurrentFrame(QStringLiteral("SAVEDATA_TEXT"), {}).text == QStringLiteral("second"),
               QStringLiteral("SAVEDATA_TEXT: 无下标读到同一格"));
         check(vs.getSystemStr(QStringLiteral("SAVEDATA_TEXT"), 0) == QStringLiteral("second"),
               QStringLiteral("SAVEDATA_TEXT: 公开 getSystemStr 与按名读同源"));
@@ -124,8 +124,8 @@ int main(int argc, char* argv[]) {
         // 今天的行序是 SAVEDATA_TEXT 先命中（M1 把 CHARADATA 提前就会红）。
         VariableStorage overlap;
         overlap.registerCharaDataVariable(QStringLiteral("SAVEDATA_TEXT"), true, 0);
-        overlap.setStringSlot(QStringLiteral("SAVEDATA_TEXT"), {0}, sv(QStringLiteral("sys")));
-        check(overlap.getStringSlot(QStringLiteral("SAVEDATA_TEXT"), {0}).text == QStringLiteral("sys"),
+        overlap.setStringSlotInCurrentFrame(QStringLiteral("SAVEDATA_TEXT"), {0}, sv(QStringLiteral("sys")));
+        check(overlap.getStringSlotInCurrentFrame(QStringLiteral("SAVEDATA_TEXT"), {0}).text == QStringLiteral("sys"),
               QStringLiteral("SAVEDATA_TEXT/CHARADATA: 读先命中单槽行（sys）"));
         check(overlap.getCharaStr(QStringLiteral("SAVEDATA_TEXT"), 0, 0).isEmpty(),
               QStringLiteral("SAVEDATA_TEXT/CHARADATA: 角色槽没被写（空）"));
@@ -140,10 +140,10 @@ int main(int argc, char* argv[]) {
         vs.addChara(10);
         vs.addChara(11);
 
-        vs.setStringSlot(QStringLiteral("XS"), {0, 0}, sv(QStringLiteral("c0")));
-        vs.setStringSlot(QStringLiteral("XS"), {1, 0}, sv(QStringLiteral("c1")));
-        check(vs.getStringSlot(QStringLiteral("XS"), {0, 0}).text == QStringLiteral("c0")
-                  && vs.getStringSlot(QStringLiteral("XS"), {1, 0}).text == QStringLiteral("c1"),
+        vs.setStringSlotInCurrentFrame(QStringLiteral("XS"), {0, 0}, sv(QStringLiteral("c0")));
+        vs.setStringSlotInCurrentFrame(QStringLiteral("XS"), {1, 0}, sv(QStringLiteral("c1")));
+        check(vs.getStringSlotInCurrentFrame(QStringLiteral("XS"), {0, 0}).text == QStringLiteral("c0")
+                  && vs.getStringSlotInCurrentFrame(QStringLiteral("XS"), {1, 0}).text == QStringLiteral("c1"),
               QStringLiteral("XS: 两个角色的字符串互不干扰"));
         check(vs.getCharaStr(QStringLiteral("XS"), 0, 0) == QStringLiteral("c0"),
               QStringLiteral("XS: 公开 getCharaStr 与按名读同源"));
@@ -151,21 +151,21 @@ int main(int argc, char* argv[]) {
         // 元素偏移（每角色 2x2 个元素）：同角色不同元素、同元素不同角色都隔离。
         // 先写最远的元素，让「运行期外接几何」一次长到 2x2；之后各格都在边界内
         //（外接几何按 indices 扩边界的重排细节不是本护栏的对象）。
-        vs.setStringSlot(QStringLiteral("XS2"), {0, 1, 1}, sv(QStringLiteral("c0e11")));
-        vs.setStringSlot(QStringLiteral("XS2"), {0, 0, 0}, sv(QStringLiteral("c0e00")));
-        vs.setStringSlot(QStringLiteral("XS2"), {1, 0, 0}, sv(QStringLiteral("c1e00")));
-        check(vs.getStringSlot(QStringLiteral("XS2"), {0, 0, 0}).text == QStringLiteral("c0e00")
-                  && vs.getStringSlot(QStringLiteral("XS2"), {0, 1, 1}).text == QStringLiteral("c0e11")
-                  && vs.getStringSlot(QStringLiteral("XS2"), {1, 0, 0}).text == QStringLiteral("c1e00"),
+        vs.setStringSlotInCurrentFrame(QStringLiteral("XS2"), {0, 1, 1}, sv(QStringLiteral("c0e11")));
+        vs.setStringSlotInCurrentFrame(QStringLiteral("XS2"), {0, 0, 0}, sv(QStringLiteral("c0e00")));
+        vs.setStringSlotInCurrentFrame(QStringLiteral("XS2"), {1, 0, 0}, sv(QStringLiteral("c1e00")));
+        check(vs.getStringSlotInCurrentFrame(QStringLiteral("XS2"), {0, 0, 0}).text == QStringLiteral("c0e00")
+                  && vs.getStringSlotInCurrentFrame(QStringLiteral("XS2"), {0, 1, 1}).text == QStringLiteral("c0e11")
+                  && vs.getStringSlotInCurrentFrame(QStringLiteral("XS2"), {1, 0, 0}).text == QStringLiteral("c1e00"),
               QStringLiteral("XS2: 角色 0/1 与元素 (0,0)/(1,1) 各占一格"));
 
         // 字符串变量经整型视图：读恒 0、写 no-op（与 test_name_locus 契约 3 对齐）。
         check(vs.readIntByName(QStringLiteral("XS2"), {0, 0, 0}, global) == 0,
               QStringLiteral("XS2: 整型读恒 0"));
         vs.writeIntByName(QStringLiteral("XS2"), {0, 0, 0}, 77, global);
-        check(vs.getStringSlot(QStringLiteral("XS2"), {0, 0, 0}).text == QStringLiteral("c0e00"),
+        check(vs.getStringSlotInCurrentFrame(QStringLiteral("XS2"), {0, 0, 0}).text == QStringLiteral("c0e00"),
               QStringLiteral("XS2: 整型写没有碰角色字符串槽"));
-        check(vs.getGlobalInt1D(QStringLiteral("XS2"), 0) == 0,
+        check(vs.getGlobalInt1DInCurrentFrame(QStringLiteral("XS2"), 0) == 0,
               QStringLiteral("XS2: 整型写没有落到同名 1D 槽"));
     }
 
@@ -176,32 +176,32 @@ int main(int argc, char* argv[]) {
         vs.installMultiDimArray(QStringLiteral("ZS"), {2, 3}, {3, 1}, /*stringArray=*/true, true);
         vs.installMultiDimArray(QStringLiteral("ZS3"), {2, 2, 2}, {4, 2, 1}, /*stringArray=*/true, true);
 
-        vs.setStringSlot(QStringLiteral("PLAIN"), {4}, sv(QStringLiteral("p4")));
-        check(vs.getStringSlot(QStringLiteral("PLAIN"), {4}).text == QStringLiteral("p4"),
+        vs.setStringSlotInCurrentFrame(QStringLiteral("PLAIN"), {4}, sv(QStringLiteral("p4")));
+        check(vs.getStringSlotInCurrentFrame(QStringLiteral("PLAIN"), {4}).text == QStringLiteral("p4"),
               QStringLiteral("PLAIN: 1D 往返命中"));
-        check(vs.getStringSlot(QStringLiteral("PLAIN"), {3}).text.isEmpty(),
+        check(vs.getStringSlotInCurrentFrame(QStringLiteral("PLAIN"), {3}).text.isEmpty(),
               QStringLiteral("PLAIN: 相邻格仍是空串"));
 
-        vs.setStringSlot(QStringLiteral("ZS"), {1, 2}, sv(QStringLiteral("z12")));
-        check(vs.getStringSlot(QStringLiteral("ZS"), {1, 2}).text == QStringLiteral("z12"),
+        vs.setStringSlotInCurrentFrame(QStringLiteral("ZS"), {1, 2}, sv(QStringLiteral("z12")));
+        check(vs.getStringSlotInCurrentFrame(QStringLiteral("ZS"), {1, 2}).text == QStringLiteral("z12"),
               QStringLiteral("ZS: 2D 往返命中同一格"));
-        check(vs.getStringSlot(QStringLiteral("ZS"), {1, 2}).text
-                  == vs.getStringSlot(QStringLiteral("ZS"), {5}).text,
+        check(vs.getStringSlotInCurrentFrame(QStringLiteral("ZS"), {1, 2}).text
+                  == vs.getStringSlotInCurrentFrame(QStringLiteral("ZS"), {5}).text,
               QStringLiteral("ZS: 扁平下标 5 与 (1,2) 是同一格"));
 
-        vs.setStringSlot(QStringLiteral("ZS3"), {1, 1, 1}, sv(QStringLiteral("q111")));
-        check(vs.getStringSlot(QStringLiteral("ZS3"), {1, 1, 1}).text == QStringLiteral("q111"),
+        vs.setStringSlotInCurrentFrame(QStringLiteral("ZS3"), {1, 1, 1}, sv(QStringLiteral("q111")));
+        check(vs.getStringSlotInCurrentFrame(QStringLiteral("ZS3"), {1, 1, 1}).text == QStringLiteral("q111"),
               QStringLiteral("ZS3: 3D 往返命中同一格"));
 
         // 权威几何越界：读空；写被忽略（qWarning 一条）但 setStringSlot 的返回值
         // 仍是 true —— 今天 set 的 bool 只表示「下标非负」，钉住这个事实。
-        check(vs.getStringSlot(QStringLiteral("ZS"), {5, 0}).text.isEmpty(),
+        check(vs.getStringSlotInCurrentFrame(QStringLiteral("ZS"), {5, 0}).text.isEmpty(),
               QStringLiteral("ZS: 越界读返回空串"));
-        check(vs.setStringSlot(QStringLiteral("ZS"), {5, 0}, sv(QStringLiteral("oob"))),
+        check(vs.setStringSlotInCurrentFrame(QStringLiteral("ZS"), {5, 0}, sv(QStringLiteral("oob"))),
               QStringLiteral("ZS: 越界写返回 true（bool 只表示下标非负）"));
-        check(vs.getStringSlot(QStringLiteral("ZS"), {5, 0}).text.isEmpty(),
+        check(vs.getStringSlotInCurrentFrame(QStringLiteral("ZS"), {5, 0}).text.isEmpty(),
               QStringLiteral("ZS: 越界写被忽略（读回仍是空串）"));
-        check(vs.getStringSlot(QStringLiteral("ZS"), {0, 0}).text.isEmpty(),
+        check(vs.getStringSlotInCurrentFrame(QStringLiteral("ZS"), {0, 0}).text.isEmpty(),
               QStringLiteral("ZS: 越界写没有落到别的格子"));
     }
 
@@ -210,8 +210,8 @@ int main(int argc, char* argv[]) {
     {
         VariableStorage vs;
         const FlatStringValue value = marked(QStringLiteral("按钮"), QStringLiteral("7"));
-        vs.setStringSlot(QStringLiteral("MK"), {2}, value);
-        const FlatStringValue read = vs.getStringSlot(QStringLiteral("MK"), {2});
+        vs.setStringSlotInCurrentFrame(QStringLiteral("MK"), {2}, value);
+        const FlatStringValue read = vs.getStringSlotInCurrentFrame(QStringLiteral("MK"), {2});
         check(read.text == value.text && read.markup.parts.size() == 1
                   && read.markup.parts.at(0).kind == PrintTemplatePart::Kind::Button
                   && read.markup.parts.at(0).buttonValue == QStringLiteral("7"),
@@ -222,9 +222,9 @@ int main(int argc, char* argv[]) {
               QStringLiteral("MK: getStringSlotRaw 带回 markup.parts"));
 
         // 特殊槽也一样（LOCALS / ARGS 的值是原地存的 FlatStringValue）。
-        vs.setStringSlot(QStringLiteral("LOCALS"), {0}, value);
-        vs.setStringSlot(QStringLiteral("ARGS"), {0}, value);
-        check(vs.getStringSlot(QStringLiteral("LOCALS"), {0}).markup.parts.size() == 1
+        vs.setStringSlotInCurrentFrame(QStringLiteral("LOCALS"), {0}, value);
+        vs.setStringSlotInCurrentFrame(QStringLiteral("ARGS"), {0}, value);
+        check(vs.getStringSlotInCurrentFrame(QStringLiteral("LOCALS"), {0}).markup.parts.size() == 1
                   && vs.getStringSlotRaw(QStringLiteral("LOCALS"), {0}).markup.parts.at(0).buttonValue
                          == QStringLiteral("7")
                   && vs.getStringSlotRaw(QStringLiteral("ARGS"), {0}).text == value.text,
@@ -258,11 +258,11 @@ int main(int argc, char* argv[]) {
         check(vs.getStringSlotRaw(keyA, {0}).text == QStringLiteral("in-A"),
               QStringLiteral("Raw: 当前帧是 B 时用 A 的键仍读到 A"));
 
-        // 更狠的一条：把「键文本本身」挂一条 REF 别名。storageName(键文本) 会
+        // 更狠的一条：把「键文本本身」挂一条 REF 别名。storageNameInCurrentFrame(键文本) 会
         // 改道到 HIJACK —— 任何「把已解析键再当名字解析一次」的实现都会读到
         // HIJACK 而不是本槽，这条断言就会红。
         vs.setReference(keyA, QStringLiteral("STRLOCUS_HIJACK"));
-        vs.setGlobalStr1D(QStringLiteral("STRLOCUS_HIJACK"), 0, QStringLiteral("hijacked"));
+        vs.setGlobalStr1DInCurrentFrame(QStringLiteral("STRLOCUS_HIJACK"), 0, QStringLiteral("hijacked"));
         check(vs.getStringSlotRaw(keyA, {0}).text == QStringLiteral("in-A"),
               QStringLiteral("Raw: 键文本有 REF 别名时仍读键自己的槽（不重解析）"));
     }
@@ -275,32 +275,32 @@ int main(int argc, char* argv[]) {
         vs.addChara(10);
 
         const int localSize = vs.localStrSize();
-        check(vs.getStringSlot(QStringLiteral("PLAIN"), {-1}).text.isEmpty(),
+        check(vs.getStringSlotInCurrentFrame(QStringLiteral("PLAIN"), {-1}).text.isEmpty(),
               QStringLiteral("读: 普通槽负下标返回空串"));
-        check(vs.getStringSlot(QStringLiteral("LOCALS"), {-1}).text.isEmpty(),
+        check(vs.getStringSlotInCurrentFrame(QStringLiteral("LOCALS"), {-1}).text.isEmpty(),
               QStringLiteral("读: LOCALS 负下标返回空串"));
-        check(vs.getStringSlot(QStringLiteral("ARGS"), {-1}).text.isEmpty(),
+        check(vs.getStringSlotInCurrentFrame(QStringLiteral("ARGS"), {-1}).text.isEmpty(),
               QStringLiteral("读: ARGS 负下标返回空串"));
-        check(vs.getStringSlot(QStringLiteral("XS"), {-1, 0}).text.isEmpty(),
+        check(vs.getStringSlotInCurrentFrame(QStringLiteral("XS"), {-1, 0}).text.isEmpty(),
               QStringLiteral("读: CHARADATA 负角色号返回空串"));
-        check(!vs.setStringSlot(QStringLiteral("PLAIN"), {-1}, sv(QStringLiteral("x"))),
+        check(!vs.setStringSlotInCurrentFrame(QStringLiteral("PLAIN"), {-1}, sv(QStringLiteral("x"))),
               QStringLiteral("写: 普通槽负下标返回 false"));
-        check(!vs.setStringSlot(QStringLiteral("LOCALS"), {-1}, sv(QStringLiteral("x"))),
+        check(!vs.setStringSlotInCurrentFrame(QStringLiteral("LOCALS"), {-1}, sv(QStringLiteral("x"))),
               QStringLiteral("写: LOCALS 负下标返回 false"));
-        check(!vs.setStringSlot(QStringLiteral("XS"), {0, -1}, sv(QStringLiteral("x"))),
+        check(!vs.setStringSlotInCurrentFrame(QStringLiteral("XS"), {0, -1}, sv(QStringLiteral("x"))),
               QStringLiteral("写: CHARADATA 负元素下标返回 false"));
         check(vs.localStrSize() == localSize,
               QStringLiteral("写: 负下标没有触发 LOCALS 懒扩容（没有发生）"));
-        check(vs.getStringSlot(QStringLiteral("LOCALS"), {0}).text.isEmpty()
-                  && vs.getStringSlot(QStringLiteral("PLAIN"), {0}).text.isEmpty(),
+        check(vs.getStringSlotInCurrentFrame(QStringLiteral("LOCALS"), {0}).text.isEmpty()
+                  && vs.getStringSlotInCurrentFrame(QStringLiteral("PLAIN"), {0}).text.isEmpty(),
               QStringLiteral("写: 负下标没有落到别的格子（没有发生）"));
 
         // 角色号解析失败（void chara -> 模板号 -1）：两侧同样「没有发生」。
         VariableStorage voids;
         voids.registerCharaDataVariable(QStringLiteral("XS"), true, 1);
         voids.addVoidChara();
-        check(voids.getStringSlot(QStringLiteral("XS"), {0, 0}).text.isEmpty()
-                  && !voids.setStringSlot(QStringLiteral("XS"), {0, 0}, sv(QStringLiteral("x"))),
+        check(voids.getStringSlotInCurrentFrame(QStringLiteral("XS"), {0, 0}).text.isEmpty()
+                  && !voids.setStringSlotInCurrentFrame(QStringLiteral("XS"), {0, 0}, sv(QStringLiteral("x"))),
               QStringLiteral("CHARADATA: 角色槽解析失败时读空 / 写 false（对称）"));
     }
 

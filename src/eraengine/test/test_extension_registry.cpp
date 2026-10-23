@@ -183,7 +183,7 @@ int main(int argc, char* argv[]) {
         check(engine.executeInstruction(chk), "CHKVARDATA 存在的文件 -> 分发命中");
         check(storage.getSystemVariable(QStringLiteral("RESULT"), 0) == 0,
               "CHKVARDATA 存在 -> RESULT == 0（EraDataState::OK）");
-        check(storage.getGlobalStr1D(QStringLiteral("RESULTS"), 0) == QStringLiteral("ＯＫ"),
+        check(storage.getGlobalStr1DInCurrentFrame(QStringLiteral("RESULTS"), 0) == QStringLiteral("ＯＫ"),
               "RESULTS = ＯＫ（状态说明）");
         QFile(savFile).remove();
         chk.arguments.clear();
@@ -191,7 +191,7 @@ int main(int argc, char* argv[]) {
         check(engine.executeInstruction(chk), "CHKVARDATA 不存在的文件 -> 分发命中");
         check(storage.getSystemVariable(QStringLiteral("RESULT"), 0) == 1,
               "CHKVARDATA 不存在 -> RESULT == 1（FILENOTFOUND）");
-        check(storage.getGlobalStr1D(QStringLiteral("RESULTS"), 0)
+        check(storage.getGlobalStr1DInCurrentFrame(QStringLiteral("RESULTS"), 0)
                   == QStringLiteral("ファイルが存在しません"),
               "RESULTS = ファイルが存在しません");
 
@@ -202,7 +202,7 @@ int main(int argc, char* argv[]) {
             QStringLiteral("SPLIT \"a,b,c\", \",\", PARTS"),
             ScriptPosition("t.ERB", 3, 1), parseExpr);
         check(engine.executeInstruction(splitLine), "引擎：SPLIT 语句分发（核心分支命中）");
-        check(storage.getGlobalStr1D(QStringLiteral("PARTS"), 0) == QStringLiteral("a"),
+        check(storage.getGlobalStr1DInCurrentFrame(QStringLiteral("PARTS"), 0) == QStringLiteral("a"),
               "SPLIT 第 1 段写入 PARTS:0");
         check(storage.getSystemVariable(QStringLiteral("RESULT"), 0) == 3,
               "SPLIT 段数写 RESULT == 3");

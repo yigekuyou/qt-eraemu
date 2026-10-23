@@ -334,33 +334,33 @@ int main(int argc, char* argv[]) {
         qDebug() << "      runner state =" << int(st) << "warnings:" << mt.parseWarnings();
         check(st == ExecState::Halt, "多维夹具运行到 HALT");
 
-        check(vs.getGlobalInt3D("GARR", 1, 2, 3) == 42, "GARR:1:2:3 落到 3D 元素 42");
+        check(vs.getGlobalInt3DInCurrentFrame("GARR", 1, 2, 3) == 42, "GARR:1:2:3 落到 3D 元素 42");
         // 脚本层 `GARR:23` 被静态检查拒绝（多维必须给足下标）。扁平写法只能在
         // 存储层出现：它现在是**同一个**多维扁平容器里的元素 23（=1*12+2*4+3）。
-        vs.setGlobalInt1D("GARR", 23, 7);
-        check(vs.getGlobalInt1D("GARR", 23) == 7, "GARR[23]（存储层扁平写）== 7");
-        check(vs.getGlobalInt3D("GARR", 1, 2, 3) == vs.getGlobalInt1D("GARR", 23),
+        vs.setGlobalInt1DInCurrentFrame("GARR", 23, 7);
+        check(vs.getGlobalInt1DInCurrentFrame("GARR", 23) == 7, "GARR[23]（存储层扁平写）== 7");
+        check(vs.getGlobalInt3DInCurrentFrame("GARR", 1, 2, 3) == vs.getGlobalInt1DInCurrentFrame("GARR", 23),
               "X:1:2:3 与 X[扁平] 落到同一槽位");
         // strides 正确性的直接护栏：不同下标元组必须落到不同槽位。dim0 的 stride
         // 若写错（例如用 1 而不是 lengths[1]*lengths[2]），GARR:1:0:0 与 GARR:0:0:1
         // 会别名到同一个扁平槽，下面两条断言就会红。
-        vs.setGlobalInt3D("GARR", 1, 0, 0, 43);
-        check(vs.getGlobalInt1D("GARR", 12) == 43, "GARR:1:0:0 落在扁平 12（=1*12+0*4+0）");
-        check(vs.getGlobalInt3D("GARR", 0, 0, 1) == 0,
+        vs.setGlobalInt3DInCurrentFrame("GARR", 1, 0, 0, 43);
+        check(vs.getGlobalInt1DInCurrentFrame("GARR", 12) == 43, "GARR:1:0:0 落在扁平 12（=1*12+0*4+0）");
+        check(vs.getGlobalInt3DInCurrentFrame("GARR", 0, 0, 1) == 0,
               "GARR:1:0:0 与 GARR:0:0:1 不别名（stride 正确）");
-        check(vs.arraySize("GARR") == 2, "arraySize(GARR) == 声明首维 2（不再读 1D 占位槽）");
-        check(vs.getGlobalInt1D("R_DIM2", 0) == 4, "VARSIZE(GARR,2) == 4（声明维）");
-        qDebug() << "      R_NODIM=" << vs.getGlobalInt1D("R_NODIM",0); check(vs.getGlobalInt1D("R_NODIM", 0) == 2, "当前 VARSIZE(GARR) == 2（1D 槽按首维分配）");
-        check(vs.getGlobalInt1D("R_SZ0", 0) == 2 && vs.getGlobalInt1D("R_SZ1", 0) == 3
-                  && vs.getGlobalInt1D("R_SZ2", 0) == 4,
+        check(vs.arraySizeInCurrentFrame("GARR") == 2, "arraySizeInCurrentFrame(GARR) == 声明首维 2（不再读 1D 占位槽）");
+        check(vs.getGlobalInt1DInCurrentFrame("R_DIM2", 0) == 4, "VARSIZE(GARR,2) == 4（声明维）");
+        qDebug() << "      R_NODIM=" << vs.getGlobalInt1DInCurrentFrame("R_NODIM",0); check(vs.getGlobalInt1DInCurrentFrame("R_NODIM", 0) == 2, "当前 VARSIZE(GARR) == 2（1D 槽按首维分配）");
+        check(vs.getGlobalInt1DInCurrentFrame("R_SZ0", 0) == 2 && vs.getGlobalInt1DInCurrentFrame("R_SZ1", 0) == 3
+                  && vs.getGlobalInt1DInCurrentFrame("R_SZ2", 0) == 4,
               "VARSIZE 语句一次写出 2/3/4（声明各维）");
-        check(vs.getGlobalInt2D("MAT", 1, 2) == 5, "私有 2D MAT:1:2 == 5");
-        check(vs.arraySize("MAT") == 2, "当前私有 MAT 的 1D 槽按首维分配 == 2");
-        check(vs.getGlobalInt1D("ONED", 2) == 9 && vs.arraySize("ONED") == 4,
+        check(vs.getGlobalInt2DInCurrentFrame("MAT", 1, 2) == 5, "私有 2D MAT:1:2 == 5");
+        check(vs.arraySizeInCurrentFrame("MAT") == 2, "当前私有 MAT 的 1D 槽按首维分配 == 2");
+        check(vs.getGlobalInt1DInCurrentFrame("ONED", 2) == 9 && vs.arraySizeInCurrentFrame("ONED") == 4,
               "单维 ONED 装载期按声明分配 4（行为保持不变）");
-        check(vs.getGlobalInt3D("GARR", 100, 0, 0) == 0, "越界读 == 0");
-        vs.setGlobalInt3D("GARR", 100, 0, 0, 5);
-        check(vs.getGlobalInt3D("GARR", 100, 0, 0) == 0, "多维越界写被忽略（不再懒扩容）");
+        check(vs.getGlobalInt3DInCurrentFrame("GARR", 100, 0, 0) == 0, "越界读 == 0");
+        vs.setGlobalInt3DInCurrentFrame("GARR", 100, 0, 0, 5);
+        check(vs.getGlobalInt3DInCurrentFrame("GARR", 100, 0, 0) == 0, "多维越界写被忽略（不再懒扩容）");
 
         // 存档字节：SMD 声明 2x3，只有 [1][2]=99；golden md5 钉在这里。
         //

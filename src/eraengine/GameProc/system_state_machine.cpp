@@ -285,7 +285,7 @@ void SystemStateMachine::setWaitInput() {
         m_systemResult = m_state->flowInputDef();
         if (strMode && m_storage) {
             m_storage->setGlobalStr1D(QStringLiteral("RESULTS"), 0,
-                                      m_state->flowInputDefString());
+                                      m_state->flowInputDefString(), eravar::kGlobalScope);
         }
         m_inputDeliveredImmediately = true;
         return;                       // 不请求 UI 输入、不挂起
@@ -573,7 +573,7 @@ ExecState SystemStateMachine::resumeString(const QString& value) {
     if (m_storage) {
         // [qdbug] 修复：RESULTS 全局（C# VariableData.cs:202，跨函数共享；
         //   INPUTS 写入的 RESULTS 在任何函数里都应读到）
-        m_storage->setGlobalStr1D(QStringLiteral("RESULTS"), 0, value);
+        m_storage->setGlobalStr1D(QStringLiteral("RESULTS"), 0, value, eravar::kGlobalScope);
     }
     // 字符串输入**不写 RESULT**（C#：INPUTS/INPUTANY 的字符串分支只写 RESULTS，
     // 「另一者保持原值」）。此前这里复用 resume(0)，会把 RESULT 清成 0 ——
@@ -705,7 +705,7 @@ void SystemStateMachine::waitTimedStringInput(int timeoutMs, const QString& defa
     if (timeoutMs > 0) {
         armTimedWait(timeoutMs, [this, wait, defaultValue]() {
             if (wait != m_waitGeneration) return;
-            m_storage->setGlobalStr1D(QStringLiteral("RESULTS"), 0, defaultValue);
+            m_storage->setGlobalStr1D(QStringLiteral("RESULTS"), 0, defaultValue, eravar::kGlobalScope);
             resume(0);
         });
     }

@@ -37,6 +37,10 @@ namespace forksupport {
 // （字面量/表达式不能作为输出目标 —— 对齐 C#「只有 VariableTerm 才回写」）。
 [[nodiscard]] QString refTargetName(const ExpressionNode* node);
 
+// 扩展层的作用域：扩展没有段身份，调用点就是「此刻正在跑的那一帧」。
+// 显式读 + 显式传参（存储层不再替调用方猜）；见 fork_extension.cpp 的说明。
+[[nodiscard]] eravar::ScopeId currentFrameScope(VariableStorage* storage);
+
 // 目标数组容量：系统变量走 VariableConfig（RESULT=1500 / RESULTS=100 等），
 // 用户变量走 VariableConfig / 已建容器（两者都拿不到时返回 fallback）。
 [[nodiscard]] int arrayCapacity(VariableStorage* storage, const QString& name);

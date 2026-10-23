@@ -933,15 +933,21 @@ VariableStorage::StrLocus VariableStorage::resolveStrLocus(const QString &nameOr
 				return l;
 		}
 		// 6) 角色字符串变量（CSTR / NAME / 用户 #DIMS CHARADATA）。
-		//    只有按名入口会命中这一行：Raw 的键来自装载期「变量分词」，而角色
-		//    字符串名在分词期已判 Chara/Dynamic，不会带着键进来（语义与旧
-		//    getStringSlotRaw 一致：那里没有这一行）。
-		if (keyState == StrKeyState::Name && isCharaDataString(nameOrKey)) {
-				int character = 0;
-				reduceCharaArgs(nameOrKey, indices, character, l.elements);
-				l.charaSlot = resolveCharaIndex(character);
-				l.kind = StrLocusKind::CharaStr;
-				return l;
+		//    **两种入参都命中这一行**：按名入口传名字；键语义入口（ResolvedKey）
+		//    传的键可能**就是**角色变量名本身 —— REF 别名把形参键解析成目标键
+		//    后，目标可以是一个角色字符串变量（`#DIMS REF PS` ← `CSTR`），此时
+		//    键文本与名字文本相同。只认名字会让这类读掉进 7) 的扁平槽（恒空）。
+		//    私有键/复合键不是角色变量名（isCharaDataString 按整串查注册表），
+		//    仍落到 7) —— 与旧的 Raw 语义只在这里多认出「键即角色名」一种。
+		{
+				const QString& charaName = keyState == StrKeyState::Name ? nameOrKey : l.key;
+				if (isCharaDataString(charaName)) {
+						int character = 0;
+						reduceCharaArgs(charaName, indices, character, l.elements);
+						l.charaSlot = resolveCharaIndex(character);
+						l.kind = StrLocusKind::CharaStr;
+						return l;
+				}
 		}
 		// 7) 普通扁平槽：1D 与多维共用一条序列（取址在 readStrSlot/writeStrSlot）。
 		l.kind = StrLocusKind::GlobalStr;

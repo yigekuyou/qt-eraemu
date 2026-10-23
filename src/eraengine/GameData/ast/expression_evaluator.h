@@ -302,7 +302,12 @@ private:
         const VariableNode* node = nullptr;
         VariableStorage* storage = nullptr;
         GameBaseData* gameBaseData = nullptr;
-        eravar::ScopeId scope = eravar::kGlobalScope;   // 按名解析使用的显式作用域
+        eravar::ScopeId scope = eravar::kGlobalScope;   // 下标 + 按名解析共用的作用域
+        // applyReferenceAlias 之后 varName 已**不是名字而是存储键**（或目标裸名，
+        // 两者在存储层是同一形态）。置位后终局读必须走 *Raw / ResolvedKey 入口
+        // ——把键当名字再解析一次，当前帧的私有名表会把目标名改道到本段的同名
+        // 私有变量（目标叫 RG、本段又有私有 RG 时，读到的就是本段那份）。
+        bool varNameIsKey = false;
         // 旧链的局部量（逐字沿用）：varName 可被 REF 别名重映射。
         QString varName;
         int count = 0;

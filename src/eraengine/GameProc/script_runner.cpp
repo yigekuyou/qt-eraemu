@@ -2190,14 +2190,16 @@ ExecState ScriptRunner::doCallLine(const LogicalLine& line, bool isForm, bool is
             expandable = expandable && p.fixedIndex >= 0 && p.varName.compare(actualName, Qt::CaseInsensitive) == 0;
         if (expandable) {
             QList<Operand> expanded;
+            // storageName 已是**解析后的存储键**（上一行 resolvedStorageName）：
+            // 键语义入口，不再按名解析一次（否则键会被当前帧私有名表改道）。
             const QString storageName = m_storage->resolvedStorageName(actualName, m_currentScopeId);
             expanded.append(evaluated.first());
             for (const UserParamDecl& p : info->params) {
                 Operand item;
                 item.isString = p.type == OperandType::Str;
                 item.raw = item.isString
-                    ? m_storage->getGlobalStr1D(storageName, p.fixedIndex)
-                    : QString::number(m_storage->getGlobalInt1D(storageName, p.fixedIndex));
+                    ? m_storage->getGlobalStr1DRaw(storageName, p.fixedIndex)
+                    : QString::number(m_storage->getGlobalInt1DRaw(storageName, p.fixedIndex));
                 expanded.append(item);
             }
             evaluated = expanded;
@@ -2462,6 +2464,12 @@ void ScriptRunner::bindArguments(const UserFunctionDecl* info, const QString& sc
                                  const QList<Operand>& callArgs,
                                  const QHash<QString, QString>& references,
                                  const QList<QVariant>* snapshots) {
+    // 顺序即正确性前提（(a) 类「形参绑定 / 数组操作」今天靠它偶然正确）：
+    // doCallLine 先 enterCall(scopeKey) 再调这里，下面所有**隐式当前帧**的写入
+    // （setStringSlot / setGlobalInt1D / setGlobalInt2D …）因此落到被调段而不是
+    // 调用者帧。这条断言把「顺序」从注释变成可观察前提 —— 若有人把 bindArguments
+    // 提到 enterCall 之前（或中间再切帧），元素形参就会静默写进调用者帧。
+    Q_ASSERT(m_storage->privateScopeId() == eravar::internName(scopeKey));
     const auto bindOne = [this, &references, info, &scopeKey](const UserParamDecl* p, int position,
                                 bool argIsString, const QString& strValue, qint64 intValue, const QVariant& snapshot = {}) {
         switch (p ? p->target : UserParamTarget::Unknown) {

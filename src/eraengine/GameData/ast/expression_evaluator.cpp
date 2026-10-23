@@ -885,7 +885,9 @@ bool ExpressionEvaluator::readStringParameterAlias(DynamicContext& ctx, QVariant
         const QString target = storage->resolvedStorageName(ctx.varName, ctx.scope);
         const int idx = node.indices().isEmpty() ? 0
             : static_cast<int>(resolveIndex(node, 0, storage, gameBaseData, ctx.scope));
-        out = toVariant(storage->getStringSlot(target, {idx}, ctx.scope));
+        // target 是**已解析的存储键**：走键语义入口，否则按名入口会把键当名字
+        // 再 storageName 一次（REF 目标裸名 + 本段同名私有名 -> 读到本段那份）。
+        out = toVariant(storage->getStringSlotRaw(target, {idx}));
         return true;
     }
     return false;
@@ -899,6 +901,8 @@ bool ExpressionEvaluator::applyReferenceAlias(DynamicContext& ctx, QVariant& out
         // 只有已登记为 REF 的整数形参才切换到目标系统变量路由；
         // 普通私有作用域名称解析为 COLLECT 前缀键仍应保留原变量语义。
         ctx.varName = ctx.storage->resolvedStorageName(ctx.varName, ctx.scope);
+        // 从这一刻起 varName 是键：终局读必须走键语义入口（见 varNameIsKey）。
+        ctx.varNameIsKey = true;
     }
     return false;
 }
@@ -1194,7 +1198,11 @@ bool ExpressionEvaluator::readStringVariable(DynamicContext& ctx, QVariant& out)
             }
             idx = static_cast<int>(resolveIndex(node, 0, storage, gameBaseData, ctx.scope));
         }
-        out = toVariant(storage->getStringSlot(storage->resolvedStorageName(ctx.varName, ctx.scope), {idx}));
+        // 键已解析（REF 别名重映射）时走键语义入口；否则按名解析一次再走键入口
+        // ——「先解析成键、再把键当名字传给按名入口」就是二次解析。
+        const QString key = ctx.varNameIsKey ? ctx.varName
+                                             : storage->resolvedStorageName(ctx.varName, ctx.scope);
+        out = toVariant(storage->getStringSlotRaw(key, {idx}));
         return true;
     }
     return false;
@@ -1232,13 +1240,15 @@ bool ExpressionEvaluator::readIndexedArray(DynamicContext& ctx, QVariant& out)
         if (dim >= 2 && indices.size() >= 2 && !storage->hasSystemVariable(ctx.varName)) {
             const QList<int> ids = resolveIndices(node, storage, gameBaseData, ctx.scope);
             if (dim >= 3 && ids.size() >= 3) {
-                out = QVariant::fromValue<qint64>(
-                    storage->getGlobalInt3D(ctx.varName, ids.at(0), ids.at(1), ids.at(2)));
+                out = QVariant::fromValue<qint64>(ctx.varNameIsKey
+                    ? storage->getGlobalInt3DRaw(ctx.varName, ids.at(0), ids.at(1), ids.at(2))
+                    : storage->getGlobalInt3D(ctx.varName, ids.at(0), ids.at(1), ids.at(2)));
                 return true;
             }
             if (ids.size() >= 2) {
-                out = QVariant::fromValue<qint64>(
-                    storage->getGlobalInt2D(ctx.varName, ids.at(0), ids.at(1)));
+                out = QVariant::fromValue<qint64>(ctx.varNameIsKey
+                    ? storage->getGlobalInt2DRaw(ctx.varName, ids.at(0), ids.at(1))
+                    : storage->getGlobalInt2D(ctx.varName, ids.at(0), ids.at(1)));
                 return true;
             }
         }
@@ -1256,7 +1266,8 @@ bool ExpressionEvaluator::readIndexedArray(DynamicContext& ctx, QVariant& out)
         }
 
         // Fall back to global variable
-        out = QVariant(storage->getGlobalInt1D(ctx.varName, index));
+        out = QVariant(ctx.varNameIsKey ? storage->getGlobalInt1DRaw(ctx.varName, index)
+                                        : storage->getGlobalInt1D(ctx.varName, index));
         return true;
     }
     return false;
@@ -1275,7 +1286,8 @@ bool ExpressionEvaluator::readSimpleVariable(DynamicContext& ctx, QVariant& out)
     }
 
     // Regular global variable
-    out = QVariant(storage->getGlobalInt1D(ctx.varName, 0));
+    out = QVariant(ctx.varNameIsKey ? storage->getGlobalInt1DRaw(ctx.varName, 0)
+                                    : storage->getGlobalInt1D(ctx.varName, 0));
     return true;
 }
 

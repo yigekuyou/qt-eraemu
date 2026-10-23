@@ -400,6 +400,9 @@ add_test(NAME test_name_locus COMMAND test_name_locus)
 # 名字 -> 字符串存储的解析顺序（与 IntLocus 同形的唯一解析点护栏）
 eraengine_add_test(test_string_locus)
 add_test(NAME test_string_locus COMMAND test_string_locus)
+# 「谁的作用域」运行期护栏：形参绑定 / 默认值 / REF 别名不得用隐式当前帧解析
+eraengine_add_test(test_scope_plumbing)
+add_test(NAME test_scope_plumbing COMMAND test_scope_plumbing)
 eraengine_add_test(test_erb_preprocessor)
 eraengine_add_test(test_async_load)
 eraengine_add_test(test_async_lifecycle)

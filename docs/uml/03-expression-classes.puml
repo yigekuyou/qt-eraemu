@@ -108,8 +108,12 @@ title 表达式 AST 与变量访问描述符
     + installPrivateScopeTable(table)           ' 装载期一次
     + privateScopeTableInstalled() : bool
     + saveReadiness() : SaveReadiness           ' 存档前置条件（显式）
-    + readIntByName(name, indices, scope) : qint64   ' 唯一按名读原语
-    + writeIntByName(name, indices, value, scope)    ' 唯一按名写原语
+    - resolveIntLocus(name, indices, scope) : IntLocus  ' 按名判定唯一定义点（行序即语义）
+    - IntLocus { kind, key, charaId, e0, e1, e2 }      ' 解析产物：位置是数据
+    - IntLocusKind { Parameter, CharaInt1D/2D, CharaStrAsInt, Arg, Local, StringSlot, System, Global3D/2D/1D }
+    + readIntByName(name, indices, scope) : qint64   ' 唯一按名读原语（解析一次 → switch kind）
+    + writeIntByName(name, indices, value, scope)    ' 唯一按名写原语（同一 IntLocus，无第二份顺序）
+    ' 两个 switch 无 default：漏一个 case 在 -Wswitch + -Werror 下编译失败
     + storageKeyFor(key) : const QString&       ' 唯一 id→存储串入口（记忆化）
     + shapeOf(name, scope) : ArrayShape         ' 形状唯一入口（声明 → 装载期尺寸表 → 多维几何）
     + allocatedSlots(key) : int                 ' 容器分配量（不是形状）

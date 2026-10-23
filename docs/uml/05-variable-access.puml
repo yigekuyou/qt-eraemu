@@ -20,9 +20,13 @@ partition "装载期定型，运行期只查表" {
   node.accessKey { scopeId, nameId };
   if (usesKey(kind) ?) then (是：键自足)
     if (裸键 且 下标数 != 声明维数 ?) then (是)
-      :按名原语
-      readIntByName / writeIntByName(名字, 下标, scope)
-      —— 其行为即旧路 throw;
+      :按名原语：解析一次，位置是数据
+      resolveIntLocus(名字, 下标, scope) → IntLocus: kind / key / charaId / e0..e2
+      判定顺序只在这一处（行序即语义）：
+      形参 → 角色 → ARG/LOCAL → ARGS/LOCALS/RESULTS → 系统变量 → 2D/3D → 1D;
+      :读 / 写各一次穷尽 switch(kind)
+      无 default：漏一类 = -Wswitch + -Werror 编译失败
+      —— 顺序不再有两份手写副本;
     else (否)
       :槽位直取（不读作用域）
       GlobalInt*DRaw / getStringSlotRaw
@@ -52,6 +56,9 @@ legend right
     同名 @F 的两份声明是两个段、两套私有域。身份文本由
     eravar::segmentKeyText 唯一构造（总含 ':'，与变量名 id 不可能撞车），
     装载期写进 line.scopeKey，运行期只 intern 一次、不按名字回查。
+  · 按名原语也只有一份顺序：`resolveIntLocus` 解析一次产出 `IntLocus`（位置是数据），
+    读/写只是两个穷尽 `switch(kind)`。旧形态是读链、写链各一份手写 if 顺序（加一类漏一边
+    时编译期不报，症状是「写进去的那一格读出来是另一格」），且头注释是第三份、还与两者不符。
   · 两条例外是 Era 语义，不是实现分叉：
     - 私有键（scopeId != 0）保持宽松 1 维读
     - 裸键维数不符 → 按名原语（旧路在那一处的 throw）

@@ -10,7 +10,7 @@ PlantUML 源码。所有图都是**当前代码**的静态结构，不包含计�
 | `02-runtime-classes.puml` | 类图 | 运行期：`ExecutionEngine` / `ScriptRunner` 单步状态机 / `ProcessState` / `LoopFrame`（作用是显式 `ScopeId`；位置推进经 `position` 自由函数） |
 | `03-expression-classes.puml` | 类图 | 表达式 AST、`AccessKind` 16 值、`VariableKey{scopeId,nameId}`、名字 intern 表、`resolverTable` |
 | `04-load-pipeline.puml` | 时序图 | 装载流水线：CSV → 逐文件解析 → `m_loadPasses[7]` 表驱动收尾（每步独立 sink + `replaceOrigin`）→ 诊断 |
-| `05-variable-access.puml` | 活动图 | 运行期变量访问：两条入口 → 一张 resolver 表 → 唯一按名原语；作用域 = 段身份（装载期写进 `line.scopeKey`） |
+| `05-variable-access.puml` | 活动图 | 运行期变量访问：两条入口 → 一张 resolver 表 → 唯一按名原语（解析一次产出 `IntLocus`，读/写各一个穷尽 switch）；作用域 = 段身份（装载期写进 `line.scopeKey`） |
 | `06-diagnostics.puml` | 类图 | 诊断模型：`ParseDiagnostics` / `ParseDiagnostic` / `DiagEffect` / `DiagOrigin`（pass 切片）/ `DiagCode` 全码与产生步骤 |
 | `07-static-checks.puml` | 卡片图 | `checkStaticValues` 检查目录（C1..C4）与已验证口径 |
 | `08-save-load.puml` | 时序图 | 存档 / 读档：`erasave::Map`（条目 ↔ 身份的唯一一张表）、`SaveReadiness` 前置条件、版本常量与旧档判废、私有条目写盘名可还原段身份 |
@@ -71,9 +71,17 @@ plantuml -txmi docs/uml/01-load-classes.puml
   不消费，于是 `evaluateCondition` 对它们直接传 `kGlobalScope`，**不取位置、不查段身份**。
   `evaluateAst` 收显式 `ScopeId`（无默认参数 —— 不允许静默回落到「解释器停在哪一行」）。
   旧形态：每条 IF/SIF/WHILE 都无条件 `executionScopeId()`（QString 哈希 + toUpper + intern 互斥）。
-- **单一按名原语**：`VariableStorage::readIntByName` / `writeIntByName(name, indices, scope)` 是
-  「名字 + 下标 → 存储」的唯一实现（顺序：形参 → 角色 → ARG/LOCAL → ARGS/LOCALS/RESULTS →
-  系统变量 → 2D/3D → 1D）。存储容器仍是字符串键（存档格式不变），id → 串只在 `storageKeyFor` 一处。
+- **单一按名原语，且顺序只有一份**：`VariableStorage::readIntByName` / `writeIntByName(name, indices, scope)`
+  仍是「名字 + 下标 → 存储」的唯一入口，但它们不再各自重走一遍判定：`resolveIntLocus` 解析一次，
+  产出 `IntLocus{ kind, key, charaId, e0..e2 }`（**位置是数据**），读/写各自只做一次
+  `switch(kind)`，`kind` 是 11 值枚举且两个 switch **都没有 `default`** —— 漏一类在
+  `-Wswitch` + `-Werror` 下直接编译失败。判定行序即语义：形参 → 角色（字符串/1 维/2 维）→
+  ARG/LOCAL → ARGS/LOCALS/RESULTS → 系统变量 → 声明维数 ≥2 的 2D/3D → 1D。
+  旧形态是**三份副本**：头注释一份（还写错成「整型读为 0」，实际读落到 1D 槽）、读链一份、
+  写链一份；往一边加一类而忘另一边时编译期不报、语料也未必报，症状是「写进去的那一格
+  读出来是另一格」。`ARGS/LOCALS/RESULTS` 的读写不对称是 Era 语义、不是实现分叉，由
+  `test_name_locus` 的 51 条断言显式钉住（不是消掉）。`storageKeyFor` 仍是唯一 id→串入口，
+  存储容器仍是字符串键（存档格式不变）。
 - `writeLoopCounter` 写的是「计数器固定下标上的循环值」——值是值，不是下标，因此没有「循环值越界」检查。
 - **收尾 pass 表**：`m_loadPasses[7] = { label, run, origin, gate, phaseAfter }`，表即流程
   （顺序 = 执行顺序，日志文案也取自表）。`run` 的类型是 `PassAction`
@@ -209,17 +217,19 @@ plantuml -txmi docs/uml/01-load-classes.puml
 `dump_warnings` 五语料（`eraTW` / `eraMegaten` / `eraTetris` / `FL3.8` / `ecd`）：
 **6 / 2 / 0 / 0 / 0** 行（`eraMegaten` 的目录参数必须是 `eraMegaten/data`；用错路径会得到
 0 字节的假基线），与 `/tmp/uml-baseline/*.raw.txt` **未排序**逐字节相同。
-累计三十六个重构（身份整数化 / 全定型 / 作用域显式化 / 只读收尾外移 / 存档独立映射 /
+累计三十七个重构（身份整数化 / 全定型 / 作用域显式化 / 只读收尾外移 / 存档独立映射 /
 私有名表前移 / 存档顺序确定性 / 写收尾外移 / 标记区外移 / 位置区外移 /
 标签归属单一索引 / 诊断切片幂等 / 常数作用域参数化 / 增量装载协议显式化 /
 GOTO 段身份入索引 / 静态检查用段身份 / 删第三张裸名表 / 错误去重 / 配对语法只判一次 /
 越界判定只判一次 / 常量下标装载期求值 / 多维独立形态 / 私有作用域按段身份 / 存档版本常数化 / LSP 侧段身份 / 函数表按脚本换贡献 / 删装载器第二份脚本清单 / CALL 入口吃段身份原文 / 删标记区三张整表副本 / 删 ScriptData::jumpTo /
  数组形状单一入口 / 收尾 pass 表单一形态 / 删 PositionState::depth 副本 / 删只写不读的 scopeId 缓存 /
- 容器形态单一化（一个键一条扁平槽位序列）/ 条件范围装载期定完（conditionNeedsScope））前后完全一致；
-`ctest` 48 → 62（新增 `test_parse_checks` / `test_save_variable_map` / `test_private_scope_table` /
+ 容器形态单一化（一个键一条扁平槽位序列）/ 条件范围装载期定完（conditionNeedsScope）/
+ 按名原语的解析顺序单一化（IntLocus + 两个穷尽 switch））前后完全一致；
+`ctest` 48 → 63（新增 `test_parse_checks` / `test_save_variable_map` / `test_private_scope_table` /
 `test_load_contracts` / `test_save_variable_map_hashseed` / `test_jump_markings` /
 `test_position_state` / `test_goto_label_lookup` / `test_structure_pairing` / `test_index_bounds` /
-`test_segment_scope` / `test_array_shape` / `test_storage_form` / `test_condition_scope`）。
+`test_segment_scope` / `test_array_shape` / `test_storage_form` / `test_condition_scope` /
+`test_name_locus`）。
 
 装载耗时（eraTW，2260 文件 / 2.11M 逻辑行，12 线程）：`load` 41 s → **22.8 s**
 （scan 129 ms / parse 8.4 s / merge 4.9 s），收尾 `markLoadComplete` 23.3 s → 6.5 s，

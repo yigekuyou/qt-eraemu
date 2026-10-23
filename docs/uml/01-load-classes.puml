@@ -138,7 +138,7 @@ package "GameProc" {
 
   package "position（位置区，自由函数）" {
     struct PositionState {
-      script / line / callStack / depth / jumped
+      script / line / callStack / jumped   ' 栈深 = callStack.size()（没有 depth 副本）
       scopeIdName / scopeId / scopeIdValid   ' executionScopeId 的缓存
     }
     struct PositionEffects {
@@ -276,7 +276,8 @@ end note
 
 note right of PosFns
   位置区的复杂度落在三样**数据**上：
-  · PositionState —— 执行位置 + 调用栈（depth 是 callStack.size() 的缓存）；
+  · PositionState —— 执行位置 + 调用栈（栈深就是 callStack.size()，
+    depth() 是这个集合的公开名字，不是第二份副本）；
   · PositionEffects —— 一次转移要广播哪四个信号（不含顺序）；
   · ScriptView —— 它只读的两张表（scripts / labelIndex），
     不复用 ParseIrView（那 5 个字段位置区一个都不读）。

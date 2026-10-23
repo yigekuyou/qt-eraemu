@@ -207,6 +207,88 @@ public:
         }
         return false;
     }
+    // 该 kind 的读写是否**消费执行位置（作用域）**。
+    // 唯一的判据：该 kind 的读写路径里是否有代码拿 scope 去把**名字**解析成
+    // 存储键 / 槽位（storageName / resolvedStorageName / getStringSlot(…, scope) /
+    // 常数表的 scope 参数），或把 scope 直接交给按名原语。逐 kind 对照运行期
+    // 的分派点 —— 读：readIntNode + evaluateVariable 的 resolver 表；
+    // 写：writeIntNode + assignVariable —— 一条不漏：
+    //
+    //   GlobalInt1/2/3、GlobalStr1/2/3
+    //       读 readIntNode/readKeyedInt（getGlobalInt*DRaw）、readKeyedStr
+    //       （getStringSlotRaw）；写 writeIntNode、assignVariable（setGlobal*DRaw）。
+    //       静态键直取，scope 不进任何接口。
+    //       （下标表达式的 scope 由 walkApply 递归计入，属于下标节点自己的 kind。）
+    //   LocalSlot / ArgSlot
+    //       读 readKeyedLocalArgInt、写 writeIntNode/assignVariable：
+    //       getLocalInt / setLocalInt / getArgInt / setArgInt，只用槽号。
+    //   LocalStr / ArgStr
+    //       读 readKeyedLocalArgStr（getStringSlotRaw("LOCALS"/"ARGS")）；
+    //       写 writeIntNode/assignVariable 落进 writeIntByName 的 ARGS/LOCALS
+    //       分支直接返回（字符串槽不自增），不产生写入。
+    //   System
+    //       读 readIntNode 回退 readIntByName、写 writeIntByName：名单里的名字
+    //       全是整型（无字符串系统名），且 hasSystemVariable 优先于按名取槽 ——
+    //       脚本私有同名声明遮蔽不了系统槽，scope 不改变结果。
+    //   Pseudo
+    //       readGameBase / readLineCount / readRandom / readIntLimits /
+    //       readRandData / readLastLoad 都按**名字**命中，不解析 ctx.varName。
+    //       只有「脚本把保留名当私有变量声明」（`#DIMS RESULTS` 之类，Emuera
+    //       下同样不生效的错误写法）才会让 readStringParameterAlias 的 aliased
+    //       分支抢在前头；该写法五语料 0 命中，维持 false 以免每个 RAND 条件
+    //       都去取位置。
+    //   Param
+    //       readStringParameterAlias：aliased && Str 且**带下标**时走
+    //           storage->resolvedStorageName(ctx.varName, ctx.scope)
+    //           storage->getStringSlot(target, {idx}, ctx.scope)
+    //       读的是该形参在**本函数私有作用域**里的槽位（`#DIMS S, N` 的数组
+    //       元素，声明默认值），不是裸名槽。判成 false 时 aliased 恒假、这一
+    //       分支被跳过：值绑定过的形参先命中 readParameter（实测读到
+    //       m_parameters，见 test_condition_scope 的 1b 段），未绑定的落到
+    //       裸名槽 —— 两种都是静默读到另一份存储。
+    //       另外 readCharaData 对 CHARADATA 形参同样收 scope
+    //       （resolvedStorageName + getStringSlot(name, ids, ctx.scope)）。
+    //       写侧不取 scope：writeIntByName / writeStructuredValue 对
+    //       hasParameter 的名字一律短路到值绑定（setParameter）；条件求值只读，
+    //       判据按读侧定。
+    //   Chara
+    //       读 readCharaData：resolvedStorageName(ctx.varName, ctx.scope) +
+    //       getStringSlot(name, ids, ctx.scope) / getCharaInt(3D)；
+    //       写 writeIntByName 的 isCharaDataVariable 分支用同一个 resolvedStorageName。
+    //   Const
+    //       readConst：m_constArrayChecker / m_constArrayProvider / m_constProvider
+    //       都收 scope（私有 #DIM CONST 按函数作用域查表；常量不进私有名表，
+    //       所以只能在这里消费）。常量不可写。
+    //   Dynamic
+    //       回退 readIntByName(name, indices, scope)，以及 resolver 表里的
+    //       readStringParameterAlias / applyReferenceAlias / readCharaData /
+    //       readConst / readStringVariable —— 全部按名解析。
+    //
+    // 这是「条件求值要不要取 executionScopeId()」的装载期判据：
+    // 由 walkApply 一趟 OR 出来写进 LogicalLine::conditionNeedsScope，运行期只读。
+    [[nodiscard]] static constexpr bool needsExecutionScope(AccessKind k) noexcept {
+        switch (k) {
+        case AccessKind::Param:
+        case AccessKind::Chara:
+        case AccessKind::Const:
+        case AccessKind::Dynamic:
+            return true;
+        case AccessKind::GlobalInt1:
+        case AccessKind::GlobalInt2:
+        case AccessKind::GlobalInt3:
+        case AccessKind::GlobalStr1:
+        case AccessKind::GlobalStr2:
+        case AccessKind::GlobalStr3:
+        case AccessKind::LocalSlot:
+        case AccessKind::ArgSlot:
+        case AccessKind::LocalStr:
+        case AccessKind::ArgStr:
+        case AccessKind::Pseudo:
+        case AccessKind::System:
+            return false;
+        }
+        return true;   // 未知 kind：保守取位置（不会发生）
+    }
     // kind -> 位掩码的一位（运行期 resolver 表的 kinds 列用）。
     [[nodiscard]] static constexpr quint16 bit(AccessKind k) noexcept {
         return static_cast<quint16>(1u << static_cast<unsigned>(k));

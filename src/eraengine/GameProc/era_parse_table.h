@@ -463,7 +463,9 @@ public:
 
     // 用缓存 AST 求值条件；返回 false 表示求值失败。
     bool evaluateCondition(const QString& scriptName, int line, bool& out, int argIndex = -1);
-    bool evaluateAst(const QSharedPointer<ExpressionNode>& ast, bool& out);
+    // scope 必须显式给出（无默认参数：杜绝「忘了传就静默用当前位置」）。
+    bool evaluateAst(const QSharedPointer<ExpressionNode>& ast, bool& out,
+                     eravar::ScopeId scope);
 
     // ---- 位置区查询 ----
     // perf：返回引用而非按值拷贝（stepOnce/executeLine 每条指令都调用，

@@ -307,14 +307,15 @@ bool EraParseTable::callLabelAt(const QString& scriptName, int line,
 // 只读区：条件求值（优先使用缓存 AST）
 // ---------------------------------------------------------------------------
 
-bool EraParseTable::evaluateAst(const QSharedPointer<ExpressionNode>& ast, bool& out) {
+bool EraParseTable::evaluateAst(const QSharedPointer<ExpressionNode>& ast, bool& out,
+                                eravar::ScopeId scope) {
     if (!ast) {
         if (m_state) m_state->setErrorState();
         return false;
     }
     ExpressionEvaluator local;
     ExpressionEvaluator* ev = m_evaluator ? m_evaluator : &local;
-    const QVariant v = ev->evaluate(*ast, m_variableStorage, m_gameBaseData, executionScopeId());
+    const QVariant v = ev->evaluate(*ast, m_variableStorage, m_gameBaseData, scope);
     if (!v.isValid()) {
         if (m_state) m_state->setErrorState();
         return false;
@@ -329,10 +330,14 @@ bool EraParseTable::evaluateCondition(const QString& scriptName, int line, bool&
         return false;
     }
     if (ll->condition) {
-        return evaluateAst(ll->condition, out);
+        // 装载期已定：这条条件是否消费执行位置（Param/Chara/Const/Dynamic 才要）。
+        // false 时直接 kGlobalScope —— 不取位置、不查段身份；那些 kind 忽略它。
+        return evaluateAst(ll->condition, out,
+                           ll->conditionNeedsScope ? executionScopeId() : eravar::kGlobalScope);
     }
     if (argIndex >= 0 && argIndex < ll->arguments.size() && ll->arguments.at(argIndex).ast) {
-        return evaluateAst(ll->arguments.at(argIndex).ast, out);
+        // 实参条件（非 condition 字段）没有装载期 datum，保持旧行为。
+        return evaluateAst(ll->arguments.at(argIndex).ast, out, executionScopeId());
     }
     if (m_state) m_state->setErrorState();
     return false;

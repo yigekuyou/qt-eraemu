@@ -205,10 +205,15 @@ public:
     // ExpressionEvaluator / storage / 作用域），本表不依赖求值器类型。
     // 返回 nullopt = 求值失败；返回值必须是「运行期同一表达式的结果」。
     using ConstantIndexEvaluator = std::function<std::optional<qint64>(const ExpressionNode&)>;
+    // needsScope（可选出参）：同一趟 walk 里 OR 出「这棵树是否有任一
+    // VariableNode 的 kind 需要执行位置」（Param/Chara/Const/Dynamic，见
+    // VariableNode::needsExecutionScope）。调用方先置 false；本函数只做 |=。
+    // 条件 AST 的唯一写入点就是这里（收尾定型 -> LogicalLine::conditionNeedsScope）。
     static void applyTypes(ExpressionNode& node, const VariableTable& table,
                            const QString& function = QString(),
                            const QSet<QString>* paramNames = nullptr,
-                           const ConstantIndexEvaluator& evalConst = {});
+                           const ConstantIndexEvaluator& evalConst = {},
+                           bool* needsScope = nullptr);
 
     // ---- 调试：访问描述符判定分布（默认关闭；EMUERA_KIND_STATS=1 才计数）----
     // 只给 dump_warnings --kind-stats 用：一次装载后按 kind 数变量引用节点。

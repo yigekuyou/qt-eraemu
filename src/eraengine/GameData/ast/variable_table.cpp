@@ -241,7 +241,8 @@ void fillConstantIndex(ExpressionNode& idx,
 void walkApply(ExpressionNode& node, const VariableTable& table, const QString& function,
                const QSet<QString>* paramNames,
                const VariableTable::ConstantIndexEvaluator& evalConst,
-               const indexbounds::ConstNameResolver& resolveConst) {
+               const indexbounds::ConstNameResolver& resolveConst,
+               bool* needsScope) {
     switch (node.kind()) {
     case NodeKind::Variable: {
         auto& var = static_cast<VariableNode&>(node);
@@ -260,10 +261,14 @@ void walkApply(ExpressionNode& node, const VariableTable& table, const QString& 
             }
         }
         computeVariableAccess(var, table, function, paramNames);
+        // 条件求值的装载期判据（与 accessKind 同一趟、同一写入点）：
+        // 任一引用需要执行位置 -> 整棵树 needsScope。下标里的引用同样递归计入。
+        if (needsScope && VariableNode::needsExecutionScope(var.accessKind))
+            *needsScope = true;
         // 先递归（子下标定型）再回填常量值：isConstantIndexExpression 读的是
         // 子节点**定型后**的 accessKind，值是求值器按同一棵（已定型）树算的。
         for (auto& idx : var.indices()) {
-            if (idx) walkApply(*idx, table, function, paramNames, evalConst, resolveConst);
+            if (idx) walkApply(*idx, table, function, paramNames, evalConst, resolveConst, needsScope);
         }
         for (auto& idx : var.indices()) {
             if (idx) fillConstantIndex(*idx, resolveConst, evalConst);
@@ -272,35 +277,35 @@ void walkApply(ExpressionNode& node, const VariableTable& table, const QString& 
     }
     case NodeKind::BinaryOp: {
         auto& op = static_cast<BinaryOpNode&>(node);
-        if (op.left())  walkApply(*op.left(), table, function, paramNames, evalConst, resolveConst);
-        if (op.right()) walkApply(*op.right(), table, function, paramNames, evalConst, resolveConst);
+        if (op.left())  walkApply(*op.left(), table, function, paramNames, evalConst, resolveConst, needsScope);
+        if (op.right()) walkApply(*op.right(), table, function, paramNames, evalConst, resolveConst, needsScope);
         break;
     }
     case NodeKind::UnaryOp: {
         auto& op = static_cast<UnaryOpNode&>(node);
-        if (op.operand()) walkApply(*op.operand(), table, function, paramNames, evalConst, resolveConst);
+        if (op.operand()) walkApply(*op.operand(), table, function, paramNames, evalConst, resolveConst, needsScope);
         break;
     }
     case NodeKind::Function: {
         auto& fn = static_cast<FunctionNode&>(node);
         for (auto& a : fn.arguments()) {
-            if (a) walkApply(*a, table, function, paramNames, evalConst, resolveConst);
+            if (a) walkApply(*a, table, function, paramNames, evalConst, resolveConst, needsScope);
         }
         break;
     }
     case NodeKind::If: {
         auto& n = static_cast<IfNode&>(node);
-        if (n.condition()) walkApply(*n.condition(), table, function, paramNames, evalConst, resolveConst);
-        if (n.thenExpr())  walkApply(*n.thenExpr(), table, function, paramNames, evalConst, resolveConst);
-        if (n.elseExpr())  walkApply(*n.elseExpr(), table, function, paramNames, evalConst, resolveConst);
+        if (n.condition()) walkApply(*n.condition(), table, function, paramNames, evalConst, resolveConst, needsScope);
+        if (n.thenExpr())  walkApply(*n.thenExpr(), table, function, paramNames, evalConst, resolveConst, needsScope);
+        if (n.elseExpr())  walkApply(*n.elseExpr(), table, function, paramNames, evalConst, resolveConst, needsScope);
         break;
     }
     case NodeKind::StrForm: {
         auto& n = static_cast<StrFormNode&>(node);
         for (auto& p : n.parts()) {
             if (p.type == StrFormPartType::Expression && p.expression) {
-                walkApply(*p.expression, table, function, paramNames, evalConst, resolveConst);
-                if (p.width) walkApply(*p.width, table, function, paramNames, evalConst, resolveConst);
+                walkApply(*p.expression, table, function, paramNames, evalConst, resolveConst, needsScope);
+                if (p.width) walkApply(*p.width, table, function, paramNames, evalConst, resolveConst, needsScope);
             }
         }
         break;
@@ -538,12 +543,12 @@ void VariableTable::clear() {
 
 void VariableTable::applyTypes(ExpressionNode& node, const VariableTable& table,
                                const QString& function, const QSet<QString>* paramNames,
-                               const ConstantIndexEvaluator& evalConst) {
+                               const ConstantIndexEvaluator& evalConst, bool* needsScope) {
     // 常量名查询器在**一趟定型**里只建一次（captures 是引用，寿命覆盖整趟）。
     // 没有求值器时完全不建（不产生每节点的 std::function 分配）。
     static const indexbounds::ConstNameResolver kNoConstNames;
     if (!evalConst) {
-        walkApply(node, table, function, paramNames, evalConst, kNoConstNames);
+        walkApply(node, table, function, paramNames, evalConst, kNoConstNames, needsScope);
         return;
     }
     const indexbounds::ConstNameResolver resolveConst =
@@ -552,7 +557,7 @@ void VariableTable::applyTypes(ExpressionNode& node, const VariableTable& table,
         if (table.constInt(name, v, function)) return v;
         return std::nullopt;
     };
-    walkApply(node, table, function, paramNames, evalConst, resolveConst);
+    walkApply(node, table, function, paramNames, evalConst, resolveConst, needsScope);
 }
 
 // ---------------------------------------------------------------------------

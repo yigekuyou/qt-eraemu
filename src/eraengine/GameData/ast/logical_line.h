@@ -315,6 +315,13 @@ struct LogicalLine {
     //   GETMILLISECOND / CURRENTREDRAW / GETTIME / REPLACE LOCALS, "a", "b" …
     bool           isFunctionCall = false;
 
+    // 条件 AST（condition）的变量引用是否需要执行位置（作用域）。
+    // **唯一写入点**：收尾定型 applyVariableTypes 对 line.condition 的同一趟
+    // walkApply（与 accessKind 同趟）。运行期 evaluateCondition 只读：
+    //   true  -> 取 executionScopeId()（Param/Chara/Const/Dynamic 按名解析要 scope）
+    //   false -> 直接用 eravar::kGlobalScope（键自足/忽略 scope 的 kind）
+    bool conditionNeedsScope = false;
+
     // 诊断（errMes 是冷字段，见 LineExtras；isError 常与热路径判定同行，留内联）
     bool    isError = false;
 

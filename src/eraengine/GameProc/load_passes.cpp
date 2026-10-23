@@ -631,7 +631,18 @@ void applyVariableTypes(LoadContext& ctx) {
                 PrintTemplateCompiler::prepare(ast);
             };
             for (auto& op : line.arguments) bind(op.ast);
-            bind(line.condition);
+            // 条件 AST：needsScope 必须与 accessKind 同趟算出（唯一写入点，
+            // 运行期只读）。条件节点按行独立解析，不与实参/模板共享；这里
+            // 不走 seen 早退 —— 即便共享，重走一趟也只是幂等重写
+            // accessKind/constantIndex，代价是一棵条件树。
+            line.conditionNeedsScope = false;
+            if (line.condition) {
+                seen->insert(line.condition.data());
+                VariableTable::applyTypes(*line.condition, ctx.variables, scope, paramNames,
+                                          constantIndexEvaluator(ctx, scope),
+                                          &line.conditionNeedsScope);
+                PrintTemplateCompiler::prepare(line.condition);
+            }
             // 先查空再取可写引用：mutableColumnDefaults() 会懒建 extras，
             // 若无条件调用，每行都会分配一份 LineExtras（2.11M 行 ≈ 236 MB），
             // 把这次瘦身全部抵消掉。columnDefaults 在 eraTW 上是 0 行。

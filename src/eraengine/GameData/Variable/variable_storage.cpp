@@ -104,141 +104,334 @@ VariableStorage::VariableStorage(QObject *parent)
 }
 
 // ---------------------------------------------------------------------------
-// 多维数组（dimension >= 2）
+// 扁平槽位序列（唯一的容器形态）
 //
-// 存储形态与单维**不同**：单维是 m_globalInt1D / m_globalStr1D 的轻量 QList，
-// 多维是这里的一张扁平表（m_globalIntN / m_globalStrN）+ 装载期算好的 strides。
-// 形状（lengths/strides/elementCount）来自 VariableDecl；本类只持有一份装载期
-// 拷入的视图（QList 是 COW），运行期只读。
+// 每个存储键 = 一条扁平 QList；维数不决定容器，只决定取址几何：
+//     offset = Σ idx[d] · strides[d]        （addressOf，唯一的取址公式）
+// CHARADATA 在同一布局上加角色 stride：
+//     slot   = charaSlot · elementCount + offset
+// 形状仍只由 shapeOf 回答；容器里的几何缓存（m_geometries / m_charaGeometries）
+// 只有 installGeometry 一个写入点，缓存的是**同一份**事实（strides 是 shapeOf
+// 不提供的、每次取址都需要的量）。
 // ---------------------------------------------------------------------------
-std::optional<qint64> VariableStorage::flattenMultiDim(const QString& storageKey,
-                                                       const QList<int>& indices,
-                                                       bool warnOnBound,
-                                                       const char* operation) const
-{
-    const auto it = m_multiDimShapes.constFind(storageKey);
-    if (it == m_multiDimShapes.constEnd()) return std::nullopt;
-    const MultiDimShape& shape = it.value();
-    const auto reject = [&](const QString& why) -> std::optional<qint64> {
-        if (warnOnBound)
-            qWarning().noquote() << "[var] 多维变量" << storageKey << operation
-                                 << "越界（忽略）:" << why << "indices=" << indices;
-        return std::nullopt;
-    };
-    if (shape.lengths.isEmpty() || shape.elementCount <= 0)
-        return reject(QStringLiteral("形状未定稿"));
-    if (indices.isEmpty()) return qint64(0);   // 裸名 = 元素 0（与 1D 口径一致）
 
-    qint64 flat = 0;
-    if (indices.size() == 1) {
-        // 扁平写法：X[flat] —— 直接按元素序号寻址（与 X:i:j:k 共用同一个容器）。
-        flat = indices.at(0);
+void VariableStorage::installGeometry(QHash<QString, SlotGeometry>& map,
+                                      const QString& storageKey,
+                                      const QList<int>& lengths, const QList<int>& strides,
+                                      qint64 elementCount, bool allocated, bool authoritative)
+{
+    if (storageKey.isEmpty()) return;
+    SlotGeometry geometry;
+    geometry.lengths = lengths;
+    geometry.elementCount = elementCount > 0 ? elementCount : 1;   // 标量也占一格
+    geometry.allocated = allocated;
+    geometry.authoritative = authoritative;
+    if (strides.size() == lengths.size()) {
+        geometry.strides = strides;
     } else {
-        const int rank = int(shape.lengths.size());
-        for (int i = 0; i < indices.size(); ++i) {
-            if (i >= rank || i >= shape.strides.size())
-                return reject(QStringLiteral("下标个数超过维数"));
-            const int index = indices.at(i);
-            if (index < 0 || index >= shape.lengths.at(i))
-                return reject(QStringLiteral("第 %1 维下标 %2 不在 [0,%3)")
-                                  .arg(i).arg(index).arg(shape.lengths.at(i)));
-            flat += qint64(index) * shape.strides.at(i);
+        // 兜底：调用方没给 strides 时按「最后一维连续」补一次。
+        geometry.strides.resize(lengths.size());
+        qint64 acc = 1;
+        for (int i = lengths.size() - 1; i >= 0; --i) {
+            geometry.strides[i] = int(acc);
+            acc *= lengths.at(i);
         }
-        // 缺省的后导维按 0（例如 3D 变量只给 2 个下标）。
     }
-    if (flat < 0 || flat >= shape.elementCount)
-        return reject(QStringLiteral("扁平偏移 %1 不在 [0,%2)").arg(flat).arg(shape.elementCount));
-    return flat;
+    map.insert(storageKey, geometry);
 }
 
-qint64 VariableStorage::readMultiDimInt(const QString& storageKey, const QList<int>& indices) const
+qint64 VariableStorage::addressOf(const SlotGeometry* geometry, const QList<int>& indices)
 {
-    const auto shapeIt = m_multiDimShapes.constFind(storageKey);
-    if (shapeIt == m_multiDimShapes.constEnd()) return 0;
-    if (!shapeIt.value().allocated) return 0;
-    const auto flat = flattenMultiDim(storageKey, indices, /*warnOnBound=*/false, "读");
-    if (!flat) return 0;
-    const auto it = m_globalIntN.constFind(storageKey);
-    if (it == m_globalIntN.constEnd() || *flat >= it.value().size()) return 0;
-    return it.value().at(*flat);
-}
-
-void VariableStorage::writeMultiDimInt(const QString& storageKey, const QList<int>& indices,
-                                       qint64 value)
-{
-    const auto shapeIt = m_multiDimShapes.constFind(storageKey);
-    if (shapeIt == m_multiDimShapes.constEnd()) return;
-    if (!shapeIt.value().allocated) {
-        qWarning().noquote() << "[var] 多维变量" << storageKey
-                             << "未分配（元素数" << shapeIt.value().elementCount
-                             << "超过上限" << kMaxMultiDimElements << "或维数未定稿），写忽略";
-        return;
+    if (geometry == nullptr) {
+        // 无几何：只有 1D 语义（扁平序号），容器按需增长。多维坐标无法取址。
+        if (indices.size() >= 2) return -1;
+        return indices.isEmpty() ? 0 : qint64(indices.value(0));
     }
-    const auto flat = flattenMultiDim(storageKey, indices, /*warnOnBound=*/true, "写");
-    if (!flat) return;
-    auto it = m_globalIntN.find(storageKey);
-    if (it == m_globalIntN.end() || *flat >= it.value().size()) {
-        qWarning().noquote() << "[var] 多维变量" << storageKey << "存储缺失，写忽略";
-        return;
+    if (indices.isEmpty()) return geometry->elementCount > 0 ? 0 : -1;
+    if (indices.size() == 1) {
+        // 扁平写法：X[flat]（与 X:i:j:k 共用同一条序列）。
+        const qint64 flat = indices.value(0);
+        return (flat >= 0 && flat < geometry->elementCount) ? flat : -1;
     }
-    it.value()[*flat] = value;
-}
-
-FlatStringValue VariableStorage::readMultiDimStr(const QString& storageKey,
-                                                 const QList<int>& indices) const
-{
-    const auto shapeIt = m_multiDimShapes.constFind(storageKey);
-    if (shapeIt == m_multiDimShapes.constEnd() || !shapeIt.value().allocated) return {};
-    const auto flat = flattenMultiDim(storageKey, indices, /*warnOnBound=*/false, "读");
-    if (!flat) return {};
-    const auto it = m_globalStrN.constFind(storageKey);
-    if (it == m_globalStrN.constEnd() || *flat >= it.value().size()) return {};
-    return it.value().at(*flat);
-}
-
-void VariableStorage::writeMultiDimStr(const QString& storageKey, const QList<int>& indices,
-                                       const FlatStringValue& value)
-{
-    const auto shapeIt = m_multiDimShapes.constFind(storageKey);
-    if (shapeIt == m_multiDimShapes.constEnd()) return;
-    if (!shapeIt.value().allocated) {
-        qWarning().noquote() << "[var] 多维变量" << storageKey
-                             << "未分配（元素数" << shapeIt.value().elementCount
-                             << "超过上限" << kMaxMultiDimElements << "或维数未定稿），写忽略";
-        return;
+    const int rank = geometry->lengths.size();
+    if (indices.size() > rank) return -1;                 // 下标个数超过维数
+    qint64 offset = 0;
+    for (int d = 0; d < indices.size(); ++d) {
+        const int index = indices.at(d);
+        if (index < 0 || index >= geometry->lengths.at(d)) return -1;
+        offset += qint64(index) * geometry->strides.at(d);   // 唯一的取址公式
     }
-    const auto flat = flattenMultiDim(storageKey, indices, /*warnOnBound=*/true, "写");
-    if (!flat) return;
-    auto it = m_globalStrN.find(storageKey);
-    if (it == m_globalStrN.end() || *flat >= it.value().size()) {
-        qWarning().noquote() << "[var] 多维变量" << storageKey << "存储缺失，写忽略";
-        return;
+    if (offset < 0 || offset >= geometry->elementCount) return -1;
+    return offset;
+}
+
+// 唯一的角色 stride 公式：角色块基址 = 角色号 · 每角色元素数。
+qint64 VariableStorage::roleSlotOf(const SlotGeometry& geometry, int charaSlot,
+                                   qint64 elementOffset)
+{
+    const qint64 stride = geometry.elementCount > 0 ? geometry.elementCount : 1;
+    return qint64(charaSlot) * stride + elementOffset;
+}
+
+// 外接几何（运行期才长出来的数组）扩容：把边界扩到包含 indices，并按新 strides
+// 把既有数据重排（行主序逐格搬）。权威几何（声明/CSV）不走这里 —— 越界写忽略。
+template <typename SlotList>
+static void restrideInto(SlotList& cells, const QList<int>& fromLengths,
+                         const QList<int>& toLengths, const QList<int>& toStrides,
+                         qint64 fromCount, qint64 toCount)
+{
+    if (fromLengths.isEmpty() || fromLengths == toLengths || fromCount <= 0) return;
+    if (cells.isEmpty()) return;
+    SlotList moved(static_cast<qsizetype>(toCount));
+    // 旧行主序逐格 -> 新偏移（最后一维连续，与取址公式同一口径）。
+    const bool twoAxis = fromLengths.size() == 2;
+    for (qint64 i = 0; i < fromCount && i < cells.size(); ++i) {
+        qint64 dst = 0;
+        if (fromLengths.size() <= 1) {
+            dst = i;
+        } else if (twoAxis) {
+            const int d0 = fromLengths.at(0), d1 = fromLengths.at(1);
+            const int x = int((i / d1) % d0), y = int(i % d1);
+            dst = qint64(x) * toStrides.at(0) + qint64(y) * toStrides.at(1);
+        } else {
+            const int d1 = fromLengths.at(1), d2 = fromLengths.at(2);
+            const int z = int(i % d2); const qint64 t = i / d2;
+            const int y = int(t % d1), x = int(t / d1);
+            dst = qint64(x) * toStrides.at(0) + qint64(y) * toStrides.at(1)
+                  + qint64(z) * toStrides.at(2);
+        }
+        if (dst >= 0 && dst < toCount) moved[qsizetype(dst)] = cells.at(qsizetype(i));
     }
-    it.value()[*flat] = value;
+    cells = moved;
 }
 
-qint64 VariableStorage::multiDimAllocatedElements() const
+// 无几何（或运行期外接几何）的多维写：装/扩几何，返回新几何下的取址。
+// 返回 -2 = 不能装（负下标），-1 = 无法取址（权威几何越界 / 下标个数不足）。
+template <typename SlotList>
+qint64 VariableStorage::extendExtents(QHash<QString, SlotGeometry>& map,
+                                      const QString& storageKey, const QList<int>& indices,
+                                      SlotList& cells)
 {
-    qint64 n = 0;
-    for (auto it = m_globalIntN.constBegin(); it != m_globalIntN.constEnd(); ++it) n += it.value().size();
-    for (auto it = m_globalStrN.constBegin(); it != m_globalStrN.constEnd(); ++it) n += it.value().size();
-    return n;
+    if (indices.size() < 2) return -1;
+    for (int index : indices) if (index < 0) return -2;
+    QList<int> lengths;
+    for (int index : indices) lengths.append(index + 1);
+    const auto it = map.constFind(storageKey);
+    const bool known = it != map.constEnd();
+    if (known && it.value().authoritative) return -1;   // 权威几何：越界写忽略
+    if (known) {
+        bool grew = false;
+        for (int d = 0; d < lengths.size(); ++d) {
+            const int was = it.value().lengths.value(d);
+            if (was > lengths[d]) lengths[d] = was;     // 既有边界不缩
+            if (lengths[d] != was || d >= it.value().lengths.size()) grew = true;
+        }
+        if (!grew) return addressOf(&it.value(), indices);
+    }
+    // 元素总数必须在**合并完既有边界之后**算：边界只扩不缩（count 是几何事实）。
+    qint64 count = 1;
+    for (int n : lengths) count *= n;
+    QList<int> strides(lengths.size(), 1);
+    qint64 acc = 1;
+    for (int d = lengths.size() - 1; d >= 0; --d) { strides[d] = int(acc); acc *= lengths.at(d); }
+    installGeometry(map, storageKey, lengths, strides, count, /*allocated=*/false,
+                    /*authoritative=*/false);
+    const SlotGeometry& after = *map.constFind(storageKey);
+    if (known) {
+        SlotGeometry before = it.value();
+        restrideInto(cells, before.lengths, after.lengths, after.strides,
+                     before.elementCount, after.elementCount);
+    }
+    return addressOf(&after, indices);
 }
 
-qint64 VariableStorage::multiDimAllocatedBytes() const
+// ---- 唯一的写规则（读同理）：取址 -> 按需把容器长到 offset+1 -> 写 ----
+bool VariableStorage::writeIntSlot(const QString& storageKey, const QList<int>& indices,
+                                   qint64 value, const char* operation)
 {
-    qint64 bytes = 0;
-    for (auto it = m_globalIntN.constBegin(); it != m_globalIntN.constEnd(); ++it)
-        bytes += qint64(it.value().size()) * qint64(sizeof(qint64));
-    for (auto it = m_globalStrN.constBegin(); it != m_globalStrN.constEnd(); ++it)
-        bytes += qint64(it.value().size()) * qint64(sizeof(FlatStringValue));
-    return bytes;
+    ensureGeometry(storageKey);
+    const auto it = m_geometries.constFind(storageKey);
+    qint64 offset = it == m_geometries.constEnd() ? addressOf(nullptr, indices)
+                                                  : addressOf(&it.value(), indices);
+    if (offset < 0) {
+        // 只有「没有几何」或「运行期外接几何」才允许扩边界；权威几何（声明/CSV）
+        // 越界写忽略 —— 与旧实现「声明多维不长」同口径。
+        if (indices.size() >= 2
+            && (it == m_geometries.constEnd() || !it.value().authoritative)) {
+            offset = extendExtents(m_geometries, storageKey, indices, m_intSlots[storageKey]);
+        } else {
+            qWarning().noquote() << "[var] 变量" << storageKey << operation
+                                 << "越界（忽略）: indices=" << indices;
+        }
+    }
+    if (offset < 0) return false;
+    auto& cells = m_intSlots[storageKey];
+    if (offset >= cells.size()) cells.resize(qsizetype(offset) + 1);  // 唯一的懒扩容
+    cells[qsizetype(offset)] = value;
+    return true;
 }
 
-QList<int> VariableStorage::multiDimLengths(const QString& storageKey) const
+bool VariableStorage::writeStrSlot(const QString& storageKey, const QList<int>& indices,
+                                   const FlatStringValue& value, const char* operation)
 {
-    const auto it = m_multiDimShapes.constFind(storageKey);
-    return it == m_multiDimShapes.constEnd() ? QList<int>() : it.value().lengths;
+    ensureGeometry(storageKey);
+    const auto it = m_geometries.constFind(storageKey);
+    qint64 offset = it == m_geometries.constEnd() ? addressOf(nullptr, indices)
+                                                  : addressOf(&it.value(), indices);
+    if (offset < 0) {
+        // 只有「没有几何」或「运行期外接几何」才允许扩边界；权威几何（声明/CSV）
+        // 越界写忽略 —— 与旧实现「声明多维不长」同口径。
+        if (indices.size() >= 2
+            && (it == m_geometries.constEnd() || !it.value().authoritative)) {
+            offset = extendExtents(m_geometries, storageKey, indices, m_strSlots[storageKey]);
+        } else {
+            qWarning().noquote() << "[var] 变量" << storageKey << operation
+                                 << "越界（忽略）: indices=" << indices;
+        }
+    }
+    if (offset < 0) return false;
+    auto& cells = m_strSlots[storageKey];
+    if (offset >= cells.size()) cells.resize(qsizetype(offset) + 1);
+    cells[qsizetype(offset)] = value;
+    return true;
+}
+
+qint64 VariableStorage::readIntSlot(const QString& storageKey, const QList<int>& indices) const
+{
+    ensureGeometry(storageKey);
+    const auto geometry = m_geometries.constFind(storageKey);
+    const qint64 offset = geometry == m_geometries.constEnd()
+        ? addressOf(nullptr, indices) : addressOf(&geometry.value(), indices);
+    if (offset < 0) return 0;
+    const auto it = m_intSlots.constFind(storageKey);
+    if (it == m_intSlots.constEnd() || offset >= it.value().size()) return 0;
+    return it.value().at(qsizetype(offset));
+}
+
+FlatStringValue VariableStorage::readStrSlot(const QString& storageKey,
+                                             const QList<int>& indices) const
+{
+    ensureGeometry(storageKey);
+    const auto geometry = m_geometries.constFind(storageKey);
+    const qint64 offset = geometry == m_geometries.constEnd()
+        ? addressOf(nullptr, indices) : addressOf(&geometry.value(), indices);
+    if (offset < 0) return {};
+    const auto it = m_strSlots.constFind(storageKey);
+    if (it == m_strSlots.constEnd() || offset >= it.value().size()) return {};
+    return it.value().at(qsizetype(offset));
+}
+
+// ---- CHARADATA：同一条扁平序列 + 角色 stride ----
+// stride = 该变量每角色的元素数（几何 elementCount）；角色块基址 = 角色号·stride。
+// 几何来自 shapeOf（声明 -> VariableSize.csv），首次访问时经 installGeometry 登记。
+void VariableStorage::ensureCharaGeometry(const QString& storageKey)
+{
+    if (m_charaGeometries.contains(storageKey)) return;
+    const ArrayShape shape = declaredShapeOfKey(storageKey);
+    qint64 count = 1;
+    QList<int> lengths = shape.lengths;
+    QList<int> strides(lengths.size(), 1);
+    if (!lengths.isEmpty()) {
+        count = shape.elementCount > 0 ? shape.elementCount : 1;
+        qint64 acc = 1;
+        for (int d = lengths.size() - 1; d >= 0; --d) { strides[d] = int(acc); acc *= lengths.at(d); }
+    }
+    installGeometry(m_charaGeometries, storageKey, lengths, strides, count,
+                    /*allocated=*/false, /*authoritative=*/!lengths.isEmpty());
+}
+
+const VariableStorage::SlotGeometry& VariableStorage::charaGeometry(const QString& storageKey) const
+{
+    static const SlotGeometry kScalar{};
+    const auto it = m_charaGeometries.constFind(storageKey);
+    return it == m_charaGeometries.constEnd() ? kScalar : it.value();
+}
+
+qint64 VariableStorage::readCharaIntSlot(const QString& storageKey, int charaSlot,
+                                         const QList<int>& elements) const
+{
+    const SlotGeometry& geometry = charaGeometry(storageKey);
+    const qint64 offset = addressOf(&geometry, elements);
+    if (offset < 0) return 0;
+    const qint64 slot = roleSlotOf(geometry, charaSlot, offset);
+    const auto it = m_charaIntSlots.constFind(storageKey);
+    if (it == m_charaIntSlots.constEnd() || slot < 0 || slot >= it.value().size()) return 0;
+    return it.value().at(qsizetype(slot));
+}
+
+FlatStringValue VariableStorage::readCharaStrSlot(const QString& storageKey, int charaSlot,
+                                                  const QList<int>& elements) const
+{
+    const SlotGeometry& geometry = charaGeometry(storageKey);
+    const qint64 offset = addressOf(&geometry, elements);
+    if (offset < 0) return {};
+    const qint64 slot = roleSlotOf(geometry, charaSlot, offset);
+    const auto it = m_charaStrSlots.constFind(storageKey);
+    if (it == m_charaStrSlots.constEnd() || slot < 0 || slot >= it.value().size()) return {};
+    return it.value().at(qsizetype(slot));
+}
+
+void VariableStorage::writeCharaIntSlot(const QString& storageKey, int charaSlot,
+                                        const QList<int>& elements, qint64 value)
+{
+    ensureCharaGeometry(storageKey);
+    qint64 offset = addressOf(&charaGeometry(storageKey), elements);
+    if (offset < 0) {
+        // 无几何/运行期外接几何才扩边界（每角色 stride 随 elementCount 一起变）。
+        const auto it = m_charaGeometries.constFind(storageKey);
+        if (elements.size() >= 2 && (it == m_charaGeometries.constEnd() || !it.value().authoritative))
+            offset = extendExtents(m_charaGeometries, storageKey, elements, m_charaIntSlots[storageKey]);
+        if (offset < 0) {
+            qWarning().noquote() << "[var] 角色变量" << storageKey
+                                 << "越界（忽略）: chara=" << charaSlot << "元素=" << elements;
+            return;
+        }
+    }
+    // 扩边界会重装几何（map.insert 可能使引用失效）：几何取扩后的事实。
+    const qint64 slot = roleSlotOf(charaGeometry(storageKey), charaSlot, offset);
+    auto& cells = m_charaIntSlots[storageKey];
+    if (slot >= cells.size()) cells.resize(qsizetype(slot) + 1);   // 唯一的懒扩容
+    cells[qsizetype(slot)] = value;
+}
+
+void VariableStorage::writeCharaStrSlot(const QString& storageKey, int charaSlot,
+                                        const QList<int>& elements, const FlatStringValue& value)
+{
+    ensureCharaGeometry(storageKey);
+    qint64 offset = addressOf(&charaGeometry(storageKey), elements);
+    if (offset < 0) {
+        // 无几何/运行期外接几何才扩边界（每角色 stride 随 elementCount 一起变）。
+        const auto it = m_charaGeometries.constFind(storageKey);
+        if (elements.size() >= 2 && (it == m_charaGeometries.constEnd() || !it.value().authoritative))
+            offset = extendExtents(m_charaGeometries, storageKey, elements, m_charaStrSlots[storageKey]);
+        if (offset < 0) {
+            qWarning().noquote() << "[var] 角色变量" << storageKey
+                                 << "越界（忽略）: chara=" << charaSlot << "元素=" << elements;
+            return;
+        }
+    }
+    // 扩边界会重装几何（map.insert 可能使引用失效）：几何取扩后的事实。
+    const qint64 slot = roleSlotOf(charaGeometry(storageKey), charaSlot, offset);
+    auto& cells = m_charaStrSlots[storageKey];
+    if (slot >= cells.size()) cells.resize(qsizetype(slot) + 1);
+    cells[qsizetype(slot)] = value;
+}
+
+// 几何缺失时从形状的唯一入口登记（声明 -> VariableSize.csv）。维数 1 不登记：
+// 1D 的取址就是扁平序号，没有几何可言（见 addressOf(nullptr, ...)）。
+void VariableStorage::ensureGeometry(const QString& storageKey) const
+{
+    if (m_geometries.contains(storageKey)) return;
+    const ArrayShape shape = declaredShapeOfKey(storageKey);
+    if (shape.dimension() < 2 || shape.elementCount <= 0) return;
+    QList<int> strides(shape.lengths.size(), 1);
+    qint64 acc = 1;
+    for (int d = shape.lengths.size() - 1; d >= 0; --d) {
+        strides[d] = int(acc);
+        acc *= shape.lengths.at(d);
+    }
+    installGeometry(m_geometries, storageKey, shape.lengths, strides, shape.elementCount,
+                    /*allocated=*/false, /*authoritative=*/true);
 }
 
 void VariableStorage::installMultiDimArray(const QString& storageKey, const QList<int>& lengths,
@@ -248,67 +441,75 @@ void VariableStorage::installMultiDimArray(const QString& storageKey, const QLis
     if (storageKey.isEmpty() || lengths.size() < 2) return;
     qint64 count = 1;
     for (int n : lengths) {
-        if (n <= 0) return;                  // 维数未定稿：不注册（运行期仍走旧路径）
+        if (n <= 0) return;                  // 维数未定稿：不注册
         if (count > std::numeric_limits<qint64>::max() / n) { count = -1; break; }
         count *= n;
     }
     if (count <= 0) return;
-    const auto existing = m_multiDimShapes.constFind(storageKey);
-    if (existing != m_multiDimShapes.constEnd()) {
+    const auto existing = m_geometries.constFind(storageKey);
+    if (existing != m_geometries.constEnd()) {
         // 同键同形状：幂等（装载 pass 与按需分配都可能调用）。
         if (existing.value().lengths == lengths) return;
         qWarning().noquote() << "[var] 多维变量" << storageKey << "形状冲突，保留首次声明";
         return;
     }
-    MultiDimShape shape;
-    shape.lengths = lengths;
-    shape.elementCount = count;
-    if (strides.size() == lengths.size()) {
-        shape.strides = strides;
-    } else {
-        // 兜底：调用方没给 strides（测试/旧构造）时按「最后一维连续」补一次。
-        shape.strides.resize(lengths.size());
-        int acc = 1;
-        for (int i = lengths.size() - 1; i >= 0; --i) {
-            shape.strides[i] = acc;
-            acc *= lengths.at(i);
-        }
-    }
     if (count > kMaxMultiDimElements) {
         // 不分配，但保留声明形状：越界判定/VARSIZE 仍与声明一致。
         qWarning().noquote() << "[var] 多维变量" << storageKey << "元素数" << count
                              << "超过上限" << kMaxMultiDimElements << "，拒绝分配";
-        m_multiDimShapes.insert(storageKey, shape);
+        installGeometry(m_geometries, storageKey, lengths, strides, count,
+                        /*allocated=*/false, /*authoritative=*/true);
         return;
     }
-    shape.allocated = allocate;
-    m_multiDimShapes.insert(storageKey, shape);
-    if (!allocate) return;   // 只登记形状（CHARADATA：元素在角色存储里）
+    installGeometry(m_geometries, storageKey, lengths, strides, count,
+                    /*allocated=*/allocate, /*authoritative=*/true);
+    if (!allocate) return;   // 只登记几何（CHARADATA：元素在角色容器里）
     if (stringArray)
-        m_globalStrN.insert(storageKey, QList<FlatStringValue>(qsizetype(count), FlatStringValue{}));
+        m_strSlots.insert(storageKey, QList<FlatStringValue>(qsizetype(count), FlatStringValue{}));
     else
-        m_globalIntN.insert(storageKey, QList<qint64>(qsizetype(count), 0));
+        m_intSlots.insert(storageKey, QList<qint64>(qsizetype(count), 0));
+}
+
+qint64 VariableStorage::multiDimAllocatedElements() const
+{
+    qint64 n = 0;
+    for (auto it = m_geometries.constBegin(); it != m_geometries.constEnd(); ++it) {
+        if (!it.value().allocated) continue;
+        n += it.value().elementCount;
+    }
+    return n;
+}
+
+qint64 VariableStorage::multiDimAllocatedBytes() const
+{
+    qint64 bytes = 0;
+    for (auto it = m_geometries.constBegin(); it != m_geometries.constEnd(); ++it) {
+        if (!it.value().allocated) continue;
+        const bool isStr = m_strSlots.contains(it.key());
+        bytes += it.value().elementCount * qint64(isStr ? sizeof(FlatStringValue) : sizeof(qint64));
+    }
+    return bytes;
+}
+
+QList<int> VariableStorage::multiDimLengths(const QString& storageKey) const
+{
+    const auto it = m_geometries.constFind(storageKey);
+    return it == m_geometries.constEnd() ? QList<int>() : it.value().lengths;
 }
 
 void VariableStorage::clearForReload()
 {
     VariableStorage defaults;
-    std::swap(m_globalStr3D, defaults.m_globalStr3D);
-    std::swap(m_globalIntN, defaults.m_globalIntN);
-    std::swap(m_globalStrN, defaults.m_globalStrN);
-    std::swap(m_multiDimShapes, defaults.m_multiDimShapes);
-    std::swap(m_charaInt2D, defaults.m_charaInt2D);
-    std::swap(m_charaStr2D, defaults.m_charaStr2D);
+    std::swap(m_intSlots, defaults.m_intSlots);
+    std::swap(m_strSlots, defaults.m_strSlots);
+    std::swap(m_charaIntSlots, defaults.m_charaIntSlots);
+    std::swap(m_charaStrSlots, defaults.m_charaStrSlots);
+    std::swap(m_csvIntSlots, defaults.m_csvIntSlots);
+    std::swap(m_csvStrSlots, defaults.m_csvStrSlots);
+    std::swap(m_geometries, defaults.m_geometries);
+    std::swap(m_charaGeometries, defaults.m_charaGeometries);
     std::swap(m_systemIntVars, defaults.m_systemIntVars);
     std::swap(m_systemStrVars, defaults.m_systemStrVars);
-    std::swap(m_globalInt1D, defaults.m_globalInt1D);
-    std::swap(m_globalInt2D, defaults.m_globalInt2D);
-    std::swap(m_globalInt3D, defaults.m_globalInt3D);
-    std::swap(m_globalStr1D, defaults.m_globalStr1D);
-    std::swap(m_globalStr2D, defaults.m_globalStr2D);
-    std::swap(m_charaIntVars, defaults.m_charaIntVars);
-    std::swap(m_charaIntVars3D, defaults.m_charaIntVars3D);
-    std::swap(m_charaStrVars, defaults.m_charaStrVars);
     std::swap(m_parameters, defaults.m_parameters);
     std::swap(m_privateNames, defaults.m_privateNames);
     std::swap(m_references, defaults.m_references);
@@ -350,9 +551,6 @@ void VariableStorage::clearForReload()
     std::swap(m_charaList, defaults.m_charaList);
     std::swap(m_charaSp, defaults.m_charaSp);
     std::swap(m_existCsv, defaults.m_existCsv);
-    std::swap(m_csvIntVars, defaults.m_csvIntVars);
-    std::swap(m_csvIntVars3D, defaults.m_csvIntVars3D);
-    std::swap(m_csvStrVars, defaults.m_csvStrVars);
     std::swap(m_variableTypes, defaults.m_variableTypes);
     std::swap(m_variableIdentifiers, defaults.m_variableIdentifiers);
     std::swap(m_variableConfig, defaults.m_variableConfig);
@@ -413,7 +611,7 @@ VariableStorage::ArrayShape VariableStorage::shapeOf(const QString& name,
         return shapeOfKey(storageName(name, scope));
 }
 
-VariableStorage::ArrayShape VariableStorage::shapeOfKey(const QString& storageKey) const
+VariableStorage::ArrayShape VariableStorage::declaredShapeOfKey(const QString& storageKey) const
 {
         // 1) 声明（形状的所有者）。复合键 "段身份\x1fNAME" 拆回 (名字, 段身份文本)；
         //    裸键 = 广域声明。键已在 storageName 里做过 REF 别名解析，所以
@@ -476,46 +674,24 @@ VariableStorage::ArrayShape VariableStorage::shapeOfKey(const QString& storageKe
                 shape.elementCount = size1;
                 return shape;
         }
-        // 3) 没有声明也没有装载期尺寸表 = 运行期才长出来的多维容器（REF 指向的
-        //    未声明数组）。多维容器的**外接几何**就是它的形状（元素只到 extents
+        return {};
+}
+
+VariableStorage::ArrayShape VariableStorage::shapeOfKey(const QString& storageKey) const
+{
+        // 1)+2) 声明 -> VariableConfig（形状的所有者，只有一个函数）。
+        if (const ArrayShape declared = declaredShapeOfKey(storageKey); !declared.isEmpty())
+                return declared;
+        // 3) 运行期外接几何：没有声明也没有装载期尺寸表 = 运行期才长出来的多维
+        //    容器（REF 指向的未声明数组）。它的外接边界就是形状（元素只到 extents
         //    为止）；1D 容器的槽位数没有这个性质（任意前缀都有意义），所以 1D
         //    不进形状 —— 那是 allocatedSlots 的容器事实。
-        if (auto it = m_globalInt3D.constFind(storageKey); it != m_globalInt3D.constEnd()) {
-                int rows = 0, columns = 0;
-                for (const auto& plane : *it) {
-                        rows = qMax(rows, int(plane.size()));
-                        for (const auto& row : plane) columns = qMax(columns, int(row.size()));
-                }
+        const auto geometry = m_geometries.constFind(storageKey);
+        if (geometry != m_geometries.constEnd() && !geometry.value().authoritative
+            && geometry.value().lengths.size() >= 2) {
                 ArrayShape shape;
-                shape.lengths = QList<int>{int(it->size()), rows, columns};
-                shape.elementCount = product(shape.lengths);
-                return shape;
-        }
-        if (auto it = m_globalStr3D.constFind(storageKey); it != m_globalStr3D.constEnd()) {
-                int rows = 0, columns = 0;
-                for (const auto& plane : *it) {
-                        rows = qMax(rows, int(plane.size()));
-                        for (const auto& row : plane) columns = qMax(columns, int(row.size()));
-                }
-                ArrayShape shape;
-                shape.lengths = QList<int>{int(it->size()), rows, columns};
-                shape.elementCount = product(shape.lengths);
-                return shape;
-        }
-        if (auto it = m_globalInt2D.constFind(storageKey); it != m_globalInt2D.constEnd()) {
-                int columns = 0;
-                for (const auto& row : *it) columns = qMax(columns, int(row.size()));
-                ArrayShape shape;
-                shape.lengths = QList<int>{int(it->size()), columns};
-                shape.elementCount = product(shape.lengths);
-                return shape;
-        }
-        if (auto it = m_globalStr2D.constFind(storageKey); it != m_globalStr2D.constEnd()) {
-                int columns = 0;
-                for (const auto& row : *it) columns = qMax(columns, int(row.size()));
-                ArrayShape shape;
-                shape.lengths = QList<int>{int(it->size()), columns};
-                shape.elementCount = product(shape.lengths);
+                shape.lengths = geometry.value().lengths;
+                shape.elementCount = geometry.value().elementCount;
                 return shape;
         }
         return {};
@@ -540,8 +716,8 @@ int VariableStorage::allocatedSlots(const QString& key) const
         // 容器当前已分配的槽位数（**不是形状**：装载期形状见 shapeOf）。
         // 旧名 arraySizeRaw 会被误当成形状读者（VARSIZE 曾回落到这里），故改名。
         // 多维：仍按声明首维报（形状已由 shapeOf 回答；这里只服务无形状的名字）。
-        if (const auto shape = m_multiDimShapes.constFind(key); shape != m_multiDimShapes.constEnd())
-            return shape.value().lengths.value(0);
+        if (const auto geometry = m_geometries.constFind(key); geometry != m_geometries.constEnd())
+            return geometry.value().lengths.value(0);
 
 		// 局部/实参槽不在 m_global* 容器里，单独报尺寸
 		if (key == QLatin1String("ITEMPRICE")) return m_itemprice.size();   // 常量容器（不在 m_global* 里）
@@ -549,10 +725,8 @@ int VariableStorage::allocatedSlots(const QString& key) const
 		if (key == QLatin1String("LOCALS")) return m_localStrVars.size();
 		if (key == QLatin1String("ARG")) return m_argIntVars.size();
 		if (key == QLatin1String("ARGS")) return m_argStrVars.size();
-		if (auto it = m_globalStr1D.constFind(key); it != m_globalStr1D.constEnd()) return it->size();
-		if (auto it = m_globalInt1D.constFind(key); it != m_globalInt1D.constEnd()) return it->size();
-		if (auto it = m_globalStr2D.constFind(key); it != m_globalStr2D.constEnd()) return it->size();
-		if (auto it = m_globalInt2D.constFind(key); it != m_globalInt2D.constEnd()) return it->size();
+		if (auto it = m_strSlots.constFind(key); it != m_strSlots.constEnd()) return int(it->size());
+		if (auto it = m_intSlots.constFind(key); it != m_intSlots.constEnd()) return int(it->size());
 		return 0;
 }
 
@@ -575,11 +749,12 @@ void VariableStorage::ensureArraySize(const QString& name, int size, bool string
 		if (size <= 0) return;
 		// 多维变量的容量由声明决定，不允许「第一次写时偷偷扩容」。
 		if (isMultiDimArray(storageName(name))) return;
+		// 唯一的懒扩容：把扁平序列长到 size（只增不减）。
 		if (stringArray) {
-			auto& values = m_globalStr1D[storageName(name)];
+			auto& values = m_strSlots[storageName(name)];
 			if (values.size() < size) values.resize(size);
 		} else {
-			auto& values = m_globalInt1D[storageName(name)];
+			auto& values = m_intSlots[storageName(name)];
 			if (values.size() < size) values.resize(size);
 		}
 }
@@ -590,27 +765,17 @@ void VariableStorage::ensureArraySize(const QString& name, int size, bool string
 void VariableStorage::applyPrivateDefault(const QString& storageKey, bool isString, int ensureSize,
                                           const QList<qint64>& defaultInt, const QStringList& defaultStr)
 {
-		// 多维：容量已在装载期按声明分配；初值按**扁平序号**写（行主序，最后一维
-		// 连续），与 #DIM X, 2,3 = a,b,c,d 的 C# 口径一致。
-		if (isMultiDimArray(storageKey)) {
-			if (isString) {
-				for (int i = 0; i < defaultStr.size(); ++i)
-					writeMultiDimStr(storageKey, {i}, FlatStringValue(defaultStr.at(i)));
-			} else {
-				for (int i = 0; i < defaultInt.size(); ++i)
-					writeMultiDimInt(storageKey, {i}, defaultInt.at(i));
-			}
-			return;
-		}
+		// 初值按**扁平序号**写（行主序，最后一维连续），与 #DIM X, 2,3 = a,b,c,d
+		// 的 C# 口径一致；多维的容量已在装载期按声明分配。
 		if (isString) {
-			auto& values = m_globalStr1D[storageKey];
+			auto& values = m_strSlots[storageKey];
 			if (ensureSize > 0 && values.size() < ensureSize) values.resize(ensureSize);
 			for (int i = 0; i < defaultStr.size(); ++i) {
 				if (values.size() <= i) values.resize(i + 1);
 				values[i] = FlatStringValue(defaultStr.at(i));
 			}
 		} else {
-			auto& values = m_globalInt1D[storageKey];
+			auto& values = m_intSlots[storageKey];
 			if (ensureSize > 0 && values.size() < ensureSize) values.resize(ensureSize);
 			for (int i = 0; i < defaultInt.size(); ++i) {
 				if (values.size() <= i) values.resize(i + 1);
@@ -731,19 +896,12 @@ void VariableStorage::writeIntByName(const QString &name, const QList<int> &indi
 }
 
 // ================= 角色整型变量 =================
-// Raw：按**运行时下标**直接存取（不做 运行时->模板 翻译），供角色列表自身使用。
+// 扁平 + 角色 stride：槽位 = 角色号·elementCount + 元素偏移。Raw：按**运行时
+// 下标**直接存取（不做 运行时->模板 翻译），供角色列表自身使用。
 void VariableStorage::setCharaIntRaw(const QString &name, int charaId, int index, qint64 value)
 {
 		if (charaId < 0 || index < 0) return;
-		auto &charaList = m_charaIntVars[storageName(name)];
-		if (charaList.size() <= charaId) {
-				charaList.resize(charaId + 1);
-		}
-		auto &vec = charaList[charaId];
-		if (vec.size() <= index) {
-				vec.resize(index + 1, 0);
-		}
-		vec[index] = value;
+		writeCharaIntSlot(storageName(name), charaId, {index}, value);
 }
 
 void VariableStorage::setCharaInt(const QString &name, int charaId, int index, qint64 value)
@@ -751,6 +909,16 @@ void VariableStorage::setCharaInt(const QString &name, int charaId, int index, q
 		if (charaId < 0 || index < 0) return;
 		setCharaIntRaw(name, resolveCharaIndex(charaId), index, value);
 }
+
+namespace {
+// 角色变量「全部角色全部元素归零」：扁平序列整体 fill（与旧实现逐角色填充同义）。
+void zeroCharaSlots(QHash<QString, QList<qint64>>& cells, const QString& key)
+{
+	auto it = cells.find(key);
+	if (it == cells.end()) return;
+	it.value().fill(0);
+}
+} // namespace
 
 // ---------------------------------------------------------------------------
 // 训练流程变量重置（对齐 C# GameData/Variable/VariableEvaluator.cs
@@ -764,19 +932,14 @@ void VariableStorage::updateAfterShowUsercom()
 		m_losebase.fill(0);
 		// 各角色 DOWNBASE = 0, CUP = 0, CDOWN = 0
 		static const char* const kCharaKeys[] = {"DOWNBASE", "CUP", "CDOWN"};
-		for (const char* k : kCharaKeys) {
-				auto it = m_charaIntVars.find(storageName(QString::fromLatin1(k)));
-				if (it == m_charaIntVars.end()) continue;
-				for (QList<qint64>& vec : it.value()) vec.fill(0);
-		}
+		for (const char* k : kCharaKeys)
+				zeroCharaSlots(m_charaIntSlots, storageName(QString::fromLatin1(k)));
 }
 
 void VariableStorage::updateAfterInputCom()
 {
 		// 各角色 NOWEX = 0（对齐 C#：选择中以外的角色也全部重置）
-		auto it = m_charaIntVars.find(storageName(QStringLiteral("NOWEX")));
-		if (it == m_charaIntVars.end()) return;
-		for (QList<qint64>& vec : it.value()) vec.fill(0);
+		zeroCharaSlots(m_charaIntSlots, storageName(QStringLiteral("NOWEX")));
 }
 
 void VariableStorage::updateInBeginTrain()
@@ -803,21 +966,13 @@ void VariableStorage::updateInBeginTrain()
 		}
 
 		// 全角色数值归零（C#：GOTJUEL/TEQUIP/EX/STAIN/PALAM/SOURCE/TCVAR）。
-		// 与 updateAfterShowUsercom 同款：直接遍历角色存储的每个角色槽。
 		static const char* const kCharaKeys[] = {
-			"GOTJUEL", "TEQUIP", "EX", "PALAM", "SOURCE", "TCVAR",
+			"GOTJUEL", "TEQUIP", "EX", "PALAM", "SOURCE", "TCVAR", "STAIN",
 		};
-		for (const char* k : kCharaKeys) {
-				auto it = m_charaIntVars.find(storageName(QString::fromLatin1(k)));
-				if (it == m_charaIntVars.end()) continue;
-				for (QList<qint64>& vec : it.value()) vec.fill(0);
-		}
+		for (const char* k : kCharaKeys)
+				zeroCharaSlots(m_charaIntSlots, storageName(QString::fromLatin1(k)));
 		// STAIN 走 C# 的 setDefaultStain()：_REPLACE.CSV 初值未装载时按 0
 		// （与 RESET_STAIN 内建指令取同一语义）。
-		auto stain = m_charaIntVars.find(storageName(QStringLiteral("STAIN")));
-		if (stain != m_charaIntVars.end()) {
-				for (QList<qint64>& vec : stain.value()) vec.fill(0);
-		}
 }
 
 qint64 VariableStorage::getCharaInt(const QString &name, int charaId, int index) const
@@ -825,15 +980,7 @@ qint64 VariableStorage::getCharaInt(const QString &name, int charaId, int index)
 		if (charaId < 0 || index < 0) return 0;
 		charaId = resolveCharaIndex(charaId);
 		if (charaId < 0) return 0;   // VOID 角色（ADDVOIDCHARA）：无模板数据
-
-		auto it = m_charaIntVars.constFind(storageName(name));
-		if (it != m_charaIntVars.constEnd() && charaId < it.value().size()) {
-				const auto &vec = it.value().at(charaId);
-				if (index < vec.size()) {
-						return vec.at(index);
-				}
-		}
-		return 0;
+		return readCharaIntSlot(storageName(name), charaId, {index});
 }
 
 // ================= 角色字符串变量 =================
@@ -846,11 +993,7 @@ void VariableStorage::setCharaStr(const QString &name, int charaId, int index, c
 void VariableStorage::setCharaStrRaw(const QString &name, int charaId, int index, const QString &value)
 {
 		if (charaId < 0 || index < 0) return;
-		auto &charaList = m_charaStrVars[storageName(name)];
-		if (charaList.size() <= charaId) charaList.resize(charaId + 1);
-		auto &vec = charaList[charaId];
-		if (vec.size() <= index) vec.resize(index + 1);
-		vec[index] = FlatStringValue(value);
+		writeCharaStrSlot(storageName(name), charaId, {index}, FlatStringValue(value));
 }
 
 QString VariableStorage::getCharaStr(const QString &name, int charaId, int index) const
@@ -858,12 +1001,7 @@ QString VariableStorage::getCharaStr(const QString &name, int charaId, int index
 		if (charaId < 0 || index < 0) return QString();
 		charaId = resolveCharaIndex(charaId);
 		if (charaId < 0) return QString();   // VOID 角色：无模板数据
-		auto it = m_charaStrVars.constFind(storageName(name));
-		if (it != m_charaStrVars.constEnd() && charaId < it.value().size()) {
-				const auto &vec = it.value().at(charaId);
-				if (index < vec.size()) return vec.at(index).text;
-		}
-		return QString();
+		return readCharaStrSlot(storageName(name), charaId, {index}).text;
 }
 
 // ================= 角色列表（ADDCHARA / DELCHARA / CHARANUM）=================
@@ -1026,14 +1164,13 @@ void VariableStorage::resetGlobals()
 				else it = map.erase(it);
 			}
 		};
-		purge(m_globalInt1D);
-		purge(m_globalInt2D);
-		purge(m_globalInt3D);
-		purge(m_globalStr1D);
-		purge(m_globalStr2D);
-		purge(m_globalStr3D);
-		purge(m_globalIntN);
-		purge(m_globalStrN);
+		purge(m_intSlots);
+		purge(m_strSlots);
+		// 外接几何随容器一起作废（没有容器的形状不是形状）。
+		for (auto it = m_geometries.begin(); it != m_geometries.end(); ) {
+			if (it.value().authoritative) ++it;
+			else it = m_geometries.erase(it);
+		}
 		qDebug() << "[global] RESETGLOBAL（保留函数私有变量）";
 }
 
@@ -1060,38 +1197,15 @@ void VariableStorage::restoreDeclaredDefaults()
 		const int count = erasave::shapeCount(dims);
 		const int defaultCount = d.type == OperandType::Str ? int(d.defaultStr.size())
 		                                                    : int(d.defaultInt.size());
-		if (d.dimension <= 1) {
-			// 1 维：x 就是 i
-			if (d.type == OperandType::Str) {
-				auto& vec = m_globalStr1D[storageKey];
-				if (vec.size() < count) vec.resize(count);
-				std::fill_n(vec.begin(), count, FlatStringValue{});
-				const int n = qMin(count, defaultCount);
-				for (int i = 0; i < n; ++i) vec[i] = FlatStringValue(d.defaultStr.at(i));
-			} else {
-				auto& vec = m_globalInt1D[storageKey];
-				if (vec.size() < count) vec.resize(count, 0);
-				if (count > 0) std::memset(vec.data(), 0, size_t(count) * sizeof(qint64));
-				const int n = qMin(count, defaultCount);
-				for (int i = 0; i < n; ++i) vec[i] = d.defaultInt.at(i);
-			}
-			continue;
-		}
-		// 2/3 维：走独立的多维扁平容器（装载期按 lengths 乘积分配）。
-		// 形状来自声明；这里不再按嵌套 QList 扩容。未安装（测试/无装载 pass）
-		// 时就地安装一次，保持「恢复初值」在任何入口都成立。
-		if (!isMultiDimArray(storageKey))
-			installMultiDimArray(storageKey, dims, d.strides, d.type == OperandType::Str);
-		const auto shapeIt = m_multiDimShapes.constFind(storageKey);
-		if (shapeIt == m_multiDimShapes.constEnd() || !shapeIt.value().allocated) continue;
+		// 声明过的变量（1D 与多维同一容器）：整条扁平序列 = dims 的乘积。
 		if (d.type == OperandType::Str) {
-			auto& vec = m_globalStrN[storageKey];
+			auto& vec = m_strSlots[storageKey];
 			if (vec.size() < count) vec.resize(count);
 			std::fill_n(vec.begin(), count, FlatStringValue{});
 			const int n = qMin(count, defaultCount);
 			for (int i = 0; i < n; ++i) vec[i] = FlatStringValue(d.defaultStr.at(i));
 		} else {
-			auto& vec = m_globalIntN[storageKey];
+			auto& vec = m_intSlots[storageKey];
 			if (vec.size() < count) vec.resize(count, 0);
 			if (count > 0) std::memset(vec.data(), 0, size_t(count) * sizeof(qint64));
 			const int n = qMin(count, defaultCount);
@@ -1120,14 +1234,8 @@ void VariableStorage::resetForNewGame()
 				if (!globalNames.contains(it.key().toUpper())) it = result.erase(it); else ++it;
 			return result;
 		};
-		const auto keptI1 = keep(m_globalInt1D);
-		const auto keptI2 = keep(m_globalInt2D);
-		const auto keptI3 = keep(m_globalInt3D);
-		const auto keptS1 = keep(m_globalStr1D);
-		const auto keptS2 = keep(m_globalStr2D);
-		const auto keptS3 = keep(m_globalStr3D);
-		const auto keptIN = keep(m_globalIntN);
-		const auto keptSN = keep(m_globalStrN);
+		const auto keptInt = keep(m_intSlots);
+		const auto keptStr = keep(m_strSlots);
 		clearCharaList();
 		resetGlobals();   // 用户普通广域变量回默认；GLOBAL/GLOBALS 稍后恢复
 		const auto zero = [](QList<qint64>& list) { list.fill(0); };
@@ -1153,14 +1261,12 @@ void VariableStorage::resetForNewGame()
 				else ++it;
 			}
 		};
-		purgePrivate(m_globalInt1D);
-		purgePrivate(m_globalInt2D);
-		purgePrivate(m_globalInt3D);
-		purgePrivate(m_globalStr1D);
-		purgePrivate(m_globalStr2D);
-		purgePrivate(m_globalStr3D);
-		purgePrivate(m_globalIntN);
-		purgePrivate(m_globalStrN);
+		purgePrivate(m_intSlots);
+		purgePrivate(m_strSlots);
+		for (auto it = m_geometries.begin(); it != m_geometries.end(); ) {
+			if (it.value().authoritative) ++it;
+			else it = m_geometries.erase(it);   // 外接几何随容器作废
+		}
 		// 私有名表是**装载期元数据**（脚本声明的一部分），不是每局数据：
 		// RESETDATA 不能清掉它 —— 安装后 setPrivateScope 已不再建表，清掉就会让
 		// 所有私有名静默退化成裸名（又是另一个变量）。未安装（测试手工路径）时
@@ -1170,15 +1276,18 @@ void VariableStorage::resetForNewGame()
 
 		restoreDeclaredDefaults();
 		// 角色数据回默认值。本移植把 CSV 模板默认值**直接写进角色存储**
-		// （m_charaIntVars/m_charaStrVars，按模板号存放），ADDCHARA/LOADCHARA 之后
+		// （m_charaIntSlots/m_charaStrSlots，按模板号·stride 存放），ADDCHARA/LOADCHARA 之后
 		// 都从这些容器取 NAME/ABL… 模板默认值 —— 因此这里必须从模板快照恢复，
 		// 而不是清空；否则清空后新增/载入的角色 NAME/ABL… 全空（组 9 LOADCHARA
 		// NAME、组 28 ABL:技巧 的回归根因）。运行时 2D 角色数组（无 CSV 快照）仍清空。
-		m_charaIntVars = m_csvIntVars;
-		m_charaIntVars3D = m_csvIntVars3D;
-		m_charaStrVars = m_csvStrVars;
-		m_charaInt2D.clear();
-		m_charaStr2D.clear();
+		m_charaIntSlots = m_csvIntSlots;
+		m_charaStrSlots = m_csvStrSlots;
+		// 运行期才长出来的角色几何（无声明）随运行时数据一起作废；
+		// 声明/CSV 定形的几何保留（快照仍按同一几何解释）。
+		for (auto it = m_charaGeometries.begin(); it != m_charaGeometries.end(); ) {
+			if (it.value().authoritative) ++it;
+			else it = m_charaGeometries.erase(it);
+		}
 		// 本地槽（LOCAL/ARG/LOCALS/ARGS）与形参
 		m_localIntVars.fill(0);
 		m_argIntVars.fill(0);
@@ -1188,9 +1297,8 @@ void VariableStorage::resetForNewGame()
 		const auto restore = [](auto& map, const auto& saved) {
 			for (auto it = saved.constBegin(); it != saved.constEnd(); ++it) map.insert(it.key(), it.value());
 		};
-		restore(m_globalInt1D, keptI1); restore(m_globalInt2D, keptI2); restore(m_globalInt3D, keptI3);
-		restore(m_globalStr1D, keptS1); restore(m_globalStr2D, keptS2); restore(m_globalStr3D, keptS3);
-		restore(m_globalIntN, keptIN); restore(m_globalStrN, keptSN);
+		restore(m_intSlots, keptInt);
+		restore(m_strSlots, keptStr);
 		qDebug() << "[var] RESETDATA 变量回默认值，角色列表已清空";
 }
 
@@ -1199,32 +1307,35 @@ void VariableStorage::resetForNewGame()
 // 此后 CSV* 函数读快照，脚本对 VAR:角色:下标 的修改不再影响模板值。
 void VariableStorage::snapshotCharaTemplates()
 {
-		m_csvIntVars = m_charaIntVars;
-		m_csvIntVars3D = m_charaIntVars3D;
-		m_csvStrVars = m_charaStrVars;
-		qDebug() << "[chara] CSV 模板快照：整型变量" << m_csvIntVars.size()
-				 << "三维" << m_csvIntVars3D.size()
-				 << "字符串" << m_csvStrVars.size();
+		// 与运行时同布局的扁平快照（按模板号而不是运行时下标）。
+		m_csvIntSlots = m_charaIntSlots;
+		m_csvStrSlots = m_charaStrSlots;
+		qDebug() << "[chara] CSV 模板快照：整型变量" << m_csvIntSlots.size()
+				 << "字符串" << m_csvStrSlots.size();
 }
 
 qint64 VariableStorage::csvCharaInt(const QString& name, int charaId, int index) const
 {
 		if (charaId < 0 || index < 0) return 0;
-		const auto it = m_csvIntVars.constFind(storageName(name));
-		if (it == m_csvIntVars.constEnd()) return 0;
-		if (charaId >= it.value().size()) return 0;
-		const auto& vec = it.value().at(charaId);
-		return index < vec.size() ? vec.at(index) : 0;
+		const QString storageKey = storageName(name);
+		const SlotGeometry& geometry = charaGeometry(storageKey);
+		const qint64 stride = geometry.elementCount > 0 ? geometry.elementCount : 1;
+		const qint64 slot = qint64(charaId) * stride + index;
+		const auto it = m_csvIntSlots.constFind(storageKey);
+		if (it == m_csvIntSlots.constEnd() || slot >= it.value().size()) return 0;
+		return it.value().at(qsizetype(slot));
 }
 
 QString VariableStorage::csvCharaStr(const QString& name, int charaId, int index) const
 {
 		if (charaId < 0 || index < 0) return QString();
-		const auto it = m_csvStrVars.constFind(storageName(name));
-		if (it == m_csvStrVars.constEnd()) return QString();
-		if (charaId >= it.value().size()) return QString();
-		const auto& vec = it.value().at(charaId);
-		return index < vec.size() ? vec.at(index).text : QString();
+		const QString storageKey = storageName(name);
+		const SlotGeometry& geometry = charaGeometry(storageKey);
+		const qint64 stride = geometry.elementCount > 0 ? geometry.elementCount : 1;
+		const qint64 slot = qint64(charaId) * stride + index;
+		const auto it = m_csvStrSlots.constFind(storageKey);
+		if (it == m_csvStrSlots.constEnd() || slot >= it.value().size()) return QString();
+		return it.value().at(qsizetype(slot)).text;
 }
 
 // ================= 角色数据变量（CHARADATA） =================
@@ -1529,7 +1640,9 @@ bool VariableStorage::isCharaVariable1D(const QString &name) const
 		return (it != m_variableIdentifiers.constEnd()) ? (it.value().is1D() && it.value().isCharacterData()) : false;
 }
 
-// ================= 全局整型 1D/2D 实现 =================
+// ================= 全局整型 / 字符串 1D/2D/3D =================
+// 三种维数、名字访问与 Raw 访问都是同一对原语（readIntSlot / writeIntSlot、
+// readStrSlot / writeStrSlot）的薄包装：维数只体现在 indices 的个数上。
 void VariableStorage::setGlobalInt1D(const QString &name, int x, qint64 val)
 {
 		if (x < 0) return;
@@ -1539,17 +1652,7 @@ void VariableStorage::setGlobalInt1D(const QString &name, int x, qint64 val)
 void VariableStorage::setGlobalStr1D(const QString &name, int x, const QString &value)
 {
 		if (x < 0) return;
-		const QString key = storageName(name);
-		auto it = m_globalStr1D.find(key);
-		if (it != m_globalStr1D.end()) {
-				if (it.value().size() <= x) it.value().resize(x + 1);
-				it.value()[x] = FlatStringValue(value);
-				return;
-		}
-		if (isMultiDimArray(key)) { writeMultiDimStr(key, {x}, FlatStringValue(value)); return; }
-		auto &vec = m_globalStr1D[key];
-		if (vec.size() <= x) vec.resize(x + 1);
-		vec[x] = FlatStringValue(value);
+		writeStrSlot(storageName(name), {x}, FlatStringValue(value), "写");
 }
 
 QString VariableStorage::getGlobalStr1D(const QString &name, int x) const
@@ -1573,31 +1676,19 @@ const QString& VariableStorage::storageKeyFor(const eravar::VariableKey& key) co
 QString VariableStorage::getGlobalStr1DRaw(const QString& storageKey, int x) const
 {
         if (x < 0) return QString();
-        auto it = m_globalStr1D.constFind(storageKey);
-        if (it != m_globalStr1D.constEnd() && x < it.value().size()) return it.value().at(x).text;
-        if (isMultiDimArray(storageKey)) return readMultiDimStr(storageKey, {x}).text;
-        return QString();
+        return readStrSlot(storageKey, {x}).text;
 }
 
 void VariableStorage::setGlobalStr2D(const QString &name, int x, int y, const QString &value)
 {
 		if (x < 0 || y < 0) return;
-		const QString key = storageName(name);
-		if (isMultiDimArray(key)) { writeMultiDimStr(key, {x, y}, FlatStringValue(value)); return; }
-		auto &table = m_globalStr2D[key];
-		if (table.size() <= x) table.resize(x + 1);
-		if (table[x].size() <= y) table[x].resize(y + 1);
-		table[x][y] = FlatStringValue(value);
+		writeStrSlot(storageName(name), {x, y}, FlatStringValue(value), "写");
 }
 
 QString VariableStorage::getGlobalStr2D(const QString &name, int x, int y) const
 {
 		if (x < 0 || y < 0) return QString();
-		if (isMultiDimArray(storageName(name))) return getGlobalStr2DRaw(storageName(name), x, y);
-		auto it = m_globalStr2D.constFind(storageName(name));
-		if (it == m_globalStr2D.constEnd()) return QString();
-		if (x >= it.value().size() || y >= it.value().at(x).size()) return QString();
-		return it.value().at(x).at(y).text;
+		return readStrSlot(storageName(name), {x, y}).text;
 }
 
 void VariableStorage::setSystemStr(const QString &name, int index, const QString &value)
@@ -1621,105 +1712,51 @@ qint64 VariableStorage::getGlobalInt1D(const QString &name, int x) const
 qint64 VariableStorage::getGlobalInt1DRaw(const QString& storageKey, int x) const
 {
 		if (x < 0) return 0;
-		const auto it = m_globalInt1D.constFind(storageKey);
-		if (it != m_globalInt1D.constEnd() && x < it.value().size()) return it.value().at(x);
-		// 多维变量的「扁平写法」：与 X:i:j:k 共用同一个扁平容器（脚本层由
-		// 静态检查要求给足下标；这里是内部/旧路径的统一口径）。
-		if (isMultiDimArray(storageKey)) return readMultiDimInt(storageKey, {x});
-		return 0;
+		// 多维变量的「扁平写法」：与 X:i:j:k 共用同一条序列（脚本层由静态检查
+		// 要求给足下标；这里是内部/旧路径的统一口径）。
+		return readIntSlot(storageKey, {x});
 }
 
 qint64 VariableStorage::getGlobalInt2DRaw(const QString& storageKey, int x, int y) const
 {
 		if (x < 0 || y < 0) return 0;
-		if (isMultiDimArray(storageKey)) return readMultiDimInt(storageKey, {x, y});
-		const auto it = m_globalInt2D.constFind(storageKey);
-		if (it != m_globalInt2D.constEnd() && x < it.value().size()) {
-				const auto& vec = it.value().at(x);
-				if (y < vec.size()) return vec.at(y);
-		}
-		return 0;
+		return readIntSlot(storageKey, {x, y});
 }
 
 qint64 VariableStorage::getGlobalInt3DRaw(const QString& storageKey, int x, int y, int z) const
 {
 		if (x < 0 || y < 0 || z < 0) return 0;
-		if (isMultiDimArray(storageKey)) return readMultiDimInt(storageKey, {x, y, z});
-		const auto it = m_globalInt3D.constFind(storageKey);
-		if (it != m_globalInt3D.constEnd() && x < it.value().size()) {
-				const auto& plane = it.value().at(x);
-				if (y < plane.size()) {
-						const auto& vec = plane.at(y);
-						if (z < vec.size()) return vec.at(z);
-				}
-		}
-		return 0;
+		return readIntSlot(storageKey, {x, y, z});
 }
 
 QString VariableStorage::getGlobalStr2DRaw(const QString& storageKey, int x, int y) const
 {
 		if (x < 0 || y < 0) return QString();
-		if (isMultiDimArray(storageKey)) return readMultiDimStr(storageKey, {x, y}).text;
-		const auto it = m_globalStr2D.constFind(storageKey);
-		if (it != m_globalStr2D.constEnd() && x < it.value().size()) {
-				const auto& vec = it.value().at(x);
-				if (y < vec.size()) return vec.at(y).text;
-		}
-		return QString();
+		return readStrSlot(storageKey, {x, y}).text;
 }
 
 QString VariableStorage::getGlobalStr3DRaw(const QString& storageKey, int x, int y, int z) const
 {
 		if (x < 0 || y < 0 || z < 0) return QString();
-		if (isMultiDimArray(storageKey)) return readMultiDimStr(storageKey, {x, y, z}).text;
-		const auto it = m_globalStr3D.constFind(storageKey);
-		if (it != m_globalStr3D.constEnd() && x < it.value().size()) {
-				const auto& plane = it.value().at(x);
-				if (y < plane.size()) {
-						const auto& vec = plane.at(y);
-						if (z < vec.size()) return vec.at(z).text;
-				}
-		}
-		return QString();
+		return readStrSlot(storageKey, {x, y, z}).text;
 }
 
 void VariableStorage::setGlobalInt1DRaw(const QString& storageKey, int x, qint64 value)
 {
 		if (x < 0) return;
-		auto it = m_globalInt1D.find(storageKey);
-		if (it != m_globalInt1D.end()) {
-				if (it.value().size() <= x) it.value().resize(x + 1, 0);
-				it.value()[x] = value;
-				return;
-		}
-		if (isMultiDimArray(storageKey)) { writeMultiDimInt(storageKey, {x}, value); return; }
-		auto& vec = m_globalInt1D[storageKey];
-		if (vec.size() <= x) vec.resize(x + 1, 0);
-		vec[x] = value;
+		writeIntSlot(storageKey, {x}, value, "写");
 }
 
 void VariableStorage::setGlobalInt2DRaw(const QString& storageKey, int x, int y, qint64 value)
 {
 		if (x < 0 || y < 0) return;
-		if (isMultiDimArray(storageKey)) { writeMultiDimInt(storageKey, {x, y}, value); return; }
-		auto& grid2D = m_globalInt2D[storageKey];
-		if (grid2D.size() <= x) grid2D.resize(x + 1);
-		auto& vec = grid2D[x];
-		if (vec.size() <= y) vec.resize(y + 1, 0);
-		vec[y] = value;
+		writeIntSlot(storageKey, {x, y}, value, "写");
 }
 
 void VariableStorage::setGlobalInt3DRaw(const QString& storageKey, int x, int y, int z, qint64 value)
 {
 		if (x < 0 || y < 0 || z < 0) return;
-		if (isMultiDimArray(storageKey)) { writeMultiDimInt(storageKey, {x, y, z}, value); return; }
-		auto& cube = m_globalInt3D[storageKey];
-		if (cube.size() <= x) cube.resize(x + 1);
-		auto& plane = cube[x];
-		if (plane.size() <= y) plane.resize(y + 1);
-		auto& vec = plane[y];
-		if (vec.size() <= z) vec.resize(z + 1, 0);
-		vec[z] = value;
+		writeIntSlot(storageKey, {x, y, z}, value, "写");
 }
 
 void VariableStorage::setGlobalInt2D(const QString &name, int x, int y, qint64 val)
@@ -1730,15 +1767,7 @@ void VariableStorage::setGlobalInt2D(const QString &name, int x, int y, qint64 v
 qint64 VariableStorage::getGlobalInt2D(const QString &name, int x, int y) const
 {
 		if (x < 0 || y < 0) return 0;
-		if (isMultiDimArray(storageName(name))) return getGlobalInt2DRaw(storageName(name), x, y);
-		auto it = m_globalInt2D.constFind(storageName(name));
-		if (it != m_globalInt2D.constEnd() && x < it.value().size()) {
-				const auto &vec = it.value().at(x);
-				if (y < vec.size()) {
-						return vec.at(y);
-				}
-		}
-		return 0;
+		return getGlobalInt2DRaw(storageName(name), x, y);
 }
 
 // ================= 角色整型 3D 实现 =================
@@ -1746,13 +1775,8 @@ void VariableStorage::setCharaInt3D(const QString &name, int charaId, int x, int
 {
 		if (charaId < 0 || x < 0 || y < 0) return;
 		charaId = resolveCharaIndex(charaId);
-		auto &charaList = m_charaIntVars3D[storageName(name)];
-		if (charaList.size() <= charaId) charaList.resize(charaId + 1);
-		auto &grid2D = charaList[charaId];
-		if (grid2D.size() <= x) grid2D.resize(x + 1);
-		auto &vec = grid2D[x];
-		if (vec.size() <= y) vec.resize(y + 1, 0);
-		vec[y] = value;
+		if (charaId < 0) return;   // VOID 角色：无模板数据
+		writeCharaIntSlot(storageName(name), charaId, {x, y}, value);
 }
 
 qint64 VariableStorage::getCharaInt3D(const QString &name, int charaId, int x, int y) const
@@ -1760,17 +1784,7 @@ qint64 VariableStorage::getCharaInt3D(const QString &name, int charaId, int x, i
 		if (charaId < 0 || x < 0 || y < 0) return 0;
 		charaId = resolveCharaIndex(charaId);
 		if (charaId < 0) return 0;   // VOID 角色：无模板数据
-		auto it = m_charaIntVars3D.constFind(storageName(name));
-		if (it != m_charaIntVars3D.constEnd() && charaId < it.value().size()) {
-				const auto &grid2D = it.value().at(charaId);
-				if (x < grid2D.size()) {
-						const auto &vec = grid2D.at(x);
-						if (y < vec.size()) {
-								return vec.at(y);
-						}
-				}
-		}
-		return 0;
+		return readCharaIntSlot(storageName(name), charaId, {x, y});
 }
 
 // ================= Save/Load Methods =================
@@ -1795,7 +1809,7 @@ bool VariableStorage::hasSystemVariable(const QString &name) const
 {
 		// 「有存储通道的系统变量」名单与装载期变量分词共用同一份
 		//（sysvar::systemStorageNames —— **新增系统变量必须同步那里**）：
-		// 漏在这里会让运行期把它当成用户全局变量（退回 m_globalInt1D）——
+		// 漏在这里会让运行期把它当成用户全局变量（退回 m_intSlots）——
 		// ITEMPRICE 就是这样变成恒 0 的（装载期写常量容器、读取走用户全局槽）。
 		// 先经 REF 形参别名解析（`#DIM REF X` ← 系统变量实参），再判名。
 		return sysvar::systemStorageNames().contains(systemVariableName(name));
@@ -1935,11 +1949,9 @@ EraBinaryData::Variable VariableStorage::readSaveEntry(const erasave::Entry& ent
     case erasave::Slot::SystemInt1D:
         appendInts(v, [&](int x, int, int) { return getSystemVariable(entry.name, x); });
         break;
-    case erasave::Slot::GlobalInt1D: {
-        const auto it = m_globalInt1D.constFind(key);
-        appendInts(v, [&](int x, int, int) -> qint64 {
-            return it != m_globalInt1D.constEnd() && x < it.value().size() ? it.value().at(x) : 0; });
-        break; }
+    case erasave::Slot::GlobalInt1D:
+        appendInts(v, [&](int x, int, int) { return readIntSlot(key, {x}); });
+        break;
     case erasave::Slot::GlobalInt2D:
         appendInts(v, [&](int x, int y, int) { return getGlobalInt2DRaw(key, x, y); });
         break;
@@ -1955,32 +1967,22 @@ EraBinaryData::Variable VariableStorage::readSaveEntry(const erasave::Entry& ent
     case erasave::Slot::GlobalStr3D:
         appendStrings(v, [&](int x, int y, int z) { return getGlobalStr3DRaw(key, x, y, z); });
         break;
-    case erasave::Slot::CharaInt1D: {
-        const auto it = m_charaIntVars.constFind(key);
-        appendInts(v, [&](int x, int, int) -> qint64 {
-            return it != m_charaIntVars.constEnd() && charaSlot >= 0 && charaSlot < it.value().size()
-                    && x < it.value().at(charaSlot).size() ? it.value().at(charaSlot).at(x) : 0; });
-        break; }
-    case erasave::Slot::CharaInt2D: {
-        const auto it = m_charaIntVars3D.constFind(key);
-        appendInts(v, [&](int x, int y, int) -> qint64 {
-            return it != m_charaIntVars3D.constEnd() && charaSlot >= 0 && charaSlot < it.value().size()
-                    && x < it.value().at(charaSlot).size() && y < it.value().at(charaSlot).at(x).size()
-                ? it.value().at(charaSlot).at(x).at(y) : 0; });
-        break; }
-    case erasave::Slot::CharaStr1D: {
-        const auto it = m_charaStrVars.constFind(key);
-        appendStrings(v, [&](int x, int, int) -> QString {
-            return it != m_charaStrVars.constEnd() && charaSlot >= 0 && charaSlot < it.value().size()
-                    && x < it.value().at(charaSlot).size() ? it.value().at(charaSlot).at(x).text : QString(); });
-        break; }
-    case erasave::Slot::CharaStr2D: {
-        const auto it = m_charaStr2D.constFind(key);
-        appendStrings(v, [&](int x, int y, int) -> QString {
-            return it != m_charaStr2D.constEnd() && charaSlot >= 0 && charaSlot < it.value().size()
-                    && x < it.value().at(charaSlot).size() && y < it.value().at(charaSlot).at(x).size()
-                ? it.value().at(charaSlot).at(x).at(y).text : QString(); });
-        break; }
+    case erasave::Slot::CharaInt1D:
+        appendInts(v, [&](int x, int, int) {
+            return charaSlot >= 0 ? readCharaIntSlot(key, charaSlot, {x}) : 0; });
+        break;
+    case erasave::Slot::CharaInt2D:
+        appendInts(v, [&](int x, int y, int) {
+            return charaSlot >= 0 ? readCharaIntSlot(key, charaSlot, {x, y}) : 0; });
+        break;
+    case erasave::Slot::CharaStr1D:
+        appendStrings(v, [&](int x, int, int) {
+            return charaSlot >= 0 ? readCharaStrSlot(key, charaSlot, {x}).text : QString(); });
+        break;
+    case erasave::Slot::CharaStr2D:
+        appendStrings(v, [&](int x, int y, int) {
+            return charaSlot >= 0 ? readCharaStrSlot(key, charaSlot, {x, y}).text : QString(); });
+        break;
     }
     return v;
 }
@@ -1989,55 +1991,25 @@ void VariableStorage::writeSaveEntry(const erasave::Entry& entry, int charaSlot,
                                      qint64 number, const QString& text)
 {
     const QString& key = storageKeyFor(entry.key);
-    const auto put1 = [](auto& list, int i, const auto& value) {
-        if (list.size() <= i) list.resize(i + 1);
-        list[i] = value;
-    };
     switch (entry.slot) {
     case erasave::Slot::SystemInt1D: setSystemVariable(entry.name, x, number); break;
-    case erasave::Slot::GlobalInt1D: put1(m_globalInt1D[key], x, number); break;
-    case erasave::Slot::GlobalStr1D: put1(m_globalStr1D[key], x, FlatStringValue(text)); break;
-    case erasave::Slot::GlobalInt2D:
-        if (isMultiDimArray(key)) writeMultiDimInt(key, {x, y}, number);
-        else { auto& a = m_globalInt2D[key]; if (a.size() <= x) a.resize(x + 1);
-               put1(a[x], y, number); }
-        break;
-    case erasave::Slot::GlobalStr2D:
-        if (isMultiDimArray(key)) writeMultiDimStr(key, {x, y}, FlatStringValue(text));
-        else { auto& a = m_globalStr2D[key]; if (a.size() <= x) a.resize(x + 1);
-               put1(a[x], y, FlatStringValue(text)); }
-        break;
-    case erasave::Slot::GlobalInt3D:
-        if (isMultiDimArray(key)) writeMultiDimInt(key, {x, y, z}, number);
-        else { auto& a = m_globalInt3D[key];
-               if (a.size() <= x) a.resize(x + 1);
-               if (a[x].size() <= y) a[x].resize(y + 1);
-               put1(a[x][y], z, number); }
-        break;
-    case erasave::Slot::GlobalStr3D:
-        if (isMultiDimArray(key)) writeMultiDimStr(key, {x, y, z}, FlatStringValue(text));
-        else { auto& a = m_globalStr3D[key];
-               if (a.size() <= x) a.resize(x + 1);
-               if (a[x].size() <= y) a[x].resize(y + 1);
-               put1(a[x][y], z, FlatStringValue(text)); }
-        break;
+    case erasave::Slot::GlobalInt1D: writeIntSlot(key, {x}, number, "读档写"); break;
+    case erasave::Slot::GlobalStr1D: writeStrSlot(key, {x}, FlatStringValue(text), "读档写"); break;
+    case erasave::Slot::GlobalInt2D: writeIntSlot(key, {x, y}, number, "读档写"); break;
+    case erasave::Slot::GlobalStr2D: writeStrSlot(key, {x, y}, FlatStringValue(text), "读档写"); break;
+    case erasave::Slot::GlobalInt3D: writeIntSlot(key, {x, y, z}, number, "读档写"); break;
+    case erasave::Slot::GlobalStr3D: writeStrSlot(key, {x, y, z}, FlatStringValue(text), "读档写"); break;
     case erasave::Slot::CharaInt1D:
-        if (charaSlot >= 0) { auto& a = m_charaIntVars[key]; if (a.size() <= charaSlot) a.resize(charaSlot + 1);
-                              put1(a[charaSlot], x, number); }
+        if (charaSlot >= 0) writeCharaIntSlot(key, charaSlot, {x}, number);
         break;
     case erasave::Slot::CharaStr1D:
-        if (charaSlot >= 0) { auto& a = m_charaStrVars[key]; if (a.size() <= charaSlot) a.resize(charaSlot + 1);
-                              put1(a[charaSlot], x, FlatStringValue(text)); }
+        if (charaSlot >= 0) writeCharaStrSlot(key, charaSlot, {x}, FlatStringValue(text));
         break;
     case erasave::Slot::CharaInt2D:
-        if (charaSlot >= 0) { auto& a = m_charaIntVars3D[key]; if (a.size() <= charaSlot) a.resize(charaSlot + 1);
-                              if (a[charaSlot].size() <= x) a[charaSlot].resize(x + 1);
-                              put1(a[charaSlot][x], y, number); }
+        if (charaSlot >= 0) writeCharaIntSlot(key, charaSlot, {x, y}, number);
         break;
     case erasave::Slot::CharaStr2D:
-        if (charaSlot >= 0) { auto& a = m_charaStr2D[key]; if (a.size() <= charaSlot) a.resize(charaSlot + 1);
-                              if (a[charaSlot].size() <= x) a[charaSlot].resize(x + 1);
-                              put1(a[charaSlot][x], y, FlatStringValue(text)); }
+        if (charaSlot >= 0) writeCharaStrSlot(key, charaSlot, {x, y}, FlatStringValue(text));
         break;
     }
 }
@@ -2104,9 +2076,7 @@ void VariableStorage::applyBinarySave(const EraBinaryData::Document& document) {
             if (!globalKeys.contains(it.key().toUpper())) it = kept.erase(it); else ++it;
         return kept;
     };
-    const auto keptI1=preserve(m_globalInt1D); const auto keptI2=preserve(m_globalInt2D); const auto keptI3=preserve(m_globalInt3D);
-    const auto keptS1=preserve(m_globalStr1D); const auto keptS2=preserve(m_globalStr2D); const auto keptS3=preserve(m_globalStr3D);
-    const auto keptIN=preserve(m_globalIntN); const auto keptSN=preserve(m_globalStrN);
+    const auto keptInt=preserve(m_intSlots); const auto keptStr=preserve(m_strSlots);
     if(normal) {
         resetForNewGame(); setLocalContext({});
         // 声明初值恢复 = resetForNewGame 的同一件事，走同一个批量实现
@@ -2115,9 +2085,7 @@ void VariableStorage::applyBinarySave(const EraBinaryData::Document& document) {
         restoreDeclaredDefaults();
         applyBinarySave(globals);
         const auto restore=[](auto& map,const auto& kept) { for(auto it=kept.begin();it!=kept.end();++it) map.insert(it.key(),it.value()); };
-        restore(m_globalInt1D,keptI1); restore(m_globalInt2D,keptI2); restore(m_globalInt3D,keptI3);
-        restore(m_globalStr1D,keptS1); restore(m_globalStr2D,keptS2); restore(m_globalStr3D,keptS3);
-        restore(m_globalIntN,keptIN); restore(m_globalStrN,keptSN);
+        restore(m_intSlots,keptInt); restore(m_strSlots,keptStr);
     }
     const erasave::Map charaMap=erasave::Map::build(m_variableConfig,m_saveVariableTable,EraBinaryData::FileType::Character);
     const erasave::Map variableMap=erasave::Map::build(m_variableConfig,m_saveVariableTable,
@@ -2201,14 +2169,10 @@ FlatStringValue VariableStorage::getStringSlot(const QString& name, const QList<
     if (isCharaDataString(name)) {
         int character; QList<int> elements; reduceCharaArgs(name, indices, character, elements);
         const int slot = resolveCharaIndex(character);
-        if (charaDataDimension(name) >= 2)
-            return m_charaStr2D.value(key).value(slot).value(elements.value(0)).value(elements.value(1));
-        return m_charaStrVars.value(key).value(slot).value(elements.value(0));
+        if (slot < 0) return {};
+        return readCharaStrSlot(key, slot, elements);
     }
-    if (isMultiDimArray(key)) return readMultiDimStr(key, indices);
-    if (indices.size() >= 3) return m_globalStr3D.value(key).value(x).value(y).value(z);
-    if (indices.size() >= 2) return m_globalStr2D.value(key).value(x).value(y);
-    return m_globalStr1D.value(key).value(x);
+    return readStrSlot(key, indices);
 }
 
 // 键已解析的 getStringSlot（「变量分词」快路径用）：跳过 storageName，其余分派
@@ -2221,10 +2185,7 @@ FlatStringValue VariableStorage::getStringSlotRaw(const QString& storageKey, con
     if (storageKey == QLatin1String("LOCALS")) return m_localStrVars.value(x);
     if (storageKey == QLatin1String("ARGS")) return m_argStrVars.value(x);
     if (storageKey == QLatin1String("SAVEDATA_TEXT")) return m_systemStrVars.value(storageKey);
-    if (isMultiDimArray(storageKey)) return readMultiDimStr(storageKey, indices);
-    if (indices.size() >= 3) return m_globalStr3D.value(storageKey).value(x).value(y).value(z);
-    if (indices.size() >= 2) return m_globalStr2D.value(storageKey).value(x).value(y);
-    return m_globalStr1D.value(storageKey).value(x);
+    return readStrSlot(storageKey, indices);
 }
 
 bool VariableStorage::setStringSlot(const QString& name, const QList<int>& indices, const FlatStringValue& value) {
@@ -2236,22 +2197,15 @@ bool VariableStorage::setStringSlot(const QString& name, const QList<int>& indic
     const QString key = storageName(name, scope);
     const int x = indices.value(0), y = indices.value(1), z = indices.value(2);
     if (x < 0 || y < 0 || z < 0) return false;
-    const auto put1 = [&](auto& list, int i) { if (list.size() <= i) list.resize(i+1); list[i] = value; };
-    const auto put2 = [&](auto& list, int i, int j) { if (list.size() <= i) list.resize(i+1); put1(list[i], j); };
-    const auto put3 = [&](auto& list, int i, int j, int k) { if (list.size() <= i) list.resize(i+1); put2(list[i], j, k); };
-    if (key == "LOCALS") put1(m_localStrVars, x);
-    else if (key == "ARGS") put1(m_argStrVars, x);
+    if (key == "LOCALS") { if (m_localStrVars.size() <= x) m_localStrVars.resize(x + 1); m_localStrVars[x] = value; }
+    else if (key == "ARGS") { if (m_argStrVars.size() <= x) m_argStrVars.resize(x + 1); m_argStrVars[x] = value; }
     else if (key == "SAVEDATA_TEXT") m_systemStrVars[key] = value;
     else if (isCharaDataString(name)) {
         int character; QList<int> elements; reduceCharaArgs(name, indices, character, elements);
         const int slot = resolveCharaIndex(character);
-        if (slot < 0 || elements.value(0) < 0 || elements.value(1) < 0) return false;
-        if (charaDataDimension(name) >= 2) put3(m_charaStr2D[key], slot, elements.value(0), elements.value(1));
-        else put2(m_charaStrVars[key], slot, elements.value(0));
+        if (slot < 0) return false;
+        writeCharaStrSlot(key, slot, elements, value);
     }
-    else if (isMultiDimArray(key)) writeMultiDimStr(key, indices, value);
-    else if (indices.size() >= 3) put3(m_globalStr3D[key], x, y, z);
-    else if (indices.size() >= 2) put2(m_globalStr2D[key], x, y);
-    else put1(m_globalStr1D[key], x);
+    else writeStrSlot(key, indices, value, "写");
     return true;
 }

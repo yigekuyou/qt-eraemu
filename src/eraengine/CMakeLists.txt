@@ -388,6 +388,9 @@ add_test(NAME test_segment_scope COMMAND test_segment_scope)
 # 数组形状的唯一事实（声明 -> VariableConfig）+ 各读者一致性（探针分歧表）
 eraengine_add_test(test_array_shape)
 add_test(NAME test_array_shape COMMAND test_array_shape)
+# 容器的单一形态：每个存储键一条扁平槽位序列 + 唯一取址公式 + 角色 stride
+eraengine_add_test(test_storage_form)
+add_test(NAME test_storage_form COMMAND test_storage_form)
 eraengine_add_test(test_erb_preprocessor)
 eraengine_add_test(test_async_load)
 eraengine_add_test(test_async_lifecycle)

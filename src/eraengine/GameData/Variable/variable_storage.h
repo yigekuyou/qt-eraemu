@@ -356,7 +356,7 @@ public:
         }
         // REF 形参别名解析：`#DIM REF ターゲット` ← 实参 TARGET 时，m_references 把
         // 形参名映射到实参的存储键（"TARGET"）。系统变量按**名字**分派到各自数组
-        // （m_target / m_flag …），并不走 m_globalInt1D —— 若不做这一步解析，
+        // （m_target / m_flag …），并不走 m_intSlots —— 若不做这一步解析，
         // 「REF 到系统变量」的读写会落到同名用户全局槽（恒 0）。eraTW 画像表示
         // 的 `CALL PRINT_TARGET_IMAGE(TARGET)`（TARGET 是系统变量）正是此例：
         // 函数内 `SIF !ターゲット` 读成 0 提前 RETURN → 「示例立絵」整块不显示。
@@ -406,10 +406,10 @@ public:
         [[nodiscard]] QList<int> arrayLengths(const QString& name, eravar::ScopeId scope) const;
         void ensureArraySize(const QString& name, int size, bool stringArray);
 
-        // ---- 多维数组（dimension >= 2）：独立容器，装载期按 lengths 乘积分配 ----
-        // 单维变量仍走 m_globalInt1D / m_globalStr1D 的轻量 QList；多维不走那套
-        // 「首维 + 懒扩容」，而是这里的一张扁平表 + 装载期算好的 strides。
-        // 运行期寻址 = base + Σ idx*stride（strides 来自声明，不重新推导）。
+        // ---- 多维数组（dimension >= 2）：与 1D **同一个**扁平容器，按几何分配 ----
+        // 每个存储键只有一条扁平槽位序列（m_intSlots / m_strSlots）；维数不决定
+        // 容器，只决定取址所用的几何：offset = Σ idx[d]·strides[d]（唯一公式
+        // 在 addressOf）。1D 的 strides 是隐式的 {1}，不另立容器。
         //
         // 上限依据（2026-10 五语料实测）：纯数字多维声明的乘积中位数 600/995/21，
         // p90 20000/11688/8000，最大值 32000/1000000/30000（eraTW/eraMegaten/
@@ -418,21 +418,21 @@ public:
         // 「乘积写错一个零」的声明。超过上限：不分配、qWarning 一条装载期诊断，
         // 运行期读写按越界处理（读 0 / 写忽略）。
         static constexpr qint64 kMaxMultiDimElements = 4'000'000;
-        // 安装一个多维变量的形状并按需分配。重复安装（同键同形状）是 no-op；
-        // 形状冲突时保留首次（与声明表 first-wins 同口径）。
-        // allocate=false：只登记形状（CHARADATA 等多维变量由角色存储各自持有元素，
-        // 这里登记是为了让 VARSIZE/尺寸口径与声明一致）。
+        // 安装一个多维变量的几何并按需分配扁平槽位。重复安装（同键同形状）是
+        // no-op；形状冲突时保留首次（与声明表 first-wins 同口径）。
+        // allocate=false：只登记几何（CHARADATA 的元素在角色容器里，每个角色
+        // 一份；这里登记是为了让 VARSIZE/尺寸口径与声明一致，并给角色 stride）。
         void installMultiDimArray(const QString& storageKey, const QList<int>& lengths,
                                   const QList<int>& strides, bool stringArray,
                                   bool allocate = true);
         // 声明各维长度的**唯一运行时视图**（装载期从 VariableDecl 拷入）。未登记返回空。
         [[nodiscard]] QList<int> multiDimLengths(const QString& storageKey) const;
-        // 多维扁平容器实际占用的元素数 / 字节数（装载期诊断用：确认「真实分配」
+        // 扁平槽位序列实际占用的元素数 / 字节数（装载期诊断用：确认「真实分配」
         // 的量级与 VmHWM 的增量对得上）。
         [[nodiscard]] qint64 multiDimAllocatedElements() const;
         [[nodiscard]] qint64 multiDimAllocatedBytes() const;
         [[nodiscard]] bool isMultiDimArray(const QString& storageKey) const {
-            return m_multiDimShapes.contains(storageKey);
+            return m_geometries.contains(storageKey);
         }
         bool hasParameter(const QString& name) const { return m_parameters.contains(eraUpperKey(name)); }
         QVariant parameter(const QString& name) const { return m_parameters.value(eraUpperKey(name)); }
@@ -453,7 +453,7 @@ public:
 		// ITEMPRICE：C# 是**常量** 1D（VariableCode.ITEMPRICE | __UNCHANGEABLE__，
 		// VariableData.cs:252 的 Int1DConstantToken(constant.ItemPrice)），
 		// 由 ConstantData.LoadData 的 `loadDataTo("ITEM.CSV", itemIndex, ItemPrice)`
-		// 从 Item.csv 第 3 列装载。此前 9388aec 把价格写进 m_globalInt1D，而 ERB 的
+		// 从 Item.csv 第 3 列装载。此前 9388aec 把价格写进用户全局槽，而 ERB 的
 		// `ITEMPRICE:i` 读取走 hasSystemVariable -> getSystemVariable（无该分支 -> 恒 0），
 		// 于是「商店价格全为 $0」回归（eraTW 隙間商店）。这里补上常量容器。
 		Q_INVOKABLE void setItemprice(int index, qint64 value);
@@ -596,59 +596,82 @@ private:
 		void writeSaveEntry(const erasave::Entry& entry, int charaSlot, int x, int y, int z,
 		                    qint64 number, const QString& text);
 
-		// 扩展 3D 字符串及更多维度的全局容器
-		QHash<QString, QList<QList<QList<FlatStringValue>>>> m_globalStr3D;
+		// ---- 扁平槽位序列：一个存储键 = 一条序列，形态只有这一种 ----
+		// 全局/私有（1D 与多维同一容器）：
+		QHash<QString, QList<qint64>>         m_intSlots;
+		QHash<QString, QList<FlatStringValue>> m_strSlots;
+		// CHARADATA：同一条扁平序列，布局 = 角色号·stride + 元素偏移
+		// （stride = 该变量每个角色的元素数 = 几何 elementCount）。
+		QHash<QString, QList<qint64>>         m_charaIntSlots;
+		QHash<QString, QList<FlatStringValue>> m_charaStrSlots;
+		// CSV 模板快照（与运行时同布局，按模板号而不是运行时下标）
+		QHash<QString, QList<qint64>>         m_csvIntSlots;
+		QHash<QString, QList<FlatStringValue>> m_csvStrSlots;
 
-        // ---- 多维数组（用户 #DIM/#DIMS 声明，dimension >= 2）----
-        // 形状只此一份：装载期从 VariableDecl（lengths/strides/elementCount）拷入，
-        // 之后运行期只读。QList 是 COW，拷贝不深拷元素。
-        struct MultiDimShape {
-            QList<int> lengths;
-            QList<int> strides;
-            qint64     elementCount = 0;   // 声明乘积（可能 > 上限）
-            bool       allocated = false;  // false = 未分配（超限/维数未定稿）
-        };
-        QHash<QString, MultiDimShape> m_multiDimShapes;
-        QHash<QString, QList<qint64>> m_globalIntN;
-        QHash<QString, QList<FlatStringValue>> m_globalStrN;
-        // 把一组下标换算成扁平偏移；形状不存在返回 nullopt（调用方回落到旧容器）。
-        [[nodiscard]] std::optional<qint64> flattenMultiDim(const QString& storageKey,
-                                                            const QList<int>& indices,
-                                                            bool warnOnBound,
-                                                            const char* operation) const;
-        [[nodiscard]] qint64 readMultiDimInt(const QString& storageKey,
-                                             const QList<int>& indices) const;
-        void writeMultiDimInt(const QString& storageKey, const QList<int>& indices, qint64 value);
-        [[nodiscard]] FlatStringValue readMultiDimStr(const QString& storageKey,
-                                                      const QList<int>& indices) const;
-        void writeMultiDimStr(const QString& storageKey, const QList<int>& indices,
-                              const FlatStringValue& value);
-        void clearMultiDimArrays() {
-            m_multiDimShapes.clear();
-            m_globalIntN.clear();
-            m_globalStrN.clear();
-        }
-
-		// 角色 2D/3D 变量容器
-		QHash<QString, QList<QList<QList<qint64>>>> m_charaInt2D;
-		QHash<QString, QList<QList<QList<FlatStringValue>>>> m_charaStr2D;
+		// ---- 取址几何：唯一缓存，唯一写入点 installGeometry ----
+		// 为什么缓存而不是每次调 shapeOf：shapeOf 要拆私有键 + 查声明表/CSV 表
+		// （每元素 2~3 次哈希 + storageName 解析），且**不提供 strides**；扁平
+		// 容器的每次读写都要 strides。缓存的是 shapeOf 的同一份事实（声明乘积），
+		// 不是第二份形状来源：写入点只有 installGeometry，形状仍只由 shapeOf 回答。
+		struct SlotGeometry {
+			QList<int> lengths;
+			QList<int> strides;          // 行主序，最后一维连续
+			qint64 elementCount = 1;     // 每键（每角色）的元素数；标量 = 1
+			bool   allocated = false;    // 装载期已按 elementCount 分配扁平槽位
+			bool   authoritative = true; // true = 声明/CSV 定形（越界写忽略）；
+			                             // false = 运行期外接几何（写时扩边界）
+		};
+		// mutable：**读**路径也可按需从 shapeOf 登记几何（首读不再依赖装载期
+		// installMultiDimArray 跑过；写入点仍只有 installGeometry 一个）。
+		mutable QHash<QString, SlotGeometry> m_geometries;      // 全局/私有键
+		QHash<QString, SlotGeometry> m_charaGeometries; // CHARADATA 每角色元素几何
+		// **唯一**的几何写入点（两个 map 都只经这里插入/扩边界）。
+		static void installGeometry(QHash<QString, SlotGeometry>& map, const QString& storageKey,
+		                            const QList<int>& lengths, const QList<int>& strides,
+		                            qint64 elementCount, bool allocated, bool authoritative);
+		// 几何按需登记：几何缺失时问 declaredShapeOfKey（shapeOf 的前两步 —— 声明 ->
+		// VariableConfig），维数 >= 2 才登记。读/写前各调一次（幂等、一次哈希）。
+		void ensureGeometry(const QString& storageKey) const;
+		// **唯一**的取址公式：offset = Σ idx[d]·strides[d]。
+		// geometry == nullptr = 无形状的 1D（offset = idx[0]，容器按需长）。
+		// 返回 -1 = 无法取址（越界 / 下标个数超过维数 / 无几何的多维坐标）。
+		[[nodiscard]] static qint64 addressOf(const SlotGeometry* geometry,
+		                                      const QList<int>& indices);
+		// **唯一**的角色 stride 公式：slot = charaSlot·elementCount + offset。
+		[[nodiscard]] static qint64 roleSlotOf(const SlotGeometry& geometry, int charaSlot,
+		                                       qint64 elementOffset);
+		// 无几何（或运行期外接几何）的多维写：装/扩几何并按新 strides 重排既有
+		// 数据（运行期才长出来的数组）。权威几何（声明/CSV）返回 -1（越界写忽略）。
+		template <typename SlotList>
+		qint64 extendExtents(QHash<QString, SlotGeometry>& map, const QString& storageKey,
+		                     const QList<int>& indices, SlotList& slots);
+		// 唯一的写规则：取址 -> 按需把容器长到 offset+1 -> 写。
+		// 有权威几何时越界忽略（qWarning 一条）；无几何时按需增长（唯一的懒扩容）。
+		bool writeIntSlot(const QString& storageKey, const QList<int>& indices, qint64 value,
+		                  const char* operation);
+		bool writeStrSlot(const QString& storageKey, const QList<int>& indices,
+		                  const FlatStringValue& value, const char* operation);
+		[[nodiscard]] qint64 readIntSlot(const QString& storageKey, const QList<int>& indices) const;
+		[[nodiscard]] FlatStringValue readStrSlot(const QString& storageKey,
+		                                          const QList<int>& indices) const;
+		// CHARADATA：角色号 -> 角色块基址（stride = 每角色元素数）。
+		[[nodiscard]] const SlotGeometry& charaGeometry(const QString& storageKey) const;
+		void ensureCharaGeometry(const QString& storageKey);
+		[[nodiscard]] qint64 readCharaIntSlot(const QString& storageKey, int charaSlot,
+		                                      const QList<int>& elements) const;
+		[[nodiscard]] FlatStringValue readCharaStrSlot(const QString& storageKey, int charaSlot,
+		                                              const QList<int>& elements) const;
+		void writeCharaIntSlot(const QString& storageKey, int charaSlot,
+		                       const QList<int>& elements, qint64 value);
+		void writeCharaStrSlot(const QString& storageKey, int charaSlot,
+		                       const QList<int>& elements, const FlatStringValue& value);
+		// 形状查询的**前两步**（声明 -> VariableConfig）。shapeOf 用它，CHARADATA
+		// 的几何安装也用它 —— 同一个函数，没有第二份形状来源。
+		[[nodiscard]] ArrayShape declaredShapeOfKey(const QString& storageKey) const;
 
 		// 内置系统状态映射（例如 DAY, MONEY, FLAG 等）
 		QHash<QString, qint64> m_systemIntVars;
 		QHash<QString, FlatStringValue> m_systemStrVars;
-
-		// 全局变量容器 (支持 1D, 2D, 3D)
-		QHash<QString, QList<qint64>> m_globalInt1D;
-		QHash<QString, QList<QList<qint64>>> m_globalInt2D;
-		QHash<QString, QList<QList<QList<qint64>>>> m_globalInt3D;
-
-		QHash<QString, QList<FlatStringValue>> m_globalStr1D;
-		QHash<QString, QList<QList<FlatStringValue>>> m_globalStr2D;
-
-		// 角色变量容器 (支持 1D/2D 对应 CharaId + Index，可扩展到 3D)
-		QHash<QString, QList<QList<qint64>>> m_charaIntVars;
-		QHash<QString, QList<QList<QList<qint64>>>> m_charaIntVars3D;
-		QHash<QString, QList<QList<FlatStringValue>>> m_charaStrVars;
 
 		// 本地变量
 		const VariableTable* m_saveVariableTable = nullptr;
@@ -717,10 +740,6 @@ private:
 		QList<int> m_charaList;
 		QSet<int>  m_charaSp;   // SP 角色的运行时下标（ADDSPCHARA）
 		QSet<int>  m_existCsv;
-		// CSV 模板快照（按模板号存放）
-		QHash<QString, QList<QList<qint64>>> m_csvIntVars;
-		QHash<QString, QList<QList<QList<qint64>>>> m_csvIntVars3D;
-		QHash<QString, QList<QList<FlatStringValue>>> m_csvStrVars;
 
 		// Variable type information and identifiers
 		QHash<QString, VariableTypeInfo> m_variableTypes;

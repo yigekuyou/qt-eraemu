@@ -397,6 +397,9 @@ add_test(NAME test_storage_form COMMAND test_storage_form)
 # 名字+下标 -> 整数存储的解析顺序（唯一解析点的护栏）
 eraengine_add_test(test_name_locus)
 add_test(NAME test_name_locus COMMAND test_name_locus)
+# 名字 -> 字符串存储的解析顺序（与 IntLocus 同形的唯一解析点护栏）
+eraengine_add_test(test_string_locus)
+add_test(NAME test_string_locus COMMAND test_string_locus)
 eraengine_add_test(test_erb_preprocessor)
 eraengine_add_test(test_async_load)
 eraengine_add_test(test_async_lifecycle)

@@ -898,6 +898,73 @@ VariableStorage::IntLocus VariableStorage::resolveIntLocus(const QString &name,
 		return l;
 }
 
+VariableStorage::StrLocus VariableStorage::resolveStrLocus(const QString &nameOrKey,
+                                                            const QList<int> &indices,
+                                                            eravar::ScopeId scope,
+                                                            StrKeyState keyState) const
+{
+		// 行序即语义：这是「名字 -> 字符串存储」判定的**唯一定义点**。
+		// getStringSlot / getStringSlotRaw / setStringSlot 只按 StrLocusKind 施加；
+		// 新增/调整优先级必须改这里，并由 test_string_locus 的护栏钉住。
+		StrLocus l;
+		l.x = indices.value(0);
+		const int y = indices.value(1), z = indices.value(2);
+		// 1) 名字 -> 存储键只解析一次。Raw 入口（StrKeyState::ResolvedKey）的键
+		//    是装载期算好的静态键，**绝不再套一次 storageName**（否则就是按 scope
+		//    重新解析，私有名/REF 别名都会把键改道）。
+		l.key = keyState == StrKeyState::Name ? storageName(nameOrKey, scope) : nameOrKey;
+		// 2) 负下标：读写都不发生。放在键解析之后与旧实现同序（解析无副作用）。
+		if (l.x < 0 || y < 0 || z < 0) {
+				l.kind = StrLocusKind::NegativeIndex;
+				return l;
+		}
+		// 3) LOCALS / 4) ARGS：函数局部字符串槽（读越界给空，写懒扩容）。
+		if (l.key == QLatin1String("LOCALS")) {
+				l.kind = StrLocusKind::LocalStr;
+				return l;
+		}
+		if (l.key == QLatin1String("ARGS")) {
+				l.kind = StrLocusKind::ArgStr;
+				return l;
+		}
+		// 5) SAVEDATA_TEXT：系统字符串，单槽（下标不参与取址）。
+		if (l.key == QLatin1String("SAVEDATA_TEXT")) {
+				l.kind = StrLocusKind::SavedataText;
+				return l;
+		}
+		// 6) 角色字符串变量（CSTR / NAME / 用户 #DIMS CHARADATA）。
+		//    只有按名入口会命中这一行：Raw 的键来自装载期「变量分词」，而角色
+		//    字符串名在分词期已判 Chara/Dynamic，不会带着键进来（语义与旧
+		//    getStringSlotRaw 一致：那里没有这一行）。
+		if (keyState == StrKeyState::Name && isCharaDataString(nameOrKey)) {
+				int character = 0;
+				reduceCharaArgs(nameOrKey, indices, character, l.elements);
+				l.charaSlot = resolveCharaIndex(character);
+				l.kind = StrLocusKind::CharaStr;
+				return l;
+		}
+		// 7) 普通扁平槽：1D 与多维共用一条序列（取址在 readStrSlot/writeStrSlot）。
+		l.kind = StrLocusKind::GlobalStr;
+		return l;
+}
+
+FlatStringValue VariableStorage::readStrLocus(const StrLocus &locus,
+                                              const QList<int> &indices) const
+{
+		// 穷尽所有 kind（无 default）：漏一个 case 在 -Wswitch + -Werror 下编译失败。
+		switch (locus.kind) {
+		case StrLocusKind::NegativeIndex: return {};
+		case StrLocusKind::LocalStr:      return m_localStrVars.value(locus.x);
+		case StrLocusKind::ArgStr:        return m_argStrVars.value(locus.x);
+		case StrLocusKind::SavedataText:  return m_systemStrVars.value(locus.key);
+		case StrLocusKind::CharaStr:
+				if (locus.charaSlot < 0) return {};
+				return readCharaStrSlot(locus.key, locus.charaSlot, locus.elements);
+		case StrLocusKind::GlobalStr:     return readStrSlot(locus.key, indices);
+		}
+		return {};   // 编译器兜底：switch 已穷尽所有枚举值
+}
+
 qint64 VariableStorage::readIntByName(const QString &name, const QList<int> &indices,
                                      eravar::ScopeId scope) const
 {
@@ -2204,19 +2271,9 @@ FlatStringValue VariableStorage::getStringSlot(const QString& name, const QList<
 
 FlatStringValue VariableStorage::getStringSlot(const QString& name, const QList<int>& indices,
                                                eravar::ScopeId scope) const {
-    const QString key = storageName(name, scope);
-    const int x = indices.value(0), y = indices.value(1), z = indices.value(2);
-    if (x < 0 || y < 0 || z < 0) return {};
-    if (key == "LOCALS") return m_localStrVars.value(x);
-    if (key == "ARGS") return m_argStrVars.value(x);
-    if (key == "SAVEDATA_TEXT") return m_systemStrVars.value(key);
-    if (isCharaDataString(name)) {
-        int character; QList<int> elements; reduceCharaArgs(name, indices, character, elements);
-        const int slot = resolveCharaIndex(character);
-        if (slot < 0) return {};
-        return readCharaStrSlot(key, slot, elements);
-    }
-    return readStrSlot(key, indices);
+    // 解析一次（resolveStrLocus），读侧只有一份施加点（readStrLocus）。
+    const StrLocus locus = resolveStrLocus(name, indices, scope, StrKeyState::Name);
+    return readStrLocus(locus, indices);
 }
 
 // 键已解析的 getStringSlot（「变量分词」快路径用）：跳过 storageName，其余分派
@@ -2224,12 +2281,10 @@ FlatStringValue VariableStorage::getStringSlot(const QString& name, const QList<
 // 累积（html += HTML_BUTTON(...)）与打印模板都靠 markup，不能只回裸文本。
 // 角色/系统字符串名（CSTR/SAVEDATA_TEXT…）在分词期已判 Dynamic，不进这里。
 FlatStringValue VariableStorage::getStringSlotRaw(const QString& storageKey, const QList<int>& indices) const {
-    const int x = indices.value(0), y = indices.value(1), z = indices.value(2);
-    if (x < 0 || y < 0 || z < 0) return {};
-    if (storageKey == QLatin1String("LOCALS")) return m_localStrVars.value(x);
-    if (storageKey == QLatin1String("ARGS")) return m_argStrVars.value(x);
-    if (storageKey == QLatin1String("SAVEDATA_TEXT")) return m_systemStrVars.value(storageKey);
-    return readStrSlot(storageKey, indices);
+    // 键已解析：同一个判定链，但第 1 步跳过 storageName（不按 scope 重新解析）。
+    const StrLocus locus = resolveStrLocus(storageKey, indices, eravar::kGlobalScope,
+                                           StrKeyState::ResolvedKey);
+    return readStrLocus(locus, indices);
 }
 
 bool VariableStorage::setStringSlot(const QString& name, const QList<int>& indices, const FlatStringValue& value) {
@@ -2238,18 +2293,30 @@ bool VariableStorage::setStringSlot(const QString& name, const QList<int>& indic
 
 bool VariableStorage::setStringSlot(const QString& name, const QList<int>& indices,
                                     const FlatStringValue& value, eravar::ScopeId scope) {
-    const QString key = storageName(name, scope);
-    const int x = indices.value(0), y = indices.value(1), z = indices.value(2);
-    if (x < 0 || y < 0 || z < 0) return false;
-    if (key == "LOCALS") { if (m_localStrVars.size() <= x) m_localStrVars.resize(x + 1); m_localStrVars[x] = value; }
-    else if (key == "ARGS") { if (m_argStrVars.size() <= x) m_argStrVars.resize(x + 1); m_argStrVars[x] = value; }
-    else if (key == "SAVEDATA_TEXT") m_systemStrVars[key] = value;
-    else if (isCharaDataString(name)) {
-        int character; QList<int> elements; reduceCharaArgs(name, indices, character, elements);
-        const int slot = resolveCharaIndex(character);
-        if (slot < 0) return false;
-        writeCharaStrSlot(key, slot, elements, value);
+    // 解析一次（与读侧同一个 resolveStrLocus），写侧只有这一份施加点。
+    // 尾部动作的差异保留在这里：LOCALS/ARGS 懒扩容，其余按各自存储写。
+    const StrLocus locus = resolveStrLocus(name, indices, scope, StrKeyState::Name);
+    // 穷尽所有 kind（无 default）：漏一个 case 在 -Wswitch + -Werror 下编译失败。
+    switch (locus.kind) {
+    case StrLocusKind::NegativeIndex: return false;
+    case StrLocusKind::LocalStr:
+        if (m_localStrVars.size() <= locus.x) m_localStrVars.resize(locus.x + 1);
+        m_localStrVars[locus.x] = value;
+        return true;
+    case StrLocusKind::ArgStr:
+        if (m_argStrVars.size() <= locus.x) m_argStrVars.resize(locus.x + 1);
+        m_argStrVars[locus.x] = value;
+        return true;
+    case StrLocusKind::SavedataText:
+        m_systemStrVars[locus.key] = value;
+        return true;
+    case StrLocusKind::CharaStr:
+        if (locus.charaSlot < 0) return false;
+        writeCharaStrSlot(locus.key, locus.charaSlot, locus.elements, value);
+        return true;
+    case StrLocusKind::GlobalStr:
+        writeStrSlot(locus.key, indices, value, "写");
+        return true;
     }
-    else writeStrSlot(key, indices, value, "写");
-    return true;
+    return false;   // 编译器兜底：switch 已穷尽所有枚举值
 }

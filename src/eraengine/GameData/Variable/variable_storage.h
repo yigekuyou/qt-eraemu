@@ -610,6 +610,36 @@ private:
 		[[nodiscard]] IntLocus resolveIntLocus(const QString& name, const QList<int>& indices,
 		                                       eravar::ScopeId scope) const;
 
+		// ---- 「名字 -> 字符串存储」的解析结果 ----
+		// 判定顺序**只在 resolveStrLocus 的 if 链里定义一次**（行序即语义）；
+		// getStringSlot / getStringSlotRaw / setStringSlot 只按 kind 施加，
+		// 读一个 switch、写一个 switch（与 IntLocus 同形），漏 case 编译失败。
+		enum class StrLocusKind : quint8 {
+			NegativeIndex,  // 任一维负下标：读写都不发生（读空 / 写 false）
+			LocalStr,       // LOCALS:x
+			ArgStr,         // ARGS:x
+			SavedataText,   // SAVEDATA_TEXT：单槽（任意下标同一格）
+			CharaStr,       // 角色字符串变量：角色块 + 元素偏移
+			GlobalStr       // 普通扁平槽（1D/2D/3D 同一容器）
+		};
+		struct StrLocus {
+			StrLocusKind kind = StrLocusKind::GlobalStr;
+			QString key;          // storageName(name, scope) 的结果（或已解析的键）
+			int x = 0;            // 第 0 个下标（LOCALS / ARGS 用）
+			int charaSlot = 0;    // 已翻译的角色槽（resolveCharaIndex 之后）
+			QList<int> elements;  // 角色元素下标（reduceCharaArgs 的结果）
+		};
+		// 入参是「名字」还是「已经解析过的存储键」。Raw 入口传 ResolvedKey：
+		// 同一个 if 链，只是第 1 步不再套 storageName（键不重新按 scope 解析；
+		// 此时 scope 参数不参与任何查询，传 kGlobalScope 即可）。
+		enum class StrKeyState : quint8 { Name, ResolvedKey };
+		[[nodiscard]] StrLocus resolveStrLocus(const QString& nameOrKey, const QList<int>& indices,
+		                                       eravar::ScopeId scope, StrKeyState keyState) const;
+		// 读侧唯一的施加点（getStringSlot 与 getStringSlotRaw 共用）：
+		// 返回 FlatStringValue（含 markup 分片），不在这里做任何解析。
+		[[nodiscard]] FlatStringValue readStrLocus(const StrLocus& locus,
+		                                           const QList<int>& indices) const;
+
 		// ---- 存档映射层的存储侧：条目（erasave::Entry）-> 容器取值/写值 ----
 		// 只做「容器类型不同」的分派；条目属于哪个容器由 save_variable_map 决定。
 		[[nodiscard]] EraBinaryData::Variable readSaveEntry(const erasave::Entry& entry, int charaSlot) const;

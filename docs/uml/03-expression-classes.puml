@@ -92,6 +92,8 @@ title 表达式 AST 与变量访问描述符
     - readParameter / readCharaData / readSlotNames / readConst
     - readGameBase / readLineCount / readRandom / readIntLimits / readRandData
     - readStringVariable / readLastLoad / readIndexedArray / readSimpleVariable
+    - DynamicContext.varNameIsKey : bool  ' REF 别名重映射后 varName 是**键**不是名字
+    ' 终局读按它二选一：键 -> *Raw / getStringSlotRaw（ResolvedKey）；名字 -> 按名入口
   }
 
   class VariableStorage {
@@ -206,5 +208,10 @@ note bottom of ExpressionEvaluator
   * 作用域是参数，不是 storage 里的环境状态：
     只有按名回退读它，键自足的节点不看它
   * 保留的第二道守卫：裸键下标数与维数不符 → 按名原语
+  * 解析**恰好一次**：applyReferenceAlias 之后 varName 已是键，置
+    DynamicContext.varNameIsKey；终局读因此走 *Raw / ResolvedKey，
+    绝不「先解析成键、再把键当名字交给按名入口」
+  * 旧形态正是在这里二次解析：REF 目标叫 RG、本段又有私有 RG 时，
+    第二次解析按当前帧名表把键改道到 段\x1fRG，读到本段那份（读到 0）
 end note
 @enduml

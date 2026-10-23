@@ -36,7 +36,9 @@ partition "装载期定型，运行期只查表" {
       GlobalInt*DRaw / getStringSlotRaw
       getLocalInt / getArgInt
       —— getStringSlotRaw 是同一个 resolveStrLocus
-         配 StrKeyState::ResolvedKey（键不再重解析）;
+         配 StrKeyState::ResolvedKey（键不再重解析）
+      —— REF 别名重映射后 varName 已是键：
+         DynamicContext.varNameIsKey 决定走 *Raw 还是按名;
     endif
   else (否：Param / Pseudo / System / Chara / Const / Dynamic)
     :resolver 表逐行匹配
@@ -65,6 +67,11 @@ legend right
   · 按名原语也只有一份顺序：`resolveIntLocus` 解析一次产出 `IntLocus`（位置是数据），
     读/写只是两个穷尽 `switch(kind)`。旧形态是读链、写链各一份手写 if 顺序（加一类漏一边
     时编译期不报，症状是「写进去的那一格读出来是另一格」），且头注释是第三份、还与两者不符。
+  · 解析**恰好一次**：键不得再当名字用。`applyReferenceAlias` 把 `ctx.varName`
+    改写成键之后置 `varNameIsKey`，终局读就走 `*Raw` / `ResolvedKey` 入口。
+    旧形态在这里二次解析（键 → 按名入口 → `storageName(key, 当前帧)`）：REF 目标叫
+    `RG`、本段又有私有 `RG` 时，键被改道到本段那份 —— 实测 `P:0` 读回 0（应为 77）。
+    这一条也有读写不对称作证：写路径一直对，坏的是读的那一半。
   · 字符串侧是同一个病的第二份：`getStringSlot` / `setStringSlot` / `getStringSlotRaw` 各写了
     一遍 `LOCALS / ARGS / SAVEDATA_TEXT / 角色 / 扁平槽`。现在同一形态（`resolveStrLocus` +
     `StrLocus` + 读/写各一个穷尽 switch）；`getStringSlotRaw` 的「键已解析」变成一个参数

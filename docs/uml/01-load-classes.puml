@@ -139,7 +139,7 @@ package "GameProc" {
   package "position（位置区，自由函数）" {
     struct PositionState {
       script / line / callStack / jumped   ' 栈深 = callStack.size()（没有 depth 副本）
-      scopeIdName / scopeId / scopeIdValid   ' executionScopeId 的缓存
+      ' 没有作用域字段：executionScopeId 每次按当前行的 scopeKey 现算
     }
     struct PositionEffects {
       callStackChanged / memorySpaceChanged

@@ -162,8 +162,10 @@ plantuml -txmi docs/uml/01-load-classes.puml
     `inline` 自由函数只吃 `const ScriptData*`（nullptr 安全）。`EraParseTable` 里
     这 7 个方法已删除、不留 forwarder。
   * **位置区**（`position_state.{h,cpp}`，`namespace position`）：状态是纯数据
-    `PositionState`（`script` / `line` / `callStack` / `jumped` / 作用域 id 缓存；
-    栈深没有字段，`depth()` 返回 `callStack.size()`），
+    `PositionState`（`script` / `line` / `callStack` / `jumped`；栈深没有字段、
+    `depth()` 返回 `callStack.size()`，作用域也没有字段、`executionScopeId()`
+    每次按当前行 `scopeKey` 现算 —— 于是 `m_position` 不是 `mutable`，
+    const 方法改不了位置），
     20 个自由函数做转移，只置 `PositionEffects` 的位（`callStackChanged` /
     `memorySpaceChanged` / `positionChanged` / `jumpRequested`）；`EraParseTable` 的 11 个
     方法是「打包 `ScriptView` → 调自由函数 → `emitEffects`」。信号顺序写死在
@@ -195,12 +197,12 @@ plantuml -txmi docs/uml/01-load-classes.puml
 `dump_warnings` 五语料（`eraTW` / `eraMegaten` / `eraTetris` / `FL3.8` / `ecd`）：
 **6 / 2 / 0 / 0 / 0** 行（`eraMegaten` 的目录参数必须是 `eraMegaten/data`；用错路径会得到
 0 字节的假基线），与 `/tmp/uml-baseline/*.raw.txt` **未排序**逐字节相同。
-累计三十三个重构（身份整数化 / 全定型 / 作用域显式化 / 只读收尾外移 / 存档独立映射 /
+累计三十四个重构（身份整数化 / 全定型 / 作用域显式化 / 只读收尾外移 / 存档独立映射 /
 私有名表前移 / 存档顺序确定性 / 写收尾外移 / 标记区外移 / 位置区外移 /
 标签归属单一索引 / 诊断切片幂等 / 常数作用域参数化 / 增量装载协议显式化 /
 GOTO 段身份入索引 / 静态检查用段身份 / 删第三张裸名表 / 错误去重 / 配对语法只判一次 /
 越界判定只判一次 / 常量下标装载期求值 / 多维独立形态 / 私有作用域按段身份 / 存档版本常数化 / LSP 侧段身份 / 函数表按脚本换贡献 / 删装载器第二份脚本清单 / CALL 入口吃段身份原文 / 删标记区三张整表副本 / 删 ScriptData::jumpTo /
- 数组形状单一入口 / 收尾 pass 表单一形态 / 删 PositionState::depth 副本）前后完全一致；
+ 数组形状单一入口 / 收尾 pass 表单一形态 / 删 PositionState::depth 副本 / 删只写不读的 scopeId 缓存）前后完全一致；
 `ctest` 48 → 60（新增 `test_parse_checks` / `test_save_variable_map` / `test_private_scope_table` /
 `test_load_contracts` / `test_save_variable_map_hashseed` / `test_jump_markings` /
 `test_position_state` / `test_goto_label_lookup` / `test_structure_pairing` / `test_index_bounds` /

@@ -35,8 +35,10 @@
 #include <QStringList>
 
 #include <algorithm>
+#include <type_traits>
 
 #include "ast/logical_line.h"
+#include "ast/name_interner.h"
 #include "era_parse_table.h"
 #include "position_state.h"
 
@@ -741,6 +743,113 @@ int main(int argc, char** argv) {
         for (int d : seenDepths) seen << QString::number(d);
         checkStr(seen.join(QLatin1Char(' ')), QStringLiteral("0 1 2 3 2 1 0"),
                  "callStackChanged 的实参序列 = reset(0) / 压 1,2,3 / 弹 2,1,0");
+    }
+
+    // -----------------------------------------------------------------------
+    // 14) executionScopeId 只读位置：每次调用都按当前行现算（没有缓存）
+    //
+    // 段身份由装载期写好的 LogicalLine::scopeKey 决定；函数只读 PositionState。
+    // 这节把「每次现算、跟着位置走」钉住：不缓存返回值，也不回写 state。
+    // -----------------------------------------------------------------------
+    qDebug() << "\n14) executionScopeId 每次现算（位置决定段身份）";
+    {
+        // (a) 同一行连续取两次：结果相同，且都等于对当前行 scopeKey 现 intern 的结果。
+        PositionState s;
+        PositionEffects fx;
+        position::setPosition(s, view, QStringLiteral("A.ERB"), 1, true, fx);
+        const auto idMain = position::executionScopeId(s, view);
+        const auto idMainAgain = position::executionScopeId(s, view);
+        check(idMain == idMainAgain, "同一行取两次：结果相同");
+        check(idMain == eravar::internName(makeScriptA().lines.at(1).scopeKey),
+              "取值 == internName(当前行 scopeKey)（每次现算）");
+
+        // (b) 换到另一个 @ 标签（SUB）后 id 改变；回到原行后复原。
+        fx = {};
+        position::setPosition(s, view, QStringLiteral("A.ERB"), 6, false, fx);
+        const auto idSub = position::executionScopeId(s, view);
+        check(idSub != idMain, "换到另一段（@SUB）后 id 改变");
+        check(idSub == eravar::internName(makeScriptA().lines.at(6).scopeKey),
+              "@SUB 行的 id == internName(该行 scopeKey)");
+        fx = {};
+        position::setPosition(s, view, QStringLiteral("A.ERB"), 2, false, fx);
+        checkInt(int(position::executionScopeId(s, view)), int(idMain),
+                 "回到 @MAIN 段的行后 id 复原");
+
+        // (c) 同名 @MAIN 的第二份声明：段身份是 (脚本, 段起点行)，所以 id 不同。
+        //     两个脚本各一行 @MAIN，scopeKey 用真实的 segmentKeyText 构造。
+        auto sameNameScript = [](const QString& script) {
+            LogicalLine ll;
+            ll.kind = LineKind::FunctionLabel;
+            ll.labelName = QStringLiteral("MAIN");
+            ll.ownerFunction = QStringLiteral("MAIN");
+            ll.scopeKey = eravar::segmentKeyText(script, 0);   // 段身份 = (脚本, 0)
+            ScriptData d;
+            d.lines = {ll};
+            return d;
+        };
+        QHash<QString, ScriptData> dupScripts;
+        dupScripts.insert(QStringLiteral("D1.ERB"), sameNameScript(QStringLiteral("D1.ERB")));
+        dupScripts.insert(QStringLiteral("D2.ERB"), sameNameScript(QStringLiteral("D2.ERB")));
+        ScriptView dupView;
+        dupView.scripts = &dupScripts;
+        PositionState ds;
+        position::setPosition(ds, dupView, QStringLiteral("D1.ERB"), 0, true, fx);
+        const auto idDup1 = position::executionScopeId(ds, dupView);
+        fx = {};
+        position::setPosition(ds, dupView, QStringLiteral("D2.ERB"), 0, false, fx);
+        const auto idDup2 = position::executionScopeId(ds, dupView);
+        check(idDup1 != idDup2, "同名 @MAIN 的另一份声明（另一段身份）id 不同");
+        check(idDup2 == eravar::internName(sameNameScript(QStringLiteral("D2.ERB")).lines.at(0).scopeKey),
+              "D2.ERB:0 的 id == internName(该行 scopeKey)");
+        fx = {};
+        position::setPosition(ds, dupView, QStringLiteral("D1.ERB"), 0, false, fx);
+        checkInt(int(position::executionScopeId(ds, dupView)), int(idDup1),
+                 "回到 D1.ERB 的同名段后 id 复原");
+
+        // (d) 文件头段：段起点行 = -1，身份仍存在（不是 kGlobalScope）。
+        LogicalLine header;
+        header.kind = LineKind::Instruction;
+        header.functionName = QStringLiteral("PRINT");
+        header.scopeKey = eravar::segmentKeyText(QStringLiteral("HDR.ERH"), -1);
+        QHash<QString, ScriptData> hdrScripts;
+        ScriptData hdrData;
+        hdrData.lines = {header};
+        hdrScripts.insert(QStringLiteral("HDR.ERH"), hdrData);
+        ScriptView hdrView;
+        hdrView.scripts = &hdrScripts;
+        PositionState hs;
+        position::setPosition(hs, hdrView, QStringLiteral("HDR.ERH"), 0, true, fx);
+        const auto idHeader = position::executionScopeId(hs, hdrView);
+        check(idHeader == eravar::internName(header.scopeKey),
+              "文件头段 id == internName((HDR.ERH,-1) 的段身份)");
+        check(idHeader != eravar::kGlobalScope, "文件头段的 id 不是 kGlobalScope");
+
+        // (e) 没有行就没有段身份：空位置 / 越界 / 负行 / 未知脚本 -> kGlobalScope。
+        PositionState none;
+        checkInt(int(position::executionScopeId(none, view)), int(eravar::kGlobalScope),
+                 "空位置（空 script）-> kGlobalScope");
+        PositionState oob;
+        oob.script = QStringLiteral("A.ERB");
+        oob.line = 999;
+        checkInt(int(position::executionScopeId(oob, view)), int(eravar::kGlobalScope),
+                 "越界行 -> kGlobalScope");
+        oob.line = -7;
+        checkInt(int(position::executionScopeId(oob, view)), int(eravar::kGlobalScope),
+                 "负行 -> kGlobalScope");
+        PositionState unknown;
+        unknown.script = QStringLiteral("NO.ERB");
+        checkInt(int(position::executionScopeId(unknown, view)), int(eravar::kGlobalScope),
+                 "未知脚本 -> kGlobalScope");
+
+        // (f) 编译期证据：签名确实是 const PositionState&。
+        static_assert(std::is_same_v<decltype(&position::executionScopeId),
+                                     eravar::ScopeId (*)(const PositionState&, const ScriptView&)>,
+                      "executionScopeId 必须接受 const PositionState&");
+        eravar::ScopeId (*const scopeFn)(const PositionState&, const ScriptView&) =
+            &position::executionScopeId;
+        const PositionState& constRef = s;
+        checkInt(int(scopeFn(constRef, view)), int(idMain),
+                 "经 const PositionState& 调用结果不变");
     }
 
     if (g_failures == 0) qDebug() << "\nALL PASSED";

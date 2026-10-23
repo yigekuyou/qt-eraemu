@@ -194,8 +194,8 @@ bool resolveJumpToScript(PositionState& state, const ScriptView& view, const QSt
 // 直接读 LogicalLine::scopeKey（装载期写入的 (脚本名, 段起点) 文本）再 intern；
 // **没有任何按函数名的回查**。装载期尚未开始执行（无位置/越界）时返回
 // kGlobalScope —— 此时只有广域常量可见，正是 #DIM 维数之类查询想要的语义。
-// **会更新 state 里的缓存**（故收非 const 引用）。
-eravar::ScopeId executionScopeId(PositionState& state, const ScriptView& view);
+// 只读位置：每次调用都按当前行现算（不缓存）。
+eravar::ScopeId executionScopeId(const PositionState& state, const ScriptView& view);
 
 }  // namespace position
 

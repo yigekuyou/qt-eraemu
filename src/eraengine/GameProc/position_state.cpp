@@ -52,10 +52,6 @@ const LogicalLine* lineAt(const ScriptView& view, const QString& script, int lin
 // ---------------------------------------------------------------------------
 
 void setLineInternal(PositionState& state, int line, bool forceEmit, PositionEffects& fx) {
-    // 作用域缓存按「当前行所属函数」记忆：行变了就必须作废。
-    // 注意顺序：旧实现先作废缓存、再判早退（同一行跳到同一行也要作废，
-    // 因为缓存可能因为别的原因陈旧）。
-    state.scopeIdValid = false;
     if (line < 0) {
         line = 0;
     }
@@ -301,15 +297,11 @@ bool resolveJumpToScript(PositionState& state, const ScriptView& view, const QSt
     return true;
 }
 
-eravar::ScopeId executionScopeId(PositionState& state, const ScriptView& view) {
-    // 段身份只在装载期写入 line->scopeKey；这里只做一次 intern（无名字回查）。
+eravar::ScopeId executionScopeId(const PositionState& state, const ScriptView& view) {
+    // 段身份只在装载期写入 line->scopeKey；这里每次调用都做一次 intern（无名字回查）。
     // 空 scopeKey（手工构造的行 / 尚未装载）= 顶层。
     const auto* line = lineAt(view, state.script, state.line);
-    const eravar::ScopeId id = line ? eravar::internName(line->scopeKey)
-                                    : eravar::kGlobalScope;
-    state.scopeId = id;
-    state.scopeIdValid = true;
-    return id;
+    return line ? eravar::internName(line->scopeKey) : eravar::kGlobalScope;
 }
 
 }  // namespace position

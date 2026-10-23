@@ -83,10 +83,6 @@ struct PositionState {
     int           line = 0;            // PC
     QList<Frame>  callStack;           // 栈深 = callStack.size()（唯一事实来源）
     bool          jumped = false;      // 上一次位置变化是不是跳转
-    // executionScopeId() 的缓存：按「当前行所属段」记忆。段身份由
-    // LogicalLine::scopeKey 直接给出（装载期唯一写入），运行期没有名字回查。
-    eravar::ScopeId   scopeId = eravar::kGlobalScope;
-    bool              scopeIdValid = false;
 };
 
 // 一次位置转移**对外要广播什么**（纯数据，不带顺序语义）。
@@ -734,10 +730,8 @@ private:
     ExpressionEvaluator* m_evaluator = nullptr;
 
     // 位置区：执行位置 + 调用栈。纯数据；算法全在 position_state.h。
-    // mutable 的唯一原因：executionScopeId() 是 const，但要更新其中的纯缓存
-    //（scopeIdName / scopeId / scopeIdValid，与搬到 PositionState 之前一样是缓存，
-    // 不改变任何可观察的执行位置语义）。
-    mutable PositionState m_position;
+    // const 方法只读它（executionScopeId 每次现算，不再有缓存要回写）。
+    PositionState m_position;
     quint64 m_segmentIdentityMismatches = 0;
 };
 

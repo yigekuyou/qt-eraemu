@@ -370,7 +370,7 @@ void EraParseTable::clear() {
     // 发信号 —— 旧顺序是 positionChanged 先、callStackChanged 后（与
     // resetPosition 相反）。这一处逐字保留，不许改成规范顺序。
     emit positionChanged(QString(), 0);
-    emit callStackChanged(0);
+    emit callStackChanged(m_position.callStack.size());   // 栈深唯一来源（此刻 = 0）
 }
 
 // ---------------------------------------------------------------------------

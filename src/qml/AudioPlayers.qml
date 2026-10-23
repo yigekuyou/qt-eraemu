@@ -59,7 +59,15 @@ Item {
                     volume: root.audio ? (slot.index === 0 ? root.audio.bgmVolume : root.audio.soundVolume) / 100 : 1
                 }
                 onMediaStatusChanged: function(status) {
-                    if (slot.index > 0 && root.audio
+                    if (!root.audio)
+                        return;
+                    if (status === MediaPlayer.InvalidMedia && slot.index === 0) {
+                        // BGM 是 loops=-1，永远不会 EndOfMedia；坏文件/不存在的文件
+                        // 只能靠 InvalidMedia 回收，否则「播放中」状态永久挂着。
+                        root.audio.stopBgm();
+                        return;
+                    }
+                    if (slot.index > 0
                         && (status === MediaPlayer.EndOfMedia || status === MediaPlayer.InvalidMedia))
                         root.audio.reportFinished(slot.index);
                 }
@@ -70,8 +78,17 @@ Item {
                 function onChannelPlay(channel, source, volume, loops) {
                     if (channel !== slot.index)
                         return;
+                    const url = root.toUrl(source);
                     player.loops = loops === -1 ? MediaPlayer.Infinite : Math.max(1, loops);
-                    player.source = root.toUrl(source);
+                    // 同一文件再次 PLAY（EE：每次 play() 都先 stop() 再从头播）：
+                    // 只把 source 赋成同一个 URL，MediaPlayer 视为「没变化」而不重载，
+                    // 表现为「点了重播却接着上一半」。同源时显式回到 0 再播。
+                    if (player.source.toString() === url) {
+                        player.position = 0;
+                        player.play();
+                        return;
+                    }
+                    player.source = url;
                     player.play();
                 }
                 function onChannelStop(channel) {

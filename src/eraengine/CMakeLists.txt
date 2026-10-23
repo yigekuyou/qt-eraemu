@@ -437,6 +437,10 @@ eraengine_add_test(test_print_template)
 eraengine_add_test(test_extension_registry)
 eraengine_add_test(test_audio_pipeline)
 add_test(NAME test_audio_pipeline COMMAND test_audio_pipeline)
+# 播放契约（不含声卡）：重复 PLAYBGM 必须重发 channelPlay、容量收缩只停被裁管线、
+# reportFinished 的 0 号/越界边界、0 条 SE 管线时 PLAYSOUND 不假装在播。
+eraengine_add_test(test_audio_pipeline_contracts)
+add_test(NAME test_audio_pipeline_contracts COMMAND test_audio_pipeline_contracts)
 eraengine_add_test(test_getconfig)
 add_test(NAME test_getconfig COMMAND test_getconfig)
 add_test(NAME test_print_template COMMAND test_print_template)

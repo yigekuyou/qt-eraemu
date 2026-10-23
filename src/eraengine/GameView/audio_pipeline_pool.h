@@ -89,7 +89,9 @@ public:
     // ---- C++ 控制 API（扩展的音频命令调用）--------------------------------
     // 返回「实际使用的资源名」：命中磁盘时是绝对路径，否则原样返回（空串 = 参数为空）。
     QString playBgm(const QString& source);              // 循环播放 BGM
-    void stopBgm();                                      // STOPBGM
+    // STOPBGM；也是 QML 播放层对「BGM 资源无效（InvalidMedia）」的回收入口 ——
+    // BGM 是 loops=-1，永远不会 EndOfMedia，坏文件若不回收会让「播放中」永久亮着。
+    Q_INVOKABLE void stopBgm();
     // PLAYSOUND：挑一条空闲 SE 管线（全忙则用 0 号，对齐 EE `if (i >= sound.Length) i = 0`）；
     // repeat 为播放次数（EE 的 `Opt`，>=1）。
     QString playSound(const QString& source, int repeat = 1);

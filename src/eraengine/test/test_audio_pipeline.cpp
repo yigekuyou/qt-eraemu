@@ -119,7 +119,7 @@ int main(int argc, char* argv[]) {
     }
 
     // =====================================================================
-    qDebug() << "\n2) BGM：循环 (loops=-1) / 同曲不重启 / 停止";
+    qDebug() << "\n2) BGM：循环 (loops=-1) / 同曲重播从头 / 停止";
     {
         AudioPipelinePool pool;
         pool.setSoundPipelines(10u);
@@ -137,7 +137,8 @@ int main(int argc, char* argv[]) {
         check(plays == 1 && lastChannel == 0u && lastLoops == -1,
               "BGM 走 0 号管线且无限循环（EE repeat=-1）");
         pool.playBgm(QStringLiteral("bgm"));
-        check(plays == 1, "同曲在播 -> 不重启");
+        // 对齐 EE `Sound.play()`：每次都先 stop() 再打开文件，同曲再播 = 从头播。
+        check(plays == 2 && lastLoops == -1, "同曲再播 -> 重发 channelPlay（从头，loops=-1）");
         pool.stopBgm();
         check(stops == 1 && !pool.bgmPlaying() && pool.activeChannels() == 0, "STOPBGM 回落");
     }

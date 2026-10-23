@@ -32,4 +32,23 @@ TestCase {
         players.destroy();
         audio.destroy();
     }
+
+    // BGM 是 loops=-1，不存在「自然播完」；只有 InvalidMedia 能证明这条流已经废了。
+    // 若不回收，池的 bgmPlaying/activeChannels 会永久为真（状态灯一直亮「播放中」）。
+    function test_invalidMediaReleasesBgm() {
+        const audio = consoleFixture.createAudio(tc);
+        const component = Qt.createComponent("../../../qml/AudioPlayers.qml");
+        verify(component.status === Component.Ready, component.errorString());
+        const players = component.createObject(tc, { audio: audio });
+        verify(players !== null);
+        try {
+            consoleFixture.playBgm(audio, "file:///nonexistent-emuera-audio-file.wav");
+            verify(audio.bgmPlaying, "池先接受这次播放请求");
+            tryVerify(() => !audio.bgmPlaying, 5000);
+            compare(audio.activeChannels, 0);
+        } finally {
+            players.destroy();
+            audio.destroy();
+        }
+    }
 }

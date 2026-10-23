@@ -110,7 +110,9 @@ bool AudioPipelinePool::sourceExists(const QString& source) const {
 QString AudioPipelinePool::playBgm(const QString& source) {
     const QString resolved = resolveSource(source);
     if (resolved.isEmpty()) return {};
-    if (m_bgm.playing && m_bgm.source == resolved) return resolved;   // 同曲在播 -> 不重启
+    // 每次 PLAYBGM 都要重新发起（对齐 EE `Sound.play()`：先 stop() 再打开文件）。
+    // 同一文件再播 = 从 0:00 重新开始，而不是「当作已在播就忽略」—— 脚本用
+    // `PLAYBGM "theme"` 回到标题曲时，期望的是从头播，不是接着上一半。
     m_bgm.source = resolved;
     m_bgm.playing = true;
     emit channelPlay(kBgmChannel, resolved, m_bgmVolume, /*loops*/ -1);   // EE: repeat=-1

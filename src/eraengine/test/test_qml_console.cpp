@@ -110,6 +110,11 @@ public:
     Q_INVOKABLE QObject* createAudio(QObject* parent = nullptr) {
         return new AudioPipelinePool(parent);
     }
+    // BGM 的播放请求由 C++ 侧发起（真实路径是 PLAYBGM -> 扩展 -> 池）；
+    // QML 测试直接从池发一条 channelPlay，观察播放层如何回收。
+    Q_INVOKABLE void playBgm(QObject* pool, const QString& source) {
+        static_cast<AudioPipelinePool*>(pool)->playBgm(source);
+    }
     Q_INVOKABLE QObject* create(QObject* parent = nullptr) {
         return new ConsoleBackend(parent);
     }

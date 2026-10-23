@@ -11,6 +11,7 @@ title 表达式 AST 与变量访问描述符
     runnerInstruction : RunnerInstruction
     arguments : QList<Operand>
     condition : ExpressionNode*
+    conditionNeedsScope : bool   ' 装载期一趟 OR 出来：这条条件求值要不要执行位置
     assignmentAsts : QList
     columnDefaults : QList
     ownerFunction : QString
@@ -124,6 +125,7 @@ class GameBaseData
 LogicalLine *-- Operand
 LogicalLine *-- TypedArgument
 LogicalLine --> ExpressionNode : condition / assignmentAsts
+LogicalLine ..> VariableNode : conditionNeedsScope = OR needsExecutionScope(kind)
 Operand --> ExpressionNode
 TypedArgument --> Operand
 

@@ -64,11 +64,11 @@ namespace position {
 // line 未变且 forceEmit=false -> 什么都不亮（旧实现的 early-return）。
 void setLineInternal(PositionState& state, int line, bool forceEmit, PositionEffects& fx);
 
-// 压帧：callStack.append + depth 同步 + 亮 callStackChanged。
+// 压帧：callStack.append + 亮 callStackChanged（栈深只由 callStack 决定）。
 void pushFrame(PositionState& state, const Frame& frame, PositionEffects& fx);
 
-// 弹帧：空栈返回 Frame() 且不动状态（不亮位）；否则 takeLast + depth 同步 +
-// 亮 callStackChanged，返回被弹出的帧。
+// 弹帧：空栈返回 Frame() 且不动状态（不亮位）；否则 takeLast + 亮
+// callStackChanged，返回被弹出的帧。
 Frame popFrame(PositionState& state, PositionEffects& fx);
 
 // 某脚本的行数（不存在 = 0）。跳转越界判定的唯一数据来源。

@@ -68,7 +68,6 @@ void setLineInternal(PositionState& state, int line, bool forceEmit, PositionEff
 
 void pushFrame(PositionState& state, const Frame& frame, PositionEffects& fx) {
     state.callStack.append(frame);
-    state.depth = state.callStack.size();
     fx.callStackChanged = true;
 }
 
@@ -77,7 +76,6 @@ Frame popFrame(PositionState& state, PositionEffects& fx) {
         return Frame();
     }
     const Frame frame = state.callStack.takeLast();
-    state.depth = state.callStack.size();
     fx.callStackChanged = true;
     return frame;
 }
@@ -99,7 +97,6 @@ PositionEffects reset(PositionState& state) {
     // 与旧 resetPosition() 逐字一致：清栈 + PC=0，**不动 script / jumped /
     // 作用域缓存**。script 由调用方决定（clear() 要清、setEntryPoint 要保留）。
     state.callStack.clear();
-    state.depth = 0;
     state.line = 0;
     PositionEffects fx;
     fx.callStackChanged = true;

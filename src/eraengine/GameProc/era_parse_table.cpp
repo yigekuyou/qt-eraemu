@@ -892,7 +892,7 @@ int EraParseTable::firstGotoLabelPosition(const QString& scriptName, int functio
 int EraParseTable::currentFunctionSegment() const {
     // 有帧：帧里记的就是「进入的是哪个 @声明」（callLabelAt 可以指定同名函数的
     // 非首份声明），这正是段的身份。
-    if (m_position.depth > 0) return m_position.callStack.last().entryLine;
+    if (!m_position.callStack.isEmpty()) return m_position.callStack.last().entryLine;
     // 没有帧（系统入口的直接执行）：直接读行的 segmentStart —— 装载期写入的
     // 段起点下标；**不再按函数名回查**（同名 @F 的两段会回查到错误的那一份）。
     const LogicalLine* line = lineAt(m_position.script, m_position.line);
@@ -941,7 +941,8 @@ void EraParseTable::emitEffects(const PositionEffects& fx, const QString& jumpLa
     //   callStackChanged -> memorySpaceChanged -> positionChanged -> jumpRequested
     // 载荷取自转移**之后**的状态：旧实现 emit 时读的正是同一批值
     //（jumpRequested 的 targetPosition 就是刚设好的 PC）。
-    if (fx.callStackChanged)   emit callStackChanged(m_position.depth);
+    // 实参 = 发信号这一刻的栈深（emit 同步；栈深只有 callStack.size() 一个来源）。
+    if (fx.callStackChanged)   emit callStackChanged(m_position.callStack.size());
     if (fx.memorySpaceChanged) emit memorySpaceChanged(m_position.script);
     if (fx.positionChanged)    emit positionChanged(m_position.script, m_position.line);
     if (fx.jumpRequested)      emit jumpRequested(m_position.script, jumpLabel, m_position.line);
@@ -956,7 +957,7 @@ int EraParseTable::currentLine() const {
 }
 
 int EraParseTable::depth() const {
-    return m_position.depth;
+    return m_position.callStack.size();   // 栈深的唯一来源
 }
 
 const QList<Frame>& EraParseTable::callStack() const {

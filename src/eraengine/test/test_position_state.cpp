@@ -262,8 +262,7 @@ int main(int argc, char** argv) {
         PositionEffects fx;
         check(position::callLabel(s, view, "SUB", /*advanceWasCalled=*/false, fx),
               "callLabel(SUB) 成功");
-        checkInt(s.callStack.size(), 1, "压了一帧");
-        checkInt(s.depth, 1, "depth 同步");
+        checkInt(s.callStack.size(), 1, "压了一帧（栈深 = callStack.size()）");
         const Frame fr = s.callStack.last();
         checkStr(fr.script, "A.ERB", "帧里的返回脚本");
         checkInt(fr.returnLine, 3, "返回地址 = 当前行 + 1");
@@ -373,8 +372,7 @@ int main(int argc, char** argv) {
         checkStr(s.script, "A.ERB", "回到帧里的脚本");
         checkInt(s.line, 3, "回到帧里的返回地址");
         check(!s.jumped, "RETURN 后 jumped = false");
-        checkInt(s.callStack.size(), 0, "弹空");
-        checkInt(s.depth, 0, "depth 同步");
+        checkInt(s.callStack.size(), 0, "弹空（栈深 = callStack.size()）");
         only(fx, true, true, true, false, "弹帧 + 切空间 + 定位");
 
         PositionState s2;
@@ -659,6 +657,90 @@ int main(int argc, char** argv) {
                  "reload 后旧标签从索引消失");
         checkInt(r.getLabelPosition(reloaded, QStringLiteral("DUP")), 1,
                  "reload 后新标签行号生效（不是旧版的 2）");
+    }
+
+    // -----------------------------------------------------------------------
+    // 13) 栈深只有一个事实来源
+    //
+    // depth() 是 callStack 的**公开名字**，不是第二份副本：任何时候都必须
+    // 等于 callStack().size()。callStackChanged(int) 的实参同样必须是
+    // 「发信号那一刻」的栈深 —— 这里逐次录下来，既比较每次的实参，也比较
+    // 整条序列，作为「信号值 = 栈深」的唯一证据。
+    // -----------------------------------------------------------------------
+    qDebug() << "\n13) depth() == callStack().size()（栈深唯一事实来源）";
+    {
+        EraParseTable table(nullptr);
+        table.loadScript(QStringLiteral("A.ERB"), makeScriptA().lines);
+        table.loadScript(QStringLiteral("B.ERB"), makeScriptB().lines);
+
+        // 不变量：每个操作之后都查一次。
+        auto invariant = [&table](const QString& what) {
+            checkInt(table.depth(), int(table.callStack().size()),
+                     QStringLiteral("不变量 depth() == callStack().size()：%1").arg(what));
+        };
+
+        int signalCount = 0;
+        bool payloadMatches = true;
+        QList<int> seenDepths;
+        // emitEffects 是同步的：lambda 里读到的 table 状态就是发信号那一刻的状态。
+        QObject::connect(&table, &EraParseTable::callStackChanged, [&](int d) {
+            ++signalCount;
+            seenDepths << d;
+            if (d != table.depth() || d != table.callStack().size()) payloadMatches = false;
+        });
+
+        table.setPosition(QStringLiteral("A.ERB"), 2, true);
+
+        // (a) reset：depth() == 0 且栈空
+        table.resetPosition();
+        checkInt(table.depth(), 0, "reset 后 depth() == 0");
+        check(table.callStack().isEmpty(), "reset 后 callStack 为空");
+        checkInt(signalCount, 1, "reset 发一次 callStackChanged");
+        invariant(QStringLiteral("reset 后"));
+
+        // (b) 连续三次压帧 -> depth() == 3
+        check(table.callLabel(QStringLiteral("REMOTE")), "第 1 次压帧（A.ERB:2 -> B.ERB:REMOTE）");
+        checkInt(table.depth(), 1, "压一帧后 depth() == 1");
+        check(table.callLabel(QStringLiteral("SUB")), "第 2 次压帧（B.ERB -> A.ERB:SUB）");
+        checkInt(table.depth(), 2, "压两帧后 depth() == 2");
+        check(table.callLabel(QStringLiteral("REMOTE_2")), "第 3 次压帧（A.ERB -> B.ERB:REMOTE_2）");
+        checkInt(table.depth(), 3, "连续三次压帧后 depth() == 3");
+        invariant(QStringLiteral("三次压帧后"));
+
+        // (c) 弹两次 -> depth() == 1
+        const int beforePops = signalCount;
+        check(table.returnFromCall(), "第 1 次弹帧");
+        check(table.returnFromCall(), "第 2 次弹帧");
+        checkInt(table.depth(), 1, "弹两次后 depth() == 1");
+        checkInt(signalCount - beforePops, 2, "两次弹帧各发一次 callStackChanged");
+        invariant(QStringLiteral("弹两次后"));
+
+        // (d) 空栈：弹帧失败、depth() == 0、不亮 callStackChanged
+        check(table.returnFromCall(), "第 3 次弹帧（弹到空栈）");
+        checkInt(table.depth(), 0, "弹到空栈后 depth() == 0");
+        const int beforeEmptyPop = signalCount;
+        check(!table.returnFromCall(), "空栈 returnFromCall 返回 false");
+        checkInt(table.depth(), 0, "空栈弹帧后 depth() 仍为 0");
+        checkInt(signalCount - beforeEmptyPop, 0, "空栈弹帧不亮 callStackChanged");
+        invariant(QStringLiteral("空栈弹帧后"));
+
+        // (e) 基元层同样：空栈 popFrame 返回默认帧且一位都不亮
+        {
+            PositionState s;
+            PositionEffects fx;
+            const Frame fr = position::popFrame(s, fx);
+            check(fr.script.isEmpty() && fr.returnLine == 0, "空栈 popFrame 返回默认 Frame");
+            check(s.callStack.isEmpty(), "空栈 popFrame 后 callStack 仍为空");
+            only(fx, false, false, false, false, "空栈 popFrame 一位都不亮");
+        }
+
+        // (f) 信号值 = 发信号那一刻的栈深
+        check(signalCount > 0, "本轮至少发过一次 callStackChanged");
+        check(payloadMatches, "每次 callStackChanged(int) 的实参都等于当时的 depth()");
+        QStringList seen;
+        for (int d : seenDepths) seen << QString::number(d);
+        checkStr(seen.join(QLatin1Char(' ')), QStringLiteral("0 1 2 3 2 1 0"),
+                 "callStackChanged 的实参序列 = reset(0) / 压 1,2,3 / 弹 2,1,0");
     }
 
     if (g_failures == 0) qDebug() << "\nALL PASSED";

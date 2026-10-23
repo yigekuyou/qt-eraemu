@@ -81,8 +81,7 @@ Q_DECLARE_METATYPE(Frame)
 struct PositionState {
     QString       script;              // 当前内存空间（空 = 还没有位置）
     int           line = 0;            // PC
-    QList<Frame>  callStack;
-    int           depth = 0;           // == callStack.size()，缓存给人读
+    QList<Frame>  callStack;           // 栈深 = callStack.size()（唯一事实来源）
     bool          jumped = false;      // 上一次位置变化是不是跳转
     // executionScopeId() 的缓存：按「当前行所属段」记忆。段身份由
     // LogicalLine::scopeKey 直接给出（装载期唯一写入），运行期没有名字回查。
@@ -223,7 +222,7 @@ struct ScriptView {
 //
 //   只读区 : m_scripts（ScriptData，包含装载期绑定的 AST）
 //   标记区 : ScriptData 内的 loopEndLines / ifBranches / … + 各行 jumpTo
-//   位置区 : m_position（script / line(PC) / callStack / depth）
+//   位置区 : m_position（script / line(PC) / callStack）
 // ---------------------------------------------------------------------------
 class EraParseTable : public QObject {
     Q_OBJECT
@@ -309,8 +308,8 @@ public:
 
     // 当前执行位置所在的函数段起点行（= 当前行的 @标签行；文件头 = -1）。
     // 有调用帧时帧里的 entryLine 就是段起点（事件导航用 callLabelAt 可以显式指定
-    // 同名函数的**非首份**声明，所以不能用名字回查索引）；没有帧（depth==0 的
-    // 系统入口）时直接读行上的 segmentStart（装载期写入的段起点下标）。
+    // 同名函数的**非首份**声明，所以不能用名字回查索引）；栈空（系统入口）时
+    // 直接读行上的 segmentStart（装载期写入的段起点下标）。
     [[nodiscard]] int currentFunctionSegment() const;
 
     bool resolveJumpTarget(const QString& label, int& position);

@@ -59,11 +59,15 @@ legend right
     因此没有「循环值越界」检查。
 endlegend
 note right
-  单维与多维是两种形态：
-  单维 = 扁平容器 + 懒扩容（strides 为空）；
-  多维 = 装载期按 lengths 乘积真实分配（上限 4e6），
-  strides 写进声明，运行期只做 Σidx*stride + 一次边界判断。
-  越界读 0、写 qWarning 后忽略 —— 多维不再偷偷扩容。
+  容器只有一种形态：一个存储键 = 一条扁平槽位序列。
+  维数不决定容器，只决定取址：
+    offset = Σ idx[d]·strides[d]             （addressOf，唯一公式）
+    slot   = charaSlot·elementCount + offset （roleSlotOf，CHARADATA）
+  1D 是「无几何」的特例（扁平序号）；多维装载期按 lengths 乘积真实分配
+  （上限 4e6，语料实测最大 1e6），越界读 0、写 qWarning 后忽略 —— 不偷偷扩容。
+  几何（strides）由 shapeOf 那份形状派生，缓存唯一写入点 installGeometry。
+  旧形态：1D/2D/3D 三套平行容器各一套取址与懒扩容规则，
+  CHARADATA 每角色一套嵌套 QList（内层 QList 头单独占块）。
 
   形状（维数 / 每维长度 / 元素总数）只有一份、只有一个入口：
   VariableStorage::shapeOf(name, scope) → { lengths, elementCount, lengthOf(d) }

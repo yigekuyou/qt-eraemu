@@ -94,7 +94,10 @@ title 表达式 AST 与变量访问描述符
   }
 
   class VariableStorage {
-    - m_globalInt1D / 2D / 3D : QHash<QString>
+    - m_intSlots / m_strSlots : QHash<QString>          ' 一个键一条扁平槽位序列（1D 与多维同一条）
+    - m_charaIntSlots / m_charaStrSlots : QHash<QString> ' 角色号·stride + 元素偏移
+    - m_csvIntSlots / m_csvStrSlots : QHash<QString>     ' 同布局的 COW 快照
+    - m_geometries / m_charaGeometries : QHash           ' 取址几何（唯一写入点 installGeometry）
     - m_localIntVars / m_argIntVars : QList
     - m_systemIntVars / m_systemStrVars : QHash
     - m_privateNames : QHash   ' scopeId → (名字 → 存储键)，装载期安装
@@ -109,6 +112,8 @@ title 表达式 AST 与变量访问描述符
     + storageKeyFor(key) : const QString&       ' 唯一 id→存储串入口（记忆化）
     + shapeOf(name, scope) : ArrayShape         ' 形状唯一入口（声明 → 装载期尺寸表 → 多维几何）
     + allocatedSlots(key) : int                 ' 容器分配量（不是形状）
+    - addressOf(geometry, indices) : qint64     ' 唯一取址：Σ idx[d]·strides[d]
+    - roleSlotOf(geometry, chara, offset) : qint64   ' 唯一角色块：charaSlot·elementCount + offset
     + getGlobalInt1DRaw(key, x) / setGlobalInt1DRaw(key, x, v)
     + getStringSlotRaw(key, indices) : FlatStringValue
     + getLocalInt / getArgInt / setLocalInt / setArgInt
@@ -154,6 +159,10 @@ note right of VariableKey
 end note
 
 note right of VariableStorage
+  容器也只有一种形态：维数不决定容器，只决定取址几何
+  （1D 是「无几何」的特例）。旧形态是 1D/2D/3D 三套平行容器，
+  各有自己的取址与懒扩容规则，CHARADATA 还是每角色一套嵌套 QList。
+
   形状也是装载期事实，只有一个入口 `shapeOf`：
   `VARSIZE` 函数 / `VARSIZE` 语句 / `arraySize` / `arrayLengths` /
   多维下标翻译都读它；容器当前分配量（`allocatedSlots`）不是形状。

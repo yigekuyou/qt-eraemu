@@ -72,6 +72,15 @@ legend right
     旧形态在这里二次解析（键 → 按名入口 → `storageName(key, 当前帧)`）：REF 目标叫
     `RG`、本段又有私有 `RG` 时，键被改道到本段那份 —— 实测 `P:0` 读回 0（应为 77）。
     这一条也有读写不对称作证：写路径一直对，坏的是读的那一半。
+  · **作用域永远是参数，没有「当前帧」这个隐含输入**：显式重载
+    `set/getGlobal*(…, scope)`、`getStringSlot(…, scope)`、`arraySize(…, scope)` 是
+    生产的唯一形态；无 scope 的那一族只剩名字里带 `*InCurrentFrame` 的一种
+    （生产 0 调用，旧名字已删 → 退回隐式就是编译错误）。
+    病因证据：把 `enterCall` 与 `bindArguments` 顺序颠倒（测试开关
+    `setTestBindBeforeEnter`），改前 **5 条断言红**（元素形参写进调用者帧），
+    改后同一颠倒 **全绿** —— 结论不再依赖「谁恰好是当前帧」。
+    扩展层没有段身份，于是 `forksupport::currentFrameScope(storage)` 是一次
+    **显式声明**，而不是偷偷读成员。
   · 字符串侧是同一个病的第二份：`getStringSlot` / `setStringSlot` / `getStringSlotRaw` 各写了
     一遍 `LOCALS / ARGS / SAVEDATA_TEXT / 角色 / 扁平槽`。现在同一形态（`resolveStrLocus` +
     `StrLocus` + 读/写各一个穷尽 switch）；`getStringSlotRaw` 的「键已解析」变成一个参数

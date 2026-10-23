@@ -82,6 +82,17 @@ plantuml -txmi docs/uml/01-load-classes.puml
   读出来是另一格」。`ARGS/LOCALS/RESULTS` 的读写不对称是 Era 语义、不是实现分叉，由
   `test_name_locus` 的 51 条断言显式钉住（不是消掉）。`storageKeyFor` 仍是唯一 id→串入口，
   存储容器仍是字符串键（存档格式不变）。
+- **删掉「当前帧」这个隐含输入**：存储层的每个「名字 → 存储」入口都必须说清用哪个作用域。
+  无 scope 的那一族现在只剩名字里带 `*InCurrentFrame` 的一种（生产 **0 调用**，旧名字已删
+  —— 任何退回隐式的调用点是**编译错误**，不是靠评审看出来）。显式 scope 重载
+  （`set/getGlobalInt1D/2D/3D`、`set/getGlobalStr1D/2D`、`getStringSlot`、`setStringSlot`、
+  `arraySize`/`arrayLengths`/`ensureArraySize`）没有默认参数。
+  **病因证据**：把 `enterCall` 与 `bindArguments` 的顺序颠倒（测试开关
+  `ScriptRunner::setTestBindBeforeEnter`，默认关）—— 改前 **5 条断言红**（元素形参
+  写进调用者帧、调用者同名私有变量被污染），改后同一颠倒 **全绿**。上一刀那条
+  `bindArguments` 的 `Q_ASSERT` 因此删掉：它钉的是旧假设，显式化之后顺序无关。
+  扩展层没有段身份，于是 `forksupport::currentFrameScope(storage)` 是一次**显式声明**。
+  副作用清理：`ExpressionEvaluator::evaluateIndexedVariable`（0 调用点、无 scope 参数）删除。
 - **键不得再当名字解析（这一刀是 bug 修复，不是等价重构）**：`REF` 别名
   （`applyReferenceAlias`）把 `ctx.varName` 改写成的已经是**存储键**，但终局读把它当名字
   交给按名入口，里面 `storageName(key, m_privateScopeId)` 又解析一次 —— 目标叫 `RG`、
@@ -236,7 +247,7 @@ plantuml -txmi docs/uml/01-load-classes.puml
 `dump_warnings` 五语料（`eraTW` / `eraMegaten` / `eraTetris` / `FL3.8` / `ecd`）：
 **6 / 2 / 0 / 0 / 0** 行（`eraMegaten` 的目录参数必须是 `eraMegaten/data`；用错路径会得到
 0 字节的假基线），与 `/tmp/uml-baseline/*.raw.txt` **未排序**逐字节相同。
-累计三十九个重构（身份整数化 / 全定型 / 作用域显式化 / 只读收尾外移 / 存档独立映射 /
+累计四十个重构（身份整数化 / 全定型 / 作用域显式化 / 只读收尾外移 / 存档独立映射 /
 私有名表前移 / 存档顺序确定性 / 写收尾外移 / 标记区外移 / 位置区外移 /
 标签归属单一索引 / 诊断切片幂等 / 常数作用域参数化 / 增量装载协议显式化 /
 GOTO 段身份入索引 / 静态检查用段身份 / 删第三张裸名表 / 错误去重 / 配对语法只判一次 /
@@ -245,7 +256,8 @@ GOTO 段身份入索引 / 静态检查用段身份 / 删第三张裸名表 / 错
  容器形态单一化（一个键一条扁平槽位序列）/ 条件范围装载期定完（conditionNeedsScope）/
  按名原语的解析顺序单一化（IntLocus + 两个穷尽 switch）/
  字符串侧同一形态（StrLocus + StrKeyState，同一份七步行序）/
- **键不得再当名字解析**（varNameIsKey → *Raw / ResolvedKey））前后完全一致；
+ **键不得再当名字解析**（varNameIsKey → *Raw / ResolvedKey）/
+ 删掉「当前帧」这个隐含输入（显式 scope 重载 + *InCurrentFrame 生产 0 调用））前后完全一致；
 `ctest` 48 → 65（新增 `test_parse_checks` / `test_save_variable_map` / `test_private_scope_table` /
 `test_load_contracts` / `test_save_variable_map_hashseed` / `test_jump_markings` /
 `test_position_state` / `test_goto_label_lookup` / `test_structure_pairing` / `test_index_bounds` /

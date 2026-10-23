@@ -128,8 +128,13 @@ title 表达式 AST 与变量访问描述符
     - roleSlotOf(geometry, chara, offset) : qint64   ' 唯一角色块：charaSlot·elementCount + offset
     + getGlobalInt1DRaw(key, x) / setGlobalInt1DRaw(key, x, v)
     + getStringSlotRaw(key, indices) : FlatStringValue   ' 键已解析 → ResolvedKey，不重解析
-    + getStringSlot / setStringSlot(name, indices[, scope])
+    + getStringSlot / setStringSlot(name, indices, scope)   ' scope 必须给（无默认参数）
     ' 读/写不对称是 Era 语义、由护栏钉住：读越界给空不扩容，写按需扩容
+    + set/getGlobalInt1D/2D/3D(..., scope) / set/getGlobalStr1D/2D(..., scope)
+    + arraySize / arrayLengths / ensureArraySize(name[, ...], scope)
+    - *InCurrentFrame(name, ...)          ' **生产 0 调用**：假设写在名字里
+    ' 无 scope 形态只剩这个名字；旧的无 scope 名字已删除 —— 生产代码
+    ' 一旦退回「解名字但不说是哪一帧」就是编译错误
     + getLocalInt / getArgInt / setLocalInt / setArgInt
   }
 

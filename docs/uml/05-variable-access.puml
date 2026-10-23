@@ -27,10 +27,16 @@ partition "装载期定型，运行期只查表" {
       :读 / 写各一次穷尽 switch(kind)
       无 default：漏一类 = -Wswitch + -Werror 编译失败
       —— 顺序不再有两份手写副本;
+      :字符串侧同一形态
+      resolveStrLocus(名字, 下标, scope, Name) → StrLocus
+      负下标 → LOCALS → ARGS → SAVEDATA_TEXT → 角色 → 扁平槽
+      读 readStrLocus / 写 setStringSlot 各一次穷尽 switch;
     else (否)
       :槽位直取（不读作用域）
       GlobalInt*DRaw / getStringSlotRaw
-      getLocalInt / getArgInt;
+      getLocalInt / getArgInt
+      —— getStringSlotRaw 是同一个 resolveStrLocus
+         配 StrKeyState::ResolvedKey（键不再重解析）;
     endif
   else (否：Param / Pseudo / System / Chara / Const / Dynamic)
     :resolver 表逐行匹配
@@ -59,6 +65,10 @@ legend right
   · 按名原语也只有一份顺序：`resolveIntLocus` 解析一次产出 `IntLocus`（位置是数据），
     读/写只是两个穷尽 `switch(kind)`。旧形态是读链、写链各一份手写 if 顺序（加一类漏一边
     时编译期不报，症状是「写进去的那一格读出来是另一格」），且头注释是第三份、还与两者不符。
+  · 字符串侧是同一个病的第二份：`getStringSlot` / `setStringSlot` / `getStringSlotRaw` 各写了
+    一遍 `LOCALS / ARGS / SAVEDATA_TEXT / 角色 / 扁平槽`。现在同一形态（`resolveStrLocus` +
+    `StrLocus` + 读/写各一个穷尽 switch）；`getStringSlotRaw` 的「键已解析」变成一个参数
+    （`StrKeyState::ResolvedKey`）而不是第二份分派 —— 键不会再被按 scope 解析一次。
   · 两条例外是 Era 语义，不是实现分叉：
     - 私有键（scopeId != 0）保持宽松 1 维读
     - 裸键维数不符 → 按名原语（旧路在那一处的 throw）

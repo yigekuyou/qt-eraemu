@@ -82,6 +82,15 @@ plantuml -txmi docs/uml/01-load-classes.puml
   读出来是另一格」。`ARGS/LOCALS/RESULTS` 的读写不对称是 Era 语义、不是实现分叉，由
   `test_name_locus` 的 51 条断言显式钉住（不是消掉）。`storageKeyFor` 仍是唯一 id→串入口，
   存储容器仍是字符串键（存档格式不变）。
+- **字符串侧是同一个病的第二份**：`getStringSlot` / `setStringSlot` / `getStringSlotRaw` 各自
+  手写过 `LOCALS → ARGS → SAVEDATA_TEXT → 角色 → 扁平槽`；读写必须永远同步，加一类忘一边
+  编译期不报（症状：写得进读不出，或读到的其实是另一格）。现在同一形态 ——
+  `resolveStrLocus` 一份七步行序，`StrLocus` 是数据，读 `readStrLocus` / 写 `setStringSlot`
+  各一个穷尽 switch。「键已解析」不再是一份代码，而是参数 `StrKeyState::ResolvedKey`
+  （Raw 入口绝不二次 `storageName`，否则私有名 / REF 别名会被按 scope 改道）。
+  读/写的**不对称是 Era 语义**、由 `test_string_locus` 47 条断言钉住而非消掉：
+  读越界给空且不扩容，写 `LOCALS/ARGS` 懒扩容，`setStringSlot` 的 bool 是「下标非负」
+  而不是「写成功」（越界写 qWarning 后忽略）。
 - `writeLoopCounter` 写的是「计数器固定下标上的循环值」——值是值，不是下标，因此没有「循环值越界」检查。
 - **收尾 pass 表**：`m_loadPasses[7] = { label, run, origin, gate, phaseAfter }`，表即流程
   （顺序 = 执行顺序，日志文案也取自表）。`run` 的类型是 `PassAction`
@@ -217,19 +226,20 @@ plantuml -txmi docs/uml/01-load-classes.puml
 `dump_warnings` 五语料（`eraTW` / `eraMegaten` / `eraTetris` / `FL3.8` / `ecd`）：
 **6 / 2 / 0 / 0 / 0** 行（`eraMegaten` 的目录参数必须是 `eraMegaten/data`；用错路径会得到
 0 字节的假基线），与 `/tmp/uml-baseline/*.raw.txt` **未排序**逐字节相同。
-累计三十七个重构（身份整数化 / 全定型 / 作用域显式化 / 只读收尾外移 / 存档独立映射 /
+累计三十八个重构（身份整数化 / 全定型 / 作用域显式化 / 只读收尾外移 / 存档独立映射 /
 私有名表前移 / 存档顺序确定性 / 写收尾外移 / 标记区外移 / 位置区外移 /
 标签归属单一索引 / 诊断切片幂等 / 常数作用域参数化 / 增量装载协议显式化 /
 GOTO 段身份入索引 / 静态检查用段身份 / 删第三张裸名表 / 错误去重 / 配对语法只判一次 /
 越界判定只判一次 / 常量下标装载期求值 / 多维独立形态 / 私有作用域按段身份 / 存档版本常数化 / LSP 侧段身份 / 函数表按脚本换贡献 / 删装载器第二份脚本清单 / CALL 入口吃段身份原文 / 删标记区三张整表副本 / 删 ScriptData::jumpTo /
  数组形状单一入口 / 收尾 pass 表单一形态 / 删 PositionState::depth 副本 / 删只写不读的 scopeId 缓存 /
  容器形态单一化（一个键一条扁平槽位序列）/ 条件范围装载期定完（conditionNeedsScope）/
- 按名原语的解析顺序单一化（IntLocus + 两个穷尽 switch））前后完全一致；
-`ctest` 48 → 63（新增 `test_parse_checks` / `test_save_variable_map` / `test_private_scope_table` /
+ 按名原语的解析顺序单一化（IntLocus + 两个穷尽 switch）/
+ 字符串侧同一形态（StrLocus + StrKeyState，同一份七步行序））前后完全一致；
+`ctest` 48 → 64（新增 `test_parse_checks` / `test_save_variable_map` / `test_private_scope_table` /
 `test_load_contracts` / `test_save_variable_map_hashseed` / `test_jump_markings` /
 `test_position_state` / `test_goto_label_lookup` / `test_structure_pairing` / `test_index_bounds` /
 `test_segment_scope` / `test_array_shape` / `test_storage_form` / `test_condition_scope` /
-`test_name_locus`）。
+`test_name_locus` / `test_string_locus`）。
 
 装载耗时（eraTW，2260 文件 / 2.11M 逻辑行，12 线程）：`load` 41 s → **22.8 s**
 （scan 129 ms / parse 8.4 s / merge 4.9 s），收尾 `markLoadComplete` 23.3 s → 6.5 s，

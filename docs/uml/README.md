@@ -82,6 +82,19 @@ plantuml -txmi docs/uml/01-load-classes.puml
   读出来是另一格」。`ARGS/LOCALS/RESULTS` 的读写不对称是 Era 语义、不是实现分叉，由
   `test_name_locus` 的 51 条断言显式钉住（不是消掉）。`storageKeyFor` 仍是唯一 id→串入口，
   存储容器仍是字符串键（存档格式不变）。
+- **元素形参的缺省值只有一份判据**：`hasStringDefault(decl)` = `hasDefault && type == Str`，
+  三个消费者（`bindArguments` 省略分支、尾部缺省循环、`invokeUserFunction::bindDefault`）。
+  旧形态是两条绑定路径各写一遍，且其中一条**没有** `Str` 分支 —— 式子调用的
+  `@F(SS:0=\"x\")` 缺省值、以及式子调用传的字符串实参，全部被写进无关整数键（读到空串）。
+  另一处两份都错：`&& !defaultStr.isEmpty()` 把 `@F(S=\"\")` 的空串缺省退化成整数 0，
+  语句路径写成 `\"0\"`、式子路径写成 `\"\"` —— 两路互不一致。对齐 C# `ErbLoader` 的
+  「缺省值必须与形参同型」，空串是合法缺省值。eraTW 的真实形状
+  `@RECOVER_PERMIL(ARG,回復割合,ARGS,回復速度の影響,ARGS:1=\"\")` 已进护栏。
+  **这是行为修复**：旧行为下 `ARGS:1 == \"\"` 恒假（值是 `\"0\"`）。
+- **`dump_warnings` 的参数位置不再有隐含含义**：`argv[2]` 只有不以 `--` 开头时才是输出文件，
+  否则报错退出（退出码 2 + 固定文本）。旧实现把 `dirname --jumpcheck` 里的开关当文件名，
+  在 cwd 写出一个叫 `--jumpcheck` 的警告文件，同时开关照常生效、退出码 0 ——
+  「看起来成功」的垃圾文件。未知开关、缺参数、多余位置参数同样报错。
 - **音频管线：池只管状态位，播放器是 QML 的一层**：`AudioPipelinePool` 保存
   `{source, playing}` 与音量、循环次数，发 `channelPlay/channelStop/channelVolume`；
   真正出声的是 `AudioPlayers.qml` 里每条管线一个 `MediaPlayer + AudioOutput`（0 = BGM，
@@ -260,7 +273,7 @@ plantuml -txmi docs/uml/01-load-classes.puml
 `dump_warnings` 五语料（`eraTW` / `eraMegaten` / `eraTetris` / `FL3.8` / `ecd`）：
 **6 / 2 / 0 / 0 / 0** 行（`eraMegaten` 的目录参数必须是 `eraMegaten/data`；用错路径会得到
 0 字节的假基线），与 `/tmp/uml-baseline/*.raw.txt` **未排序**逐字节相同。
-累计四十一个重构（身份整数化 / 全定型 / 作用域显式化 / 只读收尾外移 / 存档独立映射 /
+累计四十二个重构（身份整数化 / 全定型 / 作用域显式化 / 只读收尾外移 / 存档独立映射 /
 私有名表前移 / 存档顺序确定性 / 写收尾外移 / 标记区外移 / 位置区外移 /
 标签归属单一索引 / 诊断切片幂等 / 常数作用域参数化 / 增量装载协议显式化 /
 GOTO 段身份入索引 / 静态检查用段身份 / 删第三张裸名表 / 错误去重 / 配对语法只判一次 /
@@ -271,12 +284,13 @@ GOTO 段身份入索引 / 静态检查用段身份 / 删第三张裸名表 / 错
  字符串侧同一形态（StrLocus + StrKeyState，同一份七步行序）/
  **键不得再当名字解析**（varNameIsKey → *Raw / ResolvedKey）/
  删掉「当前帧」这个隐含输入（显式 scope 重载 + *InCurrentFrame 生产 0 调用）/
- 音频管线契约（同曲重播从头 / 坏媒体回收））前后完全一致；
-`ctest` 48 → 66（新增 `test_parse_checks` / `test_save_variable_map` / `test_private_scope_table` /
+ 音频管线契约（同曲重播从头 / 坏媒体回收）/
+ 元素形参两条绑定路径同构（hasStringDefault））前后完全一致；
+`ctest` 48 → 68（新增 `test_parse_checks` / `test_save_variable_map` / `test_private_scope_table` /
 `test_load_contracts` / `test_save_variable_map_hashseed` / `test_jump_markings` /
 `test_position_state` / `test_goto_label_lookup` / `test_structure_pairing` / `test_index_bounds` /
 `test_segment_scope` / `test_array_shape` / `test_storage_form` / `test_condition_scope` /
-`test_name_locus` / `test_string_locus` / `test_scope_plumbing` / `test_audio_pipeline_contracts`）。
+`test_name_locus` / `test_string_locus` / `test_scope_plumbing` / `test_audio_pipeline_contracts` / `test_bind_defaults` / `test_dump_warnings_args`）。
 
 装载耗时（eraTW，2260 文件 / 2.11M 逻辑行，12 线程）：`load` 41 s → **22.8 s**
 （scan 129 ms / parse 8.4 s / merge 4.9 s），收尾 `markLoadComplete` 23.3 s → 6.5 s，

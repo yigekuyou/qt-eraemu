@@ -108,8 +108,12 @@ VariableStorage::VariableStorage(QObject *parent)
 //
 // 每个存储键 = 一条扁平 QList；维数不决定容器，只决定取址几何：
 //     offset = Σ idx[d] · strides[d]        （addressOf，唯一的取址公式）
-// CHARADATA 在同一布局上加角色 stride：
-//     slot   = charaSlot · elementCount + offset
+// CHARADATA 的每个角色另有一块：
+//     slot   = baseOf(charaSlot) + offset   （CharaArena::slotOf，唯一的角色公式）
+// baseOf 是一张**显式基址表**（角色号 -> arena 起址）：出现的角色号 = 已分配，
+// 未出现的 = 未分配（读 0 / 空串，读路径不分配）。arena 只给写过的角色号追加块
+// （块长 = elementCount），所以槽位总数 = 写过的角色数 × elementCount，
+// 而不是 maxCharaSlot × elementCount。
 // 形状仍只由 shapeOf 回答；容器里的几何缓存（m_geometries / m_charaGeometries）
 // 只有 installGeometry 一个写入点，缓存的是**同一份**事实（strides 是 shapeOf
 // 不提供的、每次取址都需要的量）。
@@ -165,13 +169,8 @@ qint64 VariableStorage::addressOf(const SlotGeometry* geometry, const QList<int>
     return offset;
 }
 
-// 唯一的角色 stride 公式：角色块基址 = 角色号 · 每角色元素数。
-qint64 VariableStorage::roleSlotOf(const SlotGeometry& geometry, int charaSlot,
-                                   qint64 elementOffset)
-{
-    const qint64 stride = geometry.elementCount > 0 ? geometry.elementCount : 1;
-    return qint64(charaSlot) * stride + elementOffset;
-}
+// 唯一的角色块取址公式在 CharaArena::slotOf（头文件）：基址表 + 元素偏移。
+// 未分配的角色号（基址表缺键）-> -1：读 0 / 空串；写路径先 ensureBlock。
 
 // 外接几何（运行期才长出来的数组）扩容：把边界扩到包含 indices，并按新 strides
 // 把既有数据重排（行主序逐格搬）。权威几何（声明/CSV）不走这里 —— 越界写忽略。
@@ -205,6 +204,43 @@ static void restrideInto(SlotList& cells, const QList<int>& fromLengths,
     cells = moved;
 }
 
+// 几何变化后既有数据的搬家：两种容器形态各一份实现（按容器类型重载）。
+//   · 扁平序列（全局/私有）：整条重排；
+//   · 角色 arena：逐块重排 —— 每块都是「该角色自己的元素序列」，
+//     块长随 elementCount 变，基址按原角色块的**追加顺序**（基址升序）重算。
+template <typename Cell>
+void VariableStorage::restrideSlots(QList<Cell>& cells, const SlotGeometry& before,
+                                    const SlotGeometry& after)
+{
+    restrideInto(cells, before.lengths, after.lengths, after.strides,
+                 before.elementCount, after.elementCount);
+}
+
+template <typename Cell>
+void VariableStorage::restrideSlots(CharaArena<Cell>& arena, const SlotGeometry& before,
+                                    const SlotGeometry& after)
+{
+    if (arena.bases.isEmpty()) return;
+    QList<QPair<qint64, int>> order;   // (块基址, 角色号)：基址升序 = 追加顺序
+    order.reserve(arena.bases.size());
+    for (auto it = arena.bases.constBegin(); it != arena.bases.constEnd(); ++it)
+        order.append({it.value(), it.key()});
+    std::sort(order.begin(), order.end());
+    CharaArena<Cell> moved;
+    moved.cells.reserve(qsizetype(order.size()) * qsizetype(after.elementCount));
+    for (const auto& entry : order) {
+        QList<Cell> block = arena.cells.mid(qsizetype(entry.first),
+                                           qsizetype(before.elementCount));
+        restrideInto(block, before.lengths, after.lengths, after.strides,
+                     before.elementCount, after.elementCount);
+        if (block.size() < after.elementCount) block.resize(qsizetype(after.elementCount));
+        const qint64 base = moved.cells.size();
+        moved.cells.append(block);
+        moved.bases.insert(entry.second, base);
+    }
+    arena = moved;
+}
+
 // 无几何（或运行期外接几何）的多维写：装/扩几何，返回新几何下的取址。
 // 返回 -2 = 不能装（负下标），-1 = 无法取址（权威几何越界 / 下标个数不足）。
 template <typename SlotList>
@@ -219,6 +255,8 @@ qint64 VariableStorage::extendExtents(QHash<QString, SlotGeometry>& map,
     const auto it = map.constFind(storageKey);
     const bool known = it != map.constEnd();
     if (known && it.value().authoritative) return -1;   // 权威几何：越界写忽略
+    SlotGeometry before;                                 // known 时的旧几何快照
+    if (known) before = it.value();
     if (known) {
         bool grew = false;
         for (int d = 0; d < lengths.size(); ++d) {
@@ -237,11 +275,7 @@ qint64 VariableStorage::extendExtents(QHash<QString, SlotGeometry>& map,
     installGeometry(map, storageKey, lengths, strides, count, /*allocated=*/false,
                     /*authoritative=*/false);
     const SlotGeometry& after = *map.constFind(storageKey);
-    if (known) {
-        SlotGeometry before = it.value();
-        restrideInto(cells, before.lengths, after.lengths, after.strides,
-                     before.elementCount, after.elementCount);
-    }
+    if (known) restrideSlots(cells, before, after);
     return addressOf(&after, indices);
 }
 
@@ -321,8 +355,8 @@ FlatStringValue VariableStorage::readStrSlot(const QString& storageKey,
     return it.value().at(qsizetype(offset));
 }
 
-// ---- CHARADATA：同一条扁平序列 + 角色 stride ----
-// stride = 该变量每角色的元素数（几何 elementCount）；角色块基址 = 角色号·stride。
+// ---- CHARADATA：碎片化角色号 -> 连续 arena + 显式基址表 ----
+// 每变量一块 arena；块长 = 该变量每角色的元素数（几何 elementCount）。
 // 几何来自 shapeOf（声明 -> VariableSize.csv），首次访问时经 installGeometry 登记。
 void VariableStorage::ensureCharaGeometry(const QString& storageKey)
 {
@@ -347,16 +381,51 @@ const VariableStorage::SlotGeometry& VariableStorage::charaGeometry(const QStrin
     return it == m_charaGeometries.constEnd() ? kScalar : it.value();
 }
 
+// CHARADATA 写路径的唯一规则：取块（未分配则在该变量自己的 arena 尾部追加一块）->
+// 基址 + 元素偏移。读路径不经过这里（读纯性：未分配就是 0 / 空串）。
+// 上限：块长 = 每角色元素数，与多维声明同一阈值 kMaxMultiDimElements；超限拒绝分配
+// （诊断与多维声明同形），容器与基址表都不变 —— 与「越界写忽略」同口径。
+template <typename Cell>
+qint64 VariableStorage::charaWriteSlot(QHash<QString, CharaArena<Cell>>& map,
+                                       const QString& storageKey, int charaSlot,
+                                       qint64 elementOffset, const QList<int>& elements)
+{
+    const SlotGeometry& geometry = charaGeometry(storageKey);
+    const qint64 elementCount = geometry.elementCount > 0 ? geometry.elementCount : 1;
+    if (elementCount > kMaxMultiDimElements) {
+        qWarning().noquote() << "[var] 角色变量" << storageKey << "元素数" << elementCount
+                             << "超过上限" << kMaxMultiDimElements << "，拒绝分配";
+        return -1;
+    }
+    CharaArena<Cell>& arena = map[storageKey];
+    if (arena.ensureBlock(charaSlot, elementCount) < 0) {
+        qWarning().noquote() << "[var] 角色变量" << storageKey
+                             << "越界（忽略）: chara=" << charaSlot << "元素=" << elements;
+        return -1;
+    }
+    return arena.slotOf(charaSlot, elementOffset);
+}
+
+template <typename Cell>
+void VariableStorage::zeroCharaSlots(QHash<QString, CharaArena<Cell>>& map, const QString& key)
+{
+	auto it = map.find(key);
+	if (it == map.end()) return;
+	it.value().cells.fill(Cell{});
+}
+
 qint64 VariableStorage::readCharaIntSlot(const QString& storageKey, int charaSlot,
                                          const QList<int>& elements) const
 {
     const SlotGeometry& geometry = charaGeometry(storageKey);
     const qint64 offset = addressOf(&geometry, elements);
     if (offset < 0) return 0;
-    const qint64 slot = roleSlotOf(geometry, charaSlot, offset);
+    // 读是**纯**的：只查基址表，未分配的角色号直接 0，绝不在这里开块。
     const auto it = m_charaIntSlots.constFind(storageKey);
-    if (it == m_charaIntSlots.constEnd() || slot < 0 || slot >= it.value().size()) return 0;
-    return it.value().at(qsizetype(slot));
+    if (it == m_charaIntSlots.constEnd()) return 0;
+    const qint64 slot = it.value().slotOf(charaSlot, offset);
+    if (slot < 0 || slot >= it.value().cells.size()) return 0;
+    return it.value().cells.at(qsizetype(slot));
 }
 
 FlatStringValue VariableStorage::readCharaStrSlot(const QString& storageKey, int charaSlot,
@@ -365,10 +434,11 @@ FlatStringValue VariableStorage::readCharaStrSlot(const QString& storageKey, int
     const SlotGeometry& geometry = charaGeometry(storageKey);
     const qint64 offset = addressOf(&geometry, elements);
     if (offset < 0) return {};
-    const qint64 slot = roleSlotOf(geometry, charaSlot, offset);
     const auto it = m_charaStrSlots.constFind(storageKey);
-    if (it == m_charaStrSlots.constEnd() || slot < 0 || slot >= it.value().size()) return {};
-    return it.value().at(qsizetype(slot));
+    if (it == m_charaStrSlots.constEnd()) return {};
+    const qint64 slot = it.value().slotOf(charaSlot, offset);
+    if (slot < 0 || slot >= it.value().cells.size()) return {};
+    return it.value().cells.at(qsizetype(slot));
 }
 
 void VariableStorage::writeCharaIntSlot(const QString& storageKey, int charaSlot,
@@ -388,10 +458,10 @@ void VariableStorage::writeCharaIntSlot(const QString& storageKey, int charaSlot
         }
     }
     // 扩边界会重装几何（map.insert 可能使引用失效）：几何取扩后的事实。
-    const qint64 slot = roleSlotOf(charaGeometry(storageKey), charaSlot, offset);
-    auto& cells = m_charaIntSlots[storageKey];
-    if (slot >= cells.size()) cells.resize(qsizetype(slot) + 1);   // 唯一的懒扩容
-    cells[qsizetype(slot)] = value;
+    // 写路径唯一的分配点：未分配的角色号追加一块（块长 = elementCount）。
+    const qint64 slot = charaWriteSlot(m_charaIntSlots, storageKey, charaSlot, offset, elements);
+    if (slot < 0) return;
+    m_charaIntSlots[storageKey].cells[qsizetype(slot)] = value;
 }
 
 void VariableStorage::writeCharaStrSlot(const QString& storageKey, int charaSlot,
@@ -411,10 +481,9 @@ void VariableStorage::writeCharaStrSlot(const QString& storageKey, int charaSlot
         }
     }
     // 扩边界会重装几何（map.insert 可能使引用失效）：几何取扩后的事实。
-    const qint64 slot = roleSlotOf(charaGeometry(storageKey), charaSlot, offset);
-    auto& cells = m_charaStrSlots[storageKey];
-    if (slot >= cells.size()) cells.resize(qsizetype(slot) + 1);
-    cells[qsizetype(slot)] = value;
+    const qint64 slot = charaWriteSlot(m_charaStrSlots, storageKey, charaSlot, offset, elements);
+    if (slot < 0) return;
+    m_charaStrSlots[storageKey].cells[qsizetype(slot)] = value;
 }
 
 // 几何缺失时从形状的唯一入口登记（声明 -> VariableSize.csv）。维数 1 不登记：
@@ -727,6 +796,12 @@ int VariableStorage::allocatedSlots(const QString& key) const
 		if (key == QLatin1String("ARGS")) return m_argStrVars.size();
 		if (auto it = m_strSlots.constFind(key); it != m_strSlots.constEnd()) return int(it->size());
 		if (auto it = m_intSlots.constFind(key); it != m_intSlots.constEnd()) return int(it->size());
+		// CHARADATA：容器事实 = arena 里**已分配**的槽位数（写过的角色块之和），
+		// 不是「最大角色号 × 每角色元素数」。
+		if (auto it = m_charaIntSlots.constFind(key); it != m_charaIntSlots.constEnd())
+			return int(it->cells.size());
+		if (auto it = m_charaStrSlots.constFind(key); it != m_charaStrSlots.constEnd())
+			return int(it->cells.size());
 		return 0;
 }
 
@@ -1033,16 +1108,6 @@ void VariableStorage::setCharaInt(const QString &name, int charaId, int index, q
 		if (charaId < 0 || index < 0) return;
 		setCharaIntRaw(name, resolveCharaIndex(charaId), index, value);
 }
-
-namespace {
-// 角色变量「全部角色全部元素归零」：扁平序列整体 fill（与旧实现逐角色填充同义）。
-void zeroCharaSlots(QHash<QString, QList<qint64>>& cells, const QString& key)
-{
-	auto it = cells.find(key);
-	if (it == cells.end()) return;
-	it.value().fill(0);
-}
-} // namespace
 
 // ---------------------------------------------------------------------------
 // 训练流程变量重置（对齐 C# GameData/Variable/VariableEvaluator.cs
@@ -1439,28 +1504,28 @@ void VariableStorage::snapshotCharaTemplates()
 				 << "字符串" << m_csvStrSlots.size();
 }
 
+// CSV*：读**模板快照**。快照与运行时同布局（快照时连基址表一起复制），
+// 所以取址公式仍是同一个 CharaArena::slotOf —— 这里的角色号是模板号。
 qint64 VariableStorage::csvCharaInt(const QString& name, int charaId, int index) const
 {
 		if (charaId < 0 || index < 0) return 0;
 		const QString storageKey = storageName(name, eravar::kGlobalScope);
-		const SlotGeometry& geometry = charaGeometry(storageKey);
-		const qint64 stride = geometry.elementCount > 0 ? geometry.elementCount : 1;
-		const qint64 slot = qint64(charaId) * stride + index;
 		const auto it = m_csvIntSlots.constFind(storageKey);
-		if (it == m_csvIntSlots.constEnd() || slot >= it.value().size()) return 0;
-		return it.value().at(qsizetype(slot));
+		if (it == m_csvIntSlots.constEnd()) return 0;
+		const qint64 slot = it.value().slotOf(charaId, index);
+		if (slot < 0 || slot >= it.value().cells.size()) return 0;
+		return it.value().cells.at(qsizetype(slot));
 }
 
 QString VariableStorage::csvCharaStr(const QString& name, int charaId, int index) const
 {
 		if (charaId < 0 || index < 0) return QString();
 		const QString storageKey = storageName(name, eravar::kGlobalScope);
-		const SlotGeometry& geometry = charaGeometry(storageKey);
-		const qint64 stride = geometry.elementCount > 0 ? geometry.elementCount : 1;
-		const qint64 slot = qint64(charaId) * stride + index;
 		const auto it = m_csvStrSlots.constFind(storageKey);
-		if (it == m_csvStrSlots.constEnd() || slot >= it.value().size()) return QString();
-		return it.value().at(qsizetype(slot)).text;
+		if (it == m_csvStrSlots.constEnd()) return QString();
+		const qint64 slot = it.value().slotOf(charaId, index);
+		if (slot < 0 || slot >= it.value().cells.size()) return QString();
+		return it.value().cells.at(qsizetype(slot)).text;
 }
 
 // ================= 角色数据变量（CHARADATA） =================

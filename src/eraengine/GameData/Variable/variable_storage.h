@@ -669,13 +669,41 @@ private:
 		// 全局/私有（1D 与多维同一容器）：
 		QHash<QString, QList<qint64>>         m_intSlots;
 		QHash<QString, QList<FlatStringValue>> m_strSlots;
-		// CHARADATA：同一条扁平序列，布局 = 角色号·stride + 元素偏移
-		// （stride = 该变量每个角色的元素数 = 几何 elementCount）。
-		QHash<QString, QList<qint64>>         m_charaIntSlots;
-		QHash<QString, QList<FlatStringValue>> m_charaStrSlots;
-		// CSV 模板快照（与运行时同布局，按模板号而不是运行时下标）
-		QHash<QString, QList<qint64>>         m_csvIntSlots;
-		QHash<QString, QList<FlatStringValue>> m_csvStrSlots;
+		// CHARADATA：**碎片化角色号 → 连续 arena**。
+		// 每个存储键有自己的 arena（连续槽位）与基址表（角色号 → 该角色块的起址）。
+		// 只为**写过的**角色号追加一块（块长 = 该变量每角色元素数 = 几何 elementCount）；
+		// 未出现在基址表里的角色号 = 未分配 —— 读一律 0 / 空串，且**读路径不分配**
+		// （读必须是纯的：同一状态读多少次，容器都一模一样）。
+		// 旧布局是「角色号 × 每角色元素数」直接当 stride，模板号稀疏时（eraMegaten
+		// 模板号到 9002、每角色 7505 个元素，有用叶 4.33M）会撑到 65M+ 槽。
+		template <typename Cell>
+		struct CharaArena {
+			QList<Cell> cells;          // 连续槽位（各角色的块首尾相接）
+			QHash<int, qint64> bases;   // 角色号 -> 块起址；缺失 = 未分配
+			// **唯一**的角色取址公式：块基址 + 元素偏移（未分配 -> -1）。
+			[[nodiscard]] qint64 slotOf(int charaSlot, qint64 elementOffset) const {
+				const auto it = bases.constFind(charaSlot);
+				if (it == bases.constEnd()) return -1;
+				return it.value() + elementOffset;
+			}
+			// 写路径唯一的分配点：未分配时在 arena 尾部追加一块并登记基址。
+			// 已分配 -> 返回既有基址（块长只由几何决定，不在这里改）。
+			qint64 ensureBlock(int charaSlot, qint64 elementCount) {
+				if (charaSlot < 0 || elementCount <= 0) return -1;
+				if (const auto it = bases.constFind(charaSlot); it != bases.constEnd())
+					return it.value();
+				const qint64 base = cells.size();
+				bases.insert(charaSlot, base);
+				cells.resize(qsizetype(base + elementCount));
+				return base;
+			}
+		};
+		QHash<QString, CharaArena<qint64>>         m_charaIntSlots;
+		QHash<QString, CharaArena<FlatStringValue>> m_charaStrSlots;
+		// CSV 模板快照（与运行时**同一布局**：装载期模板号就是角色号，快照连基址表
+		// 一起复制；此后两者各自独立生长）。
+		QHash<QString, CharaArena<qint64>>         m_csvIntSlots;
+		QHash<QString, CharaArena<FlatStringValue>> m_csvStrSlots;
 
 		// ---- 取址几何：唯一缓存，唯一写入点 installGeometry ----
 		// 为什么缓存而不是每次调 shapeOf：shapeOf 要拆私有键 + 查声明表/CSV 表
@@ -706,14 +734,32 @@ private:
 		// 返回 -1 = 无法取址（越界 / 下标个数超过维数 / 无几何的多维坐标）。
 		[[nodiscard]] static qint64 addressOf(const SlotGeometry* geometry,
 		                                      const QList<int>& indices);
-		// **唯一**的角色 stride 公式：slot = charaSlot·elementCount + offset。
-		[[nodiscard]] static qint64 roleSlotOf(const SlotGeometry& geometry, int charaSlot,
-		                                       qint64 elementOffset);
+		// **唯一**的角色块取址公式已收进 CharaArena::slotOf（基址表 + 元素偏移）。
+		// 基址表只在两处写：CharaArena::ensureBlock（分配新块，写路径）与
+		// restrideSlots（几何变化后整块重建）；读路径只查表，永不写。
 		// 无几何（或运行期外接几何）的多维写：装/扩几何并按新 strides 重排既有
 		// 数据（运行期才长出来的数组）。权威几何（声明/CSV）返回 -1（越界写忽略）。
 		template <typename SlotList>
 		qint64 extendExtents(QHash<QString, SlotGeometry>& map, const QString& storageKey,
 		                     const QList<int>& indices, SlotList& slots);
+		// 几何变化后把既有数据搬到新布局（extendExtents 用）：
+		//   · 扁平序列：整条重排（行主序，最后一个元素也不丢）；
+		//   · 角色 arena：逐块重排（每块 base..base+elementCount），基址按原角色号顺序重算。
+		// 两种形态各一份实现，按容器类型重载 —— 不是按维数/按存储分派。
+		template <typename Cell>
+		static void restrideSlots(QList<Cell>& cells, const SlotGeometry& before,
+		                          const SlotGeometry& after);
+		template <typename Cell>
+		static void restrideSlots(CharaArena<Cell>& arena, const SlotGeometry& before,
+		                          const SlotGeometry& after);
+		// CHARADATA：全部角色块归零（块与基址表都不动，只填 0 / 空串）。
+		template <typename Cell>
+		static void zeroCharaSlots(QHash<QString, CharaArena<Cell>>& map, const QString& key);
+		// CHARADATA 写路径的唯一规则：取块（未分配则追加一块）-> 基址 + 元素偏移。
+		// 返回 -1 = 拒绝（每角色元素数超过上限 / 角色号非法）。
+		template <typename Cell>
+		qint64 charaWriteSlot(QHash<QString, CharaArena<Cell>>& map, const QString& storageKey,
+		                      int charaSlot, qint64 elementOffset, const QList<int>& elements);
 		// 唯一的写规则：取址 -> 按需把容器长到 offset+1 -> 写。
 		// 有权威几何时越界忽略（qWarning 一条）；无几何时按需增长（唯一的懒扩容）。
 		bool writeIntSlot(const QString& storageKey, const QList<int>& indices, qint64 value,
@@ -723,7 +769,7 @@ private:
 		[[nodiscard]] qint64 readIntSlot(const QString& storageKey, const QList<int>& indices) const;
 		[[nodiscard]] FlatStringValue readStrSlot(const QString& storageKey,
 		                                          const QList<int>& indices) const;
-		// CHARADATA：角色号 -> 角色块基址（stride = 每角色元素数）。
+		// CHARADATA：每角色一块，块基址在 CharaArena::bases（未分配 = 缺键）。
 		[[nodiscard]] const SlotGeometry& charaGeometry(const QString& storageKey) const;
 		void ensureCharaGeometry(const QString& storageKey);
 		[[nodiscard]] qint64 readCharaIntSlot(const QString& storageKey, int charaSlot,

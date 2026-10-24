@@ -394,6 +394,8 @@ add_test(NAME test_array_shape COMMAND test_array_shape)
 # 容器的单一形态：每个存储键一条扁平槽位序列 + 唯一取址公式 + 角色 stride
 eraengine_add_test(test_storage_form)
 add_test(NAME test_storage_form COMMAND test_storage_form)
+eraengine_add_test(test_chara_arena)
+add_test(NAME test_chara_arena COMMAND test_chara_arena)
 # 名字+下标 -> 整数存储的解析顺序（唯一解析点的护栏）
 eraengine_add_test(test_name_locus)
 add_test(NAME test_name_locus COMMAND test_name_locus)

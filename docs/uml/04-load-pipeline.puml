@@ -33,7 +33,8 @@ loop 每个 ERB 文件（并行 worker）
     并行线程只查 VariableTable，绝不插入新声明。
   end note
   E -> L : loadFile(path, root)
-  L -> DS : scanScript(lines, script, isHeader)   ' 「哪行是声明」唯一判据（全树一份）
+  L -> DS : scanFileDeclarations（预处理一次 + 扫描一次）: Scan
+             ' 「哪行是声明」唯一判据（全树一份）；Scan 随文件数据传给每个消费者
   L -> VT : preRegisterDeclarations → 登记进 m_variables
   L -> AB : build(rawLine, position, resolve)
   AB -> AB : 识别指令 / 切分实参 / 解析表达式 AST
@@ -112,6 +113,8 @@ note right of T
   ⇒ 构建期就有类型，**没有「左值类型未知 ⇒ 收尾再定型」的第三态**
     （LogicalLine::rhsPending 已删；load_passes 的结算块同删）
   · 已预登记（装载器路径）或本脚本已登记过 = 空操作
+  · 产物是 BuiltScript{ lines, scan }：loadScript 接受这份 scan，
+    于是「构建 + 装载」只有一次扫描（Scan 是纯值，随行数据走）
 end note
 
 group 3/6 参数校验【改状态：置 line.isError；出诊断】

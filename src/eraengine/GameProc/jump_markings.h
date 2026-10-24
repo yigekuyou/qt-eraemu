@@ -32,7 +32,7 @@
 // 本文件不认识 EraParseTable，只认识 ScriptData —— 输入就是那一份数据本身：
 //   * 构建 buildJumpMarkings(ScriptData&)  —— 可写：清表、逐行配对、回填
 //     lines[i].lineIndex / nextLine / jumpTo（跳转事实只有行字段这一份）；
-//   * 读侧 6 个自由函数(const ScriptData*) —— 只读，nullptr 安全。
+//   * 读侧 7 个自由函数(const ScriptData*) —— 只读，nullptr 安全。
 //
 // 于是「怎么配对」是**数据**问题（ScriptData 里的行号索引表 +
 // structureIssues），「怎么查」就是按行号读行字段；两者都不需要 EraParseTable
@@ -81,6 +81,31 @@ inline constexpr int kNoJumpTarget = -1;
 inline int jumpTarget(const ScriptData* data, int line) {
     if (!data || line < 0 || line >= data->lines.size()) return kNoJumpTarget;
     return data->lines.at(line).jumpTo;
+}
+
+// 行 -> 该循环开块（REPEAT/FOR/WHILE/DO）配对的**收尾行**（REND/NEXT/WEND/LOOP）；
+// -1 = 不是已配对的循环开块（或没有这一行）。
+//
+// **唯一**的开块 -> 收尾索引，也是本文件里唯一的「反查」读侧。配对的两个方向
+// 各有读者，不能只留一个：
+//   * 收尾 -> 开块：lines[closer].jumpTo（= 回边，控制转移事实的一部分，
+//     buildJumpMarkings 在同一个分支里写它）；
+//   * 开块 -> 收尾：这张表 —— 运行期的 5 个读者（REPEAT / DO / WHILE ×2 / FOR
+//     的入环与条件不成立时跳过、LoopFrame::endLine）都在**开块行**上问
+//     「我的收尾行在哪」。
+// 为什么不能用 jumpTo 反推（把这张表删掉）：jumpTo 是**控制转移**目标，不是结构
+// 配对；它的反向关系多对一，且语义不唯一。真语料里的反例（IF 与循环首尾相接）：
+//       IF …          <- 这一行（以及它的 ELSEIF/ELSE）的 jumpTo = ENDIF + 1
+//       ENDIF
+//       REPEAT 3      <- ENDIF + 1 正好是这个循环开块行
+// 「谁的 jumpTo 指向这个 REPEAT 行」于是有两个答案（配对的 REND 与那个 IF），
+// 而行数组上求它只能整表扫描 —— 每次进循环付 O(行数)。
+// 因此这里保留 loopEndLines，并把它当作**唯一**的开块 -> 收尾索引；它与回边由
+// 同一个 if 分支成对写入（jump_markings.cpp），契约见 test_jump_markings：
+// 它必须恰好是「收尾指令回边」的逆。
+inline int loopEndTarget(const ScriptData* data, int openerLine) {
+    if (!data) return kNoJumpTarget;
+    return data->loopEndLines.value(openerLine, kNoJumpTarget);
 }
 
 // 行字段自洽性检查（探针/测试用，运行期不调）：遍历**全部行**，凡

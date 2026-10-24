@@ -198,9 +198,13 @@ bool EraParseTable::hasCallableLabel(const QString& label) const {
     return resolveCallableLabel(label, targetScript, targetLine);
 }
 
-// 每函数的形参名集合（大写）。按需构建并缓存；失效点 = clear()/loadScript
-//（新脚本可能带来新的 @label 形参）。「变量分词」的装载期解析与收尾定型共用。
-// 收尾定型（applyVariableTypes）的并行趟开始前会先建全 —— 定型期间只读不插。
+// 每函数的形参名集合（大写）。**装载期唯一写入点**是 loadScript 注册 @label 的
+// 地方（era_parse_table.cpp，与 decl.params 同点构建）；此后只查不插 —— 装载期
+// 逐行解析（parseScopedExpression）与收尾定型（applyVariableTypes）共用同一张表，
+// 两者都可能并行，任何按需插入都是共享 QHash 上的竞态。
+// 键 = 段身份文本（eravar::segmentKeyText(script, @label 行)），不是函数名：
+// 同名函数被重复声明时第二段（first-wins 不保留它的 decl）也要查得到自己的形参。
+// 失效点 = clear()（整表）与 loadScript 替换同名脚本（按旧段身份键逐个删）。
 const QSet<QString>* EraParseTable::paramNamesOf(const QString& scopeKey) const
 {
     return loadpass::paramNamesOf(m_paramNamesBySegment, scopeKey);
@@ -735,7 +739,14 @@ bool EraParseTable::loadScript(const QString& scriptName, const QList<LogicalLin
                 // 「变量分词」的形参名集合与段身份同点构建；查找端 paramNamesOf
                 // 只读不插 —— 并行装载/收尾趟安全。键 = 段身份文本：与私有域、
                 // AST 定型用的是**同一个**身份；每个 @ 段登记自己的一份（同名函数
-                // 的第二段也拿得到形参表）。
+                // 的第二段也拿得到形参表 —— 它的 decl 会被下面的 first-wins 丢弃，
+                // 但**行**仍按自己的形参名定型，所以这张索引不是 params 的投影）。
+                //
+                // 权威：@label 行（line.labelArgs()）-> decl.params（原始大小写 +
+                // 绑定目标 + 类型 + 缺省值）-> 这里的名集（大写折叠，只留名字）。
+                // 两步都在**本函数这一处**完成且不可分叉：名集只从 decl.params 取，
+                // 不另解析一遍标签文本。多一条 / 少一条 / 大小写不同都会让
+                // test_load_contracts 第 11 段红（该段按 @ 行重算期望值）。
                 QSet<QString> paramNames;
                 paramNames.reserve(decl.params.size());
                 for (const UserParamDecl& p : decl.params)

@@ -280,6 +280,68 @@ int main(int argc, char* argv[]) {
         checkInt(jumpmark::endCatchTarget(none, 0), -1, "endCatchTarget(nullptr)");
         check(jumpmark::funcEntryLines(none, 0).isEmpty(), "funcEntryLines(nullptr) 为空");
         checkInt(jumpmark::endFuncTarget(none, 0), -1, "endFuncTarget(nullptr)");
+        checkInt(jumpmark::loopEndTarget(none, 0), -1, "loopEndTarget(nullptr)");
+    }
+
+    // ---- 10) loopEndLines 的契约：唯一 opener -> closer 索引 ----
+    //
+    // 配对的两个方向各有读者，谁都不能删：
+    //   * 开块 -> 收尾：ScriptData::loopEndLines（运行期 5 个读者：
+    //     REPEAT / DO / WHILE ×2 / FOR 的入环与跳过、LoopFrame::endLine）；
+    //   * 收尾 -> 开块：lines[closer].jumpTo 的回边。
+    // 本段钉死两件事：
+    //   ① 表必须**恰好**是回边的逆 —— 多一条、少一条、方向反了都要红；
+    //   ② 用 jumpTo 反查会给错答案（多对一），所以这张表不能被「由 jumpTo
+    //      派生」取代 —— loopEndTarget 注释里的判据就是第 ② 条。
+    {
+        qDebug() << "\n[10] loopEndLines == 「收尾指令回边」的逆（唯一反查索引）";
+        // 四种循环嵌套：REPEAT > FOR > WHILE > DO 各自配对，互不串。
+        ScriptData d = makeData({"REPEAT", "FOR", "WHILE", "DO",
+                                 "LOOP", "WEND", "NEXT", "REND"});
+        jumpmark::buildJumpMarkings(d);
+        QHash<int, int> inverse;
+        for (int i = 0; i < d.lines.size(); ++i) {
+            const LogicalLine& ll = d.lines.at(i);
+            if (!ll.isInstruction() || !rebuild::isLoopCloserName(ll.functionName)) continue;
+            if (ll.jumpTo >= 0) inverse.insert(ll.jumpTo, i);
+        }
+        checkInt(inverse.size(), 4, "回边条数（四个收尾各一条）");
+        check(d.loopEndLines == inverse,
+              QStringLiteral("loopEndLines 逐项 == 回边求逆（表 %1 条 / 回边 %2 条）")
+                  .arg(d.loopEndLines.size()).arg(inverse.size()));
+        // 每个条目三件事同时成立：键是循环开块、值是**它要求的**收尾、回边指回键。
+        int pairMismatch = 0;
+        for (auto it = d.loopEndLines.constBegin(); it != d.loopEndLines.constEnd(); ++it) {
+            const int opener = it.key();
+            const int closer = it.value();
+            const bool ok = opener >= 0 && opener < d.lines.size()
+                && closer > opener && closer < d.lines.size()
+                && d.lines.at(opener).isInstruction()
+                && jumpmark::isLoopOpener(d.lines.at(opener).functionName)
+                && d.lines.at(closer).isInstruction()
+                && d.lines.at(closer).functionName
+                       == jumpmark::requiredCloser(d.lines.at(opener).functionName)
+                && jumpmark::jumpTarget(&d, closer) == opener
+                && jumpmark::loopEndTarget(&d, opener) == closer;
+            if (!ok) ++pairMismatch;
+        }
+        checkInt(pairMismatch, 0, "每个条目：开块/收尾名配对 + 回边指回开块");
+
+        // ② 反查不唯一：IF 的 jumpTo（= ENDIF + 1）正好落在下一行的 REPEAT 上。
+        ScriptData amb = makeData({"IF", "NOP", "ENDIF", "REPEAT", "NOP", "REND"});
+        jumpmark::buildJumpMarkings(amb);
+        checkInt(jumpmark::jumpTarget(&amb, 0), 3,
+                 "IF(行 0) 的 jumpTo = 3（ENDIF + 1 正好是 REPEAT 开块行）");
+        checkInt(jumpmark::jumpTarget(&amb, 2), -1, "ENDIF 自己没有 jumpTo（跳转在 IF/分支上）");
+        QStringList pointingAtRepeat;
+        for (int i = 0; i < amb.lines.size(); ++i) {
+            if (jumpmark::jumpTarget(&amb, i) == 3) pointingAtRepeat << QString::number(i);
+        }
+        check(pointingAtRepeat == QStringList({"0", "5"}),
+              QStringLiteral("「谁的 jumpTo 指向行 3」有两个答案 %1 = [IF, REND] -> 反查多对一")
+                  .arg(pointingAtRepeat.join(QLatin1Char(','))));
+        checkInt(jumpmark::loopEndTarget(&amb, 3), 5,
+                 "loopEndTarget(REPEAT) = 5（只有配对表能回答；按 jumpTo 反查会拿到 IF）");
     }
 
     if (g_failures == 0) qDebug() << "\nALL PASSED";

@@ -657,7 +657,7 @@ ExecState ScriptRunner::executeLine(const LogicalLine& line) {
         qint64 count = 0;
         writeLoopCounter(QStringLiteral("COUNT"), 0);
         evalInt(line.condition, line.raw, count);
-        const int endLine = sd->loopEndLines.value(pc, -1);
+        const int endLine = jumpmark::loopEndTarget(sd, pc);
         if (count <= 0) {
             gotoLine(endLine >= 0 ? endLine + 1 : pc + 1);
             return ExecState::Continue;
@@ -681,7 +681,7 @@ ExecState ScriptRunner::executeLine(const LogicalLine& line) {
         f.depth = m_table->depth();
         f.script = script;
         f.startLine = pc;
-        f.endLine = sd->loopEndLines.value(pc, -1);
+        f.endLine = jumpmark::loopEndTarget(sd, pc);
         m_loops.append(f);
         advance();
         return ExecState::Continue;
@@ -739,11 +739,11 @@ ExecState ScriptRunner::executeLine(const LogicalLine& line) {
             f.depth = m_table->depth();
             f.script = script;
             f.startLine = pc;
-            f.endLine = sd->loopEndLines.value(pc, -1);
+            f.endLine = jumpmark::loopEndTarget(sd, pc);
             m_loops.append(f);
             advance();
         } else {
-            const int endLine = sd->loopEndLines.value(pc, -1);
+            const int endLine = jumpmark::loopEndTarget(sd, pc);
             gotoLine(endLine >= 0 ? endLine + 1 : pc + 1);
         }
         return ExecState::Continue;
@@ -768,7 +768,7 @@ ExecState ScriptRunner::executeLine(const LogicalLine& line) {
                 if (a.raw != QLatin1String(",")) ops.append(&a);
             }
         }
-        const int endLine = sd->loopEndLines.value(pc, -1);
+        const int endLine = jumpmark::loopEndTarget(sd, pc);
         if (ops.size() >= 3) {
             LoopFrame f;
             f.kind = LoopFrame::Kind::For;

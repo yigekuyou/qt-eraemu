@@ -224,9 +224,10 @@ const QSet<QString>* paramNamesOf(const QHash<QString, QSet<QString>>& paramName
 {
     // **只查不插**：并行装载的 worker（逐行解析表达式）与收尾定型趟
     //（按脚本并行）都会走到这里 —— 任何按需插入都是共享 QHash 上的竞态
-    //（eraMegaten 2260 脚本并行装载实测崩溃）。集合在两处构建：
-    //   · loadScript 注册函数时（与 ctx.functions.insert 同点、同线程纪律）；
-    //   · applyVariableTypes 并行趟开始前（收尾前的兜底，覆盖一切）。
+    //（eraMegaten 2260 脚本并行装载实测崩溃）。集合只有一个写点：
+    //   · loadScript 注册 @label 时（与 decl.params 同点、同线程纪律）。
+    // 收尾定型前**不再**重建/补建（旧注释曾声称这里有一个「覆盖一切」的兜底
+    // 构建，实际只有 finalizeBindings 给顶层空作用域补一个空集，别的键全靠装载期）。
     // miss（段未知/顶层空作用域）返回 nullptr —— 与「该段没有形参」等价。
     const auto it = paramNames.constFind(scopeKey);
     return it != paramNames.constEnd() ? &it.value() : nullptr;

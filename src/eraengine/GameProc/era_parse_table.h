@@ -113,7 +113,14 @@ struct PositionEffects {
 // ---------------------------------------------------------------------------
 struct ScriptData {
     QList<LogicalLine>  lines;          // 完整 AST 逻辑行（对齐 C# LogicalLine 数组）
-    QHash<int, int>     loopEndLines;   // 标记区：REPEAT/WHILE/FOR 行 -> 配对行
+    // 循环配对：开块行（REPEAT/FOR/WHILE/DO） -> 收尾行（REND/NEXT/WEND/LOOP）。
+    // **唯一**的开块 -> 收尾索引（读侧 jumpmark::loopEndTarget，运行期 5 处）。
+    // 反方向（收尾 -> 开块）是行字段 lines[closer].jumpTo 的回边；两个方向在
+    // jump_markings.cpp 的同一个 if 分支里成对写入，不许各自演化。
+    // 为什么不能只留 jumpTo：jumpTo 是控制转移目标，反向多对一（IF 的 jumpTo
+    // = ENDIF+1，可以正好落在下一行的 REPEAT 上），行数组上求逆只能整表扫描 —— 见
+    // jump_markings.h 里 loopEndTarget 的注释与 test_jump_markings 的契约。
+    QHash<int, int>     loopEndLines;
     QHash<int, QList<int>> ifBranches;  // IF 行 -> 其 ELSEIF/ELSE 行列表（C# IfCaseList）
     // TRYC 系异常块的配对（对齐 C# ErbLoader 的 nestStack + JumpToEndCatch）
     //   catchLines    : TRYC 行     -> 配对的 CATCH 行（失败时跳到它**之后**）
@@ -526,12 +533,22 @@ public slots:
                                              int& targetLine) const;
     // 函数私有变量初值（#DIM X = 7）——进入函数时由执行侧调用
     void applyPrivateVariableDefaults(const QString& scopeKey);
-    // 每函数的形参名集合（大写，按需构建/缓存）。「变量分词」的形参判定用：
+    // 每函数的形参名集合（大写）；键 = 段身份文本，装载期一次建好，只查不插。
+    // 「变量分词」的形参判定用：
     // 形参的值绑定（Parameter）/ ARG 别名 / REF 引用绑定都是运行期语义，
     // 命中形参名的变量引用无法静态定键 -> AccessKind::Dynamic。
     // 装载期解析（parseScopedExpression）与收尾定型（applyVariableTypes）
     // **共用同一张表** —— 收尾的赋值 AST 重建在定型趟之后跑，重建出的节点
     // 不再回定型；若装载期不带形参表，重建节点会带上「私有数组」的错描述符。
+    //
+    // 与 UserFunctionDecl::params 的分工（谁是权威）：
+    // 权威是**@label 行本身**（line.labelArgs()/labelDefaults()）。params 是它的
+    // 拥有模型（原始大小写 + 绑定目标 + 类型 + 缺省值），但这张表**不能**写成
+    // params 的投影：同名 @ 在一个脚本里重复声明时，decl 表按 first-wins 只留
+    // 第一份（m_functionDeclsByScript / m_functions），第二段的 params 根本不存在，
+    // 而它的**每一行仍要按自己的形参名定型** —— 只有这张按段身份的索引还在。
+    // 一致性由 test_load_contracts 第 11 段钉住（每个 @ 行一条、内容 = 该行
+    // labelArgs 的大写折叠；每个保留 decl 的条目 = 它的 params 名集）。
     const QSet<QString>* paramNamesOf(const QString& scopeKey) const;
     bool returnFromCall();
     void switchToMemorySpace(const QString& scriptName);

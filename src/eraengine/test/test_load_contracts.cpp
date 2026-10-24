@@ -1221,6 +1221,99 @@ int main(int argc, char* argv[]) {
         check(manifestMatchesScriptData(loader, mTable), "⑤ 取消后清单与 ScriptData 逐项一致");
     }
 
+    // ------------------------------------------------------------------
+    // 11) 形参名索引（m_paramNamesBySegment）与 UserFunctionDecl::params
+    //
+    // 同一张形参表有三种物化，各自回答不同的问题，**谁都不是谁的可选副本**：
+    //   * @label 行的 labelArgs()/labelDefaults()：权威（原文，含缺省值文本）；
+    //   * UserFunctionDecl::params：拥有模型（原始大小写 + 绑定目标 + 类型 +
+    //     缺省值），但只存在于**胜出的那一份声明**上（脚本内 first-wins）；
+    //   * 段身份 -> 大写名集（本段）：装载期「变量分词」与收尾定型的**唯一**
+    //     按段查找入口，键与私有域 / AST 定型同一个身份。
+    // 为什么名集不能收敛成 params 的投影：同名 @ 在一个脚本里重复声明时
+    // （eraTW 的「口上」常态）decl 表只留行号最小的一份，**第二段的 params
+    // 根本不存在**，而第二段的每一行仍按自己的形参名定型 —— 少了这条索引，
+    // 那些形参读会被描述成私有数组/未知变量。
+    // 本段钉住四条：① 每个 @ 行恰好一条、内容 = 该行 labelArgs 的大写折叠；
+    //              ② 每个保留 decl 的条目 = 它的 params 名集；
+    //              ③ 重复同名的第二段：params 说第一段，索引两段都给；
+    //              ④ 不是 @ 行的段身份 = nullptr（没有凭空多出来的条目）。
+    // ------------------------------------------------------------------
+    qDebug() << "\n11) 形参名索引 == @label 行的投影（不是 params 的副本）";
+    {
+        ProcessState pState;
+        VariableStorage pStorage;
+        EraParseTable pTable(&pState);
+        pTable.setVariableStorage(&pStorage);
+        const QList<LogicalLine> pLines = buildLinesAs(pTable, QStringLiteral("P.ERB"), {
+            QStringLiteral("@DUP(ARG, ARGS:1)"), QStringLiteral("#FUNCTION"),
+            QStringLiteral("RETURN 1"),
+            QStringLiteral("@DUP(A, B, C)"), QStringLiteral("#FUNCTION"),
+            QStringLiteral("RETURN 2"),
+            QStringLiteral("@ONLY(X)"), QStringLiteral("RETURN"),
+        });
+        check(pTable.loadScript(QStringLiteral("P.ERB"), pLines),
+              "11) 装载含重复同名 @ 的脚本");
+        pTable.markLoadComplete();
+
+        // ① 全表扫描：@ 行 -> 条目；内容按**行上的 labelArgs**重算（不读 params）。
+        int labelLines = 0, missing = 0, wrong = 0;
+        for (const QString& scriptName : pTable.scriptNames()) {
+            const ScriptData* sd = pTable.script(scriptName);
+            if (!sd) continue;
+            for (int i = 0; i < sd->lines.size(); ++i) {
+                const LogicalLine& ll = sd->lines.at(i);
+                if (ll.kind != LineKind::FunctionLabel) continue;
+                ++labelLines;
+                QSet<QString> expected;
+                for (const QString& argName : ll.labelArgs()) expected.insert(argName.toUpper());
+                const QSet<QString>* got =
+                    pTable.paramNamesOf(eravar::segmentKeyText(scriptName, i));
+                if (!got) { ++missing; continue; }
+                if (*got != expected) ++wrong;
+            }
+        }
+        check(labelLines == 3, QStringLiteral("11) 脚本里的 @ 行数 = %1（期望 3）").arg(labelLines));
+        check(missing == 0 && wrong == 0,
+              QStringLiteral("11) ① 每个 @ 行恰好一条、内容 = labelArgs 大写折叠（缺 %1 / 内容不符 %2）")
+                  .arg(missing).arg(wrong));
+
+        // ② 保留 decl 的条目 == 它的 params 名集（全表遍历 userFunctions）。
+        const int declTotal = int(pTable.userFunctions().size());
+        int declWrong = 0;
+        for (auto it = pTable.userFunctions().constBegin();
+             it != pTable.userFunctions().constEnd(); ++it) {
+            const UserFunctionInfo& fn = it.value();
+            QSet<QString> expected;
+            for (const UserParamDecl& p : fn.params) expected.insert(p.name.toUpper());
+            if (paramNamesAt(pTable, fn.script, fn.labelLine) != expected) ++declWrong;
+        }
+        check(declTotal > 0 && declWrong == 0,
+              QStringLiteral("11) ② %1 个 decl 的条目 == params 名集（不符 %2）")
+                  .arg(declTotal).arg(declWrong));
+
+        // ③ 重复同名：params 只见第一段，索引两段各自正确。
+        const UserFunctionInfo* dup = pTable.userFunction(QStringLiteral("DUP"));
+        check(dup && dup->labelLine == 0 && dup->params.size() == 2,
+              QStringLiteral("11) ③ userFunction(DUP) = 第一段（行 %1 / %2 形参）")
+                  .arg(dup ? dup->labelLine : -1).arg(dup ? dup->params.size() : -1));
+        check(paramNamesAt(pTable, QStringLiteral("P.ERB"), 0)
+                  == QSet<QString>({QStringLiteral("ARG"), QStringLiteral("ARGS:1")}),
+              "11) ③ 第一段条目 = {ARG, ARGS:1}");
+        check(paramNamesAt(pTable, QStringLiteral("P.ERB"), 3)
+                  == QSet<QString>({QStringLiteral("A"), QStringLiteral("B"), QStringLiteral("C")}),
+              "11) ③ 第二段（decl 已被 first-wins 丢弃）条目 = {A, B, C} —— 这条信息 params 里没有");
+        check(pTable.userFunction(QStringLiteral("DUP"))->params.size() == 2
+                  && paramNamesAt(pTable, QStringLiteral("P.ERB"), 3).size() == 3,
+              "11) ③ 两段各答各的：params 2 个 / 第二段索引 3 个（不是同一份数据的两次读取）");
+
+        // ④ 段身份只属于 @ 行：指令行（第 2 行 RETURN 1）没有条目；顶层是空集不是 miss。
+        check(pTable.paramNamesOf(eravar::segmentKeyText(QStringLiteral("P.ERB"), 2)) == nullptr,
+              "11) ④ 非 @ 行的段身份 -> nullptr（没有凭空多出来的条目）");
+        check(pTable.paramNamesOf(QString()) && pTable.paramNamesOf(QString())->isEmpty(),
+              "11) 顶层空作用域 = 空集（与 miss 的 nullptr 区分）");
+    }
+
     qDebug() << "\n================================";
     if (g_failures == 0) qDebug() << "ALL PASS";
     else qDebug() << g_failures << "FAILURE(S)";

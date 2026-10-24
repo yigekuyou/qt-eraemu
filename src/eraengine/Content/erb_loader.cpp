@@ -797,6 +797,20 @@ bool ErbLoader::loadDirectory(const QString& dirPath, int depth) {
     m_preprocessor.setMacroTable(macroTable);
 
     if (!m_parallel || files.size() < 2) {
+        // 串行分支也**先预扫描、再建 AST**（与并行分支同一条规则，见下面的
+        // 「先登记 #DIM/#DIMS，再构造 AST」）。没有预扫描时构建期没有类型表，
+        // 左值类型只能是 Unknown，赋值右值的「FORM 还是表达式」就定不下来
+        //（LogicalLine::rhsPending）—— 单文件游戏走的正是这条路径。
+        // 预扫描只做「读 + 按预处理后的行登记声明」，不产出 AST。
+        QSet<QString> headerSet;
+        for (const QString& f : files) {
+            if (f.endsWith(QLatin1String(".erh"), Qt::CaseInsensitive)) headerSet.insert(f);
+        }
+        QHash<QString, QString> decoded;
+        decoded.reserve(files.size());
+        for (const QString& f : files) decoded.insert(f, readFileContent(f));
+        preRegisterDeclarations(files, decoded, headerSet, dirPath);
+
         bool ok = true;
         for (const QString& f : files) {
             if (!loadFile(f, dirPath)) ok = false;
@@ -1453,15 +1467,28 @@ QList<LogicalLine> ErbLoader::buildAst(const QString& content, const QString& fi
     QStringList warnings;
     const QList<ErbSourceLine> source = prepareLines(content, filePath, &warnings);
     logicalLines.reserve(source.size());
+    // 段身份 = (脚本名, 段起点行)：与 parseOneFileReadOnly / loadScript 同一个
+    // eravar::segmentKeyText。左值「已声明类型」必须按**本行所属段**查，否则
+    // 函数内 `#DIMS X` 之后的 `X = "..."` 查不到类型，右值的「FORM 还是表达式」
+    // 在构建期定不下来（LogicalLine::rhsPending）。
+    int segmentStart = -1;
+    QString currentScope = eravar::segmentKeyText(scriptName, segmentStart);
     for (int i = 0; i < source.size(); ++i) {
         const ScriptPosition pos(filePath, source.at(i).physicalLine, 1);
-        const auto declaredType = [this](const QString& name) -> OperandType {
-            return m_parseTable ? m_parseTable->variableTable().typeOf(name, QString())
-                                : OperandType::Unknown;
+        const auto declaredType = [this, &currentScope](const QString& lvalue) -> OperandType {
+            if (!m_parseTable) return OperandType::Unknown;
+            const QString baseName = VariableTable::baseName(lvalue);
+            return m_parseTable->variableTable().typeOf(baseName, currentScope);
         };
         LogicalLine line = AstBuilder::build(source.at(i).text, pos, resolve, quietResolve, diagnostics,
                                              declaredType);
         line.lineIndex = i;
+        // 作用域切换在构建**之后**（与 parseOneFileReadOnly 同序：行自身先按旧段
+        // 归约，遇到 @ 标签才切到新段）。
+        if (line.kind == LineKind::FunctionLabel) {
+            segmentStart = i;
+            currentScope = eravar::segmentKeyText(scriptName, segmentStart);
+        }
         logicalLines.append(line);
         emit parseLineReady(scriptName, source.at(i).physicalLine, source.at(i).text);
     }

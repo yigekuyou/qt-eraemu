@@ -331,9 +331,12 @@ struct LogicalLine {
     //     （declType != Int 且 != Str），而构建期 resolver 也可能不带本行作用域。
     //     RHS 的「FORM 还是表达式」与 assignmentAsts 都由收尾按**最终**变量表
     //     结算这一次（数据门控，不是再猜一遍）。
-    // 装载器路径（parseOneFileReadOnly）**总有** declaredType（预扫描登记表），
-    // 因此该标记在五语料上为 0 行；只有直接调 loadScript(QList<LogicalLine>)
-    // 且不建 AST 类型回调的工具/夹具路径才会置位。
+    // 装载器路径（parseOneFileReadOnly / buildAst）**总有** declaredType（预扫描
+    // 登记表，按本行所属段查）—— 两条分支都在 AST 构建**之前**登记 #DIM/#DIMS，
+    // 因此该标记在五语料与单文件串行路径上均为 0 行。只有外部**自己构造**
+    // LogicalLine 序列再交给 loadScript 的路径（夹具/工具）才会置位：那时 AST
+    // 已按「没有类型表」构建完毕，左值类型只能等最终变量表（见
+    // EraParseTable::loadScript 里声明登记的时点）。
     bool    needsCompletion = false;
     bool    rhsPending = false;
 

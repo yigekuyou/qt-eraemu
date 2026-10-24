@@ -96,47 +96,58 @@ static void only(const PositionEffects& fx, bool callStack, bool memorySpace, bo
 //   7  @REMOTE_2        owner=REMOTE_2
 //   8  RETURN           owner=REMOTE_2
 // ---------------------------------------------------------------------------
-static LogicalLine instr(const QString& name, const QString& owner) {
+// 段身份必须由**同一个**构造点给出（eravar::segmentKeyText = (脚本名, 段起点行)）：
+// 装载期 loadScript 会按 (脚本名, @ 标签行号) 重算并自检，夹具若自己编一个
+// 名字（旧版用 owner 函数名），每一行都会被记成「段身份两侧不一致」刷进 stderr。
+static LogicalLine instr(const QString& script, int segmentStart, const QString& name,
+                         const QString& owner) {
     LogicalLine ll;
     ll.kind = LineKind::Instruction;
     ll.functionName = name;
     ll.ownerFunction = owner;
-    ll.scopeKey = owner;   // 本测试只关心「位置 -> 身份」的映射，用 owner 当身份文本
+    ll.scopeKey = eravar::segmentKeyText(script, segmentStart);
     return ll;
 }
 
-static LogicalLine funcLabel(const QString& label) {
+static LogicalLine funcLabel(const QString& label, const QString& script, int segmentStart) {
     LogicalLine ll;
     ll.kind = LineKind::FunctionLabel;
     ll.labelName = label;
     ll.ownerFunction = label;
-    ll.scopeKey = label;   // 段身份（本测试的简化：一段一个名字）
+    ll.scopeKey = eravar::segmentKeyText(script, segmentStart);
     return ll;
 }
 
-static LogicalLine gotoLabel(const QString& label, const QString& owner) {
+static LogicalLine gotoLabel(const QString& label, const QString& script, int segmentStart,
+                             const QString& owner) {
     LogicalLine ll;
     ll.kind = LineKind::GotoLabel;
     ll.labelName = label;
     ll.ownerFunction = owner;
-    ll.scopeKey = owner;
+    ll.scopeKey = eravar::segmentKeyText(script, segmentStart);
     return ll;
 }
 
 static ScriptData makeScriptA() {
+    const QString script = QStringLiteral("A.ERB");
     ScriptData d;
-    d.lines = {funcLabel("MAIN"), instr("PRINT", "MAIN"), instr("CALL", "MAIN"),
-               gotoLabel("PRINT_TITLE", "MAIN"), instr("RETURN", "MAIN"),
-               funcLabel("SUB"), instr("PRINT", "SUB"), instr("RETURN", "SUB")};
+    d.lines = {funcLabel("MAIN", script, 0), instr(script, 0, "PRINT", "MAIN"),
+               instr(script, 0, "CALL", "MAIN"),
+               gotoLabel("PRINT_TITLE", script, 0, "MAIN"),
+               instr(script, 0, "RETURN", "MAIN"),
+               funcLabel("SUB", script, 5), instr(script, 5, "PRINT", "SUB"),
+               instr(script, 5, "RETURN", "SUB")};
     return d;
 }
 
 static ScriptData makeScriptB() {
+    const QString script = QStringLiteral("B.ERB");
     ScriptData d;
-    d.lines = {funcLabel("REMOTE"), instr("PRINT", "REMOTE"), instr("RETURN", "REMOTE"),
-               funcLabel("PRINT_TITLE"), instr("PRINT", "PRINT_TITLE"),
-               funcLabel("MAIN"), instr("RETURN", "MAIN"),
-               funcLabel("REMOTE_2"), instr("RETURN", "REMOTE_2")};
+    d.lines = {funcLabel("REMOTE", script, 0), instr(script, 0, "PRINT", "REMOTE"),
+               instr(script, 0, "RETURN", "REMOTE"),
+               funcLabel("PRINT_TITLE", script, 3), instr(script, 3, "PRINT", "PRINT_TITLE"),
+               funcLabel("MAIN", script, 5), instr(script, 5, "RETURN", "MAIN"),
+               funcLabel("REMOTE_2", script, 7), instr(script, 7, "RETURN", "REMOTE_2")};
     return d;
 }
 
@@ -426,7 +437,8 @@ int main(int argc, char** argv) {
 
         position::setPosition(s, view, "A.ERB", 1, true, fx);
         const auto idMain = position::executionScopeId(s, view);
-        check(idMain == eravar::internName("MAIN"), "A.ERB:1 的段身份 = MAIN（行上的 scopeKey）");
+        check(idMain == eravar::internName(eravar::segmentKeyText(QStringLiteral("A.ERB"), 0)),
+              "A.ERB:1 的段身份 = (A.ERB,0)（行上的 scopeKey）");
         check(idMain != eravar::kGlobalScope, "MAIN 的 id 不是顶层");
 
         fx = {};
@@ -437,7 +449,8 @@ int main(int argc, char** argv) {
         fx = {};
         position::setPosition(s, view, "A.ERB", 6, false, fx);   // 换到 @SUB
         const auto idSub = position::executionScopeId(s, view);
-        check(idSub == eravar::internName("SUB"), "A.ERB:6 的段身份 = SUB");
+        check(idSub == eravar::internName(eravar::segmentKeyText(QStringLiteral("A.ERB"), 5)),
+              "A.ERB:6 的段身份 = (A.ERB,5)（@SUB 行）");
         check(idSub != idMain, "换段后 id 变");
 
         fx = {};
@@ -508,12 +521,13 @@ int main(int argc, char** argv) {
     qDebug() << "\n11) 重名裸标签：装载序无关的唯一定序";
     {
         // SHARED 落在第 padCount + 1 行（0 行是 @PAD，中间是 PRINT）。
-        auto sharedScript = [](int padCount) {
+        auto sharedScript = [](const QString& script, int padCount) {
             QList<LogicalLine> lines;
-            lines << funcLabel(QStringLiteral("PAD"));
-            for (int i = 0; i < padCount; ++i) lines << instr(QStringLiteral("PRINT"), QStringLiteral("PAD"));
-            lines << funcLabel(QStringLiteral("SHARED"));
-            lines << instr(QStringLiteral("RETURN"), QStringLiteral("SHARED"));
+            lines << funcLabel(QStringLiteral("PAD"), script, 0);
+            for (int i = 0; i < padCount; ++i)
+                lines << instr(script, 0, QStringLiteral("PRINT"), QStringLiteral("PAD"));
+            lines << funcLabel(QStringLiteral("SHARED"), script, padCount + 1);
+            lines << instr(script, padCount + 1, QStringLiteral("RETURN"), QStringLiteral("SHARED"));
             return lines;
         };
         const QStringList names = {QStringLiteral("S01.ERB"), QStringLiteral("S02.ERB"),
@@ -524,11 +538,12 @@ int main(int argc, char** argv) {
         auto run = [&](const QStringList& order) {
             EraParseTable table(nullptr);
             for (const QString& name : order) {
-                table.loadScript(name, sharedScript(name == QLatin1String("S01.ERB") ? 4 : 0));
+                table.loadScript(name, sharedScript(name, name == QLatin1String("S01.ERB") ? 4 : 0));
             }
             table.loadScript(QStringLiteral("N.ERB"),
-                             {funcLabel(QStringLiteral("NEUTRAL")),
-                              instr(QStringLiteral("RETURN"), QStringLiteral("NEUTRAL"))});
+                             {funcLabel(QStringLiteral("NEUTRAL"), QStringLiteral("N.ERB"), 0),
+                              instr(QStringLiteral("N.ERB"), 0, QStringLiteral("RETURN"),
+                                    QStringLiteral("NEUTRAL"))});
             table.markLoadComplete();
 
             // 中性脚本里没有 SHARED -> 只能跨脚本解析。
@@ -601,11 +616,11 @@ int main(int argc, char** argv) {
         const QString script = QStringLiteral("DUP.ERB");
         EraParseTable table(nullptr);
         table.loadScript(script,
-                         {funcLabel(QStringLiteral("DUP")),
-                          instr(QStringLiteral("PRINT"), QStringLiteral("DUP")),
-                          funcLabel(QStringLiteral("DUP")),
-                          instr(QStringLiteral("PRINT"), QStringLiteral("DUP")),
-                          instr(QStringLiteral("RETURN"), QStringLiteral("DUP"))});
+                         {funcLabel(QStringLiteral("DUP"), script, 0),
+                          instr(script, 0, QStringLiteral("PRINT"), QStringLiteral("DUP")),
+                          funcLabel(QStringLiteral("DUP"), script, 2),
+                          instr(script, 2, QStringLiteral("PRINT"), QStringLiteral("DUP")),
+                          instr(script, 2, QStringLiteral("RETURN"), QStringLiteral("DUP"))});
 
         // (b) 装载完成**之前**：索引尚未跨脚本排序固化，但同脚本内按行号
         //     追加，因此 onlyScript 查询的答案已是确定的 0。
@@ -634,8 +649,8 @@ int main(int argc, char** argv) {
         const QString mixed = QStringLiteral("CASE.ERB");
         check(table.beginIncrementalLoad(), "增量装载 CASE.ERB 前 beginIncrementalLoad");
         table.loadScript(mixed,
-                         {funcLabel(QStringLiteral("Foo")),
-                          instr(QStringLiteral("RETURN"), QStringLiteral("Foo"))});
+                         {funcLabel(QStringLiteral("Foo"), mixed, 0),
+                          instr(mixed, 0, QStringLiteral("RETURN"), QStringLiteral("Foo"))});
         const int foo = table.getLabelPosition(mixed, QStringLiteral("foo"));
         const int FOO = table.getLabelPosition(mixed, QStringLiteral("FOO"));
         const int Foo = table.getLabelPosition(mixed, QStringLiteral("Foo"));
@@ -650,11 +665,13 @@ int main(int argc, char** argv) {
         // 若旧声明留在索引里，firstLabel 会答出一个新版本里不存在的行。
         const QString reloaded = QStringLiteral("RELOAD.ERB");
         EraParseTable r(nullptr);
-        r.loadScript(reloaded, {funcLabel(QStringLiteral("OLD")),
-                                instr(QStringLiteral("RETURN"), QStringLiteral("OLD")),
-                                funcLabel(QStringLiteral("DUP"))});
-        r.loadScript(reloaded, {instr(QStringLiteral("PRINT"), QString()),
-                                funcLabel(QStringLiteral("DUP"))});
+        r.loadScript(reloaded, {funcLabel(QStringLiteral("OLD"), reloaded, 0),
+                                instr(reloaded, 0, QStringLiteral("RETURN"), QStringLiteral("OLD")),
+                                funcLabel(QStringLiteral("DUP"), reloaded, 2)});
+        // 第二版第一行在**任何 @ 之前**：段起点 = -1（文件头段），与
+        // loadScript 的 currentFunctionLine 初值同源。
+        r.loadScript(reloaded, {instr(reloaded, -1, QStringLiteral("PRINT"), QString()),
+                                funcLabel(QStringLiteral("DUP"), reloaded, 1)});
         checkInt(r.getLabelPosition(reloaded, QStringLiteral("OLD")), -1,
                  "reload 后旧标签从索引消失");
         checkInt(r.getLabelPosition(reloaded, QStringLiteral("DUP")), 1,

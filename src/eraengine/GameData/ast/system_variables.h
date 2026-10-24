@@ -262,8 +262,10 @@ findExtensionSystemVariable(std::string_view name) {
 //   · 运行期读写对这些名字一律先走系统槽（readLhs/writeLhs/evaluateVariable 的
 //     旧路径都是 hasSystemVariable 优先）——即便脚本里又有 #DIM/VARI 的同名
 //     私有声明，也遮蔽不了系统槽；
-//   · 分词期对命中名单的名字判 AccessKind::Dynamic（回退完整解析），
-//     静态声明表命中与否都不下结论，否则读写两侧的槽位会对不上。
+//   · 「变量分词」（computeVariableAccess）对命中名单的名字判
+//     AccessKind::System**而不是**按静态声明表判「私有/全局槽位」——即便脚本
+//     里又有 #DIM/VARI 的同名声明也遮蔽不了系统槽。类别在此定死，只剩
+//     「取哪个槽」留给运行期，否则读写两侧的槽位会对不上。
 // **新增系统变量必须同步这里**（此前注释在 variable_storage.cpp，两处不同源）。
 inline const QSet<QString>& systemStorageNames()
 {

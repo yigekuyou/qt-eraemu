@@ -231,6 +231,10 @@ void fillConstantIndex(ExpressionNode& idx,
         idx.constantIndex = {};
         return;
     }
+    // 求值前先清空本字段：evalConst 是装载期常量求值的**唯一**入口，它把
+    // 「已有 Value」当作构建期算过的缓存直接返回（见 load_passes::constantValueAt）。
+    // 不清空的话，同一节点被按另一个作用域重新定型时会读到上一次的值。
+    idx.constantIndex = {};
     const std::optional<qint64> v = evalConst(idx);
     idx.constantIndex.value = v.value_or(0);
     idx.constantIndex.state = v.has_value() ? indexbounds::ConstantIndexState::Value

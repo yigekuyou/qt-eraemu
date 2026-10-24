@@ -82,6 +82,15 @@ plantuml -txmi docs/uml/01-load-classes.puml
   读出来是另一格」。`ARGS/LOCALS/RESULTS` 的读写不对称是 Era 语义、不是实现分叉，由
   `test_name_locus` 的 51 条断言显式钉住（不是消掉）。`storageKeyFor` 仍是唯一 id→串入口，
   存储容器仍是字符串键（存档格式不变）。
+- **没有「构建后再重建」这一步**：预扫描本就覆盖 `VARI`/`VARS`（它们复用 `#DIM` 的
+  `registerScopedVariableLine`），定型失败的真因是拿**整段左值文本**（含下标）查名字表。
+  新增唯一实现 `VariableTable::baseName`（构建期定型 / 收尾字符串赋值 / 收尾左值诊断三处共用），
+  `strAssignPending` 从 eraTW 48,514 / FL3.8 16,979 / eraTetris 99 **降到五语料全 0**。
+  字符串 `++/--` 的目标也改为构建期用同一套带折叠 resolver 解一次（全量 AST 逐字节对比：
+  三语料 112.7 万行 IDENTICAL）。于是 `recompileFuncLinesInScript`（18 行）、
+  `rebuildAssignmentAstsInScript`（12 行）、`applyStringAssignments` 里的无条件 FORM
+  重编译（约 10 行）**全部删除**；剩余门控全是数据（`needsCompletion` / `rhsPending` /
+  非变量项），不是再猜一遍。代价：多扫一遍，eraTW/eraMegaten 装载均 <3% 变化。
 - **赋值左值的 AST 在构造期就完备**：`#DIM CONST` 标量的折叠原来只在收尾重解析里做
   （`parseScopedExpression(foldConstants=true)` 在 `parsePrimary` 装
   `setConstantValueProvider`），构造期 `resolveExpr` 没装 → 每行白解析一遍。
@@ -307,7 +316,7 @@ plantuml -txmi docs/uml/01-load-classes.puml
 `dump_warnings` 五语料（`eraTW` / `eraMegaten` / `eraTetris` / `FL3.8` / `ecd`）：
 **6 / 2 / 0 / 0 / 0** 行（`eraMegaten` 的目录参数必须是 `eraMegaten/data`；用错路径会得到
 0 字节的假基线），与 `/tmp/uml-baseline/*.raw.txt` **未排序**逐字节相同。
-累计四十七个重构（身份整数化 / 全定型 / 作用域显式化 / 只读收尾外移 / 存档独立映射 /
+累计四十八个重构（身份整数化 / 全定型 / 作用域显式化 / 只读收尾外移 / 存档独立映射 /
 私有名表前移 / 存档顺序确定性 / 写收尾外移 / 标记区外移 / 位置区外移 /
 标签归属单一索引 / 诊断切片幂等 / 常数作用域参数化 / 增量装载协议显式化 /
 GOTO 段身份入索引 / 静态检查用段身份 / 删第三张裸名表 / 错误去重 / 配对语法只判一次 /
@@ -322,7 +331,8 @@ GOTO 段身份入索引 / 静态检查用段身份 / 删第三张裸名表 / 错
  元素形参两条绑定路径同构（hasStringDefault）/
  角色基址表 + arena / loopEndLines 立为唯一反查索引 / 形状只剩装载期来源 /
  GETVAR 族名字解析缓存 /
- 赋值左值构造期折完常量）
+ 赋值左值构造期折完常量 /
+ 消灭「构建后再重建」）
  前后完全一致；
 `ctest` 48 → 70（新增 `test_parse_checks` / `test_save_variable_map` / `test_private_scope_table` /
 `test_load_contracts` / `test_save_variable_map_hashseed` / `test_jump_markings` /

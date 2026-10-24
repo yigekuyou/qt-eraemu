@@ -122,7 +122,7 @@ title 表达式 AST 与变量访问描述符
     + writeIntByName(name, indices, value, scope)    ' 唯一按名写原语（同一 IntLocus，无第二份顺序）
     ' 四个 switch 都无 default：漏一个 case 在 -Wswitch + -Werror 下编译失败
     + storageKeyFor(key) : const QString&       ' 唯一 id→存储串入口（记忆化）
-    + shapeOf(name, scope) : ArrayShape         ' 形状唯一入口（声明 → 装载期尺寸表 → 多维几何）
+    + shapeOf(name, scope) : ArrayShape         ' 形状唯一入口（声明 → 装载期尺寸表；无运行期来源）
     + allocatedSlots(key) : int                 ' 容器分配量（不是形状）
     - addressOf(geometry, indices) : qint64     ' 唯一取址：Σ idx[d]·strides[d]
     - CharaArena::slotOf(chara, offset) : qint64   ' 唯一角色取址：bases[chara] + offset（缺键 = -1 未分配）

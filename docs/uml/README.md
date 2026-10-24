@@ -82,6 +82,12 @@ plantuml -txmi docs/uml/01-load-classes.puml
   读出来是另一格」。`ARGS/LOCALS/RESULTS` 的读写不对称是 Era 语义、不是实现分叉，由
   `test_name_locus` 的 51 条断言显式钉住（不是消掉）。`storageKeyFor` 仍是唯一 id→串入口，
   存储容器仍是字符串键（存档格式不变）。
+- **形状只剩装载期来源**：`shapeOf` 的回落从三条减到两条（声明 → VariableSize.csv），
+  删掉「未声明多维容器的运行期外接几何」。那一条让 `VARSIZE` 对同一变量在「先读」与
+  「先写」后给**两个答案**（答案依赖执行历史）。可达性实测：五语料 495 个「无可用声明」
+  的多维下标节点**全部**是 `#DIM REF X,0,0`（占位 lengths 不可用，存储键落到调用方目标数组），
+  真正落到未声明键的实例 **0**。删掉后「未声明名 + 多维写」仍能写读（取址不受影响，
+  `extendExtents`/`addressOf` 不变），但 `shapeOf` 不再为它回答尺寸。
 - **CHARADATA 的角色块：基址表 + 连续 arena**：`CharaArena{ QList<Cell> cells; QHash<int,qint64> bases; }`，
   取址公式仍是唯一一条 `slot = bases[charaSlot] + offset`（**未分配 = 缺键 → -1**）。
   读路径只做一次 `constFind`，**分配动作只存在于 `ensureBlock`**，读路径根本调不到它 ——
@@ -284,7 +290,7 @@ plantuml -txmi docs/uml/01-load-classes.puml
 `dump_warnings` 五语料（`eraTW` / `eraMegaten` / `eraTetris` / `FL3.8` / `ecd`）：
 **6 / 2 / 0 / 0 / 0** 行（`eraMegaten` 的目录参数必须是 `eraMegaten/data`；用错路径会得到
 0 字节的假基线），与 `/tmp/uml-baseline/*.raw.txt` **未排序**逐字节相同。
-累计四十三个重构（身份整数化 / 全定型 / 作用域显式化 / 只读收尾外移 / 存档独立映射 /
+累计四十四个重构（身份整数化 / 全定型 / 作用域显式化 / 只读收尾外移 / 存档独立映射 /
 私有名表前移 / 存档顺序确定性 / 写收尾外移 / 标记区外移 / 位置区外移 /
 标签归属单一索引 / 诊断切片幂等 / 常数作用域参数化 / 增量装载协议显式化 /
 GOTO 段身份入索引 / 静态检查用段身份 / 删第三张裸名表 / 错误去重 / 配对语法只判一次 /
@@ -297,7 +303,7 @@ GOTO 段身份入索引 / 静态检查用段身份 / 删第三张裸名表 / 错
  删掉「当前帧」这个隐含输入（显式 scope 重载 + *InCurrentFrame 生产 0 调用）/
  音频管线契约（同曲重播从头 / 坏媒体回收）/
  元素形参两条绑定路径同构（hasStringDefault）/
- 角色基址表 + arena）前后完全一致；
+ 角色基址表 + arena / 形状只剩装载期来源）前后完全一致；
 `ctest` 48 → 69（新增 `test_parse_checks` / `test_save_variable_map` / `test_private_scope_table` /
 `test_load_contracts` / `test_save_variable_map_hashseed` / `test_jump_markings` /
 `test_position_state` / `test_goto_label_lookup` / `test_structure_pairing` / `test_index_bounds` /

@@ -18,7 +18,16 @@
 // 告警导出工具：装载一个游戏目录的全部脚本，把 parseTable 的所有告警
 // 按「脚本:行号: 文本」写到 stdout（或 --out 指定的文件），便于逐条核对。
 //
-// 用法： dump_warnings <gameDir> [outFile] [--async]
+// 用法：
+//   dump_warnings <gameDir> [outFile] [--async] [--detail] [--jumpcheck]
+//                 [--sizeof] [--probe] [--kind-stats] [--var NAME] [--line SCRIPT IDX]
+//
+// 位置带隐含含义的地方**只有两处**：argv[1] 是游戏目录，argv[2]（若存在且不以
+// `--` 开头）是输出文件。此后每个词都必须是一个已知的 `--开关`（`--var` / `--line`
+// 后面跟它们的参数）。outFile 位置上的 `--xxx` 是**错误**而不是文件名 ——
+// 旧实现无条件把它当输出文件：`dump_warnings eraTW --jumpcheck` 于是把告警写进
+// cwd 下一个名叫 `--jumpcheck` 的文件，而 jumpcheck 照常执行、退出码 0，
+// 命令「看起来成功」，实际只留下一个垃圾文件。
 #include <QCoreApplication>
 #include <QDebug>
 #include <QDir>
@@ -26,23 +35,115 @@
 #include <QTextStream>
 #include <QElapsedTimer>
 #include <QEventLoop>
+#include <QPair>
+#include <QStringList>
 #include "eraengine.h"
 #include "jump_markings.h"   // jumpmark::countBadJumpTargets（--jumpcheck 探针）
 
+namespace {
+
+// 参数错误统一退出码（与旧实现的「无参数」路径一致）。
+constexpr int kUsageErrorExit = 2;
+
+const char kUsage[] =
+    "usage: dump_warnings <gameDir> [outFile] [--async] [--detail] [--jumpcheck] "
+    "[--sizeof] [--probe] [--kind-stats] [--var NAME] [--line SCRIPT IDX]";
+
+// 报错文本是**契约**（test_dump_warnings_args 逐字断言）：一行原因 + 一行用法，
+// 不含时间戳 / 随机量 / 环境相关内容。
+int usageError(const QString& reason) {
+    fprintf(stderr, "dump_warnings: error: %s\n%s\n", reason.toUtf8().constData(), kUsage);
+    return kUsageErrorExit;
+}
+
+struct Options {
+    QString dir;
+    QString outPath;
+    bool async = false;
+    bool detail = false;
+    bool jumpcheck = false;
+    bool sizeofProbe = false;
+    bool probe = false;
+    bool kindStats = false;
+    QStringList vars;                 // --var NAME（可重复）
+    QList<QPair<QString, int>> lines; // --line SCRIPT INDEX（可重复）
+};
+
+// 参数形状的**唯一**解析点。返回 false 表示参数错误（已打印报错）。
+bool parseOptions(const QStringList& args, Options& opt, int& exitCode) {
+    if (args.isEmpty()) {
+        exitCode = usageError(QStringLiteral("missing <gameDir>"));
+        return false;
+    }
+    opt.dir = args.at(0);
+    int i = 1;
+    // argv[2]：输出文件。以 `--` 开头的词**不是**文件名（旧实现正是在这里
+    // 把 `--jumpcheck` 当成了输出文件）。要让开关在没有输出文件时生效，
+    // 把 outFile 写成空串：`dump_warnings <dir> "" --jumpcheck`。
+    if (i < args.size()) {
+        if (args.at(i).startsWith(QLatin1String("--"))) {
+            exitCode = usageError(QStringLiteral("output file must not start with \"--\": %1")
+                                      .arg(args.at(i)));
+            return false;
+        }
+        opt.outPath = args.at(i);
+        ++i;
+    }
+    for (; i < args.size(); ++i) {
+        const QString& a = args.at(i);
+        if (a == QLatin1String("--async")) { opt.async = true; continue; }
+        if (a == QLatin1String("--detail")) { opt.detail = true; continue; }
+        if (a == QLatin1String("--jumpcheck")) { opt.jumpcheck = true; continue; }
+        if (a == QLatin1String("--sizeof")) { opt.sizeofProbe = true; continue; }
+        if (a == QLatin1String("--probe")) { opt.probe = true; continue; }
+        if (a == QLatin1String("--kind-stats")) { opt.kindStats = true; continue; }
+        if (a == QLatin1String("--var")) {
+            if (i + 1 >= args.size()) {
+                exitCode = usageError(QStringLiteral("option --var requires a value"));
+                return false;
+            }
+            opt.vars.append(args.at(++i));
+            continue;
+        }
+        if (a == QLatin1String("--line")) {
+            if (i + 2 >= args.size()) {
+                exitCode = usageError(QStringLiteral("option --line requires SCRIPT and INDEX"));
+                return false;
+            }
+            const QString script = args.at(++i);
+            const int index = args.at(++i).toInt();
+            opt.lines.append({script, index});
+            continue;
+        }
+        if (a.startsWith(QLatin1String("--"))) {
+            exitCode = usageError(QStringLiteral("unknown option: %1").arg(a));
+            return false;
+        }
+        // 多余的位置参数：旧实现静默忽略（与「写错文件名」同类的坑）。
+        exitCode = usageError(QStringLiteral("unexpected argument: %1").arg(a));
+        return false;
+    }
+    return true;
+}
+
+} // namespace
+
 int main(int argc, char* argv[]) {
     QCoreApplication app(argc, argv);
-    if (argc < 2) {
-        qWarning() << "usage: dump_warnings <gameDir> [outFile] [--async]";
-        return 2;
-    }
-    const QString dir = QString::fromLocal8Bit(argv[1]);
-    const QString outPath = argc > 2 ? QString::fromLocal8Bit(argv[2]) : QString();
+    QStringList rawArgs;
+    rawArgs.reserve(argc > 0 ? argc - 1 : 0);
+    for (int i = 1; i < argc; ++i) rawArgs.append(QString::fromLocal8Bit(argv[i]));
+    Options opt;
+    int usageExit = 0;
+    if (!parseOptions(rawArgs, opt, usageExit)) return usageExit;
+    const QString dir = opt.dir;
+    const QString outPath = opt.outPath;
 
     QElapsedTimer timer;
     timer.start();
 
     EraEngine engine;
-    if (app.arguments().contains(QStringLiteral("--async"))) {
+    if (opt.async) {
         QEventLoop loop;
         bool ok = false;
         QObject::connect(&engine, &EraEngine::scriptsLoaded, &loop, [&](bool loaded) {
@@ -50,13 +151,17 @@ int main(int argc, char* argv[]) {
             loop.quit();
         });
         engine.loadAsync(dir);
-        if (engine.isLoadingScripts()) loop.exec();
+        // 这里必须**无条件**进事件循环等 scriptsLoaded：loadAsync 先把 CSV 准备
+        // 丢到后台未来（QtConcurrent），此刻 ErbLoader 还没开跑，isLoadingScripts()
+        // 恒 false —— 旧写法 `if (isLoadingScripts()) loop.exec()` 于是直接跳过，
+        // ok 永远是 false，`--async` 恒退出 1 且不输出任何告警。
+        loop.exec();
         if (!ok) return 1;
     } else {
         engine.setGameDirectory(dir);
     }
 
-    const bool detail = app.arguments().contains(QStringLiteral("--detail"));
+    const bool detail = opt.detail;
     const int n = engine.getParseTable()->parseWarningCount();
     const QStringList warns = engine.getParseTable()->parseWarnings();
     const int vars = engine.getParseTable()->variableTable().count();
@@ -76,7 +181,7 @@ int main(int argc, char* argv[]) {
     // 可选探针：--jumpcheck 遍历**全部脚本的全部行**，核对行字段 lines[i].jumpTo
     // 的合法性（0 <= t <= lines.size()；t < size 时目标行同脚本）。读侧唯一事实
     // 就是行字段，所以这里 0 违例即「跳转事实自洽」。不影响告警输出。
-    if (app.arguments().contains(QStringLiteral("--jumpcheck"))) {
+    if (opt.jumpcheck) {
         int scripts = 0, rows = 0, links = 0, bad = 0;
         const auto& allScripts = engine.getParseTable()->scripts();
         for (auto it = allScripts.constBegin(); it != allScripts.constEnd(); ++it) {
@@ -98,12 +203,12 @@ int main(int argc, char* argv[]) {
         if (bad != 0) return 3;
     }
     // 可选探针：--sizeof 打印关键结构大小（只读，不影响告警输出）。
-    if (app.arguments().contains(QStringLiteral("--sizeof"))) {
+    if (opt.sizeofProbe) {
         fprintf(stderr, "SIZEOF\tScriptData=%zu\tLogicalLine=%zu\n",
                 sizeof(ScriptData), sizeof(LogicalLine));
     }
     // ROM 编码探测（只读；用于展示「这个游戏是什么编码」）
-    if (argc > 3 && QString::fromLocal8Bit(argv[3]) == QLatin1String("--probe")) {
+    if (opt.probe) {
         fputs((engine.probeGameEncoding() + QLatin1Char('\n')).toUtf8().constData(), stdout);
     }
     qWarning() << "load ms =" << timer.elapsed() << " warnings =" << n << " variables =" << vars;
@@ -121,7 +226,7 @@ int main(int argc, char* argv[]) {
 
     // 可选（调试，默认不走）：--kind-stats 打印「变量分词」的 kind 判定分布。
     // 需要环境变量 EMUERA_KIND_STATS=1 才会计数（否则恒空）。
-    if (app.arguments().contains(QStringLiteral("--kind-stats"))) {
+    if (opt.kindStats) {
         const auto hist = engine.getParseTable()->variableTable().accessKindHistogram();
         qint64 total = 0;
         for (auto it = hist.constBegin(); it != hist.constEnd(); ++it) total += it.value();
@@ -134,9 +239,7 @@ int main(int argc, char* argv[]) {
         VariableTable::resetAccessKindHistogram();
     }
     // 可选：--var NAME 打印变量表里的声明
-    for (int i = 2; i + 1 < argc; ++i) {
-        if (QString::fromLocal8Bit(argv[i]) != QLatin1String("--var")) continue;
-        const QString name = QString::fromLocal8Bit(argv[++i]);
+    for (const QString& name : opt.vars) {
         for (const VariableDecl& d : engine.getParseTable()->variableTable().declarations()) {
             if (d.name.compare(name, Qt::CaseInsensitive) != 0) continue;
             qWarning().noquote() << "VAR" << d.name
@@ -147,10 +250,9 @@ int main(int argc, char* argv[]) {
         }
     }
     // 可选：--line SCRIPT INDEX 打印该行的 ownerFunction 与实参 AST 类型
-    for (int i = 2; i + 2 < argc; ++i) {
-        if (QString::fromLocal8Bit(argv[i]) != QLatin1String("--line")) continue;
-        const QString script = QString::fromLocal8Bit(argv[i + 1]);
-        const int index = QString::fromLocal8Bit(argv[i + 2]).toInt();
+    for (const auto& query : opt.lines) {
+        const QString& script = query.first;
+        const int index = query.second;
         if (const ScriptData* sd = engine.getParseTable()->script(script)) {
             if (index >= 0 && index < sd->lines.size()) {
                 const LogicalLine& l = sd->lines.at(index);

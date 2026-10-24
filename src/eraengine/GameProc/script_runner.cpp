@@ -59,6 +59,18 @@ QList<Operand> inputArgs(const LogicalLine& line) {
     return out;
 }
 
+// 「这个形参的缺省值是字符串」的唯一判据（两条绑定路径共用同一句）。
+//
+// C# 在装载期就把缺省值项解析成与形参**同型**的项（ErbLoader.parseLabel：
+// `vTerm.GetOperandType() != def.GetOperandType()` 直接报「引数の型と初期値の型が
+// 一致していません」），所以「Str 形参 + 声明了缺省值」就是字符串缺省值 ——
+// 空串 `""` 也是缺省值，不能因为它「看起来是空的」就退化成整数零值。
+// 旧判据多了一个 `&& !defaultStr.isEmpty()`：`@F(SS:0 = "")` 于是被当成
+// 「没有字符串缺省值」，语句路径写进 "0"、式子路径写进空串（两份实现各错一半）。
+bool hasStringDefault(const UserParamDecl& p) {
+    return p.hasDefault && p.type == OperandType::Str;
+}
+
 } // namespace
 
 ScriptRunner::ScriptRunner(EraParseTable* table,
@@ -2549,7 +2561,8 @@ void ScriptRunner::bindArguments(const UserFunctionDecl* info, const QString& sc
         // 否则取零值/空串；**不能**把空文本当表达式求值（那会落成字面量 0 或报错）。
         if (a.omitted) {
             if (param && param->hasDefault) {
-                const bool stringDefault = param->type == OperandType::Str && !param->defaultStr.isEmpty();
+                // 字符串缺省值的判据见 hasStringDefault()：空串 `""` 也算。
+                const bool stringDefault = hasStringDefault(*param);
                 bindOne(param, position, stringDefault, param->defaultStr, param->defaultInt);
             } else if (param) {
                 const bool wantStr = param->type == OperandType::Str;
@@ -2578,7 +2591,7 @@ void ScriptRunner::bindArguments(const UserFunctionDecl* info, const QString& sc
     for (int position = supplied; position < info->params.size(); ++position) {
         const UserParamDecl& param = info->params.at(position);
         if (param.hasDefault) {
-            const bool stringDefault = param.type == OperandType::Str && !param.defaultStr.isEmpty();
+            const bool stringDefault = hasStringDefault(param);
             const QString& text = param.defaultStr;
             bindOne(&param, position, stringDefault, text, param.defaultInt);
             continue;
@@ -2660,7 +2673,8 @@ bool ScriptRunner::invokeUserFunction(const QString& name, const QList<QVariant>
     // 形参缺省值绑定（`@F(A, OP = "NORMAL")`）：实参没给到、或写成了空位
     //（省略实参）时使用。对齐 C#：实参为 null 时取 func.Def[i]。
     const auto bindDefault = [this, callScope](const UserParamDecl& param, int position) {
-        const bool stringDefault = param.type == OperandType::Str && !param.defaultStr.isEmpty();
+        // 与 bindArguments::bindOne 同一句判据（同一份声明只有一种缺省值语义）。
+        const bool stringDefault = hasStringDefault(param);
         const QString& text = param.defaultStr;
         switch (param.target) {
         case UserParamTarget::Arg:
@@ -2673,7 +2687,19 @@ bool ScriptRunner::invokeUserFunction(const QString& name, const QList<QVariant>
             break;
         case UserParamTarget::LocalVar:
             if (param.fixedIndex >= 0) {
-                m_storage->setGlobalInt1D(param.varName, param.fixedIndex, param.defaultInt, callScope);
+                // 元素形参（`@F(SS:0 = "x")` / `@F(A:0:1 = "x")`）：与 bindOne 同形 ——
+                // 字符串元素写字符串槽（多维按 fixedIndices 定位），整数元素写整数槽。
+                // 此前这里**只有**整数一处，字符串元素形参的缺省值被整体丢掉
+                //（写成了空串）：语句 CALL 有值、式子调用没有值，两路不一致。
+                if (stringDefault) {
+                    m_storage->setStringSlot(param.varName,
+                        param.fixedIndices.isEmpty() ? QList<int>{param.fixedIndex}
+                                                     : param.fixedIndices,
+                        flatString(QVariant(text)), callScope);
+                } else {
+                    m_storage->setGlobalInt1D(param.varName, param.fixedIndex, param.defaultInt,
+                                              callScope);
+                }
                 break;
             }
             m_storage->setParameter(param.varName.isEmpty() ? param.name : param.varName,
@@ -2725,8 +2751,18 @@ bool ScriptRunner::invokeUserFunction(const QString& name, const QList<QVariant>
             break;
         case UserParamTarget::LocalVar:
             if (param->fixedIndex >= 0) {
-                m_storage->setGlobalInt1D(param->varName, param->fixedIndex,
-                                          omitted ? 0 : v.toLongLong(), callScope);
+                // 元素形参：字符串元素（1D 与多维）必须写字符串槽 —— 只走整数槽
+                // 会让式子调用 `F("yy")` 的实参整个丢失（写进了一个与字符串变量
+                // 无关的整数键），函数体内读到的是缺省值。
+                if (param->type == OperandType::Str) {
+                    m_storage->setStringSlot(param->varName,
+                        param->fixedIndices.isEmpty() ? QList<int>{param->fixedIndex}
+                                                      : param->fixedIndices,
+                        flatString(omitted ? QVariant(QString()) : v), callScope);
+                } else {
+                    m_storage->setGlobalInt1D(param->varName, param->fixedIndex,
+                                              omitted ? 0 : v.toLongLong(), callScope);
+                }
                 break;
             }
             m_storage->setParameter(param->varName.isEmpty() ? param->name : param->varName,

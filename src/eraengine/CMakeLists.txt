@@ -403,6 +403,10 @@ add_test(NAME test_string_locus COMMAND test_string_locus)
 # 「谁的作用域」运行期护栏：形参绑定 / 默认值 / REF 别名不得用隐式当前帧解析
 eraengine_add_test(test_scope_plumbing)
 add_test(NAME test_scope_plumbing COMMAND test_scope_plumbing)
+# 元素形参（`@F(A:0 = …)`）的**默认值**：语句 CALL 与式中调用两条绑定路径
+# 必须给出同一结果（同一份声明两处实现，缺一半就会只在一条路上丢值）
+eraengine_add_test(test_bind_defaults)
+add_test(NAME test_bind_defaults COMMAND test_bind_defaults)
 eraengine_add_test(test_erb_preprocessor)
 eraengine_add_test(test_async_load)
 eraengine_add_test(test_async_lifecycle)
@@ -512,6 +516,11 @@ add_test(NAME test_ecd_command_coverage COMMAND test_ecd_command_coverage)
 
 # 诊断工具：导出全部装载告警
 eraengine_add_test(dump_warnings)
+# 护栏：dump_warnings 的参数形状（outFile 位置写开关 -> 报错而不是造垃圾文件）。
+# 用 QProcess 跑真二进制：参数解析在 main 里，只有端到端才测得到「cwd 里没有新文件」。
+eraengine_add_test(test_dump_warnings_args)
+add_dependencies(test_dump_warnings_args dump_warnings)
+add_test(NAME test_dump_warnings_args COMMAND test_dump_warnings_args)
 # 工具：把游戏目录的文本文件规范化为 UTF-8（dry-run 缺省）
 eraengine_add_test(text_convert)
 eraengine_add_test(expr_probe)

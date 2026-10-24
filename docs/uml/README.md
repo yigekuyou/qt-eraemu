@@ -100,6 +100,26 @@ plantuml -txmi docs/uml/01-load-classes.puml
   原则记在此：**能在构造/定型期做的就做完，运行期只查表**；
   `strAssignPending`（VARI/VARS 是语句、预扫描只扫 `#` 行）与 GETVAR 族
   （名字是运行期字符串，按 C# 语义必须不折）是两条有理由的例外。
+- **常量子树只求值一次，构建期算过的就查值**：`load_passes.cpp::constantValueAt(ctx, node, scope)`
+  是装载期唯一的常量求值入口 —— `node.constantIndex.isValid()` 就直接返回构建期算好的值，
+  否则才调 `evaluate`。构建期的 `constantIndexEvaluator` 与收尾 `validate()` 都只走它，
+  于是装载期 `evaluate` 调用点 **2 → 1**（原先校验趟对已有 `constantIndex` 的子树又算了一遍）。
+  `VariableTable::fillConstantIndex` 求值前先 `idx.constantIndex = {}`：否则同一节点按另一段
+  重定型时会命中上一段的旧值（缓存反噬，症状是同一行在两次定型后给两个常量答案）。
+  实测跳过 269 次（eraMegaten 266 / eraTetris 3 / 其余 0），**269/269 与逐节点重算逐节点相同**、
+  mismatch 0。eraTW 跳过为 0 是**事实而非遗漏**：该语料的常量下标在构建期已折成 `LiteralNode`，
+  而 `Literal` 分支本来就不求值；剩下的求值全是 `StrForm`/`If` 根（无 `constantIndex`），
+  属于校验趟的**首次**求值。
+- **`rhsPending` 在生产路径是 0，标记仍在（有代价记账）**：串行 `loadDirectory` 分支补上
+  「先预扫描再建 AST」，`AstBuilder::build` 的 `declaredType` 改为按**段身份**查
+  （`eravar::segmentKeyText`）而不是按裸脚本名 —— 单文件夹具从「1 行 RHSPENDING + 2/6 两次
+  RHSSETTLE FORM」降到 **0/0**，五语料 0/0（并行路径本就预扫描）。标记不能删的**理由不是懒**：
+  路径 B 的 AST 由调用方在 `loadScript` **之前**建好，而声明是 `loadScript` 扫描时才登记
+  （`m_declarationsPreRegistered` 之前根本没有类型表），所以「构建期就有类型」在 API 上不成立。
+  删除代价实测 = `test_control_flow` / `test_statements` / `test_parse_table_ast` 三红
+  （15 行 FORM 语义），而生产调用者 **0**（`execution_engine.cpp:572` 是唯一入口，
+  两条分支都已预扫描）—— 救测试要么在夹具里重抄一遍「哪些 `#` 行算声明」（第二份判定），
+  要么加新引擎 API，都比保留更差。
 - **GETVAR / GETVARS / SETVAR 的名字解析有缓存（唯一表、唯一键）**：键 =
   `(名字文本.trimmed(), 段身份文本)`，值是不可变 AST 的 `QSharedPointer`；容量 512、
   满时淘汰 stamp 最小者（近似 LRU）。失效只有一个入口、6 个调用点（`clear` /
@@ -316,7 +336,7 @@ plantuml -txmi docs/uml/01-load-classes.puml
 `dump_warnings` 五语料（`eraTW` / `eraMegaten` / `eraTetris` / `FL3.8` / `ecd`）：
 **6 / 2 / 0 / 0 / 0** 行（`eraMegaten` 的目录参数必须是 `eraMegaten/data`；用错路径会得到
 0 字节的假基线），与 `/tmp/uml-baseline/*.raw.txt` **未排序**逐字节相同。
-累计四十八个重构（身份整数化 / 全定型 / 作用域显式化 / 只读收尾外移 / 存档独立映射 /
+累计四十九个重构（身份整数化 / 全定型 / 作用域显式化 / 只读收尾外移 / 存档独立映射 /
 私有名表前移 / 存档顺序确定性 / 写收尾外移 / 标记区外移 / 位置区外移 /
 标签归属单一索引 / 诊断切片幂等 / 常数作用域参数化 / 增量装载协议显式化 /
 GOTO 段身份入索引 / 静态检查用段身份 / 删第三张裸名表 / 错误去重 / 配对语法只判一次 /
@@ -332,7 +352,8 @@ GOTO 段身份入索引 / 静态检查用段身份 / 删第三张裸名表 / 错
  角色基址表 + arena / loopEndLines 立为唯一反查索引 / 形状只剩装载期来源 /
  GETVAR 族名字解析缓存 /
  赋值左值构造期折完常量 /
- 消灭「构建后再重建」）
+ 消灭「构建后再重建」 /
+ 常量子树不求值第二次（constantValueAt 唯一入口））
  前后完全一致；
 `ctest` 48 → 70（新增 `test_parse_checks` / `test_save_variable_map` / `test_private_scope_table` /
 `test_load_contracts` / `test_save_variable_map_hashseed` / `test_jump_markings` /

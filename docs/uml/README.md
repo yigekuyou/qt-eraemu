@@ -82,6 +82,14 @@ plantuml -txmi docs/uml/01-load-classes.puml
   读出来是另一格」。`ARGS/LOCALS/RESULTS` 的读写不对称是 Era 语义、不是实现分叉，由
   `test_name_locus` 的 51 条断言显式钉住（不是消掉）。`storageKeyFor` 仍是唯一 id→串入口，
   存储容器仍是字符串键（存档格式不变）。
+- **GETVAR / GETVARS / SETVAR 的名字解析有缓存（唯一表、唯一键）**：键 =
+  `(名字文本.trimmed(), 段身份文本)`，值是不可变 AST 的 `QSharedPointer`；容量 512、
+  满时淘汰 stamp 最小者（近似 LRU）。失效只有一个入口、6 个调用点（`clear` /
+  `beginIncrementalLoad` / `loadScript` / `markLoadComplete` / `setExpressionEvaluator` /
+  `setConstantTable`）—— 脚本替换后**不复活旧 AST**。实测：命中率 91.67%，
+  单次 0.55 µs vs 重解析 13.2 µs（24×；Debug -O0，绝对值偏大、比例有意义）。
+  取证开关 `EMUERA_NO_RUNTIME_REF_CACHE=1` 旁路到旧实现（语义完全相同），
+  护栏靠它证明「缓存不改语义」（13 条红全是"缓存确实生效"类）。
 - **形状只剩装载期来源**：`shapeOf` 的回落从三条减到两条（声明 → VariableSize.csv），
   删掉「未声明多维容器的运行期外接几何」。那一条让 `VARSIZE` 对同一变量在「先读」与
   「先写」后给**两个答案**（答案依赖执行历史）。可达性实测：五语料 495 个「无可用声明」
@@ -290,7 +298,7 @@ plantuml -txmi docs/uml/01-load-classes.puml
 `dump_warnings` 五语料（`eraTW` / `eraMegaten` / `eraTetris` / `FL3.8` / `ecd`）：
 **6 / 2 / 0 / 0 / 0** 行（`eraMegaten` 的目录参数必须是 `eraMegaten/data`；用错路径会得到
 0 字节的假基线），与 `/tmp/uml-baseline/*.raw.txt` **未排序**逐字节相同。
-累计四十五个重构（身份整数化 / 全定型 / 作用域显式化 / 只读收尾外移 / 存档独立映射 /
+累计四十六个重构（身份整数化 / 全定型 / 作用域显式化 / 只读收尾外移 / 存档独立映射 /
 私有名表前移 / 存档顺序确定性 / 写收尾外移 / 标记区外移 / 位置区外移 /
 标签归属单一索引 / 诊断切片幂等 / 常数作用域参数化 / 增量装载协议显式化 /
 GOTO 段身份入索引 / 静态检查用段身份 / 删第三张裸名表 / 错误去重 / 配对语法只判一次 /
@@ -303,13 +311,14 @@ GOTO 段身份入索引 / 静态检查用段身份 / 删第三张裸名表 / 错
  删掉「当前帧」这个隐含输入（显式 scope 重载 + *InCurrentFrame 生产 0 调用）/
  音频管线契约（同曲重播从头 / 坏媒体回收）/
  元素形参两条绑定路径同构（hasStringDefault）/
- 角色基址表 + arena / loopEndLines 立为唯一反查索引 / 形状只剩装载期来源）
+ 角色基址表 + arena / loopEndLines 立为唯一反查索引 / 形状只剩装载期来源 /
+ GETVAR 族名字解析缓存）
  前后完全一致；
-`ctest` 48 → 69（新增 `test_parse_checks` / `test_save_variable_map` / `test_private_scope_table` /
+`ctest` 48 → 70（新增 `test_parse_checks` / `test_save_variable_map` / `test_private_scope_table` /
 `test_load_contracts` / `test_save_variable_map_hashseed` / `test_jump_markings` /
 `test_position_state` / `test_goto_label_lookup` / `test_structure_pairing` / `test_index_bounds` /
 `test_segment_scope` / `test_array_shape` / `test_storage_form` / `test_condition_scope` /
-`test_name_locus` / `test_string_locus` / `test_scope_plumbing` / `test_audio_pipeline_contracts` / `test_bind_defaults` / `test_dump_warnings_args` / `test_chara_arena`）。
+`test_name_locus` / `test_string_locus` / `test_scope_plumbing` / `test_audio_pipeline_contracts` / `test_bind_defaults` / `test_dump_warnings_args` / `test_chara_arena` / `test_runtime_ref_cache`）。
 
 装载耗时（eraTW，2260 文件 / 2.11M 逻辑行，12 线程）：`load` 41 s → **22.8 s**
 （scan 129 ms / parse 8.4 s / merge 4.9 s），收尾 `markLoadComplete` 23.3 s → 6.5 s，

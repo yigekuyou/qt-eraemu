@@ -254,9 +254,9 @@ int main(int argc, char* argv[]) {
         };
         // 脚本级构建（唯一入口）：#DIMS LOCAL_TEXT 在构建期可见，`LOCAL_TEXT = …`
         // 于是**在这一步**就定成 StrForm，收尾不再重解。
-        const QList<LogicalLine> stringLines =
+        const declscan::BuiltScript stringBuilt =
             stringTable.buildScriptAst("strings", stringSource, "strings.ERB");
-        check(stringTable.loadScript("strings", stringLines), "load string assignment script");
+        check(stringTable.loadScript("strings", stringBuilt), "load string assignment script");
         stringTable.markLoadComplete();
         const ScriptData* strings = stringTable.script("strings");
         check(strings != nullptr, "string assignment script available");

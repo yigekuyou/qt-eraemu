@@ -36,8 +36,10 @@ static void run(const QString& name, const QStringList& source, qint64 expected,
     QStringList script = {"@MAIN"};
     script.append(source);
     // 脚本级构建（唯一入口）：声明是前置步骤，字符串赋值在构建期即定成 FORM。
-    const QList<LogicalLine> lines = table.buildScriptAst("flow", script, "flow.ERB");
-    table.loadScript("flow", lines);
+    // BuiltScript = 行 + 它**唯一**的那份声明扫描：装载时不再重扫。
+    const declscan::BuiltScript built = table.buildScriptAst("flow", script, "flow.ERB");
+    const QList<LogicalLine>& lines = built.lines;
+    table.loadScript("flow", built);
     table.markLoadComplete();
     for (int i = 0; i < lines.size(); ++i) {
         const auto* loaded = table.lineAt("flow", i);
@@ -189,8 +191,8 @@ static void globalConstShadowedByPrivate() {
     // 脚本级构建（唯一入口）：#DIM SHADOW 是构建的**前置步骤**，于是构建期的
     // 常量折叠就看得见这个可写私有变量（同名广域 CONST 被遮蔽，不折），
     // 左值与右值在同一次构建里定型 —— 收尾不再按最终表重解。
-    const QList<LogicalLine> lines = table.buildScriptAst("shadow", source, "shadow.ERB");
-    table.loadScript("shadow", lines);
+    const declscan::BuiltScript built = table.buildScriptAst("shadow", source, "shadow.ERB");
+    table.loadScript("shadow", built);
     table.markLoadComplete();
     table.setEntryPoint("MAIN");
     const ExecState state_ = runner.runToCompletion();

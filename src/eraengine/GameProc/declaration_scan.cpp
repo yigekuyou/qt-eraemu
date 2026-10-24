@@ -371,13 +371,10 @@ void registerDeclaration(VariableTable& variables, ParseDiagnostics& diagnostics
                             site.scopeKey, /*isHeaderFile=*/false);
 }
 
-Scan declareScriptVariables(VariableTable& variables, ParseDiagnostics& diagnostics,
-                            const QList<SourceLine>& lines, const QString& scriptName,
-                            bool isHeaderFile) {
-    Scan scan = scanScript(lines, scriptName, isHeaderFile);
+void registerScannedDeclarations(VariableTable& variables, ParseDiagnostics& diagnostics,
+                                 VariableStorage* storage, const Scan& scan) {
     for (const DeclarationSite& site : scan.declarations)
-        registerDeclaration(variables, diagnostics, nullptr, site);
-    return scan;
+        registerDeclaration(variables, diagnostics, storage, site);
 }
 
 }  // namespace declscan

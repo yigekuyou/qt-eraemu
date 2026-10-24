@@ -268,8 +268,19 @@ public:
     // 显式声明意图 —— 先 beginIncrementalLoad()（Finalized -> Loading），
     // 装载完再 markLoadComplete() 让新脚本被定型/重绑。
     // 协议是显式的：不存在「loadScript 顺手重置状态机」的隐式行为。
+    // declScan：这段行的声明扫描（可以对空 = 手里只有行、没有扫描 —— 那就自扫
+    // 一次；那是**另一份数据**的扫描，不是重复扫描）。非空时必须与 lines 同源
+    // （declscan::Scan::covers 自检）；生产路径把它随 ParsedErbFile 一起带下来。
     bool loadScript(const QString& scriptName, const QList<LogicalLine>& lines,
-                    bool isHeaderFile = false, const QString& path = QString());
+                    bool isHeaderFile = false, const QString& path = QString(),
+                    const declscan::Scan* declScan = nullptr);
+    // 便捷重载：buildScriptAst 的产物直接交给 loadScript —— 扫描随行数据一起走，
+    // 同一个脚本只扫一次（「AST 一次构造成型」的传递单元，见 declscan::BuiltScript）。
+    bool loadScript(const QString& scriptName, const declscan::BuiltScript& built,
+                    bool isHeaderFile = false, const QString& path = QString()) {
+        return loadScript(scriptName, built.lines, isHeaderFile, path,
+                          built.scan.isEmpty() ? nullptr : &built.scan);
+    }
 
     // ---- 一段源码 -> 一段 AST（**脚本级构建的唯一入口**）-------------------
     // 声明是这条入口的**前置步骤**：先按 declscan::scanScript 扫出本脚本的声明、
@@ -281,17 +292,22 @@ public:
     // 调用方只给源码，不决定哪一行是声明。
     // diagnostics：**行级**诊断出口（表达式归约失败、整数字面量、未识别指令…）。
     //   声明本身的诊断随登记进本表的诊断容器（与 loadScript 同一次、不重复）。
-    [[nodiscard]] QList<LogicalLine> buildScriptAst(const QString& scriptName,
-                                                    const QList<declscan::SourceLine>& lines,
-                                                    bool isHeaderFile = false,
-                                                    ParseDiagnostics* diagnostics = nullptr);
+    // scan：这些行的声明扫描。可空（= 还没扫过，本函数扫一次）；非空时必须与
+    //   lines 同源（covers 自检），否则视为另一份数据、重扫。返回的 BuiltScript
+    //   带着**本函数实际用的**那份 Scan，交给 loadScript 即不再重扫。
+    [[nodiscard]] declscan::BuiltScript buildScriptAst(const QString& scriptName,
+                                                       const QList<declscan::SourceLine>& lines,
+                                                       bool isHeaderFile = false,
+                                                       ParseDiagnostics* diagnostics = nullptr,
+                                                       const declscan::Scan* scan = nullptr);
     // 便捷重载：行号 = 下标 + 1（工具/单测的源码片段没有物理行号）。
     // sourceName 只进诊断位置（空 = scriptName）。
-    [[nodiscard]] QList<LogicalLine> buildScriptAst(const QString& scriptName,
-                                                    const QStringList& rawLines,
-                                                    const QString& sourceName = QString(),
-                                                    bool isHeaderFile = false,
-                                                    ParseDiagnostics* diagnostics = nullptr);
+    [[nodiscard]] declscan::BuiltScript buildScriptAst(const QString& scriptName,
+                                                       const QStringList& rawLines,
+                                                       const QString& sourceName = QString(),
+                                                       bool isHeaderFile = false,
+                                                       ParseDiagnostics* diagnostics = nullptr,
+                                                       const declscan::Scan* scan = nullptr);
 
     // 增量装载的显式入口：Finalized -> Loading（其余阶段 = qWarning + false）。
     // 仅在「已定型 + 要追加/替换脚本」时使用；调用方随后必须
@@ -481,6 +497,7 @@ public:
     void finishDeclarationPreRegistration();   // 结算：维数/初值/用户函数类型
     // 一段源码的声明 -> 变量表（**唯一登记入口**）：buildScriptAst 的前置步骤与
     // loadScript 都调它。已预登记（装载器路径）或本脚本已登记过 => 空操作。
+    // 登记循环本身也只有一份（declscan::registerScannedDeclarations）。
     void registerScriptDeclarations(const QString& scriptName, const declscan::Scan& scan);
     [[nodiscard]] bool declarationsPreRegistered() const { return m_declarationsPreRegistered; }
 

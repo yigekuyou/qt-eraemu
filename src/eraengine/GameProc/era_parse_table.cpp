@@ -528,7 +528,8 @@ void EraParseTable::syncFunctionContributionsFromWinners()
 }
 
 bool EraParseTable::loadScript(const QString& scriptName, const QList<LogicalLine>& lines,
-                              bool isHeaderFile, const QString& path) {
+                              bool isHeaderFile, const QString& path,
+                              const declscan::Scan* declScan) {
     // 增量装载协议（显式）：Finalized 之后必须先 beginIncrementalLoad()。
     // loadScript 不再兼职「重置状态机」—— 隐含的重开会让调用方以为装载一行
     // 就能继续用，实际是「只读区已经定型、新脚本还没被重绑」的半成品状态。
@@ -647,12 +648,19 @@ bool EraParseTable::loadScript(const QString& scriptName, const QList<LogicalLin
     }
 
     // ---- 声明：**先登记，后使用**（不是事后补）----
-    // 判据只有一份（declscan::scanScript）：它与 preRegisterDeclarations 共用同一
-    // 个扫描循环。登记本身也只有一处（registerScriptDeclarations）—— buildScriptAst
-    // 的构建期前置步骤与这里调的是同一个函数，所以「构建期看到的类型」与「本表
-    // 最终登记的类型」按构造相同（同一张表，不是两份视图）。
-    const declscan::Scan declScan = declscan::scanScript(data.lines, scriptName, isHeaderFile);
-    registerScriptDeclarations(scriptName, declScan);
+    // 判据只有一份（declscan::scanScript）。这里优先**消费**调用方随行数据带来的
+    // 那份扫描（declscan::BuiltScript / ErbLoader 的预扫描）：同一份行只扫一次。
+    // 只有「手里只有行、没有扫描」的调用方才自扫一次 —— 那是**另一份数据**的
+    // 扫描（外部构造的 LogicalLine），不是对同一份行的重复扫描。
+    declscan::Scan localScan;
+    const declscan::Scan* scan = declScan;
+    if (!scan || !scan->covers(data.lines.size())) {
+        Q_ASSERT_X(!declScan, "EraParseTable::loadScript",
+                   "传入的 Scan 与行数组行数不符（不是同一份数据）");
+        localScan = declscan::scanScript(data.lines, scriptName, isHeaderFile);
+        scan = &localScan;
+    }
+    registerScriptDeclarations(scriptName, *scan);
 
     QString currentFunction;   // **函数名**事实（形参/事件/RETURNF/展示）
     int currentFunctionLine = -1;   // 段起点（预处理后行序里的 @ 标签下标；文件头 = -1）
@@ -693,7 +701,7 @@ bool EraParseTable::loadScript(const QString& scriptName, const QList<LogicalLin
             // 声明已在上面按 declscan 的扫描结果登记（唯一判据）。这里只剩一条
             // 诊断：声明区之外的 # 行（.ERB 的 # 行必须紧跟函数标签，对齐 C# ErbLoader）。
             // 行序遍历保证诊断插入顺序与逐行判定时完全一致。
-            if (declScan.orphanSharpLines.contains(i)) {
+            if (scan->orphanSharpLines.contains(i)) {
                 m_diagnostics.add(DiagSeverity::Warning, DiagCode::kSharpLine,
                                   line.position.filename, line.position.lineNumber, line.position.column, 0,
                                   QCoreApplication::translate("ParseDiagnostics", "函数声明之外使用了 # 行 (%1)")
@@ -902,23 +910,36 @@ bool EraParseTable::loadScript(const QString& scriptName, const QList<LogicalLin
 //   · 常量折叠看到本脚本的可写私有变量（同名广域常量被遮蔽，不折）；
 //   · 没有第二张「构建期表」—— AST 在 loadScript/markLoadComplete 前后逐节点相同。
 // ---------------------------------------------------------------------------
-QList<LogicalLine> EraParseTable::buildScriptAst(const QString& scriptName,
-                                                const QList<declscan::SourceLine>& lines,
-                                                bool isHeaderFile, ParseDiagnostics* diagnostics) {
-    QList<LogicalLine> out;
-    if (scriptName.isEmpty() || lines.isEmpty()) return out;
+declscan::BuiltScript EraParseTable::buildScriptAst(const QString& scriptName,
+                                                    const QList<declscan::SourceLine>& lines,
+                                                    bool isHeaderFile,
+                                                    ParseDiagnostics* diagnostics,
+                                                    const declscan::Scan* providedScan) {
+    declscan::BuiltScript built;
+    if (scriptName.isEmpty() || lines.isEmpty()) return built;
     if (m_phase == LoadPhase::Finalized) {
         // 与 loadScript 同一协议：定型之后不再编译源码。
         qWarning().noquote() << "[parse] buildScriptAst 在定型（Finalized）之后调用，忽略"
                              << scriptName;
-        return out;
+        return built;
     }
     // ① 声明先登记（唯一判据 + 唯一登记入口；已预登记/已登记则跳过）。
-    const declscan::Scan scan = declscan::scanScript(lines, scriptName, isHeaderFile);
+    //    扫描只做一次：调用方（ErbLoader 的预扫描）已经随源码带来同源的 Scan
+    //    就直接用；没有才扫。返回的 BuiltScript 带着这份 Scan，loadScript 因此
+    //    不再重扫。
+    if (providedScan && providedScan->covers(lines.size())) {
+        built.scan = *providedScan;   // 隐式共享：不复制行索引
+    } else {
+        Q_ASSERT_X(!providedScan, "EraParseTable::buildScriptAst",
+                   "传入的 Scan 与源码行数不符（不是同一份数据）");
+        built.scan = declscan::scanScript(lines, scriptName, isHeaderFile);
+    }
+    const declscan::Scan& scan = built.scan;
     registerScriptDeclarations(scriptName, scan);
 
     // ② 逐行构建。作用域随段切换（与 loadScript 的 currentFunctionLine 同一事实，
     //    这里直接读扫描结果 —— 两条路径是同一个数）。
+    QList<LogicalLine>& out = built.lines;
     QString currentScope;   // 当前行的段身份文本（空 = 广域）
     const auto declaredType = [this, &currentScope](const QString& lvalue) -> OperandType {
         const QString baseName = VariableTable::baseName(lvalue);
@@ -945,19 +966,20 @@ QList<LogicalLine> EraParseTable::buildScriptAst(const QString& scriptName,
         line.scopeKey = currentScope;
         out.append(line);
     }
-    return out;
+    return built;
 }
 
-QList<LogicalLine> EraParseTable::buildScriptAst(const QString& scriptName,
-                                                const QStringList& rawLines,
-                                                const QString& sourceName, bool isHeaderFile,
-                                                ParseDiagnostics* diagnostics) {
+declscan::BuiltScript EraParseTable::buildScriptAst(const QString& scriptName,
+                                                    const QStringList& rawLines,
+                                                    const QString& sourceName, bool isHeaderFile,
+                                                    ParseDiagnostics* diagnostics,
+                                                    const declscan::Scan* scan) {
     const QString fileName = sourceName.isEmpty() ? scriptName : sourceName;
     QList<declscan::SourceLine> lines;
     lines.reserve(rawLines.size());
     for (int i = 0; i < rawLines.size(); ++i)
         lines.append({rawLines.at(i), ScriptPosition(fileName, i + 1, 1)});
-    return buildScriptAst(scriptName, lines, isHeaderFile, diagnostics);
+    return buildScriptAst(scriptName, lines, isHeaderFile, diagnostics, scan);
 }
 
 bool EraParseTable::beginIncrementalLoad() {
@@ -1269,11 +1291,10 @@ void EraParseTable::registerScriptDeclarations(const QString& scriptName,
     //   · 空脚本。
     if (m_declarationsPreRegistered || m_declarationScripts.contains(scriptName)) return;
     m_declarationScripts.insert(scriptName);
-    for (const declscan::DeclarationSite& site : scan.declarations) {
-        // SharpDirective 与 VARI/VARS 都走同一个登记入口（registerDeclaration 内
-        // 按 kind 分流；函数外的 VARI/VARS 不登记，告警只由预登记路径给出）。
-        declscan::registerDeclaration(m_variables, m_diagnostics, m_variableStorage, site);
-    }
+    // 登记循环只有一份（declscan::registerScannedDeclarations）：SharpDirective 与
+    // VARI/VARS 都走 registerDeclaration 按 kind 分流（函数外的 VARI/VARS 不登记，
+    // 告警只由预登记路径给出）。
+    declscan::registerScannedDeclarations(m_variables, m_diagnostics, m_variableStorage, scan);
 }
 
 void EraParseTable::parseVariableDeclarationText(const QString& rawLine, const ScriptPosition& position,

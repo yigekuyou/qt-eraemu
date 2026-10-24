@@ -33,15 +33,22 @@ class VariableTable;
 // 声明扫描（declaration scan）—— 「哪一行是变量声明、它属于哪个段」的**唯一**判据
 //
 // 声明是**源码的静态事实**：给定预处理后的一行序列，变量的名字/类型/作用域
-// 就已经定死了。因此这段判定只能有一份实现，四条消费路径共用它：
-//   · ErbLoader::preRegisterDeclarations —— 装载前把全部文件的声明登记进解析表
-//                                            （生产路径的权威来源）；
-//   · EraParseTable::loadScript          —— 未预登记路径（单测/工具）自己先扫一遍；
+// 就已经定死了。因此这段判定只能有一份实现，且**同一份源码只扫一次** ——
+// scanScript 的产物（Scan）是纯值类型，随文件数据一起传递给每个消费者：
+//   · ErbLoader::scanFileDeclarations     —— 预处理一次 + 扫描一次，产出 Scan；
+//   · ErbLoader::preRegisterDeclarations  —— 装载前把全部文件的声明登记进解析表
+//                                            （生产路径的权威来源）；**消费** Scan；
+//   · EraParseTable::loadScript          —— 登记 + 声明区外的 # 行诊断；**消费** Scan；
 //   · EraParseTable::buildScriptAst      —— **构建的前置步骤**：AST 构建之前先把
 //                                            本脚本的声明登记进解析表（与
 //                                            loadScript 同一个登记入口），
 //                                            于是构建期不存在「左值类型未知」的行；
-//   · ErbLoader::scanVariableTypes       —— LoadTimeVarTypes（并行解析的类型快照）。
+//                                            产出 BuiltScript（行 + Scan）；
+//   · LoadTimeVarTypes（并行解析的类型快照）—— 由同一份 Scan 摊平而来。
+//
+// 「谁该把 Scan 传给谁」写在类型上：EraParseTable::buildScriptAst 返回
+// BuiltScript（行 + 它的 Scan），EraParseTable::loadScript 接受它 ——
+// 于是单文件/工具路径上「构建 + 装载」只有一次扫描（见 BuiltScript 的注释）。
 //
 // 判据与 AstBuilder 的行分类**同序**（见 ast_builder.cpp 的 build 开头）：
 //   空行/注释（';'）        -> Null          —— 不结束声明区
@@ -87,6 +94,29 @@ struct Scan {
     // 每行的段起点（预处理后行序）：@ 行是自己的段起点，其余沿用最近的 @。
     // 与 loadScript 的 currentFunctionLine、解析线程的 segmentStart 是同一个数。
     QList<int> segmentStartOfLine;
+
+    // 这份 Scan 是否覆盖 lineCount 行源码。Scan 与行序列**同源**的自检：
+    // 条目数 = 行数（每个输入行恰好一条）。消费者用它判断「传进来的是不是
+    // 这批行的扫描结果」，而不是各自重扫一遍再比。
+    [[nodiscard]] bool covers(int lineCount) const {
+        return segmentStartOfLine.size() == lineCount;
+    }
+    // 空 Scan（= 还没扫过；0 行源码也是空）。
+    [[nodiscard]] bool isEmpty() const { return segmentStartOfLine.isEmpty(); }
+};
+
+// ---------------------------------------------------------------------------
+// 一次「脚本级构建」的产物：AST 行 + 它们**唯一**的那份声明扫描。
+//
+// 两个字段是同一份源码的两个视图，不是两份数据：谁是声明、哪一行属于哪个段
+// 由 Scan 回答，行本身由 AstBuilder 按它构建。交给 EraParseTable::loadScript
+// 时扫描随行数据一起走 —— 所以「构建 + 装载」不会把同一个脚本扫第二遍。
+// 只有「手里只有行、没有扫描」（外部构造的 LogicalLine / 工具直接拼的行）
+// 的调用方才退回 loadScript 自扫一次，那是**另一份数据**的扫描。
+// ---------------------------------------------------------------------------
+struct BuiltScript {
+    QList<LogicalLine> lines;
+    Scan scan;
 };
 
 // 扫描一段预处理后的源码（三种输入形态共用**同一个**扫描循环）。
@@ -109,12 +139,12 @@ void registerDeclarationText(VariableTable& variables, ParseDiagnostics& diagnos
 void registerDeclaration(VariableTable& variables, ParseDiagnostics& diagnostics,
                          VariableStorage* storage, const DeclarationSite& site);
 
-// 一段源码的声明视图：先扫、再登记进调用方给的变量表（返回扫描结果，
-// 调用方还要用 segmentStartOfLine 给每行定作用域）。这是「构建期类型表」的
-// **唯一**产物 —— 之后按 VariableTable::typeOf 查，与收尾查同一份表实现。
-[[nodiscard]] Scan declareScriptVariables(VariableTable& variables, ParseDiagnostics& diagnostics,
-                                          const QList<SourceLine>& lines,
-                                          const QString& scriptName, bool isHeaderFile);
+// 把一段**已扫描**的源码的声明登记进调用方给的变量表（唯一登记循环）：
+//   · ErbLoader::scanFileDeclarations —— 登记进临时表再摊平成类型快照；
+//   · EraParseTable::registerScriptDeclarations —— 登记进本表唯一的变量表。
+// scan 必须与调用方手里的行同源（covers() 自检）。
+void registerScannedDeclarations(VariableTable& variables, ParseDiagnostics& diagnostics,
+                                 VariableStorage* storage, const Scan& scan);
 
 // VARI / VARS -> 等价的 `#DIM/#DIMS 名字, 长度…` 文本（唯一构造点）。
 // 不是声明的行返回空串。

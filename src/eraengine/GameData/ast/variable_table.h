@@ -105,6 +105,18 @@ public:
     [[nodiscard]] OperandType typeOf(const QString& name,
                                      const QString& scopeKey = QString()) const;
 
+    // 变量引用文本（赋值左值 / 自增目标 / 裸变量名）的**基础变量名**：
+    // 取到第一个「不再属于名字」的字符为止 —— 下标分隔符 `:`/`[`、空白、
+    // `(`（`CHARA:(CNT_CHARA)`）、`=`。
+    //   `LOCAL:1:B` -> `LOCAL` ；`CFLAG:ARG:職場` -> `CFLAG` ；`X` -> `X`
+    //
+    // **唯一实现**：下列三处必须对「这个名字是什么」给出同一个答案，
+    // 各写一遍就会在 `A:(expr):B` 这类写法上分叉：
+    //   · 构建期定型（ErbLoader 的 declaredType：拿基础名查类型）；
+    //   · 收尾字符串赋值（applyStringAssignments 的类型判定）；
+    //   · 收尾左值/右值诊断（validateScriptLines）。
+    [[nodiscard]] static QString baseName(const QString& lvalueText);
+
     [[nodiscard]] int count() const;
     [[nodiscard]] QList<VariableDecl> declarations() const;
     // perf：declarations() 的缓存版（装载完成后不再变化；clear/维数定稿时失效）。

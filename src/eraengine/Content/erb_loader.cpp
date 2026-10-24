@@ -356,8 +356,12 @@ QSharedPointer<ExpressionNode> ErbLoader::resolveExpr(
         return varTypes ? varTypes->typeOf(name, scope) : OperandType::Unknown;
     });
     // 格式化串：@"..." / \@...#...\@（内部表达式继续使用同一函数/变量类型表）
-    const AstResolver self = [this, &types, varTypes, &scope](const QString& e) {
-        return resolveExpr(e, types, /*quiet=*/false, varTypes, scope);
+    // **foldConstants 必须透传**：FORM 里的插值表达式（`@"{颜色_赤}"`）与收尾
+    // （loadpass::expressionAstInScope 的 form provider）一样要把 `#DIM CONST`
+    // 折成字面量 —— 否则「成品 AST」在构建期与收尾两个答案（FL3.8 的
+    // `'= @"…{颜色_赤}…"` 共 1113 行就是这么分叉的）。
+    const AstResolver self = [this, &types, varTypes, &scope, foldConstants](const QString& e) {
+        return resolveExpr(e, types, /*quiet=*/false, varTypes, scope, foldConstants);
     };
     parser.setFormProvider([this, self](const QString& text, bool yenAt) -> QSharedPointer<ExpressionNode> {
         if (yenAt) return StrFormParser::parseYenAt(text, self, m_parseTable && m_parseTable->ignoreTripleSymbols());
@@ -641,31 +645,37 @@ ParsedErbFile ErbLoader::parseOneFileReadOnly(const QString& filePath,
             }
             return ast;
         };
-        // 赋值右值的临时归约：静默（字符串赋值随后由 StrFormParser 重新解释）
+        // 赋值右值的临时归约：静默（字符串左值的右值随后由 StrFormParser 接管）
         const AstResolver quietResolver = [this, &types, &pf, &currentScope, varTypes](const QString& e) {
             return resolveExpr(e, types, /*quiet*/ true, varTypes, currentScope);
         };
-        // 赋值左值：构建期就要与收尾（loadpass::expressionAstInScope）逐节点相同，
-        // 所以启用同一份常量折叠。合法左值（变量项）在收尾不再重解析 ——
-        // 这一趟是唯一来源；构建期不是变量项的行由收尾按最终声明表兜底。
-        const AstResolver lvalueResolver = [this, &types, &currentScope, varTypes](const QString& e) {
+        // 「成品 AST」的归约器：赋值左值、`++/--` 目标、赋值右值清单（assignmentAsts）
+        // 在构建期就要与收尾（loadpass::expressionAstInScope）逐节点相同，所以启用
+        // 同一份常量折叠。这三类 AST 在收尾不再重解 —— 这一趟是唯一来源；
+        // 构建期不是变量项的行由收尾按最终声明表兜底（只判不重建）。
+        const AstResolver foldedResolver = [this, &types, &currentScope, varTypes](const QString& e) {
             return resolveExpr(e, types, /*quiet*/ true, varTypes, currentScope,
                                /*foldConstants=*/true);
         };
         for (int i = 0; i < source.size(); ++i) {
             currentPhysicalLine = source.at(i).physicalLine;
             const ScriptPosition pos(filePath, source.at(i).physicalLine, 1);
-            // 左值「已声明类型」：取自预扫描类型表（含本文件/跨文件/私有作用域）。
-            // 命中 Str 的行在构建期即编译为 StrForm；未命中的标记待收尾。
-            const auto declaredType = [this, varTypes, &currentScope](const QString& name) -> OperandType {
+            // 左值「已声明类型」：取自**预扫描已登记**的变量表（#DIM/#DIMS/
+            // #GLOBAL(S)/#PRIVATE 与 VARI/VARS 走同一条登记路径，系统变量由
+            // VariableTable::typeOf 回退）。传入的是整个左值文本（`LOCAL:1`、
+            // `CFLAG:ARG:職場`），基础变量名用 VariableTable::baseName 取 ——
+            // 与收尾（applyStringAssignments/validateScriptLines）同一份实现。
+            // 命中 Str 的行在构建期即编译为 StrForm；命中 Int 的行右值按表达式。
+            const auto declaredType = [this, varTypes, &currentScope](const QString& lvalue) -> OperandType {
+                const QString baseName = VariableTable::baseName(lvalue);
                 if (m_parseTable) {
-                    const OperandType t = m_parseTable->variableTable().typeOf(name, currentScope);
+                    const OperandType t = m_parseTable->variableTable().typeOf(baseName, currentScope);
                     if (t != OperandType::Unknown) return t;
                 }
-                return varTypes ? varTypes->typeOf(name, currentScope) : OperandType::Unknown;
+                return varTypes ? varTypes->typeOf(baseName, currentScope) : OperandType::Unknown;
             };
             LogicalLine line = AstBuilder::build(source.at(i).text, pos, resolver, quietResolver,
-                                                  &pf.diagnostics, declaredType, lvalueResolver);
+                                                  &pf.diagnostics, declaredType, foldedResolver);
             line.lineIndex = i;
             // 作用域切换在构建**之后**（与 loadScript 的顺序一致：行自身先按
             // 旧作用域归约，遇到标签行才切到新段）。@ 行属于它自己开启的新段。

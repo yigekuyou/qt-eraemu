@@ -363,18 +363,6 @@ bool isScopedVariableLine(const QString& rawLine) {
 // ---------------------------------------------------------------------------
 namespace {
 
-// 取赋值左值的首标识符（跳过 A:1 / GLOBAL:5 这类下标）
-QString leadingIdentifier(const QString& raw) {
-    int i = 0;
-    while (i < raw.size()) {
-        const QChar c = raw.at(i);
-        if (c.isSpace() || c == QLatin1Char(':') || c == QLatin1Char('[')
-            || c == QLatin1Char('(') || c == QLatin1Char('=')) break;
-        ++i;
-    }
-    return raw.left(i).trimmed();
-}
-
 
 
 // 把 #DIM/#DIMS 的初值写入存储（对齐 C#：全局变量装载时取初值；
@@ -516,7 +504,9 @@ QString checkUserCallArgs(const UserFunctionDecl& decl,
 
 
 
-// 收尾 2/6 第 1 段：字符串赋值 / FORM / CASE 的收尾重解析。
+// 收尾 2/6 第 1 段：只补**构建期无法定型**的那几类行的收尾结算
+// （FORM 的收尾编译 / CASE 臂 / rhsPending 的右值定型）。
+// 构建期已定型的行一律不重解（收尾只扫描未定型项，见各分支的门控）。
 // **逐脚本**：只写本脚本的行（含 mutable 的 caseCache / extras）与本任务独占的
 // sink；ctx 是只读视图（variables 查类型 / evaluator 读配置 / constantTable 折叠）。
 void applyStringAssignmentsInScript(const LoadContext& ctx, ScriptData& script,
@@ -529,7 +519,10 @@ void applyStringAssignmentsInScript(const LoadContext& ctx, ScriptData& script,
     for (LogicalLine& line : script.lines) {
         // 只处理构建期未定型的行：构建期已按（预扫描）类型表定型的
         // 字符串/FORM/CASE 不再重解析（收尾只扫描未定型项）。
-        if (!line.strAssignPending && !line.needsCompletion) continue;
+        // 字符串赋值的「FORM 还是表达式」在装载器路径上由预扫描登记表在构建期
+        // 定死（AstBuilder::build 的 declaredType）；只有**类型表没确认**的行
+        // 才会置 rhsPending —— 这类行走下面这次按最终变量表的结算。
+        if (!line.needsCompletion && !line.rhsPending) continue;
         const QString owner = line.scopeKey;
         // &line 是每行局部量、&sink 是本任务独占的 sink —— 两者都不会跨任务。
         const AstResolver resolve = [ctx, owner, &line, &sink, &reportedNumbers](const QString& e) {
@@ -538,6 +531,27 @@ void applyStringAssignmentsInScript(const LoadContext& ctx, ScriptData& script,
             return expressionAstInScope(ctx, e, owner);
         };
         if (line.kind != LineKind::Instruction) continue;
+        // 数据门控：构建期类型表没确认的赋值行，按**最终**变量表结算一次 ——
+        //   左值是 Str ⇒ 右值是 FORM；否则右值按表达式重新解一遍（构建期 resolver
+        //   可能不带本行作用域，把「与广域常量同名的私有变量」折成常量值）。
+        // 只在 rhsPending 行上做，装载器路径 0 行。
+        if (line.rhsPending) {
+            line.rhsPending = false;
+            if (line.assignOperator == QLatin1String("=") && line.arguments.size() == 2) {
+                Operand& value = line.arguments[1];
+                const QString varName = VariableTable::baseName(line.arguments[0].raw);
+                if (!varName.isEmpty()
+                    && ctx.variables.typeOf(varName, line.scopeKey) == OperandType::Str) {
+                    value.ast = StrFormParser::parse(value.raw.trimmed(), resolve,
+                        ctx.evaluator && ctx.evaluator->ignoreTripleSymbols());
+                    PrintTemplateCompiler::prepare(value.ast);
+                } else {
+                    line.assignmentAsts.clear();
+                    for (const auto& text : AstBuilder::assignmentValues(value.raw))
+                        line.assignmentAsts.append(expressionAstInScope(ctx, text, line.scopeKey, true));
+                }
+            }
+        }
         // FORM construction may need private string types unavailable in a worker.
         // Recompile the source in its owner scope while compilation is permitted.
         if (line.assignOperator.isEmpty() && (line.raw.contains("@\"")
@@ -553,35 +567,27 @@ void applyStringAssignmentsInScript(const LoadContext& ctx, ScriptData& script,
             line.caseCache.clear();
             AstBuilder::buildCaseClauses(line, resolve);
         }
-        // C# uses two assignment operators with different RHS semantics:
-        //   =  : string variables consume the remaining source as a StrForm
-        //        (plain text plus {expr}/%expr% interpolation).
-        //   '= : expression string assignment; keep the normal expression AST.
-        // The initial AST is intentionally built before variable declarations
-        // are finalized, so it may look like a call for text such as
-        // `白狼天狗服(色固定)`.  Do not use that provisional node to decide
-        // whether the RHS is raw text.
+        // 字符串赋值（`=` 且左值是字符串）的 FORM **在构建期就已编译**
+        // （AstBuilder::build 按 declaredType 判定），这里只补一条诊断：构建期
+        // FORM 解析失败的行（AST 为空）—— 不重解、不重建。
+        // C# 两个赋值运算符的 RHS 语义不同：
+        //   =  : 字符串变量吃整段原文当 StrForm（文本 + {expr}/%expr% 插值）；
+        //   '= : 表达式形式，保留普通表达式 AST（不在此分支）。
         if (line.assignOperator != QLatin1String("=")) continue;
         if (line.arguments.size() != 2) continue;
-
-        Operand& dest = line.arguments[0];
-        Operand& value = line.arguments[1];
-
-        const QString varName = leadingIdentifier(dest.raw);
+        const Operand& dest = line.arguments[0];
+        const Operand& value = line.arguments[1];
+        if (value.ast) continue;
+        const QString varName = VariableTable::baseName(dest.raw);
         if (varName.isEmpty()) continue;
         if (ctx.variables.typeOf(varName, line.scopeKey) != OperandType::Str) continue;
-
-        value.ast = StrFormParser::parse(value.raw.trimmed(), resolve, ctx.evaluator && ctx.evaluator->ignoreTripleSymbols());
-        PrintTemplateCompiler::prepare(value.ast);
-        if (!value.ast) {
-            const QString error = QCoreApplication::translate("ParseDiagnostics", "字符串赋值FORM无效");
-            line.argument.typeOk = false;
-            line.argument.typeError = error;
-            line.isError = true;
-            line.mutableErrMes() = error;
-            sink.addRejectLine(DiagSeverity::Error, DiagCode::kArgCheck,
-                line.position.filename, line.position.lineNumber, line.position.column, 0, error);
-        }
+        const QString error = QCoreApplication::translate("ParseDiagnostics", "字符串赋值FORM无效");
+        line.argument.typeOk = false;
+        line.argument.typeError = error;
+        line.isError = true;
+        line.mutableErrMes() = error;
+        sink.addRejectLine(DiagSeverity::Error, DiagCode::kArgCheck,
+            line.position.filename, line.position.lineNumber, line.position.column, 0, error);
     }
 }
 
@@ -653,7 +659,11 @@ void applyVariableTypes(LoadContext& ctx) {
                 for (auto& ast : line.mutableColumnDefaults()) bind(ast);
             }
             ArgumentParser::build(line);
-            for (const auto& ast : line.assignmentAsts) PrintTemplateCompiler::prepare(ast);
+            // 赋值右值清单（`X = a, b, c` 的分项 AST，诊断/校验用）也是**成品**：
+            // 与实参同一趟定型（此前由已删的「赋值 AST 重建」段各自 parse 时定型；
+            // 那段删掉后这里必须补上 —— 否则 dimension/readOnly/characterData
+            // 不会写进节点，REF 实参校验会把整数组实参误判成标量）。
+            for (auto& ast : line.assignmentAsts) bind(ast);
             // line.printTemplate（PRINT/PRINTFORM/PRINTS 的分词）无需单独处理：
             // 其片段表达式就是上面这批已被就地定型的节点。
         }
@@ -1121,74 +1131,31 @@ void resolveGlobalDeclarationsStep(LoadContext& ctx, ParseDiagnostics& diagnosti
 
 
 
-// 收尾 2/6 第 2 段：FUNC 重编译（仅构建期未定型的行）。
-// **逐脚本**：只写本脚本的行；解析只读 variables / constantTable / evaluator。
-// 本段不产诊断 —— sink 形参只为与其余各段共用同一个驱动（runPerScript）。
-void recompileFuncLinesInScript(const LoadContext& ctx, ScriptData& script, ParseDiagnostics&) {
-    for (LogicalLine& line : script.lines) {
-        if (line.functionName != QLatin1String("FUNC")) continue;
-        const AstResolver resolve = [ctx, scope = line.scopeKey](const QString& text) {
-            return expressionAstInScope(ctx, text, scope);
-        };
-        for (int i = 0; i < line.arguments.size(); ++i) {
-            auto& operand = line.arguments[i];
-            if (i == 0)
-                operand.ast = StrFormParser::parse(operand.raw, resolve,
-                    ctx.evaluator && ctx.evaluator->ignoreTripleSymbols());
-            else if (operand.isString)
-                operand.ast = QSharedPointer<LiteralNode>::create(operand.raw);
-            else
-                operand.ast = resolve(operand.raw);
-        }
-    }
-}
 
-// 收尾 2/6 第 4 段：赋值 AST 重建（仅构建期未定型的行）。
-// **逐脚本**：只写本脚本的行；类型判断只读变量表。必须在 applyVariableTypes
-// **之后**（私有变量/维数此刻才定稿），所以它是独立的一段，不与第 3 段合并。
-void rebuildAssignmentAstsInScript(const LoadContext& ctx, ScriptData& script, ParseDiagnostics&) {
-    for (LogicalLine& line : script.lines) {
-        if (line.assignOperator.isEmpty() || line.arguments.size() != 2) continue;
-        const QString name = line.arguments[0].raw.section(':', 0, 0).trimmed();
-        if (line.assignOperator == "=" && ctx.variables.typeOf(name, line.scopeKey) == OperandType::Str) continue;
-        line.assignmentAsts.clear();
-        for (const auto& text : AstBuilder::assignmentValues(line.arguments[1].raw)) {
-            // expressionAstInScope 已按 ownerFunction 定型并 prepare —— 不再克隆/重定型。
-            line.assignmentAsts.append(expressionAstInScope(ctx, text, line.scopeKey, true));
-        }
-    }
-}
-
-
-
-// 全体脚本绑定（一趟）：字符串赋值/FUNC → 变量类型就地定型 → 赋值 AST → 函数调用解析。
+// 全体脚本绑定（一趟）：字符串赋值诊断 → 变量类型就地定型 → 函数调用解析。
 // 要求 resolveGlobalDeclarations() 已就绪（变量维数与函数类型已定）。
 //
-// 五段之间各有一条 barrier，顺序不可交换（1→2→3→4→5），段内**逐脚本并行**
+// 三段之间各有一条 barrier，顺序不可交换（1→2→3），段内**逐脚本并行**
 // （runPerScript：排序序幕 + 每脚本一个任务 + 按脚本名序归并）。
-// 刻意不把多段折进同一个任务：那会让「类型回填」与「赋值重建」的先后关系
-// 隐式化（那是另一刀）。
+//
+// 曾经在这里的「FUNC 重编译」与「赋值 AST 重建」两段已删除：它们都是**二次构建**
+// ——把构建期已经解过的行（FUNC 实参、赋值右值清单）按最终声明表再解一遍。
+// 现在这两类 AST 在构建期就用**带折叠的 resolver**（AstBuilder 的 foldedResolve）
+// 解完，与收尾那一趟逐节点相同（五语料逐节点比对 0 差异），所以收尾只判不重建。
+// 剩下的 1 号段只做一件事：为「字符串赋值的 FORM 在构建期解析失败」补诊断。
 void finalizeBindings(LoadContext& ctx, ParseDiagnostics& diagnostics) {
     QElapsedTimer step;
     step.start();
     runPerScript(ctx, diagnostics, applyStringAssignmentsInScript);
-    qCDebug(eraTrace).noquote() << "[parse] 2/6 子步 1/5 字符串赋值:" << step.elapsed() << "ms";
-
-    step.restart();
-    runPerScript(ctx, diagnostics, recompileFuncLinesInScript);
-    qCDebug(eraTrace).noquote() << "[parse] 2/6 子步 2/5 FUNC 重编译:" << step.elapsed() << "ms";
+    qCDebug(eraTrace).noquote() << "[parse] 2/6 子步 1/3 字符串赋值诊断:" << step.elapsed() << "ms";
 
     step.restart();
     applyVariableTypes(ctx);
-    qCDebug(eraTrace).noquote() << "[parse] 2/6 子步 3/5 变量类型回填:" << step.elapsed() << "ms";
-
-    step.restart();
-    runPerScript(ctx, diagnostics, rebuildAssignmentAstsInScript);
-    qCDebug(eraTrace).noquote() << "[parse] 2/6 子步 4/5 赋值 AST 重建:" << step.elapsed() << "ms";
+    qCDebug(eraTrace).noquote() << "[parse] 2/6 子步 2/3 变量类型回填:" << step.elapsed() << "ms";
 
     step.restart();
     resolveFunctionNodes(ctx);
-    qCDebug(eraTrace).noquote() << "[parse] 2/6 子步 5/5 函数调用解析:" << step.elapsed() << "ms";
+    qCDebug(eraTrace).noquote() << "[parse] 2/6 子步 3/3 函数调用解析:" << step.elapsed() << "ms";
 
     // 收尾的最后一步：私有名表（「每个函数有哪些私有变量、存储键是什么」）
     // 由声明一次性建好并装进存储层 —— 此刻声明（resolveGlobalDeclarations）
@@ -1333,22 +1300,25 @@ void validateScriptLines(const LoadContext& ctx, ScriptData& script, ParseDiagno
             }
         };
         // Increment/decrement statements have one LHS, unlike assignments.
-        // Rebind it after declarations are known, in the owning function scope.
+        // 目标 AST 在构建期就用**与赋值左值同一套** resolver（带常量折叠、按本行
+        // 所属段解析）解好（AstBuilder::build 的 foldedResolve），因此这里**只判不重解**：
+        // 判定（是变量项 / 可写 / 非字符串）与重解那一趟逐节点相同的 AST 上做，
+        // 答案不变，但不再有一次「按最终表再解一遍」的二次构建。
         if ((line.functionName == "++" || line.functionName == "--")
             && line.arguments.size() == 1) {
             auto& operand = line.arguments[0];
-            // expressionAstInScope 已按 ownerFunction 定型 —— 不再克隆/重定型。
-            operand.ast = expressionAstInScope(ctx, operand.raw, line.scopeKey, true);
+            // 数据门控：构建期产出的不是变量项（占位 resolver 折成了字面量 / 直接
+            // loadScript 的无类型表路径 / 解析失败）⇒ 按最终声明表补解一次。
+            // 合法目标在构建期必然是变量项，因此正常行一次也不重解。
+            if (!operand.ast || operand.ast->kind() != NodeKind::Variable)
+                operand.ast = expressionAstInScope(ctx, operand.raw, line.scopeKey, true);
             const bool ok = operand.ast && operand.ast->kind() == NodeKind::Variable
                 && !static_cast<const VariableNode&>(*operand.ast).readOnly
                 && operand.ast->valueType() != OperandType::Str;
-            // 这一步是 `X ++` 的**权威**判定：构建期的临时 AST 在「无作用域」
-            // 上下文里解析，可能把「与别处同名常量重名的函数私有变量」折成字面量
-            // （eraTW 的 `削除行数 ++`：CASINO_SLOT 里的 `#DIM CONST 削除行数`
-            // 会让 COMF625 的同名私有变量在构建期变成 `51`），于是收尾第 3 步
-            // 的 ArgumentParser 会拿那个陈旧的字面量报「第一个参数需要变量节点」。
-            // 因此这里通过时必须**清掉**那次残留的错误状态（typeOk/errMes），
-            // 否则语义已经判定正确的行仍会带着旧错误进入 validateArguments。
+            // 构建期 AST 已是成品；这里仍要**清掉**可能残留的错误状态
+            // （typeOk/errMes），否则语义已判定正确的行会带着旧错误进入
+            // validateArguments（此前是因为上面那次重解替换了陈旧 AST，现在
+            // 陈旧 AST 本身已不存在，清状态因此只是幂等的收尾）。
             line.argument.typeOk = ok;
             line.argument.typeError.clear();
             line.isError = !ok;
@@ -1395,7 +1365,7 @@ void validateScriptLines(const LoadContext& ctx, ScriptData& script, ParseDiagno
         }
         if (!line.assignOperator.isEmpty() && line.arguments.size() == 2) {
             const auto& dest = line.arguments[0].raw;
-            const QString name = dest.section(':', 0, 0).trimmed();
+            const QString name = VariableTable::baseName(dest);
             const auto* decl = ctx.variables.find(name, line.scopeKey);
             // 左值 AST 在构建期就已完备（常量折叠 + 定型 + 函数解析）：装载器
             // 用声明表解析出的变量左值与收尾重解析逐节点相同（全语料 852,937
@@ -1519,5 +1489,6 @@ void finalizeValidation(LoadContext& ctx, ParseDiagnostics& diagnostics) {
         validateArguments(view, sd, sink);
     });
 }
+
 
 }  // namespace loadpass

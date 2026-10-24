@@ -47,16 +47,23 @@ public:
 
     // 行 -> LogicalLine（归类、归约实参、预解析条件）。
     // resolveQuiet：赋值右值**临时**归约用的静默 resolver（可选；为空时回落
-    // 到 resolve）。临时解析的失败是噪音 —— 字符串赋值随后由
-    // applyStringAssignments() 以 StrFormParser 重新解释。
+    // 到 resolve）。临时解析的失败是噪音 —— 右值最终形态由下面两条决定：
+    //   字符串赋值（`=` 且左值是字符串）→ StrForm；否则就是 foldedResolve 的产物。
     // diagnostics：结构化诊断出口（可选）。未登记指令等以 DiagSeverity 分级 + code
     //              记录，供调用方统一汇总/按类统计（见 parse_diagnostic.h）。
-    // declaredType：左值「已声明类型」查询（装载期类型表/变量表）。字符串赋值
-    //   （`X = 文本`）在构建期即按它判定 StrForm：返回 Str 立即编译；返回 Int
-    //   按表达式；返回 Unknown（未声明/未知）→ 标记 strAssignPending，收尾再定型。
-    // resolveLvalue：赋值**左值**专用的归约器（可选；为空时回落 resolveQuiet/
-    //   resolve）。合法左值在收尾校验时不再重解析，所以它必须在构建期就得到与
-    //   收尾那趟完全相同的 AST —— 即带 `#DIM CONST` 常量折叠。折叠规则本身只在
+    // declaredType：左值「已声明类型」查询（装载期已登记的变量表，含系统变量）。
+    //   收的是**整个左值文本**（`A:1`），基础变量名由调用方用
+    //   VariableTable::baseName 取 —— 与收尾同一份实现。
+    //   字符串赋值（`X = 文本`）的 StrForm/表达式判定**只在构建期做这一次**：
+    //   返回 Str 立即按 FORM 编译，返回 Int 就是普通表达式。预扫描（#DIM/#DIMS/
+    //   VARI/VARS 与 #DIM CONST）在 AST 构建之前结算，所以这里的答案与收尾的
+    //   最终变量表相同 —— 构建之后不需要「按最终表再解一遍」。
+    //   返回 Unknown（调用方没给类型表，只有直接 loadScript 的工具路径）⇒
+    //   置 LogicalLine::rhsPending，收尾按最终变量表结算那一次（数据门控）。
+    // foldedResolve：**带常量折叠**的归约器（可选；为空时回落 resolveQuiet/
+    //   resolve）。赋值左值、`++/--` 目标、赋值右值清单（诊断/校验用的
+    //   assignmentAsts）都走它：这三类 AST 在构建期就要与「收尾按最终声明表
+    //   解析」逐节点相同（否则收尾得再解一遍 = 二次构建）。折叠规则本身只在
     //   VariableTable::constantValue（+ ExpressionParser 的同一分支）实现一次，
     //   这里只是把「对左值也启用折叠」这个事实显式化。
     static LogicalLine build(const QString& rawLine,
@@ -65,7 +72,7 @@ public:
                              const AstResolver& resolveQuiet = {},
                              ParseDiagnostics* diagnostics = nullptr,
                              const std::function<OperandType(const QString&)>& declaredType = {},
-                             const AstResolver& resolveLvalue = {});
+                             const AstResolver& foldedResolve = {});
 
     // CASE has its own IS / TO grammar, shared by loading and lazy cache restore.
     static void buildCaseClauses(const LogicalLine& line, const AstResolver& resolve);

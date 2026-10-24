@@ -720,7 +720,7 @@ LogicalLine AstBuilder::build(const QString& rawLine,
                               const AstResolver& resolveQuiet,
                               ParseDiagnostics* diagnostics,
                               const std::function<OperandType(const QString&)>& declaredType,
-                              const AstResolver& resolveLvalue) {
+                              const AstResolver& foldedResolve) {
     LogicalLine line;
     line.raw = rawLine;
     line.position = position;
@@ -863,7 +863,8 @@ LogicalLine AstBuilder::build(const QString& rawLine,
         line.functionName = op;
         line.assignOperator = op;
         Operand dest(lhs);
-        if (resolveLvalue) dest.ast = resolveLvalue(lhs);
+        // 左值：构建期就按**带折叠**的 resolver 解一次，收尾只判不重解。
+        if (foldedResolve) dest.ast = foldedResolve(lhs);
         else if (resolveQuiet) dest.ast = resolveQuiet(lhs);
         else if (resolve) dest.ast = resolve(lhs);
         Operand value(rhs);
@@ -877,19 +878,35 @@ LogicalLine AstBuilder::build(const QString& rawLine,
         const auto& lookup = resolveQuiet ? resolveQuiet : resolve;
         if (op == QLatin1String("=") && lookup) {
             const auto target = lookup(lhs);
+            // 左值类型两个来源，先命中者为准：
+            //   exprType —— 按表达式解析左值得到的类型（系统字符串变量 RESULTS/CSTR、
+            //               已声明字符串变量、`$NAME` 前缀）；
+            //   declType —— 预扫描登记表的答案（`A:1` 这类带下标的左值取基础名，
+            //               由调用方用 VariableTable::baseName 归一）。
+            // 两者在构建期都已就绪（预扫描在 AST 构建之前结算），所以**判定只在
+            // 这里做一次**：字符串左值按 FORM 编译；登记表说是整型 ⇒ RHS 是表达式。
+            // 登记表**没说**是整型（名字在装载期没被登记 —— 只有直接调
+            // loadScript 的工具/夹具路径才会出现）⇒ RHS 先按表达式归约并置
+            // rhsPending，由收尾按最终变量表结这一次（数据门控，不是再猜；
+            // 装载器路径上 declType 总有答案，见 LogicalLine::rhsPending）。
             const OperandType exprType = target ? target->valueType() : OperandType::Unknown;
             const OperandType declType = declaredType ? declaredType(lhs) : OperandType::Unknown;
-            if (exprType == OperandType::Str)
-                value.ast = StrFormParser::parse(rhs, lookup);   // 构建期即按 FORM 定型
-            else if (declType == OperandType::Int)
-                ;                                                // 已声明整型：RHS 按表达式
-            else
-                // 左值「已声明类型」未知：构建期无法判定 RHS 是表达式还是 FORM 文本
-                // ——标记为待收尾按 StrForm 定型（收尾只处理这些未定型项）。
-                line.strAssignPending = true;
+            const OperandType assignType = exprType == OperandType::Str || declType == OperandType::Str
+                                              ? OperandType::Str : declType;
+            // FORM 里的插值表达式用**带数字诊断**的 resolver 编译：整数字面量
+            // 超范围/格式错误必须在这里报出来（与收尾旧路径同一口径）。构建期
+            // 就做完，因此不需要再在收尾重编译一次 FORM 来报这条诊断。
+            const AstResolver& formResolver = resolve ? resolve : lookup;
+            if (assignType == OperandType::Str)
+                value.ast = StrFormParser::parse(rhs, formResolver);   // 构建期即按 FORM 定型
+            else if (declType != OperandType::Int)
+                line.rhsPending = true;   // 类型表没确认：RHS 由收尾按最终变量表结算一次
         }
         if (lookup && !(op == "=" && value.ast && value.ast->kind() == NodeKind::StrForm)) {
-            for (const auto& text : assignmentValues(rhs)) line.assignmentAsts.append(lookup(text));
+            // 右值清单（`X = a, b, c` 的分项 AST，供诊断/校验用）同样按带折叠的
+            // resolver 解：收尾不再重建它们（旧实现无条件重解一遍 = 二次构建）。
+            const AstResolver& valueResolver = foldedResolve ? foldedResolve : lookup;
+            for (const auto& text : assignmentValues(rhs)) line.assignmentAsts.append(valueResolver(text));
         }
         line.arguments = { dest, value };
         return finalized(std::move(line));
@@ -913,6 +930,12 @@ LogicalLine AstBuilder::build(const QString& rawLine,
             line.functionName = QString::fromLatin1(opText);
             line.assignOperator = line.functionName;
             Operand target(body);
+            // 自增/自减目标与赋值左值走**同一套** resolver（同一作用域、同一类型表、
+            // 同一失败静默口径），收尾不再按最终表重解一次（见 load_passes 3/6）。
+            // 唯一差别：这里**不启用常量折叠** —— 实测三行（eraTW 1 / eraMegaten 2）
+            // 的下标里有「`#DIM CONST` 与同名**可写私有变量**并存」的名字
+            // （`胖次管理` / `BASESTATUSNUM`）：收尾的折叠查询看得到遮蔽声明（不折），
+            // 构建期的常数查询看不到（会折成错误常量）。不折时两侧逐节点相同。
             if (resolveQuiet) target.ast = resolveQuiet(body);
             else if (resolve) target.ast = resolve(body);
             line.arguments = { target };
@@ -937,6 +960,12 @@ LogicalLine AstBuilder::build(const QString& rawLine,
             line.functionName = QString::fromLatin1(opText);
             line.assignOperator = line.functionName;
             Operand target(body);
+            // 自增/自减目标与赋值左值走**同一套** resolver（同一作用域、同一类型表、
+            // 同一失败静默口径），收尾不再按最终表重解一次（见 load_passes 3/6）。
+            // 唯一差别：这里**不启用常量折叠** —— 实测三行（eraTW 1 / eraMegaten 2）
+            // 的下标里有「`#DIM CONST` 与同名**可写私有变量**并存」的名字
+            // （`胖次管理` / `BASESTATUSNUM`）：收尾的折叠查询看得到遮蔽声明（不折），
+            // 构建期的常数查询看不到（会折成错误常量）。不折时两侧逐节点相同。
             if (resolveQuiet) target.ast = resolveQuiet(body);
             else if (resolve) target.ast = resolve(body);
             line.arguments = { target };

@@ -326,10 +326,16 @@ struct LogicalLine {
     bool    isError = false;
 
     // 构建期未能定型的标记（收尾只处理这些，避免全量重解析）：
-    //   strAssignPending —— `=` 字符串赋值，构建期左值类型未知（需按 StrForm 重解）
-    //   needsCompletion  —— 行内含类型未知/解析失败的表达式（收尾时再补）
-    bool    strAssignPending = false;
+    //   needsCompletion —— 行内含类型未知/解析失败的表达式（收尾时再补）。
+    //   rhsPending —— `=` 的右值**定型未确认**：预扫描登记表没给出左值类型
+    //     （declType != Int 且 != Str），而构建期 resolver 也可能不带本行作用域。
+    //     RHS 的「FORM 还是表达式」与 assignmentAsts 都由收尾按**最终**变量表
+    //     结算这一次（数据门控，不是再猜一遍）。
+    // 装载器路径（parseOneFileReadOnly）**总有** declaredType（预扫描登记表），
+    // 因此该标记在五语料上为 0 行；只有直接调 loadScript(QList<LogicalLine>)
+    // 且不建 AST 类型回调的工具/夹具路径才会置位。
     bool    needsCompletion = false;
+    bool    rhsPending = false;
 
     // CASE 臂解析缓存就绪标记（见 caseCache 注释）
     mutable bool caseCacheReady = false;

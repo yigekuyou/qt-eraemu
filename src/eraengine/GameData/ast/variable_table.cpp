@@ -444,6 +444,21 @@ OperandType VariableTable::typeOf(const QString& name, const QString& scopeKey) 
     return sysvar::systemVariableTypeDyn(name.toStdString());
 }
 
+QString VariableTable::baseName(const QString& lvalueText) {
+    // 与 `#DIM` 的变量名规则无关：这里只切「引用文本」，不判断名字是否合法
+    //（合法性由表达式解析器/声明登记判定）。
+    int end = 0;
+    while (end < lvalueText.size()) {
+        const QChar c = lvalueText.at(end);
+        if (c.isSpace() || c == QLatin1Char(':') || c == QLatin1Char('[')
+            || c == QLatin1Char('(') || c == QLatin1Char('=')) {
+            break;
+        }
+        ++end;
+    }
+    return lvalueText.left(end).trimmed();
+}
+
 int VariableTable::count() const {
     int n = m_globals.size();
     for (const auto& f : m_locals) n += f.size();

@@ -77,6 +77,8 @@ void EraParseTable::setVariableStorage(VariableStorage* storage) {
 
 void EraParseTable::setExpressionEvaluator(ExpressionEvaluator* evaluator) {
     m_evaluator = evaluator;
+    // 失效点⑤：ignoreTripleSymbols() 由求值器提供，是 StrForm 解析的输入。
+    invalidateRuntimeRefCache();
     if (!evaluator) return;
     evaluator->setVariableDimProvider([this](const QString& name) {
         const auto* line = lineAt(m_position.script, m_position.line);
@@ -146,9 +148,78 @@ QSharedPointer<ExpressionNode> EraParseTable::expressionAstInScope(const QString
 }
 
 QSharedPointer<ExpressionNode> EraParseTable::runtimeVariableReference(const QString& text) {
-    // 见头文件说明：运行期、不折叠常量、静默。
-    return parseScopedExpression(text, executionScopeKey(), /*quiet=*/true,
-                                 /*foldConstants=*/false, /*allowAfterFinalize=*/true);
+    // 唯一实现：查缓存 → 未命中才走 parseScopedExpression。
+    //
+    // 缓存键的**决定输入**清单（parseScopedExpression 读到的每一样东西）：
+    //   ① 文本（trimmed —— 解析入口自己也只 trim 一次，空白差异不构成不同输入）；
+    //   ② 作用域文本 = executionScopeKey()：变量表 typeOf、私有 #DIM CONST、
+    //      形参名集合（paramNamesOf）全部按它分，换段就是换答案；
+    //   ③ 装载期数据：变量声明/常数/CSV 常量名/用户函数类型/形参表 —— 它们只在
+    //      装载期与装配期变化，由 m_runtimeRefEpoch 代表（见 invalidateRuntimeRefCache）；
+    //   ④ PrintTemplateCompiler::prepare 本身**没有**外部输入（只读节点自身的
+    //      kind / op / isString），所以不进键；StrForm 的**解析**依赖
+    //      ExpressionEvaluator::ignoreTripleSymbols()，它在**世代边界**重新快照
+    //      （见 syncRuntimeRefCache）。GETVAR 族合法输入必须是单个变量项，
+    //      StrForm 文本一律判「不是变量」—— 这个开关对缓存的结论无可观察影响。
+    // 三个 GETVAR/GETVARS/SETVAR 调用点共用这一处 —— 都不写缓存逻辑。
+    //
+    // 取证开关（微基准「缓存前 / 后」用；语义完全相同）：设了就不读也不写缓存。
+    static const bool cacheDisabled = qEnvironmentVariableIsSet("EMUERA_NO_RUNTIME_REF_CACHE");
+    const QString scope = executionScopeKey();
+    if (cacheDisabled) {
+        return parseScopedExpression(text, scope, /*quiet=*/true,
+                                     /*foldConstants=*/false, /*allowAfterFinalize=*/true);
+    }
+
+    syncRuntimeRefCache();
+    const QPair<QString, QString> key(text.trimmed(), scope);
+    ++m_runtimeRefStamp;
+    if (auto it = m_runtimeRefCache.find(key); it != m_runtimeRefCache.end()) {
+        it->stamp = m_runtimeRefStamp;
+        ++m_runtimeRefHits;
+        // AST 在 prepare 之后只被读（求值器全 const 路径），constCast 只是把
+        // 缓存的 const 视图换回既有签名要的非 const 指针 —— 不拷贝。
+        return it->ast.constCast<ExpressionNode>();
+    }
+
+    ++m_runtimeRefMisses;
+    QSharedPointer<ExpressionNode> ast = parseScopedExpression(
+        text, scope, /*quiet=*/true, /*foldConstants=*/false, /*allowAfterFinalize=*/true);
+    if (!ast) return ast;   // 空文本/空 token：失败是冷路径，缓存它只会挤掉命中
+    if (m_runtimeRefCache.size() >= kRuntimeRefCacheCapacity) evictRuntimeRefCache();
+    m_runtimeRefCache.insert(key, RuntimeRefEntry{ast, m_runtimeRefStamp});
+    return ast;
+}
+
+void EraParseTable::syncRuntimeRefCache() {
+    // 热路径只有**一次整数比较**：世代没变就直接返回。
+    if (m_runtimeRefCacheEpoch == m_runtimeRefEpoch) return;
+    m_runtimeRefCache.clear();
+    m_runtimeRefCacheEpoch = m_runtimeRefEpoch;
+    // ignoreTripleSymbols 只在**世代边界**读一次（每次装载一次），原因是实测代价：
+    // EraEngine 的 provider（eraengine.cpp:250）每次调用要查 ConfigLoader 两个键
+    // （两次 QString 构造 + 哈希查找），实测 ~10 µs/次 —— 放进每条 GETVAR 的热
+    // 路径等于把缓存收益全部吃回去。它能影响的东西只有 StrForm 文本的解析结果，
+    // 而 GETVAR/GETVARS/SETVAR 的合法输入必须是**单个变量项**：StrForm 文本一律
+    // 在 resolveVariableReference 里被判「不是变量」，所以「按调用重读」对缓存的
+    // 可观察结论零收益。开关真正变化时，装载世代边界会重新读取它。
+    m_runtimeRefCacheTriple = ignoreTripleSymbols();
+}
+
+// 满了淘汰**最久未被用到**的那一条（近似 LRU：命中只写一个 stamp，不搬容器）。
+// 调用点只有一处 —— 插入前；命中路径不碰它。代价 = 一次 512 条的线性扫描，
+// 而它换来的是一次完整解析（词法 + 归约 + applyTypes + prepare）—— 值得。
+// 容量 512 的来历：五语料里 GETVAR 族的**静态**名字文本共 57 处（FL3.8），
+// 其余四语料 0；512 足以装下一个标题的全部静态名字。溢出只可能来自
+// 运行期拼出来的名字（如 "CFLAG:" + 索引），那种流量命中率本来就低，
+// 让其把静态条目挤出去是唯一可接受的方向。
+void EraParseTable::evictRuntimeRefCache() {
+    if (m_runtimeRefCache.isEmpty()) return;
+    auto oldest = m_runtimeRefCache.begin();
+    for (auto it = m_runtimeRefCache.begin(); it != m_runtimeRefCache.end(); ++it) {
+        if (it->stamp < oldest->stamp) oldest = it;
+    }
+    m_runtimeRefCache.erase(oldest);
 }
 
 QSharedPointer<ExpressionNode> EraParseTable::parseScopedExpression(const QString& expr,
@@ -353,6 +424,7 @@ bool EraParseTable::evaluateCondition(const QString& scriptName, int line, bool&
 
 void EraParseTable::clear() {
     // QUIT 关闭游戏：释放全部解析期数据（AST/标记区/函数表/标签/告警/变量声明）
+    invalidateRuntimeRefCache();   // 失效点①（整表作废，见 syncRuntimeRefCache）
     m_scripts.clear();
     m_functions.clear();
     m_functionDeclsByScript.clear();
@@ -467,8 +539,10 @@ bool EraParseTable::loadScript(const QString& scriptName, const QList<LogicalLin
     if (scriptName.isEmpty() || lines.isEmpty()) {
         return false;
     }
+    // 失效点③：本脚本声明/常数/形参表/函数表即将改变。即使调用方漏了
+    // beginIncrementalLoad，这里也拦住「替换脚本后旧 AST 复用」。
+    invalidateRuntimeRefCache();
     m_phase = LoadPhase::Loading;
-
     // 重复装载同名脚本 = 用新 AST **替换** m_scripts 里的旧条目。索引是「名字 ->
     // 行号」的唯一来源，必须同步替换：否则旧版本的声明会留在全序里，firstLabel
     // 可能答出一个在当前 ScriptData 里根本不存在的行。初次装载时 m_scripts
@@ -820,6 +894,9 @@ bool EraParseTable::beginIncrementalLoad() {
                              << loadPhaseName(m_phase) << "），忽略";
         return false;
     }
+    // 失效点②：新的装载会话开始 —— 下面可能替换脚本、新增声明、改常数，
+    // 旧缓存条目一律不可再用（含「同一段身份文本、不同脚本内容」的情形）。
+    invalidateRuntimeRefCache();
     m_phase = LoadPhase::Loading;
     return true;
 }
@@ -1712,6 +1789,9 @@ void EraParseTable::markLoadComplete() {
     m_diagnostics.sortForOutput();
     // 可选步骤被门控跳过时，循环里不会走到它的 phaseAfter。
     if (m_phase != LoadPhase::Finalized) m_phase = LoadPhase::Finalized;
+    // 失效点④：收尾重绑（类型回填 / 赋值 AST 重建 / 常数定稿 / 函数类型）之后，
+    // 任何在装载中途解析出的名字 AST 都可能带旧类型 —— 一律作废。
+    invalidateRuntimeRefCache();
     qInfo().noquote() << "[parse] markLoadComplete：" << m_scripts.size() << "脚本"
                       << completeTimer.elapsed() << "ms";
 }

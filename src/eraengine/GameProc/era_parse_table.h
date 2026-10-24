@@ -327,7 +327,7 @@ public:
     void setExpressionEvaluator(ExpressionEvaluator* evaluator);
 
     // CSV 常量名表（解析期识别「常量名下标」）
-    void setConstantTable(const ConstantTable* table) { m_constantTable = table; }
+    void setConstantTable(const ConstantTable* table) { m_constantTable = table; invalidateRuntimeRefCache(); }
     [[nodiscard]] const ConstantTable* constantTable() const { return m_constantTable; }
 
     [[nodiscard]] bool ignoreTripleSymbols() const;
@@ -361,6 +361,16 @@ public:
     //   ③ 静默（运行期解析失败不该再产生装载期诊断）。
     // 作用域 = 当前执行行所属的函数（私有变量可见，与 C# allowPrivate 同义）。
     [[nodiscard]] QSharedPointer<ExpressionNode> runtimeVariableReference(const QString& text);
+    // 上面那次「文本 -> 变量项」的**唯一**缓存（表在 private：m_runtimeRefCache）。
+    // 键 = (名字文本.trimmed(), 段身份文本) —— 见 .cpp 里「决定输入」的清单；
+    // 缓存内容在**解析输入世代**（装载/装配）变化时整表作废，失效点只有
+    // invalidateRuntimeRefCache() 一个（调用点在 .cpp 逐个注明）。
+    // 命中/未命中计数只服务取证与微基准（两个 quint64 自增，不参与语义）。
+    [[nodiscard]] quint64 runtimeRefCacheHits() const { return m_runtimeRefHits; }
+    [[nodiscard]] quint64 runtimeRefCacheMisses() const { return m_runtimeRefMisses; }
+    [[nodiscard]] int runtimeRefCacheSize() const { return int(m_runtimeRefCache.size()); }
+    // 容量上限（条）。满了淘汰最久未用的那一条（见 .cpp 的策略说明）。
+    static constexpr int kRuntimeRefCacheCapacity = 512;
     // EXISTVAR 的变量存在性/属性查询（对齐 C# ExistVarMethod ->
     // IdentifierDictionary.GetVariableToken(name, null, allowPrivate=true)）：
     // 位掩码 1=整型 2=字符串 4=常量 8=二维 16=三维；0 = 不存在。
@@ -576,6 +586,22 @@ private:
                                                                       bool foldConstants,
                                                                       bool allowAfterFinalize);
 
+    // ---- 运行期名字解析缓存的机制（三条，全部只在这里出现）----
+    // ① 失效：**唯一**的失效点。任何会改变「解析结果」的装载/装配动作都调它
+    //    （调用点在 .cpp 里紧贴动作写，共 6 处：clear / beginIncrementalLoad /
+    //    loadScript / markLoadComplete / setExpressionEvaluator / setConstantTable）。
+    //    实现是「世代 +1」，缓存体在下次查找时才清 —— 装载期不付代价。
+    void invalidateRuntimeRefCache() { ++m_runtimeRefEpoch; }
+    // ② 生效：查找前比对世代（一次整数比较），不符则整表清空并在**世代边界**
+    //    重新快照 ignoreTripleSymbols（热路径不碰它，理由见 .cpp 的说明）。
+    void syncRuntimeRefCache();
+    // ③ 淘汰：满了挑 stamp 最小的那条丢弃（近似 LRU）。只在插入且已满时跑。
+    void evictRuntimeRefCache();
+    struct RuntimeRefEntry {
+        QSharedPointer<const ExpressionNode> ast;   // 共享，不深拷贝
+        quint64 stamp = 0;                          // 近似 LRU 的时间戳
+    };
+
     // 变量声明解析（#DIM/#DIMS/#GLOBAL/#GLOBALS/#PRIVATE）与类型回填
     void parseVariableDeclaration(const LogicalLine& line, const QString& currentFunction,
                                   const QString& scopeKey, bool isHeaderFile);
@@ -752,6 +778,18 @@ private:
     // const 方法只读它（executionScopeId 每次现算，不再有缓存要回写）。
     PositionState m_position;
     quint64 m_segmentIdentityMismatches = 0;
+
+    // ---- 运行期名字解析缓存（GETVAR / GETVARS / SETVAR 的唯一表）----
+    // 键 = (名字文本, 段身份文本)。为什么是这两个：parseScopedExpression 的全部
+    // 可变输入 = 文本、作用域（typeOf / 私有常量 / 形参表都按它分）、以及
+    // 变量表/函数表/常数表这些**装载期**数据 —— 后者由 m_runtimeRefEpoch 代表。
+    QHash<QPair<QString, QString>, RuntimeRefEntry> m_runtimeRefCache;
+    quint64 m_runtimeRefEpoch = 0;        // 解析输入世代（只增；失效 = +1）
+    quint64 m_runtimeRefCacheEpoch = 0;   // 缓存体对应的世代
+    bool m_runtimeRefCacheTriple = false; // 世代边界处的 ignoreTripleSymbols 快照
+    quint64 m_runtimeRefStamp = 0;        // 近似 LRU 的单调时钟
+    quint64 m_runtimeRefHits = 0;
+    quint64 m_runtimeRefMisses = 0;
 };
 
 #endif // ERA_PARSE_TABLE_H

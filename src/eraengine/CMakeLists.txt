@@ -375,6 +375,8 @@ eraengine_add_test(test_input)
 eraengine_add_test(test_key_map)
 add_test(NAME test_key_map COMMAND test_key_map)
 eraengine_add_test(test_statements)
+eraengine_add_test(test_runtime_ref_cache)
+add_test(NAME test_runtime_ref_cache COMMAND test_runtime_ref_cache)
 eraengine_add_test(test_expression_system)
 eraengine_add_test(test_expression_types)
 # 刀 B1 护栏：条件的「是否需要执行位置」装载期定完（LogicalLine::conditionNeedsScope）

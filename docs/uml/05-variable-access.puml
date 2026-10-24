@@ -95,7 +95,8 @@ note right
   容器只有一种形态：一个存储键 = 一条扁平槽位序列。
   维数不决定容器，只决定取址：
     offset = Σ idx[d]·strides[d]             （addressOf，唯一公式）
-    slot   = charaSlot·elementCount + offset （roleSlotOf，CHARADATA）
+    slot   = bases[charaSlot] + offset    （CharaArena::slotOf，CHARADATA）
+             未分配 = 缺键 → -1 → 读 0/空串；写才 ensureBlock（读纯性由数据保证）
   1D 是「无几何」的特例（扁平序号）；多维装载期按 lengths 乘积真实分配
   （上限 4e6，语料实测最大 1e6），越界读 0、写 qWarning 后忽略 —— 不偷偷扩容。
   几何（strides）由 shapeOf 那份形状派生，缓存唯一写入点 installGeometry。

@@ -98,7 +98,7 @@ title 表达式 AST 与变量访问描述符
 
   class VariableStorage {
     - m_intSlots / m_strSlots : QHash<QString>          ' 一个键一条扁平槽位序列（1D 与多维同一条）
-    - m_charaIntSlots / m_charaStrSlots : QHash<QString> ' 角色号·stride + 元素偏移
+    - m_charaIntSlots / m_charaStrSlots : QHash<QString, CharaArena> ' 基址表 + 连续 arena
     - m_csvIntSlots / m_csvStrSlots : QHash<QString>     ' 同布局的 COW 快照
     - m_geometries / m_charaGeometries : QHash           ' 取址几何（唯一写入点 installGeometry）
     - m_localIntVars / m_argIntVars : QList
@@ -125,7 +125,9 @@ title 表达式 AST 与变量访问描述符
     + shapeOf(name, scope) : ArrayShape         ' 形状唯一入口（声明 → 装载期尺寸表 → 多维几何）
     + allocatedSlots(key) : int                 ' 容器分配量（不是形状）
     - addressOf(geometry, indices) : qint64     ' 唯一取址：Σ idx[d]·strides[d]
-    - roleSlotOf(geometry, chara, offset) : qint64   ' 唯一角色块：charaSlot·elementCount + offset
+    - CharaArena::slotOf(chara, offset) : qint64   ' 唯一角色取址：bases[chara] + offset（缺键 = -1 未分配）
+    - CharaArena::ensureBlock(chara, elementCount) ' 写路径唯一分配点（读路径调不到 → 读纯性）
+    ' 旧形态：roleSlotOf = charaSlot·elementCount + offset（模板号稀疏时撑到 65M+ 槽）
     + getGlobalInt1DRaw(key, x) / setGlobalInt1DRaw(key, x, v)
     + getStringSlotRaw(key, indices) : FlatStringValue   ' 键已解析 → ResolvedKey，不重解析
     + getStringSlot / setStringSlot(name, indices, scope)   ' scope 必须给（无默认参数）

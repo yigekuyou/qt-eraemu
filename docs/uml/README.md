@@ -82,6 +82,17 @@ plantuml -txmi docs/uml/01-load-classes.puml
   读出来是另一格」。`ARGS/LOCALS/RESULTS` 的读写不对称是 Era 语义、不是实现分叉，由
   `test_name_locus` 的 51 条断言显式钉住（不是消掉）。`storageKeyFor` 仍是唯一 id→串入口，
   存储容器仍是字符串键（存档格式不变）。
+- **CHARADATA 的角色块：基址表 + 连续 arena**：`CharaArena{ QList<Cell> cells; QHash<int,qint64> bases; }`，
+  取址公式仍是唯一一条 `slot = bases[charaSlot] + offset`（**未分配 = 缺键 → -1**）。
+  读路径只做一次 `constFind`，**分配动作只存在于 `ensureBlock`**，读路径根本调不到它 ——
+  读纯性由数据形态保证，不靠调用方纪律（变异：读路径顺手分配 → `allocatedSlots` 从 4 变 204，1 条红）。
+  旧形态把「角色号 × 每角色元素数」当 stride：eraMegaten 模板号到 9002、每角色 7505 元素、
+  有用叶 4.33M，**已分配 67,567,733 槽**；新形态 **14,541,824 槽（−78.5%）**，
+  快照点 VmHWM **792 MB → 291 MB（−502 MB / −63%）**。端到端峰值只降 3.8%（−443 MB）：
+  11.6 GB 峰值发生在之后的 ERB 装载，角色槽位只占 4%（记账，别把两个数字混用）。
+  存档**不按槽位区间枚举**（按 Map 条目 + (x,y,z) 下标读），所以输出字节不变；
+  arena 是整块分配，因此补了一条 `elementCount > kMaxMultiDimElements` 拒绝分配
+  （语料实测最大 5100，零影响）。
 - **元素形参的缺省值只有一份判据**：`hasStringDefault(decl)` = `hasDefault && type == Str`，
   三个消费者（`bindArguments` 省略分支、尾部缺省循环、`invokeUserFunction::bindDefault`）。
   旧形态是两条绑定路径各写一遍，且其中一条**没有** `Str` 分支 —— 式子调用的
@@ -174,8 +185,8 @@ plantuml -txmi docs/uml/01-load-classes.puml
   `VariableTable::applyTypes` 一趟定型时写入（scope 是行所属函数，显式传入），
   判定只读它。五语料约 2.7 万处常量表达式下标（`ARR:(10+0)`、`ARR:PL`）因此进入判定。此前两侧已矛盾：`PRINTV 10 / 0` 同一行既 RejectLine 又 ReportOnly。
 - **容器只有一种形态**：一个存储键 = 一条扁平槽位序列，维数不决定容器、只决定取址
-  （`addressOf`：`offset = Σ idx[d]·strides[d]`；CHARADATA 在 `roleSlotOf`：
-  `slot = charaSlot·elementCount + offset`）。1D 是「无几何」的特例；多维装载期按
+  （`addressOf`：`offset = Σ idx[d]·strides[d]`；CHARADATA 在 `CharaArena::slotOf`：
+  `slot = bases[charaSlot] + offset`）。1D 是「无几何」的特例；多维装载期按
   `lengths` 乘积真实分配（上限 `4'000'000`，语料实测最大 1e6），越界读 0、写 `qWarning`
   后忽略。几何缓存唯一写入点 `installGeometry`，形状仍只由 `shapeOf` 回答。
   旧形态是 1D/2D/3D 三套平行容器（各有取址与懒扩容规则）+ CHARADATA 每角色嵌套
@@ -273,7 +284,7 @@ plantuml -txmi docs/uml/01-load-classes.puml
 `dump_warnings` 五语料（`eraTW` / `eraMegaten` / `eraTetris` / `FL3.8` / `ecd`）：
 **6 / 2 / 0 / 0 / 0** 行（`eraMegaten` 的目录参数必须是 `eraMegaten/data`；用错路径会得到
 0 字节的假基线），与 `/tmp/uml-baseline/*.raw.txt` **未排序**逐字节相同。
-累计四十二个重构（身份整数化 / 全定型 / 作用域显式化 / 只读收尾外移 / 存档独立映射 /
+累计四十三个重构（身份整数化 / 全定型 / 作用域显式化 / 只读收尾外移 / 存档独立映射 /
 私有名表前移 / 存档顺序确定性 / 写收尾外移 / 标记区外移 / 位置区外移 /
 标签归属单一索引 / 诊断切片幂等 / 常数作用域参数化 / 增量装载协议显式化 /
 GOTO 段身份入索引 / 静态检查用段身份 / 删第三张裸名表 / 错误去重 / 配对语法只判一次 /
@@ -285,12 +296,13 @@ GOTO 段身份入索引 / 静态检查用段身份 / 删第三张裸名表 / 错
  **键不得再当名字解析**（varNameIsKey → *Raw / ResolvedKey）/
  删掉「当前帧」这个隐含输入（显式 scope 重载 + *InCurrentFrame 生产 0 调用）/
  音频管线契约（同曲重播从头 / 坏媒体回收）/
- 元素形参两条绑定路径同构（hasStringDefault））前后完全一致；
-`ctest` 48 → 68（新增 `test_parse_checks` / `test_save_variable_map` / `test_private_scope_table` /
+ 元素形参两条绑定路径同构（hasStringDefault）/
+ 角色基址表 + arena）前后完全一致；
+`ctest` 48 → 69（新增 `test_parse_checks` / `test_save_variable_map` / `test_private_scope_table` /
 `test_load_contracts` / `test_save_variable_map_hashseed` / `test_jump_markings` /
 `test_position_state` / `test_goto_label_lookup` / `test_structure_pairing` / `test_index_bounds` /
 `test_segment_scope` / `test_array_shape` / `test_storage_form` / `test_condition_scope` /
-`test_name_locus` / `test_string_locus` / `test_scope_plumbing` / `test_audio_pipeline_contracts` / `test_bind_defaults` / `test_dump_warnings_args`）。
+`test_name_locus` / `test_string_locus` / `test_scope_plumbing` / `test_audio_pipeline_contracts` / `test_bind_defaults` / `test_dump_warnings_args` / `test_chara_arena`）。
 
 装载耗时（eraTW，2260 文件 / 2.11M 逻辑行，12 线程）：`load` 41 s → **22.8 s**
 （scan 129 ms / parse 8.4 s / merge 4.9 s），收尾 `markLoadComplete` 23.3 s → 6.5 s，

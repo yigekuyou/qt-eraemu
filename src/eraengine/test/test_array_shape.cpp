@@ -35,7 +35,8 @@
 //        · 私有多维（L2/L3/M3）：arraySize 曾按「当前帧」解析、与 VARSIZE 不一致；
 //        · CHARADATA 多维（C2）曾是 0（形状没进声明查询路径）。
 //   4. 「容器分配量」不再是形状来源：未声明的运行时数组 shapeOf 为空，
-//      arraySize 只报已分配槽位数。
+//      arraySize 只报已分配槽位数；2D/3D 的运行期外接几何（越界写长出来的
+//      边界）同样不进形状 —— VARSIZE 与「有没有人先写过」无关（第 6 节）。
 // ---------------------------------------------------------------------------
 
 #include <QCoreApplication>
@@ -270,6 +271,60 @@ int main(int argc, char* argv[]) {
               QStringLiteral("无形状名字的 arraySize == allocatedSlots（容器事实）"));
         check(vs.arraySizeInCurrentFrame(QStringLiteral("RUNTIME_ONLY")) == 5,
               QStringLiteral("无形状名字的 arraySize == 写入的槽位数 5"));
+    }
+
+    // 6) 运行期外接几何**不进形状**：VARSIZE 的答案与执行顺序无关。
+
+    // 背景（旧实现）：shapeOf 的第 3 条回落是「未声明多维容器的运行期外接几何」。
+    // 它让 VARSIZE(X) 在「有人先写过」前后给两个答案 —— 答案依赖执行历史。
+    // 现在形状只来自装载期事实（声明 -> VariableSize），越界写仍然扩边界
+    // （extendExtents/addressOf 的取址照常），但不再回答「变量有多大」。
+    // 这些断言是删除那条回落的前提条件，也是它的回归护栏。
+    qDebug() << "\n6) 未声明多维名字：写扩边界、形状不变（先读/先写两种顺序同答案）";
+    {
+        // 顺序 1：先读 VARSIZE，再写，再读。
+        VariableStorage before;
+        const QString name = QStringLiteral("RUNTIME_2D");
+        check(before.shapeOf(name, eravar::kGlobalScope).isEmpty(),
+              "写之前：未声明 2D 名字的 shapeOf 为空");
+        before.setGlobalInt2DInCurrentFrame(name, 3, 4, 7);
+        check(before.shapeOf(name, eravar::kGlobalScope).isEmpty(),
+              "写之后：shapeOf 仍为空（外接边界不进形状）");
+        check(before.getGlobalInt2DInCurrentFrame(name, 3, 4) == 7,
+              "写扩边界仍在：写进去的元素读得回来（取址未被削弱）");
+        // 容器事实仍然可读（不是形状）：已分配槽位数 = 首维上界 4。
+        check(before.arraySizeInCurrentFrame(name) == before.allocatedSlots(name),
+              "无形状名字的 arraySize 仍 == allocatedSlots（容器事实）");
+        check(before.arraySizeInCurrentFrame(name) == 4,
+              "外接边界 [3][4] 的首维上界 = 4（容器事实，不冒充形状）");
+
+        // 顺序 2：先写，再读 —— 与顺序 1 的第二次读逐项相同。
+        VariableStorage after;
+        after.setGlobalInt2DInCurrentFrame(name, 3, 4, 7);
+        check(after.shapeOf(name, eravar::kGlobalScope).lengths
+                  == before.shapeOf(name, eravar::kGlobalScope).lengths,
+              "两种顺序的 shapeOf 相同（长度表逐项相等）");
+        check(after.shapeOf(name, eravar::kGlobalScope).elementCount
+                  == before.shapeOf(name, eravar::kGlobalScope).elementCount,
+              "两种顺序的 shapeOf 相同（元素总数相等）");
+        check(after.arraySizeInCurrentFrame(name) == before.arraySizeInCurrentFrame(name),
+              "两种顺序的 arraySize 相同");
+    }
+    {
+        // 3D + 字符串侧同一条契约（两条写入路径各一份实现，都要钉）。
+        VariableStorage vs;
+        const QString name3 = QStringLiteral("RUNTIME_3D");
+        vs.setGlobalInt3DInCurrentFrame(name3, 2, 3, 4, 11);
+        check(vs.shapeOf(name3, eravar::kGlobalScope).isEmpty(),
+              "未声明 3D：写扩边界后 shapeOf 仍为空");
+        check(vs.getGlobalInt3DInCurrentFrame(name3, 2, 3, 4) == 11,
+              "未声明 3D：写进去的元素读得回来");
+        const QString sname = QStringLiteral("RUNTIME_S2");
+        vs.setGlobalStr2DInCurrentFrame(sname, 1, 2, QStringLiteral("x"));
+        check(vs.shapeOf(sname, eravar::kGlobalScope).isEmpty(),
+              "未声明字符串 2D：写扩边界后 shapeOf 仍为空");
+        check(vs.getGlobalStr2DInCurrentFrame(sname, 1, 2) == QStringLiteral("x"),
+              "未声明字符串 2D：写进去的元素读得回来");
     }
 
     // 形态数量自检：断言数随形态 × 维度线性增长（≥40）。

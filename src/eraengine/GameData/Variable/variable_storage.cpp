@@ -115,8 +115,9 @@ VariableStorage::VariableStorage(QObject *parent)
 // （块长 = elementCount），所以槽位总数 = 写过的角色数 × elementCount，
 // 而不是 maxCharaSlot × elementCount。
 // 形状仍只由 shapeOf 回答；容器里的几何缓存（m_geometries / m_charaGeometries）
-// 只有 installGeometry 一个写入点，缓存的是**同一份**事实（strides 是 shapeOf
-// 不提供的、每次取址都需要的量）。
+// 只有 installGeometry 一个写入点。权威几何（authoritative）就是声明/CSV 的同一份
+// 事实；非权威几何是**取址边界**（越界写长出来的 extents + 每次取址都要的 strides），
+// 它不回答形状 —— shapeOf 读不到它（见 shapeOfKey）。
 // ---------------------------------------------------------------------------
 
 void VariableStorage::installGeometry(QHash<QString, SlotGeometry>& map,
@@ -748,22 +749,15 @@ VariableStorage::ArrayShape VariableStorage::declaredShapeOfKey(const QString& s
 
 VariableStorage::ArrayShape VariableStorage::shapeOfKey(const QString& storageKey) const
 {
-        // 1)+2) 声明 -> VariableConfig（形状的所有者，只有一个函数）。
-        if (const ArrayShape declared = declaredShapeOfKey(storageKey); !declared.isEmpty())
-                return declared;
-        // 3) 运行期外接几何：没有声明也没有装载期尺寸表 = 运行期才长出来的多维
-        //    容器（REF 指向的未声明数组）。它的外接边界就是形状（元素只到 extents
-        //    为止）；1D 容器的槽位数没有这个性质（任意前缀都有意义），所以 1D
-        //    不进形状 —— 那是 allocatedSlots 的容器事实。
-        const auto geometry = m_geometries.constFind(storageKey);
-        if (geometry != m_geometries.constEnd() && !geometry.value().authoritative
-            && geometry.value().lengths.size() >= 2) {
-                ArrayShape shape;
-                shape.lengths = geometry.value().lengths;
-                shape.elementCount = geometry.value().elementCount;
-                return shape;
-        }
-        return {};
+        // 形状**只**来自装载期事实：声明 -> VariableConfig（唯一一份回落顺序在
+        // declaredShapeOfKey）。运行期外接几何（extendExtents 长出来的边界）只服务
+        // 取址（addressOf 需要 strides），**不进形状**：
+        //   · 它依赖执行历史（有没有人先写过），拿它当形状会让同一变量的 VARSIZE
+        //     在「先读」与「先写再读」两种顺序下给两个答案；
+        //   · 它与 allocatedSlots 同属容器事实，2D/3D 也没有特殊理由升格为形状
+        //     （1D 早就按同一条原则处理：任意前缀都有意义，槽位数不是形状）。
+        // 越界写的边界扩展仍然存在（extendExtents），只是不再回答「变量有多大」。
+        return declaredShapeOfKey(storageKey);
 }
 
 int VariableStorage::arraySizeInCurrentFrame(const QString& name) const

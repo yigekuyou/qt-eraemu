@@ -821,7 +821,14 @@ int main(int argc, char* argv[]) {
         ExecutionEngine ex(&vs);
         pt.setVariableStorage(&vs); pt.setExpressionEvaluator(&ev);
         ex.setParseTable(&pt); ex.setExpressionEvaluator(&ev);
-        const QStringList program{"@SIZE_TEST", "#DIMS REF ARG_COM, 0, 0", "#DIMS DECLARED_COM, 5, 7", "VARSIZE ARG_COM", "RETURN"};
+        const QStringList program{"@SIZE_TEST", "#DIMS REF ARG_COM, 0, 0", "#DIMS DECLARED_COM, 5, 7",
+                                  // 目标数组必须有**声明**：VARSIZE(REF) 跟的是目标的形状，
+                                  // 而形状只来自装载期事实（声明 -> VariableSize）。旧夹具
+                                  // 让目标 ACTUAL_COM 完全未声明、靠「写到 [2][3] 长出来的
+                                  // 外接几何」当形状 —— 那条来源已删除（它让 VARSIZE 依赖
+                                  // 执行历史），见 test_array_shape 第 6 节。
+                                  "#DIMS GLOBAL ACTUAL_COM, 3, 4",
+                                  "VARSIZE ARG_COM", "RETURN"};
         pt.loadScript("varsize_ref", buildLines(pt, program)); pt.markLoadComplete();
         check(pt.parseWarningCount() == 0, "VARSIZE multidimensional REF array needs no indices");
         vs.setGlobalStr2DInCurrentFrame("ACTUAL_COM", 2, 3, "x");
@@ -829,7 +836,7 @@ int main(int argc, char* argv[]) {
         const AstResolver resolve = [&](const QString& text) { return compileFixture(pt, text); };
         ex.executeInstruction(AstBuilder::build("VARSIZE ARG_COM", {}, resolve));
         check(vs.getSystemVariable("RESULT", 0) == 3 && vs.getSystemVariable("RESULT", 1) == 4,
-              "VARSIZE REF resolves target and writes all dimension lengths");
+              "VARSIZE REF resolves target declaration and writes all dimension lengths");
         vs.setLocalInt(0, 8);
         ex.executeInstruction(AstBuilder::build("VARSIZE ARG_COM:(LOCAL++):999", {}, resolve));
         check(vs.getLocalInt(0) == 8 && vs.getSystemVariable("RESULT", 1) == 4,
@@ -838,6 +845,17 @@ int main(int argc, char* argv[]) {
         ex.executeInstruction(AstBuilder::build("VARSIZE DECLARED_COM", {}, resolve));
         check(vs.getSystemVariable("RESULT", 0) == 5 && vs.getSystemVariable("RESULT", 1) == 7,
               "VARSIZE uses declared dimensions before array elements are written");
+        // 新契约：REF 的目标**没有声明**（只有越界写长出来的外接几何）时 VARSIZE = 0，
+        // 与「有没有人先写过」无关 —— 形状不再回答容器边界。
+        vs.setSystemVariable(QStringLiteral("RESULT"), 0, 7);
+        vs.setSystemVariable(QStringLiteral("RESULT"), 1, 7);
+        vs.setGlobalStr2DInCurrentFrame("RUNTIME_COM", 2, 3, "y");
+        check(vs.shapeOf(QStringLiteral("RUNTIME_COM"), eravar::kGlobalScope).isEmpty(),
+              "runtime-only 2D target: 写入后 shapeOf 仍为空");
+        vs.setReference("ARG_COM", "RUNTIME_COM");
+        ex.executeInstruction(AstBuilder::build("VARSIZE ARG_COM", {}, resolve));
+        check(vs.getSystemVariable("RESULT", 0) == 7 && vs.getSystemVariable("RESULT", 1) == 7,
+              "VARSIZE REF -> 无声明目标：越界写长出来的边界不写进 RESULT");
         auto array = QSharedPointer<VariableNode>::create("ARG_COM", OperandType::Str);
         array->dimension = 2;
         check(!validateExpression(*array).isEmpty(), "ordinary multidimensional element read still requires indices");

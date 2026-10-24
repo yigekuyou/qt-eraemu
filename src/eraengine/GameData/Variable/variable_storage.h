@@ -384,10 +384,10 @@ public:
         //      —— 声明表是形状的所有者；键先经 storageName（REF 别名/私有键）解析，
         //      复合键再拆回 (名字, 段身份文本) 查声明；
         //   2) 无声明 -> VariableConfig（VariableSize.csv + 默认表）：**装载期**尺寸来源；
-        //   3) 都没有 -> 多维容器（2D/3D）的**外接几何**（运行期才长出来的数组，
-        //      如 REF 指向的未声明数组）；1D 容器槽位数不是形状（见 allocatedSlots）。
-        //   4) 都没有 -> 空形状（未声明的 1D 名字没有形状）。
-        // 容器当前分配量**不是**形状（见 allocatedSlots）。
+        //   3) 都没有 -> 空形状（未声明 / 未定稿的名字没有形状）。
+        // 容器事实**都不是**形状：已分配槽位数见 allocatedSlots；2D/3D 的运行期
+        // 外接几何（越界写长出来的边界）只服务取址（addressOf 的 strides），
+        // 不进这张表 —— 否则同一变量的 VARSIZE 会随「有没有人先写过」而变。
         struct ArrayShape {
             QList<int> lengths;      // 每维长度（空 = 无形状）
             qint64 elementCount = 0; // 各维乘积

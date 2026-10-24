@@ -82,6 +82,15 @@ plantuml -txmi docs/uml/01-load-classes.puml
   读出来是另一格」。`ARGS/LOCALS/RESULTS` 的读写不对称是 Era 语义、不是实现分叉，由
   `test_name_locus` 的 51 条断言显式钉住（不是消掉）。`storageKeyFor` 仍是唯一 id→串入口，
   存储容器仍是字符串键（存档格式不变）。
+- **赋值左值的 AST 在构造期就完备**：`#DIM CONST` 标量的折叠原来只在收尾重解析里做
+  （`parseScopedExpression(foldConstants=true)` 在 `parsePrimary` 装
+  `setConstantValueProvider`），构造期 `resolveExpr` 没装 → 每行白解析一遍。
+  现在抽出唯一查值入口 `VariableTable::constantValue(name, scope)`，两侧共用；
+  `AstBuilder::build` 的 `resolveLvalue` 让赋值左值也折。全语料 852,937 行
+  逐节点比对 **0 差异**后删掉重解析 —— eraTW CPU −2.7%、eraMegaten CPU −5.6%。
+  原则记在此：**能在构造/定型期做的就做完，运行期只查表**；
+  `strAssignPending`（VARI/VARS 是语句、预扫描只扫 `#` 行）与 GETVAR 族
+  （名字是运行期字符串，按 C# 语义必须不折）是两条有理由的例外。
 - **GETVAR / GETVARS / SETVAR 的名字解析有缓存（唯一表、唯一键）**：键 =
   `(名字文本.trimmed(), 段身份文本)`，值是不可变 AST 的 `QSharedPointer`；容量 512、
   满时淘汰 stamp 最小者（近似 LRU）。失效只有一个入口、6 个调用点（`clear` /
@@ -298,7 +307,7 @@ plantuml -txmi docs/uml/01-load-classes.puml
 `dump_warnings` 五语料（`eraTW` / `eraMegaten` / `eraTetris` / `FL3.8` / `ecd`）：
 **6 / 2 / 0 / 0 / 0** 行（`eraMegaten` 的目录参数必须是 `eraMegaten/data`；用错路径会得到
 0 字节的假基线），与 `/tmp/uml-baseline/*.raw.txt` **未排序**逐字节相同。
-累计四十六个重构（身份整数化 / 全定型 / 作用域显式化 / 只读收尾外移 / 存档独立映射 /
+累计四十七个重构（身份整数化 / 全定型 / 作用域显式化 / 只读收尾外移 / 存档独立映射 /
 私有名表前移 / 存档顺序确定性 / 写收尾外移 / 标记区外移 / 位置区外移 /
 标签归属单一索引 / 诊断切片幂等 / 常数作用域参数化 / 增量装载协议显式化 /
 GOTO 段身份入索引 / 静态检查用段身份 / 删第三张裸名表 / 错误去重 / 配对语法只判一次 /
@@ -312,7 +321,8 @@ GOTO 段身份入索引 / 静态检查用段身份 / 删第三张裸名表 / 错
  音频管线契约（同曲重播从头 / 坏媒体回收）/
  元素形参两条绑定路径同构（hasStringDefault）/
  角色基址表 + arena / loopEndLines 立为唯一反查索引 / 形状只剩装载期来源 /
- GETVAR 族名字解析缓存）
+ GETVAR 族名字解析缓存 /
+ 赋值左值构造期折完常量）
  前后完全一致；
 `ctest` 48 → 70（新增 `test_parse_checks` / `test_save_variable_map` / `test_private_scope_table` /
 `test_load_contracts` / `test_save_variable_map_hashseed` / `test_jump_markings` /

@@ -327,18 +327,11 @@ struct LogicalLine {
 
     // 构建期未能定型的标记（收尾只处理这些，避免全量重解析）：
     //   needsCompletion —— 行内含类型未知/解析失败的表达式（收尾时再补）。
-    //   rhsPending —— `=` 的右值**定型未确认**：预扫描登记表没给出左值类型
-    //     （declType != Int 且 != Str），而构建期 resolver 也可能不带本行作用域。
-    //     RHS 的「FORM 还是表达式」与 assignmentAsts 都由收尾按**最终**变量表
-    //     结算这一次（数据门控，不是再猜一遍）。
-    // 装载器路径（parseOneFileReadOnly / buildAst）**总有** declaredType（预扫描
-    // 登记表，按本行所属段查）—— 两条分支都在 AST 构建**之前**登记 #DIM/#DIMS，
-    // 因此该标记在五语料与单文件串行路径上均为 0 行。只有外部**自己构造**
-    // LogicalLine 序列再交给 loadScript 的路径（夹具/工具）才会置位：那时 AST
-    // 已按「没有类型表」构建完毕，左值类型只能等最终变量表（见
-    // EraParseTable::loadScript 里声明登记的时点）。
+    // 「左值类型未知 ⇒ RHS 待收尾定型」那第三态（rhsPending）已删：声明视图是
+    // **构建入口的前置步骤**（ErbLoader 的预扫描 / EraParseTable::buildScriptAst
+    // 的扫描，判据与登记实现各只有一份），所以脚本路径上每个赋值的左值类型在
+    // 构建期就有答案，FORM 与表达式在构建期一次定死，收尾不再重解。
     bool    needsCompletion = false;
-    bool    rhsPending = false;
 
     // CASE 臂解析缓存就绪标记（见 caseCache 注释）
     mutable bool caseCacheReady = false;

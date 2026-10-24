@@ -30,6 +30,7 @@
 #include <utility>
 #include "ast/logical_line.h"
 #include "ast/variable_table.h"
+#include "declaration_scan.h"   // declscan::DeclarationSite / SourceLine（声明唯一判据）
 #include "ast/user_function.h"
 #include "ast/parse_diagnostic.h"
 #include "structure_issue.h"
@@ -270,6 +271,28 @@ public:
     bool loadScript(const QString& scriptName, const QList<LogicalLine>& lines,
                     bool isHeaderFile = false, const QString& path = QString());
 
+    // ---- 一段源码 -> 一段 AST（**脚本级构建的唯一入口**）-------------------
+    // 声明是这条入口的**前置步骤**：先按 declscan::scanScript 扫出本脚本的声明、
+    // 登记进**本表唯一的变量表**（registerScriptDeclarations —— 与 loadScript
+    // 调的是同一个函数），再逐行 AstBuilder::build。于是：
+    //   · 左值类型/常量遮蔽在构建期就按最终的那张表判定（不存在第二份视图）；
+    //   · 字符串赋值在构建期即定成 FORM/表达式，不存在「构建后再补」的行；
+    //   · AST 在 loadScript/markLoadComplete 前后**逐节点相同**。
+    // 调用方只给源码，不决定哪一行是声明。
+    // diagnostics：**行级**诊断出口（表达式归约失败、整数字面量、未识别指令…）。
+    //   声明本身的诊断随登记进本表的诊断容器（与 loadScript 同一次、不重复）。
+    [[nodiscard]] QList<LogicalLine> buildScriptAst(const QString& scriptName,
+                                                    const QList<declscan::SourceLine>& lines,
+                                                    bool isHeaderFile = false,
+                                                    ParseDiagnostics* diagnostics = nullptr);
+    // 便捷重载：行号 = 下标 + 1（工具/单测的源码片段没有物理行号）。
+    // sourceName 只进诊断位置（空 = scriptName）。
+    [[nodiscard]] QList<LogicalLine> buildScriptAst(const QString& scriptName,
+                                                    const QStringList& rawLines,
+                                                    const QString& sourceName = QString(),
+                                                    bool isHeaderFile = false,
+                                                    ParseDiagnostics* diagnostics = nullptr);
+
     // 增量装载的显式入口：Finalized -> Loading（其余阶段 = qWarning + false）。
     // 仅在「已定型 + 要追加/替换脚本」时使用；调用方随后必须
     // loadScript(...) 至少一次并 markLoadComplete()。
@@ -451,13 +474,14 @@ public:
     // 维数/初值/用户函数类型；于是构建期解析器即可拿到完整用户变量类型，
     // 字符串赋值在构建期即按 StrForm 定型，收尾只需校验用户变量合法性。
     void beginDeclarationPreRegistration();
-    // scriptName / segmentStart = 段身份的两半（**预处理后行序**里的 @ 标签下标，
-    // 文件头段 = -1）。函数名只用于展示（VariableDecl::function），不再充当
-    // 私有作用域键 —— 同名 @F 的两段因此得到两个不同身份。
-    void preRegisterDeclaration(const QString& rawLine, const ScriptPosition& position,
-                                const QString& function, bool isHeaderFile,
-                                const QString& scriptName, int segmentStart);
+    // 登记一条**已由扫描器判定**的声明（declscan::scanScript 的产物）。
+    // 段身份（scriptName + segmentStart）与私有/广域判定都在站点里 —— 调用方
+    // 不重算、也不决定「哪一行算声明」（唯一判据见 declaration_scan.h）。
+    void preRegisterDeclaration(const declscan::DeclarationSite& site);
     void finishDeclarationPreRegistration();   // 结算：维数/初值/用户函数类型
+    // 一段源码的声明 -> 变量表（**唯一登记入口**）：buildScriptAst 的前置步骤与
+    // loadScript 都调它。已预登记（装载器路径）或本脚本已登记过 => 空操作。
+    void registerScriptDeclarations(const QString& scriptName, const declscan::Scan& scan);
     [[nodiscard]] bool declarationsPreRegistered() const { return m_declarationsPreRegistered; }
 
     // ---- VARI / VARS（emuera.em 的**作用域变量声明**，emuera.net 系）--------
@@ -603,8 +627,7 @@ private:
     };
 
     // 变量声明解析（#DIM/#DIMS/#GLOBAL/#GLOBALS/#PRIVATE）与类型回填
-    void parseVariableDeclaration(const LogicalLine& line, const QString& currentFunction,
-                                  const QString& scopeKey, bool isHeaderFile);
+    //（唯一实现在 declaration_scan.cpp —— 预登记 / loadScript / 构建期视图共用）
     // 文本版（预扫描「先登记 #DIM/#DIMS 再构造 AST」用）：直接按声明文本登记。
     // scopeKey 为空 = 广域声明；非空 = 该段身份的私有域（唯一键）。
     void parseVariableDeclarationText(const QString& rawLine, const ScriptPosition& position,
@@ -741,6 +764,10 @@ private:
     bool m_functionNotCalledWarning = false;
     bool m_constProvidersReady = false;   // 常量/维数求值器是否已设置
     bool m_declarationsPreRegistered = false;   // 声明已由装载器预登记（loadScript 不再重复登记）
+    // 「本表已登记过哪些脚本的声明」：buildScriptAst 的前置步骤登记后在这里留痕，
+    // loadScript 随后装载同一脚本时不再登记第二遍（声明/诊断都只出现一次）。
+    // **只去重，不参与任何类型判定** —— 类型判定只有一份（m_variables）。
+    QSet<QString> m_declarationScripts;
     // 声明已定稿（resolveGlobalDeclarations 的 resolveDimensions 跑过）：
     // 私有名表安装（installPrivateScopes）的前置条件。
     bool m_declarationsResolved = false;

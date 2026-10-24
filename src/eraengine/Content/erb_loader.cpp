@@ -418,51 +418,15 @@ void ErbLoader::preRegisterDeclarations(const QStringList& files,
         // 关键：按**预处理后**的行登记（与 AstBuilder 所见逐字一致），
         // 否则 [SKIPSTART]/#DEFINE/_Rename 会让声明与最终登记不一致。
         const QList<ErbSourceLine> src = m_preprocessor.process(decoded.value(f), &warnings, f);
-        QString currentFunction;
-        // **预处理后行序**里的段起点（@ 标签所在的下标；文件头段 = -1）。
-        // 与 loadScript 的 currentFunctionLine / parseOneFileReadOnly 的
-        // segmentStart 是同一个数 —— 段身份的唯一锚点。
-        int segmentStart = -1;
-        bool afterLabel = false;
-        for (int i = 0; i < src.size(); ++i) {
-            const ErbSourceLine& sl = src.at(i);
-            const QString t = sl.text.trimmed();
-            if (t.isEmpty() || t.startsWith(QLatin1Char(';'))) continue;   // 空行/注释不结束声明区
-            if (t.startsWith(QLatin1Char('@'))) {
-                // 标签名 = 首个标识符（与 AstBuilder::build 同一判据），
-                // 作用域键必须逐字一致：空格 ( , [ : = 都截断。
-                const QString label = t.mid(1);
-                int cut = label.size();
-                for (int k = 0; k < label.size(); ++k) {
-                    const QChar c = label.at(k);
-                    if (c.isSpace() || c == QLatin1Char('(') || c == QLatin1Char(',')
-                        || c == QLatin1Char('[') || c == QLatin1Char(':') || c == QLatin1Char('=')) {
-                        cut = k; break;
-                    }
-                }
-                const QString name = label.left(cut).trimmed();
-                if (!name.isEmpty()) currentFunction = name;
-                segmentStart = i;
-                afterLabel = true;
-                continue;
-            }
-            if (t.startsWith(QLatin1Char('#'))) {
-                if (!isHeader && !afterLabel) continue;   // 函数声明之外：loadScript 忽略
-                m_parseTable->preRegisterDeclaration(sl.text, ScriptPosition(f, sl.physicalLine, 1),
-                                                     currentFunction, isHeader, scriptName, segmentStart);
-                continue;
-            }
-            // VARI / VARS（EM/emuera.net 的作用域变量声明）：**语句**位置的私有
-            // 变量声明，必须在 AST 构造前登记，否则同函数内随后的
-            // `COLUMN:0 = "x"` 会按 Int 定型（FL3.8 有 907 处）。
-            if (EraParseTable::isScopedVariableLine(t)) {
-                m_parseTable->registerScopedVariableLine(sl.text, ScriptPosition(f, sl.physicalLine, 1),
-                                                         currentFunction, scriptName, segmentStart);
-                afterLabel = false;
-                continue;
-            }
-            afterLabel = false;   // 普通指令行：声明区结束
-        }
+        // 「哪一行是声明」只有一份判据（declscan::scanScript）：本预扫描、loadScript
+        // 的未预登记路径、以及 buildScriptAst 的前置步骤都用它。
+        QList<declscan::SourceLine> scanLines;
+        scanLines.reserve(src.size());
+        for (const ErbSourceLine& sl : src)
+            scanLines.append({sl.text, ScriptPosition(f, sl.physicalLine, 1)});
+        const declscan::Scan scan = declscan::scanScript(scanLines, scriptName, isHeader);
+        for (const declscan::DeclarationSite& site : scan.declarations)
+            m_parseTable->preRegisterDeclaration(site);
         ++processed;
         if (processed % reportEvery == 0) {
             qInfo().noquote() << "[ErbLoader] 登记声明进行中:" << processed << "/" << files.size()
@@ -479,89 +443,20 @@ void ErbLoader::scanVariableTypes(const QString& content, bool isHeaderFile,
     // 下标会与最终行数组错位 —— 私有类型就查不到（同一病根的第二处）。
     QStringList warnings;
     const QList<ErbSourceLine> lines = pp.process(content, &warnings, scriptName);
-    QString currentFunction;
-    int segmentStart = -1;
-    bool afterLabel = false;
-    for (int lineIndex = 0; lineIndex < lines.size(); ++lineIndex) {
-        const QString raw = lines.at(lineIndex).text;
-        const QString t = raw.trimmed();
-        // 空行 / 注释（Null 行）：不影响 afterLabel
-        if (t.isEmpty() || t.startsWith(QLatin1Char(';'))) continue;
-
-        if (t.startsWith(QLatin1Char('@'))) {
-            // 标签名 = '@' 之后到 '(' 或空白为止（eraTW 里 `@FUNC ...` / `@FUNC(ARGS)`）
-            QString label = t.mid(1);
-            int cut = label.size();
-            for (int k = 0; k < label.size(); ++k) {
-                const QChar c = label.at(k);
-                if (c == QLatin1Char('(') || c.isSpace() || c == QLatin1Char(';')) { cut = k; break; }
-            }
-            label = label.left(cut).trimmed();
-            if (!label.isEmpty()) currentFunction = label.toUpper();
-            segmentStart = lineIndex;
-            afterLabel = true;
-            continue;
-        }
-
-        if (t.startsWith(QLatin1Char('#'))) {
-            if (!isHeaderFile && !afterLabel) continue;   // 函数声明之外：loadScript 忽略
-            QString s = t.mid(1);
-            int i = 0;
-            while (i < s.size() && !s.at(i).isSpace()) ++i;
-            const QString directive = s.left(i).toUpper();
-
-            bool isStr = false;
-            bool isGlobal = false;
-            if (directive == QLatin1String("DIM")) {
-                // 函数内私有 / 文件级广域（由作用域决定）
-            } else if (directive == QLatin1String("DIMS")) {
-                isStr = true;
-            } else if (directive == QLatin1String("GLOBAL")) {
-                isGlobal = true;
-            } else if (directive == QLatin1String("GLOBALS")) {
-                isGlobal = true;
-                isStr = true;
-            } else if (directive == QLatin1String("PRIVATE")) {
-                isGlobal = true;
-            } else {
-                continue;   // #FUNCTION/#SINGLE/… 不是变量声明
-            }
-
-            QString rest = s.mid(i);
-            // 去掉行尾注释（`#DIM X = 5 ; 说明`）；引号内的 ';' 不算注释
-            bool inQuote = false;
-            for (int k = 0; k < rest.size(); ++k) {
-                const QChar c = rest.at(k);
-                if (c == QLatin1Char('\\') && k + 1 < rest.size()) { ++k; continue; }
-                if (c == QLatin1Char('"')) { inQuote = !inQuote; continue; }
-                if (c == QLatin1Char(';') && !inQuote) { rest = rest.left(k); break; }
-            }
-            rest = rest.trimmed();
-            if (rest.isEmpty()) continue;
-
-            // 名字与类型用与 loadScript 同一个解析器，避免两套规则漂移
-            UserDefinedVariableData d;
-            try {
-                d = UserDefinedVariableData::create(rest, isStr, /*isPrivate=*/true, ScriptPosition());
-            } catch (const std::exception&) {
-                continue;   // 非法声明：loadScript 那边会报错，这里只是不提供类型
-            }
-            if (d.name.isEmpty()) continue;
-
-            const OperandType type = d.typeIsStr ? OperandType::Str : OperandType::Int;
-            const bool global = isHeaderFile || isGlobal || d.global
-                                || currentFunction.isEmpty() || segmentStart < 0;
-            if (global) {
-                out.globalVars.insert(d.name.toUpper(), type);
-            } else {
-                // 段身份（不是函数名）：同名 @F 的两段各自一份类型。
-                out.localVars[eravar::segmentKeyText(scriptName, segmentStart)]
-                    .insert(d.name.toUpper(), type);
-            }
-            continue;
-        }
-
-        afterLabel = false;   // 普通指令行：声明区结束
+    QList<declscan::SourceLine> scanLines;
+    scanLines.reserve(lines.size());
+    for (const ErbSourceLine& sl : lines)
+        scanLines.append({sl.text, ScriptPosition(scriptName, sl.physicalLine, 1)});
+    // 类型快照 = 「同一份声明扫描 + 同一份登记」的产物摊平：这里没有第二套
+    // 「哪行算声明」「哪个指令是字符串」的判定（登记进临时变量表，再摊平）。
+    VariableTable vars;
+    ParseDiagnostics diagnostics;   // 声明诊断由正式登记路径给出（这里丢弃）
+    // 快照只需要类型（段起点等结构信息在这里无用）。
+    static_cast<void>(declscan::declareScriptVariables(vars, diagnostics, scanLines, scriptName,
+                                                       isHeaderFile));
+    for (const VariableDecl& d : vars.declarations()) {
+        if (d.scope == VarScope::Local) out.localVars[d.scopeKey].insert(d.name.toUpper(), d.type);
+        else out.globalVars.insert(d.name.toUpper(), d.type);
     }
 }
 
@@ -798,9 +693,8 @@ bool ErbLoader::loadDirectory(const QString& dirPath, int depth) {
 
     if (!m_parallel || files.size() < 2) {
         // 串行分支也**先预扫描、再建 AST**（与并行分支同一条规则，见下面的
-        // 「先登记 #DIM/#DIMS，再构造 AST」）。没有预扫描时构建期没有类型表，
-        // 左值类型只能是 Unknown，赋值右值的「FORM 还是表达式」就定不下来
-        //（LogicalLine::rhsPending）—— 单文件游戏走的正是这条路径。
+        // 「先登记 #DIM/#DIMS，再构造 AST」）：跨文件的声明（.ERH 的 #DIM）必须
+        // 在构建期可见，否则赋值左值的类型只能退化成「未声明」。
         // 预扫描只做「读 + 按预处理后的行登记声明」，不产出 AST。
         QSet<QString> headerSet;
         for (const QString& f : files) {
@@ -1453,45 +1347,24 @@ void ErbLoader::mergeStep() {
 // ---------------------------------------------------------------------------
 QList<LogicalLine> ErbLoader::buildAst(const QString& content, const QString& filePath,
                                       const QString& root, ParseDiagnostics* diagnostics) {
-    QList<LogicalLine> logicalLines;
+    if (!m_parseTable) return {};
     const QString scriptName = scriptNameFor(root, filePath);
-
-    const AstResolver resolve = [this](const QString& expr) -> QSharedPointer<ExpressionNode> {
-        return m_parseTable ? m_parseTable->expressionAst(expr) : nullptr;
-    };
-    // 赋值右值的临时归约：静默（见 AstBuilder::build 的 resolveQuiet）
-    const AstResolver quietResolve = [this](const QString& expr) -> QSharedPointer<ExpressionNode> {
-        return m_parseTable ? m_parseTable->expressionAst(expr, /*quiet*/ true) : nullptr;
-    };
+    const bool isHeaderFile = filePath.endsWith(QLatin1String(".erh"), Qt::CaseInsensitive);
 
     QStringList warnings;
     const QList<ErbSourceLine> source = prepareLines(content, filePath, &warnings);
-    logicalLines.reserve(source.size());
-    // 段身份 = (脚本名, 段起点行)：与 parseOneFileReadOnly / loadScript 同一个
-    // eravar::segmentKeyText。左值「已声明类型」必须按**本行所属段**查，否则
-    // 函数内 `#DIMS X` 之后的 `X = "..."` 查不到类型，右值的「FORM 还是表达式」
-    // 在构建期定不下来（LogicalLine::rhsPending）。
-    int segmentStart = -1;
-    QString currentScope = eravar::segmentKeyText(scriptName, segmentStart);
-    for (int i = 0; i < source.size(); ++i) {
-        const ScriptPosition pos(filePath, source.at(i).physicalLine, 1);
-        const auto declaredType = [this, &currentScope](const QString& lvalue) -> OperandType {
-            if (!m_parseTable) return OperandType::Unknown;
-            const QString baseName = VariableTable::baseName(lvalue);
-            return m_parseTable->variableTable().typeOf(baseName, currentScope);
-        };
-        LogicalLine line = AstBuilder::build(source.at(i).text, pos, resolve, quietResolve, diagnostics,
-                                             declaredType);
-        line.lineIndex = i;
-        // 作用域切换在构建**之后**（与 parseOneFileReadOnly 同序：行自身先按旧段
-        // 归约，遇到 @ 标签才切到新段）。
-        if (line.kind == LineKind::FunctionLabel) {
-            segmentStart = i;
-            currentScope = eravar::segmentKeyText(scriptName, segmentStart);
-        }
-        logicalLines.append(line);
+    QList<declscan::SourceLine> lines;
+    lines.reserve(source.size());
+    for (const ErbSourceLine& sl : source)
+        lines.append({sl.text, ScriptPosition(filePath, sl.physicalLine, 1)});
+
+    // 脚本级构建的唯一入口：声明是它的**前置步骤**（先扫本脚本的 #DIM/#DIMS 与
+    // VARI/VARS，再逐行构造），因此构建期不存在「左值类型未知」的赋值行 ——
+    // 单文件游戏（没有跨文件预登记）走的正是这条路径。
+    QList<LogicalLine> logicalLines =
+        m_parseTable->buildScriptAst(scriptName, lines, isHeaderFile, diagnostics);
+    for (int i = 0; i < logicalLines.size() && i < source.size(); ++i)
         emit parseLineReady(scriptName, source.at(i).physicalLine, source.at(i).text);
-    }
     return logicalLines;
 }
 

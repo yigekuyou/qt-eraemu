@@ -45,21 +45,26 @@ public:
     static QStringList assignmentValues(const QString& text);
     static WordCollection tokenize(const QString& line);
 
+    // `@`/`$` 之后**标签名**的结束下标（唯一判据：名字不能含 空格/全角空格/制表符
+    // 以及 ( , [ : = —— 对齐 C# LexicalAnalyzer）。构建期的行分类与声明扫描
+    // （declscan::scanScript）必须对「这行的标签叫什么」给出同一个答案。
+    static int labelNameEnd(const QString& labelText);
+
     // 行 -> LogicalLine（归类、归约实参、预解析条件）。
     // resolveQuiet：赋值右值**临时**归约用的静默 resolver（可选；为空时回落
     // 到 resolve）。临时解析的失败是噪音 —— 右值最终形态由下面两条决定：
     //   字符串赋值（`=` 且左值是字符串）→ StrForm；否则就是 foldedResolve 的产物。
     // diagnostics：结构化诊断出口（可选）。未登记指令等以 DiagSeverity 分级 + code
     //              记录，供调用方统一汇总/按类统计（见 parse_diagnostic.h）。
-    // declaredType：左值「已声明类型」查询（装载期已登记的变量表，含系统变量）。
+    // declaredType：左值「已声明类型」查询（声明视图，含系统变量回落）。
     //   收的是**整个左值文本**（`A:1`），基础变量名由调用方用
     //   VariableTable::baseName 取 —— 与收尾同一份实现。
     //   字符串赋值（`X = 文本`）的 StrForm/表达式判定**只在构建期做这一次**：
-    //   返回 Str 立即按 FORM 编译，返回 Int 就是普通表达式。预扫描（#DIM/#DIMS/
-    //   VARI/VARS 与 #DIM CONST）在 AST 构建之前结算，所以这里的答案与收尾的
-    //   最终变量表相同 —— 构建之后不需要「按最终表再解一遍」。
-    //   返回 Unknown（调用方没给类型表，只有直接 loadScript 的工具路径）⇒
-    //   置 LogicalLine::rhsPending，收尾按最终变量表结算那一次（数据门控）。
+    //   返回 Str 立即按 FORM 编译，返回 Int 就是普通表达式。
+    //   声明视图由构建入口先行建立（ErbLoader 的预扫描；脚本级入口
+    //   EraParseTable::buildScriptAst 自己扫），因此脚本路径上这里不会是
+    //   Unknown。Unknown 只出现在「这行不属于任何脚本」的独立行构建上，
+    //   按本移植对未声明变量的既有语义（整型全局变量）处理。
     // foldedResolve：**带常量折叠**的归约器（可选；为空时回落 resolveQuiet/
     //   resolve）。赋值左值、`++/--` 目标、赋值右值清单（诊断/校验用的
     //   assignmentAsts）都走它：这三类 AST 在构建期就要与「收尾按最终声明表

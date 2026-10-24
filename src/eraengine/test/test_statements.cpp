@@ -614,7 +614,10 @@ int main(int argc, char* argv[]) {
             QStringLiteral("OUT_CALL = GETDOINGFUNCTION()"), // 函数调用形态也是字面量
             QStringLiteral("RETURN")
         };
-        check(pt.loadScript("strap", buildLines(pt, program)), "load string-assignment script");
+        // 脚本级构建（唯一入口）：#DIMS OUT_* 在构建期可见 —— 「= 的右值是 FORM、
+        // '= 的右值是表达式」在这一步定死（收尾不再按最终变量表补一次）。
+        check(pt.loadScript("strap", pt.buildScriptAst("strap", program, "s.ERB")),
+              "load string-assignment script");
         pt.markLoadComplete();
         pt.setEntryPoint("MAIN");
         check(run.runToCompletion() == ExecState::Halt, "string-assignment script completes");
@@ -673,7 +676,8 @@ int main(int argc, char* argv[]) {
             QStringLiteral("FE '= @\"lit_{N}\""),
             QStringLiteral("RETURN")
         };
-        check(pt.loadScript("qstr", buildLines(pt, program)), "load quoted string-assignment script");
+        check(pt.loadScript("qstr", pt.buildScriptAst("qstr", program, "s.ERB")),
+              "load quoted string-assignment script");
         pt.markLoadComplete();
         pt.setEntryPoint("MAIN");
         check(run.runToCompletion() == ExecState::Halt, "quoted string-assignment script completes");

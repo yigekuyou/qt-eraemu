@@ -33,12 +33,10 @@ static void run(const QString& name, const QStringList& source, qint64 expected,
     ScriptRunner runner(&table, &engine, &state, &storage);
     runner.setExpressionEvaluator(&evaluator);
     runner.setStepLimit(1000);
-    QList<LogicalLine> lines;
     QStringList script = {"@MAIN"};
     script.append(source);
-    for (int i = 0; i < script.size(); ++i)
-        lines.append(AstBuilder::build(script[i], ScriptPosition("flow.ERB", i, 0),
-            [&table](const QString& text) { return table.expressionAst(text); }));
+    // 脚本级构建（唯一入口）：声明是前置步骤，字符串赋值在构建期即定成 FORM。
+    const QList<LogicalLine> lines = table.buildScriptAst("flow", script, "flow.ERB");
     table.loadScript("flow", lines);
     table.markLoadComplete();
     for (int i = 0; i < lines.size(); ++i) {
@@ -188,10 +186,10 @@ static void globalConstShadowedByPrivate() {
 
     const QStringList source = {"@MAIN", "#DIM SHADOW", "SHADOW = 7", "SHADOW ++",
                                 "CHECK = SHADOW", "RETURN"};
-    QList<LogicalLine> lines;
-    for (int i = 0; i < source.size(); ++i)
-        lines.append(AstBuilder::build(source.at(i), ScriptPosition("shadow.ERB", i, 0),
-            [&table](const QString& text) { return table.expressionAst(text); }));
+    // 脚本级构建（唯一入口）：#DIM SHADOW 是构建的**前置步骤**，于是构建期的
+    // 常量折叠就看得见这个可写私有变量（同名广域 CONST 被遮蔽，不折），
+    // 左值与右值在同一次构建里定型 —— 收尾不再按最终表重解。
+    const QList<LogicalLine> lines = table.buildScriptAst("shadow", source, "shadow.ERB");
     table.loadScript("shadow", lines);
     table.markLoadComplete();
     table.setEntryPoint("MAIN");

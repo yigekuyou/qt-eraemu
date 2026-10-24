@@ -19,6 +19,7 @@
 #include <QCoreApplication>
 #include "parse_checks.h"   // 收尾步骤 4/5/6 的自由函数实现（只读 IR 视图）
 #include "load_passes.h"    // 收尾步骤 1/2/3 的自由函数实现（可写 IR 视图 = LoadContext）
+#include "declaration_scan.h"   // 声明扫描（唯一判据）/ 登记的唯一实现
 #include "jump_markings.h"  // 标记区：跳转表的构建（输入只有 ScriptData）
 #include "position_state.h" // 位置区：执行位置 + 调用栈的状态转移（自由函数）
 #include "process_state.h"
@@ -445,6 +446,7 @@ void EraParseTable::clear() {
     // 常量/维数求值器也必须随新的变量表重新装配（clearLoadedGame 已把
     // 求值器上的提供者清空，标志不复位就会带着空提供者进入下一局）。
     m_declarationsPreRegistered = false;
+    m_declarationScripts.clear();
     m_constProvidersReady = false;
     m_declarationsResolved = false;
     // 信号位置与旧实现相同（在全部字段复位之后）：装载期 clear 不按 Effects
@@ -573,6 +575,10 @@ bool EraParseTable::loadScript(const QString& scriptName, const QList<LogicalLin
         // 函数声明贡献按脚本名整份删除（与上面的标签索引删除同点、同语义）。
         replacedFunctionNames.unite(dropScriptFunctionContribution(scriptName));
 
+        // 替换同一脚本 = 新版本的行可能带来新的声明：允许这次重新登记（与替换前
+        // 的行为一致；旧版本已登记的声明仍按 first-wins 留在表里，pre-existing）。
+        m_declarationScripts.remove(scriptName);
+
         for (auto it = m_labelIndex.begin(); it != m_labelIndex.end();) {
             QList<LabelRef>& list = it.value();
             list.erase(std::remove_if(list.begin(), list.end(),
@@ -640,9 +646,16 @@ bool EraParseTable::loadScript(const QString& scriptName, const QList<LogicalLin
         }
     }
 
+    // ---- 声明：**先登记，后使用**（不是事后补）----
+    // 判据只有一份（declscan::scanScript）：它与 preRegisterDeclarations 共用同一
+    // 个扫描循环。登记本身也只有一处（registerScriptDeclarations）—— buildScriptAst
+    // 的构建期前置步骤与这里调的是同一个函数，所以「构建期看到的类型」与「本表
+    // 最终登记的类型」按构造相同（同一张表，不是两份视图）。
+    const declscan::Scan declScan = declscan::scanScript(data.lines, scriptName, isHeaderFile);
+    registerScriptDeclarations(scriptName, declScan);
+
     QString currentFunction;   // **函数名**事实（形参/事件/RETURNF/展示）
     int currentFunctionLine = -1;   // 段起点（预处理后行序里的 @ 标签下标；文件头 = -1）
-    bool afterLabel = false;   // .ERB 中 # 行必须紧跟函数标签（对齐 C# ErbLoader）
     QSet<QString> labelNames;  // 仅用于装载日志的「本脚本标签名个数」，不保留
     // 本脚本的函数声明贡献（大写名 -> 第一份声明）。装载收尾把整份表按脚本名
     // 换进 m_functionDeclsByScript —— 替换脚本时旧表随之整份消失。
@@ -650,10 +663,6 @@ bool EraParseTable::loadScript(const QString& scriptName, const QList<LogicalLin
 
     for (int i = 0; i < data.lines.size(); ++i) {
         LogicalLine& line = data.lines[i];
-        if (line.kind != LineKind::Null && line.kind != LineKind::Preprocessor
-            && line.kind != LineKind::FunctionLabel) {
-            afterLabel = false;
-        }
         // ---- 段身份（私有作用域的唯一键）----
         // 预处理后行序里的 @ 下标；本行自身就是 @ 时，它就是本段的起点（与
         // LabelRef::functionLine 同一事实）。写入是**唯一**的：这里的值来自
@@ -681,14 +690,10 @@ bool EraParseTable::loadScript(const QString& scriptName, const QList<LogicalLin
             currentFunction = line.labelName;
             currentFunctionLine = i;   // 段起点（LabelRef::functionLine 的来源）
         } else if (line.kind == LineKind::Preprocessor) {
-            // .ERH（头文件）：文件级 #DIM = 全局（对齐 C# HeaderFileLoader）
-            // .ERB（脚本）  ：# 行必须紧跟函数标签，否则告警并忽略（对齐 C# ErbLoader）
-            if (isHeaderFile || afterLabel) {
-                // 声明的作用域 = 当前段身份（头文件一律广域，见 parseVariableDeclaration）。
-                // 已由装载器预登记（先预处理→先登记→再构造）：不再重复登记。
-                if (!m_declarationsPreRegistered)
-                    parseVariableDeclaration(line, currentFunction, line.scopeKey, isHeaderFile);
-            } else {
+            // 声明已在上面按 declscan 的扫描结果登记（唯一判据）。这里只剩一条
+            // 诊断：声明区之外的 # 行（.ERB 的 # 行必须紧跟函数标签，对齐 C# ErbLoader）。
+            // 行序遍历保证诊断插入顺序与逐行判定时完全一致。
+            if (declScan.orphanSharpLines.contains(i)) {
                 m_diagnostics.add(DiagSeverity::Warning, DiagCode::kSharpLine,
                                   line.position.filename, line.position.lineNumber, line.position.column, 0,
                                   QCoreApplication::translate("ParseDiagnostics", "函数声明之外使用了 # 行 (%1)")
@@ -700,7 +705,6 @@ bool EraParseTable::loadScript(const QString& scriptName, const QList<LogicalLin
         }
         if (line.kind == LineKind::FunctionLabel) {
             line.ownerFunction = currentFunction;   // 函数标签行自身（函数名事实）
-            afterLabel = true;
         }
 
         if (line.isLabel()) {
@@ -886,6 +890,74 @@ bool EraParseTable::loadScript(const QString& scriptName, const QList<LogicalLin
              << "逻辑行" << data.lines.size() << "标签" << labelNames.size();
     emit parseCompleted(scriptName);
     return true;
+}
+
+// ---------------------------------------------------------------------------
+// 一段源码 -> 一段 AST（脚本级构建的唯一入口）
+//
+// 声明是**前置步骤**：先 declscan 扫出本脚本的声明、**登记进本表唯一的变量表**
+//（registerScriptDeclarations —— 与 loadScript 同一个函数），再逐行
+// AstBuilder::build。构建期的类型/常量查询因此就是收尾时的那张表：
+//   · 左值类型总有答案（本脚本声明 + 跨文件声明 + 系统变量回落）；
+//   · 常量折叠看到本脚本的可写私有变量（同名广域常量被遮蔽，不折）；
+//   · 没有第二张「构建期表」—— AST 在 loadScript/markLoadComplete 前后逐节点相同。
+// ---------------------------------------------------------------------------
+QList<LogicalLine> EraParseTable::buildScriptAst(const QString& scriptName,
+                                                const QList<declscan::SourceLine>& lines,
+                                                bool isHeaderFile, ParseDiagnostics* diagnostics) {
+    QList<LogicalLine> out;
+    if (scriptName.isEmpty() || lines.isEmpty()) return out;
+    if (m_phase == LoadPhase::Finalized) {
+        // 与 loadScript 同一协议：定型之后不再编译源码。
+        qWarning().noquote() << "[parse] buildScriptAst 在定型（Finalized）之后调用，忽略"
+                             << scriptName;
+        return out;
+    }
+    // ① 声明先登记（唯一判据 + 唯一登记入口；已预登记/已登记则跳过）。
+    const declscan::Scan scan = declscan::scanScript(lines, scriptName, isHeaderFile);
+    registerScriptDeclarations(scriptName, scan);
+
+    // ② 逐行构建。作用域随段切换（与 loadScript 的 currentFunctionLine 同一事实，
+    //    这里直接读扫描结果 —— 两条路径是同一个数）。
+    QString currentScope;   // 当前行的段身份文本（空 = 广域）
+    const auto declaredType = [this, &currentScope](const QString& lvalue) -> OperandType {
+        const QString baseName = VariableTable::baseName(lvalue);
+        if (baseName.isEmpty()) return OperandType::Unknown;
+        // 唯一来源：本表（声明优先于系统变量回落，见 VariableTable::typeOf）。
+        return m_variables.typeOf(baseName, currentScope);
+    };
+    // 归约器按**本行所属段**解析：字符串 FORM 里的 `%私有变量%`、赋值右值清单的
+    // 常量折叠都要看到与收尾同一份作用域。
+    const auto resolve = [this, &currentScope](const QString& e, bool quiet) {
+        return expressionAstInScope(e, currentScope, quiet);
+    };
+
+    out.reserve(lines.size());
+    for (int i = 0; i < lines.size(); ++i) {
+        currentScope = eravar::segmentKeyText(scriptName, scan.segmentStartOfLine.at(i));
+        const ScriptPosition& pos = lines.at(i).position;
+        const AstResolver plain = [&resolve](const QString& e) { return resolve(e, false); };
+        const AstResolver quiet = [&resolve](const QString& e) { return resolve(e, true); };
+        LogicalLine line = AstBuilder::build(lines.at(i).text, pos, plain, quiet, diagnostics,
+                                             declaredType, quiet);
+        line.lineIndex = i;
+        line.segmentStart = scan.segmentStartOfLine.at(i);
+        line.scopeKey = currentScope;
+        out.append(line);
+    }
+    return out;
+}
+
+QList<LogicalLine> EraParseTable::buildScriptAst(const QString& scriptName,
+                                                const QStringList& rawLines,
+                                                const QString& sourceName, bool isHeaderFile,
+                                                ParseDiagnostics* diagnostics) {
+    const QString fileName = sourceName.isEmpty() ? scriptName : sourceName;
+    QList<declscan::SourceLine> lines;
+    lines.reserve(rawLines.size());
+    for (int i = 0; i < rawLines.size(); ++i)
+        lines.append({rawLines.at(i), ScriptPosition(fileName, i + 1, 1)});
+    return buildScriptAst(scriptName, lines, isHeaderFile, diagnostics);
 }
 
 bool EraParseTable::beginIncrementalLoad() {
@@ -1158,41 +1230,11 @@ void EraParseTable::switchToMemorySpace(const QString& scriptName) {
 
 // ---------------------------------------------------------------------------
 // 变量表：解析 #DIM/#DIMS/#GLOBAL/#GLOBALS/#PRIVATE，并把类型回填到 AST
+//
+// 实现已整体搬到 declaration_scan.cpp（declscan::registerDeclarationText）：
+// 它是**唯一**的声明登记实现，「先登记再构造 AST」的预登记、未预登记路径的
+// loadScript、以及脚本级构建的前置步骤（buildScriptAst）都用它。
 // ---------------------------------------------------------------------------
-namespace {
-// `#DIM CONST NAME = <初值>` 的「初值」部分（按顶层逗号切分）。
-// 空初值返回空表 —— eraTW 用它表示「初值写在其后的 { … } 块里」。
-QStringList constValueExpressions(const QString& declRest) {
-    QChar quote;
-    int depth = 0;
-    for (int i = 0; i < declRest.size(); ++i) {
-        const QChar c = declRest.at(i);
-        if (!quote.isNull()) { if (c == quote) quote = QChar(); continue; }
-        if (c == QLatin1Char('"') || c == QLatin1Char('\'')) { quote = c; continue; }
-        if (c == QLatin1Char('(') || c == QLatin1Char('[')) { ++depth; continue; }
-        if (c == QLatin1Char(')') || c == QLatin1Char(']')) { if (depth > 0) --depth; continue; }
-        if (c == QLatin1Char('=') && depth == 0) {
-            const QString tail = declRest.mid(i + 1).trimmed();
-            if (tail.isEmpty()) return QStringList();
-            QStringList out;
-            QString current;
-            int d2 = 0;
-            QChar q2;
-            for (const QChar ch : tail) {
-                if (!q2.isNull()) { current += ch; if (ch == q2) q2 = QChar(); continue; }
-                if (ch == QLatin1Char('"') || ch == QLatin1Char('\'')) { q2 = ch; current += ch; continue; }
-                if (ch == QLatin1Char('(') || ch == QLatin1Char('[')) { ++d2; current += ch; continue; }
-                if (ch == QLatin1Char(')') || ch == QLatin1Char(']')) { if (d2 > 0) --d2; current += ch; continue; }
-                if (d2 == 0 && ch == QLatin1Char(',')) { out << current.trimmed(); current.clear(); continue; }
-                current += ch;
-            }
-            if (!current.trimmed().isEmpty()) out << current.trimmed();
-            return out;
-        }
-    }
-    return QStringList();
-}
-} // namespace
 
 void EraParseTable::beginDeclarationPreRegistration() {
     m_declarationsPreRegistered = true;
@@ -1201,15 +1243,17 @@ void EraParseTable::beginDeclarationPreRegistration() {
     if (m_phase == LoadPhase::Empty) m_phase = LoadPhase::Loading;
 }
 
-void EraParseTable::preRegisterDeclaration(const QString& rawLine, const ScriptPosition& position,
-                                           const QString& function, bool isHeaderFile,
-                                           const QString& scriptName, int segmentStart) {
-    // 段身份 = (脚本名, 段起点行)。声明只在**函数段内**才是私有的：
-    // 头文件 / 文件头段 / 函数外的 # 行一律广域（与 loadScript 同一判据）。
-    const bool global = isHeaderFile || function.isEmpty() || segmentStart < 0;
-    const QString scopeKey = global ? QString()
-                                    : eravar::segmentKeyText(scriptName, segmentStart);
-    parseVariableDeclarationText(rawLine, position, function, scopeKey, isHeaderFile);
+void EraParseTable::preRegisterDeclaration(const declscan::DeclarationSite& site) {
+    // 段身份/私有-广域判定由扫描器给出（declaration_scan.cpp 的 scopeKeyOf），
+    // 这里只按声明种类选登记入口 —— 不重算、也不再判一次「哪行算声明」。
+    if (site.kind == declscan::DeclarationKind::ScopedVariable) {
+        // VARI/VARS：走带告警的登记入口（函数外的声明无法绑定到标签）。
+        registerScopedVariableLine(site.rawLine, site.position, site.function, site.scriptName,
+                                   site.segmentStart);
+        return;
+    }
+    parseVariableDeclarationText(site.rawLine, site.position, site.function, site.scopeKey,
+                                site.isHeaderFile);
 }
 
 void EraParseTable::finishDeclarationPreRegistration() {
@@ -1217,153 +1261,29 @@ void EraParseTable::finishDeclarationPreRegistration() {
     resolveGlobalDeclarations();
 }
 
-void EraParseTable::parseVariableDeclarationText(const QString& rawLine, const ScriptPosition& position,
-                                                const QString& currentFunction, const QString& scopeKey,
-                                                bool isHeaderFile) {
-    QString s = rawLine.trimmed();
-    if (!s.startsWith(QLatin1Char('#'))) return;
-    s = s.mid(1);
-
-    int i = 0;
-    while (i < s.size() && !s.at(i).isSpace()) ++i;
-    const QString directive = s.left(i).toUpper();
-    const QString rest = loadpass::stripDirectiveComment(s.mid(i)).trimmed();
-
-    bool isStr = false;
-    bool isGlobal = false;
-    bool isPrivate = false;
-    if (directive == QLatin1String("DIM")) {
-        // 默认：函数内私有 / 文件级全局
-    } else if (directive == QLatin1String("DIMS")) {
-        isStr = true;
-    } else if (directive == QLatin1String("GLOBAL")) {
-        isGlobal = true;
-    } else if (directive == QLatin1String("GLOBALS")) {
-        isGlobal = true;
-        isStr = true;
-    } else if (directive == QLatin1String("PRIVATE")) {
-        isGlobal = true;
-        isPrivate = true;
-    } else {
-        return;   // 其它 # 行（#FUNCTION/#SINGLE/…）不在此处理
-    }
-
-    if (rest.isEmpty()) {
-        m_diagnostics.add(DiagSeverity::Warning, DiagCode::kSharpLine,
-                          position.filename, position.lineNumber, position.column, 0,
-                          QCoreApplication::translate("ParseDiagnostics", "#%1 缺少变量名").arg(directive));
-        return;
-    }
-
-    const int priorDiagnostics = m_diagnostics.size();
-    // 去重键是本次调用的局部集合（同一位置只报一次；不读共享容器）。
-    QSet<QString> reportedNumbers;
-    diagnoseIntegerLiterals(rest, position.filename, position.lineNumber,
-                            position.column + qMax(0, int(rawLine.indexOf(rest))), m_diagnostics,
-                            reportedNumbers);
-    if (m_diagnostics.size() != priorDiagnostics) return; // 错误初值不得登记成 0。
-    try {
-        const UserDefinedVariableData d =
-            UserDefinedVariableData::create(rest, isStr, /*isPrivate=*/true, position);
-
-        // CONST 声明的初值即常数（供 #DIM 维数引用）。
-        // **归属作用域**：与 decl.scope 同一判据（GLOBAL 关键字 / 头文件文件级 /
-        // 不在任何函数内 = 广域；否则是该函数的**私有常量**）。
-        // 私有常量只在声明它的函数内可见（对齐 C#：函数内 #DIM 走
-        // LogicalLine.AddPrivateVariable，查询经 GetVariableToken 只查当前函数）。
-        const QString constOwner = (isGlobal || d.global || isHeaderFile || scopeKey.isEmpty())
-                                       ? QString() : scopeKey;
-        if (d.isConst) {
-            // 非常量字面量的初值（`#DIM CONST OBJ_ID_LAST = 人物数量上限`）：
-            // 按字面量解析只会得到 0（曾因此 INRANGE(…, OBJ_ID_LAST) 恒假，
-            // eraTW 的 EXISTOBJ 抛 THROW），而声明顺序又不可靠（跨文件！），
-            // 所以保留表达式原文，交给求值期**惰性**计算。
-            const QStringList valueExprs = constValueExpressions(rest);
-            const bool allLiteral = !valueExprs.isEmpty()
-                && std::all_of(valueExprs.begin(), valueExprs.end(), [](const QString& v) {
-                       qint64 n = 0;
-                       return parseIntegerLiteral(v.trimmed(), n);
-                   });
-            if (d.typeIsStr) {
-                if (d.defaultStr.size() > 1) {
-                    // 字符串常数**数组**（`#DIMS CONST X, N = s0, s1, …`，
-                    // eraTW 的 DISP_MEMO）：逐下标提供，此前只存第一个值。
-                    m_variables.setConstStrArray(d.name, d.defaultStr, constOwner);
-                } else if (!d.defaultStr.isEmpty()) {
-                    m_variables.setConstStr(d.name, d.defaultStr.first(), constOwner);
-                }
-            } else if (!allLiteral && !valueExprs.isEmpty()) {
-                m_variables.setConstExprs(d.name, valueExprs, constOwner);
-            } else if (valueExprs.isEmpty()) {
-                // `#DIM CONST X, N =` + 紧随其后的 `{ … }` 多行初值块：
-                // 本移植尚未支持该写法（常量数组的初值会丢），明确留痕。
-                if (d.dimension > 1)
-                    qWarning() << "[未完成] #DIM CONST 的多行初值块（{ }）尚未实现:"
-                               << d.name << position.toString();
-            } else if (!d.defaultInt.isEmpty()) {
-                // 常数**数组**（`#DIM CONST NAME, N = v0, v1, …`）也要存下来，
-                // 供 `NAME:i` 的下标访问使用；标量常数取第一个值
-                m_variables.setConstArray(d.name, d.defaultInt, constOwner);
-            }
-        }
-
-        VariableDecl decl;
-        decl.name = d.name;
-        decl.type = d.typeIsStr ? OperandType::Str : OperandType::Int;
-        // 全局判定：GLOBAL 关键字 / 头文件文件级 / 不在任何函数内
-        decl.scope = (isGlobal || d.global || isHeaderFile || scopeKey.isEmpty())
-                         ? VarScope::Global : VarScope::Local;
-        // function 只保留「函数名」这个事实（形参/事件/RETURNF/展示）；
-        // 私有域的唯一键是 scopeKey（段身份文本）。
-        decl.function = (decl.scope == VarScope::Local) ? currentFunction : QString();
-        decl.scopeKey = (decl.scope == VarScope::Local) ? scopeKey : QString();
-        decl.dimension = d.dimension;
-        decl.lengths = d.lengths;
-        decl.lengthExprs = d.lengthExprs;
-        decl.isPrivate = isPrivate || !isGlobal;
-        decl.isConst = d.isConst;
-        decl.isReference = d.reference;
-        decl.isCharaData = d.charaData;
-        // 随 SAVEGLOBAL/LOADGLOBAL 持久化到 save_global.dat 的用户变量：
-        // `#DIM SAVEDATA GLOBAL X`（C# IsGlobal && IsSavedata）与 `#DIM GLOBAL X`
-        //（ecd/docs「全局变量随 SAVEGLOBAL/LOADGLOBAL 往返」）都算。
-        // 注意 `#DIM GLOBAL X` 的 GLOBAL 写在变量名前（d.global），与
-        // `#GLOBAL X` 指令（isGlobal）两种写法都要认。
-        decl.isSavedata = d.save;
-        decl.isGlobal = d.global || isGlobal;
-        decl.isGlobalSave = decl.isSavedata && decl.isGlobal;
-
-        // 用户 `#DIM(S) CHARADATA`：登记为角色数据变量，供读写路径按
-        // (角色号, 元素下标) 存取（否则元素互相覆盖，表现为「变量似乎不可变」）。
-        if (decl.isCharaData && !decl.isReference && m_variableStorage) {
-            m_variableStorage->registerCharaDataVariable(
-                decl.name, decl.type == OperandType::Str, decl.dimension);
-        }
-        if (!d.isConst) {                 // 初值（非 CONST）：进入函数/装载时写入
-            decl.defaultInt = d.defaultInt;
-            decl.defaultStr = d.defaultStr;
-        }
-
-        // 重复声明（first-wins）：与 C# 一样，全局变量重名一律告警（类型/维度是否
-        // 一致都不影响后续使用，但重名通常意味着脚本有误）；函数局部重名在真实
-        // 游戏里很常见（同名 @label 被口上补丁覆盖），保持静默。
-        const VariableTable::DeclStatus status = m_variables.addChecked(decl);
-        if (status != VariableTable::DeclStatus::Added && decl.scope == VarScope::Global) {
-            m_diagnostics.add(DiagSeverity::Warning, DiagCode::kDeclError,
-                              position.filename, position.lineNumber, position.column, 0,
-                              QCoreApplication::translate("ParseDiagnostics", "全局变量 %1 重复定义").arg(decl.name));
-        }
-    } catch (const std::exception& e) {
-        m_diagnostics.add(DiagSeverity::Error, DiagCode::kDeclError,
-                          position.filename, position.lineNumber, position.column, 0,
-                          QCoreApplication::translate("ParseDiagnostics", "#%1 声明错误：%2 (%3)")
-                              .arg(directive, QString::fromUtf8(e.what()), rest));
+void EraParseTable::registerScriptDeclarations(const QString& scriptName,
+                                              const declscan::Scan& scan) {
+    // 三种「声明已就位」的情形都不重复登记（诊断因此只出现一次）：
+    //   · 装载器已按全部文件预登记（生产路径）；
+    //   · 本脚本的声明已由脚本级构建（buildScriptAst）的前置步骤登记过；
+    //   · 空脚本。
+    if (m_declarationsPreRegistered || m_declarationScripts.contains(scriptName)) return;
+    m_declarationScripts.insert(scriptName);
+    for (const declscan::DeclarationSite& site : scan.declarations) {
+        // SharpDirective 与 VARI/VARS 都走同一个登记入口（registerDeclaration 内
+        // 按 kind 分流；函数外的 VARI/VARS 不登记，告警只由预登记路径给出）。
+        declscan::registerDeclaration(m_variables, m_diagnostics, m_variableStorage, site);
     }
 }
 
-void EraParseTable::parseVariableDeclaration(const LogicalLine& line, const QString& currentFunction,
-                                            const QString& scopeKey, bool isHeaderFile) {
-    parseVariableDeclarationText(line.raw, line.position, currentFunction, scopeKey, isHeaderFile);
+void EraParseTable::parseVariableDeclarationText(const QString& rawLine, const ScriptPosition& position,
+                                                const QString& currentFunction, const QString& scopeKey,
+                                                bool isHeaderFile) {
+
+    // 唯一实现：declaration_scan.cpp（预登记 / loadScript / 构建期视图共用）。
+    declscan::registerDeclarationText(m_variables, m_diagnostics, m_variableStorage, rawLine,
+                                      position, currentFunction, scopeKey, isHeaderFile);
+
 }
 
 // ---------------------------------------------------------------------------
@@ -1405,9 +1325,10 @@ void EraParseTable::registerScopedVariableLine(const QString& rawLine, const Scr
                               .arg(spec.isStr ? QStringLiteral("VARS") : QStringLiteral("VARI")));
         return;
     }
-    // 复用 #DIM/#DIMS 的登记路径：类型/维度/作用域判定完全同源。
-    QString declText = (spec.isStr ? QStringLiteral("#DIMS ") : QStringLiteral("#DIM ")) + spec.name;
-    for (const QString& l : spec.lengths) declText += QStringLiteral(", ") + l;
+    // 复用 #DIM/#DIMS 的登记路径：类型/维度/作用域判定完全同源
+    //（VARI/VARS -> #DIM(S) 文本的换算只有一个实现）。
+    const QString declText = declscan::scopedVariableDeclText(rawLine);
+    if (declText.isEmpty()) return;
     const QString scopeKey = segmentStart < 0 ? QString()
                                               : eravar::segmentKeyText(scriptName, segmentStart);
     parseVariableDeclarationText(declText, position, function, scopeKey, /*isHeaderFile=*/false);
@@ -1417,13 +1338,8 @@ void EraParseTable::applyScopedVariableLine(LogicalLine& line, const QString& fu
                                             const QString& scopeKey) {
     const loadpass::ScopedVarSpec spec = loadpass::parseScopedVarSpec(line.raw);
     if (!spec.ok) return;
-    if (!m_declarationsPreRegistered) {
-        // 未预登记路径（单测/单文件）：行上已有段身份，直接用它登记。
-        QString declText = (spec.isStr ? QStringLiteral("#DIMS ") : QStringLiteral("#DIM ")) + spec.name;
-        for (const QString& l : spec.lengths) declText += QStringLiteral(", ") + l;
-        parseVariableDeclarationText(declText, line.position, function, scopeKey,
-                                     /*isHeaderFile=*/false);
-    }
+    // 声明本身**已在 loadScript 开头**按 declscan 的扫描结果登记（先登记后使用）；
+    // 这里只重建运行期交接用的操作数，不再登记。
     if (function.isEmpty()) { line.arguments.clear(); return; }
 
     // 运行期交接用两个操作数：

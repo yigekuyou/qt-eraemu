@@ -711,6 +711,17 @@ QStringList AstBuilder::splitOperands(const QString& text, bool splitWhitespace)
     return tokens;
 }
 
+int AstBuilder::labelNameEnd(const QString& labelText) {
+    for (int i = 0; i < labelText.size(); ++i) {
+        const QChar c = labelText.at(i);
+        if (c.isSpace() || c == QLatin1Char('(') || c == QLatin1Char(',')
+            || c == QLatin1Char('[') || c == QLatin1Char(':') || c == QLatin1Char('=')) {
+            return i;
+        }
+    }
+    return labelText.size();
+}
+
 // ---------------------------------------------------------------------------
 // build —— 行 -> LogicalLine
 // ---------------------------------------------------------------------------
@@ -777,17 +788,8 @@ LogicalLine AstBuilder::build(const QString& rawLine,
         // COMF410 掃除.ERB 的 `$ CANCEL_LOOP` 等）；此前名字被切成空串，标签根本没登记，
         // 运行到 `GOTO GOOUT` 就报 "GOTO label not found"。
         const QString label = trimmed.mid(1).trimmed();
-        // 标签名 = 首个标识符 token（对齐 C# LexicalAnalyzer：名字不能含
-        // 空格 / 全角空格 / 制表符 / ( , [ : = 等符号）
-        int cut = label.size();
-        for (int i = 0; i < label.size(); ++i) {
-            const QChar c = label.at(i);
-            if (c.isSpace() || c == QLatin1Char('(') || c == QLatin1Char(',')
-                || c == QLatin1Char('[') || c == QLatin1Char(':') || c == QLatin1Char('=')) {
-                cut = i;
-                break;
-            }
-        }
+        // 标签名 = 首个标识符 token（判据唯一实现在 labelNameEnd）。
+        const int cut = labelNameEnd(label);
         line.labelName = label.left(cut).trimmed();
 
         // 形参列表：Emuera 支持两种写法（ErbLoader.parseLabel 的 symbol.Type）
@@ -868,13 +870,11 @@ LogicalLine AstBuilder::build(const QString& rawLine,
         else if (resolveQuiet) dest.ast = resolveQuiet(lhs);
         else if (resolve) dest.ast = resolve(lhs);
         Operand value(rhs);
-        // 右值在此处只是**临时**归约（变量类型尚未定稿）：字符串赋值的右值
-        // 会被最终 applyStringAssignments() 用 StrFormParser 替换掉。用静默
-        // resolver 解析，避免临时失败刷屏（705 条噪音的来源）。
+        // 右值先按静默 resolver 归约（构建期类型未定时它是临时结果，避免
+        // 临时失败刷屏 —— 705 条噪音的来源）；字符串左值随后按 FORM 重新编译。
         if (resolveQuiet) value.ast = resolveQuiet(rhs);
         else if (resolve) value.ast = resolve(rhs);
-        // 已知字符串左值（系统变量/已登记声明）立即按原始 FORM 编译。
-        // 其余声明由 markLoadComplete 的 applyStringAssignments 完成定型。
+        // 左值类型在构建期就定：字符串左值按原始 FORM 编译，其余按表达式。
         const auto& lookup = resolveQuiet ? resolveQuiet : resolve;
         if (op == QLatin1String("=") && lookup) {
             const auto target = lookup(lhs);
@@ -883,24 +883,26 @@ LogicalLine AstBuilder::build(const QString& rawLine,
             //               已声明字符串变量、`$NAME` 前缀）；
             //   declType —— 预扫描登记表的答案（`A:1` 这类带下标的左值取基础名，
             //               由调用方用 VariableTable::baseName 归一）。
-            // 两者在构建期都已就绪（预扫描在 AST 构建之前结算），所以**判定只在
-            // 这里做一次**：字符串左值按 FORM 编译；登记表说是整型 ⇒ RHS 是表达式。
-            // 登记表**没说**是整型（名字在装载期没被登记 —— 只有直接调
-            // loadScript 的工具/夹具路径才会出现）⇒ RHS 先按表达式归约并置
-            // rhsPending，由收尾按最终变量表结这一次（数据门控，不是再猜；
-            // 装载器路径上 declType 总有答案，见 LogicalLine::rhsPending）。
+            // 两者在构建期都已就绪 —— 声明视图是**构建入口的前置步骤**
+            //（ErbLoader 的预扫描 / EraParseTable::buildScriptAst 的扫描），
+            // 所以**判定只在这里做一次**：字符串左值按 FORM 编译，整型左值
+            // 的 RHS 就是表达式。不存在「构建后再按最终表结算」的第三态。
             const OperandType exprType = target ? target->valueType() : OperandType::Unknown;
             const OperandType declType = declaredType ? declaredType(lhs) : OperandType::Unknown;
+            // 未知 = 本移植对「未声明变量」的既有语义（按整型全局变量处理）：
+            // 声明视图由构建入口先行建立（EraParseTable::buildScriptAst /
+            // ErbLoader 的预扫描），所以脚本路径上这里不会是 Unknown。
             const OperandType assignType = exprType == OperandType::Str || declType == OperandType::Str
-                                              ? OperandType::Str : declType;
+                                              ? OperandType::Str
+                                              : (declType == OperandType::Unknown ? OperandType::Int
+                                                                                  : declType);
             // FORM 里的插值表达式用**带数字诊断**的 resolver 编译：整数字面量
             // 超范围/格式错误必须在这里报出来（与收尾旧路径同一口径）。构建期
             // 就做完，因此不需要再在收尾重编译一次 FORM 来报这条诊断。
             const AstResolver& formResolver = resolve ? resolve : lookup;
             if (assignType == OperandType::Str)
                 value.ast = StrFormParser::parse(rhs, formResolver);   // 构建期即按 FORM 定型
-            else if (declType != OperandType::Int)
-                line.rhsPending = true;   // 类型表没确认：RHS 由收尾按最终变量表结算一次
+            // 否则（Int）就是普通表达式 —— 构建期已定型，收尾不再重解。
         }
         if (lookup && !(op == "=" && value.ast && value.ast->kind() == NodeKind::StrForm)) {
             // 右值清单（`X = a, b, c` 的分项 AST，供诊断/校验用）同样按带折叠的

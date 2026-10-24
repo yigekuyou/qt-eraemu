@@ -243,9 +243,6 @@ int main(int argc, char* argv[]) {
     {
         ProcessState stringState;
         EraParseTable stringTable(&stringState);
-        const AstResolver stringResolve = [&stringTable](const QString& e) {
-            return stringTable.expressionAst(e);
-        };
         const QStringList stringSource = {
             "@TEXT_CASE(ARG)",
             "#DIMS LOCAL_TEXT",
@@ -255,12 +252,10 @@ int main(int argc, char* argv[]) {
             "LOCAL_TEXT = %TOSTR(ARG)%",
             "LOCAL_TEXT '= missing_function(ARG)"
         };
-        QList<LogicalLine> stringLines;
-        for (int i = 0; i < stringSource.size(); ++i) {
-            stringLines.append(AstBuilder::build(stringSource.at(i),
-                                                  ScriptPosition("strings.ERB", i),
-                                                  stringResolve));
-        }
+        // 脚本级构建（唯一入口）：#DIMS LOCAL_TEXT 在构建期可见，`LOCAL_TEXT = …`
+        // 于是**在这一步**就定成 StrForm，收尾不再重解。
+        const QList<LogicalLine> stringLines =
+            stringTable.buildScriptAst("strings", stringSource, "strings.ERB");
         check(stringTable.loadScript("strings", stringLines), "load string assignment script");
         stringTable.markLoadComplete();
         const ScriptData* strings = stringTable.script("strings");

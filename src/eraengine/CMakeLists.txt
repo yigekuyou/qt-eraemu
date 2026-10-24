@@ -116,6 +116,8 @@ GameData/Variable/variable_types.h
 
 GameProc/era_parse_table.cpp
 GameProc/era_parse_table.h
+GameProc/declaration_scan.cpp
+GameProc/declaration_scan.h
 GameProc/parse_checks.cpp
 GameProc/parse_checks.h
 GameProc/load_passes.cpp

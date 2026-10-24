@@ -315,6 +315,17 @@ bool isVariableName(const QString& name) {
 
 ScopedVarSpec parseScopedVarSpec(const QString& rawLine) {
     ScopedVarSpec spec;
+    // 快路径：指令头必须是 VARI / VARS（不区分大小写），所以首字符必然是 V。
+    // 普通指令行（占绝大多数）在这里就返回，省掉下面的 stripDirectiveComment /
+    // trimmed / toUpper 三处按行分配 —— 本函数在装载期**按行**调用（声明扫描
+    // 与 loadScript 的行循环各一遍），eraTW 2.1M 行实测这里曾是主要开销。
+    // 判据没有第二份：能走到下面的仍由同一段代码判定。
+    int lead = 0;
+    while (lead < rawLine.size() && rawLine.at(lead).isSpace()) ++lead;
+    if (lead >= rawLine.size()) return spec;
+    const QChar initial = rawLine.at(lead);
+    if (initial != QLatin1Char('v') && initial != QLatin1Char('V')) return spec;
+
     const QString text = stripDirectiveComment(rawLine).trimmed();
     int i = 0;
     while (i < text.size() && !text.at(i).isSpace()) ++i;
@@ -517,7 +528,7 @@ QString checkUserCallArgs(const UserFunctionDecl& decl,
 
 
 // 收尾 2/6 第 1 段：只补**构建期无法定型**的那几类行的收尾结算
-// （FORM 的收尾编译 / CASE 臂 / rhsPending 的右值定型）。
+// （FORM 的收尾编译需要本行作用域的私有字符串类型 / CASE 臂）。
 // 构建期已定型的行一律不重解（收尾只扫描未定型项，见各分支的门控）。
 // **逐脚本**：只写本脚本的行（含 mutable 的 caseCache / extras）与本任务独占的
 // sink；ctx 是只读视图（variables 查类型 / evaluator 读配置 / constantTable 折叠）。
@@ -529,12 +540,11 @@ void applyStringAssignmentsInScript(const LoadContext& ctx, ScriptData& script,
     // 不读共享容器（见 diagnoseIntegerLiterals）。
     QSet<QString> reportedNumbers;
     for (LogicalLine& line : script.lines) {
-        // 只处理构建期未定型的行：构建期已按（预扫描）类型表定型的
-        // 字符串/FORM/CASE 不再重解析（收尾只扫描未定型项）。
-        // 字符串赋值的「FORM 还是表达式」在装载器路径上由预扫描登记表在构建期
-        // 定死（AstBuilder::build 的 declaredType）；只有**类型表没确认**的行
-        // 才会置 rhsPending —— 这类行走下面这次按最终变量表的结算。
-        if (!line.needsCompletion && !line.rhsPending) continue;
+        // 只处理构建期未定型的行：构建期已按声明视图定型的字符串/FORM/CASE
+        // 不再重解析（收尾只扫描未定型项）。
+        // 字符串赋值的「FORM 还是表达式」在构建期由声明视图定死
+        //（AstBuilder::build 的 declaredType）—— 没有「类型表没确认」的第三态。
+        if (!line.needsCompletion) continue;
         const QString owner = line.scopeKey;
         // &line 是每行局部量、&sink 是本任务独占的 sink —— 两者都不会跨任务。
         const AstResolver resolve = [ctx, owner, &line, &sink, &reportedNumbers](const QString& e) {
@@ -543,27 +553,6 @@ void applyStringAssignmentsInScript(const LoadContext& ctx, ScriptData& script,
             return expressionAstInScope(ctx, e, owner);
         };
         if (line.kind != LineKind::Instruction) continue;
-        // 数据门控：构建期类型表没确认的赋值行，按**最终**变量表结算一次 ——
-        //   左值是 Str ⇒ 右值是 FORM；否则右值按表达式重新解一遍（构建期 resolver
-        //   可能不带本行作用域，把「与广域常量同名的私有变量」折成常量值）。
-        // 只在 rhsPending 行上做，装载器路径 0 行。
-        if (line.rhsPending) {
-            line.rhsPending = false;
-            if (line.assignOperator == QLatin1String("=") && line.arguments.size() == 2) {
-                Operand& value = line.arguments[1];
-                const QString varName = VariableTable::baseName(line.arguments[0].raw);
-                if (!varName.isEmpty()
-                    && ctx.variables.typeOf(varName, line.scopeKey) == OperandType::Str) {
-                    value.ast = StrFormParser::parse(value.raw.trimmed(), resolve,
-                        ctx.evaluator && ctx.evaluator->ignoreTripleSymbols());
-                    PrintTemplateCompiler::prepare(value.ast);
-                } else {
-                    line.assignmentAsts.clear();
-                    for (const auto& text : AstBuilder::assignmentValues(value.raw))
-                        line.assignmentAsts.append(expressionAstInScope(ctx, text, line.scopeKey, true));
-                }
-            }
-        }
         // FORM construction may need private string types unavailable in a worker.
         // Recompile the source in its owner scope while compilation is permitted.
         if (line.assignOperator.isEmpty() && (line.raw.contains("@\"")

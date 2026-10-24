@@ -10,6 +10,7 @@ participant "EraEngine" as E
 participant "ConfigLoader /\nConstantTable /\nVariableConfig" as CSV
 participant "ErbLoader" as L
 participant "AstBuilder /\n解析器" as AB
+participant "declscan\n(声明扫描)" as DS
 participant "EraParseTable" as T
 participant "VariableTable /\nparamNames" as VT
 participant "VariableStorage" as S
@@ -32,11 +33,13 @@ loop 每个 ERB 文件（并行 worker）
     并行线程只查 VariableTable，绝不插入新声明。
   end note
   E -> L : loadFile(path, root)
+  L -> DS : scanScript(lines, script, isHeader)   ' 「哪行是声明」唯一判据（全树一份）
+  L -> VT : preRegisterDeclarations → 登记进 m_variables
   L -> AB : build(rawLine, position, resolve)
   AB -> AB : 识别指令 / 切分实参 / 解析表达式 AST
   AB --> L : LogicalLine
   L -> T : loadScript(name, lines, isHeaderFile)
-  T -> VT : 声明预登记（#DIM/#DIMS/#FUNCTION…）
+  T -> VT : 声明预登记（#DIM/#DIMS/#FUNCTION…，同一份 declscan 判据）
   T -> VT : 形参名集合（append-only，并行安全：只查不插）
 end
 
@@ -99,6 +102,17 @@ group 2/6 就地定型【改状态】
   LP -> S : installPrivateScopeTable(table)
   note right : 每段都是 runPerScript：脚本名排序 → 每任务独占 sink → 按名字序归并；\n段与段之间保持原顺序（类型回填必须早于赋值重建）。\neraTW 实测 2/6 4.3s → 2.0s。
 end
+
+note right of T
+  单文件 / 工具 / 测试路径（不经并行 worker）：
+  AST 由 **buildScriptAst(script, lines)** 一次铸成 ——
+  · 前置步骤：declscan 扫本脚本 → 登记进 m_variables **本身**
+    （不是临时表，否则「构建期视图 vs 最终表」会成为第二份判定）
+  · 然后逐行 build，declaredType 只查 m_variables.typeOf
+  ⇒ 构建期就有类型，**没有「左值类型未知 ⇒ 收尾再定型」的第三态**
+    （LogicalLine::rhsPending 已删；load_passes 的结算块同删）
+  · 已预登记（装载器路径）或本脚本已登记过 = 空操作
+end note
 
 group 3/6 参数校验【改状态：置 line.isError；出诊断】
   T -> LP : finalizeValidation(ctx, sink[Pass3])

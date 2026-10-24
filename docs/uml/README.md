@@ -6,10 +6,10 @@ PlantUML 源码。所有图都是**当前代码**的静态结构，不包含计�
 | 文件 | 类型 | 内容 |
 | --- | --- | --- |
 | `00-overview.puml` | 组件图 | 分层总览：装载期一次定型 → 运行期只做存取；收尾三层（`parsecheck` 只读 / `loadpass` 可写 / 类只剩编排）；标记区 `jumpmark` 与位置区 `position` 各只有一份实现 |
-| `01-load-classes.puml` | 类图 | 装载期：`EraEngine` / `ErbLoader` / `AstBuilder` / `EraParseTable` / `ParseIrView` 与 4/5/6 自由函数 / `LoadContext` 与 1/2/3 自由函数 / 标记区 `jumpmark` / 标签索引 `m_labelIndex` / 位置区 `PositionState`+`PositionEffects`+`position` 自由函数 / `LoadPhase` 阶段机 / 带 `origin` 切片的 pass 表 |
+| `01-load-classes.puml` | 类图 | 装载期：`EraEngine` / `ErbLoader` / `AstBuilder` / `declscan`（「哪一行是声明」的唯一判据）/ `EraParseTable`（`buildScriptAst` = 唯一的脚本级构建入口，声明是它的前置步骤） / `ParseIrView` 与 4/5/6 自由函数 / `LoadContext` 与 1/2/3 自由函数 / 标记区 `jumpmark` / 标签索引 `m_labelIndex` / 位置区 `PositionState`+`PositionEffects`+`position` 自由函数 / `LoadPhase` 阶段机 / 带 `origin` 切片的 pass 表 |
 | `02-runtime-classes.puml` | 类图 | 运行期：`ExecutionEngine` / `ScriptRunner` 单步状态机 / `ProcessState` / `LoopFrame`（作用是显式 `ScopeId`；位置推进经 `position` 自由函数） |
 | `03-expression-classes.puml` | 类图 | 表达式 AST、`AccessKind` 16 值、`VariableKey{scopeId,nameId}`、名字 intern 表、`resolverTable` |
-| `04-load-pipeline.puml` | 时序图 | 装载流水线：CSV → 逐文件解析 → `m_loadPasses[7]` 表驱动收尾（每步独立 sink + `replaceOrigin`）→ 诊断 |
+| `04-load-pipeline.puml` | 时序图 | 装载流水线：CSV → declscan 声明扫描 → 逐文件解析 → `m_loadPasses[7]` 表驱动收尾（每步独立 sink + `replaceOrigin`）→ 诊断 |
 | `05-variable-access.puml` | 活动图 | 运行期变量访问：两条入口 → 一张 resolver 表 → 唯一按名原语（解析一次产出 `IntLocus`，读/写各一个穷尽 switch）；作用域 = 段身份（装载期写进 `line.scopeKey`） |
 | `06-diagnostics.puml` | 类图 | 诊断模型：`ParseDiagnostics` / `ParseDiagnostic` / `DiagEffect` / `DiagOrigin`（pass 切片）/ `DiagCode` 全码与产生步骤 |
 | `07-static-checks.puml` | 卡片图 | `checkStaticValues` 检查目录（C1..C4）与已验证口径 |
@@ -89,8 +89,7 @@ plantuml -txmi docs/uml/01-load-classes.puml
   字符串 `++/--` 的目标也改为构建期用同一套带折叠 resolver 解一次（全量 AST 逐字节对比：
   三语料 112.7 万行 IDENTICAL）。于是 `recompileFuncLinesInScript`（18 行）、
   `rebuildAssignmentAstsInScript`（12 行）、`applyStringAssignments` 里的无条件 FORM
-  重编译（约 10 行）**全部删除**；剩余门控全是数据（`needsCompletion` / `rhsPending` /
-  非变量项），不是再猜一遍。代价：多扫一遍，eraTW/eraMegaten 装载均 <3% 变化。
+  重编译（约 10 行）**全部删除**；剩余门控只剩数据（`needsCompletion`），不是再猜一遍。代价：多扫一遍，eraTW/eraMegaten 装载均 <3% 变化。
 - **赋值左值的 AST 在构造期就完备**：`#DIM CONST` 标量的折叠原来只在收尾重解析里做
   （`parseScopedExpression(foldConstants=true)` 在 `parsePrimary` 装
   `setConstantValueProvider`），构造期 `resolveExpr` 没装 → 每行白解析一遍。
@@ -110,16 +109,26 @@ plantuml -txmi docs/uml/01-load-classes.puml
   mismatch 0。eraTW 跳过为 0 是**事实而非遗漏**：该语料的常量下标在构建期已折成 `LiteralNode`，
   而 `Literal` 分支本来就不求值；剩下的求值全是 `StrForm`/`If` 根（无 `constantIndex`），
   属于校验趟的**首次**求值。
-- **`rhsPending` 在生产路径是 0，标记仍在（有代价记账）**：串行 `loadDirectory` 分支补上
-  「先预扫描再建 AST」，`AstBuilder::build` 的 `declaredType` 改为按**段身份**查
-  （`eravar::segmentKeyText`）而不是按裸脚本名 —— 单文件夹具从「1 行 RHSPENDING + 2/6 两次
-  RHSSETTLE FORM」降到 **0/0**，五语料 0/0（并行路径本就预扫描）。标记不能删的**理由不是懒**：
-  路径 B 的 AST 由调用方在 `loadScript` **之前**建好，而声明是 `loadScript` 扫描时才登记
-  （`m_declarationsPreRegistered` 之前根本没有类型表），所以「构建期就有类型」在 API 上不成立。
-  删除代价实测 = `test_control_flow` / `test_statements` / `test_parse_table_ast` 三红
-  （15 行 FORM 语义），而生产调用者 **0**（`execution_engine.cpp:572` 是唯一入口，
-  两条分支都已预扫描）—— 救测试要么在夹具里重抄一遍「哪些 `#` 行算声明」（第二份判定），
-  要么加新引擎 API，都比保留更差。
+- **没有「待收尾定型」的第三态**：`LogicalLine::rhsPending` 已删。它存在的前提是
+  「AST 构建期看不到类型表」——路径 B（调用方在 `loadScript` **之前**建好 AST）当时确实
+  没有声明表，于是字符串赋值/复合赋值把定型拆成两段、两份判据（实测就是它把
+  `@HOLDER #DIM CONST SHADOW = 51` 的私有 `#DIM SHADOW` 折成字面量 51、
+  又把 A–Z 系统 Int 变量挡住 `#DIMS` 的字符串声明）。现在**声明是构建入口的前置步骤**：
+  `EraParseTable::buildScriptAst()` 是脚本级构建的唯一入口，它调
+  `declscan::scanScript()`（「哪一行是声明、属于哪个段」的唯一扫描循环，`SourceLine` /
+  `LogicalLine` / `QStringList` 三形态共用同一 `scanImpl`）后把声明登记进 **`m_variables` 本身**
+  —— 构建期看到的表与 `loadScript`/收尾用的是**同一个对象**，不是两份视图
+  （先前一版用临时 `VariableTable` 做「本脚本视图」正是第二份判定，已弃）。
+  同一份扫描还产出 `segmentStartOfLine`（段起点）与 `orphanSharpLines`（声明区外的 `#` 行）；
+  `classifySharpDirective()` 是「指令 → 语义」的唯一映射，`AstBuilder::labelNameEnd()` 是
+  `@`/`$` 标签名判据的唯一实现。连带删除：`load_passes` 的整块结算（45 行）与门控、
+  死函数 `parseVariableDeclaration(const LogicalLine&)`、`ErbLoader` 的三段手写扫描
+  （1589 → 1462 行）。验收：全量 AST 逐字节 **1,076 万行 IDENTICAL**（eraTetris 1,027 /
+  eraTW 2,111,136 / eraMegaten 5,550,572，2.05 GB dump），五语料告警逐字节不变。
+  代价与收益：声明前置让 `isScopedVariableLine` 每行被调 2 次（实测 merge 跌到 9,112 ms），
+  `parseScopedVarSpec` 加首字符快路径（指令头必是 `VARI`/`VARS` ⇒ 首字符必为 `V`/`v`，
+  判据仍只有一段代码）后 merge 6,235 ms；最终 eraTW −6.9% wall / −5.7% CPU、
+  eraMegaten −4.9% / −3.6%。
 - **GETVAR / GETVARS / SETVAR 的名字解析有缓存（唯一表、唯一键）**：键 =
   `(名字文本.trimmed(), 段身份文本)`，值是不可变 AST 的 `QSharedPointer`；容量 512、
   满时淘汰 stamp 最小者（近似 LRU）。失效只有一个入口、6 个调用点（`clear` /
@@ -336,7 +345,7 @@ plantuml -txmi docs/uml/01-load-classes.puml
 `dump_warnings` 五语料（`eraTW` / `eraMegaten` / `eraTetris` / `FL3.8` / `ecd`）：
 **6 / 2 / 0 / 0 / 0** 行（`eraMegaten` 的目录参数必须是 `eraMegaten/data`；用错路径会得到
 0 字节的假基线），与 `/tmp/uml-baseline/*.raw.txt` **未排序**逐字节相同。
-累计四十九个重构（身份整数化 / 全定型 / 作用域显式化 / 只读收尾外移 / 存档独立映射 /
+累计五十个重构（身份整数化 / 全定型 / 作用域显式化 / 只读收尾外移 / 存档独立映射 /
 私有名表前移 / 存档顺序确定性 / 写收尾外移 / 标记区外移 / 位置区外移 /
 标签归属单一索引 / 诊断切片幂等 / 常数作用域参数化 / 增量装载协议显式化 /
 GOTO 段身份入索引 / 静态检查用段身份 / 删第三张裸名表 / 错误去重 / 配对语法只判一次 /
@@ -353,7 +362,8 @@ GOTO 段身份入索引 / 静态检查用段身份 / 删第三张裸名表 / 错
  GETVAR 族名字解析缓存 /
  赋值左值构造期折完常量 /
  消灭「构建后再重建」 /
- 常量子树不求值第二次（constantValueAt 唯一入口））
+ 常量子树不求值第二次（constantValueAt 唯一入口）/
+ 声明前置：删掉「待收尾定型」第三态（rhsPending））
  前后完全一致；
 `ctest` 48 → 70（新增 `test_parse_checks` / `test_save_variable_map` / `test_private_scope_table` /
 `test_load_contracts` / `test_save_variable_map_hashseed` / `test_jump_markings` /

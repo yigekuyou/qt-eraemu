@@ -20,6 +20,9 @@ package "GameProc" {
     - m_variables : VariableTable
     - m_diagnostics : ParseDiagnostics
     - m_position : PositionState   ' 位置区：状态是数据，算法在 position
+    + buildScriptAst(name, lines, isHeader, diags) : QList<LogicalLine>
+                                  ' 脚本级构建**唯一**入口：先 declscan 登记声明进 m_variables，
+                                  ' 再逐行 build ⇒ 构建期就有类型，没有「待收尾定型」第三态
     + loadScript(name, lines, isHeaderFile)   ' Finalized 后拒绝（须先 beginIncrementalLoad）
     + beginIncrementalLoad() : bool  ' Finalized → Loading（唯一的增量入口）
     + expressionAst(expr)
@@ -99,6 +102,35 @@ package "GameProc" {
       finalizeValidation(ctx, sink)   ' 第二参是该 pass 独占的诊断切片
       finalizeLabelIndex(ctx)         ' 唯一排序固化点（只 sort，不去重）
       parseScopedExpression(ctx, …) / expressionAstInScope(ctx, …)
+    }
+  }
+
+  package "declscan（声明扫描，自由函数）" {
+    struct SourceLine {
+      text : QString            ' 预处理后的原文（与 AstBuilder 所见逐字一致）
+      position : ScriptPosition
+    }
+    struct DeclarationSite {
+      kind : DeclarationKind    ' SharpDirective（#DIM/#DIMS/#GLOBAL/…）/ ScopedVariable（VARI/VARS）
+      rawLine / position / function / scriptName
+      segmentStart : int        ' 段起点（@ 行下标；文件头段 = -1）
+      scopeKey / isHeaderFile
+    }
+    struct Scan {
+      declarations : QList<DeclarationSite>
+      orphanSharpLines : QHash<int,QString>   ' 声明区外的 # 行（调用方按自己的口径告警）
+      segmentStartOfLine : QList<int>         ' 每行段起点 = loadScript 的 currentFunctionLine
+    }
+    class "声明扫描" as DeclFns {
+      scanScript(lines, script, isHeader) : Scan
+        ' 「哪一行是声明、属于哪个段」的**唯一**扫描循环；
+        ' SourceLine / LogicalLine / QStringList 三形态共用同一 scanImpl 模板
+      registerDeclarationText(vars, diags, storage, rawLine, …)  ' 唯一登记实现
+        ' 表方法 parseVariableDeclarationText 只是它的 forwarder
+      registerDeclaration(vars, diags, storage, site)
+      declareScriptVariables(vars, diags, lines, script, isHeader) : Scan
+      scopedVariableDeclText(rawLine) : QString   ' VARI/VARS -> 等价 #DIM(S) 文本（唯一构造点）
+      classifySharpDirective(text) : 指令语义      ' 扫描器与登记器共用
     }
   }
 
@@ -231,6 +263,9 @@ EraParseTable ..> ConstantTable : 名表下标
 EraParseTable ..> ParseIrView : makeIrView()
 ParseIrView <.. FreeFns : const 输入
 EraParseTable ..> FreeFns : 4/5/6 forwarder
+EraParseTable ..> DeclFns : buildScriptAst / loadScript（声明前置）
+ErbLoader ..> DeclFns : preRegisterDeclarations / scanVariableTypes
+AstBuilder ..> DeclFns : labelNameEnd()（标签名判据共用）
 EraParseTable ..> LoadContext : makeLoadContext()
 EraParseTable ..> WriteFns : 表项 1/2/3 直连（无 forwarder）
 EraParseTable ..> JumpFns : loadScript 末尾建表（类内无成员入口）
@@ -266,6 +301,7 @@ note bottom of EraParseTable
   输入是可写的 LoadContext，类内不再有它们的成员入口。
 
   装载之外的两块也搬走了：
+  · 声明扫描 → declscan（四条消费路径共用一份「哪行是声明」判据；类型只有 m_variables 一份）；
   · 标记区 → jumpmark（构建吃 ScriptData&，读侧是 inline 查表）；
     配对语法只判一次（buildJumpMarkings），5/6 只把 StructureIssue 翻成诊断；
   · 位置区 → position（状态是 PositionState，转移只置 Effects 的位，

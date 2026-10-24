@@ -719,7 +719,8 @@ LogicalLine AstBuilder::build(const QString& rawLine,
                               const AstResolver& resolveInput,
                               const AstResolver& resolveQuiet,
                               ParseDiagnostics* diagnostics,
-                              const std::function<OperandType(const QString&)>& declaredType) {
+                              const std::function<OperandType(const QString&)>& declaredType,
+                              const AstResolver& resolveLvalue) {
     LogicalLine line;
     line.raw = rawLine;
     line.position = position;
@@ -862,7 +863,8 @@ LogicalLine AstBuilder::build(const QString& rawLine,
         line.functionName = op;
         line.assignOperator = op;
         Operand dest(lhs);
-        if (resolveQuiet) dest.ast = resolveQuiet(lhs);
+        if (resolveLvalue) dest.ast = resolveLvalue(lhs);
+        else if (resolveQuiet) dest.ast = resolveQuiet(lhs);
         else if (resolve) dest.ast = resolve(lhs);
         Operand value(rhs);
         // 右值在此处只是**临时**归约（变量类型尚未定稿）：字符串赋值的右值

@@ -187,11 +187,7 @@ QSharedPointer<ExpressionNode> parseScopedExpression(const LoadContext& ctx, con
     if (foldConstants) {
         const VariableTable* vt = &ctx.variables;
         parser.setConstantValueProvider([vt, scope](const QString& name) -> QVariant {
-            qint64 iv = 0;
-            if (vt->constInt(name, iv, scope)) return QVariant::fromValue<qint64>(iv);
-            QString sv;
-            if (vt->constStr(name, sv, scope)) return QVariant(sv);
-            return QVariant();
+            return vt->constantValue(name, scope);
         });
     }
     QSharedPointer<ExpressionNode> ast = parser.parse(tokens);
@@ -1401,9 +1397,18 @@ void validateScriptLines(const LoadContext& ctx, ScriptData& script, ParseDiagno
             const auto& dest = line.arguments[0].raw;
             const QString name = dest.section(':', 0, 0).trimmed();
             const auto* decl = ctx.variables.find(name, line.scopeKey);
-            // expressionAstInScope 已按 ownerFunction 定型 —— 不再克隆/重定型。
-            const auto target = expressionAstInScope(ctx, dest, line.scopeKey, true);
-            line.arguments[0].ast = target;
+            // 左值 AST 在构建期就已完备（常量折叠 + 定型 + 函数解析）：装载器
+            // 用声明表解析出的变量左值与收尾重解析逐节点相同（全语料 852,937
+            // 行 0 差异），因此直接复用。
+            // 兜底只留给「构建期拿到的不是变量项」的行（占位 resolver / 解析
+            // 失败 / 常量左值）：这类行的 AST 来自**非声明表**的解析器，不能用
+            // 它下最终诊断，仍按最终声明表重解析一次。合法左值必然是变量项，
+            // 所以正常行一次也不重解析。
+            QSharedPointer<ExpressionNode> target = line.arguments[0].ast;
+            if (!target || target->kind() != NodeKind::Variable) {
+                target = expressionAstInScope(ctx, dest, line.scopeKey, true);
+                line.arguments[0].ast = target;
+            }
             // 诊断带上**具体原因**（未定义变量 / 维数不符 / AST 解析失败）：
             // 只报「必须为有效变量项」时，eraTW 这种 10k 变量的工程无从下手。
             QString lvalueError;

@@ -615,6 +615,14 @@ bool VariableTable::constStr(const QString& name, QString& out, const QString& s
     return false;
 }
 
+QVariant VariableTable::constantValue(const QString& name, const QString& scope) const {
+    qint64 iv = 0;
+    if (constInt(name, iv, scope)) return QVariant::fromValue<qint64>(iv);
+    QString sv;
+    if (constStr(name, sv, scope)) return QVariant(sv);
+    return QVariant();
+}
+
 bool VariableTable::evalDim(const QString& expr, int& out, const QString& scope) const {
     bool ok = false;
     const int v = expr.toInt(&ok);

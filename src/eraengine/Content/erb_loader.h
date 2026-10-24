@@ -286,10 +286,15 @@ private:
 
     // 供线程内使用：只读函数类型表 + 用户变量类型表（+ 当前函数作用域）
     // quiet=true：解析失败时不打印（用于赋值右值的临时归约，见 AstBuilder::build）
+    // foldConstants=true：把 `#DIM CONST` 标量折成字面量（与收尾流水线
+    //   loadpass::parseScopedExpression 的 foldConstants=true 同一实现：查值
+    //   走 VariableTable::constantValue）。赋值左值必须以它解析 —— 左值在收尾
+    //   不再重解析，构建期就必须与收尾那趟逐节点相同。
     QSharedPointer<ExpressionNode> resolveExpr(const QString& expr, const FunctionTypes& types,
                                                bool quiet = false,
                                                const LoadTimeVarTypes* varTypes = nullptr,
-                                               const QString& scope = QString()) const;
+                                               const QString& scope = QString(),
+                                               bool foldConstants = false) const;
 
     // 预扫描：收集函数返回类型（#FUNCTION → Int，#FUNCTIONS → Str）
     FunctionTypes scanFunctionTypes(const QString& content) const;

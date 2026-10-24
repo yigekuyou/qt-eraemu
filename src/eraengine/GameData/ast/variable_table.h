@@ -24,6 +24,7 @@
 #include <QString>
 #include <QList>
 #include <QMap>
+#include <QVariant>
 #include "operand_type.h"
 #include "expression_ast.h"
 
@@ -174,6 +175,12 @@ public:
     [[nodiscard]] QStringList constExprs(const QString& name, const QString& scope = QString()) const;
     [[nodiscard]] bool constInt(const QString& name, qint64& out, const QString& scope = QString()) const;
     [[nodiscard]] bool constStr(const QString& name, QString& out, const QString& scope = QString()) const;
+    // 常量名 -> 值：解析期常量折叠的**唯一**查值入口（ExpressionParser 的
+    // ConstantValueProvider）。两个解析入口 —— 装载期预扫描
+    //（ErbLoader::resolveExpr）与收尾流水线（loadpass::parseScopedExpression）
+    // —— 都只调这一个函数，折叠规则（私有作用域优先、可写变量遮蔽、常数数组
+    // 不折叠）因此只有一份。返回无效 QVariant = 不是可折叠的标量常量。
+    [[nodiscard]] QVariant constantValue(const QString& name, const QString& scope = QString()) const;
     [[nodiscard]] int constCount() const;
 
     // 用常数表重新求值所有声明的维数（后声明的常数也能修正先前的声明）

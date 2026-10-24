@@ -320,7 +320,8 @@ OperandType LoadTimeVarTypes::typeOf(const QString& name, const QString& scopeKe
 
 QSharedPointer<ExpressionNode> ErbLoader::resolveExpr(
     const QString& expr, const FunctionTypes& types,
-    bool quiet, const LoadTimeVarTypes* varTypes, const QString& scope) const {
+    bool quiet, const LoadTimeVarTypes* varTypes, const QString& scope,
+    bool foldConstants) const {
     const QString key = expr.trimmed();
     if (key.isEmpty()) return nullptr;
 
@@ -367,6 +368,15 @@ QSharedPointer<ExpressionNode> ErbLoader::resolveExpr(
         const ConstantTable* ct = m_constantTable;
         parser.setConstantNameProvider([ct](const QString& var, const QString& name) {
             return ct->indexForVariable(var, name) >= 0;
+        });
+    }
+    // `#DIM CONST NAME = value`：与收尾流水线同一份折叠实现（唯一查值入口
+    // VariableTable::constantValue）。声明预登记在 AST 构建之前结算，因此
+    // 此刻常数（含函数私有常数）已经就绪，与收尾重解析的答案相同。
+    if (foldConstants && m_parseTable) {
+        const VariableTable* vt = &m_parseTable->variableTable();
+        parser.setConstantValueProvider([vt, scope](const QString& name) -> QVariant {
+            return vt->constantValue(name, scope);
         });
     }
     QSharedPointer<ExpressionNode> ast = parser.parse(tokens);
@@ -635,6 +645,13 @@ ParsedErbFile ErbLoader::parseOneFileReadOnly(const QString& filePath,
         const AstResolver quietResolver = [this, &types, &pf, &currentScope, varTypes](const QString& e) {
             return resolveExpr(e, types, /*quiet*/ true, varTypes, currentScope);
         };
+        // 赋值左值：构建期就要与收尾（loadpass::expressionAstInScope）逐节点相同，
+        // 所以启用同一份常量折叠。合法左值（变量项）在收尾不再重解析 ——
+        // 这一趟是唯一来源；构建期不是变量项的行由收尾按最终声明表兜底。
+        const AstResolver lvalueResolver = [this, &types, &currentScope, varTypes](const QString& e) {
+            return resolveExpr(e, types, /*quiet*/ true, varTypes, currentScope,
+                               /*foldConstants=*/true);
+        };
         for (int i = 0; i < source.size(); ++i) {
             currentPhysicalLine = source.at(i).physicalLine;
             const ScriptPosition pos(filePath, source.at(i).physicalLine, 1);
@@ -648,7 +665,7 @@ ParsedErbFile ErbLoader::parseOneFileReadOnly(const QString& filePath,
                 return varTypes ? varTypes->typeOf(name, currentScope) : OperandType::Unknown;
             };
             LogicalLine line = AstBuilder::build(source.at(i).text, pos, resolver, quietResolver,
-                                                  &pf.diagnostics, declaredType);
+                                                  &pf.diagnostics, declaredType, lvalueResolver);
             line.lineIndex = i;
             // 作用域切换在构建**之后**（与 loadScript 的顺序一致：行自身先按
             // 旧作用域归约，遇到标签行才切到新段）。@ 行属于它自己开启的新段。

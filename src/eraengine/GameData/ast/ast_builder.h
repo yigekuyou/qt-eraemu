@@ -54,12 +54,18 @@ public:
     // declaredType：左值「已声明类型」查询（装载期类型表/变量表）。字符串赋值
     //   （`X = 文本`）在构建期即按它判定 StrForm：返回 Str 立即编译；返回 Int
     //   按表达式；返回 Unknown（未声明/未知）→ 标记 strAssignPending，收尾再定型。
+    // resolveLvalue：赋值**左值**专用的归约器（可选；为空时回落 resolveQuiet/
+    //   resolve）。合法左值在收尾校验时不再重解析，所以它必须在构建期就得到与
+    //   收尾那趟完全相同的 AST —— 即带 `#DIM CONST` 常量折叠。折叠规则本身只在
+    //   VariableTable::constantValue（+ ExpressionParser 的同一分支）实现一次，
+    //   这里只是把「对左值也启用折叠」这个事实显式化。
     static LogicalLine build(const QString& rawLine,
                              const ScriptPosition& position,
                              const AstResolver& resolve,
                              const AstResolver& resolveQuiet = {},
                              ParseDiagnostics* diagnostics = nullptr,
-                             const std::function<OperandType(const QString&)>& declaredType = {});
+                             const std::function<OperandType(const QString&)>& declaredType = {},
+                             const AstResolver& resolveLvalue = {});
 
     // CASE has its own IS / TO grammar, shared by loading and lazy cache restore.
     static void buildCaseClauses(const LogicalLine& line, const AstResolver& resolve);

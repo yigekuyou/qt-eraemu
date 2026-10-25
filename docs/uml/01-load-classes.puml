@@ -239,7 +239,7 @@ package "GameData" {
     + getSize1D(name) : int
     + getSize2D(name) : QPair
     + getSize3D(name) : QVector
-    + loadFromCSV(path) : bool
+    + loadFromText(text) : bool
   }
 
   class AstBuilder {

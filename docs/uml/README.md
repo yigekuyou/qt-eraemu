@@ -200,8 +200,9 @@ plantuml -txmi docs/uml/01-load-classes.puml
   变异：字节来源换回自己再读 → 读盘回升 2,432→2,577 而告警不变；
   喂错文件（全喂最后一个）→ `test_dir_tree` 4 红、角色模板从 145 塌成 1。
   记账：读失败时补回两条既有日志（`VariableSize` / `Item` 的「加载失败」），因为走文本表
-  后原告警分支不再经过 —— 保住原可观测性；`VariableStorage::loadVariableSizes(path)` 无生产
-  调用方（只是 read + 委托，不构成第二套判据，可下一刀清）。
+  后原告警分支不再经过 —— 保住原可观测性；`VariableStorage::loadVariableSizes(path)` 当时已无
+  生产调用方（只是 read + 委托，不构成第二套判据），后单独清掉 —— 见文末「同一份数据不留
+  第二个入口」那一刀（`VariableConfig::loadFromCSV` 作为它的唯一下游一并消失）。
 - **异步装载的完成信号只有一个发布点**：`EraEngine::completeAsyncLoad(ok)` 是
   `scriptsLoaded` 的唯一出口，且用 `QTimer::singleShot(0)` 投递到**下一轮事件循环**
   —— 修前失败路径在 `loadAsync()` 内**同步** emit，调用方 `connect → loadAsync → exec()`
@@ -468,13 +469,26 @@ plantuml -txmi docs/uml/01-load-classes.puml
 - **诊断两种后果**：`DiagEffect` 与 `DiagSeverity` 正交。`RejectLine`（该行失效）当前只有 6 处，
   全在 3/6 `finalizeValidation`；`checkStaticValues` 全部 `ReportOnly` —— 静态检查不允许改变运行行为，
   这条不变式由字段表达，不再只靠注释。
+- **同一份数据不留第二个入口（`VariableSize.csv` 只剩一条解析路径）**：尺寸表原来有两个
+  公有入口 —— `VariableStorage::loadVariableSizes(path)`（自己 `TextCodecUtil::readFile` 读盘
+  再委托）与 `loadVariableSizesFromText(text, label)`（字节已由 `CsvTextTable` 读过）。生产只有
+  后者被调用（`eraengine.cpp` 的 `sizeCandidates` 循环），前者是**零调用点**的读盘旁路 ——
+  正是「同一份字节的第二个消费者入口」，留着等于给后人留一条再读一遍盘的路。删掉后
+  `applyVariableSizes()` 只剩一个调用点，`VariableConfig::loadFromCSV` 作为它的唯一下游一并
+  消失，`loadFromText` 成为唯一解析入口（函数签名、返回值、两条诊断文本一字未改）。
+  零行为变化的三重证据：被删函数不可达；它独有的两行日志文本（`[var] VariableSize 加载`
+  / `加载失败`）仍由 `loadVariableSizesFromText` 以相同前缀相同文本产生；eraTW 运行日志里
+  `^\[var\] VariableSize` 两行与改动前逐字节相同。五语料告警 6/1/0/0/0 行逐字节不变、
+  `ctest` 71/71。记账（有意不改）：`test/README.md` 那一行是对**某次提交当时**所改动的历史
+  记录，不作为当前态描述；同类死符号 `VariableConfig::getAllVariableSizes()`（0 引用，
+  改动前即死）登记待攒批。
 
 ## 回归基线
 
 `dump_warnings` 五语料（`eraTW` / `eraMegaten` / `eraTetris` / `FL3.8` / `ecd`）：
-**6 / 2 / 0 / 0 / 0** 行（`eraMegaten` 的目录参数必须是 `eraMegaten/data`；用错路径会得到
+**6 / 1 / 0 / 0 / 0** 行（`eraMegaten` 的目录参数必须是 `eraMegaten/data`；用错路径会得到
 0 字节的假基线），与 `/tmp/uml-baseline/*.raw.txt` **未排序**逐字节相同。
-累计五十九个重构（身份整数化 / 全定型 / 作用域显式化 / 只读收尾外移 / 存档独立映射 /
+累计六十个重构（身份整数化 / 全定型 / 作用域显式化 / 只读收尾外移 / 存档独立映射 /
 私有名表前移 / 存档顺序确定性 / 写收尾外移 / 标记区外移 / 位置区外移 /
 标签归属单一索引 / 诊断切片幂等 / 常数作用域参数化 / 增量装载协议显式化 /
 GOTO 段身份入索引 / 静态检查用段身份 / 删第三张裸名表 / 错误去重 / 配对语法只判一次 /
@@ -498,7 +512,8 @@ GOTO 段身份入索引 / 静态检查用段身份 / 删第三张裸名表 / 错
  文本只预处理一次（BuiltAst 交回 warnings）/
  预处理产物共用（一份正文 + 12 B/行跨度）/
  CSV 字节只读一次（CsvTextTable，两个消费者共用字节不共用解析）/
- 异步完成信号单一发布点（completeAsyncLoad + 零工作量 = 显式成功））
+ 异步完成信号单一发布点（completeAsyncLoad + 零工作量 = 显式成功）/
+ 同一份数据不留第二个入口（VariableSize.csv 只剩一条解析路径））
  前后完全一致；
 `ctest` 48 → 71（新增 `test_parse_checks` / `test_save_variable_map` / `test_private_scope_table` /
 `test_load_contracts` / `test_save_variable_map_hashseed` / `test_jump_markings` /

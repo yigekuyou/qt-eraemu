@@ -337,8 +337,8 @@ QSharedPointer<ExpressionNode> ErbLoader::resolveExpr(
     // （kBuiltinFunctions）：resolveFunctionCall 只有在提供者给出「已知类型」时才
     // 把调用当用户函数，若此处把内置函数的返回类型也报出来，内置调用会被误判成
     // 用户函数 —— 装载期的 StrForm 特化（`STRFORM("<FORM 文本>")` 在解析期换成
-    // StrFormNode）就永远不会命中，运行期只剩 `S(0)` 读取原始实参文本，
-    // 于是 `STRFORM("{123,5,RIGHT}")` 展开成 `{123,5,RIGHT}` 而非 `  123`。
+    // StrFormNode）就永远不会命中，于是 `STRFORM("{123,5,RIGHT}")` 只能交给
+    // 普通字符串实参处理，拿不到装载期拆好的插值/宽度部件。
     // 非内置名同样返回 Unknown（markLoadComplete 的 resolveFunctionNodes 会按宽容语义重绑）。
     parser.setFunctionTypeProvider([&types](const QString& name) -> OperandType {
         const auto fit = types.constFind(name.toUpper());

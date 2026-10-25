@@ -442,12 +442,13 @@ int main(int argc, char** argv) {
     auto staticForm = compile("STRFORM(\"value={LOCAL}\")");
     storage.setLocalInt(0, 23);
     check(staticForm && staticForm->kind() == NodeKind::StrForm
-          && static_cast<const StrFormNode&>(*staticForm).rawText() == "value={LOCAL}"
           && evaluator.evaluate(*staticForm, &storage).toString() == "value=23",
-          "STRFORM keeps raw text while evaluating its load-time FORM node");
-    auto rawConsumer = compile("STRLEN(STRFORM(\"value={LOCAL}\"))");
-    check(rawConsumer && evaluator.evaluate(*rawConsumer, &storage).toLongLong() == 13,
-          "non-FORM string consumer reads STRFORM raw text");
+          "STRFORM evaluates its load-time FORM node");
+    // 字符串实参只有「求值」一条取值路径：STRLEN 拿到的是展开后的 "value=23"
+    //（8 个字符），不是 FORM 原文（13 个字符）。原文副本已从 StrFormNode 删除。
+    auto expandedConsumer = compile("STRLEN(STRFORM(\"value={LOCAL}\"))");
+    check(expandedConsumer && evaluator.evaluate(*expandedConsumer, &storage).toLongLong() == 8,
+          "string consumers read the expanded form (single evaluation path)");
     storage.setLocalStr(0, "raw {LOCAL}");
     auto rawForm = compile("STRFORM(LOCALS)");
     check(rawForm && evaluator.evaluate(*rawForm, &storage).toString() == "raw {LOCAL}",

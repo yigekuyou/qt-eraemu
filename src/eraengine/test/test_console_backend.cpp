@@ -35,6 +35,8 @@
 #include <QTimer>
 
 #include "console_backend.h"
+#include "graphics_store.h"
+#include "resource_image_provider.h"
 
 // 段 -> span 摊平（行结构是「行 -> 段 -> span」两层；断言按最小单位读）
 static QList<ConsoleSpan> flatSpansOf(const ConsoleDisplayLine& line) {
@@ -248,6 +250,80 @@ int main(int argc, char* argv[]) {
         check(value == 10, "new prompt remains clickable after automatic completion");
     }
 
+    // ---- 输入类型 ↔ 按钮类型的裁决（C# SelectedString / SelectedInteger）----
+    // 用户现场：FL3.8 的 CHARACTER_EDIT 屏（BINPUTS，字符串输入）按钮全是整数
+    // 按钮（[取消]=30000），旧规则「字符串输入只收字符串按钮」把整屏按钮变成死键。
+    qDebug() << "\n输入裁决";
+    {
+        ConsoleBackend c;
+        int intValue = -1;
+        QString strValue;
+        bool strSubmitted = false;
+        QObject::connect(&c, &ConsoleBackend::inputSubmitted,
+                         [&](qint64 v) { intValue = static_cast<int>(v); });
+        QObject::connect(&c, &ConsoleBackend::inputSubmittedString,
+                         [&](const QString& v) { strSubmitted = true; strValue = v; });
+
+        // 1) 字符串输入（BINPUTS）+ 整数按钮 -> 可点，交按钮值的十进制文本
+        c.printButton("[取消]", 30000);
+        c.newline();
+        c.notifyInputRequested("BINPUTS");
+        check(c.acceptsIntegerButtons() && c.acceptsStringButtons(),
+              "BINPUTS：整数按钮与字符串按钮都接受（QML clickable 由此取值）");
+        c.clickAt(0, 0);
+        check(strSubmitted && strValue == "30000",
+              QString("BINPUTS + 整数按钮 -> inputSubmittedString(\"30000\")，实得 \"%1\"").arg(strValue));
+        check(intValue == -1, "BINPUTS + 整数按钮不走 inputSubmitted");
+
+        // 2) 整数输入（INPUT）+ 字符串按钮 -> 仍被忽略（C# SelectedInteger 返回 null）
+        ConsoleBackend d;
+        int dInt = -1;
+        QString dStr;
+        bool dStrSubmitted = false;
+        QObject::connect(&d, &ConsoleBackend::inputSubmitted,
+                         [&](qint64 v) { dInt = static_cast<int>(v); });
+        QObject::connect(&d, &ConsoleBackend::inputSubmittedString,
+                         [&](const QString& v) { dStrSubmitted = true; dStr = v; });
+        d.printButtonStr("[字符串]", "abc");
+        d.newline();
+        d.notifyInputRequested("INPUT");
+        check(d.acceptsIntegerButtons() && !d.acceptsStringButtons(),
+              "INPUT：只接受整数按钮");
+        d.clickAt(0, 0);
+        check(!dStrSubmitted && dInt == -1, "INPUT + 字符串按钮 -> 忽略（不交付、不推进世代）");
+
+        // 3) 整数输入（INPUT）+ 整数按钮 -> 仍是 inputSubmitted（不回归）
+        ConsoleBackend e;
+        int eInt = -1;
+        bool eStrSubmitted = false;
+        QObject::connect(&e, &ConsoleBackend::inputSubmitted,
+                         [&](qint64 v) { eInt = static_cast<int>(v); });
+        QObject::connect(&e, &ConsoleBackend::inputSubmittedString,
+                         [&](const QString&) { eStrSubmitted = true; });
+        e.printButton("[1] 选择一", 1);
+        e.newline();
+        e.notifyInputRequested("INPUT");
+        e.clickAt(0, 0);
+        check(eInt == 1 && !eStrSubmitted, "INPUT + 整数按钮 -> inputSubmitted(1)");
+
+        // 4) INPUTANY（AnyValue）：字符串按钮仍交字符串（不被整数通道吞掉）
+        ConsoleBackend f;
+        int fInt = -1;
+        QString fStr;
+        QObject::connect(&f, &ConsoleBackend::inputSubmitted,
+                         [&](qint64 v) { fInt = static_cast<int>(v); });
+        QObject::connect(&f, &ConsoleBackend::inputSubmittedString,
+                         [&](const QString& v) { fStr = v; });
+        f.printButtonStr("[任意]", "任意值");
+        f.newline();
+        f.notifyInputRequested("INPUTANY");
+        check(f.acceptsIntegerButtons() && f.acceptsStringButtons(),
+              "INPUTANY：两种按钮都接受");
+        f.clickAt(0, 0);
+        check(fStr == QString::fromUtf8("任意值") && fInt == -1,
+              "INPUTANY + 字符串按钮 -> inputSubmittedString");
+    }
+
     // ---- 菜单项 `[n]` 自动变按钮（对齐 C# ButtonStringCreator）----
     qDebug() << "\n菜单按钮";
     {
@@ -310,6 +386,34 @@ int main(int argc, char* argv[]) {
         const ConsoleDisplayLine& l = c.buffer().at(0);
         check(l.segments.size() == 2, "两个 PRINTBUTTON -> 2 段");
         check(l.segments.at(0).intValue == 4 && l.segments.at(1).intValue == 2, "值 4/2");
+    }
+
+    // ---- 资源名解析不到 -> imageResolutionFailed（引擎据此落可定位诊断）----
+    // 资源名多是运行期插值出来的，装载期静态不可判；所以「打了不存在的资源」
+    // 由区块生成点（pinImage 失败）上报，EraEngine 拼当前执行位置写日志。
+    qDebug() << "\n缺图留痕";
+    {
+        ConsoleBackend c;
+        QStringList missing;
+        QObject::connect(&c, &ConsoleBackend::imageResolutionFailed,
+                         [&missing](const QString& n) { missing << n; });
+        c.printImage(QStringLiteral("NO_SUCH_RESOURCE"), 100, 100);
+        c.newline();
+        check(missing == QStringList{QStringLiteral("NO_SUCH_RESOURCE")},
+              "PRINTIMG 打了不存在的资源 -> imageResolutionFailed(资源名)");
+
+        missing.clear();
+        c.reportMissingImage(QString());
+        check(missing.isEmpty(), "空资源名不报缺图（<img> 没写 src 是排版问题）");
+
+        // 资源在位（运行期精灵）时不得报：钉住成功 = 真的能画
+        GraphicsStore::gCreate(9101, 2, 2);
+        GraphicsStore::spriteCreate(QStringLiteral("present_img"), 9101);
+        c.printImage(QStringLiteral("present_img"), 100, 100);
+        c.newline();
+        check(missing.isEmpty(), "资源存在时不报缺图");
+        GraphicsStore::clearAll();
+        ResourceImageProvider::clearPinnedImages();
     }
 
     qDebug() << "\n最小单位区块 / 图 / 形";

@@ -478,17 +478,18 @@ QImage ResourceImageProvider::loadResourceImage(const QString& id) {
     return image;
 }
 
-void ResourceImageProvider::pinImage(const QString& id) {
+bool ResourceImageProvider::pinImage(const QString& id) {
     const QString name = normalizeId(id);
-    if (name.isEmpty()) return;
+    if (name.isEmpty()) return false;
     // 运行期精灵 → 静态资源图集/文件（与 requestImage 同一解析顺序）
     QImage image = GraphicsStore::spriteImage(name);
-    if (image.isNull()) return;
+    if (image.isNull()) return false;
     QMutexLocker lock(&pinnedMutex());
     // 同一像素（cacheKey 相同）不重复搬运；精灵被重建/同名文件换了内容时刷新。
     const QImage* existing = pinnedCache().object(name);
-    if (existing && existing->cacheKey() == image.cacheKey()) return;
+    if (existing && existing->cacheKey() == image.cacheKey()) return true;
     pinnedCache().insert(name, new QImage(std::move(image)));
+    return true;
 }
 
 void ResourceImageProvider::clearPinnedImages() {

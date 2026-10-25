@@ -238,6 +238,14 @@ QString EraDBusDebug::listButtons() {
     return out.join(QLatin1Char('\n'));
 }
 
+// 点中按钮：坐标口径与 listButtons 相同（[行,段]），入口与 QML 相同（clickAt）。
+// 返回值只回显请求坐标；「点了有没有效果」由随后的 state 判断。
+QString EraDBusDebug::clickButton(int lineIndex, int segmentIndex) {
+    if (!m_engine || !m_engine->getConsole()) return QStringLiteral("no console");
+    m_engine->getConsole()->clickAt(lineIndex, segmentIndex);
+    return QStringLiteral("clicked [%1,%2]").arg(lineIndex).arg(segmentIndex);
+}
+
 // 「文件 > 打开目录…」（Main.qml 的 FolderDialog 赋值 eraEngine.gameDirectory）
 // 的脚本等价物：装载该目录并走 scriptsLoaded -> runSystem()（标题画面）。
 // 有了它，无参启动的 GUI 也能被 D-Bus 指到任意游戏目录（自动化/性能测试用）。

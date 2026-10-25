@@ -89,8 +89,11 @@ public:
     // ResourceImageProvider::setRoot("") + GraphicsStore::clearAll()，
     // 于是 QUIT 之后才被请求的那一屏图片全部「Failed to get image from provider」。
     // 所以区块生成时必须先把像素钉住（pin），requestImage 优先取钉住的副本。
-    // 解析不到时什么都不做（C# 同：退化成 AltText）。
-    static void pinImage(const QString& id);
+    // 返回 true = 资源存在且像素已在手上；false = **解析不到**（C# 同：退化成
+    // AltText）。返回值的唯一消费者是 ConsoleBackend 的 imageResolutionFailed：
+    // 引擎自己知道当前执行位置，所以「取不到图」由引擎报一条可定位的诊断，
+    // 而不是只让 QML 打 "Failed to get image from provider"。
+    [[nodiscard]] static bool pinImage(const QString& id);
     // 控制台清屏（clearAll/CLEAR）后没有任何区块引用这些像素，全部释放。
     static void clearPinnedImages();
 

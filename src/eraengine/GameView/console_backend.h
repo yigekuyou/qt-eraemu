@@ -272,8 +272,13 @@ public:
     void setFramePacingAttached(bool attached);
     // QML 控制台把「舞台变更处理完毕」回报到这里 -> 放行限时输入的计时器
     Q_INVOKABLE void notifyFramePresented();
-    [[nodiscard]] bool acceptsIntegerButtons() const;
-    [[nodiscard]] bool acceptsStringButtons() const;
+    // ---- 输入类型 ↔ 按钮类型的裁决（**唯一事实**）----------------------------
+    // C# EmueraConsole.SelectedString（任意类型按钮都接受，整数按钮交
+    // Input.ToString()）/ SelectedInteger（只在字符串按钮上返回 null）。
+    // clickAt 与 QML 的 clickable（经下面两个只读属性）都从这里取值。
+    [[nodiscard]] bool buttonValueAccepted(bool isIntegerButton) const;
+    [[nodiscard]] bool acceptsIntegerButtons() const { return buttonValueAccepted(true); }
+    [[nodiscard]] bool acceptsStringButtons() const { return buttonValueAccepted(false); }
     [[nodiscard]] bool waitingInput() const { return m_waitingInput; }
     [[nodiscard]] quint64 generation() const { return m_generation; }
     [[nodiscard]] int gridColumns() const { return m_layout.gridColumns(); }
@@ -296,6 +301,9 @@ public:
     Q_INVOKABLE void printButtonStr(const QString& text, const QString& value, const QString& tooltip = QString());
     // 内联图（C# PrintImg / <img>）：只给资源名与目标像素尺寸，QML 侧 Image 自己加载
     Q_INVOKABLE void printImage(const QString& resourceName, int width = 0, int height = 0, int ypos = 0);
+    // 资源名解析不到（<img src>/PRINTIMG 打了不存在或拼错的资源）时的留痕。
+    // 名字之外**不**携带位置：位置是引擎的事实（EraEngine 从 m_parseTable 取）。
+    void reportMissingImage(const QString& resourceName);
     // 图形（C# PrintShape / <shape>）：type ∈ space/rect/polygon，param 为百分比
     Q_INVOKABLE void printShape(const QString& type, const QList<int>& params);
     // OUTPUTLOG（C# Console.OutputLog）：把全部显示行文本写进 path
@@ -370,6 +378,9 @@ public:
     void notifyReuseLastLine(const QString& text);
     // ---- QML 调用 ----
     Q_INVOKABLE void clickAt(int lineIndex, int segmentIndex);
+    // 按钮命中后的提交形态（clickAt 专用）：由**等待的输入类型**决定，
+    // 不由按钮形态决定 —— 字符串型等待收到整数按钮时交十进制文本。
+    void submitButton(const ConsoleSegment& button);
     Q_INVOKABLE void submitMouseKey(int type, int r1, int r2, int r3, int r4);
     // QML 键盘入口：直接上报 Qt 键码与 Qt 修饰符（KeyEvent.key /
     // KeyEvent.modifiers），由 C++ 的键码模型（GameView/key_map.h）换算成
@@ -418,6 +429,9 @@ signals:
     void mouseKeySubmitted(int type, int r1, int r2, int r3, int r4);
     void inputSubmitted(qint64 value);
     void inputSubmittedString(const QString& value);
+    // 区块生成时资源解析不到（pinImage 失败）。消费点：EraEngine 的连接
+    // （拼当前执行位置 + 去重后写运行期日志）。装载期告警**不**收这条。
+    void imageResolutionFailed(const QString& resourceName);
     // CLEARTEXTBOX：QML 输入栏清空请求（C# Console.ClearTextBox）
     void clearTextBoxRequested();
     // EE SETTEXTBOX：输入栏整体替换为指定文本（C# MainWindow.ChangeTextBox）

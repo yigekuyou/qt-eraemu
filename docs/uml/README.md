@@ -572,16 +572,55 @@ plantuml -txmi docs/uml/01-load-classes.puml
   与 `ExpressionLexer::setAllowSingleQuotation`（两条未接线的功能分支的唯一开关）。
   验收：`-Werror` 0 warning、`ctest` 71/71、五语料 md5 与基线一致、被删符号全树剩余引用
   逐个归零（`VariableToken` 剩 4 处全是注释里的 C# 类型名）。
-  发现待办（未修，记账）：`test/dump_lines` 的 `--parallel` 开关在 `2c8a1fa` 把默认改回并行后
-  已成**无操作**（`setParallelLoad(true)` 与默认同值），文件头注释仍写「默认串行」—— 应改成
-  `--serial` 语义或删掉开关。
+  待办（次日了结）：`test/dump_lines` 的 `--parallel` 开关在 `2c8a1fa` 把默认改回并行后
+  已成**无操作**（`setParallelLoad(true)` 与默认同值）—— 已改成 `--serial` 语义（开关必须指向
+  **非默认值**才算真开关），文件头注释同步。
+
+- **`@"…"` 是表达式，不是原文；「按值取串」只能有一条路**：`ExpressionEvaluator::argStr()` 曾经对
+  `StrFormNode` 直接返回 `rawText()`（同一份文本的**第二份副本**），于是「FORM 专用路径」与「普通
+  字符串路径」各自解释同一个实参 —— `SPRITECREATE @"%出力スプライト名%"` 建出的精灵名是字面量
+  `%出力スプライト名%` 而不是展开值。症状出现在控制台之外：`DRAW_PORTRAIT` 拼出的
+  `<img src='FACE_{CHARA_ID}'>` 指向一个**从未以该名字建出来的精灵**，QML 只打
+  `Failed to get image from provider: image://emuera/FACE_1`（用户看到的是「最后那一屏点不动」）。
+  修法：删掉取值旁路与 `StrFormNode::rawText` 字段本身（含 `astJson` 的 `rawText` 键、
+  `cloneExpression` 透传、`StrFormParser` 的第二实参），`S()`/`FORM()`/`EVALSTR()` 三个 lambda
+  收成一个 `S()`（它们原本等价，只是因为旁路才被迫分开）。**判据**：一个表达式节点只能有一个值
+  来源；「原文」一旦能被当值读出来，就等于给同一事实留了第二份副本。
+- **输入类型 ↔ 按钮类型只有一张裁决表**：`BINPUTS`（字符串输入）那一屏的按钮是整数按钮
+  （`[名前]`=10000 / `[取消]`=30000），移植侧曾把规则写成「按钮类型必须与输入类型相同」→ QML
+  `clickable` 恒 false、点了没有任何反应。C# 的规则不对称：`SelectedString`（字符串输入）**接受
+  任意按钮**（整数按钮交 `Input.ToString()`），只有 `SelectedInteger` 才拒绝字符串按钮。现在规则
+  只住在 `ConsoleBackend::buttonValueAccepted(bool isIntegerButton)`，`clickAt` 的准入与 QML 的
+  两个只读属性都从它取值；提交形态由 `submitButton()` 一处决定（跟随**等待的输入类型**，不跟随
+  按钮形态）。
+- **运行期资源缺失 = 引擎诊断，不是 QML 噪音**：资源名绝大多数是运行期插值（`@"FACE_{CHARA_ID}"`），
+  静态不可判 —— 若在装载期拿图集校验，`SPRITECREATE` 造出来的运行期精灵会被误报。正确落点：
+  `ResourceImageProvider::pinImage()` 改返回 `bool`（`[[nodiscard]]`，逼每个调用点表态），
+  `ConsoleBackend` 失败时 `emit imageResolutionFailed(name)`（名字之外**不**带位置），`EraEngine`
+  用 parse table 自己的游标（`lineAt(currentScript(), currentLine())->position`）拼
+  `[img] 未找到资源 "X" 位置 文件:行`，按 (位置, 名字) 去重。位置只有一份（`LogicalLine::position`），
+  且这条日志**不进**装载期告警切片 —— 否则五语料基线会被运行期事件污染。
+- **EE 内置角色变量的初值也是尺寸事实**：`DOWNBASE/CUP/CDOWN` 是 EmueraEM+EE 的内置角色数值变量，
+  C# 给**所有**角色数值变量的初值是 `CharacterIntArrayLength[i] = 100`（只有 TALENT/CFLAG=1000、
+  JUEL/GOTJUEL=200 与 PALAM 取 CSV 名表条数另有覆盖）。移植侧从未登记这三条 → 每角色块长回落成 1
+  → eraTW 里一切 `CUP:x:11`、`DOWNBASE:x:1` 的写都走「越界（忽略）」**静默丢数据**（一处真实运行
+  日志里同类告警 354 条）。补齐到 `VariableConfig::loadDefaults()`（「VariableSize.csv 缺省值」的
+  唯一事实），不新增表：`CUP:0:11` 现在写得进读得回；连带 `VARSIZE(CUP)=100`、
+  `updateAfterShowUsercom` 的归零真正覆盖 100 格、存档里这三个数组长度字段 `0 → 100`（golden md5
+  已记账）。顺带一条反例（**不改**）：eraTW `OPTION.ERB` 的 `CLEARLINE 10 + LOCAL:1` 与它实际
+  打印的 9 行固定行差 1（汉化版把 `[96]` 那行注释掉了），点任意选项会多删上方一行；C# `deleteLine`
+  同样按逻辑行计数，行为一致 —— **脚本 off-by-one，不是移植侧回归**（探针证明端口删的物理行数 ==
+  脚本请求数）。
+- **假开关的定义**：开关指向它本该改变的那个非默认值才算开关。`dump_lines --parallel` 在默认改回
+  并行后 `setParallelLoad(true)` 与默认同值 → 无操作；改成 `--serial`（传 `false`）后它才真的切到
+  「串行装载」这另一半，`setParallelLoad` 本身保留（串行/并行结果一致这条契约的唯一入口）。
 
 ## 回归基线
 
 `dump_warnings` 五语料（`eraTW` / `eraMegaten` / `eraTetris` / `FL3.8` / `ecd`）：
 **6 / 1 / 0 / 0 / 0** 行（`eraMegaten` 的目录参数必须是 `eraMegaten/data`；用错路径会得到
 0 字节的假基线），与 `/tmp/uml-baseline/*.raw.txt` **未排序**逐字节相同。
-累计六十三个重构（身份整数化 / 全定型 / 作用域显式化 / 只读收尾外移 / 存档独立映射 /
+累计六十四个重构（身份整数化 / 全定型 / 作用域显式化 / 只读收尾外移 / 存档独立映射 /
 私有名表前移 / 存档顺序确定性 / 写收尾外移 / 标记区外移 / 位置区外移 /
 标签归属单一索引 / 诊断切片幂等 / 常数作用域参数化 / 增量装载协议显式化 /
 GOTO 段身份入索引 / 静态检查用段身份 / 删第三张裸名表 / 错误去重 / 配对语法只判一次 /
@@ -610,7 +649,9 @@ GOTO 段身份入索引 / 静态检查用段身份 / 删第三张裸名表 / 错
  零调用点符号不是「留着待用」而是「第二个入口的邀请」（装载器调参旁路 + 两个永不发射的信号 /
  CsvLoader 的第二读盘入口 / TOOLTIP 七字段副本按字段拆分 /
  配置键表合一（键/默认值/类型/英文别名一张表）/ 舞台尺寸只剩一处（QML 只缩放）/
- 「有调用点」不等于「有消费者」（判据改到生产路径，删 21 个测试专用符号含 VariableToken 整类））
+ 「有调用点」不等于「有消费者」（判据改到生产路径，删 21 个测试专用符号含 VariableToken 整类）/
+ `@"…"` 只有求值一条取值路径（删 StrForm 原文副本）/ 输入类型↔按钮类型一张裁决表 /
+ 运行期资源缺失带 文件:行（不进装载期告警）/ EE 内置角色变量初值 100（CUP/DOWNBASE/CDOWN））
  前后完全一致；
 `ctest` 48 → 71（新增 `test_parse_checks` / `test_save_variable_map` / `test_private_scope_table` /
 `test_load_contracts` / `test_save_variable_map_hashseed` / `test_jump_markings` /

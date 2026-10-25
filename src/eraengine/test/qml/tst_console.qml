@@ -953,24 +953,38 @@ TestCase {
         spy.destroy();
     }
 
-    function test_stringWaitDisablesIntegerBackgroundButtons() {
+    // 「字符串等待时整数按钮不可点」曾经是**写反的**规则：C# EmueraConsole.SelectedString
+    // 接受任意按钮（整数按钮的 Inputs = 十进制文本），只有 SelectedInteger 才拒
+    // 字符串按钮。这里按 C# 语义核对：整数背景按钮在 TINPUTS 下可点，点击交 "0"。
+    function test_stringWaitKeepsIntegerButtonsClickable() {
         backend.clearAll();
         backend.printButton("                                                                                ", 0);
         backend.newline();
         consoleFixture.request(backend, "TINPUTS");
         backend.flush(); view.syncView();
+
+        const spy = Qt.createQmlObject('import QtTest 1.0; SignalSpy {}', tc);
+        spy.target = backend;
+        spy.signalName = "inputSubmittedString";
+
         const item = view.blockAt(0, 0);
         verify(item !== null && item.blockData.isButton === true);
         compare(item.blockData.isInteger, true);
-        compare(item.clickable, false, "字符串等待时整数背景按钮不可点击");
-        compare(item.hovered, false, "整数背景按钮不可高亮");
+        compare(item.clickable, true, "字符串等待时整数背景按钮可点击（C# SelectedString）");
+
+        const mouse = findChild(item, "blockButtonMouse");
+        verify(mouse !== null, "按钮没有命中区");
+        mouseClick(mouse, 2, mouse.height / 2);
+        compare(spy.count, 1, "点击整数按钮交付字符串");
+        compare(spy.signalArguments[0][0], "0", "交付按钮值的十进制文本");
 
         backend.clearAll();
         backend.printButton("next", 1);
         backend.newline();
         backend.flush(); view.syncView();
-        compare(view.blockAt(0, 0).clickable, false,
-                "字符串等待时整数菜单按钮也不可点击");
+        compare(view.blockAt(0, 0).clickable, true,
+                "字符串等待时整数菜单按钮同样可点");
+        spy.destroy();
         consoleFixture.finishInput(backend);
     }
 

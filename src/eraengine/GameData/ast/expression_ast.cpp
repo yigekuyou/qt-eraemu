@@ -176,7 +176,6 @@ QJsonObject astJson(const ExpressionNode& node) {
         if (n.elseExpr()) children.append(astJson(*n.elseExpr()));
     } else if (node.kind() == NodeKind::StrForm) {
         const auto& n = static_cast<const StrFormNode&>(node);
-        if (!n.rawText().isNull()) out.insert(QStringLiteral("rawText"), n.rawText());
         for (const auto& part : n.parts()) {
             QJsonObject p;
             p.insert(QStringLiteral("part"), part.type == StrFormPartType::Text ? QStringLiteral("text") : QStringLiteral("expression"));
@@ -515,8 +514,8 @@ QString IfNode::toString() const {
 // ---------------------------------------------------------------------------
 // StrFormNode
 // ---------------------------------------------------------------------------
-StrFormNode::StrFormNode(QList<StrFormPart> parts, QString rawText)
-    : m_parts(std::move(parts)), m_rawText(std::move(rawText)) {}
+StrFormNode::StrFormNode(QList<StrFormPart> parts)
+    : m_parts(std::move(parts)) {}
 
 QString StrFormNode::toString() const {
     QString s = QStringLiteral("StrForm(");
@@ -590,7 +589,7 @@ QSharedPointer<ExpressionNode> cloneExpression(const QSharedPointer<ExpressionNo
         const auto& form = static_cast<const StrFormNode&>(*node);
         QList<StrFormPart> parts = form.parts();
         for (auto& p : parts) { p.expression = cloneExpression(p.expression); p.width = cloneExpression(p.width); }
-        return QSharedPointer<StrFormNode>::create(parts, form.rawText());
+        return QSharedPointer<StrFormNode>::create(parts);
     }
     }
     return {};

@@ -309,5 +309,5 @@ QSharedPointer<StrFormNode> StrFormParser::parse(const QString& text, const Expr
         b.parts.append(StrFormPart::makeText(QString()));
     }
 
-    return QSharedPointer<StrFormNode>::create(b.parts, text);
+    return QSharedPointer<StrFormNode>::create(b.parts);
 }

@@ -290,7 +290,8 @@ int main(int argc, char* argv[]) {
         check(!prov.requestImage(QStringLiteral("pinned"), &size, QSize()).isNull(),
               "钉住前：资源根在位时可取图");
 
-        ResourceImageProvider::pinImage(QStringLiteral("pinned"));
+        check(ResourceImageProvider::pinImage(QStringLiteral("pinned")),
+              "pinImage 返回值：解析到资源 -> true（ConsoleBackend 据此决定是否报缺图）");
         ResourceImageProvider::setRoot(QString());        // 模拟 QUIT/closeGame 卸载资源
         const QImage afterQuit = prov.requestImage(QStringLiteral("pinned"), &size, QSize());
         check(!afterQuit.isNull() && afterQuit.size() == QSize(4, 4),
@@ -301,6 +302,8 @@ int main(int argc, char* argv[]) {
         ResourceImageProvider::clearPinnedImages();       // 控制台清屏
         check(prov.requestImage(QStringLiteral("pinned"), &size, QSize()).isNull(),
               "清屏后：钉住的副本已释放（不常驻）");
+        check(!ResourceImageProvider::pinImage(QStringLiteral("no_such_resource")),
+              "pinImage 返回值：解析不到 -> false（唯一消费者据此报 [img] 诊断）");
     }
     {
         // 运行期精灵（SPRITECREATE）：C# 的 ConsoleImagePart 同样持有像素，
@@ -309,7 +312,8 @@ int main(int argc, char* argv[]) {
         GraphicsStore::gCreate(9001, 4, 4);
         GraphicsStore::gClear(9001, QColor(0, 128, 255));
         GraphicsStore::spriteCreate(QStringLiteral("pinned_sprite"), 9001);
-        ResourceImageProvider::pinImage(QStringLiteral("pinned_sprite"));
+        check(ResourceImageProvider::pinImage(QStringLiteral("pinned_sprite")),
+              "运行期精灵同样能钉住（pinImage 返回 true）");
         GraphicsStore::clearAll();                        // 模拟 RESETDATA
         ResourceImageProvider prov;
         QSize size;

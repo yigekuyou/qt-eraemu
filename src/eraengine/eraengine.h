@@ -22,6 +22,7 @@
 #include <QTimer>
 #include <memory>
 #include <QVariantList>
+#include <QSet>
 #include <QFuture>
 #include <QFutureWatcher>
 #include <QtConcurrent/QtConcurrentRun>
@@ -338,6 +339,9 @@ private:
     EraParseTable m_parseTable;
     ScriptRunner m_scriptRunner;
     ConsoleBackend m_console;
+    // 运行期「资源名解析不到」的去重键（位置 + 名字）：同一行同一名字只报一次。
+    // 只在 m_console 的 imageResolutionFailed 连接里读写，与装载期告警无关。
+    QSet<QString> m_reportedMissingImages;
     GuiManager m_guiManager;
     AudioPipelinePool m_audio;   // 音频播放管线池（扩展登记数量，QML 维护播放）
     

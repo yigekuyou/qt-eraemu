@@ -535,9 +535,9 @@ struct StrFormPart {
 
 class StrFormNode : public ExpressionNode {
 public:
-    // rawText 是该节点对应的原始 FORM 文本；parts 是同一文本在装载期生成的
-    // 可执行结构。读取原始参数时使用 rawText()，求值时使用本节点本身。
-    explicit StrFormNode(QList<StrFormPart> parts, QString rawText = {});
+    // parts 是该 FORM 文本在装载期生成的可执行结构（唯一事实：原文已按
+    // 文本/表达式/宽度拆开，运行时只求值，不再解析任何源文本）。
+    explicit StrFormNode(QList<StrFormPart> parts);
 
     [[nodiscard]] NodeKind kind() const noexcept override { return NodeKind::StrForm; }
     [[nodiscard]] QString toString() const override;
@@ -546,11 +546,8 @@ public:
     [[nodiscard]] const QList<StrFormPart>& parts() const { return m_parts; }
     [[nodiscard]] bool isConst() const;   // 所有内嵌表达式均为字面量（供常量折叠）
 
-    [[nodiscard]] const QString& rawText() const { return m_rawText; }
-
 private:
     QList<StrFormPart> m_parts;
-    QString m_rawText;
 };
 
 // 校验结果：message 为空 = 通过；indexKind 非空 = 该失败是 index_bounds 的

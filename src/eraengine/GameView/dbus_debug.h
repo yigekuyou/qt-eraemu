@@ -68,6 +68,11 @@ public Q_SLOTS:  // ---- 检查 ----
     QString stopFrameCapture();                   // 停止每帧抓取，返回状态说明
 public Q_SLOTS:  // ---- 控制 ----
     QString openDirectory(const QString& path);  // 等价「文件 > 打开目录…」：装载并进入标题画面
+    // 等价「点中屏幕上的按钮」。坐标与 listButtons 的输出同一口径（[行,段]，
+    // 都是模型行号/段下标），走的是 QML 点击完全相同的入口
+    // ConsoleBackend::clickAt —— sendInput 是**键盘输入**，不经过按钮裁决，
+    // 所以「字符串输入时整数按钮点不动」这类问题只能靠这条路径复现。
+    QString clickButton(int lineIndex, int segmentIndex);
     void sendInput(qint64 value);         // 等价键入整数（INPUT/TINPUT…）
     void sendInputString(const QString& text);
     void sendAnyKey();                    // 等价回车/点击继续（WAIT 系）

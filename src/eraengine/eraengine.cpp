@@ -105,6 +105,7 @@ void EraEngine::clearLoadedGame() {
         m_expressionEvaluator.setConstArrayProvider({});
         m_expressionEvaluator.setConstArrayChecker({});
         m_parseTable.clear();
+        m_reportedMissingImages.clear();
         m_variableStorage.clearForReload();
         m_constantTable.clear();
         m_gameBaseData.clear();
@@ -627,6 +628,29 @@ EraEngine::EraEngine(QObject *parent)
 				[this](qint64 value) { provideInput(value); });
 		connect(&m_console, &ConsoleBackend::inputSubmittedString, this,
 				[this](const QString& value) { provideInputString(value); });
+		// ---- 运行期诊断：资源名解析不到 ------------------------------------
+		// 资源名绝大多数是运行期插值出来的（`@"FACE_{CHARA_ID}"`），静态不可判，
+		// 所以不做装载期校验；但引擎自己知道**当前执行位置**，就在这里把
+		// 「打了不存在的资源」落成一条可定位的运行期日志。只写日志，不进
+		// ParseDiagnostics 的装载期告警切片（否则五语料告警基线会被打破）。
+		// 去重键 = 位置 + 名字：同一行同一名字只报一次。
+		connect(&m_console, &ConsoleBackend::imageResolutionFailed, this,
+				[this](const QString& resourceName) {
+			// 位置取当前逻辑行自己的 position（与 D-Bus state 的取值同源：
+			// PC = currentScript()/currentLine()）。
+			const LogicalLine* line = m_parseTable.lineAt(m_parseTable.currentScript(),
+			                                             m_parseTable.currentLine());
+			const QString at = line
+				? line->position.filename + QLatin1Char(':')
+				      + QString::number(line->position.lineNumber)
+				: QStringLiteral("<未知位置>");
+			const QString key = at + QLatin1Char('\n') + resourceName;
+			if (m_reportedMissingImages.contains(key)) return;
+			m_reportedMissingImages.insert(key);
+			// 单词 .arg(name, at)：位置里出现 %2/%3 也只会被当成字面量。
+			qWarning().noquote() << QStringLiteral("[img] 未找到资源 \"%1\" 位置 %2")
+			                            .arg(resourceName, at);
+		});
 		
 		// Connect ErbLoader to ParseTable for parsing notifications
 		m_executionEngine.getErbLoader().setParseTable(&m_parseTable);

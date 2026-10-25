@@ -169,6 +169,15 @@ void VariableConfig::loadDefaults()
     variableSizes["GOTJUEL"] = VariableSizeInfo{200, QPair<int, int>(), QVector<int>(), false, false};
     variableSizes["NOWEX"] = VariableSizeInfo{100, QPair<int, int>(), QVector<int>(), false, false};
     variableSizes["TCVAR"] = VariableSizeInfo{1000, QPair<int, int>(), QVector<int>(), false, false};
+    // EE（EmueraEM+EE）内置的角色数值变量：C# 侧 `CharacterIntArrayLength[i] = 100`
+    // 是**所有角色数值变量**的初值（emuera.em ConstantData.cs:204），只有
+    // TALENT/CFLAG(1000)、JUEL/GOTJUEL(200) 与 PALAM/JUEL（= CSV 名表条数）另有覆盖；
+    // DOWNBASE/CUP/CDOWN 没有任何覆盖，就停在 100。漏登记这三条会让「每角色块长」
+    // 回落成 1（declaredShapeOfKey 空形状 -> charaGeometry 的 elementCount 兜底 1），
+    // 于是 eraTW 的 `CUP:x:11`、`DOWNBASE:x:1` 一律「越界（忽略）」被静默丢弃。
+    variableSizes["DOWNBASE"] = VariableSizeInfo{100, QPair<int, int>(), QVector<int>(), false, false};
+    variableSizes["CUP"] = VariableSizeInfo{100, QPair<int, int>(), QVector<int>(), false, false};
+    variableSizes["CDOWN"] = VariableSizeInfo{100, QPair<int, int>(), QVector<int>(), false, false};
     
     // 1D character string variables
     variableSizes["CSTR"] = VariableSizeInfo{100, QPair<int, int>(), QVector<int>(), false, false};

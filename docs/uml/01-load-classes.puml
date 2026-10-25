@@ -240,6 +240,9 @@ package "GameData" {
     + getSize2D(name) : QPair
     + getSize3D(name) : QVector
     + loadFromText(text) : bool
+    ' loadDefaults() = VariableSize.csv 缺省值的唯一事实（PALAM 200 / CFLAG 1000 /
+    ' EE 内置角色变量 DOWNBASE・CUP・CDOWN = 100，对齐 C# CharacterIntArrayLength 初值）。
+    ' 漏登记 = 每角色块长回落成 1 -> `CUP:x:11` 一律「越界（忽略）」，静默丢数据。
   }
 
   class AstBuilder {

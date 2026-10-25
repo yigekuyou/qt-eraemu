@@ -233,6 +233,20 @@ int main(int argc, char* argv[]) {
               QStringLiteral("VARSIZE(TA) == %1（旧实现 0）").arg(ta.at(0)));
         check(vs.shapeOf(QStringLiteral("TA"), eravar::kGlobalScope).lengthOf(2) == ta.at(2),
               QStringLiteral("VARSIZE(TA,2) == %1").arg(ta.at(2)));
+        // EE 内置角色数值变量：C# CharacterIntArrayLength 初值 100（无 CSV 覆盖）。
+        // 漏登记 -> declaredShapeOfKey 空形状 -> 每角色块长兜底 1 -> eraTW 的
+        // `CUP:x:11` 被「越界（忽略）」静默丢弃（数据丢失）。
+        for (const char* eeName : {"DOWNBASE", "CUP", "CDOWN"}) {
+            const QString n = QString::fromLatin1(eeName);
+            check(cfg.getSize1D(n) == 100, QStringLiteral("EE 角色变量 %1 默认长度 100（实得 %2）")
+                                              .arg(n).arg(cfg.getSize1D(n)));
+        }
+        vs.setCharaInt(QStringLiteral("CUP"), 0, 11, 777);
+        check(vs.getCharaInt(QStringLiteral("CUP"), 0, 11) == 777,
+              QStringLiteral("CUP:0:11 写读回 777（尺寸为 1 时此处被丢弃，读回 0）"));
+        vs.setCharaInt(QStringLiteral("DOWNBASE"), 0, 1, 555);
+        check(vs.getCharaInt(QStringLiteral("DOWNBASE"), 0, 1) == 555,
+              QStringLiteral("DOWNBASE:0:1 写读回 555"));
         // 系统 2D 的第 2 维（旧实现 dim==2 分支会落到 getSize3D）。
         const QPair<int, int> da = cfg.getSize2D(QStringLiteral("DA"));
         check(vs.shapeOf(QStringLiteral("DA"), eravar::kGlobalScope).lengthOf(1) == da.second,

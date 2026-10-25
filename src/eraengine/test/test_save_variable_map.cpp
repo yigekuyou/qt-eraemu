@@ -13,7 +13,8 @@
 //   4) 映射表本身的内容（名字 / 身份 / 容器 / 形状）与 (slot, 大写名) 结构序。
 //
 // 新 golden（2026-10-22 重算）的 md5：
-//   normal-new.bin  d3b24b4570a8bf4893b60b1e3ec1eb91（23886 字节）：
+//   normal-new.bin  fb08824496a878642b6ca13b87bfccc2（23886 字节；2026-10-25 重算：
+//                   DOWNBASE/CUP/CDOWN 的长度字段 0 -> 100，仅 6 字节不同）：
 //                   与上版 golden 只差版本字段（1808 -> 1809）—— 本夹具没有
 //                   函数私有 savedata 声明，条目名一个都没变（cmp 逐字节核对）；
 //   global-new.bin  07bb540a2ab8c2e415a49dd5f4f1c9f3（98 字节）：同样只差版本字段；

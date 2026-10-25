@@ -388,8 +388,8 @@ void ConsoleBackend::renderTemplate(const PrintTemplate& output, bool toBuffer) 
             // C# ConsoleImagePart 在解析期就取到图像并持有；移植侧 QML 异步按名取图，
             // 所以这里先把像素钉住：QUIT（closeGame -> setRoot("")+GraphicsStore 清空）
             // 之后仍能画出最后一屏的 <img>（否则 "Failed to get image from provider"）。
-            ResourceImageProvider::pinImage(part.text);
-            if (!span.imageButton.isEmpty()) ResourceImageProvider::pinImage(span.imageButton);
+            reportMissingImage(part.text);
+            if (!span.imageButton.isEmpty()) reportMissingImage(span.imageButton);
             span.altText = QStringLiteral("<img src='%1'>").arg(part.text);
             // 资源固有像素尺寸（布局期算纵横比用）；取不到则为空。
             // 只在**宽度缺省**时才查（立絵常态是「只给 height」或「都不给」）：
@@ -678,6 +678,15 @@ void ConsoleBackend::printButtonStr(const QString& text, const QString& value, c
     markDirty();
 }
 
+// 区块生成时钉住像素；解析不到就把**资源名**交给上层（EraEngine 用当前执行
+// 位置落一条可定位诊断）。空名字不算「缺资源」（`<img>` 没写 src 是排版问题，
+// 不是资源问题）。
+void ConsoleBackend::reportMissingImage(const QString& resourceName) {
+    if (resourceName.isEmpty()) return;
+    if (!ResourceImageProvider::pinImage(resourceName))
+        emit imageResolutionFailed(resourceName);
+}
+
 void ConsoleBackend::printImage(const QString& resourceName, int width, int height, int ypos) {
     if (resourceName.isEmpty()) return;
     ensureLineOpen();
@@ -688,7 +697,7 @@ void ConsoleBackend::printImage(const QString& resourceName, int width, int heig
     part.imageSize = QSizeF(width, height);
     part.yposRaw = ypos;               // 字号百分比的纵向偏移（measurePart 折算成像素）
     // 同 <img> 路径：区块生成时钉住像素（C# ConsoleImagePart 的 cImage 语义）
-    ResourceImageProvider::pinImage(resourceName);
+    reportMissingImage(resourceName);
     // 与 `<img>` 路径同源：固有尺寸供布局期补宽度；两个宽高都缺省时按固有像素排版。
     int iw = 0, ih = 0;
     if (width <= 0 && ResourceImageProvider::intrinsicSize(resourceName, iw, ih))
@@ -1039,12 +1048,16 @@ void ConsoleBackend::notifyFramePresented() {
     emit framePresented();
 }
 
-bool ConsoleBackend::acceptsIntegerButtons() const {
-    return m_waitingInput && (inputAcceptsAny(m_inputKind) || !inputExpectsString(m_inputKind));
-}
-
-bool ConsoleBackend::acceptsStringButtons() const {
-    return m_waitingInput && (inputAcceptsAny(m_inputKind) || inputExpectsString(m_inputKind));
+// 输入类型 ↔ 按钮类型的裁决（**唯一事实**，clickAt / QML clickable 都读它）。
+// 对齐 C# EmueraConsole：
+//   SelectedString（:319-337）接受**任意**按钮 —— 整数按钮返回其 Input.ToString()；
+//   SelectedInteger（:1700-1706）才拒绝字符串按钮。
+// 所以：字符串输入**不**拒绝整数按钮（此前写反了，BINPUTS 那一屏的 [取消] 点不动）。
+bool ConsoleBackend::buttonValueAccepted(bool isIntegerButton) const {
+    if (!m_waitingInput) return false;
+    if (inputAcceptsAny(m_inputKind)) return true;   // INPUTANY：两种按钮都收
+    if (isIntegerButton) return true;                // 整数按钮：任何输入类型都收
+    return inputExpectsString(m_inputKind);          // 字符串按钮：只有字符串输入收
 }
 
 void ConsoleBackend::notifyInputRequested(const QString& kind, const QVariant& defaultValue) {
@@ -1271,13 +1284,10 @@ void ConsoleBackend::clickAt(int lineIndex, int segmentIndex) {
         qDebug() << "[input] 点击忽略（世代过期）行" << lineIndex << "段" << segmentIndex;
         return;
     }
-    // 输入裁决：只有「正在等待输入」且「按钮类型与等待的输入类型一致」才响应。
-    // 否则静默忽略——不推进世代（点击无效但按钮保持可重试），
-    // 杜绝「点击杀死了按钮却没有产生任何效果」的不确定响应。
-    // INPUTANY（AnyValue）：两种按钮都接受（整数按钮交 RESULT、字符串按钮交 RESULTS）。
-    if (!m_waitingInput
-        || (!inputAcceptsAny(m_inputKind)
-            && inputExpectsString(m_inputKind) == seg.isInteger)) {
+    // 输入裁决（buttonValueAccepted 是唯一事实）：不接受的按钮静默忽略 ——
+    // 不推进世代（点击无效但按钮保持可重试），杜绝「点击杀死了按钮却没有
+    // 产生任何效果」的不确定响应。
+    if (!buttonValueAccepted(seg.isInteger)) {
         qDebug() << "[input] 点击忽略（未等待输入或类型不符）kind" << m_inputKind
                  << "等待中" << m_waitingInput << "段为整数" << seg.isInteger;
         return;
@@ -1285,8 +1295,17 @@ void ConsoleBackend::clickAt(int lineIndex, int segmentIndex) {
     qDebug() << "[input] 点击按钮 行" << lineIndex << "段" << segmentIndex
              << (seg.isInteger ? QStringLiteral("整数=") + QString::number(seg.intValue)
                                : QStringLiteral("字符串=") + seg.strValue);
-    if (seg.isInteger) submitInput(seg.intValue);
-    else submitInputString(seg.strValue);
+    submitButton(seg);
+}
+
+// 按钮命中后的提交：形态由**等待的输入类型**决定（C# EmueraConsole.SelectedString）：
+//   字符串型等待 + 整数按钮 -> 交十进制文本（Input.ToString()）；
+//   整数型等待（含 INPUTANY）+ 整数按钮 -> 交整数；
+//   字符串按钮 -> 交字符串（整数型等待下已在 buttonValueAccepted 被拒）。
+void ConsoleBackend::submitButton(const ConsoleSegment& button) {
+    if (!button.isInteger) { submitInputString(button.strValue); return; }
+    if (inputExpectsString(m_inputKind)) submitInputString(QString::number(button.intValue));
+    else submitInput(button.intValue);
 }
 
 void ConsoleBackend::submitMouseKey(int type, int r1, int r2, int r3, int r4) {

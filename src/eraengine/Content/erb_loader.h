@@ -410,7 +410,7 @@ private:
     // 并行解析期的三类不确定性（「未定义」解析 / worker AST 缓存缺失 /
     // 插入顺序）已由 markLoadComplete 的重绑 + labels() 的 (脚本名,行号) 排序 +
     // 懒加载解析兜底。保持并行默认（性能收益），显式 setParallelLoad(false)
-    // 可退回串行（dump_lines --parallel 可复核一致性）。
+    // 可退回串行（dump_lines --serial 取非默认值，可复核一致性）。
     bool m_parallel = true;
     // 后台解析块大小：解析在后台线程池，块大 → 调度轮次少、吞吐高
     // （eraTW 实测 64/块比 16/块总耗时少 ~2s）。

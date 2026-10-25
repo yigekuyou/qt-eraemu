@@ -18,21 +18,23 @@
 // ---------------------------------------------------------------------------
 // 拍平行表导出工具（qdbug 桩）
 //
-// 背景（eraTW 实测差距）：AST 拍平（装载 -> 平铺行表）应该是**顺序**的；
-// 并行分块装载存在插入顺序不确定的问题（见 era_parse_table.cpp 注释），
-// 装载默认已改为串行。本工具把 parseTable 的**全部拍平行**按
-// 「确定性顺序（脚本名字典序 + 行号升序）」导出，供离线核对：
+// 背景（eraTW 实测差距）：并行分块装载存在插入顺序不确定的问题（见
+// era_parse_table.cpp 注释），因此装载**默认并行**（性能），而「串行/并行
+// 结果一致」这条契约由本工具的 `--serial` 显式取另一半来核对。本工具把
+// parseTable 的**全部拍平行**按「确定性顺序（脚本名字典序 + 行号升序）」导出，
+// 供离线核对：
 //   * 拍平是否保序（行号 == 源码行号-1 的一致偏移）；
 //   * 行内容与原始 ERB 是否一致（串行装载时）；
 //   * 函数标签 / 循环 / SELECTCASE 标记区的完整性。
 //
 // 每行格式：脚本名<TAB>行号<TAB>kind<TAB>labelName<TAB>原文(截断)
 //
-// 用法： dump_lines <gameDir> [outFile] [--script NAME] [--parallel]
+// 用法： dump_lines <gameDir> [outFile] [--script NAME] [--serial]
 //   --script NAME 只导出指定脚本（大库全量导出会很慢，先定位再导）
-//   --parallel 用并行分块装载（默认串行）：与顺序装载对比，验证
-//   「并行拍平 == 顺序拍平」—— 两次导出走同一确定性顺序（脚本名字典序
-//   + 行号升序），diff 两份导出即可核对一致性。
+//   --serial 用**串行**分块装载（默认并行，与 ErbLoader 的默认值一致）：
+//   两次导出（带/不带 --serial）走同一确定性顺序（脚本名字典序 + 行号升序），
+//   diff 两份导出即可核对「并行拍平 == 顺序拍平」。
+//   注：开关必须指向**非默认值**，否则它是个假开关（改过默认值后曾如此）。
 // ---------------------------------------------------------------------------
 #include <QCoreApplication>
 #include <QDebug>
@@ -45,7 +47,7 @@
 int main(int argc, char* argv[]) {
     QCoreApplication app(argc, argv);
     if (argc < 2) {
-        qWarning() << "usage: dump_lines <gameDir> [outFile] [--script NAME] [--parallel]";
+        qWarning() << "usage: dump_lines <gameDir> [outFile] [--script NAME] [--serial]";
         return 2;
     }
     const QString dir = QString::fromLocal8Bit(argv[1]);
@@ -53,13 +55,13 @@ int main(int argc, char* argv[]) {
                                 ? QString::fromLocal8Bit(argv[2]) : QString();
 
     QString onlyScript;
-    bool useParallel = false;
+    bool useSerial = false;
     for (int i = 2; i < argc; ++i) {
         if (QString::fromLocal8Bit(argv[i]) == QLatin1String("--script")
             && i + 1 < argc) {
             onlyScript = QString::fromLocal8Bit(argv[i + 1]);
-        } else if (QString::fromLocal8Bit(argv[i]) == QLatin1String("--parallel")) {
-            useParallel = true;
+        } else if (QString::fromLocal8Bit(argv[i]) == QLatin1String("--serial")) {
+            useSerial = true;
         }
     }
 
@@ -67,8 +69,8 @@ int main(int argc, char* argv[]) {
     timer.start();
 
     EraEngine engine;
-    // 并行模式：装载前显式开启（验证并行拍平与顺序拍平结果一致）
-    if (useParallel) engine.getExecutionEngine()->getErbLoader().setParallelLoad(true);
+    // 串行模式：装载前显式切到非默认值（验证并行拍平与串行拍平结果一致）
+    if (useSerial) engine.getExecutionEngine()->getErbLoader().setParallelLoad(false);
     engine.setGameDirectory(dir);
 
     const EraParseTable* table = engine.getParseTable();

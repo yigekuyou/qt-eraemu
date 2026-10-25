@@ -1637,14 +1637,11 @@ qint64 ExpressionEvaluator::argInt(const FunctionNode &node, int i, VariableStor
 QString ExpressionEvaluator::argStr(const FunctionNode &node, int i, VariableStorage *storage,
                                     GameBaseData *g, eravar::ScopeId scope) {
     if (!hasArg(node, i)) return QString();
-    const ExpressionNode& argument = *node.arguments().at(i);
-    // StrForm 同时携带原始文本和装载期节点。普通字符串参数读取的是
-    // 原始属性值；FORM 专用路径直接调用 evaluateNode，才会展开节点。
-    if (argument.kind() == NodeKind::StrForm) {
-        const auto& form = static_cast<const StrFormNode&>(argument);
-        if (!form.rawText().isNull()) return form.rawText();
-    }
-    return stringText(evaluateNode(argument, storage, g, scope));
+    // 字符串实参**只有一条**取值路径：求值。`@"…"` 在表达式里是 StrForm 节点，
+    // 它的语义就是展开后的字符串（C# ExpressionParser 对 STRING/STRING_EXPRESSION
+    // 形参一律 GetStrValue，StrForm 求值即展开）；取原文当返回值会让
+    // `SPRITECREATE @"%名%"` 建出名叫 `%名%` 的精灵。原文副本已随旁路一起删掉。
+    return stringText(evaluateNode(*node.arguments().at(i), storage, g, scope));
 }
 
 const VariableNode* ExpressionEvaluator::argVar(const FunctionNode &node, int i) const {
@@ -1905,24 +1902,10 @@ bool ExpressionEvaluator::evaluateBuiltin(const FunctionNode &node, VariableStor
     const BuiltinOp op = node.builtinOp();
     const auto I = [&](int i) { return argInt(node, i, storage, gameBaseData, scope); };
     const auto S = [&](int i) { return argStr(node, i, storage, gameBaseData, scope); };
-    // FORM consumers use the load-time StrForm AST. Other string consumers use
-    // argStr(), which intentionally reads StrFormNode::rawText().
-    const auto FORM = [&](int i) {
-        if (!hasArg(node, i)) return QString();
-        const auto& argument = *node.arguments().at(i);
-        if (argument.kind() == NodeKind::StrForm)
-            return stringText(evaluateNode(argument, storage, gameBaseData, scope));
-        return argStr(node, i, storage, gameBaseData, scope);
-    };
-    // 求值后的字符串实参：与 S() 的唯一差别是 **StrForm 也展开**
-    //（S() 对 StrForm 返回原文，那是 PRINTFORM 那类「格式化串消费者」要的形状）。
-    // 「把字符串当**路径**用」的实参必须用求值后的值：LOADTEXT / SAVETEXT 的
-    // 路径形态在脚本里大量写作 `@"XML/%name%.txt"`、`@"sav/datatable_%X%.txt"`，
-    // 用 S() 会把 `%…%`、`{…}` 原样当文件名（读不到、写到奇怪的路径）。
-    const auto EVALSTR = [&](int i) {
-        if (!hasArg(node, i)) return QString();
-        return stringText(evaluateNode(*node.arguments().at(i), storage, gameBaseData, scope));
-    };
+    // 字符串实参只有 S() 一个入口（= argStr = 求值）。这里曾经并排放着
+    // FORM() 与 EVALSTR() 两个「求值版」，因为 S() 对 StrForm 返回原文 ——
+    // 那条旁路删除后三者等价：`@"…{x}…"`/`%v%` 无论当格式串、当路径还是
+    // 当普通字符串，都只有「展开后的值」这一种形态。
     const auto V = [&]() -> const BuiltinFunctionSpec* { return node.builtinSpec(); };
 
     switch (op) {
@@ -2120,17 +2103,11 @@ bool ExpressionEvaluator::evaluateBuiltin(const FunctionNode &node, VariableStor
         out = QVariant((pos < 0 || pos >= s.size()) ? QString() : QString(s.at(pos)));
         return true;
     }
-    case BuiltinOp::StrForm: {
-        // STRFORM is the explicit expansion operator. Its argument may be a
-        // StrFormNode carrying both the source attribute and its load-time AST;
-        // this path deliberately evaluates the node. A variable/function
-        // argument remains an independent read and therefore supplies raw text.
-        if (hasArg(node, 0) && node.arguments().at(0)->kind() == NodeKind::StrForm)
-            out = evaluateNode(*node.arguments().at(0), storage, gameBaseData, scope);
-        else
-            out = S(0);
+    case BuiltinOp::StrForm:
+        // STRFORM(<format>)：显式展开。字面量实参在装载期已被归约成 StrForm
+        // 节点，变量/函数实参求值即原值 —— 两条形态都由 S() 一次求值覆盖。
+        out = QVariant(S(0));
         return true;
-    }
     case BuiltinOp::LineIsEmpty:
         // LINEISEMPTY()：当前打印缓冲是否为空（C# GlobalStatic.Console.EmptyLine）
         out = QVariant::fromValue<qint64>(m_lineEmptyProvider ? m_lineEmptyProvider() : 0);
@@ -2449,7 +2426,7 @@ bool ExpressionEvaluator::evaluateBuiltin(const FunctionNode &node, VariableStor
         // 对齐 C# STRLEN_Instruction(argisform=true)：FORM_STR 求值后
         //   STRLENFORM  -> LangManager.GetStrlenLang(str)（按语言编码的字节数）
         //   STRLENFORMU -> str.Length（UTF-16 码元数）
-        QString text = hasArg(node, 0) ? FORM(0) : QString();
+        QString text = hasArg(node, 0) ? S(0) : QString();
         if (op == BuiltinOp::StrLenFormU) out = QVariant::fromValue<qint64>(text.size());
         else out = QVariant::fromValue<qint64>(langByteCount(text));
         return true;
@@ -2939,7 +2916,7 @@ bool ExpressionEvaluator::evaluateBuiltin(const FunctionNode &node, VariableStor
                      && file.write(S(0).toUtf8()) >= 0) ? 1 : 0);
             return true;
         }
-        QString filepath = resolveScriptPath(EVALSTR(1));
+        QString filepath = resolveScriptPath(S(1));
         if (filepath.isEmpty()) { out = QVariant::fromValue<qint64>(0); return true; }
         if (!erapath::extensionAllowed(validExtensions(), filepath))
             filepath = QFileInfo(filepath).path() + QLatin1Char('/')
@@ -2963,7 +2940,7 @@ bool ExpressionEvaluator::evaluateBuiltin(const FunctionNode &node, VariableStor
                               && node.arguments().at(0)->valueType() == OperandType::Str;
         QString filepath;
         if (pathForm) {
-            filepath = resolveScriptPath(EVALSTR(0));
+            filepath = resolveScriptPath(S(0));
             if (filepath.isEmpty()
                 || !erapath::extensionAllowed(validExtensions(), filepath)) {
                 out = QString();
@@ -2985,7 +2962,7 @@ bool ExpressionEvaluator::evaluateBuiltin(const FunctionNode &node, VariableStor
         // 此前写 setGlobalStr1D -> m_globalStr1D，读取 getSystemStr -> m_systemStrVars，
         // 两张表不一致导致概要永不生效）
         const QString prev = storage->getSystemStr(QStringLiteral("SAVEDATA_TEXT"), 0);
-        storage->setSystemStr(QStringLiteral("SAVEDATA_TEXT"), 0, prev + FORM(0));
+        storage->setSystemStr(QStringLiteral("SAVEDATA_TEXT"), 0, prev + S(0));
         out = QVariant::fromValue<qint64>(0);
         return true;
     }
@@ -3165,7 +3142,7 @@ bool ExpressionEvaluator::evaluateBuiltin(const FunctionNode &node, VariableStor
         const QColor fallbackBrush = m_defaultColorProvider
             ? QColor::fromRgba(static_cast<QRgb>(m_defaultColorProvider())) : QColor(255, 255, 255);
         int measuredW = 0, measuredH = 0;
-        const bool ok = GraphicsStore::gDrawString(int(I(0)), EVALSTR(1), x, y,
+        const bool ok = GraphicsStore::gDrawString(int(I(0)), S(1), x, y,
                                                    fallbackFont, fallbackBrush,
                                                    &measuredW, &measuredH);
         if (ok && storage) {
@@ -3240,7 +3217,7 @@ bool ExpressionEvaluator::evaluateBuiltin(const FunctionNode &node, VariableStor
     case BuiltinOp::GGetTextSize: {
         // GGETTEXTSIZE(text, fontname, fontsize{, style})：C# EE_GGETTEXTSIZE ——
         // RESULT:1 = 高，返回宽（MeasureString + GenericTypographic 的紧排测量）
-        const QSize size = GraphicsStore::measureText(EVALSTR(0), EVALSTR(1), int(I(2)),
+        const QSize size = GraphicsStore::measureText(S(0), S(1), int(I(2)),
                                                      hasArg(node, 3) ? int(I(3)) : 0);
         if (storage) storage->setSystemVariable(QStringLiteral("RESULT"), 1, size.height());
         out = QVariant::fromValue<qint64>(size.width());

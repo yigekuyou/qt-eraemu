@@ -41,7 +41,12 @@ title 表达式 AST 与变量访问描述符
   class UnaryOpNode
   class FunctionNode
   class IfNode
-  class StrFormNode
+  class StrFormNode {
+    parts : QList<StrFormPart>   ' 装载期拆好的文本/表达式/宽度；**没有**原文副本
+    ' 一个节点只有一个值来源：运行时只求值，不再解析任何源文本。
+    ' 曾经并存 rawText()（原文）与 parts（结构），"按值取串"读了原文 ->
+    ' `SPRITECREATE @"%名%"` 建出名叫 `%名%` 的精灵（未展开）。原文副本已删。
+  }
 
   class VariableNode {
     name : QString

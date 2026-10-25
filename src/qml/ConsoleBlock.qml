@@ -89,6 +89,10 @@ Item {
     readonly property int gridRow: blockData && blockData.row !== undefined ? blockData.row : 0
     readonly property int gridCols: blockData && blockData.cols > 0 ? blockData.cols : 1
     readonly property int gridRows: blockData && blockData.rows > 0 ? blockData.rows : 1
+    // 「这一块现在能不能点」= 按钮自身状态（C++ 区块数据）∧ 世代未过期 ∧
+    // **输入裁决**。输入裁决的两个属性都只是 ConsoleBackend::buttonValueAccepted
+    // 的取值（C# SelectedString 接受任意按钮、SelectedInteger 才拒字符串按钮），
+    // QML 这里只做「按按钮形态挑一个」，不重算规则。
     readonly property bool clickable: blockData && backend
         ? blockData.clickable === true && blockData.generation === backend.generation
           && (blockData.isInteger ? backend.acceptsIntegerButtons : backend.acceptsStringButtons)

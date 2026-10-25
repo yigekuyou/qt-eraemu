@@ -253,7 +253,10 @@ private:
         // 于是「同一份文本被预处理两次」不再存在。分块消费后即从 map 移除，
         // 峰值内存 ≈ 全部文件的预处理行（见 ErbPreprocessed 的内存说明）。
         QHash<QString, ScannedFile> scanned;
-        bool ok = false;
+        // 没有 ok 字段：prepareLoad 的**每一个**出口都是「准备完成」（空目录 =
+        // 零个文件的空集，也是一次完成的准备），完成与否由装载状态机按 files/
+        // total 推进（total=0 → scheduleNextChunk 直接 finishAsync(true)）。
+        // 读取失败是另一个事实（m_readFailures 计数），不是「准备失败」。
     };
     LoadPrep prepareLoad(const QString& dirPath, int depth) const;
     // 主线程合并一批解析结果

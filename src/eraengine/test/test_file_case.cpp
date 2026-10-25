@@ -155,7 +155,17 @@ int main(int argc, char* argv[]) {
         });
         if (async) engine.loadAsync(wrapper);
         else engine.setGameDirectory(wrapper);
-        check(resultCount == 1 && engine.hasError(), "路径错误立即报告失败");
+        // 契约（刀 56 起）：异步装载的完成信号**绝不在发起调用内部同步发出**，
+        // 而是投递到下一轮事件循环 —— 否则 `connect(); loadAsync(); loop.exec()`
+        // 的调用方会错过信号、永久挂起（目录里没有 ERB 时会真的挂住）。
+        // 同步路径（setGameDirectory -> reload）仍是「立即」。这条断言随契约一起改：
+        // 旧断言 `路径错误立即报告失败` 钉的正是会挂住调用方的同步发布。
+        if (async) {
+            check(resultCount == 0 && engine.isLoadingScripts(),
+                  "异步错误路径：完成推迟到事件循环（loadAsync 内不同步发出）");
+            QCoreApplication::processEvents();   // 处理 singleShot(0)：投递完成
+        }
+        check(resultCount == 1 && engine.hasError(), "路径错误报告失败（恰好一次）");
         check(engine.getGameDirectory() == wrapper, "不探测或重定向到 data");
         check(engine.getParseTable()->scriptNames().isEmpty(), "错误游戏路径未载入脚本");
         check(!engine.isLoadingScripts(), "错误路径未启动后台装载");

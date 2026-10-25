@@ -529,6 +529,12 @@ eraengine_add_test(dump_warnings)
 eraengine_add_test(test_dump_warnings_args)
 add_dependencies(test_dump_warnings_args dump_warnings)
 add_test(NAME test_dump_warnings_args COMMAND test_dump_warnings_args)
+# 刀 56：异步装载的「零工作量」边界（只有 CSV / 空目录 / 空 ERB / 只有 .ERH /
+# 1 个 ERB / 文件全被跳过）×（同步 / 异步）—— 完成信号恰好一次且不在 loadAsync
+# 内同步发出，两条路径的输出与退出码逐字节一致。跑真二进制证明「返回了」。
+eraengine_add_test(test_async_empty_dir)
+add_dependencies(test_async_empty_dir dump_warnings)
+add_test(NAME test_async_empty_dir COMMAND test_async_empty_dir)
 # 工具：把游戏目录的文本文件规范化为 UTF-8（dry-run 缺省）
 eraengine_add_test(text_convert)
 eraengine_add_test(expr_probe)

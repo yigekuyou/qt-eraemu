@@ -384,14 +384,23 @@ private:
     void stopAsyncLoad();             // 取消并等待旧加载会话，随后才能清理解析表
     void startErbLoadAsync(quint64 generation);   // CSV 准备（后台）完成后的 ERB 装载启动段
 
+    // 异步装载的**唯一**完成发布点：把 scriptsLoaded(ok) 投递到下一轮事件循环。
+    // 契约（状态机、不是约定）：一次 loadAsync 恰好发布一次；且**绝不**在发起
+    // 调用内部同步发布 —— 那时调用方还没进入自己的 QEventLoop，quit() 是空操作，
+    // 于是「目录里没有 ERB」这类零工作量装载会把调用方永久挂住（刀 56 修的就是它）。
+    // m_loadCompletionGen 记录已登记完成的世代：同一代第二次调用是显式错误（只
+    // 留痕、不重发），新的一代由 stopAsyncLoad() 推进世代自然作废旧的一次。
+    void completeAsyncLoad(bool ok);
+
     // ---- 装载心跳（QML 装载遮罩/状态灯的数据源，见 Q_PROPERTY loadStage 等）----
     void applyLoadHeartbeat(int stage, const QString& name, int done, int total,
                             qint64 elapsedMs, bool stalled);
     void resetLoadHeartbeat();        // 装载开始/结束复位快照（不留上一局文案）
     void setLoadStageText(const QString& name);   // 收尾阶段手动置文案（心跳已停）
 
-    bool m_completingLoad = false;    // 收尾窗口（已弃用后台语义线程，仅保留取消语义）
+    bool m_completingLoad = false;    // 从「完成已登记」到「scriptsLoaded 已投递」的窗口
     quint64 m_loadGeneration = 0;     // 丢弃过期的 loader/完成回调
+    quint64 m_loadCompletionGen = 0;  // 已登记完成的世代（0 = 本引擎还没完成过装载）
     QString m_loadStage;              // 心跳快照：粗阶段名
     int m_loadProcessed = 0;          // 心跳快照：已处理（口径随阶段单调）
     int m_loadTotal = 0;              // 心跳快照：总数（0 = 未知）

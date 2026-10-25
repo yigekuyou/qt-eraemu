@@ -875,6 +875,14 @@ ErbLoader::LoadPrep ErbLoader::prepareLoad(const QString& dirPath, int depth) co
     qInfo().noquote() << "[ErbLoader] 预扫描:枚举到" << allFiles.size()
                       << "个 ERB/ERH 文件，目录枚举耗时" << prepClock.elapsed() << "ms";
     if (allFiles.isEmpty()) {
+        // 「零个 ERB 文件」是一条**显式的装载状态**，不是失败：目录里没有脚本，
+        // 装载的就是空集，和同步路径 loadDirectory 的 `allFiles.isEmpty() ->
+        // return true`（同一事实）完全一致。返回空的 prep 之后，状态机在
+        // onPrepFinished → scheduleNextChunk 的 total=0 判断处显式收尾
+        // （finishAsync(true)）；**不需要**在每个 early return 前各自发一次
+        // 完成/失败 —— 那正是旧写法散落补救的地方（旧代码在这里留了一个
+        // ok=false，于是同一条空目录：同步成功、异步报失败、--async 退出 1
+        // 且不产出输出文件）。
         return prep;
     }
     // 头文件（.ERH）先行：其 #DIM 为全局、#DEFINE 定义宏
@@ -1000,7 +1008,6 @@ ErbLoader::LoadPrep ErbLoader::prepareLoad(const QString& dirPath, int depth) co
     qInfo().noquote() << "[ErbLoader] 预扫描:读+解码+类型扫描完成" << prep.files.size()
                       << "个文件，" << scanClock.elapsed() << "ms，读取失败"
                       << m_readFailures.load(std::memory_order_relaxed);
-    prep.ok = true;
     return prep;
 }
 
@@ -1252,12 +1259,8 @@ void ErbLoader::onPrepFinished() {
     m_prepWatcher->setFuture(QFuture<LoadPrep>());
     m_prepFuture = {};
     m_async.prepMs = m_async.clock.isValid() ? m_async.clock.elapsed() : 0;
-    if (!prep.ok) {
-        qWarning() << "[ErbLoader] 后台预扫描失败（文件列表为空或读取失败）:"
-                   << m_async.dirPath;
-        finishAsync(false);
-        return;
-    }
+    // 没有「准备失败」的分支：prepareLoad 的每个出口都是完成（空目录 = 空集），
+    // 零点由下面的 total=0 在 scheduleNextChunk 里显式收尾（finishAsync(true)）。
     // _Rename.csv：未显式设置时按目录自动探测（对齐 C# 从 CsvDir 读取）
     if (m_preprocessor.renameMap().isEmpty()) {
         tryAutoLoadRename(m_async.dirPath);

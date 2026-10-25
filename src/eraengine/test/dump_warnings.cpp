@@ -155,8 +155,17 @@ int main(int argc, char* argv[]) {
         // 丢到后台未来（QtConcurrent），此刻 ErbLoader 还没开跑，isLoadingScripts()
         // 恒 false —— 旧写法 `if (isLoadingScripts()) loop.exec()` 于是直接跳过，
         // ok 永远是 false，`--async` 恒退出 1 且不输出任何告警。
+        // 完成信号由 EraEngine::completeAsyncLoad 保证在返回事件循环之后投递，
+        // 因此「发起调用内部同步完成」的窗口（目录里没有 ERB / 没有游戏目录结构）
+        // 不会再丢掉信号、把本进程挂死。
         loop.exec();
-        if (!ok) return 1;
+        if (!ok) {
+            // 装载没成功（例如目录里没有 CSV/ERB）：同步路径（setGameDirectory ->
+            // reload()）同样只留一条日志，然后照样输出「当前解析表」（空表）并
+            // 退出 0。两条路径的输出/退出码必须逐字节一致（--async 只是装载方式
+            // 不同，不是另一套判定），所以这里不提前 return。
+            qWarning() << "dump_warnings: 异步装载未成功，按当前解析表（可能为空）输出";
+        }
     } else {
         engine.setGameDirectory(dir);
     }

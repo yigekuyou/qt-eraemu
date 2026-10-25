@@ -1491,8 +1491,7 @@ void EraEngine::reloadAsync()
         stopAsyncLoad();
         clearLoadedGame();
 		if (m_gameDirectory.isEmpty()) {
-				emit scriptsLoaded(false);
-				resetLoadHeartbeat();
+				completeAsyncLoad(false);
 				return;
 		}
 		// ---- 与同步 reload() 完全对齐的「重新开始」复位 ----
@@ -1510,8 +1509,7 @@ void EraEngine::reloadAsync()
 		QElapsedTimer phase;   // 主线程各阶段耗时：定位「装载时界面卡一下」的来源
 		phase.start();
 		if (!resolveGameDirs()) {
-				emit scriptsLoaded(false);
-				resetLoadHeartbeat();
+				completeAsyncLoad(false);
 				return;
 		}
 		loadConfigFiles();
@@ -1570,8 +1568,7 @@ void EraEngine::reloadAsync()
 				if (!ok) {
 						qWarning() << "[EraEngine] 异步装载失败：脚本装载未完成（详见上面的 [ErbLoader]/[load] 日志）";
 						loadFinishedHook();
-						emit scriptsLoaded(false);
-						resetLoadHeartbeat();
+						completeAsyncLoad(false);
 						return;
 				}
 				// 收尾（声明定稿 → 全体脚本就地定型/重绑 → 诊断）由 markLoadComplete
@@ -1590,19 +1587,11 @@ void EraEngine::reloadAsync()
 				loadFinishedHook();
 				qInfo().noquote() << "[EraEngine] 异步装载·全链路: 同步准备 + 后台装载 + 收尾"
 				                  << "共" << chainElapsed() << "ms";
-				// 推迟到下一事件循环再发 scriptsLoaded：期间若有新的 loadAsync
-				// （世代 +1），本次完成回调即被丢弃 —— 与原「语义阶段」相同的取消语义，
-				// 只是不再有后台线程/future。m_completingLoad 让 isLoadingScripts()
-				// 在收尾窗口内仍报「正在装载」。
-				m_completingLoad = true;
-				QTimer::singleShot(0, this, [this, generation]() {
-						m_completingLoad = false;
-						if (generation != m_loadGeneration) return;
-						m_processState.setExecState(ExecState::Continue);
-						emit scriptsLoaded(true);
-						// QML 的 onScriptsLoaded 已把遮罩收起，这里复位快照不会闪
-						resetLoadHeartbeat();
-				});
+				// 推迟到下一事件循环再发 scriptsLoaded（由 completeAsyncLoad 统一
+				// 负责）：期间若有新的 loadAsync（世代 +1），本次完成即被丢弃 ——
+				// 与原「语义阶段」相同的取消语义，只是不再有后台线程/future。
+				// m_completingLoad 让 isLoadingScripts() 在收尾窗口内仍报「正在装载」。
+				completeAsyncLoad(true);
 		});
 
 		emit scriptsLoadStarted();
@@ -1627,6 +1616,42 @@ void EraEngine::reloadAsync()
 		});
 }
 
+
+// ---------------------------------------------------------------------------
+// 异步装载的完成发布（唯一入口）
+//
+// 为什么不能在发起调用里直接 emit：`loadAsync()` → `reloadAsync()` 里有几条
+// 零工作量的提前返回（游戏目录为空 / CSV、ERB 目录解析失败）。它们此前直接
+// `emit scriptsLoaded(false)`，而调用方（QProcess 工具、QML 之外的测试）都是
+// `connect(); loadAsync(); loop.exec();` 的顺序 —— 信号在 exec 之前到达，
+// `QEventLoop::quit()` 对尚未运行的循环是**空操作**，于是调用方永久挂起。
+// 改动只影响「何时发」：投递到下一轮事件循环，此时调用方一定已在 loop 里
+// （或还没进，但信号仍会在它进 loop 后立刻被处理，不再丢失）。
+//
+// 恰好一次：m_loadCompletionGen 在**登记时**就记为当前世代，同一代第二次调用
+// 只报警不重发；世代由 stopAsyncLoad() 推进，旧世代的定时器在回调里被世代检查
+// 丢弃 —— 所以「谁来发完成信号」由状态（世代 + 已登记世代）保证，而不是靠每
+// 个 return 前记得发一次。
+// ---------------------------------------------------------------------------
+void EraEngine::completeAsyncLoad(bool ok)
+{
+		const quint64 generation = m_loadGeneration;
+		if (m_loadCompletionGen == generation) {
+				qWarning() << "[EraEngine] 重复的装载完成请求（世代" << generation
+				           << "），已忽略：每代装载只发布一次 scriptsLoaded";
+				return;
+		}
+		m_loadCompletionGen = generation;
+		m_completingLoad = true;
+		QTimer::singleShot(0, this, [this, generation, ok]() {
+				m_completingLoad = false;
+				if (generation != m_loadGeneration) return;   // 新的一代接管：丢弃
+				if (ok) m_processState.setExecState(ExecState::Continue);
+				emit scriptsLoaded(ok);
+				// QML 的 onScriptsLoaded 已把遮罩收起，这里复位快照不会闪
+				resetLoadHeartbeat();
+		});
+}
 
 // ---------------------------------------------------------------------------
 // ERB 异步装载的启动段：CSV 准备（后台线程）完成后由主线程调用。

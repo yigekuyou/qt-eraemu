@@ -230,6 +230,21 @@ plantuml -txmi docs/uml/01-load-classes.puml
   逐字节不变，AST 1076 万行 IDENTICAL。变异：键丢掉 message → 5 红（跨事实误吞）；
   删掉抑制 → 25 红（镜像重现）。未修（记账）：3/6 内部「实参循环 validate + 左值专用诊断」
   会产两条 **A/A** 重复，要收需让实参循环跳过左值槽位。
+- **窗口几何只有一个来源，网格与字号同源**（显示层，不动引擎语义）：
+  `targetWindowSize()` 是唯一尺寸来源（配置值，仅 320x240 下限，**不做屏幕钳制**），
+  `applyWindowSize()` 与 `verifyWindowSize()`（visible 后 0ms 与 300ms 各对账一次）都用它；
+  QML 侧不再有任何窗口几何绑定（删掉拿 `gui.windowWidth` 自己缩放的 `gameStage`）。
+  修前配置 760x640 而实际 `QWindow` 是 1901x1033 —— 两边各说各话。网格同理：
+  `columnsFor/rowsFor` 是纯函数（列 = ⌊(宽−滚动条)/(字号/2)⌋、行 = ⌊(高−1)/max(行高, 字号+1)⌋），
+  `cellW/cellH` 由网格反算，同一份网格经 `updateGrid()` 推给 C++（`maxLineUnits` /
+  `GETCLIENTSIZE`），排版宽度与显示永远一致；字形 `Scale` **只压缩不放大**。
+  修前 475x400 下行距 11.8 px < 字高 18 px → 文字重叠、`[是]/[否]` 挤成一条。
+  实测四尺寸 `cellH ≥ 字号+1` 全部成立（最紧 eraTW@1400x750 = 17.050 ≥ 17），
+  字号全程等于配置值。原生菜单栏的能力判定也收成一处（`platformSupportsNativeMenuBar()`
+  只认 xcb/wayland）：修前只看 D-Bus 有宿主，于是 offscreen/minimal 在
+  `setInitialProperty → Qt6LabsPlatform` 段错误（rc=139）。
+  记账：xcb/wayland 未真跑（本机无 X 服务器）；wayland 下合成器仍可能改写几何
+  （日志会打「启动几何被窗口管理器改写」）；eraTW@1400x750 余量只有 0.05 px。
 - **GETVAR / GETVARS / SETVAR 的名字解析有缓存（唯一表、唯一键）**：键 =
   `(名字文本.trimmed(), 段身份文本)`，值是不可变 AST 的 `QSharedPointer`；容量 512、
   满时淘汰 stamp 最小者（近似 LRU）。失效只有一个入口、6 个调用点（`clear` /
@@ -446,7 +461,7 @@ plantuml -txmi docs/uml/01-load-classes.puml
 `dump_warnings` 五语料（`eraTW` / `eraMegaten` / `eraTetris` / `FL3.8` / `ecd`）：
 **6 / 2 / 0 / 0 / 0** 行（`eraMegaten` 的目录参数必须是 `eraMegaten/data`；用错路径会得到
 0 字节的假基线），与 `/tmp/uml-baseline/*.raw.txt` **未排序**逐字节相同。
-累计五十七个重构（身份整数化 / 全定型 / 作用域显式化 / 只读收尾外移 / 存档独立映射 /
+累计五十八个重构（身份整数化 / 全定型 / 作用域显式化 / 只读收尾外移 / 存档独立映射 /
 私有名表前移 / 存档顺序确定性 / 写收尾外移 / 标记区外移 / 位置区外移 /
 标签归属单一索引 / 诊断切片幂等 / 常数作用域参数化 / 增量装载协议显式化 /
 GOTO 段身份入索引 / 静态检查用段身份 / 删第三张裸名表 / 错误去重 / 配对语法只判一次 /

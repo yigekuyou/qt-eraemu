@@ -174,6 +174,19 @@ plantuml -txmi docs/uml/01-load-classes.puml
   未做（记账）：每文件仍有 **2 次** `ErbPreprocessor::process`（`scanFileDeclarations`
   一次产出 `Scan` + `prepareLines` 一次建 AST）。合成 1 次要让预扫描的**预处理行数组**
   活到构建期 —— eraTW 210 万逻辑行常驻，远大于现在 93 MB 原始文本，必须先管住峰值内存。
+- **预处理一趟的产物，扫描与构建共用**：`ErbPreprocessor::process` 每文件 **2 → 1** 次
+  （修前 `scanFileDeclarations` 一次产出 `Scan`、`prepareLines` 又一次建 AST）。障碍是
+  「预处理行数组要活到构建期」，于是先量后改：全库常驻 `QList<ErbSourceLine>` 按
+  `sizeof` + 实测锚点推算是 eraTW **+142 MB（+4.1%）** / eraMegaten **+366 MB（+3.2%）**
+  —— 超 2% 判据、否决；改用**一份正文 + 每行 12 B 跨度** `(offset,length)`
+  （eraTW +19 MB ≈ +0.56%、eraMegaten +44 MB ≈ +0.4%）通过，而且实测峰值**下降**
+  （注释 / 空行 / CR 在预处理后不占地方）：eraTW 3,477,068 → 3,425,816 KB（−1.5%）、
+  eraMegaten 11,119,412 → 10,981,984 KB（−1.2%）。形态是 `ErbPreprocessed{ text_, spans }`
+  + `materialize()` 投影（不是第二份事实）、`ScannedFile{ pre, scan, warnings }`（一次预扫描
+  的全部产物，取代原先同键同生命期的 `decoded` + `scans` 两张表），四条装载路径都从这里取。
+  收益：eraTW CPU −3.2%、eraMegaten CPU −3.1%。变异：构建期无视产物自己重预处理 →
+  计数回到 2.00/文件而告警逐字节不变（纯冗余）；`textAt()` 每行少取 1 字节 →
+  eraTetris AST 从第 2 行起不同（证明逐字节验收对行文本灵敏）。
 - **GETVAR / GETVARS / SETVAR 的名字解析有缓存（唯一表、唯一键）**：键 =
   `(名字文本.trimmed(), 段身份文本)`，值是不可变 AST 的 `QSharedPointer`；容量 512、
   满时淘汰 stamp 最小者（近似 LRU）。失效只有一个入口、6 个调用点（`clear` /
@@ -390,7 +403,7 @@ plantuml -txmi docs/uml/01-load-classes.puml
 `dump_warnings` 五语料（`eraTW` / `eraMegaten` / `eraTetris` / `FL3.8` / `ecd`）：
 **6 / 2 / 0 / 0 / 0** 行（`eraMegaten` 的目录参数必须是 `eraMegaten/data`；用错路径会得到
 0 字节的假基线），与 `/tmp/uml-baseline/*.raw.txt` **未排序**逐字节相同。
-累计五十三个重构（身份整数化 / 全定型 / 作用域显式化 / 只读收尾外移 / 存档独立映射 /
+累计五十四个重构（身份整数化 / 全定型 / 作用域显式化 / 只读收尾外移 / 存档独立映射 /
 私有名表前移 / 存档顺序确定性 / 写收尾外移 / 标记区外移 / 位置区外移 /
 标签归属单一索引 / 诊断切片幂等 / 常数作用域参数化 / 增量装载协议显式化 /
 GOTO 段身份入索引 / 静态检查用段身份 / 删第三张裸名表 / 错误去重 / 配对语法只判一次 /
@@ -411,7 +424,8 @@ GOTO 段身份入索引 / 静态检查用段身份 / 删第三张裸名表 / 错
  声明前置：删掉「待收尾定型」第三态（rhsPending）/
  一个脚本只扫描一次（Scan 随数据传递）/
  文件字节只读一次盘（内容随数据走）/
- 文本只预处理一次（BuiltAst 交回 warnings））
+ 文本只预处理一次（BuiltAst 交回 warnings）/
+ 预处理产物共用（一份正文 + 12 B/行跨度））
  前后完全一致；
 `ctest` 48 → 70（新增 `test_parse_checks` / `test_save_variable_map` / `test_private_scope_table` /
 `test_load_contracts` / `test_save_variable_map_hashseed` / `test_jump_markings` /

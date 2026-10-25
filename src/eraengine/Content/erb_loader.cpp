@@ -662,9 +662,12 @@ bool ErbLoader::loadFile(const QString& filePath, const QString& root,
     pf.path = filePath;
     // 串行路径：复用 parseTable 缓存。构建期用的那份 Scan 写回 pf.declScan，
     // 随后 mergeParsedFile 把它交给 loadScript（构建 + 装载 = 一次扫描）。
-    pf.lines = buildAst(body, filePath, root, &pf.diagnostics, scan, &pf.declScan);
-    // buildAst 的预处理告警：再次预处理仅取告警（廉价且无副作用）
-    prepareLines(body, filePath, &pf.warnings);
+    // 预处理也只有一个来源：buildAst 交回的 warnings 就是它那一趟 prepareLines
+    // 的产物（以前为了取告警在这里把同一份文本又预处理了一遍）。
+    BuiltAst built = buildAst(body, filePath, root, &pf.diagnostics, scan);
+    pf.lines = std::move(built.lines);
+    pf.warnings = std::move(built.warnings);
+    pf.declScan = std::move(built.scan);
 
     return mergeParsedFile(std::move(pf));
 }
@@ -1422,15 +1425,17 @@ void ErbLoader::mergeStep() {
 // ---------------------------------------------------------------------------
 // 串行 AST 构建（loadFile 路径）
 // ---------------------------------------------------------------------------
-QList<LogicalLine> ErbLoader::buildAst(const QString& content, const QString& filePath,
-                                      const QString& root, ParseDiagnostics* diagnostics,
-                                      const declscan::Scan* scan, declscan::Scan* scanOut) {
-    if (!m_parseTable) return {};
+ErbLoader::BuiltAst ErbLoader::buildAst(const QString& content, const QString& filePath,
+                                        const QString& root, ParseDiagnostics* diagnostics,
+                                        const declscan::Scan* scan) {
+    BuiltAst out;
+    if (!m_parseTable) return out;
     const QString scriptName = scriptNameFor(root, filePath);
     const bool isHeaderFile = filePath.endsWith(QLatin1String(".erh"), Qt::CaseInsensitive);
 
-    QStringList warnings;
-    const QList<ErbSourceLine> source = prepareLines(content, filePath, &warnings);
+    // 这一趟的预处理产物：行交给 AstBuilder（转成 declscan::SourceLine），告警
+    // 随 BuiltAst 原样交回调用方 —— 同一份文本只在这里预处理一次。
+    const QList<ErbSourceLine> source = prepareLines(content, filePath, &out.warnings);
     QList<declscan::SourceLine> lines;
     lines.reserve(source.size());
     for (const ErbSourceLine& sl : source)
@@ -1439,14 +1444,15 @@ QList<LogicalLine> ErbLoader::buildAst(const QString& content, const QString& fi
     // 脚本级构建的唯一入口：声明是它的**前置步骤**（先扫本脚本的 #DIM/#DIMS 与
     // VARI/VARS，再逐行构造），因此构建期不存在「左值类型未知」的赋值行 ——
     // 单文件游戏（没有跨文件预登记）走的正是这条路径。
-    // scan：目录装载的预扫描结果（有就直接用）；scanOut：把**实际用的**那份
-    // Scan 交回调用方 —— loadScript 因此不再重扫同一份源码。
+    // scan：目录装载的预扫描结果（有就直接用）；实际用的那一份随 BuiltAst::scan
+    // 交回调用方 —— loadScript 因此不再重扫同一份源码。
     declscan::BuiltScript built =
         m_parseTable->buildScriptAst(scriptName, lines, isHeaderFile, diagnostics, scan);
-    if (scanOut) *scanOut = built.scan;
+    out.scan = std::move(built.scan);
     for (int i = 0; i < built.lines.size() && i < source.size(); ++i)
         emit parseLineReady(scriptName, source.at(i).physicalLine, source.at(i).text);
-    return built.lines;
+    out.lines = std::move(built.lines);
+    return out;
 }
 
 // ---------------------------------------------------------------------------

@@ -1314,6 +1314,77 @@ int main(int argc, char* argv[]) {
               "11) 顶层空作用域 = 空集（与 miss 的 nullptr 区分）");
     }
 
+    // ------------------------------------------------------------------
+    // 12) 装载期预处理告警：同一份文本在一趟装载里只预处理一次 → 告警报告一次
+    //
+    // 串行装载（loadFile -> buildAst）曾经把同一份文本预处理两遍：一遍建 AST
+    //（告警被丢掉），紧跟一遍**只为取告警**。现在 buildAst 把那一份告警随行
+    // 一起交回（BuiltAst::warnings），于是「丢了」（0 条）与「重了一份」（2 倍）
+    // 都会让这里的逐条断言变红。
+    {
+        QTemporaryDir warnDir;
+        check(warnDir.isValid(), "12) 建立临时游戏目录");
+        QDir(warnDir.path()).mkpath(QStringLiteral("ERB"));
+        const QString erbDir = QDir(warnDir.path()).filePath(QStringLiteral("ERB"));
+        const QString erbFile = QDir(erbDir).filePath(QStringLiteral("W.ERB"));
+        // 每行触发一类预处理告警（与 dump_warnings 的夹具同一份文本；纯 ASCII，
+        // 不受编码嗅探影响）。第 2..8 行各出一条。
+        check(writeUtf8(erbFile, QStringLiteral("; directives\n"
+                                                "[SKIPSTART extra]\n"
+                                                "[SKIPEND]\n"
+                                                "[IF]\n"
+                                                "[ELSEIF]\n"
+                                                "[ELSE extra]\n"
+                                                "[ENDIF extra]\n"
+                                                "[BADTOKEN]\n")),
+              "12) 写入触发 7 类预处理告警的 W.ERB");
+        const QStringList texts{
+            QStringLiteral("[SKIPSTART] 有多余参数"),
+            QStringLiteral("[SKIPEND] 与 [SKIPSTART] 不对应"),
+            QStringLiteral("[IF] 缺少参数"),
+            QStringLiteral("[ELSEIF] 缺少参数"),
+            QStringLiteral("[ELSE] 有多余参数"),
+            QStringLiteral("[ENDIF] 有多余参数"),
+            QStringLiteral("无法识别的预处理器 [BADTOKEN]"),
+        };
+        // 位置前缀 = (装载时传给预处理的文件路径, 物理行号)：逐字固定下来。
+        QStringList want;
+        for (int i = 0; i < texts.size(); ++i)
+            want << erbFile + QStringLiteral(":%1: ").arg(i + 2) + texts.at(i);
+
+        const auto warningsOfDir = [&](bool parallel) {
+            ProcessState st;
+            EraParseTable table(&st);
+            ErbLoader ld;
+            ld.setParseTable(&table);
+            ld.setParallelLoad(parallel);
+            const bool ok = ld.loadDirectory(erbDir);
+            return ok ? table.parseWarnings() : QStringList{QStringLiteral("<装载失败>")};
+        };
+        // ① 串行（单文件目录即走串行分支 -> loadFile -> buildAst）
+        const QStringList serialWarns = warningsOfDir(false);
+        check(serialWarns == want,
+              QStringLiteral("12) ① 串行装载的预处理告警逐条相同（%1 条，期望 %2 条）")
+                  .arg(serialWarns.size()).arg(want.size()));
+        // ② 并行（parseOneFileReadOnly）：必须真的走并行分支 —— 单文件目录会
+        // 退化成串行，所以这里再放一个不产告警的脚本凑够 2 个文件。
+        check(writeUtf8(QDir(erbDir).filePath(QStringLiteral("W2.ERB")),
+                        QStringLiteral("@W2\nRETURN\n")),
+              "12) ② 写入第二个脚本（无告警）以走真正的并行分支");
+        const QStringList parallelWarns = warningsOfDir(true);
+        check(parallelWarns == want,
+              QStringLiteral("12) ② 并行装载与串行逐条相同（%1 条）").arg(parallelWarns.size()));
+        // ③ 单文件 loadFile（content 为空的入口，同一份 buildAst）
+        ProcessState st3;
+        EraParseTable table3(&st3);
+        ErbLoader single;
+        single.setParseTable(&table3);
+        const bool singleOk = single.loadFile(erbFile);
+        check(singleOk && table3.parseWarnings() == want,
+              QStringLiteral("12) ③ 单文件 loadFile 的预处理告警逐条相同（%1 条）")
+                  .arg(table3.parseWarnings().size()));
+    }
+
     qDebug() << "\n================================";
     if (g_failures == 0) qDebug() << "ALL PASS";
     else qDebug() << g_failures << "FAILURE(S)";

@@ -96,8 +96,8 @@ public:
     // Load ERB files
     // root：脚本名的基准目录（脚本名 = 相对 root 的路径，对齐 C# Config.GetFiles）。
     // 缺省时回落到「文件名」——仅供单文件装载使用。
-    // scan：该文件的预扫描结果（可空 = 还没扫过，buildAst 扫一次并把结果写进
-    // 它，见 buildAst 的 scanOut）。目录装载把预扫描的 Scan 传进来，因此
+    // scan：该文件的预扫描结果（可空 = 还没扫过，buildAst 扫一次并随
+    // BuiltAst::scan 交回，见 buildAst）。目录装载把预扫描的 Scan 传进来，因此
     // 「登记 + 构建 + 装载」共用同一份扫描。
     // content：该文件的**已解码文本**（可空 = 调用方手里没有，这里读一次）。
     // 目录装载的预扫描已经读过这份字节，把同一份文本传进来 —— 于是这个文件在
@@ -366,14 +366,26 @@ private:
     bool mergeParsedFile(ParsedErbFile&& pf);
 
     // 逐行构建完整 AST（串行路径；会 emit parseLineReady）
-    // scanOut：in/out。传入已覆盖本文件的 Scan（目录装载的预扫描结果）就不再扫；
-    // 否则（单文件装载）在这里扫一次并写回 —— loadFile 随后把同一份结果交给
-    // loadScript，所以「构建 + 装载」只有一个 Scan。
-    QList<LogicalLine> buildAst(const QString& content, const QString& filePath,
-                                const QString& root = QString(),
-                                ParseDiagnostics* diagnostics = nullptr,
-                                const declscan::Scan* scan = nullptr,
-                                declscan::Scan* scanOut = nullptr);
+    //
+    // 一趟构建的**三样产物一起交回**（而不是「返回值是行 + 两个 out 指针」）：
+    //   * lines    —— AST 行（这一趟的产物）；
+    //   * warnings —— 本次 prepareLines 的告警，**唯一一份**：调用方直接消费它，
+    //                 不再为了拿告警把同一份文本二次预处理一遍；
+    //   * scan     —— 实际消费的那份声明扫描（= 传入的 scan，或这里扫的那一份），
+    //                 随后交给 loadScript，「构建 + 装载」只有一个 Scan。
+    // 形态与 declscan::BuiltScript（行 + 同源扫描）一致：同一份源码的多个视图
+    // 装在同一个值里一起走，不各留一份副本。
+    struct BuiltAst {
+        QList<LogicalLine> lines;
+        QStringList warnings;
+        declscan::Scan scan;
+    };
+    // scan：in。传入已覆盖本文件的 Scan（目录装载的预扫描结果）就不再扫；
+    // 否则（单文件装载）在这里扫一次，结果随 BuiltAst::scan 交回。
+    [[nodiscard]] BuiltAst buildAst(const QString& content, const QString& filePath,
+                                    const QString& root = QString(),
+                                    ParseDiagnostics* diagnostics = nullptr,
+                                    const declscan::Scan* scan = nullptr);
 
     QString readFileContent(const QString& filePath) const;
     // 同上，但返回读取是否成功：后台预扫描用它把「读取失败」计数并告警。

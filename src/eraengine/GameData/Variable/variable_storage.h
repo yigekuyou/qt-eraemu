@@ -72,15 +72,12 @@ public:
 
 		Q_INVOKABLE void initialize(int maxCharacters, int localSize);
 
-		// 从 CSV 目录的 VariableSize.csv 读取系统数组尺寸（对齐 C# VariableData）
-		bool loadVariableSizes(const QString& csvPath);
-		// 同一份字节的第二个消费者入口：文本已由 CsvTextTable 读过（一次），
-		// 这里只解析 + 应用尺寸（常量名表也要读 VariableSize.csv 建名表）。
-		// label 只用于日志（通常是路径）。
+		// 唯一入口：文本已由 CsvTextTable 读过（一次），这里只解析 + 应用尺寸
+		// （常量名表也要读 VariableSize.csv 建名表）。label 只用于日志（通常是路径）。
 		bool loadVariableSizesFromText(const QString& text, const QString& label);
 
-		// 尺寸表 -> 容器（loadVariableSizes / loadVariableSizesFromText 共用）。
-		// 拆开是为了「读盘一次、解析一次、施加一次」三者各只有一处。
+		// 尺寸表 -> 容器（只有 loadVariableSizesFromText 一个调用点）。
+		// 拆开是为了「解析一次、施加一次」各只有一处。
 		void applyVariableSizes();
 		[[nodiscard]] const VariableConfig& variableConfig() const { return m_variableConfig; }
 

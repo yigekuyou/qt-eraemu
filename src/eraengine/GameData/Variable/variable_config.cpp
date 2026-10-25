@@ -28,18 +28,6 @@ VariableConfig::VariableConfig()
     loadDefaults();
 }
 
-bool VariableConfig::loadFromCSV(const QString& filePath)
-{
-    // 编码按文件嗅探（VariableSize.csv 常见 Shift-JIS 或 UTF-8）
-    bool readOk = false;
-    const QString text = TextCodecUtil::readFile(FileSystem::resolvePathCase(filePath),
-                                                 TextEncoding::Auto, nullptr, &readOk);
-    if (!readOk) {
-        return false;
-    }
-    return loadFromText(text);
-}
-
 bool VariableConfig::loadFromText(const QString& text)
 {
     const QStringList rawLines = text.split(QLatin1Char('\n'));

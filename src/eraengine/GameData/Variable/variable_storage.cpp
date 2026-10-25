@@ -628,21 +628,9 @@ void VariableStorage::clearForReload()
     m_privateTableInstalled = false;
 }
 
-// 从 VariableSize.csv 读取系统数组尺寸并应用
-// （对齐 C# GameData/Variable/VariableData.cs 的 processSystemVariableSize）
-bool VariableStorage::loadVariableSizes(const QString& csvPath)
-{
-		if (!m_variableConfig.loadFromCSV(csvPath)) {
-				qWarning() << "[var] VariableSize 加载失败:" << csvPath;
-				return false;
-		}
-		applyVariableSizes();
-		qDebug() << "[var] VariableSize 加载:" << csvPath;
-		return true;
-}
-
-// 同一份字节的第二个消费者入口：文本已由 CsvTextTable 读过（常量名表也要读
+// VariableSize.csv 的唯一入口：文本已由 CsvTextTable 读过（常量名表也要读
 // VariableSize.csv —— 它的第 0 列同时是一张名表）。这里只解析 + 应用尺寸。
+// （对齐 C# GameData/Variable/VariableData.cs 的 processSystemVariableSize）
 bool VariableStorage::loadVariableSizesFromText(const QString& text, const QString& label)
 {
 		if (!m_variableConfig.loadFromText(text)) {

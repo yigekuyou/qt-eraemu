@@ -40,8 +40,6 @@ private:
 public:
     VariableConfig();
     
-    // 读盘 + 解析（独立调用方：直接给路径）
-    bool loadFromCSV(const QString& filePath);
     // 只解析：字节已由 CsvTextTable 读过（一次）——见 csv_text_table.h
     bool loadFromText(const QString& text);
     void loadDefaults();

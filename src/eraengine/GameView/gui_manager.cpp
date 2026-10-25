@@ -30,54 +30,16 @@
 #include <QTextStream>
 
 namespace {
-
-// C# ConfigData 的日文键（唯一权威）+ 常见英文别名
-const QString kKeyFontName    = QStringLiteral("フォント名");
-const QString kKeyFontSize    = QStringLiteral("フォントサイズ");
-const QString kKeyLineHeight  = QStringLiteral("一行の高さ");
-const QString kKeyForeColor   = QStringLiteral("文字色");
-const QString kKeyBackColor   = QStringLiteral("背景色");
-const QString kKeyFocusColor  = QStringLiteral("選択中文字色");
-const QString kKeyLogColor    = QStringLiteral("履歴文字色");
-const QString kKeyFps         = QStringLiteral("フレーム毎秒");
-const QString kKeyMaxLog      = QStringLiteral("履歴ログの行数");
-const QString kKeyScrollLines = QStringLiteral("スクロール行数");
-const QString kKeySizable     = QStringLiteral("ウィンドウの高さを可変にする");
-const QString kKeyMaximized   = QStringLiteral("起動時にウィンドウを最大化する");
-const QString kKeyWindowWidth = QStringLiteral("ウィンドウ幅");
-const QString kKeyWindowHeight = QStringLiteral("ウィンドウ高さ");
-
-const QStringList kAliasFontName    = {QStringLiteral("FontName")};
-const QStringList kAliasFontSize    = {QStringLiteral("FontSize")};
-const QStringList kAliasLineHeight  = {QStringLiteral("LineHeight")};
-const QStringList kAliasForeColor   = {QStringLiteral("ForeColor")};
-const QStringList kAliasBackColor   = {QStringLiteral("BackColor")};
-const QStringList kAliasFocusColor  = {QStringLiteral("FocusColor")};
-const QStringList kAliasLogColor    = {QStringLiteral("LogColor")};
-const QStringList kAliasFps         = {QStringLiteral("FPS")};
-const QStringList kAliasMaxLog      = {QStringLiteral("MaxLog")};
-const QStringList kAliasScrollLines = {QStringLiteral("ScrollHeight")};
-const QStringList kAliasSizable     = {QStringLiteral("SizableWindow")};
-const QStringList kAliasMaximized   = {QStringLiteral("WindowMaximixed"),
-                                       QStringLiteral("WindowMaximized")};
-const QStringList kAliasWindowWidth = {QStringLiteral("WindowX")};
-const QStringList kAliasWindowHeight = {QStringLiteral("WindowY")};
-
-// 依次尝试：日文键 + 英文别名；命中第一个存在的键
-bool lookup(const ConfigLoader& cfg, const QString& key, const QStringList& aliases, QString& out) {
-    if (cfg.hasConfig(key)) { out = cfg.getConfig(key); return true; }
-    for (const QString& a : aliases) {
-        if (cfg.hasConfig(a)) { out = cfg.getConfig(a); return true; }
-    }
-    return false;
-}
-
-} // namespace
+// 窗口宽高的健全性上限（只挡荒唐值；下限是窗口的事，见 WindowController::targetWindowSize）
+constexpr int kMaxWindowSide = 20000;
+}  // namespace
 
 GuiManager::GuiManager(QObject* parent)
     : QObject(parent)
 {
     m_startDirectory = QDir::currentPath();
+    // 成员初值不在这里写：默认值只在配置键表里有一份
+    resetToDefaults();
 }
 
 void GuiManager::setConsole(ConsoleBackend* console) {
@@ -90,30 +52,23 @@ void GuiManager::setConsole(ConsoleBackend* console) {
 // ---------------------------------------------------------------------------
 
 void GuiManager::loadFromConfig(const ConfigLoader& cfg) {
-    QString text;
-
-    if (lookup(cfg, kKeyFontName, kAliasFontName, text))  setFontName(text);
-    if (lookup(cfg, kKeyFontSize, kAliasFontSize, text))  setFontSize(text.toInt());
-    if (lookup(cfg, kKeyLineHeight, kAliasLineHeight, text)) setLineHeight(text.toInt());
-    if (lookup(cfg, kKeyForeColor, kAliasForeColor, text))  setForeColor(parseColor(text, m_foreColor));
-    if (lookup(cfg, kKeyBackColor, kAliasBackColor, text))  setBackColor(parseColor(text, m_backColor));
-    if (lookup(cfg, kKeyFocusColor, kAliasFocusColor, text)) setFocusColor(parseColor(text, m_focusColor));
-    if (lookup(cfg, kKeyLogColor, kAliasLogColor, text))    setLogColor(parseColor(text, m_logColor));
-    if (lookup(cfg, kKeyFps, kAliasFps, text))              setFps(text.toInt());
-    if (lookup(cfg, kKeyMaxLog, kAliasMaxLog, text))        setMaxLog(text.toInt());
-    if (lookup(cfg, kKeyScrollLines, kAliasScrollLines, text)) setScrollLines(text.toInt());
-    if (lookup(cfg, kKeySizable, kAliasSizable, text)) {
-        setSizableWindow(cfg.hasConfig(kKeySizable)
-                              ? cfg.getBool(kKeySizable, m_sizableWindow)
-                              : cfg.getBool(kAliasSizable.first(), m_sizableWindow));
-    }
-    if (lookup(cfg, kKeyMaximized, kAliasMaximized, text)) {
-        setMaximized(cfg.hasConfig(kKeyMaximized)
-                         ? cfg.getBool(kKeyMaximized, m_maximized)
-                         : cfg.getBool(kAliasMaximized.first(), m_maximized));
-    }
-    if (lookup(cfg, kKeyWindowWidth, kAliasWindowWidth, text))  setWindowWidth(text.toInt());
-    if (lookup(cfg, kKeyWindowHeight, kAliasWindowHeight, text)) setWindowHeight(text.toInt());
+    // 键名/别名/默认值/类型全在 ConfigLoader 的那一张配置键表里：这里只按名问它，
+    // 每一项都只查表一次（以前先 lookup 别名、再用 hasConfig/getBool 按某个名字
+    // 重查一遍，于是写正确拼法 WindowMaximized 时值被拼错的键名吞掉）。
+    setFontName(cfg.configText(QStringLiteral("フォント名")));
+    setFontSize(cfg.configInt(QStringLiteral("フォントサイズ")));
+    setLineHeight(cfg.configInt(QStringLiteral("一行の高さ")));
+    setForeColor(parseColor(cfg.configText(QStringLiteral("文字色")), m_foreColor));
+    setBackColor(parseColor(cfg.configText(QStringLiteral("背景色")), m_backColor));
+    setFocusColor(parseColor(cfg.configText(QStringLiteral("選択中文字色")), m_focusColor));
+    setLogColor(parseColor(cfg.configText(QStringLiteral("履歴文字色")), m_logColor));
+    setFps(cfg.configInt(QStringLiteral("フレーム毎秒")));
+    setMaxLog(cfg.configInt(QStringLiteral("履歴ログの行数")));
+    setScrollLines(cfg.configInt(QStringLiteral("スクロール行数")));
+    setSizableWindow(cfg.configBool(QStringLiteral("ウィンドウの高さを可変にする")));
+    setMaximized(cfg.configBool(QStringLiteral("起動時にウィンドウを最大化する")));
+    setWindowWidth(cfg.configInt(QStringLiteral("ウィンドウ幅")));
+    setWindowHeight(cfg.configInt(QStringLiteral("ウィンドウ高さ")));
 
     applyToConsole();
     emit settingsChanged();
@@ -121,25 +76,28 @@ void GuiManager::loadFromConfig(const ConfigLoader& cfg) {
 
 int GuiManager::saveToConfig(ConfigLoader& cfg) const {
     int n = 0;
+    // 写回用的就是键表里的规范键（GuiManager 不自带键名清单/别名）
     const auto put = [&cfg, &n](const QString& key, const QString& value) {
         if (cfg.getConfig(key) == value && cfg.hasConfig(key)) return;
         cfg.setConfig(key, value);
         ++n;
     };
-    put(kKeyFontName, m_fontName);
-    put(kKeyFontSize, QString::number(m_fontSize));
-    put(kKeyLineHeight, QString::number(m_lineHeight));
-    put(kKeyForeColor, colorToString(m_foreColor));
-    put(kKeyBackColor, colorToString(m_backColor));
-    put(kKeyFocusColor, colorToString(m_focusColor));
-    put(kKeyLogColor, colorToString(m_logColor));
-    put(kKeyFps, QString::number(m_fps));
-    put(kKeyMaxLog, QString::number(m_maxLog));
-    put(kKeyScrollLines, QString::number(m_scrollLines));
-    put(kKeySizable, m_sizableWindow ? QStringLiteral("YES") : QStringLiteral("NO"));
-    put(kKeyMaximized, m_maximized ? QStringLiteral("YES") : QStringLiteral("NO"));
-    put(kKeyWindowWidth, QString::number(m_windowWidth));
-    put(kKeyWindowHeight, QString::number(m_windowHeight));
+    put(QStringLiteral("フォント名"), m_fontName);
+    put(QStringLiteral("フォントサイズ"), QString::number(m_fontSize));
+    put(QStringLiteral("一行の高さ"), QString::number(m_lineHeight));
+    put(QStringLiteral("文字色"), colorToString(m_foreColor));
+    put(QStringLiteral("背景色"), colorToString(m_backColor));
+    put(QStringLiteral("選択中文字色"), colorToString(m_focusColor));
+    put(QStringLiteral("履歴文字色"), colorToString(m_logColor));
+    put(QStringLiteral("フレーム毎秒"), QString::number(m_fps));
+    put(QStringLiteral("履歴ログの行数"), QString::number(m_maxLog));
+    put(QStringLiteral("スクロール行数"), QString::number(m_scrollLines));
+    put(QStringLiteral("ウィンドウの高さを可変にする"),
+        m_sizableWindow ? QStringLiteral("YES") : QStringLiteral("NO"));
+    put(QStringLiteral("起動時にウィンドウを最大化する"),
+        m_maximized ? QStringLiteral("YES") : QStringLiteral("NO"));
+    put(QStringLiteral("ウィンドウ幅"), QString::number(m_windowWidth));
+    put(QStringLiteral("ウィンドウ高さ"), QString::number(m_windowHeight));
     return n;
 }
 
@@ -191,17 +149,18 @@ void GuiManager::setScrollLines(int v) {
 }
 void GuiManager::setSizableWindow(bool v) { if (m_sizableWindow == v) return; m_sizableWindow = v; emit settingsChanged(); }
 void GuiManager::setMaximized(bool v) { if (m_maximized == v) return; m_maximized = v; emit settingsChanged(); }
-// 窗口尺寸（= QML 舞台尺寸）：只做健全性钳制（正数、不过分巨大），
-// **不按屏幕/网格钳制**——窗口比舞台小或比例不同都由 QML 舞台等比缩放消化，
-// 折行与布局永远只由舞台尺寸（配置）决定。
+// 舞台尺寸 = 配置 ウィンドウ幅/高さ（也是窗口的目标几何）。这里**不套窗口
+// 下限**：320x240 是**窗口**的下限，只有 WindowController::targetWindowSize
+// 用它；舞台是整块逻辑画布，可以比窗口小（Android 小窗）也可以比窗口大（桌面
+// 放大）。只挡非正数与荒唐值，也不做屏幕钳制 —— 窗口尺寸唯一来源是配置。
 void GuiManager::setWindowWidth(int v) {
-    v = qBound(320, v, 20000);
+    v = qBound(1, v, kMaxWindowSide);
     if (m_windowWidth == v) return;
     m_windowWidth = v;
     emit settingsChanged();
 }
 void GuiManager::setWindowHeight(int v) {
-    v = qBound(240, v, 20000);
+    v = qBound(1, v, kMaxWindowSide);
     if (m_windowHeight == v) return;
     m_windowHeight = v;
     emit settingsChanged();
@@ -227,22 +186,10 @@ void GuiManager::setStartDirectory(const QString& v) {
 // ---------------------------------------------------------------------------
 
 void GuiManager::resetToDefaults() {
-    m_fontName      = QString();
-    m_fontSize      = 18;
-    m_lineHeight    = 19;
-    m_foreColor     = QColor(192, 192, 192);
-    m_backColor     = QColor(0, 0, 0);
-    m_focusColor    = QColor(255, 255, 0);
-    m_logColor      = QColor(192, 192, 192);
-    m_fps           = 5;
-    m_maxLog        = 5000;
-    m_scrollLines   = 1;
-    m_sizableWindow = true;
-    m_maximized     = false;
-    m_windowWidth   = 760;
-    m_windowHeight  = 480;
-    applyToConsole();
-    emit settingsChanged();
+    // 复位 = 从**空配置**装载一遍：每一项都落回 ConfigLoader 键表里的默认值，
+    // 这里不再抄一份 18/19/5000/760x480（此前成员初值、reset、键表三处各一份）。
+    const ConfigLoader noConfig;
+    loadFromConfig(noConfig);
 }
 
 void GuiManager::applyToConsole() {
@@ -309,6 +256,16 @@ QColor GuiManager::parseColor(const QString& text, const QColor& fallback) {
     if (t.isEmpty()) return fallback;
     QColor c(t);                       // "#RRGGBB" / "#AARRGGBB" / 颜色名
     if (c.isValid()) return c;
+    // C# emuera.config 的颜色是 "R,G,B"（表内默认值也是这个形态），
+    // "#rrggbb" 是本引擎自己写回的格式；两种都认。
+    const QStringList rgb = t.split(QLatin1Char(','));
+    if (rgb.size() == 3) {
+        bool r = false, g = false, b = false;
+        const int rv = rgb.at(0).trimmed().toInt(&r);
+        const int gv = rgb.at(1).trimmed().toInt(&g);
+        const int bv = rgb.at(2).trimmed().toInt(&b);
+        if (r && g && b) return QColor(rv, gv, bv);
+    }
     bool ok = false;
     const uint v = t.toUInt(&ok, 16);  // "RRGGBB"（无 #）
     if (ok) return QColor::fromRgb(v);

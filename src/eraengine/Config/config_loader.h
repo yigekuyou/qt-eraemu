@@ -24,7 +24,7 @@
 #include <QString>
 #include <QList>
 
-#include "text_encoding.h"
+#include "Content/encoding/text_encoding.h"   // 相对 src/eraengine（target 的 PUBLIC 包含目录）
 
 // Config file with precedence level
 struct ConfigFile {
@@ -73,6 +73,16 @@ public:
     bool getBool(const QString& key, bool defaultValue = false) const;
     int getInt(const QString& key, int defaultValue = 0) const;
     qint64 getColor(const QString& key, qint64 fallback) const { return m_colors.value(key, fallback); }
+
+    // ---- 配置键表读取：键 → {默认值, 类型, 英文别名} 的唯一一张表在 .cpp 里 ----
+    // GuiManager 这类使用者只按名问这张表，不再自己存键名/别名/默认值。
+    // 命中顺序：规范键（含汉化版的中文译名，见 getConfig）→ 表内英文/历史别名
+    // → 表内默认值。bool 项一次查表后就地解析（不再「先找名字、再按某个名字重查」）。
+    QString configText(const QString& key) const;   // 原样文本（<Color> 为 "R,G,B"）
+    int     configInt(const QString& key) const;     // 缺省/非法 -> 表内默认值
+    bool    configBool(const QString& key) const;    // 缺省 -> 表内默认值
+    // 表内默认值（没有 ConfigLoader 可用的读者，例如窗口几何在设置对象接上之前）
+    static int configIntDefault(const QString& key);
 
     // ---- 编码 ----
     // 强制读取编码（Auto = 逐文件嗅探，默认）

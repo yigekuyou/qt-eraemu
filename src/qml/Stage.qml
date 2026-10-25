@@ -46,17 +46,21 @@ import QtQuick
 //           stageHeight: windowController.stageHeight
 //           EraRender { anchors.fill: parent } }
 // 位置/缩放全部由本组件从 parent 推导；子项只需 anchors.fill: parent。
+//
+// 两个尺寸是 **required**：舞台宽高是 C++ 的一份事实（配置键表里 ウィンドウ幅/
+// 高さ 的默认值 + 配置值），这里既不带默认值（那会变成第二份事实，且已经漂移成
+// 760x640 与 C++ 的 760x480 不一致），也不做任何尺寸钳制 —— 只做缩放。
 // ---------------------------------------------------------------------------
 Item {
     id: stage
 
-    // 逻辑舞台尺寸（唯一来源：C++ WindowController 的配置值）
-    property real stageWidth: 760
-    property real stageHeight: 640
+    // 逻辑舞台尺寸（唯一来源：C++ WindowController 的配置值；C++ 保证 >= 1）
+    required property real stageWidth
+    required property real stageHeight
 
     // 舞台的逻辑尺寸就是它自己的几何 —— 子项按逻辑像素布局
-    width: Math.max(1, stageWidth)
-    height: Math.max(1, stageHeight)
+    width: stageWidth
+    height: stageHeight
 
     // 可用区域 = 父项（窗口的游戏视口）尺寸
     readonly property real hostWidth: parent ? parent.width : width

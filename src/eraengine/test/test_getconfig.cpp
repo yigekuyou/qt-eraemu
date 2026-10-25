@@ -20,7 +20,9 @@
 //
 // GETCONFIG / GETCONFIGS 的取值语义（对齐 C# ConfigData.GetConfigValueInERB）：
 //   1. **白名单**：只有列出的配置项能被 ERB 读出；白名单外 -> 未命中
-//      （Caller: GETCONFIG -> 0 / GETCONFIGS -> ""）
+//      （Caller: GETCONFIG -> 0 / GETCONFIGS -> ""）。白名单 = ConfigLoader
+//      的那一张配置键表（键 → 默认值/类型/英文别名），GuiManager 也从它读
+//      界面项 —— 窗口宽高与界面项同表，所以 ウィンドウ高さ 等 6 项可读。
 //   2. 值形态按项类型：<bool> -> "1"/"0"；<Color> -> ((R*256)+G)*256+B；
 //      整数/Int64 -> 数值文本；字符串/字符/描画インターフェース -> 原样
 //   3. 配置项缺省时回落 C# 内建默认值（フォントサイズ 18 / 一行の高さ 19 …）
@@ -80,7 +82,7 @@ int main(int argc, char* argv[]) {
     const QString kAuto   = QString::fromUtf8("オートセーブを行なう");
     const QString kFore   = QString::fromUtf8("文字色");
     const QString kMoney  = QString::fromUtf8("お金の単位");
-    const QString kHeight = QString::fromUtf8("ウィンドウ高さ");   // 白名单外
+    const QString kHeight = QString::fromUtf8("ウィンドウ高さ");   // 界面项同表 -> 可读
     const QString kBook   = QString::fromUtf8("存在しない設定");   // 白名单外
 
     qDebug() << "\n1) 空配置：白名单命中 -> C# 内建默认值";
@@ -98,16 +100,31 @@ int main(int argc, char* argv[]) {
               "文字色 默认 192,192,192 -> ((192*256)+192)*256+192 = 12632256");
     }
 
-    qDebug() << "\n2) 白名单外：未命中（GETCONFIG -> 0 / GETCONFIGS -> \"\"）";
+    qDebug() << "\n2) 白名单 = 键表：界面项可读，表外仍未命中（GETCONFIG -> 0）";
     {
         ConfigLoader loader;
         bool hit = true;
+        // 契约变更（2026-10-25）：ウィンドウ高さ 等 6 个界面项进了同一张键表，
+        // 于是也进 ERB 白名单 —— C# 的 ConfigData 同样把它们算作配置项；
+        // 空配置下读到的是表内默认值（窗口默认高 480）。
         erbValue(loader, kHeight, &hit);
-        check(!hit, "ウィンドウ高さ 不在白名单（C# 亦拒绝）");
+        check(hit && erbValue(loader, kHeight) == QStringLiteral("480"),
+              "ウィンドウ高さ 可读且默认 480（与舞台缺省高同一事实）");
+        check(erbValue(loader, QString::fromUtf8("フレーム毎秒")) == QStringLiteral("5"),
+              "フレーム毎秒 可读，默认 5");
+        check(erbValue(loader, QString::fromUtf8("履歴ログの行数")) == QStringLiteral("5000"),
+              "履歴ログの行数 可读，默认 5000");
+        check(erbValue(loader, QString::fromUtf8("スクロール行数")) == QStringLiteral("1"),
+              "スクロール行数 可读，默认 1");
+        check(erbValue(loader, QString::fromUtf8("ウィンドウの高さを可変にする")) == QStringLiteral("1"),
+              "ウィンドウの高さを可変にする 可读，默认 1（bool）");
+        check(erbValue(loader, QString::fromUtf8("起動時にウィンドウを最大化する")) == QStringLiteral("0"),
+              "起動時にウィンドウを最大化する 可读，默认 0（bool）");
         erbValue(loader, kBook, &hit);
         check(!hit, "不存在的键 -> 未命中");
-        check(!ConfigLoader::isErbConfigKey(kHeight) && !ConfigLoader::isErbConfigKey(kBook),
-              "isErbConfigKey：白名单外 -> false");
+        check(!ConfigLoader::isErbConfigKey(kBook), "isErbConfigKey：白名单外 -> false");
+        check(!ConfigLoader::isErbConfigKey(QStringLiteral("WindowX")),
+              "英文别名不是 ERB 键（C# 只认日文键）");
         check(ConfigLoader::isErbConfigKey(kFont) && ConfigLoader::isErbConfigKey(kIf)
                   && ConfigLoader::isErbConfigKey(kFore),
               "isErbConfigKey：白名单内 -> true");
@@ -122,7 +139,7 @@ int main(int argc, char* argv[]) {
                   "フォントサイズ:16\n"
                   "一行の高さ:16\n"
                   "ウィンドウ幅:1400\n"
-                  "ウィンドウ高さ:750\n"          // 白名单外，读不到但不该影响其它项
+                  "ウィンドウ高さ:750\n"
                   "描画インターフェース:TEXTRENDERER\n"
                   "オートセーブを行なう:YES\n"
                   "文字色:10,20,30\n")),
@@ -137,7 +154,8 @@ int main(int argc, char* argv[]) {
         check(erbValue(loader, kAuto) == QStringLiteral("1"), "オートセーブ YES -> \"1\"（不是原样 YES）");
         check(erbValue(loader, kFore) == QStringLiteral("660510"),
               "文字色 10,20,30 -> ((10*256)+20)*256+30 = 660510");
-        check(erbValue(loader, kHeight).isEmpty(), "ウィンドウ高さ 仍不可读（白名单外）");
+        // 契约变更（2026-10-25）：ウィンドウ高さ 现在可读（此前恒 0 -> 修 bug）
+        check(erbValue(loader, kHeight) == QStringLiteral("750"), "ウィンドウ高さ 750（可读）");
     }
 
     qDebug() << "\n4) 回归：eraTW 的像素换算不再除以 0"

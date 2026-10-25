@@ -512,12 +512,39 @@ plantuml -txmi docs/uml/01-load-classes.puml
   验收：`-Werror` 0 warning、`ctest` 71/71、五语料 6/1/0/0/0 行逐字节不变（eraTW 1343 B md5
   `db0cca17…`、eraMegaten 166 B md5 `84fbbb6b…`）；净 **−236 行**（+80/−316，16 个文件）。
 
+- **配置与舞台各有一份事实（两份键表漂移出两个静默 bug）**：配置项原来有两份注册表 ——
+  `ConfigLoader` 的白名单（26 项）+ `GuiManager` 自起的 16 个键名常量、13 组英文别名与私有
+  `lookup()`。漂移已经产生两个真 bug：① `kAliasMaximized` 把**正确**拼法 `WindowMaximized`
+  与拼错的 `WindowMaximixed` 并列，`lookup()` 之后又用**第一个**（拼错的那个）重查一次 →
+  玩家写正确拼法时值被静默丢弃；② `GuiManager` 读的 14 个界面项里有 6 个不在 ERB 白名单 →
+  `GETCONFIG("ウィンドウ高さ")` 恒 0，而 `eraengine.cpp` 早已把它登记为脚本可见。
+  修法：一张 32 行的 `ConfigItem{键, 默认值, 类型, 英文别名}`（匿名命名空间，外部拿不到第二份），
+  `findConfigItem`（名字/别名）与 `findErbItem`（只认规范键）是仅有的两个静态索引入口，
+  `GuiManager` 只按名问 `configText/configInt/configBool`，自己不再存任何键名/别名/默认值；
+  bool 项一次查表后就地 `parseBool`，「用另一个键名再查一次」整段删除。优先级语义
+  （`fixed` 文件优先 → 非 fixed 逆序）在 `getConfig` 里一行未改。
+  **舞台尺寸随之收成一处**：默认值就地躺在同一张表的 `ウィンドウ幅/高さ` 两行，
+  `stageWidth()` / `stageHeight()` / `targetWindowSize()` / `GuiManager::resetToDefaults()`
+  全部从它取；`320/240` 只剩一对常量且**只作用于窗口**（舞台是整块逻辑画布，可以小于窗口）；
+  `Stage.qml` 的 760/640 默认值删除，改成 `required property`（漏注入立刻报错），
+  QML 只剩「尺寸来自 C++ + 一次 `Item.scale`」。四处副本 → 键表两行 + 一对窗口下限常量。
+  记账（玩家可见）：`GETCONFIG("ウィンドウ高さ")` 从 0 变真实值，另 5 项从 `0`/`""` 变
+  真实值或 `"1"`/`"0"`；正确拼法 `WindowMaximized` 现在生效（旧拼写仍生效）；
+  `parseColor` 接受 C# 的 `R,G,B` 三元组；未配 `フォント名` 时取表内默认 `ＭＳ ゴシック`；
+  舞台注入前的默认高 640→480（装载前不再自相矛盾：此前 QML 说 640、网格按 480 推）；
+  `GuiManager` 的宽高 setter 不再套 320/240；`resetToDefaults()` 改走
+  `loadFromConfig(空配置)` → `[render] 应用界面设置…` 从 1 行变 3 行（文本未改，仅次数）。
+  验收：`-Werror` 0 warning（clean-first 全量重编）、`ctest` 71/71、五语料 md5 与基线一致
+  （eraTW `db0cca17…`、eraMegaten `84fbbb6b…`、其余 0 B）；offscreen 实测 eraTetris 舞台
+  760x640 / 网格 84x33、eraTW 1400x750 / 175x46，D-Bus 把窗口改到 1000x1200 与 400x300 时
+  grid 恒 84x33（scale 1.3158 / 0.3609）。
+
 ## 回归基线
 
 `dump_warnings` 五语料（`eraTW` / `eraMegaten` / `eraTetris` / `FL3.8` / `ecd`）：
 **6 / 1 / 0 / 0 / 0** 行（`eraMegaten` 的目录参数必须是 `eraMegaten/data`；用错路径会得到
 0 字节的假基线），与 `/tmp/uml-baseline/*.raw.txt` **未排序**逐字节相同。
-累计六十一个重构（身份整数化 / 全定型 / 作用域显式化 / 只读收尾外移 / 存档独立映射 /
+累计六十二个重构（身份整数化 / 全定型 / 作用域显式化 / 只读收尾外移 / 存档独立映射 /
 私有名表前移 / 存档顺序确定性 / 写收尾外移 / 标记区外移 / 位置区外移 /
 标签归属单一索引 / 诊断切片幂等 / 常数作用域参数化 / 增量装载协议显式化 /
 GOTO 段身份入索引 / 静态检查用段身份 / 删第三张裸名表 / 错误去重 / 配对语法只判一次 /
@@ -544,7 +571,8 @@ GOTO 段身份入索引 / 静态检查用段身份 / 删第三张裸名表 / 错
  异步完成信号单一发布点（completeAsyncLoad + 零工作量 = 显式成功）/
  同一份数据不留第二个入口（VariableSize.csv 只剩一条解析路径）/
  零调用点符号不是「留着待用」而是「第二个入口的邀请」（装载器调参旁路 + 两个永不发射的信号 /
- CsvLoader 的第二读盘入口 / TOOLTIP 七字段副本按字段拆分））
+ CsvLoader 的第二读盘入口 / TOOLTIP 七字段副本按字段拆分 /
+ 配置键表合一（键/默认值/类型/英文别名一张表）/ 舞台尺寸只剩一处（QML 只缩放））
  前后完全一致；
 `ctest` 48 → 71（新增 `test_parse_checks` / `test_save_variable_map` / `test_private_scope_table` /
 `test_load_contracts` / `test_save_variable_map_hashseed` / `test_jump_markings` /

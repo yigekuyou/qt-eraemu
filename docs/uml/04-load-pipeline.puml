@@ -19,6 +19,15 @@ participant "parsecheck\n(const ParseIrView)" as PC
 participant "ParseDiagnostics" as D
 participant "LSP / 测试 / CLI" as LSP
 
+note over CSV
+  配置键表 = 「键 / 默认值 / 类型 / 英文别名」的唯一一张表
+  （匿名命名空间的 32 行 ConfigItem；外部拿不到第二份）。
+  它同时是舞台尺寸的唯一事实：stageWidth/stageHeight、targetWindowSize()、
+  GuiManager::resetToDefaults() 都从这张表取默认值；320/240 只作用于窗口，
+  不作用于舞台（舞台是整块逻辑画布，可以小于窗口）。
+  QML 只按注入的舞台尺寸做一次等比缩放，自己不带任何默认宽高。
+end note
+
 User -> E : setGameDirectory(dir) / loadAsync(dir)
 E -> CSV : loadConfigFiles()
 E -> CSV : loadConstantData()（常量名表 / VariableSize.csv / 角色模板）

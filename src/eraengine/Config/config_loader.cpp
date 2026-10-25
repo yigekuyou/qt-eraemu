@@ -98,12 +98,25 @@ const QHash<QString, QString>& configKeyAliases() {
     return m;
 }
 
+// 反查方向（规范键 -> 中文译名）建表时算一次：以前每查一个键都把 25 条
+// 中文别名线性扫一遍。
+const QHash<QString, QStringList>& configAliasIndex() {
+    static const QHash<QString, QStringList> m = [] {
+        QHash<QString, QStringList> index;
+        const auto& aliases = configKeyAliases();
+        for (auto it = aliases.constBegin(); it != aliases.constEnd(); ++it)
+            if (it.key() != it.value()) index[it.value()].append(it.key());
+        return index;
+    }();
+    return m;
+}
+
 // 查找顺序：先原键，再其中文别名（汉化文件里只有中文键）
 QStringList configLookupKeys(const QString& key) {
+    const QHash<QString, QStringList>& index = configAliasIndex();
+    const auto it = index.constFind(key);
     QStringList out{key};
-    const auto& aliases = configKeyAliases();
-    for (auto it = aliases.constBegin(); it != aliases.constEnd(); ++it)
-        if (it.value() == key && it.key() != key) out << it.key();
+    if (it != index.constEnd()) out += it.value();
     return out;
 }
 
@@ -254,92 +267,174 @@ bool ConfigLoader::parseBool(const QString& value, bool defaultValue)
 
 bool ConfigLoader::getBool(const QString& key, bool defaultValue) const
 {
-    if (!hasConfig(key)) return defaultValue;
+    // 同 getInt：没有该键时 .value 就返回 defaultValue，守卫是多余的第二跳
     return m_boolValues.value(key, defaultValue);
 }
 
 int ConfigLoader::getInt(const QString& key, int defaultValue) const
 {
-    if (!hasConfig(key)) return defaultValue;
+    // 摊平表 m_intValues 只由「文件里真实存在的键」建出来，没有该键时
+    // .value(key, ...) 本来就返回 defaultValue —— 这里不再先跳一次 hasConfig。
     return m_intValues.value(key, defaultValue);
 }
 
 // ---------------------------------------------------------------------------
-// GETCONFIG / GETCONFIGS —— 对齐 C# ConfigData.GetConfigValueInERB 的白名单
+// **全工程唯一的一张配置键表**：键 → {默认值, 项类型, 英文（历史）别名}
 //
-// 表项 = (键名, 缺省值, 类型)。类型只影响返回值形态（bool/color 需要转换），
-// 其余原样。eraTW/eraMegaten 等大量脚本靠这几项换算像素与行数，例如
-//   `画像横幅 = 默认角色画像横幅 * 拡大比率 / GETCONFIG("フォントサイズ")`
-// ——不接线时全部除零得 0，画面上的画像尺寸（选项 4/5/6）就完全失效。
+// 这张表同时是四件事的同一个来源，加/改一个配置项只改这里一处：
+//   1. GETCONFIG / GETCONFIGS 的白名单与内建默认值（对齐 C# ConfigData.
+//      GetConfigValueInERB：白名单外 C# 抛错，这里按「未命中」处理）；
+//   2. 类型：决定 ERB 的返回形态（<bool> -> "1"/"0"、<Color> -> RGB 打包）
+//      以及 ConfigLoader::configInt/configBool 的解析方式；
+//   3. 界面项（GuiManager）：字体/颜色/帧率/窗口宽高…… 的默认值与英文别名
+//      —— GuiManager 只按名问这张表，自己不再存键名或别名（此前两份表已经
+//      漂移：WindowMaximixed 的正确拼写被第二次查找用错的键名吞掉、
+//      ウィンドウ高さ/フレーム毎秒 等 6 项不在 ERB 白名单里 -> GETCONFIG 得 0）；
+//   4. **舞台尺寸的唯一事实**：ウィンドウ幅/高さ 的默认值（760x480）。
+//      WindowController::stageWidth/stageHeight、targetWindowSize、GuiManager
+//      的窗口初值全部从这里取；QML 只负责把舞台等比缩放呈现，不自带默认宽高。
+//
+// 别名按「历史顺序」排列，命中第一个存在的名字；值为命中的那一个，**只解析一次**
+// （以前 GuiManager 先 lookup 别名、再用别名列表里的第一个名字重新 hasConfig/getBool，
+// 于是写正确拼法 WindowMaximized 时值被静默丢弃）。
+//
+// 中文译名（汉化版 CSV/_default.config 的键名）不在这张表里：那是「文件里的键名
+// 归一」（configKeyAliases），覆盖的键比这张表多、且没有默认值/类型的语义。
+// getConfig/hasConfig 已经会同时试中文译名，所以按规范键读表项即可。
 // ---------------------------------------------------------------------------
 namespace {
-enum class ErbConfigType { Int, Int64, Bool, Color, Text };
+enum class ConfigType { Int, Int64, Bool, Color, Text };
 
-struct ErbConfigItem { const char* key; const char* def; ErbConfigType type; };
+struct ConfigItem {
+    QString     key;           // 规范键（C# ConfigData 的日文键；saveToConfig 写回用）
+    QString     defaultValue;  // 内建默认值（文本形态，与 C# 一致）
+    ConfigType  type;
+    QStringList aliases;       // 英文/历史别名（规范键之外能命中的名字）
+};
 
-const QList<ErbConfigItem>& erbConfigTable() {
-    static const QList<ErbConfigItem> kItems = {
-        // <int>
-        {"ウィンドウ幅",                "760",            ErbConfigType::Int},
-        {"PRINTCを並べる数",             "3",              ErbConfigType::Int},
-        {"PRINTCの文字数",               "25",             ErbConfigType::Int},
-        {"フォントサイズ",               "18",             ErbConfigType::Int},
-        {"一行の高さ",                   "19",             ErbConfigType::Int},
-        {"表示するセーブデータ数",       "20",             ErbConfigType::Int},
-        {"販売アイテム数",               "100",            ErbConfigType::Int},
-        {"COM_ABLE初期値",               "1",              ErbConfigType::Int},
-        // <Int64>
-        {"PBANDの初期値",                "4",              ErbConfigType::Int64},
-        {"RELATIONの初期値",             "0",              ErbConfigType::Int64},
-        // <bool>（C# 以 1/0 返回）
-        {"オートセーブを行なう",         "1",              ErbConfigType::Bool},
-        {"単位の位置",                   "1",              ErbConfigType::Bool},
-        // <Color>（C# 打包为 ((R*256)+G)*256+B）
-        {"文字色",                       "192,192,192",    ErbConfigType::Color},
-        {"背景色",                       "0,0,0",          ErbConfigType::Color},
-        {"選択中文字色",                 "255,255,0",      ErbConfigType::Color},
-        {"履歴文字色",                   "192,192,192",    ErbConfigType::Color},
-        // <string>
-        {"フォント名",                   "ＭＳ ゴシック",  ErbConfigType::Text},
-        {"お金の単位",                   "$",              ErbConfigType::Text},
-        {"起動時簡略表示",               "Now Loading...", ErbConfigType::Text},
-        {"DRAWLINE文字",                 "-",              ErbConfigType::Text},
-        {"システムメニュー0",            "最初からはじめる", ErbConfigType::Text},
-        {"システムメニュー1",            "ロードしてはじめる", ErbConfigType::Text},
-        {"時間切れ表示",                 "時間切れ",       ErbConfigType::Text},
-        // <char>
-        {"BAR文字1",                     "*",              ErbConfigType::Text},
-        {"BAR文字2",                     ".",              ErbConfigType::Text},
-        // <TextDrawingMode>
-        {"描画インターフェース",         "TEXTRENDERER",   ErbConfigType::Text},
+const QList<ConfigItem>& configItemTable() {
+    static const QList<ConfigItem> kItems = {
+        // ---- 窗口 / 舞台：**舞台尺寸的唯一事实就是这两行的默认值** ----
+        // （窗口下限常量在 WindowController，且只作用于窗口，不作用于舞台）
+        {QStringLiteral("ウィンドウ幅"),                QStringLiteral("760"),            ConfigType::Int,   {QStringLiteral("WindowX")}},
+        {QStringLiteral("ウィンドウ高さ"),              QStringLiteral("480"),            ConfigType::Int,   {QStringLiteral("WindowY")}},
+        // ---- <int> ----
+        {QStringLiteral("PRINTCを並べる数"),             QStringLiteral("3"),              ConfigType::Int,   {}},
+        {QStringLiteral("PRINTCの文字数"),               QStringLiteral("25"),             ConfigType::Int,   {}},
+        {QStringLiteral("フォントサイズ"),               QStringLiteral("18"),             ConfigType::Int,   {QStringLiteral("FontSize")}},
+        {QStringLiteral("一行の高さ"),                   QStringLiteral("19"),             ConfigType::Int,   {QStringLiteral("LineHeight")}},
+        {QStringLiteral("表示するセーブデータ数"),       QStringLiteral("20"),             ConfigType::Int,   {}},
+        {QStringLiteral("販売アイテム数"),               QStringLiteral("100"),            ConfigType::Int,   {}},
+        {QStringLiteral("COM_ABLE初期値"),               QStringLiteral("1"),              ConfigType::Int,   {}},
+        {QStringLiteral("フレーム毎秒"),                 QStringLiteral("5"),              ConfigType::Int,   {QStringLiteral("FPS")}},
+        {QStringLiteral("履歴ログの行数"),               QStringLiteral("5000"),           ConfigType::Int,   {QStringLiteral("MaxLog")}},
+        {QStringLiteral("スクロール行数"),               QStringLiteral("1"),              ConfigType::Int,   {QStringLiteral("ScrollHeight")}},
+        // ---- <Int64> ----
+        {QStringLiteral("PBANDの初期値"),                QStringLiteral("4"),              ConfigType::Int64, {}},
+        {QStringLiteral("RELATIONの初期値"),             QStringLiteral("0"),              ConfigType::Int64, {}},
+        // ---- <bool>（C# 以 1/0 返回）----
+        {QStringLiteral("オートセーブを行なう"),         QStringLiteral("1"),              ConfigType::Bool,  {}},
+        {QStringLiteral("単位の位置"),                   QStringLiteral("1"),              ConfigType::Bool,  {}},
+        {QStringLiteral("ウィンドウの高さを可変にする"), QStringLiteral("1"),              ConfigType::Bool,  {QStringLiteral("SizableWindow")}},
+        // WindowMaximixed 是历史拼写（老配置文件里可能有），正确拼写也必须命中
+        {QStringLiteral("起動時にウィンドウを最大化する"), QStringLiteral("0"),            ConfigType::Bool,  {QStringLiteral("WindowMaximixed"), QStringLiteral("WindowMaximized")}},
+        // ---- <Color>（C# 打包为 ((R*256)+G)*256+B）----
+        {QStringLiteral("文字色"),                       QStringLiteral("192,192,192"),    ConfigType::Color, {QStringLiteral("ForeColor")}},
+        {QStringLiteral("背景色"),                       QStringLiteral("0,0,0"),          ConfigType::Color, {QStringLiteral("BackColor")}},
+        {QStringLiteral("選択中文字色"),                 QStringLiteral("255,255,0"),      ConfigType::Color, {QStringLiteral("FocusColor")}},
+        {QStringLiteral("履歴文字色"),                    QStringLiteral("192,192,192"),   ConfigType::Color, {QStringLiteral("LogColor")}},
+        // ---- <string> ----
+        {QStringLiteral("フォント名"),                   QStringLiteral("ＭＳ ゴシック"),  ConfigType::Text,  {QStringLiteral("FontName")}},
+        {QStringLiteral("お金の単位"),                   QStringLiteral("$"),              ConfigType::Text,  {}},
+        {QStringLiteral("起動時簡略表示"),               QStringLiteral("Now Loading..."), ConfigType::Text,  {}},
+        {QStringLiteral("DRAWLINE文字"),                 QStringLiteral("-"),              ConfigType::Text,  {}},
+        {QStringLiteral("システムメニュー0"),            QStringLiteral("最初からはじめる"), ConfigType::Text, {}},
+        {QStringLiteral("システムメニュー1"),            QStringLiteral("ロードしてはじめる"), ConfigType::Text, {}},
+        {QStringLiteral("時間切れ表示"),                 QStringLiteral("時間切れ"),        ConfigType::Text,  {}},
+        // ---- <char> ----
+        {QStringLiteral("BAR文字1"),                     QStringLiteral("*"),              ConfigType::Text,  {}},
+        {QStringLiteral("BAR文字2"),                     QStringLiteral("."),              ConfigType::Text,  {}},
+        // ---- <TextDrawingMode> ----
+        {QStringLiteral("描画インターフェース"),         QStringLiteral("TEXTRENDERER"),   ConfigType::Text,  {}},
     };
     return kItems;
 }
 
-const ErbConfigItem* findErbConfig(const QString& key) {
-    for (const ErbConfigItem& item : erbConfigTable()) {
-        if (key == QString::fromUtf8(item.key)) return &item;
-    }
-    return nullptr;
+// 规范键或英文别名 -> 表项（名字/别名索引只建一次）
+const ConfigItem* findConfigItem(const QString& key) {
+    static const QHash<QString, const ConfigItem*> index = [] {
+        QHash<QString, const ConfigItem*> m;
+        for (const ConfigItem& item : configItemTable()) {
+            m.insert(item.key, &item);
+            for (const QString& alias : item.aliases) m.insert(alias, &item);
+        }
+        return m;
+    }();
+    const auto it = index.constFind(key);
+    return it == index.constEnd() ? nullptr : it.value();
+}
+
+// ERB 白名单只认规范键（英文别名不是 ERB 键，C# 也只认日文键）
+const ConfigItem* findErbItem(const QString& key) {
+    const ConfigItem* item = findConfigItem(key);
+    return (item && item->key == key) ? item : nullptr;
 }
 } // namespace
 
+// ---------------------------------------------------------------------------
+// 按键表读取（唯一一张表见上）：GuiManager 等使用者只按名问，不自己存别名/默认值
+// ---------------------------------------------------------------------------
+
+QString ConfigLoader::configText(const QString& key) const
+{
+    if (const ConfigItem* item = findConfigItem(key)) {
+        // 规范键优先（getConfig 内部已含汉化版的中文译名），再试英文/历史别名；
+        // 都没配过就是表内默认值 —— 默认值只写在表里一份。
+        if (hasConfig(item->key)) return getConfig(item->key);
+        for (const QString& alias : item->aliases)
+            if (hasConfig(alias)) return getConfig(alias);
+        return item->defaultValue;
+    }
+    return getConfig(key);   // 未登记的键：按老语义直查
+}
+
+int ConfigLoader::configInt(const QString& key) const
+{
+    bool ok = false;
+    const int value = configText(key).trimmed().toInt(&ok);
+    return ok ? value : configIntDefault(key);
+}
+
+bool ConfigLoader::configBool(const QString& key) const
+{
+    const ConfigItem* item = findConfigItem(key);
+    if (!item) return getBool(key, false);
+    // 整型/文本项被当 bool 问时按宽松语义解析（YES/NO/TRUE/FALSE/ON/OFF/1/0）
+    return parseBool(configText(key), parseBool(item->defaultValue, false));
+}
+
+int ConfigLoader::configIntDefault(const QString& key)
+{
+    const ConfigItem* item = findConfigItem(key);
+    return item ? item->defaultValue.toInt() : 0;
+}
+
 bool ConfigLoader::isErbConfigKey(const QString& key)
 {
-    return findErbConfig(key) != nullptr;
+    return findErbItem(key) != nullptr;
 }
 
 bool ConfigLoader::convertErbValue(const QString& key, QString& out) const
 {
-    const ErbConfigItem* item = findErbConfig(key);
+    const ConfigItem* item = findErbItem(key);
     if (!item) return false;
-    const QString def = QString::fromUtf8(item->def);
+    const QString def = item->defaultValue;
     const QString raw = hasConfig(key) ? getConfig(key) : def;
     switch (item->type) {
-    case ErbConfigType::Bool:
+    case ConfigType::Bool:
         out = QString::number(parseBool(raw, def == QLatin1String("1")) ? 1 : 0);
         return true;
-    case ErbConfigType::Color: {
+    case ConfigType::Color: {
         const QStringList rgb = raw.split(QLatin1Char(','));
         const int r = rgb.size() > 0 ? rgb.at(0).trimmed().toInt() : 0;
         const int g = rgb.size() > 1 ? rgb.at(1).trimmed().toInt() : 0;
@@ -347,9 +442,9 @@ bool ConfigLoader::convertErbValue(const QString& key, QString& out) const
         out = QString::number(((r * 256) + g) * 256 + b);
         return true;
     }
-    case ErbConfigType::Int:
-    case ErbConfigType::Int64:
-    case ErbConfigType::Text:
+    case ConfigType::Int:
+    case ConfigType::Int64:
+    case ConfigType::Text:
     default:
         out = raw;
         return true;
@@ -363,12 +458,12 @@ void ConfigLoader::rebuildValues()
     m_intValues.clear();
     m_boolValues.clear();
     m_colors.clear();
-    for (const auto& item : erbConfigTable()) {
-        const QString key = QString::fromUtf8(item.key);
+    for (const ConfigItem& item : configItemTable()) {
         QString value;
-        convertErbValue(key, value);
-        m_erbValues.insert(key, value);
-        if (item.type != ErbConfigType::Text) m_erbIntegerValues.insert(key, value.toLongLong());
+        convertErbValue(item.key, value);
+        m_erbValues.insert(item.key, value);
+        if (item.type != ConfigType::Text)
+            m_erbIntegerValues.insert(item.key, value.toLongLong());
     }
     for (const auto& file : m_configFiles) {
         for (auto it = file.config.constBegin(); it != file.config.constEnd(); ++it) {

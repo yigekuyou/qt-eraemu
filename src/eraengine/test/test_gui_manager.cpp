@@ -100,6 +100,31 @@ int main(int argc, char* argv[]) {
     }
 
     // =====================================================================
+    // 回归（2026-10-25 键表合并）：别名命中后**用命中的那个名字**取值。
+    // 旧实现先 lookup 别名、再用别名列表的**第一个**名字（拼错的
+    // WindowMaximixed）重新 hasConfig/getBool，于是写正确拼写时值被静默丢弃。
+    qDebug() << "\n2b) bool 项按命中的名字解析（WindowMaximized 不再丢值）";
+    {
+        ConfigLoader cfg;                                  // 空配置
+        cfg.setConfig(QStringLiteral("WindowMaximized"), QStringLiteral("YES"));
+        GuiManager gui;
+        gui.loadFromConfig(cfg);
+        check(gui.maximized(), "正确拼写 WindowMaximized:YES -> 最大化生效");
+
+        ConfigLoader legacy;                                // 历史拼写也仍然认
+        legacy.setConfig(QStringLiteral("WindowMaximixed"), QStringLiteral("YES"));
+        GuiManager gui2;
+        gui2.loadFromConfig(legacy);
+        check(gui2.maximized(), "历史拼写 WindowMaximixed:YES 仍生效");
+
+        ConfigLoader no;                                    // 都没有 -> 表内默认 false
+        GuiManager gui3;
+        gui3.setMaximized(true);                            // 先置 true，确认不是残留
+        gui3.loadFromConfig(no);
+        check(!gui3.maximized(), "未配置 -> 回落到表内默认（false）");
+    }
+
+    // =====================================================================
     qDebug() << "\n3) 配置写回";
     {
         GuiManager gui;
@@ -146,6 +171,8 @@ int main(int argc, char* argv[]) {
         GuiManager gui;
         check(gui.colorFromString(QStringLiteral("#ff8800")) == QColor(255, 136, 0), "#ff8800");
         check(gui.colorFromString(QStringLiteral("ff8800")) == QColor(255, 136, 0), "无#的 ff8800");
+        // C# emuera.config 的颜色形态（键表里 <Color> 项的默认值就是这个形态）
+        check(gui.colorFromString(QStringLiteral("192,192,192")) == QColor(192, 192, 192), "R,G,B 形态");
         check(gui.colorFromString(QStringLiteral("red")) == QColor(Qt::red), "颜色名 red");
         check(!gui.colorFromString(QStringLiteral("not-a-color")).isValid(), "非法颜色 -> 无效");
         check(gui.colorToString(QColor(1, 2, 3)) == QStringLiteral("#010203"), "序列化 #010203");

@@ -17,6 +17,8 @@
  */
 #include "window_controller.h"
 
+#include "Config/config_loader.h"   // 键表默认值（舞台尺寸的唯一事实）
+
 #if defined(Q_OS_LINUX) && defined(EMUERA_HAS_DBUS)
 #include <QDBusConnection>
 #include <QDBusConnectionInterface>
@@ -27,6 +29,13 @@
 
 namespace {
 constexpr int kWindowSizeMax = 0x00FFFFFF;   // QWINDOWSIZE_MAX（qwindow_p.h 未导出）
+
+// 窗口的**唯一**下限。它是「窗口」的下限，不是舞台的：舞台是整块逻辑画布，
+// 可以比窗口小（Android 小窗）也可以比窗口大（桌面放大），呈现层只做缩放。
+// 只被 targetWindowSize()（以及 applyWindowSize 的 minimumSize）使用。
+constexpr int kMinWindowWidth  = 320;
+constexpr int kMinWindowHeight = 240;
+
 constexpr const char* kModeWindowed   = "windowed";
 constexpr const char* kModeFullscreen = "fullscreen";
 constexpr const char* kModeBorderless = "borderless";
@@ -127,13 +136,16 @@ void WindowController::setGui(GuiManager* g) {
 
 // 舞台（逻辑画布）= 配置 ウィンドウ幅/高さ。**不做窗口下限钳制**：
 // EraEngine::syncConsoleGrid 用的就是这两个原始值，舞台必须与网格逐字一致。
-// 配置尚未装载时用 GuiManager 的默认值（760x640），与窗口默认值同源。
+// 设置对象尚未接上时回落**同一张键表**的默认值（ウィンドウ幅/高さ = 760x480）
+// —— 这不是第二个来源，只是同一个事实在没有配置可读时的取值。
 int WindowController::stageWidth() const {
-    return m_gui ? qMax(1, m_gui->windowWidth()) : 760;
+    return m_gui ? m_gui->windowWidth()
+                 : ConfigLoader::configIntDefault(QStringLiteral("ウィンドウ幅"));
 }
 
 int WindowController::stageHeight() const {
-    return m_gui ? qMax(1, m_gui->windowHeight()) : 640;
+    return m_gui ? m_gui->windowHeight()
+                 : ConfigLoader::configIntDefault(QStringLiteral("ウィンドウ高さ"));
 }
 
 void WindowController::setWindowMode(const QString& mode) {
@@ -185,11 +197,14 @@ QSize WindowController::targetWindowSize() const {
     // **全程不做屏幕钳制**：原版 Emuera 也允许窗口比屏幕大（Win32 无限制），
     // 而任何「本进程缩小窗口」都会让 gui.windowWidth ≠ 实际 QWindow，
     // 把配置和画面对不上。屏幕装不下是用户/窗口管理器的选择，不是本进程的。
-    // 只有下限保护（320x240，防止 0 尺寸窗口）。
-    constexpr int kMinW = 320;
-    constexpr int kMinH = 240;
-    const int w = qMax(kMinW, m_gui ? m_gui->windowWidth() : 760);
-    const int h = qMax(kMinH, m_gui ? m_gui->windowHeight() : 640);
+    // 只有下限保护（kMinWindowWidth/Height，防止 0 尺寸窗口）：默认尺寸与舞台
+    // 同源（键表里 ウィンドウ幅/高さ 的默认值），下限只在这里加到窗口上。
+    const int w = qMax(kMinWindowWidth,
+                       m_gui ? m_gui->windowWidth()
+                             : ConfigLoader::configIntDefault(QStringLiteral("ウィンドウ幅")));
+    const int h = qMax(kMinWindowHeight,
+                       m_gui ? m_gui->windowHeight()
+                             : ConfigLoader::configIntDefault(QStringLiteral("ウィンドウ高さ")));
     return QSize(w, h);
 }
 
@@ -199,13 +214,11 @@ void WindowController::applyWindowSize() {
     if (m_windowMode != QLatin1String(kModeWindowed))
         return;   // 全屏/无边框全屏时几何由窗口模式接管
 
-    constexpr int kMinW = 320;
-    constexpr int kMinH = 240;
     const QSize target = targetWindowSize();
     const int w = target.width();
     const int h = target.height();
 
-    m_window->setMinimumSize(QSize(kMinW, kMinH));
+    m_window->setMinimumSize(QSize(kMinWindowWidth, kMinWindowHeight));
     m_window->setMaximumSize(m_gui->sizableWindow()
                                  ? QSize(kWindowSizeMax, kWindowSizeMax)
                                  : QSize(w, h));   // 尺寸固定：min=max 锁死

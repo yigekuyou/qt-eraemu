@@ -37,6 +37,11 @@ class ConsoleBackend;
 //   * 日志保存（`saveLog`，等价 C# 菜单「ログを保存」）；
 //   * 读取/写回 `emuera.config`（键名沿用 C# ConfigData 的日文键）。
 //
+// **键名 / 英文别名 / 默认值 / 项类型不在这里定义**：它们只有一份，在
+// ConfigLoader 的配置键表里（Config/config_loader.cpp）。本类只按名问表
+// （ConfigLoader::configText/configInt/configBool），读、写回、恢复默认三条
+// 路径都走同一张表 —— 于是「舞台缺省尺寸」也只剩 C++ 的一处事实。
+//
 // 数据模型：QML 只读绑定；设置对话框写回后 `settingsChanged` 触发控制台重绘。
 // 纯逻辑（默认值/配置往返/颜色解析/日志文本）可无 UI 单测（见 test_gui_manager）。
 // ---------------------------------------------------------------------------
@@ -100,10 +105,11 @@ public:
     [[nodiscard]] int scrollLines() const { return m_scrollLines; }
     [[nodiscard]] bool sizableWindow() const { return m_sizableWindow; }
     [[nodiscard]] bool maximized() const { return m_maximized; }
+    // 舞台（逻辑画布）尺寸 / 窗口目标几何：同一对配置值（ウィンドウ幅/高さ）。
+    // 只来自配置，不做网格/屏幕钳制；这里也不套窗口下限（那是
+    // WindowController::targetWindowSize 的事）。QML 只把舞台等比缩放呈现。
     [[nodiscard]] int windowWidth() const { return m_windowWidth; }
     [[nodiscard]] int windowHeight() const { return m_windowHeight; }
-    // 窗口尺寸（= QML 舞台尺寸）只来自配置，不再有网格/屏幕钳制：
-    // 窗口比舞台小或比例不同都由 QML 舞台等比缩放消化
     [[nodiscard]] QString windowTitle() const { return m_windowTitle; }
     [[nodiscard]] QString gameDirectory() const { return m_gameDirectory; }
     [[nodiscard]] QString startDirectory() const { return m_startDirectory; }
@@ -157,20 +163,22 @@ private:
 
     ConsoleBackend* m_console = nullptr;
 
+    // 这些成员**刻意不带默认值**：构造函数经 resetToDefaults() 从配置键表取回
+    // （默认值只写在 ConfigLoader 的那一张表里一份，这里再抄一遍就是第三份）。
     QString m_fontName;
-    int     m_fontSize      = 18;
-    int     m_lineHeight    = 19;
-    QColor  m_foreColor     = QColor(192, 192, 192);
-    QColor  m_backColor     = QColor(0, 0, 0);
-    QColor  m_focusColor    = QColor(255, 255, 0);
-    QColor  m_logColor      = QColor(192, 192, 192);
-    int     m_fps           = 5;
-    int     m_maxLog        = 5000;
-    int     m_scrollLines   = 1;
-    bool    m_sizableWindow = true;
+    int     m_fontSize      = 0;
+    int     m_lineHeight    = 0;
+    QColor  m_foreColor;
+    QColor  m_backColor;
+    QColor  m_focusColor;
+    QColor  m_logColor;
+    int     m_fps           = 0;
+    int     m_maxLog        = 0;
+    int     m_scrollLines   = 0;
+    bool    m_sizableWindow = false;
     bool    m_maximized     = false;
-    int     m_windowWidth   = 760;
-    int     m_windowHeight  = 480;
+    int     m_windowWidth   = 0;
+    int     m_windowHeight  = 0;
     QString m_windowTitle;
     QString m_gameDirectory;
     QString m_startDirectory;

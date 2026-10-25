@@ -66,7 +66,8 @@ class WindowController : public QObject {
     // 呈现层只负责把舞台等比缩放（contain）到窗口。窗口可以比舞台小（Android）
     // 或比舞台大（桌面放大），都不影响脚本看到的画布。
     // 注意：这里不做 320x240 的窗口下限钳制 —— 窗口下限是 QWindow 的事
-    // （targetWindowSize），而 C++ 的网格用的正是配置原值，舞台必须与它逐字相同。
+    // （targetWindowSize 的 kMinWindowWidth/Height），而 C++ 的网格用的正是
+    // 配置原值，舞台必须与它逐字相同；未接上设置时回落配置键表的默认值。
     Q_PROPERTY(int stageWidth READ stageWidth NOTIFY stageSizeChanged FINAL)
     Q_PROPERTY(int stageHeight READ stageHeight NOTIFY stageSizeChanged FINAL)
     // 当前屏幕的刷新率（Hz；未知为 0）。QML 的 Screen 附着类型**没有**

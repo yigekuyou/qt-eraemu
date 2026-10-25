@@ -25,6 +25,8 @@
 
 #include "GameData/file_system_io.h"   // DirNode（树版 loadCsvDirectory）
 
+class CsvTextTable;
+
 // ---------------------------------------------------------------------------
 // ConstantTable —— CSV 常量名表（对齐 C# GameData/ConstantData.cs 的子集）
 //
@@ -52,8 +54,12 @@ public:
     // 同名表只取先出现者。recursive=false 只查树根文件。
     // onProgress(done, total)：已处理 / 候选 CSV 文件数（在调用线程触发；
     // 供装载遮罩显示读取进度）。
+    // texts：CSV 文本表（见 csv_text_table.h）。传非空时**不再读盘**，从表里取
+    // 同一份字节 —— 角色 CSV 等同一批文件随后还要被 CsvLoader 读，共用一次读取。
+    // 传空 = 本表自建一个临时表（每个文件仍只读一次，但没有跨消费者共享）。
     int loadCsvDirectory(const DirNode& tree, bool recursive,
-                         const std::function<void(int done, int total)>& onProgress = {});
+                         const std::function<void(int done, int total)>& onProgress = {},
+                         CsvTextTable* texts = nullptr);
 
     // CSV 文件名（大小写不敏感，可带/不带 .csv）内的名字 → 行号（0 起）
     [[nodiscard]] int indexOf(const QString& csvFileName, const QString& name) const;
@@ -85,10 +91,11 @@ private:
     // 树版递归主体：done/total 跨层累计，每处理一个候选文件回调一次进度。
     int loadCsvTreeInto(const DirNode& node, bool recursive,
                         const std::function<void(int done, int total)>& onProgress,
-                        int& done, int total);
+                        int& done, int total, CsvTextTable& texts);
 
-    // 解析单个 CSV 为名字表（取每行第 0 列；跳过空行与 ';' 注释）
-    bool loadCsvFile(const QString& filePath, const QString& tableKey);
+    // 解析单个 CSV 为名字表（取每行第 0 列；跳过空行与 ';' 注释）。
+    // 字节从 texts 取（同一文件只读一次），解析语义只在这里。
+    bool loadCsvFile(const QString& filePath, const QString& tableKey, CsvTextTable& texts);
     // 解析单行（支持引号包裹与 \" 转义）
     static QStringList parseCsvLine(const QString& line);
 

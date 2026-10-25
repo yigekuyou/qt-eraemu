@@ -29,6 +29,7 @@
 #include <QQmlContext>
 #include "csv_loader.h"
 #include "constant_table.h"
+#include "csv_text_table.h"   // CSV 目录「同一份字节只读一次」的文本表
 #include "encoding_probe.h"
 #include "variable_storage.h"
 #include "expression_evaluator.h"
@@ -246,7 +247,9 @@ public:
     Q_INVOKABLE bool setConfigValue(const QString& key, const QString& value);
     
     // Game base data loading
-    void loadGameBaseData();
+    // texts = CSV 文本表（csv_text_table.h）：GameBase.csv 的字节由装载链的
+    // 同一张表提供（常量名表也要读它）；空 = 自建临时表（每文件仍只读一次）。
+    void loadGameBaseData(CsvTextTable* texts = nullptr);
     Q_INVOKABLE void reloadSavedData();
 
     // 把「配置窗口 ÷ 单元格像素」同步成控制台逻辑网格列/行数。
@@ -372,7 +375,7 @@ private:
     bool resolveGameDirs();          // 解析 CSV/ERB 目录（绝对路径 + 实际大小写）
     [[nodiscard]] const DirNode& csvTree();   // 惰性预扫描 m_csvDir 的路径树（resolveGameDirs 时失效）
     void loadConfigFiles();          // _default.config / emuera.config / _fixed.config
-    void loadConstantData();         // CSV 目录内的常量数据（VariableSize 等）
+    void loadConstantData(CsvTextTable* texts = nullptr);         // CSV 目录内的常量数据（VariableSize 等）
     void collectEntryPoints();       // 从已装载 AST 收集入口点（不再二次扫文件）
     void resolveTextConfig();        // 从配置读编码/子目录检索设置（Config.SearchSubdirectory 等）
     void loadFinishedHook();         // 装载完成后的统一收尾（日志/告警）

@@ -16,8 +16,9 @@
  * along with this program.  If not, see <https://www.gnu.org/licenses/>.
  */
 #include "constant_table.h"
+#include "csv_text_table.h"           // 同一份 CSV 字节只读一次
 #include "GameData/game_paths.h"
-#include "GameData/file_system_io.h"   // FileSystem::resolvePathCase（加载前还原真实大小写）
+#include "GameData/file_system_io.h"   // FileSystem::collectTree
 
 #include <QDir>
 #include <QFile>
@@ -27,7 +28,6 @@
 #include <string>
 #include <string_view>
 #include "system_variables.h"   // sysvar::extensionNameTableCsvOf（扩展名表映射）
-#include "text_encoding.h"
 
 namespace {
 
@@ -62,11 +62,11 @@ QStringList ConstantTable::parseCsvLine(const QString& line) {
     return out;
 }
 
-bool ConstantTable::loadCsvFile(const QString& filePath, const QString& tableKey) {
-    // CSV 名表：同样按文件嗅探编码（CSV 可能是 Shift-JIS 或 UTF-8）
+bool ConstantTable::loadCsvFile(const QString& filePath, const QString& tableKey, CsvTextTable& texts) {
+    // CSV 名表：字节来自 CSV 文本表（同一文件只被读一次；角色 CSV 随后还要被
+    // CsvLoader 解析成角色变量，共用这一份）。编码嗅探在表里做。
     bool ok = false;
-    QString text = TextCodecUtil::readFile(FileSystem::resolvePathCase(filePath),
-                                           TextEncoding::Auto, nullptr, &ok);
+    QString text = texts.get(filePath, &ok);
     if (!ok) {
         return false;
     }
@@ -131,19 +131,24 @@ void countCsvCandidates(const DirNode& n, bool recursive, int& total)
 } // namespace
 
 int ConstantTable::loadCsvDirectory(const DirNode& tree, bool recursive,
-                                    const std::function<void(int done, int total)>& onProgress)
+                                    const std::function<void(int done, int total)>& onProgress,
+                                    CsvTextTable* texts)
 {
+    // 文本表的唯一副本：调用方给了就共用（装载链：常量名表 → 角色 CSV），
+    // 没给就自建一个（测试/独立调用方；每文件仍只读一次）。
+    CsvTextTable local;
+    CsvTextTable& src = texts ? *texts : local;
     int total = 0;
     countCsvCandidates(tree, recursive, total);
     int done = 0;
-    const int loaded = loadCsvTreeInto(tree, recursive, onProgress, done, total);
+    const int loaded = loadCsvTreeInto(tree, recursive, onProgress, done, total, src);
     if (onProgress && total > 0) onProgress(total, total);   // 收尾到 100%
     return loaded;
 }
 
 int ConstantTable::loadCsvTreeInto(const DirNode& node, bool recursive,
                                    const std::function<void(int done, int total)>& onProgress,
-                                   int& done, int total) {
+                                   int& done, int total, CsvTextTable& texts) {
     int loaded = 0;
     for (const DirEntry& f : node.files) {
         if (!f.name.endsWith(QLatin1String(".csv"), Qt::CaseInsensitive)) continue;
@@ -155,12 +160,12 @@ int ConstantTable::loadCsvTreeInto(const DirNode& node, bool recursive,
         if (m_tables.contains(key)) continue;   // 同名（不同目录）只取先出现的
         // f.path 已是 entryInfoList 的 absoluteFilePath()，直接读取；
         // 不走 GamePaths::join（content:// 下每文件多一次 exists 探测）。
-        if (loadCsvFile(f.path, key)) ++loaded;
+        if (loadCsvFile(f.path, key, texts)) ++loaded;
     }
     qDebug() << "[load] 常量名表" << node.path << ":" << loaded << "张（累计" << m_tables.size() << "张/" << m_nameCount << "名）";
     if (recursive) {
         for (const DirNode& sub : node.subdirs)
-            loaded += loadCsvTreeInto(sub, true, onProgress, done, total);
+            loaded += loadCsvTreeInto(sub, true, onProgress, done, total, texts);
     }
     return loaded;
 }

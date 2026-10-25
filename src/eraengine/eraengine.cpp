@@ -794,9 +794,12 @@ void EraEngine::reload()
 				loadConfigFiles();
 				resolveTextConfig();   // 编码 / 子目录检索（配置项在编码嗅探下才读得到）
 
-				// GameBase.csv / 常量 CSV：只从 CSV 目录读取
-				loadGameBaseData();
-				loadConstantData();
+				// GameBase.csv / 常量 CSV：只从 CSV 目录读取。
+				// CSV 文本表：GameBase.csv 与常量名表 / 角色 CSV 的字节**同一次**
+				// 读取（loadConstantData 收尾释放，不长期驻留）。
+				CsvTextTable csvText;
+				loadGameBaseData(&csvText);
+				loadConstantData(&csvText);
 
 				// 脚本：只从 ERB 目录装载
 				// 先清掉上一局的解析数据：loadScript 是增量 append（同名事件
@@ -947,9 +950,15 @@ void EraEngine::loadConfigFiles()
 		m_guiManager.loadFromConfig(m_configLoader);
 }
 
-void EraEngine::loadConstantData()
+void EraEngine::loadConstantData(CsvTextTable* texts)
 {
 		if (m_csvDir.isEmpty()) return;
+
+		// CSV 文本表：调用方（装载链）给的同一张表，或自建一张临时表
+		// （独立调用方；每文件仍只读一次，但没有跨消费者共享）。
+		// 本函数收尾 clear()：CSV 文本不长期驻留。
+		CsvTextTable localTexts;
+		CsvTextTable& csvText = texts ? *texts : localTexts;
 
 		// 常量名表（CSV 名 → 下标）：只从 CSV 目录读取，对齐 C# ConstantData。
 		// 查预扫描路径树（csvTree() 一次遍历后所有阶段共享，见其注释）。
@@ -973,7 +982,8 @@ void EraEngine::loadConstantData()
 		    csvTree(), m_searchSubdirectory,
 		    [&reportProgress](int done, int total) {
 				reportProgress(QStringLiteral("读取 CSV 常量表"), done, total);
-		    });
+		    },
+		    &csvText);
 
 		// CSV 名表 -> <VAR>NAME 字符串数组（对齐 C#：装载 CSV 时同步填充
 		// TALENTNAME/ABLNAME/EXPNAME/…——脚本会直接引用这些数组，
@@ -1015,7 +1025,14 @@ void EraEngine::loadConstantData()
 		const QStringList sizeCandidates = FileSystem::listFilesFromTree(
 		    csvTree(), QStringList{"VariableSize.csv"}, false);
 		for (const QString& path : sizeCandidates) {
-				if (m_variableStorage.loadVariableSizes(path)) ++sizesLoaded;
+				bool textOk = false;
+				const QString sizeText = csvText.get(path, &textOk);
+				if (!textOk) {
+						qWarning() << "[var] VariableSize 加载失败:" << path;
+						continue;
+				}
+				if (m_variableStorage.loadVariableSizesFromText(sizeText, path))
+						++sizesLoaded;
 		}
 		// ITEMPRICE：Item.csv **第 3 列**是价格（对齐 C# ConstantData.LoadData 的
 		// `loadDataTo(csvDir + "ITEM.CSV", itemIndex, ItemPrice, disp)`：tokens[0] 是
@@ -1034,8 +1051,14 @@ void EraEngine::loadConstantData()
 					itemCandidates = FileSystem::listFilesFromTree(
 					    csvTree(), QStringList{QStringLiteral("Item.csv")}, m_searchSubdirectory);
 			if (!itemCandidates.isEmpty()) {
+				// Item.csv 的字节与常量名表共用（同一次读取）
+				bool itemTextOk = false;
+				const QString itemText = csvText.get(itemCandidates.first(), &itemTextOk);
 				CsvLoader itemLoader;
-				if (itemLoader.loadFile(itemCandidates.first())) {
+				if (!itemTextOk) {
+					qWarning() << "[load] CSV 读取失败:" << itemCandidates.first();
+				} else {
+					itemLoader.loadContent(itemCandidates.first(), itemText);
 					const QString table = QFileInfo(itemCandidates.first()).baseName();
 					// C# `ItemPrice = new Int64[MaxDataList[itemIndex]]`：按当前尺寸重建
 					m_variableStorage.resetItemprice();
@@ -1069,7 +1092,8 @@ void EraEngine::loadConstantData()
 		    csvTree(), &m_constantTable, &m_variableStorage, m_searchSubdirectory,
 		    [&reportProgress](int done, int total) {
 				reportProgress(QStringLiteral("读取角色 CSV"), done, total);
-		    });
+		    },
+		    &csvText);   // 常量名表已读过同一批 Chara*.csv：共用这一份字节
 		// CSV* 系函数读「模板值」：装载完角色 CSV 后立刻快照一份
 		// （此后脚本对 VAR:角色:下标 的修改不再污染模板）
 		m_variableStorage.snapshotCharaTemplates();
@@ -1077,6 +1101,14 @@ void EraEngine::loadConstantData()
 		         << " 常量表:" << tables << "(" << m_constantTable.nameCount() << "项)"
 		         << " VariableSize:" << sizesLoaded
 		         << " 角色:" << charaLoaded;
+		// CSV 文本表到此为止：全部消费者（常量名表 / GameBase / VariableSize /
+		// Item / 角色 CSV）都已从**同一份字节**取完，立即释放，不长期驻留。
+		// 实测规模（一次装载峰值）：eraTW 363 KB 文本 / eraMegaten 8.2 MB
+		// —— 相对 GB 级 AST 可忽略，但「能释放就释放」。
+		qDebug() << "[load] CSV 文本表:" << csvText.fileCount() << "文件 /"
+		         << csvText.charCount() << "字符（读盘" << csvText.readCount()
+		         << "次，装载收尾释放）";
+		csvText.clear();
 
 		// TRAINNAME 名表不在这里刷新：本函数现在跑在**后台线程**（reloadAsync 的
 		// CSV 准备），而 SystemStateMachine 是主线程 QObject。刷新由调用方在
@@ -1484,7 +1516,12 @@ void EraEngine::reloadAsync()
 		}
 		loadConfigFiles();
 		resolveTextConfig();
-		loadGameBaseData();
+		// CSV 文本表：GameBase.csv 在这里（主线程）读一次，随后的 CSV 准备
+		// （后台线程：常量名表 / VariableSize / Item / 角色 CSV）从**同一张表**
+		// 取字节，因此 GameBase.csv 不会被读第二次。shared_ptr 让表活到后台
+		// 任务结束（表在 loadConstantData 收尾 clear()）。
+		const auto csvText = std::make_shared<CsvTextTable>();
+		loadGameBaseData(csvText.get());
 		// **CSV 常量/角色准备移到后台线程**（SAF 上是 ~60s 的 provider 往返：
 		// 路径树预扫描 + 1328 张常量 CSV + 1318 个角色 CSV）。此前整段在主线程
 		// 同步执行 —— 加载遮罩虽有进度文案，主线程却被占住、界面无法重绘。
@@ -1570,7 +1607,7 @@ void EraEngine::reloadAsync()
 
 		emit scriptsLoadStarted();
 		if (m_csvPrepConn) disconnect(m_csvPrepConn);
-		m_csvPrepWatcher.setFuture(QtConcurrent::run([this]() { loadConstantData(); }));
+		m_csvPrepWatcher.setFuture(QtConcurrent::run([this, csvText]() { loadConstantData(csvText.get()); }));
 		m_csvPrepConn = connect(&m_csvPrepWatcher, &QFutureWatcher<void>::finished, this,
 		                        [this, prepGeneration, prepStartMs]() {
 				m_scriptProcessor.clear();
@@ -1641,12 +1678,16 @@ void EraEngine::syncConsoleGrid()
 				 << "(单元格" << columnPx << "x" << lineHeight << "px)";
 }
 
-void EraEngine::loadGameBaseData(){
+void EraEngine::loadGameBaseData(CsvTextTable* texts){
 		// 对齐 C#：GameBase.csv 位于 CSV 目录（Program.CsvDir + "GAMEBASE.CSV"）
 		if (m_csvDir.isEmpty()) {
 				qDebug() << "[EraEngine] CSV 目录未解析，跳过 GameBase.csv";
 				return;
 		}
+		// CSV 文本表：调用方给的是装载链的同一张表（随后常量名表 / 角色 CSV 也
+		// 从它取字节）；没给则自建临时表（独立调用方，每文件仍只读一次）。
+		CsvTextTable localTexts;
+		CsvTextTable& csvText = texts ? *texts : localTexts;
 		QString gameBasePath;
 		// GameBase.csv 在 CSV 顶层（C# Program.CsvDir + "GAMEBASE.CSV" 直拼）——
 		// 查预扫描树，不再多一次目录列举往返。
@@ -1661,11 +1702,15 @@ void EraEngine::loadGameBaseData(){
 		}
 
 		// Load GameBase.csv using CsvLoader
+		// 字节来自 CSV 文本表（与常量名表共用同一次读取）
 		CsvLoader csvLoader;
-		if (!csvLoader.loadFile(gameBasePath)) {
+		bool gameBaseTextOk = false;
+		const QString gameBaseText = csvText.get(gameBasePath, &gameBaseTextOk);
+		if (!gameBaseTextOk) {
 				qDebug() << "[EraEngine] GameBase.csv 装载失败：" << gameBasePath;
 				return;
 		}
+		csvLoader.loadContent(gameBasePath, gameBaseText);
 		// **真正的载入**：把每一行 (键, 值) 写进 GameBaseData
 		// （对齐 C# GameBase.LoadGameBase；此前只打印了行列数，导致 %GAMEBASE_TITLE% 等全为空）
 		const QString table = csvLoader.getTableNames().isEmpty()

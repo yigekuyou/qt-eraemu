@@ -42,6 +42,7 @@
 
 #include "constant_table.h"
 #include "csv_loader.h"
+#include "csv_text_table.h"   // CSV 文本表：同一份字节只读一次（4b 节）
 #include "GameData/file_system_io.h"
 #include "GameData/Variable/variable_storage.h"
 
@@ -265,6 +266,45 @@ int main(int argc, char* argv[]) {
         const QString rootOnly = storage.getCharaStr(QStringLiteral("NAME"), 5, 0);
         check(rootOnly == QStringLiteral("根独有"),
               "NAME[5] == 根独有 —— 根目录里子目录没有的文件名仍然读取（兼容性保留）");
+    }
+
+    // ---- 4b) 同一份字节喂两个消费者（CSV 文本表） ------------------------
+    // 契约：ConstantTable（名表）与 CsvLoader（角色数据）对同一个文件的**字节
+    // 来源只有一处**。解析语义仍各一套（名表取第 0 列、角色按 番号/名前 切行），
+    // 但读盘只能发生一次：命中次数 > 0 就证明第二个消费者没再读盘。
+    qDebug() << "\n4b) CSV 文本表：同一份字节只读一次（名表 + 角色数据共用）";
+    {
+        const DirNode tree = FileSystem::collectTree(root);
+        CsvTextTable texts;
+        ConstantTable ct;
+        ct.loadCsvDirectory(tree, true, {}, &texts);
+        VariableStorage storage;
+        storage.initialize(100, 100);
+        CsvLoader::loadCharaDirectory(tree, &ct, &storage, true, {}, &texts);
+
+        // 7 个不同的 CSV 文件被读过（Abl/Item/Chara9 顶层/Chara5/Talent/Exp
+        // + subA/Chara9 —— 常量表按表键跳过 subA/Chara9，角色装载按文件名跳过
+        // 顶层 Chara9，两边合起来恰好覆盖全部 7 个文件）。
+        check(texts.readCount() == 7, "共享表读盘 7 次（每个文件恰好一次）");
+        // 缓存命中 = 第二个消费者没再读盘。本夹具里恰好 1 次：Chara5.csv
+        // 先被名表读过，角色装载直接命中。subA/Chara9.csv 不共享 —— 两个消费者
+        // 的**选择规则不同**（名表按表键取先出现的顶层那份、角色按文件名取子目录
+        // 那份），它们读的是**两个不同文件**，各读一次并不算重复。
+        check(texts.hitCount() == 1, "Chara5.csv 的字节被两个消费者共用（命中 1 次）");
+        // ① 名表侧与 ② 角色侧都来自同一份文本：名表的列名 = 文件第一列，
+        //    角色数据 = 同一文件的 番号/名前 行。若任一侧被喂了别的文件的字节，
+        //    这两组断言至少一组会红。
+        check(ct.nameAt(QStringLiteral("CHARA9.CSV"), 0) == QStringLiteral("番号")
+                  && ct.nameAt(QStringLiteral("CHARA9.CSV"), 1) == QStringLiteral("名前"),
+              "名表侧的 Chara9.csv 列名 = 番号/名前");
+        check(storage.getCharaStr(QStringLiteral("NAME"), 9, 0) == QStringLiteral("子目录"),
+              "角色侧的 NAME[9] 与名表侧同一份文本（subA/Chara9.csv）");
+        // 同一路径两次 get 返回同一份（隐式共享，不复制字节）
+        const QString a = texts.get(tree.files.first().path);
+        const QString b = texts.get(tree.files.first().path);
+        check(a.constData() == b.constData(), "同一路径两次 get = 同一份数据（无副本）");
+        texts.clear();
+        check(texts.fileCount() == 0 && texts.charCount() == 0, "clear() 释放全部文本");
     }
 
     // ---- 5) 并行分层扫描：结果一致性 + 进度回调 ---------------------------

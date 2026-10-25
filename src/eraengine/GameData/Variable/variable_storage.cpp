@@ -636,8 +636,27 @@ bool VariableStorage::loadVariableSizes(const QString& csvPath)
 				qWarning() << "[var] VariableSize 加载失败:" << csvPath;
 				return false;
 		}
+		applyVariableSizes();
 		qDebug() << "[var] VariableSize 加载:" << csvPath;
-		// 名字 -> 容器；只处理有独立容器的系统变量
+		return true;
+}
+
+// 同一份字节的第二个消费者入口：文本已由 CsvTextTable 读过（常量名表也要读
+// VariableSize.csv —— 它的第 0 列同时是一张名表）。这里只解析 + 应用尺寸。
+bool VariableStorage::loadVariableSizesFromText(const QString& text, const QString& label)
+{
+		if (!m_variableConfig.loadFromText(text)) {
+				qWarning() << "[var] VariableSize 加载失败:" << label;
+				return false;
+		}
+		applyVariableSizes();
+		qDebug() << "[var] VariableSize 加载:" << label;
+		return true;
+}
+
+// 尺寸表 -> 容器：只处理有独立容器的系统变量
+void VariableStorage::applyVariableSizes()
+{
 		const auto resize1D = [this](const QString& name, QList<qint64>& vec) {
 				const int n = m_variableConfig.getSize1D(name);
 				if (n > 0) vec.resize(n);
@@ -672,7 +691,6 @@ bool VariableStorage::loadVariableSizes(const QString& csvPath)
 		resize1D(QStringLiteral("A"), m_a);
 		resize1D(QStringLiteral("B"), m_b);
 		resize1D(QStringLiteral("C"), m_c);
-		return true;
 }
 
 VariableStorage::ArrayShape VariableStorage::shapeOf(const QString& name,

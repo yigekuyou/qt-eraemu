@@ -54,6 +54,8 @@ Content/encoding/encoding_probe.h
 Content/encoding/text_encoding.h
 Content/constant_table.cpp
 Content/constant_table.h
+Content/csv_text_table.cpp
+Content/csv_text_table.h
 Content/erb_preprocessor.cpp
 Content/erb_preprocessor.h
 

@@ -37,7 +37,11 @@ bool VariableConfig::loadFromCSV(const QString& filePath)
     if (!readOk) {
         return false;
     }
+    return loadFromText(text);
+}
 
+bool VariableConfig::loadFromText(const QString& text)
+{
     const QStringList rawLines = text.split(QLatin1Char('\n'));
     for (QString line : rawLines) {
         if (line.endsWith(QLatin1Char('\r'))) line.chop(1);

@@ -38,7 +38,7 @@
 // ---------------------------------------------------------------------------
 #include "csv_loader.h"
 #include "constant_table.h"
-#include "text_encoding.h"
+#include "csv_text_table.h"           // 同一份 CSV 字节只读一次
 #include "GameData/Variable/variable_storage.h"
 
 #include <QDir>
@@ -86,8 +86,13 @@ int CsvLoader::loadCharaDirectory(const DirNode& tree,
                                   const ConstantTable* constants,
                                   VariableStorage* storage,
                                   bool recursive,
-                                  const std::function<void(int done, int total)>& onProgress) {
+                                  const std::function<void(int done, int total)>& onProgress,
+                                  CsvTextTable* texts) {
     if (!storage) return 0;
+    // 文本表的唯一副本：调用方给了就共用（常量名表已读过同一批 Chara*.csv），
+    // 没给就自建一个（测试/独立调用方；每文件仍只读一次）。
+    CsvTextTable local;
+    CsvTextTable& src = texts ? *texts : local;
 
     // 对齐 C# `Config.GetFiles(csvDir, "CHARA*.CSV")`：**文件名以 Chara 开头**
     // 的 *.csv，而不是「名为 Chara 的子目录」。
@@ -139,8 +144,7 @@ int CsvLoader::loadCharaDirectory(const DirNode& tree,
         ++fileIndex;
         if (onProgress) onProgress(fileIndex, fileTotal);
         bool ok = false;
-        QString content = TextCodecUtil::readFile(charaPath,
-                                                  TextEncoding::Auto, nullptr, &ok);
+        QString content = src.get(charaPath, &ok);
         if (!ok || content.isEmpty()) continue;
         if (content.startsWith(QChar(0xFEFF))) content.remove(0, 1);   // UTF-8 BOM
 

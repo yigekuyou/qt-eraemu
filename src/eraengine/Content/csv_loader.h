@@ -31,6 +31,7 @@
 // CSV data loader - loads CSV files for game data
 class ConstantTable;
 class VariableStorage;
+class CsvTextTable;
 class CsvLoader : public QObject {
     Q_OBJECT
 
@@ -39,6 +40,10 @@ public:
 
     // Load CSV file
     bool loadFile(const QString& filePath);
+
+    // 同一份 CSV 字节的另一个消费者入口：文本已由 CsvTextTable 读过（一次），
+    // 这里只解析、不再读盘（GameBase.csv / Item.csv 与常量名表共用同一次读取）。
+    void loadContent(const QString& filePath, const QString& content);
 
     // 角色 CSV（<Csv> 下 Chara*.csv -> NAME/CALLNAME/BASE/ABL/…）：
     // 返回成功装载的角色数（对齐 C# ConstantData.loadCharacterData 的
@@ -60,11 +65,15 @@ public:
     // 但树版起以 C# 为准（test_dir_tree 锁定该顺序）。
     // onProgress(done, total)：已处理 / 待读取的角色 CSV 文件数（在调用线程
     // 触发；供装载遮罩显示读取进度）。
+    // texts：CSV 文本表（见 csv_text_table.h）。非空时角色 CSV 的字节从表里取
+    // —— 常量名表已经读过同一批文件（Chara*.csv 也会被收录为 CHARAxx 名表），
+    // **共用一次读取**；为空 = 自建临时表（每文件仍只读一次）。
     static int loadCharaDirectory(const DirNode& tree,
                                   const ConstantTable* constants,
                                   VariableStorage* storage,
                                   bool recursive = false,
-                                  const std::function<void(int done, int total)>& onProgress = {});
+                                  const std::function<void(int done, int total)>& onProgress = {},
+                                  CsvTextTable* texts = nullptr);
 
     // Access data
     QVariant getValue(const QString& tableName, int row, int col);
@@ -81,7 +90,6 @@ private:
 		QStringList parseLine(const QString& line);
 
     // Load CSV content into data structure
-		void loadCsvData(const QString& filePath, const QString& content);
 		QStringList getRowByFirstColumn(const QString& tableName, const QString& key) const;
     
     // CSV data storage: table name -> rows -> columns

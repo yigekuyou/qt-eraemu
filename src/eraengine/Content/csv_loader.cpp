@@ -37,13 +37,11 @@ bool CsvLoader::loadFile(const QString& filePath) {
         return false;
     }
 
-    // Parse the CSV content
-		loadCsvData(filePath,content);
-
+    loadContent(filePath, content);
     return true;
 }
 
-void CsvLoader::loadCsvData(const QString& filePath,const QString& content) {
+void CsvLoader::loadContent(const QString& filePath, const QString& content) {
     // For now, just load basic CSV format
     // In a full implementation, this would parse all CSV files
     // and store them in m_data

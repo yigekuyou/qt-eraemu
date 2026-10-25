@@ -108,15 +108,32 @@ int WindowController::screenRefreshRate() const {
 void WindowController::setGui(GuiManager* g) {
     if (m_gui == g)
         return;
-    if (m_gui)
+    if (m_gui) {
         disconnect(m_gui, &GuiManager::settingsChanged, this, &WindowController::applyWindowSize);
+        disconnect(m_gui, &GuiManager::settingsChanged, this, &WindowController::stageSizeChanged);
+    }
     m_gui = g;
     if (m_gui) {
         // 设置/config 变化 -> C++ 直接改变窗口大小（QML 侧不再绑 width/height）
         connect(m_gui, &GuiManager::settingsChanged, this, &WindowController::applyWindowSize);
+        // 舞台尺寸是同一份配置值的另一个读者（不是第二个来源）：网格由
+        // EraEngine 从同一对值推导，这里只把「舞台变了」这件事通知呈现层。
+        connect(m_gui, &GuiManager::settingsChanged, this, &WindowController::stageSizeChanged);
         applyWindowSize();
     }
+    emit stageSizeChanged();
     emit guiChanged();
+}
+
+// 舞台（逻辑画布）= 配置 ウィンドウ幅/高さ。**不做窗口下限钳制**：
+// EraEngine::syncConsoleGrid 用的就是这两个原始值，舞台必须与网格逐字一致。
+// 配置尚未装载时用 GuiManager 的默认值（760x640），与窗口默认值同源。
+int WindowController::stageWidth() const {
+    return m_gui ? qMax(1, m_gui->windowWidth()) : 760;
+}
+
+int WindowController::stageHeight() const {
+    return m_gui ? qMax(1, m_gui->windowHeight()) : 640;
 }
 
 void WindowController::setWindowMode(const QString& mode) {

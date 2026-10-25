@@ -50,6 +50,11 @@ TestCase {
             "height": 200
         });
         verify(view !== null, "Console.qml 创建失败");
+        // Console 只读网格（唯一推导在 C++：列 = 舞台宽 ÷ 半角字宽、
+        // 行 = 舞台高 ÷ 行高）。夹具必须给出与 320x200 舞台一致的一组，
+        // 否则测的就不是生产里那种「舞台 ↔ 网格同源」的状态。
+        backend.setGridColumns(Math.floor(320 / Math.max(1, view.fontSize / 2)));
+        backend.setGridRows(Math.floor(200 / Math.max(1, view.lineHeight)));
         const inputComp = Qt.createComponent("file://" + consoleQmlPath.replace("Console.qml", "ConsoleInput.qml"));
         verify(inputComp.status === Component.Ready, inputComp.errorString());
         inputBar = inputComp.createObject(host, { backend: backend, width: 320, height: 26, y: 250 });
@@ -211,42 +216,134 @@ TestCase {
         compare(next.x, block.x + block.width);
     }
 
-    // 契约（2026-10-25）：网格与字号同源 —— 对任意窗口尺寸，
-    //   * 列/行 = 视口像素 ÷ 单元格像素（字号/2 × max(行高, 字号+1)）；
-    //   * 实际 cell 高 ≥ 渲染字号 + 1（行间不重叠）；
-    //   * 2×cell 宽 ≥ 渲染字号（横向不重叠）；
-    //   * 内容尺寸不超出视口（不削字）；
-    //   * C++ 排版网格与 QML 显示网格完全一致（折行/居中同源）。
-    function test_gridFontInvariantAcrossSizes() {
-        const cases = [
-            { w: 760,  h: 640,  f: 18, lh: 19 },   // eraTetris 配置
-            { w: 1400, h: 750,  f: 16, lh: 16 },   // eraTW 配置（行高 == 字号）
-            { w: 475,  h: 400,  f: 18, lh: 19 },   // 小窗口
-            { w: 1901, h: 1033, f: 18, lh: 19 },   // 大窗口（不再拉伸格子）
-            { w: 200,  h: 120,  f: 24, lh: 20 },   // 极端：缩网格而不是压字
+    // 契约（2026-10-25 二次修正）：舞台是 C++ 的事实，窗口只决定呈现缩放。
+    //   * 舞台尺寸 = 配置 ウィンドウ幅/高さ（C++ 推导网格/maxLineUnits/GETCLIENTSIZE）；
+    //   * Console 读取 backend 的网格，再摊到舞台逻辑像素上得到 cell；
+    //   * **同一个舞台在任意窗口尺寸下 grid / cell / 字号逐字相同**
+    //     （窗口尺寸不是网格的输入 —— 这正是本测试钉住的回归点）；
+    //   * 内容不越出舞台（舞台固定 ⇒ 与窗口无关）。
+    // 旧契约（上一版）把窗口像素当网格输入，四尺寸的 grid 各不相同 —— 那正是
+    // 用户指出的错误：同一游戏在不同设备上脚本看到不同画布。
+    function test_stageGridInvariantAcrossWindowSizes() {
+        // 舞台 = 两个真实游戏的配置；窗口 = 验收要求的四例（含 Android 小窗和大屏）
+        const stages = [
+            { w: 760,  h: 640, f: 18, lh: 19 },   // eraTetris 配置
+            { w: 1400, h: 750, f: 16, lh: 16 },   // eraTW 配置（行高 == 字号）
         ];
-        for (const c of cases) {
-            view.width = c.w;
-            view.height = c.h;
-            view.fontSize = c.f;
-            view.lineHeight = c.lh;
+        const windows = [[475, 400], [760, 640], [1400, 750], [1901, 1033]];
+        for (const st of stages) {
+            view.stageWidth = st.w;
+            view.stageHeight = st.h;
+            view.fontSize = st.f;
+            view.lineHeight = st.lh;
+            // C++（EraEngine::syncConsoleGrid）从舞台推导的那份网格
+            backend.setGridColumns(Math.floor(st.w / Math.max(1, st.f / 2)));
+            backend.setGridRows(Math.floor(st.h / Math.max(1, st.lh)));
             wait(1);
-            const tag = c.w + "x" + c.h + " font " + c.f + " lh " + c.lh;
-            // 字号保持配置值（这是「格子缩放与字号同源」的本意：窗口变化
-            // 只改变列/行，不靠缩字号来硬塞内容）。
-            verify(Math.abs(view.renderFontSize - view.fontSize) < 1e-6,
-                   "字号被缩小 " + view.renderFontSize + " != " + view.fontSize + " @ " + tag);
-            verify(view.cellHeight >= view.renderFontSize + 1 - 1e-6,
-                   "cell 高 " + view.cellHeight + " < 字号+1 " + (view.renderFontSize + 1) + " @ " + tag);
-            verify(2 * view.cellWidth >= view.renderFontSize - 1e-6,
-                   "cell 宽不足 @ " + tag);
-            compare(view.gridColumns, backend.gridColumns, "QML/C++ 列同源 @ " + tag);
-            compare(view.gridRows, backend.gridRows, "QML/C++ 行同源 @ " + tag);
-            verify(view.gridColumns * view.cellWidth <= view.width - view.scrollBarWidth + 1e-6,
-                   "内容右缘越界 @ " + tag);
-            verify(view.gridRows * view.cellHeight <= view.height + 1e-6,
-                   "内容下缘越界 @ " + tag);
+            const cols = view.gridColumns;
+            const rows = view.gridRows;
+            const cw = view.cellWidth;
+            const ch = view.cellHeight;
+            const fs = view.renderFontSize;
+            const stageTag = "stage " + st.w + "x" + st.h + " font " + st.f + " lh " + st.lh;
+            compare(cols, backend.gridColumns, "QML 网格取自 C++ @ " + stageTag);
+            compare(rows, backend.gridRows, "QML 网格取自 C++ @ " + stageTag);
+            verify(Math.abs(fs - st.f) < 1e-6,
+                   "字号被缩小 " + fs + " != " + st.f + " @ " + stageTag);
+            verify(ch * 1.0 >= st.lh - 0.1, "行距 " + ch + " 小于配置行高 " + st.lh + " @ " + stageTag);
+            for (const win of windows) {
+                view.width = win[0];
+                view.height = win[1];
+                wait(1);
+                const tag = stageTag + " in window " + win[0] + "x" + win[1];
+                compare(view.gridColumns, cols, "列随窗口变了 @ " + tag);
+                compare(view.gridRows, rows, "行随窗口变了 @ " + tag);
+                verify(Math.abs(view.cellWidth - cw) < 1e-9, "格宽随窗口变了 @ " + tag);
+                verify(Math.abs(view.cellHeight - ch) < 1e-9, "格高随窗口变了 @ " + tag);
+                verify(Math.abs(view.renderFontSize - fs) < 1e-9, "字号随窗口变了 @ " + tag);
+                verify(cols * cw <= st.w + 1e-6, "内容右缘越过舞台 @ " + tag);
+                verify(rows * ch <= st.h + 1e-6, "内容下缘越过舞台 @ " + tag);
+            }
         }
+    }
+
+    // 契约（2026-10-25 二次修正）：呈现层 = 舞台的一个等比缩放（contain）。
+    //   * scale = min(窗口宽/舞台宽, 窗口高/舞台高)，窗口可小于或远大于舞台；
+    //   * 舞台完整可见（缩放后包围盒不超出窗口，至少一边贴边 = 无内容裁剪）；
+    //   * 居中：缩放后包围盒中心 == 窗口中心；letterbox = 多出来的那一边的一半。
+    // 变异：把 scale 改成非等比（例如两个方向各取各的）→ 本用例红。
+    function test_stageScaleContainsStage() {
+        const comp = Qt.createComponent("file://" + consoleQmlPath.replace("Console.qml", "Stage.qml"));
+        verify(comp.status === Component.Ready, comp.errorString ? comp.errorString() : "Stage.qml");
+        const host = Qt.createQmlObject('import QtQuick; Item { width: 0; height: 0 }', tc);
+        const stage = comp.createObject(host, { "stageWidth": 760, "stageHeight": 640 });
+        verify(stage !== null, "Stage.qml 创建失败");
+        compare(stage.width, 760, "舞台逻辑宽 = C++ 配置值");
+        compare(stage.height, 640, "舞台逻辑高 = C++ 配置值");
+
+        const windows = [[475, 400], [760, 640], [1400, 750], [1901, 1033]];
+        for (const win of windows) {
+            host.width = win[0];
+            host.height = win[1];
+            wait(1);
+            const expect = Math.min(win[0] / 760, win[1] / 640);
+            const tag = "stage 760x640 in " + win[0] + "x" + win[1];
+            verify(Math.abs(stage.stageScale - expect) < 1e-9,
+                   "scale " + stage.stageScale + " != " + expect + " @ " + tag);
+            // 等比：两个方向同一个系数（非等比缩放会在这里红）
+            verify(Math.abs(stage.scale - expect) < 1e-9, "Item.scale != contain scale @ " + tag);
+            verify(Math.abs(760 * stage.stageScale - stage.width * stage.scale) < 1e-6);
+            // 完整可见（contain 永不裁内容）
+            verify(760 * stage.stageScale <= win[0] + 1e-6, "舞台宽越界 @ " + tag);
+            verify(640 * stage.stageScale <= win[1] + 1e-6, "舞台高越界 @ " + tag);
+            // 居中：缩放后包围盒中心 == 窗口中心
+            const boxCx = stage.x + stage.width / 2;
+            const boxCy = stage.y + stage.height / 2;
+            verify(Math.abs(boxCx - win[0] / 2) < 1e-6, "水平未居中 @ " + tag);
+            verify(Math.abs(boxCy - win[1] / 2) < 1e-6, "垂直未居中 @ " + tag);
+            // 黑边：至少一边为 0（贴边），另一边 = 差值的一半
+            verify(Math.abs(stage.letterboxX) < 1e-6 || Math.abs(stage.letterboxY) < 1e-6,
+                   "contain 应至少贴住一边 @ " + tag);
+            verify(Math.abs(stage.letterboxX - (win[0] - 760 * stage.stageScale) / 2) < 1e-6,
+                   "左右黑边 @ " + tag);
+            verify(Math.abs(stage.letterboxY - (win[1] - 640 * stage.stageScale) / 2) < 1e-6,
+                   "上下黑边 @ " + tag);
+        }
+        // 小窗 vs 大窗：缩放确实跨过 1（舞台可以缩小显示、也可以放大显示）
+        host.width = 475; host.height = 400; wait(1);
+        verify(stage.stageScale < 1, "小窗应缩小舞台");
+        host.width = 1901; host.height = 1033; wait(1);
+        verify(stage.stageScale > 1, "大窗应放大舞台（不设上限）");
+        stage.destroy();
+        host.destroy();
+    }
+
+    // 契约（2026-10-25 二次修正）：缩放后的舞台仍按「舞台本地坐标」收事件。
+    // 舞台缩小显示（Android）时如果命中/坐标没走逆变换，按钮会点不中或点偏。
+    // 这里用**窗口坐标**发一次点击（与舞台本地坐标相差 scale 倍），验证
+    // Qt 文档（Item::scale）承诺的逆变换：MouseArea 收到的仍是舞台本地坐标。
+    function test_stageScaledClickMapsToStageCoordinates() {
+        const comp = Qt.createComponent("file://" + consoleQmlPath.replace("Console.qml", "Stage.qml"));
+        verify(comp.status === Component.Ready);
+        const stage = comp.createObject(host, { "stageWidth": 760, "stageHeight": 640 });
+        verify(stage !== null, "Stage.qml 创建失败");
+        const area = Qt.createQmlObject(
+            'import QtQuick; MouseArea { objectName: "probeArea"; x: 100; y: 200; width: 200; height: 60;'
+            + ' property real hitX: -1; property real hitY: -1;'
+            + ' onClicked: function(m) { hitX = m.x; hitY = m.y; } }', stage);
+        wait(1);
+        const s = stage.stageScale;
+        verify(s > 0 && s < 1, "夹具应缩小显示（scale=" + s + "）");
+        // 目标：舞台本地 (150, 230) -> MouseArea 本地 (50, 30)。
+        // 缩放原点是舞台中心（transformOrigin: Item.Center），所以舞台本地
+        // 坐标到窗口坐标的映射 = 中心 + (本地 - 中心) × scale。
+        const wx = stage.x + stage.width / 2 + (150 - stage.width / 2) * s;
+        const wy = stage.y + stage.height / 2 + (230 - stage.height / 2) * s;
+        mouseClick(host, wx, wy);      // host 未缩放：host 局部坐标 == 窗口坐标
+        wait(1);
+        verify(Math.abs(area.hitX - 50) <= 1, "命中坐标 x=" + area.hitX + "（应为 50）");
+        verify(Math.abs(area.hitY - 30) <= 1, "命中坐标 y=" + area.hitY + "（应为 30）");
+        stage.destroy();
     }
 
     // 文本按「段」渲染（性能回归）：相邻同格宽的字符合成一个 Text。
@@ -1026,9 +1123,13 @@ TestCase {
             backend.newline();
             backend.flush();
             wait(1);
-            verify(lv.contentY + lv.height >= lv.contentHeight - 1,
+            // 坐标系：Flickable 的 contentY 相对 contentItem 顶端，而 ListView
+            // 的 contentHeight 相对「模型原点」；头部委托被 cacheBuffer 释放后
+            // originY 会带走一段偏移（格高为非整数时是亚像素量，本例 -1.1px）。
+            // 判「在末尾」必须把 originY 补回去（与 Console.qml 的 atTail 同式）。
+            verify(lv.contentY - lv.originY + lv.height >= lv.contentHeight - 1,
                    "第 " + i + " 行刷新后仍停在末尾（contentY=" + lv.contentY
-                   + " contentHeight=" + lv.contentHeight + "）");
+                   + " originY=" + lv.originY + " contentHeight=" + lv.contentHeight + "）");
         }
         verify(lv.atTail, "头部裁剪没有打断跟随");
         backend.setMaxLog(5000);
@@ -1049,9 +1150,11 @@ TestCase {
             backend.newline();
             backend.flush();
             wait(1);    // 事件循环：Qt.callLater(scrollToTail)
-            verify(lv.contentY + lv.height >= lv.contentHeight - 1,
+            // 同上：contentHeight 相对模型原点，contentY 相对 contentItem，
+            // 两者之间差一个 originY（头部委托释放后非零）。
+            verify(lv.contentY - lv.originY + lv.height >= lv.contentHeight - 1,
                    "第 " + i + " 次刷新后停在末尾（contentY=" + lv.contentY
-                   + " contentHeight=" + lv.contentHeight + "）");
+                   + " originY=" + lv.originY + " contentHeight=" + lv.contentHeight + "）");
         }
 
         compare(view.rowCount, n, "模型行数");
@@ -1071,8 +1174,9 @@ TestCase {
 
         backend.print("L" + n);
         backend.newline(); backend.flush(); wait(1);
-        verify(lv.contentY + lv.height >= lv.contentHeight - 1,
-               "新行一来即贴回最新行（contentY=" + lv.contentY + "）");
+        verify(lv.contentY - lv.originY + lv.height >= lv.contentHeight - 1,
+               "新行一来即贴回最新行（contentY=" + lv.contentY
+               + " originY=" + lv.originY + "）");
         verify(lv.atTail, "回到末尾");
 
         // 菜单/C++ 的「滚动到底部」（requestScrollToBottom）同样贴底
@@ -1081,7 +1185,8 @@ TestCase {
         backend.requestScrollBy(3);               // D-Bus/菜单滚动：向上 3 行
         verify(lv.contentY + lv.height < lv.contentHeight - 1, "向上滚动后离开末尾");
         backend.requestScrollToBottom(); wait(1);
-        verify(lv.contentY + lv.height >= lv.contentHeight - 1, "滚动到底部请求生效");
+        verify(lv.contentY - lv.originY + lv.height >= lv.contentHeight - 1,
+               "滚动到底部请求生效（contentY=" + lv.contentY + " originY=" + lv.originY + "）");
         verify(lv.atTail, "回到末尾");
     }
 

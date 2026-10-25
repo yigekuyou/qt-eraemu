@@ -94,6 +94,7 @@ qt_add_qml_module(appemuera
         src/qml/Main.qml
         src/qml/NativeMenuBar.qml
         src/qml/EraRender.qml
+        src/qml/Stage.qml
         src/qml/TitleScreen.qml
         src/qml/Console.qml
         src/qml/ConsoleInput.qml

@@ -59,6 +59,16 @@ class WindowController : public QObject {
     Q_PROPERTY(GuiManager* gui READ gui WRITE setGui NOTIFY guiChanged FINAL)
     // "windowed" | "fullscreen" | "borderless"
     Q_PROPERTY(QString windowMode READ windowMode WRITE setWindowMode NOTIFY windowModeChanged FINAL)
+    // ---- 舞台（逻辑画布）尺寸：配置 ウィンドウ幅/高さ 的原始值 ----
+    // 这是「舞台」在 QML 侧的**唯一**尺寸来源（与窗口几何共用 GuiManager 的
+    // 同一对配置值，不引入第二份数据）：网格（列/行）、maxLineUnits、
+    // GETCLIENTSIZE 都由 C++ 从这两个值推导（EraEngine::syncConsoleGrid），
+    // 呈现层只负责把舞台等比缩放（contain）到窗口。窗口可以比舞台小（Android）
+    // 或比舞台大（桌面放大），都不影响脚本看到的画布。
+    // 注意：这里不做 320x240 的窗口下限钳制 —— 窗口下限是 QWindow 的事
+    // （targetWindowSize），而 C++ 的网格用的正是配置原值，舞台必须与它逐字相同。
+    Q_PROPERTY(int stageWidth READ stageWidth NOTIFY stageSizeChanged FINAL)
+    Q_PROPERTY(int stageHeight READ stageHeight NOTIFY stageSizeChanged FINAL)
     // 当前屏幕的刷新率（Hz；未知为 0）。QML 的 Screen 附着类型**没有**
     // refreshRate（Qt 文档 Screen QML Type 的属性表里不存在），所以刷新节拍
     // 由 C++ 提供：QScreen::refreshRate()（Qt 文档 QScreen）。
@@ -74,6 +84,9 @@ public:
     void setGui(GuiManager* g);
     [[nodiscard]] QString windowMode() const { return m_windowMode; }
     void setWindowMode(const QString& mode);
+    // 舞台（逻辑画布）尺寸 = 配置 ウィンドウ幅/高さ 原值（见上方属性注释）
+    [[nodiscard]] int stageWidth() const;
+    [[nodiscard]] int stageHeight() const;
     // 当前屏幕刷新率（Hz）；窗口/屏幕未知时为 0
     [[nodiscard]] int screenRefreshRate() const;
 
@@ -97,6 +110,9 @@ Q_SIGNALS:
     void guiChanged();
     void windowModeChanged();
     void screenRefreshRateChanged();
+    // 配置里的舞台尺寸变化（装载游戏 / 改设置）—— QML 据此重算呈现缩放；
+    // 网格由 C++ 同步重算（EraEngine::syncConsoleGrid），二者同源。
+    void stageSizeChanged();
 
 private:
     void applyWindowState();

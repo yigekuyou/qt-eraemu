@@ -19,12 +19,19 @@ import QtQuick
 import io.yigekuoyou.eraengine
 
 // 渲染层：把引擎的 ConsoleBackend 接到控制台视图。
+// 本项铺满上层 Stage（逻辑舞台 = C++ 配置画布）；网格/字号只由舞台决定，
+// 呈现缩放（contain）由 Stage 用**一个** Item.scale 完成 —— 这里不做任何
+// 尺寸补偿，也不读窗口尺寸。
 Item {
     id: eraRender
     anchors.fill: parent
 
     // 绑定到 C++ 引擎
     property EraEngine engine: null
+    // 舞台逻辑尺寸：本项被 Stage 铺满，自身宽高就是舞台逻辑像素。
+    // 显式转给 Console，让「网格只由舞台决定」在 QML 里可读（不是窗口像素）。
+    readonly property real stageWidth: width
+    readonly property real stageHeight: height
     Rectangle {
         anchors.fill: parent
         color: eraRender.engine ? eraRender.engine.gui.backColor : "#101010"
@@ -34,6 +41,8 @@ Item {
         // 与 stage 同尺寸：网格行数按「配置高 / 行高」推导，控制台必须拿到
         // 整块 stage 高度，否则最后一行的行距会被 margin 吃掉（底部削字）。
         anchors.fill: parent
+        stageWidth: eraRender.stageWidth
+        stageHeight: eraRender.stageHeight
         lineHeight: eraRender.engine ? eraRender.engine.gui.lineHeight : 22
         fontName: eraRender.engine ? eraRender.engine.gui.fontName : ""
         fontSize: eraRender.engine ? eraRender.engine.gui.fontSize : 16

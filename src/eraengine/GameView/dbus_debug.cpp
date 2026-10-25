@@ -29,6 +29,7 @@
 #include <QFileInfo>
 #include <QGuiApplication>
 #include <QLoggingCategory>
+#include <QQuickItem>
 #include <QQuickWindow>
 #include <QUrl>
 
@@ -128,9 +129,17 @@ QString EraDBusDebug::diagBlocks() {
     out << QStringLiteral("gui.fore=%1 back=%2 font=%3 size=%4 lh=%5")
                .arg(g->foreColor().name(), g->backColor().name(), g->fontName())
                .arg(g->fontSize()).arg(g->lineHeight());
-    out << QStringLiteral("console modelRows=%1 buffer=%2 maxSpanReach=%3 grid=%4x%5")
+    // grid / clientSize / maxLineUnits 三者的关系是验收点：网格由舞台（C++ 配置
+    // 画布）推导，GETCLIENTSIZE 读同一份网格，maxLineUnits（折行/DRAWLINE 宽）
+    // 也同步到同一个列数 —— 它们必须与窗口尺寸无关。
+    const int maxLineUnits = m_engine->getExecutionEngine()
+                                 ? m_engine->getExecutionEngine()->maxLineUnits() : -1;
+    out << QStringLiteral(
+               "console modelRows=%1 buffer=%2 maxSpanReach=%3 grid=%4x%5 clientSize=%4x%5 "
+               "maxLineUnits=%6")
                .arg(c->rowCount()).arg(c->buffer().count()).arg(c->maxSpanReach())
-               .arg(c->gridColumns()).arg(c->gridRows());
+               .arg(c->gridColumns()).arg(c->gridRows())
+               .arg(maxLineUnits);
     if (QScreen* s = QGuiApplication::primaryScreen()) {
         out << QStringLiteral("screen name=%1 geom=%2x%3 avail=%4x%5 stage=%6x%7")
                    .arg(s->name())
@@ -149,6 +158,31 @@ QString EraDBusDebug::diagBlocks() {
         // QML 实际使用的 cell / 字号 / 网格（验收「不重叠」需要真值，
         // 不能用窗口宽 ÷ 网格反推 —— 那是旧实现的口径）。
         if (const auto* qw = qobject_cast<const QQuickWindow*>(w)) {
+            // 舞台（逻辑画布）+ 呈现缩放：舞台尺寸来自 C++ 配置，
+            // scale/letterbox 来自 Stage.qml 的**唯一**一次变换。
+            // 这张表就是「同一舞台、任意窗口 → grid/字号恒定」的证据。
+            if (const auto* stage =
+                    qobject_cast<const QQuickItem*>(
+                        qw->findChild<QObject*>(QStringLiteral("gameStage")))) {
+                const QQuickItem* host = stage->parentItem();
+                const QSizeF hostSize = host ? QSizeF(host->width(), host->height())
+                                             : QSizeF();
+                const double scale = stage->property("stageScale").toDouble();
+                out << QStringLiteral(
+                           "gameStage=%1x%2 scale=%3 box=%4x%5 letterbox=%6x%7 host=%8x%9 "
+                           "origin=%10,%11")
+                           .arg(stage->width(), 0, 'f', 1)
+                           .arg(stage->height(), 0, 'f', 1)
+                           .arg(scale, 0, 'f', 4)
+                           .arg(stage->width() * scale, 0, 'f', 1)
+                           .arg(stage->height() * scale, 0, 'f', 1)
+                           .arg(stage->property("letterboxX").toDouble(), 0, 'f', 1)
+                           .arg(stage->property("letterboxY").toDouble(), 0, 'f', 1)
+                           .arg(hostSize.width(), 0, 'f', 1)
+                           .arg(hostSize.height(), 0, 'f', 1)
+                           .arg(stage->x(), 0, 'f', 1)
+                           .arg(stage->y(), 0, 'f', 1);
+            }
             const QObject* root = qw->findChild<QObject*>(QStringLiteral("consoleRoot"));
             if (root) {
                 out << QStringLiteral("qmlConsole box=%1x%2 cell=%3x%4 font=%5 grid=%6x%7")
@@ -258,6 +292,11 @@ void EraDBusDebug::setLoggingRules(const QString& rules) {
 QString EraDBusDebug::resizeWindow(int width, int height) {
     for (QWindow* w : QGuiApplication::topLevelWindows()) {
         if (auto* qw = qobject_cast<QQuickWindow*>(w)) {
+            // 诊断专用：WindowController 会把窗口锁在配置尺寸（sizableWindow=false
+            // 时 min==max），这里先解除约束再 resize，才能验证「窗口 != 配置」
+            // 的极端情况（呈现层必须仍然正确）。不改变任何生产语义。
+            qw->setMinimumSize(QSize(1, 1));
+            qw->setMaximumSize(QSize(16777215, 16777215));
             qw->resize(qMax(1, width), qMax(1, height));
             return QStringLiteral("resize %1x%2 -> actual %3x%4 (platform %5)")
                 .arg(width).arg(height)

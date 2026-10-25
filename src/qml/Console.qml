@@ -65,7 +65,6 @@ FocusScope {
     onBackendChanged: {
         attachFramePacing();
         syncLayout();
-        updateGrid();
     }
     Component.onDestruction: if (backend) backend.framePacingAttached = false
 
@@ -142,45 +141,44 @@ FocusScope {
     property string focusColor: ""
     property string logColor: ""
 
-    // ---- 网格与字号同源（窗口多大，就显示多少列/行）----
-    // 单元格像素 = 字号/2（半角宽）× max(行高, 字号+1)（行距至少比字高 1px）。
-    // 列/行 = 视口像素 ÷ 单元格像素；再回算 cellWidth/cellHeight 把余量摊给
-    // 单元格，保证 columns*cellWidth ≤ 视口宽、rows*cellHeight ≤ 视口高。
+    // ---- 网格/字号：只由舞台（C++ 配置画布）决定 ----
+    // 舞台尺寸是 C++ 的事实（WindowController.stageWidth/stageHeight =
+    // emuera.config 的 ウィンドウ幅/高さ），C++ 用同一对值推导：
+    //   * 网格（列 = 舞台宽 ÷ 半角字宽、行 = 舞台高 ÷ 行高）
+    //     → ConsoleBackend::gridColumns/gridRows（EraEngine::syncConsoleGrid）
+    //   * maxLineUnits（折行/DRAWLINE 宽度）
+    //   * GETCLIENTSIZE / CLIENTWIDTH / CLIENTHEIGHT
+    // 所以 QML **不再推导网格、也不把网格推给 C++**：读取 backend 的网格，
+    // 再把它摊到舞台逻辑像素上得到 cellWidth/cellHeight。
     //
-    // 这是「字号不随格子乱来」的唯一来源：
-    //   * 以前 grid 固定为配置值、整块 stage 再做 Item.scale —— 窗口放大时
-    //     格子被拉成 22×31 px 而字号仍是 18（字距散开、横线铺满整屏）；
-    //     窗口缩小时格子小于字高（文字上下重叠、按钮挤成一条）。
-    //   * 现在窗口放大 → 列/行变多，cell 仍是字号量级；窗口缩小 → 列/行
-    //     变少，字号不变（只有极端尺寸才按 cellHeight-1 自动缩字号）。
-    // C++ 排版用的 grid 由 updateGrid() 同步推过去（含折行宽度），
-    // QML 不再读取 backend.gridColumns 作为显示几何。
+    // 这条边界的意义：同一个游戏在任意窗口尺寸下（475x400 / 760x640 /
+    // 1400x750 / 1901x1033）grid、字号、GETCLIENTSIZE 完全相同 —— 呈现层
+    // 只把整块舞台等比缩放（Stage.qml 的一个 Item.scale），窗口尺寸不参与
+    // 任何排版计算。上一版按窗口像素推导网格是错的：它让脚本看到的画布随
+    // 设备而变（Android 窗口 1080x2400 与桌面 760x640 会得到不同列数）。
+    //
+    // 舞台逻辑尺寸：由 EraRender 从 Stage 注入（生产路径必填）；
+    // 默认取自身尺寸，只有独立实例化（QML 单测）才会走到。
+    property real stageWidth: width
+    property real stageHeight: height
     readonly property real scrollBarWidth: 10
-    // 底部留 1px：最后一行文字的下缘不会被视口 clip 切掉。
-    readonly property real gridWidthPx: Math.max(1, width - scrollBarWidth)
-    readonly property real gridHeightPx: Math.max(1, height - 1)
-    // 基准格宽/格高不单独存在：格宽来自 fontSize（半角 = 字号/2），
-    // 格高的下界 lineHeight 与「装得下字高」的 fontSize+1 都写在 rowsFor() 里，
-    // 保证「派生网格」与「推给 C++ 的网格」永远同一份公式。
-    // 网格推导做成纯函数：属性绑定与 updateGrid() 用**同一份**公式。
-    // （QML 的属性变更信号早于派生绑定重算，在 onFontSizeChanged 里直接读
-    //  gridColumns 会拿到上一次的值 —— 测试里就表现为「字号 19、网格还是 18」。）
-    function columnsFor(px, fontPx): int {
-        return Math.max(1, Math.floor(Math.max(1, px - scrollBarWidth)
-                                      / Math.max(1, fontPx / 2)));
-    }
-    function rowsFor(px, linePx, fontPx): int {
-        return Math.max(1, Math.floor(Math.max(1, px - 1)
-                                      / Math.max(1, linePx, fontPx + 1)));
-    }
-    readonly property int gridColumns: columnsFor(width, fontSize)
-    readonly property int gridRows: rowsFor(height, lineHeight, fontSize)
+    // 网格来自 C++（舞台推导的唯一一份公式）；backend 尚未接上时给 1，
+    // 此时没有任何模型/委托，不会画出错位内容。
+    readonly property int gridColumns: backend && backend.gridColumns > 0 ? backend.gridColumns : 1
+    readonly property int gridRows: backend && backend.gridRows > 0 ? backend.gridRows : 1
+    // 内容区：右侧常驻滚动条让位、底部留 1px（最后一行下缘不被 clip 切掉）。
+    readonly property real gridWidthPx: Math.max(1, stageWidth - scrollBarWidth)
+    readonly property real gridHeightPx: Math.max(1, stageHeight - 1)
+    // 单元格 = 舞台像素 ÷ 网格（把除不尽的余量摊给每格；永远 ≥ 字号/2 与行高，
+    // 因为 C++ 是先除后取整得到网格的）。
     readonly property real cellWidth: Math.max(1, gridWidthPx / gridColumns)
     readonly property real cellHeight: Math.max(1, gridHeightPx / gridRows)
-    // 渲染字号：不超过配置字号，也不超过单元格能容纳的大小（行高留 1px）。
-    // 极端窄/矮窗口下字号自动缩小，绝不与相邻行重叠、也不越过格宽。
+    // 渲染字号：常规情况下 == 配置字号（舞台网格就是按它算出来的）。
+    // 只有当配置自相矛盾（行高 < 字号）时才压到行距能容纳的大小 —— 这是
+    // 「极端配置不重叠」的兜底，不参与窗口缩放（窗口缩放由 Stage 统一做）。
+    // 横向不重叠不靠缩字号：每个字形按 xScale ≤ 1 压进自己的格宽（ConsoleBlock）。
     readonly property real renderFontSize: Math.max(1, Math.min(fontSize,
-                                                     Math.min(2 * cellWidth, cellHeight - 1)))
+                                                     Math.max(cellHeight, lineHeight)))
 
     // 当前舞台和历史是互斥页面；历史刷新不能覆盖用户的回看位置。
     property bool reviewingHistory: false
@@ -287,36 +285,17 @@ FocusScope {
         return n;
     }
 
-    // 把字号/行高/字体推给 C++（C++ 据此动态重算所有区块的位置与尺寸）
+    // 把字号/行高/字体推给 C++（C++ 据此动态重算所有区块的位置与尺寸）。
+    // 注意：**网格不在这里推**——网格由 C++ 从舞台尺寸推导（唯一一份公式），
+    // QML 只是读取它（见上方 gridColumns/gridRows）。
     function syncLayout(): void {
         if (!backend)
             return;
         backend.setFontSize(fontSize);
         backend.setLineHeight(lineHeight);
     }
-    // 把「视口像素 + 字号」推导出的列/行推给 C++（同一份网格用于折行、
-    // DRAWLINE 与舞台模型）。幂等：值相同就 no-op，C++ 的 gridChanged
-    // 再回调到这里时不会形成循环。
-    function updateGrid(): void {
-        if (!backend)
-            return;
-        const cols = columnsFor(width, fontSize);
-        const rows = rowsFor(height, lineHeight, fontSize);
-        if (backend.gridColumns !== cols)
-            backend.setGridColumns(cols);
-        if (backend.gridRows !== rows)
-            backend.setGridRows(rows);
-    }
-    onFontSizeChanged: { syncLayout(); updateGrid(); }
-    onLineHeightChanged: { syncLayout(); updateGrid(); }
-    onWidthChanged: updateGrid()
-    onHeightChanged: updateGrid()
-    // 装载/设置变化时 C++ 会按配置重设网格（EraEngine::syncConsoleGrid）；
-    // 显示层再按实际视口推回一次，保证两边始终同源。
-    Connections {
-        target: root.backend
-        function onGridChanged() { root.updateGrid() }
-    }
+    onFontSizeChanged: syncLayout()
+    onLineHeightChanged: syncLayout()
 
     // ---- SETBGIMAGE：背景图层（C# ConsoleBackground）----
     // 贴在正文**后面**：列表深度降序（后画的深度小、盖在上面），保持长宽比
@@ -609,7 +588,6 @@ FocusScope {
     Component.onCompleted: {
         attachFramePacing();
         syncLayout();
-        updateGrid();          // 初版网格按当前视口推给 C++
         applyToolTipStyle();   // TOOLTIP_SET* 可能在界面出现前就已下发
     }
 }

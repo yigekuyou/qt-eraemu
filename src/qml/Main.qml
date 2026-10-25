@@ -703,12 +703,13 @@ ApplicationWindow {
         enabled: !statusStrip.loading
     }
 
-    // ---- 控制台（渲染层）----
-    // 不再有「虚拟舞台 + 整体 transform」：渲染层直接铺满窗口的游戏视口，
-    // 网格（列/行）与单元格像素**由视口尺寸 + 字号/行高同源推导**（见
-    // Console.qml 的 gridColumns/gridRows/cellWidth/cellHeight）。
-    // 这样窗口放大 → 列/行变多、单元格仍是 字号/2 × 行高（字不会被拉散）；
-    // 窗口缩小 → 列/行变少、字号不变（行距永远 ≥ 字号+1，不会上下重叠）。
+    // ---- 控制台（渲染层）：逻辑舞台 + 等比缩放呈现 ----
+    // 舞台尺寸 = C++ 的配置画布（WindowController.stageWidth/Height，与
+    // 网格/maxLineUnits/GETCLIENTSIZE 同一来源），**与窗口尺寸无关**；
+    // Stage.qml 把整块舞台用**一个** Item.scale 等比缩放（contain）到游戏视口
+    // 并居中，多出来的边留背景色（信箱）。
+    //   * 舞台 > 窗口（Android 竖屏、小窗）：整体缩小显示，内容不重排、不丢行；
+    //   * 舞台 < 窗口（桌面放大/平板）：整体放大（不设上限）。
     // 窗口尺寸本身只由 C++ WindowController 设置（QML 不绑 width/height）。
     ColumnLayout {
         anchors.fill: parent
@@ -718,13 +719,21 @@ ApplicationWindow {
             Layout.fillWidth: true
             Layout.fillHeight: true
             // Android normally resizes the window above the keyboard. Keep the
-            // viewport clipped so the console cannot draw over the chrome.
+            // viewport clipped so the scaled stage cannot draw over the chrome.
             clip: true
 
-            EraRender {
-                id: eraRender
-                anchors.fill: parent
-                engine: eraEngine
+            // 逻辑舞台：尺寸与位置都由 C++ 配置 + 本视口推导，绝不按窗口重排
+            Stage {
+                id: gameStage
+                objectName: "gameStage"
+                stageWidth: windowController.stageWidth
+                stageHeight: windowController.stageHeight
+
+                EraRender {
+                    id: eraRender
+                    anchors.fill: parent
+                    engine: eraEngine
+                }
             }
 
         // 未装载时在屏幕空间显示操作，不随游戏舞台缩小。

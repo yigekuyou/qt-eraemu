@@ -188,11 +188,16 @@ TestCase {
             const glyph = findChild(cell, "gridGlyph");
             if (!glyph) continue;
             // 一个「段」承载相邻同格宽的若干字符（ConsoleBlock.glyphRuns）。
-            // 不变式：段宽 == 字数 × 格宽、缩放后正好铺满段宽、缩放原点在
-            // Left（不外溢到相邻 span —— 取代 delegate 内 clip：Qt 文档
-            // 「Performance considerations」明确禁止在 delegate 里用 clip）。
+            // 不变式：段宽 == 字数 × 格宽、缩放**绝不超过**段宽（不外溢到
+            // 相邻 span —— 取代 delegate 内 clip：Qt 文档「Performance
+            // considerations」明确禁止在 delegate 里用 clip）。
+            // 契约变化（2026-10-25）：不再强制「放大铺满」。窗口变矮/变窄时
+            // Console 会把渲染字号降到 cellHeight-1，此时若把 glyph 横向拉回
+            // 格宽会把字撑变形；现在只允许压缩（xScale ≤ 1），宁可留亚像素
+            // 空隙。
             const run = cell.modelData;
-            verify(Math.abs(glyph.implicitWidth * glyph.transform[0].xScale - cell.width) < 0.01);
+            verify(glyph.implicitWidth * glyph.transform[0].xScale <= cell.width + 0.01);
+            verify(glyph.transform[0].xScale <= 1.0);
             verify(Math.abs(cell.width - run.count * run.units * view.cellWidth) < 0.01);
             verify(glyph.transform[0].origin.x === 0);
             verify(!cell.clip);
@@ -204,6 +209,44 @@ TestCase {
         const next = view.blockAt(0, 1);
         verify(next !== null, "同一行还有第二个区块（按钮）");
         compare(next.x, block.x + block.width);
+    }
+
+    // 契约（2026-10-25）：网格与字号同源 —— 对任意窗口尺寸，
+    //   * 列/行 = 视口像素 ÷ 单元格像素（字号/2 × max(行高, 字号+1)）；
+    //   * 实际 cell 高 ≥ 渲染字号 + 1（行间不重叠）；
+    //   * 2×cell 宽 ≥ 渲染字号（横向不重叠）；
+    //   * 内容尺寸不超出视口（不削字）；
+    //   * C++ 排版网格与 QML 显示网格完全一致（折行/居中同源）。
+    function test_gridFontInvariantAcrossSizes() {
+        const cases = [
+            { w: 760,  h: 640,  f: 18, lh: 19 },   // eraTetris 配置
+            { w: 1400, h: 750,  f: 16, lh: 16 },   // eraTW 配置（行高 == 字号）
+            { w: 475,  h: 400,  f: 18, lh: 19 },   // 小窗口
+            { w: 1901, h: 1033, f: 18, lh: 19 },   // 大窗口（不再拉伸格子）
+            { w: 200,  h: 120,  f: 24, lh: 20 },   // 极端：缩网格而不是压字
+        ];
+        for (const c of cases) {
+            view.width = c.w;
+            view.height = c.h;
+            view.fontSize = c.f;
+            view.lineHeight = c.lh;
+            wait(1);
+            const tag = c.w + "x" + c.h + " font " + c.f + " lh " + c.lh;
+            // 字号保持配置值（这是「格子缩放与字号同源」的本意：窗口变化
+            // 只改变列/行，不靠缩字号来硬塞内容）。
+            verify(Math.abs(view.renderFontSize - view.fontSize) < 1e-6,
+                   "字号被缩小 " + view.renderFontSize + " != " + view.fontSize + " @ " + tag);
+            verify(view.cellHeight >= view.renderFontSize + 1 - 1e-6,
+                   "cell 高 " + view.cellHeight + " < 字号+1 " + (view.renderFontSize + 1) + " @ " + tag);
+            verify(2 * view.cellWidth >= view.renderFontSize - 1e-6,
+                   "cell 宽不足 @ " + tag);
+            compare(view.gridColumns, backend.gridColumns, "QML/C++ 列同源 @ " + tag);
+            compare(view.gridRows, backend.gridRows, "QML/C++ 行同源 @ " + tag);
+            verify(view.gridColumns * view.cellWidth <= view.width - view.scrollBarWidth + 1e-6,
+                   "内容右缘越界 @ " + tag);
+            verify(view.gridRows * view.cellHeight <= view.height + 1e-6,
+                   "内容下缘越界 @ " + tag);
+        }
     }
 
     // 文本按「段」渲染（性能回归）：相邻同格宽的字符合成一个 Text。

@@ -294,11 +294,11 @@ EraEngine::EraEngine(QObject *parent)
 		};
 		m_executionEngine.setDefaultColorProvider(defaultForeColor);
 		m_expressionEvaluator.setDefaultColorProvider(defaultForeColor);
+		// GETCLIENTSIZE / CLIENTWIDTH / CLIENTHEIGHT = 玩家实际看到的网格。
+		// 显示层（Console.qml）按窗口视口与字号推导列/行并经 setGridColumns/Rows
+		// 推给 C++，这里直接读同一份数据，避免「脚本看到 84 列、画面只有 51 列」。
 		m_expressionEvaluator.setClientSizeProvider([this]() -> QPair<int,int> {
-			const int columnPx = qMax(1, m_guiManager.fontSize() / 2);
-			const int lineHeight = qMax(1, m_guiManager.lineHeight());
-			return { qMax(1, m_guiManager.windowWidth() / columnPx),
-			         qMax(1, m_guiManager.windowHeight() / lineHeight) };
+			return { qMax(1, m_console.gridColumns()), qMax(1, m_console.gridRows()) };
 		});
 		m_expressionEvaluator.setSkipProvider([this](int kind) -> int {
 			// kind：0=ISSKIP（SKIPDISP） 1=MESSKIP 2=MOUSESKIP（GUI 专属，恒 0）
@@ -476,6 +476,13 @@ EraEngine::EraEngine(QObject *parent)
 		// 会按错误的列数计算，宽度超过默认 80 列的图片/长行会被挤到左边
 		// （eraTW 标题图宽 130 列，正是被 80 列的网格压到 col 0 的）。
 		syncConsoleGrid();
+		// 显示网格（Console.qml 按窗口视口推导）才是实际排版宽度：列数一变，
+		// DRAWLINE 的铺满宽度与折行上限必须同步，否则长行会越出右边被裁掉。
+		// 配置变化时 syncConsoleGrid 先按配置重设，QML 收到 gridChanged 后再
+		// 按实际视口推回一次（见 Console.qml updateGrid）。
+		connect(&m_console, &ConsoleBackend::gridChanged, this, [this]() {
+			m_executionEngine.setMaxLineUnits(qMax(1, m_console.gridColumns()));
+		});
 		// 窗口宽/字号变化后同步（DRAWLINE 的铺满宽度由它决定）
 		connect(&m_guiManager, &GuiManager::settingsChanged, this, [this]() {
 			m_executionEngine.setMaxLineUnits(

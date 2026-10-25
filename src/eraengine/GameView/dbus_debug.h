@@ -59,6 +59,9 @@ public Q_SLOTS:  // ---- 检查 ----
     QString diagBlocks();                 // 诊断：颜色/字体/区块数据（临时）
     QString listButtons();                // 当前屏的按钮值（输入候选）
     QString saveScreenshot(const QString& path);  // 保存当前画面，返回结果说明
+    // 诊断专用：像用户拖拽一样改变顶层窗口尺寸（不经过 WindowController，
+    // 因此可用于验证「任意窗口尺寸下网格/字号自适应」）。返回实际几何。
+    QString resizeWindow(int width, int height);
     // 每帧抓取渲染：引擎每产生一次新画面（ConsoleBackend::generationChanged）就抓一张，
     // 存到 <prefix>00000.png …（prefix 不含扩展名）。limit<=0 表示不限（stopFrameCapture 停）。
     QString startFrameCapture(const QString& prefix, int limit);

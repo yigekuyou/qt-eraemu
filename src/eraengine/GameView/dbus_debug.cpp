@@ -146,6 +146,21 @@ QString EraDBusDebug::diagBlocks() {
         out << QStringLiteral("window %1x%2 visible=%3 dpr=%4")
                        .arg(w->width()).arg(w->height())
                        .arg(w->isVisible()).arg(w->devicePixelRatio());
+        // QML 实际使用的 cell / 字号 / 网格（验收「不重叠」需要真值，
+        // 不能用窗口宽 ÷ 网格反推 —— 那是旧实现的口径）。
+        if (const auto* qw = qobject_cast<const QQuickWindow*>(w)) {
+            const QObject* root = qw->findChild<QObject*>(QStringLiteral("consoleRoot"));
+            if (root) {
+                out << QStringLiteral("qmlConsole box=%1x%2 cell=%3x%4 font=%5 grid=%6x%7")
+                           .arg(root->property("width").toDouble(), 0, 'f', 1)
+                           .arg(root->property("height").toDouble(), 0, 'f', 1)
+                           .arg(root->property("cellWidth").toDouble(), 0, 'f', 3)
+                           .arg(root->property("cellHeight").toDouble(), 0, 'f', 3)
+                           .arg(root->property("renderFontSize").toDouble(), 0, 'f', 2)
+                           .arg(root->property("gridColumns").toInt())
+                           .arg(root->property("gridRows").toInt());
+            }
+        }
     }
     const QVariantList blocks = c->screenBlocks();
     out << QStringLiteral("textBlocks=%1").arg(blocks.size());
@@ -238,6 +253,19 @@ void EraDBusDebug::scrollToBottom() {
 
 void EraDBusDebug::setLoggingRules(const QString& rules) {
     QLoggingCategory::setFilterRules(rules);
+}
+
+QString EraDBusDebug::resizeWindow(int width, int height) {
+    for (QWindow* w : QGuiApplication::topLevelWindows()) {
+        if (auto* qw = qobject_cast<QQuickWindow*>(w)) {
+            qw->resize(qMax(1, width), qMax(1, height));
+            return QStringLiteral("resize %1x%2 -> actual %3x%4 (platform %5)")
+                .arg(width).arg(height)
+                .arg(qw->width()).arg(qw->height())
+                .arg(QGuiApplication::platformName());
+        }
+    }
+    return QStringLiteral("no top-level window");
 }
 
 QString EraDBusDebug::saveScreenshot(const QString& path) {

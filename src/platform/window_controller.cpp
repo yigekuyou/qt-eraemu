@@ -23,12 +23,24 @@
 #endif
 #include <QGuiApplication>
 #include <QScreen>
+#include <QTimer>
 
 namespace {
 constexpr int kWindowSizeMax = 0x00FFFFFF;   // QWINDOWSIZE_MAX（qwindow_p.h 未导出）
 constexpr const char* kModeWindowed   = "windowed";
 constexpr const char* kModeFullscreen = "fullscreen";
 constexpr const char* kModeBorderless = "borderless";
+
+// Qt.labs.platform 的原生菜单栏只在**真实桌面合成器**平台上有实现：
+// xcb（X11/XWayland）与 wayland 会创建 QPlatformMenuBar；offscreen /
+// minimal / vnc / eglfs / linuxfb 没有原生菜单接口。旧实现只看 D-Bus
+// 宿主是否注册，于是 `QT_QPA_PLATFORM=offscreen` 也会走进 labs 的
+// createObject()，在 setInitialProperty 里解引用空平台菜单栏 → SIGSEGV。
+// 判据集中在这一个函数里（平台能力），D-Bus 只决定「有宿主时用不用」。
+bool platformSupportsNativeMenuBar() {
+    const QString p = QGuiApplication::platformName();
+    return p == QLatin1String("xcb") || p == QLatin1String("wayland");
+}
 }  // namespace
 
 WindowController::WindowController(QObject* parent) : QObject(parent) {}
@@ -56,6 +68,27 @@ void WindowController::setWindow(QQuickWindow* w) {
         connect(m_window, &QQuickWindow::screenChanged, this, [this](QScreen*) {
             applyWindowSize();
             emit screenRefreshRateChanged();   // 刷新率随屏幕变化（QScreen::refreshRate）
+        });
+        // 尺寸唯一来源在 applyWindowSize()。这里记录每一次几何变化，启动后
+        // 的事件循环第 0 拍与 300 ms 再核对一次（窗口管理器可能在 map 时
+        // 应用「记住的几何/最大化」规则，如 KWin 的窗口规则；Wayland 的
+        // 初始尺寸也由合成器决定）。对账失败只在窗口化模式下纠正一次。
+        connect(m_window, &QQuickWindow::widthChanged, this, [this](int w) {
+            qDebug() << "[window] widthChanged" << w << "visible" << m_window->isVisible()
+                     << "state" << int(m_window->windowStates());
+        });
+        connect(m_window, &QQuickWindow::heightChanged, this, [this](int h) {
+            qDebug() << "[window] heightChanged" << h << "visible" << m_window->isVisible()
+                     << "state" << int(m_window->windowStates());
+        });
+        connect(m_window, &QQuickWindow::visibleChanged, this, [this](bool visible) {
+            if (!visible || m_initialGeometryChecked)
+                return;
+            QTimer::singleShot(0, this, [this] { verifyWindowSize(); });
+            QTimer::singleShot(300, this, [this] {
+                verifyWindowSize();
+                m_initialGeometryChecked = true;
+            });
         });
         // 装配完成立刻由 C++ 定尺寸，避免 QML 默认尺寸闪一帧
         applyWindowSize();
@@ -114,15 +147,33 @@ bool WindowController::hasGlobalMenuBar() {
     // 菜单、或桌面环境的全局菜单宿主不完整时用）
     if (qEnvironmentVariableIsSet("EMUERA_INLINE_MENU"))
         return false;
-    // Qt 文档 Qt.labs.platform：Linux 上原生菜单栏只在桌面环境提供系统
-    // D-Bus 菜单栏时可用；没有宿主时 labs MenuBar 什么都不显示，会「吃掉」
-    // 菜单。探测宿主服务（与 Qt 内部 QDBusMenuBar 相同的服务名），
-    // 有 Plasma/Unity 的全局菜单宿主才走 labs。
-    return QDBusConnection::sessionBus().interface()->isServiceRegistered(
-        QStringLiteral("com.canonical.AppMenu.Registrar"));
+    // ① 平台必须真的提供原生菜单栏接口。offscreen/minimal/vnc 等 QPA
+    //    插件没有 QPlatformMenuBar，创建 Qt.labs.platform MenuBar 会 SIGSEGV
+    //    （setInitialProperty → QQuickLabsPlatformMenuItem）。这是能力判定。
+    if (!platformSupportsNativeMenuBar())
+        return false;
+    // ② Linux 上还要有全局菜单宿主（Qt 文档 Qt.labs.platform）。没有宿主时
+    //    labs MenuBar 什么都不显示、会「吃掉」菜单，退到窗口内菜单栏。
+    QDBusConnectionInterface* bus = QDBusConnection::sessionBus().interface();
+    if (!bus)
+        return false;
+    return bus->isServiceRegistered(QStringLiteral("com.canonical.AppMenu.Registrar"));
 #else
     return false;
 #endif
+}
+
+QSize WindowController::targetWindowSize() const {
+    // 窗口尺寸 = GuiManager 的配置尺寸（emuera.config 的ウィンドウ幅/高さ），
+    // **全程不做屏幕钳制**：原版 Emuera 也允许窗口比屏幕大（Win32 无限制），
+    // 而任何「本进程缩小窗口」都会让 gui.windowWidth ≠ 实际 QWindow，
+    // 把配置和画面对不上。屏幕装不下是用户/窗口管理器的选择，不是本进程的。
+    // 只有下限保护（320x240，防止 0 尺寸窗口）。
+    constexpr int kMinW = 320;
+    constexpr int kMinH = 240;
+    const int w = qMax(kMinW, m_gui ? m_gui->windowWidth() : 760);
+    const int h = qMax(kMinH, m_gui ? m_gui->windowHeight() : 640);
+    return QSize(w, h);
 }
 
 void WindowController::applyWindowSize() {
@@ -131,29 +182,11 @@ void WindowController::applyWindowSize() {
     if (m_windowMode != QLatin1String(kModeWindowed))
         return;   // 全屏/无边框全屏时几何由窗口模式接管
 
-    // 舞台（stage）= GuiManager 的配置尺寸（emuera.config 推导），QML 会把它
-    // 等比缩放到窗口内。这里把**窗口**初始化为「舞台等比缩到屏幕内」的结果：
-    // 通常 = 舞台 1:1（无信箱）；舞台比屏幕大时窗口更小，画面由 QML 缩小呈现。
-    // Qt 文档 QScreen::availableGeometry 已扣除任务栏/系统菜单。
-    QScreen* screen = m_window->screen();
-    if (!screen)
-        screen = QGuiApplication::primaryScreen();
-    const QRect avail = screen ? screen->availableGeometry() : QRect();
-
     constexpr int kMinW = 320;
     constexpr int kMinH = 240;
-    const double stageW = qMax(1, m_gui->windowWidth());
-    const double stageH = qMax(1, m_gui->windowHeight());
-    double k = 1.0;
-    if (avail.isValid())
-        k = qMin(1.0, qMin(avail.width() / stageW, avail.height() / stageH));
-
-    int w = qMax(kMinW, static_cast<int>(stageW * k + 0.5));
-    int h = qMax(kMinH, static_cast<int>(stageH * k + 0.5));
-    if (avail.isValid()) {
-        w = qMin(w, avail.width());
-        h = qMin(h, avail.height());
-    }
+    const QSize target = targetWindowSize();
+    const int w = target.width();
+    const int h = target.height();
 
     m_window->setMinimumSize(QSize(kMinW, kMinH));
     m_window->setMaximumSize(m_gui->sizableWindow()
@@ -232,6 +265,36 @@ void WindowController::clearFramelessHint() {
     m_window->setFlags(m_window->flags() & ~Qt::FramelessWindowHint);
     if (wasVisible)
         m_window->show();
+}
+
+void WindowController::verifyWindowSize() {
+    if (m_initialGeometryChecked || !m_window || !m_gui)
+        return;
+    if (m_windowMode != QLatin1String(kModeWindowed) || !m_window->isVisible())
+        return;
+    // 配置要求最大化时，实际几何本来就该由窗口管理器决定，不做对账。
+    if (m_gui->maximized())
+        return;
+
+    const QSize target = targetWindowSize();
+    const QSize actual(m_window->width(), m_window->height());
+    const bool maximized = (m_window->windowStates() & Qt::WindowMaximized) != 0;
+    if (actual == target && !maximized)
+        return;
+
+    // 典型来源：KWin 等窗口管理器把「上次关闭时的几何/最大化」当作新窗口的
+    // 初始状态；Wayland 合成器也可能改写初始 toplevel 尺寸。本进程不再有
+    // 第二处 setWidth/setHeight（QML 不绑定 width/height），所以这里纠正后
+    // 若仍不一致，就是平台/合成器的行为。
+    qWarning() << "[window] 启动几何被窗口管理器改写，纠正一次: actual" << actual
+               << "target" << target << "maximized" << maximized
+               << "platform" << QGuiApplication::platformName();
+    if (maximized)
+        m_window->showNormal();
+    applyWindowSize();
+
+    qDebug() << "[window] 纠正后" << QSize(m_window->width(), m_window->height())
+             << "payload target" << target;
 }
 
 void WindowController::raiseWindow() {

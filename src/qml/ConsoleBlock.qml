@@ -59,7 +59,8 @@ Item {
     property real cellHeight: 19
     // 空字体/颜色表示使用系统主题默认值；C++ 只在模板显式指定时提供覆盖值。
     property string fontName: ""
-    property int fontSize: 16
+    // real：极端窗口下 Console 会按 cellHeight-1 给出非整数字号
+    property real fontSize: 16
     property string foreColor: ""
     property string focusColor: ""
     property string logColor: ""
@@ -197,9 +198,14 @@ Item {
                     // 空 family 交给 Qt 使用系统默认字体。
                     font.family: block.effectiveFontName
                     font.pixelSize: block.fontSize > 0 ? block.fontSize : undefined
+                    // 只**压缩**不拉伸：字号可能被 Console 调小（窗口很窄/很矮时
+                    // 保证行距 ≥ 字高+1），此时若把 glyph 放大回格宽，字会被横向
+                    // 撑开变形。implicitWidth 本来就是按配置字号量出来的格宽，
+                    // 正常情况下比例 ≈ 1。
                     transform: Scale {
                         origin.x: 0
-                        xScale: glyph.implicitWidth > 0 ? glyph.parent.width / glyph.implicitWidth : 1
+                        xScale: glyph.implicitWidth > 0
+                                ? Math.min(1, glyph.parent.width / glyph.implicitWidth) : 1
                     }
                     color: block.effectiveTextColor
                     font.bold: block.blockData ? block.blockData.bold === true : false

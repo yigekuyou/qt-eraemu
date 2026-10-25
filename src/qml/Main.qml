@@ -57,12 +57,34 @@ ApplicationWindow {
     // 平台差异总开关：移动端没有菜单栏/托盘/F11，走触屏适配
     readonly property bool isMobile: Qt.platform.os === "android" || Qt.platform.os === "ios"
     readonly property bool isAndroid: Qt.platform.os === "android"
-    // 原生菜单栏：macOS 总是走系统菜单栏；Linux 探测 D-Bus 全局菜单宿主
-    // （com.canonical.AppMenu.Registrar，Plasma/Unity），有宿主走 labs 原生
-    // 菜单栏（NativeMenuBar.qml），否则窗口内 MenuBar
+    // 原生菜单栏：macOS 总是走系统菜单栏；Linux 由 C++ 的**能力判定**决定
+    // （平台提供 QPlatformMenuBar 且 D-Bus 有全局菜单宿主，见
+    // WindowController::hasGlobalMenuBar），否则窗口内 MenuBar。
+    // 注意：这里只回答「可以用原生菜单栏吗」，创建时机还要等窗口 visible
+    // （见 maybeCreateNativeMenuBar）——offscreen/minimal/vnc 平台没有原生
+    // 菜单接口，旧实现直接 createObject 会在 setInitialProperty 里段错误。
     readonly property bool useNativeMenuBar: Qt.platform.os === "macos"
                                              || (Qt.platform.os === "linux"
                                                  && windowController.hasGlobalMenuBar())
+    property bool nativeMenuCreated: false
+    function maybeCreateNativeMenuBar(): void {
+        if (nativeMenuCreated || !useNativeMenuBar || isMobile)
+            return;
+        // Qt.labs.platform 的菜单栏要挂到已存在的原生窗口上；窗口还没显示时
+        // 创建会拿到空的 platform menu bar（这正是无头平台崩溃的触发点）。
+        if (!window.visible)
+            return;
+        nativeMenuCreated = true;
+        const comp = Qt.createComponent(Qt.resolvedUrl("NativeMenuBar.qml"));
+        if (comp.status === Component.Error) {
+            console.error("加载 NativeMenuBar 失败:", comp.errorString());
+            return;
+        }
+        const obj = comp.createObject(window, { window: window, actions: window.menuActions });
+        if (!obj)
+            console.error("创建 NativeMenuBar 失败:", comp.errorString());
+    }
+    onVisibleChanged: maybeCreateNativeMenuBar()
 
     // 引擎单例（QML 中实例化；也可作为 qmlRegisterSingletonInstance 注入）
     EraEngine {
@@ -681,12 +703,13 @@ ApplicationWindow {
         enabled: !statusStrip.loading
     }
 
-    // ---- 控制台（渲染层）：虚拟舞台 ----
-    // 舞台尺寸 = 配置舞台（emuera.config 的ウィンドウ幅/高さ推导），QML 对整个
-    // 舞台做**一次等比 transform** 缩放并居中进窗口。窗口拖拽/全屏/跨分辨率
-    // 都只是变焦：折行、网格、C++ 排版永远只由舞台尺寸决定，边缘露出
-    // window.color（背景色）= 信箱。Qt 文档：Item.scale 级联到全部子项，
-    // 输入事件坐标自动按逆变换映射（MouseArea 拿到的仍是舞台本地坐标）。
+    // ---- 控制台（渲染层）----
+    // 不再有「虚拟舞台 + 整体 transform」：渲染层直接铺满窗口的游戏视口，
+    // 网格（列/行）与单元格像素**由视口尺寸 + 字号/行高同源推导**（见
+    // Console.qml 的 gridColumns/gridRows/cellWidth/cellHeight）。
+    // 这样窗口放大 → 列/行变多、单元格仍是 字号/2 × 行高（字不会被拉散）；
+    // 窗口缩小 → 列/行变少、字号不变（行距永远 ≥ 字号+1，不会上下重叠）。
+    // 窗口尺寸本身只由 C++ WindowController 设置（QML 不绑 width/height）。
     ColumnLayout {
         anchors.fill: parent
         spacing: 0
@@ -695,22 +718,13 @@ ApplicationWindow {
             Layout.fillWidth: true
             Layout.fillHeight: true
             // Android normally resizes the window above the keyboard. Keep the
-            // viewport clipped so the scaled stage cannot draw below that area.
+            // viewport clipped so the console cannot draw over the chrome.
             clip: true
 
-            Item {
-                id: gameStage
-                anchors.centerIn: parent
-                width: eraEngine.gui.windowWidth
-                height: eraEngine.gui.windowHeight
-                scale: Math.max(0, Math.min(gameViewport.width / width,
-                                gameViewport.height / height))
-
-                EraRender {
-                    id: eraRender
-                    anchors.fill: parent
-                    engine: eraEngine
-                }
+            EraRender {
+                id: eraRender
+                anchors.fill: parent
+                engine: eraEngine
             }
 
         // 未装载时在屏幕空间显示操作，不随游戏舞台缩小。
@@ -887,14 +901,9 @@ ApplicationWindow {
 
     // ---- 启动收尾 ----
     Component.onCompleted: {
-        // macOS：挂 Qt.labs.platform 原生菜单栏到系统菜单栏
-        if (useNativeMenuBar) {
-            const comp = Qt.createComponent(Qt.resolvedUrl("NativeMenuBar.qml"));
-            if (comp.status === Component.Error)
-                console.error("加载 NativeMenuBar 失败:", comp.errorString());
-            else
-                comp.createObject(window, { window: window, actions: menuActions });
-        }
+        // macOS / Linux 全局菜单：挂 Qt.labs.platform 原生菜单栏
+        // （创建时机由 maybeCreateNativeMenuBar 统一判定：能力 + visible）
+        window.maybeCreateNativeMenuBar();
         // 移动端默认全屏（窗口模式在 C++，Wayland 之外的桌面不受影响）
         if (isMobile)
             windowController.windowMode = "fullscreen";

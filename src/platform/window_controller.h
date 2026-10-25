@@ -31,9 +31,10 @@
 // QML 的 Window 属性绑定（width/height/visibility）一多，外部（设置/config）
 // 想改窗口就要「改 C++ 状态 -> 通知 QML -> QML 绑定回写窗口」，链路绕且容易
 // 和用户手动拖拽打架。这里改为 C++ 直控：
-//   * applyWindowSize()：读取 GuiManager 的 windowWidth/Height，按当前屏幕
-//     availableGeometry 钳制后直接 setWidth/setHeight（Qt 文档 QWindow：
-//     width/height 是窗口几何，直接改即触发窗口管理器 resize）；
+//   * applyWindowSize()：读取 GuiManager 的 windowWidth/Height，直接
+//     setWidth/setHeight（Qt 文档 QWindow：width/height 是窗口几何，直接改
+//     即触发窗口管理器 resize）。不做屏幕钳制——窗口尺寸的唯一来源是配置；
+//     屏幕/合成器放不下是平台行为（启动后会核对一次并记录）；
 //   * setWindowMode("windowed"|"fullscreen"|"borderless")：窗口化 / 全屏 /
 //     无边框全屏。无边框全屏 = Qt::FramelessWindowHint + 覆盖整屏几何
 //     （Wayland 客户端不允许自定位窗口，退化为合成器全屏 showFullScreen，
@@ -100,6 +101,12 @@ Q_SIGNALS:
 private:
     void applyWindowState();
     void clearFramelessHint();
+    // 配置（GuiManager）推导出的窗口化目标尺寸；applyWindowSize 与启动后的
+    // 几何对账共用它，保证「配置 → 窗口」只有一个来源。
+    [[nodiscard]] QSize targetWindowSize() const;
+    // 启动后核对实际 QWindow 几何与 targetWindowSize：窗口管理器可能在
+    // map 时套用「记住的几何/最大化」规则。只纠正一次，避免和用户拖拽打架。
+    void verifyWindowSize();
 
     QQuickWindow* m_window = nullptr;
     GuiManager*   m_gui = nullptr;
@@ -110,6 +117,8 @@ private:
     // 与组合器的实际表面可以不一致 —— 判断是否需要 hide/show 重映射时
     // 只能信自己记录的值）
     QSize m_appliedSize;
+    // 启动后的首次几何对账完成标记（见 verifyWindowSize）
+    bool  m_initialGeometryChecked = false;
 };
 
 #endif // WINDOW_CONTROLLER_H

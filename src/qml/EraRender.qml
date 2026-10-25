@@ -31,8 +31,9 @@ Item {
     }
 
     Console {
+        // 与 stage 同尺寸：网格行数按「配置高 / 行高」推导，控制台必须拿到
+        // 整块 stage 高度，否则最后一行的行距会被 margin 吃掉（底部削字）。
         anchors.fill: parent
-        anchors.margins: 6
         lineHeight: eraRender.engine ? eraRender.engine.gui.lineHeight : 22
         fontName: eraRender.engine ? eraRender.engine.gui.fontName : ""
         fontSize: eraRender.engine ? eraRender.engine.gui.fontSize : 16

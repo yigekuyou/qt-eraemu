@@ -45,6 +45,7 @@ import io.yigekuoyou.eraengine
 // 天然保序 —— 打印顺序 z 随行号单调，与 C# 逐 part 绘制一致。
 FocusScope {
     id: root
+    objectName: "consoleRoot"     // D-Bus diagBlocks 读取实际 cell/font 用
     focus: true
     readonly property bool isMobile: Qt.platform.os === "android" || Qt.platform.os === "ios"
 
@@ -64,6 +65,7 @@ FocusScope {
     onBackendChanged: {
         attachFramePacing();
         syncLayout();
+        updateGrid();
     }
     Component.onDestruction: if (backend) backend.framePacingAttached = false
 
@@ -99,15 +101,18 @@ FocusScope {
             return;
         // OwnerDraw（TOOLTIP_CUSTOM）打开时才用脚本设的字体（C# 的语义：
         // 不打开 OwnerDraw 就是系统默认外观，SetToolTipFont* 只是记下值）。
+        // Qt 6.9 起 `Qt.font({})` 会报 “no valid font subproperties specified”
+        // 并在首屏日志里打一条 Error：空对象不再被接受。给出明确的 family /
+        // pointSize（缺省跟随应用字体）后再赋值。
         if (backend.toolTipCustom) {
-            const f = Qt.font({});
-            if (backend.toolTipFontFamily !== "")
-                f.family = backend.toolTipFontFamily;
-            if (backend.toolTipPointSize > 0)
-                f.pointSize = backend.toolTipPointSize;
-            tip.font = f;
+            tip.font = Qt.font({
+                family: backend.toolTipFontFamily !== ""
+                            ? backend.toolTipFontFamily : Qt.application.font.family,
+                pointSize: backend.toolTipPointSize > 0
+                            ? backend.toolTipPointSize : Qt.application.font.pointSize
+            });
         } else {
-            tip.font = Qt.font({});
+            tip.font = Qt.application.font;
         }
         tip.delay = backend.toolTipDelay;
         tip.timeout = backend.toolTipDuration;
@@ -137,16 +142,45 @@ FocusScope {
     property string focusColor: ""
     property string logColor: ""
 
-    // ---- 固定逻辑网格，固定像素格子 ----
-    readonly property int gridColumns: backend && backend.gridColumns > 0 ? backend.gridColumns : 80
-    readonly property int gridRows: backend && backend.gridRows > 0 ? backend.gridRows : 25
-    // 滚动条独占的宽度：视口右缘常驻让出一条空档，滚动条画在空档里
-    // 而非盖在内容上（Qt 文档：attached ScrollBar 自动贴边安放且不预留
-    // 空间，会遮住最右列文字）。常驻预留而不是 AsNeeded 时才让位，
-    // 否则滚动条一出现网格就重排，正在读的行会跳。
+    // ---- 网格与字号同源（窗口多大，就显示多少列/行）----
+    // 单元格像素 = 字号/2（半角宽）× max(行高, 字号+1)（行距至少比字高 1px）。
+    // 列/行 = 视口像素 ÷ 单元格像素；再回算 cellWidth/cellHeight 把余量摊给
+    // 单元格，保证 columns*cellWidth ≤ 视口宽、rows*cellHeight ≤ 视口高。
+    //
+    // 这是「字号不随格子乱来」的唯一来源：
+    //   * 以前 grid 固定为配置值、整块 stage 再做 Item.scale —— 窗口放大时
+    //     格子被拉成 22×31 px 而字号仍是 18（字距散开、横线铺满整屏）；
+    //     窗口缩小时格子小于字高（文字上下重叠、按钮挤成一条）。
+    //   * 现在窗口放大 → 列/行变多，cell 仍是字号量级；窗口缩小 → 列/行
+    //     变少，字号不变（只有极端尺寸才按 cellHeight-1 自动缩字号）。
+    // C++ 排版用的 grid 由 updateGrid() 同步推过去（含折行宽度），
+    // QML 不再读取 backend.gridColumns 作为显示几何。
     readonly property real scrollBarWidth: 10
-    readonly property real cellWidth: Math.max(1, view.width / gridColumns)
-    readonly property real cellHeight: Math.max(1, viewport.height / gridRows)
+    // 底部留 1px：最后一行文字的下缘不会被视口 clip 切掉。
+    readonly property real gridWidthPx: Math.max(1, width - scrollBarWidth)
+    readonly property real gridHeightPx: Math.max(1, height - 1)
+    // 基准格宽/格高不单独存在：格宽来自 fontSize（半角 = 字号/2），
+    // 格高的下界 lineHeight 与「装得下字高」的 fontSize+1 都写在 rowsFor() 里，
+    // 保证「派生网格」与「推给 C++ 的网格」永远同一份公式。
+    // 网格推导做成纯函数：属性绑定与 updateGrid() 用**同一份**公式。
+    // （QML 的属性变更信号早于派生绑定重算，在 onFontSizeChanged 里直接读
+    //  gridColumns 会拿到上一次的值 —— 测试里就表现为「字号 19、网格还是 18」。）
+    function columnsFor(px, fontPx): int {
+        return Math.max(1, Math.floor(Math.max(1, px - scrollBarWidth)
+                                      / Math.max(1, fontPx / 2)));
+    }
+    function rowsFor(px, linePx, fontPx): int {
+        return Math.max(1, Math.floor(Math.max(1, px - 1)
+                                      / Math.max(1, linePx, fontPx + 1)));
+    }
+    readonly property int gridColumns: columnsFor(width, fontSize)
+    readonly property int gridRows: rowsFor(height, lineHeight, fontSize)
+    readonly property real cellWidth: Math.max(1, gridWidthPx / gridColumns)
+    readonly property real cellHeight: Math.max(1, gridHeightPx / gridRows)
+    // 渲染字号：不超过配置字号，也不超过单元格能容纳的大小（行高留 1px）。
+    // 极端窄/矮窗口下字号自动缩小，绝不与相邻行重叠、也不越过格宽。
+    readonly property real renderFontSize: Math.max(1, Math.min(fontSize,
+                                                     Math.min(2 * cellWidth, cellHeight - 1)))
 
     // 当前舞台和历史是互斥页面；历史刷新不能覆盖用户的回看位置。
     property bool reviewingHistory: false
@@ -188,7 +222,7 @@ FocusScope {
                 cellWidth: root.cellWidth
                 cellHeight: root.cellHeight
                 fontName: root.fontName
-                fontSize: root.fontSize
+                fontSize: root.renderFontSize
                 foreColor: root.foreColor
                 focusColor: root.focusColor
                 logColor: root.logColor
@@ -260,8 +294,29 @@ FocusScope {
         backend.setFontSize(fontSize);
         backend.setLineHeight(lineHeight);
     }
-    onFontSizeChanged: syncLayout()
-    onLineHeightChanged: syncLayout()
+    // 把「视口像素 + 字号」推导出的列/行推给 C++（同一份网格用于折行、
+    // DRAWLINE 与舞台模型）。幂等：值相同就 no-op，C++ 的 gridChanged
+    // 再回调到这里时不会形成循环。
+    function updateGrid(): void {
+        if (!backend)
+            return;
+        const cols = columnsFor(width, fontSize);
+        const rows = rowsFor(height, lineHeight, fontSize);
+        if (backend.gridColumns !== cols)
+            backend.setGridColumns(cols);
+        if (backend.gridRows !== rows)
+            backend.setGridRows(rows);
+    }
+    onFontSizeChanged: { syncLayout(); updateGrid(); }
+    onLineHeightChanged: { syncLayout(); updateGrid(); }
+    onWidthChanged: updateGrid()
+    onHeightChanged: updateGrid()
+    // 装载/设置变化时 C++ 会按配置重设网格（EraEngine::syncConsoleGrid）；
+    // 显示层再按实际视口推回一次，保证两边始终同源。
+    Connections {
+        target: root.backend
+        function onGridChanged() { root.updateGrid() }
+    }
 
     // ---- SETBGIMAGE：背景图层（C# ConsoleBackground）----
     // 贴在正文**后面**：列表深度降序（后画的深度小、盖在上面），保持长宽比
@@ -327,7 +382,7 @@ FocusScope {
                             cellWidth: root.cellWidth
                             cellHeight: root.cellHeight
                             fontName: root.fontName
-                            fontSize: root.fontSize
+                            fontSize: root.renderFontSize
                             foreColor: root.foreColor
                             focusColor: root.focusColor
                             logColor: root.logColor
@@ -554,6 +609,7 @@ FocusScope {
     Component.onCompleted: {
         attachFramePacing();
         syncLayout();
+        updateGrid();          // 初版网格按当前视口推给 C++
         applyToolTipStyle();   // TOOLTIP_SET* 可能在界面出现前就已下发
     }
 }

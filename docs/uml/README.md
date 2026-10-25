@@ -145,6 +145,21 @@ plantuml -txmi docs/uml/01-load-classes.puml
   收益：eraTW 34.76 → 29.85 s wall（−14.1%）、eraMegaten 115.0 → 101.1 s（−12.2%）。
   未做（记账）：`--async` 只在 eraTetris 4 文件上逐文件量过计数；串行 `loadFile` 仍
   会再读一次盘（`decoded` 只喂了扫描）—— HEAD 既有浪费。
+- **同一份文件字节只读一次盘**：与 `Scan` 同一条思路 —— 一次读取的产物随数据走，
+  下游不重读。三处都曾是「预扫描已拿到文本、下游又自己读一遍」：串行 `loadDirectory`
+  的 `decoded` 只喂了扫描、`loadFile` 又读同一文件；宏表循环把同一个 `.ERH` 读了
+  两遍（`collectDefines` / `collectMacroTable` 两个消费者）；异步 `prepareLoad` 的
+  `scanOne` 又读一遍宏表阶段读过的 `.ERH`。现在 `loadFile(path, root, scan, content)`
+  吃已读文本（`QString` 隐式共享，非空 = 同一份字节），宏表阶段只读一次到 `headerText`，
+  异步把「文本 + 成败」打包成一次读取的两个事实（读取失败仍只计一次、只报一次）。
+  实测每文件读盘（插桩 `TextCodecUtil::readFile`）：串行 eraTW ERB 总读 **4,594 → 2,260**
+  （头文件 **4 → 1**）、并行 2,334 → 2,260、异步 2,297 → 2,260；全部读（含 148 个
+  `Chara*.csv` 各 2 次）串行 4,914 → 2,580。变异：串行不传 `content` → 2,408 个文件
+  回到 2 次而输出逐字节不变（第二次读盘纯冗余）；传空文本 → `test_load_contracts` ④ 变红。
+  峰值 RSS 与耗时在噪声带内（被消掉的副本上限 ≈1 MB，相对 3.5/11.2 GB 不可见）。
+  未做（记账）：`loadFile` 里「只为取 warnings」仍再预处理一遍（`buildAst` 内部已
+  `prepareLines` —— CPU 不是读盘）；148 个 `Chara*.csv` 每文件仍读 2 次
+  （`ConstantTable` 与 `CsvLoader` 是两个消费者读同一份字节，属 CSV 装载统一改造）。
 - **GETVAR / GETVARS / SETVAR 的名字解析有缓存（唯一表、唯一键）**：键 =
   `(名字文本.trimmed(), 段身份文本)`，值是不可变 AST 的 `QSharedPointer`；容量 512、
   满时淘汰 stamp 最小者（近似 LRU）。失效只有一个入口、6 个调用点（`clear` /
@@ -361,7 +376,7 @@ plantuml -txmi docs/uml/01-load-classes.puml
 `dump_warnings` 五语料（`eraTW` / `eraMegaten` / `eraTetris` / `FL3.8` / `ecd`）：
 **6 / 2 / 0 / 0 / 0** 行（`eraMegaten` 的目录参数必须是 `eraMegaten/data`；用错路径会得到
 0 字节的假基线），与 `/tmp/uml-baseline/*.raw.txt` **未排序**逐字节相同。
-累计五十一个重构（身份整数化 / 全定型 / 作用域显式化 / 只读收尾外移 / 存档独立映射 /
+累计五十二个重构（身份整数化 / 全定型 / 作用域显式化 / 只读收尾外移 / 存档独立映射 /
 私有名表前移 / 存档顺序确定性 / 写收尾外移 / 标记区外移 / 位置区外移 /
 标签归属单一索引 / 诊断切片幂等 / 常数作用域参数化 / 增量装载协议显式化 /
 GOTO 段身份入索引 / 静态检查用段身份 / 删第三张裸名表 / 错误去重 / 配对语法只判一次 /
@@ -380,7 +395,8 @@ GOTO 段身份入索引 / 静态检查用段身份 / 删第三张裸名表 / 错
  消灭「构建后再重建」 /
  常量子树不求值第二次（constantValueAt 唯一入口）/
  声明前置：删掉「待收尾定型」第三态（rhsPending）/
- 一个脚本只扫描一次（Scan 随数据传递））
+ 一个脚本只扫描一次（Scan 随数据传递）/
+ 文件字节只读一次盘（内容随数据走））
  前后完全一致；
 `ctest` 48 → 70（新增 `test_parse_checks` / `test_save_variable_map` / `test_private_scope_table` /
 `test_load_contracts` / `test_save_variable_map_hashseed` / `test_jump_markings` /

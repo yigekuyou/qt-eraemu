@@ -278,26 +278,6 @@ struct ConsoleDisplayLine {
 
     [[nodiscard]] bool isEmpty() const { return segments.isEmpty(); }
 
-    // 扁平化视图（调试/测试用）：把每段的 span 顺序摊开
-    [[nodiscard]] QList<ConsoleSpan> flatSpans() const {
-        QList<ConsoleSpan> out;
-        for (const ConsoleSegment& seg : segments) out += seg.spans;
-        return out;
-    }
-    [[nodiscard]] int spanCount() const {
-        int n = 0;
-        for (const ConsoleSegment& seg : segments) n += seg.spans.size();
-        return n;
-    }
-    // 行内可点击段的索引列表
-    [[nodiscard]] QList<int> buttonIndices() const {
-        QList<int> out;
-        for (int i = 0; i < segments.size(); ++i) {
-            if (segments.at(i).isButton) out.append(i);
-        }
-        return out;
-    }
-
     [[nodiscard]] QString plainText() const {
         QString s;
         for (const ConsoleSegment& seg : segments) s += seg.plainText();

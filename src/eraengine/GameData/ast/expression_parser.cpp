@@ -121,10 +121,8 @@ QSharedPointer<ExpressionNode> ExpressionParser::parseBinary(int minPrecedence) 
 
     while (true) {
         const ExpressionToken op = peek();
-        // 绑定力（Pratt）：单一来源 = 运算符表，或由 Provider 注入（见头文件）。
-        const BindingPower bp = m_bindingPowerProvider
-                                    ? m_bindingPowerProvider(op.type())
-                                    : binaryBindingPower(op.type());
+        // 绑定力（Pratt）：单一来源 = 运算符表（operator_table.h）。
+        const BindingPower bp = binaryBindingPower(op.type());
         if (bp.left == 0 || bp.left < minPrecedence) {
             break;
         }

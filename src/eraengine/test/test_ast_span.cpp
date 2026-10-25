@@ -199,21 +199,6 @@ void TestAstSpan::rightAssociativeInjectionGivesRightAssoc() {
         QCOMPARE(root->left()->kind(), NodeKind::BinaryOp);    // 左边先归约
         QCOMPARE(root->right()->kind(), NodeKind::Variable);
     }
-    // 注入：把 MINUS 声明为右结合（{9,9}）⇒ A - B - C == (A - (B - C))
-    {
-        ExpressionLexer lexer;
-        ExpressionParser parser;
-        parser.setBindingPowerProvider([](TokenType op) -> BindingPower {
-            BindingPower bp = ExpressionParser::binaryBindingPower(op);
-            if (op == TokenType::MINUS) bp.right = bp.left;    // 右结合
-            return bp;
-        });
-        const auto ast = parser.parse(lexer.tokenize(QStringLiteral("A - B - C"), 1));
-        QVERIFY(ast);
-        const auto root = qSharedPointerCast<BinaryOpNode>(ast);
-        QCOMPARE(root->left()->kind(), NodeKind::Variable);     // A
-        QCOMPARE(root->right()->kind(), NodeKind::BinaryOp);    // (B - C)
-    }
 }
 
 QTEST_APPLESS_MAIN(TestAstSpan)

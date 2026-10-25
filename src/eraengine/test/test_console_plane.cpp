@@ -32,6 +32,13 @@
 #include "console_buffer.h"
 #include "console_plane.h"
 
+// 段 -> span 摊平（行结构是「行 -> 段 -> span」两层；断言按最小单位读）
+static QList<ConsoleSpan> flatSpansOf(const ConsoleDisplayLine& line) {
+    QList<ConsoleSpan> flat;
+    for (const ConsoleSegment& seg : line.segments) flat += seg.spans;
+    return flat;
+}
+
 static int g_failures = 0;
 
 static void check(bool ok, const QString& what) {
@@ -129,11 +136,11 @@ int main(int argc, char** argv) {
         c.newline();
 
         const ConsoleDisplayLine& l0 = c.buffer().at(0);
-        const QList<ConsoleSpan> parts = l0.flatSpans();
+        const QList<ConsoleSpan> parts = flatSpansOf(l0);
         check(parts.size() == 3, "each print operation remains a distinct span");
 
         ConsolePlaneOptions opt;
-        opt.windowWidth = c.gridColumns() * c.columnWidth();
+        opt.windowWidth = c.gridColumns() * (qMax(1, c.fontSize() / 2));
         opt.terminalSafe = false;           // 这里要看原始占位符
         const QStringList plane = ConsolePlane::render(c.buffer(), c.layout(), opt);
         check(plane.size() == 2, "2 行 -> 平面 2 行");
@@ -176,6 +183,7 @@ int main(int argc, char** argv) {
         wide.kind = ConsoleSpanKind::Text;
         wide.text = QString(QChar(0x25A0));
         wide.cols = 2;
+        wide.style.color = QColor("#ff1abd");   // ANSI 输出用（非 ANSI 渲染不看颜色）
         left.spans.append(wide);
 
         ConsoleSegment right;
@@ -204,8 +212,6 @@ int main(int argc, char** argv) {
         const QStringList debugPlane = ConsolePlane::render(buffer, layout, debug);
         check(debugPlane.size() == 1 && debugPlane.first() == QStringLiteral("##    X  |7"),
               "调试占位符保持 2 列宽");
-
-        buffer.lastMutable().segments[0].spans[0].style.color = QColor("#ff1abd");
         ConsolePlaneOptions ansi = opt;
         ansi.ansiColors = true;
         check(ConsolePlane::render(buffer, layout, ansi).first()
@@ -240,7 +246,7 @@ int main(int argc, char** argv) {
         c.newline();
 
         ConsolePlaneOptions opt;
-        opt.windowWidth = c.gridColumns() * c.columnWidth();
+        opt.windowWidth = c.gridColumns() * (qMax(1, c.fontSize() / 2));
         const QList<ConsolePlaneIssue> issues =
             ConsolePlane::inspect(c.buffer(), c.layout(), opt);
         check(!issues.isEmpty(), "越界被检出");

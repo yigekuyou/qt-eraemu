@@ -193,13 +193,14 @@ int main(int argc, char* argv[]) {
         ext.setServices(services);
         check(ext.audioPipelines() == 10u,
               "扩展登记 SE 管线数 = 10（对齐 EE Sound[10]；核心不含此常量）");
-        check(ext.hasStatement(QStringLiteral("PLAYBGM"))
-                  && ext.hasStatement(QStringLiteral("PLAYSOUND"))
-                  && ext.hasStatement(QStringLiteral("STOPBGM"))
-                  && ext.hasStatement(QStringLiteral("STOPSOUND"))
-                  && ext.hasStatement(QStringLiteral("SETBGMVOLUME"))
-                  && ext.hasStatement(QStringLiteral("SETSOUNDVOLUME")),
-              "音频命令在扩展注册类中可见");
+        // 生产查询 = 解析期「这一行是不是指令」的唯一入口（AstBuilder 的扩展语句集合）。
+        check(AstBuilder::isKnownInstructionName(QStringLiteral("PLAYBGM"))
+                  && AstBuilder::isKnownInstructionName(QStringLiteral("PLAYSOUND"))
+                  && AstBuilder::isKnownInstructionName(QStringLiteral("STOPBGM"))
+                  && AstBuilder::isKnownInstructionName(QStringLiteral("STOPSOUND"))
+                  && AstBuilder::isKnownInstructionName(QStringLiteral("SETBGMVOLUME"))
+                  && AstBuilder::isKnownInstructionName(QStringLiteral("SETSOUNDVOLUME")),
+              "音频命令在扩展注册类中可见（解析期认作指令）");
         ext.setAudioPool(&pool);
         pool.setSoundPipelines(ext.audioPipelines());
         pool.setSoundDirectory(tmp.path());

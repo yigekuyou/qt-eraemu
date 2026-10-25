@@ -9,6 +9,13 @@
 #include "expression_evaluator.h"
 #include "console_backend.h"
 
+// 段 -> span 摊平（行结构是「行 -> 段 -> span」两层；断言按最小单位读）
+static QList<ConsoleSpan> flatSpansOf(const ConsoleDisplayLine& line) {
+    QList<ConsoleSpan> flat;
+    for (const ConsoleSegment& seg : line.segments) flat += seg.spans;
+    return flat;
+}
+
 static_assert(!std::is_convertible_v<QString, FlatStringValue>);
 
 int main(int argc, char** argv) {
@@ -226,7 +233,7 @@ int main(int argc, char** argv) {
         const auto& row = console.buffer().at(0);
         check(row.plainText() == "8<b>&amp;</b>", "expression result stays text, not markup or entities");
         check(row.segments.size() == 1 && row.segments.first().isButton && row.segments.first().intValue == 7, "button expression value retained");
-        const auto spans = row.flatSpans();
+        const auto spans = flatSpansOf(row);
         check(spans.size() == 2 && spans[0].style.bold && !spans[0].style.italic && spans[1].style.italic && !spans[1].style.bold, "nested button styles restored");
         check(row.segments.first().tooltip == "a > b", "quoted greater-than scanner");
     }
@@ -262,7 +269,7 @@ int main(int argc, char** argv) {
     printHtmlFixture("<font color='red'><img src='a&amp;b' width='200'><shape type='rect' param='100,50'></font><b>x</b>y &amp;lt; &#65; &#x1F600;<br/>");
     check(console.buffer().count() == 1, "self closing break");
     if (console.buffer().count()) {
-        const auto& row = console.buffer().at(0); const auto spans = row.flatSpans();
+        const auto& row = console.buffer().at(0); const auto spans = flatSpansOf(row);
         check(row.plainText() == QString::fromUtf8("xy &lt; A 😀"), "entities decoded once including numeric Unicode");
         check(spans.size() >= 4 && spans[0].kind == ConsoleSpanKind::Image && spans[0].text == "a&b" && spans[0].imageSize.width() == 200 && spans[0].style.color == QColor("red") && spans[1].kind == ConsoleSpanKind::Shape && spans[1].style.color == QColor("red"), "image and shape inherit style and attributes");
         check(spans.size() >= 4 && !spans.last().style.bold && !spans.last().style.color.isValid(), "closing styles restored");
@@ -279,7 +286,7 @@ int main(int argc, char** argv) {
     // 尾部 <br> 只冲刷其前的内容（不留空行）—— 与正文 PRINT 的换行语义一致。
     check(console.buffer().count() == 1
           && console.buffer().at(0).plainText() == "runtime"
-          && console.buffer().at(0).flatSpans().first().style.underline,
+          && flatSpansOf(console.buffer().at(0)).first().style.underline,
           "运行期拼出的标签在打印时补解析（<u> 生效、<br> 冲刷成行）");
     console.clearAll();
     // eraTW INFO_CLOCK_IMAGE 的原样复刻：`=` 裸文本 + 三次 `+=`，其中 <img> 被
@@ -317,7 +324,7 @@ int main(int argc, char** argv) {
             clockEngine.executeInstruction(*clockTable.lineAt(QStringLiteral("CLOCK.ERB"), i));
         if (console.buffer().count() == 1) {
             bool image = false;
-            for (const auto& span : console.buffer().at(0).flatSpans()) {
+            for (const auto& span : flatSpansOf(console.buffer().at(0))) {
                 if (span.kind == ConsoleSpanKind::Image && span.text == "clock_07_00"
                     && span.imageSize.height() == 500 && span.yposRaw == 201) image = true;
             }
@@ -337,7 +344,7 @@ int main(int argc, char** argv) {
     storage.setLocalStr(0, "blue");
     line = AstBuilder::build("HTML_PRINT @\"<font color='%LOCALS%'><b>blue</b></font><br>\"", {}, resolve);
     engine.executeInstruction(line);
-    check(console.buffer().count() == 1 && console.buffer().at(0).flatSpans().first().style.color == QColor("blue"), "dynamic font attribute");
+    check(console.buffer().count() == 1 && flatSpansOf(console.buffer().at(0)).first().style.color == QColor("blue"), "dynamic font attribute");
 
     console.clearAll(); storage.setLocalInt(0, 1);
     line = AstBuilder::build("HTML_PRINT @\"[{LOCAL, 3}] [{LOCAL, 3, LEFT}]<br>\"", {}, resolve);
@@ -360,8 +367,8 @@ int main(int argc, char** argv) {
     auto titleImage = AstBuilder::build(R"ERB(HTML_PRINT "<p align='center'><img src='TW_title" + TOSTR(LOCAL, "000") + "'></p>")ERB", {}, resolve);
     engine.executeInstruction(titleImage);
     check(console.buffer().count() > 0
-          && console.buffer().at(0).flatSpans().first().kind == ConsoleSpanKind::Image
-          && console.buffer().at(0).flatSpans().first().text == "TW_title004",
+          && flatSpansOf(console.buffer().at(0)).first().kind == ConsoleSpanKind::Image
+          && flatSpansOf(console.buffer().at(0)).first().text == "TW_title004",
           "concatenated HTML compiles image structure at load time with dynamic src");
     // Truncated markup must preserve its text and the next complete tag.
     for (const QString& source : QStringList{
@@ -376,7 +383,7 @@ int main(int argc, char** argv) {
     printHtmlFixture("prefix<font color=red<b>bold</b>tail<br>");
     check(console.buffer().count() == 1
           && console.buffer().at(0).plainText() == "prefix<font color=redboldtail"
-          && console.buffer().at(0).flatSpans().at(2).style.bold,
+          && flatSpansOf(console.buffer().at(0)).at(2).style.bold,
           "unfinished tag does not swallow the next complete tag");
     console.clearAll();
     storage.setLocalStr(0, "suffix");
@@ -384,7 +391,7 @@ int main(int argc, char** argv) {
     engine.executeInstruction(line);
     check(console.buffer().count() == 1
           && console.buffer().at(0).plainText() == "suffix"
-          && console.buffer().at(0).flatSpans().first().style.color == QColor("red"),
+          && flatSpansOf(console.buffer().at(0)).first().style.color == QColor("red"),
           "FORM inside concatenation completes a quoted tag across AST boundaries");
     console.clearAll();
     line = AstBuilder::build(R"ERB(HTML_PRINT @"<but" + @"ton value='{LOCAL++}' title='a > b'>" + @"[%LOCALS,8,LEFT%]</button><br>")ERB", {}, resolve);
@@ -402,7 +409,7 @@ int main(int argc, char** argv) {
     engine.executeInstruction(line);
     check(console.buffer().count() == 1
           && console.buffer().at(0).plainText() == "<b>literal</b>&amp;"
-          && !console.buffer().at(0).flatSpans().first().style.bold,
+          && !flatSpansOf(console.buffer().at(0)).first().style.bold,
           "literal interpolation stays opaque text including markup and entities");
     console.clearAll();
     line = AstBuilder::build(R"ERB(HTML_PRINT @"<b%LOCALS%>tail<br>")ERB", {}, resolve);

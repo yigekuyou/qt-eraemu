@@ -202,38 +202,4 @@ private:
 		VariableTypeInfo m_typeInfo;
 };
 
-// ---------------------------------------------------------------------------
-// A bound variable reference (name + type + backing storage).
-// ---------------------------------------------------------------------------
-class VariableStorage; // Forward declaration
-
-class VariableToken
-{
-private:
-    QString name;
-    VariableTypeInfo typeInfo;
-    bool isValid;
-    mutable VariableStorage* storage = nullptr;
-
-public:
-    VariableToken();
-    VariableToken(const QString &name, const VariableTypeInfo &typeInfo, bool isValid = true);
-
-    const QString& getName() const { return name; }
-    const VariableTypeInfo& getTypeInfo() const { return typeInfo; }
-
-    bool isInteger() const { return typeInfo.isInteger; }
-    bool isString() const { return typeInfo.isString; }
-    bool isCharacterData() const { return typeInfo.isCharacterData; }
-    bool is1D() const { return typeInfo.dimension == VariableTypes::Dimension::OneD; }
-    bool is2D() const { return typeInfo.dimension == VariableTypes::Dimension::TwoD; }
-    bool is3D() const { return typeInfo.dimension == VariableTypes::Dimension::ThreeD; }
-
-    // These are implemented in variable_types.cpp with access to VariableStorage
-    qint64 getIntValue(int index) const;
-    void setIntValue(int index, qint64 value) const;
-    QString getStrValue(int index) const;
-    void setStrValue(int index, const QString& value) const;
-};
-
 #endif // VARIABLE_TYPES_H

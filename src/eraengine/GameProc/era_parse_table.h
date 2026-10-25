@@ -399,8 +399,6 @@ public:
     // 缓存内容在**解析输入世代**（装载/装配）变化时整表作废，失效点只有
     // invalidateRuntimeRefCache() 一个（调用点在 .cpp 逐个注明）。
     // 命中/未命中计数只服务取证与微基准（两个 quint64 自增，不参与语义）。
-    [[nodiscard]] quint64 runtimeRefCacheHits() const { return m_runtimeRefHits; }
-    [[nodiscard]] quint64 runtimeRefCacheMisses() const { return m_runtimeRefMisses; }
     [[nodiscard]] int runtimeRefCacheSize() const { return int(m_runtimeRefCache.size()); }
     // 容量上限（条）。满了淘汰最久未用的那一条（见 .cpp 的策略说明）。
     static constexpr int kRuntimeRefCacheCapacity = 512;
@@ -826,8 +824,6 @@ private:
     quint64 m_runtimeRefCacheEpoch = 0;   // 缓存体对应的世代
     bool m_runtimeRefCacheTriple = false; // 世代边界处的 ignoreTripleSymbols 快照
     quint64 m_runtimeRefStamp = 0;        // 近似 LRU 的单调时钟
-    quint64 m_runtimeRefHits = 0;
-    quint64 m_runtimeRefMisses = 0;
 };
 
 #endif // ERA_PARSE_TABLE_H

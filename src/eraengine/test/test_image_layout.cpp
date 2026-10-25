@@ -48,6 +48,13 @@
 #include "console_types.h"
 #include "resource_image_provider.h"
 
+// 段 -> span 摊平（行结构是「行 -> 段 -> span」两层；断言按最小单位读）
+static QList<ConsoleSpan> flatSpansOf(const ConsoleDisplayLine& line) {
+    QList<ConsoleSpan> flat;
+    for (const ConsoleSegment& seg : line.segments) flat += seg.spans;
+    return flat;
+}
+
 static int g_failures = 0;
 
 static void check(bool cond, const QString& what) {
@@ -95,7 +102,7 @@ int main(int argc, char* argv[]) {
         console.printTemplate(PrintTemplateCompiler::evaluateOccurrences(*compiled, [](const ExpressionNode&, int) { return QVariant(QString()); }));
         console.flush();
         if (console.buffer().count() == 0) return ConsoleSpan{};
-        const QList<ConsoleSpan> spans = console.buffer().at(0).flatSpans();
+        const QList<ConsoleSpan> spans = flatSpansOf(console.buffer().at(0));
         return spans.isEmpty() ? ConsoleSpan{} : spans.first();
     };
 

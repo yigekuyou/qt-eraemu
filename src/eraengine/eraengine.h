@@ -166,7 +166,6 @@ public:
     [[nodiscard]] QString csvDir() const { return m_csvDir; }
     [[nodiscard]] QString erbDir() const { return m_erbDir; }
     [[nodiscard]] bool searchSubdirectory() const { return m_searchSubdirectory; }
-    void setSearchSubdirectory(bool on) { m_searchSubdirectory = on; }
 
     // ---- 文本编码（跨平台）----
     // 读：Auto = 逐文件嗅探（BOM → UTF-8 → Shift-JIS → Latin-1），引擎内部统一 Unicode/UTF-8；

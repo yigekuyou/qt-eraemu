@@ -36,6 +36,13 @@
 
 #include "console_backend.h"
 
+// 段 -> span 摊平（行结构是「行 -> 段 -> span」两层；断言按最小单位读）
+static QList<ConsoleSpan> flatSpansOf(const ConsoleDisplayLine& line) {
+    QList<ConsoleSpan> flat;
+    for (const ConsoleSegment& seg : line.segments) flat += seg.spans;
+    return flat;
+}
+
 static int g_failures = 0;
 
 static void check(bool cond, const QString& what) {
@@ -313,9 +320,9 @@ int main(int argc, char* argv[]) {
         c.printShape("rect", {100});
         c.newline();
         const ConsoleDisplayLine& l = c.buffer().at(0);
-        check(l.spanCount() == 3, "3 个最小单位区块（文本/图/形）");
-        if (l.spanCount() == 3) {
-            const QList<ConsoleSpan> parts = l.flatSpans();
+        check(flatSpansOf(l).size() == 3, "3 个最小单位区块（文本/图/形）");
+        if (flatSpansOf(l).size() == 3) {
+            const QList<ConsoleSpan> parts = flatSpansOf(l);
             check(parts.at(0).kind == ConsoleSpanKind::Text, "第 1 个是 text");
             check(parts.at(1).kind == ConsoleSpanKind::Image
                       && parts.at(1).text == "face_01", "第 2 个是 image(face_01)");

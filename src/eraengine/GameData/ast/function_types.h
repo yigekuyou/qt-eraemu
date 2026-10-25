@@ -493,18 +493,6 @@ inline void mergeCoreArgWiden(const std::string_view upperName, int& minArgs, in
     return OperandType::Unknown;
 }
 
-// 参数个数范围（-1 表示不限）；未登记返回 false。
-[[nodiscard]] constexpr bool builtinFunctionArgRange(std::string_view upperName,
-                                                     int& minArgs, int& maxArgs) noexcept {
-    if (const BuiltinFunctionSpec* s = findBuiltinFunction(upperName)) {
-        minArgs = s->minArgs;
-        maxArgs = s->maxArgs;
-        mergeCoreArgWiden(upperName, minArgs, maxArgs);   // 扩展放宽（EM 私家版拡張）
-        return true;
-    }
-    return false;
-}
-
 // ---------------------------------------------------------------------------
 // 运行期「扩展式中函数」表
 //

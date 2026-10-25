@@ -59,10 +59,6 @@ public:
     [[nodiscard]] qint64 charCount() const { return m_chars; }
     // 实际读盘次数（== fileCount，含读失败者）
     [[nodiscard]] int readCount() const { return m_entries.size(); }
-    // 缓存命中次数（未读盘就拿到文本的次数）—— 「两个消费者共用一份字节」的
-    // 可观测证据：命中 = 有人省掉了一次读盘。
-    [[nodiscard]] int hitCount() const { return m_hits; }
-
     // 释放全部文本（装载收尾调用；之后再 get() 会重新读盘）
     void clear();
 
@@ -73,7 +69,6 @@ private:
     };
     QHash<QString, Entry> m_entries;
     qint64 m_chars = 0;
-    int m_hits = 0;
 };
 
 #endif // CSV_TEXT_TABLE_H

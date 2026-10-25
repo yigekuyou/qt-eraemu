@@ -22,7 +22,6 @@ QString CsvTextTable::get(const QString& path, bool* ok)
 {
     const auto it = m_entries.constFind(path);
     if (it != m_entries.constEnd()) {
-        ++m_hits;
         if (ok) *ok = it.value().ok;
         return it.value().text;   // 隐式共享：不复制字节
     }
@@ -46,5 +45,4 @@ void CsvTextTable::clear()
 {
     m_entries.clear();
     m_chars = 0;
-    m_hits = 0;
 }

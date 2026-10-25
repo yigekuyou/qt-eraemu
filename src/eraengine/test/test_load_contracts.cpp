@@ -154,9 +154,9 @@ static QString serializeDiagnostics(const ParseDiagnostics& d) {
     QString out;
     for (const ParseDiagnostic& x : d.all()) {
         const QStringList fields = {
-            QString::fromLatin1(diagOriginName(x.origin)),
+            QString::number(static_cast<int>(x.origin)),
             QString::fromLatin1(diagSeverityName(x.severity)),
-            QString::fromLatin1(diagEffectName(x.effect)),
+            QString::number(static_cast<int>(x.effect)),
             x.code, x.file, QString::number(x.line), QString::number(x.column),
             QString::number(x.length), x.position, x.message, x.snippet,
         };

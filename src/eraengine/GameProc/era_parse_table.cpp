@@ -177,13 +177,11 @@ QSharedPointer<ExpressionNode> EraParseTable::runtimeVariableReference(const QSt
     ++m_runtimeRefStamp;
     if (auto it = m_runtimeRefCache.find(key); it != m_runtimeRefCache.end()) {
         it->stamp = m_runtimeRefStamp;
-        ++m_runtimeRefHits;
         // AST 在 prepare 之后只被读（求值器全 const 路径），constCast 只是把
         // 缓存的 const 视图换回既有签名要的非 const 指针 —— 不拷贝。
         return it->ast.constCast<ExpressionNode>();
     }
 
-    ++m_runtimeRefMisses;
     QSharedPointer<ExpressionNode> ast = parseScopedExpression(
         text, scope, /*quiet=*/true, /*foldConstants=*/false, /*allowAfterFinalize=*/true);
     if (!ast) return ast;   // 空文本/空 token：失败是冷路径，缓存它只会挤掉命中

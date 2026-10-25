@@ -129,11 +129,14 @@ int main(int argc, char* argv[]) {
     check(builtinFunctionReturnType("CSVCSTR") == OperandType::Str, "CSVCSTR -> Str");
     check(builtinFunctionReturnType("MAXARRAY") == OperandType::Int, "MAXARRAY -> Int");
     {
-        int mn = 0, mx = 0;
-        check(builtinFunctionArgRange("RAND", mn, mx) && mn == 1 && mx == 2, "RAND 参数 1..2");
-        check(builtinFunctionArgRange("MIN", mn, mx) && mx == -1, "MIN 参数 1..*");
-        check(builtinFunctionArgRange("STRLENS", mn, mx) && mn == 1 && mx == 1, "STRLENS 参数 1..1");
-        check(!builtinFunctionArgRange("NOPE", mn, mx), "未登记函数无参数范围");
+        // 参数区间直接读核心函数表（与 validateBuiltinCall 同一条生产查询）。
+        const BuiltinFunctionSpec* randSpec = findBuiltinFunction("RAND");
+        check(randSpec && randSpec->minArgs == 1 && randSpec->maxArgs == 2, "RAND 参数 1..2");
+        const BuiltinFunctionSpec* minSpec = findBuiltinFunction("MIN");
+        check(minSpec && minSpec->maxArgs == -1, "MIN 参数 1..*");
+        const BuiltinFunctionSpec* lensSpec = findBuiltinFunction("STRLENS");
+        check(lensSpec && lensSpec->minArgs == 1 && lensSpec->maxArgs == 1, "STRLENS 参数 1..1");
+        check(findBuiltinFunction("NOPE") == nullptr, "未登记函数无参数范围");
     }
 
     // =====================================================================

@@ -84,9 +84,9 @@ const QString kFile = QStringLiteral("bounds.ERB");
 
 QString serialize(const ParseDiagnostic& d) {
     return QStringList{
-        QString::fromLatin1(diagOriginName(d.origin)),
+        QString::number(static_cast<int>(d.origin)),   // DiagOrigin 的稳定数值（无名字视图）
         QString::fromLatin1(diagSeverityName(d.severity)),
-        QString::fromLatin1(diagEffectName(d.effect)),
+        QString::number(static_cast<int>(d.effect)),   // DiagEffect 的稳定数值
         d.code,
         QString::number(d.line),
         d.message,
@@ -115,9 +115,9 @@ QList<ParseDiagnostic> withOriginOnLine(const ParseDiagnostics& d, int line, Dia
 
 QStringList expectRow(DiagOrigin origin, DiagSeverity sev, DiagEffect effect, const char* code,
                       int line, const QString& message) {
-    return {QString::fromLatin1(diagOriginName(origin)),
+    return {QString::number(static_cast<int>(origin)),
             QString::fromLatin1(diagSeverityName(sev)),
-            QString::fromLatin1(diagEffectName(effect)),
+            QString::number(static_cast<int>(effect)),
             QString::fromLatin1(code),
             QString::number(line),
             message};

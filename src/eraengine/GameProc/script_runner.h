@@ -81,7 +81,6 @@ public:
 
     // 单次连续执行的步数上限（0 = 不限）；超限报错，用于把「脚本死循环」变成可定位的错误
     void setStepLimit(qint64 limit) { m_stepLimit = limit; }
-    [[nodiscard]] qint64 stepLimit() const { return m_stepLimit; }
 
     // 系统状态机（BEGIN / CALLTRAIN / DOTRAIN / SAVEGAME 等指令需要它）
     void setSystemStateMachine(SystemStateMachine* machine) { m_machine = machine; }

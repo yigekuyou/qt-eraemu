@@ -79,9 +79,10 @@ int main(int argc, char* argv[]) {
     qDebug() << "\n1) LOCALS / ARGS：读写往返 + 懒扩容";
     {
         VariableStorage vs;
-        const int localBefore = vs.localStrSize();
+        // 容器长度走生产查询（arraySizeInCurrentFrame -> allocatedSlots("LOCALS")）
+        const int localBefore = vs.arraySizeInCurrentFrame(QStringLiteral("LOCALS"));
         vs.setStringSlotInCurrentFrame(QStringLiteral("LOCALS"), {localBefore + 3}, sv(QStringLiteral("L")));
-        check(vs.localStrSize() == localBefore + 4,
+        check(vs.arraySizeInCurrentFrame(QStringLiteral("LOCALS")) == localBefore + 4,
               QStringLiteral("LOCALS: 写 size 之外的下标后容器长到下标 +1"));
         check(vs.getStringSlotInCurrentFrame(QStringLiteral("LOCALS"), {localBefore + 3}).text == QStringLiteral("L"),
               QStringLiteral("LOCALS: 读该格命中刚写的值"));
@@ -274,7 +275,7 @@ int main(int argc, char* argv[]) {
         vs.registerCharaDataVariable(QStringLiteral("XS"), true, 1);
         vs.addChara(10);
 
-        const int localSize = vs.localStrSize();
+        const int localSize = vs.arraySizeInCurrentFrame(QStringLiteral("LOCALS"));
         check(vs.getStringSlotInCurrentFrame(QStringLiteral("PLAIN"), {-1}).text.isEmpty(),
               QStringLiteral("读: 普通槽负下标返回空串"));
         check(vs.getStringSlotInCurrentFrame(QStringLiteral("LOCALS"), {-1}).text.isEmpty(),
@@ -289,7 +290,7 @@ int main(int argc, char* argv[]) {
               QStringLiteral("写: LOCALS 负下标返回 false"));
         check(!vs.setStringSlotInCurrentFrame(QStringLiteral("XS"), {0, -1}, sv(QStringLiteral("x"))),
               QStringLiteral("写: CHARADATA 负元素下标返回 false"));
-        check(vs.localStrSize() == localSize,
+        check(vs.arraySizeInCurrentFrame(QStringLiteral("LOCALS")) == localSize,
               QStringLiteral("写: 负下标没有触发 LOCALS 懒扩容（没有发生）"));
         check(vs.getStringSlotInCurrentFrame(QStringLiteral("LOCALS"), {0}).text.isEmpty()
                   && vs.getStringSlotInCurrentFrame(QStringLiteral("PLAIN"), {0}).text.isEmpty(),

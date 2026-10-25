@@ -502,13 +502,14 @@ plantuml -txmi docs/uml/01-load-classes.puml
   （前者从未打印过 —— 信号从不发射；后者生产路径本就由 `CsvTextTable` 报错，文本未变）；
   `test_console_backend` 的 `changed` 计数随「一次双字段写入」拆成「两次单字段写入」由 1→2、2→3
   （每次变更一次通知的语义未变，断言期望值未改）。
-  与审计结论不符一处（据实保留）：`VariableStorage::localStrSize` 有 4 处测试调用 —— 审计标
-  「0 调用点」是错的，未删。**未动（有意）**：`ConsoleLayout::m_buttonWrap/m_compatiLinefeed`
+  与审计结论不符一处：`VariableStorage::localStrSize` 当时有 4 处测试调用（审计标「0 调用点」
+  是错的），按「测试调用也算调用点」保留；下一刀按用户裁决改判「测试不是消费者」，已删
+  （断言改走生产查询 `arraySizeInCurrentFrame`）。**未动（有意）**：`ConsoleLayout::m_buttonWrap/m_compatiLinefeed`
   （零调用点但配套配置键已建好中文别名 —— 是**未接线的功能**，不是死码）、
   `CsvTextTable::readCount/fileCount`（职责不同，取证日志在用）、`maxLineUnits` 与
   `gridChanged` 那条连接（显式边界的安全阀，删了会把判断变成隐式假设）。
-  登记待下一批：`VariableToken::storage` 与它的 4 个读写方法（`setStorage` 删后恒 `nullptr`、
-  四个方法恒早退，改动前即如此 —— 属「整个 `VariableToken` 是否已死」的更大判断）。
+  登记后已了结：`VariableToken` **整类已删**（`setStorage` 删后 `storage` 再无赋值点 → 恒
+  `nullptr`、四个方法恒早退；全树零实例零引用，只剩注释里的 C# 类型名）。
   验收：`-Werror` 0 warning、`ctest` 71/71、五语料 6/1/0/0/0 行逐字节不变（eraTW 1343 B md5
   `db0cca17…`、eraMegaten 166 B md5 `84fbbb6b…`）；净 **−236 行**（+80/−316，16 个文件）。
 
@@ -539,12 +540,48 @@ plantuml -txmi docs/uml/01-load-classes.puml
   760x640 / 网格 84x33、eraTW 1400x750 / 175x46，D-Bus 把窗口改到 1000x1200 与 400x300 时
   grid 恒 84x33（scale 1.3158 / 0.3609）。
 
+- **「有调用点」不等于「有消费者」：判据从调用点改到生产路径**（用户裁决「测试调用的可以移除」）：
+  上一刀按「0 调用点」修剪，留下一批只因测试在调而存活的符号。判据修正为**生产路径有没有
+  消费者**，测试不算。全树扫（先剥注释，否则「注释里提到名字」会被算成消费者）初筛 38 个候选，
+  删 21 个符号，净 −177 行（36 文件 +145/−322）：
+  - **七个「同一事实的第二个出口」**（与已有生产入口同义，删掉后调用方改走生产那个）：
+    `localStrSize` → `arraySizeInCurrentFrame`｜`resolvedStorageNameInCurrentFrame` →
+    `storageNameInCurrentFrame`｜`ConsoleBackend::columnWidth` → `ConsoleGridLayout::columnWidthPx`｜
+    `ExtensionRegistry::hasStatement/hasVariable/hasNameTable` → `AstBuilder::isKnownInstructionName` /
+    `sysvar::findExtensionSystemVariable` / `ConstantTable::csvForVariable`｜
+    `builtinFunctionArgRange` → `findBuiltinFunction` + `mergeCoreArgWiden`。
+  - **纯性能遥测 vs 契约**：`runtimeRefCacheHits/Misses`、`CsvTextTable::hitCount` 删 ——
+    「命中与否结果相同」，不构成契约（证据改由生产可观察事实承担：同一世代两次拿到**同一条 AST
+    指针**、跨世代拿到**不同指针**、再读一次条目数仍等于上限）；而
+    `runtimeRefCacheSize`（容量/失效）、`segmentIdentityMismatches`（零错配）、
+    `privateScopeTableInstalled`（名表已装载）保留 —— 它们是各自不变量**唯一**的出口。
+  - **测试专用视图**：`ConsoleDisplayLine::flatSpans/spanCount/buttonIndices`、
+    `ConsoleBuffer::lastMutable/replaceLast`、`ParseDiagnostics::diagOriginName/diagEffectName`
+    删；断言搬进测试文件内的静态 helper（读公开的 `segments`），或改用枚举数值序列化 ——
+    **期望值一字未改**，序列化仍是稳定可比对的契约。
+  - **为将来准备的接缝**：`ExpressionParser::setBindingPowerProvider` 删（生产从不注入；
+    「注入 MINUS 右结合」那条断言连同机制一起消失，「`A - B - C` 左结合」与
+    `binaryPrecedence` 的断言仍在）。
+  - **整类已死**：`VariableToken` 删（含 6 个成员定义与只为它存在的前置声明）。
+  **反向判据也要写下来** —— 有五个 setter 生产 0 调用点却**必须保留**，因为它们各是一条分支的
+  **唯一入口**，删 setter 的下一步必然是删语义（这是「隐式调用必须显式」的镜像）：
+  `ScriptRunner::setStepLimit`（否则 `m_stepLimit > 0` 恒假、死循环诊断恒不可达，且它是 15 个
+  测试唯一的挂死保护）｜`ErbLoader::setParallelLoad`（否则多文件**串行**装载分支再没有入口，
+  而「串行/并行结果一致」正被它钉住）｜`ScriptRunner::setTestBindBeforeEnter`（唯一能进入
+  「私有初值 + 实参绑定都在进入被调帧之前完成」顺序的分支）｜`ConsoleBackend::setWrappingEnabled`
+  与 `ExpressionLexer::setAllowSingleQuotation`（两条未接线的功能分支的唯一开关）。
+  验收：`-Werror` 0 warning、`ctest` 71/71、五语料 md5 与基线一致、被删符号全树剩余引用
+  逐个归零（`VariableToken` 剩 4 处全是注释里的 C# 类型名）。
+  发现待办（未修，记账）：`test/dump_lines` 的 `--parallel` 开关在 `2c8a1fa` 把默认改回并行后
+  已成**无操作**（`setParallelLoad(true)` 与默认同值），文件头注释仍写「默认串行」—— 应改成
+  `--serial` 语义或删掉开关。
+
 ## 回归基线
 
 `dump_warnings` 五语料（`eraTW` / `eraMegaten` / `eraTetris` / `FL3.8` / `ecd`）：
 **6 / 1 / 0 / 0 / 0** 行（`eraMegaten` 的目录参数必须是 `eraMegaten/data`；用错路径会得到
 0 字节的假基线），与 `/tmp/uml-baseline/*.raw.txt` **未排序**逐字节相同。
-累计六十二个重构（身份整数化 / 全定型 / 作用域显式化 / 只读收尾外移 / 存档独立映射 /
+累计六十三个重构（身份整数化 / 全定型 / 作用域显式化 / 只读收尾外移 / 存档独立映射 /
 私有名表前移 / 存档顺序确定性 / 写收尾外移 / 标记区外移 / 位置区外移 /
 标签归属单一索引 / 诊断切片幂等 / 常数作用域参数化 / 增量装载协议显式化 /
 GOTO 段身份入索引 / 静态检查用段身份 / 删第三张裸名表 / 错误去重 / 配对语法只判一次 /
@@ -572,7 +609,8 @@ GOTO 段身份入索引 / 静态检查用段身份 / 删第三张裸名表 / 错
  同一份数据不留第二个入口（VariableSize.csv 只剩一条解析路径）/
  零调用点符号不是「留着待用」而是「第二个入口的邀请」（装载器调参旁路 + 两个永不发射的信号 /
  CsvLoader 的第二读盘入口 / TOOLTIP 七字段副本按字段拆分 /
- 配置键表合一（键/默认值/类型/英文别名一张表）/ 舞台尺寸只剩一处（QML 只缩放））
+ 配置键表合一（键/默认值/类型/英文别名一张表）/ 舞台尺寸只剩一处（QML 只缩放）/
+ 「有调用点」不等于「有消费者」（判据改到生产路径，删 21 个测试专用符号含 VariableToken 整类））
  前后完全一致；
 `ctest` 48 → 71（新增 `test_parse_checks` / `test_save_variable_map` / `test_private_scope_table` /
 `test_load_contracts` / `test_save_variable_map_hashseed` / `test_jump_markings` /

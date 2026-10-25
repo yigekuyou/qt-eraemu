@@ -354,21 +354,6 @@ public:
 
     // ---- 查询（执行引擎使用；查询侧零扩展名）------------------------------
 
-    // 注册表是否认识该语句名（实现 / 桩 / 式中函数裸写）
-    [[nodiscard]] bool hasStatement(const QString& upperName) const {
-        return m_functions.contains(upperName) || m_stubs.contains(upperName)
-               || m_exprFunctions.contains(upperName);
-    }
-
-    // 注册表是否登记了该扩展系统变量（名字规范为大写；查询侧零扩展名）
-    [[nodiscard]] bool hasVariable(const QString& upperName) const {
-        return m_variables.contains(upperName);
-    }
-    // 注册表是否登记了该变量的名表映射
-    [[nodiscard]] bool hasNameTable(const QString& upperVariable) const {
-        return m_nameTables.contains(upperVariable);
-    }
-
     // 式中函数求值入口（ExpressionEvaluator 的 BuiltinOp::Extension 回调转来）。
     // 未命中的名字返回 false（调用方按求值失败处理）。名字大小写不敏感。
     bool runExpression(const QString& name, const QList<QVariant>& args,

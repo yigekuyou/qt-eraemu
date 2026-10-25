@@ -280,8 +280,6 @@ public:
     [[nodiscard]] int gridRows() const { return m_layout.gridRows(); }
     [[nodiscard]] int lineHeight() const { return m_lineHeight; }
     [[nodiscard]] int fontSize() const { return m_layout.fontSize(); }
-    // 平面重建用的「一列」宽度（半角字符宽）＝ fontPx / 2
-    [[nodiscard]] int columnWidth() const { return qMax(1, m_layout.fontSize() / 2); }
     // 是否由 C++ 折行。默认 false：**容器自由渲染位置**，C++ 只给区块与位置数据
     void setWrappingEnabled(bool on) { m_wrapLines = on; }
     [[nodiscard]] bool wrappingEnabled() const { return m_wrapLines; }

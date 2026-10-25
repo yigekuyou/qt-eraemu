@@ -88,10 +88,12 @@ int main(int argc, char* argv[]) {
     {
         ExtensionRegistry ext;
         ext.reg(QStringLiteral("PUTFORM"));
-        check(!ext.hasStatement("PUTFORM"), "核心名 PUTFORM 被拒绝（isBuiltinFunction）");
+        check(!ext.runStatement(QStringLiteral("PUTFORM"), LogicalLine()),
+              "核心名 PUTFORM 不登记为扩展语句（否则会遮蔽核心实现）");
         ext.reg(QStringLiteral("FIND_CHARADATA"),
                 [](const LogicalLine&, const QList<Operand>&) { return true; });
-        check(!ext.hasStatement("FIND_CHARADATA"), "核心名 FIND_CHARADATA 被拒绝（带实现同样拒）");
+        check(!ext.runStatement(QStringLiteral("FIND_CHARADATA"), LogicalLine()),
+              "核心名 FIND_CHARADATA 不登记（带实现同样拒）");
     }
 
     // ---- 2) first-wins：同名重复注册拒绝 ----
@@ -102,7 +104,6 @@ int main(int argc, char* argv[]) {
         ext.reg(QStringLiteral("MYEXT"),
                 [&calls](const LogicalLine&, const QList<Operand>&) { ++calls; return true; });
         ext.reg(QStringLiteral("MYEXT"));   // 重复 -> 拒绝（first-wins）
-        check(ext.hasStatement("MYEXT"), "首个注册生效");
         LogicalLine line;
         line.functionName = "MYEXT";
         check(ext.runStatement("MYEXT", line), "runStatement 命中实现");
@@ -129,7 +130,8 @@ int main(int argc, char* argv[]) {
         ext.reg(QStringLiteral("OVL1"));
         ext.reg(QStringLiteral("OVL2"),
                 [](const LogicalLine&, const QList<Operand>&) { return true; });
-        check(ext.hasStatement("OVL1") && ext.hasStatement("OVL2"),
+        check(AstBuilder::isKnownInstructionName(QStringLiteral("OVL1"))
+                  && AstBuilder::isKnownInstructionName(QStringLiteral("OVL2")),
               "reg(name) 与 reg(name, fn) 两个重载都能登记");
         ext.regForm(QStringLiteral("OVLFORM"));
         check(AstBuilder::isFormArgFunction("OVLFORM"), "regForm 插入 AST（isFormArgFunction）");
@@ -160,9 +162,9 @@ int main(int argc, char* argv[]) {
         // EE 头只在注册类里被实现：构造 ExtensionRegistry 即装入 EE 扩展
         // （本测试不 include ee_extension.h —— 验证的正是这个性质）
         ExtensionRegistry fresh;
-        check(fresh.hasStatement("CHKVARDATA")
-                  && fresh.hasStatement("CHKGLOBALDATA")
-                  && fresh.hasStatement("FIND_VARDATA"),
+        check(AstBuilder::isKnownInstructionName(QStringLiteral("CHKVARDATA"))
+                  && AstBuilder::isKnownInstructionName(QStringLiteral("CHKGLOBALDATA"))
+                  && AstBuilder::isKnownInstructionName(QStringLiteral("FIND_VARDATA")),
               "注册类构造即装入 EE 扩展（EE 头只在注册类里被实现）");
 
         VariableStorage storage;
@@ -241,8 +243,9 @@ int main(int argc, char* argv[]) {
               "原生系统变量表不含 DAYNAME（已移出核心）");
 
         ExtensionRegistry ext;
-        check(ext.hasVariable("DAYNAME") && ext.hasVariable("TIMENAME")
-                  && ext.hasVariable("MONEYNAME"),
+        check(sysvar::findExtensionSystemVariable("DAYNAME") != nullptr
+                  && sysvar::findExtensionSystemVariable("TIMENAME") != nullptr
+                  && sysvar::findExtensionSystemVariable("MONEYNAME") != nullptr,
               "注册类构造即登记 EE 的 DAYNAME/TIMENAME/MONEYNAME");
         check(sysvar::systemVariableTypeDyn("DAYNAME") == OperandType::Str,
               "systemVariableTypeDyn(DAYNAME) == Str（扩展表合并）");
@@ -258,7 +261,9 @@ int main(int argc, char* argv[]) {
               "扩展名表大小写不敏感");
         check(ConstantTable::csvForVariable(QStringLiteral("CFLAG")) == QStringLiteral("CFLAG.CSV"),
               "原生名表优先（CFLAG 不被扩展覆盖）");
-        check(ext.hasNameTable("DAY") && ext.hasNameTable("TIME") && ext.hasNameTable("MONEY"),
+        check(ConstantTable::csvForVariable(QStringLiteral("DAY")) == QStringLiteral("DAY.CSV")
+                  && ConstantTable::csvForVariable(QStringLiteral("TIME")) == QStringLiteral("TIME.CSV")
+                  && ConstantTable::csvForVariable(QStringLiteral("MONEY")) == QStringLiteral("MONEY.CSV"),
               "注册类登记 DAY/TIME/MONEY 名表映射");
 
         // 默认长度：VariableConfig 兜底查扩展表（DAYNAME 一维长度 1000）。
@@ -270,12 +275,15 @@ int main(int argc, char* argv[]) {
 
         // fail-fast：原生系统变量 / 已映射名表拒绝注册。
         ext.regVariable(QStringLiteral("FLAG"), OperandType::Int);
-        check(!ext.hasVariable("FLAG"), "原生变量 FLAG 拒绝注册（fail-fast）");
+        check(sysvar::findExtensionSystemVariable("FLAG") == nullptr,
+              "原生变量 FLAG 拒绝注册（fail-fast：不进扩展表）");
         ext.regNameTable(QStringLiteral("CFLAG"), QStringLiteral("CFLAG.CSV"));
-        check(!ext.hasNameTable("CFLAG"), "核心已映射名表拒绝注册（fail-fast）");
+        check(ConstantTable::csvForVariable(QStringLiteral("CFLAG")) == QStringLiteral("CFLAG.CSV"),
+              "核心已映射名表拒绝注册（CFLAG 仍是核心映射）");
         // first-wins：同名扩展变量拒绝重复注册。
         ext.regVariable(QStringLiteral("DAYNAME"), OperandType::Str, 1000);
-        check(ext.hasVariable("DAYNAME"), "DAYNAME 首次注册生效（first-wins 不覆盖）");
+        check(sysvar::findExtensionSystemVariable("DAYNAME") != nullptr,
+              "DAYNAME 首次注册生效（first-wins 不覆盖）");
     }
 
     // =====================================================================
@@ -283,9 +291,6 @@ int main(int argc, char* argv[]) {
     {
         // 注册类构造时已登记 EE 的 GCLEAR 2/6 参（argumentTypeArrayEx 第二形态）。
         ExtensionRegistry ext;
-        int mn = 0, mx = 0;
-        check(builtinFunctionArgRange("GCLEAR", mn, mx) && mn == 2 && mx == 6,
-              "EE 扩展登记 GCLEAR 2..6 参（对齐 argumentTypeArrayEx 2/6）");
 
         const auto args2 = QList<QSharedPointer<ExpressionNode>>{
             parseExpr(QStringLiteral("1")), parseExpr(QStringLiteral("2"))};
@@ -302,14 +307,14 @@ int main(int argc, char* argv[]) {
         check(validateBuiltinCall(builtinSpec("GCLEAR"), args6).isEmpty(), "GCLEAR(6) 通过（新形态）");
         check(!validateBuiltinCall(builtinSpec("GCLEAR"), args7).isEmpty(), "GCLEAR(7) 参数过多");
 
-        // fail-fast：非核心命令拒绝放宽。
+        // fail-fast：非核心命令拒绝放宽（判据 = 不在核心函数表里）。
         ext.regCoreArgRange(QStringLiteral("PLAYBGM"), 1, 2);
-        check(!builtinFunctionArgRange("PLAYBGM", mn, mx),
-              "非核心命令 PLAYBGM 拒绝放宽（fail-fast）");
-        // first-wins：同名拒绝重复登记（区间不被改写）。
+        check(findBuiltinFunction("PLAYBGM") == nullptr,
+              "非核心命令 PLAYBGM 不在核心函数表（故拒绝放宽）");
+        // first-wins：同名拒绝重复登记（区间不被改写）-> 7 参仍报「过多」。
         ext.regCoreArgRange(QStringLiteral("GCLEAR"), 2, 8);
-        check(builtinFunctionArgRange("GCLEAR", mn, mx) && mx == 6,
-              "GCLEAR 重复登记被拒（first-wins 不覆盖）");
+        check(!validateBuiltinCall(builtinSpec("GCLEAR"), args7).isEmpty(),
+              "GCLEAR 重复登记被拒（first-wins 不覆盖：7 参仍报过多）");
     }
 
 
@@ -381,7 +386,7 @@ int main(int argc, char* argv[]) {
         for (const char* n : { "MAP_CREATE", "MAP_SET", "MAP_GET", "ENUMFUNCBEGINSWITH",
                                "ENUMFILES", "XML_DOCUMENT", "XML_GET", "DT_CREATE",
                                "DT_ROW_ADD", "DT_SELECT", "DT_COLUMN_OPTIONS", "CALLSHARP" }) {
-            check(fresh.hasStatement(QLatin1String(n)),
+            check(AstBuilder::isKnownInstructionName(QLatin1String(n)),
                   QStringLiteral("注册类认识 %1（.NET 族）").arg(QLatin1String(n)));
         }
         // 含 `=` 的扩展语句必须被当成「指令」而不是赋值（否则到不了扩展分派）

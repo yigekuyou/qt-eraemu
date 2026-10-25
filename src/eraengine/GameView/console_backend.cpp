@@ -971,7 +971,7 @@ void ConsoleBackend::updateStageModels(bool force) {
     const quint64 lastSerial = m_buffer.lastSerial();
     for (auto it = m_imageSerials.begin(); it != m_imageSerials.end();) {
         const quint64 serial = *it;
-        // 惰性剪枝：头部裁剪/CLEARLINE/replaceLast 产生的死 serial（区间外，
+        // 惰性剪枝：头部裁剪/CLEARLINE 产生的死 serial（区间外，
         // 或 serial 对应的行已不在该下标上）就地清除。
         if (serial < firstSerial || serial > lastSerial) {
             it = m_imageSerials.erase(it);
@@ -979,7 +979,7 @@ void ConsoleBackend::updateStageModels(bool force) {
         }
         const int row = int(serial - firstSerial);
         if (row >= viewportStart) { ++it; continue; }
-        if (m_buffer.at(row).serial != serial) { ++it; continue; }   // replaceLast 留下的洞
+        if (m_buffer.at(row).serial != serial) { ++it; continue; }   // 下标与 serial 不对齐留下的洞
         const auto line = displayLine(row);
         for (const auto& segment : line.segments) {
             for (const auto& part : segment.spans) {

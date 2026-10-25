@@ -193,7 +193,7 @@ int main(int argc,char** argv) {
         check(storage.getGlobalInt1DInCurrentFrame(QStringLiteral("全角ａｂ"),1)==7,
               "eraUpperKey：全角小写 ａｂ 仍映射到 ＡＢ 键");
         storage.setPrivateScope(eravar::internName(QStringLiteral("函")),{QStringLiteral("私変数")});
-        check(storage.resolvedStorageNameInCurrentFrame(QStringLiteral("私変数"))
+        check(storage.storageNameInCurrentFrame(QStringLiteral("私変数"))
                   == QStringLiteral("函\x1f私変数"),
               "eraUpperKey：私有作用域映射对 CJK 名字不受影响");
         storage.setLocalContext({});

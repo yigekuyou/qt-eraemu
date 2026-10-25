@@ -81,7 +81,6 @@ public:
     [[nodiscard]] int indexForVariable(const QString& variableName, const QString& name) const;
 
     [[nodiscard]] bool isEmpty() const { return m_tables.isEmpty(); }
-    [[nodiscard]] int tableCount() const { return m_tables.size(); }
     [[nodiscard]] int nameCount() const { return m_nameCount; }
     [[nodiscard]] const QStringList& loadedFiles() const { return m_loadedFiles; }
 

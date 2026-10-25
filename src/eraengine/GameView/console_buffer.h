@@ -75,25 +75,12 @@ public:
     const ConsoleDisplayLine& at(int index) const { return m_lines.at(index); }
     const QList<ConsoleDisplayLine>& lines() const { return m_lines; }
 
-    ConsoleDisplayLine& lastMutable() { return m_lines.last(); }
-
     void appendLine(const ConsoleDisplayLine& line) {
         ConsoleDisplayLine committed = line;
         committed.serial = ++m_nextSerial;
         if (committed.isLogicalLine) ++m_logicalCount;
         m_lines.append(committed);
         trim();
-    }
-
-    void replaceLast(const ConsoleDisplayLine& line) {
-        if (m_lines.isEmpty()) {
-            appendLine(line);
-            return;
-        }
-        if (m_lines.last().isLogicalLine) --m_logicalCount;
-        m_lines.last() = line;
-        m_lines.last().serial = ++m_nextSerial;
-        if (line.isLogicalLine) ++m_logicalCount;
     }
 
     // 返回本次实际删除的**物理**行数（含折行续行）

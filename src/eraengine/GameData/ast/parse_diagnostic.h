@@ -102,28 +102,6 @@ enum class DiagOrigin : quint8 {
     Pass7,
 };
 
-[[nodiscard]] inline const char* diagOriginName(DiagOrigin o) noexcept {
-    switch (o) {
-    case DiagOrigin::Load:  return "load";
-    case DiagOrigin::Pass1: return "pass1";
-    case DiagOrigin::Pass2: return "pass2";
-    case DiagOrigin::Pass3: return "pass3";
-    case DiagOrigin::Pass4: return "pass4";
-    case DiagOrigin::Pass5: return "pass5";
-    case DiagOrigin::Pass6: return "pass6";
-    case DiagOrigin::Pass7: return "pass7";
-    }
-    return "load";
-}
-
-[[nodiscard]] inline const char* diagEffectName(DiagEffect e) noexcept {
-    switch (e) {
-    case DiagEffect::ReportOnly: return "report-only";
-    case DiagEffect::RejectLine: return "reject-line";
-    }
-    return "report-only";
-}
-
 // 诊断代码（稳定标识；新增时在此登记，测试据此固定化）
 namespace DiagCode {
 inline constexpr auto kPreprocess         = "preprocess";          // 预处理（[宏]/行连接…）

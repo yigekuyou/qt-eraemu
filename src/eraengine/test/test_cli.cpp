@@ -80,6 +80,20 @@
 #include "console_plane.h"
 #include "variable_storage.h"
 
+// 段 -> span 摊平（行结构是「行 -> 段 -> span」两层；断言按最小单位读）
+static QList<ConsoleSpan> flatSpansOf(const ConsoleDisplayLine& line) {
+    QList<ConsoleSpan> flat;
+    for (const ConsoleSegment& seg : line.segments) flat += seg.spans;
+    return flat;
+}
+
+static QList<int> buttonIndicesOf(const ConsoleDisplayLine& line) {
+    QList<int> out;
+    for (int i = 0; i < line.segments.size(); ++i)
+        if (line.segments.at(i).isButton) out.append(i);
+    return out;
+}
+
 namespace {
 
 // ---------------------------------------------------------------------------
@@ -125,7 +139,7 @@ QString lineAnnotation(const ConsoleDisplayLine& line) {
               << " lineNo=" << line.lineNo
               << " logical=" << (line.isLogicalLine ? 1 : 0)
               << " segments=" << line.segments.size()
-              << " parts=" << line.spanCount()
+              << " parts=" << flatSpansOf(line).size()
               << " width=" << line.width()
               << "  text=\"" << line.plainText().toStdString() << "\"\n";
     for (int i = 0; i < line.segments.size(); ++i) {
@@ -168,9 +182,9 @@ QString lineAnnotation(const ConsoleDisplayLine& line) {
 // 显示模型（扁平）：兼容旧的逐 span / 逐 button 输出
 [[maybe_unused]] void dumpModelFlat(const ConsoleDisplayLine& line, int absIndex) {
     std::cout << "  #" << absIndex << " align=" << alignName(int(line.align))
-              << " spans=" << line.spanCount() << " buttons=" << line.buttonIndices().size()
+              << " spans=" << flatSpansOf(line).size() << " buttons=" << buttonIndicesOf(line).size()
               << "  text=\"" << line.plainText().toStdString() << "\"\n";
-    const QList<ConsoleSpan> parts = line.flatSpans();
+    const QList<ConsoleSpan> parts = flatSpansOf(line);
     for (int i = 0; i < parts.size(); ++i) {
         const ConsoleSpan& sp = parts.at(i);
         std::cout << "      span" << i;
@@ -273,7 +287,7 @@ bool renderScreen(ConsoleBackend* console, QList<QString>& last, bool withAnnota
 // ---------------------------------------------------------------------------
 ConsolePlaneOptions planeOptions(ConsoleBackend* console, bool withDebug = false, bool withColor = false) {
     ConsolePlaneOptions opt;
-    opt.windowWidth = console ? console->gridColumns() * console->columnWidth() : 760;
+    opt.windowWidth = console ? console->gridColumns() * (qMax(1, console->fontSize() / 2)) : 760;
     // 终端安全：把 □ ■ ▨ ─ 这些「宽度有歧义」的符号换成 2 个 ASCII 字符，
     // 于是任何终端/字体下都严格「1 字符 = 1 个区块长」，列才对得齐；
     // 行尾附带本行占用的单位数，便于核对（不依赖终端字体）。
@@ -310,7 +324,7 @@ QStringList renderSuspects(ConsoleBackend* console) {
         const ConsoleDisplayLine& l = lines.at(i);
         const QString t = l.plainText();
         if (t.trimmed().isEmpty()) { ++blanks; continue; }
-        if (l.buttonIndices().isEmpty() && looksLikeMenuButton(t))
+        if (buttonIndicesOf(l).isEmpty() && looksLikeMenuButton(t))
             out << QStringLiteral("第 %1 行像选中项但没有按钮: %2").arg(i).arg(t.left(60));
     }
     if (blanks > lines.size() / 2 && lines.size() > 4)
@@ -810,8 +824,8 @@ int main(int argc, char* argv[]) {
             std::cout << "  区块数 " << blocks.size()
                       << "  行高 " << (console ? console->lineHeight() : 0)
                       << "  字号 " << (console ? console->fontSize() : 0)
-                      << "  root 宽 " << (console ? console->gridColumns() * console->columnWidth() : 0)
-                      << "  列宽 " << (console ? console->columnWidth() : 0) << "\n";
+                      << "  root 宽 " << (console ? console->gridColumns() * (qMax(1, console->fontSize() / 2)) : 0)
+                      << "  列宽 " << (console ? (qMax(1, console->fontSize() / 2)) : 0) << "\n";
             for (const QVariant& v : blocks) {
                 const QVariantMap m = v.toMap();
                 std::cout << "    [" << m.value("layer").toString().toStdString() << "]"

@@ -116,8 +116,8 @@ int main(int argc, char* argv[]) {
 
     qDebug() << "\n5) CSV 常量名表（只来自 CSV 目录）";
     const ConstantTable& ct = engine.constantTable();
-    qDebug().noquote() << QString("  表 %1 / 名字项 %2").arg(ct.tableCount()).arg(ct.nameCount());
-    check(ct.tableCount() > 0, "常量表非空");
+    qDebug().noquote() << QString("  名字项 %1").arg(ct.nameCount());
+    check(!ct.isEmpty(), "常量表非空");
     // 往返一致：indexOf(nameAt(i)) == i
     {
         const QStringList tables = ct.tableNames();

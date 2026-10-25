@@ -187,6 +187,21 @@ plantuml -txmi docs/uml/01-load-classes.puml
   收益：eraTW CPU −3.2%、eraMegaten CPU −3.1%。变异：构建期无视产物自己重预处理 →
   计数回到 2.00/文件而告警逐字节不变（纯冗余）；`textAt()` 每行少取 1 字节 →
   eraTetris AST 从第 2 行起不同（证明逐字节验收对行文本灵敏）。
+- **CSV 的字节也只读一次**：`CsvTextTable`（`get(path, *ok)`：首次读盘并按文件嗅探编码，
+  之后同一路径的所有消费者拿同一份 `QString`，隐式共享无副本）是「CSV 一次读取」的唯一
+  产物。两个消费者共用**字节**、各自保留**解析**（`ConstantTable` 建名表取第 0/1 列、
+  `CsvLoader` 按 `番号/名前/基礎/…` 切行 —— 两个消费者不是两份判据）。装载链把表建在栈上
+  （异步用 `shared_ptr` 活到 future 结束），`loadConstantData` 收尾 `clear()`，不常驻。
+  实测读盘（插桩 `TextCodecUtil::readFile`）：eraTW `Chara*.csv` **290 → 145**、
+  GameBase/Item/VariableSize 各 **2 → 1**、全库 **2,580 → 2,432**；
+  eraMegaten 全库 **13,100 → 10,782（−17.7%）**；修后每文件恰好一次。
+  正确性证据不只是告警逐字节：临时探针导出全部常量名表 + 全部角色变量，
+  HEAD vs 修后逐字节相同（eraTW 274,384 B / 145 模板、eraMegaten 6,208,523 B / 2,057 模板）。
+  变异：字节来源换回自己再读 → 读盘回升 2,432→2,577 而告警不变；
+  喂错文件（全喂最后一个）→ `test_dir_tree` 4 红、角色模板从 145 塌成 1。
+  记账：读失败时补回两条既有日志（`VariableSize` / `Item` 的「加载失败」），因为走文本表
+  后原告警分支不再经过 —— 保住原可观测性；`VariableStorage::loadVariableSizes(path)` 无生产
+  调用方（只是 read + 委托，不构成第二套判据，可下一刀清）。
 - **GETVAR / GETVARS / SETVAR 的名字解析有缓存（唯一表、唯一键）**：键 =
   `(名字文本.trimmed(), 段身份文本)`，值是不可变 AST 的 `QSharedPointer`；容量 512、
   满时淘汰 stamp 最小者（近似 LRU）。失效只有一个入口、6 个调用点（`clear` /
@@ -403,7 +418,7 @@ plantuml -txmi docs/uml/01-load-classes.puml
 `dump_warnings` 五语料（`eraTW` / `eraMegaten` / `eraTetris` / `FL3.8` / `ecd`）：
 **6 / 2 / 0 / 0 / 0** 行（`eraMegaten` 的目录参数必须是 `eraMegaten/data`；用错路径会得到
 0 字节的假基线），与 `/tmp/uml-baseline/*.raw.txt` **未排序**逐字节相同。
-累计五十四个重构（身份整数化 / 全定型 / 作用域显式化 / 只读收尾外移 / 存档独立映射 /
+累计五十五个重构（身份整数化 / 全定型 / 作用域显式化 / 只读收尾外移 / 存档独立映射 /
 私有名表前移 / 存档顺序确定性 / 写收尾外移 / 标记区外移 / 位置区外移 /
 标签归属单一索引 / 诊断切片幂等 / 常数作用域参数化 / 增量装载协议显式化 /
 GOTO 段身份入索引 / 静态检查用段身份 / 删第三张裸名表 / 错误去重 / 配对语法只判一次 /
@@ -425,7 +440,8 @@ GOTO 段身份入索引 / 静态检查用段身份 / 删第三张裸名表 / 错
  一个脚本只扫描一次（Scan 随数据传递）/
  文件字节只读一次盘（内容随数据走）/
  文本只预处理一次（BuiltAst 交回 warnings）/
- 预处理产物共用（一份正文 + 12 B/行跨度））
+ 预处理产物共用（一份正文 + 12 B/行跨度）/
+ CSV 字节只读一次（CsvTextTable，两个消费者共用字节不共用解析））
  前后完全一致；
 `ctest` 48 → 70（新增 `test_parse_checks` / `test_save_variable_map` / `test_private_scope_table` /
 `test_load_contracts` / `test_save_variable_map_hashseed` / `test_jump_markings` /

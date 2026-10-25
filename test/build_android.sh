@@ -92,7 +92,7 @@ fi
 
 # Qt for Android 交叉套件（含 arm64 库与 qt-cmake 包装脚本，**不含宿主工具**）
 if [ -z "${QT_ANDROID:-}" ]; then
-    QT_ANDROID="$(ls -d /home/light/Qt/*/android_arm64_v8a 2>/dev/null | sort -V | tail -1)"
+    QT_ANDROID="$(ls -d  Qt/*/android_arm64_v8a 2>/dev/null | sort -V | tail -1)"
 fi
 [ -n "$QT_ANDROID" ] && [ -x "$QT_ANDROID/bin/qt-cmake" ] || die \
     "找不到 Qt for Android 套件（缺 $QT_ANDROID/bin/qt-cmake）。

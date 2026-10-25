@@ -218,6 +218,18 @@ plantuml -txmi docs/uml/01-load-classes.puml
   （与同步一致）、`test_file_case` 一条断言随契约改为「完成推迟到事件循环 + 恰好一次」。
   保留的不对称（有意）：`loadDirectoryAsync` 对「上一轮仍在进行 / 目录无效」仍是同步
   **拒绝**（那是拒绝，不是装载完成）。
+- **同一诊断只报一次（A/B 镜像按 (文件,行,消息) 抑制）**：eraMegaten
+  `SHOP_LABORATORY.ERB:108` 同一现象报两遍 —— A 是左值专用 `RejectLine`（带 snippet），
+  B 是 `validateArguments` 通用出口 `"%1 (%2)"` 把**同一个** `typeError` 再包一次并追加原文
+  后缀。判据做成数据：「本行已有 A 级拒绝诊断」是 `ParseDiagnostics` 里的**显式登记**
+  （唯一登记点 `add()` 收下 `effect == RejectLine` 时写入 `(文件 \x1f 行 \x1f 消息)`；
+  唯一查表点 `hasRejectFact`），B 的出口只加一个查表条件。派生集合随 `replaceOrigin` /
+  `removeOriginFiles` / `clear` 整体重建，切片重跑不会读到已删事实。**键含 message** 是精确性
+  的关键（同一行可以有两个不同事实，夹具钉住「下标越界 A + 不能赋值 const B」两条都留）。
+  效果：eraMegaten 基线 **411 B/2 行 → 166 B/1 行**（用户裁决允许这 1 行变化），其余四语料
+  逐字节不变，AST 1076 万行 IDENTICAL。变异：键丢掉 message → 5 红（跨事实误吞）；
+  删掉抑制 → 25 红（镜像重现）。未修（记账）：3/6 内部「实参循环 validate + 左值专用诊断」
+  会产两条 **A/A** 重复，要收需让实参循环跳过左值槽位。
 - **GETVAR / GETVARS / SETVAR 的名字解析有缓存（唯一表、唯一键）**：键 =
   `(名字文本.trimmed(), 段身份文本)`，值是不可变 AST 的 `QSharedPointer`；容量 512、
   满时淘汰 stamp 最小者（近似 LRU）。失效只有一个入口、6 个调用点（`clear` /
@@ -434,7 +446,7 @@ plantuml -txmi docs/uml/01-load-classes.puml
 `dump_warnings` 五语料（`eraTW` / `eraMegaten` / `eraTetris` / `FL3.8` / `ecd`）：
 **6 / 2 / 0 / 0 / 0** 行（`eraMegaten` 的目录参数必须是 `eraMegaten/data`；用错路径会得到
 0 字节的假基线），与 `/tmp/uml-baseline/*.raw.txt` **未排序**逐字节相同。
-累计五十六个重构（身份整数化 / 全定型 / 作用域显式化 / 只读收尾外移 / 存档独立映射 /
+累计五十七个重构（身份整数化 / 全定型 / 作用域显式化 / 只读收尾外移 / 存档独立映射 /
 私有名表前移 / 存档顺序确定性 / 写收尾外移 / 标记区外移 / 位置区外移 /
 标签归属单一索引 / 诊断切片幂等 / 常数作用域参数化 / 增量装载协议显式化 /
 GOTO 段身份入索引 / 静态检查用段身份 / 删第三张裸名表 / 错误去重 / 配对语法只判一次 /

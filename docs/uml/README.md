@@ -202,6 +202,22 @@ plantuml -txmi docs/uml/01-load-classes.puml
   记账：读失败时补回两条既有日志（`VariableSize` / `Item` 的「加载失败」），因为走文本表
   后原告警分支不再经过 —— 保住原可观测性；`VariableStorage::loadVariableSizes(path)` 无生产
   调用方（只是 read + 委托，不构成第二套判据，可下一刀清）。
+- **异步装载的完成信号只有一个发布点**：`EraEngine::completeAsyncLoad(ok)` 是
+  `scriptsLoaded` 的唯一出口，且用 `QTimer::singleShot(0)` 投递到**下一轮事件循环**
+  —— 修前失败路径在 `loadAsync()` 内**同步** emit，调用方 `connect → loadAsync → exec()`
+  时 `quit()` 落在还没跑起来的循环上 = 永久挂死（`--async` 在「目录里没有 ERB」时
+  rc=124）。「恰好一次」由世代字段保证（登记时记下当前世代，同代第二次 = warn + 不重发；
+  `stopAsyncLoad()` 推进世代，旧定时器在回调里被世代检查丢弃）。同时
+  **零工作量是显式成功状态**：空目录 = 零个文件的空集，由 `parsed >= total (0)` 收尾，
+  与同步 `loadDirectory`「空文件列表 → true」同一事实（`LoadPrep::ok` 这个「future 已完成」
+  的第二份副本因此删除）。六种边界夹具（只有 CSV / 空目录 / 空 ERB 目录 / 只有 .ERH /
+  1 个 ERB / 全被跳过）×（同步 / 异步）修后全部 rc=0 且输出逐字节相同；`ecd --async`
+  从 rc=124 变 rc=0 / 27 ms。变异：撤掉修复 → 8 红（原缺陷被超时判红）；
+  完成信号发两次 → 9 红。行为变化显式记账：删掉一条「后台预扫描失败（文件列表为空…）」
+  诊断（空目录不再算失败，读取失败仍有计数 + 逐条告警）、`--async` 装载失败不再退出 1
+  （与同步一致）、`test_file_case` 一条断言随契约改为「完成推迟到事件循环 + 恰好一次」。
+  保留的不对称（有意）：`loadDirectoryAsync` 对「上一轮仍在进行 / 目录无效」仍是同步
+  **拒绝**（那是拒绝，不是装载完成）。
 - **GETVAR / GETVARS / SETVAR 的名字解析有缓存（唯一表、唯一键）**：键 =
   `(名字文本.trimmed(), 段身份文本)`，值是不可变 AST 的 `QSharedPointer`；容量 512、
   满时淘汰 stamp 最小者（近似 LRU）。失效只有一个入口、6 个调用点（`clear` /
@@ -418,7 +434,7 @@ plantuml -txmi docs/uml/01-load-classes.puml
 `dump_warnings` 五语料（`eraTW` / `eraMegaten` / `eraTetris` / `FL3.8` / `ecd`）：
 **6 / 2 / 0 / 0 / 0** 行（`eraMegaten` 的目录参数必须是 `eraMegaten/data`；用错路径会得到
 0 字节的假基线），与 `/tmp/uml-baseline/*.raw.txt` **未排序**逐字节相同。
-累计五十五个重构（身份整数化 / 全定型 / 作用域显式化 / 只读收尾外移 / 存档独立映射 /
+累计五十六个重构（身份整数化 / 全定型 / 作用域显式化 / 只读收尾外移 / 存档独立映射 /
 私有名表前移 / 存档顺序确定性 / 写收尾外移 / 标记区外移 / 位置区外移 /
 标签归属单一索引 / 诊断切片幂等 / 常数作用域参数化 / 增量装载协议显式化 /
 GOTO 段身份入索引 / 静态检查用段身份 / 删第三张裸名表 / 错误去重 / 配对语法只判一次 /
@@ -441,13 +457,14 @@ GOTO 段身份入索引 / 静态检查用段身份 / 删第三张裸名表 / 错
  文件字节只读一次盘（内容随数据走）/
  文本只预处理一次（BuiltAst 交回 warnings）/
  预处理产物共用（一份正文 + 12 B/行跨度）/
- CSV 字节只读一次（CsvTextTable，两个消费者共用字节不共用解析））
+ CSV 字节只读一次（CsvTextTable，两个消费者共用字节不共用解析）/
+ 异步完成信号单一发布点（completeAsyncLoad + 零工作量 = 显式成功））
  前后完全一致；
-`ctest` 48 → 70（新增 `test_parse_checks` / `test_save_variable_map` / `test_private_scope_table` /
+`ctest` 48 → 71（新增 `test_parse_checks` / `test_save_variable_map` / `test_private_scope_table` /
 `test_load_contracts` / `test_save_variable_map_hashseed` / `test_jump_markings` /
 `test_position_state` / `test_goto_label_lookup` / `test_structure_pairing` / `test_index_bounds` /
 `test_segment_scope` / `test_array_shape` / `test_storage_form` / `test_condition_scope` /
-`test_name_locus` / `test_string_locus` / `test_scope_plumbing` / `test_audio_pipeline_contracts` / `test_bind_defaults` / `test_dump_warnings_args` / `test_chara_arena` / `test_runtime_ref_cache`）。
+`test_name_locus` / `test_string_locus` / `test_scope_plumbing` / `test_audio_pipeline_contracts` / `test_bind_defaults` / `test_dump_warnings_args` / `test_chara_arena` / `test_runtime_ref_cache` / `test_async_empty_dir`）。
 
 装载耗时（eraTW，2260 文件 / 2.11M 逻辑行，12 线程）：`load` 41 s → **22.8 s**
 （scan 129 ms / parse 8.4 s / merge 4.9 s），收尾 `markLoadComplete` 23.3 s → 6.5 s，

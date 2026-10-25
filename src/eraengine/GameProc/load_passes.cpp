@@ -1065,7 +1065,16 @@ void validateArguments(const LoadContext& /*ctx*/, ScriptData& script, ParseDiag
             line.isError = true;
             line.mutableErrMes() = semanticError;
         }
-        if (line.argument.hasError()) {
+        if (line.argument.hasError()
+            // 同一行、同一事实只报一次：本行若已有一条 A 级拒绝诊断（RejectLine），
+            // 且其文本与当前 typeError 逐字相同，这条结构告警就只是它的**镜像**
+            // ——"%1 (%2)" 多带的只是原文后缀，事实（哪一行、为什么）完全一样，
+            // 上游已经说过。判定是查 ParseDiagnostics 的拒绝事实登记表（见
+            // hasRejectFact），不是在这里猜文本。
+            // 只设 typeError 而不产拒绝诊断的两类（复合赋值不允许列表 /
+            // 不能赋值 const）没有登记，因此照常从这里输出。
+            && !sink.hasRejectFact(line.position.filename, line.position.lineNumber,
+                                   line.argument.typeError)) {
             // 结构告警：不参与去重（与串行版一致，key 留空）
             out.warnings.append(QStringLiteral("%1 (%2)")
                                     .arg(line.argument.typeError, line.raw.trimmed()));

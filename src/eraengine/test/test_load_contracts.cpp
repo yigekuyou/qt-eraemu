@@ -814,22 +814,27 @@ int main(int argc, char* argv[]) {
         const QList<ParseDiagnostic> serialRun = runFinalizeValidation(serial);
         QThreadPool::globalInstance()->setMaxThreadCount(savedMaxThreads);
 
-        check(parallelRun1.size() == 12,
-              QStringLiteral("4 个脚本各 3 条（逐行校验错误 + validateArguments 告警 + 数字字面量）"
+        check(parallelRun1.size() == 8,
+              QStringLiteral("4 个脚本各 2 条（逐行校验错误 + 数字字面量；validateArguments 的"
+                             "同文本镜像被「同一行同一事实只报一次」抑制）"
                              " -> 共 %1 条").arg(parallelRun1.size()));
 
-        // 同一脚本内的顺序也钉住：先跑完**逐行校验**（arg-check 错误、numeric-conversion），
-        // 再跑 validateArguments（arg-check 告警）—— 与旧的「全库两趟」相比，唯一的
-        // 可观察差异是两趟变成**逐脚本交替**（这正是「两步同处一个任务」的直接后果；
-        // 诊断内容/条数/code/severity/effect 不变，五语料 dump_warnings 逐字节相同）。
+        // 同一脚本内的顺序也钉住：逐行校验（arg-check 错误）在前、数字字面量在后。
+        // validateArguments 的通用出口曾在同一行再追加一条「同文本 + 原文后缀」的
+        // 镜像；现在它查拒绝事实登记表，命中即抑制 —— 每个脚本因此从 3 条变 2 条，
+        // 与旧的「全库两趟」相比，两趟仍是**逐脚本交替**（这正是「两步同处一个任务」
+        // 的直接后果），只是不再重复同一条事实。
         QStringList codeOrder;
-        for (int i = 0; i < 3 && i < parallelRun1.size(); ++i)
+        for (int i = 0; i < 2 && i < parallelRun1.size(); ++i)
             codeOrder.append(parallelRun1.at(i).code);
         check(codeOrder == QStringList({QString::fromLatin1(DiagCode::kArgCheck),
-                                        QString::fromLatin1(DiagCode::kNumericConversion),
-                                        QString::fromLatin1(DiagCode::kArgCheck)}),
-              QStringLiteral("脚本内顺序 = 逐行校验(错误) / 逐行校验(数字字面量) / validateArguments(告警)"
-                             "（得到 %1）").arg(codeOrder.join(QLatin1Char(','))));
+                                        QString::fromLatin1(DiagCode::kNumericConversion)}),
+              QStringLiteral("脚本内顺序 = 逐行校验(错误) / 数字字面量（得到 %1）")
+                  .arg(codeOrder.join(QLatin1Char(','))));
+        bool mirrorGone = true;
+        for (const ParseDiagnostic& d : parallelRun1)
+            if (d.message.endsWith(QStringLiteral(" (K ++)"))) mirrorGone = false;
+        check(mirrorGone, "同一行的镜像告警（\"… (K ++)\"）不再出现");
         check(sameList(parallelRun1, parallelRun2),
               "并行分支连跑两次 -> 逐字段（file/line/column/code/severity/effect/message/"
               "snippet）且逐位置相同");

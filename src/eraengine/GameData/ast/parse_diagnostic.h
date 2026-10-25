@@ -195,9 +195,34 @@ struct ParseDiagnostic {
 
 class ParseDiagnostics {
 public:
+    // ------------------------------------------------------------------
+    // 「本行已被拒绝」的**显式事实**登记表
+    //
+    // 一份判定：收下一条 effect == RejectLine 的诊断时，add() 顺手把
+    // (文件, 行, 消息) 记进 m_rejectFacts —— 这是「该行已有一条 A 级拒绝
+    // 诊断、原因文本就是这条」的唯一登记点，与文本视图同源（都在 add 里）。
+    //
+    // 一个查表：下游生产者若对同一行给出**同一事实的镜像**（典型是
+    // validateArguments 的结构告警 "%1 (%2)" —— message 相同、只是多带
+    // 原文后缀），先查 hasRejectFact(file, line, message)：命中就说明这条
+    // 事实已经由拒绝诊断说过一次，不再重复输出。
+    //
+    // 键含 message 而不是只含 (文件, 行)：同一行可以有两条**不同**事实
+    // （例如左值无效 + 不能赋值 const），只抑制「同一文本」的镜像；后写入的
+    // typeError 与前一条拒绝诊断的文本不同时不会命中，因而照常输出。
+    // ------------------------------------------------------------------
+    [[nodiscard]] bool hasRejectFact(const QString& file, int line, const QString& message) const {
+        if (file.isEmpty() || line <= 0 || message.isEmpty()) return false;
+        return m_rejectFacts.contains(rejectFactKey(file, line, message));
+    }
+
     void add(const ParseDiagnostic& d) {
         m_items.append(d);
         m_texts.append(d.toString());
+        if (d.effect == DiagEffect::RejectLine && !d.file.isEmpty() && d.line > 0
+            && !d.message.isEmpty()) {
+            m_rejectFacts.insert(rejectFactKey(d.file, d.line, d.message));
+        }
     }
 
     void add(DiagSeverity sev, const QString& code, const QString& position,
@@ -256,6 +281,7 @@ public:
     void clear() {
         m_items.clear();
         m_texts.clear();
+        m_rejectFacts.clear();
     }
 
     // 用 items 整体替换 origin 切片：给每条盖上 origin（**唯一盖章点**），
@@ -309,8 +335,29 @@ public:
     [[nodiscard]] QString summarize() const;
 
 private:
+    // m_rejectFacts 的唯一键形态：文件 \x1f 行 \x1f 消息（\x1f = 单元分隔符，
+    // 不会出现在合法路径/消息里；与 load_passes 的去重键同一手法）。
+    [[nodiscard]] static QString rejectFactKey(const QString& file, int line,
+                                               const QString& message) {
+        return file + QLatin1Char('\x1f') + QString::number(line) + QLatin1Char('\x1f')
+             + message;
+    }
+
+    // 派生数据随 m_items 重建：切片替换 / 按文件移除 / 清空之后，登记表必须与
+    // 「当前留存的 RejectLine 诊断」逐条一致，否则抑制判据会读到已删的事实。
+    void rebuildRejectFacts() {
+        m_rejectFacts.clear();
+        for (const ParseDiagnostic& d : m_items) {
+            if (d.effect == DiagEffect::RejectLine && !d.file.isEmpty() && d.line > 0
+                && !d.message.isEmpty()) {
+                m_rejectFacts.insert(rejectFactKey(d.file, d.line, d.message));
+            }
+        }
+    }
+
     QList<ParseDiagnostic> m_items;
     QStringList m_texts;
+    QSet<QString> m_rejectFacts;   // 派生：见 hasRejectFact
 };
 
 // 仅供表达式上下文使用；普通 PRINT/字符串原文不得送入数字诊断。

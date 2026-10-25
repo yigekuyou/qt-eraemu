@@ -40,6 +40,18 @@
 //        （ExpressionNode::constantIndex），两趟只读它 —— 非负归 3/6、
 //        负值归 6/6、求值失败归 3/6（见 indexbounds::issuePolicy）
 //   16 VARSIZE 的下标被语言忽略        两趟都不判
+//   26 复合赋值列表 / 27 赋值 const    只设 typeError、**没有** A 级拒绝诊断
+//        -> validateArguments 的通用出口照常输出（抑制范围不含这两类）
+//   28 赋值 const + 越界下标           同一行既有 A（越界）又有 B（const），
+//        文本不同 = 不同事实 -> 两条都留（「本行有拒绝就抑制 B」会在这里红）
+//
+// 抑制契约（刀 57）：同一行、同一 typeError 现象的**镜像**只报一次。
+//   A = 3/6 的 RejectLine 诊断（带 snippet，说的是真正原因）；
+//   B = validateArguments 的通用出口 "%1 (%2)"（message 相同 + 原文后缀）。
+// 判据是数据：ParseDiagnostics 把每条 RejectLine 登记成 (文件, 行, 消息) 的
+// 拒绝事实；B 输出前查 hasRejectFact(file, line, typeError) —— 命中即抑制。
+// 因此 4/9/11/12/14/17/18/19/21/23 各只剩 A；26/27 的 B 仍可见（它们没有
+// 同文本的 A），28 行上「A + 不同文本的 B」也照常各留一条。
 // ---------------------------------------------------------------------------
 #include <QCoreApplication>
 #include <QDebug>
@@ -164,6 +176,10 @@ int main(int argc, char* argv[]) {
         QStringLiteral("PRINTV ARR:(1/0)"),         // 23 常量表达式求值失败
         QStringLiteral("PRINTV ITEM:(5000+0)"),     // 24 系统变量 + 常量算术越界
         QStringLiteral("PRINTV ITEM:(LIDX+1)"),     // 25 系统变量 + 常量名（界内，负对照）
+        // ---- 抑制范围（刀 57）：只有「同一行 + 同一文本」的镜像被抑制 ----
+        QStringLiteral("ARR += 1, 2"),              // 26 复合赋值列表：只设 typeError，无 A
+        QStringLiteral("LIDX = 5"),                 // 27 赋值 const：只设 typeError，无 A
+        QStringLiteral("LIDX:10 = 5"),              // 28 const + 越界下标：A 与 B 是两条不同事实
     };
     const AstResolver resolve = [&table](const QString& e) { return table.expressionAst(e); };
     QList<LogicalLine> lines;
@@ -198,13 +214,12 @@ int main(int argc, char* argv[]) {
     const QString kTooMany = QStringLiteral("变量下标超过三项");
     const QString kLvalueOob = QStringLiteral("赋值左值必须为有效变量项（ARR:10：变量 ARR 常量下标越界）");
 
-    // 3：3/6 判定（RejectLine）+ 同趟 validateArguments 的告警（既有行为）；6/6 让位。
+    // 3：3/6 判定（RejectLine）。validateArguments 的结构告警是同一事实的
+    //    **镜像**（同文本 + 原文后缀），已由拒绝事实登记表抑制；6/6 让位。
     check(lineEquals(diags, 4, {
               expectRow(DiagOrigin::Pass3, DiagSeverity::Error, DiagEffect::RejectLine,
                         DiagCode::kArgCheck, 4, kArrOob),
-              expectRow(DiagOrigin::Pass3, DiagSeverity::Warning, DiagEffect::ReportOnly,
-                        DiagCode::kArgCheck, 4, kArrOob + QStringLiteral(" (PRINTV ARR:10)")),
-          }), "4  声明数组纯字面量越界 -> Pass3 RejectLine + 同趟告警；Pass6 0 条");
+          }), "4  声明数组纯字面量越界 -> 只 1 条 Pass3 RejectLine（镜像告警被抑制）；Pass6 0 条");
     check(withOriginOnLine(diags, 4, DiagOrigin::Pass6).isEmpty(),
           "4  Pass6 对已 RejectLine 的行不再产任何事实");
 
@@ -235,9 +250,7 @@ int main(int argc, char* argv[]) {
     check(lineEquals(diags, 9, {
               expectRow(DiagOrigin::Pass3, DiagSeverity::Error, DiagEffect::RejectLine,
                         DiagCode::kArgCheck, 9, kDivZero),
-              expectRow(DiagOrigin::Pass3, DiagSeverity::Warning, DiagEffect::ReportOnly,
-                        DiagCode::kArgCheck, 9, kDivZero + QStringLiteral(" (PRINTV 10 / 0)")),
-          }), "9  常量除零 -> Pass3 RejectLine（唯一生产者）；Pass6 0 条");
+          }), "9  常量除零 -> 只 1 条 Pass3 RejectLine（唯一生产者，镜像告警被抑制）；Pass6 0 条");
     check(withOriginOnLine(diags, 9, DiagOrigin::Pass6).isEmpty(),
           "9  同一行不再出现 Pass3 RejectLine + Pass6 ReportOnly（历史矛盾已收敛）");
 
@@ -251,15 +264,11 @@ int main(int argc, char* argv[]) {
     check(lineEquals(diags, 11, {
               expectRow(DiagOrigin::Pass3, DiagSeverity::Error, DiagEffect::RejectLine,
                         DiagCode::kArgCheck, 11, kDim),
-              expectRow(DiagOrigin::Pass3, DiagSeverity::Warning, DiagEffect::ReportOnly,
-                        DiagCode::kArgCheck, 11, kDim + QStringLiteral(" (PRINTV A2:1)")),
-          }), "11 二维数组缺下标 -> Pass3 RejectLine；Pass6 让位");
+          }), "11 二维数组缺下标 -> 1 条 Pass3 RejectLine（镜像被抑制）；Pass6 让位");
     check(lineEquals(diags, 12, {
               expectRow(DiagOrigin::Pass3, DiagSeverity::Error, DiagEffect::RejectLine,
                         DiagCode::kArgCheck, 12, kDim),
-              expectRow(DiagOrigin::Pass3, DiagSeverity::Warning, DiagEffect::ReportOnly,
-                        DiagCode::kArgCheck, 12, kDim + QStringLiteral(" (PRINTV A2:1:1:1)")),
-          }), "12 二维数组多下标 -> Pass3 RejectLine；Pass6 让位");
+          }), "12 二维数组多下标 -> 1 条 Pass3 RejectLine（镜像被抑制）；Pass6 让位");
     // 13：四项下标在**表达式解析**阶段就被拒（test_expression_types 锁过），
     // 3/6 的 n>3 分支在正常源码路径上不可达 —— 这里记录“两趟都没有事实”的现状；
     // n>3 的判定本身在第 4 节用直接构造的 AST 锁住。
@@ -282,33 +291,24 @@ int main(int argc, char* argv[]) {
         return expectRow(DiagOrigin::Pass6, DiagSeverity::Warning, DiagEffect::ReportOnly,
                          DiagCode::kStaticValue, line, msg);
     };
-    const auto text3 = [](int /*line*/, const QString& arg) {
-        return QStringLiteral(" (") + arg + QStringLiteral(")");
-    };
-    check(lineEquals(diags, 14, {
-              row3(14, kArrOob), warn3(14, kArrOob + text3(14, "PRINTV ARR:(10+0)")),
-          }), "14 ARR:(10+0) -> 常量值 10 越界：Pass3 RejectLine + 同趟告警");
+    check(lineEquals(diags, 14, {row3(14, kArrOob)}),
+          "14 ARR:(10+0) -> 常量值 10 越界：1 条 Pass3 RejectLine（镜像被抑制）");
     check(lineEquals(diags, 15, {row6(15, kNegArr)}),
           "15 ARR:(-1+0) -> 常量值 -1：仅 Pass6 Warning/ReportOnly（下界归 6/6）");
     check(onLine(diags, 16).isEmpty(), "16 VARSIZE ARR:500 -> 两趟都不判（语言忽略其下标）");
-    check(lineEquals(diags, 18, {
-              row3(18, kArrOob), warn3(18, kArrOob + text3(18, "PRINTV ARR:LIDX")),
-          }), "18 ARR:LIDX（#DIM CONST 名 = 10）-> Pass3 RejectLine + 同趟告警");
-    check(lineEquals(diags, 19, {
-              row3(19, kArrOob), warn3(19, kArrOob + text3(19, "PRINTV ARR:(2*5)")),
-          }), "19 ARR:(2*5) -> 常量值 10 越界：Pass3 RejectLine + 同趟告警");
+    check(lineEquals(diags, 18, {row3(18, kArrOob)}),
+          "18 ARR:LIDX（#DIM CONST 名 = 10）-> 1 条 Pass3 RejectLine（镜像被抑制）");
+    check(lineEquals(diags, 19, {row3(19, kArrOob)}),
+          "19 ARR:(2*5) -> 常量值 10 越界：1 条 Pass3 RejectLine（镜像被抑制）");
     check(onLine(diags, 20).isEmpty(), "20 ARR:(10-10) -> 常量值 0 界内：0 条");
-    check(lineEquals(diags, 21, {
-              row3(21, kArrOob), warn3(21, kArrOob + text3(21, "PRINTV ARR:(10+0)")),
-          }), "21 ARR:(10+0) -> 常量值 10 越界：Pass3 RejectLine + 同趟告警");
+    check(lineEquals(diags, 21, {row3(21, kArrOob)}),
+          "21 ARR:(10+0) -> 常量值 10 越界：1 条 Pass3 RejectLine（镜像被抑制）");
     check(lineEquals(diags, 22, {row6(22, kNegArr)}),
           "22 ARR:(-1+0) -> 常量值 -1：仅 Pass6 Warning/ReportOnly");
     check(lineEquals(diags, 23, {
               expectRow(DiagOrigin::Pass3, DiagSeverity::Error, DiagEffect::RejectLine,
                         DiagCode::kArgCheck, 23, kDivZero),
-              expectRow(DiagOrigin::Pass3, DiagSeverity::Warning, DiagEffect::ReportOnly,
-                        DiagCode::kArgCheck, 23, kDivZero + QStringLiteral(" (PRINTV ARR:(1/0))")),
-          }), "23 ARR:(1/0) -> 装载期求值失败（除零），Pass3 RejectLine；文案不变");
+          }), "23 ARR:(1/0) -> 装载期求值失败（除零），1 条 Pass3 RejectLine；文案不变、镜像被抑制");
     check(withOriginOnLine(diags, 23, DiagOrigin::Pass6).isEmpty(),
           "23 常量除零行上 Pass6 让位");
     check(lineEquals(diags, 24, {row6(24, kItemSize)}),
@@ -317,14 +317,56 @@ int main(int argc, char* argv[]) {
           "25 ITEM:(LIDX+1) -> 常量值 11 界内：0 条");
     check(lineEquals(diags, 17, {
               // 同一条事实在 3/6 内部有两个入口（实参循环 + 赋值左值专用诊断）——
-              // 这是既有的同趟重复，记录为现状（见报告「未改的同类隐患」）。
+              // 这是既有的**同趟 A/A 重复**，本刀不动（只抑制 A/B 镜像）；记录现状。
               expectRow(DiagOrigin::Pass3, DiagSeverity::Error, DiagEffect::RejectLine,
                         DiagCode::kArgCheck, 17, kArrOob),
               expectRow(DiagOrigin::Pass3, DiagSeverity::Error, DiagEffect::RejectLine,
                         DiagCode::kArgCheck, 17, kLvalueOob),
-              expectRow(DiagOrigin::Pass3, DiagSeverity::Warning, DiagEffect::ReportOnly,
-                        DiagCode::kArgCheck, 17, kLvalueOob + QStringLiteral(" (ARR:10 = 1)")),
-          }), "17 赋值左值越界 -> Pass3 RejectLine（同一条处置表）；Pass6 让位");
+          }), "17 赋值左值越界 -> 2 条 Pass3 RejectLine；同文本镜像告警被抑制");
+
+    // ------------------------------------------------------------------
+    // 1b) 抑制范围 = 只吃「同一行 + 同一文本」的镜像（一份判定、一个查表）
+    //
+    //   17：A 在、B（kLvalueOob + 原文后缀）被抑制 —— 同一条事实只报一次；
+    //   26：复合赋值列表，只设 typeError、没有 A -> B 照常输出；
+    //   27：赋值 const，A 的文本是「左值不是变量项」（const 折叠成字面量，
+    //       不是变量项），与 B 的「不能赋值const变量」**不是同一事实** ->
+    //       两条都留下。若抑制条件被放宽成「本行只要有拒绝诊断就抑制 B」，
+    //       这一行的 B 会消失、这里立刻红。
+    // ------------------------------------------------------------------
+    check(lineEquals(diags, 26, {
+              warn3(26, QStringLiteral("复合赋值不允许列表 (ARR += 1, 2)")),
+          }), "26 复合赋值不允许列表：没有 A，B 照常输出");
+    check(lineEquals(diags, 27, {
+              warn3(27, QStringLiteral("不能赋值const变量 (LIDX = 5)")),
+          }), "27 不能赋值 const：没有 A，B 照常输出");
+
+    // 28：同一行上既有 A（拒绝事实，文本是「下标越界」）又有 B（const），
+    //     两条**不同事实**各自都留下。若抑制条件被放宽成「本行只要有拒绝
+    //     诊断就抑制 B」，这一行的 B 会消失 —— 这条就是那个变异的红点。
+    const QString kLvalueConstOob = QStringLiteral(
+        "赋值左值必须为有效变量项（LIDX:10：变量 LIDX 常量下标越界）");
+    check(lineEquals(diags, 28, {
+              warn3(28, QStringLiteral("不能赋值const变量 (LIDX:10 = 5)")),
+              row3(28, QStringLiteral("变量 LIDX 常量下标越界")),
+              row3(28, kLvalueConstOob),
+          }), "28 const + 越界下标：B（const）与 A（越界）文本不同，两条事实都留下");
+
+    // 判据本身是数据：拒绝事实 = (文件, 行, 消息)。查表直接断言，不靠文本猜测。
+    check(diags.hasRejectFact(kFile, 17, kLvalueOob),
+          "查表：17 行登记了「左值无效」这条拒绝事实（B 因此被抑制）");
+    check(diags.hasRejectFact(kFile, 17, kArrOob),
+          "查表：17 行同时登记了「常量下标越界」这条拒绝事实（A/A 各一条都在）");
+    check(!diags.hasRejectFact(kFile, 26, QStringLiteral("复合赋值不允许列表")),
+          "查表：26 行没有拒绝事实（B 的文本未被登记）");
+    check(!diags.hasRejectFact(kFile, 27, QStringLiteral("不能赋值const变量")),
+          "查表：27 行没有登记 B 的文本");
+    check(diags.hasRejectFact(kFile, 28, QStringLiteral("变量 LIDX 常量下标越界")),
+          "查表：28 行登记了「下标越界」（A1）");
+    check(!diags.hasRejectFact(kFile, 28, QStringLiteral("不能赋值const变量")),
+          "查表：28 行的 B 文本未被登记 —— 同一行有拒绝诊断也不抑制不同事实");
+    check(!diags.hasRejectFact(kFile, 4, kLvalueOob),
+          "查表：键含行号 —— 4 行不命中 17 行的事实");
 
     // ------------------------------------------------------------------
     // 2) 运行期事实：line.isError / argument.typeOk
@@ -357,6 +399,8 @@ int main(int argc, char* argv[]) {
         expectLineState(23, true, false, "23 常量除零 -> isError=true / typeOk=false");
         expectLineState(24, false, true, "24 系统变量常量算术越界（仅 6/6）-> 不置错");
         expectLineState(25, false, true, "25 系统变量常量名（界内）-> 不置错");
+        expectLineState(26, true, false, "26 复合赋值列表（无 A）-> isError=true / typeOk=false");
+        expectLineState(27, true, false, "27 赋值 const（A+B 不同文本）-> isError=true / typeOk=false");
     }
 
     // ------------------------------------------------------------------
@@ -366,38 +410,34 @@ int main(int argc, char* argv[]) {
     const QStringList all = serializeAll(diags);
     const QStringList expectedAll = {
         row3(4, kArrOob).join(QLatin1Char('\t')),
-        warn3(4, kArrOob + QStringLiteral(" (PRINTV ARR:10)")).join(QLatin1Char('\t')),
         row6(5, kNegArr).join(QLatin1Char('\t')),
         expectRow(DiagOrigin::Pass6, DiagSeverity::Error, DiagEffect::ReportOnly,
                   DiagCode::kStaticValue, 6, kArrStr).join(QLatin1Char('\t')),
         row6(7, kItemSize).join(QLatin1Char('\t')),
         row6(8, kNegItem).join(QLatin1Char('\t')),
         row3(9, kDivZero).join(QLatin1Char('\t')),
-        warn3(9, kDivZero + QStringLiteral(" (PRINTV 10 / 0)")).join(QLatin1Char('\t')),
         expectRow(DiagOrigin::Pass6, DiagSeverity::Error, DiagEffect::ReportOnly,
                   DiagCode::kStaticValue, 10, kDivZero).join(QLatin1Char('\t')),
         row3(11, kDim).join(QLatin1Char('\t')),
-        warn3(11, kDim + QStringLiteral(" (PRINTV A2:1)")).join(QLatin1Char('\t')),
         row3(12, kDim).join(QLatin1Char('\t')),
-        warn3(12, kDim + QStringLiteral(" (PRINTV A2:1:1:1)")).join(QLatin1Char('\t')),
         row3(14, kArrOob).join(QLatin1Char('\t')),
-        warn3(14, kArrOob + text3(14, "PRINTV ARR:(10+0)")).join(QLatin1Char('\t')),
         row6(15, kNegArr).join(QLatin1Char('\t')),
         row3(17, kArrOob).join(QLatin1Char('\t')),
         row3(17, kLvalueOob).join(QLatin1Char('\t')),
-        warn3(17, kLvalueOob + QStringLiteral(" (ARR:10 = 1)")).join(QLatin1Char('\t')),
         row3(18, kArrOob).join(QLatin1Char('\t')),
-        warn3(18, kArrOob + text3(18, "PRINTV ARR:LIDX")).join(QLatin1Char('\t')),
         row3(19, kArrOob).join(QLatin1Char('\t')),
-        warn3(19, kArrOob + text3(19, "PRINTV ARR:(2*5)")).join(QLatin1Char('\t')),
         row3(21, kArrOob).join(QLatin1Char('\t')),
-        warn3(21, kArrOob + text3(21, "PRINTV ARR:(10+0)")).join(QLatin1Char('\t')),
         row6(22, kNegArr).join(QLatin1Char('\t')),
         row3(23, kDivZero).join(QLatin1Char('\t')),
-        warn3(23, kDivZero + QStringLiteral(" (PRINTV ARR:(1/0))")).join(QLatin1Char('\t')),
         row6(24, kItemSize).join(QLatin1Char('\t')),
+        // 抑制范围之外的两类：B 照常输出（28 行还带着两条文本不同的 A）。
+        warn3(26, QStringLiteral("复合赋值不允许列表 (ARR += 1, 2)")).join(QLatin1Char('\t')),
+        warn3(27, QStringLiteral("不能赋值const变量 (LIDX = 5)")).join(QLatin1Char('\t')),
+        warn3(28, QStringLiteral("不能赋值const变量 (LIDX:10 = 5)")).join(QLatin1Char('\t')),
+        row3(28, QStringLiteral("变量 LIDX 常量下标越界")).join(QLatin1Char('\t')),
+        row3(28, kLvalueConstOob).join(QLatin1Char('\t')),
     };
-    check(all.size() == 29, QString("最终列表 29 条（得到 %1）").arg(all.size()));
+    check(all.size() == 24, QString("最终列表 24 条（得到 %1）").arg(all.size()));
     check(all == expectedAll, "最终列表逐条（origin/severity/effect/code/line/message）且顺序一致");
     if (all != expectedAll) {
         qDebug().noquote() << "    expected:" << expectedAll.join(QStringLiteral(" | "));

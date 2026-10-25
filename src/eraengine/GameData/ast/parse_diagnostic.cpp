@@ -59,6 +59,7 @@ void ParseDiagnostics::replaceOrigin(DiagOrigin origin, QList<ParseDiagnostic> i
     m_texts.clear();
     m_texts.reserve(m_items.size());
     for (const ParseDiagnostic& d : m_items) m_texts.append(d.toString());
+    rebuildRejectFacts();
 }
 
 void ParseDiagnostics::removeOriginFiles(DiagOrigin origin, const QSet<QString>& files) {
@@ -74,6 +75,7 @@ void ParseDiagnostics::removeOriginFiles(DiagOrigin origin, const QSet<QString>&
     m_texts.clear();
     m_texts.reserve(m_items.size());
     for (const ParseDiagnostic& d : m_items) m_texts.append(d.toString());
+    rebuildRejectFacts();
 }
 
 void ParseDiagnostics::addText(DiagSeverity sev, const QString& code, const QString& text) {

@@ -139,9 +139,9 @@ QMap<QString, ErbDocument> analyzeSources(const QMap<QString, QString>& sources,
         const AstResolver quiet = [&](const QString& expression) {
             return table.expressionAstInScope(expression, scope, true);
         };
-        for (const auto& entry : source) {
-            current = ScriptPosition(name, entry.physicalLine, 1);
-            auto line = AstBuilder::build(entry.text, current, resolve, quiet, &diagnostics);
+        for (int i = 0; i < source.size(); ++i) {
+            current = ScriptPosition(name, source.physicalLineAt(i), 1);
+            auto line = AstBuilder::build(source.textAt(i), current, resolve, quiet, &diagnostics);
             line.lineIndex = lines.size();
             // 段起点行 = 本行在预处理后行序里的下标（lineIndex 已由上一行算好）。
             // 作用域切换发生在构建**之后**：@ 行自身属于它开启的新段（与装载器同序）。

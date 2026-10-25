@@ -67,7 +67,7 @@ int main(int argc, char* argv[]) {
             "}\n"
             "#DIM B\n"
             "A = 1\n";
-        const QList<ErbSourceLine> out = pp.process(src, &warns, "t.ERB");
+        const QList<ErbSourceLine> out = pp.process(src, &warns, "t.ERB").materialize();
         check(out.size() == 6, QString("物理行数 == 6（得到 %1）").arg(out.size()));
         check(out.size() > 1 && out[1].text == QStringLiteral("#DIM A, 1, 2"),
               QString("{ 行合并为 #DIM A, 1, 2（得到 %1）")
@@ -90,7 +90,7 @@ int main(int argc, char* argv[]) {
             "BROKEN EXPRESSION ###\n"
             "[SKIPEND]\n"
             "B = 2\n";
-        const QList<ErbSourceLine> out = pp.process(src, &warns, "t.ERB");
+        const QList<ErbSourceLine> out = pp.process(src, &warns, "t.ERB").materialize();
         check(out.size() == 6, "行数保持（6）");
         check(out[0].text == QStringLiteral("A = 1"), "SKIPSTART 之前正常");
         check(out[2].text.isEmpty(), "SKIPSTART 区域内容被禁用");
@@ -109,7 +109,7 @@ int main(int argc, char* argv[]) {
         {
             ErbPreprocessor pp;   // DEBUG 未定义
             QStringList warns;
-            const QList<ErbSourceLine> out = pp.process(src, &warns, "t.ERB");
+            const QList<ErbSourceLine> out = pp.process(src, &warns, "t.ERB").materialize();
             check(out[1].text.isEmpty(), "未定义宏 -> 第一分支禁用");
             check(out[3].text == QStringLiteral("PRINTNORMAL"), "某分支启用");
         }
@@ -117,7 +117,7 @@ int main(int argc, char* argv[]) {
             ErbPreprocessor pp;
             QStringList warns;
             pp.setMacros(QSet<QString>{QStringLiteral("DEBUG")});
-            const QList<ErbSourceLine> out = pp.process(src, &warns, "t.ERB");
+            const QList<ErbSourceLine> out = pp.process(src, &warns, "t.ERB").materialize();
             check(out[1].text == QStringLiteral("PRINTDEBUG"), "定义了宏 -> 第一分支启用");
             check(out[3].text.isEmpty(), "ELSE 分支禁用");
         }
@@ -129,12 +129,12 @@ int main(int argc, char* argv[]) {
         ErbPreprocessor on;
         on.setDebugMode(true);
         QStringList w1;
-        const QList<ErbSourceLine> r1 = on.process(src, &w1, "t.ERB");
+        const QList<ErbSourceLine> r1 = on.process(src, &w1, "t.ERB").materialize();
         check(r1[1].text == QStringLiteral("A = 1"), "调试模式 -> IF_DEBUG 分支启用");
 
         ErbPreprocessor off;
         QStringList w2;
-        const QList<ErbSourceLine> r2 = off.process(src, &w2, "t.ERB");
+        const QList<ErbSourceLine> r2 = off.process(src, &w2, "t.ERB").materialize();
         check(r2[3].text == QStringLiteral("B = 2"), "非调试模式 -> ELSE 分支启用");
     }
 
@@ -159,7 +159,7 @@ int main(int argc, char* argv[]) {
         pp.setRenameMap(map);
         QStringList warns;
         const QList<ErbSourceLine> out =
-            pp.process(QStringLiteral("FLAG:[[魅魔]] = [[你]]\n"), &warns, "t.ERB");
+            pp.process(QStringLiteral("FLAG:[[魅魔]] = [[你]]\n"), &warns, "t.ERB").materialize();
         check(out.value(0).text == QStringLiteral("FLAG:4 = 0"),
               QString("行内替换（得到 %1）").arg(out.value(0).text));
     }
@@ -208,7 +208,7 @@ int main(int argc, char* argv[]) {
         pp.setMacroTable(t);
 
         QStringList warns;
-        const QList<ErbSourceLine> out = pp.process(QStringLiteral("PRINTL A\n"), &warns, "t.ERB");
+        const QList<ErbSourceLine> out = pp.process(QStringLiteral("PRINTL A\n"), &warns, "t.ERB").materialize();
         check(out.size() == 1, "自引用宏：process 正常返回（未卡死）");
         if (out.size() == 1) {
             check(out.first().text == QStringLiteral("PRINTL A"),
@@ -255,7 +255,7 @@ int main(int argc, char* argv[]) {
         pp.setMacroTable(t);
         QStringList warns;
         const QList<ErbSourceLine> out =
-            pp.process(QStringLiteral("DEFRPG_EVENT_DB:0 = 0001\n"), &warns, "t.ERB");
+            pp.process(QStringLiteral("DEFRPG_EVENT_DB:0 = 0001\n"), &warns, "t.ERB").materialize();
         check(out.value(0).text
                   == QStringLiteral("TRPG_FLAG_EVENT:(FLAG:RPG_進行中イベント):0 = 0001"),
               QString("展开后赋值语句完整（得到 '%1'）").arg(out.value(0).text));
@@ -263,7 +263,7 @@ int main(int argc, char* argv[]) {
         // 宏体里的 ';' 若属于注释，展开到表达式中同样不得截断后续代码
         QStringList w2;
         const QList<ErbSourceLine> out2 =
-            pp.process(QStringLiteral("FOR L_I, 0, DEFRPG_CHARA_ALL_NUM\n"), &w2, "t.ERB");
+            pp.process(QStringLiteral("FOR L_I, 0, DEFRPG_CHARA_ALL_NUM\n"), &w2, "t.ERB").materialize();
         check(out2.value(0).text == QStringLiteral("FOR L_I, 0, (7000 + 100)"),
               QString("表达式位置展开不被截断（得到 '%1'）").arg(out2.value(0).text));
     }

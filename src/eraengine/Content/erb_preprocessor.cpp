@@ -386,13 +386,46 @@ QString ErbPreprocessor::expandMacros(const QString& line, MacroAbort* abort) co
     return text;
 }
 
-QList<ErbSourceLine> ErbPreprocessor::process(const QString& content, QStringList* warnings,
-                                             const QString& fileName) const {
+QList<ErbSourceLine> ErbPreprocessed::materialize() const {
     QList<ErbSourceLine> out;
+    out.reserve(spans_.size());
+    for (int i = 0; i < spans_.size(); ++i) {
+        ErbSourceLine line;
+        line.physicalLine = spans_.at(i).physicalLine;
+        if (spans_.at(i).length > 0) line.text = text_.mid(spans_.at(i).offset, spans_.at(i).length);
+        out.append(line);
+    }
+    return out;
+}
+
+void ErbPreprocessed::appendLine(int physicalLine, const QString& text) {
+    ErbLineSpan span;
+    span.physicalLine = physicalLine;
+    span.offset = text_.size();
+    span.length = text.size();
+    if (span.length > 0) text_ += text;
+    spans_.append(span);
+}
+
+void ErbPreprocessed::squeeze() {
+    text_.squeeze();
+}
+
+void ErbPreprocessed::reserve(int lineCount, int charCount) {
+    spans_.reserve(lineCount);
+    text_.reserve(charCount);
+}
+
+ErbPreprocessed ErbPreprocessor::process(const QString& content, QStringList* warnings,
+                                        const QString& fileName) const {
+    ErbPreprocessed out;
 
     // 保留全部物理行（含结尾空串），确保 lineNumber 与物理行一致
     QStringList raw = content.split(QLatin1Char('\n'));
     if (!raw.isEmpty() && raw.last().isEmpty()) raw.removeLast();
+    // 行数 = 物理行数；字符数按原文预留（预处理后略长于原文：行连接补空格、
+    // 宏展开；超出时由 QString 自己再长一次，末尾 squeeze 掉多余容量）。
+    out.reserve(raw.size(), content.size());
 
     // Rename 替换：只按本行出现的 [[…]] 去 QHash 里查，不做全表扫描。
     // 旧实现逐词条 s.contains(key) 是 O(行数 × 词条)：eraH 2030 词条、数万带
@@ -426,8 +459,6 @@ QList<ErbSourceLine> ErbPreprocessor::process(const QString& content, QStringLis
 
     for (int idx = 0; idx < raw.size(); ++idx) {
         const int lineNo = idx + 1;
-        ErbSourceLine outLine;
-        outLine.physicalLine = lineNo;
 
         QString line = applyRename(raw.at(idx));
         // CRLF 文件：split('\n') 会留下行尾 CR，而 C# 的 EraStreamReader 是连行终止符
@@ -436,7 +467,7 @@ QList<ErbSourceLine> ErbPreprocessor::process(const QString& content, QStringLis
 
         // 空行 / 纯空白行：C# 直接跳过（不产生逻辑行）
         if (line.isEmpty() || line.trimmed().isEmpty()) {
-            out.append(outLine);   // text 为空 -> Null 行
+            out.appendLine(lineNo, QString());   // text 为空 -> Null 行
             continue;
         }
 
@@ -457,7 +488,7 @@ QList<ErbSourceLine> ErbPreprocessor::process(const QString& content, QStringLis
             }
         }
         if (line.isEmpty() || line.trimmed().isEmpty()) {
-            out.append(outLine);
+            out.appendLine(lineNo, QString());
             continue;
         }
 
@@ -468,7 +499,7 @@ QList<ErbSourceLine> ErbPreprocessor::process(const QString& content, QStringLis
             if (warnings) {
                 warnings->append(warnPrefix(fileName, lineNo) + QStringLiteral("意外的行连接终止符 '}'"));
             }
-            out.append(outLine);
+            out.appendLine(lineNo, QString());
             continue;
         }
 
@@ -490,16 +521,9 @@ QList<ErbSourceLine> ErbPreprocessor::process(const QString& content, QStringLis
             if (!closed && warnings) {
                 warnings->append(warnPrefix(fileName, lineNo) + QStringLiteral("行连接 '{' 缺少对应的 '}'"));
             }
-            if (!pp.disabled) {
-                outLine.text = joined.trimmed();
-            }
-            out.append(outLine);
+            out.appendLine(lineNo, pp.disabled ? QString() : joined.trimmed());
             // 被吞并的物理行（含 '}' 行）保持为空
-            for (int k = idx + 1; k < j; ++k) {
-                ErbSourceLine filler;
-                filler.physicalLine = k + 1;
-                out.append(filler);
-            }
+            for (int k = idx + 1; k < j; ++k) out.appendLine(k + 1, QString());
             idx = j - 1;
             continue;
         }
@@ -522,19 +546,21 @@ QList<ErbSourceLine> ErbPreprocessor::process(const QString& content, QStringLis
             } else if (warnings) {
                 warnings->append(warnPrefix(fileName, lineNo) + QStringLiteral("'[' 的用法不正确"));
             }
-            out.append(outLine);
+            out.appendLine(lineNo, QString());
             continue;
         }
 
         if (pp.disabled) {
-            out.append(outLine);
+            out.appendLine(lineNo, QString());
             continue;
         }
 
-        outLine.text = line;
-        out.append(outLine);
+        out.appendLine(lineNo, line);
     }
 
     pp.fileEnd(fileName, raw.size(), warnings);
+    // 预留按原文长度给（行连接补空格 / 宏展开会让实际略长），这里把多余容量
+    // 交还：这份产物的生命期是整个装载期，容量翻倍就是白占一份内存。
+    out.squeeze();
     return out;
 }

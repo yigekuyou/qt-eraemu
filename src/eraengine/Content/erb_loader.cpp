@@ -123,8 +123,8 @@ QString ErbLoader::readFileContent(const QString& filePath, bool* ok) const {
 // ---------------------------------------------------------------------------
 // 预处理与 _Rename.csv
 // ---------------------------------------------------------------------------
-QList<ErbSourceLine> ErbLoader::prepareLines(const QString& content, const QString& fileName,
-                                             QStringList* warnings) const {
+ErbPreprocessed ErbLoader::prepareLines(const QString& content, const QString& fileName,
+                                        QStringList* warnings) const {
     return m_preprocessor.process(content, warnings, fileName);
 }
 
@@ -399,21 +399,27 @@ QSharedPointer<ExpressionNode> ErbLoader::resolveExpr(
 // 这里做的是**唯一一次**扫描：返回的 Scan 随文件数据一路传给预登记
 // （preRegisterDeclarations）、装载（loadScript）与类型快照（varTypes）。
 // 三者读同一个 Scan —— 不是同一份源码被扫三遍。
-declscan::Scan ErbLoader::scanFileDeclarations(const QString& content, bool isHeaderFile,
-                                               const QString& scriptName,
-                                               const QString& diagnosticName,
-                                               const ErbPreprocessor& pp,
-                                               LoadTimeVarTypes* varTypes) const {
+ScannedFile ErbLoader::scanFileDeclarations(const QString& content, bool isHeaderFile,
+                                            const QString& scriptName,
+                                            const QString& diagnosticName,
+                                            const ErbPreprocessor& pp,
+                                            LoadTimeVarTypes* varTypes) const {
     // 与 loadScript 完全同一条预处理（行连接 / SKIP / 宏展开），否则段起点
     // 下标会与最终行数组错位 —— 私有类型就查不到（同一病根的第二处）。
-    QStringList warnings;
-    const QList<ErbSourceLine> lines = pp.process(content, &warnings, diagnosticName);
+    //
+    // 这一趟预处理的产物（行 + 告警）原样交回调用方：构建期/装载期直接消费它，
+    // 所以同一份文本在这个文件上只被 process 一次（见 ScannedFile 的说明）。
+    ScannedFile out;
+    out.pre = pp.process(content, &out.warnings, diagnosticName);
+    // 扫描吃的是同一批行：这里把紧凑形态摊成 declscan::SourceLine（每行一个
+    // QString，**临时**——扫描结束即释放；常驻的是 out.pre）。
     QList<declscan::SourceLine> scanLines;
-    scanLines.reserve(lines.size());
-    for (const ErbSourceLine& sl : lines)
-        scanLines.append({sl.text, ScriptPosition(diagnosticName, sl.physicalLine, 1)});
-    declscan::Scan scan = declscan::scanScript(scanLines, scriptName, isHeaderFile);
-    if (!varTypes) return scan;
+    scanLines.reserve(out.pre.size());
+    for (int i = 0; i < out.pre.size(); ++i)
+        scanLines.append({out.pre.textAt(i), ScriptPosition(diagnosticName, out.pre.physicalLineAt(i), 1)});
+    out.scan = declscan::scanScript(scanLines, scriptName, isHeaderFile);
+    declscan::Scan& scan = out.scan;
+    if (!varTypes) return out;
     // 类型快照 = 「同一份声明扫描 + 同一份登记」的产物摊平：登记进临时变量表
     // 再摊平，没有第二套「哪行算声明」「哪个指令是字符串」的判定。
     VariableTable vars;
@@ -423,14 +429,14 @@ declscan::Scan ErbLoader::scanFileDeclarations(const QString& content, bool isHe
         if (d.scope == VarScope::Local) varTypes->localVars[d.scopeKey].insert(d.name.toUpper(), d.type);
         else varTypes->globalVars.insert(d.name.toUpper(), d.type);
     }
-    return scan;
+    return out;
 }
 
 // ---------------------------------------------------------------------------
 // 声明登记（唯一的登记入口）：消费预扫描已经算好的 Scan
 // ---------------------------------------------------------------------------
 void ErbLoader::preRegisterDeclarations(const QStringList& files,
-                                        const QHash<QString, declscan::Scan>& scans) {
+                                        const QHash<QString, ScannedFile>& scanned) {
     if (!m_parseTable) return;
     // 本函数在 GUI 线程上跑：期间心跳定时器（也在 GUI 线程）无法触发，
     // 所以进度直接在循环里打印 —— 逐行日志是同步写的，主线程就算被占住，
@@ -443,11 +449,11 @@ void ErbLoader::preRegisterDeclarations(const QStringList& files,
     for (const QString& f : files) {
         // 段身份 = (脚本名, 段起点行)：脚本名与 loadScript / parseOneFile 用同一个
         // scriptNameFor（相对 root 的路径）—— 扫描时已按这个身份写好，这里只读取。
-        const auto it = scans.constFind(f);
-        Q_ASSERT_X(it != scans.constEnd(), "ErbLoader::preRegisterDeclarations",
+        const auto it = scanned.constFind(f);
+        Q_ASSERT_X(it != scanned.constEnd(), "ErbLoader::preRegisterDeclarations",
                    "预扫描结果缺失：声明登记与扫描必须来自同一次读取");
-        if (it == scans.constEnd()) continue;
-        for (const declscan::DeclarationSite& site : it.value().declarations)
+        if (it == scanned.constEnd()) continue;
+        for (const declscan::DeclarationSite& site : it.value().scan.declarations)
             m_parseTable->preRegisterDeclaration(site);
         ++processed;
         if (processed % reportEvery == 0) {
@@ -506,14 +512,19 @@ ParsedErbFile ErbLoader::parseOneFileReadOnly(const QString& filePath,
     ParsedErbFile pf;
     pf.path = filePath;
     pf.scriptName = scriptNameFor(root, filePath);
-    // 声明扫描随行数据往后带（mergeParsedFile -> loadScript 直接消费它）：
-    // 这份 Scan 是预扫描对**同一份内容**扫出来的，不是对行的第二次扫描。
-    if (inputs.declScan) pf.declScan = *inputs.declScan;
+    // 预扫描的产物随行数据往后带（mergeParsedFile -> loadScript 直接消费它）：
+    // 这份 Scan 是预扫描对**同一批行**扫出来的，不是对行的第二次扫描。
+    if (inputs.scanned) {
+        pf.declScan = inputs.scanned->scan;
+        // 告警是那一次预处理的产物：沿用，不再为了拿告警把同一份文本重跑一遍。
+        pf.warnings = inputs.scanned->warnings;
+    }
 
-    // 预扫描阶段已读取并解码过：直接复用，省掉第二次读盘 + 解码 + 编码嗅探。
-    const QString content = inputs.content ? *inputs.content : readFileContent(filePath);
-    if (!content.isEmpty()) {
-        const QList<ErbSourceLine> source = prepareLines(content, filePath, &pf.warnings);
+    // 行也来自那一份产物（inputs.scanned->pre）；只有手里没有产物（单文件
+    // 装载）时才在这里读盘 + 预处理一次。
+    const ErbPreprocessed source =
+        inputs.scanned ? inputs.scanned->pre : prepareLines(readFileContent(filePath), filePath, &pf.warnings);
+    if (!source.isEmpty()) {
         pf.lines.reserve(source.size());
 
         // 结构化诊断出口（本文件；随后经 ParsedErbFile 汇总回灌解析表）
@@ -554,8 +565,8 @@ ParsedErbFile ErbLoader::parseOneFileReadOnly(const QString& filePath,
                                /*foldConstants=*/true);
         };
         for (int i = 0; i < source.size(); ++i) {
-            currentPhysicalLine = source.at(i).physicalLine;
-            const ScriptPosition pos(filePath, source.at(i).physicalLine, 1);
+            currentPhysicalLine = source.physicalLineAt(i);
+            const ScriptPosition pos(filePath, source.physicalLineAt(i), 1);
             // 左值「已声明类型」：取自**预扫描已登记**的变量表（#DIM/#DIMS/
             // #GLOBAL(S)/#PRIVATE 与 VARI/VARS 走同一条登记路径，系统变量由
             // VariableTable::typeOf 回退）。传入的是整个左值文本（`LOCAL:1`、
@@ -570,7 +581,7 @@ ParsedErbFile ErbLoader::parseOneFileReadOnly(const QString& filePath,
                 }
                 return varTypes ? varTypes->typeOf(baseName, currentScope) : OperandType::Unknown;
             };
-            LogicalLine line = AstBuilder::build(source.at(i).text, pos, resolver, quietResolver,
+            LogicalLine line = AstBuilder::build(source.textAt(i), pos, resolver, quietResolver,
                                                   &pf.diagnostics, declaredType, foldedResolver);
             line.lineIndex = i;
             // 作用域切换在构建**之后**（与 loadScript 的顺序一致：行自身先按
@@ -646,13 +657,14 @@ bool ErbLoader::mergeParsedFile(ParsedErbFile&& pf) {
 // 装载入口
 // ---------------------------------------------------------------------------
 bool ErbLoader::loadFile(const QString& filePath, const QString& root,
-                         const declscan::Scan* scan, const QString* content) {
-    // 内容随数据走：目录装载的预扫描已经把这同一个文件读过一次（解一次码、
-    // 嗅一次编码），文本就放在调用方手里。传进来就**不再读盘** —— 同一份字节
-    // 不会有两份副本。content == nullptr 只出现在「单文件装载」（调用方手里
-    // 确实没有这份文本），那时这里读唯一的一次。
-    const QString body = content ? *content : readFileContent(filePath);
-    if (body.isEmpty()) {
+                         const ScannedFile* scanned) {
+    // 产物随数据走：目录装载的预扫描已经把这同一个文件「读一次、预处理一次」
+    // 过，行 + 扫描 + 告警都放在调用方手里。传进来就**不再读盘、不再预处理**
+    // —— 同一份文本不会有两份副本，也不会被处理第二遍。
+    // scanned == nullptr 只出现在「单文件装载」（调用方手里确实没有），那时
+    // 这里读唯一的一次、预处理唯一的一次。
+    const QString body = scanned ? QString() : readFileContent(filePath);
+    if (!scanned && body.isEmpty()) {
         qWarning() << "[load] ERB 读取失败或为空:" << filePath;
         return false;
     }
@@ -664,7 +676,7 @@ bool ErbLoader::loadFile(const QString& filePath, const QString& root,
     // 随后 mergeParsedFile 把它交给 loadScript（构建 + 装载 = 一次扫描）。
     // 预处理也只有一个来源：buildAst 交回的 warnings 就是它那一趟 prepareLines
     // 的产物（以前为了取告警在这里把同一份文本又预处理了一遍）。
-    BuiltAst built = buildAst(body, filePath, root, &pf.diagnostics, scan);
+    BuiltAst built = buildAst(body, filePath, root, &pf.diagnostics, scanned);
     pf.lines = std::move(built.lines);
     pf.warnings = std::move(built.warnings);
     pf.declScan = std::move(built.scan);
@@ -696,8 +708,8 @@ bool ErbLoader::loadDirectory(const QString& dirPath, int depth) {
     // 宏表：#DEFINE（仅头文件，对齐 C# HeaderFileLoader）
     //
     // 头文件的**同一份字节只读一次**：宏名表与宏表来自同一次读取，读到的文本
-    // 直接留在这里，供随后的预扫描复用（串行分支的 decoded、并行分支的 scan
-    // 都先查它）—— 于是「宏表 -> 预扫描 -> 构建」不加读盘次数。
+    // 直接留在这里，供随后的预扫描复用（串行/并行两条分支的预扫描都先查它）
+    // —— 于是「宏表 -> 预扫描 -> 构建」不加读盘次数。
     QHash<QString, QString> headerText;
     headerText.reserve(headers.size());
     for (const QString& h : headers) headerText.insert(h, readFileContent(h));
@@ -721,33 +733,28 @@ bool ErbLoader::loadDirectory(const QString& dirPath, int depth) {
         for (const QString& f : files) {
             if (f.endsWith(QLatin1String(".erh"), Qt::CaseInsensitive)) headerSet.insert(f);
         }
-        QHash<QString, QString> decoded = std::move(headerText);   // 头文件：宏表那一次读取就是这一份
-        decoded.reserve(files.size());
-        for (const QString& f : scripts) decoded.insert(f, readFileContent(f));
-        // 每文件扫**一次**：登记、构建（buildScriptAst）、装载（loadScript）
-        // 消费的都是这一份 Scan（见 scanFileDeclarations 的注释）。
-        // 文本也随数据走：扫描从 decoded 取（不读盘），装载把同一份文本交给
-        // loadFile（更不读盘）—— 串行装载因此是「每文件读盘一次」。
-        QHash<QString, declscan::Scan> scans;
-        scans.reserve(files.size());
+        // 每文件**读一次、预处理一次**：产出的 ScannedFile（行 + 扫描 + 告警）
+        // 就是登记、构建、装载三处共用的那一份。文本在扫描后即释放（只有头文件
+        // 的宏表需要它提前读一遍，见上面的 headerText）。
+        QHash<QString, ScannedFile> scanned;
+        scanned.reserve(files.size());
         for (const QString& f : files) {
-            scans.insert(f, scanFileDeclarations(decoded.value(f), headerSet.contains(f),
-                                                 scriptNameFor(dirPath, f), f, m_preprocessor,
-                                                 /*varTypes=*/nullptr));
+            const bool isHeader = headerSet.contains(f);
+            const QString text = isHeader ? headerText.value(f) : readFileContent(f);
+            scanned.insert(f, scanFileDeclarations(text, isHeader, scriptNameFor(dirPath, f), f,
+                                                   m_preprocessor, /*varTypes=*/nullptr));
         }
-        preRegisterDeclarations(files, scans);
+        headerText.clear();   // 宏表已建好，头文件文本不再需要（预处理行在 scanned 里）
+        preRegisterDeclarations(files, scanned);
 
         bool ok = true;
         for (const QString& f : files) {
-            const QString content = decoded.value(f);   // 浅拷贝（隐式共享）
-            const auto scanIt = scans.constFind(f);
-            const bool fileOk = loadFile(f, dirPath,
-                                         scanIt == scans.constEnd() ? nullptr : &scanIt.value(),
-                                         &content);
+            // 直接把这一份产物交给 loadFile（不拷贝：它在本次调用期间只读）
+            const auto it = scanned.constFind(f);
+            const bool fileOk = loadFile(f, dirPath, it == scanned.constEnd() ? nullptr : &it.value());
             if (!fileOk) ok = false;
-            // 本文件已消费：立即释放它的文本与扫描（峰值内存不随文件数累积）。
-            decoded.remove(f);
-            scans.remove(f);
+            // 本文件已消费：立即释放它的预处理行与扫描（峰值内存不随文件数累积）。
+            scanned.remove(f);
         }
         // 标签数不再单独记账：唯一那份数据在 EraParseTable::m_labelIndex
         //（裸名第三张表已删，见 mergeParsedFile 的注释）。
@@ -775,54 +782,46 @@ bool ErbLoader::loadDirectory(const QString& dirPath, int depth) {
     for (const QString& f : files) {
         if (f.endsWith(QLatin1String(".erh"), Qt::CaseInsensitive)) headerSet.insert(f);
     }
-    QList<QPair<QString, FunctionTypes>> scans;
+    // 预扫描的**产物**（每文件：预处理行 + 声明扫描 + 告警）在登记与分块解析
+    // 之间只有一份（QHash<QString, ScannedFile>），不再「文本一份 + 扫描一份」。
+    QHash<QString, ScannedFile> scanned;
+    FunctionTypes functionTypes;
     LoadTimeVarTypes varTypes;
-    QHash<QString, declscan::Scan> fileScans;   // 每文件扫一次，后面全程复用
     {
+        // 一次读取（头文件复用宏表那一次的文本）→ 一次预处理 + 一次声明扫描。
         struct SyncScan {
-            QString content;
+            ScannedFile file;
             FunctionTypes functionTypes;
             LoadTimeVarTypes varTypes;
-            declscan::Scan declScan;
         };
         const QList<SyncScan> s2 =
             QtConcurrent::blockingMapped(files, [this, &headerSet, &dirPath, &headerText](const QString& f) {
                 SyncScan scan;
                 // 头文件在宏表阶段已经读过这份字节：直接复用（同一个文件不读第二次）。
                 const auto pre = headerText.constFind(f);
-                scan.content = pre != headerText.constEnd() ? pre.value() : readFileContent(f);
-                scan.functionTypes = scanFunctionTypes(scan.content);
-                scan.declScan = scanFileDeclarations(scan.content, headerSet.contains(f),
-                                                     scriptNameFor(dirPath, f), f, m_preprocessor,
-                                                     &scan.varTypes);
+                const QString content = pre != headerText.constEnd() ? pre.value() : readFileContent(f);
+                scan.functionTypes = scanFunctionTypes(content);
+                scan.file = scanFileDeclarations(content, headerSet.contains(f),
+                                                 scriptNameFor(dirPath, f), f, m_preprocessor,
+                                                 &scan.varTypes);
                 return scan;
             });
-        scans.reserve(s2.size());
-        fileScans.reserve(s2.size());
+        scanned.reserve(s2.size());
         for (int i = 0; i < s2.size(); ++i) {
-            scans.append(qMakePair(s2.at(i).content, s2.at(i).functionTypes));
-            fileScans.insert(files.at(i), s2.at(i).declScan);
+            scanned.insert(files.at(i), s2.at(i).file);
+            const FunctionTypes& m = s2.at(i).functionTypes;
+            for (auto it = m.constBegin(); it != m.constEnd(); ++it) {
+                functionTypes.insert(it.key(), it.value());
+            }
             mergeVarTypes(varTypes, s2.at(i).varTypes);
         }
     }
-    FunctionTypes functionTypes;
-    QHash<QString, QString> decoded;
-    decoded.reserve(files.size());
-    for (int i = 0; i < scans.size(); ++i) {
-        decoded.insert(files.at(i), scans.at(i).first);
-        const FunctionTypes& m = scans.at(i).second;
-        for (auto it = m.constBegin(); it != m.constEnd(); ++it) {
-            functionTypes.insert(it.key(), it.value());
-        }
-    }
-
-    // decoded 接管源文本；扫描结果不能继续持有已消费文件的共享字符串。
-    scans.clear();
+    headerText.clear();   // 宏表已建好；头文件文本已变成本文件的预处理行
     tScan = timer.elapsed();
 
     // 「先登记 #DIM/#DIMS，再构造 AST」：按预处理后的行登记声明 + 结算，之后
     // 并行构建时解析器即可拿到完整用户变量类型。
-    preRegisterDeclarations(files, fileScans);
+    preRegisterDeclarations(files, scanned);
 
 
     // 2) 分块并行解析 + 主线程合并（限制内存峰值）
@@ -832,10 +831,10 @@ bool ErbLoader::loadDirectory(const QString& dirPath, int depth) {
         const QStringList slice = files.mid(base, chunk);
         QElapsedTimer pt; pt.start();
         QList<ParsedErbFile> parsed = QtConcurrent::blockingMapped(slice,
-            [this, &functionTypes, &varTypes, &decoded, &fileScans, dirPath](const QString& f) {
-                const QString content = decoded.value(f);   // 浅拷贝（隐式共享）
-                const declscan::Scan declScan = fileScans.value(f);   // 同上：扫描只有一份
-                const ParallelParseInputs inputs{&functionTypes, &varTypes, &content, &declScan};
+            [this, &functionTypes, &varTypes, &scanned, dirPath](const QString& f) {
+                // 本文件的预扫描产物（行 + 扫描 + 告警）：浅拷贝（隐式共享）
+                const ScannedFile prod = scanned.value(f);
+                const ParallelParseInputs inputs{&functionTypes, &varTypes, &prod};
                 return parseOneFileReadOnly(f, inputs, dirPath);
             });
         tParse += pt.elapsed();
@@ -844,9 +843,8 @@ bool ErbLoader::loadDirectory(const QString& dirPath, int depth) {
             if (!mergeParsedFile(std::move(pf))) ok = false;
         }
         tMerge += mt.elapsed();
-        for (const QString& f : slice) {   // 释放本块已消费的文本与扫描
-            decoded.remove(f);
-            fileScans.remove(f);
+        for (const QString& f : slice) {   // 释放本块已消费的预处理行与扫描
+            scanned.remove(f);
         }
     }
     qDebug() << "[ErbLoader] files:" << files.size()
@@ -864,10 +862,9 @@ bool ErbLoader::loadDirectory(const QString& dirPath, int depth) {
 ErbLoader::LoadPrep ErbLoader::prepareLoad(const QString& dirPath, int depth) const {
     // 预扫描的单文件结果（函数返回类型 + 用户变量类型 + 已解码文本）
     struct FileScan {
-        QString content;
+        ScannedFile file;          // 预处理行 + 声明扫描 + 告警（一次预处理的产物）
         FunctionTypes functionTypes;
         LoadTimeVarTypes varTypes;
-        declscan::Scan declScan;   // 本文件**唯一**的一份声明扫描（随数据往后传）
     };
     // 本函数跑在线程池线程上：这里的 qInfo/计时与 m_async.clock（GUI 侧）互不干扰
     QElapsedTimer prepClock;
@@ -955,22 +952,25 @@ ErbLoader::LoadPrep ErbLoader::prepareLoad(const QString& dirPath, int depth) co
         // 头文件：宏表阶段已经读过这份字节（连成败一起带过来），不再读第二次。
         const auto pre = headerReads.constFind(f);
         bool readOk = false;
-        if (pre != headerReads.constEnd()) {
-            scan.content = pre.value().text;
-            readOk = pre.value().ok;
-        } else {
-            scan.content = readFileContent(f, &readOk);
-        }
+        const QString content = [&] {
+            if (pre != headerReads.constEnd()) {
+                readOk = pre.value().ok;
+                return pre.value().text;
+            }
+            return readFileContent(f, &readOk);
+        }();
         if (!readOk) {
             noteReadFailure();
             if (failed.fetch_add(1, std::memory_order_relaxed) < kMaxReadFailureLogs)
                 qWarning() << "[load] ERB/ERH 读取失败，已跳过:" << f;
         }
-        scan.functionTypes = scanFunctionTypes(scan.content);
-        // 预处理一次 + 声明扫描一次：类型快照、预登记、loadScript 共用这一份。
-        scan.declScan = scanFileDeclarations(scan.content, headerSet.contains(f),
-                                             scriptNameFor(dirPath, f), f, scanPP,
-                                             &scan.varTypes);
+        scan.functionTypes = scanFunctionTypes(content);
+        // 预处理一次 + 声明扫描一次：类型快照、预登记、构建、loadScript 共用这一份。
+        // 预处理的行随 scan.file 常驻到分块解析期（不再在构建期重新预处理）；
+        // 原文在本次工作项结束时就释放（它的两份用途都已在上面用完）。
+        scan.file = scanFileDeclarations(content, headerSet.contains(f),
+                                         scriptNameFor(dirPath, f), f, scanPP,
+                                         &scan.varTypes);
         bumpLoadStage(1);
         return scan;
     };
@@ -986,11 +986,11 @@ ErbLoader::LoadPrep ErbLoader::prepareLoad(const QString& dirPath, int depth) co
         scans.reserve(prep.files.size());
         for (const QString& f : filesForScan) scans.append(scanOne(f));
     }
-    prep.decoded.reserve(prep.files.size());
-    prep.scans.reserve(prep.files.size());
+    prep.scanned.reserve(prep.files.size());
     for (int i = 0; i < scans.size(); ++i) {
-        prep.decoded.insert(prep.files.at(i), scans.at(i).content);
-        prep.scans.insert(prep.files.at(i), scans.at(i).declScan);
+        // 每文件的产物（预处理行 + 扫描 + 告警）与它一起往后走：同一个键、同一个
+        // 生命期，不再有「文本一份、扫描一份」两份 map。
+        prep.scanned.insert(prep.files.at(i), std::move(scans[i].file));
         const FunctionTypes& m = scans.at(i).functionTypes;
         for (auto it = m.constBegin(); it != m.constEnd(); ++it) {
             prep.functionTypes.insert(it.key(), it.value());
@@ -1267,8 +1267,8 @@ void ErbLoader::onPrepFinished() {
     m_asyncTypes = prep.functionTypes;
     m_asyncVarTypes = prep.varTypes;   // 解析期只读的用户变量类型快照
     m_async.files = prep.files;
-    m_async.decoded = std::move(prep.decoded);   // 复用预扫描的解码文本
-    m_async.scans = std::move(prep.scans);       // 复用预扫描的声明扫描（同一份事实）
+    // 复用预扫描的产物（每文件：预处理行 + 声明扫描 + 告警，一份值一个生命期）
+    m_async.scanned = std::move(prep.scanned);
     m_async.total = prep.files.size();
     {
         // 先登记 #DIM/#DIMS（按预处理后的行），再让分块并行构建 AST。
@@ -1282,7 +1282,7 @@ void ErbLoader::onPrepFinished() {
         QElapsedTimer registerClock;
         registerClock.start();
         // 登记消费预扫描的 Scan：不重新预处理、不重新扫描（同一份源码只扫一次）。
-        preRegisterDeclarations(m_async.files, m_async.scans);
+        preRegisterDeclarations(m_async.files, m_async.scanned);
         m_async.registerMs = registerClock.elapsed();
         qInfo().noquote() << "[ErbLoader] 登记声明完成:" << m_async.registerMs << "ms";
     }
@@ -1326,15 +1326,12 @@ void ErbLoader::scheduleNextChunk() {
     // 用户变量类型快照同样是「本次 mapped 运行期间只读」，按值捕获
     //（QHash 隐式共享，拷贝很便宜）。
     const LoadTimeVarTypes varTypes = m_asyncVarTypes;
-    // 复用预扫描已解码的源文本（m_async.decoded 在本次 mapped 运行期间只读，
-    // 直到 onChunkFinished 才回收 —— 无并发写）。
+    // 复用预扫描的产物（m_async.scanned 在本次 mapped 运行期间只读，直到
+    // onChunkFinished 才回收 —— 无并发写）：构建期因此**不再预处理**这份文本。
     m_chunkFuture = QtConcurrent::mapped(slice,
         [this, types, varTypes](const QString& f) {
-            const QString content = m_async.decoded.value(f);   // 浅拷贝（隐式共享）
-            // 声明的唯一一份扫描：预扫描时算好的那一份（本次 mapped 期间
-            // m_async.scans 只读，直到 onChunkFinished 才回收）。
-            const declscan::Scan declScan = m_async.scans.value(f);
-            const ParallelParseInputs inputs{&types, &varTypes, &content, &declScan};
+            const ScannedFile prod = m_async.scanned.value(f);   // 浅拷贝（隐式共享）
+            const ParallelParseInputs inputs{&types, &varTypes, &prod};
             return parseOneFileReadOnly(f, inputs, m_async.dirPath);
         });
     m_chunkWatcher->setFuture(m_chunkFuture);
@@ -1350,13 +1347,10 @@ void ErbLoader::onChunkFinished() {
     m_chunkWatcher->setFuture(QFuture<ParsedErbFile>());
     m_chunkFuture = {};
     const int n = parsed.size();
-    // 本块后台解析已完成：立即释放其解码文本（解析阶段用完即弃）
+    // 本块后台解析已完成：立即释放这批复用过的预处理行与扫描（用完即弃）
     const int base = m_async.parsed;
-    for (int i = base; i < base + n && i < m_async.files.size(); ++i) {
-        // 解码文本与它的声明扫描一起释放（两者的生产者/消费者是同一次读取）。
-        m_async.decoded.remove(m_async.files.at(i));
-        m_async.scans.remove(m_async.files.at(i));
-    }
+    for (int i = base; i < base + n && i < m_async.files.size(); ++i)
+        m_async.scanned.remove(m_async.files.at(i));
     m_async.parsed += n;
     // 进度按「后台解析完成」的文件数单调推进（合并步不回收它）
     setLoadStage(StageParse, m_async.parsed, m_async.total);
@@ -1427,19 +1421,21 @@ void ErbLoader::mergeStep() {
 // ---------------------------------------------------------------------------
 ErbLoader::BuiltAst ErbLoader::buildAst(const QString& content, const QString& filePath,
                                         const QString& root, ParseDiagnostics* diagnostics,
-                                        const declscan::Scan* scan) {
+                                        const ScannedFile* scanned) {
     BuiltAst out;
     if (!m_parseTable) return out;
     const QString scriptName = scriptNameFor(root, filePath);
     const bool isHeaderFile = filePath.endsWith(QLatin1String(".erh"), Qt::CaseInsensitive);
 
-    // 这一趟的预处理产物：行交给 AstBuilder（转成 declscan::SourceLine），告警
-    // 随 BuiltAst 原样交回调用方 —— 同一份文本只在这里预处理一次。
-    const QList<ErbSourceLine> source = prepareLines(content, filePath, &out.warnings);
+    // 行与告警：有预扫描产物就直接用它（同一份文本不预处理第二遍）；
+    // 没有（单文件装载）就在这里预处理唯一的一次，告警随 BuiltAst 原样交回。
+    const ErbPreprocessed source =
+        scanned ? scanned->pre : prepareLines(content, filePath, &out.warnings);
+    if (scanned) out.warnings = scanned->warnings;
     QList<declscan::SourceLine> lines;
     lines.reserve(source.size());
-    for (const ErbSourceLine& sl : source)
-        lines.append({sl.text, ScriptPosition(filePath, sl.physicalLine, 1)});
+    for (int i = 0; i < source.size(); ++i)
+        lines.append({source.textAt(i), ScriptPosition(filePath, source.physicalLineAt(i), 1)});
 
     // 脚本级构建的唯一入口：声明是它的**前置步骤**（先扫本脚本的 #DIM/#DIMS 与
     // VARI/VARS，再逐行构造），因此构建期不存在「左值类型未知」的赋值行 ——
@@ -1447,10 +1443,11 @@ ErbLoader::BuiltAst ErbLoader::buildAst(const QString& content, const QString& f
     // scan：目录装载的预扫描结果（有就直接用）；实际用的那一份随 BuiltAst::scan
     // 交回调用方 —— loadScript 因此不再重扫同一份源码。
     declscan::BuiltScript built =
-        m_parseTable->buildScriptAst(scriptName, lines, isHeaderFile, diagnostics, scan);
+        m_parseTable->buildScriptAst(scriptName, lines, isHeaderFile, diagnostics,
+                                     scanned ? &scanned->scan : nullptr);
     out.scan = std::move(built.scan);
     for (int i = 0; i < built.lines.size() && i < source.size(); ++i)
-        emit parseLineReady(scriptName, source.at(i).physicalLine, source.at(i).text);
+        emit parseLineReady(scriptName, source.physicalLineAt(i), source.textAt(i));
     out.lines = std::move(built.lines);
     return out;
 }

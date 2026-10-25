@@ -160,6 +160,20 @@ plantuml -txmi docs/uml/01-load-classes.puml
   未做（记账）：`loadFile` 里「只为取 warnings」仍再预处理一遍（`buildAst` 内部已
   `prepareLines` —— CPU 不是读盘）；148 个 `Chara*.csv` 每文件仍读 2 次
   （`ConstantTable` 与 `CsvLoader` 是两个消费者读同一份字节，属 CSV 装载统一改造）。
+- **同一份文本只预处理一次**：`buildAst` 返回 `BuiltAst{ lines, warnings, scan }`
+  —— 一趟构建的三样产物一起交回（原来的 `declscan::Scan* scanOut` 因此消失，
+  从「返回值 + 2 个 out 指针」变成「返回值 + 1 个诊断累加器」，与 `declscan::BuiltScript`
+  同形态）。修前串行/单文件路径把同一个文本预处理两遍：`buildAst` 里那次的行被用掉、
+  warnings 被丢掉；`loadFile` 又跑一遍只为取 warnings，行当场丢弃。实测
+  `prepareLines` 每文件：串行 **2 → 1**（eraTW 4,516 → 2,258）、单文件 **2 → 1**、
+  并行/异步本来就 1。五语料**不覆盖**这条路径（eraTW 6 条 / eraMegaten 2 条全是结构化
+  解析诊断，预处理告警 0 条），因此用六组夹具逐类覆盖 `ErbPreprocessor` 的 19 处告警
+  文本，HEAD 二进制 vs 修后输出逐字节 IDENTICAL ×6，并把 7 条告警在「串行 / 并行 /
+  单文件 loadFile」三个入口钉进 `test_load_contracts` 12)。变异：丢弃交回的 warnings →
+  7 行变 0 行、测试 2 红；恢复第二遍预处理 → 14 条（期望 7）2 红。
+  未做（记账）：每文件仍有 **2 次** `ErbPreprocessor::process`（`scanFileDeclarations`
+  一次产出 `Scan` + `prepareLines` 一次建 AST）。合成 1 次要让预扫描的**预处理行数组**
+  活到构建期 —— eraTW 210 万逻辑行常驻，远大于现在 93 MB 原始文本，必须先管住峰值内存。
 - **GETVAR / GETVARS / SETVAR 的名字解析有缓存（唯一表、唯一键）**：键 =
   `(名字文本.trimmed(), 段身份文本)`，值是不可变 AST 的 `QSharedPointer`；容量 512、
   满时淘汰 stamp 最小者（近似 LRU）。失效只有一个入口、6 个调用点（`clear` /
@@ -376,7 +390,7 @@ plantuml -txmi docs/uml/01-load-classes.puml
 `dump_warnings` 五语料（`eraTW` / `eraMegaten` / `eraTetris` / `FL3.8` / `ecd`）：
 **6 / 2 / 0 / 0 / 0** 行（`eraMegaten` 的目录参数必须是 `eraMegaten/data`；用错路径会得到
 0 字节的假基线），与 `/tmp/uml-baseline/*.raw.txt` **未排序**逐字节相同。
-累计五十二个重构（身份整数化 / 全定型 / 作用域显式化 / 只读收尾外移 / 存档独立映射 /
+累计五十三个重构（身份整数化 / 全定型 / 作用域显式化 / 只读收尾外移 / 存档独立映射 /
 私有名表前移 / 存档顺序确定性 / 写收尾外移 / 标记区外移 / 位置区外移 /
 标签归属单一索引 / 诊断切片幂等 / 常数作用域参数化 / 增量装载协议显式化 /
 GOTO 段身份入索引 / 静态检查用段身份 / 删第三张裸名表 / 错误去重 / 配对语法只判一次 /
@@ -396,7 +410,8 @@ GOTO 段身份入索引 / 静态检查用段身份 / 删第三张裸名表 / 错
  常量子树不求值第二次（constantValueAt 唯一入口）/
  声明前置：删掉「待收尾定型」第三态（rhsPending）/
  一个脚本只扫描一次（Scan 随数据传递）/
- 文件字节只读一次盘（内容随数据走））
+ 文件字节只读一次盘（内容随数据走）/
+ 文本只预处理一次（BuiltAst 交回 warnings））
  前后完全一致；
 `ctest` 48 → 70（新增 `test_parse_checks` / `test_save_variable_map` / `test_private_scope_table` /
 `test_load_contracts` / `test_save_variable_map_hashseed` / `test_jump_markings` /

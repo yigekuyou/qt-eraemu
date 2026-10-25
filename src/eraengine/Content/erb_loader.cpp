@@ -646,9 +646,13 @@ bool ErbLoader::mergeParsedFile(ParsedErbFile&& pf) {
 // 装载入口
 // ---------------------------------------------------------------------------
 bool ErbLoader::loadFile(const QString& filePath, const QString& root,
-                         const declscan::Scan* scan) {
-    const QString content = readFileContent(filePath);
-    if (content.isEmpty()) {
+                         const declscan::Scan* scan, const QString* content) {
+    // 内容随数据走：目录装载的预扫描已经把这同一个文件读过一次（解一次码、
+    // 嗅一次编码），文本就放在调用方手里。传进来就**不再读盘** —— 同一份字节
+    // 不会有两份副本。content == nullptr 只出现在「单文件装载」（调用方手里
+    // 确实没有这份文本），那时这里读唯一的一次。
+    const QString body = content ? *content : readFileContent(filePath);
+    if (body.isEmpty()) {
         qWarning() << "[load] ERB 读取失败或为空:" << filePath;
         return false;
     }
@@ -658,9 +662,9 @@ bool ErbLoader::loadFile(const QString& filePath, const QString& root,
     pf.path = filePath;
     // 串行路径：复用 parseTable 缓存。构建期用的那份 Scan 写回 pf.declScan，
     // 随后 mergeParsedFile 把它交给 loadScript（构建 + 装载 = 一次扫描）。
-    pf.lines = buildAst(content, filePath, root, &pf.diagnostics, scan, &pf.declScan);
+    pf.lines = buildAst(body, filePath, root, &pf.diagnostics, scan, &pf.declScan);
     // buildAst 的预处理告警：再次预处理仅取告警（廉价且无副作用）
-    prepareLines(content, filePath, &pf.warnings);
+    prepareLines(body, filePath, &pf.warnings);
 
     return mergeParsedFile(std::move(pf));
 }
@@ -687,11 +691,19 @@ bool ErbLoader::loadDirectory(const QString& dirPath, int depth) {
     tryAutoLoadRename(dirPath);
 
     // 宏表：#DEFINE（仅头文件，对齐 C# HeaderFileLoader）
+    //
+    // 头文件的**同一份字节只读一次**：宏名表与宏表来自同一次读取，读到的文本
+    // 直接留在这里，供随后的预扫描复用（串行分支的 decoded、并行分支的 scan
+    // 都先查它）—— 于是「宏表 -> 预扫描 -> 构建」不加读盘次数。
+    QHash<QString, QString> headerText;
+    headerText.reserve(headers.size());
+    for (const QString& h : headers) headerText.insert(h, readFileContent(h));
     QSet<QString> macros = m_preprocessor.macros();
     ErbPreprocessor::MacroTable macroTable = m_preprocessor.macroTable();
     for (const QString& h : headers) {
-        macros.unite(ErbPreprocessor::collectDefines(readFileContent(h)));
-        const ErbPreprocessor::MacroTable t = ErbPreprocessor::collectMacroTable(readFileContent(h));
+        const QString& text = headerText[h];
+        macros.unite(ErbPreprocessor::collectDefines(text));
+        const ErbPreprocessor::MacroTable t = ErbPreprocessor::collectMacroTable(text);
         for (auto it = t.constBegin(); it != t.constEnd(); ++it) macroTable.insert(it.key(), it.value());
     }
     m_preprocessor.setMacros(macros);
@@ -706,11 +718,13 @@ bool ErbLoader::loadDirectory(const QString& dirPath, int depth) {
         for (const QString& f : files) {
             if (f.endsWith(QLatin1String(".erh"), Qt::CaseInsensitive)) headerSet.insert(f);
         }
-        QHash<QString, QString> decoded;
+        QHash<QString, QString> decoded = std::move(headerText);   // 头文件：宏表那一次读取就是这一份
         decoded.reserve(files.size());
-        for (const QString& f : files) decoded.insert(f, readFileContent(f));
+        for (const QString& f : scripts) decoded.insert(f, readFileContent(f));
         // 每文件扫**一次**：登记、构建（buildScriptAst）、装载（loadScript）
         // 消费的都是这一份 Scan（见 scanFileDeclarations 的注释）。
+        // 文本也随数据走：扫描从 decoded 取（不读盘），装载把同一份文本交给
+        // loadFile（更不读盘）—— 串行装载因此是「每文件读盘一次」。
         QHash<QString, declscan::Scan> scans;
         scans.reserve(files.size());
         for (const QString& f : files) {
@@ -722,9 +736,15 @@ bool ErbLoader::loadDirectory(const QString& dirPath, int depth) {
 
         bool ok = true;
         for (const QString& f : files) {
+            const QString content = decoded.value(f);   // 浅拷贝（隐式共享）
             const auto scanIt = scans.constFind(f);
-            if (!loadFile(f, dirPath, scanIt == scans.constEnd() ? nullptr : &scanIt.value()))
-                ok = false;
+            const bool fileOk = loadFile(f, dirPath,
+                                         scanIt == scans.constEnd() ? nullptr : &scanIt.value(),
+                                         &content);
+            if (!fileOk) ok = false;
+            // 本文件已消费：立即释放它的文本与扫描（峰值内存不随文件数累积）。
+            decoded.remove(f);
+            scans.remove(f);
         }
         // 标签数不再单独记账：唯一那份数据在 EraParseTable::m_labelIndex
         //（裸名第三张表已删，见 mergeParsedFile 的注释）。
@@ -763,9 +783,11 @@ bool ErbLoader::loadDirectory(const QString& dirPath, int depth) {
             declscan::Scan declScan;
         };
         const QList<SyncScan> s2 =
-            QtConcurrent::blockingMapped(files, [this, &headerSet, &dirPath](const QString& f) {
+            QtConcurrent::blockingMapped(files, [this, &headerSet, &dirPath, &headerText](const QString& f) {
                 SyncScan scan;
-                scan.content = readFileContent(f);
+                // 头文件在宏表阶段已经读过这份字节：直接复用（同一个文件不读第二次）。
+                const auto pre = headerText.constFind(f);
+                scan.content = pre != headerText.constEnd() ? pre.value() : readFileContent(f);
                 scan.functionTypes = scanFunctionTypes(scan.content);
                 scan.declScan = scanFileDeclarations(scan.content, headerSet.contains(f),
                                                      scriptNameFor(dirPath, f), f, m_preprocessor,
@@ -870,17 +892,26 @@ ErbLoader::LoadPrep ErbLoader::prepareLoad(const QString& dirPath, int depth) co
     QElapsedTimer macroClock;
     macroClock.start();
     // 头文件：#DEFINE 宏名与宏表来自同一份内容 —— 只读一次（以前 collectDefines
-    // 与 collectMacroTable 各读一遍，同一个 .ERH 被解码两次）。
+    // 与 collectMacroTable 各读一遍，同一个 .ERH 被解码两次）。读到的文本连着
+    // 「这次读成功了没有」一起留在这里：紧随其后的预扫描对头文件复用同一份字节
+    // （不再读盘），读取失败也仍然只计一次、只报一次。
+    struct PreRead {
+        QString text;
+        bool ok = false;
+    };
+    QHash<QString, PreRead> headerReads;
+    headerReads.reserve(headers.size());
     for (const QString& h : headers) {
-        bool readOk = false;
-        const QString content = readFileContent(h, &readOk);
-        if (!readOk) {
+        PreRead r;
+        r.text = readFileContent(h, &r.ok);
+        if (!r.ok) {
             noteReadFailure();
             qWarning() << "[load] 头文件读取失败（宏表/全局 #DIM 可能缺失）:" << h;
         }
-        prep.macros.unite(ErbPreprocessor::collectDefines(content));
-        const ErbPreprocessor::MacroTable t = ErbPreprocessor::collectMacroTable(content);
+        prep.macros.unite(ErbPreprocessor::collectDefines(r.text));
+        const ErbPreprocessor::MacroTable t = ErbPreprocessor::collectMacroTable(r.text);
         for (auto it = t.constBegin(); it != t.constEnd(); ++it) prep.macroTable.insert(it.key(), it.value());
+        headerReads.insert(h, r);
         bumpLoadStage(1);
     }
 
@@ -916,10 +947,17 @@ ErbLoader::LoadPrep ErbLoader::prepareLoad(const QString& dirPath, int depth) co
     // 读取失败的文件（SAF 权限/文档失效）：计数 + 逐条告警（上限 20 条，避免刷屏），
     // 否则脚本会静默缺失而装载仍报 ok=true。
     std::atomic<int> failed{0};
-    const auto scanOne = [this, &headerSet, &failed, scanPP, &dirPath](const QString& f) {
+    const auto scanOne = [this, &headerSet, &failed, &headerReads, scanPP, &dirPath](const QString& f) {
         FileScan scan;
+        // 头文件：宏表阶段已经读过这份字节（连成败一起带过来），不再读第二次。
+        const auto pre = headerReads.constFind(f);
         bool readOk = false;
-        scan.content = readFileContent(f, &readOk);
+        if (pre != headerReads.constEnd()) {
+            scan.content = pre.value().text;
+            readOk = pre.value().ok;
+        } else {
+            scan.content = readFileContent(f, &readOk);
+        }
         if (!readOk) {
             noteReadFailure();
             if (failed.fetch_add(1, std::memory_order_relaxed) < kMaxReadFailureLogs)

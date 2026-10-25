@@ -99,8 +99,12 @@ public:
     // scan：该文件的预扫描结果（可空 = 还没扫过，buildAst 扫一次并把结果写进
     // 它，见 buildAst 的 scanOut）。目录装载把预扫描的 Scan 传进来，因此
     // 「登记 + 构建 + 装载」共用同一份扫描。
+    // content：该文件的**已解码文本**（可空 = 调用方手里没有，这里读一次）。
+    // 目录装载的预扫描已经读过这份字节，把同一份文本传进来 —— 于是这个文件在
+    // 整条流水线上只读盘一次（同一份字节不会有两份副本）。单文件装载传空。
     bool loadFile(const QString& filePath, const QString& root = QString(),
-                  const declscan::Scan* scan = nullptr);
+                  const declscan::Scan* scan = nullptr,
+                  const QString* content = nullptr);
     bool loadDirectory(const QString& dirPath, int depth = 0);
 
     // ---- 异步装载（分块：后台解析 -> 主线程合并，不阻塞 UI）----

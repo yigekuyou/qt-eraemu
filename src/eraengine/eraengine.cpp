@@ -533,23 +533,24 @@ EraEngine::EraEngine(QObject *parent)
 				&m_console, &ConsoleBackend::printImage);
 		connect(&m_executionEngine, &ExecutionEngine::consolePrintShape,
 				&m_console, &ConsoleBackend::printShape);
-		// 工具提示样式（C# TOOLTIP_* 指令族 -> WinForms ToolTip 的属性）
-		connect(&m_executionEngine, &ExecutionEngine::consoleToolTipStyle,
-				&m_console, [this](const QString& family, int pointSize, int format,
-				                   bool custom, bool image) {
-					m_console.setToolTipFormat(format);
-					m_console.setToolTipCustom(custom);
-					m_console.setToolTipImage(image);
-					m_console.setToolTipFont(family, pointSize);
-				});
-		connect(&m_executionEngine, &ExecutionEngine::consoleToolTipTiming,
-				&m_console, [this](int delayMs, int durationMs) {
-					m_console.setToolTipTiming(delayMs, durationMs);
-				});
+		// 工具提示样式（C# TOOLTIP_* 指令族 -> WinForms ToolTip 的属性）：
+		// 一条指令一个字段，信号与 ConsoleBackend 的写入器一一对应（直连）。
+		connect(&m_executionEngine, &ExecutionEngine::consoleToolTipFontFamily,
+				&m_console, &ConsoleBackend::setToolTipFontFamily);
+		connect(&m_executionEngine, &ExecutionEngine::consoleToolTipPointSize,
+				&m_console, &ConsoleBackend::setToolTipPointSize);
+		connect(&m_executionEngine, &ExecutionEngine::consoleToolTipFormat,
+				&m_console, &ConsoleBackend::setToolTipFormat);
+		connect(&m_executionEngine, &ExecutionEngine::consoleToolTipCustom,
+				&m_console, &ConsoleBackend::setToolTipCustom);
+		connect(&m_executionEngine, &ExecutionEngine::consoleToolTipImage,
+				&m_console, &ConsoleBackend::setToolTipImage);
+		connect(&m_executionEngine, &ExecutionEngine::consoleToolTipDelay,
+				&m_console, &ConsoleBackend::setToolTipDelay);
+		connect(&m_executionEngine, &ExecutionEngine::consoleToolTipDuration,
+				&m_console, &ConsoleBackend::setToolTipDuration);
 		connect(&m_executionEngine, &ExecutionEngine::consoleToolTipColors,
-				&m_console, [this](const QColor& fore, const QColor& back) {
-					m_console.setToolTipColors(fore, back);
-				});
+				&m_console, &ConsoleBackend::setToolTipColors);
 		// BREAKBUTTON：作废屏上全部按钮（世代号自增，旧按钮点击失效）
 		connect(&m_executionEngine, &ExecutionEngine::consoleBreakButtons,
 				&m_console, &ConsoleBackend::breakButtons);
@@ -650,10 +651,6 @@ EraEngine::EraEngine(QObject *parent)
 				&m_statusManager, &SystemStatusManager::onScriptFinished);
 		connect(&m_executionEngine, &ExecutionEngine::errorOccurred,
 				&m_statusManager, &SystemStatusManager::onError);
-		connect(&m_executionEngine.getErbLoader(), &ErbLoader::parseStarted,
-				this, [](const QString& name) { qDebug() << "[parse] started:" << name; });
-		connect(&m_executionEngine.getErbLoader(), &ErbLoader::parseFinished,
-				this, [](const QString& name) { qDebug() << "[parse] finished:" << name; });
 		connect(&m_executionEngine.getErbLoader(), &ErbLoader::parseError,
 				this, [](const QString& err) { qWarning().noquote() << "[parse] error:" << err; });		// 交给控制台的必须是**输入类型**（INPUT/TINPUT/ANYKEY…），不是系统状态名 ——
 		// 以前这里传 stateName(state)，QML 就显示「输入（Train_CallEventComEnd）」，

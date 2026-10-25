@@ -16,29 +16,12 @@
  * along with this program.  If not, see <https://www.gnu.org/licenses/>.
  */
 #include "csv_loader.h"
-#include "GameData/file_system_io.h"   // FileSystem::resolvePathCase（加载前还原真实大小写）
-#include "text_encoding.h"
 #include <QRegularExpression>
-#include <QDebug>
 #include <QFileInfo>
 
 CsvLoader::CsvLoader(QObject* parent)
     : QObject(parent)
 {
-}
-
-bool CsvLoader::loadFile(const QString& filePath) {
-    // 编码按文件嗅探（CSV 在日文游戏里常为 Shift-JIS，汉化版为 UTF-8）
-    bool ok = false;
-    const QString content = TextCodecUtil::readFile(FileSystem::resolvePathCase(filePath),
-                                                    TextEncoding::Auto, nullptr, &ok);
-    if (!ok) {
-        qWarning() << "[load] CSV 读取失败:" << filePath;
-        return false;
-    }
-
-    loadContent(filePath, content);
-    return true;
 }
 
 void CsvLoader::loadContent(const QString& filePath, const QString& content) {
@@ -62,16 +45,6 @@ void CsvLoader::loadContent(const QString& filePath, const QString& content) {
     
     // Store the data
     m_data.insert(tableName, tableData);
-    m_rowCounts.insert(tableName, tableData.size());
-}
-QStringList CsvLoader::getRowByFirstColumn(const QString& tableName,
-																					 const QString& key) const {
-		auto it = m_data.constFind(tableName);
-		if (it == m_data.constEnd()) return {};
-		for (const auto& row : *it) {
-				if (!row.isEmpty() && row.first() == key) return row;
-		}
-		return {};
 }
 QStringList CsvLoader::parseLine(const QString& line) {
 		QStringList values;
@@ -124,30 +97,10 @@ QString CsvLoader::getString(const QString& tableName, int row, int col) {
     return table[row][col];
 }
 
-int CsvLoader::getInt(const QString& tableName, int row, int col) {
-    return getValue(tableName, row, col).toInt();
-}
-
 QStringList CsvLoader::getTableNames() const {
     return m_data.keys();
 }
 
 int CsvLoader::getRowCount(const QString& tableName) const {
-    if (!m_rowCounts.contains(tableName)) {
-        return 0;
-    }
-    return m_rowCounts[tableName];
-}
-
-int CsvLoader::getColumnCount(const QString& tableName) const {
-    if (!m_data.contains(tableName)) {
-        return 0;
-    }
-    
-    const QList<QList<QString>>& table = m_data[tableName];
-    if (table.isEmpty()) {
-        return 0;
-    }
-    
-    return table[0].size();
+    return m_data.value(tableName).size();
 }

@@ -876,31 +876,19 @@ bool ExecutionEngine::executeInstruction(const LogicalLine& line, eravar::ScopeI
                              : first.raw;
         };
         if (name == "TOOLTIP_SETFONT") {
-            m_toolTipFontFamily = evalStr();
-            emit consoleToolTipStyle(m_toolTipFontFamily, m_toolTipPointSize,
-                                     m_toolTipFormat, m_toolTipCustom, m_toolTipImage);
+            emit consoleToolTipFontFamily(evalStr());
         } else if (name == "TOOLTIP_SETFONTSIZE") {
-            m_toolTipPointSize = static_cast<int>(evalInt());
-            emit consoleToolTipStyle(m_toolTipFontFamily, m_toolTipPointSize,
-                                     m_toolTipFormat, m_toolTipCustom, m_toolTipImage);
+            emit consoleToolTipPointSize(static_cast<int>(evalInt()));
         } else if (name == "TOOLTIP_FORMAT") {
-            m_toolTipFormat = static_cast<int>(evalInt());
-            emit consoleToolTipStyle(m_toolTipFontFamily, m_toolTipPointSize,
-                                     m_toolTipFormat, m_toolTipCustom, m_toolTipImage);
+            emit consoleToolTipFormat(static_cast<int>(evalInt()));
         } else if (name == "TOOLTIP_CUSTOM") {
-            m_toolTipCustom = evalInt() != 0;
-            emit consoleToolTipStyle(m_toolTipFontFamily, m_toolTipPointSize,
-                                     m_toolTipFormat, m_toolTipCustom, m_toolTipImage);
+            emit consoleToolTipCustom(evalInt() != 0);
         } else if (name == "TOOLTIP_IMG") {
-            m_toolTipImage = evalInt() != 0;
-            emit consoleToolTipStyle(m_toolTipFontFamily, m_toolTipPointSize,
-                                     m_toolTipFormat, m_toolTipCustom, m_toolTipImage);
+            emit consoleToolTipImage(evalInt() != 0);
         } else if (name == "TOOLTIP_SETDELAY") {
-            m_toolTipDelay = static_cast<int>(evalInt());
-            emit consoleToolTipTiming(m_toolTipDelay, m_toolTipDuration);
+            emit consoleToolTipDelay(static_cast<int>(evalInt()));
         } else if (name == "TOOLTIP_SETDURATION") {
-            m_toolTipDuration = static_cast<int>(evalInt());
-            emit consoleToolTipTiming(m_toolTipDelay, m_toolTipDuration);
+            emit consoleToolTipDuration(static_cast<int>(evalInt()));
         } else if (name == "TOOLTIP_SETCOLOR") {
             // C# SetToolTipColor(fore, back)：两个**颜色整数**（ARGB，同 GSETBRUSH）。
             // 逗号族切分会把「,」本身也作为操作数（无 AST）—— 必须跳过，

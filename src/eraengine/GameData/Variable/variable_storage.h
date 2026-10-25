@@ -254,14 +254,11 @@ public:
 
 		// #LOCALSIZE：把当前函数的 LOCAL/LOCALS 扩到 n（只扩不缩，保留静态值）
 		void ensureLocalSize(int n);
-		[[nodiscard]] int localIntSize() const { return m_localIntVars.size(); }
 		[[nodiscard]] int localStrSize() const { return m_localStrVars.size(); }
 
 		// 局部变量名别名：用户函数形参(@F(A,B)) -> LOCAL 槽位，供表达式解析 A/B
 		void setLocalAlias(const QString &name, int index);
 		int  localAliasIndex(const QString &name) const;
-		QHash<QString, int> localAliases() const { return m_localAliases; }
-		void setLocalAliases(const QHash<QString, int> &aliases) { m_localAliases = aliases; }
 		void clearLocalAliases() { m_localAliases.clear(); }
 
         [[nodiscard]] FlatStringValue getStringSlotInCurrentFrame(const QString& name, const QList<int>& indices = {}) const;

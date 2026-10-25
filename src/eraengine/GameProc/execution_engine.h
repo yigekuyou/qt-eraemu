@@ -150,10 +150,16 @@ signals:
     // HTML_PRINT 第 2 实参非 0（EM 私家版拡張）：C# `printBuffer.AppendButton` ——
     // 挂进当前行的打印缓冲，不冲刷不收尾（见 ConsoleBackend::printTemplateBuffered）。
     void consolePrintTemplateBuffered(const PrintTemplate& output);
-    // ---- 工具提示样式（C# TOOLTIP_* 指令族 -> WinForms ToolTip 的属性）----
-    void consoleToolTipStyle(const QString& fontFamily, int pointSize, int formatFlags,
-                             bool custom, bool image);
-    void consoleToolTipTiming(int delayMs, int durationMs);
+    // ---- 工具提示样式（C# TOOLTIP_* 族 -> WinForms ToolTip 的属性）----
+    // 一条指令只发它自己那个字段的值：值的唯一存放处是 ConsoleBackend 的
+    // toolTip* 属性（这里不再缓存 7 个字段的第二份副本）。
+    void consoleToolTipFontFamily(const QString& family);
+    void consoleToolTipPointSize(int pointSize);
+    void consoleToolTipFormat(int formatFlags);
+    void consoleToolTipCustom(bool on);
+    void consoleToolTipImage(bool on);
+    void consoleToolTipDelay(int delayMs);
+    void consoleToolTipDuration(int durationMs);
     void consoleToolTipColors(const QColor& fore, const QColor& back);
     // BREAKBUTTON：作废屏上全部按钮（C# Console.forceUpdateGeneration）
     void consoleBreakButtons();
@@ -221,14 +227,6 @@ public:
     void reportRuntimeError(const QString& message);
 
 private:
-    // ---- 工具提示样式（TOOLTIP_* 的值缓存；每次变化整体重发一个信号）----
-    QString m_toolTipFontFamily;
-    int     m_toolTipPointSize = 0;
-    int     m_toolTipFormat = 0;
-    bool    m_toolTipCustom = false;
-    bool    m_toolTipImage = false;
-    int     m_toolTipDelay = 500;        // WinForms ToolTip.InitialDelay
-    int     m_toolTipDuration = 5000;    // WinForms ToolTip.AutoPopDelay
     // 扩展注册类实例（构造时由注册类装入 EE 扩展 + SPLIT 实现；分发时查表）
     ExtensionRegistry m_extensions;
     // SPLIT：核心函数专用分支（对齐 C# FunctionCode.SPLIT / SpSplitArgument）

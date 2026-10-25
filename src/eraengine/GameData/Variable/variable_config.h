@@ -47,9 +47,6 @@ public:
     int getSize1D(const QString& name) const;
     QPair<int, int> getSize2D(const QString& name) const;
     QVector<int> getSize3D(const QString& name) const;
-    
-    // Get all variable sizes for debugging/inspection
-    QMap<QString, VariableSizeInfo> getAllVariableSizes() const { return variableSizes; }
 };
 
 #endif // VARIABLE_CONFIG_H

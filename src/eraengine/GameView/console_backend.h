@@ -220,10 +220,14 @@ public:
     [[nodiscard]] bool toolTipImage() const { return m_toolTipImage; }
     [[nodiscard]] QColor toolTipForeColor() const { return m_toolTipForeColor; }
     [[nodiscard]] QColor toolTipBackColor() const { return m_toolTipBackColor; }
-    // 字体/字号（TOOLTIP_SETFONT / TOOLTIP_SETFONTSIZE；C# 用**磅**字号）
-    void setToolTipFont(const QString& family, int pointSize);
+    // 字体/字号（TOOLTIP_SETFONT / TOOLTIP_SETFONTSIZE）
+    // C# 的 tooltip_fontsize 是 `new Font(name, size)`（GraphicsUnit.Point），
+    // 所以字号是**磅**；QML 侧写到 ToolTip 的 font.pointSize。
+    void setToolTipFontFamily(const QString& family) { const QString f = family.trimmed(); if (m_toolTipFontFamily == f) return; m_toolTipFontFamily = f; emit toolTipStyleChanged(); }
+    void setToolTipPointSize(int pointSize) { const int size = pointSize > 0 ? pointSize : 0; if (m_toolTipPointSize == size) return; m_toolTipPointSize = size; emit toolTipStyleChanged(); }
     // 延迟/持续时间（TOOLTIP_SETDELAY / TOOLTIP_SETDURATION）
-    void setToolTipTiming(int delayMs, int durationMs);
+    void setToolTipDelay(int delayMs) { if (m_toolTipDelay == delayMs) return; m_toolTipDelay = delayMs; emit toolTipStyleChanged(); }
+    void setToolTipDuration(int durationMs) { if (m_toolTipDuration == durationMs) return; m_toolTipDuration = durationMs; emit toolTipStyleChanged(); }
     // 对齐/换行（TOOLTIP_FORMAT；WinForms TextFormatFlags 位掩码）
     void setToolTipFormat(int flags) { if (m_toolTipFormat == flags) return; m_toolTipFormat = flags; emit toolTipStyleChanged(); }
     // OwnerDraw 总开关（TOOLTIP_CUSTOM）与「内容是 G 图像」（TOOLTIP_IMG）

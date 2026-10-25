@@ -437,17 +437,22 @@ int main(int argc, char* argv[]) {
         int changed = 0;
         QObject::connect(&c, &ConsoleBackend::toolTipStyleChanged, [&] { ++changed; });
         // TOOLTIP_SETFONT / TOOLTIP_SETFONTSIZE（C# SetToolTipFontName / FontSize，磅）
-        c.setToolTipFont(QStringLiteral("ＭＳ ゴシック"), 10);
+        // 一条指令 = 一个字段 = 一次写入（信号按字段拆，见 ExecutionEngine）
+        c.setToolTipFontFamily(QStringLiteral("ＭＳ ゴシック"));
         check(c.toolTipFontFamily().isEmpty() == false
-              && c.toolTipFontFamily() == QStringLiteral("ＭＳ ゴシック")
-              && c.toolTipPointSize() == 10, "SETFONT/SETFONTSIZE 生效");
+              && c.toolTipFontFamily() == QStringLiteral("ＭＳ ゴシック"),
+              "SETFONT 生效");
         check(changed == 1, "一次变更发一次 toolTipStyleChanged");
+        c.setToolTipPointSize(10);
+        check(c.toolTipPointSize() == 10, "SETFONTSIZE 生效（磅）");
+        check(changed == 2, "字号变更同样只发一次 toolTipStyleChanged");
         // TOOLTIP_CUSTOM / TOOLTIP_FORMAT（OwnerDraw 与 TextFormatFlags）
         c.setToolTipCustom(true);
         c.setToolTipFormat(0);
-        check(c.toolTipCustom() && changed == 2, "SETCUSTOM 生效（OwnerDraw）");
+        check(c.toolTipCustom() && changed == 3, "SETCUSTOM 生效（OwnerDraw）");
         // TOOLTIP_SETDELAY / TOOLTIP_SETDURATION
-        c.setToolTipTiming(120, 300);
+        c.setToolTipDelay(120);
+        c.setToolTipDuration(300);
         check(c.toolTipDelay() == 120 && c.toolTipDuration() == 300, "SETDELAY/SETDURATION 生效");
         // TOOLTIP_SETCOLOR（ARGB 前景/背景）
         c.setToolTipColors(QColor(0xFF, 0xFF, 0x00), QColor(0, 0, 0));

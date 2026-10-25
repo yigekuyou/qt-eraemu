@@ -65,12 +65,6 @@ struct Frame {
     Frame() = default;
     Frame(const QString& s, int line, const QString& label, int entry = -1, bool jump = false)
         : script(s), returnLine(line), callLabel(label), entryLine(entry), isJump(jump) {}
-
-    bool operator==(const Frame& other) const {
-        return script == other.script
-            && returnLine == other.returnLine
-            && callLabel == other.callLabel;
-    }
 };
 Q_DECLARE_METATYPE(Frame)
 

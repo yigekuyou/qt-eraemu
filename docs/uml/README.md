@@ -481,14 +481,43 @@ plantuml -txmi docs/uml/01-load-classes.puml
   `^\[var\] VariableSize` 两行与改动前逐字节相同。五语料告警 6/1/0/0/0 行逐字节不变、
   `ctest` 71/71。记账（有意不改）：`test/README.md` 那一行是对**某次提交当时**所改动的历史
   记录，不作为当前态描述；同类死符号 `VariableConfig::getAllVariableSizes()`（0 引用，
-  改动前即死）登记待攒批。
+  改动前即死）在下一批（见下条）一并清掉。
+- **零调用点符号不是「留着待用」，是「第二个入口的邀请」**（三个案例，一批清完）：
+  ① `ErbLoader` 六个调参入口（`setChunkSize` / `setMaxThreads` / `setHeartbeatInterval` /
+  `setEmitParseSignals` / `addMacros` 及两个 getter）零调用 → 带来 4 处**恒真恒假**的常量分支
+  （块大小恒 64、线程数恒 0 于是永远走 `applyThreadLimit()`）、两个**从不发射**却仍被
+  `connect` 的信号（隐式死连接：两个永不执行的 lambda）、以及一条「即使调了也会被
+  `setMacros(collectDefines(...))` 整体覆盖」的宏入口。删后线程数只剩一个活来源
+  （`applyThreadLimit()` 读 `EMUERA_THREADS`），块大小只剩一个常量。
+  ② `CsvLoader::loadFile` 是同一份 CSV 字节的**第二个消费者入口**（自己读盘、绕过
+  `CsvTextTable`），生产 0 调用点 —— 与上一刀的 `loadVariableSizes` 同型；`loadContent`
+  成为唯一入口。连带删 `getRowByFirstColumn` / `getInt` / `getColumnCount` 与 `m_rowCounts`
+  （恒等于 `m_data[t].size()`，是同一事实的第二份副本）。顺带查清：`test_csv_loader.cpp`
+  **从未进入任何 CMakeLists**（孤儿脚手架，`ctest` 71 条里没有它），整文件删除后条数不变。
+  ③ TOOLTIP 样式 7 个字段在 `ExecutionEngine` 与 `ConsoleBackend` 各一份，EE 侧**零读取者**，
+  而每条 `TOOLTIP_*` 指令都把 7 个值**整体重发**一遍；默认值 500/5000 也抄了两份。
+  改成「一条指令 = 一个字段 = 一个信号 = CB 的**单字段**写入器」，桥接从 5 参 lambda 变
+  **8 条直连**（0 lambda，与 `consoleToolTipColors` 一贯的直连风格一致），默认值只剩 CB 一处。
+  记账：`[parse] started/finished` 与 `[load] CSV 读取失败:` 两条文本随唯一发射点消失
+  （前者从未打印过 —— 信号从不发射；后者生产路径本就由 `CsvTextTable` 报错，文本未变）；
+  `test_console_backend` 的 `changed` 计数随「一次双字段写入」拆成「两次单字段写入」由 1→2、2→3
+  （每次变更一次通知的语义未变，断言期望值未改）。
+  与审计结论不符一处（据实保留）：`VariableStorage::localStrSize` 有 4 处测试调用 —— 审计标
+  「0 调用点」是错的，未删。**未动（有意）**：`ConsoleLayout::m_buttonWrap/m_compatiLinefeed`
+  （零调用点但配套配置键已建好中文别名 —— 是**未接线的功能**，不是死码）、
+  `CsvTextTable::readCount/fileCount`（职责不同，取证日志在用）、`maxLineUnits` 与
+  `gridChanged` 那条连接（显式边界的安全阀，删了会把判断变成隐式假设）。
+  登记待下一批：`VariableToken::storage` 与它的 4 个读写方法（`setStorage` 删后恒 `nullptr`、
+  四个方法恒早退，改动前即如此 —— 属「整个 `VariableToken` 是否已死」的更大判断）。
+  验收：`-Werror` 0 warning、`ctest` 71/71、五语料 6/1/0/0/0 行逐字节不变（eraTW 1343 B md5
+  `db0cca17…`、eraMegaten 166 B md5 `84fbbb6b…`）；净 **−236 行**（+80/−316，16 个文件）。
 
 ## 回归基线
 
 `dump_warnings` 五语料（`eraTW` / `eraMegaten` / `eraTetris` / `FL3.8` / `ecd`）：
 **6 / 1 / 0 / 0 / 0** 行（`eraMegaten` 的目录参数必须是 `eraMegaten/data`；用错路径会得到
 0 字节的假基线），与 `/tmp/uml-baseline/*.raw.txt` **未排序**逐字节相同。
-累计六十个重构（身份整数化 / 全定型 / 作用域显式化 / 只读收尾外移 / 存档独立映射 /
+累计六十一个重构（身份整数化 / 全定型 / 作用域显式化 / 只读收尾外移 / 存档独立映射 /
 私有名表前移 / 存档顺序确定性 / 写收尾外移 / 标记区外移 / 位置区外移 /
 标签归属单一索引 / 诊断切片幂等 / 常数作用域参数化 / 增量装载协议显式化 /
 GOTO 段身份入索引 / 静态检查用段身份 / 删第三张裸名表 / 错误去重 / 配对语法只判一次 /
@@ -513,7 +542,9 @@ GOTO 段身份入索引 / 静态检查用段身份 / 删第三张裸名表 / 错
  预处理产物共用（一份正文 + 12 B/行跨度）/
  CSV 字节只读一次（CsvTextTable，两个消费者共用字节不共用解析）/
  异步完成信号单一发布点（completeAsyncLoad + 零工作量 = 显式成功）/
- 同一份数据不留第二个入口（VariableSize.csv 只剩一条解析路径））
+ 同一份数据不留第二个入口（VariableSize.csv 只剩一条解析路径）/
+ 零调用点符号不是「留着待用」而是「第二个入口的邀请」（装载器调参旁路 + 两个永不发射的信号 /
+ CsvLoader 的第二读盘入口 / TOOLTIP 七字段副本按字段拆分））
  前后完全一致；
 `ctest` 48 → 71（新增 `test_parse_checks` / `test_save_variable_map` / `test_private_scope_table` /
 `test_load_contracts` / `test_save_variable_map_hashseed` / `test_jump_markings` /

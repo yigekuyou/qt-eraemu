@@ -86,7 +86,7 @@ ErbLoader::ErbLoader(QObject* parent) : QObject(parent), m_parseTable(nullptr) {
     // 打印「装载心跳：阶段=… 进度=… 已耗时=…」，并把同一份快照转发给 UI
     // （loadHeartbeat → EraEngine 的 loadStage/loadProcessed/… 属性）。
     // 详见 LoadStage 的说明：eraTW 在 Android SAF 上是分钟级，中间窗口必须留痕。
-    m_heartbeat.setInterval(m_heartbeatMs > 0 ? m_heartbeatMs : 1000);
+    m_heartbeat.setInterval(1000);   // 上报周期 1Hz（Android SAF 忙时也不能静默）
     m_heartbeat.setTimerType(Qt::CoarseTimer);
     connect(&m_heartbeat, &QTimer::timeout, this, &ErbLoader::onHeartbeat);
 }
@@ -612,10 +612,6 @@ bool ErbLoader::mergeParsedFile(ParsedErbFile&& pf) {
         return true;
     }
 
-    // perf：逐文件信号（+ 接收端 qDebug）默认关闭 —— eraTW 2200+ 文件会在
-    // 主线程合并阶段产生 ~4500 次发射；诊断需要时用 setEmitParseSignals(true) 打开。
-    if (m_emitParseSignals) emit parseStarted(pf.scriptName);
-
     // 标签登记只有一处：EraParseTable::loadScript 的 m_labelIndex
     //（裸名/大小写敏感/last-wins 的第三张表已删 —— 那是同一事实的第三份副本，
     // 口径与索引相反却因答案偶合而长期未被发现）。
@@ -649,7 +645,6 @@ bool ErbLoader::mergeParsedFile(ParsedErbFile&& pf) {
         m_logicalLines.insert(pf.scriptName, pf.lines);
     }
 
-    if (m_emitParseSignals) emit parseFinished(pf.scriptName);
     return true;
 }
 
@@ -763,12 +758,8 @@ bool ErbLoader::loadDirectory(const QString& dirPath, int depth) {
         return ok;
     }
 
-    // 限制并行度（显式 m_maxThreads 优先；否则 EMUERA_THREADS 诊断开关）
-    if (m_maxThreads > 0) {
-        QThreadPool::globalInstance()->setMaxThreadCount(m_maxThreads);
-    } else {
-        applyThreadLimit();
-    }
+    // 限制并行度（EMUERA_THREADS 诊断开关）
+    applyThreadLimit();
 
     QElapsedTimer timer;
     timer.start();
@@ -825,7 +816,7 @@ bool ErbLoader::loadDirectory(const QString& dirPath, int depth) {
 
 
     // 2) 分块并行解析 + 主线程合并（限制内存峰值）
-    const int chunk = m_chunkSize > 0 ? m_chunkSize : kDefaultChunkSize;
+    const int chunk = kDefaultChunkSize;
     bool ok = true;
     for (int base = 0; base < files.size(); base += chunk) {
         const QStringList slice = files.mid(base, chunk);
@@ -1094,8 +1085,7 @@ void ErbLoader::startHeartbeat() {
     m_hbDone = -1;
     m_hbLogMs = 0;
     m_hbChangeMs = 0;
-    if (m_heartbeatMs <= 0) return;   // 显式关闭（单测）
-    m_heartbeat.start(m_heartbeatMs);
+    m_heartbeat.start();   // 周期由构造函数的 setInterval(1000) 决定
 }
 
 void ErbLoader::stopHeartbeat() {
@@ -1183,13 +1173,9 @@ void ErbLoader::loadDirectoryAsync(const QString& dirPath, int depth) {
     m_async.dirPath = dirPath;
     m_async.depth = depth;
     m_async.clock.start();
-    if (m_maxThreads > 0) {
-        QThreadPool::globalInstance()->setMaxThreadCount(m_maxThreads);
-    } else {
-        applyThreadLimit();
-    }
+    applyThreadLimit();
     qInfo().noquote() << "[ErbLoader] 异步装载参数: 并行" << (m_parallel ? "是" : "否")
-                      << "块大小" << m_chunkSize << "线程池"
+                      << "块大小" << kDefaultChunkSize << "线程池"
                       << QThreadPool::globalInstance()->maxThreadCount();
     // 先落到「枚举」阶段：后台任务还没被线程池调度起来的这几十毫秒里，
     // 任何心跳/取消日志都不该显示「空闲」。
@@ -1307,7 +1293,7 @@ void ErbLoader::scheduleNextChunk() {
         finishAsync(false);
         return;
     }
-    const int chunk = m_chunkSize > 0 ? m_chunkSize : kDefaultChunkSize;
+    const int chunk = kDefaultChunkSize;
     if (m_async.parsed >= m_async.total) {
         finishAsync(m_async.ok);
         return;

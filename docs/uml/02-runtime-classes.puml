@@ -17,6 +17,7 @@ package "GameProc" {
     - m_erbLoader : ErbLoader
     - m_parseTable : EraParseTable
     - m_activeScope : eravar::ScopeId   ' 本节指令的作用域（RAII 设置）
+    ' TOOLTIP_*：一条指令 = 一个字段 = 一个信号 = ConsoleBackend 一个单字段写入器（8 条直连，无桥接 lambda）
     + loadScripts(dir) : bool
     + executeLogicalLine(line)
     + executeInstruction(line, scope)

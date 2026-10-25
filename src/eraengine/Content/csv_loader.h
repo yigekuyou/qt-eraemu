@@ -38,10 +38,7 @@ class CsvLoader : public QObject {
 public:
     explicit CsvLoader(QObject* parent = nullptr);
 
-    // Load CSV file
-    bool loadFile(const QString& filePath);
-
-    // 同一份 CSV 字节的另一个消费者入口：文本已由 CsvTextTable 读过（一次），
+    // 同一份 CSV 字节的唯一消费者入口：文本已由 CsvTextTable 读过（一次），
     // 这里只解析、不再读盘（GameBase.csv / Item.csv 与常量名表共用同一次读取）。
     void loadContent(const QString& filePath, const QString& content);
 
@@ -78,23 +75,17 @@ public:
     // Access data
     QVariant getValue(const QString& tableName, int row, int col);
     QString getString(const QString& tableName, int row, int col);
-    int getInt(const QString& tableName, int row, int col);
-    
+
     // Get table info
     QStringList getTableNames() const;
     int getRowCount(const QString& tableName) const;
-    int getColumnCount(const QString& tableName) const;
-    
+
 private:
     // Parse a single CSV line
 		QStringList parseLine(const QString& line);
 
-    // Load CSV content into data structure
-		QStringList getRowByFirstColumn(const QString& tableName, const QString& key) const;
-    
     // CSV data storage: table name -> rows -> columns
     QHash<QString, QList<QList<QString>>> m_data;
-    QHash<QString, int> m_rowCounts;
 };
 
 #endif // CSV_LOADER_H

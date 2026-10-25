@@ -157,27 +157,11 @@ public:
     // 立刻合并，1Hz 采样会来回跳 —— UI 文案不能跟着闪），故归为同一个名字。
     [[nodiscard]] static QString loadStageGroupName(int stage);
     [[nodiscard]] int loadStage() const { return m_stage.load(std::memory_order_relaxed); }
-    [[nodiscard]] int loadStageDone() const { return m_stageDone.load(std::memory_order_relaxed); }
-    [[nodiscard]] int loadStageTotal() const { return m_stageTotal.load(std::memory_order_relaxed); }
-    [[nodiscard]] int readFailureCount() const { return m_readFailures.load(std::memory_order_relaxed); }
-    // 心跳周期（ms）。<=0 关闭心跳（单测用；正常路径默认 1000ms）。
-    void setHeartbeatInterval(int ms) { m_heartbeatMs = ms > 0 ? ms : 0; }
-    [[nodiscard]] int heartbeatInterval() const { return m_heartbeatMs; }
     // 「阶段/进度多久没变化」判定为停滞的阈值（ms）：心跳日志与 UI 提示共用。
     static constexpr qint64 kStallMs = 10000;
 
-    // 并行装载开关与线程数（默认开启；线程数 <=0 表示用 QThreadPool 默认）
+    // 并行装载开关（默认开启；线程数由 applyThreadLimit() 决定 —— 见 .cpp）
     void setParallelLoad(bool on) { m_parallel = on; }
-    [[nodiscard]] bool parallelLoad() const { return m_parallel; }
-    void setMaxThreads(int n) { m_maxThreads = n; }
-    void setChunkSize(int n) { m_chunkSize = n > 0 ? n : kDefaultChunkSize; }
-
-    // 逐文件 parseStarted/parseFinished 信号开关（默认关）。
-    // perf：eraTW 有 2200+ 文件 → 每次装载 ~4500 次信号发射 + 接收端 qDebug，
-    // 全部发生在**主线程合并**阶段，是合并耗时的一部分；这两个信号当前只被
-    // 诊断日志消费（进度改用 loadProgress），故默认关闭，需要时再打开。
-    void setEmitParseSignals(bool on) { m_emitParseSignals = on; }
-    [[nodiscard]] bool emitParseSignals() const { return m_emitParseSignals; }
 
     // 文本读取编码（Auto = 逐文件嗅探；可强制 UTF-8 / Shift-JIS）
     void setReadEncoding(TextEncoding enc) { m_readEncoding = enc; }
@@ -190,11 +174,6 @@ public:
     void setRenameMap(const ErbPreprocessor::RenameMap& map) { m_preprocessor.setRenameMap(map); }
     // 从 CSV 目录加载 _Rename.csv（对齐 C# ParserMediator.LoadEraExRenameFile）
     bool loadRenameFile(const QString& filePath);
-    void addMacros(const QSet<QString>& macros) {
-        QSet<QString> all = m_preprocessor.macros();
-        all.unite(macros);
-        m_preprocessor.setMacros(all);
-    }
     void setDebugMode(bool on) { m_preprocessor.setDebugMode(on); }
     [[nodiscard]] const ErbPreprocessor& preprocessor() const { return m_preprocessor; }
 
@@ -220,9 +199,7 @@ public:
     [[nodiscard]] int loadedFileCount() const;
 
 signals:
-    void parseStarted(const QString& scriptName);
     void parseLineReady(const QString& scriptName, int lineNumber, const QString& lineContent);
-    void parseFinished(const QString& scriptName);
     void parseError(const QString& errorMessage);
 
     // 异步装载进度（processed / total 文件数）与完成
@@ -435,7 +412,6 @@ private:
     // 懒加载解析兜底。保持并行默认（性能收益），显式 setParallelLoad(false)
     // 可退回串行（dump_lines --parallel 可复核一致性）。
     bool m_parallel = true;
-    int  m_maxThreads = 0;
     // 后台解析块大小：解析在后台线程池，块大 → 调度轮次少、吞吐高
     // （eraTW 实测 64/块比 16/块总耗时少 ~2s）。
     static constexpr int kDefaultChunkSize = 64;
@@ -443,8 +419,6 @@ private:
     // 每批后回事件循环 —— 单次主线程阻塞 ≈ kMergeBatch × ~1.3ms/文件
     // （eraTW 8 → ~10ms），远小于整块 80–240ms 的抖动。
     static constexpr int kMergeBatch = 8;
-    int  m_chunkSize = kDefaultChunkSize;
-    bool m_emitParseSignals = false;   // 逐文件信号默认关闭（见 setEmitParseSignals）
     EraParseTable* m_parseTable;
 
     // ---- 装载心跳状态（见 LoadStage 的说明）----
@@ -455,7 +429,6 @@ private:
     mutable std::atomic<int> m_stageMerged{0};   // 分块流水线里「已并入解析表」的文件数
     mutable std::atomic<int> m_readFailures{0};
     QTimer m_heartbeat;            // 仅异步装载期间运行（主线程）
-    int m_heartbeatMs = 1000;      // 上报周期；<=0 关闭
     int m_hbStage = -1;            // 上次上报的阶段（主线程，用于去重）
     int m_hbDone = -1;             // 上次上报的进度
     qint64 m_hbLogMs = 0;          // 上次打印心跳日志的时刻（clock 口径）

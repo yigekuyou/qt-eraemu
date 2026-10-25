@@ -194,7 +194,6 @@ public:
 		bool is1D() const { return m_typeInfo.dimension == VariableTypes::Dimension::OneD; }
 		bool is2D() const { return m_typeInfo.dimension == VariableTypes::Dimension::TwoD; }
 		bool is3D() const { return m_typeInfo.dimension == VariableTypes::Dimension::ThreeD; }
-		bool isUnchangeable() const { return m_typeInfo.flags == VariableTypes::Flag::Unchangeable; }
 
 		static VariableIdentifier fromName(const QString &name);
 
@@ -219,11 +218,9 @@ private:
 public:
     VariableToken();
     VariableToken(const QString &name, const VariableTypeInfo &typeInfo, bool isValid = true);
-    void setStorage(VariableStorage* storage) { this->storage = storage; }
 
     const QString& getName() const { return name; }
     const VariableTypeInfo& getTypeInfo() const { return typeInfo; }
-    bool isValidToken() const { return isValid; }
 
     bool isInteger() const { return typeInfo.isInteger; }
     bool isString() const { return typeInfo.isString; }

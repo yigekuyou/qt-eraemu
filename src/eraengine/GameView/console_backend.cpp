@@ -426,24 +426,6 @@ void ConsoleBackend::renderTemplate(const PrintTemplate& output, bool toBuffer) 
 }
 
 // ---- 工具提示样式（C# TOOLTIP_* 族 -> WinForms ToolTip 的属性）----
-// C# 的 tooltip_fontsize 是 `new Font(name, size)`（GraphicsUnit.Point），
-// 所以这里是**磅**字号；QML 侧写到 ToolTip 的 font.pointSize。
-void ConsoleBackend::setToolTipFont(const QString& family, int pointSize) {
-    const QString f = family.trimmed();
-    const int size = pointSize > 0 ? pointSize : 0;
-    if (m_toolTipFontFamily == f && m_toolTipPointSize == size) return;
-    m_toolTipFontFamily = f;
-    m_toolTipPointSize = size;
-    emit toolTipStyleChanged();
-}
-
-void ConsoleBackend::setToolTipTiming(int delayMs, int durationMs) {
-    if (m_toolTipDelay == delayMs && m_toolTipDuration == durationMs) return;
-    m_toolTipDelay = delayMs;
-    m_toolTipDuration = durationMs;
-    emit toolTipStyleChanged();
-}
-
 void ConsoleBackend::setToolTipColors(const QColor& fore, const QColor& back) {
     if (m_toolTipForeColor == fore && m_toolTipBackColor == back) return;
     m_toolTipForeColor = fore;

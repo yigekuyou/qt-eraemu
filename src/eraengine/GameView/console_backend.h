@@ -462,6 +462,16 @@ private:
     // 把「未定型」串按 ButtonStringCreator 切段（对齐 C# fromCssToButton）
     void flushPendingToSegments(QList<ConsoleSegment>& out) const;
     ConsoleDisplayLine buildLine() const;
+    // 提交当前待打包的行（C# addDisplayLine）。
+    // temporary：本行是「一時行」（C# PrintSingleLine(str, temporary=true)），
+    // 下一行显示输出会把它顶掉 —— 行缓冲里带 isTemporary。
+    void newlineInternal(bool temporary);
+    // C# deleteLine：从尾部删 n 个**逻辑行**（连同折行续行）。
+    // 只动已提交的显示行（m_buffer），**不碰**未定型的打印缓冲
+    // （C# printBuffer）—— CLEARLINE 与「一時行替换」共用这一个实体。
+    void deleteTailLogicalLines(int n);
+    // 尾部（已提交的）最后一行是否「一時行」（C# LastLineIsTemporary）
+    [[nodiscard]] bool lastLineIsTemporary() const;
     void markDirty();                                  // 内容变化：等 flush 发布
     // 尾行摊平（flattenLine）时把行内坐标补齐成区块数据
     QVariantList flattenLine(const ConsoleDisplayLine& line, int row) const;
@@ -525,8 +535,9 @@ private:
     // 空回车时交付它；无效表示「无缺省」-> 空回车被忽略。
     QVariant m_inputDefault;
     bool    m_waitingInput = false;
-    // 最后一行是否为「一時行」（REUSELASTLINE）：下一行显示输出替换它
-    bool    m_lastLineTemporary = false;
+    // 「一時行」标记不另设成员：它随行一起存在 ConsoleDisplayLine::isTemporary
+    //（C# 的 LastLineIsTemporary 也是读 displayLineList 尾部那一行）——
+    // 另立布尔值就会与「行被删/被顶掉」的时机脱钩，进而算错要删的行数。
 
     // EE 文本框内容（GETTEXTBOX / SETTEXTBOX；C# MainWindow 输入框文本）
     QString m_textboxText;

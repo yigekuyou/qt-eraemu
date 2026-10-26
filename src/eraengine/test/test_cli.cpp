@@ -590,6 +590,7 @@ int main(int argc, char* argv[]) {
             QStringLiteral("line=%1").arg(engine.getParseTable() ? engine.getParseTable()->currentLine() : -1),
             QStringLiteral("depth=%1").arg(engine.getParseTable() ? engine.getParseTable()->depth() : -1),
             QStringLiteral("screenLines=%1").arg(console ? console->buffer().count() : 0),
+            QStringLiteral("logicalLines=%1").arg(console ? console->logicalLineCount() : 0),
             QStringLiteral("pendingCommands=%1").arg(pending.size())
         };
     };

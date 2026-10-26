@@ -32,6 +32,9 @@
 //
 // 注意：C# 的 MaxLog 裁剪**不会**回退 logicalLineCount，这里同样保持
 // 「逻辑行计数只增不减（除 deleteLine）」的语义。
+// C# deleteLine 在请求量超过现存行数时**提前 break**（`if (displayLineList.Count
+// == 0) break;`），logicalLineCount 因此**永远不会被删成负数** —— 这里同样
+// 只按实际删掉的逻辑行递减，不做「补偿」。
 //
 // 身份与裁剪（配合「全量 append-only 行模型」）：
 //   * 每行在 appendLine 时领一个单调递增的 serial（ConsoleDisplayLine.serial），
@@ -83,21 +86,21 @@ public:
         trim();
     }
 
-    // 返回本次实际删除的**物理**行数（含折行续行）
+    // 删除尾部 n 个**逻辑行**（连同折行续行）。返回本次实际删掉的**逻辑**行数：
+    // 现存行不够时提前停（对齐 C# deleteLine 的 `if (displayLineList.Count == 0)
+    // break;`），故返回值恒 <= n，逻辑行计数不会被减成负数。
     int removeLastLogicalLines(int n) {
-        int deleted = 0;
-        while (deleted < n && !m_lines.isEmpty()) {
-            const bool logical = m_lines.last().isLogicalLine;
+        int logical = 0;
+        while (logical < n && !m_lines.isEmpty()) {
+            const bool isLogical = m_lines.last().isLogicalLine;
             m_lines.removeLast();
-            ++deleted;
-            if (logical && m_logicalCount > 0) --m_logicalCount;
+            if (isLogical) {
+                ++logical;
+                if (m_logicalCount > 0) --m_logicalCount;
+            }
         }
-        return deleted;
+        return logical;
     }
-
-    // C# deleteLine：请求超过现存行数时，LINECOUNT 仍按请求数量修正，
-    // 因而可以暂时变成负数，后续追加逻辑行再逐步回到非负值。
-    void adjustLogicalCount(int delta) { m_logicalCount += delta; }
 
     // 预告：从尾部删 n 个逻辑行会动掉多少**物理**行（不删）。
     // 模型发 beginRemoveRows 前需要先知道区间。

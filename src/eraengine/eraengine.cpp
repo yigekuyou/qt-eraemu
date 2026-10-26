@@ -1972,8 +1972,10 @@ void EraEngine::buildSystemHost()
 		host.print = [this](const QString& text) { m_console.print(text); };
 		host.printC = [this](const QString& text, bool) { m_console.print(text); };
 		host.printTemporaryLine = [this](const QString& text) {
-				m_console.print(text);
-				m_console.newline();
+				// C# PrintTemporaryLine == PrintSingleLine(str, temporary: true)：
+				// 与 REUSELASTLINE 同一入口（下一行输出顶掉这一行），
+				// 否则「無効な値です」之类提示会一直留在屏上。
+				m_console.notifyReuseLastLine(text);
 		};
 		host.printError = [this](const QString& text) {
 				m_console.print(text);

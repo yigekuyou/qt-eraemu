@@ -543,6 +543,10 @@ void ConsoleBackend::printPlain(const QString& text) {
 }
 
 void ConsoleBackend::newline() {
+    newlineInternal(false);
+}
+
+void ConsoleBackend::newlineInternal(bool temporary) {
     // HTML_PRINT_ISLAND 期间（printHtmlIsland 借用同一走片循环）：行提交进
     // 岛层（C# _htmlElementList）—— 不进正文缓冲、不发模型信号；岛层按钮
     // 不可点（C# 的点击命中走主窗口的正文行列表，岛层只参与绘制）。
@@ -564,14 +568,15 @@ void ConsoleBackend::newline() {
         }
         return;
     }
-    // C# addDisplayLine：最后一行是「一時行」（REUSELASTLINE/PrintTemporaryLine）时，
-    // 下一个显示行输出**替换**它（deleteLine(1)）。DQPRINT 逐字动画靠这个
-    // 把整句动画在一行内完成；此前按普通输出追加，一句口上会产生几十行。
-    if (m_lastLineTemporary) {
-        m_lastLineTemporary = false;
-        clearLines(1);
-    }
-    ConsoleDisplayLine line = buildLine();    // 先定型，避免 buildLine 里 const 的临时结果
+    // C# PrintSingleLine / PrintFlush：**先把本行成型**（BufferToSingleLine），
+    // 再走 addDisplayLine。顺序不能反 —— 反过来（先删舊行、后成型）会把本次
+    // 待显示的未定型缓冲一起清掉，DQPRINT 的最后一句就成了空行。
+    ConsoleDisplayLine line = buildLine();
+    line.isTemporary = temporary;
+    // C# addDisplayLine：`if (LastLineIsTemporary) deleteLine(1);` —— 顶掉上一条
+    // 「一時行」；只作用于**已提交的**显示行，不碰 printBuffer。
+    if (lastLineIsTemporary())
+        deleteTailLogicalLines(1);
     m_sealed.clear();
     m_pendingParts.clear();
     m_pendingOpen = false;
@@ -581,6 +586,11 @@ void ConsoleBackend::newline() {
     if (m_wrapLines) {
         // wrapSegments 只负责切分逻辑行；绝对列/对齐仍由同一入口计算。
         committed = m_layout.wrapSegments(std::move(line.segments), line.align);
+        if (temporary) {
+            // 折行的续行也属于这条一時行：deleteLine(1) 会把整组一起删掉，
+            // 尾部判定（LastLineIsTemporary）看的是物理末行。
+            for (ConsoleDisplayLine& w : committed) w.isTemporary = true;
+        }
     } else {
         committed.append(line);
     }
@@ -744,42 +754,37 @@ bool ConsoleBackend::outputLog(const QString& path) const {
     return true;
 }
 
-void ConsoleBackend::clearLines(int n) {
-    if (m_pendingOpen) {
-        // 当前未 flush 的行先丢掉（C# deleteLine 只作用于 displayLineList）
-        m_pendingParts.clear();
-        m_sealed.clear();
-        m_pendingOpen = false;
-        m_tailDirty = false;
-    }
+// C# deleteLine：从 displayLineList 尾部删掉 n 个**逻辑行**（连同其折行续行）。
+// 只动**已提交的显示行**；C# 的 printBuffer（= 本移植的 m_pendingParts/
+// m_sealed）原样保留 —— CLEARLINE 之后接着 PRINT，内容仍接在当前行上。
+// 「一時行替换」（C# addDisplayLine 的 deleteLine(1)）走同一入口。
+void ConsoleBackend::deleteTailLogicalLines(int n) {
+    if (n <= 0 || m_buffer.isEmpty()) return;
     const int oldCount = m_buffer.count();
-    const int logicalBefore = m_buffer.logicalLineCount();
-    // CLEARLINE：从尾部删掉 n 个**逻辑行**（连同其折行续行）。
     // 先预告物理行数，才能把 beginRemoveRows 括在真正的删除外面。
     const int physical = m_buffer.physicalTailCount(n);
-    if (physical > 0) {
-        beginRemoveRows(QModelIndex(), oldCount - physical, oldCount - 1);
-        m_buffer.removeLastLogicalLines(n);
-        endRemoveRows();
-        m_removedRows += physical;
-        pruneTailCache();
-    }
-    // C# deleteLine adjusts logicalLineCount for the part of an oversized
-    // request that could not be backed by stored display lines.
-    const int logicalAfter = m_buffer.storedLogicalLineCount();
-    const int deletedLogical = qMax(0, logicalBefore - logicalAfter);
-    const int missing = qMax(0, n - deletedLogical);
-    if (missing > 0)
-        m_buffer.adjustLogicalCount(-missing);
-    if (physical > 0 || missing > 0)
-        emit lineCountChanged();
-    if (m_tailRow) {
-        beginRemoveRows(QModelIndex(), m_buffer.count(), m_buffer.count());
-        m_tailRow = false;
-        endRemoveRows();
-        ++m_removedRows;
-    }
-    m_lastLineTemporary = false;   // 末尾的「一時行」已被删 -> 清标记
+    if (physical <= 0) return;
+    beginRemoveRows(QModelIndex(), oldCount - physical, oldCount - 1);
+    // 逻辑行计数（LINECOUNT）由缓冲按**实际删掉的**逻辑行递减：
+    // removeLastLogicalLines 每弹掉一行 IsLogicalLine 就 --m_logicalCount。
+    m_buffer.removeLastLogicalLines(n);
+    endRemoveRows();
+    // 预告的物理行数必须与实删一致（both 走同一个「只数逻辑行」的循环）
+    Q_ASSERT(m_buffer.count() == oldCount - physical);
+    m_removedRows += physical;
+    pruneTailCache();
+    // C# deleteLine 在现存行不够时提前 break（`if (displayLineList.Count == 0)
+    // break;`），所以这里**没有**「补齐请求量」的补偿 —— 请求超过现存行数时
+    // LINECOUNT 停在 0 附近而不是被减成负数（eraTW 的 -14 就是这么来的）。
+    emit lineCountChanged();
+}
+
+bool ConsoleBackend::lastLineIsTemporary() const {
+    return !m_buffer.isEmpty() && m_buffer.at(m_buffer.count() - 1).isTemporary;
+}
+
+void ConsoleBackend::clearLines(int n) {
+    deleteTailLogicalLines(n);
 }
 
 void ConsoleBackend::clearAll() {
@@ -792,7 +797,6 @@ void ConsoleBackend::clearAll() {
     m_tailRow = false;
     m_tailDirty = false;
     m_dirty = false;
-    m_lastLineTemporary = false;
     m_maxSpanReach = 1;
     m_publishedLineCount = 0;
     // HTML 岛层随清屏一起清空（C# ClearDisplay 清 _htmlElementList：初始化 /
@@ -1107,14 +1111,15 @@ void ConsoleBackend::setTextboxText(const QString& text) {
 // 空文本不产生任何输出（C# IsNullOrEmpty 早退）。
 void ConsoleBackend::notifyReuseLastLine(const QString& text) {
     if (text.isEmpty()) return;
-    // C# PrintSingleLine：先 PrintFlush（把未定型缓冲定型成普通行），
-    // 再把文本作为一条「一時行」加入；newline() 里处理一時行替换
-    if (m_pendingOpen || !m_pendingParts.isEmpty() || !m_sealed.isEmpty()) {
+    // C# PrintSingleLine(str, temporary: true)：
+    //   1) PrintFlush(false) —— 挂着的未定型缓冲先定型成普通行；
+    //   2) printBuffer.Append(str) 并**立即成型**；
+    //   3) addDisplayLine —— 若尾行是「一時行」就 deleteLine(1) 顶掉它。
+    // 成型与「顶掉舊行」的顺序在 newlineInternal 里：先行成型、再删舊行。
+    if (m_pendingOpen || !m_pendingParts.isEmpty() || !m_sealed.isEmpty())
         newline();
-    }
     print(text);
-    newline();
-    m_lastLineTemporary = true;    // 本行是「一時行」
+    newlineInternal(/*temporary=*/true);
 }
 
 // ---------------------------------------------------------------------------
@@ -1177,7 +1182,9 @@ int ConsoleBackend::lineSpanRows(const ConsoleDisplayLine& line) const {
 QVariantList ConsoleBackend::lineBlocks(int row) const {
     if (row < 0 || row >= rowCount()) return {};
     const bool isTail = m_tailRow && row == m_buffer.count();
-    const bool temporaryTail = m_lastLineTemporary && row == m_buffer.count() - 1;
+    // 一時行下一行就会被顶掉：不为它留缓存条目（键是 serial，留着也不会错，
+    // 但会让缓存里堆一批只显示过一帧的行）。
+    const bool temporaryTail = row == m_buffer.count() - 1 && lastLineIsTemporary();
     if (!isTail && !temporaryTail) {
         pruneHeadCacheIfNeeded();
         const auto it = m_lineCache.constFind(m_buffer.at(row).serial);

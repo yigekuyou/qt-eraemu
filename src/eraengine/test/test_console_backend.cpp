@@ -172,8 +172,42 @@ int main(int argc, char* argv[]) {
         check(c.lineCount() == 1 && c.logicalLineCount() == 1,
               "CLEARLINE 负数不删除且不改变 LINECOUNT");
         c.clearLines(4);
-        check(c.lineCount() == 0 && c.logicalLineCount() == -3,
-              "CLEARLINE 超量请求按 C# 修正 LINECOUNT");
+        check(c.lineCount() == 0 && c.logicalLineCount() == 0,
+              "CLEARLINE 超量请求按 C# deleteLine 提前 break：LINECOUNT 不为负");
+    }
+    // 「一時行」（REUSELASTLINE / DQPRINT）：
+    //   * 一時行本身要出现在屏上；
+    //   * 紧跟的下一行输出**顶掉**它（C# addDisplayLine 的 deleteLine(1)），
+    //     而不是把它自己（以及下一行）一起吞掉。
+    {
+        ConsoleBackend c;
+        c.print("[A] first"); c.newline();
+        c.notifyReuseLastLine("[B] temp1");
+        c.flush();
+        check(c.lineCount() == 2 && c.lineText(1) == "[B] temp1",
+              "一時行（REUSELASTLINE）自身可见");
+        check(c.lineBlocks(1).size() > 0, "一時行摊平非空（不是空行）");
+
+        c.print("[C] plain-after-temp");
+        c.newline();
+        c.flush();
+        check(c.lineCount() == 2, "紧随一時行的下一行顶掉它（行数不变）");
+        check(c.lineText(0) == "[A] first" && c.lineText(1) == "[C] plain-after-temp",
+              "顶掉的是舊一時行，本行文本完整（不再被吞）");
+        check(c.logicalLineCount() == 2, "一時行替换不动 LINECOUNT");
+
+        // 连续 REUSELASTLINE（DQPRINT 逐字动画）：整句始终只占一行
+        for (int i = 0; i < 5; ++i)
+            c.notifyReuseLastLine(QStringLiteral("[D] tick %1").arg(i));
+        c.flush();
+        check(c.lineCount() == 3 && c.lineText(2) == "[D] tick 4",
+              "连续一時行只保留最后一条（动画不堆行）");
+        check(c.logicalLineCount() == 3, "连续一時行替换仍不动 LINECOUNT");
+
+        c.clearLines(1);
+        check(c.lineCount() == 2 && c.lineText(1) == "[C] plain-after-temp",
+              "CLEARLINE 能删掉一時行（按逻辑行）");
+        check(c.logicalLineCount() == 2, "删一時行后 LINECOUNT 按实际行数递减");
     }
     {
         ConsoleBackend c;

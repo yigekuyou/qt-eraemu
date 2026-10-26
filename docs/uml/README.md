@@ -623,6 +623,22 @@ plantuml -txmi docs/uml/01-load-classes.puml
   `ScriptRunner` 构造函数的槽里清 loops / 调用上下文 / 函数私有域 / 事件链 / 私有作用域；
   `LOADDATA` 指令分支不再各抄一遍（C# 对应 `LoadFrom` 后的 `ClearFunctionList`）。
   两条读档路径（`LOADDATA` 指令、系统菜单 `LOADGAME`）都只经这一个点。
+- **一時行替换的顺序是 C# 的顺序：先成型、再删尾行**。`REUSELASTLINE` / `PrintTemporaryLine`
+  先 `print()` 再 `newline()`；`newlineInternal(true)` 必须**先** `buildLine()` 把本行成型，
+  **再** `deleteTailLogicalLines(1)` 顶掉上一条一時行。反过来（先删后成型）会把本次待显示的
+  未定型缓冲一起清掉 —— DQPRINT 逐字动画（`REUSELASTLINE` + `TWAIT`）的整句就成了空行，
+  用户看到的就是「最后一次点击后没有任何文字」。
+- **`deleteLine` 只动已提交的显示行，从不碰未定型打印缓冲**：C# `deleteLine` 作用于
+  `displayLineList`，`printBuffer` 原样保留。所以 `CLEARLINE` 与一時行替换共用
+  `deleteTailLogicalLines(n)` 这一个实体（`clearLines` 只是转发），**没有**第二条「顺手清
+  pending」的路；只有 `clearAll()`（C# `ClearDisplay`）丢缓冲。
+- **LINECOUNT 永不为负**：`deleteLine` 在现存行不够时提前 `break`（C#），
+  所以 `CLEARLINE` 不做「按请求量补齐」的补偿 —— 删掉 `adjustLogicalCount` 后
+  eraTW 的 `logicalLines` 不再从 17 漂到 -14（那些 `CLEARLINE LINECOUNT - LINESTART`
+  才重新可信）。
+- **一時行标志随行存在**：`ConsoleDisplayLine::isTemporary`（折行的续行一并标记），
+  `lastLineIsTemporary()` 读缓冲尾行。删掉侧副本 `m_lastLineTemporary` —— 标志与行
+  不会再脱钩（行被顶掉/被删时标志自动消失）。
 - **读档不恢复 GLOBAL、只恢复普通存档变量**：`applyBinarySave` 的 normal 分支先
   `resetForNewGame()`、再 `applyBinarySave(Global)`、最后把读档前拍下的 GLOBAL 槽原样放回
   （`globalKeys` 一张表：`GLOBAL` / `GLOBALS` + 所有 `isGlobal` 声明）。对齐 C# ——
@@ -634,7 +650,7 @@ plantuml -txmi docs/uml/01-load-classes.puml
 `dump_warnings` 五语料（`eraTW` / `eraMegaten` / `eraTetris` / `FL3.8` / `ecd`）：
 **6 / 1 / 0 / 0 / 0** 行（`eraMegaten` 的目录参数必须是 `eraMegaten/data`；用错路径会得到
 0 字节的假基线），与 `/tmp/uml-baseline/*.raw.txt` **未排序**逐字节相同。
-累计六十五个重构（身份整数化 / 全定型 / 作用域显式化 / 只读收尾外移 / 存档独立映射 /
+累计六十六个重构（身份整数化 / 全定型 / 作用域显式化 / 只读收尾外移 / 存档独立映射 /
 私有名表前移 / 存档顺序确定性 / 写收尾外移 / 标记区外移 / 位置区外移 /
 标签归属单一索引 / 诊断切片幂等 / 常数作用域参数化 / 增量装载协议显式化 /
 GOTO 段身份入索引 / 静态检查用段身份 / 删第三张裸名表 / 错误去重 / 配对语法只判一次 /
@@ -669,6 +685,8 @@ GOTO 段身份入索引 / 静态检查用段身份 / 删第三张裸名表 / 错
  致命执行错误只有一个收件人和一个落点（控制台可见，不再是只点状态灯）/
  读档后的执行帧清理只有一份（gameStateLoaded 唯一入口，LOADDATA 分支不再各清一遍）/
  读档不恢复 GLOBAL（独立生命周期，一张 globalKeys 表）
+ 一時行替换先成型再删尾行（不再吞掉刚打印的那行）/ deleteLine 只动已提交行（clearLines 一条实体）/
+ LINECOUNT 永不为负（删 adjustLogicalCount）/ 一時行标志随行（删 m_lastLineTemporary）
  前后完全一致；
 `ctest` 48 → 71（新增 `test_parse_checks` / `test_save_variable_map` / `test_private_scope_table` /
 `test_load_contracts` / `test_save_variable_map_hashseed` / `test_jump_markings` /

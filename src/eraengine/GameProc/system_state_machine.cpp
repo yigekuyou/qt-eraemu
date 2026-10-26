@@ -748,14 +748,12 @@ ExecState SystemStateMachine::pump() {
                 m_atFloor = true;
             } else {
                 if (m_pacingEnabled) {
-                    // 切片预算：上一片**有输出** -> 4096 条/3ms（渐进显示节奏不变）；
-                    // 上一片**没有任何输出**（纯计算：6000 次循环、读档解包、
-                    // CHEAK_NAME_ERROR 这类大扫描）-> 16384 条/10ms。频繁让路只
-                    // 白付事件循环 + QML 渲染的固定成本（offscreen 软渲染实测每
-                    // 让一次 ~100ms），纯计算期间没有任何显示进度可推进；
-                    // 10ms 的时间帽保证输入/取消仍然即时响应。
+                    // 切片预算面向 60Hz GUI 帧：有输出时最多占 2ms，纯计算时
+                    // 最多占 4ms，为 QML 同步、场景图和输入事件留下约 12ms。
+                    // 每片结束仍通过 0ms PreciseTimer 让出事件循环；不能为了提高
+                    // 指令吞吐而连续霸占 GUI 线程，否则一帧的输出会错过呈现。
                     const bool printed = m_runner->printedInSlice();
-                    m_runner->runSlice(printed ? 4096 : 16384, printed ? 3 : 10);
+                    m_runner->runSlice(printed ? 4096 : 16384, printed ? 2 : 4);
                 } else {
                     m_runner->runToCompletion();
                 }

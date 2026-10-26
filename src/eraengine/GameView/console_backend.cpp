@@ -869,7 +869,7 @@ void ConsoleBackend::flush() {
         ++m_insertedRows;
         m_tailDirty = false;    // 新行的数据即最新
     } else if (m_tailRow && m_tailDirty) {
-        emit dataChanged(index(n), index(n));
+        emit dataChanged(index(n), index(n), {BlocksRole, SpanRowsRole});
         m_tailDirty = false;
     }
     if (m_publishedLineCount != n) {
@@ -1075,7 +1075,10 @@ void ConsoleBackend::notifyInputRequested(const QString& kind, const QVariant& d
     m_inputDefault = defaultValue;
     m_waitingInput = true;
     flush();
-    updateStageModels(true);
+    // flush() already publishes the current stage when automatic redraw is enabled.
+    // Keep the forced path for REDRAW 0, where the input prompt must still be visible.
+    if (!m_autoRedraw)
+        updateStageModels(true);
     emit inputRequested(kind);
     emit waitingInputChanged();
     // C# EmueraConsole：限时输入不在语句处启动计时器，等这一帧画完再启动

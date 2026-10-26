@@ -80,8 +80,8 @@ public:
 
     [[nodiscard]] const QList<Entry>& entries() const noexcept { return m_entries; }
     [[nodiscard]] bool isEmpty() const noexcept { return m_entries.isEmpty(); }
-    // 读档：文件条目名 -> 行。同名时广域/内建行优先，私有行只在名字唯一时命中
-    //（Emuera 的私有变量也是按裸名写盘的，同名会撞车 —— 与 C# 行为一致）。
+    // 读档：文件条目名 -> 行。私有条目使用段身份键，因此同名私有变量
+    // 仍可按唯一的 (段身份, 名字) 恢复；全局/内建条目仍使用裸名。
     [[nodiscard]] const Entry* findByName(const QString& saveName) const;
     [[nodiscard]] const Entry* findByKey(const eravar::VariableKey& key) const;
 

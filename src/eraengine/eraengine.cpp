@@ -2003,6 +2003,10 @@ void EraEngine::buildSystemHost()
 		// EE FLOWINPUT canSkip：系统流程输入在 SKIPLOG 跳过中直接交缺省
 		// （C# setWaitInput 的 `flowinputCanSkip && Console.MesSkip`）
 		host.mesSkip = [this]() { return m_executionEngine.mesSkip(); };
+		// SystemStateMachine 的无效值分支必须观察已提交末行；此前两个
+		// SystemHost 回调未接线，永远回落 false，导致临时错误行不被替换。
+		host.lastLineIsTemporary = [this]() { return m_console.lastLineIsTemporary(); };
+		host.lastLineIsEmpty = [this]() { return m_console.lastLineIsEmpty(); };
 
 		// ---- GameBase（标准标题画面）----
 		host.scriptTitle = [this]() { return m_gameBaseData.title(); };

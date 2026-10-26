@@ -269,6 +269,20 @@ int main(int argc, char* argv[]) {
     }
     {
         ConsoleBackend c;
+        check(c.lastLineIsEmpty(), "空控制台的末行视为空");
+        c.print("普通行");
+        c.newline();
+        check(!c.lastLineIsTemporary() && !c.lastLineIsEmpty(),
+              "普通提交行不是临时行且非空");
+        c.notifyReuseLastLine("临时行");
+        c.flush();
+        check(c.lastLineIsTemporary() && !c.lastLineIsEmpty(),
+              "临时提交行状态可见");
+        c.clearLines(2);
+        check(c.lastLineIsEmpty(), "删除临时行和前行后末行状态为空");
+    }
+    {
+        ConsoleBackend c;
         c.printButton("old", 9);
         c.newline();
         c.notifyInputRequested("INPUTMOUSEKEY");

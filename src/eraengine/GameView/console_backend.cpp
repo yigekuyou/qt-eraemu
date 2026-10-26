@@ -198,6 +198,12 @@ QString ConsoleBackend::currentLineText() const {
     return line.plainText();
 }
 
+bool ConsoleBackend::lastLineIsEmpty() const {
+    if (m_buffer.isEmpty())
+        return buildLine().plainText().isEmpty();
+    return m_buffer.at(m_buffer.count() - 1).plainText().isEmpty();
+}
+
 // ---------------------------------------------------------------------------
 // 显示写入
 // ---------------------------------------------------------------------------

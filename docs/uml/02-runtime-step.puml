@@ -1,0 +1,106 @@
+@startuml 02-runtime-step
+!pragma layout smetana
+' 运行时责任 1/4：脚本执行步进与调用栈
+' 来源：GameProc/script_runner.h, execution_engine.h, process_state.h
+
+title 运行时：脚本执行步进
+
+package "GameProc" {
+  class EraEngine {
+    - m_executionEngine : ExecutionEngine
+    - m_scriptRunner : ScriptRunner
+    - m_processState : ProcessState
+  }
+
+  class ExecutionEngine {
+    + executeScript(scriptName) : bool
+    + executeLogicalLine(line)
+    + executeInstruction(line, scope) : bool
+    + setParseTable(table)
+    + consumePrintWaitKey() : bool
+    .. 输出信号 ..
+    .. consolePrint / requestAnyKey ..
+  }
+
+  class ScriptRunner {
+    - m_table : EraParseTable*
+    - m_engine : ExecutionEngine*
+    - m_state : ProcessState*
+    - m_loops : QList<LoopFrame>
+    + runToCompletion() : ExecState
+    + runSlice(instructionBudget, timeBudgetMs) : ExecState
+    - stepOnce() : bool
+    - executeLine(line) : ExecState
+    - doCallLine(line, ...) : ExecState
+    - returnFromCall() : bool
+    .. suspended(state) ..
+    .. instructionExecuted(script, line) ..
+    .. finished() / errorOccurred(message) ..
+  }
+
+  class ProcessState {
+    + getExecState() : ExecState
+    + requestResume()
+    + requestWaitInput()
+    + requestWaitSystemInput()
+    + intoFunction(label, position)
+    + returnF()
+    + currentMin() : int
+    + functionCount() : int
+    .. execStateChanged(state) ..
+    .. continueExecution() ..
+  }
+
+  struct LoopFrame {
+    kind : Repeat | For | While | Do
+    startLine / endLine : int
+    script : QString
+    value / end / step : qint64
+    iterations : qint64
+  }
+}
+
+class ExecState <<enum>> {
+  Continue
+  WaitInput
+  WaitSystemInput
+  WaitEvent
+  Halt
+  Error
+}
+
+class EraParseTable
+class VariableStorage
+
+EraEngine *-- ExecutionEngine
+EraEngine *-- ScriptRunner
+EraEngine *-- ProcessState
+ScriptRunner --> ExecutionEngine : execute instruction
+ScriptRunner --> EraParseTable : current logical line
+ScriptRunner --> VariableStorage : explicit scope access
+ScriptRunner --> ProcessState : read / request state
+ScriptRunner *-- LoopFrame
+ProcessState --> ExecState
+ProcessState ..> ScriptRunner : continueExecution()
+ScriptRunner ..> ProcessState : suspended / finished
+ExecutionEngine ..> ScriptRunner : script execution service
+
+note right of ScriptRunner
+  一个 slice 只推进当前调用帧。
+  CALL / CALLFORM 压入帧，RETURN 弹出帧；
+  JUMP 改变当前位置但不新建返回帧。
+  runSlice() 在 Continue 之外立即交还控制权，
+  由 ProcessState 的恢复信号重新进入执行链。
+end note
+
+note bottom of EraEngine
+  EraEngine 负责装配对象和信号连接；
+  ScriptRunner 负责步进，ExecutionEngine 负责指令语义，
+  ProcessState 只保存执行/调用上下文。
+end note
+
+legend bottom
+  不在本图描述系统状态处理、QML 展示或存档；它们分别见
+  03-runtime-system、04-runtime-console-qml、05-runtime-save-load。
+endlegend
+@enduml

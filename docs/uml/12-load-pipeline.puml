@@ -1,0 +1,45 @@
+@startuml 12-load-pipeline
+!pragma layout smetana
+' 装载流水线：Content 输入 -> AST -> GameProc 收尾 -> 诊断
+' 来源：Content/erb_loader.h, GameData/ast, GameProc/load_passes.h, parse_checks.h
+
+title 装载流水线（当前实现）
+
+actor User
+participant "Content::ErbLoader" as Loader
+participant "declaration scan" as Scan
+participant "GameData/ast::AstBuilder" as Builder
+participant "GameProc::EraParseTable" as Table
+participant "loadpass" as LoadPass
+participant "parsecheck" as Check
+participant "ParseDiagnostics" as Diagnostics
+
+User -> Loader : loadDirectory / loadAsync
+Loader -> Scan : scan declarations once
+Scan --> Loader : Scan + preprocessed content
+Loader -> Builder : buildScriptAst(lines, declarations)
+Builder --> Loader : BuiltScript{lines, scan}
+Loader -> Table : loadScript(script, builtScript)
+Table -> LoadPass : finalize declarations / bindings
+LoadPass -> Check : resolve targets / structures / static values
+Check -> Diagnostics : replaceOrigin(pass, sink)
+Diagnostics --> User : load diagnostics
+
+note right of Builder
+  Declarations are registered before AST construction.
+  The current implementation does not contain a later
+  function recompilation or assignment AST rebuild stage.
+end note
+
+note right of Table
+  The table drives explicit load phases:
+  Empty -> Loading -> Bound -> Finalized.
+  Passes receive typed views and own diagnostic origins;
+  repeated finalization replaces those origins.
+end note
+
+legend bottom
+  Content reads and preprocesses files. GameData/ast owns nodes
+  and diagnostics. GameProc owns orchestration and pass ordering.
+endlegend
+@enduml

@@ -428,6 +428,10 @@ public:
     const ConsoleBuffer& buffer() const { return m_buffer; }
     [[nodiscard]] const ConsoleLayout& layout() const { return m_layout; }
     [[nodiscard]] QString currentLineText() const;   // 未 flush 的当前行文本（调试）
+    // C# EmueraConsole.LastLineIsTemporary：尾部已提交行是否为一时行。
+    [[nodiscard]] bool lastLineIsTemporary() const;
+    // C# EmueraConsole.LastLineIsEmpty：已提交末行没有可见文本。
+    [[nodiscard]] bool lastLineIsEmpty() const;
 
 public slots:
     void setFrameMs(int ms);
@@ -493,8 +497,6 @@ private:
     // 只动已提交的显示行（m_buffer），**不碰**未定型的打印缓冲
     // （C# printBuffer）—— CLEARLINE 与「一時行替换」共用这一个实体。
     void deleteTailLogicalLines(int n);
-    // 尾部（已提交的）最后一行是否「一時行」（C# LastLineIsTemporary）
-    [[nodiscard]] bool lastLineIsTemporary() const;
     void markDirty();                                  // 内容变化：等 flush 发布
     // 尾行摊平（flattenLine）时把行内坐标补齐成区块数据
     QVariantList flattenLine(const ConsoleDisplayLine& line, int row) const;

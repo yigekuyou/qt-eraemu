@@ -1,0 +1,95 @@
+@startuml 08-variable-storage
+!pragma layout smetana
+' 运行期变量容器与存档条目映射。解析顺序见 07-variable-resolution。
+' 来源：GameData/Variable/variable_storage.h, save_variable_map.h,
+'       GameData/ast/variable_table.h, ast/name_interner.h
+
+title GameData/Variable：变量存储与存档条目
+
+package "GameData/Variable" {
+  class VariableStorage {
+    + readIntByName(name, indices, scope) : qint64
+    + writeIntByName(name, indices, value, scope)
+    + getStringSlot(name, indices, scope) : FlatStringValue
+    + setStringSlot(name, indices, value, scope)
+    + shapeOf(name, scope) : ArrayShape
+    + allocatedSlots(key) : int
+    + storageKeyFor(key) : QString
+    + captureBinarySave(type, chars) : Document
+    + applyBinarySave(document)
+    + saveReadiness() : SaveReadiness
+    - resolveIntLocus(...) : IntLocus
+    - resolveStrLocus(...) : StrLocus
+    - addressOf(geometry, indices) : qint64
+    - ensureBlock(chara, elementCount)
+  }
+
+  class VariableTable {
+    + declarations()
+    + saveDeclarations()
+    + privateScopeTable()
+  }
+
+  class "erasave::Map" as SaveMap {
+    + build(config, variables, type) : Map
+    + entries() : QList<Entry>
+    + findByName(name) : Entry*
+  }
+
+  struct Entry {
+    + name : QString
+    + key : VariableKey
+    + slot : StorageSlot
+    + dimensions : QList<int>
+    + persisted : bool
+  }
+}
+
+package "GameData/ast" {
+  struct VariableKey {
+    + scopeId : quint32
+    + nameId : quint32
+  }
+  class NameInterner <<namespace eravar>> {
+    + internName(upper) : quint32
+    + nameOf(id) : QString
+    + makePrivateStorageKey(scope, name) : QString
+  }
+}
+
+package "GameData" {
+  class "EraBinaryData::Document" as Document {
+    + encode()
+    + decode()
+    + Version = 1809
+  }
+}
+
+VariableStorage --> VariableTable : declarations / shapes
+VariableStorage --> SaveMap : build and iterate entries
+SaveMap --> VariableTable : SAVEDATA declarations
+VariableStorage --> NameInterner : key -> storage string
+VariableStorage --> Document : capture / apply
+SaveMap *-- Entry
+Entry *-- VariableKey
+
+note right of VariableStorage
+  One container shape is used for scalar and multidimensional
+  arrays; dimensions select the address geometry. Reads do not
+  allocate. Writes allocate only through ensureBlock().
+  `shapeOf()` is the only shape source for runtime consumers.
+end note
+
+note right of SaveMap
+  Entry is the only save mapping fact. Global entries keep their
+  file name; private entries use makePrivateStorageKey(segment,
+  name). Entry ordering is data-defined before encoding.
+  The runtime save flow is 05-runtime-save-load; file format
+  compatibility is 11-save-format.
+end note
+
+legend bottom
+  AST owns VariableKey; GameData/Variable owns storage and mapping.
+  No diagram should duplicate the locus switch or private-key separator.
+endlegend
+@enduml

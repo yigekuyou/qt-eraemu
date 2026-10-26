@@ -1,0 +1,39 @@
+@startuml 11-save-format
+!pragma layout smetana
+' 文件格式边界。运行期调用链见 05-runtime-save-load，变量条目见 08-variable-storage。
+' 来源：GameData/era_binary_data.h, GameData/Variable/save_variable_map.h
+
+title GameData：存档文件格式与兼容性
+
+actor Runtime
+participant "EraBinaryData::Document" as D
+participant "encode / decode" as Codec
+participant "sav/*.sav" as File
+
+Runtime -> D : capture document
+D -> Codec : encode() / encodeText()
+Codec -> File : write bytes / text
+
+note right of D
+  EraBinaryData::Version = 1809 is the single format version.
+  Binary headers, text markers and decode checks derive from it.
+  A decode failure leaves the destination Document unchanged.
+end note
+
+File -> Codec : read bytes / text
+Codec -> D : decode() / decodeText()
+D --> Runtime : Document or failure
+
+alt current format
+  Runtime -> Runtime : applyBinarySave(document)
+else corrupt or unsupported format
+  Runtime -> Runtime : reject atomically
+  Runtime -> Runtime : expose slot as overwriteable empty data
+end
+
+legend bottom
+  This file records the format contract only. The save map owns
+  entry identity and private-key spelling; the system state machine
+  owns SAVEGAME/LOADGAME interaction.
+endlegend
+@enduml

@@ -1,0 +1,34 @@
+@startuml 10-static-checks
+!pragma layout smetana
+' 静态检查的责任目录；数据流与诊断所有权见 09-diagnostics。
+' 来源：GameProc/parse_checks.h, load_passes.h, era_parse_table.h
+
+title GameProc：静态检查目录
+
+rectangle "parsecheck::resolveStaticTargets" as Targets
+rectangle "parsecheck::checkStructures" as Structures
+rectangle "parsecheck::checkStaticValues" as Values
+rectangle "loadpass::finalizeBindings" as Bindings
+rectangle "ParseDiagnostics::replaceOrigin" as Sink
+
+Targets --> Sink : Pass4 / target diagnostics
+Structures --> Sink : Pass5 / structure diagnostics
+Values --> Sink : Pass6 / value diagnostics
+Bindings --> Sink : Pass2 / binding diagnostics
+
+note bottom of Targets
+  CALL / GOTO / TRY* targets, undefined function warnings,
+  and jump destinations are checked from the finalized table.
+end note
+
+note bottom of Structures
+  Pairing and structural checks read the existing markings;
+  they do not rebuild the script AST.
+end note
+
+note bottom of Values
+  Constant bounds, dimensions, and static expression facts.
+  A missing runtime function such as @GAMEOVER remains a real
+  content diagnostic; this diagram does not invent a fallback function.
+end note
+@enduml

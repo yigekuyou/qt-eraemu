@@ -1,0 +1,117 @@
+@startuml 03-runtime-system
+!pragma layout smetana
+' 运行时责任 2/4：系统状态、脚本帧底与输入等待
+' 来源：GameProc/system_state_machine.h, process_state.h, script_runner.h
+
+title 运行时：系统状态与输入等待
+
+package "GameProc" {
+  class SystemStateMachine {
+    - m_state : ProcessState*
+    - m_runner : ScriptRunner*
+    - m_handlers : QHash<SystemStateCode, Handler>
+    - m_pendingTimedWait : PendingTimedWait
+    - m_prevStates : QList<SystemStateCode>
+    + run() : ExecState
+    + runSystemProc()
+    + resume(value) : ExecState
+    + resumeString(value) : ExecState
+    + deliverInputValues(values) : ExecState
+    + waitAnyKey()
+    + waitTimedInput(ms, defaultValue, oneInput)
+    + waitTimedStringInput(ms, defaultValue, oneInput)
+    + waitTimedAnyKey(ms)
+    + onFramePresented()
+    + requestSaveLoad(save)
+    .. stateChanged(old, new) ..
+    .. inputKindRequested(kind, defaultValue) ..
+    .. stateAdvanced(state) ..
+  }
+
+  struct SystemHost {
+    + waitInput()
+    + readAnyKey()
+    + printSingleLine(text)
+    + printTemporaryLine(text)
+    + lastLineIsTemporary() : bool
+    + lastLineIsEmpty() : bool
+    + saveTo(index, text) : bool
+    + loadFrom(index) : bool
+    + checkData(index, message) : bool
+  }
+
+  class ScriptRunner {
+    + runSlice(budget, time) : ExecState
+    + onInputProvided(value)
+    + onSystemStateChanged(state)
+    .. suspended(state) ..
+    .. inputRequested(kind, defaultValue) ..
+  }
+
+  class ProcessState {
+    + getSystemState() : SystemStateCode
+    + setSystemState(state)
+    + getExecState() : ExecState
+    + requestWaitSystemInput()
+    + requestResume()
+    .. execStateChanged(state) ..
+    .. continueExecution() ..
+  }
+
+  enum SystemStateCode {
+    Title_Begin
+    Normal
+    Train_WaitInput
+    Shop_WaitInput
+    Ablup_WaitInput
+    SaveGame_WaitInput
+    LoadGame_WaitInput
+    LoadData_DataLoaded
+  }
+
+  enum ExecState {
+    Continue
+    WaitInput
+    WaitSystemInput
+    Halt
+    Error
+  }
+
+  class QTimer <<Qt>>
+}
+
+SystemStateMachine *-- SystemHost : injected callbacks
+SystemStateMachine --> ProcessState : set state / read floor
+SystemStateMachine --> ScriptRunner : call function / resume
+SystemStateMachine --> SystemStateCode : dispatch handler
+ProcessState --> ExecState
+ProcessState ..> SystemStateMachine : execStateChanged
+ScriptRunner ..> ProcessState : suspended / continueExecution
+SystemStateMachine ..> QTimer : arm timed wait
+SystemStateMachine ..> SystemHost : output / input policy
+
+note right of SystemStateMachine
+  pump() alternates two owners:
+  1. ScriptRunner runs until the call stack
+     returns to the frame floor or suspends.
+  2. runSystemProc() dispatches the current
+     SystemStateCode handler.
+
+  System input is non-blocking:
+  setWaitInput() sets WaitSystemInput and
+  emits inputKindRequested(); resume*() writes
+  the result and schedules the next pump.
+end note
+
+note bottom of QTimer
+  Timed input first arms PendingTimedWait.
+  With a QML presentation probe, onFramePresented()
+  starts the timer only after the frame is visible;
+  headless tests use the injected timer directly.
+end note
+
+legend bottom
+  The callback boundary is SystemHost. The state machine does not own
+  ConsoleBackend, file widgets, or QML objects.
+endlegend
+@enduml

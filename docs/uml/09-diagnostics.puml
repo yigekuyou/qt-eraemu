@@ -1,0 +1,62 @@
+@startuml 09-diagnostics
+!pragma layout smetana
+' 装载诊断数据流与所有权；静态检查目录见 10-static-checks。
+' 来源：GameData/ast/parse_diagnostic.h, GameProc/era_parse_table.cpp
+
+title GameData/ast：装载诊断
+
+package "GameData/ast" {
+  class ParseDiagnostics {
+    + add(diagnostic)
+    + replaceOrigin(origin, sink)
+    + removeOriginFiles(origin, files)
+    + clear()
+    + items() : QList<ParseDiagnostic>
+  }
+  struct ParseDiagnostic {
+    + code : DiagCode
+    + severity : Severity
+    + origin : DiagOrigin
+    + file : QString
+    + line : int
+    + message : QString
+  }
+  enum DiagOrigin {
+    Preprocess
+    Pass1
+    Pass2
+    Pass3
+    Pass4
+    Pass5
+    Pass6
+    Pass7
+  }
+}
+
+package "GameProc" {
+  class EraParseTable {
+    + runCheckStructures()
+    + runCheckStaticValues()
+    + resolveStaticTargets()
+    + diagnostics() : ParseDiagnostics
+  }
+  class "loadpass / parsecheck" as Pass
+}
+
+EraParseTable *-- ParseDiagnostics
+EraParseTable --> Pass : each pass gets a sink
+Pass --> ParseDiagnostics : replaceOrigin(origin, sink)
+ParseDiagnostics --> ParseDiagnostic
+
+note right of ParseDiagnostics
+  Diagnostics are facts owned by the loading table.
+  A rerun replaces the pass slice, so stale results cannot
+  survive a repeated check. Runtime errors are reported through
+  GameProc/EraEngine and do not enter these load slices.
+end note
+
+legend bottom
+  This diagram describes ownership and flow only.
+  The content of each check is 10-static-checks.
+endlegend
+@enduml

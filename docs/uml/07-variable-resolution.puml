@@ -1,0 +1,38 @@
+@startuml 07-variable-resolution
+!pragma layout smetana
+!pragma useVerticalIf on
+' 变量名字、作用域与访问描述符的唯一解析顺序。
+' 来源：GameData/ast/variable_table.h, expression_evaluator.h,
+'       GameData/Variable/variable_storage.h, GameProc/script_runner.h
+
+title GameData：变量解析
+
+start
+:ScriptRunner::stepOnce() supplies explicit ScopeId;
+:ExpressionEvaluator receives VariableNode or a runtime name;
+
+if (VariableNode has a valid access key?) then (yes)
+  :read/write the keyed locus;
+  :use accessKind and VariableKey;
+else (no)
+  :VariableStorage::resolveIntLocus(name, indices, scope);
+  :resolve once to IntLocus;
+  :dispatch by locus kind;
+endif
+
+:Return value or commit write;
+stop
+
+legend right
+  The source of scope identity is the script segment
+  (script name + segment start), not the function name.
+  The loader writes line.scopeKey; a call frame interns it once.
+
+  The resolver is the only ordered name decision:
+  parameter -> character -> ARG/LOCAL -> ARGS/LOCALS/RESULTS
+  -> system slot -> declared multidimensional slot -> 1D slot.
+
+  `readIntByName` and `writeIntByName` consume the same resolved
+  locus. Storage shape and address geometry are outside this diagram.
+endlegend
+@enduml

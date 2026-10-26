@@ -1,341 +1,72 @@
 @startuml 01-load-classes
-' 无 graphviz(dot) 时用 PlantUML 内置 smetana 布局引擎
 !pragma layout smetana
-' emuera —— 装载期核心类型：CSV → ERB 逐行解析 → EraParseTable → 收尾定型
-' 渲染：plantuml -tpng docs/uml/01-load-classes.puml
-title 装载期核心类图
+' 装载期类型边界。具体步骤见 12-load-pipeline。
+' 来源：Content/erb_loader.h, GameData/ast, GameProc/era_parse_table.h
 
-package "GameProc" {
-  class EraEngine {
-    - m_constantTable : ConstantTable
-    - m_variableStorage : VariableStorage
-    - m_parseTable : EraParseTable
-    + setGameDirectory(dir)
-    + loadAsync(dir)
-    + reload()
-  }
-
-  class EraParseTable {
-    - m_scripts : QHash
-    - m_variables : VariableTable
-    - m_diagnostics : ParseDiagnostics
-    - m_position : PositionState   ' 位置区：状态是数据，算法在 position
-    + buildScriptAst(name, lines, isHeader, diags) : QList<LogicalLine>
-                                  ' 脚本级构建**唯一**入口：先 declscan 登记声明进 m_variables，
-                                  ' 再逐行 build ⇒ 构建期就有类型，没有「待收尾定型」第三态
-    + loadScript(name, lines, isHeaderFile)   ' Finalized 后拒绝（须先 beginIncrementalLoad）
-    + beginIncrementalLoad() : bool  ' Finalized → Loading（唯一的增量入口）
-    + expressionAst(expr)
-    + runtimeVariableReference(expr)
-    + markLoadComplete()
-    + resolveStaticTargets()      ' 转调 parsecheck
-    + checkStructures()           ' 转调 parsecheck
-    + checkStaticValues()         ' 转调 parsecheck
-    + scripts() / variableTable() / variableStorage()   ' 只读 getter
-    + labels(name) / hasLabel(name)  ' 都查同一张 m_labelIndex
-    + getLabelPosition(script, label) ' = firstLabel(…, onlyScript)->line
-    + firstGotoLabelPosition(script, segment, label)  ' GOTO 一次查表
-    + currentFunctionSegment() : int  ' 有帧=帧的 entryLine；无帧=ownerFunction 回查
-    + setPosition / advance / jumpToLabel / callLabel / returnFromCall
-                                  ' 位置区壳子：打包视图 → position → emitEffects
-    - makeIrView() : ParseIrView ' 只做指针打包
-    - makeScriptView() : ScriptView  ' 只做指针打包
-    - emitEffects(fx, jumpLabel)  ' Effects → 信号，顺序在此写死
-    - resolveGlobalDeclarations()   ' 仅预登记结算用（实现在 loadpass）
-    - checkNotCalledFunctions()
-    + loadPhase() : LoadPhase   ' Empty / Loading / Bound / Finalized
-    + isFinalized() / isBoundOrLater()
-    - readOnlyPassAllowed(entryName) : bool  ' 只查阶段，不计数
-    - isGateOpen(gate) : bool
-    - m_loadPasses : LoadPass[7]  ' 表即流程（含切片身份 origin）；实例成员（成员步骤要绑 this）
-    {static} - makeLoadPasses(self) : LoadPass[7]  ' 构造时建表：自由函数 + 只捕获 this 的 lambda
-  }
-
-  struct LoadPass {
-    label : const char*
-    run : PassAction      ' 唯一的可调用体（1/2/3 自由函数；4/5/6/7 lambda）
-    gate : LoadPassGate   ' Always / NotCalledWarning
-    phaseAfter : LoadPhase
-    origin : DiagOrigin   ' 该步拥有的诊断切片（Pass1..Pass7）
-    ' 运行与否都 replaceOrigin(origin, sink)：跳过 = 切片置空
-  }
-
-  class PassAction {
-    ' 无默认构造 + 拒绝 nullptr_t = 空状态不可表达
-    operator()(LoadContext&, ParseDiagnostics&) : 7 条表项形态相同
-    ' 4/5/6/7 的 lambda 第一参数**无名** -> 拿不到可写 LoadContext
-  }
-
-  enum LoadPassGate {
-    Always
-    NotCalledWarning
-  }
-
-  enum LoadPhase {
-    Empty      ' 构造后 / clear() 之后
-    Loading    ' 脚本与声明正在增长
-    Bound      ' 前 3 步完成，只读区可跑
-    Finalized  ' 收尾返回，不再编译新源码
-  }
-
-  enum ReadOnlyPass {
-    StaticTargets
-    Structures
-    StaticValues
-  }
-
-  package "loadpass（可写收尾，自由函数）" {
-    struct LoadContext {
-      scripts / variables / functions      ' 可写：就地定型
-      storage / evaluator / gameBaseData   ' 可写：装名表 / 装 provider / 求值
-      constantTable                        ' 只读：名表下标
-      labelIndex / paramNames              ' 可写：排序固化 / 补顶层空集
-      declarationsResolved                 ' pass 1 置位（类里仍读）
-      constProvidersReady                  ' pass 1 幂等 guard
-      ' 11 个字段。没有 diagnostics（每 pass 一个独立 sink，
-      ' 由驱动 replaceOrigin 合并），也没有运行期位置 —— 作用域是
-      ' evaluate() 的参数，装载视图不读解释器在哪一行。
-    }
-    class "写步骤自由函数" as WriteFns {
-      resolveGlobalDeclarationsStep(ctx, sink)   ' 内部调 resolveGlobalDeclarations(ctx)（预登记结算也用）
-      finalizeBindings(ctx, sink)
-      finalizeValidation(ctx, sink)   ' 第二参是该 pass 独占的诊断切片
-      finalizeLabelIndex(ctx)         ' 唯一排序固化点（只 sort，不去重）
-      parseScopedExpression(ctx, …) / expressionAstInScope(ctx, …)
-    }
-  }
-
-  package "declscan（声明扫描，自由函数）" {
-    struct SourceLine {
-      text : QString            ' 预处理后的原文（与 AstBuilder 所见逐字一致）
-      position : ScriptPosition
-    }
-    struct DeclarationSite {
-      kind : DeclarationKind    ' SharpDirective（#DIM/#DIMS/#GLOBAL/…）/ ScopedVariable（VARI/VARS）
-      rawLine / position / function / scriptName
-      segmentStart : int        ' 段起点（@ 行下标；文件头段 = -1）
-      scopeKey / isHeaderFile
-    }
-    struct Scan {
-      declarations : QList<DeclarationSite>
-      orphanSharpLines : QHash<int,QString>   ' 声明区外的 # 行（调用方按自己的口径告警）
-      segmentStartOfLine : QList<int>         ' 每行段起点 = loadScript 的 currentFunctionLine
-    }
-    class "声明扫描" as DeclFns {
-      scanScript(lines, script, isHeader) : Scan
-        ' 「哪一行是声明、属于哪个段」的**唯一**扫描循环；
-        ' SourceLine / LogicalLine / QStringList 三形态共用同一 scanImpl 模板
-      registerDeclarationText(vars, diags, storage, rawLine, …)  ' 唯一登记实现
-        ' 表方法 parseVariableDeclarationText 只是它的 forwarder
-      registerDeclaration(vars, diags, storage, site)
-      declareScriptVariables(vars, diags, lines, script, isHeader) : Scan
-      scopedVariableDeclText(rawLine) : QString   ' VARI/VARS -> 等价 #DIM(S) 文本（唯一构造点）
-      classifySharpDirective(text) : 指令语义      ' 扫描器与登记器共用
-    }
-  }
-
-  package "parsecheck（只读收尾，自由函数）" {
-    struct ParseIrView {
-      scripts : const QHash<QString,ScriptData>*
-      variables : const VariableTable*
-      constantTable : const ConstantTable*
-      storage : const VariableStorage*
-      functions : const QHash<QString,UserFunctionInfo>*
-      labelIndex : const QHash<QString,QList<LabelRef>>*  ' 标签名并集（4/6 的 hasLabel 判定）
-    }
-    class "自由函数" as FreeFns {
-      resolveStaticTargets(view, diags)
-      checkCallStatementArgs(view, line, target, diags)
-      checkStructures(view, diags)
-      checkStaticValues(view, diags)
-    }
-  }
-
-  package "jumpmark（标记区，自由函数）" {
-    class "标记区" as JumpFns {
-      buildJumpMarkings(ScriptData&)   ' 一趟扫行：配对 + 未解析记录
-      jumpTarget / ifBranches          ' inline 查表（nullptr 安全）
-      catchTarget / endCatchTarget
-      funcEntryLines / endFuncTarget
-      ' 配对结果写 ScriptData::structureIssues（唯一写点）：
-      ' 运行期表 + 静态诊断是**同一次配对**的两个投影
-      ' 差异显式成字段（staticVisible / jumpPaired），不是两份实现
-    }
-  }
-
-  struct StructureIssue {
-    kind : StructureIssueKind   ' 17 个值，一个 kind 对应一个消息模板
-    line / related / name       ' 0 基逻辑行；related = 关联行（无则 -1）
-  }
-
-  package "position（位置区，自由函数）" {
-    struct PositionState {
-      script / line / callStack / jumped   ' 栈深 = callStack.size()（没有 depth 副本）
-      ' 没有作用域字段：executionScopeId 每次按当前行的 scopeKey 现算
-    }
-    struct PositionEffects {
-      callStackChanged / memorySpaceChanged
-      positionChanged / jumpRequested   ' 只回答「发哪个」，无顺序语义
-    }
-    struct ScriptView {
-      scripts : const QHash<QString,ScriptData>*
-      labelIndex : const QHash<QString,QList<LabelRef>>*
-      ' 裸标签名（大写折叠）→ 全部声明的全序列表
-      ' 全序 = 脚本名 compare 升序 → 同脚本行号升序
-      ' 每条 LabelRef 带 functionLine（所属段起点）—— GOTO 的
-      ' 「$ 只在本函数内」于是是一次字段比较，不是运行期扫行
-    }
-    class "位置区" as PosFns {
-      setPosition / advance / jumpToLine / jumpToLabel
-      callLabel / callLabelWithReturn / callLabelAt / jumpLabel
-      returnFromCall / switchToMemorySpace / reset
-      resolveCallableLabel / resolveJumpTarget / resolveJumpToScript
-      firstLabel(state, view, name, callableOnly, onlyScript)  ' 唯一择一规则：全序第一条
-      firstGotoLabel(view, name, script, segment)  ' GOTO：非 @ + 同脚本 + 同段
-      executionScope / executionScopeId
-      setLineInternal / pushFrame / popFrame / lineCount   ' 基元
-    }
-  }
-}
+title 装载期类型边界
 
 package "Content" {
   class ErbLoader {
-    + loadFile(path, root) : bool
-    + loadDirectory(dir, depth) : bool
-    + loadDirectoryAsync(dir, depth)
+    + loadDirectory(dir) : bool
+    + loadAsync(dir)
+    + loadFile(path)
+    .. loadProgress / loadCompleted ..
   }
 
-  class ConstantTable {
-    - m_tables : QHash
-    + loadCsvDirectory(tree, recursive)
-    + indexForVariable(variable, name) : int
-    + count(csvName) : int
-  }
+  class SourceText
+  class DeclarationScan
 }
 
-package "GameData" {
-  class VariableTable {
-    + addChecked(decl) : DeclStatus
-    + find(name, function) : VariableDecl*
-    + typeOf(name, function) : OperandType
-    + buildPrivateNameTable() : PrivateNameTable
-    + dimensionsResolved() : bool
-    {static} + applyTypes(ast, table, function, paramNames)
-  }
-
-  class PrivateNameTable <<eravar>> {
-    scopeId → (名字(大写) → "FUNC\x1fNAME")
-    ' 装载期由声明一次建好；运行期只读
-  }
-
-  struct VariableDecl {
-    name / type / scope / function
-    dimension : int
-    lengths : QList
-    isPrivate / isConst / isArg
-  }
-
-  class VariableConfig {
-    + getSize1D(name) : int
-    + getSize2D(name) : QPair
-    + getSize3D(name) : QVector
-    + loadFromText(text) : bool
-    ' loadDefaults() = VariableSize.csv 缺省值的唯一事实（PALAM 200 / CFLAG 1000 /
-    ' EE 内置角色变量 DOWNBASE・CUP・CDOWN = 100，对齐 C# CharacterIntArrayLength 初值）。
-    ' 漏登记 = 每角色块长回落成 1 -> `CUP:x:11` 一律「越界（忽略）」，静默丢数据。
-  }
-
+package "GameData/ast" {
   class AstBuilder {
-    {static} + build(raw, pos, resolver) : LogicalLine
-    {static} + registerExtensionStatement(name)
+    + build(source, position, resolve) : LogicalLine
   }
-
+  class LogicalLine
+  class VariableTable
   class ParseDiagnostics
 }
 
-EraEngine *-- EraParseTable
-EraEngine --> ConstantTable : 装载名表
-ErbLoader ..> AstBuilder : 逐行 build
-ErbLoader --> EraParseTable : loadScript
+package "GameProc" {
+  class EraParseTable {
+    + loadScript(name, lines, isHeader) : bool
+    + buildScriptAst(name, lines) : BuiltScript
+    + runLoadPasses()
+    + lineAt(script, line) : LogicalLine*
+    - m_loadPasses : QList<LoadPass>
+  }
+  class LoadPass
+  class ParseChecks
+}
+
+ErbLoader --> SourceText : read / preprocess
+ErbLoader --> DeclarationScan : scan declarations
+ErbLoader --> AstBuilder : build lines
+AstBuilder --> LogicalLine
 EraParseTable *-- VariableTable
-EraParseTable *-- LoadPass : m_loadPasses（表即流程）
-EraParseTable --> LoadPhase : m_phase
-VariableTable ..> PrivateNameTable : buildPrivateNameTable()
-EraParseTable --> ParseDiagnostics : 诊断累积
-EraParseTable ..> ConstantTable : 名表下标
-EraParseTable ..> ParseIrView : makeIrView()
-ParseIrView <.. FreeFns : const 输入
-EraParseTable ..> FreeFns : 4/5/6 forwarder
-EraParseTable ..> DeclFns : buildScriptAst / loadScript（声明前置）
-ErbLoader ..> DeclFns : preRegisterDeclarations / scanVariableTypes
-AstBuilder ..> DeclFns : labelNameEnd()（标签名判据共用）
-EraParseTable ..> LoadContext : makeLoadContext()
-EraParseTable ..> WriteFns : 表项 1/2/3 直连（无 forwarder）
-EraParseTable ..> JumpFns : loadScript 末尾建表（类内无成员入口）
-EraParseTable *-- PositionState : m_position（纯数据）
-EraParseTable ..> PosFns : 位置推进的 11 个壳子
-EraParseTable --> PositionEffects : emitEffects 按它发信号
-PosFns ..> PositionState : 读写（唯一的转移实现）
-PosFns ..> ScriptView : 只读两张表
-PosFns ..> PositionEffects : 置「发哪个」
-VariableTable *-- VariableDecl
-EraParseTable --> VariableConfig : 尺寸 / 维数
+EraParseTable *-- ParseDiagnostics
+EraParseTable *-- LoadPass
+EraParseTable --> ParseChecks : read-only checks
+EraParseTable --> LogicalLine : owns script lines
+ErbLoader --> EraParseTable : merge loaded scripts
+AstBuilder --> VariableTable : resolve declarations
+LoadPass --> VariableTable : finalize types and scopes
+LoadPass --> ParseDiagnostics : pass-owned sink
+ParseChecks --> ParseDiagnostics : pass-owned sink
 
-note bottom of EraParseTable
-  收尾由 m_loadPasses[7] 驱动（表即流程，顺序即执行顺序）：
-  1/6 resolveGlobalDeclarationsStep（声明定稿 + 标签索引）  loadpass · 改状态
-  2/6 finalizeBindings（含 applyVariableTypes）             loadpass · 改状态
-  3/6 finalizeValidation（表达式 / 常量下标 / 实参）        loadpass · 改状态
-  4/6 resolveStaticTargets（CALL / GOTO / TRY*）           只读
-  5/6 checkStructures（IF / FOR / REPEAT 配对）             只读
-  6/6 checkStaticValues（除零 / 负下标 / 尺寸 / 名字表）    只读
-  7 checkNotCalledFunctions（gate = NotCalledWarning）      只读
-  markLoadComplete 只是「遍历表 + isGateOpen + 计时日志 + m_phase」；
-  每步只有一种调用写法 run(ctx, sink) —— 没有「哪一种形态」的分派。
-  阶段随 phaseAfter 推进：Empty → Loading → Bound → Finalized。
-
-  诊断也由表决定归属：每个 pass 建独立 sink，运行与否都
-  replaceOrigin(pass.origin, sink) —— 切片身份是 pass 编号，不是
-  「谁先跑」。重收尾 == 一次性装载；gate 跳过 = 切片置空（不残留）。
-
-  4/5/6 的实现已搬出本类：本类只剩一行 forwarder，
-  真正的算法在 parsecheck 的自由函数里（输入是 ParseIrView）。
-  1/2/3 的实现也已搬出：表项直接指向 loadpass 的自由函数，
-  输入是可写的 LoadContext，类内不再有它们的成员入口。
-
-  装载之外的两块也搬走了：
-  · 声明扫描 → declscan（四条消费路径共用一份「哪行是声明」判据；类型只有 m_variables 一份）；
-  · 标记区 → jumpmark（构建吃 ScriptData&，读侧是 inline 查表）；
-    配对语法只判一次（buildJumpMarkings），5/6 只把 StructureIssue 翻成诊断；
-  · 位置区 → position（状态是 PositionState，转移只置 Effects 的位，
-    本类只剩「打包视图 + emitEffects」）。
-  本类只剩「解析入口 + pass 表 + 阶段机 + 位置区壳子 + getter」。
-  7 仍在本类：它的 gate 开关是解析表的装载选项。
+note right of ErbLoader
+  Content owns file decoding, preprocessing and directory traversal.
+  It does not own runtime execution or QML presentation.
 end note
 
-note right of PosFns
-  位置区的复杂度落在三样**数据**上：
-  · PositionState —— 执行位置 + 调用栈（栈深就是 callStack.size()，
-    depth() 是这个集合的公开名字，不是第二份副本）；
-  · PositionEffects —— 一次转移要广播哪四个信号（不含顺序）；
-  · ScriptView —— 它只读的两张表（scripts / labelIndex），
-    不复用 ParseIrView（那 5 个字段位置区一个都不读）。
-  「裸标签属于哪个脚本」只有一张索引、一个全序（脚本名 → 行号）、
-  一个择一规则（firstLabel 取全序第一条）。CALL / GOTO / getLabelPosition /
-  hasLabel 全都查它，所以同一个名字只有一个行号。
-  GOTO 的段身份也在这张表上（LabelRef::functionLine）：装载期写、运行期只比字段。
-  顺序由壳子的 emitEffects 写死（规范序 callStack → space → position → jump），
-  clear() 是唯一的反序例外（position 先、callStack 后），
-  两条都由 test_position_state 录信号钉住。
+note right of EraParseTable
+  This is the load orchestration boundary. It owns the script table,
+  phase transitions and pass ordering; pass implementations live in
+  GameProc/load_passes and parse_checks.
 end note
 
-note right of ParseIrView
-  视图全部 const：编译期就禁止写。
-  · 4/5/6 只需 scripts / variables / constantTable
-    （另加 functions：RETURNF 与 CALL 实参校验要用户函数表）
-  · storage 是 const*，收尾对变量存储确实纯只读
-  · 标签名并集（4/6 的 hasLabel 判定）直接读 labelIndex 的键，
-    不再逐脚本二次求并集 —— 索引本来就是「全库标签名」的并集
-  · 原来的 hasLabel() 带 mutable 缓存；缓存随标签索引一起消失
-end note
+legend bottom
+  One responsibility per layer:
+  Content reads, GameData/ast represents, GameProc finalizes.
+  Runtime diagrams begin at 02-runtime-step.
+endlegend
 @enduml

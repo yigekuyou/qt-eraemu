@@ -1,0 +1,105 @@
+@startuml 06-expression-ast
+!pragma layout smetana
+' 装载后的表达式结构。变量解析与容器布局分别见 07-variable-resolution、08-variable-storage。
+' 来源：GameData/ast/logical_line.h, expression_ast.h, ast_builder.h
+
+title GameData/ast：表达式 AST
+
+package "GameData/ast" {
+  class LogicalLine {
+    + kind : LineKind
+    + runnerInstruction : RunnerInstruction
+    + arguments : QList<Operand>
+    + condition : ExpressionNode*
+    + assignmentAsts : QList<ExpressionNode*>
+    + conditionNeedsScope : bool
+    + ownerFunction : QString
+    + scopeKey : QString
+  }
+
+  struct Operand {
+    + raw : QString
+    + ast : ExpressionNode*
+    + isVariable : bool
+  }
+
+  abstract class ExpressionNode {
+    + kind() : NodeKind
+    + valueType() : OperandType
+  }
+
+  class LiteralNode
+  class BinaryOpNode
+  class UnaryOpNode
+  class FunctionNode
+  class IfNode
+  class StrFormNode {
+    + parts : QList<StrFormPart>
+  }
+
+  class VariableNode {
+    + name : QString
+    + dimension : int
+    + lengths : QList<int>
+    + accessKind : AccessKind
+    + accessKey : VariableKey
+  }
+
+  struct VariableKey {
+    + scopeId : quint32
+    + nameId : quint32
+    + isPrivate() : bool
+  }
+
+  enum AccessKind {
+    Dynamic
+    GlobalInt / GlobalStr
+    LocalSlot / ArgSlot
+    LocalStr / ArgStr
+    Param / Pseudo / System / Chara / Const
+  }
+
+  class AstBuilder {
+    + build(source, position, resolve) : LogicalLine
+    + buildScriptAst(script, lines) : BuiltScript
+  }
+
+  class EraParseTable {
+    + buildScriptAst(script, lines)
+    + lineAt(script, line) : LogicalLine*
+  }
+}
+
+LogicalLine *-- Operand
+LogicalLine *-- ExpressionNode : condition / assignments
+Operand --> ExpressionNode
+ExpressionNode <|-- LiteralNode
+ExpressionNode <|-- BinaryOpNode
+ExpressionNode <|-- UnaryOpNode
+ExpressionNode <|-- FunctionNode
+ExpressionNode <|-- IfNode
+ExpressionNode <|-- StrFormNode
+ExpressionNode <|-- VariableNode
+VariableNode *-- VariableKey
+VariableNode ..> AccessKind : load-time classification
+EraParseTable ..> AstBuilder : one script AST entry point
+
+note right of LogicalLine
+  Declaration scanning supplies the variable table before
+  script AST construction. The runtime consumes these nodes;
+  it does not reparse source text or rebuild assignment ASTs.
+end note
+
+note bottom of VariableKey
+  VariableKey is an integer identity pair. The segment identity
+  is stored in scopeKey during loading and interned when a call
+  frame becomes active. Storage key construction belongs to
+  08-variable-storage and the save map.
+end note
+
+legend bottom
+  AST ownership: GameData/ast.
+  Name resolution: 07-variable-resolution.
+  Storage loci and array geometry: 08-variable-storage.
+endlegend
+@enduml

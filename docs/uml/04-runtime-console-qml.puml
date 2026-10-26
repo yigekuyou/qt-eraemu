@@ -1,0 +1,129 @@
+@startuml 04-runtime-console-qml
+!pragma layout smetana
+' 运行时责任 3/4：输出、输入桥接与 QML 呈现
+' 来源：eraengine.cpp, GameProc/execution_engine.h, GameView/console_backend.h,
+'       GameView/system_status_manager.h, GameView/input_handler.h, qml/Console.qml,
+'       qml/ConsoleInput.qml
+
+title 运行时：控制台与 QML 展示链
+
+package "GameProc" {
+  class ExecutionEngine {
+    .. output signals ..
+    + consolePrint(text, newline)
+    + consoleReuseLastLine(text)
+    + consolePrintTemplate(output)
+    + requestAnyKey()
+    + consolePrintButton(text, intValue, strValue, isString)
+    + clearTextBox()
+  }
+
+  class ScriptRunner {
+    .. input signals ..
+    + inputRequested(kind, defaultValue)
+    + suspended(state)
+  }
+
+  class EraEngine {
+    + provideInput(value)
+    + provideInputString(value)
+    + provideMouseKey(type, r1, r2, r3, r4)
+    + executeConsoleCommand(text)
+    .. Q_PROPERTY console / statusManager / inputHandler ..
+  }
+
+  class SystemStatusManager {
+    + onScriptStarted(script)
+    + onScriptFinished()
+    + onError(message)
+    + onStateChanged(state)
+    .. statusChanged() ..
+  }
+}
+
+package "GameView" {
+  class ConsoleBackend <<QAbstractListModel>> {
+    + inputKind : QString
+    + waitingInput : bool
+    + anyKeyInput : bool
+    + stringInput : bool
+    + oneInput : bool
+    + framePacingAttached : bool
+    + lineModel / historyModel / stageModel
+    + notifyInputRequested(kind, defaultValue)
+    + notifyInputCommitted()
+    + submitInput(value)
+    + submitInputString(value)
+    + submitAnyKey()
+    + submitMouseKey(...)
+    + notifyFramePresented()
+    .. inputRequested(kind) ..
+    .. inputSubmitted(value) ..
+    .. inputSubmittedString(value) ..
+    .. presentationRequested() ..
+    .. framePresented() ..
+    .. generationChanged() ..
+  }
+
+  class InputHandler {
+    + setInputResult(result)
+    + waitForInput() : int
+  }
+}
+
+package "QML" {
+  class QmlConsole
+  class QmlInput
+  class QmlMain
+
+  note right of QmlConsole
+    backend : ConsoleBackend
+    generationChanged -> capture
+    framePresented -> backend.notifyFramePresented()
+  end note
+
+  note right of QmlInput
+    submit()
+    submitText(text)
+    handleTextEdited()
+    TextField.onAccepted
+    TextField.onTextEdited
+  end note
+
+  note right of QmlMain
+    eraEngine : EraEngine
+    contains Console and ConsoleInput
+  end note
+}
+
+ExecutionEngine ..> EraEngine : Qt signals
+ScriptRunner ..> EraEngine : inputRequested
+EraEngine --> ConsoleBackend : print / notify input
+ConsoleBackend ..> EraEngine : submitted input
+EraEngine --> SystemStatusManager : state and execution signals
+EraEngine --> InputHandler : QML-owned compatibility input
+QmlMain *-- QmlConsole
+QmlMain *-- QmlInput
+QmlConsole --> ConsoleBackend : models / properties
+QmlInput --> ConsoleBackend : submit*()
+ConsoleBackend ..> QmlConsole : presentationRequested / framePresented
+
+note right of ConsoleBackend
+  ConsoleBackend is the single convergence point for input:
+  integer, string, any-key, mouse-key and button paths all
+  finish by ending the wait and emitting one submission signal.
+  QML reads inputKind/waitingInput and never infers the kind
+  from a SystemStateCode.
+end note
+
+note bottom of QmlConsole
+  generationChanged invalidates stale buttons and drives capture.
+  presentationRequested is the frame-pacing handshake:
+  QML builds the delegates, then calls notifyFramePresented().
+end note
+
+legend bottom
+  ConsoleBackend owns console state; QML owns view composition;
+  EraEngine owns cross-layer signal wiring; SystemStatusManager owns status state.
+endlegend
+@enduml

@@ -1,104 +1,78 @@
 @startuml 00-overview
-' 无 graphviz(dot) 时用 PlantUML 内置 smetana 布局引擎（有 dot 可删掉这两行）
 !pragma layout smetana
-' emuera —— 架构总览：装载期一次定型，运行期只做存取
-' 渲染：plantuml -tpng docs/uml/00-overview.puml
+' 只描述模块边界和依赖方向；每个运行期责任有自己的图。
 title emuera 架构总览
 
-package "装载期 GameProc（一次性）" {
-  [EraEngine 顶层编排] as Engine
+package "Content" {
+  [ERB / CSV / 编码输入] as ContentInput
   [ErbLoader] as Loader
-  [AstBuilder 表达式解析] as Builder
-  [EraParseTable\n脚本表 + 变量表 + 诊断\n解析入口 + pass 表 + 阶段机] as Table
-  [收尾流水线\npass 表 m_loadPasses 7 条] as Finish
-  [parsecheck\n4/5/6 只读检查（自由函数）\n输入 ParseIrView] as Checks
-  [loadpass\n1/2/3 写步骤（自由函数）\n输入 LoadContext] as Writes
-  [jumpmark\n标记区（自由函数）\n行字段 jumpTo + 配对索引（无第二份副本）] as Mark
-  [position\n位置区（自由函数）\n状态 PositionState + 效果 Effects] as Pos
 }
 
-package "内容与配置（Content）" {
-  [ConstantTable\n常数名表 CSV] as Consts
-  [VariableConfig\nVariableSize.csv + 默认表] as Config
+package "GameData/ast" {
+  [AstBuilder / LogicalLine] as AST
+  [ParseDiagnostics] as Diagnostics
+  [VariableTable / NameInterner] as Declarations
 }
 
-package "运行期 GameProc" {
-  [ExecutionEngine 语句执行] as Exec
-  [ScriptRunner 状态机 stepOnce] as Runner
-  [ProcessState 运行上下文] as State
+package "GameProc" {
+  [EraEngine 装配] as Engine
+  [EraParseTable 装载编排] as Table
+  [loadpass / parsecheck] as Passes
+  [ScriptRunner 步进] as Runner
+  [SystemStateMachine 系统状态] as System
+  [ExecutionEngine 指令语义] as Execution
 }
 
-package "数据与求值 GameData" {
-  [AST（装载期分词的 LogicalLine）] as AST
-  [VariableStorage 全部运行时容器\n唯一按名原语 read/writeIntByName] as Storage
-  [ExpressionEvaluator\nresolver 表 20 行 + 唯一分派 read/writeIntNode] as Eval
-  [erasave::Map\n存档条目表（声明 → Entry）\n文件里只写裸名] as Save
+package "GameData/Variable" {
+  [VariableStorage 容器] as Storage
+  [erasave::Map 条目映射] as SaveMap
+  [EraBinaryData 文件格式] as Binary
 }
 
-Loader ..> Builder : 逐行 build
-Loader --> Table : loadScript(name, lines)
-Builder --> AST
-Finish ..> Table : 七条 pass，产出诊断
-Table --> Finish
-Finish ..> Checks : 4/5/6 转调
-Finish ..> Writes : 1/2/3 转调（表项直连，无 forwarder）
-Table ..> Mark : loadScript 末尾建表
-Table ..> Pos : 位置推进的 11 个壳子（打包视图 → 调用 → 按 Effects emit）
-Consts --> Table : 名表下标 / 字面名字校验
-Config --> Table : 尺寸 / 维数 / 类型
-Exec --> Runner
-Runner --> AST : 取行（已分词）
-Runner --> Storage : 按名原语（Dynamic 时）
-Runner --> Eval : 表达式求值（显式 ScopeId）
-Eval --> Storage
-Storage --> Save : capture/apply
-Exec ..> Save : 存档入口检查 SaveReadiness
-Table --> AST : 定型
+package "GameView / QML" {
+  [ConsoleBackend] as Console
+  [SystemStatusManager] as Status
+  [Console.qml / ConsoleInput.qml] as Qml
+}
 
-note right of Finish
-  装载期一次定型（尽量把名字解析前移）：
-  * 类型 / 维数 / 长度
-  * 访问描述符 AccessKind（16 值）+ VariableKey{scopeId, nameId}
-    —— 身份是两个 intern id，不是「函数名 + 0x1F + 名字」串
-  * 类别定型：形参 / 伪变量 / 系统槽 / 角色 / 常数 各有 kind
-  * 标签索引 / 函数表 / 形参名集合
+ContentInput --> Loader
+Loader --> AST : source lines
+Loader --> Table : scripts
+AST --> Declarations : typed descriptors
+Table --> Passes : ordered finalization
+Passes --> Diagnostics
+Table --> Runner : finalized lines
+Engine --> Table
+Engine --> Execution
+Engine --> Runner
+Engine --> System
+Runner --> Execution
+Runner --> System : frame-floor handoff
+Execution --> Storage
+System --> Storage : host callbacks
+Storage --> SaveMap
+Storage --> Binary
+Execution ..> Console : output signals
+System ..> Console : input requests
+Console <--> Qml : properties / submissions
+Engine --> Status : signal wiring
 
-  运行期只剩两条通路，且各只有一份实现：
-  * 描述符直达槽位（readIntNode / writeIntNode 查表）
-  * 按名原语（readIntByName / writeIntByName，作用域显式传入）
-
-  Dynamic 只留给「有系统元数据但无系统存储槽」
-  的裸名：真实语料 eraTW 0.5% / FL3.8 0.3%。
-
-  收尾三层，各自只有一份实现、输入类型不同：
-  4/5/6 只读检查 → parsecheck，输入 ParseIrView（全 const）；
-  1/2/3 写步骤 → loadpass，输入 LoadContext（纯数据、可写视图）；
-  7 仍在本类（gate 开关是装载选项）。
-
-  运行期两块同样各自只有一份实现：
-  标记区 → jumpmark，输入 ScriptData&（构建）/ const ScriptData*（查表）；
-  位置区 → position，状态是 PositionState（纯数据），转移只置
-  PositionEffects 的位，类里只剩「打包视图 + 按 Effects emit」的壳子。
-  EraParseTable 只剩「解析入口 + pass 表 + 阶段机 + 位置区壳子 + getter」。
-
-  并行也是数据形状决定的：3/6 与 4/5/6 都是「逐脚本独立 + 只写自己的诊断」，
-  驱动一律「脚本名排序 → 每任务独占 ParseDiagnostics → 按名字序归并」。
-  实测 eraTW：4/5/6 10.5s → 1.9s，3/6 9.1s → 1.7s（12 线程）。
-
-  协议也是数据：m_loadPasses 每项带 origin（该步拥有的诊断切片），
-  且只有一个可调用体（空状态不可表达）。
-  每步建独立 sink，运行与否都 replaceOrigin —— 重收尾 == 一次性装载；
-  gate 跳过 = 切片置空。增量追加是显式的 beginIncrementalLoad()，
-  Finalized 后直接 loadScript = 拒绝（不再偷偷把阶段改回 Loading）。
-
-  「裸标签属于哪个脚本」只有一张索引：名字（大写折叠）→ 全部声明的全序
-  （脚本名 compare → 行号）。CALL / GOTO / getLabelPosition / hasLabel
-  同一个答案（firstLabel 取全序第一条）。
-
-  阶段机显式：Empty → Loading → Bound → Finalized。
-  pass 表的 gate / phaseAfter 是数据；
-  越界调用 = qWarning + no-op（不 assert、不写诊断）。
-  私有名表在装载期由声明建好并安装，
-  运行期换函数只记当前帧，不再建表。
+note right of Runner
+  02-runtime-step：步进、调用栈、ExecState。
+  03-runtime-system：系统状态、输入等待、帧节拍。
+  04-runtime-console-qml：输出、输入桥接、QML 呈现。
+  05-runtime-save-load：存档运行时集成。
 end note
+
+note bottom of Storage
+  06-expression-ast：AST 结构。
+  07-variable-resolution：名字到 locus 的唯一解析顺序。
+  08-variable-storage：容器、几何和 save map。
+  11-save-format：文件格式和版本兼容。
+end note
+
+legend bottom
+  目录边界：Content 读入；GameData 保存值和结构；GameProc 驱动；
+  GameView/QML 呈现；platform 管理窗口和系统集成；tools 提供协议服务。
+endlegend
 @enduml

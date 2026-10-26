@@ -1,0 +1,122 @@
+@startuml 05-runtime-save-load
+!pragma layout smetana
+' 运行时责任 4/4：系统存档画面、指令存档和变量快照
+' 来源：GameProc/system_state_machine.h, execution_engine.h,
+'       GameData/Variable/variable_storage.h, GameData/era_binary_data.h, eraengine.cpp
+
+title 运行时：存档与读档集成
+
+package "GameProc" {
+  class ScriptRunner {
+    + executeLine(SAVEGAME / LOADGAME)
+    + onInputProvided(value)
+  }
+
+  class SystemStateMachine {
+    + requestSaveLoad(save)
+    + resume(value)
+    + beginSaveGame()
+    + beginLoadGame()
+    + saveGameWaitInput()
+    + loadGameWaitInput()
+    - m_prevStates : QList<SystemStateCode>
+    .. SaveGame_* / LoadGame_* states ..
+  }
+
+  struct SystemHost {
+    + saveDataNos() : int
+    + checkData(index, message) : bool
+    + saveTo(index, text) : bool
+    + loadFrom(index) : bool
+    + saveData / loadData callbacks
+  }
+
+  class ExecutionEngine {
+    + reloadSaveSnapshots()
+    + loadSaveSnapshot(index) : bool
+    + writeSaveSnapshot(index, description) : bool
+    + checkSaveSnapshot(index) : int
+    + handleSaveData(line)
+    + handleLoadData(line)
+    + SAVEGLOBAL / LOADGLOBAL
+    + SAVEDATA / LOADDATA
+  }
+
+  class EraEngine {
+    + reloadSavedData()
+    + buildSystemHost()
+    + provideInput(value)
+  }
+}
+
+package "GameData/Variable" {
+  class VariableStorage {
+    + captureBinarySave(type, chars) : Document
+    + applyBinarySave(document)
+    + saveReadiness() : SaveReadiness
+    + resetForNewGame()
+    + readSaveEntry(entry, slot)
+    + writeSaveEntry(entry, slot, value)
+  }
+
+  class VariableTable
+  class "erasave::Map" as SaveMap {
+    + build(config, variableTable, type)
+    + findByName(name) : Entry
+  }
+}
+
+package "GameData" {
+  class "EraBinaryData::Document" as Document {
+    + encode()
+    + encodeText()
+    + decode()
+    + decodeText()
+    + Version = 1809
+  }
+  class SaveFile <<sav/*.sav>>
+}
+
+ScriptRunner --> SystemStateMachine : SAVEGAME / LOADGAME
+SystemStateMachine *-- SystemHost : injected callbacks
+SystemStateMachine --> EraEngine : host callbacks are assembled here
+SystemStateMachine --> ExecutionEngine : save/load snapshot callback
+SystemStateMachine --> SystemStateCode : SaveGame_* / LoadGame_*
+EraEngine --> SystemStateMachine : provide input / run
+EraEngine --> ExecutionEngine : reloadSavedData
+ExecutionEngine --> VariableStorage : capture/apply
+ExecutionEngine --> Document : encode/decode
+VariableStorage --> SaveMap : entries and loci
+SaveMap --> VariableTable : SAVEDATA declarations
+Document --> SaveFile
+
+note right of SystemStateMachine
+  SAVEGAME / LOADGAME are system flows:
+  requestSaveLoad() stores the return state,
+  enters SaveGame_Begin or LoadGame_Begin,
+  waits for a slot, then calls the SystemHost callback.
+  The callbacks keep UI state handling out of storage.
+end note
+
+note bottom of ExecutionEngine
+  SAVEGLOBAL/LOADGLOBAL and SAVEDATA/LOADDATA
+  are instruction-level paths. SAVEGAME/LOADGAME
+  select a normal snapshot through SystemStateMachine.
+  All variable snapshots converge on VariableStorage's
+  captureBinarySave/applyBinarySave pair.
+end note
+
+note right of Document
+  Version is a single format contract. Decode rejects
+  incompatible or corrupt data atomically; the caller may
+  treat an unsupported slot as overwriteable empty data.
+  Private SAVEDATA keys are made by the save mapping layer
+  from segment identity and name; this diagram leaves the
+  key construction to 11-save-format.
+end note
+
+legend bottom
+  This diagram describes runtime integration only. File encoding,
+  private key spelling and entry ordering are documented in 11-save-format.
+endlegend
+@enduml

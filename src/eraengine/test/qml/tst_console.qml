@@ -147,6 +147,35 @@ TestCase {
         }
     }
 
+    // 提交后的「回显」归属：**只在输入栏**，正文只留一条空白记账行。
+    // C# 的做法是 richTextBox1 清空 + 正文 Print(str)（正文是唯一能留下值的地方）；
+    // 本移植的输入栏一直存在且 TextInput.text 就是回显，正文再打印就是第二份副本。
+    // eraTW 的 CLEARLINE 16（15 行菜单 + 1 行回显）按**行**记账，所以行必须留下。
+    function test_submitKeepsValueInInputBarNotInBody() {
+        const field = findChild(inputBar, "consoleInputField");
+        verify(field !== null, "输入栏里的输入框");
+        // 模拟引擎：提交值 -> 唯一的提交收尾入口（正文定型占位行 + 结束等待）
+        const onSubmit = function(v) { consoleFixture.finishInputCommitted(backend); };
+        backend.inputSubmitted.connect(onSubmit);
+
+        backend.clearAll();
+        backend.print("[A]"); backend.newline();
+        consoleFixture.request(backend, "INPUT");
+        compare(backend.lineCount, 1);
+
+        field.text = "123";
+        inputBar.submit();
+        compare(backend.lineCount, 2, "提交后正文多一条逻辑行（CLEARLINE 记账）");
+        compare(backend.lineText(0), "[A]");
+        compare(backend.lineText(1), "", "正文里没有提交值的副本");
+        compare(field.text, "123", "提交值留在输入框里（这就是回显）");
+        compare(backend.waitingInput, false, "提交结束等待");
+        // 下一次等待开始 = 上一轮回显到期：清空，避免空回车把旧值再交一次
+        consoleFixture.request(backend, "INPUT");
+        compare(field.text, "", "新一次等待开始时清空输入框");
+        backend.inputSubmitted.disconnect(onSubmit);
+    }
+
     // 模型行数与视图行数一致（小内容时委托全部存活）
     function test_modelRowsAndDelegates() {
         printLines(3);
@@ -1057,7 +1086,14 @@ TestCase {
         keyClick("7");
         compare(spy.count, 1, "收到第 1 个字符就提交");
         compare(spy.signalArguments[0][0], 7);
-        compare(field.text, "", "提交后输入栏清空");
+        // 回显归属（刀 68）：提交值留在输入栏（TextInput.text 就是回显），
+        // 正文只留一条空白记账行；下一次等待开始时才清空。
+        compare(field.text, "7", "提交的字符留在输入栏（回显）");
+        // 真实路径里提交会经引擎收尾（notifyInputCommitted -> waitingInput=false），
+        // 这里补上那一步，再造「下一次等待开始」的上升沿。
+        consoleFixture.finishInput(backend);
+        consoleFixture.request(backend, "TONEINPUT");
+        compare(field.text, "", "下一次等待开始时清空输入栏");
         spy.destroy();
     }
 

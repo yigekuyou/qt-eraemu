@@ -37,6 +37,8 @@ FocusScope {
     // C# MainWindow.last_inputed：等待开始时的输入栏内容。只有**新增**字符
     // 才算「输入」（删除或内容不变不提交）。
     property string lastInputed: ""
+    // 上一刻的等待状态：用来识别「新一次等待开始」（等待的上升沿）。
+    property bool waitingPrev: false
     // 固定高度，placeholder、validator、waitingInput 均不能改变底栏尺寸。
     implicitHeight: Math.max(24, fontSize + 8)
     focus: true
@@ -48,7 +50,7 @@ FocusScope {
         if (commandText.startsWith("\\")) {
             if (root.engine)
                 root.engine.executeConsoleCommand(commandText);
-            inputField.text = "";
+            inputField.clear();
             return;
         }
         if (!backend.waitingInput || root.titleActive || backend.inputKind === "INPUTMOUSEKEY")
@@ -56,16 +58,23 @@ FocusScope {
         // 任意键型等待（WAIT/WAITANYKEY/FORCEWAIT/ANYKEY）：回车即继续，输入内容不使用
         if (anyKeyInput) {
             backend.submitAnyKey();
-            inputField.text = "";
+            // TextInput 文档：清空输入用 clear()，而不是 text = ""
+            //（它同时丢弃输入法的未提交串，中文输入法下才不会留残影）。
+            inputField.clear();
             return;
         }
         // 与 C++ 的 inputExpectsString 同源：INPUTS / SINPUTS / TONEINPUTS / ARGS 系
         // 都是字符串型输入，其余（INPUT/TINPUT/ONEINPUT…）走整数校验。
         // 交由 C++ 判定空输入 / 非法输入（对齐 C# doInputToEmueraProgram）：
         // 空回车在「有缺省值」时交缺省值，没有缺省值则忽略。
+        // 提交值**不**清空、也不打进正文：输入框本身就是回显（TextInput.text
+        // 在 echoMode == Normal 时就是显示内容，见 Qt 文档 TextInput）。
+        // C# 之所以清空 richTextBox1 再 Print(str) 到正文，是因为那边正文是
+        // 唯一能留下值的地方；本移植的正文只留记账占位行（见 C++
+        // ConsoleBackend::notifyInputCommitted），所以值就留在原处。
+        // 清空改由「下一次等待开始」负责（见 onWaitingInputChanged）。
         submitText(inputField.text);
-        inputField.text = "";
-        lastInputed = "";
+        lastInputed = inputField.text;
     }
 
     // 提交一段文本（不读输入栏）：回车路径与单字符即时提交共用。
@@ -109,24 +118,35 @@ FocusScope {
             return;
         }
         const typed = inputField.text.slice(lastInputed.length);
-        lastInputed = inputField.text;
-        inputField.text = "";
-        lastInputed = "";
+        // 同 submit()：键留在框里（就是回显），正文不再打印第二份；
+        // 下一次等待开始时才清空。基线在提交**之后**取 —— 若提交同步引发了
+        // 下一次等待（脚本循环），那时框已被清空，基线必须是清空后的值。
         submitText(typed);
+        lastInputed = inputField.text;
     }
 
     // 等待类型变化（开始等待 / 结束等待）以及脚本改文本框（SETTEXTBOX）时
     // 重设基线，避免把「上一轮残留的文本」当成这一轮的输入。
+    //
+    // 另外：**新一次等待开始**（上升沿）= 上一轮的输入回显到期 —— 清空输入框，
+    // 否则「空回车交缺省值」会把上一轮的值再提交一次。脚本用 SETTEXTBOX 给了
+    // 初值时保留它（那是这次输入的起点，不是回显）。
     Connections {
         target: root.backend
-        function onWaitingInputChanged() { root.lastInputed = inputField.text; }
+        function onWaitingInputChanged() {
+            const waiting = root.backend.waitingInput;
+            if (waiting && !root.waitingPrev && root.backend.textboxText() === "")
+                inputField.clear();
+            root.waitingPrev = waiting;
+            root.lastInputed = inputField.text;
+        }
         function onTextboxTextChanged() { root.lastInputed = inputField.text; }
     }
 
     // CLEARTEXTBOX（C# Console.ClearTextBox）：清空输入栏内容
     Connections {
         target: root.backend
-        function onClearTextBoxRequested() { inputField.text = ""; }
+        function onClearTextBoxRequested() { inputField.clear(); }
         function onTextboxTextChanged(text) { inputField.text = text; }
     }
 

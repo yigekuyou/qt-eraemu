@@ -284,6 +284,40 @@ int main(int argc, char* argv[]) {
         check(value == 10, "new prompt remains clickable after automatic completion");
     }
 
+    // ---- 提交收尾：正文只留「记账占位行」，不打印提交值 ----
+    // C# doInputToEmueraProgram 结尾是 Print(str) + PrintFlush(false)，因为 C# 的
+    // 输入框在提交时就被清空、正文是唯一能留下值的地方。本移植的值显示在 QML
+    // 输入栏（TextInput），正文再打印一遍就是同一事实的第二份副本（「输出两次」）。
+    // 但**行**必须留下：eraTW 的 CLEARLINE 16（15 行菜单 + 1 行回显）按行删。
+    {
+        ConsoleBackend c;
+        c.print("[A]");
+        c.newline();
+        check(c.buffer().count() == 1, "前提：一行正文");
+        c.notifyInputRequested("INPUT");
+        c.notifyInputCommitted();
+        check(c.buffer().count() == 2, "提交后正文多一条逻辑行（CLEARLINE 记账）");
+        check(c.lineText(1).isEmpty(), "占位行不带提交值（值只在输入栏）");
+        check(!c.waitingInput(), "提交收尾结束等待");
+        // 未定型缓冲为空时也要产出行 —— 这就是 CLEARLINE 数的那一行
+        check(c.displayLineText(1).isEmpty(), "占位行显示为空");
+    }
+    {
+        // WAIT / ANYKEY 与 INPUTMOUSEKEY 没有 str（C# PrintFlush(false) 空操作），不占行
+        ConsoleBackend c;
+        c.print("[A]");
+        c.newline();
+        c.notifyInputRequested("WAIT");
+        c.notifyInputCommitted();
+        check(c.buffer().count() == 1, "WAIT 提交不产出行");
+        c.notifyInputRequested("INPUTMOUSEKEY");
+        c.notifyInputCommitted();
+        check(c.buffer().count() == 1, "INPUTMOUSEKEY 提交不产出行");
+        // 未在等待时调用：无副作用
+        c.notifyInputCommitted();
+        check(c.buffer().count() == 1, "非等待状态下提交流程无副作用");
+    }
+
     // ---- 输入类型 ↔ 按钮类型的裁决（C# SelectedString / SelectedInteger）----
     // 用户现场：FL3.8 的 CHARACTER_EDIT 屏（BINPUTS，字符串输入）按钮全是整数
     // 按钮（[取消]=30000），旧规则「字符串输入只收字符串按钮」把整屏按钮变成死键。

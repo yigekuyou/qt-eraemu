@@ -107,6 +107,10 @@ public:
     Q_INVOKABLE void finishInput(QObject* object) {
         static_cast<ConsoleBackend*>(object)->notifyInputDone();
     }
+    // 提交收尾（有输入框的正常路径）：C++ 侧只有一个入口 notifyInputCommitted。
+    Q_INVOKABLE void finishInputCommitted(QObject* object) {
+        static_cast<ConsoleBackend*>(object)->notifyInputCommitted();
+    }
     Q_INVOKABLE QObject* createAudio(QObject* parent = nullptr) {
         return new AudioPipelinePool(parent);
     }

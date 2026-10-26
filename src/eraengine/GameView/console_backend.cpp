@@ -1093,37 +1093,32 @@ void ConsoleBackend::notifyInputDone() {
     emit waitingInputChanged();
 }
 
-// 带提交值的结束等待 = C# doInputToEmueraProgram 的收尾，顺序相同：
-// 写输入（调用方 resume 里做）→ 回显 → 继续执行。
+// 提交收尾 = C# doInputToEmueraProgram 的最后两步，顺序相同：
+// 写输入（调用方 resume 里做）→ 正文定型（PrintFlush）→ 继续执行。
 //
-// 回显必须在 ++m_generation **之前**：C# 的 newGeneration() 在
-// callEmueraProgram 末尾（DoScript 之后）才执行，所以回显行里的按钮带的是
-// 「提交前那一世代」—— 与屏幕上残留的旧按钮同命（不可点）。放在自增之后
-// 回显行就会长出**活**按钮，等于凭空多出一个可点的输入候选。
-void ConsoleBackend::notifyInputDone(const QString& echoText) {
+// 占位行必须在 ++m_generation **之前**：C# 的 newGeneration() 在
+// callEmueraProgram 末尾（DoScript 之后）才执行，所以提交那一刻定型出来的行
+// 属于「提交前那一世代」—— 与屏幕上残留的旧按钮同命（不可点）。顺序反了，
+// 这一行就会带**活**按钮，等于凭空多出一个可点的输入候选。
+void ConsoleBackend::notifyInputCommitted() {
     if (!m_waitingInput) return;
-    if (inputEchoEnabled()) echoInput(echoText);
+    if (inputAccountingLineNeeded()) sealInputAccountingLine();
     notifyInputDone();
 }
 
-// C# EmueraConsole.Print(str)：只往未定型缓冲追加，**不带换行**
-//（`if (string.IsNullOrEmpty(str)) return;` —— 空串不改缓冲）。
-void ConsoleBackend::echoInput(const QString& text) {
-    // PrintFlush(false)：`if (!force && printBuffer.IsEmpty) return;`
-    // —— 缓冲空时连「空行」也不产生（WAIT 之后紧跟 INPUT 时不会多出空行）。
-    if (text.isEmpty() && m_sealed.isEmpty() && m_pendingParts.isEmpty() && !m_pendingOpen)
-        return;
-    print(text);   // 空串是空操作：此刻只有「提示语还挂在未定型行上」这一种情形
-    // PrintFlush(false) 的等价物：**立即**把缓冲定型成一条显示行。
-    // 注意它不是「等下一句脚本的换行」——所以 CLEARLINE 数行时这一行已经
-    // 在缓冲里，eraTW 的 +1 才对得上。
+// C# EmueraConsole.PrintFlush(false) 的行效果：把未定型缓冲立刻定型成一条显示行。
+// 本移植**不**在这里 Print(str)：提交值由 QML 输入栏显示（TextInput.text 就是
+// 回显），正文再打印一份 = 同一事实两份副本。但**行**要留下 —— eraTW 的
+// `CLEARLINE 16`（15 行菜单 + 1 行回显）按行数删，少了这行每次刷新多删一行。
+void ConsoleBackend::sealInputAccountingLine() {
     newline();
 }
 
 // C# doInputToEmueraProgram 只在 state == WaitInput 且 InputType 为
 // IntValue/StrValue 时拿到非 null 的 str（WAIT/ANYKEY 系走
-// callEmueraProgram("")、INPUTMOUSEKEY 走 callEmueraProgram(null)）。
-bool ConsoleBackend::inputEchoEnabled() const {
+// callEmueraProgram("")、INPUTMOUSEKEY 走 callEmueraProgram(null)）；
+// 那两条路 C# 结尾的 PrintFlush(false) 在缓冲为空时是空操作，不产出行。
+bool ConsoleBackend::inputAccountingLineNeeded() const {
     if (!m_waitingInput) return false;
     if (inputExpectsAnyKey(m_inputKind)) return false;
     return m_inputKind != QLatin1String("INPUTMOUSEKEY");

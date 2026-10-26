@@ -1916,10 +1916,10 @@ void EraEngine::provideInput(qint64 value)
 		// 再等输入）—— 引擎把 RESTART / GOTO 跑对即可。
 		// 用户操作交付：写入 RESULT/systemResult 并让状态机继续
 		qDebug() << "[input] provideInput" << value;
-		// 回显：C# doInputToEmueraProgram 结尾的 Print(str); PrintFlush(false)。
-		// str 对整数输入是十进制文本（按钮也是 SelectedString -> Input.ToString()），
-		// 所以键盘与按钮两条路在这里汇成同一句回显。
-		m_console.notifyInputDone(QString::number(value));
+		// 提交收尾：C# doInputToEmueraProgram 结尾的 PrintFlush(false) —— 正文留下
+		// 一条记账占位行（CLEARLINE 数行要用），提交值本身由 QML 输入栏显示，
+		// 不再往正文打印第二份（键盘 / 按钮 / 标题画面选择三条路共用这一处）。
+		m_console.notifyInputCommitted();
 		m_systemStateMachine.resume(value);
 }
 void EraEngine::provideInputString(const QString& value)
@@ -1927,8 +1927,8 @@ void EraEngine::provideInputString(const QString& value)
         if (isLoadingScripts()) return;
 		// 字符串输入：写入 RESULTS（局部字符串槽）后继续
 		qDebug() << "[input] provideInputString" << value;
-		// 同上：字符串等待的回显就是提交的字符串本身（C# str）。
-		m_console.notifyInputDone(value);
+		// 同上：字符串等待也只在正文留占位行（值在输入栏）。
+		m_console.notifyInputCommitted();
 		m_systemStateMachine.resumeString(value);
 }
 

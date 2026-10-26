@@ -364,6 +364,15 @@ public:
     // DefStrValue）。空回车时用它；无缺省则**忽略**这次回车（继续等输入）。
     void notifyInputRequested(const QString& kind, const QVariant& defaultValue = QVariant());
     void notifyInputDone();
+    // 提交成功的**唯一收敛点**（带提交值）：回显提交值，再结束等待。
+    // 对齐 C# EmueraConsole.doInputToEmueraProgram 结尾的
+    //     Print(str); PrintFlush(false);
+    // —— 玩家提交的输入作为一行显示出来（不带任何标记）。eraTW 的
+    // `CLEARLINE 16`（注释「LOOP01からのPRINTLの数+1」）就是按这一行算账：
+    // 没有它，菜单每次刷新都会多吃掉一行上一页的残行。
+    // 回显**不是**无条件：WAIT/ANYKEY 系（C# callEmueraProgram("")）与
+    // INPUTMOUSEKEY（callEmueraProgram(null)）没有 str，不回显。
+    void notifyInputDone(const QString& echoText);
 
     // ---- EE 文本框（GETTEXTBOX / SETTEXTBOX）--------------------------------
     // C# 直接读写主窗口输入框（MainWindow.ChangeTextBox / TextBox.Text）。
@@ -459,6 +468,11 @@ private:
     void ensureLineOpen();
     void appendPart(const ConsoleSpan& part);          // 追加到「未定型」串
     void sealSpan();                                   // 未定型 part → 段
+    // C# doInputToEmueraProgram 结尾的 `Print(str); PrintFlush(false);`：
+    // 追加到未定型缓冲（**不带换行**）+ 立即定型成一条显示行（缓冲空则什么都不做）。
+    void echoInput(const QString& text);
+    // 回显适用性：C# 只有 IntValue/StrValue 两种等待走「带 str」的提交路径。
+    [[nodiscard]] bool inputEchoEnabled() const;
     // 把「未定型」串按 ButtonStringCreator 切段（对齐 C# fromCssToButton）
     void flushPendingToSegments(QList<ConsoleSegment>& out) const;
     ConsoleDisplayLine buildLine() const;

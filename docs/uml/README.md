@@ -613,14 +613,28 @@ plantuml -txmi docs/uml/01-load-classes.puml
   脚本请求数）。
 - **假开关的定义**：开关指向它本该改变的那个非默认值才算开关。`dump_lines --parallel` 在默认改回
   并行后 `setParallelLoad(true)` 与默认同值 → 无操作；改成 `--serial`（传 `false`）后它才真的切到
-  「串行装载」这另一半，`setParallelLoad` 本身保留（串行/并行结果一致这条契约的唯一入口）。
+- **致命执行错误只有一个收件人和一个落点**：`ExecutionEngine` / `ScriptRunner` /
+  `SystemStateMachine` 三处 `errorOccurred` 全接到 `EraEngine::reportExecutionError`
+  （C# `handleException` / `handleExceptionInSystemProc` → `console.PrintError`）。此前只
+  `qWarning` + 点状态灯，**控制台停在旧画面** —— 读档链走到 `endAutoSave → @SHOW_SHOP` 缺失时
+  （C# 同样是 CodeEE，但消息可见），用户看到的就是「读档后什么都没有」。同一条消息连续
+  上报只落一行（`m_lastReportedError`，随 `setHasError(false)` 复位）。
+- **读档后的执行帧清理只有一份**：`gameStateLoaded`（`loadSaveSnapshot` 成功时发）在
+  `ScriptRunner` 构造函数的槽里清 loops / 调用上下文 / 函数私有域 / 事件链 / 私有作用域；
+  `LOADDATA` 指令分支不再各抄一遍（C# 对应 `LoadFrom` 后的 `ClearFunctionList`）。
+  两条读档路径（`LOADDATA` 指令、系统菜单 `LOADGAME`）都只经这一个点。
+- **读档不恢复 GLOBAL、只恢复普通存档变量**：`applyBinarySave` 的 normal 分支先
+  `resetForNewGame()`、再 `applyBinarySave(Global)`、最后把读档前拍下的 GLOBAL 槽原样放回
+  （`globalKeys` 一张表：`GLOBAL` / `GLOBALS` + 所有 `isGlobal` 声明）。对齐 C# ——
+  GLOBAL 有独立生命周期（`SAVEGLOBAL`/`LOADGLOBAL`），不随 `save##.sav` 变化。
+  读档实测：`SAVE(FLAG=7,8,9) → 改成 70,80,90 → LOAD` 后 `FLAG=7,8,9` 而 `GLOBAL` 保持 99。
 
 ## 回归基线
 
 `dump_warnings` 五语料（`eraTW` / `eraMegaten` / `eraTetris` / `FL3.8` / `ecd`）：
 **6 / 1 / 0 / 0 / 0** 行（`eraMegaten` 的目录参数必须是 `eraMegaten/data`；用错路径会得到
 0 字节的假基线），与 `/tmp/uml-baseline/*.raw.txt` **未排序**逐字节相同。
-累计六十四个重构（身份整数化 / 全定型 / 作用域显式化 / 只读收尾外移 / 存档独立映射 /
+累计六十五个重构（身份整数化 / 全定型 / 作用域显式化 / 只读收尾外移 / 存档独立映射 /
 私有名表前移 / 存档顺序确定性 / 写收尾外移 / 标记区外移 / 位置区外移 /
 标签归属单一索引 / 诊断切片幂等 / 常数作用域参数化 / 增量装载协议显式化 /
 GOTO 段身份入索引 / 静态检查用段身份 / 删第三张裸名表 / 错误去重 / 配对语法只判一次 /
@@ -652,6 +666,9 @@ GOTO 段身份入索引 / 静态检查用段身份 / 删第三张裸名表 / 错
  「有调用点」不等于「有消费者」（判据改到生产路径，删 21 个测试专用符号含 VariableToken 整类）/
  `@"…"` 只有求值一条取值路径（删 StrForm 原文副本）/ 输入类型↔按钮类型一张裁决表 /
  运行期资源缺失带 文件:行（不进装载期告警）/ EE 内置角色变量初值 100（CUP/DOWNBASE/CDOWN））
+ 致命执行错误只有一个收件人和一个落点（控制台可见，不再是只点状态灯）/
+ 读档后的执行帧清理只有一份（gameStateLoaded 唯一入口，LOADDATA 分支不再各清一遍）/
+ 读档不恢复 GLOBAL（独立生命周期，一张 globalKeys 表）
  前后完全一致；
 `ctest` 48 → 71（新增 `test_parse_checks` / `test_save_variable_map` / `test_private_scope_table` /
 `test_load_contracts` / `test_save_variable_map_hashseed` / `test_jump_markings` /

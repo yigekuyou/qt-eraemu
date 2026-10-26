@@ -85,6 +85,9 @@ ScriptRunner::ScriptRunner(EraParseTable* table,
     , m_storage(storage)
 {
     if (m_engine) {
+        // 读档成功 = 旧执行帧全部作废（C# LoadFrom 后 state.ClearFunctionList()）。
+        // **唯一副本**：LOADDATA 指令（executeLine）与系统菜单读档（LOADGAME）都经
+        // loadSaveSnapshot -> gameStateLoaded 走到这里，调用点不再各清一遍。
         connect(m_engine, &ExecutionEngine::gameStateLoaded, this, [this] {
             m_loops.clear(); m_callContexts.clear(); m_functionLocals.clear();
             m_eventChain.active=false; m_lastScopeKey.clear(); m_currentScopeId = eravar::kGlobalScope;
@@ -1803,11 +1806,10 @@ ExecState ScriptRunner::executeLine(const LogicalLine& line) {
         }
         m_engine->executeLogicalLine(line);
         if (m_state->getExecState() == ExecState::Error) return ExecState::Error;
-        m_loops.clear();
-        m_callContexts.clear();
-        m_functionLocals.clear();
-        m_eventChain.active = false;
-        m_lastScopeKey.clear(); m_currentScopeId = eravar::kGlobalScope;
+        // 执行帧（循环/调用上下文/函数私有域/事件链/私有作用域）的清理**只有一份**：
+        // ExecutionEngine::loadSaveSnapshot 成功时发 gameStateLoaded，本类构造函数
+        // 里的槽负责清。这里再抄一遍就是第二个副本 —— 之前两处各清一次，改一处
+        // 漏一处时（读档后 scope 或事件链残留）行为取决于调用路径，很难对上 C#。
         m_table->resetPosition();
         m_state->clearFunctionList();
         if (m_machine) m_machine->dataLoaded();

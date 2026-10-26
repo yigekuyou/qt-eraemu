@@ -416,12 +416,9 @@ EraEngine::EraEngine(QObject *parent)
 		// 扩展（C++ 控制端），QML 按 pool.capacity() 维护对应数量的播放器。
 		m_executionEngine.extensions().setAudioPool(&m_audio);
 		m_audio.setSoundPipelines(m_executionEngine.extensions().audioPipelines());
-		// 执行错误 -> 状态灯（QML 读 hasError）
-		connect(&m_executionEngine, &ExecutionEngine::errorOccurred, this,
-		        [this](const QString& message) {
-			        qWarning() << "[EraEngine] 执行错误:" << message;
-			        setHasError(true);
-		        });
+		// 执行错误 -> 状态灯（QML 读 hasError）+ 控制台一行（见 reportExecutionError）
+		connect(&m_executionEngine, &ExecutionEngine::errorOccurred,
+		        this, &EraEngine::reportExecutionError);
 		m_expressionEvaluator.setHtmlPrintedProvider(
 			[this](int lineNo) -> QString { return m_console.htmlPrintedStr(lineNo); },
 			[this]() -> QString { return m_console.htmlPopPrintingStr(); });
@@ -496,9 +493,8 @@ EraEngine::EraEngine(QObject *parent)
 			m_guiManager.setWindowTitle(m_gameBaseData.windowTitle());
 		});
 
-		connect(&m_scriptRunner, &ScriptRunner::errorOccurred, this, [](const QString& msg) {
-			qWarning() << "[ScriptRunner]" << msg;
-		});
+		connect(&m_scriptRunner, &ScriptRunner::errorOccurred,
+		        this, &EraEngine::reportExecutionError);
 		// QUIT：脚本请求结束本局。queued 投递，等当前 pump/事件栈退出后再卸载，
 		// 避免在 pump() 栈内重入清理解析表。
 		connect(&m_systemStateMachine, &SystemStateMachine::quitRequestedByScript,
@@ -683,10 +679,8 @@ EraEngine::EraEngine(QObject *parent)
 				[this](const QString& kind, const QVariant& def) {
 					m_console.notifyInputRequested(kind, def);
 				});
-		connect(&m_systemStateMachine, &SystemStateMachine::errorOccurred, this,
-				[](const QString& message) {
-			qWarning().noquote() << "[SystemStateMachine]" << message;
-		});
+		connect(&m_systemStateMachine, &SystemStateMachine::errorOccurred,
+		        this, &EraEngine::reportExecutionError);
 }
 
 // QML 类型注册已全部改为声明式（各类型的 QML_ELEMENT / QML_NAMED_ELEMENT /
@@ -694,6 +688,31 @@ EraEngine::EraEngine(QObject *parent)
 // 注册代码）。此处原有的 EraEngine::registerTypes() 是 Qt 5 风格的命令式注册
 //（qmlRegisterType / qmlRegisterSingletonType / qmlRegisterUncreatableType），
 // 与声明式注册重复，而且**从未被任何地方调用** —— 已移除。
+
+// ---------------------------------------------------------------------------
+// 致命执行错误：唯一的收件人（三个 emitter 都接在这里）+ 唯一的落点（控制台一行）
+//
+// C# 的错误呈现只有一条路径：DoScript 的 catch 把异常交给 handleException()
+// （脚本层）或 handleExceptionInSystemProc()（系统层），两者都先
+// console.ThrowError() 把控制台置为 Error，再把消息 **PrintError 到控制台**。
+// 移植版此前只 qWarning + 点状态灯：控制台停在旧画面，用户看到的就是
+// 「读档后什么都没有」——例如读档链走到 endAutoSave → @SHOW_SHOP 缺失时
+// （C# 同样是 CodeEE，但消息可见）。这里把「打印」补上：错误必须落到屏幕上。
+// ---------------------------------------------------------------------------
+void EraEngine::reportExecutionError(const QString& message)
+{
+	if (message.isEmpty()) return;
+	qWarning().noquote() << "[EraEngine] 执行错误:" << message;
+	// 同一条消息连续上报只落一行：ExecutionEngine::setError 记过之后，
+	// ScriptRunner::stepOnce 还会把 Error 状态再报一次（两份报告，一个事实）。
+	if (message != m_lastReportedError) {
+		m_lastReportedError = message;
+		m_console.printPlain(message);
+		m_console.newline();
+		m_console.flush();
+	}
+	setHasError(true);
+}
 
 bool EraEngine::loadScript(const QString& scriptPath)
 {

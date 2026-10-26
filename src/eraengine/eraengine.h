@@ -136,10 +136,16 @@ public:
     AudioPipelinePool* getAudio() { return &m_audio; }
     [[nodiscard]] bool hasError() const { return m_hasError; }
     void setHasError(bool on) {
+        if (!on) m_lastReportedError.clear();   // 新一轮执行 -> 同一条错误可以再显示
         if (m_hasError == on) return;
         m_hasError = on;
         emit hasErrorChanged();
     }
+
+    // 致命执行错误的唯一收件人（ExecutionEngine / ScriptRunner / SystemStateMachine
+    // 三个 errorOccurred 都接在这里）：qWarning + 状态灯 + 控制台一行（对齐 C#
+    // handleException / handleExceptionInSystemProc -> console.PrintError）。
+    void reportExecutionError(const QString& message);
 
 		// ---- 装载心跳快照（只读；由 ErbLoader::loadHeartbeat 刷新，见 Q_PROPERTY）----
 		[[nodiscard]] QString loadStage() const { return m_loadStage; }
@@ -339,6 +345,8 @@ private:
     EraParseTable m_parseTable;
     ScriptRunner m_scriptRunner;
     ConsoleBackend m_console;
+    // 上一条已落到控制台的错误（连续重复不重复打印），随 setHasError(false) 复位。
+    QString m_lastReportedError;
     // 运行期「资源名解析不到」的去重键（位置 + 名字）：同一行同一名字只报一次。
     // 只在 m_console 的 imageResolutionFailed 连接里读写，与装载期告警无关。
     QSet<QString> m_reportedMissingImages;

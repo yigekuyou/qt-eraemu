@@ -59,7 +59,8 @@ ConsoleBackend::ConsoleBackend(QObject* parent)
     m_timer.setInterval(m_frameMs);
     m_timer.setTimerType(Qt::CoarseTimer);
     connect(&m_timer, &QTimer::timeout, this, &ConsoleBackend::tick);
-    m_timer.start();
+    // 只在有待发布内容时运行；空闲时不让事件循环每帧唤醒。
+    // markDirty() 会按需启动，flush() 会在发布完成后停止。
     // 帧呈现应答的兜底（见 notifyInputRequested）：50ms 内没等到 QML 的
     // 呈现回报就自行放行，宁可少等待一点也不能让限时输入卡死。
     m_presentationFallback.setSingleShot(true);
@@ -803,6 +804,7 @@ void ConsoleBackend::clearAll() {
     m_tailRow = false;
     m_tailDirty = false;
     m_dirty = false;
+    m_timer.stop();
     m_maxSpanReach = 1;
     m_publishedLineCount = 0;
     // HTML 岛层随清屏一起清空（C# ClearDisplay 清 _htmlElementList：初始化 /
@@ -856,10 +858,13 @@ void ConsoleBackend::setFontStyle(bool bold, bool italic, bool underline, bool s
 void ConsoleBackend::markDirty() {
     m_dirty = true;
     m_tailDirty = true;
+    if (!m_timer.isActive())
+        m_timer.start();
 }
 
 void ConsoleBackend::flush() {
     m_dirty = false;
+    m_timer.stop();
     const int n = m_buffer.count();
     if (m_pendingOpen && !m_tailRow) {
         // 未定型行首次入模：insert 1 行（print 打开行缓冲后，到帧才发布）
@@ -1487,6 +1492,8 @@ void ConsoleBackend::setFrameMs(int ms) {
     }
     m_frameMs = ms;
     m_timer.setInterval(ms);
+    if (m_dirty && !m_timer.isActive())
+        m_timer.start();
     emit frameMsChanged();
 }
 

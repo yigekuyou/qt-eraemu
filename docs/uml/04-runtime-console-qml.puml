@@ -57,6 +57,9 @@ package "GameView" {
     + submitAnyKey()
     + submitMouseKey(...)
     + notifyFramePresented()
+    + markDirty()
+    + flush()
+    + tick()
     .. inputRequested(kind) ..
     .. inputSubmitted(value) ..
     .. inputSubmittedString(value) ..
@@ -79,7 +82,10 @@ package "QML" {
   note right of QmlConsole
     backend : ConsoleBackend
     generationChanged -> capture
-    framePresented -> backend.notifyFramePresented()
+    presentationRequested -> syncView / positionStage
+    layoutPrepared -> backend.notifyFramePresented()
+    The callback acknowledges model/layout work;
+    it does not prove a scene-graph swap or pixels on screen.
   end note
 
   note right of QmlInput
@@ -118,8 +124,16 @@ end note
 
 note bottom of QmlConsole
   generationChanged invalidates stale buttons and drives capture.
-  presentationRequested is the frame-pacing handshake:
-  QML builds the delegates, then calls notifyFramePresented().
+  presentationRequested is a layout acknowledgement handshake:
+  QML synchronizes models and stage geometry, then calls
+  notifyFramePresented(). This signal does not establish that Qt Quick
+  has swapped a scene graph frame or that pixels reached the display.
+end note
+
+note bottom of ConsoleBackend
+  markDirty() starts the frame timer only while a publish is pending;
+  flush() stops it after the clean snapshot is emitted. tick() therefore
+  has no idle 16 ms wakeups and only delegates dirty work to flush().
 end note
 
 legend bottom

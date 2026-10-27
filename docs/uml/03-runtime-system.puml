@@ -106,8 +106,9 @@ end note
 note bottom of QTimer
   Timed input first arms PendingTimedWait.
   With a QML presentation probe, onFramePresented()
-  starts the timer only after the frame is visible;
-  headless tests use the injected timer directly.
+  starts the timer only after the pending model/layout work
+  has been acknowledged; this does not prove pixels reached the display.
+  Headless tests use the injected timer directly.
 end note
 
 legend bottom

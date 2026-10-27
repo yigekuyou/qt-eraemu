@@ -53,9 +53,10 @@ SSM -> SSM : m_pumpActive=false; if m_pumpScheduled, queue continuation
 SSM -> PS : set ExecState::WaitInput
 SSM -> CB : request presentation / arm pending TimedWait
 CB -> Fallback : start 50ms presentation fallback
-CB -> QML : presentationRequested()
+CB -> QML : presentationRequested(generation)
 QML -> QML : Qt.callLater(syncView, positionStage)
-QML -> CB : notifyFramePresented()
+QML -> CB : notifyFramePresented(generation)
+CB -> CB : ignore stale or duplicate generation
 CB -> Fallback : stop fallback
 CB -> SSM : framePresented / onFramePresented()
 SSM -> Timer : start(timeout)

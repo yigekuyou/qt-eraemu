@@ -271,7 +271,10 @@ public:
     [[nodiscard]] bool framePacingAttached() const { return m_framePacingAttached; }
     void setFramePacingAttached(bool attached);
     // QML 控制台把「舞台变更处理完毕」回报到这里 -> 放行限时输入的计时器
-    Q_INVOKABLE void notifyFramePresented();
+    // generation 为 0 表示兼容旧调用，确认当前待处理的呈现请求；QML
+    // 应答必须回传 presentationRequested 携带的 token，避免旧 callLater
+    // 提前释放新一轮限时输入的等待。
+    Q_INVOKABLE void notifyFramePresented(quint64 generation = 0);
     // ---- 输入类型 ↔ 按钮类型的裁决（**唯一事实**）----------------------------
     // C# EmueraConsole.SelectedString（任意类型按钮都接受，整数按钮交
     // Input.ToString()）/ SelectedInteger（只在字符串按钮上返回 null）。
@@ -464,7 +467,7 @@ signals:
     void scrollToBottomRequested();
     // 输入等待的帧已发布（notifyInputRequested 里 flush + updateStageModels 之后）：
     // QML 收到后把这一帧的委托建好再回报 notifyFramePresented()。
-    void presentationRequested();
+    void presentationRequested(quint64 generation);
     // 舞台变更呈现完毕：限时输入的计时器到这一刻才开始倒计时
     void framePresented();
     void framePacingAttachedChanged();
@@ -572,6 +575,8 @@ private:
     // 呈现应答的兜底：QML 因任何原因没回报（视图销毁/未接线）时，限时输入的
     // 计时器不能永远不启动 —— 超时后自行放行一次。
     QTimer m_presentationFallback;
+    quint64 m_presentationGeneration = 0;
+    bool m_presentationPending = false;
 
     // ---- 模型发布状态 ----
     // 尾部「未定型行」是否已在模型里（print 打开后由 flush 插入，newline 摘除）。

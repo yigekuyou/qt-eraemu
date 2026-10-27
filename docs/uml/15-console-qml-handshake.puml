@@ -18,12 +18,13 @@ B -> B : flush(), updateStageModels()
 B -> B : generation++
 B --> C : generationChanged()
 B -> F : start 50ms presentationFallback
-B --> C : presentationRequested()
+B --> C : presentationRequested(generation)
 C -> Qt : Qt.callLater(syncView, positionStage)
 Qt -> C : deferred callback
 C -> V : create delegates / sync model / position stage
 V --> C : model/layout work handled
-C -> B : notifyFramePresented()
+C -> B : notifyFramePresented(generation)
+B -> B : ignore stale or duplicate generation
 B --> S : framePresented()
 S -> S : onFramePresented()
 B -> B : release presentation fallback
@@ -50,8 +51,12 @@ B --> C : ignore stale click
 == destruction and fallback ==
 C -> B : Component.onDestruction
 B -> B : framePacingAttached=false
-B -> F : arm presentationFallback
-F --> B : timeout -> notifyFramePresented()
+note right of B
+  If a presentation request is already pending, the existing
+  50ms fallback remains armed. Detach does not create a new ack;
+  with no pending request, no fallback is started.
+end note
+F --> B : existing fallback timeout -> notifyFramePresented(generation)
 B --> S : framePresented()
 S -> E : start injected timer(timeout)
 

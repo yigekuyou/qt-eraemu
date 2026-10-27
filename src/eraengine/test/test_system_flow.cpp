@@ -208,6 +208,14 @@ int main(int argc, char* argv[]) {
         check(pending.size() == 1 && pending.first().ms == 250,
               "舞台呈现完毕后才启动，且用完整超时时长");
         pending.clear();
+
+        // 输入先到时，帧确认不能再启动已经被消费的旧等待。
+        pacingMachine.waitTimedInput(250, 99);
+        check(pending.isEmpty(), "输入先到前计时器仍未启动");
+        pacingMachine.resume(7);
+        pacingMachine.onFramePresented();
+        check(pending.isEmpty(), "输入先到后不会启动幽灵计时器");
+
         pacingMachine.onFramePresented();
         check(pending.isEmpty(), "重复的呈现回报不会重复启动");
 

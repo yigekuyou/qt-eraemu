@@ -65,7 +65,9 @@ ConsoleBackend::ConsoleBackend(QObject* parent)
     // 呈现回报就自行放行，宁可少等待一点也不能让限时输入卡死。
     m_presentationFallback.setSingleShot(true);
     m_presentationFallback.setInterval(50);
-    connect(&m_presentationFallback, &QTimer::timeout, this, &ConsoleBackend::notifyFramePresented);
+    connect(&m_presentationFallback, &QTimer::timeout, this, [this]() {
+        notifyFramePresented(m_presentationGeneration);
+    });
 }
 
 // ---------------------------------------------------------------------------
@@ -1058,7 +1060,11 @@ void ConsoleBackend::setFramePacingAttached(bool attached) {
     emit framePacingAttachedChanged();
 }
 
-void ConsoleBackend::notifyFramePresented() {
+void ConsoleBackend::notifyFramePresented(quint64 generation) {
+    if (!m_presentationPending
+        || (generation != 0 && generation != m_presentationGeneration))
+        return;
+    m_presentationPending = false;
     m_presentationFallback.stop();
     emit framePresented();
 }
@@ -1091,7 +1097,9 @@ void ConsoleBackend::notifyInputRequested(const QString& kind, const QVariant& d
     // 把「舞台变更处理完毕」回报回来：这里先请它处理这一帧。
     // 没有视图（test_cli / CTest）时不做闸门，计时器在语句处立即启动。
     if (m_framePacingAttached) {
-        emit presentationRequested();
+        ++m_presentationGeneration;
+        m_presentationPending = true;
+        emit presentationRequested(m_presentationGeneration);
         m_presentationFallback.start();
     }
 }

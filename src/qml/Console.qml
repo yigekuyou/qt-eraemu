@@ -73,14 +73,14 @@ FocusScope {
     // 且晚于 C++ 在 emit 之后设置「等待中的计时器」。
     Connections {
         target: root.backend
-        function onPresentationRequested() {
+        function onPresentationRequested(generation) {
             Qt.callLater(function() {
                 if (!root.backend)
                     return;
                 root.syncView();
                 if (root.showingStage)
                     stageView.positionStage();   // id 不是属性：不能写 root.stageView
-                root.backend.notifyFramePresented();
+                root.backend.notifyFramePresented(generation);
             });
         }
     }

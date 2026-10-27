@@ -819,25 +819,42 @@ int main(int argc, char* argv[]) {
         ConsoleBackend c;
         int presented = 0;
         int asked = 0;
+        quint64 firstGeneration = 0;
+        quint64 secondGeneration = 0;
         QObject::connect(&c, &ConsoleBackend::framePresented, [&] { ++presented; });
-        QObject::connect(&c, &ConsoleBackend::presentationRequested, [&] { ++asked; });
+        QObject::connect(&c, &ConsoleBackend::presentationRequested,
+                         [&](quint64 generation) {
+            ++asked;
+            if (firstGeneration == 0) firstGeneration = generation;
+            else secondGeneration = generation;
+        });
 
         c.notifyInputRequested(QStringLiteral("TINPUT"));
         check(asked == 0, "没有 QML 视图时不请求呈现（CLI 立即计时）");
 
         c.setFramePacingAttached(true);
         c.notifyInputRequested(QStringLiteral("TINPUT"));
-        check(asked == 1, "有视图时请求一次呈现");
+        check(asked == 1 && firstGeneration != 0, "有视图时请求一次呈现并取得 token");
         check(presented == 0, "视图还没回报就不放行");
-        c.notifyFramePresented();
+        c.notifyFramePresented(firstGeneration);
         check(presented == 1, "视图回报后放行计时器");
+
+        // 旧 QML callLater 不能确认新一轮请求；同一请求的重复回报也只能生效一次。
+        c.notifyInputRequested(QStringLiteral("TINPUT"));
+        check(asked == 2 && secondGeneration != firstGeneration, "新请求使用新 token");
+        c.notifyFramePresented(firstGeneration);
+        check(presented == 1, "旧 token 不会提前放行新请求");
+        c.notifyFramePresented(secondGeneration);
+        check(presented == 2, "当前 token 放行新请求");
+        c.notifyFramePresented(secondGeneration);
+        check(presented == 2, "重复回报不会重复放行");
 
         // 兜底：视图没能回报（销毁/未接线）时也必须放行，否则限时输入会卡死
         c.notifyInputRequested(QStringLiteral("TINPUT"));
         QEventLoop loop;
         QTimer::singleShot(200, &loop, &QEventLoop::quit);
         loop.exec();
-        check(presented == 2, "视图未回报时 50ms 兜底放行");
+        check(presented == 3, "视图未回报时 50ms 兜底放行");
     }
 
     // ---- 9. SETBGIMAGE 族与 HTML_PRINT_ISLAND ----

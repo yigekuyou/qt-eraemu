@@ -536,6 +536,7 @@ void SystemStateMachine::deletePrevState() {
 void SystemStateMachine::stopForReload() {
     ++m_waitGeneration;
     ++m_runGeneration;
+    m_pendingTimedWait = PendingTimedWait{};
     m_pumpScheduled = false;
     m_state->requestHalt();
 }
@@ -543,6 +544,7 @@ void SystemStateMachine::stopForReload() {
 ExecState SystemStateMachine::run() {
     ++m_waitGeneration;
     ++m_runGeneration;
+    m_pendingTimedWait = PendingTimedWait{};
     m_pumpScheduled = false;
     initialize();
     // C# DoScript：从**系统层**起步（Title_Begin -> beginTitle -> @SYSTEM_TITLE）。
@@ -560,6 +562,7 @@ ExecState SystemStateMachine::resume(qint64 value) {
         return ExecState::Error;
     }
     ++m_waitGeneration;
+    m_pendingTimedWait = PendingTimedWait{};
     m_systemResult = value;
     if (m_storage) {
         m_storage->setResult(0, value);
@@ -582,6 +585,7 @@ ExecState SystemStateMachine::resumeString(const QString& value) {
         return ExecState::Error;
     }
     ++m_waitGeneration;
+    m_pendingTimedWait = PendingTimedWait{};
     m_systemResult = 0;
     m_state->setExecState(ExecState::Continue);
     return pump();
@@ -589,6 +593,7 @@ ExecState SystemStateMachine::resumeString(const QString& value) {
 
 ExecState SystemStateMachine::deliverInputValues(const QList<qint64>& values) {
     ++m_waitGeneration;
+    m_pendingTimedWait = PendingTimedWait{};
     if (m_state->getExecState() == ExecState::Error) {
         return ExecState::Error;
     }
@@ -649,6 +654,8 @@ void SystemStateMachine::waitAnyKey() {
 // 走 Qt.callLater（事件循环之后），因此这里设置的等待一定先于应答被记下。
 void SystemStateMachine::armTimedWait(int ms, std::function<void()> callback) {
     if (!m_timer) return;
+    // A new wait supersedes any frame-gated wait that has not started yet.
+    m_pendingTimedWait = PendingTimedWait{};
     if (m_framePacingProbe && m_framePacingProbe()) {
         m_pendingTimedWait = PendingTimedWait{true, ms, std::move(callback)};
         return;
@@ -725,6 +732,9 @@ void SystemStateMachine::schedulePump() {
 ExecState SystemStateMachine::pump() {
     initialize();
     if (m_pumpActive) {
+        // Resume callbacks can arrive while the current pump is emitting input
+        // signals. Defer one continuation until the owner pump has unwound.
+        schedulePump();
         return m_state->getExecState();
     }
     m_pumpActive = true;

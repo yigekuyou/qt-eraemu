@@ -42,9 +42,9 @@ ErbLoader --> SourceText : read / preprocess
 ErbLoader --> DeclarationScan : scan declarations
 ErbLoader --> AstBuilder : build lines
 AstBuilder --> LogicalLine
-EraParseTable *-- VariableTable
-EraParseTable *-- ParseDiagnostics
-EraParseTable *-- LoadPass
+EraParseTable --> VariableTable : declaration view / finalized facts
+EraParseTable --> ParseDiagnostics : owns diagnostic store
+EraParseTable --> LoadPass : invokes ordered passes
 EraParseTable --> ParseChecks : read-only checks
 EraParseTable --> LogicalLine : owns script lines
 ErbLoader --> EraParseTable : merge loaded scripts

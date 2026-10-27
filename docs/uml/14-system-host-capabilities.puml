@@ -1,0 +1,118 @@
+@startuml 14-system-host-capabilities
+!pragma layout smetana
+' SystemHost 的能力分组与依赖注入边界。
+' 来源：GameProc/system_state_machine.h, eraengine.cpp::buildSystemHost
+
+title SystemHost：能力分组与依赖注入
+
+package "GameProc" {
+  class SystemStateMachine {
+    + setHost(host : SystemHost)
+    + host() : SystemHost&
+    + run() : ExecState
+  }
+  class ProcessState {
+    + owns ExecState / SystemStateCode
+    + currentMin
+  }
+  class EraParseTable
+  class ScriptRunner
+}
+
+class SystemHost <<struct>> {
+  .. all members are std::function ..
+  + output callbacks
+  + input callbacks
+  + data callbacks
+  + save callbacks
+  + config callbacks
+  + title callbacks
+  + trainNames() : QStringList
+}
+
+package "output" {
+  class OutputCapability <<nullable>> {
+    + print / printC / printSingleLine
+    + printTemporaryLine / printError
+    + deleteLine / printBar / newLine
+    + setAlignment / refreshStrings / printFlush
+  }
+}
+package "input" {
+  class InputCapability <<nullable>> {
+    + waitInput()
+    + readAnyKey()
+    + mesSkip() : bool
+    + lastLineIsTemporary() : bool
+    + lastLineIsEmpty() : bool
+  }
+}
+package "data" {
+  class DataCapability <<nullable>> {
+    + resetData()
+    + addCharacterFromCsvNo(no)
+    + defaultCharacter() : int
+    + itemSales(no) : bool
+    + buyItem(no) : bool
+  }
+}
+package "save" {
+  class SaveCapability <<nullable>> {
+    + saveTo(index, text) : bool
+    + loadFrom(index) : bool
+    + checkData(index, message*) : bool
+    + saveDataNos() : int
+  }
+}
+package "config" {
+  class ConfigCapability <<nullable>> {
+    + autoSave() : bool
+    + maxShopItem() : int
+    + comAbleDefault() : int
+    + printCPerLine() : int
+    + compatiCallEvent() : bool
+    + titleMenuString(index) : QString
+  }
+}
+package "title" {
+  class TitleCapability <<nullable>> {
+    + scriptTitle / scriptVersionText
+    + scriptAutherName / scriptYear
+    + scriptDetail() : QString
+    + scriptVersion() : qint64
+    + setDefaultTitleVisible(bool)
+    + trainNames() : QStringList
+  }
+}
+
+SystemStateMachine o--> SystemHost : stores injected value
+SystemStateMachine --> ProcessState : required constructor dependency
+SystemStateMachine --> EraParseTable : optional table wiring
+SystemStateMachine --> ScriptRunner : optional runner wiring
+SystemHost ..> OutputCapability : groups callbacks
+SystemHost ..> InputCapability : groups callbacks
+SystemHost ..> DataCapability : groups callbacks
+SystemHost ..> SaveCapability : groups callbacks
+SystemHost ..> ConfigCapability : groups callbacks
+SystemHost ..> TitleCapability : groups callbacks
+
+note right of SystemStateMachine
+  Required for a live control loop: ProcessState and the state-machine object.
+  EraEngine normally injects parse table, runner, storage-related adapters and
+  all available host callbacks. setHost() copies the value; it does not create
+  the external subsystems.
+end note
+
+note bottom of SystemHost
+  Every callback is nullable. Empty callback means the documented neutral/no-op
+  behavior or a default scalar chosen by the handler. The state machine must
+  therefore not assume ConsoleBackend, save files, CSV data, Config, or QML title
+  objects exist. GUI and CLI/tests can inject different subsets.
+end note
+
+legend bottom
+  Solid composition means SystemStateMachine stores the host value, not that it
+  owns the capabilities. Dashed links are dependency-injection groups; ownership
+  remains with EraEngine / GameView / data and configuration providers.
+endlegend
+@enduml

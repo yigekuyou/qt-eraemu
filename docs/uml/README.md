@@ -19,8 +19,12 @@
 | `10-static-checks.puml` | 静态目标、结构和常量检查目录 |
 | `11-save-format.puml` | `EraBinaryData` 编码、版本和失败原子性 |
 | `12-load-pipeline.puml` | Content 输入到 AST、load pass 和诊断的时序 |
+| `13-runtime-control-loop.puml` | SystemStateMachine、ScriptRunner、ProcessState、ExecutionEngine 的闭环、pump 防重入、等待与帧确认 |
+| `14-system-host-capabilities.puml` | SystemHost 的 output/input/data/save/config/title 能力分组与可空注入边界 |
+| `15-console-qml-handshake.puml` | ConsoleBackend 与 QML 的 generation、Qt.callLater、输入提交、销毁与 fallback 握手 |
+| `16-variable-persistence-boundaries.puml` | NameResolution、RuntimeStorage、SaveMapping、BinaryDocument 的边界 |
 
-运行时故意拆成四张图：步进只描述脚本执行；系统图只描述帧底交接、状态分派和等待恢复；控制台图只描述信号、QML 属性和提交路径；存档图只描述运行时回调与快照。这样一个类只在拥有该责任的图中展开，跨图只保留接口关系。
+运行时故意拆成七张互补图：步进只描述脚本执行；系统图只描述帧底交接、状态分派和等待恢复；控制台图只描述信号、QML 属性和提交路径；存档图只描述运行时回调与快照；13-15 分别补足控制闭环、依赖注入和呈现握手。变量专题由 07、08、11、16 分开表达解析、运行时容器、文件格式和跨边界持久化。这样一个类只在拥有该责任的图中展开，跨图只保留接口关系。
 
 ## 源码边界
 
@@ -30,6 +34,12 @@
 - `src/eraengine/GameProc` 负责解析表、装载 pass、执行步进和系统状态。
 - `src/eraengine/GameView` 负责控制台模型、输入表面和状态展示。
 - `src/platform` 负责窗口、托盘和平台集成；`src/qml` 负责视图组合；`src/tools` 负责协议工具。
+
+## 复杂度边界
+
+`13-runtime-control-loop.puml` 是控制驱动的唯一闭环图：`ProcessState` 持有 `SystemStateCode` 与 `ExecState`，`SystemStateMachine` 负责处理器调度和 pump 门控，`ScriptRunner` 拥有调用栈，`ExecutionEngine` 只提供指令语义。`pump` 的防重入和 `TimedWait` 的 pending 语义不能被简化成互相递归的同步调用；`WaitInput`、`WaitSystemInput`、`WaitEvent` 是 `ExecState` 的统一枚举值，帧确认只表示 QML 模型/舞台布局已处理，不表示 scene-graph swap 或像素已显示。
+
+`14-system-host-capabilities.puml` 将 `SystemHost` 按能力分组，但所有回调仍是可空注入；`ProcessState` 是控制闭环的必需状态依赖，具体 Console、存档、配置和标题提供者不是状态机所有者。`15-console-qml-handshake.puml` 约束 `generation` 为逻辑版本/按钮有效性令牌，销毁或未接线时必须存在 fallback。`16-variable-persistence-boundaries.puml` 明确解析、运行时值、条目映射和二进制编解码不可合并。
 
 ## 关键口径
 
@@ -49,7 +59,16 @@ plantuml -tsvg docs/uml/*.puml
 当前环境使用 PlantUML 的 `smetana` 布局，因此不依赖 Graphviz。只检查语法而不提交生成的图片时，可使用：
 
 ```sh
-for f in docs/uml/*.puml; do plantuml -pipe -tsvg < "$f" >/dev/null || exit 1; done
+set -eu
+for f in docs/uml/*.puml; do
+  err=$(mktemp)
+  if ! plantuml -pipe -tsvg < "$f" >/dev/null 2>"$err" || [ -s "$err" ]; then
+    cat "$err" >&2
+    rm -f "$err"
+    exit 1
+  fi
+  rm -f "$err"
+done
 ```
 
-可用 `rg -n 'class |signal|Q_PROPERTY|saveTo|loadFrom|runSlice|onFramePresented' src/eraengine src/qml` 对照图中的接口。图中文字只保留能从当前源码确认、且对边界有帮助的事实；历史性能记录、重复实现说明和已删除的装载阶段放在版本历史中，不放在结构图索引中。
+可用 `rg -n 'class |signal|Q_PROPERTY|saveTo|loadFrom|runSlice|onFramePresented|notifyFramePresented|generation|Qt.callLater|SystemHost|ExecState|SystemStateCode' src/eraengine src/qml` 对照图中的接口；建议检查 13-16 是否仍分别只表达控制闭环、宿主能力、呈现握手和变量持久化边界。图中文字只保留能从当前源码确认、且对边界有帮助的事实；历史性能记录、重复实现说明和已删除的装载阶段放在版本历史中，不放在结构图索引中。

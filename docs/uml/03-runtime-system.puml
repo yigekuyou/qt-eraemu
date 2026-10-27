@@ -73,6 +73,7 @@ package "GameProc" {
     Continue
     WaitInput
     WaitSystemInput
+    WaitEvent
     Halt
     Error
   }

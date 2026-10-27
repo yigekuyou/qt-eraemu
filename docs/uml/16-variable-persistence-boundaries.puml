@@ -1,0 +1,82 @@
+@startuml 16-variable-persistence-boundaries
+!pragma layout smetana
+' 变量解析、运行时存储、存档映射和二进制文档的边界。
+' 来源：GameData/ast/name_interner.h, variable_table.h,
+'       GameData/Variable/variable_storage.h, save_variable_map.h,
+'       era_binary_data.h
+
+title 变量：解析、存储、映射与持久化边界
+
+package "NameResolution" {
+  component "VariableNode / VariableKey" as NameFacts
+  component "NameInterner" as Interner
+  component "VariableStorage resolver\nresolveIntLocus / resolveStrLocus" as Resolver
+
+  NameFacts --> Interner : intern scope/name identity
+  NameFacts --> Resolver : keyed or dynamic access
+  Interner --> Resolver : ScopeId / NameId
+}
+
+package "RuntimeStorage" {
+  component "VariableStorage" as Storage
+  component "IntLocus / StrLocus" as Loci
+  component "ArrayShape" as Shape
+
+  Storage --> Loci : read/write address
+  Storage --> Shape : geometry and allocation
+}
+
+package "SaveMapping" {
+  component "VariableTable\ndeclarations" as Declarations
+  component "erasave::Map" as SaveMap
+  component "Entry\nkey / slot / dimensions" as Entry
+
+  Declarations --> SaveMap : build persisted entries
+  SaveMap --> Entry : ordered mapping
+}
+
+package "BinaryDocument" {
+  component "EraBinaryData::Document" as Document
+  component "sav/*.sav" as SaveFile
+
+  Document --> SaveFile : encode/decode bytes or text
+}
+
+Resolver --> Storage : one shared lookup boundary
+Storage --> SaveMap : capture selected entries
+Storage --> Document : capture/apply snapshot
+
+note right of Resolver
+  Lookup order is defined once:
+  parameter -> character -> ARG/LOCAL
+  -> ARGS/LOCALS/RESULTS -> system
+  -> declared multidimensional -> 1D.
+  A valid VariableKey avoids repeated lookup.
+end note
+
+note bottom of Storage
+  Owns runtime values, loci and array geometry.
+  Reads do not allocate; writes may allocate blocks.
+  It does not own source names or file bytes.
+end note
+
+note bottom of SaveMap
+  Owns persisted-entry identity and private-key spelling.
+  It bridges declarations to storage slots; it is not a codec.
+end note
+
+note right of Document
+  Carries the decoded snapshot and participates in the atomic
+  decode result; EraBinaryData owns the format/version contract.
+  Unsupported or corrupt input is rejected before applying it
+  to RuntimeStorage.
+end note
+
+legend bottom
+  NameResolution answers "which locus?";
+  RuntimeStorage answers "what value?";
+  SaveMapping answers "which persisted entry?";
+  BinaryDocument answers "how encoded?".
+  The four responsibilities must not collapse into one API.
+endlegend
+@enduml

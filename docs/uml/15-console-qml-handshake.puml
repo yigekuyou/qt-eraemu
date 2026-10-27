@@ -1,0 +1,76 @@
+@startuml 15-console-qml-handshake
+!pragma layout smetana
+' ConsoleBackend 与 QML 的 presentation/input 握手。
+' 来源：GameView/console_backend.h/.cpp, qml/Console.qml, qml/ConsoleBlock.qml
+
+title ConsoleBackend-QML：呈现确认与输入握手
+
+participant "EraEngine / script" as E
+participant "ConsoleBackend" as B
+participant "SystemStateMachine" as S
+participant "QML Console" as C
+participant "Qt event loop" as Qt
+participant "Stage/ListView" as V
+participant "ConsoleBackend fallback" as F
+
+E -> B : print / request input
+B -> B : flush(), updateStageModels()
+B -> B : generation++
+B --> C : generationChanged()
+B -> F : start 50ms presentationFallback
+B --> C : presentationRequested()
+C -> Qt : Qt.callLater(syncView, positionStage)
+Qt -> C : deferred callback
+C -> V : create delegates / sync model / position stage
+V --> C : model/layout work handled
+C -> B : notifyFramePresented()
+B --> S : framePresented()
+S -> S : onFramePresented()
+B -> B : release presentation fallback
+
+alt timed input
+  B -> B : keep waitingInput=true; business timer not started before ack
+  S -> E : start injected timer(timeout)
+  E --> S : timeout callback
+  S -> B : default input / resume
+else ordinary input
+  C -> B : submitInput(value/string/any-key/mouse)
+  B -> B : validate kind + generation
+  B --> E : inputSubmitted(value)
+end
+
+== generation and stale controls ==
+E -> B : BREAKBUTTON / new generation
+B -> B : generation++
+B --> C : generationChanged()
+C -> C : old button generation != backend.generation
+C -> B : click(old button)
+B --> C : ignore stale click
+
+== destruction and fallback ==
+C -> B : Component.onDestruction
+B -> B : framePacingAttached=false
+B -> F : arm presentationFallback
+F --> B : timeout -> notifyFramePresented()
+B --> S : framePresented()
+S -> E : start injected timer(timeout)
+
+note over B,C
+  presentationRequested -> Qt.callLater -> model/stage handling ->
+  notifyFramePresented is a layout/model acknowledgement. It does not prove
+  a scene-graph swap or that pixels reached the display.
+end note
+
+note right of F
+  This is ConsoleBackend::m_presentationFallback. It only releases the
+  presentation acknowledgement path; the business timeout is the injected
+  SystemStateMachine timer. A destroyed or unconnected QML view therefore
+  cannot leave a timed wait armed forever.
+end note
+
+legend bottom
+  generation is the backend's logical presentation version and button validity
+  token. QML owns view composition and delegates; ConsoleBackend owns model,
+  input state, and the handshake boundary.
+endlegend
+@enduml

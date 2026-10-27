@@ -1,0 +1,86 @@
+@startuml 13-runtime-control-loop
+!pragma layout smetana
+' 运行时控制闭环：状态所有权、pump 防重入、输入等待和帧确认。
+' 来源：GameProc/system_state_machine.h, process_state.h, script_runner.h,
+'       execution_engine.h, GameView/console_backend.h, qml/Console.qml
+
+title 运行时控制闭环：状态所有权与恢复时序
+
+participant "SystemStateMachine\n(pump / handler owner)" as SSM
+participant "ProcessState\n(state owner)" as PS
+participant "ScriptRunner\n(call-stack owner)" as SR
+participant "ExecutionEngine\n(instruction semantics)" as EE
+participant "ConsoleBackend" as CB
+participant "QML Console" as QML
+participant "PresentationFallback" as Fallback
+participant "Injected TimerFn" as Timer
+
+note over SSM,EE
+  状态所有权：ProcessState 持有 SystemStateCode、ExecState 和 currentMin；
+  SystemStateMachine 负责状态处理器调度与 pump 门控；
+  ScriptRunner 维护调用栈；ExecutionEngine 只执行指令语义和发出输出/输入信号。
+end note
+
+SSM -> SSM : pump() enters with m_pumpActive=false
+SSM -> SSM : m_pumpActive=true
+SSM -> SR : runSlice()
+SR -> EE : executeInstruction(line, scope)
+EE --> SR : instruction result / output signals
+SR -> PS : read or set ExecState
+PS --> SSM : execStateChanged(state)
+
+alt Continue and script reaches frame floor
+  SR --> SSM : suspended(Continue), atSystemFloor=true
+  SSM -> SSM : runSystemProc(SystemStateCode)
+  SSM -> PS : state transition / setSystemState
+else ordinary input
+  SR --> SSM : suspended(WaitInput)
+  SSM -> CB : inputKindRequested(kind, default)
+  CB --> QML : waitingInput / inputKind
+else system input
+  SSM -> PS : requestWaitSystemInput()
+  SSM -> CB : inputKindRequested(kind, default)
+  CB --> QML : system input surface
+end
+
+note over SSM
+  防重入：pump() 若 m_pumpActive=true，则置 m_pumpScheduled=true，
+  不递归进入；当前 pump 退出后再消费已调度的 continuation。
+end note
+SSM -> SSM : m_pumpActive=false; if m_pumpScheduled, queue continuation
+
+== timed wait and frame acknowledgement ==
+SSM -> PS : set ExecState::WaitInput
+SSM -> CB : request presentation / arm pending TimedWait
+CB -> Fallback : start 50ms presentation fallback
+CB -> QML : presentationRequested()
+QML -> QML : Qt.callLater(syncView, positionStage)
+QML -> CB : notifyFramePresented()
+CB -> Fallback : stop fallback
+CB -> SSM : framePresented / onFramePresented()
+SSM -> Timer : start(timeout)
+Timer --> SSM : timeout callback
+SSM -> PS : write default value; requestResume()
+PS -> SSM : continueExecution()
+SSM -> SSM : pump() (after prior pump returned)
+
+alt input arrives first
+  QML -> CB : submitInput(value)
+  CB -> SSM : resume(value) / resumeString(value)
+  SSM -> Timer : cancel pending timed wait
+  SSM -> SSM : pump()
+else no QML acknowledgement before deadline
+  Fallback --> CB : timeout -> notifyFramePresented()
+  CB -> SSM : framePresented / onFramePresented()
+  SSM -> Timer : start(timeout) after fallback
+  Timer --> SSM : immediate or timed callback
+  SSM -> SSM : pump()
+end
+
+legend bottom
+  WaitInput = ordinary script input; WaitSystemInput = SystemStateMachine flow input.
+  TimedWait is a pending wait, not a new ExecState; its timer starts only after
+  the QML model/stage acknowledgement. notifyFramePresented does not mean pixels
+  were swapped or displayed. Frame acknowledgement is therefore a pacing gate.
+endlegend
+@enduml

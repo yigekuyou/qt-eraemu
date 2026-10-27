@@ -60,7 +60,7 @@ package "GameProc" {
   }
 }
 
-class ExecState <<enum>> {
+enum ExecState {
   Continue
   WaitInput
   WaitSystemInput

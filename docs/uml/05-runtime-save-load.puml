@@ -42,6 +42,14 @@ package "GameProc" {
     + SAVEDATA / LOADDATA
   }
 
+  enum SystemStateCode {
+    SaveGame_Begin
+    SaveGame_WaitInput
+    SaveGame_WaitInputOverwrite
+    LoadGame_Begin
+    LoadGame_WaitInput
+  }
+
   class EraEngine {
     + reloadSavedData()
     + buildSystemHost()

@@ -83,7 +83,7 @@ package "QML" {
     backend : ConsoleBackend
     generationChanged -> capture
     presentationRequested -> syncView / positionStage
-    layoutPrepared -> backend.notifyFramePresented()
+    Qt.callLater -> syncView / positionStage -> backend.notifyFramePresented()
     The callback acknowledges model/layout work;
     it does not prove a scene-graph swap or pixels on screen.
   end note

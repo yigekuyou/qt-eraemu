@@ -99,9 +99,10 @@ note right of SystemStateMachine
      SystemStateCode handler.
 
   System input is non-blocking:
-  setWaitInput() sets WaitSystemInput and
-  emits inputKindRequested(); resume*() writes
-  the result and schedules the next pump.
+  SystemStateMachine::setWaitInput() calls
+  ProcessState::requestWaitSystemInput(), then emits
+  inputKindRequested(); resume*() writes the result,
+  calls ProcessState::requestResume(), and schedules the next pump.
 end note
 
 note bottom of QTimer

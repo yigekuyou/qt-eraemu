@@ -40,23 +40,31 @@ package "GameProc" {
     + resolveStaticTargets()
     + diagnostics() : ParseDiagnostics
   }
-  class "loadpass / parsecheck" as Pass
+  class "LoadPass[1..7]" as Pass {
+    + origin : Pass1..Pass7
+    + gate : Always / NotCalledWarning
+    + phaseAfter : Loading / Bound / Finalized
+    + run(ctx, sink)
+  }
 }
 
 EraParseTable *-- ParseDiagnostics
-EraParseTable --> Pass : each pass gets a sink
-Pass --> ParseDiagnostics : replaceOrigin(origin, sink)
+EraParseTable *-- Pass : fixed ordered pass table
+Pass --> ParseDiagnostics : independent sink -> replaceOrigin
 ParseDiagnostics --> ParseDiagnostic
+EraParseTable --> ParseDiagnostics : removeOriginFiles on replaced script
 
 note right of ParseDiagnostics
   Diagnostics are facts owned by the loading table.
-  A rerun replaces the pass slice, so stale results cannot
-  survive a repeated check. Runtime errors are reported through
-  GameProc/EraEngine and do not enter these load slices.
+  Each pass runs into a fresh sink and replaces only its origin slice;
+  a closed gate replaces its old slice with empty output. When a script
+  is replaced, stale Load diagnostics for its old files are removed first.
+  Runtime errors are reported through GameProc/EraEngine and do not enter
+  these load slices.
 end note
 
 legend bottom
-  This diagram describes ownership and flow only.
-  The content of each check is 10-static-checks.
+  This diagram describes ownership, ordered pass execution and replacement
+  boundaries. The content of each check is 10-static-checks.
 endlegend
 @enduml

@@ -323,6 +323,55 @@ int main(int argc, char* argv[]) {
               "栈空闭合 -> UnexpectedCloseTag，定位到行");
     }
 
+    // 9) 反向追踪链：这是装载期**唯一**能拿到整串（骨架）的地方 —— 写链在装载期
+    //    拼成一棵 PLUS 树，字面量是静态文本、`%变量%` 是洞。对整棵树分词一次后，
+    //    标签配对在装载期即可判定，打印期也不必再对最终值重扫。
+    {
+        const auto htmlProblemsOf = [](EraParseTable& t) {
+            int n = 0;
+            for (const ParseDiagnostic& d : t.parseDiagnostics().all())
+                if (d.message.contains(QLatin1String("UnclosedTag"))
+                    || d.message.contains(QLatin1String("UnexpectedCloseTag")))
+                    ++n;
+            return n;
+        };
+        // 顺序与装载器一致：先 loadScript，再反向追踪，最后由 markLoadComplete
+        // 跑收尾 pass（诊断落在那里的 sink 上）。loadInto 会自己收尾，这里不能用。
+        const auto loadStaged = [](EraParseTable& table, const QString& name,
+                                   const QString& source) {
+            const AstResolver resolve = [&table](const QString& e) { return table.expressionAst(e); };
+            const QStringList lines = source.split(QLatin1Char('\n'));
+            QList<LogicalLine> built;
+            for (int i = 0; i < lines.size(); ++i)
+                built.append(AstBuilder::build(lines.at(i), ScriptPosition(name, i + 1, 1), resolve));
+            table.loadScript(name, built);
+        };
+        ProcessState balancedState;
+        EraParseTable balanced(&balancedState);
+        loadStaged(balanced, QStringLiteral("T.ERB"),
+                   QStringLiteral("LOCALS =  @\"<font color='red'>\"\n"
+                                  "LOCALS += @\"[y]\"\n"
+                                  "LOCALS += @\"</font>\"\n"
+                                  "HTML_PRINT LOCALS\n"));
+        balanced.traceHtmlStringArguments();
+        balanced.markLoadComplete();
+        const auto tracedLine = balanced.lineAt(QStringLiteral("T.ERB"), 3);
+        check(tracedLine && tracedLine->printTemplate,
+              "反向追踪的链在装载期拿到整串模板（printTemplate 已挂）");
+        check(htmlProblemsOf(balanced) == 0, "配平的追踪链 -> 装载期 0 条结构诊断");
+
+        ProcessState brokenState;
+        EraParseTable broken(&brokenState);
+        loadStaged(broken, QStringLiteral("U.ERB"),
+                 QStringLiteral("LOCALS =  @\"<font color='red'>\"\n"
+                                "LOCALS += @\"[y]\"\n"
+                                "HTML_PRINT LOCALS\n"));
+        broken.traceHtmlStringArguments();
+        broken.markLoadComplete();
+        check(htmlProblemsOf(broken) == 1,
+              "追踪链缺闭标签 -> 装载期报 UnclosedTag（不必等到打印期）");
+    }
+
     if (g_failures == 0) qDebug() << "\nALL PASSED";
     else qDebug() << "\nFAILURES:" << g_failures;
     return g_failures == 0 ? 0 : 1;

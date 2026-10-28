@@ -1881,6 +1881,14 @@ void EraParseTable::traceHtmlStringArguments() {
                 joined = QSharedPointer<BinaryOpNode>::create(
                     joined, ExpressionToken(TokenType::PLUS, QStringLiteral("+")), fragments.at(k));
             lines[i].arguments[0].ast = joined;              // 实参换成装载期拼好的节点
+            // 整条链此刻就是**一棵** PLUS 树：字面量是静态文本，`%变量%` 是洞
+            //（洞按既有契约当纯文本，运行期不拆标签）。对整棵树分词一次，得到的
+            // 就是「最终字符串的骨架」—— 标签位置与配对在装载期即可判定，打印期
+            // 也不必再对最终值重扫。这是本流程唯一能拿到完整字符串的地方：
+            // 拿到的是骨架（洞除外），不是变量的运行期取值。
+            PrintTemplateCompiler::prepare(joined);
+            if (joined->markupTemplate)
+                lines[i].printTemplate = joined->markupTemplate;   // 交给装载期结构诊断
             ++traced;
             if (tracedAt.size() < 8)
                 tracedAt.append(QStringLiteral("%1:%2 %3(%4段)")

@@ -144,7 +144,11 @@ note top of ExecutionEngine
   depends on who holds the final string. Load time may report them
   only for a verified template of an HTML_PRINT argument, because
   that IR is the whole value and every execution reproduces it --
-  a static fact. Any dynamic value is checked at print time, where
+  a static fact. That includes a `+=` chain rebuilt by reverse
+  tracing: the chain becomes one PLUS tree at load time, so its
+  skeleton (literals plus opaque expression holes) is the whole
+  string and is tokenized once. A chain broken by control flow or a
+  call cannot be rebuilt; its value only exists at print time. Any dynamic value is checked at print time, where
   the final string exists (ExecutionEngine::reportMarkupProblems,
   deduplicated per source position). A fragment such as a lone
   `</font>` is unbalanced on its own, so reporting it at load would

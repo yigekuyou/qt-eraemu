@@ -15,7 +15,11 @@ package "GameProc" {
     + consolePrintTemplate(output)
     + requestAnyKey()
     .. Template IR is built during load ..
-    .. runtime only fills Expression placeholders ..
+    .. runtime fills Expression placeholders ..
+    .. IR is reused only while verifiable ..
+    .. += of a string value drops verified ..
+    .. dynamic full strings reuse the same lexer once ..
+    .. compileMarkup is the single HTML tokenizer ..
     + consolePrintButton(text, intValue, strValue, isString)
     + clearTextBox()
   }
@@ -124,6 +128,18 @@ note right of ConsoleBackend
   from a SystemStateCode.
 end note
 
+note top of ExecutionEngine
+  HTML path has one tokenizer (compileMarkup) and two entry points:
+  load-time compile() for the provable skeleton, and print-time
+  parseRuntimeMarkup() for the final value. A value keeps its IR
+  (verified=true) only when that IR came from scanning the whole value
+  once. concatenateStrings() always drops the flag: a tag can straddle
+  two separately scanned pieces (eraTW prints `<font ...>` and
+  `</font>` from two `+=` lines), so pairing cannot be proven.
+  coversText() then reports the value as uncovered and the print
+  re-runs the same lexer over the final string.
+end note
+
 note bottom of QmlConsole
   generationChanged invalidates stale buttons and drives capture.
   presentationRequested is a layout acknowledgement handshake:
@@ -133,6 +149,10 @@ note bottom of QmlConsole
 end note
 
 note bottom of ConsoleBackend
+  Style stack is per print call: an EndStyle closes exactly one
+  matching top-of-stack tag. A mismatched or unknown closing tag is
+  consumed without popping, so later text cannot inherit the wrong
+  font/color. Styles never leak into the next print call.
   markDirty() starts the frame timer only while a publish is pending;
   flush() stops it after the clean snapshot is emitted. tick() therefore
   has no idle 16 ms wakeups and only delegates dirty work to flush().

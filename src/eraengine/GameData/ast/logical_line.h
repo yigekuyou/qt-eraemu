@@ -193,6 +193,16 @@ struct PrintTemplate {
     QList<PrintTemplatePart> parts;
     int alignment = 0; // 0=left, 1=center, 2=right
     bool noWrap = false;
+    // 该 IR 是否**完整覆盖**了 text 里的标签结构。
+    // true  = 整个值由 compileMarkup 一次扫描得到（装载期模版，或它的求值展开）；
+    // false = 值经过字符串拼接（`+=`/`+`）或来自未分词的普通字符串（string 函数
+    //         返回值、变量中转、读档恢复）。片段各自扫描过也不能证明**跨片段**的
+    //         标签配对（`+= @"<font …>"` 与 `+= @"</font>"` 是两条语句），
+    //         此时 IR 只是部分结构，打印期必须按同一词法器对最终字符串重新分词。
+    // 这正是 C# 的边界：HtmlManager.Html2DisplayLine 在打印时解析最终字符串，
+    // 装载期编译只能证明「静态可见」的那部分（整条写链被反向追踪成 PLUS 树时，
+    // compile() 一次分词，那条路径仍然是 verified）。
+    bool verified = true;
 };
 
 // Only load-time templates own interpolation ASTs. Runtime print data above is pure data.

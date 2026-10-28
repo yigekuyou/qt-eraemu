@@ -33,8 +33,12 @@ struct FlatStringValue {
     QString text;
     PrintTemplate markup;
     FlatStringValue() = default;
+    // 普通字符串（不含 IR）：text 没有经过 compileMarkup，markup 只是「一整段纯文本」。
+    // 因此 verified=false —— 若这段文字里带着标签（string 函数返回值、读档恢复的
+    // HTML、`+=` 拼进来的变量），打印期必须对最终字符串重新分词。
     explicit FlatStringValue(QString value) : text(std::move(value)) {
         PrintTemplatePart part; part.text = text; markup.parts.append(std::move(part));
+        markup.verified = false;
     }
     explicit FlatStringValue(QString value, PrintTemplate output) : text(std::move(value)), markup(std::move(output)) {}
 };
@@ -67,6 +71,13 @@ inline QVariant concatenateStrings(const QVariant& left, const QVariant& right) 
     const auto rhs = flatString(right);
     out.text += rhs.text;
     out.markup.parts.append(rhs.markup.parts);
+    // 拼接是唯一会把两个**独立分词结果**接在一起的入口。标签可以跨片段
+    //（`+= @"<font …>"` 与 `+= @"</font>"` 是两条语句），而每个片段单独看是
+    // 平衡的或空栈的 —— 拼出来的 IR 无法证明配对，因此一律作废：
+    // 打印期按 C# PrintHtml 对最终字符串重新分词一次（同一个 compileMarkup）。
+    // 装载期能证明的只有**整条写链**（EraParseTable 反向追踪把 += 拼成一棵
+    // PLUS 树后由 compile() 一次分词），那条路径不经过这里。
+    out.markup.verified = false;
     return toVariant(out);
 }
 

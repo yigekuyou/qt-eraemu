@@ -275,6 +275,57 @@ int main(int argc, char** argv) {
         check(spans.size() >= 4 && !spans.last().style.bold && !spans.last().style.color.isValid(), "closing styles restored");
     }
     console.clearAll();
+    printHtmlFixture("<font color='red'><b>inner</font>after</b>");
+    if (console.buffer().count()) {
+        const auto spans = flatSpansOf(console.buffer().at(0));
+        check(console.buffer().at(0).plainText() == "innerafter"
+              && spans.size() >= 2
+              && spans.at(0).style.bold && spans.at(0).style.color == QColor("red")
+              && spans.at(1).style.bold && spans.at(1).style.color == QColor("red"),
+              "mismatched closing tag does not shift the style stack");
+    } else check(false, "mismatched closing tag produces a line");
+    console.clearAll();
+    // eraTW IMAGE.ERB:98-110 的原样复刻（画像表示設定 的角色条）：
+    //   开标签走已分词的片段，闭标签 `sPrint_Text += @"</font>"` 是**单独**一段。
+    // `@"</font>"` 自身没有结构化片段（装载期编译结果为空），运行期就是普通字符串；
+    // 一旦拼进已分词的值，整条 IR 的结构就不再可证明（verified=false），
+    // 打印期必须按同一词法器重新分词 —— 否则闭标签作为字面量留在行里，
+    // 实测把行打成 `--------[霊夢]</font>--------`（宽度多出 7 格，后续按钮错位）。
+    {
+        const auto runAssignment = [&](const QString& source) {
+            const auto assignment = AstBuilder::build(source, {}, resolve);
+            // 装载器在收尾步骤做的事：给每条字符串右值准备 Template IR
+            for (const auto& operand : assignment.arguments)
+                PrintTemplateCompiler::prepare(operand.ast);
+            engine.executeInstruction(assignment);
+        };
+        runAssignment(QStringLiteral("LOCALS =  <p align='left'><nobr>"));
+        runAssignment(QStringLiteral("LOCALS += @\"<font color='#66ffff'>\""));
+        runAssignment(QStringLiteral("LOCALS += @\"<button value='1001' title='t1'>[x]</button>\""));
+        runAssignment(QStringLiteral("LOCALS += @\"</font>\""));
+        runAssignment(QStringLiteral("LOCALS += @\"<shape type='space' param='10'>\""));
+        runAssignment(QStringLiteral("HTML_PRINT LOCALS"));
+        if (console.buffer().count() == 1) {
+            const auto& row = console.buffer().at(0);
+            const auto spans = flatSpansOf(row);
+            bool button = false;
+            for (const auto& segment : row.segments)
+                if (segment.isButton && segment.intValue == 1001) button = true;
+            // 闭标签之后的 <shape> 不得继承 #66ffff：这就是「高亮/错位」的第二种形态
+            // （EndStyle 缺失时尾部 spacer 吃掉按钮颜色，测量宽度也跟着漂）。
+            bool trailingLeaksColor = false;
+            for (const auto& span : spans)
+                if (span.kind == ConsoleSpanKind::Shape && span.style.color.isValid()) trailingLeaksColor = true;
+            check(!row.plainText().contains(QLatin1String("</font>"))
+                  && row.plainText() == "[x]"
+                  && button && !spans.isEmpty() && spans.first().style.color == QColor("#66ffff")
+                  && !trailingLeaksColor,
+                  "closing tag spliced in as a plain string is re-parsed, not printed literally");
+        } else {
+            check(false, "mixed compiled/plain += chain produces one line");
+        }
+    }
+    console.clearAll();
     storage.setLocalStr(0, "<u>runtime</u><br>");
     line = AstBuilder::build("HTML_PRINT LOCALS", {}, resolve);
     check(line.arguments.first().ast && line.printTemplate, "HTML string is compiled during load");

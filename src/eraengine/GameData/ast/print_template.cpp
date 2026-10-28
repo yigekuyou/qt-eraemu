@@ -89,7 +89,14 @@ QSharedPointer<CompiledPrintTemplate> compileMarkup(const QString& markup, const
             if (tag == "p") { part.kind = PrintTemplatePart::Kind::EndAlignment; out->parts.append(part); }
             if (tag == "nobr") { part.kind = PrintTemplatePart::Kind::EndNoWrap; out->parts.append(part); }
             if (tag == "button") { part.kind = PrintTemplatePart::Kind::EndButton; out->parts.append(part); }
-            for (int i = stack.size()-1; i >= 0; --i) if (stack[i] == tag) { part.kind = PrintTemplatePart::Kind::EndStyle; part.x = stack.size() - i; out->parts.append(part); stack.resize(i); break; }
+            // HTML 样式按栈闭合。非栈顶或不存在的闭合标签只被消费，
+            // 不得跨层弹栈；否则后续文字会继承错误的字体/颜色。
+            if (!stack.isEmpty() && stack.constLast() == tag) {
+                part.kind = PrintTemplatePart::Kind::EndStyle;
+                part.x = 1;
+                out->parts.append(part);
+                stack.removeLast();
+            }
         } else if (tag == "br") { part.kind = PrintTemplatePart::Kind::Break; out->parts.append(part); }
         else if (tag == "nobr") { part.kind = PrintTemplatePart::Kind::NoWrap; out->parts.append(part); }
         else if (tag == "button" || tag == "img" || tag == "shape" || tag == "p") {
@@ -167,6 +174,9 @@ PrintTemplate PrintTemplateCompiler::evaluateOccurrences(const CompiledPrintTemp
         PrintTemplatePart part = compiled;
         if (compiled.expression) {
             const auto value = flatString(eval(*compiled.expression, compiled.occurrenceId));
+            // 插值结果是**不透明文本**（`%LOCALS%` 里带 <b> 也只当文字），
+            // 不是「未分词的片段」：它按 text 落进 IR，不改变 verified。
+            // 只有字符串级拼接（concatenateStrings）才会让结构不可证明。
             out.parts.append(value.markup.parts);
             continue;
         }
@@ -221,6 +231,11 @@ PrintTemplate PrintTemplateCompiler::parseRuntimeMarkup(const QString& text) {
 
 bool PrintTemplateCompiler::coversText(const PrintTemplate& markup, const QString& text) {
     if (!text.contains(QLatin1Char('<'))) return true;   // 字符串里没有标签，无需解析
+    // IR 里拼进过未经 compileMarkup 的纯文本（拼接/中转/读档）：
+    // 「没有未闭合标签」不再能证明结构完整 —— 完整标签也可能躺在未扫描的 Text 里
+    // （实测 `sPrint_Text += @"</font>"` 就整段留在了 Text part，打印成字面量）。
+    // 此时按 C# 的做法对最终字符串重新分词。
+    if (!markup.verified) return false;
     bool structured = false;
     for (const PrintTemplatePart& part : markup.parts) {
         if (part.kind != PrintTemplatePart::Kind::Text) { structured = true; continue; }

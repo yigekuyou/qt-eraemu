@@ -284,11 +284,16 @@ static void htmlFlow() {
             [&table](const QString& text) { return table.expressionAst(text); }));
     const auto ast = table.expressionAst("\"<button value='7'>same</button>\"");
     table.loadScript("html", lines); table.markLoadComplete(); table.setEntryPoint("MAIN");
-    // Identical markup obtained through an ordinary runtime write stays opaque.
+    // 运行期写入的 HTML 值（`LOCALS` 里的 <button>）被拼进 FOR 循环累加的字符串。
     storage.setLocalStr(0, "<button value='99'>opaque</button>");
     const auto result = runner.runToCompletion();
     bool good = result == ExecState::Halt && printed.size() == 3;
     if (good) {
+        // 累加值（`html += HTML_SPACE(2) + HTML_BUTTON(...)` × 2，再经 `copy '= html`
+        // 中转）在装载期**无法**证明标签结构：跨函数、跨循环、跨变量中转。
+        // 因此打印期按 C# PrintHtml（Html2DisplayLine）对最终字符串分词一次 ——
+        // 与装载期是同一个 compileMarkup 词法器。于是被拼进去的 <button> 也是结构
+        //（C# 同样如此：它只看最终字符串）。
         for (int output = 0; output < 2; ++output) {
             QStringList values, tips; int spaces = 0; QString text;
             for (const auto& part : printed[output].parts) {
@@ -296,8 +301,9 @@ static void htmlFlow() {
                 if (part.kind == PrintTemplatePart::Kind::Shape) ++spaces;
                 if (part.kind == PrintTemplatePart::Kind::Text) text += part.text;
             }
-            good &= values == QStringList({"0", "1"}) && tips == QStringList({"tip0", "tip1"})
-                && spaces == 4 && text.contains("<button value='99'>opaque</button>");
+            good &= values == QStringList({"0", "99", "1", "99"})
+                && tips == QStringList({"tip0", "", "tip1", ""})
+                && spaces == 4 && text == "[0]opaque[1]opaque";
         }
         // 普通运行期写入（`html '= LOCALS`）的值：装载期无法为其构筑标签，
         // 但 C# PrintHtml 本就是**打印时**从最终字符串解析（Html2DisplayLine）——

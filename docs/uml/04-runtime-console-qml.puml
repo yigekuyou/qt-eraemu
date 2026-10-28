@@ -14,6 +14,8 @@ package "GameProc" {
     + consoleReuseLastLine(text)
     + consolePrintTemplate(output)
     + requestAnyKey()
+    .. Template IR is built during load ..
+    .. runtime only fills Expression placeholders ..
     + consolePrintButton(text, intValue, strValue, isString)
     + clearTextBox()
   }

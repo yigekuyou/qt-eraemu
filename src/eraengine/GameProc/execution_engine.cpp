@@ -1090,11 +1090,9 @@ bool ExecutionEngine::executeInstruction(const LogicalLine& line, eravar::ScopeI
         if (!value.isValid() || !isStringValue(value)) return false;
         const QString text = stringText(value);
         PrintTemplate markup = valueMarkup(value);
-        // 标签一律在**装载期**构筑（静态模板编译 + 连续片段写链的拼接，见
-        // EraParseTable::stitchStringFragmentRuns）。装载期没能消化的标签材料
-        //（字符串变量里带的 <img …>、字符串函数产出的标签）在此刻**补解析** ——
-        // 对齐 C# PrintHtml：HtmlManager.Html2DisplayLine 本来就是打印时解析。
-        // 此前这里按文本输出 + [未完成] 留痕（FL3.8 的立绘框 div 正是这种写法）。
+        // 可证明的静态骨架复用装载期 Template IR；跨分支、跨函数、正则
+        // 修改后的完整字符串没有可靠骨架时，使用同一个 compileMarkup lexer
+        // 对最终值解析一次。两条路径共享词法器，不存在第二套 HTML 规则。
         if (!PrintTemplateCompiler::coversText(markup, text))
             markup = PrintTemplateCompiler::parseRuntimeMarkup(text);
         emit toBuffer ? consolePrintTemplateBuffered(markup) : consolePrintTemplate(markup);
@@ -1109,6 +1107,8 @@ bool ExecutionEngine::executeInstruction(const LogicalLine& line, eravar::ScopeI
         if (!value.isValid() || !isStringValue(value)) return false;
         const QString text = stringText(value);
         PrintTemplate markup = valueMarkup(value);
+        // HTML island 与 HTML_PRINT 共享同一 compileMarkup lexer；动态完整值
+        // 只在结构无法由装载期模板证明时解析一次。
         if (!PrintTemplateCompiler::coversText(markup, text))
             markup = PrintTemplateCompiler::parseRuntimeMarkup(text);
         emit consolePrintHtmlIsland(markup);

@@ -251,6 +251,10 @@ private:
     
     // PRINT 族统一出口（对齐 C# PRINT_Instruction）：形态由指令名后缀决定
     bool handlePrintInstruction(const LogicalLine& line);
+    // 打印期 HTML 结构告警（`UnexpectedCloseTag` / `UnclosedTag`）。装载期只能报
+    // verified 的静态模板；动态值到打印期才拿得到最终字符串。同一位置只报一次，
+    // 避免每帧刷屏。
+    void reportMarkupProblems(const PrintTemplate& markup, const LogicalLine& line);
     // PRINTC / PRINTLC 的定宽列补齐（对齐 C# CreateTypeCString）
     [[nodiscard]] QString padPrintC(const QString& text, bool padLeft) const;
     [[nodiscard]] static int printCWidth(const QString& text);
@@ -400,6 +404,8 @@ public:
     bool m_printWaitKey = false;
     int m_currentLine;
     QString m_currentScript;
+    // 打印期 HTML 结构告警的去重集（按 "文件:行"）：每帧重打印同一行不该刷屏。
+    QSet<QString> m_markupProblemsReported;
     
     // Current execution position (0-indexed line number)
     int m_executionPosition;

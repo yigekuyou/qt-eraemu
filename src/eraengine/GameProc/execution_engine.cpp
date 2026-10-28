@@ -1095,6 +1095,9 @@ bool ExecutionEngine::executeInstruction(const LogicalLine& line, eravar::ScopeI
         // 对最终值解析一次。两条路径共享词法器，不存在第二套 HTML 规则。
         if (!PrintTemplateCompiler::coversText(markup, text))
             markup = PrintTemplateCompiler::parseRuntimeMarkup(text);
+        // 打印期是结构问题的**权威判定点**：此刻手里的 text 才是最终字符串。
+        // 装载期只能诊断 verified（整串一次分词）的情形，动态值到这里才见分晓。
+        reportMarkupProblems(markup, line);
         emit toBuffer ? consolePrintTemplateBuffered(markup) : consolePrintTemplate(markup);
         return true;
     }
@@ -1111,6 +1114,7 @@ bool ExecutionEngine::executeInstruction(const LogicalLine& line, eravar::ScopeI
         // 只在结构无法由装载期模板证明时解析一次。
         if (!PrintTemplateCompiler::coversText(markup, text))
             markup = PrintTemplateCompiler::parseRuntimeMarkup(text);
+        reportMarkupProblems(markup, line);   // 与 HTML_PRINT 同一判定点
         emit consolePrintHtmlIsland(markup);
         return true;
     }
@@ -2166,7 +2170,21 @@ int ExecutionEngine::printCWidth(const QString& text) {
     return w;
 }
 
+// 打印期是 HTML 结构问题的权威判定点。装载期只能证明 verified（整串一次分词）
+// 的模板；`+=` 拼接 / 函数返回 / 读档恢复的值到这里才成为最终字符串。
+// 与 C# 一致的是「报错」这件事（HtmlManager.cs:906-910 抛 UnexpectedCloseTag），
+// 不一致的是强度：这里只告警，不中断打印，也不改变渲染结果。
+void ExecutionEngine::reportMarkupProblems(const PrintTemplate& markup, const LogicalLine& line) {
+    if (markup.problems.isEmpty()) return;
+    const QString position = line.position.toString();
+    if (m_markupProblemsReported.contains(position)) return;   // 同一行只报一次
+    m_markupProblemsReported.insert(position);
+    for (const QString& problem : markup.problems)
+        qWarning().noquote() << "[html]" << position << problem;
+}
+
 void ExecutionEngine::clearForReload() {
+    m_markupProblemsReported.clear();
     m_saveSnapshots.clear();
     m_globalSnapshot = {};
     m_globalSnapshotValid = false;

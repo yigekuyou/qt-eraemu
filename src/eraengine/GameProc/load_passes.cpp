@@ -539,7 +539,24 @@ void applyStringAssignmentsInScript(const LoadContext& ctx, ScriptData& script,
     // 数字字面量去重键属于**本次运行**（这个脚本任务）：跨行重复的位置只报一次，
     // 不读共享容器（见 diagnoseIntegerLiterals）。
     QSet<QString> reportedNumbers;
+    // HTML_PRINT 的**静态**实参（整条写链在装载期就是一张 FORM/PLUS 树）在构建期
+    // 就已分词：`line.printTemplate` 就是最终字符串的 IR，结构问题
+    // （`UnexpectedCloseTag` / `UnclosedTag`）是**静态事实**，可以在装载期报。
+    // 动态值（`+=` 拼接、函数返回、读档恢复）不在此列 —— 那时只有打印期拿得到最终
+    // 字符串（C# 也正是打印时抛 UnexpectedCloseTag，HtmlManager.cs:906-910），
+    // 见 ExecutionEngine::reportMarkupProblems。
+    const auto reportMarkupProblems = [&sink](const LogicalLine& l) {
+        if (!l.printTemplate || l.printTemplate->problems.isEmpty()) return;
+        if (l.functionName != QLatin1String("HTML_PRINT")
+            && l.functionName != QLatin1String("HTML_PRINT_ISLAND")) return;
+        for (const QString& problem : l.printTemplate->problems)
+            sink.add(DiagSeverity::Warning, DiagCode::kArgCheck,
+                     l.position.filename, l.position.lineNumber, l.position.column, 0, problem);
+    };
     for (LogicalLine& line : script.lines) {
+        // 静态模板在构建期定型，needsCompletion=false —— 必须在下面的收尾过滤**之前**
+        // 检查，否则恰恰漏掉唯一可静态证明的那一类。
+        reportMarkupProblems(line);
         // 只处理构建期未定型的行：构建期已按声明视图定型的字符串/FORM/CASE
         // 不再重解析（收尾只扫描未定型项）。
         // 字符串赋值的「FORM 还是表达式」在构建期由声明视图定死
@@ -563,6 +580,7 @@ void applyStringAssignmentsInScript(const LoadContext& ctx, ScriptData& script,
             line.condition = compiled.condition;
             line.printTemplate = compiled.printTemplate;
             ArgumentParser::build(line);
+            reportMarkupProblems(line);   // 收尾重建出来的模板同样检查一次
         }
         if (line.argument.kind == ArgKind::Case) {
             line.caseCache.clear();

@@ -203,6 +203,11 @@ struct PrintTemplate {
     // 装载期编译只能证明「静态可见」的那部分（整条写链被反向追踪成 PLUS 树时，
     // compile() 一次分词，那条路径仍然是 verified）。
     bool verified = true;
+    // 唯一词法器扫描时记下的结构问题（`UnexpectedCloseTag </font>` /
+    // `UnclosedTag <font>`）。**只有 verified=true 时它们描述最终字符串**，
+    // 才可以作为装载期诊断；verified=false 时它们只属于某个片段（`+= @"</font>"`
+    // 单独看必然不平衡），权威判定在打印期整串重新分词那一次。
+    QStringList problems;
 };
 
 // Only load-time templates own interpolation ASTs. Runtime print data above is pure data.
@@ -217,6 +222,7 @@ struct CompiledPrintTemplate {
     QList<StrFormPart> rawParts;
     int alignment = 0;
     bool noWrap = false;
+    QStringList problems;   // 见 PrintTemplate::problems
 };
 
 // ---------------------------------------------------------------------------

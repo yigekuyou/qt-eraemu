@@ -274,6 +274,25 @@ int main(int argc, char** argv) {
         check(spans.size() >= 4 && spans[0].kind == ConsoleSpanKind::Image && spans[0].text == "a&b" && spans[0].imageSize.width() == 200 && spans[0].style.color == QColor("red") && spans[1].kind == ConsoleSpanKind::Shape && spans[1].style.color == QColor("red"), "image and shape inherit style and attributes");
         check(spans.size() >= 4 && !spans.last().style.bold && !spans.last().style.color.isValid(), "closing styles restored");
     }
+    // 结构问题（C# 的 UnexpectedCloseTag / 未闭合栈）由唯一词法器记录在模板上：
+    // 装载期只能对 verified（整串一次分词）的静态模板报诊断，动态值必须等到
+    // 打印期整串重新分词那一次。这里分别验证两条路径都拿得到问题清单。
+    {
+        const auto staticLine = AstBuilder::build(
+            QStringLiteral("HTML_PRINT @\"<font>x</font></b>\""), {}, resolve);
+        check(staticLine.printTemplate && !staticLine.printTemplate->problems.isEmpty()
+                  && staticLine.printTemplate->problems.first().contains(QLatin1String("</b>")),
+              "load-time template records UnexpectedCloseTag");
+        check(PrintTemplateCompiler::parseRuntimeMarkup(QStringLiteral("<font>x")).problems.size() == 1
+                  && PrintTemplateCompiler::parseRuntimeMarkup(QStringLiteral("<font>x"))
+                         .problems.first().contains(QLatin1String("UnclosedTag")),
+              "runtime re-lex records UnclosedTag");
+        // 结构标签不进样式栈：`</p>`/`</button>`/`</nobr>` 不得被误报。
+        check(PrintTemplateCompiler::parseRuntimeMarkup(
+                  QStringLiteral("<p align='left'>[x]</p><button value='1'>b</button><nobr></nobr>"))
+                  .problems.isEmpty(),
+              "structural closing tags are not style-stack problems");
+    }
     console.clearAll();
     printHtmlFixture("<font color='red'><b>inner</font>after</b>");
     if (console.buffer().count()) {

@@ -138,6 +138,17 @@ note top of ExecutionEngine
   `</font>` from two `+=` lines), so pairing cannot be proven.
   coversText() then reports the value as uncovered and the print
   re-runs the same lexer over the final string.
+
+  Structure problems (UnexpectedCloseTag / UnclosedTag) follow the
+  same split. The lexer only records them on the IR; who reports them
+  depends on who holds the final string. Load time may report them
+  only for a verified template of an HTML_PRINT argument, because
+  that IR is the whole value and every execution reproduces it --
+  a static fact. Any dynamic value is checked at print time, where
+  the final string exists (ExecutionEngine::reportMarkupProblems,
+  deduplicated per source position). A fragment such as a lone
+  `</font>` is unbalanced on its own, so reporting it at load would
+  be a false positive.
 end note
 
 note bottom of QmlConsole

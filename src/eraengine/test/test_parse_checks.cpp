@@ -296,6 +296,33 @@ int main(int argc, char* argv[]) {
         }
     }
 
+    // 8) HTML 结构问题的装载期边界：**只有** verified（整串一次分词）的静态模板
+    //    能在这里报 UnexpectedCloseTag / UnclosedTag；`+=` 拼接出来的值必须留到
+    //    打印期（那里才有最终字符串）。
+    {
+        ProcessState state;
+        EraParseTable table(&state);
+        loadInto(table, QStringLiteral("H.ERB"),
+                 QStringLiteral("HTML_PRINT @\"<font>x\"\n"          // 未闭合
+                                "HTML_PRINT @\"<b>y</b></font>\"\n"    // 栈空闭合
+                                "HTML_PRINT @\"<font>z</font>\"\n"    // 合法
+                                "LOCALS =  <font>\n"                   // 动态写链：不报
+                                "HTML_PRINT LOCALS\n"));
+        QStringList html;
+        for (const ParseDiagnostic& d : table.parseDiagnostics().all())
+            if (d.message.contains(QLatin1String("UnclosedTag"))
+                || d.message.contains(QLatin1String("UnexpectedCloseTag")))
+                html.append(QStringLiteral("%1:%2 %3").arg(d.file).arg(d.line).arg(d.message));
+        check(html.size() == 2, QStringLiteral("装载期只报可静态证明的 HTML 结构问题（实得 %1 条：%2）")
+                                    .arg(html.size()).arg(html.join(QLatin1String(" | "))));
+        check(html.size() == 2 && html.at(0).contains(QLatin1String("H.ERB:1"))
+                  && html.at(0).contains(QLatin1String("UnclosedTag <font>")),
+              "未闭合 -> UnclosedTag，定位到行");
+        check(html.size() == 2 && html.at(1).contains(QLatin1String("H.ERB:2"))
+                  && html.at(1).contains(QLatin1String("UnexpectedCloseTag </font>")),
+              "栈空闭合 -> UnexpectedCloseTag，定位到行");
+    }
+
     if (g_failures == 0) qDebug() << "\nALL PASSED";
     else qDebug() << "\nFAILURES:" << g_failures;
     return g_failures == 0 ? 0 : 1;

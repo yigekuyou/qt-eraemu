@@ -61,6 +61,11 @@ note right of ParseDiagnostics
   is replaced, stale Load diagnostics for its old files are removed first.
   Runtime errors are reported through GameProc/EraEngine and do not enter
   these load slices.
+  HTML structure problems (UnexpectedCloseTag / UnclosedTag) sit on this
+  same boundary: they enter a load slice only for a verified HTML_PRINT
+  template, where the IR is the whole final string and the problem is a
+  static fact. Dynamic values are reported at print time instead, because
+  a fragment (a lone `</font>` appended by `+=`) is unbalanced by itself.
 end note
 
 legend bottom

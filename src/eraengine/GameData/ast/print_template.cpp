@@ -86,16 +86,26 @@ QSharedPointer<CompiledPrintTemplate> compileMarkup(const QString& markup, const
             part.attributes[key] = QSharedPointer<StrFormNode>::create(fragments(value, expressions));
         }
         if (closing) {
+            // 结构标签自成一路（不进样式栈）：`</p>`/`</nobr>`/`</button>` 只对应
+            // 各自的段落状态，不参与 font/b/i 的配对判定 —— 若把它们也塞进下面的
+            // 栈检查，每个合法的 `</p>` 都会被误报成 UnexpectedCloseTag。
             if (tag == "p") { part.kind = PrintTemplatePart::Kind::EndAlignment; out->parts.append(part); }
-            if (tag == "nobr") { part.kind = PrintTemplatePart::Kind::EndNoWrap; out->parts.append(part); }
-            if (tag == "button") { part.kind = PrintTemplatePart::Kind::EndButton; out->parts.append(part); }
+            else if (tag == "nobr") { part.kind = PrintTemplatePart::Kind::EndNoWrap; out->parts.append(part); }
+            else if (tag == "button") { part.kind = PrintTemplatePart::Kind::EndButton; out->parts.append(part); }
             // HTML 样式按栈闭合。非栈顶或不存在的闭合标签只被消费，
             // 不得跨层弹栈；否则后续文字会继承错误的字体/颜色。
-            if (!stack.isEmpty() && stack.constLast() == tag) {
+            // 但**消费不等于合法**：C# 在这里抛 UnexpectedCloseTag（栈空或与已开
+            // 标签不对应，HtmlManager.cs:906-910）。词法器不打断渲染，只把问题记在
+            // 模板上 —— 谁持有最终字符串，谁才能判定（装载期 verified，否则打印期
+            // 整串重新分词）。未知标签（`</size>` 等）保持静默消费，与既有移植一致。
+            else if (!stack.isEmpty() && stack.constLast() == tag) {
                 part.kind = PrintTemplatePart::Kind::EndStyle;
                 part.x = 1;
                 out->parts.append(part);
                 stack.removeLast();
+            } else if (tag == "font" || tag == "b" || tag == "strong" || tag == "i"
+                       || tag == "em" || tag == "u" || tag == "s") {
+                out->problems.append(QStringLiteral("UnexpectedCloseTag </%1>").arg(tag));
             }
         } else if (tag == "br") { part.kind = PrintTemplatePart::Kind::Break; out->parts.append(part); }
         else if (tag == "nobr") { part.kind = PrintTemplatePart::Kind::NoWrap; out->parts.append(part); }
@@ -110,6 +120,10 @@ QSharedPointer<CompiledPrintTemplate> compileMarkup(const QString& markup, const
         }
         pos = gt+1;
     }
+    // 整串扫完仍有未闭合的样式标签：C# 的行为是打印时报错（Html2DisplayLine
+    // 结束时校验栈），这里同样只记录、不打断渲染。
+    if (!stack.isEmpty())
+        out->problems.append(QStringLiteral("UnclosedTag <%1>").arg(stack.join(QLatin1String(","))));
     return out;
 }
 }
@@ -170,6 +184,7 @@ PrintTemplate PrintTemplateCompiler::evaluateOccurrences(const CompiledPrintTemp
     const std::function<QVariant(const ExpressionNode&, int)>& eval) {
     PrintTemplate out;
     out.alignment = source.alignment; out.noWrap = source.noWrap;
+    out.problems = source.problems;   // 结构问题是分词结果的一部分，随 IR 一起走
     for (const auto& compiled : source.parts) {
         PrintTemplatePart part = compiled;
         if (compiled.expression) {

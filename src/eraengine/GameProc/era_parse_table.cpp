@@ -1833,6 +1833,20 @@ void EraParseTable::traceHtmlStringArguments() {
         return !var.isEmpty();
     };
 
+    // 反向追踪的**策略边界**（留个判断，之后再说）：暂不跨越控制流与函数调用。
+    // 跨 IF 分支意味着同一个打印点不止一套骨架，装载期该报什么、运行期还留多少
+    // 解析余地，都要重新评估；现在见到就停，交回运行期整串解析（结果等价，
+    // 只是装载期少了这几条的结构诊断）。停下多少条、首个停在哪，都写进装载日志，
+    // 之后要重估时先看这两个数。
+    constexpr bool kTraceAcrossControlFlow = false;
+    enum class Stop { None, ControlFlow, ScopeBreak, NoBase };
+    Stop chainStop = Stop::None;
+    int stoppedAtControl = 0;   // 写链被控制流/调用打断
+    int stoppedAtScope = 0;     // 跨作用域（函数体边界）
+    int stoppedAtBase = 0;      // 追不到链的基（本段没有整赋值）
+    int singlePiece = 0;        // 只有一段：构建期已编译，无需追踪
+    QString firstStop;          // 首个停下的位置
+
     // 反向回溯 var 在 scope 内、第 before 行之前的写链；成功时给出**程序顺序**的片段。
     // depth：中转变量（`X = Y`）再追一层的余量。
     std::function<bool(const QList<LogicalLine>&, const QString&, const QString&, int, int,
@@ -1844,9 +1858,17 @@ void EraParseTable::traceHtmlStringArguments() {
         for (int j = before - 1; j >= 0; --j) {
             const LogicalLine& line = lines.at(j);
             if (line.kind == LineKind::Null || line.kind == LineKind::Preprocessor) continue;
-            if (line.scopeKey != scope) return false;    // 跨段：链断，放弃
+            if (line.scopeKey != scope) {                // 跨段：链断，放弃
+                chainStop = Stop::ScopeBreak;
+                return false;
+            }
             QString name; bool append = false; QSharedPointer<ExpressionNode> value;
-            if (!fragmentWrite(line, name, append, value)) return false;   // 控制流/调用/其它
+            if (!fragmentWrite(line, name, append, value)) {
+                // 控制流/调用/其它形态：**停下**，不跨越（见上面的策略边界）。
+                if (kTraceAcrossControlFlow) continue;   // 跨过去：跳过该行继续回溯
+                chainStop = Stop::ControlFlow;
+                return false;
+            }
             if (name.compare(var, Qt::CaseInsensitive) != 0) continue;     // 别的变量：透过
             if (append) { reversed.prepend(value); continue; }             // 追加片段
             // 整赋值 = 链的基（`X = Y` 的中转可再追一层）
@@ -1862,7 +1884,8 @@ void EraParseTable::traceHtmlStringArguments() {
             out = head;
             return true;
         }
-        return false;                                        // 找不到基：放弃
+        chainStop = Stop::NoBase;                            // 找不到基：放弃
+        return false;
     };
 
     int traced = 0;
@@ -1874,8 +1897,19 @@ void EraParseTable::traceHtmlStringArguments() {
             QString var;
             if (!htmlPrintTarget(lines.at(i), var)) continue;
             QList<QSharedPointer<ExpressionNode>> fragments;
-            if (!traceChain(lines, lines.at(i).scopeKey, var, i, 0, fragments)) continue;
-            if (fragments.size() < 2) continue;              // 单片段：构建期已编译
+            chainStop = Stop::None;
+            if (!traceChain(lines, lines.at(i).scopeKey, var, i, 0, fragments)) {
+                switch (chainStop) {
+                case Stop::ControlFlow: ++stoppedAtControl; break;
+                case Stop::ScopeBreak: ++stoppedAtScope; break;
+                default: ++stoppedAtBase; break;
+                }
+                if (firstStop.isEmpty())
+                    firstStop = QStringLiteral("%1:%2 %3")
+                                    .arg(scriptName).arg(lines.at(i).position.lineNumber).arg(var);
+                continue;
+            }
+            if (fragments.size() < 2) { ++singlePiece; continue; }   // 单片段：构建期已编译
             QSharedPointer<ExpressionNode> joined = fragments.first();
             for (int k = 1; k < fragments.size(); ++k)
                 joined = QSharedPointer<BinaryOpNode>::create(
@@ -1896,9 +1930,19 @@ void EraParseTable::traceHtmlStringArguments() {
                                     .arg(var).arg(fragments.size()));
         }
     }
-    if (traced > 0)
-        qInfo().noquote() << "[parse] HTML_PRINT 字符串反向追踪：" << traced
-                          << "条实参在装载期重建 →" << tracedAt.join(QStringLiteral(", "));
+    const int stopped = stoppedAtControl + stoppedAtScope + stoppedAtBase;
+    if (traced > 0 || stopped > 0) {
+        QString message = QStringLiteral("[parse] HTML_PRINT 字符串反向追踪： %1 条实参在装载期重建，"
+                                         "%2 条停下（控制流/调用 %3，跨作用域 %4，无基 %5，"
+                                         "单片段 %6）→ 停下的交运行期整串解析")
+                              .arg(traced).arg(stopped)
+                              .arg(stoppedAtControl).arg(stoppedAtScope).arg(stoppedAtBase)
+                              .arg(singlePiece);
+        if (!firstStop.isEmpty())
+            message += QStringLiteral("；首个停在 %1").arg(firstStop);
+        if (traced > 0) message += QStringLiteral("\n    ") + tracedAt.join(QStringLiteral(", "));
+        qInfo().noquote() << message;
+    }
 }
 
 

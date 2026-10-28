@@ -326,6 +326,30 @@ int main(int argc, char** argv) {
         }
     }
     console.clearAll();
+    // 更严格的一档：两个片段**各自**都是结构化 IR（开标签一段、`</font><shape>` 一段），
+    // 单独分词的栈状态都自洽，但跨片段的配对证明不了。拼接一律作废 IR，
+    // 否则闭标签会被当成空栈上的噪声消费掉，尾部 <shape> 继承红色。
+    {
+        const auto runAssignment = [&](const QString& source) {
+            const auto assignment = AstBuilder::build(source, {}, resolve);
+            for (const auto& operand : assignment.arguments)
+                PrintTemplateCompiler::prepare(operand.ast);
+            engine.executeInstruction(assignment);
+        };
+        runAssignment(QStringLiteral("LOCALS =  <font color='#ff0000'>"));
+        runAssignment(QStringLiteral("LOCALS += @\"</font><shape type='space' param='5'>\""));
+        runAssignment(QStringLiteral("HTML_PRINT LOCALS"));
+        if (console.buffer().count() == 1) {
+            bool leaked = false;
+            for (const auto& span : flatSpansOf(console.buffer().at(0)))
+                if (span.kind == ConsoleSpanKind::Shape && span.style.color.isValid()) leaked = true;
+            check(!leaked && console.buffer().at(0).plainText().isEmpty(),
+                  "tags straddling two separately compiled pieces are re-paired at print time");
+        } else {
+            check(false, "straddling compiled pieces produce one line");
+        }
+    }
+    console.clearAll();
     storage.setLocalStr(0, "<u>runtime</u><br>");
     line = AstBuilder::build("HTML_PRINT LOCALS", {}, resolve);
     check(line.arguments.first().ast && line.printTemplate, "HTML string is compiled during load");

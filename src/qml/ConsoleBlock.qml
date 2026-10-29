@@ -182,7 +182,7 @@ Item {
         id: contentRow
         objectName: "textCells"
         anchors.left: parent.left
-        anchors.verticalCenter: parent.verticalCenter
+        anchors.top: parent.top
         visible: block.kind === "text"
         Repeater {
             model: block.visible && block.kind === "text" ? block.glyphRuns : []
@@ -196,7 +196,7 @@ Item {
                 Text {
                     id: glyph
                     objectName: "gridGlyph"
-                    anchors.verticalCenter: parent.verticalCenter
+                    anchors.top: parent.top
                     textFormat: Text.PlainText
                     text: parent.modelData.text
                     // 空 family 交给 Qt 使用系统默认字体。
@@ -229,7 +229,7 @@ Item {
         objectName: "blockImageButton"   // 供 QML 测试 findChild 命中
         visible: block.showImageButton
         anchors.left: parent.left
-        anchors.verticalCenter: parent.verticalCenter
+        anchors.top: parent.top
         source: (visible && block.blockData && block.blockData.imageButton)
                     ? ("image://emuera/" + encodeURIComponent(block.blockData.imageButton)) : ""
         width: Math.max(1, block.width)
@@ -247,7 +247,7 @@ Item {
         objectName: "blockImage"          // 供 QML 测试 findChild 命中
         visible: block.kind === "image" && !block.showImageButton
         anchors.left: parent.left
-        anchors.verticalCenter: parent.verticalCenter
+        anchors.top: parent.top
         // QQuickImageProvider（Qt 文档）："image:" scheme + provider 标识 + id；
         // provider 名不区分大小写，id 其余部分保留大小写 —— 非 ASCII 资源名必须
         // 先 encodeURIComponent（C++ 侧 normalizeId 再 QUrl::fromPercentEncoding 还原）。

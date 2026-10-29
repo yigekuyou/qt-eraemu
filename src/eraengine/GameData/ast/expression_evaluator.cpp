@@ -57,6 +57,20 @@ inline bool isRuntimeString(const QVariant& v) noexcept {
     return id == QMetaType::QString || id == QMetaType::QChar || isFlatStringValue(v);
 }
 
+// PRINTFORM 的宽度是控制台显示格数：半角字符占 1 格，全角字符占 2 格。
+// 语言编码字节数只用于 STRLENS/SUBSTRING 等脚本语义；不能用于显示补空格。
+// 汉化文本中存在目标代码页无法表示的字符，按编码字节数补齐会让一个声明为
+// 30 格的按钮变成 31 格，随后各列逐项右移。
+inline int consoleDisplayUnits(const QString& text) noexcept {
+    int units = 0;
+    for (int i = 0; i < text.size(); ++i) {
+        const ushort u = text.at(i).unicode();
+        // 与 ConsoleLayout::measureUnits 保持同一套网格宽度规则。
+        units += (u < 0x80 || (u >= 0xFF61 && u <= 0xFF9F)) ? 1 : 2;
+    }
+    return units;
+}
+
 // ---------------------------------------------------------------------------
 // TOSTR 的第 2 参数：.NET 数字格式串（C# `i.ToString(format)`）
 //
@@ -495,8 +509,10 @@ QVariant ExpressionEvaluator::evaluateStrForm(const StrFormNode &node, VariableS
                 throw std::runtime_error("Negative numeric FORM width");
             if (width > 1000000) throw std::runtime_error("FORM width exceeds allocation limit");
             int units = 0;
-            units = langByteCount(value);
-            if (part.expression->valueType() == OperandType::Int) units = value.size();
+            if (part.expression->valueType() == OperandType::Int)
+                units = value.size();
+            else
+                units = consoleDisplayUnits(value);
             const QString padding(int(qMax<qint64>(0, width - units)), QLatin1Char(' '));
             value = part.leftAlign ? value + padding : padding + value;
         }

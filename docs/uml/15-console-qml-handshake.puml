@@ -80,7 +80,8 @@ note over C,V
   stageRows = gridRows - 1（输入框是 QML 独立控件，不在舞台内）
   QML 按 stageRows 分摊：cellHeight = gridHeightPx / stageRows
   按 gridRows 分摊会让正文与图片层比舞台少一整行高度。
-  stageImageLayer 的子项仍按整格（cols × 列宽、rows × 行高）摆放，
+  stageImageLayer 的子项位置按格子（col/row），尺寸用图片原始尺寸
+  （pxWidth/pxHeight；满格会把图拉伸几像素，框与立絵对不上），
   整层只套一次等比 scale = cellHeight / lineHeight（逐图定位会留下 1px 暗缝）；
   画布列宽 = 舞台列宽 / scale，缩放后正好落回舞台的列。
   纵向 = 行号 × lineHeight + ypos 像素位移（pxTop = raw_ypos × fontSize / 100，

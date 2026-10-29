@@ -67,6 +67,10 @@ Item {
     property bool isBacklog: false
     // 舞台打印图由 Console.qml 的独立 overlay 绘制；历史行仍由本组件绘制。
     property bool stageLayer: false
+    // 舞台图片层：位置按格子摆，**尺寸**用 C++ 量出的原始尺寸（pxWidth/pxHeight），
+    // 0 = 不覆盖（文字/历史视图仍按整格算）。
+    property real fixedWidth: 0
+    property real fixedHeight: 0
     visible: !(stageLayer && kind === "image")
     SystemPalette { id: systemPalette }
 
@@ -152,8 +156,12 @@ Item {
     x: gridCol * cellWidth
     y: offsetRows * cellHeight
     // 外层至少覆盖 C++ 的网格测量；文本内容本身由 glyph 容器自动撑开。
-    width: Math.max(gridCols * cellWidth, contentRow.implicitWidth)
-    height: Math.max(gridRows * cellHeight, contentRow.implicitHeight)
+    width: fixedWidth > 0
+           ? fixedWidth
+           : Math.max(gridCols * cellWidth, contentRow.implicitWidth)
+    height: fixedHeight > 0
+            ? fixedHeight
+            : Math.max(gridRows * cellHeight, contentRow.implicitHeight)
     // 叠放顺序 = 控制台打印顺序（C++ 给的扁平 z）。三个 Instantiator 共用同一个
     // 父 Item 后，靠它把 text/image/shape 按真正的绘制顺序交叠 —— 对齐 C#
     // 「逐 part 顺序绘制」：图可压住先打印的字，后打印的字也能盖住先打印的图。

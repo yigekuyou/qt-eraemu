@@ -656,6 +656,12 @@ TestCase {
             const faceTop = face.mapToItem(overlay.parent, 0, 0).y;
             const frameTop = frame.mapToItem(overlay.parent, 0, 0).y;
             verify(Math.abs(faceTop - frameTop) < 0.01, "negative ypos aligns frame with portrait");
+            // 尺寸用图片**原始尺寸**（C++ 量出来的 pxWidth/pxHeight），
+            // 不是「满格」：满格会把 180×180 的画像枠画成 184×176。
+            verify(Math.abs(face.width - face.blockData.pxWidth) < 0.01,
+                   "宽度 = 图片原始尺寸（不是满格 cols×列宽）");
+            verify(Math.abs(face.height - face.blockData.pxHeight) < 0.01,
+                   "高度 = 图片原始尺寸（不是满格 rows×行高）");
             const title = view.blockAt(0, 0).mapToItem(overlay.parent, 0, 0);
             verify(Math.abs(faceTop - title.y - view.cellHeight) < 0.01,
                    "portrait starts exactly one line below title for both alignments");

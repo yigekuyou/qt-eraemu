@@ -118,6 +118,12 @@ struct ConsoleSpan {
     //   raw_width==0 -> Width = DestBaseSize.Width * height / DestBaseSize.Height）。
     // 由 ConsoleBackend 在生成 span 时一次性查好（避免排版期反复解码图片）。
     QSizeF   imageIntrinsic;
+    // 量出来的**原始尺寸**（= C# ConsoleImagePart 的 Width/height，px）。
+    // 摆放位置用格子（col/row + ypos 像素位移），**尺寸**用这一份：
+    // 按整格（cols×列宽、rows×行高）画会把 180×180 的画像枠画成 184×176，
+    // 立絵 180×260 画成 184×256 —— 图像本身被拉伸，边缘自然对不上。
+    int      imageWidthPx  = 0;
+    int      imageHeightPx = 0;
     // `<img ypos=N>`：N 是**字号百分比**的纵向偏移（C# ConsoleImagePart.raw_ypos）。
     // eraTW 的画像枠・時間停止・特效都是「另一张图叠在立絵上」：它们各自在被打印的
     // 那一行，靠 ypos 负偏移被拉回去盖住立絵 —— 不实现 ypos，框就落在立絵下面一行。

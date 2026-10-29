@@ -1351,6 +1351,11 @@ QVariantList ConsoleBackend::flattenLine(const ConsoleDisplayLine& line, int row
             // 图片层在格子上做位移时用这一份：行决定行首，ypos 是加在行首上的
             // 像素位移，不再折算成「负多少格」再乘行高。
             m.insert("pxTop", part.top);
+            // 图片的**原始尺寸**：QML 用它当宽高（位置仍按格子）。
+            m.insert("pxWidth", part.imageWidthPx > 0 ? part.imageWidthPx
+                                                      : spanCols * m_layout.columnWidthPx());
+            m.insert("pxHeight", part.imageHeightPx > 0 ? part.imageHeightPx
+                                                        : spanRows * m_lineHeight);
             m.insert("width", spanCols * m_layout.columnWidthPx());
             m.insert("height", spanRows * m_lineHeight);
             // 段的点击信息（同一个段的所有区块共享）

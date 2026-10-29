@@ -420,6 +420,9 @@ FocusScope {
                     // 未缩放空间的格尺寸；整层 Scale 负责映射到舞台实际像素。
                     cellWidth: stageImageLayer.unitCol
                     cellHeight: stageImageLayer.unitRow
+                    // 位置按格子、尺寸用图片原始尺寸（满格会把图拉伸几像素）。
+                    fixedWidth: modelData.pxWidth !== undefined ? modelData.pxWidth : 0
+                    fixedHeight: modelData.pxHeight !== undefined ? modelData.pxHeight : 0
                     fontName: root.fontName
                     fontSize: root.renderFontSize
                     foreColor: root.foreColor

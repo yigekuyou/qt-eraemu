@@ -1020,17 +1020,28 @@ void ConsoleBackend::updateStageModels(bool force) {
     }
     const bool visible = m_stageMode && start < total;
     QVector<QHash<int, QVariant>> rows;
+    QVariantList imageBlocks;
     if (visible) {
         rows.reserve(total - start);
         for (int row = start; row < total; ++row) {
             QHash<int, QVariant> item;
-            item.insert(BlocksRole, lineBlocks(row));
+            const QVariantList blocks = lineBlocks(row);
+            item.insert(BlocksRole, blocks);
+            for (const QVariant& value : blocks) {
+                QVariantMap image = value.toMap();
+                if (image.value(QStringLiteral("kind")).toString() != QStringLiteral("image"))
+                    continue;
+                image.insert(QStringLiteral("sourceRow"), row);
+                imageBlocks.append(image);
+            }
             item.insert(LineIndexRole, row);
             item.insert(SpanRowsRole, lineSpanRows(displayLine(row)));
             rows.append(item);
         }
     }
     const bool boundaryChanged = m_stageStart != start || m_stageVisible != visible;
+    const bool imagesChanged = m_stageImageBlocks != imageBlocks;
+    m_stageImageBlocks = imageBlocks;
     m_stageSnapshot.setRows(rows);
     m_stageStart = start;
     m_stageVisible = visible;
@@ -1038,29 +1049,8 @@ void ConsoleBackend::updateStageModels(bool force) {
     m_historyModel.setStage(start, visible);
     if (boundaryChanged)
         emit stageChanged();
-    emit stageImageBlocksChanged();
-}
-
-QVariantList ConsoleBackend::stageImageBlocks() const {
-    QVariantList out;
-    const int total = rowCount();
-    const int start = m_stageStart;
-    if (!m_stageMode || !m_stageVisible || start >= total)
-        return out;
-    // 图片独立于舞台 ListView：保留来源行、打印顺序和完整 span 参数。
-    // QML 用 sourceRow 映射到 stageView 的 contentY，历史行仍由 historyModel 渲染。
-    for (int row = start; row < total; ++row) {
-        const QVariantList blocks = lineBlocks(row);
-        for (const QVariant& value : blocks) {
-            const QVariantMap block = value.toMap();
-            if (block.value(QStringLiteral("kind")).toString() != QStringLiteral("image"))
-                continue;
-            QVariantMap image = block;
-            image.insert(QStringLiteral("sourceRow"), row);
-            out.append(image);
-        }
-    }
-    return out;
+    if (imagesChanged)
+        emit stageImageBlocksChanged();
 }
 
 bool ConsoleBackend::anyKeyInput() const {

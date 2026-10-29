@@ -37,6 +37,7 @@
 #include <QStringList>
 #include <QtTest/QTest>
 #include "console_backend.h"
+#include "print_template.h"
 #include "audio_pipeline_pool.h"
 #include "resource_image_provider.h"
 
@@ -93,6 +94,10 @@ public:
     }
     Q_INVOKABLE void request(QObject* object, const QString& kind) {
         static_cast<ConsoleBackend*>(object)->notifyInputRequested(kind);
+    }
+    Q_INVOKABLE void printHtml(QObject* object, const QString& html) {
+        qobject_cast<ConsoleBackend*>(object)->printTemplate(
+            PrintTemplateCompiler::parseRuntimeMarkup(html));
     }
     Q_INVOKABLE void redraw(QObject* object, int mode) {
         qobject_cast<ConsoleBackend*>(object)->setRedraw(mode);

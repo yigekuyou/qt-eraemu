@@ -537,8 +537,9 @@ TestCase {
         tryCompare(stage, "atYEnd", true);
         const block = view.blockAt(0, 0);
         verify(block !== null, "stage retains the overlapping image anchor");
-        verify(view.lineItem(0).visible, "offscreen image anchor participates in painting");
-        const image = findChild(block, "blockImage");
+        compare(block.visible, false, "stage image is rendered only by the overlay");
+        compare("" + findChild(block, "blockImage").source, "");
+        const image = findChild(view.stageImageAt(0), "blockImage");
         tryCompare(image, "status", Image.Ready);
         const point = image.mapToItem(stage, 0, image.height);
         verify(point.y > 0, "image bottom still overlaps the viewport");
@@ -559,6 +560,126 @@ TestCase {
         }
         backend.flush(); view.syncView();
         verify(backend.stageStart > 0);
+    }
+
+    function test_stageTextNeverRequestsImages() {
+        backend.stageMode = true;
+        const lines = ["━━━━━━━━━━━━", "eraThe World", "2013～2022",
+                       "汉化版仅为学习日语的交流之用", "[0] 初次遊玩", "[1] 存檔再開"];
+        for (const text of lines) {
+            backend.print(text);
+            backend.newline();
+        }
+        backend.flush(); view.syncView();
+        tryCompare(view, "showingStage", true);
+        compare(backend.stageImageBlocks.length, 0);
+        for (let row = 0; row < lines.length; ++row) {
+            const block = view.blockAt(row, 0);
+            verify(block !== null);
+            compare(block.kind, "text");
+            compare("" + findChild(block, "blockImage").source, "",
+                    "text must not be passed to the image provider");
+            compare("" + findChild(block, "blockImageButton").source, "");
+        }
+    }
+
+    function test_stageImageOverlayAlignmentAndHistory() {
+        view.fontSize = view.lineHeight;
+        backend.stageMode = true;
+        const stage = findChild(view, "consoleStageView");
+        const overlay = findChild(view, "stageImageLayer");
+        for (const align of ["left", "center"]) {
+            backend.clearAll();
+            backend.print("▼示例▼"); backend.newline();
+            consoleFixture.printHtml(backend, "<p align='" + align
+                + "'><nobr><img src='offset_atlas' height='400'></nobr></p>");
+            consoleFixture.printHtml(backend, "<p align='" + align
+                + "'><nobr><img src='offset_atlas' height='400' ypos='-100'></nobr></p>");
+            backend.flush(); view.syncView();
+            tryCompare(view, "showingStage", true);
+            compare(backend.stageImageBlocks.length, 2);
+            const face = view.stageImageAt(0);
+            const frame = view.stageImageAt(1);
+            verify(face !== null && frame !== null);
+            tryCompare(findChild(face, "blockImage"), "status", Image.Ready);
+            compare(face.parent, overlay);
+            compare(frame.parent, overlay);
+            verify(frame.z > face.z, "later printed image covers earlier image");
+            verify(Math.abs(face.y - frame.y) < 0.01, "negative ypos aligns frame with portrait");
+            const title = view.blockAt(0, 0).mapToItem(overlay, 0, 0);
+            verify(Math.abs(face.y - title.y - view.cellHeight) < 0.01,
+                   "portrait starts exactly one line below title for both alignments");
+            const oldY = face.y;
+            stage.contentY += view.cellHeight;
+            compare(face.y, oldY - view.cellHeight, "overlay follows the same viewport displacement");
+            // 历史仍重建同一来源行和 ypos；切换不会丢掉图片。
+            backend.stageMode = false; view.syncView();
+            tryCompare(overlay, "visible", false);
+            const historyFace = view.blockAt(1, 0);
+            const historyFrame = view.blockAt(2, 0);
+            verify(historyFace !== null && historyFrame !== null);
+            tryCompare(findChild(historyFace, "blockImage"), "status", Image.Ready);
+            compare(historyFace.blockData.text, "offset_atlas");
+            compare(historyFrame.blockData.offsetRows, -1);
+            compare(backend.stageImageBlocks.length, 0);
+            backend.stageMode = true;
+        }
+    }
+
+    function test_stageImageOverlayFollowsTrimmedOrigin() {
+        backend.stageMode = true;
+        backend.setMaxLog(12);
+        for (let i = 0; i < 7; ++i) {
+            backend.print("before " + i); backend.newline();
+        }
+        backend.printImage("offset_atlas", 200, 400); backend.newline();
+        backend.flush(); view.syncView();
+        const stage = findChild(view, "consoleStageView");
+        const overlay = findChild(view, "stageImageLayer");
+        for (let i = 0; i < 8; ++i) {
+            backend.print("after " + i); backend.newline(); backend.flush(); view.syncView();
+            wait(1);
+            const face = view.stageImageAt(0);
+            verify(face !== null, "overlapping portrait survives trimming");
+            const index = face.blockData.sourceRow - backend.stageStart;
+            const line = stage.itemAtIndex(index);
+            verify(line !== null);
+            const anchor = line.mapToItem(overlay, 0, 0);
+            verify(Math.abs(face.y - anchor.y - face.offsetRows * view.cellHeight) < 0.01,
+                   "image and source row use the same ListView origin after trimming");
+        }
+        backend.setMaxLog(5000);
+    }
+
+    function test_stageImageSnapshotHonorsRedrawAndButtons() {
+        backend.stageMode = true;
+        consoleFixture.printHtml(backend,
+            "<button value='7' title='portrait'><img src='offset_atlas' srcb='face_01_sel' height='200'></button>");
+        consoleFixture.request(backend, "INPUT");
+        view.syncView();
+        tryCompare(view, "showingStage", true);
+        const face = view.stageImageAt(0);
+        verify(face !== null);
+        compare(face.blockData.tooltip, "portrait");
+        const swap = findChild(face, "blockImageButton");
+        mouseMove(face, face.width / 2, face.height / 2);
+        tryVerify(function() { return face.hovered; });
+        compare("" + swap.source, "image://emuera/face_01_sel");
+        const submitted = Qt.createQmlObject('import QtTest; SignalSpy {}', tc);
+        submitted.target = backend;
+        submitted.signalName = "inputSubmitted";
+        mousePress(face, face.width / 2, face.height / 2, Qt.LeftButton);
+        compare(submitted.count, 1, "overlay button submits input");
+        compare(submitted.signalArguments[0][0], 7);
+        mouseRelease(face, face.width / 2, face.height / 2, Qt.LeftButton);
+        submitted.destroy();
+        consoleFixture.finishInput(backend);
+        const published = backend.stageImageBlocks.length;
+        consoleFixture.redraw(backend, 0);
+        backend.printImage("offset_atlas", 100, 100); backend.newline(); backend.flush();
+        compare(backend.stageImageBlocks.length, published, "REDRAW 0 keeps published images");
+        consoleFixture.redraw(backend, 3);
+        compare(backend.stageImageBlocks.length, published + 1, "forced frame publishes image and text together");
     }
 
     function test_stageAndHistoryAreExclusiveAndShortStageStartsAtTop() {

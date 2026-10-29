@@ -230,34 +230,6 @@ FocusScope {
         }
     }
 
-    // 舞台打印图片层：图片不再依赖 ListView 委托跨行溢出。
-    // 历史视图仍由每个历史行的 ConsoleBlock 保存并渲染图片。
-    Item {
-        id: stageImageLayer
-        anchors.fill: parent
-        z: 5
-        visible: root.showingStage
-        clip: true
-        Repeater {
-            model: root.backend ? root.backend.stageImageBlocks : []
-            delegate: Image {
-                required property var modelData
-                readonly property real sourceRow: modelData.sourceRow || 0
-                readonly property real offsetRows: modelData.offsetRows || 0
-                x: (modelData.col || 0) * root.cellWidth
-                y: (sourceRow - root.backend.stageStart - stageView.contentY / root.cellHeight + offsetRows) * root.cellHeight
-                width: Math.max(1, (modelData.cols || 1) * root.cellWidth)
-                height: Math.max(1, (modelData.rows || 1) * root.cellHeight)
-                source: modelData.text ? "image://emuera/" + encodeURIComponent(modelData.text) : ""
-                fillMode: Image.PreserveAspectFit
-                verticalAlignment: Image.AlignTop
-                asynchronous: true
-                retainWhileLoading: true
-                smooth: width < implicitWidth || height < implicitHeight
-            }
-        }
-    }
-
     // 历史与舞台共用几何、委托和跨行图片显示范围。
     component ConsoleView: ListView {
         anchors.fill: parent
@@ -282,6 +254,10 @@ FocusScope {
     }
     function lineItem(row) {
         return (showingStage ? stageView : view).itemAtIndex(row);
+    }
+    // 独立舞台图片层的诊断/测试入口，图片顺序就是打印顺序。
+    function stageImageAt(index) {
+        return stageImages.itemAt(index);
     }
     // 第 row 行的第 i 个区块对象（行内顺序 = C++ 打平顺序）
     function blockAt(row, i) {
@@ -397,6 +373,40 @@ FocusScope {
                             isBacklog: false
                         }
                     }
+                }
+            }
+        }
+
+        // 打印图片层与背景分离，位于正文之上、HTML island 之下。
+        // 图片保留 sourceRow/点击信息，用同一个 ConsoleBlock 渲染 src/srcb。
+        Item {
+            id: stageImageLayer
+            objectName: "stageImageLayer"
+            anchors.fill: parent
+            anchors.rightMargin: root.scrollBarWidth
+            z: 5
+            visible: root.showingStage
+            clip: true
+            Repeater {
+                id: stageImages
+                model: root.backend ? root.backend.stageImageBlocks : []
+                delegate: ConsoleBlock {
+                    required property var modelData
+                    required property int index
+                    z: index
+                    blockData: modelData
+                    backend: root.backend
+                    cellWidth: root.cellWidth
+                    cellHeight: root.cellHeight
+                    fontName: root.fontName
+                    fontSize: root.renderFontSize
+                    foreColor: root.foreColor
+                    focusColor: root.focusColor
+                    logColor: root.logColor
+                    // originY 可因模型删除/插入变化，不能假设 ListView 原点为零。
+                    y: ((modelData.sourceRow - root.backend.stageStart)
+                        + offsetRows) * root.cellHeight
+                        + stageView.originY - stageView.contentY
                 }
             }
         }

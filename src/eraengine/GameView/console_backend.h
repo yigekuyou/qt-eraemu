@@ -206,7 +206,7 @@ public:
 
     [[nodiscard]] QAbstractItemModel* historyModel() { return &m_historyModel; }
     [[nodiscard]] QAbstractItemModel* stageModel() { return &m_stageSnapshot; }
-    [[nodiscard]] QVariantList stageImageBlocks() const;
+    [[nodiscard]] QVariantList stageImageBlocks() const { return m_stageImageBlocks; }
     [[nodiscard]] int stageStart() const { return m_stageStart; }
     [[nodiscard]] bool stageMode() const { return m_stageMode; }
     void setRedraw(qint64 mode);
@@ -522,6 +522,7 @@ private:
     ConsoleLayout m_layout;
     ConsoleLineProxyModel m_historyModel{this};
     ConsoleStageSnapshotModel m_stageSnapshot{this};
+    QVariantList m_stageImageBlocks;
     int m_stageStart = 0;
     bool m_stageMode = false;
     bool m_stageVisible = false;

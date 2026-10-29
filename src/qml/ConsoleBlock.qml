@@ -144,9 +144,8 @@ Item {
     }
 
     // 位置与尺寸：网格坐标 × 单元格大小（QML 说了算）。
-    // x = 绝对列 × 格宽（含对齐平移）；y = ypos 行数偏移 —— 区块的锚点行
-    // 就是所属委托（显示行），行内不再需要 windowTopRow 锚定。
-    // y 允许为负 / 超过行高：跨行图与带 ypos 的图层块会探出行外，交给视口 clip。
+    // x = 绝对列 × 格宽（含对齐平移）；y = ypos 行数偏移。
+    // 这是现有布局契约：跨行图片与图层通过根项溢出本行绘制。
     x: gridCol * cellWidth
     y: offsetRows * cellHeight
     // 外层至少覆盖 C++ 的网格测量；文本内容本身由 glyph 容器自动撑开。
@@ -182,7 +181,7 @@ Item {
         id: contentRow
         objectName: "textCells"
         anchors.left: parent.left
-        anchors.top: parent.top
+        anchors.verticalCenter: parent.verticalCenter
         visible: block.kind === "text"
         Repeater {
             model: block.visible && block.kind === "text" ? block.glyphRuns : []
@@ -196,7 +195,7 @@ Item {
                 Text {
                     id: glyph
                     objectName: "gridGlyph"
-                    anchors.top: parent.top
+                    anchors.verticalCenter: parent.verticalCenter
                     textFormat: Text.PlainText
                     text: parent.modelData.text
                     // 空 family 交给 Qt 使用系统默认字体。
@@ -235,6 +234,7 @@ Item {
         width: Math.max(1, block.width)
         height: Math.max(1, block.height)
         fillMode: Image.PreserveAspectFit
+        verticalAlignment: Image.AlignTop
         // Qt 文档（Images）：「Enable image.smooth only if required」——
         // 原尺寸显示时 smooth 无视觉效果还会更慢，仅在缩放时开启。
         smooth: width < imageItemB.implicitWidth || height < imageItemB.implicitHeight
@@ -257,13 +257,11 @@ Item {
         // same size as its span so a loaded resource cannot paint into the
         // following line or leave a zero-sized QML item.
         //
-        // fillMode 用 PreserveAspectFit 而非 QML 默认的 Stretch：区块尺寸是
-        // 「列数×半角宽 / 行数×行高」的**网格量化**值，与 C# 的像素精确 destRect
-        // 有半格误差。Stretch 会把这个误差变成拉伸（例：eraTW 标题 1041×16 的
-        // 条图被拉成 1040×行高）；PreserveAspectFit 保持原图纵横比，视觉等价。
+        // 网格区块保留资源纵横比，图片的垂直起点由 anchors.top 与 offsetRows 决定。
         width: Math.max(1, block.width)
         height: Math.max(1, block.height)
         fillMode: Image.PreserveAspectFit
+        verticalAlignment: Image.AlignTop
         smooth: width < imageItem.implicitWidth || height < imageItem.implicitHeight
         asynchronous: true
         // 文档：source 变化时默认立即丢弃旧图（异步加载会闪一下）；

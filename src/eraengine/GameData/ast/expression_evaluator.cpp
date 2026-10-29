@@ -498,9 +498,15 @@ QVariant ExpressionEvaluator::evaluateStrForm(const StrFormNode &node, VariableS
         if (!part.expression) continue;
         if (isKnown(part.expectedType) && part.expression->valueType() != part.expectedType)
             throw std::runtime_error("FORM interpolation type mismatch");
+        // 显式转换：类型取自节点定型结果（valueType()），不看任何「期望类型」。
+        //   Int -> 十进制文本；其余（Str / 带标记的 FlatStringValue）走 stringText，
+        //   它负责把 FlatStringValue 的纯文本取出来（保持“插值结果不再解析标记”）。
+        const OperandType valueType = part.expression->valueType();
         const QVariant v = evaluateNode(*part.expression, storage, gameBaseData, scope);
         if (!v.isValid()) throw std::runtime_error("Invalid FORM value");
-        QString value = stringText(v);
+        QString value = (valueType == OperandType::Int)
+                ? QString::number(v.toLongLong())
+                : stringText(v);
         if (part.width) {
             const auto widthValue = evaluateNode(*part.width, storage, gameBaseData, scope);
             if (!widthValue.isValid()) throw std::runtime_error("Invalid FORM width");
@@ -994,7 +1000,17 @@ bool ExpressionEvaluator::readGameBase(DynamicContext& ctx, QVariant& out)
     // Check if this is a GameBase variable
     if (ctx.varName.startsWith("GAMEBASE_") && gameBaseData) {
         QString key = ctx.varName.mid(9);  // Remove "GAMEBASE_" prefix
-        QString value = gameBaseData->get(key);
+        const QString value = gameBaseData->get(key);
+        // GAMEBASE_VERSION 是整数型伪变量（system_variables.h 定型为 Int，
+        // C# 侧为 IntConstantToken(gamebase.ScriptVersion)）。CSV 里可以写
+        // 非数字（eraTW 是 "proto"）：按 C# ScriptVersion 的口径取整数，
+        // 不可解析即 0。原始字符串由 GAMEBASE_VERSIONNAME 提供。
+        if (key == QLatin1String("VERSION")) {
+            bool ok = false;
+            const qint64 number = value.trimmed().toLongLong(&ok);
+            out = QVariant::fromValue<qint64>(ok ? number : 0);
+            return true;
+        }
         if (!value.isEmpty()) {
             out = QVariant(value);
             return true;

@@ -199,10 +199,22 @@ QSharedPointer<StrFormNode> StrFormParser::parse(const QString& text, const Expr
         const QString value = comma < 0 ? inner : inner.left(comma);
         auto expr = resolve ? resolve(value.trimmed()) : nullptr;
         if (!expr) return false;
-        if (expr->valueType() != type
-            && expr->kind() != NodeKind::Variable && expr->kind() != NodeKind::Function) return false;
+        // C# StrForm.FormatPercent / FormatCurlyBrace 都用 GetStrValue：
+        // `%int%` 与 `%str%`、`{int}` 与 `{str}` 全部合法（整数走 ToString）。
+        // 只有宽度/对齐参数必须是 Int。此前把 % 限定 Str、{ 限定 Int，
+        // 导致 `%GAMEBASE_VERSION%`（Int 伪变量）整行解析失败并静默打成空行。
+        (void)type;
+        const OperandType vt = expr->valueType();
+        if (isKnown(vt) && vt != OperandType::Int && vt != OperandType::Str) return false;
         b.addExpr(expr);
-        b.parts.last().expectedType = type;
+        // expectedType 记录的是「该语法位置**强制**的类型」：`%…%` / `{…}` 在 C#
+        // 里都走 GetStrValue，int 与 string 都合法，因此这里没有强制类型。
+        // 真正的类型由节点自己携带（part.expression->valueType()，在
+        // markLoadComplete/finalizeBindings 之后定型）；运行期按该已定型类型做
+        // **显式转换**（见 evaluateStrForm：Int -> 十进制文本 + 数字补白，
+        // Str -> 原串 + 显示格补白）。不要在这里把推断类型抄成契约：私有作用域
+        // 变量在解析期的推断可能还没定型，抄下来会在 finalize 后自相矛盾。
+        b.parts.last().expectedType = OperandType::Unknown;
         if (comma >= 0) {
             const int second = findTopLevel(inner, ',', comma + 1, -1);
             const QString width = second < 0 ? inner.mid(comma + 1) : inner.mid(comma + 1, second-comma-1);

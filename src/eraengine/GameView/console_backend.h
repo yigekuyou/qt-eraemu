@@ -173,6 +173,15 @@ class ConsoleBackend : public QAbstractListModel {
     Q_PROPERTY(QAbstractItemModel* stageModel READ stageModel CONSTANT)
     // 舞台打印图层：独立于 ListView 行委托，保存来源行及完整图片参数。
     Q_PROPERTY(QVariantList stageImageBlocks READ stageImageBlocks NOTIFY stageImageBlocksChanged)
+    // 底部回显行：正文**最底一行**的区块（与行委托同一形状）。
+    //
+    // C# 的窗口最底一行是独立的输入框（MainWindow.richTextBox1），而
+    // doInputToEmueraProgram 结尾的 `Print(str); PrintFlush(false);` 又把提交值
+    // 写进正文，era 脚本也有直接往最底一行打提示/按钮的写法。本移植的输入栏是
+    // QML 独立控件（ConsoleInput.qml，**不在舞台上**），所以这一行不画在舞台里：
+    // 舞台快照到倒数第二行为止，最底一行由本属性单独递交，QML 把它排在输入
+    // 回显栏里（输入框左侧）。
+    Q_PROPERTY(QVariantList inputEchoLine READ inputEchoLine NOTIFY inputEchoLineChanged)
     Q_PROPERTY(int stageStart READ stageStart NOTIFY stageChanged)
     Q_PROPERTY(bool stageMode READ stageMode WRITE setStageMode NOTIFY stageChanged)
     // ---- 工具提示样式（C# TOOLTIP_* 族；WinForms ToolTip 的 InitialDelay /
@@ -209,6 +218,7 @@ public:
     [[nodiscard]] QAbstractItemModel* historyModel() { return &m_historyModel; }
     [[nodiscard]] QAbstractItemModel* stageModel() { return &m_stageSnapshot; }
     [[nodiscard]] QVariantList stageImageBlocks() const { return m_stageImageBlocks; }
+    [[nodiscard]] QVariantList inputEchoLine() const { return m_inputEchoLine; }
     [[nodiscard]] int stageStart() const { return m_stageStart; }
     [[nodiscard]] bool stageMode() const { return m_stageMode; }
     void setRedraw(qint64 mode);
@@ -451,6 +461,7 @@ signals:
     void toolTipStyleChanged();
     void backgroundImagesChanged();
     void stageImageBlocksChanged();
+    void inputEchoLineChanged();
     void htmlIslandChanged();
     void gridChanged();
     void lineCountChanged();
@@ -522,12 +533,20 @@ private:
     void pruneTailCache() const;
     void invalidateLineCache();
     void updateStageModels(bool force = false);
+    // 「溢出到窗口最底那一行（输入行）」的那一行下标；不需要/不该摘时 -1。
+    //   * 没预留输入行（没有输入栏的宿主）-> -1
+    //   * 正文没溢出舞台（例如 eraTW 标题这 45 行定页）-> -1
+    //   * 那一行含图片（跨行图在一行文字栏里没有意义）-> -1，整行留给舞台
+    [[nodiscard]] int inputEchoRow() const;
+    // 重新取「正文最底一行」的区块，变化时才发信号（舞台快照不含这一行）。
+    void updateInputEchoLine();
 
     ConsoleBuffer m_buffer;
     ConsoleLayout m_layout;
     ConsoleLineProxyModel m_historyModel{this};
     ConsoleStageSnapshotModel m_stageSnapshot{this};
     QVariantList m_stageImageBlocks;
+    QVariantList m_inputEchoLine;
     int m_stageStart = 0;
     bool m_stageMode = false;
     bool m_stageInputRowReserved = false;

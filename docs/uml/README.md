@@ -49,6 +49,8 @@
 
 输入行不属于舞台正文。`EraEngine::syncConsoleGrid()` 的 `gridRows` 按**窗口高 / 行高**计算（含输入行，脚本看到的行数与 C# 一致）；输入框是 QML 独立控件（`ConsoleInput.qml`，位于 `Stage` 之外），因此 `ConsoleBackend::stageRows()` 暴露 `gridRows - 1` 作为正文可绘制行数。QML 必须按 `stageRows` 分摊行高：`cellHeight = gridHeightPx / stageRows`。若按 `gridRows` 分摊，正文与图片层会比舞台少一整行高度，最后一行落到输入行位置。
 
+输入行本身由 QML 输入栏承载，最底一行随之移交。C# 的窗口最底一行是独立的输入框（`MainWindow.richTextBox1`），`doInputToEmueraProgram` 结尾的 `Print(str); PrintFlush(false);` 又把提交值写进正文；era 脚本也会把输入提示打到最新那一行。本移植的输入栏在舞台之外，所以当正文溢出舞台（`总行数 > stageRows()`）时，`ConsoleBackend::updateStageModels()` 把最新一行从舞台快照中摘出、作为 `inputEchoLine` 单独递交，`ConsoleInput.qml` 把它排在输入框左侧（`consoleInputEcho`）；没溢出时（eraTW 标题这 45 行定页画面）不摘，全部行都在舞台上。这样「舞台 45 行 + 输入回显 1 行 = 窗口 46 行」，与 C# 的行数一致。
+
 舞台打印图片层整层一次缩放。`stageImageLayer` 的子项用**未缩放的配置像素**坐标摆放（1 行 = `lineHeight`，1 列 = `fontSize / 2`，与 `ConsoleLayout::columnWidthPx()` 同基准），整层只套一个 `scale = cellHeight / lineHeight`。逐图按 `cellHeight` 定位会在每张图边界各自取整，密集切片（例如 `title.webp` 的 36 条 16px 横条）之间会留下 1px 暗缝；整层缩放让所有边界落在同一套连续变换上。历史视图仍按行委托渲染，不使用这层。
 
 静态检查发现的未定义函数属于内容/脚本诊断。运行时不会伪造 `@GAMEOVER` 实现；如果脚本在执行时调用缺失标签，仍按执行错误处理。

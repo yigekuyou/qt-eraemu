@@ -860,7 +860,9 @@ ApplicationWindow {
             titleActive: eraEngine.defaultTitleVisible
             fontName: eraEngine.gui.fontName
             fontSize: eraEngine.gui.fontSize
+            lineHeight: eraEngine.gui.lineHeight
             foreColor: String(eraEngine.gui.foreColor)
+            focusColor: String(eraEngine.gui.focusColor)
         }
 
 

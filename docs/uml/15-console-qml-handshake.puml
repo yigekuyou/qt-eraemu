@@ -83,6 +83,9 @@ note over C,V
   stageImageLayer 的子项用未缩放配置像素坐标
   （1 行 = lineHeight，1 列 = fontSize / 2），整层只套一个
   scale = cellHeight / lineHeight：逐图定位会让密集切片之间留下 1px 暗缝。
+  溢出舞台时（总数 > stageRows）最新一行即窗口最底那一行：
+  舞台快照不包含它，改由 inputEchoLine 递交，QML 排在输入框左侧
+  （没溢出则全部行都在舞台上）。
 end note
 
 legend bottom

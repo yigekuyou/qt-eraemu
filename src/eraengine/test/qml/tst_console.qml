@@ -66,6 +66,7 @@ TestCase {
         consoleFixture.finishInput(backend);
         consoleFixture.redraw(backend, 1);
         backend.stageMode = false;
+        backend.stageInputRowReserved = false;
         if (inputBar) { inputBar.destroy(); inputBar = null; }
         if (view) { view.destroy(); view = null; }
         backend.clearAll();
@@ -107,6 +108,50 @@ TestCase {
         view.scale = 1.2;
         compare(field.mapToItem(host, 0, 0), bounds, "input does not inherit stage scale");
         spy.destroy();
+    }
+
+    // 正文**最底一行**（溢出到窗口最底那一行的那一行）属于输入栏、不属于舞台：
+    // 预留输入行时 C++ 把这一行从舞台快照里摘出来单独递交（inputEchoLine），
+    // ConsoleInput 把它渲染在输入框左侧；没溢出时（标题这种定页画面）不摘。
+    function test_echoLineBelongsToInputBarNotStage() {
+        backend.stageInputRowReserved = true;
+        backend.stageMode = true;
+        backend.clearAll();
+        const cap = backend.stageRows;          // 舞台正文行数（gridRows - 输入行）
+        const echo = findChild(inputBar, "consoleInputEcho");
+        const field = findChild(inputBar, "consoleInputField");
+        verify(echo !== null, "输入栏有回显行容器");
+        // 正好装满舞台：不摘行（eraTW 标题就是 45 行定页，摘了会少一行）
+        for (let i = 0; i < cap; ++i) {
+            backend.print("E" + i);
+            backend.newline();
+        }
+        backend.flush();
+        view.syncView();
+        compare(backend.inputEchoLine.length, 0, "填满舞台时不摘行（回显栏为空）");
+        compare(view.rowCount, cap, "全都在舞台上");
+        compare(echo.width, 0);
+
+        // 再打一行 -> 溢出：最新一行（＞）进回显栏，舞台仍占满 cap 行
+        backend.print("＞");
+        backend.flush();
+        view.syncView();
+        compare(backend.inputEchoLine.length, 1, "回显行 = 溢出那一行");
+        compare(backend.inputEchoLine[0].text, "＞");
+        compare(view.rowCount, cap, "舞台仍是 cap 行（内容不整体上移）");
+        compare(view.blockAt(cap - 1, 0).blockData.text, "E" + (cap - 1));
+        verify(echo.width > 0, "回显行占据宽度");
+        compare(field.mapToItem(host, 0, 0).x,
+                echo.mapToItem(host, 0, 0).x + echo.width,
+                "输入框排在回显行右侧");
+
+        // 清屏后回显行清空：输入框回到贴左边缘（无游戏时的常态）
+        backend.clearAll();
+        backend.flush();
+        view.syncView();
+        compare(backend.inputEchoLine.length, 0);
+        compare(echo.width, 0, "无正文时回显行为空");
+        compare(field.mapToItem(host, 0, 0).x, echo.mapToItem(host, 0, 0).x);
     }
 
     function test_timedRedrawKeepsInputGeometryAndFocus() {

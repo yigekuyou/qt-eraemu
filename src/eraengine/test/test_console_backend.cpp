@@ -618,6 +618,88 @@ int main(int argc, char* argv[]) {
         }
     }
 
+    // ---- 5c. 输入回显行（正文最底一行移交 QML 输入栏）----
+    // 输入框不在舞台上（QML 的 ConsoleInput 是独立控件）：预留输入行时舞台快照
+    // 止于倒数第二行，最底一行由 inputEchoLine 单独递交。C# 的窗口最底一行就是
+    // richTextBox1（输入框），era 脚本也会往那一行打提示/按钮。
+    qDebug() << "\n5c) 输入回显行（最底一行不进军台快照）";
+    {
+        ConsoleBackend c;
+        c.setFontSize(16);
+        c.setLineHeight(16);
+        c.setGridColumns(40);
+        c.setGridRows(5);
+        c.setStageMode(true);
+        for (int i = 0; i < 12; ++i) { c.print(QStringLiteral("H%1").arg(i)); c.newline(); }
+        c.flush();
+        check(c.stageStart() == 7 && c.stageModel()->rowCount() == 5,
+              "未预留输入行：舞台照旧占满 5 行（最底一行仍在舞台上）");
+        check(c.inputEchoLine().isEmpty(),
+              "未预留输入行：不递交回显行（否则与舞台重复）");
+
+        int echoes = 0;
+        QObject::connect(&c, &ConsoleBackend::inputEchoLineChanged, [&] { ++echoes; });
+        c.setStageInputRowReserved(true);
+        check(echoes >= 1, "预留输入行：递交回显行（信号）");
+        check(c.stageModel()->rowCount() == 4, "预留输入行：舞台快照少一行（5 → 4）");
+        check(c.stageStart() == 7, "预留输入行：舞台起点 12 - 1 - 4 = 7（内容不整体上移）");
+        check(textOf(c.inputEchoLine(), QStringLiteral("H11")) == QStringLiteral("H11"),
+              "回显行 = 正文最底一行（H11）");
+        const QVariantList stageLast =
+            c.stageModel()->data(c.stageModel()->index(3, 0),
+                                 ConsoleBackend::BlocksRole).toList();
+        check(textOf(stageLast, QStringLiteral("H11")).isEmpty()
+              && textOf(stageLast, QStringLiteral("H10")) == QStringLiteral("H10"),
+              "舞台最后一行是 H10，H11 只在回显行");
+
+        // 未定型尾行（print 后未 newline）同样属于「最底一行」
+        c.clearAll();
+        for (int i = 0; i < 5; ++i) { c.print(QStringLiteral("K%1").arg(i)); c.newline(); }
+        c.print(QStringLiteral("＞"));
+        c.flush();
+        check(textOf(c.inputEchoLine(), QStringLiteral("＞")) == QStringLiteral("＞"),
+              "未定型尾行（＞）立刻成为回显行");
+        check(c.stageModel()->rowCount() == 4, "舞台仍是 4 行（不作待输入的尾行留在上面）");
+
+        // 回显行上的按钮保持可点（与正文同源的 generation/clickable 数据）
+        c.clearAll();
+        c.notifyInputRequested(QStringLiteral("INPUT"));
+        for (int i = 0; i < 5; ++i) { c.print(QStringLiteral("M%1").arg(i)); c.newline(); }
+        c.printButton(QStringLiteral("[0] 戻る"), 0);
+        c.newline();
+        c.flush();
+        const QVariantMap echoButton = blockOf(c.inputEchoLine(), QStringLiteral("[0] 戻る"));
+        check(!echoButton.isEmpty() && echoButton.value("clickable").toBool(),
+              "回显行按钮带点击数据（可在输入栏里点）");
+        check((echoButton.value("generation").toLongLong()) == qint64(c.generation()),
+              "回显行按钮的世代 == 当前世代（未被 BREAKBUTTON 作废）");
+        c.notifyInputDone();
+    }
+    // 不溢出时不摘行：eraTW 标题是 45 行定页画面（gridRows 46 - 输入行 = 45），
+    // 全部行都在舞台上，回显栏为空 —— 否则标题会少一行、把最后的按钮挤进输入栏。
+    {
+        ConsoleBackend c;
+        c.setFontSize(16);
+        c.setLineHeight(16);
+        c.setGridColumns(40);
+        c.setGridRows(6);              // 舞台 5 行
+        c.setStageMode(true);
+        c.setStageInputRowReserved(true);
+        for (int i = 0; i < 5; ++i) { c.print(QStringLiteral("T%1").arg(i)); c.newline(); }
+        c.flush();
+        check(c.inputEchoLine().isEmpty(), "正好装满舞台：不摘行、回显栏为空");
+        check(c.stageStart() == 0 && c.stageModel()->rowCount() == 5,
+              "正好装满舞台：5 行全在舞台上（自第 0 行起）");
+        c.print(QStringLiteral("[1] 存檔再開"));
+        c.newline();
+        c.flush();
+        check(textOf(c.inputEchoLine(), QStringLiteral("[1] 存檔再開"))
+                  == QStringLiteral("[1] 存檔再開"),
+              "溢出 1 行：最新一行进回显栏");
+        check(c.stageStart() == 0 && c.stageModel()->rowCount() == 5,
+              "溢出后舞台仍是 5 行（T0..T4 全在舞台上，最新一行不挤上去）");
+    }
+
     // ---- 8. 工具提示样式（TOOLTIP_*）与 BREAKBUTTON ----
     qDebug() << "\n8) 工具提示样式（TOOLTIP_*）/ BREAKBUTTON";
     {

@@ -165,6 +165,8 @@ class ConsoleBackend : public QAbstractListModel {
     // ——表现就是「内容比窗口宽/高出一倍，只能看见一半」。
     Q_PROPERTY(int gridColumns READ gridColumns NOTIFY gridChanged)
     Q_PROPERTY(int gridRows READ gridRows NOTIFY gridChanged)
+    Q_PROPERTY(int stageRows READ stageRows NOTIFY gridChanged)
+    Q_PROPERTY(bool stageInputRowReserved READ stageInputRowReserved WRITE setStageInputRowReserved NOTIFY gridChanged)
     // 本体即行模型（QML ListView 直接用；CONSTANT：指针生命周期 = 后端本身）
     Q_PROPERTY(QAbstractListModel* lineModel READ lineModel CONSTANT)
     Q_PROPERTY(QAbstractItemModel* historyModel READ historyModel CONSTANT)
@@ -289,6 +291,9 @@ public:
     [[nodiscard]] quint64 generation() const { return m_generation; }
     [[nodiscard]] int gridColumns() const { return m_layout.gridColumns(); }
     [[nodiscard]] int gridRows() const { return m_layout.gridRows(); }
+    [[nodiscard]] int stageRows() const { return qMax(1, m_layout.gridRows() - (m_stageInputRowReserved ? 1 : 0)); }
+    [[nodiscard]] bool stageInputRowReserved() const { return m_stageInputRowReserved; }
+    void setStageInputRowReserved(bool reserved);
     [[nodiscard]] int lineHeight() const { return m_lineHeight; }
     [[nodiscard]] int fontSize() const { return m_layout.fontSize(); }
     // 是否由 C++ 折行。默认 false：**容器自由渲染位置**，C++ 只给区块与位置数据
@@ -525,6 +530,7 @@ private:
     QVariantList m_stageImageBlocks;
     int m_stageStart = 0;
     bool m_stageMode = false;
+    bool m_stageInputRowReserved = false;
     bool m_stageVisible = false;
     bool m_autoRedraw = true;
 

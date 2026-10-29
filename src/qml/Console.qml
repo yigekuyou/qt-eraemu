@@ -166,6 +166,9 @@ FocusScope {
     // 此时没有任何模型/委托，不会画出错位内容。
     readonly property int gridColumns: backend && backend.gridColumns > 0 ? backend.gridColumns : 1
     readonly property int gridRows: backend && backend.gridRows > 0 ? backend.gridRows : 1
+    // 舞台正文少占底部输入行；输入控件由 Main.qml 独立绘制，但这行仍属于
+    // era 的舞台坐标系，因此舞台快照、ListView 和图片层必须共用 stageRows。
+    readonly property int stageRows: backend && backend.stageRows > 0 ? backend.stageRows : gridRows
     // 内容区：右侧常驻滚动条让位、底部留 1px（最后一行下缘不被 clip 切掉）。
     readonly property real gridWidthPx: Math.max(1, stageWidth - scrollBarWidth)
     readonly property real gridHeightPx: Math.max(1, stageHeight - 1)
@@ -385,7 +388,9 @@ FocusScope {
             anchors.fill: parent
             anchors.rightMargin: root.scrollBarWidth
             z: 5
-            visible: root.showingStage
+            // 不依赖 stageView.count：换帧/清屏期间 ListView 可能暂时为空，
+            // 但 C++ 已经发布了图片快照。舞台模式本身才是显示条件。
+            visible: root.backend && root.backend.stageMode && !root.reviewingHistory
             clip: true
             Repeater {
                 id: stageImages
@@ -519,10 +524,10 @@ FocusScope {
             interactive: false
             function positionStage() {
                 forceLayout();
-                if (count <= root.gridRows)
+                if (count <= root.stageRows)
                     positionViewAtBeginning();
                 else
-                    positionViewAtIndex(count - root.gridRows, ListView.Beginning);
+                    positionViewAtIndex(count - root.stageRows, ListView.Beginning);
             }
             // 仅结构或视口变化需要定位；普通行数据更新保持位置和缩放。
             onCountChanged: Qt.callLater(positionStage)

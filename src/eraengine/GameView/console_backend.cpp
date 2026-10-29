@@ -824,7 +824,8 @@ void ConsoleBackend::clearAll() {
     emit cleared();
     emit lineCountChanged();
     if (hadIsland) emit htmlIslandChanged();
-    updateStageModels();
+    // 清屏也必须发布空的舞台图片快照；否则独立 QML 图片层会保留上一帧。
+    updateStageModels(true);
 }
 
 void ConsoleBackend::setAlignment(ConsoleAlign align) {
@@ -938,6 +939,13 @@ void ConsoleBackend::setGridColumns(int columns) {
     if (rowCount() > 0) emit dataChanged(index(0), index(rowCount() - 1));
 }
 
+void ConsoleBackend::setStageInputRowReserved(bool reserved) {
+    if (m_stageInputRowReserved == reserved) return;
+    m_stageInputRowReserved = reserved;
+    emit gridChanged();
+    updateStageModels(true);
+}
+
 void ConsoleBackend::setGridRows(int rows) {
     if (rows <= 0 || rows == m_layout.gridRows()) return;
     m_layout.setGridRows(rows);
@@ -985,7 +993,8 @@ void ConsoleBackend::updateStageModels(bool force) {
     // REDRAW 0 只保留当前舞台前帧；源模型仍遵守正常的 Qt 通知契约。
     if (!force && !m_autoRedraw) return;
     const int total = rowCount();
-    int start = qMax(0, total - m_layout.gridRows());
+    const int visibleRows = m_stageInputRowReserved ? stageRows() : m_layout.gridRows();
+    int start = qMax(0, total - visibleRows);
     // A line is only the anchor of an image, not its full drawing extent.
     // Keep earlier anchors whose image still overlaps the current stage. The
     // extra rows scroll above the viewport; ListView clips the image itself.

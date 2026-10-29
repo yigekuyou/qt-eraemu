@@ -52,8 +52,16 @@ Item {
         backend: eraRender.engine ? eraRender.engine.console : null
         // 当前舞台与历史日志使用独立模型；舞台快照在 C++ flush 帧边界发布。
         // stageMode 属于 ConsoleBackend，Console 通过 backend.stageMode 读取。
-        onBackendChanged: if (backend) backend.stageMode = true
-        Component.onCompleted: if (backend) backend.stageMode = true
+        // era 原版输入框占据舞台底部一行；QML 输入框是独立控件，
+        // 但舞台快照仍必须为它保留这一行的逻辑空间。
+        onBackendChanged: if (backend) {
+            backend.stageInputRowReserved = true;
+            backend.stageMode = true;
+        }
+        Component.onCompleted: if (backend) {
+            backend.stageInputRowReserved = true;
+            backend.stageMode = true;
+        }
         engine: eraRender.engine
         // 标准标题画面的输入由 TitleScreen 交付。
         titleActive: eraRender.engine ? eraRender.engine.defaultTitleVisible : false

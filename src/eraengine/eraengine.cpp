@@ -1743,6 +1743,8 @@ void EraEngine::syncConsoleGrid()
 		const int columnPx = qMax(1, m_guiManager.fontSize() / 2);
 		const int columns = qMax(1, m_guiManager.windowWidth() / columnPx);
 		const int lineHeight = qMax(1, m_guiManager.lineHeight());
+		// C++ 的 gridRows 含输入行（与 C# 的窗口高口径一致）；输入框是 QML 独立
+		// 控件、不在舞台内，舞台正文少用一行由 QML 侧预留（stageInputRowReserved）。
 		const int rows = qMax(1, m_guiManager.windowHeight() / lineHeight);
 		m_console.setGridColumns(columns);
 		m_console.setGridRows(rows);

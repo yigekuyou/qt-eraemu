@@ -55,10 +55,14 @@ Item {
         // era 原版输入框占据舞台底部一行；QML 输入框是独立控件，
         // 但舞台快照仍必须为它保留这一行的逻辑空间。
         onBackendChanged: if (backend) {
+            // C++ 的 gridRows 含输入行（与 C# 的窗口高口径一致）；输入框是
+            // QML 独立控件、不在舞台内，因此舞台正文少用一行，由 QML 预留。
             backend.stageInputRowReserved = true;
             backend.stageMode = true;
         }
         Component.onCompleted: if (backend) {
+            // C++ 的 gridRows 含输入行（与 C# 的窗口高口径一致）；输入框是
+            // QML 独立控件、不在舞台内，因此舞台正文少用一行，由 QML 预留。
             backend.stageInputRowReserved = true;
             backend.stageMode = true;
         }

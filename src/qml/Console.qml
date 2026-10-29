@@ -175,7 +175,10 @@ FocusScope {
     // 单元格 = 舞台像素 ÷ 网格（把除不尽的余量摊给每格；永远 ≥ 字号/2 与行高，
     // 因为 C++ 是先除后取整得到网格的）。
     readonly property real cellWidth: Math.max(1, gridWidthPx / gridColumns)
-    readonly property real cellHeight: Math.max(1, gridHeightPx / gridRows)
+    // 行高按**舞台正文行数**分摊：C++ 的 gridRows 含输入行（窗口高口径），
+    // 而输入框是 QML 独立控件、不在舞台内。若仍按 gridRows 摊，正文会比
+    // 舞台少一整行的高度（图片层尤其明显：最后一行落到输入行位置）。
+    readonly property real cellHeight: Math.max(1, gridHeightPx / stageRows)
     // 渲染字号：常规情况下 == 配置字号（舞台网格就是按它算出来的）。
     // 只有当配置自相矛盾（行高 < 字号）时才压到行距能容纳的大小 —— 这是
     // 「极端配置不重叠」的兜底，不参与窗口缩放（窗口缩放由 Stage 统一做）。

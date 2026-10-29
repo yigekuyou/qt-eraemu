@@ -21,7 +21,7 @@
 | `12-load-pipeline.puml` | Content 输入到 AST、load pass 和诊断的时序 |
 | `13-runtime-control-loop.puml` | SystemStateMachine、ScriptRunner、ProcessState、ExecutionEngine 的闭环、pump 防重入、等待与帧确认 |
 | `14-system-host-capabilities.puml` | SystemHost 的 output/input/data/save/config/title 能力分组与可空注入边界 |
-| `15-console-qml-handshake.puml` | ConsoleBackend 与 QML 的 generation、Qt.callLater、输入提交、销毁与 fallback 握手 |
+| `15-console-qml-handshake.puml` | ConsoleBackend 与 QML 的 generation、Qt.callLater、输入提交、销毁与 fallback 握手；`gridRows`/`stageRows` 口径与舞台图片层整层缩放 |
 | `16-variable-persistence-boundaries.puml` | NameResolution、RuntimeStorage、SaveMapping、BinaryDocument 的边界 |
 
 运行时故意拆成七张互补图：步进只描述脚本执行；系统图只描述帧底交接、状态分派和等待恢复；控制台图只描述信号、QML 属性和提交路径；存档图只描述运行时回调与快照；13-15 分别补足控制闭环、依赖注入和呈现握手。变量专题由 07、08、11、16 分开表达解析、运行时容器、文件格式和跨边界持久化。这样一个类只在拥有该责任的图中展开，跨图只保留接口关系。
@@ -46,6 +46,10 @@
 变量解析只有一条顺序：段身份作用域由装载期写入 `LogicalLine::scopeKey`，运行时显式 intern 为 `ScopeId`；`VariableNode` 的 `AccessKind/VariableKey` 或 `VariableStorage::resolve*Locus` 决定位置，读写共享解析结果。
 
 存档分成两个边界。`08-variable-storage.puml` 描述 `erasave::Map` 如何把声明映射到条目和存储槽；`11-save-format.puml` 只描述 `EraBinaryData::Version`、编码/解码和不兼容文件的原子拒绝；`05-runtime-save-load.puml` 描述状态机和执行引擎怎样调用它们。私有写盘键由 `makePrivateStorageKey(segment, name)` 统一构造，图中不再声称文件只保存裸名。
+
+输入行不属于舞台正文。`EraEngine::syncConsoleGrid()` 的 `gridRows` 按**窗口高 / 行高**计算（含输入行，脚本看到的行数与 C# 一致）；输入框是 QML 独立控件（`ConsoleInput.qml`，位于 `Stage` 之外），因此 `ConsoleBackend::stageRows()` 暴露 `gridRows - 1` 作为正文可绘制行数。QML 必须按 `stageRows` 分摊行高：`cellHeight = gridHeightPx / stageRows`。若按 `gridRows` 分摊，正文与图片层会比舞台少一整行高度，最后一行落到输入行位置。
+
+舞台打印图片层整层一次缩放。`stageImageLayer` 的子项用**未缩放的配置像素**坐标摆放（1 行 = `lineHeight`，1 列 = `fontSize / 2`，与 `ConsoleLayout::columnWidthPx()` 同基准），整层只套一个 `scale = cellHeight / lineHeight`。逐图按 `cellHeight` 定位会在每张图边界各自取整，密集切片（例如 `title.webp` 的 36 条 16px 横条）之间会留下 1px 暗缝；整层缩放让所有边界落在同一套连续变换上。历史视图仍按行委托渲染，不使用这层。
 
 静态检查发现的未定义函数属于内容/脚本诊断。运行时不会伪造 `@GAMEOVER` 实现；如果脚本在执行时调用缺失标签，仍按执行错误处理。
 

@@ -73,6 +73,18 @@ note right of F
   cannot leave a timed wait armed forever.
 end note
 
+
+note over C,V
+  gridRows 与 stageRows 的口径不同：
+  gridRows  = windowHeight / lineHeight（含输入行，脚本可见行数与 C# 一致）
+  stageRows = gridRows - 1（输入框是 QML 独立控件，不在舞台内）
+  QML 按 stageRows 分摊：cellHeight = gridHeightPx / stageRows
+  按 gridRows 分摊会让正文与图片层比舞台少一整行高度。
+  stageImageLayer 的子项用未缩放配置像素坐标
+  （1 行 = lineHeight，1 列 = fontSize / 2），整层只套一个
+  scale = cellHeight / lineHeight：逐图定位会让密集切片之间留下 1px 暗缝。
+end note
+
 legend bottom
   generation is the backend's logical presentation version and button validity
   token. QML owns view composition and delegates; ConsoleBackend owns model,

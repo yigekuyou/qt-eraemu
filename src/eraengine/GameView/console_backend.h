@@ -169,6 +169,8 @@ class ConsoleBackend : public QAbstractListModel {
     Q_PROPERTY(QAbstractListModel* lineModel READ lineModel CONSTANT)
     Q_PROPERTY(QAbstractItemModel* historyModel READ historyModel CONSTANT)
     Q_PROPERTY(QAbstractItemModel* stageModel READ stageModel CONSTANT)
+    // 舞台打印图层：独立于 ListView 行委托，保存来源行及完整图片参数。
+    Q_PROPERTY(QVariantList stageImageBlocks READ stageImageBlocks NOTIFY stageImageBlocksChanged)
     Q_PROPERTY(int stageStart READ stageStart NOTIFY stageChanged)
     Q_PROPERTY(bool stageMode READ stageMode WRITE setStageMode NOTIFY stageChanged)
     // ---- 工具提示样式（C# TOOLTIP_* 族；WinForms ToolTip 的 InitialDelay /
@@ -204,6 +206,7 @@ public:
 
     [[nodiscard]] QAbstractItemModel* historyModel() { return &m_historyModel; }
     [[nodiscard]] QAbstractItemModel* stageModel() { return &m_stageSnapshot; }
+    [[nodiscard]] QVariantList stageImageBlocks() const;
     [[nodiscard]] int stageStart() const { return m_stageStart; }
     [[nodiscard]] bool stageMode() const { return m_stageMode; }
     void setRedraw(qint64 mode);
@@ -442,6 +445,7 @@ public slots:
 signals:
     void toolTipStyleChanged();
     void backgroundImagesChanged();
+    void stageImageBlocksChanged();
     void htmlIslandChanged();
     void gridChanged();
     void lineCountChanged();

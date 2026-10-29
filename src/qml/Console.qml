@@ -225,6 +225,35 @@ FocusScope {
                 focusColor: root.focusColor
                 logColor: root.logColor
                 isBacklog: root.reviewingHistory || (!root.showingStage && !view.atTail)    // 舞台始终是当前画面；历史视图按滚动位置回看
+                stageLayer: root.showingStage
+            }
+        }
+    }
+
+    // 舞台打印图片层：图片不再依赖 ListView 委托跨行溢出。
+    // 历史视图仍由每个历史行的 ConsoleBlock 保存并渲染图片。
+    Item {
+        id: stageImageLayer
+        anchors.fill: parent
+        z: 5
+        visible: root.showingStage
+        clip: true
+        Repeater {
+            model: root.backend ? root.backend.stageImageBlocks : []
+            delegate: Image {
+                required property var modelData
+                readonly property real sourceRow: modelData.sourceRow || 0
+                readonly property real offsetRows: modelData.offsetRows || 0
+                x: (modelData.col || 0) * root.cellWidth
+                y: (sourceRow - root.backend.stageStart - stageView.contentY / root.cellHeight + offsetRows) * root.cellHeight
+                width: Math.max(1, (modelData.cols || 1) * root.cellWidth)
+                height: Math.max(1, (modelData.rows || 1) * root.cellHeight)
+                source: modelData.text ? "image://emuera/" + encodeURIComponent(modelData.text) : ""
+                fillMode: Image.PreserveAspectFit
+                verticalAlignment: Image.AlignTop
+                asynchronous: true
+                retainWhileLoading: true
+                smooth: width < implicitWidth || height < implicitHeight
             }
         }
     }

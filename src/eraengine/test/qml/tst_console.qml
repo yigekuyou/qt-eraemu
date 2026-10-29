@@ -605,13 +605,18 @@ TestCase {
             compare(face.parent, overlay);
             compare(frame.parent, overlay);
             verify(frame.z > face.z, "later printed image covers earlier image");
-            verify(Math.abs(face.y - frame.y) < 0.01, "negative ypos aligns frame with portrait");
-            const title = view.blockAt(0, 0).mapToItem(overlay, 0, 0);
-            verify(Math.abs(face.y - title.y - view.cellHeight) < 0.01,
+            // 图片层整层套了一个 Scale（消除逐条取整造成的接缝），因此断言
+            // 必须取「渲染后的舞台坐标」，不能直接读未缩放子项的 y。
+            const faceTop = face.mapToItem(overlay.parent, 0, 0).y;
+            const frameTop = frame.mapToItem(overlay.parent, 0, 0).y;
+            verify(Math.abs(faceTop - frameTop) < 0.01, "negative ypos aligns frame with portrait");
+            const title = view.blockAt(0, 0).mapToItem(overlay.parent, 0, 0);
+            verify(Math.abs(faceTop - title.y - view.cellHeight) < 0.01,
                    "portrait starts exactly one line below title for both alignments");
-            const oldY = face.y;
+            const oldTop = face.mapToItem(overlay.parent, 0, 0).y;
             stage.contentY += view.cellHeight;
-            compare(face.y, oldY - view.cellHeight, "overlay follows the same viewport displacement");
+            verify(Math.abs(face.mapToItem(overlay.parent, 0, 0).y - (oldTop - view.cellHeight)) < 0.01,
+                   "overlay follows the same viewport displacement");
             // 历史仍重建同一来源行和 ypos；切换不会丢掉图片。
             backend.stageMode = false; view.syncView();
             tryCompare(overlay, "visible", false);

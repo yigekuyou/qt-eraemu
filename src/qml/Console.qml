@@ -392,6 +392,17 @@ FocusScope {
             // 但 C++ 已经发布了图片快照。舞台模式本身才是显示条件。
             visible: root.backend && root.backend.stageMode && !root.reviewingHistory
             clip: true
+            // 图片层「全体缩放」：子项一律用**未缩放的配置像素坐标**摆放
+            // （1 行 = root.lineHeight，1 列 = root.fontSize/2，与 C++
+            // ConsoleLayout::columnWidthPx() 同一基准），整层只套一个 Scale。
+            // 这样 title 的 36 条切片共用一次栅格化，条与条的边界落在同一套
+            // 连续变换上，不会因逐项取整而在中间留下 1px 暗缝。
+            readonly property real unitRow: Math.max(1, root.lineHeight)
+            readonly property real unitCol: Math.max(1, root.fontSize / 2)
+            readonly property real imageScale: root.cellHeight / unitRow
+            // 用 item.scale + 左上变换原点实现「整层一次缩放」。
+            scale: imageScale
+            transformOrigin: Item.TopLeft
             Repeater {
                 id: stageImages
                 model: root.backend ? root.backend.stageImageBlocks : []
@@ -401,17 +412,20 @@ FocusScope {
                     z: index
                     blockData: modelData
                     backend: root.backend
-                    cellWidth: root.cellWidth
-                    cellHeight: root.cellHeight
+                    // 未缩放空间的格尺寸；整层 Scale 负责映射到舞台实际像素。
+                    cellWidth: stageImageLayer.unitCol
+                    cellHeight: stageImageLayer.unitRow
                     fontName: root.fontName
                     fontSize: root.renderFontSize
                     foreColor: root.foreColor
                     focusColor: root.focusColor
                     logColor: root.logColor
                     // originY 可因模型删除/插入变化，不能假设 ListView 原点为零。
+                    // 它属于缩放后的空间，因此先除回未缩放空间。
                     y: ((modelData.sourceRow - root.backend.stageStart)
-                        + offsetRows) * root.cellHeight
-                        + stageView.originY - stageView.contentY
+                        + offsetRows) * stageImageLayer.unitRow
+                        + (stageView.originY - stageView.contentY)
+                          / stageImageLayer.imageScale
                 }
             }
         }

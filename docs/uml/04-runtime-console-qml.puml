@@ -152,9 +152,13 @@ note top of ExecutionEngine
   Tracing therefore stops at the first control-flow or call line
   (policy flag kTraceAcrossControlFlow = false): crossing an IF would
   yield several skeletons for one print point, while stopping keeps
-  one value and hands it to the print-time lexer. How many stopped,
-  and the first stop, are logged at load so the policy can be
-  revisited with numbers. Any dynamic value is checked at print time, where
+  one value and hands it to the print-time lexer. The safe IF subset
+  may merge only when every reachable branch has ELSE coverage and
+  produces the same ordered AST fragment sequence; missing, unequal,
+  or nested/unknown paths stop. Loops remain conservative: unknown
+  iteration counts stop, while a future bounded analysis may prove
+  zero/one iterations. How many stopped, and the first stop, are
+  logged at load so the policy can be revisited with numbers. Any dynamic value is checked at print time, where
   the final string exists (ExecutionEngine::reportMarkupProblems,
   deduplicated per source position). A fragment such as a lone
   `</font>` is unbalanced on its own, so reporting it at load would

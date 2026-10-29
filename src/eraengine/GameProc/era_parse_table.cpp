@@ -1849,6 +1849,66 @@ void EraParseTable::traceHtmlStringArguments() {
 
     // 反向回溯 var 在 scope 内、第 before 行之前的写链；成功时给出**程序顺序**的片段。
     // depth：中转变量（`X = Y`）再追一层的余量。
+    const ScriptData* activeScript = nullptr;
+    // 合并一个 IF 的安全子集：每个可达分支都必须有 ELSE，且对同一变量
+    // 产生逐节点相同的写链。分支内遇到调用、循环或嵌套控制流立即拒绝。
+    // 这不是把 IF 当成顺序代码，而是证明所有路径的字符串骨架相同。
+    const auto sameIfWriteChain = [&](const QList<LogicalLine>& lines, int endIf,
+                                      const QString& var,
+                                      QList<QSharedPointer<ExpressionNode>>& merged,
+                                      int& openerOut) -> bool {
+        if (!activeScript || endIf < 0 || endIf >= lines.size()
+            || lines.at(endIf).functionName != QLatin1String("ENDIF")) return false;
+        int opener = -1;
+        for (auto it = activeScript->ifBranches.constBegin();
+             it != activeScript->ifBranches.constEnd(); ++it) {
+            if (it.key() >= 0 && it.key() < lines.size()
+                && lines.at(it.key()).jumpTo == endIf + 1) {
+                opener = it.key(); break;
+            }
+        }
+        if (opener < 0) return false;
+        const QList<int> branchMarks = activeScript->ifBranches.value(opener);
+        bool hasElse = false;
+        for (const int mark : branchMarks)
+            if (mark >= 0 && mark < lines.size()
+                && lines.at(mark).functionName == QLatin1String("ELSE")) hasElse = true;
+        if (!hasElse) return false; // IF 的 false 路径没有写入证明，不能合流。
+
+        QList<QList<QSharedPointer<ExpressionNode>>> paths;
+        QList<int> starts;
+        starts.append(opener + 1);
+        for (const int mark : branchMarks) starts.append(mark + 1);
+        for (int b = 0; b < starts.size(); ++b) {
+            const int begin = starts.at(b);
+            const int finish = b + 1 < starts.size() ? branchMarks.at(b) - 1 : endIf - 1;
+            if (begin > finish) return false;
+            QList<QSharedPointer<ExpressionNode>> path;
+            bool hasBase = false;
+            for (int k = begin; k <= finish; ++k) {
+                const LogicalLine& candidate = lines.at(k);
+                if (candidate.kind == LineKind::Null || candidate.kind == LineKind::Preprocessor
+                   ) continue;
+                QString name; bool append = false; QSharedPointer<ExpressionNode> value;
+                if (!fragmentWrite(candidate, name, append, value)) return false;
+                if (name.compare(var, Qt::CaseInsensitive) != 0) continue;
+                if (!append) { path.clear(); hasBase = true; }
+                path.append(value);
+            }
+            if (!hasBase || path.isEmpty()) return false;
+            paths.append(path);
+        }
+        if (paths.isEmpty()) return false;
+        for (int b = 1; b < paths.size(); ++b) {
+            if (paths.at(b).size() != paths.first().size()) return false;
+            for (int k = 0; k < paths.first().size(); ++k)
+                if (paths.at(b).at(k)->toString() != paths.first().at(k)->toString()) return false;
+        }
+        merged = paths.first();
+        openerOut = opener;
+        return true;
+    };
+
     std::function<bool(const QList<LogicalLine>&, const QString&, const QString&, int, int,
                        QList<QSharedPointer<ExpressionNode>>&)> traceChain;
     traceChain = [&](const QList<LogicalLine>& lines, const QString& scope, const QString& var,
@@ -1861,6 +1921,17 @@ void EraParseTable::traceHtmlStringArguments() {
             if (line.scopeKey != scope) {                // 跨段：链断，放弃
                 chainStop = Stop::ScopeBreak;
                 return false;
+            }
+            if (line.functionName == QLatin1String("ENDIF")) {
+                QList<QSharedPointer<ExpressionNode>> branch;
+                int opener = -1;
+                if (!sameIfWriteChain(lines, j, var, branch, opener)) {
+                    chainStop = Stop::ControlFlow;
+                    return false;
+                }
+                reversed = branch + reversed;
+                j = opener; // for-loop 的递减会从 IF 之前继续回溯。
+                continue;
             }
             QString name; bool append = false; QSharedPointer<ExpressionNode> value;
             if (!fragmentWrite(line, name, append, value)) {
@@ -1893,6 +1964,7 @@ void EraParseTable::traceHtmlStringArguments() {
     for (auto it = m_scripts.begin(); it != m_scripts.end(); ++it) {
         const QString& scriptName = it.key();
         QList<LogicalLine>& lines = it.value().lines;
+        activeScript = &it.value();
         for (int i = 0; i < lines.size(); ++i) {
             QString var;
             if (!htmlPrintTarget(lines.at(i), var)) continue;

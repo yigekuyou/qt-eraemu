@@ -564,6 +564,7 @@ TestCase {
         backend.clearAll();
         verify(!consoleFixture.hasImage("offset_atlas"),
                "清屏后钉住的副本已释放");
+        consoleFixture.loadResources();      // 复原资源根，后续用例还要取图
     }
 
     function test_stageKeepsOverflowingImageAcrossRefresh() {
@@ -674,6 +675,34 @@ TestCase {
             compare(backend.stageImageBlocks.length, 0);
             backend.stageMode = true;
         }
+    }
+
+    // ypos 是**像素**位移，加在行首之上；不是「负几格再乘行高」。
+    // eraTW 的 字号 16 / 行高 20 就是这样：画像枠被拉回 16px，而不是 20px，
+    // 所以它比立絵低 4px（C# 同样如此，差的是 4px，不是一整格）。
+    function test_yposIsPixelShiftOnGridNotRows() {
+        backend.stageMode = true;
+        backend.clearAll();
+        view.lineHeight = 20;
+        view.fontSize = 16;
+        backend.print("▼"); backend.newline();
+        consoleFixture.printHtml(backend, "<p align='left'><nobr><img src='offset_atlas' height='400'></nobr></p>");
+        consoleFixture.printHtml(backend, "<p align='left'><nobr><img src='offset_atlas' height='400' ypos='-100'></nobr></p>");
+        backend.flush(); view.syncView();
+        tryCompare(view, "showingStage", true);
+        const overlay = findChild(view, "stageImageLayer");
+        const face = view.stageImageAt(0);
+        const frame = view.stageImageAt(1);
+        verify(face !== null && frame !== null);
+        compare(backend.stageImageBlocks[1].pxTop, -16, "C++ 递交的是像素位移 -16");
+        const scale = view.cellHeight / 20;
+        const gap = frame.mapToItem(overlay.parent, 0, 0).y - face.mapToItem(overlay.parent, 0, 0).y;
+        verify(Math.abs(gap - (20 - 16) * scale) < 0.01,
+               "位移按像素（4px × 整层缩放），而不是被当成负一格（应为 0）");
+        verify(Math.abs(gap) > 0.5, "确实不是「正好一格」的对齐");
+        view.lineHeight = view.fontSize;
+        backend.stageMode = false;
+        backend.clearAll(); view.syncView();
     }
 
     function test_stageImageOverlayFollowsTrimmedOrigin() {

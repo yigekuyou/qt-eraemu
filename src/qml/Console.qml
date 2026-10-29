@@ -401,8 +401,10 @@ FocusScope {
             // 这样 title 的 36 条切片共用一次栅格化，条与条的边界落在同一套
             // 连续变换上，不会因逐项取整而在中间留下 1px 暗缝。
             readonly property real unitRow: Math.max(1, root.lineHeight)
-            readonly property real unitCol: Math.max(1, root.fontSize / 2)
             readonly property real imageScale: root.cellHeight / unitRow
+            // 画布列宽：舞台真实列宽（root.cellWidth = 舞台宽 / 列数）先除回
+            // 整层缩放，缩放之后正好落回舞台的列 —— 图片与文字共用同一套列。
+            readonly property real unitCol: Math.max(1, root.cellWidth / imageScale)
             // 用 item.scale + 左上变换原点实现「整层一次缩放」。
             scale: imageScale
             transformOrigin: Item.TopLeft
@@ -425,10 +427,17 @@ FocusScope {
                     logColor: root.logColor
                     // originY 可因模型删除/插入变化，不能假设 ListView 原点为零。
                     // 它属于缩放后的空间，因此先除回未缩放空间。
-                    y: ((modelData.sourceRow - root.backend.stageStart)
-                        + offsetRows) * stageImageLayer.unitRow
-                        + (stageView.originY - stageView.contentY)
-                          / stageImageLayer.imageScale
+                    // 纵向 = 行首（行号 × 行高）+ ypos（**像素**位移）+ 视口补偿。
+                    // 对齐 C#：ConsoleImagePart.DrawTo 里 rect.Y = pointY + top，
+                    // top = raw_ypos * FontSize / 100。位移发生在格子上（行首之上
+                    // 加像素），不是「算出负几格再乘行高」—— 后者会把不足一格的
+                    // 偏移放大成整格，画像枠就会离开立絵一格。
+                    y: (modelData.sourceRow - root.backend.stageStart)
+                       * stageImageLayer.unitRow
+                       + (modelData.pxTop !== undefined
+                          ? modelData.pxTop : offsetRows * stageImageLayer.unitRow)
+                       + (stageView.originY - stageView.contentY)
+                         / stageImageLayer.imageScale
                 }
             }
         }

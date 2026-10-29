@@ -51,7 +51,7 @@
 
 输入行本身由 QML 输入栏承载，最底一行随之移交。C# 的窗口最底一行是独立的输入框（`MainWindow.richTextBox1`），`doInputToEmueraProgram` 结尾的 `Print(str); PrintFlush(false);` 又把提交值写进正文；era 脚本也会把输入提示打到最新那一行。本移植的输入栏在舞台之外，所以当正文溢出舞台（`总行数 > stageRows()`）时，`ConsoleBackend::updateStageModels()` 把最新一行从舞台快照中摘出、作为 `inputEchoLine` 单独递交，`ConsoleInput.qml` 把它排在输入框左侧（`consoleInputEcho`）；没溢出时（eraTW 标题这 45 行定页画面）不摘，全部行都在舞台上。这样「舞台 45 行 + 输入回显 1 行 = 窗口 46 行」，与 C# 的行数一致。
 
-舞台打印图片层整层一次缩放。`stageImageLayer` 的子项用**未缩放的配置像素**坐标摆放（1 行 = `lineHeight`，1 列 = `fontSize / 2`，与 `ConsoleLayout::columnWidthPx()` 同基准），整层只套一个 `scale = cellHeight / lineHeight`。逐图按 `cellHeight` 定位会在每张图边界各自取整，密集切片（例如 `title.webp` 的 36 条 16px 横条）之间会留下 1px 暗缝；整层缩放让所有边界落在同一套连续变换上。历史视图仍按行委托渲染，不使用这层。
+舞台打印图片层的坐标与缩放。子项仍按**整格**摆放（尺寸 = `cols × 列宽`、`rows × 行高`，`PreserveAspectFit` 保持纵横比，图与文字共用同一套格子），外层 `stageImageLayer` 只套一次等比 `Scale`（`cellHeight / lineHeight`）。画布列宽取「舞台真实列宽 ÷ 这个 scale」，缩放之后正好落回舞台的列，靠右的图不会被整体拉偏。纵向位置 = **行首**（行号 × `lineHeight`）**+ ypos 像素位移**（`pxTop = raw_ypos × fontSize / 100`，对齐 C# `ConsoleImagePart.DrawTo` 的 `rect.Y = pointY + top`）：位移发生在格子上，不是「算出负几格再乘行高」—— 后者会把不足一格的偏移放大成整格，画像枠/時間停止/特效这类叠层就会离开立絵一格，而 C# 里字号 16 / 行高 20 时它只差 4px。历史视图仍按行委托渲染，不用这层。
 
 静态检查发现的未定义函数属于内容/脚本诊断。运行时不会伪造 `@GAMEOVER` 实现；如果脚本在执行时调用缺失标签，仍按执行错误处理。
 

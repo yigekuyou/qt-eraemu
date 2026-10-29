@@ -1347,6 +1347,10 @@ QVariantList ConsoleBackend::flattenLine(const ConsoleDisplayLine& line, int row
             m.insert("relCol", part.relCol);
             m.insert("relRow", 0);
             m.insert("offsetRows", offsetRows);
+            // ypos 的**像素**值（C#：rect.Y = pointY + raw_ypos*FontSize/100）。
+            // 图片层在格子上做位移时用这一份：行决定行首，ypos 是加在行首上的
+            // 像素位移，不再折算成「负多少格」再乘行高。
+            m.insert("pxTop", part.top);
             m.insert("width", spanCols * m_layout.columnWidthPx());
             m.insert("height", spanRows * m_lineHeight);
             // 段的点击信息（同一个段的所有区块共享）

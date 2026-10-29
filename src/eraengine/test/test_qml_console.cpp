@@ -105,6 +105,11 @@ public:
     // QUIT -> EraEngine::closeGame() 的两步资源卸载（setRoot("") + 清运行期精灵）
     // 与「清屏后钉住的副本释放」的探针 —— 用例用它复现「Failed to get image」。
     Q_INVOKABLE void unloadResources() { ResourceImageProvider::setRoot(QString()); }
+    // 反向：把资源根装回去（卸载用例之后必须复原，否则同一进程里后续用例
+    // 取图全部失败 —— image://emuera/… 会返回空图）。
+    Q_INVOKABLE void loadResources() {
+        ResourceImageProvider::setRoot(QStringLiteral(EXAMPLE_RESOURCES_DIR));
+    }
     Q_INVOKABLE bool hasImage(const QString& id) {
         ResourceImageProvider provider;
         return !provider.requestImage(id, nullptr, QSize()).isNull();

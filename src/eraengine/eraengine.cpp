@@ -1,4 +1,5 @@
 #include "GameData/game_paths.h"
+#include "GameData/ast/text_path.h"
 /*
  * emuera —— Emuera（ERB 脚本引擎）的 Qt6 + QML/C++ 移植
  * Copyright (C) 2026  yigekuyou
@@ -387,7 +388,26 @@ EraEngine::EraEngine(QObject *parent)
 				// ENUMMACRO*：#DEFINE 宏名（预处理器的宏表）
 				return m_executionEngine.getErbLoader().preprocessor().macroTable().keys();
 			},
-			[this]() -> QString { return m_gameDirectory; });
+			[this]() -> QString { return m_gameDirectory; },
+            [this](const QString& dir, const QString& pattern, bool recursive) -> QStringList {
+                const QStringList files = m_fileSystem.listFilesFromTreePath(
+                    dir, QStringList{pattern}, recursive);
+#ifdef Q_OS_ANDROID
+                if (GamePaths::isContent(m_gameDirectory)) return files;
+#endif
+                QDir root(m_gameDirectory);
+                QStringList relative;
+                for (const QString& file : files) relative.append(root.relativeFilePath(file));
+                return relative;
+            },
+            [this](const QString& path) {
+                const QString indexed = m_fileSystem.resolveFromTree(path);
+                if (!indexed.isEmpty()) return indexed;
+#ifdef Q_OS_ANDROID
+                if (m_fileSystem.hasPreloadedTree() && GamePaths::isContent(m_gameDirectory)) return QString();
+#endif
+                return erapath::resolveUnderBase(m_gameDirectory, path);
+            });
 		// HTML_STRINGLEN 的像素形态（`HtmlLength`）用字号：半角 = FontSize/2 像素。
 		// 取值口径与 CLIENTWIDTH/CLIENTHEIGHT 的排版参数一致（GUI 侧的字号）。
 		m_executionEngine.extensions().setFontSizeProvider(
@@ -797,6 +817,14 @@ void EraEngine::setGameDirectory(const QString& directory)
 void EraEngine::applyScriptPathServices()
 {
     m_expressionEvaluator.setBaseDirectory(m_gameDirectory);
+    m_expressionEvaluator.setScriptPathResolver([this](const QString& path) {
+        const QString indexed = m_fileSystem.resolveFromTree(path);
+        if (!indexed.isEmpty()) return indexed;
+#ifdef Q_OS_ANDROID
+        if (m_fileSystem.hasPreloadedTree() && GamePaths::isContent(m_gameDirectory)) return QString();
+#endif
+        return erapath::resolveUnderBase(m_gameDirectory, path);
+    });
     m_expressionEvaluator.setValidExtensionsProvider([this]() -> QStringList {
         for (const QString& key : {QString::fromUtf8("LOADTEXTとSAVETEXTで使える拡張子"),
                                    QStringLiteral("ValidExtension")}) {

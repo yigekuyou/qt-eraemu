@@ -150,6 +150,8 @@ public:
         std::function<QStringList()> enumVariableNames;  // 系统变量 + 广域用户变量名
         std::function<QStringList()> enumMacroNames;     // #DEFINE 宏名
         std::function<QString()>     exeDir;             // 相对路径基准（= 游戏目录）
+        std::function<QString(const QString&)> resolveScriptPath;
+        std::function<QStringList(const QString&, const QString&, bool)> enumFiles;
         // EM 私家版 HTML 系（HTML_STRINGLEN/HTML_SUBSTRING/HTML_STRINGLINES）：
         // C# 的 HtmlManager 以**像素**度量（`HtmlLength` -> 「半角字符宽」换算
         // 要乘 `Config.FontSize / 2`），本移植按同一个模型量字符宽，故需要字号。
@@ -186,11 +188,15 @@ public:
     void setForkServices(std::function<QStringList()> enumFunctionNames,
                          std::function<QStringList()> enumVariableNames,
                          std::function<QStringList()> enumMacroNames,
-                         std::function<QString()> exeDir) {
+                         std::function<QString()> exeDir,
+                         std::function<QStringList(const QString&, const QString&, bool)> enumFiles = {},
+                         std::function<QString(const QString&)> resolveScriptPath = {}) {
         m_services.enumFunctionNames = std::move(enumFunctionNames);
         m_services.enumVariableNames = std::move(enumVariableNames);
         m_services.enumMacroNames = std::move(enumMacroNames);
         m_services.exeDir = std::move(exeDir);
+        m_services.enumFiles = std::move(enumFiles);
+        m_services.resolveScriptPath = std::move(resolveScriptPath);
     }
     // 字号（Config.FontSize）：HTML_STRINGLEN 的像素形态与 HtmlManager 的
     // 「半角字符宽 -> 像素」换算用。

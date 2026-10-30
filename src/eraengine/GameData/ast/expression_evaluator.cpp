@@ -3380,6 +3380,7 @@ QStringList ExpressionEvaluator::validExtensions() const {
 // 脚本相对路径 -> 游戏目录下的绝对路径（`Utils.GetValidPath`）。
 // **空串 = C# 的 null**：绝对路径 / 有根路径 / 解析失败一律拒绝。
 QString ExpressionEvaluator::resolveScriptPath(const QString& path) const {
+    if (m_scriptPathResolver) return m_scriptPathResolver(path);
     return erapath::resolveUnderBase(m_baseDirectory, path);
 }
 

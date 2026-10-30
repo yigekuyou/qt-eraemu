@@ -199,6 +199,28 @@ int main(int argc, char* argv[]) {
         check(missing.isEmpty() && !missing.path.isEmpty(), "不存在目录 -> 空树（path 已填充）");
     }
 
+#ifdef Q_OS_ANDROID
+    // ---- 1b) Android 根目录索引：运行时解析只查预加载树 -----------
+    qDebug() << "\n1b) Android 根目录索引解析";
+    {
+        FileSystem indexed;
+        indexed.setRootDir(root);
+        const QString item = indexed.resolveFromTree(QStringLiteral("item.CSV"));
+        check(item.endsWith(QLatin1String("/Item.csv")) && QFile::exists(item),
+              "相对路径大小写不敏感地返回预加载树中的真实文件路径");
+        check(indexed.resolveFromTree(QStringLiteral("suba/TALENT.CSV"))
+                  .endsWith(QLatin1String("/subA/Talent.csv")),
+              "子目录路径从预加载树返回真实路径");
+        check(indexed.resolveFromTree(QStringLiteral("missing.csv")).isEmpty(),
+              "不存在文件不伪造预加载路径");
+        const QStringList indexedFiles = indexed.listFilesFromTreePath(
+            root + QStringLiteral("/subA"), QStringList{QStringLiteral("*.csv")}, true);
+        check(indexedFiles.size() == 3, "路径调用从预加载子树枚举文件");
+        for (const QString& file : indexedFiles)
+            check(QFile::exists(file), "树枚举结果是可直接读取的真实路径");
+    }
+#endif
+
     // ---- 2) listFilesFromTree == 路径版 listFiles -------------------------
     qDebug() << "\n2) listFilesFromTree 与 listFiles 一致";
     {

@@ -64,6 +64,7 @@ struct DirEntry {
     QString path;   // 完整路径/URI（absoluteFilePath()，可直接读取）
 };
 struct DirNode {
+    QString name;              // 目录显示名（根目录为空）
     QString path;              // 目录完整路径/URI
     QList<DirEntry> files;     // 本目录文件（QDir::Name 序）
     QVector<DirNode> subdirs;  // 子目录（QDir::Name 序）
@@ -81,6 +82,15 @@ public:
     // Directory management
     void setRootDir(const QString& rootDir);
     QString getRootDir() const;
+    [[nodiscard]] bool hasPreloadedTree() const { return m_rootTreeValid; }
+
+    // Resolve a game-relative path from the preloaded tree. The returned value
+    // is the provider's original path/URI, so callers never reconstruct SAF
+    // document URIs at runtime.
+    QString resolveFromTree(const QString& path) const;
+    QStringList listFilesFromTreePath(const QString& dirPath,
+                                      const QStringList& suffixes,
+                                      bool recursive) const;
     
     // Case-insensitive directory lookup
     static QString findActualDir(const QString& basePath, const QString& targetName);
@@ -151,6 +161,8 @@ public:
 
 private:
     QString m_rootDir;
+    DirNode m_rootTree;
+    bool m_rootTreeValid = false;
     QString m_lastError;
     
     // Helper methods

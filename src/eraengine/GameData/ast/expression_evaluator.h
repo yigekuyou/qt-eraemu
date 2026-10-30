@@ -199,6 +199,9 @@ public:
     // 游戏目录（对齐 C# `Program.ExeDir`）：LOADTEXT / SAVETEXT 的**路径形态**
     // 与 EXISTFILE 把脚本给的相对路径拼在它之下（`Utils.GetValidPath`）。
     void setBaseDirectory(const QString& dir) { m_baseDirectory = dir; }
+    void setScriptPathResolver(std::function<QString(const QString&)> resolver) {
+        m_scriptPathResolver = std::move(resolver);
+    }
     // LOADTEXT / SAVETEXT 允许的扩展名（对齐 C# `Config.ValidExtension`，
     // 配置键「LOADTEXTとSAVETEXTで使える拡張子」，默认 {"txt"}）。
     void setValidExtensionsProvider(std::function<QStringList()> provider) {
@@ -452,6 +455,7 @@ private:
     ConstArrayChecker   m_constArrayChecker;
     ConstArraySizeProvider m_constArraySizeProvider;
     QString m_baseDirectory;                             // 游戏目录（Program.ExeDir）
+    std::function<QString(const QString&)> m_scriptPathResolver;
     std::function<QStringList()> m_validExtensionsProvider;   // Config.ValidExtension
     const ConstantTable* m_constantTable = nullptr;
     TextEncoding m_langEncoding = TextEncoding::ShiftJis;

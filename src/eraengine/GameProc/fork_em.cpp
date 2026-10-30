@@ -372,9 +372,13 @@ void registerEmExtensions(ExtensionRegistry& ext)
     // File.Exists（**目录不算存在**：C# File.Exists 对目录返回 false）。
     ext.regExpr(QStringLiteral("EXISTFILE"), OperandType::Int, 1, 1,
         [&ext](const QList<QVariant>& a, const QList<const ExpressionNode*>&, QVariant& out) {
-            const QString base = ext.services().exeDir ? ext.services().exeDir() : QString();
+            const ExtensionRegistry::Services& sv = ext.services();
+            const QString base = sv.exeDir ? sv.exeDir() : QString();
+            const QString candidate = sv.resolveScriptPath
+                ? sv.resolveScriptPath(stringText(a.value(0)))
+                : erapath::resolveUnderBase(base, stringText(a.value(0)));
             out = QVariant::fromValue<qint64>(
-                erapath::existsUnderBase(base, stringText(a.value(0))) ? 1 : 0);
+                !candidate.isEmpty() && QFileInfo(candidate).isFile() ? 1 : 0);
             return true;
         });
 

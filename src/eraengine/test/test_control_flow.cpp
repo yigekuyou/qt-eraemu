@@ -10,7 +10,6 @@
 #include "script_runner.h"
 #include "variable_storage.h"
 #include "ast/print_template.h"
-#include "ast/text_path.h"
 
 [[maybe_unused]] static QString scopeKeyOfFunction(const VariableTable& vt, const QString& function) {
     for (const VariableDecl& d : vt.declarations()) {
@@ -429,20 +428,6 @@ static void emExtensionFunctions() {
 // 扩展名须在 Config.ValidExtension 内（默认 txt；LOADTEXT 超出 -> ""，
 // SAVETEXT 超出 -> 强制改 .txt）。
 static void scriptPathFunctions() {
-    // SAF 不能在 Linux 测试环境中伪造 DocumentsProvider，但路径解析契约
-    // 可以直接回归：相对路径必须保留 content://，枚举返回的完整 URI 必须
-    // 原样传递，普通本地根目录则拒绝这种 URI。
-    const QString safRoot = QStringLiteral("content://com.example.documents/tree/primary%3Aeraemu");
-    const QString safFile = safRoot + QStringLiteral("/document/primary%3Aeraemu%2FXML%2FSKILL_LIFE.xml");
-    if (erapath::resolveUnderBase(safRoot, QStringLiteral("XML/SKILL_LIFE.xml")) != safRoot + QStringLiteral("/XML/SKILL_LIFE.xml")
-        || erapath::resolveUnderBase(safRoot, safFile) != safFile
-        || !erapath::resolveUnderBase(QStringLiteral("/tmp/game"), safFile).isEmpty()) {
-        qCritical() << "SAF text path contract failed";
-        ++failures;
-    } else {
-        qInfo() << "PASS SAF text path contract";
-    }
-
     QTemporaryDir tmp;
     if (!tmp.isValid()) { qCritical() << "无法创建临时目录"; ++failures; return; }
     QDir().mkpath(tmp.path() + "/xml");

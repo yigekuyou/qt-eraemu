@@ -7,8 +7,7 @@
 #include <QUrl>
 #include <QUuid>
 #ifdef Q_OS_ANDROID
-#include <QJniObject>
-#include <QCoreApplication>
+#include "android_saf_paths.h"
 #endif
 
 namespace GamePaths {
@@ -21,99 +20,32 @@ QString normalize(const QString& path)
 }
 QString join(const QString& base, const QString& relative)
 {
-    if (isContent(relative)) return relative;
-    if (!isContent(base)) return QDir(base).filePath(relative);
-    QString current = base;
-    const auto parts = QString(relative).replace(u'\\', u'/').split(u'/', Qt::SkipEmptyParts);
-    for (const QString& part : parts) {
-        if (part == QLatin1String(".")) continue;
-        // A provider document has no portable parent operation. Never escape
-        // the authorized resource directory through a script path.
-        if (part == QLatin1String("..")) return {};
-        // 快路径：先按「%编码子名」拼出候选，只做一次存在性查询。装载期每个
-        // 脚本/CSV 文件都会走这里（collectFiles / loadCsvDirectory 每文件一次），
-        // 旧实现无条件做整目录 entryInfoList —— 在 content:// 上每趟都是一次
-        // DocumentsContract 往返（列出全部子项再逐个 stat），2258 个 ERB 就是
-        // 两千多次全目录枚举，装载 prep 阶段因此数分钟无任何输出，看起来就是
-        // 「卡在正在装载脚本、日志没有加载痕迹」。
-        const QString appended =
-            current + u'/' + QString::fromLatin1(QUrl::toPercentEncoding(part));
-        if (QFileInfo::exists(appended)) {
-            current = appended;
-            continue;
-        }
-        // 慢路径：脚本里写的大小写与盘上不一致（`Foo.ERB` vs `foo.erb`），或
-        // appended 形态引擎不认 —— 退回整目录枚举找真实名（维持原语义）。
-        QString child;
-        const auto entries = QDir(current).entryInfoList(QDir::AllEntries | QDir::Hidden
-                                  | QDir::System | QDir::NoDotAndDotDot);
-        for (const QFileInfo& entry : entries) {
-            if (entry.fileName() == part) { child = entry.absoluteFilePath(); break; }
-            if (entry.fileName().compare(part, Qt::CaseInsensitive) == 0)
-                child = entry.absoluteFilePath();
-        }
-        // Qt 6.11's file engine accepts appended paths for creation. Encode
-        // literal %, #, spaces and Unicode so document names remain intact.
-        current = child.isEmpty() ? appended : child;
-    }
-    return current;
-}
-static bool writeGranted(const QString& game)
-{
+    if (isContent(base)) {
+        const QString normalized = QString(relative).replace(u'\\', u'/');
+        if (normalized.split(u'/', Qt::SkipEmptyParts).contains(QStringLiteral("..")))
+            return {};
 #ifdef Q_OS_ANDROID
-    const QJniObject context = QNativeInterface::QAndroidApplication::context();
-    const auto gameUri = QJniObject::callStaticObjectMethod(
-        "android/net/Uri", "parse", "(Ljava/lang/String;)Landroid/net/Uri;",
-        QJniObject::fromString(game).object<jstring>());
-    // Let Android resolve tree grants and opaque IDs, rather than infer
-    // permission from a string prefix. WRITE is Intent's native flag 0x2.
-    if (context.callMethod<jint>("checkCallingOrSelfUriPermission",
-            "(Landroid/net/Uri;I)I", gameUri.object<jobject>(), jint(2)) != 0)
-        return false;
-    const auto resolver = context.callObjectMethod("getContentResolver", "()Landroid/content/ContentResolver;");
-    const auto grants = resolver.callObjectMethod("getPersistedUriPermissions", "()Ljava/util/List;");
-    const auto treeId = [](const QJniObject& uri) {
-        if (!QJniObject::callStaticMethod<jboolean>("android/provider/DocumentsContract",
-                "isTreeUri", "(Landroid/net/Uri;)Z", uri.object<jobject>()))
-            return QString();
-        return QJniObject::callStaticObjectMethod("android/provider/DocumentsContract",
-                "getTreeDocumentId", "(Landroid/net/Uri;)Ljava/lang/String;",
-                uri.object<jobject>()).toString();
-    };
-    const QString gameTree = treeId(gameUri);
-    const QString authority = gameUri.callObjectMethod("getAuthority", "()Ljava/lang/String;").toString();
-    const jint count = grants.callMethod<jint>("size");
-    for (jint i = 0; i < count; ++i) {
-        const auto grant = grants.callObjectMethod("get", "(I)Ljava/lang/Object;", i);
-        if (!grant.callMethod<jboolean>("isWritePermission")) continue;
-        const auto uri = grant.callObjectMethod("getUri", "()Landroid/net/Uri;");
-        if (uri.toString() == game) return true;
-        if (!gameTree.isEmpty() && treeId(uri) == gameTree
-                && uri.callObjectMethod("getAuthority", "()Ljava/lang/String;").toString() == authority)
-            return true;
-    }
+        return AndroidSafPaths::join(base, relative);
 #else
-    Q_UNUSED(game);
+        return base + QLatin1Char('/') + normalized;
 #endif
-    return false;
+    }
+#ifdef Q_OS_ANDROID
+    if (isContent(relative)) return AndroidSafPaths::join(base, relative);
+#endif
+    if (isContent(relative)) return relative;
+    return QDir(base).filePath(relative);
 }
 QString storageRoot(const QString& game)
 {
+#ifdef Q_OS_ANDROID
+    if (isContent(game)) return AndroidSafPaths::storageRoot(game);
+#endif
     if (!isContent(game)) return game;
-    if (writeGranted(game)) {
-        const QString sav = join(game, QStringLiteral("sav"));
-        if (QDir().mkpath(sav)) {
-            const QString probe = join(sav, QStringLiteral(".emuera-probe-") + QUuid::createUuid().toString(QUuid::Id128));
-            QFile file(probe);
-            if (file.open(QIODevice::WriteOnly | QIODevice::NewOnly)) {
-                file.close();
-                if (file.remove()) return game;
-            }
-        }
-    }
-    const QString hash = QString::fromLatin1(QCryptographicHash::hash(game.toUtf8(), QCryptographicHash::Sha256).toHex());
-    const QString root = QDir(QStandardPaths::writableLocation(QStandardPaths::AppDataLocation))
-        .filePath(QStringLiteral("save-data/") + hash);
+    const QString hash = QString::fromLatin1(QCryptographicHash::hash(
+        game.toUtf8(), QCryptographicHash::Sha256).toHex());
+    const QString root = QDir(QStandardPaths::writableLocation(
+        QStandardPaths::AppDataLocation)).filePath(QStringLiteral("save-data/") + hash);
     QDir().mkpath(root + QStringLiteral("/sav"));
     return root;
 }

@@ -35,6 +35,70 @@ FileSystem::FileSystem(QObject *parent)
 void FileSystem::setRootDir(const QString& rootDir)
 {
     m_rootDir = rootDir;
+    m_rootTree = {};
+#ifdef Q_OS_ANDROID
+    m_rootTreeValid = !rootDir.isEmpty();
+    if (m_rootTreeValid)
+        m_rootTree = collectTree(rootDir);
+#else
+    m_rootTreeValid = false;
+#endif
+}
+
+namespace {
+const DirNode* findTreeDir(const DirNode& node, const QStringList& parts, int index)
+{
+    if (index == parts.size()) return &node;
+    for (const DirNode& child : node.subdirs) {
+        if (child.name.compare(parts.at(index), Qt::CaseInsensitive) == 0)
+            return findTreeDir(child, parts, index + 1);
+    }
+    return nullptr;
+}
+const DirNode* findTreePath(const DirNode& node, const QString& path)
+{
+    if (node.path == path) return &node;
+    for (const DirNode& child : node.subdirs) {
+        if (const DirNode* found = findTreePath(child, path)) return found;
+    }
+    return nullptr;
+}
+}
+
+QString FileSystem::resolveFromTree(const QString& path) const
+{
+    if (!m_rootTreeValid) return {};
+    if (GamePaths::isContent(path)) return path;
+    QString normalized = path;
+    normalized.replace(u'\\', u'/');
+    while (normalized.startsWith(QStringLiteral("../"))) normalized.remove(0, 3);
+    const QStringList parts = normalized.split(u'/', Qt::SkipEmptyParts);
+    if (parts.isEmpty()) return m_rootDir;
+    const QStringList dirs = parts.mid(0, parts.size() - 1);
+    const QString leaf = parts.last();
+    const DirNode* dir = findTreeDir(m_rootTree, dirs, 0);
+    if (!dir) return {};
+    for (const DirEntry& file : dir->files)
+        if (file.name.compare(leaf, Qt::CaseInsensitive) == 0) return file.path;
+    return {};
+}
+
+QStringList FileSystem::listFilesFromTreePath(const QString& dirPath,
+                                              const QStringList& suffixes,
+                                              bool recursive) const
+{
+    if (!m_rootTreeValid) return {};
+    QString normalized = dirPath;
+    const DirNode* node = nullptr;
+    node = findTreePath(m_rootTree, normalized);
+    if (!node) {
+        QString relative = normalized;
+        if (relative.startsWith(m_rootDir + QLatin1Char('/')))
+            relative = relative.mid(m_rootDir.size() + 1);
+        const QStringList parts = relative.split(u'/', Qt::SkipEmptyParts);
+        node = findTreeDir(m_rootTree, parts, 0);
+    }
+    return node ? listFilesFromTree(*node, suffixes, recursive) : QStringList{};
 }
 
 QString FileSystem::getRootDir() const
@@ -56,16 +120,16 @@ QString FileSystem::findActualDir(const QString& basePath, const QString& target
 
 QString FileSystem::resolveSubDir(const QString& basePath, const QString& name) const
 {
+    if (m_rootTreeValid && basePath == m_rootDir) {
+        for (const DirNode& child : m_rootTree.subdirs)
+            if (child.name.compare(name, Qt::CaseInsensitive) == 0)
+                return child.path;
+    }
     QDir base(basePath);
-    if (!base.exists()) {
-        return QString();
-    }
+    if (!base.exists()) return QString();
     const QStringList entries = base.entryList(QDir::Dirs | QDir::NoDotAndDotDot, QDir::Name);
-    for (const QString& e : entries) {
-        if (e.compare(name, Qt::CaseInsensitive) == 0) {
-            return GamePaths::join(basePath, e);
-        }
-    }
+    for (const QString& e : entries)
+        if (e.compare(name, Qt::CaseInsensitive) == 0) return GamePaths::join(basePath, e);
     return QString();
 }
 
@@ -122,63 +186,37 @@ QString FileSystem::getPathWithActualCase(const QString& basePath, const QString
 // 「文件一次 + 目录一次」会让每个目录白跑一趟。
 namespace {
 
-// 列出单个目录：文件进 files，子目录进 subdirs（**一次性 resize 预留槽位**，
-// 之后不再追加 —— 元素地址因此稳定，上层才能把指针交给下一层并行任务填充；
-// QVector 追加会搬移元素）。顺序即 entryInfoList 的 QDir::Name 名字序。
-void listSingleDir(const QString& dirPath, DirNode& node, QVector<DirNode*>& kids)
-{
-    const QFileInfoList entries = QDir(dirPath).entryInfoList(
-        QDir::AllEntries | QDir::Hidden | QDir::System | QDir::NoDotAndDotDot, QDir::Name);
-    int dirCount = 0;
-    for (const QFileInfo& e : entries)
-        if (e.isDir()) ++dirCount;
-    node.subdirs.resize(dirCount);
-    int di = 0;
-    for (const QFileInfo& e : entries) {
-        if (e.isDir()) {
-            DirNode& sub = node.subdirs[di++];
-            sub.path = e.absoluteFilePath();
-            kids.append(&sub);
-        } else if (e.isFile()) {
-            DirEntry entry;
-            entry.name = e.fileName();
-            entry.path = e.absoluteFilePath();
-            node.files.append(entry);
-        }
-    }
-}
+
 
 } // namespace
 
 DirNode FileSystem::collectTree(const QString& dirPath, const TreeScanProgress& onProgress)
 {
-    DirNode root;
-    root.path = dirPath;
-    // 不做 QDir::exists()：对 content:// 它是一次独立的 provider 查询，
-    // 而 entryInfoList 对不存在的目录本就返回空列表（同样得到空树）。
-    // 每目录省一趟 = 38 目录少 38 次往返（eraH 实测约一半扫描时间）。
-    //
-    // 按层 BFS + **层内并行**：同一层的目录互不依赖，一次 QtConcurrent::map
-    // 把它们全部列出。SAF 上每次 listing 都是一次 provider 往返（本地是系统
-    // 调用），eraH 的 38 个目录里同层最多 ~18 个 —— 并行把墙钟时间从
-    // 「Σ 每目录延迟」压到「最慢一层」。
-    QVector<DirNode*> level{&root};
+    // 构建过程中只传递值和引用，不保存 QVector/ QList 元素地址。
+    // 旧的按层并行版本把子节点地址放进下一层队列；节点容器移动或重分配
+    // 后地址失效，返回树在遍历时会出现随机递归和段错误。SAF 的正确性
+    // 首先要求这棵预加载树是稳定快照；provider 访问也由这里集中完成。
     int done = 0;
-    while (!level.isEmpty()) {
-        QVector<DirNode*> next;
-        QMutex mutex;
-        QFuture<void> f = QtConcurrent::map(level, [&](DirNode* n) {
-            QVector<DirNode*> kids;
-            listSingleDir(n->path, *n, kids);
-            QMutexLocker lock(&mutex);
-            next += kids;
-        });
-        f.waitForFinished();
-        done += level.size();
-        if (onProgress) onProgress(done, done + next.size());
-        level = next;
-    }
-    return root;
+    std::function<DirNode(const QString&, const QString&)> build =
+        [&](const QString& path, const QString& name) {
+            DirNode node;
+            node.name = name;
+            node.path = path;
+            const QFileInfoList entries = QDir(path).entryInfoList(
+                QDir::AllEntries | QDir::Hidden | QDir::System | QDir::NoDotAndDotDot,
+                QDir::Name);
+            for (const QFileInfo& entry : entries) {
+                if (entry.isDir()) {
+                    node.subdirs.append(build(entry.absoluteFilePath(), entry.fileName()));
+                } else if (entry.isFile()) {
+                    node.files.append({entry.fileName(), entry.absoluteFilePath()});
+                }
+            }
+            ++done;
+            if (onProgress) onProgress(done, done + node.subdirs.size());
+            return node;
+        };
+    return build(dirPath, QString());
 }
 
 // 纯内存查树：与 FileSystem::listFiles 相同的后缀匹配器（允许 "*.csv"/".csv"

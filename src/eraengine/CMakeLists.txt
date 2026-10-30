@@ -180,6 +180,12 @@ GameView/audio_pipeline_pool.h
 # Add QtConcurrent and OpenMP after the library is defined
 find_package(ZLIB REQUIRED)
 target_link_libraries(eraengine PRIVATE ZLIB::ZLIB)
+if(ANDROID)
+    target_sources(eraengine PRIVATE
+        ${CMAKE_SOURCE_DIR}/src/platform/android_saf_paths.cpp
+        ${CMAKE_SOURCE_DIR}/src/platform/android_saf_paths.h)
+    target_include_directories(eraengine PRIVATE ${CMAKE_SOURCE_DIR}/src/platform)
+endif()
 target_link_libraries(eraengine
     PRIVATE Qt6::Quick Qt6::Core Qt6::Quick Qt6::Widgets Qt6::Concurrent)
 # 可选依赖（见顶层 CMakeLists.txt 的说明）：有则用，没有就静默降级。

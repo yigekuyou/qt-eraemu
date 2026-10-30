@@ -42,7 +42,7 @@
 #include "extension_registry.h"
 #include "expression_ast.h"
 #include "variable_storage.h"
-#include "../GameData/game_paths.h"
+#include "../GameData/file_system_io.h"
 
 namespace forkxml { void registerXmlExtensions(ExtensionRegistry& ext); }
 namespace forkdt  { void registerDataTableExtensions(ExtensionRegistry& ext); }
@@ -428,26 +428,23 @@ void registerForkExtensions(ExtensionRegistry& ext)
             }
             const QString pattern = a.size() > 1 ? stringText(a.value(1)) : QStringLiteral("*");
             const bool recursive = a.size() > 2 && a.value(2).toLongLong() != 0;
-            const bool saf = GamePaths::isContent(base);
-            const QString targetPath = saf ? GamePaths::join(base, dir)
-                                           : QDir(base).absoluteFilePath(dir);
-            if (targetPath.isEmpty()) {
-                out = QVariant::fromValue<qint64>(-1);
-                return true;
-            }
-            const QDir target(targetPath);
-            if (!target.exists()) { out = QVariant::fromValue<qint64>(-1); return true; }
-
             QStringList result;
-            QDirIterator it(target.absolutePath(), QStringList{ pattern }, QDir::Files,
-                            recursive ? QDirIterator::Subdirectories : QDirIterator::NoIteratorFlags);
-            while (it.hasNext()) {
-                it.next();
-                // A SAF result must remain the exact URI returned by the provider;
-                // relativeFilePath() would turn its opaque document id into text
-                // that LOADTEXT cannot resolve. Local games retain C#'s relative
-                // path result.
-                result.append(saf ? it.filePath() : QDir(base).relativeFilePath(it.filePath()));
+#ifdef Q_OS_ANDROID
+            if (sv.enumFiles) {
+                result = sv.enumFiles(dir, pattern, recursive);
+            } else {
+#else
+            { // Desktop keeps the original immediate QDir enumeration semantics.
+#endif
+                const QDir root(base);
+                const QDir target(root.absoluteFilePath(dir));
+                if (!target.exists()) { out = QVariant::fromValue<qint64>(-1); return true; }
+                QDirIterator it(target.absolutePath(), QStringList{ pattern }, QDir::Files,
+                                recursive ? QDirIterator::Subdirectories : QDirIterator::NoIteratorFlags);
+                while (it.hasNext()) {
+                    it.next();
+                    result.append(root.relativeFilePath(it.filePath()));
+                }
             }
             const QString targetName = nodes.size() >= 4 ? refTargetName(nodes.at(3)) : QString();
             const QString outName = targetName.isEmpty() ? QStringLiteral("RESULTS") : targetName;

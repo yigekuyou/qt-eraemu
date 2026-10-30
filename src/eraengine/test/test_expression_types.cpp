@@ -371,9 +371,22 @@ int main(int argc, char* argv[]) {
         check(!parse(parser, text), QString(text) + " rejects");
     check(parse(parser, "!(VA++)") != nullptr, "parenthesized postfix under NOT");
     check(parse(parser, "!(!1)") != nullptr, "parenthesized unary operators");
-    for (const char* text : {"{}", "%%", "%1%", "{\"a\"}", "{1,,LEFT}", "{1,2,CENTER}",
+    for (const char* text : {"{}", "%%", "{1,,LEFT}", "{1,2,CENTER}",
                             "{1,2,LEFT,3}", "{1", "%RESULTS", "\\@ 1 ? x", "\\@ x \\@"})
         check(!StrFormParser::parse(text, resolve), QString(text) + " FORM rejects");
+    // C# StrForm.FormattedStringMethod.CheckArgumentType 直接抛 ExeEE（装载期不做
+    // 类型检查）：`%…%` 走 FormatPercent -> GetStrValue，`{…}` 走
+    // FormatCurlyBrace -> GetIntValue。因此 `%int%`、`%1%` 在装载期合法；
+    // 本移植对 `{str}` 也在装载期接受并按文本输出（比 C# 宽松，C# 要到运行期
+    // 调 GetIntValue 才报错），所以这两条不再属于「应拒绝」清单。
+    const auto formOf = [&resolve](const char* text) {
+        return StrFormParser::parse(QString::fromLatin1(text), resolve);
+    };
+    const auto one = formOf("%1%");
+    check(one && evaluator.evaluate(*one, &storage).toString() == "1", "%1% -> 1");
+    const auto quoted = formOf("{\"a\"}");
+    check(quoted && evaluator.evaluate(*quoted, &storage).toString() == "a",
+          "{\"a\"} -> a");
     for (const char* text : {"1 / 0", "1 % 0", "1 ? 1 # \"x\"", "\"x\" ? 1 # 2", "{VA}"}) {
         check(!evalSource(text).isValid(), QString(text) + " invalid result");
     }

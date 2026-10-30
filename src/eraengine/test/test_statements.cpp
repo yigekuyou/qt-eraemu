@@ -667,6 +667,8 @@ int main(int argc, char* argv[]) {
             QStringLiteral("#DIMS E"),
             QStringLiteral("#DIMS QE"),
             QStringLiteral("#DIMS FE"),
+            QStringLiteral("#DIMS B2"),
+            QStringLiteral("#DIMS B3"),
             QStringLiteral("N = 7"),
             QStringLiteral("Q = \"quote\""),          // 字符串字面量 -> quote
             QStringLiteral("F = @\"lit_{N}\""),        // 格式化字符串字面量 -> lit_7
@@ -674,6 +676,12 @@ int main(int argc, char* argv[]) {
             QStringLiteral("E = @\"[PN:{N}]\""),       // eraTW 精灵名样式 -> [PN:7]
             QStringLiteral("QE '= \"quote\""),
             QStringLiteral("FE '= @\"lit_{N}\""),
+            // `%…%` 走 C# FormatPercent -> GetStrValue（Int 合法）；
+            // `{…}` 走 FormatCurlyBrace -> GetIntValue，C# 装载期不做类型检查
+            // （CheckArgumentType 抛 ExeEE），Str 要到运行期才报错。本移植对
+            // `{str}` 装载期即接受并按文本输出，因此这两行都是**合法**赋值。
+            QStringLiteral("B2 = %N%"),
+            QStringLiteral("B3 = {QE}"),
             QStringLiteral("RETURN")
         };
         check(pt.loadScript("qstr", pt.buildScriptAst("qstr", program, "s.ERB")),
@@ -683,7 +691,8 @@ int main(int argc, char* argv[]) {
         check(run.runToCompletion() == ExecState::Halt, "quoted string-assignment script completes");
         vs.setPrivateScope(eravar::internName(scopeKeyOfFunction(pt.variableTable(), QStringLiteral("MAIN"))),
                            {QStringLiteral("Q"), QStringLiteral("F"), QStringLiteral("B"),
-                            QStringLiteral("E"), QStringLiteral("QE"), QStringLiteral("FE")});
+                            QStringLiteral("E"), QStringLiteral("QE"), QStringLiteral("FE"),
+                            QStringLiteral("B2"), QStringLiteral("B3")});
         check(vs.getGlobalStr1DInCurrentFrame(QStringLiteral("Q"), 0) == QStringLiteral("\"quote\""),
               "Q = \"quote\" -> 保留双引号");
         check(vs.getGlobalStr1DInCurrentFrame(QStringLiteral("F"), 0) == QStringLiteral("@\"lit_7\""),
@@ -696,10 +705,14 @@ int main(int argc, char* argv[]) {
               "QE '= \"quote\" -> 字符串表达式去引号");
         check(vs.getGlobalStr1DInCurrentFrame(QStringLiteral("FE"), 0) == QStringLiteral("lit_7"),
               "FE '= @\"lit_{N}\" -> 格式化字符串表达式");
+        check(vs.getGlobalStr1DInCurrentFrame(QStringLiteral("B2"), 0) == QStringLiteral("7"),
+              "B = %N% -> 7（%int% 合法：C# GetStrValue）");
+        check(vs.getGlobalStr1DInCurrentFrame(QStringLiteral("B3"), 0) == QStringLiteral("quote"),
+              "B = {QE} -> quote（{str} 装载期合法）");
 
         const AstResolver resolve = [&pt](const QString& text) { return compileFixture(pt, text); };
         const QStringList invalidForms = {
-            "B = %N%", "B = {QE}", "B = %QE", "B = {N", "B = % %", "B = {}"
+            "B = %QE", "B = {N", "B = % %", "B = {}"
         };
         for (const auto& source : invalidForms) {
             vs.setGlobalStr1DInCurrentFrame("B", 0, "unchanged");

@@ -65,10 +65,8 @@ Item {
     property string focusColor: ""
     property string logColor: ""
     property bool isBacklog: false
-    // 舞台打印图由 Console.qml 的独立 overlay 绘制；历史行仍由本组件绘制。
+    // 舞台图片层由 Console.qml 独立 overlay 绘制；图片委托本身必须可见。
     property bool stageLayer: false
-    // 舞台图片层：位置按格子摆，**尺寸**用 C++ 量出的原始尺寸（pxWidth/pxHeight），
-    // 0 = 不覆盖（文字/历史视图仍按整格算）。
     property real fixedWidth: 0
     property real fixedHeight: 0
     visible: !(stageLayer && kind === "image")
@@ -240,7 +238,7 @@ Item {
         visible: block.showImageButton
         anchors.left: parent.left
         anchors.top: parent.top
-        source: (!block.stageLayer && block.kind === "image" && visible && block.blockData && block.blockData.imageButton)
+        source: (block.kind === "image" && visible && block.blockData && block.blockData.imageButton)
                     ? ("image://emuera/" + encodeURIComponent(block.blockData.imageButton)) : ""
         width: Math.max(1, block.width)
         height: Math.max(1, block.height)
@@ -262,7 +260,7 @@ Item {
         // QQuickImageProvider（Qt 文档）："image:" scheme + provider 标识 + id；
         // provider 名不区分大小写，id 其余部分保留大小写 —— 非 ASCII 资源名必须
         // 先 encodeURIComponent（C++ 侧 normalizeId 再 QUrl::fromPercentEncoding 还原）。
-        source: (!block.stageLayer && block.kind === "image" && visible && block.blockData && block.blockData.text)
+        source: (block.kind === "image" && visible && block.blockData && block.blockData.text)
                     ? ("image://emuera/" + encodeURIComponent(block.blockData.text)) : ""
         // ConsoleLayout supplies grid dimensions.  Keep the Image item at the
         // same size as its span so a loaded resource cannot paint into the

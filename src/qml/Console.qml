@@ -416,6 +416,7 @@ FocusScope {
                     required property int index
                     z: index
                     blockData: modelData
+                    stageLayer: true
                     backend: root.backend
                     // 未缩放空间的格尺寸；整层 Scale 负责映射到舞台实际像素。
                     cellWidth: stageImageLayer.unitCol
@@ -439,8 +440,6 @@ FocusScope {
                        * stageImageLayer.unitRow
                        + (modelData.pxTop !== undefined
                           ? modelData.pxTop : offsetRows * stageImageLayer.unitRow)
-                       + (stageView.originY - stageView.contentY)
-                         / stageImageLayer.imageScale
                 }
             }
         }

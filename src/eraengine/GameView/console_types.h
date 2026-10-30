@@ -100,6 +100,7 @@ struct ConsoleSpan {
     int   width    = -1;
     int   height   = -1;
     float xSubPixel = 0.0f;     // 亚像素累积（C# XsubPixel）
+    int positionedTopPx = 0;   // relative HTML div origin, added after image ypos
     bool  pointXLocked = false; // <img pos=…> / <shape> 的绝对定位
     int   top = 0;              // 命中测试用（C# Top/Bottom）
     int   bottom = 0;

@@ -91,6 +91,7 @@ QSharedPointer<CompiledPrintTemplate> compileMarkup(const QString& markup, const
             // 栈检查，每个合法的 `</p>` 都会被误报成 UnexpectedCloseTag。
             if (tag == "p") { part.kind = PrintTemplatePart::Kind::EndAlignment; out->parts.append(part); }
             else if (tag == "nobr") { part.kind = PrintTemplatePart::Kind::EndNoWrap; out->parts.append(part); }
+            else if (tag == "div") { part.kind = PrintTemplatePart::Kind::EndDivision; out->parts.append(part); }
             else if (tag == "button") { part.kind = PrintTemplatePart::Kind::EndButton; out->parts.append(part); }
             // HTML 样式按栈闭合。非栈顶或不存在的闭合标签只被消费，
             // 不得跨层弹栈；否则后续文字会继承错误的字体/颜色。
@@ -109,6 +110,7 @@ QSharedPointer<CompiledPrintTemplate> compileMarkup(const QString& markup, const
             }
         } else if (tag == "br") { part.kind = PrintTemplatePart::Kind::Break; out->parts.append(part); }
         else if (tag == "nobr") { part.kind = PrintTemplatePart::Kind::NoWrap; out->parts.append(part); }
+        else if (tag == "div") { part.kind = PrintTemplatePart::Kind::Division; out->parts.append(part); }
         else if (tag == "button" || tag == "img" || tag == "shape" || tag == "p") {
             part.kind = tag == "button" ? PrintTemplatePart::Kind::Button : tag == "img" ? PrintTemplatePart::Kind::Image : tag == "shape" ? PrintTemplatePart::Kind::Shape : PrintTemplatePart::Kind::Alignment;
             out->parts.append(part);
@@ -225,6 +227,16 @@ PrintTemplate PrintTemplateCompiler::evaluateOccurrences(const CompiledPrintTemp
         part.width = parseLength(attrs.value("width"), part.widthIsPixels);
         part.height = parseLength(attrs.value("height"), part.heightIsPixels);
         part.y = parseLength(attrs.value("ypos"), part.yposIsPixels);
+        if (part.kind == PrintTemplatePart::Kind::Division) {
+            part.x = parseLength(attrs.value("xpos"), part.xposIsPixels);
+            const QStringList rect = attrs.value("rect").split(',');
+            if (rect.size() == 4) {
+                part.x = parseLength(rect[0], part.xposIsPixels);
+                part.y = parseLength(rect[1], part.yposIsPixels);
+                part.width = parseLength(rect[2], part.widthIsPixels);
+                part.height = parseLength(rect[3], part.heightIsPixels);
+            }
+        }
         out.parts.append(std::move(part));
     }
     return out;

@@ -18,6 +18,7 @@
 #include "console_layout.h"
 
 #include <QtGlobal>
+#include <algorithm>
 
 // ---------------------------------------------------------------------------
 // 单位（网格）坐标
@@ -94,6 +95,7 @@ void ConsoleLayout::measurePart(ConsoleSpan& part) const {
         part.top = part.yposIsPixels
                        ? part.yposRaw
                        : part.yposRaw * m_fontSize / 100;
+        part.top += part.positionedTopPx;
         part.bottom = part.top + part.height;
         break;
     }
@@ -235,7 +237,10 @@ QList<ConsoleDisplayLine> ConsoleLayout::wrapSegments(QList<ConsoleSegment> segm
     layoutSegments(segments);
     for (int i = 0; i < segments.size(); ++i) {
         const ConsoleSegment& seg = segments.at(i);
-        if (current.isEmpty() || seg.relCol + seg.cols <= limitCols) {
+        const bool positioned = !seg.spans.isEmpty()
+            && std::all_of(seg.spans.cbegin(), seg.spans.cend(),
+                           [](const ConsoleSpan& part) { return part.pointXLocked; });
+        if (current.isEmpty() || positioned || seg.relCol + seg.cols <= limitCols) {
             current.append(seg);
             continue;
         }

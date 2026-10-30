@@ -69,7 +69,8 @@ Item {
     property bool stageLayer: false
     property real fixedWidth: 0
     property real fixedHeight: 0
-    visible: !(stageLayer && kind === "image")
+    property bool imageOverlay: false
+    visible: !(stageLayer && kind === "image") || imageOverlay
     SystemPalette { id: systemPalette }
 
     readonly property string effectiveFontName: blockData && blockData.fontName

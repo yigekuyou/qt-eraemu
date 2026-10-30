@@ -324,6 +324,13 @@ void ConsoleBackend::renderTemplate(const PrintTemplate& output, bool toBuffer) 
     QList<ConsoleStyle> styles;
     ConsoleSegment button;
     bool inButton = false;
+    // Relative div children have their own cursor. Sibling divs at the same
+    // rect share an origin (FL3.8 overlays face, pupils and features this way).
+    struct DivisionCursor { int x; int y; int col = 0; };
+    QList<DivisionCursor> divisions;
+    const auto lengthPx = [this](int value, bool pixels) {
+        return pixels ? value : value * m_layout.fontSize() / 100;
+    };
     const auto sealButton = [&] {
         if (!inButton) return;
         button.generation = m_generation;
@@ -332,6 +339,21 @@ void ConsoleBackend::renderTemplate(const PrintTemplate& output, bool toBuffer) 
         inButton = false;
     };
     for (const auto& part : output.parts) {
+        if (part.kind == PrintTemplatePart::Kind::Division) {
+            sealButton();
+            flushPendingToSegments(m_sealed); m_pendingParts.clear();
+            const int parentX = divisions.isEmpty() ? 0 : divisions.last().x;
+            const int parentY = divisions.isEmpty() ? 0 : divisions.last().y;
+            divisions.append({parentX + lengthPx(part.x, part.xposIsPixels),
+                              parentY + lengthPx(part.y, part.yposIsPixels), 0});
+            continue;
+        }
+        if (part.kind == PrintTemplatePart::Kind::EndDivision) {
+            sealButton();
+            flushPendingToSegments(m_sealed); m_pendingParts.clear();
+            if (!divisions.isEmpty()) divisions.removeLast();
+            continue;
+        }
         if (part.kind == PrintTemplatePart::Kind::Style) {
             styles.append(style);
             if (part.style.color.isValid()) { style.color = part.style.color; style.colorChanged = true; }
@@ -426,6 +448,14 @@ void ConsoleBackend::renderTemplate(const PrintTemplate& output, bool toBuffer) 
         } else if (part.kind == PrintTemplatePart::Kind::Shape) {
             span.kind = ConsoleSpanKind::Shape; span.shapeType = part.shapeType;
             span.shapeParams = part.shapeParams; span.altText = QStringLiteral("<shape type='%1'>").arg(part.shapeType);
+        }
+        if (!divisions.isEmpty()) {
+            auto& division = divisions.last();
+            span.pointXLocked = true;
+            span.relCol = qRound(double(division.x) / m_layout.columnWidthPx()) + division.col;
+            span.positionedTopPx = division.y;
+            m_layout.measurePart(span);
+            division.col += span.cols;
         }
         ensureLineOpen();
         if (inButton) button.spans.append(span); else appendPart(span);

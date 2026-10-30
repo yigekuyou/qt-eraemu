@@ -794,6 +794,66 @@ TestCase {
         backend.setMaxLog(5000);
     }
 
+    function test_positionedThumbnailLayersDoNotWrap() {
+        backend.stageMode = true;
+        let html = "";
+        for (let i = 0; i < 7; ++i) {
+            const rect = "<div rect='" + (i * 80) + "px,0px,80px,80px'>";
+            html += rect + "<img src='offset_atlas' width='80px' height='80px'></div>";
+            html += rect + "<button value='" + i + "'><img src='transparent' width='80px' height='80px'></button></div>";
+        }
+        consoleFixture.printHtml(backend, html);
+        backend.flush(); view.syncView();
+        compare(backend.stageImageBlocks.length, 14);
+        for (let i = 0; i < 7; ++i) {
+            const base = backend.stageImageBlocks[i * 2];
+            const feature = backend.stageImageBlocks[i * 2 + 1];
+            compare(base.sourceRow, 0, "positioned children stay on the source line");
+            compare(feature.sourceRow, 0);
+            compare(base.col, feature.col);
+            compare(base.col, Math.round(i * 80 / Math.floor(view.fontSize / 2)));
+        }
+    }
+
+    function test_divImagesShareAnchorInStageAndHistory() {
+        backend.stageMode = true;
+        consoleFixture.printHtml(backend,
+            "<div rect='80px,20px,80px,80px'><img src='offset_atlas' width='80px' height='80px'></div>"
+            + "<div rect='80px,20px,80px,80px'><img src='transparent' width='80px' height='80px'></div>"
+            + "<div rect='80px,20px,80px,80px'><button value='7'><img src='webp_atlas' width='80px' height='80px'></button></div>");
+        consoleFixture.request(backend, "INPUT");
+        backend.flush(); view.syncView();
+        tryCompare(view, "showingStage", true);
+        compare(backend.stageImageBlocks.length, 3);
+        const images = [];
+        for (let i = 0; i < 3; ++i) {
+            const block = view.stageImageAt(i);
+            verify(block.visible, "overlay image is visible");
+            tryCompare(findChild(block, "blockImage"), "status", Image.Ready);
+            compare(block.width, 80);
+            compare(block.height, 80);
+            compare(block.blockData.pxTop, 20);
+            images.push(block);
+        }
+        compare(images[0].x, images[1].x);
+        compare(images[0].y, images[1].y);
+        compare(images[0].x, images[2].x);
+        compare(images[0].y, images[2].y);
+        verify(images[2].z > images[1].z && images[1].z > images[0].z);
+        mouseMove(images[2], 40, 40);
+        tryVerify(function() { return images[2].hovered; });
+        backend.stageMode = false; view.syncView();
+        for (let i = 0; i < 3; ++i) {
+            const block = view.blockAt(0, i);
+            verify(block !== null && block.visible, "history retains each image");
+            tryCompare(findChild(block, "blockImage"), "status", Image.Ready);
+            compare(block.x, view.blockAt(0, 0).x);
+            compare(block.y, view.blockAt(0, 0).y);
+        }
+        backend.stageMode = true; view.syncView();
+        tryCompare(findChild(view.stageImageAt(0), "blockImage"), "status", Image.Ready);
+    }
+
     function test_stageImageSnapshotHonorsRedrawAndButtons() {
         backend.stageMode = true;
         consoleFixture.printHtml(backend,

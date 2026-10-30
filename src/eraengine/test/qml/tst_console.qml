@@ -711,6 +711,64 @@ TestCase {
         backend.clearAll(); view.syncView();
     }
 
+    // eraTW 的画像枠（图像边框）在**另一行**打印：@画像セット 把立絵放到
+    // レイヤー階数 0、枠放到 最大レイヤー数（=1），两个层各是一次 HTML_PRINT，
+    // 所以框在立絵的下一行，靠 ypos 的 `-(LINECOUNT-描画開始行数+階数)*(行高/字号)`
+    // 拉回来。左右对齐（<p align='left'|'center'>）作用于**整行**，而 eraTW 给
+    // 立絵和框的 width/height 是同一个值（都是 默认角色画像横幅*比率/字号），
+    // 两行的内容宽度一模一样 —— 所以居中和左对齐都必须让框贴着立絵走，
+    // 不能因为「按行宽平移」把框推开。
+    // 行高 == 字号（eraTW 的 emuera.config：フォントサイズ16 / 一行の高さ16）时，
+    // 一层正好是一行、ypos 正好抵消一行，框与立絵上下也重合。
+    function test_alignmentKeepsFrameOnPortrait() {
+        backend.stageMode = true;
+        view.lineHeight = 16;              // eraTW：一行の高さ 16
+        view.fontSize = 16;                // eraTW：フォントサイズ 16
+        backend.setGridColumns(Math.floor(320 / 8));
+        const overlay = findChild(view, "stageImageLayer");
+        const left = {};
+        for (const align of ["left", "center"]) {
+            backend.clearAll();
+            backend.print("▼"); backend.newline();
+            // 第 0 层：立絵（资源固有 180×180 = eraTW の立絵サイズ）
+            consoleFixture.printHtml(backend, "<shape type='space' param='0'><p align='" + align + "'>"
+                + "<img src='transparent' width='1125' height='1125'>");
+            // 第 1 层：画像枠（资源固有 16×16，和立絵完全不同 —— 若把固有尺寸
+            // 漏进行宽/摆放，两行的宽度就会不同，居中时框会被推歪）
+            consoleFixture.printHtml(backend, "<shape type='space' param='0'><p align='" + align + "'>"
+                + "<img src='webp_atlas' width='1125' height='1125' ypos='-100'>");
+            backend.flush(); view.syncView();
+            tryCompare(view, "showingStage", true);
+            const face = view.stageImageAt(0);
+            const frame = view.stageImageAt(1);
+            verify(face !== null && frame !== null);
+            tryCompare(findChild(face, "blockImage"), "status", Image.Ready);
+            compare(frame.blockData.col, face.blockData.col,
+                    align + "：框与立絵同一列（行宽相同，整行平移相同）");
+            compare(frame.blockData.cols, face.blockData.cols, "框与立絵占同样多的格子");
+            const fx = face.mapToItem(overlay.parent, 0, 0).x;
+            const gx = frame.mapToItem(overlay.parent, 0, 0).x;
+            verify(Math.abs(fx - gx) < 0.01, align + "：框与立絵左边缘重合");
+            const fy = face.mapToItem(overlay.parent, 0, 0).y;
+            const gy = frame.mapToItem(overlay.parent, 0, 0).y;
+            verify(Math.abs(fy - gy) < 0.01,
+                   align + "：行高 == 字号时 ypos 正好抵消一整行");
+            left[align] = fx;
+            left[align + "Frame"] = gx;
+        }
+        // 居中相对左对齐整体右移，而且立絵和框**移动同样的距离**。
+        const shiftFace = left["center"] - left["left"];
+        const shiftFrame = left["centerFrame"] - left["leftFrame"];
+        verify(shiftFace > 0.5, "居中确实把整行右移（不是没生效）");
+        verify(Math.abs(shiftFace - shiftFrame) < 0.01,
+               "立絵和框被平移同样的距离（对齐不改变两者相对位置）");
+        view.lineHeight = 20;
+        view.fontSize = 18;
+        backend.setGridColumns(Math.floor(320 / 9));
+        backend.stageMode = false;
+        backend.clearAll(); view.syncView();
+    }
+
     function test_stageImageOverlayFollowsTrimmedOrigin() {
         backend.stageMode = true;
         backend.setMaxLog(12);

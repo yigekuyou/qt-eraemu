@@ -359,7 +359,9 @@ void ConsoleBackend::renderTemplate(const PrintTemplate& output, bool toBuffer) 
             continue;
         }
         if (part.kind == PrintTemplatePart::Kind::Alignment) {
-            if (m_pendingOpen) { sealButton(); newline(); }
+            // C# HtmlManager 的 <p align> 只设置整行对齐，不提交已有片段。
+            // eraTW 左对齐会把 <shape type='space'> 拼在 <p> 前面；若在此
+            // 换行，每个图层就多占一行，而框的 ypos 只补偿一行，最终下错一格。
             alignments.append(m_align);
             const QString align = part.text.toLower();
             if (align == "center") m_align = ConsoleAlign::Center;

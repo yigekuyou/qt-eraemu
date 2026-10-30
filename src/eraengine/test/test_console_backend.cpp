@@ -34,6 +34,7 @@
 #include <QEventLoop>
 #include <QTimer>
 
+#include "ast/print_template.h"
 #include "console_backend.h"
 #include "graphics_store.h"
 #include "resource_image_provider.h"
@@ -556,6 +557,40 @@ int main(int argc, char* argv[]) {
         check(face.value("row").toInt() + face.value("offsetRows").toDouble()
                   == frame.value("row").toInt() + frame.value("offsetRows").toDouble(),
               "框与立絵**同一纵坐标**（图层叠加对齐 -> 边框落在立绘边缘）");
+    }
+
+    // ---- 5a. eraTW 画像枠：两层各占一行，不许有额外空行 ----
+    // eraTW 的 `@画像一斉表示` 每一层是一次 HTML_PRINT：立絵（包在 <button> 里）
+    // 一层、画像枠（裸 <img ypos='-100'>）一层。ypos 的补偿只够**一行**
+    //（-100% × 字号 / 100 = -16px = 一行高），所以两层之间必须**正好隔一行**：
+    // 多出一行，框就整体掉到立絵下面一格 —— 正是 QML 里看到的「错开一格」。
+    qDebug() << "\n5a) eraTW 画像枠两层之间只隔一行";
+    {
+        ConsoleBackend c;
+        c.setFontSize(16);
+        c.setLineHeight(16);
+        c.setGridColumns(40);
+        c.setGridRows(10);
+        c.print(QStringLiteral("▼"));
+        c.newline();                                                                    // 0
+        c.printTemplate(PrintTemplateCompiler::parseRuntimeMarkup(QStringLiteral(
+            "<shape type='space' param='0'><p align='left'><button value='1001' title='t'>"
+            "<img src='face' width='1125' height='1125' ypos='0'></button>")));  // 1
+        c.printTemplate(PrintTemplateCompiler::parseRuntimeMarkup(QStringLiteral(
+            "<shape type='space' param='0'><p align='left'>"
+            "<img src='frame' width='1125' height='1125' ypos='-100'>")));       // 2
+        c.flush();
+        check(c.lineCount() == 3, "立絵/枠各占一行（没有多出空行）");
+        const QVariantMap face = blockOf(c.lineBlocks(1), "face");
+        const QVariantMap frame = blockOf(c.lineBlocks(2), "frame");
+        check(!face.isEmpty() && !frame.isEmpty(), "两层都在预期的行上");
+        check(frame.value("row").toInt() - face.value("row").toInt() == 1,
+              "框在立絵的**下一行**（相隔 1 行，不是 2 行）");
+        check(frame.value("pxTop").toInt() == -16, "ypos=-100 -> pxTop == -16（一行高）");
+        check(face.value("pxTop").toInt() == 0, "立絵本身没有 ypos");
+        check(frame.value("row").toInt() * 16 + frame.value("pxTop").toInt()
+                  == face.value("row").toInt() * 16 + face.value("pxTop").toInt(),
+              "框与立絵同一纵坐标（像素位移正好抵消一行）");
     }
 
     // ---- 5b. 舞台快照的图锚（updateStageModels 的含图行索引）----

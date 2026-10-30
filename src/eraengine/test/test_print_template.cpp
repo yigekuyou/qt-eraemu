@@ -241,6 +241,47 @@ int main(int argc, char** argv) {
         const auto compiled = PrintTemplateCompiler::compile(QSharedPointer<LiteralNode>::create(text));
         console.printTemplate(PrintTemplateCompiler::evaluateOccurrences(*compiled, [](const ExpressionNode&, int) { return QVariant(QString()); }));
     };
+    const int savedFontSize = console.fontSize();
+    const int savedLineHeight = console.lineHeight();
+    // eraTW stores each layer in TEMP_HTML, then prepends a spacer before <p>.
+    // Exercise structured values and plain-text replacement through the same slot.
+    for (const bool plainReplacement : {false, true}) {
+        console.clearAll();
+        console.setFontSize(16);
+        console.setLineHeight(16);
+        const QString faceHtml = QStringLiteral(
+            "<shape type='space' param='0'><p align='left'>"
+            "<img src='face' width='400' height='400'>");
+        const QString frameHtml = QStringLiteral(
+            "<shape type='space' param='0'><p align='left'>"
+            "<img src='frame' width='400' height='400' ypos='-100'>");
+        for (int layer = 0; layer < 2; ++layer) {
+            const QString html = layer == 0 ? faceHtml : frameHtml;
+            storage.setStringSlotInCurrentFrame("LOCALS", {layer},
+                FlatStringValue(html, PrintTemplateCompiler::parseRuntimeMarkup(html)));
+            if (plainReplacement) {
+                // Text-only reads (including save-file restoration) must replace old IR.
+                storage.setLocalStr(layer, "stale");
+                storage.setLocalStr(layer, html);
+            }
+        }
+        engine.executeInstruction(AstBuilder::build("HTML_PRINT LOCALS:0", {}, resolve));
+        engine.executeInstruction(AstBuilder::build("HTML_PRINT LOCALS:1", {}, resolve));
+        check(storage.getStringSlotInCurrentFrame("LOCALS", {1}).text == frameHtml,
+              "layer slot preserves ypos through storage and replacement");
+        check(console.buffer().count() == 2,
+              "stored layer markup does not submit spacer as an extra line");
+        if (console.buffer().count() == 2) {
+            const auto face = flatSpansOf(console.buffer().at(0)).last();
+            const auto frameImage = flatSpansOf(console.buffer().at(1)).last();
+            check(face.kind == ConsoleSpanKind::Image && face.text == "face"
+                  && frameImage.kind == ConsoleSpanKind::Image && frameImage.text == "frame"
+                  && frameImage.yposRaw == -100 && frameImage.top == -16,
+                  "structured and text-only readback keep frame image and pixel compensation");
+        }
+    }
+    console.setFontSize(savedFontSize);
+    console.setLineHeight(savedLineHeight);
     console.clearAll();
     printHtmlFixture("<shape type = 'space' param = '100'><button value = '0' title = 'start'>START</button><br>");
     check(console.buffer().count() == 1

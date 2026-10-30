@@ -271,12 +271,16 @@ void registerDeclarationText(VariableTable& variables, ParseDiagnostics& diagnos
                        return parseIntegerLiteral(v.trimmed(), n);
                    });
             if (d.typeIsStr) {
-                if (d.defaultStr.size() > 1) {
-                    // 字符串常数**数组**（`#DIMS CONST X, N = s0, s1, …`，
-                    // eraTW 的 DISP_MEMO）：逐下标提供，此前只存第一个值。
+                if (!d.defaultStr.isEmpty()) {
+                    // #DIMS CONST 仍然是数组，即使只有一个初值：
+                    // `IMG_頭部位_パーツ名 = "兽耳"` 会被 GETVARS("…:0")
+                    // 按数组元素访问。此前只有 size > 1 才登记数组，导致单元素
+                    // 数组落入标量表，GETVARS 的常量数组 provider 查不到它，
+                    // 最终把图片名拼成 `CC1_頭部位__0`。
                     variables.setConstStrArray(d.name, d.defaultStr, constOwner);
-                } else if (!d.defaultStr.isEmpty()) {
-                    variables.setConstStr(d.name, d.defaultStr.first(), constOwner);
+                    // 同时保留单元素标量视图，兼容无下标的 GETVARS("NAME")。
+                    if (d.defaultStr.size() == 1)
+                        variables.setConstStr(d.name, d.defaultStr.first(), constOwner);
                 }
             } else if (!allLiteral && !valueExprs.isEmpty()) {
                 variables.setConstExprs(d.name, valueExprs, constOwner);

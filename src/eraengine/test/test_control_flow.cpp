@@ -370,6 +370,7 @@ static void emExtensionFunctions() {
 
     const QStringList source = {"@MAIN",
         "#DIM CONST CONSTANT = 3",
+        "#DIMS CONST SINGLE_NAME = \"兽耳\"",
         "#DIM COUNT, 4",
         "#DIMS TEXT",
         "COUNT:1 = 7",
@@ -381,6 +382,7 @@ static void emExtensionFunctions() {
         "CHECK:4 = GETVAR(\"CONSTANT\")",       // 常量按常数表取值 -> 3
         "CHECK:5 = GETVAR(\"COUNT:1\")",        // 带下标的可写变量 -> 7
         "CHECK:6 = STRLENS(GETVARS(\"TEXT\"))", // 字符串变量 -> 2
+        "CHECK:15 = STRLENS(GETVARS(\"SINGLE_NAME\")) * 10 + STRLENS(GETVARS(\"SINGLE_NAME:0\"))", // 单元素 #DIMS CONST 兼容标量/数组访问
         "COUNT:2 = 0",
         "CHECK:7 = SETVAR(\"COUNT:2\", 9)",     // 成功返回 1
         "CHECK:8 = COUNT:2",                    // 真的写进去了 -> 9
@@ -409,7 +411,7 @@ static void emExtensionFunctions() {
     table.setEntryPoint("MAIN");
     runner.runToCompletion();
     // RESULTS:0 = 整个匹配 "2026-10"（7 字符：模式只覆盖到月）
-    const QList<qint64> expect = {5, 1, 2, 0, 3, 7, 2, 1, 9, 3, 1, 3, 7, 8, 2};
+    const QList<qint64> expect = {5, 1, 2, 0, 3, 7, 2, 1, 9, 3, 1, 3, 7, 8, 2, 33};
     bool ok = true;
     for (int i = 0; i < expect.size(); ++i) {
         const qint64 actual = storage.getGlobalInt1DInCurrentFrame("CHECK", i);

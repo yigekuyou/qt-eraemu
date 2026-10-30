@@ -136,14 +136,24 @@ int main(int argc, char* argv[]) {
         check(!(s.width == 64 && s.height == 20), "不再回退成固有像素 64×20");
     }
 
-    qDebug() << "\n4) `<img src='wide' width='1000'>`（只给 width）";
+    qDebug() << "\n4) `<img src='wide' width='80px' height='80px'>`（C# 绝对像素尺寸）";
+    {
+        const ConsoleSpan s = spanOf(QStringLiteral("<img src='wide' width='80px' height='80px'>"));
+        check(s.widthIsPixels && s.heightIsPixels, "px 单位被保留");
+        check(s.width == 80 && s.height == 80,
+              QString("目标尺寸保持 80×80，得到 %1×%2").arg(s.width).arg(s.height));
+        check(s.imageWidthPx == 80 && s.imageHeightPx == 80,
+              QString("QML 绘制尺寸保持 80×80，得到 %1×%2").arg(s.imageWidthPx).arg(s.imageHeightPx));
+    }
+
+    qDebug() << "\n5) `<img src='wide' width='1000'>`（只给 width）";
     {
         const ConsoleSpan s = spanOf(QStringLiteral("<img src='wide' width='1000'>"));
         check(s.width == 160, QString("width == 160（10 倍字号）得到 %1").arg(s.width));
         check(s.height == kLineHeight, QString("height 缺省 = 1 行得到 %1").arg(s.height));
     }
 
-    qDebug() << "\n5) `<img src='wide' width='1000' height='1000'>`（都写）";
+    qDebug() << "\n6) `<img src='wide' width='1000' height='1000'>`（都写）";
     {
         const ConsoleSpan s = spanOf(QStringLiteral("<img src='wide' width='1000' height='1000'>"));
         check(s.width == 160 && s.height == 160, "两者都按字号百分比");

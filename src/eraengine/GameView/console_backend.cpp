@@ -394,6 +394,9 @@ void ConsoleBackend::renderTemplate(const PrintTemplate& output, bool toBuffer) 
         span.style.underline |= part.style.underline; span.style.strike |= part.style.strike;
         if (part.kind == PrintTemplatePart::Kind::Image) {
             span.kind = ConsoleSpanKind::Image; span.imageSize = QSizeF(part.width, part.height);
+            span.widthIsPixels = part.widthIsPixels;
+            span.heightIsPixels = part.heightIsPixels;
+            span.yposIsPixels = part.yposIsPixels;
             span.yposRaw = part.y;
             span.imageButton = part.imageAlt;   // <img srcb=...> 按钮选中态替换图
             // C# ConsoleImagePart 在解析期就取到图像并持有；移植侧 QML 异步按名取图，

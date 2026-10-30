@@ -216,7 +216,15 @@ PrintTemplate PrintTemplateCompiler::evaluateOccurrences(const CompiledPrintTemp
         if (part.kind == PrintTemplatePart::Kind::Alignment) part.text = attrs.value("align");
         part.shapeType = attrs.value("type");
         for (const auto& value : attrs.value("param").split(',', Qt::SkipEmptyParts)) part.shapeParams.append(value.trimmed().toInt());
-        part.width = attrs.value("width").toInt(); part.height = attrs.value("height").toInt(); part.y = attrs.value("ypos").toInt();
+        const auto parseLength = [](const QString& raw, bool& pixels) {
+            const QString value = raw.trimmed();
+            pixels = value.endsWith(QStringLiteral("px"), Qt::CaseInsensitive);
+            const QString number = pixels ? value.left(value.size() - 2).trimmed() : value;
+            return number.toInt();
+        };
+        part.width = parseLength(attrs.value("width"), part.widthIsPixels);
+        part.height = parseLength(attrs.value("height"), part.heightIsPixels);
+        part.y = parseLength(attrs.value("ypos"), part.yposIsPixels);
         out.parts.append(std::move(part));
     }
     return out;

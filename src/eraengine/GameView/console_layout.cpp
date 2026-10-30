@@ -63,10 +63,14 @@ void ConsoleLayout::measurePart(ConsoleSpan& part) const {
             //   height = raw_height==0 ? FontSize : FontSize*raw_height/100
             //   Width  = raw_width==0  ? 固有宽 * height / 固有高 : FontSize*raw_width/100
             hPx = part.imageSize.height() > 0
-                      ? static_cast<int>(part.imageSize.height() * m_fontSize / 100.0)
+                      ? (part.heightIsPixels
+                             ? static_cast<int>(part.imageSize.height())
+                             : static_cast<int>(part.imageSize.height() * m_fontSize / 100.0))
                       : 0;
             if (part.imageSize.width() > 0) {
-                wPx = static_cast<int>(part.imageSize.width() * m_fontSize / 100.0);
+                wPx = part.widthIsPixels
+                          ? static_cast<int>(part.imageSize.width())
+                          : static_cast<int>(part.imageSize.width() * m_fontSize / 100.0);
             } else if (hPx > 0 && !part.imageIntrinsic.isEmpty()
                        && part.imageIntrinsic.height() > 0) {
                 // 只写了 height（eraTW 立絵 `<img src=… height='{iFont_Hei_mag}'>`）：
@@ -87,7 +91,9 @@ void ConsoleLayout::measurePart(ConsoleSpan& part) const {
         // C# ConsoleImagePart：top = raw_ypos * FontSize / 100（**像素**，负值合法）。
         // eraTW 的画像枠/時間停止/特效各自在被打印的那一行，靠负 ypos 被拉回来盖在
         // 立絵上 —— 这里不折算，QML 就只能在立絵下面一行画框（「边框没有在立绘边缘」）。
-        part.top = part.yposRaw * m_fontSize / 100;
+        part.top = part.yposIsPixels
+                       ? part.yposRaw
+                       : part.yposRaw * m_fontSize / 100;
         part.bottom = part.top + part.height;
         break;
     }

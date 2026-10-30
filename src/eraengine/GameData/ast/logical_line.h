@@ -182,6 +182,11 @@ struct PrintTemplatePart {
     QString tooltip;
     int width = 0;
     int height = 0;
+    // HTML length units: bare numbers are FontSize percentages; an explicit
+    // `px` suffix is an absolute pixel value (C# MixedNum semantics).
+    bool widthIsPixels = false;
+    bool heightIsPixels = false;
+    bool yposIsPixels = false;
     QString shapeType;
     QList<int> shapeParams;
     bool lockedPosition = false;

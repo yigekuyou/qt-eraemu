@@ -292,6 +292,11 @@ void walkApply(ExpressionNode& node, const VariableTable& table, const QString& 
     }
     case NodeKind::Function: {
         auto& fn = static_cast<FunctionNode&>(node);
+        // VARSIZE 的第一个参数可以是字符串字面量（数组名），因此参数树里没有
+        // VariableNode 可供 needsExecutionScope() 发现；但运行期仍必须按当前
+        // 函数段查询私有 CONST 数组的形状。
+        if (needsScope && fn.builtinOp() == BuiltinOp::VarSize)
+            *needsScope = true;
         for (auto& a : fn.arguments()) {
             if (a) walkApply(*a, table, function, paramNames, evalConst, resolveConst, needsScope);
         }

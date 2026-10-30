@@ -452,7 +452,26 @@ bool ScriptRunner::evalInt(const QSharedPointer<ExpressionNode>& ast, const QStr
 }
 
 bool ScriptRunner::evalCondition(const LogicalLine& line, bool& out) {
-    return m_table->evaluateCondition(m_table->currentScript(), line.lineIndex, out);
+    if (!line.condition) {
+        m_state->setErrorState();
+        reportError(QStringLiteral("条件表达式缺少装载期 AST：%1").arg(line.raw.trimmed()));
+        return false;
+    }
+    // 条件行在 stepOnce() 中已经按本行 scopeKey 同步了 m_currentScopeId。
+    // 不再让 EraParseTable 从独立的 PositionState 重新取 scope：系统入口、GOTO
+    // 和恢复调用帧时两者可能暂时不同步，私有 CONST 数组（例如 VARSIZE）会
+    // 错误地按全局域查询。
+    const eravar::ScopeId scope = line.conditionNeedsScope
+        ? m_currentScopeId : eravar::kGlobalScope;
+    const QVariant value = getEvaluator().evaluate(*line.condition, m_storage,
+                                                     baseData(), scope);
+    if (!value.isValid()) {
+        m_state->setErrorState();
+        reportError(QStringLiteral("条件表达式求值失败：%1").arg(line.raw.trimmed()));
+        return false;
+    }
+    out = value.toLongLong() != 0;
+    return true;
 }
 
 // ---------------------------------------------------------------------------

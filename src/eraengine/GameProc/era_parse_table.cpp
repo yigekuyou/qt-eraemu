@@ -1929,9 +1929,11 @@ void EraParseTable::traceHtmlStringArguments() {
                     chainStop = Stop::ControlFlow;
                     return false;
                 }
+                // 各分支都包含整赋值，因此合并结果就是当前链的基；
+                // 不再越过 IF 向前寻找另一条可能不相关的写链。
                 reversed = branch + reversed;
-                j = opener; // for-loop 的递减会从 IF 之前继续回溯。
-                continue;
+                out = reversed;
+                return true;
             }
             QString name; bool append = false; QSharedPointer<ExpressionNode> value;
             if (!fragmentWrite(line, name, append, value)) {

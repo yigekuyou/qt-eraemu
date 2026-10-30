@@ -370,6 +370,42 @@ int main(int argc, char* argv[]) {
         broken.markLoadComplete();
         check(htmlProblemsOf(broken) == 1,
               "追踪链缺闭标签 -> 装载期报 UnclosedTag（不必等到打印期）");
+
+        // IF 合流：两条路径写入完全相同的片段时，反向追踪可以证明同一骨架。
+        ProcessState sameIfState;
+        EraParseTable sameIf(&sameIfState);
+        loadStaged(sameIf, QStringLiteral("SAME_IF.ERB"),
+                   QStringLiteral("IF 1\n"
+                                  "LOCALS = @\"<b>\"\n"
+                                  "ELSE\n"
+                                  "LOCALS = @\"<b>\"\n"
+                                  "ENDIF\n"
+                                  "LOCALS += @\"x</b>\"\n"
+                                  "HTML_PRINT LOCALS\n"));
+        sameIf.traceHtmlStringArguments();
+        sameIf.markLoadComplete();
+        const auto sameIfLine = sameIf.lineAt(QStringLiteral("SAME_IF.ERB"), 6);
+        check(sameIfLine && sameIfLine->printTemplate,
+              "IF 两个分支写入相同片段 -> 装载期合流");
+
+        // IF 合流拒绝：分支结果不同，不能把两个互斥值串成一个不存在的字符串。
+        ProcessState differentIfState;
+        EraParseTable differentIf(&differentIfState);
+        loadStaged(differentIf, QStringLiteral("DIFFERENT_IF.ERB"),
+                   QStringLiteral("IF 1\n"
+                                  "LOCALS = @\"<b>\"\n"
+                                  "ELSE\n"
+                                  "LOCALS = @\"<i>\"\n"
+                                  "ENDIF\n"
+                                  "LOCALS += @\"x</b>\"\n"
+                                  "HTML_PRINT LOCALS\n"));
+        differentIf.traceHtmlStringArguments();
+        differentIf.markLoadComplete();
+        const auto differentIfLine = differentIf.lineAt(QStringLiteral("DIFFERENT_IF.ERB"), 6);
+        check(differentIfLine && !differentIfLine->arguments.isEmpty()
+                  && differentIfLine->arguments.first().ast
+                  && differentIfLine->arguments.first().ast->kind() == NodeKind::Variable,
+              "IF 分支结果不同 -> 不合流，保留变量 AST 交运行期解析");
     }
 
     if (g_failures == 0) qDebug() << "\nALL PASSED";

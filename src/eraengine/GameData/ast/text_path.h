@@ -24,6 +24,8 @@
 #include <QString>
 #include <QStringList>
 
+#include "../game_paths.h"
+
 // ---------------------------------------------------------------------------
 // emuera.em 私family 的**路径规范化**（`Utils.GetValidPath`）与
 // LOADTEXT / SAVETEXT 的扩展名白名单（`Config.ValidExtension`）。
@@ -87,9 +89,16 @@ namespace erapath {
 // baseDir 为空（引擎尚未设置游戏目录）时按当前目录解析 —— 与 C# 的
 // `Program.ExeDir + path`（ExeDir 必有值）保持同一形态，不回退成「拒绝」。
 [[nodiscard]] inline QString resolveUnderBase(const QString& baseDir, const QString& path) {
+    // ENUMFILES 在 SAF 下返回 provider 的完整 content:// URI。它已经是授权
+    // 目录中的实际文档路径，必须原样保留；再次按普通本地路径处理会丢失
+    // DocumentsProvider 的 opaque document id。
+    if (GamePaths::isContent(path))
+        return GamePaths::isContent(baseDir) ? path : QString();
+
     const QString p = normalize(path);
     if (isRooted(p)) return QString();
     if (baseDir.isEmpty()) return QDir::cleanPath(p);
+    if (GamePaths::isContent(baseDir)) return GamePaths::join(baseDir, p);
     return QDir(baseDir).absoluteFilePath(p);
 }
 

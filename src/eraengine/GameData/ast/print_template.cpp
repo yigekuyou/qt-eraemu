@@ -42,6 +42,39 @@ QList<StrFormPart> fragments(const QString& text, const QList<QSharedPointer<Exp
     if (pos < text.size()) out.append(StrFormPart::makeText(decode(text.mid(pos))));
     return out;
 }
+// 这个插值是不是「就一个变量/SFORM 读取」（没有宽度格式）：运行时只对这种洞做抽取。
+bool isPlainRead(const QSharedPointer<ExpressionNode>& node) {
+    if (!node) return false;
+    if (node->kind() == NodeKind::Variable) return true;
+    if (node->kind() != NodeKind::StrForm) return false;
+    const auto& parts = static_cast<const StrFormNode&>(*node).parts();
+    return parts.size() == 1 && !parts.first().width && parts.first().expression
+           && isPlainRead(parts.first().expression);
+}
+// 各标签接受的属性（C# ConsoleDivPart / ConsoleImagePart / ConsoleButtonPart …）。
+// 标签内部的「裸片段」插值（`<div %RECT% …>` 的 RECT）只能贡献这些名字：
+// 装载期把标签身份和名单一起定下，运行期只是把值拆成键值对、按名单筛。
+QStringList tagAttributes(const QString& tag) {
+    if (tag == QLatin1String("div"))
+        return {QStringLiteral("rect"), QStringLiteral("xpos"), QStringLiteral("ypos"),
+                QStringLiteral("width"), QStringLiteral("height"), QStringLiteral("border"),
+                QStringLiteral("bcolor"), QStringLiteral("color"), QStringLiteral("depth"),
+                QStringLiteral("display"), QStringLiteral("relative"), QStringLiteral("align")};
+    if (tag == QLatin1String("img"))
+        return {QStringLiteral("src"), QStringLiteral("srcb"), QStringLiteral("width"),
+                QStringLiteral("height"), QStringLiteral("ypos")};
+    if (tag == QLatin1String("button"))
+        return {QStringLiteral("value"), QStringLiteral("title"), QStringLiteral("color"),
+                QStringLiteral("bcolor"), QStringLiteral("border")};
+    if (tag == QLatin1String("shape"))
+        return {QStringLiteral("type"), QStringLiteral("param"), QStringLiteral("color"),
+                QStringLiteral("bcolor")};
+    if (tag == QLatin1String("p")) return {QStringLiteral("align")};
+    if (tag == QLatin1String("font"))
+        return {QStringLiteral("color"), QStringLiteral("face"), QStringLiteral("size"),
+                QStringLiteral("bcolor")};
+    return {};
+}
 QSharedPointer<CompiledPrintTemplate> compileMarkup(const QString& markup, const QList<QSharedPointer<ExpressionNode>>& expressions) {
     auto out = QSharedPointer<CompiledPrintTemplate>::create();
     QStringList stack;
@@ -76,6 +109,31 @@ QSharedPointer<CompiledPrintTemplate> compileMarkup(const QString& markup, const
         if (!tagMatch.hasMatch()) { text(markup.mid(lt, gt-lt+1)); pos = gt+1; continue; }
         const QString tag = tagMatch.captured(2).toLower();
         const bool closing = !tagMatch.captured(1).isEmpty();
+        // 标签内部的洞分两种：
+        //  · 属性**值**位置（`rect = '%POS_X%, …'`、`src = '%NAME%'`）—— 属性名在
+        //    装载期已经确定，值只是普通插值，静态 part 就能承载，**不需要**任何
+        //    运行期分词；
+        //  · 属性**语法**位置（`<div %RECT% …>`，裸位置）—— 标签身份不变，只是
+        //    属性表由值提供：装载期锁住名单（tagAttributes），运行期把值拆成
+        //    `名字 = 值` 对并按名单筛，**不重新分词**。若链反向追踪/登记已把这段
+        //    还原成文本，洞会落在引号内，走上面第一种。
+        const QString rawTag = markup.mid(lt, gt - lt + 1);
+        bool fragment = false;
+        if (!closing && rawTag.contains(QChar(0xfdd0))) {
+            bool quoted = false; QChar last;
+            for (qsizetype k = 0; k + 1 < rawTag.size(); ++k) {
+                const QChar c = rawTag.at(k);
+                if (c == QChar(0xfdd0)) {
+                    if (!quoted && last != QLatin1Char('=')) { fragment = true; break; }
+                    while (k + 1 < rawTag.size() && rawTag.at(k) != QChar(0xfdd1)) ++k;
+                    last = {};
+                    continue;
+                }
+                if (!quoted && (c == QLatin1Char('\'') || c == QLatin1Char('"'))) quoted = true;
+                else if (quoted && (c == QLatin1Char('\'') || c == QLatin1Char('"'))) quoted = false;
+                if (!c.isSpace()) last = c;
+            }
+        }
         CompiledPrintTemplatePart part; part.style = {};
         static const QRegularExpression attrRe("([a-zA-Z][a-zA-Z0-9_-]*)\\s*=\\s*(?:\"([^\"]*)\"|'([^']*)'|([^\\s/]+))");
         auto am = attrRe.globalMatch(token.mid(tagMatch.capturedEnd()));
@@ -84,6 +142,16 @@ QSharedPointer<CompiledPrintTemplate> compileMarkup(const QString& markup, const
             const QString value = a.captured(2).isNull() ? (a.captured(3).isNull() ? a.captured(4) : a.captured(3)) : a.captured(2);
             if (!part.attributes.contains(key)) part.attributeOrder.append(key);
             part.attributes[key] = QSharedPointer<StrFormNode>::create(fragments(value, expressions));
+        }
+        if (fragment) {
+            // 属性**语法**位置的洞（`<div %RECT%>`）：标签身份和可接受的属性名
+            // 装载期就定了（tagAttributes），运行期只把这段值拆成 `名字 = 值` 对
+            // 并按名单筛一遍 —— 不重新分词，标签已经没有别的形态。
+            // 链反向追踪/登记若能还原出 `rect = '…'`，洞会落在引号内，走上面
+            // 属性值那条路，连这一步都不需要。
+            part.tagAllowed = tagAttributes(tag);
+            for (const auto& f : fragments(rawTag, expressions))
+                if (f.expression) { part.tagHoles.append(f.expression); part.tagHoleIds.append(f.occurrenceId); }
         }
         if (closing) {
             // 结构标签自成一路（不进样式栈）：`</p>`/`</nobr>`/`</button>` 只对应
@@ -191,10 +259,17 @@ PrintTemplate PrintTemplateCompiler::evaluateOccurrences(const CompiledPrintTemp
         PrintTemplatePart part = compiled;
         if (compiled.expression) {
             const auto value = flatString(eval(*compiled.expression, compiled.occurrenceId));
-            // 插值结果是**不透明文本**（`%LOCALS%` 里带 <b> 也只当文字），
-            // 不是「未分词的片段」：它按 text 落进 IR，不改变 verified。
-            // 只有字符串级拼接（concatenateStrings）才会让结构不可证明。
-            out.parts.append(value.markup.parts);
+            // 正文位置的插值（`<` `>` 之外）：外层字面量不重分词，只把取到的
+            // 这一串内容做「运行时抽取」—— 变量读出来本身就是一整串文本，
+            // 里面若有标签（`%PORTRAIT%` = `<img …>`）就在这里成为结构。
+            // FORM 字符串产出的值带结构（verified），直接并入，不再解释。
+            if (isPlainRead(compiled.expression) && !value.markup.verified
+                && value.text.contains(QLatin1Char('<'))) {
+                for (const auto& nested : parseRuntimeMarkup(value.text).parts)
+                    out.parts.append(nested);
+            } else {
+                out.parts.append(value.markup.parts);
+            }
             continue;
         }
         QHash<QString, QString> attrs;
@@ -204,6 +279,22 @@ PrintTemplate PrintTemplateCompiler::evaluateOccurrences(const CompiledPrintTemp
             for (const auto& fragment : form.parts())
                 value += fragment.expression ? stringText(eval(*fragment.expression, fragment.occurrenceId)) : fragment.text;
             attrs[key] = value;
+        }
+        // 语法位置的洞：只贡献**属性键值对**，名字必须在装载期锁定的名单里
+        //（`nonsense = 'x'` 直接忽略）；标签本身（div/img/…）早已确定。
+        for (int i = 0; i < compiled.tagHoles.size(); ++i) {
+            const QString text = stringText(eval(*compiled.tagHoles.at(i), compiled.tagHoleIds.value(i)));
+            static const QRegularExpression pair(QStringLiteral(
+                "([a-zA-Z][a-zA-Z0-9_-]*)\\s*=\\s*(?:\"([^\"]*)\"|'([^']*)'|([^\\s/]+))"));
+            auto m = pair.globalMatch(text);
+            while (m.hasNext()) {
+                const auto p = m.next();
+                const QString key = p.captured(1).toLower();
+                if (!compiled.tagAllowed.contains(key)) continue;
+                attrs[key] = p.captured(2).isNull()
+                                 ? (p.captured(3).isNull() ? p.captured(4) : p.captured(3))
+                                 : p.captured(2);
+            }
         }
         if (part.kind == PrintTemplatePart::Kind::Style) {
             part.style.color = QColor(attrs.value("color"));

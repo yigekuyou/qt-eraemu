@@ -222,6 +222,12 @@ struct CompiledPrintTemplatePart : PrintTemplatePart {
     int occurrenceId = -1;
     QHash<QString, QSharedPointer<ExpressionNode>> attributes;
     QStringList attributeOrder;
+    // `<div %RECT% …>`：标签内部有插值时**不在装载期定标签**。装载期只锁定标签名
+    // 与它接受的属性集合，值到手后由运行期抽取组装成完整标签再分词一次。
+    // `<` `>` 之外的插值不登记在这里（正文插值不重分词）。
+    QList<QSharedPointer<ExpressionNode>> tagHoles;
+    QList<int> tagHoleIds;
+    QStringList tagAllowed;
 };
 struct CompiledPrintTemplate {
     QList<CompiledPrintTemplatePart> parts;

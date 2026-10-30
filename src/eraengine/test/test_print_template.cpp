@@ -231,10 +231,14 @@ int main(int argc, char** argv) {
     check(console.buffer().count() == 1, "br without attributes recognized");
     if (console.buffer().count()) {
         const auto& row = console.buffer().at(0);
-        check(row.plainText() == "8<b>&amp;</b>", "expression result stays text, not markup or entities");
+        // 变量读取是**取变量节点**：值在打印期抽取成结构（`<b>&amp;</b>` →
+        // 粗体 "&"），不再是转义后的一整段字面量文本。
+        check(row.plainText() == "8&", "variable read is extracted and tokenized at print time");
         check(row.segments.size() == 1 && row.segments.first().isButton && row.segments.first().intValue == 7, "button expression value retained");
         const auto spans = flatSpansOf(row);
-        check(spans.size() == 2 && spans[0].style.bold && !spans[0].style.italic && spans[1].style.italic && !spans[1].style.bold, "nested button styles restored");
+        check(spans.size() == 2 && spans[0].style.bold && !spans[0].style.italic
+              && spans[1].style.italic && spans[1].style.bold,
+              "nested button styles restored (value tag nests inside the outer one)");
         check(row.segments.first().tooltip == "a > b", "quoted greater-than scanner");
     }
     const auto printHtmlFixture = [&](const QString& text) {
@@ -638,6 +642,33 @@ int main(int argc, char** argv) {
     auto caseLine = AstBuilder::build("CASE 1 TO 3, IS >= 8", {}, compile);
     check(caseLine.caseCacheReady && caseLine.caseCache.size() == 2,
           "CASE clauses are ready before execution");
+    {
+        // 标签**语法**位置的洞：`<div %LOCALS%>`。标签身份与属性名单在装载期就
+        // 定了，运行期只把这段值拆成 `名字 = 值` 对并按名单筛（不重新分词）。
+        PrintTemplate result;
+        auto tagAst = compile(QStringLiteral("STRFORM(\"<div %LOCALS% border='1px'>x</div>\")"));
+        const auto compiled = PrintTemplateCompiler::compile(tagAst);
+        if (compiled) {
+            result = PrintTemplateCompiler::evaluateOccurrences(*compiled, [](const ExpressionNode&, int) {
+                return QVariant(QStringLiteral("rect = '600, 0, 60px, 60px'"));
+            });
+        }
+        bool div = false, foreignDropped = true;
+        for (const auto& part : result.parts)
+            if (part.kind == PrintTemplatePart::Kind::Division && part.x == 600 && part.width == 60) div = true;
+        check(compiled && div, "bare attribute fragment supplies the attribute list of a load-time div");
+        auto lockedAst = compile(QStringLiteral("STRFORM(\"<div %LOCALS%></div>\")"));
+        const auto lockedCompiled = PrintTemplateCompiler::compile(lockedAst);
+        if (lockedCompiled) {
+            const auto locked = PrintTemplateCompiler::evaluateOccurrences(*lockedCompiled, [](const ExpressionNode&, int) {
+                return QVariant(QStringLiteral("rect = '1, 0, 9px, 9px' nonsense = 'x'"));
+            });
+            for (const auto& part : locked.parts)
+                if (part.kind == PrintTemplatePart::Kind::Division)
+                    foreignDropped = part.x == 1 && part.width == 9;
+            check(foreignDropped, "attributes outside the div set are ignored (locked attribute names)");
+        } else check(false, "locked fragment compiles");
+    }
     qInfo() << "print template failures:" << failures;
     return failures ? 1 : 0;
 }

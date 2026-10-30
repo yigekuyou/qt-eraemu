@@ -1853,6 +1853,52 @@ void EraParseTable::traceHtmlStringArguments() {
     // 合并一个 IF 的安全子集：每个可达分支都必须有 ELSE，且对同一变量
     // 产生逐节点相同的写链。分支内遇到调用、循环或嵌套控制流立即拒绝。
     // 这不是把 IF 当成顺序代码，而是证明所有路径的字符串骨架相同。
+    const auto staticString = [](const QSharedPointer<ExpressionNode>& node) -> QString {
+        if (!node) return {};
+        if (node->kind() == NodeKind::Literal && node->isString())
+            return static_cast<const LiteralNode&>(*node).strValue();
+        if (node->kind() == NodeKind::StrForm) {
+            QString out;
+            for (const auto& part : static_cast<const StrFormNode&>(*node).parts()) {
+                if (part.expression) return {};
+                out += part.text;
+            }
+            return out;
+        }
+        return {};
+    };
+    // 将两个分支参数提升为一个局部洞。公共前后缀负责 HTML 结构，
+    // 差异部分由 IfNode 在运行期求值；差异跨越 < 或 > 时拒绝，避免把标签
+    // 名称/边界变成不透明参数。这样 value='1' / value='2' 可以合并，
+    // <b> / <i> 则必须留给运行期整串解析。
+    const auto mergeParameter = [&](const QSharedPointer<ExpressionNode>& left,
+                                    const QSharedPointer<ExpressionNode>& right,
+                                    const QSharedPointer<ExpressionNode>& condition,
+                                    QSharedPointer<ExpressionNode>& out) -> bool {
+        const QString a = staticString(left);
+        const QString b = staticString(right);
+        if (a.isEmpty() && b.isEmpty()) return false;
+        if (a == b) { out = left; return true; }
+        int prefix = 0;
+        while (prefix < a.size() && prefix < b.size() && a.at(prefix) == b.at(prefix)) ++prefix;
+        int suffix = 0;
+        while (suffix < a.size() - prefix && suffix < b.size() - prefix
+               && a.at(a.size() - 1 - suffix) == b.at(b.size() - 1 - suffix)) ++suffix;
+        const QString am = a.mid(prefix, a.size() - prefix - suffix);
+        const QString bm = b.mid(prefix, b.size() - prefix - suffix);
+        if (am.contains(QLatin1Char('<')) || am.contains(QLatin1Char('>'))
+            || bm.contains(QLatin1Char('<')) || bm.contains(QLatin1Char('>')))
+            return false;
+        QList<StrFormPart> parts;
+        if (prefix) parts.append(StrFormPart::makeText(a.left(prefix)));
+        parts.append(StrFormPart::makeExpr(QSharedPointer<IfNode>::create(
+            condition, QSharedPointer<LiteralNode>::create(am),
+            QSharedPointer<LiteralNode>::create(bm))));
+        if (suffix) parts.append(StrFormPart::makeText(a.right(suffix)));
+        out = QSharedPointer<StrFormNode>::create(std::move(parts));
+        return true;
+    };
+
     const auto sameIfWriteChain = [&](const QList<LogicalLine>& lines, int endIf,
                                       const QString& var,
                                       QList<QSharedPointer<ExpressionNode>>& merged,
@@ -1869,6 +1915,9 @@ void EraParseTable::traceHtmlStringArguments() {
         }
         if (opener < 0) return false;
         const QList<int> branchMarks = activeScript->ifBranches.value(opener);
+        // 当前局部参数化只使用 IF/ELSE 两条路径；ELSEIF 需要为每个
+        // 差异洞构造分支条件，不能错误复用第一个 IF 条件。
+        if (branchMarks.size() != 1) return false;
         bool hasElse = false;
         for (const int mark : branchMarks)
             if (mark >= 0 && mark < lines.size()
@@ -1899,12 +1948,20 @@ void EraParseTable::traceHtmlStringArguments() {
             paths.append(path);
         }
         if (paths.isEmpty()) return false;
-        for (int b = 1; b < paths.size(); ++b) {
-            if (paths.at(b).size() != paths.first().size()) return false;
-            for (int k = 0; k < paths.first().size(); ++k)
-                if (paths.at(b).at(k)->toString() != paths.first().at(k)->toString()) return false;
-        }
         merged = paths.first();
+        // 先保守地合并分支参数：条件使用 IF 开头的条件；多级 ELSEIF
+        // 仍在结构不同/条件表达式复杂时拒绝，避免制造错误路径。
+        const auto condition = lines.at(opener).condition;
+        if (!condition) return false;
+        for (int b = 1; b < paths.size(); ++b) {
+            if (paths.at(b).size() != merged.size()) return false;
+            for (int k = 0; k < merged.size(); ++k) {
+                if (merged.at(k)->toString() == paths.at(b).at(k)->toString()) continue;
+                QSharedPointer<ExpressionNode> parameter;
+                if (!mergeParameter(merged.at(k), paths.at(b).at(k), condition, parameter)) return false;
+                merged[k] = parameter;
+            }
+        }
         openerOut = opener;
         return true;
     };

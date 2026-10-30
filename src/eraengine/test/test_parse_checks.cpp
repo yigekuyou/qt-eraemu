@@ -388,20 +388,35 @@ int main(int argc, char* argv[]) {
         check(sameIfLine && sameIfLine->printTemplate,
               "IF 两个分支写入相同片段 -> 装载期合流");
 
-        // IF 合流拒绝：分支结果不同，不能把两个互斥值串成一个不存在的字符串。
+        // 参数不同但 HTML 骨架相同：差异提升成局部 IfNode 洞，仍可装载期分词。
+        ProcessState parameterIfState;
+        EraParseTable parameterIf(&parameterIfState);
+        loadStaged(parameterIf, QStringLiteral("PARAMETER_IF.ERB"),
+                   QStringLiteral("IF 1\n"
+                                  "LOCALS = @\"<button value='1'>x</button>\"\n"
+                                  "ELSE\n"
+                                  "LOCALS = @\"<button value='2'>x</button>\"\n"
+                                  "ENDIF\n"
+                                  "HTML_PRINT LOCALS\n"));
+        parameterIf.traceHtmlStringArguments();
+        parameterIf.markLoadComplete();
+        const auto parameterIfLine = parameterIf.lineAt(QStringLiteral("PARAMETER_IF.ERB"), 5);
+        check(parameterIfLine && parameterIfLine->printTemplate,
+              "IF 参数不同但结构相同 -> 参数局部化后装载期合流");
+
+        // 标签结构不同仍拒绝：不能把两个互斥标签拼成一个不存在的字符串。
         ProcessState differentIfState;
         EraParseTable differentIf(&differentIfState);
         loadStaged(differentIf, QStringLiteral("DIFFERENT_IF.ERB"),
                    QStringLiteral("IF 1\n"
-                                  "LOCALS = @\"<b>\"\n"
+                                  "LOCALS = @\"<b>x</b>\"\n"
                                   "ELSE\n"
-                                  "LOCALS = @\"<i>\"\n"
+                                  "LOCALS = @\"<i>x</i>\"\n"
                                   "ENDIF\n"
-                                  "LOCALS += @\"x</b>\"\n"
                                   "HTML_PRINT LOCALS\n"));
         differentIf.traceHtmlStringArguments();
         differentIf.markLoadComplete();
-        const auto differentIfLine = differentIf.lineAt(QStringLiteral("DIFFERENT_IF.ERB"), 6);
+        const auto differentIfLine = differentIf.lineAt(QStringLiteral("DIFFERENT_IF.ERB"), 5);
         check(differentIfLine && !differentIfLine->arguments.isEmpty()
                   && differentIfLine->arguments.first().ast
                   && differentIfLine->arguments.first().ast->kind() == NodeKind::Variable,

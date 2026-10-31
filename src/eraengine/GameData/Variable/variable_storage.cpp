@@ -2501,10 +2501,14 @@ void VariableStorage::enterDynamicPrivateScope(eravar::ScopeId scope) {
     DynamicPrivateSnapshot snapshot;
     snapshot.ints.reserve(it.value().size());
     snapshot.strs.reserve(it.value().size());
+    snapshot.intPresent.reserve(it.value().size());
+    snapshot.strPresent.reserve(it.value().size());
     for (const DynamicPrivateVar& var : it.value()) {
         // 快照 = 调用前的原值（父帧/上一次调用的值），leave 时原样写回。
         snapshot.ints.append(m_intSlots.value(var.storageKey));
         snapshot.strs.append(m_strSlots.value(var.storageKey));
+        snapshot.intPresent.append(m_intSlots.contains(var.storageKey));
+        snapshot.strPresent.append(m_strSlots.contains(var.storageKey));
         if (var.isStr) {
             QList<FlatStringValue> values;
             values.reserve(var.length);
@@ -2532,13 +2536,13 @@ void VariableStorage::leaveDynamicPrivateScope(eravar::ScopeId scope) {
         const DynamicPrivateVar& var = it.value().at(i);
         // 空序列 = 进入前这个键不存在（首次调用/上一帧已回收）：删掉即可。
         if (var.isStr) {
-            if (i < snapshot.strs.size() && !snapshot.strs.at(i).isEmpty())
-                m_strSlots.insert(var.storageKey, snapshot.strs.at(i));
+            if (i < snapshot.strPresent.size() && snapshot.strPresent.at(i))
+                m_strSlots.insert(var.storageKey, snapshot.strs.value(i));
             else
                 m_strSlots.remove(var.storageKey);
         } else {
-            if (i < snapshot.ints.size() && !snapshot.ints.at(i).isEmpty())
-                m_intSlots.insert(var.storageKey, snapshot.ints.at(i));
+            if (i < snapshot.intPresent.size() && snapshot.intPresent.at(i))
+                m_intSlots.insert(var.storageKey, snapshot.ints.value(i));
             else
                 m_intSlots.remove(var.storageKey);
         }

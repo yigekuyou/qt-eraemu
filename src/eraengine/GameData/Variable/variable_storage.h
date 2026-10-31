@@ -703,6 +703,10 @@ private:
 		struct DynamicPrivateSnapshot {
 			QList<QList<qint64>>          ints;   // 与 m_dynamicPrivateVars[scope] 同序
 			QList<QList<FlatStringValue>> strs;
+			// 空容器也可能是已存在的槽位；不能用 value.isEmpty()
+			// 推断“进入前不存在”，必须保存键存在性。
+			QList<bool> intPresent;
+			QList<bool> strPresent;
 		};
 		QHash<eravar::ScopeId, QList<DynamicPrivateVar>> m_dynamicPrivateVars;
 		QHash<eravar::ScopeId, QVector<DynamicPrivateSnapshot>> m_dynamicPrivateStack;

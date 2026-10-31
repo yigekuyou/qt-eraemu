@@ -9,6 +9,7 @@ title 运行时控制闭环：状态所有权与恢复时序
 participant "SystemStateMachine\n(pump / handler owner)" as SSM
 participant "ProcessState\n(state owner)" as PS
 participant "ScriptRunner\n(call-stack owner)" as SR
+participant "VariableStorage\n(named array slots)" as VS
 participant "ExecutionEngine\n(instruction semantics)" as EE
 participant "ConsoleBackend" as CB
 participant "QML Console" as QML
@@ -26,6 +27,8 @@ SSM -> SSM : m_pumpActive=true
 SSM -> SR : runSlice()
 SR -> EE : executeInstruction(line, scope)
 EE --> SR : instruction result / output signals
+SR -> VS : named 1D array element read/write
+VS --> SR : real system or user slot
 SR -> PS : read or set ExecState
 PS --> SSM : execStateChanged(state)
 

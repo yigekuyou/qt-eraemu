@@ -51,6 +51,9 @@ public:
 public Q_SLOTS:  // ---- 检查 ----
     QString ping();                       // 存活探测 -> "pong <epoch-ms>"
     QString state();                      // 状态机/执行状态/等待输入/当前脚本行
+    // 脚本函数调用栈（自底向上，每帧 = 标签名 + 位置）。出错的 THROW 只报
+    // 最终一行，跨 CALL 的调用链靠这条。halted 状态下仍可读。
+    QString stack();
     QString consoleStats();               // 行数/逻辑行/可见窗口/滚动
     QString perf();                       // 区块构建计数与耗时（QML 卡顿定位）
     void resetPerf();                     // 清零性能计数器

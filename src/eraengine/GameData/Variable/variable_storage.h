@@ -614,6 +614,22 @@ public:
 		[[nodiscard]] bool hasSystemVariable(const QString &name) const;
 		Q_INVOKABLE void setSystemVariable(const QString &name, int index, qint64 value);
 
+		// ================= 数组指令的元素读写（1D） =================
+		// ARRAYSHIFT / ARRAYREMOVE / ARRAYSORT 要按**名字**读写某个 1D 数组的
+		// 元素，而这个名字可能是用户数组，也可能是**系统/内建数组**
+		// （RESULT / LOCAL / ARG / ITEM / FLAG / …；RESULTS 是扁平字符串槽）。
+		// 这些数组有自己的存储槽（m_result、m_localIntVars、…），走裸槽位
+		// 读写（getGlobalInt1D/getGlobalStr1D）会写进同名的**影子容器** ——
+		// 读的人（求值器走系统/字符串 locus）看不到：
+		//   `ARRAYSHIFT RESULT, 1, 0`（FL3.8 WindowDrawer.ERB:104 给窗口列表
+		//   头部腾一格）整条丢失 → 列表整体错位一位 → WndMgr_SetBehindProp
+		//   把列表尾部的 -1 当窗口号 → THROW「ウィンドウ（nWndId=-1）は未生成です」。
+		// 这四个入口把这层分派收在存储层，与 ARRAYCOPY 的分派保持同一口径。
+		qint64 getIntElement1D(const QString& name, int x, eravar::ScopeId scope) const;
+		void setIntElement1D(const QString& name, int x, qint64 value, eravar::ScopeId scope);
+		QString getStrElement1D(const QString& name, int x, eravar::ScopeId scope) const;
+		void setStrElement1D(const QString& name, int x, const QString& value, eravar::ScopeId scope);
+
 		// ================= Character variable type checking methods =================
 		Q_INVOKABLE bool isCharaVariableInteger(const QString &name) const;
 		Q_INVOKABLE bool isCharaVariableString(const QString &name) const;

@@ -205,6 +205,12 @@ public:
     void pushFunction(const QString& label, const ScriptPosition& pos);
     void popFunction();
     int getFunctionCount() const;
+
+    // 函数栈快照（诊断用）：自底向上，每帧 = 标签名 + 返回位置。
+    // 错误消息只带最终位置（`WndMgr_SetPropertyNum` 里 THROW 的那一行），
+    // 「谁把 -1 传进来的」只能靠这条链看出来 —— 见 ScriptRunner::reportError
+    // 与 D-Bus 的 stack()。
+    QList<CalledFunction> functionStack() const { return m_functionList; }
     
     // Into function and return (for CALL/GOTO/RETURN flow control)
     // IntoFunction: Push function to stack and set current line

@@ -44,8 +44,16 @@ package "GameProc" {
     + runSlice(budget, time) : ExecState
     + onInputProvided(value)
     + onSystemStateChanged(state)
+    + ARRAYSHIFT / ARRAYREMOVE / ARRAYSORT
     .. suspended(state) ..
     .. inputRequested(kind, defaultValue) ..
+  }
+
+  class VariableStorage {
+    + getIntElement1D(name, index, scope)
+    + setIntElement1D(name, index, value, scope)
+    + getStrElement1D(name, index, scope)
+    + setStrElement1D(name, index, value, scope)
   }
 
   class ProcessState {
@@ -90,6 +98,15 @@ ProcessState ..> SystemStateMachine : execStateChanged
 ScriptRunner ..> ProcessState : suspended / continueExecution
 SystemStateMachine ..> QTimer : arm timed wait
 SystemStateMachine ..> SystemHost : output / input policy
+ScriptRunner --> VariableStorage : named 1D array element access
+
+note right of ScriptRunner
+  ARRAYSHIFT, ARRAYREMOVE and ARRAYSORT accept 1D names. Their storage
+  dispatch must distinguish declared/user arrays from built-in arrays; RESULT,
+  LOCAL and ARG use their real slots, while RESULTS keeps its flat string slot,
+  instead of creating a same-named shadow container. Negative or out-of-range start values are ignored at the command boundary;
+  oversized numeric arguments are rejected before conversion to int.
+end note
 
 note right of SystemStateMachine
   pump() alternates two owners:

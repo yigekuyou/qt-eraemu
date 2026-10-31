@@ -19,6 +19,7 @@
 #include "script_runner.h"
 #include "eraengine_log.h"
 #include <algorithm>
+#include <limits>
 #include "era_parse_table.h"
 #include "jump_markings.h"   // 标记区读侧（跳转表查表，输入只有 ScriptData*）
 #include "execution_engine.h"
@@ -282,6 +283,24 @@ bool ScriptRunner::returnFromCall() {
 
 void ScriptRunner::reportError(const QString& message) {
     ++m_errorEpoch;
+    // 把函数栈一起写进日志：错误消息只带最终位置（THROW 的那一行），
+    // 「这个坏参数是谁传进来的」只能靠跨 CALL 的调用链看出来。
+    // 例：WindowDrawer.ERB 的 `THROW ... ウィンドウ（nWndId=-1）は未生成です`
+    // 实际是 WndMgr_DisplayAll 里的 arrDisplayPriority 传下来的。
+    if (m_state) {
+        const QList<CalledFunction> stack = m_state->functionStack();
+        QStringList frames;
+        frames.reserve(stack.size());
+        for (int i = 0; i < stack.size(); ++i) {
+            frames << QStringLiteral("#%1 %2 (%3)")
+                          .arg(i)
+                          .arg(stack.at(i).getLabelName(),
+                               stack.at(i).getPosition().toString());
+        }
+        qWarning().noquote() << "[era.error]" << message
+                             << "\n  stack:\n         "
+                                + frames.join(QStringLiteral("\n         "));
+    }
     emit errorOccurred(message);
 }
 
@@ -1293,14 +1312,16 @@ ExecState ScriptRunner::executeLine(const LogicalLine& line) {
             }
             return qMax(0, m_storage->arraySize(var, arrayScope));
         };
-        // 是否字符串数组（按声明类型）
+        // 是否字符串数组（按声明类型；系统数组按装载期元数据 —— 与 ARRAYCOPY 同口径，
+        // 否则 `ARRAYSHIFT RESULTS, …` 会被当成整型数组，写进看不到的通道）
         auto isStrArray = [&](const QString& var) -> bool {
             if (m_table) {
                 const VariableDecl* decl =
                     m_table->variableTable().find(var, line.scopeKey);
                 if (decl) return decl->type == OperandType::Str;
             }
-            return false;
+            return sysvar::systemVariableMetadataDyn(var.toStdString()).type
+                   == OperandType::Str;
         };
 
         if (name == QLatin1String("ARRAYREMOVE")) {
@@ -1309,20 +1330,22 @@ ExecState ScriptRunner::executeLine(const LogicalLine& line) {
             if (ops.isEmpty()) return ExecState::Continue;
             const QString var = ops.first().raw.trimmed();
             const int len = length1D(var);
-            const int start = static_cast<int>(evalOp(1, 0));
+            const qint64 startN = evalOp(1, 0);
+            if (startN < 0 || startN > std::numeric_limits<int>::max()) return ExecState::Continue;
+            const int start = static_cast<int>(startN);
             qint64 numN = evalOp(2, 0);
             if (len <= 0 || start < 0 || start >= len) return ExecState::Continue;
             const int num = (numN <= 0) ? (len - start) : static_cast<int>(qMin<qint64>(numN, len - start));
             if (isStrArray(var)) {
                 QStringList vals;
-                for (int i = 0; i < len; ++i) vals << m_storage->getGlobalStr1D(var, i, arrayScope);
+                for (int i = 0; i < len; ++i) vals << m_storage->getStrElement1D(var, i, arrayScope);
                 for (int i = start; i < len; ++i)
-                    m_storage->setGlobalStr1D(var, i, (i + num < len) ? vals.at(i + num) : QString(), arrayScope);
+                    m_storage->setStrElement1D(var, i, (i + num < len) ? vals.at(i + num) : QString(), arrayScope);
             } else {
                 QList<qint64> vals;
-                for (int i = 0; i < len; ++i) vals << m_storage->getGlobalInt1D(var, i, arrayScope);
+                for (int i = 0; i < len; ++i) vals << m_storage->getIntElement1D(var, i, arrayScope);
                 for (int i = start; i < len; ++i)
-                    m_storage->setGlobalInt1D(var, i, (i + num < len) ? vals.at(i + num) : 0, arrayScope);
+                    m_storage->setIntElement1D(var, i, (i + num < len) ? vals.at(i + num) : 0, arrayScope);
             }
             return ExecState::Continue;
         }
@@ -1331,9 +1354,14 @@ ExecState ScriptRunner::executeLine(const LogicalLine& line) {
             if (ops.isEmpty()) return ExecState::Continue;
             const QString var = ops.first().raw.trimmed();
             const int len = length1D(var);
-            const int shift = static_cast<int>(evalOp(1, 0));
+            const qint64 shiftN = evalOp(1, 0);
+            if (shiftN < std::numeric_limits<int>::min()
+                || shiftN > std::numeric_limits<int>::max()) return ExecState::Continue;
+            const int shift = static_cast<int>(shiftN);
             if (len <= 0 || shift == 0) return ExecState::Continue;
-            const int start = static_cast<int>(evalOp(3, 0));
+            const qint64 startN = evalOp(3, 0);
+            if (startN < 0 || startN > std::numeric_limits<int>::max()) return ExecState::Continue;
+            const int start = static_cast<int>(startN);
             if (start < 0 || start >= len) return ExecState::Continue;
             qint64 numN = evalOp(4, -1);
             int num = (numN < 0) ? (len - start) : static_cast<int>(qMin<qint64>(numN, len - start));
@@ -1344,19 +1372,19 @@ ExecState ScriptRunner::executeLine(const LogicalLine& line) {
             const qint64 defI = evalOp(2, 0);
             if (strArr) {
                 QStringList vals;
-                for (int i = 0; i < len; ++i) vals << m_storage->getGlobalStr1D(var, i, arrayScope);
+                for (int i = 0; i < len; ++i) vals << m_storage->getStrElement1D(var, i, arrayScope);
                 for (int i = start; i < start + num; ++i) {
-                    const int src = i - shift;
-                    m_storage->setGlobalStr1D(var, i,
-                        (src >= start && src < start + num) ? vals.at(src) : defS, arrayScope);
+                    const qint64 src = qint64(i) - qint64(shift);
+                    m_storage->setStrElement1D(var, i,
+                        (src >= start && src < start + num) ? vals.at(int(src)) : defS, arrayScope);
                 }
             } else {
                 QList<qint64> vals;
-                for (int i = 0; i < len; ++i) vals << m_storage->getGlobalInt1D(var, i, arrayScope);
+                for (int i = 0; i < len; ++i) vals << m_storage->getIntElement1D(var, i, arrayScope);
                 for (int i = start; i < start + num; ++i) {
-                    const int src = i - shift;
-                    m_storage->setGlobalInt1D(var, i,
-                        (src >= start && src < start + num) ? vals.at(src) : defI, arrayScope);
+                    const qint64 src = qint64(i) - qint64(shift);
+                    m_storage->setIntElement1D(var, i,
+                        (src >= start && src < start + num) ? vals.at(int(src)) : defI, arrayScope);
                 }
             }
             return ExecState::Continue;
@@ -1369,25 +1397,27 @@ ExecState ScriptRunner::executeLine(const LogicalLine& line) {
             if (len <= 0) return ExecState::Continue;
             const bool back = (ops.size() > 1
                                && ops.at(1).raw.trimmed().toUpper() == QLatin1String("BACK"));
-            const int start = static_cast<int>(evalOp(2, 0));
+            const qint64 startN = evalOp(2, 0);
+            if (startN < 0 || startN > std::numeric_limits<int>::max()) return ExecState::Continue;
+            const int start = static_cast<int>(startN);
             qint64 numN = evalOp(3, -1);
             if (start < 0 || start >= len) return ExecState::Continue;
             const int num = (numN < 0) ? (len - start) : static_cast<int>(qMin<qint64>(numN, len - start));
             if (num <= 1) return ExecState::Continue;
             if (isStrArray(var)) {
                 QStringList vals;
-                for (int i = 0; i < len; ++i) vals << m_storage->getGlobalStr1D(var, i, arrayScope);
+                for (int i = 0; i < len; ++i) vals << m_storage->getStrElement1D(var, i, arrayScope);
                 std::sort(vals.begin() + start, vals.begin() + start + num,
                           [&](const QString& a, const QString& b) {
                               return back ? (a > b) : (a < b);
                           });
-                for (int i = 0; i < len; ++i) m_storage->setGlobalStr1D(var, i, vals.at(i), arrayScope);
+                for (int i = 0; i < len; ++i) m_storage->setStrElement1D(var, i, vals.at(i), arrayScope);
             } else {
                 QList<qint64> vals;
-                for (int i = 0; i < len; ++i) vals << m_storage->getGlobalInt1D(var, i, arrayScope);
+                for (int i = 0; i < len; ++i) vals << m_storage->getIntElement1D(var, i, arrayScope);
                 std::sort(vals.begin() + start, vals.begin() + start + num,
                           [&](qint64 a, qint64 b) { return back ? (a > b) : (a < b); });
-                for (int i = 0; i < len; ++i) m_storage->setGlobalInt1D(var, i, vals.at(i), arrayScope);
+                for (int i = 0; i < len; ++i) m_storage->setIntElement1D(var, i, vals.at(i), arrayScope);
             }
             return ExecState::Continue;
         }

@@ -72,11 +72,15 @@ end note
 
 package "Runtime diagnostics" {
   class EraDBusDebug {
+    + stack() : QString
     + evalVar(text) : QString
   }
 }
 
 note right of EraDBusDebug
+  stack returns a read-only snapshot from ProcessState, ordered from the
+  bottom frame to the current frame; an empty or unavailable state returns a
+  bounded status/result rather than dereferencing a missing engine.
   evalVar is a read-only diagnostic path. It trims one variable expression,
   reports declaration flags, then uses EraParseTable::runtimeVariableReference
   and the engine-owned ExpressionEvaluator. It may be called after loading;

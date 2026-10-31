@@ -2074,6 +2074,67 @@ bool VariableStorage::hasSystemVariable(const QString &name) const
 		return sysvar::systemStorageNames().contains(systemVariableName(name));
 }
 
+// ---- 数组指令的元素读写（1D，名字可能是用户数组或系统数组）----
+// 见 variable_storage.h 的说明：系统数组（RESULT/RESULTS/LOCAL/ARG/…）的
+// 真实存储不在 m_intSlots 里，裸槽位读写会落进同名影子容器。
+qint64 VariableStorage::getIntElement1D(const QString& name, int x,
+                                        eravar::ScopeId scope) const
+{
+		if (x < 0) return 0;
+		if (hasSystemVariable(name)) {
+			const QString key = systemVariableName(name).toUpper();
+			if (key == QLatin1String("LOCAL")) return getLocalInt(x);
+			if (key == QLatin1String("ARG")) return getArgInt(x);
+			return getSystemVariable(name, x);
+		}
+		return getGlobalInt1D(name, x, scope);
+}
+
+void VariableStorage::setIntElement1D(const QString& name, int x, qint64 value,
+                                      eravar::ScopeId scope)
+{
+		if (x < 0) return;
+		if (hasSystemVariable(name)) {
+			const QString key = systemVariableName(name).toUpper();
+			if (key == QLatin1String("LOCAL")) { setLocalInt(x, value); return; }
+			if (key == QLatin1String("ARG")) { setArgInt(x, value); return; }
+			setSystemVariable(name, x, value);
+			return;
+		}
+		setGlobalInt1D(name, x, value, scope);
+}
+
+QString VariableStorage::getStrElement1D(const QString& name, int x,
+                                         eravar::ScopeId scope) const
+{
+		if (x < 0) return QString();
+		// LOCALS/ARGS are string system arrays but deliberately are not in
+		// sysvar::systemStorageNames(), which is the integer-slot registry.
+		const QString key = systemVariableName(name).toUpper();
+		if (key == QLatin1String("LOCALS")) return getLocalStr(x);
+		if (key == QLatin1String("ARGS")) return getArgStr(x);
+		if (hasSystemVariable(name)) return getSystemStr(name, x);
+		// RESULTS and other string arrays retain their existing flat-slot storage.
+		return getGlobalStr1D(name, x, scope);
+}
+
+void VariableStorage::setStrElement1D(const QString& name, int x, const QString& value,
+                                      eravar::ScopeId scope)
+{
+		if (x < 0) return;
+		// LOCALS/ARGS are string system arrays but deliberately are not in
+		// sysvar::systemStorageNames(), which is the integer-slot registry.
+		const QString key = systemVariableName(name).toUpper();
+		if (key == QLatin1String("LOCALS")) { setLocalStr(x, value); return; }
+		if (key == QLatin1String("ARGS")) { setArgStr(x, value); return; }
+		if (hasSystemVariable(name)) {
+			setSystemStr(name, x, value);
+			return;
+		}
+		// RESULTS and other string arrays retain their existing flat-slot storage.
+		setGlobalStr1D(name, x, value, scope);
+}
+
 qint64 VariableStorage::getSystemVariable(const QString &name, int index) const
 {
 		// 系统变量名同样大小写不敏感（ICVariable）；并先经 REF 形参别名解析

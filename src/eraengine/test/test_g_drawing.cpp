@@ -135,6 +135,23 @@ int main(int argc, char* argv[]) {
         check(GraphicsStore::brushState(10) == QColor(255, 255, 255), "GGETBRUSH 回读画刷色");
     }
 
+    // ---- 运行期精灵跟随源 G 的后续合成，并在 G 释放后保留快照 ----
+    {
+        GraphicsStore::gCreate(31, 2, 2);
+        GraphicsStore::gClear(31, QColor(0, 0, 0, 0));
+        check(GraphicsStore::spriteCreate("live_sprite", 31), "创建运行期精灵视图");
+        check(GraphicsStore::gFillRectangle(31, QColor(0, 255, 0, 255), QRect(0, 0, 2, 2)),
+              "修改精灵来源 G");
+        const QImage live = GraphicsStore::spriteImage("live_sprite");
+        check(!live.isNull() && qAlpha(live.pixel(0, 0)) == 255 && qGreen(live.pixel(0, 0)) == 255,
+              "精灵读取到来源 G 的最新像素");
+        GraphicsStore::gDispose(31);
+        const QImage snapshot = GraphicsStore::spriteImage("live_sprite");
+        check(!snapshot.isNull() && qAlpha(snapshot.pixel(0, 0)) == 0,
+              "来源 G 释放后精灵回退到创建时快照");
+        GraphicsStore::spriteDispose("live_sprite");
+    }
+
     // ---- SPRITEDISPOSEALL：清运行期精灵（C# AppContents.SpriteDisposeAll）----
     {
         GraphicsStore::gCreate(30, 4, 4);

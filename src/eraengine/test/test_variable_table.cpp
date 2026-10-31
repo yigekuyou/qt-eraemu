@@ -183,7 +183,11 @@ int main(int argc, char* argv[]) {
         const QStringList constArrSrc = {
             "@MAIN",
             "#DIM CONST SNOW = 0x111111,0x222222,0x333333,0x444444",
-            "#DIM CONST SCALAR = 7"
+            "#DIM CONST SCALAR = 7",
+            "#DIM CONST IMG_A = 10",
+            "#DIM CONST IMG_B = 20",
+            "#DIM CONST IMG_C = 30",
+            "#DIM IMG_PARTS_ORDER = IMG_A, IMG_B, IMG_C"
         };
         EraParseTable compiler3(nullptr);
         const AstResolver r3 = [&compiler3](const QString& e) { return compiler3.expressionAst(e); };
@@ -195,6 +199,11 @@ int main(int argc, char* argv[]) {
         table.loadScript("carr", s3);
         table.markLoadComplete();
         const QString kCarrMain = table.lineAt("carr", 0)->scopeKey;
+        const VariableDecl* parts = table.variableTable().find("IMG_PARTS_ORDER", kCarrMain);
+        check(parts != nullptr && parts->lengths == QList<int>({3}),
+              "普通数组的常量名初值长度 == [3]");
+        check(parts != nullptr && parts->defaultInt == QList<qint64>({10, 20, 30}),
+              "普通数组的常量名初值登记为 10,20,30");
         const VariableDecl* snow = table.variableTable().find("SNOW", kCarrMain);
         check(snow != nullptr && snow->lengths == QList<int>({4}),
               QString("SNOW 长度 == [4]（得到 %1）")

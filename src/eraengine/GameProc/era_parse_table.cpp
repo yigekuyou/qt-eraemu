@@ -1272,8 +1272,10 @@ void EraParseTable::preRegisterDeclaration(const declscan::DeclarationSite& site
                                    site.segmentStart);
         return;
     }
-    parseVariableDeclarationText(site.rawLine, site.position, site.function, site.scopeKey,
-                                site.isHeaderFile);
+    // 预登记必须消费与单文件/工具路径相同的 DeclarationSite，尤其是普通数组
+    // 初值中的常量名；直接走旧入口会绕过统一的初值解析，令 FL3.8 的部件顺序表
+    // 只得到一串 0。
+    declscan::registerDeclaration(m_variables, m_diagnostics, m_variableStorage, site);
 }
 
 void EraParseTable::finishDeclarationPreRegistration() {

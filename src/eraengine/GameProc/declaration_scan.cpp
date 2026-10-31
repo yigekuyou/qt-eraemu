@@ -33,8 +33,6 @@
 namespace declscan {
 namespace {
 
-// `#DIM CONST NAME = <初值>` 的「初值」部分（按顶层逗号切分）。
-// 空初值返回空表 —— eraTW 用它表示「初值写在其后的 { … } 块里」。
 QStringList constValueExpressions(const QString& declRest) {
     QChar quote;
     int depth = 0;
@@ -251,6 +249,28 @@ void registerDeclarationText(VariableTable& variables, ParseDiagnostics& diagnos
     try {
         const UserDefinedVariableData d =
             UserDefinedVariableData::create(rest, isStr, /*isPrivate=*/true, position);
+        // 非 CONST 数组的初值也可以由已登记的常量名组成。UserDefinedVariableData
+        // 负责推导数组长度，但它只能把这类表达式的 defaultInt 暂存为 0；在
+        // 装载阶段写入 VariableStorage 前必须把每个常量名解析成实际整数。
+        // 这是 FL3.8 的 `#DIM IMG_PARTS_ORDER = IMG_後髪, ...` 形式。
+        QList<qint64> resolvedDefaultInt = d.defaultInt;
+        if (!d.isConst && !d.typeIsStr && d.dimension == 1) {
+            const QStringList valueExprs = constValueExpressions(rest);
+            if (valueExprs.size() > 1) {
+                resolvedDefaultInt.clear();
+                resolvedDefaultInt.reserve(valueExprs.size());
+                const QString owner = (kind.isGlobal || d.global || isHeaderFile || scopeKey.isEmpty())
+                                          ? QString() : scopeKey;
+                for (const QString& expression : valueExprs) {
+                    qint64 value = 0;
+                    if (!parseIntegerLiteral(expression.trimmed(), value)) {
+                        const bool resolved = variables.constInt(expression.trimmed(), value, owner);
+                        Q_UNUSED(resolved);
+                    }
+                    resolvedDefaultInt.append(value);
+                }
+            }
+        }
 
         // CONST 声明的初值即常数（供 #DIM 维数引用）。
         // **归属作用域**：与 decl.scope 同一判据（GLOBAL 关键字 / 头文件文件级 /
@@ -330,7 +350,7 @@ void registerDeclarationText(VariableTable& variables, ParseDiagnostics& diagnos
                 decl.name, decl.type == OperandType::Str, decl.dimension);
         }
         if (!d.isConst) {                 // 初值（非 CONST）：进入函数/装载时写入
-            decl.defaultInt = d.defaultInt;
+            decl.defaultInt = resolvedDefaultInt;
             decl.defaultStr = d.defaultStr;
         }
 

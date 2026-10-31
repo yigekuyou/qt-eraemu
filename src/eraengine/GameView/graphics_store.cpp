@@ -125,6 +125,8 @@ bool GraphicsStore::spriteCreate(const QString& name, int gId, const QRect& rect
     if (src.isNull()) return false;   // C#：G 未建立 -> 0
     Sprite sprite;
     sprite.created = true;
+    sprite.sourceGId = gId;
+    sprite.sourceRect = rect.isNull() ? src.rect() : rect;
     sprite.image = rect.isNull() ? src : src.copy(rect);
     if (sprite.image.isNull()) return false;
     sprites().insert(name.toUpper(), sprite);
@@ -178,7 +180,19 @@ bool GraphicsStore::spriteCreated(const QString& name) {
 
 QImage GraphicsStore::spriteImage(const QString& name) {
     const Sprite* s = sprite(name);
-    if (s && s->created) return s->image;
+    if (s && s->created) {
+        // A runtime sprite is a view of its source G until that G is disposed.
+        // This matters for FL3.8 FACE_*: the sprite is first created from a
+        // transparent dummy, then the same G is filled by GDRAWSPRITE layers.
+        const QImage current = gImage(s->sourceGId);
+        if (!current.isNull()) {
+            const QRect rect = s->sourceRect.isNull() ? current.rect()
+                                                        : s->sourceRect.intersected(current.rect());
+            if (!rect.isEmpty()) return current.copy(rect);
+        }
+        // After the source G is gone, preserve SPRITECREATE snapshot semantics.
+        return s->image;
+    }
     // 静态资源回退：C# 的 imageDictionary 包含 resources 装载的所有精灵，
     // GDRAWSPRITE / SPRITEWIDTH 等对 "55_A1" 这类资源名同样有效。
     return ResourceImageProvider::loadResourceImage(name);

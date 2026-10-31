@@ -38,7 +38,14 @@
 class GraphicsStore {
 public:
     struct Sprite {
+        // Keep the original snapshot for the lifetime of the sprite (C# sprites
+        // remain usable after their source G is disposed), but also retain the
+        // source G and crop.  FL3.8 creates FACE_* from a transparent dummy and
+        // then draws the layers into that same G; SPRITECREATE must expose the
+        // current G pixels while the G is alive.
         QImage image;
+        int    sourceGId = -1;
+        QRect  sourceRect;
         bool   created = false;
         int    posX = 0;
         int    posY = 0;

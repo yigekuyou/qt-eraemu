@@ -169,8 +169,10 @@ FocusScope {
     // 舞台正文少占底部输入行；输入控件由 Main.qml 独立绘制，但这行仍属于
     // era 的舞台坐标系，因此舞台快照、ListView 和图片层必须共用 stageRows。
     readonly property int stageRows: backend && backend.stageRows > 0 ? backend.stageRows : gridRows
-    // 内容区：右侧常驻滚动条让位、底部留 1px（最后一行下缘不被 clip 切掉）。
-    readonly property real gridWidthPx: Math.max(1, stageWidth - scrollBarWidth)
+    // 舞台坐标平面必须覆盖完整 stageWidth。滚动条是独立的呈现控件，
+    // 不能从网格宽度扣除，否则 C++ 的 col=POS_X*fontSize/100/(fontSize/2)
+    // 与 QML 的 x=col*cellWidth 会产生随列号增长的横向漂移。
+    readonly property real gridWidthPx: Math.max(1, stageWidth)
     readonly property real gridHeightPx: Math.max(1, stageHeight - 1)
     // 单元格 = 舞台像素 ÷ 网格（把除不尽的余量摊给每格；永远 ≥ 字号/2 与行高，
     // 因为 C++ 是先除后取整得到网格的）。
@@ -239,7 +241,6 @@ FocusScope {
     // 历史与舞台共用几何、委托和跨行图片显示范围。
     component ConsoleView: ListView {
         anchors.fill: parent
-        anchors.rightMargin: root.scrollBarWidth
         clip: true
         reuseItems: true
         delegateModelAccess: DelegateModel.ReadOnly
@@ -389,7 +390,7 @@ FocusScope {
             id: stageImageLayer
             objectName: "stageImageLayer"
             anchors.fill: parent
-            anchors.rightMargin: root.scrollBarWidth
+            // 图片层覆盖完整舞台坐标平面；滚动条不属于舞台网格。
             z: 5
             // 不依赖 stageView.count：换帧/清屏期间 ListView 可能暂时为空，
             // 但 C++ 已经发布了图片快照。舞台模式本身才是显示条件。

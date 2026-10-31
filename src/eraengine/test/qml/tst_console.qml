@@ -257,7 +257,7 @@ TestCase {
         backend.print("WWiii■■□　");
         backend.printButton("[HOLD]", 8);
         backend.newline(); backend.flush(); view.syncView();
-        compare(view.cellWidth, (view.width - view.scrollBarWidth) / backend.gridColumns);
+        compare(view.cellWidth, view.width / backend.gridColumns);
         const block = view.blockAt(0, 0);
         const row = findChild(block, "textCells");
         let total = 0;
@@ -1201,7 +1201,7 @@ TestCase {
     function test_boundedWindow() {
         printLines(50);
         compare(view.rowCount, 50, "模型行数 == 缓冲行数");
-        compare(view.cellWidth, (view.width - view.scrollBarWidth) / backend.gridColumns);
+        compare(view.cellWidth, view.width / backend.gridColumns);
         // 虚拟化：只实例化可见 + cacheBuffer 的委托，50 行不会全部创建
         let alive = 0;
         for (let r = 0; r < 50; ++r)

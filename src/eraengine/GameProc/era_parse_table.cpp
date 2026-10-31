@@ -1853,16 +1853,20 @@ void EraParseTable::traceHtmlStringArguments() {
     // 合并一个 IF 的安全子集：每个可达分支都必须有 ELSE，且对同一变量
     // 产生逐节点相同的写链。分支内遇到调用、循环或嵌套控制流立即拒绝。
     // 这不是把 IF 当成顺序代码，而是证明所有路径的字符串骨架相同。
-    const auto staticString = [](const QSharedPointer<ExpressionNode>& node) -> QString {
+    const auto staticString = [](const QSharedPointer<ExpressionNode>& node, bool& ok) -> QString {
+        ok = false;
         if (!node) return {};
-        if (node->kind() == NodeKind::Literal && node->isString())
+        if (node->kind() == NodeKind::Literal && node->isString()) {
+            ok = true;
             return static_cast<const LiteralNode&>(*node).strValue();
+        }
         if (node->kind() == NodeKind::StrForm) {
             QString out;
             for (const auto& part : static_cast<const StrFormNode&>(*node).parts()) {
                 if (part.expression) return {};
                 out += part.text;
             }
+            ok = true;
             return out;
         }
         return {};
@@ -1875,9 +1879,10 @@ void EraParseTable::traceHtmlStringArguments() {
                                     const QSharedPointer<ExpressionNode>& right,
                                     const QSharedPointer<ExpressionNode>& condition,
                                     QSharedPointer<ExpressionNode>& out) -> bool {
-        const QString a = staticString(left);
-        const QString b = staticString(right);
-        if (a.isEmpty() && b.isEmpty()) return false;
+        bool leftOk = false, rightOk = false;
+        const QString a = staticString(left, leftOk);
+        const QString b = staticString(right, rightOk);
+        if (!leftOk || !rightOk) return false;
         if (a == b) { out = left; return true; }
         int prefix = 0;
         while (prefix < a.size() && prefix < b.size() && a.at(prefix) == b.at(prefix)) ++prefix;

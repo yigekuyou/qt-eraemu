@@ -327,7 +327,11 @@ void ConsoleBackend::renderTemplate(const PrintTemplate& output, bool toBuffer) 
     bool inButton = false;
     // Relative div children have their own cursor. Sibling divs at the same
     // rect share an origin (FL3.8 overlays face, pupils and features this way).
-    struct DivisionCursor { int x; int y; int col = 0; };
+    //
+    // px = div 内**已经排到第几像素**。同一个 <div> 里可以有多段（换色/换字体
+    // 就会切成多段），它们必须顺次前进；只有「没有 px 游标」时每段才会退回
+    // div 原点互相压住（FL3.8 情報画面「性別:」被「男性」盖住就是这个）。
+    struct DivisionCursor { int x; int y; int col = 0; int px = 0; };
     QList<DivisionCursor> divisions;
     const auto lengthPx = [this](int value, bool pixels) {
         return pixels ? value : value * m_layout.fontSize() / 100;
@@ -339,6 +343,12 @@ void ConsoleBackend::renderTemplate(const PrintTemplate& output, bool toBuffer) 
         button = {};
         inButton = false;
     };
+    // 换行 = 回到 div 的左边距（C# HtmlManager 在 <br> 时把 PointX 复位到 div.Left）。
+    // 不复位的话 div 内的 <br> 会让每一行接着上一行末尾继续向右漂 —— FL3.8 情報
+    // 画面的「陥落／淫乱素質／嗜好」就画成斜阶梯（实测每行右移 42px）。
+    const auto resetDivisionCursors = [&divisions] {
+        for (auto& d : divisions) { d.px = 0; d.col = 0; }
+    };
     for (const auto& part : output.parts) {
         if (part.kind == PrintTemplatePart::Kind::Division) {
             sealButton();
@@ -346,7 +356,7 @@ void ConsoleBackend::renderTemplate(const PrintTemplate& output, bool toBuffer) 
             const int parentX = divisions.isEmpty() ? 0 : divisions.last().x;
             const int parentY = divisions.isEmpty() ? 0 : divisions.last().y;
             divisions.append({parentX + lengthPx(part.x, part.xposIsPixels),
-                              parentY + lengthPx(part.y, part.yposIsPixels), 0});
+                              parentY + lengthPx(part.y, part.yposIsPixels), 0, 0});
             continue;
         }
         if (part.kind == PrintTemplatePart::Kind::EndDivision) {
@@ -372,12 +382,12 @@ void ConsoleBackend::renderTemplate(const PrintTemplate& output, bool toBuffer) 
             wrapping.append(m_wrapLines); m_wrapLines = false; continue;
         }
         if (part.kind == PrintTemplatePart::Kind::EndNoWrap) {
-            if (m_pendingOpen) { sealButton(); newline(); }
+            if (m_pendingOpen) { sealButton(); newline(); resetDivisionCursors(); }
             if (!wrapping.isEmpty()) m_wrapLines = wrapping.takeLast();
             continue;
         }
         if (part.kind == PrintTemplatePart::Kind::EndAlignment) {
-            if (m_pendingOpen) { sealButton(); newline(); }
+            if (m_pendingOpen) { sealButton(); newline(); resetDivisionCursors(); }
             if (!alignments.isEmpty()) m_align = alignments.takeLast();
             continue;
         }
@@ -405,6 +415,7 @@ void ConsoleBackend::renderTemplate(const PrintTemplate& output, bool toBuffer) 
         if (part.kind == PrintTemplatePart::Kind::Break) {
             const auto continued = button; const bool wasButton = inButton;
             sealButton(); newline();
+            resetDivisionCursors();
             if (wasButton) { button = continued; button.spans.clear(); inButton = true; }
             continue;
         }
@@ -453,12 +464,18 @@ void ConsoleBackend::renderTemplate(const PrintTemplate& output, bool toBuffer) 
         if (!divisions.isEmpty()) {
             auto& division = divisions.last();
             span.pointXLocked = true;
-            // 保留 rect 的累计像素原点；relCol 仅作为折行/兼容诊断值。
-            // 每个 COL 独立 qRound(80px / 7px) 会产生 0,11,23,34... 的累进误差。
-            span.positionedXpx = division.x;
+            // rect 原点 + **div 内已排到第几像素**。同一个 <div> 里换色/换字体
+            // 会切成多段（FL3.8：「性別:<font color=…>男性</font>」），每段都必须
+            // 接在前一段右边；只给 div 原点会让后一段压在前一段上。
+            span.positionedXpx = division.x + division.px;
             span.relCol = qRound(double(division.x) / m_layout.columnWidthPx()) + division.col;
             span.positionedTopPx = division.y;
             m_layout.measurePart(span);
+            // 前进量取「这一段实际占的像素」：图片用**原始像素宽**（80px 的缩略图
+            // 按 11 列 × 7px = 77px 前进，十张就少 30px），其余用测量宽度。
+            division.px += (span.kind == ConsoleSpanKind::Image && span.imageWidthPx > 0)
+                               ? span.imageWidthPx
+                               : qMax(0, span.width);
             division.col += span.cols;
         }
         ensureLineOpen();

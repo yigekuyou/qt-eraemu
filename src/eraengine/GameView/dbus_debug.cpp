@@ -123,6 +123,32 @@ QString EraDBusDebug::dumpScreen(int lastLines) {
     return out.join(QLatin1Char('\n'));
 }
 
+QString EraDBusDebug::dumpRow(int row) {
+    if (!m_engine || !m_engine->getConsole()) return QStringLiteral("no console");
+    auto* c = m_engine->getConsole();
+    QStringList out;
+    int n = 0;
+    const QVariantList blocks = c->screenBlocks();
+    for (const QVariant& v : blocks) {
+        const QVariantMap m = v.toMap();
+        if (m.value(QStringLiteral("row")).toInt() != row) continue;
+        ++n;
+        out << QStringLiteral(
+                   "  [%1] col=%2 px=%3 top=%4 cols=%5 rows=%6 kind=%7 color=%8 text=%9")
+                   .arg(n)
+                   .arg(m.value("col").toInt())
+                   .arg(m.value("pxLeft").toInt())
+                   .arg(m.value("pxTop").toInt())
+                   .arg(m.value("cols").toInt())
+                   .arg(m.value("rows").toInt())
+                   .arg(m.value("kind").toString())
+                   .arg(m.value("color").toString())
+                   .arg(QString(m.value("text").toString()).left(60));
+    }
+    out.prepend(QStringLiteral("row=%1 blocks=%2").arg(row).arg(n));
+    return out.join(QLatin1Char('\n'));
+}
+
 QString EraDBusDebug::diagBlocks() {
     if (!m_engine || !m_engine->getConsole()) return QStringLiteral("no console");
     auto* c = m_engine->getConsole();

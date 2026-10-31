@@ -57,6 +57,9 @@ public Q_SLOTS:  // ---- 检查 ----
     QString loadState();                  // 异步装载状态（loading / 脚本数 / 告警数）
     QString dumpScreen(int lastLines);    // 抓控制台尾部文本
     QString diagBlocks();                 // 诊断：颜色/字体/区块数据（临时）
+    // 诊断：只列**某一行**的全部区块（px/col/text/color）。diagBlocks 只打首尾
+    // 几行，判断「同一行里两段是否重叠」必须能把整行拉出来。
+    QString dumpRow(int row);
     QString listButtons();                // 当前屏的按钮值（输入候选）
     QString saveScreenshot(const QString& path);  // 保存当前画面，返回结果说明
     // 诊断：把运行期精灵（SPRITECREATE 的图，如 FL3.8 合成像 FACE_*）当前的

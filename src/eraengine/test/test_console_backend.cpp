@@ -1121,6 +1121,96 @@ int main(int argc, char* argv[]) {
               "非 div 区块 pxLeft == -1（走 col × 格宽）");
     }
 
+    // ---- 10b. 同一个 <div> 内的多段必须顺次前进（不能都回到 div 原点）----
+    // FL3.8 情報画面表头：`SEX '= @"性別:%RESULTS:1%"`，RESULTS:1 带 <font color>，
+    // 于是同一个 div 里出现「性別:」+「男性」两段。若每段都拿 division.x 当左边界，
+    // 「男性」会整个压在「性別:」上（屏幕上表现为字形叠加/彩色毛边）。
+    qDebug() << "\n10b) 同一 div 内多段顺次前进";
+    {
+        ConsoleBackend c;
+        c.setFontSize(14);          // columnWidthPx() == 7
+        c.setLineHeight(14);
+        c.setGridColumns(226);
+        c.setGridRows(60);
+        c.printTemplate(PrintTemplateCompiler::parseRuntimeMarkup(
+            QStringLiteral("<div rect='2200,0,2000,110'>性別:"
+                           "<font color='#FF0080'>男性</font></div>")));
+        c.flush();
+        const QVariantList blocks = c.lineBlocks(0);
+        const QVariantMap label = blockOf(blocks, QStringLiteral("性別:"));
+        const QVariantMap value = blockOf(blocks, QStringLiteral("男性"));
+        check(!label.isEmpty() && !value.isEmpty(),
+              "div 内的两段都出现在同一行");
+        // 2200 单位 × 14px / 100 = 308px；「性別:」= 2 全角 + 1 半角 = 5 列 = 35px
+        check(label.value("pxLeft").toInt() == 308,
+              QString("首段左边界 = div 原点 308px（实得 %1）")
+                  .arg(label.value("pxLeft").toInt()));
+        check(value.value("pxLeft").toInt() == 308 + 35,
+              QString("次段接在前一段右边 343px（实得 %1）")
+                  .arg(value.value("pxLeft").toInt()));
+        check(value.value("pxLeft").toInt() != label.value("pxLeft").toInt(),
+              "两段不会共用同一个 pxLeft（旧实现就是共用的）");
+
+        // 同一个 div 里的两张 80px 缩略图：按**原始像素**前进，不是 11 列 × 7px。
+        ConsoleBackend d;
+        d.setFontSize(14);
+        d.setLineHeight(14);
+        d.setGridColumns(226);
+        d.setGridRows(60);
+        d.printTemplate(PrintTemplateCompiler::parseRuntimeMarkup(
+            QStringLiteral("<div rect='0,0,400,80'>"
+                           "<img src='thumbA' width='80px' height='80px'>"
+                           "<img src='thumbB' width='80px' height='80px'></div>")));
+        d.flush();
+        const QVariantList shots = d.lineBlocks(0);
+        const QVariantMap a = blockOf(shots, QStringLiteral("thumbA"));
+        const QVariantMap b = blockOf(shots, QStringLiteral("thumbB"));
+        check(a.value("pxLeft").toInt() == 0 && b.value("pxLeft").toInt() == 80,
+              QString("div 内缩略图按像素前进 0/80（实得 %1/%2）")
+                  .arg(a.value("pxLeft").toInt()).arg(b.value("pxLeft").toInt()));
+
+        // div 内的 <br>：每一行都回到 div 的左边距（C# HtmlManager 的 PointX 复位）。
+        // 不复位时每一行接着上一行末尾继续右移 —— FL3.8 情報画面「陥落」块就是
+        // 一条 42px/行的斜阶梯（实测 700,742,784,854…）。
+        ConsoleBackend e;
+        e.setFontSize(14);
+        e.setLineHeight(14);
+        e.setGridColumns(226);
+        e.setGridRows(60);
+        e.printTemplate(PrintTemplateCompiler::parseRuntimeMarkup(
+            QStringLiteral("<div rect='5000,0,3600,600'>・陥落<br>　　無<br>・嗜好</div>")));
+        e.flush();
+        QList<int> lineStarts;
+        for (int line = 0; line < 3; ++line) {
+            const QVariantList lb = e.lineBlocks(line);
+            lineStarts.append(lb.isEmpty() ? -1 : lb.first().toMap().value("pxLeft").toInt());
+        }
+        // 5000 单位 × 14px / 100 = 700px
+        check(lineStarts == QList<int>({700, 700, 700}),
+              QString("div 内 3 行都从 700px 起（实得 %1/%2/%3）")
+                  .arg(lineStarts.value(0)).arg(lineStarts.value(1)).arg(lineStarts.value(2)));
+
+        // <div rect> 的肖像之后接正文：正文必须回到行首，不能被 div 右边缘推走。
+        // FL3.8「SHOW_PORTRAIT 之后紧接 SMALL_TITLE("基礎") + SHOW_BASE」就是这条：
+        // 之前 基礎/体力 整条 HUD 被推到第 173 列（超出画布，右端被裁掉）。
+        ConsoleBackend g;
+        g.setFontSize(14);
+        g.setLineHeight(14);
+        g.setGridColumns(226);
+        g.setGridRows(60);
+        g.printTemplateBuffered(PrintTemplateCompiler::parseRuntimeMarkup(
+            QStringLiteral("<div rect='7200,0,200px,200px'>"
+                           "<img src='face' width='200px' height='200px'></div>")));
+        g.print(QStringLiteral("体力:"));
+        g.flush();
+        const QVariantList withFace = g.lineBlocks(0);
+        const QVariantMap face = blockOf(withFace, QStringLiteral("face"));
+        const QVariantMap bodyLabel = blockOf(withFace, QStringLiteral("体力:"));
+        check(face.value("col").toInt() == 144,
+              QString("肖像 div 定位在第 144 列（实得 %1）").arg(face.value("col").toInt()));
+        check(bodyLabel.value("col").toInt() == 0,
+              QString("div 之后的正文回到第 0 列（实得 %1）").arg(bodyLabel.value("col").toInt()));    }
+
     qDebug() << "\n===================";
     if (g_failures == 0) {
         qDebug() << "[SUCCESS] console backend tests passed";

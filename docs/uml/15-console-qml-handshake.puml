@@ -99,8 +99,11 @@ note over C,V
   dummy 建精灵、再用 GDRAWSPRITE 合成后因释放 G 而丢失整张图。QML 收到
   spriteImagesChanged 后重载运行期图片；精灵优先于 pin 快照，精灵不存在时
   才回退到 pin，避免旧快照覆盖新的合成像素。
-  `pxLeft >= 0` 是 `<div rect>` 的累计像素坐标，QML 只在像素坐标系中
-  使用一次；`pxLeft == -1` 表示无 div 定位，回退到 `col × columnWidth` 网格。
+  `<div rect>` 内部维护独立的像素游标：同一 div 的文本/换色片段顺次推进，
+  图片按原始像素宽推进，`<br>` 将游标复位到 div 左边界；div 内部布局不推进
+  后续正文游标，绝对定位图片之后的 HUD 仍从原正文列继续。`pxLeft >= 0` 是
+  `<div rect>` 的累计像素坐标，QML 只在像素坐标系中使用一次；`pxLeft == -1`
+  表示无 div 定位，回退到 `col × columnWidth` 网格。
   溢出舞台时（总数 > stageRows）最新一行即窗口最底那一行：
   舞台快照不包含它，改由 inputEchoLine 递交，QML 排在输入框左侧
   （没溢出则全部行都在舞台上）。

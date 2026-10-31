@@ -147,6 +147,15 @@ void ConsoleLayout::layoutSegments(QList<ConsoleSegment>& segments) const {
     int col = 0;
     for (ConsoleSegment& seg : segments) {
         int c = col;
+        // 整段都是 `<div rect>` 绝对定位的区块（肖像 / 缩略图 / 图层）时，这一段
+        // **不推进正文游标**：C# 的 LockPointX 只给该 part 定死 X，div 结束后正文
+        // 仍从 div 之前的位置继续。推进的话，div 的右边缘会被当成下一段的起点 ——
+        // FL3.8 情報画面 SHOW_PORTRAIT 之后紧接的「基礎／体力」整条 HUD 就被推到
+        // 肖像右边第 173 列（超出 226 列画布，右端被窗口裁掉）。
+        bool lockedSegment = !seg.spans.isEmpty();
+        for (const ConsoleSpan& p : seg.spans) {
+            if (!p.pointXLocked || p.relCol < 0) { lockedSegment = false; break; }
+        }
         for (ConsoleSpan& part : seg.spans) {
             if (part.pointXLocked && part.relCol >= 0) {
                 c = part.relCol;                 // C# LockPointX：绝对定位
@@ -162,7 +171,7 @@ void ConsoleLayout::layoutSegments(QList<ConsoleSegment>& segments) const {
             const ConsoleSpan& last = seg.spans.last();
             seg.cols = qMax(0, last.relCol + last.cols - seg.relCol);
             seg.width = seg.cols * columnWidthPx();
-            col = seg.relCol + seg.cols;
+            if (!lockedSegment) col = seg.relCol + seg.cols;
         } else {
             seg.relCol = col;
             seg.cols = 0;

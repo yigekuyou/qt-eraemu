@@ -72,6 +72,10 @@ static QString join(const QList<int>& lengths) {
     return out.join(QLatin1Char(','));
 }
 
+// 注：本文件里**能从脚本观察**的那半边（VARSIZE 逐维长度、越界维为 0、
+// 系统数组与用户数组同一条问法、"形状是装载期事实"）已迁到
+// test/example/ERB/42_ARRAY_SHAPE.ERB（组 42）；这里只保留脚本看不到的部分
+// （shapeOf/私有段身份/VariableConfig 默认值/角色变量形状）。
 int main(int argc, char* argv[]) {
     QCoreApplication app(argc, argv);
 

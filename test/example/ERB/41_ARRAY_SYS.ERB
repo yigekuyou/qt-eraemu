@@ -27,6 +27,7 @@
 ;=============================================================
 @TEST_ARRAY_SYS
 #DIM RET
+#DIM arrU, 10
 
 RET = 0
 
@@ -100,6 +101,22 @@ CALL FN_SHIFT_LOCALS
 CALL ASSERT_EQ, RESULT, 1, "ARRAYSHIFT LOCALS 落在 m_localStrVars 上"
 RET += RESULT
 
+;---- 8) 用户数组：语义不变（test_array_control.cpp 的 OUT3 部分迁入） ----
+arrU:0 = 3
+arrU:1 = 1
+arrU:2 = 2
+ARRAYSORT arrU, FORWARD, 0, 3
+CALL ASSERT_EQ, arrU:0, 1, "ARRAYSORT 用户数组（限定区间）:0"
+CALL ASSERT_EQ, arrU:1, 2, "ARRAYSORT 用户数组（限定区间）:1"
+CALL ASSERT_EQ, arrU:2, 3, "ARRAYSORT 用户数组（限定区间）:2"
+ARRAYSHIFT arrU, -1, 9, 0, 3
+CALL ASSERT_EQ, arrU:0, 2, "ARRAYSHIFT 用户数组左移:0"
+CALL ASSERT_EQ, arrU:1, 3, "ARRAYSHIFT 用户数组左移:1"
+CALL ASSERT_EQ, arrU:2, 9, "ARRAYSHIFT 用户数组左移:2（补 9）"
+ARRAYREMOVE arrU, 1, 2
+CALL ASSERT_EQ, arrU:0, 2, "ARRAYREMOVE 用户数组:0"
+CALL ASSERT_EQ, arrU:1, 0, "ARRAYREMOVE 用户数组:1（删掉 1..2 后是空槽）"
+RET = RET + RESULT
 RETURN RET
 
 ;=============================================================

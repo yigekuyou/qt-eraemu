@@ -147,8 +147,9 @@ int main(int argc, char* argv[]) {
               "精灵读取到来源 G 的最新像素");
         GraphicsStore::gDispose(31);
         const QImage snapshot = GraphicsStore::spriteImage("live_sprite");
-        check(!snapshot.isNull() && qAlpha(snapshot.pixel(0, 0)) == 0,
-              "来源 G 释放后精灵回退到创建时快照");
+        check(!snapshot.isNull() && qAlpha(snapshot.pixel(0, 0)) == 255
+                  && qGreen(snapshot.pixel(0, 0)) == 255,
+              "来源 G 释放后精灵冻结为销毁瞬间的合成像素");
         GraphicsStore::spriteDispose("live_sprite");
     }
 

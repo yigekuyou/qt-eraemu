@@ -461,6 +461,9 @@ signals:
     void toolTipStyleChanged();
     void backgroundImagesChanged();
     void stageImageBlocksChanged();
+    // 运行期精灵的像素变了（GDRAWSPRITE/GFILLRECTANGLE…）。
+    // QML 的 image:// 有 URL 级缓存，收到本信号后要主动重载对应 <img>。
+    void spriteImagesChanged(const QStringList& names);
     void inputEchoLineChanged();
     void htmlIslandChanged();
     void gridChanged();

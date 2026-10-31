@@ -22,6 +22,7 @@
 #include <QImage>
 #include <QRect>
 #include <QString>
+#include <QStringList>
 
 // ---------------------------------------------------------------------------
 // GraphicsStore —— G 图像缓冲 + 运行期精灵注册表
@@ -72,6 +73,14 @@ public:
     static int spriteDisposeAll(bool delCsvImage);
     static bool spriteCreate(const QString& name, int gId, const QRect& rect = QRect());
     static bool spriteDispose(const QString& name);
+
+    // ---- 精灵像素变更通知（绘制点记账，模型更新完成时统一取走推送 QML）----
+    // FL3.8 的合成像（FACE_*）是先把透明 dummy 建成精灵，再往同一个 G 上
+    // 一层层 GDRAWSPRITE。QML 的 image:// 走 URL 级缓存，像素变了不会自己重取，
+    // 所以这里只做 O(1) 记账，由 ConsoleBackend 在模型刷新末尾发一次信号。
+    static void markSpriteDirty(int gId);
+    [[nodiscard]] static QStringList takeDirtySpriteNames();
+    [[nodiscard]] static bool hasRuntimeSprite(const QString& name);
     static bool spriteSetPos(const QString& name, int x, int y);
     [[nodiscard]] static bool spriteCreated(const QString& name);
     [[nodiscard]] static QImage spriteImage(const QString& name);

@@ -685,6 +685,50 @@ TestCase {
         }
     }
 
+    // 可点击部分：`<div rect>` 里的 `<button><img>` 必须「看得见的图片矩形」
+    // 和「鼠标命中矩形」是同一个矩形。
+    // 以前 x 走 col×格宽（80/7 逐段取整 -> 0,11,23,34…），图片层又被整体
+    // Scale 缩放，于是命中区和画面在第 3 张以后差出一整格：看起来点中了，
+    // 实际落在隔壁按钮上（或哪里都不是）。现在 C++ 只给一次累计像素 pxLeft，
+    // QML 折算一次，图片层与命中区都读同一个值。
+    function test_divButtonHitRectMatchesVisibleImage() {
+        view.fontSize = 14;
+        view.lineHeight = 14;      // imageScale = 1 -> 未缩放空间 == 舞台像素
+        backend.stageMode = true;
+        backend.clearAll();
+        backend.print("▼"); backend.newline();
+        consoleFixture.printHtml(backend,
+            "<div rect='160px,0px,80px,80px'><button value='7'>"
+            + "<img src='offset_atlas' width='80px' height='80px'></button></div>");
+        backend.flush(); view.syncView();
+        tryCompare(view, "showingStage", true);
+        compare(backend.stageImageBlocks.length, 1);
+        const block = view.stageImageAt(0);
+        verify(block !== null, "div 按钮图片进入舞台图片层");
+        compare(block.blockData.pxLeft, 160);
+        compare(block.blockData.clickable, true);
+        // 图片层整层套一个 Scale，子项坐标是**未缩放**空间。x 必须等于
+        // 「累计像素 / 列像素宽 × 未缩放列宽」——只是把 C++ 的像素原点换回本层
+        // 的单位，中间不再有任何一次取整（col 那份量化值不参与定位）。
+        const overlayLayer = findChild(view, "stageImageLayer");
+        const expected = block.blockData.pxLeft / (view.fontSize / 2) * overlayLayer.unitCol;
+        verify(Math.abs(block.x - expected) < 0.01,
+               "图片左边界 = 累计像素折算值（不是 col×格宽）：x=" + block.x
+               + " 期望=" + expected + " col×格宽=" + (block.blockData.col * overlayLayer.unitCol));
+        verify(Math.abs(block.width - block.blockData.pxWidth) < 0.01,
+               "命中宽度 = 图片原始宽度（按钮矩形 == 图片矩形）");
+        const mouse = findChild(block, "blockButtonMouse");
+        verify(mouse !== null, "div 按钮图片带命中区");
+        // 命中区必须铺满整个可见图片矩形（否则图片右/下边缘点不动）。
+        // 是否**当下**可点由 generation 闸门决定（另有专门测试），这里只锁几何。
+        verify(Math.abs(mouse.width - block.width) < 0.01
+               && Math.abs(mouse.height - block.height) < 0.01,
+               "命中区与图片同尺寸：" + mouse.width + "x" + mouse.height
+               + " vs " + block.width + "x" + block.height);
+        compare(mouse.width, block.width);
+        compare(mouse.height, block.height);
+    }
+
     // ypos 是**像素**位移，加在行首之上；不是「负几格再乘行高」。
     // eraTW 的 字号 16 / 行高 20 就是这样：画像枠被拉回 16px，而不是 20px，
     // 所以它比立絵低 4px（C# 同样如此，差的是 4px，不是一整格）。

@@ -2778,6 +2778,18 @@ bool ScriptRunner::invokeUserFunction(const QString& name, const QList<QVariant>
             m_storage->setLocalAlias(param->name, param->index);
             break;
         case UserParamTarget::LocalVar:
+            // `#DIM REF` / `#DIMS REF` 形参**已经**在 enterCall 之后被
+            // setReference 绑定到实参的存储键（上面的 refTargets）。
+            // 若继续走到下面的 setParameter，存储里会同时存在
+            //   m_references["OUT"] -> "O"     （读：求值器先查别名）
+            //   m_parameters["OUT"] -> 0       （写：writeStringValue/writeLhs 先查 parameter）
+            // 于是「读得到、写不进去」：FL3.8 的
+            //   `arrTagInfo:1 '= strTagValue`（Function_TagSetText.ERB:425）
+            // 全部写进这个用完即弃的形参槽，调用方的 arrTagInfo 永远是空串，
+            // TAG_PRINT 走 ELSE → PRINTPLAINFORM → 颜色屏的出口按钮
+            // （TAG_PRINT(@"@B:999999999@…@/B@", 5)）根本出不来，ONEINPUTS 卡死。
+            if (param->isReference && refTargets.contains(param->varName.toUpper()))
+                break;
             if (param->fixedIndex >= 0) {
                 // 元素形参：字符串元素（1D 与多维）必须写字符串槽 —— 只走整数槽
                 // 会让式子调用 `F("yy")` 的实参整个丢失（写进了一个与字符串变量
@@ -2810,6 +2822,9 @@ bool ScriptRunner::invokeUserFunction(const QString& name, const QList<QVariant>
     // SELECTCASE 一个 CASE 都不命中，TEMPVAR 清除链整体失效。
     for (int position = args.size(); position < info->params.size(); ++position) {
         const UserParamDecl& param = info->params.at(position);
+        // 引用形参没有「缺省值绑定」这回事：它必须指向实参的存储键，
+        // 登记成标量形参只会把之后的写入吞掉（同上）。
+        if (param.isReference) continue;
         if (param.hasDefault) {
             bindDefault(param, position);
             continue;

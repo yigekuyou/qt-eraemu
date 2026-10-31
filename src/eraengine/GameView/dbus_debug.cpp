@@ -200,10 +200,16 @@ QString EraDBusDebug::diagBlocks() {
     const QVariantList blocks = c->screenBlocks();
     out << QStringLiteral("textBlocks=%1").arg(blocks.size());
     auto dump = [&out](int i, const QVariantMap& m) {
-        out << QStringLiteral("  [%1] row=%2 col=%3 cols=%4 rows=%5 color=%6 font=%7 kind=%8 btn=%9 text=%10")
+        // px/top 是**像素**坐标（pxLeft 含 div 累计原点 + 整行对齐平移，pxTop 含
+        // ypos 与 div 的 y）。col/row 是逐段量化后的网格值：核对按钮与图片是否
+        // 共用同一个矩形时看 px/top，不要看 col —— 80px/7px 这类除不尽的比例下
+        // 两者会差出整数格。
+        out << QStringLiteral("  [%1] row=%2 col=%3 px=%4 top=%5 cols=%6 rows=%7 wh=%8x%9 color=%10 font=%11 kind=%12 btn=%13 text=%14")
                    .arg(i)
                    .arg(m.value("row").toInt()).arg(m.value("col").toInt())
+                   .arg(m.value("pxLeft").toInt()).arg(m.value("pxTop").toInt())
                    .arg(m.value("cols").toInt()).arg(m.value("rows").toInt())
+                   .arg(m.value("pxWidth").toInt()).arg(m.value("pxHeight").toInt())
                    .arg(m.value("color").toString()).arg(m.value("fontName").toString())
                    .arg(m.value("kind").toString()).arg(m.value("isButton").toBool())
                    .arg(QString(m.value("text").toString()).left(40));

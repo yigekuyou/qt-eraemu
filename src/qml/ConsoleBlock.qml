@@ -164,9 +164,18 @@ Item {
     x: pxLeft >= 0 ? (pxLeft / columnWidthPx) * cellWidth : gridCol * cellWidth
     y: offsetRows * cellHeight
     // 外层至少覆盖 C++ 的网格测量；文本内容本身由 glyph 容器自动撑开。
+    // div 定位的图片（缩略图/立絵）宽度必须取**图片原始像素**：命中区就是这块
+    // Item，用网格列宽（80px 按 7px 列算 = 11 列 = 77px）会让图片右侧 3px
+    // 点不动，而且和图片层画出来的 80px 差一截。历史视图没有图片层兜底，
+    // 这一处就是唯一的命中矩形。
+    readonly property real divImageWidth: blockData && blockData.pxLeft !== undefined
+                                          && blockData.pxLeft >= 0
+                                          && block.kind === "image"
+                                          && blockData.pxWidth !== undefined
+                                          ? blockData.pxWidth : 0
     width: fixedWidth > 0
            ? fixedWidth
-           : Math.max(gridCols * cellWidth, contentRow.implicitWidth)
+           : Math.max(divImageWidth, gridCols * cellWidth, contentRow.implicitWidth)
     height: fixedHeight > 0
             ? fixedHeight
             : Math.max(gridRows * cellHeight, contentRow.implicitHeight)
@@ -246,6 +255,32 @@ Item {
         }
     }
 
+    // C++ 在模型刷新完成时把「这一轮像素变了的精灵名」推过来（缓冲合并后只发一次）。
+    // Image 没有 invalidate API，唯一让已加载的图重新取的办法是重赋 source：
+    // 先卸载（""），下一帧还原（cache:false 保证真的回调 provider）。
+    Connections {
+        target: backend
+        function onSpriteImagesChanged(names) {
+            if (block.kind !== "image" || !block.blockData) return
+            const n1 = block.blockData.text
+            const n2 = block.blockData.imageButton
+            if (names.length > 0 && names.indexOf(n1) < 0 && names.indexOf(n2) < 0) return
+            imageItem.source = ""
+            imageItemB.source = ""
+            // 缓冲同步：下一帧再还原。还原前必须重新确认 item 还活着 ——
+            // 模型刷新会销毁重建 delegate，闭包里抓到的可能是已销毁对象；
+            // 同时只在仍为空时还原，避免两次信号叠加把已重载的 source 再打空。
+            // 还原时用 Qt.binding 重新建立绑定：直接赋值 imageUrl 会把
+            // `source: imageUrl` 的绑定打断，之后 blockData 换名字图就不跟着变了。
+            Qt.callLater(function() {
+                if (imageItem && imageItem.source === "")
+                    imageItem.source = Qt.binding(function() { return imageItem.imageUrl })
+                if (imageItemB && imageItemB.source === "")
+                    imageItemB.source = Qt.binding(function() { return imageItemB.imageButtonUrl })
+            })
+        }
+    }
+
     // <img srcb='...'>：按钮选中/悬停态替换图（C# ConsoleImagePart.cImageB：
     // isSelecting||isFocus 时**改画 srcb**，不是叠加 —— 平时 src、指向时 srcb）。
     // 两张 Image 同几何叠放，按 hovered 切换可见性；无 srcb 时退化为单张。
@@ -255,8 +290,14 @@ Item {
         visible: block.showImageButton
         anchors.left: parent.left
         anchors.top: parent.top
-        source: (block.kind === "image" && visible && block.blockData && block.blockData.imageButton)
-                    ? ("image://emuera/" + encodeURIComponent(block.blockData.imageButton)) : ""
+        // <img srcb> 的 URL：保留为属性，供像素变更后重载（见下方 Connections）
+        readonly property string imageButtonUrl: (block.kind === "image" && visible
+                                                  && block.blockData && block.blockData.imageButton)
+                                                 ? ("image://emuera/" + encodeURIComponent(block.blockData.imageButton)) : ""
+        source: imageButtonUrl
+        // 运行期精灵的像素会随合成变化（FL3.8 FACE_*），不能吃 URL 级 pixmap 缓存：
+        // 文档（Image Caching）：cache=false 时每次都回调 provider。
+        cache: false
         width: Math.max(1, block.width)
         height: Math.max(1, block.height)
         fillMode: Image.PreserveAspectFit
@@ -277,8 +318,11 @@ Item {
         // QQuickImageProvider（Qt 文档）："image:" scheme + provider 标识 + id；
         // provider 名不区分大小写，id 其余部分保留大小写 —— 非 ASCII 资源名必须
         // 先 encodeURIComponent（C++ 侧 normalizeId 再 QUrl::fromPercentEncoding 还原）。
-        source: (block.kind === "image" && visible && block.blockData && block.blockData.text)
-                    ? ("image://emuera/" + encodeURIComponent(block.blockData.text)) : ""
+        readonly property string imageUrl: (block.kind === "image" && visible
+                                            && block.blockData && block.blockData.text)
+                                           ? ("image://emuera/" + encodeURIComponent(block.blockData.text)) : ""
+        source: imageUrl
+        cache: false
         // ConsoleLayout supplies grid dimensions.  Keep the Image item at the
         // same size as its span so a loaded resource cannot paint into the
         // following line or leave a zero-sized QML item.

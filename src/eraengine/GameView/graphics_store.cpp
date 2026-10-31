@@ -22,6 +22,7 @@
 #include <QDebug>
 #include <cmath>
 #include <QPainter>
+#include <QSet>
 
 namespace {
 QHash<int, QImage>& gImages() {
@@ -35,11 +36,35 @@ QHash<QString, GraphicsStore::Sprite>& sprites() {
 // 静态资源（CSV 精灵）被 SPRITESETPOS/SPRITEMOVE 改过的位置。
 // C# 里静态精灵也是可变对象（AppContents.GetSprite 返回同一个 ASprite），
 // 我们不改 ResourceImageProvider 的只读清单，改在这里覆盖。
+// 像素被改动过的运行期精灵名（大写）。合并窗口 = 一次模型刷新。
+QSet<QString>& dirtySprites() {
+    static QSet<QString> store;
+    return store;
+}
 QHash<QString, QPoint>& spritePosOverrides() {
     static QHash<QString, QPoint> store;   // 键统一大写
     return store;
 }
 } // namespace
+
+void GraphicsStore::markSpriteDirty(int gId) {
+    for (auto it = sprites().constBegin(); it != sprites().constEnd(); ++it) {
+        if (it->created && it->sourceGId == gId)
+            dirtySprites().insert(it.key());
+    }
+}
+
+QStringList GraphicsStore::takeDirtySpriteNames() {
+    QStringList out(dirtySprites().constBegin(), dirtySprites().constEnd());
+    dirtySprites().clear();
+    out.sort();
+    return out;
+}
+
+bool GraphicsStore::hasRuntimeSprite(const QString& name) {
+    const Sprite* s = sprite(name);
+    return s && s->created;
+}
 
 bool GraphicsStore::gCreate(int id, int width, int height) {
     if (width <= 0 || height <= 0 || width > 8192 || height > 8192) return false;
@@ -61,6 +86,21 @@ bool GraphicsStore::gCreateFromFile(int id, const QString& resourceName) {
 }
 
 bool GraphicsStore::gDispose(int id) {
+    // 源 G 被销毁前先把当前像素固化成精灵快照：C# 的 ASprite 拥有自己的位图，
+    // 而 FL3.8 的 FACE_* 是从 dummy.webp（全透明）建精灵、之后才往 G 上叠层，
+    // 所以 s->image 里是透明快照。若不在销毁瞬间刷新，G 一没了就没有活像素可读，
+    // 合成像会整张变透明（表现为「没有精灵合成图片了」）。
+    auto git = gImages().constFind(id);
+    if (git != gImages().constEnd()) {
+        const QImage& current = *git;
+        for (auto it = sprites().begin(); it != sprites().end(); ++it) {
+            if (!it->created || it->sourceGId != id) continue;
+            const QRect rect = it->sourceRect.isNull()
+                                   ? current.rect()
+                                   : it->sourceRect.intersected(current.rect());
+            if (!rect.isEmpty()) it->image = current.copy(rect);
+        }
+    }
     return gImages().remove(id) > 0;
 }
 
@@ -72,6 +112,7 @@ bool GraphicsStore::gClear(int id, const QColor& color) {
     auto it = gImages().find(id);
     if (it == gImages().end()) return false;
     it->fill(color.isValid() ? color : QColor(0, 0, 0, 0));
+    markSpriteDirty(id);
     return true;
 }
 
@@ -80,6 +121,7 @@ bool GraphicsStore::gFillRectangle(int id, const QColor& color, const QRect& rec
     if (it == gImages().end()) return false;
     QPainter painter(&*it);
     painter.fillRect(rect, color);
+    markSpriteDirty(id);
     return true;
 }
 
@@ -92,6 +134,7 @@ bool GraphicsStore::gDrawImage(int id, const QImage& src, const QRect& destRect,
     QPainter painter(&*it);
     painter.setRenderHint(QPainter::SmoothPixmapTransform);
     painter.drawImage(destRect, drawn);
+    markSpriteDirty(id);
     return true;
 }
 
@@ -113,6 +156,7 @@ int GraphicsStore::spriteDisposeAll(bool delCsvImage) {
     //     否则 imageDictionary = new(resourceImageDictionary)，返回 **运行期条数**
     //     （= sprites - csprites）。
     sprites().clear();
+    dirtySprites().clear();
     if (!delCsvImage) return runtime;
     const int statics = ResourceImageProvider::staticSpriteCount();
     ResourceImageProvider::clearAtlas();
@@ -130,12 +174,14 @@ bool GraphicsStore::spriteCreate(const QString& name, int gId, const QRect& rect
     sprite.image = rect.isNull() ? src : src.copy(rect);
     if (sprite.image.isNull()) return false;
     sprites().insert(name.toUpper(), sprite);
+    dirtySprites().insert(name.toUpper());   // 新建精灵本身就是要画的东西
     return true;
 }
 
 bool GraphicsStore::spriteDispose(const QString& name) {
     const QString key = name.toUpper();
     spritePosOverrides().remove(key);
+    dirtySprites().remove(key);
     return sprites().remove(key) > 0;
 }
 

@@ -325,7 +325,9 @@ FocusScope {
             delegate: Image {
                 required property var modelData
                 anchors.fill: parent
-                source: "image://emuera/" + modelData.name
+                source: "image://emuera/" + encodeURIComponent(modelData.name)
+                // 舞台图片层同样是运行期精灵（合成像/背景）：不吃 URL 缓存
+                cache: false
                 // C# BakeBackground：按「填满窗口」缩放（`cropHorizontally =
                 // bh*scaleW < H` -> 按宽或高取大者），即 cover 而不是 fit；
                 // 横向居中（paddingX = (W - newWidth) / 2）、纵向从 y=0 起画。

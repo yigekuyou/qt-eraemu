@@ -185,6 +185,12 @@ namespace {
 
 // 去掉 image:// 查询串与首尾空白
 QString normalizeId(QString id) {
+    // QML 侧可能在 id 上带 ?v=… 一类的后缀（缓存键/调试用）：Qt 只保证去掉
+    // "image:" scheme 与 provider 名，不保证剥 query，这里统一剥掉。
+    const qsizetype queryAt = id.indexOf(QLatin1Char('?'));
+    if (queryAt >= 0) id.truncate(queryAt);
+    const qsizetype fragAt = id.indexOf(QLatin1Char('#'));
+    if (fragAt >= 0) id.truncate(fragAt);
     const int q = id.indexOf(QLatin1Char('?'));
     if (q >= 0) id.truncate(q);
     // QML percent-encodes non-ASCII resource names in image provider IDs.
@@ -481,6 +487,10 @@ QImage ResourceImageProvider::loadResourceImage(const QString& id) {
 bool ResourceImageProvider::pinImage(const QString& id) {
     const QString name = normalizeId(id);
     if (name.isEmpty()) return false;
+    // 注意：运行期精灵**必须**保留 pin 的像素副本。RESETDATA 会同时清空
+    // sprites() 与图集，那时「最后一屏」只能靠这里（测试
+    // “RESETDATA 后：钉住的运行期精灵仍可取图” 就是锁这条）。
+    // 旧快照盖住新像素的问题已在 requestImage() 用「活精灵优先」解决。
     // 运行期精灵 → 静态资源图集/文件（与 requestImage 同一解析顺序）
     QImage image = GraphicsStore::spriteImage(name);
     if (image.isNull()) return false;
@@ -501,20 +511,21 @@ QImage ResourceImageProvider::requestImage(const QString& id, QSize* size, const
     const QString normalizedId = normalizeId(id);
 
     QImage image;
-    // 区块生成时钉住的像素最优先：QUIT/RESETDATA 之后资源根与运行期精灵都没了，
-    // 但最后一屏仍要画出来（C# ConsoleImagePart 持有 cImage 的语义）。
-    {
-        QMutexLocker lock(&pinnedMutex());
-        if (const QImage* pinned = pinnedCache().object(normalizedId)) image = *pinned;
-    }
+    // 运行期精灵优先（SPRITECREATE 产物，同名覆盖静态资源）：合成像（FL3.8 的
+    // FACE_*）会往源 G 上反复画，这里必须拿**当前**像素，不能被 pin 的旧快照挡住。
+    image = GraphicsStore::spriteImage(normalizedId);
     if (!image.isNull()) {
         if (size) *size = image.size();
         if (requestedSize.isValid() && !requestedSize.isEmpty())
             image = image.scaled(requestedSize, Qt::KeepAspectRatio, Qt::SmoothTransformation);
         return image;
     }
-    // 运行期精灵优先（SPRITECREATE 产物，同名覆盖静态资源）
-    image = GraphicsStore::spriteImage(normalizedId);
+    // 精灵已经没了才退回 pin 住的像素：QUIT/RESETDATA 之后资源根与运行期精灵都
+    // 清空了，但最后一屏仍要画出来（C# ConsoleImagePart 持有 cImage 的语义）。
+    {
+        QMutexLocker lock(&pinnedMutex());
+        if (const QImage* pinned = pinnedCache().object(normalizedId)) image = *pinned;
+    }
     if (!image.isNull()) {
         if (size) *size = image.size();
         if (requestedSize.isValid() && !requestedSize.isEmpty())

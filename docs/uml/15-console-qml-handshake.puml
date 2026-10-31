@@ -89,6 +89,11 @@ note over C,V
   `#DIM DYNAMIC` 私有变量在 CALL 入口保存槽位值与“键是否存在”
   两个状态，再写入声明初值；RETURN 按存在标记恢复或删除，空数组
   不能被误判为不存在，递归调用按栈层配对。`#DIM STATIC` 不走此重置路径。
+  运行期精灵在源 G 存在时读取 G 的最新合成像素；G 销毁时把销毁瞬间的
+  当前像素冻结到精灵快照，之后 image provider 仍能按名称取图，避免先用透明
+  dummy 建精灵、再用 GDRAWSPRITE 合成后因释放 G 而丢失整张图。QML 收到
+  spriteImagesChanged 后重载运行期图片；精灵优先于 pin 快照，精灵不存在时
+  才回退到 pin，避免旧快照覆盖新的合成像素。
   `pxLeft >= 0` 是 `<div rect>` 的累计像素坐标，QML 只在像素坐标系中
   使用一次；`pxLeft == -1` 表示无 div 定位，回退到 `col × columnWidth` 网格。
   溢出舞台时（总数 > stageRows）最新一行即窗口最底那一行：

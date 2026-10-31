@@ -16,6 +16,7 @@
  * along with this program.  If not, see <https://www.gnu.org/licenses/>.
  */
 #include "console_backend.h"
+#include "graphics_store.h"
 #include "button_string_creator.h"
 #include "resource_image_provider.h"
 #include "key_map.h"
@@ -1118,6 +1119,10 @@ void ConsoleBackend::updateStageModels(bool force) {
         emit stageImageBlocksChanged();
     // 舞台之外的那一行：递交进 QML 的输入回显栏。
     updateInputEchoLine();
+    // 模型刷新完成 -> 把这一轮累计的精灵像素变更一次性推给 QML（缓冲区）。
+    const QStringList changedSprites = GraphicsStore::takeDirtySpriteNames();
+    if (!changedSprites.isEmpty())
+        emit spriteImagesChanged(changedSprites);
 }
 
 // 窗口最底那一行（输入行）该由谁画：舞台装不下时才摘给输入栏。

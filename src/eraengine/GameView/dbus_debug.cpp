@@ -20,6 +20,7 @@
 #include "console_backend.h"
 #include "eraengine.h"
 #include "eraengine_log.h"
+#include "graphics_store.h"
 
 #ifdef EMUERA_HAS_DBUS
 #include <QDBusConnection>
@@ -214,6 +215,31 @@ QString EraDBusDebug::diagBlocks() {
         const QVariantMap m = blocks.at(i).toMap();
         if (m.value(QStringLiteral("kind")).toString() != QLatin1String("text"))
             dump(i, m);
+    }
+    // 运行期精灵诊断：FACE_* 等名称来自 SPRITECREATE，不能只看静态资源表。
+    // 同时报告像素尺寸和 alpha，区分“QML 没有 delegate”与“精灵本身为空/透明”。
+    for (const QVariant& v : blocks) {
+        const QVariantMap m = v.toMap();
+        if (m.value(QStringLiteral("kind")).toString() != QLatin1String("image"))
+            continue;
+        const QString name = m.value(QStringLiteral("text")).toString();
+        const QImage image = GraphicsStore::spriteImage(name);
+        if (!image.isNull()) {
+            const QImage argb = image.convertToFormat(QImage::Format_ARGB32);
+            QRect alphaBounds;
+            for (int y = 0; y < argb.height(); ++y) {
+                for (int x = 0; x < argb.width(); ++x) {
+                    if (qAlpha(argb.pixel(x, y)) != 0)
+                        alphaBounds |= QRect(x, y, 1, 1);
+                }
+            }
+            out << QStringLiteral("runtimeImage name=%1 size=%2x%3 null=0 alphaBounds=%4x%5+%6+%7")
+                       .arg(name).arg(image.width()).arg(image.height())
+                       .arg(alphaBounds.width()).arg(alphaBounds.height())
+                       .arg(alphaBounds.x()).arg(alphaBounds.y());
+        } else {
+            out << QStringLiteral("runtimeImage name=%1 null=1").arg(name);
+        }
     }
     return out.join(QLatin1Char('\n'));
 }

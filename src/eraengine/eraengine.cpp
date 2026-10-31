@@ -2067,6 +2067,37 @@ void EraEngine::buildSystemHost()
 		                                               QStringLiteral("AutoSave")}, true); };
 		host.maxShopItem = [intCfg]() { return intCfg({QStringLiteral("販売アイテム数"),
 		                                                QStringLiteral("MaxShopItem")}, 100); };
+
+		// ---- SHOP 的「商品」语义（对齐 C# Evaluator.ItemSales / BuyItem）----
+		// 这两个回调此前**完全没有接线**：SystemStateMachine::shopWaitInput()
+		// 里是 `if (m_host.itemSales && m_host.itemSales(...))`，回调为空 ⇒ 恒假
+		// ⇒ 任何点击都掉进 else 分支打印「没有卖。」并原地重绘。表现就是
+		// 「商店/主菜单点不动」。FL3.8 把整个据点主菜单都做进了 ITEMSALES 空间
+		// （PRINTBUTTON "[QSAVE]", 94 之类），所以这条链路断了等于游戏卡死。
+		//
+		// C# ItemSales：ITEMSALES[no] != 0 且 ITEM.CSV 里有该商品的 NAME。
+		// 这里只查前者（名字表是另一套常量表，FL3.8 的 ITEMSALES 由脚本按
+		// 可用/不可用精确置位，已经等价）。
+		host.itemSales = [this](int index) {
+				if (index < 0) return false;
+				// 必须走 getSystemVariable：ITEMSALES / ITEMPRICE / MONEY / BOUGHT
+				// 都是有专用存储的系统变量（m_itemsales / m_itemprice / m_money /
+				// m_bought）。若误用 getGlobalInt1DRaw 会读到「用户全局槽」那一份
+				// 恒 0 的镜像 —— 脚本 VARSET 写的是系统槽，于是这里永远读到 0，
+				// 每个点击都被判成「没有卖。」（本轮的真凶）。
+				return m_variableStorage.getSystemVariable(QStringLiteral("ITEMSALES"), index) != 0;
+		};
+		host.buyItem = [this](int index) {
+				if (index < 0) return false;
+				if (m_variableStorage.getSystemVariable(QStringLiteral("ITEMSALES"), index) == 0)
+						return false;
+				const qint64 price = m_variableStorage.getSystemVariable(QStringLiteral("ITEMPRICE"), index);
+				const qint64 money = m_variableStorage.getSystemVariable(QStringLiteral("MONEY"), 0);
+				if (money < price) return false;
+				m_variableStorage.setSystemVariable(QStringLiteral("MONEY"), 0, money - price);
+				m_variableStorage.setSystemVariable(QStringLiteral("BOUGHT"), 0, index);
+				return true;
+		};
 		host.comAbleDefault = [intCfg]() { return intCfg({QStringLiteral("COM_ABLE初期値"),
 		                                                   QStringLiteral("ComAbleDefault")}, 1); };
 		host.printCPerLine = [intCfg]() { return intCfg({QStringLiteral("PRINTCを並べる数"),

@@ -60,6 +60,11 @@ public Q_SLOTS:  // ---- 检查 ----
     // 诊断：只列**某一行**的全部区块（px/col/text/color）。diagBlocks 只打首尾
     // 几行，判断「同一行里两段是否重叠」必须能把整行拉出来。
     QString dumpRow(int row);
+    // 诊断：当前音频管线状态（BGM 源/是否在播/音量/SE 通道占用）。
+    // 「有没有声音」窗口截图看不出来：必须把**模型状态**和系统侧
+    // （pw-top / parec 抓 sink monitor 的 RMS）对起来 —— 模型说在播而
+    // RMS=0，就只剩「音量被设成 0」或「解码出来是静音」两种可能。
+    QString diagAudio();
     QString listButtons();                // 当前屏的按钮值（输入候选）
     QString saveScreenshot(const QString& path);  // 保存当前画面，返回结果说明
     // 诊断：把运行期精灵（SPRITECREATE 的图，如 FL3.8 合成像 FACE_*）当前的

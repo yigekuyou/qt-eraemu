@@ -21,6 +21,7 @@
 #include "eraengine.h"
 #include "eraengine_log.h"
 #include "graphics_store.h"
+#include "audio_pipeline_pool.h"
 
 #ifdef EMUERA_HAS_DBUS
 #include <QDBusConnection>
@@ -147,6 +148,27 @@ QString EraDBusDebug::dumpRow(int row) {
     }
     out.prepend(QStringLiteral("row=%1 blocks=%2").arg(row).arg(n));
     return out.join(QLatin1Char('\n'));
+}
+
+QString EraDBusDebug::diagAudio() {
+    QString out;
+    QTextStream ts(&out);
+    AudioPipelinePool* audio = m_engine ? m_engine->getAudio() : nullptr;
+    if (!audio) {
+        ts << QStringLiteral("audioPool=null");
+        return out;
+    }
+    ts << QStringLiteral("bgmSource=%1\n").arg(audio->bgmSource());
+    ts << QStringLiteral("bgmPlaying=%1\n").arg(audio->bgmPlaying() ? 1 : 0);
+    // QML 侧 AudioOutput.volume = bgmVolume/100；0 就是**数字静音**（Qt 后端做
+    // 软件增益，PulseAudio 侧流音量仍是 100%），所以只看 pactl 会被骗。
+    ts << QStringLiteral("bgmVolume=%1%%\n").arg(audio->bgmVolume());
+    ts << QStringLiteral("soundVolume=%1%%\n").arg(audio->soundVolume());
+    ts << QStringLiteral("activeChannels=%1 totalPipelines=%2\n")
+              .arg(audio->activeChannels())
+              .arg(audio->totalPipelines());
+    ts << QStringLiteral("soundDirectory=%1").arg(audio->soundDirectory());
+    return out;
 }
 
 QString EraDBusDebug::diagBlocks() {

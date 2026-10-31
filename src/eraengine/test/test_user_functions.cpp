@@ -613,6 +613,64 @@ int main(int argc, char* argv[]) {
               "经 REF 写回系统变量 TARGET:2 = 22");
     }
 
+    // ---- `#DIM DYNAMIC` 私有变量：每次 CALL 重新初始化（C# ScopeIn/ScopeOut）----
+    // FL3.8 的缩略图排版把 COL/ROW 声明成 DYNAMIC，靠「进来就是 0」算 rect。
+    // 移植侧此前把所有私有变量当 STATIC，COL/ROW 会带着上一次调用的值继续涨，
+    // 缩略图因此整体偏移并分到两条视觉行上（按钮点击位置跟着错）。
+    {
+        VariableStorage vars;
+        ProcessState ps;
+        EraParseTable pt(&ps);
+        ExecutionEngine ex(&vars, nullptr);
+        ExpressionEvaluator ev;
+        ex.setParseTable(&pt); ex.setExpressionEvaluator(&ev);
+        pt.setVariableStorage(&vars); pt.setExpressionEvaluator(&ev);
+        ScriptRunner run(&pt, &ex, &ps, &vars);
+        run.setExpressionEvaluator(&ev); run.setStepLimit(1000);
+        const QStringList program = {
+            QStringLiteral("@MAIN"),
+            QStringLiteral("CALL THUMBS(3)"),
+            QStringLiteral("FIRST = LAST_COL"),      // 第 1 次调用结束时的 COL
+            QStringLiteral("CALL THUMBS(3)"),
+            QStringLiteral("SECOND = FIRST_COL"),    // 第 2 次调用**进入时**的 COL
+            QStringLiteral("RETURN"),
+            QStringLiteral("@THUMBS(N)"),
+            QStringLiteral("#DIM N"),
+            QStringLiteral("#DIM DYNAMIC COL"),
+            QStringLiteral("#DIM DYNAMIC ROW"),
+            QStringLiteral("#DIM STATIC KEEP"),
+            QStringLiteral("FIRST_COL = COL"),       // DYNAMIC：每次进入都应是 0
+            QStringLiteral("FIRST_ROW = ROW"),
+            QStringLiteral("KEEP_AT_ENTRY = KEEP"),  // STATIC：第二次进入应是上一轮的值
+            QStringLiteral("FOR LOCAL, 0, N"),
+            QStringLiteral("COL = COL + 1"),
+            QStringLiteral("KEEP = KEEP + 1"),
+            QStringLiteral("NEXT"),
+            QStringLiteral("LAST_COL = COL"),
+            QStringLiteral("KEEP_AT_END = KEEP"),
+            QStringLiteral("RETURN")
+        };
+        check(pt.loadScript("case", buildLines(pt, program)), "load DYNAMIC private variable script");
+        pt.markLoadComplete();
+        pt.setEntryPoint("MAIN");
+        check(run.runToCompletion() == ExecState::Halt, "DYNAMIC private variable script completes");
+        check(vars.getGlobalInt1DInCurrentFrame("FIRST_COL", 0) == 0,
+              QString("DYNAMIC 私有变量第二次调用进入时归 0（实得 %1）")
+                  .arg(vars.getGlobalInt1DInCurrentFrame("FIRST_COL", 0)));
+        check(vars.getGlobalInt1DInCurrentFrame("FIRST_ROW", 0) == 0,
+              "DYNAMIC 私有变量 ROW 也从 0 开始");
+        check(vars.getGlobalInt1DInCurrentFrame("FIRST", 0) == 3,
+              QString("caller 看到第 1 次调用结束时的 COL=3（实得 %1）")
+                  .arg(vars.getGlobalInt1DInCurrentFrame("FIRST", 0)));
+        // 普通 #DIM（= STATIC）：第二次进入时带着上一轮结束时的 3，循环后到 6。
+        check(vars.getGlobalInt1DInCurrentFrame("KEEP_AT_ENTRY", 0) == 3,
+              QString("普通 #DIM 跨调用保留：第二次进入 KEEP=3（实得 %1）")
+                  .arg(vars.getGlobalInt1DInCurrentFrame("KEEP_AT_ENTRY", 0)));
+        check(vars.getGlobalInt1DInCurrentFrame("KEEP_AT_END", 0) == 6,
+              QString("普通 #DIM 继续累加到 6（实得 %1）")
+                  .arg(vars.getGlobalInt1DInCurrentFrame("KEEP_AT_END", 0)));
+    }
+
     qDebug() << "\n================================";
     if (g_failures == 0) {
         qDebug() << "[SUCCESS] user function tests passed";

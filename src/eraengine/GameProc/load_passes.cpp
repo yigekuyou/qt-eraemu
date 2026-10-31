@@ -828,6 +828,11 @@ void installPrivateScopes(LoadContext& ctx) {
     Q_ASSERT_X(ctx.declarationsResolved, "installPrivateScopes",
                "private name table installed before declarations were finalized");
     ctx.storage->installPrivateScopeTable(ctx.variables.buildPrivateNameTable());
+    // `#DIM DYNAMIC` 私有变量：装载期把「哪些私有变量每次 CALL 都要重新分配、
+    // 各自的声明初值/元素数」固定成表（对齐 C# LogicalLine.AddPrivateVariable
+    // 记下的 hasPrivDynamicVar + Private*VariableToken.ScopeIn）。
+    // 运行期 enterCall/returnFromCall 只查表，不再重新扫描声明。
+    ctx.storage->installDynamicPrivateVars(ctx.variables.declarationsRef());
 }
 
 

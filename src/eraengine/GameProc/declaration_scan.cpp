@@ -332,6 +332,7 @@ void registerDeclarationText(VariableTable& variables, ParseDiagnostics& diagnos
         decl.lengthExprs = d.lengthExprs;
         decl.isPrivate = isPrivate || !isGlobal;
         decl.isConst = d.isConst;
+        decl.isDynamic = d.isDynamic && decl.scope == VarScope::Local && !d.isConst;
         decl.isReference = d.reference;
         decl.isCharaData = d.charaData;
         // 随 SAVEGLOBAL/LOADGLOBAL 持久化到 save_global.dat 的用户变量：

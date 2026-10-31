@@ -146,6 +146,12 @@ private slots:
     void subprocessEof() {
         for (const auto& name : {QStringLiteral("/eralsp"), QStringLiteral("/eramcp")}) {
             QProcess process;
+            QProcessEnvironment env = QProcessEnvironment::systemEnvironment();
+            // eralsp/eramcp 的 EOF 契约只允许协议诊断；避免宿主打开
+            // QT_QML_DEBUG 时 Qt 注入启动提示到 stderr。
+            env.remove(QStringLiteral("QT_QML_DEBUG"));
+            env.remove(QStringLiteral("QML_DEBUG"));
+            process.setProcessEnvironment(env);
             process.start(QCoreApplication::applicationDirPath() + name, QStringList{});
             QVERIFY(process.waitForStarted());
             process.closeWriteChannel();

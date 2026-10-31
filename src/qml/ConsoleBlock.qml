@@ -149,10 +149,19 @@ Item {
         return runs;
     }
 
+    // `<div rect='Xpx,...'>` 的累计像素左边界：C++ 在 flattenLine 里给出
+    // （已含整行对齐平移），-1 表示没有 div 定位。
+    readonly property real pxLeft: blockData && blockData.pxLeft !== undefined
+                                   ? blockData.pxLeft : -1
+    // C++ ConsoleLayout::columnWidthPx()：像素坐标是按「半角字宽」定标出来的。
+    // 这里先折回**未取整**的列数，再乘 QML 自己的格宽，全程只有一次除法一次乘法。
+    readonly property real columnWidthPx: Math.max(1, fontSize / 2)
+
     // 位置与尺寸：网格坐标 × 单元格大小（QML 说了算）。
     // x = 绝对列 × 格宽（含对齐平移）；y = ypos 行数偏移。
-    // 这是现有布局契约：跨行图片与图层通过根项溢出本行绘制。
-    x: gridCol * cellWidth
+    // HTML div 的区块改用 pxLeft 折算：col 是逐段 qRound 出来的列，
+    // 连续 80px 缩略图会累进出 3 格以上的横向漂移。
+    x: pxLeft >= 0 ? (pxLeft / columnWidthPx) * cellWidth : gridCol * cellWidth
     y: offsetRows * cellHeight
     // 外层至少覆盖 C++ 的网格测量；文本内容本身由 glyph 容器自动撑开。
     width: fixedWidth > 0
@@ -164,7 +173,14 @@ Item {
     // 叠放顺序 = 控制台打印顺序（C++ 给的扁平 z）。三个 Instantiator 共用同一个
     // 父 Item 后，靠它把 text/image/shape 按真正的绘制顺序交叠 —— 对齐 C#
     // 「逐 part 顺序绘制」：图可压住先打印的字，后打印的字也能盖住先打印的图。
-    z: blockData && blockData.z !== undefined ? blockData.z : 0
+    //
+    // HTML 缩略图常见结构是同一 rect 内先画底图，再画 button/img。底图与
+    // 按钮图片的几何完全重叠；按钮必须优先取得鼠标命中，否则透明底图的
+    // delegate 会遮掉按钮的 MouseArea。这个优先级只用于重叠命中，绘制内容仍
+    // 由各自的 Image/Text 顺序决定。
+    z: block.clickable
+       ? 100000 + (blockData && blockData.z !== undefined ? blockData.z : 0)
+       : (blockData && blockData.z !== undefined ? blockData.z : 0)
 
     // ---- 悬停高亮（可点击区块，含按钮 span）----
     Rectangle {

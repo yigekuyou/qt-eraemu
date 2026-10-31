@@ -34,6 +34,10 @@ struct UserDefinedVariableData {
 		QList<QString> defaultStr;
 		bool global = false;
 		bool save = false;
+		// `#DIM DYNAMIC`：每次 CALL 重新分配并写入声明初值（C#
+		// PrivateInt1DVariableToken + LogicalLine.ScopeIn/ScopeOut）。
+		// 普通 `#DIM` / `#DIM STATIC` 相反：跨调用保留上次的值。
+		bool isDynamic = false;
 		bool isStatic = true;
 		bool isPrivate = true;
 		bool charaData = false;

@@ -452,6 +452,9 @@ void ConsoleBackend::renderTemplate(const PrintTemplate& output, bool toBuffer) 
         if (!divisions.isEmpty()) {
             auto& division = divisions.last();
             span.pointXLocked = true;
+            // 保留 rect 的累计像素原点；relCol 仅作为折行/兼容诊断值。
+            // 每个 COL 独立 qRound(80px / 7px) 会产生 0,11,23,34... 的累进误差。
+            span.positionedXpx = division.x;
             span.relCol = qRound(double(division.x) / m_layout.columnWidthPx()) + division.col;
             span.positionedTopPx = division.y;
             m_layout.measurePart(span);
@@ -1038,9 +1041,15 @@ void ConsoleBackend::updateStageModels(bool force) {
     // 舞台快照止于它前面一行 —— 于是「舞台 45 行 + 输入回显 1 行 = 窗口 46 行」。
     // 没有溢出时（例如 eraTW 标题这 45 行定页画面）不摘：全部行都在舞台上。
     // 没有输入栏的宿主（test_cli、纯历史视图）不预留，舞台照旧占满 gridRows。
-    const bool echoExtracted = inputEchoRow() >= 0;
+    const int echoRow = inputEchoRow();
+    const bool echoExtracted = echoRow >= 0;
+    // 输入栏在舞台外。尾行含图片时不能把它交给输入栏，但仍必须把舞台
+    // 正文限制在 stageRows；否则最后一行会额外占用一个舞台模型行，表现为
+    // 每次 PRINTL/PX_NEWLINE 后舞台行数逐步偏移。
     const int bodyRows = echoExtracted ? total - 1 : total;
     int start = qMax(0, bodyRows - visibleRows);
+    if (!echoExtracted && total > visibleRows)
+        start = qMax(start, total - visibleRows);
     // A line is only the anchor of an image, not its full drawing extent.
     // Keep earlier anchors whose image still overlaps the current stage. The
     // extra rows scroll above the viewport; ListView clips the image itself.
@@ -1369,6 +1378,15 @@ QVariantList ConsoleBackend::flattenLine(const ConsoleDisplayLine& line, int row
             m.insert("z", idx);
             m.insert("col", offset + part.relCol);     // 绝对列（单位 = 区块长）
             m.insert("row", row);                      // 行号（单位 = 区块高）
+            // HTML `<div rect='Xpx,...'>` 的**累计像素**左边界（含整行对齐平移）。
+            // col 是把像素逐个 qRound 成列的结果：80px / 7px = 11.428…，十张
+            // 缩略图会得到 0,11,23,34,46,57 列（而不是 0,11,22,34,45,57 的正确
+            // 递进），到第 10 张就差出 3 格。像素坐标只在这里算一次，QML 再按
+            // 自己的格宽折算，不在任何一步重新取整。
+            // -1 = 没有 div 定位（按 col × 格宽走网格）。
+            m.insert("pxLeft", part.positionedXpx >= 0
+                                   ? part.positionedXpx + offset * m_layout.columnWidthPx()
+                                   : -1);
             const int spanCols = qMax(1, part.cols);
             // 区块占几行：文本/形状恒 1 行，**图片按资源尺寸跨多行**
             // （ConsoleLayout::measurePart 已按 `<img width/height>` 算好 rows）。

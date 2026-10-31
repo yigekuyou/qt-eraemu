@@ -78,6 +78,10 @@ RunResult run(const QStringList& args) {
     process.setWorkingDirectory(g_cwd);
     // 输出侧有中文告警：固定子进程 locale，stdout/file 的字节比较才与开发机无关。
     QProcessEnvironment env = QProcessEnvironment::systemEnvironment();
+    // 测试的 stderr 是 dump_warnings 的稳定诊断契约；开发环境若打开
+    // QT_QML_DEBUG，Qt 会在子进程启动时插入一行无关提示，污染逐字节断言。
+    env.remove(QStringLiteral("QT_QML_DEBUG"));
+    env.remove(QStringLiteral("QML_DEBUG"));
     env.insert(QStringLiteral("LC_ALL"), QStringLiteral("C.UTF-8"));
     process.setProcessEnvironment(env);
     process.start(g_binary, args);

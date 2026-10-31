@@ -173,7 +173,10 @@ FocusScope {
     // 不能从网格宽度扣除，否则 C++ 的 col=POS_X*fontSize/100/(fontSize/2)
     // 与 QML 的 x=col*cellWidth 会产生随列号增长的横向漂移。
     readonly property real gridWidthPx: Math.max(1, stageWidth)
-    readonly property real gridHeightPx: Math.max(1, stageHeight - 1)
+    // 输入栏位于 Main.qml 的 gameViewport 外部，不能从舞台高度扣除像素。
+    // 舞台正文使用 stageRows（gridRows - 1），但这只是网格行数的划分，
+    // 不是从逻辑舞台像素尺寸中再减去一行或一个像素。
+    readonly property real gridHeightPx: Math.max(1, stageHeight)
     // 单元格 = 舞台像素 ÷ 网格（把除不尽的余量摊给每格；永远 ≥ 字号/2 与行高，
     // 因为 C++ 是先除后取整得到网格的）。
     readonly property real cellWidth: Math.max(1, gridWidthPx / gridColumns)

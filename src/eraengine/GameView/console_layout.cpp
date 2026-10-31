@@ -83,8 +83,11 @@ void ConsoleLayout::measurePart(ConsoleSpan& part) const {
         if (wPx <= 0) wPx = m_fontSize;                  // 缺省 = 1 个全角宽
         if (hPx <= 0) hPx = m_lineHeight;
         part.cols = qMax(1, qRound(wPx / static_cast<double>(columnWidthPx())));
-        // 高图（立ち絵/顔絵）必须跨多行，否则后面的行会与图重叠
-        part.rows = qMax(1, qRound(hPx / static_cast<double>(qMax(1, m_lineHeight))));
+        // PX_NEWLINE/C# 的 PrintFlush 组合按像素高度覆盖到最后一行：
+        // 需要 ceil(height / lineHeight) 行，而不是 qRound。qRound 会在
+        // 29px/20px 这类尺寸上只占一行，下一行文字就会压进图片底部。
+        const int lineHeight = qMax(1, m_lineHeight);
+        part.rows = qMax(1, (hPx + lineHeight - 1) / lineHeight);
         part.width = part.cols * columnWidthPx();
         part.height = part.rows * m_lineHeight;
         part.imageWidthPx = wPx;

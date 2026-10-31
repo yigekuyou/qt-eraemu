@@ -2468,3 +2468,79 @@ bool VariableStorage::setStringSlot(const QString& name, const QList<int>& indic
     }
     return false;   // 编译器兜底：switch 已穷尽所有枚举值
 }
+
+// ---------------------------------------------------------------------------
+// `#DIM DYNAMIC` 私有变量：每次 CALL 重新分配（C# LogicalLine.ScopeIn/ScopeOut）
+// ---------------------------------------------------------------------------
+// 与 STATIC 的唯一差别在**生命周期**，不在存储形态：两者都是「存储键 -> 一条
+// 扁平槽位序列」。所以这里不需要新的容器，只需要在进入/离开函数时把这条序列
+// 换成声明初值 / 换回来。
+void VariableStorage::installDynamicPrivateVars(const QList<VariableDecl>& decls) {
+    m_dynamicPrivateVars.clear();
+    m_dynamicPrivateStack.clear();
+    for (const VariableDecl& decl : decls) {
+        if (!decl.isDynamic || decl.isConst || decl.scope != VarScope::Local) continue;
+        if (decl.scopeKey.isEmpty()) continue;
+        DynamicPrivateVar var;
+        var.storageKey = eravar::makePrivateStorageKey(decl.scopeKey, decl.name);
+        var.isStr = (decl.type == OperandType::Str);
+        // C# Private*VariableToken.ScopeIn: `array = new long[sizes[0]]`，
+        // sizes 就是声明的元素数（多维按扁平 elementCount 分配）。
+        const qint64 elements = decl.elementCount > 0 ? decl.elementCount
+                                                      : (decl.lengths.isEmpty() ? 1 : decl.lengths.first());
+        var.length = int(qMax<qint64>(1, elements));
+        var.defaultInt = decl.defaultInt;
+        var.defaultStr = decl.defaultStr;
+        m_dynamicPrivateVars[eravar::internName(decl.scopeKey)].append(var);
+    }
+}
+
+void VariableStorage::enterDynamicPrivateScope(eravar::ScopeId scope) {
+    const auto it = m_dynamicPrivateVars.constFind(scope);
+    if (it == m_dynamicPrivateVars.constEnd()) return;
+    DynamicPrivateSnapshot snapshot;
+    snapshot.ints.reserve(it.value().size());
+    snapshot.strs.reserve(it.value().size());
+    for (const DynamicPrivateVar& var : it.value()) {
+        // 快照 = 调用前的原值（父帧/上一次调用的值），leave 时原样写回。
+        snapshot.ints.append(m_intSlots.value(var.storageKey));
+        snapshot.strs.append(m_strSlots.value(var.storageKey));
+        if (var.isStr) {
+            QList<FlatStringValue> values;
+            values.reserve(var.length);
+            for (int i = 0; i < var.length; ++i)
+                values.append(i < var.defaultStr.size() ? FlatStringValue(var.defaultStr.at(i))
+                                                        : FlatStringValue());
+            m_strSlots.insert(var.storageKey, values);
+        } else {
+            QList<qint64> values(var.length, 0);
+            for (int i = 0; i < values.size() && i < var.defaultInt.size(); ++i)
+                values[i] = var.defaultInt.at(i);
+            m_intSlots.insert(var.storageKey, values);
+        }
+    }
+    m_dynamicPrivateStack[scope].append(std::move(snapshot));
+}
+
+void VariableStorage::leaveDynamicPrivateScope(eravar::ScopeId scope) {
+    const auto it = m_dynamicPrivateVars.constFind(scope);
+    if (it == m_dynamicPrivateVars.constEnd()) return;
+    auto stackIt = m_dynamicPrivateStack.find(scope);
+    if (stackIt == m_dynamicPrivateStack.end() || stackIt.value().isEmpty()) return;
+    const DynamicPrivateSnapshot snapshot = stackIt.value().takeLast();
+    for (int i = 0; i < it.value().size(); ++i) {
+        const DynamicPrivateVar& var = it.value().at(i);
+        // 空序列 = 进入前这个键不存在（首次调用/上一帧已回收）：删掉即可。
+        if (var.isStr) {
+            if (i < snapshot.strs.size() && !snapshot.strs.at(i).isEmpty())
+                m_strSlots.insert(var.storageKey, snapshot.strs.at(i));
+            else
+                m_strSlots.remove(var.storageKey);
+        } else {
+            if (i < snapshot.ints.size() && !snapshot.ints.at(i).isEmpty())
+                m_intSlots.insert(var.storageKey, snapshot.ints.at(i));
+            else
+                m_intSlots.remove(var.storageKey);
+        }
+    }
+}

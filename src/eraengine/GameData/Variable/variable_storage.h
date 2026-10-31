@@ -331,6 +331,26 @@ public:
         }
         // 名表是否已由装载期安装（false = setPrivateScope 仍按调用方名字建表）。
         [[nodiscard]] bool privateScopeTableInstalled() const { return m_privateTableInstalled; }
+
+        // ---- `#DIM DYNAMIC` 私有变量：每次 CALL 重置 ----
+        // C# 语义（LogicalLine.ScopeIn/ScopeOut + PrivateInt1DVariableToken）：
+        // DYNAMIC 私有变量在**每次进入函数**时都是新分配的数组并写入声明初值，
+        // RETURN 时把上一层（父调用/上一次调用）的值恢复回去 —— 递归安全。
+        // 普通 `#DIM` / `#DIM STATIC` 相反：跨调用保留上次的值（Static*Token）。
+        //
+        // 为什么必须实现：FL3.8 的 `@PORTRAIT_EDIT_DRAW_THUMBS` 把 COL/ROW 声明成
+        // `#DIM DYNAMIC`，靠「进来就是 0」来计算 `rect = COL*80px`。移植侧此前把
+        // 所有私有变量一律当 STATIC（isStatic 解析了但没人用），于是上一次调用
+        // 结束时的 COL/ROW 被带进下一次：缩略图整体落到 640px/720px 起、并因为
+        // ROW≠0 分到两条不同的视觉行上 —— 就是「按钮/图片位置错乱」。
+        void installDynamicPrivateVars(const QList<VariableDecl>& decls);
+        [[nodiscard]] bool hasDynamicPrivateVars(eravar::ScopeId scope) const {
+            return m_dynamicPrivateVars.contains(scope);
+        }
+        // 进入私有作用域：快照当前值 -> 重建成声明初值。
+        void enterDynamicPrivateScope(eravar::ScopeId scope);
+        // 离开私有作用域：恢复进入时的快照（栈式，支持同名函数递归）。
+        void leaveDynamicPrivateScope(eravar::ScopeId scope);
         // Emuera 的 `大文字小文字の違いを無視する:YES`（ICVariable）语义：
         // 标识符大小写不敏感，所有存储键统一用大写，写 A 与读 a 落到同一槽位。
         // 否则 `Mark`/`MARK` 会被当成两个变量，表现为「变量似乎不可变」。
@@ -669,6 +689,23 @@ private:
 		// 全局/私有（1D 与多维同一容器）：
 		QHash<QString, QList<qint64>>         m_intSlots;
 		QHash<QString, QList<FlatStringValue>> m_strSlots;
+
+		// `#DIM DYNAMIC` 私有变量（见 installDynamicPrivateVars 的说明）。
+		// 键 = 段身份（ScopeId）；值 = 该段声明过的 DYNAMIC 变量（装载期一次性建表）。
+		struct DynamicPrivateVar {
+			QString         storageKey;    // "段身份\x1fNAME"
+			bool            isStr = false;
+			int             length = 1;    // 声明元素数（C# ScopeIn 的 sizes[0]）
+			QList<qint64>   defaultInt;    // 声明初值（缺省 = 0）
+			QStringList     defaultStr;
+		};
+		// 每次进入函数压一层快照，RETURN 时弹回（同名函数递归各自一层）。
+		struct DynamicPrivateSnapshot {
+			QList<QList<qint64>>          ints;   // 与 m_dynamicPrivateVars[scope] 同序
+			QList<QList<FlatStringValue>> strs;
+		};
+		QHash<eravar::ScopeId, QList<DynamicPrivateVar>> m_dynamicPrivateVars;
+		QHash<eravar::ScopeId, QVector<DynamicPrivateSnapshot>> m_dynamicPrivateStack;
 		// CHARADATA：**碎片化角色号 → 连续 arena**。
 		// 每个存储键有自己的 arena（连续槽位）与基址表（角色号 → 该角色块的起址）。
 		// 只为**写过的**角色号追加一块（块长 = 该变量每角色元素数 = 几何 elementCount）；

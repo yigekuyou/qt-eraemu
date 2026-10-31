@@ -100,6 +100,11 @@ struct ConsoleSpan {
     int   width    = -1;
     int   height   = -1;
     float xSubPixel = 0.0f;     // 亚像素累积（C# XsubPixel）
+    // `<div rect='Xpx,...'>`：区块在 HTML 原点坐标系里的**累计像素** X。
+    // 不能再把它逐段量化成列：80px / 7px = 11.428…，每段独立 qRound 得到
+    // 0,11,23,34,46,57，第 10 个缩略图就比真实位置少 23px（约 3 格）。
+    // -1 = 未定位（按 col × 列宽走网格）。
+    int positionedXpx = -1;
     int positionedTopPx = 0;   // relative HTML div origin, added after image ypos
     bool  pointXLocked = false; // <img pos=…> / <shape> 的绝对定位
     int   top = 0;              // 命中测试用（C# Top/Bottom）
@@ -179,6 +184,7 @@ struct ConsoleSpan {
         m.insert("h", height);
         m.insert("xSubPixel", xSubPixel);
         m.insert("pointXLocked", pointXLocked);
+        m.insert("positionedXpx", positionedXpx);
         m.insert("top", top);
         m.insert("bottom", bottom);
         m.insert("imageId", imageId);

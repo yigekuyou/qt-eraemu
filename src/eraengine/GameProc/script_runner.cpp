@@ -221,7 +221,12 @@ void ScriptRunner::enterCall(const QString& function, const QString& scopeKey) {
     // 脚本名含小写字母时必然 miss，装进存储的是一张空名表（安装期名表会把这次
     // 错误掩盖，卸载后就是私有变量退化成广域裸名）。
     const eravar::ScopeId scope = eravar::internName(scopeKey);
-    m_callContexts.append({m_table->depth(), int(m_loops.size()), scope, m_storage->localContext()});
+    // `#DIM DYNAMIC`：C# 在进入函数时重建这些私有变量（LogicalLine.ScopeIn）。
+    // 必须在**取 LocalContext 之前**做，因为它只动私有存储槽，不动 ARG/LOCAL。
+    const bool dynamicScope = m_storage->hasDynamicPrivateVars(scope);
+    if (dynamicScope) m_storage->enterDynamicPrivateScope(scope);
+    m_callContexts.append({m_table->depth(), int(m_loops.size()), scope,
+                           m_storage->localContext(), dynamicScope});
     // QHash::value() 会先默认构造再拷贝（LocalContext 带 4 个容器成员）——
     // 每个 CALL 都白付一次分配，改 constFind。
     const auto lit = m_functionLocals.constFind(scope);
@@ -255,6 +260,7 @@ bool ScriptRunner::returnFromCall() {
         if (!m_callContexts.isEmpty()
             && m_callContexts.last().depth == m_table->depth() - 1) {
             const auto context = m_callContexts.takeLast();
+            if (context.dynamicScope) m_storage->leaveDynamicPrivateScope(context.scope);
             m_functionLocals.insert(context.scope, m_storage->localContext());
             m_storage->setLocalContext(context.locals);
             m_lastScopeKey.clear(); m_currentScopeId = eravar::kGlobalScope;   // 上下文被恢复 -> 强制重算私有作用域
@@ -265,6 +271,7 @@ bool ScriptRunner::returnFromCall() {
     if (!m_table->returnFromCall()) return false;
     if (!m_callContexts.isEmpty() && m_callContexts.last().depth == m_table->depth()) {
         const auto context = m_callContexts.takeLast();
+        if (context.dynamicScope) m_storage->leaveDynamicPrivateScope(context.scope);
         m_functionLocals.insert(context.scope, m_storage->localContext());
         m_storage->setLocalContext(context.locals);
         m_lastScopeKey.clear(); m_currentScopeId = eravar::kGlobalScope;   // 上下文被恢复 -> 强制重算私有作用域

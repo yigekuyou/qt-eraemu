@@ -136,7 +136,15 @@ int main(int argc, char* argv[]) {
         check(!(s.width == 64 && s.height == 20), "不再回退成固有像素 64×20");
     }
 
-    qDebug() << "\n4) `<img src='wide' width='80px' height='80px'>`（C# 绝对像素尺寸）";
+    qDebug() << "\n4) 非整行像素高度必须向上覆盖（对齐 PX_NEWLINE）";
+    {
+        const ConsoleSpan s = spanOf(QStringLiteral("<img src='wide' width='80px' height='29px'>"));
+        check(s.height == 40 && s.rows == 2,
+              QString("29px / 20px 向上占 2 行，得到 height=%1 rows=%2")
+                  .arg(s.height).arg(s.rows));
+    }
+
+    qDebug() << "\n5) `<img src='wide' width='80px' height='80px'>`（C# 绝对像素尺寸）";
     {
         const ConsoleSpan s = spanOf(QStringLiteral("<img src='wide' width='80px' height='80px'>"));
         check(s.widthIsPixels && s.heightIsPixels, "px 单位被保留");

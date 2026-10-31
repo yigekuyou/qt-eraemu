@@ -337,6 +337,8 @@ TestCase {
                 verify(Math.abs(view.renderFontSize - fs) < 1e-9, "字号随窗口变了 @ " + tag);
                 verify(cols * cw <= st.w + 1e-6, "内容右缘越过舞台 @ " + tag);
                 verify(rows * ch <= st.h + 1e-6, "内容下缘越过舞台 @ " + tag);
+                verify(Math.abs(view.stageRows * ch - st.h) < 1e-6,
+                       "正文行覆盖完整舞台高度 @ " + tag);
             }
         }
     }
@@ -792,6 +794,32 @@ TestCase {
                    "image and source row use the same ListView origin after trimming");
         }
         backend.setMaxLog(5000);
+    }
+
+    // 同一 rect 内先画非按钮底图、再画按钮图片时，按钮命中区必须位于
+    // 底图之上；这是 FL3.8 肖像缩略图的实际 HTML 结构。
+    function test_overlappingThumbnailButtonWinsHitTest() {
+        backend.stageMode = false;
+        backend.clearAll();
+        consoleFixture.printHtml(backend,
+            "<div rect='0px,0px,80px,80px'><img src='offset_atlas' width='80px' height='80px'></div>"
+            + "<div rect='0px,0px,80px,80px'><button value='7'><img src='transparent' width='80px' height='80px'></button></div>");
+        backend.flush(); view.syncView();
+        consoleFixture.request(backend, "INPUT");
+        backend.flush(); view.syncView();
+        const base = view.blockAt(0, 0);
+        const button = view.blockAt(0, 1);
+        verify(base !== null && button !== null, "重叠缩略图区块存在");
+        compare(base.blockData.clickable, false);
+        compare(button.blockData.clickable, true);
+        verify(button.z > base.z, "按钮区块位于底图区块之上");
+        const spy = Qt.createQmlObject('import QtTest 1.0; SignalSpy {}', tc);
+        spy.target = backend;
+        spy.signalName = "inputSubmitted";
+        mouseClick(findChild(button, "blockButtonMouse"), button.width / 2, button.height / 2);
+        compare(spy.count, 1, "重叠图片上的按钮仍可点击");
+        compare(spy.signalArguments[0][0], 7);
+        spy.destroy();
     }
 
     function test_positionedThumbnailLayersDoNotWrap() {

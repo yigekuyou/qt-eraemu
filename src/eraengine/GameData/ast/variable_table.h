@@ -59,6 +59,12 @@ struct VariableDecl {
     bool        isPrivate = false;
     bool        isConst = false;
     bool        isArg = false;               // 来自 @F(A,B) 形参表
+    // `#DIM DYNAMIC`：C# 的 IsStatic=false —— 每次 CALL 都重新分配数组并写入
+    // 声明初值（LogicalLine.ScopeIn -> PrivateInt1DVariableToken.ScopeIn），
+    // RETURN 时恢复上一层。普通 `#DIM` / `#DIM STATIC` 则跨调用保留。
+    // FL3.8 的肖像缩略图排版把 COL/ROW 声明成 DYNAMIC：不重置就会把上一次
+    // 调用结束时的列号/行号带进下一次，缩略图整体错位（0,80,160 → 640,720,0…）。
+    bool        isDynamic = false;
     bool        isReference = false;         // #DIM(S) REF：调用方数组的别名
     bool        isCharaData = false;         // #DIM(S) CHARADATA：每角色一份
     bool        isSavedata = false;

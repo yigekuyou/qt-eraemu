@@ -1048,6 +1048,79 @@ int main(int argc, char* argv[]) {
         check(b.htmlIsland().isEmpty(), "clearAll 清屏同时清岛层（C# ClearDisplay）");
     }
 
+    // ---- 10. `<div rect>` 的像素左边界（不允许逐段取整累进）----
+    // FL3.8 肖像编辑器把 10 张 80px 缩略图整体放进一个 div：
+    //   `<div rect='{COL*80}px,{ROW*80}px,80px,80px'>`
+    // 若把每段的 division.x 单独 qRound(80/7) 成列，会得到
+    // 0,11,23,34,46,57 —— 第 10 张比真实位置少 3 格（21px）。
+    // 现在 flattenLine 直接给**累计像素** pxLeft，QML 只折回一次。
+    qDebug() << "\n10) HTML div 连续像素列（80px 缩略图不累进）";
+    {
+        ConsoleBackend c;
+        c.setFontSize(14);          // columnWidthPx() == 7
+        c.setLineHeight(14);
+        c.setGridColumns(226);
+        c.setGridRows(60);
+        QString html;
+        for (int col = 0; col < 10; ++col) {
+            html += QStringLiteral("<div rect='%1px,0px,80px,80px'>"
+                                   "<img src='thumb%2' width='80px' height='80px'>"
+                                   "</div>")
+                        .arg(col * 80).arg(col);
+        }
+        c.printTemplate(PrintTemplateCompiler::parseRuntimeMarkup(html));
+        c.flush();
+        const QVariantList blocks = c.lineBlocks(0);
+        QList<int> pxLefts;
+        for (const QVariant& v : blocks) {
+            const QVariantMap m = v.toMap();
+            if (m.value("kind").toString() != "image") continue;
+            pxLefts.append(m.value("pxLeft").toInt());
+        }
+        check(pxLefts.size() == 10,
+              QString("10 张缩略图都在同一行（实得 %1）").arg(pxLefts.size()));
+        QList<int> expected;
+        for (int col = 0; col < 10; ++col) expected.append(col * 80);
+        check(pxLefts == expected,
+              QString("pxLeft 是累计像素 0,80,...,720（实得 %1）")
+                  .arg([&] {
+                      QStringList s;
+                      for (int v : pxLefts) s << QString::number(v);
+                      return s.join(',');
+                  }()));
+        // 反证：旧的 col 口径会累进（0,11,23,34,46,57），必须与像素口径分离。
+        QList<int> cols;
+        for (const QVariant& v : blocks) {
+            const QVariantMap m = v.toMap();
+            if (m.value("kind").toString() != "image") continue;
+            cols.append(m.value("col").toInt());
+        }
+        // col 是「80px / 7px = 11.43」逐段取整后的列：步进 11/12 交替，
+        // 换算回像素会得到 0,77,161,238,… —— 与 pxLeft 的 0,80,160,240,… 不同。
+        // 这正是 QML 必须用 pxLeft（像素）而不是 col（量化列）的原因。
+        QList<int> colPx;
+        for (int c : cols) colPx.append(c * 7);
+        check(colPx != pxLefts,
+              QString("col × 列宽 != pxLeft（量化列 %1）")
+                  .arg([&] {
+                      QStringList s;
+                      for (int v : colPx) s << QString::number(v);
+                      return s.join(',');
+                  }()));
+        // 没有 div 定位的普通区块：pxLeft == -1（继续按网格列定位）。
+        ConsoleBackend d;
+        d.setFontSize(14);
+        d.setLineHeight(14);
+        d.setGridColumns(226);
+        d.setGridRows(60);
+        d.printTemplate(PrintTemplateCompiler::parseRuntimeMarkup(
+            QStringLiteral("<img src='plain' width='80px' height='80px'>")));
+        d.flush();
+        const QVariantMap plain = blockOf(d.lineBlocks(0), "plain");
+        check(!plain.isEmpty() && plain.value("pxLeft").toInt() == -1,
+              "非 div 区块 pxLeft == -1（走 col × 格宽）");
+    }
+
     qDebug() << "\n===================";
     if (g_failures == 0) {
         qDebug() << "[SUCCESS] console backend tests passed";

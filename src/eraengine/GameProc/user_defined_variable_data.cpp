@@ -89,9 +89,13 @@ UserDefinedVariableData UserDefinedVariableData::create(QString streamContent, b
 						data.isStatic = false;
 				} else if (keyword == "DYNAMIC") {
 						if (!isPrivate) throw std::runtime_error("全局变量不能指定 DYNAMIC");
+						// C# UserDefinedVariableData：DYNAMIC 与 STATIC 互斥，
+						// 且 IsStatic=false —— 进入函数时重新分配（ScopeIn）。
 						data.isStatic = false;
+						data.isDynamic = true;
 				} else if (keyword == "STATIC") {
 						data.isStatic = true;
+						data.isDynamic = false;
 				} else if (keyword == "CHARADATA") {
 						data.charaData = true;
 				} else if (keyword == "SAVEDATA") {

@@ -267,7 +267,10 @@ private:
 
     QList<LoopFrame> m_loops;
     // function 字段 → 被调段身份：同名 @F 的两段各自保存自己的 ARG/LOCAL 快照。
-    struct CallContext { int depth; int loops; eravar::ScopeId scope; VariableStorage::LocalContext locals; };
+    // dynamicScope：本次 CALL 是否压入了一层 `#DIM DYNAMIC` 私有变量快照
+    //（C# LogicalLine.ScopeIn/ScopeOut）。RETURN 时必须对同一层调用 leave，否则
+    // 递归/多层调用会留下错位的快照栈。
+    struct CallContext { int depth; int loops; eravar::ScopeId scope; VariableStorage::LocalContext locals; bool dynamicScope = false; };
     // 本轮挂起是否为「需要用户输入」的等待（AWAIT / TWAIT skip!=0 的纯计时不算，
     // 不发 inputRequested：C# InputType.Void 不是用户输入请求，UI 不显示）
     bool m_waitNotifiesUser = true;

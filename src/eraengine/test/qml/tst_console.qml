@@ -1636,4 +1636,50 @@ TestCase {
         verify(lv.atTail, "回到末尾");
     }
 
+    // ---------------------------------------------------------------------
+    // 运行期精灵「像素变了就重取」的接线（FL3.8 合成像 FACE_*）。
+    //
+    // provider 侧每次现读源 G 的最新像素，但 QQuickImageProvider 文档写明
+    // 「同一个 image:// URL 命中缓存后不再回调 provider」——URL 不变，Image
+    // 就不会再问。Image 没有 invalidate API，唯一手段是让 source 变一次。
+    //
+    // 曾经的写法是 `imageItem.source = ""` 再在 Qt.callLater 里用 Qt.binding
+    // 还原：卸载后 delegate 被模型刷新销毁 → 还原永不发生，合成像整块空白。
+    // 这里锁住新语义：source 的绑定**始终有效**，卸载只是一个布尔量的中间态，
+    // 翻回去时不需要任何人重新赋值。
+    function test_spriteImageReloadKeepsSourceBound() {
+        const blockComp = Qt.createComponent(
+            "file://" + consoleQmlPath.replace("Console.qml", "ConsoleBlock.qml"));
+        verify(blockComp.status === Component.Ready, blockComp.errorString());
+        const blk = blockComp.createObject(host, {
+            "blockData": ({ kind: "image", text: "FACE_0", col: 0, row: 0,
+                            cols: 1, rows: 1, pxLeft: 0, pxTop: 0,
+                            pxWidth: 200, pxHeight: 200 }),
+            "cellWidth": 7, "cellHeight": 20, "fontSize": 14
+        });
+        verify(blk !== null, "ConsoleBlock.qml 创建失败");
+
+        let img = null;
+        for (let i = 0; i < blk.children.length; ++i) {
+            if (blk.children[i].objectName === "blockImage")
+                img = blk.children[i];
+        }
+        verify(img !== null, "找到 blockImage");
+        compare(String(img.source), "image://emuera/FACE_0", "初次绑定到资源名");
+        verify(img.cache === false, "cache:false —— 重取才会真的回调 provider");
+
+        blk.imagesUnloaded = true;
+        compare(String(img.source), "", "卸载态：source 为空（一次真正的免缓存重取）");
+        blk.imagesUnloaded = false;
+        compare(String(img.source), "image://emuera/FACE_0",
+                "翻回来即恢复：绑定没被打断，不依赖任何回调再赋值");
+
+        // 资源名换了也要跟着变（绑定没被 source="" 打断的反证）
+        blk.blockData = { kind: "image", text: "FACE_1", col: 0, row: 0,
+                          cols: 1, rows: 1, pxLeft: 0, pxTop: 0,
+                          pxWidth: 200, pxHeight: 200 };
+        compare(String(img.source), "image://emuera/FACE_1", "换名跟随");
+        blk.destroy();
+    }
+
 }

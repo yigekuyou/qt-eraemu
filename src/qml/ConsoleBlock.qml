@@ -256,8 +256,22 @@ Item {
     }
 
     // C++ 在模型刷新完成时把「这一轮像素变了的精灵名」推过来（缓冲合并后只发一次）。
-    // Image 没有 invalidate API，唯一让已加载的图重新取的办法是重赋 source：
-    // 先卸载（""），下一帧还原（cache:false 保证真的回调 provider）。
+    //
+    // 为什么要「卸载再装」：Qt 文档 Image Caching 明确「同一个 image:// URL 命中
+    // 缓存后不再回调 provider」——provider 侧虽然每次现读源 G 的最新像素，
+    // 但 URL 没变，Image 就不会再问它。Image 没有 invalidate API，唯一可用的
+    // 手段是让 source 变一次（"" → 原 URL），配合 cache:false 真正回调 provider。
+    //
+    // 实现上**必须保持声明式，且不能依赖任何延迟还原**：
+    //   * 早期版本 `imageItem.source = ""` + Qt.callLater 里 Qt.binding 还原 ——
+    //     闭包所在 delegate 被模型刷新销毁后还原永不发生（合成像整块空白）；
+    //   * 改成「布尔量 + Timer 跨帧还原」仍然错：模型刷新期间信号连续到来，
+    //     restart() 不断重置计时器，source 就永久停在 ""（整页缩略图全空）。
+    // 现在只在同一个 tick 内翻转两次布尔量：source 的绑定始终有效，卸载与装回
+    // 之间没有任何窗口期可以被打断，也就没有「卡在空图」的状态。
+    // QQuickImageSource 收到 "" 会 resetSource()，紧随其后的 URL 赋值因此一定
+    // 被当作「改了 URL」→ 重新加载；配 cache:false 必然真正回调 provider。
+    property bool imagesUnloaded: false
     Connections {
         target: backend
         function onSpriteImagesChanged(names) {
@@ -265,19 +279,8 @@ Item {
             const n1 = block.blockData.text
             const n2 = block.blockData.imageButton
             if (names.length > 0 && names.indexOf(n1) < 0 && names.indexOf(n2) < 0) return
-            imageItem.source = ""
-            imageItemB.source = ""
-            // 缓冲同步：下一帧再还原。还原前必须重新确认 item 还活着 ——
-            // 模型刷新会销毁重建 delegate，闭包里抓到的可能是已销毁对象；
-            // 同时只在仍为空时还原，避免两次信号叠加把已重载的 source 再打空。
-            // 还原时用 Qt.binding 重新建立绑定：直接赋值 imageUrl 会把
-            // `source: imageUrl` 的绑定打断，之后 blockData 换名字图就不跟着变了。
-            Qt.callLater(function() {
-                if (imageItem && imageItem.source === "")
-                    imageItem.source = Qt.binding(function() { return imageItem.imageUrl })
-                if (imageItemB && imageItemB.source === "")
-                    imageItemB.source = Qt.binding(function() { return imageItemB.imageButtonUrl })
-            })
+            block.imagesUnloaded = true
+            block.imagesUnloaded = false
         }
     }
 
@@ -294,7 +297,8 @@ Item {
         readonly property string imageButtonUrl: (block.kind === "image" && visible
                                                   && block.blockData && block.blockData.imageButton)
                                                  ? ("image://emuera/" + encodeURIComponent(block.blockData.imageButton)) : ""
-        source: imageButtonUrl
+        // imagesUnloaded = 本帧被要求重新取图（见上）；绑定本身永远不断。
+        source: block.imagesUnloaded ? "" : imageButtonUrl
         // 运行期精灵的像素会随合成变化（FL3.8 FACE_*），不能吃 URL 级 pixmap 缓存：
         // 文档（Image Caching）：cache=false 时每次都回调 provider。
         cache: false
@@ -321,7 +325,7 @@ Item {
         readonly property string imageUrl: (block.kind === "image" && visible
                                             && block.blockData && block.blockData.text)
                                            ? ("image://emuera/" + encodeURIComponent(block.blockData.text)) : ""
-        source: imageUrl
+        source: block.imagesUnloaded ? "" : imageUrl
         cache: false
         // ConsoleLayout supplies grid dimensions.  Keep the Image item at the
         // same size as its span so a loaded resource cannot paint into the

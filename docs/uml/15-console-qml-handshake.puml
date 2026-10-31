@@ -89,6 +89,11 @@ note over C,V
   `#DIM DYNAMIC` 私有变量在 CALL 入口保存槽位值与“键是否存在”
   两个状态，再写入声明初值；RETURN 按存在标记恢复或删除，空数组
   不能被误判为不存在，递归调用按栈层配对。`#DIM STATIC` 不走此重置路径。
+  `spriteImagesChanged(names)` 是像素更新通知，不等同于模型重建：
+  GraphicsStore 在一轮 G 绘制后合并脏精灵名，ConsoleBlock 在同一 tick
+  内通过 `imagesUnloaded` 翻转 source，保持声明式绑定不断开；`cache:false`
+  让 image provider 重新取图。`diagBlocks` 的 QML 委托诊断只在有 GUI/window
+  时执行，无 GUI 宿主仍保留 C++ 区块诊断而不解引用空应用。
   运行期精灵在源 G 存在时读取 G 的最新合成像素；G 销毁时把销毁瞬间的
   当前像素冻结到精灵快照，之后 image provider 仍能按名称取图，避免先用透明
   dummy 建精灵、再用 GDRAWSPRITE 合成后因释放 G 而丢失整张图。QML 收到

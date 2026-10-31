@@ -59,6 +59,10 @@ public Q_SLOTS:  // ---- 检查 ----
     QString diagBlocks();                 // 诊断：颜色/字体/区块数据（临时）
     QString listButtons();                // 当前屏的按钮值（输入候选）
     QString saveScreenshot(const QString& path);  // 保存当前画面，返回结果说明
+    // 诊断：把运行期精灵（SPRITECREATE 的图，如 FL3.8 合成像 FACE_*）当前的
+    // 像素直接落盘。用来区分「provider 抓到的是透明/纯黑像素」与
+    // 「QML 侧没画/被裁掉」——窗口截图两者都会空。
+    QString saveSpriteImage(const QString& name, const QString& path);
     // 诊断专用：像用户拖拽一样改变顶层窗口尺寸（不经过 WindowController，
     // 因此可用于验证「任意窗口尺寸下网格/字号自适应」）。返回实际几何。
     QString resizeWindow(int width, int height);

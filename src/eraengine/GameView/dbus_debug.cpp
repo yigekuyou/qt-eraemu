@@ -31,6 +31,7 @@
 #include <QGuiApplication>
 #include <QLoggingCategory>
 #include <QQuickItem>
+#include <functional>
 #include <QQuickWindow>
 #include <QUrl>
 
@@ -222,6 +223,90 @@ QString EraDBusDebug::diagBlocks() {
         if (m.value(QStringLiteral("kind")).toString() != QLatin1String("text"))
             dump(i, m);
     }
+    // QML 侧真相：每个图片委托（blockImage / blockImageButton）实际拿到的
+    // source / status / 几何。C++ 只能证明「provider 有像素」，证明不了
+    // 「Image 元素有没有加载、放到了哪里」——两者要分开看。
+    // 诊断接口也可由无 GUI 的 test_cli/DBus 宿主调用；没有应用或窗口时，
+    // C++ 区块诊断仍应返回，QML 侧诊断只跳过，不能解引用空 instance。
+    QGuiApplication* app = qobject_cast<QGuiApplication*>(QCoreApplication::instance());
+    if (app && !app->allWindows().isEmpty()) {
+        if (QQuickWindow* qw = qobject_cast<QQuickWindow*>(app->allWindows().value(0))) {
+            if (const QObject* root = qw->findChild<QObject*>(QStringLiteral("consoleRoot"))) {
+            out << QStringLiteral("qmlBlocks=%1 stageStart=%2 stageMode=%3 stageImageBlocks=%4")
+                       .arg(root->findChildren<QObject*>(QStringLiteral("consoleBlock")).size())
+                       .arg(c->stageStart())
+                       .arg(c->stageMode())
+                       .arg(c->stageImageBlocks().size());
+            // 只列「合成像」这类带 ypos 的图（top != 0）：缩略图每屏几十张，
+            // 全列会把诊断刷成一片噪声。
+            for (const QVariant& v : c->stageImageBlocks()) {
+                const QVariantMap m = v.toMap();
+                if (m.value(QStringLiteral("pxTop")).toInt() == 0) continue;
+                out << QStringLiteral("  stageImg name=%1 srcRow=%2 px=%3 top=%4")
+                           .arg(m.value(QStringLiteral("text")).toString())
+                           .arg(m.value(QStringLiteral("sourceRow")).toInt())
+                           .arg(m.value(QStringLiteral("pxLeft")).toInt())
+                           .arg(m.value(QStringLiteral("pxTop")).toInt());
+            }
+            for (const QString& viewName : {QStringLiteral("consoleListView"),
+                                            QStringLiteral("consoleStageView"),
+                                            QStringLiteral("stageImageLayer")}) {
+                const auto* v = root->findChild<QQuickItem*>(viewName);
+                if (!v) { out << QStringLiteral("view %1: <missing>").arg(viewName); continue; }
+                out << QStringLiteral("view %1 count=%2 children=%3 visible=%4 wh=%5x%6")
+                           .arg(viewName)
+                           .arg(v->property("count").toInt())
+                           .arg(v->childItems().size())
+                           .arg(v->isVisible())
+                           .arg(v->width(), 0, 'f', 1)
+                           .arg(v->height(), 0, 'f', 1);
+            }
+            // 注意：ListView/Repeater 的 delegate **不是** root 的 QObject 子对象
+            // （findChildren 找不到），只能沿 childItems() 递归遍历。
+            QStringList imgs;
+            int blockCount = 0;
+            std::function<void(QQuickItem*, int)> walk = [&](QQuickItem* item, int depth) {
+                if (!item || depth > 20) return;
+                if (item->objectName() == QLatin1String("consoleBlock")) {
+                    ++blockCount;
+                    const QVariantMap data = item->property("blockData").toMap();
+                    if (data.value(QStringLiteral("kind")).toString() == QLatin1String("image")) {
+                        const QPointF scenePos = item->mapToScene(QPointF(0, 0));
+                        QString desc = QStringLiteral("  img name=%1 xy=%2,%3 wh=%4x%5 vis=%6 scene=%7,%8 swh=%9x%10")
+                                           .arg(data.value(QStringLiteral("text")).toString())
+                                           .arg(item->x(), 0, 'f', 0).arg(item->y(), 0, 'f', 0)
+                                           .arg(item->width(), 0, 'f', 0)
+                                           .arg(item->height(), 0, 'f', 0)
+                                           .arg(item->isVisible())
+                                           .arg(scenePos.x(), 0, 'f', 0).arg(scenePos.y(), 0, 'f', 0)
+                                           .arg(item->width() * item->scale() * 1.0, 0, 'f', 0)
+                                           .arg(item->height(), 0, 'f', 0);
+                        const QQuickItem* imgItem = nullptr;
+                        for (QQuickItem* c : item->childItems()) {
+                            if (c->objectName() == QLatin1String("blockImage")) imgItem = c;
+                        }
+                        if (imgItem) {
+                            desc += QStringLiteral(" src=%1 status=%2 iwh=%3x%4")
+                                        .arg(imgItem->property("source").toUrl().toString())
+                                        .arg(imgItem->property("status").toInt())
+                                        .arg(imgItem->property("implicitWidth").toDouble(), 0, 'f', 0)
+                                        .arg(imgItem->property("implicitHeight").toDouble(), 0, 'f', 0);
+                        } else {
+                            desc += QStringLiteral(" src=<no blockImage>");
+                        }
+                        imgs << desc;
+                    }
+                }
+                for (QQuickItem* child : item->childItems()) walk(child, depth + 1);
+            };
+            if (auto* contentItem = qobject_cast<QQuickItem*>(qw->contentItem()))
+                walk(contentItem, 0);
+            out << QStringLiteral("qmlImageBlocks=%1 consoleBlocksSeen=%2")
+                       .arg(imgs.size()).arg(blockCount);
+                out << imgs.join(QLatin1Char('\n'));
+            }
+        }
+    }
     // 运行期精灵诊断：FACE_* 等名称来自 SPRITECREATE，不能只看静态资源表。
     // 同时报告像素尺寸和 alpha，区分“QML 没有 delegate”与“精灵本身为空/透明”。
     for (const QVariant& v : blocks) {
@@ -248,6 +333,26 @@ QString EraDBusDebug::diagBlocks() {
         }
     }
     return out.join(QLatin1Char('\n'));
+}
+
+QString EraDBusDebug::saveSpriteImage(const QString& name, const QString& path) {
+    const QImage image = GraphicsStore::spriteImage(name);
+    if (image.isNull()) return QStringLiteral("no such sprite: %1").arg(name);
+    if (!image.save(path)) return QStringLiteral("save failed: %1").arg(path);
+    // 顺带报像素统计：不透明像素数 / 纯黑像素数，一眼看出「有内容但是黑的」。
+    const QImage argb = image.convertToFormat(QImage::Format_ARGB32);
+    qint64 opaque = 0, black = 0;
+    for (int y = 0; y < argb.height(); ++y) {
+        const auto* line = reinterpret_cast<const QRgb*>(argb.constScanLine(y));
+        for (int x = 0; x < argb.width(); ++x) {
+            const QRgb p = line[x];
+            if (qAlpha(p) == 0) continue;
+            ++opaque;
+            if ((p & 0x00ffffff) == 0) ++black;
+        }
+    }
+    return QStringLiteral("saved %1 (%2x%3) opaque=%4 black=%5")
+        .arg(path).arg(image.width()).arg(image.height()).arg(opaque).arg(black);
 }
 
 QString EraDBusDebug::listButtons() {

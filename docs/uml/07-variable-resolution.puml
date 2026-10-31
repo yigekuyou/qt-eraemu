@@ -34,5 +34,14 @@ legend right
 
   `readIntByName` and `writeIntByName` consume the same resolved
   locus. Storage shape and address geometry are outside this diagram.
+
+  CSV name resolution has a separate final lookup in ConstantTable:
+  core mappings (FLAG, STR -> STRNAME, etc.) win first, then registered
+  EE mappings (for example DAY -> DAY.CSV), and only then an EE-style
+  user-variable fallback can use an already loaded CSV whose basename is
+  the variable name. This fallback is a name-table lookup only; this layer
+  does not claim ERD loading or multi-dimensional user-variable support.
+  A missing table or missing name returns -1 and normal numeric indices are
+  unaffected.
 endlegend
 @enduml

@@ -80,6 +80,21 @@ QString EraDBusDebug::state() {
         .arg(table ? table->depth() : -1);
 }
 
+QString EraDBusDebug::stack() {
+    if (!m_engine) return QStringLiteral("no engine");
+    const auto* state = m_engine->getProcessState();
+    if (!state) return QStringLiteral("no process state");
+    const QList<CalledFunction> frames = state->functionStack();
+    QString out;
+    QTextStream ts(&out);
+    ts << QStringLiteral("frames=%1").arg(frames.size());
+    // 自底向上：#0 = 帧底（系统层进来的那个函数），最后一帧 = 当前执行处。
+    for (int i = 0; i < frames.size(); ++i)
+        ts << QStringLiteral("\n#%1 %2 (%3)").arg(i).arg(frames.at(i).getLabelName(),
+                                                         frames.at(i).getPosition().toString());
+    return out;
+}
+
 QString EraDBusDebug::consoleStats() {
     if (!m_engine || !m_engine->getConsole()) return QStringLiteral("no console");
     const auto* c = m_engine->getConsole();
@@ -184,37 +199,43 @@ QString EraDBusDebug::evalVar(const QString& text) {
     const QString name = text.trimmed();
     // 声明标志位（1=整型 2=字符串 4=常量 8=二维 16=三维；0=不存在）
     ts << QStringLiteral("flags=%1 ").arg(table->variableFlags(name));
-    // 与 GETVAR 同一条路径：收尾（markLoadComplete）之后仍可解析，
-    // 且不做 #DIM CONST 折叠 —— 下标里的常量名（FLCONFIG:BGMの音量）才解得开。
-    const QSharedPointer<ExpressionNode> ast = table->runtimeVariableReference(name);
-    if (!ast) {
-        ts << QStringLiteral("not-a-variable");
-        return out;
-    }
-    // 必须用**引擎自己那个**求值器：它被注入了常数表/名表 provider
-    // （eraengine.cpp 的 setExpressionEvaluator 装配）。临时构造的
-    // ExpressionEvaluator 没有这些 provider，`#DIM CONST` 一律读成 0
-    // —— 会把「常量=300」误报成 0，取证结论完全失效。
-    ExpressionEvaluator* ev = m_engine->getExpressionEvaluator();
-    if (!ev) return QStringLiteral("no evaluator");
-    const QVariant v = ev->evaluate(*ast, storage, m_engine->gameBaseData(), eravar::kGlobalScope);
-    switch (v.typeId()) {
-    case QMetaType::QString:
-        ts << QStringLiteral("str=\"%1\"").arg(v.toString());
-        break;
-    case QMetaType::Double:
-        ts << QStringLiteral("real=%1").arg(v.toDouble());
-        break;
-    case QMetaType::LongLong:
-    case QMetaType::Int:
-        ts << QStringLiteral("int=%1").arg(v.toLongLong());
-        break;
-    case QMetaType::Bool:
-        ts << QStringLiteral("bool=%1").arg(v.toBool() ? 1 : 0);
-        break;
-    default:
-        ts << QStringLiteral("invalid/null (%1)").arg(v.typeName() ? v.typeName() : "?");
-        break;
+    try {
+        // 与 GETVAR 同一条路径：收尾（markLoadComplete）之后仍可解析，
+        // 且不做 #DIM CONST 折叠 —— 下标里的常量名（FLCONFIG:BGMの音量）才解得开。
+        const QSharedPointer<ExpressionNode> ast = table->runtimeVariableReference(name);
+        if (!ast) {
+            ts << QStringLiteral("not-a-variable");
+            return out;
+        }
+        // 必须用**引擎自己那个**求值器：它被注入了常数表/名表 provider
+        // （eraengine.cpp 的 setExpressionEvaluator 装配）。临时构造的
+        // ExpressionEvaluator 没有这些 provider，`#DIM CONST` 一律读成 0
+        // —— 会把「常量=300」误报成 0，取证结论完全失效。
+        ExpressionEvaluator* ev = m_engine->getExpressionEvaluator();
+        if (!ev) return QStringLiteral("no evaluator");
+        const QVariant v = ev->evaluate(*ast, storage, m_engine->gameBaseData(), eravar::kGlobalScope);
+        switch (v.typeId()) {
+        case QMetaType::QString:
+            ts << QStringLiteral("str=\"%1\"").arg(v.toString());
+            break;
+        case QMetaType::Double:
+            ts << QStringLiteral("real=%1").arg(v.toDouble());
+            break;
+        case QMetaType::LongLong:
+        case QMetaType::Int:
+            ts << QStringLiteral("int=%1").arg(v.toLongLong());
+            break;
+        case QMetaType::Bool:
+            ts << QStringLiteral("bool=%1").arg(v.toBool() ? 1 : 0);
+            break;
+        default:
+            ts << QStringLiteral("invalid/null (%1)").arg(v.typeName() ? v.typeName() : "?");
+            break;
+        }
+    } catch (const std::exception& e) {
+        return QStringLiteral("evaluation-error: %1").arg(QString::fromUtf8(e.what()));
+    } catch (...) {
+        return QStringLiteral("evaluation-error: unknown exception");
     }
     return out;
 }

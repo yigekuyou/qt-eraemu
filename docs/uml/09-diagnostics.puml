@@ -70,6 +70,22 @@ note right of ParseDiagnostics
   a fragment (a lone `</font>` appended by `+=`) is unbalanced by itself.
 end note
 
+package "Runtime diagnostics" {
+  class EraDBusDebug {
+    + evalVar(text) : QString
+  }
+}
+
+note right of EraDBusDebug
+  evalVar is a read-only diagnostic path. It trims one variable expression,
+  reports declaration flags, then uses EraParseTable::runtimeVariableReference
+  and the engine-owned ExpressionEvaluator. It may be called after loading;
+  missing engine/table/storage/evaluator returns a status string. Invalid
+  names, bad indices, and evaluator exceptions are returned as diagnostic
+  text, so the debug slot does not turn a probe failure into a process crash.
+  This is a host/debug capability and does not change script semantics.
+end note
+
 legend bottom
   This diagram describes ownership, ordered pass execution and replacement
   boundaries. The content of each check is 10-static-checks.

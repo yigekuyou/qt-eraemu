@@ -134,6 +134,40 @@ int main(int argc, char* argv[]) {
     check(ct2.indexForVariable(QStringLiteral("STR"), QStringLiteral("\u540d6001")) == -1,
           "无 StrName.csv 时 STR:名 不可解析（返回 -1）");
 
+    // ---- 4) EE 用户变量 CSV 查表层及保留名表边界 -----------------------------
+    // EmueraEM+EE 文档把“ERH 中声明的一维变量 + 变量名.csv”定义为完整
+    // 功能；本测试只覆盖 ConstantTable 的最后一级查表层，因为它不持有
+    // VariableTable，不能单独证明声明来源或维数限制。核心/扩展显式映射
+    // 必须优先，保留的 _*.csv 不进入名表。
+    qDebug() << "\n4) EE 用户变量同名 CSV 兜底";
+    QTemporaryDir tmp3;
+    if (!tmp3.isValid()) {
+        qDebug() << "  [FAIL] 无法创建临时目录";
+        return 1;
+    }
+    const QString csvDir3 = tmp3.path();
+    const bool okWrite3 =
+        writeFile(QDir(csvDir3).filePath(QStringLiteral("FLCONFIG.csv")),
+                  QStringLiteral("101,BGM音量\n102,SE音量\n"))
+        && writeFile(QDir(csvDir3).filePath(QStringLiteral("_Rename.csv")),
+                     QStringLiteral("1,不要作为名表\n"))
+        && writeFile(QDir(csvDir3).filePath(QStringLiteral("CFLAG.csv")),
+                     QStringLiteral("0,核心零\n1,核心一\n"));
+    check(okWrite3, "写入用户变量、保留文件和核心同名 CSV");
+
+    ConstantTable ct3;
+    ct3.loadCsvDirectory(csvDir3, false);
+    check(ct3.indexForVariable(QStringLiteral("FLCONFIG"), QStringLiteral("BGM音量")) == 101,
+          "EE 用户变量名 == CSV 文件名时可解析字符串下标");
+    check(ct3.indexForVariable(QStringLiteral("FLCONFIG"), QStringLiteral("SE音量")) == 102,
+          "EE 用户变量第二个名称保持声明行号");
+    check(ct3.indexForVariable(QStringLiteral("FLCONFIG"), QStringLiteral("不要作为名表")) == -1,
+          "_Rename.csv 等保留文件不参与用户变量名表");
+    check(ct3.indexForVariable(QStringLiteral("CFLAG"), QStringLiteral("核心一")) == 1,
+          "核心变量映射优先于同名用户 CSV 兜底");
+    check(ct3.indexForVariable(QStringLiteral("NO_SUCH_VARIABLE"), QStringLiteral("BGM音量")) == -1,
+          "无同名 CSV 的普通变量不会借用其他表");
+
     qDebug() << "\n==============================";
     if (g_failures == 0) {
         qDebug() << "[SUCCESS] CSV 名表 / STR 测试通过";

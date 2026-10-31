@@ -22,6 +22,9 @@
 #include "eraengine_log.h"
 #include "graphics_store.h"
 #include "audio_pipeline_pool.h"
+#include "era_parse_table.h"
+#include "expression_evaluator.h"
+#include "variable_storage.h"
 
 #ifdef EMUERA_HAS_DBUS
 #include <QDBusConnection>
@@ -168,6 +171,51 @@ QString EraDBusDebug::diagAudio() {
               .arg(audio->activeChannels())
               .arg(audio->totalPipelines());
     ts << QStringLiteral("soundDirectory=%1").arg(audio->soundDirectory());
+    return out;
+}
+
+QString EraDBusDebug::evalVar(const QString& text) {
+    QString out;
+    QTextStream ts(&out);
+    if (!m_engine) return QStringLiteral("no engine");
+    EraParseTable* table = m_engine->getParseTable();
+    VariableStorage* storage = m_engine->getVariableStorage();
+    if (!table || !storage) return QStringLiteral("engine not ready");
+    const QString name = text.trimmed();
+    // 声明标志位（1=整型 2=字符串 4=常量 8=二维 16=三维；0=不存在）
+    ts << QStringLiteral("flags=%1 ").arg(table->variableFlags(name));
+    // 与 GETVAR 同一条路径：收尾（markLoadComplete）之后仍可解析，
+    // 且不做 #DIM CONST 折叠 —— 下标里的常量名（FLCONFIG:BGMの音量）才解得开。
+    const QSharedPointer<ExpressionNode> ast = table->runtimeVariableReference(name);
+    if (!ast) {
+        ts << QStringLiteral("not-a-variable");
+        return out;
+    }
+    // 必须用**引擎自己那个**求值器：它被注入了常数表/名表 provider
+    // （eraengine.cpp 的 setExpressionEvaluator 装配）。临时构造的
+    // ExpressionEvaluator 没有这些 provider，`#DIM CONST` 一律读成 0
+    // —— 会把「常量=300」误报成 0，取证结论完全失效。
+    ExpressionEvaluator* ev = m_engine->getExpressionEvaluator();
+    if (!ev) return QStringLiteral("no evaluator");
+    const QVariant v = ev->evaluate(*ast, storage, m_engine->gameBaseData(), eravar::kGlobalScope);
+    switch (v.typeId()) {
+    case QMetaType::QString:
+        ts << QStringLiteral("str=\"%1\"").arg(v.toString());
+        break;
+    case QMetaType::Double:
+        ts << QStringLiteral("real=%1").arg(v.toDouble());
+        break;
+    case QMetaType::LongLong:
+    case QMetaType::Int:
+        ts << QStringLiteral("int=%1").arg(v.toLongLong());
+        break;
+    case QMetaType::Bool:
+        ts << QStringLiteral("bool=%1").arg(v.toBool() ? 1 : 0);
+        break;
+    default:
+        ts << QStringLiteral("invalid/null (%1)").arg(v.typeName() ? v.typeName() : "?");
+        break;
+    }
     return out;
 }
 

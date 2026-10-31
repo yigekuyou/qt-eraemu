@@ -254,7 +254,20 @@ QString ConstantTable::coreCsvForVariable(const QString& variableName) {
     return map.value(variableName.toUpper());
 }
 
-// 合并查表：原生优先（核心不得被扩展改写），其次扩展名表映射。
+// 合并查表：原生优先（核心不得被扩展改写），其次扩展名表映射，
+// 最后是**用户变量**的兜底：CSV 文件名 == 变量名（大小写不敏感）。
+//
+// 为什么需要这条兜底：`#DIM SAVEDATA FLCONFIG, 300` 这类**用户自定义数组**
+// 的要素名由 CSV/FLconfig.CSV 定义（101=BGMの音量、102=SEの音量…），
+// 而 C# 的 ConstantData 只登记内建 VariableCode，靠 EmueraEM+EE 的
+// 「CSV 文件名即变量名」约定接上用户变量。缺这条兜底时：
+//   * `FLCONFIG:BGMの音量` 的下标既不是数字也不是已登记关键词，
+//     被当成**普通变量名**求值 -> Unknown -> 整型全局 -> 永远 0；
+//   * 于是 @INIT_CONFIG_FLCONFIG 里几十条 `FLCONFIG:xx = n` 全写到下标 0，
+//     最后一次写入再把它盖成 0；`SETBGMVOLUME FLCONFIG:BGMの音量` 读到的
+//     也是 0 -> 游戏在跑、音乐管线在跑，但音量 0 = 用户听不见声音；
+//   * `GETNUM(FLCONFIG, "BGMの音量")` 返回 -1（配置页 [変更] 按钮值变成 -1）。
+// 这条兜底只在本表里**确实存在**同名 CSV 时生效，不会把普通变量误判成关键词表。
 QString ConstantTable::csvForVariable(const QString& variableName) {
     const QString core = coreCsvForVariable(variableName);
     if (!core.isEmpty()) return core;
@@ -264,7 +277,24 @@ QString ConstantTable::csvForVariable(const QString& variableName) {
 }
 
 int ConstantTable::indexForVariable(const QString& variableName, const QString& name) const {
-    const QString csv = csvForVariable(variableName);
+    QString csv = csvForVariable(variableName);
+    if (csv.isEmpty()) {
+        // 用户变量兜底：CSV 文件名 == 变量名（大小写不敏感）。
+        // `#DIM SAVEDATA FLCONFIG, 300` 的要素名由 CSV/FLconfig.CSV 定义
+        // （101=BGMの音量、102=SEの音量…）。C# 的 ConstantData 只登记内建
+        // VariableCode，用户变量靠 EmueraEM+EE 的「CSV 名即变量名」约定接上；
+        // 缺这条兜底时 `FLCONFIG:BGMの音量` 的下标既不是数字也不是已登记关键词，
+        // 会被当成**普通变量名**求值（Unknown -> 整型全局 -> 恒 0）：
+        //   * @INIT_CONFIG_FLCONFIG 里几十条 `FLCONFIG:xx = n` 全写进下标 0，
+        //     最后一次写入再把它盖掉；`SETBGMVOLUME FLCONFIG:BGMの音量` 读到的
+        //     同样是 0 —— 音乐管线在跑、解码在跑，音量 0 = 听不见；
+        //   * `GETNUM(FLCONFIG, "BGMの音量")` 返回 -1（配置页 [変更] 按钮值 -1）。
+        // 只在**本表确实存在同名 CSV** 时生效，不会把普通变量误判成关键词表。
+        const QString userKey = tableKeyOf(variableName);
+        if (!userKey.isEmpty() && !userKey.startsWith(QLatin1Char('_'))
+            && m_tables.contains(userKey))
+            csv = userKey;
+    }
     if (csv.isEmpty()) return -1;
     return indexOf(csv, name);
 }

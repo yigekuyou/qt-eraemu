@@ -65,6 +65,11 @@ public Q_SLOTS:  // ---- 检查 ----
     // （pw-top / parec 抓 sink monitor 的 RMS）对起来 —— 模型说在播而
     // RMS=0，就只剩「音量被设成 0」或「解码出来是静音」两种可能。
     QString diagAudio();
+    // 诊断：按**变量项文本**取值（与 GETVAR 同一条运行期解析路径
+    // EraParseTable::runtimeVariableReference + ExpressionEvaluator）。
+    // 只读、不执行脚本 —— 用来回答「这个值现在到底是多少」，
+    // 例如 LASTLOAD_VERSION / FLCONFIG:BGMの音量。附带声明标志位。
+    QString evalVar(const QString& text);
     QString listButtons();                // 当前屏的按钮值（输入候选）
     QString saveScreenshot(const QString& path);  // 保存当前画面，返回结果说明
     // 诊断：把运行期精灵（SPRITECREATE 的图，如 FL3.8 合成像 FACE_*）当前的

@@ -1,0 +1,160 @@
+;=============================================================
+; 组 41 —— 数组指令 × 系统数组（RESULT / RESULTS / LOCAL / LOCALS）
+;
+; 原型（FL3.8 ERB/SYSTEM/LIBRARY/WindowDrawer.ERB 的窗口列表）：
+;   ARRAYCOPY "arrWndIdList", "RESULT"
+;   ARRAYSHIFT RESULT, 1, 0      ; 头部腾一格放"个数"
+;   RESULT:0 = nIdx
+;   ...
+;   ARRAYCOPY "RESULT", "arrDisplayPriority"
+;   ARRAYSHIFT arrDisplayPriority, -1, -1
+;
+; 此前 ARRAYSHIFT / ARRAYREMOVE / ARRAYSORT 一律走裸槽位读写
+; （get/setGlobalInt1D）。而系统数组有自己的存储槽
+; （RESULT → m_result、RESULTS → m_stringSlots、LOCAL → m_localIntVars、
+;   ARGS → m_argStrVars …），于是指令"成功"了却写进**同名的影子容器**，
+; 读的人（求值器走 getSystemVariable / getLocalInt …）什么也看不见：
+;   * ARRAYSHIFT RESULT 整条丢失 → 列表整体错位一位 → 尾部那个陈旧的 -1
+;     被当成窗口号 → THROW「ウィンドウ（nWndId=-1）は未生成です」
+;     （表现：商店界面一画就 Error 停住）
+;   * LOCAL / ARG 更彻底：它们不在 sysvar::systemStorageNames() 里
+;     （装载期分成独立的 LocalSlot/ArgSlot 类别），连分派都不进 → 空操作
+;
+; 本组钉住修好后的行为：三个指令对系统数组与用户数组**同一条语义**。
+;
+; 注：GETTEXTSIZE 不在本组 —— 核对 EE readme 后确认它是 GETTEXTBOX 的笔误，
+;     EE/Emuera 都没有这个命令（真命令是 GGETTEXTSIZE 文本测量），已从核心表撤回。
+;=============================================================
+@TEST_ARRAY_SYS
+#DIM RET
+
+RET = 0
+
+;---- 1) RESULT（m_result）：右移一格 + 头部放"个数" ----
+RESULT:0 = 0
+RESULT:1 = 1
+RESULT:2 = 2
+RESULT:3 = 3
+RESULT:4 = -1
+ARRAYSHIFT RESULT, 1, 0
+RESULT:0 = 4
+CALL ASSERT_EQ, RESULT:0, 4, "RESULT:0 = 个数（C# 的既有写法）"
+RET += RESULT
+CALL ASSERT_EQ, RESULT:1, 0, "ARRAYSHIFT RESULT,1,0 -> RESULT:1 是原来的 0（旧实现这里是 1）"
+RET += RESULT
+CALL ASSERT_EQ, RESULT:2, 1, "RESULT:2 是原来的 1"
+RET += RESULT
+CALL ASSERT_EQ, RESULT:3, 2, "RESULT:3 是原来的 2"
+RET += RESULT
+CALL ASSERT_EQ, RESULT:4, 3, "RESULT:4 是原来的 3"
+RET += RESULT
+CALL ASSERT_EQ, RESULT:5, -1, "尾部 -1 仍在列表末尾（不再被顶到有效位）"
+RET += RESULT
+
+;---- 2) RESULT 左移（空位填默认值 -1）----
+ARRAYSHIFT RESULT, -1, -1
+CALL ASSERT_EQ, RESULT:0, 0, "ARRAYSHIFT RESULT,-1,-1 -> RESULT:0 是原来的 1"
+RET += RESULT
+CALL ASSERT_EQ, RESULT:3, 3, "RESULT:3 是原来的 4"
+RET += RESULT
+CALL ASSERT_EQ, RESULT:4, -1, "左移的空位填 -1"
+RET += RESULT
+
+;---- 3) ARRAYREMOVE / ARRAYSORT 也走同一条通道 ----
+RESULT:0 = 7
+RESULT:1 = 8
+RESULT:2 = 9
+ARRAYREMOVE RESULT, 1, 1
+CALL ASSERT_EQ, RESULT:0, 7, "ARRAYREMOVE RESULT,1,1 -> RESULT:0 不变"
+RET += RESULT
+CALL ASSERT_EQ, RESULT:1, 9, "ARRAYREMOVE RESULT,1,1 -> RESULT:1 是原来的 2"
+RET += RESULT
+RESULT:0 = 30
+RESULT:1 = 10
+RESULT:2 = 20
+ARRAYSORT RESULT, FORWARD, 0, 3
+CALL ASSERT_EQ, RESULT:0, 10, "ARRAYSORT RESULT,FORWARD,0,3 -> 升序首位"
+RET += RESULT
+CALL ASSERT_EQ, RESULT:2, 30, "ARRAYSORT RESULT,FORWARD,0,3 -> 升序末位"
+RET += RESULT
+
+;---- 4) RESULTS（字符串系统数组）----
+RESULTS:0 '= "ra"
+RESULTS:1 '= "rb"
+RESULTS:2 '= "rc"
+ARRAYSHIFT RESULTS, 1, ""
+CALL ASSERT_SEQ, RESULTS:0, "", "ARRAYSHIFT RESULTS,1,\"\" -> 槽 0 是空串"
+RET += RESULT
+CALL ASSERT_SEQ, RESULTS:1, "ra", "RESULTS:1 是原来的 0"
+RET += RESULT
+CALL ASSERT_SEQ, RESULTS:2, "rb", "RESULTS:2 是原来的 1"
+RET += RESULT
+
+;---- 5) LOCAL（m_localIntVars）：必须进分派，不再空操作 ----
+CALL FN_SHIFT_LOCAL
+CALL ASSERT_EQ, RESULT, 1, "ARRAYSHIFT/ARRAYREMOVE LOCAL 落在 m_localIntVars 上"
+RET += RESULT
+
+;---- 6) LOCALS（m_localStrVars）：字符串槽位系统数组 ----
+CALL FN_SHIFT_LOCALS
+CALL ASSERT_EQ, RESULT, 1, "ARRAYSHIFT LOCALS 落在 m_localStrVars 上"
+RET += RESULT
+
+RETURN RET
+
+;=============================================================
+; LOCAL 组：**不能有 #DIM**（#DIM 局部就是 LOCAL:0.. 的槽位，
+; 有它会跟 ARRAYSHIFT LOCAL 抢同一批槽）
+;=============================================================
+@FN_SHIFT_LOCAL
+#LOCALSIZE 8
+LOCAL:0 = 5
+LOCAL:1 = 6
+LOCAL:2 = 7
+ARRAYSHIFT LOCAL, 1, 0
+IF LOCAL:0 != 0
+	RETURN 0
+ENDIF
+IF LOCAL:1 != 5
+	RETURN 0
+ENDIF
+IF LOCAL:2 != 6
+	RETURN 0
+ENDIF
+ARRAYREMOVE LOCAL, 0, 1
+IF LOCAL:0 != 5
+	RETURN 0
+ENDIF
+IF LOCAL:1 != 6
+	RETURN 0
+ENDIF
+RETURN 1
+
+;=============================================================
+; LOCALS 组（字符串槽位；同样不能有 #DIM）
+; 注：ARGS 走不到这里 —— 本移植的形参是**别名**绑定，CALL 之后 m_argStrVars
+;     仍是空的（`ARGS:0` 读空串），那是形参绑定的事，与数组指令无关。
+;=============================================================
+@FN_SHIFT_LOCALS
+#LOCALSIZE 8
+LOCALS:0 '= "la"
+LOCALS:1 '= "lb"
+LOCALS:2 '= "lc"
+ARRAYSHIFT LOCALS, 1, ""
+IF LOCALS:0 != ""
+	RETURN 0
+ENDIF
+IF LOCALS:1 != "la"
+	RETURN 0
+ENDIF
+IF LOCALS:2 != "lb"
+	RETURN 0
+ENDIF
+ARRAYREMOVE LOCALS, 0, 1
+IF LOCALS:0 != "la"
+	RETURN 0
+ENDIF
+IF LOCALS:1 != "lb"
+	RETURN 0
+ENDIF
+RETURN 1

@@ -1315,6 +1315,15 @@ ExecState ScriptRunner::executeLine(const LogicalLine& line) {
         // 是否字符串数组（按声明类型；系统数组按装载期元数据 —— 与 ARRAYCOPY 同口径，
         // 否则 `ARRAYSHIFT RESULTS, …` 会被当成整型数组，写进看不到的通道）
         auto isStrArray = [&](const QString& var) -> bool {
+            // LOCAL/ARG 是**整型**槽位，LOCALS/ARGS 是**字符串**槽位；这四个名字
+            // 既没有声明表项、也不在系统变量元数据里（装载期分成独立的
+            // LocalSlot/ArgSlot/LocalStr/ArgStr 类别），必须在这里显式点名，
+            // 否则 `ARRAYSHIFT ARGS, -1, ""` 会被当成整型数组处理（写进影子容器）。
+            const QString upper = var.trimmed().toUpper();
+            if (upper == QLatin1String("LOCALS") || upper == QLatin1String("ARGS"))
+                return true;
+            if (upper == QLatin1String("LOCAL") || upper == QLatin1String("ARG"))
+                return false;
             if (m_table) {
                 const VariableDecl* decl =
                     m_table->variableTable().find(var, line.scopeKey);
@@ -1367,9 +1376,12 @@ ExecState ScriptRunner::executeLine(const LogicalLine& line) {
             int num = (numN < 0) ? (len - start) : static_cast<int>(qMin<qint64>(numN, len - start));
             if (num <= 0) return ExecState::Continue;
             const bool strArr = isStrArray(var);
+            // 字符串数组的默认值只按字符串取（raw 已去引号）；**不要**再按整数求值 ——
+            // `ARRAYSHIFT RESULTS, 1, ""` 的 `""` 当整数求值会抛
+            // 「表达式求值失败：」（实测：整条指令变 Error 停住）。
             const QString defS = ops.size() > 2 ? (ops.at(2).isString ? ops.at(2).raw : QString())
                                                 : QString();
-            const qint64 defI = evalOp(2, 0);
+            const qint64 defI = strArr ? 0 : evalOp(2, 0);
             if (strArr) {
                 QStringList vals;
                 for (int i = 0; i < len; ++i) vals << m_storage->getStrElement1D(var, i, arrayScope);

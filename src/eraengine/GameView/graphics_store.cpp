@@ -21,6 +21,7 @@
 
 #include <QDebug>
 #include <cmath>
+#include <QGuiApplication>
 #include <QPainter>
 #include <QSet>
 
@@ -352,6 +353,17 @@ QFont GraphicsStore::makeFont(const QString& name, int size, int style) {
 
 QSize GraphicsStore::measureText(const QString& text, const QString& fontName,
                                  int size, int style) {
+    // 无 GUI 应用时 QFont/QFontMetrics 会 qFatal（"no QGuiApplication instance"）——
+    // test_cli、编辑器工具这类纯控制台宿主里 `GGETTEXTSIZE`/`GETTEXTSIZE` 会直接
+    // 核心转储。这里给一条**确定性**回退：按字号留出等宽近似，宽随字数与字号
+    // 单调、高 = 字号（行高 ≈ 字号），让排版逻辑（TOOLTIP/HTML 预计算）在无字体
+    // 环境下仍能跑完并保持可断言的性质。
+    // 注意：QGuiApplication::instance() 对纯 QCoreApplication 宿主也返回**非空**
+    // （内部只是 static_cast），必须按类型判。
+    if (!qobject_cast<QGuiApplication*>(QCoreApplication::instance())) {
+        const int w = int(qint64(qMax(1, size)) * 5 / 10) * qMax(1, int(text.size()));
+        return { qMax(1, w), qMax(1, size) };
+    }
     const QFontMetrics metrics(makeFont(fontName, size, style));
     // C# MeasureString + StringFormat.GenericTypographic = 紧排前进量（无内边距）
     return { metrics.horizontalAdvance(text), metrics.height() };

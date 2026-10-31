@@ -2081,12 +2081,16 @@ qint64 VariableStorage::getIntElement1D(const QString& name, int x,
                                         eravar::ScopeId scope) const
 {
 		if (x < 0) return 0;
-		if (hasSystemVariable(name)) {
-			const QString key = systemVariableName(name).toUpper();
-			if (key == QLatin1String("LOCAL")) return getLocalInt(x);
-			if (key == QLatin1String("ARG")) return getArgInt(x);
-			return getSystemVariable(name, x);
-		}
+		// LOCAL/ARG 是**整型槽位**系统数组，但它们刻意**不在**
+		// sysvar::systemStorageNames()（那是「有系统变量存储通道」的名单位，
+		// 见 hasSystemVariable 的注释）；它们在装载期被分成独立的
+		// LocalSlot / ArgSlot 访问类别。所以这一层判定必须在 hasSystemVariable
+		// **之前**做，否则 `ARRAYSHIFT LOCAL, …` 会退回用户全局槽 ——
+		// 又一个「指令成功但读的人看不见」的影子容器（测出来是空操作）。
+		const QString key = systemVariableName(name).toUpper();
+		if (key == QLatin1String("LOCAL")) return getLocalInt(x);
+		if (key == QLatin1String("ARG")) return getArgInt(x);
+		if (hasSystemVariable(name)) return getSystemVariable(name, x);
 		return getGlobalInt1D(name, x, scope);
 }
 
@@ -2094,10 +2098,11 @@ void VariableStorage::setIntElement1D(const QString& name, int x, qint64 value,
                                       eravar::ScopeId scope)
 {
 		if (x < 0) return;
+		// 同上：LOCAL/ARG 不在 systemStorageNames 里，必须在前一层判定。
+		const QString key = systemVariableName(name).toUpper();
+		if (key == QLatin1String("LOCAL")) { setLocalInt(x, value); return; }
+		if (key == QLatin1String("ARG")) { setArgInt(x, value); return; }
 		if (hasSystemVariable(name)) {
-			const QString key = systemVariableName(name).toUpper();
-			if (key == QLatin1String("LOCAL")) { setLocalInt(x, value); return; }
-			if (key == QLatin1String("ARG")) { setArgInt(x, value); return; }
 			setSystemVariable(name, x, value);
 			return;
 		}

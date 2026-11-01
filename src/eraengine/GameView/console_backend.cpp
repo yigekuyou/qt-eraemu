@@ -211,10 +211,16 @@ void ConsoleBackend::sealSpan() {
 
 ConsoleDisplayLine ConsoleBackend::buildLine() const {
     ConsoleDisplayLine line;
-    // div 绘制层排在本行正文前面（QML 的 z = 段序号，于是文字压在 div 上，
-    // 与 C# 同一行里「先 div part、后文字 part」的绘制顺序一致）。
-    line.segments = m_pendingDiv;
+    // 与 C# 的绘制次序一致（QML 的 z = 段序号，序号越大越靠前）：
+    //     depth > 0（降序，远 -> 近） → 本行正文 → depth <= 0（降序）
+    // EmueraConsole.cs:1699 起逐个 depth 画，`depth == 0` 那一步先画正文行、
+    // 再画 depth 0 的 div —— 所以正的 depth 在正文**下面**，0 与负的在上面。
+    // m_pendingDiv 已经按 depth 降序稳定排好，这里只是把正文插到分界处。
+    for (const ConsoleSegment& seg : m_pendingDiv)
+        if (seg.divDepth > 0) line.segments.append(seg);
     line.segments += m_sealed;
+    for (const ConsoleSegment& seg : m_pendingDiv)
+        if (seg.divDepth <= 0) line.segments.append(seg);
     flushPendingToSegments(line.segments);
     line.align = m_align;
     return line;
@@ -380,7 +386,7 @@ void ConsoleBackend::renderTemplate(const PrintTemplate& output, bool toBuffer) 
     // 对应行，x 由 positionedXpx（div 原点 + 段内偏移）交给布局绝对定位。
     struct DivCapture {
         int yPx = 0;
-        int depth = 0;   // C# HtmlDivTag.Depth：绘制层次（小 = 先画 = 在下面）
+        int depth = 0;   // C# HtmlDivTag.Depth：绘制层次（**小 = 后画 = 在上面**）
         QList<QList<ConsoleSegment>> lines{1};   // 每行一组段
         // 盒子（背景 + 四条边）单独放，**不占内容行**：C# 的盒子是 DrawBorder
         // 画在 rect 上、行号由 ceil(Top/LineHeight) 记账，div 的第一行内容就
@@ -758,12 +764,13 @@ void ConsoleBackend::renderTemplate(const PrintTemplate& output, bool toBuffer) 
     // 纵向偏移全部由 span 的 positionedTopPx（相对行首的**绝对像素**）表达。
     // 段的相对顺序就是绘制顺序（QML 的 z = 序号），所以按 depth 稳定排序。
     if (!overlays.isEmpty()) {
-        // C# 按 depth 升序绘制叠放层（ConsoleDivPart.depth），与打印顺序无关：
-        // FL3.8 地图先打 depth=1 的节点按钮、再打 depth=10 的地图底图、
-        // 最后 depth=3 的路径图 —— 打印顺序不能直接当 z。稳定排序保持同 depth 的
-        // 相对顺序（同一深度里仍按脚本书写顺序）。
-        std::stable_sort(overlays.begin(), overlays.end(),
-                         [](const DivCapture& a, const DivCapture& b) { return a.depth < b.depth; });
+        // 叠放顺序 = C# 的 depth **降序**绘制（EmueraConsole.cs:1699
+        // `Array.Sort(edepth, (a, b) => -a.CompareTo(b))` 后逐个 depth 调
+        // DrawPartTo —— 先画大的、最后画小的，所以 **depth 小 = 更靠近观察者**）。
+        // FL3.8 拠点地图先打 depth=1 的节点按钮、再打 depth=10 的地图底图、
+        // 最后 depth=3 的路径图；打印顺序不能直接当 z，必须按 depth 10 → 3 → 1
+        // 排列，QML 的 z（段序号）才会把节点压在底图之上、路径压在底图之上。
+        // 稳定排序保持同 depth 的相对顺序（同一深度里仍按脚本书写顺序）。
         const auto dropEmpty = [](const DivCapture& c) {
             QList<QList<ConsoleSegment>> ls = c.lines;
             // `<div><br>…` 的引导换行不该占一行（C# 的 div 缓冲同样不吃它）
@@ -775,15 +782,24 @@ void ConsoleBackend::renderTemplate(const PrintTemplate& output, bool toBuffer) 
             // 盒子（背景/边框）排在该 div 内容之前：QML 的 z 是段序号，盒子
             // 因此压在子内容下面，与 C# 先 DrawBorder 再画子内容一致。
             for (ConsoleSegment& seg : c.boxSegs) {
+                seg.divDepth = c.depth;
                 for (ConsoleSpan& span : seg.spans) m_layout.measurePart(span);
                 m_pendingDiv.append(seg);
             }
             for (QList<ConsoleSegment>& line : dropEmpty(c))
                 for (ConsoleSegment& seg : line) {
+                    seg.divDepth = c.depth;
                     for (ConsoleSpan& span : seg.spans) m_layout.measurePart(span);
                     m_pendingDiv.append(seg);
                 }
         }
+        // depth 是**整屏**的绘制层次，不是单次 HTML_PRINT 的层内次序：FL3.8 拠点
+        // 地图的节点(1) / 底图(10) / 路径(3) / 日志面板各是一次调用，必须合起来
+        // 一次排。降序 + 稳定排序 = 先画远、后画近，同深度仍按打印顺序。
+        std::stable_sort(m_pendingDiv.begin(), m_pendingDiv.end(),
+                         [](const ConsoleSegment& a, const ConsoleSegment& b) {
+                             return a.divDepth > b.divDepth;
+                         });
         overlays.clear();
         m_pendingOpen = true;    // 这一行有内容了（div 也算），等待收尾/换行
         markDirty();

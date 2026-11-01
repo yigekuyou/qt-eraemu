@@ -1420,7 +1420,8 @@ int main(int argc, char* argv[]) {
               "盒子不占内容行：div 的第一行内容就贴在第 0 行");
     }
 
-    // 10i) div 的 depth：C# 按 depth 升序绘制叠放层，与打印顺序无关。
+    // 10i) div 的 depth：C# 按 depth **降序**绘制叠放层（EmueraConsole.cs:1699
+    //      `-a.CompareTo(b)` 后逐个 depth 画 → 小的后画 = 更靠前），与打印顺序无关。
     //      FL3.8 地图先打 depth=1 的节点按钮、再 depth=10 的底图、最后 depth=3 的路径图。
     qDebug() << "\n10i) div depth 决定叠放顺序（与打印顺序无关）";
     {
@@ -1439,9 +1440,39 @@ int main(int argc, char* argv[]) {
                 const QString t = m.value("text").toString().trimmed();
                 if (!t.isEmpty()) order << t;
             }
-        check(order.size() >= 2 && order.first() == QStringLiteral("LOW")
-                  && order.last() == QStringLiteral("HIGH"),
-              QString("depth 小的先画（顺序：%1）").arg(order.join(QLatin1String(", "))));
+        check(order.size() >= 2 && order.first() == QStringLiteral("HIGH")
+                  && order.last() == QStringLiteral("LOW"),
+              QString("depth 大的先画、小的压在上面（顺序：%1）")
+                  .arg(order.join(QLatin1String(", "))));
+    }
+
+    // 10i-2) depth 是**整屏**层次，不限于单次 HTML_PRINT：FL3.8 拠点地图的节点 /
+    //        底图 / 路径图各是一次 `HTML_PRINT …, 1` 调用，合并到同一行后仍要按
+    //        depth 10 → 3 → 1 排（先打的节点不能因为打印早而留在底图下面）。
+    qDebug() << "\n10i-2) depth 跨多次 HTML_PRINT 仍然生效（拠点地图的打印顺序）";
+    {
+        ConsoleBackend z;
+        z.setFontSize(14); z.setLineHeight(14);
+        z.setGridColumns(226); z.setGridRows(60);
+        z.printTemplateBuffered(PrintTemplateCompiler::parseRuntimeMarkup(QStringLiteral(
+            "<div rect='0px,0px,60px,60px' depth='1'>NODE</div>")));
+        z.printTemplateBuffered(PrintTemplateCompiler::parseRuntimeMarkup(QStringLiteral(
+            "<div rect='0px,0px,60px,60px' depth='10'>MAP</div>")));
+        z.printTemplateBuffered(PrintTemplateCompiler::parseRuntimeMarkup(QStringLiteral(
+            "<div rect='0px,0px,60px,60px' depth='3'>PATH</div>")));
+        z.newline();
+        z.flush();
+        QStringList order;
+        for (int r = 0; r < z.rowCount(); ++r)
+            for (const QVariant& v : z.lineBlocks(r)) {
+                const auto m = v.toMap();
+                if (m.value("kind").toString() != "text") continue;
+                const QString t = m.value("text").toString().trimmed();
+                if (!t.isEmpty()) order << t;
+            }
+        check(order == QStringList({"MAP", "PATH", "NODE"}),
+              QString("三次调用的 div 按 depth 10 → 3 → 1 排序（实得：%1）")
+                  .arg(order.join(QLatin1String(", "))));
     }
 
     // Nested captures retain all rows; positioned layers cannot consume trailing body text.

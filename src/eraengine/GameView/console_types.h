@@ -255,6 +255,16 @@ struct ConsoleSpan {
 // 之后，旧世代的段不再可点击。
 // ---------------------------------------------------------------------------
 struct ConsoleSegment {
+    // `<div depth='N'>` 的绘制层次（C# HtmlDivTag.Depth / ConsoleDivPart.Depth）。
+    // 0 = 普通正文段（也是没写 depth 的 div 的默认值）。C# 在 EmueraConsole
+    // 绘制时把可见 div 按 depth **降序**排开（EmueraConsole.cs:1699
+    // `Array.Sort(edepth, (a, b) => -a.CompareTo(b))`），逐个 depth 调
+    // DrawPartTo，其中 depth == 0 那一步先画正文再画 depth 0 的 div：
+    //     depth > 0 降序 → 正文 → depth <= 0 降序
+    // 所以 **depth 小 = 后画 = 更靠近观察者**（FL3.8 拠点地图的节点 depth=1
+    // 压在底图 depth=10 之上，depth=-1 的面板压在正文之上）。
+    // 段在行内是扁平数组、QML 的 z = 段序号，所以这个顺序必须在这里排好。
+    int  divDepth = 0;
     // HTML button/nonbutton pos: font-size percentage, independent of div cursors.
     bool pointXLocked = false;
     int positionPercent = 0;

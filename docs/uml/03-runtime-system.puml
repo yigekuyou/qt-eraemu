@@ -102,10 +102,16 @@ ScriptRunner --> VariableStorage : named 1D array element access
 
 note right of ScriptRunner
   ARRAYSHIFT, ARRAYREMOVE and ARRAYSORT accept 1D names. Their storage
-  dispatch must distinguish declared/user arrays from built-in arrays; RESULT,
-  LOCAL and ARG use their real slots, while RESULTS keeps its flat string slot,
-  instead of creating a same-named shadow container. Negative or out-of-range start values are ignored at the command boundary;
-  oversized numeric arguments are rejected before conversion to int.
+  dispatch distinguishes declared/user arrays from built-in arrays: RESULT,
+  LOCAL and ARG use integer slots; RESULTS uses its flat global string slots;
+  LOCALS and ARGS use per-frame string slots. None of these paths should create
+  a same-named shadow container. The current port treats negative, out-of-range,
+  or non-positive effective ranges as a safe no-op at the command boundary;
+  this is a defensive port policy, not the EE reference error contract (the
+  command reference documents errors for several invalid ranges). Numeric
+  arguments are range-checked before conversion to int, including INT_MIN.
+  ARRAYSHIFT/REMOVE/SORT operate on the declared/configured 1D length, not on
+  the number of currently allocated slots.
 end note
 
 note right of SystemStateMachine

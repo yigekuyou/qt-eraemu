@@ -77,7 +77,18 @@ note right of VariableStorage
   One container shape is used for scalar and multidimensional
   arrays; dimensions select the address geometry. Reads do not
   allocate. Writes allocate only through ensureBlock().
-  `shapeOf()` is the only shape source for runtime consumers.
+  `shapeOf()` is the only shape source for runtime consumers: declared
+  VariableTable lengths win, then VariableConfig defaults, and a missing
+  shape stays empty. allocatedSlots() is container capacity/fact and never
+  changes the declared shape.
+
+  Named 1D array commands dispatch through get/set*Element1D(). RESULT,
+  LOCAL and ARG use integer system slots; RESULTS is a flat global string
+  slot; LOCALS and ARGS are per-frame string slots. Their lifetimes and
+  length sources differ, so the four names must not be documented as one
+  homogeneous "system string array" family. Invalid command ranges are
+  currently handled by ScriptRunner as safe no-ops; this port policy is
+  separate from the EE reference's documented error behavior.
 end note
 
 note right of SaveMap

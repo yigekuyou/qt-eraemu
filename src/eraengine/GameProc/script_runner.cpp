@@ -1372,8 +1372,13 @@ ExecState ScriptRunner::executeLine(const LogicalLine& line) {
             if (startN < 0 || startN > std::numeric_limits<int>::max()) return ExecState::Continue;
             const int start = static_cast<int>(startN);
             if (start < 0 || start >= len) return ExecState::Continue;
+            const bool hasNum = ops.size() > 4;
             qint64 numN = evalOp(4, -1);
-            int num = (numN < 0) ? (len - start) : static_cast<int>(qMin<qint64>(numN, len - start));
+            // 负数仅表示省略参数时的内部 sentinel；显式负数是非法范围，
+            // 必须拒绝执行，不能误当成“移动到末尾”。
+            if (hasNum && numN < 0) return ExecState::Continue;
+            int num = hasNum ? static_cast<int>(qMin<qint64>(numN, len - start))
+                             : (len - start);
             if (num <= 0) return ExecState::Continue;
             const bool strArr = isStrArray(var);
             // 字符串数组的默认值只按字符串取（raw 已去引号）；**不要**再按整数求值 ——
@@ -1412,9 +1417,13 @@ ExecState ScriptRunner::executeLine(const LogicalLine& line) {
             const qint64 startN = evalOp(2, 0);
             if (startN < 0 || startN > std::numeric_limits<int>::max()) return ExecState::Continue;
             const int start = static_cast<int>(startN);
+            const bool hasNum = ops.size() > 3;
             qint64 numN = evalOp(3, -1);
             if (start < 0 || start >= len) return ExecState::Continue;
-            const int num = (numN < 0) ? (len - start) : static_cast<int>(qMin<qint64>(numN, len - start));
+            // 负数仅表示省略参数时的内部 sentinel；显式负数是非法范围。
+            if (hasNum && numN < 0) return ExecState::Continue;
+            const int num = hasNum ? static_cast<int>(qMin<qint64>(numN, len - start))
+                                   : (len - start);
             if (num <= 1) return ExecState::Continue;
             if (isStrArray(var)) {
                 QStringList vals;

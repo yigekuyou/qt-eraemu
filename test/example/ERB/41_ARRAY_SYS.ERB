@@ -117,6 +117,18 @@ ARRAYREMOVE arrU, 1, 2
 CALL ASSERT_EQ, arrU:0, 2, "ARRAYREMOVE 用户数组:0"
 CALL ASSERT_EQ, arrU:1, 0, "ARRAYREMOVE 用户数组:1（删掉 1..2 后是空槽）"
 RET = RET + RESULT
+
+;---- 9) 显式负元素数：ARRAYSHIFT/ARRAYSORT 拒绝，不当作省略参数 ----
+arrU:0 = 3
+arrU:1 = 1
+arrU:2 = 2
+ARRAYSHIFT arrU, 1, 9, 0, -1
+CALL ASSERT_EQ, arrU:0, 3, "ARRAYSHIFT 显式 num=-1 不执行"
+CALL ASSERT_EQ, arrU:1, 1, "ARRAYSHIFT 显式 num=-1 不改变中间槽"
+ARRAYSORT arrU, FORWARD, 0, -1
+CALL ASSERT_EQ, arrU:0, 3, "ARRAYSORT 显式 num=-1 不执行"
+CALL ASSERT_EQ, arrU:1, 1, "ARRAYSORT 显式 num=-1 不改变中间槽"
+RET = RET + RESULT
 RETURN RET
 
 ;=============================================================

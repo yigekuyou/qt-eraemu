@@ -24,6 +24,7 @@
 #include <QGuiApplication>
 #include <QPainter>
 #include <QSet>
+#include <limits>
 
 namespace {
 QHash<int, QImage>& gImages() {
@@ -361,8 +362,16 @@ QSize GraphicsStore::measureText(const QString& text, const QString& fontName,
     // 注意：QGuiApplication::instance() 对纯 QCoreApplication 宿主也返回**非空**
     // （内部只是 static_cast），必须按类型判。
     if (!qobject_cast<QGuiApplication*>(QCoreApplication::instance())) {
-        const int w = int(qint64(qMax(1, size)) * 5 / 10) * qMax(1, int(text.size()));
-        return { qMax(1, w), qMax(1, size) };
+        const qint64 unit = qMax<qint64>(1, size) * 5 / 10;
+        const qint64 chars = qMax<qint64>(1, text.size());
+        const qint64 rawWidth = unit > std::numeric_limits<qint64>::max() / chars
+            ? std::numeric_limits<qint64>::max()
+            : unit * chars;
+        const int width = rawWidth > std::numeric_limits<int>::max()
+            ? std::numeric_limits<int>::max()
+            : static_cast<int>(rawWidth);
+        const int height = qBound(1, size, std::numeric_limits<int>::max());
+        return { qMax(1, width), height };
     }
     const QFontMetrics metrics(makeFont(fontName, size, style));
     // C# MeasureString + StringFormat.GenericTypographic = 紧排前进量（无内边距）

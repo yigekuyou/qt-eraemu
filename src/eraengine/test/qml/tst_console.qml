@@ -940,12 +940,22 @@ TestCase {
         mouseMove(images[2], 40, 40);
         tryVerify(function() { return images[2].hovered; });
         backend.stageMode = false; view.syncView();
+        // C# ConsoleDivPart：div 的 rect.y 决定它落在**哪一行**（PointY 是绝对像素），
+        // 同一 rect 的兄弟 div 落在同一行、同一位置。这里不再假定是第 0 行 ——
+        // 行号由 rect.y/行高 决定，三个 div 必须同源同行。
+        let histRow = -1;
+        for (let r = 0; r < 12 && histRow < 0; ++r) {
+            let n = 0;
+            for (let i = 0; i < 8; ++i) if (view.blockAt(r, i) !== null) ++n;
+            if (n >= 3) histRow = r;
+        }
+        verify(histRow >= 0, "sibling divs with the same rect share one row (C# PointY)");
         for (let i = 0; i < 3; ++i) {
-            const block = view.blockAt(0, i);
+            const block = view.blockAt(histRow, i);
             verify(block !== null && block.visible, "history retains each image");
             tryCompare(findChild(block, "blockImage"), "status", Image.Ready);
-            compare(block.x, view.blockAt(0, 0).x);
-            compare(block.y, view.blockAt(0, 0).y);
+            compare(block.x, view.blockAt(histRow, 0).x);
+            compare(block.y, view.blockAt(histRow, 0).y);
         }
         backend.stageMode = true; view.syncView();
         tryCompare(findChild(view.stageImageAt(0), "blockImage"), "status", Image.Ready);

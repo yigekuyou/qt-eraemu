@@ -350,6 +350,7 @@ void ConsoleBackend::renderTemplate(const PrintTemplate& output, bool toBuffer) 
     QList<DivCapture> captures;
     QList<DivCapture> overlays;
     int blockRow = 0;                             // 本区块起点行号
+    bool blockStarted = false;                    // 本区块只认第一个顶层 div 的起点
     const auto captureLine = [&captures](QList<ConsoleSegment>& fallback) -> QList<ConsoleSegment>& {
         return captures.isEmpty() ? fallback : captures.last().lines.last();
     };
@@ -380,11 +381,16 @@ void ConsoleBackend::renderTemplate(const PrintTemplate& output, bool toBuffer) 
             // 缓冲模式（PRINTFORM 续行 / HTML_PRINT toBuffer）里 div 的内容
             // 必须继续留在未定型行上，否则后续 print 接不上。
             if (toBuffer) { continue; }
-            if (captures.isEmpty()) {
+            if (captures.isEmpty() && !blockStarted) {
                 // 顶层 div = 独立叠放层：先把正文行定格，再记下本区块的起始行，
                 // div 的 rect.y 就是相对这个起始行的像素偏移。
-                if (m_pendingOpen) newline();
+                // 只认**第一个**顶层 div：同一区块里后面的兄弟 div（FL3.8 拠点地图
+                // 的 25 个格子、肖像编辑器的 10 张缩略图）都相对同一起点落位，
+                // 否则每个 div 都会推进一行、永远合不到同一行上。
+                if (m_pendingOpen && (!m_sealed.isEmpty() || !m_pendingParts.isEmpty()))
+                    newline();
                 blockRow = m_buffer.count();
+                blockStarted = true;
             }
             DivCapture cap;
             cap.xPx = divX;

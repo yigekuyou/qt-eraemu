@@ -723,6 +723,24 @@ int main(int argc, char** argv) {
         for (const auto& part : result.parts)
             if (part.kind == PrintTemplatePart::Kind::Division && part.x == 600 && part.width == 60) div = true;
         check(compiled && div, "bare attribute fragment supplies the attribute list of a load-time div");
+        // C# ConsoleDivPart：margin/padding/border 只内缩**子内容**起点，
+        // rect 原点不变（divXOffset / yOffset）。
+        {
+            PrintTemplate t2 = PrintTemplateCompiler::parseRuntimeMarkup(
+                QStringLiteral("<div rect='600,0,60px,60px' margin='2' padding='3px,4px' "
+                               "border='1px,2px,3px,5px'>x</div>"));
+            bool found = false;
+            for (const auto& part : t2.parts) {
+                if (part.kind != PrintTemplatePart::Kind::Division) continue;
+                found = part.x == 600 && part.y == 0;
+                check(found, "div rect origin stays untouched by margin/padding/border");
+                // x: margin 2 + padding 4 + border 5 = 11；y: 2 + 3 + 1 = 6
+                check(part.insetX == 11 && part.insetY == 6,
+                      qPrintable(QString("div insets margin+padding+border (x=%1 y=%2)")
+                                     .arg(part.insetX).arg(part.insetY)));
+            }
+            check(found, "div part present for inset check");
+        }
         auto lockedAst = compile(QStringLiteral("STRFORM(\"<div %LOCALS%></div>\")"));
         const auto lockedCompiled = PrintTemplateCompiler::compile(lockedAst);
         if (lockedCompiled) {

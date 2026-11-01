@@ -191,6 +191,10 @@ struct PrintTemplatePart {
     QList<int> shapeParams;
     bool xposIsPixels = false;
     bool lockedPosition = false;
+    // C# ConsoleDivPart：divXOffset / yOffset（margin + padding + border 的左上量）。
+    // 只移动**子内容**起点，rect 本身不变（测试 bare attribute fragment 也是这么约束的）。
+    int insetX = 0;
+    int insetY = 0;
     int x = -1;
     int y = -1;
 };

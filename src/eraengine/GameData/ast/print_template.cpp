@@ -349,6 +349,35 @@ PrintTemplate PrintTemplateCompiler::evaluateOccurrences(const CompiledPrintTemp
                 part.width = parseLength(rect[2], part.widthIsPixels);
                 part.height = parseLength(rect[3], part.heightIsPixels);
             }
+            // C# ConsoleDivPart：
+            //   divXOffset += margin.Left + padding.Left + border.Left
+            //   yOffset    += margin.Top  + padding.Top  + border.Top
+            // 子内容从「rect 左上角 + 这三者」开始排；rect 原点保持不变。
+            // 4 值简写按 上,右,下,左；1 值四边相同；2 值 上/下 , 左/右。
+            const auto insetOf = [](QString raw) {
+                struct P { int left; int top; };
+                auto px = [](QString v) {
+                    v = v.trimmed();
+                    if (v.endsWith(QLatin1String("px"))) v.chop(2);
+                    bool ok = false;
+                    const int n = v.toInt(&ok);
+                    return ok ? n : 0;
+                };
+                const QStringList f = raw.split(',', Qt::SkipEmptyParts);
+                if (f.size() == 1) { const int a = px(f[0]); return P{a, a}; }
+                if (f.size() == 2) return P{px(f[1]), px(f[0])};
+                return P{px(f.size() >= 4 ? f[3] : f[1]), px(f[0])};
+            };
+            int insetX = 0, insetY = 0;
+            for (const char* key : {"margin", "padding", "border"}) {
+                const QString raw = attrs.value(QLatin1String(key));
+                if (raw.isEmpty()) continue;
+                const auto in = insetOf(raw);
+                insetX += in.left;
+                insetY += in.top;
+            }
+            part.insetX = insetX;
+            part.insetY = insetY;
         }
         out.parts.append(std::move(part));
     }

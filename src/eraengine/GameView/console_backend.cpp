@@ -374,8 +374,10 @@ void ConsoleBackend::renderTemplate(const PrintTemplate& output, bool toBuffer) 
             flushPendingToSegments(captureLine(m_sealed)); m_pendingParts.clear();
             const int parentX = divisions.isEmpty() ? 0 : divisions.last().x;
             const int parentY = divisions.isEmpty() ? 0 : divisions.last().y;
-            const int divX = parentX + lengthPx(part.x, part.xposIsPixels);
-            const int divY = parentY + lengthPx(part.y, part.yposIsPixels);
+            // C# ShiftChildrenX(PointX + xOffset + divXOffset)：子内容再从 rect
+            // 左上角内缩 margin+padding+border，rect 本身不动。
+            const int divX = parentX + lengthPx(part.x, part.xposIsPixels) + part.insetX;
+            const int divY = parentY + lengthPx(part.y, part.yposIsPixels) + part.insetY;
             divisions.append({divX, divY, 0, 0});
             // 只有「整块提交」的 HTML_PRINT 才把 div 当独立叠放层处理：
             // 缓冲模式（PRINTFORM 续行 / HTML_PRINT toBuffer）里 div 的内容

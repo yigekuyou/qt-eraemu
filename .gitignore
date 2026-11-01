@@ -37,3 +37,32 @@ prd.md
 # 体积随历史线性膨胀，且与源码必然不同步。渲染见 docs/uml/README.md
 docs/uml/*.png
 docs/uml/*.svg
+
+# ---- 本地参考游戏 / 第三方源码（只在本机，不入库）----
+# 这些是**运行/对照用**的外部资源，不是本项目的源码：
+#   Emuera/                      —— 上游 C# 实现（对照语义用）
+#   Era-Chinese-Documentation/   —— era 中文文档
+#   FL3.8/ eraTW/ 等             —— 本地游戏数据（体积大、版权独立）
+#   QT/ Qt/                       —— 本地 Qt SDK / 工具链
+#   Testing/                      —— ctest 的临时产物目录
+#   aqtinstall.log                —— aqt 安装 Qt 的日志
+Emuera/
+Era-Chinese-Documentation/
+FL3.8/
+eraTW/
+QT/
+# Qt 是 QT 的符号链接（git 不把 Qt/ 当目录，得写不带斜杠的）
+Qt
+Testing/
+aqtinstall.log
+build-debug/
+ecd/
+emuera.em/
+eraMegaten/
+eraTetris/
+webp/
+mkprd.txt
+thoughts/
+
+# 本地游戏：无名深潜（era 游戏数据，不入库）
+无名深潜/

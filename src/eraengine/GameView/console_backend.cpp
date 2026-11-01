@@ -402,10 +402,12 @@ void ConsoleBackend::renderTemplate(const PrintTemplate& output, bool toBuffer) 
             else if (align == "left") m_align = ConsoleAlign::Left;
             continue;
         }
-        if (part.kind == PrintTemplatePart::Kind::Button) {
+        if (part.kind == PrintTemplatePart::Kind::Button || part.kind == PrintTemplatePart::Kind::NonButton) {
             sealButton();
             flushPendingToSegments(m_sealed); m_pendingParts.clear();
-            button.isButton = true;
+            button.isButton = part.kind == PrintTemplatePart::Kind::Button;
+            button.pointXLocked = part.lockedPosition;
+            button.positionPercent = part.x;
             button.intValue = part.buttonValue.toLongLong(&button.isInteger);
             button.strValue = part.buttonValue; button.tooltip = part.tooltip;
             inButton = true;

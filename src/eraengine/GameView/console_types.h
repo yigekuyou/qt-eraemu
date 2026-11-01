@@ -221,6 +221,9 @@ struct ConsoleSpan {
 // 之后，旧世代的段不再可点击。
 // ---------------------------------------------------------------------------
 struct ConsoleSegment {
+    // HTML button/nonbutton pos: font-size percentage, independent of div cursors.
+    bool pointXLocked = false;
+    int positionPercent = 0;
     QList<ConsoleSpan> spans;
     bool    isButton  = false;
     bool    isInteger = false;      // 点击值是整数（INPUT 才可用）

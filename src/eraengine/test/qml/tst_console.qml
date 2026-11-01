@@ -840,6 +840,31 @@ TestCase {
         backend.setMaxLog(5000);
     }
 
+    function test_positionedWindowBackgroundStaysBehindLabels() {
+        backend.clearAll();
+        consoleFixture.printHtml(backend,
+            "<nobr><button value='0' pos='0'><shape type='rect' param='0,0,1500,100' color='#000000'></button>"
+            + "<nonbutton pos='100' title='label tip'>Guild</nonbutton>"
+            + "<button pos='800' value='7'>Quest</button></nobr>");
+        consoleFixture.request(backend, "INPUT");
+        backend.flush(); view.syncView();
+        const background = view.blockAt(0, 0);
+        const label = view.blockAt(0, 1);
+        const task = view.blockAt(0, 2);
+        verify(background !== null && label !== null && task !== null);
+        verify(label.z > background.z, "background button must not cover nonbutton text");
+        verify(task.z > background.z, "task button stays above window background");
+        compare(label.clickable, false);
+        verify(findChild(label, "blockButtonMouse").hoverEnabled, "nonbutton title supports hover");
+        const spy = Qt.createQmlObject('import QtTest 1.0; SignalSpy {}', tc);
+        spy.target = backend;
+        spy.signalName = "inputSubmitted";
+        mouseClick(findChild(task, "blockButtonMouse"), task.width / 2, task.height / 2);
+        compare(spy.count, 1);
+        compare(spy.signalArguments[0][0], 7);
+        spy.destroy();
+    }
+
     // 同一 rect 内先画非按钮底图、再画按钮图片时，按钮命中区必须位于
     // 底图之上；这是 FL3.8 肖像缩略图的实际 HTML 结构。
     function test_overlappingThumbnailButtonWinsHitTest() {

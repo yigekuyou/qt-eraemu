@@ -70,6 +70,11 @@ REDRAW 1
 CALL ASSERT_EQ, CURRENTREDRAW(), 1, @"REDRAW 1 后 CURRENTREDRAW 为真"
 NONG += RESULT
 
+; HTML 定位依据 test/data/language/HTML显示.md：pos 为字号百分比，
+; 在 nobr/left 内定位整段；nonbutton 有提示文字且不可点击。
+; 背景按钮先输出，后输出的文字和按钮必须盖在背景之上。
+HTML_PRINT "<nobr><button pos='0' value='_'><shape type='rect' param='0,0,3000,100' color='#000000' bcolor='#000000'></button><nonbutton pos='100' title='不可点击的标题'>定位标题</nonbutton><button pos='1600' value='7'>[定位按钮]</button></nobr>"
+
 ;---- HTML 系（HTML_PRINT / HTML_TAGSPLIT / 4 个转换函数）----
 HTML_PRINT "<b>HTML_PRINT 加粗</b><br>"
 CALL ASSERT_SEQ, HTML_ESCAPE("<a&b>"), "&lt;a&amp;b&gt;", @"HTML_ESCAPE 转义实体"

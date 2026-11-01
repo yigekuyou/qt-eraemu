@@ -183,13 +183,9 @@ Item {
     // 父 Item 后，靠它把 text/image/shape 按真正的绘制顺序交叠 —— 对齐 C#
     // 「逐 part 顺序绘制」：图可压住先打印的字，后打印的字也能盖住先打印的图。
     //
-    // HTML 缩略图常见结构是同一 rect 内先画底图，再画 button/img。底图与
-    // 按钮图片的几何完全重叠；按钮必须优先取得鼠标命中，否则透明底图的
-    // delegate 会遮掉按钮的 MouseArea。这个优先级只用于重叠命中，绘制内容仍
-    // 由各自的 Image/Text 顺序决定。
-    z: block.clickable
-       ? 100000 + (blockData && blockData.z !== undefined ? blockData.z : 0)
-       : (blockData && blockData.z !== undefined ? blockData.z : 0)
+    // Keep paint and hit order consistent: a window background is itself a
+    // button, but must remain behind later nonbutton labels and task buttons.
+    z: blockData && blockData.z !== undefined ? blockData.z : 0
 
     // ---- 悬停高亮（可点击区块，含按钮 span）----
     Rectangle {
@@ -378,10 +374,10 @@ Item {
         objectName: "blockButtonMouse"      // 供 QML 测试 findChild 命中
         z: 1
         anchors.fill: parent
-        // 只在可点击时开启悬停：全屏数千个区块逐帧 hover 命中测试是
-        // 滚动/鼠标移动卡顿的主要来源之一（不可点击区块永远不需要高亮）。
-        hoverEnabled: block.clickable
-        enabled: block.clickable
+        // Only buttons and titled nonbutton spans need hover tracking.
+        hoverEnabled: block.clickable || (block.blockData && (block.blockData.tooltip || "") !== "")
+        enabled: hoverEnabled
+        acceptedButtons: block.clickable ? Qt.LeftButton : Qt.NoButton
         // Qt 文档（MouseArea::preventStealing）：MouseArea 位于 Flickable
         // （历史视图本身是 ListView）内部时，父项一旦识别出拖动手势就会把
         // 鼠标事件夺走，本区域收到 canceled 而不是 clicked。按钮按下即提交
@@ -397,7 +393,7 @@ Item {
         }
         // 按钮的 Title（C# ButtonString.Title）——以前挂在原生 Button 上，
         // 去掉按钮样式后改挂在命中区上，行为不变。
-        ToolTip.visible: block.hovered && block.blockData
+        ToolTip.visible: mouse.containsMouse && block.blockData
                          && (block.blockData.tooltip || "") !== ""
         // 延迟/时长来自 TOOLTIP_SETDELAY / TOOLTIP_SETDURATION（C# WinForms
         // ToolTip 的 InitialDelay / AutoPopDelay，默认 500 / 5000ms）；

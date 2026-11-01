@@ -63,9 +63,9 @@ QStringList tagAttributes(const QString& tag) {
     if (tag == QLatin1String("img"))
         return {QStringLiteral("src"), QStringLiteral("srcb"), QStringLiteral("width"),
                 QStringLiteral("height"), QStringLiteral("ypos")};
-    if (tag == QLatin1String("button"))
+    if (tag == QLatin1String("button") || tag == QLatin1String("nonbutton"))
         return {QStringLiteral("value"), QStringLiteral("title"), QStringLiteral("color"),
-                QStringLiteral("bcolor"), QStringLiteral("border")};
+                QStringLiteral("bcolor"), QStringLiteral("border"), QStringLiteral("pos")};
     if (tag == QLatin1String("shape"))
         return {QStringLiteral("type"), QStringLiteral("param"), QStringLiteral("color"),
                 QStringLiteral("bcolor")};
@@ -78,6 +78,7 @@ QStringList tagAttributes(const QString& tag) {
 QSharedPointer<CompiledPrintTemplate> compileMarkup(const QString& markup, const QList<QSharedPointer<ExpressionNode>>& expressions) {
     auto out = QSharedPointer<CompiledPrintTemplate>::create();
     QStringList stack;
+    QString buttonTag;
     auto text = [&](const QString& value) {
         for (const auto& f : fragments(value, expressions)) {
             CompiledPrintTemplatePart part; part.text = f.text; part.expression = f.expression;
@@ -160,7 +161,11 @@ QSharedPointer<CompiledPrintTemplate> compileMarkup(const QString& markup, const
             if (tag == "p") { part.kind = PrintTemplatePart::Kind::EndAlignment; out->parts.append(part); }
             else if (tag == "nobr") { part.kind = PrintTemplatePart::Kind::EndNoWrap; out->parts.append(part); }
             else if (tag == "div") { part.kind = PrintTemplatePart::Kind::EndDivision; out->parts.append(part); }
-            else if (tag == "button") { part.kind = PrintTemplatePart::Kind::EndButton; out->parts.append(part); }
+            else if (tag == "button" || tag == "nonbutton") {
+                if (buttonTag != tag) out->problems.append(QStringLiteral("UnexpectedCloseTag </%1>").arg(tag));
+                buttonTag.clear();
+                part.kind = PrintTemplatePart::Kind::EndButton; out->parts.append(part);
+            }
             // HTML 样式按栈闭合。非栈顶或不存在的闭合标签只被消费，
             // 不得跨层弹栈；否则后续文字会继承错误的字体/颜色。
             // 但**消费不等于合法**：C# 在这里抛 UnexpectedCloseTag（栈空或与已开
@@ -179,8 +184,12 @@ QSharedPointer<CompiledPrintTemplate> compileMarkup(const QString& markup, const
         } else if (tag == "br") { part.kind = PrintTemplatePart::Kind::Break; out->parts.append(part); }
         else if (tag == "nobr") { part.kind = PrintTemplatePart::Kind::NoWrap; out->parts.append(part); }
         else if (tag == "div") { part.kind = PrintTemplatePart::Kind::Division; out->parts.append(part); }
-        else if (tag == "button" || tag == "img" || tag == "shape" || tag == "p") {
-            part.kind = tag == "button" ? PrintTemplatePart::Kind::Button : tag == "img" ? PrintTemplatePart::Kind::Image : tag == "shape" ? PrintTemplatePart::Kind::Shape : PrintTemplatePart::Kind::Alignment;
+        else if (tag == "button" || tag == "nonbutton" || tag == "img" || tag == "shape" || tag == "p") {
+            part.kind = tag == "button" ? PrintTemplatePart::Kind::Button : tag == "nonbutton" ? PrintTemplatePart::Kind::NonButton : tag == "img" ? PrintTemplatePart::Kind::Image : tag == "shape" ? PrintTemplatePart::Kind::Shape : PrintTemplatePart::Kind::Alignment;
+            if (tag == "button" || tag == "nonbutton") {
+                if (!buttonTag.isEmpty()) out->problems.append(QStringLiteral("NestedButtonTag"));
+                buttonTag = tag;
+            }
             out->parts.append(part);
         } else if (tag == "font" || tag == "b" || tag == "strong" || tag == "i" || tag == "em" || tag == "u" || tag == "s") {
             stack.append(tag);
@@ -192,6 +201,7 @@ QSharedPointer<CompiledPrintTemplate> compileMarkup(const QString& markup, const
     }
     // 整串扫完仍有未闭合的样式标签：C# 的行为是打印时报错（Html2DisplayLine
     // 结束时校验栈），这里同样只记录、不打断渲染。
+    if (!buttonTag.isEmpty()) out->problems.append(QStringLiteral("UnclosedTag <%1>").arg(buttonTag));
     if (!stack.isEmpty())
         out->problems.append(QStringLiteral("UnclosedTag <%1>").arg(stack.join(QLatin1String(","))));
     return out;
@@ -305,8 +315,20 @@ PrintTemplate PrintTemplateCompiler::evaluateOccurrences(const CompiledPrintTemp
             part.style.underline = part.text == "u"; part.style.strike = part.text == "s";
         }
         part.buttonValue = attrs.value("value"); part.tooltip = attrs.value("title");
+        if (part.kind == PrintTemplatePart::Kind::Button || part.kind == PrintTemplatePart::Kind::NonButton) {
+            // Missing value makes <button> a non-clickable segment too.
+            if (!attrs.contains("value")) part.kind = PrintTemplatePart::Kind::NonButton;
+            if (attrs.contains("pos")) {
+                part.x = attrs.value("pos").toInt(&part.lockedPosition);
+                if (!part.lockedPosition) out.problems.append(QStringLiteral("AttributeCanNotInterpretNum: pos"));
+            }
+        }
         if (part.kind == PrintTemplatePart::Kind::Image) { part.text = attrs.value("src"); part.imageAlt = attrs.value("srcb"); }
         if (part.kind == PrintTemplatePart::Kind::Alignment) part.text = attrs.value("align");
+        if (part.kind == PrintTemplatePart::Kind::Shape) {
+            part.style.color = QColor(attrs.value("color"));
+            part.style.buttonColor = QColor(attrs.value("bcolor"));
+        }
         part.shapeType = attrs.value("type");
         for (const auto& value : attrs.value("param").split(',', Qt::SkipEmptyParts)) part.shapeParams.append(value.trimmed().toInt());
         const auto parseLength = [](const QString& raw, bool& pixels) {
@@ -330,6 +352,16 @@ PrintTemplate PrintTemplateCompiler::evaluateOccurrences(const CompiledPrintTemp
         }
         out.parts.append(std::move(part));
     }
+    // C# checks positioned segments against the final HTML line flags.
+    bool hasPos = false, hasNoWrap = false;
+    QString alignment = "left";
+    for (const auto& part : out.parts) {
+        hasPos |= part.lockedPosition;
+        hasNoWrap |= part.kind == PrintTemplatePart::Kind::NoWrap;
+        if (part.kind == PrintTemplatePart::Kind::Alignment) alignment = part.text.toLower();
+    }
+    if (hasPos && !hasNoWrap) out.problems.append(QStringLiteral("CanNotUsePosWithoutNobr"));
+    if (hasPos && alignment != "left") out.problems.append(QStringLiteral("CanOnlyUsePosAssignmentLR"));
     return out;
 }
 

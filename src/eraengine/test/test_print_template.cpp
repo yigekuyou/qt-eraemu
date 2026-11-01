@@ -245,6 +245,72 @@ int main(int argc, char** argv) {
         const auto compiled = PrintTemplateCompiler::compile(QSharedPointer<LiteralNode>::create(text));
         console.printTemplate(PrintTemplateCompiler::evaluateOccurrences(*compiled, [](const ExpressionNode&, int) { return QVariant(QString()); }));
     };
+    // FL3.8 WindowDrawer overlays a background, border and content on one row.
+    console.clearAll();
+    console.setFontSize(16);
+    printHtmlFixture("<nobr><button pos='0' value='_'><shape type='rect' param='0,0,8500,100' color='#000000'></button>"
+                     "<nonbutton pos='100' title='label'><font color='red'>A</font><b>B</b></nonbutton>"
+                     "<button pos='3300' value='1000'>Quest</button>tail</nobr>");
+    check(console.buffer().count() == 1, "positioned window layers stay on one row");
+    if (console.buffer().count() == 1) {
+        const auto& row = console.buffer().at(0);
+        check(row.segments.size() == 4, "nonbutton owns a separate non-clickable segment");
+        if (row.segments.size() == 4) {
+            const auto& label = row.segments.at(1);
+            const auto& quest = row.segments.at(2);
+            check(!label.isButton && label.tooltip == "label" && label.spans.size() == 2
+                      && label.spans[0].positionedXpx == 16 && label.spans[1].positionedXpx == 24,
+                  "nonbutton pos uses font percentages and styled children advance within it");
+            check(quest.isButton && quest.intValue == 1000 && quest.spans.first().positionedXpx == 528
+                      && row.segments.last().relCol == quest.relCol + quest.cols,
+                  "button pos resets X after a wide background and following text continues at its end");
+        }
+    }
+    console.clearAll();
+    printHtmlFixture("<nobr><button pos='0'>plain</button><nonbutton pos='50'>x</nonbutton></nobr>");
+    check(console.buffer().count() == 1 && console.buffer().at(0).segments.size() == 2
+              && !console.buffer().at(0).segments.first().isButton
+              && !console.buffer().at(0).segments.last().isButton,
+          "button without value and nonbutton are both non-clickable");
+    // FORM attributes and runtime-generated HTML take the same positioning path.
+    console.clearAll();
+    storage.setLocalInt(0, 125);
+    engine.executeInstruction(AstBuilder::build(
+        "HTML_PRINT @\"<nobr><nonbutton pos='{LOCAL++}'>X</nonbutton></nobr>\"", {}, resolve));
+    check(storage.getLocalInt(0) == 126 && console.buffer().count() == 1
+              && flatSpansOf(console.buffer().at(0)).first().positionedXpx == 20,
+          "FORM pos evaluates once and retains pixel coordinates between grid columns");
+    console.clearAll();
+    console.printTemplate(PrintTemplateCompiler::parseRuntimeMarkup(
+        "<nobr><nonbutton pos='200'>runtime</nonbutton></nobr>"));
+    check(console.buffer().count() == 1
+              && flatSpansOf(console.buffer().at(0)).first().positionedXpx == 32,
+          "runtime nonbutton markup preserves pos");
+    check(PrintTemplateCompiler::parseRuntimeMarkup("<nonbutton pos='0'>x</nonbutton>")
+              .problems.contains("CanNotUsePosWithoutNobr"), "pos without nobr is diagnosed");
+    check(PrintTemplateCompiler::parseRuntimeMarkup("<p align='right'><nobr><nonbutton pos='0'>x</nonbutton></nobr></p>")
+              .problems.contains("CanOnlyUsePosAssignmentLR"), "pos with non-left alignment is diagnosed");
+    check(PrintTemplateCompiler::parseRuntimeMarkup("<nobr><nonbutton pos='bad'>x</nonbutton></nobr>")
+              .problems.contains("AttributeCanNotInterpretNum: pos"), "invalid pos is diagnosed");
+    check(PrintTemplateCompiler::parseRuntimeMarkup("<button value='1'><nonbutton>x</nonbutton></button>")
+              .problems.contains("NestedButtonTag"), "nested button/nonbutton is diagnosed");
+    console.clearAll();
+    printHtmlFixture("<nobr><button pos='0' value='7'>click</button><nonbutton pos='500'>label</nonbutton></nobr>");
+    console.notifyInputRequested("INPUT");
+    qint64 positionedInput = -1;
+    const auto positionedConnection = QObject::connect(&console, &ConsoleBackend::inputSubmitted,
+        [&](qint64 value) { positionedInput = value; });
+    console.clickAt(0, 1);
+    check(positionedInput == -1, "positioned nonbutton does not submit input");
+    console.clickAt(0, 0);
+    check(positionedInput == 7, "positioned button retains its input value");
+    QObject::disconnect(positionedConnection);
+    console.notifyInputDone();
+    const auto background = PrintTemplateCompiler::parseRuntimeMarkup(
+        "<shape type='rect' param='0,0,100,100' color='#000000' bcolor='#ffffff'>");
+    check(background.parts.first().style.color == QColor("#000000")
+              && background.parts.first().style.buttonColor == QColor("#ffffff"),
+          "window background shape preserves explicit normal and focus colors");
     const int savedFontSize = console.fontSize();
     const int savedLineHeight = console.lineHeight();
     // eraTW stores each layer in TEMP_HTML, then prepends a spacer before <p>.

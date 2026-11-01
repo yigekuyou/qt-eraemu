@@ -147,6 +147,8 @@ void ConsoleLayout::layoutSegments(QList<ConsoleSegment>& segments) const {
     int col = 0;
     for (ConsoleSegment& seg : segments) {
         int c = col;
+        int positionedPx = seg.positionPercent * m_fontSize / 100;
+        if (seg.pointXLocked) c = qRound(double(positionedPx) / columnWidthPx());
         // 整段都是 `<div rect>` 绝对定位的区块（肖像 / 缩略图 / 图层）时，这一段
         // **不推进正文游标**：C# 的 LockPointX 只给该 part 定死 X，div 结束后正文
         // 仍从 div 之前的位置继续。推进的话，div 的右边缘会被当成下一段的起点 ——
@@ -157,6 +159,13 @@ void ConsoleLayout::layoutSegments(QList<ConsoleSegment>& segments) const {
             if (!p.pointXLocked || p.relCol < 0) { lockedSegment = false; break; }
         }
         for (ConsoleSpan& part : seg.spans) {
+            if (seg.pointXLocked) {
+                measurePart(part);
+                part.pointXLocked = true;
+                part.positionedXpx = positionedPx;
+                part.relCol = c;
+                positionedPx += qMax(0, part.width);
+            }
             if (part.pointXLocked && part.relCol >= 0) {
                 c = part.relCol;                 // C# LockPointX：绝对定位
             }
@@ -171,7 +180,7 @@ void ConsoleLayout::layoutSegments(QList<ConsoleSegment>& segments) const {
             const ConsoleSpan& last = seg.spans.last();
             seg.cols = qMax(0, last.relCol + last.cols - seg.relCol);
             seg.width = seg.cols * columnWidthPx();
-            if (!lockedSegment) col = seg.relCol + seg.cols;
+            if (seg.pointXLocked || !lockedSegment) col = seg.relCol + seg.cols;
         } else {
             seg.relCol = col;
             seg.cols = 0;

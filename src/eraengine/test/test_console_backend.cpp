@@ -1387,6 +1387,30 @@ int main(int argc, char* argv[]) {
               "盒子不占内容行：div 的第一行内容就贴在第 0 行");
     }
 
+    // 10i) div 的 depth：C# 按 depth 升序绘制叠放层，与打印顺序无关。
+    //      FL3.8 地图先打 depth=1 的节点按钮、再 depth=10 的底图、最后 depth=3 的路径图。
+    qDebug() << "\n10i) div depth 决定叠放顺序（与打印顺序无关）";
+    {
+        ConsoleBackend z;
+        z.setFontSize(14); z.setLineHeight(14);
+        z.setGridColumns(226); z.setGridRows(60);
+        z.printTemplate(PrintTemplateCompiler::parseRuntimeMarkup(QStringLiteral(
+            "<div rect='0px,0px,60px,20px' depth='10'>HIGH</div>"
+            "<div rect='0px,0px,60px,20px' depth='3'>LOW</div>")));
+        z.flush();
+        QStringList order;
+        for (int r = 0; r < z.rowCount(); ++r)
+            for (const QVariant& v : z.lineBlocks(r)) {
+                const auto m = v.toMap();
+                if (m.value("kind").toString() != "text") continue;
+                const QString t = m.value("text").toString().trimmed();
+                if (!t.isEmpty()) order << t;
+            }
+        check(order.size() >= 2 && order.first() == QStringLiteral("LOW")
+                  && order.last() == QStringLiteral("HIGH"),
+              QString("depth 小的先画（顺序：%1）").arg(order.join(QLatin1String(", "))));
+    }
+
     // Nested captures retain all rows; positioned layers cannot consume trailing body text.
     {
         ConsoleBackend c;

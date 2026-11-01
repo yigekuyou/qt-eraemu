@@ -213,6 +213,9 @@ struct PrintTemplatePart {
     // 对每个非 0 角走 drawRoundedCornerBorder*（把该角的方角裁成 1/4 圆）。
     QList<int> radiusPx;
     QList<int> radiusRel;
+    // `<div depth='N'>`：叠放层次（C# HtmlDivTag.Depth / ConsoleDivPart.depth）。
+    // C# 绘制时按 depth 升序画，与打印顺序无关；移植侧在发布叠放层前按它稳定排序。
+    int depth = 0;
     int x = -1;
     int y = -1;
 };

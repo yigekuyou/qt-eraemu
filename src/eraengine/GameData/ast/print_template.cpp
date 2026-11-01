@@ -398,6 +398,7 @@ PrintTemplate PrintTemplateCompiler::evaluateOccurrences(const CompiledPrintTemp
             // C# BoxBorder.DrawBorder：div 自身先画背景填充（color），
             // 再在 rect 内侧画四边边框（bcolor + border 宽度），最后才画子内容。
             part.fillColor = QColor(attrs.value("color"));
+            part.depth = attrs.value("depth").trimmed().toInt();
             const auto borderBox = sidesOf(attrs.value("border"));
             part.borderPx = {qMax(0, borderBox.px[0]), qMax(0, borderBox.px[1]),
                              qMax(0, borderBox.px[2]), qMax(0, borderBox.px[3])};

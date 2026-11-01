@@ -374,6 +374,7 @@ void ConsoleBackend::renderTemplate(const PrintTemplate& output, bool toBuffer) 
     // 对应行，x 由 positionedXpx（div 原点 + 段内偏移）交给布局绝对定位。
     struct DivCapture {
         int yPx = 0;
+        int depth = 0;   // C# HtmlDivTag.Depth：绘制层次（小 = 先画 = 在下面）
         QList<QList<ConsoleSegment>> lines{1};   // 每行一组段
         // 盒子（背景 + 四条边）单独放，**不占内容行**：C# 的盒子是 DrawBorder
         // 画在 rect 上、行号由 ceil(Top/LineHeight) 记账，div 的第一行内容就
@@ -469,6 +470,7 @@ void ConsoleBackend::renderTemplate(const PrintTemplate& output, bool toBuffer) 
             }
             DivCapture cap;
             cap.yPx = divY;
+            cap.depth = part.depth;
             // C# ConsoleDivPart.DrawTo：先 BoxBorder.DrawBorder（背景填充 + 四边
             // 边框），再画子内容。移植侧把盒子拆成「1 个填充块 + 最多 4 条边框」
             // 塞进本 div 的**第一行最前面** —— QML 的 z 就是打印顺序，所以盒子
@@ -741,6 +743,12 @@ void ConsoleBackend::renderTemplate(const PrintTemplate& output, bool toBuffer) 
     // 交给布局绝对定位；同一行的多个 div 合并成一行的多个段（FL3.8 拠点地图
     // 就是 5 个 780×480 的格子并排）。超出 rect 的部分由 QML 侧裁剪。
     if (!overlays.isEmpty()) {
+        // C# 按 depth 升序绘制叠放层（ConsoleDivPart.depth），与打印顺序无关：
+        // FL3.8 地图先打 depth=1 的节点按钮、再打 depth=10 的地图底图、
+        // 最后 depth=3 的路径图 —— 打印顺序不能直接当 z。稳定排序保持同 depth 的
+        // 相对顺序（同一深度里仍按脚本书写顺序）。
+        std::stable_sort(overlays.begin(), overlays.end(),
+                         [](const DivCapture& a, const DivCapture& b) { return a.depth < b.depth; });
         const int lineH = qMax(1, m_layout.lineHeight());
         const auto dropEmpty = [](const DivCapture& c) {
             QList<QList<ConsoleSegment>> ls = c.lines;

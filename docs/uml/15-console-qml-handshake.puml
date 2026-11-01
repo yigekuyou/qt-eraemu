@@ -76,14 +76,15 @@ end note
 
 note over C,V
   gridRows 与 stageRows 的口径不同：
-  gridRows  = windowHeight / lineHeight（含输入行，脚本可见行数与 C# 一致）
+  gridRows  = stageHeight / lineHeight（含输入行，脚本可见行数与 C# 一致）
   stageRows = gridRows - 1（输入框是 QML 独立控件，不在舞台内）
-  QML 按 stageRows 分摊：cellHeight = gridHeightPx / stageRows
-  按 gridRows 分摊会让正文与图片层比舞台少一整行高度。
-  stageImageLayer 的子项位置按格子（col/row），尺寸用图片原始尺寸
-  （pxWidth/pxHeight；满格会把图拉伸几像素，框与立絵对不上），
-  整层只套一次等比 scale = cellHeight / lineHeight（逐图定位会留下 1px 暗缝）；
-  画布列宽 = 舞台列宽 / scale，缩放后正好落回舞台的列。
+  QML 使用 C# 固定排版单位：cellWidth = floor(fontSize / 2)，cellHeight = lineHeight；
+  舞台除不尽的右侧/底部余量保留为空白，不摊进每格。
+  stageBackImageLayer 与 stageImageLayer 的子项位置按格子（col/row），尺寸使用
+  C++ 目标矩形 pxWidth/pxHeight，并由 Image.Stretch 填满；外层各套一次
+  scale = cellHeight / lineHeight（逐图定位会留下 1px 暗缝），画布列宽 = 舞台列宽 / scale。
+  C++ 将所有 div 按全屏 depth 降序稳定排序，depth > 0 的 div 图片进入正文之下，
+  普通 <img> 与 depth <= 0 的 div 图片进入正文之上；同一 depth 保留打印顺序。
   纵向 = 行号 × lineHeight + ypos 像素位移（pxTop = raw_ypos × fontSize / 100，
   对齐 C# 的 rect.Y = pointY + top）：位移发生在格子上，不折算成「负几格」。
   `spriteImagesChanged(names)` 是像素更新通知，不等同于模型重建：

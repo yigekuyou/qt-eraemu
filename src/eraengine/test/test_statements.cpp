@@ -434,6 +434,21 @@ int main(int argc, char* argv[]) {
         check(evalStr2D(QStringLiteral("VSS2D:3:7")) == QStringLiteral("hi"),
               "表达式求值 VSS2D:3:7 读回同一槽（写/读两路径一致）");
 
+        // --- 2D 字符串数组的复合赋值：左侧当前值必须读**同一个槽** ---
+        // 旧实现用「重建 VariableNode + 二元表达式」求 A + B；重建的节点没有
+        // 声明维度信息，2D 字符串数组的左侧读成空串，结果只剩右值。FL3.8 的
+        //   m_arrWndTextPrint:nWndId:nLoop += 行首边框 + arrWndTextBuf:nLoop
+        // 因此每一行都退化成「行首边框 + 本行内容」，窗口每行多画一条顶边框
+        // （任务板整屏横线、任务列表被盖住）。
+        execV(QStringLiteral("VSS2D:3:7 += \"!\""));
+        check(storage.getGlobalStr2DInCurrentFrame("VSS2D", 3, 7) == QStringLiteral("hi!"),
+              "2D 字符串数组 += 保留原值（VSS2D:3:7 -> \"hi!\"）");
+        execV(QStringLiteral("VSS2D:3:7 *= 2"));
+        check(storage.getGlobalStr2DInCurrentFrame("VSS2D", 3, 7) == QStringLiteral("hi!hi!"),
+              "2D 字符串数组 *= 按原值重复（VSS2D:3:7 -> \"hi!hi!\"）");
+        check(storage.getGlobalStr2DInCurrentFrame("VSS2D", 4, 7).isEmpty(),
+              "2D 字符串数组复合赋值不串到别的元素");
+
         // --- 显式范围 + start>end 自动交换 ---
         for (int i = 1; i <= 4; ++i) storage.setGlobalInt1DInCurrentFrame("VSCNT", i, 7);
         execV(QStringLiteral("VARSET VSCNT, 5, 3, 1"));   // start=3,end=1 -> 交换 -> [1,3)

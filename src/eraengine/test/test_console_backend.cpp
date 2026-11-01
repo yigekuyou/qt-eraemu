@@ -1263,6 +1263,22 @@ int main(int argc, char* argv[]) {
             for (const QVariant& v : n.lineBlocks(r))
                 if (v.toMap().value("kind").toString() == "box") ++count;
         check(count == 4, QString("没有 color 就只有 4 条边（实得 %1）").arg(count));
+
+        ConsoleBackend extreme;
+        extreme.setFontSize(14); extreme.setLineHeight(14);
+        extreme.printTemplate(PrintTemplateCompiler::parseRuntimeMarkup(
+            QStringLiteral("<div rect='0px,0px,4px,4px' border='999px,-1px,999px,999px' bcolor='#f00'>X</div>")));
+        extreme.flush();
+        for (int r = 0; r < extreme.rowCount(); ++r)
+            for (const QVariant& v : extreme.lineBlocks(r)) {
+                const auto m = v.toMap();
+                if (m.value("kind").toString() == "box") {
+                    check(m.value("boxW").toInt() >= 0 && m.value("boxH").toInt() >= 0,
+                          "极端 border 值不会生成负盒子几何");
+                    check(m.value("boxW").toInt() <= 4 && m.value("boxH").toInt() <= 4,
+                          "border 宽度限制在 rect 尺寸内");
+                }
+            }
     }
 
     // Nested captures retain all rows; positioned layers cannot consume trailing body text.

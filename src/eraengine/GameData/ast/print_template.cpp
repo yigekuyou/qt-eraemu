@@ -388,8 +388,8 @@ PrintTemplate PrintTemplateCompiler::evaluateOccurrences(const CompiledPrintTemp
             // 再在 rect 内侧画四边边框（bcolor + border 宽度），最后才画子内容。
             part.fillColor = QColor(attrs.value("color"));
             const auto borderBox = insetOf(attrs.value("border"));
-            part.borderWidths = {borderBox.top, borderBox.right,
-                                 borderBox.bottom, borderBox.left};
+            part.borderWidths = {qMax(0, borderBox.top), qMax(0, borderBox.right),
+                                 qMax(0, borderBox.bottom), qMax(0, borderBox.left)};
             // bcolor 与 border 一样是 CSS 1~4 值简写（C# ParseParam4MixedNum 的
             // 展开规则同样适用于 AddColorParam4）：上 / 上下、左右 / 上、左右、下 /
             // 上、右、下、左。全无效 = 没有边框色（不画边）。

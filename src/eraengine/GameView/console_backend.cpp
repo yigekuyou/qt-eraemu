@@ -453,15 +453,15 @@ void ConsoleBackend::renderTemplate(const PrintTemplate& output, bool toBuffer) 
                 // 就压在这块底色上）。这里按 rect 全程填充，边框条随后覆盖边缘。
                 if (part.fillColor.isValid()) boxes.append(makeBox(0, 0, divW, divH, part.fillColor));
                 if (part.borderColors.size() == 4 && part.borderWidths.size() == 4) {
-                    const int bt = part.borderWidths.at(0), br = part.borderWidths.at(1);
-                    const int bb = part.borderWidths.at(2), bl = part.borderWidths.at(3);
+                    const int bt = qMin(divH, part.borderWidths.at(0));
+                    const int br = qMin(divW, part.borderWidths.at(1));
+                    const int bb = qMin(divH - bt, part.borderWidths.at(2));
+                    const int bl = qMin(divW - br, part.borderWidths.at(3));
                     const int midH = qMax(0, divH - bt - bb);
-                    const int midW = qMax(0, divW - bl - br);
                     if (bt > 0) boxes.append(makeBox(0, 0, divW, bt, part.borderColors.at(0)));
                     if (bb > 0) boxes.append(makeBox(0, divH - bb, divW, bb, part.borderColors.at(2)));
                     if (bl > 0) boxes.append(makeBox(0, bt, bl, midH, part.borderColors.at(3)));
                     if (br > 0) boxes.append(makeBox(divW - br, bt, br, midH, part.borderColors.at(1)));
-                    Q_UNUSED(midW);
                 }
             }
             if (!boxes.isEmpty() && !cap.lines.isEmpty()) {

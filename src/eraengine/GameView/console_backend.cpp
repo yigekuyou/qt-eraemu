@@ -336,10 +336,28 @@ void ConsoleBackend::renderTemplate(const PrintTemplate& output, bool toBuffer) 
     const auto lengthPx = [this](int value, bool pixels) {
         return pixels ? value : value * m_layout.fontSize() / 100;
     };
+    // ---- <div> 行缓冲 ------------------------------------------------------
+    // C# ConsoleDivPart 持有自己的 Buffer（内容先排进 div 的行），DrawTo 时整块
+    // 画到 rect 位置；div 内的 <br> 只影响 div 自己的行，不会打断正文。
+    // 移植侧以前把 div 内容直接排进正文流：`<br>` 会换正文行，于是 FL3.8 拠点
+    // 地图的 25 个 `<div rect>` 格子被摊成一列（每格两行）。
+    // 现在：捕获期内容进 captures.last()，EndDivision 后按 rect 的 y/行高 落到
+    // 对应行，x 由 positionedXpx（div 原点 + 段内偏移）交给布局绝对定位。
+    struct DivCapture {
+        int xPx = 0, yPx = 0, wPx = 0, hPx = 0;
+        QList<QList<ConsoleSegment>> lines{1};   // 每行一组段
+    };
+    QList<DivCapture> captures;
+    QList<DivCapture> overlays;
+    int blockRow = 0;                             // 本区块起点行号
+    const auto captureLine = [&captures](QList<ConsoleSegment>& fallback) -> QList<ConsoleSegment>& {
+        return captures.isEmpty() ? fallback : captures.last().lines.last();
+    };
+
     const auto sealButton = [&] {
         if (!inButton) return;
         button.generation = m_generation;
-        m_sealed.append(button);
+        captureLine(m_sealed).append(button);
         button = {};
         inButton = false;
     };
@@ -352,16 +370,38 @@ void ConsoleBackend::renderTemplate(const PrintTemplate& output, bool toBuffer) 
     for (const auto& part : output.parts) {
         if (part.kind == PrintTemplatePart::Kind::Division) {
             sealButton();
-            flushPendingToSegments(m_sealed); m_pendingParts.clear();
+            flushPendingToSegments(captureLine(m_sealed)); m_pendingParts.clear();
             const int parentX = divisions.isEmpty() ? 0 : divisions.last().x;
             const int parentY = divisions.isEmpty() ? 0 : divisions.last().y;
-            divisions.append({parentX + lengthPx(part.x, part.xposIsPixels),
-                              parentY + lengthPx(part.y, part.yposIsPixels), 0, 0});
+            const int divX = parentX + lengthPx(part.x, part.xposIsPixels);
+            const int divY = parentY + lengthPx(part.y, part.yposIsPixels);
+            divisions.append({divX, divY, 0, 0});
+            // 只有「整块提交」的 HTML_PRINT 才把 div 当独立叠放层处理：
+            // 缓冲模式（PRINTFORM 续行 / HTML_PRINT toBuffer）里 div 的内容
+            // 必须继续留在未定型行上，否则后续 print 接不上。
+            if (toBuffer) { continue; }
+            if (captures.isEmpty()) {
+                // 顶层 div = 独立叠放层：先把正文行定格，再记下本区块的起始行，
+                // div 的 rect.y 就是相对这个起始行的像素偏移。
+                if (m_pendingOpen) newline();
+                blockRow = m_buffer.count();
+            }
+            DivCapture cap;
+            cap.xPx = divX;
+            cap.yPx = divY;
+            cap.wPx = lengthPx(part.width, part.widthIsPixels);
+            cap.hPx = lengthPx(part.height, part.heightIsPixels);
+            captures.append(cap);
             continue;
         }
         if (part.kind == PrintTemplatePart::Kind::EndDivision) {
             sealButton();
-            flushPendingToSegments(m_sealed); m_pendingParts.clear();
+            flushPendingToSegments(captureLine(m_sealed)); m_pendingParts.clear();
+            if (!captures.isEmpty()) {
+                DivCapture cap = captures.takeLast();
+                if (captures.isEmpty()) overlays.append(cap);
+                else captures.last().lines.last().append(cap.lines.value(0));
+            }
             if (!divisions.isEmpty()) divisions.removeLast();
             continue;
         }
@@ -404,7 +444,7 @@ void ConsoleBackend::renderTemplate(const PrintTemplate& output, bool toBuffer) 
         }
         if (part.kind == PrintTemplatePart::Kind::Button || part.kind == PrintTemplatePart::Kind::NonButton) {
             sealButton();
-            flushPendingToSegments(m_sealed); m_pendingParts.clear();
+            flushPendingToSegments(captureLine(m_sealed)); m_pendingParts.clear();
             button.isButton = part.kind == PrintTemplatePart::Kind::Button;
             button.pointXLocked = part.lockedPosition;
             button.positionPercent = part.x;
@@ -416,8 +456,16 @@ void ConsoleBackend::renderTemplate(const PrintTemplate& output, bool toBuffer) 
         if (part.kind == PrintTemplatePart::Kind::EndButton) { sealButton(); continue; }
         if (part.kind == PrintTemplatePart::Kind::Break) {
             const auto continued = button; const bool wasButton = inButton;
-            sealButton(); newline();
-            resetDivisionCursors();
+            sealButton();
+            if (!captures.isEmpty()) {
+                // div 内的换行只影响 div 自己的行缓冲，不打断正文；
+                // 行内游标回到 div 左边界（C# 在 <br> 时把 PointX 复位到 div.Left）。
+                captures.last().lines.append(QList<ConsoleSegment>());
+                if (!divisions.isEmpty()) { divisions.last().px = 0; divisions.last().col = 0; }
+            } else {
+                newline();
+                resetDivisionCursors();
+            }
             if (wasButton) { button = continued; button.spans.clear(); inButton = true; }
             continue;
         }
@@ -485,6 +533,38 @@ void ConsoleBackend::renderTemplate(const PrintTemplate& output, bool toBuffer) 
         markDirty();
     }
     sealButton();
+    // ---- div 叠放层落位 --------------------------------------------------
+    // rect.y / 行高 = 目标行（相对本区块起点），rect.x 已由 positionedXpx
+    // 交给布局绝对定位；同一行的多个 div 合并成一行的多个段（FL3.8 拠点地图
+    // 就是 5 个 780×480 的格子并排）。超出 rect 的部分由 QML 侧裁剪。
+    if (!overlays.isEmpty()) {
+        const int lineH = qMax(1, m_layout.fontSize());
+        const auto dropEmpty = [](const DivCapture& c) {
+            QList<QList<ConsoleSegment>> ls = c.lines;
+            // `<div><br>…` 的引导换行不该占一行（C# 的 div 缓冲同样不吃它）
+            if (ls.size() > 1 && ls.first().isEmpty()) ls.removeFirst();
+            while (!ls.isEmpty() && ls.last().isEmpty()) ls.removeLast();
+            return ls;
+        };
+        QMap<int, QList<ConsoleSegment>> rows;
+        for (const DivCapture& c : overlays) {
+            const int row = c.yPx / lineH;
+            const QList<QList<ConsoleSegment>> ls = dropEmpty(c);
+            for (int k = 0; k < ls.size(); ++k) rows[row + k] += ls.at(k);
+        }
+        int guard = 0;
+        for (auto it = rows.cbegin(); it != rows.cend(); ++it) {
+            while (m_buffer.count() < blockRow + it.key() && guard++ < 4096) {
+                m_sealed.clear(); m_pendingParts.clear();
+                newline();
+            }
+            m_sealed = it.value();
+            m_pendingParts.clear();
+            m_pendingOpen = true;
+            newline();
+        }
+        overlays.clear();
+    }
     // 收尾：非缓冲把内容定格成完整行（HTML_PRINT 自动换行）；缓冲把尾部
     // **留在未定型行**，后续 print 继续接在同一行上。
     if (!toBuffer && m_pendingOpen) newline();

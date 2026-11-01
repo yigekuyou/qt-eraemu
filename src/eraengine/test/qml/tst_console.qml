@@ -931,6 +931,17 @@ TestCase {
         // 也是引擎像素：min(300px 原始宽, 200px 裁剪上限) = 200px。
         verify(Math.abs(clipped.width - 200) < 0.51,
                "rect 外的绘制被裁到 200px（实得 " + clipped.width + "）");
+        const clippedImage = findChild(clipped, "blockImage");
+        verify(clippedImage !== null, "裁剪区块仍有图片绘制项");
+        verify(Math.abs(clipped.naturalLayoutWidth - 300) < 0.51,
+               "自然布局宽度保留原图 300px");
+        verify(Math.abs(clippedImage.width - 300) < 0.51,
+               "Image 绘制宽度保持原值，不随裁剪容器缩小（实得 "
+               + clippedImage.width + "/" + clipped.width + "）");
+        verify(Math.abs(clippedImage.height - 60) < 0.51,
+               "Image 绘制高度保持原值，不随裁剪容器缩小");
+        verify(clippedImage.width > clipped.width,
+               "Image 可超出裁剪容器，由容器负责裁剪");
         // 没越界的图：同样在 div 里、clip: true，但裁剪上限要大于自身宽高 ——
         // 一个像素都不能被切掉（上限是 200px，150px 的图还剩 50px 余量）。
         const intact = view.blockAt(0, 1);
@@ -966,7 +977,7 @@ TestCase {
             tryCompare(findChild(block, "blockImage"), "status", Image.Ready);
             compare(block.width, 80);
             compare(block.height, 80);
-            compare(block.blockData.pxTop, 20);
+            compare(block.blockData.sourceRow * view.lineHeight + block.blockData.pxTop, 20);
             images.push(block);
         }
         compare(images[0].x, images[1].x);

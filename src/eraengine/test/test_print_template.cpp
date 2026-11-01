@@ -748,6 +748,12 @@ int main(int argc, char** argv) {
             }
             check(found, "div part present for inset check");
         }
+        for (const QString& inset : {QStringLiteral(","), QStringLiteral(" , , "), QStringLiteral("1,2,3,4,5")}) {
+            const auto t = PrintTemplateCompiler::parseRuntimeMarkup(
+                QStringLiteral("<div padding='%1'>x</div>").arg(inset));
+            check(!t.parts.isEmpty() && t.parts.first().insetX == 0,
+                  "malformed inset list safely falls back to zero");
+        }
         auto lockedAst = compile(QStringLiteral("STRFORM(\"<div %LOCALS%></div>\")"));
         const auto lockedCompiled = PrintTemplateCompiler::compile(lockedAst);
         if (lockedCompiled) {

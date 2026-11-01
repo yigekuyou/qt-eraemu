@@ -364,6 +364,7 @@ PrintTemplate PrintTemplateCompiler::evaluateOccurrences(const CompiledPrintTemp
                     return ok ? n : 0;
                 };
                 const QStringList f = raw.split(',', Qt::SkipEmptyParts);
+                if (f.isEmpty() || f.size() > 4) return P{0, 0, 0, 0};
                 if (f.size() == 1) { const int a = px(f[0]); return P{a, a, a, a}; }
                 if (f.size() == 2) return P{px(f[0]), px(f[1]), px(f[0]), px(f[1])};
                 if (f.size() == 3) return P{px(f[0]), px(f[1]), px(f[2]), px(f[1])};

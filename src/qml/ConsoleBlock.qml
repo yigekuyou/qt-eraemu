@@ -194,19 +194,25 @@ Item {
     readonly property real clipHeightLimit: clipHeightPx >= 0 ? clipHeightPx * enginePxToLocalH : -1
     // 完全落在 rect 外（limit == 0）也算「被裁」——宽度 0 时本来什么也画不出来。
     readonly property bool divClipped: clipWidthLimit >= 0 || clipHeightLimit >= 0
+    // 绘制内容必须保留裁剪前的自然布局尺寸。父 Item 的 width/height 是裁剪
+    // 容器尺寸；让 Image 读取它们会把原图缩放到剩余可见区域，改变 src/srcb
+    // 的绘制大小。Image 保持 naturalLayoutWidth/Height，超出的部分由父 Item
+    // 的 clip 丢弃。
+    readonly property real naturalLayoutWidth: fixedWidth > 0
+                                                ? fixedWidth
+                                                : (divImageWidth > 0 ? divImageWidth
+                                                   : Math.max(gridCols * cellWidth, contentRow.implicitWidth))
+    readonly property real naturalLayoutHeight: fixedHeight > 0
+                                                 ? fixedHeight
+                                                 : (divImageWidth > 0 && blockData.pxHeight > 0 ? blockData.pxHeight
+                                                    : Math.max(gridRows * cellHeight, contentRow.implicitHeight))
     clip: divClipped
-    width: {
-        const w = fixedWidth > 0
-                ? fixedWidth
-                : Math.max(divImageWidth, gridCols * cellWidth, contentRow.implicitWidth)
-        return clipWidthLimit >= 0 ? Math.max(0, Math.min(w, clipWidthLimit)) : w
-    }
-    height: {
-        const h = fixedHeight > 0
-                  ? fixedHeight
-                  : Math.max(gridRows * cellHeight, contentRow.implicitHeight)
-        return clipHeightLimit >= 0 ? Math.max(0, Math.min(h, clipHeightLimit)) : h
-    }
+    width: clipWidthLimit >= 0
+           ? Math.max(0, Math.min(naturalLayoutWidth, clipWidthLimit))
+           : naturalLayoutWidth
+    height: clipHeightLimit >= 0
+            ? Math.max(0, Math.min(naturalLayoutHeight, clipHeightLimit))
+            : naturalLayoutHeight
     // 叠放顺序 = 控制台打印顺序（C++ 给的扁平 z）。三个 Instantiator 共用同一个
     // 父 Item 后，靠它把 text/image/shape 按真正的绘制顺序交叠 —— 对齐 C#
     // 「逐 part 顺序绘制」：图可压住先打印的字，后打印的字也能盖住先打印的图。
@@ -326,8 +332,8 @@ Item {
         // 运行期精灵的像素会随合成变化（FL3.8 FACE_*），不能吃 URL 级 pixmap 缓存：
         // 文档（Image Caching）：cache=false 时每次都回调 provider。
         cache: false
-        width: Math.max(1, block.width)
-        height: Math.max(1, block.height)
+        width: Math.max(1, block.naturalLayoutWidth)
+        height: Math.max(1, block.naturalLayoutHeight)
         fillMode: Image.PreserveAspectFit
         verticalAlignment: Image.AlignTop
         // Qt 文档（Images）：「Enable image.smooth only if required」——
@@ -356,8 +362,9 @@ Item {
         // following line or leave a zero-sized QML item.
         //
         // 网格区块保留资源纵横比，图片的垂直起点由 anchors.top 与 offsetRows 决定。
-        width: Math.max(1, block.width)
-        height: Math.max(1, block.height)
+        // 裁剪容器可以比图片小，但不能反过来改变图片的绘制尺寸。
+        width: Math.max(1, block.naturalLayoutWidth)
+        height: Math.max(1, block.naturalLayoutHeight)
         fillMode: Image.PreserveAspectFit
         verticalAlignment: Image.AlignTop
         smooth: width < imageItem.implicitWidth || height < imageItem.implicitHeight

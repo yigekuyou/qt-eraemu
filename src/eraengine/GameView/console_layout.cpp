@@ -128,8 +128,8 @@ void ConsoleLayout::measurePart(ConsoleSpan& part) const {
         part.rows = qMax(1, qRound(hPx / static_cast<double>(qMax(1, m_lineHeight))));
         part.width = qMax(0, wPx);
         part.height = qMax(1, hPx);
-        part.top = yPx;
-        part.bottom = yPx + part.height;
+        part.top = yPx + part.positionedTopPx;
+        part.bottom = part.top + part.height;
         break;
     }
     default:
@@ -137,8 +137,8 @@ void ConsoleLayout::measurePart(ConsoleSpan& part) const {
         part.rows = 1;
         part.width = part.cols * columnWidthPx();
         part.height = m_lineHeight;
-        part.top = 0;
-        part.bottom = m_lineHeight;
+        part.top = part.positionedTopPx;
+        part.bottom = part.top + m_lineHeight;
         break;
     }
 }

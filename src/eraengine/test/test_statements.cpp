@@ -449,6 +449,30 @@ int main(int argc, char* argv[]) {
         check(storage.getGlobalStr2DInCurrentFrame("VSS2D", 4, 7).isEmpty(),
               "2D 字符串数组复合赋值不串到别的元素");
 
+        // Repetition follows the expression contract before any qint64 -> int cast.
+        for (const QString& count : {QStringLiteral("-1"), QStringLiteral("10000"),
+                                     QStringLiteral("4294967297"), QStringLiteral("-4294967295"),
+                                     QStringLiteral("9223372036854775807")}) {
+            execV(QStringLiteral("VSS2D:3:7 *= ") + count);
+            check(storage.getGlobalStr2DInCurrentFrame("VSS2D", 3, 7) == QStringLiteral("hi!hi!"),
+                  QStringLiteral("invalid repeat count preserves slot: %1").arg(count));
+        }
+        execV(QStringLiteral("VSS2D:3:7 *= 0"));
+        check(storage.getGlobalStr2DInCurrentFrame("VSS2D", 3, 7).isEmpty(), "repeat zero clears slot");
+        execV(QStringLiteral("VSS2D:3:7 '= \"x\""));
+        execV(QStringLiteral("VSS2D:3:7 *= 9999"));
+        check(storage.getGlobalStr2DInCurrentFrame("VSS2D", 3, 7).size() == 9999,
+              "repeat 9999 accepted");
+        const QString html = QStringLiteral("<b>left</b>");
+        const FlatStringValue structured(html, PrintTemplateCompiler::parseRuntimeMarkup(html));
+        storage.setStringSlotInCurrentFrame("VSS2D", {3, 7}, structured);
+        execV(QStringLiteral("VSS2D:3:7 += \"!\""));
+        const auto appended = storage.getStringSlotInCurrentFrame("VSS2D", {3, 7});
+        const auto expected = flatString(concatenateStrings(QVariant::fromValue(structured), QVariant(QStringLiteral("!"))));
+        check(appended.text == expected.text && appended.markup.parts.size() == expected.markup.parts.size()
+              && appended.markup.parts.first().kind == expected.markup.parts.first().kind,
+              "2D += preserves structured markup through shared concatenation");
+
         // --- 显式范围 + start>end 自动交换 ---
         for (int i = 1; i <= 4; ++i) storage.setGlobalInt1DInCurrentFrame("VSCNT", i, 7);
         execV(QStringLiteral("VARSET VSCNT, 5, 3, 1"));   // start=3,end=1 -> 交换 -> [1,3)

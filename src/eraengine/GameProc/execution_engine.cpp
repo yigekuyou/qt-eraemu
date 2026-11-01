@@ -1558,44 +1558,27 @@ bool ExecutionEngine::executeInstruction(const LogicalLine& line, eravar::ScopeI
         }
         return true;
     }
-    if (name == "+=") {
-        // 字符串累加（`A += B` -> A = A + B）
-        if (args.size() >= 2) {
-            // Type lookup must not evaluate indexed LHS expressions (e.g. A:I++).
-            const OperandType destType =
-                args[0].ast ? args[0].ast->valueType() : OperandType::Unknown;
-            if (destType == OperandType::Str) {
-                if (!args[1].ast) return false;
-                const auto ref = resolveLhsRef(args[0].ast.data());
-                if (!ref.valid) return false;
-                const QVariant rhs = getEvaluator().evaluate(*args[1].ast, m_storage, m_gameBaseData, m_activeScope);
-                if (!rhs.isValid()) return false;
-                // 左侧当前值必须**直接按存储槽读**。以前是重建一个 VariableNode
-                // 再求 `A + B`：重建节点没有声明维度信息，二次元字符串数组
-                // `P:x:N += …` 的左侧会读到别的槽（通常为空串），于是结果只剩右值。
-                // FL3.8 的 WindowDrawer 正是：
-                //   m_arrWndTextPrint:nWndId:nLoop += 行首边框 + arrWndTextBuf:nLoop
-                // 左侧丢失后每行都退化成「行首边框 + 本行内容」，窗口每一行都多画
-                // 一条顶边框（画面满是横线、任务列表被盖住）。
-                QString current;
-                if (m_storage->hasParameter(ref.name)) current = m_storage->parameter(ref.name).toString();
-                else current = m_storage->getStringSlot(ref.name, ref.indices, m_activeScope).text;
-                return writeStructuredValue(ref, QVariant(current + stringText(rhs)), line.scopeKey);
-            }
-        }
-    }
-    if (name == "*=" && args.size() >= 2 && isStringVariable(args[0].ast && args[0].ast->kind() == NodeKind::Variable ? static_cast<const VariableNode&>(*args[0].ast).name() : QString(), line.scopeKey)) {
+    if ((name == "+=" || name == "*=") && args.size() >= 2
+        && args[0].ast && args[0].ast->valueType() == OperandType::Str) {
         if (!args[1].ast) return false;
         const auto ref = resolveLhsRef(args[0].ast.data());
         if (!ref.valid) return false;
-        // 同 `+=`：左侧值直接读存储槽，不从重建的 VariableNode 求值
-        //（重建节点没有声明维度，二次元字符串数组会读错槽）。
-        const QVariant count = getEvaluator().evaluate(*args[1].ast, m_storage, m_gameBaseData, m_activeScope);
-        if (!count.isValid() || isStringValue(count)) return false;
-        QString current;
-        if (m_storage->hasParameter(ref.name)) current = m_storage->parameter(ref.name).toString();
-        else current = m_storage->getStringSlot(ref.name, ref.indices, m_activeScope).text;
-        return writeStructuredValue(ref, QVariant(current.repeated(qMax(0, int(count.toLongLong())))), line.scopeKey);
+        const QVariant rhs = getEvaluator().evaluate(*args[1].ast, m_storage, m_gameBaseData, m_activeScope);
+        if (!rhs.isValid()) return false;
+        // Read the resolved slot directly: a rebuilt VariableNode loses array dimensions.
+        const QVariant current = m_storage->hasParameter(ref.name)
+            ? m_storage->parameter(ref.name)
+            : QVariant::fromValue(m_storage->getStringSlot(ref.name, ref.indices, m_activeScope));
+        if (name == "+=")
+            return writeStructuredValue(ref, concatenateStrings(current, rhs), line.scopeKey);
+        if (isStringValue(rhs)) return false;
+        // Reuse the expression evaluator's qint64 repetition bounds and error contract.
+        auto left = QSharedPointer<LiteralNode>::create(stringText(current));
+        auto right = QSharedPointer<LiteralNode>::create(rhs.toLongLong());
+        BinaryOpNode operation(left, ExpressionToken(TokenType::MULTIPLY, "*"), right);
+        const QVariant value = getEvaluator().evaluate(operation, m_storage, m_gameBaseData, m_activeScope);
+        if (!value.isValid()) return false;
+        return writeStructuredValue(ref, value, line.scopeKey);
     }
     if (name == "+=" || name == "-=" || name == "*=" || name == "/=" || name == "%="
         || name == "&=" || name == "|=" || name == "^=" || name == "<<=" || name == ">>=") {

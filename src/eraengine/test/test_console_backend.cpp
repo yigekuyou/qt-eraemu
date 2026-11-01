@@ -1196,6 +1196,34 @@ int main(int argc, char* argv[]) {
               "没给 rect 尺寸的 <div> 不裁剪（clipWidth/clipHeight == -1）");
     }
 
+    // Nested captures retain all rows; positioned layers cannot consume trailing body text.
+    {
+        ConsoleBackend c;
+        c.setFontSize(14); c.setLineHeight(20);
+        c.printTemplate(PrintTemplateCompiler::parseRuntimeMarkup(QStringLiteral(
+            "<div rect='0px,20px,100px,100px'><div rect='0px,20px,100px,80px'>"
+            "A<br>B</div></div>TAIL")));
+        c.flush();
+        bool a = false, b = false, tail = false;
+        for (int r = 0; r < c.rowCount(); ++r) {
+            for (const QVariant& v : c.lineBlocks(r)) {
+                const auto m = v.toMap();
+                const QString text = m.value("text").toString();
+                if (text == "A") { a = true; check(r * 20 + m.value("pxTop").toInt() == 40, "nested A vertical offset counted once"); }
+                if (text == "B") { b = true; check(r * 20 + m.value("pxTop").toInt() == 60, "nested B retains second line"); }
+                tail |= text == "TAIL";
+            }
+        }
+        check(a && b && tail, "nested div retains both lines and trailing body text");
+        ConsoleBackend empty;
+        empty.printTemplate(PrintTemplateCompiler::parseRuntimeMarkup(QStringLiteral(
+            "<div rect='0px,0px,10px,10px' padding='8'><img src='empty' width='30px' height='30px'></div>")));
+        empty.flush();
+        const auto clipped = blockOf(empty.lineBlocks(0), "empty");
+        check(clipped.value("clipWidth").toInt() == 0 && clipped.value("clipHeight").toInt() == 0,
+              "insets exhausting content box produce empty clip, not unlimited drawing");
+    }
+
     // ---- 10b. 同一个 <div> 内的多段必须顺次前进（不能都回到 div 原点）----
     // FL3.8 情報画面表头：`SEX '= @"性別:%RESULTS:1%"`，RESULTS:1 带 <font color>，
     // 于是同一个 div 里出现「性別:」+「男性」两段。若每段都拿 division.x 当左边界，

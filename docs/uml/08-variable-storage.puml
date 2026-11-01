@@ -103,4 +103,10 @@ legend bottom
   AST owns VariableKey; GameData/Variable owns storage and mapping.
   No diagram should duplicate the locus switch or private-key separator.
 endlegend
+note bottom
+  DYNAMIC private slots are saved with both value and presence at CALL entry.
+  RETURN restores or removes them according to that presence flag; an empty
+  container is still present. Recursive frames pair snapshots on the stack.
+  STATIC private variables do not use this reset path.
+end note
 @enduml

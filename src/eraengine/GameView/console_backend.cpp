@@ -353,12 +353,11 @@ void ConsoleBackend::renderTemplate(const PrintTemplate& output, bool toBuffer) 
     // 现在：捕获期内容进 captures.last()，EndDivision 后按 rect 的 y/行高 落到
     // 对应行，x 由 positionedXpx（div 原点 + 段内偏移）交给布局绝对定位。
     struct DivCapture {
-        int xPx = 0, yPx = 0, wPx = 0, hPx = 0;
+        int yPx = 0;
         QList<QList<ConsoleSegment>> lines{1};   // 每行一组段
     };
     QList<DivCapture> captures;
     QList<DivCapture> overlays;
-    int blockRow = 0;                             // 本区块起点行号
     bool blockStarted = false;                    // 本区块只认第一个顶层 div 的起点
     const auto captureLine = [&captures](QList<ConsoleSegment>& fallback) -> QList<ConsoleSegment>& {
         return captures.isEmpty() ? fallback : captures.last().lines.last();
@@ -399,8 +398,19 @@ void ConsoleBackend::renderTemplate(const PrintTemplate& output, bool toBuffer) 
             const int contentH = divH - part.insetY - part.insetBottom;
             // 没写 width/height 的 <div> 只是分组，不裁剪（C# 那里 rect 宽高为 0
             // 会裁成空，但实机上这种写法的用途是分组，裁剪反而画不出东西）。
-            if (contentW > 0) cursor.contentW = contentW;
-            if (contentH > 0) cursor.contentH = contentH;
+            if (part.width != 0) cursor.contentW = qMax(0, contentW);
+            if (part.height != 0) cursor.contentH = qMax(0, contentH);
+            // Each ancestor constrains the same absolute content coordinates.
+            for (const auto& parent : divisions) {
+                if (parent.contentW >= 0) {
+                    const int remaining = qMax(0, parent.x + parent.contentW - divX);
+                    cursor.contentW = cursor.contentW < 0 ? remaining : qMin(cursor.contentW, remaining);
+                }
+                if (parent.contentH >= 0) {
+                    const int remaining = qMax(0, parent.y + parent.contentH - divY);
+                    cursor.contentH = cursor.contentH < 0 ? remaining : qMin(cursor.contentH, remaining);
+                }
+            }
             divisions.append(cursor);
             // 只有「整块提交」的 HTML_PRINT 才把 div 当独立叠放层处理：
             // 缓冲模式（PRINTFORM 续行 / HTML_PRINT toBuffer）里 div 的内容
@@ -414,14 +424,10 @@ void ConsoleBackend::renderTemplate(const PrintTemplate& output, bool toBuffer) 
                 // 否则每个 div 都会推进一行、永远合不到同一行上。
                 if (m_pendingOpen && (!m_sealed.isEmpty() || !m_pendingParts.isEmpty()))
                     newline();
-                blockRow = m_buffer.count();
                 blockStarted = true;
             }
             DivCapture cap;
-            cap.xPx = divX;
             cap.yPx = divY;
-            cap.wPx = lengthPx(part.width, part.widthIsPixels);
-            cap.hPx = lengthPx(part.height, part.heightIsPixels);
             captures.append(cap);
             continue;
         }
@@ -431,7 +437,15 @@ void ConsoleBackend::renderTemplate(const PrintTemplate& output, bool toBuffer) 
             if (!captures.isEmpty()) {
                 DivCapture cap = captures.takeLast();
                 if (captures.isEmpty()) overlays.append(cap);
-                else captures.last().lines.last().append(cap.lines.value(0));
+                else {
+                    auto& parent = captures.last();
+                    const int lineH = qMax(1, m_layout.lineHeight());
+                    const int firstRow = qMax(0, cap.yPx / lineH - parent.yPx / lineH);
+                    while (parent.lines.size() < firstRow + cap.lines.size())
+                        parent.lines.append(QList<ConsoleSegment>());
+                    for (int i = 0; i < cap.lines.size(); ++i)
+                        parent.lines[firstRow + i].append(cap.lines.at(i));
+                }
             }
             if (!divisions.isEmpty()) divisions.removeLast();
             continue;
@@ -557,7 +571,7 @@ void ConsoleBackend::renderTemplate(const PrintTemplate& output, bool toBuffer) 
             // 接在前一段右边；只给 div 原点会让后一段压在前一段上。
             span.positionedXpx = division.x + division.px;
             span.relCol = qRound(double(division.x) / m_layout.columnWidthPx()) + division.col;
-            span.positionedTopPx = division.y;
+            span.positionedTopPx = division.y + division.line * qMax(1, m_layout.lineHeight());
             // C# graph.SetClip(内容框)：只裁绘制，排版推进照旧。剩余可见宽 =
             // 内容框宽 - div 内已排到的像素；剩余可见高 = 内容框高 - 已排到的
             // 内容行（图片还要扣掉 ypos，负 ypos 的图层可以探出 div 上沿）。
@@ -588,7 +602,7 @@ void ConsoleBackend::renderTemplate(const PrintTemplate& output, bool toBuffer) 
     // 交给布局绝对定位；同一行的多个 div 合并成一行的多个段（FL3.8 拠点地图
     // 就是 5 个 780×480 的格子并排）。超出 rect 的部分由 QML 侧裁剪。
     if (!overlays.isEmpty()) {
-        const int lineH = qMax(1, m_layout.fontSize());
+        const int lineH = qMax(1, m_layout.lineHeight());
         const auto dropEmpty = [](const DivCapture& c) {
             QList<QList<ConsoleSegment>> ls = c.lines;
             // `<div><br>…` 的引导换行不该占一行（C# 的 div 缓冲同样不吃它）
@@ -602,16 +616,31 @@ void ConsoleBackend::renderTemplate(const PrintTemplate& output, bool toBuffer) 
             const QList<QList<ConsoleSegment>> ls = dropEmpty(c);
             for (int k = 0; k < ls.size(); ++k) rows[row + k] += ls.at(k);
         }
-        int guard = 0;
+        // Preserve ordinary text after the positioned layers before publishing rows.
+        flushPendingToSegments(m_sealed);
+        m_pendingParts.clear();
+        rows[0].append(m_sealed);
+        m_sealed.clear();
+        int nextRow = 0;
         for (auto it = rows.cbegin(); it != rows.cend(); ++it) {
-            while (m_buffer.count() < blockRow + it.key() && guard++ < 4096) {
+            // Bound sparse-row expansion independently of the bounded history size.
+            const int targetRow = qBound(nextRow, it.key(), nextRow + 4096);
+            while (nextRow < targetRow) {
+                ++nextRow;
                 m_sealed.clear(); m_pendingParts.clear();
                 newline();
             }
             m_sealed = it.value();
+            // The model row already accounts for the integral vertical offset.
+            for (auto& segment : m_sealed)
+                for (auto& span : segment.spans) {
+                    span.positionedTopPx -= it.key() * lineH;
+                    m_layout.measurePart(span);
+                }
             m_pendingParts.clear();
             m_pendingOpen = true;
             newline();
+            ++nextRow;
         }
         overlays.clear();
     }

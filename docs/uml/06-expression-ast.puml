@@ -102,4 +102,11 @@ legend bottom
   Name resolution: 07-variable-resolution.
   Storage loci and array geometry: 08-variable-storage.
 endlegend
+note bottom
+  String compound assignments resolve the destination once and read the actual
+  storage slot, preserving multidimensional indices. += reuses structured
+  string concatenation; *= reuses expression repetition validation (qint64
+  count in [0,10000)), before writing the result. Invalid counts leave the
+  destination unchanged; no dimension-less VariableNode is reconstructed.
+end note
 @enduml

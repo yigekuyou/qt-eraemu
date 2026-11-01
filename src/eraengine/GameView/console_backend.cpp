@@ -460,6 +460,9 @@ void ConsoleBackend::renderTemplate(const PrintTemplate& output, bool toBuffer) 
             if (!captures.isEmpty()) {
                 // div 内的换行只影响 div 自己的行缓冲，不打断正文；
                 // 行内游标回到 div 左边界（C# 在 <br> 时把 PointX 复位到 div.Left）。
+                // 先把本行还没定型的 part 冲进 div 的**当前行**，再另起一行；
+                // 否则文字会漏到下一行、上一行变空（div 内多行内容只剩一行）。
+                flushPendingToSegments(captureLine(m_sealed)); m_pendingParts.clear();
                 captures.last().lines.append(QList<ConsoleSegment>());
                 if (!divisions.isEmpty()) { divisions.last().px = 0; divisions.last().col = 0; }
             } else {

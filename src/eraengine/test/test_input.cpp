@@ -166,6 +166,60 @@ int main(int argc, char* argv[]) {
     }
 
     // =====================================================================
+    qDebug() << "\nB2) INPUTS 省略第 1 实参：`INPUTS , 1`（FL3.8 USERCOM_INPUT.ERB:8）";
+    {
+        // C# SP_INPUTS_ArgumentBuilder 按**逗号位**归位：`INPUTS , 1` 的第 1 实参
+        // 空缺 -> HasDefValue=false，第 2 实参是「允许鼠标输入」。旧实现把裸
+        // 逗号当成实参、又要求它必须有装载期 AST，于是 FL3.8 一按按钮就
+        // 「INPUTS 参数缺少装载期 AST：,」并进 Error。
+        VariableStorage storage;
+        ProcessState state;
+        EraParseTable table(&state);
+        ExpressionEvaluator evaluator;
+        evaluator.setLanguageEncoding(TextEncoding::ShiftJis);
+        table.setExpressionEvaluator(&evaluator);
+        table.setVariableStorage(&storage);
+        ExecutionEngine engine(&storage, nullptr);
+        engine.setParseTable(&table);
+        engine.setExpressionEvaluator(&evaluator);
+        ScriptRunner runner(&table, &engine, &state, &storage);
+        runner.setExpressionEvaluator(&evaluator);
+        QObject::connect(&state, &ProcessState::continueExecution,
+                         &runner, &ScriptRunner::onContinueExecution);
+
+        QVariant requestedDefault = QStringLiteral("<没有发出 inputRequested>");
+        QObject::connect(&runner, &ScriptRunner::inputRequested,
+                         [&requestedDefault](const QString&, const QVariant& def) {
+                             requestedDefault = def;
+                         });
+
+        const QStringList src = {
+            "@MAIN",                    // 0
+            "#DIM LEN",                 // 1
+            "INPUTS , 1",               // 2（缺省值空缺 + 允许鼠标）
+            "LEN = STRLENS(RESULTS)"    // 3
+        };
+        check(table.loadScript("main", buildLines(table, src)), "loadScript(INPUTS , 1)");
+        table.setEntryPoint("MAIN");
+        table.markLoadComplete();
+
+        const ExecState st = runner.runToCompletion();
+        check(st == ExecState::WaitInput, "`INPUTS , 1` 正常挂起（不进 Error）");
+        check(state.getExecState() == ExecState::WaitInput, "中心状态 = WaitInput（不是 Error）");
+        // 缺省值空缺 = 没有缺省；第 2 实参 1 是鼠标输入开关，**不是**缺省字符串。
+        check(!requestedDefault.isValid(),
+              qPrintable(QString("缺省值为空（第 2 实参 1 只表示允许鼠标），实得 <%1>")
+                             .arg(requestedDefault.toString())));
+
+        // 空回车 / 字符串输入照常落到 RESULTS。
+        storage.setGlobalStr1DInCurrentFrame(QStringLiteral("RESULTS"), 0, QStringLiteral(""));
+        runner.onInputProvided(0);
+        check(state.getExecState() == ExecState::Halt, "输入后结束");
+        check(storage.getGlobalStr1DInCurrentFrame(QStringLiteral("RESULTS"), 0).isEmpty(),
+              "空输入不套用「1」当缺省字符串");
+    }
+
+    // =====================================================================
     qDebug() << "\nC) 系统层输入：标准标题画面（无 @SYSTEM_TITLE）";
     {
         VariableStorage storage;

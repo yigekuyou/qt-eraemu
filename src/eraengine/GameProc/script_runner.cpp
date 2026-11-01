@@ -1566,10 +1566,30 @@ ExecState ScriptRunner::executeLine(const LogicalLine& line) {
         // 空回车必须**什么都不发生**；以前 QML 把空输入当 0 交出去，恰好命中
         // `ELSEIF RESULT == MAIN_MAP` -> 「从外面回家」，表现就是「没操作就自动返回」。
         m_waitDefault = QVariant();
-        if (!line.arguments.isEmpty()) {
-            const Operand& a0 = line.arguments.first();
+        // C# SP_INPUT / SP_INPUTS_ArgumentBuilder：实参按**逗号位**归位 ——
+        // 第 1 位 = 缺省值，第 2 位 = 鼠标输入开关（INPUTS 族）/ 同（INPUT）。
+        // 词法把 "," 留成独立的分隔符操作数（Operand::raw == ","），所以这里
+        // 不能简单跳过逗号：`INPUTS , 1`（缺省值留空、允许鼠标）跳过逗号后
+        // 会把 1 误当缺省值；按分隔符推进字段号才能还原位置。
+        const Operand* def = nullptr;
+        {
+            int field = 0;
+            for (const Operand& a : line.arguments) {
+                const QString r = a.raw.trimmed();
+                if (!a.isString && (r == QLatin1String(",") || r == QLatin1String(":"))) {
+                    ++field;                        // 分隔符：下一个实参换到下一字段
+                    continue;
+                }
+                if (field == 0 && !def && !a.omitted) def = &a;
+            }
+        }
+        if (def) {
+            const Operand& a0 = *def;
             ExpressionEvaluator& ev = getEvaluator();
-            if (!a0.ast && !a0.isString) {
+            // INPUTS 族的第 1 实参在 C# 里是 **FORM 字符串**：装载期没解析出 AST
+            // 的裸文本就是字面量（`INPUTS 无名` 的缺省值是「无名」，不是变量）。
+            // 整数族（INPUT/ONEINPUT）解析不出 AST 才是真错误。
+            if (!a0.ast && !a0.isString && !isStr) {
                 m_state->setErrorState();
                 reportError(QStringLiteral("%1 参数缺少装载期 AST：%2").arg(name, a0.raw));
                 return ExecState::Error;

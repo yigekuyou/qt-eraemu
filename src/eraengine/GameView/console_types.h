@@ -68,7 +68,7 @@ struct ConsoleStyle {
     bool operator!=(const ConsoleStyle& o) const { return !(*this == o); }
 };
 
-enum class ConsoleSpanKind { Text, Image, Shape };
+enum class ConsoleSpanKind { Text, Image, Shape, Box };
 
 // ---------------------------------------------------------------------------
 // ConsoleSpan —— 最小单位区块（C# AConsoleDisplayPart）
@@ -147,6 +147,10 @@ struct ConsoleSpan {
     // DrawTo 在 isSelecting||isFocus 时改画 cImageB —— eraTW 立绘在按钮里
     // 平时显示 src、被指向时显示 srcb）。仅显示语义，不影响布局。
     QString  imageButton;
+    // C# BoxBorder.DrawBorder 的 div 盒子（背景填充 / 一条边框）：几何是**引擎
+    // 像素**，QML 按它直接摆，不参与网格推进。
+    int      boxWidthPx  = 0;
+    int      boxHeightPx = 0;
     QString  shapeType;         // "space" | "rect" | "line" | "polygon"
     QList<int> shapeParams;     // 百分比参数（× FontSize / 100）
     // rect 四参数按 C# 语义为 x, y, width, height；这里保存换算后的像素几何。
@@ -163,6 +167,7 @@ struct ConsoleSpan {
         switch (k) {
         case ConsoleSpanKind::Image: return QStringLiteral("image");
         case ConsoleSpanKind::Shape: return QStringLiteral("shape");
+        case ConsoleSpanKind::Box:   return QStringLiteral("shape");
         default:                     return QStringLiteral("text");
         }
     }
@@ -174,6 +179,7 @@ struct ConsoleSpan {
         switch (kind) {
         case ConsoleSpanKind::Image: m.insert("kind", "image"); break;
         case ConsoleSpanKind::Shape: m.insert("kind", "shape"); break;
+        case ConsoleSpanKind::Box:   m.insert("kind", "box");   break;
         default:                     m.insert("kind", "text");  break;
         }
         m.insert("text", text);
@@ -195,6 +201,8 @@ struct ConsoleSpan {
         m.insert("clipHeight", clipHeightPx);
         m.insert("top", top);
         m.insert("bottom", bottom);
+        m.insert("boxW", boxWidthPx);
+        m.insert("boxH", boxHeightPx);
         m.insert("imageId", imageId);
         m.insert("imageW", imageSize.width());
         m.insert("imageH", imageSize.height());

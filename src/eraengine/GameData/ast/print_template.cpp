@@ -384,6 +384,31 @@ PrintTemplate PrintTemplateCompiler::evaluateOccurrences(const CompiledPrintTemp
             part.insetY = insetY;
             part.insetRight = insetRight;
             part.insetBottom = insetBottom;
+            // C# BoxBorder.DrawBorder：div 自身先画背景填充（color），
+            // 再在 rect 内侧画四边边框（bcolor + border 宽度），最后才画子内容。
+            part.fillColor = QColor(attrs.value("color"));
+            const auto borderBox = insetOf(attrs.value("border"));
+            part.borderWidths = {borderBox.top, borderBox.right,
+                                 borderBox.bottom, borderBox.left};
+            // bcolor 与 border 一样是 CSS 1~4 值简写（C# ParseParam4MixedNum 的
+            // 展开规则同样适用于 AddColorParam4）：上 / 上下、左右 / 上、左右、下 /
+            // 上、右、下、左。全无效 = 没有边框色（不画边）。
+            const auto colorsOf = [](const QString& raw) {
+                QStringList f = raw.split(',');
+                for (QString& v : f) v = v.trimmed();
+                if (f.isEmpty() || f.size() > 4) return QList<QColor>{};
+                QList<QColor> four;
+                switch (f.size()) {
+                case 1: four = {QColor(f[0]), QColor(f[0]), QColor(f[0]), QColor(f[0])}; break;
+                case 2: four = {QColor(f[0]), QColor(f[1]), QColor(f[0]), QColor(f[1])}; break;
+                case 3: four = {QColor(f[0]), QColor(f[1]), QColor(f[2]), QColor(f[1])}; break;
+                default: four = {QColor(f[0]), QColor(f[1]), QColor(f[2]), QColor(f[3])}; break;
+                }
+                bool any = false;
+                for (const QColor& c : four) any = any || c.isValid();
+                return any ? four : QList<QColor>{};
+            };
+            part.borderColors = colorsOf(attrs.value("bcolor"));
         }
         out.parts.append(std::move(part));
     }

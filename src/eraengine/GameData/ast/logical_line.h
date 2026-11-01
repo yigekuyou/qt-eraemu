@@ -200,6 +200,13 @@ struct PrintTemplatePart {
     // （3000px 的背景图、超长一行文字）会画到 rect 外面去。
     int insetRight = 0;
     int insetBottom = 0;
+    // C# BoxBorder.DrawBorder：`<div>` 自身的盒子（背景 + 四边边框）。
+    //   color  = 背景填充色（无效 = 不填充）
+    //   bcolor = 四边边框色，1~4 值 CSS 简写展开成 top/right/bottom/left
+    //   borderWidths 与 inset 里的 border 是同一份值，这里单独留一份给绘制
+    QColor fillColor;
+    QList<int> borderWidths;     // top, right, bottom, left（px）
+    QList<QColor> borderColors;  // 同上顺序；空 = 没有边框色
     int x = -1;
     int y = -1;
 };

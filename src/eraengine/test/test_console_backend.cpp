@@ -1196,6 +1196,75 @@ int main(int argc, char* argv[]) {
               "没给 rect 尺寸的 <div> 不裁剪（clipWidth/clipHeight == -1）");
     }
 
+    // ---- 10e. div 自身的盒子（C# BoxBorder.DrawBorder）----
+    // FL3.8 拠点地图的每格就是 `<div rect='…' border='2px' bcolor='#C0C0C0'>`：
+    // 只画文字不画盒子，格子就只剩孤零零的标签（实机截图上整张地图是空的）。
+    // C++ 把盒子拆成「背景填充 1 块 + 四边 4 条」，几何用**引擎像素**。
+    qDebug() << "\n10e) div 自身的盒子（C# BoxBorder.DrawBorder）";
+    {
+        ConsoleBackend c;
+        c.setFontSize(14); c.setLineHeight(14);
+        c.setGridColumns(226); c.setGridRows(60);
+        c.printTemplate(PrintTemplateCompiler::parseRuntimeMarkup(
+            QStringLiteral("<div rect='100px,0px,200px,60px' border='2px' "
+                           "bcolor='#C0C0C0' color='#112233'>A</div>")));
+        c.flush();
+        QList<QVariantMap> boxes;
+        QVariantMap label;
+        for (int r = 0; r < c.rowCount(); ++r) {
+            for (const QVariant& v : c.lineBlocks(r)) {
+                const auto m = v.toMap();
+                if (m.value("kind").toString() == "box") boxes.append(m);
+                if (m.value("text").toString() == "A") label = m;
+            }
+        }
+        check(boxes.size() == 5,
+              QString("背景 1 块 + 四边 4 条 = 5 个盒子区块（实得 %1）").arg(boxes.size()));
+        QVariantMap fill, top, bottom, left, right;
+        for (const auto& b : boxes) {
+            if (b.value("color").toString().compare(QStringLiteral("#ff112233"),
+                                                    Qt::CaseInsensitive) == 0) fill = b;
+            else if (b.value("boxW").toInt() == 200 && b.value("boxH").toInt() == 2)
+                (b.value("pxTop").toInt() == 0 ? top : bottom) = b;
+            else if (b.value("boxW").toInt() == 2) (b.value("pxLeft").toInt() == 100 ? left : right) = b;
+        }
+        check(!fill.isEmpty(), "color 属性画出背景填充块");
+        if (!fill.isEmpty()) {
+            check(fill.value("boxW").toInt() == 200 && fill.value("boxH").toInt() == 60,
+                  QString("背景填充铺满 rect 200x60（实得 %1x%2）")
+                      .arg(fill.value("boxW").toInt()).arg(fill.value("boxH").toInt()));
+            check(fill.value("pxLeft").toInt() == 100,
+                  QString("背景从 rect 左边界 100px 起（实得 %1）").arg(fill.value("pxLeft").toInt()));
+        }
+        check(!top.isEmpty() && !bottom.isEmpty(),
+              "bcolor 的上/下边框条各一条（2px 高，与 rect 同宽）");
+        if (!top.isEmpty())
+            check(top.value("pxTop").toInt() == 0, "上边框在 rect 顶部");
+        if (!bottom.isEmpty())
+            check(bottom.value("pxTop").toInt() == 58,
+                  QString("下边框贴 rect 底部（pxTop 实得 %1）").arg(bottom.value("pxTop").toInt()));
+        check(!left.isEmpty() && !right.isEmpty(),
+              "bcolor 的左/右边框条各一条（2px 宽）");
+        if (!right.isEmpty())
+            check(right.value("pxLeft").toInt() == 298,
+                  QString("右边框贴 rect 右边界（pxLeft 实得 %1）").arg(right.value("pxLeft").toInt()));
+        check(label.value("pxLeft").toInt() == 102,
+              QString("子内容再内缩 border 2px（pxLeft 实得 %1）").arg(label.value("pxLeft").toInt()));
+
+        // 只给 bcolor 不给 color：不画背景，只画四条边。
+        ConsoleBackend n;
+        n.setFontSize(14); n.setLineHeight(14);
+        n.setGridColumns(226); n.setGridRows(60);
+        n.printTemplate(PrintTemplateCompiler::parseRuntimeMarkup(
+            QStringLiteral("<div rect='0px,0px,100px,40px' border='1px' bcolor='#FF0000'>B</div>")));
+        n.flush();
+        int count = 0;
+        for (int r = 0; r < n.rowCount(); ++r)
+            for (const QVariant& v : n.lineBlocks(r))
+                if (v.toMap().value("kind").toString() == "box") ++count;
+        check(count == 4, QString("没有 color 就只有 4 条边（实得 %1）").arg(count));
+    }
+
     // Nested captures retain all rows; positioned layers cannot consume trailing body text.
     {
         ConsoleBackend c;

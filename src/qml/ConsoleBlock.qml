@@ -176,6 +176,16 @@ Item {
                                           && block.kind === "image"
                                           && blockData.pxWidth !== undefined
                                           ? blockData.pxWidth : 0
+    // ---- `<div>` 自身的盒子（C# ConsoleDivPart.DrawTo -> BoxBorder.DrawBorder）----
+    // C++ 把「背景填充 + 四边边框」拆成若干条盒子区块，几何是**引擎像素**
+    // （divW × divH 与每条边的宽高），不参与网格推进。宽度按「像素 -> 本地格」
+    // 同一套折算（与 pxLeft 一致：px / columnWidthPx * cellWidth）。
+    readonly property real boxWidthPx: blockData && blockData.boxW !== undefined
+                                       ? blockData.boxW : 0
+    readonly property real boxHeightPx: blockData && blockData.boxH !== undefined
+                                        ? blockData.boxH : 0
+    readonly property bool isBox: block.kind === "box"
+
     // ---- 所属 <div> 的绘制裁剪（C# ConsoleDivPart.DrawTo 的 graph.SetClip(内容框)）----
     // C++ 给出**引擎像素**的剩余可见宽/高（-1 = 不裁）。本组件的宽高有两条口径：
     //   * 图片（divImageWidth / fixedWidth）= 图片原始**引擎像素** → 系数 1；
@@ -198,11 +208,15 @@ Item {
     // 容器尺寸；让 Image 读取它们会把原图缩放到剩余可见区域，改变 src/srcb
     // 的绘制大小。Image 保持 naturalLayoutWidth/Height，超出的部分由父 Item
     // 的 clip 丢弃。
-    readonly property real naturalLayoutWidth: fixedWidth > 0
+    readonly property real naturalLayoutWidth: isBox
+                                                ? boxWidthPx * cellWidth / columnWidthPx
+                                                : fixedWidth > 0
                                                 ? fixedWidth
                                                 : (divImageWidth > 0 ? divImageWidth
                                                    : Math.max(gridCols * cellWidth, contentRow.implicitWidth))
-    readonly property real naturalLayoutHeight: fixedHeight > 0
+    readonly property real naturalLayoutHeight: isBox
+                                                 ? boxHeightPx * cellHeight / Math.max(1, lineHeightPx)
+                                                 : fixedHeight > 0
                                                  ? fixedHeight
                                                  : (divImageWidth > 0 && blockData.pxHeight > 0 ? blockData.pxHeight
                                                     : Math.max(gridRows * cellHeight, contentRow.implicitHeight))
@@ -233,6 +247,15 @@ Item {
     // A Text.width constrains layout, not glyph advance. Render each grid
     // character in its assigned cells so font fallback/proportional fonts cannot
     // move later characters or paint over the following span.
+    // div 自身的盒子（背景填充 / 一条边框）：C# BoxBorder.DrawBorder 画在子内容
+    // 之前，所以这里也先于内容绘制（同 z 下按声明顺序）。
+    Rectangle {
+        objectName: "divBox"
+        anchors.fill: parent
+        visible: block.isBox
+        color: block.blockData && block.blockData.color ? block.blockData.color : "transparent"
+    }
+
     // SETBGCOLOR 背景（画在文字之后，z = -1）
     Rectangle {
         objectName: "spanBg"

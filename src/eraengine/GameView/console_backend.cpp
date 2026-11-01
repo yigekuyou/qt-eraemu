@@ -428,6 +428,47 @@ void ConsoleBackend::renderTemplate(const PrintTemplate& output, bool toBuffer) 
             }
             DivCapture cap;
             cap.yPx = divY;
+            // C# ConsoleDivPart.DrawTo：先 BoxBorder.DrawBorder（背景填充 + 四边
+            // 边框），再画子内容。移植侧把盒子拆成「1 个填充块 + 最多 4 条边框」
+            // 塞进本 div 的**第一行最前面** —— QML 的 z 就是打印顺序，所以盒子
+            // 自然压在子内容下面。盒子只画，不推进排版（不进 division.px）。
+            // 盒子的原点 = **rect 原点**，不是内容原点：divX/divY 已经内缩了
+            // margin+border+padding，而盒子（背景/边框）画在 rect 自己身上。
+            const int rectX = divX - part.insetX;
+            const int rectY = divY - part.insetY;
+            const auto makeBox = [&](int bx, int by, int bw, int bh, const QColor& color) {
+                ConsoleSpan box;
+                box.kind = ConsoleSpanKind::Box;
+                box.style.color = color;
+                box.boxWidthPx = qMax(0, bw);
+                box.boxHeightPx = qMax(0, bh);
+                box.pointXLocked = true;
+                box.positionedXpx = rectX + bx;
+                box.positionedTopPx = rectY + by;
+                return box;
+            };
+            QList<ConsoleSpan> boxes;
+            if (divW > 0 && divH > 0) {
+                // 背景：C# 用 margin 之后、border 之内的 rect 填满（border 自身
+                // 就压在这块底色上）。这里按 rect 全程填充，边框条随后覆盖边缘。
+                if (part.fillColor.isValid()) boxes.append(makeBox(0, 0, divW, divH, part.fillColor));
+                if (part.borderColors.size() == 4 && part.borderWidths.size() == 4) {
+                    const int bt = part.borderWidths.at(0), br = part.borderWidths.at(1);
+                    const int bb = part.borderWidths.at(2), bl = part.borderWidths.at(3);
+                    const int midH = qMax(0, divH - bt - bb);
+                    const int midW = qMax(0, divW - bl - br);
+                    if (bt > 0) boxes.append(makeBox(0, 0, divW, bt, part.borderColors.at(0)));
+                    if (bb > 0) boxes.append(makeBox(0, divH - bb, divW, bb, part.borderColors.at(2)));
+                    if (bl > 0) boxes.append(makeBox(0, bt, bl, midH, part.borderColors.at(3)));
+                    if (br > 0) boxes.append(makeBox(divW - br, bt, br, midH, part.borderColors.at(1)));
+                    Q_UNUSED(midW);
+                }
+            }
+            if (!boxes.isEmpty() && !cap.lines.isEmpty()) {
+                ConsoleSegment boxSeg;
+                boxSeg.spans = boxes;
+                cap.lines.first().append(boxSeg);
+            }
             captures.append(cap);
             continue;
         }

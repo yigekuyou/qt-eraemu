@@ -734,24 +734,28 @@ int main(int argc, char** argv) {
                 if (part.kind != PrintTemplatePart::Kind::Division) continue;
                 found = part.x == 600 && part.y == 0;
                 check(found, "div rect origin stays untouched by margin/padding/border");
-                // x: margin 2 + padding 4 + border 5 = 11；y: 2 + 3 + 1 = 6
-                check(part.insetX == 11 && part.insetY == 6,
-                      qPrintable(QString("div insets margin+padding+border (x=%1 y=%2)")
-                                     .arg(part.insetX).arg(part.insetY)));
-                // 右侧：margin 2 + padding 4 + border 2 = 8；
-                // 底部：margin 2 + padding 3 + border 3 = 8。
-                // C# DrawTo 对 rect 减去**四边**再 SetClip，右侧/底部不内缩的话
-                // 子内容会画到 div 外面（背景大图压住旁列文字）。
-                check(part.insetRight == 8 && part.insetBottom == 8,
-                      qPrintable(QString("div right/bottom insets (right=%1 bottom=%2)")
-                                     .arg(part.insetRight).arg(part.insetBottom)));
+                // 四边量分两条通道（顺序 上,右,下,左）：
+                //   px  = padding 3/4/3/4 + border 1/2/3/5
+                //   rel = margin '2'（裸数字 = 字号百分比，C# MixedNum）
+                const auto pxSum = [&part](int i) { return i < part.insetPxSum.size() ? part.insetPxSum.at(i) : -1; };
+                const auto relSum = [&part](int i) { return i < part.insetRelSum.size() ? part.insetRelSum.at(i) : -1; };
+                check(pxSum(0) == 4 && pxSum(1) == 6 && pxSum(2) == 6 && pxSum(3) == 9,
+                      qPrintable(QString("div inset px 通道 (上%1 右%2 下%3 左%4)")
+                                     .arg(pxSum(0)).arg(pxSum(1)).arg(pxSum(2)).arg(pxSum(3))));
+                check(relSum(0) == 2 && relSum(1) == 2 && relSum(2) == 2 && relSum(3) == 2,
+                      qPrintable(QString("裸数字 margin 进 rel 通道（不当作像素）：%1")
+                                     .arg(relSum(0))));
             }
             check(found, "div part present for inset check");
         }
         for (const QString& inset : {QStringLiteral(","), QStringLiteral(" , , "), QStringLiteral("1,2,3,4,5")}) {
             const auto t = PrintTemplateCompiler::parseRuntimeMarkup(
                 QStringLiteral("<div padding='%1'>x</div>").arg(inset));
-            check(!t.parts.isEmpty() && t.parts.first().insetX == 0,
+            const auto& p0 = t.parts.first();
+            const auto total = [](const QList<int>& l) {
+                int sum = 0; for (int v : l) sum += v; return sum;
+            };
+            check(!t.parts.isEmpty() && total(p0.insetPxSum) == 0 && total(p0.insetRelSum) == 0,
                   "malformed inset list safely falls back to zero");
         }
         auto lockedAst = compile(QStringLiteral("STRFORM(\"<div %LOCALS%></div>\")"));

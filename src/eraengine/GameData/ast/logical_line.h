@@ -191,25 +191,28 @@ struct PrintTemplatePart {
     QList<int> shapeParams;
     bool xposIsPixels = false;
     bool lockedPosition = false;
-    // C# ConsoleDivPart：divXOffset / yOffset（margin + padding + border 的左上量）。
-    // 只移动**子内容**起点，rect 本身不变（测试 bare attribute fragment 也是这么约束的）。
-    int insetX = 0;
-    int insetY = 0;
-    // 右下内缩：C# DrawTo 里 rect 依次减去 margin/border/padding 的**四边**，
-    // 最后 SetClip 用的就是这个内容框 —— 右侧/底部同样要收，否则子内容
-    // （3000px 的背景图、超长一行文字）会画到 rect 外面去。
-    int insetRight = 0;
-    int insetBottom = 0;
+    // C# StyledBoxModel：margin / padding / border / radius 都是 MixedNum 数组
+    // （Utils.ParseParam4MixedNum）——**裸数字是字号百分比**（num*FontSize/100），
+    // 带 px 后缀才是绝对像素。解析期还没有字号，所以分两条通道存原始值，布局期
+    // 用 ConsoleLayout 的字号折算（与 rect 的 xposIsPixels 是同一套口径）。
+    // 顺序统一为 上,右,下,左；radius 借用同序（0=左上 1=右上 2=右下 3=左下，
+    // 因为 CSS 简写让 [2]=下 对应右下、[3]=左 对应左下）。
+    // C# ConsoleDivPart：divXOffset / yOffset（margin + padding + border 的左上量）
+    // 只移动**子内容**起点，rect 本身不变；右/下同样要收（SetClip 用整个内容框，
+    // 否则 3000px 背景图、超长一行文字会画到 rect 外面）。
+    QList<int> insetPxSum;       // margin+padding+border 合计（像素）
+    QList<int> insetRelSum;      // 同上（1/100 em）
     // C# BoxBorder.DrawBorder：`<div>` 自身的盒子（背景 + 四边边框）。
     //   color  = 背景填充色（无效 = 不填充）
-    //   bcolor = 四边边框色，1~4 值 CSS 简写展开成 top/right/bottom/left
-    //   borderWidths 与 inset 里的 border 是同一份值，这里单独留一份给绘制
+    //   bcolor = 四边边框色，1~4 值 CSS 简写展开成 上,右,下,左
     QColor fillColor;
-    QList<int> borderWidths;     // top, right, bottom, left（px）
-    QList<QColor> borderColors;  // 同上顺序；空 = 没有边框色
-    // `<div radius=…>`：四角半径（左上, 右上, 右下, 左下，px）。C# BoxBorder
+    QList<int> borderPx;         // 边框宽度（像素）
+    QList<int> borderRel;        // 边框宽度（1/100 em）
+    QList<QColor> borderColors;  // 上,右,下,左；空 = 没有边框色
+    // `<div radius=…>`：四角半径（左上, 右上, 右下, 左下）。C# BoxBorder
     // 对每个非 0 角走 drawRoundedCornerBorder*（把该角的方角裁成 1/4 圆）。
-    QList<int> cornerRadii;
+    QList<int> radiusPx;
+    QList<int> radiusRel;
     int x = -1;
     int y = -1;
 };

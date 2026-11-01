@@ -1228,36 +1228,36 @@ int main(int argc, char* argv[]) {
                 if (m.value("text").toString() == "A") label = m;
             }
         }
-        check(boxes.size() == 5,
-              QString("背景 1 块 + 四边 4 条 = 5 个盒子区块（实得 %1）").arg(boxes.size()));
-        QVariantMap fill, top, bottom, left, right;
+        // 四边同色 -> 「外圈边框 + 内圈底色」两块（C# 圆角就是靠两圈半径自然形成，
+        // 逐边四条的拆法只在四边颜色各不相同时才用）。
+        check(boxes.size() == 2,
+              QString("边框外圈 + 底色内圈 = 2 个盒子区块（实得 %1）").arg(boxes.size()));
+        QVariantMap ring, fill;
         for (const auto& b : boxes) {
             if (b.value("color").toString().compare(QStringLiteral("#ff112233"),
                                                     Qt::CaseInsensitive) == 0) fill = b;
-            else if (b.value("boxW").toInt() == 200 && b.value("boxH").toInt() == 2)
-                (b.value("pxTop").toInt() == 0 ? top : bottom) = b;
-            else if (b.value("boxW").toInt() == 2) (b.value("pxLeft").toInt() == 100 ? left : right) = b;
+            else ring = b;
         }
-        check(!fill.isEmpty(), "color 属性画出背景填充块");
+        check(!ring.isEmpty()
+                  && ring.value("color").toString().compare(QStringLiteral("#ffc0c0c0"),
+                                                            Qt::CaseInsensitive) == 0,
+              "bcolor 画出边框外圈");
+        if (!ring.isEmpty()) {
+            check(ring.value("boxW").toInt() == 200 && ring.value("boxH").toInt() == 60
+                      && ring.value("pxLeft").toInt() == 100 && ring.value("pxTop").toInt() == 0,
+                  QString("外圈铺满 rect（实得 %1x%2 @ %3,%4）")
+                      .arg(ring.value("boxW").toInt()).arg(ring.value("boxH").toInt())
+                      .arg(ring.value("pxLeft").toInt()).arg(ring.value("pxTop").toInt()));
+        }
+        check(!fill.isEmpty(), "color 属性画出底色");
         if (!fill.isEmpty()) {
-            check(fill.value("boxW").toInt() == 200 && fill.value("boxH").toInt() == 60,
-                  QString("背景填充铺满 rect 200x60（实得 %1x%2）")
+            check(fill.value("boxW").toInt() == 196 && fill.value("boxH").toInt() == 56,
+                  QString("底色内缩一个边框宽 200-4 x 60-4（实得 %1x%2）")
                       .arg(fill.value("boxW").toInt()).arg(fill.value("boxH").toInt()));
-            check(fill.value("pxLeft").toInt() == 100,
-                  QString("背景从 rect 左边界 100px 起（实得 %1）").arg(fill.value("pxLeft").toInt()));
+            check(fill.value("pxLeft").toInt() == 102 && fill.value("pxTop").toInt() == 2,
+                  QString("底色从 rect 内侧 2px 起（实得 %1,%2）")
+                      .arg(fill.value("pxLeft").toInt()).arg(fill.value("pxTop").toInt()));
         }
-        check(!top.isEmpty() && !bottom.isEmpty(),
-              "bcolor 的上/下边框条各一条（2px 高，与 rect 同宽）");
-        if (!top.isEmpty())
-            check(top.value("pxTop").toInt() == 0, "上边框在 rect 顶部");
-        if (!bottom.isEmpty())
-            check(bottom.value("pxTop").toInt() == 58,
-                  QString("下边框贴 rect 底部（pxTop 实得 %1）").arg(bottom.value("pxTop").toInt()));
-        check(!left.isEmpty() && !right.isEmpty(),
-              "bcolor 的左/右边框条各一条（2px 宽）");
-        if (!right.isEmpty())
-            check(right.value("pxLeft").toInt() == 298,
-                  QString("右边框贴 rect 右边界（pxLeft 实得 %1）").arg(right.value("pxLeft").toInt()));
         check(label.value("pxLeft").toInt() == 102,
               QString("子内容再内缩 border 2px（pxLeft 实得 %1）").arg(label.value("pxLeft").toInt()));
 
@@ -1272,9 +1272,10 @@ int main(int argc, char* argv[]) {
         for (int r = 0; r < n.rowCount(); ++r)
             for (const QVariant& v : n.lineBlocks(r))
                 if (v.toMap().value("kind").toString() == "box") ++count;
-        check(count == 4, QString("没有 color 就只有 4 条边（实得 %1）").arg(count));
+        // 没有 color 时只有「外圈」一块：内圈底色是透明，不画。
+        check(count == 1, QString("没有 color 就只有外圈一块（实得 %1）").arg(count));
 
-        // 10f) radius 圆角：背景块带 per-corner 半径，四条边框条两端让出圆角。
+        // 10f) radius 圆角：外圈（边框色）带 per-corner 半径，内圈半径随边框宽收缩。
         qDebug() << "\n10f) radius 圆角（C# BoxBorder 的 radius 分支）";
         ConsoleBackend rad;
         rad.setFontSize(14); rad.setLineHeight(14);
@@ -1283,25 +1284,24 @@ int main(int argc, char* argv[]) {
             QStringLiteral("<div rect='0px,0px,100px,50px' border='2px' bcolor='#00FF00' "
                            "color='#223344' radius='10px'>R</div>")));
         rad.flush();
-        QVariantMap rfill, rtop;
+        QVariantMap rfill, rinner;
         for (int r = 0; r < rad.rowCount(); ++r)
             for (const QVariant& v : rad.lineBlocks(r)) {
                 const auto m = v.toMap();
-                if (m.value("kind").toString() != "box") continue;
-                if (m.contains("radii")) { rfill = m; continue; }
-                // 上边框条：2px 高、从顶部起、两端各让出 10px -> 宽 80
-                if (m.value("boxH").toInt() == 2 && m.value("pxTop").toInt() == 0) rtop = m;
+                if (m.value("kind").toString() != "box" || !m.contains("radii")) continue;
+                if (rfill.isEmpty()) rfill = m; else rinner = m;
             }
-        check(!rfill.isEmpty(), "radius 让背景块带上圆角信息");
+        check(!rfill.isEmpty(), "radius 让盒子带上圆角信息");
         if (!rfill.isEmpty()) {
+            // 外圈半径 = 10；内圈（底色）半径 = 10 - 边框 2 = 8。
             const QVariantList rr = rfill.value("radii").toList();
             check(rr.size() == 4 && rr.at(0).toInt() == 10 && rr.at(3).toInt() == 10,
-                  QString("四角半径都取 10px（实得 %1 个角）").arg(rr.size()));
+                  QString("外圈四角半径都取 10px（实得 %1 个角）").arg(rr.size()));
+            const QVariantList ir = rinner.value("radii").toList();
+            check(ir.size() == 4 && ir.at(0).toInt() == 8,
+                  QString("内圈半径随边框宽收缩成 8px（实得 %1）")
+                      .arg(ir.isEmpty() ? -1 : ir.at(0).toInt()));
         }
-        check(!rtop.isEmpty() && rtop.value("boxW").toInt() == 80
-              && rtop.value("pxLeft").toInt() == 10,
-              QString("上边框条两端各让出 10px 圆角（宽 %1，左起 %2）")
-                  .arg(rtop.value("boxW").toInt()).arg(rtop.value("pxLeft").toInt()));
 
         ConsoleBackend extreme;
         extreme.setFontSize(14); extreme.setLineHeight(14);
@@ -1408,7 +1408,9 @@ int main(int argc, char* argv[]) {
         check(a && b && tail, "nested div retains both lines and trailing body text");
         ConsoleBackend empty;
         empty.printTemplate(PrintTemplateCompiler::parseRuntimeMarkup(QStringLiteral(
-            "<div rect='0px,0px,10px,10px' padding='8'><img src='empty' width='30px' height='30px'></div>")));
+            // padding 用 px 才表达「四边各 8px、把 10px 的盒子吃空」；
+            // 裸数字按 C# MixedNum 是字号百分比（8% ≈ 1px），吃不空。
+            "<div rect='0px,0px,10px,10px' padding='8px'><img src='empty' width='30px' height='30px'></div>")));
         empty.flush();
         const auto clipped = blockOf(empty.lineBlocks(0), "empty");
         check(clipped.value("clipWidth").toInt() == 0 && clipped.value("clipHeight").toInt() == 0,

@@ -353,43 +353,56 @@ PrintTemplate PrintTemplateCompiler::evaluateOccurrences(const CompiledPrintTemp
             //   divXOffset += margin.Left + padding.Left + border.Left
             //   yOffset    += margin.Top  + padding.Top  + border.Top
             // 子内容从「rect 左上角 + 这三者」开始排；rect 原点保持不变。
-            // 4 值简写按 上,右,下,左；1 值四边相同；2 值 上/下 , 左/右。
-            const auto insetOf = [](QString raw) {
-                struct P { int top; int right; int bottom; int left; };
-                auto px = [](QString v) {
+            // C# Utils.ParseParam4MixedNum：1 值四边相同 / 2 值 上下,左右 /
+            // 3 值 上,左右,下 / 4 值 上,右,下,左。每项都是 **MixedNum**：
+            // 裸数字 = 字号百分比（num*FontSize/100），带 px 才是绝对像素。
+            // 这里把两项分别存进 px / rel 两条通道，布局期再折算。
+            struct Sides {
+                int px[4] = {0, 0, 0, 0};   // 上,右,下,左
+                int rel[4] = {0, 0, 0, 0};  // 上,右,下,左（1/100 em）
+            };
+            const auto sidesOf = [](QString raw) {
+                Sides out;
+                struct V { int value = 0; bool pixels = false; };
+                auto one = [](QString v) {
+                    V r;
                     v = v.trimmed();
-                    if (v.endsWith(QLatin1String("px"))) v.chop(2);
+                    if (v.endsWith(QLatin1String("px"))) { v.chop(2); r.pixels = true; }
                     bool ok = false;
                     const int n = v.toInt(&ok);
-                    return ok ? n : 0;
+                    r.value = ok ? n : 0;
+                    return r;
                 };
                 const QStringList f = raw.split(',', Qt::SkipEmptyParts);
-                if (f.isEmpty() || f.size() > 4) return P{0, 0, 0, 0};
-                if (f.size() == 1) { const int a = px(f[0]); return P{a, a, a, a}; }
-                if (f.size() == 2) return P{px(f[0]), px(f[1]), px(f[0]), px(f[1])};
-                if (f.size() == 3) return P{px(f[0]), px(f[1]), px(f[2]), px(f[1])};
-                return P{px(f[0]), px(f[1]), px(f[2]), px(f[3])};
+                if (f.isEmpty() || f.size() > 4) return out;
+                V v[4];
+                switch (f.size()) {
+                case 1: v[0] = one(f[0]); v[1] = v[2] = v[3] = v[0]; break;
+                case 2: v[0] = one(f[0]); v[1] = one(f[1]); v[2] = v[0]; v[3] = v[1]; break;
+                case 3: v[0] = one(f[0]); v[1] = one(f[1]); v[2] = one(f[2]); v[3] = v[1]; break;
+                default: for (int i = 0; i < 4; ++i) v[i] = one(f.at(i)); break;
+                }
+                for (int i = 0; i < 4; ++i)
+                    if (v[i].pixels) out.px[i] = v[i].value; else out.rel[i] = v[i].value;
+                return out;
             };
-            int insetX = 0, insetY = 0, insetRight = 0, insetBottom = 0;
+            Sides inset;
             for (const char* key : {"margin", "padding", "border"}) {
                 const QString raw = attrs.value(QLatin1String(key));
                 if (raw.isEmpty()) continue;
-                const auto in = insetOf(raw);
-                insetX += in.left;
-                insetY += in.top;
-                insetRight += in.right;
-                insetBottom += in.bottom;
+                const auto in = sidesOf(raw);
+                for (int i = 0; i < 4; ++i) { inset.px[i] += in.px[i]; inset.rel[i] += in.rel[i]; }
             }
-            part.insetX = insetX;
-            part.insetY = insetY;
-            part.insetRight = insetRight;
-            part.insetBottom = insetBottom;
+            part.insetPxSum = {inset.px[0], inset.px[1], inset.px[2], inset.px[3]};
+            part.insetRelSum = {inset.rel[0], inset.rel[1], inset.rel[2], inset.rel[3]};
             // C# BoxBorder.DrawBorder：div 自身先画背景填充（color），
             // 再在 rect 内侧画四边边框（bcolor + border 宽度），最后才画子内容。
             part.fillColor = QColor(attrs.value("color"));
-            const auto borderBox = insetOf(attrs.value("border"));
-            part.borderWidths = {qMax(0, borderBox.top), qMax(0, borderBox.right),
-                                 qMax(0, borderBox.bottom), qMax(0, borderBox.left)};
+            const auto borderBox = sidesOf(attrs.value("border"));
+            part.borderPx = {qMax(0, borderBox.px[0]), qMax(0, borderBox.px[1]),
+                             qMax(0, borderBox.px[2]), qMax(0, borderBox.px[3])};
+            part.borderRel = {qMax(0, borderBox.rel[0]), qMax(0, borderBox.rel[1]),
+                              qMax(0, borderBox.rel[2]), qMax(0, borderBox.rel[3])};
             // bcolor 与 border 一样是 CSS 1~4 值简写（C# ParseParam4MixedNum 的
             // 展开规则同样适用于 AddColorParam4）：上 / 上下、左右 / 上、左右、下 /
             // 上、右、下、左。全无效 = 没有边框色（不画边）。
@@ -412,10 +425,16 @@ PrintTemplate PrintTemplateCompiler::evaluateOccurrences(const CompiledPrintTemp
             // radius：与 border 同一套 CSS 1~4 值简写（C# ParseParam4MixedNum ->
             // Corner.LeftTop/RightTop/LeftBottom/RightBottom），裸数字同样按
             // 字号百分比折算；带 px 才是绝对像素。
-            const auto radiusBox = insetOf(attrs.value("radius"));
-            if (radiusBox.top || radiusBox.right || radiusBox.bottom || radiusBox.left)
-                part.cornerRadii = {qMax(0, radiusBox.top), qMax(0, radiusBox.right),
-                                    qMax(0, radiusBox.bottom), qMax(0, radiusBox.left)};
+            const auto radiusBox = sidesOf(attrs.value("radius"));
+            const int radiusTotal = radiusBox.px[0] + radiusBox.px[1] + radiusBox.px[2]
+                                    + radiusBox.px[3] + radiusBox.rel[0] + radiusBox.rel[1]
+                                    + radiusBox.rel[2] + radiusBox.rel[3];
+            if (radiusTotal != 0) {
+                part.radiusPx = {qMax(0, radiusBox.px[0]), qMax(0, radiusBox.px[1]),
+                                 qMax(0, radiusBox.px[2]), qMax(0, radiusBox.px[3])};
+                part.radiusRel = {qMax(0, radiusBox.rel[0]), qMax(0, radiusBox.rel[1]),
+                                  qMax(0, radiusBox.rel[2]), qMax(0, radiusBox.rel[3])};
+            }
         }
         out.parts.append(std::move(part));
     }

@@ -1274,6 +1274,35 @@ int main(int argc, char* argv[]) {
                 if (v.toMap().value("kind").toString() == "box") ++count;
         check(count == 4, QString("没有 color 就只有 4 条边（实得 %1）").arg(count));
 
+        // 10f) radius 圆角：背景块带 per-corner 半径，四条边框条两端让出圆角。
+        qDebug() << "\n10f) radius 圆角（C# BoxBorder 的 radius 分支）";
+        ConsoleBackend rad;
+        rad.setFontSize(14); rad.setLineHeight(14);
+        rad.setGridColumns(226); rad.setGridRows(60);
+        rad.printTemplate(PrintTemplateCompiler::parseRuntimeMarkup(
+            QStringLiteral("<div rect='0px,0px,100px,50px' border='2px' bcolor='#00FF00' "
+                           "color='#223344' radius='10px'>R</div>")));
+        rad.flush();
+        QVariantMap rfill, rtop;
+        for (int r = 0; r < rad.rowCount(); ++r)
+            for (const QVariant& v : rad.lineBlocks(r)) {
+                const auto m = v.toMap();
+                if (m.value("kind").toString() != "box") continue;
+                if (m.contains("radii")) { rfill = m; continue; }
+                // 上边框条：2px 高、从顶部起、两端各让出 10px -> 宽 80
+                if (m.value("boxH").toInt() == 2 && m.value("pxTop").toInt() == 0) rtop = m;
+            }
+        check(!rfill.isEmpty(), "radius 让背景块带上圆角信息");
+        if (!rfill.isEmpty()) {
+            const QVariantList rr = rfill.value("radii").toList();
+            check(rr.size() == 4 && rr.at(0).toInt() == 10 && rr.at(3).toInt() == 10,
+                  QString("四角半径都取 10px（实得 %1 个角）").arg(rr.size()));
+        }
+        check(!rtop.isEmpty() && rtop.value("boxW").toInt() == 80
+              && rtop.value("pxLeft").toInt() == 10,
+              QString("上边框条两端各让出 10px 圆角（宽 %1，左起 %2）")
+                  .arg(rtop.value("boxW").toInt()).arg(rtop.value("pxLeft").toInt()));
+
         ConsoleBackend extreme;
         extreme.setFontSize(14); extreme.setLineHeight(14);
         extreme.printTemplate(PrintTemplateCompiler::parseRuntimeMarkup(

@@ -207,6 +207,9 @@ struct PrintTemplatePart {
     QColor fillColor;
     QList<int> borderWidths;     // top, right, bottom, left（px）
     QList<QColor> borderColors;  // 同上顺序；空 = 没有边框色
+    // `<div radius=…>`：四角半径（左上, 右上, 右下, 左下，px）。C# BoxBorder
+    // 对每个非 0 角走 drawRoundedCornerBorder*（把该角的方角裁成 1/4 圆）。
+    QList<int> cornerRadii;
     int x = -1;
     int y = -1;
 };

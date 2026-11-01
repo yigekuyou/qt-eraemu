@@ -185,6 +185,11 @@ Item {
     readonly property real boxHeightPx: blockData && blockData.boxH !== undefined
                                         ? blockData.boxH : 0
     readonly property bool isBox: block.kind === "box"
+    // 四角圆角（C# BoxBorder 的 radius）：引擎像素 -> 本地像素（× 缩放）。
+    readonly property var boxRadii: (blockData && blockData.radii && blockData.radii.length === 4)
+                                    ? blockData.radii : []
+    readonly property real boxScale: Math.max(1, lineHeightPx) > 0
+                                     ? cellHeight / Math.max(1, lineHeightPx) : 1
 
     // ---- 所属 <div> 的绘制裁剪（C# ConsoleDivPart.DrawTo 的 graph.SetClip(内容框)）----
     // C++ 给出**引擎像素**的剩余可见宽/高（-1 = 不裁）。本组件的宽高有两条口径：
@@ -254,6 +259,12 @@ Item {
         anchors.fill: parent
         visible: block.isBox
         color: block.blockData && block.blockData.color ? block.blockData.color : "transparent"
+        // radius：左上/右上/右下/左下（Qt 6.7+ 的 per-corner 属性）。引擎像素按
+        // 与宽高同一套 scale 折算成本地像素。
+        topLeftRadius: block.boxRadii.length === 4 ? block.boxRadii[0] * block.boxScale : 0
+        topRightRadius: block.boxRadii.length === 4 ? block.boxRadii[1] * block.boxScale : 0
+        bottomRightRadius: block.boxRadii.length === 4 ? block.boxRadii[2] * block.boxScale : 0
+        bottomLeftRadius: block.boxRadii.length === 4 ? block.boxRadii[3] * block.boxScale : 0
     }
 
     // SETBGCOLOR 背景（画在文字之后，z = -1）

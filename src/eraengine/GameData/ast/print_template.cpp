@@ -409,6 +409,13 @@ PrintTemplate PrintTemplateCompiler::evaluateOccurrences(const CompiledPrintTemp
                 return any ? four : QList<QColor>{};
             };
             part.borderColors = colorsOf(attrs.value("bcolor"));
+            // radius：与 border 同一套 CSS 1~4 值简写（C# ParseParam4MixedNum ->
+            // Corner.LeftTop/RightTop/LeftBottom/RightBottom），裸数字同样按
+            // 字号百分比折算；带 px 才是绝对像素。
+            const auto radiusBox = insetOf(attrs.value("radius"));
+            if (radiusBox.top || radiusBox.right || radiusBox.bottom || radiusBox.left)
+                part.cornerRadii = {qMax(0, radiusBox.top), qMax(0, radiusBox.right),
+                                    qMax(0, radiusBox.bottom), qMax(0, radiusBox.left)};
         }
         out.parts.append(std::move(part));
     }

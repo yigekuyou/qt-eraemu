@@ -449,19 +449,40 @@ void ConsoleBackend::renderTemplate(const PrintTemplate& output, bool toBuffer) 
             };
             QList<ConsoleSpan> boxes;
             if (divW > 0 && divH > 0) {
+                // 四角圆角（C# BoxBorder.DrawBorder 的 radius 分支）。C# 的做法是
+                // 把每个非 0 角按 1/4 圆裁掉；移植侧改成「背景块带 per-corner
+                // radius（QML Rectangle 的 topLeftRadius 等）+ 四条边框条各自
+                // 在两端让出圆角长度」，视觉上是同一个圆角矩形。
+                int rtl = 0, rtr = 0, rbr = 0, rbl = 0;
+                if (part.cornerRadii.size() == 4) {
+                    rtl = qBound(0, part.cornerRadii.at(0), qMin(divW, divH) / 2);
+                    rtr = qBound(0, part.cornerRadii.at(1), qMin(divW, divH) / 2);
+                    rbr = qBound(0, part.cornerRadii.at(2), qMin(divW, divH) / 2);
+                    rbl = qBound(0, part.cornerRadii.at(3), qMin(divW, divH) / 2);
+                }
                 // 背景：C# 用 margin 之后、border 之内的 rect 填满（border 自身
                 // 就压在这块底色上）。这里按 rect 全程填充，边框条随后覆盖边缘。
-                if (part.fillColor.isValid()) boxes.append(makeBox(0, 0, divW, divH, part.fillColor));
+                if (part.fillColor.isValid()) {
+                    ConsoleSpan fill = makeBox(0, 0, divW, divH, part.fillColor);
+                    if (rtl || rtr || rbr || rbl) fill.boxRadii = {rtl, rtr, rbr, rbl};
+                    boxes.append(fill);
+                }
                 if (part.borderColors.size() == 4 && part.borderWidths.size() == 4) {
                     const int bt = qMin(divH, part.borderWidths.at(0));
                     const int br = qMin(divW, part.borderWidths.at(1));
                     const int bb = qMin(divH - bt, part.borderWidths.at(2));
                     const int bl = qMin(divW - br, part.borderWidths.at(3));
                     const int midH = qMax(0, divH - bt - bb);
-                    if (bt > 0) boxes.append(makeBox(0, 0, divW, bt, part.borderColors.at(0)));
-                    if (bb > 0) boxes.append(makeBox(0, divH - bb, divW, bb, part.borderColors.at(2)));
-                    if (bl > 0) boxes.append(makeBox(0, bt, bl, midH, part.borderColors.at(3)));
-                    if (br > 0) boxes.append(makeBox(divW - br, bt, br, midH, part.borderColors.at(1)));
+                    const int midW = qMax(0, divW - bl - br);
+                    // 上/下条在左右两端各让出对应角的半径；左/右条同理。
+                    const int topX  = qMin(rtl, midW),        topW  = qMax(0, divW - rtl - rtr);
+                    const int botX  = qMin(rbl, midW),        botW  = qMax(0, divW - rbl - rbr);
+                    const int leftY = qMin(rtl, midH),        leftH = qMax(0, divH - rtl - rbl);
+                    const int rightY= qMin(rtr, midH),        rightH= qMax(0, divH - rtr - rbr);
+                    if (bt > 0) boxes.append(makeBox(topX, 0, topW, bt, part.borderColors.at(0)));
+                    if (bb > 0) boxes.append(makeBox(botX, divH - bb, botW, bb, part.borderColors.at(2)));
+                    if (bl > 0) boxes.append(makeBox(0, bt + leftY, bl, qMax(0, leftH - bt - bb), part.borderColors.at(3)));
+                    if (br > 0) boxes.append(makeBox(divW - br, bt + rightY, br, qMax(0, rightH - bt - bb), part.borderColors.at(1)));
                 }
             }
             if (!boxes.isEmpty() && !cap.lines.isEmpty()) {

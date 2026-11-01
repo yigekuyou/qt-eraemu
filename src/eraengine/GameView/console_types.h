@@ -151,6 +151,9 @@ struct ConsoleSpan {
     // 像素**，QML 按它直接摆，不参与网格推进。
     int      boxWidthPx  = 0;
     int      boxHeightPx = 0;
+    // 四角圆角半径（左上, 右上, 右下, 左下，px）；空/Qt<6.7 时退化为直角。
+    // 只有背景填充块带它（边框条是矩形，四角由圆角留白体现）。
+    QList<int> boxRadii;
     QString  shapeType;         // "space" | "rect" | "line" | "polygon"
     QList<int> shapeParams;     // 百分比参数（× FontSize / 100）
     // rect 四参数按 C# 语义为 x, y, width, height；这里保存换算后的像素几何。
@@ -203,6 +206,11 @@ struct ConsoleSpan {
         m.insert("bottom", bottom);
         m.insert("boxW", boxWidthPx);
         m.insert("boxH", boxHeightPx);
+        if (!boxRadii.isEmpty()) {
+            QVariantList radii;
+            for (int r : boxRadii) radii.append(r);
+            m.insert("radii", radii);
+        }
         m.insert("imageId", imageId);
         m.insert("imageW", imageSize.width());
         m.insert("imageH", imageSize.height());

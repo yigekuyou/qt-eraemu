@@ -1320,6 +1320,32 @@ int main(int argc, char* argv[]) {
             }
     }
 
+        // 10g) 制表符：C# StringMeasure（GRAPHICS 分支）把 '\t' 当成 8 个空格，
+    // GDI 的制表位同样是「平均字宽 × 8」。移植侧测量按半角 1 格、QML 却用
+    // QTextLayout 自己画制表符（约 2 格），「测 1 画 2」会让制表符之后的区块
+    // 全部压在左边 —— FL3.8 SHOW_STATUS 的「图像的大小」选项行就是重灾区。
+    // 所以 span.text 里不再保留 '\t'，一律展开成 kTabColumns 个空格。
+    qDebug() << "\n10g) 制表符按 8 个半角格展开（测量/绘制同一口径）";
+    {
+        ConsoleBackend tabs;
+        tabs.setFontSize(14); tabs.setLineHeight(14);
+        tabs.setGridColumns(226); tabs.setGridRows(60);
+        // "A" + 2 个制表符 + "B" -> 1 + 16 + 1 = 18 格
+        tabs.print(QStringLiteral("A\t\tB"));
+        tabs.flush();
+        QString text;
+        int cols = -1;
+        for (int r = 0; r < tabs.rowCount(); ++r)
+            for (const QVariant& v : tabs.lineBlocks(r)) {
+                const auto m = v.toMap();
+                if (m.value("kind").toString() != "text") continue;
+                text = m.value("text").toString();
+                cols = m.value("cols").toInt();
+            }
+        check(!text.contains(QLatin1Char('\t')), "显示文本里不再有制表符（交给 QML 只画空格）");
+        check(cols == 18, QString("2 个制表符算 16 格（实得总格数 %1）").arg(cols));
+    }
+
     // Nested captures retain all rows; positioned layers cannot consume trailing body text.
     {
         ConsoleBackend c;

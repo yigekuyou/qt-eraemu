@@ -30,6 +30,26 @@
 #include <QTextStream>
 
 namespace {
+// 制表符宽度（C# StringMeasure.GetDisplayLength 的 GRAPHICS 分支：`\t` -> 8 个空格；
+// GDI TextRenderer 的制表位同样是「平均字宽 × 8」，即 8 个半角格）。
+//
+// 为什么必须在这里落地：C# 用 GDI 自绘，**测量与绘制走同一个制表位**，所以哪怕
+// 宽度古怪也自洽；移植侧测量按「半角 1 / 全角 2」数格，QML 却用 QTextLayout 自己
+// 画制表符（实测约 2 格宽）——于是「测 1 格、画 2 格」，制表符之后的所有区块都
+// 压在一起。FL3.8 SHOW_STATUS 的「图像的大小: ☐ S ☐ M …」选项行就是重灾区。
+// 统一到确定的空格数后，测量/排版/QML 绘制三者用的是同一个宽度。
+constexpr int kTabColumns = 8;
+QString expandTabs(const QString& text) {
+    if (!text.contains(QLatin1Char('\t'))) return text;
+    QString out;
+    out.reserve(text.size() + kTabColumns);
+    for (const QChar c : text) {
+        if (c == QLatin1Char('\t')) out += QString(kTabColumns, QLatin1Char(' '));
+        else out += c;
+    }
+    return out;
+}
+
 // 当前等待的输入是否为**字符串型**（INPUTS/SINPUTS/TONEINPUTS/ARGS 系）。
 // 其余（INPUT/TINPUT/ONEINPUT/INPUTMOUSEKEY/系统菜单…）一律按整数型裁决。
 bool inputExpectsString(const QString& kind) {
@@ -217,7 +237,7 @@ void ConsoleBackend::print(const QString& text) {
     ensureLineOpen();
     ConsoleSpan part;
     part.kind = ConsoleSpanKind::Text;
-    part.text = text;
+    part.text = expandTabs(text);
     part.raw = text;
     part.style = m_style;
     appendPart(part);
@@ -583,7 +603,7 @@ void ConsoleBackend::renderTemplate(const PrintTemplate& output, bool toBuffer) 
             if (wasButton) { button = continued; button.spans.clear(); inButton = true; }
             continue;
         }
-        ConsoleSpan span; span.text = part.text; span.raw = part.text;
+        ConsoleSpan span; span.text = expandTabs(part.text); span.raw = part.text;
         span.style = style;
         if (part.style.color.isValid()) { span.style.color = part.style.color; span.style.colorChanged = true; }
         if (part.style.buttonColor.isValid()) span.style.buttonColor = part.style.buttonColor;
@@ -821,7 +841,7 @@ void ConsoleBackend::printPlain(const QString& text) {
     ConsoleSegment seg;
     ConsoleSpan part;
     part.kind = ConsoleSpanKind::Text;
-    part.text = text;
+    part.text = expandTabs(text);
     part.raw = text;
     part.style = m_style;
     seg.spans.append(part);
@@ -941,7 +961,7 @@ void ConsoleBackend::printButton(const QString& text, qint64 value, const QStrin
     ConsoleSegment seg;
     ConsoleSpan part;
     part.kind = ConsoleSpanKind::Text;
-    part.text = text;
+    part.text = expandTabs(text);
     part.raw = text;
     part.style = m_style;
     seg.spans.append(part);
@@ -963,7 +983,7 @@ void ConsoleBackend::printButtonStr(const QString& text, const QString& value, c
     ConsoleSegment seg;
     ConsoleSpan part;
     part.kind = ConsoleSpanKind::Text;
-    part.text = text;
+    part.text = expandTabs(text);
     part.raw = text;
     part.style = m_style;
     seg.spans.append(part);

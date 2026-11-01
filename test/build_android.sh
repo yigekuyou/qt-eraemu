@@ -38,7 +38,7 @@ ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 BUILD_DIR="${BUILD_DIR:-$ROOT/build-android}"
 BUILD_TYPE="${BUILD_TYPE:-Debug}"
 JOBS="$( (nproc 2>/dev/null || echo 4) | head -1 )"
-PKG="io.yigekuyou.emuera"
+PKG="io.github.yigekuyou.emuera"
 DO_CLEAN=0
 DO_CONFIGURE=0
 DO_INSTALL=0
@@ -49,7 +49,7 @@ while [ $# -gt 0 ]; do
         -c|--clean)        DO_CLEAN=1; DO_CONFIGURE=1 ;;
         -r|--reconfigure)  DO_CONFIGURE=1 ;;
         -i|--install)      DO_INSTALL=1 ;;
-        -j)                JOBS="$2"; shift ;;
+        -j)                [ $# -ge 2 ] || { echo "-j 需要并行度参数（-h 看用法）" >&2; exit 2; }; JOBS="$2"; shift ;;
         --fix-ndk-symlinks) FIX_NDK=1 ;;
         -h|--help)         sed -n '1,40p' "$0"; exit 0 ;;
         *) echo "未知参数: $1（-h 看用法）" >&2; exit 2 ;;
@@ -92,7 +92,7 @@ fi
 
 # Qt for Android 交叉套件（含 arm64 库与 qt-cmake 包装脚本，**不含宿主工具**）
 if [ -z "${QT_ANDROID:-}" ]; then
-    QT_ANDROID="$(ls -d  ./Qt/*/android_arm64_v8a 2>/dev/null | sort -V | tail -1)"
+    QT_ANDROID="$(ls -d "$ROOT"/Qt/*/android_arm64_v8a 2>/dev/null | sort -V | tail -1)"
 fi
 [ -n "$QT_ANDROID" ] && [ -x "$QT_ANDROID/bin/qt-cmake" ] || die \
     "找不到 Qt for Android 套件（缺 $QT_ANDROID/bin/qt-cmake）。

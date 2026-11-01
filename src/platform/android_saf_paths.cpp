@@ -1,6 +1,7 @@
 #include "android_saf_paths.h"
 
 #ifdef Q_OS_ANDROID
+#include <QCoreApplication>
 #include <QCryptographicHash>
 #include <QDir>
 #include <QFile>

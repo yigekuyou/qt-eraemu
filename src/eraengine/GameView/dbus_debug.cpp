@@ -268,15 +268,18 @@ QString EraDBusDebug::diagBlocks() {
                .arg(g->foreColor().name(), g->backColor().name(), g->fontName())
                .arg(g->fontSize()).arg(g->lineHeight());
     // grid / clientSize / maxLineUnits 三者的关系是验收点：网格由舞台（C++ 配置
-    // 画布）推导，GETCLIENTSIZE 读同一份网格，maxLineUnits（折行/DRAWLINE 宽）
-    // 也同步到同一个列数 —— 它们必须与窗口尺寸无关。
+    // 画布）推导，maxLineUnits（折行/DRAWLINE 宽）同步到同一个列数；clientSize
+    // 是 **C# MainPicBox 的像素尺寸**（宽 = 舞台宽、高 = 舞台高 - 一行输入栏），
+    // 与 CLIENTWIDTH/CLIENTHEIGHT 同源 —— 三者都必须与窗口尺寸无关。
     const int maxLineUnits = m_engine->getExecutionEngine()
                                  ? m_engine->getExecutionEngine()->maxLineUnits() : -1;
     out << QStringLiteral(
-               "console modelRows=%1 buffer=%2 maxSpanReach=%3 grid=%4x%5 clientSize=%4x%5 "
-               "maxLineUnits=%6")
+               "console modelRows=%1 buffer=%2 maxSpanReach=%3 grid=%4x%5 "
+               "clientSize=%6x%7 maxLineUnits=%8")
                .arg(c->rowCount()).arg(c->buffer().count()).arg(c->maxSpanReach())
                .arg(c->gridColumns()).arg(c->gridRows())
+               .arg(g->windowWidth())
+               .arg(qMax(1, g->windowHeight() - qMax(1, g->lineHeight())))
                .arg(maxLineUnits);
     if (QScreen* s = QGuiApplication::primaryScreen()) {
         out << QStringLiteral("screen name=%1 geom=%2x%3 avail=%4x%5 stage=%6x%7")
@@ -323,14 +326,18 @@ QString EraDBusDebug::diagBlocks() {
             }
             const QObject* root = qw->findChild<QObject*>(QStringLiteral("consoleRoot"));
             if (root) {
-                out << QStringLiteral("qmlConsole box=%1x%2 cell=%3x%4 font=%5 grid=%6x%7")
+                out << QStringLiteral("qmlConsole box=%1x%2 cell=%3x%4 font=%5 grid=%6x%7 "
+                                      "canvas=%8 inset=%9 rows=%10")
                            .arg(root->property("width").toDouble(), 0, 'f', 1)
                            .arg(root->property("height").toDouble(), 0, 'f', 1)
                            .arg(root->property("cellWidth").toDouble(), 0, 'f', 3)
                            .arg(root->property("cellHeight").toDouble(), 0, 'f', 3)
                            .arg(root->property("renderFontSize").toDouble(), 0, 'f', 2)
                            .arg(root->property("gridColumns").toInt())
-                           .arg(root->property("gridRows").toInt());
+                           .arg(root->property("gridRows").toInt())
+                           .arg(root->property("stageCanvasHeight").toDouble(), 0, 'f', 1)
+                           .arg(root->property("stageTopInset").toDouble(), 0, 'f', 1)
+                           .arg(root->property("stageShownRows").toInt());
             }
         }
     }

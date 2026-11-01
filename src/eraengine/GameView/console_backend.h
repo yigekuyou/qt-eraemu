@@ -167,6 +167,7 @@ class ConsoleBackend : public QAbstractListModel {
     Q_PROPERTY(int gridRows READ gridRows NOTIFY gridChanged)
     Q_PROPERTY(int stageRows READ stageRows NOTIFY gridChanged)
     Q_PROPERTY(bool stageInputRowReserved READ stageInputRowReserved WRITE setStageInputRowReserved NOTIFY gridChanged)
+    Q_PROPERTY(int stageCanvasRows READ stageCanvasRows WRITE setStageCanvasRows NOTIFY gridChanged)
     // 本体即行模型（QML ListView 直接用；CONSTANT：指针生命周期 = 后端本身）
     Q_PROPERTY(QAbstractListModel* lineModel READ lineModel CONSTANT)
     Q_PROPERTY(QAbstractItemModel* historyModel READ historyModel CONSTANT)
@@ -179,15 +180,6 @@ class ConsoleBackend : public QAbstractListModel {
     // 的底图（10）/ 路径图（3）在正文下面、节点文字（1）压在上面。一个图层做不到
     // 「一半在上一半在下」，所以拆成两层（QML 里 z 分别为 5 与 -0.5）。
     Q_PROPERTY(QVariantList stageBackImageBlocks READ stageBackImageBlocks NOTIFY stageImageBlocksChanged)
-    // 底部回显行：正文**最底一行**的区块（与行委托同一形状）。
-    //
-    // C# 的窗口最底一行是独立的输入框（MainWindow.richTextBox1），而
-    // doInputToEmueraProgram 结尾的 `Print(str); PrintFlush(false);` 又把提交值
-    // 写进正文，era 脚本也有直接往最底一行打提示/按钮的写法。本移植的输入栏是
-    // QML 独立控件（ConsoleInput.qml，**不在舞台上**），所以这一行不画在舞台里：
-    // 舞台快照到倒数第二行为止，最底一行由本属性单独递交，QML 把它排在输入
-    // 回显栏里（输入框左侧）。
-    Q_PROPERTY(QVariantList inputEchoLine READ inputEchoLine NOTIFY inputEchoLineChanged)
     Q_PROPERTY(int stageStart READ stageStart NOTIFY stageChanged)
     Q_PROPERTY(bool stageMode READ stageMode WRITE setStageMode NOTIFY stageChanged)
     // ---- 工具提示样式（C# TOOLTIP_* 族；WinForms ToolTip 的 InitialDelay /
@@ -225,7 +217,6 @@ public:
     [[nodiscard]] QAbstractItemModel* stageModel() { return &m_stageSnapshot; }
     [[nodiscard]] QVariantList stageImageBlocks() const { return m_stageImageBlocks; }
     [[nodiscard]] QVariantList stageBackImageBlocks() const { return m_stageBackImageBlocks; }
-    [[nodiscard]] QVariantList inputEchoLine() const { return m_inputEchoLine; }
     [[nodiscard]] int stageStart() const { return m_stageStart; }
     [[nodiscard]] bool stageMode() const { return m_stageMode; }
     void setRedraw(qint64 mode);
@@ -308,9 +299,22 @@ public:
     [[nodiscard]] quint64 generation() const { return m_generation; }
     [[nodiscard]] int gridColumns() const { return m_layout.gridColumns(); }
     [[nodiscard]] int gridRows() const { return m_layout.gridRows(); }
-    [[nodiscard]] int stageRows() const { return qMax(1, m_layout.gridRows() - (m_stageInputRowReserved ? 1 : 0)); }
+    // 舞台可见**行数**（不是网格行数）。C# EmueraConsole.OnPaint：
+    //   pointY = MainPicBox.Height - LineHeight，逐行往上退，最后一行贴画布底；
+    // 画布高 = 窗口高 - 一行（最底那一条带子是 richTextBox1）——
+    // 所以「看得见的行数」= ceil(画布高 / 行高) = (窗口高 - 1) / 行高（整数除法），
+    // 首行可以只露出一部分（本配置 851/14 = 60 行，首行露出 12px）。
+    // 窗口高正好是行高整数倍时它会比 gridRows 少一行 —— C# 那边首行整行落在
+    // 画布外，同样看不见，所以这个差值是真实的。
+    [[nodiscard]] int stageRows() const {
+        return qMax(1, (m_stageInputRowReserved && m_stageCanvasRows > 0)
+                           ? m_stageCanvasRows : m_layout.gridRows());
+    }
     [[nodiscard]] bool stageInputRowReserved() const { return m_stageInputRowReserved; }
     void setStageInputRowReserved(bool reserved);
+    // 画布能看到几行（由 EraEngine::syncConsoleGrid 从窗口高/行高推导后注入）
+    [[nodiscard]] int stageCanvasRows() const { return m_stageCanvasRows; }
+    void setStageCanvasRows(int rows);
     [[nodiscard]] int lineHeight() const { return m_lineHeight; }
     [[nodiscard]] int fontSize() const { return m_layout.fontSize(); }
     // 是否由 C++ 折行。默认 false：**容器自由渲染位置**，C++ 只给区块与位置数据
@@ -477,7 +481,6 @@ signals:
     // 运行期精灵的像素变了（GDRAWSPRITE/GFILLRECTANGLE…）。
     // QML 的 image:// 有 URL 级缓存，收到本信号后要主动重载对应 <img>。
     void spriteImagesChanged(const QStringList& names);
-    void inputEchoLineChanged();
     void htmlIslandChanged();
     void gridChanged();
     void lineCountChanged();
@@ -552,13 +555,6 @@ private:
     void pruneTailCache() const;
     void invalidateLineCache();
     void updateStageModels(bool force = false);
-    // 「溢出到窗口最底那一行（输入行）」的那一行下标；不需要/不该摘时 -1。
-    //   * 没预留输入行（没有输入栏的宿主）-> -1
-    //   * 正文没溢出舞台（例如 eraTW 标题这 45 行定页）-> -1
-    //   * 那一行含图片（跨行图在一行文字栏里没有意义）-> -1，整行留给舞台
-    [[nodiscard]] int inputEchoRow() const;
-    // 重新取「正文最底一行」的区块，变化时才发信号（舞台快照不含这一行）。
-    void updateInputEchoLine();
 
     ConsoleBuffer m_buffer;
     ConsoleLayout m_layout;
@@ -566,10 +562,10 @@ private:
     ConsoleStageSnapshotModel m_stageSnapshot{this};
     QVariantList m_stageImageBlocks;
     QVariantList m_stageBackImageBlocks;
-    QVariantList m_inputEchoLine;
     int m_stageStart = 0;
     bool m_stageMode = false;
     bool m_stageInputRowReserved = false;
+    int m_stageCanvasRows = 0;   // 0 = 未知：退回 gridRows
     bool m_stageVisible = false;
     bool m_autoRedraw = true;
 

@@ -663,11 +663,14 @@ int main(int argc, char* argv[]) {
         }
     }
 
-    // ---- 5c. 输入回显行（正文最底一行移交 QML 输入栏）----
-    // 输入框不在舞台上（QML 的 ConsoleInput 是独立控件）：预留输入行时舞台快照
-    // 止于倒数第二行，最底一行由 inputEchoLine 单独递交。C# 的窗口最底一行就是
-    // richTextBox1（输入框），era 脚本也会往那一行打提示/按钮。
-    qDebug() << "\n5c) 输入回显行（最底一行不进军台快照）";
+    // ---- 5c. 预留输入行（正文最底一行仍留在舞台上）----
+    // C# MainWindow：客户端最底一整行是 richTextBox1（输入框），MainPicBox
+    // 的高度（winHeight - menuHeight - LineHeight）已经不含它；EmueraConsole
+    // 的 OnPaint 又让 `pointY` 从 MainPicBox.Height - LineHeight 起往上退 ——
+    // 也就是说**正文最后一行就画在画布最底那一行**。以「预留输入行」把最底
+    // 一行从舞台快照里摘出去，会让整屏逐行差一行，分栏窗的底边（最底一行）
+    // 也跑出舞台。所以预留只减少可见行数，不摘行。
+    qDebug() << "\n5c) 预留输入行（最底一行仍在舞台上）";
     {
         ConsoleBackend c;
         c.setFontSize(16);
@@ -678,50 +681,49 @@ int main(int argc, char* argv[]) {
         for (int i = 0; i < 12; ++i) { c.print(QStringLiteral("H%1").arg(i)); c.newline(); }
         c.flush();
         check(c.stageStart() == 7 && c.stageModel()->rowCount() == 5,
-              "未预留输入行：舞台照旧占满 5 行（最底一行仍在舞台上）");
-        check(c.inputEchoLine().isEmpty(),
-              "未预留输入行：不递交回显行（否则与舞台重复）");
+              "未预留输入行：舞台占满 5 行（12 - 5 == 7）");
 
-        int echoes = 0;
-        QObject::connect(&c, &ConsoleBackend::inputEchoLineChanged, [&] { ++echoes; });
         c.setStageInputRowReserved(true);
-        check(echoes >= 1, "预留输入行：递交回显行（信号）");
-        check(c.stageModel()->rowCount() == 4, "预留输入行：舞台快照少一行（5 → 4）");
-        check(c.stageStart() == 7, "预留输入行：舞台起点 12 - 1 - 4 = 7（内容不整体上移）");
-        check(textOf(c.inputEchoLine(), QStringLiteral("H11")) == QStringLiteral("H11"),
-              "回显行 = 正文最底一行（H11）");
-        const QVariantList stageLast =
-            c.stageModel()->data(c.stageModel()->index(3, 0),
-                                 ConsoleBackend::BlocksRole).toList();
-        check(textOf(stageLast, QStringLiteral("H11")).isEmpty()
-              && textOf(stageLast, QStringLiteral("H10")) == QStringLiteral("H10"),
-              "舞台最后一行是 H10，H11 只在回显行");
+        c.setStageCanvasRows(4);   // 画布只容得下 4 行（C# 画布高 / 行高）
+        check(c.stageRows() == 4, "舞台行数 = 画布行数（网格 5 行里画布只看得见 4 行）");
+        check(c.stageModel()->rowCount() == 4, "舞台快照 4 行");
+        check(c.stageStart() == 8, "舞台起点 12 - 4 == 8（正文最后 4 行）");
+        const auto stageLast = [&c] {
+            return c.stageModel()
+                ->data(c.stageModel()->index(c.stageModel()->rowCount() - 1, 0),
+                       ConsoleBackend::BlocksRole)
+                .toList();
+        };
+        check(textOf(stageLast(), QStringLiteral("H11")) == QStringLiteral("H11"),
+              "最底一行（H11）仍在舞台最后一行（C# OnPaint 画在画布底）");
+        check(textOf(stageLast(), QStringLiteral("H10")).isEmpty(),
+              "舞台最后一行只有 H11，不把上一行一起并进来");
 
-        // 未定型尾行（print 后未 newline）同样属于「最底一行」
+        // 未定型尾行（print 后未 newline）同样是「最底一行」，照样留在舞台上
         c.clearAll();
         for (int i = 0; i < 5; ++i) { c.print(QStringLiteral("K%1").arg(i)); c.newline(); }
         c.print(QStringLiteral("＞"));
         c.flush();
-        check(textOf(c.inputEchoLine(), QStringLiteral("＞")) == QStringLiteral("＞"),
-              "未定型尾行（＞）立刻成为回显行");
-        check(c.stageModel()->rowCount() == 4, "舞台仍是 4 行（不作待输入的尾行留在上面）");
+        check(c.stageModel()->rowCount() == 4, "舞台仍是 4 行");
+        check(textOf(stageLast(), QStringLiteral("＞")) == QStringLiteral("＞"),
+              "未定型尾行（＞）占舞台最后一行（输入提示在画布最底）");
 
-        // 回显行上的按钮保持可点（与正文同源的 generation/clickable 数据）
+        // 最底一行的按钮照旧可点（与正文同源的 generation/clickable 数据）
         c.clearAll();
         c.notifyInputRequested(QStringLiteral("INPUT"));
-        for (int i = 0; i < 5; ++i) { c.print(QStringLiteral("M%1").arg(i)); c.newline(); }
+        for (int i = 0; i < 3; ++i) { c.print(QStringLiteral("M%1").arg(i)); c.newline(); }
         c.printButton(QStringLiteral("[0] 戻る"), 0);
         c.newline();
         c.flush();
-        const QVariantMap echoButton = blockOf(c.inputEchoLine(), QStringLiteral("[0] 戻る"));
-        check(!echoButton.isEmpty() && echoButton.value("clickable").toBool(),
-              "回显行按钮带点击数据（可在输入栏里点）");
-        check((echoButton.value("generation").toLongLong()) == qint64(c.generation()),
-              "回显行按钮的世代 == 当前世代（未被 BREAKBUTTON 作废）");
+        const QVariantMap stageButton = blockOf(stageLast(), QStringLiteral("[0] 戻る"));
+        check(!stageButton.isEmpty() && stageButton.value("clickable").toBool(),
+              "舞台最底一行的按钮带点击数据");
+        check((stageButton.value("generation").toLongLong()) == qint64(c.generation()),
+              "该按钮的世代 == 当前世代（未被 BREAKBUTTON 作废）");
         c.notifyInputDone();
     }
-    // 不溢出时不摘行：eraTW 标题是 45 行定页画面（gridRows 46 - 输入行 = 45），
-    // 全部行都在舞台上，回显栏为空 —— 否则标题会少一行、把最后的按钮挤进输入栏。
+    // 正好装满时不滚：eraTW 标题是 45 行定页画面（gridRows 46 - 输入行 = 45），
+    // 全部行都在舞台上，stageStart 保持 0 —— 否则标题会整体上移一行。
     {
         ConsoleBackend c;
         c.setFontSize(16);
@@ -730,19 +732,20 @@ int main(int argc, char* argv[]) {
         c.setGridRows(6);              // 舞台 5 行
         c.setStageMode(true);
         c.setStageInputRowReserved(true);
+        c.setStageCanvasRows(5);   // 画布容得下 5 行（= 网格行数 - 1）
         for (int i = 0; i < 5; ++i) { c.print(QStringLiteral("T%1").arg(i)); c.newline(); }
         c.flush();
-        check(c.inputEchoLine().isEmpty(), "正好装满舞台：不摘行、回显栏为空");
         check(c.stageStart() == 0 && c.stageModel()->rowCount() == 5,
               "正好装满舞台：5 行全在舞台上（自第 0 行起）");
         c.print(QStringLiteral("[1] 存檔再開"));
         c.newline();
         c.flush();
-        check(textOf(c.inputEchoLine(), QStringLiteral("[1] 存檔再開"))
-                  == QStringLiteral("[1] 存檔再開"),
-              "溢出 1 行：最新一行进回显栏");
-        check(c.stageStart() == 0 && c.stageModel()->rowCount() == 5,
-              "溢出后舞台仍是 5 行（T0..T4 全在舞台上，最新一行不挤上去）");
+        check(c.stageStart() == 1 && c.stageModel()->rowCount() == 5,
+              "溢出 1 行：滚动一行（T0 滚出），舞台仍是 5 行");
+        check(textOf(c.stageModel()->data(c.stageModel()->index(4, 0),
+                                         ConsoleBackend::BlocksRole).toList(),
+                     QStringLiteral("[1] 存檔再開")) == QStringLiteral("[1] 存檔再開"),
+              "最新一行（[1] 存檔再開）占舞台最后一行");
     }
 
     // ---- 8. 工具提示样式（TOOLTIP_*）与 BREAKBUTTON ----

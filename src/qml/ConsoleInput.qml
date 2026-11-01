@@ -27,10 +27,10 @@ FocusScope {
     property bool titleActive: false
     property string fontName: ""
     property int fontSize: 18
-    // 逻辑行高（C++ GuiManager 的 LineHeight）：回显行按它排格高
+    // 逻辑行高（C++ GuiManager 的 LineHeight）：输入栏高度就是这一行
     property int lineHeight: 19
     property string foreColor: ""
-    // 按钮/悬停色（回显行里的按钮与正文同源，用同一组颜色）
+    // 按钮/悬停色（与正文同源，用同一组颜色）
     property string focusColor: ""
     readonly property bool isMobile: Qt.platform.os === "android" || Qt.platform.os === "ios"
     readonly property bool anyKeyInput: backend && backend.anyKeyInput
@@ -154,59 +154,6 @@ FocusScope {
         function onTextboxTextChanged(text) { inputField.text = text; }
     }
 
-    // ---- 回显行：正文**最底一行** ----
-    //
-    // 输入框是 QML 独立控件（**不在舞台上**，见 Console.qml 的 stageRows），
-    // 而窗口最底那一行在 era 游戏里属于输入：C# 那边它就是独立的输入框
-    // （MainWindow.richTextBox1），doInputToEmueraProgram 结尾的
-    // `Print(str); PrintFlush(false);` 再把提交值打进正文最底一行；era 脚本
-    // 也有直接往这一行打提示（`＞` 等）或按钮的写法。
-    // C++ 因此把「正文最底一行」从舞台快照里摘出来单独递交
-    // （ConsoleBackend.inputEchoLine，舞台只到倒数第二行），这里把它排在输入框
-    // 左侧 —— 输入框自己的回显（TextInput.text）不受影响，于是「脚本给的回显」
-    // 与「玩家键入的值」在同一行并存。
-    Item {
-        id: echoLayer
-        objectName: "consoleInputEcho"
-        anchors.left: parent.left
-        anchors.top: parent.top
-        anchors.bottom: parent.bottom
-        // 逻辑格与舞台同源：列宽 = 字号/2（C++ ConsoleLayout::columnWidthPx），
-        // 格高 = 输入栏高度（正好一行）。
-        readonly property real cellWidth: Math.max(1, root.fontSize / 2)
-        readonly property real cellHeight: Math.max(1, root.height)
-        readonly property var blocks: root.backend ? root.backend.inputEchoLine : []
-        // 行宽 = 最右格子数 × 格宽；上限半行，保证输入框永远有地方可打。
-        readonly property real echoWidth: {
-            let cols = 0;
-            for (let i = 0; i < blocks.length; ++i) {
-                const b = blocks[i] || ({});
-                const right = (b.col || 0) + Math.max(1, b.cols || 1);
-                if (right > cols)
-                    cols = right;
-            }
-            return Math.min(cols * cellWidth, root.width * 0.5) + (cols > 0 ? 4 : 0);
-        }
-        width: echoWidth
-        clip: true
-        // 回显行的按钮也该能点（C# 的按钮命中只看正文行列表，这一行同样在里面）。
-        Repeater {
-            model: echoLayer.blocks
-            delegate: ConsoleBlock {
-                required property var modelData
-                blockData: modelData
-                backend: root.backend
-                cellWidth: echoLayer.cellWidth
-                cellHeight: echoLayer.cellHeight
-                fontName: root.fontName
-                fontSize: root.fontSize
-                foreColor: root.foreColor
-                focusColor: root.focusColor
-                isBacklog: false
-            }
-        }
-    }
-
     // 底部输入行：等待输入时贴着最下面出现——无边框、无背景、无按钮，
     // 高度只有一行文字；直接键入、回车即提交。非等待状态高度为 0。
     TextField {
@@ -215,8 +162,8 @@ FocusScope {
         // 输入状态仅用于提示、校验和提交。
         focus: !root.isMobile
         enabled: true
-        // 排在回显行右侧（回显行为空时宽度 0，等于贴着左边缘）
-        anchors.left: echoLayer.right
+        // 输入栏占满整行（正文最底一行留在舞台上，见 Console.qml 的 stageRows）
+        anchors.left: parent.left
         anchors.right: parent.right
         anchors.bottom: parent.bottom
         height: root.height

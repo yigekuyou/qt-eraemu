@@ -1312,7 +1312,6 @@ void ConsoleBackend::setFontSize(int px) {
         m_layout.setFontSize(px);
         invalidateLineCache();
         if (rowCount() > 0) emit dataChanged(index(0), index(rowCount() - 1));
-        updateInputEchoLine();       // 区块尺寸被烘焙进缓存，回显行同样要重摊
     }
 }
 
@@ -1334,6 +1333,13 @@ void ConsoleBackend::setStageInputRowReserved(bool reserved) {
     updateStageModels(true);
 }
 
+void ConsoleBackend::setStageCanvasRows(int rows) {
+    if (rows <= 0 || rows == m_stageCanvasRows) return;
+    m_stageCanvasRows = rows;
+    emit gridChanged();
+    updateStageModels(true);
+}
+
 void ConsoleBackend::setGridRows(int rows) {
     if (rows <= 0 || rows == m_layout.gridRows()) return;
     m_layout.setGridRows(rows);
@@ -1349,7 +1355,6 @@ void ConsoleBackend::setLineHeight(int px) {
     m_layout.setLineHeight(px);     // 区块「高」也按行高算
     invalidateLineCache();          // 行高被烘焙进区块 height/offsetRows
     if (rowCount() > 0) emit dataChanged(index(0), index(rowCount() - 1));
-    updateInputEchoLine();
 }
 
 void ConsoleBackend::setMaxLog(int lines) {
@@ -1383,22 +1388,12 @@ void ConsoleBackend::updateStageModels(bool force) {
     if (!force && !m_autoRedraw) return;
     const int total = rowCount();
     const int visibleRows = m_stageInputRowReserved ? stageRows() : m_layout.gridRows();
-    // 预留了输入行时，**溢出到输入行**的那一行不属于舞台：窗口最底一行是输入框
-    // （C# 的 richTextBox1；本移植是 QML 的 ConsoleInput，不在舞台上），era 脚本
-    // 会把输入提示打在这一行（它总是最新的那一行）。舞台装不下全部行时
-    // （total > 舞台行数），最新一行改由 inputEchoLine 递交进输入回显栏，
-    // 舞台快照止于它前面一行 —— 于是「舞台 45 行 + 输入回显 1 行 = 窗口 46 行」。
-    // 没有溢出时（例如 eraTW 标题这 45 行定页画面）不摘：全部行都在舞台上。
-    // 没有输入栏的宿主（test_cli、纯历史视图）不预留，舞台照旧占满 gridRows。
-    const int echoRow = inputEchoRow();
-    const bool echoExtracted = echoRow >= 0;
-    // 输入栏在舞台外。尾行含图片时不能把它交给输入栏，但仍必须把舞台
-    // 正文限制在 stageRows；否则最后一行会额外占用一个舞台模型行，表现为
-    // 每次 PRINTL/PX_NEWLINE 后舞台行数逐步偏移。
-    const int bodyRows = echoExtracted ? total - 1 : total;
-    int start = qMax(0, bodyRows - visibleRows);
-    if (!echoExtracted && total > visibleRows)
-        start = qMax(start, total - visibleRows);
+    // 舞台快照 = **正文最后 visibleRows 行**（C# OnPaint：`pointY` 从
+    // MainPicBox.Height - LineHeight 起往上退，最后一行永远贴画布底）。
+    // 不摘行：C# 的 richTextBox1 在画布**下面**（MainPicBox.Height 已经不含它），
+    // 正文最后一行就画在画布最底那一行；把它移出舞台会让整屏逐行差一行，
+    // 画面最底那一行（分栏边框、菜单底边）也随之消失。
+    int start = qMax(0, total - visibleRows);
     // A line is only the anchor of an image, not its full drawing extent.
     // Keep earlier anchors whose image still overlaps the current stage. The
     // extra rows scroll above the viewport; ListView clips the image itself.
@@ -1417,8 +1412,7 @@ void ConsoleBackend::updateStageModels(bool force) {
             continue;
         }
         const int row = int(serial - firstSerial);
-        // 回显行（最底一行）不参与舞台，不能把它的图锚拉低视口起点。
-        if (row >= viewportStart || row >= bodyRows) { ++it; continue; }
+        if (row >= viewportStart) { ++it; continue; }
         if (m_buffer.at(row).serial != serial) { ++it; continue; }   // 下标与 serial 不对齐留下的洞
         const auto line = displayLine(row);
         for (const auto& segment : line.segments) {
@@ -1432,13 +1426,13 @@ void ConsoleBackend::updateStageModels(bool force) {
         }
         ++it;
     }
-    const bool visible = m_stageMode && start < bodyRows;
+    const bool visible = m_stageMode && start < total;
     QVector<QHash<int, QVariant>> rows;
     QVariantList imageBlocks;
     QVariantList backImageBlocks;
     if (visible) {
-        rows.reserve(bodyRows - start);
-        for (int row = start; row < bodyRows; ++row) {
+        rows.reserve(total - start);
+        for (int row = start; row < total; ++row) {
             QHash<int, QVariant> item;
             const QVariantList blocks = lineBlocks(row);
             item.insert(BlocksRole, blocks);
@@ -1473,41 +1467,10 @@ void ConsoleBackend::updateStageModels(bool force) {
         emit stageChanged();
     if (imagesChanged)
         emit stageImageBlocksChanged();
-    // 舞台之外的那一行：递交进 QML 的输入回显栏。
-    updateInputEchoLine();
     // 模型刷新完成 -> 把这一轮累计的精灵像素变更一次性推给 QML（缓冲区）。
     const QStringList changedSprites = GraphicsStore::takeDirtySpriteNames();
     if (!changedSprites.isEmpty())
         emit spriteImagesChanged(changedSprites);
-}
-
-// 窗口最底那一行（输入行）该由谁画：舞台装不下时才摘给输入栏。
-// C# 的 echo 来自 doInputToEmueraProgram 末尾的 `Print(str)`：提交值成为正文的
-// 一行；era 脚本也会往这一行打提示/按钮。本移植的输入栏不在舞台上，这一行的
-// 区块由 updateInputEchoLine() 单独递交，QML 在输入框左侧并排显示。
-// 判据见头文件；这里只有一份，舞台快照与回显行共用，避免两边各判一次而错位。
-int ConsoleBackend::inputEchoRow() const {
-    if (!m_stageInputRowReserved) return -1;
-    const int total = rowCount();            // 含未定型的尾行
-    if (total <= stageRows()) return -1;     // 没溢出：全部行都在舞台上
-    const int row = total - 1;
-    // 含图的行走不了这一行文字栏（跨行图在输入框里没有意义），整行留给舞台。
-    const ConsoleDisplayLine tail = displayLine(row);
-    for (const ConsoleSegment& seg : tail.segments)
-        for (const ConsoleSpan& part : seg.spans)
-            if (part.kind == ConsoleSpanKind::Image) return -1;
-    return row;
-}
-
-void ConsoleBackend::updateInputEchoLine() {
-    QVariantList line;
-    const int echoRow = inputEchoRow();
-    if (echoRow >= 0)
-        line = lineBlocks(echoRow);
-    if (line == m_inputEchoLine)
-        return;
-    m_inputEchoLine = line;
-    emit inputEchoLineChanged();
 }
 
 bool ConsoleBackend::anyKeyInput() const {

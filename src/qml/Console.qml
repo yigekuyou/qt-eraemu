@@ -166,17 +166,44 @@ FocusScope {
     // 此时没有任何模型/委托，不会画出错位内容。
     readonly property int gridColumns: backend && backend.gridColumns > 0 ? backend.gridColumns : 1
     readonly property int gridRows: backend && backend.gridRows > 0 ? backend.gridRows : 1
-    // 舞台正文少占底部输入行；输入控件由 Main.qml 独立绘制，但这行仍属于
-    // era 的舞台坐标系，因此舞台快照、ListView 和图片层必须共用 stageRows。
+    // 舞台快照的**行数**（C++ 发布，= 画布看得见的行数，见 C++ stageRows）。
+    // 它不是 gridRows：画布高 = 舞台高 - 一行（输入条带），行从画布底往上排，
+    // 首行可以只露出一部分 —— 本配置 838/14 = 59.86 → 60 行（首行露出 12px）。
+    // 舞台快照、ListView 和图片层必须共用这一份行数。
     readonly property int stageRows: backend && backend.stageRows > 0 ? backend.stageRows : gridRows
     // 舞台坐标平面必须覆盖完整 stageWidth。滚动条是独立的呈现控件，
     // 不能从网格宽度扣除，否则 C++ 的 col=POS_X*fontSize/100/(fontSize/2)
     // 与 QML 的 x=col*cellWidth 会产生随列号增长的横向漂移。
     readonly property real gridWidthPx: Math.max(1, stageWidth)
-    // 输入栏位于 Main.qml 的 gameViewport 外部，不能从舞台高度扣除像素。
-    // 舞台正文使用 stageRows（gridRows - 1），但这只是网格行数的划分，
-    // 不是从逻辑舞台像素尺寸中再减去一行或一个像素。
+    // 输入栏位于 Main.qml 的 gameViewport 外部（呈现层），舞台坐标平面仍然是
+    // 完整的 stageHeight —— 只把正文视口的下边界压到画布底（见 stageCanvasHeight）。
     readonly property real gridHeightPx: Math.max(1, stageHeight)
+
+    // ---- 画布高度 = C# MainPicBox.Height（舞台减去底部输入行）----
+    // C# MainWindow：`mainPicBox.Size = (WindowX, winHeight - menuHeight -
+    // LineHeight)`、`richTextBox1 = (0, winHeight - LineHeight)` —— 输入框占
+    // 客户端最底**一整行**，主画布并不含它。所以脚本看到的画布是
+    //   CLIENTWIDTH  = Config.WindowX                     （像素）
+    //   CLIENTHEIGHT = Config.WindowY - Config.LineHeight （像素）
+    // 舞台（= 配置画布）比它高一行；这一行就是输入栏在舞台坐标系里的位置
+    // （本移植的输入控件画在舞台外，几何上仍对应舞台最底这一条带）。
+    readonly property real stageCanvasHeight: Math.max(0, stageHeight - Math.max(1, lineHeight))
+
+    // ---- 正文**从画布底往上**排（C# OnPaint 的 pointY）----
+    // C#：`pointY = MainPicBox.Height - LineHeight`，最后一条显示行就画在这一
+    // 高度，其余行按 -LineHeight 往上退 —— 内容不足一屏时整块贴底、空行留在
+    // **顶部**；画布装不下时首行被推到画布上沿之外（只露出零头）。
+    //   本配置：画布 838 = 59×14 + 12 → 60 行，首行从 -2 起、露出 12px。
+    // 移植侧此前把行放在 row×行高（= 贴顶），于是每条显示行都比理论值高
+    // `画布高 - 行数×行高`：55 行画面整体高 68px，且 rect.y 为负的 div 会被
+    // 画布上沿裁掉（C# 里它们根本没到上沿）。
+    // ListView 的委托 y 由视图管理：装得下时整块下移 stageTopInset，装不下时
+    // 由 positionViewAtEnd 把「除不尽的零头」让给首行 —— 行、div、图片层共用
+    // 同一份偏移，相对位置不变。
+    readonly property int stageRowsFit: Math.max(1, Math.ceil(stageCanvasHeight / cellHeight))
+    readonly property int stageShownRows: Math.min(stageRowsFit, stageView.count)
+    readonly property real stageTopInset: Math.max(0,
+        stageCanvasHeight - stageShownRows * cellHeight)
     // 单元格 = C# 的排版单位，**不从舞台摊**：
     //   列宽 = 字号/2（ConsoleLayout::columnWidthPx，C# 的 col * (int)(FontSize/2)）
     //   行高 = 配置「一行の高さ」（C# 的 pointY = row * Config.LineHeight）
@@ -248,7 +275,15 @@ FocusScope {
 
     // 历史与舞台共用几何、委托和跨行图片显示范围。
     component ConsoleView: ListView {
+        // 内容整体下移量（舞台模式：正文贴画布底，见 root.stageTopInset）。
+        // 历史视图贴顶（0）——回看时的滚动位置就是内容位置。
+        property real topInset: 0
+        // 视口下边界：舞台正文只画到画布底（C# MainPicBox），舞台最底那一条带子
+        // 是输入框的位置，正文不许压上去。
+        property real bottomInset: 0
         anchors.fill: parent
+        anchors.topMargin: topInset
+        anchors.bottomMargin: bottomInset
         clip: true
         reuseItems: true
         delegateModelAccess: DelegateModel.ReadOnly
@@ -412,6 +447,11 @@ FocusScope {
         component StageImageLayer: Item {
             id: layer
             anchors.fill: parent
+            // 正文贴画布底：图片层与正文行共用同一份下移量（见 root.stageTopInset），
+            // 否则图与行会错开 stageTopInset 像素。
+            property real topInset: root.stageTopInset
+            anchors.topMargin: topInset
+            anchors.bottomMargin: Math.max(0, root.stageHeight - root.stageCanvasHeight)
             clip: true
             property var images: []
             // 测试/诊断入口：委托按需实例化（顺序 = C++ 发布顺序）
@@ -504,6 +544,12 @@ FocusScope {
             model: root.lineModel
             interactive: !root.primitiveInput
             boundsBehavior: Flickable.StopAtBounds
+            // 历史日志也画在同一块画布上（C# 的 backlog 走 OnPaint，MainPicBox
+            // 高 = 舞台高 - 一行），底部输入条带不属于它。
+            // 注：历史是**可滚动**视图，末尾由 positionViewAtEnd 贴底；不满一屏时
+            // 不做贴底内缩 —— 跨行图（div/<img> 占多行）会让「行数×行高」低估
+            // 内容高度，内缩会把整块内容推出视口。
+            bottomInset: Math.max(0, root.stageHeight - root.stageCanvasHeight)
 
             // 普通日志模式跟随新增输出；舞台模式下历史回看位置独立保存。
             // Qt ListView 删除头部行后 originY 可以改变，末尾判断必须减去它。
@@ -593,12 +639,20 @@ FocusScope {
             visible: root.stageActive && !root.reviewingHistory
             model: root.stageModel
             interactive: false
+            // C# OnPaint：最后一行贴画布底（见 root.stageTopInset），
+            // 视口止于画布底（输入条带不属于正文）。
+            topInset: root.stageTopInset
+            bottomInset: Math.max(0, root.stageHeight - root.stageCanvasHeight)
             function positionStage() {
                 forceLayout();
-                if (count <= root.stageRows)
+                // 内容装得下：贴画布底（顶部的空行留给上面）。
+                // 装不下：滚到末尾 —— contentY = contentHeight - height 会多出
+                // 「画布高除不尽行高」的零头（838 - 59×14 = 12px），首行因此
+                // 上移 2px 只露出 12px，与 C# 的 pointY 起点一致。
+                if (count * root.cellHeight <= root.stageCanvasHeight)
                     positionViewAtBeginning();
                 else
-                    positionViewAtIndex(count - root.stageRows, ListView.Beginning);
+                    positionViewAtEnd();
             }
             // 仅结构或视口变化需要定位；普通行数据更新保持位置和缩放。
             onCountChanged: Qt.callLater(positionStage)
@@ -632,10 +686,13 @@ FocusScope {
             acceptedButtons: Qt.AllButtons
             onPressed: e => {
                 // WinForms MouseButtons values; coordinates relative to the lower left.
+                // C#：clientPoint.Y = point.Y - ClientHeight，ClientHeight =
+                // MainPicBox.Height = 舞台高 - 一行（输入框占最底那一行），
+                // 所以底部输入行里的点不属于画布，y 在画布底边为 -1。
                 const button = e.button === Qt.LeftButton ? 1048576 : e.button === Qt.RightButton ? 2097152 : e.button === Qt.MiddleButton ? 4194304 : e.button === Qt.BackButton ? 8388608 : 16777216;
-                root.backend.submitMouseKey(1, button, Math.round(e.x), Math.round(e.y - viewport.height), -1);
+                root.backend.submitMouseKey(1, button, Math.round(e.x), Math.round(e.y - root.stageCanvasHeight), -1);
             }
-            onWheel: e => root.backend.submitMouseKey(2, e.angleDelta.y, Math.round(e.x), Math.round(e.y - viewport.height), 0)
+            onWheel: e => root.backend.submitMouseKey(2, e.angleDelta.y, Math.round(e.x), Math.round(e.y - root.stageCanvasHeight), 0)
         }
 
         // 任意键型等待（WAIT/WAITANYKEY/FORCEWAIT/ANYKEY）：点击控制台任意处即继续。

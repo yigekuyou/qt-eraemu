@@ -55,6 +55,8 @@ TestCase {
         // 否则测的就不是生产里那种「舞台 ↔ 网格同源」的状态。
         backend.setGridColumns(Math.floor(320 / Math.max(1, view.fontSize / 2)));
         backend.setGridRows(Math.floor(200 / Math.max(1, view.lineHeight)));
+        // 画布行数 = (舞台高 - 1) / 行高（C#：画布 = 舞台高 - 一行，首行可只露一半）
+        backend.stageCanvasRows = Math.floor((200 - 1) / Math.max(1, view.lineHeight));
         const inputComp = Qt.createComponent("file://" + consoleQmlPath.replace("Console.qml", "ConsoleInput.qml"));
         verify(inputComp.status === Component.Ready, inputComp.errorString());
         inputBar = inputComp.createObject(host, { backend: backend, width: 320, height: 26, y: 250 });
@@ -110,48 +112,104 @@ TestCase {
         spy.destroy();
     }
 
-    // 正文**最底一行**（溢出到窗口最底那一行的那一行）属于输入栏、不属于舞台：
-    // 预留输入行时 C++ 把这一行从舞台快照里摘出来单独递交（inputEchoLine），
-    // ConsoleInput 把它渲染在输入框左侧；没溢出时（标题这种定页画面）不摘。
-    function test_echoLineBelongsToInputBarNotStage() {
+    // 正文**最底一行**属于舞台：C# 的 richTextBox1 在 MainPicBox 之下，
+    // MainPicBox.Height 已经不含它 —— 正文最后一行就画在画布最底那一行
+    // （OnPaint 的 pointY 从 MainPicBox.Height - LineHeight 起往上退）。
+    // 所以「预留输入行」只让舞台少显示一行，不能把最底一行搬进输入栏：
+    // 搬了整屏会逐行差一行，分栏窗的底边（最底一行）也会跑出舞台。
+    function test_bottomLineStaysOnStage() {
         backend.stageInputRowReserved = true;
         backend.stageMode = true;
         backend.clearAll();
         const cap = backend.stageRows;          // 舞台正文行数（gridRows - 输入行）
-        const echo = findChild(inputBar, "consoleInputEcho");
         const field = findChild(inputBar, "consoleInputField");
-        verify(echo !== null, "输入栏有回显行容器");
-        // 正好装满舞台：不摘行（eraTW 标题就是 45 行定页，摘了会少一行）
+        verify(findChild(inputBar, "consoleInputEcho") === null, "输入栏不再有回显层");
+        // 正好装满舞台：全部都在舞台上
         for (let i = 0; i < cap; ++i) {
             backend.print("E" + i);
             backend.newline();
         }
         backend.flush();
         view.syncView();
-        compare(backend.inputEchoLine.length, 0, "填满舞台时不摘行（回显栏为空）");
-        compare(view.rowCount, cap, "全都在舞台上");
-        compare(echo.width, 0);
+        compare(view.rowCount, cap, "正文正好一屏：cap 行全在舞台上");
+        compare(view.blockAt(cap - 1, 0).blockData.text, "E" + (cap - 1),
+                "最底一行（最新行）占舞台最后一行");
 
-        // 再打一行 -> 溢出：最新一行（＞）进回显栏，舞台仍占满 cap 行
+        // 再打一行 -> 镜头下移一行，最新行仍占舞台最后一行（不搬出舞台）
         backend.print("＞");
         backend.flush();
         view.syncView();
-        compare(backend.inputEchoLine.length, 1, "回显行 = 溢出那一行");
-        compare(backend.inputEchoLine[0].text, "＞");
-        compare(view.rowCount, cap, "舞台仍是 cap 行（内容不整体上移）");
-        compare(view.blockAt(cap - 1, 0).blockData.text, "E" + (cap - 1));
-        verify(echo.width > 0, "回显行占据宽度");
-        compare(field.mapToItem(host, 0, 0).x,
-                echo.mapToItem(host, 0, 0).x + echo.width,
-                "输入框排在回显行右侧");
+        compare(view.rowCount, cap, "溢出后舞台仍是 cap 行（内容不下移）");
+        compare(view.blockAt(0, 0).blockData.text, "E1", "首行上移一行（E0 滚出）");
+        compare(view.blockAt(cap - 1, 0).blockData.text, "＞",
+                "最新一行（＞）占舞台最后一行，不搬进输入栏");
 
-        // 清屏后回显行清空：输入框回到贴左边缘（无游戏时的常态）
+        // 输入栏贴舞台左边缘占满整行（回显层已随「摘行」一起去掉）
+        compare(field.mapToItem(host, 0, 0).x, inputBar.mapToItem(host, 0, 0).x,
+                "输入栏贴左边缘");
+        compare(field.width, inputBar.width, "输入栏占满整行");
+    }
+
+    // C# EmueraConsole.OnPaint：画布高 = 舞台高 - 一行，`pointY` 从画布底往上退 ——
+    // 画布高不是行高整数倍时，**首行只露出一部分**（838 = 59×14 + 12 → 60 行，
+    // 首行从 -2 起）。舞台因此要：
+    //   ① 正文视口止于画布底（不许压到输入条带）；
+    //   ② 行数 = ceil(画布高 / 行高)，滚到末尾把零头让给首行。
+    function test_stageClipsTopRowLikeCppPaint() {
+        backend.stageInputRowReserved = true;
+        backend.stageMode = true;
         backend.clearAll();
+        // 舞台 195 / 行高 20 → 画布 175 = 8×20 + 15：9 行，首行露出 15px
+        view.stageHeight = 195;
+        view.height = 195;    // 生产里 stageHeight == 舞台高；测试也要一起改
+        view.syncView();
+        wait(1);   // 视口高度变化 → positionStage 走 Qt.callLater
+        compare(view.stageCanvasHeight, 175, "画布高 = 舞台高 - 一行");
+        const cap = backend.stageRows;
+        compare(cap, 9, "画布容得下 9 行（ceil(175 / 20)）");
+        for (let i = 0; i < cap; ++i) {
+            backend.print("P" + i);
+            backend.newline();
+        }
         backend.flush();
         view.syncView();
-        compare(backend.inputEchoLine.length, 0);
-        compare(echo.width, 0, "无正文时回显行为空");
-        compare(field.mapToItem(host, 0, 0).x, echo.mapToItem(host, 0, 0).x);
+        wait(1);
+        compare(view.rowCount, cap, "舞台快照 = 画布行数");
+        compare(view.stageTopInset, 0,
+                "装不下（9×20 > 175）时不留顶部空白：零头留给首行");
+        const first = view.lineItem(0);
+        compare(first.mapToItem(view, 0, 0).y, 175 - cap * view.cellHeight,
+                "首行上移到画布外（露出 15px）");
+        const last = view.lineItem(cap - 1);
+        compare(last.mapToItem(view, 0, 0).y + view.cellHeight, 175,
+                "末行底边 = 画布底");
+    }
+
+    // 图片层与正文行共用同一份纵向偏移：内容溢出画布时首行被推到画布外
+    // （contentY = 内容高 - 画布高，不是行高的整数倍），图片必须跟着上移同样的
+    // 像素，否则立絵会与它所在的行错开几个像素（C#：rect.Y = pointY + top）。
+    function test_imageLayerSharesClippedTopOffset() {
+        backend.stageInputRowReserved = true;
+        backend.stageMode = true;
+        backend.clearAll();
+        consoleFixture.printHtml(backend,
+            "<div rect='80px,20px,80px,80px'><img src='offset_atlas' width='80px' height='80px'></div>");
+        consoleFixture.request(backend, "INPUT");
+        backend.flush(); view.syncView();
+        while (backend.lineCount < view.stageRows) backend.newline();
+        backend.flush(); view.syncView();
+        view.stageHeight = 195;          // 画布 175 = 8×20 + 15 → 首行上移 5px
+        view.height = 195;
+        view.syncView(); wait(1);
+        compare(view.stageTopInset, 0, "画布装不下时不留顶部空白");
+        const rowY = view.lineItem(0).mapToItem(view, 0, 0).y;
+        compare(rowY, 175 - view.stageRows * view.cellHeight,
+                "首行被推到画布外（露出 15px）");
+        const img = view.stageImageAt(0);
+        verify(img !== null, "舞台有图片层委托");
+        tryCompare(findChild(img, "blockImage"), "status", Image.Ready);
+        compare(img.y, rowY + img.blockData.pxTop,
+                "图片随首行一起上移同一像素（originY - contentY）");
     }
 
     function test_timedRedrawKeepsInputGeometryAndFocus() {
@@ -347,6 +405,42 @@ TestCase {
                 verify(st.h - view.stageRows * ch < st.lh, "正文行余量不足一行 @ " + tag);
             }
         }
+    }
+
+    // 契约：舞台正文**贴画布底**（C# OnPaint：`pointY = MainPicBox.Height -
+    // LineHeight`，从这一行往上退）。画布 = 舞台高 - 一行（最底一行是输入框）。
+    //   * 内容不足一屏：整块落到画布底部，空行留在**顶部**；
+    //   * 满屏：首行落在 画布高 - 行数×行高（本配置 838 - 59×14 = 12px）。
+    // 变异：回到「贴顶排」（y = row×行高）→ 本用例红。
+    function test_stageContentSitsAtCanvasBottom() {
+        backend.stageInputRowReserved = true;
+        backend.stageMode = true;
+        view.stageWidth = 320;
+        view.stageHeight = 200;
+        backend.setGridColumns(Math.floor(320 / Math.max(1, view.fontSize / 2)));
+        backend.setGridRows(Math.floor(200 / Math.max(1, view.lineHeight)));
+        // 画布行数 = (舞台高 - 1) / 行高（C#：画布 = 舞台高 - 一行，首行可只露一半）
+        backend.stageCanvasRows = Math.floor((200 - 1) / Math.max(1, view.lineHeight));
+        wait(1);
+        const canvas = view.stageCanvasHeight;
+        compare(canvas, 200 - view.lineHeight,
+                "画布高 = 舞台高 - 一行（C# MainPicBox.Height）");
+        backend.clearAll();
+        for (let i = 0; i < 3; ++i) {
+            backend.print("L" + i);
+            backend.newline();
+        }
+        backend.flush(); view.syncView();
+        tryCompare(view, "showingStage", true);
+        compare(view.stageShownRows, 3);
+        compare(view.stageTopInset, canvas - 3 * view.cellHeight,
+                "整块正文贴画布底");
+        const first = view.lineItem(0);
+        const last = view.lineItem(2);
+        verify(first !== null && last !== null);
+        compare(first.mapToItem(view, 0, 0).y, view.stageTopInset, "首行落在顶部留白之下");
+        compare(last.mapToItem(view, 0, 0).y + view.cellHeight, canvas,
+                "末行底边 = 画布底（pointY + LineHeight）");
     }
 
     // 契约（2026-10-25 二次修正）：呈现层 = 舞台的一个等比缩放（contain）。
@@ -978,6 +1072,13 @@ TestCase {
             + "<div rect='80px,20px,80px,80px'><button value='7'><img src='webp_atlas' width='80px' height='80px'></button></div>");
         consoleFixture.request(backend, "INPUT");
         backend.flush(); view.syncView();
+        // 舞台正文按 C# OnPaint 贴**画布底**：内容不足一屏时整块落到画布底部，
+        // 只剩 1 行时这 3 张 80px 的图会被推出画布（C# 里同样画在画布外，
+        // 被 clip 掉）。这里把正文补满一屏，div 才落在画布可见区域，
+        // 下面的锚点/层序/命中断言才有意义。
+        while (backend.lineCount < view.stageRows) backend.newline();
+        backend.flush(); view.syncView();
+        compare(view.stageTopInset, 0, "满屏时正文顶到画布顶（画布高 180 < 行数×行高）");
         tryCompare(view, "showingStage", true);
         compare(backend.stageImageBlocks.length, 3);
         const images = [];
@@ -1640,7 +1741,9 @@ TestCase {
         compare(spy.signalArguments[0][0], 1);
         compare(spy.signalArguments[0][1], 1048576);
         compare(spy.signalArguments[0][2], 12);
-        compare(spy.signalArguments[0][3], 15 - mouse.height);
+        // C#：clientPoint.Y = point.Y - ClientHeight，ClientHeight 是
+        // MainPicBox.Height = 舞台高 - 一行（最底一行是输入框），不是整个舞台。
+        compare(spy.signalArguments[0][3], 15 - view.stageCanvasHeight);
         consoleFixture.request(backend, "INPUTMOUSEKEY");
         win.requestActivate();
         tryCompare(win, "active", true);

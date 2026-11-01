@@ -296,11 +296,18 @@ EraEngine::EraEngine(QObject *parent)
 		};
 		m_executionEngine.setDefaultColorProvider(defaultForeColor);
 		m_expressionEvaluator.setDefaultColorProvider(defaultForeColor);
-		// GETCLIENTSIZE / CLIENTWIDTH / CLIENTHEIGHT = 玩家实际看到的网格。
-		// 显示层（Console.qml）按窗口视口与字号推导列/行并经 setGridColumns/Rows
-		// 推给 C++，这里直接读同一份数据，避免「脚本看到 84 列、画面只有 51 列」。
+		// CLIENTWIDTH / CLIENTHEIGHT = C# 的主画布像素尺寸
+		// （EmueraConsole.ClientWidth => MainPicBox.Width、ClientHeight =>
+		//  MainPicBox.Height）。C# MainWindow：
+		//    mainPicBox.Size = (WindowX, winHeight - menuHeight - LineHeight)
+		//    richTextBox1    = (0, winHeight - LineHeight)
+		// 即宽度 = 配置ウィンドウ幅、高度 = 配置ウィンドウ高さ - 一行（输入框占
+		// 最底一行）。**单位是像素**，不是列/行：脚本用它做像素定位（MOUSEX 的
+		// 范围、div/img 的 rect、底对齐），返回列数会让这些位置整体错位。
 		m_expressionEvaluator.setClientSizeProvider([this]() -> QPair<int,int> {
-			return { qMax(1, m_console.gridColumns()), qMax(1, m_console.gridRows()) };
+			const int lineH = qMax(1, m_guiManager.lineHeight());
+			return { qMax(1, m_guiManager.windowWidth()),
+			         qMax(1, m_guiManager.windowHeight() - lineH) };
 		});
 		m_expressionEvaluator.setSkipProvider([this](int kind) -> int {
 			// kind：0=ISSKIP（SKIPDISP） 1=MESSKIP 2=MOUSESKIP（GUI 专属，恒 0）
@@ -1779,11 +1786,15 @@ void EraEngine::syncConsoleGrid()
 		const int columnPx = qMax(1, m_guiManager.fontSize() / 2);
 		const int columns = qMax(1, m_guiManager.windowWidth() / columnPx);
 		const int lineHeight = qMax(1, m_guiManager.lineHeight());
-		// C++ 的 gridRows 含输入行（与 C# 的窗口高口径一致）；输入框是 QML 独立
-		// 控件、不在舞台内，舞台正文少用一行由 QML 侧预留（stageInputRowReserved）。
 		const int rows = qMax(1, m_guiManager.windowHeight() / lineHeight);
+		// 舞台画布能看到几行：C# 的画布高 = 窗口高 - 一行（最底那一条带子是输入框
+		// richTextBox1），行从画布底往上排，首行可以只露出一部分 —— 所以
+		//   canvasRows = ceil((窗口高 - 行高) / 行高) = (窗口高 - 1) / 行高
+		// （本配置 851/14 = 60 行，正好等于 gridRows；窗口高是行高整数倍时才少一行）。
+		const int canvasRows = qMax(1, (m_guiManager.windowHeight() - 1) / lineHeight);
 		m_console.setGridColumns(columns);
 		m_console.setGridRows(rows);
+		m_console.setStageCanvasRows(canvasRows);
 		qDebug() << "[render] 逻辑网格" << columns << "列 x" << rows << "行"
 				 << "(单元格" << columnPx << "x" << lineHeight << "px)";
 }

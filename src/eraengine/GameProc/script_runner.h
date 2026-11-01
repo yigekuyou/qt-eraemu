@@ -71,6 +71,15 @@ public:
     // 是否正在执行
     bool isRunning() const { return m_running; }
 
+    // 调用栈（自底向上）：每层 = 被调段的标签 + 调用点脚本/行号。
+    // 深度与 EraParseTable::depth() 一致（两者都由 CALL/RETURN 同步推进）。
+    struct StackFrame { QString label; QString script; int line = -1; };
+    QList<StackFrame> callStack() const;
+
+    // 本次等待是否接受鼠标输入（C# InputRequest.MouseInput）：INPUT/INPUTS 族
+    // 的第 2 实参。true 时点击按钮还会把按键号写进 RESULT:1。
+    bool waitMouseInput() const { return m_waitMouseInput; }
+
     // 用户函数回调（表达式 `NAME(args)`），由 ExpressionEvaluator 使用。
     // argNodes 与 args 一一对应（省略实参为 nullptr），供 REF 形参识别实参变量。
     bool invokeUserFunction(const QString& name, const QList<QVariant>& args,
@@ -270,7 +279,12 @@ private:
     // dynamicScope：本次 CALL 是否压入了一层 `#DIM DYNAMIC` 私有变量快照
     //（C# LogicalLine.ScopeIn/ScopeOut）。RETURN 时必须对同一层调用 leave，否则
     // 递归/多层调用会留下错位的快照栈。
-    struct CallContext { int depth; int loops; eravar::ScopeId scope; VariableStorage::LocalContext locals; bool dynamicScope = false; };
+    // label / script / line：**调用点**（C# ProcessState.CalledFunction 的
+    // LabelName + Position）。调试接口的 stack() 就靠它报帧；此前
+    // ProcessState::m_functionList 从来没被 push 过，frames 恒为 0。
+    struct CallContext { int depth; int loops; eravar::ScopeId scope; VariableStorage::LocalContext locals;
+                         bool dynamicScope = false;
+                         QString label; QString script; int line = -1; };
     // 本轮挂起是否为「需要用户输入」的等待（AWAIT / TWAIT skip!=0 的纯计时不算，
     // 不发 inputRequested：C# InputType.Void 不是用户输入请求，UI 不显示）
     bool m_waitNotifiesUser = true;
@@ -278,6 +292,7 @@ private:
     // 统一报 ANYKEY，UI 侧按「点击任意处/回车」裁决（C# IsWaitingEnterKey）
     QString m_waitKind;
     QVariant m_waitDefault;   // 本次等待的缺省值（无缺省 = 无效 QVariant）
+    bool m_waitMouseInput = false;   // C# InputRequest.MouseInput（默认 false）
     QHash<eravar::ScopeId, VariableStorage::LocalContext> m_functionLocals;
     QList<CallContext> m_callContexts;   // Caller locals and loop depth, restored on every return
     bool m_running = false;

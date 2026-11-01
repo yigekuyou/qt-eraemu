@@ -1437,8 +1437,10 @@ bool ConsoleBackend::buttonValueAccepted(bool isIntegerButton) const {
     return inputExpectsString(m_inputKind);          // 字符串按钮：只有字符串输入收
 }
 
-void ConsoleBackend::notifyInputRequested(const QString& kind, const QVariant& defaultValue) {
+void ConsoleBackend::notifyInputRequested(const QString& kind, const QVariant& defaultValue,
+                                          bool mouseInput) {
     m_inputKind = kind;
+    m_mouseInput = mouseInput;
     m_inputDefault = defaultValue;
     m_waitingInput = true;
     flush();
@@ -1697,7 +1699,7 @@ QVariantList ConsoleBackend::screenBlocks() const {
 }
 
 // 点击：segmentIndex 是**段**下标（C# ConsoleButtonString）
-void ConsoleBackend::clickAt(int lineIndex, int segmentIndex) {
+void ConsoleBackend::clickAt(int lineIndex, int segmentIndex, int mouseButton) {
     const int n = rowCount();
     // 区块里的 lineIndex 是模型行号 —— 点击按行定位。
     if (lineIndex < 0 || lineIndex >= n) {
@@ -1734,6 +1736,11 @@ void ConsoleBackend::clickAt(int lineIndex, int segmentIndex) {
     qDebug() << "[input] 点击按钮 行" << lineIndex << "段" << segmentIndex
              << (seg.isInteger ? QStringLiteral("整数=") + QString::number(seg.intValue)
                                : QStringLiteral("字符串=") + seg.strValue);
+    // C# MainWindow.mainPicBox_MouseDown 的 IsWaintingInputWithMouse 分支：
+    // 等待开了鼠标输入时，按键号先进 RESULT:1，再交付按钮值（FL3.8 的
+    // `INPUTS , 1` -> `MOUSE_BTN = RESULT:1` 就靠这一步区分左右键）。
+    if (m_mouseInput && mouseButton >= 1 && mouseButton <= 3)
+        emit mouseButtonClicked(mouseButton);
     submitButton(seg);
 }
 

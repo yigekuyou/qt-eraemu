@@ -525,9 +525,17 @@ EraEngine::EraEngine(QObject *parent)
 				[this](const QString& kind, const QVariant& def) {
 			qDebug() << "[ScriptRunner] waiting for user input:" << kind
 					 << "state=" << static_cast<int>(m_processState.getExecState());
-			m_console.notifyInputRequested(kind, def);
+			// 把「本次等待是否接受鼠标输入」（INPUTS 族第 2 实参）一并交给控制台；
+			// 否则点击即使命中也写不出 RESULT:1。
+			m_console.notifyInputRequested(kind, def, m_scriptRunner.waitMouseInput());
 		});
 		// ---- 显示层：执行引擎输出 -> ConsoleBackend ----
+		// C# GlobalStatic.Process.InputInteger(1, 1/2/3)：等待开了鼠标输入时，
+		// 点击命中按钮要把按键号先写进 RESULT:1（FL3.8 `MOUSE_BTN = RESULT:1`）。
+		connect(&m_console, &ConsoleBackend::mouseButtonClicked, this,
+				[this](int mouseButton) {
+			m_variableStorage.setResult(1, mouseButton);
+		});
 		connect(&m_executionEngine, &ExecutionEngine::consolePrint, this,
 				[this](const QString& text, bool newline) {
 					m_console.print(text);

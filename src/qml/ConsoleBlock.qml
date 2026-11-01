@@ -458,7 +458,10 @@ Item {
         // 此时 MouseArea 不会再发 clicked，导致有效的按下被丢弃。
         onPressed: event => {
             if (block.backend && block.clickable && block.blockData)
-                block.backend.clickAt(block.blockData.lineIndex, block.blockData.segmentIndex);
+                // 第三个实参 = 按键号（Qt: 1=左 2=右 3=中，与 C# MouseButtons
+                // 的 1/2/3 顺序一致）。等待开了鼠标输入时 C++ 会写进 RESULT:1。
+                block.backend.clickAt(block.blockData.lineIndex, block.blockData.segmentIndex,
+                                      mouse.button);
         }
         // 按钮的 Title（C# ButtonString.Title）——以前挂在原生 Button 上，
         // 去掉按钮样式后改挂在命中区上，行为不变。

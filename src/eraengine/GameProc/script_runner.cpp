@@ -214,6 +214,14 @@ void ScriptRunner::onHaltRequested() {
 // 主步进
 // ---------------------------------------------------------------------------
 
+QList<ScriptRunner::StackFrame> ScriptRunner::callStack() const {
+    QList<StackFrame> frames;
+    frames.reserve(m_callContexts.size());
+    for (const auto& ctx : m_callContexts)
+        frames.append({ctx.label, ctx.script, ctx.line});
+    return frames;
+}
+
 void ScriptRunner::enterCall(const QString& function, const QString& scopeKey) {
     // scopeKey = 段身份**原文**（装载期写进行上的 line.scopeKey /
     // eravar::segmentKeyText 的产物，大小写照写）。存储层的 ScopeId 由它 intern
@@ -226,8 +234,11 @@ void ScriptRunner::enterCall(const QString& function, const QString& scopeKey) {
     // 必须在**取 LocalContext 之前**做，因为它只动私有存储槽，不动 ARG/LOCAL。
     const bool dynamicScope = m_storage->hasDynamicPrivateVars(scope);
     if (dynamicScope) m_storage->enterDynamicPrivateScope(scope);
+    // 调用点：进段之前的位置就是「谁调用了它」，供调试接口的 stack() 用。
     m_callContexts.append({m_table->depth(), int(m_loops.size()), scope,
-                           m_storage->localContext(), dynamicScope});
+                           m_storage->localContext(), dynamicScope,
+                           function, m_table->currentScript(),
+                           m_table->currentLine()});
     // QHash::value() 会先默认构造再拷贝（LocalContext 带 4 个容器成员）——
     // 每个 CALL 都白付一次分配，改 constFind。
     const auto lit = m_functionLocals.constFind(scope);
@@ -1572,6 +1583,7 @@ ExecState ScriptRunner::executeLine(const LogicalLine& line) {
         // 不能简单跳过逗号：`INPUTS , 1`（缺省值留空、允许鼠标）跳过逗号后
         // 会把 1 误当缺省值；按分隔符推进字段号才能还原位置。
         const Operand* def = nullptr;
+        const Operand* mouse = nullptr;
         // Keep the field map local to this instruction. Do not compact operands:
         // the empty first field is meaningful and the second field must stay field 2.
         int field = 0;
@@ -1582,6 +1594,21 @@ ExecState ScriptRunner::executeLine(const LogicalLine& line) {
                 continue;
             }
             if (field == 0 && !def && !a.omitted) def = &a;
+            if (field == 1 && !mouse && !a.omitted) mouse = &a;
+        }
+        // C# SpInputsArgument.Mouse / InputRequest.MouseInput：第 2 实参是
+        // **鼠标输入开关**（默认 false，给了才置位）。开启后点击按钮除了提交
+        // 按钮值，还会把按键号写进 RESULT:1（1=左 2=右 3=中）—— FL3.8
+        // TRAIN/USERCOM_INPUT.ERB:8 `INPUTS , 1` 之后 `MOUSE_BTN = RESULT:1`
+        // 就是靠它区分左右键。以前只解析不生效，RESULT:1 永远是 0。
+        m_waitMouseInput = false;
+        if (mouse) {
+            qint64 v = 0;
+            if (mouse->ast)
+                v = getEvaluator().evaluate(*mouse->ast, m_storage, baseData(),
+                                            m_currentScopeId).toLongLong();
+            else if (mouse->isString) v = mouse->raw.toLongLong();
+            m_waitMouseInput = (v != 0);
         }
         if (def) {
             const Operand& a0 = *def;
@@ -1618,6 +1645,7 @@ ExecState ScriptRunner::executeLine(const LogicalLine& line) {
     //   画面上 PRINTBUTTON 生成的整数/字符串按钮都可以点。
     case RunnerInstruction::INPUTANY: {
         m_waitDefault = QVariant();
+        m_waitMouseInput = false;
         if (m_engine) m_engine->setMesSkip(false);
         advance();
         return ExecState::WaitInput;

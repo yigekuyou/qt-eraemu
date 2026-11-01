@@ -383,7 +383,10 @@ public:
     // ---- 输入桥接 ----
     // defaultValue：本次等待的缺省值（C# InputRequest.HasDefValue/DefIntValue/
     // DefStrValue）。空回车时用它；无缺省则**忽略**这次回车（继续等输入）。
-    void notifyInputRequested(const QString& kind, const QVariant& defaultValue = QVariant());
+    // mouseInput：C# InputRequest.MouseInput（INPUT/INPUTS 族第 2 实参）。true 时
+    // 点击按钮除提交按钮值外，还要把按键号交给脚本（RESULT:1）。
+    void notifyInputRequested(const QString& kind, const QVariant& defaultValue = QVariant(),
+                              bool mouseInput = false);
     void notifyInputDone();
     // 提交成功的**唯一收敛点**：结束等待，并在正文留下**一条空行**（记账占位行）。
     //
@@ -416,7 +419,10 @@ public:
     // DQPRINT 逐字动画靠它把整句动画在一行内完成。
     void notifyReuseLastLine(const QString& text);
     // ---- QML 调用 ----
-    Q_INVOKABLE void clickAt(int lineIndex, int segmentIndex);
+    // mouseButton：1=左 2=右 3=中（Qt MouseEvent.button）。只有本次等待开了
+    // 鼠标输入（见 notifyInputRequested）才会写进 RESULT:1 —— 对齐 C#
+    // MainWindow.mainPicBox_MouseDown 的 IsWaintingInputWithMouse 分支。
+    Q_INVOKABLE void clickAt(int lineIndex, int segmentIndex, int mouseButton = 1);
     // 按钮命中后的提交形态（clickAt 专用）：由**等待的输入类型**决定，
     // 不由按钮形态决定 —— 字符串型等待收到整数按钮时交十进制文本。
     void submitButton(const ConsoleSegment& button);
@@ -473,6 +479,9 @@ signals:
     void generationChanged();
     void stageChanged();
     void inputRequested(const QString& kind);
+    // 一次**鼠标**点击命中了按钮：mouseButton 1=左 2=右 3=中。
+    // 引擎接它写 RESULT:1（C# GlobalStatic.Process.InputInteger(1, 1/2/3)）。
+    void mouseButtonClicked(int mouseButton);
     void waitingInputChanged();
     void mouseKeySubmitted(int type, int r1, int r2, int r3, int r4);
     void inputSubmitted(qint64 value);
@@ -592,6 +601,8 @@ private:
 
     QStringList m_htmlLines;      // HTML 原文（HTML_POPPRINTINGSTR 消费）
     QString m_inputKind;
+    // 本次等待是否接受鼠标输入（C# InputRequest.MouseInput，默认 false）
+    bool    m_mouseInput = false;
     // 本次等待的缺省值（C# InputRequest.HasDefValue/DefIntValue/DefStrValue）：
     // 空回车时交付它；无效表示「无缺省」-> 空回车被忽略。
     QVariant m_inputDefault;

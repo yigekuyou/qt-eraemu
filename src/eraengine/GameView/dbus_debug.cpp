@@ -83,16 +83,28 @@ QString EraDBusDebug::state() {
 
 QString EraDBusDebug::stack() {
     if (!m_engine) return QStringLiteral("no engine");
-    const auto* state = m_engine->getProcessState();
-    if (!state) return QStringLiteral("no process state");
-    const QList<CalledFunction> frames = state->functionStack();
+    // C# 的栈来自 ProcessState.CalledFunction；移植侧的 ProcessState::pushFunction()
+    // 从来没被调用过（frames 恒为 0），真实调用栈只有 ScriptRunner 的
+    // m_callContexts 记着 —— 这里直接取它，深度与 EraParseTable::depth() 同源，
+    // 不再与 state() 的 depth 打架。
+    const QList<ScriptRunner::StackFrame> frames = m_engine->getScriptRunner()->callStack();
+    const auto* table = m_engine->getParseTable();
     QString out;
     QTextStream ts(&out);
     ts << QStringLiteral("frames=%1").arg(frames.size());
     // 自底向上：#0 = 帧底（系统层进来的那个函数），最后一帧 = 当前执行处。
     for (int i = 0; i < frames.size(); ++i)
-        ts << QStringLiteral("\n#%1 %2 (%3)").arg(i).arg(frames.at(i).getLabelName(),
-                                                         frames.at(i).getPosition().toString());
+        ts << QStringLiteral("\n#%1 %2 (%3:%4)")
+                  .arg(i)
+                  .arg(frames.at(i).label)
+                  .arg(frames.at(i).script)
+                  .arg(frames.at(i).line);
+    // 当前执行位置（栈顶函数里正在跑的那一行）单独点名，方便对照 state()。
+    if (table)
+        ts << QStringLiteral("\ncurrent %1:%2 depth=%3")
+                  .arg(table->currentScript())
+                  .arg(table->currentLine())
+                  .arg(table->depth());
     return out;
 }
 

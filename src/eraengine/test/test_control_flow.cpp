@@ -122,6 +122,94 @@ static void tryListLoadTime() {
 // 0 / 空数组 —— FL3.8 的 FLPEDIA 正是用
 //   `FINDELEMENT(FLPEDIA_MAIN_CATEGORY, MAIN_CATEGORY) == -1`
 // 判类别是否存在，读不到就把每个类别都判成「未定義のカテゴリ」。
+// 调试接口的 stack()：C# 用 ProcessState.CalledFunction 报帧，移植侧
+// ProcessState::pushFunction() 从来没被调用过（frames 恒 0），真实调用栈只有
+// ScriptRunner::m_callContexts 记着。这里锁住「挂起时栈深/标签 == 实际调用层」，
+// 以及返回后栈清空 —— 否则 state() 的 depth 和 stack() 的 frames 会互相打架。
+// INPUTS 族第 2 实参 = 鼠标输入开关（C# InputRequest.MouseInput，默认 false）。
+// FL3.8 `TRAIN/USERCOM_INPUT.ERB:8` 写的是 `INPUTS , 1`，之后 `MOUSE_BTN = RESULT:1`
+// 靠它区分左右键 —— 以前只解析不生效。
+static void inputsSecondArgumentIsMouseFlag() {
+    const auto waitFlag = [](const QString& line) {
+        VariableStorage storage;
+        ProcessState state;
+        EraParseTable table(&state);
+        ExecutionEngine engine(&storage, nullptr);
+        ExpressionEvaluator evaluator;
+        engine.setParseTable(&table);
+        engine.setExpressionEvaluator(&evaluator);
+        table.setExpressionEvaluator(&evaluator);
+        table.setVariableStorage(&storage);
+        ScriptRunner runner(&table, &engine, &state, &storage);
+        runner.setExpressionEvaluator(&evaluator);
+        runner.setStepLimit(100);
+        const QStringList source = {"@MAIN", line, "RETURN"};
+        QList<LogicalLine> lines;
+        for (int i = 0; i < source.size(); ++i)
+            lines.append(AstBuilder::build(source[i], ScriptPosition("mi.ERB", i, 0),
+                [&table](const QString& text) { return table.expressionAst(text); }));
+        table.loadScript("mi", lines);
+        table.markLoadComplete();
+        table.setEntryPoint("MAIN");
+        runner.runToCompletion();
+        return runner.waitMouseInput();
+    };
+    if (!waitFlag("INPUTS , 1")) {
+        qCritical() << "INPUTS , 1 应开鼠标输入";
+        ++failures;
+    } else qInfo() << "PASS INPUTS , 1 打开鼠标输入（RESULT:1 可写按键号）";
+    if (waitFlag("INPUTS , 0")) {
+        qCritical() << "INPUTS , 0 不应开鼠标输入";
+        ++failures;
+    } else qInfo() << "PASS INPUTS , 0 关闭鼠标输入";
+    if (waitFlag("INPUTS")) {
+        qCritical() << "省略第 2 实参时默认不开鼠标输入（C# InputRequest.MouseInput 默认 false）";
+        ++failures;
+    } else qInfo() << "PASS 省略第 2 实参 = 默认 false";
+}
+
+static void callStackReportsRealFrames() {
+    VariableStorage storage;
+    ProcessState state;
+    EraParseTable table(&state);
+    ExecutionEngine engine(&storage, nullptr);
+    ExpressionEvaluator evaluator;
+    engine.setParseTable(&table);
+    engine.setExpressionEvaluator(&evaluator);
+    table.setExpressionEvaluator(&evaluator);
+    table.setVariableStorage(&storage);
+    ScriptRunner runner(&table, &engine, &state, &storage);
+    runner.setExpressionEvaluator(&evaluator);
+    runner.setStepLimit(1000);
+    const QStringList source = {"@MAIN", "CALL SUB", "RETURN", "@SUB", "CALL DEEP", "RETURN",
+                                "@DEEP", "WAIT", "RETURN"};
+    QList<LogicalLine> lines;
+    for (int i = 0; i < source.size(); ++i)
+        lines.append(AstBuilder::build(source[i], ScriptPosition("cs.ERB", i, 0),
+            [&table](const QString& text) { return table.expressionAst(text); }));
+    table.loadScript("cs", lines);
+    table.markLoadComplete();
+    table.setEntryPoint("MAIN");
+    runner.runToCompletion();
+    const QList<ScriptRunner::StackFrame> frames = runner.callStack();
+    if (frames.size() < 2) {
+        qCritical() << "挂起时调用栈应至少两层（SUB/DEEP）" << "actual" << frames.size();
+        ++failures;
+    } else {
+        const QString top = frames.last().label;
+        if (top != QLatin1String("DEEP") || frames.at(frames.size() - 2).label != QLatin1String("SUB")) {
+            qCritical() << "栈顶应为 DEEP、次层为 SUB" << "actual" << top;
+            ++failures;
+        } else qInfo() << "PASS 挂起时 stack() 报出真实调用层（DEEP <- SUB）";
+    }
+    // 栈深度要和 parse table 的 depth 一致（两者由同一套 CALL/RETURN 推进）
+    if (frames.size() != table.depth()) {
+        qCritical() << "栈深应与 table.depth 一致" << "frames" << frames.size()
+                    << "depth" << table.depth();
+        ++failures;
+    } else qInfo() << "PASS 栈深与 EraParseTable::depth 一致";
+}
+
 static void constArrayIntrospection() {
     VariableStorage storage;
     ProcessState state;
@@ -524,6 +612,8 @@ int main(int argc, char** argv) {
     htmlFlow();
     tryListLoadTime();
     constArrayIntrospection();
+    callStackReportsRealFrames();
+    inputsSecondArgumentIsMouseFlag();
     globalConstShadowedByPrivate();
     emExtensionFunctions();
     scriptPathFunctions();

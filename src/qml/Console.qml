@@ -177,13 +177,17 @@ FocusScope {
     // 舞台正文使用 stageRows（gridRows - 1），但这只是网格行数的划分，
     // 不是从逻辑舞台像素尺寸中再减去一行或一个像素。
     readonly property real gridHeightPx: Math.max(1, stageHeight)
-    // 单元格 = 舞台像素 ÷ 网格（把除不尽的余量摊给每格；永远 ≥ 字号/2 与行高，
-    // 因为 C++ 是先除后取整得到网格的）。
-    readonly property real cellWidth: Math.max(1, gridWidthPx / gridColumns)
-    // 行高按**舞台正文行数**分摊：C++ 的 gridRows 含输入行（窗口高口径），
-    // 而输入框是 QML 独立控件、不在舞台内。若仍按 gridRows 摊，正文会比
-    // 舞台少一整行的高度（图片层尤其明显：最后一行落到输入行位置）。
-    readonly property real cellHeight: Math.max(1, gridHeightPx / stageRows)
+    // 单元格 = C# 的排版单位，**不从舞台摊**：
+    //   列宽 = 字号/2（ConsoleLayout::columnWidthPx，C# 的 col * (int)(FontSize/2)）
+    //   行高 = 配置「一行の高さ」（C# 的 pointY = row * Config.LineHeight）
+    // C# 里这两个量都是固定整数，网格除不尽时剩下的零头（< 1 格）就是舞台
+    // 底/右侧的空白，**不能**摊进每一格。一旦摊了，所有带坐标的东西（div 的
+    // rect、<img> 的 width/height、ypos）都会随行/列号累积漂移：
+    // FL3.8 拠点地图 5 行格子理论行距 74.2px（530*14/100），按舞台 852/59 摊
+    // 就成了 76.2px —— 整张地图比脚本坐标高 2.7%。
+    // 舞台尺寸仍然完整覆盖（gridWidthPx/gridHeightPx 不变），只是右下角留白。
+    readonly property real cellWidth: Math.max(1, Math.floor(fontSize / 2))
+    readonly property real cellHeight: Math.max(1, lineHeight)
     // 渲染字号：常规情况下 == 配置字号（舞台网格就是按它算出来的）。
     // 只有当配置自相矛盾（行高 < 字号）时才压到行距能容纳的大小 —— 这是
     // 「极端配置不重叠」的兜底，不参与窗口缩放（窗口缩放由 Stage 统一做）。

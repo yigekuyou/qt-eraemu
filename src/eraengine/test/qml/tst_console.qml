@@ -257,7 +257,9 @@ TestCase {
         backend.print("WWiii■■□　");
         backend.printButton("[HOLD]", 8);
         backend.newline(); backend.flush(); view.syncView();
-        compare(view.cellWidth, view.width / backend.gridColumns);
+        // 格宽 = C# 的排版单位（字号/2），不是「舞台宽 ÷ 列数」——除不尽的零头
+        // 留在舞台右侧，摊进格子会让 x 随列号漂移（见 Console.qml 的 cellWidth）。
+        compare(view.cellWidth, Math.floor(view.fontSize / 2));
         const block = view.blockAt(0, 0);
         const row = findChild(block, "textCells");
         let total = 0;
@@ -324,7 +326,9 @@ TestCase {
             compare(rows, backend.gridRows, "QML 网格取自 C++ @ " + stageTag);
             verify(Math.abs(fs - st.f) < 1e-6,
                    "字号被缩小 " + fs + " != " + st.f + " @ " + stageTag);
-            verify(ch * 1.0 >= st.lh - 0.1, "行距 " + ch + " 小于配置行高 " + st.lh + " @ " + stageTag);
+            // 格 = C# 的排版单位：宽 = 字号/2、高 = 配置行高（整数，不摊余量）。
+            compare(cw, Math.floor(st.f / 2), "格宽 = 字号/2 @ " + stageTag);
+            compare(ch, st.lh, "格高 = 配置行高 @ " + stageTag);
             for (const win of windows) {
                 view.width = win[0];
                 view.height = win[1];
@@ -337,8 +341,10 @@ TestCase {
                 verify(Math.abs(view.renderFontSize - fs) < 1e-9, "字号随窗口变了 @ " + tag);
                 verify(cols * cw <= st.w + 1e-6, "内容右缘越过舞台 @ " + tag);
                 verify(rows * ch <= st.h + 1e-6, "内容下缘越过舞台 @ " + tag);
-                verify(Math.abs(view.stageRows * ch - st.h) < 1e-6,
-                       "正文行覆盖完整舞台高度 @ " + tag);
+                // 正文行不再「摊满」舞台：C# 的 pointY = row × LineHeight 是整数
+                // 倍，摊满舞台会给每个坐标叠上随行号增长的漂移（拠点地图整张
+                // 图高 2.7%）。允许的余量就是网格除不尽的那不到一行/一列的零头。
+                verify(st.h - view.stageRows * ch < st.lh, "正文行余量不足一行 @ " + tag);
             }
         }
     }
@@ -1356,7 +1362,8 @@ TestCase {
     function test_boundedWindow() {
         printLines(50);
         compare(view.rowCount, 50, "模型行数 == 缓冲行数");
-        compare(view.cellWidth, view.width / backend.gridColumns);
+        compare(view.cellWidth, Math.floor(view.fontSize / 2), "格宽 = 字号/2");
+        compare(view.cellHeight, view.lineHeight, "格高 = 配置行高");
         // 虚拟化：只实例化可见 + cacheBuffer 的委托，50 行不会全部创建
         let alive = 0;
         for (let r = 0; r < 50; ++r)

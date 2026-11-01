@@ -382,9 +382,19 @@ Item {
         // 运行期精灵的像素会随合成变化（FL3.8 FACE_*），不能吃 URL 级 pixmap 缓存：
         // 文档（Image Caching）：cache=false 时每次都回调 provider。
         cache: false
-        width: Math.max(1, block.naturalLayoutWidth)
-        height: Math.max(1, block.naturalLayoutHeight)
-        fillMode: Image.PreserveAspectFit
+        // 绘制尺寸 = C# 的目标矩形（ConsoleImagePart.destRect = 引擎算出的
+        // wPx × hPx）：`<img width='300px' height='400px'>` 在 C# 里是
+        // `Graphics.DrawImage(bmp, destRect, …)` —— **拉伸填满**，不保纵横比。
+        // 用 PreserveAspectFit 会把 3:2 的图缩成 300×200 留在 300×400 的框里，
+        // 拠点地图的路径图就只盖住上半截。（只写一边时引擎已按固有纵横比补另一边，
+        // 所以这里的框本身就是正确比例。）
+        readonly property real drawWidth: block.blockData && block.blockData.pxWidth > 0
+                                          ? block.blockData.pxWidth : block.naturalLayoutWidth
+        readonly property real drawHeight: block.blockData && block.blockData.pxHeight > 0
+                                           ? block.blockData.pxHeight : block.naturalLayoutHeight
+        width: Math.max(1, drawWidth)
+        height: Math.max(1, drawHeight)
+        fillMode: Image.Stretch
         verticalAlignment: Image.AlignTop
         // Qt 文档（Images）：「Enable image.smooth only if required」——
         // 原尺寸显示时 smooth 无视觉效果还会更慢，仅在缩放时开启。
@@ -413,9 +423,14 @@ Item {
         //
         // 网格区块保留资源纵横比，图片的垂直起点由 anchors.top 与 offsetRows 决定。
         // 裁剪容器可以比图片小，但不能反过来改变图片的绘制尺寸。
-        width: Math.max(1, block.naturalLayoutWidth)
-        height: Math.max(1, block.naturalLayoutHeight)
-        fillMode: Image.PreserveAspectFit
+        // 同 imageItemB：目标矩形 = C# destRect，拉伸填满（见上）。
+        readonly property real drawWidth: block.blockData && block.blockData.pxWidth > 0
+                                          ? block.blockData.pxWidth : block.naturalLayoutWidth
+        readonly property real drawHeight: block.blockData && block.blockData.pxHeight > 0
+                                           ? block.blockData.pxHeight : block.naturalLayoutHeight
+        width: Math.max(1, drawWidth)
+        height: Math.max(1, drawHeight)
+        fillMode: Image.Stretch
         verticalAlignment: Image.AlignTop
         smooth: width < imageItem.implicitWidth || height < imageItem.implicitHeight
         asynchronous: true

@@ -271,8 +271,13 @@ FocusScope {
         return (showingStage ? stageView : view).itemAtIndex(row);
     }
     // 独立舞台图片层的诊断/测试入口，图片顺序就是打印顺序。
+    // 正文之上的那一层（普通 <img>、depth <= 0 的 div 图片）。
     function stageImageAt(index) {
-        return stageImages.itemAt(index);
+        return stageImageLayer.imagesRepeater.itemAt(index);
+    }
+    // 正文之下的那一层（depth > 0 的 div 图片：拠点地图的底图 / 路径图）。
+    function stageBackImageAt(index) {
+        return stageBackImageLayer.imagesRepeater.itemAt(index);
     }
     // 第 row 行的第 i 个区块对象（行内顺序 = C++ 打平顺序）
     function blockAt(row, i) {
@@ -397,16 +402,23 @@ FocusScope {
 
         // 打印图片层与背景分离，位于正文之上、HTML island 之下。
         // 图片保留 sourceRow/点击信息，用同一个 ConsoleBlock 渲染 src/srcb。
-        Item {
-            id: stageImageLayer
-            objectName: "stageImageLayer"
+        //
+        // 为什么是**两层**：C# 把所有 part 按 depth 降序画，`depth > 0` 的 div
+        // 内容排在正文（depth 0）之前 —— FL3.8 拠点地图的底图(10)/路径图(3) 在
+        // 正文**下面**、节点文字(1) 压在上面。一个图层做不到「一半在上一半在下」，
+        // 于是按 C++ 的 behindText 拆成：
+        //   stageImageLayer     z = 5    正文之上（普通 <img>、depth <= 0 的 div）
+        //   stageBackImageLayer z = -0.5 正文之下、背景之上（depth > 0 的 div）
+        component StageImageLayer: Item {
+            id: layer
             anchors.fill: parent
-            // 图片层覆盖完整舞台坐标平面；滚动条不属于舞台网格。
-            z: 5
+            clip: true
+            property var images: []
+            // 测试/诊断入口：委托按需实例化（顺序 = C++ 发布顺序）
+            property alias imagesRepeater: layerRepeater
             // 不依赖 stageView.count：换帧/清屏期间 ListView 可能暂时为空，
             // 但 C++ 已经发布了图片快照。舞台模式本身才是显示条件。
             visible: root.backend && root.backend.stageMode && !root.reviewingHistory
-            clip: true
             // 图片层「全体缩放」：子项一律用**未缩放的配置像素坐标**摆放
             // （1 行 = root.lineHeight，1 列 = root.fontSize/2，与 C++
             // ConsoleLayout::columnWidthPx() 同一基准），整层只套一个 Scale。
@@ -421,8 +433,8 @@ FocusScope {
             scale: imageScale
             transformOrigin: Item.TopLeft
             Repeater {
-                id: stageImages
-                model: root.backend ? root.backend.stageImageBlocks : []
+                id: layerRepeater
+                model: layer.images
                 delegate: ConsoleBlock {
                     required property var modelData
                     required property int index
@@ -432,9 +444,9 @@ FocusScope {
                     imageOverlay: true
                     backend: root.backend
                     // 未缩放空间的格尺寸；整层 Scale 负责映射到舞台实际像素。
-                    cellWidth: stageImageLayer.unitCol
-                    cellHeight: stageImageLayer.unitRow
-                    lineHeightPx: stageImageLayer.unitRow
+                    cellWidth: layer.unitCol
+                    cellHeight: layer.unitRow
+                    lineHeightPx: layer.unitRow
                     // 位置按格子、尺寸用图片原始尺寸（满格会把图拉伸几像素）。
                     fixedWidth: modelData.pxWidth !== undefined ? modelData.pxWidth : 0
                     fixedHeight: modelData.pxHeight !== undefined ? modelData.pxHeight : 0
@@ -451,12 +463,28 @@ FocusScope {
                     // 加像素），不是「算出负几格再乘行高」—— 后者会把不足一格的
                     // 偏移放大成整格，画像枠就会离开立絵一格。
                     y: (modelData.sourceRow - root.backend.stageStart)
-                       * stageImageLayer.unitRow
+                       * layer.unitRow
                        + (modelData.pxTop !== undefined
-                          ? modelData.pxTop : offsetRows * stageImageLayer.unitRow)
-                       + (stageView.originY - stageView.contentY) / stageImageLayer.imageScale
+                          ? modelData.pxTop : offsetRows * layer.unitRow)
+                       + (stageView.originY - stageView.contentY) / layer.imageScale
                 }
             }
+        }
+
+        // 正文之上：普通 <img>、depth <= 0 的 div 图片（立絵 / 标题切片 / 地图节点图）。
+        StageImageLayer {
+            id: stageImageLayer
+            objectName: "stageImageLayer"
+            z: 5
+            images: root.backend ? root.backend.stageImageBlocks : []
+        }
+
+        // 正文之下：depth > 0 的 div 图片（拠点地图的底图 / 路径图）。
+        StageImageLayer {
+            id: stageBackImageLayer
+            objectName: "stageBackImageLayer"
+            z: -0.5
+            images: root.backend ? root.backend.stageBackImageBlocks : []
         }
 
         // 独立的滚动条槽位。两个 ListView 都让出这段宽度，滚动条不会

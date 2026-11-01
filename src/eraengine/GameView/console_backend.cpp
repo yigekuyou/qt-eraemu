@@ -1435,6 +1435,7 @@ void ConsoleBackend::updateStageModels(bool force) {
     const bool visible = m_stageMode && start < bodyRows;
     QVector<QHash<int, QVariant>> rows;
     QVariantList imageBlocks;
+    QVariantList backImageBlocks;
     if (visible) {
         rows.reserve(bodyRows - start);
         for (int row = start; row < bodyRows; ++row) {
@@ -1446,7 +1447,12 @@ void ConsoleBackend::updateStageModels(bool force) {
                 if (image.value(QStringLiteral("kind")).toString() != QStringLiteral("image"))
                     continue;
                 image.insert(QStringLiteral("sourceRow"), row);
-                imageBlocks.append(image);
+                // C# 绘制次序：depth > 0 的 div 内容在正文之前（下面），
+                // depth <= 0 的 div / 普通 <img> 在正文之后（上面）。
+                if (image.value(QStringLiteral("behindText")).toBool())
+                    backImageBlocks.append(image);
+                else
+                    imageBlocks.append(image);
             }
             item.insert(LineIndexRole, row);
             item.insert(SpanRowsRole, lineSpanRows(displayLine(row)));
@@ -1454,8 +1460,10 @@ void ConsoleBackend::updateStageModels(bool force) {
         }
     }
     const bool boundaryChanged = m_stageStart != start || m_stageVisible != visible;
-    const bool imagesChanged = m_stageImageBlocks != imageBlocks;
+    const bool imagesChanged = m_stageImageBlocks != imageBlocks
+                               || m_stageBackImageBlocks != backImageBlocks;
     m_stageImageBlocks = imageBlocks;
+    m_stageBackImageBlocks = backImageBlocks;
     m_stageSnapshot.setRows(rows);
     m_stageStart = start;
     m_stageVisible = visible;
@@ -1731,6 +1739,11 @@ QVariantList ConsoleBackend::flattenLine(const ConsoleDisplayLine& line, int row
             // 行内叠放顺序（委托内兄弟 z）：图压住先打印的字，后打印的字盖住图。
             // 跨行叠放（立絵/图层）由「后打印的行 = 后创建的委托」天然保序。
             m.insert("z", idx);
+            // 所属 div 的绘制层次（0 = 普通正文）。`> 0` = 按 C# 的绘制次序排在
+            // 正文**之前**（下面），拠点地图的底图/路径图就是这一类；舞台图片层
+            // 据此把图片分成「正文之下」「正文之上」两层。
+            m.insert("divDepth", seg.divDepth);
+            m.insert("behindText", seg.divDepth > 0);
             m.insert("col", offset + part.relCol);     // 绝对列（单位 = 区块长）
             m.insert("row", row);                      // 行号（单位 = 区块高）
             // HTML `<div rect='Xpx,...'>` 的**累计像素**左边界（含整行对齐平移）。

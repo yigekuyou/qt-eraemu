@@ -520,7 +520,11 @@ TestCase {
         const image = findChild(block, "blockImage");
         verify(image !== null, "图片区块里有 Image 元素");
         compare(image.source, "image://emuera/face_01");
-        compare(image.fillMode, Image.PreserveAspectFit);
+        // C# ConsoleImagePart.DrawTo 是 `Graphics.DrawImage(bmp, destRect, …)`：
+        // 目标矩形由引擎算好（只写一边时另一边按固有纵横比补），绘制时**拉伸填满**
+        // 这个矩形 —— 不是「按比例塞进去」。用 PreserveAspectFit 会让
+        // `<img width='300px' height='400px'>` 的 3:2 图片只占 300×200。
+        compare(image.fillMode, Image.Stretch);
         verify(image.asynchronous, "异步加载（QImage provider 支持）");
 
         // 非 ASCII（eraTW 的立絵资源名就是日文）：编码一次，provider 侧还原

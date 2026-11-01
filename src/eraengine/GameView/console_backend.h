@@ -172,7 +172,13 @@ class ConsoleBackend : public QAbstractListModel {
     Q_PROPERTY(QAbstractItemModel* historyModel READ historyModel CONSTANT)
     Q_PROPERTY(QAbstractItemModel* stageModel READ stageModel CONSTANT)
     // 舞台打印图层：独立于 ListView 行委托，保存来源行及完整图片参数。
+    // **画在正文之上**的那一半（普通 `<img>`、depth <= 0 的 div 图片）。
     Q_PROPERTY(QVariantList stageImageBlocks READ stageImageBlocks NOTIFY stageImageBlocksChanged)
+    // 同一批图片里 **画在正文之下** 的那一半：`<div depth='N'>`（N > 0）里的图片。
+    // C# 逐个 depth 降序绘制，正的 depth 排在正文（depth 0）之前，所以拠点地图
+    // 的底图（10）/ 路径图（3）在正文下面、节点文字（1）压在上面。一个图层做不到
+    // 「一半在上一半在下」，所以拆成两层（QML 里 z 分别为 5 与 -0.5）。
+    Q_PROPERTY(QVariantList stageBackImageBlocks READ stageBackImageBlocks NOTIFY stageImageBlocksChanged)
     // 底部回显行：正文**最底一行**的区块（与行委托同一形状）。
     //
     // C# 的窗口最底一行是独立的输入框（MainWindow.richTextBox1），而
@@ -218,6 +224,7 @@ public:
     [[nodiscard]] QAbstractItemModel* historyModel() { return &m_historyModel; }
     [[nodiscard]] QAbstractItemModel* stageModel() { return &m_stageSnapshot; }
     [[nodiscard]] QVariantList stageImageBlocks() const { return m_stageImageBlocks; }
+    [[nodiscard]] QVariantList stageBackImageBlocks() const { return m_stageBackImageBlocks; }
     [[nodiscard]] QVariantList inputEchoLine() const { return m_inputEchoLine; }
     [[nodiscard]] int stageStart() const { return m_stageStart; }
     [[nodiscard]] bool stageMode() const { return m_stageMode; }
@@ -558,6 +565,7 @@ private:
     ConsoleLineProxyModel m_historyModel{this};
     ConsoleStageSnapshotModel m_stageSnapshot{this};
     QVariantList m_stageImageBlocks;
+    QVariantList m_stageBackImageBlocks;
     QVariantList m_inputEchoLine;
     int m_stageStart = 0;
     bool m_stageMode = false;

@@ -1475,6 +1475,43 @@ int main(int argc, char* argv[]) {
                   .arg(order.join(QLatin1String(", "))));
     }
 
+    // 10i-3) 舞台图片分层：`depth > 0` 的 div 图片在 C# 的绘制次序里排在正文**之前**，
+    //        所以它必须画在正文下面（拠点地图的底图/路径图不能被节点文字压在下面，
+    //        也不能反过来盖住节点文字）。depth 0 / 普通 <img> 仍在正文之上。
+    qDebug() << "\n10i-3) 舞台图片按 depth 分成「正文之下 / 之上」两层";
+    {
+        ConsoleBackend c;
+        c.setFontSize(14); c.setLineHeight(14);
+        c.setGridColumns(226); c.setGridRows(60);
+        c.setStageMode(true);
+        c.printTemplateBuffered(PrintTemplateCompiler::parseRuntimeMarkup(QStringLiteral(
+            "<div rect='0px,0px,600px,400px' depth='10'>"
+            "<img src='bg_map' width='600px' height='400px'></div>")));
+        c.newline();
+        c.flush();
+        const QVariantList back = c.stageBackImageBlocks();
+        const QVariantList front = c.stageImageBlocks();
+        check(back.size() == 1 && front.isEmpty(),
+              QString("depth=10 的 div 图片进「正文之下」层（下 %1 / 上 %2）")
+                  .arg(back.size()).arg(front.size()));
+        if (back.size() == 1) {
+            const auto m = back.first().toMap();
+            check(m.value("text").toString() == QStringLiteral("bg_map")
+                      && m.value("pxWidth").toInt() == 600
+                      && m.value("pxHeight").toInt() == 400,
+                  "底图尺寸仍是 600x400px（C# destRect 拉伸填满）");
+        }
+
+        // 普通 <img>（没有 div / depth 0）留在正文之上
+        c.clearAll();
+        c.printImage(QStringLiteral("plain_img"), 100, 100);
+        c.newline();
+        c.flush();
+        check(c.stageBackImageBlocks().isEmpty() && c.stageImageBlocks().size() == 1,
+              QString("普通 <img> 进「正文之上」层（下 %1 / 上 %2）")
+                  .arg(c.stageBackImageBlocks().size()).arg(c.stageImageBlocks().size()));
+    }
+
     // Nested captures retain all rows; positioned layers cannot consume trailing body text.
     {
         ConsoleBackend c;

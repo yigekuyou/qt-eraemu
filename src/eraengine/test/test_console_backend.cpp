@@ -1228,35 +1228,26 @@ int main(int argc, char* argv[]) {
                 if (m.value("text").toString() == "A") label = m;
             }
         }
-        // 四边同色 -> 「外圈边框 + 内圈底色」两块（C# 圆角就是靠两圈半径自然形成，
-        // 逐边四条的拆法只在四边颜色各不相同时才用）。
-        check(boxes.size() == 2,
-              QString("边框外圈 + 底色内圈 = 2 个盒子区块（实得 %1）").arg(boxes.size()));
-        QVariantMap ring, fill;
-        for (const auto& b : boxes) {
-            if (b.value("color").toString().compare(QStringLiteral("#ff112233"),
-                                                    Qt::CaseInsensitive) == 0) fill = b;
-            else ring = b;
-        }
-        check(!ring.isEmpty()
-                  && ring.value("color").toString().compare(QStringLiteral("#ffc0c0c0"),
-                                                            Qt::CaseInsensitive) == 0,
-              "bcolor 画出边框外圈");
-        if (!ring.isEmpty()) {
-            check(ring.value("boxW").toInt() == 200 && ring.value("boxH").toInt() == 60
-                      && ring.value("pxLeft").toInt() == 100 && ring.value("pxTop").toInt() == 0,
-                  QString("外圈铺满 rect（实得 %1x%2 @ %3,%4）")
-                      .arg(ring.value("boxW").toInt()).arg(ring.value("boxH").toInt())
-                      .arg(ring.value("pxLeft").toInt()).arg(ring.value("pxTop").toInt()));
-        }
-        check(!fill.isEmpty(), "color 属性画出底色");
-        if (!fill.isEmpty()) {
-            check(fill.value("boxW").toInt() == 196 && fill.value("boxH").toInt() == 56,
-                  QString("底色内缩一个边框宽 200-4 x 60-4（实得 %1x%2）")
-                      .arg(fill.value("boxW").toInt()).arg(fill.value("boxH").toInt()));
-            check(fill.value("pxLeft").toInt() == 102 && fill.value("pxTop").toInt() == 2,
-                  QString("底色从 rect 内侧 2px 起（实得 %1,%2）")
-                      .arg(fill.value("pxLeft").toInt()).arg(fill.value("pxTop").toInt()));
+        // 四边同色 -> 一个盒子块：边框环（外沿盒矩形、内沿缩一个边框宽）由
+        // QML 的 Rectangle.border 画，color 属性是环内的背景填充。
+        check(boxes.size() == 1,
+              QString("边框 + 底色合成一个盒子块（实得 %1）").arg(boxes.size()));
+        if (!boxes.isEmpty()) {
+            const QVariantMap b = boxes.first();
+            check(b.value("boxW").toInt() == 200 && b.value("boxH").toInt() == 60
+                      && b.value("pxLeft").toInt() == 100 && b.value("pxTop").toInt() == 0,
+                  QString("盒子铺满 rect（实得 %1x%2 @ %3,%4）")
+                      .arg(b.value("boxW").toInt()).arg(b.value("boxH").toInt())
+                      .arg(b.value("pxLeft").toInt()).arg(b.value("pxTop").toInt()));
+            check(b.value("borderW").toInt() == 2,
+                  QString("边框宽度 2px（实得 %1）").arg(b.value("borderW").toInt()));
+            check(b.value("color").toString().compare(QStringLiteral("#ffc0c0c0"),
+                                                      Qt::CaseInsensitive) == 0,
+                  "color 位置放的是 bcolor（边框色）");
+            check(b.value("fill").toString().compare(QStringLiteral("#ff112233"),
+                                                     Qt::CaseInsensitive) == 0,
+                  QString("color 属性成为环内的背景填充（实得 %1）")
+                      .arg(b.value("fill").toString()));
         }
         check(label.value("pxLeft").toInt() == 102,
               QString("子内容再内缩 border 2px（pxLeft 实得 %1）").arg(label.value("pxLeft").toInt()));
@@ -1272,8 +1263,9 @@ int main(int argc, char* argv[]) {
         for (int r = 0; r < n.rowCount(); ++r)
             for (const QVariant& v : n.lineBlocks(r))
                 if (v.toMap().value("kind").toString() == "box") ++count;
-        // 没有 color 时只有「外圈」一块：内圈底色是透明，不画。
-        check(count == 1, QString("没有 color 就只有外圈一块（实得 %1）").arg(count));
+        // 没有 color 时环内必须透空：块还是 1 个（边框），但不能带 fill ——
+        // 否则拠点地图的格子会整块涂成边框色（灰底实心块）。
+        check(count == 1, QString("没有 color 就只有边框一块（实得 %1）").arg(count));
 
         // 10f) radius 圆角：外圈（边框色）带 per-corner 半径，内圈半径随边框宽收缩。
         qDebug() << "\n10f) radius 圆角（C# BoxBorder 的 radius 分支）";
@@ -1284,12 +1276,11 @@ int main(int argc, char* argv[]) {
             QStringLiteral("<div rect='0px,0px,100px,50px' border='2px' bcolor='#00FF00' "
                            "color='#223344' radius='10px'>R</div>")));
         rad.flush();
-        QVariantMap rfill, rinner;
+        QVariantMap rfill;
         for (int r = 0; r < rad.rowCount(); ++r)
             for (const QVariant& v : rad.lineBlocks(r)) {
                 const auto m = v.toMap();
-                if (m.value("kind").toString() != "box" || !m.contains("radii")) continue;
-                if (rfill.isEmpty()) rfill = m; else rinner = m;
+                if (m.value("kind").toString() == "box" && m.contains("radii")) rfill = m;
             }
         check(!rfill.isEmpty(), "radius 让盒子带上圆角信息");
         if (!rfill.isEmpty()) {
@@ -1297,10 +1288,12 @@ int main(int argc, char* argv[]) {
             const QVariantList rr = rfill.value("radii").toList();
             check(rr.size() == 4 && rr.at(0).toInt() == 10 && rr.at(3).toInt() == 10,
                   QString("外圈四角半径都取 10px（实得 %1 个角）").arg(rr.size()));
-            const QVariantList ir = rinner.value("radii").toList();
-            check(ir.size() == 4 && ir.at(0).toInt() == 8,
-                  QString("内圈半径随边框宽收缩成 8px（实得 %1）")
-                      .arg(ir.isEmpty() ? -1 : ir.at(0).toInt()));
+            check(rfill.value("borderW").toInt() == 2,
+                  QString("圆角盒子同时带 2px 边框宽（实得 %1）")
+                      .arg(rfill.value("borderW").toInt()));
+            check(rfill.value("fill").toString().compare(QStringLiteral("#ff223344"),
+                                                         Qt::CaseInsensitive) == 0,
+                  "圆角盒子保留背景填充色");
         }
 
         ConsoleBackend margined;

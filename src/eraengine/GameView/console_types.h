@@ -154,6 +154,13 @@ struct ConsoleSpan {
     // 四角圆角半径（左上, 右上, 右下, 左下，px）；空/Qt<6.7 时退化为直角。
     // 只有背景填充块带它（边框条是矩形，四角由圆角留白体现）。
     QList<int> boxRadii;
+    // 盒子边框宽度（px，0 = 无边框）。C# BoxBorder.DrawBorder 画的是「边框环 +
+    // 背景填充」两层：环的外沿是盒子矩形、内沿缩进一个边框宽。
+    // 这里交给 QML 的 Rectangle.border 一次画完（能跟着圆角走）。
+    //  > 0 时 style.color = **边框色**，boxFillColor = 背景填充（无效 = 透明）；
+    //  == 0 时 style.color 就是填充色（旧语义，保持兼容）。
+    int boxBorderWidthPx = 0;
+    QColor boxFillColor;
     QString  shapeType;         // "space" | "rect" | "line" | "polygon"
     QList<int> shapeParams;     // 百分比参数（× FontSize / 100）
     // rect 四参数按 C# 语义为 x, y, width, height；这里保存换算后的像素几何。
@@ -205,6 +212,9 @@ struct ConsoleSpan {
         m.insert("top", top);
         m.insert("bottom", bottom);
         m.insert("boxW", boxWidthPx);
+        if (boxBorderWidthPx > 0) m.insert("borderW", boxBorderWidthPx);
+        // 与 style.color 同口径给 #AARRGGBB 字符串，QML 端两处都用 color 属性接收。
+        if (boxFillColor.isValid()) m.insert("fill", boxFillColor.name(QColor::HexArgb));
         m.insert("boxH", boxHeightPx);
         if (!boxRadii.isEmpty()) {
             QVariantList radii;

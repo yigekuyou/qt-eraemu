@@ -512,40 +512,33 @@ void ConsoleBackend::renderTemplate(const PrintTemplate& output, bool toBuffer) 
                     rbr = qBound(0, sideOf(part.radiusPx, part.radiusRel, 2), lim);
                     rbl = qBound(0, sideOf(part.radiusPx, part.radiusRel, 3), lim);
                 }
-                // C# BoxBorder.DrawBorder：四边同一颜色时整圈画成「外圈边框 +
-                // 内圈底色」，圆角由两圈的 radius 自然形成（外圈 R、内圈
-                // R-边框宽）——这才是 C# 把圆角裁成 1/4 圆的等效画法。
+                // C# BoxBorder.DrawBorder：盒子 = 边框环（外沿盒矩形、内沿缩一个
+                // 边框宽）+ 背景填充。四边同色时交给 QML 的 Rectangle.border 一次
+                // 画完（跟着圆角走，不会在圆角处露缺口）——注意**没有 color 时
+                // 环内必须是透空**，不能整块涂边框色（那样拠点地图的格子会变成
+                // 一片灰色实心块）。
                 // 四边颜色各不相同（C# 逐边画）时才退回「四条直边」的拆法。
                 const bool hasBorder = part.borderColors.size() == 4
                     && (part.borderPx.size() == 4 || part.borderRel.size() == 4);
                 int bt = 0, br = 0, bb = 0, bl = 0;
                 if (hasBorder) {
-                    bt = qMin(divH, sideOf(part.borderPx, part.borderRel, 0));
-                    br = qMin(divW, sideOf(part.borderPx, part.borderRel, 1));
-                    bb = qMin(divH - bt, sideOf(part.borderPx, part.borderRel, 2));
-                    bl = qMin(divW - br, sideOf(part.borderPx, part.borderRel, 3));
+                    bt = qMin(boxH, sideOf(part.borderPx, part.borderRel, 0));
+                    br = qMin(boxW, sideOf(part.borderPx, part.borderRel, 1));
+                    bb = qMin(boxH - bt, sideOf(part.borderPx, part.borderRel, 2));
+                    bl = qMin(boxW - br, sideOf(part.borderPx, part.borderRel, 3));
                 }
                 const bool uniformBorder = hasBorder && part.borderColors.at(0) == part.borderColors.at(1)
                     && part.borderColors.at(0) == part.borderColors.at(2)
                     && part.borderColors.at(0) == part.borderColors.at(3)
                     && (bt > 0 || br > 0 || bb > 0 || bl > 0);
                 if (uniformBorder) {
-                    // 外圈：整块涂边框色（圆角 R）。
-                    ConsoleSpan ring = makeBox(0, 0, boxW, boxH, part.borderColors.at(0));
-                    if (rtl || rtr || rbr || rbl) ring.boxRadii = {rtl, rtr, rbr, rbl};
-                    boxes.append(ring);
-                    // 内圈：底色，四边各缩一个边框宽，圆角同步收缩。
-                    if (part.fillColor.isValid()) {
-                        const int inW = qMax(0, boxW - bl - br);
-                        const int inH = qMax(0, boxH - bt - bb);
-                        ConsoleSpan inner = makeBox(bl, bt, inW, inH, part.fillColor);
-                        const int shrink = qMin(qMin(bt, br), qMin(bb, bl));
-                        const int lim2 = qMin(inW, inH) / 2;
-                        const auto inner_r = [&](int r) { return qBound(0, r - shrink, lim2); };
-                        if (rtl || rtr || rbr || rbl)
-                            inner.boxRadii = {inner_r(rtl), inner_r(rtr), inner_r(rbr), inner_r(rbl)};
-                        boxes.append(inner);
-                    }
+                    ConsoleSpan frame = makeBox(0, 0, boxW, boxH, part.borderColors.at(0));
+                    if (rtl || rtr || rbr || rbl) frame.boxRadii = {rtl, rtr, rbr, rbl};
+                    // 四边宽度不同时取最小值（QML 的 border 只有一个宽度）；
+                    // C# 里这种写法极少见（FL3.8 都是 border='1px'/'2px'）。
+                    frame.boxBorderWidthPx = qMax(1, qMin(qMin(bt, br), qMin(bb, bl)));
+                    if (part.fillColor.isValid()) frame.boxFillColor = part.fillColor;
+                    boxes.append(frame);
                 } else {
                     // 背景：C# 用 margin 之后、border 之内的 rect 填满（border 自身
                     // 就压在这块底色上）。这里按 rect 全程填充，边框条随后覆盖边缘。

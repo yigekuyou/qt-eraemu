@@ -258,7 +258,23 @@ Item {
         objectName: "divBox"
         anchors.fill: parent
         visible: block.isBox
-        color: block.blockData && block.blockData.color ? block.blockData.color : "transparent"
+        // 有边框时（borderW > 0）blockData.color 是**边框色**、fill 是背景填充；
+        // 没有边框时 color 就是填充色。环内没有 color 时必须透空 ——
+        // 整块涂边框色会让拠点地图的格子变成灰色实心块（C# BoxBorder 是「环」）。
+        readonly property int boxBorderW: (block.blockData && block.blockData.borderW)
+                                          ? block.blockData.borderW : 0
+        readonly property color boxFill: (block.blockData && block.blockData.fill)
+                                          ? block.blockData.fill
+                                          : (boxBorderW > 0 ? "transparent"
+                                                            : (block.blockData && block.blockData.color
+                                                               ? block.blockData.color : "transparent"))
+        color: boxFill
+        // 边框环交给 Rectangle.border 画：它跟着 per-corner 圆角走，且宽度计在
+        // 自身尺寸**以内**（与 C# 的「rect 内画环」一致）。
+        border.width: boxBorderW > 0
+                      ? Math.max(1, Math.round(boxBorderW * block.boxScale)) : 0
+        border.color: (block.blockData && block.blockData.color)
+                      ? block.blockData.color : "transparent"
         // radius：左上/右上/右下/左下（Qt 6.7+ 的 per-corner 属性）。引擎像素按
         // 与宽高同一套 scale 折算成本地像素。
         topLeftRadius: block.boxRadii.length === 4 ? block.boxRadii[0] * block.boxScale : 0

@@ -912,6 +912,43 @@ TestCase {
         }
     }
 
+    function test_divClipCutsOversizedDrawing() {
+        backend.stageMode = false;
+        // C# ConsoleDivPart.DrawTo：SetClip(内容框)。300px 宽的图放进 200px 宽的
+        // rect，只画前 200px；排版推进仍是 300px（后面的兄弟 div 不会左移）。
+        consoleFixture.printHtml(backend,
+            "<div rect='0px,0px,200px,60px'>"
+            + "<img src='offset_atlas' width='300px' height='60px'></div>"
+            + "<div rect='400px,0px,200px,60px'>"
+            + "<img src='transparent' width='150px' height='60px'></div>");
+        backend.flush(); view.syncView();
+        const clipped = view.blockAt(0, 0);
+        verify(clipped !== null, "rect 内的图区块存在");
+        compare(clipped.clip, true);
+        compare(clipped.divClipped, true);
+        compare(clipped.blockData.clipWidth, 200);
+        // 图片区块的宽高就是图片原始**引擎像素**（divImageWidth），所以裁剪上限
+        // 也是引擎像素：min(300px 原始宽, 200px 裁剪上限) = 200px。
+        verify(Math.abs(clipped.width - 200) < 0.51,
+               "rect 外的绘制被裁到 200px（实得 " + clipped.width + "）");
+        // 没越界的图：同样在 div 里、clip: true，但裁剪上限要大于自身宽高 ——
+        // 一个像素都不能被切掉（上限是 200px，150px 的图还剩 50px 余量）。
+        const intact = view.blockAt(0, 1);
+        verify(intact !== null, "第二个 div 的图存在");
+        compare(intact.divClipped, true);
+        compare(intact.blockData.clipWidth, 200);
+        verify(intact.width <= intact.clipWidthLimit + 0.01 && intact.width > 100,
+               "没越界时宽度不受裁剪影响（实得 " + intact.width + "/" + intact.clipWidthLimit + "）");
+        // div 外的正文不裁剪。
+        backend.clearAll();
+        consoleFixture.printHtml(backend, "<div><img src='offset_atlas' width='300px' height='60px'></div>");
+        backend.flush(); view.syncView();
+        const free = view.blockAt(0, 0);
+        verify(free !== null);
+        compare(free.clip, false);
+        compare(free.blockData.clipWidth, -1);
+    }
+
     function test_divImagesShareAnchorInStageAndHistory() {
         backend.stageMode = true;
         consoleFixture.printHtml(backend,

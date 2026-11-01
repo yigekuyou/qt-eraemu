@@ -331,7 +331,16 @@ void ConsoleBackend::renderTemplate(const PrintTemplate& output, bool toBuffer) 
     // px = div 内**已经排到第几像素**。同一个 <div> 里可以有多段（换色/换字体
     // 就会切成多段），它们必须顺次前进；只有「没有 px 游标」时每段才会退回
     // div 原点互相压住（FL3.8 情報画面「性別:」被「男性」盖住就是这个）。
-    struct DivisionCursor { int x; int y; int col = 0; int px = 0; };
+    struct DivisionCursor {
+        int x; int y; int col = 0; int px = 0;
+        // C# ConsoleDivPart.DrawTo：rect 依次减去 margin/border/padding 的四边，
+        // 最后 graph.SetClip(内容框) —— 子内容超出就被裁掉。这里存内容框的
+        // 宽/高（-1 = 没给 width/height 的 <div>，不裁）与 div 内已排到的行号，
+        // 裁剪量一律按「内容框 - 已用掉的像素」算，不掺行号/绝对坐标。
+        int contentW = -1;
+        int contentH = -1;
+        int line = 0;
+    };
     QList<DivisionCursor> divisions;
     const auto lengthPx = [this](int value, bool pixels) {
         return pixels ? value : value * m_layout.fontSize() / 100;
@@ -378,7 +387,21 @@ void ConsoleBackend::renderTemplate(const PrintTemplate& output, bool toBuffer) 
             // 左上角内缩 margin+padding+border，rect 本身不动。
             const int divX = parentX + lengthPx(part.x, part.xposIsPixels) + part.insetX;
             const int divY = parentY + lengthPx(part.y, part.yposIsPixels) + part.insetY;
-            divisions.append({divX, divY, 0, 0});
+            // C# DrawTo：rect 先减 margin、再减 border、再减 padding（四边），
+            // SetClip 用的是这个内容框。rect 的左/上由 insetX/insetY 表达，
+            // 右/下由 insetRight/insetBottom 表达；divX/divY 已经是内容框左上角。
+            const int divW = lengthPx(part.width, part.widthIsPixels);
+            const int divH = lengthPx(part.height, part.heightIsPixels);
+            DivisionCursor cursor;
+            cursor.x = divX;
+            cursor.y = divY;
+            const int contentW = divW - part.insetX - part.insetRight;
+            const int contentH = divH - part.insetY - part.insetBottom;
+            // 没写 width/height 的 <div> 只是分组，不裁剪（C# 那里 rect 宽高为 0
+            // 会裁成空，但实机上这种写法的用途是分组，裁剪反而画不出东西）。
+            if (contentW > 0) cursor.contentW = contentW;
+            if (contentH > 0) cursor.contentH = contentH;
+            divisions.append(cursor);
             // 只有「整块提交」的 HTML_PRINT 才把 div 当独立叠放层处理：
             // 缓冲模式（PRINTFORM 续行 / HTML_PRINT toBuffer）里 div 的内容
             // 必须继续留在未定型行上，否则后续 print 接不上。
@@ -472,7 +495,11 @@ void ConsoleBackend::renderTemplate(const PrintTemplate& output, bool toBuffer) 
                 // 否则文字会漏到下一行、上一行变空（div 内多行内容只剩一行）。
                 flushPendingToSegments(captureLine(m_sealed)); m_pendingParts.clear();
                 captures.last().lines.append(QList<ConsoleSegment>());
-                if (!divisions.isEmpty()) { divisions.last().px = 0; divisions.last().col = 0; }
+                if (!divisions.isEmpty()) {
+                    divisions.last().px = 0;
+                    divisions.last().col = 0;
+                    ++divisions.last().line;   // div 内的 <br> 推进内容行（裁剪用）
+                }
             } else {
                 newline();
                 resetDivisionCursors();
@@ -531,6 +558,18 @@ void ConsoleBackend::renderTemplate(const PrintTemplate& output, bool toBuffer) 
             span.positionedXpx = division.x + division.px;
             span.relCol = qRound(double(division.x) / m_layout.columnWidthPx()) + division.col;
             span.positionedTopPx = division.y;
+            // C# graph.SetClip(内容框)：只裁绘制，排版推进照旧。剩余可见宽 =
+            // 内容框宽 - div 内已排到的像素；剩余可见高 = 内容框高 - 已排到的
+            // 内容行（图片还要扣掉 ypos，负 ypos 的图层可以探出 div 上沿）。
+            if (division.contentW >= 0)
+                span.clipWidthPx = qMax(0, division.contentW - division.px);
+            if (division.contentH >= 0) {
+                const int yposPx = part.yposIsPixels
+                                       ? part.y
+                                       : part.y * m_layout.fontSize() / 100;
+                const int relTop = division.line * qMax(1, m_layout.lineHeight()) + yposPx;
+                span.clipHeightPx = qMax(0, division.contentH - relTop);
+            }
             m_layout.measurePart(span);
             // 前进量取「这一段实际占的像素」：图片用**原始像素宽**（80px 的缩略图
             // 按 11 列 × 7px = 77px 前进，十张就少 30px），其余用测量宽度。
@@ -1502,6 +1541,11 @@ QVariantList ConsoleBackend::flattenLine(const ConsoleDisplayLine& line, int row
             m.insert("pxLeft", part.positionedXpx >= 0
                                    ? part.positionedXpx + offset * m_layout.columnWidthPx()
                                    : -1);
+            // 所属 <div> 的裁剪量（**引擎像素**，-1 = 不裁；在生成 span 时按
+            // 「内容框 - 已用掉的部分」算好）。C# graph.SetClip(内容框) 只裁
+            // 绘制，排版推进不变 —— QML 用这两个值收窄区块自己的宽高。
+            m.insert("clipWidth", part.clipWidthPx);
+            m.insert("clipHeight", part.clipHeightPx);
             const int spanCols = qMax(1, part.cols);
             // 区块占几行：文本/形状恒 1 行，**图片按资源尺寸跨多行**
             // （ConsoleLayout::measurePart 已按 `<img width/height>` 算好 rows）。

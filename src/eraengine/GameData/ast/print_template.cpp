@@ -355,7 +355,7 @@ PrintTemplate PrintTemplateCompiler::evaluateOccurrences(const CompiledPrintTemp
             // 子内容从「rect 左上角 + 这三者」开始排；rect 原点保持不变。
             // 4 值简写按 上,右,下,左；1 值四边相同；2 值 上/下 , 左/右。
             const auto insetOf = [](QString raw) {
-                struct P { int left; int top; };
+                struct P { int top; int right; int bottom; int left; };
                 auto px = [](QString v) {
                     v = v.trimmed();
                     if (v.endsWith(QLatin1String("px"))) v.chop(2);
@@ -364,20 +364,25 @@ PrintTemplate PrintTemplateCompiler::evaluateOccurrences(const CompiledPrintTemp
                     return ok ? n : 0;
                 };
                 const QStringList f = raw.split(',', Qt::SkipEmptyParts);
-                if (f.size() == 1) { const int a = px(f[0]); return P{a, a}; }
-                if (f.size() == 2) return P{px(f[1]), px(f[0])};
-                return P{px(f.size() >= 4 ? f[3] : f[1]), px(f[0])};
+                if (f.size() == 1) { const int a = px(f[0]); return P{a, a, a, a}; }
+                if (f.size() == 2) return P{px(f[0]), px(f[1]), px(f[0]), px(f[1])};
+                if (f.size() == 3) return P{px(f[0]), px(f[1]), px(f[2]), px(f[1])};
+                return P{px(f[0]), px(f[1]), px(f[2]), px(f[3])};
             };
-            int insetX = 0, insetY = 0;
+            int insetX = 0, insetY = 0, insetRight = 0, insetBottom = 0;
             for (const char* key : {"margin", "padding", "border"}) {
                 const QString raw = attrs.value(QLatin1String(key));
                 if (raw.isEmpty()) continue;
                 const auto in = insetOf(raw);
                 insetX += in.left;
                 insetY += in.top;
+                insetRight += in.right;
+                insetBottom += in.bottom;
             }
             part.insetX = insetX;
             part.insetY = insetY;
+            part.insetRight = insetRight;
+            part.insetBottom = insetBottom;
         }
         out.parts.append(std::move(part));
     }

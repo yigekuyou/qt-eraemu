@@ -57,6 +57,9 @@ Item {
     // ---- 单元格大小（由容器决定）----
     property real cellWidth: 9
     property real cellHeight: 19
+    // 引擎侧「一行」的像素高（ConsoleLayout::lineHeight）：把 C++ 给的裁剪像素
+    // 换算到本组件的格子系统时要用（cellHeight 是缩放后的行高）。
+    property real lineHeightPx: 19
     // 空字体/颜色表示使用系统主题默认值；C++ 只在模板显式指定时提供覆盖值。
     property string fontName: ""
     // real：极端窗口下 Console 会按 cellHeight-1 给出非整数字号
@@ -173,12 +176,37 @@ Item {
                                           && block.kind === "image"
                                           && blockData.pxWidth !== undefined
                                           ? blockData.pxWidth : 0
-    width: fixedWidth > 0
-           ? fixedWidth
-           : Math.max(divImageWidth, gridCols * cellWidth, contentRow.implicitWidth)
-    height: fixedHeight > 0
-            ? fixedHeight
-            : Math.max(gridRows * cellHeight, contentRow.implicitHeight)
+    // ---- 所属 <div> 的绘制裁剪（C# ConsoleDivPart.DrawTo 的 graph.SetClip(内容框)）----
+    // C++ 给出**引擎像素**的剩余可见宽/高（-1 = 不裁）。本组件的宽高有两条口径：
+    //   * 图片（divImageWidth / fixedWidth）= 图片原始**引擎像素** → 系数 1；
+    //   * 网格区块 = 格数 × 格宽 → 系数 cellWidth / columnWidthPx
+    //     （纵向 cellHeight / lineHeightPx）。
+    // 只裁绘制：排版推进由 C++ 定好，被裁掉的区块照旧占着它的格子。
+    readonly property real clipWidthPx: blockData && blockData.clipWidth !== undefined
+                                        ? blockData.clipWidth : -1
+    readonly property real clipHeightPx: blockData && blockData.clipHeight !== undefined
+                                         ? blockData.clipHeight : -1
+    readonly property real enginePxToLocalW: (divImageWidth > 0 || fixedWidth > 0)
+                                             ? 1 : cellWidth / columnWidthPx
+    readonly property real enginePxToLocalH: (divImageWidth > 0 || fixedHeight > 0)
+                                             ? 1 : cellHeight / Math.max(1, lineHeightPx)
+    readonly property real clipWidthLimit: clipWidthPx >= 0 ? clipWidthPx * enginePxToLocalW : -1
+    readonly property real clipHeightLimit: clipHeightPx >= 0 ? clipHeightPx * enginePxToLocalH : -1
+    // 完全落在 rect 外（limit == 0）也算「被裁」——宽度 0 时本来什么也画不出来。
+    readonly property bool divClipped: clipWidthLimit >= 0 || clipHeightLimit >= 0
+    clip: divClipped
+    width: {
+        const w = fixedWidth > 0
+                ? fixedWidth
+                : Math.max(divImageWidth, gridCols * cellWidth, contentRow.implicitWidth)
+        return clipWidthLimit >= 0 ? Math.max(0, Math.min(w, clipWidthLimit)) : w
+    }
+    height: {
+        const h = fixedHeight > 0
+                  ? fixedHeight
+                  : Math.max(gridRows * cellHeight, contentRow.implicitHeight)
+        return clipHeightLimit >= 0 ? Math.max(0, Math.min(h, clipHeightLimit)) : h
+    }
     // 叠放顺序 = 控制台打印顺序（C++ 给的扁平 z）。三个 Instantiator 共用同一个
     // 父 Item 后，靠它把 text/image/shape 按真正的绘制顺序交叠 —— 对齐 C#
     // 「逐 part 顺序绘制」：图可压住先打印的字，后打印的字也能盖住先打印的图。

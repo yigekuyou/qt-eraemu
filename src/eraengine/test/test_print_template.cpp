@@ -738,6 +738,13 @@ int main(int argc, char** argv) {
                 check(part.insetX == 11 && part.insetY == 6,
                       qPrintable(QString("div insets margin+padding+border (x=%1 y=%2)")
                                      .arg(part.insetX).arg(part.insetY)));
+                // 右侧：margin 2 + padding 4 + border 2 = 8；
+                // 底部：margin 2 + padding 3 + border 3 = 8。
+                // C# DrawTo 对 rect 减去**四边**再 SetClip，右侧/底部不内缩的话
+                // 子内容会画到 div 外面（背景大图压住旁列文字）。
+                check(part.insetRight == 8 && part.insetBottom == 8,
+                      qPrintable(QString("div right/bottom insets (right=%1 bottom=%2)")
+                                     .arg(part.insetRight).arg(part.insetBottom)));
             }
             check(found, "div part present for inset check");
         }

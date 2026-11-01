@@ -106,6 +106,12 @@ struct ConsoleSpan {
     // -1 = 未定位（按 col × 列宽走网格）。
     int positionedXpx = -1;
     int positionedTopPx = 0;   // relative HTML div origin, added after image ypos
+    // C# ConsoleDivPart.DrawTo：graph.SetClip(内容框) —— 子内容越过 rect 就被裁掉，
+    // 但**排版推进不变**（裁剪只影响绘制）。这里是本区块在所属 div 内容框里
+    // **还剩多少可见**（引擎像素，已扣掉 margin/border/padding 与前面已排的内容）；
+    // -1 = 不在 div 内、或 div 没给 width/height → 不裁。
+    int clipWidthPx = -1;
+    int clipHeightPx = -1;
     bool  pointXLocked = false; // <img pos=…> / <shape> 的绝对定位
     int   top = 0;              // 命中测试用（C# Top/Bottom）
     int   bottom = 0;
@@ -185,6 +191,8 @@ struct ConsoleSpan {
         m.insert("xSubPixel", xSubPixel);
         m.insert("pointXLocked", pointXLocked);
         m.insert("positionedXpx", positionedXpx);
+        m.insert("clipWidth", clipWidthPx);
+        m.insert("clipHeight", clipHeightPx);
         m.insert("top", top);
         m.insert("bottom", bottom);
         m.insert("imageId", imageId);

@@ -1121,6 +1121,81 @@ int main(int argc, char* argv[]) {
               "非 div 区块 pxLeft == -1（走 col × 格宽）");
     }
 
+    // ---- 10c. div 超出 rect 的绘制裁剪（C# graph.SetClip(内容框)）----
+    // C# ConsoleDivPart.DrawTo 里 SetClip 只影响**绘制**：子内容越过 rect 就被裁掉，
+    // 排版推进不变。C++ 侧给出「本区块还剩多少可见宽/高」（引擎像素，-1 = 不裁），
+    // QML 再把区块自己的宽高收进这个上限（clip: true）。
+    qDebug() << "\n10c) div 超出 rect 的绘制裁剪（C# SetClip）";
+    {
+        ConsoleBackend c;
+        c.setFontSize(14);          // 列宽 7px、行高 14px
+        c.setLineHeight(14);
+        c.setGridColumns(226);
+        c.setGridRows(60);
+        // rect 200×60 里放一张 300px 宽的图：横向必须裁到 200px（纵向正好 60px）。
+        c.printTemplate(PrintTemplateCompiler::parseRuntimeMarkup(
+            QStringLiteral("<div rect='0px,0px,200px,60px'>"
+                           "<img src='wide' width='300px' height='60px'></div>")));
+        c.flush();
+        const QVariantMap wide = blockOf(c.lineBlocks(0), "wide");
+        check(!wide.isEmpty(), "rect 内的图区块存在");
+        check(wide.value("pxWidth").toInt() == 300,
+              QString("图片原始宽仍是 300px（实得 %1）").arg(wide.value("pxWidth").toInt()));
+        check(wide.value("clipWidth").toInt() == 200,
+              QString("超出 rect 的绘制被裁到 200px（实得 %1）").arg(wide.value("clipWidth").toInt()));
+        check(wide.value("clipHeight").toInt() == 60,
+              QString("纵向裁剪高 = rect 高 60px（实得 %1）").arg(wide.value("clipHeight").toInt()));
+
+        // padding 四边各 10px：内容框 180×40，左边界同时内缩到 10px。
+        ConsoleBackend p;
+        p.setFontSize(14);
+        p.setLineHeight(14);
+        p.setGridColumns(226);
+        p.setGridRows(60);
+        p.printTemplate(PrintTemplateCompiler::parseRuntimeMarkup(
+            QStringLiteral("<div rect='0px,0px,200px,60px' padding='10px'>"
+                           "<img src='pad' width='300px' height='60px'></div>")));
+        p.flush();
+        const QVariantMap pad = blockOf(p.lineBlocks(0), "pad");
+        check(pad.value("pxLeft").toInt() == 10,
+              QString("padding 内缩子内容起点到 10px（实得 %1）").arg(pad.value("pxLeft").toInt()));
+        check(pad.value("clipWidth").toInt() == 180,
+              QString("裁剪宽 = rect - 左右 padding = 180px（实得 %1）").arg(pad.value("clipWidth").toInt()));
+        check(pad.value("clipHeight").toInt() == 40,
+              QString("裁剪高 = rect - 上下 padding = 40px（实得 %1）").arg(pad.value("clipHeight").toInt()));
+
+        // 同一 div 里第二张图已经越过右边界一半：只剩 50px 可见。
+        ConsoleBackend s;
+        s.setFontSize(14);
+        s.setLineHeight(14);
+        s.setGridColumns(226);
+        s.setGridRows(60);
+        s.printTemplate(PrintTemplateCompiler::parseRuntimeMarkup(
+            QStringLiteral("<div rect='0px,0px,200px,60px'>"
+                           "<img src='first' width='150px' height='60px'>"
+                           "<img src='second' width='150px' height='60px'></div>")));
+        s.flush();
+        const QVariantMap second = blockOf(s.lineBlocks(0), "second");
+        check(second.value("pxLeft").toInt() == 150,
+              QString("第二张图从 150px 起（实得 %1）").arg(second.value("pxLeft").toInt()));
+        check(second.value("clipWidth").toInt() == 50,
+              QString("越过右边界的部分被裁掉（clipWidth 实得 %1）").arg(second.value("clipWidth").toInt()));
+
+        // 没给 width/height 的 <div> 只是分组：不裁剪；div 外的正文也不裁剪。
+        ConsoleBackend d;
+        d.setFontSize(14);
+        d.setLineHeight(14);
+        d.setGridColumns(226);
+        d.setGridRows(60);
+        d.printTemplate(PrintTemplateCompiler::parseRuntimeMarkup(
+            QStringLiteral("<div><img src='nodim' width='300px' height='60px'></div>")));
+        d.printPlain(QStringLiteral("tail"));
+        d.flush();
+        const QVariantMap nodim = blockOf(d.lineBlocks(0), "nodim");
+        check(nodim.value("clipWidth").toInt() == -1 && nodim.value("clipHeight").toInt() == -1,
+              "没给 rect 尺寸的 <div> 不裁剪（clipWidth/clipHeight == -1）");
+    }
+
     // ---- 10b. 同一个 <div> 内的多段必须顺次前进（不能都回到 div 原点）----
     // FL3.8 情報画面表头：`SEX '= @"性別:%RESULTS:1%"`，RESULTS:1 带 <font color>，
     // 于是同一个 div 里出现「性別:」+「男性」两段。若每段都拿 division.x 当左边界，

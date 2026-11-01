@@ -195,6 +195,11 @@ struct PrintTemplatePart {
     // 只移动**子内容**起点，rect 本身不变（测试 bare attribute fragment 也是这么约束的）。
     int insetX = 0;
     int insetY = 0;
+    // 右下内缩：C# DrawTo 里 rect 依次减去 margin/border/padding 的**四边**，
+    // 最后 SetClip 用的就是这个内容框 —— 右侧/底部同样要收，否则子内容
+    // （3000px 的背景图、超长一行文字）会画到 rect 外面去。
+    int insetRight = 0;
+    int insetBottom = 0;
     int x = -1;
     int y = -1;
 };

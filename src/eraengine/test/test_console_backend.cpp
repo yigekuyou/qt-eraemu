@@ -173,8 +173,18 @@ int main(int argc, char* argv[]) {
         check(c.lineCount() == 1 && c.logicalLineCount() == 1,
               "CLEARLINE 负数不删除且不改变 LINECOUNT");
         c.clearLines(4);
-        check(c.lineCount() == 0 && c.logicalLineCount() == 0,
-              "CLEARLINE 超量请求按 C# deleteLine 提前 break：LINECOUNT 不为负");
+        // C# deleteLine：`while (delNum < num) { if (displayLineList.Count == 0) break; … }`
+        // 之后还有 `if (delNum < num) logicalLineCount -= num - delNum;`
+        // —— 短删的差额照扣，LINECOUNT **可以为负**（era 系脚本的
+        // `CLEARLINE LINECOUNT` 在行为空时就走到这条）。这里剩 1 行、请求 4，
+        // 实删 1 -> logicalLineCount = 0 - (4-1) = -3。
+        check(c.lineCount() == 0 && c.logicalLineCount() == -3,
+              "CLEARLINE 超量请求：按 C# 短删补偿，LINECOUNT 变负（0-3 = -3）");
+        // 一時行替换走同一入口但**不**做补偿（C# 只在 LastLineIsTemporary 时
+        // deleteLine(1)，请求量与现存行数总是相等）—— 这里直接验证语义边界：
+        // 负数计数下再删一行仍是「按实际删除递减」。
+        c.print("D"); c.newline(); c.flush();
+        check(c.logicalLineCount() == -2, "负数计数下追加一行：-3 + 1 = -2");
     }
     // 「一時行」（REUSELASTLINE / DQPRINT）：
     //   * 一時行本身要出现在屏上；

@@ -345,11 +345,16 @@ public:
     void printDataNewline();
     void requestPrintDataWaitKey();
     // PRINTDATA 的可选整型变量实参（如 `PRINTDATAW LOCAL:0`）：写入被选中的段下标。
-    void assignPrintDataIndex(const Operand& lhs, qint64 value);
+    // scope：调用方（ScriptRunner）当前帧的显式作用域 —— PRINTDATA 的实参可以是
+    // 函数私有变量（`#DIM IDX` -> 键 "函数名\x1fIDX"），拿全局作用域写会落到
+    // 同名的广域槽里（读回来仍是旧值）。
+    void assignPrintDataIndex(const Operand& lhs, qint64 value,
+                              eravar::ScopeId scope = eravar::kGlobalScope);
 
     // STRDATA <字符串变量>：与 PRINTDATA 同段结构，但**不显示**，把被选中段的
     // 文本写进这个变量（C# STRDATA = PRINTDATA 的不显示版）。
-    void assignPrintDataString(const Operand& lhs, const QString& value);
+    void assignPrintDataString(const Operand& lhs, const QString& value,
+                               eravar::ScopeId scope = eravar::kGlobalScope);
 
     void setGameDirectory(const QString& dir) { m_gameDirectory = dir; }
     QHash<qint64, EraBinaryData::Document> m_saveSnapshots;

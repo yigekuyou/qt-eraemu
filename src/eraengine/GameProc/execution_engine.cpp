@@ -183,6 +183,12 @@ ExecutionEngine::LhsRef ExecutionEngine::resolveLhsRef(const ExpressionNode* ast
     ref.name = variable.name();
     try {
         ref.indices = getEvaluator().resolveIndices(variable, m_storage, m_gameBaseData, m_activeScope);
+        // 标量（0 维）变量的「左边」不带下标，resolveIndices 会给出空表；但
+        // resolveIntLocus 用 indices.value(0) 定位（空 -> -1 -> 写被忽略）。
+        // 赋值语句走的是 accessKind 分支（自带 e0=0），而 PRINTDATA/STRDATA 这类
+        // 「指令级写变量」走这里 —— 不补 0 的话 `PRINTDATAW LOCAL:0` 之外的
+        // 标量写法（`PRINTDATA IDX`）永远写不进去。空表按标量第 0 元素处理。
+        if (ref.indices.isEmpty()) ref.indices.append(0);
         ref.valid = true;
     } catch (const std::exception& error) {
         emit errorOccurred(QString::fromUtf8(error.what()));
@@ -1950,17 +1956,29 @@ void ExecutionEngine::requestPrintDataWaitKey() {
     m_printWaitKey = true;
 }
 
-void ExecutionEngine::assignPrintDataIndex(const Operand& lhs, qint64 value) {
-    const LhsRef ref = resolveLhsRef(lhs.ast.data());
-    if (ref.name.isEmpty()) return;
-    writeLhs(ref, value);
+void ExecutionEngine::assignPrintDataIndex(const Operand& lhs, qint64 value,
+                                          eravar::ScopeId scope) {
+    // 走「变量节点 -> 存储」的**唯一写路径**（ExpressionEvaluator::assignVariable）：
+    // 它按节点自带的 accessKey / accessKind 分派，函数私有变量（`#DIM IDX`、
+    // LOCAL、ARG）都能正确落位。旧实现用 resolveLhsRef + writeLhs，那条链把
+    // 「名字 + 作用域」重新解析成存储键，而 ExecutionEngine 的 m_activeScope
+    // 恒为全局 —— 私有变量被写进同名的广域槽，读回来还是旧值
+    // （组23 `PRINTDATA IDX` 的 IDX 永远是 -1）。
+    if (!lhs.ast) return;
+    getEvaluator().assignNodeValue(*lhs.ast, m_storage, m_gameBaseData,
+                                   QVariant::fromValue<qint64>(value), scope);
 }
 
 // STRDATA <字符串变量>：把被选中段的文本写进变量（不显示）
-void ExecutionEngine::assignPrintDataString(const Operand& lhs, const QString& value) {
+void ExecutionEngine::assignPrintDataString(const Operand& lhs, const QString& value,
+                                           eravar::ScopeId scope) {
     // 值已经是**求值后的字符串**，不能再当表达式文本走 handleStringAssignment
-    // （裸文本会被解析成变量名 -> 0）。与 SPLIT 一样直接用 writeStringValue。
-    writeStringValue(lhs.ast.data(), value);
+    // （裸文本会被解析成变量名 -> 0）。与 assignPrintDataIndex 一样走
+    // 「变量节点 -> 存储」的唯一写路径（按节点的 accessKey/accessKind 落位，
+    // 函数私有 #DIMS 变量也正确）。
+    if (!lhs.ast) return;
+    getEvaluator().assignNodeValue(*lhs.ast, m_storage, m_gameBaseData,
+                                   QVariant::fromValue<QString>(value), scope);
 }
 
 // 未实现接口的运行期留痕（同名只报一次，避免刷屏）

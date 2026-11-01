@@ -522,7 +522,7 @@ private:
     // C# deleteLine：从尾部删 n 个**逻辑行**（连同折行续行）。
     // 只动已提交的显示行（m_buffer），**不碰**未定型的打印缓冲
     // （C# printBuffer）—— CLEARLINE 与「一時行替换」共用这一个实体。
-    void deleteTailLogicalLines(int n);
+    void deleteTailLogicalLines(int n, bool compensateShortfall = false);
     void markDirty();                                  // 内容变化：等 flush 发布
     // 尾行摊平（flattenLine）时把行内坐标补齐成区块数据
     QVariantList flattenLine(const ConsoleDisplayLine& line, int row) const;

@@ -11,7 +11,8 @@
 ;   · 读到的确实是 test/example 的 CSV/_default.config（フォントサイズ 18 …）
 ;   · 类型：<int>/<Int64> 数值、<Color> 打包为 ((R*256)+G)*256+B、<bool> 1/0、
 ;     字符串/字符原样（GETCONFIGS）
-;   · **白名单**：ウィンドウ高さ 存在于 _default.config(640) 但不在白名单 -> 0
+;   · **可读范围 = ConfigCode 里申报过的项**（ウィンドウ高さ=640 / 履歴ログの行数=5000
+;     都走 default 分支）；不在 ConfigCode 里的名字 C# 抛错、本移植宽容为 0
 ;   · 缺项回落 C# 内建默认（PBANDの初期値 4 / COM_ABLE初期値 1 …）
 ;   · eraTW 的像素换算不再除零
 ;************************************************************************
@@ -49,11 +50,13 @@ FAILS += RESULT
 CALL ASSERT_EQ, GETCONFIG("オートセーブを行なう"), 0, "GETCONFIG(オートセーブを行なう) NO -> 0"
 FAILS += RESULT
 
-;--- 4) 白名单：存在于配置文件但不允许被 ERB 读出的项 -> 0 ---
-CALL ASSERT_EQ, GETCONFIG("ウィンドウ高さ"), 0, "白名单外：ウィンドウ高さ(文件里=640) -> 0"
+;--- 4) 申报过的配置项都能读（C# GetConfigValueInERB：ConfigCode 枚举里的
+;       名字一律可读，走 default 分支按 ValueToString 转数值/字符串）------
+CALL ASSERT_EQ, GETCONFIG("ウィンドウ高さ"), 640, "ウィンドウ高さ=640（ConfigCode.WindowY，走 default 分支）"
 FAILS += RESULT
-CALL ASSERT_EQ, GETCONFIG("履歴ログの行数"), 0, "白名单外：履歴ログの行数 -> 0"
+CALL ASSERT_EQ, GETCONFIG("履歴ログの行数"), 5000, "履歴ログの行数=5000（ConfigCode.MaxLog）"
 FAILS += RESULT
+;--- 4b) **不在** ConfigCode 里的名字：C# 抛 CodeEE；本移植宽容 -> 0 ---
 CALL ASSERT_EQ, GETCONFIG("不存在的配置项"), 0, "不存在的键 -> 0"
 FAILS += RESULT
 

@@ -1951,7 +1951,7 @@ ExecState ScriptRunner::executeLine(const LogicalLine& line) {
                 if (k > 0) value += QLatin1Char('\n');
                 value += m_engine->printDataFormText(sd->lines.at(grp.at(k)));
             }
-            m_engine->assignPrintDataString(line.arguments.first(), value);
+            m_engine->assignPrintDataString(line.arguments.first(), value, m_currentScopeId);
         }
         m_table->setPosition(script, next, false);
         return ExecState::Continue;
@@ -1967,7 +1967,7 @@ ExecState ScriptRunner::executeLine(const LogicalLine& line) {
             const AstBuilder::PrintDataFlags flags = AstBuilder::printDataFlags(name);
             // 可选整型变量实参（如 `PRINTDATAW LOCAL:0`）：写入被选中的段下标
             if (!line.arguments.isEmpty() && m_engine) {
-                m_engine->assignPrintDataIndex(line.arguments.first(), choice);
+                m_engine->assignPrintDataIndex(line.arguments.first(), choice, m_currentScopeId);
             }
             const QList<int>& grp = line.printDataGroups().at(choice);
             for (int k = 0; k < grp.size(); ++k) {

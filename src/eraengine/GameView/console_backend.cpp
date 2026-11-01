@@ -1025,7 +1025,7 @@ bool ConsoleBackend::outputLog(const QString& path) const {
 // 只动**已提交的显示行**；C# 的 printBuffer（= 本移植的 m_pendingParts/
 // m_sealed）原样保留 —— CLEARLINE 之后接着 PRINT，内容仍接在当前行上。
 // 「一時行替换」（C# addDisplayLine 的 deleteLine(1)）走同一入口。
-void ConsoleBackend::deleteTailLogicalLines(int n) {
+void ConsoleBackend::deleteTailLogicalLines(int n, bool compensateShortfall) {
     if (n <= 0 || m_buffer.isEmpty()) return;
     const int oldCount = m_buffer.count();
     // 先预告物理行数，才能把 beginRemoveRows 括在真正的删除外面。
@@ -1034,15 +1034,16 @@ void ConsoleBackend::deleteTailLogicalLines(int n) {
     beginRemoveRows(QModelIndex(), oldCount - physical, oldCount - 1);
     // 逻辑行计数（LINECOUNT）由缓冲按**实际删掉的**逻辑行递减：
     // removeLastLogicalLines 每弹掉一行 IsLogicalLine 就 --m_logicalCount。
-    m_buffer.removeLastLogicalLines(n);
+    m_buffer.removeLastLogicalLines(n, compensateShortfall);
     endRemoveRows();
     // 预告的物理行数必须与实删一致（both 走同一个「只数逻辑行」的循环）
     Q_ASSERT(m_buffer.count() == oldCount - physical);
     m_removedRows += physical;
     pruneTailCache();
     // C# deleteLine 在现存行不够时提前 break（`if (displayLineList.Count == 0)
-    // break;`），所以这里**没有**「补齐请求量」的补偿 —— 请求超过现存行数时
-    // LINECOUNT 停在 0 附近而不是被减成负数（eraTW 的 -14 就是这么来的）。
+    // break;`），但**紧接着**有 `if (delNum < num) logicalLineCount -= num - delNum;`
+    // —— 短删的差额照扣，LINECOUNT 因此可以为负（era 系脚本 `CLEARLINE LINECOUNT`
+    // 在行为空时就会走到这条）。CLEARLINE 走补偿路径，一時行替换不补。
     emit lineCountChanged();
 }
 
@@ -1051,7 +1052,8 @@ bool ConsoleBackend::lastLineIsTemporary() const {
 }
 
 void ConsoleBackend::clearLines(int n) {
-    deleteTailLogicalLines(n);
+    // CLEARLINE 可以删成负数（对齐 C# 的短删补偿），一時行替换不补。
+    deleteTailLogicalLines(n, /*compensateShortfall=*/true);
 }
 
 void ConsoleBackend::clearAll() {

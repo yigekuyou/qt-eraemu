@@ -158,6 +158,11 @@ int ConstantTable::loadCsvTreeInto(const DirNode& node, bool recursive,
         ++done;
         if (onProgress) onProgress(done, total);
         if (m_tables.contains(key)) continue;   // 同名（不同目录）只取先出现的
+        // 注：Chara*.csv（角色模板）也会在这里建一张名表。C# 只按固定文件名读
+        // （ABL.CSV/BASE.CSV/…），不会给它建表；本移植按「递归扫 *.csv」统一处理，
+        // 多出来的 CHARA* 表不会命中任何 `<KEY>NAME` 变量（<KEY>NAME 填充只认
+        // 已登记的系统变量），也不影响角色 CSV 装载 —— CsvTextTable 让同一份
+        // 字节只读一次，两趟共享。保留它是 test_dir_tree 钉住的不变量。
         // f.path 已是 entryInfoList 的 absoluteFilePath()，直接读取；
         // 不走 GamePaths::join（content:// 下每文件多一次 exists 探测）。
         if (loadCsvFile(f.path, key, texts)) ++loaded;

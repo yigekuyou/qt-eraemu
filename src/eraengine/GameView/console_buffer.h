@@ -89,16 +89,23 @@ public:
     // 删除尾部 n 个**逻辑行**（连同折行续行）。返回本次实际删掉的**逻辑**行数：
     // 现存行不够时提前停（对齐 C# deleteLine 的 `if (displayLineList.Count == 0)
     // break;`），故返回值恒 <= n，逻辑行计数不会被减成负数。
-    int removeLastLogicalLines(int n) {
+    // C# deleteLine 的收尾：`if (delNum < num) { lineNo = 0; logicalLineCount -= num - delNum; }`
+    // —— 请求量超过现存行数时，C# 会**把差额从逻辑行计数里再扣一次**，于是
+    // LINECOUNT 可以变成负数（era 系脚本 `CLEARLINE LINECOUNT` 之后就是这样）。
+    // compensateShortfall=true 时照抄这一条：短删的部分不计入「已删」，
+    // 而是直接从计数里减掉（计数允许为负）。
+    int removeLastLogicalLines(int n, bool compensateShortfall = false) {
         int logical = 0;
         while (logical < n && !m_lines.isEmpty()) {
             const bool isLogical = m_lines.last().isLogicalLine;
             m_lines.removeLast();
             if (isLogical) {
                 ++logical;
-                if (m_logicalCount > 0) --m_logicalCount;
+                // 计数可能已经是负数（上一次短删补偿留下的），继续按删除递减
+                --m_logicalCount;
             }
         }
+        if (compensateShortfall && logical < n) m_logicalCount -= (n - logical);
         return logical;
     }
 

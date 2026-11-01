@@ -2487,6 +2487,14 @@ bool ExpressionEvaluator::evaluateBuiltin(const FunctionNode &node, VariableStor
         if (size <= 0 && dim == 0 && m_constArraySizeProvider) {
             size = m_constArraySizeProvider(name, scope);
         }
+        // LOCAL / LOCALS / ARG / ARGS 没有「声明形状」（尺寸来自 #LOCALSIZE /
+        // 函数形参个数），C# 走 LocalVariableToken.GetLength() 报**当前帧的槽位数**
+        // —— `@F ... #LOCALSIZE 40` 里 VARSIZE("LOCAL") 必须是 40，否则
+        // era 系脚本的 `VARSIZE ローカル` 保护全废。容器事实由 storage 回答
+        // （arraySize 的第二段就是 allocatedSlots）。
+        if (size <= 0 && dim == 0 && storage) {
+            size = storage->arraySize(name, scope);
+        }
         out = QVariant::fromValue<qint64>(size);
         return true;
     }

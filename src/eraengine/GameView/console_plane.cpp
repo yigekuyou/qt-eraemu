@@ -294,9 +294,16 @@ QList<ConsolePlaneIssue> ConsolePlane::inspect(const ConsoleBuffer& buffer,
         for (const ConsoleSegment& seg : line.segments) {
             for (const ConsoleSpan& part : seg.spans) {
                 if (part.kind == ConsoleSpanKind::Image) continue;   // 图片像素高 ≠ 行高（见上）
+                // `<shape type='rect' param='x,y,w,h'>` 是**自带几何**的绘图块
+                // （C# ConsoleShapePart：宽高来自 param，与行高无关），
+                // 和图片一样不受「一区块 = 一行」的启发式约束；
+                // 只有 space（占位）才必须与行高一致。
+                if (part.kind == ConsoleSpanKind::Shape
+                    && part.shapeType != QLatin1String("space")) continue;
                 if (part.height > 0 && part.height != lineHeight) {
-                    issues.append({i, QStringLiteral("区块像素高 %1 ≠ 行高 %2")
-                                          .arg(part.height).arg(lineHeight)});
+                    issues.append({i, QStringLiteral("区块像素高 %1 ≠ 行高 %2（kind=%3 text=\"%4\"）")
+                                          .arg(part.height).arg(lineHeight)
+                                          .arg(int(part.kind)).arg(part.text.left(16))});
                 }
             }
         }

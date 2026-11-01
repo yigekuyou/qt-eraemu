@@ -31,8 +31,11 @@
 #   ./test/run_example.sh 40       # LOADDATA 往返（清空调用栈，加载钩子中断言）
 #   ./test/run_example.sh 16       # CLEARLINE 逻辑行计数与边界回归
 #
-# 依赖：build/src/eraengine/test_cli
-#       （cmake --build build --target test_cli）
+# 依赖：test_cli 可执行文件，按以下顺序解析
+#       $EMIERA_TEST_CLI / $ERA_TEST_CLI（直接指定文件）
+#       $ERA_BUILD_DIR/src/eraengine/test_cli（指定构建目录）
+#       仓库内 build/src/eraengine/test_cli（默认）
+#       例：ERA_BUILD_DIR=/tmp/build/Local_PC-Test ./test/run_example.sh 0
 # 退出码：0 = 全部断言通过且渲染自检无异常；非 0 = 有 FAIL / 渲染可疑项
 #
 # 自动路径中的 PRINTDATAW 和组11等等待指令由 --script 注入输入。
@@ -40,12 +43,27 @@
 # ---------------------------------------------------------------------------
 set -u
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
-CLI="$ROOT/build/src/eraengine/test_cli"
 GAME="$ROOT/test/example"
+
+# CLI 解析顺序（都可覆盖，方便对任意构建目录跑同一套示例）：
+#   1. 环境变量 EMIERA_TEST_CLI / ERA_TEST_CLI —— 显式指定可执行文件
+#   2. 环境变量 ERA_BUILD_DIR —— 指定构建目录，取其中的 src/eraengine/test_cli
+#   3. 仓库内 build/src/eraengine/test_cli（默认，历史路径）
+# 例：ERA_BUILD_DIR=/tmp/build/Local_PC-Test ./test/run_example.sh 0
+if [ -n "${EMIERA_TEST_CLI:-}" ]; then
+    CLI="$EMIERA_TEST_CLI"
+elif [ -n "${ERA_TEST_CLI:-}" ]; then
+    CLI="$ERA_TEST_CLI"
+elif [ -n "${ERA_BUILD_DIR:-}" ]; then
+    CLI="$ERA_BUILD_DIR/src/eraengine/test_cli"
+else
+    CLI="$ROOT/build/src/eraengine/test_cli"
+fi
 
 if [ ! -x "$CLI" ]; then
     echo "test_cli 不存在：$CLI"
-    echo "先执行：cmake --build $ROOT/build --target test_cli"
+    echo "先执行：cmake --build <build目录> --target test_cli"
+    echo "或指定：ERA_BUILD_DIR=/tmp/build/Local_PC-Test $0 ${1:-0}"
     exit 1
 fi
 

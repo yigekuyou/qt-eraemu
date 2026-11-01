@@ -1,0 +1,207 @@
+;=============================================================
+; [43] 迁移自 src/eraengine/test/test_control_flow.cpp 的脚本语义部分
+; 这里只保留 ERB 可观察的行为：循环、分支、短路、递增、SWAP、调用与返回。
+; AST 类型表、解析告警、step limit 等宿主内部检查仍留在 C++。
+;=============================================================
+@TEST_CONTROL_CORE
+#DIM NONG
+#DIM I
+#DIM J
+#DIM TOTAL
+#DIM A
+#DIM B
+#DIM CHECK
+#DIM ARR, 8
+
+PRINTL == 组43：脚本语义迁移（control_flow） ==
+
+; FOR：步长、降序、空区间、零步长
+TOTAL = 0
+FOR I, 2, 10, 2
+    TOTAL += I
+NEXT
+CALL ASSERT_EQ, TOTAL, 20, "FOR 步长 2"
+NONG += RESULT
+
+TOTAL = 0
+FOR I, 3, 0, -1
+    TOTAL += I
+NEXT
+CALL ASSERT_EQ, TOTAL, 6, "FOR 降序"
+NONG += RESULT
+
+TOTAL = 0
+FOR I, 1, 1
+    TOTAL = 999
+NEXT
+CALL ASSERT_EQ, TOTAL, 0, "FOR 空区间"
+NONG += RESULT
+
+TOTAL = 0
+FOR I, 0, 9, 0
+    TOTAL = 999
+NEXT
+CALL ASSERT_EQ, TOTAL, 0, "FOR 零步长不执行"
+NONG += RESULT
+
+; CONTINUE / BREAK 及嵌套循环
+TOTAL = 0
+FOR I, 0, 10
+    SIF I == 3
+        CONTINUE
+    SIF I == 6
+        BREAK
+    TOTAL += I
+NEXT
+CALL ASSERT_EQ, TOTAL, 12, "CONTINUE 跳过 3，BREAK 在 6 停止"
+NONG += RESULT
+
+TOTAL = 0
+REPEAT 3
+    FOR I, 0, 10
+        SIF I == 2
+            BREAK
+        TOTAL += 1
+    NEXT
+REND
+CALL ASSERT_EQ, TOTAL, 6, "嵌套循环"
+NONG += RESULT
+
+; WHILE / DO LOOP / REPEAT COUNT
+I = 0
+TOTAL = 0
+WHILE I < 4
+    I += 1
+    TOTAL += I
+WEND
+CALL ASSERT_EQ, TOTAL, 10, "WHILE 累加"
+NONG += RESULT
+
+I = 100
+TOTAL = 0
+DO
+    TOTAL = I
+    I += 1
+LOOP I < 1
+CALL ASSERT_EQ, TOTAL, 100, "DO 至少执行一次"
+NONG += RESULT
+
+TOTAL = 0
+REPEAT 3
+    TOTAL += COUNT + 1
+REND
+CALL ASSERT_EQ, TOTAL, 6, "REPEAT COUNT 0..2"
+NONG += RESULT
+
+; SELECTCASE：范围、IS、字符串 TO 文本
+TOTAL = 0
+SELECTCASE 4512
+    CASE IS < 0, 4510 TO 4512
+        TOTAL = 7
+    CASEELSE
+        TOTAL = 99
+ENDSELECT
+CALL ASSERT_EQ, TOTAL, 7, "CASE IS 与范围"
+NONG += RESULT
+
+TOTAL = 0
+SELECTCASE "A TO B"
+    CASE "A TO B"
+        TOTAL = 3
+    CASEELSE
+        TOTAL = 99
+ENDSELECT
+CALL ASSERT_EQ, TOTAL, 3, "字符串 CASE 中的 TO"
+NONG += RESULT
+
+; 短路求值：右侧副作用必须按需要发生
+I = 0
+IF 0 && (++I)
+    TOTAL = 999
+ENDIF
+IF 1 || (++I)
+    TOTAL = I
+ENDIF
+CALL ASSERT_EQ, TOTAL, 0, "&&/|| 短路"
+NONG += RESULT
+
+I = 0
+TOTAL = 1 !& I++
+CALL ASSERT_EQ, TOTAL, 1, "!&（NAND）左值非零且右值为0时结果为1"
+NONG += RESULT
+CALL ASSERT_EQ, I, 1, "!&（NAND）左值非零时求值右侧副作用"
+NONG += RESULT
+
+; 前缀/后缀递增及索引表达式
+ARR:0 = 10
+ARR:1 = 20
+I = 0
+A = ARR:(I++)
+B = ARR:(I++)
+CALL ASSERT_EQ, A * 100 + B * 10 + I, 1202, "后缀递增返回旧值"
+NONG += RESULT
+
+J = 1
+ARR:J = 99
+CALL ASSERT_EQ, ARR:1, 99, "索引表达式写入"
+NONG += RESULT
+
+; SWAP
+A = 3
+B = 8
+SWAP A, B
+CALL ASSERT_EQ, A * 10 + B, 83, "SWAP 交换标量"
+NONG += RESULT
+
+; CALL / CALLFORM / TRYCALL / TRYCCALLFORM
+CALL CORE_ADD, 5
+CALL ASSERT_EQ, RESULT, 15, "CALL 返回 RESULT"
+NONG += RESULT
+
+A = 7
+CALLFORM CORE_ADD_{A}(A)
+CALL ASSERT_EQ, RESULT, 17, "CALLFORM 格式化函数名"
+NONG += RESULT
+
+TRYCALL CORE_ADD, 1
+CALL ASSERT_EQ, RESULT, 11, "TRYCALL 存在目标"
+NONG += RESULT
+
+TOTAL = 1
+TRYCALL CORE_MISSING
+TOTAL += 1
+CALL ASSERT_EQ, TOTAL, 2, "TRYCALL 缺失目标静默跳过"
+NONG += RESULT
+
+A = 2
+CORE_SIDE_EFFECT = 0
+TRYCCALLFORM CORE_MARK_%TOSTR(A)%(A)
+CATCH
+    CORE_SIDE_EFFECT = 999
+ENDCATCH
+CALL ASSERT_EQ, CORE_SIDE_EFFECT, 12, "TRYCCALLFORM 存在目标"
+NONG += RESULT
+
+A = 3
+TRYCCALLFORM CORE_MISSING_{A}
+CATCH
+    TOTAL = 7
+ENDCATCH
+CALL ASSERT_EQ, TOTAL, 7, "TRYCCALLFORM 缺失目标进入 CATCH"
+NONG += RESULT
+
+RETURN NONG
+
+@CORE_ADD(N)
+RETURN N + 10
+
+@CORE_ADD_7(N)
+RETURN N + 10
+
+@CORE_ADD_2(N)
+CORE_SIDE_EFFECT = N + 10
+RETURN
+
+@CORE_MARK_2(N)
+CORE_SIDE_EFFECT = N + 10
+RETURN

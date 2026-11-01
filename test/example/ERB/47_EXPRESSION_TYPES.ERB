@@ -1,0 +1,79 @@
+;=============================================================
+; 组 47 —— test_expression_types.cpp 的脚本可观察类型语义
+; 依据：test/data/language/表达式.md、运算符.md、
+;      表达式解析边界.md、预处理与定义.md。
+; AST valueType、operator table 和错误节点仍保留在 C++。
+;=============================================================
+@TEST_EXPRESSION_TYPES
+#DIM FAILS
+#DIM A
+#DIM N
+#DIM NUMS, 4
+#DIMS TEXT
+#DIMS EXPECT
+#DIMS PARTS, 4
+
+;---- 字符串 =：右侧是 FORM 文本，' =：右侧是字符串表达式 ----
+A = 27
+TEXT = "值={A}"
+EXPECT '= UNICODE(34) + "值=27" + UNICODE(34)
+CALL ASSERT_SEQ, TEXT, EXPECT, "字符串=保留外层引号并展开 FORM"
+FAILS += RESULT
+TEXT '= "值={A}"
+CALL ASSERT_SEQ, TEXT, "值={A}", "字符串\'=按字面字符串表达式赋值"
+FAILS += RESULT
+TEXT '= "值=" + TOSTR(A)
+CALL ASSERT_SEQ, TEXT, "值=27", "字符串\'=支持字符串连接和显式转换"
+FAILS += RESULT
+TEXT += "!"
+CALL ASSERT_SEQ, TEXT, "值=27!", "字符串+=连接"
+FAILS += RESULT
+TEXT *= 2
+CALL ASSERT_SEQ, TEXT, "值=27!值=27!", "字符串*=重复"
+FAILS += RESULT
+
+;---- 数值数组连续赋值 ----
+NUMS:0 = 10, 20, 30, 40
+CALL ASSERT_EQ, NUMS:0, 10, "数值数组连续赋值第0项"
+FAILS += RESULT
+CALL ASSERT_EQ, NUMS:3, 40, "数值数组连续赋值第3项"
+FAILS += RESULT
+
+;---- 字符串数组连续 ' = 赋值 ----
+PARTS:0 '= "甲", "乙", "丙"
+CALL ASSERT_SEQ, PARTS:0, "甲", "字符串数组连续赋值第0项"
+FAILS += RESULT
+CALL ASSERT_SEQ, PARTS:1, "乙", "字符串数组连续赋值第1项"
+FAILS += RESULT
+CALL ASSERT_SEQ, PARTS:2, "丙", "字符串数组连续赋值第2项"
+FAILS += RESULT
+
+;---- 普通表达式没有隐式整数/字符串转换 ----
+CALL ASSERT_EQ, TOINT("123"), 123, "TOINT 显式字符串转整数"
+FAILS += RESULT
+CALL ASSERT_EQ, ISNUMERIC("12.5"), 1, "ISNUMERIC"
+FAILS += RESULT
+CALL ASSERT_SEQ, TOSTR(123), "123", "TOSTR 显式整数转字符串"
+FAILS += RESULT
+
+;---- #FUNCTION / #FUNCTIONS：表达式调用必须返回对应类型 ----
+CALL ASSERT_EQ, TYPE_ADD(20, 7), 27, "#FUNCTION 返回整数"
+FAILS += RESULT
+CALL ASSERT_SEQ, TYPE_NAME(27), "N27", "#FUNCTIONS 返回字符串"
+FAILS += RESULT
+N = TYPE_ADD(1, 2) * 10
+CALL ASSERT_EQ, N, 30, "整数表达式函数可参与运算"
+FAILS += RESULT
+TEXT '= TYPE_NAME(5) + "!"
+CALL ASSERT_SEQ, TEXT, "N5!", "字符串表达式函数可参与连接"
+FAILS += RESULT
+
+RETURN FAILS
+
+@TYPE_ADD(X, Y)
+#FUNCTION
+RETURNF X + Y
+
+@TYPE_NAME(X)
+#FUNCTIONS
+RETURNF "N" + TOSTR(X)

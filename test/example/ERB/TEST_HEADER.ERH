@@ -25,6 +25,7 @@
 
 ;---- 全局变量（SAVEGLOBAL/LOADGLOBAL 持久化）----
 #DIM SAVEDATA GLOBAL DOC_GVAR_27
+#DIM CORE_SIDE_EFFECT
 
 ;---- 组34 用：GDRAWSPRITE 第 7 实参的颜色矩阵（eraTW CN_GRAPHIC 的カラーマトリクス同型）----
 ;以 `WEBP_CM:0:0` 传入，运行期从该元素起读 5×5 个整数各除以 256。

@@ -1,0 +1,111 @@
+;=============================================================
+; 组 44 —— test_statements.cpp 的脚本语义迁移
+; 语义依据：test/data/commands/VARSET.md、CVARSET.md、POWER.md、
+; SPLIT.md、ENCODETOUNI.md、CLEARBIT.md、INVERTBIT.md。
+; AST 类型、信号、宿主回调和存储容器检查仍保留在 C++ 测试。
+;=============================================================
+@TEST_STATEMENTS_CORE
+#DIM FAILS
+#DIM A, 10
+#DIM B
+#DIM COUNT
+#DIM BITS
+#DIM POWERED
+#DIM MAT, 2, 3
+#DIMS WORDS, 8
+#DIMS TEXTS, 5
+
+;---- VARSET：省略范围、显式半开范围、反向范围、多维和字符串 ----
+A:0 = 9
+A:5 = 9
+VARSET A
+CALL ASSERT_EQ, A:0, 0, "VARSET 一维省略范围清零首项"
+FAILS += RESULT
+CALL ASSERT_EQ, A:5, 0, "VARSET 一维省略范围清零末项"
+FAILS += RESULT
+
+VARSET A, 7, 1, 4
+CALL ASSERT_EQ, A:0, 0, "VARSET 范围外首项不变"
+FAILS += RESULT
+CALL ASSERT_EQ, A:1, 7, "VARSET [1,4) 写入第1项"
+FAILS += RESULT
+CALL ASSERT_EQ, A:3, 7, "VARSET [1,4) 写入第3项"
+FAILS += RESULT
+CALL ASSERT_EQ, A:4, 0, "VARSET [1,4) 不写终止项"
+FAILS += RESULT
+
+VARSET A, 5, 4, 2
+CALL ASSERT_EQ, A:2, 5, "VARSET start>end 自动交换后的首项"
+FAILS += RESULT
+CALL ASSERT_EQ, A:3, 5, "VARSET start>end 自动交换后的末项"
+FAILS += RESULT
+CALL ASSERT_EQ, A:4, 0, "VARSET start>end 仍使用半开终点"
+FAILS += RESULT
+
+MAT:0:0 = 1
+MAT:1:2 = 1
+VARSET MAT, 8, 0, 1
+CALL ASSERT_EQ, MAT:0:0, 8, "VARSET 多维数组忽略范围并填满"
+FAILS += RESULT
+CALL ASSERT_EQ, MAT:1:2, 8, "VARSET 多维数组末项也被填满"
+FAILS += RESULT
+
+TEXTS:2 '= "旧"
+VARSET TEXTS, "新"
+CALL ASSERT_SEQ, TEXTS:2, "新", "VARSET 字符串数组填充值"
+FAILS += RESULT
+
+;---- CVARSET：同一角色元素的角色范围 ----
+; CVARSET 的角色区间只允许已登录角色；CSV/ADDCHARA.md 规定先添加模板角色。
+ADDCHARA 0
+CFLAG:0:5 = 1
+CVARSET CFLAG, 5, 9, 0, 1
+CALL ASSERT_EQ, CFLAG:0:5, 9, "CVARSET 写入角色范围内的元素"
+FAILS += RESULT
+
+;---- POWER 语句：X^Y 写入变量，区别于式中 POWER 函数 ----
+POWER POWERED, 2, 10
+CALL ASSERT_EQ, POWERED, 1024, "POWER 语句把 2^10 写入目标"
+FAILS += RESULT
+POWER POWERED, 3, 4
+CALL ASSERT_EQ, POWERED, 81, "POWER 语句支持再次写入"
+FAILS += RESULT
+
+;---- SPLIT：普通字符串分隔、保留空字段、显式计数变量 ----
+SPLIT "a,b,,c", ",", WORDS, COUNT
+CALL ASSERT_EQ, COUNT, 4, "SPLIT 计数包含空字段"
+FAILS += RESULT
+CALL ASSERT_SEQ, WORDS:0, "a", "SPLIT 第0项"
+FAILS += RESULT
+CALL ASSERT_SEQ, WORDS:1, "b", "SPLIT 第1项"
+FAILS += RESULT
+CALL ASSERT_SEQ, WORDS:2, "", "SPLIT 保留中间空字段"
+FAILS += RESULT
+CALL ASSERT_SEQ, WORDS:3, "c", "SPLIT 第3项"
+FAILS += RESULT
+
+;---- ENCODETOUNI：RESULT:0 为字符数，后续为 Unicode 码点 ----
+ENCODETOUNI あA
+A = RESULT:0
+B = RESULT:1
+COUNT = RESULT:2
+CALL ASSERT_EQ, A, 2, "ENCODETOUNI RESULT:0 是字符数"
+FAILS += RESULT
+CALL ASSERT_EQ, B, 12354, "ENCODETOUNI あ 的 Unicode 码点"
+FAILS += RESULT
+CALL ASSERT_EQ, COUNT, 65, "ENCODETOUNI A 的 Unicode 码点"
+FAILS += RESULT
+
+;---- CLEARBIT / INVERTBIT：按位清零和反转 ----
+BITS = 255
+CLEARBIT BITS, 0, 1
+CALL ASSERT_EQ, BITS, 252, "CLEARBIT 清零多个位"
+FAILS += RESULT
+INVERTBIT BITS, 2
+CALL ASSERT_EQ, BITS, 248, "INVERTBIT 反转已置位的位"
+FAILS += RESULT
+INVERTBIT BITS, 0, 3
+CALL ASSERT_EQ, BITS, 241, "INVERTBIT 可一次反转多个位"
+FAILS += RESULT
+
+RETURN FAILS

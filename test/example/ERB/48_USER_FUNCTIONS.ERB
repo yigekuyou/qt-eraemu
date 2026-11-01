@@ -1,0 +1,85 @@
+;=============================================================
+; 组48 —— 用户函数运行时语义迁移
+; 依据：test/data/language/ERB结构与函数.md、预处理与定义.md。
+;=============================================================
+@TEST_USER_FUNCTIONS
+#DIM FAILS
+#DIM A
+#DIM B
+#DIM OUT
+#DIMS TEXT
+#DIM REF_TARGET
+
+; 普通 CALL 的整数/字符串形参绑定与返回
+CALL UF_ADD, 3, 4
+CALL ASSERT_EQ, RESULT, 7, "CALL 整数形参绑定与 RETURN"
+FAILS += RESULT
+CALL UF_TEXT, "abc"
+CALL ASSERT_SEQ, RESULTS:0, "abc!", "CALL 字符串形参写 RESULTS"
+FAILS += RESULT
+
+; 默认参数：省略时使用定义处常量
+CALL UF_DEFAULT, 5
+CALL ASSERT_EQ, RESULT, 12, "省略默认整数形参"
+FAILS += RESULT
+CALL UF_DEFAULT, 5, 9
+CALL ASSERT_EQ, RESULT, 14, "显式整数形参覆盖默认值"
+FAILS += RESULT
+
+; REF 形参写回调用者变量
+REF_TARGET = 10
+CALL UF_REF, REF_TARGET
+CALL ASSERT_EQ, REF_TARGET, 15, "REF 形参写回调用者变量"
+FAILS += RESULT
+
+; 表达式内函数的返回类型和调用
+CALL ASSERT_EQ, UF_EXPR(6), 18, "#FUNCTION 返回整数参与表达式"
+FAILS += RESULT
+CALL ASSERT_SEQ, UF_EXPR_TEXT(6), "N6", "#FUNCTIONS 返回字符串"
+FAILS += RESULT
+
+; DYNAMIC 每次进入重建，普通私有变量跨 CALL 保留
+CALL UF_LIFETIME
+A = RESULT
+CALL UF_LIFETIME
+B = RESULT
+CALL ASSERT_EQ, A % 10, 1, "DYNAMIC 私有变量第一次从0开始"
+FAILS += RESULT
+CALL ASSERT_EQ, B % 10, 2, "STATIC 私有变量跨调用保留"
+FAILS += RESULT
+CALL ASSERT_EQ, A, 11, "第一次生命周期函数返回 TEMP*10+KEEP"
+FAILS += RESULT
+CALL ASSERT_EQ, B, 12, "第二次生命周期函数返回 TEMP*10+KEEP"
+FAILS += RESULT
+
+RETURN FAILS
+
+@UF_ADD(X, Y)
+RETURN X + Y
+
+@UF_TEXT(ARGS)
+RESULTS:0 '= ARGS + "!"
+RETURN
+
+@UF_DEFAULT(X, Y = 7)
+RETURN X + Y
+
+@UF_REF(V)
+#DIM REF V
+V += 5
+RETURN
+
+@UF_EXPR(X)
+#FUNCTION
+RETURNF X * 3
+
+@UF_EXPR_TEXT(X)
+#FUNCTIONS
+RETURNF "N" + TOSTR(X)
+
+@UF_LIFETIME()
+#DIM DYNAMIC TEMP
+#DIM KEEP
+TEMP += 1
+KEEP += 1
+RETURN TEMP * 10 + KEEP

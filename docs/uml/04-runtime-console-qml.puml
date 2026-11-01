@@ -78,6 +78,15 @@ package "GameView" {
     + setInputResult(result)
     + waitForInput() : int
   }
+
+  note right of ScriptRunner
+    INPUT / ONEINPUT and INPUTS / ONEINPUTS keep comma positions.
+    The first field is the default value; an empty first field means
+    no default and must not consume the second field. String-family
+    defaults use FORM semantics: a bare token is literal text, while
+    an unresolved integer default is a load-time error. The runner
+    owns this field mapping; QML only submits the resulting value.
+  end note
 }
 
 package "QML" {

@@ -1572,16 +1572,16 @@ ExecState ScriptRunner::executeLine(const LogicalLine& line) {
         // 不能简单跳过逗号：`INPUTS , 1`（缺省值留空、允许鼠标）跳过逗号后
         // 会把 1 误当缺省值；按分隔符推进字段号才能还原位置。
         const Operand* def = nullptr;
-        {
-            int field = 0;
-            for (const Operand& a : line.arguments) {
-                const QString r = a.raw.trimmed();
-                if (!a.isString && (r == QLatin1String(",") || r == QLatin1String(":"))) {
-                    ++field;                        // 分隔符：下一个实参换到下一字段
-                    continue;
-                }
-                if (field == 0 && !def && !a.omitted) def = &a;
+        // Keep the field map local to this instruction. Do not compact operands:
+        // the empty first field is meaningful and the second field must stay field 2.
+        int field = 0;
+        for (const Operand& a : line.arguments) {
+            const QString r = a.raw.trimmed();
+            if (!a.isString && (r == QLatin1String(",") || r == QLatin1String(":"))) {
+                ++field;
+                continue;
             }
+            if (field == 0 && !def && !a.omitted) def = &a;
         }
         if (def) {
             const Operand& a0 = *def;

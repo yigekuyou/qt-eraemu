@@ -70,6 +70,18 @@ class WindowController : public QObject {
     // 配置原值，舞台必须与它逐字相同；未接上设置时回落配置键表的默认值。
     Q_PROPERTY(int stageWidth READ stageWidth NOTIFY stageSizeChanged FINAL)
     Q_PROPERTY(int stageHeight READ stageHeight NOTIFY stageSizeChanged FINAL)
+    // ---- 窗口内「应用自身占用」的高度（QML 上报）----
+    // 窗口是 ApplicationWindow，菜单栏与底部状态条都画在**窗口内部**（C#
+    // 用的是系统菜单栏，不在客户区里）。若窗口高度直接取配置的
+    // ウィンドウ高さ，这份 chrome 就会从游戏视口里扣掉 —— 舞台被压小、
+    // 整体等比缩放到 0.92 倍并出现左右黑边，画面就与脚本的像素坐标对不上
+    // （拠点地图 830 单位本应 116px，实测 107px）。
+    // 所以 targetWindowSize() 的高度 = 舞台高 + 这个 chrome 高：客户区
+    // 恰好等于配置画布，contain 缩放为 1:1。QML 在布局完成后上报
+    // `window.height - gameViewport.height`（chrome 高度与窗口尺寸无关，
+    // 上报值稳定，不会形成回写循环）。
+    Q_PROPERTY(int chromeHeight READ chromeHeight WRITE setChromeHeight
+               NOTIFY chromeHeightChanged FINAL)
     // 当前屏幕的刷新率（Hz；未知为 0）。QML 的 Screen 附着类型**没有**
     // refreshRate（Qt 文档 Screen QML Type 的属性表里不存在），所以刷新节拍
     // 由 C++ 提供：QScreen::refreshRate()（Qt 文档 QScreen）。
@@ -88,6 +100,8 @@ public:
     // 舞台（逻辑画布）尺寸 = 配置 ウィンドウ幅/高さ 原值（见上方属性注释）
     [[nodiscard]] int stageWidth() const;
     [[nodiscard]] int stageHeight() const;
+    [[nodiscard]] int chromeHeight() const { return m_chromeHeight; }
+    void setChromeHeight(int h);
     // 当前屏幕刷新率（Hz）；窗口/屏幕未知时为 0
     [[nodiscard]] int screenRefreshRate() const;
 
@@ -111,6 +125,7 @@ Q_SIGNALS:
     void guiChanged();
     void windowModeChanged();
     void screenRefreshRateChanged();
+    void chromeHeightChanged();
     // 配置里的舞台尺寸变化（装载游戏 / 改设置）—— QML 据此重算呈现缩放；
     // 网格由 C++ 同步重算（EraEngine::syncConsoleGrid），二者同源。
     void stageSizeChanged();
@@ -134,6 +149,8 @@ private:
     // 与组合器的实际表面可以不一致 —— 判断是否需要 hide/show 重映射时
     // 只能信自己记录的值）
     QSize m_appliedSize;
+    // 窗口内应用自身（菜单栏 + 状态条）占用高度；由 QML 上报，见属性注释
+    int   m_chromeHeight = 0;
     // 启动后的首次几何对账完成标记（见 verifyWindowSize）
     bool  m_initialGeometryChecked = false;
 };

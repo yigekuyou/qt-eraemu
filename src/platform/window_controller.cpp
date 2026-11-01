@@ -192,6 +192,17 @@ bool WindowController::hasGlobalMenuBar() {
 #endif
 }
 
+void WindowController::setChromeHeight(int h) {
+    h = qMax(0, h);
+    if (m_chromeHeight == h)
+        return;
+    m_chromeHeight = h;
+    emit chromeHeightChanged();
+    // chrome 高度变了（首次布局完成 / 菜单栏出现或消失）→ 以新目标尺寸重算窗口，
+    // 让游戏视口回到「恰好等于配置画布」。窗口化模式下才需要。
+    applyWindowSize();
+}
+
 QSize WindowController::targetWindowSize() const {
     // 窗口尺寸 = GuiManager 的配置尺寸（emuera.config 的ウィンドウ幅/高さ），
     // **全程不做屏幕钳制**：原版 Emuera 也允许窗口比屏幕大（Win32 无限制），
@@ -202,9 +213,13 @@ QSize WindowController::targetWindowSize() const {
     const int w = qMax(kMinWindowWidth,
                        m_gui ? m_gui->windowWidth()
                              : ConfigLoader::configIntDefault(QStringLiteral("ウィンドウ幅")));
-    const int h = qMax(kMinWindowHeight,
-                       m_gui ? m_gui->windowHeight()
-                             : ConfigLoader::configIntDefault(QStringLiteral("ウィンドウ高さ")));
+    const int stageH = qMax(kMinWindowHeight,
+                            m_gui ? m_gui->windowHeight()
+                                  : ConfigLoader::configIntDefault(QStringLiteral("ウィンドウ高さ")));
+    // 高度再加上窗口内应用自身占用的部分（菜单栏 + 状态条）：客户区
+    // （游戏视口）恰好等于配置画布，Stage 的 contain 缩放正好 1:1。
+    // 不加这一步，chrome 会从画布里扣掉，整体缩到 0.92 倍并留左右黑边。
+    const int h = stageH + m_chromeHeight;
     return QSize(w, h);
 }
 

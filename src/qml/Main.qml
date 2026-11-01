@@ -722,6 +722,22 @@ ApplicationWindow {
             // viewport clipped so the scaled stage cannot draw over the chrome.
             clip: true
 
+            // 窗口内应用自身占用的高度（菜单栏 + 底部状态条）。C++ 的
+            // WindowController::targetWindowSize() 把它加在配置画布高度**之外**，
+            // 客户区才恰好等于舞台 —— Stage 的 contain 缩放因此是 1:1。
+            // 不这么做的话 chrome 会从画布里扣掉：拠点地图 830 单位本该 116px，
+            // 实际被缩成 107px（整体 0.92 倍 + 左右黑边），与脚本坐标对不上。
+            // chrome 高度与窗口尺寸无关（布局后恒定），上报不会形成回写循环。
+            function reportChromeHeight(): void {
+                if (height <= 0)
+                    return
+                const chrome = Math.round(window.height - height)
+                if (chrome > 0 && chrome < 400 && chrome !== windowController.chromeHeight)
+                    windowController.chromeHeight = chrome
+            }
+            Component.onCompleted: Qt.callLater(reportChromeHeight)
+            onHeightChanged: Qt.callLater(reportChromeHeight)
+
             // 逻辑舞台：尺寸与位置都由 C++ 配置 + 本视口推导，绝不按窗口重排
             Stage {
                 id: gameStage

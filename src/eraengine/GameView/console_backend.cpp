@@ -375,6 +375,11 @@ void ConsoleBackend::renderTemplate(const PrintTemplate& output, bool toBuffer) 
     struct DivCapture {
         int yPx = 0;
         QList<QList<ConsoleSegment>> lines{1};   // 每行一组段
+        // 盒子（背景 + 四条边）单独放，**不占内容行**：C# 的盒子是 DrawBorder
+        // 画在 rect 上、行号由 ceil(Top/LineHeight) 记账，div 的第一行内容就
+        // 贴在内容框顶部。早先把它塞进 lines.first() 会让「引导空行」不再为空
+        // （dropEmpty 靠 isEmpty 判断），每个格子整体下移一行。
+        QList<ConsoleSegment> boxSegs;
     };
     QList<DivCapture> captures;
     QList<DivCapture> overlays;
@@ -432,17 +437,22 @@ void ConsoleBackend::renderTemplate(const PrintTemplate& output, bool toBuffer) 
                 }
             }
             divisions.append(cursor);
-            // 只有「整块提交」的 HTML_PRINT 才把 div 当独立叠放层处理：
-            // 缓冲模式（PRINTFORM 续行 / HTML_PRINT toBuffer）里 div 的内容
-            // 必须继续留在未定型行上，否则后续 print 接不上。
-            if (toBuffer) { continue; }
+            // div 永远是**独立部件**：C# HtmlManager 解析 `<div>` 时递归调用
+            // html2DisplayLine 并把 buttonsOutput 传成 null（子内容自成一行集合），
+            // 外层只把一棵 ConsoleDivPart 塞进 cssList —— 因此无论 PrintHtml 走不走
+            // toPrintBuffer（`HTML_PRINT X, 1`），div 都在自己的缓冲里排版、按 rect
+            // 落位。缓冲模式唯一的区别是**不在 div 之前换行**：这一批 div 全部叠进
+            // 当前正在拼的那一行。FL3.8 拠点地图就是 `HTML += ROOM_DIV:LOCAL` 攒满
+            // 25 个格子后一次 `HTML_PRINT HTML, 1`，靠这条并成 5×5；否则每个格子
+            // 里的 `<br>` 都会推进正文行，25 个格子被摊成 50 行。
             if (captures.isEmpty() && !blockStarted) {
                 // 顶层 div = 独立叠放层：先把正文行定格，再记下本区块的起始行，
                 // div 的 rect.y 就是相对这个起始行的像素偏移。
                 // 只认**第一个**顶层 div：同一区块里后面的兄弟 div（FL3.8 拠点地图
                 // 的 25 个格子、肖像编辑器的 10 张缩略图）都相对同一起点落位，
                 // 否则每个 div 都会推进一行、永远合不到同一行上。
-                if (m_pendingOpen && (!m_sealed.isEmpty() || !m_pendingParts.isEmpty()))
+                if (!toBuffer && m_pendingOpen
+                    && (!m_sealed.isEmpty() || !m_pendingParts.isEmpty()))
                     newline();
                 blockStarted = true;
             }
@@ -505,10 +515,10 @@ void ConsoleBackend::renderTemplate(const PrintTemplate& output, bool toBuffer) 
                     if (br > 0) boxes.append(makeBox(divW - br, bt + rightY, br, qMax(0, rightH - bt - bb), part.borderColors.at(1)));
                 }
             }
-            if (!boxes.isEmpty() && !cap.lines.isEmpty()) {
+            if (!boxes.isEmpty()) {
                 ConsoleSegment boxSeg;
                 boxSeg.spans = boxes;
-                cap.lines.first().append(boxSeg);
+                cap.boxSegs.append(boxSeg);
             }
             captures.append(cap);
             continue;
@@ -527,6 +537,8 @@ void ConsoleBackend::renderTemplate(const PrintTemplate& output, bool toBuffer) 
                         parent.lines.append(QList<ConsoleSegment>());
                     for (int i = 0; i < cap.lines.size(); ++i)
                         parent.lines[firstRow + i].append(cap.lines.at(i));
+                    // 子 div 的盒子跟着它的第一行进父 div 的行集合（父 div 只是分组）
+                    parent.lines[firstRow] += cap.boxSegs;
                 }
             }
             if (!divisions.isEmpty()) divisions.removeLast();
@@ -695,7 +707,13 @@ void ConsoleBackend::renderTemplate(const PrintTemplate& output, bool toBuffer) 
         QMap<int, QList<ConsoleSegment>> rows;
         for (const DivCapture& c : overlays) {
             const int row = c.yPx / lineH;
-            const QList<QList<ConsoleSegment>> ls = dropEmpty(c);
+            QList<QList<ConsoleSegment>> ls = dropEmpty(c);
+            // 盒子压在该 div 的第一行最前面（QML 的 z = 打印顺序，于是盒子在
+            // 子内容之下），且不额外占行。
+            if (!c.boxSegs.isEmpty()) {
+                if (ls.isEmpty()) ls.append(c.boxSegs);
+                else ls[0] = c.boxSegs + ls.first();
+            }
             for (int k = 0; k < ls.size(); ++k) rows[row + k] += ls.at(k);
         }
         // Preserve ordinary text after the positioned layers before publishing rows.

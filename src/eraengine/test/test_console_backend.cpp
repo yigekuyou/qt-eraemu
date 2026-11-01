@@ -1346,6 +1346,47 @@ int main(int argc, char* argv[]) {
         check(cols == 18, QString("2 个制表符算 16 格（实得总格数 %1）").arg(cols));
     }
 
+    // 10h) 缓冲模式的 div：C# PrintHtml(str, toPrintBuffer=true) 仍然把 div 变成
+    // ConsoleDivPart（HtmlManager 递归时 buttonsOutput 传 null），只是**不在 div
+    // 前换行**——整批 div 叠进当前正在拼的那一行。FL3.8 拠点地图 25 个格子一次
+    // `HTML_PRINT HTML, 1` 就是靠这条并成 5×5；盒子也不许占内容行。
+    qDebug() << "\n10h) 缓冲模式（HTML_PRINT X, 1）的 div 仍按 rect 落位";
+    {
+        ConsoleBackend buf;
+        buf.setFontSize(14); buf.setLineHeight(14);
+        buf.setGridColumns(226); buf.setGridRows(60);
+        buf.printTemplateBuffered(PrintTemplateCompiler::parseRuntimeMarkup(QStringLiteral(
+            // div 的**背景填充**来自 color 属性（C# ConsoleDivPart.backgroundColor
+            // = tag.Color），bcolor 是边框色；两格都用 color 填底色。
+            "<div rect='0px,0px,100px,40px' color='#C0C0C0'><br>[L]<br>[l]</div>"
+            "<div rect='120px,0px,100px,40px' color='#C0C0C0'><br>[R]<br>[r]</div>")));
+        buf.flush();
+        QMap<QString, QVariantMap> byText;
+        int boxCount = 0;
+        for (int r = 0; r < buf.rowCount(); ++r)
+            for (const QVariant& v : buf.lineBlocks(r)) {
+                const auto m = v.toMap();
+                if (m.value("kind").toString() == "box") { ++boxCount; continue; }
+                const QString text = m.value("text").toString().trimmed();
+                if (!text.isEmpty()) byText.insert(text, m);
+            }
+        check(boxCount > 0, QString("缓冲模式的 div 也画出盒子（实得 %1 个盒子块）").arg(boxCount));
+        check(byText.contains(QStringLiteral("[L]")) && byText.contains(QStringLiteral("[R]")),
+              "两个格子的内容都进来了");
+        if (byText.contains(QStringLiteral("[L]")) && byText.contains(QStringLiteral("[R]"))) {
+            check(byText.value(QStringLiteral("[L]")).value("row").toInt()
+                      == byText.value(QStringLiteral("[R]")).value("row").toInt(),
+                  "同一 y 的两个 div 落在同一行（C# 整批叠进当前行，不是每格一行）");
+            check(byText.value(QStringLiteral("[L]")).value("col").toInt() == 0
+                      && byText.value(QStringLiteral("[R]")).value("col").toInt() == 17,
+                  QString("x 仍由 rect 决定（左 %1，右 %2；120px/7px≈17 列）")
+                      .arg(byText.value(QStringLiteral("[L]")).value("col").toInt())
+                      .arg(byText.value(QStringLiteral("[R]")).value("col").toInt()));
+        }
+        check(byText.value(QStringLiteral("[L]")).value("row").toInt() == 0,
+              "盒子不占内容行：div 的第一行内容就贴在第 0 行");
+    }
+
     // Nested captures retain all rows; positioned layers cannot consume trailing body text.
     {
         ConsoleBackend c;

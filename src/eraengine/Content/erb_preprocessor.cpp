@@ -509,7 +509,11 @@ ErbPreprocessed ErbPreprocessor::process(const QString& content, QStringList* wa
             int j = idx + 1;
             bool closed = false;
             while (j < raw.size()) {
-                const QString l2 = applyRename(raw.at(j));
+                QString l2 = applyRename(raw.at(j));
+                // 与普通行同一套行终止符处理：CRLF 文件的 `\r` 不能跟着续行内容
+                // 进入逻辑行。`\r` 留在 FORM/按钮文本里会被按未定义字符测量，
+                // 表现为选项之间凭空多出宽度（FL3.8 画像尺寸按钮）。
+                if (l2.endsWith(QLatin1Char('\r'))) l2.chop(1);
                 const QString t2 = l2.trimmed();
                 if (t2 == QLatin1String("}")) { closed = true; ++j; break; }
                 if (!t2.isEmpty()) {

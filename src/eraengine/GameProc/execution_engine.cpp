@@ -1220,9 +1220,12 @@ bool ExecutionEngine::executeInstruction(const LogicalLine& line, eravar::ScopeI
             };
             const QVariant textValue = evaluateOperand(*ops[0]);
             QString text = stringText(textValue);
-            if (text.isEmpty() && !ops[0]->isString) text = ops[0]->raw.trimmed();
+            // C# EmueraConsole.Print.cs PrintButton: 空文字は**何も出力しない**。
+            // 以前这里把空值替换成参数原文，`PRINTBUTTON strText, …`（实参为空）
+            // 会在画面上打出变量名 "strText"（FL3.8 画像尺寸按钮）。
             // ボタン処理に絡んで表示がおかしくなるため、PRINTBUTTONでの改行コードはオミット
             text.remove(QLatin1Char('\n'));
+            if (text.isEmpty()) return true;
             if (name != "PRINTBUTTON" && !text.isEmpty()) {
                 text = padPrintC(text, name == "PRINTBUTTONC");   // C=右对齐 / LC=左对齐
             }

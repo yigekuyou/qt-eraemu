@@ -79,6 +79,20 @@ int main(int argc, char* argv[]) {
         check(dump(out).value(1).startsWith(QStringLiteral("2:")), "合并行取 '{' 所在的物理行号 2");
     }
 
+    qDebug() << "\n1b) CRLF 续行不把 '\\r' 带进逻辑行";
+    {
+        ErbPreprocessor pp;
+        QStringList warns;
+        const QString src = "@F(ARG)\r\n{\r\n    PRINTFORML %ARG%\r\n}\r\n";
+        const QList<ErbSourceLine> out = pp.process(src, &warns, "t.ERB").materialize();
+        const QString joined = out.value(1).text;
+        check(!joined.contains(QLatin1Char('\r')),
+              QString("续行不含 CR（得到 %1）").arg(joined.toHtmlEscaped()));
+        check(joined.contains(QStringLiteral("PRINTFORML %ARG%")),
+              "续行正文保留（缩进是否保留由 FORM 语义决定）");
+        check(warns.isEmpty(), "CRLF 续行无告警");
+    }
+
     qDebug() << "\n2) [SKIPSTART] / [SKIPEND]";
     {
         ErbPreprocessor pp;

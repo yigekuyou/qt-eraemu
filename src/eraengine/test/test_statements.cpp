@@ -297,13 +297,26 @@ int main(int argc, char* argv[]) {
         execute("PRINTBUTTON \"[穗月]\", \"穗月\"");
         check(text == "[穗月]" && isString && stringValue == "穗月",
               "documented name button preserves string value");
+        // C# EmueraConsole.Print.cs PrintButton: `if (string.IsNullOrEmpty(str)) return;`
+        // —— 空文本不产生任何输出（不是打印一个空按钮，更不能回退成参数原文）。
+        const int beforeEmpty = emitted;
         execute("PRINTBUTTON \"\", 40 + 2");
-        check(text.isEmpty() && !isString && integerValue == 42,
-              "empty button text and numeric expression");
+        check(emitted == beforeEmpty,
+              "empty button text emits nothing (C# PrintButton returns early)");
+        // FL3.8 画像尺寸按钮：`PRINTBUTTON strText, …` 的实参是空串时，
+        // 旧实现回退输出参数原文，画面上出现变量名 "strText"。
+        storage.setGlobalStr1DInCurrentFrame(QStringLiteral("RESULTS"), 0, QString());
+        execute("PRINTBUTTON RESULTS:0, 42");
+        check(emitted == beforeEmpty,
+              "empty string variable emits nothing (no identifier fallback)");
+        storage.setGlobalStr1DInCurrentFrame(QStringLiteral("RESULTS"), 0, QStringLiteral("X"));
+        execute("PRINTBUTTON RESULTS:0, 42");
+        check(emitted == beforeEmpty + 1 && text == QStringLiteral("X") && integerValue == 42,
+              "non-empty string variable renders its value");
         execute("PRINTBUTTON \"a\" + \"b\", 7");
         check(text == "ab" && !isString && integerValue == 7,
               "button string concatenation is an expression");
-        check(emitted == 4, "each button instruction emits exactly once");
+        check(emitted == 4, "only the four non-empty buttons emit, once each");
         QObject::disconnect(connection);
     }
 

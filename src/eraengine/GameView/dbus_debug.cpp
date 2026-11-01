@@ -25,6 +25,7 @@
 #include "era_parse_table.h"
 #include "expression_evaluator.h"
 #include "variable_storage.h"
+#include "print_template.h"
 
 #ifdef EMUERA_HAS_DBUS
 #include <QDBusConnection>
@@ -214,6 +215,12 @@ QString EraDBusDebug::evalVar(const QString& text) {
         ExpressionEvaluator* ev = m_engine->getExpressionEvaluator();
         if (!ev) return QStringLiteral("no evaluator");
         const QVariant v = ev->evaluate(*ast, storage, m_engine->gameBaseData(), eravar::kGlobalScope);
+        // 字符串变量求值返回引擎内部的 FlatStringValue，不是 QString —— 只按
+        // typeId 分派会把它报成 invalid/null，取证时会把「有值」误判成「空」。
+        if (isFlatStringValue(v)) {
+            ts << QStringLiteral("str=\"%1\"").arg(stringText(v));
+            return out;
+        }
         switch (v.typeId()) {
         case QMetaType::QString:
             ts << QStringLiteral("str=\"%1\"").arg(v.toString());

@@ -211,7 +211,10 @@ void ConsoleBackend::sealSpan() {
 
 ConsoleDisplayLine ConsoleBackend::buildLine() const {
     ConsoleDisplayLine line;
-    line.segments = m_sealed;
+    // div 绘制层排在本行正文前面（QML 的 z = 段序号，于是文字压在 div 上，
+    // 与 C# 同一行里「先 div part、后文字 part」的绘制顺序一致）。
+    line.segments = m_pendingDiv;
+    line.segments += m_sealed;
     flushPendingToSegments(line.segments);
     line.align = m_align;
     return line;
@@ -287,9 +290,12 @@ bool ConsoleBackend::hasEnabledButton() const {
     //   只看**尾部连续的按钮块**（当前屏幕刚打印的按钮）——历史屏幕遗留的按钮
     //   不算「実行時点でボタン化されている」。世代（generation）仍用于过滤：
     //   只有与当前世代一致的按钮才可点击（对齐 lastButtonGeneration）。
-    // 1) PRINTBUTTON 后尚未换行的当前行
-    for (const ConsoleSegment& seg : m_sealed) {
-        if (seg.isButton && seg.enabled && seg.generation == m_generation) return true;
+    // 1) PRINTBUTTON 后尚未换行的当前行（含挂在当前行上的 div 按钮 ——
+    //    C# 里它们同样是 printBuffer 当前行的部件，BINPUT 必须能看到）
+    for (const QList<ConsoleSegment>* list : {&m_sealed, &m_pendingDiv}) {
+        for (const ConsoleSegment& seg : *list) {
+            if (seg.isButton && seg.enabled && seg.generation == m_generation) return true;
+        }
     }
     // 2) 末尾连续的「含按钮」显示行
     const QList<ConsoleDisplayLine>& lines = m_buffer.lines();
@@ -316,7 +322,7 @@ QString ConsoleBackend::htmlPopPrintingStr() {
 }
 
 bool ConsoleBackend::currentLineEmpty() const {
-    return m_pendingParts.isEmpty() && m_sealed.isEmpty();
+    return m_pendingParts.isEmpty() && m_sealed.isEmpty() && m_pendingDiv.isEmpty();
 }
 
 void ConsoleBackend::printTemplate(const PrintTemplate& output) {
@@ -738,10 +744,19 @@ void ConsoleBackend::renderTemplate(const PrintTemplate& output, bool toBuffer) 
         markDirty();
     }
     sealButton();
-    // ---- div 叠放层落位 --------------------------------------------------
-    // rect.y / 行高 = 目标行（相对本区块起点），rect.x 已由 positionedXpx
-    // 交给布局绝对定位；同一行的多个 div 合并成一行的多个段（FL3.8 拠点地图
-    // 就是 5 个 780×480 的格子并排）。超出 rect 的部分由 QML 侧裁剪。
+    // ---- div 绘制层：挂在当前行上，**不推进正文行** ---------------------
+    // C# ConsoleDivPart 只是 printBuffer 当前行里的一个部件：DrawTo 用
+    // `pointY + PointY`（= 行的 y + rect.y）绝对定位，SetWidth 是空实现（不占
+    // 宽度、不推进排版），所以画多少 div 都不占一行。FL3.8 拠点地图画完要自己
+    // `CALL NEWLINE(26)` 让开正文，正是因为 div 不推进行号。
+    //
+    // 移植侧曾把 div 内容物化成真实行（rect.y / 行高 = 目标行），于是：
+    //   * 每次 HTML_PRINT 调用都让下一批 div 的落位原点下移一大截 —— 拠点地图
+    //     的底图/路径图/日志面板/模块窗口各自是一次调用，整体错位几十行；
+    //   * 正文行被 div 吃掉一块，脚本再 NEWLINE(26) 就多让了一倍。
+    // 现在与 C# 同构：所有 div 的段都留在 m_pendingDiv，随当前行一起提交，
+    // 纵向偏移全部由 span 的 positionedTopPx（相对行首的**绝对像素**）表达。
+    // 段的相对顺序就是绘制顺序（QML 的 z = 序号），所以按 depth 稳定排序。
     if (!overlays.isEmpty()) {
         // C# 按 depth 升序绘制叠放层（ConsoleDivPart.depth），与打印顺序无关：
         // FL3.8 地图先打 depth=1 的节点按钮、再打 depth=10 的地图底图、
@@ -749,7 +764,6 @@ void ConsoleBackend::renderTemplate(const PrintTemplate& output, bool toBuffer) 
         // 相对顺序（同一深度里仍按脚本书写顺序）。
         std::stable_sort(overlays.begin(), overlays.end(),
                          [](const DivCapture& a, const DivCapture& b) { return a.depth < b.depth; });
-        const int lineH = qMax(1, m_layout.lineHeight());
         const auto dropEmpty = [](const DivCapture& c) {
             QList<QList<ConsoleSegment>> ls = c.lines;
             // `<div><br>…` 的引导换行不该占一行（C# 的 div 缓冲同样不吃它）
@@ -757,45 +771,22 @@ void ConsoleBackend::renderTemplate(const PrintTemplate& output, bool toBuffer) 
             while (!ls.isEmpty() && ls.last().isEmpty()) ls.removeLast();
             return ls;
         };
-        QMap<int, QList<ConsoleSegment>> rows;
-        for (const DivCapture& c : overlays) {
-            const int row = c.yPx / lineH;
-            QList<QList<ConsoleSegment>> ls = dropEmpty(c);
-            // 盒子压在该 div 的第一行最前面（QML 的 z = 打印顺序，于是盒子在
-            // 子内容之下），且不额外占行。
-            if (!c.boxSegs.isEmpty()) {
-                if (ls.isEmpty()) ls.append(c.boxSegs);
-                else ls[0] = c.boxSegs + ls.first();
+        for (DivCapture& c : overlays) {
+            // 盒子（背景/边框）排在该 div 内容之前：QML 的 z 是段序号，盒子
+            // 因此压在子内容下面，与 C# 先 DrawBorder 再画子内容一致。
+            for (ConsoleSegment& seg : c.boxSegs) {
+                for (ConsoleSpan& span : seg.spans) m_layout.measurePart(span);
+                m_pendingDiv.append(seg);
             }
-            for (int k = 0; k < ls.size(); ++k) rows[row + k] += ls.at(k);
-        }
-        // Preserve ordinary text after the positioned layers before publishing rows.
-        flushPendingToSegments(m_sealed);
-        m_pendingParts.clear();
-        rows[0].append(m_sealed);
-        m_sealed.clear();
-        int nextRow = 0;
-        for (auto it = rows.cbegin(); it != rows.cend(); ++it) {
-            // Bound sparse-row expansion independently of the bounded history size.
-            const int targetRow = qBound(nextRow, it.key(), nextRow + 4096);
-            while (nextRow < targetRow) {
-                ++nextRow;
-                m_sealed.clear(); m_pendingParts.clear();
-                newline();
-            }
-            m_sealed = it.value();
-            // The model row already accounts for the integral vertical offset.
-            for (auto& segment : m_sealed)
-                for (auto& span : segment.spans) {
-                    span.positionedTopPx -= it.key() * lineH;
-                    m_layout.measurePart(span);
+            for (QList<ConsoleSegment>& line : dropEmpty(c))
+                for (ConsoleSegment& seg : line) {
+                    for (ConsoleSpan& span : seg.spans) m_layout.measurePart(span);
+                    m_pendingDiv.append(seg);
                 }
-            m_pendingParts.clear();
-            m_pendingOpen = true;
-            newline();
-            ++nextRow;
         }
         overlays.clear();
+        m_pendingOpen = true;    // 这一行有内容了（div 也算），等待收尾/换行
+        markDirty();
     }
     // 收尾：非缓冲把内容定格成完整行（HTML_PRINT 自动换行）；缓冲把尾部
     // **留在未定型行**，后续 print 继续接在同一行上。
@@ -863,15 +854,18 @@ void ConsoleBackend::printHtmlIsland(const PrintTemplate& markup) {
     // m_pendingParts/m_sealed 并在收尾调用 newline() —— 岛模式下提交进岛层）。
     const QList<ConsoleSpan> savedParts = m_pendingParts;
     const QList<ConsoleSegment> savedSealed = m_sealed;
+    const QList<ConsoleSegment> savedDiv = m_pendingDiv;
     const bool savedOpen = m_pendingOpen;
     m_pendingParts.clear();
     m_sealed.clear();
+    m_pendingDiv.clear();
     m_pendingOpen = false;
     m_islandMode = true;
     renderTemplate(markup, /*toBuffer=*/false);
     m_islandMode = false;
     m_pendingParts = savedParts;
     m_sealed = savedSealed;
+    m_pendingDiv = savedDiv;
     m_pendingOpen = savedOpen;
     emit htmlIslandChanged();
 }
@@ -933,6 +927,7 @@ void ConsoleBackend::newlineInternal(bool temporary) {
         ConsoleDisplayLine line = buildLine();
         m_sealed.clear();
         m_pendingParts.clear();
+        m_pendingDiv.clear();
         m_pendingOpen = false;
         if (m_wrapLines) {
             QList<ConsoleDisplayLine> wrapped =
@@ -958,6 +953,9 @@ void ConsoleBackend::newlineInternal(bool temporary) {
         deleteTailLogicalLines(1);
     m_sealed.clear();
     m_pendingParts.clear();
+    // div 绘制层随本行提交完毕：清空，下一行重新开始（C# 的 div part 也只
+    // 属于它被 append 的那一行）。
+    m_pendingDiv.clear();
     m_pendingOpen = false;
     m_tailDirty = false;
 
@@ -1174,6 +1172,7 @@ void ConsoleBackend::clearAll() {
     m_buffer.clear();
     m_pendingParts.clear();
     m_sealed.clear();
+    m_pendingDiv.clear();
     m_pendingOpen = false;
     m_tailRow = false;
     m_tailDirty = false;

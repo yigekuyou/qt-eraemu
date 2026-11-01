@@ -350,6 +350,15 @@ QString EraDBusDebug::diagBlocks() {
                    .arg(m.value("color").toString()).arg(m.value("fontName").toString())
                    .arg(m.value("kind").toString()).arg(m.value("isButton").toBool())
                    .arg(QString(m.value("text").toString()).left(40));
+        // div 盒子（kind=box）：wh 上报的是**格子footprint**（cols×rows 的量化
+        // 尺寸），真正的盒子矩形在 boxW/boxH 里。核对脚本像素坐标时必须看后者，
+        // 否则会把 780×480（14 号字 → 109×67）的格子当成 7×14 的一格。
+        if (m.value("kind").toString() == QLatin1String("box"))
+            out.last() += QStringLiteral(" boxW=%1 boxH=%2 borderW=%3 fill=%4")
+                              .arg(m.value("boxW").toInt())
+                              .arg(m.value("boxH").toInt())
+                              .arg(m.value("borderW").toInt())
+                              .arg(m.value("fill").toString());
     };
     for (int i = 0; i < qMin(3, blocks.size()); ++i) dump(i, blocks.at(i).toMap());
     for (int i = qMax(0, blocks.size() - 2); i < blocks.size(); ++i) dump(i, blocks.at(i).toMap());

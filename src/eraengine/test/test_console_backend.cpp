@@ -1533,15 +1533,26 @@ int main(int argc, char* argv[]) {
         e.printTemplate(PrintTemplateCompiler::parseRuntimeMarkup(
             QStringLiteral("<div rect='5000,0,3600,600'>・陥落<br>　　無<br>・嗜好</div>")));
         e.flush();
+        // div 的**全部内容都挂在同一行上**（C# ConsoleDivPart 只是当前行的部件，
+        // 不推进正文行号）：三行文字在同一个模型行里，靠 pxTop 0/14/28 分行。
+        const QVariantList divLines = e.lineBlocks(0);
         QList<int> lineStarts;
-        for (int line = 0; line < 3; ++line) {
-            const QVariantList lb = e.lineBlocks(line);
-            lineStarts.append(lb.isEmpty() ? -1 : lb.first().toMap().value("pxLeft").toInt());
+        QList<int> lineTops;
+        for (const QVariant& v : divLines) {
+            if (!v.toMap().value("text").toString().isEmpty()) {
+                lineStarts.append(v.toMap().value("pxLeft").toInt());
+                lineTops.append(v.toMap().value("pxTop").toInt());
+            }
         }
-        // 5000 单位 × 14px / 100 = 700px
+        // 5000 单位 × 14px / 100 = 700px；行距 = 配置「一行の高さ」= 14px
         check(lineStarts == QList<int>({700, 700, 700}),
               QString("div 内 3 行都从 700px 起（实得 %1/%2/%3）")
                   .arg(lineStarts.value(0)).arg(lineStarts.value(1)).arg(lineStarts.value(2)));
+        check(lineTops == QList<int>({0, 14, 28}),
+              QString("div 内 3 行纵向偏移 0/14/28（实得 %1/%2/%3）")
+                  .arg(lineTops.value(0)).arg(lineTops.value(1)).arg(lineTops.value(2)));
+        check(e.rowCount() == 1,
+              QString("div 内容不推进正文行号（模型行数实得 %1）").arg(e.rowCount()));
 
         // <div rect> 的肖像之后接正文：正文必须回到行首，不能被 div 右边缘推走。
         // FL3.8「SHOW_PORTRAIT 之后紧接 SMALL_TITLE("基礎") + SHOW_BASE」就是这条：

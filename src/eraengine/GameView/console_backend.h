@@ -568,6 +568,15 @@ private:
     // ---- 「当前行」打印缓冲（C# PrintStringBuffer）----
     QList<ConsoleSpan>    m_pendingParts;     // 还没成段的 part（m_stringList/builder）
     QList<ConsoleSegment> m_sealed;           // 已经定型的段（m_buttonList）
+    // `<div>` 的绘制层（C# ConsoleDivPart）：**挂在当前行上，不推进正文行**。
+    // C# 的 div part 只是 printBuffer 当前行里的一个部件（PointX 锁定、纵向
+    // 用 part.Top = rect.y 偏移绘制），整块 div 不占一行 —— FL3.8 拠点地图画完
+    // 之后要自己 `CALL NEWLINE(26)` 把正文让开，正是因为 div 不推进行号。
+    // 移植侧曾把 div 内容物化成真实行：每多一次 HTML_PRINT 调用，下一批 div
+    // 的落位原点就下移一截（底图/路径图/日志面板整体错位），正文还要再多让
+    // 26 行。现在改成和 C# 一样：内容留在 m_pendingDiv 里，随当前行一起提交，
+    // 纵向偏移全部由 span 的 positionedTopPx（绝对像素）表达。
+    QList<ConsoleSegment> m_pendingDiv;
     ConsoleStyle m_style;
     ConsoleAlign m_align = ConsoleAlign::Left;
     bool         m_pendingOpen = false;

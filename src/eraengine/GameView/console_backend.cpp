@@ -421,13 +421,17 @@ void ConsoleBackend::renderTemplate(const PrintTemplate& output, bool toBuffer) 
             const int insetRight = sideOf(part.insetPxSum, part.insetRelSum, 1);
             const int insetBottom = sideOf(part.insetPxSum, part.insetRelSum, 2);
             const int insetLeft = sideOf(part.insetPxSum, part.insetRelSum, 3);
+            const int marginTop = sideOf(part.marginPx, part.marginRel, 0);
+            const int marginRight = sideOf(part.marginPx, part.marginRel, 1);
+            const int marginBottom = sideOf(part.marginPx, part.marginRel, 2);
+            const int marginLeft = sideOf(part.marginPx, part.marginRel, 3);
             const int divX = parentX + lengthPx(part.x, part.xposIsPixels) + insetLeft;
             const int divY = parentY + lengthPx(part.y, part.yposIsPixels) + insetTop;
             // C# DrawTo：rect 先减 margin、再减 border、再减 padding（四边），
             // SetClip 用的是这个内容框。rect 的左/上由 insetX/insetY 表达，
             // 右/下由 insetRight/insetBottom 表达；divX/divY 已经是内容框左上角。
-            const int divW = lengthPx(part.width, part.widthIsPixels);
-            const int divH = lengthPx(part.height, part.heightIsPixels);
+            const int divW = qAbs(lengthPx(part.width, part.widthIsPixels));
+            const int divH = qAbs(lengthPx(part.height, part.heightIsPixels));
             DivisionCursor cursor;
             cursor.x = divX;
             cursor.y = divY;
@@ -477,8 +481,11 @@ void ConsoleBackend::renderTemplate(const PrintTemplate& output, bool toBuffer) 
             // 自然压在子内容下面。盒子只画，不推进排版（不进 division.px）。
             // 盒子的原点 = **rect 原点**，不是内容原点：divX/divY 已经内缩了
             // margin+border+padding，而盒子（背景/边框）画在 rect 自己身上。
-            const int rectX = divX - insetLeft;
+            const int rectX = divX - insetLeft + marginLeft;
             const int rectY = divY - insetTop;
+            const int boxTop = rectY + marginTop;
+            const int boxW = qMax(0, divW - marginLeft - marginRight);
+            const int boxH = qMax(0, divH - marginTop - marginBottom);
             const auto makeBox = [&](int bx, int by, int bw, int bh, const QColor& color) {
                 ConsoleSpan box;
                 box.kind = ConsoleSpanKind::Box;
@@ -487,11 +494,11 @@ void ConsoleBackend::renderTemplate(const PrintTemplate& output, bool toBuffer) 
                 box.boxHeightPx = qMax(0, bh);
                 box.pointXLocked = true;
                 box.positionedXpx = rectX + bx;
-                box.positionedTopPx = rectY + by;
+                box.positionedTopPx = boxTop + by;
                 return box;
             };
             QList<ConsoleSpan> boxes;
-            if (divW > 0 && divH > 0) {
+            if (boxW > 0 && boxH > 0) {
                 // 四角圆角（C# BoxBorder.DrawBorder 的 radius 分支）。C# 的做法是
                 // 把每个非 0 角按 1/4 圆裁掉；移植侧改成「背景块带 per-corner
                 // radius（QML Rectangle 的 topLeftRadius 等）+ 四条边框条各自
@@ -499,7 +506,7 @@ void ConsoleBackend::renderTemplate(const PrintTemplate& output, bool toBuffer) 
                 // 0=左上 1=右上 2=右下 3=左下（radius 的 CSS 简写 [2]=下、[3]=左）
                 int rtl = 0, rtr = 0, rbr = 0, rbl = 0;
                 if (part.radiusPx.size() == 4 || part.radiusRel.size() == 4) {
-                    const int lim = qMin(divW, divH) / 2;
+                    const int lim = qMin(boxW, boxH) / 2;
                     rtl = qBound(0, sideOf(part.radiusPx, part.radiusRel, 0), lim);
                     rtr = qBound(0, sideOf(part.radiusPx, part.radiusRel, 1), lim);
                     rbr = qBound(0, sideOf(part.radiusPx, part.radiusRel, 2), lim);
@@ -524,13 +531,13 @@ void ConsoleBackend::renderTemplate(const PrintTemplate& output, bool toBuffer) 
                     && (bt > 0 || br > 0 || bb > 0 || bl > 0);
                 if (uniformBorder) {
                     // 外圈：整块涂边框色（圆角 R）。
-                    ConsoleSpan ring = makeBox(0, 0, divW, divH, part.borderColors.at(0));
+                    ConsoleSpan ring = makeBox(0, 0, boxW, boxH, part.borderColors.at(0));
                     if (rtl || rtr || rbr || rbl) ring.boxRadii = {rtl, rtr, rbr, rbl};
                     boxes.append(ring);
                     // 内圈：底色，四边各缩一个边框宽，圆角同步收缩。
                     if (part.fillColor.isValid()) {
-                        const int inW = qMax(0, divW - bl - br);
-                        const int inH = qMax(0, divH - bt - bb);
+                        const int inW = qMax(0, boxW - bl - br);
+                        const int inH = qMax(0, boxH - bt - bb);
                         ConsoleSpan inner = makeBox(bl, bt, inW, inH, part.fillColor);
                         const int shrink = qMin(qMin(bt, br), qMin(bb, bl));
                         const int lim2 = qMin(inW, inH) / 2;
@@ -543,22 +550,22 @@ void ConsoleBackend::renderTemplate(const PrintTemplate& output, bool toBuffer) 
                     // 背景：C# 用 margin 之后、border 之内的 rect 填满（border 自身
                     // 就压在这块底色上）。这里按 rect 全程填充，边框条随后覆盖边缘。
                     if (part.fillColor.isValid()) {
-                        ConsoleSpan fill = makeBox(0, 0, divW, divH, part.fillColor);
+                        ConsoleSpan fill = makeBox(0, 0, boxW, boxH, part.fillColor);
                         if (rtl || rtr || rbr || rbl) fill.boxRadii = {rtl, rtr, rbr, rbl};
                         boxes.append(fill);
                     }
                     if (hasBorder) {
-                        const int midH = qMax(0, divH - bt - bb);
-                        const int midW = qMax(0, divW - bl - br);
+                        const int midH = qMax(0, boxH - bt - bb);
+                        const int midW = qMax(0, boxW - bl - br);
                         // 上/下条在左右两端各让出对应角的半径；左/右条同理。
-                        const int topX  = qMin(rtl, midW),        topW  = qMax(0, divW - rtl - rtr);
-                        const int botX  = qMin(rbl, midW),        botW  = qMax(0, divW - rbl - rbr);
-                        const int leftY = qMin(rtl, midH),        leftH = qMax(0, divH - rtl - rbl);
-                        const int rightY= qMin(rtr, midH),        rightH= qMax(0, divH - rtr - rbr);
+                        const int topX  = qMin(rtl, midW),        topW  = qMax(0, boxW - rtl - rtr);
+                        const int botX  = qMin(rbl, midW),        botW  = qMax(0, boxW - rbl - rbr);
+                        const int leftY = qMin(rtl, midH),        leftH = qMax(0, boxH - rtl - rbl);
+                        const int rightY= qMin(rtr, midH),        rightH= qMax(0, boxH - rtr - rbr);
                         if (bt > 0) boxes.append(makeBox(topX, 0, topW, bt, part.borderColors.at(0)));
-                        if (bb > 0) boxes.append(makeBox(botX, divH - bb, botW, bb, part.borderColors.at(2)));
+                        if (bb > 0) boxes.append(makeBox(botX, boxH - bb, botW, bb, part.borderColors.at(2)));
                         if (bl > 0) boxes.append(makeBox(0, bt + leftY, bl, qMax(0, leftH - bt - bb), part.borderColors.at(3)));
-                        if (br > 0) boxes.append(makeBox(divW - br, bt + rightY, br, qMax(0, rightH - bt - bb), part.borderColors.at(1)));
+                        if (br > 0) boxes.append(makeBox(boxW - br, bt + rightY, br, qMax(0, rightH - bt - bb), part.borderColors.at(1)));
                     }
                 }
             }

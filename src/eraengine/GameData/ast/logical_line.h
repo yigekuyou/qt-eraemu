@@ -202,6 +202,8 @@ struct PrintTemplatePart {
     // 否则 3000px 背景图、超长一行文字会画到 rect 外面）。
     QList<int> insetPxSum;       // margin+padding+border 合计（像素）
     QList<int> insetRelSum;      // 同上（1/100 em）
+    QList<int> marginPx;         // margin 绘制矩形内缩（像素），顺序上右下左
+    QList<int> marginRel;        // 同上（1/100 em）
     // C# BoxBorder.DrawBorder：`<div>` 自身的盒子（背景 + 四边边框）。
     //   color  = 背景填充色（无效 = 不填充）
     //   bcolor = 四边边框色，1~4 值 CSS 简写展开成 上,右,下,左

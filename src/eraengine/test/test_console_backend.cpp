@@ -1303,6 +1303,46 @@ int main(int argc, char* argv[]) {
                       .arg(ir.isEmpty() ? -1 : ir.at(0).toInt()));
         }
 
+        ConsoleBackend margined;
+        margined.setFontSize(14); margined.setLineHeight(14);
+        margined.setGridColumns(226); margined.setGridRows(60);
+        margined.printTemplate(PrintTemplateCompiler::parseRuntimeMarkup(
+            QStringLiteral("<div rect='10px,10px,100px,40px' margin='5px' border='1px' "
+                           "bcolor='#f00' color='#fff'>M</div>")));
+        margined.flush();
+        QVariantMap marginBox;
+        int marginRow = 0;
+        for (int r = 0; r < margined.rowCount(); ++r)
+            for (const QVariant& v : margined.lineBlocks(r)) {
+                const auto m = v.toMap();
+                if (m.value("kind").toString() == "box" && m.value("boxW").toInt() == 90) {
+                    marginBox = m;
+                    marginRow = r;
+                }
+            }
+        check(!marginBox.isEmpty() && marginBox.value("boxH").toInt() == 30,
+              "margin 从盒子四边各扣除 5px");
+        check(marginBox.value("pxLeft").toInt() == 15
+                  && marginBox.value("pxTop").toInt() + marginRow * 14 == 15,
+              QString("margin 后盒子从 rect (10,10) 落在 (15,15), 实得 (%1,%2)")
+                  .arg(marginBox.value("pxLeft").toInt())
+                  .arg(marginBox.value("pxTop").toInt() + marginRow * 14));
+
+        ConsoleBackend negative;
+        negative.setFontSize(14); negative.setLineHeight(14);
+        negative.printTemplate(PrintTemplateCompiler::parseRuntimeMarkup(
+            QStringLiteral("<div rect='0px,0px,-100px,-40px' color='#f00'>N</div>")));
+        negative.flush();
+        bool positiveExtent = false;
+        for (int r = 0; r < negative.rowCount(); ++r)
+            for (const QVariant& v : negative.lineBlocks(r)) {
+                const auto m = v.toMap();
+                positiveExtent |= m.value("kind").toString() == "box"
+                                  && m.value("boxW").toInt() == 100
+                                  && m.value("boxH").toInt() == 40;
+            }
+        check(positiveExtent, "负 div 宽高按 C# 语义取绝对值");
+
         ConsoleBackend extreme;
         extreme.setFontSize(14); extreme.setLineHeight(14);
         extreme.printTemplate(PrintTemplateCompiler::parseRuntimeMarkup(

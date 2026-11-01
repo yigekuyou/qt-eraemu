@@ -386,8 +386,13 @@ PrintTemplate PrintTemplateCompiler::evaluateOccurrences(const CompiledPrintTemp
                     if (v[i].pixels) out.px[i] = v[i].value; else out.rel[i] = v[i].value;
                 return out;
             };
-            Sides inset;
-            for (const char* key : {"margin", "padding", "border"}) {
+            Sides margin;
+            const QString marginRaw = attrs.value(QStringLiteral("margin"));
+            if (!marginRaw.isEmpty()) margin = sidesOf(marginRaw);
+            part.marginPx = {margin.px[0], margin.px[1], margin.px[2], margin.px[3]};
+            part.marginRel = {margin.rel[0], margin.rel[1], margin.rel[2], margin.rel[3]};
+            Sides inset = margin;
+            for (const char* key : {"padding", "border"}) {
                 const QString raw = attrs.value(QLatin1String(key));
                 if (raw.isEmpty()) continue;
                 const auto in = sidesOf(raw);

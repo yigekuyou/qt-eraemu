@@ -103,7 +103,7 @@ Item {
     // 的取值（C# SelectedString 接受任意按钮、SelectedInteger 才拒字符串按钮），
     // QML 这里只做「按按钮形态挑一个」，不重算规则。
     readonly property bool clickable: blockData && backend
-        ? blockData.clickable === true && blockData.generation === backend.generation
+        ? blockData.clickable === true && blockData.generation === backend.clickableGeneration
           && (blockData.isInteger ? backend.acceptsIntegerButtons : backend.acceptsStringButtons)
         : false
     readonly property bool hovered: mouse.containsMouse && clickable

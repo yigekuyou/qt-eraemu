@@ -158,7 +158,13 @@ class ConsoleBackend : public QAbstractListModel {
     // 「舞台变更呈现完毕」后才启动（见 SystemStateMachine::setFramePacingProbe）。
     Q_PROPERTY(bool framePacingAttached READ framePacingAttached
                WRITE setFramePacingAttached NOTIFY framePacingAttachedChanged)
+    // 画面/状态版本号（帧抓取、限时输入交付检测用）。注意：**不是**按钮可点击
+    // 世代的判据 —— C# 用 newButtonGeneration / lastButtonGeneration 两个计数器，
+    // 点击只认 lastButtonGeneration；把它和画面版本混成一个会在「提交了非法值，
+    // 脚本原地重等同一句 INPUT」时把整屏按钮误判为过期。
     Q_PROPERTY(quint64 generation    READ generation                           NOTIFY generationChanged)
+    // 可点击世代（C# lastButtonGeneration）：区块的 generation 与它相等才可点。
+    Q_PROPERTY(quint64 clickableGeneration READ clickableGeneration           NOTIFY clickableGenerationChanged)
     // 逻辑网格列/行数：**不是**常量。装载配置后会按「窗口宽 ÷ 单元格宽」重算
     // （eraTW 是 175 列，代码默认只有 80）。若声明为 CONSTANT，QML 会一直用旧值
     // 换算像素格子，而 C++ 给出的区块坐标已按新网格计算，两者比例不一致
@@ -297,6 +303,7 @@ public:
     [[nodiscard]] bool acceptsStringButtons() const { return buttonValueAccepted(false); }
     [[nodiscard]] bool waitingInput() const { return m_waitingInput; }
     [[nodiscard]] quint64 generation() const { return m_generation; }
+    [[nodiscard]] quint64 clickableGeneration() const { return m_lastGeneration; }
     [[nodiscard]] int gridColumns() const { return m_layout.gridColumns(); }
     [[nodiscard]] int gridRows() const { return m_layout.gridRows(); }
     // 舞台可见**行数**（不是网格行数）。C# EmueraConsole.OnPaint：
@@ -396,8 +403,12 @@ public:
     // DefStrValue）。空回车时用它；无缺省则**忽略**这次回车（继续等输入）。
     // mouseInput：C# InputRequest.MouseInput（INPUT/INPUTS 族第 2 实参）。true 时
     // 点击按钮除提交按钮值外，还要把按键号交给脚本（RESULT:1）。
+    // lineKey：本次等待所在脚本行（`文件:行号`）。C# newGeneration() 用
+    // `process.getCurrentLine != lastInputLine` 判定「是不是换到另一个输入点」；
+    // 同一句 INPUT 原地重等（ASK_YN 非法值循环）时不能作废旧按钮。空 = 未知，
+    // 按「换了输入点」处理（保守作废旧按钮）。
     void notifyInputRequested(const QString& kind, const QVariant& defaultValue = QVariant(),
-                              bool mouseInput = false);
+                              bool mouseInput = false, const QString& lineKey = QString());
     void notifyInputDone();
     // 提交成功的**唯一收敛点**：结束等待，并在正文留下**一条空行**（记账占位行）。
     //
@@ -487,6 +498,8 @@ signals:
     void cleared();
     void frameMsChanged();
     void generationChanged();
+    // 可点击世代变化（新按钮 / BREAKBUTTON / 换输入点）。QML 的 clickable 绑定它。
+    void clickableGenerationChanged();
     void stageChanged();
     void inputRequested(const QString& kind);
     // 一次**鼠标**点击命中了按钮：mouseButton 1=左 2=右 3=中。
@@ -531,8 +544,18 @@ private:
     void sealInputAccountingLine();
     // 占位行适用性：C# 只有 IntValue/StrValue 两种等待走「带 str」的提交路径。
     [[nodiscard]] bool inputAccountingLineNeeded() const;
-    // 把「未定型」串按 ButtonStringCreator 切段（对齐 C# fromCssToButton）
+    // 把「未定型」串按 ButtonStringCreator 切段（对齐 C# fromCssToButton）。
+    // const：buildLine()/displayLine() 的纯查询路径也会调用它；新按钮只读
+    // newButtonGeneration，lastButtonGeneration 的推进交给 noteButtonsIn()。
     void flushPendingToSegments(QList<ConsoleSegment>& out) const;
+    // C# ConsoleButtonString 构造 + UpdateGeneration：新按钮取 newButtonGeneration，
+    // 并把 lastButtonGeneration 推到同一个值（刚打印出来的按钮可点）。
+    void assignButtonGeneration(ConsoleSegment& seg);
+    // pending 内联按钮定型后的登记（见 flushPendingToSegments 注释）。
+    void noteButtonsIn(const QList<ConsoleSegment>& segments);
+    // C# EmueraConsole.newGeneration()：脚本挂到输入等待时决定世代推进。
+    // lineChanged = 本次等待所在行与上一次不同（C# process.getCurrentLine != lastInputLine）。
+    void advanceGenerationForInput(const QString& kind, bool lineChanged);
     ConsoleDisplayLine buildLine() const;
     // 提交当前待打包的行（C# addDisplayLine）。
     // temporary：本行是「一時行」（C# PrintSingleLine(str, temporary=true)），
@@ -590,7 +613,23 @@ private:
     int  m_lineHeight = 19;
     int  m_maxSpanReach = 1;
     int  m_frameMs = 16;
+    // 画面/状态版本号（帧抓取、限时输入交付检测）。与下面的按钮世代分开：
+    // 提交输入会推进它（新画面），但**不能**因此作废旧按钮（C# 不这样做）。
     quint64 m_generation = 1;
+    // ---- C# EmueraConsole 的按钮世代（两个计数器）----
+    // newButtonGeneration：下一个新建按钮的世代号。Input 之间按需自增，
+    //   新打印的按钮取它，从而把上一批按钮挤成旧世代。
+    // lastButtonGeneration：**当前可点击**的世代号（QML 的 clickableGeneration）。
+    //   新建按钮时同步到 new（UpdateGeneration）；BREAKBUTTON / 换输入点时推进。
+    quint64 m_newGeneration = 1;
+    quint64 m_lastGeneration = 1;
+    // C# updatedGeneration：本世代内是否新建过按钮（newGeneration 的消抖标记）。
+    bool m_updatedGeneration = false;
+    // C# lastButtonIsInput：上一次输入等待是整数型（IntValue/IntButton）还是字符串型。
+    bool m_lastButtonIsInput = true;
+    // C# lastInputLine：上一次输入等待所在的脚本行（`文件:行号`）。同一行原地
+    // 重等（ASK_YN 的非法值循环）不作废旧按钮；换行才强制推进。
+    QString m_lastInputLine;
 
     // ---- 工具提示样式（TOOLTIP_*；默认值对齐 WinForms ToolTip 的缺省）----
     QString m_toolTipFontFamily;         // 空 = 跟随应用默认字体
@@ -620,6 +659,10 @@ private:
     // 空回车时交付它；无效表示「无缺省」-> 空回车被忽略。
     QVariant m_inputDefault;
     bool    m_waitingInput = false;
+    // 本次等待已被提交（C# 提交后 state=WaitInput -> Running）：旧按钮在脚本
+    // 重新挂到输入点之前不可点。与 m_waitingInput 分开是因为提交收尾
+    // notifyInputCommitted() 还要在「等待中」补一条记账行。
+    bool    m_inputSubmitted = false;
     // 「一時行」标记不另设成员：它随行一起存在 ConsoleDisplayLine::isTemporary
     //（C# 的 LastLineIsTemporary 也是读 displayLineList 尾部那一行）——
     // 另立布尔值就会与「行被删/被顶掉」的时机脱钩，进而算错要删的行数。
@@ -646,10 +689,17 @@ private:
     // 失效：clearAll 全清；字号/行高/网格变化（区块尺寸被烘焙进缓存值）全清。
     // 头部裁剪/CLEARLINE 只按 [firstSerial, lastSerial] 区间清理孤儿条目。
     mutable QHash<quint64, QVariantList> m_lineCache;
-    // 「含图行」的 serial 集合（newline() 提交行时维护，clearAll 清空，
-    // updateStageModels 惰性剪枝）。此前每次 flush 都要扫 0..viewportStart 的**全部**历史行找立絵锚
-    //（backlog 上限 5000 行，eraMegaten 配置到 50000）——O(backlog)/flush。
-    QSet<quint64> m_imageSerials;
+    // 「越出行界」的行的 serial 集合（newline() 提交行时维护，clearAll 清空，
+    // updateStageModels 惰性剪枝）。含两类：
+    //   * 跨行图（立絵 / 画像枠：rows > 1 或 ypos < 0）
+    //   * `<div rect>` 的像素层（div 内容按 rect.y 画到锚定行之外，FL3.8 拠点
+    //     地图 5×5 的 ypos 一直排到 300 多像素 = 20 多行）
+    // C# ConsoleEscapedParts.GetPartsInRange：div 的**像素范围**与视口相交就画，
+    // 即使它所在的显示行已经滚到视口上方。此前只索引图片，div 行一滚出舞台
+    // 快照（stageStart）就整层消失 —— 拠点地图「被放进历史」即此。
+    // 只索引越界行，updateStageModels 不必扫全部历史（backlog 上限 5000 行，
+    // eraMegaten 配置到 50000）。
+    QSet<quint64> m_overhangSerials;
     mutable quint64 m_cacheFirstSerial = 0;   // 上次剪枝时现存行的最小 serial
 
     // 性能计数器（perfReport 读取；D-Bus /debug 转发）

@@ -714,6 +714,37 @@ TestCase {
         verify(backend.stageStart > 0);
     }
 
+    function test_stageKeepsOverflowingDivAnchor() {
+        backend.stageMode = true;
+        backend.clearAll();
+        // FL3.8 拠点地图的缩影：`<div rect>` 的 ypos/height 把内容画到锚定行
+        // 下面很多行；锚定行随后被正文顶出视口，但 div 的像素范围仍在视口内。
+        // C# ConsoleEscapedParts.GetPartsInRange 对 div 用「像素范围与视口
+        // 相交」判定 —— 它不随锚定行一起进历史。
+        const lh = view.lineHeight;
+        consoleFixture.printHtml(backend,
+            "<div rect='0px," + (lh * 5) + "px,80px," + (lh * 2) + "px' "
+            + "border='1px' bcolor='#ffffff'><button value='7'>MAP</button></div>");
+        for (let i = 0; i < backend.gridRows; ++i) {
+            backend.print("line " + i);
+            backend.newline();
+        }
+        backend.flush(); view.syncView();
+        compare(backend.stageStart, 0, "div 像素范围盖到视口：锚定行留在舞台");
+        let map = null;
+        for (let i = 0; i < 8 && !map; ++i) {
+            const b = view.blockAt(0, i);
+            if (b && b.blockData && b.blockData.text === "MAP")
+                map = b;
+        }
+        verify(map !== null, "锚定行的 div 内容仍在舞台快照里");
+        const stage = findChild(view, "consoleStageView");
+        tryCompare(stage, "atYEnd", true);
+        const point = map.mapToItem(stage, 0, 0);
+        verify(point.y >= 0 && point.y < stage.height,
+               "div 内容画在视口内（y=" + point.y + "）");
+    }
+
     function test_stageTextNeverRequestsImages() {
         backend.stageMode = true;
         const lines = ["━━━━━━━━━━━━", "eraThe World", "2013～2022",
@@ -1395,7 +1426,7 @@ TestCase {
         const sel = "face_01_sel";
         block.blockData = {
             kind: "image", text: "face_01", imageButton: sel, isInteger: true,
-            clickable: true, generation: backend.generation,
+            clickable: true, generation: backend.clickableGeneration,
             col: 0, row: 0, cols: 4, rows: 2
         };
 

@@ -24,6 +24,7 @@
 #include "eraengine_log.h"   // eraTrace（文本框/输入裁决留痕）
 
 #include <algorithm>
+#include <cmath>
 #include <QElapsedTimer>
 #include <QRegularExpression>
 #include <QFile>
@@ -70,6 +71,41 @@ bool inputExpectsAnyKey(const QString& kind) {
     return k == QLatin1String("WAIT") || k == QLatin1String("WAITANYKEY")
         || k == QLatin1String("FORCEWAIT") || k == QLatin1String("ANYKEY")
         || k == QLatin1String("TWAIT");   // TWAIT = 限时任意键（C# InputType.EnterKey + Timelimit）
+}
+
+// 区块的绘制范围折算成「相对所属显示行的行号区间」（含端点）：
+//   上端 = ceil(topPx / lineH)                 —— C# ConsoleEscapedParts.Add：
+//          `(int)Math.Ceiling((float)p.Top / Config.LineHeight) + lineNo`
+//          （ypos 为负时探到上一行，因此可以是负数）
+//   下端 = floor((topPx + height - 1) / lineH) —— C#：
+//          `(int)Math.Floor((float)Math.Max(0, p.Bottom - 1) / Config.LineHeight) + lineNo`
+// 普通的一行文本得到 (0, 0)。
+void spanRowExtent(const ConsoleSpan& part, int lineHeight, int& topRow, int& bottomRow) {
+    const int lineH = qMax(1, lineHeight);
+    // measurePart() 已将 positionedTopPx 合并进 part.top；这里直接使用最终的
+    // 相对锚点行像素，避免 div span 被重复加一遍 rect.y。
+    const int topPx = part.top;
+    int heightPx = part.height;
+    // Box 在 measurePart 里只按「1 行」记账，可见高度在 boxHeightPx
+    // （<div rect> 的背景/边框可以比一行高得多）。
+    if (part.kind == ConsoleSpanKind::Box && part.boxHeightPx > 0)
+        heightPx = part.boxHeightPx;
+    if (heightPx <= 0) heightPx = lineH;
+    topRow = static_cast<int>(std::ceil(static_cast<double>(topPx) / lineH));
+    bottomRow = static_cast<int>(std::floor(
+        static_cast<double>(topPx + heightPx - 1) / lineH));
+}
+
+// 该行有没有画出本行范围的区块（跨行图 / ypos 负偏移 / <div rect> 像素层）。
+bool lineHasOverhang(const ConsoleDisplayLine& line, int lineHeight) {
+    for (const ConsoleSegment& seg : line.segments) {
+        for (const ConsoleSpan& part : seg.spans) {
+            int topRow = 0, bottomRow = 0;
+            spanRowExtent(part, lineHeight, topRow, bottomRow);
+            if (topRow < 0 || bottomRow > 0) return true;
+        }
+    }
+    return false;
 }
 } // namespace
 
@@ -152,8 +188,10 @@ void ConsoleBackend::flushPendingToSegments(QList<ConsoleSegment>& out) const {
         seg.isButton = prims.first().canSelect;
         seg.isInteger = seg.isButton;
         seg.intValue = prims.first().input;
-        // C#：单个核时整行是一段；若一个核都没有则不可点击
-        seg.generation = m_generation;
+        // C#：单个核时整行是一段；若一个核都没有则不可点击。
+        // 新按钮取 newButtonGeneration；lastButtonGeneration 的推进在
+        // noteButtonsIn()/assignButtonGeneration()（非 const，需发信号）。
+        if (seg.isButton) seg.generation = m_newGeneration;
         out.append(seg);
         return;
     }
@@ -169,7 +207,7 @@ void ConsoleBackend::flushPendingToSegments(QList<ConsoleSegment>& out) const {
         seg.isButton = prim.canSelect;
         seg.isInteger = prim.canSelect;
         seg.intValue = prim.input;
-        seg.generation = m_generation;
+        if (seg.isButton) seg.generation = m_newGeneration;
 
         while (spanIndex < queue.size()) {
             ConsoleSpan part = queue.at(spanIndex);
@@ -204,8 +242,36 @@ void ConsoleBackend::flushPendingToSegments(QList<ConsoleSegment>& out) const {
     }
 }
 
+// C# ConsoleButtonString 构造 + EmueraConsole.UpdateGeneration()：
+//   新按钮的 Generation = newButtonGeneration；
+//   lastButtonGeneration = newButtonGeneration（刚打印的按钮立即可点）。
+void ConsoleBackend::assignButtonGeneration(ConsoleSegment& seg) {
+    if (!seg.isButton) return;
+    seg.generation = m_newGeneration;
+    if (m_lastGeneration != m_newGeneration) {
+        m_lastGeneration = m_newGeneration;
+        emit clickableGenerationChanged();
+    }
+    m_updatedGeneration = true;
+}
+
+// 非 const 的「本批确实产生了按钮」登记：pending 里的内联按钮（`@B:` / PRINTTEXT）
+// 由 buildLine()/sealSpan() 定型，这里把 lastButtonGeneration 推到新世代。
+void ConsoleBackend::noteButtonsIn(const QList<ConsoleSegment>& segments) {
+    for (const ConsoleSegment& seg : segments) {
+        if (!seg.isButton || seg.generation != m_newGeneration) continue;
+        if (m_lastGeneration != m_newGeneration) {
+            m_lastGeneration = m_newGeneration;
+            emit clickableGenerationChanged();
+        }
+        m_updatedGeneration = true;
+        return;
+    }
+}
+
 void ConsoleBackend::sealSpan() {
     flushPendingToSegments(m_sealed);
+    noteButtonsIn(m_sealed);
     m_pendingParts.clear();
 }
 
@@ -300,7 +366,7 @@ bool ConsoleBackend::hasEnabledButton() const {
     //    C# 里它们同样是 printBuffer 当前行的部件，BINPUT 必须能看到）
     for (const QList<ConsoleSegment>* list : {&m_sealed, &m_pendingDiv}) {
         for (const ConsoleSegment& seg : *list) {
-            if (seg.isButton && seg.enabled && seg.generation == m_generation) return true;
+            if (seg.isButton && seg.enabled && seg.generation == m_lastGeneration) return true;
         }
     }
     // 2) 末尾连续的「含按钮」显示行
@@ -310,7 +376,7 @@ bool ConsoleBackend::hasEnabledButton() const {
         for (const ConsoleSegment& seg : lines.at(i).segments) {
             if (!seg.isButton) continue;
             hasButton = true;
-            if (seg.enabled && seg.generation == m_generation) hasCurrent = true;
+            if (seg.enabled && seg.generation == m_lastGeneration) hasCurrent = true;
         }
         if (!hasButton) break;       // 尾部按钮块到此结束
         if (hasCurrent) return true;
@@ -403,7 +469,7 @@ void ConsoleBackend::renderTemplate(const PrintTemplate& output, bool toBuffer) 
 
     const auto sealButton = [&] {
         if (!inButton) return;
-        button.generation = m_generation;
+        assignButtonGeneration(button);
         captureLine(m_sealed).append(button);
         button = {};
         inButton = false;
@@ -417,7 +483,7 @@ void ConsoleBackend::renderTemplate(const PrintTemplate& output, bool toBuffer) 
     for (const auto& part : output.parts) {
         if (part.kind == PrintTemplatePart::Kind::Division) {
             sealButton();
-            flushPendingToSegments(captureLine(m_sealed)); m_pendingParts.clear();
+            { auto& target = captureLine(m_sealed); flushPendingToSegments(target); noteButtonsIn(target); m_pendingParts.clear(); }
             const int parentX = divisions.isEmpty() ? 0 : divisions.last().x;
             const int parentY = divisions.isEmpty() ? 0 : divisions.last().y;
             // C# ShiftChildrenX(PointX + xOffset + divXOffset)：子内容再从 rect
@@ -584,7 +650,7 @@ void ConsoleBackend::renderTemplate(const PrintTemplate& output, bool toBuffer) 
         }
         if (part.kind == PrintTemplatePart::Kind::EndDivision) {
             sealButton();
-            flushPendingToSegments(captureLine(m_sealed)); m_pendingParts.clear();
+            { auto& target = captureLine(m_sealed); flushPendingToSegments(target); noteButtonsIn(target); m_pendingParts.clear(); }
             if (!captures.isEmpty()) {
                 DivCapture cap = captures.takeLast();
                 if (captures.isEmpty()) overlays.append(cap);
@@ -642,7 +708,7 @@ void ConsoleBackend::renderTemplate(const PrintTemplate& output, bool toBuffer) 
         }
         if (part.kind == PrintTemplatePart::Kind::Button || part.kind == PrintTemplatePart::Kind::NonButton) {
             sealButton();
-            flushPendingToSegments(captureLine(m_sealed)); m_pendingParts.clear();
+            { auto& target = captureLine(m_sealed); flushPendingToSegments(target); noteButtonsIn(target); m_pendingParts.clear(); }
             button.isButton = part.kind == PrintTemplatePart::Kind::Button;
             button.pointXLocked = part.lockedPosition;
             button.positionPercent = part.x;
@@ -660,7 +726,7 @@ void ConsoleBackend::renderTemplate(const PrintTemplate& output, bool toBuffer) 
                 // 行内游标回到 div 左边界（C# 在 <br> 时把 PointX 复位到 div.Left）。
                 // 先把本行还没定型的 part 冲进 div 的**当前行**，再另起一行；
                 // 否则文字会漏到下一行、上一行变空（div 内多行内容只剩一行）。
-                flushPendingToSegments(captureLine(m_sealed)); m_pendingParts.clear();
+                { auto& target = captureLine(m_sealed); flushPendingToSegments(target); noteButtonsIn(target); m_pendingParts.clear(); }
                 captures.last().lines.append(QList<ConsoleSegment>());
                 if (!divisions.isEmpty()) {
                     divisions.last().px = 0;
@@ -905,11 +971,16 @@ QVariantList ConsoleBackend::htmlIsland() const {
     return rows;
 }
 
-// BREAKBUTTON（C# Console.forceUpdateGeneration）：世代号自增 -> 屏上旧按钮的
-// generation 与当前值不符，点击/输入判定一律忽略（见 buttonAt/hasEnabledButton）。
+// BREAKBUTTON（C# Console.forceUpdateGeneration）：
+//   newButtonGeneration++; lastButtonGeneration = newButtonGeneration;
+// —— 屏上旧按钮的 generation 比新值小，点击/输入判定一律忽略。
 void ConsoleBackend::breakButtons() {
     ++m_generation;
+    ++m_newGeneration;
+    m_lastGeneration = m_newGeneration;
+    m_updatedGeneration = true;
     emit generationChanged();
+    emit clickableGenerationChanged();
     markDirty();
 }
 
@@ -918,6 +989,7 @@ void ConsoleBackend::printPlain(const QString& text) {
     ensureLineOpen();
     // 先定型当前串，再把这一整段作为「不可点击」的段（C# AppendPlainText）
     flushPendingToSegments(m_sealed);
+    noteButtonsIn(m_sealed);
     m_pendingParts.clear();
     ConsoleSegment seg;
     ConsoleSpan part;
@@ -962,6 +1034,7 @@ void ConsoleBackend::newlineInternal(bool temporary) {
     // 再走 addDisplayLine。顺序不能反 —— 反过来（先删舊行、后成型）会把本次
     // 待显示的未定型缓冲一起清掉，DQPRINT 的最后一句就成了空行。
     ConsoleDisplayLine line = buildLine();
+    noteButtonsIn(line.segments);
     line.isTemporary = temporary;
     // C# addDisplayLine：`if (LastLineIsTemporary) deleteLine(1);` —— 顶掉上一条
     // 「一時行」；只作用于**已提交的**显示行，不碰 printBuffer。
@@ -1017,20 +1090,16 @@ void ConsoleBackend::newlineInternal(bool temporary) {
         }
         endInsertRows();
         m_insertedRows += committed.size();
-        // 图锚索引：新提交的行若含 Image span，记下它的 serial
-        //（newline() 是行提交的唯一入口；updateStageModels 的舞台快照
-        //  不再每次 flush 扫全部历史行找锚）。
+        // 越界行索引：新提交的行若有区块画到本行之外（跨行图 / `<div rect>`
+        // 的像素层），记下它的 serial。updateStageModels 只看这批行决定要不要
+        // 把锚定行拉进舞台快照（newline() 是行提交的唯一入口，不必每次 flush
+        // 扫全部历史行）。
         {
             const int lastRow = m_buffer.count() - 1;
             for (int i = 0; i < committed.size() && lastRow - i >= 0; ++i) {
                 const ConsoleDisplayLine& appended = m_buffer.at(lastRow - i);
-                for (const ConsoleSegment& seg : appended.segments) {
-                    bool hasImage = false;
-                    for (const ConsoleSpan& part : seg.spans) {
-                        if (part.kind == ConsoleSpanKind::Image) { hasImage = true; break; }
-                    }
-                    if (hasImage) { m_imageSerials.insert(appended.serial); break; }
-                }
+                if (lineHasOverhang(appended, m_lineHeight))
+                    m_overhangSerials.insert(appended.serial);
             }
         }
     }
@@ -1041,6 +1110,7 @@ void ConsoleBackend::printButton(const QString& text, qint64 value, const QStrin
     if (text.isEmpty()) return;
     ensureLineOpen();
     flushPendingToSegments(m_sealed);
+    noteButtonsIn(m_sealed);
     m_pendingParts.clear();
 
     ConsoleSegment seg;
@@ -1054,7 +1124,7 @@ void ConsoleBackend::printButton(const QString& text, qint64 value, const QStrin
     seg.isInteger = true;
     seg.intValue = value;
     seg.tooltip = tooltip;
-    seg.generation = m_generation;
+    assignButtonGeneration(seg);
     m_sealed.append(seg);
     markDirty();
 }
@@ -1063,6 +1133,7 @@ void ConsoleBackend::printButtonStr(const QString& text, const QString& value, c
     if (text.isEmpty()) return;
     ensureLineOpen();
     flushPendingToSegments(m_sealed);
+    noteButtonsIn(m_sealed);
     m_pendingParts.clear();
 
     ConsoleSegment seg;
@@ -1076,7 +1147,7 @@ void ConsoleBackend::printButtonStr(const QString& text, const QString& value, c
     seg.isInteger = false;
     seg.strValue = value;
     seg.tooltip = tooltip;
-    seg.generation = m_generation;
+    assignButtonGeneration(seg);
     m_sealed.append(seg);
     markDirty();
 }
@@ -1201,13 +1272,20 @@ void ConsoleBackend::clearAll() {
     // C# 不随正文清屏，保留。
     const bool hadIsland = !m_islandLines.isEmpty();
     m_islandLines.clear();
-    m_imageSerials.clear();       // 含图行索引随清屏整表作废
+    m_overhangSerials.clear();       // 越界行索引随清屏整表作废
     // 屏上已无任何区块引用图片像素：把钉住的副本一起释放（下一次装载重新钉）。
     ResourceImageProvider::clearPinnedImages();
     invalidateLineCache();        // 行全部消失 -> 按行缓存作废
     ++m_generation;
+    // 清屏 = 屏上按钮全部消失（C# ClearDisplay 走 forceUpdateGeneration）。
+    ++m_newGeneration;
+    m_lastGeneration = m_newGeneration;
+    m_updatedGeneration = false;
+    m_lastInputLine.clear();
+    m_inputSubmitted = false;
     endResetModel();
     emit generationChanged();
+    emit clickableGenerationChanged();
     emit cleared();
     emit lineCountChanged();
     if (hadIsland) emit htmlIslandChanged();
@@ -1394,36 +1472,47 @@ void ConsoleBackend::updateStageModels(bool force) {
     // 正文最后一行就画在画布最底那一行；把它移出舞台会让整屏逐行差一行，
     // 画面最底那一行（分栏边框、菜单底边）也随之消失。
     int start = qMax(0, total - visibleRows);
-    // A line is only the anchor of an image, not its full drawing extent.
-    // Keep earlier anchors whose image still overlaps the current stage. The
-    // extra rows scroll above the viewport; ListView clips the image itself.
+    // 跨行图只把「锚定行」留在快照里，图片本身可以画到视口里。
     const int viewportStart = start;
-    // 图锚扫描只看「含图行」索引（newline() 提交时维护）。此前是每次 flush 都扫
-    // 0..viewportStart 的**全部**历史行 —— backlog 上限 5000 行（eraMegaten
-    // 配置到 50000），存/读档画面每行 flushOut 一次，一次画档 = 40+ 次全量扫描。
+    // 越界区块索引只看「有跨行图 / div 像素层」的行索引（newline() 提交时维护）。
+    // 此前每次 flush 都扫 0..viewportStart 的**全部**历史行 —— backlog 上限 5000
+    // 行（eraMegaten 配置到 50000），存/读档画面每行 flushOut 一次，一次画档 =
+    // 40+ 次全量扫描。现在只扫这批行。
+    //
+    // 条件与 C# ConsoleEscapedParts.GetPartsInRange 一致：区块的**绘制范围**
+    // （跨行图的 rows、div 的 rect.y/height）与视口相交，就把它所在的显示行
+    // 留在快照里。div 的 ypos/height 是相对锚定行的像素值，锚定行滚出视口后
+    // 它自己仍可能画在视口内 —— FL3.8 拠点地图（5×5 的 ypos 排到 300 多像素）
+    // 正是如此：只索引图片时，地图所在的显示行一离开舞台快照就整层消失
+    //（看起来像「地图被放进历史」）。
     const quint64 firstSerial = m_buffer.firstSerial();
     const quint64 lastSerial = m_buffer.lastSerial();
-    for (auto it = m_imageSerials.begin(); it != m_imageSerials.end();) {
+    for (auto it = m_overhangSerials.begin(); it != m_overhangSerials.end();) {
         const quint64 serial = *it;
         // 惰性剪枝：头部裁剪/CLEARLINE 产生的死 serial（区间外，
         // 或 serial 对应的行已不在该下标上）就地清除。
         if (serial < firstSerial || serial > lastSerial) {
-            it = m_imageSerials.erase(it);
+            it = m_overhangSerials.erase(it);
             continue;
         }
         const int row = int(serial - firstSerial);
         if (row >= viewportStart) { ++it; continue; }
         if (m_buffer.at(row).serial != serial) { ++it; continue; }   // 下标与 serial 不对齐留下的洞
         const auto line = displayLine(row);
+        bool overlaps = false;
         for (const auto& segment : line.segments) {
             for (const auto& part : segment.spans) {
-                if (part.kind != ConsoleSpanKind::Image) continue;
-                const double top = row + (m_lineHeight > 0
-                    ? double(part.top) / m_lineHeight : 0.0);
-                if (top < total && top + qMax(1, part.rows) > viewportStart)
-                    start = qMin(start, row);
+                int topRow = 0, bottomRow = 0;
+                spanRowExtent(part, m_lineHeight, topRow, bottomRow);
+                // 行的绝对行号区间 = [row + topRow, row + bottomRow]
+                if (row + bottomRow >= viewportStart && row + topRow < total) {
+                    overlaps = true;
+                    break;
+                }
             }
+            if (overlaps) break;
         }
+        if (overlaps) start = qMin(start, row);
         ++it;
     }
     const bool visible = m_stageMode && start < total;
@@ -1508,18 +1597,68 @@ void ConsoleBackend::notifyFramePresented(quint64 generation) {
 //   SelectedInteger（:1700-1706）才拒绝字符串按钮。
 // 所以：字符串输入**不**拒绝整数按钮（此前写反了，BINPUTS 那一屏的 [取消] 点不动）。
 bool ConsoleBackend::buttonValueAccepted(bool isIntegerButton) const {
-    if (!m_waitingInput) return false;
+    if (!m_waitingInput || m_inputSubmitted) return false;
     if (inputAcceptsAny(m_inputKind)) return true;   // INPUTANY：两种按钮都收
     if (isIntegerButton) return true;                // 整数按钮：任何输入类型都收
     return inputExpectsString(m_inputKind);          // 字符串按钮：只有字符串输入收
 }
 
+// C# EmueraConsole.newGeneration()（:538）的移植。两个细节决定了 ASK_YN 这类
+// 「提交非法值后原地重等 INPUT」的画面：
+//   * 上一轮没有新建按钮、且还停在同一个输入行 -> 世代不动（按钮继续可点）；
+//   * 上一轮新建了按钮（批内 last == new）-> new++，让下一次打印的按钮换世代，
+//     但本轮刚打印的按钮仍等于 last，保持可点。
+// 旧实现只有一个计数器并在每次提交时自增，于是「点错一次 -> 整屏按钮全死」。
+void ConsoleBackend::advanceGenerationForInput(const QString& kind, bool lineChanged) {
+    if (!m_updatedGeneration && lineChanged) {
+        // ボタン無しで次の入力に来たなら強制で世代更新
+        if (m_lastGeneration != m_newGeneration) {
+            m_lastGeneration = m_newGeneration;
+            emit clickableGenerationChanged();
+        }
+    } else {
+        m_updatedGeneration = false;
+    }
+
+    const bool stringWait = inputExpectsString(kind);
+    // C# 的 switch 只列 IntValue/IntButton 与 StrValue/StrButton；ANYKEY /
+    // INPUTMOUSEKEY 等「不需要值」的等待走默认分支。移植侧把它们并入整数分支：
+    // 效果只是「本批按钮仍可点（last 不动），下一批拿到新世代（new++）」，不会
+    // 改变当前等待的可点集合，却能让自动交付后的新一批按钮淘汰上一批（回归测试
+    // 「automatic input completion invalidates old buttons」）。
+    if (stringWait) {
+        if (m_lastGeneration == m_newGeneration)
+            ++m_newGeneration;
+        else if (m_lastButtonIsInput) {
+            m_lastGeneration = m_newGeneration;
+            emit clickableGenerationChanged();
+        }
+        m_lastButtonIsInput = false;
+    } else {
+        if (m_lastGeneration == m_newGeneration)
+            ++m_newGeneration;
+        else if (!m_lastButtonIsInput) {
+            m_lastGeneration = m_newGeneration;
+            emit clickableGenerationChanged();
+        }
+        m_lastButtonIsInput = true;
+    }
+}
+
 void ConsoleBackend::notifyInputRequested(const QString& kind, const QVariant& defaultValue,
-                                          bool mouseInput) {
+                                          bool mouseInput, const QString& lineKey) {
     m_inputKind = kind;
     m_mouseInput = mouseInput;
     m_inputDefault = defaultValue;
     m_waitingInput = true;
+    m_inputSubmitted = false;
+    // 先把未定型的 pending 串定型（PRINTTEXT 内联的 @B: 按钮世代在这一步登记），
+    // 再推进世代：这一批按钮属于「输入前」的世代，C# 正是先创建按钮、后 newGeneration。
+    sealSpan();
+    // C# newGeneration()：脚本挂到输入等待时决定世代推进。必须在 waitingInput
+    // 置真之后、发布这一帧之前完成，QML 才不会先按旧可点击世代画一帧。
+    advanceGenerationForInput(kind, lineKey.isEmpty() || lineKey != m_lastInputLine);
+    if (!lineKey.isEmpty()) m_lastInputLine = lineKey;
     flush();
     // flush() already publishes the current stage when automatic redraw is enabled.
     // Keep the forced path for REDRAW 0, where the input prompt must still be visible.
@@ -1553,10 +1692,10 @@ void ConsoleBackend::notifyInputDone() {
 // 提交收尾 = C# doInputToEmueraProgram 的最后两步，顺序相同：
 // 写输入（调用方 resume 里做）→ 正文定型（PrintFlush）→ 继续执行。
 //
-// 占位行必须在 ++m_generation **之前**：C# 的 newGeneration() 在
-// callEmueraProgram 末尾（DoScript 之后）才执行，所以提交那一刻定型出来的行
-// 属于「提交前那一世代」—— 与屏幕上残留的旧按钮同命（不可点）。顺序反了，
-// 这一行就会带**活**按钮，等于凭空多出一个可点的输入候选。
+// 占位行在 notifyInputDone() **之前**定型：C# 的 newGeneration() 在
+// callEmueraProgram 末尾（DoScript 之后）才执行。可点击世代已与画面版本
+// （m_generation）分离，这里不再靠 ++m_generation 作废按钮 —— 是否作废由
+// advanceGenerationForInput() 按「是否新建过按钮 / 是否换了输入行」决定。
 void ConsoleBackend::notifyInputCommitted() {
     if (!m_waitingInput) return;
     if (inputAccountingLineNeeded()) sealInputAccountingLine();
@@ -1803,7 +1942,7 @@ void ConsoleBackend::clickAt(int lineIndex, int segmentIndex, int mouseButton) {
         return;
     }
     // 只有当前世代的段可点击（对齐 C# selectingButton.Generation != lastButtonGeneration）
-    if (seg.generation != m_generation) {
+    if (seg.generation != m_lastGeneration) {
         qDebug() << "[input] 点击忽略（世代过期）行" << lineIndex << "段" << segmentIndex;
         return;
     }
@@ -1842,6 +1981,8 @@ void ConsoleBackend::submitMouseKey(int type, int r1, int r2, int r3, int r4) {
         return;
     }
     qDebug() << "[input] 提交鼠标键 type" << type << r1 << r2 << r3 << r4;
+    m_inputSubmitted = true;
+    emit clickableGenerationChanged();   // 「可点集合」变了：QML 立即刷新 clickable
     sealSpan();
     ++m_generation;
     emit generationChanged();
@@ -1865,6 +2006,8 @@ void ConsoleBackend::submitAnyKey() {
         return;
     }
     qDebug() << "[input] 任意键/点击继续 kind" << m_inputKind;
+    m_inputSubmitted = true;
+    emit clickableGenerationChanged();   // 「可点集合」变了：QML 立即刷新 clickable
     sealSpan();
     ++m_generation;   // 与 submitInput 同源：提交后旧按钮失效
     emit generationChanged();
@@ -1878,6 +2021,8 @@ void ConsoleBackend::submitInput(qint64 value) {
         return;
     }
     qDebug() << "[input] 提交整数" << value << "kind" << m_inputKind;
+    m_inputSubmitted = true;
+    emit clickableGenerationChanged();   // 「可点集合」变了：QML 立即刷新 clickable
     sealSpan();
     ++m_generation;   // 提交后旧按钮失效（C# forceUpdateGeneration）
     emit generationChanged();
@@ -1951,6 +2096,8 @@ void ConsoleBackend::submitInputString(const QString& value) {
         return;
     }
     qDebug() << "[input] 提交字符串" << value << "kind" << m_inputKind;
+    m_inputSubmitted = true;
+    emit clickableGenerationChanged();   // 「可点集合」变了：QML 立即刷新 clickable
     sealSpan();
     ++m_generation;
     emit generationChanged();
@@ -1973,17 +2120,19 @@ void ConsoleBackend::setFrameMs(int ms) {
     emit frameMsChanged();
 }
 
-// 记录「区块最多往上探出窗口几行」：rows 本身，加上 ypos 的负偏移折算的行数。
-// 只在行定型（measurePart 算完 cols/rows/top）之后调用。QML 拿它设
-// ListView 的 cacheBuffer，跨行图在锚点行滚出视口后仍保持可见。
+// 记录「区块画到本行之外多少行」：跨行图（rows > 1）、ypos 负偏移、以及
+// `<div rect>` 的像素层（rect.y/height 把内容画到锚定行下面几十行）。
+// QML 拿它设 ListView 的 displayMargin：锚定行滚出视口后委托仍要实例化，
+// 否则画在视口内的图形/div 层会整块消失。只在行定型（measurePart 算完
+// cols/rows/top）之后调用。
 void ConsoleBackend::trackSpanReach(const ConsoleDisplayLine& line) {
     for (const ConsoleSegment& seg : line.segments) {
         for (const ConsoleSpan& part : seg.spans) {
-            int reach = qMax(1, part.rows);
-            if (m_lineHeight > 0 && part.top < 0) {
-                const int offRows = int(-part.top) / qMax(1, m_lineHeight);
-                reach += offRows;
-            }
+            int topRow = 0, bottomRow = 0;
+            spanRowExtent(part, m_lineHeight, topRow, bottomRow);
+            // 锚定行 + 向下探出的行（跨行图 / div 层）；再用区块自身 rows 兜底。
+            int reach = qMax(qMax(1, part.rows), bottomRow + 1);
+            if (topRow < 0) reach += -topRow;     // 向上探出的行（负 ypos，历史回看也用它）
             m_maxSpanReach = std::max(m_maxSpanReach, reach);
         }
     }

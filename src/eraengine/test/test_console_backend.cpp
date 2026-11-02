@@ -246,15 +246,35 @@ int main(int argc, char* argv[]) {
         console.printButton("[1] 选择一", 1);
         console.printButton("[2] 选择二", 2);
         console.newline();
+        const int buttonRow = console.lineCount() - 1;
 
         // 两个按钮在同一行；点击第 2 个
-        console.clickAt(console.lineCount() - 1, 1);
+        console.clickAt(buttonRow, 1);
         check(submitted == 2, "clickAt(button#1) -> inputSubmitted(2)");
 
-        // 提交后同一批按钮失效（对齐 C# generation）
+        // 提交后引擎会走 notifyInputCommitted：等待结束 -> 同一批按钮不可再点
+        //（C# state != WaitInput 时 selectingButton 被清空）
+        console.notifyInputCommitted();
         submitted = -1;
-        console.clickAt(console.lineCount() - 1, 0);
-        check(submitted == -1, "stale button after submit ignored");
+        console.clickAt(buttonRow, 0);
+        check(submitted == -1, "提交后等待结束，旧按钮不可再点");
+
+        // 脚本在**同一句 INPUT** 原地重等（ASK_YN 非法值循环）：没有新按钮时
+        // C# 不推进世代 -> 旧按钮恢复可点。旧实现每次提交都 ++generation，把
+        // 整屏按钮误杀成「点一下就全死」。
+        console.notifyInputRequested("INPUT", QVariant(), false,
+                                     QStringLiteral("SYSTEM/FUNCTION/_FUNCTION.ERB:2744"));
+        submitted = -1;
+        console.clickAt(buttonRow, 0);
+        check(submitted == 1, "同一输入行原地重等：旧按钮仍可点");
+
+        // 但换到另一个输入行（仍然没有新按钮）-> C# 强制推进世代，旧按钮失效
+        console.notifyInputDone();
+        console.notifyInputRequested("INPUT", QVariant(), false,
+                                     QStringLiteral("SYSTEM/FUNCTION/_FUNCTION.ERB:9999"));
+        submitted = -1;
+        console.clickAt(buttonRow, 0);
+        check(submitted == -1, "换输入行后旧按钮失效");
 
         // 新一批按钮可点击
         console.printButton("[3] 新选择", 3);
@@ -663,6 +683,59 @@ int main(int argc, char* argv[]) {
         }
     }
 
+    // ---- 5b-2. 舞台快照的 div 锚（C# GetPartsInRange 的 display:relative）----
+    // FL3.8 拠点地图是 `<div rect='x,y,w,h'>` 拼出的 5×5 网格：25 个格子的
+    // rect.y 从 12px 一直排到 300 多像素，全部挂在**同一条显示行**上，随后
+    // `CALL NEWLINE(26)` 让开正文。一旦这条锚定行滚出舞台快照（backlog/对话框
+    // 把内容顶过一屏），整层地图就消失 —— 看起来像「地图被放进历史」。
+    // C# ConsoleEscapedParts.GetPartsInRange：div 的**像素范围**与视口相交
+    // 就画，不管锚定行在不在视口里。这里锁定同一条判定。
+    qDebug() << "\n5b-2) div 像素层的锚定行（C# GetPartsInRange）";
+    {
+        // 锚定行 0 的 div 画到 144px（9 行）之后、高 32px（2 行）：像素范围
+        // 9..10 与视口 8..12 相交 -> 锚定行 0 必须留在舞台快照里。
+        {
+            ConsoleBackend c;
+            c.setFontSize(16);
+            c.setLineHeight(16);
+            c.setGridColumns(40);
+            c.setGridRows(5);          // 舞台 = 最后 5 行
+            c.setStageMode(true);
+            // 非缓冲 printTemplate 自带换行（HTML_PRINT 自动换行），不要再 newline。
+            c.printTemplate(PrintTemplateCompiler::parseRuntimeMarkup(
+                QStringLiteral("<div rect='0px,144px,80px,32px' border='1px' "
+                               "bcolor='#ffffff'>M</div>")));
+            for (int i = 0; i < 12; ++i) { c.print(QStringLiteral("Y%1").arg(i)); c.newline(); }
+            c.flush();
+            check(c.lineCount() == 13, "13 行（div 只占 1 个逻辑行）");
+            check(c.stageStart() == 0, "div 像素范围盖到视口：锚定行 0 拉进快照");
+            check(c.stageModel()->rowCount() == 13, "快照从锚定行起（0..12）");
+            check(c.maxSpanReach() >= 11,
+                  "maxSpanReach >= 11（div 下探 9 行 + 盒高 2 行，QML displayMargin 依据）");
+            const QVariantList stageBlocks = c.stageModel()
+                ->data(c.stageModel()->index(0, 0), ConsoleBackend::BlocksRole).toList();
+            const QVariantMap cell = blockOf(stageBlocks, QStringLiteral("M"));
+            check(!cell.isEmpty(), "舞台快照第 0 行仍带 div 内容（绘制/点击数据都在）");
+            check(cell.value("pxTop").toInt() >= 144,
+                  "div 内容的像素纵向偏移保留（QML 按它落到视口内）");
+        }
+        // 反向：div 的像素范围完全落到视口下方（20 行后）-> 不拉锚定行
+        {
+            ConsoleBackend c;
+            c.setFontSize(16);
+            c.setLineHeight(16);
+            c.setGridColumns(40);
+            c.setGridRows(5);
+            c.setStageMode(true);
+            c.printTemplate(PrintTemplateCompiler::parseRuntimeMarkup(
+                QStringLiteral("<div rect='0px,320px,80px,32px' border='1px' "
+                               "bcolor='#ffffff'>N</div>")));
+            for (int i = 0; i < 12; ++i) { c.print(QStringLiteral("Z%1").arg(i)); c.newline(); }
+            c.flush();
+            check(c.stageStart() == 8, "div 范围在视口外：锚定行不拉进快照（13 - 5）");
+        }
+    }
+
     // ---- 5c. 预留输入行（正文最底一行仍留在舞台上）----
     // C# MainWindow：客户端最底一整行是 richTextBox1（输入框），MainPicBox
     // 的高度（winHeight - menuHeight - LineHeight）已经不含它；EmueraConsole
@@ -718,8 +791,8 @@ int main(int argc, char* argv[]) {
         const QVariantMap stageButton = blockOf(stageLast(), QStringLiteral("[0] 戻る"));
         check(!stageButton.isEmpty() && stageButton.value("clickable").toBool(),
               "舞台最底一行的按钮带点击数据");
-        check((stageButton.value("generation").toLongLong()) == qint64(c.generation()),
-              "该按钮的世代 == 当前世代（未被 BREAKBUTTON 作废）");
+        check((stageButton.value("generation").toLongLong()) == qint64(c.clickableGeneration()),
+              "该按钮的世代 == 当前可点击世代（未被 BREAKBUTTON 作废）");
         c.notifyInputDone();
     }
     // 正好装满时不滚：eraTW 标题是 45 行定页画面（gridRows 46 - 输入行 = 45），

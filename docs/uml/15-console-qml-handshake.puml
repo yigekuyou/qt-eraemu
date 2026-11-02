@@ -85,6 +85,10 @@ note over C,V
   scale = cellHeight / lineHeight（逐图定位会留下 1px 暗缝），画布列宽 = 舞台列宽 / scale。
   C++ 将所有 div 按全屏 depth 降序稳定排序，depth > 0 的 div 图片进入正文之下，
   普通 <img> 与 depth <= 0 的 div 图片进入正文之上；同一 depth 保留打印顺序。
+  div/图片的绘制范围与舞台相交时，C++ 保留其锚定行，即使锚点本身已经滚到视口上方；
+  行范围按最终像素 top/height 折算，避免把 rect.y 重复加到已经合并的 top。
+  画面 generation 与按钮 clickableGeneration 分离：帧刷新或输入提交不直接等同于按钮失效；
+  QML 只按 clickableGeneration、输入类型和 submitted 状态判断按钮是否可点。
   纵向 = 行号 × lineHeight + ypos 像素位移（pxTop = raw_ypos × fontSize / 100，
   对齐 C# 的 rect.Y = pointY + top）：位移发生在格子上，不折算成「负几格」。
   `spriteImagesChanged(names)` 是像素更新通知，不等同于模型重建：

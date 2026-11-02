@@ -868,6 +868,16 @@ int main(int argc, char** argv) {
         "B = \"abc\"",
         "CHECK = STRLENS(A) * 10 + STRLENS(B)",
         "RETURN"}, 35);
+    // 动态私有变量：C# 的 VARI/VARS 是 Static=false，每次进入函数由 ScopeIn
+    // 重建（FL3.8 窗口绘制靠这一点把 TEXT/HTML 清零）。若换算成普通 #DIM，
+    // 第二次调用会读到上一次调用留下的值。
+    run("VARI/VARS 每次调用重新初始化", {
+        "CALL F",
+        "CALL F",
+        "CHECK = RESULT",
+        "RETURN",
+        "@F", "VARI N", "VARS T", "CHECK = N + STRLENS(T)", "N = 5", "T = \"x\"",
+        "RETURN CHECK"}, 0);
     run("CASE mixed forms", {"SELECTCASE 5", "CASE 1, 4 TO 6, IS > 10", "CHECK = 1", "CASEELSE", "CHECK = 999", "ENDSELECT"}, 1);
     run("CASE reversed range", {"SELECTCASE 5", "CASE 6 TO 4", "CHECK = 999", "CASEELSE", "CHECK = 1", "ENDSELECT"}, 1);
     run("CASE string relation", {"SELECTCASE \"abc\"", "CASE IS > \"zzz\"", "CHECK = 999", "CASE IS < \"def\"", "CHECK = 1", "ENDSELECT"}, 1);

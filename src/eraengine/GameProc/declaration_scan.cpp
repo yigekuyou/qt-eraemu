@@ -375,7 +375,13 @@ void registerDeclarationText(VariableTable& variables, ParseDiagnostics& diagnos
 QString scopedVariableDeclText(const QString& rawLine) {
     const loadpass::ScopedVarSpec spec = loadpass::parseScopedVarSpec(rawLine);
     if (!spec.ok) return QString();
-    QString declText = (spec.isStr ? QStringLiteral("#DIMS ") : QStringLiteral("#DIM ")) + spec.name;
+    // VARI/VARS 在 emuera.em（C# 侧 VARS_Instruction）里是**动态私有变量**：
+    // UserDefinedVariableData.Static = false，每次进入函数都由 ScopeIn 重建数组。
+    // 这里换算出的 #DIM/#DIMS 必须带 DYNAMIC，否则会退化成「跨调用保留」的
+    // STATIC 私有变量 —— FL3.8 的 `VARS TEXT` / `VARS HTML` 正是靠每次调用
+    // 清零来绘窗口，退化成 STATIC 后每帧内容会不断累积（窗口重复、边框叠画）。
+    QString declText = (spec.isStr ? QStringLiteral("#DIMS DYNAMIC ") : QStringLiteral("#DIM DYNAMIC "))
+            + spec.name;
     for (const QString& l : spec.lengths) declText += QStringLiteral(", ") + l;
     return declText;
 }

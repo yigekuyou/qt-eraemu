@@ -534,7 +534,14 @@ EraEngine::EraEngine(QObject *parent)
 					 << "state=" << static_cast<int>(m_processState.getExecState());
 			// 把「本次等待是否接受鼠标输入」（INPUTS 族第 2 实参）一并交给控制台；
 			// 否则点击即使命中也写不出 RESULT:1。
-			m_console.notifyInputRequested(kind, def, m_scriptRunner.waitMouseInput());
+			// lineKey：C# newGeneration 的 inputLine 判定 —— 同一句 INPUT 原地重等
+			// （ASK_YN 非法值循环）不作废旧按钮，换行才强制推进世代。
+			QString lineKey;
+			const QString script = m_parseTable.currentScript();
+			if (!script.isEmpty())
+				lineKey = script + QLatin1Char(':')
+				          + QString::number(m_parseTable.currentLine());
+			m_console.notifyInputRequested(kind, def, m_scriptRunner.waitMouseInput(), lineKey);
 		});
 		// ---- 显示层：执行引擎输出 -> ConsoleBackend ----
 		// C# GlobalStatic.Process.InputInteger(1, 1/2/3)：等待开了鼠标输入时，
